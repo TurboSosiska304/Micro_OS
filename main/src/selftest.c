@@ -7,6 +7,8 @@
  */
 #include "selftest.h"
 
+#include <stdio.h>
+
 #include "kernel/log.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
