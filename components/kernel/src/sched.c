@@ -18,11 +18,13 @@ static ready_queue_t g_ready[TASK_PRIO_MAX + 1];
 static struct task *g_sleeping[TASK_MAX_TASKS];
 static k_size_t g_sleeping_count;
 static k_u32_t g_ticks;
+static k_u32_t g_quantum = SCHED_QUANTUM_DEFAULT;
 static bool g_initialised;
 
 /* --- run queue primitives (callers hold the lock) --- */
 
-static void ready_enqueue(struct task *t) {
+static void ready_enqueue(struct task *t)
+{
     ready_queue_t *q = &g_ready[t->prio];
 
     if (q->count >= SCHED_READY_SLOTS) {
@@ -36,7 +38,8 @@ static void ready_enqueue(struct task *t) {
     q->count++;
 }
 
-static void ready_remove(struct task *t) {
+static void ready_remove(struct task *t)
+{
     ready_queue_t *q = &g_ready[t->prio];
     k_u8_t i;
 
@@ -54,14 +57,16 @@ static void ready_remove(struct task *t) {
     }
 }
 
-static void ready_move_to_tail(struct task *t) {
+static void ready_move_to_tail(struct task *t)
+{
     ready_remove(t);
     ready_enqueue(t);
 }
 
 /* --- public API --- */
 
-void k_sched_init(void) {
+void k_sched_init(void)
+{
     k_port_enter_critical();
     memset(g_ready, 0, sizeof(g_ready));
     memset(g_sleeping, 0, sizeof(g_sleeping));
@@ -71,7 +76,8 @@ void k_sched_init(void) {
     k_port_exit_critical();
 }
 
-void k_sched_tick(void) {
+void k_sched_tick(void)
+{
     k_size_t i = 0;
 
     k_port_enter_critical();
@@ -94,10 +100,65 @@ void k_sched_tick(void) {
         i++;
     }
 
+    /*
+     * Round robin: the running task loses the CPU when its time slice is
+     * over and goes to the end of the queue of its priority level.
+     */
+    if (g_quantum > 0) {
+        struct task *current = k_port_task_current();
+
+        if (current != NULL && current->state == TASK_STATE_RUNNING) {
+            if (current->quantum_left == 0) {
+                current->quantum_left = g_quantum;
+            }
+
+            current->quantum_left--;
+
+            if (current->quantum_left == 0) {
+                current->runtime_ticks++;
+                ready_move_to_tail(current);
+                current->state = TASK_STATE_READY;
+            }
+        }
+    }
+
     k_port_exit_critical();
 }
 
-k_u32_t k_sched_ticks(void) {
+void k_sched_set_quantum(k_u32_t ticks)
+{
+    k_port_enter_critical();
+    g_quantum = (ticks < SCHED_QUANTUM_MIN) ? SCHED_QUANTUM_MIN : ticks;
+    k_port_exit_critical();
+}
+
+k_u32_t k_sched_quantum(void)
+{
+    k_u32_t quantum;
+
+    k_port_enter_critical();
+    quantum = g_quantum;
+    k_port_exit_critical();
+
+    return quantum;
+}
+
+k_u32_t k_sched_quantum_left(void)
+{
+    struct task *self = task_self();
+    k_u32_t left = 0;
+
+    if (self != NULL) {
+        k_port_enter_critical();
+        left = self->quantum_left;
+        k_port_exit_critical();
+    }
+
+    return left;
+}
+
+k_u32_t k_sched_ticks(void)
+{
     k_u32_t ticks;
 
     k_port_enter_critical();
@@ -107,11 +168,13 @@ k_u32_t k_sched_ticks(void) {
     return ticks;
 }
 
-k_u64_t k_sched_uptime_ms(void) {
+k_u64_t k_sched_uptime_ms(void)
+{
     return (k_u64_t)k_sched_ticks();
 }
 
-void k_sched_yield(void) {
+void k_sched_yield(void)
+{
     struct task *self = task_self();
 
     if (self != NULL) {
@@ -126,7 +189,8 @@ void k_sched_yield(void) {
     k_port_task_yield();
 }
 
-void k_sched_sleep_ms(k_u32_t ms) {
+void k_sched_sleep_ms(k_u32_t ms)
+{
     struct task *self = task_self();
     task_state_t previous;
     k_size_t i;
@@ -177,7 +241,8 @@ void k_sched_sleep_ms(k_u32_t ms) {
     }
     k_port_exit_critical();
 }
-void k_sched_block(struct task *t) {
+void k_sched_block(struct task *t)
+{
     if (t == NULL) {
         return;
     }
@@ -190,7 +255,8 @@ void k_sched_block(struct task *t) {
     k_port_exit_critical();
 }
 
-void k_sched_unblock(struct task *t) {
+void k_sched_unblock(struct task *t)
+{
     if (t == NULL) {
         return;
     }
@@ -203,7 +269,8 @@ void k_sched_unblock(struct task *t) {
     k_port_exit_critical();
 }
 
-struct task *k_sched_pick_next(void) {
+struct task *k_sched_pick_next(void)
+{
     struct task *next = NULL;
     int prio;
 
@@ -220,7 +287,8 @@ struct task *k_sched_pick_next(void) {
     return next;
 }
 
-k_size_t k_sched_ready_count(void) {
+k_size_t k_sched_ready_count(void)
+{
     k_size_t count = 0;
     int prio;
 
@@ -233,7 +301,8 @@ k_size_t k_sched_ready_count(void) {
     return count;
 }
 
-k_size_t k_sched_sleeping_count(void) {
+k_size_t k_sched_sleeping_count(void)
+{
     k_size_t count;
 
     k_port_enter_critical();
@@ -243,11 +312,13 @@ k_size_t k_sched_sleeping_count(void) {
     return count;
 }
 
-k_size_t k_sched_blocked_count(void) {
+k_size_t k_sched_blocked_count(void)
+{
     return task_count_by_state(TASK_STATE_BLOCKED);
 }
 
-void k_sched_task_ready(struct task *t) {
+void k_sched_task_ready(struct task *t)
+{
     if (t == NULL) {
         return;
     }
@@ -258,7 +329,8 @@ void k_sched_task_ready(struct task *t) {
     k_port_exit_critical();
 }
 
-void k_sched_task_running(struct task *t) {
+void k_sched_task_running(struct task *t)
+{
     if (t == NULL) {
         return;
     }
@@ -269,7 +341,8 @@ void k_sched_task_running(struct task *t) {
     k_port_exit_critical();
 }
 
-void k_sched_task_terminated(struct task *t) {
+void k_sched_task_terminated(struct task *t)
+{
     k_size_t i;
 
     if (t == NULL) {

@@ -7,7 +7,7 @@ AlignAfterOpenBracket: Align
 AllowShortFunctionsOnASingleLine: Inline
 AllowShortIfStatementsOnASingleLine: false
 AllowShortLoopsOnASingleLine: false
-BreakBeforeBraces: Attach
+BreakBeforeBraces: Linux
 PointerAlignment: Right
 SortIncludes: false
 SpaceAfterCStyleCast: false

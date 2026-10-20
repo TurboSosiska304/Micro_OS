@@ -35,4 +35,15 @@ const char *k_port_name(void);
 /* Human readable architecture name, e.g. "xtensa-esp32". */
 const char *k_port_arch(void);
 
+/*
+ * Read one line from the console. Returns the number of characters read
+ * (without the newline) or -1 on end of input.
+ */
+int k_port_console_readline(char *buf, k_size_t size);
+
+/* Memory information. */
+k_size_t k_port_heap_free(void);
+k_size_t k_port_heap_total(void);
+k_size_t k_port_psram_free(void);
+
 #endif /* MICRO_OS_KERNEL_PORT_H */

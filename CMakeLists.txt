@@ -53,6 +53,7 @@ else()
 
     add_subdirectory(components/kernel)
     add_subdirectory(components/board)
+    add_subdirectory(components/kshell)
     add_subdirectory(ports/port_host)
     add_subdirectory(tests)
 

@@ -5,5 +5,5 @@ set(MICRO_OS_PORT_ESP32_SRCS "src/port_esp32.c")
 idf_component_register(
     SRCS ${MICRO_OS_PORT_ESP32_SRCS}
     INCLUDE_DIRS "include"
-    REQUIRES kernel esp_timer freertos
+    REQUIRES kernel esp_timer freertos esp_driver_uart vfs
 )

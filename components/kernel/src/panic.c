@@ -6,7 +6,8 @@
 #include "kernel/log.h"
 #include "kernel/port.h"
 
-_Noreturn void kernel_panic(const char *file, int line, const char *fmt, ...) {
+_Noreturn void kernel_panic(const char *file, int line, const char *fmt, ...)
+{
     char msg[192];
     va_list ap;
 

@@ -16,7 +16,8 @@
 #include "kernel/version.h"
 #include "port_host.h"
 
-static void heartbeat_task(void *arg) {
+static void heartbeat_task(void *arg)
+{
     K_UNUSED(arg);
 
     kinfo("heartbeat: started");
@@ -28,7 +29,8 @@ static void heartbeat_task(void *arg) {
     }
 }
 
-static void worker_task(void *arg) {
+static void worker_task(void *arg)
+{
     int id = (int)(intptr_t)arg;
     int i;
 
@@ -42,7 +44,8 @@ static void worker_task(void *arg) {
     kinfo("worker %d: done", id);
 }
 
-static int tasks_subsys_init(void) {
+static int tasks_subsys_init(void)
+{
     if (task_create("heartbeat", heartbeat_task, NULL, 8) == NULL) {
         return -1;
     }
@@ -62,7 +65,8 @@ static const struct kernel_subsys g_subsystems[] = {
     {"tasks", tasks_subsys_init, KERNEL_SUBSYS_LEVEL_APP},
 };
 
-static void repl(void) {
+static void repl(void)
+{
     char line[128];
 
     printf("microos> ");
@@ -87,7 +91,8 @@ static void repl(void) {
     }
 }
 
-int main(void) {
+int main(void)
+{
     const struct board_info *info = board_get_info();
     struct kernel_boot_config cfg;
 

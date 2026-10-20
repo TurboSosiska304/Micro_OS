@@ -14,6 +14,10 @@
 
 #define SCHED_READY_SLOTS 8
 
+/* Time slice of a task in ticks (1 tick = 1 ms). */
+#define SCHED_QUANTUM_DEFAULT 10
+#define SCHED_QUANTUM_MIN 1
+
 /* Initialise the scheduler. Must be called before the first task_create(). */
 void k_sched_init(void);
 
@@ -43,6 +47,15 @@ struct task *k_sched_pick_next(void);
 k_size_t k_sched_ready_count(void);
 k_size_t k_sched_sleeping_count(void);
 k_size_t k_sched_blocked_count(void);
+
+/*
+ * Time slice: when the running task has used up its quantum it is moved to
+ * the end of its priority queue, so that the tasks of the same priority take
+ * turns (Linux SCHED_RR style).
+ */
+void k_sched_set_quantum(k_u32_t ticks);
+k_u32_t k_sched_quantum(void);
+k_u32_t k_sched_quantum_left(void);
 
 /* Internal: called by the task trampoline. */
 void k_sched_task_ready(struct task *t);

@@ -15,6 +15,8 @@
 #define TASK_PRIO_MAX 15
 #define TASK_PRIO_DEFAULT 5
 #define TASK_MAX_TASKS 32
+#define TASK_MAX_FDS 8
+#define TASK_CWD_MAX 32
 
 typedef enum {
     TASK_STATE_NEW = 0,  /* created, not started yet */
@@ -37,12 +39,15 @@ struct task {
     k_u32_t wake_tick; /* tick at which a sleeping task wakes up */
     k_u32_t exit_code;
     k_u64_t runtime_ticks; /* bookkeeping: ticks spent running */
+    k_u32_t quantum_left;  /* ticks left in the current time slice */
     void *stack;           /* owned by the port */
     k_size_t stack_size;
     void *ctx; /* port context: FreeRTOS handle / pthread */
     task_entry_fn entry;
     void *arg;
     struct task *parent;
+    int fds[TASK_MAX_FDS]; /* file descriptors, -1 means closed */
+    char cwd[TASK_CWD_MAX];
     bool in_use;
 };
 
@@ -63,6 +68,27 @@ k_size_t task_count_by_state(task_state_t state);
 
 /* Release the slot of a finished task (Linux style reaping). */
 int task_reap(k_u32_t pid);
+
+/*
+ * Wait for a child task to finish, like waitpid(). The task is reaped and
+ * its exit code is stored in exit_code (may be NULL).
+ * Returns 0 on success, -1 if there is no such task, -2 on timeout.
+ */
+int task_wait(k_u32_t pid, int *exit_code, k_u32_t timeout_ms);
+
+/* Wait for any child task to finish. Returns the pid or -1. */
+int task_wait_any(int *exit_code, k_u32_t timeout_ms);
+
+/* File descriptors of a task. */
+int task_fd_alloc(struct task *t);
+int task_fd_set(struct task *t, int fd, int slot);
+int task_fd_get(struct task *t, int fd);
+void task_fd_close(struct task *t, int fd);
+void task_fds_init(struct task *t);
+
+/* Working directory of a task. */
+void task_set_cwd(struct task *t, const char *dir);
+const char *task_get_cwd(struct task *t);
 
 /* Helpers. */
 void task_set_name(struct task *t, const char *name);

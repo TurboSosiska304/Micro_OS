@@ -13,7 +13,8 @@
 
 static k_size_t g_booted_subsys;
 
-static int sched_subsys_init(void) {
+static int sched_subsys_init(void)
+{
     k_sched_init();
     return 0;
 }
@@ -26,7 +27,8 @@ static const struct kernel_subsys g_builtin_subsystems[] = {
     {"sched", sched_subsys_init, KERNEL_SUBSYS_LEVEL_CORE},
 };
 
-static void print_banner(const struct kernel_boot_config *cfg) {
+static void print_banner(const struct kernel_boot_config *cfg)
+{
     klog(K_LOG_LEVEL_INFO, "%s %s (build %s)", kernel_name(), kernel_version(), kernel_build_id());
     klog(K_LOG_LEVEL_INFO, "board: %s — %s", cfg->board ? cfg->board : KERNEL_BOARD_NAME,
          cfg->board_desc ? cfg->board_desc : KERNEL_BOARD_DESC);
@@ -37,7 +39,8 @@ static void print_banner(const struct kernel_boot_config *cfg) {
  * Stable insertion sort by level: subsystems with the same level keep the
  * order in which they were declared. The list is sorted in place.
  */
-static void sort_subsys_list(const struct kernel_subsys **list, k_size_t n) {
+static void sort_subsys_list(const struct kernel_subsys **list, k_size_t n)
+{
     k_size_t i;
 
     for (i = 0; i < n; i++) {
@@ -52,7 +55,8 @@ static void sort_subsys_list(const struct kernel_subsys **list, k_size_t n) {
     }
 }
 
-int kernel_boot(const struct kernel_boot_config *cfg) {
+int kernel_boot(const struct kernel_boot_config *cfg)
+{
     const struct kernel_subsys *sorted[KERNEL_MAX_SUBSYS];
     k_size_t n = 0;
     k_size_t i;
@@ -110,6 +114,7 @@ int kernel_boot(const struct kernel_boot_config *cfg) {
     return 0;
 }
 
-k_size_t kernel_boot_subsys_count(void) {
+k_size_t kernel_boot_subsys_count(void)
+{
     return g_booted_subsys;
 }

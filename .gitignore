@@ -1,5 +1,5 @@
-# --- ESP-IDF ---
-build/
+# build/
+build-host/
 build-*/
 sdkconfig
 sdkconfig.old
@@ -9,11 +9,9 @@ dependencies.lock
 config/sdkconfig.h
 
 # --- Host build ---
-build-host/
 *.o
 *.a
 *.elf
-*.bin
 *.map
 *.log
 

@@ -7,18 +7,22 @@
  * just like the init process of Linux.
  */
 #include "board/board.h"
+#include "drivers/drivers.h"
 #include "kernel/boot.h"
+#include "kernel/kmod.h"
 #include "kernel/log.h"
 #include "kernel/port.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
 #include "kernel/version.h"
+#include "kshell/kshell.h"
 #include "port_esp32.h"
 #include "selftest.h"
 
 #include <string.h>
 
-static int board_subsys_init(void) {
+static int board_subsys_init(void)
+{
     const struct board_info *info = board_get_info();
 
     klog(K_LOG_LEVEL_INFO, "soc: %s, flash: %u MB, psram: %u KB", info->soc,
@@ -29,11 +33,17 @@ static int board_subsys_init(void) {
     return 0;
 }
 
+static int drivers_subsys_init(void)
+{
+    return drivers_init();
+}
+
 /*
- * The init task: the first task of the system (PID 1). It keeps the system
- * alive and will later start the shell and the other services.
+ * The init task: the first task of the system (PID 1). It checks the kernel
+ * and the hardware, and later starts the shell and the other services.
  */
-static void init_task(void *arg) {
+static void init_task(void *arg)
+{
     struct task *self = task_self();
 
     K_UNUSED(arg);
@@ -44,12 +54,27 @@ static void init_task(void *arg) {
     /* The first thing the init process does: check that the kernel works. */
     selftest_run();
 
+    /* Then it walks through the modules and checks the hardware. */
+    kinfo("init: running the hardware doctor");
+    if (kmod_doctor() == 0) {
+        kinfo("init: all modules are healthy");
+    } else {
+        kwarn("init: the doctor found problems, see the report");
+    }
+    kmod_report();
+
+    /* And finally it starts the shell. */
+    if (task_create("shell", (task_entry_fn)kshell_run, NULL, TASK_PRIO_DEFAULT) == NULL) {
+        kerror("init: cannot start the shell");
+    }
+
     for (;;) {
         k_sched_sleep_ms(1000);
     }
 }
 
-static int tasks_subsys_init(void) {
+static int tasks_subsys_init(void)
+{
     if (task_create("init", init_task, NULL, TASK_PRIO_DEFAULT) == NULL) {
         return -1;
     }
@@ -59,10 +84,12 @@ static int tasks_subsys_init(void) {
 
 static const struct kernel_subsys g_subsystems[] = {
     {"board", board_subsys_init, KERNEL_SUBSYS_LEVEL_CORE},
+    {"drivers", drivers_subsys_init, KERNEL_SUBSYS_LEVEL_DRIVER},
     {"tasks", tasks_subsys_init, KERNEL_SUBSYS_LEVEL_APP},
 };
 
-void app_main(void) {
+void app_main(void)
+{
     const struct board_info *info = board_get_info();
     struct kernel_boot_config cfg;
 

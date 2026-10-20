@@ -21,7 +21,8 @@ static volatile int s_progress[SELFTEST_TASKS];
 static volatile int s_finished;
 static volatile int s_context_switches;
 
-static void selftest_worker(void *arg) {
+static void selftest_worker(void *arg)
+{
     int id = (int)(intptr_t)arg;
     int i;
 
@@ -35,7 +36,8 @@ static void selftest_worker(void *arg) {
     s_finished++;
 }
 
-static void print_task_table(void) {
+static void print_task_table(void)
+{
     struct task *self = task_self();
     k_size_t i;
     k_size_t count = task_count();
@@ -59,7 +61,8 @@ static void print_task_table(void) {
     }
 }
 
-int selftest_run(void) {
+int selftest_run(void)
+{
     int id;
     int waited = 0;
     int failures = 0;

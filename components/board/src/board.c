@@ -59,6 +59,7 @@ static const struct board_info g_info = {
 
 #endif
 
-const struct board_info *board_get_info(void) {
+const struct board_info *board_get_info(void)
+{
     return &g_info;
 }

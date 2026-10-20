@@ -7,7 +7,8 @@
 #include "kernel/log.h"
 #include "port_host.h"
 
-static void test_log_levels(void) {
+static void test_log_levels(void)
+{
     FILE *sink = tmpfile();
 
     ktest_begin("log: level filtering");
@@ -31,7 +32,8 @@ static void test_log_levels(void) {
     fclose(sink);
 }
 
-static void test_log_ring(void) {
+static void test_log_ring(void)
+{
     char buf[512];
     k_size_t used;
 
@@ -58,7 +60,8 @@ static void test_log_ring(void) {
     port_host_set_sink(NULL);
 }
 
-static void test_log_wrap(void) {
+static void test_log_wrap(void)
+{
     char buf[512];
     int i;
 
@@ -83,7 +86,8 @@ static void test_log_wrap(void) {
     port_host_set_sink(NULL);
 }
 
-void test_log(void) {
+void test_log(void)
+{
     test_log_levels();
     test_log_ring();
     test_log_wrap();

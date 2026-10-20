@@ -10,5 +10,7 @@ void test_version(void);
 void test_board(void);
 void test_task(void);
 void test_sched(void);
+void test_kmod(void);
+void test_kshell(void);
 
 #endif /* MICRO_OS_TESTS_H */

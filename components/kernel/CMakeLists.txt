@@ -6,6 +6,7 @@
 
 set(MICRO_OS_KERNEL_SRCS
     "src/boot.c"
+    "src/kmod.c"
     "src/log.c"
     "src/panic.c"
     "src/sched.c"

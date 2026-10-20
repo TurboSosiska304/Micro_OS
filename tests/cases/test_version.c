@@ -5,7 +5,8 @@
 
 #include "kernel/version.h"
 
-void test_version(void) {
+void test_version(void)
+{
     ktest_begin("version: identification strings are sane");
 
     KT_CHECK_STR_NE(kernel_name(), "");

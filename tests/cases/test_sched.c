@@ -11,7 +11,8 @@
 
 static volatile int g_blocked;
 
-static void blocker(void *arg) {
+static void blocker(void *arg)
+{
     struct task *self = task_self();
 
     K_UNUSED(arg);
@@ -34,7 +35,8 @@ static void blocker(void *arg) {
     }
 }
 
-static void test_ready_queue(void) {
+static void test_ready_queue(void)
+{
     struct task *low = NULL;
     struct task *high = NULL;
     struct task *next;
@@ -83,7 +85,8 @@ static void test_ready_queue(void) {
     port_host_set_sink(NULL);
 }
 
-static void test_sleep(void) {
+static void test_sleep(void)
+{
     k_u64_t start;
     k_u64_t elapsed;
 
@@ -97,7 +100,8 @@ static void test_sleep(void) {
     KT_CHECK(elapsed >= 50);
 }
 
-static void test_ticks(void) {
+static void test_ticks(void)
+{
     k_u32_t before;
     k_u32_t after;
 
@@ -110,8 +114,30 @@ static void test_ticks(void) {
     KT_CHECK(after > before);
 }
 
-void test_sched(void) {
+static void test_quantum(void)
+{
+    k_u32_t quantum;
+
+    ktest_begin("sched: the time slice is configurable and counted down");
+
+    quantum = k_sched_quantum();
+    KT_CHECK(quantum >= SCHED_QUANTUM_MIN);
+
+    k_sched_set_quantum(5);
+    KT_CHECK_INT_EQ(k_sched_quantum(), 5);
+
+    /* The quantum is counted down while the task runs. */
+    k_sched_sleep_ms(12);
+    KT_CHECK(k_sched_quantum_left() <= 5);
+
+    k_sched_set_quantum(quantum);
+    KT_CHECK_INT_EQ(k_sched_quantum(), quantum);
+}
+
+void test_sched(void)
+{
     test_ready_queue();
     test_sleep();
     test_ticks();
+    test_quantum();
 }

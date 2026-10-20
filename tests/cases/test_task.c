@@ -12,7 +12,8 @@ static volatile int g_ran;
 static volatile int g_order[8];
 static volatile int g_order_count;
 
-static void worker(void *arg) {
+static void worker(void *arg)
+{
     int id = (int)(intptr_t)arg;
 
     g_ran++;
@@ -21,7 +22,8 @@ static void worker(void *arg) {
     }
 }
 
-static void wait_for(int *counter, int value, int timeout_ms) {
+static void wait_for(int *counter, int value, int timeout_ms)
+{
     int waited = 0;
 
     while (*counter < value && waited < timeout_ms) {
@@ -30,7 +32,8 @@ static void wait_for(int *counter, int value, int timeout_ms) {
     }
 }
 
-static void wait_for_state(k_u32_t pid, task_state_t state, int timeout_ms) {
+static void wait_for_state(k_u32_t pid, task_state_t state, int timeout_ms)
+{
     int waited = 0;
 
     while (waited < timeout_ms) {
@@ -43,7 +46,8 @@ static void wait_for_state(k_u32_t pid, task_state_t state, int timeout_ms) {
     }
 }
 
-static void test_task_lifecycle(void) {
+static void test_task_lifecycle(void)
+{
     struct task *t;
 
     ktest_begin("task: create, run and exit");
@@ -74,7 +78,8 @@ static void test_task_lifecycle(void) {
     port_host_set_sink(NULL);
 }
 
-static void test_task_self(void) {
+static void test_task_self(void)
+{
     struct task *self;
 
     ktest_begin("task: task_self() returns the running task");
@@ -91,7 +96,8 @@ static void test_task_self(void) {
     KT_CHECK(task_by_pid(9999) == NULL);
 }
 
-static void test_task_table(void) {
+static void test_task_table(void)
+{
     struct task *a;
     struct task *b;
 
@@ -126,8 +132,132 @@ static void test_task_table(void) {
     port_host_set_sink(NULL);
 }
 
-void test_task(void) {
+static void test_task_parent(void)
+{
+    struct task *child;
+    struct task *self = task_self();
+
+    ktest_begin("task: a new task inherits the parent");
+
+    port_host_set_sink(tmpfile());
+    g_ran = 0;
+
+    child = task_create("child", worker, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(child != NULL);
+
+    if (child != NULL && self != NULL) {
+        KT_CHECK(child->parent == self);
+    }
+
+    wait_for((int *)&g_ran, 1, 2000);
+    if (child != NULL) {
+        task_reap(child->pid);
+    }
+
+    port_host_set_sink(NULL);
+}
+
+static void exiting_task(void *arg)
+{
+    int code = (int)(intptr_t)arg;
+
+    k_sched_sleep_ms(10);
+    task_exit(code);
+}
+
+static void test_task_wait(void)
+{
+    struct task *child;
+    int code = -1;
+    int rc;
+
+    ktest_begin("task: the parent waits for the child");
+
+    port_host_set_sink(tmpfile());
+
+    child = task_create("exiting", exiting_task, (void *)(intptr_t)7, TASK_PRIO_DEFAULT);
+    KT_CHECK(child != NULL);
+
+    if (child != NULL) {
+        rc = task_wait(child->pid, &code, 2000);
+
+        KT_CHECK_INT_EQ(rc, 0);
+        KT_CHECK_INT_EQ(code, 7);
+        /* The task has been reaped by the wait. */
+        KT_CHECK(task_by_pid(child->pid) == NULL);
+
+        /* Waiting for a task that does not exist must fail. */
+        KT_CHECK_INT_EQ(task_wait(4242, &code, 10), -1);
+    }
+
+    port_host_set_sink(NULL);
+}
+
+static void long_sleeping_task(void *arg)
+{
+    K_UNUSED(arg);
+
+    /* Stays alive longer than the timeout of the test. */
+    k_sched_sleep_ms(500);
+}
+
+static void test_task_wait_timeout(void)
+{
+    struct task *child;
+    int code = -1;
+
+    ktest_begin("task: waiting for a running task times out");
+
+    port_host_set_sink(tmpfile());
+
+    child = task_create("sleeper", long_sleeping_task, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(child != NULL);
+
+    if (child != NULL) {
+        KT_CHECK_INT_EQ(task_wait(child->pid, &code, 20), -2);
+        task_reap(child->pid);
+    }
+
+    port_host_set_sink(NULL);
+}
+
+static void test_task_fds(void)
+{
+    struct task *self = task_self();
+
+    ktest_begin("task: file descriptors and the working directory");
+
+    if (self == NULL) {
+        return;
+    }
+
+    /* Every task starts with closed descriptors and the root directory. */
+    KT_CHECK_INT_EQ(task_fd_get(self, 0), -1);
+    KT_CHECK_STR_EQ(task_get_cwd(self), "/");
+
+    KT_CHECK_INT_EQ(task_fd_alloc(self), 0);
+    KT_CHECK_INT_EQ(task_fd_alloc(self), 1);
+    KT_CHECK_INT_EQ(task_fd_get(self, 0), 0);
+    KT_CHECK_INT_EQ(task_fd_get(self, 1), 1);
+
+    KT_CHECK_INT_EQ(task_fd_set(self, 1, 42), 0);
+    KT_CHECK_INT_EQ(task_fd_get(self, 1), 42);
+
+    task_fd_close(self, 1);
+    KT_CHECK_INT_EQ(task_fd_get(self, 1), -1);
+
+    task_set_cwd(self, "/tmp");
+    KT_CHECK_STR_EQ(task_get_cwd(self), "/tmp");
+    task_set_cwd(self, "/");
+}
+
+void test_task(void)
+{
     test_task_lifecycle();
     test_task_self();
     test_task_table();
+    test_task_parent();
+    test_task_wait();
+    test_task_wait_timeout();
+    test_task_fds();
 }

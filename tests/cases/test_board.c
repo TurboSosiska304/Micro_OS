@@ -5,7 +5,8 @@
 
 #include "board/board.h"
 
-void test_board(void) {
+void test_board(void)
+{
     const struct board_info *info = board_get_info();
 
     ktest_begin("board: the description is complete");

@@ -12,7 +12,8 @@ static k_u32_t g_next;  /* slot to be written next */
 static k_u32_t g_count; /* amount of valid entries */
 static k_log_level_t g_level = K_LOG_LEVEL_INFO;
 
-static k_size_t str_len(const char *s) {
+static k_size_t str_len(const char *s)
+{
     k_size_t n = 0;
     while (s[n] != '\0') {
         n++;
@@ -20,22 +21,26 @@ static k_size_t str_len(const char *s) {
     return n;
 }
 
-void klog_init(k_log_level_t level) {
+void klog_init(k_log_level_t level)
+{
     g_level = level;
     g_next = 0;
     g_count = 0;
     memset(g_lines, 0, sizeof(g_lines));
 }
 
-void klog_set_level(k_log_level_t level) {
+void klog_set_level(k_log_level_t level)
+{
     g_level = level;
 }
 
-k_log_level_t klog_get_level(void) {
+k_log_level_t klog_get_level(void)
+{
     return g_level;
 }
 
-const char *klog_level_name(k_log_level_t level) {
+const char *klog_level_name(k_log_level_t level)
+{
     switch (level) {
     case K_LOG_LEVEL_DEBUG:
         return "debug";
@@ -52,7 +57,8 @@ const char *klog_level_name(k_log_level_t level) {
     }
 }
 
-void klog(k_log_level_t level, const char *fmt, ...) {
+void klog(k_log_level_t level, const char *fmt, ...)
+{
     char buf[KERNEL_LOG_LINE_MAX];
     va_list ap;
     int written;
@@ -83,17 +89,20 @@ void klog(k_log_level_t level, const char *fmt, ...) {
     k_port_write("\n", 1);
 }
 
-k_size_t klog_line_count(void) {
+k_size_t klog_line_count(void)
+{
     return (k_size_t)g_count;
 }
 
-void klog_clear(void) {
+void klog_clear(void)
+{
     g_next = 0;
     g_count = 0;
     memset(g_lines, 0, sizeof(g_lines));
 }
 
-k_size_t klog_dump(char *out, k_size_t out_size) {
+k_size_t klog_dump(char *out, k_size_t out_size)
+{
     k_u32_t i;
     k_size_t used = 0;
     k_size_t needed = 0;

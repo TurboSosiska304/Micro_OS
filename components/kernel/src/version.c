@@ -8,19 +8,23 @@
 #define KSTR_(x) #x
 #define KSTR(x) KSTR_(x)
 
-const char *kernel_name(void) {
+const char *kernel_name(void)
+{
     return KERNEL_NAME;
 }
 
-const char *kernel_version(void) {
+const char *kernel_version(void)
+{
     return KSTR(KERNEL_VERSION_MAJOR) "." KSTR(KERNEL_VERSION_MINOR) "." KSTR(KERNEL_VERSION_PATCH);
 }
 
-const char *kernel_build_id(void) {
+const char *kernel_build_id(void)
+{
     return __DATE__ " " __TIME__;
 }
 
-const char *kernel_compiler(void) {
+const char *kernel_compiler(void)
+{
 #if defined(__clang__)
     return "clang " __clang_version__;
 #elif defined(__GNUC__)
@@ -30,6 +34,7 @@ const char *kernel_compiler(void) {
 #endif
 }
 
-const char *kernel_arch(void) {
+const char *kernel_arch(void)
+{
     return k_port_arch();
 }

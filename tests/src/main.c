@@ -17,7 +17,8 @@
 static volatile bool g_done;
 static int g_result;
 
-static void run_tests(void *arg) {
+static void run_tests(void *arg)
+{
     K_UNUSED(arg);
 
     test_version();
@@ -25,13 +26,16 @@ static void run_tests(void *arg) {
     test_log();
     test_task();
     test_sched();
+    test_kmod();
+    test_kshell();
     test_boot();
 
     g_result = ktest_summary();
     g_done = true;
 }
 
-int main(void) {
+int main(void)
+{
     struct task *runner;
 
     printf("Micro OS unit tests\n\n");

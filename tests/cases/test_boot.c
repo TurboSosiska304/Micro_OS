@@ -12,33 +12,39 @@
 static const char *g_order[MAX_RECORDED];
 static int g_order_count;
 
-static void record(const char *name) {
+static void record(const char *name)
+{
     if (g_order_count < MAX_RECORDED) {
         g_order[g_order_count++] = name;
     }
 }
 
-static int init_app(void) {
+static int init_app(void)
+{
     record("app");
     return 0;
 }
 
-static int init_core(void) {
+static int init_core(void)
+{
     record("core");
     return 0;
 }
 
-static int init_driver(void) {
+static int init_driver(void)
+{
     record("driver");
     return 0;
 }
 
-static int init_service(void) {
+static int init_service(void)
+{
     record("service");
     return 0;
 }
 
-static void test_boot_order(void) {
+static void test_boot_order(void)
+{
     static const struct kernel_subsys subsys[] = {
         {"app", init_app, KERNEL_SUBSYS_LEVEL_APP},
         {"core", init_core, KERNEL_SUBSYS_LEVEL_CORE},
@@ -74,7 +80,8 @@ static void test_boot_order(void) {
     port_host_set_sink(NULL);
 }
 
-static void test_boot_failure(void) {
+static void test_boot_failure(void)
+{
     static const struct kernel_subsys ok_subsys[] = {
         {"good", init_core, KERNEL_SUBSYS_LEVEL_CORE},
     };
@@ -102,7 +109,8 @@ static void test_boot_failure(void) {
     port_host_set_sink(NULL);
 }
 
-void test_boot(void) {
+void test_boot(void)
+{
     test_boot_order();
     test_boot_failure();
 }

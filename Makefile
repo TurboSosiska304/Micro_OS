@@ -10,7 +10,7 @@ BUILD_DIR   ?= build-host
 IDF_EXPORT  ?= $(HOME)/esp/esp-idf/export.sh
 IDF_TARGET  ?= esp32
 
-.PHONY: help all build test sim clean format idf-build idf-flash idf-monitor idf-size
+.PHONY: help all build test sim clean format idf-build idf-flash idf-monitor idf-size bundle
 
 help:
 	@echo "Micro OS — available targets:"
@@ -23,6 +23,7 @@ help:
 	@echo "  make idf-flash  flash the ESP32 firmware over USB"
 	@echo "  make idf-monitor attach the serial monitor"
 	@echo "  make idf-size   show the firmware size report"
+	@echo "  make bundle     copy the firmware into bild/ for distribution"
 
 all: build
 
@@ -56,3 +57,15 @@ idf-monitor:
 
 idf-size:
 	. $(IDF_EXPORT) && idf.py -D IDF_TARGET=$(IDF_TARGET) size
+
+# Collect the firmware into bild/ so that it can be downloaded and flashed
+# without the whole project.
+bundle:
+	. $(IDF_EXPORT) && idf.py -D IDF_TARGET=$(IDF_TARGET) build
+	mkdir -p bild
+	cp build/micro_os.bin bild/micro_os.bin
+	cp build/bootloader/bootloader.bin bild/bootloader.bin
+	cp build/partition_table/partition-table.bin bild/partition-table.bin
+	cp build/ota_data_initial.bin bild/ota_data_initial.bin
+	cd bild && sha256sum micro_os.bin bootloader.bin partition-table.bin ota_data_initial.bin > checksums.txt
+	@echo "the firmware is in bild/, flash it with: bild/flash.sh"

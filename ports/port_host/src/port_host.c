@@ -1,6 +1,7 @@
 #include "port_host.h"
 
 #include <errno.h>
+#include <malloc.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdlib.h>
@@ -17,11 +18,13 @@
 
 static FILE *s_sink;
 
-void port_host_set_sink(FILE *sink) {
+void port_host_set_sink(FILE *sink)
+{
     s_sink = sink;
 }
 
-FILE *port_host_get_sink(void) {
+FILE *port_host_get_sink(void)
+{
     return s_sink != NULL ? s_sink : stdout;
 }
 
@@ -35,7 +38,8 @@ static pthread_mutex_t s_lock;
 static pthread_once_t s_once = PTHREAD_ONCE_INIT;
 static pthread_key_t s_task_key;
 
-static void host_once_init(void) {
+static void host_once_init(void)
+{
     pthread_mutexattr_t attr;
 
     pthread_mutexattr_init(&attr);
@@ -46,26 +50,31 @@ static void host_once_init(void) {
     pthread_key_create(&s_task_key, NULL);
 }
 
-static void host_lock(void) {
+static void host_lock(void)
+{
     pthread_once(&s_once, host_once_init);
     pthread_mutex_lock(&s_lock);
 }
 
-static void host_unlock(void) {
+static void host_unlock(void)
+{
     pthread_mutex_unlock(&s_lock);
 }
 
-void k_port_enter_critical(void) {
+void k_port_enter_critical(void)
+{
     host_lock();
 }
 
-void k_port_exit_critical(void) {
+void k_port_exit_critical(void)
+{
     host_unlock();
 }
 
 /* --- basic port API --- */
 
-void k_port_write(const char *data, k_size_t len) {
+void k_port_write(const char *data, k_size_t len)
+{
     if (data == NULL || len == 0) {
         return;
     }
@@ -73,7 +82,8 @@ void k_port_write(const char *data, k_size_t len) {
     fflush(port_host_get_sink());
 }
 
-k_u64_t k_port_uptime_ms(void) {
+k_u64_t k_port_uptime_ms(void)
+{
     struct timespec ts;
 
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
@@ -82,21 +92,25 @@ k_u64_t k_port_uptime_ms(void) {
     return (k_u64_t)ts.tv_sec * 1000u + (k_u64_t)(ts.tv_nsec / 1000000);
 }
 
-void k_port_halt(void) {
+void k_port_halt(void)
+{
     for (;;) {
         sleep(1);
     }
 }
 
-void k_port_reset(void) {
+void k_port_reset(void)
+{
     exit(0);
 }
 
-const char *k_port_name(void) {
+const char *k_port_name(void)
+{
     return "host";
 }
 
-const char *k_port_arch(void) {
+const char *k_port_arch(void)
+{
 #if defined(__x86_64__)
     return "x86_64";
 #elif defined(__aarch64__)
@@ -104,6 +118,58 @@ const char *k_port_arch(void) {
 #else
     return "host";
 #endif
+}
+
+/* --- console --- */
+
+int k_port_console_readline(char *buf, k_size_t size)
+{
+    if (buf == NULL || size == 0) {
+        return -1;
+    }
+
+    if (fgets(buf, (int)size, stdin) == NULL) {
+        return -1;
+    }
+
+    {
+        k_size_t len = strlen(buf);
+
+        while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r')) {
+            buf[--len] = '\0';
+        }
+
+        return (int)len;
+    }
+}
+
+/* --- memory --- */
+
+k_size_t k_port_heap_free(void)
+{
+#if defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 33))
+    struct mallinfo2 info = mallinfo2();
+
+    return (k_size_t)(info.arena - info.uordblks);
+#else
+    return 0;
+#endif
+}
+
+k_size_t k_port_heap_total(void)
+{
+#if defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 33))
+    struct mallinfo2 info = mallinfo2();
+
+    return (k_size_t)info.arena;
+#else
+    return 0;
+#endif
+}
+
+k_size_t k_port_psram_free(void)
+{
+    return 0;
 }
 
 /* --- tasks (pthreads) --- */
@@ -116,11 +182,13 @@ typedef struct {
     bool started;
 } host_task_ctl;
 
-k_size_t k_port_task_stack_size(void) {
+k_size_t k_port_task_stack_size(void)
+{
     return 64 * 1024;
 }
 
-static void *host_task_thread(void *arg) {
+static void *host_task_thread(void *arg)
+{
     host_task_ctl *ctl = (host_task_ctl *)arg;
 
     pthread_once(&s_once, host_once_init);
@@ -137,7 +205,8 @@ static void *host_task_thread(void *arg) {
     return NULL;
 }
 
-int k_port_task_create(struct task *t, k_port_task_entry_fn entry, void *arg) {
+int k_port_task_create(struct task *t, k_port_task_entry_fn entry, void *arg)
+{
     host_task_ctl *ctl;
     pthread_attr_t attr;
     pthread_t thread;
@@ -174,7 +243,8 @@ int k_port_task_create(struct task *t, k_port_task_entry_fn entry, void *arg) {
     return 0;
 }
 
-void k_port_task_start(struct task *t) {
+void k_port_task_start(struct task *t)
+{
     host_task_ctl *ctl;
 
     if (t == NULL) {
@@ -192,12 +262,14 @@ void k_port_task_start(struct task *t) {
     pthread_mutex_unlock(&ctl->lock);
 }
 
-void k_port_task_yield(void) {
+void k_port_task_yield(void)
+{
     /* POSIX scheduler yield (kernel/sched.h uses the k_ prefix to avoid the clash). */
     sched_yield();
 }
 
-void k_port_task_sleep_ms(k_u32_t ms) {
+void k_port_task_sleep_ms(k_u32_t ms)
+{
     struct timespec ts;
 
     ts.tv_sec = (time_t)(ms / 1000u);
@@ -208,12 +280,14 @@ void k_port_task_sleep_ms(k_u32_t ms) {
     }
 }
 
-void k_port_task_exit(int code) {
+void k_port_task_exit(int code)
+{
     K_UNUSED(code);
     pthread_exit(NULL);
 }
 
-struct task *k_port_task_current(void) {
+struct task *k_port_task_current(void)
+{
     struct task *t;
 
     pthread_once(&s_once, host_once_init);
@@ -227,7 +301,8 @@ struct task *k_port_task_current(void) {
 static pthread_t s_tick_thread;
 static volatile bool s_tick_running;
 
-static void *host_tick_thread(void *arg) {
+static void *host_tick_thread(void *arg)
+{
     long interval_ms = (long)(intptr_t)arg;
     struct timespec ts;
 
@@ -244,7 +319,8 @@ static void *host_tick_thread(void *arg) {
     return NULL;
 }
 
-void port_host_start_tick(long interval_ms) {
+void port_host_start_tick(long interval_ms)
+{
     if (interval_ms <= 0) {
         interval_ms = 1;
     }
@@ -256,7 +332,8 @@ void port_host_start_tick(long interval_ms) {
     }
 }
 
-void port_host_stop_tick(void) {
+void port_host_stop_tick(void)
+{
     s_tick_running = false;
     pthread_join(s_tick_thread, NULL);
 }

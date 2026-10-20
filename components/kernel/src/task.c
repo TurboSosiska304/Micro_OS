@@ -15,14 +15,16 @@ static const char *const g_state_names[] = {
     "new", "ready", "running", "sleeping", "blocked", "zombie", "dead",
 };
 
-const char *task_state_name(task_state_t state) {
+const char *task_state_name(task_state_t state)
+{
     if ((k_u32_t)state >= K_ARRAY_SIZE(g_state_names)) {
         return "?";
     }
     return g_state_names[state];
 }
 
-void task_set_name(struct task *t, const char *name) {
+void task_set_name(struct task *t, const char *name)
+{
     if (t == NULL) {
         return;
     }
@@ -34,11 +36,95 @@ void task_set_name(struct task *t, const char *name) {
     t->name[TASK_NAME_MAX - 1] = '\0';
 }
 
+void task_fds_init(struct task *t)
+{
+    int i;
+
+    if (t == NULL) {
+        return;
+    }
+
+    for (i = 0; i < TASK_MAX_FDS; i++) {
+        t->fds[i] = -1;
+    }
+}
+
+int task_fd_alloc(struct task *t)
+{
+    int i;
+
+    if (t == NULL) {
+        return -1;
+    }
+
+    for (i = 0; i < TASK_MAX_FDS; i++) {
+        if (t->fds[i] == -1) {
+            t->fds[i] = i;
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+int task_fd_set(struct task *t, int fd, int slot)
+{
+    if (t == NULL || fd < 0 || fd >= TASK_MAX_FDS) {
+        return -1;
+    }
+
+    t->fds[fd] = slot;
+    return 0;
+}
+
+int task_fd_get(struct task *t, int fd)
+{
+    if (t == NULL || fd < 0 || fd >= TASK_MAX_FDS) {
+        return -1;
+    }
+
+    return t->fds[fd];
+}
+
+void task_fd_close(struct task *t, int fd)
+{
+    if (t == NULL || fd < 0 || fd >= TASK_MAX_FDS) {
+        return;
+    }
+
+    t->fds[fd] = -1;
+}
+
+void task_set_cwd(struct task *t, const char *dir)
+{
+    if (t == NULL) {
+        return;
+    }
+
+    if (dir == NULL) {
+        t->cwd[0] = '\0';
+        return;
+    }
+
+    strncpy(t->cwd, dir, TASK_CWD_MAX - 1);
+    t->cwd[TASK_CWD_MAX - 1] = '\0';
+}
+
+const char *task_get_cwd(struct task *t)
+{
+    if (t == NULL) {
+        return NULL;
+    }
+
+    return t->cwd;
+}
+
 /*
- * The trampoline: every task starts here. It marks the task as running and
- * calls the user entry point.
+ * The trampoline: every task starts running here. It marks the task as
+ * running and calls the user entry point.
  */
-static void task_trampoline(void *arg) {
+static void task_trampoline(void *arg)
+{
     struct task *t = (struct task *)arg;
 
     k_sched_task_running(t);
@@ -50,7 +136,8 @@ static void task_trampoline(void *arg) {
     task_exit(0);
 }
 
-struct task *task_create(const char *name, task_entry_fn entry, void *arg, k_u8_t prio) {
+struct task *task_create(const char *name, task_entry_fn entry, void *arg, k_u8_t prio)
+{
     struct task *t = NULL;
     k_size_t i;
 
@@ -76,6 +163,9 @@ struct task *task_create(const char *name, task_entry_fn entry, void *arg, k_u8_
         t->entry = entry;
         t->arg = arg;
         t->stack_size = k_port_task_stack_size();
+        t->parent = task_self();
+        task_fds_init(t);
+        task_set_cwd(t, "/");
         task_set_name(t, name);
         g_used++;
     }
@@ -108,7 +198,8 @@ struct task *task_create(const char *name, task_entry_fn entry, void *arg, k_u8_
     return t;
 }
 
-void task_exit(int code) {
+void task_exit(int code)
+{
     struct task *self = task_self();
 
     if (self != NULL) {
@@ -128,11 +219,13 @@ void task_exit(int code) {
     }
 }
 
-struct task *task_self(void) {
+struct task *task_self(void)
+{
     return k_port_task_current();
 }
 
-struct task *task_by_pid(k_u32_t pid) {
+struct task *task_by_pid(k_u32_t pid)
+{
     struct task *found = NULL;
     k_size_t i;
 
@@ -148,7 +241,8 @@ struct task *task_by_pid(k_u32_t pid) {
     return found;
 }
 
-struct task *task_get_by_index(k_size_t index) {
+struct task *task_get_by_index(k_size_t index)
+{
     struct task *t = NULL;
 
     k_port_enter_critical();
@@ -160,7 +254,8 @@ struct task *task_get_by_index(k_size_t index) {
     return t;
 }
 
-k_size_t task_count(void) {
+k_size_t task_count(void)
+{
     k_size_t count;
 
     k_port_enter_critical();
@@ -170,7 +265,8 @@ k_size_t task_count(void) {
     return count;
 }
 
-k_size_t task_count_by_state(task_state_t state) {
+k_size_t task_count_by_state(task_state_t state)
+{
     k_size_t i;
     k_size_t count = 0;
 
@@ -185,7 +281,8 @@ k_size_t task_count_by_state(task_state_t state) {
     return count;
 }
 
-int task_reap(k_u32_t pid) {
+int task_reap(k_u32_t pid)
+{
     k_size_t i;
     int rc = -1;
 
@@ -204,4 +301,70 @@ int task_reap(k_u32_t pid) {
     k_port_exit_critical();
 
     return rc;
+}
+
+int task_wait(k_u32_t pid, int *exit_code, k_u32_t timeout_ms)
+{
+    k_u32_t waited = 0;
+
+    for (;;) {
+        struct task *t = task_by_pid(pid);
+
+        if (t == NULL) {
+            /* Already reaped or never existed. */
+            return -1;
+        }
+
+        if (t->state == TASK_STATE_ZOMBIE || t->state == TASK_STATE_DEAD) {
+            int code = (int)t->exit_code;
+
+            if (exit_code != NULL) {
+                *exit_code = code;
+            }
+            task_reap(pid);
+            return 0;
+        }
+
+        if (waited >= timeout_ms) {
+            return -2;
+        }
+
+        k_sched_sleep_ms(1);
+        waited++;
+    }
+}
+
+int task_wait_any(int *exit_code, k_u32_t timeout_ms)
+{
+    k_u32_t waited = 0;
+
+    for (;;) {
+        k_size_t i;
+
+        for (i = 0; i < TASK_MAX_TASKS; i++) {
+            struct task *t = task_get_by_index(i);
+
+            if (t == NULL) {
+                continue;
+            }
+
+            if (t->state == TASK_STATE_ZOMBIE || t->state == TASK_STATE_DEAD) {
+                int code = (int)t->exit_code;
+                k_u32_t pid = t->pid;
+
+                if (exit_code != NULL) {
+                    *exit_code = code;
+                }
+                task_reap(pid);
+                return (int)pid;
+            }
+        }
+
+        if (waited >= timeout_ms) {
+            return -1;
+        }
+
+        k_sched_sleep_ms(1);
+        waited++;
+    }
 }
