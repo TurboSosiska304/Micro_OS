@@ -14,6 +14,7 @@
 #include "kernel/task.h"
 #include "kernel/version.h"
 #include "port_esp32.h"
+#include "selftest.h"
 
 #include <string.h>
 
@@ -39,6 +40,9 @@ static void init_task(void *arg) {
 
     kinfo("init: system is up, pid %u, uptime %llu ms", (unsigned)(self ? self->pid : 0),
           (unsigned long long)k_sched_uptime_ms());
+
+    /* The first thing the init process does: check that the kernel works. */
+    selftest_run();
 
     for (;;) {
         k_sched_sleep_ms(1000);
