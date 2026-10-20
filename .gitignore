@@ -1,0 +1,31 @@
+# --- ESP-IDF ---
+build/
+build-*/
+sdkconfig
+sdkconfig.old
+managed_components/
+dependencies.lock
+*.sdkconfig
+config/sdkconfig.h
+
+# --- Host build ---
+build-host/
+*.o
+*.a
+*.elf
+*.bin
+*.map
+*.log
+
+# --- Editors / IDE ---
+.vscode/
+.idea/
+.cache/
+compile_commands.json
+*.swp
+*~
+.DS_Store
+
+# --- Runtime artifacts ---
+core*.csv
+core*.txt
