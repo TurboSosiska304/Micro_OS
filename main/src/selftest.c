@@ -36,6 +36,7 @@ static void selftest_worker(void *arg) {
 }
 
 static void print_task_table(void) {
+    struct task *self = task_self();
     k_size_t i;
     k_size_t count = task_count();
 
@@ -44,13 +45,17 @@ static void print_task_table(void) {
 
     for (i = 0; i < count + 8; i++) {
         struct task *t = task_get_by_index(i);
+        const char *state;
 
         if (t == NULL) {
             continue;
         }
 
-        klog(K_LOG_LEVEL_INFO, "  %3u  %4u  %-8s  %s", (unsigned)t->pid, (unsigned)t->prio,
-             task_state_name(t->state), t->name);
+        /* The task that prints the table is running, not just ready. */
+        state = (t == self) ? "running" : task_state_name(t->state);
+
+        klog(K_LOG_LEVEL_INFO, "  %3u  %4u  %-8s  %s", (unsigned)t->pid, (unsigned)t->prio, state,
+             t->name);
     }
 }
 

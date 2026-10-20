@@ -50,5 +50,43 @@ the Xtensa registers (the same way FreeRTOS does it for xPort).
   switches tasks by its own rules (time slicing), with our priority level on top.
 * Two priority levels (FreeRTOS and ours) can conflict: the FreeRTOS priority of
   a kernel task has to be chosen carefully.
+## Consequences
+
+**Good:**
+
+* Working multitasking already in phase 1, without risky low-level tricks.
+* WiFi/BLE/TLS keep working: they live in FreeRTOS tasks.
+* A bug in the scheduler does not end in "a hang in IRAM" — the FreeRTOS watchdog
+  recovers the task.
+
+**Bad:**
+
+* The exact priority behaviour does not match Linux: the FreeRTOS scheduler
+  switches tasks by its own rules (time slicing), with our priority level on top.
+* Two priority levels (FreeRTOS and ours) can conflict: the FreeRTOS priority of
+  a kernel task has to be chosen carefully.
 * Moving to our own scheduler is separate work involving Xtensa register saving;
   mistakes there are unpleasant (a silent portrait of garbage on the stack).
+
+## Measured on the device
+
+The first version of the scheduler was verified on a real StickC Plus2:
+
+```
+MicroOS 0.1.0 (build Oct 21 2026 01:36:03)
+board: stickc_plus2 — M5Stack StickC Plus2
+arch: xtensa-esp32, compiler: gcc 13.2.0
+[ ok ] sched
+[ ok ] board
+init: system is up, pid 1, uptime 0 ms
+selftest: 3 task(s), 15 context switch(es)
+  pid  prio  state     name
+    1     5  running   init
+    2     5  zombie    selftest0
+    3     6  zombie    selftest1
+    4     7  zombie    selftest2
+selftest: PASS
+```
+
+Memory footprint of that build: 102 KB of flash code, 58 KB of IRAM, 22 KB of DRAM
+and the 2 MB PSRAM pool registered in the heap.

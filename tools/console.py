@@ -29,9 +29,26 @@ def find_port() -> str:
     return candidates[0]
 
 
+def reset_board(ser) -> None:
+    """Reset the board through the DTR/RTS lines of the USB serial chip.
+
+    The CH9102 of the StickC Plus2 is wired to the auto reset circuit of the
+    ESP32: RTS drives EN (reset), DTR drives GPIO0 (boot mode). Holding IO0
+    high and pulsing EN low boots the application.
+    """
+    ser.dtr = False  # IO0 high: boot the application, not the loader
+    ser.rts = True   # EN low: reset
+    time.sleep(0.1)
+    ser.rts = False  # EN high: run
+    time.sleep(0.2)
+
+
 def main() -> int:
-    port = sys.argv[1] if len(sys.argv) > 1 else find_port()
-    seconds = float(sys.argv[2]) if len(sys.argv) > 2 else 20.0
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    do_reset = "--reset" in sys.argv
+
+    port = args[0] if len(args) > 0 else find_port()
+    seconds = float(args[1]) if len(args) > 1 else 20.0
 
     print(f"--- console on {port} for {seconds:.0f}s ---", flush=True)
 
@@ -40,6 +57,10 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"cannot open {port}: {exc}", file=sys.stderr)
         return 2
+
+    if do_reset:
+        print("--- resetting the board ---", flush=True)
+        reset_board(ser)
 
     deadline = time.time() + seconds
     buffer = ""

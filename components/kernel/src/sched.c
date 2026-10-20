@@ -140,7 +140,11 @@ void k_sched_sleep_ms(k_u32_t ms) {
     k_port_enter_critical();
     previous = self->state;
     self->state = TASK_STATE_SLEEPING;
-    self->wake_state = previous;
+    /*
+     * A blocked task stays blocked, everything else returns to the run
+     * queue: after the timeout the task is runnable again.
+     */
+    self->wake_state = (previous == TASK_STATE_BLOCKED) ? TASK_STATE_BLOCKED : TASK_STATE_READY;
     self->wake_tick = g_ticks + ms;
     /* A sleeping task is not in the run queue. */
     ready_remove(self);
@@ -173,7 +177,6 @@ void k_sched_sleep_ms(k_u32_t ms) {
     }
     k_port_exit_critical();
 }
-
 void k_sched_block(struct task *t) {
     if (t == NULL) {
         return;
