@@ -21,12 +21,14 @@ Every phase ends with a working state on the device and green tests.
 
 ## Phase 1 - Tasks and scheduler
 
-* [ ] `struct task`, states, priorities
-* [ ] Context switching (FreeRTOS substrate first), `task_yield`, `sleep`
-* [ ] Timer queue, 1 ms tick
-* [ ] PID allocation, `/proc/<pid>`
-* [ ] `init` as PID 1, spawning "user" tasks
-* [ ] Tests: scheduling, priorities, switching
+* [x] `struct task`, states, priorities, PID allocation
+* [x] Context switching (FreeRTOS substrate), `k_sched_yield`, `k_sched_sleep_ms`
+* [x] Run queues per priority level, sleep queue, 1 ms tick
+* [x] `init` as PID 1, spawning "user" tasks
+* [x] Tests: task lifecycle, priorities, ready queue, sleeping, ticking
+* [ ] `/proc/<pid>`, per task file descriptors and working directory
+* [ ] `fork`/`exec`/`wait` semantics on top of the task model
+* [ ] Round-robin preemption with a time slice (Linux `SCHED_RR` style)
 
 ## Phase 2 - VFS, procfs, devfs, shell
 

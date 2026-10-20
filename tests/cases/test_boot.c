@@ -7,27 +7,43 @@
 #include "kernel/log.h"
 #include "port_host.h"
 
-static int g_init_order[8];
-static int g_init_count;
+#define MAX_RECORDED 8
 
-static int record_init(void) {
-    if (g_init_count < (int)(sizeof(g_init_order) / sizeof(g_init_order[0]))) {
-        g_init_order[g_init_count] = g_init_count;
+static const char *g_order[MAX_RECORDED];
+static int g_order_count;
+
+static void record(const char *name) {
+    if (g_order_count < MAX_RECORDED) {
+        g_order[g_order_count++] = name;
     }
-    g_init_count++;
+}
+
+static int init_app(void) {
+    record("app");
     return 0;
 }
 
-static int failing_init(void) {
-    return -42;
+static int init_core(void) {
+    record("core");
+    return 0;
+}
+
+static int init_driver(void) {
+    record("driver");
+    return 0;
+}
+
+static int init_service(void) {
+    record("service");
+    return 0;
 }
 
 static void test_boot_order(void) {
     static const struct kernel_subsys subsys[] = {
-        {"app", record_init, KERNEL_SUBSYS_LEVEL_APP},
-        {"core", record_init, KERNEL_SUBSYS_LEVEL_CORE},
-        {"driver", record_init, KERNEL_SUBSYS_LEVEL_DRIVER},
-        {"service", record_init, KERNEL_SUBSYS_LEVEL_SERVICE},
+        {"app", init_app, KERNEL_SUBSYS_LEVEL_APP},
+        {"core", init_core, KERNEL_SUBSYS_LEVEL_CORE},
+        {"driver", init_driver, KERNEL_SUBSYS_LEVEL_DRIVER},
+        {"service", init_service, KERNEL_SUBSYS_LEVEL_SERVICE},
     };
     struct kernel_boot_config cfg;
 
@@ -39,21 +55,28 @@ static void test_boot_order(void) {
     cfg.subsystems = subsys;
     cfg.nsubsystems = K_ARRAY_SIZE(subsys);
 
-    g_init_count = 0;
-    memset(g_init_order, 0, sizeof(g_init_order));
+    g_order_count = 0;
+    memset(g_order, 0, sizeof(g_order));
     port_host_set_sink(tmpfile());
 
     KT_CHECK_INT_EQ(kernel_boot(&cfg), 0);
-    KT_CHECK_INT_EQ(g_init_count, 4);
-    KT_CHECK_INT_EQ(kernel_boot_subsys_count(), 4);
+    /* Four subsystems of the platform plus the built-in "sched". */
+    KT_CHECK_INT_EQ(kernel_boot_subsys_count(), 5);
+
+    KT_CHECK_INT_EQ(g_order_count, 4);
+    if (g_order_count == 4) {
+        KT_CHECK_STR_EQ(g_order[0], "core");
+        KT_CHECK_STR_EQ(g_order[1], "driver");
+        KT_CHECK_STR_EQ(g_order[2], "service");
+        KT_CHECK_STR_EQ(g_order[3], "app");
+    }
 
     port_host_set_sink(NULL);
 }
 
 static void test_boot_failure(void) {
-    static const struct kernel_subsys subsys[] = {
-        {"good", record_init, KERNEL_SUBSYS_LEVEL_CORE},
-        {"bad", failing_init, KERNEL_SUBSYS_LEVEL_DRIVER},
+    static const struct kernel_subsys ok_subsys[] = {
+        {"good", init_core, KERNEL_SUBSYS_LEVEL_CORE},
     };
     struct kernel_boot_config cfg;
 
@@ -62,29 +85,21 @@ static void test_boot_failure(void) {
     memset(&cfg, 0, sizeof(cfg));
     cfg.board = "test";
     cfg.board_desc = "unit test board";
-    cfg.subsystems = subsys;
-    cfg.nsubsystems = K_ARRAY_SIZE(subsys);
+    cfg.subsystems = ok_subsys;
+    cfg.nsubsystems = K_ARRAY_SIZE(ok_subsys);
 
-    g_init_count = 0;
+    g_order_count = 0;
+    port_host_set_sink(tmpfile());
 
-    /* The failing subsystem panics, which halts the host process. That is
-     * the expected behaviour, so the case is only checked for not crashing
-     * unexpectedly when the subsystem succeeds. */
-    {
-        static const struct kernel_subsys ok_subsys[] = {
-            {"good", record_init, KERNEL_SUBSYS_LEVEL_CORE},
-        };
-        struct kernel_boot_config ok_cfg;
+    /*
+     * A subsystem that fails makes the kernel panic, which halts the host
+     * process. That is the expected behaviour, so only the successful path is
+     * exercised here; the failure path is checked on the device.
+     */
+    KT_CHECK_INT_EQ(kernel_boot(&cfg), 0);
+    KT_CHECK_INT_EQ(kernel_boot_subsys_count(), 2);
 
-        memset(&ok_cfg, 0, sizeof(ok_cfg));
-        ok_cfg.board = "test";
-        ok_cfg.board_desc = "unit test board";
-        ok_cfg.subsystems = ok_subsys;
-        ok_cfg.nsubsystems = K_ARRAY_SIZE(ok_subsys);
-
-        KT_CHECK_INT_EQ(kernel_boot(&ok_cfg), 0);
-        KT_CHECK_INT_EQ(g_init_count, 1);
-    }
+    port_host_set_sink(NULL);
 }
 
 void test_boot(void) {
