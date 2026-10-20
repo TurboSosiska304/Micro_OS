@@ -33,6 +33,7 @@ static SemaphoreHandle_t s_lock;
 typedef struct {
     TaskHandle_t handle;
     struct task *task;
+    k_port_task_entry_fn entry;
 } esp_task_entry;
 
 static esp_task_entry s_registry[TASK_MAX_TASKS];
@@ -125,6 +126,7 @@ int k_port_task_create(struct task *t, k_port_task_entry_fn entry, void *arg) {
     }
 
     slot->task = t;
+    slot->entry = entry;
 
     rc = xTaskCreate(esp_task_thread, "ktask", TASK_STACK_SIZE / sizeof(StackType_t), slot,
                      TASK_FREERTOS_PRIO_BASE + t->prio, &slot->handle);
@@ -201,6 +203,11 @@ static void esp_tick_timer(void *arg) {
 }
 
 esp_err_t port_esp32_start_tick(uint32_t period_ms) {
+    const esp_timer_create_args_t args = {
+        .callback = esp_tick_timer,
+        .name = "microos_tick",
+        .dispatch_method = ESP_TIMER_TASK,
+    };
     esp_timer_handle_t timer;
     esp_err_t rc;
 
@@ -208,11 +215,7 @@ esp_err_t port_esp32_start_tick(uint32_t period_ms) {
         period_ms = 1;
     }
 
-    rc = esp_timer_create(&timer, esp_timer_create_args_t{
-                                      .callback = esp_tick_timer,
-                                      .name = "microos_tick",
-                                      .dispatch_method = ESP_TIMER_TASK,
-                                  });
+    rc = esp_timer_create(&timer, &args);
     if (rc != ESP_OK) {
         return rc;
     }
