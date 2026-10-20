@@ -26,19 +26,41 @@ Every phase ends with a working state on the device and green tests.
 * [x] Run queues per priority level, sleep queue, 1 ms tick
 * [x] `init` as PID 1, spawning "user" tasks
 * [x] Tests: task lifecycle, priorities, ready queue, sleeping, ticking
-* [ ] `/proc/<pid>`, per task file descriptors and working directory
-* [ ] `fork`/`exec`/`wait` semantics on top of the task model
-* [ ] Round-robin preemption with a time slice (Linux `SCHED_RR` style)
+* [x] Time slice (SCHED_RR style), configurable quantum
+* [x] Parent/child relations, `task_wait()`, `task_wait_any()`
+* [x] File descriptor table and working directory per task
+* [ ] `/proc/<pid>` (belongs to phase 2)
+* [ ] A real `fork()` (needs our own context switch, see ADR 0002)
+
+## Phase 1F - The hardware doctor
+
+The init process walks through the registered modules and checks them one by
+one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
+
+* [x] Module registry in the kernel (`kernel/kmod`) with init and health check
+* [x] Display (ST7789v2, framebuffer in PSRAM, test pattern)
+* [x] Buttons A, B and C
+* [x] Buzzer (LEDC, 2 kHz)
+* [x] Red LED and IR emitter (shared pin G19)
+* [x] IMU (MPU6886 on I2C)
+* [x] RTC (BM8563 on I2C)
+* [x] Battery voltage (ADC on G38)
+* [x] WiFi radio
+* [x] PSRAM and flash
+* [ ] Microphone (SPM1423, I2S) - registered, but skipped
+* [ ] A `doctor` command that repeats the check at any time
 
 ## Phase 2 - VFS, procfs, devfs, shell
 
+* [x] Shell: a portable command interpreter with a command registry
+* [x] Built in commands: `help`, `uname`, `uptime`, `ps`, `echo`, `sleep`,
+      `dmesg`, `free`, `clear`, `reboot`, `modules`
+* [x] The console of the ESP32 port (the UART driver makes the input work)
 * [ ] `inode` / `dentry` / `file_operations`
 * [ ] In-RAM files (`/etc`, `/tmp`), mounting
 * [ ] `/proc`: `version`, `uptime`, `meminfo`, `tasks`, `self/`
 * [ ] `/dev`: `tty0` (console on UART and TFT)
-* [ ] Shell with commands: `ls`, `cat`, `echo`, `ps`, `free`, `dmesg`, `uname`,
-      `mount`, `uptime`, `reboot`
-* [ ] Command history, `help`, tab completion
+* [ ] Command history, `help` per command, tab completion
 
 ## Phase 3 - Memory and the syscall ABI
 

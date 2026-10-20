@@ -1,7 +1,7 @@
 {
     "version":            "1.1",
     "project_name":       "micro_os",
-    "project_version":    "a5c2b55-dirty",
+    "project_version":    "b33f19d-dirty",
     "project_path":       "/home/nik/Проекты/Micro_OS",
     "idf_path":           "/home/nik/esp/esp-idf",
     "build_dir":          "/home/nik/Проекты/Micro_OS/build",

@@ -10,6 +10,8 @@
 #include "drivers/drivers.h"
 
 #include "driver/i2c_master.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "kernel/log.h"
 
 static i2c_master_bus_handle_t s_bus;
@@ -34,64 +36,85 @@ int drv_i2c_init(void)
         return -1;
     }
 
+    /*
+     * The sensors need a moment after the power up. The first transaction
+     * is often NACKed, the retries below take care of that.
+     */
+    vTaskDelay(pdMS_TO_TICKS(100));
+
     return 0;
+}
+
+/* The number of attempts of a single transaction. */
+#define I2C_ATTEMPTS 3
+#define I2C_RETRY_MS 10
+
+static int i2c_add_device(uint8_t addr, i2c_master_dev_handle_t *dev)
+{
+    i2c_device_config_t config = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = addr,
+        .scl_speed_hz = 100000,
+    };
+
+    return i2c_master_bus_add_device(s_bus, &config, dev) == ESP_OK ? 0 : -1;
 }
 
 int drv_i2c_read(uint8_t addr, uint8_t reg, uint8_t *buf, size_t len)
 {
-    i2c_master_dev_handle_t dev;
-    i2c_device_config_t config = {
-        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-        .device_address = addr,
-        .scl_speed_hz = 400000,
-    };
+    int attempt;
 
     if (s_bus == NULL) {
         return -1;
     }
 
-    if (i2c_master_bus_add_device(s_bus, &config, &dev) != ESP_OK) {
-        return -2;
-    }
+    for (attempt = 0; attempt < I2C_ATTEMPTS; attempt++) {
+        i2c_master_dev_handle_t dev;
 
-    if (i2c_master_transmit(dev, &reg, 1, true) != ESP_OK) {
+        if (i2c_add_device(addr, &dev) != 0) {
+            return -2;
+        }
+
+        if (i2c_master_transmit(dev, &reg, 1, true) == ESP_OK &&
+            i2c_master_receive(dev, buf, len, true) == ESP_OK) {
+            i2c_master_bus_rm_device(dev);
+            return 0;
+        }
+
         i2c_master_bus_rm_device(dev);
-        return -3;
+        vTaskDelay(pdMS_TO_TICKS(I2C_RETRY_MS));
     }
 
-    if (i2c_master_receive(dev, buf, len, true) != ESP_OK) {
-        i2c_master_bus_rm_device(dev);
-        return -4;
-    }
-
-    i2c_master_bus_rm_device(dev);
-    return 0;
+    return -3;
 }
 
 int drv_i2c_write(uint8_t addr, uint8_t reg, const uint8_t *buf, size_t len)
 {
-    i2c_master_dev_handle_t dev;
-    i2c_device_config_t config = {
-        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-        .device_address = addr,
-        .scl_speed_hz = 400000,
-    };
     uint8_t tmp[16];
-    esp_err_t rc;
+    int attempt;
 
     if (s_bus == NULL || len + 1 > sizeof(tmp)) {
         return -1;
     }
 
-    if (i2c_master_bus_add_device(s_bus, &config, &dev) != ESP_OK) {
-        return -2;
-    }
-
     tmp[0] = reg;
     memcpy(&tmp[1], buf, len);
 
-    rc = i2c_master_transmit(dev, tmp, len + 1, true);
-    i2c_master_bus_rm_device(dev);
+    for (attempt = 0; attempt < I2C_ATTEMPTS; attempt++) {
+        i2c_master_dev_handle_t dev;
 
-    return rc == ESP_OK ? 0 : -3;
+        if (i2c_add_device(addr, &dev) != 0) {
+            return -2;
+        }
+
+        if (i2c_master_transmit(dev, tmp, len + 1, true) == ESP_OK) {
+            i2c_master_bus_rm_device(dev);
+            return 0;
+        }
+
+        i2c_master_bus_rm_device(dev);
+        vTaskDelay(pdMS_TO_TICKS(I2C_RETRY_MS));
+    }
+
+    return -3;
 }

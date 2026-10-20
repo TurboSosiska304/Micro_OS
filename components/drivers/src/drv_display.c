@@ -11,6 +11,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "kernel/types.h"
+
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_heap_caps.h"
@@ -21,10 +23,23 @@
 #include "kernel/log.h"
 
 #define LCD_SPI_HOST SPI2_HOST
-#define LCD_HZ (40 * 1000 * 1000)
+/*
+ * Through the GPIO matrix the SPI master works up to 26.7 MHz, so the
+ * clock is set to 20 MHz (80 MHz / 4).
+ */
+#define LCD_HZ (20 * 1000 * 1000)
 
 static uint16_t *s_fb;
+static spi_device_handle_t s_dev;
 static bool s_initialised;
+
+/*
+ * The SPI DMA of the ESP32 cannot read from the PSRAM, so the framebuffer is
+ * copied into this internal buffer in pieces. The buffer is in the internal
+ * RAM because it is a static array.
+ */
+#define LCD_CHUNK_SIZE 4092
+static uint8_t s_chunk[LCD_CHUNK_SIZE];
 
 static void lcd_write_command(uint8_t cmd)
 {
@@ -34,7 +49,7 @@ static void lcd_write_command(uint8_t cmd)
         .length = 8,
         .tx_buffer = &cmd,
     };
-    spi_device_polling_transmit(LCD_SPI_HOST, &trans);
+    spi_device_polling_transmit(s_dev, &trans);
     gpio_set_level(PIN_LCD_CS, 1);
 }
 
@@ -50,7 +65,7 @@ static void lcd_write_data(const uint8_t *data, size_t len)
         .length = len * 8,
         .tx_buffer = data,
     };
-    spi_device_polling_transmit(LCD_SPI_HOST, &trans);
+    spi_device_polling_transmit(s_dev, &trans);
     gpio_set_level(PIN_LCD_CS, 1);
 }
 
@@ -137,6 +152,9 @@ static void lcd_set_window(int x, int y, int w, int h)
 
 static void lcd_flush(void)
 {
+    const k_size_t total = (k_size_t)LCD_WIDTH * LCD_HEIGHT * 2;
+    k_size_t offset = 0;
+
     if (s_fb == NULL) {
         return;
     }
@@ -146,12 +164,24 @@ static void lcd_flush(void)
     gpio_set_level(PIN_LCD_DC, 1);
     gpio_set_level(PIN_LCD_CS, 0);
 
-    spi_transaction_t trans = {
-        .length = LCD_WIDTH * LCD_HEIGHT * 2 * 8,
-        .tx_buffer = s_fb,
-    };
+    while (offset < total) {
+        k_size_t chunk = LCD_CHUNK_SIZE;
 
-    spi_device_polling_transmit(LCD_SPI_HOST, &trans);
+        if (chunk > total - offset) {
+            chunk = total - offset;
+        }
+
+        memcpy(s_chunk, ((const uint8_t *)s_fb) + offset, chunk);
+
+        spi_transaction_t trans = {
+            .length = chunk * 8,
+            .tx_buffer = s_chunk,
+        };
+
+        spi_device_polling_transmit(s_dev, &trans);
+        offset += chunk;
+    }
+
     gpio_set_level(PIN_LCD_CS, 1);
 }
 
@@ -223,8 +253,7 @@ static int drv_display_init(void)
         .queue_size = 1,
     };
 
-    spi_device_handle_t handle;
-    if (spi_bus_add_device(LCD_SPI_HOST, &dev, &handle) != ESP_OK) {
+    if (spi_bus_add_device(LCD_SPI_HOST, &dev, &s_dev) != ESP_OK) {
         kerror("display: cannot add the SPI device");
         return -3;
     }
