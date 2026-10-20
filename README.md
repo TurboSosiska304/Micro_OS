@@ -70,10 +70,31 @@ git clone -b v5.3 --recursive https://github.com/espressif/esp-idf.git ~/esp/esp
 
 idf.py set-target esp32
 idf.py build
-idf.py -p /dev/ttyUSB0 flash monitor
+idf.py -p /dev/ttyACM0 flash monitor
 ```
 
 Or through the Makefile: `make idf-build`, `make idf-flash`, `make idf-monitor`.
+
+The board needs to be reachable by the current user. On most distributions the
+serial device belongs to the `uucp` group:
+
+```bash
+sudo gpasswd -a $USER uucp   # then log out and back in
+```
+
+### Checking the kernel on the device
+
+The init process runs a self test on the real hardware: three tasks with
+different priorities sleep, yield and wake up, and the init task verifies the
+result and prints a `ps` like table of the task list.
+
+```bash
+tools/device-test.sh              # build, flash and check automatically
+tools/device-test.sh /dev/ttyACM0 # with an explicit port
+tools/console.py                  # just read the console
+```
+
+The script exits with `RESULT: PASS` when the self test succeeded.
 
 ## Repository layout
 

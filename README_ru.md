@@ -68,10 +68,31 @@ git clone -b v5.3 --recursive https://github.com/espressif/esp-idf.git ~/esp/esp
 
 idf.py set-target esp32
 idf.py build
-idf.py -p /dev/ttyUSB0 flash monitor
+idf.py -p /dev/ttyACM0 flash monitor
 ```
 
 Либо через Makefile: `make idf-build`, `make idf-flash`, `make idf-monitor`.
+
+Порт должен быть доступен текущему пользователю. В большинстве дистрибутивов
+устройство принадлежит группе `uucp`:
+
+```bash
+sudo gpasswd -a $USER uucp   # затем перелогиниться
+```
+
+### Проверка ядра на устройстве
+
+init-процесс запускает самотест на реальном железе: три задачи с разными
+приоритетами спят, отдают управление и просыпаются, а init проверяет результат
+и печатает `ps`-подобную таблицу списка задач.
+
+```bash
+tools/device-test.sh              # собрать, залить и проверить автоматически
+tools/device-test.sh /dev/ttyACM0 # с явным указанием порта
+tools/console.py                  # просто читать консоль
+```
+
+Скрипт завершается с `RESULT: PASS`, если самотест прошёл.
 
 ## Структура репозитория
 
