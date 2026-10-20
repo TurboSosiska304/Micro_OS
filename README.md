@@ -1,52 +1,56 @@
 # Micro OS
 
-Linux-подобное ядро для **M5Stack StickC Plus2** (ESP32-PICO-V3-02, 240 МГц, 2 МБ PSRAM).
+A Linux-like kernel for the **M5Stack StickC Plus2** (ESP32-PICO-V3-02, 240 MHz,
+2 MB PSRAM).
 
-Цель — не «прошить ещё один ESP32-проект», а написать настоящее ядро: планировщик задач,
-системные вызовы, VFS с `/proc` и `/dev`, менеджер памяти, драйверы и init-процесс,
-который запускает шелл. Всё это — на голом железе без MMU, с одним ядром ESP32,
-200 мА·ч батареей и экраном 135×240.
+The goal is not "another ESP32 project" but an actual kernel: a task scheduler,
+system calls, a VFS with `/proc` and `/dev`, a memory manager, device drivers and
+an init process that starts a shell. All of it on bare metal without an MMU, with
+a single ESP32 core, a 200 mAh battery and a 135x240 display.
 
-## Состояние проекта
+> Russian version: [README_ru.md](README_ru.md)
 
-| Фаза | Содержание | Статус |
-|------|------------|--------|
-| 0 | Каркас, сборка, лог, описание платы, юнит-тесты | ✅ готово |
-| 1 | Планировщик, задачи, таймеры, PID | ⬜ план |
-| 2 | VFS, `/proc`, `/dev`, шелл | ⬜ план |
-| 3 | Менеджер памяти, ABI системных вызовов, libc | ⬜ план |
-| 4 | Драйверы: TFT, кнопки, буззер, IMU, RTC, IR, микрофон | ⬜ план |
-| 5 | init, конфигурация, приложения, WiFi/MQTT | ⬜ план |
-| 6 | OTA, релиз, документация | ⬜ план |
+## Status
 
-Подробный план — в [docs/roadmap.md](docs/roadmap.md), архитектура — в
-[docs/architecture.md](docs/architecture.md).
+| Phase | Content | State |
+|-------|---------|-------|
+| 0 | Skeleton, build system, log, board description, unit tests | done |
+| 1 | Scheduler, tasks, timers, PIDs | in progress |
+| 2 | VFS, `/proc`, `/dev`, shell | planned |
+| 3 | Memory manager, syscall ABI, libc subset | planned |
+| 4 | Drivers: TFT, buttons, buzzer, IMU, RTC, IR, microphone | planned |
+| 5 | init, configuration, applications, WiFi/MQTT | planned |
+| 6 | OTA, release, documentation | planned |
 
-## Ключевая идея: переносимое ядро
+See [docs/roadmap.md](docs/roadmap.md) for the full plan and
+[docs/architecture.md](docs/architecture.md) for the design.
 
-Ядро **не знает про железо**. Вся платформенная часть вынесена в порт:
+## The key idea: a portable kernel
+
+The kernel **knows nothing about hardware**. Everything platform specific is
+behind a port:
 
 ```
-components/kernel/    ← чистый C11, ноль зависимостей от ESP-IDF
-components/board/     ← описание платы
-components/port_esp32/← реализация порта для ESP32 (ESP-IDF)
-ports/port_host/      ← реализация порта для Linux (симулятор + тесты)
+components/kernel/    <- plain C11, zero ESP-IDF dependencies
+components/board/     <- board description
+components/port_esp32/<- ESP32 implementation of the port (ESP-IDF)
+ports/port_host/      <- Linux implementation (simulator + unit tests)
 ```
 
-Следствие: ядро компилируется и тестируется на обычном компьютере за секунды.
-Цикл «правка → тест → запуск» не требует прошивки устройства. А сборка самой
-прошивки — обычный ESP-IDF проект.
+Consequence: the kernel compiles and its tests run on a normal PC in seconds. The
+edit/compile/run loop does not involve flashing a device, while the firmware
+itself stays a plain ESP-IDF project.
 
-## Сборка и запуск
+## Build and run
 
-### Хост (симулятор + тесты) — работает сразу
+### Host (simulator + tests) — works out of the box
 
 ```bash
-make test     # сборка и юнит-тесты
-make sim      # запустить симулятор ядра на Linux
+make test     # build and run the unit tests
+make sim      # run the kernel simulator on Linux
 ```
 
-Или напрямую:
+Or directly:
 
 ```bash
 cmake -B build-host -S . -G Ninja
@@ -55,9 +59,9 @@ ctest --test-dir build-host --output-on-failure
 ./build-host/ports/port_host/microos_sim
 ```
 
-### Устройство (ESP-IDF)
+### Device (ESP-IDF)
 
-Требуется установленный ESP-IDF v5.x:
+Requires ESP-IDF v5.x:
 
 ```bash
 git clone -b v5.3 --recursive https://github.com/espressif/esp-idf.git ~/esp/esp-idf
@@ -69,44 +73,44 @@ idf.py build
 idf.py -p /dev/ttyUSB0 flash monitor
 ```
 
-Либо через Makefile: `make idf-build`, `make idf-flash`, `make idf-monitor`.
+Or through the Makefile: `make idf-build`, `make idf-flash`, `make idf-monitor`.
 
-## Структура репозитория
+## Repository layout
 
 ```
 Micro_OS/
 ├── components/
-│   ├── kernel/         переносимое ядро: boot, log, panic, version
-│   ├── board/          описание железа
-│   └── port_esp32/     порт для ESP32
-├── ports/port_host/    порт для Linux + симулятор
-├── main/               точка входа прошивки (app_main)
-├── tests/              юнит-тесты (свой минимальный фреймворк, без зависимостей)
-├── docs/               архитектура, roadmap, железо, ADR
-├── CMakeLists.txt      двухрежимная сборка: ESP-IDF или хост
-└── Makefile            удобные цели: test, sim, format, idf-*
+│   ├── kernel/         portable kernel: boot, log, panic, version, tasks, sched
+│   ├── board/          hardware description
+│   └── port_esp32/     ESP32 port
+├── ports/port_host/    Linux port + simulator
+├── main/               firmware entry point (app_main)
+├── tests/              unit tests (own minimal framework, no dependencies)
+├── docs/               architecture, roadmap, hardware notes, ADRs
+├── CMakeLists.txt      dual mode build: ESP-IDF or host
+└── Makefile            convenience targets: test, sim, format, idf-*
 ```
 
-## Стиль разработки
+## Development rules
 
-* C11, `-Wall -Wextra -Werror`, 4 пробела, стиль Linux/BSD-mix (см. `.clang-format`).
-* Один коммит — одна логическая change; сообщения в стиле Linux:
+* C11, `-Wall -Wextra -Werror`, 4 spaces, Linux/BSD mixed style (see `.clang-format`).
+* One logical change per commit; messages in the Linux style:
   `subsys: add vfs mount table`, `drivers: fix ir carrier frequency`.
-* Любое новое поведение ядра покрывается тестом в `tests/`.
-* Форматирование: `make format`.
+* Any new kernel behaviour is covered by a test in `tests/`.
+* Formatting: `make format`.
 
-Подробнее — [CONTRIBUTING.md](CONTRIBUTING.md).
+Details: [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Ограничения, о которых стоит знать сразу
+## Known limitations
 
-* **Нет MMU.** Разделение ядра и пользовательского кода логическое, а не аппаратное:
-  нет аппаратной защиты памяти и полноценных адресных пространств.
-* **8 МБ flash / 2 МБ PSRAM.** Ядро, приложения и данные делят одну флешку
-  (OTA-разделы `app0`/`app1` + `spiffs`).
-* **ESP32-PICO-V3-02 без PMIC.** Питанием и сном управляет сам ESP32:
-  вывод `HOLD` (G4) надо выставить в HIGH, иначе плата выключится.
-* **Одна кнопка питания + две пользовательские** (A, B) и третья (C) у Plus2.
+* **No MMU.** The kernel/user split is logical, not hardware enforced: there is no
+  memory protection and no real address space isolation.
+* **8 MB flash / 2 MB PSRAM.** Kernel, applications and data share one flash
+  (OTA slots `app0`/`app1` plus `spiffs`).
+* **The ESP32-PICO-V3-02 has no PMIC.** Power and sleep are handled by the ESP32
+  itself: `HOLD` (G4) must be driven high after a wake-up or the board powers off.
+* **One power button plus two user buttons** (A, B), and a third one (C) on Plus2.
 
-## Лицензия
+## License
 
-MIT — см. [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).

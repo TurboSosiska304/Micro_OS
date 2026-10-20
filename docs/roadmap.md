@@ -1,65 +1,69 @@
-# Roadmap Micro OS
+# Micro OS roadmap
 
-Каждая фаза заканчивается рабочим состоянием на устройстве и зелёными тестами.
+> Russian version: [roadmap_ru.md](roadmap_ru.md)
 
-## Фаза 0 — Каркас ✅
+Every phase ends with a working state on the device and green tests.
 
-* [x] Репозиторий, структура каталогов, лицензия, правила коммитов
-* [x] Двухрежимная сборка: ESP-IDF (устройство) и хост (симулятор + тесты)
-* [x] Переносимое ядро: типы, конфиг, лог с кольцевым буфером, паника, версия
-* [x] Модель загрузки с уровнями подсистем и проверкой ошибок
-* [x] Описание платы (SoC, flash, PSRAM, дисплей, IMU, RTC, питание)
-* [x] Порт ESP32 (UART-вывод, таймер, критические секции) и порт для хоста
-* [x] Юнит-тесты (свой фреймворк, без внешних зависимостей)
-* [x] Документация: README, CONTRIBUTING, архитектура, железо, ADR
+## Phase 0 - Skeleton (done)
 
-**Не входит (осознанно):** инициализация дисплея и кнопок требует ESP-IDF.
+* [x] Repository, directory layout, licence, commit rules
+* [x] Dual mode build: ESP-IDF (device) and host (simulator + tests)
+* [x] Portable kernel: types, compile time config, levelled log with a ring
+      buffer, panic handler, version and build identification
+* [x] Boot sequence with ordered subsystem initialisation and error reporting,
+      mirroring the Linux initcall model
+* [x] Board description (SoC, flash, PSRAM, display, IMU, RTC, power)
+* [x] ESP32 port (UART output, time source, critical sections) and a host port
+* [x] Unit tests (own framework, no external dependencies)
+* [x] Documentation: README, CONTRIBUTING, architecture, hardware notes, ADRs
 
-## Фаза 1 — Задачи и планировщик
+**Deliberately out of scope:** display and button initialisation require ESP-IDF.
 
-* [ ] `struct task`, состояния, приоритеты
-* [ ] Переключение контекста (сначала поверх FreeRTOS), `task_yield`, `sleep`
-* [ ] Таймерная очередь, 1-мс тик
-* [ ] Выделение PID, `/proc/<pid>`
-* [ ] `init` как PID 1, запуск «пользовательских» задач
-* [ ] Тесты: планирование, приоритеты, переключение
+## Phase 1 - Tasks and scheduler
 
-## Фаза 2 — VFS, procfs, devfs, шелл
+* [ ] `struct task`, states, priorities
+* [ ] Context switching (FreeRTOS substrate first), `task_yield`, `sleep`
+* [ ] Timer queue, 1 ms tick
+* [ ] PID allocation, `/proc/<pid>`
+* [ ] `init` as PID 1, spawning "user" tasks
+* [ ] Tests: scheduling, priorities, switching
+
+## Phase 2 - VFS, procfs, devfs, shell
 
 * [ ] `inode` / `dentry` / `file_operations`
-* [ ] Файлы в ОЗУ (`/etc`, `/tmp`), монтирование
+* [ ] In-RAM files (`/etc`, `/tmp`), mounting
 * [ ] `/proc`: `version`, `uptime`, `meminfo`, `tasks`, `self/`
-* [ ] `/dev`: `tty0` (консоль на UART и TFT)
-* [ ] Шелл с командами: `ls`, `cat`, `echo`, `ps`, `free`, `dmesg`, `uname`,
+* [ ] `/dev`: `tty0` (console on UART and TFT)
+* [ ] Shell with commands: `ls`, `cat`, `echo`, `ps`, `free`, `dmesg`, `uname`,
       `mount`, `uptime`, `reboot`
-* [ ] История команд, `help`, автодополнение по tab
+* [ ] Command history, `help`, tab completion
 
-## Фаза 3 — Память и ABI системных вызовов
+## Phase 3 - Memory and the syscall ABI
 
-* [ ] `kmm_alloc`/`kmm_free`, слабы, выделение из PSRAM
-* [ ] Таблица системных вызовов, единый ABI
-* [ ] Минимальный libc поверх ядра: `open/read/write/close/malloc/printf`
-* [ ] Модель прав и «файловых дескрипторов»
+* [ ] `kmm_alloc`/`kmm_free`, slabs, allocation from PSRAM
+* [ ] System call table, uniform ABI
+* [ ] Minimal libc on top of the kernel: `open/read/write/close/malloc/printf`
+* [ ] Permission model and "file descriptors"
 
-## Фаза 4 — Драйверы
+## Phase 4 - Drivers
 
-* [ ] `drv_framebuffer`: ST7789v2, 135×240, поворот, вывод текста и графики
-* [ ] `drv_input`: кнопки A/B/C, debounce, события ввода
-* [ ] `drv_buzzer`, `drv_led` (IR+LED на общем G19), `drv_ir` (передача и приём)
+* [ ] `drv_framebuffer`: ST7789v2, 135x240, rotation, text and graphics output
+* [ ] `drv_input`: A/B/C buttons, debounce, input events
+* [ ] `drv_buzzer`, `drv_led` (IR+LED share G19), `drv_ir` (transmit and receive)
 * [ ] `drv_imu` (MPU6886), `drv_rtc` (BM8563, deep-sleep wake)
-* [ ] `drv_mic` (SPM1423) — простой детектор шума/звука
-* [ ] Консоль на TFT + UART одновременно
+* [ ] `drv_mic` (SPM1423) — a simple sound/noise detector
+* [ ] Console on TFT and UART at the same time
 
-## Фаза 5 — Сервисы и приложения
+## Phase 5 - Services and applications
 
-* [ ] init-процесс: запуск демонов из `/etc/init.d`
-* [ ] Конфигурация из `/etc`, сохранение в NVS
-* [ ] WiFi, HTTP/MQTT-клиент, NTP по RTC
-* [ ] Прикладные приложения: логгер датчиков, пульт ИК, часы, метеостанция
+* [ ] Init process: starting daemons from `/etc/init.d`
+* [ ] Configuration from `/etc`, persisted in NVS
+* [ ] WiFi, HTTP/MQTT client, NTP based on the RTC
+* [ ] Applications: sensor logger, IR remote, clock, weather station
 
-## Фаза 6 — Релиз
+## Phase 6 - Release
 
-* [ ] OTA-обновление (`app0`/`app1`), откат при неудачной загрузке
-* [ ] Сброс настроек, `factory reset`
-* [ ] Корпус/дисплей: режим «часы», «пульт», «логгер»
-* [ ] Релизный процесс, теги, changelog
+* [ ] OTA updates (`app0`/`app1`), rollback after a failed boot
+* [ ] Settings reset, `factory reset`
+* [ ] Enclosure/display modes: "clock", "remote", "logger"
+* [ ] Release process, tags, changelog

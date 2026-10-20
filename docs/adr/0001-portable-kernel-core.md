@@ -1,62 +1,65 @@
-# ADR 0001 — Переносимое ядро с портным слоем
+# ADR 0001 - Portable kernel with a port layer
 
-* Статус: принято
-* Дата: 2026-10-21
+* Status: accepted
+* Date: 2026-10-21
 
-## Контекст
+> Russian version: [0001-portable-kernel-core_ru.md](0001-portable-kernel-core_ru.md)
 
-Плата M5Stack StickC Plus2 построена на ESP32. Готовые среды разработки
-(ESP-IDF, Arduino, MicroPython) дают «приложение на C++/Python», а не ядро.
-Чтобы написать ядро с планировщиком, VFS и системными вызовами, нужно решить,
-на чём строить: поверх готовой RTOS или с нуля.
+## Context
 
-ESP32 — не «просто микроконтроллер»: у него два ядра, FreeRTOS, WiFi-стек,
-ESP-NOW, TLS, файловая система FAT, и всё это занимает единицы мегабайт flash
-и десятки килобайт SRAM. Написать своё ядро **с нуля**, выбросив FreeRTOS,
-означает отказаться от WiFi, BLE, OTA и криптографии — то есть выбросить
-95% того, ради чего M5Stack и покупают.
+The M5Stack StickC Plus2 is built around the ESP32. Existing development
+environments (ESP-IDF, Arduino, MicroPython) give you "an application in C++ or
+Python", not a kernel. To write a kernel with a scheduler, a VFS and system calls
+we have to decide what to build on: an existing RTOS or from scratch.
 
-## Решение
+The ESP32 is not "just a microcontroller": it has two cores, FreeRTOS, a WiFi
+stack, ESP-NOW, TLS, a FAT filesystem, and all of that costs megabytes of flash
+and tens of kilobytes of SRAM. Writing a kernel **from scratch**, dropping
+FreeRTOS, means giving up WiFi, BLE, OTA and cryptography — giving up most of the
+reason people buy M5Stack boards in the first place.
 
-Ядро пишется **переносимым**, с тонким портным слоем:
+## Decision
 
-* `components/kernel/` — ядро на чистом C11, без `#include "freertos/FreeRTOS.h"`
-  и без `#include "esp_*.h"`. Оно компилируется и тестируется на Linux.
-* `components/port_esp32/` — реализация контракта `kernel/port.h` для ESP32
-  (ESP-IDF). Единственное место, где ядро касается железа.
-* `ports/port_host/` — реализация для хоста: симулятор и стенд юнит-тестов.
+The kernel is written **portable**, with a thin port layer:
 
-Системные вызовы и VFS — внутри ядра; «пользовательский» код вызывает их
-как обычные функции (граница логическая, без MMU).
+* `components/kernel/` — the kernel in plain C11, without
+  `#include "freertos/FreeRTOS.h"` and without `#include "esp_*.h"`. It compiles
+  and is unit tested on Linux.
+* `components/port_esp32/` — the implementation of the `kernel/port.h` contract for
+  ESP32 (ESP-IDF). The only place where the kernel touches hardware.
+* `ports/port_host/` — the host implementation: simulator and unit test bench.
 
-## Последствия
+System calls and the VFS live inside the kernel; "user" code calls them like
+ordinary functions (the boundary is logical, there is no MMU).
 
-**Хорошие:**
+## Consequences
 
-* Юнит-тесты ядра работают за секунды, без прошивки — быстрый цикл разработки.
-* Ядро можно перенести на другую плату M5 (Core2, Atom) или на ESP32-S3,
-  написав новый порт.
-* Ошибки в логике ядра воспроизводятся на хосте.
-* Сомнения по поводу «а заработает ли это на ESP32» отсекаются на этапе сборки:
-  если в `components/kernel` появится `#include "esp_timer.h"` — сборка хоста
-  сразу это покажет.
+**Good:**
 
-**Плохие:**
+* Kernel unit tests run in seconds, without flashing — a fast development loop.
+* The kernel can be ported to another M5 board (Core2, Atom) or to an ESP32-S3 by
+  writing a new port.
+* Bugs in kernel logic are reproducible on the host.
+* Doubts like "will this even work on an ESP32?" are cut off at build time: a
+  stray `#include "esp_timer.h"` inside `components/kernel` immediately breaks the
+  host build.
 
-* Нельзя напрямую использовать мощности ESP-IDF (спин-локи, таймеры, DMA) внутри
-  ядра — нужен слой-обёртка в порту.
-* Границы «ядро/пользовательский код» не защищены аппаратно: ошибка в «приложении»
-  уронит всю систему. Это осознанный размен на скорость разработки.
-* Часть функций (критические секции) на хосте — заглушки: гонки в ядре на хосте
-  не воспроизводятся. Тесты планировщика на хосте поэтому ограничены.
+**Bad:**
 
-## Альтернативы
+* ESP-IDF facilities (spinlocks, timers, DMA) cannot be used directly inside the
+  kernel — they need a wrapper in the port.
+* The kernel/user boundary is not enforced by hardware: a bug in an "application"
+  takes the whole system down. That is a deliberate trade for development speed.
+* Some functions (critical sections) are stubs on the host: data races in the
+  kernel are not reproduced there. Host scheduler tests are therefore limited.
 
-* **Писать своё ядро вместо FreeRTOS** — отвергнуто: теряем WiFi/BLE/OTA/TLS,
-  а объём работы растёт в разы (нужны свой планировщик, драйверы SPI/I2C,
-  свой загрузчик и своя прошивка).
-* **Только ESP-IDF + FreeRTOS, без переносимости** — отвергнуто: нет быстрого
-  цикла разработки и тестов, ядро нельзя проверить без железа.
-* **Linux на ESP32 (esp-linux, NuttX)** — отвергнуто: требует MMU, внешнюю
-  SD/флеш-память и не влезает в 8 МБ с 200 мА·ч батареей. Для Plus2 это
-  другая категория устройства.
+## Alternatives
+
+* **Writing our own kernel instead of FreeRTOS** — rejected: we lose WiFi/BLE/OTA/TLS
+  and the amount of work grows several times over (own scheduler, SPI/I2C drivers,
+  own bootloader and firmware).
+* **Plain ESP-IDF + FreeRTOS without portability** — rejected: no fast development
+  loop, no tests, and the kernel cannot be verified without hardware.
+* **Real Linux on the ESP32 (esp-linux, NuttX)** — rejected: it requires an MMU,
+  external SD/flash memory and does not fit into 8 MB with a 200 mAh battery. For
+  the Plus2 that is a different class of device.

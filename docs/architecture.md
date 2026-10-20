@@ -1,28 +1,30 @@
-# Архитектура Micro OS
+# Micro OS architecture
 
-## 1. Общая схема
+> Russian version: [architecture_ru.md](architecture_ru.md)
+
+## 1. Overview
 
 ```
-┌───────────────────────────────────────────────────────────────┐
-│  Приложения: /bin/sh, утилиты, демоны (init запускает их)      │
-├───────────────────────────────────────────────────────────────┤
-│  API: POSIX-подобный интерфейс (open/read/write/fork/...)      │
-├───────────────────────────────────────────────────────────────┤
-│  Ядро:                                                      │
-│    sched   — планировщик и задачи (PCB, состояния, PID)       │
-│    vfs     — виртуальная ФС: inode, dentry, mount, /proc, /dev │
-│    kmm     — менеджер памяти (kmalloc, slab, pools)           │
-│    ksys    — таблица системных вызовов и их ABI               │
-│    kshell  — командный интерпретатор                          │
-├───────────────────────────────────────────────────────────────┤
-│  Драйверы: fb(tft), input(кнопки), buzzer, imu, rtc, ir, mic   │
-├───────────────────────────────────────────────────────────────┤
-│  Порт: ESP32 (ESP-IDF) │ Хост (Linux, для тестов и симуляции)  │
-└───────────────────────────────────────────────────────────────┘
++---------------------------------------------------------------+
+| Applications: /bin/sh, utilities, daemons (init starts them)  |
++---------------------------------------------------------------+
+| API: POSIX-like interface (open/read/write/fork/...)            |
++---------------------------------------------------------------+
+| Kernel:                                                       |
+|   sched   - task scheduler (PCB, states, PIDs)                  |
+|   vfs     - virtual filesystem: inode, dentry, mount, /proc, /dev|
+|   kmm     - memory manager (kmalloc, slab, pools)               |
+|   ksys    - system call table and its ABI                       |
+|   kshell  - command interpreter                                |
++---------------------------------------------------------------+
+| Drivers: fb(tft), input(buttons), buzzer, imu, rtc, ir, mic     |
++---------------------------------------------------------------+
+| Port: ESP32 (ESP-IDF) | Host (Linux, for tests and simulation)  |
++---------------------------------------------------------------+
 ```
 
-Правило номер один: **ядро не знает про железо**. Всё, что зависит от платформы,
-лежит за интерфейсом `kernel/port.h`:
+Rule number one: **the kernel knows nothing about hardware**. Everything that
+depends on the platform sits behind the `kernel/port.h` contract:
 
 ```c
 void     k_port_write(const char *data, k_size_t len);
@@ -34,96 +36,98 @@ void     k_port_reset(void);
 const char *k_port_name(void);
 ```
 
-Именно это позволяет гонять тесты ядра на ноутбуке.
+That is exactly what allows the kernel tests to run on a laptop.
 
-## 2. Что здесь Linux-подобного, а что — нет
+## 2. What is Linux-like here, and what is not
 
-| Свойство | Linux | Micro OS |
+| Property | Linux | Micro OS |
 |---|---|---|
-| Модульный монолит | да | да (ядро + драйверы в одном адресном пространстве) |
-| Иерархия подсистем | да | да (`kernel/boot.h`, уровни инициализации) |
-| Процессы/потоки | да | да, с фазы 1 (облегчённые) |
-| Файловая система | да | да, с фазы 2 (in-RAM FS + VFS-слой) |
-| `/proc`, `/dev`, `/sys` | да | `/proc` и `/dev` — с фазы 2, `/sys` — позже |
-| Системные вызовы | да | да, с фазы 3, но **без аппаратной изоляции** |
-| Защита памяти | MMU | **нет** (у ESP32 нет MMU) |
-| Многопользователь | да | нет (один пользователь — это устройство) |
-| Динамический линкер | да | нет (всё статически слинковано) |
+| Modular monolith | yes | yes (kernel + drivers in one address space) |
+| Layered subsystems | yes | yes (`kernel/boot.h`, initialisation levels) |
+| Processes / threads | yes | yes, simplified, from phase 1 |
+| Filesystem | yes | yes, from phase 2 (in-RAM FS plus a VFS layer) |
+| `/proc`, `/dev`, `/sys` | yes | `/proc` and `/dev` from phase 2, `/sys` later |
+| System calls | yes | yes, from phase 3, but **without hardware isolation** |
+| Memory protection | MMU | **none** (the ESP32 has no MMU) |
+| Multi-user | yes | no (a single user: the device itself) |
+| Dynamic linker | yes | no (everything is statically linked) |
 
-Мы честно называем это **Linux-подобным**, а не Linux: без MMU нельзя получить
-настоящее разделение пользовательского и системного пространства. Обращения к
-системным функциям — обычные вызовы функций с единым ABI, граница проходит по
-дисциплине, а не по железу.
+We honestly call this **Linux-like**, not Linux: without an MMU there is no real
+separation of user and kernel space. System calls are ordinary function calls
+with a uniform ABI; the boundary is kept by discipline, not by hardware.
 
-## 3. Модель загрузки
+## 3. Boot model
 
-Загрузка повторяет модель Linux: подсистемы регистрируются с **уровнем**, и
-инициализируются в порядке уровней.
+Booting mirrors the Linux model: subsystems are registered with a **level** and are
+initialised in level order.
 
-| Уровень | Что попадает | Пример |
+| Level | Contents | Examples |
 |---|---|---|
-| `CORE` (0) | критичные подсистемы | лог, board, память |
-| `DRIVER` (10) | драйверы железа | tft, input, buzzer, imu, rtc |
-| `SERVICE` (20) | системные сервисы | vfs, procfs, devfs |
-| `APP` (30) | приложения | init, shell |
+| `CORE` (0) | critical subsystems | log, board, memory |
+| `DRIVER` (10) | hardware drivers | tft, input, buzzer, imu, rtc |
+| `SERVICE` (20) | system services | vfs, procfs, devfs |
+| `APP` (30) | applications | init, shell |
 
-Каждая подсистема возвращает 0 или отрицательный код. Ошибка инициализации
-приводит к панике с печатью имени подсистемы — «молчаливый» сбой в разборе
-диагностируется сразу.
+Every subsystem returns 0 or a negative error code. A failed initialisation
+triggers a panic that names the subsystem, so a broken driver is diagnosed
+immediately instead of causing mysterious crashes later.
 
-Фаза 0 уже реализует этот механизм (`components/kernel/src/boot.c`), включая
-сортировку по уровню и проверку результата.
+Phase 0 already implements this mechanism (`components/kernel/src/boot.c`),
+including level ordering and error checking.
 
-## 4. Планировщик (фаза 1)
+## 4. Scheduler (phase 1)
 
-* `struct task` — аналог `task_struct`: состояние, приоритет, стек, TID, счётчик
-  квантов, файловые дескрипторы, рабочий каталог, окружение.
-* Состояния: `TASK_NEW → TASK_READY → TASK_RUNNING → TASK_SLEEPING → TASK_ZOMBIE`.
-* Приоритеты 0..`TASK_PRIO_MAX`, планирование — preemptive round-robin с
-  учётом приоритета, как в Linux с `SCHED_RR`.
-* Таймер: 1-мс тик ESP32 (FreeRTOS tick или `esp_timer`), `sleep()` и
-  `usleep()` реализуются через таймерную очередь.
-* PID выдаёт `init`-процесс (как в Linux), `/proc/<pid>` — виртуальные каталоги.
+* `struct task` — the analogue of `task_struct`: state, priority, stack, TID,
+  quantum counter, file descriptors, working directory, environment.
+* States: `TASK_NEW -> TASK_READY -> TASK_RUNNING -> TASK_SLEEPING -> TASK_ZOMBIE`.
+* Priorities 0..`TASK_PRIO_MAX`; scheduling is preemptive round-robin with
+  priorities, like Linux `SCHED_RR`.
+* Timer: 1 ms tick (FreeRTOS tick or `esp_timer`), `sleep()` and `usleep()` are
+  implemented on top of a timer queue.
+* PIDs are handed out starting from the init process (as in Linux), and
+  `/proc/<pid>` are virtual directories.
 
-### Слой исполнения
+### Execution substrate
 
-Планировщик должен вытеснить задачу в любой момент. На ESP32 это возможно
-двумя способами:
+Preempting a task at an arbitrary point requires a context switch. On ESP32 there
+are two options:
 
-1. **FreeRTOS как субстрат** — каждая задача ядра = задача FreeRTOS, приоритеты
-   мапятся один в один. Быстро, надёжно, но преемственность не наша.
-2. **Свой планировщик поверх FreeRTOS** — FreeRTOS даёт только одну «низкоуровневую»
-   задачу, переключение контекста делаем сами через `portYIELD`/ISR-триггер.
+1. **FreeRTOS as substrate** — every kernel task is a FreeRTOS task, priorities
+   map one to one. Fast and reliable, but preemption is not "ours".
+2. **Our own scheduler on top of FreeRTOS** — FreeRTOS provides a single
+   low-level task (or an ISR trigger) and we switch contexts ourselves by
+   saving and restoring stack pointers and registers.
 
-План: начать с варианта 1 (работает сразу), перейти на вариант 2, когда появится
-реальная потребность в Linux-подобной семантике (приоритеты, состояния, `fork`).
-Решение зафиксировано в [ADR 0002](adr/0002-scheduler-substrate.md).
+Plan: start with option 1 (it works immediately), move to option 2 when real
+Linux-like semantics are needed (priorities, states, `fork`). The decision is
+recorded in [ADR 0002](adr/0002-scheduler-substrate.md).
 
-## 5. Виртуальная файловая система (фаза 2)
+## 5. Virtual filesystem (phase 2)
 
-Цель — «всё есть файл»:
+The goal is "everything is a file":
 
 ```
-/            корень (in-RAM FS: /etc, /bin, /dev, /tmp, /proc)
-/proc        виртуальная ФС: version, uptime, meminfo, tasks, self/
-/dev         устройства: tty0, imu, rtc, buzzer, ir, mic
-/sys         (позже) параметры драйверов
+/            root (in-RAM FS: /etc, /bin, /dev, /tmp, /proc)
+/proc        virtual FS: version, uptime, meminfo, tasks, self/
+/dev         devices: tty0, imu, rtc, buzzer, ir, mic
+/sys         (later) driver parameters
 ```
 
-Реализация: `inode` → `dentry` → `file_operations` (open/read/write/ioctl),
-как в Linux, но с плоским списком dentry в одном бинарном дереве.
+Implementation: `inode` -> `dentry` -> `file_operations` (open/read/write/ioctl),
+as in Linux, but with a flat dentry list inside a single binary tree.
 
-## 6. Память (фаза 3)
+## 6. Memory (phase 3)
 
-* `kmm_alloc`/`kmm_free` — свой аллокатор (bitmap или slab поверх кучи ESP-IDF).
-* Большие объекты (буферы кадров, файловые кэши) — в PSRAM, мелкие — во внутренней
-  SRAM (её мало, это ограничение).
-* Виртуальная память эмулируется: у каждой задачи свой «адресное пространство»,
-  но без MMU переключение = переключение указателя стека и базы сегмента данных.
+* `kmm_alloc`/`kmm_free` — our own allocator (bitmap or slab on top of the ESP-IDF
+  heap).
+* Large objects (frame buffers, file caches) live in PSRAM, small ones in internal
+  SRAM (which is scarce — that is the constraint).
+* Virtual memory is emulated: each task has its own "address space", but without
+  an MMU a switch means switching the stack pointer and the data segment base.
 
-## 7. Драйверы (фаза 4)
+## 7. Drivers (phase 4)
 
-Интерфейс в духе Linux:
+The interface follows Linux:
 
 ```c
 struct file_operations {
@@ -134,24 +138,25 @@ struct file_operations {
 };
 ```
 
-Драйверы планируются: `drv_framebuffer` (ST7789v2), `drv_input` (A/B/C),
-`drv_buzzer`, `drv_imu` (MPU6886), `drv_rtc` (BM8563), `drv_ir`, `drv_mic` (SPM1423),
-`drv_led`. Распиновка и особенности — в
+Planned drivers: `drv_framebuffer` (ST7789v2), `drv_input` (A/B/C),
+`drv_buzzer`, `drv_imu` (MPU6886), `drv_rtc` (BM8563), `drv_ir`, `drv_mic`
+(SPM1423), `drv_led`. The pinout and the quirks are documented in
 [docs/hardware/stickc-plus2.md](hardware/stickc-plus2.md).
 
-## 8. Тестирование
+## 8. Testing
 
-* Ядро тестируется на хосте: `make test` (свой фреймворк, без зависимостей).
-* Симулятор `make sim` запускает то же ядро на Linux — можно отлаживать шелл и VFS
-  без прошивки.
-* На устройстве — UART-консоль; вывод можно перенаправить на TFT (фаза 4).
+* The kernel is tested on the host: `make test` (own framework, no dependencies).
+* The simulator `make sim` runs the very same kernel on Linux, so the shell and
+  the VFS can be debugged without flashing.
+* On the device there is a UART console; the output can be mirrored to the TFT
+  (phase 4).
 
-## 9. Ограничения по ресурсам
+## 9. Resource budget
 
-| Ресурс | Доступно | Комментарий |
+| Resource | Available | Comment |
 |---|---|---|
-| Flash | 8 МБ | `app0`+`app1` по 2 МБ (OTA), `spiffs` ~4 МБ |
-| PSRAM | 2 МБ | файловые данные, буферы |
-| Внутренняя SRAM | ~100 КБ доступно коду | стеки задач, драйверы |
-| CPU | 240 МГц, 2 ядра | FreeRTOS уже занял оба; своё ядро живёт поверх |
-| Батарея | 200 мА·ч | deep sleep + RTC — основной сценарий «ношения» |
+| Flash | 8 MB | `app0`+`app1` of 2 MB each (OTA), `spiffs` ~4 MB |
+| PSRAM | 2 MB | file data, buffers |
+| Internal SRAM | ~100 KB usable by code | task stacks, drivers |
+| CPU | 240 MHz, 2 cores | already taken by FreeRTOS; our kernel lives on top |
+| Battery | 200 mAh | deep sleep + RTC is the main "wearable" scenario |
