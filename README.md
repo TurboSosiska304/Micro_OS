@@ -15,7 +15,9 @@ a single ESP32 core, a 200 mAh battery and a 135x240 display.
 | Phase | Content | State |
 |-------|---------|-------|
 | 0 | Skeleton, build system, log, board description, unit tests | done |
-| 1 | Scheduler, tasks, timers, PIDs | in progress |
+| 1 | Scheduler, tasks, timers, PIDs | done |
+| 1F | Hardware doctor (modules and health checks) | done |
+| 2 | VFS, `/proc`, `/dev`, shell | in progress |
 | 2 | VFS, `/proc`, `/dev`, shell | planned |
 | 3 | Memory manager, syscall ABI, libc subset | planned |
 | 4 | Drivers: TFT, buttons, buzzer, IMU, RTC, IR, microphone | planned |
@@ -92,9 +94,60 @@ result and prints a `ps` like table of the task list.
 tools/device-test.sh              # build, flash and check automatically
 tools/device-test.sh /dev/ttyACM0 # with an explicit port
 tools/console.py                  # just read the console
+tools/console.py /dev/ttyACM0 20 --reset --send "modules"
 ```
 
 The script exits with `RESULT: PASS` when the self test succeeded.
+
+### The hardware doctor
+
+After the self test the init process walks through the registered modules and
+checks them one by one. The result is a report:
+
+```
+module health report:
+  module     state     detail
+  psram      ok        2048 KB
+  flash      ok        8 MB
+  imu        ok        acc -16,-2952,16728 (raw)
+  rtc        degraded  01:00:00 (no clock)
+  display    ok        135x240, fb 63 KB
+  input      ok        A=up B=up C=up
+  buzzer     ok        passive, 2 kHz via LEDC
+  led/ir     ok        G19, shared with the IR emitter
+  battery    ok        4176 mV (raw 2088 mV)
+  wifi       degraded  f4:65:0b:32:00:c0 idle
+  mic        skip      SPM1423 MEMS microphone (I2S)
+11 module(s), 0 problem(s)
+```
+
+`ok` works, `degraded` works with limitations (no access point, no clock
+without a backup battery), `fail` does not work and `skip` is not implemented
+yet. The command `modules` repeats the check at any time.
+
+### The shell
+
+The init process starts the shell, which speaks a small subset of the Linux
+commands:
+
+| Command | Meaning |
+|---|---|
+| `help` | list the commands |
+| `ps` | the task list |
+| `uptime` | the time since the boot |
+| `uname` | the name and the version of the kernel |
+| `free` | the memory usage |
+| `dmesg` | the kernel log |
+| `modules` | check the hardware modules again |
+| `i2c` | scan the I2C bus |
+| `date` | the time of the RTC |
+| `echo`, `sleep`, `clear`, `reboot` | the usual suspects |
+
+### Ready to flash binaries
+
+The `bild/` folder holds the built firmware: the application, the bootloader,
+the partition table and a flash script. Download the folder, connect the board
+and run `bild/flash.sh` — no sources, no ESP-IDF and no toolchain needed.
 
 ## Repository layout
 

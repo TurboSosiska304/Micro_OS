@@ -8,6 +8,7 @@ set(MICRO_OS_DRIVERS_SRCS
     "src/drv_buzzer.c"
     "src/drv_display.c"
     "src/drv_i2c.c"
+    "src/drv_i2c_scan.c"
     "src/drv_imu.c"
     "src/drv_input.c"
     "src/drv_memory.c"
@@ -19,6 +20,6 @@ set(MICRO_OS_DRIVERS_SRCS
 idf_component_register(
     SRCS ${MICRO_OS_DRIVERS_SRCS}
     INCLUDE_DIRS "include"
-    REQUIRES kernel kshell spi_flash esp_psram esp_driver_gpio esp_driver_i2c esp_driver_spi esp_driver_ledc esp_adc esp_timer
+    REQUIRES kernel kshell spi_flash esp_psram esp_driver_gpio esp_driver_i2c driver esp_driver_spi esp_driver_ledc esp_adc esp_timer
              esp_wifi esp_netif esp_event nvs_flash
 )

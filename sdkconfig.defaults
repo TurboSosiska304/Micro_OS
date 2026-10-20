@@ -30,9 +30,10 @@ CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
 CONFIG_ESP_INT_WDT_TIMEOUT_S=10
 
-# Logging: keep the boot log readable over UART
-CONFIG_LOG_DEFAULT_LEVEL_INFO=y
-CONFIG_BOOTLOADER_LOG_LEVEL_INFO=y
+# Logging: the kernel has its own log, the log of ESP-IDF only reports the
+# problems, otherwise the output of the UART overflows during the boot
+CONFIG_LOG_DEFAULT_LEVEL_WARN=y
+CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
 
 # Size over speed: the kernel is small, but memory matters on a 200 mAh device
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y

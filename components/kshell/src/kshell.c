@@ -298,6 +298,8 @@ static int cmd_free(int argc, char **argv)
     kshell_printf("heap: %u KB free of %u KB, psram: %u KB free\n",
                   (unsigned)(k_port_heap_free() / 1024), (unsigned)(k_port_heap_total() / 1024),
                   (unsigned)(k_port_psram_free() / 1024));
+    kshell_printf("uptime: %llu ms, %u tick(s)\n", (unsigned long long)k_sched_uptime_ms(),
+                  (unsigned)k_sched_ticks());
 
     return KSHELL_OK;
 }

@@ -157,7 +157,8 @@ int k_port_console_readline(char *buf, k_size_t size)
 
 k_size_t k_port_heap_free(void)
 {
-    return (k_size_t)esp_get_free_heap_size();
+    /* The internal heap only, the PSRAM is reported separately. */
+    return (k_size_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
 }
 
 k_size_t k_port_heap_total(void)
@@ -303,10 +304,30 @@ esp_err_t port_esp32_start_tick(uint32_t period_ms)
         period_ms = 1;
     }
 
-    rc = esp_timer_create(&timer, &args);
-    if (rc != ESP_OK) {
+    /*
+     * The task of the esp_timer is created by a startup hook, which the
+     * linker drops when no other component uses the esp_timer API. The
+     * explicit initialisation makes the time base independent of that.
+     */
+    rc = esp_timer_init();
+    if (rc != ESP_OK && rc != ESP_ERR_INVALID_STATE) {
+        kerror("tick: cannot initialise the esp_timer (rc=%d)", (int)rc);
         return rc;
     }
 
-    return esp_timer_start_periodic(timer, period_ms * 1000);
+    rc = esp_timer_create(&args, &timer);
+    if (rc != ESP_OK) {
+        kerror("tick: cannot create the timer (rc=%d)", (int)rc);
+        return rc;
+    }
+
+    rc = esp_timer_start_periodic(timer, period_ms * 1000);
+    if (rc != ESP_OK) {
+        kerror("tick: cannot start the timer (rc=%d)", (int)rc);
+        return rc;
+    }
+
+    kinfo("tick: the %u ms time base is running", (unsigned)period_ms);
+
+    return ESP_OK;
 }

@@ -1,7 +1,7 @@
 {
     "version":            "1.1",
     "project_name":       "micro_os",
-    "project_version":    "b33f19d-dirty",
+    "project_version":    "495b13b-dirty",
     "project_path":       "/home/nik/Проекты/Micro_OS",
     "idf_path":           "/home/nik/esp/esp-idf",
     "build_dir":          "/home/nik/Проекты/Micro_OS/build",
@@ -185,12 +185,12 @@
             "dir": "/home/nik/Проекты/Micro_OS/components/drivers",
             "type": "LIBRARY",
             "lib": "__idf_drivers",
-            "reqs": [ "kernel", "kshell", "spi_flash", "esp_psram", "esp_driver_gpio", "esp_driver_i2c", "esp_driver_spi", "esp_driver_ledc", "esp_adc", "esp_timer", "esp_wifi", "esp_netif", "esp_event", "nvs_flash" ],
+            "reqs": [ "kernel", "kshell", "spi_flash", "esp_psram", "esp_driver_gpio", "esp_driver_i2c", "driver", "esp_driver_spi", "esp_driver_ledc", "esp_adc", "esp_timer", "esp_wifi", "esp_netif", "esp_event", "nvs_flash" ],
             "priv_reqs": [],
             "managed_reqs": [],
             "managed_priv_reqs": [],
             "file": "/home/nik/Проекты/Micro_OS/build/esp-idf/drivers/libdrivers.a",
-            "sources": [ "/home/nik/Проекты/Micro_OS/components/drivers/src/drivers.c", "/home/nik/Проекты/Micro_OS/components/drivers/src/drv_battery.c", "/home/nik/Проекты/Micro_OS/components/drivers/src/drv_buzzer.c", "/home/nik/Проекты/Micro_OS/components/drivers/src/drv_display.c", "/home/nik/Проекты/Micro_OS/components/drivers/src/drv_i2c.c", "/home/nik/Проекты/Micro_OS/components/drivers/src/drv_imu.c", "/home/nik/Проекты/Micro_OS/components/drivers/src/drv_input.c", "/home/nik/Проекты/Micro_OS/components/drivers/src/drv_memory.c", "/home/nik/Проекты/Micro_OS/components/drivers/src/drv_mic.c", "/home/nik/Проекты/Micro_OS/components/drivers/src/drv_rtc.c", "/home/nik/Проекты/Micro_OS/components/drivers/src/drv_wifi.c" ],
+            "sources": [ "/home/nik/Проекты/Micro_OS/components/drivers/src/drivers.c", "/home/nik/Проекты/Micro_OS/components/drivers/src/drv_battery.c", "/home/nik/Проекты/Micro_OS/components/drivers/src/drv_buzzer.c", "/home/nik/Проекты/Micro_OS/components/drivers/src/drv_display.c", "/home/nik/Проекты/Micro_OS/components/drivers/src/drv_i2c.c", "/home/nik/Проекты/Micro_OS/components/drivers/src/drv_i2c_scan.c", "/home/nik/Проекты/Micro_OS/components/drivers/src/drv_imu.c", "/home/nik/Проекты/Micro_OS/components/drivers/src/drv_input.c", "/home/nik/Проекты/Micro_OS/components/drivers/src/drv_memory.c", "/home/nik/Проекты/Micro_OS/components/drivers/src/drv_mic.c", "/home/nik/Проекты/Micro_OS/components/drivers/src/drv_rtc.c", "/home/nik/Проекты/Micro_OS/components/drivers/src/drv_wifi.c" ],
             "include_dirs": [ "include" ]
         },
         "efuse": {
@@ -2859,7 +2859,7 @@
             "prefix": "idf",
             "dir": "/home/nik/Проекты/Micro_OS/components/drivers",
             "lib": "__idf_drivers",
-            "reqs": [ "kernel", "kshell", "spi_flash", "esp_psram", "esp_driver_gpio", "esp_driver_i2c", "esp_driver_spi", "esp_driver_ledc", "esp_adc", "esp_timer", "esp_wifi", "esp_netif", "esp_event", "nvs_flash" ],
+            "reqs": [ "kernel", "kshell", "spi_flash", "esp_psram", "esp_driver_gpio", "esp_driver_i2c", "driver", "esp_driver_spi", "esp_driver_ledc", "esp_adc", "esp_timer", "esp_wifi", "esp_netif", "esp_event", "nvs_flash" ],
             "priv_reqs": [],
             "managed_reqs": [],
             "managed_priv_reqs": [],

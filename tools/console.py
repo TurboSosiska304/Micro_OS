@@ -47,11 +47,18 @@ def main() -> int:
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     do_reset = "--reset" in sys.argv
 
-    # Everything after --send is written to the board, one line per argument.
+    # Every --send is followed by the commands to write to the board.
     sends: list[str] = []
-    if "--send" in sys.argv:
-        index = sys.argv.index("--send")
-        sends = sys.argv[index + 1 :]
+    argv = sys.argv[1:]
+    index = 0
+    while index < len(argv):
+        if argv[index] == "--send":
+            index += 1
+            while index < len(argv) and not argv[index].startswith("--"):
+                sends.append(argv[index])
+                index += 1
+            continue
+        index += 1
 
     port = args[0] if len(args) > 0 else find_port()
     seconds = float(args[1]) if len(args) > 1 else 20.0
@@ -67,6 +74,8 @@ def main() -> int:
     if do_reset:
         print("--- resetting the board ---", flush=True)
         reset_board(ser)
+        # The board needs a moment to boot, the commands would be lost.
+        time.sleep(3.0)
 
     for line in sends:
         print(f"--- sending: {line}", flush=True)

@@ -65,11 +65,15 @@ static int drv_rtc_check(void)
     s_min = bcd_to_bin(raw[1] & 0x7F);
     s_hour = bcd_to_bin(raw[2] & 0x7F);
 
+    /*
+     * Without a backup battery the clock of the BM8563 does not run, the
+     * registers keep random values. The chip itself works, so the module is
+     * only degraded, not broken.
+     */
     if (s_sec > 59 || s_min > 59 || s_hour > 23) {
-        return -3;
+        s_valid = false;
     }
 
-    /* Without a valid clock the module works, but the time is unreliable. */
     return s_valid ? 0 : 1;
 }
 

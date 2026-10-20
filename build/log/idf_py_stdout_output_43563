@@ -1,0 +1,40 @@
+[1/11] Building C object esp-idf/drivers/CMakeFiles/__idf_drivers.dir/src/drv_rtc.c.obj
+[2/11] Performing build step for 'bootloader'
+[1/1] cd /home/nik/Проекты/Micro_OS/build/bootloader/esp-idf/esptool_py && /home/nik/.espressif/python_env/idf5.3_py3.14_env/bin/python /home/nik/esp/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 bootloader 0x1000 /home/nik/Проекты/Micro_OS/build/bootloader/bootloader.bin
+Bootloader binary size 0x6050 bytes. 0xfb0 bytes (14%) free.
+[3/11] Linking C static library esp-idf/drivers/libdrivers.a
+[4/11] No install step for 'bootloader'
+[5/11] Completed 'bootloader'
+[6/11] Building C object esp-idf/port_esp32/CMakeFiles/__idf_port_esp32.dir/src/port_esp32.c.obj
+/home/nik/Проекты/Micro_OS/components/port_esp32/src/port_esp32.c: In function 'port_esp32_start_tick':
+/home/nik/Проекты/Micro_OS/components/port_esp32/src/port_esp32.c:318:27: warning: passing argument 1 of 'esp_timer_create' from incompatible pointer type [-Wincompatible-pointer-types]
+  318 |     rc = esp_timer_create(&timer, &args);
+      |                           ^~~~~~
+      |                           |
+      |                           struct esp_timer **
+In file included from /home/nik/Проекты/Micro_OS/components/port_esp32/src/port_esp32.c:12:
+/home/nik/esp/esp-idf/components/esp_timer/include/esp_timer.h:143:59: note: expected 'const esp_timer_create_args_t *' but argument is of type 'struct esp_timer **'
+  143 | esp_err_t esp_timer_create(const esp_timer_create_args_t* create_args,
+      |                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~
+/home/nik/Проекты/Micro_OS/components/port_esp32/src/port_esp32.c:318:35: warning: passing argument 2 of 'esp_timer_create' from incompatible pointer type [-Wincompatible-pointer-types]
+  318 |     rc = esp_timer_create(&timer, &args);
+      |                                   ^~~~~
+      |                                   |
+      |                                   const esp_timer_create_args_t *
+/home/nik/esp/esp-idf/components/esp_timer/include/esp_timer.h:144:48: note: expected 'struct esp_timer **' but argument is of type 'const esp_timer_create_args_t *'
+  144 |                            esp_timer_handle_t* out_handle);
+      |                            ~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~
+[7/11] Linking C static library esp-idf/port_esp32/libport_esp32.a
+[8/11] Generating ld/sections.ld
+info: INFO: Symbol IDF_TARGET_LINUX defined in multiple locations (see below). Please check if this is a correct behavior or a random name match:
+    /home/nik/esp/esp-idf/Kconfig:78
+    /home/nik/esp/esp-idf/Kconfig:162
+[9/11] Linking CXX executable micro_os.elf
+[10/11] Generating binary image from built executable
+esptool.py v4.12.0
+Creating esp32 image...
+Merged 2 ELF sections
+Successfully created esp32 image.
+Generated /home/nik/Проекты/Micro_OS/build/micro_os.bin
+[11/11] cd /home/nik/Проекты/Micro_OS/build/esp-idf/esptool_py && /home/nik/.espressif/python_env/idf5.3_py3.14_env/bin/python /home/nik/esp/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 partition --type app /home/nik/Проекты/Micro_OS/build/partition_table/partition-table.bin /home/nik/Проекты/Micro_OS/build/micro_os.bin
+micro_os.bin binary size 0xc4530 bytes. Smallest app partition is 0x200000 bytes. 0x13bad0 bytes (62%) free.

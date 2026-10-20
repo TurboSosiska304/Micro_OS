@@ -90,3 +90,19 @@ selftest: PASS
 
 Memory footprint of that build: 102 KB of flash code, 58 KB of IRAM, 22 KB of DRAM
 and the 2 MB PSRAM pool registered in the heap.
+
+## Side findings of phase 1F
+
+The hardware doctor found three bugs that only a real device can reveal:
+
+1. **The I2C driver of IDF 5.3**: the last argument of `i2c_master_transmit()`
+   is a timeout in milliseconds, not a flag. The value `true` meant 1 ms, and
+   the transactions were cut short depending on the phase of the boot. With a
+   timeout of 100 ms the bus works reliably.
+2. **SPI through the GPIO matrix** is limited to 26.7 MHz, 40 MHz fails with
+   `assigned clock speed not supported`. The display runs at 20 MHz.
+3. **The SPI DMA of the ESP32 cannot read from the PSRAM**: the framebuffer is
+   sent to the panel in 4 KB pieces through an internal buffer.
+
+Lesson: the hardware doctor is not a formality but a working tool. Each of
+these bugs looked like "the device is broken", while the code was wrong.

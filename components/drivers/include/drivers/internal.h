@@ -10,6 +10,9 @@
 int drv_i2c_init(void);
 int drv_i2c_read(uint8_t addr, uint8_t reg, uint8_t *buf, size_t len);
 int drv_i2c_write(uint8_t addr, uint8_t reg, const uint8_t *buf, size_t len);
+int drv_i2c_probe(uint8_t addr, uint32_t speed_hz, uint8_t *value);
+int drv_i2c_set_speed(uint32_t speed_hz);
+int drv_i2c_register_command(void);
 
 /* Module registration. */
 int drv_display_register(void);
