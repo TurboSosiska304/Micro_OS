@@ -16,6 +16,7 @@ void test_kmm(void);
 void test_mfs(void);
 void test_mfs_persistence(void);
 void test_vfs(void);
+void test_sysfs(void);
 void test_kshell(void);
 
 #endif /* MICRO_OS_TESTS_H */

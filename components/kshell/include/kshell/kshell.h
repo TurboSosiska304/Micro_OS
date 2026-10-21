@@ -37,6 +37,13 @@ void kshell_run(void);
 /* Print a formatted message to the console. */
 void kshell_printf(const char *fmt, ...);
 
+/*
+ * The sink of the output: the shell writes to it as well as to the console.
+ * The console of the display of the board uses it.
+ */
+typedef void (*kshell_sink_fn)(const char *data, k_size_t len);
+void kshell_set_sink(kshell_sink_fn sink);
+
 /* Number of registered commands. */
 k_size_t kshell_command_count(void);
 

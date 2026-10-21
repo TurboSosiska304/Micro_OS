@@ -67,9 +67,13 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
       `df`, `mount`
 * [x] The volume of the flash: the partition of 5.75 MB, the data of the
       user survives the restarts
-* [ ] `/proc`: `version`, `uptime`, `meminfo`, `tasks`, `self/`
-* [ ] `/dev`: `tty0` (console on UART and TFT)
-* [ ] Command history, `help` per command, tab completion
+* [x] `/proc`: `version`, `uptime`, `meminfo`, `tasks`, `modules`
+* [x] `/dev`: `tty0` (the console) and `null`
+* [x] The console on the display: the output of the shell is mirrored to the
+      screen of the board, the font is 5x7
+* [x] The help is short: one line per command, `help <command>` tells more
+* [ ] Command history, tab completion
+* [ ] `/proc/self`, the directories of the tasks
 
 ## Phase 3 - Memory and the syscall ABI
 

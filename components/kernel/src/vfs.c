@@ -183,6 +183,9 @@ int vfs_open(const char *path, int flags, struct vfs_file *out, k_size_t slot)
         return -2;
     }
 
+    /* The descriptor of the caller is not initialised: the offset and the
+     * size have to start from zero. */
+    memset(out, 0, sizeof(*out));
     out->priv = vfs_file_data(slot);
     out->ops = m->ops;
     out->fs = m->ctx;

@@ -19,7 +19,9 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "drivers/display.h"
 #include "drivers/internal.h"
+#include "graphics/font.h"
 #include "kernel/kmod.h"
 #include "kernel/log.h"
 
@@ -309,4 +311,76 @@ static const struct kmod s_display_module = {
 int drv_display_register(void)
 {
     return kmod_register(&s_display_module);
+}
+
+/* --- the text on the screen --- */
+
+int drv_display_clear(uint16_t color)
+{
+    k_size_t i;
+    k_size_t count = (k_size_t)LCD_WIDTH * LCD_HEIGHT;
+
+    if (s_fb == NULL) {
+        return -1;
+    }
+
+    for (i = 0; i < count; i++) {
+        s_fb[i] = color;
+    }
+
+    return 0;
+}
+
+int drv_display_text(int x, int y, const char *text, uint16_t color)
+{
+    int cursor = x;
+
+    if (s_fb == NULL || text == NULL) {
+        return -1;
+    }
+
+    while (*text != '\0') {
+        const uint8_t *glyph = font_glyph(*text);
+        int column;
+        int row;
+
+        if (cursor + FONT_WIDTH > LCD_WIDTH) {
+            break; /* the line is full */
+        }
+
+        if (y + FONT_HEIGHT > LCD_HEIGHT) {
+            break; /* the screen is full */
+        }
+
+        for (column = 0; column < FONT_WIDTH; column++) {
+            uint8_t bits = glyph[column];
+
+            for (row = 0; row < FONT_HEIGHT; row++) {
+                if ((bits & (1u << row)) != 0) {
+                    int px = cursor + column;
+                    int py = y + row;
+
+                    if (px >= 0 && px < LCD_WIDTH && py >= 0 && py < LCD_HEIGHT) {
+                        s_fb[py * LCD_WIDTH + px] = color;
+                    }
+                }
+            }
+        }
+
+        cursor += FONT_WIDTH + 1;
+        text++;
+    }
+
+    return 0;
+}
+
+int drv_display_flush(void)
+{
+    if (s_fb == NULL) {
+        return -1;
+    }
+
+    lcd_flush();
+
+    return 0;
 }

@@ -16,7 +16,10 @@
 #include "kernel/task.h"
 #include "kernel/version.h"
 #include "kernel/vfs.h"
+#include "devfs/devfs.h"
+#include "graphics/tft_console.h"
 #include "mfs/mfs_flash.h"
+#include "procfs/procfs.h"
 #include "kshell/kshell.h"
 #include "port_esp32.h"
 #include "selftest.h"
@@ -43,7 +46,36 @@ static int drivers_subsys_init(void)
 /* The filesystem of the flash: the data of the user survives the restarts. */
 static int fs_subsys_init(void)
 {
-    return mfs_flash_mount("/");
+    int rc = mfs_flash_mount("/");
+
+    if (rc != 0) {
+        return rc;
+    }
+
+    /* The information about the system and the devices. */
+    if (procfs_register("/proc") != 0) {
+        kerror("init: cannot mount the procfs");
+        return -1;
+    }
+
+    if (devfs_register("/dev") != 0) {
+        kerror("init: cannot mount the devfs");
+        return -1;
+    }
+
+    return 0;
+}
+
+/* The shell: the input comes from the UART, the output goes to the UART
+ * and to the display of the board. */
+static void shell_task(void *arg)
+{
+    K_UNUSED(arg);
+
+    tft_console_start();
+    kshell_set_sink(tft_console_write);
+
+    kshell_run();
 }
 
 /*
@@ -72,7 +104,7 @@ static void init_task(void *arg)
     kmod_report();
 
     /* And finally it starts the shell. */
-    if (task_create("shell", (task_entry_fn)kshell_run, NULL, TASK_PRIO_DEFAULT) == NULL) {
+    if (task_create("shell", shell_task, NULL, TASK_PRIO_DEFAULT) == NULL) {
         kerror("init: cannot start the shell");
     }
 

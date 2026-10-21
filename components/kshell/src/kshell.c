@@ -20,6 +20,7 @@ struct command {
 
 static struct command g_commands[KSHELL_MAX_COMMANDS];
 static k_size_t g_command_count;
+static kshell_sink_fn g_sink;
 
 static void copy_str(char *dst, k_size_t size, const char *src)
 {
@@ -102,6 +103,16 @@ void kshell_printf(const char *fmt, ...)
 
     buf[sizeof(buf) - 1] = '\0';
     k_port_write(buf, strlen(buf));
+
+    /* The console of the display of the board shows the same. */
+    if (g_sink != NULL) {
+        g_sink(buf, strlen(buf));
+    }
+}
+
+void kshell_set_sink(kshell_sink_fn sink)
+{
+    g_sink = sink;
 }
 
 /* Split a line into arguments. Returns the number of arguments. */
@@ -136,6 +147,8 @@ static int split_args(char *line, char **argv, int max_args)
 
     return argc;
 }
+
+static struct command *find_command(const char *name);
 
 static struct command *find_command(const char *name)
 {
@@ -187,16 +200,30 @@ int kshell_execute(const char *line)
 
 /* --- the built in commands --- */
 
+/*
+ * The help is deliberately short: the screen of the board is small and the
+ * flash is not big either. "help <command>" tells more about one command.
+ */
 static int cmd_help(int argc, char **argv)
 {
     k_size_t i;
 
-    (void)argc;
-    (void)argv;
+    if (argc > 1) {
+        struct command *cmd = find_command(argv[1]);
 
-    kshell_printf("commands:\n");
+        if (cmd == NULL) {
+            kshell_printf("help: no such command\n");
+            return KSHELL_ERROR;
+        }
+
+        kshell_printf("%s: %s\n", cmd->name, cmd->help != NULL ? cmd->help : "");
+
+        return KSHELL_OK;
+    }
+
+    kshell_printf("%-9s %s\n", "command", "what it does");
     for (i = 0; i < g_command_count; i++) {
-        kshell_printf("  %-10s %s\n", g_commands[i].name,
+        kshell_printf("%-9s %s\n", g_commands[i].name,
                       g_commands[i].help != NULL ? g_commands[i].help : "");
     }
 
