@@ -25,7 +25,12 @@ k_log_level_t klog_get_level(void);
 
 /* Print a message (level filtered). */
 #if defined(__GNUC__)
-void klog(k_log_level_t level, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+/*
+ * The attribute uses the reserved name __printf__: the usual name is a
+ * macro in the library of Micro OS, and a macro cannot be the name of a
+ * format.
+ */
+void klog(k_log_level_t level, const char *fmt, ...) __attribute__((format(__printf__, 2, 3)));
 #else
 void klog(k_log_level_t level, const char *fmt, ...);
 #endif

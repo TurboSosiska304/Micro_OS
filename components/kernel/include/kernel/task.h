@@ -9,13 +9,13 @@
 #define MICRO_OS_KERNEL_TASK_H
 
 #include "kernel/types.h"
+#include "kernel/vfs.h"
 
 #define TASK_NAME_MAX 16
 #define TASK_PRIO_MIN 0
 #define TASK_PRIO_MAX 15
 #define TASK_PRIO_DEFAULT 5
 #define TASK_MAX_TASKS 32
-#define TASK_MAX_FDS 8
 #define TASK_CWD_MAX 32
 
 typedef enum {
@@ -29,6 +29,20 @@ typedef enum {
 } task_state_t;
 
 typedef void (*task_entry_fn)(void *arg);
+
+/* The maximum number of the open files of a task. */
+#define TASK_MAX_FDS 4
+
+/* The length of the path that is kept with an open file. */
+#define TASK_PATH_MAX 48
+
+/* One open file of a task. */
+struct kfile {
+    bool used;
+    int flags;
+    char path[TASK_PATH_MAX]; /* the path the file was opened with */
+    struct vfs_file file;
+};
 
 struct task {
     k_u32_t pid;
@@ -53,7 +67,13 @@ struct task {
     task_entry_fn entry;
     void *arg;
     struct task *parent;
-    int fds[TASK_MAX_FDS]; /* file descriptors, -1 means closed */
+    /*
+     * True for the child of a fork. In Linux the child knows it by the zero
+     * that fork() returns; here the child starts the program from the
+     * beginning, so the program has to ask.
+     */
+    bool is_child;
+    struct kfile files[TASK_MAX_FDS]; /* the open files of the task */
     /*
      * The priority of the memory allocations of the task: the system flag
      * raises it from KMM_PRIORITY_USER to KMM_PRIORITY_SYSTEM.
@@ -90,13 +110,6 @@ int task_wait(k_u32_t pid, int *exit_code, k_u32_t timeout_ms);
 
 /* Wait for any child task to finish. Returns the pid or -1. */
 int task_wait_any(int *exit_code, k_u32_t timeout_ms);
-
-/* File descriptors of a task. */
-int task_fd_alloc(struct task *t);
-int task_fd_set(struct task *t, int fd, int slot);
-int task_fd_get(struct task *t, int fd);
-void task_fd_close(struct task *t, int fd);
-void task_fds_init(struct task *t);
 
 /* The priority of the memory allocations of a task (KMM_PRIORITY_*). */
 void task_set_mem_priority(struct task *t, int priority);

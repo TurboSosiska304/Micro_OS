@@ -8,7 +8,7 @@
 
 #if defined(__GNUC__)
 _Noreturn void kernel_panic(const char *file, int line, const char *fmt, ...)
-    __attribute__((format(printf, 3, 4)));
+    __attribute__((format(__printf__, 3, 4)));
 #else
 _Noreturn void kernel_panic(const char *file, int line, const char *fmt, ...);
 #endif

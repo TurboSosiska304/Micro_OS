@@ -37,65 +37,6 @@ void task_set_name(struct task *t, const char *name)
     t->name[TASK_NAME_MAX - 1] = '\0';
 }
 
-void task_fds_init(struct task *t)
-{
-    int i;
-
-    if (t == NULL) {
-        return;
-    }
-
-    for (i = 0; i < TASK_MAX_FDS; i++) {
-        t->fds[i] = -1;
-    }
-}
-
-int task_fd_alloc(struct task *t)
-{
-    int i;
-
-    if (t == NULL) {
-        return -1;
-    }
-
-    for (i = 0; i < TASK_MAX_FDS; i++) {
-        if (t->fds[i] == -1) {
-            t->fds[i] = i;
-            return i;
-        }
-    }
-
-    return -1;
-}
-
-int task_fd_set(struct task *t, int fd, int slot)
-{
-    if (t == NULL || fd < 0 || fd >= TASK_MAX_FDS) {
-        return -1;
-    }
-
-    t->fds[fd] = slot;
-    return 0;
-}
-
-int task_fd_get(struct task *t, int fd)
-{
-    if (t == NULL || fd < 0 || fd >= TASK_MAX_FDS) {
-        return -1;
-    }
-
-    return t->fds[fd];
-}
-
-void task_fd_close(struct task *t, int fd)
-{
-    if (t == NULL || fd < 0 || fd >= TASK_MAX_FDS) {
-        return;
-    }
-
-    t->fds[fd] = -1;
-}
-
 void task_set_mem_priority(struct task *t, int priority)
 {
     if (t == NULL) {
@@ -190,7 +131,6 @@ struct task *task_create(const char *name, task_entry_fn entry, void *arg, k_u8_
         t->arg = arg;
         t->stack_size = k_port_task_stack_size();
         t->parent = task_self();
-        task_fds_init(t);
         t->mem_priority = KMM_PRIORITY_USER;
         task_set_cwd(t, "/");
         task_set_name(t, name);

@@ -221,36 +221,6 @@ static void test_task_wait_timeout(void)
     port_host_set_sink(NULL);
 }
 
-static void test_task_fds(void)
-{
-    struct task *self = task_self();
-
-    ktest_begin("task: file descriptors and the working directory");
-
-    if (self == NULL) {
-        return;
-    }
-
-    /* Every task starts with closed descriptors and the root directory. */
-    KT_CHECK_INT_EQ(task_fd_get(self, 0), -1);
-    KT_CHECK_STR_EQ(task_get_cwd(self), "/");
-
-    KT_CHECK_INT_EQ(task_fd_alloc(self), 0);
-    KT_CHECK_INT_EQ(task_fd_alloc(self), 1);
-    KT_CHECK_INT_EQ(task_fd_get(self, 0), 0);
-    KT_CHECK_INT_EQ(task_fd_get(self, 1), 1);
-
-    KT_CHECK_INT_EQ(task_fd_set(self, 1, 42), 0);
-    KT_CHECK_INT_EQ(task_fd_get(self, 1), 42);
-
-    task_fd_close(self, 1);
-    KT_CHECK_INT_EQ(task_fd_get(self, 1), -1);
-
-    task_set_cwd(self, "/tmp");
-    KT_CHECK_STR_EQ(task_get_cwd(self), "/tmp");
-    task_set_cwd(self, "/");
-}
-
 void test_task(void)
 {
     test_task_lifecycle();
@@ -259,5 +229,4 @@ void test_task(void)
     test_task_parent();
     test_task_wait();
     test_task_wait_timeout();
-    test_task_fds();
 }

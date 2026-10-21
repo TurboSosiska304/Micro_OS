@@ -58,6 +58,7 @@ else()
     add_subdirectory(components/procfs)
     add_subdirectory(components/devfs)
     add_subdirectory(components/font)
+    add_subdirectory(components/libc)
     add_subdirectory(ports/port_host)
     add_subdirectory(tests)
 
