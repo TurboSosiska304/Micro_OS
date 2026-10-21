@@ -37,6 +37,13 @@ struct task {
     task_state_t wake_state; /* state to restore when a sleeping task wakes up */
     k_u8_t prio;
     k_u32_t wake_tick; /* tick at which a sleeping task wakes up */
+    /*
+     * A task that waits with a timeout is transiently sleeping. A block or
+     * an unblock that arrives in that moment must not get lost: the request
+     * is remembered here and applied when the task wakes up.
+     */
+    bool pending_block;
+    bool pending_wake;
     k_u32_t exit_code;
     k_u64_t runtime_ticks; /* bookkeeping: ticks spent running */
     k_u32_t quantum_left;  /* ticks left in the current time slice */
@@ -89,6 +96,12 @@ void task_fds_init(struct task *t);
 /* Working directory of a task. */
 void task_set_cwd(struct task *t, const char *dir);
 const char *task_get_cwd(struct task *t);
+
+/*
+ * Access to the task table without taking the lock. Only for the internals
+ * of the kernel, which already hold it.
+ */
+struct task *task_get_by_index_unlocked(k_size_t index);
 
 /* Helpers. */
 void task_set_name(struct task *t, const char *name);

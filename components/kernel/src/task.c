@@ -254,6 +254,15 @@ struct task *task_get_by_index(k_size_t index)
     return t;
 }
 
+struct task *task_get_by_index_unlocked(k_size_t index)
+{
+    if (index < TASK_MAX_TASKS && g_tasks[index].in_use) {
+        return &g_tasks[index];
+    }
+
+    return NULL;
+}
+
 k_size_t task_count(void)
 {
     k_size_t count;

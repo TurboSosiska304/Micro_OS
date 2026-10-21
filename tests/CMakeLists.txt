@@ -15,6 +15,7 @@ if(NOT ESP_PLATFORM)
         cases/test_kshell.c
         cases/test_task.c
         cases/test_sched.c
+        cases/test_sched_queue.c
     )
 
     target_include_directories(microos_tests PRIVATE

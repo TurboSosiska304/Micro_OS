@@ -26,6 +26,7 @@ static void run_tests(void *arg)
     test_log();
     test_task();
     test_sched();
+    test_sched_queue();
     test_kmod();
     test_kshell();
     test_boot();

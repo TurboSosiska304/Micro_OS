@@ -10,6 +10,7 @@
 #include "port_host.h"
 
 static volatile int g_blocked;
+static volatile int g_release;
 
 static void blocker(void *arg)
 {
@@ -30,7 +31,7 @@ static void blocker(void *arg)
      * a task waiting for an event keeps the BLOCKED state (in Linux such a
      * task would sit in a wait queue).
      */
-    while (self->state == TASK_STATE_BLOCKED) {
+    while (self->state == TASK_STATE_BLOCKED && !g_release) {
         k_port_task_sleep_ms(1);
     }
 }
@@ -46,6 +47,7 @@ static void test_ready_queue(void)
 
     port_host_set_sink(tmpfile());
     g_blocked = 0;
+    g_release = 0;
 
     low = task_create("low", blocker, NULL, 10);
     high = task_create("high", blocker, NULL, 12);
@@ -74,6 +76,11 @@ static void test_ready_queue(void)
     KT_CHECK_INT_EQ(k_sched_ready_count(), 3);
     next = k_sched_pick_next();
     KT_CHECK(next == high);
+
+    /* Let the tasks finish and free their slots, they must not stay in the
+     * run queue of the following tests. */
+    g_release = 1;
+    k_sched_sleep_ms(50);
 
     if (low != NULL) {
         task_reap(low->pid);
