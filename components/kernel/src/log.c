@@ -7,10 +7,16 @@
 #include "kernel/config.h"
 #include "kernel/port.h"
 
+/* The capture of the log of the boot. */
+#define KERNEL_LOG_CAPTURE_SIZE (6 * 1024)
+
 static char g_lines[KERNEL_LOG_LINES][KERNEL_LOG_LINE_MAX];
 static k_u32_t g_next;  /* slot to be written next */
 static k_u32_t g_count; /* amount of valid entries */
 static k_log_level_t g_level = K_LOG_LEVEL_INFO;
+static char g_capture[KERNEL_LOG_CAPTURE_SIZE];
+static k_size_t g_capture_size;
+static bool g_capture_on;
 
 static k_size_t str_len(const char *s)
 {
@@ -85,8 +91,43 @@ void klog(k_log_level_t level, const char *fmt, ...)
         g_count++;
     }
 
+    if (g_capture_on) {
+        /* The log of the boot is collected, not printed. */
+        k_size_t len = str_len(buf);
+
+        if (g_capture_size + len + 2 < KERNEL_LOG_CAPTURE_SIZE) {
+            memcpy(g_capture + g_capture_size, buf, len);
+            g_capture_size += len;
+            g_capture[g_capture_size++] = '\n';
+            g_capture[g_capture_size] = '\0';
+        }
+        return;
+    }
+
     k_port_write(buf, str_len(buf));
     k_port_write("\n", 1);
+}
+
+void klog_capture_start(void)
+{
+    g_capture_size = 0;
+    g_capture[0] = '\0';
+    g_capture_on = true;
+}
+
+void klog_capture_stop(void)
+{
+    g_capture_on = false;
+}
+
+const char *klog_captured_text(void)
+{
+    return g_capture;
+}
+
+k_size_t klog_captured_size(void)
+{
+    return g_capture_size;
 }
 
 k_size_t klog_line_count(void)

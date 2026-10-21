@@ -21,6 +21,9 @@ _Noreturn void kernel_panic(const char *file, int line, const char *fmt, ...)
     klog(K_LOG_LEVEL_ERROR, "at %s:%d", file ? file : "?", line);
     klog(K_LOG_LEVEL_ERROR, "system halted");
 
+    /* The panic goes to the console even when the log is captured. */
+    k_port_write("kernel panic, the system is stopped\n", 34);
+
     k_port_halt();
 
     /* k_port_halt() must never return; keep the compiler happy anyway. */

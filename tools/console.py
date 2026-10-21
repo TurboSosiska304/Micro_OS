@@ -73,6 +73,9 @@ def main() -> int:
         return 2
 
     if do_reset:
+        # The buffer of the USB serial may still hold the output of the
+        # previous run, it is dropped before the reset.
+        ser.reset_input_buffer()
         print("--- resetting the board ---", flush=True)
         reset_board(ser)
         # The board needs a moment to boot, the commands would be lost.

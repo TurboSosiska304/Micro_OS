@@ -13,6 +13,13 @@
 
 #include "kernel/types.h"
 
+/*
+ * The GRAM of the ST7789V2 is 240x320, the glass of the 1.14" panel shows
+ * the rows 80 to 319. Without the offset the image is shifted up by 80 rows
+ * and the rest of the screen is garbage.
+ */
+#define LCD_Y_OFFSET 80
+
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_heap_caps.h"
@@ -135,6 +142,8 @@ static void lcd_init_panel(void)
 static void lcd_set_window(int x, int y, int w, int h)
 {
     uint8_t data[4];
+    int first_row = y + LCD_Y_OFFSET;
+    int last_row = first_row + h - 1;
 
     lcd_write_command(0x2A); /* column address */
     data[0] = (uint8_t)(x >> 8);
@@ -144,10 +153,10 @@ static void lcd_set_window(int x, int y, int w, int h)
     lcd_write_data(data, 4);
 
     lcd_write_command(0x2B); /* row address */
-    data[0] = (uint8_t)(y >> 8);
-    data[1] = (uint8_t)(y & 0xFF);
-    data[2] = (uint8_t)((y + h - 1) >> 8);
-    data[3] = (uint8_t)((y + h - 1) & 0xFF);
+    data[0] = (uint8_t)(first_row >> 8);
+    data[1] = (uint8_t)(first_row & 0xFF);
+    data[2] = (uint8_t)(last_row >> 8);
+    data[3] = (uint8_t)(last_row & 0xFF);
     lcd_write_data(data, 4);
 
     lcd_write_command(0x2C); /* memory write */

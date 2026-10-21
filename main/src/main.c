@@ -11,6 +11,7 @@
 #include "kernel/boot.h"
 #include "kernel/kmod.h"
 #include "kernel/log.h"
+#include "kernel/vfs.h"
 #include "kernel/port.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
@@ -79,6 +80,38 @@ static void shell_task(void *arg)
 }
 
 /*
+ * The log of the boot goes to the file /log/start.log, so that the console
+ * stays readable. The doctor report and the summary still go to the console.
+ */
+static int write_boot_log(void)
+{
+    struct vfs_file file;
+    const char *text;
+    int rc;
+
+    /* The directory of the log. */
+    rc = vfs_mkdir("/log");
+    if (rc != 0 && rc != -3) {
+        kwarn("init: cannot create the directory /log (rc=%d)", rc);
+    }
+
+    rc = vfs_open("/log/start.log", VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, 0);
+    if (rc != 0) {
+        kwarn("init: cannot create the log file (rc=%d)", rc);
+        return rc;
+    }
+
+    text = klog_captured_text();
+    if (text != NULL && klog_captured_size() > 0) {
+        vfs_write(&file, text, klog_captured_size());
+    }
+
+    vfs_close(&file);
+
+    return 0;
+}
+
+/*
  * The init task: the first task of the system (PID 1). It checks the kernel
  * and the hardware, and later starts the shell and the other services.
  */
@@ -101,6 +134,16 @@ static void init_task(void *arg)
     } else {
         kwarn("init: the doctor found problems, see the report");
     }
+
+    /* The log of the boot goes to the file, the console gets the report. */
+    if (write_boot_log() == 0) {
+        klog_capture_stop();
+        kinfo("init: the log of the boot is in /log/start.log (%u bytes)",
+              (unsigned)klog_captured_size());
+    } else {
+        klog_capture_stop();
+    }
+
     kmod_report();
 
     /* And finally it starts the shell. */
@@ -136,6 +179,9 @@ void app_main(void)
 
     port_esp32_console_init();
     port_esp32_init();
+
+    /* The log of the boot is collected, it is written to a file later. */
+    klog_capture_start();
 
     /* The time base of the kernel: one tick per millisecond. */
     port_esp32_start_tick(1);

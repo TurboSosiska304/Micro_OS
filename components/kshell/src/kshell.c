@@ -412,6 +412,12 @@ void kshell_run(void)
             break;
         }
 
+        /* The terminal echoes what was typed, so that the dialogue is
+         * readable on the screen and in the interactive console. */
+        if (line[0] != '\0') {
+            kshell_printf("%s\n", line);
+        }
+
         kshell_execute(line);
     }
 }

@@ -72,6 +72,11 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [x] The console on the display: the output of the shell is mirrored to the
       screen of the board, the font is 5x7
 * [x] The help is short: one line per command, `help <command>` tells more
+* [x] The log of the boot goes to `/log/start.log`, the console stays readable
+* [x] The terminal echoes the input, so that the dialogue is readable in the
+      interactive console
+* [x] The image of the display: the ST7789V2 has 240x320 of memory, the
+      glass of the 1.14" panel shows the rows 80 to 319
 * [ ] Command history, tab completion
 * [ ] `/proc/self`, the directories of the tasks
 
