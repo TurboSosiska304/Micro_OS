@@ -7,6 +7,7 @@
 
 #include "kernel/kmod.h"
 #include "kernel/ksys.h"
+#include "kernel/console.h"
 #include "kernel/log.h"
 #include "kernel/port.h"
 #include "kernel/sched.h"
@@ -21,7 +22,6 @@ struct command {
 
 static struct command g_commands[KSHELL_MAX_COMMANDS];
 static k_size_t g_command_count;
-static kshell_sink_fn g_sink;
 
 static void copy_str(char *dst, k_size_t size, const char *src)
 {
@@ -103,17 +103,14 @@ void kshell_printf(const char *fmt, ...)
     }
 
     buf[sizeof(buf) - 1] = '\0';
-    k_port_write(buf, strlen(buf));
 
-    /* The console of the display of the board shows the same. */
-    if (g_sink != NULL) {
-        g_sink(buf, strlen(buf));
-    }
+    /* The serial port and the display of the board show the same. */
+    k_console_write(buf, strlen(buf));
 }
 
 void kshell_set_sink(kshell_sink_fn sink)
 {
-    g_sink = sink;
+    k_console_set_sink(sink);
 }
 
 /* Split a line into arguments. Returns the number of arguments. */
@@ -438,7 +435,7 @@ static int shell_read_line(char *buf, k_size_t size)
         }
 
         if (c == '\n' || c == '\r') {
-            k_port_write("\r\n", 2);
+            k_console_write("\r\n", 2);
             buf[len] = '\0';
             return (int)len;
         }
@@ -446,20 +443,20 @@ static int shell_read_line(char *buf, k_size_t size)
         if (c == '\b' || c == 127) {
             if (len > 0) {
                 len--;
-                k_port_write("\b \b", 3);
+                k_console_write("\b \b", 3);
             }
             continue;
         }
 
         if (c == 3) { /* Ctrl+C: the line is thrown away */
-            k_port_write("^C\r\n", 4);
+            k_console_write("^C\r\n", 4);
             len = 0;
             continue;
         }
 
         if (len + 1 < size) {
             buf[len++] = (char)c;
-            k_port_write(&buf[len - 1], 1);
+            k_console_write(&buf[len - 1], 1);
         }
     }
 }

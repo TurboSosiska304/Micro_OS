@@ -10,5 +10,6 @@ most important remarks, the mistakes and the bugs that cost time.
 | [1F](phase1f.md) | The hardware doctor: the modules and their health |
 | [2](phase2.md) | The filesystem, the VFS and the shell |
 | [3](phase3.md) | The ABI of the system calls |
+| [4](phase4.md) | The C library over the ABI |
 
 The Russian versions are in the same folders with the name `_ru`.

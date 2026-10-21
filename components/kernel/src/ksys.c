@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "kernel/console.h"
 #include "kernel/errno.h"
 #include "kernel/log.h"
 #include "kernel/port.h"
@@ -108,6 +109,14 @@ static k_ssize_t sys_write(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys
     K_UNUSED(a5);
 
     if (file == NULL) {
+        /*
+         * The descriptors 1 and 2 are the console of the system when they
+         * are not open as a file, the same way as in Linux.
+         */
+        if (fd == 1 || fd == 2) {
+            k_console_write((const char *)(uintptr_t)buf, (k_size_t)count);
+            return (k_ssize_t)count;
+        }
         return KERR_BADF;
     }
 
@@ -502,7 +511,6 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
     k_u32_t waited = 0;
     const k_u32_t limit = 5000; /* five seconds */
 
-    K_UNUSED(flags);
     K_UNUSED(a3);
     K_UNUSED(a4);
     K_UNUSED(a5);
@@ -534,6 +542,11 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
 
         if (child != NULL) {
             break;
+        }
+
+        if ((flags & KSYS_WNOHANG) != 0) {
+            /* The caller does not want to wait: there is nothing yet. */
+            return 0;
         }
 
         k_sched_sleep_ms(1);
@@ -717,7 +730,8 @@ int ksys_getppid(void)
     return (int)ksys_call(KSYS_GETPPID, 0, 0, 0, 0, 0, 0);
 }
 
-int ksys_waitpid(int pid, int *status)
+int ksys_waitpid(int pid, int *status, int flags)
 {
-    return (int)ksys_call(KSYS_WAITPID, (ksys_arg_t)pid, (ksys_arg_t)(uintptr_t)status, 0, 0, 0, 0);
+    return (int)ksys_call(KSYS_WAITPID, (ksys_arg_t)pid, (ksys_arg_t)(uintptr_t)status,
+                          (ksys_arg_t)flags, 0, 0, 0);
 }

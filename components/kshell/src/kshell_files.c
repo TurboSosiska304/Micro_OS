@@ -8,6 +8,7 @@
 
 #include "kernel/task.h"
 #include "kernel/vfs.h"
+#include "libc/unistd.h"
 
 #define SHELL_MAX_ENTRIES 64
 #define SHELL_PATH_MAX 128
@@ -122,10 +123,9 @@ static int cmd_ls(int argc, char **argv)
 
 static int cmd_cat(int argc, char **argv)
 {
-    struct vfs_file file;
     char path[SHELL_PATH_MAX];
     char buffer[128];
-    int rc;
+    int fd;
 
     if (argc < 2) {
         kshell_printf("usage: cat <file>\n");
@@ -134,32 +134,37 @@ static int cmd_cat(int argc, char **argv)
 
     shell_resolve(argv[1], path, sizeof(path));
 
-    rc = vfs_open(path, VFS_O_RDONLY, &file, 0);
-    if (rc != 0) {
-        kshell_printf("cat: %s: %s\n", path, vfs_strerror(rc));
+    /*
+     * The file is opened through the library of the system, that is, through
+     * the calls of the kernel. The shell and the programs of the user see
+     * the same files.
+     */
+    fd = microos_open(path, MICROOS_O_RDONLY);
+    if (fd < 0) {
+        kshell_printf("cat: %s: %s\n", path, microos_strerror(microos_errno()));
         return KSHELL_ERROR;
     }
 
     for (;;) {
-        rc = vfs_read(&file, buffer, sizeof(buffer));
-        if (rc <= 0) {
+        long got = microos_read(fd, buffer, sizeof(buffer));
+
+        if (got <= 0) {
             break;
         }
-        kshell_printf("%.*s", rc, buffer);
+        kshell_printf("%.*s", (int)got, buffer);
     }
 
-    vfs_close(&file);
+    microos_close(fd);
 
     return KSHELL_OK;
 }
 
 static int cmd_write(int argc, char **argv)
 {
-    struct vfs_file file;
     char path[SHELL_PATH_MAX];
     char text[128];
     k_size_t len = 0;
-    int rc;
+    int fd;
     int i;
 
     if (argc < 3) {
@@ -177,15 +182,16 @@ static int cmd_write(int argc, char **argv)
     }
     text[len] = '\0';
 
-    rc = vfs_open(path, VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, 0);
-    if (rc != 0) {
-        kshell_printf("write: %s: %s\n", path, vfs_strerror(rc));
+    /* The file is written through the library, that is, through the calls. */
+    fd = microos_open(path, MICROOS_O_WRONLY | MICROOS_O_CREAT | MICROOS_O_TRUNC);
+    if (fd < 0) {
+        kshell_printf("write: %s: %s\n", path, microos_strerror(microos_errno()));
         return KSHELL_ERROR;
     }
 
-    vfs_write(&file, text, len);
-    vfs_write(&file, "\n", 1);
-    vfs_close(&file);
+    microos_write(fd, text, len);
+    microos_write(fd, "\n", 1);
+    microos_close(fd);
 
     kshell_printf("%u byte(s) written to %s\n", (unsigned)(len + 1), path);
 

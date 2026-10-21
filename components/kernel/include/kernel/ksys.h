@@ -51,6 +51,9 @@
 #define KSYS_O_TRUNC 0x0200
 #define KSYS_O_APPEND 0x0400
 
+/* The flags of the waitpid. */
+#define KSYS_WNOHANG 1 /* do not wait, answer 0 when the child is not ready */
+
 /* The whence of the lseek. */
 #define KSYS_SEEK_SET 0
 #define KSYS_SEEK_CUR 1
@@ -122,6 +125,6 @@ k_u64_t ksys_uptime(void);
 int ksys_reboot(void);
 int ksys_fork(void);
 int ksys_getppid(void);
-int ksys_waitpid(int pid, int *status);
+int ksys_waitpid(int pid, int *status, int flags);
 
 #endif /* MICRO_OS_KERNEL_KSYS_H */

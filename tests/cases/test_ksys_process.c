@@ -133,7 +133,7 @@ static void parent_program(void *arg)
     g_child_pid = g_fork_result;
 
     if (g_fork_result > 0) {
-        g_wait_result = ksys_waitpid(g_fork_result, (int *)&g_wait_status);
+        g_wait_result = ksys_waitpid(g_fork_result, (int *)&g_wait_status, 0);
     }
 
     g_result = 1;
@@ -210,7 +210,11 @@ static void test_wait_errors(void)
 
     setup();
 
-    KT_CHECK_INT_EQ(ksys_waitpid(4242, &status), KERR_AGAIN);
+    /*
+     * The call that does not wait answers at once: there is no child that
+     * could finish.
+     */
+    KT_CHECK_INT_EQ(ksys_waitpid(4242, &status, KSYS_WNOHANG), 0);
 
     teardown();
 }

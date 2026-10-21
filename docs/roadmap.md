@@ -94,12 +94,15 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
       give the same result no matter how it is broken into pieces
 * [x] The process part of the ABI: fork, getppid, waitpid. The memory
       of the parent is not copied, the tasks share it, like CLONE_VM
-* [ ] The libc over the ABI: printf, open, read, write
+* [x] The libc over the ABI: printf, open, read, write. The library is
+      checked against the library of the system with the real numbers of the
+      corpus
 * [ ] execve: it needs a format of the programs
 
-* [ ] `kmm_alloc`/`kmm_free`, slabs, allocation from PSRAM
-* [ ] System call table, uniform ABI
-* [ ] Minimal libc on top of the kernel: `open/read/write/close/malloc/printf`
+* [x] `kmm_alloc`/`kmm_free`, allocation from the PSRAM. The slabs are not
+* [x] System call table, uniform ABI
+* [x] Minimal libc over the ABI: `open/read/write/close/printf`. The memory
+      (`malloc`) is still missing
 * [ ] Permission model and "file descriptors"
 
 ## Phase 4 - Drivers
