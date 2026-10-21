@@ -1,4 +1,5 @@
-# build/
+# --- ESP-IDF ---
+build/
 build-host/
 build-*/
 sdkconfig
