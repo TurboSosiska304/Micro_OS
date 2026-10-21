@@ -78,6 +78,15 @@ init-процесс обходит зарегистрированные моду
 
 ## Фаза 3 — Память и ABI системных вызовов
 
+* [x] ABI системных вызовов: номера — это контракт, они записаны в
+      [docs/syscall-abi_ru.md](syscall-abi_ru.md) и покрыты тестом
+* [x] Вызовы для работы с файлами: open, read, write, close, stat, lseek,
+      unlink, mkdir, readdir, getpid, getcwd, ioctl, yield, sleep, uptime
+* [x] Тесты работают с корпусом настоящих чисел: одни и те же данные
+      должны давать одинаковый результат, как бы их ни делили на части
+* [ ] libc поверх ABI: printf, open, read, write
+* [ ] fork и exec поверх задач
+
 * [ ] `kmm_alloc`/`kmm_free`, слабы, выделение из PSRAM
 * [ ] Таблица системных вызовов, единый ABI
 * [ ] Минимальный libc поверх ядра: `open/read/write/close/malloc/printf`

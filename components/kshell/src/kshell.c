@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "kernel/kmod.h"
+#include "kernel/ksys.h"
 #include "kernel/log.h"
 #include "kernel/port.h"
 #include "kernel/sched.h"
@@ -339,6 +340,29 @@ static int cmd_free(int argc, char **argv)
     return KSHELL_OK;
 }
 
+static int cmd_abi(int argc, char **argv)
+{
+    k_u32_t number;
+
+    (void)argc;
+    (void)argv;
+
+    kshell_printf("the system calls of the kernel:\n");
+    kshell_printf("%-5s %s\n", "nr", "name");
+
+    for (number = 0; number < KSYS_COUNT; number++) {
+        const char *name = ksys_name(number);
+
+        if (name != NULL) {
+            kshell_printf("%-5u %s\n", (unsigned)number, name);
+        }
+    }
+
+    kshell_printf("%u call(s) registered\n", (unsigned)ksys_count());
+
+    return KSHELL_OK;
+}
+
 static int cmd_modules(int argc, char **argv)
 {
     int problems;
@@ -388,6 +412,7 @@ int kshell_init(void)
     rc |= kshell_register("free", "the memory usage", cmd_free);
     rc |= kshell_register("clear", "clear the screen", cmd_clear);
     rc |= kshell_register("modules", "check the hardware modules", cmd_modules);
+    rc |= kshell_register("abi", "the system calls of the kernel", cmd_abi);
     rc |= kshell_register_memtest();
     rc |= kshell_register_files();
     rc |= kshell_register("reboot", "restart the board", cmd_reboot);

@@ -3,6 +3,8 @@
 #include <string.h>
 
 #include "kernel/config.h"
+#include "kernel/kmm.h"
+#include "kernel/ksys.h"
 #include "kernel/log.h"
 #include "kernel/panic.h"
 #include "kernel/port.h"
@@ -16,6 +18,8 @@ static k_size_t g_booted_subsys;
 static int sched_subsys_init(void)
 {
     k_sched_init();
+    kmm_init();
+    ksys_init();
     return 0;
 }
 

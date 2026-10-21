@@ -33,6 +33,7 @@ static void run_tests(void *arg)
     test_mfs_persistence();
     test_vfs();
     test_sysfs();
+    test_ksys();
     test_kshell();
     test_boot();
 

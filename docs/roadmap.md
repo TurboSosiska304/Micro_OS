@@ -85,6 +85,16 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 
 ## Phase 3 - Memory and the syscall ABI
 
+* [x] The ABI of the system calls: the numbers are a contract, they are
+      written down in [docs/syscall-abi.md](syscall-abi.md) and covered by
+      a test
+* [x] The calls of the files: open, read, write, close, stat, lseek,
+      unlink, mkdir, readdir, getpid, getcwd, ioctl, yield, sleep, uptime
+* [x] The tests work with a corpus of real numbers: the same data has to
+      give the same result no matter how it is broken into pieces
+* [ ] The libc over the ABI: printf, open, read, write
+* [ ] fork and exec on top of the tasks
+
 * [ ] `kmm_alloc`/`kmm_free`, slabs, allocation from PSRAM
 * [ ] System call table, uniform ABI
 * [ ] Minimal libc on top of the kernel: `open/read/write/close/malloc/printf`
