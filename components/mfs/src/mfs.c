@@ -348,6 +348,14 @@ struct dir_buffer {
     k_size_t size;
 };
 
+/*
+ * The buffer of the directories. It is not on the stack: four kilobytes do
+ * not fit into the stack of a task, and the filesystem is a singleton, so
+ * it is not reentrant anyway.
+ */
+static struct dir_buffer g_dir_buffer;
+static struct dir_buffer g_dir_buffer2;
+
 /* Read the whole content of a directory into the buffer. */
 static int dir_read(const struct mfs_inode *inode, struct dir_buffer *buf)
 {
@@ -491,8 +499,16 @@ static int dir_entries(const struct dir_buffer *buf, struct mfs_dirent *out, k_s
         }
 
         if (found < max) {
+            struct mfs_inode child;
+
             memcpy(entry.name, buf->data + offset + sizeof(struct mfs_dirent_header), name_len);
             entry.name[name_len] = '\0';
+            entry.size = 0;
+
+            if (inode_read(entry.inode, &child) == MFS_OK) {
+                entry.size = child.size;
+            }
+
             out[found] = entry;
         }
         found++;
@@ -603,7 +619,7 @@ static int path_lookup(const char *path, struct mfs_inode *out, struct mfs_diren
                        k_u32_t *inode_number)
 {
     struct mfs_inode inode;
-    struct dir_buffer dir;
+    struct dir_buffer *dir = &g_dir_buffer;
     struct mfs_dirent local;
     char name[MFS_NAME_MAX + 1];
     const char *cursor = path;
@@ -655,12 +671,12 @@ static int path_lookup(const char *path, struct mfs_inode *out, struct mfs_diren
         memcpy(name, cursor, len);
         name[len] = '\0';
 
-        rc = dir_read(&inode, &dir);
+        rc = dir_read(&inode, dir);
         if (rc != MFS_OK) {
             return rc;
         }
 
-        rc = dir_find(&dir, name, entry);
+        rc = dir_find(dir, name, entry);
         if (rc != MFS_OK) {
             return rc;
         }
@@ -884,6 +900,14 @@ int mfs_format(struct mfs_device *dev, k_u32_t max_records)
         return MFS_EIO;
     }
 
+    /*
+     * The changes have to reach the device: the flash keeps the data in a
+     * sector buffer until the filesystem says that it is done.
+     */
+    if (g.dev.sync != NULL) {
+        return g.dev.sync(g.dev.ctx);
+    }
+
     return MFS_OK;
 }
 
@@ -1001,7 +1025,7 @@ int mfs_get_info(struct mfs_info *out)
 static int add_to_parent(const char *dir_path, const char *name, k_u32_t inode, k_u8_t type)
 {
     struct mfs_inode parent;
-    struct dir_buffer dir;
+    struct dir_buffer *dir = &g_dir_buffer;
     struct mfs_dirent entry;
     k_u32_t dir_inode = MFS_ROOT_INODE;
     int rc;
@@ -1015,12 +1039,12 @@ static int add_to_parent(const char *dir_path, const char *name, k_u32_t inode, 
         return MFS_ENOTDIR;
     }
 
-    rc = dir_read(&parent, &dir);
+    rc = dir_read(&parent, dir);
     if (rc != MFS_OK) {
         return rc;
     }
 
-    if (dir_find(&dir, name, NULL) == MFS_OK) {
+    if (dir_find(dir, name, NULL) == MFS_OK) {
         return MFS_EEXIST;
     }
 
@@ -1031,14 +1055,14 @@ static int add_to_parent(const char *dir_path, const char *name, k_u32_t inode, 
     memcpy(entry.name, name, entry.name_len);
     entry.name[entry.name_len] = '\0';
 
-    rc = dir_add(&dir, &entry);
+    rc = dir_add(dir, &entry);
     if (rc != MFS_OK) {
         return rc;
     }
 
-    parent.size = (k_u32_t)dir.size;
+    parent.size = (k_u32_t)dir->size;
     parent.entries++;
-    rc = dir_write(&parent, &dir);
+    rc = dir_write(&parent, dir);
     if (rc != MFS_OK) {
         return rc;
     }
@@ -1412,7 +1436,17 @@ int mfs_close(struct mfs_file *file)
     }
 
     /* The blocks of the file have been taken, the map has to know it. */
-    return bitmap_store();
+    rc = bitmap_store();
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    /* The changes have to reach the device. */
+    if (g.dev.sync != NULL) {
+        return g.dev.sync(g.dev.ctx);
+    }
+
+    return MFS_OK;
 }
 
 int mfs_unlink(const char *path)
@@ -1421,7 +1455,7 @@ int mfs_unlink(const char *path)
     char name[MFS_NAME_MAX + 1];
     struct mfs_inode parent;
     struct mfs_inode inode;
-    struct dir_buffer dir;
+    struct dir_buffer *dir = &g_dir_buffer;
     struct mfs_dirent entry;
     k_u32_t parent_inode = MFS_ROOT_INODE;
     int rc;
@@ -1440,12 +1474,12 @@ int mfs_unlink(const char *path)
         return rc;
     }
 
-    rc = dir_read(&parent, &dir);
+    rc = dir_read(&parent, dir);
     if (rc != MFS_OK) {
         return rc;
     }
 
-    rc = dir_find(&dir, name, &entry);
+    rc = dir_find(dir, name, &entry);
     if (rc != MFS_OK) {
         return rc;
     }
@@ -1456,13 +1490,13 @@ int mfs_unlink(const char *path)
     }
 
     if ((inode.flags & MFS_INODE_DIR) != 0) {
-        struct dir_buffer content;
+        struct dir_buffer *content = &g_dir_buffer2;
 
-        rc = dir_read(&inode, &content);
+        rc = dir_read(&inode, content);
         if (rc != MFS_OK) {
             return rc;
         }
-        if (content.size > 0) {
+        if (content->size > 0) {
             return MFS_ENOTEMPTY;
         }
     }
@@ -1493,16 +1527,16 @@ int mfs_unlink(const char *path)
     inode_write(entry.inode, &inode);
 
     /* And the entry in the parent. */
-    rc = dir_remove(&dir, name);
+    rc = dir_remove(dir, name);
     if (rc != MFS_OK) {
         return rc;
     }
 
-    parent.size = (k_u32_t)dir.size;
+    parent.size = (k_u32_t)dir->size;
     if (parent.entries > 0) {
         parent.entries--;
     }
-    dir_write(&parent, &dir);
+    dir_write(&parent, dir);
     inode_write(parent_inode, &parent);
 
     /* The blocks of the object are free again. */
@@ -1533,7 +1567,7 @@ int mfs_stat(const char *path, struct mfs_inode *out, struct mfs_dirent *dirent)
 int mfs_list(const char *path, struct mfs_dirent *out, k_size_t max)
 {
     struct mfs_inode inode;
-    struct dir_buffer dir;
+    struct dir_buffer *dir = &g_dir_buffer;
     k_size_t count = 0;
     int rc;
 
@@ -1550,12 +1584,12 @@ int mfs_list(const char *path, struct mfs_dirent *out, k_size_t max)
         return MFS_ENOTDIR;
     }
 
-    rc = dir_read(&inode, &dir);
+    rc = dir_read(&inode, dir);
     if (rc != MFS_OK) {
         return rc;
     }
 
-    return dir_entries(&dir, out, max, &count);
+    return dir_entries(dir, out, max, &count);
 }
 
 const char *mfs_strerror(int error)

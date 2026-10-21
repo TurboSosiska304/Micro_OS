@@ -3,5 +3,5 @@
 idf_component_register(
     SRCS "src/main.c" "src/selftest.c"
     INCLUDE_DIRS "."
-    REQUIRES kernel board port_esp32 drivers kshell
+    REQUIRES kernel board port_esp32 drivers kshell mfs
 )

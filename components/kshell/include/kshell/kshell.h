@@ -49,4 +49,7 @@ int kshell_register_memtest(void);
  */
 int kshell_init(void);
 
+/* Register the commands that work with the files. */
+int kshell_register_files(void);
+
 #endif /* MICRO_OS_KSHELL_KSHELL_H */

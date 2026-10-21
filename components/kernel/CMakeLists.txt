@@ -12,6 +12,7 @@ set(MICRO_OS_KERNEL_SRCS
     "src/panic.c"
     "src/sched.c"
     "src/task.c"
+    "src/vfs.c"
     "src/version.c"
 )
 

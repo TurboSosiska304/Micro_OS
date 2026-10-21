@@ -28,7 +28,7 @@
  *     the needs of the drivers.
  */
 #define TASK_FREERTOS_PRIO_BASE 9
-#define TASK_STACK_SIZE 4096
+#define TASK_STACK_SIZE 8192
 
 /*
  * A recursive mutex is used instead of portENTER_CRITICAL(): the FreeRTOS

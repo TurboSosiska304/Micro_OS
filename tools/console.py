@@ -9,6 +9,7 @@ the board sends and exits with the status 0 when the self test passed.
 """
 
 import glob
+import os
 import sys
 import time
 
@@ -75,7 +76,7 @@ def main() -> int:
         print("--- resetting the board ---", flush=True)
         reset_board(ser)
         # The board needs a moment to boot, the commands would be lost.
-        time.sleep(3.0)
+        time.sleep(float(os.environ.get("CONSOLE_BOOT_WAIT", "6.0")))
 
     for line in sends:
         print(f"--- sending: {line}", flush=True)

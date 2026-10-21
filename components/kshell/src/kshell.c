@@ -126,6 +126,14 @@ static int split_args(char *line, char **argv, int max_args)
         }
     }
 
+    /*
+     * The list has to end with a null pointer: the commands read argv[1]
+     * even when there is only one argument.
+     */
+    if (argc < max_args) {
+        argv[argc] = NULL;
+    }
+
     return argc;
 }
 
@@ -354,6 +362,7 @@ int kshell_init(void)
     rc |= kshell_register("clear", "clear the screen", cmd_clear);
     rc |= kshell_register("modules", "check the hardware modules", cmd_modules);
     rc |= kshell_register_memtest();
+    rc |= kshell_register_files();
     rc |= kshell_register("reboot", "restart the board", cmd_reboot);
 
     return rc;

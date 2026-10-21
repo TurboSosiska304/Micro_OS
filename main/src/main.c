@@ -15,6 +15,8 @@
 #include "kernel/sched.h"
 #include "kernel/task.h"
 #include "kernel/version.h"
+#include "kernel/vfs.h"
+#include "mfs/mfs_flash.h"
 #include "kshell/kshell.h"
 #include "port_esp32.h"
 #include "selftest.h"
@@ -36,6 +38,12 @@ static int board_subsys_init(void)
 static int drivers_subsys_init(void)
 {
     return drivers_init();
+}
+
+/* The filesystem of the flash: the data of the user survives the restarts. */
+static int fs_subsys_init(void)
+{
+    return mfs_flash_mount("/");
 }
 
 /*
@@ -85,6 +93,7 @@ static int tasks_subsys_init(void)
 static const struct kernel_subsys g_subsystems[] = {
     {"board", board_subsys_init, KERNEL_SUBSYS_LEVEL_CORE},
     {"drivers", drivers_subsys_init, KERNEL_SUBSYS_LEVEL_DRIVER},
+    {"fs", fs_subsys_init, KERNEL_SUBSYS_LEVEL_SERVICE},
     {"tasks", tasks_subsys_init, KERNEL_SUBSYS_LEVEL_APP},
 };
 

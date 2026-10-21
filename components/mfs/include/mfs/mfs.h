@@ -59,6 +59,7 @@ struct mfs_device {
     k_u32_t blocks; /* the number of the blocks of the volume */
     int (*read_block)(void *ctx, k_u32_t block, void *buf);
     int (*write_block)(void *ctx, k_u32_t block, const void *buf);
+    int (*sync)(void *ctx); /* write the changes out, may be NULL */
     void *ctx;
 };
 
@@ -103,6 +104,7 @@ struct mfs_dirent {
     k_u16_t name_len;
     k_u8_t type;
     k_u8_t reserved;
+    k_u32_t size; /* the size of the object in bytes */
     char name[MFS_NAME_MAX + 1];
 };
 

@@ -57,6 +57,7 @@ void mfs_ram_device(struct mfs_ram_device *dev, struct mfs_device *out)
     out->blocks = dev->blocks;
     out->read_block = ram_read_block;
     out->write_block = ram_write_block;
+    out->sync = NULL;
     out->ctx = dev;
 }
 
