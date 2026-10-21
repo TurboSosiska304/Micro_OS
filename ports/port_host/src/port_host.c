@@ -1,4 +1,5 @@
 #include "port_host.h"
+#include "port_host_psram.h"
 
 #include <errno.h>
 #include <malloc.h>
@@ -169,21 +170,22 @@ k_size_t k_port_heap_total(void)
 
 k_size_t k_port_psram_free(void)
 {
-    return 0;
+    return host_psram_available();
 }
 
 k_size_t k_port_psram_total(void)
 {
-    /* The host has no separate PSRAM. */
-    return 0;
+    return host_psram_total();
 }
 
 void *k_port_alloc(k_size_t size, bool psram)
 {
-    K_UNUSED(psram);
-
     if (size == 0) {
         size = 4096;
+    }
+
+    if (psram) {
+        return host_psram_alloc(size);
     }
 
     return malloc(size);
@@ -191,6 +193,11 @@ void *k_port_alloc(k_size_t size, bool psram)
 
 void k_port_free(void *ptr)
 {
+    if (host_psram_contains(ptr)) {
+        host_psram_release(ptr);
+        return;
+    }
+
     free(ptr);
 }
 

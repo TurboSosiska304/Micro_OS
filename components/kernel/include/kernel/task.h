@@ -54,6 +54,11 @@ struct task {
     void *arg;
     struct task *parent;
     int fds[TASK_MAX_FDS]; /* file descriptors, -1 means closed */
+    /*
+     * The priority of the memory allocations of the task: the system flag
+     * raises it from KMM_PRIORITY_USER to KMM_PRIORITY_SYSTEM.
+     */
+    k_i8_t mem_priority;
     char cwd[TASK_CWD_MAX];
     bool in_use;
 };
@@ -92,6 +97,10 @@ int task_fd_set(struct task *t, int fd, int slot);
 int task_fd_get(struct task *t, int fd);
 void task_fd_close(struct task *t, int fd);
 void task_fds_init(struct task *t);
+
+/* The priority of the memory allocations of a task (KMM_PRIORITY_*). */
+void task_set_mem_priority(struct task *t, int priority);
+int task_get_mem_priority(struct task *t);
 
 /* Working directory of a task. */
 void task_set_cwd(struct task *t, const char *dir);

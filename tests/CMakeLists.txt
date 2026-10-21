@@ -12,6 +12,7 @@ if(NOT ESP_PLATFORM)
         cases/test_log.c
         cases/test_boot.c
         cases/test_kmod.c
+        cases/test_kmm.c
         cases/test_kshell.c
         cases/test_task.c
         cases/test_sched.c

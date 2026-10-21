@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "kernel/kmm.h"
 #include "kernel/log.h"
 #include "kernel/port.h"
 #include "kernel/port_task.h"
@@ -95,6 +96,31 @@ void task_fd_close(struct task *t, int fd)
     t->fds[fd] = -1;
 }
 
+void task_set_mem_priority(struct task *t, int priority)
+{
+    if (t == NULL) {
+        return;
+    }
+
+    if (priority > KMM_PRIORITY_KERNEL) {
+        priority = KMM_PRIORITY_KERNEL;
+    }
+    if (priority < KMM_PRIORITY_USER) {
+        priority = KMM_PRIORITY_USER;
+    }
+
+    t->mem_priority = (k_i8_t)priority;
+}
+
+int task_get_mem_priority(struct task *t)
+{
+    if (t == NULL) {
+        return KMM_PRIORITY_USER;
+    }
+
+    return (int)t->mem_priority;
+}
+
 void task_set_cwd(struct task *t, const char *dir)
 {
     if (t == NULL) {
@@ -165,6 +191,7 @@ struct task *task_create(const char *name, task_entry_fn entry, void *arg, k_u8_
         t->stack_size = k_port_task_stack_size();
         t->parent = task_self();
         task_fds_init(t);
+        t->mem_priority = KMM_PRIORITY_USER;
         task_set_cwd(t, "/");
         task_set_name(t, name);
         g_used++;
