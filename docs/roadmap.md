@@ -54,7 +54,9 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 
 * [x] Shell: a portable command interpreter with a command registry
 * [x] Built in commands: `help`, `uname`, `uptime`, `ps`, `echo`, `sleep`,
-      `dmesg`, `free`, `clear`, `reboot`, `modules`
+      `dmesg`, `free`, `clear`, `reboot`, `modules`, `memtest`, `i2c`
+* [x] `memtest`: the size of the internal heap and of the PSRAM, and the
+      speed of both (fill, checksum, copy) with a verification of the data
 * [x] The console of the ESP32 port (the UART driver makes the input work)
 * [ ] `inode` / `dentry` / `file_operations`
 * [ ] In-RAM files (`/etc`, `/tmp`), mounting
