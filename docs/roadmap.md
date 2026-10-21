@@ -50,7 +50,7 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [ ] Microphone (SPM1423, I2S) - registered, but skipped
 * [ ] A `doctor` command that repeats the check at any time
 
-## Phase 2 - VFS, procfs, devfs, shell
+## Phase 2 - VFS, MicroFS, shell
 
 * [x] Shell: a portable command interpreter with a command registry
 * [x] Built in commands: `help`, `uname`, `uptime`, `ps`, `echo`, `sleep`,
@@ -58,8 +58,15 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [x] `memtest`: the size of the internal heap and of the PSRAM, and the
       speed of both (fill, checksum, copy) with a verification of the data
 * [x] The console of the ESP32 port (the UART driver makes the input work)
-* [ ] `inode` / `dentry` / `file_operations`
-* [ ] In-RAM files (`/etc`, `/tmp`), mounting
+* [x] MicroFS: the filesystem of the board, as described in
+      [docs/memory.md](memory.md): the DATA, META and INFO sections, the
+      addresses of the sections are computed from the size of the volume
+* [x] The VFS: the tree of the directories, the filesystems are mounted at
+      a point of it
+* [x] The file commands: `ls`, `cat`, `write`, `mkdir`, `rm`, `cd`, `pwd`,
+      `df`, `mount`
+* [x] The volume of the flash: the partition of 5.75 MB, the data of the
+      user survives the restarts
 * [ ] `/proc`: `version`, `uptime`, `meminfo`, `tasks`, `self/`
 * [ ] `/dev`: `tty0` (console on UART and TFT)
 * [ ] Command history, `help` per command, tab completion
