@@ -37,7 +37,26 @@ void kshell_run(void);
 /* Print a formatted message to the console. */
 void kshell_printf(const char *fmt, ...);
 
+/*
+ * The sink of the output: the shell writes to it as well as to the console.
+ * The console of the display of the board uses it.
+ */
+typedef void (*kshell_sink_fn)(const char *data, k_size_t len);
+void kshell_set_sink(kshell_sink_fn sink);
+
 /* Number of registered commands. */
 k_size_t kshell_command_count(void);
+
+/* Register the memory test command. */
+int kshell_register_memtest(void);
+
+/*
+ * Register the built in commands. The shell does it on its own, the tests
+ * call it directly.
+ */
+int kshell_init(void);
+
+/* Register the commands that work with the files. */
+int kshell_register_files(void);
 
 #endif /* MICRO_OS_KSHELL_KSHELL_H */

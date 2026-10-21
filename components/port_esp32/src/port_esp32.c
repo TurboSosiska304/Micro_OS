@@ -28,7 +28,7 @@
  *     the needs of the drivers.
  */
 #define TASK_FREERTOS_PRIO_BASE 9
-#define TASK_STACK_SIZE 4096
+#define TASK_STACK_SIZE 8192
 
 /*
  * A recursive mutex is used instead of portENTER_CRITICAL(): the FreeRTOS
@@ -153,6 +153,18 @@ int k_port_console_readline(char *buf, k_size_t size)
     return (int)len;
 }
 
+int k_port_console_getchar(void)
+{
+    uint8_t c = 0;
+    int rc = uart_read_bytes(CONFIG_ESP_CONSOLE_UART_NUM, &c, 1, portMAX_DELAY);
+
+    if (rc != 1) {
+        return -1;
+    }
+
+    return (int)c;
+}
+
 /* --- memory --- */
 
 k_size_t k_port_heap_free(void)
@@ -169,6 +181,30 @@ k_size_t k_port_heap_total(void)
 k_size_t k_port_psram_free(void)
 {
     return (k_size_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+}
+
+k_size_t k_port_psram_total(void)
+{
+    return (k_size_t)heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
+}
+
+void *k_port_alloc(k_size_t size, bool psram)
+{
+    if (size == 0) {
+        size = 4096;
+    }
+
+    return heap_caps_malloc(size, psram ? MALLOC_CAP_SPIRAM : MALLOC_CAP_INTERNAL);
+}
+
+void k_port_free(void *ptr)
+{
+    heap_caps_free(ptr);
+}
+
+k_u64_t k_port_uptime_us(void)
+{
+    return (k_u64_t)esp_timer_get_time();
 }
 
 /* --- tasks (FreeRTOS) --- */

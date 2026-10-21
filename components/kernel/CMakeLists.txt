@@ -6,11 +6,13 @@
 
 set(MICRO_OS_KERNEL_SRCS
     "src/boot.c"
+    "src/kmm.c"
     "src/kmod.c"
     "src/log.c"
     "src/panic.c"
     "src/sched.c"
     "src/task.c"
+    "src/vfs.c"
     "src/version.c"
 )
 

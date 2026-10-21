@@ -43,5 +43,6 @@ CONFIG_COMPILER_WARN_WRITE_STRINGS=y
 CONFIG_ESPTOOLPY_MONITOR_BAUD=115200
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
 
-# Crash dump to flash helps post-mortem debugging on a device without a shell
-CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+# The crash dump needs a partition of its own, the flash of the board is
+# fully used by the application and the filesystem
+CONFIG_ESP_COREDUMP_ENABLE_TO_NONE=y

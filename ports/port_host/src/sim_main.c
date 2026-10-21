@@ -14,6 +14,7 @@
 #include "kernel/sched.h"
 #include "kernel/task.h"
 #include "kernel/version.h"
+#include "kshell/kshell.h"
 #include "port_host.h"
 
 static void heartbeat_task(void *arg)
@@ -44,6 +45,13 @@ static void worker_task(void *arg)
     kinfo("worker %d: done", id);
 }
 
+static void shell_task(void *arg)
+{
+    K_UNUSED(arg);
+
+    kshell_run();
+}
+
 static int tasks_subsys_init(void)
 {
     if (task_create("heartbeat", heartbeat_task, NULL, 8) == NULL) {
@@ -58,38 +66,16 @@ static int tasks_subsys_init(void)
         return -1;
     }
 
+    if (task_create("shell", shell_task, NULL, 6) == NULL) {
+        return -1;
+    }
+
     return 0;
 }
 
 static const struct kernel_subsys g_subsystems[] = {
     {"tasks", tasks_subsys_init, KERNEL_SUBSYS_LEVEL_APP},
 };
-
-static void repl(void)
-{
-    char line[128];
-
-    printf("microos> ");
-    fflush(stdout);
-
-    while (fgets(line, sizeof(line), stdin) != NULL) {
-        size_t len = strlen(line);
-
-        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
-            line[--len] = '\0';
-        }
-
-        if (len == 0) {
-            printf("microos> ");
-            fflush(stdout);
-            continue;
-        }
-
-        printf("microos: unknown command: '%s' (the shell arrives in phase 2)\n", line);
-        printf("microos> ");
-        fflush(stdout);
-    }
-}
 
 int main(void)
 {
@@ -107,6 +93,8 @@ int main(void)
 
     kernel_boot(&cfg);
 
-    repl();
-    return 0;
+    /* The shell task owns the console, the main thread waits for it. */
+    for (;;) {
+        k_sched_sleep_ms(1000);
+    }
 }

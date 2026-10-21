@@ -20,6 +20,7 @@ struct command {
 
 static struct command g_commands[KSHELL_MAX_COMMANDS];
 static k_size_t g_command_count;
+static kshell_sink_fn g_sink;
 
 static void copy_str(char *dst, k_size_t size, const char *src)
 {
@@ -102,6 +103,16 @@ void kshell_printf(const char *fmt, ...)
 
     buf[sizeof(buf) - 1] = '\0';
     k_port_write(buf, strlen(buf));
+
+    /* The console of the display of the board shows the same. */
+    if (g_sink != NULL) {
+        g_sink(buf, strlen(buf));
+    }
+}
+
+void kshell_set_sink(kshell_sink_fn sink)
+{
+    g_sink = sink;
 }
 
 /* Split a line into arguments. Returns the number of arguments. */
@@ -126,8 +137,18 @@ static int split_args(char *line, char **argv, int max_args)
         }
     }
 
+    /*
+     * The list has to end with a null pointer: the commands read argv[1]
+     * even when there is only one argument.
+     */
+    if (argc < max_args) {
+        argv[argc] = NULL;
+    }
+
     return argc;
 }
+
+static struct command *find_command(const char *name);
 
 static struct command *find_command(const char *name)
 {
@@ -179,16 +200,30 @@ int kshell_execute(const char *line)
 
 /* --- the built in commands --- */
 
+/*
+ * The help is deliberately short: the screen of the board is small and the
+ * flash is not big either. "help <command>" tells more about one command.
+ */
 static int cmd_help(int argc, char **argv)
 {
     k_size_t i;
 
-    (void)argc;
-    (void)argv;
+    if (argc > 1) {
+        struct command *cmd = find_command(argv[1]);
 
-    kshell_printf("commands:\n");
+        if (cmd == NULL) {
+            kshell_printf("help: no such command\n");
+            return KSHELL_ERROR;
+        }
+
+        kshell_printf("%s: %s\n", cmd->name, cmd->help != NULL ? cmd->help : "");
+
+        return KSHELL_OK;
+    }
+
+    kshell_printf("%-9s %s\n", "command", "what it does");
     for (i = 0; i < g_command_count; i++) {
-        kshell_printf("  %-10s %s\n", g_commands[i].name,
+        kshell_printf("%-9s %s\n", g_commands[i].name,
                       g_commands[i].help != NULL ? g_commands[i].help : "");
     }
 
@@ -339,7 +374,7 @@ static int cmd_clear(int argc, char **argv)
     return KSHELL_OK;
 }
 
-static int kshell_register_builtins(void)
+int kshell_init(void)
 {
     int rc = 0;
 
@@ -353,27 +388,72 @@ static int kshell_register_builtins(void)
     rc |= kshell_register("free", "the memory usage", cmd_free);
     rc |= kshell_register("clear", "clear the screen", cmd_clear);
     rc |= kshell_register("modules", "check the hardware modules", cmd_modules);
+    rc |= kshell_register_memtest();
+    rc |= kshell_register_files();
     rc |= kshell_register("reboot", "restart the board", cmd_reboot);
 
     return rc;
+}
+
+/*
+ * Read a line from the console. Every character is repeated right away, so
+ * that the person at the keyboard sees what is being typed. The backspace
+ * erases the last character.
+ */
+static int shell_read_line(char *buf, k_size_t size)
+{
+    k_size_t len = 0;
+
+    for (;;) {
+        int c = k_port_console_getchar();
+
+        if (c < 0) {
+            buf[len] = '\0';
+            return (len > 0) ? (int)len : -1;
+        }
+
+        if (c == '\n' || c == '\r') {
+            k_port_write("\r\n", 2);
+            buf[len] = '\0';
+            return (int)len;
+        }
+
+        if (c == '\b' || c == 127) {
+            if (len > 0) {
+                len--;
+                k_port_write("\b \b", 3);
+            }
+            continue;
+        }
+
+        if (c == 3) { /* Ctrl+C: the line is thrown away */
+            k_port_write("^C\r\n", 4);
+            len = 0;
+            continue;
+        }
+
+        if (len + 1 < size) {
+            buf[len++] = (char)c;
+            k_port_write(&buf[len - 1], 1);
+        }
+    }
 }
 
 void kshell_run(void)
 {
     char line[KSHELL_LINE_MAX];
 
-    kshell_register_builtins();
+    kshell_init();
 
     kshell_printf("%s shell ready. Type 'help' for the list of commands.\n", kernel_name());
 
     for (;;) {
         kshell_printf("microos> ");
 
-        if (k_port_console_readline(line, sizeof(line)) < 0) {
-            /* No input available: do not spin. */
+        if (shell_read_line(line, sizeof(line)) < 0) {
+            /* The console is closed (end of the input). */
             kshell_printf("\n");
-            k_sched_sleep_ms(20);
-            continue;
+            break;
         }
 
         kshell_execute(line);

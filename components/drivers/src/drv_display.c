@@ -13,13 +13,29 @@
 
 #include "kernel/types.h"
 
+/*
+ * The GRAM of the ST7789V2 is 240x320, the glass of the 1.14" panel shows
+ * only a part of it. Without the offset the image is shifted and the rest
+ * of the screen is garbage.
+ *
+ * The offsets can be changed at runtime with the "display" command of the
+ * shell, so that the right values can be found without reflashing.
+ */
+#define LCD_X_OFFSET 105
+#define LCD_Y_OFFSET 80
+
+static int s_offset_x = LCD_X_OFFSET;
+static int s_offset_y = LCD_Y_OFFSET;
+
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "drivers/display.h"
 #include "drivers/internal.h"
+#include "graphics/font.h"
 #include "kernel/kmod.h"
 #include "kernel/log.h"
 
@@ -133,19 +149,23 @@ static void lcd_init_panel(void)
 static void lcd_set_window(int x, int y, int w, int h)
 {
     uint8_t data[4];
+    int first_row = y + s_offset_y;
+    int last_row = first_row + h - 1;
+    int first_col = x + s_offset_x;
+    int last_col = first_col + w - 1;
 
     lcd_write_command(0x2A); /* column address */
-    data[0] = (uint8_t)(x >> 8);
-    data[1] = (uint8_t)(x & 0xFF);
-    data[2] = (uint8_t)((x + w - 1) >> 8);
-    data[3] = (uint8_t)((x + w - 1) & 0xFF);
+    data[0] = (uint8_t)(first_col >> 8);
+    data[1] = (uint8_t)(first_col & 0xFF);
+    data[2] = (uint8_t)(last_col >> 8);
+    data[3] = (uint8_t)(last_col & 0xFF);
     lcd_write_data(data, 4);
 
     lcd_write_command(0x2B); /* row address */
-    data[0] = (uint8_t)(y >> 8);
-    data[1] = (uint8_t)(y & 0xFF);
-    data[2] = (uint8_t)((y + h - 1) >> 8);
-    data[3] = (uint8_t)((y + h - 1) & 0xFF);
+    data[0] = (uint8_t)(first_row >> 8);
+    data[1] = (uint8_t)(first_row & 0xFF);
+    data[2] = (uint8_t)(last_row >> 8);
+    data[3] = (uint8_t)(last_row & 0xFF);
     lcd_write_data(data, 4);
 
     lcd_write_command(0x2C); /* memory write */
@@ -309,4 +329,92 @@ static const struct kmod s_display_module = {
 int drv_display_register(void)
 {
     return kmod_register(&s_display_module);
+}
+
+/* --- the text on the screen --- */
+
+int drv_display_clear(uint16_t color)
+{
+    k_size_t i;
+    k_size_t count = (k_size_t)LCD_WIDTH * LCD_HEIGHT;
+
+    if (s_fb == NULL) {
+        return -1;
+    }
+
+    for (i = 0; i < count; i++) {
+        s_fb[i] = color;
+    }
+
+    return 0;
+}
+
+int drv_display_text(int x, int y, const char *text, uint16_t color)
+{
+    int cursor = x;
+
+    if (s_fb == NULL || text == NULL) {
+        return -1;
+    }
+
+    while (*text != '\0') {
+        const uint8_t *glyph = font_glyph(*text);
+        int column;
+        int row;
+
+        if (cursor + FONT_WIDTH > LCD_WIDTH) {
+            break; /* the line is full */
+        }
+
+        if (y + FONT_HEIGHT > LCD_HEIGHT) {
+            break; /* the screen is full */
+        }
+
+        for (column = 0; column < FONT_WIDTH; column++) {
+            uint8_t bits = glyph[column];
+
+            for (row = 0; row < FONT_HEIGHT; row++) {
+                if ((bits & (1u << row)) != 0) {
+                    int px = cursor + column;
+                    int py = y + row;
+
+                    if (px >= 0 && px < LCD_WIDTH && py >= 0 && py < LCD_HEIGHT) {
+                        s_fb[py * LCD_WIDTH + px] = color;
+                    }
+                }
+            }
+        }
+
+        cursor += FONT_WIDTH + 1;
+        text++;
+    }
+
+    return 0;
+}
+
+int drv_display_flush(void)
+{
+    if (s_fb == NULL) {
+        return -1;
+    }
+
+    lcd_flush();
+
+    return 0;
+}
+
+void drv_display_set_offset(int x, int y)
+{
+    s_offset_x = x;
+    s_offset_y = y;
+}
+
+void drv_display_get_offset(int *x, int *y)
+{
+    if (x != NULL) {
+        *x = s_offset_x;
+    }
+    if (y != NULL) {
+        *y = s_offset_y;
+    }
 }

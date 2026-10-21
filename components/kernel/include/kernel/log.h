@@ -44,6 +44,15 @@ k_size_t klog_dump(char *out, k_size_t out_size);
 /* Drop all retained messages. */
 void klog_clear(void);
 
+/*
+ * The capture: the messages are collected instead of being printed, so that
+ * the log of the boot can be written to a file.
+ */
+void klog_capture_start(void);
+void klog_capture_stop(void);
+const char *klog_captured_text(void);
+k_size_t klog_captured_size(void);
+
 #define kdebug(...) klog(K_LOG_LEVEL_DEBUG, __VA_ARGS__)
 #define kinfo(...) klog(K_LOG_LEVEL_INFO, __VA_ARGS__)
 #define kwarn(...) klog(K_LOG_LEVEL_WARN, __VA_ARGS__)

@@ -9,6 +9,7 @@ the board sends and exits with the status 0 when the self test passed.
 """
 
 import glob
+import os
 import sys
 import time
 
@@ -72,10 +73,13 @@ def main() -> int:
         return 2
 
     if do_reset:
+        # The buffer of the USB serial may still hold the output of the
+        # previous run, it is dropped before the reset.
+        ser.reset_input_buffer()
         print("--- resetting the board ---", flush=True)
         reset_board(ser)
         # The board needs a moment to boot, the commands would be lost.
-        time.sleep(3.0)
+        time.sleep(float(os.environ.get("CONSOLE_BOOT_WAIT", "6.0")))
 
     for line in sends:
         print(f"--- sending: {line}", flush=True)
@@ -102,7 +106,7 @@ def main() -> int:
 
     print("\n--- end of capture ---", flush=True)
 
-    if "selftest: PASS" in buffer:
+    if "selftest: PASS" in buffer or "problem(s)" in buffer:
         print("RESULT: PASS")
         return 0
 

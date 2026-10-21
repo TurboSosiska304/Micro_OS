@@ -14,6 +14,16 @@
 
 #define SCHED_READY_SLOTS 8
 
+/*
+ * The number of entries of the run queue of one priority level.
+ *
+ * It has to be at least TASK_MAX_TASKS: every task of the system can be
+ * ready at the same time and belong to the same priority level. A smaller
+ * queue would silently drop tasks, they would stay "ready" but would never
+ * be picked up again.
+ */
+#define SCHED_READY_CAPACITY TASK_MAX_TASKS
+
 /* Time slice of a task in ticks (1 tick = 1 ms). */
 #define SCHED_QUANTUM_DEFAULT 10
 #define SCHED_QUANTUM_MIN 1
@@ -47,6 +57,13 @@ struct task *k_sched_pick_next(void);
 k_size_t k_sched_ready_count(void);
 k_size_t k_sched_sleeping_count(void);
 k_size_t k_sched_blocked_count(void);
+
+/*
+ * Check the invariants of the run queues: a task that is ready has to be in
+ * the queue of its priority level, and a task in the queue has to be ready.
+ * Returns the number of broken invariants (0 when everything is fine).
+ */
+k_size_t k_sched_validate(void);
 
 /*
  * Time slice: when the running task has used up its quantum it is moved to

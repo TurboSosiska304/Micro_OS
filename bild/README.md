@@ -8,8 +8,27 @@ use it: download the folder, connect the board and run the flash script.
 |------|-------------|---------------|
 | `bootloader.bin` | Second stage bootloader | `0x1000` |
 | `partition-table.bin` | Partition table | `0x8000` |
-| `ota_data_initial.bin` | OTA bookkeeping | `0xe000` |
 | `micro_os.bin` | The kernel itself | `0x10000` |
+
+## The layout of the flash
+
+The whole 8 MB of the flash are used, there is no room for an OTA update:
+the kernel is the only application, and the rest of the flash belongs to the
+file system.
+
+```
+0x00000  +--------------------+
+         | boot loader        |  4 KB
+0x01000  +--------------------+
+         | partition table    |  4 KB
+0x02000  +--------------------+
+         | nvs                |  20 KB
+0x09000  +--------------------+
+         | application        |  2 MB
+0x210000 +--------------------+
+         | MicroFS            |  5.75 MB
+0x800000 +--------------------+
+```
 
 ## Flashing
 

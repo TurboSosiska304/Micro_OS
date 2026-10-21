@@ -50,17 +50,38 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [ ] Microphone (SPM1423, I2S) - registered, but skipped
 * [ ] A `doctor` command that repeats the check at any time
 
-## Phase 2 - VFS, procfs, devfs, shell
+## Phase 2 - VFS, MicroFS, shell
 
 * [x] Shell: a portable command interpreter with a command registry
 * [x] Built in commands: `help`, `uname`, `uptime`, `ps`, `echo`, `sleep`,
-      `dmesg`, `free`, `clear`, `reboot`, `modules`
+      `dmesg`, `free`, `clear`, `reboot`, `modules`, `memtest`, `i2c`
+* [x] `memtest`: the size of the internal heap and of the PSRAM, and the
+      speed of both (fill, checksum, copy) with a verification of the data
 * [x] The console of the ESP32 port (the UART driver makes the input work)
-* [ ] `inode` / `dentry` / `file_operations`
-* [ ] In-RAM files (`/etc`, `/tmp`), mounting
-* [ ] `/proc`: `version`, `uptime`, `meminfo`, `tasks`, `self/`
-* [ ] `/dev`: `tty0` (console on UART and TFT)
-* [ ] Command history, `help` per command, tab completion
+* [x] MicroFS: the filesystem of the board, as described in
+      [docs/memory.md](memory.md): the DATA, META and INFO sections, the
+      addresses of the sections are computed from the size of the volume
+* [x] The VFS: the tree of the directories, the filesystems are mounted at
+      a point of it
+* [x] The file commands: `ls`, `cat`, `write`, `mkdir`, `rm`, `cd`, `pwd`,
+      `df`, `mount`
+* [x] The volume of the flash: the partition of 5.75 MB, the data of the
+      user survives the restarts
+* [x] `/proc`: `version`, `uptime`, `meminfo`, `tasks`, `modules`
+* [x] `/dev`: `tty0` (the console) and `null`
+* [x] The console on the display: the output of the shell is mirrored to the
+      screen of the board, the font is 5x7
+* [x] The help is short: one line per command, `help <command>` tells more
+* [x] The log of the boot goes to `/log/start.log`, the console stays readable
+* [x] The terminal echoes the input, so that the dialogue is readable in the
+      interactive console
+* [x] The image of the display: the ST7789V2 has 240x320 of memory, the
+      glass of the 1.14" panel shows only a part of it. The offset can be
+      changed while the board runs: `display <x> <y>`
+* [x] The terminal repeats every character while it is typed, the backspace
+      erases it
+* [x] `/proc/self` and a directory per task with a `status` file
+* [ ] Command history, tab completion (not needed for now)
 
 ## Phase 3 - Memory and the syscall ABI
 

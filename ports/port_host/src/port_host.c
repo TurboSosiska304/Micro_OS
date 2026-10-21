@@ -1,4 +1,5 @@
 #include "port_host.h"
+#include "port_host_psram.h"
 
 #include <errno.h>
 #include <malloc.h>
@@ -143,6 +144,17 @@ int k_port_console_readline(char *buf, k_size_t size)
     }
 }
 
+int k_port_console_getchar(void)
+{
+    int c = getchar();
+
+    if (c == EOF) {
+        return -1;
+    }
+
+    return c;
+}
+
 /* --- memory --- */
 
 k_size_t k_port_heap_free(void)
@@ -169,7 +181,46 @@ k_size_t k_port_heap_total(void)
 
 k_size_t k_port_psram_free(void)
 {
-    return 0;
+    return host_psram_available();
+}
+
+k_size_t k_port_psram_total(void)
+{
+    return host_psram_total();
+}
+
+void *k_port_alloc(k_size_t size, bool psram)
+{
+    if (size == 0) {
+        size = 4096;
+    }
+
+    if (psram) {
+        return host_psram_alloc(size);
+    }
+
+    return malloc(size);
+}
+
+void k_port_free(void *ptr)
+{
+    if (host_psram_contains(ptr)) {
+        host_psram_release(ptr);
+        return;
+    }
+
+    free(ptr);
+}
+
+k_u64_t k_port_uptime_us(void)
+{
+    struct timespec ts;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return 0;
+    }
+
+    return (k_u64_t)ts.tv_sec * 1000000u + (k_u64_t)(ts.tv_nsec / 1000);
 }
 
 /* --- tasks (pthreads) --- */

@@ -11,10 +11,16 @@
 #include "kernel/boot.h"
 #include "kernel/kmod.h"
 #include "kernel/log.h"
+#include "kernel/vfs.h"
 #include "kernel/port.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
 #include "kernel/version.h"
+#include "kernel/vfs.h"
+#include "devfs/devfs.h"
+#include "graphics/tft_console.h"
+#include "mfs/mfs_flash.h"
+#include "procfs/procfs.h"
 #include "kshell/kshell.h"
 #include "port_esp32.h"
 #include "selftest.h"
@@ -36,6 +42,74 @@ static int board_subsys_init(void)
 static int drivers_subsys_init(void)
 {
     return drivers_init();
+}
+
+/* The filesystem of the flash: the data of the user survives the restarts. */
+static int fs_subsys_init(void)
+{
+    int rc = mfs_flash_mount("/");
+
+    if (rc != 0) {
+        return rc;
+    }
+
+    /* The information about the system and the devices. */
+    if (procfs_register("/proc") != 0) {
+        kerror("init: cannot mount the procfs");
+        return -1;
+    }
+
+    if (devfs_register("/dev") != 0) {
+        kerror("init: cannot mount the devfs");
+        return -1;
+    }
+
+    return 0;
+}
+
+/* The shell: the input comes from the UART, the output goes to the UART
+ * and to the display of the board. */
+static void shell_task(void *arg)
+{
+    K_UNUSED(arg);
+
+    tft_console_start();
+    tft_console_register();
+    kshell_set_sink(tft_console_write);
+
+    kshell_run();
+}
+
+/*
+ * The log of the boot goes to the file /log/start.log, so that the console
+ * stays readable. The doctor report and the summary still go to the console.
+ */
+static int write_boot_log(void)
+{
+    struct vfs_file file;
+    const char *text;
+    int rc;
+
+    /* The directory of the log. */
+    rc = vfs_mkdir("/log");
+    if (rc != 0 && rc != -3) {
+        kwarn("init: cannot create the directory /log (rc=%d)", rc);
+    }
+
+    rc = vfs_open("/log/start.log", VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, 0);
+    if (rc != 0) {
+        kwarn("init: cannot create the log file (rc=%d)", rc);
+        return rc;
+    }
+
+    text = klog_captured_text();
+    if (text != NULL && klog_captured_size() > 0) {
+        vfs_write(&file, text, klog_captured_size());
+    }
+
+    vfs_close(&file);
+
+    return 0;
 }
 
 /*
@@ -61,10 +135,20 @@ static void init_task(void *arg)
     } else {
         kwarn("init: the doctor found problems, see the report");
     }
+
+    /* The log of the boot goes to the file, the console gets the report. */
+    if (write_boot_log() == 0) {
+        klog_capture_stop();
+        kinfo("init: the log of the boot is in /log/start.log (%u bytes)",
+              (unsigned)klog_captured_size());
+    } else {
+        klog_capture_stop();
+    }
+
     kmod_report();
 
     /* And finally it starts the shell. */
-    if (task_create("shell", (task_entry_fn)kshell_run, NULL, TASK_PRIO_DEFAULT) == NULL) {
+    if (task_create("shell", shell_task, NULL, TASK_PRIO_DEFAULT) == NULL) {
         kerror("init: cannot start the shell");
     }
 
@@ -85,6 +169,7 @@ static int tasks_subsys_init(void)
 static const struct kernel_subsys g_subsystems[] = {
     {"board", board_subsys_init, KERNEL_SUBSYS_LEVEL_CORE},
     {"drivers", drivers_subsys_init, KERNEL_SUBSYS_LEVEL_DRIVER},
+    {"fs", fs_subsys_init, KERNEL_SUBSYS_LEVEL_SERVICE},
     {"tasks", tasks_subsys_init, KERNEL_SUBSYS_LEVEL_APP},
 };
 
@@ -95,6 +180,9 @@ void app_main(void)
 
     port_esp32_console_init();
     port_esp32_init();
+
+    /* The log of the boot is collected, it is written to a file later. */
+    klog_capture_start();
 
     /* The time base of the kernel: one tick per millisecond. */
     port_esp32_start_tick(1);

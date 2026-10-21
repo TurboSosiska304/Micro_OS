@@ -26,7 +26,13 @@ static void run_tests(void *arg)
     test_log();
     test_task();
     test_sched();
+    test_sched_queue();
     test_kmod();
+    test_kmm();
+    test_mfs();
+    test_mfs_persistence();
+    test_vfs();
+    test_sysfs();
     test_kshell();
     test_boot();
 

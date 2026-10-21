@@ -20,6 +20,6 @@ set(MICRO_OS_DRIVERS_SRCS
 idf_component_register(
     SRCS ${MICRO_OS_DRIVERS_SRCS}
     INCLUDE_DIRS "include"
-    REQUIRES kernel kshell spi_flash esp_psram esp_driver_gpio esp_driver_i2c driver esp_driver_spi esp_driver_ledc esp_adc esp_timer
+    REQUIRES kernel font kshell spi_flash esp_psram esp_driver_gpio esp_driver_i2c driver esp_driver_spi esp_driver_ledc esp_adc esp_timer
              esp_wifi esp_netif esp_event nvs_flash
 )
