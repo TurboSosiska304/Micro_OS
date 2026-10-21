@@ -99,7 +99,10 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
       corpus
 * [ ] execve: it needs a format of the programs
 
-* [x] `kmm_alloc`/`kmm_free`, allocation from the PSRAM. The slabs are not
+* [x] `kmm_alloc`/`kmm_free`, allocation from the PSRAM, the slabs for the
+      small blocks
+* [x] The memory of the programs: malloc, free, realloc and calloc over the
+      ABI
 * [x] System call table, uniform ABI
 * [x] Minimal libc over the ABI: `open/read/write/close/printf`. The memory
       (`malloc`) is still missing

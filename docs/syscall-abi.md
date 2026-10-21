@@ -53,6 +53,9 @@ A negative result is an error, the numbers are the negative error codes of
 | 17 | `fork` | - | the number of the child, or an error |
 | 18 | `getppid` | - | the number of the parent, 0 at the root |
 | 19 | `waitpid` | `pid, status` | the number of the child, or an error |
+| 20 | `malloc` | `size` | the address of the memory, 0 when there is none |
+| 21 | `free` | `ptr` | 0 |
+| 22 | `realloc` | `ptr, size` | the address of the memory, 0 when there is none |
 
 The flags of `open` are the same as the ones of the VFS:
 

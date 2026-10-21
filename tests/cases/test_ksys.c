@@ -279,12 +279,14 @@ static void test_abi_is_stable(void)
         k_u32_t number;
         const char *name;
     } golden[] = {
-        {KSYS_EXIT, "exit"},       {KSYS_READ, "read"},     {KSYS_WRITE, "write"},
-        {KSYS_OPEN, "open"},       {KSYS_CLOSE, "close"},   {KSYS_STAT, "stat"},
-        {KSYS_LSEEK, "lseek"},     {KSYS_UNLINK, "unlink"}, {KSYS_MKDIR, "mkdir"},
-        {KSYS_READDIR, "readdir"}, {KSYS_GETPID, "getpid"}, {KSYS_GETCWD, "getcwd"},
-        {KSYS_IOCTL, "ioctl"},     {KSYS_YIELD, "yield"},   {KSYS_SLEEP, "sleep"},
-        {KSYS_UPTIME, "uptime"},   {KSYS_REBOOT, "reboot"},
+        {KSYS_EXIT, "exit"},       {KSYS_READ, "read"},       {KSYS_WRITE, "write"},
+        {KSYS_OPEN, "open"},       {KSYS_CLOSE, "close"},     {KSYS_STAT, "stat"},
+        {KSYS_LSEEK, "lseek"},     {KSYS_UNLINK, "unlink"},   {KSYS_MKDIR, "mkdir"},
+        {KSYS_READDIR, "readdir"}, {KSYS_GETPID, "getpid"},   {KSYS_GETCWD, "getcwd"},
+        {KSYS_IOCTL, "ioctl"},     {KSYS_YIELD, "yield"},     {KSYS_SLEEP, "sleep"},
+        {KSYS_UPTIME, "uptime"},   {KSYS_REBOOT, "reboot"},   {KSYS_FORK, "fork"},
+        {KSYS_GETPPID, "getppid"}, {KSYS_WAITPID, "waitpid"}, {KSYS_MALLOC, "malloc"},
+        {KSYS_FREE, "free"},       {KSYS_REALLOC, "realloc"},
     };
     size_t i;
 

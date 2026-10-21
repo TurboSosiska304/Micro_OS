@@ -75,6 +75,22 @@ int microos_mkdir(const char *path);
 Флаги open — числа POSIX: `MICROOS_O_RDONLY`, `MICROOS_O_WRONLY`,
 `MICROOS_O_RDWR`, `MICROOS_O_CREAT`, `MICROOS_O_TRUNC`, `MICROOS_O_APPEND`.
 
+## Память
+
+```c
+void *microos_malloc(size_t size);
+void *microos_realloc(void *ptr, size_t size);
+void *microos_calloc(size_t count, size_t size);
+void microos_free(void *ptr);
+```
+
+Память берётся у менеджера памяти ядра через ABI системных вызовов. Откуда
+она берётся, решает приоритет задачи: системные утилиты получают внутреннюю
+RAM, приложения — PSRAM.
+
+`calloc` отдаёт пустую память, `realloc` сохраняет данные старого блока.
+`realloc` блока в ноль освобождает его.
+
 ## Процессы
 
 ```c
