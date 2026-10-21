@@ -20,9 +20,11 @@
 static int (*sys_snprintf)(char *, size_t, const char *, ...) = snprintf;
 
 #include "libc/stdio.h"
+#include "libc/stdlib.h"
 #include "libc/unistd.h"
 
 #include "kernel/errno.h"
+#include "kernel/kmm.h"
 #include "kernel/ksys.h"
 #include "kernel/log.h"
 #include "mfs/mfs.h"
@@ -462,6 +464,91 @@ static void test_console(void)
     teardown();
 }
 
+/*
+ * The property: the memory of the program keeps the data, and the data
+ * survives the growth of the block.
+ */
+static void test_memory_keeps_the_data(void)
+{
+    struct kmm_stats stats;
+    char *block;
+    int i;
+
+    ktest_begin("libc: the memory of the program keeps the data");
+
+    setup();
+
+    block = (char *)microos_malloc(1000);
+    KT_CHECK(block != NULL);
+
+    if (block != NULL) {
+        for (i = 0; i < 1000; i++) {
+            block[i] = (char)(i & 0xFF);
+        }
+
+        for (i = 0; i < 1000; i += 97) {
+            KT_CHECK_INT_EQ((unsigned char)block[i], (unsigned char)(i & 0xFF));
+        }
+        KT_CHECK_INT_EQ((unsigned char)block[999], (unsigned char)(999 & 0xFF));
+
+        /* The growth of the block keeps the data. */
+        {
+            char *bigger = (char *)microos_realloc(block, 4000);
+
+            KT_CHECK(bigger != NULL);
+            if (bigger != NULL) {
+                for (i = 0; i < 1000; i += 97) {
+                    KT_CHECK_INT_EQ((unsigned char)bigger[i], (unsigned char)(i & 0xFF));
+                }
+                microos_free(bigger);
+                block = NULL;
+            }
+        }
+    }
+
+    microos_free(block);
+
+    /* The memory of the manager is back to zero. */
+    kmm_get_stats(&stats);
+    KT_CHECK_INT_EQ(stats.allocations, 0);
+    KT_CHECK_INT_EQ(stats.total_bytes, 0);
+
+    teardown();
+}
+
+/*
+ * The property: the memory of calloc is empty, and the multiplication that
+ * overflows gives nothing instead of a small block.
+ */
+static void test_calloc_is_empty(void)
+{
+    char *block;
+    int i;
+    int empty = 1;
+
+    ktest_begin("libc: the memory of calloc is empty");
+
+    setup();
+
+    block = (char *)microos_calloc(64, 4);
+    KT_CHECK(block != NULL);
+
+    if (block != NULL) {
+        for (i = 0; i < 256; i++) {
+            if (block[i] != 0) {
+                empty = 0;
+            }
+        }
+        KT_CHECK_INT_EQ(empty, 1);
+        microos_free(block);
+    }
+
+    /* The multiplication that does not fit gives nothing. */
+    KT_CHECK(microos_calloc((size_t)-1, 2) == NULL);
+
+    teardown();
+}
+
 void test_libc(void)
 {
     test_float_matches_the_system();
@@ -471,4 +558,6 @@ void test_libc(void)
     test_formatted_output_to_a_file();
     test_errors();
     test_console();
+    test_memory_keeps_the_data();
+    test_calloc_is_empty();
 }

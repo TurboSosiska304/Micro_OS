@@ -41,7 +41,10 @@
 #define KSYS_FORK 17    /* fork() */
 #define KSYS_GETPPID 18 /* getppid() */
 #define KSYS_WAITPID 19 /* waitpid(pid, status) */
-#define KSYS_COUNT 20   /* the number of the system calls */
+#define KSYS_MALLOC 20  /* malloc(size) */
+#define KSYS_FREE 21    /* free(ptr) */
+#define KSYS_REALLOC 22 /* realloc(ptr, size) */
+#define KSYS_COUNT 23   /* the number of the system calls */
 
 /* The flags of the open call, the same as the ones of the VFS. */
 #define KSYS_O_RDONLY 0x0000
@@ -126,5 +129,8 @@ int ksys_reboot(void);
 int ksys_fork(void);
 int ksys_getppid(void);
 int ksys_waitpid(int pid, int *status, int flags);
+void *ksys_malloc(k_size_t size);
+void ksys_free(void *ptr);
+void *ksys_realloc(void *ptr, k_size_t size);
 
 #endif /* MICRO_OS_KERNEL_KSYS_H */

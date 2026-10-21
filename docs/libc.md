@@ -79,6 +79,22 @@ The flags of the open are the numbers of POSIX: `MICROOS_O_RDONLY`,
 `MICROOS_O_WRONLY`, `MICROOS_O_RDWR`, `MICROOS_O_CREAT`, `MICROOS_O_TRUNC`,
 `MICROOS_O_APPEND`.
 
+## The memory
+
+```c
+void *microos_malloc(size_t size);
+void *microos_realloc(void *ptr, size_t size);
+void *microos_calloc(size_t count, size_t size);
+void microos_free(void *ptr);
+```
+
+The memory comes from the memory manager of the kernel through the ABI of
+the system calls. The priority of the task decides where it comes from:
+the system utilities get the internal RAM, the applications get the PSRAM.
+
+`calloc` gives the memory empty, and `realloc` keeps the data of the old
+block. `realloc` of a block to the size 0 frees it.
+
 ## The processes
 
 ```c

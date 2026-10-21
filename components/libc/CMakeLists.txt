@@ -6,6 +6,7 @@
 
 set(MICRO_OS_LIBC_SRCS
     "src/stdio.c"
+    "src/stdlib.c"
     "src/unistd.c"
 )
 

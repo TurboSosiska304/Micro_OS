@@ -5,6 +5,7 @@
 
 #include "kernel/console.h"
 #include "kernel/errno.h"
+#include "kernel/kmm.h"
 #include "kernel/log.h"
 #include "kernel/port.h"
 #include "kernel/sched.h"
@@ -569,6 +570,84 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
     }
 }
 
+/*
+ * The memory of a program. The priority of the task decides where the
+ * memory comes from, the same way as for the kernel itself.
+ */
+static k_ssize_t sys_malloc(ksys_arg_t size, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                            ksys_arg_t a4, ksys_arg_t a5)
+{
+    void *block;
+
+    K_UNUSED(a1);
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    if (size == 0) {
+        return 0;
+    }
+
+    block = kmm_alloc((k_size_t)size, kmm_current_priority());
+    if (block == NULL) {
+        return KERR_NOSPC;
+    }
+
+    return (k_ssize_t)(uintptr_t)block;
+}
+
+static k_ssize_t sys_free(ksys_arg_t ptr, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                          ksys_arg_t a4, ksys_arg_t a5)
+{
+    K_UNUSED(a1);
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    if (ptr == 0) {
+        return 0;
+    }
+
+    kmm_free((void *)(uintptr_t)ptr);
+
+    return 0;
+}
+
+static k_ssize_t sys_realloc(ksys_arg_t ptr, ksys_arg_t size, ksys_arg_t a2, ksys_arg_t a3,
+                             ksys_arg_t a4, ksys_arg_t a5)
+{
+    void *old_block = (void *)(uintptr_t)ptr;
+    void *block;
+    k_size_t old_size;
+
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    if (size <= 0) {
+        kmm_free(old_block);
+        return 0;
+    }
+
+    old_size = kmm_block_size(old_block);
+
+    block = kmm_alloc((k_size_t)size, kmm_current_priority());
+    if (block == NULL) {
+        return KERR_NOSPC;
+    }
+
+    if (old_size > 0) {
+        memcpy(block, old_block, (old_size < (k_size_t)size) ? old_size : (k_size_t)size);
+    }
+
+    kmm_free(old_block);
+
+    return (k_ssize_t)(uintptr_t)block;
+}
+
 /* --- the table --- */
 
 int ksys_register(k_u32_t number, const char *name, ksys_handler_fn handler)
@@ -637,6 +716,9 @@ void ksys_init(void)
     ksys_register(KSYS_FORK, "fork", sys_fork);
     ksys_register(KSYS_GETPPID, "getppid", sys_getppid);
     ksys_register(KSYS_WAITPID, "waitpid", sys_waitpid);
+    ksys_register(KSYS_MALLOC, "malloc", sys_malloc);
+    ksys_register(KSYS_FREE, "free", sys_free);
+    ksys_register(KSYS_REALLOC, "realloc", sys_realloc);
 }
 
 /* --- the wrappers --- */
@@ -734,4 +816,20 @@ int ksys_waitpid(int pid, int *status, int flags)
 {
     return (int)ksys_call(KSYS_WAITPID, (ksys_arg_t)pid, (ksys_arg_t)(uintptr_t)status,
                           (ksys_arg_t)flags, 0, 0, 0);
+}
+
+void *ksys_malloc(k_size_t size)
+{
+    return (void *)(uintptr_t)ksys_call(KSYS_MALLOC, (ksys_arg_t)size, 0, 0, 0, 0, 0);
+}
+
+void ksys_free(void *ptr)
+{
+    ksys_call(KSYS_FREE, (ksys_arg_t)(uintptr_t)ptr, 0, 0, 0, 0, 0);
+}
+
+void *ksys_realloc(void *ptr, k_size_t size)
+{
+    return (void *)(uintptr_t)ksys_call(KSYS_REALLOC, (ksys_arg_t)(uintptr_t)ptr, (ksys_arg_t)size,
+                                        0, 0, 0, 0);
 }
