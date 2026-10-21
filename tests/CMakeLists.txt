@@ -13,6 +13,8 @@ if(NOT ESP_PLATFORM)
         cases/test_boot.c
         cases/test_kmod.c
         cases/test_kmm.c
+        cases/test_mfs.c
+        cases/test_mfs_persistence.c
         cases/test_kshell.c
         cases/test_task.c
         cases/test_sched.c
@@ -24,7 +26,7 @@ if(NOT ESP_PLATFORM)
         "${CMAKE_CURRENT_LIST_DIR}/framework"
     )
 
-    target_link_libraries(microos_tests PRIVATE microos_kernel microos_board microos_kshell microos_port_host)
+    target_link_libraries(microos_tests PRIVATE microos_kernel microos_board microos_kshell microos_mfs microos_port_host)
 
     add_test(NAME unit COMMAND microos_tests)
 endif()
