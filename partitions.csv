@@ -1,4 +1,4 @@
-# MicroOS partition table (8 MB flash, single app, maximum MFS)
+# MicroOS partition table (8 MB flash, single app, maximum MicroFS)
 #
 # Name,     Type, SubType, Offset,    Size,     Flags
 nvs,        data, nvs,     0x9000,    0x5000,
