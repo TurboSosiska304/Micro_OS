@@ -17,9 +17,14 @@ k_ssize_t ksys_call(k_u32_t number, k_u64_t a0, k_u64_t a1, k_u64_t a2,
                      k_u64_t a3, k_u64_t a4, k_u64_t a5);
 ```
 
-The arguments are **64 bits wide** on every platform. The kernel of the board
-has 32 bit pointers, but the same code is tested on a 64 bit host, and a
-pointer that is cut in half is a crash that only shows up on one of the two.
+The width of the arguments is the width of a pointer of the target:
+**32 bits on the board** (the kernel of the ESP32 works with 32 bit numbers,
+it is faster) and 64 bits on a 64 bit host. The numbers of the calls are
+the same everywhere, only the width of the arguments belongs to the target,
+like in the real syscall interface.
+
+A pointer must never be cut in half: that was a bug that only showed up on
+the host, where the pointers are twice as long.
 
 A negative result is an error, the numbers are the negative error codes of
 `kernel/errno.h` (the same values as the POSIX ones).

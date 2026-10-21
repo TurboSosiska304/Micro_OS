@@ -296,6 +296,10 @@ static void test_abi_is_stable(void)
         KT_CHECK_STR_EQ(ksys_name(golden[i].number), golden[i].name);
     }
 
+    /* The width of the arguments follows the target: 32 bits on the board,
+     * 64 on the host. A pointer must never be cut in half. */
+    KT_CHECK_INT_EQ(sizeof(ksys_arg_t), sizeof(void *));
+
     /* An unknown call has to be refused, not guessed. */
     KT_CHECK_INT_EQ(ksys_call(0xFFFF, 0, 0, 0, 0, 0, 0), KERR_NOSYS);
 

@@ -68,7 +68,8 @@ static void fd_release(int fd)
 
 /* --- the handlers --- */
 
-static k_ssize_t sys_exit(k_u64_t code, k_u64_t a1, k_u64_t a2, k_u64_t a3, k_u64_t a4, k_u64_t a5)
+static k_ssize_t sys_exit(ksys_arg_t code, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                          ksys_arg_t a4, ksys_arg_t a5)
 {
     K_UNUSED(a1);
     K_UNUSED(a2);
@@ -80,8 +81,8 @@ static k_ssize_t sys_exit(k_u64_t code, k_u64_t a1, k_u64_t a2, k_u64_t a3, k_u6
     return 0;
 }
 
-static k_ssize_t sys_read(k_u64_t fd, k_u64_t buf, k_u64_t count, k_u64_t a3, k_u64_t a4,
-                          k_u64_t a5)
+static k_ssize_t sys_read(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys_arg_t a3,
+                          ksys_arg_t a4, ksys_arg_t a5)
 {
     struct kfile *file = fd_get((int)fd);
 
@@ -96,8 +97,8 @@ static k_ssize_t sys_read(k_u64_t fd, k_u64_t buf, k_u64_t count, k_u64_t a3, k_
     return vfs_read(&file->file, (void *)(uintptr_t)buf, count);
 }
 
-static k_ssize_t sys_write(k_u64_t fd, k_u64_t buf, k_u64_t count, k_u64_t a3, k_u64_t a4,
-                           k_u64_t a5)
+static k_ssize_t sys_write(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys_arg_t a3,
+                           ksys_arg_t a4, ksys_arg_t a5)
 {
     struct kfile *file = fd_get((int)fd);
 
@@ -112,8 +113,8 @@ static k_ssize_t sys_write(k_u64_t fd, k_u64_t buf, k_u64_t count, k_u64_t a3, k
     return vfs_write(&file->file, (const void *)(uintptr_t)buf, count);
 }
 
-static k_ssize_t sys_open(k_u64_t path, k_u64_t flags, k_u64_t a2, k_u64_t a3, k_u64_t a4,
-                          k_u64_t a5)
+static k_ssize_t sys_open(ksys_arg_t path, ksys_arg_t flags, ksys_arg_t a2, ksys_arg_t a3,
+                          ksys_arg_t a4, ksys_arg_t a5)
 {
     struct kfile *file;
     const char *name = (const char *)(uintptr_t)path;
@@ -144,7 +145,8 @@ static k_ssize_t sys_open(k_u64_t path, k_u64_t flags, k_u64_t a2, k_u64_t a3, k
     return (k_ssize_t)fd;
 }
 
-static k_ssize_t sys_close(k_u64_t fd, k_u64_t a1, k_u64_t a2, k_u64_t a3, k_u64_t a4, k_u64_t a5)
+static k_ssize_t sys_close(ksys_arg_t fd, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                           ksys_arg_t a4, ksys_arg_t a5)
 {
     struct kfile *file = fd_get((int)fd);
 
@@ -164,7 +166,8 @@ static k_ssize_t sys_close(k_u64_t fd, k_u64_t a1, k_u64_t a2, k_u64_t a3, k_u64
     return 0;
 }
 
-static k_ssize_t sys_stat(k_u64_t path, k_u64_t buf, k_u64_t a2, k_u64_t a3, k_u64_t a4, k_u64_t a5)
+static k_ssize_t sys_stat(ksys_arg_t path, ksys_arg_t buf, ksys_arg_t a2, ksys_arg_t a3,
+                          ksys_arg_t a4, ksys_arg_t a5)
 {
     struct vfs_stat stat;
     int rc;
@@ -186,8 +189,8 @@ static k_ssize_t sys_stat(k_u64_t path, k_u64_t buf, k_u64_t a2, k_u64_t a3, k_u
     return 0;
 }
 
-static k_ssize_t sys_lseek(k_u64_t fd, k_u64_t offset, k_u64_t whence, k_u64_t a3, k_u64_t a4,
-                           k_u64_t a5)
+static k_ssize_t sys_lseek(ksys_arg_t fd, ksys_arg_t offset, ksys_arg_t whence, ksys_arg_t a3,
+                           ksys_arg_t a4, ksys_arg_t a5)
 {
     struct kfile *file = fd_get((int)fd);
     k_ssize_t position;
@@ -218,13 +221,13 @@ static k_ssize_t sys_lseek(k_u64_t fd, k_u64_t offset, k_u64_t whence, k_u64_t a
         return KERR_INVAL;
     }
 
-    file->file.offset = (k_u64_t)position;
+    file->file.offset = (ksys_arg_t)position;
 
     return position;
 }
 
-static k_ssize_t sys_unlink(k_u64_t path, k_u64_t a1, k_u64_t a2, k_u64_t a3, k_u64_t a4,
-                            k_u64_t a5)
+static k_ssize_t sys_unlink(ksys_arg_t path, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                            ksys_arg_t a4, ksys_arg_t a5)
 {
     K_UNUSED(a1);
     K_UNUSED(a2);
@@ -235,7 +238,8 @@ static k_ssize_t sys_unlink(k_u64_t path, k_u64_t a1, k_u64_t a2, k_u64_t a3, k_
     return vfs_unlink((const char *)(uintptr_t)path);
 }
 
-static k_ssize_t sys_mkdir(k_u64_t path, k_u64_t a1, k_u64_t a2, k_u64_t a3, k_u64_t a4, k_u64_t a5)
+static k_ssize_t sys_mkdir(ksys_arg_t path, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                           ksys_arg_t a4, ksys_arg_t a5)
 {
     K_UNUSED(a1);
     K_UNUSED(a2);
@@ -246,8 +250,8 @@ static k_ssize_t sys_mkdir(k_u64_t path, k_u64_t a1, k_u64_t a2, k_u64_t a3, k_u
     return vfs_mkdir((const char *)(uintptr_t)path);
 }
 
-static k_ssize_t sys_readdir(k_u64_t fd, k_u64_t buf, k_u64_t count, k_u64_t a3, k_u64_t a4,
-                             k_u64_t a5)
+static k_ssize_t sys_readdir(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys_arg_t a3,
+                             ksys_arg_t a4, ksys_arg_t a5)
 {
     struct kfile *file = fd_get((int)fd);
     struct vfs_dirent *out = (struct vfs_dirent *)(uintptr_t)buf;
@@ -280,7 +284,8 @@ static k_ssize_t sys_readdir(k_u64_t fd, k_u64_t buf, k_u64_t count, k_u64_t a3,
     return (k_ssize_t)(count_files * sizeof(struct vfs_dirent));
 }
 
-static k_ssize_t sys_getpid(k_u64_t a0, k_u64_t a1, k_u64_t a2, k_u64_t a3, k_u64_t a4, k_u64_t a5)
+static k_ssize_t sys_getpid(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                            ksys_arg_t a4, ksys_arg_t a5)
 {
     struct task *self = task_self();
 
@@ -294,8 +299,8 @@ static k_ssize_t sys_getpid(k_u64_t a0, k_u64_t a1, k_u64_t a2, k_u64_t a3, k_u6
     return (self != NULL) ? (k_ssize_t)self->pid : 0;
 }
 
-static k_ssize_t sys_getcwd(k_u64_t buf, k_u64_t size, k_u64_t a2, k_u64_t a3, k_u64_t a4,
-                            k_u64_t a5)
+static k_ssize_t sys_getcwd(ksys_arg_t buf, ksys_arg_t size, ksys_arg_t a2, ksys_arg_t a3,
+                            ksys_arg_t a4, ksys_arg_t a5)
 {
     struct task *self = task_self();
     const char *cwd;
@@ -326,7 +331,8 @@ static k_ssize_t sys_getcwd(k_u64_t buf, k_u64_t size, k_u64_t a2, k_u64_t a3, k
     return (k_ssize_t)strlen(cwd);
 }
 
-static k_ssize_t sys_ioctl(k_u64_t fd, k_u64_t cmd, k_u64_t arg, k_u64_t a3, k_u64_t a4, k_u64_t a5)
+static k_ssize_t sys_ioctl(ksys_arg_t fd, ksys_arg_t cmd, ksys_arg_t arg, ksys_arg_t a3,
+                           ksys_arg_t a4, ksys_arg_t a5)
 {
     struct kfile *file = fd_get((int)fd);
 
@@ -344,7 +350,8 @@ static k_ssize_t sys_ioctl(k_u64_t fd, k_u64_t cmd, k_u64_t arg, k_u64_t a3, k_u
     return KERR_INVAL;
 }
 
-static k_ssize_t sys_yield(k_u64_t a0, k_u64_t a1, k_u64_t a2, k_u64_t a3, k_u64_t a4, k_u64_t a5)
+static k_ssize_t sys_yield(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                           ksys_arg_t a4, ksys_arg_t a5)
 {
     K_UNUSED(a0);
     K_UNUSED(a1);
@@ -358,7 +365,8 @@ static k_ssize_t sys_yield(k_u64_t a0, k_u64_t a1, k_u64_t a2, k_u64_t a3, k_u64
     return 0;
 }
 
-static k_ssize_t sys_sleep(k_u64_t ms, k_u64_t a1, k_u64_t a2, k_u64_t a3, k_u64_t a4, k_u64_t a5)
+static k_ssize_t sys_sleep(ksys_arg_t ms, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                           ksys_arg_t a4, ksys_arg_t a5)
 {
     K_UNUSED(a1);
     K_UNUSED(a2);
@@ -371,7 +379,8 @@ static k_ssize_t sys_sleep(k_u64_t ms, k_u64_t a1, k_u64_t a2, k_u64_t a3, k_u64
     return (k_ssize_t)ms;
 }
 
-static k_ssize_t sys_uptime(k_u64_t a0, k_u64_t a1, k_u64_t a2, k_u64_t a3, k_u64_t a4, k_u64_t a5)
+static k_ssize_t sys_uptime(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                            ksys_arg_t a4, ksys_arg_t a5)
 {
     K_UNUSED(a0);
     K_UNUSED(a1);
@@ -383,7 +392,8 @@ static k_ssize_t sys_uptime(k_u64_t a0, k_u64_t a1, k_u64_t a2, k_u64_t a3, k_u6
     return (k_ssize_t)k_sched_uptime_ms();
 }
 
-static k_ssize_t sys_reboot(k_u64_t a0, k_u64_t a1, k_u64_t a2, k_u64_t a3, k_u64_t a4, k_u64_t a5)
+static k_ssize_t sys_reboot(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                            ksys_arg_t a4, ksys_arg_t a5)
 {
     K_UNUSED(a0);
     K_UNUSED(a1);
@@ -416,8 +426,8 @@ int ksys_register(k_u32_t number, const char *name, ksys_handler_fn handler)
     return 0;
 }
 
-k_ssize_t ksys_call(k_u32_t number, k_u64_t a0, k_u64_t a1, k_u64_t a2, k_u64_t a3, k_u64_t a4,
-                    k_u64_t a5)
+k_ssize_t ksys_call(k_u32_t number, ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                    ksys_arg_t a4, ksys_arg_t a5)
 {
     if (number >= KSYS_COUNT || g_table[number].handler == NULL) {
         return KERR_NOSYS;
@@ -468,47 +478,51 @@ void ksys_init(void)
 
 k_ssize_t ksys_read(int fd, void *buf, k_size_t count)
 {
-    return ksys_call(KSYS_READ, (k_u64_t)fd, (k_u64_t)(uintptr_t)buf, (k_u64_t)count, 0, 0, 0);
+    return ksys_call(KSYS_READ, (ksys_arg_t)fd, (ksys_arg_t)(uintptr_t)buf, (ksys_arg_t)count, 0, 0,
+                     0);
 }
 
 k_ssize_t ksys_write(int fd, const void *buf, k_size_t count)
 {
-    return ksys_call(KSYS_WRITE, (k_u64_t)fd, (k_u64_t)(uintptr_t)buf, (k_u64_t)count, 0, 0, 0);
+    return ksys_call(KSYS_WRITE, (ksys_arg_t)fd, (ksys_arg_t)(uintptr_t)buf, (ksys_arg_t)count, 0,
+                     0, 0);
 }
 
 int ksys_open(const char *path, int flags)
 {
-    return (int)ksys_call(KSYS_OPEN, (k_u64_t)(uintptr_t)path, (k_u64_t)flags, 0, 0, 0, 0);
+    return (int)ksys_call(KSYS_OPEN, (ksys_arg_t)(uintptr_t)path, (ksys_arg_t)flags, 0, 0, 0, 0);
 }
 
 int ksys_close(int fd)
 {
-    return (int)ksys_call(KSYS_CLOSE, (k_u64_t)fd, 0, 0, 0, 0, 0);
+    return (int)ksys_call(KSYS_CLOSE, (ksys_arg_t)fd, 0, 0, 0, 0, 0);
 }
 
 int ksys_stat(const char *path, void *buf)
 {
-    return (int)ksys_call(KSYS_STAT, (k_u64_t)(uintptr_t)path, (k_u64_t)(uintptr_t)buf, 0, 0, 0, 0);
+    return (int)ksys_call(KSYS_STAT, (ksys_arg_t)(uintptr_t)path, (ksys_arg_t)(uintptr_t)buf, 0, 0,
+                          0, 0);
 }
 
 k_ssize_t ksys_lseek(int fd, k_ssize_t offset, int whence)
 {
-    return ksys_call(KSYS_LSEEK, (k_u64_t)fd, (k_u64_t)offset, (k_u64_t)whence, 0, 0, 0);
+    return ksys_call(KSYS_LSEEK, (ksys_arg_t)fd, (ksys_arg_t)offset, (ksys_arg_t)whence, 0, 0, 0);
 }
 
 int ksys_unlink(const char *path)
 {
-    return (int)ksys_call(KSYS_UNLINK, (k_u64_t)(uintptr_t)path, 0, 0, 0, 0, 0);
+    return (int)ksys_call(KSYS_UNLINK, (ksys_arg_t)(uintptr_t)path, 0, 0, 0, 0, 0);
 }
 
 int ksys_mkdir(const char *path)
 {
-    return (int)ksys_call(KSYS_MKDIR, (k_u64_t)(uintptr_t)path, 0, 0, 0, 0, 0);
+    return (int)ksys_call(KSYS_MKDIR, (ksys_arg_t)(uintptr_t)path, 0, 0, 0, 0, 0);
 }
 
 k_ssize_t ksys_readdir(int fd, void *buf, k_size_t count)
 {
-    return ksys_call(KSYS_READDIR, (k_u64_t)fd, (k_u64_t)(uintptr_t)buf, (k_u64_t)count, 0, 0, 0);
+    return ksys_call(KSYS_READDIR, (ksys_arg_t)fd, (ksys_arg_t)(uintptr_t)buf, (ksys_arg_t)count, 0,
+                     0, 0);
 }
 
 k_u32_t ksys_getpid(void)
@@ -518,7 +532,7 @@ k_u32_t ksys_getpid(void)
 
 int ksys_getcwd(char *buf, k_size_t size)
 {
-    return (int)ksys_call(KSYS_GETCWD, (k_u64_t)(uintptr_t)buf, (k_u64_t)size, 0, 0, 0, 0);
+    return (int)ksys_call(KSYS_GETCWD, (ksys_arg_t)(uintptr_t)buf, (ksys_arg_t)size, 0, 0, 0, 0);
 }
 
 int ksys_yield(void)
@@ -526,14 +540,14 @@ int ksys_yield(void)
     return (int)ksys_call(KSYS_YIELD, 0, 0, 0, 0, 0, 0);
 }
 
-int ksys_sleep(k_u64_t ms)
+int ksys_sleep(ksys_arg_t ms)
 {
     return (int)ksys_call(KSYS_SLEEP, ms, 0, 0, 0, 0, 0);
 }
 
 k_u64_t ksys_uptime(void)
 {
-    return (k_u64_t)ksys_call(KSYS_UPTIME, 0, 0, 0, 0, 0, 0);
+    return (ksys_arg_t)ksys_call(KSYS_UPTIME, 0, 0, 0, 0, 0, 0);
 }
 
 int ksys_reboot(void)
