@@ -139,6 +139,7 @@ commands:
 | `free` | the memory usage |
 | `dmesg` | the kernel log |
 | `modules` | check the hardware modules again |
+| `memtest` | measure the memory and its speed |
 | `i2c` | scan the I2C bus |
 | `date` | the time of the RTC |
 | `echo`, `sleep`, `clear`, `reboot` | the usual suspects |
