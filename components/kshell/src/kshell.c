@@ -395,6 +395,50 @@ int kshell_init(void)
     return rc;
 }
 
+/*
+ * Read a line from the console. Every character is repeated right away, so
+ * that the person at the keyboard sees what is being typed. The backspace
+ * erases the last character.
+ */
+static int shell_read_line(char *buf, k_size_t size)
+{
+    k_size_t len = 0;
+
+    for (;;) {
+        int c = k_port_console_getchar();
+
+        if (c < 0) {
+            buf[len] = '\0';
+            return (len > 0) ? (int)len : -1;
+        }
+
+        if (c == '\n' || c == '\r') {
+            k_port_write("\r\n", 2);
+            buf[len] = '\0';
+            return (int)len;
+        }
+
+        if (c == '\b' || c == 127) {
+            if (len > 0) {
+                len--;
+                k_port_write("\b \b", 3);
+            }
+            continue;
+        }
+
+        if (c == 3) { /* Ctrl+C: the line is thrown away */
+            k_port_write("^C\r\n", 4);
+            len = 0;
+            continue;
+        }
+
+        if (len + 1 < size) {
+            buf[len++] = (char)c;
+            k_port_write(&buf[len - 1], 1);
+        }
+    }
+}
+
 void kshell_run(void)
 {
     char line[KSHELL_LINE_MAX];
@@ -406,16 +450,10 @@ void kshell_run(void)
     for (;;) {
         kshell_printf("microos> ");
 
-        if (k_port_console_readline(line, sizeof(line)) < 0) {
+        if (shell_read_line(line, sizeof(line)) < 0) {
             /* The console is closed (end of the input). */
             kshell_printf("\n");
             break;
-        }
-
-        /* The terminal echoes what was typed, so that the dialogue is
-         * readable on the screen and in the interactive console. */
-        if (line[0] != '\0') {
-            kshell_printf("%s\n", line);
         }
 
         kshell_execute(line);

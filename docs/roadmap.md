@@ -76,9 +76,12 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [x] The terminal echoes the input, so that the dialogue is readable in the
       interactive console
 * [x] The image of the display: the ST7789V2 has 240x320 of memory, the
-      glass of the 1.14" panel shows the rows 80 to 319
-* [ ] Command history, tab completion
-* [ ] `/proc/self`, the directories of the tasks
+      glass of the 1.14" panel shows only a part of it. The offset can be
+      changed while the board runs: `display <x> <y>`
+* [x] The terminal repeats every character while it is typed, the backspace
+      erases it
+* [x] `/proc/self` and a directory per task with a `status` file
+* [ ] Command history, tab completion (not needed for now)
 
 ## Phase 3 - Memory and the syscall ABI
 

@@ -6,7 +6,7 @@ if(ESP_PLATFORM)
     idf_component_register(
         SRCS ${MICRO_OS_GRAPHICS_SRCS}
         INCLUDE_DIRS "include"
-        REQUIRES kernel drivers font
+        REQUIRES kernel drivers font kshell
     )
 else()
     add_library(microos_graphics STATIC ${MICRO_OS_GRAPHICS_SRCS})

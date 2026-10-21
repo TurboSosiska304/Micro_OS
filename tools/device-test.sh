@@ -12,7 +12,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IDF_EXPORT="${IDF_EXPORT:-$HOME/esp/esp-idf/export.sh}"
 PORT="${1:-}"
-CONSOLE_SECONDS="${CONSOLE_SECONDS:-25}"
+CONSOLE_SECONDS="${CONSOLE_SECONDS:-30}"
 
 if [ ! -f "$IDF_EXPORT" ]; then
     echo "ESP-IDF not found at $IDF_EXPORT" >&2

@@ -19,4 +19,8 @@ int drv_display_clear(uint16_t color);
 /* Send the framebuffer to the panel. */
 int drv_display_flush(void);
 
+/* The offset of the visible area of the panel. */
+void drv_display_set_offset(int x, int y);
+void drv_display_get_offset(int *x, int *y);
+
 #endif /* MICRO_OS_DRIVERS_DISPLAY_H */

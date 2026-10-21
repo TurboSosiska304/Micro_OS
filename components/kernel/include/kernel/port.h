@@ -41,6 +41,13 @@ const char *k_port_arch(void);
  */
 int k_port_console_readline(char *buf, k_size_t size);
 
+/*
+ * Read one character from the console and wait for it. Returns the
+ * character or -1 at the end of the input. The terminal of the user
+ * repeats the character itself, the kernel does not have to.
+ */
+int k_port_console_getchar(void);
+
 /* Memory information. */
 k_size_t k_port_heap_free(void);
 k_size_t k_port_heap_total(void);

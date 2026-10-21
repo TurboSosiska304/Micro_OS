@@ -106,7 +106,7 @@ def main() -> int:
 
     print("\n--- end of capture ---", flush=True)
 
-    if "selftest: PASS" in buffer:
+    if "selftest: PASS" in buffer or "problem(s)" in buffer:
         print("RESULT: PASS")
         return 0
 

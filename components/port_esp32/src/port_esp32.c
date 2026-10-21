@@ -153,6 +153,18 @@ int k_port_console_readline(char *buf, k_size_t size)
     return (int)len;
 }
 
+int k_port_console_getchar(void)
+{
+    uint8_t c = 0;
+    int rc = uart_read_bytes(CONFIG_ESP_CONSOLE_UART_NUM, &c, 1, portMAX_DELAY);
+
+    if (rc != 1) {
+        return -1;
+    }
+
+    return (int)c;
+}
+
 /* --- memory --- */
 
 k_size_t k_port_heap_free(void)

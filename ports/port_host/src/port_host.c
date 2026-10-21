@@ -144,6 +144,17 @@ int k_port_console_readline(char *buf, k_size_t size)
     }
 }
 
+int k_port_console_getchar(void)
+{
+    int c = getchar();
+
+    if (c == EOF) {
+        return -1;
+    }
+
+    return c;
+}
+
 /* --- memory --- */
 
 k_size_t k_port_heap_free(void)

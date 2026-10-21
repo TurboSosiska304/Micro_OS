@@ -156,9 +156,46 @@ static void test_devfs(void)
     teardown();
 }
 
+static void test_procfs_tasks(void)
+{
+    struct vfs_dirent entries[16];
+    struct vfs_stat stat;
+    k_size_t count = 0;
+    char buffer[512];
+    int rc;
+
+    ktest_begin("procfs: every task has a directory");
+
+    setup();
+
+    /* The root holds the files and the directories of the tasks. */
+    rc = vfs_list("/proc", entries, 16, &count);
+    KT_CHECK_INT_EQ(rc, 0);
+    KT_CHECK(count >= 2);
+
+    /* The directory of the current task. */
+    rc = vfs_list("/proc/self", entries, 16, &count);
+    KT_CHECK_INT_EQ(rc, 0);
+    KT_CHECK_INT_EQ(count, 1);
+    if (count == 1) {
+        KT_CHECK_STR_EQ(entries[0].name, "status");
+    }
+
+    /* The file of the task. */
+    rc = read_file("/proc/self/status", buffer, sizeof(buffer));
+    KT_CHECK(rc > 0);
+    KT_CHECK(strstr(buffer, "Name:") != NULL);
+    KT_CHECK(strstr(buffer, "Pid:") != NULL);
+
+    KT_CHECK_INT_EQ(vfs_stat("/proc/self/status", &stat), 0);
+
+    teardown();
+}
+
 void test_sysfs(void)
 {
     test_procfs();
     test_procfs_end();
+    test_procfs_tasks();
     test_devfs();
 }

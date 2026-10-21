@@ -15,10 +15,17 @@
 
 /*
  * The GRAM of the ST7789V2 is 240x320, the glass of the 1.14" panel shows
- * the rows 80 to 319. Without the offset the image is shifted up by 80 rows
- * and the rest of the screen is garbage.
+ * only a part of it. Without the offset the image is shifted and the rest
+ * of the screen is garbage.
+ *
+ * The offsets can be changed at runtime with the "display" command of the
+ * shell, so that the right values can be found without reflashing.
  */
+#define LCD_X_OFFSET 105
 #define LCD_Y_OFFSET 80
+
+static int s_offset_x = LCD_X_OFFSET;
+static int s_offset_y = LCD_Y_OFFSET;
 
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
@@ -142,14 +149,16 @@ static void lcd_init_panel(void)
 static void lcd_set_window(int x, int y, int w, int h)
 {
     uint8_t data[4];
-    int first_row = y + LCD_Y_OFFSET;
+    int first_row = y + s_offset_y;
     int last_row = first_row + h - 1;
+    int first_col = x + s_offset_x;
+    int last_col = first_col + w - 1;
 
     lcd_write_command(0x2A); /* column address */
-    data[0] = (uint8_t)(x >> 8);
-    data[1] = (uint8_t)(x & 0xFF);
-    data[2] = (uint8_t)((x + w - 1) >> 8);
-    data[3] = (uint8_t)((x + w - 1) & 0xFF);
+    data[0] = (uint8_t)(first_col >> 8);
+    data[1] = (uint8_t)(first_col & 0xFF);
+    data[2] = (uint8_t)(last_col >> 8);
+    data[3] = (uint8_t)(last_col & 0xFF);
     lcd_write_data(data, 4);
 
     lcd_write_command(0x2B); /* row address */
@@ -392,4 +401,20 @@ int drv_display_flush(void)
     lcd_flush();
 
     return 0;
+}
+
+void drv_display_set_offset(int x, int y)
+{
+    s_offset_x = x;
+    s_offset_y = y;
+}
+
+void drv_display_get_offset(int *x, int *y)
+{
+    if (x != NULL) {
+        *x = s_offset_x;
+    }
+    if (y != NULL) {
+        *y = s_offset_y;
+    }
 }

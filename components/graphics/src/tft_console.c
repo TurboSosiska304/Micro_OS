@@ -6,10 +6,13 @@
  */
 #include "graphics/tft_console.h"
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "drivers/display.h"
 #include "graphics/font.h"
+#include "drivers/display.h"
 #include "kernel/log.h"
 #include "kshell/kshell.h"
 
@@ -23,6 +26,13 @@ static int s_line_count;
 static int s_cursor;
 static char s_current[TFT_LINE_MAX];
 static bool s_started;
+
+static void draw(void);
+
+void tft_console_redraw(void)
+{
+    draw();
+}
 
 static void draw(void)
 {
@@ -82,6 +92,36 @@ void tft_console_start(void)
     drv_display_flush();
 
     s_started = true;
+}
+
+/*
+ * The offset of the visible area of the panel. The glass of the 1.14" panel
+ * shows only a part of the memory of the controller, and the values differ
+ * between the models, so they can be changed while the board runs.
+ */
+static int cmd_display(int argc, char **argv)
+{
+    int x = 0;
+    int y = 0;
+
+    drv_display_get_offset(&x, &y);
+
+    if (argc > 1) {
+        x = (int)strtol(argv[1], NULL, 10);
+        y = (argc > 2) ? (int)strtol(argv[2], NULL, 10) : y;
+
+        drv_display_set_offset(x, y);
+        tft_console_redraw();
+    }
+
+    kshell_printf("display offset: x=%d y=%d\n", x, y);
+
+    return KSHELL_OK;
+}
+
+int tft_console_register(void)
+{
+    return kshell_register("display", "the offset of the image on the screen", cmd_display);
 }
 
 void tft_console_write(const char *data, k_size_t len)
