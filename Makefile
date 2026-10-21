@@ -66,6 +66,5 @@ bundle:
 	cp build/micro_os.bin bild/micro_os.bin
 	cp build/bootloader/bootloader.bin bild/bootloader.bin
 	cp build/partition_table/partition-table.bin bild/partition-table.bin
-	cp build/ota_data_initial.bin bild/ota_data_initial.bin
-	cd bild && sha256sum micro_os.bin bootloader.bin partition-table.bin ota_data_initial.bin > checksums.txt
+	cd bild && sha256sum micro_os.bin bootloader.bin partition-table.bin > checksums.txt
 	@echo "the firmware is in bild/, flash it with: bild/flash.sh"

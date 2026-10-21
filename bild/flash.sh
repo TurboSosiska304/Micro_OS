@@ -9,6 +9,12 @@
 #
 # The script works with a standalone esptool as well as with the one that
 # comes with ESP-IDF.
+#
+# The layout of the flash (8 MB):
+#   0x0000  boot loader
+#   0x8000  partition table
+#   0x10000 the application (2 MB)
+#   0x21000 MicroFS, the rest of the flash (5.75 MB)
 
 set -euo pipefail
 
@@ -68,7 +74,6 @@ echo "==> flashing $PORT with $ESPTOOL"
 $ESPTOOL --chip esp32 -p "$PORT" -b 460800 --before default_reset --after hard_reset write_flash \
     0x1000 "$HERE/bootloader.bin" \
     0x8000 "$HERE/partition-table.bin" \
-    0xe000 "$HERE/ota_data_initial.bin" \
     0x10000 "$HERE/micro_os.bin"
 
 echo "==> done. Start the console with:"
