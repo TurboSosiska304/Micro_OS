@@ -21,24 +21,27 @@
  * The system calls. The numbers are frozen: a new call gets the next free
  * number, an old one keeps its number forever.
  */
-#define KSYS_EXIT 0    /* exit(code) */
-#define KSYS_READ 1    /* read(fd, buf, count) */
-#define KSYS_WRITE 2   /* write(fd, buf, count) */
-#define KSYS_OPEN 3    /* open(path, flags) */
-#define KSYS_CLOSE 4   /* close(fd) */
-#define KSYS_STAT 5    /* stat(path, buf) */
-#define KSYS_LSEEK 6   /* lseek(fd, offset, whence) */
-#define KSYS_UNLINK 7  /* unlink(path) */
-#define KSYS_MKDIR 8   /* mkdir(path) */
-#define KSYS_READDIR 9 /* readdir(fd, buf, count) */
-#define KSYS_GETPID 10 /* getpid() */
-#define KSYS_GETCWD 11 /* getcwd(buf, size) */
-#define KSYS_IOCTL 12  /* ioctl(fd, cmd, arg) */
-#define KSYS_YIELD 13  /* yield() */
-#define KSYS_SLEEP 14  /* sleep(ms) */
-#define KSYS_UPTIME 15 /* uptime() */
-#define KSYS_REBOOT 16 /* reboot() */
-#define KSYS_COUNT 17  /* the number of the system calls */
+#define KSYS_EXIT 0     /* exit(code) */
+#define KSYS_READ 1     /* read(fd, buf, count) */
+#define KSYS_WRITE 2    /* write(fd, buf, count) */
+#define KSYS_OPEN 3     /* open(path, flags) */
+#define KSYS_CLOSE 4    /* close(fd) */
+#define KSYS_STAT 5     /* stat(path, buf) */
+#define KSYS_LSEEK 6    /* lseek(fd, offset, whence) */
+#define KSYS_UNLINK 7   /* unlink(path) */
+#define KSYS_MKDIR 8    /* mkdir(path) */
+#define KSYS_READDIR 9  /* readdir(fd, buf, count) */
+#define KSYS_GETPID 10  /* getpid() */
+#define KSYS_GETCWD 11  /* getcwd(buf, size) */
+#define KSYS_IOCTL 12   /* ioctl(fd, cmd, arg) */
+#define KSYS_YIELD 13   /* yield() */
+#define KSYS_SLEEP 14   /* sleep(ms) */
+#define KSYS_UPTIME 15  /* uptime() */
+#define KSYS_REBOOT 16  /* reboot() */
+#define KSYS_FORK 17    /* fork() */
+#define KSYS_GETPPID 18 /* getppid() */
+#define KSYS_WAITPID 19 /* waitpid(pid, status) */
+#define KSYS_COUNT 20   /* the number of the system calls */
 
 /* The flags of the open call, the same as the ones of the VFS. */
 #define KSYS_O_RDONLY 0x0000
@@ -117,5 +120,8 @@ int ksys_yield(void);
 int ksys_sleep(ksys_arg_t ms);
 k_u64_t ksys_uptime(void);
 int ksys_reboot(void);
+int ksys_fork(void);
+int ksys_getppid(void);
+int ksys_waitpid(int pid, int *status);
 
 #endif /* MICRO_OS_KERNEL_KSYS_H */

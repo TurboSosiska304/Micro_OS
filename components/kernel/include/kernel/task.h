@@ -67,6 +67,12 @@ struct task {
     task_entry_fn entry;
     void *arg;
     struct task *parent;
+    /*
+     * True for the child of a fork. In Linux the child knows it by the zero
+     * that fork() returns; here the child starts the program from the
+     * beginning, so the program has to ask.
+     */
+    bool is_child;
     struct kfile files[TASK_MAX_FDS]; /* the open files of the task */
     /*
      * The priority of the memory allocations of the task: the system flag

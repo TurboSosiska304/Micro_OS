@@ -10,6 +10,7 @@ change is noticed at once.
 * The table of the calls: `exit`, `read`, `write`, `open`, `close`, `stat`,
   `lseek`, `unlink`, `mkdir`, `readdir`, `getpid`, `getcwd`, `ioctl`,
   `yield`, `sleep`, `uptime`, `reboot`.
+* The process part: `fork`, `getppid`, `waitpid`.
 * The wrappers with the checked arguments.
 * Every task has its own table of the open files.
 
@@ -29,6 +30,18 @@ values mixed in (0, 1, 255, 65535, 2147483647 and so on).
 * **The errors.** The same error, no matter how the call was made.
 * **The agreement.** The file that the calls write is the file that the
   filesystem sees.
+
+## The processes
+
+The kernel has no memory management, so a `fork` cannot copy the memory of
+the parent: the tasks share it, like the flag `CLONE_VM` of Linux. The child
+gets its own number, the program tells the child by the mark of its task.
+
+**A race that the test found:** the mark of the child was set after
+`task_create()`, but the task starts at once, and the child managed to take
+the way of the parent and to fork again. The child now starts in a trampoline
+of the kernel, which sets the mark and only then runs the program of the
+parent.
 
 ## The mistakes that cost time
 

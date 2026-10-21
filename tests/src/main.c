@@ -34,6 +34,7 @@ static void run_tests(void *arg)
     test_vfs();
     test_sysfs();
     test_ksys();
+    test_ksys_process();
     test_kshell();
     test_boot();
 

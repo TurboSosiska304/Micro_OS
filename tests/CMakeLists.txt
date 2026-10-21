@@ -18,6 +18,7 @@ if(NOT ESP_PLATFORM)
         cases/test_vfs.c
         cases/test_sysfs.c
         cases/test_ksys.c
+        cases/test_ksys_process.c
         cases/test_kshell.c
         cases/test_task.c
         cases/test_sched.c

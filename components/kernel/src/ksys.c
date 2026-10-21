@@ -1,5 +1,6 @@
 #include "kernel/ksys.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "kernel/errno.h"
@@ -407,6 +408,154 @@ static k_ssize_t sys_reboot(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_ar
     return 0;
 }
 
+/*
+ * The program of the child of a fork. The child starts here, marks itself
+ * and then runs the program of the parent. The mark is set before the
+ * program starts, so that the child can never take the way of the parent.
+ */
+static void forked_child(void *arg)
+{
+    struct task *self = task_self();
+    struct task *parent = (struct task *)arg;
+
+    if (self != NULL) {
+        self->is_child = true;
+    }
+
+    if (parent != NULL && parent->entry != NULL) {
+        parent->entry(parent->arg);
+    }
+}
+
+/*
+ * The fork: a new task with the same program. The memory of the parent is
+ * NOT copied - the kernel of the board cannot do that - so the tasks share
+ * it, like the flag CLONE_VM of Linux. The child has its own number, so
+ * the program tells the child by the mark of its task.
+ */
+static k_ssize_t sys_fork(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3, ksys_arg_t a4,
+                          ksys_arg_t a5)
+{
+    struct task *self = task_self();
+    struct task *child;
+    char name[TASK_NAME_MAX];
+
+    K_UNUSED(a0);
+    K_UNUSED(a1);
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    if (self == NULL) {
+        return KERR_PERM;
+    }
+
+    /* The name of the child is the name of the parent with a mark. */
+    {
+        k_size_t len = strlen(self->name);
+
+        if (len + 2 > sizeof(name)) {
+            len = sizeof(name) - 2;
+        }
+        memcpy(name, self->name, len);
+        name[len] = '\'';
+        name[len + 1] = '\0';
+    }
+
+    child = task_create(name, forked_child, (void *)self, self->prio);
+    if (child == NULL) {
+        return KERR_NOSPC;
+    }
+
+    return (k_ssize_t)child->pid;
+}
+
+static k_ssize_t sys_getppid(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                             ksys_arg_t a4, ksys_arg_t a5)
+{
+    struct task *self = task_self();
+
+    K_UNUSED(a0);
+    K_UNUSED(a1);
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    if (self == NULL || self->parent == NULL) {
+        return 0;
+    }
+
+    return (k_ssize_t)self->parent->pid;
+}
+
+/*
+ * Wait for a child. The number 0 or -1 means "any child". The status of
+ * the child is the code it finished with.
+ */
+static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags, ksys_arg_t a3,
+                             ksys_arg_t a4, ksys_arg_t a5)
+{
+    struct task *self = task_self();
+    struct task *child = NULL;
+    k_u32_t waited = 0;
+    const k_u32_t limit = 5000; /* five seconds */
+
+    K_UNUSED(flags);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    if (self == NULL) {
+        return KERR_PERM;
+    }
+
+    /* Look for a child that has finished. */
+    for (waited = 0; waited < limit; waited++) {
+        k_size_t i;
+
+        for (i = 0; i < TASK_MAX_TASKS; i++) {
+            struct task *t = task_get_by_index(i);
+
+            if (t == NULL || t->parent != self) {
+                continue;
+            }
+
+            if (pid > 0 && (int)t->pid != (int)pid) {
+                continue;
+            }
+
+            if (t->state == TASK_STATE_ZOMBIE) {
+                child = t;
+                break;
+            }
+        }
+
+        if (child != NULL) {
+            break;
+        }
+
+        k_sched_sleep_ms(1);
+    }
+
+    if (child == NULL) {
+        return KERR_AGAIN;
+    }
+
+    if (status != 0) {
+        *(int *)(uintptr_t)status = (int)child->exit_code;
+    }
+
+    {
+        k_u32_t child_pid = child->pid;
+
+        task_reap(child_pid);
+
+        return (k_ssize_t)child_pid;
+    }
+}
+
 /* --- the table --- */
 
 int ksys_register(k_u32_t number, const char *name, ksys_handler_fn handler)
@@ -472,6 +621,9 @@ void ksys_init(void)
     ksys_register(KSYS_SLEEP, "sleep", sys_sleep);
     ksys_register(KSYS_UPTIME, "uptime", sys_uptime);
     ksys_register(KSYS_REBOOT, "reboot", sys_reboot);
+    ksys_register(KSYS_FORK, "fork", sys_fork);
+    ksys_register(KSYS_GETPPID, "getppid", sys_getppid);
+    ksys_register(KSYS_WAITPID, "waitpid", sys_waitpid);
 }
 
 /* --- the wrappers --- */
@@ -553,4 +705,19 @@ k_u64_t ksys_uptime(void)
 int ksys_reboot(void)
 {
     return (int)ksys_call(KSYS_REBOOT, 0, 0, 0, 0, 0, 0);
+}
+
+int ksys_fork(void)
+{
+    return (int)ksys_call(KSYS_FORK, 0, 0, 0, 0, 0, 0);
+}
+
+int ksys_getppid(void)
+{
+    return (int)ksys_call(KSYS_GETPPID, 0, 0, 0, 0, 0, 0);
+}
+
+int ksys_waitpid(int pid, int *status)
+{
+    return (int)ksys_call(KSYS_WAITPID, (ksys_arg_t)pid, (ksys_arg_t)(uintptr_t)status, 0, 0, 0, 0);
 }

@@ -92,8 +92,10 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
       unlink, mkdir, readdir, getpid, getcwd, ioctl, yield, sleep, uptime
 * [x] The tests work with a corpus of real numbers: the same data has to
       give the same result no matter how it is broken into pieces
+* [x] The process part of the ABI: fork, getppid, waitpid. The memory
+      of the parent is not copied, the tasks share it, like CLONE_VM
 * [ ] The libc over the ABI: printf, open, read, write
-* [ ] fork and exec on top of the tasks
+* [ ] execve: it needs a format of the programs
 
 * [ ] `kmm_alloc`/`kmm_free`, slabs, allocation from PSRAM
 * [ ] System call table, uniform ABI

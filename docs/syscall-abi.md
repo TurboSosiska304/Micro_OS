@@ -50,6 +50,9 @@ A negative result is an error, the numbers are the negative error codes of
 | 14 | `sleep` | `ms` | 0 |
 | 15 | `uptime` | - | the time since the boot in milliseconds |
 | 16 | `reboot` | - | never returns |
+| 17 | `fork` | - | the number of the child, or an error |
+| 18 | `getppid` | - | the number of the parent, 0 at the root |
+| 19 | `waitpid` | `pid, status` | the number of the child, or an error |
 
 The flags of `open` are the same as the ones of the VFS:
 
@@ -64,6 +67,17 @@ The flags of `open` are the same as the ones of the VFS:
 
 The `whence` of `lseek`: `KSYS_SEEK_SET` (from the beginning), `KSYS_SEEK_CUR`
 (from the current position), `KSYS_SEEK_END` (from the end).
+
+## The processes
+
+The kernel has no memory management, so a `fork` cannot copy the memory of
+the parent: the tasks **share** it, like the flag `CLONE_VM` of Linux. The
+child gets its own number, and the program tells the child by the mark of its
+task (`task_self()->is_child`) - in Linux the child knows it by the zero that
+`fork()` returns, here the child starts the program from the beginning.
+
+`waitpid()` waits for a child, the status is the code the child finished
+with. The number 0 or -1 means "any child".
 
 ## The descriptors
 
