@@ -339,7 +339,7 @@ static int cmd_clear(int argc, char **argv)
     return KSHELL_OK;
 }
 
-static int kshell_register_builtins(void)
+int kshell_init(void)
 {
     int rc = 0;
 
@@ -353,6 +353,7 @@ static int kshell_register_builtins(void)
     rc |= kshell_register("free", "the memory usage", cmd_free);
     rc |= kshell_register("clear", "clear the screen", cmd_clear);
     rc |= kshell_register("modules", "check the hardware modules", cmd_modules);
+    rc |= kshell_register_memtest();
     rc |= kshell_register("reboot", "restart the board", cmd_reboot);
 
     return rc;
@@ -362,7 +363,7 @@ void kshell_run(void)
 {
     char line[KSHELL_LINE_MAX];
 
-    kshell_register_builtins();
+    kshell_init();
 
     kshell_printf("%s shell ready. Type 'help' for the list of commands.\n", kernel_name());
 
@@ -370,10 +371,9 @@ void kshell_run(void)
         kshell_printf("microos> ");
 
         if (k_port_console_readline(line, sizeof(line)) < 0) {
-            /* No input available: do not spin. */
+            /* The console is closed (end of the input). */
             kshell_printf("\n");
-            k_sched_sleep_ms(20);
-            continue;
+            break;
         }
 
         kshell_execute(line);

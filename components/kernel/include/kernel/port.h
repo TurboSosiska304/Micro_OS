@@ -45,5 +45,16 @@ int k_port_console_readline(char *buf, k_size_t size);
 k_size_t k_port_heap_free(void);
 k_size_t k_port_heap_total(void);
 k_size_t k_port_psram_free(void);
+k_size_t k_port_psram_total(void);
+
+/*
+ * Allocate memory from the internal heap or from the PSRAM. The size 0
+ * means "ask the system for a default block".
+ */
+void *k_port_alloc(k_size_t size, bool psram);
+void k_port_free(void *ptr);
+
+/* Microseconds since the boot (for the benchmarks). */
+k_u64_t k_port_uptime_us(void);
 
 #endif /* MICRO_OS_KERNEL_PORT_H */

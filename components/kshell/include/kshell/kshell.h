@@ -40,4 +40,13 @@ void kshell_printf(const char *fmt, ...);
 /* Number of registered commands. */
 k_size_t kshell_command_count(void);
 
+/* Register the memory test command. */
+int kshell_register_memtest(void);
+
+/*
+ * Register the built in commands. The shell does it on its own, the tests
+ * call it directly.
+ */
+int kshell_init(void);
+
 #endif /* MICRO_OS_KSHELL_KSHELL_H */

@@ -171,6 +171,30 @@ k_size_t k_port_psram_free(void)
     return (k_size_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
 }
 
+k_size_t k_port_psram_total(void)
+{
+    return (k_size_t)heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
+}
+
+void *k_port_alloc(k_size_t size, bool psram)
+{
+    if (size == 0) {
+        size = 4096;
+    }
+
+    return heap_caps_malloc(size, psram ? MALLOC_CAP_SPIRAM : MALLOC_CAP_INTERNAL);
+}
+
+void k_port_free(void *ptr)
+{
+    heap_caps_free(ptr);
+}
+
+k_u64_t k_port_uptime_us(void)
+{
+    return (k_u64_t)esp_timer_get_time();
+}
+
 /* --- tasks (FreeRTOS) --- */
 
 k_size_t k_port_task_stack_size(void)

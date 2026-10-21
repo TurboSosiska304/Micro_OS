@@ -172,6 +172,39 @@ k_size_t k_port_psram_free(void)
     return 0;
 }
 
+k_size_t k_port_psram_total(void)
+{
+    /* The host has no separate PSRAM. */
+    return 0;
+}
+
+void *k_port_alloc(k_size_t size, bool psram)
+{
+    K_UNUSED(psram);
+
+    if (size == 0) {
+        size = 4096;
+    }
+
+    return malloc(size);
+}
+
+void k_port_free(void *ptr)
+{
+    free(ptr);
+}
+
+k_u64_t k_port_uptime_us(void)
+{
+    struct timespec ts;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return 0;
+    }
+
+    return (k_u64_t)ts.tv_sec * 1000000u + (k_u64_t)(ts.tv_nsec / 1000);
+}
+
 /* --- tasks (pthreads) --- */
 
 typedef struct {

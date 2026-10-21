@@ -74,9 +74,29 @@ static void test_registry(void)
     port_host_set_sink(NULL);
 }
 
+static void test_memtest(void)
+{
+    ktest_begin("kshell: the memory test measures the memory");
+
+    port_host_set_sink(tmpfile());
+
+    /* The command has to run on every platform, even without a PSRAM. */
+    KT_CHECK_INT_EQ(kshell_execute("memtest"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("memtest 32"), KSHELL_OK);
+
+    /* A size of zero is not a valid argument. */
+    KT_CHECK(kshell_execute("memtest 0") != KSHELL_OK);
+
+    port_host_set_sink(NULL);
+}
+
 void test_kshell(void)
 {
+    /* The built in commands are registered by the shell itself. */
+    KT_CHECK_INT_EQ(kshell_init(), KSHELL_OK);
+
     test_execute();
     test_unknown();
     test_registry();
+    test_memtest();
 }
