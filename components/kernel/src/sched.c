@@ -195,7 +195,11 @@ k_u32_t k_sched_ticks(void)
 
 k_u64_t k_sched_uptime_ms(void)
 {
-    return (k_u64_t)k_sched_ticks();
+    /*
+     * The real time of the board, not the number of the ticks: the timer
+     * of the kernel can not keep up when the processor is busy.
+     */
+    return (k_u64_t)(k_port_uptime_us() / 1000u);
 }
 
 void k_sched_yield(void)

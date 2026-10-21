@@ -21,7 +21,7 @@
 
 #define PROCFS_MAX 128
 #define PROC_NAME_MAX 32
-#define PROCFS_TEXT_MAX 1024
+#define PROCFS_TEXT_MAX 2048
 
 struct proc_file {
     const char *name;
@@ -100,7 +100,7 @@ static int read_modules(char *buf, k_size_t size)
         }
 
         n += snprintf(buf + n, size - (k_size_t)n, "%-10s %-9s %s\n", mod->name,
-                      kmod_state_name(mod->state), mod->info);
+                      kmod_state_name(mod->state), mod->info[0] != '\0' ? mod->info : mod->desc);
     }
 
     return n;
