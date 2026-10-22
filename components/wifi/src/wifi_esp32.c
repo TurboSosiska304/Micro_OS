@@ -47,6 +47,14 @@ static bool s_initialised;  /* the driver of the radio is up */
 static bool s_handlers;     /* the events are watched */
 
 static SemaphoreHandle_t s_scan_done;      /* the end of a scan */
+
+/*
+ * Whether the last scan found anything at all. A scan can fail (the radio
+ * is busy joining a network, or it was asked to stop), and the event of
+ * the end is delivered either way - the caller has to know which, or it
+ * reads a list the radio never filled.
+ */
+static bool s_scan_ok;
 static esp_timer_handle_t s_reconnect_timer; /* the wait before a retry */
 
 /* The two below are used by the events and defined after them. */
@@ -157,12 +165,22 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
 
             break;
         }
-        case WIFI_EVENT_SCAN_DONE:
-            /* The scan is asynchronous: the caller waits on the semaphore. */
+        case WIFI_EVENT_SCAN_DONE: {
+            /*
+             * The event is delivered whether the scan found networks or
+             * not: the status says which. A failed scan must not be read,
+             * because the list of the networks is not filled.
+             */
+            wifi_event_sta_scan_done_t *info = (wifi_event_sta_scan_done_t *)data;
+
+            s_scan_ok = (info == NULL) || (info->status == 0);
+
+            /* The scan is asynchronous: the caller waits for the semaphore. */
             if (s_scan_done != NULL) {
                 (void)xSemaphoreGive(s_scan_done);
             }
             break;
+        }
         default:
             break;
         }
@@ -322,6 +340,7 @@ static int radio_scan(struct wifi_scan_entry *out, k_size_t max, k_size_t *count
      */
     while (xSemaphoreTake(s_scan_done, 0) == pdTRUE) {
     }
+    s_scan_ok = false;
 
     rc = esp_wifi_scan_start(&config, false);
     if (rc != ESP_OK) {
@@ -332,6 +351,18 @@ static int radio_scan(struct wifi_scan_entry *out, k_size_t max, k_size_t *count
     if (xSemaphoreTake(s_scan_done, pdMS_TO_TICKS(WIFI_SCAN_TIMEOUT_MS)) != pdTRUE) {
         (void)esp_wifi_scan_stop();
         kerror("wifi: the scan did not answer in %u ms", (unsigned)WIFI_SCAN_TIMEOUT_MS);
+        return -1;
+    }
+
+    /*
+     * The event of the end was delivered, but the scan may have failed
+     * (the radio was joining a network, or it was asked to stop). The list
+     * of the networks is only filled by a scan that went through, so a
+     * failed one is not read: the caller is told that there was nothing,
+     * and not handed a list that the radio never wrote.
+     */
+    if (!s_scan_ok) {
+        kerror("wifi: the scan did not finish cleanly");
         return -1;
     }
 
