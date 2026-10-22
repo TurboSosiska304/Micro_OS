@@ -12,7 +12,13 @@
 #include "kernel/console.h"
 #include "kernel/types.h"
 
-#define KSHELL_MAX_COMMANDS 24
+/*
+ * The number of the commands of the shell. The built in commands are 22,
+ * the drivers add their own (the date, the bus, the radio, the display)
+ * and the filesystem its mkfs, so the table has room for all of them and
+ * for the commands of the next phases.
+ */
+#define KSHELL_MAX_COMMANDS 32
 #define KSHELL_MAX_ARGS 8
 #define KSHELL_LINE_MAX 128
 

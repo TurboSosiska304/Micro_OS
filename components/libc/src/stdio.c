@@ -18,6 +18,12 @@
 /* The size of the buffers of the numbers. */
 #define NUM_BUF 72
 
+/*
+ * The size of the buffer of a number with a point. The biggest double
+ * has 309 digits before the point, and %f prints all of them.
+ */
+#define FMT_TEXT_MAX 400
+
 /* The description of one conversion. */
 struct spec {
     int left;  /* '-' */
@@ -164,6 +170,7 @@ static void put_number(struct sink *s, const struct spec *sp, int negative,
     int nprefix = 0;
     int sign = 0;
     int zeros = 0;
+    int use_zero;
     int pad;
     int i;
 
@@ -201,8 +208,15 @@ static void put_number(struct sink *s, const struct spec *sp, int negative,
         sign = 3; /* ' ' */
     }
 
+    /*
+     * The zeros of the width are not used when the precision is given:
+     * the precision already decides the digits, the rest is the padding
+     * of the C library - spaces.
+     */
+    use_zero = sp->zero && sp->precision < 0;
+
     /* The padding in front, when the number is on the right. */
-    if (!sp->left && !sp->zero) {
+    if (!sp->left && !use_zero) {
         pad = sp->width - ndigits - nprefix - (sign ? 1 : 0);
         while (pad-- > 0) {
             sink_putc(s, ' ');
@@ -220,7 +234,7 @@ static void put_number(struct sink *s, const struct spec *sp, int negative,
     sink_puts(s, prefix, (size_t)nprefix);
 
     /* The zeros of the width, when they are asked for. */
-    if (!sp->left && sp->zero) {
+    if (!sp->left && use_zero) {
         zeros = sp->width - ndigits - nprefix - (sign ? 1 : 0);
         while (zeros-- > 0) {
             sink_putc(s, '0');
@@ -286,6 +300,21 @@ static int fraction_digits(double *fp, char *digits, int precision)
 static void emit_text(struct sink *s, const struct spec *sp, const char *text, int len)
 {
     int pad = sp->width - len;
+    int skip = 0;
+    int zeros = 0;
+
+    /*
+     * The zeros of the width of a number with a point come after the sign,
+     * the way the C library does it. The flag is not used when the text is
+     * on the left.
+     */
+    if (!sp->left && sp->zero && pad > 0) {
+        if (len > 0 && (text[0] == '-' || text[0] == '+' || text[0] == ' ')) {
+            skip = 1;
+        }
+        zeros = pad;
+        pad = 0;
+    }
 
     if (!sp->left) {
         while (pad-- > 0) {
@@ -293,20 +322,175 @@ static void emit_text(struct sink *s, const struct spec *sp, const char *text, i
         }
     }
 
+    if (skip != 0) {
+        sink_putc(s, text[0]);
+        text++;
+        len--;
+    }
+
+    while (zeros-- > 0) {
+        sink_putc(s, '0');
+    }
+
     sink_puts(s, text, (size_t)len);
 
     if (sp->left) {
+        pad = sp->width - len;
         while (pad-- > 0) {
             sink_putc(s, ' ');
         }
     }
 }
 
+/*
+ * The sign of a number, with the minus zero: -0.0 is a number with a
+ * sign, and the C library prints it as "-0.000000".
+ */
+static int is_negative(double value)
+{
+    uint64_t bits = 0;
+
+    memcpy(&bits, &value, sizeof(bits));
+
+    return (bits >> 63) != 0u;
+}
+
+/*
+ * The values that are not numbers: the infinity and the not-a-number of
+ * the hardware. The C library prints them as words; a formatter that
+ * counted the digits of an infinite number would never come back.
+ * Returns the number of the characters, or -1 when the value is a real
+ * number and the caller has to go on.
+ */
+static int special_text(char *out, size_t cap, const struct spec *sp, double value)
+{
+    static const double double_max = 1.7976931348623157e308; /* the biggest double */
+    const char *word;
+    char text[16];
+    int len = 0;
+
+    if (value == value) {
+        /* Not a NaN: the infinity is the only value left. */
+        if (value <= double_max && value >= -double_max) {
+            return -1;
+        }
+        word = "inf";
+    } else {
+        word = "nan";
+    }
+
+    if (value < 0.0) {
+        text[len++] = '-';
+    } else if (sp->plus) {
+        text[len++] = '+';
+    } else if (sp->space) {
+        text[len++] = ' ';
+    }
+
+    memcpy(text + len, word, 3);
+    len += 3;
+    text[len] = '\0';
+
+    if ((size_t)len >= cap) {
+        len = (int)cap - 1;
+    }
+    memcpy(out, text, (size_t)len);
+    out[len] = '\0';
+
+    return len;
+}
+
+/*
+ * The integer part of a number that is too big for the integers of the
+ * machine. The value of a double is exact, and for a number of this size
+ * it is a whole number: it is written out through a small array of
+ * digits, the way a big integer is written out. The text comes without a
+ * sign and without the fraction - the fraction of such a number is zero.
+ */
+#define BIG_WORDS 40 /* 40 groups of nine digits: more than any double */
+
+static int big_integer_text(char *out, size_t cap, double value)
+{
+    uint64_t bits = 0;
+    uint32_t words[BIG_WORDS]; /* the groups, the least significant first */
+    uint64_t mantissa;
+    int count;
+    int shift;
+    int biased;
+    int len = 0;
+    int i;
+
+    memcpy(&bits, &value, sizeof(bits));
+    biased = (int)((bits >> 52) & 0x7FFu);
+    mantissa = (bits & 0xFFFFFFFFFFFFFull) | 0x10000000000000ull; /* the hidden bit */
+    shift = biased - 1023 - 52; /* the value is mantissa * 2^shift */
+
+    /* The mantissa is smaller than 2^53: two groups of nine digits hold it. */
+    words[0] = (uint32_t)(mantissa % 1000000000u);
+    words[1] = (uint32_t)(mantissa / 1000000000u);
+    count = (words[1] != 0) ? 2 : 1;
+
+    for (i = 0; i < shift; i++) {
+        uint32_t carry = 0;
+        int j;
+
+        for (j = 0; j < count; j++) {
+            uint32_t piece = words[j] * 2u + carry;
+
+            words[j] = piece % 1000000000u;
+            carry = piece / 1000000000u;
+        }
+
+        if (carry != 0 && count < BIG_WORDS) {
+            words[count++] = carry;
+        }
+    }
+
+    /* The most significant group, without the zeros in front of it. */
+    {
+        uint32_t top = words[count - 1];
+        char piece[10];
+        int n = 0;
+
+        do {
+            piece[n++] = (char)('0' + (int)(top % 10u));
+            top /= 10u;
+        } while (top != 0 && n < (int)sizeof(piece));
+
+        while (n > 0 && len < (int)cap) {
+            out[len++] = piece[--n];
+        }
+    }
+
+    /* The rest of the groups, always nine digits. */
+    for (i = count - 2; i >= 0; i--) {
+        uint32_t top = words[i];
+        char piece[9];
+        int n = 9;
+
+        while (n > 0) {
+            piece[--n] = (char)('0' + (int)(top % 10u));
+            top /= 10u;
+        }
+
+        n = 0;
+        while (n < 9 && len < (int)cap) {
+            out[len++] = piece[n++];
+        }
+    }
+
+    if (len < (int)cap) {
+        out[len] = '\0';
+    }
+
+    return len;
+}
+
 /* The number with a point: %f. The text goes into the buffer. */
 static int fixed_text(char *out, size_t cap, const struct spec *sp, double value)
 {
     char digits[NUM_BUF];
-    char text[NUM_BUF + 32];
+    char text[FMT_TEXT_MAX];
     int precision = (sp->precision < 0) ? 6 : sp->precision;
     int negative = 0;
     unsigned long long ip;
@@ -315,18 +499,18 @@ static int fixed_text(char *out, size_t cap, const struct spec *sp, double value
     int len = 0;
     int i;
 
-    if (value < 0.0) {
-        negative = 1;
-        value = -value;
+    /* The infinity and the NaN are words, not digits. */
+    {
+        int special = special_text(out, cap, sp, value);
+
+        if (special >= 0) {
+            return special;
+        }
     }
 
-    ip = (unsigned long long)value;
-    fp = value - (double)ip;
-
-    ndigits = fraction_digits(&fp, digits, precision);
-    if (ndigits < 0) {
-        ip++;
-        ndigits = 0;
+    if (is_negative(value)) {
+        negative = 1;
+        value = -value;
     }
 
     if (negative) {
@@ -337,7 +521,30 @@ static int fixed_text(char *out, size_t cap, const struct spec *sp, double value
         text[len++] = ' ';
     }
 
-    len += format_utoa(text + len, ip, 10, 0);
+    if (value >= 18446744073709551616.0) {
+        /* 2^64 and more: the integers of the machine cannot hold it. A
+         * double this big is a whole number: the fraction is zero, and
+         * the space for the point and the fraction is kept. */
+        ndigits = 0;
+        if (precision > 0) {
+            ndigits = (precision < NUM_BUF - 2) ? precision : (NUM_BUF - 2);
+            memset(digits, '0', (size_t)ndigits);
+        }
+
+        len += big_integer_text(text + len,
+                                sizeof(text) - (size_t)len - 1u - (size_t)NUM_BUF, value);
+    } else {
+        ip = (unsigned long long)value;
+        fp = value - (double)ip;
+
+        ndigits = fraction_digits(&fp, digits, precision);
+        if (ndigits < 0) {
+            ip++;
+            ndigits = 0;
+        }
+
+        len += format_utoa(text + len, ip, 10, 0);
+    }
 
     if (precision > 0) {
         text[len++] = '.';
@@ -369,18 +576,30 @@ static int exponent_text(char *out, size_t cap, const struct spec *sp, double va
     int ndigits;
     int len = 0;
     int i;
+    int guard;
 
-    if (value < 0.0) {
+    /* The infinity and the NaN are words, not digits. */
+    {
+        int special = special_text(out, cap, sp, value);
+
+        if (special >= 0) {
+            return special;
+        }
+    }
+
+    if (is_negative(value)) {
         negative = 1;
         value = -value;
     }
 
+    /* The loops are bounded: the value is a real number, but a formatter
+     * must never hang whatever it is given. */
     if (value != 0.0) {
-        while (value >= 10.0) {
+        for (guard = 0; guard < 400 && value >= 10.0; guard++) {
             value /= 10.0;
             exponent++;
         }
-        while (value < 1.0) {
+        for (guard = 0; guard < 400 && value < 1.0 && value != 0.0; guard++) {
             value *= 10.0;
             exponent--;
         }
@@ -456,17 +675,27 @@ static int general_text(char *out, size_t cap, const struct spec *sp, double val
     size_t end;
     size_t last;
     int len;
+    int guard;
+
+    /* The infinity and the NaN are words, not digits. */
+    {
+        int special = special_text(out, cap, sp, value);
+
+        if (special >= 0) {
+            return special;
+        }
+    }
 
     if (precision == 0) {
         precision = 1;
     }
 
     if (abs_value != 0.0) {
-        while (abs_value >= 10.0) {
+        for (guard = 0; guard < 400 && abs_value >= 10.0; guard++) {
             abs_value /= 10.0;
             exponent++;
         }
-        while (abs_value < 1.0) {
+        for (guard = 0; guard < 400 && abs_value < 1.0 && abs_value != 0.0; guard++) {
             abs_value *= 10.0;
             exponent--;
         }
@@ -510,24 +739,28 @@ static int general_text(char *out, size_t cap, const struct spec *sp, double val
     }
 
     if (dot != NULL) {
+        size_t point = (size_t)(dot - text);
+
         last = end;
 
-        while (last > (size_t)(dot - text) + 1 && text[last - 1] == '0') {
+        while (last > point + 1 && text[last - 1] == '0') {
             last--;
-        }
-
-        if (last == (size_t)(dot - text) + 1) {
-            /* Nothing is left after the point: the point goes away. */
-            memmove(dot, dot + 1, end - (size_t)(dot - text) - 1);
-            last--;
-            end--;
         }
 
         if (mark != NULL) {
-            memmove(text + last, mark, (size_t)len - end);
-            len = (int)(last + ((size_t)len - end));
+            size_t tail = (size_t)len - end; /* the exponent and what is after it */
+
+            if (last == point + 1) {
+                /* Nothing is left after the point: the point and the
+                 * fraction go away, the exponent follows the digits. */
+                memmove(text + point, text + end, tail);
+                len = (int)(point + tail);
+            } else {
+                memmove(text + last, text + end, tail);
+                len = (int)(last + tail);
+            }
         } else {
-            len = (int)last;
+            len = (last == point + 1) ? (int)point : (int)last;
         }
     }
 
@@ -542,7 +775,7 @@ static int general_text(char *out, size_t cap, const struct spec *sp, double val
 
 static void put_general(struct sink *s, const struct spec *sp, double value, int upper)
 {
-    char text[NUM_BUF + 32];
+    char text[FMT_TEXT_MAX];
     int len = general_text(text, sizeof(text), sp, value, upper);
 
     emit_text(s, sp, text, len);
@@ -663,7 +896,7 @@ static int format(struct sink *s, const char *fmt, va_list ap)
                 sp.length = (sp.length == 1) ? 2 : 1;
                 p++;
             } else if (*p == 'h') {
-                sp.length = 4;
+                sp.length = (sp.length == 4) ? 5 : 4;
                 p++;
             } else if (*p == 'z' || *p == 'j' || *p == 't') {
                 sp.length = 3;
@@ -688,6 +921,10 @@ static int format(struct sink *s, const char *fmt, va_list ap)
                 value = va_arg(ap, long long);
             } else if (sp.length == 1 || sp.length == 3) {
                 value = va_arg(ap, long);
+            } else if (sp.length == 4) {
+                value = (short)va_arg(ap, int); /* %hd */
+            } else if (sp.length == 5) {
+                value = (signed char)va_arg(ap, int); /* %hhd */
             } else {
                 value = va_arg(ap, int);
             }
@@ -709,6 +946,10 @@ static int format(struct sink *s, const char *fmt, va_list ap)
                 value = va_arg(ap, unsigned long long);
             } else if (sp.length == 1 || sp.length == 3) {
                 value = va_arg(ap, unsigned long);
+            } else if (sp.length == 4) {
+                value = (unsigned short)va_arg(ap, unsigned int); /* %hu */
+            } else if (sp.length == 5) {
+                value = (unsigned char)va_arg(ap, unsigned int); /* %hhu */
             } else {
                 value = va_arg(ap, unsigned int);
             }
@@ -747,7 +988,7 @@ static int format(struct sink *s, const char *fmt, va_list ap)
         }
         case 'f':
         case 'F': {
-            char text[NUM_BUF + 32];
+            char text[FMT_TEXT_MAX];
             int len = fixed_text(text, sizeof(text), &sp, va_arg(ap, double));
 
             emit_text(s, &sp, text, len);
@@ -755,7 +996,7 @@ static int format(struct sink *s, const char *fmt, va_list ap)
         }
         case 'e':
         case 'E': {
-            char text[NUM_BUF + 32];
+            char text[FMT_TEXT_MAX];
             int len = exponent_text(text, sizeof(text), &sp, va_arg(ap, double), conv == 'E');
 
             emit_text(s, &sp, text, len);

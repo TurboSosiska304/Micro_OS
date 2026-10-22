@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "libc/stdlib.h"
+#include "libc/unistd.h"
 #include "kernel/kmod.h"
 #include "kernel/ksys.h"
 #include "kernel/console.h"
@@ -53,6 +55,12 @@ int kshell_register(const char *name, const char *help, kshell_cmd_fn fn)
     }
 
     if (g_command_count >= KSHELL_MAX_COMMANDS) {
+        /*
+         * The table is full: it has to be visible, because a command that
+         * is not registered answers "command not found" without saying
+         * why.
+         */
+        kerror("kshell: the table of the commands is full, '%s' is not registered", name);
         return KSHELL_ERROR;
     }
 
@@ -294,16 +302,38 @@ static int cmd_echo(int argc, char **argv)
     return KSHELL_OK;
 }
 
+/* The longest sleep of the shell: the console belongs to the person. */
+#define SLEEP_MAX_MS 60000u
+
 static int cmd_sleep(int argc, char **argv)
 {
     unsigned long ms;
+    char *end = NULL;
 
     if (argc < 2) {
         kshell_printf("usage: sleep <milliseconds>\n");
         return KSHELL_USAGE;
     }
 
-    ms = strtoul(argv[1], NULL, 10);
+    /* The text has to be a whole number, not the beginning of one. */
+    ms = microos_strtoul(argv[1], &end, 10);
+
+    if (end == argv[1] || (end != NULL && *end != '\0') ||
+        microos_errno() == MICROOS_ERANGE) {
+        kshell_printf("sleep: %s: not a number of milliseconds\n", argv[1]);
+        return KSHELL_USAGE;
+    }
+
+    /*
+     * The shell does not disappear for weeks: the sleep of a human is
+     * short, and the console has to come back.
+     */
+    if (ms > (unsigned long)SLEEP_MAX_MS) {
+        kshell_printf("sleep: %lu ms is too much, slept %u ms\n", ms,
+                      (unsigned)SLEEP_MAX_MS);
+        ms = SLEEP_MAX_MS;
+    }
+
     k_sched_sleep_ms((k_u32_t)ms);
     kshell_printf("slept %lu ms\n", ms);
 
@@ -421,22 +451,38 @@ int kshell_init(void)
  * Read a line from the console. Every character is repeated right away, so
  * that the person at the keyboard sees what is being typed. The backspace
  * erases the last character.
+ * A line that did not fit into the buffer is not returned for execution:
+ * it is a different command, and a different command deletes a different
+ * file.
  */
+#define LINE_TOO_LONG (-2)
+
+
 static int shell_read_line(char *buf, k_size_t size)
 {
     k_size_t len = 0;
+    bool cut = false;
 
     for (;;) {
         int c = k_port_console_getchar();
 
         if (c < 0) {
             buf[len] = '\0';
+            if (cut) {
+                kshell_printf("line too long, it was not executed\n");
+                return LINE_TOO_LONG;
+            }
             return (len > 0) ? (int)len : -1;
         }
 
         if (c == '\n' || c == '\r') {
             k_console_write("\r\n", 2);
             buf[len] = '\0';
+            if (cut) {
+                /* A cut line is a different command: it is thrown away. */
+                kshell_printf("line too long, it was not executed\n");
+                return LINE_TOO_LONG;
+            }
             return (int)len;
         }
 
@@ -451,12 +497,17 @@ static int shell_read_line(char *buf, k_size_t size)
         if (c == 3) { /* Ctrl+C: the line is thrown away */
             k_console_write("^C\r\n", 4);
             len = 0;
+            cut = false;
             continue;
         }
 
         if (len + 1 < size) {
             buf[len++] = (char)c;
             k_console_write(&buf[len - 1], 1);
+        } else {
+            /* The character does not fit: from here on the line is not
+             * the line any more, and it must not be executed. */
+            cut = true;
         }
     }
 }
@@ -464,18 +515,31 @@ static int shell_read_line(char *buf, k_size_t size)
 void kshell_run(void)
 {
     char line[KSHELL_LINE_MAX];
+    int rc;
 
-    kshell_init();
+    rc = kshell_init();
+    if (rc != 0) {
+        /* A command of the shell is not there: say it at once. */
+        kshell_printf("the shell: %d command(s) could not be registered\n", -rc);
+    }
 
     kshell_printf("%s shell ready. Type 'help' for the list of commands.\n", kernel_name());
 
     for (;;) {
+        int read_rc;
+
         kshell_printf("microos> ");
 
-        if (shell_read_line(line, sizeof(line)) < 0) {
+        read_rc = shell_read_line(line, sizeof(line));
+
+        if (read_rc == -1) {
             /* The console is closed (end of the input). */
             kshell_printf("\n");
             break;
+        }
+
+        if (read_rc == LINE_TOO_LONG) {
+            continue; /* the line was thrown away, the prompt comes back */
         }
 
         kshell_execute(line);

@@ -44,9 +44,21 @@ void microos_exit(int code);
 /* The code of the last error, the numbers of POSIX. */
 int microos_errno(void);
 
+/*
+ * Remember the code of the last error. The library of the system sets
+ * errno this way, and a program that checks it after a call of the
+ * library sees the number of POSIX.
+ */
+void microos_set_errno(int code);
+
 /* The text of an error code, the texts of POSIX. */
 const char *microos_strerror(int code);
 
+/*
+ * The mode of open (the third argument of POSIX) is accepted and
+ * ignored: the filesystem of the board has no rights yet. The access
+ * alone has to be a real one, 3 is not a mode.
+ */
 #define open microos_open
 #define close microos_close
 #define read microos_read

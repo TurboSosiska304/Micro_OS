@@ -20,6 +20,7 @@
 #define KERR_IO (-5)     /* input/output error */
 #define KERR_TOOBIG (-7) /* argument list too long */
 #define KERR_BADF (-9)   /* bad file descriptor */
+#define KERR_NOMEM (-12) /* out of memory */
 #define KERR_AGAIN (-11) /* try again later */
 #define KERR_NOSYS (-38) /* the system call does not exist */
 #define KERR_NOTDIR (-20)

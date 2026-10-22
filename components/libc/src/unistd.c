@@ -18,6 +18,11 @@ int microos_errno(void)
     return g_errno;
 }
 
+void microos_set_errno(int code)
+{
+    g_errno = (code > 0) ? code : -code;
+}
+
 /* Turn the negative result of a call into the -1 of POSIX. */
 static int fail(int rc)
 {
@@ -102,6 +107,17 @@ int microos_open(const char *path, int flags, ...)
         return fail(KERR_INVAL);
     }
 
+    /* The access of POSIX is two bits: 3 is not a mode. */
+    if ((flags & 3) == 3) {
+        return fail(KERR_INVAL);
+    }
+
+    /*
+     * The mode, when the caller gives one, stays in the register it was
+     * passed in: the ABI keeps the third argument of open for it, and the
+     * filesystem does not use it yet. It is not read here, because a
+     * caller may not have passed it at all.
+     */
     rc = ksys_open(path, map_flags(flags));
     if (rc < 0) {
         return fail(rc);
