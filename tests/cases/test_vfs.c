@@ -3,6 +3,7 @@
 
 #include <string.h>
 
+#include "kernel/errno.h"
 #include "kernel/vfs.h"
 #include "mfs/mfs.h"
 #include "mfs/mfs_ram_device.h"
@@ -104,6 +105,17 @@ static void test_directories(void)
     KT_CHECK_INT_EQ(vfs_unlink("/etc"), 0);
     KT_CHECK_INT_EQ(vfs_list("/", entries, 16, &count), 0);
     KT_CHECK_INT_EQ(count, 0);
+
+    /*
+     * The codes of the errors of the filesystem are translated into the
+     * codes of the contract of the system calls at the adapter. The two
+     * sets are close but not the same: "the directory is not empty" is
+     * -39 of the kernel, and -9 of the kernel is a "bad file descriptor".
+     */
+    KT_CHECK_INT_EQ(vfs_mkdir("/full"), 0);
+    KT_CHECK_INT_EQ(mfs_create("/full/file.txt"), MFS_OK);
+    KT_CHECK_INT_EQ(vfs_unlink("/full"), KERR_NOTEMPTY);
+    KT_CHECK_INT_EQ(vfs_unlink("/nothing-here"), KERR_NOENT);
 
     teardown();
 }
