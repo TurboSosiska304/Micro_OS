@@ -59,8 +59,23 @@ int main(void)
         return 1;
     }
 
-    while (!g_done) {
-        usleep(1000);
+    /*
+     * A run that does not end is a failed run: the runner stops itself
+     * instead of leaving the CI to wait forever.
+     */
+    {
+        const useconds_t limit = 120u * 1000u * 1000u;
+        useconds_t waited = 0;
+
+        while (!g_done && waited < limit) {
+            usleep(1000);
+            waited += 1000;
+        }
+
+        if (!g_done) {
+            printf("\nthe tests did not end in %u second(s), stopping\n", 120u);
+            g_result = 2;
+        }
     }
 
     port_host_stop_tick();

@@ -12,6 +12,11 @@
  * Redirect all kernel output to the given stream (NULL restores stdout).
  * Used by the unit tests to capture log output.
  */
+/*
+ * Where the console of the board goes. The sink that is given belongs to
+ * the port: it is closed when another one is put in its place, and NULL
+ * sends the output to the console of the process again.
+ */
 void port_host_set_sink(FILE *sink);
 FILE *port_host_get_sink(void);
 

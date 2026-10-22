@@ -105,6 +105,16 @@ struct mfs_dirent_header {
     k_u8_t reserved;
 };
 
+/*
+ * The layout of these structures is the layout of the volume: the fields
+ * are whole words and the records have the same size on every processor
+ * the system runs on. A change of one of them is a change of the format
+ * of the volume, and the checks below make it a conscious one.
+ */
+_Static_assert(sizeof(struct mfs_superblock) == 52, "the header of the volume changed");
+_Static_assert(sizeof(struct mfs_inode) == 16, "a record of the table of the inodes changed");
+_Static_assert(sizeof(struct mfs_dirent_header) == 8, "an entry of a directory changed");
+
 /* One entry of a directory, as the caller sees it. */
 struct mfs_dirent {
     k_u32_t inode;
@@ -147,6 +157,12 @@ int mfs_format(struct mfs_device *dev, k_u32_t max_records);
 int mfs_mount(struct mfs_device *dev);
 
 /* Unmount the volume. */
+/*
+ * Forget the volume. What was written reaches the flash first, so the
+ * volume is the same when it is mounted again. Every file that was opened
+ * has to be closed before this is called: the filesystem keeps no table
+ * of the open files.
+ */
 void mfs_unmount(void);
 
 /*

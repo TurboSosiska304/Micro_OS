@@ -3,6 +3,9 @@
 #include <string.h>
 
 #include "kernel/log.h"
+#include "kernel/port.h"
+#include "kernel/sched.h"
+#include "kernel/task.h"
 
 /*
  * The state of the mounted volume. The filesystem is a singleton: one
@@ -24,6 +27,78 @@ static struct {
  * The end of the chain is marked with MFS_NEXT_NONE, so that a file can grow
  * without the blocks being continuous.
  */
+/*
+ * The lock of the filesystem.
+ *
+ * The volume is one piece of state: the map of the free blocks, the table
+ * of the inodes and the cache of the sector of the header all describe the
+ * same storage. Two tasks that work with it at the same time would give
+ * the same block to two files, or write half of the state of the other.
+ *
+ * The kernel has no blocking primitive yet, so a task that has to wait
+ * sleeps a millisecond and looks again: the CPU goes to the task that
+ * holds the lock, and the wait is bounded by the work of that task.
+ */
+static struct task *s_lock_owner;
+static k_u32_t s_lock_depth;
+
+static void mfs_lock(void)
+{
+    struct task *self = task_self();
+
+    /*
+     * Before the first task exists (the boot) there is nobody to compete
+     * with, and there is no task to wait as either.
+     */
+    if (self == NULL) {
+        return;
+    }
+
+    for (;;) {
+        bool taken = false;
+
+        k_port_enter_critical();
+
+        if (s_lock_owner == NULL) {
+            s_lock_owner = self;
+            s_lock_depth = 1;
+            taken = true;
+        } else if (s_lock_owner == self) {
+            /* The lock is recursive: the functions call each other. */
+            s_lock_depth++;
+            taken = true;
+        }
+
+        k_port_exit_critical();
+
+        if (taken) {
+            return;
+        }
+
+        k_sched_sleep_ms(1);
+    }
+}
+
+static void mfs_unlock(void)
+{
+    struct task *self = task_self();
+
+    if (self == NULL) {
+        return;
+    }
+
+    k_port_enter_critical();
+
+    if (s_lock_owner == self) {
+        s_lock_depth--;
+        if (s_lock_depth == 0) {
+            s_lock_owner = NULL;
+        }
+    }
+
+    k_port_exit_critical();
+}
+
 #define MFS_NEXT_NONE 0xFFFFFFFFu
 #define MFS_BLOCK_DATA (MFS_BLOCK_SIZE - 4)
 
@@ -807,7 +882,7 @@ static int path_parent(const char *path, char *dir, k_size_t dir_size, char *nam
 
 /* --- the public interface --- */
 
-int mfs_format(struct mfs_device *dev, k_u32_t max_records)
+static int mfs_format_locked(struct mfs_device *dev, k_u32_t max_records)
 {
     struct mfs_superblock sb;
     struct mfs_inode inode;
@@ -1003,7 +1078,7 @@ int mfs_format(struct mfs_device *dev, k_u32_t max_records)
     return MFS_OK;
 }
 
-int mfs_mount(struct mfs_device *dev)
+static int mfs_mount_locked(struct mfs_device *dev)
 {
     struct mfs_superblock sb;
     int rc;
@@ -1088,12 +1163,25 @@ int mfs_mount(struct mfs_device *dev)
     return MFS_OK;
 }
 
-void mfs_unmount(void)
+static int mfs_sync_locked(void);
+
+static void mfs_unmount_locked(void)
 {
+    /*
+     * The changes that are only in the memory have to reach the flash
+     * before the volume is forgotten: an unmounted volume that comes back
+     * would show the state of an earlier moment. The files themselves are
+     * closed by the one that opened them - the filesystem keeps no table
+     * of the open files.
+     */
+    if (g.mounted) {
+        (void)mfs_sync_locked();
+    }
+
     memset(&g, 0, sizeof(g));
 }
 
-int mfs_sync(void)
+static int mfs_sync_locked(void)
 {
     int rc;
 
@@ -1123,7 +1211,7 @@ bool mfs_is_mounted(void)
     return g.mounted;
 }
 
-int mfs_get_info(struct mfs_info *out)
+static int mfs_get_info_locked(struct mfs_info *out)
 {
     k_u32_t i;
     k_u32_t free_blocks = 0;
@@ -1211,7 +1299,7 @@ static int add_to_parent(const char *dir_path, const char *name, k_u32_t inode, 
     return inode_write(dir_inode, &parent);
 }
 
-int mfs_mkdir(const char *path)
+static int mfs_mkdir_locked(const char *path)
 {
     char dir_path[MFS_PATH_MAX];
     char name[MFS_NAME_MAX + 1];
@@ -1291,7 +1379,7 @@ int mfs_mkdir(const char *path)
     return mfs_sync();
 }
 
-int mfs_create(const char *path)
+static int mfs_create_locked(const char *path)
 {
     char dir_path[MFS_PATH_MAX];
     char name[MFS_NAME_MAX + 1];
@@ -1335,7 +1423,7 @@ int mfs_create(const char *path)
     return mfs_sync();
 }
 
-int mfs_open(const char *path, int flags, struct mfs_file *out)
+static int mfs_open_locked(const char *path, int flags, struct mfs_file *out)
 {
     struct mfs_inode inode;
     struct mfs_dirent entry;
@@ -1390,19 +1478,31 @@ int mfs_open(const char *path, int flags, struct mfs_file *out)
     out->inode = entry.inode;
     out->first_block = inode.first_block;
     out->size = inode.size;
-    out->offset = 0;
+    /*
+     * A file that was opened with "append" starts at its end: everything
+     * written to it is added to what is already there.
+     */
+    out->offset = ((flags & MFS_O_APPEND) != 0) ? inode.size : 0;
     out->flags = flags;
 
     return MFS_OK;
 }
 
-int mfs_read(struct mfs_file *file, void *buf, k_size_t size)
+static int mfs_read_locked(struct mfs_file *file, void *buf, k_size_t size)
 {
     k_u8_t *out = (k_u8_t *)buf;
     k_size_t done = 0;
     int rc;
 
     if (file == NULL || buf == NULL) {
+        return MFS_EINVAL;
+    }
+
+    /*
+     * The descriptor says what the file was opened for: a file that was
+     * opened to be written to cannot be read from.
+     */
+    if ((file->flags & 0x3) == MFS_O_WRONLY) {
         return MFS_EINVAL;
     }
 
@@ -1495,7 +1595,7 @@ static int file_grow(struct mfs_file *file, k_u32_t *new_block)
     return MFS_OK;
 }
 
-int mfs_write(struct mfs_file *file, const void *buf, k_size_t size)
+static int mfs_write_locked(struct mfs_file *file, const void *buf, k_size_t size)
 {
     const k_u8_t *in = (const k_u8_t *)buf;
     k_size_t done = 0;
@@ -1508,6 +1608,15 @@ int mfs_write(struct mfs_file *file, const void *buf, k_size_t size)
 
     if ((file->flags & (MFS_O_WRONLY | MFS_O_RDWR)) == 0) {
         return MFS_EINVAL;
+    }
+
+    /*
+     * A file that was opened with "append" is written to its end every
+     * time: the position of the descriptor does not decide where the data
+     * goes.
+     */
+    if ((file->flags & MFS_O_APPEND) != 0) {
+        file->offset = file->size;
     }
 
     /* The file has to have enough blocks for the whole write. */
@@ -1593,7 +1702,7 @@ int mfs_write(struct mfs_file *file, const void *buf, k_size_t size)
     return (int)done;
 }
 
-int mfs_close(struct mfs_file *file)
+static int mfs_close_locked(struct mfs_file *file)
 {
     struct mfs_inode inode;
     int rc;
@@ -1620,7 +1729,7 @@ int mfs_close(struct mfs_file *file)
     return mfs_sync();
 }
 
-int mfs_unlink(const char *path)
+static int mfs_unlink_locked(const char *path)
 {
     char dir_path[MFS_PATH_MAX];
     char name[MFS_NAME_MAX + 1];
@@ -1715,7 +1824,7 @@ int mfs_unlink(const char *path)
     return mfs_sync();
 }
 
-int mfs_stat(const char *path, struct mfs_inode *out, struct mfs_dirent *dirent)
+static int mfs_stat_locked(const char *path, struct mfs_inode *out, struct mfs_dirent *dirent)
 {
     struct mfs_inode inode;
     int rc;
@@ -1736,7 +1845,7 @@ int mfs_stat(const char *path, struct mfs_inode *out, struct mfs_dirent *dirent)
     return MFS_OK;
 }
 
-int mfs_list(const char *path, struct mfs_dirent *out, k_size_t max)
+static int mfs_list_locked(const char *path, struct mfs_dirent *out, k_size_t max)
 {
     struct mfs_inode inode;
     struct dir_buffer *dir = &g_dir_buffer;
@@ -1762,6 +1871,161 @@ int mfs_list(const char *path, struct mfs_dirent *out, k_size_t max)
     }
 
     return dir_entries(dir, out, max, &count);
+}
+
+/*
+ * The public functions of the filesystem hold the lock of the volume
+ * for the whole of their work: the volume is one piece of state and
+ * two tasks that touch it together corrupt it.
+ */
+int mfs_format(struct mfs_device *dev, k_u32_t max_records)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_format_locked(dev, max_records);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_mount(struct mfs_device *dev)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_mount_locked(dev);
+    mfs_unlock();
+
+    return rc;
+}
+
+void mfs_unmount(void)
+{
+    mfs_lock();
+    mfs_unmount_locked();
+    mfs_unlock();
+}
+
+int mfs_sync(void)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_sync_locked();
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_get_info(struct mfs_info *out)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_get_info_locked(out);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_mkdir(const char *path)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_mkdir_locked(path);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_create(const char *path)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_create_locked(path);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_open(const char *path, int flags, struct mfs_file *out)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_open_locked(path, flags, out);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_read(struct mfs_file *file, void *buf, k_size_t size)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_read_locked(file, buf, size);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_write(struct mfs_file *file, const void *buf, k_size_t size)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_write_locked(file, buf, size);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_close(struct mfs_file *file)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_close_locked(file);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_unlink(const char *path)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_unlink_locked(path);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_stat(const char *path, struct mfs_inode *out, struct mfs_dirent *dirent)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_stat_locked(path, out, dirent);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_list(const char *path, struct mfs_dirent *out, k_size_t max)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_list_locked(path, out, max);
+    mfs_unlock();
+
+    return rc;
 }
 
 const char *mfs_strerror(int error)

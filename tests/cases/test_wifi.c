@@ -10,6 +10,7 @@
 
 #include <string.h>
 
+#include "kernel/sched.h"
 #include "wifi/wifi.h"
 
 /* --- the fake radio --- */
@@ -373,6 +374,53 @@ static void test_the_format(void)
     KT_CHECK(strstr(buf, "locked") != NULL);
 }
 
+/*
+ * The property: a network that goes away is asked for again by itself (the
+ * router was rebooted), the attempts are few and further apart every time,
+ * and a station that was told to leave stays where it is.
+ */
+static void test_the_reconnection(void)
+{
+    k_u32_t first;
+    k_u32_t second;
+
+    ktest_begin("wifi: the station comes back to the network by itself");
+
+    reset_fake();
+
+    KT_CHECK_INT_EQ(wifi_start(), WIFI_OK);
+    KT_CHECK_INT_EQ(wifi_connect("home", "secret"), WIFI_OK);
+
+    /* The network is up, and then the router is rebooted. */
+    wifi_notify(WIFI_EVT_CONNECTED, 0);
+    wifi_notify(WIFI_EVT_DISCONNECTED, 0);
+
+    first = wifi_reconnect_after_ms();
+    KT_CHECK(first > 0);
+
+    /* One attempt is planned at a time: the next event adds nothing. */
+    KT_CHECK_INT_EQ((int)wifi_reconnect_after_ms(), 0);
+
+    /*
+     * The wait grows with every attempt: the second wait is longer than
+     * the first. The test sleeps a little longer than the first one.
+     */
+    k_sched_sleep_ms(first + 100u);
+    second = wifi_reconnect_after_ms();
+    KT_CHECK(second > first);
+
+    /* A connection asked for by hand starts the count of the attempts again. */
+    KT_CHECK_INT_EQ(wifi_connect("home", "secret"), WIFI_OK);
+    wifi_notify(WIFI_EVT_CONNECTED, 0);
+    wifi_notify(WIFI_EVT_DISCONNECTED, 0);
+    KT_CHECK_INT_EQ((int)wifi_reconnect_after_ms(), (int)first);
+
+    /* A station that was told to leave does not come back by itself. */
+    KT_CHECK_INT_EQ(wifi_disconnect(), WIFI_OK);
+    wifi_notify(WIFI_EVT_DISCONNECTED, 0);
+    KT_CHECK_INT_EQ((int)wifi_reconnect_after_ms(), 0);
+}
+
 void test_wifi(void)
 {
     test_the_states();
@@ -381,4 +429,5 @@ void test_wifi(void)
     test_the_configuration();
     test_the_scan();
     test_the_format();
+    test_the_reconnection();
 }

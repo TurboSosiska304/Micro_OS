@@ -10,7 +10,12 @@
 #include "kernel/errno.h"
 #include "kernel/ksys.h"
 
-static int g_errno;
+/*
+ * The code of the last error belongs to the task that made the call: two
+ * tasks that use the library at the same time must not read each other's
+ * error. The standard says the same about errno (C11 7.5).
+ */
+static _Thread_local int g_errno;
 
 /* The code of the last error. The numbers are the numbers of POSIX. */
 int microos_errno(void)

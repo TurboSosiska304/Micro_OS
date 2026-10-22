@@ -7,3 +7,8 @@ idf_component_register(
     INCLUDE_DIRS "include"
     REQUIRES kernel esp_timer freertos esp_driver_uart vfs
 )
+
+    # The discipline of the host build: the sources of the project are
+    # compiled with the extra warnings, so a mistake is a message at
+    # build time and not a fault on the board.
+    target_compile_options(${COMPONENT_LIB} PRIVATE -Wextra)

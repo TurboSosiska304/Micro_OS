@@ -28,8 +28,11 @@ static void test_log_levels(void)
     KT_CHECK_INT_EQ(klog_get_level(), K_LOG_LEVEL_WARN);
     KT_CHECK_INT_EQ(klog_line_count(), 2);
 
+    /*
+     * The sink belongs to the port from the moment it is given: it is
+     * closed when it is replaced.
+     */
     port_host_set_sink(NULL);
-    fclose(sink);
 }
 
 static void test_log_ring(void)

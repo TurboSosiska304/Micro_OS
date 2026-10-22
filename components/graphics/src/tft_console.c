@@ -3,6 +3,14 @@
  *
  * The output of the shell is mirrored to the screen: the last lines of the
  * dialogue are shown, the text is written with the small font of the board.
+ *
+ * The task that prints does not draw. It writes the lines down and says
+ * that the screen is out of date, and one task of its own, of a low
+ * priority, brings the screen up to date at most ten times a second. A
+ * listing of fifty lines is one redraw instead of fifty, and the board
+ * does not stand still in the middle of the dialogue: redrawing after
+ * every line costs a clear of the panel and a flush of its whole memory
+ * (64 KB over the SPI) per line.
  */
 #include "graphics/tft_console.h"
 
@@ -11,14 +19,23 @@
 #include <string.h>
 
 #include "drivers/display.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "graphics/font.h"
-#include "drivers/display.h"
 #include "kernel/log.h"
+#include "kernel/sched.h"
+#include "kernel/task.h"
 #include "kshell/kshell.h"
 
 #define TFT_COLUMNS ((DISPLAY_WIDTH / (FONT_WIDTH + 1)))
 #define TFT_ROWS ((DISPLAY_HEIGHT / (FONT_HEIGHT + 2)))
 #define TFT_LINE_MAX (TFT_COLUMNS + 1)
+
+/* The screen is brought up to date at most ten times a second. */
+#define TFT_FLUSH_MS 100
+
+/* The priority of the task that draws: the task that prints comes first. */
+#define TFT_FLUSH_PRIO 3
 
 /* The lines of the dialogue, the oldest is overwritten. */
 static char s_lines[TFT_ROWS][TFT_LINE_MAX];
@@ -27,34 +44,58 @@ static int s_cursor;
 static char s_current[TFT_LINE_MAX];
 static bool s_started;
 
-static void draw(void);
+/*
+ * The lines are written by the task that prints and read by the task that
+ * draws: the two of them never hold the same line at the same time.
+ */
+static SemaphoreHandle_t s_lock;
 
-void tft_console_redraw(void)
+/* The screen shows something older than the lines that were written. */
+static volatile bool s_dirty;
+
+static void console_lock(void)
 {
-    draw();
+    if (s_lock != NULL) {
+        (void)xSemaphoreTakeRecursive(s_lock, portMAX_DELAY);
+    }
 }
 
+static void console_unlock(void)
+{
+    if (s_lock != NULL) {
+        (void)xSemaphoreGiveRecursive(s_lock);
+    }
+}
+
+/* The caller holds the lock of the console. */
 static void draw(void)
 {
     int row;
-    int column;
 
     drv_display_clear(0x0000);
 
     for (row = 0; row < s_line_count; row++) {
-        const char *text = s_lines[row];
-
-        drv_display_text(0, row * (FONT_HEIGHT + 2), text, 0xFFFF);
+        drv_display_text(0, row * (FONT_HEIGHT + 2), s_lines[row], 0xFFFF);
     }
 
     /* The line that is being written. */
     drv_display_text(0, s_line_count * (FONT_HEIGHT + 2), s_current, 0x07E0);
 
-    (void)column;
-    drv_display_flush();
+    (void)drv_display_flush();
 }
 
-/* Copy a line into the buffer, the rest is filled up. */
+void tft_console_redraw(void)
+{
+    /*
+     * The drawing is done by the task that owns the screen: this only
+     * says that what is on the screen is older than the lines.
+     */
+    s_dirty = true;
+}
+
+/*
+ * Copy a line into the buffer, the rest is filled up.
+ */
 static void copy_line(char *dst, const char *text)
 {
     int i;
@@ -65,6 +106,7 @@ static void copy_line(char *dst, const char *text)
     dst[TFT_COLUMNS] = '\0';
 }
 
+/* The caller holds the lock of the console. */
 static void push_line(const char *text)
 {
     if (s_line_count < TFT_ROWS) {
@@ -80,18 +122,69 @@ static void push_line(const char *text)
     copy_line(s_lines[s_line_count - 1], text);
 }
 
+/*
+ * The task that brings the screen up to date. It sleeps most of its life
+ * and only looks at the screen when the printing has said that it is out
+ * of date.
+ */
+static void flush_task(void *arg)
+{
+    K_UNUSED(arg);
+
+    for (;;) {
+        k_sched_sleep_ms(TFT_FLUSH_MS);
+
+        if (!s_started || !s_dirty) {
+            continue;
+        }
+
+        console_lock();
+        draw();
+        s_dirty = false;
+        console_unlock();
+    }
+}
+
 void tft_console_start(void)
 {
+    if (s_lock == NULL) {
+        s_lock = xSemaphoreCreateRecursiveMutex();
+        if (s_lock == NULL) {
+            kerror("display: the lock of the console cannot be made");
+            return;
+        }
+    }
+
+    console_lock();
+
     memset(s_lines, 0, sizeof(s_lines));
     s_line_count = 0;
     s_cursor = 0;
     s_current[0] = '\0';
+    s_started = true;
 
+    console_unlock();
+
+    /* The panel shows the name of the system at once. */
+    console_lock();
     drv_display_clear(0x0000);
     drv_display_text(0, 0, "MICRO OS", 0x07E0);
-    drv_display_flush();
+    (void)drv_display_flush();
+    console_unlock();
 
-    s_started = true;
+    s_dirty = false;
+
+    /*
+     * The task that draws. There is only one, and it is only made once:
+     * the console of the board is a singleton, like the board.
+     */
+    if (task_self() != NULL) {
+        struct task *task = task_create("tft-flush", flush_task, NULL, TFT_FLUSH_PRIO);
+
+        if (task == NULL) {
+            kerror("display: the task that draws the console cannot be made");
+        }
+    }
 }
 
 /*
@@ -132,6 +225,8 @@ void tft_console_write(const char *data, k_size_t len)
         return;
     }
 
+    console_lock();
+
     for (i = 0; i < len; i++) {
         char c = data[i];
 
@@ -140,7 +235,6 @@ void tft_console_write(const char *data, k_size_t len)
             push_line(s_current);
             s_cursor = 0;
             s_current[0] = '\0';
-            draw();
             continue;
         }
 
@@ -155,4 +249,9 @@ void tft_console_write(const char *data, k_size_t len)
             s_current[s_cursor] = '\0';
         }
     }
+
+    console_unlock();
+
+    /* The lines moved: the task that draws will bring the screen up to date. */
+    s_dirty = true;
 }

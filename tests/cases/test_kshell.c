@@ -71,6 +71,23 @@ static void test_registry(void)
     KT_CHECK_INT_EQ(kshell_unregister("testcmd"), KSHELL_OK);
     KT_CHECK(kshell_execute("testcmd") != KSHELL_OK);
 
+    /*
+     * The table of the commands has a limited number of places, and a
+     * command that does not fit is lost: the board lost "mount" and "df"
+     * that way, without a word. The one that registers the commands says
+     * when one of them was refused, and the test says how many commands
+     * the board really has.
+     */
+    KT_CHECK_INT_EQ(kshell_register_files(), 0);
+
+    /*
+     * The board has more commands than the tests can see here: the
+     * drivers bring their own ("date", "i2c", "wifi", "display", "mkfs")
+     * and those are only on the board. The twenty two commands of the
+     * shell itself have to be here, all of them.
+     */
+    KT_CHECK(kshell_command_count() >= 22);
+
     port_host_set_sink(NULL);
 }
 

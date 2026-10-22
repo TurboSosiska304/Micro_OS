@@ -37,6 +37,8 @@ static int s_offset_y = LCD_Y_OFFSET;
 #include "drivers/internal.h"
 #include "graphics/font.h"
 #include "kernel/kmod.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "kernel/log.h"
 
 #define LCD_SPI_HOST SPI2_HOST
@@ -49,6 +51,30 @@ static int s_offset_y = LCD_Y_OFFSET;
 static uint16_t *s_fb;
 static spi_device_handle_t s_dev;
 static bool s_initialised;
+
+/*
+ * The panel is one piece of hardware: the command, the data, the window
+ * and the pixels are a sequence that no other task may step into the
+ * middle of. A second task that writes its own pixels in the middle of a
+ * flush changes the meaning of the commands on the wire and the panel
+ * shows a picture that was never drawn. The lock is recursive because the
+ * functions of the panel call each other.
+ */
+static SemaphoreHandle_t s_lock;
+
+static void display_lock(void)
+{
+    if (s_lock != NULL) {
+        (void)xSemaphoreTakeRecursive(s_lock, portMAX_DELAY);
+    }
+}
+
+static void display_unlock(void)
+{
+    if (s_lock != NULL) {
+        (void)xSemaphoreGiveRecursive(s_lock);
+    }
+}
 
 /*
  * The SPI DMA of the ESP32 cannot read from the PSRAM, so the framebuffer is
@@ -244,6 +270,18 @@ static int drv_display_init(void)
         .mode = GPIO_MODE_OUTPUT,
     };
 
+    /*
+     * The lock of the panel exists before anything is written to it: the
+     * console of the board and the commands of the shell both draw.
+     */
+    if (s_lock == NULL) {
+        s_lock = xSemaphoreCreateRecursiveMutex();
+        if (s_lock == NULL) {
+            kerror("display: the lock of the panel cannot be made");
+            return -1;
+        }
+    }
+
     if (gpio_config(&outputs) != ESP_OK) {
         kerror("display: cannot configure the GPIOs");
         return -1;
@@ -342,9 +380,13 @@ int drv_display_clear(uint16_t color)
         return -1;
     }
 
+    display_lock();
+
     for (i = 0; i < count; i++) {
         s_fb[i] = color;
     }
+
+    display_unlock();
 
     return 0;
 }
@@ -356,6 +398,8 @@ int drv_display_text(int x, int y, const char *text, uint16_t color)
     if (s_fb == NULL || text == NULL) {
         return -1;
     }
+
+    display_lock();
 
     while (*text != '\0') {
         const uint8_t *glyph = font_glyph(*text);
@@ -389,6 +433,8 @@ int drv_display_text(int x, int y, const char *text, uint16_t color)
         text++;
     }
 
+    display_unlock();
+
     return 0;
 }
 
@@ -398,23 +444,36 @@ int drv_display_flush(void)
         return -1;
     }
 
+    /*
+     * The whole transfer is one hold of the lock: the window and the
+     * pixels that follow it belong together, and the offset of the image
+     * must not change in the middle of the two.
+     */
+    display_lock();
     lcd_flush();
+    display_unlock();
 
     return 0;
 }
 
 void drv_display_set_offset(int x, int y)
 {
+    display_lock();
     s_offset_x = x;
     s_offset_y = y;
+    display_unlock();
 }
 
 void drv_display_get_offset(int *x, int *y)
 {
+    display_lock();
+
     if (x != NULL) {
         *x = s_offset_x;
     }
     if (y != NULL) {
         *y = s_offset_y;
     }
+
+    display_unlock();
 }

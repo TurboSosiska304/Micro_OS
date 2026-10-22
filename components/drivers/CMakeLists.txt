@@ -20,6 +20,11 @@ set(MICRO_OS_DRIVERS_SRCS
 idf_component_register(
     SRCS ${MICRO_OS_DRIVERS_SRCS}
     INCLUDE_DIRS "include"
-    REQUIRES kernel font kshell wifi spi_flash esp_psram esp_driver_gpio esp_driver_i2c driver esp_driver_spi esp_driver_ledc esp_adc esp_timer
+    REQUIRES kernel font kshell freertos wifi spi_flash esp_psram esp_driver_gpio esp_driver_i2c driver esp_driver_spi esp_driver_ledc esp_adc esp_timer
              esp_wifi esp_netif esp_event nvs_flash
 )
+
+    # The discipline of the host build: the sources of the project are
+    # compiled with the extra warnings, so a mistake is a message at
+    # build time and not a fault on the board.
+    target_compile_options(${COMPONENT_LIB} PRIVATE -Wextra)

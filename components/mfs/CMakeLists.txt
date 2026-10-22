@@ -12,6 +12,11 @@ if(ESP_PLATFORM)
         INCLUDE_DIRS "include"
         REQUIRES kernel esp_partition
     )
+
+    # The discipline of the host build: the sources of the project are
+    # compiled with the extra warnings, so a mistake is a message at
+    # build time and not a fault on the board.
+    target_compile_options(${COMPONENT_LIB} PRIVATE -Wextra)
 else()
     add_library(microos_mfs STATIC ${MICRO_OS_MFS_SRCS})
     target_include_directories(microos_mfs PUBLIC "${CMAKE_CURRENT_LIST_DIR}/include")

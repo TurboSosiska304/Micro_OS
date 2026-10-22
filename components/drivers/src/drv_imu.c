@@ -15,7 +15,9 @@
 #define MPU_REG_WHO_AM_I 0x75
 #define MPU_REG_PWR_MGMT1 0x6B
 #define MPU_REG_ACCEL_XOUT_H 0x3B
-#define MPU_REG_ACCEL_CONFIG 0x1A
+#define MPU_REG_ACCEL_CONFIG 0x1C /* the range of the acceleration */
+#define MPU_REG_GYRO_CONFIG 0x1B  /* the range of the rotation */
+#define MPU_REG_CONFIG 0x1A       /* the filter of the rotation (DLPF) */
 
 static bool s_present;
 static int16_t s_accel[3];
@@ -23,7 +25,7 @@ static int16_t s_accel[3];
 static int drv_imu_init(void)
 {
     uint8_t who = 0;
-    uint8_t pwr = 0;
+    uint8_t config = 0;
 
     if (drv_i2c_init() != 0) {
         return -1;
@@ -38,14 +40,31 @@ static int drv_imu_init(void)
         return -3;
     }
 
-    /* Wake up, +-2 g, +-2000 deg/s. */
-    pwr = 0x01;
-    if (drv_i2c_write(I2C_MPU6886_ADDR, MPU_REG_PWR_MGMT1, &pwr, 1) != 0) {
+    /*
+     * Wake up, +-2 g, +-250 deg/s, the filter of the rotation at 44 Hz.
+     * Every value is written to the register that holds it, and every
+     * write is checked: a chip that stopped answering must not be
+     * reported as working.
+     */
+    config = 0x01; /* the clock of the chip from the crystal */
+    if (drv_i2c_write(I2C_MPU6886_ADDR, MPU_REG_PWR_MGMT1, &config, 1) != 0) {
         return -4;
     }
 
-    pwr = 0x00;
-    drv_i2c_write(I2C_MPU6886_ADDR, MPU_REG_ACCEL_CONFIG, &pwr, 1);
+    config = 0x00; /* +-2 g: the whole range of a board on a table */
+    if (drv_i2c_write(I2C_MPU6886_ADDR, MPU_REG_ACCEL_CONFIG, &config, 1) != 0) {
+        return -5;
+    }
+
+    config = 0x00; /* +-250 deg/s */
+    if (drv_i2c_write(I2C_MPU6886_ADDR, MPU_REG_GYRO_CONFIG, &config, 1) != 0) {
+        return -6;
+    }
+
+    config = 0x03; /* the filter at 44 Hz: the noise goes, the motion stays */
+    if (drv_i2c_write(I2C_MPU6886_ADDR, MPU_REG_CONFIG, &config, 1) != 0) {
+        return -7;
+    }
 
     s_present = true;
     return 0;

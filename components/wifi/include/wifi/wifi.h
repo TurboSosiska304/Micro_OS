@@ -117,6 +117,19 @@ int wifi_config_get(char *ssid, k_size_t ssid_size, char *pass, k_size_t pass_si
 /* Connect with the saved configuration. */
 int wifi_connect_saved(void);
 
+/*
+ * The station comes back to the network by itself after a drop.
+ *
+ * The port asks the core how long to wait before trying the saved network
+ * again (wifi_reconnect_after_ms(), in milliseconds; 0 means "do not try")
+ * and calls wifi_reconnect() when that time has come. The policy - the
+ * number of the attempts, the growing wait and the moment to give up - is
+ * in the core; the timer that wakes the radio up belongs to the port,
+ * because a portable core has no clock to sleep on.
+ */
+k_u32_t wifi_reconnect_after_ms(void);
+int wifi_reconnect(void);
+
 /* The event of the radio: the core changes its state. */
 void wifi_notify(int event, int reason);
 

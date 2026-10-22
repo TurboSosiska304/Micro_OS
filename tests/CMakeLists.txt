@@ -39,5 +39,9 @@ target_compile_definitions(microos_tests PRIVATE
     KTEST_CORPUS="${CMAKE_SOURCE_DIR}/tests/corpus/vectors.txt"
 )
 
+    # A test that hangs is a test that failed: the panic of the kernel
+    # stops the process of the host, and anything else is a hang that has
+    # to be reported, not waited for.
     add_test(NAME unit COMMAND microos_tests)
+    set_tests_properties(unit PROPERTIES TIMEOUT 120)
 endif()

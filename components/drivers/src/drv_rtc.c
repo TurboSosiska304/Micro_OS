@@ -59,8 +59,12 @@ static int drv_rtc_check(void)
         return -2;
     }
 
-    /* Bit 7 of the seconds register is the "clock integrity" flag. */
-    s_valid = (raw[0] & 0x80) != 0;
+    /*
+     * Bit 7 of the seconds register is LV, the flag of a low voltage: it
+     * is set when the battery is going down, and then the time registers
+     * cannot be trusted. A clock that is running has the bit clear.
+     */
+    s_valid = (raw[0] & 0x80) == 0;
     s_sec = bcd_to_bin(raw[0] & 0x7F);
     s_min = bcd_to_bin(raw[1] & 0x7F);
     s_hour = bcd_to_bin(raw[2] & 0x7F);

@@ -31,16 +31,27 @@
 #define TASK_STACK_SIZE 8192
 
 /*
- * A recursive mutex is used instead of portENTER_CRITICAL(): the FreeRTOS
- * spinlock is not reentrant, while the kernel core is allowed to call a
- * locked helper from inside a locked section.
+ * The critical section of the kernel. The FreeRTOS spinlock of the chip
+ * is recursive on one core (it counts the nesting), it is taken with the
+ * interrupts off, and it works from a task and from an interrupt alike -
+ * so it is the section the kernel says it is. A mutex was not: it let an
+ * interrupt in the middle of a "critical" section, and it was a silent
+ * no-op when it was not created yet.
  */
-static SemaphoreHandle_t s_lock;
+static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 
 typedef struct {
     TaskHandle_t handle;
     struct task *task;
     k_port_task_entry_fn entry;
+    /*
+     * The slot belongs to a task from the moment it is chosen until the
+     * thread of that task has deleted itself. The scan of the free slots
+     * looks at this flag, not at handle: a slot whose handle was cleared
+     * is free before its task pointer is, and a task created in that
+     * moment would be given a slot that another thread is still erasing.
+     */
+    bool taken;
 } esp_task_entry;
 
 static esp_task_entry s_registry[TASK_MAX_TASKS];
@@ -74,9 +85,7 @@ void port_esp32_console_init(void)
 
 void port_esp32_init(void)
 {
-    if (s_lock == NULL) {
-        s_lock = xSemaphoreCreateRecursiveMutex();
-    }
+    /* The critical section needs no preparation: the spinlock is static. */
 }
 
 void k_port_write(const char *data, k_size_t len)
@@ -97,16 +106,12 @@ k_u64_t k_port_uptime_ms(void)
 
 void k_port_enter_critical(void)
 {
-    if (s_lock != NULL) {
-        xSemaphoreTakeRecursive(s_lock, portMAX_DELAY);
-    }
+    portENTER_CRITICAL(&s_lock);
 }
 
 void k_port_exit_critical(void)
 {
-    if (s_lock != NULL) {
-        xSemaphoreGiveRecursive(s_lock);
-    }
+    portEXIT_CRITICAL(&s_lock);
 }
 
 void k_port_halt(void)
@@ -217,11 +222,21 @@ k_size_t k_port_task_stack_size(void)
 static void esp_task_thread(void *arg)
 {
     esp_task_entry *entry = (esp_task_entry *)arg;
+    k_port_task_entry_fn fn;
+    struct task *task;
 
     /* Wait until the kernel puts the task into the run queue. */
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
-    entry->entry(entry->task);
+    /*
+     * The work is done with the values taken here: the slot can be given
+     * to another task as soon as this thread ends, and the thread must
+     * not read the slot again after that.
+     */
+    fn = entry->entry;
+    task = entry->task;
+
+    fn(task);
 }
 
 int k_port_task_create(struct task *t, k_port_task_entry_fn entry, void *arg)
@@ -232,26 +247,39 @@ int k_port_task_create(struct task *t, k_port_task_entry_fn entry, void *arg)
 
     K_UNUSED(arg);
 
+    /*
+     * A free slot is taken under the critical section: two tasks that
+     * create a task at the same time must not be given the same slot.
+     */
+    k_port_enter_critical();
+
     for (i = 0; i < K_ARRAY_SIZE(s_registry); i++) {
-        if (s_registry[i].handle == NULL) {
+        if (!s_registry[i].taken) {
             slot = &s_registry[i];
+            slot->taken = true;
+            slot->task = t;
+            slot->entry = entry;
+            slot->handle = NULL;
             break;
         }
     }
+
+    k_port_exit_critical();
 
     if (slot == NULL) {
         return -1;
     }
 
-    slot->task = t;
-    slot->entry = entry;
-
     rc = xTaskCreate(esp_task_thread, "ktask", TASK_STACK_SIZE / sizeof(StackType_t), slot,
                      TASK_FREERTOS_PRIO_BASE + t->prio, &slot->handle);
 
     if (rc != pdPASS) {
+        k_port_enter_critical();
         slot->handle = NULL;
         slot->task = NULL;
+        slot->entry = NULL;
+        slot->taken = false;
+        k_port_exit_critical();
         return -1;
     }
 
@@ -270,11 +298,20 @@ void k_port_task_start(struct task *t)
     }
 
     slot = (esp_task_entry *)t->ctx;
-    if (slot == NULL || slot->handle == NULL) {
+    if (slot == NULL) {
         return;
     }
 
-    xTaskNotifyGive(slot->handle);
+    k_port_enter_critical();
+    {
+        TaskHandle_t handle = slot->handle;
+
+        k_port_exit_critical();
+
+        if (handle != NULL) {
+            xTaskNotifyGive(handle);
+        }
+    }
 }
 
 void k_port_task_yield(void)
@@ -295,9 +332,19 @@ void k_port_task_exit(int code)
 
     if (self != NULL) {
         esp_task_entry *slot = (esp_task_entry *)self->ctx;
+
         if (slot != NULL) {
+            /*
+             * The slot is given back in one step, and the thread does not
+             * touch it again: a task that is created in the same moment
+             * finds a slot that is either taken or free, never half.
+             */
+            k_port_enter_critical();
             slot->handle = NULL;
             slot->task = NULL;
+            slot->entry = NULL;
+            slot->taken = false;
+            k_port_exit_critical();
         }
     }
 
@@ -307,15 +354,21 @@ void k_port_task_exit(int code)
 struct task *k_port_task_current(void)
 {
     TaskHandle_t handle = xTaskGetCurrentTaskHandle();
+    struct task *found = NULL;
     size_t i;
+
+    k_port_enter_critical();
 
     for (i = 0; i < K_ARRAY_SIZE(s_registry); i++) {
         if (s_registry[i].handle != NULL && s_registry[i].handle == handle) {
-            return s_registry[i].task;
+            found = s_registry[i].task;
+            break;
         }
     }
 
-    return NULL;
+    k_port_exit_critical();
+
+    return found;
 }
 
 /* --- time base --- */

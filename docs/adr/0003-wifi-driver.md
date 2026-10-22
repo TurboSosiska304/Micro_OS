@@ -61,6 +61,40 @@ The naming follows the other components of the project: the prefix of the
 subsystem (`wifi_`) instead of the prefix of the drivers (`drv_`), because
 the component is a subsystem of its own, like `kshell`, `mfs` or `procfs`.
 
+### The station comes back on its own
+
+A network that goes away is asked for again by the board: the router was
+rebooted, and the station must not wait for a hand every time. The policy
+belongs to the core and the timer belongs to the port:
+
+* the core knows how many attempts were made, how long the wait between
+  them grows and when the attempts are over. `wifi_reconnect_after_ms()`
+  answers the port with the number of milliseconds to wait (0 means "do
+  not try"), and `wifi_reconnect()` makes the attempt when the time has
+  come. The count of the attempts is not restarted by the attempt itself:
+  that is what stops a wrong key from being asked for all day. Only a
+  connection asked for by hand (`wifi_connect()`) starts it again, and a
+  station that was told to leave (`wifi_disconnect()`) does not come back
+  on its own;
+* the port makes a one-shot timer and calls `wifi_reconnect()` when it
+  rings. A portable core has no clock to sleep on, and the events of the
+  radio come from the event loop of ESP-IDF, which is a task of its own;
+* the errors that mean that the key does not fit the network
+  (`WIFI_REASON_AUTH_FAIL`, `WIFI_REASON_MIC_FAILURE`, the timeouts of the
+  handshake) are not retried: the same answer would come back. The
+  attempts are few (five) and the wait between them grows from one second
+  to half a minute.
+
+### The configuration is kept by the driver, not by ESP-IDF
+
+The records of the network live in the NVS of the driver (`storage_save`),
+and the storage of the driver of ESP-IDF is in the working memory
+(`WIFI_STORAGE_RAM`). With its storage in the flash, every connection
+would be a write to the flash of the board, and the flash has a limited
+number of those. The threshold of the authentication of a network with a
+key is at least WPA2, so an open point with the same name (the "evil
+twin") does not take the station in.
+
 ## Consequences
 
 **Good:**
@@ -81,9 +115,11 @@ the component is a subsystem of its own, like `kshell`, `mfs` or `procfs`.
 * The driver is a component of its own and not a part of `components/drivers`,
   so the build knows about it twice: the host build compiles the core, the
   ESP-IDF build compiles the core and the radio.
-* The scan blocks the caller for a few seconds: the shell waits for the
-  result of the radio. A scan in the background would need a task and a
-  queue, which is not worth it for a device with a 135x240 screen.
+* The scan blocks the caller until the radio answers, and it has a
+  deadline of ten seconds: a radio that went quiet is reported as an error
+  instead of holding the shell for ever. A scan in the background would
+  need a task and a queue, which is not worth it for a device with a
+  135x240 screen.
 * The core knows nothing about the details of the network: the roaming, the
   power save of the radio and the channel of the access point are the
   business of the backend.

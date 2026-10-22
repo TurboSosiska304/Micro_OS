@@ -117,6 +117,30 @@ The goal is "everything is a file":
 Implementation: `inode` -> `dentry` -> `file_operations` (open/read/write/ioctl),
 as in Linux, but with a flat dentry list inside a single binary tree.
 
+### Who may work with the filesystem at the same time
+
+The volume is one piece of state - the map of the free blocks, the table of
+the inodes and the cache of the sector of the header all describe the same
+storage - so two tasks that write files at the same time have to be kept
+apart:
+
+* every open file belongs to the one that opened it: the position and the
+  flags of the file live in the descriptor (`VFS_FILE_DATA_SIZE` bytes of
+  private data), not in a table of the filesystem. Two tasks that read
+  their own files never touch each other's position;
+* the filesystem itself has one lock, taken by every public call of
+  `mfs_*`. The kernel has no blocking primitive yet, so the lock is a
+  "sleep lock": a task that has to wait sleeps a millisecond and looks
+  again, and the CPU goes to the task that holds the lock. It is
+  recursive, because the functions of the filesystem call each other
+  (`mfs_close` puts the changes on the flash through `mfs_sync`);
+* the adapter between the filesystem and the VFS
+  (`components/mfs/src/mfs_vfs.c`) is the only place where the codes of
+  the errors of the filesystem are translated into the codes of the
+  contract of the system calls: the two sets are close but not the same
+  (`-9` is "the directory is not empty" of the filesystem and a "bad file
+  descriptor" of the kernel).
+
 ## 6. Memory (phase 3)
 
 * `kmm_alloc`/`kmm_free` — our own allocator (bitmap or slab on top of the ESP-IDF
@@ -150,6 +174,24 @@ The WiFi driver is built like the kernel itself: a portable core
 through a table of functions, so the state machine of the driver is covered
 by the unit tests of the host. The decision is recorded in
 [ADR 0003](adr/0003-wifi-driver.md).
+
+### The panel is one piece of hardware
+
+The SPI of the panel is a sequence: the command, the data, the window and
+the pixels have to arrive in that order, and a second task that writes its
+own pixels in the middle of a transfer changes the meaning of the commands
+on the wire. Everything that draws (`drv_display_clear`, `drv_display_text`,
+`drv_display_flush`, `drv_display_set_offset`) takes the lock of the panel,
+and the lock is recursive because the functions of the panel call each
+other. The shared buffer of the transfer and the offset of the image are
+behind the same lock.
+
+The console of the board (`components/graphics`) does not draw from the task
+that prints. It writes the lines down and says that the screen is out of
+date, and one task of its own, of a low priority, brings the screen up to
+date at most ten times a second: a listing of fifty lines is one redraw of
+the panel instead of fifty, and the task that prints does not stand still
+in the middle of the dialogue.
 
 ## 8. Testing
 

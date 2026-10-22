@@ -203,8 +203,10 @@ Details: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 * **No MMU.** The kernel/user split is logical, not hardware enforced: there is no
   memory protection and no real address space isolation.
-* **8 MB flash / 2 MB PSRAM.** Kernel, applications and data share one flash
-  (OTA slots `app0`/`app1` plus `spiffs`).
+* **8 MB flash / 2 MB PSRAM.** There is one application and no room for an
+  update over the air: the kernel takes 2 MB (`factory`) and the rest of the
+  flash (5.75 MB) belongs to MicroFS. The whole layout is in
+  [partitions.csv](partitions.csv).
 * **The ESP32-PICO-V3-02 has no PMIC.** Power and sleep are handled by the ESP32
   itself: `HOLD` (G4) must be driven high after a wake-up or the board powers off.
 * **One power button plus two user buttons** (A, B), and a third one (C) on Plus2.

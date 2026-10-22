@@ -9,7 +9,63 @@
 
 #include <string.h>
 
+#include "kernel/errno.h"
 #include "kernel/vfs.h"
+
+/*
+ * The filesystem has its own numbers for its errors and the kernel has
+ * another set, and the two are close but not the same: the "directory is
+ * not empty" of the filesystem is -9, and -9 of the kernel is a "bad file
+ * descriptor". A program that gets the wrong number looks for the wrong
+ * thing, so the adapter is the place where one is translated into the
+ * other - the adapter is where the two contracts meet.
+ */
+struct mfs_code_pair {
+    int mfs;
+    int kerr;
+};
+
+static const struct mfs_code_pair g_codes[] = {
+    {MFS_OK, KERR_NONE},         {MFS_ENOENT, KERR_NOENT},   {MFS_EEXIST, KERR_EXIST},
+    {MFS_ENOSPC, KERR_NOSPC},    {MFS_EIO, KERR_IO},         {MFS_EINVAL, KERR_INVAL},
+    {MFS_ENOTDIR, KERR_NOTDIR},  {MFS_EISDIR, KERR_ISDIR},   {MFS_ENOTEMPTY, KERR_NOTEMPTY},
+    {MFS_E2BIG, KERR_TOOBIG},
+};
+
+/* The number of the kernel for a result of the filesystem. */
+static int mfs_to_kerr(int rc)
+{
+    size_t i;
+
+    for (i = 0; i < sizeof(g_codes) / sizeof(g_codes[0]); i++) {
+        if (g_codes[i].mfs == rc) {
+            return g_codes[i].kerr;
+        }
+    }
+
+    /* An error that is not on the list is still an error of the disk. */
+    return (rc < 0) ? KERR_IO : rc;
+}
+
+/* The number of the filesystem for a result of the kernel. */
+static int kerr_to_mfs(int rc)
+{
+    size_t i;
+
+    for (i = 0; i < sizeof(g_codes) / sizeof(g_codes[0]); i++) {
+        if (g_codes[i].kerr == rc) {
+            return g_codes[i].mfs;
+        }
+    }
+
+    return MFS_EIO;
+}
+
+/* The text of an error of the filesystem, asked for with a number of the kernel. */
+static const char *vfs_strerror_mfs(int error)
+{
+    return mfs_strerror(kerr_to_mfs(error));
+}
 
 /* The file of the VFS holds the file of the filesystem. */
 struct mfs_vfs_file {
@@ -25,12 +81,12 @@ static int vfs_open_file(void *ctx, const char *path, int flags, struct vfs_file
 
     file = (struct mfs_vfs_file *)out->priv;
     if (file == NULL) {
-        return MFS_EINVAL;
+        return mfs_to_kerr(MFS_EINVAL);
     }
 
     rc = mfs_open(path, flags, &file->file);
     if (rc != MFS_OK) {
-        return rc;
+        return mfs_to_kerr(rc);
     }
 
     out->inode = file->file.inode;
@@ -48,7 +104,7 @@ static int vfs_read_file(void *ctx, struct vfs_file *vfs_file, void *buf, k_size
     K_UNUSED(ctx);
 
     if (file == NULL) {
-        return MFS_EINVAL;
+        return mfs_to_kerr(MFS_EINVAL);
     }
 
     /*
@@ -63,7 +119,8 @@ static int vfs_read_file(void *ctx, struct vfs_file *vfs_file, void *buf, k_size
         vfs_file->size = file->file.size;
     }
 
-    return rc;
+    /* A number of bytes is not an error and needs no translation. */
+    return (rc < 0) ? mfs_to_kerr(rc) : rc;
 }
 
 static int vfs_write_file(void *ctx, struct vfs_file *vfs_file, const void *buf, k_size_t size)
@@ -74,7 +131,7 @@ static int vfs_write_file(void *ctx, struct vfs_file *vfs_file, const void *buf,
     K_UNUSED(ctx);
 
     if (file == NULL) {
-        return MFS_EINVAL;
+        return mfs_to_kerr(MFS_EINVAL);
     }
 
     /* The same as above: the descriptor decides where the data goes. */
@@ -86,7 +143,7 @@ static int vfs_write_file(void *ctx, struct vfs_file *vfs_file, const void *buf,
         vfs_file->size = file->file.size;
     }
 
-    return rc;
+    return (rc < 0) ? mfs_to_kerr(rc) : rc;
 }
 
 static int vfs_close_file(void *ctx, struct vfs_file *vfs_file)
@@ -96,13 +153,13 @@ static int vfs_close_file(void *ctx, struct vfs_file *vfs_file)
     K_UNUSED(ctx);
 
     if (file == NULL) {
-        return MFS_EINVAL;
+        return mfs_to_kerr(MFS_EINVAL);
     }
 
     vfs_file->size = file->file.size;
     vfs_file->offset = file->file.offset;
 
-    return mfs_close(&file->file);
+    return mfs_to_kerr(mfs_close(&file->file));
 }
 
 static int vfs_list_dir(void *ctx, const char *path, struct vfs_dirent *out, k_size_t max,
@@ -120,7 +177,7 @@ static int vfs_list_dir(void *ctx, const char *path, struct vfs_dirent *out, k_s
 
     rc = mfs_list(path, entries, MFS_MAX_ENTRIES);
     if (rc != MFS_OK) {
-        return rc;
+        return mfs_to_kerr(rc);
     }
 
     for (i = 0; i < MFS_MAX_ENTRIES; i++) {
@@ -150,32 +207,36 @@ static int vfs_list_dir(void *ctx, const char *path, struct vfs_dirent *out, k_s
 static int vfs_stat_file(void *ctx, const char *path, struct vfs_stat *out)
 {
     struct mfs_inode inode;
+    struct mfs_dirent dirent;
     int rc;
 
     K_UNUSED(ctx);
 
-    rc = mfs_stat(path, &inode, NULL);
+    memset(&dirent, 0, sizeof(dirent));
+
+    rc = mfs_stat(path, &inode, &dirent);
     if (rc != MFS_OK) {
-        return rc;
+        return mfs_to_kerr(rc);
     }
 
-    out->inode = inode.flags; /* the caller gets the type from the flags */
+    /* The caller gets the number of the inode, not the flags of the file. */
+    out->inode = dirent.inode;
     out->type = (inode.flags & MFS_INODE_DIR) ? 2 : 1;
     out->size = inode.size;
 
-    return MFS_OK;
+    return mfs_to_kerr(MFS_OK);
 }
 
 static int vfs_make_dir(void *ctx, const char *path)
 {
     K_UNUSED(ctx);
-    return mfs_mkdir(path);
+    return mfs_to_kerr(mfs_mkdir(path));
 }
 
 static int vfs_remove(void *ctx, const char *path)
 {
     K_UNUSED(ctx);
-    return mfs_unlink(path);
+    return mfs_to_kerr(mfs_unlink(path));
 }
 
 static int mfs_statfs_volume(void *ctx, struct vfs_statfs *out)
@@ -187,7 +248,7 @@ static int mfs_statfs_volume(void *ctx, struct vfs_statfs *out)
 
     rc = mfs_get_info(&info);
     if (rc != MFS_OK) {
-        return rc;
+        return mfs_to_kerr(rc);
     }
 
     out->total_blocks = info.data_blocks;
@@ -209,7 +270,7 @@ static const struct vfs_operations g_mfs_operations = {
     .mkdir = vfs_make_dir,
     .unlink = vfs_remove,
     .statfs = mfs_statfs_volume,
-    .strerror = mfs_strerror,
+    .strerror = vfs_strerror_mfs,
 };
 
 int mfs_vfs_register(const char *point)

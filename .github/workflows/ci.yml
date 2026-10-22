@@ -1,0 +1,54 @@
+# Micro OS — the checks that every change has to pass.
+#
+# The host build is the fast one: it compiles the portable core, runs the
+# unit tests and then runs the same tests again with the address and the
+# undefined behaviour sanitizers. The firmware is built with the ESP-IDF,
+# in the container that holds the toolchain.
+#
+# The style of the sources is a local step (`make format`): the version of
+# clang-format that the project is written with (23.x) is not on the
+# runners yet, and a check with a different version would only argue about
+# the spaces.
+
+name: ci
+
+on:
+  push:
+    branches: [mainline, release_candidate]
+  pull_request:
+
+jobs:
+  host:
+    name: the host build and the tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: the tools of the build
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+
+      - name: build
+        run: make build
+
+      - name: the unit tests
+        run: make test
+
+      - name: the same tests with the sanitizers
+        run: make test-asan
+
+  firmware:
+    name: the firmware of the ESP32
+    runs-on: ubuntu-latest
+    container: espressif/idf:v5.3
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: build
+        shell: bash
+        run: |
+          . $IDF_PATH/export.sh
+          idf.py build

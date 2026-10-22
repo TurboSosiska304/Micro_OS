@@ -16,19 +16,42 @@
 #include "esp_event.h"
 #include "esp_heap_caps.h"
 #include "esp_netif.h"
+#include "esp_timer.h"
 #include "esp_wifi.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "kernel/log.h"
 #include "kernel/port.h"
 #include "lwip/ip_addr.h"
 #include "nvs_flash.h"
+#include "wifi/wifi.h"
 
 /* The namespace of the configuration in the NVS. */
 #define NVS_NAMESPACE "microos"
 #define NVS_KEY_SSID "wifi_ssid"
 #define NVS_KEY_PASS "wifi_pass"
 
+/* The longest a scan may take before the caller is let go. */
+#define WIFI_SCAN_TIMEOUT_MS 10000
+
 static esp_netif_t *s_netif;
-static bool s_initialised;
+
+/*
+ * The driver is made in steps, and a step that fails must not leave a
+ * half made driver behind: the state says which of them were made, so
+ * that a second attempt picks up where the first one stopped instead of
+ * starting the driver of ESP-IDF again (which it cannot: it answers
+ * "already initialised" and the events would be watched twice).
+ */
+static bool s_initialised;  /* the driver of the radio is up */
+static bool s_handlers;     /* the events are watched */
+
+static SemaphoreHandle_t s_scan_done;      /* the end of a scan */
+static esp_timer_handle_t s_reconnect_timer; /* the wait before a retry */
+
+/* The two below are used by the events and defined after them. */
+static bool wifi_reason_is_auth_error(int reason);
+static void wifi_schedule_reconnect(k_u32_t delay_ms);
 
 /* Copy a string and always terminate it. */
 static void copy_str(char *dst, k_size_t size, const char *src)
@@ -113,10 +136,33 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
         case WIFI_EVENT_STA_DISCONNECTED: {
             wifi_event_sta_disconnected_t *info = (wifi_event_sta_disconnected_t *)data;
             int reason = (info != NULL) ? (int)info->reason : 0;
+            k_u32_t delay;
 
             wifi_notify(WIFI_EVT_DISCONNECTED, reason);
+
+            /*
+             * The station does not sit disconnected for ever: a router
+             * that was rebooted must not need a hand. The errors that
+             * mean "the key does not fit this network" are not asked
+             * again - the same answer would come back - and the rest is
+             * the policy of the core: how many times and how long to
+             * wait. The wait itself is a timer of this port.
+             */
+            if (!wifi_reason_is_auth_error(reason)) {
+                delay = wifi_reconnect_after_ms();
+                if (delay > 0) {
+                    wifi_schedule_reconnect(delay);
+                }
+            }
+
             break;
         }
+        case WIFI_EVENT_SCAN_DONE:
+            /* The scan is asynchronous: the caller waits on the semaphore. */
+            if (s_scan_done != NULL) {
+                (void)xSemaphoreGive(s_scan_done);
+            }
+            break;
         default:
             break;
         }
@@ -127,6 +173,61 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
     if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         /* The address is there: the network is up. */
         wifi_notify(WIFI_EVT_CONNECTED, 0);
+    }
+}
+
+/*
+ * The errors that mean that the key does not fit the network. The access
+ * point said no to the key, and asking it the same question again and
+ * again would not change the answer. The codes are the ones of the
+ * driver of ESP-IDF (wifi_err_reason_t).
+ */
+static bool wifi_reason_is_auth_error(int reason)
+{
+    switch (reason) {
+    case WIFI_REASON_AUTH_FAIL:
+    case WIFI_REASON_MIC_FAILURE:
+    case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
+    case WIFI_REASON_HANDSHAKE_TIMEOUT:
+    case WIFI_REASON_CIPHER_SUITE_REJECTED:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static void reconnect_timer_cb(void *arg)
+{
+    K_UNUSED(arg);
+
+    /* The policy of the core decides once more when the time has come. */
+    (void)wifi_reconnect();
+}
+
+/*
+ * Plan the next attempt of the connection. Only one attempt is planned at
+ * a time: a burst of events must not wake the radio up in a pile.
+ */
+static void wifi_schedule_reconnect(k_u32_t delay_ms)
+{
+    esp_timer_create_args_t args = {
+        .callback = reconnect_timer_cb,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "wifi-reconnect",
+        .skip_unhandled_events = true,
+    };
+
+    if (s_reconnect_timer == NULL) {
+        if (esp_timer_create(&args, &s_reconnect_timer) != ESP_OK) {
+            kerror("wifi: the timer of the reconnection cannot be made");
+            return;
+        }
+    }
+
+    (void)esp_timer_stop(s_reconnect_timer);
+
+    if (esp_timer_start_once(s_reconnect_timer, (uint64_t)delay_ms * 1000u) != ESP_OK) {
+        kerror("wifi: the reconnection cannot be planned");
     }
 }
 
@@ -164,11 +265,15 @@ static int radio_connect(const char *ssid, const char *pass)
     }
 
     /*
-     * The threshold of the authentication stays open: the access point
-     * decides what it accepts, and a wrong key is reported as a failure of
-     * the connection instead of a silent refusal.
+     * The threshold of the authentication is the one of the network that
+     * was asked for. A network with a key is joined only by a point that
+     * is at least as safe as WPA2: an open point with the same name (the
+     * "evil twin") would take the station in and the key it was given
+     * would be asked for over the air. A network without a key is joined
+     * as it is - it was asked for by name, with nothing to protect.
      */
-    config.sta.threshold.authmode = WIFI_AUTH_OPEN;
+    config.sta.threshold.authmode =
+        (pass != NULL && pass[0] != '\0') ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
 
     rc = esp_wifi_set_config(WIFI_IF_STA, &config);
     if (rc != ESP_OK) {
@@ -209,10 +314,24 @@ static int radio_scan(struct wifi_scan_entry *out, k_size_t max, k_size_t *count
     memset(&config, 0, sizeof(config));
     config.show_hidden = false;
 
-    /* The scan blocks: the caller waits for the result. */
-    rc = esp_wifi_scan_start(&config, true);
+    /*
+     * The scan is started without blocking the caller and waited for with
+     * a deadline: a radio that went quiet must not hold the shell of the
+     * board for ever. A scan that was left behind by an earlier caller
+     * must not answer this one, so the semaphore is emptied first.
+     */
+    while (xSemaphoreTake(s_scan_done, 0) == pdTRUE) {
+    }
+
+    rc = esp_wifi_scan_start(&config, false);
     if (rc != ESP_OK) {
         kerror("wifi: the scan does not start (rc=%d)", (int)rc);
+        return -1;
+    }
+
+    if (xSemaphoreTake(s_scan_done, pdMS_TO_TICKS(WIFI_SCAN_TIMEOUT_MS)) != pdTRUE) {
+        (void)esp_wifi_scan_stop();
+        kerror("wifi: the scan did not answer in %u ms", (unsigned)WIFI_SCAN_TIMEOUT_MS);
         return -1;
     }
 
@@ -430,12 +549,20 @@ int wifi_esp32_init(void)
     wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
     esp_err_t rc;
 
-    if (s_initialised) {
+    if (s_initialised && s_handlers) {
         return 0;
     }
 
     if (nvs_init() != 0) {
         return -1;
+    }
+
+    if (s_scan_done == NULL) {
+        s_scan_done = xSemaphoreCreateBinary();
+        if (s_scan_done == NULL) {
+            kerror("wifi: the semaphore of the scan cannot be made");
+            return -1;
+        }
     }
 
     rc = esp_netif_init();
@@ -456,21 +583,38 @@ int wifi_esp32_init(void)
         s_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     }
 
-    if (esp_wifi_init(&config) != ESP_OK) {
-        kerror("wifi: the driver of the radio does not start");
+    /*
+     * The driver of the radio is the point of no return: from here on
+     * ESP-IDF owns the state of the chip. "Already initialised" is not a
+     * failure - it is the answer of a second attempt after a step that
+     * failed further down - and the driver says that it is up.
+     */
+    rc = esp_wifi_init(&config);
+    if (rc != ESP_OK && rc != ESP_ERR_INVALID_STATE) {
+        kerror("wifi: the driver of the radio does not start (rc=%d)", (int)rc);
         return -4;
     }
+    s_initialised = true;
 
-    if (esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL,
-                                            NULL) != ESP_OK) {
-        kerror("wifi: the events of the radio cannot be watched");
-        return -5;
-    }
+    /*
+     * The events are watched once. A second attempt that registered the
+     * handlers again would make every event of the radio be reported to
+     * the core twice.
+     */
+    if (!s_handlers) {
+        if (esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler,
+                                                NULL, NULL) != ESP_OK) {
+            kerror("wifi: the events of the radio cannot be watched");
+            return -5;
+        }
 
-    if (esp_event_handler_instance_register(IP_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL,
-                                            NULL) != ESP_OK) {
-        kerror("wifi: the events of the network cannot be watched");
-        return -6;
+        if (esp_event_handler_instance_register(IP_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler,
+                                                NULL, NULL) != ESP_OK) {
+            kerror("wifi: the events of the network cannot be watched");
+            return -6;
+        }
+
+        s_handlers = true;
     }
 
     if (esp_wifi_set_mode(WIFI_MODE_STA) != ESP_OK) {
@@ -478,10 +622,17 @@ int wifi_esp32_init(void)
         return -7;
     }
 
+    /*
+     * The configuration of a network is kept by this driver, in its own
+     * records of the NVS, and the driver of ESP-IDF keeps its own copy
+     * only in the working memory. With its storage in the flash every
+     * connection would be a write to the flash of the board, and the
+     * flash has a limited number of those.
+     */
+    (void)esp_wifi_set_storage(WIFI_STORAGE_RAM);
+
     wifi_set_radio(&s_radio_ops);
     wifi_set_storage(&s_storage_ops);
-
-    s_initialised = true;
 
     return 0;
 }

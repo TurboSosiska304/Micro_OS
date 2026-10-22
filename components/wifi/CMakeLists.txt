@@ -12,8 +12,13 @@ if(ESP_PLATFORM)
     idf_component_register(
         SRCS ${MICRO_OS_WIFI_SRCS} "src/wifi_esp32.c"
         INCLUDE_DIRS "include"
-        REQUIRES kernel esp_wifi esp_netif esp_event nvs_flash lwip
+        REQUIRES kernel esp_wifi esp_netif esp_event nvs_flash lwip esp_timer freertos
     )
+
+    # The discipline of the host build: the sources of the project are
+    # compiled with the extra warnings, so a mistake is a message at
+    # build time and not a fault on the board.
+    target_compile_options(${COMPONENT_LIB} PRIVATE -Wextra)
 else()
     add_library(microos_wifi STATIC ${MICRO_OS_WIFI_SRCS})
     target_include_directories(microos_wifi PUBLIC "${CMAKE_CURRENT_LIST_DIR}/include")

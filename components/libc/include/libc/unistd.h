@@ -59,11 +59,13 @@ const char *microos_strerror(int code);
  * ignored: the filesystem of the board has no rights yet. The access
  * alone has to be a real one, 3 is not a mode.
  */
+#ifndef MICROOS_LIBC_KEEP_NAMES
 #define open microos_open
 #define close microos_close
 #define read microos_read
 #define write microos_write
 #define lseek microos_lseek
+#endif /* MICROOS_LIBC_KEEP_NAMES */
 #define unlink microos_unlink
 #define mkdir microos_mkdir
 #define waitpid microos_waitpid

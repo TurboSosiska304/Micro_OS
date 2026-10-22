@@ -21,6 +21,38 @@ static char s_ssid[WIFI_SSID_MAX];
 static char s_pass[WIFI_PASS_MAX];
 static bool s_started;
 
+/*
+ * The station goes back to the network by itself after a drop: a router
+ * that was rebooted must not need a hand every time. The policy lives
+ * here - how many times to try, how long to wait and when to give up -
+ * and the timer that wakes the radio up is the port's, because a
+ * portable core has no clock of its own to sleep on.
+ */
+#define WIFI_RECONNECT_MAX 5       /* the attempts of one connection */
+#define WIFI_RECONNECT_BASE_MS 1000 /* the wait before the first attempt */
+#define WIFI_RECONNECT_MAX_MS 30000 /* the longest wait between attempts */
+
+static struct {
+    bool wanted;   /* the station was asked to be on a network */
+    int attempts;  /* the attempts made for the connection in progress */
+    k_u64_t next_ms; /* the moment the next attempt may start */
+    /*
+     * The network to go back to. It is the last one that was asked for,
+     * saved in the NVS or not: the cache of the configuration (s_ssid,
+     * s_pass) is the one of the records, and a network that was joined by
+     * hand has to be remembered here.
+     */
+    char ssid[WIFI_SSID_MAX];
+    char pass[WIFI_PASS_MAX];
+} s_reconnect;
+
+/* The attempts of a connection are forgotten when the connection is made. */
+static void reconnect_forget(void)
+{
+    s_reconnect.attempts = 0;
+    s_reconnect.next_ms = 0;
+}
+
 /* Copy a string and always terminate it. */
 static void copy_str(char *dst, k_size_t size, const char *src)
 {
@@ -55,6 +87,8 @@ int wifi_init(void)
     s_ssid[0] = '\0';
     s_pass[0] = '\0';
     s_started = false;
+
+    memset(&s_reconnect, 0, sizeof(s_reconnect));
 
     return WIFI_OK;
 }
@@ -97,6 +131,8 @@ int wifi_stop(void)
     }
 
     s_started = false;
+    s_reconnect.wanted = false;
+    reconnect_forget();
     s_status.state = WIFI_STATE_STOPPED;
     s_status.ssid[0] = '\0';
     s_status.bssid[0] = '\0';
@@ -126,6 +162,16 @@ int wifi_connect(const char *ssid, const char *pass)
     if (pass != NULL && strlen(pass) >= WIFI_PASS_MAX) {
         return WIFI_INVALID;
     }
+
+    /*
+     * A connection asked for by hand starts the attempts of the policy
+     * again: whatever the radio was doing before, the user wants this
+     * network now.
+     */
+    s_reconnect.wanted = true;
+    reconnect_forget();
+    copy_str(s_reconnect.ssid, sizeof(s_reconnect.ssid), ssid);
+    copy_str(s_reconnect.pass, sizeof(s_reconnect.pass), pass);
 
     rc = s_radio->connect(ssid, pass);
     if (rc != 0) {
@@ -159,6 +205,13 @@ int wifi_disconnect(void)
     if (s_radio->disconnect() != 0) {
         return WIFI_ERROR;
     }
+
+    /*
+     * The station was asked to leave: nobody has to bring it back by
+     * itself until a connection is asked for again.
+     */
+    s_reconnect.wanted = false;
+    reconnect_forget();
 
     return WIFI_OK;
 }
@@ -305,6 +358,73 @@ int wifi_connect_saved(void)
     return wifi_connect(s_ssid, s_pass);
 }
 
+k_u32_t wifi_reconnect_after_ms(void)
+{
+    k_u64_t now;
+    k_u32_t wait;
+
+    if (!s_reconnect.wanted || s_reconnect.ssid[0] == '\0') {
+        return 0;
+    }
+
+    if (s_reconnect.attempts >= WIFI_RECONNECT_MAX) {
+        /* The network was asked for WIFI_RECONNECT_MAX times: it is not there. */
+        return 0;
+    }
+
+    now = k_port_uptime_ms();
+
+    /*
+     * A drop is often reported by several events: only one attempt is
+     * planned at a time, so that the radio is not woken up in a pile.
+     */
+    if (s_reconnect.next_ms > now) {
+        return 0;
+    }
+
+    /*
+     * The wait grows with every attempt: one second, then two, then four
+     * and so on, up to the longest wait of the policy.
+     */
+    wait = WIFI_RECONNECT_BASE_MS << ((s_reconnect.attempts < 5) ? s_reconnect.attempts : 5);
+    if (wait > WIFI_RECONNECT_MAX_MS) {
+        wait = WIFI_RECONNECT_MAX_MS;
+    }
+
+    s_reconnect.attempts++;
+    s_reconnect.next_ms = now + wait;
+
+    return wait;
+}
+
+int wifi_reconnect(void)
+{
+    if (!s_reconnect.wanted || s_reconnect.ssid[0] == '\0') {
+        return WIFI_NO_CONFIG;
+    }
+
+    if (s_radio == NULL || s_radio->connect == NULL) {
+        return WIFI_NO_RADIO;
+    }
+
+    if (!s_started) {
+        return WIFI_NOT_STARTED;
+    }
+
+    /*
+     * The count of the attempts is not restarted here: it is what stops
+     * the station from asking a network with a wrong key all day.
+     */
+    if (s_radio->connect(s_reconnect.ssid, s_reconnect.pass) != 0) {
+        s_status.state = WIFI_STATE_FAILED;
+        return WIFI_ERROR;
+    }
+
+    s_status.state = WIFI_STATE_CONNECTING;
+
+    return WIFI_OK;
+}
+
 void wifi_notify(int event, int reason)
 {
     k_port_enter_critical();
@@ -317,6 +437,9 @@ void wifi_notify(int event, int reason)
     case WIFI_EVT_CONNECTED:
         s_status.state = WIFI_STATE_CONNECTED;
         s_status.reason = 0;
+        /* The network is there: the attempts of the policy are over. */
+        s_reconnect.attempts = 0;
+        s_reconnect.next_ms = 0;
         break;
     case WIFI_EVT_DISCONNECTED:
         /*
