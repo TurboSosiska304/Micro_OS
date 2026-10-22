@@ -18,6 +18,7 @@
 |   kshell  - command interpreter                                |
 +---------------------------------------------------------------+
 | Drivers: fb(tft), input(buttons), buzzer, imu, rtc, ir, mic     |
+| Wifi: the portable core of the station + the radio of the ESP32 |
 +---------------------------------------------------------------+
 | Port: ESP32 (ESP-IDF) | Host (Linux, for tests and simulation)  |
 +---------------------------------------------------------------+
@@ -142,6 +143,13 @@ Planned drivers: `drv_framebuffer` (ST7789v2), `drv_input` (A/B/C),
 `drv_buzzer`, `drv_imu` (MPU6886), `drv_rtc` (BM8563), `drv_ir`, `drv_mic`
 (SPM1423), `drv_led`. The pinout and the quirks are documented in
 [docs/hardware/stickc-plus2.md](hardware/stickc-plus2.md).
+
+The WiFi driver is built like the kernel itself: a portable core
+(`components/wifi`) that owns the state of the station and a radio
+(`components/wifi/src/wifi_esp32.c`) that talks to the ESP-IDF. The two talk
+through a table of functions, so the state machine of the driver is covered
+by the unit tests of the host. The decision is recorded in
+[ADR 0003](adr/0003-wifi-driver.md).
 
 ## 8. Testing
 

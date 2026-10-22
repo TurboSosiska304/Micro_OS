@@ -18,8 +18,8 @@ Linux-подобное ядро для **M5Stack StickC Plus2** (ESP32-PICO-V3-0
 | 1F | Доктор железа (модули и проверки) | ✅ готово |
 | 2 | VFS, MicroFS, шелл | ✅ готово |
 | 3 | ABI системных вызовов, подмножество libc | 🔄 в работе |
-| 4 | Драйвер микрофона, консоль на TFT | ⬜ план |
-| 5 | init, конфигурация, приложения, WiFi/MQTT | ⬜ план |
+| 4 | Драйверы: станция WiFi, микрофон, консоль на TFT | 🔄 в работе |
+| 5 | init, конфигурация, приложения, MQTT/NTP | ⬜ план |
 | 6 | OTA, релиз, документация | ⬜ план |
 
 Подробный план — в [docs/roadmap_ru.md](docs/roadmap_ru.md), архитектура — в
@@ -138,7 +138,29 @@ init-процесс запускает шелл — небольшое подм�
 | `memtest` | проверка памяти и её скорости |
 | `i2c` | сканирование шины I2C |
 | `date` | время с RTC |
+| `wifi` | станция WiFi: `status`, `scan`, `connect`, `join`, `disconnect` |
 | `echo`, `sleep`, `clear`, `reboot` | как в жизни |
+
+### Станция WiFi
+
+Радио платы — отдельный драйвер: переносимое ядро, которое держит состояние
+станции, и радио ESP32, которое говорит с железом. Сеть прошлого раза
+запоминается в NVS, поэтому после перезагрузки плата подключается к ней сама.
+
+```
+microos> wifi scan
+3 network(s):
+home            -42 dBm  ch  6  locked
+guest           -70 dBm  ch 11  open
+microos> wifi connect home secret
+connecting to home
+microos> wifi status
+home aa:bb:cc:dd:ee:ff, ip 192.168.1.42, -42 dBm, ch 6
+saved network: home
+```
+
+Решение о форме драйвера записано в
+[docs/adr/0003-wifi-driver_ru.md](docs/adr/0003-wifi-driver_ru.md).
 
 ### Готовые бинарники
 
@@ -153,6 +175,7 @@ Micro_OS/
 ├── components/
 │   ├── kernel/         переносимое ядро: boot, log, panic, version
 │   ├── board/          описание железа
+│   ├── wifi/           станция WiFi: переносимое ядро и радио
 │   └── port_esp32/     порт для ESP32
 ├── ports/port_host/    порт для Linux + симулятор
 ├── main/               точка входа прошивки (app_main)

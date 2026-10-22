@@ -19,8 +19,8 @@ a single ESP32 core, a 200 mAh battery and a 135x240 display.
 | 1F | Hardware doctor (modules and health checks) | done |
 | 2 | VFS, MicroFS, shell | done |
 | 3 | Syscall ABI, libc subset | in progress |
-| 4 | Microphone driver, TFT console | planned |
-| 5 | init, configuration, applications, WiFi/MQTT | planned |
+| 4 | Drivers: the WiFi station, the microphone, the TFT console | in progress |
+| 5 | init, configuration, applications, MQTT/NTP | planned |
 | 6 | OTA, release, documentation | planned |
 
 See [docs/roadmap.md](docs/roadmap.md) for the full plan and
@@ -141,7 +141,30 @@ commands:
 | `memtest` | measure the memory and its speed |
 | `i2c` | scan the I2C bus |
 | `date` | the time of the RTC |
+| `wifi` | the WiFi station: `status`, `scan`, `connect`, `join`, `disconnect` |
 | `echo`, `sleep`, `clear`, `reboot` | the usual suspects |
+
+### The WiFi station
+
+The radio of the board is a driver of its own: a portable core that holds the
+state of the station and the radio of the ESP32 that talks to the hardware.
+The network of the last time is remembered in the NVS, so the board joins it
+on its own after a restart.
+
+```
+microos> wifi scan
+3 network(s):
+home            -42 dBm  ch  6  locked
+guest           -70 dBm  ch 11  open
+microos> wifi connect home secret
+connecting to home
+microos> wifi status
+home aa:bb:cc:dd:ee:ff, ip 192.168.1.42, -42 dBm, ch 6
+saved network: home
+```
+
+The decision about the shape of the driver is recorded in
+[docs/adr/0003-wifi-driver.md](docs/adr/0003-wifi-driver.md).
 
 ### Ready to flash binaries
 
@@ -156,6 +179,7 @@ Micro_OS/
 ├── components/
 │   ├── kernel/         portable kernel: boot, log, panic, version, tasks, sched
 │   ├── board/          hardware description
+│   ├── wifi/           the WiFi station: the portable core and the radio
 │   └── port_esp32/     ESP32 port
 ├── ports/port_host/    Linux port + simulator
 ├── main/               firmware entry point (app_main)

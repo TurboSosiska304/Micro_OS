@@ -115,13 +115,16 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [ ] `drv_buzzer`, `drv_led` (IR+LED share G19), `drv_ir` (transmit and receive)
 * [ ] `drv_imu` (MPU6886), `drv_rtc` (BM8563, deep-sleep wake)
 * [ ] `drv_mic` (SPM1423) — a simple sound/noise detector
+* [x] `drv_wifi`: the station, the scan, the network of the last time is
+      remembered in the NVS (see [ADR 0003](adr/0003-wifi-driver.md))
 * [ ] Console on TFT and UART at the same time
 
 ## Phase 5 - Services and applications
 
 * [ ] Init process: starting daemons from `/etc/init.d`
 * [ ] Configuration from `/etc`, persisted in NVS
-* [ ] WiFi, HTTP/MQTT client, NTP based on the RTC
+* [x] WiFi: the station joins the network of the last time on its own
+* [ ] HTTP/MQTT client, NTP based on the RTC
 * [ ] Applications: sensor logger, IR remote, clock, weather station
 
 ## Phase 6 - Release
