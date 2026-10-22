@@ -117,6 +117,71 @@ static int flash_sync(void *ctx)
     return flash_flush();
 }
 
+/* The volume of the partition, as the filesystem sees it. */
+static void flash_make_device(struct mfs_device *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->blocks = s_partition->size / MFS_BLOCK_SIZE;
+    out->read_block = flash_read_block;
+    out->write_block = flash_write_block;
+    out->sync = flash_sync;
+    out->ctx = (void *)s_partition;
+}
+
+/*
+ * The flash was never written when the block of the header is all ones:
+ * that is the state the flash comes in. It is the only case in which the
+ * board formats the volume on its own.
+ */
+static bool flash_is_fresh(void)
+{
+    k_u8_t block[MFS_BLOCK_SIZE];
+    k_u32_t last;
+    k_size_t i;
+
+    if (s_partition == NULL) {
+        return false;
+    }
+
+    last = (k_u32_t)(s_partition->size / MFS_BLOCK_SIZE) - 1u;
+
+    if (esp_partition_read(s_partition, (size_t)last * MFS_BLOCK_SIZE, block,
+                           MFS_BLOCK_SIZE) != ESP_OK) {
+        return false;
+    }
+
+    for (i = 0; i < MFS_BLOCK_SIZE; i++) {
+        if (block[i] != 0xFF) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+int mfs_flash_format(void)
+{
+    struct mfs_device device;
+    int rc;
+
+    if (s_partition == NULL) {
+        return -1;
+    }
+
+    /* The sector in the memory belongs to the old volume. */
+    s_sector_valid = false;
+    s_sector_dirty = false;
+
+    flash_make_device(&device);
+
+    rc = mfs_format(&device, 256);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    return 0;
+}
+
 int mfs_flash_mount(const char *point)
 {
     struct mfs_device device;
@@ -130,18 +195,26 @@ int mfs_flash_mount(const char *point)
         return -1;
     }
 
-    memset(&device, 0, sizeof(device));
-    device.blocks = s_partition->size / MFS_BLOCK_SIZE;
-    device.read_block = flash_read_block;
-    device.write_block = flash_write_block;
-    device.sync = flash_sync;
-    device.ctx = (void *)s_partition;
+    flash_make_device(&device);
 
     rc = mfs_mount(&device);
     if (rc != MFS_OK) {
+        /*
+         * The volume cannot be mounted. The data of the user is only
+         * destroyed when the flash was really never written: the header
+         * of the volume is all ones, that is the state the flash comes
+         * in. Every other error (a damaged header, a failed read) keeps
+         * the data and the board comes up without a filesystem - it is
+         * better than quietly erasing it.
+         */
+        if (!flash_is_fresh()) {
+            kerror("mfs: the volume cannot be mounted (rc=%d), the data is kept", rc);
+            return rc;
+        }
+
         kinfo("mfs: the volume is not formatted yet, formatting it");
-        rc = mfs_format(&device, 256);
-        if (rc != MFS_OK) {
+        rc = mfs_flash_format();
+        if (rc != 0) {
             kerror("mfs: cannot format the volume (rc=%d)", rc);
             return rc;
         }

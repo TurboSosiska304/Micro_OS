@@ -49,7 +49,7 @@ struct vfs_statfs {
 };
 
 struct vfs_operations {
-    int (*open)(void *ctx, const char *path, int flags, struct vfs_file *out, k_size_t slot);
+    int (*open)(void *ctx, const char *path, int flags, struct vfs_file *out);
     int (*read)(void *ctx, struct vfs_file *file, void *buf, k_size_t size);
     int (*write)(void *ctx, struct vfs_file *file, const void *buf, k_size_t size);
     int (*close)(void *ctx, struct vfs_file *file);
@@ -72,8 +72,12 @@ struct vfs_file {
     void *fs;                         /* the context of the filesystem */
 };
 
-/* The place for the private data of an open file. */
-void *vfs_file_data(k_size_t index);
+/*
+ * The size of the private data of an open file. The buffer belongs to the
+ * caller (the kernel gives it to every open file of every task), so that
+ * two tasks never share the data of their files.
+ */
+#define VFS_FILE_DATA_SIZE 64
 
 /* Mount a filesystem at a point of the tree. */
 int vfs_mount(const char *point, const struct vfs_operations *ops, void *ctx);
@@ -88,7 +92,7 @@ k_size_t vfs_mount_count(void);
 const char *vfs_mount_name(k_size_t index);
 
 /* The operations of a filesystem, for the shell. */
-int vfs_open(const char *path, int flags, struct vfs_file *out, k_size_t slot);
+int vfs_open(const char *path, int flags, struct vfs_file *out, void *priv);
 int vfs_read(struct vfs_file *file, void *buf, k_size_t size);
 int vfs_write(struct vfs_file *file, const void *buf, k_size_t size);
 int vfs_close(struct vfs_file *file);

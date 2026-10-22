@@ -42,6 +42,11 @@ struct kfile {
     int flags;
     char path[TASK_PATH_MAX]; /* the path the file was opened with */
     struct vfs_file file;
+    /*
+     * The private data of the filesystem for this open file. It belongs to
+     * the task: two tasks that both have the descriptor 0 never share it.
+     */
+    k_u8_t priv[VFS_FILE_DATA_SIZE];
 };
 
 struct task {

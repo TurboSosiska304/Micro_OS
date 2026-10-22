@@ -47,6 +47,8 @@ static void test_mount(void)
 static void test_file_operations(void)
 {
     struct vfs_file file;
+    /* The place for the data of the filesystem of an open file. */
+    static k_u8_t file_data[VFS_FILE_DATA_SIZE];
     char buffer[64];
     int rc;
 
@@ -55,7 +57,7 @@ static void test_file_operations(void)
     setup();
 
     /* A path below the mount point has to be found. */
-    rc = vfs_open("/hello.txt", VFS_O_RDWR | VFS_O_CREAT | VFS_O_TRUNC, &file, 0);
+    rc = vfs_open("/hello.txt", VFS_O_RDWR | VFS_O_CREAT | VFS_O_TRUNC, &file, file_data);
     KT_CHECK_INT_EQ(rc, 0);
 
     if (rc == 0) {
@@ -63,7 +65,7 @@ static void test_file_operations(void)
         KT_CHECK_INT_EQ(vfs_close(&file), 0);
     }
 
-    rc = vfs_open("/hello.txt", VFS_O_RDONLY, &file, 0);
+    rc = vfs_open("/hello.txt", VFS_O_RDONLY, &file, file_data);
     KT_CHECK_INT_EQ(rc, 0);
 
     if (rc == 0) {

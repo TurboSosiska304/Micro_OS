@@ -79,21 +79,23 @@ static const char *base_name(const char *path)
     return slash + 1;
 }
 
-static int devfs_open(void *ctx, const char *path, int flags, struct vfs_file *out, k_size_t slot)
+static int devfs_open(void *ctx, const char *path, int flags, struct vfs_file *out)
 {
     const char *name = base_name(path);
     const struct dev_file *dev = find_device(name);
+    const struct dev_file **slot;
 
     K_UNUSED(ctx);
     K_UNUSED(flags);
-    K_UNUSED(slot);
 
     if (dev == NULL) {
         return -2;
     }
 
-    if (out->priv != NULL) {
-        snprintf((char *)out->priv, DEV_NAME_MAX, "%s", name);
+    /* The device is remembered, not its name: the table can change. */
+    slot = (const struct dev_file **)out->priv;
+    if (slot != NULL) {
+        *slot = dev;
     }
 
     return 0;
@@ -101,8 +103,8 @@ static int devfs_open(void *ctx, const char *path, int flags, struct vfs_file *o
 
 static int devfs_read(void *ctx, struct vfs_file *file, void *buf, k_size_t size)
 {
-    const char *name = (file->priv != NULL) ? (const char *)file->priv : "";
-    const struct dev_file *dev = find_device(name);
+    const struct dev_file *const *slot = (const struct dev_file *const *)file->priv;
+    const struct dev_file *dev = (slot != NULL) ? *slot : NULL;
 
     K_UNUSED(ctx);
 
@@ -115,8 +117,8 @@ static int devfs_read(void *ctx, struct vfs_file *file, void *buf, k_size_t size
 
 static int devfs_write(void *ctx, struct vfs_file *file, const void *buf, k_size_t size)
 {
-    const char *name = (file->priv != NULL) ? (const char *)file->priv : "";
-    const struct dev_file *dev = find_device(name);
+    const struct dev_file *const *slot = (const struct dev_file *const *)file->priv;
+    const struct dev_file *dev = (slot != NULL) ? *slot : NULL;
 
     K_UNUSED(ctx);
 

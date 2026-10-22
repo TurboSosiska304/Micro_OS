@@ -352,6 +352,8 @@ static void test_error_codes(void)
 static void test_syscalls_and_vfs_agree(void)
 {
     struct vfs_file file;
+    /* The place for the data of the filesystem of an open file. */
+    static k_u8_t file_data[VFS_FILE_DATA_SIZE];
     char back[128];
     int fd;
 
@@ -366,7 +368,7 @@ static void test_syscalls_and_vfs_agree(void)
     KT_CHECK_INT_EQ(ksys_close(fd), 0);
 
     /* The filesystem reads the same. */
-    KT_CHECK_INT_EQ(vfs_open("/shared.txt", VFS_O_RDONLY, &file, 1), 0);
+    KT_CHECK_INT_EQ(vfs_open("/shared.txt", VFS_O_RDONLY, &file, file_data), 0);
     memset(back, 0, sizeof(back));
     KT_CHECK_INT_EQ(vfs_read(&file, back, 64), 64);
     KT_CHECK_INT_EQ(memcmp(back, g_text, 64), 0);
@@ -377,7 +379,7 @@ static void test_syscalls_and_vfs_agree(void)
         const char *text = "written through the filesystem\n";
         int fd2;
 
-        KT_CHECK_INT_EQ(vfs_open("/shared.txt", VFS_O_WRONLY | VFS_O_TRUNC, &file, 1), 0);
+        KT_CHECK_INT_EQ(vfs_open("/shared.txt", VFS_O_WRONLY | VFS_O_TRUNC, &file, file_data), 0);
         KT_CHECK_INT_EQ(vfs_write(&file, text, strlen(text)), (int)strlen(text));
         vfs_close(&file);
 

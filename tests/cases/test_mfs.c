@@ -63,7 +63,7 @@ static void test_layout(void)
     KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
     KT_CHECK_INT_EQ(mfs_get_info(&info), MFS_OK);
 
-    /* The INFO section is the last block of the volume. */
+    /* The header of the volume lives in the last block of the volume. */
     info_block = g_volume.data + (size_t)(TEST_BLOCKS - 1) * MFS_BLOCK_SIZE;
     {
         struct mfs_superblock sb;
@@ -76,10 +76,171 @@ static void test_layout(void)
         KT_CHECK_INT_EQ(sb.total_blocks, TEST_BLOCKS);
         KT_CHECK_INT_EQ(sb.data_start, 0);
         KT_CHECK_INT_EQ(sb.data_blocks, info.data_blocks);
-        KT_CHECK_INT_EQ(sb.meta_start, TEST_BLOCKS - info.meta_blocks - 1);
-        KT_CHECK_INT_EQ(sb.info_start, TEST_BLOCKS - 1);
         KT_CHECK_INT_EQ(sb.root_inode, MFS_ROOT_INODE);
+
+        /* The three sections fill the volume, in the documented order. */
+        KT_CHECK_INT_EQ(sb.meta_start + sb.meta_blocks, sb.info_start);
+        KT_CHECK_INT_EQ(sb.info_start + sb.info_blocks, sb.total_blocks);
+        KT_CHECK_INT_EQ(sb.meta_start, TEST_BLOCKS - info.meta_blocks - sb.info_blocks);
+
+        /*
+         * The INFO section starts at the border of an erase sector of the
+         * flash (4 KB = 4 blocks): the table of the inodes is then in a
+         * sector of its own, and writing it cannot erase the header.
+         */
+        KT_CHECK_INT_EQ(sb.info_start % 4, 0);
+        KT_CHECK_INT_EQ(sb.info_blocks % 4, 0);
+
+        /* The header carries the checksum of itself. */
+        KT_CHECK((sb.features & MFS_FEATURE_CRC) != 0);
     }
+
+    teardown();
+}
+
+/*
+ * The property: a header that the storage lost in the middle is noticed,
+ * and the volume that it describes is not mounted.
+ */
+static void test_header_crc(void)
+{
+    k_u8_t saved[MFS_BLOCK_SIZE];
+    k_u8_t *info_block;
+
+    ktest_begin("mfs: a damaged header is not trusted");
+
+    KT_CHECK_INT_EQ(setup(), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+
+    info_block = g_volume.data + (size_t)(TEST_BLOCKS - 1) * MFS_BLOCK_SIZE;
+    memcpy(saved, info_block, MFS_BLOCK_SIZE);
+
+    /* A bit that a brownout left half written. */
+    info_block[sizeof(struct mfs_superblock) / 2] ^= 0x10;
+    mfs_unmount();
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_EINVAL);
+    KT_CHECK(!mfs_is_mounted());
+
+    /* The same volume, the header put back: everything is fine again. */
+    memcpy(info_block, saved, MFS_BLOCK_SIZE);
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+
+    teardown();
+}
+
+/*
+ * The property: the map of the free blocks reaches the device before the
+ * record that points at the block. After a restart the directory must not
+ * share its block with a file that was created later.
+ */
+static void test_mkdir_survives_restart(void)
+{
+    struct mfs_info before;
+    struct mfs_info after;
+    struct mfs_file file;
+    char buffer[64];
+
+    ktest_begin("mfs: a directory survives a restart without losing its block");
+
+    KT_CHECK_INT_EQ(setup(), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+
+    KT_CHECK_INT_EQ(mfs_mkdir("/logs"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_mkdir("/logs/old"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_get_info(&before), MFS_OK);
+    /* The restart of the board: only what reached the device stays. */
+    mfs_unmount();
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+
+    /* The blocks of the directories are still taken. */
+    KT_CHECK_INT_EQ(mfs_get_info(&after), MFS_OK);
+    KT_CHECK_INT_EQ(after.data_free, before.data_free);
+
+    /* The directories are still there. */
+    {
+        struct mfs_dirent entries[8];
+
+        memset(entries, 0, sizeof(entries));
+        KT_CHECK_INT_EQ(mfs_list("/logs", entries, 8), MFS_OK);
+        KT_CHECK_STR_EQ(entries[0].name, "old");
+    }
+
+    /* A new file must not be given the block of the directory. */
+    KT_CHECK_INT_EQ(mfs_create("/logs/a.txt"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_open("/logs/a.txt", MFS_O_RDWR, &file), MFS_OK);
+    memset(buffer, 'x', sizeof(buffer));
+    KT_CHECK_INT_EQ(mfs_write(&file, buffer, sizeof(buffer)), (int)sizeof(buffer));
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+
+    {
+        struct mfs_dirent entries[8];
+        int found_old = 0;
+        int found_new = 0;
+        k_size_t i;
+
+        memset(entries, 0, sizeof(entries));
+        KT_CHECK_INT_EQ(mfs_list("/logs", entries, 8), MFS_OK);
+
+        for (i = 0; i < 8; i++) {
+            if (strcmp(entries[i].name, "old") == 0) {
+                found_old = 1;
+            }
+            if (strcmp(entries[i].name, "a.txt") == 0) {
+                found_new = 1;
+            }
+        }
+
+        /* Both are still there, the new file did not overwrite the entry. */
+        KT_CHECK(found_old);
+        KT_CHECK(found_new);
+    }
+
+    /* The directory still owns its block. */
+    {
+        struct mfs_inode inode;
+
+        KT_CHECK_INT_EQ(mfs_stat("/logs", &inode, NULL), MFS_OK);
+        KT_CHECK((inode.flags & MFS_INODE_DIR) != 0);
+        KT_CHECK_INT_EQ(inode.entries, 2);
+        KT_CHECK(inode.size > 0);
+    }
+
+    teardown();
+}
+
+/*
+ * The property: a file opened with O_TRUNC gives its blocks back to the
+ * map, and the map reaches the device.
+ */
+static void test_truncate_frees_blocks(void)
+{
+    struct mfs_info empty;
+    struct mfs_info full;
+    struct mfs_info after;
+    struct mfs_file file;
+    char buffer[3000];
+
+    ktest_begin("mfs: a truncated file gives its blocks back");
+
+    KT_CHECK_INT_EQ(setup(), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_get_info(&empty), MFS_OK);
+
+    memset(buffer, 'a', sizeof(buffer));
+    KT_CHECK_INT_EQ(mfs_create("/big.bin"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_open("/big.bin", MFS_O_RDWR, &file), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_write(&file, buffer, sizeof(buffer)), (int)sizeof(buffer));
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+
+    KT_CHECK_INT_EQ(mfs_get_info(&full), MFS_OK);
+    KT_CHECK(full.data_free < empty.data_free);
+
+    /* The truncation: the blocks of the chain go back to the map. */
+    KT_CHECK_INT_EQ(mfs_open("/big.bin", MFS_O_RDWR | MFS_O_TRUNC, &file), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+
+    KT_CHECK_INT_EQ(mfs_get_info(&after), MFS_OK);
+    KT_CHECK_INT_EQ(after.data_free, empty.data_free);
 
     teardown();
 }
@@ -242,6 +403,9 @@ void test_mfs(void)
 {
     test_format();
     test_layout();
+    test_header_crc();
+    test_mkdir_survives_restart();
+    test_truncate_frees_blocks();
     test_files();
     test_big_file();
     test_directories();

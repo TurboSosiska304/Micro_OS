@@ -144,7 +144,7 @@ static k_ssize_t sys_open(ksys_arg_t path, ksys_arg_t flags, ksys_arg_t a2, ksys
 
     file = &((struct task *)task_self())->files[fd];
 
-    rc = vfs_open(name, (int)flags, &file->file, (k_size_t)fd);
+    rc = vfs_open(name, (int)flags, &file->file, file->priv);
     if (rc != 0) {
         fd_release(fd);
         return rc;

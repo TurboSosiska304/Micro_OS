@@ -38,13 +38,16 @@ static void teardown(void)
     mfs_ram_free(&g_volume);
 }
 
+/* The place for the data of the filesystem for an open file of the test. */
+static k_u8_t g_file_data[VFS_FILE_DATA_SIZE];
+
 /* Read a file of the tree of the directories. */
 static int read_file(const char *path, char *buf, k_size_t size)
 {
     struct vfs_file file;
     int rc;
 
-    rc = vfs_open(path, VFS_O_RDONLY, &file, 0);
+    rc = vfs_open(path, VFS_O_RDONLY, &file, g_file_data);
     if (rc != 0) {
         return rc;
     }
@@ -97,7 +100,7 @@ static void test_procfs_end(void)
     setup();
 
     /* The file has to end, otherwise the reader loops forever. */
-    rc = vfs_open("/proc/uptime", VFS_O_RDONLY, &file, 0);
+    rc = vfs_open("/proc/uptime", VFS_O_RDONLY, &file, g_file_data);
     KT_CHECK_INT_EQ(rc, 0);
 
     if (rc == 0) {

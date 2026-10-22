@@ -16,9 +16,9 @@
 #include "kernel/sched.h"
 #include "kernel/task.h"
 #include "kernel/version.h"
-#include "kernel/vfs.h"
 #include "devfs/devfs.h"
 #include "graphics/tft_console.h"
+#include "mfs/mfs.h"
 #include "mfs/mfs_flash.h"
 #include "procfs/procfs.h"
 #include "kshell/kshell.h"
@@ -44,13 +44,56 @@ static int drivers_subsys_init(void)
     return drivers_init();
 }
 
+/*
+ * The command that formats the volume of the flash. It refuses without the
+ * flag -y: the whole content of the volume is destroyed.
+ */
+static int cmd_mkfs(int argc, char **argv)
+{
+    if (argc < 2 || strcmp(argv[1], "-y") != 0) {
+        kshell_printf("usage: mkfs -y   (erases the whole volume)\n");
+        return KSHELL_USAGE;
+    }
+
+    /* The volume cannot be formatted while it is mounted. */
+    mfs_unmount();
+    vfs_umount("/");
+
+    if (mfs_flash_format() != 0) {
+        kshell_printf("mkfs: the volume cannot be formatted\n");
+        return KSHELL_ERROR;
+    }
+
+    if (mfs_flash_mount("/") != 0) {
+        kshell_printf("mkfs: the volume is formatted, but it cannot be mounted\n");
+        return KSHELL_ERROR;
+    }
+
+    kshell_printf("mkfs: the volume is formatted\n");
+
+    return KSHELL_OK;
+}
+
 /* The filesystem of the flash: the data of the user survives the restarts. */
 static int fs_subsys_init(void)
 {
-    int rc = mfs_flash_mount("/");
+    int rc;
 
+    /*
+     * The command is registered before the mount: when the volume of the
+     * user is damaged, the board still starts and the shell can format it
+     * again.
+     */
+    kshell_register("mkfs", "format the volume: mkfs -y", cmd_mkfs);
+
+    rc = mfs_flash_mount("/");
     if (rc != 0) {
-        return rc;
+        /*
+         * The board has to work even when the data of the user cannot be
+         * read: the information of the system is still there, and the
+         * shell has the command that makes a new volume.
+         */
+        kwarn("init: the filesystem of the flash is not available (rc=%d)", rc);
     }
 
     /* The information about the system and the devices. */
@@ -87,6 +130,8 @@ static void shell_task(void *arg)
 static int write_boot_log(void)
 {
     struct vfs_file file;
+    /* The place for the data of the filesystem of an open file. */
+    static k_u8_t file_data[VFS_FILE_DATA_SIZE];
     const char *text;
     int rc;
 
@@ -96,7 +141,7 @@ static int write_boot_log(void)
         kwarn("init: cannot create the directory /log (rc=%d)", rc);
     }
 
-    rc = vfs_open("/log/start.log", VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, 0);
+    rc = vfs_open("/log/start.log", VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, file_data);
     if (rc != 0) {
         kwarn("init: cannot create the log file (rc=%d)", rc);
         return rc;

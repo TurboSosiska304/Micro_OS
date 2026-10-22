@@ -16,14 +16,12 @@ struct mfs_vfs_file {
     struct mfs_file file;
 };
 
-static int vfs_open_file(void *ctx, const char *path, int flags, struct vfs_file *out,
-                         k_size_t slot)
+static int vfs_open_file(void *ctx, const char *path, int flags, struct vfs_file *out)
 {
     struct mfs_vfs_file *file;
     int rc;
 
     K_UNUSED(ctx);
-    K_UNUSED(slot);
 
     file = (struct mfs_vfs_file *)out->priv;
     if (file == NULL) {
@@ -45,6 +43,7 @@ static int vfs_open_file(void *ctx, const char *path, int flags, struct vfs_file
 static int vfs_read_file(void *ctx, struct vfs_file *vfs_file, void *buf, k_size_t size)
 {
     struct mfs_vfs_file *file = (struct mfs_vfs_file *)vfs_file->priv;
+    int rc;
 
     K_UNUSED(ctx);
 
@@ -52,14 +51,25 @@ static int vfs_read_file(void *ctx, struct vfs_file *vfs_file, void *buf, k_size
         return MFS_EINVAL;
     }
 
-    vfs_file->offset = file->file.offset;
+    /*
+     * The position of an open file belongs to the descriptor: a seek moves
+     * it, and the filesystem has to read from the new place.
+     */
+    file->file.offset = (k_u32_t)vfs_file->offset;
 
-    return mfs_read(&file->file, buf, size);
+    rc = mfs_read(&file->file, buf, size);
+    if (rc > 0) {
+        vfs_file->offset = file->file.offset;
+        vfs_file->size = file->file.size;
+    }
+
+    return rc;
 }
 
 static int vfs_write_file(void *ctx, struct vfs_file *vfs_file, const void *buf, k_size_t size)
 {
     struct mfs_vfs_file *file = (struct mfs_vfs_file *)vfs_file->priv;
+    int rc;
 
     K_UNUSED(ctx);
 
@@ -67,9 +77,16 @@ static int vfs_write_file(void *ctx, struct vfs_file *vfs_file, const void *buf,
         return MFS_EINVAL;
     }
 
-    vfs_file->offset = file->file.offset;
+    /* The same as above: the descriptor decides where the data goes. */
+    file->file.offset = (k_u32_t)vfs_file->offset;
 
-    return mfs_write(&file->file, buf, size);
+    rc = mfs_write(&file->file, buf, size);
+    if (rc > 0) {
+        vfs_file->offset = file->file.offset;
+        vfs_file->size = file->file.size;
+    }
+
+    return rc;
 }
 
 static int vfs_close_file(void *ctx, struct vfs_file *vfs_file)
@@ -83,6 +100,7 @@ static int vfs_close_file(void *ctx, struct vfs_file *vfs_file)
     }
 
     vfs_file->size = file->file.size;
+    vfs_file->offset = file->file.offset;
 
     return mfs_close(&file->file);
 }
@@ -194,23 +212,7 @@ static const struct vfs_operations g_mfs_operations = {
     .strerror = mfs_strerror,
 };
 
-/*
- * The VFS needs a place for the data of an open file. The kernel gives
- * every task a table of the descriptors, the private data of the file
- * lives here.
- */
-static struct mfs_vfs_file g_files[16];
-
 int mfs_vfs_register(const char *point)
 {
     return vfs_mount(point, &g_mfs_operations, NULL);
-}
-
-void *mfs_vfs_file_data(k_size_t index)
-{
-    if (index >= 16) {
-        return NULL;
-    }
-
-    return &g_files[index];
 }
