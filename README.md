@@ -17,8 +17,8 @@ a single ESP32 core, a 200 mAh battery and a 135x240 display.
 | 0 | Skeleton, build system, log, board description, unit tests | done |
 | 1 | Scheduler, tasks, timers, PIDs | done |
 | 1F | Hardware doctor (modules and health checks) | done |
-| 2 | VFS, MicroFS, shell | in progress |
-| 3 | Syscall ABI, libc subset | planned |
+| 2 | VFS, MicroFS, shell | done |
+| 3 | Syscall ABI, libc subset | in progress |
 | 4 | Microphone driver, TFT console | planned |
 | 5 | init, configuration, applications, WiFi/MQTT | planned |
 | 6 | OTA, release, documentation | planned |
