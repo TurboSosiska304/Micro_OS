@@ -59,6 +59,7 @@ else()
     add_subdirectory(components/devfs)
     add_subdirectory(components/font)
     add_subdirectory(components/libc)
+    add_subdirectory(components/wifi)
     add_subdirectory(ports/port_host)
     add_subdirectory(tests)
 

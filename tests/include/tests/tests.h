@@ -21,5 +21,6 @@ void test_ksys(void);
 void test_ksys_process(void);
 void test_libc(void);
 void test_kshell(void);
+void test_wifi(void);
 
 #endif /* MICRO_OS_TESTS_H */

@@ -1,105 +1,111 @@
 /*
  * Micro OS — WiFi driver of the StickC Plus2.
  *
- * The check starts the station mode and reads the MAC address. Without a
- * configured access point the module is "degraded": the radio works, but
- * there is no connection yet.
+ * The driver is split in two: the core of the station (components/wifi, the
+ * state machine and the configuration) and the radio of the ESP32 (the
+ * backend, which talks to the hardware). This file is the glue: it starts
+ * the radio, keeps the module of the hardware doctor and gives the shell
+ * the command that talks to the network.
+ *
+ * Without a configured access point the module is "degraded": the radio
+ * works, but there is no connection yet.
  */
 #include "drivers/internal.h"
 
 #include <stdio.h>
+#include <string.h>
 
-#include "esp_event.h"
-#include "esp_netif.h"
-#include "nvs_flash.h"
-#include "esp_wifi.h"
 #include "kernel/kmod.h"
 #include "kernel/log.h"
+#include "kshell/kshell.h"
+#include "wifi/wifi.h"
+#include "wifi/wifi_esp32.h"
 
 static bool s_started;
-static bool s_connected;
 static uint8_t s_mac[6];
 
-static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
-{
-    (void)arg;
-    (void)base;
-    (void)data;
-
-    if (id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
-    } else if (id == WIFI_EVENT_STA_CONNECTED) {
-        s_connected = true;
-    } else if (id == WIFI_EVENT_STA_DISCONNECTED) {
-        s_connected = false;
-    }
-}
+/* --- the module of the hardware doctor --- */
 
 static int drv_wifi_init(void)
 {
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    int rc;
 
-    /* The WiFi driver stores its calibration data in the NVS. */
-    {
-        esp_err_t rc = nvs_flash_init();
-
-        if (rc != ESP_OK && rc != ESP_ERR_NVS_NO_FREE_PAGES &&
-            rc != ESP_ERR_NVS_NEW_VERSION_FOUND) {
-            kerror("wifi: cannot initialise the NVS (rc=%d)", (int)rc);
-            return -1;
-        }
+    if (wifi_esp32_init() != 0) {
+        return -1;
     }
 
-    if (esp_netif_init() != ESP_OK) {
+    if (wifi_init() != WIFI_OK) {
         return -2;
     }
 
-    if (esp_event_loop_create_default() != ESP_OK) {
+    rc = wifi_start();
+    if (rc != WIFI_OK) {
+        kerror("wifi: the radio does not start (rc=%d)", rc);
         return -3;
     }
 
-    if (esp_wifi_init(&cfg) != ESP_OK) {
-        kerror("wifi: esp_wifi_init failed");
-        return -4;
-    }
-
-    if (esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL,
-                                            NULL) != ESP_OK) {
-        return -4;
-    }
-
-    if (esp_wifi_set_mode(WIFI_MODE_STA) != ESP_OK) {
-        return -5;
-    }
-
-    if (esp_wifi_start() != ESP_OK) {
-        return -6;
-    }
-
-    if (esp_wifi_get_mac(WIFI_IF_STA, s_mac) != ESP_OK) {
-        return -7;
-    }
+    (void)wifi_esp32_get_mac(s_mac);
 
     s_started = true;
+
+    /*
+     * The network of the last time is remembered in the NVS: the board
+     * joins it on its own, without waiting for the shell.
+     */
+    rc = wifi_connect_saved();
+    if (rc == WIFI_OK) {
+        kinfo("wifi: the station joins the saved network");
+    } else if (rc == WIFI_NO_CONFIG) {
+        kinfo("wifi: there is no saved network yet");
+    }
+
     return 0;
 }
 
 static int drv_wifi_check(void)
 {
+    struct wifi_status status;
+
     if (!s_started) {
         return -1;
     }
 
-    /* The radio is up: without an access point the module is only degraded. */
-    return s_connected ? 0 : 1;
+    if (wifi_get_status(&status) != WIFI_OK) {
+        return -1;
+    }
+
+    switch (status.state) {
+    case WIFI_STATE_CONNECTED:
+        return 0;
+    case WIFI_STATE_IDLE:
+    case WIFI_STATE_CONNECTING:
+        /* The radio is up: without a network the module is only degraded. */
+        return 1;
+    default:
+        return -1;
+    }
 }
 
 static const char *drv_wifi_detail(void)
 {
     static char buf[48];
+    struct wifi_status status;
+    char mac[18];
 
-    snprintf(buf, sizeof(buf), "%02x:%02x:%02x:%02x:%02x:%02x%s", s_mac[0], s_mac[1], s_mac[2],
-             s_mac[3], s_mac[4], s_mac[5], s_connected ? " connected" : " idle");
+    snprintf(mac, sizeof(mac), "%02x:%02x:%02x:%02x:%02x:%02x", s_mac[0], s_mac[1], s_mac[2],
+             s_mac[3], s_mac[4], s_mac[5]);
+
+    if (!s_started || wifi_get_status(&status) != WIFI_OK) {
+        snprintf(buf, sizeof(buf), "%s no radio", mac);
+        return buf;
+    }
+
+    if (status.state == WIFI_STATE_CONNECTED && status.ip[0] != '\0') {
+        snprintf(buf, sizeof(buf), "%s %s", mac, status.ip);
+    } else {
+        snprintf(buf, sizeof(buf), "%s %s", mac, wifi_state_name(status.state));
+    }
+
     return buf;
 }
 
@@ -111,7 +117,144 @@ static const struct kmod s_wifi_module = {
     .detail = drv_wifi_detail,
 };
 
+/* --- the command of the shell --- */
+
+static void wifi_print_status(void)
+{
+    struct wifi_status status;
+    char buf[96];
+    char ssid[WIFI_SSID_MAX];
+    int rc;
+
+    if (wifi_get_status(&status) != WIFI_OK) {
+        kshell_printf("wifi: the radio is not ready\n");
+        return;
+    }
+
+    wifi_format_status(buf, sizeof(buf), &status);
+    kshell_printf("%s\n", buf);
+
+    rc = wifi_config_get(ssid, sizeof(ssid), NULL, 0);
+    if (rc == WIFI_OK) {
+        kshell_printf("saved network: %s\n", ssid);
+    } else {
+        kshell_printf("saved network: none\n");
+    }
+}
+
+static void wifi_print_scan(void)
+{
+    struct wifi_scan_entry entries[WIFI_SCAN_MAX];
+    char buf[96];
+    k_size_t count = 0;
+    k_size_t i;
+
+    if (wifi_scan(entries, WIFI_SCAN_MAX, &count) != WIFI_OK) {
+        kshell_printf("wifi: the scan failed\n");
+        return;
+    }
+
+    if (count == 0) {
+        kshell_printf("wifi: no networks around\n");
+        return;
+    }
+
+    kshell_printf("%u network(s):\n", (unsigned)count);
+
+    for (i = 0; i < count; i++) {
+        wifi_format_scan_entry(buf, sizeof(buf), &entries[i]);
+        kshell_printf("%s\n", buf);
+    }
+}
+
+static int cmd_wifi(int argc, char **argv)
+{
+    const char *action = (argc > 1) ? argv[1] : "status";
+    int rc;
+
+    if (strcmp(action, "status") == 0) {
+        wifi_print_status();
+        return KSHELL_OK;
+    }
+
+    if (strcmp(action, "scan") == 0) {
+        wifi_print_scan();
+        return KSHELL_OK;
+    }
+
+    if (strcmp(action, "connect") == 0) {
+        const char *ssid;
+        const char *pass = NULL;
+
+        if (argc < 3) {
+            kshell_printf("usage: wifi connect <ssid> [key]\n");
+            return KSHELL_USAGE;
+        }
+
+        ssid = argv[2];
+        if (argc > 3) {
+            pass = argv[3];
+        }
+
+        rc = wifi_connect(ssid, pass);
+        if (rc != WIFI_OK) {
+            kshell_printf("wifi: the connection is refused (rc=%d)\n", rc);
+            return KSHELL_ERROR;
+        }
+
+        /* The network is remembered: the board joins it after a restart. */
+        rc = wifi_config_save(ssid, pass);
+        if (rc != WIFI_OK) {
+            kshell_printf("wifi: the network is not remembered (rc=%d)\n", rc);
+        }
+
+        kshell_printf("connecting to %s\n", ssid);
+        return KSHELL_OK;
+    }
+
+    if (strcmp(action, "join") == 0) {
+        rc = wifi_connect_saved();
+        if (rc != WIFI_OK) {
+            kshell_printf("wifi: there is no network to join (rc=%d)\n", rc);
+            return KSHELL_ERROR;
+        }
+
+        kshell_printf("connecting to the saved network\n");
+        return KSHELL_OK;
+    }
+
+    if (strcmp(action, "disconnect") == 0) {
+        rc = wifi_disconnect();
+        if (rc != WIFI_OK) {
+            kshell_printf("wifi: the disconnection is refused (rc=%d)\n", rc);
+            return KSHELL_ERROR;
+        }
+
+        kshell_printf("disconnected\n");
+        return KSHELL_OK;
+    }
+
+    if (strcmp(action, "forget") == 0) {
+        rc = wifi_config_forget();
+        if (rc != WIFI_OK) {
+            kshell_printf("wifi: the network is not forgotten (rc=%d)\n", rc);
+            return KSHELL_ERROR;
+        }
+
+        kshell_printf("the saved network is forgotten\n");
+        return KSHELL_OK;
+    }
+
+    kshell_printf("usage: wifi [status|scan|connect <ssid> [key]|join|disconnect|forget]\n");
+
+    return KSHELL_USAGE;
+}
+
 int drv_wifi_register(void)
 {
-    return kmod_register(&s_wifi_module);
+    int rc = kmod_register(&s_wifi_module);
+
+    kshell_register("wifi", "the WiFi station: status, scan, connect", cmd_wifi);
+
+    return rc;
 }

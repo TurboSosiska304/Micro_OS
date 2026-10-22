@@ -38,6 +38,7 @@ static void run_tests(void *arg)
     test_libc();
     test_kshell();
     test_boot();
+    test_wifi();
 
     g_result = ktest_summary();
     g_done = true;
