@@ -394,16 +394,13 @@ esp_err_t port_esp32_start_tick(uint32_t period_ms)
     }
 
     /*
-     * The task of the esp_timer is created by a startup hook, which the
-     * linker drops when no other component uses the esp_timer API. The
-     * explicit initialisation makes the time base independent of that.
+     * The service of the timer is made by a startup hook, which the
+     * linker keeps as soon as something uses the esp_timer API - and the
+     * port does (the tick itself), so the hook is always there. Calling
+     * the initialisation by hand makes the driver print a red line at
+     * every boot of the board: it says that the service is already up,
+     * which is exactly the state it has to be in.
      */
-    rc = esp_timer_init();
-    if (rc != ESP_OK && rc != ESP_ERR_INVALID_STATE) {
-        kerror("tick: cannot initialise the esp_timer (rc=%d)", (int)rc);
-        return rc;
-    }
-
     rc = esp_timer_create(&args, &timer);
     if (rc != ESP_OK) {
         kerror("tick: cannot create the timer (rc=%d)", (int)rc);
