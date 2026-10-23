@@ -34,11 +34,16 @@ IDF 5.3 без предупреждений; устройство `RESULT: PASS`
 событие на семафоре небезопасен: радио само сканирует при подключении и шлёт
 то же `SCAN_DONE`). Баг **предсуществующий** (база `f40fcb4` падала так же).
 
-**Блокер по push:** `git push origin release_candidate` → `could not read
-Username`. Причина: `credential.helper = manager` задан, но бинарника
-`git-credential-manager` НЕТ (GCM не установлен) → helper-пустышка, в
-неинтерактивной оболочке падает ENXIO. Нужен PAT или установка GCM — спросить
-пользователя. Всё закоммичено локально, отправить нельзя.
+**Push — решено.** `release_candidate` отправлена: `origin/release_candidate` =
+локальная = `7823604` (фиксы `4350c8d` + докс `7823604` поверх `e22564b`).
+Что мешало и что сделано: `credential.helper = manager` был задан, но бинарника
+`git-credential-manager` НЕ было (GCM не установлен) → helper-пустышка, git падал
+с ENXIO в неинтерактивной оболочке. Поставлен GCM **3.0.1** в `~/.local/bin`
+(без sudo, тарболл `gcm-linux-x64-3.0.1`; `~/.local/bin` уже в PATH, поэтому
+существующий `helper=manager` теперь резолвится сам). Для headless-машины без
+keyring выбрано хранилище `GCM_CREDENTIAL_STORE=cache` (токен в памяти git-демона,
+на диск не пишется) — **одноразового пуша хватило**; для постоянного доступа
+нужен `secretservice` (есть desktop-keyring) или осознанный `plaintext`.
 
 **Следующий шаг:** запушить `release_candidate`, при зелёном свете влить в
 `mainline`. Дальше по плану фаз — execve, защита памяти задач, dup2, NTP/HTTP.
