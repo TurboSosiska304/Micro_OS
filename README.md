@@ -10,6 +10,8 @@ a single ESP32 core, a 200 mAh battery and a 135x240 display.
 
 > Russian version: [README_ru.md](README_ru.md)
 
+[![CI](https://github.com/TurboSosiska304/Micro_OS/actions/workflows/ci.yml/badge.svg?branch=release_candidate)](https://github.com/TurboSosiska304/Micro_OS/actions/workflows/ci.yml)
+
 ## Status
 
 | Phase | Content | State |
@@ -188,9 +190,27 @@ The decision about the shape of the driver is recorded in
 
 ### Ready to flash binaries
 
-The `bild/` folder holds the built firmware: the application, the bootloader,
-the partition table and a flash script. Download the folder, connect the board
-and run `bild/flash.sh` — no sources, no ESP-IDF and no toolchain needed.
+The `dist/` folder holds the built firmware: the application, the bootloader,
+the partition table, a flash script and the sums of the files. The folder is
+not in the repository, it is a product of the build: every CI run uploads it
+as the artifact `firmware`, and a tag of the form `vX.Y.Z` publishes it as a
+release. Download the folder, connect the board and run `./flash.sh` — no
+sources, no ESP-IDF and no toolchain needed.
+
+## Continuous integration
+
+Every push to `release_candidate` builds the firmware for the ESP32
+(ESP-IDF v5.3), builds the host, runs the unit tests and the smoke test of
+the simulator, and checks the integrity of the repository: the headers of the
+images, the partition table against `partitions.csv`, the git objects and the
+formatting of the sources.
+
+```bash
+make ci          # the same, locally
+```
+
+A tag of the form `vX.Y.Z` publishes the bundle as a GitHub release. The
+details are in [docs/ci.md](docs/ci.md).
 
 ## Repository layout
 
@@ -204,9 +224,11 @@ Micro_OS/
 ├── ports/port_host/    Linux port + simulator
 ├── main/               firmware entry point (app_main)
 ├── tests/              unit tests (own minimal framework, no dependencies)
+├── tools/              console, bundle, the smoke test, the integrity check
 ├── docs/               architecture, roadmap, hardware notes, ADRs
+├── .github/workflows/  the autobuild of the release candidate
 ├── CMakeLists.txt      dual mode build: ESP-IDF or host
-└── Makefile            convenience targets: test, sim, format, idf-*
+└── Makefile            convenience targets: test, sim, ci, format, idf-*
 ```
 
 ## Development rules
@@ -216,6 +238,8 @@ Micro_OS/
   `subsys: add vfs mount table`, `drivers: fix ir carrier frequency`.
 * Any new kernel behaviour is covered by a test in `tests/`.
 * Formatting: `make format`.
+* Before you push: `make ci` (the build, the tests, the smoke test and the
+  integrity check).
 
 Details: [CONTRIBUTING.md](CONTRIBUTING.md).
 
