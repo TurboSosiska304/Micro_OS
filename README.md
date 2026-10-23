@@ -142,7 +142,27 @@ commands:
 | `i2c` | scan the I2C bus |
 | `date` | the time of the RTC |
 | `wifi` | the WiFi station: `status`, `scan`, `connect`, `join`, `disconnect` |
+| `mfetch` | the report about the system with the logo (like fastfetch) |
 | `echo`, `sleep`, `clear`, `reboot` | the usual suspects |
+
+The command `mfetch` is the analog of fastfetch: the logo of the system on
+the left and a short report about the board on the right. The drawing comes
+from [logos.md](logos.md), the size "L". It is a drawing for the serial
+console: the screen of the board has a 5x7 font that stops at `0x5F` and
+shows the box drawing characters as `?`, while the report itself is plain
+text and is readable on both consoles. `mfetch color` paints the logo.
+
+```
+microos> mfetch
+███╗   ███╗ ██████╗ ███████╗  OS           MicroOS 0.1.0
+████╗ ████║██╔═══██╗██╔════╝  Board        M5Stack StickC Plus2
+██╔████╔██║██║   ██║███████╗  SoC          ESP32-PICO-V3-02
+██║╚██╔╝██║██║   ██║╚════██║  Arch         xtensa-esp32
+██║ ╚═╝ ██║╚██████╔╝███████║  Display      1.14" TFT 135x240 (ST7789v2)
+╚═╝     ╚═╝ ╚═════╝ ╚══════╝  Memory       heap 384/512 KB, psram 1024 KB free
+                              Uptime       42 s, 6 task(s)
+                              Shell        28 command(s)
+```
 
 ### The WiFi station
 

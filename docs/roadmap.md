@@ -57,6 +57,9 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
       `dmesg`, `free`, `clear`, `reboot`, `modules`, `memtest`, `i2c`
 * [x] `memtest`: the size of the internal heap and of the PSRAM, and the
       speed of both (fill, checksum, copy) with a verification of the data
+* [x] `mfetch`: the report about the system with the logo of `logos.md`
+      (the analog of fastfetch, the logo on the left and the report on
+      the right)
 * [x] The console of the ESP32 port (the UART driver makes the input work)
 * [x] MicroFS: the filesystem of the board, as described in
       [docs/memory.md](memory.md): the DATA, META and INFO sections, the
