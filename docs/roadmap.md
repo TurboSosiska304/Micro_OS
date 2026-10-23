@@ -48,9 +48,9 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [x] WiFi radio
 * [x] PSRAM and flash
 * [ ] Microphone (SPM1423, I2S) - registered, but skipped
-* [ ] A `doctor` command that repeats the check at any time
+* [x] A `doctor` command that repeats the check at any time (as a comand "modules")
 
-## Phase 2 - VFS, MicroFS, shell
+## Phase 2 - VFS, MicroFS, shell (done)
 
 * [x] Shell: a portable command interpreter with a command registry
 * [x] Built in commands: `help`, `uname`, `uptime`, `ps`, `echo`, `sleep`,
@@ -84,7 +84,7 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [x] The terminal repeats every character while it is typed, the backspace
       erases it
 * [x] `/proc/self` and a directory per task with a `status` file
-* [ ] Command history, tab completion (not needed for now)
+* [n] Command history, tab completion (not needed for now)
 
 ## Phase 3 - Memory and the syscall ABI
 
