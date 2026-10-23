@@ -531,8 +531,8 @@ static int fixed_text(char *out, size_t cap, const struct spec *sp, double value
             memset(digits, '0', (size_t)ndigits);
         }
 
-        len += big_integer_text(text + len,
-                                sizeof(text) - (size_t)len - 1u - (size_t)NUM_BUF, value);
+        len +=
+            big_integer_text(text + len, sizeof(text) - (size_t)len - 1u - (size_t)NUM_BUF, value);
     } else {
         ip = (unsigned long long)value;
         fp = value - (double)ip;

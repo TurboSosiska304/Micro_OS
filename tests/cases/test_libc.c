@@ -559,8 +559,11 @@ static void test_calloc_is_empty(void)
 static void test_special_values_match_the_system(void)
 {
     static const double values[] = {
-        0.0,  1.5,         -1.5,   1e30,       -1e30, 1.7976931348623157e308,
-        1e20, -1.8446744e19, 1e-30, 18446744073709551616.0,
+        0.0,   1.5,
+        -1.5,  1e30,
+        -1e30, 1.7976931348623157e308,
+        1e20,  -1.8446744e19,
+        1e-30, 18446744073709551616.0,
     };
     static const char *kinds[] = {"%f", "%e", "%.12g", "%08.3f", "%014.3e"};
     size_t i;
@@ -604,8 +607,8 @@ static void test_special_values_match_the_system(void)
 
     /* The short lengths really shorten the number. */
     {
-        int n1 = microos_snprintf(g_buffer, sizeof(g_buffer), "%hhu %hd %hhi %hu", 300, 70000,
-                                  -200, 65535u);
+        int n1 = microos_snprintf(g_buffer, sizeof(g_buffer), "%hhu %hd %hhi %hu", 300, 70000, -200,
+                                  65535u);
         int n2 = sys_snprintf(g_reference, sizeof(g_reference), "%hhu %hd %hhi %hu", 300, 70000,
                               -200, 65535u);
 
@@ -639,13 +642,29 @@ static void test_special_values_match_the_system(void)
 static void test_numbers_match_the_system(void)
 {
     static const char *texts[] = {
-        "",        "   ",          "abc",       "0",         "-0",
-        "1",       "+42",          "-42",       "0777",      "0x1f",
-        "0X1Fz",   "z",            "36zzzz",    "  -12abc",  "12.99",
-        "99999999999999999999999", "-99999999999999999999999",
-        "18446744073709551615", "18446744073709551616",
-        "9223372036854775807", "9223372036854775808",
-        "-9223372036854775808", "-9223372036854775809",
+        "",
+        "   ",
+        "abc",
+        "0",
+        "-0",
+        "1",
+        "+42",
+        "-42",
+        "0777",
+        "0x1f",
+        "0X1Fz",
+        "z",
+        "36zzzz",
+        "  -12abc",
+        "12.99",
+        "99999999999999999999999",
+        "-99999999999999999999999",
+        "18446744073709551615",
+        "18446744073709551616",
+        "9223372036854775807",
+        "9223372036854775808",
+        "-9223372036854775808",
+        "-9223372036854775809",
     };
     static const int bases[] = {0, 2, 8, 10, 16, 36};
     size_t i;

@@ -474,8 +474,7 @@ static void test_two_tasks_write(void)
         char task_name[16];
 
         snprintf(task_name, sizeof(task_name), "writer%d", id);
-        tasks[id] = task_create(task_name, writer_task, (void *)(intptr_t)id,
-                                (k_u8_t)(5 + id));
+        tasks[id] = task_create(task_name, writer_task, (void *)(intptr_t)id, (k_u8_t)(5 + id));
         KT_CHECK(tasks[id] != NULL);
     }
 

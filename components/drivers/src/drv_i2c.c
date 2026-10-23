@@ -240,8 +240,8 @@ int drv_i2c_probe(uint8_t addr, uint32_t speed_hz, uint8_t *value)
     if (value != NULL) {
         uint8_t tmp = 0;
 
-        rc = (i2c_master_transmit_receive(dev, &reg, 1, &tmp, 1, I2C_TIMEOUT_MS) == ESP_OK) ? 0
-                                                                                            : -1;
+        rc =
+            (i2c_master_transmit_receive(dev, &reg, 1, &tmp, 1, I2C_TIMEOUT_MS) == ESP_OK) ? 0 : -1;
         *value = tmp;
     } else {
         rc = (i2c_master_transmit(dev, &reg, 1, I2C_TIMEOUT_MS) == ESP_OK) ? 0 : -1;

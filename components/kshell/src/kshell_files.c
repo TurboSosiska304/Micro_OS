@@ -244,8 +244,7 @@ static int cmd_write(int argc, char **argv)
     }
 
     if (cut) {
-        kshell_printf("write: the text does not fit, it is cut at %u byte(s)\n",
-                      (unsigned)len);
+        kshell_printf("write: the text does not fit, it is cut at %u byte(s)\n", (unsigned)len);
     }
 
     /* Every call is checked: a write that failed must not be reported. */

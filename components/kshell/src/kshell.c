@@ -318,8 +318,7 @@ static int cmd_sleep(int argc, char **argv)
     /* The text has to be a whole number, not the beginning of one. */
     ms = microos_strtoul(argv[1], &end, 10);
 
-    if (end == argv[1] || (end != NULL && *end != '\0') ||
-        microos_errno() == MICROOS_ERANGE) {
+    if (end == argv[1] || (end != NULL && *end != '\0') || microos_errno() == MICROOS_ERANGE) {
         kshell_printf("sleep: %s: not a number of milliseconds\n", argv[1]);
         return KSHELL_USAGE;
     }
@@ -329,8 +328,7 @@ static int cmd_sleep(int argc, char **argv)
      * short, and the console has to come back.
      */
     if (ms > (unsigned long)SLEEP_MAX_MS) {
-        kshell_printf("sleep: %lu ms is too much, slept %u ms\n", ms,
-                      (unsigned)SLEEP_MAX_MS);
+        kshell_printf("sleep: %lu ms is too much, slept %u ms\n", ms, (unsigned)SLEEP_MAX_MS);
         ms = SLEEP_MAX_MS;
     }
 
@@ -457,7 +455,6 @@ int kshell_init(void)
  * file.
  */
 #define LINE_TOO_LONG (-2)
-
 
 static int shell_read_line(char *buf, k_size_t size)
 {

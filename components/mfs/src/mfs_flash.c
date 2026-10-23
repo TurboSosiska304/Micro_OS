@@ -145,8 +145,8 @@ static bool flash_is_fresh(void)
 
     last = (k_u32_t)(s_partition->size / MFS_BLOCK_SIZE) - 1u;
 
-    if (esp_partition_read(s_partition, (size_t)last * MFS_BLOCK_SIZE, block,
-                           MFS_BLOCK_SIZE) != ESP_OK) {
+    if (esp_partition_read(s_partition, (size_t)last * MFS_BLOCK_SIZE, block, MFS_BLOCK_SIZE) !=
+        ESP_OK) {
         return false;
     }
 

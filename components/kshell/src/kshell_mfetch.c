@@ -34,12 +34,21 @@
  * The logo: `$1` and `$2` mark the color of a piece, exactly as in
  * logos.md. They are not characters of the drawing and they disappear
  * when there is no color.
+ *
+ * One line of the logo per line of the source: the drawing is UTF-8 and
+ * takes more bytes than columns, and clang-format, which counts columns,
+ * would otherwise pack two lines of the logo into one.
  */
+// clang-format off
 static const char *const g_logo[] = {
-    "$1███╗   ███╗$2 ██████╗ ███████╗", "$1████╗ ████║$2██╔═══██╗██╔════╝",
-    "$1██╔████╔██║$2██║   ██║███████╗", "$1██║╚██╔╝██║$2██║   ██║╚════██║",
-    "$1██║ ╚═╝ ██║$2╚██████╔╝███████║", "$1╚═╝     ╚═╝$2 ╚═════╝ ╚══════╝",
+    "$1███╗   ███╗$2 ██████╗ ███████╗",
+    "$1████╗ ████║$2██╔═══██╗██╔════╝",
+    "$1██╔████╔██║$2██║   ██║███████╗",
+    "$1██║╚██╔╝██║$2██║   ██║╚════██║",
+    "$1██║ ╚═╝ ██║$2╚██████╔╝███████║",
+    "$1╚═╝     ╚═╝$2 ╚═════╝ ╚══════╝",
 };
+// clang-format on
 
 #define MFETCH_LOGO_LINES (sizeof(g_logo) / sizeof(g_logo[0]))
 

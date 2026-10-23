@@ -43,10 +43,10 @@ static esp_netif_t *s_netif;
  * starting the driver of ESP-IDF again (which it cannot: it answers
  * "already initialised" and the events would be watched twice).
  */
-static bool s_initialised;  /* the driver of the radio is up */
-static bool s_handlers;     /* the events are watched */
+static bool s_initialised; /* the driver of the radio is up */
+static bool s_handlers;    /* the events are watched */
 
-static SemaphoreHandle_t s_scan_done;      /* the end of a scan */
+static SemaphoreHandle_t s_scan_done; /* the end of a scan */
 
 /*
  * Whether the last scan found anything at all. A scan can fail (the radio

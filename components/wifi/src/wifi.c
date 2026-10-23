@@ -28,13 +28,13 @@ static bool s_started;
  * and the timer that wakes the radio up is the port's, because a
  * portable core has no clock of its own to sleep on.
  */
-#define WIFI_RECONNECT_MAX 5       /* the attempts of one connection */
+#define WIFI_RECONNECT_MAX 5        /* the attempts of one connection */
 #define WIFI_RECONNECT_BASE_MS 1000 /* the wait before the first attempt */
 #define WIFI_RECONNECT_MAX_MS 30000 /* the longest wait between attempts */
 
 static struct {
-    bool wanted;   /* the station was asked to be on a network */
-    int attempts;  /* the attempts made for the connection in progress */
+    bool wanted;     /* the station was asked to be on a network */
+    int attempts;    /* the attempts made for the connection in progress */
     k_u64_t next_ms; /* the moment the next attempt may start */
     /*
      * The network to go back to. It is the last one that was asked for,
