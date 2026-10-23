@@ -13,7 +13,7 @@
 #include "kernel/types.h"
 
 /*
- * The number of the commands of the shell. The built in commands are 22,
+ * The number of the commands of the shell. The built in commands are 23,
  * the drivers add their own (the date, the bus, the radio, the display)
  * and the filesystem its mkfs, so the table has room for all of them and
  * for the commands of the next phases.
@@ -56,6 +56,9 @@ k_size_t kshell_command_count(void);
 
 /* Register the memory test command. */
 int kshell_register_memtest(void);
+
+/* Register `mfetch`, the report about the system with the logo. */
+int kshell_register_mfetch(void);
 
 /*
  * Register the built in commands. The shell does it on its own, the tests

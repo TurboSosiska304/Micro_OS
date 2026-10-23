@@ -442,6 +442,7 @@ int kshell_init(void)
     rc |= kshell_register("abi", "the system calls of the kernel", cmd_abi);
     rc |= kshell_register_memtest();
     rc |= kshell_register_files();
+    rc |= kshell_register_mfetch();
     rc |= kshell_register("reboot", "restart the board", cmd_reboot);
 
     return rc;
