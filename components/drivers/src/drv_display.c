@@ -319,8 +319,13 @@ static int drv_display_init(void)
 
     s_fb = heap_caps_malloc(LCD_WIDTH * LCD_HEIGHT * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
     if (s_fb == NULL) {
-        /* No PSRAM: fall back to the internal heap. */
-        s_fb = heap_caps_malloc(LCD_WIDTH * LCD_HEIGHT * sizeof(uint16_t), MALLOC_CAP_INTERNAL);
+        /*
+         * No PSRAM: fall back to the internal heap. MALLOC_CAP_8BIT keeps
+         * the frame off the exec-only IRAM region, where the stores of the
+         * drawing code would fault.
+         */
+        s_fb = heap_caps_malloc(LCD_WIDTH * LCD_HEIGHT * sizeof(uint16_t),
+                                MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     }
     if (s_fb == NULL) {
         kerror("display: no memory for the framebuffer");

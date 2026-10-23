@@ -19,7 +19,6 @@
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
 #include "kernel/log.h"
 #include "kernel/port.h"
 #include "lwip/ip_addr.h"
@@ -30,9 +29,6 @@
 #define NVS_NAMESPACE "microos"
 #define NVS_KEY_SSID "wifi_ssid"
 #define NVS_KEY_PASS "wifi_pass"
-
-/* The longest a scan may take before the caller is let go. */
-#define WIFI_SCAN_TIMEOUT_MS 10000
 
 static esp_netif_t *s_netif;
 
@@ -46,15 +42,6 @@ static esp_netif_t *s_netif;
 static bool s_initialised; /* the driver of the radio is up */
 static bool s_handlers;    /* the events are watched */
 
-static SemaphoreHandle_t s_scan_done; /* the end of a scan */
-
-/*
- * Whether the last scan found anything at all. A scan can fail (the radio
- * is busy joining a network, or it was asked to stop), and the event of
- * the end is delivered either way - the caller has to know which, or it
- * reads a list the radio never filled.
- */
-static bool s_scan_ok;
 static esp_timer_handle_t s_reconnect_timer; /* the wait before a retry */
 
 /* The two below are used by the events and defined after them. */
@@ -163,22 +150,6 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
                 }
             }
 
-            break;
-        }
-        case WIFI_EVENT_SCAN_DONE: {
-            /*
-             * The event is delivered whether the scan found networks or
-             * not: the status says which. A failed scan must not be read,
-             * because the list of the networks is not filled.
-             */
-            wifi_event_sta_scan_done_t *info = (wifi_event_sta_scan_done_t *)data;
-
-            s_scan_ok = (info == NULL) || (info->status == 0);
-
-            /* The scan is asynchronous: the caller waits for the semaphore. */
-            if (s_scan_done != NULL) {
-                (void)xSemaphoreGive(s_scan_done);
-            }
             break;
         }
         default:
@@ -333,36 +304,22 @@ static int radio_scan(struct wifi_scan_entry *out, k_size_t max, k_size_t *count
     config.show_hidden = false;
 
     /*
-     * The scan is started without blocking the caller and waited for with
-     * a deadline: a radio that went quiet must not hold the shell of the
-     * board for ever. A scan that was left behind by an earlier caller
-     * must not answer this one, so the semaphore is emptied first.
+     * The scan blocks the caller until it is over: this is the form the
+     * examples of the SDK use, and the one this driver started with.
+     *
+     * Starting the scan without blocking and waiting for the
+     * WIFI_EVENT_SCAN_DONE event on a semaphore was tried and then taken
+     * back out, for a reason of its own: the radio also scans by itself
+     * while it is joining a saved network, and that scan posts the very
+     * same SCAN_DONE event. A waiter on an event it cannot name may wake
+     * in the middle of the work of the radio and read the list of the
+     * networks while the firmware is still filling it. The blocking call
+     * tracks the scan it started, so no event of the radio can be taken
+     * for its end.
      */
-    while (xSemaphoreTake(s_scan_done, 0) == pdTRUE) {
-    }
-    s_scan_ok = false;
-
-    rc = esp_wifi_scan_start(&config, false);
+    rc = esp_wifi_scan_start(&config, true);
     if (rc != ESP_OK) {
         kerror("wifi: the scan does not start (rc=%d)", (int)rc);
-        return -1;
-    }
-
-    if (xSemaphoreTake(s_scan_done, pdMS_TO_TICKS(WIFI_SCAN_TIMEOUT_MS)) != pdTRUE) {
-        (void)esp_wifi_scan_stop();
-        kerror("wifi: the scan did not answer in %u ms", (unsigned)WIFI_SCAN_TIMEOUT_MS);
-        return -1;
-    }
-
-    /*
-     * The event of the end was delivered, but the scan may have failed
-     * (the radio was joining a network, or it was asked to stop). The list
-     * of the networks is only filled by a scan that went through, so a
-     * failed one is not read: the caller is told that there was nothing,
-     * and not handed a list that the radio never wrote.
-     */
-    if (!s_scan_ok) {
-        kerror("wifi: the scan did not finish cleanly");
         return -1;
     }
 
@@ -379,7 +336,16 @@ static int radio_scan(struct wifi_scan_entry *out, k_size_t max, k_size_t *count
         number = (uint16_t)max;
     }
 
-    records = heap_caps_malloc((size_t)number * sizeof(wifi_ap_record_t), MALLOC_CAP_INTERNAL);
+    /*
+     * The records of the scan are filled by the firmware of the radio with
+     * ordinary stores, so the buffer has to be memory the data bus can
+     * write to. On the ESP32 MALLOC_CAP_INTERNAL alone is not enough: it
+     * also matches the exec-only IRAM region (0x4008xxxx), where a store
+     * raises LoadStoreError. MALLOC_CAP_8BIT rules that region out and
+     * leaves the byte-writable DRAM, which is what the firmware needs.
+     */
+    records = heap_caps_malloc((size_t)number * sizeof(wifi_ap_record_t),
+                               MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (records == NULL) {
         kerror("wifi: no memory for the records of the scan");
         return -1;
@@ -586,14 +552,6 @@ int wifi_esp32_init(void)
 
     if (nvs_init() != 0) {
         return -1;
-    }
-
-    if (s_scan_done == NULL) {
-        s_scan_done = xSemaphoreCreateBinary();
-        if (s_scan_done == NULL) {
-            kerror("wifi: the semaphore of the scan cannot be made");
-            return -1;
-        }
     }
 
     rc = esp_netif_init();

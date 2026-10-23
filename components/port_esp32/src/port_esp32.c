@@ -199,7 +199,14 @@ void *k_port_alloc(k_size_t size, bool psram)
         size = 4096;
     }
 
-    return heap_caps_malloc(size, psram ? MALLOC_CAP_SPIRAM : MALLOC_CAP_INTERNAL);
+    /*
+     * Memory the kernel writes to has to be the kind the data bus can
+     * reach: MALLOC_CAP_INTERNAL alone also matches the exec-only IRAM
+     * region of the ESP32, where a store faults. MALLOC_CAP_8BIT keeps
+     * the allocation on byte-writable memory (DRAM or PSRAM).
+     */
+    return heap_caps_malloc(size,
+                            psram ? MALLOC_CAP_SPIRAM : (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
 }
 
 void k_port_free(void *ptr)
