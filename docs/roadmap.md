@@ -132,8 +132,8 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 
 ## Phase 6 - Release
 
-* [x] Autobuild of the release candidate (GitHub Actions): the firmware, the
-      host, the tests and the integrity check, see [ci.md](ci.md)
+* [x] Autobuild of the release candidate (GitHub Actions): the firmware and
+      the integrity check, see [ci.md](ci.md)
 * [ ] OTA updates (`app0`/`app1`), rollback after a failed boot
 * [ ] Settings reset, `factory reset`
 * [ ] Enclosure/display modes: "clock", "remote", "logger"

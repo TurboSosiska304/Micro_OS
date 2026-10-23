@@ -3,16 +3,18 @@
 #   release_candidate   the branch of the release candidate (the main one)
 #   mainline            the branch of the stable release
 #
-# Every push builds the firmware for the ESP32, builds the host, runs the
-# unit tests and the smoke test of the simulator, and checks the integrity
-# of the repository and of the bundle in dist/. A tag of the form vX.Y.Z
+# Every push builds the firmware for the ESP32 and checks the integrity of
+# the repository and of the bundle in dist/. A tag of the form vX.Y.Z
 # publishes the bundle as a GitHub release.
+#
+# The tests of the code itself (the unit tests and the smoke test of the
+# simulator) are not here: they belong to the contributor, on their machine
+# (make ci), until the first release gives them their own CI/CD. What is
+# here speaks about the artifact that goes onto the board.
 #
 # The style of the sources is checked with a pinned clang-format
 # (CLANG_FORMAT_VERSION): a different version formats the sources
-# differently and the check would only argue about the spaces. The failure
-# of the tests is reported as annotations of the commit, so the names of
-# the tests that failed are visible without opening the log of the run.
+# differently and the check would only argue about the spaces.
 
 name: CI
 
@@ -39,84 +41,6 @@ env:
   CLANG_FORMAT_VERSION: "23.1.3"
 
 jobs:
-  # --- the host: the build, the unit tests and the smoke test ---------------
-
-  host:
-    name: the host build and the tests
-    runs-on: ubuntu-latest
-
-    permissions:
-      contents: read
-      # The report of the tests is published as a check run.
-      checks: write
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: The tools of the build
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build
-
-      - name: Configure
-        run: |
-          cmake --version
-          cmake -B build-host -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug
-
-      - name: Build
-        run: cmake --build build-host --parallel
-
-      - name: The unit tests
-        run: |
-          # The path of the report is absolute: ctest writes it into the
-          # workspace, not into the directory the command runs in.
-          ctest --test-dir build-host --output-on-failure \
-            --output-junit "$GITHUB_WORKSPACE/test-report.xml"
-
-      - name: Why the tests failed
-        if: failure()
-        # The annotations of the commit are readable without the log of the
-        # run: the lines of ctest that speak about the failures are put
-        # there, and the whole log goes into the artifact.
-        run: |
-          log="build-host/Testing/Temporary/LastTest.log"
-          if [ -f "$log" ]; then
-            grep -E "Failed|FAIL|Segmentation" "$log" | head -20 | while IFS= read -r line; do
-              echo "::error::${line}"
-            done || true
-          else
-            echo "::error::the log of the tests is missing: ${log}"
-          fi
-          echo "::error::the whole log of the tests is in the artifact 'host-tests'"
-
-      - name: The smoke test of the simulator
-        shell: bash
-        run: |
-          set -o pipefail
-          python3 tools/sim_smoke.py --verbose 2>&1 | tee simulator.log
-
-      - name: The report of the tests
-        if: always()
-        # The report is a convenience: the gate is the step with ctest. A
-        # problem of the action itself must not break the build.
-        continue-on-error: true
-        uses: mikepenz/action-junit-report@v6
-        with:
-          report_paths: test-report.xml
-          check_name: the unit tests
-
-      - name: The artifacts of the tests
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: host-tests
-          path: |
-            test-report.xml
-            simulator.log
-            build-host/Testing/Temporary/LastTest.log
-          if-no-files-found: warn
-
   # --- the integrity of the repository and of the bundle ---------------------
 
   integrity:
@@ -224,7 +148,6 @@ jobs:
   release:
     name: the release
     needs:
-      - host
       - integrity
       - firmware
     if: startsWith(github.ref, 'refs/tags/v')

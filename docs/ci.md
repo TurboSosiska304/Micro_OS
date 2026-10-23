@@ -3,9 +3,13 @@
 > Russian version: [ci_ru.md](ci_ru.md)
 
 The autobuild of the release candidate. Every push to `release_candidate`
-builds the firmware for the ESP32, builds the host, runs the tests and checks
-the integrity of the repository and of the flash bundle. A tag of the form
-`vX.Y.Z` publishes the bundle as a GitHub release.
+builds the firmware for the ESP32 and checks the integrity of the repository
+and of the flash bundle. A tag of the form `vX.Y.Z` publishes the bundle as
+a GitHub release.
+
+The tests of the code itself are not in this workflow: they belong to the
+contributor, on their machine, until the first release gives them their own
+CI/CD. What the CI speaks about is the artifact that goes onto the board.
 
 The whole thing is one workflow: [.github/workflows/ci.yml](../.github/workflows/ci.yml).
 
@@ -13,9 +17,9 @@ The whole thing is one workflow: [.github/workflows/ci.yml](../.github/workflows
 
 | Event | Branches | What happens |
 |-------|----------|--------------|
-| push | `release_candidate`, `mainline` | the build, the tests and the checks |
+| push | `release_candidate`, `mainline` | the build and the checks |
 | push | the tags `v*` | the same, and then the release |
-| pull request | to `release_candidate`, `mainline` | the build, the tests and the checks |
+| pull request | to `release_candidate`, `mainline` | the build and the checks |
 | schedule | Mondays, 04:23 UTC | the same: the dependencies get old, the build has to keep working |
 | manual | — | the same, from the Actions tab |
 
@@ -26,33 +30,25 @@ starts working only when the workflow reaches the default branch.
 
 | Job | What it does | Notes |
 |-----|--------------|-------|
-| `host` | the host build, the unit tests, the smoke test of the simulator | GCC, the same compiler as the ESP-IDF uses |
 | `integrity` | the integrity check of the repository and of the bundle | the whole history is fetched, `git fsck` has to pass |
 | `firmware` | the firmware for the ESP32, the bundle, the check of the fresh binaries | the official `espressif/idf:v5.3` image |
 | `release` | publishes the bundle as a GitHub release | only for the tags, after all the other jobs are green |
 
-All three jobs are blocking: the branch is not green until the firmware is
-built and the tests pass.
+The build and the check are blocking: the branch is not green until the
+firmware is built and the repository passes the integrity check.
 
-### The host
+### The tests are not here
 
-```bash
-cmake -B build-host -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug
-cmake --build build-host
-ctest --test-dir build-host --output-on-failure --output-junit test-report.xml
-python3 tools/sim_smoke.py
-```
+The unit tests and the smoke test of the simulator are the tests of the code
+itself, and they are run by the contributor on their machine, before a push
+(see [Running it locally](#running-it-locally)). The unit tests are the tests
+of `tests/`. The smoke test is the whole kernel at once: the simulator boots,
+the subsystems come up, the shell answers the commands. It is the cheapest
+end to end test of the kernel and it catches the things the unit tests
+cannot see, a task that never wakes up for example.
 
-The unit tests are the tests of `tests/`. The smoke test is the whole kernel
-at once: the simulator boots, the subsystems come up, the shell answers the
-commands. It is the cheapest end to end test of the kernel and it catches the
-things the unit tests cannot see, a task that never wakes up for example.
-
-The report of the tests is published as an annotation of the commit and as
-the artifact `host-tests`. When a test fails, the step "Why the tests failed"
-puts the lines of ctest that speak about the failures into the annotations of
-the commit, and the whole log of the tests (`LastTest.log`) travels with the
-artifact: a red run can be understood without opening its log.
+They are out of the autobuild on purpose, and after the first release they
+get their own CI/CD — an autonomous workflow, separate from this one.
 
 ### The firmware
 
@@ -118,7 +114,6 @@ Every run uploads:
 
 | Artifact | What is in it |
 |----------|---------------|
-| `host-tests` | the report of the tests (`test-report.xml`), the log of the simulator and the whole log of the tests |
 | `integrity-report` | the report of the integrity check in JSON |
 | `firmware` | `dist/` with the binaries, the sums and the flash script, plus `micro_os.elf` and `micro_os.map` for the debugging |
 
@@ -140,12 +135,14 @@ debugging: they are not needed to flash the board.
 
 ## Running it locally
 
+The CI does not run the tests yet: they are the work of the contributor, on
+their machine. Everything at once:
+
 ```bash
 make ci          # the build, the tests, the smoke test and the integrity check
 ```
 
-It is the same list of steps as the `host` job and the `integrity` job of the
-CI. The firmware is built by hand, because the ESP-IDF is not installed
+The firmware is built by hand, because the ESP-IDF is not installed
 everywhere:
 
 ```bash

@@ -200,13 +200,13 @@ sources, no ESP-IDF and no toolchain needed.
 ## Continuous integration
 
 Every push to `release_candidate` builds the firmware for the ESP32
-(ESP-IDF v5.3), builds the host, runs the unit tests and the smoke test of
-the simulator, and checks the integrity of the repository: the headers of the
+(ESP-IDF v5.3) and checks the integrity of the repository: the headers of the
 images, the partition table against `partitions.csv`, the git objects and the
-formatting of the sources.
+formatting of the sources. The tests of the code itself are run by the
+contributor before a push; after the first release they get their own CI/CD.
 
 ```bash
-make ci          # the same, locally
+make ci          # the whole list of checks, locally
 ```
 
 A tag of the form `vX.Y.Z` publishes the bundle as a GitHub release. The

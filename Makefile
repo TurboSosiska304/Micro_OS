@@ -5,7 +5,7 @@
 #   make sim         build and run the host simulator
 #   make smoke       boot the simulator and check its answers
 #   make integrity   the integrity check of the repository and the bundle
-#   make ci          what the CI runs: the build, the tests and the checks
+#   make ci          the whole list of checks, before a push
 #   make idf-build   build the ESP32 firmware (requires ESP-IDF)
 #   make format      reformat the sources with clang-format
 
@@ -24,7 +24,7 @@ help:
 	@echo "  make test-asan  the same tests with the address and UB sanitizers"
 	@echo "  make smoke      boot the simulator and check its answers"
 	@echo "  make integrity  the integrity check of the repository and the bundle"
-	@echo "  make ci         build, test, smoke and integrity — what the CI runs"
+	@echo "  make ci         build, test, smoke and integrity — run it before pushing"
 	@echo "  make sim        build and run the host simulator"
 	@echo "  make clean      remove the host build directory"
 	@echo "  make format     reformat sources with clang-format"
@@ -62,7 +62,9 @@ smoke:
 integrity:
 	python3 tools/integrity_check.py --verbose
 
-# What the CI runs, and what the branch release_candidate has to pass.
+# What a contributor runs before pushing: the CI builds the firmware and
+# checks the repository, the tests stay local until the first release gives
+# them their own CI/CD.
 ci: build test test-asan smoke integrity
 
 sim: build
