@@ -205,7 +205,7 @@ in the middle of the dialogue.
 
 | Resource | Available | Comment |
 |---|---|---|
-| Flash | 8 MB | `app0`+`app1` of 2 MB each (OTA), `spiffs` ~4 MB |
+| Flash | 8 MB | `factory` 2 MB + MicroFS 5.75 MB (one application, no OTA) |
 | PSRAM | 2 MB | file data, buffers |
 | Internal SRAM | ~100 KB usable by code | task stacks, drivers |
 | CPU | 240 MHz, 2 cores | already taken by FreeRTOS; our kernel lives on top |

@@ -21,9 +21,9 @@ a single ESP32 core, a 200 mAh battery and a 135x240 display.
 | 1F | Hardware doctor (modules and health checks) | done |
 | 2 | VFS, MicroFS, shell | done |
 | 3 | Syscall ABI, libc subset | in progress |
-| 4 | Drivers: the WiFi station, the microphone, the TFT console | in progress |
-| 5 | init, configuration, applications, MQTT/NTP | planned |
-| 6 | OTA, release, documentation | planned |
+| 4 | Drivers: the WiFi station, the TFT console | in progress |
+| 5 | init, configuration, applications, HTTP/NTP | planned |
+| 6 | Release, documentation | planned |
 
 See [docs/roadmap.md](docs/roadmap.md) for the full plan and
 [docs/architecture.md](docs/architecture.md) for the design.

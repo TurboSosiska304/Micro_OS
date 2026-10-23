@@ -47,7 +47,6 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [x] Battery voltage (ADC on G38)
 * [x] WiFi radio
 * [x] PSRAM and flash
-* [ ] Microphone (SPM1423, I2S) - registered, but skipped
 * [x] A `doctor` command that repeats the check at any time (as a comand "modules")
 
 ## Phase 2 - VFS, MicroFS, shell (done)
@@ -100,8 +99,6 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [x] The libc over the ABI: printf, open, read, write. The library is
       checked against the library of the system with the real numbers of the
       corpus
-* [ ] execve: it needs a format of the programs
-
 * [x] `kmm_alloc`/`kmm_free`, allocation from the PSRAM, the slabs for the
       small blocks
 * [x] The memory of the programs: malloc, free, realloc and calloc over the
@@ -117,7 +114,6 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [ ] `drv_input`: A/B/C buttons, debounce, input events
 * [ ] `drv_buzzer`, `drv_led` (IR+LED share G19), `drv_ir` (transmit and receive)
 * [ ] `drv_imu` (MPU6886), `drv_rtc` (BM8563, deep-sleep wake)
-* [ ] `drv_mic` (SPM1423) — a simple sound/noise detector
 * [x] `drv_wifi`: the station, the scan, the network of the last time is
       remembered in the NVS (see [ADR 0003](adr/0003-wifi-driver.md))
 * [ ] Console on TFT and UART at the same time
@@ -127,14 +123,23 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [ ] Init process: starting daemons from `/etc/init.d`
 * [ ] Configuration from `/etc`, persisted in NVS
 * [x] WiFi: the station joins the network of the last time on its own
-* [ ] HTTP/MQTT client, NTP based on the RTC
+* [ ] HTTP client, NTP based on the RTC
 * [ ] Applications: sensor logger, IR remote, clock, weather station
 
 ## Phase 6 - Release
 
 * [x] Autobuild of the release candidate (GitHub Actions): the firmware and
       the integrity check, see [ci.md](ci.md)
-* [ ] OTA updates (`app0`/`app1`), rollback after a failed boot
-* [ ] Settings reset, `factory reset`
-* [ ] Enclosure/display modes: "clock", "remote", "logger"
+* [n] OTA updates (`app0`/`app1`), rollback after a failed boot (no space
+      in the flash for a second image)
+* [n] Enclosure/display modes: "clock", "remote", "logger" (not needed)
 * [ ] Release process, tags, changelog
+
+## After the first release
+
+Deferred, not forgotten:
+
+* [ ] `execve`: it needs a format of the programs
+* [ ] Microphone (SPM1423, I2S) and `drv_mic` — a simple sound/noise detector
+* [ ] MQTT client (HTTP and NTP stay in phase 5)
+* [ ] Settings reset, `factory reset`

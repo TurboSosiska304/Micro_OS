@@ -70,7 +70,7 @@ The decision about the shape of the driver is recorded in
   decision about the state is then testable.
 * A driver that only checks the hardware is half a driver. The station that
   joins the network of the last time is what makes the rest of the roadmap
-  (NTP, HTTP, MQTT) possible.
+  (NTP, HTTP) possible.
 * The key of the network is typed on the console: it is visible on the screen
   of the board and in the log of the terminal. The shell has no quotes
   either, so a name with a space in it cannot be used. A network whose key
