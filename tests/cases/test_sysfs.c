@@ -161,6 +161,87 @@ static void test_devfs(void)
     teardown();
 }
 
+/* The device of the test: a driver adds its own device to the devfs. */
+static int fake_read(char *buf, k_size_t size)
+{
+    static const char text[] = "beep";
+    k_size_t take = sizeof(text) - 1;
+
+    if (size < take) {
+        take = size;
+    }
+
+    memcpy(buf, text, take);
+    return (int)take;
+}
+
+static int fake_write(const char *buf, k_size_t size)
+{
+    (void)buf;
+    return (int)size;
+}
+
+static void test_devfs_add(void)
+{
+    struct vfs_dirent entries[8];
+    struct vfs_file file;
+    k_size_t count = 0;
+    k_u8_t data[VFS_FILE_DATA_SIZE];
+    char buf[16];
+    int rc;
+    k_size_t i;
+
+    ktest_begin("devfs: a device added by a driver is a file of its own");
+
+    setup();
+
+    /* An empty name and a device nobody can talk to are not devices. */
+    KT_CHECK(devfs_add(NULL, fake_read, NULL) < 0);
+    KT_CHECK(devfs_add("", fake_read, NULL) < 0);
+    KT_CHECK(devfs_add("useless", NULL, NULL) < 0);
+
+    /* The device is added, and the name is taken after that. */
+    KT_CHECK_INT_EQ(devfs_add("fake0", fake_read, fake_write), 0);
+    KT_CHECK(devfs_add("fake0", fake_read, fake_write) < 0);
+
+    /* It opens, it reads and it writes like any other device. */
+    rc = vfs_open("/dev/fake0", VFS_O_RDWR, &file, data);
+    KT_CHECK_INT_EQ(rc, 0);
+    if (rc == 0) {
+        rc = vfs_read(&file, buf, sizeof(buf));
+        KT_CHECK_INT_EQ(rc, 4);
+        if (rc == 4) {
+            KT_CHECK(memcmp(buf, "beep", 4) == 0);
+        }
+        KT_CHECK_INT_EQ(vfs_write(&file, "x", 1), 1);
+        vfs_close(&file);
+    }
+
+    /* It stands in the listing of /dev beside tty0 and null. */
+    count = 0;
+    rc = vfs_list("/dev", entries, 8, &count);
+    KT_CHECK_INT_EQ(rc, 0);
+    {
+        bool found = false;
+
+        for (i = 0; i < count; i++) {
+            if (strcmp(entries[i].name, "fake0") == 0) {
+                found = true;
+            }
+        }
+
+        KT_CHECK(found);
+    }
+
+    /* The table of the added devices has four places, and then it is full. */
+    KT_CHECK_INT_EQ(devfs_add("fake1", fake_read, NULL), 0);
+    KT_CHECK_INT_EQ(devfs_add("fake2", fake_read, NULL), 0);
+    KT_CHECK_INT_EQ(devfs_add("fake3", fake_read, NULL), 0);
+    KT_CHECK(devfs_add("fake4", fake_read, NULL) < 0);
+
+    teardown();
+}
+
 static void test_procfs_tasks(void)
 {
     struct vfs_dirent entries[16];
@@ -261,4 +342,5 @@ void test_sysfs(void)
     test_procfs_tasks();
     test_procfs_pid_dir();
     test_devfs();
+    test_devfs_add();
 }

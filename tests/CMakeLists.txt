@@ -17,6 +17,7 @@ if(NOT ESP_PLATFORM)
         cases/test_mfs_persistence.c
         cases/test_vfs.c
         cases/test_sysfs.c
+        cases/test_input_debounce.c
         cases/test_ksys.c
         cases/test_ksys_process.c
         cases/test_libc.c
@@ -30,6 +31,14 @@ if(NOT ESP_PLATFORM)
     target_include_directories(microos_tests PRIVATE
         "${CMAKE_CURRENT_LIST_DIR}/include"
         "${CMAKE_CURRENT_LIST_DIR}/framework"
+        # The debounce of the buttons lives with the drivers, which are
+        # ESP32 only, but the file itself has no hardware in it - so the
+        # tests compile it directly and replay the samples through it.
+        "${CMAKE_SOURCE_DIR}/components/drivers/include"
+    )
+
+    target_sources(microos_tests PRIVATE
+        "${CMAKE_SOURCE_DIR}/components/drivers/src/input_debounce.c"
     )
 
     target_link_libraries(microos_tests PRIVATE microos_kernel microos_board microos_kshell microos_mfs microos_procfs microos_devfs microos_libc microos_wifi microos_port_host)

@@ -109,7 +109,7 @@ const char *k_port_name(void);
 ```
 /            корень (in-RAM FS: /etc, /bin, /dev, /tmp, /proc)
 /proc        виртуальная ФС: version, uptime, meminfo, tasks, self/
-/dev         устройства: tty0, imu, rtc, buzzer, ir, mic
+/dev         устройства: tty0 (консоль), null, input (кнопки A/B/C)
 /sys         (позже) параметры драйверов
 ```
 

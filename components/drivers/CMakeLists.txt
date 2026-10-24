@@ -15,12 +15,13 @@ set(MICRO_OS_DRIVERS_SRCS
     "src/drv_mic.c"
     "src/drv_rtc.c"
     "src/drv_wifi.c"
+    "src/input_debounce.c"
 )
 
 idf_component_register(
     SRCS ${MICRO_OS_DRIVERS_SRCS}
     INCLUDE_DIRS "include"
-    REQUIRES kernel font kshell freertos wifi spi_flash esp_psram esp_driver_gpio esp_driver_i2c driver esp_driver_spi esp_driver_ledc esp_adc esp_timer
+    REQUIRES kernel font kshell devfs freertos wifi spi_flash esp_psram esp_driver_gpio esp_driver_i2c driver esp_driver_spi esp_driver_ledc esp_adc esp_timer
              esp_wifi esp_netif esp_event nvs_flash
 )
 

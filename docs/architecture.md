@@ -110,7 +110,7 @@ The goal is "everything is a file":
 ```
 /            root (in-RAM FS: /etc, /bin, /dev, /tmp, /proc)
 /proc        virtual FS: version, uptime, meminfo, tasks, self/
-/dev         devices: tty0, imu, rtc, buzzer, ir, mic
+/dev         devices: tty0 (console), null, input (buttons A/B/C)
 /sys         (later) driver parameters
 ```
 
