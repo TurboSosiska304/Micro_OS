@@ -33,26 +33,44 @@
 
 struct proc_file {
     const char *name;
-    int (*read)(char *buf, k_size_t size);
+    /* The task the file belongs to (0 for the files of the root). */
+    int (*read)(char *buf, k_size_t size, k_u32_t pid);
+};
+
+/*
+ * The context of an open file: the file of the table and the task it
+ * belongs to. Both are resolved once, when the file is opened, and kept in
+ * the private data of the descriptor. A global would mix the files of two
+ * tasks that open them at the same time.
+ */
+struct procfs_open {
+    const struct proc_file *file;
+    k_u32_t pid;
 };
 
 /* --- the files of the root --- */
 
-static int read_version(char *buf, k_size_t size)
+static int read_version(char *buf, k_size_t size, k_u32_t pid)
 {
+    K_UNUSED(pid);
+
     return snprintf(buf, size, "%s %s (%s)\n", kernel_name(), kernel_version(), kernel_build_id());
 }
 
-static int read_uptime(char *buf, k_size_t size)
+static int read_uptime(char *buf, k_size_t size, k_u32_t pid)
 {
+    K_UNUSED(pid);
+
     k_u64_t ms = k_sched_uptime_ms();
 
     return snprintf(buf, size, "up %llu s, %u ticks\n", (unsigned long long)(ms / 1000),
                     (unsigned)k_sched_ticks());
 }
 
-static int read_meminfo(char *buf, k_size_t size)
+static int read_meminfo(char *buf, k_size_t size, k_u32_t pid)
 {
+    K_UNUSED(pid);
+
     struct vfs_statfs fs;
     int n;
 
@@ -72,8 +90,10 @@ static int read_meminfo(char *buf, k_size_t size)
     return n;
 }
 
-static int read_tasks(char *buf, k_size_t size)
+static int read_tasks(char *buf, k_size_t size, k_u32_t pid)
 {
+    K_UNUSED(pid);
+
     k_size_t count = task_count();
     k_size_t i;
     int n = 0;
@@ -94,8 +114,10 @@ static int read_tasks(char *buf, k_size_t size)
     return n;
 }
 
-static int read_modules(char *buf, k_size_t size)
+static int read_modules(char *buf, k_size_t size, k_u32_t pid)
 {
+    K_UNUSED(pid);
+
     k_size_t count = kmod_count();
     k_size_t i;
     int n = 0;
@@ -125,29 +147,13 @@ static const k_size_t s_root_file_count = K_ARRAY_SIZE(s_root_files);
 
 /* --- the files of a task --- */
 
-/* The task the files of a directory belong to. */
-static k_u32_t s_task_pid;
-
 /* The point where the filesystem is mounted. */
 static char s_point[PROC_NAME_MAX];
 
-static int read_status(char *buf, k_size_t size)
+static int read_status(char *buf, k_size_t size, k_u32_t pid)
 {
-    struct task *t = NULL;
-    k_u32_t pid = 0;
+    struct task *t = (pid != 0) ? task_by_pid(pid) : NULL;
     int n;
-
-    if (s_task_pid != 0) {
-        t = task_by_pid(s_task_pid);
-        pid = s_task_pid;
-    } else {
-        struct task *self = task_self();
-
-        if (self != NULL) {
-            t = self;
-            pid = self->pid;
-        }
-    }
 
     n = snprintf(buf, size, "Name:\t%s\nPid:\t%u\nState:\t%s\nPrio:\t%u\n",
                  (t != NULL) ? t->name : "?", (unsigned)pid,
@@ -282,55 +288,60 @@ static const struct proc_file *find_task_file(const char *name)
 
 /* --- the operations --- */
 
-static int procfs_open(void *ctx, const char *path, int flags, struct vfs_file *out, k_size_t slot)
+static int procfs_open(void *ctx, const char *path, int flags, struct vfs_file *out)
 {
     char dir[PROC_NAME_MAX];
     const char *rel = relative_path(path);
     const char *name = base_name(rel);
+    struct procfs_open *open = (struct procfs_open *)out->priv;
     const struct proc_file *file = NULL;
+    k_u32_t pid;
 
     K_UNUSED(ctx);
     K_UNUSED(flags);
-    K_UNUSED(slot);
 
+    /* The task of the path is decided once, here: /proc/self becomes the
+     * number of the task that opened the file. */
     dir_name(rel, dir, sizeof(dir));
-    s_task_pid = dir_task_pid(dir);
+    pid = dir_task_pid(dir);
 
-    if (s_task_pid != 0) {
-        file = find_task_file(name);
-    } else {
-        file = find_root_file(name);
-    }
-
+    file = (pid != 0) ? find_task_file(name) : find_root_file(name);
     if (file == NULL) {
         return -2;
     }
 
-    if (out->priv != NULL) {
-        snprintf((char *)out->priv, PROC_NAME_MAX, "%s", name);
+    /* A file of a task is only there while the task is: the status of a
+     * task that has exited does not open any more. */
+    if (pid != 0 && task_by_pid(pid) == NULL) {
+        return -2;
     }
+
+    if (open == NULL) {
+        return -1;
+    }
+
+    open->file = file;
+    open->pid = pid;
 
     return 0;
 }
 
 static int procfs_read(void *ctx, struct vfs_file *file, void *buf, k_size_t size)
 {
-    const char *name = (file->priv != NULL) ? (const char *)file->priv : "";
+    const struct procfs_open *open = (const struct procfs_open *)file->priv;
     const struct proc_file *proc;
     char text[PROCFS_TEXT_MAX];
     int total;
 
     K_UNUSED(ctx);
 
-    /* The name of the file alone does not say where it lives, the directory
-     * of the path decides. */
-    proc = (s_task_pid != 0) ? find_task_file(name) : find_root_file(name);
-
-    if (proc == NULL) {
+    if (open == NULL || open->file == NULL) {
         return -2;
     }
 
-    total = proc->read(text, sizeof(text) - 1);
+    proc = open->file;
+
+    total = proc->read(text, sizeof(text) - 1, open->pid);
     if (total < 0) {
         total = 0;
     }
@@ -357,6 +368,7 @@ static int procfs_list(void *ctx, const char *path, struct vfs_dirent *out, k_si
     const char *rel = relative_path(path);
     k_size_t i;
     k_size_t found = 0;
+    k_u32_t pid;
 
     K_UNUSED(ctx);
 
@@ -367,12 +379,12 @@ static int procfs_list(void *ctx, const char *path, struct vfs_dirent *out, k_si
     dir_name(rel, dir, sizeof(dir));
     if (dir[0] == '\0') {
         /* The root: the name of the path is the task, if there is one. */
-        s_task_pid = dir_task_pid(rel);
+        pid = dir_task_pid(rel);
     } else {
-        s_task_pid = dir_task_pid(dir);
+        pid = dir_task_pid(dir);
     }
 
-    if (s_task_pid != 0) {
+    if (pid != 0) {
         /* The files of a task. */
         for (i = 0; i < s_task_file_count && found < max; i++) {
             memset(&out[found], 0, sizeof(out[found]));
@@ -430,21 +442,53 @@ static int procfs_stat(void *ctx, const char *path, struct vfs_stat *out)
     const char *rel = relative_path(path);
     const char *name = base_name(rel);
     const struct proc_file *file;
+    k_u32_t pid;
 
     K_UNUSED(ctx);
 
-    dir_name(rel, dir, sizeof(dir));
-    s_task_pid = dir_task_pid(dir);
+    memset(out, 0, sizeof(*out));
 
-    file = (s_task_pid != 0) ? find_task_file(name) : find_root_file(name);
-    if (file == NULL) {
-        return -2;
+    /* The point of the mount is a directory. */
+    if (rel[0] == '\0') {
+        out->type = 2;
+        return 0;
     }
 
-    memset(out, 0, sizeof(*out));
-    out->type = 1;
+    dir_name(rel, dir, sizeof(dir));
 
-    return 0;
+    if (dir[0] != '\0') {
+        /* "/proc/<task>/<file>": the task has to still be there, and the
+         * name has to be one of the files of a task. */
+        pid = dir_task_pid(dir);
+        if (pid == 0 || task_by_pid(pid) == NULL) {
+            return -2;
+        }
+
+        if (find_task_file(name) == NULL) {
+            return -2;
+        }
+
+        out->type = 1;
+        return 0;
+    }
+
+    /* A single component: a file of the root, or the directory of a task. */
+    file = find_root_file(name);
+    if (file != NULL) {
+        out->type = 1;
+        return 0;
+    }
+
+    /* The directory of a task: "self", or the number of one that is alive.
+     * A number of a task that is gone is not a directory any more, so that
+     * "cd /proc/<pid>" of a task that has exited says so instead of lying. */
+    pid = dir_task_pid(name);
+    if (pid != 0 && task_by_pid(pid) != NULL) {
+        out->type = 2;
+        return 0;
+    }
+
+    return -2;
 }
 
 static const struct vfs_operations g_operations = {

@@ -34,6 +34,7 @@ long microos_lseek(int fd, long offset, int whence);
 int microos_unlink(const char *path);
 int microos_mkdir(const char *path);
 int microos_waitpid(int pid, int *status, int flags);
+int microos_fork(void);
 int microos_getpid(void);
 int microos_getppid(void);
 int microos_getcwd(char *buf, size_t size);
@@ -44,17 +45,32 @@ void microos_exit(int code);
 /* The code of the last error, the numbers of POSIX. */
 int microos_errno(void);
 
+/*
+ * Remember the code of the last error. The library of the system sets
+ * errno this way, and a program that checks it after a call of the
+ * library sees the number of POSIX.
+ */
+void microos_set_errno(int code);
+
 /* The text of an error code, the texts of POSIX. */
 const char *microos_strerror(int code);
 
+/*
+ * The mode of open (the third argument of POSIX) is accepted and
+ * ignored: the filesystem of the board has no rights yet. The access
+ * alone has to be a real one, 3 is not a mode.
+ */
+#ifndef MICROOS_LIBC_KEEP_NAMES
 #define open microos_open
 #define close microos_close
 #define read microos_read
 #define write microos_write
 #define lseek microos_lseek
+#endif /* MICROOS_LIBC_KEEP_NAMES */
 #define unlink microos_unlink
 #define mkdir microos_mkdir
 #define waitpid microos_waitpid
+#define fork microos_fork
 #define getpid microos_getpid
 #define getppid microos_getppid
 #define getcwd microos_getcwd

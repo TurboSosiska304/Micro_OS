@@ -1,9 +1,11 @@
 #include "ktest.h"
 #include "tests/tests.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "devfs/devfs.h"
+#include "kernel/task.h"
 #include "kernel/vfs.h"
 #include "mfs/mfs.h"
 #include "mfs/mfs_ram_device.h"
@@ -38,13 +40,16 @@ static void teardown(void)
     mfs_ram_free(&g_volume);
 }
 
+/* The place for the data of the filesystem for an open file of the test. */
+static k_u8_t g_file_data[VFS_FILE_DATA_SIZE];
+
 /* Read a file of the tree of the directories. */
 static int read_file(const char *path, char *buf, k_size_t size)
 {
     struct vfs_file file;
     int rc;
 
-    rc = vfs_open(path, VFS_O_RDONLY, &file, 0);
+    rc = vfs_open(path, VFS_O_RDONLY, &file, g_file_data);
     if (rc != 0) {
         return rc;
     }
@@ -97,7 +102,7 @@ static void test_procfs_end(void)
     setup();
 
     /* The file has to end, otherwise the reader loops forever. */
-    rc = vfs_open("/proc/uptime", VFS_O_RDONLY, &file, 0);
+    rc = vfs_open("/proc/uptime", VFS_O_RDONLY, &file, g_file_data);
     KT_CHECK_INT_EQ(rc, 0);
 
     if (rc == 0) {
@@ -156,6 +161,87 @@ static void test_devfs(void)
     teardown();
 }
 
+/* The device of the test: a driver adds its own device to the devfs. */
+static int fake_read(char *buf, k_size_t size)
+{
+    static const char text[] = "beep";
+    k_size_t take = sizeof(text) - 1;
+
+    if (size < take) {
+        take = size;
+    }
+
+    memcpy(buf, text, take);
+    return (int)take;
+}
+
+static int fake_write(const char *buf, k_size_t size)
+{
+    (void)buf;
+    return (int)size;
+}
+
+static void test_devfs_add(void)
+{
+    struct vfs_dirent entries[8];
+    struct vfs_file file;
+    k_size_t count = 0;
+    k_u8_t data[VFS_FILE_DATA_SIZE];
+    char buf[16];
+    int rc;
+    k_size_t i;
+
+    ktest_begin("devfs: a device added by a driver is a file of its own");
+
+    setup();
+
+    /* An empty name and a device nobody can talk to are not devices. */
+    KT_CHECK(devfs_add(NULL, fake_read, NULL) < 0);
+    KT_CHECK(devfs_add("", fake_read, NULL) < 0);
+    KT_CHECK(devfs_add("useless", NULL, NULL) < 0);
+
+    /* The device is added, and the name is taken after that. */
+    KT_CHECK_INT_EQ(devfs_add("fake0", fake_read, fake_write), 0);
+    KT_CHECK(devfs_add("fake0", fake_read, fake_write) < 0);
+
+    /* It opens, it reads and it writes like any other device. */
+    rc = vfs_open("/dev/fake0", VFS_O_RDWR, &file, data);
+    KT_CHECK_INT_EQ(rc, 0);
+    if (rc == 0) {
+        rc = vfs_read(&file, buf, sizeof(buf));
+        KT_CHECK_INT_EQ(rc, 4);
+        if (rc == 4) {
+            KT_CHECK(memcmp(buf, "beep", 4) == 0);
+        }
+        KT_CHECK_INT_EQ(vfs_write(&file, "x", 1), 1);
+        vfs_close(&file);
+    }
+
+    /* It stands in the listing of /dev beside tty0 and null. */
+    count = 0;
+    rc = vfs_list("/dev", entries, 8, &count);
+    KT_CHECK_INT_EQ(rc, 0);
+    {
+        bool found = false;
+
+        for (i = 0; i < count; i++) {
+            if (strcmp(entries[i].name, "fake0") == 0) {
+                found = true;
+            }
+        }
+
+        KT_CHECK(found);
+    }
+
+    /* The table of the added devices has four places, and then it is full. */
+    KT_CHECK_INT_EQ(devfs_add("fake1", fake_read, NULL), 0);
+    KT_CHECK_INT_EQ(devfs_add("fake2", fake_read, NULL), 0);
+    KT_CHECK_INT_EQ(devfs_add("fake3", fake_read, NULL), 0);
+    KT_CHECK(devfs_add("fake4", fake_read, NULL) < 0);
+
+    teardown();
+}
+
 static void test_procfs_tasks(void)
 {
     struct vfs_dirent entries[16];
@@ -192,10 +278,69 @@ static void test_procfs_tasks(void)
     teardown();
 }
 
+/* The directory of a task: /proc/<pid> is a directory, its status a file. */
+static void test_procfs_pid_dir(void)
+{
+    struct task *self = task_self();
+    struct vfs_dirent entries[8];
+    struct vfs_stat stat;
+    char path[64];
+    char buffer[512];
+    k_size_t count = 0;
+    int rc;
+
+    ktest_begin("procfs: the directory of a task");
+
+    setup();
+
+    /* The point of the mount is a directory. */
+    KT_CHECK_INT_EQ(vfs_stat("/proc", &stat), 0);
+    KT_CHECK_INT_EQ(stat.type, 2);
+
+    /* The directory of the task that reads it, and its status as a file. */
+    KT_CHECK_INT_EQ(vfs_stat("/proc/self", &stat), 0);
+    KT_CHECK_INT_EQ(stat.type, 2);
+
+    KT_CHECK_INT_EQ(vfs_stat("/proc/self/status", &stat), 0);
+    KT_CHECK_INT_EQ(stat.type, 1);
+
+    if (self != NULL) {
+        /* The same by the number: /proc/<pid> and /proc/<pid>/status. */
+        snprintf(path, sizeof(path), "/proc/%u", (unsigned)self->pid);
+        KT_CHECK_INT_EQ(vfs_stat(path, &stat), 0);
+        KT_CHECK_INT_EQ(stat.type, 2);
+
+        snprintf(path, sizeof(path), "/proc/%u/status", (unsigned)self->pid);
+        rc = read_file(path, buffer, sizeof(buffer));
+        KT_CHECK(rc > 0);
+        KT_CHECK(strstr(buffer, "Pid:") != NULL);
+        KT_CHECK_INT_EQ(vfs_stat(path, &stat), 0);
+        KT_CHECK_INT_EQ(stat.type, 1);
+
+        /* The directory of the task holds its status. */
+        snprintf(path, sizeof(path), "/proc/%u", (unsigned)self->pid);
+        count = 0;
+        rc = vfs_list(path, entries, 8, &count);
+        KT_CHECK_INT_EQ(rc, 0);
+        KT_CHECK_INT_EQ(count, 1);
+        if (count == 1) {
+            KT_CHECK_STR_EQ(entries[0].name, "status");
+        }
+    }
+
+    /* A task that is not there has no directory and no status file. */
+    KT_CHECK(vfs_stat("/proc/9999", &stat) < 0);
+    KT_CHECK(read_file("/proc/9999/status", buffer, sizeof(buffer)) < 0);
+
+    teardown();
+}
+
 void test_sysfs(void)
 {
     test_procfs();
     test_procfs_end();
     test_procfs_tasks();
+    test_procfs_pid_dir();
     test_devfs();
+    test_devfs_add();
 }

@@ -17,9 +17,13 @@ void test_mfs(void);
 void test_mfs_persistence(void);
 void test_vfs(void);
 void test_sysfs(void);
+void test_input_debounce(void);
+void test_battery_soc(void);
+void test_fb_draw(void);
 void test_ksys(void);
 void test_ksys_process(void);
 void test_libc(void);
 void test_kshell(void);
+void test_wifi(void);
 
 #endif /* MICRO_OS_TESTS_H */

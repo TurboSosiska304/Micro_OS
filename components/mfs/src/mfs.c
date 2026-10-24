@@ -3,6 +3,9 @@
 #include <string.h>
 
 #include "kernel/log.h"
+#include "kernel/port.h"
+#include "kernel/sched.h"
+#include "kernel/task.h"
 
 /*
  * The state of the mounted volume. The filesystem is a singleton: one
@@ -15,6 +18,7 @@ static struct {
     k_u32_t bitmap_blocks;  /* the blocks of the bitmap of the free blocks */
     k_u32_t inode_blocks;   /* the blocks of the table of the inodes */
     k_u32_t inode_capacity; /* the number of the records of the table */
+    bool bitmap_dirty;      /* the map in the memory is newer than the device */
     k_u8_t bitmap[MFS_BLOCK_SIZE * 2];
 } g;
 
@@ -23,8 +27,110 @@ static struct {
  * The end of the chain is marked with MFS_NEXT_NONE, so that a file can grow
  * without the blocks being continuous.
  */
+/*
+ * The lock of the filesystem.
+ *
+ * The volume is one piece of state: the map of the free blocks, the table
+ * of the inodes and the cache of the sector of the header all describe the
+ * same storage. Two tasks that work with it at the same time would give
+ * the same block to two files, or write half of the state of the other.
+ *
+ * The kernel has no blocking primitive yet, so a task that has to wait
+ * sleeps a millisecond and looks again: the CPU goes to the task that
+ * holds the lock, and the wait is bounded by the work of that task.
+ */
+static struct task *s_lock_owner;
+static k_u32_t s_lock_depth;
+
+static void mfs_lock(void)
+{
+    struct task *self = task_self();
+
+    /*
+     * Before the first task exists (the boot) there is nobody to compete
+     * with, and there is no task to wait as either.
+     */
+    if (self == NULL) {
+        return;
+    }
+
+    for (;;) {
+        bool taken = false;
+
+        k_port_enter_critical();
+
+        if (s_lock_owner == NULL) {
+            s_lock_owner = self;
+            s_lock_depth = 1;
+            taken = true;
+        } else if (s_lock_owner == self) {
+            /* The lock is recursive: the functions call each other. */
+            s_lock_depth++;
+            taken = true;
+        }
+
+        k_port_exit_critical();
+
+        if (taken) {
+            return;
+        }
+
+        k_sched_sleep_ms(1);
+    }
+}
+
+static void mfs_unlock(void)
+{
+    struct task *self = task_self();
+
+    if (self == NULL) {
+        return;
+    }
+
+    k_port_enter_critical();
+
+    if (s_lock_owner == self) {
+        s_lock_depth--;
+        if (s_lock_depth == 0) {
+            s_lock_owner = NULL;
+        }
+    }
+
+    k_port_exit_critical();
+}
+
 #define MFS_NEXT_NONE 0xFFFFFFFFu
 #define MFS_BLOCK_DATA (MFS_BLOCK_SIZE - 4)
+
+/* The blocks of one erase sector of the flash (4 KB). */
+#define MFS_SECTOR_BLOCKS 4
+
+/*
+ * The checksum of the header of the volume. A small CRC32 (the polynomial
+ * of IEEE 802.3), enough to notice a header that a brownout left half
+ * written.
+ */
+static k_u32_t crc32(const void *data, k_size_t size)
+{
+    const k_u8_t *bytes = (const k_u8_t *)data;
+    k_u32_t crc = 0xFFFFFFFFu;
+    k_size_t i;
+    int bit;
+
+    for (i = 0; i < size; i++) {
+        crc ^= bytes[i];
+
+        for (bit = 0; bit < 8; bit++) {
+            if ((crc & 1u) != 0u) {
+                crc = (crc >> 1) ^ 0xEDB88320u;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+
+    return crc ^ 0xFFFFFFFFu;
+}
 
 /* --- the low level access to the volume --- */
 
@@ -126,6 +232,9 @@ static void bitmap_set(k_u32_t index, bool used)
     } else {
         g.bitmap[byte] &= (k_u8_t) ~(1u << bit);
     }
+
+    /* The device has to learn about it, the next sync writes the map out. */
+    g.bitmap_dirty = true;
 }
 
 /* Find a free block. */
@@ -339,6 +448,38 @@ static int chain_count(k_u32_t first, k_u32_t *count)
             return MFS_EIO;
         }
     }
+}
+
+/* Give the blocks of a chain back to the map of the free blocks. */
+static int file_release_chain(k_u32_t first)
+{
+    k_u32_t count;
+    k_u32_t block;
+    k_u32_t i;
+
+    if (first == MFS_NEXT_NONE) {
+        return MFS_OK;
+    }
+
+    if (chain_count(first, &count) != MFS_OK) {
+        return MFS_EIO;
+    }
+
+    block = first;
+
+    for (i = 0; i < count; i++) {
+        k_u32_t next = MFS_NEXT_NONE;
+
+        chain_next(block, &next);
+        block_release(block);
+
+        if (next == MFS_NEXT_NONE) {
+            break;
+        }
+        block = next;
+    }
+
+    return MFS_OK;
 }
 
 /* --- the directories --- */
@@ -741,12 +882,13 @@ static int path_parent(const char *path, char *dir, k_size_t dir_size, char *nam
 
 /* --- the public interface --- */
 
-int mfs_format(struct mfs_device *dev, k_u32_t max_records)
+static int mfs_format_locked(struct mfs_device *dev, k_u32_t max_records)
 {
     struct mfs_superblock sb;
     struct mfs_inode inode;
     k_u32_t total;
     k_u32_t info_blocks = 1;
+    k_u32_t info_start;
     k_u32_t meta_blocks;
     k_u32_t data_blocks;
     k_u32_t bitmap_blocks;
@@ -768,8 +910,22 @@ int mfs_format(struct mfs_device *dev, k_u32_t max_records)
 
     total = dev->blocks;
 
+    /*
+     * The INFO section starts at the border of an erase sector of the
+     * flash and covers the rest of the volume. The header of the
+     * filesystem is then alone in its sector: writing the table of the
+     * inodes can never erase the header together with it.
+     */
+    if (total < info_blocks + MFS_SECTOR_BLOCKS) {
+        return MFS_ENOSPC;
+    }
+
+    info_start = total - info_blocks;
+    info_start -= info_start % MFS_SECTOR_BLOCKS;
+    info_blocks = total - info_start;
+
     /* The first guess: four percent of the volume for the META section. */
-    meta_blocks = (total * 4u + 99u) / 100u;
+    meta_blocks = (info_start * 4u + 99u) / 100u;
     if (meta_blocks < 2) {
         meta_blocks = 2;
     }
@@ -781,13 +937,18 @@ int mfs_format(struct mfs_device *dev, k_u32_t max_records)
      * rounds are enough to find the layout.
      */
     for (attempt = 0; attempt < 4; attempt++) {
-        if (total <= info_blocks + meta_blocks) {
+        if (info_start <= meta_blocks) {
             return MFS_ENOSPC;
         }
 
-        data_blocks = total - info_blocks - meta_blocks;
+        data_blocks = info_start - meta_blocks;
         bitmap_blocks = (data_blocks + 8u * MFS_BLOCK_SIZE - 1u) / (8u * MFS_BLOCK_SIZE);
         inode_blocks = (max_records * MFS_INODE_SIZE + MFS_BLOCK_SIZE - 1u) / MFS_BLOCK_SIZE;
+
+        /* The bitmap lives in the memory of the manager, it has a size. */
+        if (bitmap_blocks > (k_u32_t)(sizeof(g.bitmap) / MFS_BLOCK_SIZE)) {
+            return MFS_ENOSPC;
+        }
 
         if (bitmap_blocks + inode_blocks <= meta_blocks) {
             break;
@@ -796,11 +957,11 @@ int mfs_format(struct mfs_device *dev, k_u32_t max_records)
         meta_blocks = bitmap_blocks + inode_blocks;
     }
 
-    if (total <= info_blocks + meta_blocks) {
+    if (info_start <= meta_blocks) {
         return MFS_ENOSPC;
     }
 
-    data_blocks = total - info_blocks - meta_blocks;
+    data_blocks = info_start - meta_blocks;
     bitmap_blocks = (data_blocks + 8u * MFS_BLOCK_SIZE - 1u) / (8u * MFS_BLOCK_SIZE);
     inode_blocks = (max_records * MFS_INODE_SIZE + MFS_BLOCK_SIZE - 1u) / MFS_BLOCK_SIZE;
 
@@ -815,12 +976,13 @@ int mfs_format(struct mfs_device *dev, k_u32_t max_records)
     sb.total_blocks = total;
     sb.data_start = 0;
     sb.data_blocks = data_blocks;
-    sb.meta_start = total - info_blocks - meta_blocks;
+    sb.meta_start = info_start - meta_blocks;
     sb.meta_blocks = meta_blocks;
-    sb.info_start = total - info_blocks;
+    sb.info_start = info_start;
     sb.info_blocks = info_blocks;
     sb.root_inode = MFS_ROOT_INODE;
-    sb.features = 0;
+    sb.features = MFS_FEATURE_CRC;
+    sb.crc = crc32(&sb, sizeof(sb) - sizeof(sb.crc));
 
     /* The state is needed by the helpers below. */
     memset(&g, 0, sizeof(g));
@@ -830,18 +992,6 @@ int mfs_format(struct mfs_device *dev, k_u32_t max_records)
     g.inode_blocks = inode_blocks;
     /* The record 0 is not used, the inodes start at 1. */
     g.inode_capacity = (inode_blocks * MFS_BLOCK_SIZE) / MFS_INODE_SIZE - 1u;
-
-    /* The header goes first, the rest of the volume follows its layout. */
-    {
-        k_u8_t info_block[MFS_BLOCK_SIZE];
-
-        memset(info_block, 0, sizeof(info_block));
-        memcpy(info_block, &sb, sizeof(sb));
-
-        if (dev->write_block(dev->ctx, sb.info_start, info_block) != 0) {
-            return MFS_EIO;
-        }
-    }
 
     /*
      * The bitmap: a bit of zero means that the block is free. The bits of
@@ -901,6 +1051,23 @@ int mfs_format(struct mfs_device *dev, k_u32_t max_records)
     }
 
     /*
+     * The header goes last: a format that is interrupted half way leaves a
+     * volume without a header, that is, a volume that is not there. The
+     * header lives in the last block of the volume, the block the mount
+     * reads.
+     */
+    {
+        k_u8_t info_block[MFS_BLOCK_SIZE];
+
+        memset(info_block, 0, sizeof(info_block));
+        memcpy(info_block, &sb, sizeof(sb));
+
+        if (dev->write_block(dev->ctx, sb.info_start + sb.info_blocks - 1u, info_block) != 0) {
+            return MFS_EIO;
+        }
+    }
+
+    /*
      * The changes have to reach the device: the flash keeps the data in a
      * sector buffer until the filesystem says that it is done.
      */
@@ -911,7 +1078,7 @@ int mfs_format(struct mfs_device *dev, k_u32_t max_records)
     return MFS_OK;
 }
 
-int mfs_mount(struct mfs_device *dev)
+static int mfs_mount_locked(struct mfs_device *dev)
 {
     struct mfs_superblock sb;
     int rc;
@@ -946,6 +1113,20 @@ int mfs_mount(struct mfs_device *dev)
         return MFS_EINVAL;
     }
 
+    /* A header that a brownout left half written must not be trusted. */
+    if ((sb.features & MFS_FEATURE_CRC) != 0u) {
+        if (sb.crc != crc32(&sb, sizeof(sb) - sizeof(sb.crc))) {
+            kerror("mfs: the header of the volume is damaged");
+            return MFS_EINVAL;
+        }
+    }
+
+    /* Every section has to have at least one block, the arithmetic below
+     * works with the sizes of the sections. */
+    if (sb.data_blocks == 0 || sb.meta_blocks == 0 || sb.info_blocks == 0) {
+        return MFS_EINVAL;
+    }
+
     /* The layout has to be consistent: the three sections fill the volume. */
     if (sb.data_blocks + sb.meta_blocks + sb.info_blocks != sb.total_blocks) {
         return MFS_EINVAL;
@@ -964,17 +1145,65 @@ int mfs_mount(struct mfs_device *dev)
         return rc;
     }
 
+    /* The rest of the META section belongs to the table of the inodes. */
+    if (sb.meta_blocks <= g.bitmap_blocks) {
+        return MFS_EINVAL;
+    }
+
     g.inode_blocks = sb.meta_blocks - g.bitmap_blocks;
     /* The record 0 is not used, the inodes start at 1. */
     g.inode_capacity = (g.inode_blocks * MFS_BLOCK_SIZE) / MFS_INODE_SIZE - 1u;
+
+    if (g.inode_capacity < MFS_ROOT_INODE) {
+        return MFS_EINVAL;
+    }
+
     g.mounted = true;
 
     return MFS_OK;
 }
 
-void mfs_unmount(void)
+static int mfs_sync_locked(void);
+
+static void mfs_unmount_locked(void)
 {
+    /*
+     * The changes that are only in the memory have to reach the flash
+     * before the volume is forgotten: an unmounted volume that comes back
+     * would show the state of an earlier moment. The files themselves are
+     * closed by the one that opened them - the filesystem keeps no table
+     * of the open files.
+     */
+    if (g.mounted) {
+        (void)mfs_sync_locked();
+    }
+
     memset(&g, 0, sizeof(g));
+}
+
+static int mfs_sync_locked(void)
+{
+    int rc;
+
+    if (!g.mounted) {
+        return MFS_EINVAL;
+    }
+
+    if (g.bitmap_dirty) {
+        rc = bitmap_store();
+        if (rc != MFS_OK) {
+            return rc;
+        }
+        g.bitmap_dirty = false;
+    }
+
+    /* The changes have to reach the device: the flash keeps the data in a
+     * sector buffer until the filesystem says that it is done. */
+    if (g.dev.sync != NULL) {
+        return g.dev.sync(g.dev.ctx);
+    }
+
+    return MFS_OK;
 }
 
 bool mfs_is_mounted(void)
@@ -982,7 +1211,7 @@ bool mfs_is_mounted(void)
     return g.mounted;
 }
 
-int mfs_get_info(struct mfs_info *out)
+static int mfs_get_info_locked(struct mfs_info *out)
 {
     k_u32_t i;
     k_u32_t free_blocks = 0;
@@ -1070,7 +1299,7 @@ static int add_to_parent(const char *dir_path, const char *name, k_u32_t inode, 
     return inode_write(dir_inode, &parent);
 }
 
-int mfs_mkdir(const char *path)
+static int mfs_mkdir_locked(const char *path)
 {
     char dir_path[MFS_PATH_MAX];
     char name[MFS_NAME_MAX + 1];
@@ -1095,6 +1324,17 @@ int mfs_mkdir(const char *path)
 
     rc = block_alloc(&block);
     if (rc != MFS_OK) {
+        return rc;
+    }
+
+    /*
+     * The block is taken: the map has to reach the device before the
+     * record that points at it. Otherwise a restart gives the same block
+     * to somebody else, and the two objects overwrite each other.
+     */
+    rc = mfs_sync();
+    if (rc != MFS_OK) {
+        block_release(block);
         return rc;
     }
 
@@ -1135,10 +1375,11 @@ int mfs_mkdir(const char *path)
         return rc;
     }
 
-    return MFS_OK;
+    /* The new directory has to survive the restart. */
+    return mfs_sync();
 }
 
-int mfs_create(const char *path)
+static int mfs_create_locked(const char *path)
 {
     char dir_path[MFS_PATH_MAX];
     char name[MFS_NAME_MAX + 1];
@@ -1178,10 +1419,11 @@ int mfs_create(const char *path)
         return rc;
     }
 
-    return MFS_OK;
+    /* The new object has to survive the restart. */
+    return mfs_sync();
 }
 
-int mfs_open(const char *path, int flags, struct mfs_file *out)
+static int mfs_open_locked(const char *path, int flags, struct mfs_file *out)
 {
     struct mfs_inode inode;
     struct mfs_dirent entry;
@@ -1209,27 +1451,58 @@ int mfs_open(const char *path, int flags, struct mfs_file *out)
     }
 
     if ((flags & MFS_O_TRUNC) != 0 && (flags & (MFS_O_WRONLY | MFS_O_RDWR)) != 0) {
+        /*
+         * The content of the file is dropped: the blocks of the chain go
+         * back to the map, otherwise they are lost forever.
+         */
+        rc = file_release_chain(inode.first_block);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
         inode.size = 0;
-        inode_write(entry.inode, &inode);
+        inode.first_block = MFS_NEXT_NONE;
+
+        rc = inode_write(entry.inode, &inode);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
+        rc = mfs_sync();
+        if (rc != MFS_OK) {
+            return rc;
+        }
     }
 
     memset(out, 0, sizeof(*out));
     out->inode = entry.inode;
     out->first_block = inode.first_block;
     out->size = inode.size;
-    out->offset = 0;
+    /*
+     * A file that was opened with "append" starts at its end: everything
+     * written to it is added to what is already there.
+     */
+    out->offset = ((flags & MFS_O_APPEND) != 0) ? inode.size : 0;
     out->flags = flags;
 
     return MFS_OK;
 }
 
-int mfs_read(struct mfs_file *file, void *buf, k_size_t size)
+static int mfs_read_locked(struct mfs_file *file, void *buf, k_size_t size)
 {
     k_u8_t *out = (k_u8_t *)buf;
     k_size_t done = 0;
     int rc;
 
     if (file == NULL || buf == NULL) {
+        return MFS_EINVAL;
+    }
+
+    /*
+     * The descriptor says what the file was opened for: a file that was
+     * opened to be written to cannot be read from.
+     */
+    if ((file->flags & 0x3) == MFS_O_WRONLY) {
         return MFS_EINVAL;
     }
 
@@ -1322,7 +1595,7 @@ static int file_grow(struct mfs_file *file, k_u32_t *new_block)
     return MFS_OK;
 }
 
-int mfs_write(struct mfs_file *file, const void *buf, k_size_t size)
+static int mfs_write_locked(struct mfs_file *file, const void *buf, k_size_t size)
 {
     const k_u8_t *in = (const k_u8_t *)buf;
     k_size_t done = 0;
@@ -1335,6 +1608,15 @@ int mfs_write(struct mfs_file *file, const void *buf, k_size_t size)
 
     if ((file->flags & (MFS_O_WRONLY | MFS_O_RDWR)) == 0) {
         return MFS_EINVAL;
+    }
+
+    /*
+     * A file that was opened with "append" is written to its end every
+     * time: the position of the descriptor does not decide where the data
+     * goes.
+     */
+    if ((file->flags & MFS_O_APPEND) != 0) {
+        file->offset = file->size;
     }
 
     /* The file has to have enough blocks for the whole write. */
@@ -1356,10 +1638,18 @@ int mfs_write(struct mfs_file *file, const void *buf, k_size_t size)
 
             rc = file_grow(file, &added);
             if (rc != MFS_OK) {
+                /*
+                 * The blocks that were already added belong to the file
+                 * now: the close has to know about them, or they are lost.
+                 */
+                file->dirty = true;
                 return rc;
             }
             have++;
         }
+
+        /* The blocks of the file have been taken, the map has to know it. */
+        file->dirty = true;
     }
 
     while (done < size) {
@@ -1412,7 +1702,7 @@ int mfs_write(struct mfs_file *file, const void *buf, k_size_t size)
     return (int)done;
 }
 
-int mfs_close(struct mfs_file *file)
+static int mfs_close_locked(struct mfs_file *file)
 {
     struct mfs_inode inode;
     int rc;
@@ -1436,25 +1726,16 @@ int mfs_close(struct mfs_file *file)
     }
 
     /* The blocks of the file have been taken, the map has to know it. */
-    rc = bitmap_store();
-    if (rc != MFS_OK) {
-        return rc;
-    }
-
-    /* The changes have to reach the device. */
-    if (g.dev.sync != NULL) {
-        return g.dev.sync(g.dev.ctx);
-    }
-
-    return MFS_OK;
+    return mfs_sync();
 }
 
-int mfs_unlink(const char *path)
+static int mfs_unlink_locked(const char *path)
 {
     char dir_path[MFS_PATH_MAX];
     char name[MFS_NAME_MAX + 1];
     struct mfs_inode parent;
     struct mfs_inode inode;
+    struct mfs_inode free_inode;
     struct dir_buffer *dir = &g_dir_buffer;
     struct mfs_dirent entry;
     k_u32_t parent_inode = MFS_ROOT_INODE;
@@ -1501,32 +1782,14 @@ int mfs_unlink(const char *path)
         }
     }
 
-    /* Free the blocks of the object. */
-    if (inode.first_block != MFS_NEXT_NONE) {
-        k_u32_t count;
+    /* The record of the object is not needed any more. */
+    memset(&free_inode, 0, sizeof(free_inode));
 
-        if (chain_count(inode.first_block, &count) == MFS_OK) {
-            k_u32_t block = inode.first_block;
-            k_u32_t i;
-
-            for (i = 0; i < count; i++) {
-                k_u32_t next = MFS_NEXT_NONE;
-
-                chain_next(block, &next);
-                block_release(block);
-                if (next == MFS_NEXT_NONE) {
-                    break;
-                }
-                block = next;
-            }
-        }
-    }
-
-    /* The record of the inode is free again. */
-    memset(&inode, 0, sizeof(inode));
-    inode_write(entry.inode, &inode);
-
-    /* And the entry in the parent. */
+    /*
+     * The entry goes away first: a directory that no longer points at the
+     * object can be survived, the opposite cannot - the blocks would be
+     * given to somebody else while the entry is still there.
+     */
     rc = dir_remove(dir, name);
     if (rc != MFS_OK) {
         return rc;
@@ -1536,14 +1799,32 @@ int mfs_unlink(const char *path)
     if (parent.entries > 0) {
         parent.entries--;
     }
-    dir_write(&parent, dir);
-    inode_write(parent_inode, &parent);
+
+    rc = dir_write(&parent, dir);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    rc = inode_write(parent_inode, &parent);
+    if (rc != MFS_OK) {
+        return rc;
+    }
 
     /* The blocks of the object are free again. */
-    return bitmap_store();
+    rc = file_release_chain(inode.first_block);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    rc = inode_write(entry.inode, &free_inode);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    return mfs_sync();
 }
 
-int mfs_stat(const char *path, struct mfs_inode *out, struct mfs_dirent *dirent)
+static int mfs_stat_locked(const char *path, struct mfs_inode *out, struct mfs_dirent *dirent)
 {
     struct mfs_inode inode;
     int rc;
@@ -1564,7 +1845,7 @@ int mfs_stat(const char *path, struct mfs_inode *out, struct mfs_dirent *dirent)
     return MFS_OK;
 }
 
-int mfs_list(const char *path, struct mfs_dirent *out, k_size_t max)
+static int mfs_list_locked(const char *path, struct mfs_dirent *out, k_size_t max)
 {
     struct mfs_inode inode;
     struct dir_buffer *dir = &g_dir_buffer;
@@ -1590,6 +1871,161 @@ int mfs_list(const char *path, struct mfs_dirent *out, k_size_t max)
     }
 
     return dir_entries(dir, out, max, &count);
+}
+
+/*
+ * The public functions of the filesystem hold the lock of the volume
+ * for the whole of their work: the volume is one piece of state and
+ * two tasks that touch it together corrupt it.
+ */
+int mfs_format(struct mfs_device *dev, k_u32_t max_records)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_format_locked(dev, max_records);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_mount(struct mfs_device *dev)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_mount_locked(dev);
+    mfs_unlock();
+
+    return rc;
+}
+
+void mfs_unmount(void)
+{
+    mfs_lock();
+    mfs_unmount_locked();
+    mfs_unlock();
+}
+
+int mfs_sync(void)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_sync_locked();
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_get_info(struct mfs_info *out)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_get_info_locked(out);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_mkdir(const char *path)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_mkdir_locked(path);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_create(const char *path)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_create_locked(path);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_open(const char *path, int flags, struct mfs_file *out)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_open_locked(path, flags, out);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_read(struct mfs_file *file, void *buf, k_size_t size)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_read_locked(file, buf, size);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_write(struct mfs_file *file, const void *buf, k_size_t size)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_write_locked(file, buf, size);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_close(struct mfs_file *file)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_close_locked(file);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_unlink(const char *path)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_unlink_locked(path);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_stat(const char *path, struct mfs_inode *out, struct mfs_dirent *dirent)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_stat_locked(path, out, dirent);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_list(const char *path, struct mfs_dirent *out, k_size_t max)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_list_locked(path, out, max);
+    mfs_unlock();
+
+    return rc;
 }
 
 const char *mfs_strerror(int error)

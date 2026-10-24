@@ -5,3 +5,8 @@ idf_component_register(
     INCLUDE_DIRS "."
     REQUIRES kernel board port_esp32 drivers kshell mfs procfs devfs graphics libc
 )
+
+    # The discipline of the host build: the sources of the project are
+    # compiled with the extra warnings, so a mistake is a message at
+    # build time and not a fault on the board.
+    target_compile_options(${COMPONENT_LIB} PRIVATE -Wextra)

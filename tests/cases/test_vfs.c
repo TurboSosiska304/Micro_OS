@@ -3,6 +3,7 @@
 
 #include <string.h>
 
+#include "kernel/errno.h"
 #include "kernel/vfs.h"
 #include "mfs/mfs.h"
 #include "mfs/mfs_ram_device.h"
@@ -47,6 +48,8 @@ static void test_mount(void)
 static void test_file_operations(void)
 {
     struct vfs_file file;
+    /* The place for the data of the filesystem of an open file. */
+    static k_u8_t file_data[VFS_FILE_DATA_SIZE];
     char buffer[64];
     int rc;
 
@@ -55,7 +58,7 @@ static void test_file_operations(void)
     setup();
 
     /* A path below the mount point has to be found. */
-    rc = vfs_open("/hello.txt", VFS_O_RDWR | VFS_O_CREAT | VFS_O_TRUNC, &file, 0);
+    rc = vfs_open("/hello.txt", VFS_O_RDWR | VFS_O_CREAT | VFS_O_TRUNC, &file, file_data);
     KT_CHECK_INT_EQ(rc, 0);
 
     if (rc == 0) {
@@ -63,7 +66,7 @@ static void test_file_operations(void)
         KT_CHECK_INT_EQ(vfs_close(&file), 0);
     }
 
-    rc = vfs_open("/hello.txt", VFS_O_RDONLY, &file, 0);
+    rc = vfs_open("/hello.txt", VFS_O_RDONLY, &file, file_data);
     KT_CHECK_INT_EQ(rc, 0);
 
     if (rc == 0) {
@@ -102,6 +105,17 @@ static void test_directories(void)
     KT_CHECK_INT_EQ(vfs_unlink("/etc"), 0);
     KT_CHECK_INT_EQ(vfs_list("/", entries, 16, &count), 0);
     KT_CHECK_INT_EQ(count, 0);
+
+    /*
+     * The codes of the errors of the filesystem are translated into the
+     * codes of the contract of the system calls at the adapter. The two
+     * sets are close but not the same: "the directory is not empty" is
+     * -39 of the kernel, and -9 of the kernel is a "bad file descriptor".
+     */
+    KT_CHECK_INT_EQ(vfs_mkdir("/full"), 0);
+    KT_CHECK_INT_EQ(mfs_create("/full/file.txt"), MFS_OK);
+    KT_CHECK_INT_EQ(vfs_unlink("/full"), KERR_NOTEMPTY);
+    KT_CHECK_INT_EQ(vfs_unlink("/nothing-here"), KERR_NOENT);
 
     teardown();
 }

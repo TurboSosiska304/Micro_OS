@@ -10,12 +10,22 @@
 #include "kernel/errno.h"
 #include "kernel/ksys.h"
 
-static int g_errno;
+/*
+ * The code of the last error belongs to the task that made the call: two
+ * tasks that use the library at the same time must not read each other's
+ * error. The standard says the same about errno (C11 7.5).
+ */
+static _Thread_local int g_errno;
 
 /* The code of the last error. The numbers are the numbers of POSIX. */
 int microos_errno(void)
 {
     return g_errno;
+}
+
+void microos_set_errno(int code)
+{
+    g_errno = (code > 0) ? code : -code;
 }
 
 /* Turn the negative result of a call into the -1 of POSIX. */
@@ -102,6 +112,17 @@ int microos_open(const char *path, int flags, ...)
         return fail(KERR_INVAL);
     }
 
+    /* The access of POSIX is two bits: 3 is not a mode. */
+    if ((flags & 3) == 3) {
+        return fail(KERR_INVAL);
+    }
+
+    /*
+     * The mode, when the caller gives one, stays in the register it was
+     * passed in: the ABI keeps the third argument of open for it, and the
+     * filesystem does not use it yet. It is not read here, because a
+     * caller may not have passed it at all.
+     */
     rc = ksys_open(path, map_flags(flags));
     if (rc < 0) {
         return fail(rc);
@@ -221,6 +242,28 @@ int microos_getpid(void)
 int microos_getppid(void)
 {
     return (int)ksys_getppid();
+}
+
+/*
+ * The fork. It is the number of the new task in the parent, and 0 in the
+ * child - but the child of this fork is a task that re-runs the program of
+ * the parent from its start, so it is not a copy of the parent at the call
+ * of the fork: the memory is shared (like CLONE_VM) and the work done
+ * before the fork runs again in the child. A real fork waits for the first
+ * release; this one is here so that the shape of a program is the usual
+ * one.
+ */
+int microos_fork(void)
+{
+    int rc = ksys_fork();
+
+    if (rc < 0) {
+        return fail(rc);
+    }
+
+    g_errno = 0;
+
+    return rc;
 }
 
 int microos_getcwd(char *buf, size_t size)

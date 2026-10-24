@@ -16,6 +16,7 @@
 #include "kernel/log.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
+#include "libc/unistd.h"
 #include "mfs/mfs.h"
 #include "mfs/mfs_ram_device.h"
 #include "mfs/mfs_vfs.h"
@@ -199,6 +200,70 @@ static void test_fork_numbers(void)
 }
 
 /*
+ * The program of the child and of the parent, the way a program of POSIX
+ * writes it: fork() is 0 in the child and the number of the child in the
+ * parent. The child of this fork is a task that re-runs this program from
+ * its start, so it reaches the fork again - and gets the 0, which is what
+ * tells it that it is the child.
+ */
+static void posix_program(void *arg)
+{
+    int pid;
+
+    K_UNUSED(arg);
+
+    pid = microos_fork();
+
+    if (pid == 0) {
+        /* The child: it finishes with the code 7, like the other tests. */
+        g_child_done = 1;
+        task_exit(7);
+        return;
+    }
+
+    /* The parent: it remembers the number and waits for the child. */
+    g_fork_result = pid;
+
+    if (pid > 0) {
+        g_wait_result = microos_waitpid(pid, (int *)&g_wait_status, 0);
+    }
+
+    g_result = 1;
+}
+
+/*
+ * The property: the shape of the fork from the library is the usual one of
+ * POSIX - 0 in the child, the number of the child in the parent - and the
+ * parent waits for the child and gets the code it finished with.
+ */
+static void test_fork_posix(void)
+{
+    struct task *parent;
+    int waited;
+
+    ktest_begin("ksys: fork() from the library is 0 in the child and its number in the parent");
+
+    setup();
+
+    parent = task_create("posix", posix_program, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(parent != NULL);
+
+    for (waited = 0; waited < 3000 && g_result < 0; waited++) {
+        k_sched_sleep_ms(1);
+    }
+
+    KT_CHECK_INT_EQ(g_result, 1);
+    /* The parent got the number of the child, not 0 and not its own. */
+    KT_CHECK(g_fork_result > 0);
+    KT_CHECK_INT_EQ(g_wait_result, g_fork_result);
+    KT_CHECK_INT_EQ(g_wait_status, 7);
+    /* The child took the branch of the 0. */
+    KT_CHECK_INT_EQ(g_child_done, 1);
+
+    teardown();
+}
+
+/*
  * The property: waiting for a child that does not exist gives an error
  * instead of hanging forever.
  */
@@ -258,6 +323,7 @@ void test_ksys_process(void)
 {
     test_fork_wait();
     test_fork_numbers();
+    test_fork_posix();
     test_wait_errors();
     test_fork_data_is_the_same();
 }

@@ -1,8 +1,10 @@
 #include "ktest.h"
 #include "tests/tests.h"
 
+#include <stdio.h>
 #include <string.h>
 
+#include "kernel/version.h"
 #include "kshell/kshell.h"
 #include "port_host.h"
 
@@ -71,6 +73,23 @@ static void test_registry(void)
     KT_CHECK_INT_EQ(kshell_unregister("testcmd"), KSHELL_OK);
     KT_CHECK(kshell_execute("testcmd") != KSHELL_OK);
 
+    /*
+     * The table of the commands has a limited number of places, and a
+     * command that does not fit is lost: the board lost "mount" and "df"
+     * that way, without a word. The one that registers the commands says
+     * when one of them was refused, and the test says how many commands
+     * the board really has.
+     */
+    KT_CHECK_INT_EQ(kshell_register_files(), 0);
+
+    /*
+     * The board has more commands than the tests can see here: the
+     * drivers bring their own ("date", "i2c", "wifi", "display", "mkfs")
+     * and those are only on the board. The twenty three commands of the
+     * shell itself have to be here, all of them.
+     */
+    KT_CHECK(kshell_command_count() >= 23);
+
     port_host_set_sink(NULL);
 }
 
@@ -90,6 +109,49 @@ static void test_memtest(void)
     port_host_set_sink(NULL);
 }
 
+/*
+ * The report of `mfetch` is written to the sink of the port: the test
+ * reads it back from there. The sink is closed by the port when it is
+ * replaced, so the reading is done while it is still the current one.
+ */
+static void test_mfetch(void)
+{
+    char buf[4096];
+    size_t used;
+    FILE *sink;
+
+    ktest_begin("kshell: mfetch prints the logo and the report");
+
+    sink = tmpfile();
+    KT_CHECK(sink != NULL);
+    if (sink == NULL) {
+        return;
+    }
+
+    port_host_set_sink(sink);
+
+    KT_CHECK_INT_EQ(kshell_execute("mfetch"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("mfetch color"), KSHELL_OK);
+
+    /* The report has a shape of its own: an unknown argument is refused. */
+    KT_CHECK(kshell_execute("mfetch nosuchmode") != KSHELL_OK);
+
+    rewind(sink);
+    used = fread(buf, 1, sizeof(buf) - 1, sink);
+    buf[used] = '\0';
+
+    port_host_set_sink(NULL);
+
+    /* The system and the board are named in the plain report ... */
+    KT_CHECK(strstr(buf, kernel_name()) != NULL);
+    KT_CHECK(strstr(buf, "Board") != NULL);
+    KT_CHECK(strstr(buf, "command(s)") != NULL);
+
+    /* ... and the colored logo brings the escapes of the terminal. */
+    KT_CHECK(strstr(buf, "███╗") != NULL);
+    KT_CHECK(strstr(buf, "\033[") != NULL);
+}
+
 void test_kshell(void)
 {
     /* The built in commands are registered by the shell itself. */
@@ -99,4 +161,5 @@ void test_kshell(void)
     test_unknown();
     test_registry();
     test_memtest();
+    test_mfetch();
 }

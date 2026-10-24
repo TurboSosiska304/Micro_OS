@@ -9,6 +9,9 @@ dependencies.lock
 *.sdkconfig
 config/sdkconfig.h
 
+# --- The firmware ready for distribution (built by `make bundle`) ---
+dist/
+
 # --- Host build ---
 *.o
 *.a

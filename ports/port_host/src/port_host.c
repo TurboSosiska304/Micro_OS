@@ -21,6 +21,15 @@ static FILE *s_sink;
 
 void port_host_set_sink(FILE *sink)
 {
+    /*
+     * The sink of the tests is a file that somebody made: the one that is
+     * replaced is closed, otherwise every run of the tests leaves a file
+     * open until the process ends.
+     */
+    if (s_sink != NULL && s_sink != stdout && s_sink != sink) {
+        (void)fclose(s_sink);
+    }
+
     s_sink = sink;
 }
 
@@ -93,11 +102,17 @@ k_u64_t k_port_uptime_ms(void)
     return (k_u64_t)ts.tv_sec * 1000u + (k_u64_t)(ts.tv_nsec / 1000000);
 }
 
+/* The code the process of the host stops with: a panic is a failure. */
+#define HOST_PANIC_EXIT_CODE 89
+
 void k_port_halt(void)
 {
-    for (;;) {
-        sleep(1);
-    }
+    /*
+     * The host is a process, not a board: a halted process is a test that
+     * failed, and a CI that waits for a quarter of an hour for it is a
+     * test that hides the failure.
+     */
+    _exit(HOST_PANIC_EXIT_CODE);
 }
 
 void k_port_reset(void)
@@ -238,6 +253,21 @@ k_size_t k_port_task_stack_size(void)
     return 64 * 1024;
 }
 
+/*
+ * The block of the thread is given back whether the work of the task
+ * returns or not: a task of the kernel ends with a call that never comes
+ * back, and a detached thread that leaves its block behind loses it on
+ * every task that has ever run.
+ */
+static void host_task_cleanup(void *arg)
+{
+    host_task_ctl *ctl = (host_task_ctl *)arg;
+
+    pthread_mutex_destroy(&ctl->lock);
+    pthread_cond_destroy(&ctl->cond);
+    free(ctl);
+}
+
 static void *host_task_thread(void *arg)
 {
     host_task_ctl *ctl = (host_task_ctl *)arg;
@@ -251,7 +281,11 @@ static void *host_task_thread(void *arg)
     }
     pthread_mutex_unlock(&ctl->lock);
 
+    pthread_cleanup_push(host_task_cleanup, ctl);
+
     ctl->entry(ctl->task);
+
+    pthread_cleanup_pop(1);
 
     return NULL;
 }

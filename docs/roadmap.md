@@ -29,10 +29,14 @@ Every phase ends with a working state on the device and green tests.
 * [x] Time slice (SCHED_RR style), configurable quantum
 * [x] Parent/child relations, `task_wait()`, `task_wait_any()`
 * [x] File descriptor table and working directory per task
-* [ ] `/proc/<pid>` (belongs to phase 2)
-* [ ] A real `fork()` (needs our own context switch, see ADR 0002)
+* [x] `/proc/<pid>` (belongs to phase 2)
+* [ ] A real `fork()` — a copy of the address space (needs our own context
+      switch, see ADR 0002). Until then `fork()` is a placeholder: the child
+      shares the memory of the parent and re-runs its program from the start
+      (see "Known limitations" in the README), to be fixed right after the
+      first release
 
-## Phase 1F - The hardware doctor
+## Phase 1F - The hardware doctor (done)
 
 The init process walks through the registered modules and checks them one by
 one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
@@ -47,16 +51,18 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [x] Battery voltage (ADC on G38)
 * [x] WiFi radio
 * [x] PSRAM and flash
-* [ ] Microphone (SPM1423, I2S) - registered, but skipped
-* [ ] A `doctor` command that repeats the check at any time
+* [x] A `doctor` command that repeats the check at any time (as a comand "modules")
 
-## Phase 2 - VFS, MicroFS, shell
+## Phase 2 - VFS, MicroFS, shell (done)
 
 * [x] Shell: a portable command interpreter with a command registry
 * [x] Built in commands: `help`, `uname`, `uptime`, `ps`, `echo`, `sleep`,
       `dmesg`, `free`, `clear`, `reboot`, `modules`, `memtest`, `i2c`
 * [x] `memtest`: the size of the internal heap and of the PSRAM, and the
       speed of both (fill, checksum, copy) with a verification of the data
+* [x] `mfetch`: the report about the system with the logo of `logos.md`
+      (the analog of fastfetch, the logo on the left and the report on
+      the right)
 * [x] The console of the ESP32 port (the UART driver makes the input work)
 * [x] MicroFS: the filesystem of the board, as described in
       [docs/memory.md](memory.md): the DATA, META and INFO sections, the
@@ -81,9 +87,9 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [x] The terminal repeats every character while it is typed, the backspace
       erases it
 * [x] `/proc/self` and a directory per task with a `status` file
-* [ ] Command history, tab completion (not needed for now)
+* [n] Command history, tab completion (not needed for now)
 
-## Phase 3 - Memory and the syscall ABI
+## Phase 3 - Memory and the syscall ABI (done)
 
 * [x] The ABI of the system calls: the numbers are a contract, they are
       written down in [docs/syscall-abi.md](syscall-abi.md) and covered by
@@ -93,12 +99,14 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [x] The tests work with a corpus of real numbers: the same data has to
       give the same result no matter how it is broken into pieces
 * [x] The process part of the ABI: fork, getppid, waitpid. The memory
-      of the parent is not copied, the tasks share it, like CLONE_VM
+      of the parent is not copied, the tasks share it, like CLONE_VM.
+      The library gives fork() the shape of POSIX - 0 in the child, the
+      number of the child in the parent - but the child re-runs the
+      program of the parent from its start (a real fork waits for the
+      first release)
 * [x] The libc over the ABI: printf, open, read, write. The library is
       checked against the library of the system with the real numbers of the
       corpus
-* [ ] execve: it needs a format of the programs
-
 * [x] `kmm_alloc`/`kmm_free`, allocation from the PSRAM, the slabs for the
       small blocks
 * [x] The memory of the programs: malloc, free, realloc and calloc over the
@@ -106,27 +114,61 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [x] System call table, uniform ABI
 * [x] Minimal libc over the ABI: `open/read/write/close/printf`. The memory
       (`malloc`) is still missing
-* [ ] Permission model and "file descriptors"
+* [x] Permission model and "file descriptors": a descriptor remembers the
+      access it was opened with, and the kernel refuses to read a write-only
+      descriptor or to write a read-only one with `EBADF`. The rule lives at
+      the edge of the system, so every filesystem answers the same way.
+      Per-file owners and mode bits wait for the first release - there is a
+      single user today (see "After the first release")
 
 ## Phase 4 - Drivers
 
-* [ ] `drv_framebuffer`: ST7789v2, 135x240, rotation, text and graphics output
-* [ ] `drv_input`: A/B/C buttons, debounce, input events
-* [ ] `drv_buzzer`, `drv_led` (IR+LED share G19), `drv_ir` (transmit and receive)
+* [x] `drv_framebuffer`: ST7789v2, 135x240, rotation, text and graphics output
+      — the framebuffer is the one of `drv_display`: the picture turns in
+      software (the panel keeps its portrait, so the offset of the visible
+      area never changes), the graphics are `pixel`, `fill_rect`, `rect` and
+      `line`, and the shell has `display rotate <0|90|180|270>` and
+      `display draw [seconds]` — a test picture for the eyes
+* [x] `drv_input`: A/B/C buttons, debounce, input events — the command
+      `input [seconds]` and the file `/dev/input`
+* [x] `drv_buzzer`: the passive buzzer on G2, a `beep` command for the user
+* [x] `drv_led`: the red LED on G19 (shared with the IR emitter), an `led` command
+* [x] Two shows for a person on the led: `led heart` makes the light
+      breathe, `led dance` makes it dance
+* [x] `drv_battery`: the charge left in percent, from the curve of one
+      cell — the command `battery`
 * [ ] `drv_imu` (MPU6886), `drv_rtc` (BM8563, deep-sleep wake)
-* [ ] `drv_mic` (SPM1423) — a simple sound/noise detector
-* [ ] Console on TFT and UART at the same time
+* [x] `drv_wifi`: the station, the scan, the network of the last time is
+      remembered in the NVS (see [ADR 0003](adr/0003-wifi-driver.md))
+* [x] Console on TFT and UART at the same time
 
 ## Phase 5 - Services and applications
 
 * [ ] Init process: starting daemons from `/etc/init.d`
 * [ ] Configuration from `/etc`, persisted in NVS
-* [ ] WiFi, HTTP/MQTT client, NTP based on the RTC
+* [x] WiFi: the station joins the network of the last time on its own
+* [ ] HTTP client, NTP based on the RTC
 * [ ] Applications: sensor logger, IR remote, clock, weather station
 
 ## Phase 6 - Release
 
-* [ ] OTA updates (`app0`/`app1`), rollback after a failed boot
-* [ ] Settings reset, `factory reset`
-* [ ] Enclosure/display modes: "clock", "remote", "logger"
+* [x] Autobuild of the release candidate (GitHub Actions): the firmware and
+      the integrity check, see [ci.md](ci.md)
+* [n] OTA updates (`app0`/`app1`), rollback after a failed boot (no space
+      in the flash for a second image)
+* [n] Enclosure/display modes: "clock", "remote", "logger" (not needed)
 * [ ] Release process, tags, changelog
+
+## After the first release
+
+Deferred, not forgotten:
+
+* [ ] `execve`: it needs a format of the programs
+* [ ] Per-file permissions: mode bits and owners in MicroFS (today the model
+      is one user and the access a descriptor was opened with, see the
+      permission model of phase 3)
+* [ ] Microphone (SPM1423, I2S) and `drv_mic` — a simple sound/noise detector
+* [ ] MQTT client (HTTP and NTP stay in phase 5)
+* [ ] Settings reset, `factory reset`
+* [ ] `drv_ir`: transmit and receive over the pin G19 it shares with the red
+      LED (the driver does not exist yet)

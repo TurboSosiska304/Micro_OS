@@ -88,6 +88,15 @@ Every task has its own table of the open files, four of them. The descriptor
 is the number of the slot. A descriptor that was never opened gives
 `KERR_BADF`.
 
+A descriptor remembers the access it was opened with - read, write, or both.
+The kernel checks that access at the edge of the system, so every filesystem
+under it answers the same way: reading a descriptor that was opened to be
+written to, or writing one that was opened to be read from, gives
+`KERR_BADF`. There are no owners and no mode bits on the files - the system
+has a single user, and the access of the descriptor is the whole of the
+permission model. Owners and mode bits are planned for after the first
+release.
+
 ## The wrappers
 
 The programs use the wrappers, they check the arguments before they reach the

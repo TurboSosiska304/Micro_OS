@@ -61,7 +61,13 @@ int microos_putchar(int ch);
  * The usual names of the library. The functions keep their own names in
  * the binary (microos_*), so that the library of the compiler and this one
  * never fight for the same symbol.
+ *
+ * A header that redefines a name of the standard is only allowed where
+ * the name is not used as the standard says (C11 7.1.4), so a translation
+ * unit that has to see the names of the compiler's library can leave them
+ * alone by defining MICROOS_LIBC_KEEP_NAMES.
  */
+#ifndef MICROOS_LIBC_KEEP_NAMES
 #define printf microos_printf
 #define vprintf microos_vprintf
 #define snprintf microos_snprintf
@@ -69,5 +75,6 @@ int microos_putchar(int ch);
 #define fprintf microos_fprintf
 #define puts microos_puts
 #define putchar microos_putchar
+#endif /* MICROOS_LIBC_KEEP_NAMES */
 
 #endif /* MICRO_OS_LIBC_STDIO_H */

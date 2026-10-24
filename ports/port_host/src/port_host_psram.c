@@ -12,11 +12,23 @@
  */
 #include "port_host_psram.h"
 
+#include <pthread.h>
 #include <string.h>
 
 #define HOST_PSRAM_SIZE (2 * 1024 * 1024)
 #define HOST_PSRAM_MAX_BLOCKS 128
 #define HOST_PSRAM_ALIGN 8u
+
+/*
+ * The pool is one piece: the kernel hands the memory out from its own
+ * threads and the shell measures the same pool from another, and the
+ * tables of the free and the busy blocks cannot take two writers at
+ * once - a torn counter writes past the table and the memory is given
+ * out twice. The port is POSIX, so the lock is a plain mutex: on the
+ * board the heap of the IDF locks itself and the port has nothing to
+ * do, and here the pool has to do the same for itself.
+ */
+static pthread_mutex_t s_lock = PTHREAD_MUTEX_INITIALIZER;
 
 struct free_block {
     k_size_t offset;
@@ -41,7 +53,7 @@ static k_size_t align_up(k_size_t value)
     return (value + (HOST_PSRAM_ALIGN - 1)) & ~((k_size_t)(HOST_PSRAM_ALIGN - 1));
 }
 
-void host_psram_init(void)
+static void host_psram_init_locked(void)
 {
     s_free_count = 1;
     s_free[0].offset = 0;
@@ -50,12 +62,12 @@ void host_psram_init(void)
     s_initialised = true;
 }
 
-void *host_psram_alloc(k_size_t size)
+static void *host_psram_alloc_locked(k_size_t size)
 {
     k_size_t i;
 
     if (!s_initialised) {
-        host_psram_init();
+        host_psram_init_locked();
     }
 
     if (size == 0) {
@@ -93,7 +105,7 @@ void *host_psram_alloc(k_size_t size)
     return NULL;
 }
 
-void host_psram_release(void *ptr)
+static void host_psram_release_locked(void *ptr)
 {
     k_size_t offset;
     k_size_t size = 0;
@@ -163,9 +175,13 @@ k_size_t host_psram_available(void)
     k_size_t i;
     k_size_t free_bytes = 0;
 
+    pthread_mutex_lock(&s_lock);
+
     for (i = 0; i < s_free_count; i++) {
         free_bytes += s_free[i].size;
     }
+
+    pthread_mutex_unlock(&s_lock);
 
     return free_bytes;
 }
@@ -175,4 +191,31 @@ bool host_psram_contains(const void *ptr)
     const uint8_t *p = ptr;
 
     return p >= s_pool && p < (s_pool + HOST_PSRAM_SIZE);
+}
+
+/* The public points of entry: everything the tables see goes through the lock. */
+
+void host_psram_init(void)
+{
+    pthread_mutex_lock(&s_lock);
+    host_psram_init_locked();
+    pthread_mutex_unlock(&s_lock);
+}
+
+void *host_psram_alloc(k_size_t size)
+{
+    void *block;
+
+    pthread_mutex_lock(&s_lock);
+    block = host_psram_alloc_locked(size);
+    pthread_mutex_unlock(&s_lock);
+
+    return block;
+}
+
+void host_psram_release(void *ptr)
+{
+    pthread_mutex_lock(&s_lock);
+    host_psram_release_locked(ptr);
+    pthread_mutex_unlock(&s_lock);
 }

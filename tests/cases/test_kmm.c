@@ -7,6 +7,7 @@
 
 #include "kernel/kmm.h"
 #include "kernel/log.h"
+#include "kernel/sched.h"
 #include "kernel/task.h"
 #include "port_host.h"
 
@@ -404,6 +405,78 @@ static void test_large_blocks(void)
     KT_CHECK_INT_EQ(stats.total_bytes, 0);
 }
 
+/*
+ * Two tasks in the allocator at the same time: without the lock of kmm
+ * they take the same free slot, one block serves two owners, and the
+ * patterns painted on the blocks disagree. The paint and the check run
+ * outside of the lock on purpose: only the allocator is guarded, and a
+ * block of one task has to stay its own while the other task paints
+ * its own block next door.
+ */
+static volatile int g_hammer_failed;
+static volatile int g_hammer_done;
+
+static void hammer_task(void *arg)
+{
+    int id = (int)(intptr_t)arg;
+    uint8_t tag = (uint8_t)(0x41 + id);
+    int i;
+
+    for (i = 0; i < 100; i++) {
+        k_size_t size = (k_size_t)(16 + ((i * 7 + id * 31) % 480));
+        uint8_t *block = (uint8_t *)kmm_alloc(size, KMM_PRIORITY_SYSTEM);
+        k_size_t j;
+
+        if (block == NULL) {
+            g_hammer_failed++;
+            continue;
+        }
+
+        memset(block, tag, size);
+        k_sched_sleep_ms(1);
+
+        for (j = 0; j < size; j++) {
+            if (block[j] != tag) {
+                g_hammer_failed++;
+                break;
+            }
+        }
+
+        kmm_free(block);
+    }
+
+    g_hammer_done++;
+}
+
+static void test_two_tasks_alloc(void)
+{
+    struct task *tasks[2];
+    int id;
+
+    ktest_begin("kmm: two tasks that allocate at the same time keep their blocks apart");
+
+    g_hammer_failed = 0;
+    g_hammer_done = 0;
+
+    for (id = 0; id < 2; id++) {
+        char name[16];
+
+        snprintf(name, sizeof(name), "hammer%d", id);
+        tasks[id] = task_create(name, hammer_task, (void *)(intptr_t)id, (k_u8_t)(5 + id));
+        KT_CHECK(tasks[id] != NULL);
+    }
+
+    for (id = 0; id < 2; id++) {
+        if (tasks[id] != NULL) {
+            /* The task is waited for: a finished task has to be taken back. */
+            KT_CHECK_INT_EQ(task_wait(tasks[id]->pid, NULL, 5000), 0);
+        }
+    }
+
+    KT_CHECK_INT_EQ(g_hammer_done, 2);
+    KT_CHECK_INT_EQ(g_hammer_failed, 0);
+}
+
 void test_kmm(void)
 {
     test_alloc_free();
@@ -416,4 +489,5 @@ void test_kmm(void)
     test_slabs_are_reused();
     test_small_blocks_follow_the_priority();
     test_large_blocks();
+    test_two_tasks_alloc();
 }

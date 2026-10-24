@@ -27,6 +27,25 @@
 static int s_offset_x = LCD_X_OFFSET;
 static int s_offset_y = LCD_Y_OFFSET;
 
+/*
+ * The turn of the picture for its viewer, in quarter turns clockwise.
+ * The controller keeps its portrait MADCTL for ever: turning the
+ * controller would move the visible area of the glass (its offset is a
+ * property of the panel, not of the picture), and every quarter turn
+ * would need its own pair of magic numbers. The drawing turns instead —
+ * see drivers/fb_draw.h, the arithmetic of it is tested on the host.
+ */
+static int s_rotation;
+
+/*
+ * The mode the panel drives its colors in. Without a command at boot
+ * this glass shows a negative: the background painted black comes out
+ * white and the text comes out dark. INVON is sent in the init, and
+ * `display invert` in the shell flips it live — the right mode for a
+ * panel of another model is found with the eyes, without reflashing.
+ */
+static bool s_inverted;
+
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_heap_caps.h"
@@ -34,9 +53,12 @@ static int s_offset_y = LCD_Y_OFFSET;
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "drivers/display.h"
+#include "drivers/fb_draw.h"
 #include "drivers/internal.h"
 #include "graphics/font.h"
 #include "kernel/kmod.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "kernel/log.h"
 
 #define LCD_SPI_HOST SPI2_HOST
@@ -49,6 +71,37 @@ static int s_offset_y = LCD_Y_OFFSET;
 static uint16_t *s_fb;
 static spi_device_handle_t s_dev;
 static bool s_initialised;
+
+/*
+ * The panel is one piece of hardware: the command, the data, the window
+ * and the pixels are a sequence that no other task may step into the
+ * middle of. A second task that writes its own pixels in the middle of a
+ * flush changes the meaning of the commands on the wire and the panel
+ * shows a picture that was never drawn. The lock is recursive because the
+ * functions of the panel call each other.
+ */
+static SemaphoreHandle_t s_lock;
+
+static void display_lock(void)
+{
+    if (s_lock != NULL) {
+        (void)xSemaphoreTakeRecursive(s_lock, portMAX_DELAY);
+    }
+}
+
+static void display_unlock(void)
+{
+    if (s_lock != NULL) {
+        (void)xSemaphoreGiveRecursive(s_lock);
+    }
+}
+
+/* The framebuffer seen the way its viewer sees it (the caller holds the
+ * lock; the size of the picture needs no pixels, the view may have none). */
+static void display_view(struct fb_view *view)
+{
+    fb_view_init(view, s_fb, LCD_WIDTH, LCD_HEIGHT, s_rotation);
+}
 
 /*
  * The SPI DMA of the ESP32 cannot read from the PSRAM, so the framebuffer is
@@ -102,6 +155,8 @@ static void lcd_init_panel(void)
 
     lcd_write_command(0x36); /* MADCTL: portrait, BGR */
     lcd_write_data8(0x08);
+    lcd_write_command(0x21); /* INVON: the colors as they are painted */
+    s_inverted = true;
     lcd_write_command(0x3A); /* 16 bits per pixel */
     lcd_write_data8(0x05);
     lcd_write_command(0xB2); /* display control */
@@ -244,6 +299,18 @@ static int drv_display_init(void)
         .mode = GPIO_MODE_OUTPUT,
     };
 
+    /*
+     * The lock of the panel exists before anything is written to it: the
+     * console of the board and the commands of the shell both draw.
+     */
+    if (s_lock == NULL) {
+        s_lock = xSemaphoreCreateRecursiveMutex();
+        if (s_lock == NULL) {
+            kerror("display: the lock of the panel cannot be made");
+            return -1;
+        }
+    }
+
     if (gpio_config(&outputs) != ESP_OK) {
         kerror("display: cannot configure the GPIOs");
         return -1;
@@ -281,8 +348,13 @@ static int drv_display_init(void)
 
     s_fb = heap_caps_malloc(LCD_WIDTH * LCD_HEIGHT * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
     if (s_fb == NULL) {
-        /* No PSRAM: fall back to the internal heap. */
-        s_fb = heap_caps_malloc(LCD_WIDTH * LCD_HEIGHT * sizeof(uint16_t), MALLOC_CAP_INTERNAL);
+        /*
+         * No PSRAM: fall back to the internal heap. MALLOC_CAP_8BIT keeps
+         * the frame off the exec-only IRAM region, where the stores of the
+         * drawing code would fault.
+         */
+        s_fb = heap_caps_malloc(LCD_WIDTH * LCD_HEIGHT * sizeof(uint16_t),
+                                MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     }
     if (s_fb == NULL) {
         kerror("display: no memory for the framebuffer");
@@ -342,32 +414,40 @@ int drv_display_clear(uint16_t color)
         return -1;
     }
 
+    display_lock();
+
     for (i = 0; i < count; i++) {
         s_fb[i] = color;
     }
+
+    display_unlock();
 
     return 0;
 }
 
 int drv_display_text(int x, int y, const char *text, uint16_t color)
 {
+    struct fb_view view;
     int cursor = x;
 
     if (s_fb == NULL || text == NULL) {
         return -1;
     }
 
+    display_lock();
+    display_view(&view);
+
     while (*text != '\0') {
         const uint8_t *glyph = font_glyph(*text);
         int column;
         int row;
 
-        if (cursor + FONT_WIDTH > LCD_WIDTH) {
+        if (cursor + FONT_WIDTH > fb_view_width(&view)) {
             break; /* the line is full */
         }
 
-        if (y + FONT_HEIGHT > LCD_HEIGHT) {
-            break; /* the screen is full */
+        if (y + FONT_HEIGHT > fb_view_height(&view)) {
+            break; /* the picture is full */
         }
 
         for (column = 0; column < FONT_WIDTH; column++) {
@@ -375,12 +455,8 @@ int drv_display_text(int x, int y, const char *text, uint16_t color)
 
             for (row = 0; row < FONT_HEIGHT; row++) {
                 if ((bits & (1u << row)) != 0) {
-                    int px = cursor + column;
-                    int py = y + row;
-
-                    if (px >= 0 && px < LCD_WIDTH && py >= 0 && py < LCD_HEIGHT) {
-                        s_fb[py * LCD_WIDTH + px] = color;
-                    }
+                    /* the set bits go through the turn of the picture */
+                    fb_view_pixel(&view, cursor + column, y + row, color);
                 }
             }
         }
@@ -388,6 +464,8 @@ int drv_display_text(int x, int y, const char *text, uint16_t color)
         cursor += FONT_WIDTH + 1;
         text++;
     }
+
+    display_unlock();
 
     return 0;
 }
@@ -398,23 +476,153 @@ int drv_display_flush(void)
         return -1;
     }
 
+    /*
+     * The whole transfer is one hold of the lock: the window and the
+     * pixels that follow it belong together, and the offset of the image
+     * must not change in the middle of the two.
+     */
+    display_lock();
     lcd_flush();
+    display_unlock();
 
     return 0;
 }
 
 void drv_display_set_offset(int x, int y)
 {
+    display_lock();
     s_offset_x = x;
     s_offset_y = y;
+    display_unlock();
 }
 
 void drv_display_get_offset(int *x, int *y)
 {
+    display_lock();
+
     if (x != NULL) {
         *x = s_offset_x;
     }
     if (y != NULL) {
         *y = s_offset_y;
     }
+
+    display_unlock();
+}
+
+/* --- the picture as its viewer sees it --- */
+
+int drv_display_width(void)
+{
+    struct fb_view view;
+
+    display_lock();
+    display_view(&view);
+    display_unlock();
+
+    return fb_view_width(&view);
+}
+
+int drv_display_height(void)
+{
+    struct fb_view view;
+
+    display_lock();
+    display_view(&view);
+    display_unlock();
+
+    return fb_view_height(&view);
+}
+
+void drv_display_set_rotation(int rotation)
+{
+    display_lock();
+    s_rotation = ((rotation % 4) + 4) % 4; /* -90 is the third quarter turn */
+    display_unlock();
+}
+
+int drv_display_rotation(void)
+{
+    int rotation;
+
+    display_lock();
+    rotation = s_rotation;
+    display_unlock();
+
+    return rotation;
+}
+
+void drv_display_set_inverted(bool inverted)
+{
+    display_lock();
+    lcd_write_command(inverted ? 0x21 : 0x20); /* INVON / INVOFF */
+    s_inverted = inverted;
+    display_unlock();
+}
+
+bool drv_display_inverted(void)
+{
+    bool inverted;
+
+    display_lock();
+    inverted = s_inverted;
+    display_unlock();
+
+    return inverted;
+}
+
+void drv_display_pixel(int x, int y, uint16_t color)
+{
+    struct fb_view view;
+
+    if (s_fb == NULL) {
+        return;
+    }
+
+    display_lock();
+    display_view(&view);
+    fb_view_pixel(&view, x, y, color);
+    display_unlock();
+}
+
+void drv_display_fill_rect(int x, int y, int w, int h, uint16_t color)
+{
+    struct fb_view view;
+
+    if (s_fb == NULL) {
+        return;
+    }
+
+    display_lock();
+    display_view(&view);
+    fb_view_fill_rect(&view, x, y, w, h, color);
+    display_unlock();
+}
+
+void drv_display_rect(int x, int y, int w, int h, uint16_t color)
+{
+    struct fb_view view;
+
+    if (s_fb == NULL) {
+        return;
+    }
+
+    display_lock();
+    display_view(&view);
+    fb_view_rect(&view, x, y, w, h, color);
+    display_unlock();
+}
+
+void drv_display_line(int x0, int y0, int x1, int y1, uint16_t color)
+{
+    struct fb_view view;
+
+    if (s_fb == NULL) {
+        return;
+    }
+
+    display_lock();
+    display_view(&view);
+    fb_view_line(&view, x0, y0, x1, y1, color);
+    display_unlock();
 }

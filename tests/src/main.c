@@ -33,11 +33,15 @@ static void run_tests(void *arg)
     test_mfs_persistence();
     test_vfs();
     test_sysfs();
+    test_input_debounce();
+    test_battery_soc();
+    test_fb_draw();
     test_ksys();
     test_ksys_process();
     test_libc();
     test_kshell();
     test_boot();
+    test_wifi();
 
     g_result = ktest_summary();
     g_done = true;
@@ -58,8 +62,23 @@ int main(void)
         return 1;
     }
 
-    while (!g_done) {
-        usleep(1000);
+    /*
+     * A run that does not end is a failed run: the runner stops itself
+     * instead of leaving the CI to wait forever.
+     */
+    {
+        const useconds_t limit = 120u * 1000u * 1000u;
+        useconds_t waited = 0;
+
+        while (!g_done && waited < limit) {
+            usleep(1000);
+            waited += 1000;
+        }
+
+        if (!g_done) {
+            printf("\nthe tests did not end in %u second(s), stopping\n", 120u);
+            g_result = 2;
+        }
     }
 
     port_host_stop_tick();

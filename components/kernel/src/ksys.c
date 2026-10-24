@@ -97,6 +97,16 @@ static k_ssize_t sys_read(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys_
         return KERR_BADF;
     }
 
+    /*
+     * The descriptor remembers how it was opened: a file that was opened
+     * to be written to cannot be read from (POSIX: EBADF). The rule lives
+     * here, at the edge of the system, so that every filesystem answers
+     * the same way.
+     */
+    if ((file->flags & KSYS_O_ACCMODE) == KSYS_O_WRONLY) {
+        return KERR_BADF;
+    }
+
     return vfs_read(&file->file, (void *)(uintptr_t)buf, count);
 }
 
@@ -118,6 +128,12 @@ static k_ssize_t sys_write(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys
             k_console_write((const char *)(uintptr_t)buf, (k_size_t)count);
             return (k_ssize_t)count;
         }
+        return KERR_BADF;
+    }
+
+    /* The descriptor remembers how it was opened: a file that was opened
+     * to be read from cannot be written to (POSIX: EBADF). */
+    if ((file->flags & KSYS_O_ACCMODE) == KSYS_O_RDONLY) {
         return KERR_BADF;
     }
 
@@ -144,7 +160,7 @@ static k_ssize_t sys_open(ksys_arg_t path, ksys_arg_t flags, ksys_arg_t a2, ksys
 
     file = &((struct task *)task_self())->files[fd];
 
-    rc = vfs_open(name, (int)flags, &file->file, (k_size_t)fd);
+    rc = vfs_open(name, (int)flags, &file->file, file->priv);
     if (rc != 0) {
         fd_release(fd);
         return rc;
@@ -459,6 +475,17 @@ static k_ssize_t sys_fork(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_
 
     if (self == NULL) {
         return KERR_PERM;
+    }
+
+    /*
+     * A task that is itself the child of a fork and reaches the fork again
+     * is that child: it gets the 0 of POSIX, and no second child is made.
+     * The child of this fork re-runs the program of the parent from its
+     * start, so a program that does not ask "am I the child?" first would
+     * fork again and again without this.
+     */
+    if (self->is_child) {
+        return 0;
     }
 
     /* The name of the child is the name of the parent with a mark. */

@@ -20,6 +20,7 @@
 
 #include "kernel/log.h"
 #include "kernel/port.h"
+#include "kernel/sched.h"
 #include "kernel/task.h"
 
 /* The header in front of every block, so that kmm_free() knows what to do. */
@@ -67,6 +68,125 @@ static k_size_t g_slab_count;
 /* The slabs of every class, for every pool. */
 static struct kmm_slab *g_class_slabs[2][KMM_SLAB_CLASSES];
 
+/*
+ * The allocator is one piece: two tasks inside the slabs at the same
+ * time take the same free slot, and the same block comes out for two
+ * owners - the memory of the kernel falls apart quietly and shows up
+ * much later somewhere else, where nothing points at the allocator.
+ * The lock is of the same shape as the lock of the MFS (see mfs.c):
+ * the owner is remembered, a waiter sleeps a millisecond and looks
+ * again, and before the first task exists there is nobody to compete
+ * with. Only the flag is touched under the critical section of the
+ * port: the work of the allocator itself never sleeps and never runs
+ * with the interrupts off.
+ */
+static struct task *s_lock_owner;
+static k_u32_t s_lock_depth;
+
+static void kmm_lock(void)
+{
+    struct task *self = task_self();
+
+    if (self == NULL) {
+        return;
+    }
+
+    for (;;) {
+        bool taken = false;
+
+        k_port_enter_critical();
+
+        if (s_lock_owner == NULL) {
+            s_lock_owner = self;
+            s_lock_depth = 1;
+            taken = true;
+        } else if (s_lock_owner == self) {
+            /* The lock is recursive: the functions call each other. */
+            s_lock_depth++;
+            taken = true;
+        }
+
+        k_port_exit_critical();
+
+        if (taken) {
+            return;
+        }
+
+        k_sched_sleep_ms(1);
+    }
+}
+
+static void kmm_unlock(void)
+{
+    struct task *self = task_self();
+
+    if (self == NULL) {
+        return;
+    }
+
+    k_port_enter_critical();
+
+    if (s_lock_owner == self) {
+        s_lock_depth--;
+
+        if (s_lock_depth == 0) {
+            s_lock_owner = NULL;
+        }
+    }
+
+    k_port_exit_critical();
+}
+
+/* The bodies of the public functions, with the lock already taken. */
+static void kmm_init_locked(void);
+static void *kmm_alloc_locked(k_size_t size, int priority);
+static void kmm_free_locked(void *ptr);
+static k_size_t kmm_block_size_locked(void *ptr);
+static void kmm_get_stats_locked(struct kmm_stats *out);
+
+void kmm_init(void)
+{
+    kmm_lock();
+    kmm_init_locked();
+    kmm_unlock();
+}
+
+void *kmm_alloc(k_size_t size, int priority)
+{
+    void *block;
+
+    kmm_lock();
+    block = kmm_alloc_locked(size, priority);
+    kmm_unlock();
+
+    return block;
+}
+
+void kmm_free(void *ptr)
+{
+    kmm_lock();
+    kmm_free_locked(ptr);
+    kmm_unlock();
+}
+
+k_size_t kmm_block_size(void *ptr)
+{
+    k_size_t size;
+
+    kmm_lock();
+    size = kmm_block_size_locked(ptr);
+    kmm_unlock();
+
+    return size;
+}
+
+void kmm_get_stats(struct kmm_stats *out)
+{
+    kmm_lock();
+    kmm_get_stats_locked(out);
+    kmm_unlock();
+}
+
 static k_size_t align_up(k_size_t value)
 {
     return (value + (KMM_ALIGN - 1)) & ~((k_size_t)(KMM_ALIGN - 1));
@@ -90,7 +210,7 @@ static int size_class(k_size_t size)
     return class;
 }
 
-void kmm_init(void)
+static void kmm_init_locked(void)
 {
     k_size_t i;
 
@@ -262,7 +382,7 @@ static void *alloc_small(k_size_t size, int priority, k_u8_t pool)
 
 /* --- the allocator --- */
 
-void *kmm_alloc(k_size_t size, int priority)
+static void *kmm_alloc_locked(k_size_t size, int priority)
 {
     k_size_t total;
     void *block;
@@ -357,7 +477,7 @@ found:
     return (void *)((uint8_t *)block + sizeof(struct kmm_header));
 }
 
-void kmm_free(void *ptr)
+static void kmm_free_locked(void *ptr)
 {
     struct kmm_header *header;
 
@@ -393,7 +513,7 @@ void kmm_free(void *ptr)
     }
 }
 
-k_size_t kmm_block_size(void *ptr)
+static k_size_t kmm_block_size_locked(void *ptr)
 {
     struct kmm_header *header;
 
@@ -410,7 +530,7 @@ k_size_t kmm_block_size(void *ptr)
     return (k_size_t)header->size;
 }
 
-void kmm_get_stats(struct kmm_stats *out)
+static void kmm_get_stats_locked(struct kmm_stats *out)
 {
     if (out == NULL) {
         return;

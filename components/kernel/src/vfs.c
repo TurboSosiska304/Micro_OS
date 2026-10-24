@@ -11,23 +11,9 @@ struct mount {
 };
 
 #define VFS_MAX_FILES 16
-#define VFS_FILE_DATA_SIZE 64
-
 static struct mount g_mounts[VFS_MAX_MOUNTS];
 static k_size_t g_count;
 static int g_last_error;
-
-/* The private data of the open files, one slot per descriptor. */
-static uint8_t g_file_data[VFS_MAX_FILES][VFS_FILE_DATA_SIZE];
-
-void *vfs_file_data(k_size_t index)
-{
-    if (index >= VFS_MAX_FILES) {
-        return NULL;
-    }
-
-    return g_file_data[index];
-}
 
 static void copy_str(char *dst, k_size_t size, const char *src)
 {
@@ -173,7 +159,7 @@ static const struct mount *resolve(const char *path, const char **relative)
     return best;
 }
 
-int vfs_open(const char *path, int flags, struct vfs_file *out, k_size_t slot)
+int vfs_open(const char *path, int flags, struct vfs_file *out, void *priv)
 {
     const struct mount *m = resolve(path, NULL);
     int rc;
@@ -184,13 +170,14 @@ int vfs_open(const char *path, int flags, struct vfs_file *out, k_size_t slot)
     }
 
     /* The descriptor of the caller is not initialised: the offset and the
-     * size have to start from zero. */
+     * size have to start from zero. The private data belongs to the caller:
+     * the kernel keeps them with the open file of the task. */
     memset(out, 0, sizeof(*out));
-    out->priv = vfs_file_data(slot);
+    out->priv = priv;
     out->ops = m->ops;
     out->fs = m->ctx;
 
-    rc = m->ops->open(m->ctx, path, flags, out, slot);
+    rc = m->ops->open(m->ctx, path, flags, out);
     g_last_error = rc;
 
     if (rc != 0) {
@@ -219,7 +206,7 @@ int vfs_write(struct vfs_file *file, const void *buf, k_size_t size)
 {
     int rc;
 
-    if (file == NULL || file == NULL || file->ops == NULL || file->ops->write == NULL) {
+    if (file == NULL || file->ops == NULL || file->ops->write == NULL) {
         return -1;
     }
 

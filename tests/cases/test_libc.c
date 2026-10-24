@@ -18,6 +18,8 @@
 #include <string.h>
 
 static int (*sys_snprintf)(char *, size_t, const char *, ...) = snprintf;
+static unsigned long (*sys_strtoul)(const char *, char **, int) = strtoul;
+static long (*sys_strtol)(const char *, char **, int) = strtol;
 
 #include "libc/stdio.h"
 #include "libc/stdlib.h"
@@ -549,9 +551,188 @@ static void test_calloc_is_empty(void)
     teardown();
 }
 
+/*
+ * The property: the values that are not ordinary numbers, and the numbers
+ * that do not fit into the integers of the machine, are printed the way
+ * the system library prints them.
+ */
+static void test_special_values_match_the_system(void)
+{
+    static const double values[] = {
+        0.0,   1.5,
+        -1.5,  1e30,
+        -1e30, 1.7976931348623157e308,
+        1e20,  -1.8446744e19,
+        1e-30, 18446744073709551616.0,
+    };
+    static const char *kinds[] = {"%f", "%e", "%.12g", "%08.3f", "%014.3e"};
+    size_t i;
+    size_t f;
+
+    ktest_begin("libc: the special values are printed like the system prints them");
+
+    setup();
+
+    for (i = 0; i < K_ARRAY_SIZE(values); i++) {
+        for (f = 0; f < K_ARRAY_SIZE(kinds); f++) {
+            int n1 = microos_snprintf(g_buffer, sizeof(g_buffer), kinds[f], values[i]);
+            int n2 = sys_snprintf(g_reference, sizeof(g_reference), kinds[f], values[i]);
+
+            KT_CHECK_INT_EQ(n1, n2);
+            KT_CHECK_STR_EQ(g_buffer, g_reference);
+        }
+    }
+
+    /* The infinity and the NaN come from the library of the system. */
+    {
+        double specials[4];
+        size_t k;
+
+        specials[0] = 0.0;
+        specials[1] = strtod("inf", NULL);
+        specials[2] = -specials[1];
+        specials[3] = strtod("nan", NULL);
+
+        for (k = 0; k < K_ARRAY_SIZE(specials); k++) {
+            int n1 = microos_snprintf(g_buffer, sizeof(g_buffer), "%f|%e|%g", specials[k],
+                                      specials[k], specials[k]);
+            int n2 = sys_snprintf(g_reference, sizeof(g_reference), "%f|%e|%g", specials[k],
+                                  specials[k], specials[k]);
+
+            /* The library must not hang on them, and must say the same. */
+            KT_CHECK_INT_EQ(n1, n2);
+            KT_CHECK_STR_EQ(g_buffer, g_reference);
+        }
+    }
+
+    /* The short lengths really shorten the number. */
+    {
+        int n1 = microos_snprintf(g_buffer, sizeof(g_buffer), "%hhu %hd %hhi %hu", 300, 70000, -200,
+                                  65535u);
+        int n2 = sys_snprintf(g_reference, sizeof(g_reference), "%hhu %hd %hhi %hu", 300, 70000,
+                              -200, 65535u);
+
+        KT_CHECK_INT_EQ(n1, n2);
+        KT_CHECK_STR_EQ(g_buffer, g_reference);
+    }
+
+    /*
+     * The zeros of the width are not used when the precision is given.
+     * The format is not a literal on purpose: the compiler of the system
+     * would warn that its own library ignores the flag.
+     */
+    {
+        const char *fmt = "%08.3d %08d";
+        int n1 = microos_snprintf(g_buffer, sizeof(g_buffer), fmt, 7, 7);
+        int n2 = sys_snprintf(g_reference, sizeof(g_reference), fmt, 7, 7);
+
+        KT_CHECK_INT_EQ(n1, n2);
+        KT_CHECK_STR_EQ(g_buffer, g_reference);
+    }
+
+    teardown();
+}
+
+/*
+ * The property: the conversion of numbers gives the same value and stops
+ * at the same place as the library of the system. The input is the real
+ * data of the project: the corpus, the text around it and the edges of
+ * the range.
+ */
+static void test_numbers_match_the_system(void)
+{
+    static const char *texts[] = {
+        "",
+        "   ",
+        "abc",
+        "0",
+        "-0",
+        "1",
+        "+42",
+        "-42",
+        "0777",
+        "0x1f",
+        "0X1Fz",
+        "z",
+        "36zzzz",
+        "  -12abc",
+        "12.99",
+        "99999999999999999999999",
+        "-99999999999999999999999",
+        "18446744073709551615",
+        "18446744073709551616",
+        "9223372036854775807",
+        "9223372036854775808",
+        "-9223372036854775808",
+        "-9223372036854775809",
+    };
+    static const int bases[] = {0, 2, 8, 10, 16, 36};
+    size_t i;
+    int b;
+    int checked = 0;
+
+    ktest_begin("libc: the conversion of numbers agrees with the system");
+
+    setup();
+    load_corpus();
+
+    for (b = 0; b < (int)(sizeof(bases) / sizeof(bases[0])); b++) {
+        for (i = 0; i < K_ARRAY_SIZE(texts); i++) {
+            char *ours_end = NULL;
+            char *their_end = NULL;
+            unsigned long ours_u = microos_strtoul(texts[i], &ours_end, bases[b]);
+            unsigned long their_u = sys_strtoul(texts[i], &their_end, bases[b]);
+
+            KT_CHECK_INT_EQ((int)(ours_end - texts[i]), (int)(their_end - texts[i]));
+            KT_CHECK_INT_EQ((int)ours_u, (int)their_u);
+            KT_CHECK(ours_u == their_u);
+
+            ours_end = NULL;
+            their_end = NULL;
+            {
+                long ours_l = microos_strtol(texts[i], &ours_end, bases[b]);
+                long their_l = sys_strtol(texts[i], &their_end, bases[b]);
+
+                KT_CHECK_INT_EQ((int)(ours_end - texts[i]), (int)(their_end - texts[i]));
+                KT_CHECK(ours_l == their_l);
+            }
+
+            checked++;
+        }
+
+        /* The real numbers of the project, the same data for both. */
+        for (i = 0; i < (size_t)g_count; i++) {
+            char *ours_end = NULL;
+            char *their_end = NULL;
+            unsigned long ours_u = microos_strtoul(g_lines[i], &ours_end, bases[b]);
+            unsigned long their_u = sys_strtoul(g_lines[i], &their_end, bases[b]);
+
+            KT_CHECK_INT_EQ((int)(ours_end - g_lines[i]), (int)(their_end - g_lines[i]));
+            KT_CHECK(ours_u == their_u);
+
+            checked++;
+        }
+    }
+
+    KT_CHECK(checked > 0);
+
+    /* The conversion that fails says so with the number of POSIX. */
+    {
+        char *end = NULL;
+        unsigned long value = microos_strtoul("99999999999999999999999", &end, 10);
+
+        KT_CHECK(value == (unsigned long)-1);
+        KT_CHECK_INT_EQ(microos_errno(), MICROOS_ERANGE);
+    }
+
+    teardown();
+}
+
 void test_libc(void)
 {
     test_float_matches_the_system();
+    test_special_values_match_the_system();
+    test_numbers_match_the_system();
     test_integer_matches_the_system();
     test_string_matches_the_system();
     test_write_and_read();

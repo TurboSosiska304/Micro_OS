@@ -47,6 +47,21 @@ else()
         -Wno-unused-parameter
     )
 
+    # The same code runs on the board, where there is no debugger: the host
+    # build is the place where a wrong pointer or undefined behaviour can be
+    # seen. "make test-asan" turns the sanitizers on for the tests.
+    option(MICRO_OS_SANITIZE
+           "the host build with the address and the undefined behaviour sanitizers" OFF)
+
+    if(MICRO_OS_SANITIZE)
+        message(STATUS "Micro OS: sanitizers are on")
+        add_compile_options(
+            -fsanitize=address,undefined
+            -fno-sanitize-recover=all
+        )
+        add_link_options(-fsanitize=address,undefined)
+    endif()
+
     message(STATUS "Micro OS: host build (simulator + unit tests)")
 
     enable_testing()
@@ -59,6 +74,7 @@ else()
     add_subdirectory(components/devfs)
     add_subdirectory(components/font)
     add_subdirectory(components/libc)
+    add_subdirectory(components/wifi)
     add_subdirectory(ports/port_host)
     add_subdirectory(tests)
 

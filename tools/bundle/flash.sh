@@ -3,7 +3,7 @@
 # Micro OS — flash the prebuilt firmware onto the board.
 #
 # Usage:
-#   bild/flash.sh [port]
+#   flash.sh [port]
 #
 # The port is optional, it is auto detected when it is not given.
 #
@@ -65,7 +65,7 @@ fi
 
 if [ -z "$PORT" ]; then
     echo "No serial port found. Connect the board or pass the port:" >&2
-    echo "    bild/flash.sh /dev/ttyACM0" >&2
+    echo "    ./flash.sh /dev/ttyACM0" >&2
     exit 2
 fi
 

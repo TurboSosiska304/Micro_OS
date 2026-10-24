@@ -9,10 +9,18 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "kernel/console.h"
 #include "kernel/port.h"
 #include "kernel/vfs.h"
 
 #define DEV_NAME_MAX 16
+
+/*
+ * The devices that the system registers while it boots, beside the two
+ * that are always there. The registration is done once, at boot, before
+ * anybody opens a file: the table does not need a lock for that.
+ */
+#define DEV_EXTRA_MAX 4
 
 struct dev_file {
     const char *name;
@@ -30,7 +38,7 @@ static int tty_read(char *buf, k_size_t size)
 
 static int tty_write(const char *buf, k_size_t size)
 {
-    k_port_write(buf, size);
+    k_console_write(buf, size);
     return (int)size;
 }
 
@@ -55,17 +63,67 @@ static const struct dev_file s_devices[] = {
 
 static const k_size_t s_device_count = K_ARRAY_SIZE(s_devices);
 
+/* The devices that were added by the drivers of the board. */
+static struct dev_file s_extra[DEV_EXTRA_MAX];
+static k_size_t s_extra_count;
+
+/* The two tables are read as one: the fixed ones first, the added after. */
+static k_size_t device_count(void)
+{
+    return s_device_count + s_extra_count;
+}
+
+static const struct dev_file *device_at(k_size_t index)
+{
+    if (index < s_device_count) {
+        return &s_devices[index];
+    }
+
+    index -= s_device_count;
+    return (index < s_extra_count) ? &s_extra[index] : NULL;
+}
+
 static const struct dev_file *find_device(const char *name)
 {
     k_size_t i;
 
-    for (i = 0; i < s_device_count; i++) {
-        if (strcmp(s_devices[i].name, name) == 0) {
-            return &s_devices[i];
+    for (i = 0; i < device_count(); i++) {
+        const struct dev_file *dev = device_at(i);
+
+        if (dev != NULL && strcmp(dev->name, name) == 0) {
+            return dev;
         }
     }
 
     return NULL;
+}
+
+int devfs_add(const char *name, int (*read)(char *buf, k_size_t size),
+              int (*write)(const char *buf, k_size_t size))
+{
+    if (name == NULL || name[0] == '\0' || (read == NULL && write == NULL)) {
+        return -1;
+    }
+
+    if (find_device(name) != NULL) {
+        return -1; /* the name of a device belongs to exactly one */
+    }
+
+    if (s_extra_count >= DEV_EXTRA_MAX) {
+        return -1;
+    }
+
+    /*
+     * The name is remembered as it is: the caller has to keep it alive
+     * (a string literal of a driver does). A driver registers at boot,
+     * before anybody opens the device.
+     */
+    s_extra[s_extra_count].name = name;
+    s_extra[s_extra_count].read = read;
+    s_extra[s_extra_count].write = write;
+    s_extra_count++;
+
+    return 0;
 }
 
 static const char *base_name(const char *path)
@@ -79,21 +137,23 @@ static const char *base_name(const char *path)
     return slash + 1;
 }
 
-static int devfs_open(void *ctx, const char *path, int flags, struct vfs_file *out, k_size_t slot)
+static int devfs_open(void *ctx, const char *path, int flags, struct vfs_file *out)
 {
     const char *name = base_name(path);
     const struct dev_file *dev = find_device(name);
+    const struct dev_file **slot;
 
     K_UNUSED(ctx);
     K_UNUSED(flags);
-    K_UNUSED(slot);
 
     if (dev == NULL) {
         return -2;
     }
 
-    if (out->priv != NULL) {
-        snprintf((char *)out->priv, DEV_NAME_MAX, "%s", name);
+    /* The device is remembered, not its name: the table can change. */
+    slot = (const struct dev_file **)out->priv;
+    if (slot != NULL) {
+        *slot = dev;
     }
 
     return 0;
@@ -101,8 +161,8 @@ static int devfs_open(void *ctx, const char *path, int flags, struct vfs_file *o
 
 static int devfs_read(void *ctx, struct vfs_file *file, void *buf, k_size_t size)
 {
-    const char *name = (file->priv != NULL) ? (const char *)file->priv : "";
-    const struct dev_file *dev = find_device(name);
+    const struct dev_file *const *slot = (const struct dev_file *const *)file->priv;
+    const struct dev_file *dev = (slot != NULL) ? *slot : NULL;
 
     K_UNUSED(ctx);
 
@@ -115,8 +175,8 @@ static int devfs_read(void *ctx, struct vfs_file *file, void *buf, k_size_t size
 
 static int devfs_write(void *ctx, struct vfs_file *file, const void *buf, k_size_t size)
 {
-    const char *name = (file->priv != NULL) ? (const char *)file->priv : "";
-    const struct dev_file *dev = find_device(name);
+    const struct dev_file *const *slot = (const struct dev_file *const *)file->priv;
+    const struct dev_file *dev = (slot != NULL) ? *slot : NULL;
 
     K_UNUSED(ctx);
 
@@ -136,9 +196,15 @@ static int devfs_list(void *ctx, const char *path, struct vfs_dirent *out, k_siz
     K_UNUSED(ctx);
     K_UNUSED(path);
 
-    for (i = 0; i < s_device_count && found < max; i++) {
+    for (i = 0; i < device_count() && found < max; i++) {
+        const struct dev_file *dev = device_at(i);
+
+        if (dev == NULL) {
+            continue;
+        }
+
         memset(&out[found], 0, sizeof(out[found]));
-        snprintf(out[found].name, sizeof(out[found].name), "%s", s_devices[i].name);
+        snprintf(out[found].name, sizeof(out[found].name), "%s", dev->name);
         out[found].type = 3; /* a device */
         found++;
     }

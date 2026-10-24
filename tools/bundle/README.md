@@ -53,10 +53,12 @@ or the one that comes with ESP-IDF:
 
 ## The console
 
-After the flash the kernel writes its boot log to the UART at 115200 baud:
+After the flash the kernel writes its boot log to the UART at 115200 baud.
+The console tool lives in the sources, it is run from the root of the
+repository:
 
 ```bash
-python3 ../tools/console.py /dev/ttyACM0
+python3 tools/console.py /dev/ttyACM0
 ```
 
 You will see the boot log, the self test and the hardware doctor report, and
