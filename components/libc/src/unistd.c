@@ -244,6 +244,28 @@ int microos_getppid(void)
     return (int)ksys_getppid();
 }
 
+/*
+ * The fork. It is the number of the new task in the parent, and 0 in the
+ * child - but the child of this fork is a task that re-runs the program of
+ * the parent from its start, so it is not a copy of the parent at the call
+ * of the fork: the memory is shared (like CLONE_VM) and the work done
+ * before the fork runs again in the child. A real fork waits for the first
+ * release; this one is here so that the shape of a program is the usual
+ * one.
+ */
+int microos_fork(void)
+{
+    int rc = ksys_fork();
+
+    if (rc < 0) {
+        return fail(rc);
+    }
+
+    g_errno = 0;
+
+    return rc;
+}
+
 int microos_getcwd(char *buf, size_t size)
 {
     int rc;

@@ -461,6 +461,17 @@ static k_ssize_t sys_fork(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_
         return KERR_PERM;
     }
 
+    /*
+     * A task that is itself the child of a fork and reaches the fork again
+     * is that child: it gets the 0 of POSIX, and no second child is made.
+     * The child of this fork re-runs the program of the parent from its
+     * start, so a program that does not ask "am I the child?" first would
+     * fork again and again without this.
+     */
+    if (self->is_child) {
+        return 0;
+    }
+
     /* The name of the child is the name of the parent with a mark. */
     {
         k_size_t len = strlen(self->name);

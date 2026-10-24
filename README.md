@@ -247,6 +247,15 @@ Details: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 * **No MMU.** The kernel/user split is logical, not hardware enforced: there is no
   memory protection and no real address space isolation.
+* **`fork()` is a placeholder.** There is no MMU, so the address space of the
+  parent cannot be copied. `fork()` starts a new task that *shares* the memory
+  of the parent (like Linux's `CLONE_VM`) and *re-runs the program of the
+  parent from its start* — the work done before the call of `fork()` runs
+  again in the child. It answers with the number of the child in the parent
+  and 0 in the child, so a program keeps the usual shape of POSIX, but a child
+  is not a copy of the parent at the point of the call. A real `fork()` (an
+  address space of its own, copy on write) is planned for right after the
+  first release.
 * **8 MB flash / 2 MB PSRAM.** There is one application and no room for an
   update over the air: the kernel takes 2 MB (`factory`) and the rest of the
   flash (5.75 MB) belongs to MicroFS. The whole layout is in

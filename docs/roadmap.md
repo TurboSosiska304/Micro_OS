@@ -30,7 +30,11 @@ Every phase ends with a working state on the device and green tests.
 * [x] Parent/child relations, `task_wait()`, `task_wait_any()`
 * [x] File descriptor table and working directory per task
 * [x] `/proc/<pid>` (belongs to phase 2)
-* [ ] A real `fork()` (needs our own context switch, see ADR 0002)
+* [ ] A real `fork()` — a copy of the address space (needs our own context
+      switch, see ADR 0002). Until then `fork()` is a placeholder: the child
+      shares the memory of the parent and re-runs its program from the start
+      (see "Known limitations" in the README), to be fixed right after the
+      first release
 
 ## Phase 1F - The hardware doctor
 
@@ -95,7 +99,11 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [x] The tests work with a corpus of real numbers: the same data has to
       give the same result no matter how it is broken into pieces
 * [x] The process part of the ABI: fork, getppid, waitpid. The memory
-      of the parent is not copied, the tasks share it, like CLONE_VM
+      of the parent is not copied, the tasks share it, like CLONE_VM.
+      The library gives fork() the shape of POSIX - 0 in the child, the
+      number of the child in the parent - but the child re-runs the
+      program of the parent from its start (a real fork waits for the
+      first release)
 * [x] The libc over the ABI: printf, open, read, write. The library is
       checked against the library of the system with the real numbers of the
       corpus

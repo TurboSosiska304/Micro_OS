@@ -34,6 +34,7 @@ long microos_lseek(int fd, long offset, int whence);
 int microos_unlink(const char *path);
 int microos_mkdir(const char *path);
 int microos_waitpid(int pid, int *status, int flags);
+int microos_fork(void);
 int microos_getpid(void);
 int microos_getppid(void);
 int microos_getcwd(char *buf, size_t size);
@@ -69,6 +70,7 @@ const char *microos_strerror(int code);
 #define unlink microos_unlink
 #define mkdir microos_mkdir
 #define waitpid microos_waitpid
+#define fork microos_fork
 #define getpid microos_getpid
 #define getppid microos_getppid
 #define getcwd microos_getcwd
