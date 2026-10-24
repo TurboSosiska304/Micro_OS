@@ -37,6 +37,15 @@ static int s_offset_y = LCD_Y_OFFSET;
  */
 static int s_rotation;
 
+/*
+ * The mode the panel drives its colors in. Without a command at boot
+ * this glass shows a negative: the background painted black comes out
+ * white and the text comes out dark. INVON is sent in the init, and
+ * `display invert` in the shell flips it live — the right mode for a
+ * panel of another model is found with the eyes, without reflashing.
+ */
+static bool s_inverted;
+
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_heap_caps.h"
@@ -146,6 +155,8 @@ static void lcd_init_panel(void)
 
     lcd_write_command(0x36); /* MADCTL: portrait, BGR */
     lcd_write_data8(0x08);
+    lcd_write_command(0x21); /* INVON: the colors as they are painted */
+    s_inverted = true;
     lcd_write_command(0x3A); /* 16 bits per pixel */
     lcd_write_data8(0x05);
     lcd_write_command(0xB2); /* display control */
@@ -539,6 +550,25 @@ int drv_display_rotation(void)
     display_unlock();
 
     return rotation;
+}
+
+void drv_display_set_inverted(bool inverted)
+{
+    display_lock();
+    lcd_write_command(inverted ? 0x21 : 0x20); /* INVON / INVOFF */
+    s_inverted = inverted;
+    display_unlock();
+}
+
+bool drv_display_inverted(void)
+{
+    bool inverted;
+
+    display_lock();
+    inverted = s_inverted;
+    display_unlock();
+
+    return inverted;
 }
 
 void drv_display_pixel(int x, int y, uint16_t color)

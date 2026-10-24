@@ -305,6 +305,7 @@ static void demo_picture(void)
  *   display                        what the panel shows right now
  *   display <x> <y>                the offset of the visible area
  *   display rotate <0|90|180|270>  the picture the other way round
+ *   display invert [on|off]        the colors: a panel may show a negative
  *   display draw [seconds]         a test picture for a few seconds
  */
 static int cmd_display(int argc, char **argv)
@@ -336,6 +337,27 @@ static int cmd_display(int argc, char **argv)
 
         kshell_printf("display rotation: %d, picture %dx%d\n", drv_display_rotation() * 90,
                       drv_display_width(), drv_display_height());
+        return KSHELL_OK;
+    }
+
+    if (argc > 1 && strcmp(argv[1], "invert") == 0) {
+        bool inverted = drv_display_inverted();
+
+        if (argc > 2) {
+            if (strcmp(argv[2], "on") == 0) {
+                inverted = true;
+            } else if (strcmp(argv[2], "off") == 0) {
+                inverted = false;
+            } else {
+                kshell_printf("usage: display invert [on|off]\n");
+                return KSHELL_OK;
+            }
+        } else {
+            inverted = !inverted;
+        }
+
+        drv_display_set_inverted(inverted);
+        kshell_printf("display inversion: %s\n", inverted ? "on" : "off");
         return KSHELL_OK;
     }
 
@@ -380,7 +402,8 @@ static int cmd_display(int argc, char **argv)
         long value = strtol(argv[1], &end, 10);
 
         if (end == argv[1] || *end != '\0') {
-            kshell_printf("usage: display [<x> <y>] | rotate <0|90|180|270> | draw [seconds]\n");
+            kshell_printf("usage: display [<x> <y>] | rotate <0|90|180|270> | invert [on|off] | "
+                          "draw [seconds]\n");
             return KSHELL_OK;
         }
 
@@ -400,7 +423,7 @@ static int cmd_display(int argc, char **argv)
 
 int tft_console_register(void)
 {
-    return kshell_register("display", "the offset and the turn of the picture on the screen",
+    return kshell_register("display", "the offset, the turn and the colors of the picture",
                            cmd_display);
 }
 

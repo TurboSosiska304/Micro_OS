@@ -32,6 +32,15 @@ void drv_display_set_rotation(int rotation);
 int drv_display_rotation(void);
 
 /*
+ * The inversion of the panel: some glasses show the colors as they are
+ * painted only in one of the two modes, and the right one is found with
+ * the eyes — `display invert` in the shell flips it while the board
+ * runs, and the driver remembers which mode was the working one at boot.
+ */
+void drv_display_set_inverted(bool inverted);
+bool drv_display_inverted(void);
+
+/*
  * The graphics: written into the framebuffer through the rotation and
  * clipped to the picture, the points outside it are not drawn. Like the
  * text, they are only seen after drv_display_flush().
