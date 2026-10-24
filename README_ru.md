@@ -114,7 +114,7 @@ module health report:
   input      ok        A=up B=up C=up
   buzzer     ok        passive, 2 kHz via LEDC
   led/ir     ok        G19, shared with the IR emitter
-  battery    ok        4176 mV (raw 2088 mV)
+  battery    ok        4176 mV, 98% (raw 2088 mV)
   wifi       degraded  f4:65:0b:32:00:c0 idle
   mic        skip      SPM1423 MEMS microphone (I2S)
 11 module(s), 0 problem(s)
@@ -258,6 +258,12 @@ Micro_OS/
   Вся раскладка — в [partitions.csv](partitions.csv).
 * **ESP32-PICO-V3-02 без PMIC.** Питанием и сном управляет сам ESP32:
   вывод `HOLD` (G4) надо выставить в HIGH, иначе плата выключится.
+* **Процент заряда — кривая, а не точный учёт.** Миллиампер-часы никто не
+  считает: заряд ищется по напряжению ячейки — правда для покоящейся
+  ячейки и приблизительность под нагрузкой. Пока вставлен USB, делитель
+  видит напряжение заряда, и процент упирается в верх кривой (100%) — там
+  честное число — напряжение из `modules`, а `battery` прямо пишет
+  `(the charger is on)`.
 * **Одна кнопка питания + две пользовательские** (A, B) и третья (C) у Plus2.
 
 ## Лицензия

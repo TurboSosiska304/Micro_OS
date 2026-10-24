@@ -4,8 +4,15 @@
  * The battery is connected to G38 through a divider. The reading is only
  * meaningful when the board runs on battery: while the USB cable is
  * connected the divider sees the charging voltage.
+ *
+ * The voltage leaves the driver two ways: as the number itself
+ * (drv_battery_voltage_mv) and as the charge it means
+ * (drv_battery_percent, a curve of one cell in battery_soc.c), and the
+ * shell carries both as the command "battery".
  */
 #include "drivers/board_pins.h"
+#include "drivers/battery.h"
+#include "drivers/battery_soc.h"
 #include "drivers/internal.h"
 
 #include <stdio.h>
@@ -14,9 +21,10 @@
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
 #include "kernel/kmod.h"
+#include "kshell/kshell.h"
 
 /* Ratio of the divider on the board. */
-#define BATTERY_DIVIDER 2.0f
+#define BATTERY_DIVIDER 2
 
 static adc_oneshot_unit_handle_t s_unit;
 static adc_cali_handle_t s_cali;
@@ -55,7 +63,11 @@ static int drv_battery_init(void)
     return 0;
 }
 
-static int drv_battery_check(void)
+/*
+ * One reading of the ADC: the millivolts of the divider (before the
+ * ratio), negative when there is no reading to be had.
+ */
+static int battery_raw_mv(void)
 {
     int raw = 0;
     int mv = 0;
@@ -76,6 +88,17 @@ static int drv_battery_check(void)
         mv = raw * 3100 / 4095;
     }
 
+    return mv;
+}
+
+static int drv_battery_check(void)
+{
+    int mv = battery_raw_mv();
+
+    if (mv < 0) {
+        return mv;
+    }
+
     s_mv = mv;
     return 0;
 }
@@ -83,9 +106,52 @@ static int drv_battery_check(void)
 static const char *drv_battery_detail(void)
 {
     static char buf[48];
+    int mv = s_mv * BATTERY_DIVIDER;
 
-    snprintf(buf, sizeof(buf), "%d mV (raw %d mV)", (int)(s_mv * BATTERY_DIVIDER), s_mv);
+    /* The voltage and the charge it means, from the one reading the check made. */
+    snprintf(buf, sizeof(buf), "%d mV, %d%% (raw %d mV)", mv, battery_soc_percent(mv), s_mv);
     return buf;
+}
+
+/* --- the numbers for a program --- */
+
+int drv_battery_voltage_mv(void)
+{
+    int mv = battery_raw_mv();
+
+    if (mv < 0) {
+        return 0;
+    }
+
+    return mv * BATTERY_DIVIDER;
+}
+
+/* --- the shell --- */
+
+/*
+ * The command "battery": one fresh reading of the ADC, the voltage it
+ * shows and the charge the curve makes of it. A voltage above full
+ * means the divider sees the charger — a resting cell cannot be higher
+ * than a full one — so the command says that out loud.
+ */
+static int cmd_battery(int argc, char **argv)
+{
+    int mv;
+
+    (void)argc;
+    (void)argv;
+
+    mv = drv_battery_voltage_mv();
+
+    if (mv <= 0) {
+        kshell_printf("battery: the reading is not ready\n");
+        return KSHELL_ERROR;
+    }
+
+    kshell_printf("battery: %d mV, %d%%%s\n", mv, battery_soc_percent(mv),
+                  (mv > BATTERY_FULL_MV) ? " (the charger is on)" : "");
+
+    return KSHELL_OK;
 }
 
 static const struct kmod s_battery_module = {
@@ -98,5 +164,7 @@ static const struct kmod s_battery_module = {
 
 int drv_battery_register(void)
 {
+    kshell_register("battery", "the battery: voltage and percent", cmd_battery);
+
     return kmod_register(&s_battery_module);
 }

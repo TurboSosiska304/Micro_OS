@@ -16,6 +16,7 @@ set(MICRO_OS_DRIVERS_SRCS
     "src/drv_rtc.c"
     "src/drv_wifi.c"
     "src/input_debounce.c"
+    "src/battery_soc.c"
 )
 
 idf_component_register(

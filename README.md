@@ -116,7 +116,7 @@ module health report:
   input      ok        A=up B=up C=up
   buzzer     ok        passive, 2 kHz via LEDC
   led/ir     ok        G19, shared with the IR emitter
-  battery    ok        4176 mV (raw 2088 mV)
+  battery    ok        4176 mV, 98% (raw 2088 mV)
   wifi       degraded  f4:65:0b:32:00:c0 idle
   mic        skip      SPM1423 MEMS microphone (I2S)
 11 module(s), 0 problem(s)
@@ -266,6 +266,12 @@ Details: [CONTRIBUTING.md](CONTRIBUTING.md).
   [partitions.csv](partitions.csv).
 * **The ESP32-PICO-V3-02 has no PMIC.** Power and sleep are handled by the ESP32
   itself: `HOLD` (G4) must be driven high after a wake-up or the board powers off.
+* **The battery percent is a curve, not a fuel gauge.** Nobody counts the
+  milliamp-hours: the charge is looked up from the voltage of the cell, which
+  is the truth for a resting cell and an approximation under load. While the
+  USB cable is connected the divider sees the charging voltage, so the percent
+  sits at the top of the curve (100%) — there the honest number is the
+  voltage in `modules`, and `battery` says `(the charger is on)` out loud.
 * **One power button plus two user buttons** (A, B), and a third one (C) on Plus2.
 
 ## License

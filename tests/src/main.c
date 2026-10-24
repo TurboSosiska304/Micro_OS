@@ -34,6 +34,7 @@ static void run_tests(void *arg)
     test_vfs();
     test_sysfs();
     test_input_debounce();
+    test_battery_soc();
     test_ksys();
     test_ksys_process();
     test_libc();
