@@ -116,7 +116,7 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [ ] `drv_imu` (MPU6886), `drv_rtc` (BM8563, deep-sleep wake)
 * [x] `drv_wifi`: the station, the scan, the network of the last time is
       remembered in the NVS (see [ADR 0003](adr/0003-wifi-driver.md))
-* [ ] Console on TFT and UART at the same time
+* [x] Console on TFT and UART at the same time
 
 ## Phase 5 - Services and applications
 

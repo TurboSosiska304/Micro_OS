@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "kernel/console.h"
 #include "kernel/port.h"
 #include "kernel/vfs.h"
 
@@ -30,7 +31,7 @@ static int tty_read(char *buf, k_size_t size)
 
 static int tty_write(const char *buf, k_size_t size)
 {
-    k_port_write(buf, size);
+    k_console_write(buf, size);
     return (int)size;
 }
 

@@ -5,7 +5,7 @@
 #include <string.h>
 
 #include "kernel/config.h"
-#include "kernel/port.h"
+#include "kernel/console.h"
 
 /* The capture of the log of the boot. */
 #define KERNEL_LOG_CAPTURE_SIZE (6 * 1024)
@@ -104,8 +104,8 @@ void klog(k_log_level_t level, const char *fmt, ...)
         return;
     }
 
-    k_port_write(buf, str_len(buf));
-    k_port_write("\n", 1);
+    k_console_write(buf, str_len(buf));
+    k_console_write("\n", 1);
 }
 
 void klog_capture_start(void)
