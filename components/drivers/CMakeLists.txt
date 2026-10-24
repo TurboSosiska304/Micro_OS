@@ -15,6 +15,7 @@ set(MICRO_OS_DRIVERS_SRCS
     "src/drv_mic.c"
     "src/drv_rtc.c"
     "src/drv_wifi.c"
+    "src/fb_draw.c"
     "src/input_debounce.c"
     "src/battery_soc.c"
 )

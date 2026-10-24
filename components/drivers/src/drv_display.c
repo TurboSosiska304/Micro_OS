@@ -27,6 +27,16 @@
 static int s_offset_x = LCD_X_OFFSET;
 static int s_offset_y = LCD_Y_OFFSET;
 
+/*
+ * The turn of the picture for its viewer, in quarter turns clockwise.
+ * The controller keeps its portrait MADCTL for ever: turning the
+ * controller would move the visible area of the glass (its offset is a
+ * property of the panel, not of the picture), and every quarter turn
+ * would need its own pair of magic numbers. The drawing turns instead —
+ * see drivers/fb_draw.h, the arithmetic of it is tested on the host.
+ */
+static int s_rotation;
+
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_heap_caps.h"
@@ -34,6 +44,7 @@ static int s_offset_y = LCD_Y_OFFSET;
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "drivers/display.h"
+#include "drivers/fb_draw.h"
 #include "drivers/internal.h"
 #include "graphics/font.h"
 #include "kernel/kmod.h"
@@ -74,6 +85,13 @@ static void display_unlock(void)
     if (s_lock != NULL) {
         (void)xSemaphoreGiveRecursive(s_lock);
     }
+}
+
+/* The framebuffer seen the way its viewer sees it (the caller holds the
+ * lock; the size of the picture needs no pixels, the view may have none). */
+static void display_view(struct fb_view *view)
+{
+    fb_view_init(view, s_fb, LCD_WIDTH, LCD_HEIGHT, s_rotation);
 }
 
 /*
@@ -398,6 +416,7 @@ int drv_display_clear(uint16_t color)
 
 int drv_display_text(int x, int y, const char *text, uint16_t color)
 {
+    struct fb_view view;
     int cursor = x;
 
     if (s_fb == NULL || text == NULL) {
@@ -405,18 +424,19 @@ int drv_display_text(int x, int y, const char *text, uint16_t color)
     }
 
     display_lock();
+    display_view(&view);
 
     while (*text != '\0') {
         const uint8_t *glyph = font_glyph(*text);
         int column;
         int row;
 
-        if (cursor + FONT_WIDTH > LCD_WIDTH) {
+        if (cursor + FONT_WIDTH > fb_view_width(&view)) {
             break; /* the line is full */
         }
 
-        if (y + FONT_HEIGHT > LCD_HEIGHT) {
-            break; /* the screen is full */
+        if (y + FONT_HEIGHT > fb_view_height(&view)) {
+            break; /* the picture is full */
         }
 
         for (column = 0; column < FONT_WIDTH; column++) {
@@ -424,12 +444,8 @@ int drv_display_text(int x, int y, const char *text, uint16_t color)
 
             for (row = 0; row < FONT_HEIGHT; row++) {
                 if ((bits & (1u << row)) != 0) {
-                    int px = cursor + column;
-                    int py = y + row;
-
-                    if (px >= 0 && px < LCD_WIDTH && py >= 0 && py < LCD_HEIGHT) {
-                        s_fb[py * LCD_WIDTH + px] = color;
-                    }
+                    /* the set bits go through the turn of the picture */
+                    fb_view_pixel(&view, cursor + column, y + row, color);
                 }
             }
         }
@@ -480,5 +496,103 @@ void drv_display_get_offset(int *x, int *y)
         *y = s_offset_y;
     }
 
+    display_unlock();
+}
+
+/* --- the picture as its viewer sees it --- */
+
+int drv_display_width(void)
+{
+    struct fb_view view;
+
+    display_lock();
+    display_view(&view);
+    display_unlock();
+
+    return fb_view_width(&view);
+}
+
+int drv_display_height(void)
+{
+    struct fb_view view;
+
+    display_lock();
+    display_view(&view);
+    display_unlock();
+
+    return fb_view_height(&view);
+}
+
+void drv_display_set_rotation(int rotation)
+{
+    display_lock();
+    s_rotation = ((rotation % 4) + 4) % 4; /* -90 is the third quarter turn */
+    display_unlock();
+}
+
+int drv_display_rotation(void)
+{
+    int rotation;
+
+    display_lock();
+    rotation = s_rotation;
+    display_unlock();
+
+    return rotation;
+}
+
+void drv_display_pixel(int x, int y, uint16_t color)
+{
+    struct fb_view view;
+
+    if (s_fb == NULL) {
+        return;
+    }
+
+    display_lock();
+    display_view(&view);
+    fb_view_pixel(&view, x, y, color);
+    display_unlock();
+}
+
+void drv_display_fill_rect(int x, int y, int w, int h, uint16_t color)
+{
+    struct fb_view view;
+
+    if (s_fb == NULL) {
+        return;
+    }
+
+    display_lock();
+    display_view(&view);
+    fb_view_fill_rect(&view, x, y, w, h, color);
+    display_unlock();
+}
+
+void drv_display_rect(int x, int y, int w, int h, uint16_t color)
+{
+    struct fb_view view;
+
+    if (s_fb == NULL) {
+        return;
+    }
+
+    display_lock();
+    display_view(&view);
+    fb_view_rect(&view, x, y, w, h, color);
+    display_unlock();
+}
+
+void drv_display_line(int x0, int y0, int x1, int y1, uint16_t color)
+{
+    struct fb_view view;
+
+    if (s_fb == NULL) {
+        return;
+    }
+
+    display_lock();
+    display_view(&view);
+    fb_view_line(&view, x0, y0, x1, y1, color);
     display_unlock();
 }

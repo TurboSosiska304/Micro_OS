@@ -163,9 +163,10 @@ struct file_operations {
 };
 ```
 
-Planned drivers: `drv_framebuffer` (ST7789v2), `drv_input` (A/B/C),
-`drv_buzzer`, `drv_imu` (MPU6886), `drv_rtc` (BM8563), `drv_ir`, `drv_mic`
-(SPM1423), `drv_led`. The pinout and the quirks are documented in
+The drivers are written: `drv_display` (ST7789v2, the panel and the turn of
+its picture), `drv_input` (A/B/C), `drv_buzzer`, `drv_imu` (MPU6886),
+`drv_rtc` (BM8563), `drv_mic` (SPM1423), `drv_battery`. The pinout and the
+quirks are documented in
 [docs/hardware/stickc-plus2.md](hardware/stickc-plus2.md).
 
 The WiFi driver is built like the kernel itself: a portable core
@@ -181,25 +182,29 @@ The SPI of the panel is a sequence: the command, the data, the window and
 the pixels have to arrive in that order, and a second task that writes its
 own pixels in the middle of a transfer changes the meaning of the commands
 on the wire. Everything that draws (`drv_display_clear`, `drv_display_text`,
-`drv_display_flush`, `drv_display_set_offset`) takes the lock of the panel,
-and the lock is recursive because the functions of the panel call each
-other. The shared buffer of the transfer and the offset of the image are
-behind the same lock.
+the graphics (`drv_display_pixel`, `drv_display_fill_rect`, `drv_display_rect`,
+`drv_display_line`), `drv_display_flush`, `drv_display_set_offset`,
+`drv_display_set_rotation`) takes the lock of the panel, and the lock is
+recursive because the functions of the panel call each other. The shared
+buffer of the transfer, the offset of the image and the turn of the picture
+are behind the same lock.
 
 The console of the board (`components/graphics`) does not draw from the task
 that prints. It writes the lines down and says that the screen is out of
 date, and one task of its own, of a low priority, brings the screen up to
 date at most ten times a second: a listing of fifty lines is one redraw of
 the panel instead of fifty, and the task that prints does not stand still
-in the middle of the dialogue.
+in the middle of the dialogue. The layout of the dialogue is of the picture
+as it is turned: 22 columns of 26 rows in the portrait, 40 of 15 in the
+landscape.
 
 ## 8. Testing
 
 * The kernel is tested on the host: `make test` (own framework, no dependencies).
 * The simulator `make sim` runs the very same kernel on Linux, so the shell and
   the VFS can be debugged without flashing.
-* On the device there is a UART console; the output can be mirrored to the TFT
-  (phase 4).
+* On the device there is a UART console, and its output is mirrored to the
+  TFT at the same time — the dialogue and the boot report are on both.
 
 ## 9. Resource budget
 

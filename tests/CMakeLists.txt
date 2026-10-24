@@ -19,6 +19,7 @@ if(NOT ESP_PLATFORM)
         cases/test_sysfs.c
         cases/test_input_debounce.c
         cases/test_battery_soc.c
+        cases/test_fb_draw.c
         cases/test_ksys.c
         cases/test_ksys_process.c
         cases/test_libc.c
@@ -41,6 +42,7 @@ if(NOT ESP_PLATFORM)
     target_sources(microos_tests PRIVATE
         "${CMAKE_SOURCE_DIR}/components/drivers/src/input_debounce.c"
         "${CMAKE_SOURCE_DIR}/components/drivers/src/battery_soc.c"
+        "${CMAKE_SOURCE_DIR}/components/drivers/src/fb_draw.c"
     )
 
     target_link_libraries(microos_tests PRIVATE microos_kernel microos_board microos_kshell microos_mfs microos_procfs microos_devfs microos_libc microos_wifi microos_port_host)

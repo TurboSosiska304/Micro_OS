@@ -123,7 +123,12 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 
 ## Phase 4 - Drivers
 
-* [ ] `drv_framebuffer`: ST7789v2, 135x240, rotation, text and graphics output
+* [x] `drv_framebuffer`: ST7789v2, 135x240, rotation, text and graphics output
+      — the framebuffer is the one of `drv_display`: the picture turns in
+      software (the panel keeps its portrait, so the offset of the visible
+      area never changes), the graphics are `pixel`, `fill_rect`, `rect` and
+      `line`, and the shell has `display rotate <0|90|180|270>` and
+      `display draw [seconds]` — a test picture for the eyes
 * [x] `drv_input`: A/B/C buttons, debounce, input events — the command
       `input [seconds]` and the file `/dev/input`
 * [x] `drv_buzzer`: the passive buzzer on G2, a `beep` command for the user
