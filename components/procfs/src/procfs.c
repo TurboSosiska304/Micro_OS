@@ -310,6 +310,12 @@ static int procfs_open(void *ctx, const char *path, int flags, struct vfs_file *
         return -2;
     }
 
+    /* A file of a task is only there while the task is: the status of a
+     * task that has exited does not open any more. */
+    if (pid != 0 && task_by_pid(pid) == NULL) {
+        return -2;
+    }
+
     if (open == NULL) {
         return -1;
     }
@@ -440,18 +446,49 @@ static int procfs_stat(void *ctx, const char *path, struct vfs_stat *out)
 
     K_UNUSED(ctx);
 
-    dir_name(rel, dir, sizeof(dir));
-    pid = dir_task_pid(dir);
+    memset(out, 0, sizeof(*out));
 
-    file = (pid != 0) ? find_task_file(name) : find_root_file(name);
-    if (file == NULL) {
-        return -2;
+    /* The point of the mount is a directory. */
+    if (rel[0] == '\0') {
+        out->type = 2;
+        return 0;
     }
 
-    memset(out, 0, sizeof(*out));
-    out->type = 1;
+    dir_name(rel, dir, sizeof(dir));
 
-    return 0;
+    if (dir[0] != '\0') {
+        /* "/proc/<task>/<file>": the task has to still be there, and the
+         * name has to be one of the files of a task. */
+        pid = dir_task_pid(dir);
+        if (pid == 0 || task_by_pid(pid) == NULL) {
+            return -2;
+        }
+
+        if (find_task_file(name) == NULL) {
+            return -2;
+        }
+
+        out->type = 1;
+        return 0;
+    }
+
+    /* A single component: a file of the root, or the directory of a task. */
+    file = find_root_file(name);
+    if (file != NULL) {
+        out->type = 1;
+        return 0;
+    }
+
+    /* The directory of a task: "self", or the number of one that is alive.
+     * A number of a task that is gone is not a directory any more, so that
+     * "cd /proc/<pid>" of a task that has exited says so instead of lying. */
+    pid = dir_task_pid(name);
+    if (pid != 0 && task_by_pid(pid) != NULL) {
+        out->type = 2;
+        return 0;
+    }
+
+    return -2;
 }
 
 static const struct vfs_operations g_operations = {

@@ -1,9 +1,11 @@
 #include "ktest.h"
 #include "tests/tests.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "devfs/devfs.h"
+#include "kernel/task.h"
 #include "kernel/vfs.h"
 #include "mfs/mfs.h"
 #include "mfs/mfs_ram_device.h"
@@ -195,10 +197,68 @@ static void test_procfs_tasks(void)
     teardown();
 }
 
+/* The directory of a task: /proc/<pid> is a directory, its status a file. */
+static void test_procfs_pid_dir(void)
+{
+    struct task *self = task_self();
+    struct vfs_dirent entries[8];
+    struct vfs_stat stat;
+    char path[64];
+    char buffer[512];
+    k_size_t count = 0;
+    int rc;
+
+    ktest_begin("procfs: the directory of a task");
+
+    setup();
+
+    /* The point of the mount is a directory. */
+    KT_CHECK_INT_EQ(vfs_stat("/proc", &stat), 0);
+    KT_CHECK_INT_EQ(stat.type, 2);
+
+    /* The directory of the task that reads it, and its status as a file. */
+    KT_CHECK_INT_EQ(vfs_stat("/proc/self", &stat), 0);
+    KT_CHECK_INT_EQ(stat.type, 2);
+
+    KT_CHECK_INT_EQ(vfs_stat("/proc/self/status", &stat), 0);
+    KT_CHECK_INT_EQ(stat.type, 1);
+
+    if (self != NULL) {
+        /* The same by the number: /proc/<pid> and /proc/<pid>/status. */
+        snprintf(path, sizeof(path), "/proc/%u", (unsigned)self->pid);
+        KT_CHECK_INT_EQ(vfs_stat(path, &stat), 0);
+        KT_CHECK_INT_EQ(stat.type, 2);
+
+        snprintf(path, sizeof(path), "/proc/%u/status", (unsigned)self->pid);
+        rc = read_file(path, buffer, sizeof(buffer));
+        KT_CHECK(rc > 0);
+        KT_CHECK(strstr(buffer, "Pid:") != NULL);
+        KT_CHECK_INT_EQ(vfs_stat(path, &stat), 0);
+        KT_CHECK_INT_EQ(stat.type, 1);
+
+        /* The directory of the task holds its status. */
+        snprintf(path, sizeof(path), "/proc/%u", (unsigned)self->pid);
+        count = 0;
+        rc = vfs_list(path, entries, 8, &count);
+        KT_CHECK_INT_EQ(rc, 0);
+        KT_CHECK_INT_EQ(count, 1);
+        if (count == 1) {
+            KT_CHECK_STR_EQ(entries[0].name, "status");
+        }
+    }
+
+    /* A task that is not there has no directory and no status file. */
+    KT_CHECK(vfs_stat("/proc/9999", &stat) < 0);
+    KT_CHECK(read_file("/proc/9999/status", buffer, sizeof(buffer)) < 0);
+
+    teardown();
+}
+
 void test_sysfs(void)
 {
     test_procfs();
     test_procfs_end();
     test_procfs_tasks();
+    test_procfs_pid_dir();
     test_devfs();
 }

@@ -29,7 +29,7 @@ Every phase ends with a working state on the device and green tests.
 * [x] Time slice (SCHED_RR style), configurable quantum
 * [x] Parent/child relations, `task_wait()`, `task_wait_any()`
 * [x] File descriptor table and working directory per task
-* [ ] `/proc/<pid>` (belongs to phase 2)
+* [x] `/proc/<pid>` (belongs to phase 2)
 * [ ] A real `fork()` (needs our own context switch, see ADR 0002)
 
 ## Phase 1F - The hardware doctor
