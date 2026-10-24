@@ -18,6 +18,7 @@ int drv_i2c_register_command(void);
 int drv_display_register(void);
 int drv_input_register(void);
 int drv_buzzer_register(void);
+int drv_buzzer_beep(unsigned freq_hz, unsigned ms);
 int drv_led_register(void);
 int drv_imu_register(void);
 int drv_rtc_register(void);

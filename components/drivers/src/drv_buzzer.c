@@ -7,14 +7,17 @@
  * opposite directions.
  */
 #include "drivers/board_pins.h"
+#include "drivers/internal.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "kernel/kmod.h"
+#include "kshell/kshell.h"
 
 #define BUZZER_CHANNEL 0
 #define BUZZER_FREQ 2000
@@ -65,6 +68,39 @@ static int drv_buzzer_check(void)
     ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZZER_CHANNEL, 128);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZZER_CHANNEL);
     vTaskDelay(pdMS_TO_TICKS(30));
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZZER_CHANNEL, 0);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZZER_CHANNEL);
+
+    return 0;
+}
+
+/*
+ * Sound the buzzer for a number of milliseconds. The frequency sets the
+ * note: the timer of the LEDC drives the passive element, so any tone in
+ * its range works. A frequency of 0 is the default of the board (2 kHz),
+ * and the buzzer is silent again when the call returns.
+ */
+int drv_buzzer_beep(unsigned freq_hz, unsigned ms)
+{
+    ledc_timer_config_t timer = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .duty_resolution = LEDC_TIMER_8_BIT,
+        .timer_num = LEDC_TIMER,
+        .freq_hz = (freq_hz != 0) ? freq_hz : BUZZER_FREQ,
+        .clk_cfg = LEDC_AUTO_CLK,
+    };
+
+    if (!s_buzzer_ready) {
+        return -1;
+    }
+
+    if (ledc_timer_config(&timer) != ESP_OK) {
+        return -2;
+    }
+
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZZER_CHANNEL, 128);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZZER_CHANNEL);
+    vTaskDelay(pdMS_TO_TICKS(ms));
     ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZZER_CHANNEL, 0);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZZER_CHANNEL);
 
@@ -131,9 +167,39 @@ static const struct kmod s_led_module = {
     .detail = drv_led_detail,
 };
 
+/*
+ * The shell command that lets a person sound the buzzer: "beep" for the
+ * note of the board, or "beep <frequency> <milliseconds>" for a note of
+ * its own.
+ */
+static int cmd_beep(int argc, char **argv)
+{
+    unsigned freq = 0;
+    unsigned ms = 100;
+
+    if (argc > 1) {
+        freq = (unsigned)strtoul(argv[1], NULL, 10);
+    }
+
+    if (argc > 2) {
+        ms = (unsigned)strtoul(argv[2], NULL, 10);
+    }
+
+    if (drv_buzzer_beep(freq, ms) != 0) {
+        kshell_printf("beep: the buzzer is not working\n");
+        return KSHELL_ERROR;
+    }
+
+    return KSHELL_OK;
+}
+
 int drv_buzzer_register(void)
 {
-    return kmod_register(&s_buzzer_module);
+    int rc = kmod_register(&s_buzzer_module);
+
+    kshell_register("beep", "sound the buzzer: beep [frequency] [ms]", cmd_beep);
+
+    return rc;
 }
 
 int drv_led_register(void)
