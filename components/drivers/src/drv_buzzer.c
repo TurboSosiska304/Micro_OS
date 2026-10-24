@@ -24,6 +24,17 @@
 #define BUZZER_FREQ 2000
 #define LEDC_TIMER LEDC_TIMER_0
 
+/*
+ * The red LED has a duty of its own, on a timer of its own: 0 is dark, the
+ * maximum is the whole light, and everything between is the light in the
+ * middle - that is what the shows shine with.
+ */
+#define LED_CHANNEL 1
+#define LED_TIMER LEDC_TIMER_1
+#define LED_FREQ 5000
+#define LED_DUTY_MAX ((1 << 10) - 1)
+#define LED_STEP_MS 4
+
 static bool s_buzzer_ready;
 static bool s_led_ready;
 
@@ -123,16 +134,32 @@ static const struct kmod s_buzzer_module = {
 
 static int drv_led_init(void)
 {
-    gpio_config_t cfg = {
-        .pin_bit_mask = (1ULL << PIN_LED),
-        .mode = GPIO_MODE_OUTPUT,
+    ledc_timer_config_t timer = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .duty_resolution = LEDC_TIMER_10_BIT,
+        .timer_num = LED_TIMER,
+        .freq_hz = LED_FREQ,
+        .clk_cfg = LEDC_AUTO_CLK,
     };
 
-    if (gpio_config(&cfg) != ESP_OK) {
+    if (ledc_timer_config(&timer) != ESP_OK) {
         return -1;
     }
 
-    gpio_set_level(PIN_LED, 0);
+    ledc_channel_config_t channel = {
+        .gpio_num = PIN_LED,
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .channel = LED_CHANNEL,
+        .intr_type = LEDC_INTR_DISABLE,
+        .timer_sel = LED_TIMER,
+        .duty = 0,
+        .hpoint = 0,
+    };
+
+    if (ledc_channel_config(&channel) != ESP_OK) {
+        return -2;
+    }
+
     s_led_ready = true;
     return 0;
 }
@@ -145,19 +172,28 @@ static int drv_led_check(void)
 
     /*
      * The pin drives the red LED and the IR emitter in opposite directions,
-     * so the level read back does not have to match what was written. It is
-     * enough that the pin can be driven at all.
+     * so what has to work is the duty itself: the light goes all the way up
+     * and down again, and a person can see it during the check.
      */
-    gpio_set_level(PIN_LED, 1);
-    vTaskDelay(pdMS_TO_TICKS(5));
-    gpio_set_level(PIN_LED, 0);
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LED_CHANNEL, LED_DUTY_MAX);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LED_CHANNEL);
+    vTaskDelay(pdMS_TO_TICKS(30));
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LED_CHANNEL, 0);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LED_CHANNEL);
 
     return 0;
 }
 
+/* The duty of the light: 0 is dark, the maximum is the whole light. */
+static void led_duty(unsigned duty)
+{
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LED_CHANNEL, duty);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LED_CHANNEL);
+}
+
 /*
- * Drive the pin that the red LED and the IR emitter share. The level turns
- * the LED on (and the IR emitter in the opposite direction); 0 is off.
+ * Drive the pin that the red LED and the IR emitter share. The light turns
+ * on (and the IR emitter in the opposite direction); 0 is off.
  */
 int drv_led_set(bool on)
 {
@@ -165,7 +201,31 @@ int drv_led_set(bool on)
         return -1;
     }
 
-    gpio_set_level(PIN_LED, on ? 1 : 0);
+    led_duty(on ? LED_DUTY_MAX : 0);
+    return 0;
+}
+
+/*
+ * Move the light from one brightness to another in a number of
+ * milliseconds. The duty changes every LED_STEP_MS, so the eye sees the
+ * light slide instead of jump.
+ */
+static int drv_led_fade(int from, int to, unsigned ms)
+{
+    unsigned count = ms / LED_STEP_MS + 1;
+    unsigned i;
+
+    if (!s_led_ready) {
+        return -1;
+    }
+
+    for (i = 1; i <= count; i++) {
+        int duty = from + ((to - from) * (int)i) / (int)count;
+
+        led_duty((unsigned)duty);
+        vTaskDelay(pdMS_TO_TICKS(LED_STEP_MS));
+    }
+
     return 0;
 }
 
@@ -208,55 +268,107 @@ static int cmd_beep(int argc, char **argv)
     return KSHELL_OK;
 }
 
-/* One note of the bar of the dance. */
-struct note {
-    unsigned freq;
-    unsigned ms;
-};
-
-/* The shell command that turns the red LED on and off. */
-static int cmd_led(int argc, char **argv)
+/*
+ * The show "led heart": the light of the LED grows slowly and leaves just
+ * as slowly, three times in a row - the board breathes for a person. The
+ * command turns the LED dark again when the show is over.
+ */
+static int led_heart(void)
 {
-    if (argc < 2) {
-        kshell_printf("usage: led on|off\n");
-        return KSHELL_USAGE;
+    int beat;
+    int rc = 0;
+
+    for (beat = 0; beat < 3 && rc == 0; beat++) {
+        rc = drv_led_fade(0, LED_DUTY_MAX, 700);
+        if (rc == 0) {
+            rc = drv_led_fade(LED_DUTY_MAX, 0, 700);
+        }
     }
 
-    if (strcmp(argv[1], "on") != 0 && strcmp(argv[1], "off") != 0) {
-        kshell_printf("usage: led on|off\n");
-        return KSHELL_USAGE;
-    }
-
-    if (drv_led_set(strcmp(argv[1], "on") == 0) != 0) {
-        kshell_printf("led: the led is not working\n");
-        return KSHELL_ERROR;
-    }
-
-    return KSHELL_OK;
+    return rc;
 }
 
 /*
- * A little show: a bar of notes on the buzzer, the LED in time with them -
- * the board dances for a couple of seconds.
+ * The show "led dance": the light hops on the beat, swings between the
+ * half light and the whole, and takes a bow - a slow bow down and a last
+ * quick flash.
  */
-static int cmd_dance(int argc, char **argv)
+static int led_dance(void)
 {
-    static const struct note bar[] = {
-        {262, 200}, {330, 200}, {392, 200}, {523, 320}, {392, 160}, {330, 160}, {262, 400},
-    };
-    bool lit = false;
-    size_t i;
+    int i;
+    int rc = 0;
 
-    (void)argc;
-    (void)argv;
-
-    for (i = 0; i < sizeof(bar) / sizeof(bar[0]); i++) {
-        lit = !lit;
-        drv_led_set(lit);
-        drv_buzzer_beep(bar[i].freq, bar[i].ms);
+    /* It hops: four times on and off, quick. */
+    for (i = 0; i < 4 && rc == 0; i++) {
+        (void)drv_led_set(true);
+        vTaskDelay(pdMS_TO_TICKS(90));
+        (void)drv_led_set(false);
+        vTaskDelay(pdMS_TO_TICKS(90));
     }
 
-    drv_led_set(false);
+    /* It swings: twice from the dark to the half light to the whole. */
+    for (i = 0; i < 2 && rc == 0; i++) {
+        rc = drv_led_fade(0, LED_DUTY_MAX / 2, 200);
+        if (rc == 0) {
+            rc = drv_led_fade(LED_DUTY_MAX / 2, LED_DUTY_MAX, 200);
+        }
+        if (rc == 0) {
+            rc = drv_led_fade(LED_DUTY_MAX, 0, 250);
+        }
+    }
+
+    /* It bows: the light goes down slowly, and the last flash closes it. */
+    if (rc == 0) {
+        rc = drv_led_fade(LED_DUTY_MAX, 0, 500);
+    }
+    if (rc == 0) {
+        (void)drv_led_set(true);
+        vTaskDelay(pdMS_TO_TICKS(60));
+    }
+
+    return rc;
+}
+
+/*
+ * The shell command for the red LED: "led on" and "led off" are the light
+ * itself, "led heart" and "led dance" are the shows. A show always ends
+ * with the LED dark.
+ */
+static int cmd_led(int argc, char **argv)
+{
+    const char *action;
+    int rc;
+
+    if (argc < 2) {
+        kshell_printf("usage: led on|off|heart|dance\n");
+        return KSHELL_USAGE;
+    }
+
+    action = argv[1];
+
+    if (strcmp(action, "on") == 0 || strcmp(action, "off") == 0) {
+        if (drv_led_set(strcmp(action, "on") == 0) != 0) {
+            kshell_printf("led: the led is not working\n");
+            return KSHELL_ERROR;
+        }
+        return KSHELL_OK;
+    }
+
+    if (strcmp(action, "heart") == 0) {
+        rc = led_heart();
+    } else if (strcmp(action, "dance") == 0) {
+        rc = led_dance();
+    } else {
+        kshell_printf("usage: led on|off|heart|dance\n");
+        return KSHELL_USAGE;
+    }
+
+    (void)drv_led_set(false); /* whatever happened, the show ends dark */
+
+    if (rc != 0) {
+        kshell_printf("led: the led is not working\n");
+        return KSHELL_ERROR;
+    }
 
     return KSHELL_OK;
 }
@@ -266,7 +378,6 @@ int drv_buzzer_register(void)
     int rc = kmod_register(&s_buzzer_module);
 
     kshell_register("beep", "sound the buzzer: beep [frequency] [ms]", cmd_beep);
-    kshell_register("dance", "the board dances: a bar of notes and the led in time", cmd_dance);
 
     return rc;
 }
@@ -275,7 +386,7 @@ int drv_led_register(void)
 {
     int rc = kmod_register(&s_led_module);
 
-    kshell_register("led", "the red led: led on|off", cmd_led);
+    kshell_register("led", "the red led: led on|off|heart|dance", cmd_led);
 
     return rc;
 }

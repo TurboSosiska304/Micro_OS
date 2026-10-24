@@ -212,83 +212,9 @@ static int cmd_display(int argc, char **argv)
     return KSHELL_OK;
 }
 
-/*
- * The heart of the command "heart": a picture of thirteen columns and
- * twelve rows, every '#' one square of the colour of the heart.
- */
-static const char *const s_heart[] = {
-    "  ###   ###  ", " ##### ##### ", "#############", "#############",
-    "#############", "#############", " ########### ", "  #########  ",
-    "   #######   ", "    #####    ", "     ###     ", "      #      ",
-};
-
-#define HEART_ROWS ((int)(sizeof(s_heart) / sizeof(s_heart[0])))
-#define HEART_COLS 13
-
-/* One frame of the beat: the picture in the middle of the black screen. */
-static void heart_beat(int cell, uint16_t color)
-{
-    int x0 = (DISPLAY_WIDTH - HEART_COLS * cell) / 2;
-    int y0 = (DISPLAY_HEIGHT - HEART_ROWS * cell) / 2;
-    int row;
-    int col;
-
-    (void)drv_display_clear(0x0000);
-
-    for (row = 0; row < HEART_ROWS; row++) {
-        for (col = 0; col < HEART_COLS; col++) {
-            if (s_heart[row][col] == '#') {
-                (void)drv_display_fill_rect(x0 + col * cell, y0 + row * cell, cell, cell, color);
-            }
-        }
-    }
-
-    (void)drv_display_flush();
-}
-
-/*
- * The command "heart": the heart beats on the screen for a moment, and the
- * dialogue of the shell comes back after it - the console keeps its lines
- * and draws them again.
- */
-static int cmd_heart(int argc, char **argv)
-{
-    int beat;
-
-    (void)argc;
-    (void)argv;
-
-    /*
-     * Every frame is drawn under the lock of the console, so the task that
-     * draws the dialogue cannot walk into the middle of it; the lock is
-     * dropped between the frames, so a line of the log waits one frame at
-     * most.
-     */
-    for (beat = 0; beat < 4; beat++) {
-        console_lock();
-        heart_beat(5, 0xF800);
-        console_unlock();
-        k_sched_sleep_ms(170);
-
-        console_lock();
-        heart_beat(6, 0xF800);
-        console_unlock();
-        k_sched_sleep_ms(170);
-    }
-
-    /* The dialogue of the shell is older than the screen: it comes back. */
-    tft_console_redraw();
-
-    return KSHELL_OK;
-}
-
 int tft_console_register(void)
 {
-    int rc = kshell_register("display", "the offset of the image on the screen", cmd_display);
-
-    rc |= kshell_register("heart", "a heart on the screen for a moment", cmd_heart);
-
-    return rc;
+    return kshell_register("display", "the offset of the image on the screen", cmd_display);
 }
 
 void tft_console_write(const char *data, k_size_t len)

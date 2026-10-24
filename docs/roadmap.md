@@ -127,8 +127,8 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [ ] `drv_input`: A/B/C buttons, debounce, input events
 * [x] `drv_buzzer`: the passive buzzer on G2, a `beep` command for the user
 * [x] `drv_led`: the red LED on G19 (shared with the IR emitter), an `led` command
-* [x] Two shows for a person: `heart` beats on the screen, `dance` plays a
-      bar of notes with the led in time
+* [x] Two shows for a person on the led: `led heart` makes the light
+      breathe, `led dance` makes it dance
 * [ ] `drv_imu` (MPU6886), `drv_rtc` (BM8563, deep-sleep wake)
 * [x] `drv_wifi`: the station, the scan, the network of the last time is
       remembered in the NVS (see [ADR 0003](adr/0003-wifi-driver.md))

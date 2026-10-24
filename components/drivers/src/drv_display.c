@@ -396,35 +396,6 @@ int drv_display_clear(uint16_t color)
     return 0;
 }
 
-int drv_display_fill_rect(int x, int y, int w, int h, uint16_t color)
-{
-    int row;
-    int col;
-
-    if (s_fb == NULL) {
-        return -1;
-    }
-
-    display_lock();
-
-    /* The parts of the rectangle that are off the screen are cut away. */
-    for (row = y; row < y + h; row++) {
-        if (row < 0 || row >= LCD_HEIGHT) {
-            continue;
-        }
-
-        for (col = x; col < x + w; col++) {
-            if (col >= 0 && col < LCD_WIDTH) {
-                s_fb[row * LCD_WIDTH + col] = color;
-            }
-        }
-    }
-
-    display_unlock();
-
-    return 0;
-}
-
 int drv_display_text(int x, int y, const char *text, uint16_t color)
 {
     int cursor = x;
