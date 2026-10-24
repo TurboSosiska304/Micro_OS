@@ -16,6 +16,9 @@ int drv_display_text(int x, int y, const char *text, uint16_t color);
 /* Fill the screen with a color. */
 int drv_display_clear(uint16_t color);
 
+/* Fill a rectangle. The origin is the top left corner. */
+int drv_display_fill_rect(int x, int y, int w, int h, uint16_t color);
+
 /* Send the framebuffer to the panel. */
 int drv_display_flush(void);
 

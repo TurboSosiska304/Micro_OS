@@ -11,6 +11,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "driver/gpio.h"
 #include "driver/ledc.h"
@@ -154,6 +155,20 @@ static int drv_led_check(void)
     return 0;
 }
 
+/*
+ * Drive the pin that the red LED and the IR emitter share. The level turns
+ * the LED on (and the IR emitter in the opposite direction); 0 is off.
+ */
+int drv_led_set(bool on)
+{
+    if (!s_led_ready) {
+        return -1;
+    }
+
+    gpio_set_level(PIN_LED, on ? 1 : 0);
+    return 0;
+}
+
 static const char *drv_led_detail(void)
 {
     return "G19, shared with the IR emitter";
@@ -193,16 +208,74 @@ static int cmd_beep(int argc, char **argv)
     return KSHELL_OK;
 }
 
+/* One note of the bar of the dance. */
+struct note {
+    unsigned freq;
+    unsigned ms;
+};
+
+/* The shell command that turns the red LED on and off. */
+static int cmd_led(int argc, char **argv)
+{
+    if (argc < 2) {
+        kshell_printf("usage: led on|off\n");
+        return KSHELL_USAGE;
+    }
+
+    if (strcmp(argv[1], "on") != 0 && strcmp(argv[1], "off") != 0) {
+        kshell_printf("usage: led on|off\n");
+        return KSHELL_USAGE;
+    }
+
+    if (drv_led_set(strcmp(argv[1], "on") == 0) != 0) {
+        kshell_printf("led: the led is not working\n");
+        return KSHELL_ERROR;
+    }
+
+    return KSHELL_OK;
+}
+
+/*
+ * A little show: a bar of notes on the buzzer, the LED in time with them -
+ * the board dances for a couple of seconds.
+ */
+static int cmd_dance(int argc, char **argv)
+{
+    static const struct note bar[] = {
+        {262, 200}, {330, 200}, {392, 200}, {523, 320}, {392, 160}, {330, 160}, {262, 400},
+    };
+    bool lit = false;
+    size_t i;
+
+    (void)argc;
+    (void)argv;
+
+    for (i = 0; i < sizeof(bar) / sizeof(bar[0]); i++) {
+        lit = !lit;
+        drv_led_set(lit);
+        drv_buzzer_beep(bar[i].freq, bar[i].ms);
+    }
+
+    drv_led_set(false);
+
+    return KSHELL_OK;
+}
+
 int drv_buzzer_register(void)
 {
     int rc = kmod_register(&s_buzzer_module);
 
     kshell_register("beep", "sound the buzzer: beep [frequency] [ms]", cmd_beep);
+    kshell_register("dance", "the board dances: a bar of notes and the led in time", cmd_dance);
 
     return rc;
 }
 
 int drv_led_register(void)
 {
-    return kmod_register(&s_led_module);
+    int rc = kmod_register(&s_led_module);
+
+    kshell_register("led", "the red led: led on|off", cmd_led);
+
+    return rc;
 }

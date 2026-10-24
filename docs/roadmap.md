@@ -126,8 +126,9 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [ ] `drv_framebuffer`: ST7789v2, 135x240, rotation, text and graphics output
 * [ ] `drv_input`: A/B/C buttons, debounce, input events
 * [x] `drv_buzzer`: the passive buzzer on G2, a `beep` command for the user
-* [ ] `drv_led`: the red LED and the IR emitter on G19 (still only a health check)
-* [ ] `drv_ir`: transmit and receive (the driver itself is missing)
+* [x] `drv_led`: the red LED on G19 (shared with the IR emitter), an `led` command
+* [x] Two shows for a person: `heart` beats on the screen, `dance` plays a
+      bar of notes with the led in time
 * [ ] `drv_imu` (MPU6886), `drv_rtc` (BM8563, deep-sleep wake)
 * [x] `drv_wifi`: the station, the scan, the network of the last time is
       remembered in the NVS (see [ADR 0003](adr/0003-wifi-driver.md))
@@ -161,3 +162,5 @@ Deferred, not forgotten:
 * [ ] Microphone (SPM1423, I2S) and `drv_mic` — a simple sound/noise detector
 * [ ] MQTT client (HTTP and NTP stay in phase 5)
 * [ ] Settings reset, `factory reset`
+* [ ] `drv_ir`: transmit and receive over the pin G19 it shares with the red
+      LED (the driver does not exist yet)
