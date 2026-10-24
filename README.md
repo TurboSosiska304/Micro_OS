@@ -10,8 +10,6 @@ a single ESP32 core, a 200 mAh battery and a 135x240 display.
 
 > Russian version: [README_ru.md](README_ru.md)
 
-[![CI](https://github.com/TurboSosiska304/Micro_OS/actions/workflows/ci.yml/badge.svg?branch=release_candidate)](https://github.com/TurboSosiska304/Micro_OS/actions/workflows/ci.yml)
-
 ## Status
 
 | Phase | Content | State |
@@ -192,25 +190,28 @@ The decision about the shape of the driver is recorded in
 
 The `dist/` folder holds the built firmware: the application, the bootloader,
 the partition table, a flash script and the sums of the files. The folder is
-not in the repository, it is a product of the build: every CI run uploads it
-as the artifact `firmware`, and a tag of the form `vX.Y.Z` publishes it as a
-release. Download the folder, connect the board and run `./flash.sh` — no
-sources, no ESP-IDF and no toolchain needed.
+not in the repository, it is a product of the build: `make bundle` collects
+it once the firmware is built, and the ready images go to the releases.
+Download the folder, connect the board and run `./flash.sh` — no sources, no
+ESP-IDF and no toolchain needed.
 
-## Continuous integration
+## Checks
 
-Every push to `release_candidate` builds the firmware for the ESP32
-(ESP-IDF v5.3) and checks the integrity of the repository: the headers of the
-images, the partition table against `partitions.csv`, the git objects and the
-formatting of the sources. The tests of the code itself are run by the
-contributor before a push; after the first release they get their own CI/CD.
+The whole list of checks runs locally, before a push:
 
 ```bash
-make ci          # the whole list of checks, locally
+make ci          # build, tests, sanitizers, smoke test, integrity
 ```
 
-A tag of the form `vX.Y.Z` publishes the bundle as a GitHub release. The
-details are in [docs/ci.md](docs/ci.md).
+It builds the firmware for the ESP32 (ESP-IDF v5.3), runs the unit tests and
+the sanitizers, the smoke test of the device and the integrity of the
+repository: the headers of the images, the partition table against
+`partitions.csv`, the git objects and the formatting of the sources.
+
+The automated CI/CD belongs to the `mainline` branch and is planned to be its
+own there; this branch builds nothing in the cloud. The tests of the code
+itself are run by the contributor, and after the first release they get their
+own CI/CD.
 
 ## Repository layout
 
@@ -226,7 +227,6 @@ Micro_OS/
 ├── tests/              unit tests (own minimal framework, no dependencies)
 ├── tools/              console, bundle, the smoke test, the integrity check
 ├── docs/               architecture, roadmap, hardware notes, ADRs
-├── .github/workflows/  the autobuild of the release candidate
 ├── CMakeLists.txt      dual mode build: ESP-IDF or host
 └── Makefile            convenience targets: test, sim, ci, format, idf-*
 ```
