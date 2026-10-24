@@ -97,6 +97,16 @@ static k_ssize_t sys_read(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys_
         return KERR_BADF;
     }
 
+    /*
+     * The descriptor remembers how it was opened: a file that was opened
+     * to be written to cannot be read from (POSIX: EBADF). The rule lives
+     * here, at the edge of the system, so that every filesystem answers
+     * the same way.
+     */
+    if ((file->flags & KSYS_O_ACCMODE) == KSYS_O_WRONLY) {
+        return KERR_BADF;
+    }
+
     return vfs_read(&file->file, (void *)(uintptr_t)buf, count);
 }
 
@@ -118,6 +128,12 @@ static k_ssize_t sys_write(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys
             k_console_write((const char *)(uintptr_t)buf, (k_size_t)count);
             return (k_ssize_t)count;
         }
+        return KERR_BADF;
+    }
+
+    /* The descriptor remembers how it was opened: a file that was opened
+     * to be read from cannot be written to (POSIX: EBADF). */
+    if ((file->flags & KSYS_O_ACCMODE) == KSYS_O_RDONLY) {
         return KERR_BADF;
     }
 

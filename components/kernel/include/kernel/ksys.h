@@ -54,6 +54,9 @@
 #define KSYS_O_TRUNC 0x0200
 #define KSYS_O_APPEND 0x0400
 
+/* The bits of the access: read, write, or both. */
+#define KSYS_O_ACCMODE 0x0003
+
 /* The flags of the waitpid. */
 #define KSYS_WNOHANG 1 /* do not wait, answer 0 when the child is not ready */
 

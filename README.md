@@ -256,6 +256,10 @@ Details: [CONTRIBUTING.md](CONTRIBUTING.md).
   is not a copy of the parent at the point of the call. A real `fork()` (an
   address space of its own, copy on write) is planned for right after the
   first release.
+* **One user, no file owners or mode bits.** A file's protection is the
+  access its descriptor was opened with - read, write, or both - enforced by
+  the kernel with `EBADF`. Owners and `chmod` wait for the first release:
+  there is a single user on the board today.
 * **8 MB flash / 2 MB PSRAM.** There is one application and no room for an
   update over the air: the kernel takes 2 MB (`factory`) and the rest of the
   flash (5.75 MB) belongs to MicroFS. The whole layout is in

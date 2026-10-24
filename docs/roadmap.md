@@ -36,7 +36,7 @@ Every phase ends with a working state on the device and green tests.
       (see "Known limitations" in the README), to be fixed right after the
       first release
 
-## Phase 1F - The hardware doctor
+## Phase 1F - The hardware doctor (done)
 
 The init process walks through the registered modules and checks them one by
 one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
@@ -89,7 +89,7 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [x] `/proc/self` and a directory per task with a `status` file
 * [n] Command history, tab completion (not needed for now)
 
-## Phase 3 - Memory and the syscall ABI
+## Phase 3 - Memory and the syscall ABI (done)
 
 * [x] The ABI of the system calls: the numbers are a contract, they are
       written down in [docs/syscall-abi.md](syscall-abi.md) and covered by
@@ -114,7 +114,12 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [x] System call table, uniform ABI
 * [x] Minimal libc over the ABI: `open/read/write/close/printf`. The memory
       (`malloc`) is still missing
-* [ ] Permission model and "file descriptors"
+* [x] Permission model and "file descriptors": a descriptor remembers the
+      access it was opened with, and the kernel refuses to read a write-only
+      descriptor or to write a read-only one with `EBADF`. The rule lives at
+      the edge of the system, so every filesystem answers the same way.
+      Per-file owners and mode bits wait for the first release - there is a
+      single user today (see "After the first release")
 
 ## Phase 4 - Drivers
 
@@ -148,6 +153,9 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 Deferred, not forgotten:
 
 * [ ] `execve`: it needs a format of the programs
+* [ ] Per-file permissions: mode bits and owners in MicroFS (today the model
+      is one user and the access a descriptor was opened with, see the
+      permission model of phase 3)
 * [ ] Microphone (SPM1423, I2S) and `drv_mic` — a simple sound/noise detector
 * [ ] MQTT client (HTTP and NTP stay in phase 5)
 * [ ] Settings reset, `factory reset`

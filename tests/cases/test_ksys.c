@@ -346,6 +346,63 @@ static void test_error_codes(void)
 }
 
 /*
+ * The property: a descriptor remembers how it was opened. A file opened to
+ * be read from cannot be written to, a file opened to be written to cannot
+ * be read from - the same way through the system calls, no matter which
+ * filesystem is under them.
+ */
+static void test_access_modes(void)
+{
+    char buffer[16];
+    int rd;
+    int wr;
+    int rw;
+
+    ktest_begin("ksys: a descriptor keeps the access it was opened with");
+
+    setup();
+    KT_CHECK_INT_EQ(load_corpus(), 0);
+    KT_CHECK_INT_EQ(ksys_mkdir("/t"), 0);
+
+    /* A file to work with: it exists and has some content. */
+    wr = ksys_open("/t/perm.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    KT_CHECK(wr >= 0);
+    if (wr >= 0) {
+        KT_CHECK_INT_EQ(ksys_write(wr, g_text, 8), 8);
+        KT_CHECK_INT_EQ(ksys_close(wr), 0);
+    }
+
+    /* Read only: reading works, writing is refused. */
+    rd = ksys_open("/t/perm.txt", KSYS_O_RDONLY);
+    KT_CHECK(rd >= 0);
+    if (rd >= 0) {
+        KT_CHECK(ksys_read(rd, buffer, sizeof(buffer)) >= 0);
+        KT_CHECK_INT_EQ(ksys_write(rd, buffer, 1), KERR_BADF);
+        KT_CHECK_INT_EQ(ksys_close(rd), 0);
+    }
+
+    /* Write only: writing works, reading is refused. */
+    wr = ksys_open("/t/perm.txt", KSYS_O_WRONLY);
+    KT_CHECK(wr >= 0);
+    if (wr >= 0) {
+        KT_CHECK_INT_EQ(ksys_write(wr, g_text, 8), 8);
+        KT_CHECK_INT_EQ(ksys_read(wr, buffer, sizeof(buffer)), KERR_BADF);
+        KT_CHECK_INT_EQ(ksys_close(wr), 0);
+    }
+
+    /* Read and write: both work. */
+    rw = ksys_open("/t/perm.txt", KSYS_O_RDWR);
+    KT_CHECK(rw >= 0);
+    if (rw >= 0) {
+        KT_CHECK(ksys_read(rw, buffer, sizeof(buffer)) >= 0);
+        KT_CHECK(ksys_write(rw, buffer, 8) >= 0);
+        KT_CHECK_INT_EQ(ksys_close(rw), 0);
+    }
+
+    teardown();
+}
+
+/*
  * The property: the file written through the system calls is the same file
  * that the filesystem sees.
  */
@@ -490,6 +547,7 @@ void test_ksys(void)
     test_write_read_roundtrip();
     test_alignment_invariance();
     test_error_codes();
+    test_access_modes();
     test_syscalls_and_vfs_agree();
     test_values_survive();
 }
