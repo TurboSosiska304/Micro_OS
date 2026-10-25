@@ -198,6 +198,14 @@ in the middle of the dialogue. The layout of the dialogue is of the picture
 as it is turned: 22 columns of 26 rows in the portrait, 40 of 15 in the
 landscape.
 
+The same console has a second door: `components/telnet` puts the shell on
+port 23 of the network, beside the UART and the display. The client is
+registered as one more sink of the console, so a command over the air
+sees the same output as a person at the USB cable; the negotiation of
+telnet is answered with refusals, because the shell needs no options —
+the client keeps its own echo. There is no authentication: the board is
+on the network of its owner, and `telnet off` closes the door.
+
 ## 8. Testing
 
 * The kernel is tested on the host: `make test` (own framework, no dependencies).

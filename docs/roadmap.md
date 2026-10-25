@@ -121,7 +121,7 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
       Per-file owners and mode bits wait for the first release - there is a
       single user today (see "After the first release")
 
-## Phase 4 - Drivers
+## Phase 4 - Drivers (done)
 
 * [x] `drv_framebuffer`: ST7789v2, 135x240, rotation, text and graphics output
       — the framebuffer is the one of `drv_display`: the picture turns in
@@ -143,7 +143,6 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
       command `date` and `date set <YYYY-MM-DD> <HH:MM:SS>`, and the
       verdict of the doctor from the LV flag and the ranges of the
       fields (a dead battery is seen at once)
-* [ ] The alarm of the RTC: the wake of the board from deep sleep
 * [x] `drv_wifi`: the station, the scan, the network of the last time is
       remembered in the NVS (see [ADR 0003](adr/0003-wifi-driver.md))
 * [x] Console on TFT and UART at the same time
@@ -153,13 +152,17 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [ ] Init process: starting daemons from `/etc/init.d`
 * [ ] Configuration from `/etc`, persisted in NVS
 * [x] WiFi: the station joins the network of the last time on its own
+* [x] Telnet on port 23: the shell over the air, beside the UART and the
+      display — no authentication, the local network only, and
+      `telnet off` closes it
 * [ ] HTTP client, NTP based on the RTC
 * [ ] Applications: sensor logger, IR remote, clock, weather station
 
 ## Phase 6 - Release
 
 * [x] Autobuild of the release candidate (GitHub Actions): the firmware and
-      the integrity check, see [ci.md](ci.md)
+      the integrity check (the workflows of the repository live on
+      `mainline`)
 * [n] OTA updates (`app0`/`app1`), rollback after a failed boot (no space
       in the flash for a second image)
 * [n] Enclosure/display modes: "clock", "remote", "logger" (not needed)
@@ -169,6 +172,9 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 
 Deferred, not forgotten:
 
+* [ ] RTC alarm: the wake of the board from deep sleep — the alarm
+      registers of the BM8563 and the EXT1 input of the ESP32 (moved
+      out of phase 4)
 * [ ] `execve`: it needs a format of the programs
 * [ ] Per-file permissions: mode bits and owners in MicroFS (today the model
       is one user and the access a descriptor was opened with, see the
