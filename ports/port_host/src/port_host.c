@@ -17,7 +17,16 @@
 
 /* --- output sink --- */
 
+/*
+ * The sink of the tests is closed by the test that replaces it while
+ * another task can be writing a log line into it at the same moment:
+ * fwrite() on a closed FILE scribbles over the heap of the process, and
+ * the damage shows up much later, far away from the console - as a torn
+ * block in somebody else's free(). The lock holds the pointer and the
+ * file together for as long as the write lasts.
+ */
 static FILE *s_sink;
+static pthread_mutex_t s_sink_lock = PTHREAD_MUTEX_INITIALIZER;
 
 void port_host_set_sink(FILE *sink)
 {
@@ -26,11 +35,14 @@ void port_host_set_sink(FILE *sink)
      * replaced is closed, otherwise every run of the tests leaves a file
      * open until the process ends.
      */
+    pthread_mutex_lock(&s_sink_lock);
+
     if (s_sink != NULL && s_sink != stdout && s_sink != sink) {
         (void)fclose(s_sink);
     }
 
     s_sink = sink;
+    pthread_mutex_unlock(&s_sink_lock);
 }
 
 FILE *port_host_get_sink(void)
@@ -85,11 +97,19 @@ void k_port_exit_critical(void)
 
 void k_port_write(const char *data, k_size_t len)
 {
+    FILE *sink;
+
     if (data == NULL || len == 0) {
         return;
     }
-    fwrite(data, 1, len, port_host_get_sink());
-    fflush(port_host_get_sink());
+
+    /* The pointer and the file are read and written under one lock: the
+     * sink can be replaced and closed by another task in between. */
+    pthread_mutex_lock(&s_sink_lock);
+    sink = s_sink != NULL ? s_sink : stdout;
+    fwrite(data, 1, len, sink);
+    fflush(sink);
+    pthread_mutex_unlock(&s_sink_lock);
 }
 
 k_u64_t k_port_uptime_ms(void)
