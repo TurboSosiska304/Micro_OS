@@ -147,8 +147,14 @@ static void test_mfetch(void)
     KT_CHECK(strstr(buf, "Board") != NULL);
     KT_CHECK(strstr(buf, "command(s)") != NULL);
 
+    /* ... the rows a person looks for ... */
+    KT_CHECK(strstr(buf, "Build") != NULL);
+    KT_CHECK(strstr(buf, "Volume") != NULL);
+    KT_CHECK(strstr(buf, "Modules") != NULL);
+    KT_CHECK(strstr(buf, "Heap") != NULL);
+
     /* ... and the colored logo brings the escapes of the terminal. */
-    KT_CHECK(strstr(buf, "███╗") != NULL);
+    KT_CHECK(strstr(buf, "MM MM") != NULL);
     KT_CHECK(strstr(buf, "\033[") != NULL);
 }
 

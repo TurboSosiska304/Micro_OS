@@ -111,6 +111,11 @@ k_size_t kmod_count(void)
     return g_count;
 }
 
+int kmod_problems(void)
+{
+    return g_problems;
+}
+
 const struct kmod *kmod_get(k_size_t index)
 {
     if (index >= g_count) {
