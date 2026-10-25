@@ -137,7 +137,13 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
       breathe, `led dance` makes it dance
 * [x] `drv_battery`: the charge left in percent, from the curve of one
       cell — the command `battery`
-* [ ] `drv_imu` (MPU6886), `drv_rtc` (BM8563, deep-sleep wake)
+* [x] `drv_imu` (MPU6886): the accelerometer, with its raw values in
+      the report of the doctor
+* [x] `drv_rtc` (BM8563): the date and the time of the clock — the
+      command `date` and `date set <YYYY-MM-DD> <HH:MM:SS>`, and the
+      verdict of the doctor from the LV flag and the ranges of the
+      fields (a dead battery is seen at once)
+* [ ] The alarm of the RTC: the wake of the board from deep sleep
 * [x] `drv_wifi`: the station, the scan, the network of the last time is
       remembered in the NVS (see [ADR 0003](adr/0003-wifi-driver.md))
 * [x] Console on TFT and UART at the same time

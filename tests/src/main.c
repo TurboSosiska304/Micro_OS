@@ -36,6 +36,7 @@ static void run_tests(void *arg)
     test_input_debounce();
     test_battery_soc();
     test_fb_draw();
+    test_rtc();
     test_ksys();
     test_ksys_process();
     test_libc();

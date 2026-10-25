@@ -18,6 +18,7 @@ set(MICRO_OS_DRIVERS_SRCS
     "src/fb_draw.c"
     "src/input_debounce.c"
     "src/battery_soc.c"
+    "src/rtc_time.c"
 )
 
 idf_component_register(
