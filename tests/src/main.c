@@ -39,6 +39,7 @@ static void run_tests(void *arg)
     test_rtc();
     test_console_sinks();
     test_telnet();
+    test_text_wrap();
     test_ksys();
     test_ksys_process();
     test_libc();

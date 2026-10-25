@@ -22,6 +22,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "graphics/font.h"
+#include "graphics/text_wrap.h"
 #include "kernel/log.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
@@ -96,8 +97,23 @@ static void draw(void)
         drv_display_text(0, row * (FONT_HEIGHT + 2), s_lines[row], 0xFFFF);
     }
 
-    /* The line that is being written. */
-    drv_display_text(0, s_line_count * (FONT_HEIGHT + 2), s_current, 0x07E0);
+    /*
+     * The line that is being written: it is cut into the rows by the
+     * same width as the lines of the history, so a long command is
+     * read to the end instead of running past the right edge.
+     */
+    {
+        char piece[TFT_LINE_MAX];
+        int row = s_line_count;
+        int index = 0;
+
+        while (row < s_rows &&
+               text_wrap_take(piece, sizeof(piece), s_current, s_columns, index) > 0) {
+            drv_display_text(0, row * (FONT_HEIGHT + 2), piece, 0x07E0);
+            row++;
+            index++;
+        }
+    }
 
     (void)drv_display_flush();
 }
@@ -130,7 +146,7 @@ static void copy_line(char *dst, const char *text)
 }
 
 /* The caller holds the lock of the console. */
-static void push_line(const char *text)
+static void push_one_row(const char *text)
 {
     if (s_line_count < s_rows) {
         s_line_count++;
@@ -143,6 +159,27 @@ static void push_line(const char *text)
     }
 
     copy_line(s_lines[s_line_count - 1], text);
+}
+
+/*
+ * A line of the dialogue: the tail of a line that is wider than the
+ * picture goes to the row below - cut by the width the picture has
+ * right now, so the same line is two rows of the portrait and one of
+ * the landscape. An empty line is still a line.
+ */
+static void push_line(const char *text)
+{
+    char piece[TFT_LINE_MAX];
+    int row = 0;
+
+    while (text_wrap_take(piece, sizeof(piece), text, s_columns, row) > 0) {
+        push_one_row(piece);
+        row++;
+    }
+
+    if (row == 0) {
+        push_one_row("");
+    }
 }
 
 /*
@@ -169,18 +206,34 @@ static void console_layout(void)
         s_rows = 1;
     }
 
-    while (s_line_count > s_rows) {
+    /*
+     * The lines are cut into the new width: the tail of a line of the
+     * wide picture goes to the row below on the narrow one, and the
+     * rows that do not fit leave from the top - the same as scrolling.
+     * The line that is being written is not touched: it is drawn by
+     * the rows of the width as well, and its bytes stay where they are.
+     */
+    {
+        static char old[TFT_ROWS_MAX][TFT_LINE_MAX];
+        int old_count = s_line_count;
         int i;
 
-        for (i = 0; i < s_line_count - 1; i++) {
-            memcpy(s_lines[i], s_lines[i + 1], TFT_LINE_MAX);
-        }
-        s_line_count--;
-    }
+        memcpy(old, s_lines, sizeof(old));
+        s_line_count = 0;
 
-    if (s_cursor > s_columns) {
-        s_cursor = s_columns;
-        s_current[s_cursor] = '\0';
+        for (i = 0; i < old_count; i++) {
+            char piece[TFT_LINE_MAX];
+            int row = 0;
+
+            while (text_wrap_take(piece, sizeof(piece), old[i], s_columns, row) > 0) {
+                push_one_row(piece);
+                row++;
+            }
+
+            if (row == 0) {
+                push_one_row("");
+            }
+        }
     }
 }
 
@@ -454,10 +507,20 @@ void tft_console_write(const char *data, k_size_t len)
             continue;
         }
 
-        if (s_cursor < s_columns) {
-            s_current[s_cursor++] = c;
-            s_current[s_cursor] = '\0';
+        /*
+         * The buffer of the line is the widest line there is: when it
+         * is full and one more letter comes, what is in it goes to the
+         * rows below and the letter starts the next piece - none of a
+         * long line is lost past the right edge.
+         */
+        if (s_cursor == TFT_LINE_MAX - 1) {
+            push_line(s_current);
+            s_cursor = 0;
+            s_current[0] = '\0';
         }
+
+        s_current[s_cursor++] = c;
+        s_current[s_cursor] = '\0';
     }
 
     console_unlock();

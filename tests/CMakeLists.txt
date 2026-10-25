@@ -23,6 +23,7 @@ if(NOT ESP_PLATFORM)
         cases/test_rtc.c
         cases/test_console.c
         cases/test_telnet.c
+        cases/test_text_wrap.c
         cases/test_ksys.c
         cases/test_ksys_process.c
         cases/test_libc.c
@@ -42,6 +43,7 @@ if(NOT ESP_PLATFORM)
         # The parser of telnet is the same story.
         "${CMAKE_SOURCE_DIR}/components/drivers/include"
         "${CMAKE_SOURCE_DIR}/components/telnet/include"
+        "${CMAKE_SOURCE_DIR}/components/graphics/include"
     )
 
     target_sources(microos_tests PRIVATE
@@ -50,6 +52,7 @@ if(NOT ESP_PLATFORM)
         "${CMAKE_SOURCE_DIR}/components/drivers/src/fb_draw.c"
         "${CMAKE_SOURCE_DIR}/components/drivers/src/rtc_time.c"
         "${CMAKE_SOURCE_DIR}/components/telnet/src/telnet_proto.c"
+        "${CMAKE_SOURCE_DIR}/components/graphics/src/text_wrap.c"
     )
 
     target_link_libraries(microos_tests PRIVATE microos_kernel microos_board microos_kshell microos_mfs microos_procfs microos_devfs microos_libc microos_wifi microos_port_host)

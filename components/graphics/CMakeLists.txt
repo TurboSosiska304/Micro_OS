@@ -1,6 +1,6 @@
 # Micro OS — the font and the console of the display.
 
-set(MICRO_OS_GRAPHICS_SRCS "src/tft_console.c")
+set(MICRO_OS_GRAPHICS_SRCS "src/tft_console.c" "src/text_wrap.c")
 
 if(ESP_PLATFORM)
     idf_component_register(
