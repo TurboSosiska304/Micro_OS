@@ -1,13 +1,13 @@
 menu "Micro OS drivers"
 
 config MICRO_OS_BUZZER_BEEP_ON_CHECK
-	bool "Beep at boot to prove that the buzzer works"
-	default n
-	help
-	  The hardware doctor sounds the buzzer for 30 ms at every boot,
-	  so that the buzzer and its LEDC timer can be heard working.
-	  The check itself does not need the sound - the state of the
-	  module is the same either way - so the beep is off by default
-	  and this switch brings it back.
+    bool "Beep at boot to prove that the buzzer works"
+    default n
+    help
+      The hardware doctor sounds the buzzer for 30 ms at every boot,
+      so that the buzzer and its LEDC timer can be heard working.
+      The check itself does not need the sound - the state of the
+      module is the same either way - so the beep is off by default
+      and this switch brings it back.
 
 endmenu
