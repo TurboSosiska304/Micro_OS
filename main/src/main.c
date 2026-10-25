@@ -24,6 +24,7 @@
 #include "kshell/kshell.h"
 #include "port_esp32.h"
 #include "selftest.h"
+#include "telnet/telnet.h"
 
 #include <string.h>
 
@@ -41,7 +42,12 @@ static int board_subsys_init(void)
 
 static int drivers_subsys_init(void)
 {
-    return drivers_init();
+    if (drivers_init() != 0) {
+        return -1;
+    }
+
+    /* The shell over the air: beside the drivers, not among them. */
+    return telnet_register();
 }
 
 /*

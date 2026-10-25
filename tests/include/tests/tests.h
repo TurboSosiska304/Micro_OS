@@ -21,6 +21,8 @@ void test_input_debounce(void);
 void test_battery_soc(void);
 void test_fb_draw(void);
 void test_rtc(void);
+void test_console_sinks(void);
+void test_telnet(void);
 void test_ksys(void);
 void test_ksys_process(void);
 void test_libc(void);
