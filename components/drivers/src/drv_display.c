@@ -21,7 +21,7 @@
  * The offsets can be changed at runtime with the "display" command of the
  * shell, so that the right values can be found without reflashing.
  */
-#define LCD_X_OFFSET 53
+#define LCD_X_OFFSET 52
 #define LCD_Y_OFFSET 40
 
 static int s_offset_x = LCD_X_OFFSET;
