@@ -33,7 +33,15 @@ static const char *drv_psram_detail(void)
 
 static int drv_flash_init(void)
 {
-    esp_flash_get_size(NULL, &s_flash_size);
+    uint32_t size = 0;
+
+    /* The API wants a 32 bit cell of its own: the size of the flash
+     * is not the size of a buffer, and the two types do not match. */
+    if (esp_flash_get_size(NULL, &size) != ESP_OK) {
+        return -1;
+    }
+
+    s_flash_size = size;
     return s_flash_size > 0 ? 0 : -1;
 }
 
