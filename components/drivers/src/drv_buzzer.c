@@ -70,18 +70,27 @@ static int drv_buzzer_init(void)
     return 0;
 }
 
-/* A short beep proves that the buzzer and the timer work. */
+/*
+ * The check of the module does not need the sound: the state of the
+ * buzzer is the same either way. The beep of the boot is behind the
+ * switch of the build (CONFIG_MICRO_OS_BUZZER_BEEP_ON_CHECK) - a short
+ * answer of the buzzer and of its timer that a person can hear - and
+ * off by default, because a board that squeaks at every start is a
+ * board people learn to hate.
+ */
 static int drv_buzzer_check(void)
 {
     if (!s_buzzer_ready) {
         return -1;
     }
 
+#ifdef CONFIG_MICRO_OS_BUZZER_BEEP_ON_CHECK
     ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZZER_CHANNEL, 128);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZZER_CHANNEL);
     vTaskDelay(pdMS_TO_TICKS(30));
     ledc_set_duty(LEDC_LOW_SPEED_MODE, BUZZER_CHANNEL, 0);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, BUZZER_CHANNEL);
+#endif
 
     return 0;
 }
