@@ -1,0 +1,88 @@
+# Micro OS — the release of a tag.
+#
+# A tag v* runs the tests, builds the firmware in the container of
+# ESP-IDF, checks the integrity of the repository against the version of
+# the tag (the tag says 0.2.0, the kernel must say 0.2.0 — the flag is
+# --expect-version) and makes a GitHub Release with the bundle: the
+# binaries, their sums and the flash script. A tag with a dash
+# (v0.2.0-pre) is a pre-release.
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: the tests before the release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: the repository
+        uses: actions/checkout@v4
+
+      - name: the unit tests
+        run: make test
+
+      - name: the tests with the address and UB sanitizers
+        run: make test-asan
+
+  build:
+    name: the firmware of the tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container: espressif/idf:v5.3
+    steps:
+      - name: the repository
+        uses: actions/checkout@v4
+
+      - name: the checkout is safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: the build of the firmware
+        run: idf.py build
+
+      - name: the bundle of dist/
+        run: tools/bundle.sh build dist
+
+      - name: the integrity against the version of the tag
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          version="${version%%-*}"
+          python3 tools/integrity_check.py --verbose --expect-version "$version"
+
+      - name: the bundle as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle
+          path: dist/
+
+  release:
+    name: the GitHub release
+    needs: [test, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: the bundle of the build
+        uses: actions/download-artifact@v4
+        with:
+          name: bundle
+          path: dist
+
+      - name: the release with the bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case "$GITHUB_REF_NAME" in
+            *-*) flags="--prerelease" ;;
+            *) flags="" ;;
+          esac
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "Micro OS $GITHUB_REF_NAME" \
+            --notes "The firmware for the M5Stack StickC Plus2: micro_os.bin, bootloader.bin, partition-table.bin, the SHA-256 sums of all of them and flash.sh — unpack and run ./flash.sh over USB. The notes about the commits are generated below." \
+            --generate-notes \
+            $flags

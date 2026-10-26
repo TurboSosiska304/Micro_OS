@@ -19,10 +19,11 @@ make ci        # the build, the tests, the smoke test, the integrity check
 `make ci` is the list of checks before a push: it builds, runs the unit
 tests, runs the smoke test of the simulator and checks the integrity of the
 repository — the git objects, the hygiene of the sources and their
-formatting. The tests are the work of the contributor and get their own
-CI/CD after the first release; the automated workflows live on `mainline`.
-The check of the bundle in `dist/` joins in when the firmware is built
-(`make bundle`).
+formatting. The workflows of the cloud repeat this list on every push to
+`mainline` and `release_candidate` (and add valgrind and the build of the
+firmware), so a push is checked again there. The check of the bundle in
+`dist/` joins in when the firmware is built (`make bundle`), and in the
+cloud — in the job that built it.
 
 If you touched the ESP32 port, additionally:
 
@@ -62,9 +63,10 @@ Rules:
 ## Branches and releases
 
 * `release_candidate` is the branch of the release candidate: every push to it
-  builds the firmware and checks the integrity of the repository. A tag of the
-  form `vX.Y.Z` publishes the bundle as a GitHub release. The tests are run by
-  the contributor locally.
+  runs the checks in the cloud, as does `mainline`. A tag of the form
+  `vX.Y.Z` builds the firmware and publishes the bundle as a GitHub release;
+  a tag with a dash (`vX.Y.Z-pre`) is a pre-release. The tests are run by
+  the contributor locally and repeated in the cloud.
 * `mainline` is always in a working state with a green `make ci`.
 * Features go to `feature/<what>`, bugs to `fix/<what>`.
 * Every significant architectural change comes with an ADR in `docs/adr/`.

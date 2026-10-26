@@ -62,9 +62,9 @@ smoke:
 integrity:
 	python3 tools/integrity_check.py --verbose
 
-# What a contributor runs before pushing: the CI builds the firmware and
-# checks the repository, the tests stay local until the first release gives
-# them their own CI/CD.
+# What a contributor runs before pushing: the workflows of the cloud
+# repeat this list on every push (and add valgrind and the firmware), so
+# `make ci` stays the local half of the same checks.
 ci: build test test-asan smoke integrity
 
 sim: build

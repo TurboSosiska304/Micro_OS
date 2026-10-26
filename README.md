@@ -214,10 +214,18 @@ the sanitizers, the smoke test of the device and the integrity of the
 repository: the headers of the images, the partition table against
 `partitions.csv`, the git objects and the formatting of the sources.
 
-The automated CI/CD belongs to the `mainline` branch and is planned to be its
-own there; this branch builds nothing in the cloud. The tests of the code
-itself are run by the contributor, and after the first release they get their
-own CI/CD.
+The same list runs in the cloud: every push to `mainline` and
+`release_candidate` and every pull request to `mainline` runs the tests,
+the same tests under valgrind, the sanitizers, the smoke test and the
+integrity of the repository, and builds the firmware for the ESP32 — the
+firmware is on the run as an artifact. A fresh checkout has no `dist/`, so
+the job that built the firmware runs the integrity check again with the
+bundle: the sums, the headers of the images, the partition table.
+
+A tag `v*` makes a release: the tests, the build, the integrity check
+against the version of the tag (`--expect-version`), and a GitHub release
+with the bundle — the binaries, their sums and `flash.sh` — and the notes
+about the commits. The tag with a dash (`v0.2.0-pre`) is a pre-release.
 
 ## Repository layout
 

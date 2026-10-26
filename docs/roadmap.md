@@ -166,7 +166,10 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [n] OTA updates (`app0`/`app1`), rollback after a failed boot (no space
       in the flash for a second image)
 * [n] Enclosure/display modes: "clock", "remote", "logger" (not needed)
-* [ ] Release process, tags, changelog
+* [x] Release process, tags, changelog: a tag `v*` runs the tests, builds
+      the firmware in Actions, checks the version of the kernel against the
+      tag and makes the release with the bundle and the notes about the
+      commits; a tag with a dash (`v0.2.0-pre`) is a pre-release
 
 ## After the first release
 
