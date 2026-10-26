@@ -15,7 +15,8 @@ const char *kernel_name(void)
 
 const char *kernel_version(void)
 {
-    return KSTR(KERNEL_VERSION_MAJOR) "." KSTR(KERNEL_VERSION_MINOR) "." KSTR(KERNEL_VERSION_PATCH);
+    return KSTR(KERNEL_VERSION_MAJOR) "." KSTR(KERNEL_VERSION_MINOR) "." KSTR(KERNEL_VERSION_PATCH)
+        KERNEL_VERSION_SUFFIX;
 }
 
 const char *kernel_build_id(void)
