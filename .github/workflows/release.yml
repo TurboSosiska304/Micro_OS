@@ -43,14 +43,22 @@ jobs:
       - name: the checkout is safe for git
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
+      # The steps of Actions run through docker exec and miss the
+      # entrypoint of the image, the one that sources export.sh — the
+      # shell of the step does it itself (IDF_PATH=/opt/esp/idf).
       - name: the build of the firmware
-        run: idf.py build
+        shell: bash
+        run: |
+          . /opt/esp/idf/export.sh >/dev/null
+          idf.py build
 
       - name: the bundle of dist/
         run: tools/bundle.sh build dist
 
       - name: the integrity against the version of the tag
+        shell: bash
         run: |
+          . /opt/esp/idf/export.sh >/dev/null
           version="${GITHUB_REF_NAME#v}"
           version="${version%%-*}"
           python3 tools/integrity_check.py --verbose --expect-version "$version"
