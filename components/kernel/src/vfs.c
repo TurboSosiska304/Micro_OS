@@ -230,25 +230,108 @@ int vfs_close(struct vfs_file *file)
     return rc;
 }
 
+/*
+ * The name of the mount point `point` when it is a direct child of `dir`,
+ * NULL otherwise. The root is the parent of every first level point.
+ */
+static const char *mount_child_name(const char *dir, const char *point)
+{
+    k_size_t len = strlen(dir);
+
+    if (len == 1 && dir[0] == '/') {
+        if (point[0] != '/' || point[1] == '\0') {
+            return NULL;
+        }
+        if (strchr(point + 1, '/') != NULL) {
+            return NULL;
+        }
+        return point + 1;
+    }
+
+    if (strncmp(dir, point, len) != 0 || point[len] != '/') {
+        return NULL;
+    }
+    if (point[len + 1] == '\0' || strchr(point + len + 1, '/') != NULL) {
+        return NULL;
+    }
+
+    return point + len + 1;
+}
+
+static bool already_listed(const struct vfs_dirent *out, k_size_t count, const char *name)
+{
+    k_size_t i;
+
+    for (i = 0; i < count; i++) {
+        if (strcmp(out[i].name, name) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 int vfs_list(const char *path, struct vfs_dirent *out, k_size_t max, k_size_t *count)
 {
     const struct mount *m = resolve(path, NULL);
+    k_size_t used = 0;
+    k_size_t i;
     int rc;
 
-    if (m == NULL) {
-        g_last_error = -2;
-        return -2;
-    }
-
-    if (m->ops->list == NULL) {
+    if (out == NULL || count == NULL) {
         g_last_error = -1;
         return -1;
     }
 
-    rc = m->ops->list(m->ctx, path, out, max, count);
-    g_last_error = rc;
+    *count = 0;
 
-    return rc;
+    if (m != NULL) {
+        if (m->ops->list == NULL) {
+            g_last_error = -1;
+            return -1;
+        }
+
+        rc = m->ops->list(m->ctx, path, out, max, &used);
+        if (rc != 0) {
+            g_last_error = rc;
+            return rc;
+        }
+    }
+
+    /*
+     * A filesystem mounted below this directory is a directory of it, even
+     * when the filesystem of the directory itself knows nothing about the
+     * mount point. This is how /proc and /dev appear in the root.
+     */
+    for (i = 0; i < g_count && used < max; i++) {
+        const char *name = mount_child_name(path, g_mounts[i].point);
+        k_size_t nlen;
+
+        if (name == NULL || already_listed(out, used, name)) {
+            continue;
+        }
+
+        nlen = strlen(name);
+        if (nlen > VFS_NAME_MAX) {
+            continue;
+        }
+
+        memcpy(out[used].name, name, nlen + 1);
+        out[used].inode = 0;
+        out[used].type = 2;
+        out[used].size = 0;
+        used++;
+    }
+
+    if (m == NULL && used == 0) {
+        g_last_error = -2;
+        return -2;
+    }
+
+    *count = used;
+    g_last_error = 0;
+
+    return 0;
 }
 
 int vfs_stat(const char *path, struct vfs_stat *out)

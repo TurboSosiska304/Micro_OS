@@ -3,11 +3,13 @@
 
 #include <string.h>
 
+#include "devfs/devfs.h"
 #include "kernel/errno.h"
 #include "kernel/vfs.h"
 #include "mfs/mfs.h"
 #include "mfs/mfs_ram_device.h"
 #include "mfs/mfs_vfs.h"
+#include "procfs/procfs.h"
 
 #define TEST_BLOCKS 128
 
@@ -140,6 +142,51 @@ static void test_mkdir_p(void)
     teardown();
 }
 
+static void test_mount_points(void)
+{
+    struct vfs_dirent entries[16];
+    k_size_t count = 0;
+    k_size_t i;
+    int saw_proc = 0;
+    int saw_dev = 0;
+
+    ktest_begin("vfs: the filesystems mounted below a directory are listed in it");
+
+    setup();
+    KT_CHECK_INT_EQ(procfs_register("/proc"), 0);
+    KT_CHECK_INT_EQ(devfs_register("/dev"), 0);
+
+    /* The root knows nothing of the mounts: the VFS shows them to it. */
+    KT_CHECK_INT_EQ(vfs_list("/", entries, 16, &count), 0);
+    KT_CHECK_INT_EQ(count, 2);
+    for (i = 0; i < count; i++) {
+        KT_CHECK_INT_EQ(entries[i].type, 2); /* a directory */
+        if (strcmp(entries[i].name, "proc") == 0) {
+            saw_proc = 1;
+        }
+        if (strcmp(entries[i].name, "dev") == 0) {
+            saw_dev = 1;
+        }
+    }
+    KT_CHECK(saw_proc);
+    KT_CHECK(saw_dev);
+
+    /* A mount below a subdirectory is an entry of that directory too. */
+    KT_CHECK_INT_EQ(vfs_mkdir("/mnt"), 0);
+    KT_CHECK_INT_EQ(devfs_register("/mnt/data"), 0);
+    KT_CHECK_INT_EQ(vfs_list("/mnt", entries, 16, &count), 0);
+    KT_CHECK_INT_EQ(count, 1);
+    if (count == 1) {
+        KT_CHECK_STR_EQ(entries[0].name, "data");
+        KT_CHECK_INT_EQ(entries[0].type, 2);
+    }
+
+    KT_CHECK_INT_EQ(vfs_umount("/mnt/data"), 0);
+    KT_CHECK_INT_EQ(vfs_umount("/proc"), 0);
+    KT_CHECK_INT_EQ(vfs_umount("/dev"), 0);
+    teardown();
+}
+
 static void test_statfs(void)
 {
     struct vfs_statfs stat;
@@ -163,5 +210,6 @@ void test_vfs(void)
     test_file_operations();
     test_directories();
     test_mkdir_p();
+    test_mount_points();
     test_statfs();
 }
