@@ -5,8 +5,9 @@ A Linux-like kernel for the **M5Stack StickC Plus2** (ESP32-PICO-V3-02, 240 MHz,
 
 The goal is not "another ESP32 project" but an actual kernel: a task scheduler,
 system calls, a VFS with `/proc` and `/dev`, a memory manager, device drivers and
-an init process that starts a shell. All of it on bare metal without an MMU, with
-a single ESP32 core, a 200 mAh battery and a 135x240 display.
+an init process that starts a shell. All of it on bare metal without an MMU, on
+top of FreeRTOS (which owns both ESP32 cores), with a 200 mAh battery and a
+135x240 display.
 
 > Russian version: [README_ru.md](README_ru.md)
 
@@ -18,10 +19,15 @@ a single ESP32 core, a 200 mAh battery and a 135x240 display.
 | 1 | Scheduler, tasks, timers, PIDs | done |
 | 1F | Hardware doctor (modules and health checks) | done |
 | 2 | VFS, MicroFS, shell | done |
-| 3 | Syscall ABI, libc subset | in progress |
-| 4 | Drivers: the WiFi station, the TFT console | done |
-| 5 | init, configuration, applications, HTTP/NTP | planned |
-| 6 | Release, documentation | planned |
+| 3 | Syscall ABI, libc subset, memory manager (slabs) | done |
+| 4 | Drivers: the WiFi station, the TFT console, input, sensors | done |
+| 5 | init, configuration, HTTP/NTP, applications | in progress |
+| 6 | Release, documentation | in progress |
+
+Phase 5 is partly done: the WiFi station and telnet (the shell over the air)
+work, the init daemons, the `/etc` configuration, HTTP/NTP and the demo
+applications are still ahead. Phase 6 has the release process and the cloud
+build; OTA is not possible with the current flash layout.
 
 See [docs/roadmap.md](docs/roadmap.md) for the full plan and
 [docs/architecture.md](docs/architecture.md) for the design.
@@ -62,7 +68,7 @@ ctest --test-dir build-host --output-on-failure
 
 ### Device (ESP-IDF)
 
-Requires ESP-IDF v5.x:
+Requires ESP-IDF v5.3 (the version the cloud build uses):
 
 ```bash
 git clone -b v5.3 --recursive https://github.com/espressif/esp-idf.git ~/esp/esp-idf
@@ -74,7 +80,18 @@ idf.py build
 idf.py -p /dev/ttyACM0 flash monitor
 ```
 
-Or through the Makefile: `make idf-build`, `make idf-flash`, `make idf-monitor`.
+The Makefile finds ESP-IDF by itself, in this order: `$IDF_PATH`, a checkout
+next to the repository (`../esp-idf`), then `~/esp/esp-idf`. So the same build
+is one command, or point it at another `export.sh` explicitly:
+
+```bash
+make idf-build
+make idf-build IDF_EXPORT=/path/to/esp-idf/export.sh
+```
+
+The host build needs `cmake`, `ninja` and a C compiler. ESP-IDF brings its own
+cross toolchain and Python environment, so no second compiler is needed for the
+device build.
 
 The board needs to be reachable by the current user. On most distributions the
 serial device belongs to the `uucp` group:
@@ -116,8 +133,9 @@ module health report:
   led/ir     ok        G19, shared with the IR emitter
   battery    ok        4176 mV, 98% (raw 2088 mV)
   wifi       degraded  f4:65:0b:32:00:c0 idle
+  telnet     ok        port 23, no auth
   mic        skip      SPM1423 MEMS microphone (I2S)
-11 module(s), 0 problem(s)
+12 module(s), 0 problem(s)
 ```
 
 `ok` works, `degraded` works with limitations (no access point, no clock
@@ -131,18 +149,12 @@ commands:
 
 | Command | Meaning |
 |---|---|
-| `help` | list the commands |
-| `ps` | the task list |
-| `uptime` | the time since the boot |
-| `uname` | the name and the version of the kernel |
-| `free` | the memory usage |
-| `dmesg` | the kernel log |
-| `modules` | check the hardware modules again |
-| `memtest` | measure the memory and its speed |
-| `i2c` | scan the I2C bus |
-| `date` | the time of the RTC |
-| `wifi` | the WiFi station: `status`, `scan`, `connect`, `join`, `disconnect` |
-| `mfetch` | the report about the system with the logo (like fastfetch) |
+| `help`, `uname`, `uptime`, `ps`, `dmesg`, `free`, `abi` | the kernel: commands, version, time, tasks, log, memory, syscall table |
+| `ls`, `cat`, `write`, `mkdir`, `rm`, `cd`, `pwd`, `df`, `mount`, `mkfs` | the filesystem of the board |
+| `modules`, `memtest`, `i2c` | the doctor, the memory test, the I2C scan |
+| `date`, `battery`, `beep`, `led`, `input`, `display` | the drivers: clock, charge, buzzer, LED, buttons, panel |
+| `wifi`, `telnet` | the network: the station and the shell over the air |
+| `mfetch`, `mfetch color` | the report about the system with the logo (like fastfetch) |
 | `echo`, `sleep`, `clear`, `reboot` | the usual suspects |
 
 The command `mfetch` is the analog of fastfetch: the logo of the system on
@@ -167,7 +179,7 @@ M   M  Arch         xtensa-esp32
        Volume       5828 of 5832 KB
        Uptime       12 s, 4 task(s)
        Modules      12, 0 problem(s)
-       Shell        32 command(s)
+       Shell        33 command(s)
 ```
 
 ### The WiFi station
@@ -209,16 +221,18 @@ The whole list of checks runs locally, before a push:
 make ci          # build, tests, sanitizers, smoke test, integrity
 ```
 
-It builds the firmware for the ESP32 (ESP-IDF v5.3), runs the unit tests and
-the sanitizers, the smoke test of the device and the integrity of the
+It builds the host code, runs the unit tests and the same tests under the
+sanitizers, the smoke test of the simulator and the integrity of the
 repository: the headers of the images, the partition table against
-`partitions.csv`, the git objects and the formatting of the sources.
+`partitions.csv`, the git objects, the hygiene of the sources and their
+formatting. The firmware is not part of `make ci`: it needs ESP-IDF, so it is
+built separately with `make idf-build`.
 
 The same list runs in the cloud: every push to `mainline` and
 `release_candidate` and every pull request to `mainline` runs the tests,
 the same tests under valgrind, the sanitizers, the smoke test and the
 integrity of the repository, and builds the firmware for the ESP32 — the
-firmware is on the run as an artifact. A fresh checkout has no `dist/`, so
+firmware is an artifact of the run. A fresh checkout has no `dist/`, so
 the job that built the firmware runs the integrity check again with the
 bundle: the sums, the headers of the images, the partition table.
 
@@ -232,8 +246,17 @@ about the commits. The tag with a dash (`v0.2.0-pre`) is a pre-release.
 ```
 Micro_OS/
 ├── components/
-│   ├── kernel/         portable kernel: boot, log, panic, version, tasks, sched
+│   ├── kernel/         portable kernel: boot, log, panic, tasks, sched, vfs, kmm, ksys
 │   ├── board/          hardware description
+│   ├── drivers/        display, input, buzzer, LED, IMU, RTC, battery, mic
+│   ├── kshell/         the command interpreter and the built-in commands
+│   ├── mfs/            MicroFS on flash and its VFS adapter
+│   ├── procfs/         the virtual /proc
+│   ├── devfs/          the virtual /dev
+│   ├── graphics/       the console on the TFT
+│   ├── font/           the 5x7 font of the screen
+│   ├── telnet/         the shell over the air on port 23
+│   ├── libc/           a libc subset over the syscall ABI
 │   ├── wifi/           the WiFi station: the portable core and the radio
 │   └── port_esp32/     ESP32 port
 ├── ports/port_host/    Linux port + simulator
@@ -276,7 +299,7 @@ Details: [CONTRIBUTING.md](CONTRIBUTING.md).
   there is a single user on the board today.
 * **8 MB flash / 2 MB PSRAM.** There is one application and no room for an
   update over the air: the kernel takes 2 MB (`factory`) and the rest of the
-  flash (5.75 MB) belongs to MicroFS. The whole layout is in
+  flash (5.94 MB) belongs to MicroFS. The whole layout is in
   [partitions.csv](partitions.csv).
 * **The ESP32-PICO-V3-02 has no PMIC.** Power and sleep are handled by the ESP32
   itself: `HOLD` (G4) must be driven high after a wake-up or the board powers off.

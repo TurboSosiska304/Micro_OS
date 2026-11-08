@@ -3,6 +3,11 @@
 The kernel is built in phases. Every phase has a short description with the
 most important remarks, the mistakes and the bugs that cost time.
 
+> These are the **implementation** phases of the kernel — a finer breakdown than
+> the milestones in [../roadmap.md](../roadmap.md). Several documents land in one
+> roadmap phase: roadmap 3 ("memory and the syscall ABI") covers phases 3–5 here,
+> and roadmap 4 ("drivers") covers phase 6.
+
 | Phase | Description | Russian |
 |---|---|---|
 | [0](phase0.md) | The skeleton: the build, the log, the board, the boot | [ru](phase0_ru.md) |

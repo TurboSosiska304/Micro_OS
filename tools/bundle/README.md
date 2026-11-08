@@ -18,15 +18,19 @@ file system.
 
 ```
 0x00000  +--------------------+
-         | boot loader        |  4 KB
+         | reserved           |  4 KB
 0x01000  +--------------------+
+         | bootloader         |  28 KB
+0x08000  +--------------------+
          | partition table    |  4 KB
-0x02000  +--------------------+
-         | nvs                |  20 KB
 0x09000  +--------------------+
+         | nvs                |  20 KB
+0x0E000  +--------------------+
+         | unused             |  8 KB
+0x10000  +--------------------+
          | application        |  2 MB
 0x210000 +--------------------+
-         | MicroFS            |  5.75 MB
+         | MicroFS            |  5.94 MB
 0x800000 +--------------------+
 ```
 
@@ -70,7 +74,7 @@ then the shell prompt `microos>`.
 2. Runs the self test: three tasks with different priorities sleep, yield and
    wake up.
 3. Runs the hardware doctor: display, buttons, buzzer, LED/IR, IMU, RTC,
-   battery, WiFi, PSRAM and flash are checked one by one.
+   battery, WiFi, telnet, PSRAM and flash are checked one by one.
 4. Starts the shell.
 
 ## Notes
