@@ -1,4 +1,7 @@
 # --- ESP-IDF ---
+# A local ESP-IDF checkout normally lives next to the project root
+# (e.g. ../esp-idf); ignored here in case it is ever cloned inside.
+esp-idf/
 build/
 build-host/
 build-*/
