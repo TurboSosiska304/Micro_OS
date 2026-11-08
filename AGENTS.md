@@ -44,6 +44,7 @@ Corollaries:
 | `components/kshell/` | command interpreter and the built-in commands (`kshell_files.c`, `kshell_memtest.c`, `kshell_mfetch.c`) |
 | `components/init/` | the init process: the scripts of `/etc/init.d`, each in a task of its own |
 | `components/config/` | the configuration of `/etc`, persisted in the NVS |
+| `components/net/` | the HTTP client and the clock of NTP |
 | `components/mfs/` | MicroFS on flash (DATA/META/INFO sections) + VFS adapter `mfs_vfs.c` |
 | `components/procfs/`, `components/devfs/` | virtual filesystems |
 | `components/graphics/`, `components/font/` | console on the TFT, 5x7 font, framebuffer drawing |
@@ -204,8 +205,11 @@ version.
 
 Open items from `docs/roadmap.md`:
 
-* Phase 5: HTTP client + NTP on top of the RTC, demo applications (sensor
-  logger, IR remote, clock, weather station).
-* After the first release: RTC alarm + deep-sleep wake, `execve` and a program
-  format, per-file mode bits/owners in MicroFS, `drv_ir`, microphone driver,
-  MQTT client, factory reset.
+* Phase 5: the demo applications (sensor logger, IR remote, clock, weather
+  station); HTTP and NTP are done.
+* Phase 7: `execve` and a format of the programs, per-file mode bits and
+  owners, a real `fork()` with its own address space.
+* Phase 8: NTP at the boot with a time zone in `/etc`, an HTTP server, MQTT,
+  OTA (the flash has to be repartitioned first).
+* Phase 9: the RTC alarm and deep sleep, the microphone, `drv_ir`, a factory
+  reset, the enclosure modes.

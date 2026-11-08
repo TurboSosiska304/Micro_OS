@@ -159,35 +159,71 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [x] Telnet on port 23: the shell over the air, beside the UART and the
       display — no authentication, the local network only, and
       `telnet off` closes it
-* [ ] HTTP client, NTP based on the RTC
+* [x] HTTP client, NTP based on the RTC — `http get <url>` prints the status
+      and the body of the answer, `ntp [server]` takes the time from the
+      server and writes it into the RTC (the time is UTC)
 * [ ] Applications: sensor logger, IR remote, clock, weather station
 
 ## Phase 6 - Release
 
+### The release of a version
+
+The release is a checklist of its own, and every step is green today:
+
+1. the version of the kernel is `KERNEL_VERSION_*` in
+   `components/kernel/include/kernel/config.h`;
+2. `make ci`, `make idf-build` and `make bundle` are green on the machine of
+   the release;
+3. the tag `vX.Y.Z` is pushed — a dash instead of the dot before the number
+   of the candidate (`vX.Y.Z-pre`) makes a pre-release;
+4. Actions repeat the tests, build the firmware and check the version of the
+   kernel against the tag (`--expect-version`);
+5. the release carries `dist/` — the binaries, their sums and `flash.sh` —
+   and the notes of the commits;
+6. the bundle of the release is flashed onto the board once, and the self
+   test and the doctor report are read.
+
 * [x] Autobuild of the release candidate (GitHub Actions): the firmware and
       the integrity check (the workflows of the repository live on
       `mainline`)
-* [n] OTA updates (`app0`/`app1`), rollback after a failed boot (no space
-      in the flash for a second image)
-* [n] Enclosure/display modes: "clock", "remote", "logger" (not needed)
 * [x] Release process, tags, changelog: a tag `v*` runs the tests, builds
       the firmware in Actions, checks the version of the kernel against the
       tag and makes the release with the bundle and the notes about the
-      commits; a tag with a dash (`v0.2.0-pre`) is a pre-release
+      commits
+* [x] The bundle: `make bundle` collects the binaries, their sums and
+      `flash.sh` into `dist/`, and the integrity check reads the headers,
+      the partition table and the sums of the images
 
-## After the first release
+### Not in the first release
 
-Deferred, not forgotten:
+* [n] OTA updates (`app0`/`app1`), rollback after a failed boot — no space
+      in the flash for a second image, the partition table has to change
+
+## Phase 7 - Programs and protection (planned)
+
+* [ ] `execve` and a format of the programs: the loader, the first program
+      in `/bin`, `PATH`
+* [ ] per-file permissions: the mode bits and the owners in MicroFS
+* [ ] `fork()` with an address space of its own: our own context switch on
+      top of FreeRTOS (ADR 0002)
+* [ ] the syscall table as the only door between a program and the kernel:
+      every argument checked at the edge
+
+## Phase 8 - The network and the updates (planned)
+
+* [ ] NTP at the boot and a time zone in `/etc` (the clock of the board is
+      UTC today)
+* [ ] an HTTP server: the report of `mfetch` and the settings as a page
+* [ ] MQTT client for the sensors
+* [ ] OTA: two application slots and a rollback after a failed boot, once
+      the flash is repartitioned
+
+## Phase 9 - The wearable (planned)
 
 * [ ] RTC alarm: the wake of the board from deep sleep — the alarm
-      registers of the BM8563 and the EXT1 input of the ESP32 (moved
-      out of phase 4)
-* [ ] `execve`: it needs a format of the programs
-* [ ] Per-file permissions: mode bits and owners in MicroFS (today the model
-      is one user and the access a descriptor was opened with, see the
-      permission model of phase 3)
-* [ ] Microphone (SPM1423, I2S) and `drv_mic` — a simple sound/noise detector
-* [ ] MQTT client (HTTP and NTP stay in phase 5)
-* [ ] Settings reset, `factory reset`
+      registers of the BM8563 and the EXT1 input of the ESP32
+* [ ] microphone (SPM1423, I2S) and `drv_mic` — a simple sound/noise detector
 * [ ] `drv_ir`: transmit and receive over the pin G19 it shares with the red
       LED (the driver does not exist yet)
+* [ ] `factory reset` and the reset of the settings
+* [ ] enclosure/display modes: "clock", "remote", "logger"

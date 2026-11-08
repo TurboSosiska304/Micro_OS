@@ -142,6 +142,15 @@ config sync        # restore the missing files, save the files of /etc
 config             # list the store
 ```
 
+### HTTP and the clock
+
+```bash
+# from the shell of the board:
+http get http://10.10.10.1/   # the status and the body of the answer
+ntp                           # pool.ntp.org, the time goes into the RTC (UTC)
+ntp time.google.com           # another server
+```
+
 ## 5. Overrides
 
 | Variable / argument | Default | Meaning |

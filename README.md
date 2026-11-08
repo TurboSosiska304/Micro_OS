@@ -23,9 +23,12 @@ top of FreeRTOS (which owns both ESP32 cores), with a 200 mAh battery and a
 | 4 | Drivers: the WiFi station, the TFT console, input, sensors | done |
 | 5 | init, configuration, HTTP/NTP, applications | in progress |
 | 6 | Release, documentation | in progress |
+| 7 | Programs and protection: execve, permissions, a real fork | planned |
+| 8 | The network and the updates: HTTP server, MQTT, OTA | planned |
+| 9 | The wearable: deep sleep, microphone, IR, enclosure modes | planned |
 
-Phase 5 is partly done: the WiFi station and telnet (the shell over the air)
-work, the init daemons, the `/etc` configuration, HTTP/NTP and the demo
+Phase 5 is partly done: the init daemons, the `/etc` configuration, HTTP/NTP,
+the WiFi station and telnet (the shell over the air) work; the demo
 applications are still ahead. Phase 6 has the release process and the cloud
 build; OTA is not possible with the current flash layout.
 
@@ -190,7 +193,7 @@ commands:
 | `modules`, `memtest`, `i2c` | the doctor, the memory test, the I2C scan |
 | `date`, `battery`, `beep`, `led`, `input`, `display` | the drivers: clock, charge, buzzer, LED, buttons, panel |
 | `config` | the configuration of `/etc` and its copy in the NVS |
-| `wifi`, `telnet` | the network: the station and the shell over the air |
+| `wifi`, `telnet`, `http`, `ntp` | the network: the station, the shell over the air, a page, the clock |
 | `mfetch`, `mfetch color` | the report about the system with the logo (like fastfetch) |
 | `echo`, `sleep`, `clear`, `reboot` | the usual suspects |
 
@@ -228,7 +231,7 @@ M   M  Arch         xtensa-esp32
        Volume       5828 of 5832 KB
        Uptime       12 s, 4 task(s)
        Modules      12, 0 problem(s)
-       Shell        34 command(s)
+       Shell        36 command(s)
 ```
 
 ### The WiFi station
@@ -252,6 +255,27 @@ saved network: home
 
 The decision about the shape of the driver is recorded in
 [docs/adr/0003-wifi-driver.md](docs/adr/0003-wifi-driver.md).
+
+### HTTP and the clock
+
+The board speaks HTTP and takes its time from NTP. The client reads the
+answer into a small buffer — it is a console, not a browser — and `ntp`
+writes the time of the server into the RTC, in UTC:
+
+```
+microos> http get http://10.10.10.1/
+HTTP 200, 256 byte(s)
+<!DOCTYPE html>
+...
+microos> ntp
+ntp: 2026-11-08 21:59:01 UTC
+microos> date
+2026-11-08 21:59:01
+```
+
+Only `http://` is spoken: the board has no TLS, so `https://` is refused with
+a word about it. Every socket waits five seconds, so a network that went away
+answers an error instead of holding the console.
 
 ### Ready to flash binaries
 
@@ -301,6 +325,7 @@ Micro_OS/
 │   ├── kshell/         the command interpreter and the built-in commands
 │   ├── init/           the init process: the scripts of /etc/init.d
 │   ├── config/         the configuration of /etc, persisted in the NVS
+│   ├── net/            the HTTP client and the clock of NTP
 │   ├── mfs/            MicroFS on flash and its VFS adapter
 │   ├── procfs/         the virtual /proc
 │   ├── devfs/          the virtual /dev
