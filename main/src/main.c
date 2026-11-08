@@ -18,6 +18,7 @@
 #include "kernel/version.h"
 #include "devfs/devfs.h"
 #include "graphics/tft_console.h"
+#include "init/initd.h"
 #include "mfs/mfs.h"
 #include "mfs/mfs_flash.h"
 #include "procfs/procfs.h"
@@ -197,6 +198,24 @@ static void init_task(void *arg)
     }
 
     kmod_report();
+
+    /*
+     * The commands of the shell have to exist before a script names one:
+     * the shell registers them when it starts, and the scripts of the init
+     * process run before it.
+     */
+    if (kshell_init() != KSHELL_OK) {
+        kwarn("init: not every command of the shell is registered");
+    }
+
+    /*
+     * The scripts of /etc/init.d are the daemons of the board: each one
+     * runs in a task of its own, so a service that never returns does not
+     * hold the init process.
+     */
+    if (initd_run(INITD_DIR) < 0) {
+        kwarn("init: the scripts of %s did not run", INITD_DIR);
+    }
 
     /* And finally it starts the shell. */
     if (task_create("shell", shell_task, NULL, TASK_PRIO_DEFAULT) == NULL) {
