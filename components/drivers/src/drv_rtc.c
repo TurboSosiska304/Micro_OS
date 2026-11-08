@@ -120,6 +120,35 @@ static const struct kmod s_rtc_module = {
  * it is read back from the chip, so the line is what the clock really
  * holds and not what was asked of it.
  */
+/*
+ * Write a moment into the chip: the seven registers in one transaction, and
+ * the read back so that `s_now` is what the clock really holds.
+ */
+int drv_rtc_set_time(const struct rtc_datetime *dt)
+{
+    uint8_t raw[7];
+
+    if (dt == NULL || !s_present) {
+        return -1;
+    }
+
+    if (!rtc_datetime_in_range(dt)) {
+        return -2;
+    }
+
+    rtc_datetime_encode(dt, raw);
+
+    if (drv_i2c_write(I2C_BM8563_ADDR, BM_REG_SEC, raw, sizeof(raw)) != 0) {
+        return -3;
+    }
+
+    if (drv_i2c_read(I2C_BM8563_ADDR, BM_REG_SEC, raw, sizeof(raw)) == 0) {
+        rtc_datetime_decode(raw, &s_now);
+    }
+
+    return 0;
+}
+
 static int cmd_date(int argc, char **argv)
 {
     char buf[48];
@@ -131,7 +160,6 @@ static int cmd_date(int argc, char **argv)
 
     if (argc == 4 && strcmp(argv[1], "set") == 0) {
         struct rtc_datetime dt;
-        uint8_t raw[7];
 
         memset(&dt, 0, sizeof(dt));
 
@@ -150,15 +178,9 @@ static int cmd_date(int argc, char **argv)
             return KSHELL_ERROR;
         }
 
-        rtc_datetime_encode(&dt, raw);
-
-        if (drv_i2c_write(I2C_BM8563_ADDR, BM_REG_SEC, raw, sizeof(raw)) != 0) {
+        if (drv_rtc_set_time(&dt) != 0) {
             kshell_printf("date set: the clock did not take the time\n");
             return KSHELL_ERROR;
-        }
-
-        if (drv_i2c_read(I2C_BM8563_ADDR, BM_REG_SEC, raw, sizeof(raw)) == 0) {
-            rtc_datetime_decode(raw, &s_now);
         }
 
         kshell_printf("%s\n", rtc_line(buf, sizeof(buf)));
