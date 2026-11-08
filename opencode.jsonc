@@ -1,0 +1,30 @@
+{
+  // Project-local configuration for Micro OS. Applies only to this directory
+  // (and its subdirectories), not to other projects.
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      // Serena: semantic code navigation for large C/C++ code bases through
+      // clangd (symbols, references, call hierarchy) instead of reading whole
+      // files. Project settings live in .serena/project.yml.
+      "serena": {
+        "type": "local",
+        "command": [
+          "/home/nik/.local/bin/serena",
+          "start-mcp-server",
+          "--context", "codex",
+          "--agent-interface", "tools",
+          "--project-from-cwd",
+          "--enable-web-dashboard", "False",
+          "--log-level", "WARNING"
+        ],
+        "cwd": ".",
+        "timeout": {
+          "startup": 120000,
+          "catalog": 60000,
+          "execution": 600000
+        }
+      }
+    }
+  }
+}
