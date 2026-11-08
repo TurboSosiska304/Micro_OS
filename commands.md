@@ -116,6 +116,19 @@ tools/console.py /dev/ttyACM0 20 --reset --send "modules"
 tools/stream_console.py                   # interactive console, Ctrl+Q to leave
 ```
 
+### Daemons at boot
+
+Every file of `/etc/init.d` is a script of the init process: one shell command
+per line, `#` starts a comment, and each script runs in a task of its own. The
+directory is created at the boot when it is missing.
+
+```bash
+# from the shell of the board:
+mkdir /etc/init.d
+write /etc/init.d/clock date
+reboot
+```
+
 ## 5. Overrides
 
 | Variable / argument | Default | Meaning |

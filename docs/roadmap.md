@@ -149,7 +149,9 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 
 ## Phase 5 - Services and applications
 
-* [ ] Init process: starting daemons from `/etc/init.d`
+* [x] Init process: starting daemons from `/etc/init.d` — a script is a list
+      of shell commands, one per line, and every script runs in a task of its
+      own
 * [ ] Configuration from `/etc`, persisted in NVS
 * [x] WiFi: the station joins the network of the last time on its own
 * [x] Telnet on port 23: the shell over the air, beside the UART and the

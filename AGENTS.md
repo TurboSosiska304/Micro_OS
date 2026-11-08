@@ -42,6 +42,7 @@ Corollaries:
 | `components/board/` | board description (SoC, flash, PSRAM, pins) |
 | `components/drivers/` | display (ST7789v2), input, buzzer, led, imu, rtc, battery, mic + `Kconfig` |
 | `components/kshell/` | command interpreter and the built-in commands (`kshell_files.c`, `kshell_memtest.c`, `kshell_mfetch.c`) |
+| `components/init/` | the init process: the scripts of `/etc/init.d`, each in a task of its own |
 | `components/mfs/` | MicroFS on flash (DATA/META/INFO sections) + VFS adapter `mfs_vfs.c` |
 | `components/procfs/`, `components/devfs/` | virtual filesystems |
 | `components/graphics/`, `components/font/` | console on the TFT, 5x7 font, framebuffer drawing |
@@ -202,9 +203,9 @@ version.
 
 Open items from `docs/roadmap.md`:
 
-* Phase 5: init starting daemons from `/etc/init.d`, configuration from `/etc`
-  persisted in NVS, HTTP client + NTP on top of the RTC, demo applications
-  (sensor logger, IR remote, clock, weather station).
+* Phase 5: configuration from `/etc` persisted in NVS, HTTP client + NTP on
+  top of the RTC, demo applications (sensor logger, IR remote, clock, weather
+  station).
 * After the first release: RTC alarm + deep-sleep wake, `execve` and a program
   format, per-file mode bits/owners in MicroFS, `drv_ir`, microphone driver,
   MQTT client, factory reset.

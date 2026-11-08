@@ -142,6 +142,23 @@ module health report:
 without a backup battery), `fail` does not work and `skip` is not implemented
 yet. The command `modules` repeats the check at any time.
 
+### The init scripts
+
+The init process treats every file of `/etc/init.d` as a daemon of the board:
+a script is a list of shell commands, one per line, empty lines and lines that
+start with `#` are skipped, and each script runs in a task of its own — a
+service that never returns does not hold the boot. The directory is created at
+the boot when it is missing.
+
+```
+microos> mkdir /etc/init.d
+microos> write /etc/init.d/clock date
+microos> reboot
+```
+
+The script above runs `date` at every boot. A command that fails is reported in
+the log (`dmesg`) and does not stop the rest of the script.
+
 ### The shell
 
 The init process starts the shell, which speaks a small subset of the Linux
@@ -250,6 +267,7 @@ Micro_OS/
 │   ├── board/          hardware description
 │   ├── drivers/        display, input, buzzer, LED, IMU, RTC, battery, mic
 │   ├── kshell/         the command interpreter and the built-in commands
+│   ├── init/           the init process: the scripts of /etc/init.d
 │   ├── mfs/            MicroFS on flash and its VFS adapter
 │   ├── procfs/         the virtual /proc
 │   ├── devfs/          the virtual /dev
