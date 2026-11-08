@@ -194,6 +194,18 @@ commands:
 | `mfetch`, `mfetch color` | the report about the system with the logo (like fastfetch) |
 | `echo`, `sleep`, `clear`, `reboot` | the usual suspects |
 
+The listing `ls` draws the tree of a directory: the branches show one level
+below the path, a slash marks a directory, and the filesystems mounted below a
+directory appear in it beside its own entries — that is why `/proc` and `/dev`
+are in the root.
+
+```
+microos> ls /etc
+/etc
+|-- setting
+`-- init.d/
+```
+
 The command `mfetch` is the analog of fastfetch: the logo of the system on
 the left and a short report about the board on the right — the version and
 the build, the hardware, the memory with the blocks that live in it, the
