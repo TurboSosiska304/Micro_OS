@@ -7,6 +7,8 @@
  * just like the init process of Linux.
  */
 #include "board/board.h"
+#include "config/config.h"
+#include "config/config_nvs.h"
 #include "drivers/drivers.h"
 #include "kernel/boot.h"
 #include "kernel/kmod.h"
@@ -171,6 +173,8 @@ static int write_boot_log(void)
 static void init_task(void *arg)
 {
     struct task *self = task_self();
+    int restored;
+    int saved;
 
     K_UNUSED(arg);
 
@@ -198,6 +202,35 @@ static void init_task(void *arg)
     }
 
     kmod_report();
+
+    /*
+     * The configuration from /etc: the NVS keeps the copy that survives a
+     * restart and a formatted volume, and the boot brings the files back.
+     * The task of the kernel has the stack for this, the boot task of the
+     * IDF is too small for the buffers of the walk.
+     */
+    if (config_nvs_register() == 0) {
+        restored = config_restore(CONFIG_DIR);
+        saved = config_persist(CONFIG_DIR);
+
+        if (restored < 0) {
+            kwarn("init: the configuration cannot be restored (rc=%d)", restored);
+        } else if (restored > 0) {
+            kinfo("init: %d configuration file(s) restored from the NVS", restored);
+        }
+
+        if (saved < 0) {
+            kwarn("init: the configuration cannot be saved (rc=%d)", saved);
+        } else if (saved > 0) {
+            kinfo("init: %d configuration file(s) saved to the NVS", saved);
+        }
+    } else {
+        kwarn("init: the configuration has no store");
+    }
+
+    if (config_register() != 0) {
+        kwarn("init: the config command is not registered");
+    }
 
     /*
      * The commands of the shell have to exist before a script names one:
