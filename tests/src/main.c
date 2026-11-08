@@ -46,6 +46,7 @@ static void run_tests(void *arg)
     test_kshell();
     test_initd();
     test_config();
+    test_net();
     test_boot();
     test_wifi();
 

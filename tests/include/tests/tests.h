@@ -30,6 +30,7 @@ void test_libc(void);
 void test_kshell(void);
 void test_initd(void);
 void test_config(void);
+void test_net(void);
 void test_wifi(void);
 
 #endif /* MICRO_OS_TESTS_H */

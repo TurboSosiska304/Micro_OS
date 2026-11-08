@@ -23,6 +23,7 @@
 #include "init/initd.h"
 #include "mfs/mfs.h"
 #include "mfs/mfs_flash.h"
+#include "net/net_esp32.h"
 #include "procfs/procfs.h"
 #include "kshell/kshell.h"
 #include "port_esp32.h"
@@ -50,7 +51,12 @@ static int drivers_subsys_init(void)
     }
 
     /* The shell over the air: beside the drivers, not among them. */
-    return telnet_register();
+    if (telnet_register() != 0) {
+        return -1;
+    }
+
+    /* The network services: the HTTP client and the clock of NTP. */
+    return net_register();
 }
 
 /*
