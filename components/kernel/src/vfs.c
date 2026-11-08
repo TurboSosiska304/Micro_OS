@@ -293,6 +293,47 @@ int vfs_mkdir(const char *path)
     return rc;
 }
 
+int vfs_mkdir_p(const char *path)
+{
+    char buffer[VFS_PATH_MAX];
+    k_size_t len;
+    k_size_t i;
+    int rc;
+
+    if (path == NULL) {
+        g_last_error = -1;
+        return -1;
+    }
+
+    len = strlen(path);
+    if (len == 0 || len >= sizeof(buffer)) {
+        g_last_error = -1;
+        return -1;
+    }
+
+    memcpy(buffer, path, len + 1);
+
+    for (i = 1; i <= len; i++) {
+        char saved;
+
+        if (buffer[i] != '/' && buffer[i] != '\0') {
+            continue;
+        }
+
+        saved = buffer[i];
+        buffer[i] = '\0';
+        rc = vfs_mkdir(buffer);
+        buffer[i] = saved;
+
+        if (rc != 0 && rc != -3) {
+            g_last_error = rc;
+            return rc;
+        }
+    }
+
+    return 0;
+}
+
 int vfs_statfs(const char *path, struct vfs_statfs *out)
 {
     const struct mount *m = resolve(path, NULL);

@@ -120,6 +120,26 @@ static void test_directories(void)
     teardown();
 }
 
+static void test_mkdir_p(void)
+{
+    struct vfs_stat stat;
+
+    ktest_begin("vfs: a directory and its parents are created at once");
+
+    setup();
+
+    KT_CHECK_INT_EQ(vfs_mkdir_p("/etc/init.d"), 0);
+    KT_CHECK_INT_EQ(vfs_stat("/etc", &stat), 0);
+    KT_CHECK_INT_EQ(stat.type, 2); /* a directory */
+    KT_CHECK_INT_EQ(vfs_stat("/etc/init.d", &stat), 0);
+    KT_CHECK_INT_EQ(stat.type, 2);
+
+    /* A directory that is already there is not an error. */
+    KT_CHECK_INT_EQ(vfs_mkdir_p("/etc/init.d"), 0);
+
+    teardown();
+}
+
 static void test_statfs(void)
 {
     struct vfs_statfs stat;
@@ -142,5 +162,6 @@ void test_vfs(void)
     test_mount();
     test_file_operations();
     test_directories();
+    test_mkdir_p();
     test_statfs();
 }

@@ -99,6 +99,12 @@ int vfs_close(struct vfs_file *file);
 int vfs_list(const char *path, struct vfs_dirent *out, k_size_t max, k_size_t *count);
 int vfs_stat(const char *path, struct vfs_stat *out);
 int vfs_mkdir(const char *path);
+
+/*
+ * Create a directory and every parent of it: /etc/init.d needs /etc first.
+ * A directory that is already there is not an error.
+ */
+int vfs_mkdir_p(const char *path);
 int vfs_unlink(const char *path);
 int vfs_statfs(const char *path, struct vfs_statfs *out);
 

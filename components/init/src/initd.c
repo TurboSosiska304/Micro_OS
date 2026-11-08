@@ -46,50 +46,6 @@ static int run_line(char *line)
     return kshell_execute(start);
 }
 
-/*
- * Create the directory and every parent of it: /etc/init.d needs /etc
- * first, and a fresh volume has neither of them.
- */
-static int ensure_dir(const char *dir)
-{
-    char path[VFS_PATH_MAX];
-    k_size_t len;
-    k_size_t i;
-    int rc;
-
-    if (dir == NULL) {
-        return -1;
-    }
-
-    len = strlen(dir);
-    if (len == 0 || len >= sizeof(path)) {
-        return -1;
-    }
-
-    memcpy(path, dir, len + 1);
-
-    for (i = 1; i <= len; i++) {
-        char saved;
-
-        if (path[i] != '/' && path[i] != '\0') {
-            continue;
-        }
-
-        saved = path[i];
-        path[i] = '\0';
-
-        rc = vfs_mkdir(path);
-        if (rc != 0 && rc != -3) {
-            path[i] = saved;
-            return rc;
-        }
-
-        path[i] = saved;
-    }
-
-    return 0;
-}
-
 int initd_run_script(const char *path)
 {
     struct vfs_file file;
@@ -226,7 +182,7 @@ int initd_run(const char *dir)
         return -1;
     }
 
-    rc = ensure_dir(dir);
+    rc = vfs_mkdir_p(dir);
     if (rc != 0) {
         kwarn("init: cannot create the directory %s (rc=%d)", dir, rc);
         return rc;
