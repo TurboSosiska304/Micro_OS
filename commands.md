@@ -129,6 +129,19 @@ write /etc/init.d/clock date
 reboot
 ```
 
+### Configuration
+
+The files of `/etc` are the configuration; the NVS keeps the copy that
+survives a restart and `mkfs -y`. The boot restores the missing files and
+saves the ones it finds; the file wins when the two disagree.
+
+```bash
+# from the shell of the board:
+write /etc/setting hello
+config sync        # restore the missing files, save the files of /etc
+config             # list the store
+```
+
 ## 5. Overrides
 
 | Variable / argument | Default | Meaning |

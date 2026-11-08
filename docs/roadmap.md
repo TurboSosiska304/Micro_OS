@@ -152,7 +152,9 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [x] Init process: starting daemons from `/etc/init.d` — a script is a list
       of shell commands, one per line, and every script runs in a task of its
       own
-* [ ] Configuration from `/etc`, persisted in NVS
+* [x] Configuration from `/etc`, persisted in NVS — a file of `/etc` is a
+      key of the configuration, the NVS keeps the copy that survives a
+      restart and a formatted volume, and `config sync` saves the edits
 * [x] WiFi: the station joins the network of the last time on its own
 * [x] Telnet on port 23: the shell over the air, beside the UART and the
       display — no authentication, the local network only, and

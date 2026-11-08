@@ -108,7 +108,7 @@ recorded in [ADR 0002](adr/0002-scheduler-substrate.md).
 The goal is "everything is a file":
 
 ```
-/            root (in-RAM FS: /etc, /bin, /dev, /tmp, /proc)
+/            root (MicroFS on the flash: /etc, /log, ...)
 /proc        virtual FS: version, uptime, meminfo, tasks, self/
 /dev         devices: tty0 (console), null, input (buttons A/B/C)
 /sys         (later) driver parameters
@@ -116,6 +116,12 @@ The goal is "everything is a file":
 
 Implementation: `inode` -> `dentry` -> `file_operations` (open/read/write/ioctl),
 as in Linux, but with a flat dentry list inside a single binary tree.
+
+The configuration lives in the files of `/etc`: a file name is the key and the
+content is the value. The NVS keeps a copy of every file, so `mkfs -y` does not
+take the settings away — the init process restores the missing files at the
+boot and saves the ones it finds, and the file wins when the two disagree (see
+`components/config`).
 
 ### Who may work with the filesystem at the same time
 

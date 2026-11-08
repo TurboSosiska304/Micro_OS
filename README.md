@@ -159,6 +159,25 @@ microos> reboot
 The script above runs `date` at every boot. A command that fails is reported in
 the log (`dmesg`) and does not stop the rest of the script.
 
+### The configuration
+
+The files of `/etc` are the configuration of the board: the name of a file is
+the key, its content is the value. The NVS keeps a copy, so the settings survive
+not only a restart but also `mkfs -y`: at the boot the init process writes back
+every key that `/etc` lost and saves the files it finds. When the two disagree
+the file wins — a person edits `/etc`, the store follows.
+
+```
+microos> write /etc/setting hello
+microos> config sync
+config: 0 file(s) restored, 1 saved
+microos> config
+setting=hello
+```
+
+`config` lists the store, `config sync` restores the missing files and saves
+the files of `/etc` in one go.
+
 ### The shell
 
 The init process starts the shell, which speaks a small subset of the Linux
@@ -170,6 +189,7 @@ commands:
 | `ls`, `cat`, `write`, `mkdir`, `rm`, `cd`, `pwd`, `df`, `mount`, `mkfs` | the filesystem of the board |
 | `modules`, `memtest`, `i2c` | the doctor, the memory test, the I2C scan |
 | `date`, `battery`, `beep`, `led`, `input`, `display` | the drivers: clock, charge, buzzer, LED, buttons, panel |
+| `config` | the configuration of `/etc` and its copy in the NVS |
 | `wifi`, `telnet` | the network: the station and the shell over the air |
 | `mfetch`, `mfetch color` | the report about the system with the logo (like fastfetch) |
 | `echo`, `sleep`, `clear`, `reboot` | the usual suspects |
@@ -196,7 +216,7 @@ M   M  Arch         xtensa-esp32
        Volume       5828 of 5832 KB
        Uptime       12 s, 4 task(s)
        Modules      12, 0 problem(s)
-       Shell        33 command(s)
+       Shell        34 command(s)
 ```
 
 ### The WiFi station
@@ -268,6 +288,7 @@ Micro_OS/
 │   ├── drivers/        display, input, buzzer, LED, IMU, RTC, battery, mic
 │   ├── kshell/         the command interpreter and the built-in commands
 │   ├── init/           the init process: the scripts of /etc/init.d
+│   ├── config/         the configuration of /etc, persisted in the NVS
 │   ├── mfs/            MicroFS on flash and its VFS adapter
 │   ├── procfs/         the virtual /proc
 │   ├── devfs/          the virtual /dev
