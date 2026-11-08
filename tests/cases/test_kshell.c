@@ -4,8 +4,13 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "devfs/devfs.h"
 #include "kernel/version.h"
+#include "kernel/vfs.h"
 #include "kshell/kshell.h"
+#include "mfs/mfs.h"
+#include "mfs/mfs_ram_device.h"
+#include "mfs/mfs_vfs.h"
 #include "port_host.h"
 
 static int g_argc;
@@ -158,9 +163,84 @@ static void test_mfetch(void)
     KT_CHECK(strstr(buf, "\033[") != NULL);
 }
 
-void test_kshell(void)
+#define LS_TEST_BLOCKS 128
+
+static struct mfs_ram_device g_ls_volume;
+static struct mfs_device g_ls_device;
+
+static void ls_setup(void)
 {
-    /* The built in commands are registered by the shell itself. */
+    if (mfs_ram_init(&g_ls_volume, LS_TEST_BLOCKS) != 0) {
+        return;
+    }
+
+    mfs_ram_device(&g_ls_volume, &g_ls_device);
+    mfs_format(&g_ls_device, 32);
+    mfs_mount(&g_ls_device);
+    mfs_vfs_register("/");
+}
+
+static void ls_teardown(void)
+{
+    vfs_umount("/");
+    mfs_unmount();
+    mfs_ram_free(&g_ls_volume);
+}
+
+/*
+ * The listing is a tree: the branches of the level below, the slash of a
+ * directory, and the mounts of the root beside the files of the volume.
+ */
+static void test_ls(void)
+{
+    struct vfs_file file;
+    static k_u8_t data[VFS_FILE_DATA_SIZE];
+    char buf[2048];
+    size_t used;
+    FILE *sink;
+
+    ktest_begin("kshell: ls draws the tree of a directory");
+
+    ls_setup();
+    KT_CHECK_INT_EQ(vfs_mkdir("/etc"), 0);
+    KT_CHECK_INT_EQ(vfs_mkdir("/etc/init.d"), 0);
+    KT_CHECK_INT_EQ(vfs_open("/etc/hello", VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, data),
+                    0);
+    KT_CHECK_INT_EQ(vfs_write(&file, "hi", 2), 2);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    KT_CHECK_INT_EQ(devfs_register("/dev"), 0);
+
+    sink = tmpfile();
+    KT_CHECK(sink != NULL);
+    if (sink == NULL) {
+        vfs_umount("/dev");
+        ls_teardown();
+        return;
+    }
+
+    port_host_set_sink(sink);
+    KT_CHECK_INT_EQ(kshell_execute("ls /"), KSHELL_OK);
+
+    rewind(sink);
+    used = fread(buf, 1, sizeof(buf) - 1, sink);
+    buf[used] = '\0';
+
+    port_host_set_sink(NULL);
+
+    /* The root, the branches, the files, and the mount point of /dev. */
+    KT_CHECK(strstr(buf, "/\n") != NULL);
+    KT_CHECK(strstr(buf, "|-- ") != NULL);
+    KT_CHECK(strstr(buf, "etc/") != NULL);
+    KT_CHECK(strstr(buf, "init.d/") != NULL);
+    KT_CHECK(strstr(buf, "hello") != NULL);
+    KT_CHECK(strstr(buf, "dev/") != NULL);
+
+    vfs_umount("/dev");
+    ls_teardown();
+}
+
+void test_kshell(void)
+{ /* The built in commands are registered by the shell itself. */
     KT_CHECK_INT_EQ(kshell_init(), KSHELL_OK);
 
     test_execute();
@@ -168,4 +248,5 @@ void test_kshell(void)
     test_registry();
     test_memtest();
     test_mfetch();
+    test_ls();
 }
