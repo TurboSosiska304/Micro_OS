@@ -197,7 +197,7 @@ The release is a checklist of its own, and every step is green today:
 ### Not in the first release
 
 * [n] OTA updates (`app0`/`app1`), rollback after a failed boot — no space
-      in the flash for a second image, the partition table has to change
+      in the flash for a second image, the partition table has to change ##Not feasible!!!!
 
 ## Phase 7 - Programs and protection (planned)
 
