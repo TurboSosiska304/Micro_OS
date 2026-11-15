@@ -101,10 +101,13 @@ is found.
 
 Requirements: `cmake`, `ninja` (make targets use `-G Ninja`), `gcc`, `python3`;
 ESP-IDF brings its own toolchain and Python env. On this machine ESP-IDF v5.3
-lives in `/home/nik/Projects/opencode/esp-idf` and its env is
+lives in `/home/nik/drives/HDD/Micro_OS_and_other/esp-idf` and its env is
 `~/.espressif/python_env/idf5.3_py3.14_env`. The device build writes
 `build/compile_commands.json`; the repo root has a `compile_commands.json`
 symlink to it so clangd (and Serena) resolve symbols with the real target flags.
+A checkout that moved to a new path has to be registered once — `install.sh
+esp32` does it — otherwise `export.sh` asks for the toolchains of the chips
+nobody builds.
 
 ## Code conventions
 
