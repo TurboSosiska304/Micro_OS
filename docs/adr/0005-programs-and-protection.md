@@ -28,7 +28,7 @@ the port.
 An executable is a flat image with a small header (`kernel/exec.h`):
 
 ```
-magic "MOX1", version, flags
+magic "MOX1" (the bytes; the little-endian word is 0x31584F4D), version, flags
 entry offset, text size, data size, bss size
 ```
 
