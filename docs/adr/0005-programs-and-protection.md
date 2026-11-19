@@ -78,7 +78,29 @@ pretend: the placeholder stays on the board, and the address space of its own
 is the next step of the x86-64 port (page tables per task, copy on write),
 not a change of the generic kernel. The syscall keeps its number.
 
-### 5. The syscall table is the only door
+### 5. `fork()`: the ABI in the kernel, the mechanism in the port
+
+The number, the answer (the pid in the parent, 0 in the child) and the
+waiting are the contract of the kernel - they do not change per machine. What
+happens under the call is the business of the port, because it is the port
+that owns the address space:
+
+* the board, without an MMU, can only share the memory of the parent and
+  re-enter its program: the child is a task that starts at the entry of the
+  parent, and `KERNEL_NOMMU` says so;
+* a port with an MMU (the x86-64 one, once its paging is done) copies the
+  page tables of the parent, marks both copies read-only and copies a page on
+  the first write - the child then continues at the instruction after the
+  call, as POSIX promises.
+
+So the kernel keeps one implementation of the *shape* (`sys_fork` decides the
+pid, the parent relations and the waiting) and asks the port for the
+*substance*: copy the context of the caller (`k_port_fork_copy()`, 0 when the
+caller is the child, the pid of the child in the parent, -1 when the machine
+cannot). Today only the first behaviour exists; the second is the milestone
+of the x86-64 paging.
+
+### 6. The syscall table is the only door
 
 With programs that the kernel did not compile, every argument is checked at
 the edge: a pointer must be inside the memory the caller may touch, a length
