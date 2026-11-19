@@ -37,6 +37,33 @@ static void print_banner(const struct kernel_boot_config *cfg)
     klog(K_LOG_LEVEL_INFO, "board: %s — %s", cfg->board ? cfg->board : KERNEL_BOARD_NAME,
          cfg->board_desc ? cfg->board_desc : KERNEL_BOARD_DESC);
     klog(K_LOG_LEVEL_INFO, "arch: %s, compiler: %s", kernel_arch(), kernel_compiler());
+    klog(K_LOG_LEVEL_INFO, "port: %s, contract %u.%u", k_port_name(), k_port_api_major(),
+         k_port_api_minor());
+}
+
+/*
+ * The port and the kernel have to agree about the meaning of the contract
+ * (kernel/port/info.h). A major mismatch is a pair that was not built
+ * together, and the only honest thing to do is to say so and stop: the
+ * calls that follow would have the wrong meaning and would fail far away
+ * from the real cause. A minor mismatch is a port older than the kernel:
+ * the calls it knows work, the newer ones it does not have - the linker
+ * says that before this code runs, so it is only a warning here.
+ */
+static void check_port_contract(void)
+{
+    unsigned major = k_port_api_major();
+    unsigned minor = k_port_api_minor();
+
+    if (major != KERNEL_PORT_API_VERSION_MAJOR) {
+        KERNEL_PANIC("port '%s': contract %u.%u, the kernel speaks %u.%u", k_port_name(), major,
+                     minor, KERNEL_PORT_API_VERSION_MAJOR, KERNEL_PORT_API_VERSION_MINOR);
+    }
+
+    if (minor < KERNEL_PORT_API_VERSION_MINOR) {
+        kwarn("port '%s': contract %u.%u is older than %u.%u", k_port_name(), major, minor,
+              KERNEL_PORT_API_VERSION_MAJOR, KERNEL_PORT_API_VERSION_MINOR);
+    }
 }
 
 /*
@@ -72,6 +99,7 @@ int kernel_boot(const struct kernel_boot_config *cfg)
     klog_init(KERNEL_LOG_DEFAULT_LEVEL);
     g_booted_subsys = 0;
 
+    check_port_contract();
     print_banner(cfg);
 
     /* The built-in subsystems come first, they have the lowest level. */

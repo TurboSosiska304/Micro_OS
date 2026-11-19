@@ -114,6 +114,63 @@ void k_port_exit_critical(void)
     portEXIT_CRITICAL(&s_lock);
 }
 
+/*
+ * The recursive mutex of FreeRTOS: it counts how many times the task that
+ * owns it has taken it, and it sleeps the others instead of spinning. The
+ * structure stays opaque to the kernel, which only sees a handle.
+ */
+struct k_port_mutex {
+    SemaphoreHandle_t handle;
+};
+
+k_port_mutex_t *k_port_mutex_create(void)
+{
+    k_port_mutex_t *mutex = calloc(1, sizeof(*mutex));
+
+    if (mutex == NULL) {
+        return NULL;
+    }
+
+    mutex->handle = xSemaphoreCreateRecursiveMutex();
+    if (mutex->handle == NULL) {
+        free(mutex);
+        return NULL;
+    }
+
+    return mutex;
+}
+
+void k_port_mutex_destroy(k_port_mutex_t *mutex)
+{
+    if (mutex == NULL) {
+        return;
+    }
+
+    if (mutex->handle != NULL) {
+        vSemaphoreDelete(mutex->handle);
+    }
+
+    free(mutex);
+}
+
+int k_port_mutex_lock(k_port_mutex_t *mutex)
+{
+    if (mutex == NULL || mutex->handle == NULL) {
+        return -1;
+    }
+
+    return xSemaphoreTakeRecursive(mutex->handle, portMAX_DELAY) == pdTRUE ? 0 : -1;
+}
+
+int k_port_mutex_unlock(k_port_mutex_t *mutex)
+{
+    if (mutex == NULL || mutex->handle == NULL) {
+        return -1;
+    }
+
+    return xSemaphoreGiveRecursive(mutex->handle) == pdTRUE ? 0 : -1;
+}
+
 void k_port_halt(void)
 {
     for (;;) {
@@ -134,6 +191,27 @@ const char *k_port_name(void)
 const char *k_port_arch(void)
 {
     return "xtensa-esp32";
+}
+
+/*
+ * The contract this port was written for. The assert turns a header that
+ * grew (or changed its mind) into a build error instead of a call with the
+ * wrong meaning, the way vermagic does for a module of Linux.
+ */
+#define PORT_API_MAJOR 1u
+#define PORT_API_MINOR 1u
+
+_Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
+               "port_esp32 does not speak the contract of this kernel");
+
+unsigned k_port_api_major(void)
+{
+    return PORT_API_MAJOR;
+}
+
+unsigned k_port_api_minor(void)
+{
+    return PORT_API_MINOR;
 }
 
 /* --- console --- */
@@ -164,6 +242,18 @@ int k_port_console_getchar(void)
     int rc = uart_read_bytes(CONFIG_ESP_CONSOLE_UART_NUM, &c, 1, portMAX_DELAY);
 
     if (rc != 1) {
+        return -1;
+    }
+
+    return (int)c;
+}
+
+int k_port_console_poll(void)
+{
+    uint8_t c = 0;
+
+    /* A zero wait: the driver answers at once, with 0 when nothing waits. */
+    if (uart_read_bytes(CONFIG_ESP_CONSOLE_UART_NUM, &c, 1, 0) != 1) {
         return -1;
     }
 
