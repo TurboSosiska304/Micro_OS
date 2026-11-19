@@ -28,7 +28,7 @@
 #define CORPUS_MAX 8192
 
 static struct mfs_ram_device g_volume;
-static struct mfs_device g_device;
+static struct k_blockdev g_device;
 static char g_text[CORPUS_MAX];
 static k_size_t g_text_len;
 

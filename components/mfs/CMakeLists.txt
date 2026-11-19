@@ -4,13 +4,14 @@ set(MICRO_OS_MFS_SRCS
     "src/mfs.c"
     "src/mfs_ram_device.c"
     "src/mfs_vfs.c"
+    "src/mfs_vfs_mount.c"
 )
 
 if(ESP_PLATFORM)
     idf_component_register(
-        SRCS ${MICRO_OS_MFS_SRCS} "src/mfs_flash.c"
+        SRCS ${MICRO_OS_MFS_SRCS}
         INCLUDE_DIRS "include"
-        REQUIRES kernel esp_partition
+        REQUIRES kernel
     )
 
     # The discipline of the host build: the sources of the project are

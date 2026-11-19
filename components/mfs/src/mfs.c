@@ -12,7 +12,7 @@
  */
 static struct {
     bool mounted;
-    struct mfs_device dev;
+    const struct k_blockdev *dev;
     struct mfs_superblock sb;
     k_u32_t bitmap_blocks;  /* the blocks of the bitmap of the free blocks */
     k_u32_t inode_blocks;   /* the blocks of the table of the inodes */
@@ -89,13 +89,18 @@ static k_u32_t crc32(const void *data, k_size_t size)
 
 /* --- the low level access to the volume --- */
 
+/*
+ * The filesystem asks for one block at a time, and the block is one sector
+ * of the device: the volume of MicroFS is laid out in sectors of the
+ * medium, it has no notion of a request that spans several of them.
+ */
 static int dev_read(k_u32_t block, void *buf)
 {
-    if (block >= g.sb.total_blocks) {
+    if (g.dev == NULL || block >= g.sb.total_blocks) {
         return MFS_EIO;
     }
 
-    if (g.dev.read_block(g.dev.ctx, block, buf) != 0) {
+    if (g.dev->ops->read(g.dev->ctx, block, buf, 1) != 0) {
         return MFS_EIO;
     }
 
@@ -104,15 +109,25 @@ static int dev_read(k_u32_t block, void *buf)
 
 static int dev_write(k_u32_t block, const void *buf)
 {
-    if (block >= g.sb.total_blocks) {
+    if (g.dev == NULL || block >= g.sb.total_blocks) {
         return MFS_EIO;
     }
 
-    if (g.dev.write_block(g.dev.ctx, block, buf) != 0) {
+    if (g.dev->ops->write(g.dev->ctx, block, buf, 1) != 0) {
         return MFS_EIO;
     }
 
     return MFS_OK;
+}
+
+/* The device hands the changes to the medium, when it holds them back. */
+static int dev_sync(void)
+{
+    if (g.dev == NULL || g.dev->ops->sync == NULL) {
+        return MFS_OK;
+    }
+
+    return (g.dev->ops->sync(g.dev->ctx) == 0) ? MFS_OK : MFS_EIO;
 }
 
 /* --- the bitmap of the free blocks --- */
@@ -837,7 +852,7 @@ static int path_parent(const char *path, char *dir, k_size_t dir_size, char *nam
 
 /* --- the public interface --- */
 
-static int mfs_format_locked(struct mfs_device *dev, k_u32_t max_records)
+static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
 {
     struct mfs_superblock sb;
     struct mfs_inode inode;
@@ -851,11 +866,16 @@ static int mfs_format_locked(struct mfs_device *dev, k_u32_t max_records)
     k_u32_t attempt;
     k_u32_t i;
 
-    if (dev == NULL || dev->read_block == NULL || dev->write_block == NULL) {
+    if (dev == NULL || dev->ops == NULL || dev->ops->read == NULL || dev->ops->write == NULL) {
         return MFS_EINVAL;
     }
 
-    if (dev->blocks < 16) {
+    /* The volume is written in blocks of MFS_BLOCK_SIZE, see mfs_mount(). */
+    if (dev->sector_size != MFS_BLOCK_SIZE) {
+        return MFS_EINVAL;
+    }
+
+    if (dev->sectors < 16) {
         return MFS_EINVAL;
     }
 
@@ -863,7 +883,7 @@ static int mfs_format_locked(struct mfs_device *dev, k_u32_t max_records)
         max_records = 64;
     }
 
-    total = dev->blocks;
+    total = dev->sectors;
 
     /*
      * The INFO section starts at the border of an erase sector of the
@@ -941,7 +961,7 @@ static int mfs_format_locked(struct mfs_device *dev, k_u32_t max_records)
 
     /* The state is needed by the helpers below. */
     memset(&g, 0, sizeof(g));
-    g.dev = *dev;
+    g.dev = dev;
     g.sb = sb;
     g.bitmap_blocks = bitmap_blocks;
     g.inode_blocks = inode_blocks;
@@ -968,7 +988,7 @@ static int mfs_format_locked(struct mfs_device *dev, k_u32_t max_records)
 
         memset(empty, 0, sizeof(empty));
         for (i = 0; i < sb.meta_blocks - bitmap_blocks; i++) {
-            if (dev->write_block(dev->ctx, sb.meta_start + bitmap_blocks + i, empty) != 0) {
+            if (dev_write(sb.meta_start + bitmap_blocks + i, empty) != MFS_OK) {
                 return MFS_EIO;
             }
         }
@@ -984,7 +1004,7 @@ static int mfs_format_locked(struct mfs_device *dev, k_u32_t max_records)
         block[2] = (k_u8_t)(MFS_NEXT_NONE >> 16);
         block[3] = (k_u8_t)(MFS_NEXT_NONE >> 24);
 
-        if (dev->write_block(dev->ctx, 0, block) != 0) {
+        if (dev_write(0, block) != MFS_OK) {
             return MFS_EIO;
         }
     }
@@ -1017,38 +1037,48 @@ static int mfs_format_locked(struct mfs_device *dev, k_u32_t max_records)
         memset(info_block, 0, sizeof(info_block));
         memcpy(info_block, &sb, sizeof(sb));
 
-        if (dev->write_block(dev->ctx, sb.info_start + sb.info_blocks - 1u, info_block) != 0) {
+        if (dev_write(sb.info_start + sb.info_blocks - 1u, info_block) != MFS_OK) {
             return MFS_EIO;
         }
     }
 
     /*
-     * The changes have to reach the device: the flash keeps the data in a
-     * sector buffer until the filesystem says that it is done.
+     * The changes have to reach the device: a medium that holds its writes
+     * back until it is told that the filesystem is done keeps the new
+     * volume in a buffer otherwise.
      */
-    if (g.dev.sync != NULL) {
-        return g.dev.sync(g.dev.ctx);
-    }
-
-    return MFS_OK;
+    return dev_sync();
 }
 
-static int mfs_mount_locked(struct mfs_device *dev)
+static int mfs_mount_locked(const struct k_blockdev *dev)
 {
     struct mfs_superblock sb;
     int rc;
 
-    if (dev == NULL || dev->read_block == NULL) {
+    if (dev == NULL || dev->ops == NULL || dev->ops->read == NULL) {
+        return MFS_EINVAL;
+    }
+
+    /*
+     * The volume is laid out in blocks of MFS_BLOCK_SIZE and the device is
+     * asked for one sector per block. A device of another sector size would
+     * still "work" for a while - and then read a block at the wrong offset,
+     * so the mismatch is refused here, at the door.
+     */
+    if (dev->sector_size != MFS_BLOCK_SIZE) {
+        kerror("mfs: the device '%s' has sectors of %u bytes, %u are needed",
+               dev->name != NULL ? dev->name : "?", (unsigned)dev->sector_size,
+               (unsigned)MFS_BLOCK_SIZE);
         return MFS_EINVAL;
     }
 
     memset(&g, 0, sizeof(g));
-    g.dev = *dev;
+    g.dev = dev;
 
     {
         k_u8_t info_block[MFS_BLOCK_SIZE];
 
-        rc = dev->read_block(dev->ctx, dev->blocks - 1u, info_block);
+        rc = dev->ops->read(dev->ctx, dev->sectors - 1u, info_block, 1);
         if (rc != 0) {
             return MFS_EIO;
         }
@@ -1064,7 +1094,7 @@ static int mfs_mount_locked(struct mfs_device *dev)
         return MFS_EINVAL;
     }
 
-    if (sb.total_blocks != dev->blocks) {
+    if (sb.total_blocks != dev->sectors) {
         return MFS_EINVAL;
     }
 
@@ -1152,13 +1182,8 @@ static int mfs_sync_locked(void)
         g.bitmap_dirty = false;
     }
 
-    /* The changes have to reach the device: the flash keeps the data in a
-     * sector buffer until the filesystem says that it is done. */
-    if (g.dev.sync != NULL) {
-        return g.dev.sync(g.dev.ctx);
-    }
-
-    return MFS_OK;
+    /* A device that holds its writes back learns that the work is done. */
+    return dev_sync();
 }
 
 bool mfs_is_mounted(void)
@@ -1833,7 +1858,7 @@ static int mfs_list_locked(const char *path, struct mfs_dirent *out, k_size_t ma
  * for the whole of their work: the volume is one piece of state and
  * two tasks that touch it together corrupt it.
  */
-int mfs_format(struct mfs_device *dev, k_u32_t max_records)
+int mfs_format(const struct k_blockdev *dev, k_u32_t max_records)
 {
     int rc;
 
@@ -1844,7 +1869,7 @@ int mfs_format(struct mfs_device *dev, k_u32_t max_records)
     return rc;
 }
 
-int mfs_mount(struct mfs_device *dev)
+int mfs_mount(const struct k_blockdev *dev)
 {
     int rc;
 
