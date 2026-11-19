@@ -63,6 +63,27 @@ Commits 11-13 are the only ones that do not build the firmware on their
 own: they move the backends before the wiring commit 15. Review them as
 one change.
 
+### The work after the map
+
+The review itself produced commits; they are part of it.
+
+| # | Commit | What it is, and what to look at |
+|---|---|---|
+| 27 | `f8c535e` | this document |
+| 28 | `93261f6` | the race detector build (`make test-tsan`), outside `make ci` |
+| 29 | `5bf12db` | the five defects the detector found: the ring of `klog`, the table of the console sinks, `task_exit` after the zombie, the waiters, the state of a task (`task_state_of`) |
+| 30-32 | `ed1d0de`, `484e0b0`, `217106b` | the x86-64 port: IDT/PIC/PIT, the context switch and the scheduler, the shell on COM1 |
+| 33 | `4e46ee0` | the roadmap and the review document after the two |
+| 34 | `63ec82d` | the flash audit's F1, F3, F5: a volume is not formatted on a guess, a damaged header is refused, the tail of the partition is dropped |
+| 35 | `eefc56c` | the eight findings of the audit in this document |
+| 36-39 | `3d8686a`...`51c3840` | the documents brought to one state (three builds, the applications out, the translations say that they lag, the porting guide counts the fourth port) |
+
+The first of these is the reason the review started early: the race detector
+and the audit of the flash were run before the review, found five defects of
+the kernel and three ways to lose the data of the user, and they are fixed
+with tests passing. A reviewer should still read the diffs: the fixes are
+small, but they change locking in the middle of the kernel.
+
 ## Risk register, most expensive first
 
 1. **`flash0` and the erase of the flash** (`5ac08e6`,
