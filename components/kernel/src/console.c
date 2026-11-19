@@ -16,7 +16,9 @@ static k_console_sink_fn g_sinks[K_CONSOLE_SINK_MAX];
 
 void k_console_set_sink(k_console_sink_fn sink)
 {
+    k_port_enter_critical();
     g_sinks[0] = sink;
+    k_port_exit_critical();
 }
 
 int k_console_add_sink(k_console_sink_fn sink)
@@ -27,18 +29,43 @@ int k_console_add_sink(k_console_sink_fn sink)
         return -1;
     }
 
+    k_port_enter_critical();
+
     for (i = 1; i < K_CONSOLE_SINK_MAX; i++) {
         if (g_sinks[i] == NULL) {
             g_sinks[i] = sink;
+            k_port_exit_critical();
             return 0;
         }
     }
 
+    k_port_exit_critical();
+
     return -1;
+}
+
+void k_console_remove_sink(k_console_sink_fn sink)
+{
+    k_size_t i;
+
+    if (sink == NULL) {
+        return;
+    }
+
+    k_port_enter_critical();
+
+    for (i = 0; i < K_CONSOLE_SINK_MAX; i++) {
+        if (g_sinks[i] == sink) {
+            g_sinks[i] = NULL;
+        }
+    }
+
+    k_port_exit_critical();
 }
 
 void k_console_write(const char *data, k_size_t len)
 {
+    k_console_sink_fn sinks[K_CONSOLE_SINK_MAX];
     k_size_t i;
 
     if (data == NULL || len == 0) {
@@ -47,9 +74,22 @@ void k_console_write(const char *data, k_size_t len)
 
     k_port_write(data, len);
 
+    /*
+     * The table is read under the critical section and the sinks are called
+     * outside it: a sink may be slow (a socket of telnet) and the kernel
+     * logs from inside its own sections, where a blocking call cannot go.
+     */
+    k_port_enter_critical();
+
     for (i = 0; i < K_CONSOLE_SINK_MAX; i++) {
-        if (g_sinks[i] != NULL) {
-            g_sinks[i](data, len);
+        sinks[i] = g_sinks[i];
+    }
+
+    k_port_exit_critical();
+
+    for (i = 0; i < K_CONSOLE_SINK_MAX; i++) {
+        if (sinks[i] != NULL) {
+            sinks[i](data, len);
         }
     }
 }

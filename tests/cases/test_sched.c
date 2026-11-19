@@ -9,8 +9,8 @@
 #include "kernel/task.h"
 #include "port_host.h"
 
-static volatile int g_blocked;
-static volatile int g_release;
+static int g_blocked;
+static int g_release;
 
 static void blocker(void *arg)
 {
@@ -23,7 +23,7 @@ static void blocker(void *arg)
     }
 
     k_sched_block(self);
-    g_blocked++;
+    (void)__atomic_add_fetch(&g_blocked, 1, __ATOMIC_SEQ_CST);
 
     /*
      * Stay blocked until the test unblocks us. The port level sleep is used
@@ -31,7 +31,8 @@ static void blocker(void *arg)
      * a task waiting for an event keeps the BLOCKED state (in Linux such a
      * task would sit in a wait queue).
      */
-    while (self->state == TASK_STATE_BLOCKED && !g_release) {
+    while (task_state_of(self) == TASK_STATE_BLOCKED &&
+           !__atomic_load_n(&g_release, __ATOMIC_SEQ_CST)) {
         k_port_task_sleep_ms(1);
     }
 }
@@ -46,8 +47,8 @@ static void test_ready_queue(void)
     ktest_begin("sched: the highest priority ready task is picked");
 
     port_host_set_sink(tmpfile());
-    g_blocked = 0;
-    g_release = 0;
+    (void)__atomic_store_n(&g_blocked, 0, __ATOMIC_SEQ_CST);
+    (void)__atomic_store_n(&g_release, 0, __ATOMIC_SEQ_CST);
 
     low = task_create("low", blocker, NULL, 10);
     high = task_create("high", blocker, NULL, 12);
@@ -55,7 +56,7 @@ static void test_ready_queue(void)
     KT_CHECK(low != NULL);
     KT_CHECK(high != NULL);
 
-    while (g_blocked < 2 && waited < 2000) {
+    while (__atomic_load_n(&g_blocked, __ATOMIC_SEQ_CST) < 2 && waited < 2000) {
         k_sched_sleep_ms(1);
         waited++;
     }
@@ -79,7 +80,7 @@ static void test_ready_queue(void)
 
     /* Let the tasks finish and free their slots, they must not stay in the
      * run queue of the following tests. */
-    g_release = 1;
+    (void)__atomic_store_n(&g_release, 1, __ATOMIC_SEQ_CST);
     k_sched_sleep_ms(50);
 
     if (low != NULL) {

@@ -1,4 +1,5 @@
 #include "kernel/log.h"
+#include "kernel/port.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -84,6 +85,15 @@ void klog(k_log_level_t level, const char *fmt, ...)
     /* Truncated output is still useful, but make sure we are NUL terminated. */
     buf[KERNEL_LOG_LINE_MAX - 1] = '\0';
 
+    bool capture;
+
+    /*
+     * The ring is written by every task that logs, and the kernel logs from
+     * inside its own critical sections - so the sections here are recursive
+     * and the kernel dies not wake up with a half written line.
+     */
+    k_port_enter_critical();
+
     /* Retain the message for /proc/kmsg. */
     memcpy(g_lines[g_next], buf, KERNEL_LOG_LINE_MAX);
     g_next = (g_next + 1) % KERNEL_LOG_LINES;
@@ -91,7 +101,9 @@ void klog(k_log_level_t level, const char *fmt, ...)
         g_count++;
     }
 
-    if (g_capture_on) {
+    capture = g_capture_on;
+
+    if (capture) {
         /* The log of the boot is collected, not printed. */
         k_size_t len = str_len(buf);
 
@@ -101,6 +113,11 @@ void klog(k_log_level_t level, const char *fmt, ...)
             g_capture[g_capture_size++] = '\n';
             g_capture[g_capture_size] = '\0';
         }
+    }
+
+    k_port_exit_critical();
+
+    if (capture) {
         return;
     }
 

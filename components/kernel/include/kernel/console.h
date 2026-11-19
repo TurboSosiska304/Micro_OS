@@ -31,6 +31,13 @@ void k_console_set_sink(k_console_sink_fn sink);
  */
 int k_console_add_sink(k_console_sink_fn sink);
 
+/*
+ * Take a sink away. The slot it holds is free again, so a client of telnet
+ * that goes away does not leave a dead function behind - and a test does
+ * not leave one in the system for every test that follows.
+ */
+void k_console_remove_sink(k_console_sink_fn sink);
+
 /* Print to the console: the serial port and every registered sink. */
 void k_console_write(const char *data, k_size_t len);
 

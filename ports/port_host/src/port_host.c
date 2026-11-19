@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <malloc.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <sched.h>
 #include <stdlib.h>
 #include <string.h>
@@ -523,7 +524,7 @@ struct task *k_port_task_current(void)
 /* --- time base --- */
 
 static pthread_t s_tick_thread;
-static volatile bool s_tick_running;
+static atomic_bool s_tick_running;
 
 static void *host_tick_thread(void *arg)
 {
@@ -533,7 +534,7 @@ static void *host_tick_thread(void *arg)
     ts.tv_sec = interval_ms / 1000;
     ts.tv_nsec = (interval_ms % 1000) * 1000000L;
 
-    while (s_tick_running) {
+    while (atomic_load(&s_tick_running)) {
         while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {
             /* retry */
         }
@@ -549,15 +550,15 @@ void port_host_start_tick(long interval_ms)
         interval_ms = 1;
     }
 
-    s_tick_running = true;
+    atomic_store(&s_tick_running, true);
     if (pthread_create(&s_tick_thread, NULL, host_tick_thread, (void *)(intptr_t)interval_ms) !=
         0) {
-        s_tick_running = false;
+        atomic_store(&s_tick_running, false);
     }
 }
 
 void port_host_stop_tick(void)
 {
-    s_tick_running = false;
+    atomic_store(&s_tick_running, false);
     pthread_join(s_tick_thread, NULL);
 }

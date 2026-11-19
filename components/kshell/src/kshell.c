@@ -280,7 +280,7 @@ static int cmd_ps(int argc, char **argv)
             continue;
         }
 
-        state = (t == self) ? "running" : task_state_name(t->state);
+        state = (t == self) ? "running" : task_state_name(task_state_of(t));
         kshell_printf("  %3u  %4u  %-8s  %s\n", (unsigned)t->pid, (unsigned)t->prio, state,
                       t->name);
     }

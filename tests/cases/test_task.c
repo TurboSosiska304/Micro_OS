@@ -38,7 +38,7 @@ static void wait_for_state(k_u32_t pid, task_state_t state, int timeout_ms)
 
     while (waited < timeout_ms) {
         struct task *t = task_by_pid(pid);
-        if (t != NULL && t->state == state) {
+        if (t != NULL && task_state_of(t) == state) {
             return;
         }
         k_sched_sleep_ms(1);
