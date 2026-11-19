@@ -1,0 +1,122 @@
+# ADR 0004 - The portable boundary and the contract of the port
+
+* Status: accepted
+* Date: 2026-11-19
+
+## Context
+
+ADR 0001 made the kernel portable: `components/kernel/` is plain C11, and
+everything platform specific sits behind `kernel/port.h`. That decision
+holds, and the kernel core has never included an ESP-IDF header since.
+
+An audit of the whole tree, however, showed that the boundary is only
+enforced for the kernel core itself:
+
+* seven portable components call `k_port_*` directly - the shell reads the
+  heap statistics and the console, `/proc` prints the memory of the chip,
+  `/dev/tty0` reads the console, the filesystem spins its own lock on top of
+  a critical section, telnet counts its clients the same way;
+* six portable components contain platform code inside them -
+  `mfs_flash.c` (`esp_partition`), `config_nvs.c` (`nvs_flash`),
+  `net_esp32.c` and the telnet server (`lwip`), `tft_console.c` (FreeRTOS
+  semaphore and the display driver), `wifi_esp32.c` (`esp_wifi`);
+* the host build skips `graphics`, `telnet` and the drivers, so a part of
+  the "portable" system is never executed on the host;
+* the contract itself is one header, and it has no version: a port built
+  against another generation of it fails in a way nobody names.
+
+The consequence is not that the code is wrong today. It is that "portable"
+is a habit, not a property: the next commit can quietly break it, and the
+split of the repository into a kernel and a platform (the next step after
+this ADR) would have no line to cut along.
+
+## Decision
+
+### 1. The contract is split by subject
+
+`kernel/port.h` becomes an aggregate of six headers, the way Linux keeps
+generic interfaces in `include/linux` and lets each architecture own the
+parts it implements in `arch/<arch>/include/asm`:
+
+| Header | Subject |
+|---|---|
+| `kernel/port/console.h` | bytes out, characters in (blocking and polling) |
+| `kernel/port/time.h` | monotonic time since the boot |
+| `kernel/port/mem.h` | internal heap, PSRAM, allocation |
+| `kernel/port/lock.h` | critical sections, recursive mutexes |
+| `kernel/port/power.h` | halt, reset |
+| `kernel/port/info.h` | name, architecture, contract version |
+
+A source includes the narrow header it needs; `kernel/port.h` exists for
+the code that speaks to the port as a whole (the boot, the tests).
+
+### 2. The contract has a version, checked at boot
+
+`KERNEL_PORT_API_VERSION_MAJOR/MINOR` in `kernel/port/info.h` is the
+version of the interface. Every port declares the version it was written
+for and asserts at build time that it matches the header; the boot
+sequence compares the two again and panics on a major mismatch, warns on a
+minor one. This is vermagic of Linux (`include/linux/vermagic.h`), reduced
+to what a single address space needs: a pair that was not built together
+says so at once, instead of failing far from the cause.
+
+### 3. The layering is a rule with an owner
+
+* `components/kernel/` includes `kernel/*` only. Nothing from `drivers/`,
+  `kshell/`, `board/` or `esp_*` may appear there - not even in a comment
+  that a header pulls in.
+* Upper layers (`kshell`, `init`, `procfs`, `devfs`, `mfs`, `config`, `net`,
+  `telnet`, `graphics`) never call `k_port_*`. They use the kernel API:
+  `k_sysinfo_*`, `k_console_*`, `k_mutex_*`, `k_reboot`, the VFS, `kmm`.
+* Platform code lives in `components/port_esp32/` (or another port), never
+  inside a portable component. A portable component that needs a backend
+  declares an interface in `kernel/` (`blockdev`, `kvstore`, `net`,
+  `render`) and the port implements it.
+* Drivers stay platform code. There is no universal GPIO/I2C/SPI
+  abstraction: on a board with 100 KB of SRAM the indirection would cost
+  more than it buys. The port is a kernel contract, not a HAL.
+
+### 4. The boundary is verified by the build and the checks
+
+* the host build compiles every portable component, with stub drivers;
+* `make integrity` grows checks for forbidden includes and for the closure
+  of the contract (a port must implement every declared function);
+* a "null" port (`ports/port_null`) is compiled in CI: it has no POSIX, no
+  ESP-IDF and no display, so anything that leaks a host or a chip detail
+  into portable code stops the build.
+
+## Consequences
+
+**Good**
+
+* "Portable" becomes a property that the build enforces, not a habit.
+* A new chip or board is a new port directory, not an edit in six
+  components - which is what the split into `Micro_OS_kernel` and
+  `Micro_OS_esp32` needs.
+* The contract version makes an incompatible pair of kernel and platform
+  visible at the first seconds of the boot.
+* `graphics`, `telnet`, `net` and `config` become testable on the host,
+  where the sanitizers are.
+
+**Bad**
+
+* A backend interface costs a call and, in one case, a pointer: the
+  memory budget of the board is the limit, so the interfaces are narrow.
+* The contract now has two copies of the version (kernel and port) that
+  have to be bumped together: an assertion, not a convention, keeps them
+  honest.
+* Some code moves between components; the history of those files has to be
+  followed with `git log --follow`.
+
+## Alternatives
+
+* **Keep one `port.h` and one rule "the kernel is portable"** - rejected:
+  the audit shows the rule does not survive the second component.
+* **A universal HAL over GPIO, I2C, SPI, ADC and everything** - rejected:
+  it moves the cost of the abstraction into the scarcest resource of the
+  board (internal SRAM) and makes the drivers harder to read, while the
+  portability that is actually needed is at the level of a console, a
+  block device, a socket and a frame.
+* **Kernel modules loaded at runtime (the Linux model)** - not applicable:
+  there is no MMU and no linker on the board; everything is linked into
+  one image.

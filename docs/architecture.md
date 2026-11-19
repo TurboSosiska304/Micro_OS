@@ -25,17 +25,24 @@
 ```
 
 Rule number one: **the kernel knows nothing about hardware**. Everything that
-depends on the platform sits behind the `kernel/port.h` contract:
+depends on the platform sits behind the `kernel/port.h` contract, which is
+split by subject the way Linux keeps `include/linux` apart and lets each
+architecture own its part in `arch/<arch>/include/asm`:
 
-```c
-void     k_port_write(const char *data, k_size_t len);
-k_u64_t  k_port_uptime_ms(void);
-void     k_port_enter_critical(void);
-void     k_port_exit_critical(void);
-void     k_port_halt(void);
-void     k_port_reset(void);
-const char *k_port_name(void);
-```
+| Header | Subject | Examples |
+|---|---|---|
+| `kernel/port/console.h` | bytes out, characters in | `k_port_write`, `k_port_console_getchar`, `k_port_console_poll` |
+| `kernel/port/time.h` | time since the boot | `k_port_uptime_ms`, `k_port_uptime_us` |
+| `kernel/port/mem.h` | internal heap and PSRAM | `k_port_alloc`, `k_port_heap_free` |
+| `kernel/port/lock.h` | critical sections, recursive mutexes | `k_port_enter_critical`, `k_port_mutex_lock` |
+| `kernel/port/power.h` | halt, reset | `k_port_halt`, `k_port_reset` |
+| `kernel/port/info.h` | identity and contract version | `k_port_name`, `k_port_api_major` |
+
+The version of the contract (`KERNEL_PORT_API_VERSION_MAJOR/MINOR`) is the
+vermagic of the pair: the port asserts it at build time and the boot
+sequence checks it again, so a kernel and a port that were not built
+together say so instead of failing far from the cause. See
+[ADR 0004](adr/0004-portable-boundary.md).
 
 That is exactly what allows the kernel tests to run on a laptop.
 
