@@ -26,6 +26,7 @@ static void run_tests(void *arg)
     test_log();
     test_port();
     test_blockdev();
+    test_render();
     test_task();
     test_sched();
     test_sched_queue();

@@ -131,7 +131,6 @@ static void shell_task(void *arg)
     K_UNUSED(arg);
 
     tft_console_start();
-    tft_console_register();
     kshell_set_sink(tft_console_write);
 
     kshell_run();

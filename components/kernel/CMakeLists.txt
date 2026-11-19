@@ -19,6 +19,7 @@ set(MICRO_OS_KERNEL_SRCS
     "src/net.c"
     "src/panic.c"
     "src/power.c"
+    "src/render.c"
     "src/sched.c"
     "src/sysinfo.c"
     "src/task.c"
