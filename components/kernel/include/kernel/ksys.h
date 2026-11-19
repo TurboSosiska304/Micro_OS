@@ -57,6 +57,10 @@
 /* The bits of the access: read, write, or both. */
 #define KSYS_O_ACCMODE 0x0003
 
+/* Every bit an open may carry: a flag outside this set is not of the
+ * contract, and the call is refused instead of being guessed at. */
+#define KSYS_O_ALLOWED (KSYS_O_ACCMODE | KSYS_O_CREAT | KSYS_O_TRUNC | KSYS_O_APPEND)
+
 /* The flags of the waitpid. */
 #define KSYS_WNOHANG 1 /* do not wait, answer 0 when the child is not ready */
 
@@ -64,6 +68,22 @@
 #define KSYS_SEEK_SET 0
 #define KSYS_SEEK_CUR 1
 #define KSYS_SEEK_END 2
+
+/*
+ * The longest path a call accepts, the terminator not counted: a path has
+ * to fit the buffer the VFS and every filesystem under it keep for it.
+ */
+#define KSYS_PATH_MAX (VFS_PATH_MAX - 1)
+
+/*
+ * The most bytes one call may touch. The kernel does not copy a buffer of
+ * an arbitrary length into its own memory, but it does walk it on behalf of
+ * the caller, and a number far above any buffer of the system is a mistake
+ * or an attempt to make the kernel read the memory it should not. The
+ * internal RAM of the board is about 100 KB, so 64 KB is the largest
+ * transfer that can still be a real one.
+ */
+#define KSYS_MAX_IO 65536u
 
 /*
  * The width of the arguments of a system call.

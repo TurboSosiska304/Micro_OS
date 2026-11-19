@@ -20,17 +20,88 @@
 static struct ksys_entry g_table[KSYS_COUNT];
 static k_u32_t g_registered;
 
+/* --- the checks at the edge --- */
+
+/*
+ * A path of a program is not trusted. The kernel must not walk past the end
+ * of the memory of the caller looking for the terminator, so the search is
+ * limited to the window the VFS keeps a path in: a path that does not end
+ * inside it is refused before any filesystem sees it. Every filesystem of
+ * the tree is mounted below the root, so a path that does not begin there
+ * cannot name an object at all, and NULL or the empty string is not a path.
+ */
+static int path_check(const char *path)
+{
+    k_size_t i;
+
+    if (path == NULL || path[0] != '/') {
+        return KERR_INVAL;
+    }
+
+    for (i = 1; i <= KSYS_PATH_MAX; i++) {
+        if (path[i] == '\0') {
+            return 0;
+        }
+    }
+
+    return KERR_TOOBIG;
+}
+
+/*
+ * The buffer of a call. NULL is only meaningful with a zero length, and a
+ * length above KSYS_MAX_IO cannot be a buffer of this system: the call is
+ * refused before the kernel touches a byte of it.
+ */
+static int buffer_check(ksys_arg_t buf, ksys_arg_t count)
+{
+    if (count > KSYS_MAX_IO) {
+        return KERR_TOOBIG;
+    }
+
+    if (buf == 0 && count != 0) {
+        return KERR_INVAL;
+    }
+
+    return 0;
+}
+
+/*
+ * The flags of an open. The access is one of the three modes - the pair of
+ * the bits is not a mode - and every other bit has to be a flag of the
+ * contract. A program that asks for something the kernel does not know is
+ * answered here, not by the filesystem under it.
+ */
+static int open_flags_check(ksys_arg_t flags)
+{
+    int access = (int)(flags & KSYS_O_ACCMODE);
+
+    if ((flags & ~(ksys_arg_t)KSYS_O_ALLOWED) != 0) {
+        return KERR_INVAL;
+    }
+
+    if (access != KSYS_O_RDONLY && access != KSYS_O_WRONLY && access != KSYS_O_RDWR) {
+        return KERR_INVAL;
+    }
+
+    return 0;
+}
+
 /* --- the open files of a task --- */
 
-static struct kfile *fd_get(int fd)
+static struct kfile *fd_get(ksys_arg_t fd)
 {
     struct task *self = task_self();
 
-    if (self == NULL || fd < 0 || fd >= TASK_MAX_FDS) {
+    /*
+     * The descriptor is an index of the table of the task and it arrives as
+     * a raw register: a value that does not fit the table is not a
+     * descriptor, and the cast to int must not turn one into one.
+     */
+    if (fd >= (ksys_arg_t)TASK_MAX_FDS) {
         return NULL;
     }
 
-    if (!self->files[fd].used) {
+    if (self == NULL || !self->files[fd].used) {
         return NULL;
     }
 
@@ -87,7 +158,8 @@ static k_ssize_t sys_exit(ksys_arg_t code, ksys_arg_t a1, ksys_arg_t a2, ksys_ar
 static k_ssize_t sys_read(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys_arg_t a3,
                           ksys_arg_t a4, ksys_arg_t a5)
 {
-    struct kfile *file = fd_get((int)fd);
+    struct kfile *file = fd_get(fd);
+    int rc;
 
     K_UNUSED(a3);
     K_UNUSED(a4);
@@ -107,37 +179,63 @@ static k_ssize_t sys_read(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys_
         return KERR_BADF;
     }
 
+    rc = buffer_check(buf, count);
+    if (rc != 0) {
+        return rc;
+    }
+
+    if (count == 0) {
+        /* POSIX: a request of no bytes reads nothing and is not an error. */
+        return 0;
+    }
+
     return vfs_read(&file->file, (void *)(uintptr_t)buf, count);
 }
 
 static k_ssize_t sys_write(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys_arg_t a3,
                            ksys_arg_t a4, ksys_arg_t a5)
 {
-    struct kfile *file = fd_get((int)fd);
+    struct kfile *file = fd_get(fd);
+    int rc;
 
     K_UNUSED(a3);
     K_UNUSED(a4);
     K_UNUSED(a5);
 
-    if (file == NULL) {
-        /*
-         * The descriptors 1 and 2 are the console of the system when they
-         * are not open as a file, the same way as in Linux.
-         */
-        if (fd == 1 || fd == 2) {
-            k_console_write((const char *)(uintptr_t)buf, (k_size_t)count);
-            return (k_ssize_t)count;
+    if (file != NULL) {
+        /* The descriptor remembers how it was opened: a file that was
+         * opened to be read from cannot be written to (POSIX: EBADF). */
+        if ((file->flags & KSYS_O_ACCMODE) == KSYS_O_RDONLY) {
+            return KERR_BADF;
         }
-        return KERR_BADF;
+
+        rc = buffer_check(buf, count);
+        if (rc != 0) {
+            return rc;
+        }
+
+        if (count == 0) {
+            return 0;
+        }
+
+        return vfs_write(&file->file, (const void *)(uintptr_t)buf, count);
     }
 
-    /* The descriptor remembers how it was opened: a file that was opened
-     * to be read from cannot be written to (POSIX: EBADF). */
-    if ((file->flags & KSYS_O_ACCMODE) == KSYS_O_RDONLY) {
-        return KERR_BADF;
+    /*
+     * The descriptors 1 and 2 are the console of the system when they are
+     * not open as a file, the same way as in Linux.
+     */
+    if (fd == 1 || fd == 2) {
+        rc = buffer_check(buf, count);
+        if (rc != 0) {
+            return rc;
+        }
+
+        k_console_write((const char *)(uintptr_t)buf, (k_size_t)count);
+        return (k_ssize_t)count;
     }
 
-    return vfs_write(&file->file, (const void *)(uintptr_t)buf, count);
+    return KERR_BADF;
 }
 
 static k_ssize_t sys_open(ksys_arg_t path, ksys_arg_t flags, ksys_arg_t a2, ksys_arg_t a3,
@@ -152,6 +250,18 @@ static k_ssize_t sys_open(ksys_arg_t path, ksys_arg_t flags, ksys_arg_t a2, ksys
     K_UNUSED(a3);
     K_UNUSED(a4);
     K_UNUSED(a5);
+
+    rc = path_check(name);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = open_flags_check(flags);
+    if (rc != 0) {
+        return rc;
+    }
+
+    /* the mode check lands here */
 
     fd = fd_alloc();
     if (fd < 0) {
@@ -175,7 +285,7 @@ static k_ssize_t sys_open(ksys_arg_t path, ksys_arg_t flags, ksys_arg_t a2, ksys
 static k_ssize_t sys_close(ksys_arg_t fd, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
                            ksys_arg_t a4, ksys_arg_t a5)
 {
-    struct kfile *file = fd_get((int)fd);
+    struct kfile *file = fd_get(fd);
 
     K_UNUSED(a1);
     K_UNUSED(a2);
@@ -204,14 +314,26 @@ static k_ssize_t sys_stat(ksys_arg_t path, ksys_arg_t buf, ksys_arg_t a2, ksys_a
     K_UNUSED(a4);
     K_UNUSED(a5);
 
+    rc = path_check((const char *)(uintptr_t)path);
+    if (rc != 0) {
+        return rc;
+    }
+
+    /*
+     * A program that asks for the information has to give the place for
+     * the answer: a NULL there is a mistake, not "the answer is not
+     * wanted", and the filesystem must not be asked for nothing.
+     */
+    if (buf == 0) {
+        return KERR_INVAL;
+    }
+
     rc = vfs_stat((const char *)(uintptr_t)path, &stat);
     if (rc != 0) {
         return rc;
     }
 
-    if (buf != 0) {
-        memcpy((void *)(uintptr_t)buf, &stat, sizeof(stat));
-    }
+    memcpy((void *)(uintptr_t)buf, &stat, sizeof(stat));
 
     return 0;
 }
@@ -219,7 +341,7 @@ static k_ssize_t sys_stat(ksys_arg_t path, ksys_arg_t buf, ksys_arg_t a2, ksys_a
 static k_ssize_t sys_lseek(ksys_arg_t fd, ksys_arg_t offset, ksys_arg_t whence, ksys_arg_t a3,
                            ksys_arg_t a4, ksys_arg_t a5)
 {
-    struct kfile *file = fd_get((int)fd);
+    struct kfile *file = fd_get(fd);
     k_ssize_t position;
 
     K_UNUSED(a3);
@@ -228,6 +350,15 @@ static k_ssize_t sys_lseek(ksys_arg_t fd, ksys_arg_t offset, ksys_arg_t whence, 
 
     if (file == NULL) {
         return KERR_BADF;
+    }
+
+    /*
+     * The whence is part of the signature of the call: three values, and
+     * the number arrives as a raw register, so it is compared before the
+     * cast to int can cut a wide number down to a valid one.
+     */
+    if (whence > KSYS_SEEK_END) {
+        return KERR_INVAL;
     }
 
     switch ((int)whence) {
@@ -256,11 +387,18 @@ static k_ssize_t sys_lseek(ksys_arg_t fd, ksys_arg_t offset, ksys_arg_t whence, 
 static k_ssize_t sys_unlink(ksys_arg_t path, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
                             ksys_arg_t a4, ksys_arg_t a5)
 {
+    int rc;
+
     K_UNUSED(a1);
     K_UNUSED(a2);
     K_UNUSED(a3);
     K_UNUSED(a4);
     K_UNUSED(a5);
+
+    rc = path_check((const char *)(uintptr_t)path);
+    if (rc != 0) {
+        return rc;
+    }
 
     return vfs_unlink((const char *)(uintptr_t)path);
 }
@@ -268,11 +406,18 @@ static k_ssize_t sys_unlink(ksys_arg_t path, ksys_arg_t a1, ksys_arg_t a2, ksys_
 static k_ssize_t sys_mkdir(ksys_arg_t path, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
                            ksys_arg_t a4, ksys_arg_t a5)
 {
+    int rc;
+
     K_UNUSED(a1);
     K_UNUSED(a2);
     K_UNUSED(a3);
     K_UNUSED(a4);
     K_UNUSED(a5);
+
+    rc = path_check((const char *)(uintptr_t)path);
+    if (rc != 0) {
+        return rc;
+    }
 
     return vfs_mkdir((const char *)(uintptr_t)path);
 }
@@ -280,7 +425,7 @@ static k_ssize_t sys_mkdir(ksys_arg_t path, ksys_arg_t a1, ksys_arg_t a2, ksys_a
 static k_ssize_t sys_readdir(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys_arg_t a3,
                              ksys_arg_t a4, ksys_arg_t a5)
 {
-    struct kfile *file = fd_get((int)fd);
+    struct kfile *file = fd_get(fd);
     struct vfs_dirent *out = (struct vfs_dirent *)(uintptr_t)buf;
     k_size_t max;
     k_size_t count_files = 0;
@@ -295,6 +440,19 @@ static k_ssize_t sys_readdir(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ks
     }
 
     if (out == NULL) {
+        return KERR_INVAL;
+    }
+
+    if (count > KSYS_MAX_IO) {
+        return KERR_TOOBIG;
+    }
+
+    /*
+     * The buffer is an array of the entries, not a number of bytes: a count
+     * that is not a whole number of them would let the last entry land past
+     * the end of the memory of the caller.
+     */
+    if ((count % sizeof(struct vfs_dirent)) != 0) {
         return KERR_INVAL;
     }
 
@@ -346,7 +504,13 @@ static k_ssize_t sys_getcwd(ksys_arg_t buf, ksys_arg_t size, ksys_arg_t a2, ksys
         return KERR_INVAL;
     }
 
-    if (buf != 0) {
+    /* The program has to give the place for the path and its terminator:
+     * a NULL or a zero size cannot hold even the root. */
+    if (buf == 0 || size == 0) {
+        return KERR_INVAL;
+    }
+
+    {
         k_size_t len = strlen(cwd) + 1;
 
         if (len > size) {
@@ -361,7 +525,7 @@ static k_ssize_t sys_getcwd(ksys_arg_t buf, ksys_arg_t size, ksys_arg_t a2, ksys
 static k_ssize_t sys_ioctl(ksys_arg_t fd, ksys_arg_t cmd, ksys_arg_t arg, ksys_arg_t a3,
                            ksys_arg_t a4, ksys_arg_t a5)
 {
-    struct kfile *file = fd_get((int)fd);
+    struct kfile *file = fd_get(fd);
 
     K_UNUSED(cmd);
     K_UNUSED(arg);
@@ -546,6 +710,25 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
 
     if (self == NULL) {
         return KERR_PERM;
+    }
+
+    /*
+     * The pid arrives as a raw register. A value that does not survive the
+     * round trip through int is not a pid - the cast below must not turn
+     * 2^32 + 5 into the child 5 - and only 0 and -1 mean "any child", so a
+     * third negative number is a mistake of the caller.
+     */
+    if ((ksys_arg_t)(int)pid != pid) {
+        return KERR_INVAL;
+    }
+
+    if ((int)pid < -1) {
+        return KERR_INVAL;
+    }
+
+    /* The flags of the call are one bit: the rest is not of the contract. */
+    if ((flags & ~(ksys_arg_t)KSYS_WNOHANG) != 0) {
+        return KERR_INVAL;
     }
 
     /* Look for a child that has finished. */

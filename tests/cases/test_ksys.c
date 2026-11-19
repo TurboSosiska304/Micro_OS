@@ -313,6 +313,7 @@ static void test_abi_is_stable(void)
  */
 static void test_error_codes(void)
 {
+    struct vfs_stat info;
     int fd;
 
     ktest_begin("ksys: the errors do not depend on the way of the call");
@@ -322,7 +323,7 @@ static void test_error_codes(void)
 
     /* A file that does not exist. */
     KT_CHECK_INT_EQ(ksys_open("/nosuchfile", KSYS_O_RDONLY), KERR_NOENT);
-    KT_CHECK_INT_EQ(ksys_stat("/nosuchfile", NULL), KERR_NOENT);
+    KT_CHECK_INT_EQ(ksys_stat("/nosuchfile", &info), KERR_NOENT);
     KT_CHECK_INT_EQ(ksys_unlink("/nosuchfile"), KERR_NOENT);
     KT_CHECK_INT_EQ(ksys_mkdir("/nosuchdir/sub"), KERR_NOENT);
 
@@ -541,6 +542,205 @@ static void test_values_survive(void)
     teardown();
 }
 
+/*
+ * The property: a path is checked at the edge of the system. NULL, the empty
+ * string and a path that does not begin at the root name nothing, and a path
+ * that does not end inside the window the VFS can hold is refused without the
+ * kernel reading past that window.
+ */
+static void test_path_validation(void)
+{
+    /* Not one terminator inside the window: the kernel has to stop at the
+     * end of the array, which is what the sanitizer build watches for. */
+    static char unterminated[VFS_PATH_MAX];
+    static char too_long[VFS_PATH_MAX + 1];
+    static char longest[KSYS_PATH_MAX + 1];
+    struct vfs_stat info;
+    k_size_t used = 0;
+    k_size_t i;
+
+    ktest_begin("ksys: a path is checked at the edge");
+
+    setup();
+
+    /* NULL and the empty string are not paths. */
+    KT_CHECK_INT_EQ(ksys_open(NULL, KSYS_O_RDONLY), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_open("", KSYS_O_RDONLY), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_unlink(NULL), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_mkdir(""), KERR_INVAL);
+
+    /* Every filesystem hangs below the root: a relative path names nothing. */
+    KT_CHECK_INT_EQ(ksys_open("etc/init.d", KSYS_O_RDONLY), KERR_INVAL);
+
+    /* The raw interface answers the same way, NULL included. */
+    KT_CHECK_INT_EQ(ksys_call(KSYS_OPEN, 0, KSYS_O_RDONLY, 0, 0, 0, 0), KERR_INVAL);
+
+    memset(unterminated, 'a', sizeof(unterminated));
+    unterminated[0] = '/';
+    KT_CHECK_INT_EQ(ksys_open(unterminated, KSYS_O_RDONLY), KERR_TOOBIG);
+
+    /* One byte more than the window, with the terminator outside of it. */
+    memset(too_long, 'a', sizeof(too_long));
+    too_long[0] = '/';
+    too_long[sizeof(too_long) - 1] = '\0';
+    KT_CHECK_INT_EQ(ksys_stat(too_long, &info), KERR_TOOBIG);
+
+    /* The bound itself is still a path: 127 characters are accepted, and the
+     * filesystem has the last word about what they name. */
+    longest[used++] = '/';
+    for (i = 0; i < 42; i++) {
+        longest[used++] = 'a';
+        longest[used++] = '/';
+    }
+    for (i = 0; i < 42; i++) {
+        longest[used++] = 'b';
+    }
+    longest[used] = '\0';
+    KT_CHECK_INT_EQ(used, KSYS_PATH_MAX);
+    KT_CHECK_INT_EQ(ksys_open(longest, KSYS_O_RDONLY), KERR_NOENT);
+
+    teardown();
+}
+
+/*
+ * The property: the buffer of a call is checked at the edge too. NULL is
+ * only meaningful with a zero length, a length the kernel never touches in
+ * one call is refused, and the whence of the seek is one of three values.
+ */
+static void test_buffer_validation(void)
+{
+    char buffer[8];
+    struct vfs_stat info;
+    int fd;
+
+    ktest_begin("ksys: a buffer and a length are checked at the edge");
+
+    setup();
+
+    fd = ksys_open("/edge.txt", KSYS_O_RDWR | KSYS_O_CREAT | KSYS_O_TRUNC);
+    KT_CHECK(fd >= 0);
+
+    if (fd >= 0) {
+        /* NULL with a length is not a buffer. */
+        KT_CHECK_INT_EQ(ksys_read(fd, NULL, 1), KERR_INVAL);
+        KT_CHECK_INT_EQ(ksys_write(fd, NULL, 1), KERR_INVAL);
+
+        /* The console of the system is behind the same door. */
+        KT_CHECK_INT_EQ(ksys_write(1, NULL, 1), KERR_INVAL);
+
+        /* A length no call of this system touches in one go. */
+        KT_CHECK_INT_EQ(ksys_read(fd, buffer, KSYS_MAX_IO + 1), KERR_TOOBIG);
+        KT_CHECK_INT_EQ(ksys_write(fd, buffer, KSYS_MAX_IO + 1), KERR_TOOBIG);
+
+        /* A request of no bytes is not an error and reads nothing. */
+        KT_CHECK_INT_EQ(ksys_write(fd, buffer, 0), 0);
+        KT_CHECK_INT_EQ(ksys_read(fd, buffer, 0), 0);
+        KT_CHECK_INT_EQ(ksys_read(fd, NULL, 0), 0);
+
+        /* The whence is part of the signature: three values, no more. */
+        KT_CHECK_INT_EQ(ksys_lseek(fd, 0, KSYS_SEEK_END + 1), KERR_INVAL);
+        KT_CHECK_INT_EQ(ksys_lseek(fd, 0, -1), KERR_INVAL);
+
+        /* A wide number must not be cut down to a valid whence by the cast
+         * to int; the width of the arguments belongs to the target. */
+        if (sizeof(ksys_arg_t) > sizeof(int)) {
+            KT_CHECK_INT_EQ(
+                ksys_call(KSYS_LSEEK, (ksys_arg_t)fd, 0, (ksys_arg_t)0x100000000ull, 0, 0, 0),
+                KERR_INVAL);
+        }
+
+        /* stat and getcwd need the place for the answer. */
+        KT_CHECK_INT_EQ(ksys_stat("/edge.txt", NULL), KERR_INVAL);
+        KT_CHECK_INT_EQ(ksys_getcwd(NULL, 0), KERR_INVAL);
+        KT_CHECK_INT_EQ(ksys_getcwd(buffer, 0), KERR_INVAL);
+
+        /* The valid forms are unchanged. */
+        KT_CHECK_INT_EQ(ksys_lseek(fd, 0, KSYS_SEEK_END), 0);
+        KT_CHECK_INT_EQ(ksys_stat("/edge.txt", &info), 0);
+        KT_CHECK_INT_EQ(info.type, 1); /* a file, not a directory */
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    teardown();
+}
+
+/*
+ * The property: an open with flags outside the contract is refused at the
+ * edge, before a descriptor is spent and before a filesystem is asked.
+ */
+static void test_open_flags(void)
+{
+    char data[1] = {'x'};
+    int fd;
+
+    ktest_begin("ksys: the flags of an open are the contract");
+
+    setup();
+
+    /* The bits that no flag owns. */
+    KT_CHECK_INT_EQ(ksys_open("/flags.txt", KSYS_O_RDONLY | 0x0004), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_open("/flags.txt", KSYS_O_RDONLY | 0x8000), KERR_INVAL);
+
+    /* Both access bits at once are not one of the three modes. */
+    KT_CHECK_INT_EQ(ksys_open("/flags.txt", KSYS_O_ACCMODE), KERR_INVAL);
+
+    /* The flags are checked first: the file does not exist, and the answer
+     * is still about the flags. */
+    KT_CHECK_INT_EQ(ksys_open("/no/such/file", KSYS_O_RDONLY | 0x8000), KERR_INVAL);
+
+    /* Every flag of the contract still opens a real file. */
+    fd = ksys_open("/flags.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC | KSYS_O_APPEND);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_write(fd, data, sizeof(data)), 1);
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    /* A directory is a real object but is not an open file: the filesystem
+     * keeps the last word about the object itself. */
+    KT_CHECK_INT_EQ(ksys_open("/", KSYS_O_RDONLY), KERR_ISDIR);
+
+    teardown();
+}
+
+/*
+ * The property: readdir takes whole entries. A count that is not a multiple
+ * of the size of an entry would make the filesystem write the last entry
+ * past the end of the buffer of the caller.
+ */
+static void test_readdir_validation(void)
+{
+    struct vfs_dirent entry;
+    int fd;
+
+    ktest_begin("ksys: readdir takes whole entries");
+
+    setup();
+
+    /*
+     * The arguments are checked before the filesystem is asked, so a file
+     * of this directory is enough to reach the checks: a directory cannot
+     * be opened through this ABI yet.
+     */
+    fd = ksys_open("/dir.txt", KSYS_O_RDONLY | KSYS_O_CREAT);
+    KT_CHECK(fd >= 0);
+
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_readdir(fd, NULL, sizeof(entry)), KERR_INVAL);
+        KT_CHECK_INT_EQ(ksys_readdir(fd, &entry, sizeof(entry) - 1), KERR_INVAL);
+        KT_CHECK_INT_EQ(ksys_readdir(fd, &entry, KSYS_MAX_IO + 1), KERR_TOOBIG);
+
+        /* No space for an entry is not an error: there is nothing to list. */
+        KT_CHECK_INT_EQ(ksys_readdir(fd, &entry, 0), 0);
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    /* The descriptor is checked first, as for every call on a file. */
+    KT_CHECK_INT_EQ(ksys_readdir(99, &entry, sizeof(entry)), KERR_BADF);
+
+    teardown();
+}
+
 void test_ksys(void)
 {
     test_abi_is_stable();
@@ -550,4 +750,8 @@ void test_ksys(void)
     test_access_modes();
     test_syscalls_and_vfs_agree();
     test_values_survive();
+    test_path_validation();
+    test_buffer_validation();
+    test_open_flags();
+    test_readdir_validation();
 }

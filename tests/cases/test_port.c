@@ -22,6 +22,7 @@
 
 #include "kernel/clock.h"
 #include "kernel/console.h"
+#include "kernel/exec.h"
 #include "kernel/kv.h"
 #include "kernel/lock.h"
 #include "kernel/port.h"
@@ -58,6 +59,10 @@ struct port_contract {
 
     void (*halt)(void);
     void (*reset)(void);
+
+    bool (*exec_supported)(void);
+    void *(*exec_base)(void);
+    int (*exec_enter)(const struct k_exec_image *image, char *const argv[]);
 
     const char *(*name)(void);
     const char *(*arch)(void);
@@ -108,6 +113,10 @@ static const struct port_contract s_contract = {
     .halt = k_port_halt,
     .reset = k_port_reset,
 
+    .exec_supported = k_port_exec_supported,
+    .exec_base = k_port_exec_base,
+    .exec_enter = k_port_exec_enter,
+
     .name = k_port_name,
     .arch = k_port_arch,
     .api_major = k_port_api_major,
@@ -157,6 +166,10 @@ static void check_contract_is_closed(void)
 
     KT_CHECK(s_contract.halt != NULL);
     KT_CHECK(s_contract.reset != NULL);
+
+    KT_CHECK(s_contract.exec_supported != NULL);
+    KT_CHECK(s_contract.exec_base != NULL);
+    KT_CHECK(s_contract.exec_enter != NULL);
 
     KT_CHECK(s_contract.name != NULL);
     KT_CHECK(s_contract.arch != NULL);

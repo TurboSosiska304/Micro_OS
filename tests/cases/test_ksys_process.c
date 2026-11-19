@@ -264,6 +264,48 @@ static void test_fork_posix(void)
 }
 
 /*
+ * The property: a pid and a flag that cannot name a child are refused
+ * instead of being guessed at, and the two shapes of "any child" stay
+ * valid.
+ */
+static void test_wait_validation(void)
+{
+    int status = -1;
+    int rc;
+
+    ktest_begin("ksys: a pid that makes no sense is refused");
+
+    setup();
+
+    /* Only 0 and -1 mean "any child": -2 and below name no task. */
+    KT_CHECK_INT_EQ(ksys_waitpid(-2, &status, KSYS_WNOHANG), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_waitpid(-100, &status, 0), KERR_INVAL);
+
+    /* The flags of the call are one bit. */
+    KT_CHECK_INT_EQ(ksys_waitpid(0, &status, 0x0100), KERR_INVAL);
+
+    /* A wide pid must not be cut down to a small child by the cast to int;
+     * the width of the arguments belongs to the target. */
+    if (sizeof(ksys_arg_t) > sizeof(int)) {
+        KT_CHECK_INT_EQ(
+            ksys_call(KSYS_WAITPID, (ksys_arg_t)0x100000005ull, 0, KSYS_WNOHANG, 0, 0, 0),
+            KERR_INVAL);
+    }
+
+    /* "Any child" still means any child, and there is nothing to report. */
+    rc = ksys_waitpid(-1, &status, KSYS_WNOHANG);
+    KT_CHECK(rc >= 0);
+    if (rc == 0) {
+        KT_CHECK_INT_EQ(status, -1);
+    }
+
+    rc = ksys_waitpid(0, &status, KSYS_WNOHANG);
+    KT_CHECK(rc >= 0);
+
+    teardown();
+}
+
+/*
  * The property: waiting for a child that does not exist gives an error
  * instead of hanging forever.
  */
@@ -325,5 +367,6 @@ void test_ksys_process(void)
     test_fork_numbers();
     test_fork_posix();
     test_wait_errors();
+    test_wait_validation();
     test_fork_data_is_the_same();
 }
