@@ -1,5 +1,12 @@
 /*
  * Micro OS — the display of the board.
+ *
+ * The module of the display comes up as the picture of the system: when the
+ * panel is up it registers a renderer (kernel/render.h) and the console of
+ * the shell draws through it. The commands of the panel - the turn, the
+ * inversion, the offset, the test picture - live with the driver as the
+ * `display` command, because they are properties of this glass and not of
+ * the console.
  */
 #ifndef MICRO_OS_DRIVERS_DISPLAY_H
 #define MICRO_OS_DRIVERS_DISPLAY_H

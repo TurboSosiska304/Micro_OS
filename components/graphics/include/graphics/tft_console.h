@@ -9,10 +9,11 @@
 /* Prepare the screen and start mirroring the output of the shell. */
 void tft_console_start(void);
 
-/* Register the commands of the console. */
-int tft_console_register(void);
-
-/* Draw the dialogue again. */
+/*
+ * Draw the dialogue again. The console notices a turned picture by
+ * itself; a caller that changes what is on the glass behind its back says
+ * so here.
+ */
 void tft_console_redraw(void);
 
 /* The sink of the output of the shell. */

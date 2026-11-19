@@ -30,7 +30,7 @@
 #define CORPUS_MAX 8192
 
 static struct mfs_ram_device g_volume;
-static struct mfs_device g_device;
+static struct k_blockdev g_device;
 
 /* The numbers of the corpus and the text that goes to the file. */
 static char g_text[CORPUS_MAX];

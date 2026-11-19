@@ -3,6 +3,7 @@
 
 #include <string.h>
 
+#include "kernel/net.h"
 #include "net/http.h"
 #include "net/ntp.h"
 
@@ -215,9 +216,66 @@ static void test_ntp(void)
     KT_CHECK(ntp_parse_response(packet, &seconds) != 0);
 }
 
+/*
+ * The port under the two clients, exercised for real: a server on a port of
+ * the loopback, a client of this very task, a line in both directions. The
+ * port is a fixed one and SO_REUSEADDR is the business of the port, so a
+ * session of the run before does not stand in the way.
+ */
+static void test_loopback(void)
+{
+    static const char question[] = "ping";
+    static const char answer_text[] = "pong";
+    char answer[16];
+    k_server_t *server;
+    k_socket_t *client = NULL;
+    k_socket_t *session = NULL;
+
+    ktest_begin("net: a session of the loopback carries a line both ways");
+
+    server = k_server_listen(45123);
+    KT_CHECK(server != NULL);
+    if (server == NULL) {
+        return;
+    }
+
+    client = k_socket_connect("127.0.0.1", 45123, 2000);
+    KT_CHECK(client != NULL);
+
+    /* The handshake is complete once connect() returns: the listener of the
+     * port accepts the client that is already waiting. */
+    if (client != NULL) {
+        session = k_server_accept(server, 2000);
+        KT_CHECK(session != NULL);
+    }
+
+    if (client != NULL && session != NULL) {
+        KT_CHECK_INT_EQ(k_socket_send(client, question, sizeof(question) - 1, true),
+                        (int)sizeof(question) - 1);
+        KT_CHECK_INT_EQ(k_socket_recv(session, answer, sizeof(answer)), (int)sizeof(question) - 1);
+        KT_CHECK_INT_EQ(memcmp(answer, question, sizeof(question) - 1), 0);
+
+        KT_CHECK_INT_EQ(k_socket_send(session, answer_text, sizeof(answer_text) - 1, true),
+                        (int)sizeof(answer_text) - 1);
+        KT_CHECK_INT_EQ(k_socket_recv(client, answer, sizeof(answer)),
+                        (int)sizeof(answer_text) - 1);
+        KT_CHECK_INT_EQ(memcmp(answer, answer_text, sizeof(answer_text) - 1), 0);
+    }
+
+    /* Closing a session is also the test of the close itself: the reader on
+     * the other side sees the end of it. */
+    k_socket_close(session);
+    if (client != NULL) {
+        KT_CHECK_INT_EQ(k_socket_recv(client, answer, sizeof(answer)), 0);
+    }
+    k_socket_close(client);
+    k_server_close(server);
+}
+
 void test_net(void)
 {
     test_url();
     test_get();
     test_ntp();
+    test_loopback();
 }

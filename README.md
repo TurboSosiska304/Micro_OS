@@ -21,16 +21,20 @@ top of FreeRTOS (which owns both ESP32 cores), with a 200 mAh battery and a
 | 2 | VFS, MicroFS, shell | done |
 | 3 | Syscall ABI, libc subset, memory manager (slabs) | done |
 | 4 | Drivers: the WiFi station, the TFT console, input, sensors | done |
-| 5 | init, configuration, HTTP/NTP, applications | in progress |
+| 5 | init, configuration, HTTP/NTP, telnet | done |
 | 6 | Release, documentation | in progress |
 | 7 | Programs and protection: execve, permissions, a real fork | planned |
 | 8 | The network and the updates: HTTP server, MQTT, OTA | planned |
 | 9 | The wearable: deep sleep, microphone, IR, enclosure modes | planned |
 
-Phase 5 is partly done: the init daemons, the `/etc` configuration, HTTP/NTP,
-the WiFi station and telnet (the shell over the air) work; the demo
-applications are still ahead. Phase 6 has the release process and the cloud
-build; OTA is not possible with the current flash layout.
+Phase 5 is done: the init daemons, the `/etc` configuration, HTTP/NTP, the
+WiFi station and telnet (the shell over the air) work. The demo applications
+(the logger, the clock, the weather station) are a project of their own and
+do not live in this tree: a board with 8 MB of flash has no room for a
+handful of programs nobody asked for. Phase 6 has the release process and
+the cloud build; OTA is not possible with the current flash layout.
+
+The kernel has a roadmap of its own: [docs/kernel-roadmap.md](docs/kernel-roadmap.md).
 
 See [docs/roadmap.md](docs/roadmap.md) for the full plan and
 [docs/architecture.md](docs/architecture.md) for the design.
@@ -42,14 +46,23 @@ behind a port:
 
 ```
 components/kernel/    <- plain C11, zero ESP-IDF dependencies
+kernel/port/*.h       <- the contract: console, time, memory, locks, power, store, sockets
 components/board/     <- board description
 components/port_esp32/<- ESP32 implementation of the port (ESP-IDF)
 ports/port_host/      <- Linux implementation (simulator + unit tests)
+ports/port_null/      <- no machine at all: linked in CI to prove the kernel needs nothing else
 ```
 
 Consequence: the kernel compiles and its tests run on a normal PC in seconds. The
 edit/compile/run loop does not involve flashing a device, while the firmware
 itself stays a plain ESP-IDF project.
+
+The boundary is not a promise, it is a check: `make integrity` refuses a
+platform header in the kernel, a `k_port_*` call above it, a portable component
+that the host build does not compile, and a port that leaves a function of the
+contract unimplemented. The contract has a version, and the boot compares it
+with the one the port reports (ADR 0004). A new chip is a new port directory -
+see [docs/porting.md](docs/porting.md).
 
 ## Build and run
 
@@ -219,7 +232,7 @@ itself is plain text everywhere. `mfetch color` paints the logo.
 
 ```
 microos> mfetch
-M   M  OS           MicroOS 0.2.0-pre
+M   M  OS           MicroOS 0.3.0
 MM MM  Build        Oct 26 2026 17:40:12
 M M M  Board        M5Stack StickC Plus2
 M   M  SoC          ESP32-PICO-V3-02
@@ -277,6 +290,23 @@ Only `http://` is spoken: the board has no TLS, so `https://` is refused with
 a word about it. Every socket waits five seconds, so a network that went away
 answers an error instead of holding the console.
 
+### The third machine: x86-64, bare metal
+
+The same kernel boots on an x86-64 processor with nothing under it: no
+Linux, no libc. The port is a project of its own, and the bootloader is
+part of the project (a multiboot image that switches the long mode on and
+copies the kernel).
+
+```bash
+make x86-build     # the kernel and its loader
+make x86-run       # QEMU, a serial console, the shell
+make x86-smoke     # boot it and check what it says
+```
+
+It needs `qemu-system-x86` only. The port does not depend on Limine or on
+any bootloader configuration: `ports/port_x86_64/loader32.S` is the whole
+of the boot.
+
 ### Ready to flash binaries
 
 The `dist/` folder holds the built firmware: the application, the bootloader,
@@ -295,11 +325,15 @@ make ci          # build, tests, sanitizers, smoke test, integrity
 ```
 
 It builds the host code, runs the unit tests and the same tests under the
-sanitizers, the smoke test of the simulator and the integrity of the
+address and UB sanitizers, the smoke test of the simulator and the integrity of the
 repository: the headers of the images, the partition table against
 `partitions.csv`, the git objects, the hygiene of the sources and their
 formatting. The firmware is not part of `make ci`: it needs ESP-IDF, so it is
 built separately with `make idf-build`.
+
+Two checks are one command each, because they need a tool of their own:
+`make test-tsan` (the race detector) and `make x86-smoke` (QEMU). Both run in
+the cloud together with the rest.
 
 The same list runs in the cloud: every push to `mainline` and
 `release_candidate` and every pull request to `mainline` runs the tests,
@@ -312,7 +346,7 @@ bundle: the sums, the headers of the images, the partition table.
 A tag `v*` makes a release: the tests, the build, the integrity check
 against the version of the tag (`--expect-version`), and a GitHub release
 with the bundle — the binaries, their sums and `flash.sh` — and the notes
-about the commits. The tag with a dash (`v0.2.0-pre`) is a pre-release.
+about the commits. The tag with a dash (`vX.Y.Z-pre`) is a pre-release.
 
 ## Repository layout
 
@@ -336,10 +370,12 @@ Micro_OS/
 │   ├── wifi/           the WiFi station: the portable core and the radio
 │   └── port_esp32/     ESP32 port
 ├── ports/port_host/    Linux port + simulator
+├── ports/port_x86_64/  a QEMU x86-64 machine, bare metal (its own loader)
+├── ports/port_null/    no machine at all: linked by the checks
 ├── main/               firmware entry point (app_main)
 ├── tests/              unit tests (own minimal framework, no dependencies)
 ├── tools/              console, bundle, the smoke test, the integrity check
-├── docs/               architecture, roadmap, hardware notes, ADRs
+├── docs/               architecture, roadmaps, porting, review, hardware notes, ADRs
 ├── CMakeLists.txt      dual mode build: ESP-IDF or host
 └── Makefile            convenience targets: test, sim, ci, format, idf-*
 ```
@@ -369,6 +405,10 @@ Details: [CONTRIBUTING.md](CONTRIBUTING.md).
   is not a copy of the parent at the point of the call. A real `fork()` (an
   address space of its own, copy on write) is planned for right after the
   first release.
+* **The x86-64 port is young.** It boots on a bare processor, takes interrupts,
+  switches tasks and runs the shell over COM1, but there is no filesystem or
+  network on it yet, and its disk is the memory. It is the proof that the
+  kernel is portable, not a machine for work.
 * **One user, no file owners or mode bits.** A file's protection is the
   access its descriptor was opened with - read, write, or both - enforced by
   the kernel with `EBADF`. Owners and `chmod` wait for the first release:

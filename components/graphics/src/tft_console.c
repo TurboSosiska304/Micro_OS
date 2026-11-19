@@ -11,32 +11,39 @@
  * does not stand still in the middle of the dialogue: redrawing after
  * every line costs a clear of the panel and a flush of its whole memory
  * (64 KB over the SPI) per line.
+ *
+ * The panel itself is not this file's business: the console draws through
+ * the renderer of the kernel (kernel/render.h) and the driver of the
+ * display registers one at the boot. A board without a display registers
+ * none, and then the dialogue simply has no copy on a screen - the serial
+ * port carries it, and nothing here has to say that a screen is missing.
  */
 #include "graphics/tft_console.h"
 
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
-#include "drivers/display.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
 #include "graphics/font.h"
 #include "graphics/text_wrap.h"
+#include "kernel/lock.h"
 #include "kernel/log.h"
+#include "kernel/panic.h"
+#include "kernel/render.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
-#include "kshell/kshell.h"
 
 /*
  * How much of the picture the dialogue fits into depends on its turn:
  * the portrait shows 22 columns of 26 rows, the landscape 40 of 15. The
- * line buffers are made for the biggest view there is, the counts
+ * line buffers are made for the biggest picture the console is meant
+ * for - the long side of the panel of the board (240) - and the counts
  * themselves are of the view the panel is showing right now and are
- * recomputed when the picture is turned (console_layout).
+ * recomputed when the picture is turned (console_layout). A bigger
+ * renderer gets its dialogue cut at the edges rather than the board
+ * asking for more memory.
  */
-#define TFT_COLUMNS_MAX ((DISPLAY_HEIGHT / (FONT_WIDTH + 1))) /* the widest picture: 40 */
-#define TFT_ROWS_MAX ((DISPLAY_HEIGHT / (FONT_HEIGHT + 2)))   /* the tallest picture: 26 */
+#define TFT_PICTURE_MAX 240
+#define TFT_COLUMNS_MAX ((TFT_PICTURE_MAX / (FONT_WIDTH + 1))) /* the widest picture: 40 */
+#define TFT_ROWS_MAX ((TFT_PICTURE_MAX / (FONT_HEIGHT + 2)))   /* the tallest picture: 26 */
 #define TFT_LINE_MAX (TFT_COLUMNS_MAX + 1)
 
 /* The screen is brought up to date at most ten times a second. */
@@ -57,32 +64,96 @@ static int s_columns = TFT_COLUMNS_MAX;
 static int s_rows = TFT_ROWS_MAX;
 
 /*
- * The test picture of the `display draw` command owns the screen: while
- * this is set the task that draws must not take it back — the dialogue
- * returns when the command says so.
- */
-static volatile bool s_demo;
-
-/*
  * The lines are written by the task that prints and read by the task that
- * draws: the two of them never hold the same line at the same time.
+ * draws: the two of them never hold the same line at the same time. The
+ * mutex is recursive because the paths that redraw the dialogue call the
+ * helpers that draw a row.
  */
-static SemaphoreHandle_t s_lock;
+static k_mutex_t s_lock = K_MUTEX_INITIALIZER;
 
 /* The screen shows something older than the lines that were written. */
 static volatile bool s_dirty;
 
 static void console_lock(void)
 {
-    if (s_lock != NULL) {
-        (void)xSemaphoreTakeRecursive(s_lock, portMAX_DELAY);
+    if (k_mutex_lock(&s_lock) != 0) {
+        /* No memory for the lock is not a condition the console can work
+         * around: half of the dialogue would be drawn over the other. */
+        KERNEL_PANIC("tft-console: cannot take the lock of the console");
     }
 }
 
 static void console_unlock(void)
 {
-    if (s_lock != NULL) {
-        (void)xSemaphoreGiveRecursive(s_lock);
+    (void)k_mutex_unlock(&s_lock);
+}
+
+/*
+ * Every painting of the console goes through the three calls below. The
+ * renderer is asked for on each of them and never kept: the panel may come
+ * up after the console, and a board without one answers by doing nothing,
+ * quietly. That is why the "there is no display" case lives here and the
+ * drawing code reads as if a picture were always there.
+ */
+static void picture_clear(k_u16_t color)
+{
+    const struct k_renderer *render = k_render_get();
+
+    if (render != NULL) {
+        render->clear(render->ctx, color);
+    }
+}
+
+static void picture_text(int x, int y, const char *text, k_u16_t color)
+{
+    const struct k_renderer *render = k_render_get();
+
+    if (render != NULL) {
+        render->text(render->ctx, x, y, text, color);
+    }
+}
+
+/* A renderer that draws directly has no flush hook: nothing to send. */
+static void picture_flush(void)
+{
+    const struct k_renderer *render = k_render_get();
+
+    if (render != NULL && render->flush != NULL) {
+        render->flush(render->ctx);
+    }
+}
+
+/*
+ * The counts of columns and rows of the picture as it is turned right now,
+ * cut to the size the line buffers have room for. Without a renderer the
+ * dialogue keeps the widest shape: a screen may still appear, and the
+ * lines are then already cut for the room there is.
+ */
+static void console_measure(int *columns, int *rows)
+{
+    const struct k_renderer *render = k_render_get();
+    int width = TFT_PICTURE_MAX;
+    int height = TFT_PICTURE_MAX;
+
+    if (render != NULL) {
+        width = render->width(render->ctx);
+        height = render->height(render->ctx);
+    }
+
+    *columns = width / (FONT_WIDTH + 1);
+    *rows = height / (FONT_HEIGHT + 2);
+
+    if (*columns > TFT_COLUMNS_MAX) {
+        *columns = TFT_COLUMNS_MAX;
+    }
+    if (*columns < 1) {
+        *columns = 1;
+    }
+    if (*rows > TFT_ROWS_MAX) {
+        *rows = TFT_ROWS_MAX;
+    }
+    if (*rows < 1) {
+        *rows = 1;
     }
 }
 
@@ -90,11 +161,14 @@ static void console_unlock(void)
 static void draw(void)
 {
     int row;
+    char piece[TFT_LINE_MAX];
+    int at;
+    int index = 0;
 
-    drv_display_clear(0x0000);
+    picture_clear(0x0000);
 
     for (row = 0; row < s_line_count; row++) {
-        drv_display_text(0, row * (FONT_HEIGHT + 2), s_lines[row], 0xFFFF);
+        picture_text(0, row * (FONT_HEIGHT + 2), s_lines[row], 0xFFFF);
     }
 
     /*
@@ -102,20 +176,15 @@ static void draw(void)
      * same width as the lines of the history, so a long command is
      * read to the end instead of running past the right edge.
      */
-    {
-        char piece[TFT_LINE_MAX];
-        int row = s_line_count;
-        int index = 0;
+    at = s_line_count;
 
-        while (row < s_rows &&
-               text_wrap_take(piece, sizeof(piece), s_current, s_columns, index) > 0) {
-            drv_display_text(0, row * (FONT_HEIGHT + 2), piece, 0x07E0);
-            row++;
-            index++;
-        }
+    while (at < s_rows && text_wrap_take(piece, sizeof(piece), s_current, s_columns, index) > 0) {
+        picture_text(0, at * (FONT_HEIGHT + 2), piece, 0x07E0);
+        at++;
+        index++;
     }
 
-    (void)drv_display_flush();
+    picture_flush();
 }
 
 void tft_console_redraw(void)
@@ -183,28 +252,14 @@ static void push_line(const char *text)
 }
 
 /*
- * The counts of columns and rows of the picture as it is turned right
- * now, and the dialogue cut down to fit it: the oldest lines go, and
- * the line that is being written loses what is beyond the new edge.
- * The caller holds the lock of the console.
+ * The dialogue cut down to the picture as it is turned right now: the
+ * counts of columns and rows of it, and the lines cut to the new width -
+ * the oldest lines go, and the line that is being written loses what is
+ * beyond the new edge. The caller holds the lock of the console.
  */
 static void console_layout(void)
 {
-    s_columns = drv_display_width() / (FONT_WIDTH + 1);
-    s_rows = drv_display_height() / (FONT_HEIGHT + 2);
-
-    if (s_columns > TFT_COLUMNS_MAX) {
-        s_columns = TFT_COLUMNS_MAX;
-    }
-    if (s_columns < 1) {
-        s_columns = 1;
-    }
-    if (s_rows > TFT_ROWS_MAX) {
-        s_rows = TFT_ROWS_MAX;
-    }
-    if (s_rows < 1) {
-        s_rows = 1;
-    }
+    console_measure(&s_columns, &s_rows);
 
     /*
      * The lines are cut into the new width: the tail of a line of the
@@ -238,9 +293,25 @@ static void console_layout(void)
 }
 
 /*
+ * Has the picture changed its shape since the dialogue was cut for it?
+ * The turn of the panel does exactly that, and the console is not told
+ * about it: the driver of the display knows nothing about a console, so
+ * the console looks at the picture it draws through.
+ */
+static bool console_shape_changed(void)
+{
+    int columns;
+    int rows;
+
+    console_measure(&columns, &rows);
+
+    return columns != s_columns || rows != s_rows;
+}
+
+/*
  * The task that brings the screen up to date. It sleeps most of its life
  * and only looks at the screen when the printing has said that it is out
- * of date.
+ * of date - or when the panel was turned under it.
  */
 static void flush_task(void *arg)
 {
@@ -249,15 +320,23 @@ static void flush_task(void *arg)
     for (;;) {
         k_sched_sleep_ms(TFT_FLUSH_MS);
 
-        /*
-         * The check of the screen is under the lock: a command that has
-         * taken the screen for itself (the `display draw`) says so
-         * before it takes the lock, and no redraw can slip past the
-         * check and land on its picture.
-         */
         console_lock();
 
-        if (!s_started || !s_dirty || s_demo) {
+        if (!s_started) {
+            console_unlock();
+            continue;
+        }
+
+        /*
+         * A turned panel needs the dialogue cut another way: the same
+         * lines are more rows in the portrait than in the landscape.
+         */
+        if (console_shape_changed()) {
+            console_layout();
+            s_dirty = true;
+        }
+
+        if (!s_dirty) {
             console_unlock();
             continue;
         }
@@ -270,12 +349,10 @@ static void flush_task(void *arg)
 
 void tft_console_start(void)
 {
-    if (s_lock == NULL) {
-        s_lock = xSemaphoreCreateRecursiveMutex();
-        if (s_lock == NULL) {
-            kerror("display: the lock of the console cannot be made");
-            return;
-        }
+    /* The console of the board starts once: a second call would make a
+     * second task of the flush and wipe the dialogue. */
+    if (s_started) {
+        return;
     }
 
     console_lock();
@@ -291,9 +368,9 @@ void tft_console_start(void)
 
     /* The panel shows the name of the system at once. */
     console_lock();
-    drv_display_clear(0x0000);
-    drv_display_text(0, 0, "MICRO OS", 0x07E0);
-    (void)drv_display_flush();
+    picture_clear(0x0000);
+    picture_text(0, 0, "MICRO OS", 0x07E0);
+    picture_flush();
     console_unlock();
 
     s_dirty = false;
@@ -311,178 +388,10 @@ void tft_console_start(void)
     }
 }
 
-/*
- * The test picture: the graphics of the driver in a form a person can
- * check with their eyes — a frame, the three colours a pixel is made
- * of, the diagonals that make a wrong turn plain to see, and the
- * colour bars along the bottom. The caller holds the lock of the
- * console and flushes the picture itself.
- */
-static void demo_picture(void)
-{
-    static const uint16_t palette[8] = {0xF800, 0xFC00, 0xFFE0, 0x07E0,
-                                        0x07FF, 0x001F, 0xF81F, 0xFFFF};
-    int w = drv_display_width();
-    int h = drv_display_height();
-    int cell = ((w < h) ? w : h) / 8;
-    int i;
-
-    if (cell < 4) {
-        cell = 4;
-    }
-
-    drv_display_rect(0, 0, w, h, 0xFFFF);
-
-    /* red, green, blue */
-    drv_display_fill_rect(cell / 2, cell / 2, cell, cell, 0xF800);
-    drv_display_fill_rect(cell * 5 / 2, cell / 2, cell, cell, 0x07E0);
-    drv_display_fill_rect(cell * 7 / 2, cell / 2, cell, cell, 0x001F);
-
-    /* the diagonals: a turn of the picture that went wrong is plain here */
-    drv_display_line(0, 0, w - 1, h - 1, 0xFFFF);
-    drv_display_line(w - 1, 0, 0, h - 1, 0xFFFF);
-
-    /* the colour bars along the bottom */
-    for (i = 0; i < 8; i++) {
-        int x0 = i * w / 8;
-        int x1 = (i + 1) * w / 8;
-
-        drv_display_fill_rect(x0 + 1, h - cell - 1, x1 - x0 - 2, cell, palette[i]);
-    }
-}
-
-/*
- * The offset of the visible area of the panel, the turn of the picture
- * and the test picture of the graphics:
- *
- *   display                        what the panel shows right now
- *   display <x> <y>                the offset of the visible area
- *   display rotate <0|90|180|270>  the picture the other way round
- *   display invert [on|off]        the colors: a panel may show a negative
- *   display draw [seconds]         a test picture for a few seconds
- */
-static int cmd_display(int argc, char **argv)
-{
-    int x = 0;
-    int y = 0;
-
-    if (argc > 1 && strcmp(argv[1], "rotate") == 0) {
-        char *end = NULL;
-        long degrees;
-
-        if (argc < 3) {
-            kshell_printf("usage: display rotate <0|90|180|270>\n");
-            return KSHELL_OK;
-        }
-
-        degrees = strtol(argv[2], &end, 10);
-        if (end == argv[2] || *end != '\0' || (degrees % 90) != 0) {
-            kshell_printf("display: the turn has to be one of 0, 90, 180, 270\n");
-            return KSHELL_OK;
-        }
-
-        drv_display_set_rotation((int)(degrees / 90));
-
-        console_lock();
-        console_layout();
-        console_unlock();
-        tft_console_redraw();
-
-        kshell_printf("display rotation: %d, picture %dx%d\n", drv_display_rotation() * 90,
-                      drv_display_width(), drv_display_height());
-        return KSHELL_OK;
-    }
-
-    if (argc > 1 && strcmp(argv[1], "invert") == 0) {
-        bool inverted = drv_display_inverted();
-
-        if (argc > 2) {
-            if (strcmp(argv[2], "on") == 0) {
-                inverted = true;
-            } else if (strcmp(argv[2], "off") == 0) {
-                inverted = false;
-            } else {
-                kshell_printf("usage: display invert [on|off]\n");
-                return KSHELL_OK;
-            }
-        } else {
-            inverted = !inverted;
-        }
-
-        drv_display_set_inverted(inverted);
-        kshell_printf("display inversion: %s\n", inverted ? "on" : "off");
-        return KSHELL_OK;
-    }
-
-    if (argc > 1 && strcmp(argv[1], "draw") == 0) {
-        long seconds = 6;
-
-        if (argc > 2) {
-            char *end = NULL;
-
-            seconds = strtol(argv[2], &end, 10);
-            if (end == argv[2] || *end != '\0' || seconds < 0 || seconds > 60) {
-                kshell_printf("usage: display draw [0..60 seconds]\n");
-                return KSHELL_OK;
-            }
-        }
-
-        /*
-         * The picture takes the screen: the flag says so before the lock
-         * is taken (the task that draws checks it under the lock), and
-         * the lock waits out a redraw that is already under way. The
-         * dialogue comes back when the command is done with it.
-         */
-        s_demo = true;
-        console_lock();
-        demo_picture();
-        (void)drv_display_flush();
-        console_unlock();
-
-        if (seconds > 0) {
-            k_sched_sleep_ms((k_u32_t)seconds * 1000u);
-        }
-
-        s_demo = false;
-        tft_console_redraw();
-        return KSHELL_OK;
-    }
-
-    drv_display_get_offset(&x, &y);
-
-    if (argc > 1) {
-        char *end = NULL;
-        long value = strtol(argv[1], &end, 10);
-
-        if (end == argv[1] || *end != '\0') {
-            kshell_printf("usage: display [<x> <y>] | rotate <0|90|180|270> | invert [on|off] | "
-                          "draw [seconds]\n");
-            return KSHELL_OK;
-        }
-
-        x = (int)value;
-        y = (argc > 2) ? (int)strtol(argv[2], NULL, 10) : y;
-
-        drv_display_set_offset(x, y);
-        tft_console_redraw();
-    }
-
-    kshell_printf("display offset: x=%d y=%d\n", x, y);
-    kshell_printf("display rotation: %d, picture %dx%d\n", drv_display_rotation() * 90,
-                  drv_display_width(), drv_display_height());
-
-    return KSHELL_OK;
-}
-
-int tft_console_register(void)
-{
-    return kshell_register("display", "the offset, the turn and the colors of the picture",
-                           cmd_display);
-}
-
 void tft_console_write(const char *data, k_size_t len)
 {
     k_size_t i;
+    static int escape;
 
     if (!s_started || data == NULL) {
         return;
@@ -492,6 +401,51 @@ void tft_console_write(const char *data, k_size_t len)
 
     for (i = 0; i < len; i++) {
         char c = data[i];
+
+        /*
+         * The shell writes the erase of the backspace as "\b \b" and the
+         * clear as the sequence of the terminal. A panel is not a terminal:
+         * the bytes used to be drawn as question marks, so both are read
+         * here and mean what they mean.
+         */
+        if (escape == 2) {
+            if (c >= 0x40 && c <= 0x7E) {
+                if (c == 'J') {
+                    memset(s_lines, 0, sizeof(s_lines));
+                    s_line_count = 0;
+                    s_cursor = 0;
+                    s_current[0] = '\0';
+                } else if (c == 'H') {
+                    s_cursor = 0;
+                    s_current[0] = '\0';
+                }
+
+                escape = 0;
+            }
+            continue;
+        }
+
+        if (escape == 1) {
+            escape = (c == '[') ? 2 : 0;
+            continue;
+        }
+
+        if (c == 0x1B) {
+            escape = 1;
+            continue;
+        }
+
+        if (c == '\b') {
+            if (s_cursor > 0) {
+                s_cursor--;
+                s_current[s_cursor] = '\0';
+            }
+            continue;
+        }
+
+        if ((unsigned char)c < 0x20 && c != '\n' && c != '\r' && c != '\t') {
+            continue;
+        }
 
         if (c == '\n') {
             s_current[s_cursor] = '\0';

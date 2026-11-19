@@ -20,11 +20,11 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "board/board.h"
+#include "kernel/board.h"
 #include "kernel/kmm.h"
 #include "kernel/kmod.h"
-#include "kernel/port.h"
 #include "kernel/sched.h"
+#include "kernel/sysinfo.h"
 #include "kernel/task.h"
 #include "kernel/version.h"
 #include "kernel/vfs.h"
@@ -146,7 +146,7 @@ static void print_row(k_size_t row, bool color, const char *key, const char *val
 
 static int cmd_mfetch(int argc, char **argv)
 {
-    const struct board_info *info = board_get_info();
+    const struct kernel_board *info = k_board_get();
     char value[48];
     bool color = false;
     k_size_t row = 0;
@@ -164,16 +164,21 @@ static int cmd_mfetch(int argc, char **argv)
     print_row(row++, color, "OS", value);
     print_row(row++, color, "Build", kernel_build_id());
 
-    print_row(row++, color, "Board", info->desc);
-    print_row(row++, color, "SoC", info->soc);
+    /*
+     * The description is missing when the platform registered none: the
+     * report is still useful, and a row of dashes says that the answer is
+     * unknown instead of guessing it.
+     */
+    print_row(row++, color, "Board", info != NULL ? info->desc : "-");
+    print_row(row++, color, "SoC", info != NULL ? info->soc : "-");
     print_row(row++, color, "Arch", kernel_arch());
-    print_row(row++, color, "Display", info->lcd);
+    print_row(row++, color, "Display", info != NULL ? info->lcd : "-");
 
-    (void)snprintf(value, sizeof(value), "%u/%u KB free", (unsigned)(k_port_heap_free() / 1024),
-                   (unsigned)(k_port_heap_total() / 1024));
+    (void)snprintf(value, sizeof(value), "%u/%u KB free", (unsigned)(k_sysinfo_heap_free() / 1024),
+                   (unsigned)(k_sysinfo_heap_total() / 1024));
     print_row(row++, color, "Heap", value);
 
-    (void)snprintf(value, sizeof(value), "%u KB free", (unsigned)(k_port_psram_free() / 1024));
+    (void)snprintf(value, sizeof(value), "%u KB free", (unsigned)(k_sysinfo_psram_free() / 1024));
     print_row(row++, color, "Psram", value);
 
     {

@@ -14,13 +14,13 @@
 #endif
 
 #define KERNEL_VERSION_MAJOR 0
-#define KERNEL_VERSION_MINOR 2
+#define KERNEL_VERSION_MINOR 3
 #define KERNEL_VERSION_PATCH 0
 
-/* The pre-release carries the suffix until the release drops it: the tag
- * is v0.2.0-pre, the kernel says 0.2.0-pre, and the integrity check of a
- * release compares the three numbers (0.2.0) with the tag. */
-#define KERNEL_VERSION_SUFFIX "-pre"
+/* A pre-release carries a suffix ("-pre") until the release drops it: the
+ * tag is vX.Y.Z or vX.Y.Z-pre, the kernel says the same, and the integrity
+ * check of a release compares the three numbers with the tag. */
+#define KERNEL_VERSION_SUFFIX ""
 
 /* Size of the in-kernel log ring buffer (number of retained messages). */
 #ifndef KERNEL_LOG_LINES
@@ -35,6 +35,26 @@
 /* Default log level at boot: debug messages are compiled in but muted. */
 #ifndef KERNEL_LOG_DEFAULT_LEVEL
 #define KERNEL_LOG_DEFAULT_LEVEL K_LOG_LEVEL_INFO
+#endif
+
+/*
+ * The kernel is written for a board without an MMU (the ESP32): the user
+ * and the kernel share one address space, a task switch means switching
+ * the stack pointer, and fork() is a concession that shares the memory of
+ * the parent and re-runs its program.
+ *
+ * Everything that exists only because of that is kept behind this one
+ * flag. A port for a processor with an MMU (the plan is a real ARM) sets
+ * it to 0, and the same sources start offering what the flag takes away:
+ * an address space of its own, a real fork, protection at the edge of the
+ * system call. The flag is a property of the port, not a second kernel.
+ */
+#ifndef KERNEL_NOMMU
+#define KERNEL_NOMMU 1
+#endif
+
+#if !KERNEL_NOMMU
+#error "the port for a processor with an MMU is not written yet: see docs/roadmap.md"
 #endif
 
 /* Board identification (set by the build system). */

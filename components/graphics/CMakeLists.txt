@@ -1,4 +1,8 @@
 # Micro OS — the font and the console of the display.
+#
+# The console draws through the renderer of the kernel (kernel/render.h) and
+# knows nothing of the panel that shows it: the graphics of the board live in
+# the drivers, which register the renderer at the boot.
 
 set(MICRO_OS_GRAPHICS_SRCS "src/tft_console.c" "src/text_wrap.c")
 
@@ -6,7 +10,7 @@ if(ESP_PLATFORM)
     idf_component_register(
         SRCS ${MICRO_OS_GRAPHICS_SRCS}
         INCLUDE_DIRS "include"
-        REQUIRES kernel drivers font kshell freertos
+        REQUIRES kernel font
     )
 
     # The discipline of the host build: the sources of the project are

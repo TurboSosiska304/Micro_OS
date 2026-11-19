@@ -20,22 +20,38 @@
 | Drivers: fb(tft), input(buttons), buzzer, imu, rtc, ir, mic     |
 | Wifi: the portable core of the station + the radio of the ESP32 |
 +---------------------------------------------------------------+
-| Port: ESP32 (ESP-IDF) | Host (Linux, for tests and simulation)  |
+| Port: ESP32 (ESP-IDF) | Host (Linux) | x86-64 (bare metal, QEMU) |
 +---------------------------------------------------------------+
 ```
 
 Rule number one: **the kernel knows nothing about hardware**. Everything that
-depends on the platform sits behind the `kernel/port.h` contract:
+depends on the platform sits behind the `kernel/port.h` contract, which is
+split by subject the way Linux keeps `include/linux` apart and lets each
+architecture own its part in `arch/<arch>/include/asm`:
 
-```c
-void     k_port_write(const char *data, k_size_t len);
-k_u64_t  k_port_uptime_ms(void);
-void     k_port_enter_critical(void);
-void     k_port_exit_critical(void);
-void     k_port_halt(void);
-void     k_port_reset(void);
-const char *k_port_name(void);
-```
+| Header | Subject | Examples |
+|---|---|---|
+| `kernel/port/console.h` | bytes out, characters in | `k_port_write`, `k_port_console_getchar`, `k_port_console_poll` |
+| `kernel/port/time.h` | time since the boot | `k_port_uptime_ms`, `k_port_uptime_us` |
+| `kernel/port/mem.h` | internal heap and PSRAM | `k_port_alloc`, `k_port_heap_free` |
+| `kernel/port/lock.h` | critical sections, recursive mutexes | `k_port_enter_critical`, `k_port_mutex_lock` |
+| `kernel/port/power.h` | halt, reset | `k_port_halt`, `k_port_reset` |
+| `kernel/port/kv.h` | the store that survives a restart | `k_port_kv_get`, `k_port_kv_next` |
+| `kernel/port/net.h` | TCP and UDP | `k_port_net_connect`, `k_port_net_listen` |
+| `kernel/port/info.h` | identity and contract version | `k_port_name`, `k_port_api_major` |
+
+The version of the contract (`KERNEL_PORT_API_VERSION_MAJOR/MINOR`) is the
+vermagic of the pair: the port asserts it at build time and the boot
+sequence checks it again, so a kernel and a port that were not built
+together say so instead of failing far from the cause. See
+[ADR 0004](adr/0004-portable-boundary.md).
+
+Above the contract sit the doors the upper layers use, so that no component
+outside the kernel includes `kernel/port.h` at all: `kernel/sysinfo.h`,
+`kernel/console.h`, `kernel/kv.h`, `kernel/net.h`, `kernel/clock.h` and
+`kernel/render.h`. A leak of the port into the components above fails
+`make integrity` (`[layers]`), together with any ESP-IDF header that appears
+where it does not belong.
 
 That is exactly what allows the kernel tests to run on a laptop.
 
@@ -49,13 +65,20 @@ That is exactly what allows the kernel tests to run on a laptop.
 | Filesystem | yes | yes, from phase 2 (in-RAM FS plus a VFS layer) |
 | `/proc`, `/dev`, `/sys` | yes | `/proc` and `/dev` from phase 2, `/sys` later |
 | System calls | yes | yes, from phase 3, but **without hardware isolation** |
-| Memory protection | MMU | **none** (the ESP32 has no MMU) |
+| Memory protection | MMU | **none used**: the ESP32 has no MMU, and the x86-64 port has one
+  but keeps the identity map of its loader and the logical boundary |
 | Multi-user | yes | no (a single user: the device itself) |
 | Dynamic linker | yes | no (everything is statically linked) |
 
 We honestly call this **Linux-like**, not Linux: without an MMU there is no real
 separation of user and kernel space. System calls are ordinary function calls
 with a uniform ABI; the boundary is kept by discipline, not by hardware.
+
+That is a property of the current port, not the shape of the kernel: everything
+the kernel concedes to a board without an MMU sits behind one compile time flag,
+`KERNEL_NOMMU` in `kernel/config.h`. A port for a processor with an MMU turns the
+flag off, and the same sources start offering what it takes away - an address
+space of its own, a real `fork()`, protection at the edge of the system call.
 
 ## 3. Boot model
 
@@ -135,17 +158,33 @@ apart:
   private data), not in a table of the filesystem. Two tasks that read
   their own files never touch each other's position;
 * the filesystem itself has one lock, taken by every public call of
-  `mfs_*`. The kernel has no blocking primitive yet, so the lock is a
-  "sleep lock": a task that has to wait sleeps a millisecond and looks
-  again, and the CPU goes to the task that holds the lock. It is
-  recursive, because the functions of the filesystem call each other
-  (`mfs_close` puts the changes on the flash through `mfs_sync`);
+  `mfs_*`. It is a recursive `k_mutex` of the kernel (`kernel/lock.h`),
+  so a task that has to wait is put to sleep by the platform and does not
+  burn a time slice looking again; it is recursive because the functions
+  of the filesystem call each other (`mfs_close` puts the changes on the
+  flash through `mfs_sync`);
 * the adapter between the filesystem and the VFS
   (`components/mfs/src/mfs_vfs.c`) is the only place where the codes of
   the errors of the filesystem are translated into the codes of the
   contract of the system calls: the two sets are close but not the same
   (`-9` is "the directory is not empty" of the filesystem and a "bad file
   descriptor" of the kernel).
+
+### The blocks under the filesystem
+
+MicroFS is a consumer of blocks, not of a flash chip: `kernel/blockdev.h`
+declares a device (a sector size, a count, read and write, an optional erase
+and sync) and the kernel keeps a small registry of the devices the platform
+registered at the boot. On the board the device is `flash0`, the partition
+`mfs` of `partitions.csv`; in the tests it is an array in the memory. The
+filesystem asks for sector 17 and does not know which of them it got, which
+is what lets the persistence tests run on a laptop.
+
+The store behind `/etc` is the same idea for a handful of strings:
+`kernel/port/kv.h` (get, set, erase, commit, next) is a duty of the port,
+because a board has one store. The ESP32 answers with the NVS, the host with
+a file per key, and the configuration does not know the difference - which
+is why `config sync` can be tested without a board.
 
 ## 6. Memory (phase 3)
 
@@ -177,7 +216,7 @@ quirks are documented in
 
 The WiFi driver is built like the kernel itself: a portable core
 (`components/wifi`) that owns the state of the station and a radio
-(`components/wifi/src/wifi_esp32.c`) that talks to the ESP-IDF. The two talk
+(`components/port_esp32/src/wifi_radio.c`) that talks to the ESP-IDF. The two talk
 through a table of functions, so the state machine of the driver is covered
 by the unit tests of the host. The decision is recorded in
 [ADR 0003](adr/0003-wifi-driver.md).
@@ -212,13 +251,30 @@ telnet is answered with refusals, because the shell needs no options —
 the client keeps its own echo. There is no authentication: the board is
 on the network of its owner, and `telnet off` closes the door.
 
+The sockets under all of this are a duty of the port as well:
+`kernel/port/net.h` offers a connection, a server, a send that may wait or
+not, and a one-shot UDP exchange - and nothing else. There is no TLS, no
+IPv6 and no raw socket: the board is on the network of its owner. On the
+board the port speaks lwIP, on the host it speaks the sockets of the
+process, so the HTTP client, the clock of NTP and the server of telnet are
+exercised without a board.
+
 ## 8. Testing
 
-* The kernel is tested on the host: `make test` (own framework, no dependencies).
-* The simulator `make sim` runs the very same kernel on Linux, so the shell and
-  the VFS can be debugged without flashing.
+* The kernel is tested on the host: `make test` (own framework, no dependencies),
+  twice more under the address sanitizer (`make test-asan`) and the race
+  detector (`make test-tsan`).
+* The simulator `make sim` runs the very same kernel on Linux with a volume on
+  a file, `/proc`, `/dev`, the configuration and the drivers of the host, so
+  the whole portable system can be debugged without flashing.
+* The x86-64 port is booted in QEMU by `make x86-smoke`: the same sources, a
+  bare processor, a serial console, the shell.
 * On the device there is a UART console, and its output is mirrored to the
-  TFT at the same time — the dialogue and the boot report are on both.
+  TFT at the same time — the dialogue and the boot report are on both; the
+  checks are driven by `tools/device-test.sh`.
+* `make integrity` holds the boundary: the kernel includes only the kernel, a
+  portable component no platform header and no `k_port_*`, every port
+  implements the whole contract, and the image fits its budget.
 
 ## 9. Resource budget
 
@@ -229,3 +285,4 @@ on the network of its owner, and `telnet off` closes the door.
 | Internal SRAM | ~100 KB usable by code | task stacks, drivers |
 | CPU | 240 MHz, 2 cores | already taken by FreeRTOS; our kernel lives on top |
 | Battery | 200 mAh | deep sleep + RTC is the main "wearable" scenario |
+| Image | 2 MB `factory` slot | the firmware is 886 KB (58 % of the slot free) |

@@ -20,6 +20,7 @@
 #ifndef MICRO_OS_MFS_MFS_H
 #define MICRO_OS_MFS_MFS_H
 
+#include "kernel/blockdev.h"
 #include "kernel/types.h"
 
 #define MFS_MAGIC 0x4D465331u /* "MFS1" */
@@ -59,15 +60,6 @@
 #define MFS_O_CREAT 0x0100
 #define MFS_O_TRUNC 0x0200
 #define MFS_O_APPEND 0x0400
-
-/* The block device under the filesystem. */
-struct mfs_device {
-    k_u32_t blocks; /* the number of the blocks of the volume */
-    int (*read_block)(void *ctx, k_u32_t block, void *buf);
-    int (*write_block)(void *ctx, k_u32_t block, const void *buf);
-    int (*sync)(void *ctx); /* write the changes out, may be NULL */
-    void *ctx;
-};
 
 /* The header of the filesystem, it lives in the INFO section. */
 struct mfs_superblock {
@@ -150,11 +142,16 @@ struct mfs_info {
 /*
  * Prepare a volume: the layout is computed, the bitmap and the table of
  * the inodes are created and the root directory is made.
+ *
+ * The device has to speak in the blocks of the filesystem: a sector of
+ * another size is refused, because the layout of the volume is written in
+ * blocks of MFS_BLOCK_SIZE and a device that reads more or less than that
+ * would silently hand out the wrong bytes.
  */
-int mfs_format(struct mfs_device *dev, k_u32_t max_records);
+int mfs_format(const struct k_blockdev *dev, k_u32_t max_records);
 
 /* Mount a volume. The header is read and checked. */
-int mfs_mount(struct mfs_device *dev);
+int mfs_mount(const struct k_blockdev *dev);
 
 /* Unmount the volume. */
 /*

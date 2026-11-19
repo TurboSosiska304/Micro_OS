@@ -2,6 +2,9 @@
 
 > Russian version: [roadmap_ru.md](roadmap_ru.md)
 
+> This is the roadmap of the **platform**: the board, the drivers, the radio,
+> the firmware. The kernel has its own: [kernel-roadmap.md](kernel-roadmap.md).
+
 Every phase ends with a working state on the device and green tests.
 
 ## Phase 0 - Skeleton (done)
@@ -147,6 +150,27 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
       remembered in the NVS (see [ADR 0003](adr/0003-wifi-driver.md))
 * [x] Console on TFT and UART at the same time
 
+## The boundary work (done)
+
+Between the drivers and the services the tree was taken apart along the
+line the kernel must not cross: the contract of the port is split by
+subject and versioned, the backends (the flash, the NVS, the sockets, the
+renderer, the radio) left the portable components, and the checks that
+hold the line were written. The kernel also got a second bare-metal
+machine: x86-64 in QEMU, with its own loader.
+
+* [x] `kernel/port/*.h` by subject, `KERNEL_PORT_API_VERSION` 1.2, checked
+      at the boot; ADR 0004
+* [x] the upper layers ask the kernel (`k_sysinfo`, `k_console`, `k_mutex`,
+      `k_kv`, `k_socket`, `k_render`, `k_clock`), never the port
+* [x] `kernel/blockdev.h`: MicroFS asks a device, not a partition
+* [x] the checks `[layers]`, `[port]`, `[budget]`, and `ports/port_null`
+* [x] the simulator boots the whole portable system on a volume of a file
+* [x] the x86-64 port: loader, IDT/PIT, context switch, shell on COM1
+      (`make x86-smoke`)
+
+The kernel side of it is in [kernel-roadmap.md](kernel-roadmap.md).
+
 ## Phase 5 - Services and applications
 
 * [x] Init process: starting daemons from `/etc/init.d` — a script is a list
@@ -162,7 +186,9 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [x] HTTP client, NTP based on the RTC — `http get <url>` prints the status
       and the body of the answer, `ntp [server]` takes the time from the
       server and writes it into the RTC (the time is UTC)
-* [ ] Applications: sensor logger, IR remote, clock, weather station
+* [n] Applications: sensor logger, IR remote, clock, weather station — not in
+      this tree: a board with 8 MB of flash does not carry programs nobody asked
+      for, and they would be a repository of their own
 
 ## Phase 6 - Release
 
@@ -172,7 +198,8 @@ The release is a checklist of its own, and every step is green today:
 
 1. the version of the kernel is `KERNEL_VERSION_*` in
    `components/kernel/include/kernel/config.h`;
-2. `make ci`, `make idf-build` and `make bundle` are green on the machine of
+2. `make ci`, `make test-tsan`, `make x86-smoke`, `make idf-build` and
+   `make bundle` are green on the machine of
    the release;
 3. the tag `vX.Y.Z` is pushed — a dash instead of the dot before the number
    of the candidate (`vX.Y.Z-pre`) makes a pre-release;
@@ -208,6 +235,11 @@ The release is a checklist of its own, and every step is green today:
       top of FreeRTOS (ADR 0002)
 * [ ] the syscall table as the only door between a program and the kernel:
       every argument checked at the edge
+* [ ] a port for a processor **with an MMU** (the plan is a real ARM): the
+      concessions of the current kernel - the placeholder `fork()`, the shared
+      address space, the logical user/kernel boundary - live behind one compile
+      time flag (`KERNEL_NOMMU` in `kernel/config.h`), so the MMU port turns the
+      flag off and they become real features instead of a second kernel
 
 ## Phase 8 - The network and the updates (planned)
 

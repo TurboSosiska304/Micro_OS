@@ -166,7 +166,7 @@ static void test_mfetch(void)
 #define LS_TEST_BLOCKS 128
 
 static struct mfs_ram_device g_ls_volume;
-static struct mfs_device g_ls_device;
+static struct k_blockdev g_ls_device;
 
 static void ls_setup(void)
 {

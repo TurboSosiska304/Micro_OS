@@ -31,7 +31,23 @@ void k_console_set_sink(k_console_sink_fn sink);
  */
 int k_console_add_sink(k_console_sink_fn sink);
 
+/*
+ * Take a sink away. The slot it holds is free again, so a client of telnet
+ * that goes away does not leave a dead function behind - and a test does
+ * not leave one in the system for every test that follows.
+ */
+void k_console_remove_sink(k_console_sink_fn sink);
+
 /* Print to the console: the serial port and every registered sink. */
 void k_console_write(const char *data, k_size_t len);
+
+/*
+ * The input side of the console. The shell waits for a whole line,
+ * /dev/tty0 asks whether a character is waiting and does not hold the
+ * task that reads it, and the code that wants one key gets one.
+ */
+int k_console_readline(char *buf, k_size_t size);
+int k_console_getchar(void);
+int k_console_poll(void);
 
 #endif /* MICRO_OS_KERNEL_CONSOLE_H */

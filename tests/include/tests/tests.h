@@ -5,6 +5,9 @@
 #define MICRO_OS_TESTS_H
 
 void test_log(void);
+void test_port(void);
+void test_blockdev(void);
+void test_render(void);
 void test_boot(void);
 void test_version(void);
 void test_board(void);

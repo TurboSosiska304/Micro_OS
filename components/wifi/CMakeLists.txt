@@ -1,8 +1,9 @@
-# Micro OS — the WiFi station: the portable core and the radio of the ESP32.
+# Micro OS — the WiFi station: the portable core of the driver.
 #
-# The core is plain C11: it holds the state machine of the station and can
-# be built for the host, where the unit tests cover it. The radio of the
-# ESP32 is the backend: it talks to the hardware through ESP-IDF.
+# The core is plain C11: it holds the state machine of the station, the
+# configuration and the formatting, and it can be built for the host, where
+# the unit tests cover it. The radio of the ESP32 is platform code and lives
+# in components/port_esp32 (ADR 0004).
 
 set(MICRO_OS_WIFI_SRCS
     "src/wifi.c"
@@ -10,9 +11,9 @@ set(MICRO_OS_WIFI_SRCS
 
 if(ESP_PLATFORM)
     idf_component_register(
-        SRCS ${MICRO_OS_WIFI_SRCS} "src/wifi_esp32.c"
+        SRCS ${MICRO_OS_WIFI_SRCS}
         INCLUDE_DIRS "include"
-        REQUIRES kernel esp_wifi esp_netif esp_event nvs_flash lwip esp_timer freertos
+        REQUIRES kernel
     )
 
     # The discipline of the host build: the sources of the project are

@@ -10,6 +10,9 @@ if(NOT ESP_PLATFORM)
         cases/test_version.c
         cases/test_board.c
         cases/test_log.c
+        cases/test_port.c
+        cases/test_blockdev.c
+        cases/test_render.c
         cases/test_boot.c
         cases/test_kmod.c
         cases/test_kmm.c

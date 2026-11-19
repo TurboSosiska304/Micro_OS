@@ -2,28 +2,30 @@
  * Micro OS — the shell over the air.
  *
  * One task, one port, one client at a time: the listener accepts a
- * connection, gives the bytes to the parser of telnet_proto.c and the
- * lines to the shell, and the output of the shell finds its way back
- * through the console — the client is registered as one more sink of
- * it beside the UART and the display.
+ * connection, gives the bytes to the parser of telnet_proto.c and the lines
+ * to the shell, and the output of the shell finds its way back through the
+ * console — the client is registered as one more sink of it beside the UART
+ * and the display.
  *
- * The answers of the negotiation are refusals (the parser of the
- * protocol does that): the client keeps its own echo and its own line
- * editing, and the session is plain text. A client that stopped
- * reading loses its own output, not the console of the board: the
- * writes to the socket do not wait.
+ * The answers of the negotiation are refusals (the parser of the protocol
+ * does that): the client keeps its own echo and its own line editing, and
+ * the session is plain text. A client that stopped reading loses its own
+ * output, not the console of the board: every write to the socket is the
+ * one that does not wait.
+ *
+ * The sockets come from the kernel (kernel/net.h): the same server runs over
+ * lwIP on the board and over the sockets of the host under the tests.
  */
 #include "telnet/telnet.h"
 
-#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 
-#include <lwip/sockets.h>
-
 #include "kernel/console.h"
 #include "kernel/kmod.h"
-#include "kernel/port.h"
+#include "kernel/lock.h"
+#include "kernel/net.h"
+#include "kernel/panic.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
 #include "kshell/kshell.h"
@@ -31,30 +33,94 @@
 
 #define TELNET_PORT 23
 
+/*
+ * The wait for the next client. It is short because the loop of the server
+ * looks at s_enabled between two waits: `telnet off` must close the door in
+ * about a second whichever way it was typed. A session waits with the poll
+ * of the port (see telnet_session).
+ */
+#define TELNET_ACCEPT_TIMEOUT_MS 1000
+
 static bool s_started;
 static volatile bool s_enabled = true;
 static volatile bool s_listening;
-static volatile int s_client = -1;
 
-/* The socket of the client, as the console sees it. */
+/*
+ * The session of the client, and the state that goes with it, are one piece
+ * of state: the task of the server writes it, the console and the command of
+ * the shell read it. The mutex is recursive, so that a helper which takes
+ * the lock may call another one that takes it too.
+ *
+ * The lock is held across the writes and the close of the session and not
+ * across its reads: a write that does not wait and a close return at once,
+ * while a read waits for a client and would hold the console behind it.
+ * Holding it for the close is what keeps the session alive under the feet
+ * of a console that is writing to it at that very moment.
+ */
+static k_mutex_t s_lock = K_MUTEX_INITIALIZER;
+static k_socket_t *s_client;
+static bool s_client_lost;
+
+static void telnet_lock(void)
+{
+    if (k_mutex_lock(&s_lock) != 0) {
+        /* Without the lock the client can be closed under the feet of the
+         * shell, and the session has no way to know about it. */
+        KERNEL_PANIC("telnet: cannot take the lock of the server");
+    }
+}
+
+static void telnet_unlock(void)
+{
+    (void)k_mutex_unlock(&s_lock);
+}
+
+/* The session of the client, as the console sees it. */
 static void telnet_console_write(const char *data, k_size_t len)
 {
-    int fd;
+    telnet_lock();
 
-    k_port_enter_critical();
-    fd = s_client;
-    k_port_exit_critical();
-
-    if (fd >= 0) {
-        /* MSG_DONTWAIT: a client that stopped reading loses output. */
-        (void)send(fd, data, len, MSG_DONTWAIT);
+    if (s_client != NULL) {
+        /* wait = false: a client that stopped reading loses output, and
+         * the console of the board does not wait for it. A failed write is
+         * the only word of the contract about a peer that is gone. */
+        if (k_socket_send(s_client, data, len, false) < 0) {
+            s_client_lost = true;
+        }
     }
+
+    telnet_unlock();
+}
+
+/* Let go of the client: after this call the console writes nowhere. */
+static void telnet_forget_client(void)
+{
+    k_socket_t *client;
+
+    telnet_lock();
+    client = s_client;
+    s_client = NULL;
+    s_client_lost = false;
+    /* Closing inside the lock: see the note at the declaration. */
+    k_socket_close(client);
+    telnet_unlock();
+}
+
+static bool telnet_client_lost(void)
+{
+    bool lost;
+
+    telnet_lock();
+    lost = s_client_lost;
+    telnet_unlock();
+
+    return lost;
 }
 
 /* One line of the state, for the doctor and for the command. */
 static void telnet_state(char *buf, size_t size)
 {
-    int client;
+    bool in;
 
     if (!s_enabled) {
         snprintf(buf, size, "off");
@@ -66,11 +132,11 @@ static void telnet_state(char *buf, size_t size)
         return;
     }
 
-    k_port_enter_critical();
-    client = s_client;
-    k_port_exit_critical();
+    telnet_lock();
+    in = s_client != NULL;
+    telnet_unlock();
 
-    if (client >= 0) {
+    if (in) {
         snprintf(buf, size, "port %d, a client is in", TELNET_PORT);
     } else {
         snprintf(buf, size, "port %d, no auth", TELNET_PORT);
@@ -78,43 +144,42 @@ static void telnet_state(char *buf, size_t size)
 }
 
 /* The session with one client: the bytes in, the lines to the shell. */
-static void telnet_session(int fd)
+static void telnet_session(k_socket_t *client)
 {
     static const char banner[] =
         "\r\nMicro OS telnet - no authentication, the local network only.\r\n\r\nmicroos> ";
     static const char prompt[] = "microos> ";
     struct telnet_parser parser;
-    struct timeval timeout;
     char reply[TELNET_REPLY_MAX];
     char line[TELNET_LINE_MAX];
     char buf[128];
     int n;
     int i;
 
-    timeout.tv_sec = 1;
-    timeout.tv_usec = 0;
-    (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    (void)k_socket_send(client, banner, sizeof(banner) - 1, false);
 
-    (void)send(fd, banner, sizeof(banner) - 1, MSG_DONTWAIT);
-
-    k_port_enter_critical();
-    s_client = fd;
-    k_port_exit_critical();
+    telnet_lock();
+    s_client = client;
+    s_client_lost = false;
+    telnet_unlock();
 
     telnet_parser_init(&parser);
 
     for (;;) {
-        n = (int)recv(fd, buf, sizeof(buf), 0);
+        n = k_socket_recv(client, buf, sizeof(buf));
 
         if (n < 0) {
-            if (errno == EWOULDBLOCK || errno == EAGAIN) {
-                /* One second of silence: has the board been told off? */
-                if (!s_enabled) {
-                    break;
-                }
-                continue;
+            /*
+             * The contract does not tell a client that is quiet from one
+             * that is gone: a read that has nothing answers -1 after the
+             * poll of the port. So the session ends on the answers it can
+             * trust — a client that closed (0), a write that failed, and
+             * the board being told off.
+             */
+            if (!s_enabled || telnet_client_lost()) {
+                break;
             }
-            break;
+            continue;
         }
 
         if (n == 0) {
@@ -127,7 +192,7 @@ static void telnet_session(int fd)
             telnet_parser_feed(&parser, (uint8_t)buf[i], reply, sizeof(reply), &reply_len);
 
             if (reply_len > 0) {
-                (void)send(fd, reply, reply_len, MSG_DONTWAIT);
+                (void)k_socket_send(client, reply, reply_len, false);
             }
 
             if (telnet_parser_take_line(&parser, line, sizeof(line))) {
@@ -135,16 +200,14 @@ static void telnet_session(int fd)
                     (void)kshell_execute(line);
                 }
 
-                /* The prompt comes back after the output of the
-                 * command: the console sends it to this socket first. */
-                (void)send(fd, prompt, sizeof(prompt) - 1, MSG_DONTWAIT);
+                /* The prompt comes back after the output of the command:
+                 * the console sends it to this socket first. */
+                (void)k_socket_send(client, prompt, sizeof(prompt) - 1, false);
             }
         }
     }
 
-    k_port_enter_critical();
-    s_client = -1;
-    k_port_exit_critical();
+    telnet_forget_client();
 }
 
 /* The listener: a port of its own, waiting for the next client. */
@@ -153,65 +216,33 @@ static void telnet_task(void *arg)
     K_UNUSED(arg);
 
     for (;;) {
-        struct sockaddr_in address;
-        int server;
-        int one = 1;
+        k_server_t *server;
 
         if (!s_enabled) {
             k_sched_sleep_ms(500);
             continue;
         }
 
-        server = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
-        if (server < 0) {
-            k_sched_sleep_ms(2000);
-            continue;
-        }
-
-        (void)setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-
-        memset(&address, 0, sizeof(address));
-        address.sin_family = AF_INET;
-        address.sin_port = htons(TELNET_PORT);
-        address.sin_addr.s_addr = htonl(INADDR_ANY);
-
-        if (bind(server, (struct sockaddr *)&address, sizeof(address)) != 0 ||
-            listen(server, 1) != 0) {
-            close(server);
+        server = k_server_listen(TELNET_PORT);
+        if (server == NULL) {
+            /* The port may still be in the hands of the stack for a while:
+             * a couple of seconds and the door is tried again. */
             k_sched_sleep_ms(2000);
             continue;
         }
 
         s_listening = true;
 
-        for (;;) {
-            fd_set read_fds;
-            struct timeval one_second;
-            int ready;
+        while (s_enabled) {
+            k_socket_t *client = k_server_accept(server, TELNET_ACCEPT_TIMEOUT_MS);
 
-            if (!s_enabled) {
-                break;
-            }
-
-            FD_ZERO(&read_fds);
-            FD_SET(server, &read_fds);
-
-            one_second.tv_sec = 1;
-            one_second.tv_usec = 0;
-
-            ready = select(server + 1, &read_fds, NULL, NULL, &one_second);
-            if (ready > 0 && FD_ISSET(server, &read_fds)) {
-                int client = accept(server, NULL, NULL);
-
-                if (client >= 0) {
-                    telnet_session(client);
-                    close(client);
-                }
+            if (client != NULL) {
+                telnet_session(client);
             }
         }
 
         s_listening = false;
-        close(server);
+        k_server_close(server);
     }
 }
 

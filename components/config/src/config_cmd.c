@@ -64,5 +64,12 @@ static int cmd_config(int argc, char **argv)
 
 int config_register(void)
 {
+    /*
+     * The store belongs to the port, so the registration of the component is
+     * the moment it is handed to the configuration: the boot restores /etc
+     * right after this call.
+     */
+    config_store_use_platform();
+
     return kshell_register("config", "the configuration of /etc: config, config sync", cmd_config);
 }

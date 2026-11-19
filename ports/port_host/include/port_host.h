@@ -27,4 +27,39 @@ FILE *port_host_get_sink(void);
 void port_host_start_tick(long interval_ms);
 void port_host_stop_tick(void);
 
+/*
+ * The volume of the simulator: the filesystem of the board needs blocks, and
+ * on a laptop a block device is a file.
+ *
+ * A sector is one block of MicroFS (the filesystem refuses another size), and
+ * the volume is 512 KB unless the build says otherwise with
+ * -DMICROOS_VOLUME_SECTORS=<n>.
+ */
+#define PORT_HOST_VOLUME_SECTOR_SIZE 1024u
+
+#ifndef MICROOS_VOLUME_SECTORS
+#define MICROOS_VOLUME_SECTORS 512u
+#endif
+
+/* The file of the volume: $MICROOS_VOLUME, or /tmp/microos-sim.img. */
+const char *port_host_volume_path(void);
+
+/*
+ * Register the volume as the block device "file0" of the kernel. It has to be
+ * called before a filesystem mounts the device.
+ */
+void port_host_register_blockdev(void);
+
+/*
+ * The stubs of the board: the modules of the hardware doctor, the commands
+ * of the drivers (`date`, `battery`, `wifi`, ...), the clock of the process
+ * and, when $MICROOS_SCREEN names a file, the renderer that writes the frame
+ * there. Call it at the service level, before the init scripts and the shell
+ * ask for a command or a module.
+ */
+void port_host_stubs_init(void);
+
+/* Is the file screen of the simulator requested ($MICROOS_SCREEN)? */
+bool port_host_screen_enabled(void);
+
 #endif /* MICRO_OS_PORT_HOST_H */

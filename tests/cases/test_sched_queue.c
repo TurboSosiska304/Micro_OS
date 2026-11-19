@@ -20,8 +20,8 @@
 /* The priority of the test tasks, the test runner has a lower one. */
 #define TEST_PRIO 7
 
-static volatile int g_blocked;
-static volatile int g_release;
+static int g_blocked;
+static int g_release;
 static struct task *g_tasks[MANY_TASKS];
 
 static void blocker(void *arg)
@@ -35,7 +35,7 @@ static void blocker(void *arg)
     }
 
     k_sched_block(self);
-    g_blocked++;
+    (void)__atomic_add_fetch(&g_blocked, 1, __ATOMIC_SEQ_CST);
 
     /*
      * Wait without touching the run queue and without reacting to the state
@@ -44,7 +44,7 @@ static void blocker(void *arg)
      * must not finish when it is unblocked, otherwise it would leave the
      * queue on its own.
      */
-    while (!g_release) {
+    while (!__atomic_load_n(&g_release, __ATOMIC_SEQ_CST)) {
         k_port_task_sleep_ms(1);
     }
 }
@@ -59,8 +59,8 @@ void test_sched_queue(void)
     ktest_begin("sched: the run queue holds every task of the system");
 
     port_host_set_sink(tmpfile());
-    g_blocked = 0;
-    g_release = 0;
+    (void)__atomic_store_n(&g_blocked, 0, __ATOMIC_SEQ_CST);
+    (void)__atomic_store_n(&g_release, 0, __ATOMIC_SEQ_CST);
 
     for (i = 0; i < MANY_TASKS; i++) {
         char name[8];
@@ -70,7 +70,7 @@ void test_sched_queue(void)
         KT_CHECK(g_tasks[i] != NULL);
     }
 
-    while (g_blocked < MANY_TASKS && waited < 4000) {
+    while (__atomic_load_n(&g_blocked, __ATOMIC_SEQ_CST) < MANY_TASKS && waited < 4000) {
         k_sched_sleep_ms(1);
         waited++;
     }
@@ -134,7 +134,7 @@ void test_sched_queue(void)
     KT_CHECK_INT_EQ(k_sched_validate(), 0);
 
     /* Let the tasks finish and free their slots for the next tests. */
-    g_release = 1;
+    (void)__atomic_store_n(&g_release, 1, __ATOMIC_SEQ_CST);
     k_sched_sleep_ms(50);
 
     port_host_set_sink(NULL);

@@ -2,8 +2,8 @@
  * Micro OS — the configuration of the board.
  *
  * A key of the configuration is a file of /etc: its name is the key and its
- * content is the value. The store is the place that survives the restart and
- * the formatted volume (the NVS on the board), so the boot can bring the
+ * content is the value. The store is the key-value store of the port (the
+ * flash of the chip, a file per key on a laptop), so the boot can bring the
  * files back after `mkfs -y`.
  */
 #include "config/config.h"
@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "kernel/log.h"
+#include "kernel/kv.h"
 #include "kernel/vfs.h"
 
 static const struct config_store *g_store;
@@ -23,6 +24,48 @@ void config_use_store(const struct config_store *store)
 const struct config_store *config_store_get(void)
 {
     return g_store;
+}
+
+/*
+ * The adapter of the port's key-value store. The contract of the port speaks
+ * the language of the store (`-2` for a key that is not there, a length for a
+ * value), the configuration speaks the language of /etc; this is the only
+ * place that translates the two.
+ */
+static int kv_load(const char *key, char *value, k_size_t size)
+{
+    int rc = k_kv_get(key, value, size);
+
+    /* -2 keeps meaning "no such key", every other code is a real error. */
+    return rc >= 0 ? 0 : rc;
+}
+
+static int kv_save(const char *key, const char *value)
+{
+    int rc = k_kv_set(key, value);
+
+    if (rc != 0) {
+        return rc;
+    }
+
+    /* The key is set, and the store is asked to make it survive the restart. */
+    return k_kv_commit();
+}
+
+static int kv_next(k_size_t index, char *key, k_size_t size)
+{
+    return k_kv_next(index, key, size);
+}
+
+static const struct config_store s_kv_store = {
+    .load = kv_load,
+    .save = kv_save,
+    .next = kv_next,
+};
+
+void config_store_use_platform(void)
+{
+    config_use_store(&s_kv_store);
 }
 
 /* `dir` and `name` joined with a slash, when the path fits. */

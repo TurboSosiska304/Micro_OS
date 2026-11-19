@@ -5,14 +5,23 @@
 # host (as a plain static library used by the unit tests).
 
 set(MICRO_OS_KERNEL_SRCS
+    "src/board.c"
+    "src/blockdev.c"
+    "src/clock.c"
     "src/boot.c"
     "src/console.c"
     "src/kmm.c"
     "src/kmod.c"
     "src/ksys.c"
+    "src/kv.c"
+    "src/lock.c"
     "src/log.c"
+    "src/net.c"
     "src/panic.c"
+    "src/power.c"
+    "src/render.c"
     "src/sched.c"
+    "src/sysinfo.c"
     "src/task.c"
     "src/vfs.c"
     "src/version.c"

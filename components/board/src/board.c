@@ -2,7 +2,7 @@
 
 #if defined(KERNEL_BOARD_STICKC_PLUS2)
 
-static const struct board_info g_info = {
+static const struct kernel_board g_info = {
     .name = "stickc_plus2",
     .desc = "M5Stack StickC Plus2",
     .soc = "ESP32-PICO-V3-02",
@@ -21,7 +21,7 @@ static const struct board_info g_info = {
 
 #elif defined(KERNEL_BOARD_SIM)
 
-static const struct board_info g_info = {
+static const struct kernel_board g_info = {
     .name = "host_sim",
     .desc = "Micro OS host simulator",
     .soc = "native",
@@ -40,7 +40,7 @@ static const struct board_info g_info = {
 
 #else
 
-static const struct board_info g_info = {
+static const struct kernel_board g_info = {
     .name = "unknown",
     .desc = "unknown board",
     .soc = "unknown",
@@ -59,7 +59,7 @@ static const struct board_info g_info = {
 
 #endif
 
-const struct board_info *board_get_info(void)
+const struct kernel_board *board_get_info(void)
 {
     return &g_info;
 }

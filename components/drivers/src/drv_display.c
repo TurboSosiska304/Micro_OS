@@ -9,6 +9,7 @@
 #include "drivers/drivers.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "kernel/types.h"
@@ -46,6 +47,17 @@ static int s_rotation;
  */
 static bool s_inverted;
 
+/*
+ * The test picture of `display draw` owns the glass while it is up: a
+ * command that tests the panel with it must see the picture and not a
+ * dialogue drawn over it. The renderer of the console is dropped while
+ * this is set (the framebuffer keeps the test picture), and the dialogue
+ * comes back with the next output of the shell - the prompt that follows
+ * the command is the first line of it. The flag is read by the task that
+ * draws the console, hence volatile.
+ */
+static volatile bool s_demo;
+
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_heap_caps.h"
@@ -60,6 +72,9 @@ static bool s_inverted;
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "kernel/log.h"
+#include "kernel/render.h"
+#include "kernel/sched.h"
+#include "kshell/kshell.h"
 
 #define LCD_SPI_HOST SPI2_HOST
 /*
@@ -291,6 +306,100 @@ static void lcd_draw_test_pattern(void)
     lcd_flush();
 }
 
+/* --- the picture the console of the shell draws on --- */
+
+/*
+ * The console of the shell draws through the renderer of the kernel and
+ * never through the panel: this block is the panel saying that it is a
+ * picture. The turn, the inversion and the clipping stay where they are,
+ * and the console asks for the size every time it draws - a turned panel
+ * therefore needs to tell nobody that it was turned.
+ */
+static int render_width(void *ctx)
+{
+    K_UNUSED(ctx);
+    return drv_display_width();
+}
+
+static int render_height(void *ctx)
+{
+    K_UNUSED(ctx);
+    return drv_display_height();
+}
+
+/* While the test picture is up it owns the glass: see s_demo. */
+static void render_clear(void *ctx, k_u16_t color)
+{
+    K_UNUSED(ctx);
+
+    if (!s_demo) {
+        (void)drv_display_clear(color);
+    }
+}
+
+static void render_text(void *ctx, int x, int y, const char *text, k_u16_t color)
+{
+    K_UNUSED(ctx);
+
+    if (!s_demo) {
+        (void)drv_display_text(x, y, text, color);
+    }
+}
+
+static void render_fill_rect(void *ctx, int x, int y, int w, int h, k_u16_t color)
+{
+    K_UNUSED(ctx);
+
+    if (!s_demo) {
+        drv_display_fill_rect(x, y, w, h, color);
+    }
+}
+
+static void render_rect(void *ctx, int x, int y, int w, int h, k_u16_t color)
+{
+    K_UNUSED(ctx);
+
+    if (!s_demo) {
+        drv_display_rect(x, y, w, h, color);
+    }
+}
+
+static void render_line(void *ctx, int x0, int y0, int x1, int y1, k_u16_t color)
+{
+    K_UNUSED(ctx);
+
+    if (!s_demo) {
+        drv_display_line(x0, y0, x1, y1, color);
+    }
+}
+
+/*
+ * The flush goes with the drawing: the framebuffer still holds the test
+ * picture and the glass is already showing it, so a message of the console
+ * must not reach the panel until the command is done with it.
+ */
+static void render_flush(void *ctx)
+{
+    K_UNUSED(ctx);
+
+    if (!s_demo) {
+        (void)drv_display_flush();
+    }
+}
+
+static const struct k_renderer s_renderer = {
+    .name = "st7789v2",
+    .width = render_width,
+    .height = render_height,
+    .clear = render_clear,
+    .text = render_text,
+    .fill_rect = render_fill_rect,
+    .rect = render_rect,
+    .line = render_line,
+    .flush = render_flush,
+    .ctx = NULL,
+};
+
 static int drv_display_init(void)
 {
     gpio_config_t outputs = {
@@ -365,6 +474,14 @@ static int drv_display_init(void)
     lcd_draw_test_pattern();
 
     s_initialised = true;
+
+    /*
+     * The console of the shell may draw from now on. A panel that did not
+     * come up registers nothing: the board still boots and the serial port
+     * still shows the dialogue.
+     */
+    k_render_register(&s_renderer);
+
     return 0;
 }
 
@@ -390,6 +507,176 @@ static const char *drv_display_detail(void)
     return buf;
 }
 
+/* --- the commands of the panel --- */
+
+/*
+ * The test picture: the graphics of the driver in a form a person can
+ * check with their eyes — a frame, the three colours a pixel is made of,
+ * the diagonals that make a wrong turn plain to see, and the colour bars
+ * along the bottom. The picture is drawn and sent under one hold of the
+ * lock, so a redraw that is under way cannot leave a row of the dialogue
+ * in the middle of it.
+ */
+static void display_demo_picture(void)
+{
+    static const uint16_t palette[8] = {0xF800, 0xFC00, 0xFFE0, 0x07E0,
+                                        0x07FF, 0x001F, 0xF81F, 0xFFFF};
+    int w;
+    int h;
+    int cell;
+    int i;
+
+    display_lock();
+
+    w = drv_display_width();
+    h = drv_display_height();
+    cell = ((w < h) ? w : h) / 8;
+
+    if (cell < 4) {
+        cell = 4;
+    }
+
+    drv_display_rect(0, 0, w, h, 0xFFFF);
+
+    /* red, green, blue */
+    drv_display_fill_rect(cell / 2, cell / 2, cell, cell, 0xF800);
+    drv_display_fill_rect(cell * 5 / 2, cell / 2, cell, cell, 0x07E0);
+    drv_display_fill_rect(cell * 7 / 2, cell / 2, cell, cell, 0x001F);
+
+    /* the diagonals: a turn of the picture that went wrong is plain here */
+    drv_display_line(0, 0, w - 1, h - 1, 0xFFFF);
+    drv_display_line(w - 1, 0, 0, h - 1, 0xFFFF);
+
+    /* the colour bars along the bottom */
+    for (i = 0; i < 8; i++) {
+        int x0 = i * w / 8;
+        int x1 = (i + 1) * w / 8;
+
+        drv_display_fill_rect(x0 + 1, h - cell - 1, x1 - x0 - 2, cell, palette[i]);
+    }
+
+    (void)drv_display_flush();
+
+    display_unlock();
+}
+
+/*
+ * The offset of the visible area of the panel, the turn of the picture and
+ * the test picture of the graphics:
+ *
+ *   display                        what the panel shows right now
+ *   display <x> <y>                the offset of the visible area
+ *   display rotate <0|90|180|270>  the picture the other way round
+ *   display invert [on|off]        the colors: a panel may show a negative
+ *   display draw [seconds]         a test picture for a few seconds
+ *
+ * The command belongs to the panel and not to the console of the shell:
+ * the offset, the turn and the inversion are properties of this glass. The
+ * dialogue follows the panel by itself - the console asks the renderer for
+ * the size every time it draws and notices a new shape on its own.
+ */
+static int cmd_display(int argc, char **argv)
+{
+    int x = 0;
+    int y = 0;
+
+    if (argc > 1 && strcmp(argv[1], "rotate") == 0) {
+        char *end = NULL;
+        long degrees;
+
+        if (argc < 3) {
+            kshell_printf("usage: display rotate <0|90|180|270>\n");
+            return KSHELL_OK;
+        }
+
+        degrees = strtol(argv[2], &end, 10);
+        if (end == argv[2] || *end != '\0' || (degrees % 90) != 0) {
+            kshell_printf("display: the turn has to be one of 0, 90, 180, 270\n");
+            return KSHELL_OK;
+        }
+
+        drv_display_set_rotation((int)(degrees / 90));
+
+        kshell_printf("display rotation: %d, picture %dx%d\n", drv_display_rotation() * 90,
+                      drv_display_width(), drv_display_height());
+        return KSHELL_OK;
+    }
+
+    if (argc > 1 && strcmp(argv[1], "invert") == 0) {
+        bool inverted = drv_display_inverted();
+
+        if (argc > 2) {
+            if (strcmp(argv[2], "on") == 0) {
+                inverted = true;
+            } else if (strcmp(argv[2], "off") == 0) {
+                inverted = false;
+            } else {
+                kshell_printf("usage: display invert [on|off]\n");
+                return KSHELL_OK;
+            }
+        } else {
+            inverted = !inverted;
+        }
+
+        drv_display_set_inverted(inverted);
+        kshell_printf("display inversion: %s\n", inverted ? "on" : "off");
+        return KSHELL_OK;
+    }
+
+    if (argc > 1 && strcmp(argv[1], "draw") == 0) {
+        long seconds = 6;
+
+        if (argc > 2) {
+            char *end = NULL;
+
+            seconds = strtol(argv[2], &end, 10);
+            if (end == argv[2] || *end != '\0' || seconds < 0 || seconds > 60) {
+                kshell_printf("usage: display draw [0..60 seconds]\n");
+                return KSHELL_OK;
+            }
+        }
+
+        /*
+         * The picture takes the glass for as long as the command runs: the
+         * flag says so before the picture is drawn, so a redraw that is
+         * already under way is dropped (see s_demo).
+         */
+        s_demo = true;
+        display_demo_picture();
+
+        if (seconds > 0) {
+            k_sched_sleep_ms((k_u32_t)seconds * 1000u);
+        }
+
+        s_demo = false;
+        return KSHELL_OK;
+    }
+
+    drv_display_get_offset(&x, &y);
+
+    if (argc > 1) {
+        char *end = NULL;
+        long value = strtol(argv[1], &end, 10);
+
+        if (end == argv[1] || *end != '\0') {
+            kshell_printf("usage: display [<x> <y>] | rotate <0|90|180|270> | invert [on|off] | "
+                          "draw [seconds]\n");
+            return KSHELL_OK;
+        }
+
+        x = (int)value;
+        y = (argc > 2) ? (int)strtol(argv[2], NULL, 10) : y;
+
+        drv_display_set_offset(x, y);
+    }
+
+    kshell_printf("display offset: x=%d y=%d\n", x, y);
+    kshell_printf("display rotation: %d, picture %dx%d\n", drv_display_rotation() * 90,
+                  drv_display_width(), drv_display_height());
+
+    return KSHELL_OK;
+}
+
 static const struct kmod s_display_module = {
     .name = "display",
     .desc = "ST7789v2 135x240 TFT",
@@ -400,7 +687,15 @@ static const struct kmod s_display_module = {
 
 int drv_display_register(void)
 {
-    return kmod_register(&s_display_module);
+    int rc = kmod_register(&s_display_module);
+
+    /*
+     * The command is there even when the panel did not come up: the offset
+     * and the turn still answer, they simply have no glass to move.
+     */
+    kshell_register("display", "the offset, the turn and the colors of the picture", cmd_display);
+
+    return rc;
 }
 
 /* --- the text on the screen --- */
@@ -555,7 +850,14 @@ int drv_display_rotation(void)
 void drv_display_set_inverted(bool inverted)
 {
     display_lock();
-    lcd_write_command(inverted ? 0x21 : 0x20); /* INVON / INVOFF */
+
+    /* A panel that did not come up has no controller to talk to: the
+     * command is registered anyway, so that a person can try it, and a
+     * NULL here used to be a crash inside the driver of the SPI. */
+    if (s_dev != NULL) {
+        lcd_write_command(inverted ? 0x21 : 0x20); /* INVON / INVOFF */
+    }
+
     s_inverted = inverted;
     display_unlock();
 }

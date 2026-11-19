@@ -249,9 +249,10 @@ int microos_getppid(void)
  * child - but the child of this fork is a task that re-runs the program of
  * the parent from its start, so it is not a copy of the parent at the call
  * of the fork: the memory is shared (like CLONE_VM) and the work done
- * before the fork runs again in the child. A real fork waits for the first
- * release; this one is here so that the shape of a program is the usual
- * one.
+ * before the fork runs again in the child. A real fork waits for the port
+ * that has an MMU (KERNEL_NOMMU = 0); this one is here so that the shape
+ * of a program is the usual one, today on the board and later on a real
+ * processor.
  */
 int microos_fork(void)
 {

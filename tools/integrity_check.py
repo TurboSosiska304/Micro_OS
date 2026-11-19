@@ -17,6 +17,9 @@ What is checked:
     git        the integrity of the git objects
     sources    the hygiene of the tracked sources (LF, final newline, ...)
     format     the formatting of the C sources (clang-format)
+    layers     the portable layers do not include the platform (ADR 0004)
+    port       every function of the port contract has its implementation
+    budget     the image of the kernel stays inside its budget
 
 The exit status is 0 when everything is in order and 1 otherwise.
 """
@@ -147,28 +150,25 @@ def read_text(path: str) -> str:
 
 
 def tracked_files(root: str) -> list:
-    """The files of the repository.
+    """Every file of the tree, including the ones not staged yet.
 
-    The list comes from git, so that the ignored files (the build
-    directories) are not checked. When git is not available the tree is
-    walked instead and the obvious build directories are skipped.
+    The check runs on a laptop before a commit: a file that is not added yet
+    is exactly the file nobody has looked at, so it must be checked too.
     """
     try:
-        out = subprocess.run(
-            ["git", "-C", root, "ls-files", "-z"],
+        result = subprocess.run(
+            ["git", "-C", root, "ls-files", "--cached", "--others", "--exclude-standard"],
             capture_output=True,
-            check=True,
+            text=True,
+            check=False,
         )
-    except (OSError, subprocess.CalledProcessError):
-        return walk_files(root)
+    except OSError:
+        return []
 
-    names = [name for name in out.stdout.decode("utf-8", "replace").split("\0") if name]
-    return names if names else walk_files(root)
+    if result.returncode != 0:
+        return []
 
-
-# The directories that never hold the sources of the project.
-SKIPPED_DIRS = {".git", "build", "build-host", "managed_components", "__pycache__"}
-
+    return [line for line in result.stdout.splitlines() if line]
 
 def walk_files(root: str) -> list:
     """Every file of the tree, without the build directories."""
@@ -854,6 +854,424 @@ def check_format(root: str, report: Report, files: list, formatter: str) -> None
     )
 
 
+# --- the layers of the tree --------------------------------------------------
+#
+# The kernel is plain C11 and the portable components are portable C: a
+# header of ESP-IDF or of the board that appears where it must not is the
+# boundary going away (ADR 0004). It is cheapest to catch that here, on a
+# laptop, than on a board that no longer builds.
+
+KERNEL_DIR = "components/kernel/"
+
+PORTABLE_DIRS = (
+    "components/board/",
+    "components/config/",
+    "components/devfs/",
+    "components/font/",
+    "components/graphics/",
+    "components/init/",
+    "components/kshell/",
+    "components/libc/",
+    "components/mfs/",
+    "components/net/",
+    "components/procfs/",
+    "components/telnet/",
+    "components/wifi/",
+)
+
+# What the kernel core may not include at all: the chip, the board, the
+# upper layers, the port implementations, and POSIX (the host is a port,
+# the kernel is not).
+KERNEL_FORBIDDEN = re.compile(
+    r'#\s*include\s*[<"]((?:'
+    r"esp_[a-z0-9_]*\.h|freertos/|driver/|drivers/|hal/|soc/|rom/|"
+    r"nvs[a-z_]*\.h|lwip/|board/|kshell/|port_esp32\.h|port_host\.h|"
+    r"unistd\.h|pthread\.h|sys/"
+    r"))"
+)
+
+# What a portable component may not include.
+PLATFORM_INCLUDE = re.compile(
+    r'#\s*include\s*[<"]((?:'
+    r"esp_[a-z0-9_]*\.h|freertos/|driver/|hal/|soc/|rom/|"
+    r"nvs[a-z_]*\.h|lwip/|port_esp32\.h|port_host\.h"
+    r"))"
+)
+
+# The platform files that still live inside portable components. Every
+# entry is a debt the portability work pays back; the check fails when an
+# entry is no longer needed, so the list can only shrink.
+PLATFORM_DEBT = {
+}
+
+# A portable component that still speaks to the port directly. The same
+# rule as above, for the calls instead of the includes: the upper layers
+# ask the kernel (kernel/sysinfo.h, kernel/lock.h), never k_port_*.
+PORT_CALL_DEBT = {
+}
+
+PORT_CALL = re.compile(r"\b(k_port_[a-z0-9_]+)\s*\(")
+
+
+# What the kernel core may not include at all: the chip, the board, the
+# upper layers, the port implementations, and POSIX (the host is a port, the
+# kernel is not).
+KERNEL_FORBIDDEN = (
+    r"esp_[a-z0-9_]*\.h",
+    r"freertos/",
+    r"driver/",
+    r"drivers/",
+    r"hal/",
+    r"soc/",
+    r"rom/",
+    r"nvs[a-z_]*\.h",
+    r"lwip/",
+    r"board/",
+    r"kshell/",
+    r"port_esp32\.h",
+    r"port_host\.h",
+    r"unistd\.h",
+    r"pthread\.h",
+    r"sys/",
+)
+
+# What a portable component may not include. Its own directory is not here:
+# components/board includes board/board.h, and that is its own header.
+PLATFORM_INCLUDE = (
+    r"esp_[a-z0-9_]*\.h",
+    r"freertos/",
+    r"driver/",
+    r"hal/",
+    r"soc/",
+    r"rom/",
+    r"nvs[a-z_]*\.h",
+    r"lwip/",
+    r"kernel/port",
+    r"drivers/",
+    r"board/",
+    r"port_esp32\.h",
+    r"port_host\.h",
+    r"^pthread\.h$",
+    r"^unistd\.h$",
+    r"^sys/",
+)
+
+# The platform files that still live inside portable components. Every entry
+# is a debt the portability work pays back; the check fails when an entry is
+# no longer needed, so the list can only shrink.
+PLATFORM_DEBT = {}
+
+# A portable component that still speaks to the port directly. The same rule,
+# for the calls: an identifier is a use, not only "name(".
+PORT_CALL_DEBT = {}
+
+INCLUDE = re.compile(r'#\s*include\s*[<"]([^>"]+)[>"]')
+PORT_CALL = re.compile(r"\bk_port_[a-z0-9_]+\b")
+IDENTIFIER = re.compile(r"[A-Za-z0-9_./-]+")
+
+
+def code_only(text: str) -> str:
+    """Drop comments and the backslash of a continued line.
+
+    A comment that names a function is documentation, not a call; a header
+    included through a macro is still found by the text of the macro, and a
+    line continued with a backslash does not hide the include from the
+    pattern. The strings are kept: a call spelled in a string is not a call,
+    but a header spelled in a string is not either - and both are rare
+    enough to accept.
+    """
+    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
+    text = re.sub(r"//[^\n]*", " ", text)
+    return text.replace("\\\n", " ")
+
+
+def check_layers(root: str, report: Report, files: list) -> None:
+    """The portable layers do not include the platform (ADR 0004)."""
+    group = "layers"
+
+    kernel_bad = []
+    portable_bad = []
+    debt_left = set(PLATFORM_DEBT)
+    call_bad = []
+    call_debt_left = set(PORT_CALL_DEBT)
+
+    for name in files:
+        path = os.path.join(root, name)
+        if not os.path.isfile(path) or is_binary(path):
+            continue
+
+        text = code_only(read_text(path))
+
+        if name.startswith(KERNEL_DIR):
+            for match in INCLUDE.finditer(text):
+                header = match.group(1)
+                for pattern in KERNEL_FORBIDDEN:
+                    if re.search(pattern, header):
+                        kernel_bad.append(f"{name}: {header}")
+                        break
+        elif name.startswith(PORTABLE_DIRS):
+            component = name.split("/")[1]
+
+            for match in INCLUDE.finditer(text):
+                header = match.group(1)
+
+                # The header of the component itself is not a platform header.
+                if header.startswith(component + "/"):
+                    continue
+
+                for pattern in PLATFORM_INCLUDE:
+                    if re.search(pattern, header):
+                        debt_left.discard(name)
+                        if name not in PLATFORM_DEBT:
+                            portable_bad.append(f"{name}: {header}")
+                        break
+
+            for match in PORT_CALL.finditer(text):
+                call_debt_left.discard(name)
+                if name not in PORT_CALL_DEBT:
+                    call_bad.append(f"{name}: {match.group(0)}")
+                    break
+
+    report.add(
+        group,
+        "the kernel includes nothing but the kernel",
+        not kernel_bad,
+        "; ".join(kernel_bad[:5]) if kernel_bad else "no platform header in " + KERNEL_DIR,
+    )
+    report.add(
+        group,
+        "the portable components include no platform code",
+        not portable_bad,
+        "; ".join(portable_bad[:5]) if portable_bad else f"{len(PORTABLE_DIRS)} directory(ies)",
+    )
+    report.add(
+        group,
+        "the list of the platform debt is up to date",
+        not debt_left,
+        "; ".join(f"{name}: {PLATFORM_DEBT[name]} - remove the entry" for name in sorted(debt_left))
+        if debt_left
+        else f"{len(PLATFORM_DEBT)} known file(s)",
+    )
+    report.add(
+        group,
+        "the portable components do not call the port",
+        not call_bad,
+        "; ".join(call_bad[:5]) if call_bad else f"{len(PORT_CALL_DEBT)} known caller(s)",
+    )
+    report.add(
+        group,
+        "the list of the port callers is up to date",
+        not call_debt_left,
+        "; ".join(
+            f"{name}: {PORT_CALL_DEBT[name]} - remove the entry" for name in sorted(call_debt_left)
+        )
+        if call_debt_left
+        else f"{len(PORT_CALL_DEBT)} known caller(s)",
+    )
+# --- the contract of the port -------------------------------------------------
+
+PORT_HEADER_DIR = "components/kernel/include/kernel/port"
+PORT_IMPLEMENTATION_DIRS = (
+    "components/port_esp32/src",
+    "ports/port_host/src",
+    "ports/port_null/src",
+)
+
+# A declaration of the contract: a line that starts with the return type and
+# names a k_port_* function. The comments of the headers never match.
+CONTRACT_DECLARATION = re.compile(r"^[A-Za-z_][\w \t\*]*?\b(k_port_[a-z0-9_]+)\s*\(", re.MULTILINE)
+
+
+def contract_functions(root: str) -> list:
+    directory = os.path.join(root, PORT_HEADER_DIR)
+    if not os.path.isdir(directory):
+        return []
+
+    names = set()
+    for entry in sorted(os.listdir(directory)):
+        if entry.endswith(".h"):
+            names.update(CONTRACT_DECLARATION.findall(read_text(os.path.join(directory, entry))))
+
+    return sorted(names)
+
+
+def check_portable_build(root: str, report: Report) -> None:
+    """The host build compiles every portable component."""
+    group = "layers"
+
+    path = os.path.join(root, "CMakeLists.txt")
+    if not os.path.isfile(path):
+        report.add(group, "the top level build file is there", False, "CMakeLists.txt is missing")
+        return
+
+    # CMake comments start with "#" and a commented add_subdirectory used to
+    # satisfy the check while the component was never compiled.
+    text = re.sub(r"^\s*#.*$", "", read_text(path), flags=re.M)
+    missing = []
+    unbuilt = []
+
+    for directory in PORTABLE_DIRS:
+        name = directory.rstrip("/")
+
+        if f"add_subdirectory({name})" not in text:
+            missing.append(name)
+            continue
+
+        # A component that is added but whose library is not in the build is
+        # still not compiled: a commented line used to satisfy the text.
+        library_dir = os.path.join(root, "build-host", "components", os.path.basename(name))
+        if os.path.isdir(library_dir) and not any(
+            entry.startswith("libmicroos_") and entry.endswith(".a")
+            for entry in os.listdir(library_dir)
+        ):
+            unbuilt.append(name)
+
+    report.add(
+        group,
+        "the host build includes every portable component",
+        not missing,
+        "not built on the host: " + ", ".join(missing) if missing else f"{len(PORTABLE_DIRS)} component(s)",
+    )
+    report.add(
+        group,
+        "the libraries of the portable components are there",
+        not unbuilt,
+        "no library: " + ", ".join(unbuilt) if unbuilt else "one library per component",
+    )
+
+# The order of the directories is the order of the report; a port without a
+# host build (the ESP32) is checked by the text of its sources.
+PORT_IMPLEMENTATION_DIRS = (
+    "components/port_esp32/src",
+    "ports/port_host/src",
+    "ports/port_null/src",
+    "ports/port_x86_64/src",
+)
+
+# Where the host build puts the libraries of the ports that it builds.
+PORT_LIBRARIES = {
+    "ports/port_host/src": "build-host/ports/port_host/libmicroos_port_host.a",
+    "ports/port_null/src": "build-host/ports/port_null/libmicroos_port_null.a",
+}
+
+
+def contract_functions(root: str) -> list:
+    directory = os.path.join(root, PORT_HEADER_DIR)
+    if not os.path.isdir(directory):
+        return []
+
+    names = set()
+    for entry in sorted(os.listdir(directory)):
+        if entry.endswith(".h"):
+            names.update(CONTRACT_DECLARATION.findall(read_text(os.path.join(directory, entry))))
+
+    return sorted(names)
+
+
+def defined_symbols(path: str) -> set:
+    """The global symbols an archive defines, if nm is there to say."""
+    try:
+        result = subprocess.run(
+            ["nm", "--defined-only", "--extern-only", path],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return set()
+
+    if result.returncode != 0:
+        return set()
+
+    symbols = set()
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and parts[1] in ("T", "t", "D", "d", "B", "b", "R", "r"):
+            symbols.add(parts[2])
+
+    return symbols
+
+
+def check_port_contract(root: str, report: Report) -> None:
+    """Every function of the contract has an implementation in every port."""
+    group = "port"
+    names = contract_functions(root)
+
+    report.add(
+        group,
+        "the contract declares its functions",
+        bool(names),
+        f"{len(names)} function(s) in {PORT_HEADER_DIR}/",
+    )
+
+    for directory in PORT_IMPLEMENTATION_DIRS:
+        path = os.path.join(root, directory)
+        if not os.path.isdir(path):
+            report.add(group, f"{directory} exists", False, "the directory is missing")
+            continue
+
+        library = PORT_LIBRARIES.get(directory)
+        symbols = defined_symbols(os.path.join(root, library)) if library else set()
+
+        if symbols:
+            # The built library is the truth: a comment is not a function.
+            missing = [name for name in names if name not in symbols]
+            detail = (
+                "missing: " + ", ".join(missing)
+                if missing
+                else f"{len(names)} function(s) defined in the library"
+            )
+        else:
+            # No host build of this port (the ESP32): the text of its sources.
+            text = ""
+            for entry in sorted(os.listdir(path)):
+                if entry.endswith((".c", ".S")):
+                    text += code_only(read_text(os.path.join(path, entry)))
+
+            missing = [name for name in names if not re.search(r"\b" + name + r"\s*\(", text)]
+            detail = (
+                "missing: " + ", ".join(missing)
+                if missing
+                else f"{len(names)} function(s) in the sources"
+            )
+
+        report.add(group, f"{directory} implements the contract", not missing, detail)
+
+IMAGE_BUDGET_BYTES = 1228800
+
+
+def check_budget(root: str, report: Report) -> None:
+    """The image of the kernel stays inside its budget."""
+    group = "budget"
+    images = []
+
+    for entry in sorted(os.listdir(root)):
+        if not entry.startswith("build"):
+            continue
+        candidate = os.path.join(root, entry, "micro_os.bin")
+        if os.path.isfile(candidate):
+            images.append(candidate)
+
+    if not images:
+        report.skip(group, "the image fits the budget", "no build*/micro_os.bin is there")
+        return
+
+    over = [
+        f"{os.path.basename(os.path.dirname(path))}: {os.path.getsize(path)} bytes"
+        for path in images
+        if os.path.getsize(path) > IMAGE_BUDGET_BYTES
+    ]
+    sizes = ", ".join(
+        f"{os.path.basename(os.path.dirname(path))} {os.path.getsize(path)}" for path in images
+    )
+
+    report.add(
+        group,
+        "the image fits the budget",
+        not over,
+        "; ".join(over) + f" (budget {IMAGE_BUDGET_BYTES})" if over else f"{sizes} of {IMAGE_BUDGET_BYTES}",
+    )
+
 def check_version(root: str, report: Report, expected: str) -> None:
     """The version of the kernel against the expected one (the tag)."""
     group = "version"
@@ -924,6 +1342,10 @@ def main(argv: list) -> int:
     images = check_images(root, report)
     table = check_partitions(root, report)
     check_config(root, report, images, table)
+    check_layers(root, report, files)
+    check_portable_build(root, report)
+    check_port_contract(root, report)
+    check_budget(root, report)
     if args.expect_version:
         check_version(root, report, args.expect_version)
     if not args.skip_git:

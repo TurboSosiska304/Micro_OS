@@ -86,6 +86,15 @@ static int fake_status(struct wifi_status *out)
     return 0;
 }
 
+static int fake_mac(uint8_t *mac)
+{
+    static const uint8_t address[6] = {0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff};
+
+    memcpy(mac, address, sizeof(address));
+
+    return 0;
+}
+
 static const struct wifi_radio s_fake_radio = {
     .start = fake_start,
     .stop = fake_stop,
@@ -93,6 +102,7 @@ static const struct wifi_radio s_fake_radio = {
     .disconnect = fake_disconnect,
     .scan = fake_scan,
     .status = fake_status,
+    .mac = fake_mac,
 };
 
 /* --- the fake storage --- */
@@ -170,6 +180,7 @@ static void reset_fake(void)
 static void test_the_states(void)
 {
     struct wifi_status status;
+    uint8_t mac[6];
 
     ktest_begin("wifi: the state of the station follows the radio");
 
@@ -183,6 +194,12 @@ static void test_the_states(void)
     KT_CHECK_INT_EQ(s_start_calls, 1);
     KT_CHECK_INT_EQ(wifi_get_status(&status), WIFI_OK);
     KT_CHECK_INT_EQ(status.state, WIFI_STATE_IDLE);
+
+    /* The address of the station is the one the radio reports. */
+    memset(mac, 0, sizeof(mac));
+    KT_CHECK_INT_EQ(wifi_get_mac(mac), WIFI_OK);
+    KT_CHECK_INT_EQ(mac[0], 0xaa);
+    KT_CHECK_INT_EQ(mac[5], 0xff);
 
     /* Starting twice does not touch the radio again. */
     KT_CHECK_INT_EQ(wifi_start(), WIFI_OK);
@@ -204,6 +221,39 @@ static void test_the_states(void)
     KT_CHECK_INT_EQ(s_stop_calls, 1);
     KT_CHECK_INT_EQ(wifi_get_status(&status), WIFI_OK);
     KT_CHECK_INT_EQ(status.state, WIFI_STATE_STOPPED);
+}
+
+/*
+ * A board whose radio did not come up still has to answer: every call that
+ * needs the hardware says "no radio" instead of touching a table that is not
+ * there. The backend installs the radio at the boot, and this is the state
+ * the shell meets when it did not.
+ */
+static void test_the_missing_radio(void)
+{
+    struct wifi_status status;
+    struct wifi_scan_entry entry;
+    k_size_t count = 0;
+    uint8_t mac[6];
+
+    ktest_begin("wifi: without a radio every call says so");
+
+    wifi_set_radio(NULL);
+    wifi_init();
+
+    KT_CHECK_INT_EQ(wifi_start(), WIFI_NO_RADIO);
+    KT_CHECK_INT_EQ(wifi_stop(), WIFI_NO_RADIO);
+    KT_CHECK_INT_EQ(wifi_connect("home", "secret"), WIFI_NO_RADIO);
+    KT_CHECK_INT_EQ(wifi_disconnect(), WIFI_NO_RADIO);
+    KT_CHECK_INT_EQ(wifi_scan(&entry, 1, &count), WIFI_NO_RADIO);
+    KT_CHECK_INT_EQ(wifi_get_mac(mac), WIFI_NO_RADIO);
+
+    /* There is still a state to report, and it is the one of a station at rest. */
+    KT_CHECK_INT_EQ(wifi_get_status(&status), WIFI_OK);
+    KT_CHECK_INT_EQ(status.state, WIFI_STATE_STOPPED);
+
+    /* The rest of the suite wants the fake radio back. */
+    reset_fake();
 }
 
 static void test_the_failure(void)
@@ -424,6 +474,7 @@ static void test_the_reconnection(void)
 void test_wifi(void)
 {
     test_the_states();
+    test_the_missing_radio();
     test_the_failure();
     test_the_refusals();
     test_the_configuration();

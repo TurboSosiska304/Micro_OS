@@ -8,12 +8,13 @@
 #include "kernel/task.h"
 #include "mfs/mfs.h"
 #include "mfs/mfs_ram_device.h"
+#include "mfs/mfs_vfs.h"
 
 /* The size of the volume of the tests: 256 blocks of 1 KB. */
 #define TEST_BLOCKS 256
 
 static struct mfs_ram_device g_volume;
-static struct mfs_device g_device;
+static struct k_blockdev g_device;
 
 static int setup(void)
 {
@@ -407,6 +408,22 @@ static volatile int s_writers_failed;
 static volatile int s_writers_done;
 
 /*
+ * The two writers update these counters at the same moment, and a plain
+ * ++ loses one of the two updates now and then: the test then says that a
+ * writer never finished, while both did. The counter is bumped by the
+ * builtin, which is one instruction and no race.
+ */
+static void count_failure(void)
+{
+    (void)__atomic_add_fetch(&s_writers_failed, 1, __ATOMIC_SEQ_CST);
+}
+
+static void count_done(void)
+{
+    (void)__atomic_add_fetch(&s_writers_done, 1, __ATOMIC_SEQ_CST);
+}
+
+/*
  * Every task writes its own file, with pauses between the writes: the
  * tasks meet each other in the middle of their work, and the filesystem
  * has to keep them apart.
@@ -423,28 +440,28 @@ static void writer_task(void *arg)
     snprintf(name, sizeof(name), "/w%d.bin", id);
 
     if (mfs_create(name) != MFS_OK) {
-        s_writers_failed++;
+        count_failure();
         return;
     }
 
     if (mfs_open(name, MFS_O_RDWR, &file) != MFS_OK) {
-        s_writers_failed++;
+        count_failure();
         return;
     }
 
     for (i = 0; i < 20; i++) {
         if (mfs_write(&file, buffer, sizeof(buffer)) != (int)sizeof(buffer)) {
-            s_writers_failed++;
+            count_failure();
             break;
         }
         k_sched_yield();
     }
 
     if (mfs_close(&file) != MFS_OK) {
-        s_writers_failed++;
+        count_failure();
     }
 
-    s_writers_done++;
+    count_done();
 }
 
 /*
@@ -579,6 +596,57 @@ static void test_append_and_access(void)
     teardown();
 }
 
+/*
+ * The property: a volume is found by the name of its device, formatted when
+ * the medium was never written and mounted at a point of the tree. The
+ * filesystem itself knows no platform: the device is whatever the registry
+ * holds under that name.
+ */
+static void test_vfs_mount(void)
+{
+    struct mfs_ram_device volume;
+    struct k_blockdev device;
+    struct mfs_file file;
+    char buffer[8];
+
+    ktest_begin("mfs: the volume of a device is mounted by name");
+
+    KT_CHECK_INT_EQ(mfs_ram_init(&volume, TEST_BLOCKS), 0);
+    mfs_ram_device(&volume, &device);
+
+    /* The medium was never written: an erased flash is all ones. */
+    memset(volume.data, 0xFF, (size_t)TEST_BLOCKS * MFS_BLOCK_SIZE);
+    KT_CHECK_INT_EQ(k_blockdev_register(&device), 0);
+
+    /* The device is not there: the mount says so and touches nothing. */
+    KT_CHECK(mfs_vfs_mount("/", "nope") != 0);
+
+    KT_CHECK_INT_EQ(mfs_vfs_mount("/", "ram0"), 0);
+    KT_CHECK(mfs_is_mounted());
+    KT_CHECK_INT_EQ(mfs_create("/first.txt"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_open("/first.txt", MFS_O_RDWR, &file), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_write(&file, "hello", 5), 5);
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+
+    /* The volume that the first mount made is mounted, not made again. */
+    mfs_unmount();
+    KT_CHECK_INT_EQ(mfs_vfs_mount("/", "ram0"), 0);
+    KT_CHECK_INT_EQ(mfs_open("/first.txt", MFS_O_RDONLY, &file), MFS_OK);
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(mfs_read(&file, buffer, sizeof(buffer)), 5);
+    KT_CHECK_STR_EQ(buffer, "hello");
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+
+    /* A format of the volume: the file is gone, the volume is usable. */
+    KT_CHECK_INT_EQ(mfs_vfs_format("ram0"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_vfs_mount("/", "ram0"), 0);
+    KT_CHECK_INT_EQ(mfs_open("/first.txt", MFS_O_RDONLY, &file), MFS_ENOENT);
+
+    /* The volume of this test is not the one of setup(): it is freed here. */
+    mfs_unmount();
+    mfs_ram_free(&volume);
+}
+
 void test_mfs(void)
 {
     test_format();
@@ -593,4 +661,5 @@ void test_mfs(void)
     test_directories();
     test_unlink();
     test_persistence();
+    test_vfs_mount();
 }

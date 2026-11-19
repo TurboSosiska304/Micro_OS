@@ -17,8 +17,11 @@ struct mfs_ram_device {
 /* Prepare a volume of "blocks" blocks. */
 int mfs_ram_init(struct mfs_ram_device *dev, k_u32_t blocks);
 
-/* The device that the filesystem talks to. */
-void mfs_ram_device(struct mfs_ram_device *dev, struct mfs_device *out);
+/*
+ * Fill `out` with the block device of the volume: one sector per block of
+ * the filesystem, in the memory of the test.
+ */
+void mfs_ram_device(struct mfs_ram_device *dev, struct k_blockdev *out);
 
 void mfs_ram_free(struct mfs_ram_device *dev);
 

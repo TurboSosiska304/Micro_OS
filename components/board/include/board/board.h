@@ -3,30 +3,17 @@
  *
  * Static description of the hardware the kernel is running on. Used by the
  * boot banner, by `uname -a` in the shell and by driver probing.
+ *
+ * The shape of the description is the one of the kernel: it hands the
+ * structure over at the boot through kernel/board.h, so the components
+ * above the port never see the board itself.
  */
 #ifndef MICRO_OS_BOARD_BOARD_H
 #define MICRO_OS_BOARD_BOARD_H
 
-#include "kernel/types.h"
-
-struct board_info {
-    const char *name;    /* "stickc_plus2" */
-    const char *desc;    /* "M5Stack StickC Plus2" */
-    const char *soc;     /* "ESP32-PICO-V3-02" */
-    k_u32_t flash_mb;    /* internal flash size */
-    k_u32_t psram_kb;    /* external PSRAM size */
-    const char *lcd;     /* display description */
-    const char *imu;     /* 6-axis IMU */
-    const char *rtc;     /* real time clock */
-    const char *audio;   /* microphone / audio */
-    const char *power;   /* power management note */
-    const char *buttons; /* user buttons */
-    bool has_buzzer;
-    bool has_ir;
-    bool has_mic;
-};
+#include "kernel/board.h"
 
 /* Description of the board this binary was built for. */
-const struct board_info *board_get_info(void);
+const struct kernel_board *board_get_info(void);
 
 #endif /* MICRO_OS_BOARD_BOARD_H */

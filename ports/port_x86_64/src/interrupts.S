@@ -1,0 +1,175 @@
+/*
+ * Micro OS — the interrupts of the x86-64 port.
+ *
+ * The table of the interrupts lives in port_x86_64.c; this file owns the
+ * first instructions of every handler, the part that has to run before C can
+ * be called. There are two shapes here.
+ *
+ * An exception is a failure of the running code, and nothing is restored,
+ * because the handler never returns: the processor pushes RIP, CS and
+ * RFLAGS and, for some vectors, an error code. The stub adds the number of
+ * the vector, so that both cases give C the same three numbers, and C says
+ * what happened and stops the machine.
+ *
+ * An interrupt of the timer is a normal event: the handler does its work and
+ * returns with iretq, so every register it touches is saved around the call
+ * of C. The kernel is built without the red zone and without SSE, so the
+ * stack and the general registers are the whole of the state.
+ */
+.section .text, "ax", @progbits
+.code64
+
+/*
+ * One stub per exception. The processor pushes RIP, CS and RFLAGS, and the
+ * error code last, so it ends up on top of the frame; a vector without one
+ * gets a zero pushed in its place. Either way the frame at the common tail
+ * is: vector, error, RIP.
+ */
+.macro isr_exception number
+.global isr\number
+.type isr\number, @function
+isr\number:
+    pushq $0
+    pushq $\number
+    jmp isr_exception_common
+.size isr\number, . - isr\number
+.endm
+
+/* The same for the vectors that carry an error code of their own: the code
+ * is already on the stack, so the stub adds only the number. */
+.macro isr_exception_err number
+.global isr\number
+.type isr\number, @function
+isr\number:
+    pushq $\number
+    jmp isr_exception_common
+.size isr\number, . - isr\number
+.endm
+
+isr_exception 0
+isr_exception 1
+isr_exception 2
+isr_exception 3
+isr_exception 4
+isr_exception 5
+isr_exception 6
+isr_exception 7
+isr_exception_err 8
+isr_exception 9
+isr_exception_err 10
+isr_exception_err 11
+isr_exception_err 12
+isr_exception_err 13
+isr_exception_err 14
+isr_exception 15
+isr_exception 16
+isr_exception_err 17
+isr_exception 18
+isr_exception 19
+isr_exception_err 20
+isr_exception_err 21
+isr_exception 22
+isr_exception 23
+isr_exception 24
+isr_exception 25
+isr_exception 26
+isr_exception 27
+isr_exception 28
+isr_exception_err 29
+isr_exception_err 30
+isr_exception 31
+
+/*
+ * The common tail of the exceptions. The handler of C does not return, so
+ * the registers of the moment are not worth saving: the body is readable
+ * when it only passes the three numbers of the frame.
+ */
+.type isr_exception_common, @function
+isr_exception_common:
+    movq %rsp, %rbp
+    movq 0(%rbp), %rdi /* the vector */
+    movq 8(%rbp), %rsi /* the error code, or the zero of the stub */
+    movq 16(%rbp), %rdx /* the instruction that was running */
+
+    /* The ABI wants the stack of a call aligned to 16 bytes, and an
+     * interrupt may have arrived at any alignment. */
+    andq $-16, %rsp
+    call port_x86_64_exception
+
+1:
+    cli
+    hlt
+    jmp 1b
+.size isr_exception_common, . - isr_exception_common
+
+/*
+ * The timer. It is the only line of the PIC that is unmasked, and it has to
+ * return where it interrupted, so everything that C may use is saved: the
+ * ten registers below plus the frame the processor pushed are the whole of
+ * the state of the kernel.
+ */
+.global isr_irq0
+.type isr_irq0, @function
+isr_irq0:
+    pushq %rax
+    pushq %rcx
+    pushq %rdx
+    pushq %rsi
+    pushq %rdi
+    pushq %r8
+    pushq %r9
+    pushq %r10
+    pushq %r11
+    pushq %rbp
+
+    movq %rsp, %rbp /* the saved stack, for the way back */
+    andq $-16, %rsp
+    call port_x86_64_irq_tick
+    movq %rbp, %rsp
+
+    popq %rbp
+    popq %r11
+    popq %r10
+    popq %r9
+    popq %r8
+    popq %rdi
+    popq %rsi
+    popq %rdx
+    popq %rcx
+    popq %rax
+    iretq
+.size isr_irq0, . - isr_irq0
+
+/*
+ * A vector nobody claimed. It cannot say which one it was, because it has
+ * no stub of its own, but a sentence beats a jump to a zero.
+ */
+.global isr_unexpected
+.type isr_unexpected, @function
+isr_unexpected:
+    movq %rsp, %rbp
+    andq $-16, %rsp
+    call port_x86_64_unexpected
+
+1:
+    cli
+    hlt
+    jmp 1b
+.size isr_unexpected, . - isr_unexpected
+
+/*
+ * The addresses of the 32 exception stubs, so that the C side can fill the
+ * table of the interrupts without naming every symbol of this file.
+ */
+.section .rodata, "a", @progbits
+.align 8
+.global port_isr_exception_table
+.type port_isr_exception_table, @object
+port_isr_exception_table:
+    .quad isr0, isr1, isr2, isr3, isr4, isr5, isr6, isr7
+    .quad isr8, isr9, isr10, isr11, isr12, isr13, isr14, isr15
+    .quad isr16, isr17, isr18, isr19, isr20, isr21, isr22, isr23
+    .quad isr24, isr25, isr26, isr27, isr28, isr29, isr30, isr31
+.size port_isr_exception_table, . - port_isr_exception_table
+
+.section .note.GNU-stack, "", @progbits
