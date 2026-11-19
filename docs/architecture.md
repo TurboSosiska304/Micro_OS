@@ -148,17 +148,33 @@ apart:
   private data), not in a table of the filesystem. Two tasks that read
   their own files never touch each other's position;
 * the filesystem itself has one lock, taken by every public call of
-  `mfs_*`. The kernel has no blocking primitive yet, so the lock is a
-  "sleep lock": a task that has to wait sleeps a millisecond and looks
-  again, and the CPU goes to the task that holds the lock. It is
-  recursive, because the functions of the filesystem call each other
-  (`mfs_close` puts the changes on the flash through `mfs_sync`);
+  `mfs_*`. It is a recursive `k_mutex` of the kernel (`kernel/lock.h`),
+  so a task that has to wait is put to sleep by the platform and does not
+  burn a time slice looking again; it is recursive because the functions
+  of the filesystem call each other (`mfs_close` puts the changes on the
+  flash through `mfs_sync`);
 * the adapter between the filesystem and the VFS
   (`components/mfs/src/mfs_vfs.c`) is the only place where the codes of
   the errors of the filesystem are translated into the codes of the
   contract of the system calls: the two sets are close but not the same
   (`-9` is "the directory is not empty" of the filesystem and a "bad file
   descriptor" of the kernel).
+
+### The blocks under the filesystem
+
+MicroFS is a consumer of blocks, not of a flash chip: `kernel/blockdev.h`
+declares a device (a sector size, a count, read and write, an optional erase
+and sync) and the kernel keeps a small registry of the devices the platform
+registered at the boot. On the board the device is `flash0`, the partition
+`mfs` of `partitions.csv`; in the tests it is an array in the memory. The
+filesystem asks for sector 17 and does not know which of them it got, which
+is what lets the persistence tests run on a laptop.
+
+The store behind `/etc` is the same idea for a handful of strings:
+`kernel/port/kv.h` (get, set, erase, commit, next) is a duty of the port,
+because a board has one store. The ESP32 answers with the NVS, the host with
+a file per key, and the configuration does not know the difference - which
+is why `config sync` can be tested without a board.
 
 ## 6. Memory (phase 3)
 
@@ -224,6 +240,14 @@ sees the same output as a person at the USB cable; the negotiation of
 telnet is answered with refusals, because the shell needs no options —
 the client keeps its own echo. There is no authentication: the board is
 on the network of its owner, and `telnet off` closes the door.
+
+The sockets under all of this are a duty of the port as well:
+`kernel/port/net.h` offers a connection, a server, a send that may wait or
+not, and a one-shot UDP exchange - and nothing else. There is no TLS, no
+IPv6 and no raw socket: the board is on the network of its owner. On the
+board the port speaks lwIP, on the host it speaks the sockets of the
+process, so the HTTP client, the clock of NTP and the server of telnet are
+exercised without a board.
 
 ## 8. Testing
 
