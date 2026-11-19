@@ -20,7 +20,7 @@
 | Drivers: fb(tft), input(buttons), buzzer, imu, rtc, ir, mic     |
 | Wifi: the portable core of the station + the radio of the ESP32 |
 +---------------------------------------------------------------+
-| Port: ESP32 (ESP-IDF) | Host (Linux, for tests and simulation)  |
+| Port: ESP32 (ESP-IDF) | Host (Linux) | x86-64 (bare metal, QEMU) |
 +---------------------------------------------------------------+
 ```
 

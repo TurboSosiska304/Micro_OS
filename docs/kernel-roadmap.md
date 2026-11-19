@@ -62,6 +62,24 @@ Every item ends with a state on the board and green tests.
 * [ ] `fork()` with an address space of its own, copy on write
 * [ ] The checks of every argument at the edge of the syscall table
 
+## K5.0 - A second machine in the tests (started)
+
+The first bare-metal port is x86-64, not ARM: the machine is documented,
+the console is a UART that predates the PC, and QEMU boots the kernel in
+CI. The port is `ports/port_x86_64`, the boot is the project's own
+(multiboot: `loader32.S` copies the kernel and turns the long mode on).
+
+* [x] The contract of the port 1.2 on x86-64: COM1, the TSC against the
+      PIT, a first fit heap over the memory map, the honest stubs of the
+      store and the sockets
+* [x] The banner of the kernel on a real (emulated) processor, and
+      `make x86-smoke` in the checks
+* [ ] The IDT and the timer interrupt
+* [ ] The task substrate: the switch of the contexts (ADR 0002) and the
+      shell on the serial port
+* [ ] Paging with the kernel in the higher half (the identity map is the
+      first step, not the model)
+
 ## K5 - A processor with an MMU (planned)
 
 * [ ] A port for a real ARM: the page tables, the switch of the address space,
