@@ -42,14 +42,23 @@ behind a port:
 
 ```
 components/kernel/    <- plain C11, zero ESP-IDF dependencies
+kernel/port/*.h       <- the contract: console, time, memory, locks, power, store, sockets
 components/board/     <- board description
 components/port_esp32/<- ESP32 implementation of the port (ESP-IDF)
 ports/port_host/      <- Linux implementation (simulator + unit tests)
+ports/port_null/      <- no machine at all: linked in CI to prove the kernel needs nothing else
 ```
 
 Consequence: the kernel compiles and its tests run on a normal PC in seconds. The
 edit/compile/run loop does not involve flashing a device, while the firmware
 itself stays a plain ESP-IDF project.
+
+The boundary is not a promise, it is a check: `make integrity` refuses a
+platform header in the kernel, a `k_port_*` call above it, a portable component
+that the host build does not compile, and a port that leaves a function of the
+contract unimplemented. The contract has a version, and the boot compares it
+with the one the port reports (ADR 0004). A new chip is a new port directory -
+see [docs/porting.md](docs/porting.md).
 
 ## Build and run
 
