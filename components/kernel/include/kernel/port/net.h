@@ -15,8 +15,8 @@
 #include "kernel/types.h"
 
 /* The socket of a session, and the socket that waits for the sessions. */
-typedef struct k_port_socket k_port_socket_t;
-typedef struct k_port_server k_port_server_t;
+typedef struct k_socket k_port_socket_t;
+typedef struct k_server k_port_server_t;
 
 /*
  * Open a TCP connection to host:port. Returns NULL when the name does not

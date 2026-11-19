@@ -3,8 +3,8 @@
  *
  * The protocol has no sockets in it: the request is written and the answer
  * is read through a transport, so the host tests replay a canned answer of a
- * server without a network. The ESP32 backend fills the transport with the
- * sockets of lwIP.
+ * server without a network. net.c fills the transport with the sockets of
+ * the port.
  *
  * The client speaks HTTP/1.0 and closes the connection after the answer: the
  * board has no room for a pool of keep-alive connections, and a server that
