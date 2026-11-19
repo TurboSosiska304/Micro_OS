@@ -15,7 +15,7 @@
 
 #define KERNEL_VERSION_MAJOR 0
 #define KERNEL_VERSION_MINOR 3
-#define KERNEL_VERSION_PATCH 0
+#define KERNEL_VERSION_PATCH 1
 
 /* A pre-release carries a suffix ("-pre") until the release drops it: the
  * tag is vX.Y.Z or vX.Y.Z-pre, the kernel says the same, and the integrity

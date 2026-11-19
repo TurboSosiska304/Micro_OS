@@ -38,6 +38,11 @@ add_compile_options(
     -Wextra
     -Werror
     -Wno-unused-parameter
+    # The kernel has no libc, and some distributions turn the checks of the
+    # C library into calls to __snprintf_chk and friends: there is nobody to
+    # answer them under the kernel.
+    -U_FORTIFY_SOURCE
+    -D_FORTIFY_SOURCE=0
 )
 
 file(GLOB KERNEL_SOURCES "${KERNEL_DIR}/src/*.c")
