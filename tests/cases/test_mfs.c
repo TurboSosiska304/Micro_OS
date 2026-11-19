@@ -376,6 +376,265 @@ static void test_unlink(void)
     teardown();
 }
 
+/*
+ * The address of a record of the table of the inodes in the volume of the
+ * test. The layout is computed the way the format computes it, so the
+ * test can put an old record into a volume of today.
+ */
+static k_u8_t *inode_record(k_u32_t index)
+{
+    struct mfs_superblock sb;
+    k_u32_t bitmap_blocks;
+
+    memcpy(&sb, g_volume.data + (size_t)(TEST_BLOCKS - 1) * MFS_BLOCK_SIZE, sizeof(sb));
+    bitmap_blocks = (sb.data_blocks + 8u * MFS_BLOCK_SIZE - 1u) / (8u * MFS_BLOCK_SIZE);
+
+    return g_volume.data + (size_t)(sb.meta_start + bitmap_blocks) * MFS_BLOCK_SIZE +
+           (size_t)index * MFS_INODE_SIZE;
+}
+
+/*
+ * The property: a new object gets the mode of the design - 0644 for a
+ * file, 0755 for a directory - and the owner 0. The type of the record
+ * stays in the two low bits, where it always was.
+ */
+static void test_default_modes(void)
+{
+    struct mfs_inode inode;
+    struct mfs_dirent entry;
+    struct mfs_dirent entries[8];
+    k_size_t i;
+    int found = 0;
+
+    ktest_begin("mfs: a new file is 0644 and a new directory is 0755");
+
+    KT_CHECK_INT_EQ(setup(), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+
+    /* The root of a new volume is a directory like any other. */
+    KT_CHECK_INT_EQ(mfs_stat("/", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_inode_mode(&inode), MFS_MODE_DIR_DEFAULT);
+    KT_CHECK_INT_EQ(mfs_inode_owner(&inode), 0);
+
+    KT_CHECK_INT_EQ(mfs_create("/plain.txt"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/plain.txt", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_inode_mode(&inode), MFS_MODE_DEFAULT);
+    KT_CHECK_INT_EQ(mfs_inode_owner(&inode), 0);
+
+    KT_CHECK_INT_EQ(mfs_mkdir("/sub"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/sub", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_inode_mode(&inode), MFS_MODE_DIR_DEFAULT);
+    KT_CHECK_INT_EQ(mfs_inode_owner(&inode), 0);
+
+    /* The two low bits are still the type: nothing moved under them. */
+    KT_CHECK_INT_EQ(inode.flags & MFS_INODE_USED, MFS_INODE_USED);
+    KT_CHECK_INT_EQ(inode.flags & MFS_INODE_DIR, MFS_INODE_DIR);
+
+    /* The entry that a stat returns carries the same numbers. */
+    memset(&entry, 0, sizeof(entry));
+    KT_CHECK_INT_EQ(mfs_stat("/sub", NULL, &entry), MFS_OK);
+    KT_CHECK_INT_EQ(entry.mode, MFS_MODE_DIR_DEFAULT);
+    KT_CHECK_INT_EQ(entry.owner, 0);
+
+    /* And so does a listing, without a stat per entry. */
+    memset(entries, 0, sizeof(entries));
+    KT_CHECK_INT_EQ(mfs_list("/", entries, 8), MFS_OK);
+    for (i = 0; i < 8; i++) {
+        if (strcmp(entries[i].name, "plain.txt") == 0) {
+            found = 1;
+            KT_CHECK_INT_EQ(entries[i].mode, MFS_MODE_DEFAULT);
+            KT_CHECK_INT_EQ(entries[i].owner, 0);
+        }
+    }
+    KT_CHECK(found);
+
+    teardown();
+}
+
+/*
+ * The property: chmod changes the nine bits of the mode and nothing else -
+ * the type of the record and the owner stay where they were.
+ */
+static void test_chmod(void)
+{
+    struct mfs_inode inode;
+
+    ktest_begin("mfs: chmod changes the mode and keeps the type and the owner");
+
+    KT_CHECK_INT_EQ(setup(), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+
+    KT_CHECK_INT_EQ(mfs_create("/tool"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_chown("/tool", 42), MFS_OK);
+
+    KT_CHECK_INT_EQ(mfs_chmod("/tool", 0755), MFS_OK);
+    /* The mode is written into the table; a sync is the end of the change. */
+    KT_CHECK_INT_EQ(mfs_sync(), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/tool", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_inode_mode(&inode), 0755);
+    KT_CHECK_INT_EQ(inode.flags & MFS_INODE_USED, MFS_INODE_USED);
+    KT_CHECK_INT_EQ(inode.flags & MFS_INODE_DIR, 0);
+
+    /* The mode nine bits are all modes, except the zero: see below. */
+    KT_CHECK_INT_EQ(mfs_chmod("/tool", 0001), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/tool", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_inode_mode(&inode), 0001);
+
+    /*
+     * Zero means "the record predates the modes" in a volume of 0.3.x, so
+     * chmod refuses it: a stored zero would come back as 0644 and the
+     * caller would believe a rule that the filesystem does not keep.
+     */
+    KT_CHECK_INT_EQ(mfs_chmod("/tool", 0), MFS_EINVAL);
+    KT_CHECK_INT_EQ(mfs_stat("/tool", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_inode_mode(&inode), 0001);
+
+    KT_CHECK_INT_EQ(mfs_chmod("/tool", 0777), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/tool", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_inode_mode(&inode), 0777);
+
+    /* A change of the mode does not touch the owner. */
+    KT_CHECK_INT_EQ(mfs_inode_owner(&inode), 42);
+
+    /* chmod is not a way to make a file out of a directory. */
+    KT_CHECK_INT_EQ(mfs_mkdir("/dir"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_chmod("/dir", 0700), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/dir", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(inode.flags & MFS_INODE_DIR, MFS_INODE_DIR);
+    KT_CHECK_INT_EQ(mfs_inode_mode(&inode), 0700);
+
+    KT_CHECK_INT_EQ(mfs_chmod("/nope", 0644), MFS_ENOENT);
+
+    teardown();
+}
+
+/*
+ * The property: a mode or an owner that does not fit into its bits is
+ * refused, and the record keeps what it had.
+ */
+static void test_chmod_chown_bounds(void)
+{
+    struct mfs_inode inode;
+
+    ktest_begin("mfs: a mode outside 9 bits and an owner outside 15 are refused");
+
+    KT_CHECK_INT_EQ(setup(), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+
+    KT_CHECK_INT_EQ(mfs_create("/bounds"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_chmod("/bounds", 0640), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_chown("/bounds", 7), MFS_OK);
+
+    /* The first number that does not fit into the nine bits of the mode. */
+    KT_CHECK_INT_EQ(mfs_chmod("/bounds", MFS_MODE_MASK + 1u), MFS_EINVAL);
+    /* The mode of Linux has a sticky bit of its own, the design has not. */
+    KT_CHECK_INT_EQ(mfs_chmod("/bounds", 01000u), MFS_EINVAL);
+    KT_CHECK_INT_EQ(mfs_chmod("/bounds", 0xFFFFFFFFu), MFS_EINVAL);
+    /* And zero means "the record predates the modes", not "no access". */
+    KT_CHECK_INT_EQ(mfs_chmod("/bounds", 0), MFS_EINVAL);
+
+    /* The record did not change: neither the mode nor the owner. */
+    KT_CHECK_INT_EQ(mfs_stat("/bounds", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_inode_mode(&inode), 0640);
+    KT_CHECK_INT_EQ(mfs_inode_owner(&inode), 7);
+
+    /* The largest owner that fits is taken, the next one is refused. */
+    KT_CHECK_INT_EQ(mfs_chown("/bounds", MFS_OWNER_MASK), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/bounds", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_inode_owner(&inode), MFS_OWNER_MASK);
+
+    KT_CHECK_INT_EQ(mfs_chown("/bounds", MFS_OWNER_MASK + 1u), MFS_EINVAL);
+    KT_CHECK_INT_EQ(mfs_chown("/bounds", 0xFFFFFFFFu), MFS_EINVAL);
+    KT_CHECK_INT_EQ(mfs_stat("/bounds", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_inode_owner(&inode), MFS_OWNER_MASK);
+    KT_CHECK_INT_EQ(mfs_inode_mode(&inode), 0640);
+
+    KT_CHECK_INT_EQ(mfs_chown("/nope", 0), MFS_ENOENT);
+
+    teardown();
+}
+
+/*
+ * The property: the volume of 0.3.x has no modes in it, and it is mounted
+ * the way it always was. A record without a mode is read as the mode of
+ * the design for its type, and the volume is not rewritten to make that
+ * true: the fallback is a rule of the reader, not a change of the data.
+ */
+static void test_volume_without_modes(void)
+{
+    struct mfs_inode inode;
+    struct mfs_dirent entry;
+    struct mfs_dirent entries[8];
+    struct mfs_file file;
+    k_u32_t old_dir_flags = MFS_INODE_USED | MFS_INODE_DIR;
+    k_u32_t old_file_flags = MFS_INODE_USED;
+
+    ktest_begin("mfs: a volume written before the modes still mounts");
+
+    KT_CHECK_INT_EQ(setup(), MFS_OK);
+
+    /* The root of a volume of 0.3.x: the type bits only, no mode, no owner. */
+    memcpy(inode_record(MFS_ROOT_INODE), &old_dir_flags, sizeof(old_dir_flags));
+
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+    KT_CHECK(mfs_is_mounted());
+
+    /*
+     * The record says nothing about the access, so the reader falls back
+     * to the mode of the design: no object of an old volume is unreadable
+     * and nothing had to be written at the mount.
+     */
+    KT_CHECK_INT_EQ(mfs_stat("/", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(inode.flags & MFS_INODE_TYPE_MASK, old_dir_flags);
+    KT_CHECK_INT_EQ(mfs_inode_mode(&inode), MFS_MODE_DIR_DEFAULT);
+    KT_CHECK_INT_EQ(mfs_inode_owner(&inode), 0);
+
+    /* The volume takes new objects, and they carry the mode of the design. */
+    KT_CHECK_INT_EQ(mfs_mkdir("/etc"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_create("/etc/hosts"), MFS_OK);
+
+    /* The file is made old the same way: a record of a volume of 0.3.x. */
+    memset(&entry, 0, sizeof(entry));
+    KT_CHECK_INT_EQ(mfs_stat("/etc/hosts", NULL, &entry), MFS_OK);
+    memcpy(inode_record(entry.inode), &old_file_flags, sizeof(old_file_flags));
+
+    KT_CHECK_INT_EQ(mfs_stat("/etc/hosts", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(inode.flags & MFS_INODE_DIR, 0);
+    KT_CHECK_INT_EQ(mfs_inode_mode(&inode), MFS_MODE_DEFAULT);
+    KT_CHECK_INT_EQ(mfs_inode_owner(&inode), 0);
+
+    /* A listing of the directory reads the same fallback. */
+    memset(entries, 0, sizeof(entries));
+    KT_CHECK_INT_EQ(mfs_list("/etc", entries, 8), MFS_OK);
+    KT_CHECK_STR_EQ(entries[0].name, "hosts");
+    KT_CHECK_INT_EQ(entries[0].mode, MFS_MODE_DEFAULT);
+    KT_CHECK_INT_EQ(entries[0].owner, 0);
+
+    /* A mode that is on the volume wins over the fallback. */
+    KT_CHECK_INT_EQ(mfs_chmod("/etc/hosts", 0600), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/etc/hosts", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_inode_mode(&inode), 0600);
+
+    /* The owner can be filled in on such a record, the mode stays. */
+    KT_CHECK_INT_EQ(mfs_chown("/etc/hosts", 3), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/etc/hosts", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_inode_owner(&inode), 3);
+    KT_CHECK_INT_EQ(mfs_inode_mode(&inode), 0600);
+
+    KT_CHECK_INT_EQ(mfs_open("/etc/hosts", MFS_O_RDWR, &file), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_write(&file, "127.0.0.1", 9), 9);
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+
+    /* And the mode is on the volume, not only in the memory. */
+    mfs_unmount();
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/etc/hosts", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_inode_mode(&inode), 0600);
+    KT_CHECK_INT_EQ(mfs_inode_owner(&inode), 3);
+
+    teardown();
+}
+
 static void test_persistence(void)
 {
     struct mfs_file file;
@@ -660,6 +919,10 @@ void test_mfs(void)
     test_big_file();
     test_directories();
     test_unlink();
+    test_default_modes();
+    test_chmod();
+    test_chmod_chown_bounds();
+    test_volume_without_modes();
     test_persistence();
     test_vfs_mount();
 }

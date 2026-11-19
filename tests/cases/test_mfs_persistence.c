@@ -87,8 +87,47 @@ static void test_free_after_unlink(void)
     mfs_ram_free(&g_volume);
 }
 
+/*
+ * The property: the mode and the owner are part of the record of the
+ * object, so they are on the volume before the remount, like the data.
+ */
+static void test_modes_persist(void)
+{
+    struct mfs_inode inode;
+
+    ktest_begin("mfs: the mode and the owner survive a remount");
+
+    KT_CHECK_INT_EQ(setup(), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+
+    KT_CHECK_INT_EQ(mfs_mkdir("/bin"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_create("/bin/tool"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_chmod("/bin", 0750), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_chmod("/bin/tool", 0755), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_chown("/bin/tool", 1000), MFS_OK);
+
+    /* The restart of the board: only what reached the device stays. */
+    mfs_unmount();
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+
+    KT_CHECK_INT_EQ(mfs_stat("/bin/tool", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_inode_mode(&inode), 0755);
+    KT_CHECK_INT_EQ(mfs_inode_owner(&inode), 1000);
+    KT_CHECK_INT_EQ(inode.flags & MFS_INODE_DIR, 0);
+
+    /* The directory kept its own mode and the owner it was made by. */
+    KT_CHECK_INT_EQ(mfs_stat("/bin", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_inode_mode(&inode), 0750);
+    KT_CHECK_INT_EQ(mfs_inode_owner(&inode), 0);
+    KT_CHECK_INT_EQ(inode.flags & MFS_INODE_DIR, MFS_INODE_DIR);
+
+    mfs_unmount();
+    mfs_ram_free(&g_volume);
+}
+
 void test_mfs_persistence(void)
 {
     test_bitmap_persists();
     test_free_after_unlink();
+    test_modes_persist();
 }
