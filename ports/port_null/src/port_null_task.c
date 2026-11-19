@@ -28,9 +28,7 @@ void k_port_task_start(struct task *t)
     K_UNUSED(t);
 }
 
-void k_port_task_yield(void)
-{
-}
+void k_port_task_yield(void) {}
 
 void k_port_task_sleep_ms(k_u32_t ms)
 {

@@ -87,13 +87,9 @@ void k_port_free(void *ptr)
 
 /* --- locking --- */
 
-void k_port_enter_critical(void)
-{
-}
+void k_port_enter_critical(void) {}
 
-void k_port_exit_critical(void)
-{
-}
+void k_port_exit_critical(void) {}
 
 /*
  * The structure exists so that the kernel's k_mutex has somewhere to keep
@@ -128,13 +124,9 @@ int k_port_mutex_unlock(k_port_mutex_t *mutex)
 
 /* --- power --- */
 
-void k_port_halt(void)
-{
-}
+void k_port_halt(void) {}
 
-void k_port_reset(void)
-{
-}
+void k_port_reset(void) {}
 
 /* --- identity --- */
 
