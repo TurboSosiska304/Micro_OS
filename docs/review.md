@@ -217,6 +217,32 @@ Thirteen findings; the ones about the locks and the stores are fixed in
 * the telnet server has no idle timeout: a client that disappeared without
   a FIN keeps the only session slot and the console keeps writing to it.
 
+## Findings of the console and radio audit
+
+One crash and a list of things a person sees at once; fixed in `a10fb3a`
+where they are cheap, written down where they are not.
+
+| # | Finding | State |
+|---|---|---|
+| 1 | `display invert` dereferenced the SPI device of a panel that never came up - a reboot, for the command that exists for a broken panel | fixed |
+| 2 | the panel drew `\b` and the clear sequence as question marks | fixed: the console reads them |
+| 3 | a log line was two console writes: two tasks tore each other's rows | fixed |
+| 4 | `dmesg` printed 191 bytes of a 2048 byte ring | fixed |
+| 5 | the panic called the log first, with a lock a dying task may hold | fixed: the port first |
+| 6 | the radio wrote its state outside the lock its event handler reads it under | fixed |
+| 7 | a connected station without an address was reported as `ok 0.0.0.0` | fixed |
+| 8 | the scheduler logged from inside its spinlock | fixed: the tick says it outside |
+| 9 | `kmod` (the doctor and `detail()` of every module) takes no lock, and there may be two shells (UART and telnet) | open: a recursive mutex in `kmod`, and `detail(char *, size_t)` instead of a static buffer |
+| 10 | `display draw` leaves the test picture if nothing is printed afterwards: the console thinks the frame went out | open: the console needs to be told, or the renderer needs a generation |
+| 11 | the console notices a renderer that appears later only if its size differs | open: a generation counter in `k_render_register` |
+| 12 | `tft-flush` wakes ten times a second even with nothing to draw | open: a wake-up on demand |
+
+The locks of the console were checked one by one: console → panel, telnet
+session → console → telnet lock, the station lock around the fields and
+never around the radio, and the `kmm` section that does not cover the
+allocator itself. No cycle was found; the delay of a frame (about 26 ms of
+SPI) is the price of one lock, not a deadlock.
+
 ## Debts and gaps known before the review
 
 * `memtest` allocates through `kmm`, and `KMM_PRIORITY_KERNEL` may fall
