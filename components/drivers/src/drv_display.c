@@ -850,7 +850,14 @@ int drv_display_rotation(void)
 void drv_display_set_inverted(bool inverted)
 {
     display_lock();
-    lcd_write_command(inverted ? 0x21 : 0x20); /* INVON / INVOFF */
+
+    /* A panel that did not come up has no controller to talk to: the
+     * command is registered anyway, so that a person can try it, and a
+     * NULL here used to be a crash inside the driver of the SPI. */
+    if (s_dev != NULL) {
+        lcd_write_command(inverted ? 0x21 : 0x20); /* INVON / INVOFF */
+    }
+
     s_inverted = inverted;
     display_unlock();
 }

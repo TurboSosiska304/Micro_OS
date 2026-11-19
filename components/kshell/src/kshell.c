@@ -347,7 +347,9 @@ static int cmd_dmesg(int argc, char **argv)
     (void)argv;
 
     klog_dump(buf, sizeof(buf));
-    kshell_printf("%s", buf);
+    /* The print buffer of the shell is 192 bytes; the log of the boot is
+     * longer, and a person wants all of it. */
+    k_console_write(buf, strlen(buf));
 
     return KSHELL_OK;
 }

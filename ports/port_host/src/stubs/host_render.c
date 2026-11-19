@@ -23,7 +23,7 @@
 
 /* The cell of the text: the font of the board is 5 wide and 7 tall. */
 #define HOST_CELL_WIDTH 6
-#define HOST_CELL_HEIGHT 8
+#define HOST_CELL_HEIGHT 9
 
 static char s_frame[HOST_ROWS][HOST_COLUMNS];
 

@@ -194,16 +194,28 @@ int wifi_connect(const char *ssid, const char *pass)
      * again: whatever the radio was doing before, the user wants this
      * network now.
      */
+    /*
+     * The fields are taken under the lock of the station and the radio is
+     * called outside it: the event of the radio runs in another task and
+     * takes the same lock, and it must not wait for a connect that waits
+     * for it.
+     */
+    station_lock();
     s_reconnect.wanted = true;
     reconnect_forget();
     copy_str(s_reconnect.ssid, sizeof(s_reconnect.ssid), ssid);
     copy_str(s_reconnect.pass, sizeof(s_reconnect.pass), pass);
+    station_unlock();
 
     rc = s_radio->connect(ssid, pass);
+
+    station_lock();
+
     if (rc != 0) {
         /* The radio refused the request: the network is not there. */
         s_status.state = WIFI_STATE_FAILED;
         s_status.reason = rc;
+        station_unlock();
         return WIFI_ERROR;
     }
 
@@ -214,6 +226,8 @@ int wifi_connect(const char *ssid, const char *pass)
     s_status.state = WIFI_STATE_CONNECTING;
     s_status.reason = 0;
     copy_str(s_status.ssid, sizeof(s_status.ssid), ssid);
+
+    station_unlock();
 
     return WIFI_OK;
 }
@@ -236,8 +250,10 @@ int wifi_disconnect(void)
      * The station was asked to leave: nobody has to bring it back by
      * itself until a connection is asked for again.
      */
+    station_lock();
     s_reconnect.wanted = false;
     reconnect_forget();
+    station_unlock();
 
     return WIFI_OK;
 }
@@ -406,12 +422,16 @@ k_u32_t wifi_reconnect_after_ms(void)
     k_u64_t now;
     k_u32_t wait;
 
+    station_lock();
+
     if (!s_reconnect.wanted || s_reconnect.ssid[0] == '\0') {
+        station_unlock();
         return 0;
     }
 
     if (s_reconnect.attempts >= WIFI_RECONNECT_MAX) {
         /* The network was asked for WIFI_RECONNECT_MAX times: it is not there. */
+        station_unlock();
         return 0;
     }
 
@@ -422,6 +442,7 @@ k_u32_t wifi_reconnect_after_ms(void)
      * planned at a time, so that the radio is not woken up in a pile.
      */
     if (s_reconnect.next_ms > now) {
+        station_unlock();
         return 0;
     }
 
@@ -436,6 +457,8 @@ k_u32_t wifi_reconnect_after_ms(void)
 
     s_reconnect.attempts++;
     s_reconnect.next_ms = now + wait;
+
+    station_unlock();
 
     return wait;
 }
@@ -458,12 +481,29 @@ int wifi_reconnect(void)
      * The count of the attempts is not restarted here: it is what stops
      * the station from asking a network with a wrong key all day.
      */
-    if (s_radio->connect(s_reconnect.ssid, s_reconnect.pass) != 0) {
-        s_status.state = WIFI_STATE_FAILED;
-        return WIFI_ERROR;
-    }
+    {
+        char ssid[WIFI_SSID_MAX];
+        char pass[WIFI_PASS_MAX];
+        int rc;
 
-    s_status.state = WIFI_STATE_CONNECTING;
+        station_lock();
+        copy_str(ssid, sizeof(ssid), s_reconnect.ssid);
+        copy_str(pass, sizeof(pass), s_reconnect.pass);
+        station_unlock();
+
+        rc = s_radio->connect(ssid, pass);
+
+        station_lock();
+
+        if (rc != 0) {
+            s_status.state = WIFI_STATE_FAILED;
+            station_unlock();
+            return WIFI_ERROR;
+        }
+
+        s_status.state = WIFI_STATE_CONNECTING;
+        station_unlock();
+    }
 
     return WIFI_OK;
 }

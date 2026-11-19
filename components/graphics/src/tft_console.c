@@ -349,6 +349,12 @@ static void flush_task(void *arg)
 
 void tft_console_start(void)
 {
+    /* The console of the board starts once: a second call would make a
+     * second task of the flush and wipe the dialogue. */
+    if (s_started) {
+        return;
+    }
+
     console_lock();
 
     memset(s_lines, 0, sizeof(s_lines));
@@ -385,6 +391,7 @@ void tft_console_start(void)
 void tft_console_write(const char *data, k_size_t len)
 {
     k_size_t i;
+    static int escape;
 
     if (!s_started || data == NULL) {
         return;
@@ -394,6 +401,51 @@ void tft_console_write(const char *data, k_size_t len)
 
     for (i = 0; i < len; i++) {
         char c = data[i];
+
+        /*
+         * The shell writes the erase of the backspace as "\b \b" and the
+         * clear as the sequence of the terminal. A panel is not a terminal:
+         * the bytes used to be drawn as question marks, so both are read
+         * here and mean what they mean.
+         */
+        if (escape == 2) {
+            if (c >= 0x40 && c <= 0x7E) {
+                if (c == 'J') {
+                    memset(s_lines, 0, sizeof(s_lines));
+                    s_line_count = 0;
+                    s_cursor = 0;
+                    s_current[0] = '\0';
+                } else if (c == 'H') {
+                    s_cursor = 0;
+                    s_current[0] = '\0';
+                }
+
+                escape = 0;
+            }
+            continue;
+        }
+
+        if (escape == 1) {
+            escape = (c == '[') ? 2 : 0;
+            continue;
+        }
+
+        if (c == 0x1B) {
+            escape = 1;
+            continue;
+        }
+
+        if (c == '\b') {
+            if (s_cursor > 0) {
+                s_cursor--;
+                s_current[s_cursor] = '\0';
+            }
+            continue;
+        }
+
+        if ((unsigned char)c < 0x20 && c != '\n' && c != '\r' && c != '\t') {
+            continue;
+        }
 
         if (c == '\n') {
             s_current[s_cursor] = '\0';

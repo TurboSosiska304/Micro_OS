@@ -121,8 +121,19 @@ void klog(k_log_level_t level, const char *fmt, ...)
         return;
     }
 
-    k_console_write(buf, str_len(buf));
-    k_console_write("\n", 1);
+    /* One write: two tasks that log at the same moment used to leave half
+     * of one line and half of another on the same row. */
+    {
+        k_size_t len = str_len(buf);
+
+        if (len >= KERNEL_LOG_LINE_MAX - 1) {
+            len = KERNEL_LOG_LINE_MAX - 2;
+        }
+
+        buf[len] = '\n';
+        buf[len + 1] = '\0';
+        k_console_write(buf, len + 1);
+    }
 }
 
 void klog_capture_start(void)

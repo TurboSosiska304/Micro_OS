@@ -102,8 +102,13 @@ static const char *drv_wifi_detail(void)
         return buf;
     }
 
-    if (status.state == WIFI_STATE_CONNECTED && status.ip[0] != '\0') {
+    if (status.state == WIFI_STATE_CONNECTED && status.ip[0] != '\0' &&
+        strcmp(status.ip, "0.0.0.0") != 0) {
         snprintf(buf, sizeof(buf), "%s %s", mac, status.ip);
+    } else if (status.state == WIFI_STATE_CONNECTED) {
+        /* Associated, but the address is not there yet: a report that says
+         * "ok 0.0.0.0" is a report that lies. */
+        snprintf(buf, sizeof(buf), "%s connected, no address", mac);
     } else {
         snprintf(buf, sizeof(buf), "%s %s", mac, wifi_state_name(status.state));
     }
