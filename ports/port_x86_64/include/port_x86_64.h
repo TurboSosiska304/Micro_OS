@@ -56,7 +56,7 @@ static inline k_u64_t port_rdtsc(void)
     return ((k_u64_t)high << 32) | low;
 }
 
-/* --- interrupts ---------------------------------------------------------- */
+/* --- the instructions of the machine -------------------------------------- */
 
 static inline void port_cli(void)
 {
@@ -90,6 +90,37 @@ static inline void port_restore_flags(k_u64_t flags)
 {
     __asm__ volatile("pushq %0\n\tpopfq" : : "r"(flags) : "memory", "cc");
 }
+
+/* --- the interrupts -------------------------------------------------------- */
+
+/*
+ * Own the table of the interrupts: the 32 exceptions, the PIC moved to the
+ * vectors 0x20..0x2F, the PIT at 1000 ticks a second, and the interrupts
+ * finally on. Called at the end of port_x86_64_init().
+ */
+void port_x86_64_interrupts_init(void);
+
+/* The ticks of the timer since the table was built; one tick is 1 ms. */
+k_u64_t port_x86_64_ticks(void);
+
+/*
+ * The C side of the stubs of interrupts.S. An exception says which vector
+ * fired, the error code the processor pushed (0 when the vector has none)
+ * and the RIP of the moment; both functions print and stop the machine,
+ * because neither has anywhere to return to in a kernel this small.
+ */
+void port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip);
+void port_x86_64_unexpected(void);
+
+/* The body of the timer interrupt, called by interrupts.S. */
+void port_x86_64_irq_tick(void);
+
+/*
+ * The hook of the task substrate, called on every tick. Weak here: a build
+ * without a scheduler keeps its clock, and the file of the tasks of the port
+ * overrides it when the scheduler exists.
+ */
+void port_x86_64_task_tick(void);
 
 /* --- what the boot of the platform learned -------------------------------- */
 
