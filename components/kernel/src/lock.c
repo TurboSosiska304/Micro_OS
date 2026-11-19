@@ -68,3 +68,13 @@ int k_mutex_unlock(k_mutex_t *mutex)
 
     return k_port_mutex_unlock((k_port_mutex_t *)mutex->handle);
 }
+
+void k_mutex_destroy(k_mutex_t *mutex)
+{
+    if (mutex == NULL || mutex->handle == NULL) {
+        return;
+    }
+
+    k_port_mutex_destroy((k_port_mutex_t *)mutex->handle);
+    mutex->handle = NULL;
+}

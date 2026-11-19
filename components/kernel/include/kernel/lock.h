@@ -38,4 +38,11 @@ int k_mutex_lock(k_mutex_t *mutex);
 /* Release the mutex one level. Returns 0, or -1 for a NULL mutex. */
 int k_mutex_unlock(k_mutex_t *mutex);
 
+/*
+ * Give the handle back to the port. A mutex that lives as long as the
+ * kernel does not need this; a subsystem that is stopped and started
+ * again, and a test, do.
+ */
+void k_mutex_destroy(k_mutex_t *mutex);
+
 #endif /* MICRO_OS_KERNEL_LOCK_H */

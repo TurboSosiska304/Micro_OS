@@ -2,10 +2,9 @@
 
 #include <string.h>
 
+#include "kernel/lock.h"
 #include "kernel/log.h"
-#include "kernel/port.h"
-#include "kernel/sched.h"
-#include "kernel/task.h"
+#include "kernel/panic.h"
 
 /*
  * The state of the mounted volume. The filesystem is a singleton: one
@@ -35,68 +34,24 @@ static struct {
  * same storage. Two tasks that work with it at the same time would give
  * the same block to two files, or write half of the state of the other.
  *
- * The kernel has no blocking primitive yet, so a task that has to wait
- * sleeps a millisecond and looks again: the CPU goes to the task that
- * holds the lock, and the wait is bounded by the work of that task.
+ * The mutex of the kernel is recursive because the helpers of mfs call
+ * each other: a public call takes the lock and the function it delegates
+ * to takes it again.
  */
-static struct task *s_lock_owner;
-static k_u32_t s_lock_depth;
+static k_mutex_t s_lock = K_MUTEX_INITIALIZER;
 
 static void mfs_lock(void)
 {
-    struct task *self = task_self();
-
-    /*
-     * Before the first task exists (the boot) there is nobody to compete
-     * with, and there is no task to wait as either.
-     */
-    if (self == NULL) {
-        return;
-    }
-
-    for (;;) {
-        bool taken = false;
-
-        k_port_enter_critical();
-
-        if (s_lock_owner == NULL) {
-            s_lock_owner = self;
-            s_lock_depth = 1;
-            taken = true;
-        } else if (s_lock_owner == self) {
-            /* The lock is recursive: the functions call each other. */
-            s_lock_depth++;
-            taken = true;
-        }
-
-        k_port_exit_critical();
-
-        if (taken) {
-            return;
-        }
-
-        k_sched_sleep_ms(1);
+    if (k_mutex_lock(&s_lock) != 0) {
+        /* Out of memory for the lock is not a condition the filesystem can
+         * work around: half of a volume is written by now. */
+        KERNEL_PANIC("mfs: cannot take the lock of the filesystem");
     }
 }
 
 static void mfs_unlock(void)
 {
-    struct task *self = task_self();
-
-    if (self == NULL) {
-        return;
-    }
-
-    k_port_enter_critical();
-
-    if (s_lock_owner == self) {
-        s_lock_depth--;
-        if (s_lock_depth == 0) {
-            s_lock_owner = NULL;
-        }
-    }
-
-    k_port_exit_critical();
+    (void)k_mutex_unlock(&s_lock);
 }
 
 #define MFS_NEXT_NONE 0xFFFFFFFFu

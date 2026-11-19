@@ -213,6 +213,10 @@ static void check_kernel_layer(void)
     KT_CHECK_INT_EQ(k_mutex_unlock(&mutex), 0);
     KT_CHECK_INT_EQ(k_mutex_unlock(&mutex), 0);
 
+    /* The handle is the memory of the port: the test gives it back. */
+    k_mutex_destroy(&mutex);
+    KT_CHECK(mutex.handle == NULL);
+
     /* The console of the kernel is the console of the port. */
     KT_CHECK(k_console_poll() == k_port_console_poll());
 }

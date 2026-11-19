@@ -23,7 +23,8 @@
 
 #include "kernel/console.h"
 #include "kernel/kmod.h"
-#include "kernel/port.h"
+#include "kernel/lock.h"
+#include "kernel/panic.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
 #include "kshell/kshell.h"
@@ -34,16 +35,40 @@
 static bool s_started;
 static volatile bool s_enabled = true;
 static volatile bool s_listening;
+
+/*
+ * The socket of the client, and the state that goes with it, are one
+ * piece of state: the task of the server writes it, the console and the
+ * command of the shell read it. The mutex is recursive, so that a helper
+ * which takes the lock may call another one that takes it too; the
+ * sections themselves stay a few instructions, and no socket call is
+ * made inside one — the network may wait, the lock may not.
+ */
+static k_mutex_t s_lock = K_MUTEX_INITIALIZER;
 static volatile int s_client = -1;
+
+static void telnet_lock(void)
+{
+    if (k_mutex_lock(&s_lock) != 0) {
+        /* Without the lock the client can be closed under the feet of the
+         * shell, and the session has no way to know about it. */
+        KERNEL_PANIC("telnet: cannot take the lock of the server");
+    }
+}
+
+static void telnet_unlock(void)
+{
+    (void)k_mutex_unlock(&s_lock);
+}
 
 /* The socket of the client, as the console sees it. */
 static void telnet_console_write(const char *data, k_size_t len)
 {
     int fd;
 
-    k_port_enter_critical();
+    telnet_lock();
     fd = s_client;
-    k_port_exit_critical();
+    telnet_unlock();
 
     if (fd >= 0) {
         /* MSG_DONTWAIT: a client that stopped reading loses output. */
@@ -66,9 +91,9 @@ static void telnet_state(char *buf, size_t size)
         return;
     }
 
-    k_port_enter_critical();
+    telnet_lock();
     client = s_client;
-    k_port_exit_critical();
+    telnet_unlock();
 
     if (client >= 0) {
         snprintf(buf, size, "port %d, a client is in", TELNET_PORT);
@@ -97,9 +122,9 @@ static void telnet_session(int fd)
 
     (void)send(fd, banner, sizeof(banner) - 1, MSG_DONTWAIT);
 
-    k_port_enter_critical();
+    telnet_lock();
     s_client = fd;
-    k_port_exit_critical();
+    telnet_unlock();
 
     telnet_parser_init(&parser);
 
@@ -142,9 +167,9 @@ static void telnet_session(int fd)
         }
     }
 
-    k_port_enter_critical();
+    telnet_lock();
     s_client = -1;
-    k_port_exit_critical();
+    telnet_unlock();
 }
 
 /* The listener: a port of its own, waiting for the next client. */
