@@ -11,6 +11,14 @@ idf_component_register(
     SRCS ${MICRO_OS_PORT_ESP32_SRCS}
     INCLUDE_DIRS "include"
     REQUIRES kernel esp_timer freertos esp_driver_uart vfs esp_partition nvs_flash lwip
+    # The port is the other half of the kernel contract: the kernel calls
+    # k_port_* and the port calls back into the kernel (the scheduler, the
+    # log). ESP-IDF links the components in dependency order and repeats
+    # them to break cycles, but a member of an archive is only pulled when
+    # something already needs it - so the files that only the kernel calls
+    # (the store, the sockets) would be dropped and the link would fail.
+    # The port is small; it is linked whole.
+    WHOLE_ARCHIVE
 )
 
     # The discipline of the host build: the sources of the project are

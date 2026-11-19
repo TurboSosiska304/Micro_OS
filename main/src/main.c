@@ -8,7 +8,6 @@
  */
 #include "board/board.h"
 #include "config/config.h"
-#include "config/config_nvs.h"
 #include "drivers/drivers.h"
 #include "kernel/boot.h"
 #include "kernel/kmod.h"
@@ -22,8 +21,8 @@
 #include "graphics/tft_console.h"
 #include "init/initd.h"
 #include "mfs/mfs.h"
-#include "mfs/mfs_flash.h"
-#include "net/net_esp32.h"
+#include "mfs/mfs_vfs.h"
+#include "net/net.h"
 #include "procfs/procfs.h"
 #include "kshell/kshell.h"
 #include "port_esp32.h"
@@ -74,12 +73,12 @@ static int cmd_mkfs(int argc, char **argv)
     mfs_unmount();
     vfs_umount("/");
 
-    if (mfs_flash_format() != 0) {
+    if (mfs_vfs_format("flash0") != 0) {
         kshell_printf("mkfs: the volume cannot be formatted\n");
         return KSHELL_ERROR;
     }
 
-    if (mfs_flash_mount("/") != 0) {
+    if (mfs_vfs_mount("/", "flash0") != 0) {
         kshell_printf("mkfs: the volume is formatted, but it cannot be mounted\n");
         return KSHELL_ERROR;
     }
@@ -101,7 +100,7 @@ static int fs_subsys_init(void)
      */
     kshell_register("mkfs", "format the volume: mkfs -y", cmd_mkfs);
 
-    rc = mfs_flash_mount("/");
+    rc = mfs_vfs_mount("/", "flash0");
     if (rc != 0) {
         /*
          * The board has to work even when the data of the user cannot be
@@ -215,7 +214,16 @@ static void init_task(void *arg)
      * The task of the kernel has the stack for this, the boot task of the
      * IDF is too small for the buffers of the walk.
      */
-    if (config_nvs_register() == 0) {
+    if (config_register() != 0) {
+        kwarn("init: the config command is not registered");
+    }
+
+    /*
+     * The store is installed by config_register(), so the restore below has
+     * one: without it /etc would come back empty and the settings of the
+     * board would be lost without a word.
+     */
+    if (config_store_get() != NULL) {
         restored = config_restore(CONFIG_DIR);
         saved = config_persist(CONFIG_DIR);
 
@@ -232,10 +240,6 @@ static void init_task(void *arg)
         }
     } else {
         kwarn("init: the configuration has no store");
-    }
-
-    if (config_register() != 0) {
-        kwarn("init: the config command is not registered");
     }
 
     /*

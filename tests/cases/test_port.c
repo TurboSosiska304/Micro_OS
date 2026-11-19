@@ -20,7 +20,9 @@
 
 #include <string.h>
 
+#include "kernel/clock.h"
 #include "kernel/console.h"
+#include "kernel/kv.h"
 #include "kernel/lock.h"
 #include "kernel/port.h"
 #include "kernel/sysinfo.h"
@@ -233,6 +235,15 @@ static void check_console(void)
     KT_CHECK(c == -1 || (c >= 0 && c <= 0xFF));
 }
 
+/* A clock of the test: the kernel keeps the door, the driver answers. */
+static k_u64_t s_clock_seconds;
+
+static int fake_clock_set(k_u64_t unix_seconds)
+{
+    s_clock_seconds = unix_seconds;
+    return 0;
+}
+
 /*
  * The layer above the port: the upper layers speak to the kernel, and the
  * kernel answers with the numbers of the port. The mutex is the one that
@@ -242,6 +253,7 @@ static void check_console(void)
 static void check_kernel_layer(void)
 {
     k_mutex_t mutex = K_MUTEX_INITIALIZER;
+    char value[K_KV_VALUE_MAX];
 
     KT_CHECK_STR_EQ(k_sysinfo_platform_name(), k_port_name());
     KT_CHECK_STR_EQ(k_sysinfo_arch(), k_port_arch());
@@ -266,6 +278,20 @@ static void check_kernel_layer(void)
 
     /* The console of the kernel is the console of the port. */
     KT_CHECK(k_console_poll() == k_port_console_poll());
+
+    /* A key that was never stored is "not there", not an error. */
+    KT_CHECK_INT_EQ(k_kv_get("no-such-key", value, sizeof(value)), -2);
+
+    /* Without a clock the call fails instead of pretending; with one, the
+     * seconds travel from the caller to the driver unchanged. */
+    KT_CHECK(!k_clock_present());
+    KT_CHECK_INT_EQ(k_clock_set_unix(1234), -1);
+
+    k_clock_register(fake_clock_set);
+    KT_CHECK(k_clock_present());
+    KT_CHECK_INT_EQ(k_clock_set_unix(1234), 0);
+    KT_CHECK_INT_EQ(s_clock_seconds, 1234);
+    k_clock_register(NULL);
 }
 
 void test_port(void)

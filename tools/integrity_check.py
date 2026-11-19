@@ -904,10 +904,6 @@ PLATFORM_INCLUDE = re.compile(
 # entry is a debt the portability work pays back; the check fails when an
 # entry is no longer needed, so the list can only shrink.
 PLATFORM_DEBT = {
-    "components/mfs/src/mfs_flash.c": "stage 2: the flash backend moves to the port",
-    "components/config/src/config_nvs.c": "stage 2: the NVS backend moves to the port",
-    "components/net/src/net_esp32.c": "stage 2: the socket backend moves to the port",
-    "components/telnet/src/telnet_server.c": "stage 3: the sockets move to the port",
     "components/graphics/src/tft_console.c": "stage 3: the renderer moves to the port",
     "components/wifi/src/wifi_esp32.c": "stage 3: the radio moves to the port",
 }
@@ -998,9 +994,9 @@ def check_layers(root: str, report: Report, files: list) -> None:
 # --- the contract of the port -------------------------------------------------
 
 PORT_HEADER_DIR = "components/kernel/include/kernel/port"
-PORT_IMPLEMENTATIONS = (
-    "components/port_esp32/src/port_esp32.c",
-    "ports/port_host/src/port_host.c",
+PORT_IMPLEMENTATION_DIRS = (
+    "components/port_esp32/src",
+    "ports/port_host/src",
 )
 
 # A declaration of the contract: a line that starts with the return type and
@@ -1033,18 +1029,22 @@ def check_port_contract(root: str, report: Report) -> None:
         f"{len(names)} function(s) in {PORT_HEADER_DIR}/",
     )
 
-    for implementation in PORT_IMPLEMENTATIONS:
-        path = os.path.join(root, implementation)
-        if not os.path.isfile(path):
-            report.add(group, f"{implementation} exists", False, "the file is missing")
+    for directory in PORT_IMPLEMENTATION_DIRS:
+        path = os.path.join(root, directory)
+        if not os.path.isdir(path):
+            report.add(group, f"{directory} exists", False, "the directory is missing")
             continue
 
-        text = read_text(path)
+        text = ""
+        for entry in sorted(os.listdir(path)):
+            if entry.endswith(".c"):
+                text += read_text(os.path.join(path, entry))
+
         missing = [name for name in names if not re.search(r"\b" + name + r"\s*\(", text)]
 
         report.add(
             group,
-            f"{implementation} implements the contract",
+            f"{directory} implements the contract",
             not missing,
             "missing: " + ", ".join(missing) if missing else f"{len(names)} function(s)",
         )
