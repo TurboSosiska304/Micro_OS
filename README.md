@@ -1,17 +1,33 @@
 # Micro OS
 
-A Linux-like kernel for the **M5Stack StickC Plus2** (ESP32-PICO-V3-02, 240 MHz,
-2 MB PSRAM).
+A Linux-like kernel for small machines: one portable core, and a port per
+kind of machine.
 
-The goal is not "another ESP32 project" but an actual kernel: a task scheduler,
-system calls, a VFS with `/proc` and `/dev`, a memory manager, device drivers and
-an init process that starts a shell. All of it on bare metal without an MMU, on
-top of FreeRTOS (which owns both ESP32 cores), with a 200 mAh battery and a
-135x240 display.
+The kernel is plain C11 and knows nothing about hardware. It has a task
+scheduler, a syscall ABI, a VFS with `/proc` and `/dev`, MicroFS, a memory
+manager with slabs, an init process that runs the scripts of `/etc/init.d`, a
+shell, HTTP, NTP and telnet. Everything platform specific lives behind the
+contract of the port (`kernel/port/*.h`), and the same sources are built for:
+
+| Port | What it is | Build |
+|---|---|---|
+| `components/port_esp32` | the board: the M5Stack StickC Plus2 (ESP32-PICO-V3-02, 2 MB PSRAM, 8 MB flash), on ESP-IDF and FreeRTOS | `make idf-build` |
+| `ports/port_host` | a Linux process: the machine of the unit tests and the simulator | `make test`, `make sim` |
+| `ports/port_x86_64` | bare metal on a QEMU x86-64 machine, with a loader and no libc under the kernel | `make x86-smoke` |
+| `ports/port_null` | no machine at all: linked by the checks to prove the kernel needs nothing else | `make ci` |
+
+The board is one port, not the project: a kernel is portable when a second
+machine can run it, and the x86-64 port is the proof that this one can. The
+contract has a version, the boot compares it with the one the port reports,
+and `make integrity` refuses a platform header in the kernel or a `k_port_*`
+call above it.
 
 > Russian version: [README_ru.md](README_ru.md)
 
 ## Status
+
+The phases describe the platform (the board and its drivers); the kernel has
+its own roadmap in [docs/kernel-roadmap.md](docs/kernel-roadmap.md).
 
 | Phase | Content | State |
 |-------|---------|-------|
@@ -47,10 +63,11 @@ behind a port:
 ```
 components/kernel/    <- plain C11, zero ESP-IDF dependencies
 kernel/port/*.h       <- the contract: console, time, memory, locks, power, store, sockets
-components/board/     <- board description
-components/port_esp32/<- ESP32 implementation of the port (ESP-IDF)
-ports/port_host/      <- Linux implementation (simulator + unit tests)
-ports/port_null/      <- no machine at all: linked in CI to prove the kernel needs nothing else
+components/board/     <- board description (pins, chips, sizes)
+components/port_esp32/<- the board's port: ESP-IDF, FreeRTOS, lwIP, NVS, the flash
+ports/port_host/      <- a Linux process: the simulator and the unit tests
+ports/port_x86_64/    <- bare metal x86-64 in QEMU: its own loader, no libc
+ports/port_null/      <- no machine at all: linked by the checks
 ```
 
 Consequence: the kernel compiles and its tests run on a normal PC in seconds. The

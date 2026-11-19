@@ -4,24 +4,35 @@
 
 ## 1. Overview
 
+The kernel is one portable core; a machine is a port under it; a board is
+the description of the machine plus the drivers of its chips.
+
 ```
-+---------------------------------------------------------------+
-| Applications: /bin/sh, utilities, daemons (init starts them)  |
-+---------------------------------------------------------------+
-| API: POSIX-like interface (open/read/write/fork/...)            |
-+---------------------------------------------------------------+
-| Kernel:                                                       |
-|   sched   - task scheduler (PCB, states, PIDs)                  |
-|   vfs     - virtual filesystem: inode, dentry, mount, /proc, /dev|
-|   kmm     - memory manager (kmalloc, slab, pools)               |
-|   ksys    - system call table and its ABI                       |
-|   kshell  - command interpreter                                |
-+---------------------------------------------------------------+
-| Drivers: fb(tft), input(buttons), buzzer, imu, rtc, ir, mic     |
-| Wifi: the portable core of the station + the radio of the ESP32 |
-+---------------------------------------------------------------+
-| Port: ESP32 (ESP-IDF) | Host (Linux) | x86-64 (bare metal, QEMU) |
-+---------------------------------------------------------------+
++---------------------------------------------------------------------+
+| Programs: the shell, the commands, the daemons of /etc/init.d       |
++---------------------------------------------------------------------+
+| API: POSIX-like (open/read/write/fork/...) over kernel/ksys.h       |
++---------------------------------------------------------------------+
+| Kernel (plain C11, no hardware):                                    |
+|   sched    task scheduler (PCB, states, PIDs, priorities)            |
+|   vfs      inode, dentry, mount, /proc, /dev                         |
+|   kmm      memory manager (slabs, the heap of the port)              |
+|   ksys     the syscall table and its ABI                             |
+|   mfs      MicroFS, a consumer of kernel/blockdev.h                  |
+|   kshell   the command interpreter; its output is kernel/console.h   |
++---------------------------------------------------------------------+
+| The port contract (kernel/port/*.h): console, time, memory, locks,   |
+| power, store, sockets, identity; and the execution substrate        |
++---------------------------------------------------------------------+
+| Ports:                                                               |
+|   port_esp32   ESP-IDF + FreeRTOS + lwIP + NVS, the partition of MFS |
+|   port_host    a Linux process (pthreads, files, sockets)           |
+|   port_x86_64  bare metal on QEMU: its own loader, IDT/PIT, switch  |
+|   port_null    no machine at all, linked by the checks              |
++---------------------------------------------------------------------+
+| Boards and drivers (the ESP32 port): the StickC Plus2, the panel,   |
+| the buttons, the IMU, the RTC, the battery, the radio               |
++---------------------------------------------------------------------+
 ```
 
 Rule number one: **the kernel knows nothing about hardware**. Everything that
@@ -70,9 +81,12 @@ That is exactly what allows the kernel tests to run on a laptop.
 | Multi-user | yes | no (a single user: the device itself) |
 | Dynamic linker | yes | no (everything is statically linked) |
 
-We honestly call this **Linux-like**, not Linux: without an MMU there is no real
-separation of user and kernel space. System calls are ordinary function calls
-with a uniform ABI; the boundary is kept by discipline, not by hardware.
+We honestly call this **Linux-like**, not Linux. On the board there is no
+MMU: the separation of user and kernel space is logical, system calls are
+ordinary function calls with a uniform ABI, and the boundary is kept by
+discipline. The x86-64 port has an MMU and does not use it yet - the identity
+map of its loader is the first step, and the address spaces of the tasks are
+the next one (see `docs/kernel-roadmap.md`).
 
 That is a property of the current port, not the shape of the kernel: everything
 the kernel concedes to a board without an MMU sits behind one compile time flag,
