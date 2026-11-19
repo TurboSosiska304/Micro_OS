@@ -65,7 +65,8 @@ That is exactly what allows the kernel tests to run on a laptop.
 | Filesystem | yes | yes, from phase 2 (in-RAM FS plus a VFS layer) |
 | `/proc`, `/dev`, `/sys` | yes | `/proc` and `/dev` from phase 2, `/sys` later |
 | System calls | yes | yes, from phase 3, but **without hardware isolation** |
-| Memory protection | MMU | **none** (the ESP32 has no MMU) |
+| Memory protection | MMU | **none used**: the ESP32 has no MMU, and the x86-64 port has one
+  but keeps the identity map of its loader and the logical boundary |
 | Multi-user | yes | no (a single user: the device itself) |
 | Dynamic linker | yes | no (everything is statically linked) |
 

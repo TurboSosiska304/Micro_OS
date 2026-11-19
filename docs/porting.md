@@ -12,7 +12,12 @@ Three ports exist, and they are the examples:
 |---|---|
 | `components/port_esp32` | the board: ESP-IDF, FreeRTOS, lwIP, NVS, the partition of MicroFS |
 | `ports/port_host` | a Linux process: the machine of the tests and the simulator |
+| `ports/port_x86_64` | a bare-metal x86-64 machine in QEMU: its own loader, IDT and PIT, a context switch, the shell on COM1 |
 | `ports/port_null` | no machine at all: built and linked in CI to prove the kernel needs nothing else |
+
+The first three are in the host build and in the checks; the x86-64 port is a
+project of its own (`make x86-build`, `make x86-smoke`), because it needs QEMU
+and a loader rather than the host compiler alone.
 
 ## What a port has to provide
 
@@ -32,7 +37,10 @@ Every function is documented at its declaration; the table is the summary.
 | `kernel/port_task.h` | `stack_size`, `task_create/start/yield/sleep_ms/exit/current` | the execution substrate: FreeRTOS, pthreads, or a switch of your own |
 
 A port that implements the headers but not `kernel/port_task.h` is not a
-port: the scheduler has no context to switch.
+port: the scheduler has no context to switch. The x86-64 port is the worked
+example of all of it: `loader32.S` copies the kernel and turns the long mode
+on, `interrupts.S` and `switch.S` are the two pieces of assembly, and the rest
+is C against the contract.
 
 ## The contract has a version
 
