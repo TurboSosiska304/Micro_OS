@@ -37,6 +37,26 @@
 #define KERNEL_LOG_DEFAULT_LEVEL K_LOG_LEVEL_INFO
 #endif
 
+/*
+ * The kernel is written for a board without an MMU (the ESP32): the user
+ * and the kernel share one address space, a task switch means switching
+ * the stack pointer, and fork() is a concession that shares the memory of
+ * the parent and re-runs its program.
+ *
+ * Everything that exists only because of that is kept behind this one
+ * flag. A port for a processor with an MMU (the plan is a real ARM) sets
+ * it to 0, and the same sources start offering what the flag takes away:
+ * an address space of its own, a real fork, protection at the edge of the
+ * system call. The flag is a property of the port, not a second kernel.
+ */
+#ifndef KERNEL_NOMMU
+#define KERNEL_NOMMU 1
+#endif
+
+#if !KERNEL_NOMMU
+#error "the port for a processor with an MMU is not written yet: see docs/roadmap.md"
+#endif
+
 /* Board identification (set by the build system). */
 #ifndef KERNEL_BOARD_NAME
 #define KERNEL_BOARD_NAME "unknown"

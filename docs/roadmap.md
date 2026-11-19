@@ -208,6 +208,11 @@ The release is a checklist of its own, and every step is green today:
       top of FreeRTOS (ADR 0002)
 * [ ] the syscall table as the only door between a program and the kernel:
       every argument checked at the edge
+* [ ] a port for a processor **with an MMU** (the plan is a real ARM): the
+      concessions of the current kernel - the placeholder `fork()`, the shared
+      address space, the logical user/kernel boundary - live behind one compile
+      time flag (`KERNEL_NOMMU` in `kernel/config.h`), so the MMU port turns the
+      flag off and they become real features instead of a second kernel
 
 ## Phase 8 - The network and the updates (planned)
 

@@ -64,6 +64,12 @@ We honestly call this **Linux-like**, not Linux: without an MMU there is no real
 separation of user and kernel space. System calls are ordinary function calls
 with a uniform ABI; the boundary is kept by discipline, not by hardware.
 
+That is a property of the current port, not the shape of the kernel: everything
+the kernel concedes to a board without an MMU sits behind one compile time flag,
+`KERNEL_NOMMU` in `kernel/config.h`. A port for a processor with an MMU turns the
+flag off, and the same sources start offering what it takes away - an address
+space of its own, a real `fork()`, protection at the edge of the system call.
+
 ## 3. Boot model
 
 Booting mirrors the Linux model: subsystems are registered with a **level** and are
