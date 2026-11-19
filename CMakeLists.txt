@@ -62,6 +62,20 @@ else()
         add_link_options(-fsanitize=address,undefined)
     endif()
 
+    # The race detector is a build of its own: it may not share the memory
+    # of the address sanitizer, and the two answer different questions.
+    # The kernel is one address space with a mutex standing in for the
+    # critical section on the host (ADR 0001), so this build is the closest
+    # the tests get to preemption.
+    option(MICRO_OS_SANITIZE_THREAD
+           "the host build with the thread sanitizer" OFF)
+
+    if(MICRO_OS_SANITIZE_THREAD)
+        message(STATUS "Micro OS: the thread sanitizer is on")
+        add_compile_options(-fsanitize=thread -fno-sanitize-recover=all)
+        add_link_options(-fsanitize=thread)
+    endif()
+
     message(STATUS "Micro OS: host build (simulator + unit tests)")
 
     enable_testing()

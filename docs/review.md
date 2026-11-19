@@ -24,7 +24,9 @@ Ceiling of the automated checks, to keep the review honest:
 * the host build does not reproduce preemption: the port's critical
   sections are a mutex (ADR 0001), so a race in the kernel is invisible
   there;
-* there is no ThreadSanitizer build yet (see the debts);
+* the ThreadSanitizer build exists (`make test-tsan`) but is not part of
+  `make ci`: its first run reports 51 races and the triage of them is one
+  of the tasks of this review (see the debts);
 * `flash0` is only exercised on the board: the tests use a RAM device;
 * the x86-64 port is outside `make ci` (it needs QEMU).
 
@@ -124,8 +126,15 @@ one change.
   (`PORT_NET_SESSION_TIMEOUT_MS`), not of `kernel/net.h`.
 * The console through a renderer is compiled on the host but not tested
   there.
-* No ThreadSanitizer build; the race detector is the missing half of the
-  host tests.
+* The race detector: `make test-tsan` builds the tests with ThreadSanitizer
+  and the first run reports 51 data races. The bulk is the console: a sink
+  is called from any task and the sinks of `test_console` count in plain
+  integers - that is by design (the output order is the order of the calls)
+  and the counters of the test should be atomic, as the ones of the mfs
+  test are now. The rest deserves a look: `task_exit`, `task_reap`,
+  `klog` and `vfs_mount` appear in the reports, and the kernel takes its
+  critical section on the host as one recursive mutex (ADR 0001), so a race
+  there is either a real gap or a lock the kernel takes too late.
 * The x86-64 port is not part of `make ci`: `make x86-smoke` is a target
   of its own (a reviewer must remember it).
 * The kernel keeps no wall clock it can read: `k_clock_*` can set the

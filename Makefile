@@ -23,7 +23,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan smoke integrity ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-run x86-smoke
+.PHONY: help all build test test-asan test-tsan smoke integrity ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-run x86-smoke
 
 help:
 	@echo "Micro OS — available targets:"
@@ -56,6 +56,11 @@ test: build
 
 # The board has no debugger: the tests of the host are the place where a
 # wrong pointer or undefined behaviour has to be caught.
+test-tsan:
+	cmake -B build-tsan -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug -DMICRO_OS_SANITIZE_THREAD=ON
+	cmake --build build-tsan
+	ctest --test-dir build-tsan --output-on-failure
+
 test-asan:
 	cmake -B $(ASAN_DIR) -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug -DMICRO_OS_SANITIZE=ON
 	cmake --build $(ASAN_DIR)
