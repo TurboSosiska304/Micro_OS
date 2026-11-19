@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "kernel/clock.h"
 #include "kernel/kmod.h"
 #include "kshell/kshell.h"
 
@@ -191,11 +192,30 @@ static int cmd_date(int argc, char **argv)
     return KSHELL_USAGE;
 }
 
+/*
+ * The clock of the system, as the driver of the chip sees it: the kernel
+ * asks for the seconds of Unix, the driver turns them into the moment of
+ * the BM8563. A service like NTP sets the time through the kernel and does
+ * not need to know which chip keeps it - nor to format a command for the
+ * shell.
+ */
+static int rtc_clock_set(k_u64_t unix_seconds)
+{
+    struct rtc_datetime dt;
+
+    if (!rtc_from_unix(unix_seconds, &dt)) {
+        return -1;
+    }
+
+    return drv_rtc_set_time(&dt);
+}
+
 int drv_rtc_register(void)
 {
     int rc = kmod_register(&s_rtc_module);
 
     kshell_register("date", "the time of the RTC", cmd_date);
+    k_clock_register(rtc_clock_set);
 
     return rc;
 }

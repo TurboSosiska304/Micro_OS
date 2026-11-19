@@ -356,6 +356,42 @@ static void test_corpus(void)
     KT_CHECK(checked > 0);
 }
 
+/* The seconds of Unix as a moment of the chip: the epoch, a known date and
+ * the last moment the chip can keep. The boundary is what a server may
+ * hand over by mistake, and it must be refused, not wrapped. */
+static void test_from_unix(void)
+{
+    struct rtc_datetime dt;
+
+    KT_CHECK(rtc_from_unix(0, &dt));
+    KT_CHECK_INT_EQ(dt.year, 1970);
+    KT_CHECK_INT_EQ(dt.month, 1);
+    KT_CHECK_INT_EQ(dt.day, 1);
+    KT_CHECK_INT_EQ(dt.hour, 0);
+    KT_CHECK_INT_EQ(dt.weekday, 4); /* a Thursday */
+
+    /* 2026-11-19 20:00:00 UTC */
+    KT_CHECK(rtc_from_unix(1795118400u, &dt));
+    KT_CHECK_INT_EQ(dt.year, 2026);
+    KT_CHECK_INT_EQ(dt.month, 11);
+    KT_CHECK_INT_EQ(dt.day, 19);
+    KT_CHECK_INT_EQ(dt.hour, 20);
+
+    /* 2024-02-29 12:00:00 UTC: the leap day of a leap year. */
+    KT_CHECK(rtc_from_unix(1709208000u, &dt));
+    KT_CHECK_INT_EQ(dt.year, 2024);
+    KT_CHECK_INT_EQ(dt.month, 2);
+    KT_CHECK_INT_EQ(dt.day, 29);
+
+    /* 2099-12-31 23:59:59 is the last one, 2100 is outside the chip. */
+    KT_CHECK(rtc_from_unix(4102444799u, &dt));
+    KT_CHECK_INT_EQ(dt.year, 2099);
+    KT_CHECK_INT_EQ(dt.month, 12);
+    KT_CHECK_INT_EQ(dt.day, 31);
+    KT_CHECK(!rtc_from_unix(4102444800u, &dt));
+    KT_CHECK(!rtc_from_unix(0, NULL));
+}
+
 void test_rtc(void)
 {
     test_bcd();
@@ -368,4 +404,5 @@ void test_rtc(void)
     test_parse();
     test_format();
     test_corpus();
+    test_from_unix();
 }
