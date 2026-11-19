@@ -580,6 +580,20 @@ static void heap_init(k_u64_t multiboot_info)
 
     best_base = (best_base + BLOCK_ALIGN - 1) & ~(k_u64_t)(BLOCK_ALIGN - 1);
 
+    /*
+     * The window of the programs (k_port_exec_base, see port_exec.c) is not
+     * the memory of the kernel. The heap stops below it, or a loaded image
+     * would land on the blocks of the allocator and neither side would see
+     * the damage until much later.
+     */
+    {
+        k_u64_t exec_base = (k_u64_t)(uintptr_t)k_port_exec_base();
+
+        if (exec_base > best_base && best_base + best_size > exec_base) {
+            best_size = exec_base - best_base;
+        }
+    }
+
     if (best_size > 32u * 1024u * 1024u) {
         best_size = 32u * 1024u * 1024u;
     }
@@ -783,7 +797,7 @@ const char *k_port_arch(void)
 }
 
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 2u
+#define PORT_API_MINOR 3u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_x86_64 does not speak the contract of this kernel");

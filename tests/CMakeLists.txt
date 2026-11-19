@@ -16,6 +16,7 @@ if(NOT ESP_PLATFORM)
         cases/test_boot.c
         cases/test_kmod.c
         cases/test_kmm.c
+        cases/test_exec.c
         cases/test_mfs.c
         cases/test_mfs_persistence.c
         cases/test_vfs.c

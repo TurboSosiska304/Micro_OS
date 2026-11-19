@@ -84,6 +84,7 @@ add_executable(microos64
     src/kmain.c
     src/shell.c
     src/port_x86_64.c
+    src/port_exec.c
     src/port_x86_64_task.c
     src/libc_shim.c
     src/interrupts.S

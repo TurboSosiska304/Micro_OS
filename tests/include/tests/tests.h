@@ -16,6 +16,7 @@ void test_sched(void);
 void test_sched_queue(void);
 void test_kmod(void);
 void test_kmm(void);
+void test_exec(void);
 void test_mfs(void);
 void test_mfs_persistence(void);
 void test_vfs(void);
