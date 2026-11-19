@@ -3,9 +3,9 @@
  *
  * The files of /etc are the configuration: a file name is the key, the
  * content is the value, and a program reads them through the VFS as it reads
- * any other file. The store behind them (the NVS on the board) is the copy
- * that survives a restart and a formatted volume: the boot writes back every
- * key that /etc lost.
+ * any other file. The store behind them (the key-value store of the port) is
+ * the copy that survives a restart and a formatted volume: the boot writes
+ * back every key that /etc lost.
  *
  * The file wins over the store. A person edits /etc, and the next boot (or
  * `config sync`) saves the files; a key of the store that /etc does not have
@@ -20,19 +20,19 @@
 /* The directory of the configuration. */
 #define CONFIG_DIR "/etc"
 
-/* The key: a file name, and the NVS gives a key 15 characters. */
+/* The key: a file name; the store gives a key 15 characters. */
 #define CONFIG_KEY_MAX 16
 
-/* The value: one line of text, as the NVS stores a string. */
+/* The value: one line of text, as the store keeps a string. */
 #define CONFIG_VALUE_MAX 128
 
 /* The most keys one pass looks at. */
 #define CONFIG_MAX_KEYS 16
 
 /*
- * A place where the configuration survives a restart: the NVS on the board,
- * a table in the tests. `next` walks the keys from the index 0 and answers
- * -2 after the last one; the other negative codes are real errors.
+ * A place where the configuration survives a restart: the key-value store of
+ * the port, a table in the tests. `next` walks the keys from the index 0 and
+ * answers -2 after the last one; the other negative codes are real errors.
  */
 struct config_store {
     int (*load)(const char *key, char *value, k_size_t size);
@@ -42,6 +42,9 @@ struct config_store {
 
 /* Install the store of the platform, or take it away with NULL. */
 void config_use_store(const struct config_store *store);
+
+/* Install the store of the port, the one the board keeps across a restart. */
+void config_store_use_platform(void);
 
 /* The installed store, NULL when the board has none. */
 const struct config_store *config_store_get(void);
@@ -62,7 +65,10 @@ int config_persist(const char *dir);
 /* Restore, then persist: the file and the store end up the same. */
 int config_sync(const char *dir);
 
-/* Register the `config` command of the shell. */
+/*
+ * Install the store of the port and register the `config` command of the
+ * shell. The boot calls this once, before it restores /etc.
+ */
 int config_register(void);
 
 #endif /* MICRO_OS_CONFIG_CONFIG_H */

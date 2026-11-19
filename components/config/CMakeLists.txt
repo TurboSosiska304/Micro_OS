@@ -1,17 +1,18 @@
-# Micro OS — the configuration of /etc, persisted in the NVS.
+# Micro OS — the configuration of /etc, persisted in the key-value store.
 #
-# The files of /etc are the configuration a program reads; the store (the
-# NVS on the board) is the copy that survives a restart and a formatted
-# volume. The portable part is built for the host tests as well, the NVS
-# backend only for the ESP32.
+# The files of /etc are the configuration a program reads; the store of the
+# port keeps the copy that survives a restart and a formatted volume. The
+# component is portable: it adapts the store to the interface of the
+# configuration, and the port (the flash of the chip, a file on the host)
+# implements the store itself.
 
 set(MICRO_OS_CONFIG_SRCS "src/config.c" "src/config_cmd.c")
 
 if(ESP_PLATFORM)
     idf_component_register(
-        SRCS ${MICRO_OS_CONFIG_SRCS} "src/config_nvs.c"
+        SRCS ${MICRO_OS_CONFIG_SRCS}
         INCLUDE_DIRS "include"
-        REQUIRES kernel kshell nvs_flash
+        REQUIRES kernel kshell
     )
 
     target_compile_options(${COMPONENT_LIB} PRIVATE -Wextra)

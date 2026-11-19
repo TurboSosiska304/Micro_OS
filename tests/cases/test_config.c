@@ -1,92 +1,55 @@
 #include "ktest.h"
 #include "tests/tests.h"
 
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "config/config.h"
+#include "kernel/blockdev.h"
+#include "kernel/port/kv.h"
 #include "kernel/vfs.h"
 #include "mfs/mfs.h"
 #include "mfs/mfs_ram_device.h"
 #include "mfs/mfs_vfs.h"
 
 #define TEST_BLOCKS 128
-#define STORE_KEYS 8
+
+/* A store of its own for the run: the simulator keeps /tmp/microos-kv. */
+#define KV_DIR_TEMPLATE "/tmp/microos-kv-test-XXXXXX"
 
 static struct mfs_ram_device g_volume;
-static struct mfs_device g_device;
+static struct k_blockdev g_device;
 
-/* The store of the tests: the same table the NVS gives the board. */
-static char g_keys[STORE_KEYS][CONFIG_KEY_MAX];
-static char g_values[STORE_KEYS][CONFIG_VALUE_MAX];
-static k_size_t g_count;
-
-static int store_load(const char *key, char *value, k_size_t size)
+static int store_put(const char *key, const char *value)
 {
-    k_size_t i;
+    int rc = k_port_kv_set(key, value);
 
-    for (i = 0; i < g_count; i++) {
-        if (strcmp(g_keys[i], key) == 0) {
-            strncpy(value, g_values[i], size - 1);
-            value[size - 1] = '\0';
-            return 0;
-        }
+    if (rc != 0) {
+        return rc;
     }
 
-    return -2;
+    return k_port_kv_commit();
 }
 
-static int store_save(const char *key, const char *value)
-{
-    k_size_t i;
-
-    if (strlen(key) >= CONFIG_KEY_MAX || strlen(value) >= CONFIG_VALUE_MAX) {
-        return -1;
-    }
-
-    for (i = 0; i < g_count; i++) {
-        if (strcmp(g_keys[i], key) == 0) {
-            strncpy(g_values[i], value, sizeof(g_values[i]) - 1);
-            g_values[i][sizeof(g_values[i]) - 1] = '\0';
-            return 0;
-        }
-    }
-
-    if (g_count >= STORE_KEYS) {
-        return -1;
-    }
-
-    strncpy(g_keys[g_count], key, sizeof(g_keys[g_count]) - 1);
-    g_keys[g_count][sizeof(g_keys[g_count]) - 1] = '\0';
-    strncpy(g_values[g_count], value, sizeof(g_values[g_count]) - 1);
-    g_values[g_count][sizeof(g_values[g_count]) - 1] = '\0';
-    g_count++;
-
-    return 0;
-}
-
-static int store_next(k_size_t index, char *key, k_size_t size)
-{
-    if (index >= g_count) {
-        return -2;
-    }
-
-    strncpy(key, g_keys[index], size - 1);
-    key[size - 1] = '\0';
-
-    return 0;
-}
-
-static const struct config_store g_store = {
-    .load = store_load,
-    .save = store_save,
-    .next = store_next,
-};
-
+/*
+ * Empty the store between the cases. The walk always starts at the index 0,
+ * and a key that is gone shifts the rest down, so the same index is used
+ * again.
+ */
 static void store_reset(void)
 {
-    memset(g_keys, 0, sizeof(g_keys));
-    memset(g_values, 0, sizeof(g_values));
-    g_count = 0;
+    char key[K_PORT_KV_KEY_MAX];
+    k_size_t guard;
+
+    for (guard = 0; guard < CONFIG_MAX_KEYS; guard++) {
+        if (k_port_kv_next(0, key, sizeof(key)) != 0) {
+            break;
+        }
+        if (k_port_kv_erase(key) != 0) {
+            break;
+        }
+    }
 }
 
 static void setup(void)
@@ -145,7 +108,7 @@ static void test_restore(void)
 
     setup();
     store_reset();
-    KT_CHECK_INT_EQ(store_save("ssid", "home"), 0);
+    KT_CHECK_INT_EQ(store_put("ssid", "home"), 0);
 
     /* /etc does not exist on a fresh volume: it is made on the way. */
     KT_CHECK_INT_EQ(config_restore("/etc"), 1);
@@ -168,7 +131,7 @@ static void test_persist(void)
     write_text("/etc/clock", "12:00\n");
 
     KT_CHECK_INT_EQ(config_persist("/etc"), 1);
-    KT_CHECK_INT_EQ(store_load("clock", value, sizeof(value)), 0);
+    KT_CHECK_INT_EQ(k_port_kv_get("clock", value, sizeof(value)), 5);
 
     /* A line ending of a person is not a part of the value. */
     KT_CHECK_STR_EQ(value, "12:00");
@@ -184,8 +147,8 @@ static void test_the_file_wins(void)
 
     setup();
     store_reset();
-    KT_CHECK_INT_EQ(store_save("mode", "old"), 0);
-    KT_CHECK_INT_EQ(store_save("port", "23"), 0);
+    KT_CHECK_INT_EQ(store_put("mode", "old"), 0);
+    KT_CHECK_INT_EQ(store_put("port", "23"), 0);
     KT_CHECK_INT_EQ(vfs_mkdir("/etc"), 0);
     write_text("/etc/mode", "new");
 
@@ -197,7 +160,7 @@ static void test_the_file_wins(void)
     KT_CHECK_STR_EQ(value, "23");
 
     KT_CHECK_INT_EQ(config_persist("/etc"), 2);
-    KT_CHECK_INT_EQ(store_load("mode", value, sizeof(value)), 0);
+    KT_CHECK_INT_EQ(k_port_kv_get("mode", value, sizeof(value)), 3);
     KT_CHECK_STR_EQ(value, "new");
 
     teardown();
@@ -229,7 +192,7 @@ static void test_bad_values(void)
     too_long[sizeof(too_long) - 1] = '\0';
     write_text("/etc/too-long", too_long);
 
-    /* The NVS gives a key 15 characters, this name is longer. */
+    /* The store gives a key 15 characters, this name is longer. */
     write_text("/etc/waytoolongname123", "1");
 
     /*
@@ -242,15 +205,67 @@ static void test_bad_values(void)
     teardown();
 }
 
+/*
+ * The point of the store is that it outlives the volume: after a restart the
+ * files of /etc are gone, and the keys of the store bring them back.
+ */
+static void test_restart(void)
+{
+    char value[CONFIG_VALUE_MAX];
+    char key[K_PORT_KV_KEY_MAX];
+
+    ktest_begin("config: the keys of the store survive a restart");
+
+    setup();
+    store_reset();
+    KT_CHECK_INT_EQ(vfs_mkdir("/etc"), 0);
+    write_text("/etc/clock", "12:00\n");
+    KT_CHECK_INT_EQ(config_persist("/etc"), 1);
+
+    /* The key is really in the port's store, and it is the only one there. */
+    KT_CHECK_INT_EQ(k_port_kv_next(0, key, sizeof(key)), 0);
+    KT_CHECK_STR_EQ(key, "clock");
+    KT_CHECK_INT_EQ(k_port_kv_next(1, key, sizeof(key)), -2);
+
+    /* The restart: the volume with /etc is gone, the store is asked again. */
+    teardown();
+    config_use_store(NULL);
+    config_store_use_platform();
+    setup();
+
+    KT_CHECK_INT_EQ(config_restore("/etc"), 1);
+    read_text("/etc/clock", value, sizeof(value));
+    KT_CHECK_STR_EQ(value, "12:00");
+
+    teardown();
+}
+
 void test_config(void)
 {
-    config_use_store(&g_store);
+    char dir[] = KV_DIR_TEMPLATE;
+
+    ktest_begin("config: the store of the host is ready for the tests");
+
+    /*
+     * The tests use the real store of the host: a table in the memory would
+     * not show a store that loses its keys between the boots. The directory
+     * is unique, so the run does not touch the store of the simulator and a
+     * leftover of another run cannot pass a test.
+     */
+    KT_CHECK(mkdtemp(dir) != NULL);
+    KT_CHECK_INT_EQ(setenv("MICROOS_KV_DIR", dir, 1), 0);
+
+    config_store_use_platform();
 
     test_restore();
     test_persist();
     test_the_file_wins();
     test_empty();
     test_bad_values();
+    test_restart();
 
     config_use_store(NULL);
+    store_reset();
+    KT_CHECK_INT_EQ(unsetenv("MICROOS_KV_DIR"), 0);
+    KT_CHECK_INT_EQ(rmdir(dir), 0);
 }
