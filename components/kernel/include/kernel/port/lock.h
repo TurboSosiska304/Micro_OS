@@ -33,8 +33,12 @@ typedef struct k_port_mutex k_port_mutex_t;
 /* Create a recursive mutex. Returns NULL when there is no memory. */
 k_port_mutex_t *k_port_mutex_create(void);
 
-/* Destroy a mutex. A locked mutex is not destroyed. */
-void k_port_mutex_destroy(k_port_mutex_t *mutex);
+/*
+ * Give the handle back. Returns 0, or -1 when the lock is in use (a task
+ * holds it or waits for it): the port may not pull the lock from under a
+ * task, and the caller has to keep the handle.
+ */
+int k_port_mutex_destroy(k_port_mutex_t *mutex);
 
 /*
  * Take the mutex, waiting as long as it takes. The task that already owns

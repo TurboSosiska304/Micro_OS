@@ -56,8 +56,42 @@ static void sink_c(const char *data, k_size_t len)
     COUNT_UP(s_c_calls);
 }
 
+/*
+ * The removal the table lacked: a client of telnet that goes away takes its
+ * sink with it, and a test does not leave two dead functions in the system
+ * for every test that follows.
+ */
+static void test_remove_sink(void)
+{
+    int before;
+
+    ktest_begin("console: a sink that is taken away is not called");
+
+    port_host_set_sink(tmpfile());
+    COUNT_RESET(s_b_calls);
+
+    KT_CHECK_INT_EQ(k_console_add_sink(sink_b), 0);
+
+    k_console_write("one\n", 4);
+    before = COUNT_GET(s_b_calls);
+    KT_CHECK(before > 0);
+
+    k_console_remove_sink(sink_b);
+
+    k_console_write("two\n", 4);
+    KT_CHECK_INT_EQ(COUNT_GET(s_b_calls), before);
+
+    /* Removing what is not there is not an error, and NULL is harmless. */
+    k_console_remove_sink(sink_b);
+    k_console_remove_sink(NULL);
+
+    port_host_set_sink(NULL);
+}
+
 void test_console_sinks(void)
 {
+    test_remove_sink();
+
     FILE *port_sink;
     char from_port[64];
     size_t n;
@@ -119,5 +153,7 @@ void test_console_sinks(void)
     KT_CHECK_STR_EQ(s_a_last, "mine");
 
     k_console_set_sink(NULL);
+    k_console_remove_sink(sink_b);
+    k_console_remove_sink(sink_c);
     port_host_set_sink(NULL);
 }

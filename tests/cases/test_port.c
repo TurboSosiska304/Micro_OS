@@ -52,7 +52,7 @@ struct port_contract {
     void (*enter_critical)(void);
     void (*exit_critical)(void);
     k_port_mutex_t *(*mutex_create)(void);
-    void (*mutex_destroy)(k_port_mutex_t *mutex);
+    int (*mutex_destroy)(k_port_mutex_t *mutex);
     int (*mutex_lock)(k_port_mutex_t *mutex);
     int (*mutex_unlock)(k_port_mutex_t *mutex);
 
@@ -209,7 +209,7 @@ static void check_mutex(void)
     /* A NULL mutex is refused, not dereferenced. */
     KT_CHECK_INT_EQ(k_port_mutex_lock(NULL), -1);
     KT_CHECK_INT_EQ(k_port_mutex_unlock(NULL), -1);
-    k_port_mutex_destroy(NULL);
+    KT_CHECK_INT_EQ(k_port_mutex_destroy(NULL), -1);
 
     mutex = k_port_mutex_create();
     KT_CHECK(mutex != NULL);
@@ -223,7 +223,7 @@ static void check_mutex(void)
     KT_CHECK_INT_EQ(k_port_mutex_unlock(mutex), 0);
     KT_CHECK_INT_EQ(k_port_mutex_unlock(mutex), 0);
 
-    k_port_mutex_destroy(mutex);
+    KT_CHECK_INT_EQ(k_port_mutex_destroy(mutex), 0);
 }
 
 static void check_console(void)

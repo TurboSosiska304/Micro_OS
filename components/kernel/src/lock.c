@@ -69,12 +69,18 @@ int k_mutex_unlock(k_mutex_t *mutex)
     return k_port_mutex_unlock((k_port_mutex_t *)mutex->handle);
 }
 
-void k_mutex_destroy(k_mutex_t *mutex)
+int k_mutex_destroy(k_mutex_t *mutex)
 {
     if (mutex == NULL || mutex->handle == NULL) {
-        return;
+        return -1;
     }
 
-    k_port_mutex_destroy((k_port_mutex_t *)mutex->handle);
+    if (k_port_mutex_destroy((k_port_mutex_t *)mutex->handle) != 0) {
+        /* The lock is held: it stays, and the caller keeps it. */
+        return -1;
+    }
+
     mutex->handle = NULL;
+
+    return 0;
 }

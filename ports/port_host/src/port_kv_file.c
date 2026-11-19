@@ -39,7 +39,8 @@ static const char *kv_dir_name(void)
  */
 static bool key_ok(const char *key)
 {
-    if (key == NULL || key[0] == '\0' || strlen(key) >= K_PORT_KV_KEY_MAX) {
+    if (key == NULL || key[0] == '\0' || key[0] == '.' || strlen(key) >= K_PORT_KV_KEY_MAX) {
+        /* A leading dot belongs to the temporary files of a save. */
         return false;
     }
     if (strchr(key, '/') != NULL) {
@@ -144,12 +145,15 @@ int k_port_kv_set(const char *key, const char *value)
      * save leaves the old value, never half of a new one. The leading dot
      * keeps the temporary file out of the walk of the keys.
      */
-    pathlen = snprintf(tmp, sizeof(tmp), "%s/.%s.tmp.%ld", kv_dir_name(), key, (long)getpid());
+    /* A temporary name of its own per save: the tasks of the host are the
+     * threads of one process, and getpid() would give them all the same
+     * name - two saves of one key would then lose each other. */
+    pathlen = snprintf(tmp, sizeof(tmp), "%s/.tmp.XXXXXX", kv_dir_name());
     if (pathlen < 0 || (k_size_t)pathlen >= sizeof(tmp)) {
         return -1;
     }
 
-    fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    fd = mkstemp(tmp);
     if (fd < 0) {
         return -1;
     }
@@ -201,7 +205,26 @@ int k_port_kv_erase(const char *key)
 
 int k_port_kv_commit(void)
 {
-    /* Each value was renamed into place, so there is nothing left to flush. */
+    /*
+     * Each value was renamed into place; the rename itself is durable only
+     * when the directory is flushed, and the promise of the contract is
+     * that the keys survive a restart.
+     */
+    int fd = open(kv_dir_name(), O_RDONLY);
+
+    if (fd < 0) {
+        return errno == ENOENT ? 0 : -1;
+    }
+
+    if (fsync(fd) != 0) {
+        int rc = errno;
+
+        close(fd);
+        return rc == EINVAL || rc == EBADF ? 0 : -1;
+    }
+
+    close(fd);
+
     return 0;
 }
 
@@ -244,7 +267,8 @@ int k_port_kv_next(k_size_t index, char *key, k_size_t size)
         k_size_t len = strlen(entry->d_name);
         char *copy;
 
-        /* ".", ".." and a temporary file of a save are not keys. */
+        /* ".", ".." and a temporary file of a save are not keys. A key may
+         * not start with a dot (key_ok), so the dot is enough. */
         if (entry->d_name[0] == '.' || len >= K_PORT_KV_KEY_MAX) {
             continue;
         }

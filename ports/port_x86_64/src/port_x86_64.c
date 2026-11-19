@@ -735,9 +735,10 @@ k_port_mutex_t *k_port_mutex_create(void)
     return NULL;
 }
 
-void k_port_mutex_destroy(k_port_mutex_t *mutex)
+int k_port_mutex_destroy(k_port_mutex_t *mutex)
 {
     K_UNUSED(mutex);
+    return 0;
 }
 
 int k_port_mutex_lock(k_port_mutex_t *mutex)

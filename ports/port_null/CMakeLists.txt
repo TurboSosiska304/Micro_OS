@@ -22,13 +22,29 @@ add_executable(microos_null_probe src/probe.c)
 # it from every corner, and a member of a static archive that nothing has
 # asked for yet is left behind by the linker. Whole-archive puts every stub
 # in place before anything calls it.
+# Every portable component is linked against the port: the kernel and the
+# shell alone would say "the kernel needs nothing else", which is not what
+# ADR 0004 promises - the filesystem, the configuration, the sockets, the
+# console and the radio are portable too, and a symbol they take from a
+# machine has to stop this link.
 target_link_libraries(microos_null_probe PRIVATE
     -Wl,--whole-archive
     microos_port_null
     -Wl,--no-whole-archive
     microos_kernel
-    microos_kshell
+    microos_board
+    microos_font
     microos_libc
+    microos_kshell
+    microos_mfs
+    microos_procfs
+    microos_devfs
+    microos_config
+    microos_net
+    microos_telnet
+    microos_graphics
+    microos_wifi
+    microos_init
 )
 
 add_test(NAME null_probe COMMAND microos_null_probe)

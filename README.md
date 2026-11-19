@@ -325,12 +325,15 @@ make ci          # build, tests, sanitizers, smoke test, integrity
 ```
 
 It builds the host code, runs the unit tests and the same tests under the
-sanitizers (`make test-tsan` adds the race detector), the smoke test of the
-simulator, the boot of the x86-64 port (`make x86-smoke`) and the integrity of the
+address and UB sanitizers, the smoke test of the simulator and the integrity of the
 repository: the headers of the images, the partition table against
 `partitions.csv`, the git objects, the hygiene of the sources and their
 formatting. The firmware is not part of `make ci`: it needs ESP-IDF, so it is
 built separately with `make idf-build`.
+
+Two checks are one command each, because they need a tool of their own:
+`make test-tsan` (the race detector) and `make x86-smoke` (QEMU). Both run in
+the cloud together with the rest.
 
 The same list runs in the cloud: every push to `mainline` and
 `release_candidate` and every pull request to `mainline` runs the tests,

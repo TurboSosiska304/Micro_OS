@@ -9,6 +9,7 @@
 
 #include <string.h>
 
+#include "kernel/lock.h"
 #include "kernel/log.h"
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -25,12 +26,27 @@ static int g_nvs_state;
  * that cannot be opened is not retried on every call: the log says why it
  * failed, and the answer stays "there is no store".
  */
+/* The first call may come from two tasks at once; one of them brings the
+ * store up, the other waits. */
+static k_mutex_t s_init_lock = K_MUTEX_INITIALIZER;
+
 static int nvs_ready(void)
 {
     esp_err_t rc;
 
     if (g_nvs_state != 0) {
         return g_nvs_state > 0 ? 0 : -1;
+    }
+
+    if (k_mutex_lock(&s_init_lock) != 0) {
+        return -1;
+    }
+
+    if (g_nvs_state != 0) {
+        int state = g_nvs_state;
+
+        (void)k_mutex_unlock(&s_init_lock);
+        return state > 0 ? 0 : -1;
     }
 
     rc = nvs_flash_init();
@@ -53,6 +69,8 @@ static int nvs_ready(void)
     }
 
     g_nvs_state = 1;
+
+    (void)k_mutex_unlock(&s_init_lock);
 
     return 0;
 }
@@ -248,6 +266,14 @@ int k_port_kv_next(k_size_t index, char *key, k_size_t size)
 
     if (iterator != NULL) {
         nvs_release_iterator(iterator);
+    }
+
+    /* Only "there are no more keys" is the end of the walk: a damaged store
+     * has to be an error, or the configuration would restore nothing and
+     * then overwrite itself. */
+    if (rc != ESP_OK && rc != ESP_ERR_NVS_NOT_FOUND) {
+        kerror("kv: the walk over the store failed (rc=%d)", (int)rc);
+        return -1;
     }
 
     return -2;

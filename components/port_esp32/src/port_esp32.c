@@ -142,10 +142,10 @@ k_port_mutex_t *k_port_mutex_create(void)
     return mutex;
 }
 
-void k_port_mutex_destroy(k_port_mutex_t *mutex)
+int k_port_mutex_destroy(k_port_mutex_t *mutex)
 {
     if (mutex == NULL) {
-        return;
+        return -1;
     }
 
     if (mutex->handle != NULL) {
@@ -153,6 +153,8 @@ void k_port_mutex_destroy(k_port_mutex_t *mutex)
     }
 
     free(mutex);
+
+    return 0;
 }
 
 int k_port_mutex_lock(k_port_mutex_t *mutex)
