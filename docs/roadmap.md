@@ -226,7 +226,12 @@ The release is a checklist of its own, and every step is green today:
 * [n] OTA updates (`app0`/`app1`), rollback after a failed boot — no space
       in the flash for a second image, the partition table has to change ##Not feasible!!!!
 
-## Phase 7 - Programs and protection (planned)
+## Phase 7 - Programs and protection (in progress)
+
+See [ADR 0005](adr/0005-programs-and-protection.md) for the shape: a program
+of our own format, `execve` as a duty of the port, mode bits inside the
+inode flags, and `fork()` with its own address space left to the paging of
+the x86-64 port.
 
 * [ ] `execve` and a format of the programs: the loader, the first program
       in `/bin`, `PATH`
