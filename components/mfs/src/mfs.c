@@ -1123,6 +1123,15 @@ static int mfs_mount_locked(const struct k_blockdev *dev)
         return MFS_EINVAL;
     }
 
+    /* The root of the volume is a directory, and the header says it is the
+     * record 1. A volume whose header is intact but whose table of the
+     * inodes is not would mount and then fail every lookup: better to say
+     * that the volume is damaged and keep the data for a person. */
+    if (sb.root_inode != MFS_ROOT_INODE || (sb.info_start % 4u) != 0u) {
+        kerror("mfs: the header names a root that cannot exist");
+        return MFS_EINVAL;
+    }
+
     g.sb = sb;
 
     rc = bitmap_load();
@@ -1141,6 +1150,21 @@ static int mfs_mount_locked(const struct k_blockdev *dev)
 
     if (g.inode_capacity < MFS_ROOT_INODE) {
         return MFS_EINVAL;
+    }
+
+    {
+        struct mfs_inode root;
+
+        if (inode_read(MFS_ROOT_INODE, &root) != MFS_OK) {
+            return MFS_EINVAL;
+        }
+
+        if ((root.flags & (MFS_INODE_USED | MFS_INODE_DIR)) != (MFS_INODE_USED | MFS_INODE_DIR) ||
+            root.first_block >= sb.data_blocks) {
+            kerror("mfs: the root of the volume is not a directory (flags 0x%x)",
+                   (unsigned)root.flags);
+            return MFS_EINVAL;
+        }
     }
 
     g.mounted = true;

@@ -36,6 +36,7 @@
 
 /* The erase unit of the flash: esp_partition_erase_range erases this much. */
 #define FLASH_ERASE_SIZE 4096u
+#define FLASH_ERASE_SECTORS (FLASH_ERASE_SIZE / FLASH_BLOCK_SIZE)
 
 static const esp_partition_t *s_partition;
 
@@ -247,7 +248,19 @@ void port_esp32_blockdev_init(void)
 
     s_device.name = FLASH_DEVICE_NAME;
     s_device.sector_size = FLASH_BLOCK_SIZE;
-    s_device.sectors = (k_u32_t)(s_partition->size / FLASH_BLOCK_SIZE);
+    /*
+     * The volume is measured in whole erase sectors: a partition whose size
+     * is not a multiple of the 4 KB erase unit would leave a last sector
+     * that the flash refuses to erase and to program - a block of the
+     * volume that can never be written. The tail is dropped with a word.
+     */
+    s_device.sectors = (k_u32_t)((s_partition->size / FLASH_ERASE_SIZE) * FLASH_ERASE_SECTORS);
+
+    if (s_partition->size % FLASH_ERASE_SIZE != 0) {
+        kwarn("flash0: the partition has %u byte(s) that do not fill an erase sector, they are "
+              "not used",
+              (unsigned)(s_partition->size % FLASH_ERASE_SIZE));
+    }
     s_device.ops = &s_ops;
     s_device.ctx = NULL;
 

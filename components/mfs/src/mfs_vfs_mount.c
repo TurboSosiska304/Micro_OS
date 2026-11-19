@@ -22,19 +22,17 @@
  */
 #define MFS_MOUNT_RECORDS 256
 
-/*
- * The medium was never written when the block of the header is all ones:
- * that is the state the flash comes in, and the only case in which the
- * board makes a volume by itself. Any other failure keeps the data of the
- * user and leaves the board without a filesystem - that is better than
- * quietly erasing it.
- */
-static bool volume_is_fresh(const struct k_blockdev *dev)
+/* A block of the medium as the flash comes in: all ones, never written. */
+static bool block_is_blank(const struct k_blockdev *dev, k_u32_t index)
 {
     k_u8_t block[MFS_BLOCK_SIZE];
     k_size_t i;
 
-    if (dev->ops->read(dev->ctx, dev->sectors - 1u, block, 1) != 0) {
+    if (index >= dev->sectors) {
+        return false;
+    }
+
+    if (dev->ops->read(dev->ctx, index, block, 1) != 0) {
         return false;
     }
 
@@ -45,6 +43,20 @@ static bool volume_is_fresh(const struct k_blockdev *dev)
     }
 
     return true;
+}
+
+/*
+ * The medium was never written when the block of the header is all ones -
+ * and so is the first block of the volume, where the root directory lives.
+ * Both have to be blank: a volume that grew or moved has a blank header
+ * block at its new end while its root is still there, and formatting that
+ * would erase the data of the user without a word. Any other failure keeps
+ * the data and leaves the board without a filesystem - that is better than
+ * quietly erasing it.
+ */
+static bool volume_is_fresh(const struct k_blockdev *dev)
+{
+    return block_is_blank(dev, dev->sectors - 1u) && block_is_blank(dev, 0);
 }
 
 static int volume_format(const struct k_blockdev *dev)
