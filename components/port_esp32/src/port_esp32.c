@@ -87,6 +87,7 @@ void port_esp32_init(void)
 {
     /* The critical section needs no preparation: the spinlock is static. */
     port_esp32_blockdev_init();
+    port_esp32_wifi_init();
 }
 
 void k_port_write(const char *data, k_size_t len)

@@ -44,3 +44,13 @@ k_u64_t k_sysinfo_uptime_us(void)
 {
     return k_port_uptime_us();
 }
+
+k_u64_t k_sysinfo_uptime_ms(void)
+{
+    /*
+     * Truncation, not rounding: the microsecond clock is the one source of
+     * the boot time, and a policy that waits "at least n milliseconds" must
+     * not be given a moment that is still short of n.
+     */
+    return k_port_uptime_us() / 1000u;
+}

@@ -3,9 +3,9 @@
  *
  * The driver is split in two: the core of the station (components/wifi, the
  * state machine and the configuration) and the radio of the ESP32 (the
- * backend, which talks to the hardware). This file is the glue: it starts
- * the radio, keeps the module of the hardware doctor and gives the shell
- * the command that talks to the network.
+ * backend, which talks to the hardware and lives in the port). This file is
+ * the glue: it starts the station, keeps the module of the hardware doctor
+ * and gives the shell the command that talks to the network.
  *
  * Without a configured access point the module is "degraded": the radio
  * works, but there is no connection yet.
@@ -19,7 +19,6 @@
 #include "kernel/log.h"
 #include "kshell/kshell.h"
 #include "wifi/wifi.h"
-#include "wifi/wifi_esp32.h"
 
 static bool s_started;
 static uint8_t s_mac[6];
@@ -30,10 +29,10 @@ static int drv_wifi_init(void)
 {
     int rc;
 
-    if (wifi_esp32_init() != 0) {
-        return -1;
-    }
-
+    /*
+     * The radio itself is brought up by the port at the boot and installs
+     * itself into the core; there is nothing hardware specific left here.
+     */
     if (wifi_init() != WIFI_OK) {
         return -2;
     }
@@ -44,7 +43,10 @@ static int drv_wifi_init(void)
         return -3;
     }
 
-    (void)wifi_esp32_get_mac(s_mac);
+    if (wifi_get_mac(s_mac) != WIFI_OK) {
+        kerror("wifi: the address of the station is not known");
+        memset(s_mac, 0, sizeof(s_mac));
+    }
 
     s_started = true;
 

@@ -29,4 +29,12 @@ k_size_t k_sysinfo_psram_free(void);
 /* Microseconds since the boot, for the measurements of the shell. */
 k_u64_t k_sysinfo_uptime_us(void);
 
+/*
+ * Milliseconds since the boot, for the policies that wait and retry (the
+ * station of WiFi counts the wait before the next attempt in them). It is
+ * the same clock as above, only coarser, so a subsystem never has to reach
+ * for the port to get the half of it it needs.
+ */
+k_u64_t k_sysinfo_uptime_ms(void);
+
 #endif /* MICRO_OS_KERNEL_SYSINFO_H */
