@@ -34,4 +34,13 @@ int k_console_add_sink(k_console_sink_fn sink);
 /* Print to the console: the serial port and every registered sink. */
 void k_console_write(const char *data, k_size_t len);
 
+/*
+ * The input side of the console. The shell waits for a whole line,
+ * /dev/tty0 asks whether a character is waiting and does not hold the
+ * task that reads it, and the code that wants one key gets one.
+ */
+int k_console_readline(char *buf, k_size_t size);
+int k_console_getchar(void);
+int k_console_poll(void);
+
 #endif /* MICRO_OS_KERNEL_CONSOLE_H */

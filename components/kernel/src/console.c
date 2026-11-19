@@ -53,3 +53,18 @@ void k_console_write(const char *data, k_size_t len)
         }
     }
 }
+
+int k_console_readline(char *buf, k_size_t size)
+{
+    return k_port_console_readline(buf, size);
+}
+
+int k_console_getchar(void)
+{
+    return k_port_console_getchar();
+}
+
+int k_console_poll(void)
+{
+    return k_port_console_poll();
+}

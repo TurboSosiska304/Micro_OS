@@ -20,7 +20,10 @@
 
 #include <string.h>
 
+#include "kernel/console.h"
+#include "kernel/lock.h"
 #include "kernel/port.h"
+#include "kernel/sysinfo.h"
 
 /*
  * The whole contract of the port headers in one place. The types are
@@ -183,6 +186,37 @@ static void check_console(void)
     KT_CHECK(c == -1 || (c >= 0 && c <= 0xFF));
 }
 
+/*
+ * The layer above the port: the upper layers speak to the kernel, and the
+ * kernel answers with the numbers of the port. The mutex is the one that
+ * matters - it is created on the first use here, which is the path a
+ * static mutex of the filesystem takes.
+ */
+static void check_kernel_layer(void)
+{
+    k_mutex_t mutex = K_MUTEX_INITIALIZER;
+
+    KT_CHECK_STR_EQ(k_sysinfo_platform_name(), k_port_name());
+    KT_CHECK_STR_EQ(k_sysinfo_arch(), k_port_arch());
+    KT_CHECK_INT_EQ(k_sysinfo_heap_total(), k_port_heap_total());
+    KT_CHECK_INT_EQ(k_sysinfo_heap_free(), k_port_heap_free());
+    KT_CHECK_INT_EQ(k_sysinfo_psram_total(), k_port_psram_total());
+    KT_CHECK_INT_EQ(k_sysinfo_psram_free(), k_port_psram_free());
+    KT_CHECK(k_sysinfo_uptime_us() <= k_port_uptime_us());
+
+    /* A NULL mutex is refused, not dereferenced. */
+    KT_CHECK_INT_EQ(k_mutex_lock(NULL), -1);
+    KT_CHECK_INT_EQ(k_mutex_unlock(NULL), -1);
+
+    KT_CHECK_INT_EQ(k_mutex_lock(&mutex), 0);
+    KT_CHECK_INT_EQ(k_mutex_lock(&mutex), 0);
+    KT_CHECK_INT_EQ(k_mutex_unlock(&mutex), 0);
+    KT_CHECK_INT_EQ(k_mutex_unlock(&mutex), 0);
+
+    /* The console of the kernel is the console of the port. */
+    KT_CHECK(k_console_poll() == k_port_console_poll());
+}
+
 void test_port(void)
 {
     ktest_begin("port");
@@ -192,4 +226,5 @@ void test_port(void)
     check_clock();
     check_mutex();
     check_console();
+    check_kernel_layer();
 }
