@@ -11,8 +11,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "kernel/port.h"
+#include "kernel/kmm.h"
 #include "kernel/sched.h"
+#include "kernel/sysinfo.h"
 
 /* The size of the test block. */
 #define MEMTEST_DEFAULT_SIZE (32 * 1024)
@@ -116,6 +117,16 @@ static k_u32_t speed_kbps(k_size_t bytes, k_u64_t micros)
 }
 
 /*
+ * The priority of the block follows the region that is measured: the
+ * kernel priority asks for the internal RAM first, the user one asks for
+ * the PSRAM first.
+ */
+static int memtest_priority(bool psram)
+{
+    return psram ? KMM_PRIORITY_USER : KMM_PRIORITY_KERNEL;
+}
+
+/*
  * Allocate a test block. The internal heap of the board is small, so the
  * block is halved until it fits.
  */
@@ -124,7 +135,7 @@ static uint8_t *alloc_block(k_size_t size, bool psram, k_size_t *actual)
     k_size_t attempt = size;
 
     while (attempt >= MEMTEST_MIN_SIZE) {
-        uint8_t *block = (uint8_t *)k_port_alloc(attempt, psram);
+        uint8_t *block = (uint8_t *)kmm_alloc(attempt, memtest_priority(psram));
 
         if (block != NULL) {
             *actual = attempt;
@@ -148,8 +159,8 @@ static void memtest_region(const char *name, bool psram, k_size_t size, struct m
     k_u32_t sum;
 
     memset(out, 0, sizeof(*out));
-    out->total = psram ? k_port_psram_total() : k_port_heap_total();
-    out->free_bytes = psram ? k_port_psram_free() : k_port_heap_free();
+    out->total = psram ? k_sysinfo_psram_total() : k_sysinfo_heap_total();
+    out->free_bytes = psram ? k_sysinfo_psram_free() : k_sysinfo_heap_free();
     out->used = (out->total > out->free_bytes) ? (out->total - out->free_bytes) : 0;
 
     if (out->total == 0) {
@@ -166,26 +177,26 @@ static void memtest_region(const char *name, bool psram, k_size_t size, struct m
     out->tested = true;
 
     /* The second block is only needed for the copy measurement. */
-    copy = (uint8_t *)k_port_alloc(block_size, psram);
+    copy = (uint8_t *)kmm_alloc(block_size, memtest_priority(psram));
 
     /* Write: fill the whole block. */
-    t0 = k_port_uptime_us();
+    t0 = k_sysinfo_uptime_us();
     memset(buffer, MEMTEST_PATTERN, block_size);
-    t1 = k_port_uptime_us();
+    t1 = k_sysinfo_uptime_us();
     out->write_kbps = speed_kbps(block_size, t1 - t0);
 
     /* Read: walk through the block and sum it up. */
-    t2 = k_port_uptime_us();
+    t2 = k_sysinfo_uptime_us();
     sum = checksum(buffer, block_size);
     g_sink = sum;
-    out->read_kbps = speed_kbps(block_size, k_port_uptime_us() - t2);
+    out->read_kbps = speed_kbps(block_size, k_sysinfo_uptime_us() - t2);
 
     /* Copy: the block into the second one. */
     if (copy != NULL) {
-        k_u64_t c0 = k_port_uptime_us();
+        k_u64_t c0 = k_sysinfo_uptime_us();
 
         memcpy(copy, buffer, block_size);
-        out->copy_kbps = speed_kbps(block_size, k_port_uptime_us() - c0);
+        out->copy_kbps = speed_kbps(block_size, k_sysinfo_uptime_us() - c0);
     }
 
     /* The data has to survive the round trip. */
@@ -193,10 +204,10 @@ static void memtest_region(const char *name, bool psram, k_size_t size, struct m
 
     if (copy != NULL) {
         out->checksum_ok = out->checksum_ok && (checksum(copy, block_size) == sum);
-        k_port_free(copy);
+        kmm_free(copy);
     }
 
-    k_port_free(buffer);
+    kmm_free(buffer);
 }
 
 static void print_result(const char *name, const struct memtest_result *r)
