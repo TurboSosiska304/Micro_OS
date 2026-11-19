@@ -44,6 +44,11 @@ COMMANDS = [
     "mkfs",
     "mkfs -y",
     "ls /",
+    "modules",
+    "date",
+    "mfetch",
+    "battery",
+    "wifi status",
 ]
 
 # The prompt of the shell. It is written in one call, so the log of another
@@ -211,6 +216,28 @@ def check(output: str) -> list:
 
     root = answer("ls /")
     expect("ls / works after a format", "proc/" in root and "dev/" in root)
+
+    # --- the stubs of the board: the drivers of the host
+    modules = answer("modules")
+    expect("modules reports the PSRAM of the host", "psram" in modules)
+    expect("modules reports the volume as the flash", "flash" in modules)
+    expect("modules reports the clock", "rtc" in modules)
+    expect("modules reports the missing radio", "wifi" in modules)
+    expect("the doctor finds no problem", "0 problem(s)" in modules)
+
+    expect(
+        "date prints the moment in the shape of the board",
+        re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", answer("date")) is not None,
+    )
+
+    fetch = answer("mfetch")
+    expect("mfetch prints the operating system", "OS" in fetch)
+    expect("mfetch prints the board", "Board" in fetch)
+    expect("mfetch prints the heap", "Heap" in fetch)
+    expect("mfetch has no color codes without `color`", "\x1b[" not in fetch)
+
+    expect("battery says the host has none", "no battery" in answer("battery"))
+    expect("wifi status says there is no radio", "no radio" in answer("wifi status"))
 
     return checks
 

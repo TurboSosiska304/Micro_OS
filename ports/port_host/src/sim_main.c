@@ -14,6 +14,7 @@
 #include "board/board.h"
 #include "config/config.h"
 #include "devfs/devfs.h"
+#include "graphics/tft_console.h"
 #include "init/initd.h"
 #include "kernel/boot.h"
 #include "kernel/log.h"
@@ -150,7 +151,28 @@ static void shell_task(void *arg)
 {
     K_UNUSED(arg);
 
+    /*
+     * The board mirrors the shell to the panel; the simulator does the same
+     * when a file screen was asked for. Without one there is no renderer and
+     * the console of the display stays silent, so it is not started.
+     */
+    if (port_host_screen_enabled()) {
+        tft_console_start();
+        kshell_set_sink(tft_console_write);
+    }
+
     kshell_run();
+}
+
+/*
+ * The board stubs come up before the init process runs the scripts of
+ * /etc/init.d and before the shell registers its own commands: a script and
+ * a person both have to find `modules`, `date` and the rest already there.
+ */
+static int stubs_subsys_init(void)
+{
+    port_host_stubs_init();
+    return 0;
 }
 
 /*
@@ -243,6 +265,7 @@ static int tasks_subsys_init(void)
 static const struct kernel_subsys g_subsystems[] = {
     {"storage", storage_subsys_init, KERNEL_SUBSYS_LEVEL_CORE},
     {"fs", fs_subsys_init, KERNEL_SUBSYS_LEVEL_SERVICE},
+    {"stubs", stubs_subsys_init, KERNEL_SUBSYS_LEVEL_SERVICE},
     {"tasks", tasks_subsys_init, KERNEL_SUBSYS_LEVEL_APP},
 };
 

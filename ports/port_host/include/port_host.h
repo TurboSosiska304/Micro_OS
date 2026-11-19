@@ -50,4 +50,16 @@ const char *port_host_volume_path(void);
  */
 void port_host_register_blockdev(void);
 
+/*
+ * The stubs of the board: the modules of the hardware doctor, the commands
+ * of the drivers (`date`, `battery`, `wifi`, ...), the clock of the process
+ * and, when $MICROOS_SCREEN names a file, the renderer that writes the frame
+ * there. Call it at the service level, before the init scripts and the shell
+ * ask for a command or a module.
+ */
+void port_host_stubs_init(void);
+
+/* Is the file screen of the simulator requested ($MICROOS_SCREEN)? */
+bool port_host_screen_enabled(void);
+
 #endif /* MICRO_OS_PORT_HOST_H */
