@@ -34,7 +34,7 @@ port:
 * **The core** (`components/wifi/src/wifi.c`, plain C11): the state machine
   of the station, the configuration of the network and the formatting of the
   status. It knows nothing about ESP-IDF and nothing about the hardware.
-* **The radio** (`components/wifi/src/wifi_esp32.c`, ESP-IDF): the backend.
+* **The radio** (`components/port_esp32/src/wifi_radio.c`, ESP-IDF): the backend.
   It starts the hardware, associates with the access point, scans and reads
   the address. It keeps the configuration in the NVS.
 

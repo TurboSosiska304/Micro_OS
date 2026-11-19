@@ -10,7 +10,7 @@ the last time in the NVS, so the board joins it on its own after a restart.
   station (`stopped`, `idle`, `connecting`, `connected`, `disconnected`,
   `failed`), the configuration of the network and the formatting of the
   status. It is plain C11 and knows nothing about the hardware.
-* **The radio** (`components/wifi/src/wifi_esp32.c`): the backend that talks
+* **The radio** (`components/port_esp32/src/wifi_radio.c`): the backend that talks
   to the ESP32 through the driver of ESP-IDF. It starts the radio, sets the
   configuration of the station, scans and reads the address of the network.
 * **The configuration** lives in the NVS (the namespace `microos`): the name

@@ -36,6 +36,8 @@ architecture own its part in `arch/<arch>/include/asm`:
 | `kernel/port/mem.h` | internal heap and PSRAM | `k_port_alloc`, `k_port_heap_free` |
 | `kernel/port/lock.h` | critical sections, recursive mutexes | `k_port_enter_critical`, `k_port_mutex_lock` |
 | `kernel/port/power.h` | halt, reset | `k_port_halt`, `k_port_reset` |
+| `kernel/port/kv.h` | the store that survives a restart | `k_port_kv_get`, `k_port_kv_next` |
+| `kernel/port/net.h` | TCP and UDP | `k_port_net_connect`, `k_port_net_listen` |
 | `kernel/port/info.h` | identity and contract version | `k_port_name`, `k_port_api_major` |
 
 The version of the contract (`KERNEL_PORT_API_VERSION_MAJOR/MINOR`) is the
@@ -43,6 +45,13 @@ vermagic of the pair: the port asserts it at build time and the boot
 sequence checks it again, so a kernel and a port that were not built
 together say so instead of failing far from the cause. See
 [ADR 0004](adr/0004-portable-boundary.md).
+
+Above the contract sit the doors the upper layers use, so that no component
+outside the kernel includes `kernel/port.h` at all: `kernel/sysinfo.h`,
+`kernel/console.h`, `kernel/kv.h`, `kernel/net.h`, `kernel/clock.h` and
+`kernel/render.h`. A leak of the port into the components above fails
+`make integrity` (`[layers]`), together with any ESP-IDF header that appears
+where it does not belong.
 
 That is exactly what allows the kernel tests to run on a laptop.
 
@@ -206,7 +215,7 @@ quirks are documented in
 
 The WiFi driver is built like the kernel itself: a portable core
 (`components/wifi`) that owns the state of the station and a radio
-(`components/wifi/src/wifi_esp32.c`) that talks to the ESP-IDF. The two talk
+(`components/port_esp32/src/wifi_radio.c`) that talks to the ESP-IDF. The two talk
 through a table of functions, so the state machine of the driver is covered
 by the unit tests of the host. The decision is recorded in
 [ADR 0003](adr/0003-wifi-driver.md).

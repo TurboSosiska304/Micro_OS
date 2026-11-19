@@ -904,15 +904,12 @@ PLATFORM_INCLUDE = re.compile(
 # entry is a debt the portability work pays back; the check fails when an
 # entry is no longer needed, so the list can only shrink.
 PLATFORM_DEBT = {
-    "components/graphics/src/tft_console.c": "stage 3: the renderer moves to the port",
-    "components/wifi/src/wifi_esp32.c": "stage 3: the radio moves to the port",
 }
 
 # A portable component that still speaks to the port directly. The same
 # rule as above, for the calls instead of the includes: the upper layers
 # ask the kernel (kernel/sysinfo.h, kernel/lock.h), never k_port_*.
 PORT_CALL_DEBT = {
-    "components/wifi/src/wifi.c": "stage 3: the core takes the lock of the kernel",
 }
 
 PORT_CALL = re.compile(r"\b(k_port_[a-z0-9_]+)\s*\(")

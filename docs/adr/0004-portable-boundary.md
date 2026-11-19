@@ -120,3 +120,27 @@ says so at once, instead of failing far from the cause.
 * **Kernel modules loaded at runtime (the Linux model)** - not applicable:
   there is no MMU and no linker on the board; everything is linked into
   one image.
+
+## Status of the work (2026-11-19)
+
+The audit that opened this record is closed: every file it named has moved
+and both debt lists of `make integrity` are empty, so the rules apply to the
+whole tree without exceptions.
+
+| Was | Is now |
+|---|---|
+| `mfs/src/mfs_flash.c` (`esp_partition`) | `port_esp32/blockdev_flash.c`, registers `flash0`; MicroFS asks `kernel/blockdev.h` |
+| `config/src/config_nvs.c` (`nvs_flash`) | `port_esp32/port_kv_nvs.c` and `port_host/port_kv_file.c`; the configuration asks `kernel/kv.h` |
+| `net/src/net_esp32.c`, the sockets of `telnet` (`lwip`) | `port_esp32/port_net_lwip.c`, `port_host/port_net_posix.c`; the services ask `kernel/net.h` |
+| `graphics/src/tft_console.c` (FreeRTOS, `drivers/display.h`) | `kernel/render.h`; the panel registers a renderer, the console draws through it |
+| `wifi/src/wifi_esp32.c` (`esp_wifi`) | `port_esp32/wifi_radio.c`; the core keeps the table and asks the kernel for the lock and the time |
+| `k_port_*` in `kshell`, `procfs`, `devfs`, `mfs`, `telnet` | the kernel doors (`k_sysinfo_*`, `k_console_*`, `k_mutex`, `k_reboot`, `k_clock_set_unix`) |
+
+The contract is at version 1.2 (37 functions), the host build compiles every
+portable component, and the console of the display is exercised on a laptop
+through a renderer of the test.
+
+The repository stays one tree, as Linux is one tree with `arch/`: the
+boundary is held by `[layers]` and `[port]`, not by a repository border. A
+kernel source release is an artifact (`git archive` over the kernel and the
+host port), not a second repository.
