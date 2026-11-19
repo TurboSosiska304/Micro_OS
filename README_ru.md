@@ -1,5 +1,7 @@
 # Micro OS
 
+> Перевод на русский может отставать от английского оригинала: канонический текст — английский.
+
 > English version: [README.md](README.md)
 
 Linux-подобное ядро для **M5Stack StickC Plus2** (ESP32-PICO-V3-02, 240 МГц, 2 МБ PSRAM).

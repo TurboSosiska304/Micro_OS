@@ -198,7 +198,8 @@ The release is a checklist of its own, and every step is green today:
 
 1. the version of the kernel is `KERNEL_VERSION_*` in
    `components/kernel/include/kernel/config.h`;
-2. `make ci`, `make idf-build` and `make bundle` are green on the machine of
+2. `make ci`, `make test-tsan`, `make x86-smoke`, `make idf-build` and
+   `make bundle` are green on the machine of
    the release;
 3. the tag `vX.Y.Z` is pushed — a dash instead of the dot before the number
    of the candidate (`vX.Y.Z-pre`) makes a pre-release;
