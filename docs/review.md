@@ -173,6 +173,50 @@ never formats itself; power-cut a `mkfs -y`; and (on a board that may lose
 its data) change the size of the partition by one sector and check that the
 mount refuses instead of formatting.
 
+## Findings of the gates audit
+
+The audit tried to break the checks, and fifteen mutations stayed green -
+including a parenthesised call of the port from the shell, a header
+included from a `.inc` file, a commented `add_subdirectory`, a comment as
+the implementation of the contract, and a portable component the host
+build never compiled. Fixed in `57f11b3`: the text is stripped of comments
+first, a `k_port_*` identifier is a use, a `#` line is not a build, the
+contract is read from the symbols of the built library, a file that is
+not staged is checked, and the null port links the whole portable system.
+
+| Hole | State |
+|---|---|
+| a call spelled `(k_port_write)(...)` or its address | fixed: the identifier is the rule |
+| an include from `.inc`, through `include_next`, a macro or a relative path | fixed: comments and continuations are stripped, every text file is read |
+| `board/` and `drivers/` headers above the kernel | fixed |
+| a commented `add_subdirectory` | fixed: CMake comments are stripped, the library must exist |
+| a comment as the implementation of the contract | fixed for the host ports (symbols of the archive); the ESP32 port is still text |
+| a file that is not staged | fixed: untracked files are checked |
+| the budget of another build directory | fixed: every `build*/` with an image |
+| the null port tested only the kernel and the shell | fixed: all portable components link against it |
+
+What the audit also found in the process, and what is fixed with it: the
+race detector was red and flaky (`test_task.c` counters), `k_mutex_destroy`
+could free a lock somebody was waiting for, the file store of the host
+lost writes when two tasks saved the same key (one temporary name per
+process), and the NVS reported a damaged store as an empty one.
+
+What stays open: the ESP32 port's signatures are checked by text, not by a
+compiler; a POSIX call in portable code still links on the host (the null
+port cannot stop glibc); and the server of telnet is linked by the probe
+but no test opens a session over the loopback.
+
+## Findings of the contract audit
+
+Thirteen findings; the ones about the locks and the stores are fixed in
+`57f11b3`. Open:
+
+* the kernel logs from inside its critical section, and a sink (telnet)
+  takes a mutex - the diagnostic has to be collected under the section and
+  written after it, or the sink has to promise never to block;
+* the telnet server has no idle timeout: a client that disappeared without
+  a FIN keeps the only session slot and the console keeps writing to it.
+
 ## Debts and gaps known before the review
 
 * `memtest` allocates through `kmm`, and `KMM_PRIORITY_KERNEL` may fall
@@ -182,6 +226,10 @@ mount refuses instead of formatting.
   (`PORT_NET_SESSION_TIMEOUT_MS`), not of `kernel/net.h`.
 * The console through a renderer is compiled on the host but not tested
   there.
+* The test coverage the audits asked for: the mutex under contention and
+  the removal of a console sink are covered now; the session of telnet over
+  the loopback, the timeouts of the sockets, the boundaries of the store as
+  the kernel door and the panic of a major version mismatch are not.
 * The race detector: closed. The first run reported fifty races; the
   triage separated thirty defects of the tests (counters shared between
   tasks with plain `++`) from five of the kernel, and the five were fixed
