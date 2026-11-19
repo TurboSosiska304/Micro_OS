@@ -260,11 +260,20 @@ exercised without a board.
 
 ## 8. Testing
 
-* The kernel is tested on the host: `make test` (own framework, no dependencies).
-* The simulator `make sim` runs the very same kernel on Linux, so the shell and
-  the VFS can be debugged without flashing.
+* The kernel is tested on the host: `make test` (own framework, no dependencies),
+  twice more under the address sanitizer (`make test-asan`) and the race
+  detector (`make test-tsan`).
+* The simulator `make sim` runs the very same kernel on Linux with a volume on
+  a file, `/proc`, `/dev`, the configuration and the drivers of the host, so
+  the whole portable system can be debugged without flashing.
+* The x86-64 port is booted in QEMU by `make x86-smoke`: the same sources, a
+  bare processor, a serial console, the shell.
 * On the device there is a UART console, and its output is mirrored to the
-  TFT at the same time — the dialogue and the boot report are on both.
+  TFT at the same time — the dialogue and the boot report are on both; the
+  checks are driven by `tools/device-test.sh`.
+* `make integrity` holds the boundary: the kernel includes only the kernel, a
+  portable component no platform header and no `k_port_*`, every port
+  implements the whole contract, and the image fits its budget.
 
 ## 9. Resource budget
 
@@ -275,3 +284,4 @@ exercised without a board.
 | Internal SRAM | ~100 KB usable by code | task stacks, drivers |
 | CPU | 240 MHz, 2 cores | already taken by FreeRTOS; our kernel lives on top |
 | Battery | 200 mAh | deep sleep + RTC is the main "wearable" scenario |
+| Image | 2 MB `factory` slot | the firmware is 886 KB (58 % of the slot free) |

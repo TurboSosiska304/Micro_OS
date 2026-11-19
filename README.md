@@ -402,6 +402,10 @@ Details: [CONTRIBUTING.md](CONTRIBUTING.md).
   is not a copy of the parent at the point of the call. A real `fork()` (an
   address space of its own, copy on write) is planned for right after the
   first release.
+* **The x86-64 port is young.** It boots on a bare processor, takes interrupts,
+  switches tasks and runs the shell over COM1, but there is no filesystem or
+  network on it yet, and its disk is the memory. It is the proof that the
+  kernel is portable, not a machine for work.
 * **One user, no file owners or mode bits.** A file's protection is the
   access its descriptor was opened with - read, write, or both - enforced by
   the kernel with `EBADF`. Owners and `chmod` wait for the first release:

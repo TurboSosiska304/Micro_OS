@@ -150,6 +150,27 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
       remembered in the NVS (see [ADR 0003](adr/0003-wifi-driver.md))
 * [x] Console on TFT and UART at the same time
 
+## The boundary work (done)
+
+Between the drivers and the services the tree was taken apart along the
+line the kernel must not cross: the contract of the port is split by
+subject and versioned, the backends (the flash, the NVS, the sockets, the
+renderer, the radio) left the portable components, and the checks that
+hold the line were written. The kernel also got a second bare-metal
+machine: x86-64 in QEMU, with its own loader.
+
+* [x] `kernel/port/*.h` by subject, `KERNEL_PORT_API_VERSION` 1.2, checked
+      at the boot; ADR 0004
+* [x] the upper layers ask the kernel (`k_sysinfo`, `k_console`, `k_mutex`,
+      `k_kv`, `k_socket`, `k_render`, `k_clock`), never the port
+* [x] `kernel/blockdev.h`: MicroFS asks a device, not a partition
+* [x] the checks `[layers]`, `[port]`, `[budget]`, and `ports/port_null`
+* [x] the simulator boots the whole portable system on a volume of a file
+* [x] the x86-64 port: loader, IDT/PIT, context switch, shell on COM1
+      (`make x86-smoke`)
+
+The kernel side of it is in [kernel-roadmap.md](kernel-roadmap.md).
+
 ## Phase 5 - Services and applications
 
 * [x] Init process: starting daemons from `/etc/init.d` — a script is a list

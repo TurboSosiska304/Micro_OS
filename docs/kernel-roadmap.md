@@ -1,6 +1,7 @@
 # Micro OS kernel roadmap
 
-> Russian version: [kernel-roadmap_ru.md](kernel-roadmap_ru.md)
+> The Russian version is not written yet; the English text is the
+> canonical one, as everywhere in the repository.
 
 This is the roadmap of **the kernel**: the part of the tree that does not
 know what it runs on. The board, the drivers, the radio and the firmware
@@ -36,17 +37,20 @@ Every item ends with a state on the board and green tests.
 * [x] `[layers]` and `[port]` in `make integrity`: a leak fails the build
 * [x] The host port as the machine of the tests (`ports/port_host`)
 
-## K2 - The host machine (next)
+## K2 - The host machine (done)
 
-* [ ] `ports/port_null`: a port with no POSIX and no chip, linked in CI - the
-      proof that nothing portable depends on either
-* [ ] The stubs of the board for the host: a display that draws in a file, the
-      input from a script, the RTC from the clock of the process
-* [ ] `make sim` boots the whole system, not only the shell: mount MicroFS on
-      a RAM device, restore `/etc` from the store, start `init`, then the shell
-* [ ] A scenario test of the simulator: a list of commands in, a transcript out
+* [x] `ports/port_null`: a port with no POSIX and no chip, linked by the host
+      build - the proof that nothing portable depends on either
+* [x] The stubs of the board for the host: the doctor modules, the commands,
+      the clock of the process, a renderer that draws into a file
+* [x] `make sim` boots the whole system: MicroFS on a file volume, `/proc`,
+      `/dev`, `/etc` restored from the store, `init`, then the shell
+* [x] A scenario test of the simulator (`make smoke`), on a volume and a store
+      of its own
+* [x] A bare-metal machine in the tests: x86-64 in QEMU (`make x86-smoke`)
 * [ ] The simulator on the loopback: `http`, `ntp` and `telnet` against a
-      server of the test
+      server of the test (the sockets of the host are exercised by the unit
+      tests of `net`, not by the simulator)
 
 ## K3 - Programs (planned)
 

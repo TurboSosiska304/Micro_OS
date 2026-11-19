@@ -18,8 +18,10 @@ Three builds from one tree:
   `make x86-smoke`), a port with its own loader and no libc under the kernel.
 * **ESP32** — the same sources as an ESP-IDF v5.3 project.
 
-Current phase: 0–4 done, phase 5 partly done (WiFi station, telnet). Details in
-`docs/roadmap.md`.
+Current state: phases 0–5 done, phase 6 (release) in progress; the boundary of
+the port was reworked (ADR 0004) and the kernel boots on a second machine, x86-64
+in QEMU. The platform roadmap is `docs/roadmap.md`, the kernel one is
+`docs/kernel-roadmap.md`.
 
 ## The rule that matters most
 
@@ -184,8 +186,8 @@ version.
 * The panel SPI is one hardware resource: every drawing/flush/offset/rotation
   call takes the recursive display lock.
 * The filesystem is one state: every public `mfs_*` call takes a recursive
-  "sleep lock" (no blocking primitive yet). Open file position/flags live in
-  the descriptor, not in the FS.
+  `k_mutex` (it blocks the task, it does not spin). Open file position/flags
+  live in the descriptor, not in the FS.
 * The allocator is behind one lock (`kmm`), the host PSRAM pool behind a mutex.
 * Error-code translation happens only in `components/mfs/src/mfs_vfs.c`;
   filesystem codes and syscall codes are not identical.
@@ -214,8 +216,10 @@ version.
 
 Open items from `docs/roadmap.md`:
 
-* Phase 5: the demo applications (sensor logger, IR remote, clock, weather
-  station); HTTP and NTP are done.
+* Phase 5 is done; the demo applications are not in this tree (a repository of
+  their own).
+* The kernel roadmap: the host machine boots the whole system, then programs
+  (`execve`), protection, and the port for a processor with an MMU.
 * Phase 7: `execve` and a format of the programs, per-file mode bits and
   owners, a real `fork()` with its own address space.
 * Phase 8: NTP at the boot with a time zone in `/etc`, an HTTP server, MQTT,
