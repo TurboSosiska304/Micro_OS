@@ -173,14 +173,41 @@ void k_port_write(const char *data, k_size_t len)
     pthread_mutex_unlock(&s_sink_lock);
 }
 
-k_u64_t k_port_uptime_ms(void)
+/*
+ * The clock of the port counts from the start of the process, not from the
+ * start of the machine: the uptime of the kernel is the time since its own
+ * boot, and a simulator that reports the uptime of the laptop is lying -
+ * the shell prints "3 h" a second after the kernel came up.
+ */
+static struct timespec s_epoch;
+static pthread_once_t s_epoch_once = PTHREAD_ONCE_INIT;
+
+static void host_epoch_init(void)
+{
+    (void)clock_gettime(CLOCK_MONOTONIC, &s_epoch);
+}
+
+static k_u64_t host_uptime_ns(void)
 {
     struct timespec ts;
+    k_u64_t now;
+    k_u64_t epoch;
+
+    pthread_once(&s_epoch_once, host_epoch_init);
 
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
         return 0;
     }
-    return (k_u64_t)ts.tv_sec * 1000u + (k_u64_t)(ts.tv_nsec / 1000000);
+
+    now = (k_u64_t)ts.tv_sec * 1000000000u + (k_u64_t)ts.tv_nsec;
+    epoch = (k_u64_t)s_epoch.tv_sec * 1000000000u + (k_u64_t)s_epoch.tv_nsec;
+
+    return now > epoch ? now - epoch : 0;
+}
+
+k_u64_t k_port_uptime_ms(void)
+{
+    return host_uptime_ns() / 1000000u;
 }
 
 /* The code the process of the host stops with: a panic is a failure. */
@@ -347,13 +374,7 @@ void k_port_free(void *ptr)
 
 k_u64_t k_port_uptime_us(void)
 {
-    struct timespec ts;
-
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
-        return 0;
-    }
-
-    return (k_u64_t)ts.tv_sec * 1000000u + (k_u64_t)(ts.tv_nsec / 1000);
+    return host_uptime_ns() / 1000u;
 }
 
 /* --- tasks (pthreads) --- */

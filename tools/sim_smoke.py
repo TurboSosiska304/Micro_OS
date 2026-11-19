@@ -2,9 +2,10 @@
 """Micro OS — the smoke test of the host simulator.
 
 The unit tests check the kernel piece by piece. This script checks the
-whole thing at once: the simulator boots, the subsystems come up, the shell
-answers. It is the cheapest end to end test of the kernel and it runs in a
-couple of seconds.
+whole thing at once: the simulator boots, the subsystems come up, the
+volume of MicroFS and the configuration of /etc work, the shell answers.
+It is the cheapest end to end test of the kernel and it runs in a couple
+of seconds.
 
 Usage:
     tools/sim_smoke.py [--binary PATH] [--timeout SECONDS] [--verbose]
@@ -17,10 +18,13 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
-# The commands that are fed to the shell of the simulator.
+# The commands that are fed to the shell of the simulator, in this order: the
+# checks below read the answer of a command by its place in the list.
 COMMANDS = [
     "help",
     "uname",
@@ -31,10 +35,25 @@ COMMANDS = [
     "echo smoke-test",
     "pwd",
     "dmesg",
+    "ls /",
+    "write /etc/smoke hello",
+    "cat /etc/smoke",
+    "df",
+    "config sync",
+    "config",
+    "mkfs",
+    "mkfs -y",
+    "ls /",
 ]
 
-# The noise of the heartbeat task: it writes to the console in parallel with
-# the shell, so its lines are cut out before the output is checked.
+# The prompt of the shell. It is written in one call, so the log of another
+# task never splits it: the answers are separated by it and read by position,
+# which does not depend on the echo of the typed line.
+PROMPT = "microos> "
+
+# The noise of the tasks that run beside the shell: the heartbeat and the
+# workers write to the console in parallel, so their numbers are cut out
+# before the output is checked.
 HEARTBEAT = re.compile(r"heartbeat: uptime \d+ ms, \d+ task\(s\)")
 
 
@@ -43,7 +62,17 @@ def normalize(output: str) -> str:
     return HEARTBEAT.sub("heartbeat: uptime", output)
 
 
-def run_simulator(binary: str, timeout: float) -> tuple:
+def answers(output: str) -> list:
+    """The blocks of the transcript, one per command of COMMANDS.
+
+    The block of a command holds the echo of the line and the answer of the
+    shell. The echo can be cut by the log of another task; the prompt cannot,
+    so the commands are matched by their place and not by their text.
+    """
+    return output.split(PROMPT)[1:]
+
+
+def run_simulator(binary: str, timeout: float, env: dict) -> tuple:
     """Feed the commands to the simulator and collect the output."""
     process = subprocess.Popen(
         [binary],
@@ -52,6 +81,7 @@ def run_simulator(binary: str, timeout: float) -> tuple:
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
+        env=env,
     )
 
     try:
@@ -78,83 +108,127 @@ def check(output: str) -> list:
     def expect(name: str, condition: bool, detail: str = "") -> None:
         checks.append((name, bool(condition), detail))
 
+    blocks = answers(output)
+
+    def answer(command: str) -> str:
+        """The answer of one command of the list, empty when it did not run."""
+        try:
+            index = COMMANDS.index(command)
+        except ValueError:
+            return ""
+        return blocks[index] if index < len(blocks) else ""
+
     # --- the boot
     expect("the kernel prints its name", "MicroOS" in output)
     expect("the board is reported", "board: host_sim" in output)
     expect("the architecture is reported", "arch:" in output)
     expect("the scheduler comes up", "[ ok ] sched" in output)
+    expect("the volume is registered", "[ ok ] storage" in output)
+    expect("the volume is a file of the machine", "sim: the volume is /" in output)
+    expect("the filesystem comes up", "[ ok ] fs" in output)
+    expect("the volume is mounted", "KB mounted" in output)
     expect("the tasks come up", "[ ok ] tasks" in output)
     expect("the subsystems are ready", "subsystem(s) ready" in output)
 
     # --- the shell
     expect("the shell starts", "MicroOS shell ready" in output)
-
-    help_text = output.split("microos> help", 1)
     expect(
-        "help lists the commands",
-        len(help_text) > 1 and "list the available commands" in help_text[1],
+        "the answers follow the commands",
+        len(blocks) >= len(COMMANDS),
+        f"{len(blocks)} block(s)",
     )
 
-    uname_text = output.split("microos> uname", 1)
+    expect("help lists the commands", "list the available commands" in answer("help"))
+
     expect(
         "uname prints the version",
-        len(uname_text) > 1 and re.search(r"MicroOS \d+\.\d+\.\d+", uname_text[1]) is not None,
+        re.search(r"MicroOS \d+\.\d+\.\d+", answer("uname")) is not None,
     )
 
-    ps_text = output.split("microos> ps", 1)
+    ps_text = answer("ps")
     expect(
         "ps prints the table of the tasks",
-        len(ps_text) > 1 and re.search(r"pid\s+prio\s+state\s+name", ps_text[1]) is not None,
+        re.search(r"pid\s+prio\s+state\s+name", ps_text) is not None,
     )
+    expect("ps lists the heartbeat task", "heartbeat" in ps_text)
+    expect("ps lists the shell task", "shell" in ps_text)
+
     expect(
-        "ps lists the heartbeat task",
-        len(ps_text) > 1 and "heartbeat" in ps_text[1],
+        "uptime prints the time",
+        re.search(r"^up \d+ s", answer("uptime"), re.MULTILINE) is not None,
     )
-
-    uptime_text = output.split("microos> uptime", 1)
-    expect("uptime prints the time", len(uptime_text) > 1 and "uptime:" in uptime_text[1])
-
-    free_text = output.split("microos> free", 1)
-    expect("free prints the memory", len(free_text) > 1 and "heap:" in free_text[1])
+    expect("free prints the memory", "heap:" in answer("free"))
 
     # --- the ABI
-    abi_text = output.split("microos> abi", 1)
-    if len(abi_text) > 1:
-        section = abi_text[1]
-        rows = re.findall(r"^(\d+)\s+([a-z_][a-z0-9_]*)$", section, re.MULTILINE)
-        summary = re.search(r"(\d+) call\(s\) registered", section)
+    section = answer("abi")
+    rows = re.findall(r"^(\d+)\s+([a-z_][a-z0-9_]*)$", section, re.MULTILINE)
+    summary = re.search(r"(\d+) call\(s\) registered", section)
 
-        expect("abi prints the table of the calls", len(rows) > 0, f"{len(rows)} row(s)")
-        expect("abi prints the summary", summary is not None)
-        if summary is not None:
-            expect(
-                "the summary of the abi matches the table",
-                int(summary.group(1)) == len(rows),
-                f"{summary.group(1)} call(s) in the summary, {len(rows)} row(s) in the table",
-            )
-        names = [name for _, name in rows]
-        for call in ("exit", "read", "write", "open", "waitpid", "malloc"):
-            expect(f"the call {call} is registered", call in names)
-    else:
-        expect("abi prints the table of the calls", False, "the command produced no output")
+    expect("abi prints the table of the calls", len(rows) > 0, f"{len(rows)} row(s)")
+    expect("abi prints the summary", summary is not None)
+    if summary is not None:
+        expect(
+            "the summary of the abi matches the table",
+            int(summary.group(1)) == len(rows),
+            f"{summary.group(1)} call(s) in the summary, {len(rows)} row(s) in the table",
+        )
+    names = [name for _, name in rows]
+    for call in ("exit", "read", "write", "open", "waitpid", "malloc"):
+        expect(f"the call {call} is registered", call in names)
 
     # --- the shell
-    echo_text = output.split("microos> echo smoke-test", 1)
     expect(
         "echo prints its argument",
-        len(echo_text) > 1 and re.search(r"^smoke-test\s*$", echo_text[1], re.MULTILINE) is not None,
+        re.search(r"^smoke-test\s*$", answer("echo smoke-test"), re.MULTILINE) is not None,
     )
+    expect("pwd prints the current directory", "/" in answer("pwd"))
+    expect("dmesg prints the log of the kernel", "[ ok ] sched" in answer("dmesg"))
 
-    pwd_text = output.split("microos> pwd", 1)
-    expect("pwd prints the current directory", len(pwd_text) > 1 and "/" in pwd_text[1])
+    # --- the filesystem
+    root = answer("ls /")
+    expect("ls / lists the procfs", "proc/" in root)
+    expect("ls / lists the devfs", "dev/" in root)
 
-    dmesg_text = output.split("microos> dmesg", 1)
+    written = answer("write /etc/smoke hello")
+    expect("write creates a file", "byte(s) written to /etc/smoke" in written)
+    expect("cat prints what write wrote", "hello" in answer("cat /etc/smoke"))
+
+    df_text = answer("df")
+    expect("df prints the volume", re.search(r"blocks: \d+ of \d+ free", df_text) is not None)
+    expect("df knows the block size", "KB each" in df_text)
+    expect("df prints the inodes", "inodes:" in df_text)
+
+    # --- the configuration
     expect(
-        "dmesg prints the log of the kernel",
-        len(dmesg_text) > 1 and "[ ok ] sched" in dmesg_text[1],
+        "config sync saves /etc",
+        re.search(r"restored, \d+ saved", answer("config sync")) is not None,
     )
+    expect("config lists the key of /etc", "smoke=hello" in answer("config"))
+
+    # --- the volume is made again
+    expect("mkfs refuses without -y", "usage: mkfs -y" in answer("mkfs"))
+    expect("mkfs formats the volume", "the volume is formatted" in answer("mkfs -y"))
+
+    root = answer("ls /")
+    expect("ls / works after a format", "proc/" in root and "dev/" in root)
 
     return checks
+
+
+def make_env(workdir: str) -> dict:
+    """The environment that gives this run a volume and a store of its own.
+
+    The volume and the key-value store of the simulator live in the files of
+    the machine, so a run that used the default ones would depend on the run
+    before it: the second `make smoke` would find a volume that is already
+    formatted, /etc that is already there and a store with the key of the
+    last run.
+    """
+    env = dict(os.environ)
+    env["MICROOS_VOLUME"] = os.path.join(workdir, "volume.img")
+    env["MICROOS_KV_DIR"] = os.path.join(workdir, "kv")
+
+    return env
 
 
 def main(argv: list) -> int:
@@ -169,6 +243,11 @@ def main(argv: list) -> int:
     )
     parser.add_argument("--timeout", type=float, default=20.0, help="how long to wait, in seconds")
     parser.add_argument("--verbose", action="store_true", help="print the output of the simulator")
+    parser.add_argument(
+        "--keep",
+        action="store_true",
+        help="keep the volume and the store of the run (they are removed by default)",
+    )
     args = parser.parse_args(argv)
 
     if not os.path.isfile(args.binary) or not os.access(args.binary, os.X_OK):
@@ -176,7 +255,14 @@ def main(argv: list) -> int:
         print("build it first: make build", file=sys.stderr)
         return 2
 
-    output, status = run_simulator(args.binary, args.timeout)
+    workdir = tempfile.mkdtemp(prefix="microos-sim-")
+    try:
+        output, status = run_simulator(args.binary, args.timeout, make_env(workdir))
+    finally:
+        if args.keep:
+            print(f"the volume of the run is kept in {workdir}")
+        else:
+            shutil.rmtree(workdir, ignore_errors=True)
 
     if args.verbose:
         print(output)
