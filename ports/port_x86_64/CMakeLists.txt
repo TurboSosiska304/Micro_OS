@@ -18,6 +18,8 @@ cmake_minimum_required(VERSION 3.16)
 project(micro_os_x86_64 C ASM)
 
 set(KERNEL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/kernel")
+set(KSHELL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/kshell")
+set(LIBC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/libc")
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -40,17 +42,53 @@ add_compile_options(
 
 file(GLOB KERNEL_SOURCES "${KERNEL_DIR}/src/*.c")
 
+# The shell is the kernel's own interpreter: the port supplies the console
+# under it and nothing else, so the commands are the same as on the board.
+set(KSHELL_SOURCES
+    "${KSHELL_DIR}/src/kshell.c"
+    "${KSHELL_DIR}/src/kshell_files.c"
+    "${KSHELL_DIR}/src/kshell_memtest.c"
+    "${KSHELL_DIR}/src/kshell_mfetch.c"
+)
+
+# The parts of the C library the shell calls. They reach the kernel through
+# the ABI of the system calls and know nothing about the port.
+#
+# src/stdio.c is left out on purpose: the path of its %f conversions needs
+# SSE registers, and the port is built with -mgeneral-regs-only because
+# nothing here saves the XMM state. The formatter of src/libc_shim.c serves
+# the shell instead; it speaks the conversions the commands use, without the
+# precision and the '*' widths that src/stdio.c adds.
+set(LIBC_SOURCES
+    "${LIBC_DIR}/src/stdlib.c"
+    "${LIBC_DIR}/src/unistd.c"
+)
+
+# The memory test calls strtoul without including the header of the library;
+# on the board that resolves to the libc of ESP-IDF. Here the name has to
+# point at the conversion of the system, so the header is put in front of
+# that one file and its macros do the renaming.
+set_source_files_properties("${KSHELL_DIR}/src/kshell_memtest.c"
+    PROPERTIES COMPILE_OPTIONS "-include;libc/stdlib.h")
+
 add_executable(microos64
     ${KERNEL_SOURCES}
+    ${KSHELL_SOURCES}
+    ${LIBC_SOURCES}
     src/boot64.S
     src/kmain.c
+    src/shell.c
     src/port_x86_64.c
     src/port_x86_64_task.c
     src/libc_shim.c
+    src/interrupts.S
+    src/switch.S
 )
 
 target_include_directories(microos64 PRIVATE
     "${KERNEL_DIR}/include"
+    "${KSHELL_DIR}/include"
+    "${LIBC_DIR}/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 

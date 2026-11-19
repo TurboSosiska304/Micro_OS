@@ -112,11 +112,21 @@ static void sink_unsigned(struct sink *s, unsigned long long value, unsigned bas
     }
 }
 
+/*
+ * The conversions the kernel writes: %s, %c, %d, %u, %x, %X, %p and %%.
+ * The flags are the ones a person uses in a table: "-" (to the left), "0"
+ * (pad a number with zeroes) and a width, given as digits or as "*" (the
+ * width is the next argument); a precision "." cuts a string or pads a
+ * number, and it may be "*" as well. What is not here (%f, %e, %g) needs a
+ * floating point unit the kernel does not save, and is printed literally.
+ */
 static int format(struct sink *s, const char *fmt, va_list ap)
 {
     while (*fmt != '\0') {
         bool left = false;
+        bool zero = false;
         int width = 0;
+        int precision = -1;
 
         if (*fmt != '%') {
             sink_char(s, *fmt++);
@@ -130,9 +140,34 @@ static int format(struct sink *s, const char *fmt, va_list ap)
             fmt++;
         }
 
-        while (*fmt >= '0' && *fmt <= '9') {
-            width = width * 10 + (*fmt - '0');
+        if (*fmt == '0') {
+            zero = true;
             fmt++;
+        }
+
+        if (*fmt == '*') {
+            width = va_arg(ap, int);
+            fmt++;
+        } else {
+            while (*fmt >= '0' && *fmt <= '9') {
+                width = width * 10 + (*fmt - '0');
+                fmt++;
+            }
+        }
+
+        if (*fmt == '.') {
+            fmt++;
+
+            if (*fmt == '*') {
+                precision = va_arg(ap, int);
+                fmt++;
+            } else {
+                precision = 0;
+                while (*fmt >= '0' && *fmt <= '9') {
+                    precision = precision * 10 + (*fmt - '0');
+                    fmt++;
+                }
+            }
         }
 
         if (*fmt == 'l') {
@@ -153,13 +188,19 @@ static int format(struct sink *s, const char *fmt, va_list ap)
 
             len = (int)strlen(text);
 
+            if (precision >= 0 && len > precision) {
+                len = precision;
+            }
+
             if (!left) {
                 for (int i = len; i < width; i++) {
                     sink_char(s, ' ');
                 }
             }
 
-            sink_text(s, text);
+            for (int i = 0; i < len; i++) {
+                sink_char(s, text[i]);
+            }
 
             if (left) {
                 for (int i = len; i < width; i++) {
@@ -168,29 +209,81 @@ static int format(struct sink *s, const char *fmt, va_list ap)
             }
             break;
         }
-        case 'c':
-            sink_char(s, (char)va_arg(ap, int));
-            break;
-        case 'd': {
-            int value = va_arg(ap, int);
+        case 'c': {
+            char c = (char)va_arg(ap, int);
 
-            if (value < 0) {
-                sink_char(s, '-');
-                sink_unsigned(s, (unsigned long long)(-(long long)value), 10, false);
-            } else {
-                sink_unsigned(s, (unsigned long long)value, 10, false);
+            if (!left) {
+                for (int i = 1; i < width; i++) {
+                    sink_char(s, ' ');
+                }
+            }
+
+            sink_char(s, c);
+
+            if (left) {
+                for (int i = 1; i < width; i++) {
+                    sink_char(s, ' ');
+                }
             }
             break;
         }
+        case 'd':
         case 'u':
-            sink_unsigned(s, va_arg(ap, unsigned int), 10, false);
-            break;
         case 'x':
-            sink_unsigned(s, va_arg(ap, unsigned int), 16, false);
+        case 'X': {
+            char number[24];
+            struct sink scratch = {.buf = number, .size = sizeof(number), .written = 0};
+            bool negative = false;
+            int len;
+            int pad;
+
+            if (*fmt == 'd') {
+                int value = va_arg(ap, int);
+
+                if (value < 0) {
+                    negative = true;
+                    value = (int)(-(long long)value);
+                }
+                sink_unsigned(&scratch, (unsigned long long)value, 10, false);
+            } else if (*fmt == 'u') {
+                sink_unsigned(&scratch, va_arg(ap, unsigned int), 10, false);
+            } else {
+                sink_unsigned(&scratch, va_arg(ap, unsigned int), 16, *fmt == 'X');
+            }
+
+            len = (int)scratch.written;
+
+            /* A precision on a number is the least number of digits. */
+            if (precision > len) {
+                for (int i = len; i < precision; i++) {
+                    sink_char(&scratch, '0');
+                }
+                len = precision;
+            }
+
+            pad = width - len - (negative ? 1 : 0);
+
+            if (!left) {
+                for (int i = 0; i < pad; i++) {
+                    sink_char(s, zero ? '0' : ' ');
+                }
+            }
+
+            if (negative) {
+                sink_char(s, '-');
+            }
+
+            for (int i = 0; i < len; i++) {
+                sink_char(s, number[i]);
+            }
+
+            if (left) {
+                for (int i = 0; i < pad; i++) {
+                    sink_char(s, ' ');
+                }
+            }
             break;
-        case 'X':
-            sink_unsigned(s, va_arg(ap, unsigned int), 16, true);
-            break;
+        }
         case 'p':
             sink_text(s, "0x");
             sink_unsigned(s, (unsigned long long)(uintptr_t)va_arg(ap, void *), 16, false);
