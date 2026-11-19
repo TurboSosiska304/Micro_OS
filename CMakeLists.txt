@@ -81,6 +81,7 @@ else()
     add_subdirectory(components/telnet)
     add_subdirectory(components/wifi)
     add_subdirectory(ports/port_host)
+    add_subdirectory(ports/port_null)
     add_subdirectory(tests)
 
 endif()

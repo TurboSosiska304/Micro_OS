@@ -19,6 +19,7 @@ What is checked:
     format     the formatting of the C sources (clang-format)
     layers     the portable layers do not include the platform (ADR 0004)
     port       every function of the port contract has its implementation
+    budget     the image of the kernel stays inside its budget
 
 The exit status is 0 when everything is in order and 1 otherwise.
 """
@@ -994,6 +995,7 @@ PORT_HEADER_DIR = "components/kernel/include/kernel/port"
 PORT_IMPLEMENTATION_DIRS = (
     "components/port_esp32/src",
     "ports/port_host/src",
+    "ports/port_null/src",
 )
 
 # A declaration of the contract: a line that starts with the return type and
@@ -1012,6 +1014,32 @@ def contract_functions(root: str) -> list:
             names.update(CONTRACT_DECLARATION.findall(read_text(os.path.join(directory, entry))))
 
     return sorted(names)
+
+
+def check_portable_build(root: str, report: Report) -> None:
+    """The host build compiles every portable component."""
+    group = "layers"
+
+    path = os.path.join(root, "CMakeLists.txt")
+    if not os.path.isfile(path):
+        report.add(group, "the top level build file is there", False, "CMakeLists.txt is missing")
+        return
+
+    text = read_text(path)
+    missing = [
+        directory
+        for directory in PORTABLE_DIRS
+        if f"add_subdirectory({directory.rstrip('/')})" not in text
+    ]
+
+    report.add(
+        group,
+        "the host build includes every portable component",
+        not missing,
+        "not built on the host: " + ", ".join(d.rstrip("/") for d in missing)
+        if missing
+        else f"{len(PORTABLE_DIRS)} component(s)",
+    )
 
 
 def check_port_contract(root: str, report: Report) -> None:
@@ -1045,6 +1073,33 @@ def check_port_contract(root: str, report: Report) -> None:
             not missing,
             "missing: " + ", ".join(missing) if missing else f"{len(names)} function(s)",
         )
+
+
+# The image may grow, but not without a word: the factory slot is 2 MB and
+# the board has 8 MB of flash in total, so the kernel has to stay far from
+# it (the current image is around 0.9 MB).
+IMAGE_BUDGET_BYTES = 1228800
+
+
+def check_budget(root: str, report: Report) -> None:
+    """The image of the kernel stays inside its budget."""
+    group = "budget"
+    path = os.path.join(root, "build", "micro_os.bin")
+
+    if not os.path.isfile(path):
+        report.skip(group, "the image fits the budget", "build/micro_os.bin is not there")
+        return
+
+    size = os.path.getsize(path)
+
+    report.add(
+        group,
+        "the image fits the budget",
+        size <= IMAGE_BUDGET_BYTES,
+        f"{size} of {IMAGE_BUDGET_BYTES} bytes"
+        if size <= IMAGE_BUDGET_BYTES
+        else f"{size} bytes is over the budget of {IMAGE_BUDGET_BYTES}",
+    )
 
 
 def check_version(root: str, report: Report, expected: str) -> None:
@@ -1118,7 +1173,9 @@ def main(argv: list) -> int:
     table = check_partitions(root, report)
     check_config(root, report, images, table)
     check_layers(root, report, files)
+    check_portable_build(root, report)
     check_port_contract(root, report)
+    check_budget(root, report)
     if args.expect_version:
         check_version(root, report, args.expect_version)
     if not args.skip_git:
