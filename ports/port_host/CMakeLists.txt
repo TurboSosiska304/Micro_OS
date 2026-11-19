@@ -3,6 +3,8 @@
 add_library(microos_port_host STATIC
     src/port_host.c
     src/port_host_psram.c
+    src/port_kv_file.c
+    src/port_net_posix.c
 )
 
 target_include_directories(microos_port_host PUBLIC "${CMAKE_CURRENT_LIST_DIR}/include")

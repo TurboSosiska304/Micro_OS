@@ -6,6 +6,7 @@
 
 set(MICRO_OS_KERNEL_SRCS
     "src/board.c"
+    "src/blockdev.c"
     "src/boot.c"
     "src/console.c"
     "src/kmm.c"

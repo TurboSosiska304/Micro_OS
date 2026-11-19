@@ -17,6 +17,8 @@
  *   kernel/port/mem.h      the internal heap and the PSRAM
  *   kernel/port/lock.h     critical sections and recursive mutexes
  *   kernel/port/power.h    halt and reset
+ *   kernel/port/kv.h       the store that survives a restart
+ *   kernel/port/net.h      the sockets of TCP and UDP
  *   kernel/port/info.h     the name, the architecture, the contract version
  *
  * A source that needs one subject includes that header and nothing else;
@@ -29,8 +31,10 @@
 
 #include "kernel/port/console.h"
 #include "kernel/port/info.h"
+#include "kernel/port/kv.h"
 #include "kernel/port/lock.h"
 #include "kernel/port/mem.h"
+#include "kernel/port/net.h"
 #include "kernel/port/power.h"
 #include "kernel/port/time.h"
 

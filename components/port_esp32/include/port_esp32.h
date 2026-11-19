@@ -18,6 +18,9 @@ void port_esp32_console_init(void);
 /* Create the kernel lock. Must be called before the first task is created. */
 void port_esp32_init(void);
 
+/* Register the block devices of the board (the partition of MicroFS). */
+void port_esp32_blockdev_init(void);
+
 /* Start the 1 ms time base (calls k_sched_tick()). */
 esp_err_t port_esp32_start_tick(uint32_t period_ms);
 

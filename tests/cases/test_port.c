@@ -61,6 +61,23 @@ struct port_contract {
     const char *(*arch)(void);
     unsigned (*api_major)(void);
     unsigned (*api_minor)(void);
+
+    int (*kv_get)(const char *key, char *buf, k_size_t size);
+    int (*kv_set)(const char *key, const char *value);
+    int (*kv_erase)(const char *key);
+    int (*kv_commit)(void);
+    int (*kv_next)(k_size_t index, char *key, k_size_t size);
+
+    k_port_socket_t *(*net_connect)(const char *host, k_u16_t port, k_u32_t timeout_ms);
+    int (*net_send)(k_port_socket_t *socket, const void *data, k_size_t size, bool wait);
+    int (*net_recv)(k_port_socket_t *socket, void *data, k_size_t size);
+    void (*net_close)(k_port_socket_t *socket);
+    k_port_server_t *(*net_listen)(k_u16_t port);
+    k_port_socket_t *(*net_accept)(k_port_server_t *server, k_u32_t timeout_ms);
+    void (*net_server_close)(k_port_server_t *server);
+    int (*net_udp_exchange)(const char *host, k_u16_t port, const void *request,
+                            k_size_t request_size, void *answer, k_size_t answer_size,
+                            k_u32_t timeout_ms);
 };
 
 static const struct port_contract s_contract = {
@@ -93,6 +110,21 @@ static const struct port_contract s_contract = {
     .arch = k_port_arch,
     .api_major = k_port_api_major,
     .api_minor = k_port_api_minor,
+
+    .kv_get = k_port_kv_get,
+    .kv_set = k_port_kv_set,
+    .kv_erase = k_port_kv_erase,
+    .kv_commit = k_port_kv_commit,
+    .kv_next = k_port_kv_next,
+
+    .net_connect = k_port_net_connect,
+    .net_send = k_port_net_send,
+    .net_recv = k_port_net_recv,
+    .net_close = k_port_net_close,
+    .net_listen = k_port_net_listen,
+    .net_accept = k_port_net_accept,
+    .net_server_close = k_port_net_server_close,
+    .net_udp_exchange = k_port_net_udp_exchange,
 };
 
 /* The number of members, so that a new subject in the header is visible
@@ -128,6 +160,21 @@ static void check_contract_is_closed(void)
     KT_CHECK(s_contract.arch != NULL);
     KT_CHECK(s_contract.api_major != NULL);
     KT_CHECK(s_contract.api_minor != NULL);
+
+    KT_CHECK(s_contract.kv_get != NULL);
+    KT_CHECK(s_contract.kv_set != NULL);
+    KT_CHECK(s_contract.kv_erase != NULL);
+    KT_CHECK(s_contract.kv_commit != NULL);
+    KT_CHECK(s_contract.kv_next != NULL);
+
+    KT_CHECK(s_contract.net_connect != NULL);
+    KT_CHECK(s_contract.net_send != NULL);
+    KT_CHECK(s_contract.net_recv != NULL);
+    KT_CHECK(s_contract.net_close != NULL);
+    KT_CHECK(s_contract.net_listen != NULL);
+    KT_CHECK(s_contract.net_accept != NULL);
+    KT_CHECK(s_contract.net_server_close != NULL);
+    KT_CHECK(s_contract.net_udp_exchange != NULL);
 }
 
 static void check_identity(void)
