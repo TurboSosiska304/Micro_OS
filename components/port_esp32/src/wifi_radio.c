@@ -6,9 +6,11 @@
  * board joins the same network after every restart.
  *
  * The core of the driver knows nothing about ESP-IDF: it only sees the table
- * of the functions below.
+ * of the functions below. The file lives in the port, beside the rest of the
+ * platform code, so the portable component `wifi` holds no chip at all
+ * (ADR 0004).
  */
-#include "wifi/wifi_esp32.h"
+#include "port_esp32.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -20,7 +22,6 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "kernel/log.h"
-#include "kernel/port.h"
 #include "lwip/ip_addr.h"
 #include "nvs_flash.h"
 #include "wifi/wifi.h"
@@ -35,7 +36,7 @@ static esp_netif_t *s_netif;
 /*
  * The driver is made in steps, and a step that fails must not leave a
  * half made driver behind: the state says which of them were made, so
- * that a second attempt picks up where the first one stopped instead of
+ * that a later call picks up where the first one stopped instead of
  * starting the driver of ESP-IDF again (which it cannot: it answers
  * "already initialised" and the events would be watched twice).
  */
@@ -401,6 +402,24 @@ static int radio_status(struct wifi_status *out)
     return 0;
 }
 
+/*
+ * The address of the station. The hardware doctor prints it at the boot and
+ * the core hands it out, so that a user of the driver never has to know that
+ * ESP-IDF is the one keeping it.
+ */
+static int radio_mac(uint8_t *mac)
+{
+    if (mac == NULL) {
+        return -1;
+    }
+
+    if (esp_wifi_get_mac(WIFI_IF_STA, mac) != ESP_OK) {
+        return -1;
+    }
+
+    return 0;
+}
+
 /* --- the storage of the configuration --- */
 
 static int storage_load(char *ssid, k_size_t ssid_size, char *pass, k_size_t pass_size)
@@ -503,6 +522,7 @@ static const struct wifi_radio s_radio_ops = {
     .disconnect = radio_disconnect,
     .scan = radio_scan,
     .status = radio_status,
+    .mac = radio_mac,
 };
 
 static const struct wifi_storage s_storage_ops = {
@@ -541,29 +561,34 @@ static int nvs_init(void)
     return 0;
 }
 
-int wifi_esp32_init(void)
+/*
+ * Install the radio and the storage of the ESP32 and bring the driver of the
+ * radio up. The port calls this at the boot; the core of the driver only
+ * sees the two tables that are handed to it here.
+ */
+void port_esp32_wifi_init(void)
 {
     wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
     esp_err_t rc;
 
     if (s_initialised && s_handlers) {
-        return 0;
+        return;
     }
 
     if (nvs_init() != 0) {
-        return -1;
+        return;
     }
 
     rc = esp_netif_init();
     if (rc != ESP_OK && rc != ESP_ERR_INVALID_STATE) {
         kerror("wifi: the netif cannot be initialised (rc=%d)", (int)rc);
-        return -2;
+        return;
     }
 
     rc = esp_event_loop_create_default();
     if (rc != ESP_OK && rc != ESP_ERR_INVALID_STATE) {
         kerror("wifi: the event loop cannot be created (rc=%d)", (int)rc);
-        return -3;
+        return;
     }
 
     s_netif = esp_netif_create_default_wifi_sta();
@@ -581,7 +606,7 @@ int wifi_esp32_init(void)
     rc = esp_wifi_init(&config);
     if (rc != ESP_OK && rc != ESP_ERR_INVALID_STATE) {
         kerror("wifi: the driver of the radio does not start (rc=%d)", (int)rc);
-        return -4;
+        return;
     }
     s_initialised = true;
 
@@ -594,13 +619,13 @@ int wifi_esp32_init(void)
         if (esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler,
                                                 NULL, NULL) != ESP_OK) {
             kerror("wifi: the events of the radio cannot be watched");
-            return -5;
+            return;
         }
 
         if (esp_event_handler_instance_register(IP_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler,
                                                 NULL, NULL) != ESP_OK) {
             kerror("wifi: the events of the network cannot be watched");
-            return -6;
+            return;
         }
 
         s_handlers = true;
@@ -608,7 +633,7 @@ int wifi_esp32_init(void)
 
     if (esp_wifi_set_mode(WIFI_MODE_STA) != ESP_OK) {
         kerror("wifi: the station cannot be selected");
-        return -7;
+        return;
     }
 
     /*
@@ -622,19 +647,4 @@ int wifi_esp32_init(void)
 
     wifi_set_radio(&s_radio_ops);
     wifi_set_storage(&s_storage_ops);
-
-    return 0;
-}
-
-int wifi_esp32_get_mac(uint8_t *mac)
-{
-    if (mac == NULL) {
-        return -1;
-    }
-
-    if (esp_wifi_get_mac(WIFI_IF_STA, mac) != ESP_OK) {
-        return -1;
-    }
-
-    return 0;
 }

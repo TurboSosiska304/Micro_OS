@@ -5,6 +5,7 @@
 #define MICRO_OS_DRIVERS_INTERNAL_H
 
 #include "kernel/types.h"
+#include "drivers/rtc_time.h"
 
 /* I2C bus shared by the IMU and the RTC. */
 int drv_i2c_init(void);
@@ -23,6 +24,10 @@ int drv_led_set(bool on);
 int drv_led_register(void);
 int drv_imu_register(void);
 int drv_rtc_register(void);
+
+/* Write the moment into the seven registers of the BM8563. Returns 0 on
+ * success, -1 when there is no clock, -2 for a date out of range. */
+int drv_rtc_set_time(const struct rtc_datetime *dt);
 int drv_wifi_register(void);
 int drv_memory_register(void);
 int drv_battery_register(void);

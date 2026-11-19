@@ -7,6 +7,7 @@
  * just like the init process of Linux.
  */
 #include "board/board.h"
+#include "config/config.h"
 #include "drivers/drivers.h"
 #include "kernel/boot.h"
 #include "kernel/kmod.h"
@@ -18,8 +19,10 @@
 #include "kernel/version.h"
 #include "devfs/devfs.h"
 #include "graphics/tft_console.h"
+#include "init/initd.h"
 #include "mfs/mfs.h"
-#include "mfs/mfs_flash.h"
+#include "mfs/mfs_vfs.h"
+#include "net/net.h"
 #include "procfs/procfs.h"
 #include "kshell/kshell.h"
 #include "port_esp32.h"
@@ -30,7 +33,7 @@
 
 static int board_subsys_init(void)
 {
-    const struct board_info *info = board_get_info();
+    const struct kernel_board *info = board_get_info();
 
     klog(K_LOG_LEVEL_INFO, "soc: %s, flash: %u MB, psram: %u KB", info->soc,
          (unsigned)info->flash_mb, (unsigned)info->psram_kb);
@@ -47,7 +50,12 @@ static int drivers_subsys_init(void)
     }
 
     /* The shell over the air: beside the drivers, not among them. */
-    return telnet_register();
+    if (telnet_register() != 0) {
+        return -1;
+    }
+
+    /* The network services: the HTTP client and the clock of NTP. */
+    return net_register();
 }
 
 /*
@@ -65,12 +73,12 @@ static int cmd_mkfs(int argc, char **argv)
     mfs_unmount();
     vfs_umount("/");
 
-    if (mfs_flash_format() != 0) {
+    if (mfs_vfs_format("flash0") != 0) {
         kshell_printf("mkfs: the volume cannot be formatted\n");
         return KSHELL_ERROR;
     }
 
-    if (mfs_flash_mount("/") != 0) {
+    if (mfs_vfs_mount("/", "flash0") != 0) {
         kshell_printf("mkfs: the volume is formatted, but it cannot be mounted\n");
         return KSHELL_ERROR;
     }
@@ -92,7 +100,7 @@ static int fs_subsys_init(void)
      */
     kshell_register("mkfs", "format the volume: mkfs -y", cmd_mkfs);
 
-    rc = mfs_flash_mount("/");
+    rc = mfs_vfs_mount("/", "flash0");
     if (rc != 0) {
         /*
          * The board has to work even when the data of the user cannot be
@@ -123,7 +131,6 @@ static void shell_task(void *arg)
     K_UNUSED(arg);
 
     tft_console_start();
-    tft_console_register();
     kshell_set_sink(tft_console_write);
 
     kshell_run();
@@ -170,6 +177,8 @@ static int write_boot_log(void)
 static void init_task(void *arg)
 {
     struct task *self = task_self();
+    int restored;
+    int saved;
 
     K_UNUSED(arg);
 
@@ -197,6 +206,58 @@ static void init_task(void *arg)
     }
 
     kmod_report();
+
+    /*
+     * The configuration from /etc: the NVS keeps the copy that survives a
+     * restart and a formatted volume, and the boot brings the files back.
+     * The task of the kernel has the stack for this, the boot task of the
+     * IDF is too small for the buffers of the walk.
+     */
+    if (config_register() != 0) {
+        kwarn("init: the config command is not registered");
+    }
+
+    /*
+     * The store is installed by config_register(), so the restore below has
+     * one: without it /etc would come back empty and the settings of the
+     * board would be lost without a word.
+     */
+    if (config_store_get() != NULL) {
+        restored = config_restore(CONFIG_DIR);
+        saved = config_persist(CONFIG_DIR);
+
+        if (restored < 0) {
+            kwarn("init: the configuration cannot be restored (rc=%d)", restored);
+        } else if (restored > 0) {
+            kinfo("init: %d configuration file(s) restored from the NVS", restored);
+        }
+
+        if (saved < 0) {
+            kwarn("init: the configuration cannot be saved (rc=%d)", saved);
+        } else if (saved > 0) {
+            kinfo("init: %d configuration file(s) saved to the NVS", saved);
+        }
+    } else {
+        kwarn("init: the configuration has no store");
+    }
+
+    /*
+     * The commands of the shell have to exist before a script names one:
+     * the shell registers them when it starts, and the scripts of the init
+     * process run before it.
+     */
+    if (kshell_init() != KSHELL_OK) {
+        kwarn("init: not every command of the shell is registered");
+    }
+
+    /*
+     * The scripts of /etc/init.d are the daemons of the board: each one
+     * runs in a task of its own, so a service that never returns does not
+     * hold the init process.
+     */
+    if (initd_run(INITD_DIR) < 0) {
+        kwarn("init: the scripts of %s did not run", INITD_DIR);
+    }
 
     /* And finally it starts the shell. */
     if (task_create("shell", shell_task, NULL, TASK_PRIO_DEFAULT) == NULL) {
@@ -226,7 +287,7 @@ static const struct kernel_subsys g_subsystems[] = {
 
 void app_main(void)
 {
-    const struct board_info *info = board_get_info();
+    const struct kernel_board *info = board_get_info();
     struct kernel_boot_config cfg;
 
     port_esp32_console_init();
@@ -241,6 +302,7 @@ void app_main(void)
     memset(&cfg, 0, sizeof(cfg));
     cfg.board = info->name;
     cfg.board_desc = info->desc;
+    cfg.board_info = info;
     cfg.subsystems = g_subsystems;
     cfg.nsubsystems = K_ARRAY_SIZE(g_subsystems);
 

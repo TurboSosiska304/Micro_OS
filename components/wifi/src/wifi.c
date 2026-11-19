@@ -11,8 +11,10 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "kernel/lock.h"
 #include "kernel/log.h"
-#include "kernel/port.h"
+#include "kernel/panic.h"
+#include "kernel/sysinfo.h"
 
 static const struct wifi_radio *s_radio;
 static const struct wifi_storage *s_storage;
@@ -20,6 +22,30 @@ static struct wifi_status s_status;
 static char s_ssid[WIFI_SSID_MAX];
 static char s_pass[WIFI_PASS_MAX];
 static bool s_started;
+
+/*
+ * The state of the station is read by the users of the driver and written by
+ * the events of the radio, which come from a task of their own. A mutex, not
+ * a critical section: the section copies a few strings, it belongs to a task,
+ * and the callers are allowed to sleep. It is recursive because the two
+ * "read" paths take it and then call a helper that takes it again.
+ *
+ * A kernel without a mutex to give is not a kernel that can run the driver:
+ * the panic says so at once instead of letting the two writers race.
+ */
+static k_mutex_t s_lock = K_MUTEX_INITIALIZER;
+
+static void station_lock(void)
+{
+    if (k_mutex_lock(&s_lock) != 0) {
+        KERNEL_PANIC("wifi: cannot take the lock of the station");
+    }
+}
+
+static void station_unlock(void)
+{
+    (void)k_mutex_unlock(&s_lock);
+}
 
 /*
  * The station goes back to the network by itself after a drop: a router
@@ -168,16 +194,28 @@ int wifi_connect(const char *ssid, const char *pass)
      * again: whatever the radio was doing before, the user wants this
      * network now.
      */
+    /*
+     * The fields are taken under the lock of the station and the radio is
+     * called outside it: the event of the radio runs in another task and
+     * takes the same lock, and it must not wait for a connect that waits
+     * for it.
+     */
+    station_lock();
     s_reconnect.wanted = true;
     reconnect_forget();
     copy_str(s_reconnect.ssid, sizeof(s_reconnect.ssid), ssid);
     copy_str(s_reconnect.pass, sizeof(s_reconnect.pass), pass);
+    station_unlock();
 
     rc = s_radio->connect(ssid, pass);
+
+    station_lock();
+
     if (rc != 0) {
         /* The radio refused the request: the network is not there. */
         s_status.state = WIFI_STATE_FAILED;
         s_status.reason = rc;
+        station_unlock();
         return WIFI_ERROR;
     }
 
@@ -188,6 +226,8 @@ int wifi_connect(const char *ssid, const char *pass)
     s_status.state = WIFI_STATE_CONNECTING;
     s_status.reason = 0;
     copy_str(s_status.ssid, sizeof(s_status.ssid), ssid);
+
+    station_unlock();
 
     return WIFI_OK;
 }
@@ -210,8 +250,10 @@ int wifi_disconnect(void)
      * The station was asked to leave: nobody has to bring it back by
      * itself until a connection is asked for again.
      */
+    station_lock();
     s_reconnect.wanted = false;
     reconnect_forget();
+    station_unlock();
 
     return WIFI_OK;
 }
@@ -248,13 +290,13 @@ static void refresh_live_data(void)
         return;
     }
 
-    k_port_enter_critical();
+    station_lock();
     copy_str(s_status.ssid, sizeof(s_status.ssid), live.ssid);
     copy_str(s_status.bssid, sizeof(s_status.bssid), live.bssid);
     copy_str(s_status.ip, sizeof(s_status.ip), live.ip);
     s_status.rssi = live.rssi;
     s_status.channel = live.channel;
-    k_port_exit_critical();
+    station_unlock();
 }
 
 int wifi_get_status(struct wifi_status *out)
@@ -267,9 +309,26 @@ int wifi_get_status(struct wifi_status *out)
         refresh_live_data();
     }
 
-    k_port_enter_critical();
+    station_lock();
     memcpy(out, &s_status, sizeof(*out));
-    k_port_exit_critical();
+    station_unlock();
+
+    return WIFI_OK;
+}
+
+int wifi_get_mac(uint8_t *mac)
+{
+    if (s_radio == NULL || s_radio->mac == NULL) {
+        return WIFI_NO_RADIO;
+    }
+
+    if (mac == NULL) {
+        return WIFI_INVALID;
+    }
+
+    if (s_radio->mac(mac) != 0) {
+        return WIFI_ERROR;
+    }
 
     return WIFI_OK;
 }
@@ -363,22 +422,27 @@ k_u32_t wifi_reconnect_after_ms(void)
     k_u64_t now;
     k_u32_t wait;
 
+    station_lock();
+
     if (!s_reconnect.wanted || s_reconnect.ssid[0] == '\0') {
+        station_unlock();
         return 0;
     }
 
     if (s_reconnect.attempts >= WIFI_RECONNECT_MAX) {
         /* The network was asked for WIFI_RECONNECT_MAX times: it is not there. */
+        station_unlock();
         return 0;
     }
 
-    now = k_port_uptime_ms();
+    now = k_sysinfo_uptime_ms();
 
     /*
      * A drop is often reported by several events: only one attempt is
      * planned at a time, so that the radio is not woken up in a pile.
      */
     if (s_reconnect.next_ms > now) {
+        station_unlock();
         return 0;
     }
 
@@ -393,6 +457,8 @@ k_u32_t wifi_reconnect_after_ms(void)
 
     s_reconnect.attempts++;
     s_reconnect.next_ms = now + wait;
+
+    station_unlock();
 
     return wait;
 }
@@ -415,19 +481,36 @@ int wifi_reconnect(void)
      * The count of the attempts is not restarted here: it is what stops
      * the station from asking a network with a wrong key all day.
      */
-    if (s_radio->connect(s_reconnect.ssid, s_reconnect.pass) != 0) {
-        s_status.state = WIFI_STATE_FAILED;
-        return WIFI_ERROR;
-    }
+    {
+        char ssid[WIFI_SSID_MAX];
+        char pass[WIFI_PASS_MAX];
+        int rc;
 
-    s_status.state = WIFI_STATE_CONNECTING;
+        station_lock();
+        copy_str(ssid, sizeof(ssid), s_reconnect.ssid);
+        copy_str(pass, sizeof(pass), s_reconnect.pass);
+        station_unlock();
+
+        rc = s_radio->connect(ssid, pass);
+
+        station_lock();
+
+        if (rc != 0) {
+            s_status.state = WIFI_STATE_FAILED;
+            station_unlock();
+            return WIFI_ERROR;
+        }
+
+        s_status.state = WIFI_STATE_CONNECTING;
+        station_unlock();
+    }
 
     return WIFI_OK;
 }
 
 void wifi_notify(int event, int reason)
 {
-    k_port_enter_critical();
+    station_lock();
 
     switch (event) {
     case WIFI_EVT_STARTED:
@@ -458,11 +541,11 @@ void wifi_notify(int event, int reason)
         s_status.reason = reason;
         break;
     default:
-        k_port_exit_critical();
+        station_unlock();
         return;
     }
 
-    k_port_exit_critical();
+    station_unlock();
 
     if (event == WIFI_EVT_CONNECTED) {
         /* The network is up: the address and the signal are known now. */

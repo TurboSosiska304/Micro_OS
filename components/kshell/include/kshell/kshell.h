@@ -13,12 +13,13 @@
 #include "kernel/types.h"
 
 /*
- * The number of the commands of the shell. The built in commands are 23,
- * the drivers add their own (the date, the bus, the radio, the display)
- * and the filesystem its mkfs, so the table has room for all of them and
- * for the commands of the next phases.
+ * The number of the commands of the shell. There are 33 today: the built in
+ * ones, the drivers (the date, the bus, the radio, the display), the
+ * filesystem (mkfs), telnet and mfetch. The table keeps room for the
+ * commands of the next phases; a command that does not fit is reported at
+ * the boot instead of disappearing silently.
  */
-#define KSHELL_MAX_COMMANDS 32
+#define KSHELL_MAX_COMMANDS 40
 #define KSHELL_MAX_ARGS 8
 #define KSHELL_LINE_MAX 128
 

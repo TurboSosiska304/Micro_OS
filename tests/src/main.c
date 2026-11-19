@@ -4,6 +4,8 @@
  * The tests run inside a kernel task: this way they exercise the very same
  * task API that the applications on the device will use.
  */
+#include <stdatomic.h>
+
 #include "ktest.h"
 #include "tests/tests.h"
 
@@ -14,7 +16,7 @@
 #include "kernel/task.h"
 #include "port_host.h"
 
-static volatile bool g_done;
+static atomic_bool g_done;
 static int g_result;
 
 static void run_tests(void *arg)
@@ -24,6 +26,9 @@ static void run_tests(void *arg)
     test_version();
     test_board();
     test_log();
+    test_port();
+    test_blockdev();
+    test_render();
     test_task();
     test_sched();
     test_sched_queue();
@@ -44,11 +49,14 @@ static void run_tests(void *arg)
     test_ksys_process();
     test_libc();
     test_kshell();
+    test_initd();
+    test_config();
+    test_net();
     test_boot();
     test_wifi();
 
     g_result = ktest_summary();
-    g_done = true;
+    atomic_store_explicit(&g_done, true, memory_order_release);
 }
 
 int main(void)
@@ -74,7 +82,7 @@ int main(void)
         const useconds_t limit = 120u * 1000u * 1000u;
         useconds_t waited = 0;
 
-        while (!g_done && waited < limit) {
+        while (!atomic_load_explicit(&g_done, memory_order_acquire) && waited < limit) {
             usleep(1000);
             waited += 1000;
         }

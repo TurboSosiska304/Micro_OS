@@ -11,6 +11,7 @@
 #include "libc/unistd.h"
 
 #define SHELL_MAX_ENTRIES 64
+#define SHELL_LS_CHILDREN 16
 #define SHELL_PATH_MAX 128
 
 /* The path of the current directory of the task. */
@@ -105,6 +106,52 @@ static int cmd_cd(int argc, char **argv)
     return KSHELL_OK;
 }
 
+/* One line of the tree: the branch, the name of the entry, a slash for a dir. */
+static void ls_print(const char *name, k_size_t type, const char *prefix, bool last)
+{
+    kshell_printf("%s%s %s%s\n", prefix, last ? "`--" : "|--", name, type == 2 ? "/" : "");
+}
+
+/*
+ * The entries below one directory of the listing, indented under it: the
+ * picture of the root then shows /etc and /etc/init.d at once, while the
+ * table of the level above stays in its own static place.
+ */
+static void ls_children(const char *path, const char *prefix)
+{
+    static struct vfs_dirent entries[SHELL_LS_CHILDREN];
+    k_size_t count = 0;
+    k_size_t i;
+
+    if (vfs_list(path, entries, SHELL_LS_CHILDREN, &count) != 0) {
+        return;
+    }
+
+    for (i = 0; i < count; i++) {
+        ls_print(entries[i].name, entries[i].type, prefix, i + 1 == count);
+    }
+}
+
+/* The path of a child of `dir`, when it fits; false when it does not. */
+static bool ls_child_path(const char *dir, const char *name, char *out, k_size_t size)
+{
+    k_size_t dlen = strlen(dir);
+    k_size_t nlen = strlen(name);
+    bool slash = (dlen > 0 && dir[dlen - 1] != '/');
+
+    if (dlen + (slash ? 1 : 0) + nlen + 1 > size) {
+        return false;
+    }
+
+    memcpy(out, dir, dlen);
+    if (slash) {
+        out[dlen++] = '/';
+    }
+    memcpy(out + dlen, name, nlen + 1);
+
+    return true;
+}
+
 static int cmd_ls(int argc, char **argv)
 {
     /*
@@ -128,12 +175,26 @@ static int cmd_ls(int argc, char **argv)
         return KSHELL_ERROR;
     }
 
+    kshell_printf("%s\n", path);
+
     for (i = 0; i < count; i++) {
-        if (entries[i].type == 2) {
-            kshell_printf("d %-24s\n", entries[i].name);
-        } else {
-            kshell_printf("- %-24s %6u B\n", entries[i].name, (unsigned)entries[i].size);
+        char child_path[SHELL_PATH_MAX];
+        char child_prefix[16];
+        bool last = (i + 1 == count);
+
+        ls_print(entries[i].name, entries[i].type, "", last);
+
+        if (entries[i].type != 2) {
+            continue;
         }
+
+        /* The path of the child, and the prefix its own entries start with. */
+        if (!ls_child_path(path, entries[i].name, child_path, sizeof(child_path))) {
+            continue;
+        }
+        snprintf(child_prefix, sizeof(child_prefix), "%s", last ? "    " : "|   ");
+
+        ls_children(child_path, child_prefix);
     }
 
     if (count == 0) {

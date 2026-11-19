@@ -7,7 +7,8 @@
  *     of the station, the configuration and the formatting of the status. It
  *     knows nothing about the hardware;
  *   - the radio (the backend): the ESP-IDF driver of the ESP32, which talks
- *     to the hardware and reports the events back to the core.
+ *     to the hardware and reports the events back to the core. It is platform
+ *     code and lives in components/port_esp32, not here.
  *
  * The radio is a table of functions that the backend fills in, so the whole
  * logic of the driver can be tested on the host, without a radio.
@@ -83,6 +84,7 @@ struct wifi_radio {
     int (*disconnect)(void);
     int (*scan)(struct wifi_scan_entry *out, k_size_t max, k_size_t *count);
     int (*status)(struct wifi_status *out);
+    int (*mac)(uint8_t *mac); /* the address of the station, 6 bytes */
 };
 
 /*
@@ -107,6 +109,13 @@ int wifi_connect(const char *ssid, const char *pass);
 int wifi_disconnect(void);
 int wifi_scan(struct wifi_scan_entry *out, k_size_t max, k_size_t *count);
 int wifi_get_status(struct wifi_status *out);
+
+/*
+ * The hardware address of the station: 6 bytes, the one the radio was given
+ * by the chip. The doctor prints it; nobody else needs to know that the
+ * radio keeps it.
+ */
+int wifi_get_mac(uint8_t *mac);
 
 /* The configuration of the network: the name and the key. */
 int wifi_config_save(const char *ssid, const char *pass);

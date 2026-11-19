@@ -187,3 +187,57 @@ void rtc_format(const struct rtc_datetime *dt, char *buf, size_t size)
     snprintf(buf, size, "%04d-%02d-%02d %02d:%02d:%02d", dt->year, dt->month, dt->day, dt->hour,
              dt->minute, dt->second);
 }
+
+/*
+ * The seconds of Unix as a date, by the calendar of the chip. The
+ * arithmetic is the one of Howard Hinnant ("chrono-compatible low-level
+ * date algorithms"): the days are cut into eras of 400 years, and the
+ * month is counted from March, which is what makes the leap day the last
+ * day of the year and the code short. It is here, in the arithmetic of the
+ * time, so that the host tests can push the boundary dates through it.
+ */
+bool rtc_from_unix(uint64_t seconds, struct rtc_datetime *dt)
+{
+    /* 2099-12-31 23:59:59 UTC: the last moment the chip can keep. */
+    const uint64_t last = 4102444799u;
+    uint64_t days;
+    uint32_t rest;
+    int64_t z;
+    int64_t era;
+    uint32_t doe;
+    uint32_t yoe;
+    uint32_t doy;
+    uint32_t mp;
+    uint32_t d;
+    int m;
+    int y;
+
+    if (dt == NULL || seconds > last) {
+        return false;
+    }
+
+    days = seconds / 86400u;
+    rest = (uint32_t)(seconds % 86400u);
+
+    z = (int64_t)days + 719468;
+    era = (z >= 0 ? z : z - 146096) / 146097;
+    doe = (uint32_t)(z - era * 146097);
+    yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    y = (int)((int64_t)yoe + era * 400);
+    doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    mp = (5 * doy + 2) / 153;
+    d = doy - (153 * mp + 2) / 5 + 1;
+    m = (int)mp + (mp < 10 ? 3 : -9);
+
+    dt->year = y + (m <= 2 ? 1 : 0);
+    dt->month = m;
+    dt->day = (int)d;
+    dt->hour = (int)(rest / 3600u);
+    dt->minute = (int)((rest % 3600u) / 60u);
+    dt->second = (int)(rest % 60u);
+    dt->weekday = (int)((days + 4u) % 7u); /* 1970-01-01 was a Thursday */
+    dt->low_voltage = false;
+    dt->valid = true;
+
+    return rtc_datetime_in_range(dt);
+}

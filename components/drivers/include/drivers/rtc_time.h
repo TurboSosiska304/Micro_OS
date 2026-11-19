@@ -74,6 +74,13 @@ void rtc_datetime_encode(const struct rtc_datetime *dt, uint8_t raw[7]);
 bool rtc_parse_date(const char *s, struct rtc_datetime *dt);
 bool rtc_parse_time(const char *s, struct rtc_datetime *dt);
 
+/*
+ * The seconds of Unix (UTC) as a moment of the chip, and false when the
+ * moment is outside the calendar the chip can keep (1900..2099). The
+ * weekday is computed from the date, as everywhere else in this file.
+ */
+bool rtc_from_unix(uint64_t seconds, struct rtc_datetime *dt);
+
 /* The moment as one line: "2026-10-26 12:34:56". */
 void rtc_format(const struct rtc_datetime *dt, char *buf, size_t size);
 

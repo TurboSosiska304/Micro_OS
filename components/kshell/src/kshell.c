@@ -11,8 +11,9 @@
 #include "kernel/ksys.h"
 #include "kernel/console.h"
 #include "kernel/log.h"
-#include "kernel/port.h"
+#include "kernel/power.h"
 #include "kernel/sched.h"
+#include "kernel/sysinfo.h"
 #include "kernel/task.h"
 #include "kernel/version.h"
 
@@ -241,7 +242,7 @@ static int cmd_uname(int argc, char **argv)
     (void)argc;
     (void)argv;
 
-    kshell_printf("%s %s %s (%s)\n", kernel_name(), kernel_version(), k_port_arch(),
+    kshell_printf("%s %s %s (%s)\n", kernel_name(), kernel_version(), k_sysinfo_arch(),
                   kernel_build_id());
 
     return KSHELL_OK;
@@ -279,7 +280,7 @@ static int cmd_ps(int argc, char **argv)
             continue;
         }
 
-        state = (t == self) ? "running" : task_state_name(t->state);
+        state = (t == self) ? "running" : task_state_name(task_state_of(t));
         kshell_printf("  %3u  %4u  %-8s  %s\n", (unsigned)t->pid, (unsigned)t->prio, state,
                       t->name);
     }
@@ -346,19 +347,24 @@ static int cmd_dmesg(int argc, char **argv)
     (void)argv;
 
     klog_dump(buf, sizeof(buf));
-    kshell_printf("%s", buf);
+    /* The print buffer of the shell is 192 bytes; the log of the boot is
+     * longer, and a person wants all of it. */
+    k_console_write(buf, strlen(buf));
 
     return KSHELL_OK;
 }
 
 static int cmd_free(int argc, char **argv)
 {
+    k_size_t heap_free = k_sysinfo_heap_free() / 1024;
+    k_size_t heap_total = k_sysinfo_heap_total() / 1024;
+    k_size_t psram_free = k_sysinfo_psram_free() / 1024;
+
     (void)argc;
     (void)argv;
 
-    kshell_printf("heap: %u KB free of %u KB, psram: %u KB free\n",
-                  (unsigned)(k_port_heap_free() / 1024), (unsigned)(k_port_heap_total() / 1024),
-                  (unsigned)(k_port_psram_free() / 1024));
+    kshell_printf("heap: %u KB free of %u KB, psram: %u KB free\n", (unsigned)heap_free,
+                  (unsigned)heap_total, (unsigned)psram_free);
     kshell_printf("uptime: %llu ms, %u tick(s)\n", (unsigned long long)k_sched_uptime_ms(),
                   (unsigned)k_sched_ticks());
 
@@ -407,7 +413,7 @@ static int cmd_reboot(int argc, char **argv)
     (void)argv;
 
     kshell_printf("rebooting...\n");
-    k_port_reset();
+    k_reboot();
 
     return KSHELL_OK;
 }
@@ -462,7 +468,7 @@ static int shell_read_line(char *buf, k_size_t size)
     bool cut = false;
 
     for (;;) {
-        int c = k_port_console_getchar();
+        int c = k_console_getchar();
 
         if (c < 0) {
             buf[len] = '\0';

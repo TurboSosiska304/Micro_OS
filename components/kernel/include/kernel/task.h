@@ -99,6 +99,14 @@ struct task *task_self(void);
 
 /* Lookups. */
 struct task *task_by_pid(k_u32_t pid);
+
+/*
+ * The state of a task, read under the section the scheduler uses: the field
+ * belongs to the kernel and is changed from another task, so a caller that
+ * reads it plainly reads a value somebody is writing. The list of the tasks
+ * of `ps` and the waiting of a parent both go through here.
+ */
+task_state_t task_state_of(const struct task *t);
 struct task *task_get_by_index(k_size_t index);
 k_size_t task_count(void);
 k_size_t task_count_by_state(task_state_t state);

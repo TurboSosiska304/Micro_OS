@@ -1,0 +1,185 @@
+/*
+ * Micro OS — the network services of the board: HTTP and NTP.
+ *
+ * One request at a time, one session: the shell is one task and the board
+ * is not a server of its own. Every wait has a timeout (NET_TIMEOUT_MS), so
+ * a network that went away answers an error to the command instead of
+ * holding the console.
+ *
+ * The sockets are not made here: this file names a host and a port, and the
+ * kernel opens the session (kernel/net.h). That is what lets the same client
+ * run over lwIP on the board and over the sockets of the host in the tests.
+ */
+#include "net/net.h"
+
+#include <stdio.h>
+#include <string.h>
+
+#include "kernel/clock.h"
+#include "kernel/log.h"
+#include "kernel/net.h"
+#include "kshell/kshell.h"
+#include "net/ntp.h"
+
+/* --- the transport of the HTTP client --- */
+
+static int sock_open(const char *host, int port, void **ctx)
+{
+    k_socket_t *session;
+
+    if (host == NULL || ctx == NULL || port <= 0 || port > 65535) {
+        return -1;
+    }
+
+    session = k_socket_connect(host, (k_u16_t)port, NET_TIMEOUT_MS);
+    if (session == NULL) {
+        kwarn("net: cannot connect to %s:%d", host, port);
+        return -1;
+    }
+
+    *ctx = session;
+
+    return 0;
+}
+
+static int sock_send(void *ctx, const void *data, k_size_t size)
+{
+    int sent = k_socket_send(ctx, data, size, true);
+
+    if (sent < 0 || (k_size_t)sent != size) {
+        return -1;
+    }
+
+    return sent;
+}
+
+static int sock_recv(void *ctx, void *data, k_size_t size)
+{
+    return k_socket_recv(ctx, data, size);
+}
+
+static void sock_close(void *ctx)
+{
+    k_socket_close(ctx);
+}
+
+static const struct http_transport s_transport = {
+    .open = sock_open,
+    .send = sock_send,
+    .recv = sock_recv,
+    .close = sock_close,
+};
+
+int net_http_get(const char *url, char *body, k_size_t size, struct http_response *out)
+{
+    return http_get(&s_transport, url, body, size, out);
+}
+
+/* --- the clock --- */
+
+int net_ntp_sync(const char *server, k_u64_t *unix_seconds)
+{
+    k_u8_t request[NTP_PACKET_SIZE];
+    k_u8_t answer[NTP_PACKET_SIZE];
+    int n;
+
+    if (server == NULL || unix_seconds == NULL) {
+        return -1;
+    }
+
+    ntp_build_request(request);
+
+    /*
+     * One request and one answer is the whole of the exchange: the port
+     * sends the packet, waits for the answer and closes the socket, so the
+     * board never holds a UDP socket for longer than the call.
+     */
+    n = k_net_udp_exchange(server, NTP_PORT, request, sizeof(request), answer, sizeof(answer),
+                           NET_TIMEOUT_MS);
+    if (n != (int)sizeof(answer)) {
+        kwarn("net: no answer from the NTP server %s (%d byte(s))", server, n);
+        return -1;
+    }
+
+    return ntp_parse_response(answer, unix_seconds);
+}
+
+/* --- the shell --- */
+
+static int cmd_http(int argc, char **argv)
+{
+    char body[257];
+    struct http_response response;
+    int rc;
+
+    if (argc != 3 || strcmp(argv[1], "get") != 0) {
+        kshell_printf("usage: http get <url>\n");
+        return KSHELL_USAGE;
+    }
+
+    rc = net_http_get(argv[2], body, sizeof(body), &response);
+    if (rc != HTTP_OK) {
+        kshell_printf("http: %s: %s\n", argv[2],
+                      rc == HTTP_ERROR ? "the connection failed" : "the URL is not one we speak");
+        return KSHELL_ERROR;
+    }
+
+    kshell_printf("HTTP %d, %u byte(s)\n", response.status, (unsigned)response.length);
+    if (response.length > 0) {
+        kshell_printf("%s\n", body);
+    }
+
+    return KSHELL_OK;
+}
+
+/*
+ * Give the moment to the clock of the board. The chip that keeps the date
+ * is a driver, the kernel keeps the door to it, and the network only knows
+ * the seconds of Unix: the three do not have to meet in the same component.
+ */
+static int ntp_store_time(k_u64_t unix_seconds)
+{
+    return k_clock_set_unix(unix_seconds);
+}
+
+static int cmd_ntp(int argc, char **argv)
+{
+    const char *server = argc > 1 ? argv[1] : "pool.ntp.org";
+    k_u64_t seconds;
+    int year;
+    int month;
+    int day;
+    int hour;
+    int minute;
+    int second;
+
+    if (net_ntp_sync(server, &seconds) != 0) {
+        kshell_printf("ntp: no answer from %s\n", server);
+        return KSHELL_ERROR;
+    }
+
+    if (ntp_unix_to_datetime(seconds, &year, &month, &day, &hour, &minute, &second) != 0) {
+        kshell_printf("ntp: the server says a year the clock cannot keep\n");
+        return KSHELL_ERROR;
+    }
+
+    kshell_printf("ntp: %04d-%02d-%02d %02d:%02d:%02d UTC\n", year, month, day, hour, minute,
+                  second);
+
+    if (ntp_store_time(seconds) != 0) {
+        kshell_printf("ntp: the clock did not take the time\n");
+        return KSHELL_ERROR;
+    }
+
+    return KSHELL_OK;
+}
+
+int net_register(void)
+{
+    int rc = 0;
+
+    rc |= kshell_register("http", "the HTTP client: http get <url>", cmd_http);
+    rc |= kshell_register("ntp", "set the clock from NTP: ntp [server]", cmd_ntp);
+
+    return rc;
+}

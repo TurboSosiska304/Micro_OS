@@ -455,9 +455,10 @@ static void forked_child(void *arg)
 
 /*
  * The fork: a new task with the same program. The memory of the parent is
- * NOT copied - the kernel of the board cannot do that - so the tasks share
- * it, like the flag CLONE_VM of Linux. The child has its own number, so
- * the program tells the child by the mark of its task.
+ * NOT copied - KERNEL_NOMMU is set, and a kernel without an MMU cannot do
+ * that - so the tasks share it, like the flag CLONE_VM of Linux. The child
+ * has its own number, so the program tells the child by the mark of its
+ * task.
  */
 static k_ssize_t sys_fork(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3, ksys_arg_t a4,
                           ksys_arg_t a5)

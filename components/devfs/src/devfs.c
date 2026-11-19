@@ -10,7 +10,6 @@
 #include <string.h>
 
 #include "kernel/console.h"
-#include "kernel/port.h"
 #include "kernel/vfs.h"
 
 #define DEV_NAME_MAX 16
@@ -31,7 +30,7 @@ struct dev_file {
 /* The console of the board. */
 static int tty_read(char *buf, k_size_t size)
 {
-    int rc = k_port_console_readline(buf, size);
+    int rc = k_console_readline(buf, size);
 
     return rc < 0 ? 0 : rc;
 }

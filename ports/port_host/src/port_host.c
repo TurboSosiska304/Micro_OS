@@ -4,9 +4,11 @@
 #include <errno.h>
 #include <malloc.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <sched.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/select.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -93,6 +95,72 @@ void k_port_exit_critical(void)
     host_unlock();
 }
 
+/*
+ * The recursive mutex of the process. The critical section above is one
+ * global lock of the kernel; a mutex is a lock of a subsystem and there
+ * may be many of them, so each one is a structure of its own.
+ */
+struct k_port_mutex {
+    pthread_mutex_t lock;
+};
+
+k_port_mutex_t *k_port_mutex_create(void)
+{
+    k_port_mutex_t *mutex = calloc(1, sizeof(*mutex));
+    pthread_mutexattr_t attr;
+
+    if (mutex == NULL) {
+        return NULL;
+    }
+
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+
+    if (pthread_mutex_init(&mutex->lock, &attr) != 0) {
+        pthread_mutexattr_destroy(&attr);
+        free(mutex);
+        return NULL;
+    }
+
+    pthread_mutexattr_destroy(&attr);
+
+    return mutex;
+}
+
+int k_port_mutex_destroy(k_port_mutex_t *mutex)
+{
+    if (mutex == NULL) {
+        return -1;
+    }
+
+    /* A lock that a task holds or waits for is not ours to take away. */
+    if (pthread_mutex_destroy(&mutex->lock) != 0) {
+        return -1;
+    }
+
+    free(mutex);
+
+    return 0;
+}
+
+int k_port_mutex_lock(k_port_mutex_t *mutex)
+{
+    if (mutex == NULL) {
+        return -1;
+    }
+
+    return pthread_mutex_lock(&mutex->lock) == 0 ? 0 : -1;
+}
+
+int k_port_mutex_unlock(k_port_mutex_t *mutex)
+{
+    if (mutex == NULL) {
+        return -1;
+    }
+
+    return pthread_mutex_unlock(&mutex->lock) == 0 ? 0 : -1;
+}
+
 /* --- basic port API --- */
 
 void k_port_write(const char *data, k_size_t len)
@@ -112,14 +180,41 @@ void k_port_write(const char *data, k_size_t len)
     pthread_mutex_unlock(&s_sink_lock);
 }
 
-k_u64_t k_port_uptime_ms(void)
+/*
+ * The clock of the port counts from the start of the process, not from the
+ * start of the machine: the uptime of the kernel is the time since its own
+ * boot, and a simulator that reports the uptime of the laptop is lying -
+ * the shell prints "3 h" a second after the kernel came up.
+ */
+static struct timespec s_epoch;
+static pthread_once_t s_epoch_once = PTHREAD_ONCE_INIT;
+
+static void host_epoch_init(void)
+{
+    (void)clock_gettime(CLOCK_MONOTONIC, &s_epoch);
+}
+
+static k_u64_t host_uptime_ns(void)
 {
     struct timespec ts;
+    k_u64_t now;
+    k_u64_t epoch;
+
+    pthread_once(&s_epoch_once, host_epoch_init);
 
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
         return 0;
     }
-    return (k_u64_t)ts.tv_sec * 1000u + (k_u64_t)(ts.tv_nsec / 1000000);
+
+    now = (k_u64_t)ts.tv_sec * 1000000000u + (k_u64_t)ts.tv_nsec;
+    epoch = (k_u64_t)s_epoch.tv_sec * 1000000000u + (k_u64_t)s_epoch.tv_nsec;
+
+    return now > epoch ? now - epoch : 0;
+}
+
+k_u64_t k_port_uptime_ms(void)
+{
+    return host_uptime_ns() / 1000000u;
 }
 
 /* The code the process of the host stops with: a panic is a failure. */
@@ -156,6 +251,27 @@ const char *k_port_arch(void)
 #endif
 }
 
+/*
+ * The contract this port was written for: the assert turns a header that
+ * grew (or changed its meaning) into a build error, the way vermagic does
+ * for a module of Linux.
+ */
+#define PORT_API_MAJOR 1u
+#define PORT_API_MINOR 2u
+
+_Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
+               "port_host does not speak the contract of this kernel");
+
+unsigned k_port_api_major(void)
+{
+    return PORT_API_MAJOR;
+}
+
+unsigned k_port_api_minor(void)
+{
+    return PORT_API_MINOR;
+}
+
 /* --- console --- */
 
 int k_port_console_readline(char *buf, k_size_t size)
@@ -188,6 +304,22 @@ int k_port_console_getchar(void)
     }
 
     return c;
+}
+
+int k_port_console_poll(void)
+{
+    fd_set readable;
+    struct timeval now = {0, 0};
+
+    FD_ZERO(&readable);
+    FD_SET(STDIN_FILENO, &readable);
+
+    /* A zero timeout: "is there a character already?" and no waiting. */
+    if (select(STDIN_FILENO + 1, &readable, NULL, NULL, &now) <= 0) {
+        return -1;
+    }
+
+    return k_port_console_getchar();
 }
 
 /* --- memory --- */
@@ -249,13 +381,7 @@ void k_port_free(void *ptr)
 
 k_u64_t k_port_uptime_us(void)
 {
-    struct timespec ts;
-
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
-        return 0;
-    }
-
-    return (k_u64_t)ts.tv_sec * 1000000u + (k_u64_t)(ts.tv_nsec / 1000);
+    return host_uptime_ns() / 1000u;
 }
 
 /* --- tasks (pthreads) --- */
@@ -404,7 +530,7 @@ struct task *k_port_task_current(void)
 /* --- time base --- */
 
 static pthread_t s_tick_thread;
-static volatile bool s_tick_running;
+static atomic_bool s_tick_running;
 
 static void *host_tick_thread(void *arg)
 {
@@ -414,7 +540,7 @@ static void *host_tick_thread(void *arg)
     ts.tv_sec = interval_ms / 1000;
     ts.tv_nsec = (interval_ms % 1000) * 1000000L;
 
-    while (s_tick_running) {
+    while (atomic_load(&s_tick_running)) {
         while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {
             /* retry */
         }
@@ -430,15 +556,15 @@ void port_host_start_tick(long interval_ms)
         interval_ms = 1;
     }
 
-    s_tick_running = true;
+    atomic_store(&s_tick_running, true);
     if (pthread_create(&s_tick_thread, NULL, host_tick_thread, (void *)(intptr_t)interval_ms) !=
         0) {
-        s_tick_running = false;
+        atomic_store(&s_tick_running, false);
     }
 }
 
 void port_host_stop_tick(void)
 {
-    s_tick_running = false;
+    atomic_store(&s_tick_running, false);
     pthread_join(s_tick_thread, NULL);
 }

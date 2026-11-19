@@ -10,12 +10,24 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IDF_EXPORT="${IDF_EXPORT:-$HOME/esp/esp-idf/export.sh}"
 PORT="${1:-}"
 CONSOLE_SECONDS="${CONSOLE_SECONDS:-30}"
 
-if [ ! -f "$IDF_EXPORT" ]; then
-    echo "ESP-IDF not found at $IDF_EXPORT" >&2
+# ESP-IDF discovery, in order: $IDF_PATH, a checkout beside the repository
+# (../esp-idf), then the conventional ~/esp/esp-idf. IDF_EXPORT overrides.
+if [ -z "${IDF_EXPORT:-}" ]; then
+    for candidate in "${IDF_PATH:+$IDF_PATH/export.sh}" \
+                     "$ROOT/../esp-idf/export.sh" \
+                     "$HOME/esp/esp-idf/export.sh"; do
+        if [ -n "$candidate" ] && [ -f "$candidate" ]; then
+            IDF_EXPORT="$candidate"
+            break
+        fi
+    done
+fi
+
+if [ -z "${IDF_EXPORT:-}" ] || [ ! -f "$IDF_EXPORT" ]; then
+    echo "ESP-IDF not found (tried \$IDF_PATH, $ROOT/../esp-idf, ~/esp/esp-idf)" >&2
     echo "Set IDF_EXPORT to the path of the ESP-IDF export.sh" >&2
     exit 1
 fi

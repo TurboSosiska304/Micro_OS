@@ -41,7 +41,7 @@ static long (*sys_strtol)(const char *, char **, int) = strtol;
 #define LINE_MAX 64
 
 static struct mfs_ram_device g_volume;
-static struct mfs_device g_device;
+static struct k_blockdev g_device;
 
 static char g_lines[MAX_LINES][LINE_MAX];
 static int g_count;

@@ -10,6 +10,9 @@ if(NOT ESP_PLATFORM)
         cases/test_version.c
         cases/test_board.c
         cases/test_log.c
+        cases/test_port.c
+        cases/test_blockdev.c
+        cases/test_render.c
         cases/test_boot.c
         cases/test_kmod.c
         cases/test_kmm.c
@@ -28,6 +31,9 @@ if(NOT ESP_PLATFORM)
         cases/test_ksys_process.c
         cases/test_libc.c
         cases/test_kshell.c
+        cases/test_initd.c
+        cases/test_config.c
+        cases/test_net.c
         cases/test_task.c
         cases/test_sched.c
         cases/test_sched_queue.c
@@ -55,7 +61,7 @@ if(NOT ESP_PLATFORM)
         "${CMAKE_SOURCE_DIR}/components/graphics/src/text_wrap.c"
     )
 
-    target_link_libraries(microos_tests PRIVATE microos_kernel microos_board microos_kshell microos_mfs microos_procfs microos_devfs microos_libc microos_wifi microos_port_host)
+    target_link_libraries(microos_tests PRIVATE microos_kernel microos_board microos_kshell microos_init microos_config microos_net microos_mfs microos_procfs microos_devfs microos_libc microos_wifi microos_port_host)
 
 # The corpus of the tests: a fixed set of numbers with the boundary values
 target_compile_definitions(microos_tests PRIVATE

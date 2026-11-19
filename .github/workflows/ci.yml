@@ -47,8 +47,17 @@ jobs:
       - name: the tests with the address and UB sanitizers
         run: make test-asan
 
+      - name: the same tests under the race detector
+        run: make test-tsan
+
       - name: the smoke test of the simulator
         run: make smoke
+
+      - name: qemu for the x86-64 machine
+        run: sudo apt-get install -y -qq --no-install-recommends qemu-system-x86
+
+      - name: the kernel boots on x86-64
+        run: make x86-smoke
 
       - name: the formatter of the sources (the version of make format)
         run: |

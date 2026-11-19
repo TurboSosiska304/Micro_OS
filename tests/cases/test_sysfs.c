@@ -15,7 +15,7 @@
 #define TEST_BLOCKS 128
 
 static struct mfs_ram_device g_volume;
-static struct mfs_device g_device;
+static struct k_blockdev g_device;
 
 static void setup(void)
 {

@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "kernel/clock.h"
 #include "kernel/kmod.h"
 #include "kshell/kshell.h"
 
@@ -120,6 +121,35 @@ static const struct kmod s_rtc_module = {
  * it is read back from the chip, so the line is what the clock really
  * holds and not what was asked of it.
  */
+/*
+ * Write a moment into the chip: the seven registers in one transaction, and
+ * the read back so that `s_now` is what the clock really holds.
+ */
+int drv_rtc_set_time(const struct rtc_datetime *dt)
+{
+    uint8_t raw[7];
+
+    if (dt == NULL || !s_present) {
+        return -1;
+    }
+
+    if (!rtc_datetime_in_range(dt)) {
+        return -2;
+    }
+
+    rtc_datetime_encode(dt, raw);
+
+    if (drv_i2c_write(I2C_BM8563_ADDR, BM_REG_SEC, raw, sizeof(raw)) != 0) {
+        return -3;
+    }
+
+    if (drv_i2c_read(I2C_BM8563_ADDR, BM_REG_SEC, raw, sizeof(raw)) == 0) {
+        rtc_datetime_decode(raw, &s_now);
+    }
+
+    return 0;
+}
+
 static int cmd_date(int argc, char **argv)
 {
     char buf[48];
@@ -131,7 +161,6 @@ static int cmd_date(int argc, char **argv)
 
     if (argc == 4 && strcmp(argv[1], "set") == 0) {
         struct rtc_datetime dt;
-        uint8_t raw[7];
 
         memset(&dt, 0, sizeof(dt));
 
@@ -150,15 +179,9 @@ static int cmd_date(int argc, char **argv)
             return KSHELL_ERROR;
         }
 
-        rtc_datetime_encode(&dt, raw);
-
-        if (drv_i2c_write(I2C_BM8563_ADDR, BM_REG_SEC, raw, sizeof(raw)) != 0) {
+        if (drv_rtc_set_time(&dt) != 0) {
             kshell_printf("date set: the clock did not take the time\n");
             return KSHELL_ERROR;
-        }
-
-        if (drv_i2c_read(I2C_BM8563_ADDR, BM_REG_SEC, raw, sizeof(raw)) == 0) {
-            rtc_datetime_decode(raw, &s_now);
         }
 
         kshell_printf("%s\n", rtc_line(buf, sizeof(buf)));
@@ -169,11 +192,30 @@ static int cmd_date(int argc, char **argv)
     return KSHELL_USAGE;
 }
 
+/*
+ * The clock of the system, as the driver of the chip sees it: the kernel
+ * asks for the seconds of Unix, the driver turns them into the moment of
+ * the BM8563. A service like NTP sets the time through the kernel and does
+ * not need to know which chip keeps it - nor to format a command for the
+ * shell.
+ */
+static int rtc_clock_set(k_u64_t unix_seconds)
+{
+    struct rtc_datetime dt;
+
+    if (!rtc_from_unix(unix_seconds, &dt)) {
+        return -1;
+    }
+
+    return drv_rtc_set_time(&dt);
+}
+
 int drv_rtc_register(void)
 {
     int rc = kmod_register(&s_rtc_module);
 
     kshell_register("date", "the time of the RTC", cmd_date);
+    k_clock_register(rtc_clock_set);
 
     return rc;
 }

@@ -5,8 +5,9 @@ A Linux-like kernel for the **M5Stack StickC Plus2** (ESP32-PICO-V3-02, 240 MHz,
 
 The goal is not "another ESP32 project" but an actual kernel: a task scheduler,
 system calls, a VFS with `/proc` and `/dev`, a memory manager, device drivers and
-an init process that starts a shell. All of it on bare metal without an MMU, with
-a single ESP32 core, a 200 mAh battery and a 135x240 display.
+an init process that starts a shell. All of it on bare metal without an MMU, on
+top of FreeRTOS (which owns both ESP32 cores), with a 200 mAh battery and a
+135x240 display.
 
 > Russian version: [README_ru.md](README_ru.md)
 
@@ -18,10 +19,22 @@ a single ESP32 core, a 200 mAh battery and a 135x240 display.
 | 1 | Scheduler, tasks, timers, PIDs | done |
 | 1F | Hardware doctor (modules and health checks) | done |
 | 2 | VFS, MicroFS, shell | done |
-| 3 | Syscall ABI, libc subset | in progress |
-| 4 | Drivers: the WiFi station, the TFT console | done |
-| 5 | init, configuration, applications, HTTP/NTP | planned |
-| 6 | Release, documentation | planned |
+| 3 | Syscall ABI, libc subset, memory manager (slabs) | done |
+| 4 | Drivers: the WiFi station, the TFT console, input, sensors | done |
+| 5 | init, configuration, HTTP/NTP, telnet | done |
+| 6 | Release, documentation | in progress |
+| 7 | Programs and protection: execve, permissions, a real fork | planned |
+| 8 | The network and the updates: HTTP server, MQTT, OTA | planned |
+| 9 | The wearable: deep sleep, microphone, IR, enclosure modes | planned |
+
+Phase 5 is done: the init daemons, the `/etc` configuration, HTTP/NTP, the
+WiFi station and telnet (the shell over the air) work. The demo applications
+(the logger, the clock, the weather station) are a project of their own and
+do not live in this tree: a board with 8 MB of flash has no room for a
+handful of programs nobody asked for. Phase 6 has the release process and
+the cloud build; OTA is not possible with the current flash layout.
+
+The kernel has a roadmap of its own: [docs/kernel-roadmap.md](docs/kernel-roadmap.md).
 
 See [docs/roadmap.md](docs/roadmap.md) for the full plan and
 [docs/architecture.md](docs/architecture.md) for the design.
@@ -33,14 +46,23 @@ behind a port:
 
 ```
 components/kernel/    <- plain C11, zero ESP-IDF dependencies
+kernel/port/*.h       <- the contract: console, time, memory, locks, power, store, sockets
 components/board/     <- board description
 components/port_esp32/<- ESP32 implementation of the port (ESP-IDF)
 ports/port_host/      <- Linux implementation (simulator + unit tests)
+ports/port_null/      <- no machine at all: linked in CI to prove the kernel needs nothing else
 ```
 
 Consequence: the kernel compiles and its tests run on a normal PC in seconds. The
 edit/compile/run loop does not involve flashing a device, while the firmware
 itself stays a plain ESP-IDF project.
+
+The boundary is not a promise, it is a check: `make integrity` refuses a
+platform header in the kernel, a `k_port_*` call above it, a portable component
+that the host build does not compile, and a port that leaves a function of the
+contract unimplemented. The contract has a version, and the boot compares it
+with the one the port reports (ADR 0004). A new chip is a new port directory -
+see [docs/porting.md](docs/porting.md).
 
 ## Build and run
 
@@ -62,7 +84,7 @@ ctest --test-dir build-host --output-on-failure
 
 ### Device (ESP-IDF)
 
-Requires ESP-IDF v5.x:
+Requires ESP-IDF v5.3 (the version the cloud build uses):
 
 ```bash
 git clone -b v5.3 --recursive https://github.com/espressif/esp-idf.git ~/esp/esp-idf
@@ -74,7 +96,18 @@ idf.py build
 idf.py -p /dev/ttyACM0 flash monitor
 ```
 
-Or through the Makefile: `make idf-build`, `make idf-flash`, `make idf-monitor`.
+The Makefile finds ESP-IDF by itself, in this order: `$IDF_PATH`, a checkout
+next to the repository (`../esp-idf`), then `~/esp/esp-idf`. So the same build
+is one command, or point it at another `export.sh` explicitly:
+
+```bash
+make idf-build
+make idf-build IDF_EXPORT=/path/to/esp-idf/export.sh
+```
+
+The host build needs `cmake`, `ninja` and a C compiler. ESP-IDF brings its own
+cross toolchain and Python environment, so no second compiler is needed for the
+device build.
 
 The board needs to be reachable by the current user. On most distributions the
 serial device belongs to the `uucp` group:
@@ -116,13 +149,50 @@ module health report:
   led/ir     ok        G19, shared with the IR emitter
   battery    ok        4176 mV, 98% (raw 2088 mV)
   wifi       degraded  f4:65:0b:32:00:c0 idle
+  telnet     ok        port 23, no auth
   mic        skip      SPM1423 MEMS microphone (I2S)
-11 module(s), 0 problem(s)
+12 module(s), 0 problem(s)
 ```
 
 `ok` works, `degraded` works with limitations (no access point, no clock
 without a backup battery), `fail` does not work and `skip` is not implemented
 yet. The command `modules` repeats the check at any time.
+
+### The init scripts
+
+The init process treats every file of `/etc/init.d` as a daemon of the board:
+a script is a list of shell commands, one per line, empty lines and lines that
+start with `#` are skipped, and each script runs in a task of its own — a
+service that never returns does not hold the boot. The directory is created at
+the boot when it is missing.
+
+```
+microos> mkdir /etc/init.d
+microos> write /etc/init.d/clock date
+microos> reboot
+```
+
+The script above runs `date` at every boot. A command that fails is reported in
+the log (`dmesg`) and does not stop the rest of the script.
+
+### The configuration
+
+The files of `/etc` are the configuration of the board: the name of a file is
+the key, its content is the value. The NVS keeps a copy, so the settings survive
+not only a restart but also `mkfs -y`: at the boot the init process writes back
+every key that `/etc` lost and saves the files it finds. When the two disagree
+the file wins — a person edits `/etc`, the store follows.
+
+```
+microos> write /etc/setting hello
+microos> config sync
+config: 0 file(s) restored, 1 saved
+microos> config
+setting=hello
+```
+
+`config` lists the store, `config sync` restores the missing files and saves
+the files of `/etc` in one go.
 
 ### The shell
 
@@ -131,19 +201,26 @@ commands:
 
 | Command | Meaning |
 |---|---|
-| `help` | list the commands |
-| `ps` | the task list |
-| `uptime` | the time since the boot |
-| `uname` | the name and the version of the kernel |
-| `free` | the memory usage |
-| `dmesg` | the kernel log |
-| `modules` | check the hardware modules again |
-| `memtest` | measure the memory and its speed |
-| `i2c` | scan the I2C bus |
-| `date` | the time of the RTC |
-| `wifi` | the WiFi station: `status`, `scan`, `connect`, `join`, `disconnect` |
-| `mfetch` | the report about the system with the logo (like fastfetch) |
+| `help`, `uname`, `uptime`, `ps`, `dmesg`, `free`, `abi` | the kernel: commands, version, time, tasks, log, memory, syscall table |
+| `ls`, `cat`, `write`, `mkdir`, `rm`, `cd`, `pwd`, `df`, `mount`, `mkfs` | the filesystem of the board |
+| `modules`, `memtest`, `i2c` | the doctor, the memory test, the I2C scan |
+| `date`, `battery`, `beep`, `led`, `input`, `display` | the drivers: clock, charge, buzzer, LED, buttons, panel |
+| `config` | the configuration of `/etc` and its copy in the NVS |
+| `wifi`, `telnet`, `http`, `ntp` | the network: the station, the shell over the air, a page, the clock |
+| `mfetch`, `mfetch color` | the report about the system with the logo (like fastfetch) |
 | `echo`, `sleep`, `clear`, `reboot` | the usual suspects |
+
+The listing `ls` draws the tree of a directory: the branches show one level
+below the path, a slash marks a directory, and the filesystems mounted below a
+directory appear in it beside its own entries — that is why `/proc` and `/dev`
+are in the root.
+
+```
+microos> ls /etc
+/etc
+|-- setting
+`-- init.d/
+```
 
 The command `mfetch` is the analog of fastfetch: the logo of the system on
 the left and a short report about the board on the right — the version and
@@ -155,7 +232,7 @@ itself is plain text everywhere. `mfetch color` paints the logo.
 
 ```
 microos> mfetch
-M   M  OS           MicroOS 0.2.0-pre
+M   M  OS           MicroOS 0.3.0
 MM MM  Build        Oct 26 2026 17:40:12
 M M M  Board        M5Stack StickC Plus2
 M   M  SoC          ESP32-PICO-V3-02
@@ -167,7 +244,7 @@ M   M  Arch         xtensa-esp32
        Volume       5828 of 5832 KB
        Uptime       12 s, 4 task(s)
        Modules      12, 0 problem(s)
-       Shell        32 command(s)
+       Shell        36 command(s)
 ```
 
 ### The WiFi station
@@ -192,6 +269,44 @@ saved network: home
 The decision about the shape of the driver is recorded in
 [docs/adr/0003-wifi-driver.md](docs/adr/0003-wifi-driver.md).
 
+### HTTP and the clock
+
+The board speaks HTTP and takes its time from NTP. The client reads the
+answer into a small buffer — it is a console, not a browser — and `ntp`
+writes the time of the server into the RTC, in UTC:
+
+```
+microos> http get http://10.10.10.1/
+HTTP 200, 256 byte(s)
+<!DOCTYPE html>
+...
+microos> ntp
+ntp: 2026-11-08 21:59:01 UTC
+microos> date
+2026-11-08 21:59:01
+```
+
+Only `http://` is spoken: the board has no TLS, so `https://` is refused with
+a word about it. Every socket waits five seconds, so a network that went away
+answers an error instead of holding the console.
+
+### The third machine: x86-64, bare metal
+
+The same kernel boots on an x86-64 processor with nothing under it: no
+Linux, no libc. The port is a project of its own, and the bootloader is
+part of the project (a multiboot image that switches the long mode on and
+copies the kernel).
+
+```bash
+make x86-build     # the kernel and its loader
+make x86-run       # QEMU, a serial console, the shell
+make x86-smoke     # boot it and check what it says
+```
+
+It needs `qemu-system-x86` only. The port does not depend on Limine or on
+any bootloader configuration: `ports/port_x86_64/loader32.S` is the whole
+of the boot.
+
 ### Ready to flash binaries
 
 The `dist/` folder holds the built firmware: the application, the bootloader,
@@ -209,38 +324,58 @@ The whole list of checks runs locally, before a push:
 make ci          # build, tests, sanitizers, smoke test, integrity
 ```
 
-It builds the firmware for the ESP32 (ESP-IDF v5.3), runs the unit tests and
-the sanitizers, the smoke test of the device and the integrity of the
+It builds the host code, runs the unit tests and the same tests under the
+address and UB sanitizers, the smoke test of the simulator and the integrity of the
 repository: the headers of the images, the partition table against
-`partitions.csv`, the git objects and the formatting of the sources.
+`partitions.csv`, the git objects, the hygiene of the sources and their
+formatting. The firmware is not part of `make ci`: it needs ESP-IDF, so it is
+built separately with `make idf-build`.
+
+Two checks are one command each, because they need a tool of their own:
+`make test-tsan` (the race detector) and `make x86-smoke` (QEMU). Both run in
+the cloud together with the rest.
 
 The same list runs in the cloud: every push to `mainline` and
 `release_candidate` and every pull request to `mainline` runs the tests,
 the same tests under valgrind, the sanitizers, the smoke test and the
 integrity of the repository, and builds the firmware for the ESP32 — the
-firmware is on the run as an artifact. A fresh checkout has no `dist/`, so
+firmware is an artifact of the run. A fresh checkout has no `dist/`, so
 the job that built the firmware runs the integrity check again with the
 bundle: the sums, the headers of the images, the partition table.
 
 A tag `v*` makes a release: the tests, the build, the integrity check
 against the version of the tag (`--expect-version`), and a GitHub release
 with the bundle — the binaries, their sums and `flash.sh` — and the notes
-about the commits. The tag with a dash (`v0.2.0-pre`) is a pre-release.
+about the commits. The tag with a dash (`vX.Y.Z-pre`) is a pre-release.
 
 ## Repository layout
 
 ```
 Micro_OS/
 ├── components/
-│   ├── kernel/         portable kernel: boot, log, panic, version, tasks, sched
+│   ├── kernel/         portable kernel: boot, log, panic, tasks, sched, vfs, kmm, ksys
 │   ├── board/          hardware description
+│   ├── drivers/        display, input, buzzer, LED, IMU, RTC, battery, mic
+│   ├── kshell/         the command interpreter and the built-in commands
+│   ├── init/           the init process: the scripts of /etc/init.d
+│   ├── config/         the configuration of /etc, persisted in the NVS
+│   ├── net/            the HTTP client and the clock of NTP
+│   ├── mfs/            MicroFS on flash and its VFS adapter
+│   ├── procfs/         the virtual /proc
+│   ├── devfs/          the virtual /dev
+│   ├── graphics/       the console on the TFT
+│   ├── font/           the 5x7 font of the screen
+│   ├── telnet/         the shell over the air on port 23
+│   ├── libc/           a libc subset over the syscall ABI
 │   ├── wifi/           the WiFi station: the portable core and the radio
 │   └── port_esp32/     ESP32 port
 ├── ports/port_host/    Linux port + simulator
+├── ports/port_x86_64/  a QEMU x86-64 machine, bare metal (its own loader)
+├── ports/port_null/    no machine at all: linked by the checks
 ├── main/               firmware entry point (app_main)
 ├── tests/              unit tests (own minimal framework, no dependencies)
 ├── tools/              console, bundle, the smoke test, the integrity check
-├── docs/               architecture, roadmap, hardware notes, ADRs
+├── docs/               architecture, roadmaps, porting, review, hardware notes, ADRs
 ├── CMakeLists.txt      dual mode build: ESP-IDF or host
 └── Makefile            convenience targets: test, sim, ci, format, idf-*
 ```
@@ -270,13 +405,17 @@ Details: [CONTRIBUTING.md](CONTRIBUTING.md).
   is not a copy of the parent at the point of the call. A real `fork()` (an
   address space of its own, copy on write) is planned for right after the
   first release.
+* **The x86-64 port is young.** It boots on a bare processor, takes interrupts,
+  switches tasks and runs the shell over COM1, but there is no filesystem or
+  network on it yet, and its disk is the memory. It is the proof that the
+  kernel is portable, not a machine for work.
 * **One user, no file owners or mode bits.** A file's protection is the
   access its descriptor was opened with - read, write, or both - enforced by
   the kernel with `EBADF`. Owners and `chmod` wait for the first release:
   there is a single user on the board today.
 * **8 MB flash / 2 MB PSRAM.** There is one application and no room for an
   update over the air: the kernel takes 2 MB (`factory`) and the rest of the
-  flash (5.75 MB) belongs to MicroFS. The whole layout is in
+  flash (5.94 MB) belongs to MicroFS. The whole layout is in
   [partitions.csv](partitions.csv).
 * **The ESP32-PICO-V3-02 has no PMIC.** Power and sleep are handled by the ESP32
   itself: `HOLD` (G4) must be driven high after a wake-up or the board powers off.

@@ -170,13 +170,25 @@ void task_exit(int code)
     struct task *self = task_self();
 
     if (self != NULL) {
+        char name[TASK_NAME_MAX];
+        k_u32_t pid;
+
+        /*
+         * The slot is read before the task is published as a zombie: from
+         * that moment its parent may reap it, the slot is zeroed, and the
+         * line in the log would name a task that never exited - or worse,
+         * the task that got the slot next.
+         */
         k_port_enter_critical();
         self->exit_code = (k_u32_t)code;
+        memcpy(name, self->name, sizeof(name));
+        name[sizeof(name) - 1] = '\0';
+        pid = self->pid;
         k_port_exit_critical();
 
         k_sched_task_terminated(self);
 
-        kinfo("task: '%s' (pid %u) exited with code %d", self->name, (unsigned)self->pid, code);
+        kinfo("task: '%s' (pid %u) exited with code %d", name, (unsigned)pid, code);
     }
 
     k_port_task_exit(code);
@@ -189,6 +201,21 @@ void task_exit(int code)
 struct task *task_self(void)
 {
     return k_port_task_current();
+}
+
+task_state_t task_state_of(const struct task *t)
+{
+    task_state_t state = TASK_STATE_DEAD;
+
+    if (t == NULL || !t->in_use) {
+        return state;
+    }
+
+    k_port_enter_critical();
+    state = t->state;
+    k_port_exit_critical();
+
+    return state;
 }
 
 struct task *task_by_pid(k_u32_t pid)
@@ -279,21 +306,51 @@ int task_reap(k_u32_t pid)
     return rc;
 }
 
+/*
+ * The state and the code of a task, read in one look under the critical
+ * section: the slot can be reaped by another task between two reads, and a
+ * caller that saw a zombie and then read the code of a stranger is a bug
+ * the `ps` of the shell would show and nobody could explain.
+ */
+static bool task_lookup(k_u32_t pid, task_state_t *state, int *code)
+{
+    k_size_t i;
+    bool found = false;
+
+    k_port_enter_critical();
+
+    for (i = 0; i < TASK_MAX_TASKS; i++) {
+        if (g_tasks[i].in_use && g_tasks[i].pid == pid) {
+            if (state != NULL) {
+                *state = g_tasks[i].state;
+            }
+            if (code != NULL) {
+                *code = (int)g_tasks[i].exit_code;
+            }
+            found = true;
+            break;
+        }
+    }
+
+    k_port_exit_critical();
+
+    return found;
+}
+
 int task_wait(k_u32_t pid, int *exit_code, k_u32_t timeout_ms)
 {
     k_u32_t waited = 0;
 
     for (;;) {
-        struct task *t = task_by_pid(pid);
+        task_state_t state;
+        int code = 0;
 
-        if (t == NULL) {
+        if (!task_lookup(pid, &state, &code)) {
             /* Already reaped or never existed. */
             return -1;
         }
 
-        if (t->state == TASK_STATE_ZOMBIE || t->state == TASK_STATE_DEAD) {
-            int code = (int)t->exit_code;
-
+        if (state == TASK_STATE_ZOMBIE || state == TASK_STATE_DEAD) {
             if (exit_code != NULL) {
                 *exit_code = code;
             }
@@ -316,24 +373,30 @@ int task_wait_any(int *exit_code, k_u32_t timeout_ms)
 
     for (;;) {
         k_size_t i;
+        bool found = false;
+        k_u32_t found_pid = 0;
+        int found_code = 0;
+
+        k_port_enter_critical();
 
         for (i = 0; i < TASK_MAX_TASKS; i++) {
-            struct task *t = task_get_by_index(i);
-
-            if (t == NULL) {
-                continue;
+            if (g_tasks[i].in_use &&
+                (g_tasks[i].state == TASK_STATE_ZOMBIE || g_tasks[i].state == TASK_STATE_DEAD)) {
+                found = true;
+                found_pid = g_tasks[i].pid;
+                found_code = (int)g_tasks[i].exit_code;
+                break;
             }
+        }
 
-            if (t->state == TASK_STATE_ZOMBIE || t->state == TASK_STATE_DEAD) {
-                int code = (int)t->exit_code;
-                k_u32_t pid = t->pid;
+        k_port_exit_critical();
 
-                if (exit_code != NULL) {
-                    *exit_code = code;
-                }
-                task_reap(pid);
-                return (int)pid;
+        if (found) {
+            if (exit_code != NULL) {
+                *exit_code = found_code;
             }
+            task_reap(found_pid);
+            return (int)found_pid;
         }
 
         if (waited >= timeout_ms) {

@@ -33,10 +33,48 @@ static const struct kernel_subsys g_builtin_subsystems[] = {
 
 static void print_banner(const struct kernel_boot_config *cfg)
 {
+    const char *name = cfg->board ? cfg->board : KERNEL_BOARD_NAME;
+    const char *desc = cfg->board_desc ? cfg->board_desc : KERNEL_BOARD_DESC;
+
+    /*
+     * The banner names the board the same way `uname` and `mfetch` do when
+     * the full description is there: one board, one name.
+     */
+    if (cfg->board_info != NULL) {
+        name = cfg->board_info->name;
+        desc = cfg->board_info->desc;
+    }
+
     klog(K_LOG_LEVEL_INFO, "%s %s (build %s)", kernel_name(), kernel_version(), kernel_build_id());
-    klog(K_LOG_LEVEL_INFO, "board: %s — %s", cfg->board ? cfg->board : KERNEL_BOARD_NAME,
-         cfg->board_desc ? cfg->board_desc : KERNEL_BOARD_DESC);
+    klog(K_LOG_LEVEL_INFO, "board: %s — %s", name, desc);
     klog(K_LOG_LEVEL_INFO, "arch: %s, compiler: %s", kernel_arch(), kernel_compiler());
+    klog(K_LOG_LEVEL_INFO, "port: %s, contract %u.%u", k_port_name(), k_port_api_major(),
+         k_port_api_minor());
+}
+
+/*
+ * The port and the kernel have to agree about the meaning of the contract
+ * (kernel/port/info.h). A major mismatch is a pair that was not built
+ * together, and the only honest thing to do is to say so and stop: the
+ * calls that follow would have the wrong meaning and would fail far away
+ * from the real cause. A minor mismatch is a port older than the kernel:
+ * the calls it knows work, the newer ones it does not have - the linker
+ * says that before this code runs, so it is only a warning here.
+ */
+static void check_port_contract(void)
+{
+    unsigned major = k_port_api_major();
+    unsigned minor = k_port_api_minor();
+
+    if (major != KERNEL_PORT_API_VERSION_MAJOR) {
+        KERNEL_PANIC("port '%s': contract %u.%u, the kernel speaks %u.%u", k_port_name(), major,
+                     minor, KERNEL_PORT_API_VERSION_MAJOR, KERNEL_PORT_API_VERSION_MINOR);
+    }
+
+    if (minor < KERNEL_PORT_API_VERSION_MINOR) {
+        kwarn("port '%s': contract %u.%u is older than %u.%u", k_port_name(), major, minor,
+              KERNEL_PORT_API_VERSION_MAJOR, KERNEL_PORT_API_VERSION_MINOR);
+    }
 }
 
 /*
@@ -72,6 +110,13 @@ int kernel_boot(const struct kernel_boot_config *cfg)
     klog_init(KERNEL_LOG_DEFAULT_LEVEL);
     g_booted_subsys = 0;
 
+    /*
+     * The description of the board is in place before anything can ask
+     * for it: a subsystem that runs during the boot already sees it.
+     */
+    k_board_register(cfg->board_info);
+
+    check_port_contract();
     print_banner(cfg);
 
     /* The built-in subsystems come first, they have the lowest level. */

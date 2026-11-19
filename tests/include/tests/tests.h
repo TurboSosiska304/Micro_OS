@@ -5,6 +5,9 @@
 #define MICRO_OS_TESTS_H
 
 void test_log(void);
+void test_port(void);
+void test_blockdev(void);
+void test_render(void);
 void test_boot(void);
 void test_version(void);
 void test_board(void);
@@ -28,6 +31,9 @@ void test_ksys(void);
 void test_ksys_process(void);
 void test_libc(void);
 void test_kshell(void);
+void test_initd(void);
+void test_config(void);
+void test_net(void);
 void test_wifi(void);
 
 #endif /* MICRO_OS_TESTS_H */

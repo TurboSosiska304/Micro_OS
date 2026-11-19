@@ -135,3 +135,29 @@ Automatic volume layout:
 - [ ] Account for service structures and the free-block bitmap in the calculation.
 - [ ] Store the actual `DATA`, `META` and `INFO` boundaries in the filesystem header.
 - [ ] Validate the layout when mounting the volume.
+
+## 7. The device under the volume
+
+MicroFS does not talk to the flash: it asks a block device
+(`kernel/blockdev.h`) for a sector of 1 KB, and the device is a partition of
+the flash on the board or a file in the simulator. The port of the ESP32
+keeps a cache of the **erase sector** of the flash, 4 KB, because NOR flash
+can only be programmed after an erase and the filesystem has no notion of
+one: the writes collect in the cache and `sync` erases and programs the
+whole sector.
+
+Two consequences a person should know before trusting the volume with the
+only copy of something:
+
+* the unit of loss of a power cut is 4 KB, not 1 KB. The bitmap of the free
+  blocks and the root inode live in the same erase sector, so a cut during
+  `sync` can take them together — the volume then mounts (its header is in
+  the INFO section, apart) and every lookup fails;
+* an interrupted `mkfs -y` on a volume that had a header leaves a volume
+  that mounts with an empty table of the inodes: the header is written
+  last, but it is also the old one that survives.
+
+The mount refuses a volume whose header is damaged or whose geometry does
+not match the device, and it keeps the data: it formats only a medium whose
+header block *and* first block are blank, so a partition that grew or moved
+is not mistaken for a fresh one.

@@ -2,6 +2,9 @@
 
 > Russian version: [roadmap_ru.md](roadmap_ru.md)
 
+> This is the roadmap of the **platform**: the board, the drivers, the radio,
+> the firmware. The kernel has its own: [kernel-roadmap.md](kernel-roadmap.md).
+
 Every phase ends with a working state on the device and green tests.
 
 ## Phase 0 - Skeleton (done)
@@ -147,43 +150,112 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
       remembered in the NVS (see [ADR 0003](adr/0003-wifi-driver.md))
 * [x] Console on TFT and UART at the same time
 
+## The boundary work (done)
+
+Between the drivers and the services the tree was taken apart along the
+line the kernel must not cross: the contract of the port is split by
+subject and versioned, the backends (the flash, the NVS, the sockets, the
+renderer, the radio) left the portable components, and the checks that
+hold the line were written. The kernel also got a second bare-metal
+machine: x86-64 in QEMU, with its own loader.
+
+* [x] `kernel/port/*.h` by subject, `KERNEL_PORT_API_VERSION` 1.2, checked
+      at the boot; ADR 0004
+* [x] the upper layers ask the kernel (`k_sysinfo`, `k_console`, `k_mutex`,
+      `k_kv`, `k_socket`, `k_render`, `k_clock`), never the port
+* [x] `kernel/blockdev.h`: MicroFS asks a device, not a partition
+* [x] the checks `[layers]`, `[port]`, `[budget]`, and `ports/port_null`
+* [x] the simulator boots the whole portable system on a volume of a file
+* [x] the x86-64 port: loader, IDT/PIT, context switch, shell on COM1
+      (`make x86-smoke`)
+
+The kernel side of it is in [kernel-roadmap.md](kernel-roadmap.md).
+
 ## Phase 5 - Services and applications
 
-* [ ] Init process: starting daemons from `/etc/init.d`
-* [ ] Configuration from `/etc`, persisted in NVS
+* [x] Init process: starting daemons from `/etc/init.d` — a script is a list
+      of shell commands, one per line, and every script runs in a task of its
+      own
+* [x] Configuration from `/etc`, persisted in NVS — a file of `/etc` is a
+      key of the configuration, the NVS keeps the copy that survives a
+      restart and a formatted volume, and `config sync` saves the edits
 * [x] WiFi: the station joins the network of the last time on its own
 * [x] Telnet on port 23: the shell over the air, beside the UART and the
       display — no authentication, the local network only, and
       `telnet off` closes it
-* [ ] HTTP client, NTP based on the RTC
-* [ ] Applications: sensor logger, IR remote, clock, weather station
+* [x] HTTP client, NTP based on the RTC — `http get <url>` prints the status
+      and the body of the answer, `ntp [server]` takes the time from the
+      server and writes it into the RTC (the time is UTC)
+* [n] Applications: sensor logger, IR remote, clock, weather station — not in
+      this tree: a board with 8 MB of flash does not carry programs nobody asked
+      for, and they would be a repository of their own
 
 ## Phase 6 - Release
+
+### The release of a version
+
+The release is a checklist of its own, and every step is green today:
+
+1. the version of the kernel is `KERNEL_VERSION_*` in
+   `components/kernel/include/kernel/config.h`;
+2. `make ci`, `make test-tsan`, `make x86-smoke`, `make idf-build` and
+   `make bundle` are green on the machine of
+   the release;
+3. the tag `vX.Y.Z` is pushed — a dash instead of the dot before the number
+   of the candidate (`vX.Y.Z-pre`) makes a pre-release;
+4. Actions repeat the tests, build the firmware and check the version of the
+   kernel against the tag (`--expect-version`);
+5. the release carries `dist/` — the binaries, their sums and `flash.sh` —
+   and the notes of the commits;
+6. the bundle of the release is flashed onto the board once, and the self
+   test and the doctor report are read.
 
 * [x] Autobuild of the release candidate (GitHub Actions): the firmware and
       the integrity check (the workflows of the repository live on
       `mainline`)
-* [n] OTA updates (`app0`/`app1`), rollback after a failed boot (no space
-      in the flash for a second image)
-* [n] Enclosure/display modes: "clock", "remote", "logger" (not needed)
 * [x] Release process, tags, changelog: a tag `v*` runs the tests, builds
       the firmware in Actions, checks the version of the kernel against the
       tag and makes the release with the bundle and the notes about the
-      commits; a tag with a dash (`v0.2.0-pre`) is a pre-release
+      commits
+* [x] The bundle: `make bundle` collects the binaries, their sums and
+      `flash.sh` into `dist/`, and the integrity check reads the headers,
+      the partition table and the sums of the images
 
-## After the first release
+### Not in the first release
 
-Deferred, not forgotten:
+* [n] OTA updates (`app0`/`app1`), rollback after a failed boot — no space
+      in the flash for a second image, the partition table has to change ##Not feasible!!!!
+
+## Phase 7 - Programs and protection (planned)
+
+* [ ] `execve` and a format of the programs: the loader, the first program
+      in `/bin`, `PATH`
+* [ ] per-file permissions: the mode bits and the owners in MicroFS
+* [ ] `fork()` with an address space of its own: our own context switch on
+      top of FreeRTOS (ADR 0002)
+* [ ] the syscall table as the only door between a program and the kernel:
+      every argument checked at the edge
+* [ ] a port for a processor **with an MMU** (the plan is a real ARM): the
+      concessions of the current kernel - the placeholder `fork()`, the shared
+      address space, the logical user/kernel boundary - live behind one compile
+      time flag (`KERNEL_NOMMU` in `kernel/config.h`), so the MMU port turns the
+      flag off and they become real features instead of a second kernel
+
+## Phase 8 - The network and the updates (planned)
+
+* [ ] NTP at the boot and a time zone in `/etc` (the clock of the board is
+      UTC today)
+* [ ] an HTTP server: the report of `mfetch` and the settings as a page
+* [ ] MQTT client for the sensors
+* [ ] OTA: two application slots and a rollback after a failed boot, once
+      the flash is repartitioned
+
+## Phase 9 - The wearable (planned)
 
 * [ ] RTC alarm: the wake of the board from deep sleep — the alarm
-      registers of the BM8563 and the EXT1 input of the ESP32 (moved
-      out of phase 4)
-* [ ] `execve`: it needs a format of the programs
-* [ ] Per-file permissions: mode bits and owners in MicroFS (today the model
-      is one user and the access a descriptor was opened with, see the
-      permission model of phase 3)
-* [ ] Microphone (SPM1423, I2S) and `drv_mic` — a simple sound/noise detector
-* [ ] MQTT client (HTTP and NTP stay in phase 5)
-* [ ] Settings reset, `factory reset`
+      registers of the BM8563 and the EXT1 input of the ESP32
+* [ ] microphone (SPM1423, I2S) and `drv_mic` — a simple sound/noise detector
 * [ ] `drv_ir`: transmit and receive over the pin G19 it shares with the red
       LED (the driver does not exist yet)
+* [ ] `factory reset` and the reset of the settings
+* [ ] enclosure/display modes: "clock", "remote", "logger"

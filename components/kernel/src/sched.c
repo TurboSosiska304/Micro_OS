@@ -21,6 +21,10 @@ static k_u32_t g_ticks;
 static k_u32_t g_quantum = SCHED_QUANTUM_DEFAULT;
 static bool g_initialised;
 
+/* A full queue reported from the section, printed by the tick outside it. */
+static k_u32_t g_queue_full;
+static k_u8_t g_queue_full_prio;
+
 /* --- run queue primitives (callers hold the lock) --- */
 
 /* Is the task already in the queue? (callers hold the lock) */
@@ -51,10 +55,12 @@ static void ready_enqueue(struct task *t)
     if (q->count >= SCHED_READY_CAPACITY) {
         /*
          * The queue is dimensioned for every task of the system, so this can
-         * only happen if a task was added twice. The task is not dropped:
-         * it stays ready and the situation is reported.
+         * only happen if a task was added twice. The task is not dropped.
+         * The line waits for the tick: a sink of the console may take a
+         * mutex, and this runs with the interrupts off.
          */
-        kerror("sched: the run queue of the priority %u is full", (unsigned)t->prio);
+        (void)__atomic_add_fetch(&g_queue_full, 1, __ATOMIC_SEQ_CST);
+        (void)__atomic_store_n(&g_queue_full_prio, t->prio, __ATOMIC_SEQ_CST);
         return;
     }
 
@@ -129,6 +135,16 @@ void k_sched_tick(void)
      * Round robin: the running task loses the CPU when its time slice is
      * over and goes to the end of the queue of its priority level.
      */
+    k_port_exit_critical();
+
+    if (__atomic_exchange_n(&g_queue_full, 0, __ATOMIC_SEQ_CST) != 0) {
+        k_u8_t prio = (k_u8_t)__atomic_load_n(&g_queue_full_prio, __ATOMIC_SEQ_CST);
+
+        kerror("sched: the run queue of the priority %u is full", (unsigned)prio);
+    }
+
+    k_port_enter_critical();
+
     if (g_quantum > 0) {
         struct task *current = k_port_task_current();
 

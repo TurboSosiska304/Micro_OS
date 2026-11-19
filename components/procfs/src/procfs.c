@@ -22,8 +22,8 @@
 #include "kernel/kmm.h"
 #include "kernel/kmod.h"
 #include "kernel/log.h"
-#include "kernel/port.h"
 #include "kernel/sched.h"
+#include "kernel/sysinfo.h"
 #include "kernel/task.h"
 #include "kernel/version.h"
 #include "kernel/vfs.h"
@@ -74,11 +74,12 @@ static int read_meminfo(char *buf, k_size_t size, k_u32_t pid)
     struct vfs_statfs fs;
     int n;
 
-    n = snprintf(buf, size,
-                 "kernel heap: %u KB free of %u KB\n"
-                 "psram: %u KB free of %u KB\n",
-                 (unsigned)(k_port_heap_free() / 1024), (unsigned)(k_port_heap_total() / 1024),
-                 (unsigned)(k_port_psram_free() / 1024), (unsigned)(k_port_psram_total() / 1024));
+    n = snprintf(
+        buf, size,
+        "kernel heap: %u KB free of %u KB\n"
+        "psram: %u KB free of %u KB\n",
+        (unsigned)(k_sysinfo_heap_free() / 1024), (unsigned)(k_sysinfo_heap_total() / 1024),
+        (unsigned)(k_sysinfo_psram_free() / 1024), (unsigned)(k_sysinfo_psram_total() / 1024));
 
     if (vfs_statfs("/", &fs) == 0) {
         n += snprintf(buf + n, size - (k_size_t)n,
@@ -108,7 +109,7 @@ static int read_tasks(char *buf, k_size_t size, k_u32_t pid)
         }
 
         n += snprintf(buf + n, size - (k_size_t)n, "%4u  %4u  %-8s  %s\n", (unsigned)t->pid,
-                      (unsigned)t->prio, task_state_name(t->state), t->name);
+                      (unsigned)t->prio, task_state_name(task_state_of(t)), t->name);
     }
 
     return n;
@@ -157,7 +158,7 @@ static int read_status(char *buf, k_size_t size, k_u32_t pid)
 
     n = snprintf(buf, size, "Name:\t%s\nPid:\t%u\nState:\t%s\nPrio:\t%u\n",
                  (t != NULL) ? t->name : "?", (unsigned)pid,
-                 (t != NULL) ? task_state_name(t->state) : "?", (t != NULL) ? t->prio : 0);
+                 (t != NULL) ? task_state_name(task_state_of(t)) : "?", (t != NULL) ? t->prio : 0);
 
     if (t != NULL) {
         n += snprintf(buf + n, size - (k_size_t)n, "ExitCode:\t%d\n", (int)t->exit_code);

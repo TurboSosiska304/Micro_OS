@@ -11,11 +11,19 @@
 
 BUILD_DIR   ?= build-host
 ASAN_DIR    ?= build-asan
-IDF_EXPORT  ?= $(HOME)/esp/esp-idf/export.sh
+# ESP-IDF discovery, in order: $IDF_PATH, a checkout beside the repository
+# (../esp-idf), then the conventional ~/esp/esp-idf. Override IDF_EXPORT to
+# point at another export.sh.
+IDF_CANDIDATES := $(if $(IDF_PATH),$(IDF_PATH)/export.sh) \
+                  $(abspath $(CURDIR)/../esp-idf/export.sh) \
+                  $(HOME)/esp/esp-idf/export.sh
+IDF_EXPORT  ?= $(firstword $(wildcard $(IDF_CANDIDATES)))
 IDF_TARGET  ?= esp32
 IDF_BUILD   ?= build
+IDF_PORT    ?=
+IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan smoke integrity ci sim clean format idf-build idf-flash idf-monitor idf-size bundle
+.PHONY: help all build test test-asan test-tsan smoke integrity ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-run x86-smoke
 
 help:
 	@echo "Micro OS — available targets:"
@@ -32,6 +40,9 @@ help:
 	@echo "  make idf-flash  flash the ESP32 firmware over USB"
 	@echo "  make idf-monitor attach the serial monitor"
 	@echo "  make idf-size   show the firmware size report"
+	@echo "  make x86-build  build the kernel for x86-64 (a multiboot image)"
+	@echo "  make x86-run    boot it in QEMU"
+	@echo "  make x86-smoke  boot it and check what it says"
 	@echo "  make bundle     collect the firmware into dist/ for distribution"
 
 all: build
@@ -45,6 +56,11 @@ test: build
 
 # The board has no debugger: the tests of the host are the place where a
 # wrong pointer or undefined behaviour has to be caught.
+test-tsan:
+	cmake -B build-tsan -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug -DMICRO_OS_SANITIZE_THREAD=ON
+	cmake --build build-tsan
+	ctest --test-dir build-tsan --output-on-failure
+
 test-asan:
 	cmake -B $(ASAN_DIR) -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug -DMICRO_OS_SANITIZE=ON
 	cmake --build $(ASAN_DIR)
@@ -79,20 +95,42 @@ format:
 		-exec clang-format -i {} +
 	@echo "sources formatted"
 
-idf-build:
+idf-check:
+	@test -n "$(IDF_EXPORT)" || { \
+		echo "ESP-IDF not found: set IDF_PATH or IDF_EXPORT"; \
+		exit 1; \
+	}
+
+idf-build: idf-check
 	. $(IDF_EXPORT) && idf.py -D IDF_TARGET=$(IDF_TARGET) build
 
-idf-flash:
-	. $(IDF_EXPORT) && idf.py -D IDF_TARGET=$(IDF_TARGET) flash
+idf-flash: idf-check
+	. $(IDF_EXPORT) && idf.py $(IDF_PORT_ARG) -D IDF_TARGET=$(IDF_TARGET) flash
 
-idf-monitor:
-	. $(IDF_EXPORT) && idf.py -D IDF_TARGET=$(IDF_TARGET) monitor
+idf-monitor: idf-check
+	. $(IDF_EXPORT) && idf.py $(IDF_PORT_ARG) -D IDF_TARGET=$(IDF_TARGET) monitor
 
-idf-size:
+idf-size: idf-check
 	. $(IDF_EXPORT) && idf.py -D IDF_TARGET=$(IDF_TARGET) size
 
 # Collect the firmware into dist/ so that it can be downloaded and flashed
 # without the whole project: the binaries, their sums and the flash script.
-bundle:
+# The x86-64 port: a project of its own, with no libc under the kernel.
+# The loader is a multiboot image that QEMU loads with -kernel; it copies
+# the kernel to its address and turns the long mode on.
+X86_BUILD := build-x86
+
+x86-build:
+	cmake -B $(X86_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release
+	cmake --build $(X86_BUILD) --target image
+
+x86-run: x86-build
+	qemu-system-x86_64 -kernel $(X86_BUILD)/loader32.elf \
+		-initrd $(X86_BUILD)/microos64.bin -m 256 -nographic -no-reboot
+
+x86-smoke: x86-build
+	python3 tools/x86_smoke.py
+
+bundle: idf-check
 	. $(IDF_EXPORT) && idf.py -D IDF_TARGET=$(IDF_TARGET) build
 	tools/bundle.sh $(IDF_BUILD) dist

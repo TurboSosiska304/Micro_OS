@@ -70,7 +70,7 @@ static void print_task_table(void)
         }
 
         /* The task that prints the table is running, not just ready. */
-        state = (t == self) ? "running" : task_state_name(t->state);
+        state = (t == self) ? "running" : task_state_name(task_state_of(t));
 
         klog(K_LOG_LEVEL_INFO, "  %3u  %4u  %-8s  %s", (unsigned)t->pid, (unsigned)t->prio, state,
              t->name);
