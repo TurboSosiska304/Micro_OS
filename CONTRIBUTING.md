@@ -78,6 +78,10 @@ Rules:
 * Kernel tests must run on the host. If a test needs real ESP32 hardware, that is
   a signal that platform and portable code got mixed.
 * A new kernel module comes with a new file in `tests/cases/`.
+* `make test-tsan` runs the same tests under the race detector; a race it finds
+  is a defect of the kernel or of the test, never noise.
+* The x86-64 port is checked by `make x86-smoke` (it needs QEMU); a change of the
+  contract of the port must keep it booting.
 
 ## Hardware
 

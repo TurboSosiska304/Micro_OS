@@ -21,16 +21,20 @@ top of FreeRTOS (which owns both ESP32 cores), with a 200 mAh battery and a
 | 2 | VFS, MicroFS, shell | done |
 | 3 | Syscall ABI, libc subset, memory manager (slabs) | done |
 | 4 | Drivers: the WiFi station, the TFT console, input, sensors | done |
-| 5 | init, configuration, HTTP/NTP, applications | in progress |
+| 5 | init, configuration, HTTP/NTP, telnet | done |
 | 6 | Release, documentation | in progress |
 | 7 | Programs and protection: execve, permissions, a real fork | planned |
 | 8 | The network and the updates: HTTP server, MQTT, OTA | planned |
 | 9 | The wearable: deep sleep, microphone, IR, enclosure modes | planned |
 
-Phase 5 is partly done: the init daemons, the `/etc` configuration, HTTP/NTP,
-the WiFi station and telnet (the shell over the air) work; the demo
-applications are still ahead. Phase 6 has the release process and the cloud
-build; OTA is not possible with the current flash layout.
+Phase 5 is done: the init daemons, the `/etc` configuration, HTTP/NTP, the
+WiFi station and telnet (the shell over the air) work. The demo applications
+(the logger, the clock, the weather station) are a project of their own and
+do not live in this tree: a board with 8 MB of flash has no room for a
+handful of programs nobody asked for. Phase 6 has the release process and
+the cloud build; OTA is not possible with the current flash layout.
+
+The kernel has a roadmap of its own: [docs/kernel-roadmap.md](docs/kernel-roadmap.md).
 
 See [docs/roadmap.md](docs/roadmap.md) for the full plan and
 [docs/architecture.md](docs/architecture.md) for the design.
@@ -286,6 +290,23 @@ Only `http://` is spoken: the board has no TLS, so `https://` is refused with
 a word about it. Every socket waits five seconds, so a network that went away
 answers an error instead of holding the console.
 
+### The third machine: x86-64, bare metal
+
+The same kernel boots on an x86-64 processor with nothing under it: no
+Linux, no libc. The port is a project of its own, and the bootloader is
+part of the project (a multiboot image that switches the long mode on and
+copies the kernel).
+
+```bash
+make x86-build     # the kernel and its loader
+make x86-run       # QEMU, a serial console, the shell
+make x86-smoke     # boot it and check what it says
+```
+
+It needs `qemu-system-x86` only. The port does not depend on Limine or on
+any bootloader configuration: `ports/port_x86_64/loader32.S` is the whole
+of the boot.
+
 ### Ready to flash binaries
 
 The `dist/` folder holds the built firmware: the application, the bootloader,
@@ -304,7 +325,8 @@ make ci          # build, tests, sanitizers, smoke test, integrity
 ```
 
 It builds the host code, runs the unit tests and the same tests under the
-sanitizers, the smoke test of the simulator and the integrity of the
+sanitizers (`make test-tsan` adds the race detector), the smoke test of the
+simulator, the boot of the x86-64 port (`make x86-smoke`) and the integrity of the
 repository: the headers of the images, the partition table against
 `partitions.csv`, the git objects, the hygiene of the sources and their
 formatting. The firmware is not part of `make ci`: it needs ESP-IDF, so it is
@@ -345,10 +367,12 @@ Micro_OS/
 │   ├── wifi/           the WiFi station: the portable core and the radio
 │   └── port_esp32/     ESP32 port
 ├── ports/port_host/    Linux port + simulator
+├── ports/port_x86_64/  a QEMU x86-64 machine, bare metal (its own loader)
+├── ports/port_null/    no machine at all: linked by the checks
 ├── main/               firmware entry point (app_main)
 ├── tests/              unit tests (own minimal framework, no dependencies)
 ├── tools/              console, bundle, the smoke test, the integrity check
-├── docs/               architecture, roadmap, hardware notes, ADRs
+├── docs/               architecture, roadmaps, porting, review, hardware notes, ADRs
 ├── CMakeLists.txt      dual mode build: ESP-IDF or host
 └── Makefile            convenience targets: test, sim, ci, format, idf-*
 ```

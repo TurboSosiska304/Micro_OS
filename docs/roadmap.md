@@ -2,6 +2,9 @@
 
 > Russian version: [roadmap_ru.md](roadmap_ru.md)
 
+> This is the roadmap of the **platform**: the board, the drivers, the radio,
+> the firmware. The kernel has its own: [kernel-roadmap.md](kernel-roadmap.md).
+
 Every phase ends with a working state on the device and green tests.
 
 ## Phase 0 - Skeleton (done)
@@ -162,7 +165,9 @@ one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
 * [x] HTTP client, NTP based on the RTC — `http get <url>` prints the status
       and the body of the answer, `ntp [server]` takes the time from the
       server and writes it into the RTC (the time is UTC)
-* [ ] Applications: sensor logger, IR remote, clock, weather station
+* [n] Applications: sensor logger, IR remote, clock, weather station — not in
+      this tree: a board with 8 MB of flash does not carry programs nobody asked
+      for, and they would be a repository of their own
 
 ## Phase 6 - Release
 

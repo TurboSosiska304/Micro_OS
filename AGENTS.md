@@ -10,10 +10,12 @@ Micro OS: a Linux-like kernel for the M5Stack StickC Plus2 (ESP32-PICO-V3-02,
 240 MHz, 2 MB PSRAM, 8 MB flash, 135x240 TFT). Scheduler, syscall ABI, VFS,
 `/proc`, `/dev`, MicroFS, drivers, shell — all on bare metal, no MMU.
 
-Two builds from one tree:
+Three builds from one tree:
 
 * **host** — plain CMake + GCC on Linux: unit tests and a simulator. The main
   development loop; no hardware and no ESP-IDF involved.
+* **x86-64** — bare metal in QEMU (`make x86-build`, `make x86-run`,
+  `make x86-smoke`), a port with its own loader and no libc under the kernel.
 * **ESP32** — the same sources as an ESP-IDF v5.3 project.
 
 Current phase: 0–4 done, phase 5 partly done (WiFi station, telnet). Details in
@@ -53,6 +55,8 @@ Corollaries:
 | `components/wifi/` | portable station core + ESP32 radio |
 | `components/port_esp32/` | ESP32 implementation of `kernel/port.h` |
 | `ports/port_host/` | Linux port, simulator, host PSRAM pool |
+| `ports/port_x86_64/` | QEMU x86-64 port: loader, IDT/PIT, context switch, shell |
+| `ports/port_null/` | the port that is not a machine: linked by the checks |
 | `main/` | firmware entry point (`app_main`, init, self test, hardware doctor) |
 | `tests/` | unit tests, own framework (`framework/ktest.h`), corpus `tests/corpus/` |
 | `tools/` | `console.py`, `device-test.sh`, `sim_smoke.py`, `integrity_check.py`, `bundle.sh` |
@@ -67,6 +71,8 @@ The full reference is in `commands.md` (`commands_ru.md`); the short version:
 
 ```bash
 make test                      # build + run unit tests (host)
+make test-tsan                 # the same under the race detector
+make x86-smoke                 # boot the kernel on x86-64 in QEMU
 make sim                       # run the kernel simulator
 make smoke                     # boot the simulator and check its answers
 make integrity                 # repo checks: bundle, images, partitions, git, hygiene, format
@@ -137,7 +143,7 @@ nobody builds.
 * `tests/corpus/vectors.txt` holds the fixed numbers (including negatives and
   boundary values) shared by the tests; new numeric behaviour should reuse it.
 * Kernel behaviour without a test is unfinished work.
-* Sanitizers: `make test-asan`.
+* Sanitizers: `make test-asan` and `make test-tsan` (race detector).
 
 ## Syscalls and ABI
 
