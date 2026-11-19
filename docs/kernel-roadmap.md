@@ -66,7 +66,7 @@ Every item ends with a state on the board and green tests.
 * [ ] `fork()` with an address space of its own, copy on write
 * [ ] The checks of every argument at the edge of the syscall table
 
-## K5.0 - A second machine in the tests (started)
+## K5.0 - A second machine in the tests (done, except paging)
 
 The first bare-metal port is x86-64, not ARM: the machine is documented,
 the console is a UART that predates the PC, and QEMU boots the kernel in

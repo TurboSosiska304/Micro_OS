@@ -6,9 +6,11 @@ short version of what an agent needs before touching code.
 
 ## What this is
 
-Micro OS: a Linux-like kernel for the M5Stack StickC Plus2 (ESP32-PICO-V3-02,
-240 MHz, 2 MB PSRAM, 8 MB flash, 135x240 TFT). Scheduler, syscall ABI, VFS,
-`/proc`, `/dev`, MicroFS, drivers, shell — all on bare metal, no MMU.
+Micro OS: a Linux-like kernel for small machines. Scheduler, syscall ABI,
+VFS, `/proc`, `/dev`, MicroFS, libc subset, shell, HTTP, NTP and telnet — the
+same sources on three machines: the M5Stack StickC Plus2 (ESP32, ESP-IDF and
+FreeRTOS), a Linux process (the tests and the simulator) and bare metal on
+x86-64 in QEMU. The board is one port of several, not the project.
 
 Three builds from one tree:
 

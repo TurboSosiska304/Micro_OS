@@ -88,7 +88,10 @@ Rules:
 The quirks of the M5Stack StickC Plus2 (power model without a PMIC, pinout, I2C
 addresses) are documented in
 [docs/hardware/stickc-plus2.md](docs/hardware/stickc-plus2.md) — check it before
-writing a driver.
+writing a driver. The board is one port of several: a change of the board or
+of a driver must keep the other builds green (`make ci`, `make x86-smoke`),
+and a change of the contract of the port is a change for every port — bump the
+version in `kernel/port/info.h` and make all of them answer.
 
 ## Translations
 
