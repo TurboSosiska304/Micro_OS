@@ -34,7 +34,7 @@
 
 static int board_subsys_init(void)
 {
-    const struct board_info *info = board_get_info();
+    const struct kernel_board *info = board_get_info();
 
     klog(K_LOG_LEVEL_INFO, "soc: %s, flash: %u MB, psram: %u KB", info->soc,
          (unsigned)info->flash_mb, (unsigned)info->psram_kb);
@@ -284,7 +284,7 @@ static const struct kernel_subsys g_subsystems[] = {
 
 void app_main(void)
 {
-    const struct board_info *info = board_get_info();
+    const struct kernel_board *info = board_get_info();
     struct kernel_boot_config cfg;
 
     port_esp32_console_init();
@@ -299,6 +299,7 @@ void app_main(void)
     memset(&cfg, 0, sizeof(cfg));
     cfg.board = info->name;
     cfg.board_desc = info->desc;
+    cfg.board_info = info;
     cfg.subsystems = g_subsystems;
     cfg.nsubsystems = K_ARRAY_SIZE(g_subsystems);
 

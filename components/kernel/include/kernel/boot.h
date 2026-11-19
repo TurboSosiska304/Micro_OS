@@ -9,6 +9,7 @@
 #ifndef MICRO_OS_KERNEL_BOOT_H
 #define MICRO_OS_KERNEL_BOOT_H
 
+#include "kernel/board.h"
 #include "kernel/types.h"
 
 /* Initialisation levels: lower value == earlier. */
@@ -26,6 +27,12 @@ struct kernel_subsys {
 struct kernel_boot_config {
     const char *board;      /* board name */
     const char *board_desc; /* human readable board description */
+    /*
+     * The full description of the board. The platform owns it and keeps it
+     * for the life of the kernel; NULL means "no description was given",
+     * and the banner falls back to the name and the description above.
+     */
+    const struct kernel_board *board_info;
     const struct kernel_subsys *subsystems;
     k_size_t nsubsystems;
     void (*on_ready)(void); /* optional, called after a successful boot */

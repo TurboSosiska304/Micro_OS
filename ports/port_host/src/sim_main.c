@@ -79,12 +79,13 @@ static const struct kernel_subsys g_subsystems[] = {
 
 int main(void)
 {
-    const struct board_info *info = board_get_info();
+    const struct kernel_board *info = board_get_info();
     struct kernel_boot_config cfg;
 
     memset(&cfg, 0, sizeof(cfg));
     cfg.board = info->name;
     cfg.board_desc = info->desc;
+    cfg.board_info = info;
     cfg.subsystems = g_subsystems;
     cfg.nsubsystems = K_ARRAY_SIZE(g_subsystems);
 

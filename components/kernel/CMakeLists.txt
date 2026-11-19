@@ -5,6 +5,7 @@
 # host (as a plain static library used by the unit tests).
 
 set(MICRO_OS_KERNEL_SRCS
+    "src/board.c"
     "src/boot.c"
     "src/console.c"
     "src/kmm.c"
