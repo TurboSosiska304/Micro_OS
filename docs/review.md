@@ -70,9 +70,15 @@ one change.
    The device caches the 4 KB erase sector, writes collect in it, and
    `sync` erases and programs. A mistake loses the volume of the user and
    no test on the host can see it.
+   *Audited, and it found a trap:* the mount called a volume fresh when
+   its last block was erased, so a partition that grew or moved would be
+   formatted at the next boot - the data erased without a word. Fixed in
+   `63ec82d`: a volume is fresh only when the whole erase sector is blank,
+   a damaged header is refused instead of formatted, and the partition is
+   measured in whole 4 KB sectors. What remains structural is below.
    *Prove it:* write a hundred files, `sync`, reboot, compare every byte;
    `mkfs -y`, repeat; pull the cable in the middle of a write and check
-   that the volume still mounts (MicroFS is designed to survive).
+   that the volume still mounts or says it is damaged.
 2. **The switch of the contexts on x86-64** (new, `switch.S`,
    `port_x86_64_task.c`).
    The frame of a new task, `-mno-red-zone`, a switch from inside the
@@ -116,6 +122,35 @@ one change.
 10. **The tiny memory gate** (`f7dc5ef`). `PORT_IMPLEMENTATION_DIRS` scans
     whole directories; a port split into many files is covered, a call
     made through a function pointer is not.
+
+## Findings of the flash audit
+
+The audit of `flash0` (read-only, before this review) found eight things.
+Three are fixed already, because one of them erased data without the user
+doing anything; the rest are for this review to decide.
+
+| # | Finding | State |
+|---|---|---|
+| F1 | a grown or moved partition was "fresh" at its new end, so the boot formatted the volume: silent data loss | **fixed** in `63ec82d` |
+| F2 | the unit of loss is the 4 KB erase sector, and the bitmap with the root inode share one sector: a power cut during `sync` can take the root directory and the bitmap together | design: shadow or a layout of its own for the bitmap; document the 4 KB unit |
+| F3 | a damaged volume mounted and reported a healthy size, because the root inode was never checked | **fixed** in `63ec82d` (the mount refuses it) |
+| F4 | an interrupted `mkfs -y` leaves a volume that mounts with an empty table: valid header, no root | design: erase META first / mark a format in progress |
+| F5 | a partition size that is not a multiple of 4 KB leaves a tail the flash refuses to write | **fixed** in `63ec82d` (the tail is dropped with a warning) |
+| F6 | one `write` costs ~21 erase sectors (the filesystem jumps META and DATA), which is wear and latency | design: the bitmap in its own erase sector, fewer syncs |
+| F7 | the cache of the port has no `invalidate`, so the filesystem cannot say "forget this volume"; the contract does not say the device is not reentrant | add to `kernel/blockdev.h` |
+| F8 | `ops->erase` is never called and never tested | decide: tests, or out of the contract |
+
+The recommendation of the audit stands for the review: move the NOR cache
+out of `port_esp32` into a portable module and test it against a model of
+the flash (a bit can be cleared, only an erase sets it back). Then F2, F4
+and F6 stop being "only the board".
+
+The on-device procedure the audit wrote down is the one to run after the
+review: write ten files and check the time and the free space; power-cut
+the board in the middle of a `write` twenty times and check that the volume
+never formats itself; power-cut a `mkfs -y`; and (on a board that may lose
+its data) change the size of the partition by one sector and check that the
+mount refuses instead of formatting.
 
 ## Debts and gaps known before the review
 
