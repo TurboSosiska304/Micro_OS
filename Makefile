@@ -23,7 +23,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan smoke integrity ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle
+.PHONY: help all build test test-asan smoke integrity ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-run x86-smoke
 
 help:
 	@echo "Micro OS — available targets:"
@@ -40,6 +40,9 @@ help:
 	@echo "  make idf-flash  flash the ESP32 firmware over USB"
 	@echo "  make idf-monitor attach the serial monitor"
 	@echo "  make idf-size   show the firmware size report"
+	@echo "  make x86-build  build the kernel for x86-64 (a multiboot image)"
+	@echo "  make x86-run    boot it in QEMU"
+	@echo "  make x86-smoke  boot it and check what it says"
 	@echo "  make bundle     collect the firmware into dist/ for distribution"
 
 all: build
@@ -107,6 +110,22 @@ idf-size: idf-check
 
 # Collect the firmware into dist/ so that it can be downloaded and flashed
 # without the whole project: the binaries, their sums and the flash script.
+# The x86-64 port: a project of its own, with no libc under the kernel.
+# The loader is a multiboot image that QEMU loads with -kernel; it copies
+# the kernel to its address and turns the long mode on.
+X86_BUILD := build-x86
+
+x86-build:
+	cmake -B $(X86_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release
+	cmake --build $(X86_BUILD) --target image
+
+x86-run: x86-build
+	qemu-system-x86_64 -kernel $(X86_BUILD)/loader32.elf \
+		-initrd $(X86_BUILD)/microos64.bin -m 256 -nographic -no-reboot
+
+x86-smoke: x86-build
+	python3 tools/x86_smoke.py
+
 bundle: idf-check
 	. $(IDF_EXPORT) && idf.py -D IDF_TARGET=$(IDF_TARGET) build
 	tools/bundle.sh $(IDF_BUILD) dist
