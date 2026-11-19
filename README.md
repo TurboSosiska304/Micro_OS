@@ -232,7 +232,7 @@ itself is plain text everywhere. `mfetch color` paints the logo.
 
 ```
 microos> mfetch
-M   M  OS           MicroOS 0.2.0-pre
+M   M  OS           MicroOS 0.3.0
 MM MM  Build        Oct 26 2026 17:40:12
 M M M  Board        M5Stack StickC Plus2
 M   M  SoC          ESP32-PICO-V3-02
@@ -346,7 +346,7 @@ bundle: the sums, the headers of the images, the partition table.
 A tag `v*` makes a release: the tests, the build, the integrity check
 against the version of the tag (`--expect-version`), and a GitHub release
 with the bundle — the binaries, their sums and `flash.sh` — and the notes
-about the commits. The tag with a dash (`v0.2.0-pre`) is a pre-release.
+about the commits. The tag with a dash (`vX.Y.Z-pre`) is a pre-release.
 
 ## Repository layout
 

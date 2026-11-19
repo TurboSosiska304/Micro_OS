@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import re
 import select
 import subprocess
 import sys
@@ -167,7 +168,12 @@ def check(output: str) -> list:
     )
 
     expect("help lists the commands", "list the available commands" in answer("help"))
-    expect("uname prints the name and the version", "MicroOS 0.2.0" in answer("uname"))
+    # The version is whatever the build says: the shape is checked, so a
+    # release does not break the smoke test.
+    expect(
+        "uname prints the name and the version",
+        re.search(r"MicroOS \d+\.\d+\.\d+", answer("uname")) is not None,
+    )
     expect(
         "uptime prints the time",
         re.search(r"up \d+ s", answer("uptime")) is not None,

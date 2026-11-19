@@ -14,13 +14,13 @@
 #endif
 
 #define KERNEL_VERSION_MAJOR 0
-#define KERNEL_VERSION_MINOR 2
+#define KERNEL_VERSION_MINOR 3
 #define KERNEL_VERSION_PATCH 0
 
-/* The pre-release carries the suffix until the release drops it: the tag
- * is v0.2.0-pre, the kernel says 0.2.0-pre, and the integrity check of a
- * release compares the three numbers (0.2.0) with the tag. */
-#define KERNEL_VERSION_SUFFIX "-pre"
+/* A pre-release carries a suffix ("-pre") until the release drops it: the
+ * tag is vX.Y.Z or vX.Y.Z-pre, the kernel says the same, and the integrity
+ * check of a release compares the three numbers with the tag. */
+#define KERNEL_VERSION_SUFFIX ""
 
 /* Size of the in-kernel log ring buffer (number of retained messages). */
 #ifndef KERNEL_LOG_LINES
