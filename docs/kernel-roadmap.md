@@ -74,9 +74,9 @@ CI. The port is `ports/port_x86_64`, the boot is the project's own
       store and the sockets
 * [x] The banner of the kernel on a real (emulated) processor, and
       `make x86-smoke` in the checks
-* [ ] The IDT and the timer interrupt
-* [ ] The task substrate: the switch of the contexts (ADR 0002) and the
-      shell on the serial port
+* [x] The IDT and the timer interrupt, a kilohertz, the ticks as the clock
+* [x] The task substrate: the switch of the contexts (ADR 0002)
+* [x] The shell on the serial port, with `help`, `uname`, `uptime`, `ps`
 * [ ] Paging with the kernel in the higher half (the identity map is the
       first step, not the model)
 
