@@ -1,6 +1,6 @@
 # MicroFS (MFS) filesystem
 
-> Russian version: [memory_ru.md](memory_ru.md)
+> Russian version: [memory_ru.md](ru/memory_ru.md)
 
 ## 1. Overview
 
@@ -98,7 +98,7 @@ A better approach is to size `META` not as a percentage of the volume but by the
 META_table = ceil(E * 16 / 1024)
 ```
 
-where `E` is the maximum number of records (files and directories) and 16 is the size of one table record in bytes. This approach is not implemented yet (see section 6).
+where `E` is the maximum number of records (files and directories) and 16 is the size of one table record in bytes. This approach is not implemented yet (see section 7).
 
 ## 5. Data stored in INFO
 
@@ -126,7 +126,60 @@ INFO
 +--------------------------------+
 ```
 
-## 6. Possible improvements
+## 6. The flags of an inode
+
+A record of MicroFS is 16 bytes and has no field of its own for the mode and
+the owner of an object: the two numbers are packed into the upper bits of its
+`flags` word, while the two low bits keep the type they always had. The volume
+of 0.3.x therefore mounts unchanged (ADR 0005).
+
+```
+bit  31          17 16        8 7      2 1  0
+     +-------------+-----------+--------+----+
+     | owner (15)  | mode (9)  | unused |type|
+     +-------------+-----------+--------+----+
+```
+
+| Bits | Field | Meaning |
+|---|---|---|
+| 0-1 | type | `0x01` the record is used, `0x02` a directory; a file is `0x01`, a directory `0x03` |
+| 2-7 | - | unused and zero |
+| 8-16 | mode | nine bits, `rwx` for the user, the group and the others (`MFS_MODE_MASK`) |
+| 17-31 | owner | fifteen bits, a uid (`MFS_OWNER_MASK`) |
+
+The rules that go with the layout:
+
+* **The masks are masks of the values, not of the fields.** A number is moved
+  by its shift before it is put into `flags`, so `0755` is stored as
+  `0755 << 8` and a uid of 42 as `42 << 17`; the constants are
+  `MFS_MODE_SHIFT`/`MFS_MODE_MASK` and `MFS_OWNER_SHIFT`/`MFS_OWNER_MASK` in
+  `mfs/mfs.h`.
+* **Two readers and two writers, no more.** `mfs_inode_mode()` and
+  `mfs_inode_owner()` are the only places that shift the word down;
+  `mfs_chmod()` and `mfs_chown()` are the only places that change a number in
+  a record that exists (the creation of a record writes the defaults). The
+  directory entry, the VFS adapter and the shell see the two numbers, not the
+  bits.
+* **A number that does not fit is refused, not cut.** A mode outside the nine
+  bits or an owner outside the fifteen is `MFS_EINVAL`, so a wide number can
+  never spill into the type of the object and turn a file into a directory.
+  The door of the syscall layer refuses the same numbers before the
+  filesystem is asked.
+* **Mode zero means "not set", not "nobody".** A record written before the
+  modes existed has nothing in those bits, and the reader answers with the
+  mode of the design for its type: `0755` for a directory, `0644` for a
+  file. Nothing is rewritten to make that true, a listing reads the same
+  fallback, and a mode that is on the volume wins over it. The price is that
+  `chmod 000` cannot be expressed: it is refused instead of being stored and
+  read back as `0644`.
+* **New objects are born with the mode of the design**: `0644` for a file and
+  `0755` for a directory, owner 0, which is the one user of the system.
+* **The numbers cross the VFS as they are.** `struct vfs_stat` carries `mode`
+  and `owner`, and `vfs_chmod()`/`vfs_chown()` are operations a filesystem may
+  have or not; a virtual filesystem without them answers "not permitted"
+  rather than storing a number that nothing would read.
+
+## 7. Possible improvements
 
 Automatic volume layout:
 
@@ -136,7 +189,7 @@ Automatic volume layout:
 - [ ] Store the actual `DATA`, `META` and `INFO` boundaries in the filesystem header.
 - [ ] Validate the layout when mounting the volume.
 
-## 7. The device under the volume
+## 8. The device under the volume
 
 MicroFS does not talk to the flash: it asks a block device
 (`kernel/blockdev.h`) for a sector of 1 KB, and the device is a partition of

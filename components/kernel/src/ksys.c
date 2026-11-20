@@ -5,6 +5,7 @@
 
 #include "kernel/console.h"
 #include "kernel/errno.h"
+#include "kernel/exec.h"
 #include "kernel/kmm.h"
 #include "kernel/log.h"
 #include "kernel/port.h"
@@ -20,17 +21,159 @@
 static struct ksys_entry g_table[KSYS_COUNT];
 static k_u32_t g_registered;
 
+/* --- the checks at the edge --- */
+
+/*
+ * A path of a program is not trusted. The kernel must not walk past the end
+ * of the memory of the caller looking for the terminator, so the search is
+ * limited to the window the VFS keeps a path in: a path that does not end
+ * inside it is refused before any filesystem sees it. Every filesystem of
+ * the tree is mounted below the root, so a path that does not begin there
+ * cannot name an object at all, and NULL or the empty string is not a path.
+ */
+static int path_check(const char *path)
+{
+    k_size_t i;
+
+    if (path == NULL || path[0] != '/') {
+        return KERR_INVAL;
+    }
+
+    for (i = 1; i <= KSYS_PATH_MAX; i++) {
+        if (path[i] == '\0') {
+            return 0;
+        }
+    }
+
+    return KERR_TOOBIG;
+}
+
+/*
+ * The buffer of a call. NULL is only meaningful with a zero length, and a
+ * length above KSYS_MAX_IO cannot be a buffer of this system: the call is
+ * refused before the kernel touches a byte of it.
+ */
+static int buffer_check(ksys_arg_t buf, ksys_arg_t count)
+{
+    if (count > KSYS_MAX_IO) {
+        return KERR_TOOBIG;
+    }
+
+    if (buf == 0 && count != 0) {
+        return KERR_INVAL;
+    }
+
+    return 0;
+}
+
+/*
+ * The flags of an open. The access is one of the three modes - the pair of
+ * the bits is not a mode - and every other bit has to be a flag of the
+ * contract. A program that asks for something the kernel does not know is
+ * answered here, not by the filesystem under it.
+ */
+static int open_flags_check(ksys_arg_t flags)
+{
+    int access = (int)(flags & KSYS_O_ACCMODE);
+
+    if ((flags & ~(ksys_arg_t)KSYS_O_ALLOWED) != 0) {
+        return KERR_INVAL;
+    }
+
+    if (access != KSYS_O_RDONLY && access != KSYS_O_WRONLY && access != KSYS_O_RDWR) {
+        return KERR_INVAL;
+    }
+
+    return 0;
+}
+
+/* --- the mode of an object --- */
+
+/* The bits of one triad of a mode: read, write, execute. */
+#define KSYS_MODE_READ 04u
+#define KSYS_MODE_WRITE 02u
+#define KSYS_MODE_EXEC 01u
+
+/*
+ * The bits of a mode that decide for the caller. There is one user, uid
+ * zero, and no group of its own: an object of that owner is answered by the
+ * triad of the owner and an object of another owner by the triad of the
+ * others - the caller is not that owner. There is no bypass for uid zero, so
+ * a file of the mode 0200 cannot be read by the only user of the system
+ * either: the rule of POSIX with the exception of root taken away (ADR 0005).
+ */
+static k_u32_t caller_bits(const struct vfs_stat *info)
+{
+    return (info->owner == KSYS_UID) ? ((info->mode >> 6) & 7u) : (info->mode & 7u);
+}
+
+/*
+ * The access of an open against the mode of an object. A filesystem that
+ * keeps no modes answers with a zeroed one, and that zero is not "nobody may
+ * touch it": it is a virtual filesystem (procfs, devfs) whose objects keep
+ * the access they always had.
+ */
+static int open_mode_check(const struct vfs_stat *info, int access)
+{
+    k_u32_t bits;
+
+    if (info->mode == 0u) {
+        return 0;
+    }
+
+    bits = caller_bits(info);
+
+    if (access != KSYS_O_WRONLY && (bits & KSYS_MODE_READ) == 0u) {
+        return KERR_PERM;
+    }
+
+    if (access != KSYS_O_RDONLY && (bits & KSYS_MODE_WRITE) == 0u) {
+        return KERR_PERM;
+    }
+
+    return 0;
+}
+
+/*
+ * The mode of the file that is about to be opened. The object is described
+ * by the filesystem and the mode is not guessed from the flags of the call:
+ * the mode is the number the filesystem keeps, the flags are the wish of the
+ * caller, and the two are compared here.
+ *
+ * A file that is not there is not checked: with O_CREAT it is about to be
+ * made with the mode of the design, which allows both accesses, and without
+ * O_CREAT the open itself answers ENOENT - the same answer the check would
+ * have to give.
+ */
+static int open_path_mode_check(const char *path, int flags)
+{
+    struct vfs_stat info;
+    int rc;
+
+    rc = vfs_stat(path, &info);
+    if (rc != 0) {
+        return (rc == KERR_NOENT) ? 0 : rc;
+    }
+
+    return open_mode_check(&info, flags & KSYS_O_ACCMODE);
+}
+
 /* --- the open files of a task --- */
 
-static struct kfile *fd_get(int fd)
+static struct kfile *fd_get(ksys_arg_t fd)
 {
     struct task *self = task_self();
 
-    if (self == NULL || fd < 0 || fd >= TASK_MAX_FDS) {
+    /*
+     * The descriptor is an index of the table of the task and it arrives as
+     * a raw register: a value that does not fit the table is not a
+     * descriptor, and the cast to int must not turn one into one.
+     */
+    if (fd >= (ksys_arg_t)TASK_MAX_FDS) {
         return NULL;
     }
 
-    if (!self->files[fd].used) {
+    if (self == NULL || !self->files[fd].used) {
         return NULL;
     }
 
@@ -87,7 +230,8 @@ static k_ssize_t sys_exit(ksys_arg_t code, ksys_arg_t a1, ksys_arg_t a2, ksys_ar
 static k_ssize_t sys_read(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys_arg_t a3,
                           ksys_arg_t a4, ksys_arg_t a5)
 {
-    struct kfile *file = fd_get((int)fd);
+    struct kfile *file = fd_get(fd);
+    int rc;
 
     K_UNUSED(a3);
     K_UNUSED(a4);
@@ -107,37 +251,63 @@ static k_ssize_t sys_read(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys_
         return KERR_BADF;
     }
 
+    rc = buffer_check(buf, count);
+    if (rc != 0) {
+        return rc;
+    }
+
+    if (count == 0) {
+        /* POSIX: a request of no bytes reads nothing and is not an error. */
+        return 0;
+    }
+
     return vfs_read(&file->file, (void *)(uintptr_t)buf, count);
 }
 
 static k_ssize_t sys_write(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys_arg_t a3,
                            ksys_arg_t a4, ksys_arg_t a5)
 {
-    struct kfile *file = fd_get((int)fd);
+    struct kfile *file = fd_get(fd);
+    int rc;
 
     K_UNUSED(a3);
     K_UNUSED(a4);
     K_UNUSED(a5);
 
-    if (file == NULL) {
-        /*
-         * The descriptors 1 and 2 are the console of the system when they
-         * are not open as a file, the same way as in Linux.
-         */
-        if (fd == 1 || fd == 2) {
-            k_console_write((const char *)(uintptr_t)buf, (k_size_t)count);
-            return (k_ssize_t)count;
+    if (file != NULL) {
+        /* The descriptor remembers how it was opened: a file that was
+         * opened to be read from cannot be written to (POSIX: EBADF). */
+        if ((file->flags & KSYS_O_ACCMODE) == KSYS_O_RDONLY) {
+            return KERR_BADF;
         }
-        return KERR_BADF;
+
+        rc = buffer_check(buf, count);
+        if (rc != 0) {
+            return rc;
+        }
+
+        if (count == 0) {
+            return 0;
+        }
+
+        return vfs_write(&file->file, (const void *)(uintptr_t)buf, count);
     }
 
-    /* The descriptor remembers how it was opened: a file that was opened
-     * to be read from cannot be written to (POSIX: EBADF). */
-    if ((file->flags & KSYS_O_ACCMODE) == KSYS_O_RDONLY) {
-        return KERR_BADF;
+    /*
+     * The descriptors 1 and 2 are the console of the system when they are
+     * not open as a file, the same way as in Linux.
+     */
+    if (fd == 1 || fd == 2) {
+        rc = buffer_check(buf, count);
+        if (rc != 0) {
+            return rc;
+        }
+
+        k_console_write((const char *)(uintptr_t)buf, (k_size_t)count);
+        return (k_ssize_t)count;
     }
 
-    return vfs_write(&file->file, (const void *)(uintptr_t)buf, count);
+    return KERR_BADF;
 }
 
 static k_ssize_t sys_open(ksys_arg_t path, ksys_arg_t flags, ksys_arg_t a2, ksys_arg_t a3,
@@ -152,6 +322,26 @@ static k_ssize_t sys_open(ksys_arg_t path, ksys_arg_t flags, ksys_arg_t a2, ksys
     K_UNUSED(a3);
     K_UNUSED(a4);
     K_UNUSED(a5);
+
+    rc = path_check(name);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = open_flags_check(flags);
+    if (rc != 0) {
+        return rc;
+    }
+
+    /*
+     * The mode of the file decides whether the access that was asked for is
+     * allowed. The check is here, at the edge, and not in the filesystem, so
+     * that every filesystem under it answers a forbidden open the same way.
+     */
+    rc = open_path_mode_check(name, (int)flags);
+    if (rc != 0) {
+        return rc;
+    }
 
     fd = fd_alloc();
     if (fd < 0) {
@@ -175,7 +365,7 @@ static k_ssize_t sys_open(ksys_arg_t path, ksys_arg_t flags, ksys_arg_t a2, ksys
 static k_ssize_t sys_close(ksys_arg_t fd, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
                            ksys_arg_t a4, ksys_arg_t a5)
 {
-    struct kfile *file = fd_get((int)fd);
+    struct kfile *file = fd_get(fd);
 
     K_UNUSED(a1);
     K_UNUSED(a2);
@@ -204,14 +394,26 @@ static k_ssize_t sys_stat(ksys_arg_t path, ksys_arg_t buf, ksys_arg_t a2, ksys_a
     K_UNUSED(a4);
     K_UNUSED(a5);
 
+    rc = path_check((const char *)(uintptr_t)path);
+    if (rc != 0) {
+        return rc;
+    }
+
+    /*
+     * A program that asks for the information has to give the place for
+     * the answer: a NULL there is a mistake, not "the answer is not
+     * wanted", and the filesystem must not be asked for nothing.
+     */
+    if (buf == 0) {
+        return KERR_INVAL;
+    }
+
     rc = vfs_stat((const char *)(uintptr_t)path, &stat);
     if (rc != 0) {
         return rc;
     }
 
-    if (buf != 0) {
-        memcpy((void *)(uintptr_t)buf, &stat, sizeof(stat));
-    }
+    memcpy((void *)(uintptr_t)buf, &stat, sizeof(stat));
 
     return 0;
 }
@@ -219,7 +421,7 @@ static k_ssize_t sys_stat(ksys_arg_t path, ksys_arg_t buf, ksys_arg_t a2, ksys_a
 static k_ssize_t sys_lseek(ksys_arg_t fd, ksys_arg_t offset, ksys_arg_t whence, ksys_arg_t a3,
                            ksys_arg_t a4, ksys_arg_t a5)
 {
-    struct kfile *file = fd_get((int)fd);
+    struct kfile *file = fd_get(fd);
     k_ssize_t position;
 
     K_UNUSED(a3);
@@ -228,6 +430,15 @@ static k_ssize_t sys_lseek(ksys_arg_t fd, ksys_arg_t offset, ksys_arg_t whence, 
 
     if (file == NULL) {
         return KERR_BADF;
+    }
+
+    /*
+     * The whence is part of the signature of the call: three values, and
+     * the number arrives as a raw register, so it is compared before the
+     * cast to int can cut a wide number down to a valid one.
+     */
+    if (whence > KSYS_SEEK_END) {
+        return KERR_INVAL;
     }
 
     switch ((int)whence) {
@@ -256,11 +467,18 @@ static k_ssize_t sys_lseek(ksys_arg_t fd, ksys_arg_t offset, ksys_arg_t whence, 
 static k_ssize_t sys_unlink(ksys_arg_t path, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
                             ksys_arg_t a4, ksys_arg_t a5)
 {
+    int rc;
+
     K_UNUSED(a1);
     K_UNUSED(a2);
     K_UNUSED(a3);
     K_UNUSED(a4);
     K_UNUSED(a5);
+
+    rc = path_check((const char *)(uintptr_t)path);
+    if (rc != 0) {
+        return rc;
+    }
 
     return vfs_unlink((const char *)(uintptr_t)path);
 }
@@ -268,11 +486,18 @@ static k_ssize_t sys_unlink(ksys_arg_t path, ksys_arg_t a1, ksys_arg_t a2, ksys_
 static k_ssize_t sys_mkdir(ksys_arg_t path, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
                            ksys_arg_t a4, ksys_arg_t a5)
 {
+    int rc;
+
     K_UNUSED(a1);
     K_UNUSED(a2);
     K_UNUSED(a3);
     K_UNUSED(a4);
     K_UNUSED(a5);
+
+    rc = path_check((const char *)(uintptr_t)path);
+    if (rc != 0) {
+        return rc;
+    }
 
     return vfs_mkdir((const char *)(uintptr_t)path);
 }
@@ -280,7 +505,7 @@ static k_ssize_t sys_mkdir(ksys_arg_t path, ksys_arg_t a1, ksys_arg_t a2, ksys_a
 static k_ssize_t sys_readdir(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys_arg_t a3,
                              ksys_arg_t a4, ksys_arg_t a5)
 {
-    struct kfile *file = fd_get((int)fd);
+    struct kfile *file = fd_get(fd);
     struct vfs_dirent *out = (struct vfs_dirent *)(uintptr_t)buf;
     k_size_t max;
     k_size_t count_files = 0;
@@ -295,6 +520,19 @@ static k_ssize_t sys_readdir(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ks
     }
 
     if (out == NULL) {
+        return KERR_INVAL;
+    }
+
+    if (count > KSYS_MAX_IO) {
+        return KERR_TOOBIG;
+    }
+
+    /*
+     * The buffer is an array of the entries, not a number of bytes: a count
+     * that is not a whole number of them would let the last entry land past
+     * the end of the memory of the caller.
+     */
+    if ((count % sizeof(struct vfs_dirent)) != 0) {
         return KERR_INVAL;
     }
 
@@ -346,7 +584,13 @@ static k_ssize_t sys_getcwd(ksys_arg_t buf, ksys_arg_t size, ksys_arg_t a2, ksys
         return KERR_INVAL;
     }
 
-    if (buf != 0) {
+    /* The program has to give the place for the path and its terminator:
+     * a NULL or a zero size cannot hold even the root. */
+    if (buf == 0 || size == 0) {
+        return KERR_INVAL;
+    }
+
+    {
         k_size_t len = strlen(cwd) + 1;
 
         if (len > size) {
@@ -361,7 +605,7 @@ static k_ssize_t sys_getcwd(ksys_arg_t buf, ksys_arg_t size, ksys_arg_t a2, ksys
 static k_ssize_t sys_ioctl(ksys_arg_t fd, ksys_arg_t cmd, ksys_arg_t arg, ksys_arg_t a3,
                            ksys_arg_t a4, ksys_arg_t a5)
 {
-    struct kfile *file = fd_get((int)fd);
+    struct kfile *file = fd_get(fd);
 
     K_UNUSED(cmd);
     K_UNUSED(arg);
@@ -537,6 +781,8 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
 {
     struct task *self = task_self();
     struct task *child = NULL;
+    k_u32_t child_pid = 0;
+    int child_exit = 0;
     k_u32_t waited = 0;
     const k_u32_t limit = 5000; /* five seconds */
 
@@ -548,12 +794,39 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
         return KERR_PERM;
     }
 
+    /*
+     * The pid arrives as a raw register. A value that does not survive the
+     * round trip through int is not a pid - the cast below must not turn
+     * 2^32 + 5 into the child 5 - and only 0 and -1 mean "any child", so a
+     * third negative number is a mistake of the caller.
+     */
+    if ((ksys_arg_t)(int)pid != pid) {
+        return KERR_INVAL;
+    }
+
+    if ((int)pid < -1) {
+        return KERR_INVAL;
+    }
+
+    /* The flags of the call are one bit: the rest is not of the contract. */
+    if ((flags & ~(ksys_arg_t)KSYS_WNOHANG) != 0) {
+        return KERR_INVAL;
+    }
+
     /* Look for a child that has finished. */
     for (waited = 0; waited < limit; waited++) {
         k_size_t i;
 
+        /*
+         * The state of a task is changed by the scheduler from another
+         * context, so the scan and the copy of what the caller needs happen
+         * under one critical section: reading state and exit code after it
+         * would be a race with the task that has just finished.
+         */
+        k_port_enter_critical();
+
         for (i = 0; i < TASK_MAX_TASKS; i++) {
-            struct task *t = task_get_by_index(i);
+            struct task *t = task_get_by_index_unlocked(i);
 
             if (t == NULL || t->parent != self) {
                 continue;
@@ -565,9 +838,13 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
 
             if (t->state == TASK_STATE_ZOMBIE) {
                 child = t;
+                child_pid = t->pid;
+                child_exit = t->exit_code;
                 break;
             }
         }
+
+        k_port_exit_critical();
 
         if (child != NULL) {
             break;
@@ -586,16 +863,12 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
     }
 
     if (status != 0) {
-        *(int *)(uintptr_t)status = (int)child->exit_code;
+        *(int *)(uintptr_t)status = child_exit;
     }
 
-    {
-        k_u32_t child_pid = child->pid;
+    task_reap(child_pid);
 
-        task_reap(child_pid);
-
-        return (k_ssize_t)child_pid;
-    }
+    return (k_ssize_t)child_pid;
 }
 
 /*
@@ -676,6 +949,185 @@ static k_ssize_t sys_realloc(ksys_arg_t ptr, ksys_arg_t size, ksys_arg_t a2, ksy
     return (k_ssize_t)(uintptr_t)block;
 }
 
+/* --- the mode, the owner and the programs --- */
+
+static k_ssize_t sys_chmod(ksys_arg_t path, ksys_arg_t mode, ksys_arg_t a2, ksys_arg_t a3,
+                           ksys_arg_t a4, ksys_arg_t a5)
+{
+    int rc;
+
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    rc = path_check((const char *)(uintptr_t)path);
+    if (rc != 0) {
+        return rc;
+    }
+
+    /*
+     * The mode is the nine bits of the triads: a wider number would have to
+     * be cut to fit the record of the filesystem, and a cut number is not
+     * what the caller asked for. A zero passes this door and is refused by
+     * the filesystem, which is where the reason for that lives.
+     */
+    if ((mode & ~(ksys_arg_t)KSYS_MODE_MASK) != 0) {
+        return KERR_INVAL;
+    }
+
+    return vfs_chmod((const char *)(uintptr_t)path, (k_u32_t)mode);
+}
+
+static k_ssize_t sys_chown(ksys_arg_t path, ksys_arg_t owner, ksys_arg_t a2, ksys_arg_t a3,
+                           ksys_arg_t a4, ksys_arg_t a5)
+{
+    int rc;
+
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    rc = path_check((const char *)(uintptr_t)path);
+    if (rc != 0) {
+        return rc;
+    }
+
+    /* The same for the fifteen bits of a uid. */
+    if ((owner & ~(ksys_arg_t)KSYS_UID_MAX) != 0) {
+        return KERR_INVAL;
+    }
+
+    return vfs_chown((const char *)(uintptr_t)path, (k_u32_t)owner);
+}
+
+/*
+ * The program. The file is read through the VFS, its header is checked
+ * against the format of the system, and the port is asked to run it: only
+ * the port knows whether this machine can run a program at all.
+ *
+ * The image has to be in the memory of the kernel before the port copies it
+ * to the window of the machine, so it is read into one block - the largest
+ * transfer the edge of the system allows in one call, which is far more than
+ * a program of this system needs. The block is given back on every way out
+ * but the successful one: a port that enters a program does not return, and
+ * the memory of the task goes with the program.
+ *
+ * The vector of the arguments is the memory of the caller. The kernel does
+ * not walk it - without an MMU there is nothing to check an array of
+ * pointers against - and it reaches the port as it is; today the port is
+ * entered without one, because k_exec_run() has no vector in its signature.
+ */
+static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksys_arg_t a3,
+                            ksys_arg_t a4, ksys_arg_t a5)
+{
+    const char *name = (const char *)(uintptr_t)path;
+    /* The place for the data of the filesystem of an open file. */
+    k_u8_t file_data[VFS_FILE_DATA_SIZE];
+    struct vfs_file file;
+    struct vfs_stat info;
+    struct k_exec_image image;
+    k_u8_t *data;
+    k_size_t got = 0;
+    int rc;
+
+    K_UNUSED(argv);
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    rc = path_check(name);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = vfs_stat(name, &info);
+    if (rc != 0) {
+        return rc;
+    }
+
+    /*
+     * Only a file can be a program, and only an executable one is run. A
+     * device of devfs is not a directory and not a program either: there is
+     * nothing to copy and nothing to enter.
+     */
+    if (info.type == 2) {
+        return KERR_ISDIR;
+    }
+
+    if (info.type != 1) {
+        return KERR_PERM;
+    }
+
+    if (info.mode != 0u && (caller_bits(&info) & KSYS_MODE_EXEC) == 0u) {
+        return KERR_PERM;
+    }
+
+    /*
+     * The smallest image is its header and the largest is the one the edge
+     * passes in a single transfer; a file outside the two is not read at all,
+     * so a wrong file of the volume cannot ask for the memory of the system.
+     */
+    if (info.size < K_EXEC_HEADER_SIZE || info.size > KSYS_MAX_IO) {
+        return KERR_INVAL;
+    }
+
+    data = kmm_alloc((k_size_t)info.size, kmm_current_priority());
+    if (data == NULL) {
+        return KERR_NOMEM;
+    }
+
+    /*
+     * The file is opened through the VFS and not through a descriptor: an
+     * exec spends no descriptor of the caller, and a failed one leaves the
+     * table of the task exactly as it was.
+     */
+    rc = vfs_open(name, VFS_O_RDONLY, &file, file_data);
+    if (rc != 0) {
+        kmm_free(data);
+        return rc;
+    }
+
+    while (got < (k_size_t)info.size) {
+        int count = vfs_read(&file, data + got, (k_size_t)info.size - got);
+
+        if (count <= 0) {
+            vfs_close(&file);
+            kmm_free(data);
+            return KERR_IO;
+        }
+
+        got += (k_size_t)count;
+    }
+
+    vfs_close(&file);
+
+    if (k_exec_parse(data, got, &image) != 0) {
+        kmm_free(data);
+        return KERR_INVAL;
+    }
+
+    rc = k_exec_run(&image);
+    kmm_free(data);
+
+    /*
+     * A port that never returns from the program never comes back here. The
+     * three answers below are the contract of k_exec_run: 0 is a program
+     * that ran and returned - the call ends, because a machine without a
+     * process to exit into has to notice a program that finished - -2 is a
+     * machine that cannot run a program at all (the board, the simulator),
+     * and anything else is the image the port could not place in its window
+     * or could not copy.
+     */
+    if (rc == 0) {
+        return 0;
+    }
+
+    return (rc == -2) ? KERR_NOSYS : KERR_NOMEM;
+}
+
 /* --- the table --- */
 
 int ksys_register(k_u32_t number, const char *name, ksys_handler_fn handler)
@@ -747,6 +1199,9 @@ void ksys_init(void)
     ksys_register(KSYS_MALLOC, "malloc", sys_malloc);
     ksys_register(KSYS_FREE, "free", sys_free);
     ksys_register(KSYS_REALLOC, "realloc", sys_realloc);
+    ksys_register(KSYS_CHMOD, "chmod", sys_chmod);
+    ksys_register(KSYS_CHOWN, "chown", sys_chown);
+    ksys_register(KSYS_EXECVE, "execve", sys_execve);
 }
 
 /* --- the wrappers --- */
@@ -860,4 +1315,20 @@ void *ksys_realloc(void *ptr, k_size_t size)
 {
     return (void *)(uintptr_t)ksys_call(KSYS_REALLOC, (ksys_arg_t)(uintptr_t)ptr, (ksys_arg_t)size,
                                         0, 0, 0, 0);
+}
+
+int ksys_chmod(const char *path, k_u32_t mode)
+{
+    return (int)ksys_call(KSYS_CHMOD, (ksys_arg_t)(uintptr_t)path, (ksys_arg_t)mode, 0, 0, 0, 0);
+}
+
+int ksys_chown(const char *path, k_u32_t owner)
+{
+    return (int)ksys_call(KSYS_CHOWN, (ksys_arg_t)(uintptr_t)path, (ksys_arg_t)owner, 0, 0, 0, 0);
+}
+
+int ksys_execve(const char *path, char *const argv[])
+{
+    return (int)ksys_call(KSYS_EXECVE, (ksys_arg_t)(uintptr_t)path, (ksys_arg_t)(uintptr_t)argv, 0,
+                          0, 0, 0);
 }

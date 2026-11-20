@@ -44,7 +44,10 @@
 #define KSYS_MALLOC 20  /* malloc(size) */
 #define KSYS_FREE 21    /* free(ptr) */
 #define KSYS_REALLOC 22 /* realloc(ptr, size) */
-#define KSYS_COUNT 23   /* the number of the system calls */
+#define KSYS_CHMOD 23   /* chmod(path, mode) */
+#define KSYS_CHOWN 24   /* chown(path, owner) */
+#define KSYS_EXECVE 25  /* execve(path, argv) */
+#define KSYS_COUNT 26   /* the number of the system calls */
 
 /* The flags of the open call, the same as the ones of the VFS. */
 #define KSYS_O_RDONLY 0x0000
@@ -57,13 +60,47 @@
 /* The bits of the access: read, write, or both. */
 #define KSYS_O_ACCMODE 0x0003
 
+/* Every bit an open may carry: a flag outside this set is not of the
+ * contract, and the call is refused instead of being guessed at. */
+#define KSYS_O_ALLOWED (KSYS_O_ACCMODE | KSYS_O_CREAT | KSYS_O_TRUNC | KSYS_O_APPEND)
+
 /* The flags of the waitpid. */
 #define KSYS_WNOHANG 1 /* do not wait, answer 0 when the child is not ready */
+
+/*
+ * The mode and the owner of an object, as the edge of the system accepts
+ * them: the mode is the nine bits of the rwx triads and the owner is a uid
+ * of fifteen bits, which is what every filesystem of the system keeps for
+ * the two numbers (ADR 0005). A wider number is refused at the door instead
+ * of being cut to fit the record.
+ *
+ * The system has one user and its uid is zero; the checks of the mode use
+ * that number and grant it nothing extra.
+ */
+#define KSYS_MODE_MASK 0777u
+#define KSYS_UID 0u
+#define KSYS_UID_MAX 0x7FFFu
 
 /* The whence of the lseek. */
 #define KSYS_SEEK_SET 0
 #define KSYS_SEEK_CUR 1
 #define KSYS_SEEK_END 2
+
+/*
+ * The longest path a call accepts, the terminator not counted: a path has
+ * to fit the buffer the VFS and every filesystem under it keep for it.
+ */
+#define KSYS_PATH_MAX (VFS_PATH_MAX - 1)
+
+/*
+ * The most bytes one call may touch. The kernel does not copy a buffer of
+ * an arbitrary length into its own memory, but it does walk it on behalf of
+ * the caller, and a number far above any buffer of the system is a mistake
+ * or an attempt to make the kernel read the memory it should not. The
+ * internal RAM of the board is about 100 KB, so 64 KB is the largest
+ * transfer that can still be a real one.
+ */
+#define KSYS_MAX_IO 65536u
 
 /*
  * The width of the arguments of a system call.
@@ -135,5 +172,8 @@ int ksys_waitpid(int pid, int *status, int flags);
 void *ksys_malloc(k_size_t size);
 void ksys_free(void *ptr);
 void *ksys_realloc(void *ptr, k_size_t size);
+int ksys_chmod(const char *path, k_u32_t mode);
+int ksys_chown(const char *path, k_u32_t owner);
+int ksys_execve(const char *path, char *const argv[]);
 
 #endif /* MICRO_OS_KERNEL_KSYS_H */

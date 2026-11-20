@@ -3,7 +3,7 @@
 * Status: accepted
 * Date: 2026-10-21
 
-> Russian version: [0001-portable-kernel-core_ru.md](0001-portable-kernel-core_ru.md)
+> Russian version: [0001-portable-kernel-core_ru.md](../ru/adr/0001-portable-kernel-core_ru.md)
 
 ## Context
 

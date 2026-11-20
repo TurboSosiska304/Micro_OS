@@ -90,10 +90,10 @@ static void test_registry(void)
     /*
      * The board has more commands than the tests can see here: the
      * drivers bring their own ("date", "i2c", "wifi", "display", "mkfs")
-     * and those are only on the board. The twenty three commands of the
+     * and those are only on the board. The twenty six commands of the
      * shell itself have to be here, all of them.
      */
-    KT_CHECK(kshell_command_count() >= 23);
+    KT_CHECK(kshell_command_count() >= 26);
 
     port_host_set_sink(NULL);
 }
@@ -239,6 +239,75 @@ static void test_ls(void)
     ls_teardown();
 }
 
+/*
+ * The commands of the mode, the owner and the programs speak to the ABI and
+ * not to the filesystem: the test checks the words of a refusal, and that a
+ * mode and an owner that were accepted are the ones the next stat reports.
+ */
+static void test_attr(void)
+{
+    char buf[2048];
+    size_t used;
+    FILE *sink;
+    struct vfs_stat stat;
+
+    ktest_begin("kshell: chmod, chown and exec check their arguments");
+
+    ls_setup();
+    KT_CHECK_INT_EQ(vfs_mkdir("/bin"), 0);
+
+    sink = tmpfile();
+    KT_CHECK(sink != NULL);
+    if (sink == NULL) {
+        ls_teardown();
+        return;
+    }
+
+    port_host_set_sink(sink);
+
+    /* A command with the wrong number of arguments says how it is used. */
+    KT_CHECK_INT_EQ(kshell_execute("chmod 0644"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(kshell_execute("chmod 0644 /bin extra"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(kshell_execute("chown 0"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(kshell_execute("exec"), KSHELL_USAGE);
+
+    /* A mode that is not octal is refused before the call ... */
+    KT_CHECK_INT_EQ(kshell_execute("chmod 0999 /bin"), KSHELL_ERROR);
+    /* ... and so is a uid outside the fifteen bits. */
+    KT_CHECK_INT_EQ(kshell_execute("chown 99999 /bin"), KSHELL_ERROR);
+
+    /* The calls pass what was asked, and the next stat sees it. */
+    KT_CHECK_INT_EQ(kshell_execute("chmod 0711 /bin"), KSHELL_OK);
+    KT_CHECK_INT_EQ(vfs_stat("/bin", &stat), 0);
+    KT_CHECK_INT_EQ(stat.mode, 0711);
+    KT_CHECK_INT_EQ(kshell_execute("chown 7 /bin"), KSHELL_OK);
+    KT_CHECK_INT_EQ(vfs_stat("/bin", &stat), 0);
+    KT_CHECK_INT_EQ(stat.owner, 7);
+
+    /* A zero is a mode the record cannot hold, and the reason is printed. */
+    KT_CHECK_INT_EQ(kshell_execute("chmod 000 /bin"), KSHELL_ERROR);
+
+    /* The answer of the ABI reaches the person: a path that is not there. */
+    KT_CHECK_INT_EQ(kshell_execute("chmod 0600 /nosuch"), KSHELL_ERROR);
+    KT_CHECK_INT_EQ(kshell_execute("exec /nosuch"), KSHELL_ERROR);
+
+    rewind(sink);
+    used = fread(buf, 1, sizeof(buf) - 1, sink);
+    buf[used] = '\0';
+
+    port_host_set_sink(NULL);
+
+    KT_CHECK(strstr(buf, "usage: chmod <mode> <path>") != NULL);
+    KT_CHECK(strstr(buf, "usage: chown <uid> <path>") != NULL);
+    KT_CHECK(strstr(buf, "usage: exec <program>") != NULL);
+    KT_CHECK(strstr(buf, "not an octal mode") != NULL);
+    KT_CHECK(strstr(buf, "a uid is 0..32767") != NULL);
+    KT_CHECK(strstr(buf, "filesystem keeps") != NULL);
+    KT_CHECK(strstr(buf, "no such file") != NULL);
+
+    ls_teardown();
+}
+
 void test_kshell(void)
 { /* The built in commands are registered by the shell itself. */
     KT_CHECK_INT_EQ(kshell_init(), KSHELL_OK);
@@ -249,4 +318,5 @@ void test_kshell(void)
     test_memtest();
     test_mfetch();
     test_ls();
+    test_attr();
 }

@@ -7,6 +7,7 @@
 
 add_library(microos_port_null STATIC
     src/port_null.c
+    src/port_exec.c
     src/port_null_task.c
 )
 

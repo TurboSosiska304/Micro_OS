@@ -18,6 +18,8 @@
 
 #include "kernel/log.h"
 #include "kernel/port.h"
+#include "kernel/port_task.h"
+#include "kernel/sched.h"
 
 /* --- the machine --- */
 
@@ -25,6 +27,22 @@
  * The low level of the machine lives in the header, where the entry code of
  * the loader can see the same instructions.
  */
+
+/* The end of the block the linker made for the _Thread_local of the library. */
+extern char __tls_end[];
+
+/*
+ * The library keeps its errno in a _Thread_local, and the compiler reaches it
+ * through %fs. The tasks of this machine share one address space and one
+ * block, which is enough for the one user of the system: a second task sees
+ * the error of the first, and a real errno per task waits for the paging that
+ * gives each task a space of its own. The block itself is in the image and
+ * zero at the boot, so the register is the whole of the set-up.
+ */
+static void tls_init(void)
+{
+    port_wrmsr(0xC0000100u, (k_u64_t)(uintptr_t)__tls_end);
+}
 
 /* --- the console on COM1 --- */
 
@@ -580,6 +598,20 @@ static void heap_init(k_u64_t multiboot_info)
 
     best_base = (best_base + BLOCK_ALIGN - 1) & ~(k_u64_t)(BLOCK_ALIGN - 1);
 
+    /*
+     * The window of the programs (k_port_exec_base, see port_exec.c) is not
+     * the memory of the kernel. The heap stops below it, or a loaded image
+     * would land on the blocks of the allocator and neither side would see
+     * the damage until much later.
+     */
+    {
+        k_u64_t exec_base = (k_u64_t)(uintptr_t)k_port_exec_base();
+
+        if (exec_base > best_base && best_base + best_size > exec_base) {
+            best_size = exec_base - best_base;
+        }
+    }
+
     if (best_size > 32u * 1024u * 1024u) {
         best_size = 32u * 1024u * 1024u;
     }
@@ -722,35 +754,156 @@ void k_port_exit_critical(void)
     }
 }
 
-struct k_mutex_handle {
-    int unused;
+struct k_port_mutex {
+    /*
+     * Who holds the lock, as a token: zero is "nobody", the address of the
+     * task when a task holds it, and a value that no task can have when the
+     * boot context does (kmain mounts the volume before the first task
+     * exists, and MicroFS takes its lock for that too).
+     */
+    k_u64_t owner;
+    k_u32_t depth; /* the recursive takes of the owner */
 };
 
+#define PORT_MUTEX_BOOT ((k_u64_t)1)
+
+/* The caller as the lock sees it. The boot context has no struct task of its
+ * own, and it is still exactly one context. */
+static k_u64_t mutex_token(void)
+{
+    struct task *self = k_port_task_current();
+
+    return self != NULL ? (k_u64_t)(uintptr_t)self : PORT_MUTEX_BOOT;
+}
+
 /*
- * The mutex needs a scheduler to put a task to sleep, and the substrate of
- * the tasks does not exist yet: the milestone says so instead of pretending.
+ * The mutex of a machine with one core and a preemptive scheduler: the flag
+ * of the owner and the depth are decided with the interrupts off, and a
+ * caller that finds the lock taken gives the CPU away instead of spinning on
+ * it - a task that holds the lock is the only thing that can release it, and
+ * a caller that spins with the interrupts on would be preempted anyway.
+ *
+ * No task is woken by name here: the wait is a yield, and the task comes back
+ * to the lock in its turn. That is coarser than a wait queue of the kernel
+ * (components/kernel has no such thing yet) and it is enough for the one
+ * mutex of the filesystem, whose sections are a handful of sector writes.
  */
+static void mutex_wait(void)
+{
+    if (k_port_task_current() != NULL) {
+        k_sched_yield();
+        return;
+    }
+
+    /*
+     * The boot context: there is nothing to switch to, and it only takes the
+     * lock when no task exists to hold it. The pause is the polite form of
+     * "wait a moment" on a processor that has one.
+     */
+    __asm__ volatile("pause");
+}
+
 k_port_mutex_t *k_port_mutex_create(void)
 {
-    return NULL;
+    k_port_mutex_t *mutex = (k_port_mutex_t *)k_port_alloc(sizeof(*mutex), false);
+
+    if (mutex == NULL) {
+        return NULL;
+    }
+
+    mutex->owner = 0;
+    mutex->depth = 0;
+
+    return mutex;
 }
 
 int k_port_mutex_destroy(k_port_mutex_t *mutex)
 {
-    K_UNUSED(mutex);
+    if (mutex == NULL) {
+        return -1;
+    }
+
+    k_port_enter_critical();
+
+    if (mutex->owner != 0) {
+        /* A lock that a task holds or waits for is not ours to take away:
+         * the caller keeps the handle. */
+        k_port_exit_critical();
+        return -1;
+    }
+
+    k_port_exit_critical();
+
+    k_port_free(mutex);
+
     return 0;
 }
 
 int k_port_mutex_lock(k_port_mutex_t *mutex)
 {
-    K_UNUSED(mutex);
-    return -1;
+    k_u64_t self;
+
+    if (mutex == NULL) {
+        return -1;
+    }
+
+    self = mutex_token();
+
+    for (;;) {
+        k_u64_t owner;
+
+        k_port_enter_critical();
+        owner = mutex->owner;
+
+        if (owner == 0) {
+            mutex->owner = self;
+            mutex->depth = 1;
+            k_port_exit_critical();
+            return 0;
+        }
+
+        if (owner == self) {
+            /* The task that holds it takes it again: MicroFS does that when a
+             * public call reaches a helper that takes the lock too. */
+            mutex->depth++;
+            k_port_exit_critical();
+            return 0;
+        }
+
+        k_port_exit_critical();
+
+        mutex_wait();
+    }
 }
 
 int k_port_mutex_unlock(k_port_mutex_t *mutex)
 {
-    K_UNUSED(mutex);
-    return -1;
+    if (mutex == NULL) {
+        return -1;
+    }
+
+    k_port_enter_critical();
+
+    if (mutex->owner != mutex_token()) {
+        /* Not the holder: an unbalanced unlock says nothing about the state
+         * the caller expected, and the lock is the one thing it must not
+         * lose track of. */
+        k_port_exit_critical();
+        return -1;
+    }
+
+    if (mutex->depth > 1) {
+        mutex->depth--;
+        k_port_exit_critical();
+        return 0;
+    }
+
+    mutex->depth = 0;
+    mutex->owner = 0;
+
+    k_port_exit_critical();
+
+    return 0;
 }
 
 /* --- the ends of the machine --- */
@@ -783,7 +936,7 @@ const char *k_port_arch(void)
 }
 
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 2u
+#define PORT_API_MINOR 3u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_x86_64 does not speak the contract of this kernel");
@@ -965,6 +1118,7 @@ void port_x86_64_init(k_u64_t multiboot_info)
 {
     const struct mb_info *info = (const struct mb_info *)(uintptr_t)multiboot_info;
 
+    tls_init();
     com1_init();
     clock_measure();
     heap_init(multiboot_info);
@@ -991,6 +1145,10 @@ void port_x86_64_init(k_u64_t multiboot_info)
 
     g_info.heap_total = g_heap_total;
     g_info.tsc_calibrated = g_tsc_per_second != 0;
+
+    /* The volume of the port is registered before the kernel looks for one:
+     * the filesystem mounts a device by name and the name has to be there. */
+    port_x86_64_blockdev_init();
 
     /* Last, because it is the point of no return: from here the timer fires
      * every millisecond and the kernel has to be able to take it. */

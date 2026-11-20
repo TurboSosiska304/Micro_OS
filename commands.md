@@ -142,6 +142,37 @@ config sync        # restore the missing files, save the files of /etc
 config             # list the store
 ```
 
+### The mode, the owner and a program
+
+A file has a mode and an owner, and the shell changes them through the system
+calls (numbers 23 and 24), not through the filesystem. `exec` asks the same ABI
+for a program: the file is read by the kernel, checked against the format
+`MOX1` and handed to the port.
+
+| Command | What it does |
+|---|---|
+| `chmod <mode> <path>` | the mode in octal: `0644`, `755`, `0700` (the nine bits `rwx`) |
+| `chown <uid> <path>` | the owner, a decimal uid `0..32767` |
+| `exec <path> [arguments...]` | run a file as a program; at most six arguments |
+
+```bash
+# from the shell of the board:
+chmod 0700 /etc/init.d
+chown 0 /etc/setting
+exec /bin/hello one two     # the board answers: this machine cannot run a program
+```
+
+A mode that is not octal (`0999`), a uid above `32767` and a missing path are
+refused with a sentence: `not an octal mode`, `a uid is 0..32767`, `no such
+file`. A `chmod 000` is not a way to lock a file either: the filesystem keeps a
+zero as "the record predates the modes", so it refuses the call instead of
+storing a number it would read back as `0644`.
+
+`exec` returns to the prompt only when no program ran, and says why: `ENOSYS`
+becomes "this machine cannot run a program", `EPERM` "the file has no execute
+bit", `EINVAL` "not a MOX1 image of this system". The board and the simulator
+have no window of programs; the x86-64 port is the machine that runs one.
+
 ### HTTP and the clock
 
 ```bash

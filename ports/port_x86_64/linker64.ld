@@ -28,6 +28,28 @@ SECTIONS
         *(.data .data.*)
     }
 
+    /*
+     * The thread pointer of the C library. The compiler addresses a
+     * _Thread_local of the library as an offset from %fs, so the port has to
+     * say where the block is; the symbols are the whole of it, because the
+     * machine has one space of tasks and no thread of its own.
+     */
+    .tdata : {
+        *(.tdata .tdata.*)
+    }
+
+    .tbss : {
+        *(.tbss .tbss.*)
+    }
+
+    /*
+     * The two ends are taken from the sections and not from the counter: a
+     * NOBITS section takes no room in the file, and the value of the counter
+     * after it is not the end of the block the compiler addresses.
+     */
+    __tls_start = ADDR(.tdata);
+    __tls_end = ADDR(.tbss) + SIZEOF(.tbss);
+
     .bss : {
         __bss_start = .;
         *(.bss .bss.*)

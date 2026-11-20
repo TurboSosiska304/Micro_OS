@@ -29,6 +29,7 @@ static long (*sys_strtol)(const char *, char **, int) = strtol;
 #include "kernel/kmm.h"
 #include "kernel/ksys.h"
 #include "kernel/log.h"
+#include "kernel/vfs.h"
 #include "mfs/mfs.h"
 #include "mfs/mfs_ram_device.h"
 #include "mfs/mfs_vfs.h"
@@ -728,6 +729,91 @@ static void test_numbers_match_the_system(void)
     teardown();
 }
 
+/*
+ * The property: chmod and chown from the library change the numbers the
+ * kernel reports, and the errors are the errors of POSIX. The library
+ * checks the width of the two numbers before the kernel is asked.
+ */
+static void test_permissions(void)
+{
+    struct vfs_stat info;
+    int fd;
+
+    ktest_begin("libc: chmod and chown change the mode and the owner");
+
+    setup();
+
+    fd = microos_open("/lib-mode.txt", MICROOS_O_WRONLY | MICROOS_O_CREAT | MICROOS_O_TRUNC);
+    KT_CHECK(fd >= 0);
+    KT_CHECK(microos_close(fd) == 0);
+
+    KT_CHECK_INT_EQ(microos_chmod("/lib-mode.txt", 0600), 0);
+    KT_CHECK_INT_EQ(microos_errno(), 0);
+
+    KT_CHECK_INT_EQ(microos_chown("/lib-mode.txt", 9), 0);
+    KT_CHECK_INT_EQ(ksys_stat("/lib-mode.txt", &info), 0);
+    KT_CHECK_INT_EQ(info.mode, 0600);
+    KT_CHECK_INT_EQ(info.owner, 9);
+
+    /* The mode is real: a file of 0400 cannot be opened to be written to. */
+    KT_CHECK_INT_EQ(microos_chmod("/lib-mode.txt", 0400), 0);
+    KT_CHECK_INT_EQ(microos_open("/lib-mode.txt", MICROOS_O_WRONLY), -1);
+    KT_CHECK_INT_EQ(microos_errno(), 1); /* EPERM */
+
+    /* The numbers a record of the filesystem cannot hold are refused here. */
+    KT_CHECK_INT_EQ(microos_chmod("/lib-mode.txt", 01000), -1);
+    KT_CHECK_INT_EQ(microos_errno(), 22); /* EINVAL */
+    KT_CHECK_INT_EQ(microos_chown("/lib-mode.txt", 0x8000u), -1);
+    KT_CHECK_INT_EQ(microos_errno(), 22);
+
+    /* And an object that is not there gives the error of POSIX. */
+    KT_CHECK_INT_EQ(microos_chmod("/nothing-here", 0644), -1);
+    KT_CHECK_INT_EQ(microos_errno(), 2); /* ENOENT */
+
+    teardown();
+}
+
+/*
+ * The property: execve of the library does not come back on success, and
+ * every refusal it does come back with is the code of POSIX - including the
+ * ENOSYS of the machine that cannot run a program at all, which is what the
+ * simulator says for a file of the format of the system.
+ */
+static void test_execve(void)
+{
+    static const char junk[] = "not a program of this system, honestly\n";
+    int fd;
+
+    ktest_begin("libc: execve reports the reason it did not run");
+
+    setup();
+
+    /* A file that is not there. */
+    KT_CHECK_INT_EQ(microos_execve("/no/such/program", NULL), -1);
+    KT_CHECK_INT_EQ(microos_errno(), 2); /* ENOENT */
+
+    /* A directory is not a program. */
+    KT_CHECK_INT_EQ(microos_execve("/", NULL), -1);
+    KT_CHECK_INT_EQ(microos_errno(), 21); /* EISDIR */
+
+    /* A file that is not an image of the format of the system. */
+    fd = microos_open("/lib-junk", MICROOS_O_WRONLY | MICROOS_O_CREAT | MICROOS_O_TRUNC);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK(microos_write(fd, junk, sizeof(junk) - 1) == (long)(sizeof(junk) - 1));
+        KT_CHECK(microos_close(fd) == 0);
+    }
+    KT_CHECK_INT_EQ(microos_chmod("/lib-junk", 0755), 0);
+    KT_CHECK_INT_EQ(microos_execve("/lib-junk", NULL), -1);
+    KT_CHECK_INT_EQ(microos_errno(), 22); /* EINVAL: no image, no MOX1 */
+
+    /* A NULL path is a mistake of the caller, caught before the kernel. */
+    KT_CHECK_INT_EQ(microos_execve(NULL, NULL), -1);
+    KT_CHECK_INT_EQ(microos_errno(), 22);
+
+    teardown();
+}
+
 void test_libc(void)
 {
     test_float_matches_the_system();
@@ -741,4 +827,6 @@ void test_libc(void)
     test_console();
     test_memory_keeps_the_data();
     test_calloc_is_empty();
+    test_permissions();
+    test_execve();
 }

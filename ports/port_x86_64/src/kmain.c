@@ -11,6 +11,12 @@
  * so and keeps breathing instead of stopping without a word: a kernel that
  * stays alive is the difference between "the tasks are not done yet" and
  * "the boot is broken".
+ *
+ * Between the banner and the init process the boot brings up a filesystem and
+ * runs a program out of it (see the section at the end of this file): this is
+ * the machine of the project that has the memory to place an image and the
+ * processor to jump into it, so a program of the phase is a program that
+ * really runs, out of a file, and not a figure of speech.
  */
 #include "port_x86_64.h"
 
@@ -18,12 +24,18 @@
 
 #include "kernel/board.h"
 #include "kernel/boot.h"
+#include "kernel/errno.h"
+#include "kernel/ksys.h"
 #include "kernel/log.h"
 #include "kernel/port.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
+#include "kernel/vfs.h"
 
 #include "kshell/kshell.h"
+
+#include "mfs/mfs.h"
+#include "mfs/mfs_vfs.h"
 
 /* The body of the shell task, in src/shell.c. */
 void port_x86_64_shell_run(void);
@@ -53,6 +65,150 @@ static void shell_task(void *arg)
     K_UNUSED(arg);
 
     port_x86_64_shell_run();
+}
+
+/* --- the filesystem and the program of the milestone --------------------- */
+
+/*
+ * The program of the phase is a file, and the boot reaches it the way any
+ * caller does: through the call. The image is built at the build time out of
+ * programs/hello.c and embedded in the kernel (see the CMakeLists of the
+ * port), because the kernel has to have the bytes before it has anywhere to
+ * put them; at the boot they are written to /bin/hello of a volume of the
+ * memory of the port, and then the boot asks the system for that file with
+ * execve.
+ *
+ * The shape is deliberate. A boot that read the image and jumped into it would
+ * prove the port and the parser, and nothing of the edge of the system: the
+ * stat of the file, the bit of execution in its mode, the read through the
+ * VFS, the memory of the kernel and the call itself are exactly what a program
+ * from /bin has to go through, and the line of the program on COM1 is the proof
+ * that all of it happened in that order.
+ */
+extern const k_u8_t _binary_hello_mox_start[];
+extern const k_u8_t _binary_hello_mox_end[];
+
+#define PROGRAM_DIR "/bin"
+#define PROGRAM_PATH "/bin/hello"
+
+/*
+ * A program is a file somebody may run, so it is created with the mode of a
+ * program and not with the 0644 of a file of data: without the three bits of
+ * execution the call answers EPERM, and an image that cannot be run proves
+ * nothing about the machine that was supposed to run it.
+ */
+#define PROGRAM_MODE 0755u
+
+/* The image of the program as the build of the kernel left it. */
+static k_size_t program_image_size(void)
+{
+    return (k_size_t)(_binary_hello_mox_end - _binary_hello_mox_start);
+}
+
+/*
+ * Write the image to the file. The file is created through the VFS and not
+ * through the filesystem: the adapter of MicroFS is the only place that knows
+ * which numbers of the filesystem mean what, and the boot is not that place.
+ */
+static bool program_install(void)
+{
+    struct vfs_file file;
+    k_u8_t priv[VFS_FILE_DATA_SIZE];
+    k_size_t size = program_image_size();
+    int rc;
+
+    rc = vfs_mkdir_p(PROGRAM_DIR);
+    if (rc != 0) {
+        kerror("x86-64: cannot make %s (%s)", PROGRAM_DIR, vfs_strerror(rc));
+        return false;
+    }
+
+    rc = vfs_open(PROGRAM_PATH, VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, priv);
+    if (rc != 0) {
+        kerror("x86-64: cannot create %s (%s)", PROGRAM_PATH, vfs_strerror(rc));
+        return false;
+    }
+
+    rc = vfs_write(&file, _binary_hello_mox_start, size);
+    (void)vfs_close(&file);
+
+    if (rc != (int)size) {
+        kerror("x86-64: %s took %d byte(s) of %u", PROGRAM_PATH, rc, (unsigned)size);
+        return false;
+    }
+
+    /* The mode is the second half of the file: a file of data is written and
+     * read, a program is written and executed, and the difference is here. */
+    rc = vfs_chmod(PROGRAM_PATH, PROGRAM_MODE);
+    if (rc != 0) {
+        kerror("x86-64: cannot make %s executable (%s)", PROGRAM_PATH, vfs_strerror(rc));
+        return false;
+    }
+
+    kinfo("x86-64: %s is written (%u bytes)", PROGRAM_PATH, (unsigned)size);
+
+    return true;
+}
+
+/*
+ * Run the file through the call. The call is the whole of the path: the stat,
+ * the check of the mode, the read through the VFS into the memory of the
+ * kernel, the parse of the image and the jump of the port. The boot does not
+ * repeat any of it.
+ *
+ * The call comes back only because this program ends with a ret and the port
+ * owns the exit; the kernel answers every return with 0, which says "the
+ * program ran and has finished". A program of the system never returns, and
+ * the call then never comes back at all.
+ */
+static void program_run(void)
+{
+    int rc;
+
+    kinfo("x86-64: running %s through the call", PROGRAM_PATH);
+    rc = ksys_execve(PROGRAM_PATH, NULL);
+
+    if (rc == 0) {
+        kinfo("x86-64: the program returned");
+        return;
+    }
+
+    if (rc == KERR_NOSYS) {
+        kerror("x86-64: this machine cannot run a program");
+        return;
+    }
+
+    /* The one refusal that is about the file and not about the medium: the
+     * call answered EPERM, so the mode of /bin/hello lost its `x` bits. */
+    if (rc == KERR_PERM) {
+        kerror("x86-64: %s is not executable", PROGRAM_PATH);
+        return;
+    }
+
+    kerror("x86-64: %s did not run (%s, %d)", PROGRAM_PATH, vfs_strerror(rc), rc);
+}
+
+/*
+ * The filesystem of the machine: a volume of the memory of the port, mounted
+ * at the root. The device is registered by port_x86_64_blockdev_init() before
+ * the kernel boots, and a volume that was never formatted is formatted here
+ * (mfs_vfs_mount does that; the RAM of a fresh machine reads as a blank
+ * medium, see blockdev_ram.c).
+ */
+static void filesystem_bring_up(void)
+{
+    int rc = mfs_vfs_mount("/", "ram0");
+
+    if (rc != 0) {
+        kerror("x86-64: cannot mount ram0 at / (%s), there is no /bin", mfs_strerror(rc));
+        return;
+    }
+
+    if (!program_install()) {
+        return;
+    }
+
+    program_run();
 }
 
 /*
@@ -93,6 +249,15 @@ void kmain(k_u64_t multiboot_info)
 
     kinfo("x86-64: the kernel is up, heap %u KB free of %u KB",
           (unsigned)(k_port_heap_free() / 1024), (unsigned)(k_port_heap_total() / 1024));
+
+    /*
+     * The filesystem and the program of the milestone, after the boot and
+     * before the tasks: at that point the machine is the boot context of the
+     * port and nothing depends on the scheduler yet. That is the moment a
+     * program can be entered without a task under it; the file it came from
+     * is on the volume for the shell to find later.
+     */
+    filesystem_bring_up();
 
     if (task_create("init", init_task, NULL, TASK_PRIO_DEFAULT) == NULL) {
         /*

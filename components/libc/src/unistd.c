@@ -17,6 +17,10 @@
  */
 static _Thread_local int g_errno;
 
+/* The widths a mode and a uid have in a record of a filesystem. */
+#define LIB_MODE_MASK 0777u
+#define LIB_UID_MAX 0x7FFFu
+
 /* The code of the last error. The numbers are the numbers of POSIX. */
 int microos_errno(void)
 {
@@ -307,4 +311,69 @@ void microos_exit(int code)
     for (;;) {
         microos_yield();
     }
+}
+
+/*
+ * The mode and the owner of a file. A number the record of the filesystem
+ * cannot hold is a mistake of the caller and is answered here, before the
+ * kernel is asked to cut it to fit: nine bits of a mode, fifteen of a uid.
+ */
+int microos_chmod(const char *path, unsigned mode)
+{
+    int rc;
+
+    if (path == NULL || (mode & ~LIB_MODE_MASK) != 0u) {
+        return fail(KERR_INVAL);
+    }
+
+    rc = ksys_chmod(path, (k_u32_t)mode);
+    if (rc < 0) {
+        return fail(rc);
+    }
+
+    g_errno = 0;
+
+    return 0;
+}
+
+int microos_chown(const char *path, unsigned owner)
+{
+    int rc;
+
+    if (path == NULL || (owner & ~LIB_UID_MAX) != 0u) {
+        return fail(KERR_INVAL);
+    }
+
+    rc = ksys_chown(path, (k_u32_t)owner);
+    if (rc < 0) {
+        return fail(rc);
+    }
+
+    g_errno = 0;
+
+    return 0;
+}
+
+/*
+ * The program becomes the caller: a call that enters it does not return. A
+ * machine without a process to exit into comes back with 0 when the program
+ * has finished, and that zero is the answer here too - the caller is the
+ * program again, and there is nothing to report.
+ */
+int microos_execve(const char *path, char *const argv[])
+{
+    int rc;
+
+    if (path == NULL) {
+        return fail(KERR_INVAL);
+    }
+
+    rc = ksys_execve(path, argv);
+    if (rc < 0) {
+        return fail(rc);
+    }
+
+    g_errno = 0;
+
+    return 0;
 }

@@ -3,7 +3,7 @@
 * Status: accepted (phase 1 in progress)
 * Date: 2026-10-21
 
-> Russian version: [0002-scheduler-substrate_ru.md](0002-scheduler-substrate_ru.md)
+> Russian version: [0002-scheduler-substrate_ru.md](../ru/adr/0002-scheduler-substrate_ru.md)
 
 ## Context
 

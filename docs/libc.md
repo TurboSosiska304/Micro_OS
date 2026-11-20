@@ -1,7 +1,7 @@
 # Micro OS — the C library
 
 The library of the system. Every function of it is a call of the ABI of the
-system calls, so a program of the board reaches the kernel the same way a
+system calls, so a program of the system reaches the kernel the same way a
 program of Linux does.
 
 The library is portable C11 and it knows nothing about the kernel: it knows
@@ -73,6 +73,9 @@ long microos_write(int fd, const void *buf, size_t count);
 long microos_lseek(int fd, long offset, int whence);
 int microos_unlink(const char *path);
 int microos_mkdir(const char *path);
+int microos_chmod(const char *path, unsigned mode);
+int microos_chown(const char *path, unsigned owner);
+int microos_execve(const char *path, char *const argv[]);
 ```
 
 The flags of the open are the numbers of POSIX: `MICROOS_O_RDONLY`,

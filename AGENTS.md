@@ -23,7 +23,7 @@ Three builds from one tree:
 Current state: phases 0–5 done, phase 6 (release) in progress; the boundary of
 the port was reworked (ADR 0004) and the kernel boots on a second machine, x86-64
 in QEMU. The platform roadmap is `docs/roadmap.md`, the kernel one is
-`docs/kernel-roadmap.md`.
+`docs/roadmap.md`.
 
 ## The rule that matters most
 
@@ -162,7 +162,7 @@ Changing it is an architectural change (see below).
 * `docs/architecture.md` — design, boot levels, locking model, resource budget.
 * `docs/phases/phase<N>.md` — what a phase delivered, which bugs it cost.
 * `docs/adr/` — architecture decision records; a significant change needs one.
-* `docs/hardware/stickc-plus2.md` — pinout and board quirks; read before
+* `docs/ports/esp32/hardware.md` — pinout and board quirks; read before
   writing a driver.
 * `docs/memory.md`, `docs/libc.md`, `docs/syscall-abi.md` — contracts worth
   not breaking.

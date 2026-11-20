@@ -2,7 +2,7 @@
 
 > Перевод на русский может отставать от английского оригинала: канонический текст — английский.
 
-> English version: [0003-wifi-driver.md](0003-wifi-driver.md)
+> English version: [0003-wifi-driver.md](../../adr/0003-wifi-driver.md)
 
 * Статус: принято
 * Дата: 2026-10-22

@@ -2,7 +2,7 @@
 
 > Перевод на русский может отставать от английского оригинала: канонический текст — английский.
 
-> English version: [0002-scheduler-substrate.md](0002-scheduler-substrate.md)
+> English version: [0002-scheduler-substrate.md](../../adr/0002-scheduler-substrate.md)
 
 * Статус: принято (фаза 1 в работе)
 * Дата: 2026-10-21

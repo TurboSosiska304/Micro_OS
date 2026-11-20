@@ -132,5 +132,7 @@ x86-smoke: x86-build
 	python3 tools/x86_smoke.py
 
 bundle: idf-check
-	. $(IDF_EXPORT) && idf.py -D IDF_TARGET=$(IDF_TARGET) build
-	tools/bundle.sh $(IDF_BUILD) dist
+	. $(IDF_EXPORT) && idf.py -D IDF_TARGET=$(IDF_TARGET) build && \
+		cmake -B $(X86_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release && \
+		cmake --build $(X86_BUILD) --target image && \
+		tools/bundle.sh $(IDF_BUILD) dist
