@@ -2,7 +2,7 @@
 
 > Перевод на русский может отставать от английского оригинала: канонический текст — английский.
 
-> English version: [memory.md](memory.md)
+> English version: [memory.md](../memory.md)
 
 ## 1. Общая схема
 

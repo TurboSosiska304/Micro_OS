@@ -46,11 +46,11 @@ Linux-подобное ядро для небольших машин: одно �
 
 Ядро грузится и на второй машине — x86-64 в QEMU, без операционной системы
 под ним (`make x86-smoke`): у ядра своя дорожная карта,
-[docs/kernel-roadmap.md](docs/kernel-roadmap.md). В фазе 6 готовы процесс
+[docs/roadmap.md](docs/roadmap.md). В фазе 6 готовы процесс
 релиза и облачная сборка; OTA при текущей раскладке флеша невозможна.
 
-Подробный план — в [docs/roadmap_ru.md](docs/roadmap_ru.md), архитектура — в
-[docs/architecture_ru.md](docs/architecture_ru.md).
+Подробный план — в [docs/roadmap_ru.md](docs/ru/roadmap_ru.md), архитектура — в
+[docs/architecture_ru.md](docs/ru/architecture_ru.md).
 
 ## Ключевая идея: переносимое ядро
 
@@ -266,7 +266,7 @@ saved network: home
 ```
 
 Решение о форме драйвера записано в
-[docs/adr/0003-wifi-driver_ru.md](docs/adr/0003-wifi-driver_ru.md).
+[docs/adr/0003-wifi-driver_ru.md](docs/ru/adr/0003-wifi-driver_ru.md).
 
 ### HTTP и часы
 

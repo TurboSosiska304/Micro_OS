@@ -1,6 +1,6 @@
 # MicroFS (MFS) filesystem
 
-> Russian version: [memory_ru.md](memory_ru.md)
+> Russian version: [memory_ru.md](ru/memory_ru.md)
 
 ## 1. Overview
 

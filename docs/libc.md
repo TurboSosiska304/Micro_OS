@@ -1,7 +1,7 @@
 # Micro OS — the C library
 
 The library of the system. Every function of it is a call of the ABI of the
-system calls, so a program of the board reaches the kernel the same way a
+system calls, so a program of the system reaches the kernel the same way a
 program of Linux does.
 
 The library is portable C11 and it knows nothing about the kernel: it knows

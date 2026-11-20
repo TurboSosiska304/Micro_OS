@@ -1,266 +1,99 @@
 # Micro OS roadmap
 
-> Russian version: [roadmap_ru.md](roadmap_ru.md)
+> Russian version: [ru/roadmap_ru.md](ru/roadmap_ru.md) (it may lag).
 
-> This is the roadmap of the **platform**: the board, the drivers, the radio,
-> the firmware. The kernel has its own: [kernel-roadmap.md](kernel-roadmap.md).
+This is the plan of **the kernel**: one portable core, the contract of the
+port, the programs, the protection, the machines it runs on, and the quality
+of all of it. The plan of the board (the ESP32 port) is in
+[ports/esp32/roadmap.md](ports/esp32/roadmap.md); the board is one port of
+several, and its build is `make idf-build`.
 
-Every phase ends with a working state on the device and green tests.
+## The builds of the kernel
 
-## Phase 0 - Skeleton (done)
+The same sources are built three ways; each one is a check of the portability
+as much as a product:
 
-* [x] Repository, directory layout, licence, commit rules
-* [x] Dual mode build: ESP-IDF (device) and host (simulator + tests)
-* [x] Portable kernel: types, compile time config, levelled log with a ring
-      buffer, panic handler, version and build identification
-* [x] Boot sequence with ordered subsystem initialisation and error reporting,
-      mirroring the Linux initcall model
-* [x] Board description (SoC, flash, PSRAM, display, IMU, RTC, power)
-* [x] ESP32 port (UART output, time source, critical sections) and a host port
-* [x] Unit tests (own framework, no external dependencies)
-* [x] Documentation: README, CONTRIBUTING, architecture, hardware notes, ADRs
+| Build | What it produces | Command | Check |
+|---|---|---|---|
+| host | the unit tests and the simulator, as a Linux process | `make test`, `make sim` | `make ci`, `make smoke` |
+| x86-64 | bare metal in QEMU: its own loader, no libc under the kernel | `make x86-build` | `make x86-smoke` |
+| ESP32 | the firmware of the board (ESP-IDF v5.3) | `make idf-build` | `tools/device-test.sh` |
 
-**Deliberately out of scope:** display and button initialisation require ESP-IDF.
+A port that does not fit one of them yet is a directory under `ports/`; the
+contract of the port is versioned in `kernel/port/info.h` and checked at the
+boot. The plan of the board (the ESP32 port) lives with the port, in
+[ports/esp32/roadmap.md](ports/esp32/roadmap.md) - it is not part of this
+document.
 
-## Phase 1 - Tasks and scheduler
+The reports of the old numbered phases are in [phases/](phases/). They were
+written when the project was an operating system for one board; the numbers
+0-9 map onto the sections below, and the reports stay as history.
 
-* [x] `struct task`, states, priorities, PID allocation
-* [x] Context switching (FreeRTOS substrate), `k_sched_yield`, `k_sched_sleep_ms`
-* [x] Run queues per priority level, sleep queue, 1 ms tick
-* [x] `init` as PID 1, spawning "user" tasks
-* [x] Tests: task lifecycle, priorities, ready queue, sleeping, ticking
-* [x] Time slice (SCHED_RR style), configurable quantum
-* [x] Parent/child relations, `task_wait()`, `task_wait_any()`
-* [x] File descriptor table and working directory per task
-* [x] `/proc/<pid>` (belongs to phase 2)
-* [ ] A real `fork()` — a copy of the address space (needs our own context
-      switch, see ADR 0002). Until then `fork()` is a placeholder: the child
-      shares the memory of the parent and re-runs its program from the start
-      (see "Known limitations" in the README), to be fixed right after the
-      first release
+## K0 - Portable core (done)
 
-## Phase 1F - The hardware doctor (done)
+* [x] Boot levels, log with a ring buffer, panic, version, build identity
+* [x] Task API and scheduler on the substrate of the port, PIDs, parents
+* [x] The syscall ABI (`kernel/ksys.h`), frozen numbers, one door
+* [x] VFS with mount points, `/proc`, `/dev`, a descriptor that remembers its access
+* [x] `kmm`: slabs for the small blocks, the heap of the port for the large ones
+* [x] MicroFS as a consumer of `kernel/blockdev.h`, not of a flash chip
+* [x] The libc subset over the ABI
 
-The init process walks through the registered modules and checks them one by
-one. The result is printed as a report: `ok`, `degraded`, `fail` or `skip`.
+## K1 - The contract of the port (done)
 
-* [x] Module registry in the kernel (`kernel/kmod`) with init and health check
-* [x] Display (ST7789v2, framebuffer in PSRAM, test pattern)
-* [x] Buttons A, B and C
-* [x] Buzzer (LEDC, 2 kHz)
-* [x] Red LED and IR emitter (shared pin G19)
-* [x] IMU (MPU6886 on I2C)
-* [x] RTC (BM8563 on I2C)
-* [x] Battery voltage (ADC on G38)
-* [x] WiFi radio
-* [x] PSRAM and flash
-* [x] A `doctor` command that repeats the check at any time (as a comand "modules")
+* [x] One header per subject: console, time, memory, locking, power, store,
+      sockets, programs; version 1.3, checked at the boot
+* [x] Doors for the upper layers: `k_sysinfo`, `k_console`, `k_kv`, `k_net`,
+      `k_clock`, `k_render`, `k_mutex`
+* [x] `[layers]` and `[port]` in `make integrity`: a leak fails the build
+* [x] `ports/port_null` and a probe that links the whole portable system
 
-## Phase 2 - VFS, MicroFS, shell (done)
+## K2 - The host machine (done)
 
-* [x] Shell: a portable command interpreter with a command registry
-* [x] Built in commands: `help`, `uname`, `uptime`, `ps`, `echo`, `sleep`,
-      `dmesg`, `free`, `clear`, `reboot`, `modules`, `memtest`, `i2c`
-* [x] `memtest`: the size of the internal heap and of the PSRAM, and the
-      speed of both (fill, checksum, copy) with a verification of the data
-* [x] `mfetch`: the report about the system with the logo of `logos.md`
-      (the analog of fastfetch, the logo on the left and the report on
-      the right)
-* [x] The console of the ESP32 port (the UART driver makes the input work)
-* [x] MicroFS: the filesystem of the board, as described in
-      [docs/memory.md](memory.md): the DATA, META and INFO sections, the
-      addresses of the sections are computed from the size of the volume
-* [x] The VFS: the tree of the directories, the filesystems are mounted at
-      a point of it
-* [x] The file commands: `ls`, `cat`, `write`, `mkdir`, `rm`, `cd`, `pwd`,
-      `df`, `mount`
-* [x] The volume of the flash: the partition of 5.75 MB, the data of the
-      user survives the restarts
-* [x] `/proc`: `version`, `uptime`, `meminfo`, `tasks`, `modules`
-* [x] `/dev`: `tty0` (the console) and `null`
-* [x] The console on the display: the output of the shell is mirrored to the
-      screen of the board, the font is 5x7
-* [x] The help is short: one line per command, `help <command>` tells more
-* [x] The log of the boot goes to `/log/start.log`, the console stays readable
-* [x] The terminal echoes the input, so that the dialogue is readable in the
-      interactive console
-* [x] The image of the display: the ST7789V2 has 240x320 of memory, the
-      glass of the 1.14" panel shows only a part of it. The offset can be
-      changed while the board runs: `display <x> <y>`
-* [x] The terminal repeats every character while it is typed, the backspace
-      erases it
-* [x] `/proc/self` and a directory per task with a `status` file
-* [n] Command history, tab completion (not needed for now)
+* [x] The stubs of a board for the host: the doctor, the commands, the clock,
+      a renderer that draws into a file
+* [x] `make sim` boots the whole system on a volume of a file, then the shell
+* [x] `make smoke` drives it and checks the transcript
+* [x] A second bare-metal machine: x86-64 in QEMU (`make x86-smoke`)
 
-## Phase 3 - Memory and the syscall ABI (done)
+## K3 - Programs (in progress)
 
-* [x] The ABI of the system calls: the numbers are a contract, they are
-      written down in [docs/syscall-abi.md](syscall-abi.md) and covered by
-      a test
-* [x] The calls of the files: open, read, write, close, stat, lseek,
-      unlink, mkdir, readdir, getpid, getcwd, ioctl, yield, sleep, uptime
-* [x] The tests work with a corpus of real numbers: the same data has to
-      give the same result no matter how it is broken into pieces
-* [x] The process part of the ABI: fork, getppid, waitpid. The memory
-      of the parent is not copied, the tasks share it, like CLONE_VM.
-      The library gives fork() the shape of POSIX - 0 in the child, the
-      number of the child in the parent - but the child re-runs the
-      program of the parent from its start (a real fork waits for the
-      first release)
-* [x] The libc over the ABI: printf, open, read, write. The library is
-      checked against the library of the system with the real numbers of the
-      corpus
-* [x] `kmm_alloc`/`kmm_free`, allocation from the PSRAM, the slabs for the
-      small blocks
-* [x] The memory of the programs: malloc, free, realloc and calloc over the
-      ABI
-* [x] System call table, uniform ABI
-* [x] Minimal libc over the ABI: `open/read/write/close/printf`. The memory
-      (`malloc`) is still missing
-* [x] Permission model and "file descriptors": a descriptor remembers the
-      access it was opened with, and the kernel refuses to read a write-only
-      descriptor or to write a read-only one with `EBADF`. The rule lives at
-      the edge of the system, so every filesystem answers the same way.
-      Per-file owners and mode bits wait for the first release - there is a
-      single user today (see "After the first release")
+* [x] The format of a program: MOX1, a flat image linked for the window of the
+      port; the parser checks the header against the image
+* [x] The contract of the port for programs (1.3): a machine that cannot run a
+      program says so, x86-64 names a window of 32 MiB
+* [x] `tools/mkprog.sh`: an image out of an object
+* [x] Mode and owner in an inode (9 + 15 bits in the flags), no format change
+* [x] Every argument checked at the edge of the syscall table
+* [ ] The mode enforced through the VFS at `open` and `stat`
+* [ ] `execve`, `chmod` and `chown` in the syscall table, and in the libc
+* [ ] A first program in `/bin`, and the jump of the x86-64 port into it
+* [ ] `PATH` for the shell
 
-## Phase 4 - Drivers (done)
+## K4 - Protection (in progress)
 
-* [x] `drv_framebuffer`: ST7789v2, 135x240, rotation, text and graphics output
-      — the framebuffer is the one of `drv_display`: the picture turns in
-      software (the panel keeps its portrait, so the offset of the visible
-      area never changes), the graphics are `pixel`, `fill_rect`, `rect` and
-      `line`, and the shell has `display rotate <0|90|180|270>` and
-      `display draw [seconds]` — a test picture for the eyes
-* [x] `drv_input`: A/B/C buttons, debounce, input events — the command
-      `input [seconds]` and the file `/dev/input`
-* [x] `drv_buzzer`: the passive buzzer on G2, a `beep` command for the user
-* [x] `drv_led`: the red LED on G19 (shared with the IR emitter), an `led` command
-* [x] Two shows for a person on the led: `led heart` makes the light
-      breathe, `led dance` makes it dance
-* [x] `drv_battery`: the charge left in percent, from the curve of one
-      cell — the command `battery`
-* [x] `drv_imu` (MPU6886): the accelerometer, with its raw values in
-      the report of the doctor
-* [x] `drv_rtc` (BM8563): the date and the time of the clock — the
-      command `date` and `date set <YYYY-MM-DD> <HH:MM:SS>`, and the
-      verdict of the doctor from the LV flag and the ranges of the
-      fields (a dead battery is seen at once)
-* [x] `drv_wifi`: the station, the scan, the network of the last time is
-      remembered in the NVS (see [ADR 0003](adr/0003-wifi-driver.md))
-* [x] Console on TFT and UART at the same time
+* [x] Mode bits and an owner in the file, set by `chmod`/`chown`
+* [x] The arguments of a system call checked at the edge
+* [ ] The permissions enforced at the edge, for the one user of the system
+* [ ] A real `fork()`: an address space per task, copy on write - the
+      milestone of the x86-64 paging (ADR 0002, ADR 0005)
 
-## The boundary work (done)
+## K5 - A processor with an MMU (planned)
 
-Between the drivers and the services the tree was taken apart along the
-line the kernel must not cross: the contract of the port is split by
-subject and versioned, the backends (the flash, the NVS, the sockets, the
-renderer, the radio) left the portable components, and the checks that
-hold the line were written. The kernel also got a second bare-metal
-machine: x86-64 in QEMU, with its own loader.
+* [ ] The paging of the x86-64 port: page tables per task, the higher half,
+      user and kernel pages, a fault handler that means something
+* [ ] A port for a real ARM with an MMU: the same contract, a second `arch/`
+* [ ] `KERNEL_NOMMU` becomes 0 and the concessions become features
 
-* [x] `kernel/port/*.h` by subject, `KERNEL_PORT_API_VERSION` 1.2, checked
-      at the boot; ADR 0004
-* [x] the upper layers ask the kernel (`k_sysinfo`, `k_console`, `k_mutex`,
-      `k_kv`, `k_socket`, `k_render`, `k_clock`), never the port
-* [x] `kernel/blockdev.h`: MicroFS asks a device, not a partition
-* [x] the checks `[layers]`, `[port]`, `[budget]`, and `ports/port_null`
-* [x] the simulator boots the whole portable system on a volume of a file
-* [x] the x86-64 port: loader, IDT/PIT, context switch, shell on COM1
-      (`make x86-smoke`)
+## K6 - The filesystem and the network (planned)
 
-The kernel side of it is in [kernel-roadmap.md](kernel-roadmap.md).
+* [ ] A second block device and a second filesystem behind the VFS
+* [ ] Timestamps of a file, fed by the clock of the kernel
+* [ ] Protocols above the sockets: MQTT, a page of the state over HTTP
 
-## Phase 5 - Services and applications
+## K7 - Quality (planned)
 
-* [x] Init process: starting daemons from `/etc/init.d` — a script is a list
-      of shell commands, one per line, and every script runs in a task of its
-      own
-* [x] Configuration from `/etc`, persisted in NVS — a file of `/etc` is a
-      key of the configuration, the NVS keeps the copy that survives a
-      restart and a formatted volume, and `config sync` saves the edits
-* [x] WiFi: the station joins the network of the last time on its own
-* [x] Telnet on port 23: the shell over the air, beside the UART and the
-      display — no authentication, the local network only, and
-      `telnet off` closes it
-* [x] HTTP client, NTP based on the RTC — `http get <url>` prints the status
-      and the body of the answer, `ntp [server]` takes the time from the
-      server and writes it into the RTC (the time is UTC)
-* [n] Applications: sensor logger, IR remote, clock, weather station — not in
-      this tree: a board with 8 MB of flash does not carry programs nobody asked
-      for, and they would be a repository of their own
-
-## Phase 6 - Release
-
-### The release of a version
-
-The release is a checklist of its own, and every step is green today:
-
-1. the version of the kernel is `KERNEL_VERSION_*` in
-   `components/kernel/include/kernel/config.h`;
-2. `make ci`, `make test-tsan`, `make x86-smoke`, `make idf-build` and
-   `make bundle` are green on the machine of
-   the release;
-3. the tag `vX.Y.Z` is pushed — a dash instead of the dot before the number
-   of the candidate (`vX.Y.Z-pre`) makes a pre-release;
-4. Actions repeat the tests, build the firmware and check the version of the
-   kernel against the tag (`--expect-version`);
-5. the release carries `dist/` — the binaries, their sums and `flash.sh` —
-   and the notes of the commits;
-6. the bundle of the release is flashed onto the board once, and the self
-   test and the doctor report are read.
-
-* [x] Autobuild of the release candidate (GitHub Actions): the firmware and
-      the integrity check (the workflows of the repository live on
-      `mainline`)
-* [x] Release process, tags, changelog: a tag `v*` runs the tests, builds
-      the firmware in Actions, checks the version of the kernel against the
-      tag and makes the release with the bundle and the notes about the
-      commits
-* [x] The bundle: `make bundle` collects the binaries, their sums and
-      `flash.sh` into `dist/`, and the integrity check reads the headers,
-      the partition table and the sums of the images
-
-### Not in the first release
-
-* [n] OTA updates (`app0`/`app1`), rollback after a failed boot — no space
-      in the flash for a second image, the partition table has to change ##Not feasible!!!!
-
-## Phase 7 - Programs and protection (in progress)
-
-See [ADR 0005](adr/0005-programs-and-protection.md) for the shape: a program
-of our own format, `execve` as a duty of the port, mode bits inside the
-inode flags, and `fork()` with its own address space left to the paging of
-the x86-64 port.
-
-* [ ] `execve` and a format of the programs: the loader, the first program
-      in `/bin`, `PATH`
-* [ ] per-file permissions: the mode bits and the owners in MicroFS
-* [ ] `fork()` with an address space of its own: our own context switch on
-      top of FreeRTOS (ADR 0002)
-* [ ] the syscall table as the only door between a program and the kernel:
-      every argument checked at the edge
-* [ ] a port for a processor **with an MMU** (the plan is a real ARM): the
-      concessions of the current kernel - the placeholder `fork()`, the shared
-      address space, the logical user/kernel boundary - live behind one compile
-      time flag (`KERNEL_NOMMU` in `kernel/config.h`), so the MMU port turns the
-      flag off and they become real features instead of a second kernel
-
-## Phase 8 - The network and the updates (planned)
-
-* [ ] NTP at the boot and a time zone in `/etc` (the clock of the board is
-      UTC today)
-* [ ] an HTTP server: the report of `mfetch` and the settings as a page
-* [ ] MQTT client for the sensors
-* [ ] OTA: two application slots and a rollback after a failed boot, once
-      the flash is repartitioned
-
-## Phase 9 - The wearable (planned)
-
-* [ ] RTC alarm: the wake of the board from deep sleep — the alarm
-      registers of the BM8563 and the EXT1 input of the ESP32
-* [ ] microphone (SPM1423, I2S) and `drv_mic` — a simple sound/noise detector
-* [ ] `drv_ir`: transmit and receive over the pin G19 it shares with the red
-      LED (the driver does not exist yet)
-* [ ] `factory reset` and the reset of the settings
-* [ ] enclosure/display modes: "clock", "remote", "logger"
+* [ ] The races of the host port under TSan in `make ci` (the detector is a
+      target of its own today)
+* [ ] A fuzz of the syscall ABI and of the parsers of the filesystem
+* [ ] The budget of the kernel checked at every release (the image, the SRAM)

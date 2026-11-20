@@ -1,6 +1,6 @@
 # M5Stack StickC Plus2 hardware
 
-> Russian version: [stickc-plus2_ru.md](stickc-plus2_ru.md)
+> Russian version: [../../ru/ports/esp32/hardware_ru.md](../../ru/ports/esp32/hardware_ru.md)
 
 Source: the official M5Stack documentation (SKU **K016-P2**).
 Check everything below before writing a driver: the board has no PMIC, an unusual

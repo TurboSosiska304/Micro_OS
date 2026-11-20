@@ -1,6 +1,6 @@
 # Micro OS architecture
 
-> Russian version: [architecture_ru.md](architecture_ru.md)
+> Russian version: [architecture_ru.md](ru/architecture_ru.md)
 
 ## 1. Overview
 
@@ -86,7 +86,7 @@ MMU: the separation of user and kernel space is logical, system calls are
 ordinary function calls with a uniform ABI, and the boundary is kept by
 discipline. The x86-64 port has an MMU and does not use it yet - the identity
 map of its loader is the first step, and the address spaces of the tasks are
-the next one (see `docs/kernel-roadmap.md`).
+the next one (see `docs/roadmap.md`).
 
 That is a property of the current port, not the shape of the kernel: everything
 the kernel concedes to a board without an MMU sits behind one compile time flag,
@@ -226,7 +226,7 @@ The drivers are written: `drv_display` (ST7789v2, the panel and the turn of
 its picture), `drv_input` (A/B/C), `drv_buzzer`, `drv_imu` (MPU6886),
 `drv_rtc` (BM8563), `drv_mic` (SPM1423), `drv_battery`. The pinout and the
 quirks are documented in
-[docs/hardware/stickc-plus2.md](hardware/stickc-plus2.md).
+[docs/ports/esp32/hardware.md](ports/esp32/hardware.md).
 
 The WiFi driver is built like the kernel itself: a portable core
 (`components/wifi`) that owns the state of the station and a radio
