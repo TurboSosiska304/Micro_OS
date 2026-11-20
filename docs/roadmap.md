@@ -100,7 +100,8 @@ written when the project was an operating system for one board; the numbers
 
 * [ ] A second block device and a second filesystem behind the VFS
 * [ ] Timestamps of a file, fed by the clock of the kernel
-* [ ] Protocols above the sockets: MQTT, a page of the state over HTTP
+* [x] A page of the state over HTTP: `httpd` on the sockets, `/` and `/health`
+* [ ] MQTT over the sockets
 
 ## K7 - Quality (in progress)
 

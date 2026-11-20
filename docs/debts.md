@@ -73,7 +73,8 @@ the row moves to the release notes of the phase that did it.
 | No second block device and no second filesystem behind the VFS. | `components/`, `components/kernel/include/kernel/blockdev.h` | open | A second consumer of `kernel/blockdev.h` and a mount that is tested next to MicroFS. |
 | No `fsck` and no journal: a power cut costs 4 KB, and a damaged record is not repaired. | `docs/memory.md` section 8, `components/mfs` | open | A checker over the META section, or a journal, or an explicit "no" in the contract of the volume. |
 | The record capacity of a volume is a constant of the mount (256, `MFS_MOUNT_RECORDS`); the formatter cannot size the table from the free space, and a volume cannot ask for more records later. | `components/mfs/src/mfs_vfs_mount.c`, `components/mfs/src/mfs.c` | open | Compute the count from the volume at format time, and a documented way to grow the table (or a refusal that says so). |
-| No HTTP server and no MQTT: the tree has an HTTP client, NTP and telnet, and nothing that serves a page of the state. | `components/net`, `components/telnet` | open | A server over `k_server_listen()` and a client of MQTT over the sockets. |
+| No MQTT: the tree has an HTTP client and a server, NTP and telnet, and no client of the broker. | `components/net` | open | A client of MQTT over the sockets. |
+| The HTTP page is not started by the boot and the `400` path has no test: the command `httpd [port|off]` is manual, and a close with an unread tail can reset the loopback. | `components/net/src/net_http_server.c` | open | A decision of the platform (init script or policy) and a drain before the close. |
 | No TLS, no IPv6 and no raw sockets. | `kernel/port/net.h`, `docs/architecture.md` section 7 | decision | None for the board on the network of its owner; revisit when a public network is a requirement. |
 
 ## K7 - Quality
