@@ -21,6 +21,13 @@ BUILD_DIR="${1:-$ROOT/build}"
 OUT_DIR="${2:-$ROOT/dist}"
 STATIC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bundle"
 
+# The stage of the x86-64 bundle is another working directory for a moment,
+# so the folder of the bundle has to be absolute before the script gets there.
+case "$OUT_DIR" in
+    /*) ;;
+    *) OUT_DIR="$ROOT/$OUT_DIR" ;;
+esac
+
 cd "$ROOT"
 
 # The files of the build and the names they get in the bundle.

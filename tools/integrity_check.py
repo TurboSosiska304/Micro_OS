@@ -402,11 +402,18 @@ def check_bundle(root: str, report: Report) -> dict:
             digest, name = parts[0].lower(), parts[1].strip().lstrip("*")
             sums[name] = digest
 
+        # The single image of the board is a binary of the bundle too, and its
+        # name carries the version: the folder says which one is expected.
+        images = {
+            os.path.basename(path) for path in glob.glob(os.path.join(dist, "MicroOS-*.bin"))
+        }
+        expected = set(BUNDLE_BINARIES) | images
+
         report.add(
             group,
             "checksums.txt covers every binary",
-            set(sums) == set(BUNDLE_BINARIES),
-            f"expected {sorted(BUNDLE_BINARIES)}, got {sorted(sums)}",
+            set(sums) == expected,
+            f"expected {sorted(expected)}, got {sorted(sums)}",
         )
 
         for name, expected in sums.items():
