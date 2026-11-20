@@ -24,8 +24,9 @@ set(MICRO_OS_DRIVERS_SRCS
 idf_component_register(
     SRCS ${MICRO_OS_DRIVERS_SRCS}
     INCLUDE_DIRS "include"
-    REQUIRES kernel font kshell devfs freertos wifi spi_flash esp_psram esp_driver_gpio esp_driver_i2c driver esp_driver_spi esp_driver_ledc esp_adc esp_timer
-             esp_wifi esp_netif esp_event nvs_flash
+    REQUIRES kernel font kshell devfs freertos wifi spi_flash esp_psram
+             esp_driver_gpio esp_driver_i2c driver esp_driver_spi esp_driver_ledc
+             esp_adc esp_driver_i2s esp_timer esp_wifi esp_netif esp_event nvs_flash
 )
 
     # The discipline of the host build: the sources of the project are
