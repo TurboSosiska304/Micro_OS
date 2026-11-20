@@ -1,13 +1,17 @@
 /*
- * Micro OS — the commands of the shell that work with the files.
+ * Micro OS — the commands of the shell that work with the files: the tree, the
+ * content, the mode and the owner, and the file that becomes a program.
  */
 #include "kshell/kshell.h"
 
 #include <stdio.h>
 #include <string.h>
 
+#include "kernel/errno.h"
+#include "kernel/ksys.h"
 #include "kernel/task.h"
 #include "kernel/vfs.h"
+#include "libc/stdlib.h"
 #include "libc/unistd.h"
 
 #define SHELL_MAX_ENTRIES 64
@@ -422,6 +426,172 @@ static int cmd_mount(int argc, char **argv)
     return KSHELL_OK;
 }
 
+/* --- the mode, the owner and the programs --- */
+
+/*
+ * A number of a command line, in the base the command speaks. The whole text
+ * has to be the number: "0644x" is not a mode that was cut to 0644, and a
+ * number above the limit is refused instead of wrapped.
+ */
+static bool shell_number(const char *text, int base, unsigned long limit, unsigned long *out)
+{
+    char *end = NULL;
+    unsigned long value = microos_strtoul(text, &end, base);
+
+    if (end == NULL || end == text || *end != '\0' || value > limit) {
+        return false;
+    }
+
+    *out = value;
+
+    return true;
+}
+
+/*
+ * The words of the shell for a call that refused a mode or an owner. The
+ * library gives the number of POSIX; the person at the console wants a
+ * sentence, and the invalid argument needs its own, because the number does
+ * not say which argument was wrong.
+ */
+static const char *attr_error_text(int code, const char *invalid)
+{
+    switch (code) {
+    case -KERR_PERM:
+        return "not permitted";
+    case -KERR_NOENT:
+        return "no such file";
+    case -KERR_INVAL:
+        return invalid;
+    default:
+        return microos_strerror(code);
+    }
+}
+
+/*
+ * The words for a program that did not run. Every reason of the call has a
+ * face of its own: "function not implemented" would hide that this machine
+ * has no window of programs, which is the answer of the board.
+ */
+static const char *exec_error_text(int code)
+{
+    if (code == -KERR_NOSYS) {
+        return "this machine cannot run a program";
+    }
+
+    if (code == -KERR_PERM) {
+        return "not permitted: the file has no execute bit";
+    }
+
+    if (code == -KERR_NOMEM) {
+        return "not enough memory for the image";
+    }
+
+    return attr_error_text(code, "not a MOX1 image of this system");
+}
+
+static int cmd_chmod(int argc, char **argv)
+{
+    char path[SHELL_PATH_MAX];
+    unsigned long mode = 0;
+    int rc;
+
+    if (argc != 3) {
+        kshell_printf("usage: chmod <mode> <path>\n");
+        return KSHELL_USAGE;
+    }
+
+    if (!shell_number(argv[1], 8, KSYS_MODE_MASK, &mode)) {
+        kshell_printf("chmod: %s: not an octal mode (000..777)\n", argv[1]);
+        return KSHELL_ERROR;
+    }
+
+    if (!shell_resolve(argv[2], path, sizeof(path))) {
+        return path_too_long("chmod");
+    }
+
+    rc = microos_chmod(path, (unsigned)mode);
+    if (rc != 0) {
+        kshell_printf("chmod: %s: %s\n", path,
+                      attr_error_text(microos_errno(), "000 is not a mode the filesystem keeps"));
+        return KSHELL_ERROR;
+    }
+
+    return KSHELL_OK;
+}
+
+static int cmd_chown(int argc, char **argv)
+{
+    char path[SHELL_PATH_MAX];
+    unsigned long owner = 0;
+    int rc;
+
+    if (argc != 3) {
+        kshell_printf("usage: chown <uid> <path>\n");
+        return KSHELL_USAGE;
+    }
+
+    if (!shell_number(argv[1], 10, KSYS_UID_MAX, &owner)) {
+        kshell_printf("chown: %s: a uid is 0..%u\n", argv[1], (unsigned)KSYS_UID_MAX);
+        return KSHELL_ERROR;
+    }
+
+    if (!shell_resolve(argv[2], path, sizeof(path))) {
+        return path_too_long("chown");
+    }
+
+    rc = microos_chown(path, (unsigned)owner);
+    if (rc != 0) {
+        kshell_printf("chown: %s: %s\n", path,
+                      attr_error_text(microos_errno(), "a uid is 0..32767"));
+        return KSHELL_ERROR;
+    }
+
+    return KSHELL_OK;
+}
+
+static int cmd_exec(int argc, char **argv)
+{
+    char path[SHELL_PATH_MAX];
+    /*
+     * The vector is built on the stack of the shell: the line it points into
+     * is a buffer of the shell as well, and a program of this system does not
+     * read its arguments yet. The extra place is the null terminator.
+     */
+    char *args[KSHELL_MAX_ARGS + 1];
+    int i;
+    int rc;
+
+    if (argc < 2) {
+        kshell_printf("usage: exec <program> [arguments...]\n");
+        return KSHELL_USAGE;
+    }
+
+    if (!shell_resolve(argv[1], path, sizeof(path))) {
+        return path_too_long("exec");
+    }
+
+    /*
+     * argv[0] is the name that was typed, as in Linux, and the rest of the
+     * line follows it. The line is already cut at KSHELL_MAX_ARGS words, so
+     * the vector has its terminator inside the array.
+     */
+    for (i = 1; i < argc; i++) {
+        args[i - 1] = argv[i];
+    }
+    args[argc - 1] = NULL;
+
+    rc = microos_execve(path, args);
+    if (rc == 0) {
+        /* A program that returned: the machine has no process to exit into. */
+        kshell_printf("the program has finished\n");
+        return KSHELL_OK;
+    }
+
+    kshell_printf("exec: %s: %s\n", path, exec_error_text(microos_errno()));
+
+    return KSHELL_ERROR;
+}
+
 int kshell_register_files(void)
 {
     int rc = 0;
@@ -435,6 +605,9 @@ int kshell_register_files(void)
     rc |= kshell_register("rm", "remove a file", cmd_rm);
     rc |= kshell_register("df", "the usage of the filesystem", cmd_df);
     rc |= kshell_register("mount", "the mounted filesystems", cmd_mount);
+    rc |= kshell_register("chmod", "change the mode of a file", cmd_chmod);
+    rc |= kshell_register("chown", "change the owner of a file", cmd_chown);
+    rc |= kshell_register("exec", "run a program: exec <path> [args...]", cmd_exec);
 
     return rc;
 }

@@ -80,8 +80,9 @@ The checks of the board are in [its port](docs/ports/esp32/README.md).
   COM1 of a PC, with a copy on a screen when the machine has one.
 
 The shell speaks a small subset of Linux: `ls`, `cat`, `write`, `mkdir`, `rm`,
-`df`, `mount`, `mkfs`, `ps`, `free`, `dmesg`, `uname`, `uptime`, `help`,
-`echo`, `sleep`, `clear`, `reboot`, and the commands the port registers.
+`df`, `mount`, `mkfs`, `chmod`, `chown`, `exec`, `ps`, `free`, `dmesg`,
+`uname`, `uptime`, `help`, `echo`, `sleep`, `clear`, `reboot`, and the
+commands the port registers.
 
 ## Repository layout
 
