@@ -4,7 +4,10 @@
 #include <string.h>
 
 #include "kernel/net.h"
+#include "kshell/kshell.h"
 #include "net/http.h"
+#include "net/net.h"
+#include "net/net_http.h"
 #include "net/ntp.h"
 
 /* --- the transport that replays a canned answer of a server --- */
@@ -274,8 +277,114 @@ static void test_loopback(void)
 
 void test_net(void)
 {
+    static const struct {
+        const char *request;
+        const char *expect;
+    } cases[] = {
+        {"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n", "200 OK"},
+        {"GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n", "200 OK"},
+        {"GET /nope HTTP/1.1\r\nHost: localhost\r\n\r\n", "404 Not Found"},
+        {"POST / HTTP/1.1\r\nHost: localhost\r\n\r\n", "405 Method Not Allowed"},
+    };
+    char answer[1024];
+    k_size_t i;
+
     test_url();
     test_get();
     test_ntp();
     test_loopback();
+
+    /*
+     * The server of the page of the state, over the loopback of the port and
+     * for real: the test is the client of its own board. The port is fixed and
+     * SO_REUSEADDR is the business of the port, so a session of the run before
+     * does not stand in the way.
+     */
+    ktest_begin("http: the server answers the page of the state, health and the refusals");
+
+    KT_CHECK_INT_EQ(net_http_server_start(18080), 0);
+    KT_CHECK(net_http_server_running());
+
+    for (i = 0; i < K_ARRAY_SIZE(cases); i++) {
+        k_socket_t *client = k_socket_connect("127.0.0.1", 18080, 2000);
+        k_size_t used = 0;
+
+        KT_CHECK(client != NULL);
+        if (client == NULL) {
+            continue;
+        }
+
+        KT_CHECK_INT_EQ(k_socket_send(client, cases[i].request, strlen(cases[i].request), true),
+                        (int)strlen(cases[i].request));
+
+        /* The answer ends with the close of the session: that is what
+         * `Connection: close` promises and what the client relies on. */
+        while (used < sizeof(answer) - 1) {
+            int n = k_socket_recv(client, answer + used, sizeof(answer) - 1 - used);
+
+            if (n <= 0) {
+                break;
+            }
+
+            used += (k_size_t)n;
+        }
+
+        answer[used] = '\0';
+        KT_CHECK(strstr(answer, cases[i].expect) != NULL);
+
+        if (i == 0) {
+            const char *head_end = strstr(answer, "\r\n\r\n");
+            const char *promise = strstr(answer, "Content-Length: ");
+            k_size_t promised = 0;
+
+            KT_CHECK(strstr(answer, "MicroOS") != NULL);
+            KT_CHECK(strstr(answer, "uptime") != NULL);
+
+            /* The length the header promises is the length the body has: a
+             * client that reads by it must not truncate the page. */
+            KT_CHECK(head_end != NULL && promise != NULL);
+            if (head_end != NULL && promise != NULL) {
+                const char *p = promise + strlen("Content-Length: ");
+
+                while (*p >= '0' && *p <= '9') {
+                    promised = promised * 10 + (k_size_t)(*p - '0');
+                    p++;
+                }
+
+                KT_CHECK_INT_EQ(promised, strlen(head_end + 4));
+            }
+        }
+
+        if (i == 1) {
+            KT_CHECK(strstr(answer, "\r\n\r\nok\n") != NULL);
+        }
+
+        k_socket_close(client);
+    }
+
+    net_http_server_stop();
+    KT_CHECK(!net_http_server_running());
+
+    /*
+     * The command of the shell is the way a person and a script of init open
+     * the door: the server itself never starts with the boot. The port is a
+     * free one, so the test does not ask for the 80 of a real machine.
+     */
+    ktest_begin("http: the command httpd starts, reports and stops the server");
+
+    KT_CHECK_INT_EQ(net_register(), 0);
+    KT_CHECK_INT_EQ(kshell_execute("httpd 18082"), KSHELL_OK);
+    KT_CHECK(net_http_server_running());
+    KT_CHECK_INT_EQ(net_http_server_port(), 18082);
+
+    /* A second call keeps the server where it is and says so. */
+    KT_CHECK_INT_EQ(kshell_execute("httpd"), KSHELL_OK);
+    KT_CHECK_INT_EQ(net_http_server_port(), 18082);
+
+    KT_CHECK_INT_EQ(kshell_execute("httpd 99999"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(kshell_execute("httpd off"), KSHELL_OK);
+    KT_CHECK(!net_http_server_running());
+
+    /* Off when it is already off is an answer, not an error. */
+    KT_CHECK_INT_EQ(kshell_execute("httpd off"), KSHELL_OK);
 }
