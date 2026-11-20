@@ -324,9 +324,11 @@ reports. The width of the two numbers is checked at the door, the library
 `errno`, and the shell has `chmod`, `chown` and `exec` over the same calls.
 The directories of a path are not checked for their `x` bit yet, and
 `fork()` with an address space of its own waits for the paging of a port
-(ADR 0005). A program has no instruction to call back into the kernel yet:
-the x86-64 port enters it with the interrupts off, and no trap leads to the
-syscall table (see [debts.md](debts.md)).
+(ADR 0005). A program calls the kernel with `int $0x80` on the x86-64 port:
+the register ABI is in [ADR 0006](adr/0006-program-entry.md), and the program
+runs in ring 0 without an address space of its own, so the handler trusts its
+pointers and a program that does not return holds the machine (see
+[debts.md](debts.md)).
 
 ## 9. Testing
 

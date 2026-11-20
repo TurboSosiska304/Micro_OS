@@ -27,17 +27,19 @@ the row moves to the release notes of the phase that did it.
 
 | Debt | Where | Status | What it needs |
 |---|---|---|---|
-| A program cannot enter the kernel: x86-64 jumps into it with interrupts off and there is no `int 0x80` (or another trap) to reach the syscall table. | `ports/port_x86_64/src/port_exec.c`, `components/kernel/src/ksys.c`, `components/kernel/include/kernel/ksys.h` | in work | A trap gate, a kernel stack per task, the register ABI of the entry and a return path to the table. |
-| `argv` does not reach the port. `sys_execve()` marks it unused, `k_exec_run()` has no vector in its signature, and the port is entered with NULL. | `components/kernel/src/ksys.c`, `components/kernel/src/exec.c`, `ports/port_x86_64/src/port_exec.c` | open | The vector through `k_exec_run()`, the entry ABI (registers, stack, alignment, where the strings live) and a test. |
-| `PATH` for the shell: `exec` resolves only against the working directory. | `components/kshell/src/kshell_files.c` | open | A list of directories, a default (for example `/bin`), and the same answer for a missing program. |
+| The entry into the kernel is ring 0: the handler trusts the pointers of the program, there is no kernel stack per task and no `KSYS_EXIT` path from a program; a program that never returns holds the CPU. | `ports/port_x86_64/src/interrupts.S`, `components/kernel/src/ksys.c` (`sys_exit`) | open | K5: page tables per task, ring 3, a TSS/IST and a kernel stack, `copy_from_user`, and an exit call that unwinds the program. |
 | `stat` reports the mode and the owner to anybody and checks nothing. | `components/kernel/src/ksys.c`, `docs/phases/phase7.md` | decision | None: POSIX makes `stat` readable, and the check stays at `open` and `execve`. |
 | The `x` bit of the directories of a path is not walked, so a directory of mode `0600` still lets its files be opened by their full path. | `components/mfs/src/mfs_vfs.c`, the VFS lookup | open | Check every directory on the way down, with its own tests. |
 | A path over the window answers `E2BIG` (`KERR_TOOBIG`), because the contract has no `ENAMETOOLONG`. | `components/kernel/include/kernel/errno.h`, `components/kernel/src/ksys.c` (`path_check`) | open | `KERR_NAMETOOLONG` in the kernel and the number of POSIX in the library, with the boundary tests. |
 | `waitpid` for a child that never comes answers `EAGAIN` after five seconds; POSIX says `ECHILD` or `ESRCH`, and `-3` is `KERR_EXIST`, not the POSIX `ESRCH`. | `components/kernel/src/ksys.c` (`sys_waitpid`), `components/kernel/include/kernel/errno.h` | open | Decide the numbers of `ECHILD` and `ESRCH`, keep `-3` for `EEXIST`, and test the negative cases. |
 | A directory cannot be opened (`mfs_open` answers `MFS_EISDIR`), so `readdir` has no path from a program; the shell lists through `vfs_list()` itself. | `components/mfs/src/mfs.c`, `components/kernel/src/ksys.c` (`sys_readdir`) | open | A directory descriptor and the entries read through it, not through a path of the caller. |
 | The image is read whole into one block of `kmm` (up to `KSYS_MAX_IO`, 64 KB) before the port copies it to the window: two copies in RAM at once. | `components/kernel/src/ksys.c` (`sys_execve`), `components/kernel/src/exec.c` | open | Stream or map the image, or cap it against the memory of the machine and not only against the transfer edge. |
-| `mkprog.sh` does not compare the address a program is linked for with the base of the window of the port. | `tools/mkprog.sh` | open | Check the first VMA of `.text` against `k_port_exec_base()` (32 MiB plus the header on x86-64) and refuse another address. |
-| The padding of the segments has no test. The bug that cost a wrong byte is fixed in `mkprog.sh`, but nothing checks a byte-level image of a padded program. | `tools/mkprog.sh`, `tests/` | open | A test of the output of `mkprog.sh` (or of the parser over a padded image) with the data one to three bytes past the text. |
+| `mkprog.sh` does not compare the address a program is linked for with the base of the window of the port. | `tools/mkprog.sh` | open | Check the first VMA of `.text` against `k_port_exec_base()` (on x86-64 `0x02000000` plus the 32-byte header) and refuse another address. |
+
+Closed in the same pass: the `int $0x80` entry and its ABI, `argv` through
+`k_exec_run()`, `PATH` and `stat` in the shell, and the test of the padding of
+`mkprog.sh`. The row that stays above is the part of the entry that waits for
+K5.
 
 ## K4 - Protection
 

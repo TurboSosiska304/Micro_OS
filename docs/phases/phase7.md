@@ -440,12 +440,13 @@ not tested because it is not checked at all (see "What is still missing").
 
 ## What is still missing
 
-* **A program cannot call the kernel.** The x86-64 port enters the image with
-  the interrupts off and there is no `int 0x80` (or another trap) that reaches
-  the syscall table, so `execve` proves the loader and the rights, not a
-  process with system calls. The entry is in work; the register ABI and the
-  kernel stack per task are its first two pieces. See
-  [debts.md](../debts.md).
+* **A program calls the kernel, but from ring 0.** The x86-64 port puts
+  `int $0x80` on vector 128, passes six arguments in registers and returns a
+  status; the ABI is in [ADR 0006](../adr/0006-program-entry.md) and
+  `docs/syscall-abi.md`. The program still runs without an address space of
+  its own, the handler trusts the pointers it passes, and a program that does
+  not return holds the machine: ring 3, a kernel stack per task and an `exit`
+  call wait for K5. See [debts.md](../debts.md).
 * **`execve` runs a program only on x86-64.** The boot writes `/bin/hello`
   and asks for it with `ksys_execve()`, and the shell does the same with
   `exec`; the check of the mode, the read into `kmm` and the answer to the

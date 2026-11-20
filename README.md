@@ -141,9 +141,10 @@ Micro_OS/
   single user (uid 0) on the board today, so the bits of the group and of the
   others are stored but not exercised.
 * **Programs are young.** The format (MOX1), `execve`, `chmod`/`chown` and
-  the window of the x86-64 port exist, and `/bin/hello` runs on that machine.
-  A program has no entry into the kernel yet, so `execve` proves the loader
-  and the rights, not a process with system calls.
+  the window of the x86-64 port exist, and `/bin/hello` runs on that machine
+  and calls the kernel through `int $0x80`, with its arguments and a status.
+  The program is still ring 0 code without an address space of its own: there
+  is no `exit` call from a program and no isolation (K5).
 * **The board has limits of its own**: no PMIC, 8 MB of flash with one
   application slot and no OTA, a 200 mAh battery. They are in
   [docs/ports/esp32](docs/ports/esp32/README.md).

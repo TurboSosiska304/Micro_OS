@@ -72,10 +72,10 @@ written when the project was an operating system for one board; the numbers
 * [x] A first program in `/bin`: the x86-64 port writes `/bin/hello` to its
       RAM volume at the boot and asks for it with `execve`; the shell runs the
       same file with `exec`
-* [ ] `PATH` for the shell
-* [ ] `argv` reaches the port, and the ABI of the entry is written down
-* [ ] An entry into the kernel from a program (`int 0x80`), not a call of the
-      table from the kernel's own code - in work
+* [x] `PATH` for the shell
+* [x] `argv` reaches the port, and the ABI of the entry is written down
+* [x] An entry into the kernel from a program (`int $0x80`), with the status
+      of a returned program and its arguments
 * [ ] `mkprog.sh` checks the address a program is linked for against the base
       of the window of the port
 
