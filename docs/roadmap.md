@@ -85,7 +85,7 @@ written when the project was an operating system for one board; the numbers
 * [x] The arguments of a system call checked at the edge
 * [x] The permissions enforced at the edge, for the one user of the system, at
       `open` and `execve`
-* [ ] The `x` bit of the directories of a path is walked and checked
+* [x] The `x` bit of the directories of a path is walked and checked
 * [ ] A real `fork()`: an address space per task, copy on write - the
       milestone of the x86-64 paging (ADR 0002, ADR 0005)
 
