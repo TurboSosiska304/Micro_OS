@@ -57,7 +57,7 @@ written when the project was an operating system for one board; the numbers
 * [x] `make smoke` drives it and checks the transcript
 * [x] A second bare-metal machine: x86-64 in QEMU (`make x86-smoke`)
 
-## K3 - Programs (in progress)
+## K3 - Programs (done)
 
 * [x] The format of a program: MOX1, a flat image linked for the window of the
       port; the parser checks the header against the image
@@ -76,7 +76,7 @@ written when the project was an operating system for one board; the numbers
 * [x] `argv` reaches the port, and the ABI of the entry is written down
 * [x] An entry into the kernel from a program (`int $0x80`), with the status
       of a returned program and its arguments
-* [ ] `mkprog.sh` checks the address a program is linked for against the base
+* [x] `mkprog.sh` checks the address a program is linked for against the base
       of the window of the port
 
 ## K4 - Protection (in progress)

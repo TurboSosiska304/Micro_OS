@@ -34,11 +34,10 @@ the row moves to the release notes of the phase that did it.
 | `waitpid` for a child that never comes answers `EAGAIN` after five seconds; POSIX says `ECHILD` or `ESRCH`, and `-3` is `KERR_EXIST`, not the POSIX `ESRCH`. | `components/kernel/src/ksys.c` (`sys_waitpid`), `components/kernel/include/kernel/errno.h` | open | Decide the numbers of `ECHILD` and `ESRCH`, keep `-3` for `EEXIST`, and test the negative cases. |
 | A directory cannot be opened (`mfs_open` answers `MFS_EISDIR`), so `readdir` has no path from a program; the shell lists through `vfs_list()` itself. | `components/mfs/src/mfs.c`, `components/kernel/src/ksys.c` (`sys_readdir`) | open | A directory descriptor and the entries read through it, not through a path of the caller. |
 | The image is read whole into one block of `kmm` (up to `KSYS_MAX_IO`, 64 KB) before the port copies it to the window: two copies in RAM at once. | `components/kernel/src/ksys.c` (`sys_execve`), `components/kernel/src/exec.c` | open | Stream or map the image, or cap it against the memory of the machine and not only against the transfer edge. |
-| `mkprog.sh` does not compare the address a program is linked for with the base of the window of the port. | `tools/mkprog.sh` | open | Check the first VMA of `.text` against `k_port_exec_base()` (on x86-64 `0x02000000` plus the 32-byte header) and refuse another address. |
 
 Closed in the same pass: the `int $0x80` entry and its ABI, `argv` through
-`k_exec_run()`, `PATH` and `stat` in the shell, and the test of the padding of
-`mkprog.sh`. The row that stays above is the part of the entry that waits for
+`k_exec_run()`, `PATH` and `stat` in the shell, the test of the padding of
+`mkprog.sh`, and its check of the linked address. The row that stays above is the part of the entry that waits for
 K5.
 
 ## K4 - Protection
