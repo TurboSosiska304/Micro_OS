@@ -26,8 +26,10 @@ call above it.
 
 ## Status
 
-The phases describe the platform (the board and its drivers); the kernel has
-its own roadmap in [docs/kernel-roadmap.md](docs/kernel-roadmap.md).
+The plan of the kernel is [docs/roadmap.md](docs/roadmap.md); the plan of the
+board (its port, its drivers, its release) is
+[docs/ports/esp32/roadmap.md](docs/ports/esp32/roadmap.md). The table below is
+the history of the platform phases, kept by their names.
 
 | Phase | Content | State |
 |-------|---------|-------|
@@ -50,10 +52,9 @@ do not live in this tree: a board with 8 MB of flash has no room for a
 handful of programs nobody asked for. Phase 6 has the release process and
 the cloud build; OTA is not possible with the current flash layout.
 
-The kernel has a roadmap of its own: [docs/kernel-roadmap.md](docs/kernel-roadmap.md).
-
-See [docs/roadmap.md](docs/roadmap.md) for the full plan and
-[docs/architecture.md](docs/architecture.md) for the design.
+See [docs/roadmap.md](docs/roadmap.md) for the plan of the kernel,
+[docs/ports/esp32/roadmap.md](docs/ports/esp32/roadmap.md) for the plan of the
+board, and [docs/architecture.md](docs/architecture.md) for the design.
 
 ## The key idea: a portable kernel
 
