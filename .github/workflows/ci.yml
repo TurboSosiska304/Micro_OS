@@ -59,6 +59,15 @@ jobs:
       - name: the kernel boots on x86-64
         run: make x86-smoke
 
+      # A machine that stops before the shell leaves the binary as the only
+      # witness: the console says where, and the image says which instruction.
+      - name: the build of the machine that did not boot
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: x86-build
+          path: build-x86/
+
       - name: the formatter of the sources (the version of make format)
         run: |
           python3 -m venv "$RUNNER_TEMP/cf" || python -m venv "$RUNNER_TEMP/cf"
