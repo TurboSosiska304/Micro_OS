@@ -196,12 +196,12 @@ x86-run-disk: x86-build $(X86_DISK_IMAGE)
 	qemu-system-x86_64 -kernel $(X86_BUILD)/loader32.elf \
 		-initrd $(X86_BUILD)/microos64.bin -m 256 -no-reboot \
 		-display $(X86_DISPLAY) -serial null \
-		-drive file=$(X86_DISK_IMAGE),format=raw,if=ide,index=0,cache=writethrough
+		-drive file=$(X86_DISK_IMAGE),format=raw,if=ide,index=0,cache=writeback
 
 x86-run-disk-serial: x86-build $(X86_DISK_IMAGE)
 	qemu-system-x86_64 -kernel $(X86_BUILD)/loader32.elf \
 		-initrd $(X86_BUILD)/microos64.bin -m 256 -nographic -no-reboot \
-		-drive file=$(X86_DISK_IMAGE),format=raw,if=ide,index=0,cache=writethrough
+		-drive file=$(X86_DISK_IMAGE),format=raw,if=ide,index=0,cache=writeback
 
 x86-disk-smoke: x86-build
 	python3 tools/x86_disk_smoke.py

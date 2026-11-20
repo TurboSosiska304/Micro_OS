@@ -18,6 +18,18 @@
  * It is slower and it is the honest first step: a disk that works on one
  * address map is worth more than a fast one that faults on the next.
  *
+ * A command is one transaction with the interrupts off (ata_transfer): the
+ * timer of the machine and its keyboard are live while a disk works, and a
+ * transfer that is preempted belongs to two tasks at once - the channel has
+ * one command register and no notion of an owner. Every wait has a budget of
+ * time (the counter of the processor, which the interrupts do not stop), a
+ * failure is repeated once and reported with the number of the sector, and a
+ * drive that does not answer costs the boot a message and not a hang.
+ *
+ * The writes collect in the cache of the drive; the filesystem flushes it
+ * when it closes a file, makes a directory or unmounts (the sync operation
+ * below), so the data of a call that returned is on the medium.
+ *
  * The drive is programmed in LBA28, which addresses 128 GiB, and it is split
  * into chunks of 32 sectors so that one command never fills the FIFO of the
  * controller of a real machine.
@@ -81,10 +93,31 @@ _Static_assert(MFS_BLOCK_SIZE % ATA_MEDIUM_SECTOR == 0,
 
 /*
  * A device that does not answer must not hang the boot: every wait gives up
- * after this many reads of the status. A real transfer of one sector is a
- * few dozen polls, so the number is generous and still finite.
+ * after this much time. The budget is time and not a number of polls, because
+ * a medium behind the cache of the host can be slow - a sector goes through
+ * the page cache and the platter of the machine that runs the emulator - and
+ * a machine under load must not mistake slow for dead.
+ *
+ * The counter of the processor is the clock the driver may read while the
+ * interrupts are off: the ticks of the kernel move in an interrupt, and no
+ * interrupt is taken from the programming of a command to the end of its
+ * transfer.
  */
-#define ATA_POLL_LIMIT 2000000u
+#define ATA_TIMEOUT_MS 5000u
+
+/*
+ * The same budget for a machine whose processor the port could not calibrate:
+ * a number of polls, generous for a medium of any speed and still finite.
+ */
+#define ATA_FALLBACK_POLLS 50000000u
+
+/*
+ * A command that fails is repeated once. The first failure of a boot is
+ * often a stale state of the channel - an error latched by the command of a
+ * device that was not ready - and the second attempt starts from a channel
+ * that has been read and found idle.
+ */
+#define ATA_ATTEMPTS 2u
 
 /* --- the bus, one word at a time --- */
 
@@ -114,31 +147,58 @@ static void ata_delay(void)
 }
 
 /*
+ * The budget of a wait, in the ticks of the time stamp counter; zero when the
+ * port could not measure the processor.
+ */
+static k_u64_t ata_timeout_ticks(void)
+{
+    const struct port_x86_64_info *info = port_x86_64_info();
+
+    if (info->cpu_hz == 0) {
+        return 0;
+    }
+
+    return info->cpu_hz / 1000u * ATA_TIMEOUT_MS;
+}
+
+/*
  * Wait until the drive is not busy. With `mask` not zero the wait also asks
  * for one bit of the status - DRQ before a transfer. A drive that reports an
- * error, or one that never answers, ends the wait.
+ * error, or one that does not answer in the budget, ends the wait.
+ *
+ * The wait is called with the interrupts off, so the polls are uninterrupted:
+ * no task can take the channel while a command of this one is in flight, and
+ * a slow medium is the only thing the loop waits for.
  */
 static bool ata_wait(k_u8_t mask)
 {
-    k_u32_t i;
+    k_u64_t budget = ata_timeout_ticks();
+    k_u64_t start = port_rdtsc();
+    k_u32_t polls = 0;
 
-    for (i = 0; i < ATA_POLL_LIMIT; i++) {
+    for (;;) {
         k_u8_t status = port_inb(ATA_IO + ATA_STATUS);
 
-        if ((status & ATA_STATUS_BSY) != 0) {
-            continue;
+        if ((status & ATA_STATUS_BSY) == 0) {
+            if ((status & ATA_STATUS_ERR) != 0) {
+                return false;
+            }
+
+            if (mask == 0 || (status & mask) != 0) {
+                return true;
+            }
         }
 
-        if ((status & ATA_STATUS_ERR) != 0) {
+        if (budget != 0) {
+            if (port_rdtsc() - start > budget) {
+                return false;
+            }
+        } else if (++polls >= ATA_FALLBACK_POLLS) {
             return false;
         }
 
-        if (mask == 0 || (status & mask) != 0) {
-            return true;
-        }
+        __asm__ volatile("pause");
     }
-
-    return false;
 }
 
 /* The words of one sector, as the bytes of the caller: the port is 16 bits
@@ -207,6 +267,13 @@ static int ata_read_raw(k_u32_t lba, k_u8_t *buf, k_size_t sectors)
             buf += ATA_MEDIUM_SECTOR;
         }
 
+        /* The command is over when the drive says so, not when the last word
+         * is read: the next command would be programmed into a channel that
+         * is still finishing this one. */
+        if (!ata_wait(0)) {
+            return -1;
+        }
+
         lba += (k_u32_t)chunk;
         sectors -= chunk;
     }
@@ -233,11 +300,69 @@ static int ata_write_raw(k_u32_t lba, const k_u8_t *buf, k_size_t sectors)
             buf += ATA_MEDIUM_SECTOR;
         }
 
+        /* A write is accepted when the drive leaves the transfer, and a write
+         * fault is only visible here: the status of every sector of the chunk
+         * is checked before the next chunk is programmed. */
+        if (!ata_wait(0)) {
+            return -1;
+        }
+
         lba += (k_u32_t)chunk;
         sectors -= chunk;
     }
 
     return 0;
+}
+
+/*
+ * One transaction of the channel: the interrupts off, the command, the
+ * transfer and the drive idle again - with one more attempt when the first
+ * one failed.
+ *
+ * The interrupts are off for the whole transaction on purpose. The timer of
+ * this port fires every millisecond and the keyboard line is open (ADR 0008,
+ * the VGA and PS/2 of the machine), so a transfer that is preempted is a
+ * transfer that another task could interleave with its own: the drive has
+ * one command register, and the state of the channel belongs to whoever
+ * programmed it last. The price is a tick of the clock that is not counted
+ * during a command; the disk does not keep time.
+ *
+ * A failed command leaves the error bit of the status latched and may leave
+ * the channel busy. The registers are read (which acknowledges the line) and
+ * the channel is waited out; the repeat starts only from an idle drive,
+ * because a command written into a channel that is still transferring a
+ * sector is a second failure and not a retry.
+ */
+static int ata_transfer(bool write, k_u32_t lba, const k_u8_t *buf, k_size_t sectors)
+{
+    k_u64_t flags = port_save_flags_and_cli();
+    int rc = -1;
+    k_u32_t attempt;
+
+    for (attempt = 0; attempt < ATA_ATTEMPTS; attempt++) {
+        rc = write ? ata_write_raw(lba, buf, sectors) : ata_read_raw(lba, (k_u8_t *)buf, sectors);
+
+        if (rc == 0) {
+            break;
+        }
+
+        (void)port_inb(ATA_IO + ATA_STATUS);
+        (void)port_inb(ATA_IO + ATA_ERROR);
+
+        if (!ata_wait(0)) {
+            break;
+        }
+    }
+
+    port_restore_flags(flags);
+
+    if (rc != 0) {
+        kerror("ata0: the %s of %u sector(s) at %u failed (status 0x%02x, error 0x%02x)",
+               write ? "write" : "read", (unsigned)sectors, (unsigned)lba,
+               (unsigned)port_inb(ATA_IO + ATA_STATUS), (unsigned)port_inb(ATA_IO + ATA_ERROR));
+    }
+
+    return rc;
 }
 
 /* --- the device itself --- */
@@ -259,7 +384,7 @@ static int ata_read(void *ctx, k_u32_t sector, void *buf, k_size_t count)
         return -1;
     }
 
-    return ata_read_raw(sector * ATA_SECTORS_PER_BLOCK, (k_u8_t *)buf,
+    return ata_transfer(false, sector * ATA_SECTORS_PER_BLOCK, (const k_u8_t *)buf,
                         count * ATA_SECTORS_PER_BLOCK);
 }
 
@@ -271,25 +396,48 @@ static int ata_write(void *ctx, k_u32_t sector, const void *buf, k_size_t count)
         return -1;
     }
 
-    return ata_write_raw(sector * ATA_SECTORS_PER_BLOCK, (const k_u8_t *)buf,
-                         count * ATA_SECTORS_PER_BLOCK);
+    return ata_transfer(true, sector * ATA_SECTORS_PER_BLOCK, (const k_u8_t *)buf,
+                        count * ATA_SECTORS_PER_BLOCK);
 }
 
 /*
- * The drive has a cache of its own: a write is finished when the cache is
- * empty, and the cache is emptied by the command of the drive. Every write
- * ends with one, which is slower than a burst of writes and it is the price
- * of a file that is on the platter when the command returns.
+ * The drive has a cache of its own: the writes of a file collect in it, and
+ * the cache is emptied by the flush command. The filesystem calls this when
+ * it closes a file, makes a directory or unmounts the volume, so the data of
+ * a command that returned is on the medium even if the machine stops.
+ *
+ * The flush is a command like any other and is waited out the same way: the
+ * drive is busy while it empties the cache, and the busy bit - not only the
+ * request of a transfer - says when it is done.
  */
 static int ata_sync(void *ctx)
 {
+    k_u64_t flags;
+    int rc = -1;
+    k_u32_t attempt;
+
     K_UNUSED(ctx);
 
-    if (!ata_command(ATA_CMD_FLUSH, 0, 0)) {
-        return -1;
+    flags = port_save_flags_and_cli();
+
+    for (attempt = 0; attempt < ATA_ATTEMPTS; attempt++) {
+        if (ata_command(ATA_CMD_FLUSH, 0, 0) && ata_wait(0)) {
+            rc = 0;
+            break;
+        }
+
+        (void)port_inb(ATA_IO + ATA_STATUS);
+        (void)port_inb(ATA_IO + ATA_ERROR);
     }
 
-    return ata_wait(0) ? 0 : -1;
+    port_restore_flags(flags);
+
+    if (rc != 0) {
+        kerror("ata0: the flush of the drive failed (status 0x%02x)",
+               (unsigned)port_inb(ATA_IO + ATA_STATUS));
+    }
+
+    return rc;
 }
 
 static const struct k_blockdev_ops g_ata_ops = {

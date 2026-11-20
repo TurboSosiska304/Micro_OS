@@ -8,6 +8,7 @@ checks the thing that no line of a boot can prove: a file written by one boot
 is read by the next one, out of the same 8 MB of the image.
 
     python3 tools/x86_disk_smoke.py [--image PATH] [--timeout SECONDS]
+                                    [--repeat N] [--keep] [--verbose]
 
 The image is made before the run (the MBR of one partition, the partition
 itself blank, the way a formatter of a flash leaves it) and removed after it,
@@ -23,7 +24,12 @@ Two boots of the same machine, the same image:
      and the shell reads the file back. The line of /persist.txt below was
      written in the first boot and exists nowhere else.
 
-The exit status is 0 when both boots are what they have to be and 1 otherwise.
+`--repeat N` does the whole pair N times on an image made again each time: a
+driver of a disk is only as good as its worst boot, and one pass of a test
+that flaked once says nothing.
+
+The exit status is 0 when every boot of every run is what it has to be and 1
+otherwise.
 """
 
 from __future__ import annotations
@@ -105,8 +111,17 @@ def run_machine(image: str, commands: list, timeout: float) -> str:
         "-no-reboot",
         # A raw image on the primary channel: the driver of the port polls
         # the ports of the IDE controller (ADR 0008).
+        #
+        # The cache of the host is on purpose. `writethrough` turns every
+        # 512-byte write of the guest into a synchronous write of the file,
+        # and an image on a disk of the machine that runs QEMU then costs a
+        # flush of the host filesystem per sector: a format of 8 MB took
+        # tens of seconds and looked like a hang of the driver. The reboot
+        # this test is about is a new process on the same file, and the page
+        # cache of the host is enough for it; the flush of the guest (the
+        # ATA command of `sync`) still reaches the medium.
         "-drive",
-        f"file={image},format=raw,if=ide,index=0,cache=writethrough",
+        f"file={image},format=raw,if=ide,index=0,cache=writeback",
     ]
 
     process = subprocess.Popen(
@@ -184,6 +199,16 @@ def check(first: str, second: str) -> list:
         "x86-64: the root volume is ata0p1 (1 partition(s))" in first,
     )
 
+    # A boot that stopped before its shell is the failure this test is
+    # famous for, and it deserves a line of its own: the timeout of the run,
+    # the driver stuck on the channel and the console of the machine all look
+    # the same when only the answer of a command is checked.
+    expect(
+        "the first boot reaches the shell",
+        PROMPT in first,
+        f"the machine wrote {len(first)} byte(s) and stopped",
+    )
+
     # --- the first boot: a blank partition, formatted, and a file in it
     expect(
         "the blank partition is formatted at the first boot",
@@ -205,6 +230,11 @@ def check(first: str, second: str) -> list:
     )
 
     # --- the second boot: the same image, the same machine
+    expect(
+        "the second boot reaches the shell",
+        PROMPT in second,
+        f"the machine wrote {len(second)} byte(s) and stopped",
+    )
     expect(
         "the second boot mounts the partition it finds",
         "x86-64: the root volume is ata0p1" in second,
@@ -236,48 +266,23 @@ def check(first: str, second: str) -> list:
     return checks
 
 
-def main(argv: list) -> int:
-    parser = argparse.ArgumentParser(description="the disk smoke test of the x86-64 port")
-    parser.add_argument("--image", default=DEFAULT_IMAGE, help="the image of the disk")
-    parser.add_argument("--mkimage", metavar="PATH", help="write the image and stop")
-    parser.add_argument("--size-mb", type=int, default=IMAGE_MB, help="the size of a new image")
-    parser.add_argument("--timeout", type=float, default=25.0, help="the seconds a boot gets")
-    parser.add_argument("--keep", action="store_true", help="keep the image after the run")
-    parser.add_argument("--verbose", action="store_true", help="print the consoles of both boots")
-    args = parser.parse_args(argv)
+def run_once(args) -> tuple:
+    """One image, two boots: the transcripts and how long each one took."""
+    if os.path.exists(args.image):
+        os.remove(args.image)
 
-    if args.mkimage:
-        os.makedirs(os.path.dirname(os.path.abspath(args.mkimage)), exist_ok=True)
-        make_image(args.mkimage, args.size_mb)
-        print(f"disk: {args.mkimage} ({args.size_mb} MB, one partition at LBA {PARTITION_START})")
-        return 0
+    make_image(args.image, args.size_mb)
 
-    for path in ("loader32.elf", "microos64.bin"):
-        if not os.path.isfile(os.path.join(BUILD, path)):
-            print(f"missing build-x86/{path}: run make x86-build", file=sys.stderr)
-            return 2
+    started = time.monotonic()
+    first = run_machine(args.image, FIRST_BOOT, args.timeout)
+    middle = time.monotonic()
+    second = run_machine(args.image, SECOND_BOOT, args.timeout)
+    ended = time.monotonic()
 
-    try:
-        if os.path.exists(args.image):
-            os.remove(args.image)
-        make_image(args.image, args.size_mb)
+    return first, second, middle - started, ended - middle
 
-        first = run_machine(args.image, FIRST_BOOT, args.timeout)
-        second = run_machine(args.image, SECOND_BOOT, args.timeout)
-    except FileNotFoundError:
-        print("qemu-system-x86_64 is not installed", file=sys.stderr)
-        return 2
-    finally:
-        if not args.keep and os.path.exists(args.image):
-            os.remove(args.image)
 
-    if args.verbose:
-        print("--- the first boot ---")
-        print(first)
-        print("--- the second boot ---")
-        print(second)
-
-    checks = check(first, second)
+def report(checks: list, runs: int) -> None:
     failed = [item for item in checks if not item[1]]
 
     print("Micro OS — the disk smoke test of the x86-64 port")
@@ -292,11 +297,82 @@ def main(argv: list) -> int:
     if failed:
         print(f"FAILED: {len(failed)} of {len(checks)} check(s)")
         print("RESULT: FAIL")
-        return 1
+        return
 
-    print(f"OK: {len(checks)} check(s) passed")
+    if runs > 1:
+        print(f"OK: {runs} run(s) of {len(checks)} check(s) passed")
+    else:
+        print(f"OK: {len(checks)} check(s) passed")
     print("RESULT: PASS")
-    return 0
+
+
+def main(argv: list) -> int:
+    parser = argparse.ArgumentParser(description="the disk smoke test of the x86-64 port")
+    parser.add_argument("--image", default=DEFAULT_IMAGE, help="the image of the disk")
+    parser.add_argument("--mkimage", metavar="PATH", help="write the image and stop")
+    parser.add_argument("--size-mb", type=int, default=IMAGE_MB, help="the size of a new image")
+    parser.add_argument("--timeout", type=float, default=30.0, help="the seconds a boot gets")
+    parser.add_argument("--repeat", type=int, default=1, help="how many times to boot the pair")
+    parser.add_argument("--keep", action="store_true", help="keep the image after the run")
+    parser.add_argument("--verbose", action="store_true", help="print the consoles of the boots")
+    args = parser.parse_args(argv)
+
+    if args.mkimage:
+        os.makedirs(os.path.dirname(os.path.abspath(args.mkimage)), exist_ok=True)
+        make_image(args.mkimage, args.size_mb)
+        print(f"disk: {args.mkimage} ({args.size_mb} MB, one partition at LBA {PARTITION_START})")
+        return 0
+
+    for path in ("loader32.elf", "microos64.bin"):
+        if not os.path.isfile(os.path.join(BUILD, path)):
+            print(f"missing build-x86/{path}: run make x86-build", file=sys.stderr)
+            return 2
+
+    runs = 0
+    failed_run = None
+    last = None
+
+    try:
+        for index in range(max(1, args.repeat)):
+            first, second, first_s, second_s = run_once(args)
+            checks = check(first, second)
+            runs += 1
+
+            bad = [item for item in checks if not item[1]]
+            print(
+                f"  run {index + 1}: {len(checks) - len(bad)} of {len(checks)}"
+                f" in {first_s:.1f} s + {second_s:.1f} s"
+            )
+
+            if bad:
+                failed_run = (checks, first, second)
+                break
+
+            last = (checks, first, second)
+    except FileNotFoundError:
+        print("qemu-system-x86_64 is not installed", file=sys.stderr)
+        return 2
+    finally:
+        if not args.keep and os.path.exists(args.image):
+            os.remove(args.image)
+
+    shown = failed_run if failed_run is not None else last
+
+    if shown is None:
+        print("no run was made", file=sys.stderr)
+        return 2
+
+    checks, first, second = shown
+
+    if args.verbose:
+        print("--- the first boot ---")
+        print(first)
+        print("--- the second boot ---")
+        print(second)
+
+    report(checks, runs)
+
+    return 1 if failed_run is not None else 0
 
 
 if __name__ == "__main__":

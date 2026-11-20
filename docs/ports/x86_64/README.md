@@ -144,7 +144,7 @@ What the window does not do:
 ## The disk
 
 `make x86-run-disk` attaches a raw image of 8 MB to the primary IDE channel
-(`-drive file=build-x86/disk.img,format=raw,if=ide`), and the port makes the
+(`-drive file=build-x86/disk.img,format=raw,if=ide,cache=writeback`), and the
 image the first time it needs it: 8 MB of an erased medium with the MBR of one
 partition at LBA 2048 (`tools/x86_disk_smoke.py --mkimage`). The boot finds the
 drive (`ata0`), reads the MBR, registers the partition (`ata0p1`) and mounts it
@@ -158,8 +158,12 @@ x86-disk-smoke` is the proof and the regression test: one image, two boots,
 
 The driver is `src/ata.c`: the ATA registers at 0x1F0, LBA28, PIO, polled -
 no DMA (the port has no contract for a physical address yet) and no interrupt
-of the channel. A disk that does not answer is reported and the machine goes
-on with `ram0`, so `make x86-run` and `make x86-smoke` work without one.
+of the channel. A command runs with the interrupts off, so the timer and the
+keyboard of this machine cannot interleave another task's request with the
+transfer; every wait has a budget of five seconds, a failed command is
+repeated once and reported with the sector that failed. A disk that does not
+answer is reported and the machine goes on with `ram0`, so `make x86-run` and
+`make x86-smoke` work without one.
 `disk.img` is generated and not committed; `make clean` does not remove
 `build-x86`, `rm -rf build-x86` does.
 
@@ -210,8 +214,9 @@ on with `ram0`, so `make x86-run` and `make x86-smoke` work without one.
 * the disk is one, and it is the primary ATA channel: no SATA, no virtio, no
   NVMe, no card, no second disk;
 * the driver polls and copies through the processor: no interrupt, no DMA and
-  no queue, so a large copy is slow; there is no cache of the kernel and the
-  cache of the drive is flushed after every write;
+  no queue, so a large copy is slow; there is no cache of the kernel, and the
+  writes reach the cache of the drive until the filesystem flushes it (at
+  every close, every new directory and the unmount);
 * the tables understood are the MBR of four primaries and the GPT; extended
   and logical partitions wait, and a medium of 4 KB sectors does not;
 * without a disk the volume is still the memory of the port, and it does not

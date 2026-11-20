@@ -150,11 +150,27 @@ of that tool.
 
 ### 4. Cache, queue and interrupts
 
-What this iteration has: one request at a time, polled, no queue, no cache
-of the kernel, and `sync` after every write (the FLUSH CACHE command of the
-drive). Every wait is bounded - a drive that stops answering returns an error
-and the boot goes on with the volume in its memory - because a machine that
-hangs on a disk is a machine that cannot say what is wrong with it.
+What this iteration has: one request at a time, polled, no queue and no
+cache of the kernel. The writes collect in the cache of the drive, and the
+filesystem flushes it with the FLUSH CACHE command when it closes a file,
+makes a directory or unmounts the volume, so the data of a call that returned
+is on the medium.
+
+A command runs as one transaction with the interrupts off, from the
+programming of the command register to the end of its transfer: the timer of
+this machine fires every millisecond and its keyboard line is open, and a
+transfer that is preempted has two owners for the one command register of the
+channel. The price is the ticks of the clock spent inside a command, which is
+a few microseconds of a fast medium and nothing a disk keeps.
+
+Every wait has a budget of wall time and not a number of polls - the counter
+of the processor, which the interrupts do not stop - because a medium behind
+the cache of the host can be slow and a machine under load must not mistake
+slow for a dead drive. The error bit of the status is read and cleared, a
+failed command is repeated once from an idle channel, and a command that
+fails twice returns an error with the sector that failed. The boot then goes
+on with the volume in its memory: a machine that hangs on a disk is a machine
+that cannot say what is wrong with it.
 
 What performance will want, in the order it will be worth it:
 
@@ -229,7 +245,9 @@ Stated plainly, so that nobody expects it:
 * one disk, the primary ATA channel, master; one controller of one kind; no
   SATA, no virtio, no NVMe, no card;
 * PIO, polled, one request at a time; no interrupt, no DMA, no queue, no
-  cache of the kernel; the drive's own cache is flushed after every write;
+  cache of the kernel; the writes reach the cache of the drive and the
+  filesystem flushes it (FLUSH CACHE) at every close, every directory and
+  every unmount, not after every sector;
 * MBR with primary entries and GPT; no extended or logical partitions, no
   hybrid MBR, no backup GPT, no Apple or BSD labels;
 * media with a sector size that divides 1 KiB (512, 1 KiB); a 4 KB-native disk
