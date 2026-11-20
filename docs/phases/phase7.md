@@ -311,8 +311,8 @@ test is unfinished work. That is the first thing the next commit owes.
   and the size of the image is checked against the transfer limit of the edge
   and not against the memory of the machine.
 * **`stat` checks nothing.** It reports the mode and the owner to anybody who
-  asks, as in Linux; `chmod` and `chown` have numbers in the table but no
-  command of the shell and no function in the libc yet.
+  asks, as in Linux; `chmod` and `chown` have numbers in the table and
+  wrappers in the libc, and a command of the shell is still missing.
 * **The mode of a directory does not decide the search.** The check happens
   for the object a call names, not for every directory of its path: there is
   no `x` bit walked on the way, so a directory of mode `0600` still lets its
@@ -335,11 +335,12 @@ test is unfinished work. That is the first thing the next commit owes.
   address other than `k_port_exec_base()` builds without a word of warning and
   is refused at the run, or worse. A linker script of the format and a check
   of the first address of `.text` are missing.
-* **The calls of this round have no tests yet.** `chmod`, `chown`, `execve`
-  and the check of the mode are in the tree with the arguments checked at the
-  door; the negative cases and the properties they need (`EPERM` for the
-  wrong triad, `EISDIR` for a directory, `ENOSYS` on a machine without a
-  window) are the first thing the next commit owes.
+* **The calls of this round are covered, the x86-64 path at the port level.**
+  `chmod`, `chown` and `execve` have their positive and negative cases in the
+  host tests (`EPERM` for the wrong triad, `EISDIR` for a directory, `ENOSYS`
+  on a machine without a window); the branch where a program really runs and
+  returns is proved by `make x86-smoke` on the port, not through the call,
+  because the host cannot run a program.
 * **The board will never run a program**, and that is a decision of ADR 0005
   and not a debt: its flash is not executable for a file, and a copy in
   internal SRAM would take the memory of the kernel and the drivers.

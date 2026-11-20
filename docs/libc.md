@@ -73,6 +73,9 @@ long microos_write(int fd, const void *buf, size_t count);
 long microos_lseek(int fd, long offset, int whence);
 int microos_unlink(const char *path);
 int microos_mkdir(const char *path);
+int microos_chmod(const char *path, unsigned mode);
+int microos_chown(const char *path, unsigned owner);
+int microos_execve(const char *path, char *const argv[]);
 ```
 
 The flags of the open are the numbers of POSIX: `MICROOS_O_RDONLY`,
