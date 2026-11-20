@@ -61,20 +61,24 @@ written when the project was an operating system for one board; the numbers
 * [x] The format of a program: MOX1, a flat image linked for the window of the
       port; the parser checks the header against the image
 * [x] The contract of the port for programs (1.3): a machine that cannot run a
-      program says so, x86-64 names a window of 32 MiB
+      program says so, x86-64 names a window at 32 MiB
 * [x] `tools/mkprog.sh`: an image out of an object
 * [x] Mode and owner in an inode (9 + 15 bits in the flags), no format change
 * [x] Every argument checked at the edge of the syscall table
-* [ ] The mode enforced through the VFS at `open` and `stat`
-* [ ] `execve`, `chmod` and `chown` in the syscall table, and in the libc
-* [ ] A first program in `/bin`, and the jump of the x86-64 port into it
+* [x] The mode enforced at `open`, through `vfs_stat`, and the `x` bit at
+      `execve`
+* [x] `execve`, `chmod` and `chown` in the syscall table, and in the libc
+* [x] A first program in `/bin`: the x86-64 port writes `/bin/hello` to its
+      RAM volume at the boot and asks for it with `execve`; the shell runs the
+      same file with `exec`
 * [ ] `PATH` for the shell
 
 ## K4 - Protection (in progress)
 
 * [x] Mode bits and an owner in the file, set by `chmod`/`chown`
 * [x] The arguments of a system call checked at the edge
-* [ ] The permissions enforced at the edge, for the one user of the system
+* [x] The permissions enforced at the edge, for the one user of the system, at
+      `open` and `execve`
 * [ ] A real `fork()`: an address space per task, copy on write - the
       milestone of the x86-64 paging (ADR 0002, ADR 0005)
 
