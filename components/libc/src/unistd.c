@@ -355,9 +355,10 @@ int microos_chown(const char *path, unsigned owner)
 }
 
 /*
- * The program becomes the caller: a successful call does not return, so the
- * only results here are errors. A port that answered with no error without
- * entering the program is reported as what it is - a call that did nothing.
+ * The program becomes the caller: a call that enters it does not return. A
+ * machine without a process to exit into comes back with 0 when the program
+ * has finished, and that zero is the answer here too - the caller is the
+ * program again, and there is nothing to report.
  */
 int microos_execve(const char *path, char *const argv[])
 {
@@ -372,5 +373,7 @@ int microos_execve(const char *path, char *const argv[])
         return fail(rc);
     }
 
-    return fail(KERR_NOSYS);
+    g_errno = 0;
+
+    return 0;
 }

@@ -58,7 +58,7 @@ A negative result is an error, the numbers are the negative error codes of
 | 22 | `realloc` | `ptr, size` | the address of the memory, 0 when there is none |
 | 23 | `chmod` | `path, mode` | 0, or an error |
 | 24 | `chown` | `path, owner` | 0, or an error |
-| 25 | `execve` | `path, argv` | never returns, or an error |
+| 25 | `execve` | `path, argv` | never returns; 0 when the program returns; or an error |
 
 The numbers 0 to 22 are frozen, and 23 to 25 were the next three free ones.
 A call that is not in the table is `ENOSYS`, never a guess at what it might
