@@ -12,8 +12,14 @@
 #
 # The sizes are rounded up to four bytes and the file is padded to match: the
 # port copies segment by segment in words, and a size that is not a multiple
-# of four would leave a tear at the end of a segment. The trailing padding is
-# part of the image and the parser ignores it.
+# of four would leave a tear at the end of a segment. Each segment is padded
+# before the next one starts and not once at the end of the file: the header
+# says that the data begins at the header plus the (padded) text, and a
+# program is linked for that address. A single pad at the end of the file
+# leaves the data one, two or three bytes short of where the program reads
+# it - a shift that runs, prints the wrong bytes and looks like a bug in the
+# program. The trailing padding after the data is allowed by the format and
+# is ignored by the parser.
 set -eu
 
 K_EXEC_HEADER_SIZE=32
@@ -131,8 +137,10 @@ header="$header$(le32 "$text_aligned")$(le32 "$data_aligned")$(le32 "$bss_size")
 
 {
     printf '%s' "$header" | xxd -r -p
-    cat "$work/text.bin" "$work/segment.bin"
-    head -c $((text_aligned + data_aligned - text_size - data_size)) /dev/zero
+    cat "$work/text.bin"
+    head -c $((text_aligned - text_size)) /dev/zero
+    cat "$work/segment.bin"
+    head -c $((data_aligned - data_size)) /dev/zero
 } > "$output"
 
 echo "mkprog: $output: text $text_aligned, data $data_aligned, bss $bss_size, entry $entry"

@@ -12,10 +12,11 @@
  * stays alive is the difference between "the tasks are not done yet" and
  * "the boot is broken".
  *
- * Between the banner and the init process the boot runs a program of its own
- * (see program_demo below): this is the machine of the project that has the
- * memory to place an image and the processor to jump into it, so a program of
- * the phase is a program that really runs and not a figure of speech.
+ * Between the banner and the init process the boot brings up a filesystem and
+ * runs a program out of it (see the section at the end of this file): this is
+ * the machine of the project that has the memory to place an image and the
+ * processor to jump into it, so a program of the phase is a program that
+ * really runs, out of a file, and not a figure of speech.
  */
 #include "port_x86_64.h"
 
@@ -23,13 +24,18 @@
 
 #include "kernel/board.h"
 #include "kernel/boot.h"
-#include "kernel/exec.h"
+#include "kernel/errno.h"
+#include "kernel/ksys.h"
 #include "kernel/log.h"
 #include "kernel/port.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
+#include "kernel/vfs.h"
 
 #include "kshell/kshell.h"
+
+#include "mfs/mfs.h"
+#include "mfs/mfs_vfs.h"
 
 /* The body of the shell task, in src/shell.c. */
 void port_x86_64_shell_run(void);
@@ -61,136 +67,148 @@ static void shell_task(void *arg)
     port_x86_64_shell_run();
 }
 
-/* --- the program of the milestone ---------------------------------------- */
+/* --- the filesystem and the program of the milestone --------------------- */
 
 /*
- * A program, built in C out of the bytes of the machine code, instead of
- * being read from a file: the boot of this port has no filesystem yet, and
- * the point of the milestone is that an image of the MOX1 format really runs.
- * The image is the one tools/mkprog.sh makes out of an object, so the parser
- * of the kernel and the jump of the port are exercised by the format itself
- * and not by a shortcut.
+ * The program of the phase is a file, and the boot reaches it the way any
+ * caller does: through the call. The image is built at the build time out of
+ * programs/hello.c and embedded in the kernel (see the CMakeLists of the
+ * port), because the kernel has to have the bytes before it has anywhere to
+ * put them; at the boot they are written to /bin/hello of a volume of the
+ * memory of the port, and then the boot asks the system for that file with
+ * execve.
  *
- * The listing of the bytes, which an assembler would turn into the same
- * numbers:
- *
- *     lea  rsi, [rip + message]   the string, in the data of the image
- *     mov  edx, 0x3f8             the data register of COM1
- * loop:
- *     mov  al, [rsi]
- *     test al, al
- *     jz   done
- *     out  dx, al                 one byte at a time, no libc and no kernel
- *     inc  rsi
- *     jmp  loop
- * done:
- *     ret                         the exit the port left on the stack
- * message:
- *     "PROGRAM: hello from 0x02000000\r\n" and a zero
- *
- * The string sits in the data segment and not in the text on purpose: the
- * port copies the text and the data, clears the bss and then jumps, and a
- * message that came out of the data is the proof that the copy of the data
- * happened (a port that copied the text alone would print zeros here).
- *
- * The last instruction is a ret and not the halt of a program that owns the
- * machine: this demonstration runs at the boot, before the shell exists, and
- * the shell of the smoke test still has to come up. The port leaves the
- * address of its exit on the stack of the program for exactly that reason
- * (see port_exec.c); a program that halts never gets there.
+ * The shape is deliberate. A boot that read the image and jumped into it would
+ * prove the port and the parser, and nothing of the edge of the system: the
+ * stat of the file, the bit of execution in its mode, the read through the
+ * VFS, the memory of the kernel and the call itself are exactly what a program
+ * from /bin has to go through, and the line of the program on COM1 is the proof
+ * that all of it happened in that order.
  */
-#define PROG_CODE_SIZE 25u
-#define PROG_TEXT_SIZE 28u /* the code, rounded up to the four bytes of the format */
-#define PROG_DATA_SIZE 36u /* the message, rounded up the same way */
+extern const k_u8_t _binary_hello_mox_start[];
+extern const k_u8_t _binary_hello_mox_end[];
 
-static const char g_prog_message[] = "PROGRAM: hello from 0x02000000\r\n";
-
-static const k_u8_t g_prog_code[PROG_CODE_SIZE] = {
-    0x48, 0x8d, 0x35, 0x00, 0x00, 0x00, 0x00, /* lea rsi, [rip + message] */
-    0xba, 0xf8, 0x03, 0x00, 0x00,             /* mov edx, 0x03f8 */
-    0x8a, 0x06,                               /* mov al, [rsi] */
-    0x84, 0xc0,                               /* test al, al */
-    0x74, 0x06,                               /* jz done (the ret) */
-    0xee,                                     /* out dx, al */
-    0x48, 0xff, 0xc6,                         /* inc rsi */
-    0xeb, 0xf4,                               /* jmp loop */
-    0xc3,                                     /* ret */
-};
+#define PROGRAM_DIR "/bin"
+#define PROGRAM_PATH "/bin/hello"
 
 /*
- * The header of the format wants sizes that are multiples of four, and the
- * two segments have to hold what the program is made of; the padding of a
- * segment is part of the image and is ignored, as the format allows.
+ * A program is a file somebody may run, so it is created with the mode of a
+ * program and not with the 0644 of a file of data: without the three bits of
+ * execution the call answers EPERM, and an image that cannot be run proves
+ * nothing about the machine that was supposed to run it.
  */
-_Static_assert(PROG_CODE_SIZE <= PROG_TEXT_SIZE, "the code does not fit the text");
-_Static_assert(sizeof(g_prog_message) <= PROG_DATA_SIZE, "the message does not fit the data");
-_Static_assert((PROG_TEXT_SIZE & 3u) == 0, "the text is not a multiple of four");
-_Static_assert((PROG_DATA_SIZE & 3u) == 0, "the data is not a multiple of four");
+#define PROGRAM_MODE 0755u
 
-static k_u8_t g_program_image[K_EXEC_HEADER_SIZE + PROG_TEXT_SIZE + PROG_DATA_SIZE];
-
-static void put_u32(k_u8_t *where, k_u32_t value)
+/* The image of the program as the build of the kernel left it. */
+static k_size_t program_image_size(void)
 {
-    where[0] = (k_u8_t)(value & 0xFFu);
-    where[1] = (k_u8_t)((value >> 8) & 0xFFu);
-    where[2] = (k_u8_t)((value >> 16) & 0xFFu);
-    where[3] = (k_u8_t)((value >> 24) & 0xFFu);
-}
-
-/* The image in memory: the header of kernel/exec.h, the text, the data. */
-static k_size_t program_image_build(k_u8_t *image)
-{
-    /*
-     * The displacement of a rip-relative lea is measured from the end of the
-     * instruction, which is where the RIP points when it runs. The lea ends
-     * seven bytes into the text and the message is the first byte of the
-     * data, so the distance is the text minus the lea.
-     */
-    k_u32_t displacement = PROG_TEXT_SIZE - 7u;
-    k_u8_t *text = image + K_EXEC_HEADER_SIZE;
-    k_u8_t *data = text + PROG_TEXT_SIZE;
-
-    memset(image, 0, K_EXEC_HEADER_SIZE + PROG_TEXT_SIZE + PROG_DATA_SIZE);
-    memcpy(text, g_prog_code, PROG_CODE_SIZE);
-    put_u32(text + 3u, displacement);
-    memcpy(data, g_prog_message, sizeof(g_prog_message));
-
-    put_u32(image + 0u, K_EXEC_MAGIC);
-    put_u32(image + 4u, K_EXEC_VERSION);
-    put_u32(image + 8u, 0u);                  /* flags */
-    put_u32(image + 12u, K_EXEC_HEADER_SIZE); /* entry: the first byte of the text */
-    put_u32(image + 16u, PROG_TEXT_SIZE);
-    put_u32(image + 20u, PROG_DATA_SIZE);
-    put_u32(image + 24u, 0u); /* bss */
-    put_u32(image + 28u, 0u); /* reserved */
-
-    return K_EXEC_HEADER_SIZE + PROG_TEXT_SIZE + PROG_DATA_SIZE;
+    return (k_size_t)(_binary_hello_mox_end - _binary_hello_mox_start);
 }
 
 /*
- * Run the program of the milestone at the boot. The parse and the run are the
- * two calls the system call layer makes, so what runs here is the whole path
- * of a program and not a copy of it.
+ * Write the image to the file. The file is created through the VFS and not
+ * through the filesystem: the adapter of MicroFS is the only place that knows
+ * which numbers of the filesystem mean what, and the boot is not that place.
  */
-static void program_demo(void)
+static bool program_install(void)
 {
-    struct k_exec_image image;
-    k_size_t size = program_image_build(g_program_image);
+    struct vfs_file file;
+    k_u8_t priv[VFS_FILE_DATA_SIZE];
+    k_size_t size = program_image_size();
+    int rc;
 
-    if (k_exec_parse(g_program_image, size, &image) != 0) {
-        kerror("x86-64: the image of the demonstration program is not a program");
+    rc = vfs_mkdir_p(PROGRAM_DIR);
+    if (rc != 0) {
+        kerror("x86-64: cannot make %s (%s)", PROGRAM_DIR, vfs_strerror(rc));
+        return false;
+    }
+
+    rc = vfs_open(PROGRAM_PATH, VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, priv);
+    if (rc != 0) {
+        kerror("x86-64: cannot create %s (%s)", PROGRAM_PATH, vfs_strerror(rc));
+        return false;
+    }
+
+    rc = vfs_write(&file, _binary_hello_mox_start, size);
+    (void)vfs_close(&file);
+
+    if (rc != (int)size) {
+        kerror("x86-64: %s took %d byte(s) of %u", PROGRAM_PATH, rc, (unsigned)size);
+        return false;
+    }
+
+    /* The mode is the second half of the file: a file of data is written and
+     * read, a program is written and executed, and the difference is here. */
+    rc = vfs_chmod(PROGRAM_PATH, PROGRAM_MODE);
+    if (rc != 0) {
+        kerror("x86-64: cannot make %s executable (%s)", PROGRAM_PATH, vfs_strerror(rc));
+        return false;
+    }
+
+    kinfo("x86-64: %s is written (%u bytes)", PROGRAM_PATH, (unsigned)size);
+
+    return true;
+}
+
+/*
+ * Run the file through the call. The call is the whole of the path: the stat,
+ * the check of the mode, the read through the VFS into the memory of the
+ * kernel, the parse of the image and the jump of the port. The boot does not
+ * repeat any of it.
+ *
+ * The call comes back only because this program ends with a ret and the port
+ * owns the exit; the kernel answers every return with 0, which says "the
+ * program ran and has finished". A program of the system never returns, and
+ * the call then never comes back at all.
+ */
+static void program_run(void)
+{
+    int rc;
+
+    kinfo("x86-64: running %s through the call", PROGRAM_PATH);
+    rc = ksys_execve(PROGRAM_PATH, NULL);
+
+    if (rc == 0) {
+        kinfo("x86-64: the program returned");
         return;
     }
 
-    kinfo("x86-64: a program runs");
+    if (rc == KERR_NOSYS) {
+        kerror("x86-64: this machine cannot run a program");
+        return;
+    }
 
-    /*
-     * The call comes back only because this program ends with a ret and the
-     * port owns the exit; the kernel answers every return with an error,
-     * which says nothing about this program. A program of the system never
-     * returns, and the call then never comes back at all.
-     */
-    (void)k_exec_run(&image);
+    /* The one refusal that is about the file and not about the medium: the
+     * call answered EPERM, so the mode of /bin/hello lost its `x` bits. */
+    if (rc == KERR_PERM) {
+        kerror("x86-64: %s is not executable", PROGRAM_PATH);
+        return;
+    }
+
+    kerror("x86-64: %s did not run (%s, %d)", PROGRAM_PATH, vfs_strerror(rc), rc);
+}
+
+/*
+ * The filesystem of the machine: a volume of the memory of the port, mounted
+ * at the root. The device is registered by port_x86_64_blockdev_init() before
+ * the kernel boots, and a volume that was never formatted is formatted here
+ * (mfs_vfs_mount does that; the RAM of a fresh machine reads as a blank
+ * medium, see blockdev_ram.c).
+ */
+static void filesystem_bring_up(void)
+{
+    int rc = mfs_vfs_mount("/", "ram0");
+
+    if (rc != 0) {
+        kerror("x86-64: cannot mount ram0 at / (%s), there is no /bin", mfs_strerror(rc));
+        return;
+    }
+
+    if (!program_install()) {
+        return;
+    }
+
+    program_run();
 }
 
 /*
@@ -233,12 +251,13 @@ void kmain(k_u64_t multiboot_info)
           (unsigned)(k_port_heap_free() / 1024), (unsigned)(k_port_heap_total() / 1024));
 
     /*
-     * The program of the milestone, after the boot and before the tasks: at
-     * that point the machine is the boot context of the port and nothing
-     * depends on the scheduler yet. That is the moment a program can be
-     * entered without a task under it.
+     * The filesystem and the program of the milestone, after the boot and
+     * before the tasks: at that point the machine is the boot context of the
+     * port and nothing depends on the scheduler yet. That is the moment a
+     * program can be entered without a task under it; the file it came from
+     * is on the volume for the shell to find later.
      */
-    program_demo();
+    filesystem_bring_up();
 
     if (task_create("init", init_task, NULL, TASK_PRIO_DEFAULT) == NULL) {
         /*

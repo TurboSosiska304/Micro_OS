@@ -20,6 +20,7 @@ project(micro_os_x86_64 C ASM)
 set(KERNEL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/kernel")
 set(KSHELL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/kshell")
 set(LIBC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/libc")
+set(MFS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/mfs")
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -69,6 +70,17 @@ set(LIBC_SOURCES
     "${LIBC_DIR}/src/unistd.c"
 )
 
+# MicroFS, so that the machine has a tree of directories and a program in
+# /bin. The filesystem is the same code the board runs, mounted on the RAM
+# volume the port registers (src/blockdev_ram.c). src/mfs_ram_device.c is not
+# here: that one is the volume of the host tests, and it takes its memory from
+# the libc of the process.
+set(MFS_SOURCES
+    "${MFS_DIR}/src/mfs.c"
+    "${MFS_DIR}/src/mfs_vfs.c"
+    "${MFS_DIR}/src/mfs_vfs_mount.c"
+)
+
 # The memory test calls strtoul without including the header of the library;
 # on the board that resolves to the libc of ESP-IDF. Here the name has to
 # point at the conversion of the system, so the header is put in front of
@@ -76,25 +88,78 @@ set(LIBC_SOURCES
 set_source_files_properties("${KSHELL_DIR}/src/kshell_memtest.c"
     PROPERTIES COMPILE_OPTIONS "-include;libc/stdlib.h")
 
+# --- the program of the port: /bin/hello -------------------------------------
+#
+# The image has to be inside the kernel before there is a filesystem to read it
+# from, so it is built here and linked in as a blob. Three steps, and the
+# second one is the interesting one: tools/mkprog.sh copies the sections of an
+# object as they are, and a reference to a string is a relocation until a
+# linker has applied it. The object is therefore linked first, for the window
+# of the programs (programs/program.ld), and the image is made out of the
+# linked file.
+set(PROGRAM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/programs")
+set(PROGRAM_IMAGE "${CMAKE_BINARY_DIR}/hello.mox")
+set(PROGRAM_OBJECT "${CMAKE_BINARY_DIR}/hello_mox.o")
+set(MKPROG "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/mkprog.sh")
+
+add_custom_command(
+    OUTPUT "${PROGRAM_IMAGE}"
+    COMMAND ${CMAKE_C_COMPILER} -c -O2 -ffreestanding -fno-stack-protector
+            -fno-pic -fno-pie -mno-red-zone -mgeneral-regs-only
+            -fno-asynchronous-unwind-tables -Wall -Wextra -Werror
+            -o hello.o "${PROGRAM_DIR}/hello.c"
+    COMMAND ${CMAKE_C_COMPILER} -nostdlib -static -no-pie -Wl,--build-id=none
+            -Wl,-e,hello_main
+            -T "${PROGRAM_DIR}/program.ld" -o hello.elf hello.o
+    COMMAND sh "${MKPROG}" hello.elf hello.mox hello_main
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+    DEPENDS "${PROGRAM_DIR}/hello.c" "${PROGRAM_DIR}/program.ld" "${MKPROG}"
+    COMMENT "building the image of /bin/hello"
+    VERBATIM
+)
+
+# The blob of the image as an object of the kernel. It goes to .rodata, which
+# the linker script of the port keeps in the image that the loader copies, and
+# objcopy names its symbols after the file: _binary_hello_mox_start and _end.
+add_custom_command(
+    OUTPUT "${PROGRAM_OBJECT}"
+    COMMAND objcopy -I binary -O elf64-x86-64
+            --rename-section .data=.rodata,alloc,load,readonly,data,contents
+            hello.mox hello_mox.o
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+    DEPENDS "${PROGRAM_IMAGE}"
+    COMMENT "embedding the image of /bin/hello"
+    VERBATIM
+)
+
+set_source_files_properties("${PROGRAM_OBJECT}" PROPERTIES
+    GENERATED TRUE
+    EXTERNAL_OBJECT TRUE
+)
+
 add_executable(microos64
     ${KERNEL_SOURCES}
     ${KSHELL_SOURCES}
     ${LIBC_SOURCES}
+    ${MFS_SOURCES}
     src/boot64.S
     src/kmain.c
     src/shell.c
     src/port_x86_64.c
     src/port_exec.c
     src/port_x86_64_task.c
+    src/blockdev_ram.c
     src/libc_shim.c
     src/interrupts.S
     src/switch.S
+    "${PROGRAM_OBJECT}"
 )
 
 target_include_directories(microos64 PRIVATE
     "${KERNEL_DIR}/include"
     "${KSHELL_DIR}/include"
     "${LIBC_DIR}/include"
+    "${MFS_DIR}/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 

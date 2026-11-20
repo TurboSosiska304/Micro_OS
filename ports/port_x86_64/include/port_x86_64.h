@@ -131,6 +131,13 @@ void port_x86_64_unexpected(void);
 void port_x86_64_irq_tick(void);
 
 /*
+ * Own the block devices of the port: a volume in the memory of the machine,
+ * "ram0", which is where the filesystem of the port lives (blockdev_ram.c).
+ * Called by port_x86_64_init(), before the kernel asks for a device.
+ */
+void port_x86_64_blockdev_init(void);
+
+/*
  * The hook of the task substrate, called on every tick. Weak here: a build
  * without a scheduler keeps its clock, and the file of the tasks of the port
  * overrides it when the scheduler exists.
