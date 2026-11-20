@@ -52,6 +52,11 @@ jobs:
           . /opt/esp/idf/export.sh >/dev/null
           idf.py build
 
+      # The container of ESP-IDF carries the toolchain of the board and not
+      # the host tools of the other machine.
+      - name: the tools of the x86-64 port
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends cmake ninja-build build-essential
+
       - name: the kernel of the x86-64 port
         run: make x86-build
 
