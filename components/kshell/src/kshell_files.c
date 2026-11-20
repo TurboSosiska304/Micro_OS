@@ -1,18 +1,33 @@
 /*
- * Micro OS — the commands of the shell that work with the files.
+ * Micro OS — the commands of the shell that work with the files: the tree, the
+ * content, the mode and the owner, and the file that becomes a program.
  */
 #include "kshell/kshell.h"
 
 #include <stdio.h>
 #include <string.h>
 
+#include "kernel/errno.h"
+#include "kernel/ksys.h"
 #include "kernel/task.h"
 #include "kernel/vfs.h"
+#include "mfs/mfs.h"
+#include "libc/stdlib.h"
 #include "libc/unistd.h"
 
 #define SHELL_MAX_ENTRIES 64
 #define SHELL_LS_CHILDREN 16
 #define SHELL_PATH_MAX 128
+
+/*
+ * The value of PATH. It belongs to the shell and not to the filesystem or
+ * the kernel: which directories hold the commands is a matter of the person
+ * at the console, and a program of this system does not inherit it yet.
+ */
+#define SHELL_PATH_DEFAULT "/bin:/usr/bin"
+#define SHELL_PATH_SIZE 96
+
+static char g_shell_path[SHELL_PATH_SIZE] = SHELL_PATH_DEFAULT;
 
 /* The path of the current directory of the task. */
 static const char *shell_cwd(void)
@@ -422,6 +437,389 @@ static int cmd_mount(int argc, char **argv)
     return KSHELL_OK;
 }
 
+/* --- the mode, the owner, the path and the programs --- */
+
+/*
+ * A number of a command line, in the base the command speaks. The whole text
+ * has to be the number: "0644x" is not a mode that was cut to 0644, and a
+ * number above the limit is refused instead of wrapped.
+ */
+static bool shell_number(const char *text, int base, unsigned long limit, unsigned long *out)
+{
+    char *end = NULL;
+    unsigned long value = microos_strtoul(text, &end, base);
+
+    if (end == NULL || end == text || *end != '\0' || value > limit) {
+        return false;
+    }
+
+    *out = value;
+
+    return true;
+}
+
+/*
+ * The words of the shell for a call that refused a mode or an owner. The
+ * library gives the number of POSIX; the person at the console wants a
+ * sentence, and the invalid argument needs its own, because the number does
+ * not say which argument was wrong.
+ */
+static const char *attr_error_text(int code, const char *invalid)
+{
+    switch (code) {
+    case -KERR_PERM:
+        return "not permitted";
+    case -KERR_NOENT:
+        return "no such file";
+    case -KERR_INVAL:
+        return invalid;
+    default:
+        return microos_strerror(code);
+    }
+}
+
+/*
+ * The words for a program that did not run. Every reason of the call has a
+ * face of its own: "function not implemented" would hide that this machine
+ * has no window of programs, which is the answer of the board.
+ */
+static const char *exec_error_text(int code)
+{
+    if (code == -KERR_NOSYS) {
+        return "this machine cannot run a program";
+    }
+
+    if (code == -KERR_PERM) {
+        return "not permitted: the file has no execute bit";
+    }
+
+    if (code == -KERR_NOMEM) {
+        return "not enough memory for the image";
+    }
+
+    return attr_error_text(code, "not a MOX1 image of this system");
+}
+
+static int cmd_chmod(int argc, char **argv)
+{
+    char path[SHELL_PATH_MAX];
+    unsigned long mode = 0;
+    int rc;
+
+    if (argc != 3) {
+        kshell_printf("usage: chmod <mode> <path>\n");
+        return KSHELL_USAGE;
+    }
+
+    if (!shell_number(argv[1], 8, KSYS_MODE_MASK, &mode)) {
+        kshell_printf("chmod: %s: not an octal mode (000..777)\n", argv[1]);
+        return KSHELL_ERROR;
+    }
+
+    if (!shell_resolve(argv[2], path, sizeof(path))) {
+        return path_too_long("chmod");
+    }
+
+    rc = microos_chmod(path, (unsigned)mode);
+    if (rc != 0) {
+        kshell_printf("chmod: %s: %s\n", path,
+                      attr_error_text(microos_errno(), "000 is not a mode the filesystem keeps"));
+        return KSHELL_ERROR;
+    }
+
+    return KSHELL_OK;
+}
+
+static int cmd_chown(int argc, char **argv)
+{
+    char path[SHELL_PATH_MAX];
+    unsigned long owner = 0;
+    int rc;
+
+    if (argc != 3) {
+        kshell_printf("usage: chown <uid> <path>\n");
+        return KSHELL_USAGE;
+    }
+
+    if (!shell_number(argv[1], 10, KSYS_UID_MAX, &owner)) {
+        kshell_printf("chown: %s: a uid is 0..%u\n", argv[1], (unsigned)KSYS_UID_MAX);
+        return KSHELL_ERROR;
+    }
+
+    if (!shell_resolve(argv[2], path, sizeof(path))) {
+        return path_too_long("chown");
+    }
+
+    rc = microos_chown(path, (unsigned)owner);
+    if (rc != 0) {
+        kshell_printf("chown: %s: %s\n", path,
+                      attr_error_text(microos_errno(), "a uid is 0..32767"));
+        return KSHELL_ERROR;
+    }
+
+    return KSHELL_OK;
+}
+
+/* The nine bits of a mode as ls writes them: a live bit is a letter. */
+static void mode_text(unsigned mode, char out[10])
+{
+    static const char letters[3] = {'r', 'w', 'x'};
+    int bit;
+
+    for (bit = 0; bit < 9; bit++) {
+        out[bit] = (mode & (1u << (8 - bit))) ? letters[bit % 3] : '-';
+    }
+    out[9] = '\0';
+}
+
+/*
+ * The mode, the owner and the size of one object. The line of `ls -l` comes
+ * first because it is the one a person reads at a glance; the fields below
+ * it are the same numbers without the puzzle of the nine bits.
+ *
+ * A record of an old volume keeps no mode at all. Nine dashes would be read
+ * as "nobody may touch it", which is a different and false statement, so
+ * such an object prints the fields alone and says `mode: (not set)`.
+ */
+static int cmd_stat(int argc, char **argv)
+{
+    char path[SHELL_PATH_MAX];
+    struct vfs_stat info;
+    unsigned mode;
+    const char *type;
+    int rc;
+
+    if (argc != 2) {
+        kshell_printf("usage: stat <path>\n");
+        return KSHELL_USAGE;
+    }
+
+    if (!shell_resolve(argv[1], path, sizeof(path))) {
+        return path_too_long("stat");
+    }
+
+    rc = vfs_stat(path, &info);
+    if (rc != 0) {
+        kshell_printf("stat: %s: %s\n", path, vfs_strerror(rc));
+        return KSHELL_ERROR;
+    }
+
+    mode = info.mode & KSYS_MODE_MASK;
+
+    if (info.type == 2) {
+        type = "directory";
+    } else if (info.type == 1) {
+        type = "file";
+    } else {
+        type = "device";
+    }
+
+    if (mode != 0) {
+        char bits[10];
+        char kind = (info.type == 2) ? 'd' : (info.type == 1 ? '-' : 'c');
+
+        mode_text(mode, bits);
+        kshell_printf("%c%s %u %llu %s\n", kind, bits, (unsigned)info.owner,
+                      (unsigned long long)info.size, path);
+    }
+
+    kshell_printf("type: %s\n", type);
+
+    if (mode == 0) {
+        kshell_printf("mode: (not set)\n");
+    } else {
+        kshell_printf("mode: 0%o\n", mode);
+    }
+
+    kshell_printf("owner: %u\n", (unsigned)info.owner);
+    kshell_printf("size: %llu\n", (unsigned long long)info.size);
+
+    return KSHELL_OK;
+}
+
+/*
+ * The consistency of the volume, read-only. The filesystem answers with
+ * the report and not with a repair: a person decides what to do about a
+ * broken record, and a checker that writes is a formatter that nobody
+ * asked for.
+ */
+static int cmd_fsck(int argc, char **argv)
+{
+    struct mfs_check_report report;
+    int rc;
+
+    K_UNUSED(argv);
+
+    if (argc != 1) {
+        kshell_printf("usage: fsck\n");
+        return KSHELL_USAGE;
+    }
+
+    rc = mfs_check(&report);
+    if (rc == MFS_EINVAL) {
+        kshell_printf("fsck: no volume is mounted\n");
+        return KSHELL_ERROR;
+    }
+
+    if (rc != MFS_OK) {
+        kshell_printf("fsck: the volume cannot be read (%s)\n", mfs_strerror(rc));
+        return KSHELL_ERROR;
+    }
+
+    kshell_printf("fsck: %u file(s), %u directory(ies), %u of %u block(s) free\n",
+                  (unsigned)report.files, (unsigned)report.directories,
+                  (unsigned)report.free_blocks, (unsigned)report.data_blocks);
+
+    if (report.errors != 0) {
+        kshell_printf("fsck: %u problem(s), the first: %s\n", (unsigned)report.errors,
+                      report.first);
+        return KSHELL_ERROR;
+    }
+
+    kshell_printf("fsck: the volume is consistent\n");
+
+    return KSHELL_OK;
+}
+
+static int cmd_path(int argc, char **argv)
+{
+    if (argc < 2) {
+        kshell_printf("%s\n", g_shell_path);
+        return KSHELL_OK;
+    }
+
+    if (argc > 2) {
+        kshell_printf("usage: path [directories]\n");
+        return KSHELL_USAGE;
+    }
+
+    /*
+     * The splitter of the shell has no quotes yet, so the empty argument
+     * that resets the value reaches this command as two quote marks: that
+     * is the only way a person can type "nothing" at the console.
+     */
+    if (argv[1][0] == '\0' || strcmp(argv[1], "\"\"") == 0) {
+        snprintf(g_shell_path, sizeof(g_shell_path), "%s", SHELL_PATH_DEFAULT);
+        return KSHELL_OK;
+    }
+
+    if (strlen(argv[1]) >= sizeof(g_shell_path)) {
+        kshell_printf("path: the value is too long (%u byte(s) at most)\n",
+                      (unsigned)(sizeof(g_shell_path) - 1));
+        return KSHELL_ERROR;
+    }
+
+    snprintf(g_shell_path, sizeof(g_shell_path), "%s", argv[1]);
+
+    return KSHELL_OK;
+}
+
+/* Whether the name carries its own path, in which case PATH has no say. */
+static bool shell_name_has_dir(const char *name)
+{
+    return strchr(name, '/') != NULL;
+}
+
+/*
+ * The first entry of PATH that holds a file with an execute bit. A file
+ * without one is passed over, as Linux does: a broken entry must not hide
+ * the program that waits below it. The answer is the full path that will be
+ * run, because the person has to see which file answered.
+ */
+static bool shell_find_program(const char *name, char *out, k_size_t size)
+{
+    const char *cursor = g_shell_path;
+
+    for (;;) {
+        const char *colon = strchr(cursor, ':');
+        k_size_t len = (colon != NULL) ? (k_size_t)(colon - cursor) : strlen(cursor);
+        char dir[SHELL_PATH_MAX];
+        char candidate[SHELL_PATH_MAX];
+        struct vfs_stat info;
+        int n;
+
+        /*
+         * An empty entry is the current directory, as in Linux; an entry
+         * too long to hold is not a directory that can be named.
+         */
+        if (len == 0) {
+            dir[0] = '.';
+            dir[1] = '\0';
+            len = 1;
+        } else if (len < sizeof(dir)) {
+            memcpy(dir, cursor, len);
+            dir[len] = '\0';
+        } else {
+            dir[0] = '\0';
+        }
+
+        if (dir[0] != '\0') {
+            const char *slash = (dir[len - 1] == '/') ? "" : "/";
+
+            n = snprintf(candidate, sizeof(candidate), "%s%s%s", dir, slash, name);
+            if (n >= 0 && (k_size_t)n < sizeof(candidate) && shell_resolve(candidate, out, size) &&
+                vfs_stat(out, &info) == 0 && info.type == 1 && (info.mode & 0111u) != 0) {
+                return true;
+            }
+        }
+
+        if (colon == NULL) {
+            break;
+        }
+        cursor = colon + 1;
+    }
+
+    return false;
+}
+
+static int cmd_exec(int argc, char **argv)
+{
+    char path[SHELL_PATH_MAX];
+    /*
+     * The vector is built on the stack of the shell: the line it points into
+     * is a buffer of the shell as well, and a program of this system does not
+     * read its arguments yet. The extra place is the null terminator.
+     */
+    char *args[KSHELL_MAX_ARGS + 1];
+    int i;
+    int rc;
+
+    if (argc < 2) {
+        kshell_printf("usage: exec <program> [arguments...]\n");
+        return KSHELL_USAGE;
+    }
+
+    if (shell_name_has_dir(argv[1])) {
+        if (!shell_resolve(argv[1], path, sizeof(path))) {
+            return path_too_long("exec");
+        }
+    } else if (!shell_find_program(argv[1], path, sizeof(path))) {
+        kshell_printf("exec: %s: not found in %s\n", argv[1], g_shell_path);
+        return KSHELL_ERROR;
+    }
+
+    /*
+     * argv[0] is the name that was typed, as in Linux, and the rest of the
+     * line follows it. The line is already cut at KSHELL_MAX_ARGS words, so
+     * the vector has its terminator inside the array.
+     */
+    for (i = 1; i < argc; i++) {
+        args[i - 1] = argv[i];
+    }
+    args[argc - 1] = NULL;
+
+    rc = microos_execve(path, args);
+    if (rc == 0) {
+        /* A program that returned: the machine has no process to exit into. */
+        kshell_printf("the program has finished\n");
+        return KSHELL_OK;
+    }
+
+    kshell_printf("exec: %s: %s\n", path, exec_error_text(microos_errno()));
+
+    return KSHELL_ERROR;
+}
+
 int kshell_register_files(void)
 {
     int rc = 0;
@@ -435,6 +833,12 @@ int kshell_register_files(void)
     rc |= kshell_register("rm", "remove a file", cmd_rm);
     rc |= kshell_register("df", "the usage of the filesystem", cmd_df);
     rc |= kshell_register("mount", "the mounted filesystems", cmd_mount);
+    rc |= kshell_register("fsck", "check the volume, read-only", cmd_fsck);
+    rc |= kshell_register("chmod", "change the mode of a file", cmd_chmod);
+    rc |= kshell_register("chown", "change the owner of a file", cmd_chown);
+    rc |= kshell_register("stat", "the type, the mode and the owner", cmd_stat);
+    rc |= kshell_register("path", "show or set PATH: path [directories]", cmd_path);
+    rc |= kshell_register("exec", "run a program: exec <program> [args...]", cmd_exec);
 
     return rc;
 }

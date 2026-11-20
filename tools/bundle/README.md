@@ -1,14 +1,22 @@
 # Micro OS — prebuilt firmware
 
 This folder holds the **ready to flash** firmware of Micro OS for the M5Stack
-StickC Plus2. You do not need the sources, the ESP-IDF or the toolchain to
-use it: download the folder, connect the board and run the flash script.
+StickC Plus2, and the same kernel for a PC. You do not need the sources, the
+ESP-IDF or the toolchain to use it: download the folder, connect the board
+and run the flash script.
 
 | File | Description | Flash address |
 |------|-------------|---------------|
-| `bootloader.bin` | Second stage bootloader | `0x1000` |
-| `partition-table.bin` | Partition table | `0x8000` |
-| `micro_os.bin` | The kernel itself | `0x10000` |
+| `MicroOS-<version>.bin` | The whole board image: bootloader, table and kernel | `0x0` |
+| `bootloader.bin` | Second stage bootloader, for the tools that want the parts | `0x1000` |
+| `partition-table.bin` | Partition table, for the tools that want the parts | `0x8000` |
+| `micro_os.bin` | The kernel itself, for the tools that want the parts | `0x10000` |
+| `MicroOS-x86_64-<version>.tar.gz` | The same kernel for QEMU: loader, kernel, `run.sh` and a readme | - |
+
+The single image is the same bytes as the three parts at their offsets. It
+covers `0x0` to the end of the application; the NVS and MicroFS live further
+and are **not** touched by a flash of it, so the data of the volume survives
+an update.
 
 ## The layout of the flash
 
@@ -42,7 +50,9 @@ chmod +x flash.sh
 ./flash.sh /dev/ttyACM0     # or give the port explicitly
 ```
 
-The script needs `esptool`:
+The script writes `MicroOS-<version>.bin` at `0x0` when the bundle has it,
+and falls back to the three parts at their offsets when it does not. It needs
+`esptool`:
 
 ```bash
 pip install esptool
@@ -54,6 +64,13 @@ or the one that comes with ESP-IDF:
 . ~/esp/esp-idf/export.sh
 ./flash.sh
 ```
+
+## The other machine
+
+`MicroOS-x86_64-<version>.tar.gz` is the same kernel built for a bare x86-64
+machine. Unpack it and run `./run.sh`: it starts QEMU with the loader and the
+kernel, no board and no operating system under it. The console is COM1, and
+the machine has a volume in its memory with a program in `/bin`.
 
 ## The console
 

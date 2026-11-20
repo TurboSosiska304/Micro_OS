@@ -344,10 +344,18 @@ int vfs_stat(const char *path, struct vfs_stat *out)
         return -2;
     }
 
-    if (m->ops->stat == NULL) {
+    if (out == NULL || m->ops->stat == NULL) {
         g_last_error = -1;
         return -1;
     }
+
+    /*
+     * The answer is zeroed before the filesystem fills it: a filesystem that
+     * keeps no modes leaves the zero that says so, and the bytes of the
+     * answer are the same for every call - stat is copied to the memory of
+     * the caller whole, padding included.
+     */
+    memset(out, 0, sizeof(*out));
 
     rc = m->ops->stat(m->ctx, path, out);
     g_last_error = rc;
@@ -454,6 +462,54 @@ int vfs_unlink(const char *path)
     }
 
     rc = m->ops->unlink(m->ctx, path);
+    g_last_error = rc;
+
+    return rc;
+}
+
+int vfs_chmod(const char *path, k_u32_t mode)
+{
+    const struct mount *m = resolve(path, NULL);
+    int rc;
+
+    if (m == NULL) {
+        g_last_error = -2;
+        return -2;
+    }
+
+    /*
+     * A filesystem without modes answers what the VFS answers for every
+     * operation it does not have: -1, "not permitted". A virtual filesystem
+     * has no attributes to write, and a number stored nowhere would be a
+     * lie to the caller.
+     */
+    if (m->ops->chmod == NULL) {
+        g_last_error = -1;
+        return -1;
+    }
+
+    rc = m->ops->chmod(m->ctx, path, mode);
+    g_last_error = rc;
+
+    return rc;
+}
+
+int vfs_chown(const char *path, k_u32_t owner)
+{
+    const struct mount *m = resolve(path, NULL);
+    int rc;
+
+    if (m == NULL) {
+        g_last_error = -2;
+        return -2;
+    }
+
+    if (m->ops->chown == NULL) {
+        g_last_error = -1;
+        return -1;
+    }
+
+    rc = m->ops->chown(m->ctx, path, owner);
     g_last_error = rc;
 
     return rc;

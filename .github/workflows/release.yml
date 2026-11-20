@@ -52,8 +52,21 @@ jobs:
           . /opt/esp/idf/export.sh >/dev/null
           idf.py build
 
+      # The container of ESP-IDF carries the toolchain of the board and not
+      # the host tools of the other machine.
+      - name: the tools of the x86-64 port
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends cmake ninja-build build-essential
+
+      - name: the kernel of the x86-64 port
+        run: make x86-build
+
+      # esptool lives in the python environment of the image, and the step
+      # that builds the bundle is where it is needed (merge_bin).
       - name: the bundle of dist/
-        run: tools/bundle.sh build dist
+        shell: bash
+        run: |
+          . /opt/esp/idf/export.sh >/dev/null
+          tools/bundle.sh build dist
 
       - name: the integrity against the version of the tag
         shell: bash
@@ -99,6 +112,6 @@ jobs:
           esac
           gh release create "$GITHUB_REF_NAME" dist/* \
             --title "Micro OS $GITHUB_REF_NAME" \
-            --notes "The firmware for the M5Stack StickC Plus2: micro_os.bin, bootloader.bin, partition-table.bin, the SHA-256 sums of all of them and flash.sh — unpack and run ./flash.sh over USB. The notes about the commits are generated below." \
+            --notes "The firmware for the M5Stack StickC Plus2 is one file: MicroOS-<version>.bin, which flash.sh writes at offset 0x0. The parts (micro_os.bin, bootloader.bin, partition-table.bin) and the SHA-256 sums of all of them stay for the tools that want them; NVS and MicroFS are not part of the image, so a flash keeps the data of the volume. For a PC, MicroOS-x86_64-<version>.tar.gz carries the same kernel for QEMU: unpack and run ./run.sh. Unpack the board bundle, connect over USB and run bash flash.sh (the release keeps no executable bit, so ./flash.sh needs a chmod +x first). The notes about the commits are generated below." \
             --generate-notes \
             $flags

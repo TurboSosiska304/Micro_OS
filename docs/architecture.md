@@ -1,6 +1,6 @@
 # Micro OS architecture
 
-> Russian version: [architecture_ru.md](architecture_ru.md)
+> Russian version: [architecture_ru.md](ru/architecture_ru.md)
 
 ## 1. Overview
 
@@ -50,6 +50,7 @@ architecture own its part in `arch/<arch>/include/asm`:
 | `kernel/port/kv.h` | the store that survives a restart | `k_port_kv_get`, `k_port_kv_next` |
 | `kernel/port/net.h` | TCP and UDP | `k_port_net_connect`, `k_port_net_listen` |
 | `kernel/port/info.h` | identity and contract version | `k_port_name`, `k_port_api_major` |
+| `kernel/port/exec.h` | running a program | `k_port_exec_supported`, `k_port_exec_base`, `k_port_exec_enter` |
 
 The version of the contract (`KERNEL_PORT_API_VERSION_MAJOR/MINOR`) is the
 vermagic of the pair: the port asserts it at build time and the boot
@@ -86,7 +87,7 @@ MMU: the separation of user and kernel space is logical, system calls are
 ordinary function calls with a uniform ABI, and the boundary is kept by
 discipline. The x86-64 port has an MMU and does not use it yet - the identity
 map of its loader is the first step, and the address spaces of the tasks are
-the next one (see `docs/kernel-roadmap.md`).
+the next one (see `docs/roadmap.md`).
 
 That is a property of the current port, not the shape of the kernel: everything
 the kernel concedes to a board without an MMU sits behind one compile time flag,
@@ -224,9 +225,10 @@ struct file_operations {
 
 The drivers are written: `drv_display` (ST7789v2, the panel and the turn of
 its picture), `drv_input` (A/B/C), `drv_buzzer`, `drv_imu` (MPU6886),
-`drv_rtc` (BM8563), `drv_mic` (SPM1423), `drv_battery`. The pinout and the
+`drv_rtc` (BM8563), `drv_battery` and `drv_mic` (SPM1423, a PDM microphone
+on I2S at 16 kHz; the doctor reports its RMS and peak). The pinout and the
 quirks are documented in
-[docs/hardware/stickc-plus2.md](hardware/stickc-plus2.md).
+[docs/ports/esp32/hardware.md](ports/esp32/hardware.md).
 
 The WiFi driver is built like the kernel itself: a portable core
 (`components/wifi`) that owns the state of the station and a radio
@@ -273,7 +275,62 @@ board the port speaks lwIP, on the host it speaks the sockets of the
 process, so the HTTP client, the clock of NTP and the server of telnet are
 exercised without a board.
 
-## 8. Testing
+## 8. Programs (phase 7)
+
+A program is a file, not a function of the tree: `execve` reads it, the kernel
+parses a format of its own and the port runs it. The decisions are in
+[ADR 0005](adr/0005-programs-and-protection.md), the report of the phase in
+[phase7.md](phases/phase7.md).
+
+### The format: MOX1
+
+An executable is a flat image with a 32-byte header (`kernel/exec.h`): the
+magic `MOX1`, a version, flags, the offset of the entry, the sizes of the text,
+the data and the bss, and a reserved word. The image is linked for the window
+of the port - the code at its base plus the 32 bytes of the header - and copied
+as it is, because nothing relocates it; the bss is not in the file and the port
+clears it. `tools/mkprog.sh` turns an object into the image. The parser
+(`components/kernel/src/exec.c`) checks the image against itself and nothing
+else: the magic and the version, sizes that fit the file, a text that is not
+empty, an entry in the text, sizes that are multiples of four, and a bss under
+a megabyte.
+
+### `execve` belongs to the port
+
+`kernel/port/exec.h` is a subject of the contract (1.3) with three calls:
+`k_port_exec_supported()` (can this machine run a program at all),
+`k_port_exec_base()` (where the window is) and `k_port_exec_enter()` (copy the
+image, clear the bss, jump). The kernel parses the image and asks the port, so
+the answer for a machine that has no window is `ENOSYS` at the edge. The board
+says no: its flash is not executable for a file, and internal SRAM is ~100 KB
+for everything. The host says no too: jumping into the bytes of a program
+inside the address space of the simulator would run it with the libc of the
+host under it. x86-64 says yes and places a program at 32 MiB, with a 64 KiB
+stack at the top of its window; its boot mounts MicroFS on a volume of the
+port's RAM, writes `/bin/hello` there, gives it the mode of a program and asks
+for it with `execve` - the stat, the mode, the read through the VFS, the parse
+and the jump are the ones of the call.
+
+### The rights are checked at the edge
+
+`chmod` and `chown` are numbers 23 and 24 of the syscall table and `execve` is
+25. A mode is nine bits (`rwx` for the user, the group and the others) and an
+owner is a fifteen-bit uid; both live in the spare bits of the MicroFS record
+(see [memory.md](memory.md)). There is one user (uid 0), and it gets no
+exemption of root: `open` compares the access it was asked for with the triad
+that decides for the caller, and `execve` needs the `x` bit; `stat` only
+reports. The width of the two numbers is checked at the door, the library
+(`components/libc`) has the three wrappers with the codes of POSIX in
+`errno`, and the shell has `chmod`, `chown` and `exec` over the same calls.
+The directories of a path are not checked for their `x` bit yet, and
+`fork()` with an address space of its own waits for the paging of a port
+(ADR 0005). A program calls the kernel with `int $0x80` on the x86-64 port:
+the register ABI is in [ADR 0006](adr/0006-program-entry.md), and the program
+runs in ring 0 without an address space of its own, so the handler trusts its
+pointers and a program that does not return holds the machine (see
+[debts.md](debts.md)).
+
+## 9. Testing
 
 * The kernel is tested on the host: `make test` (own framework, no dependencies),
   twice more under the address sanitizer (`make test-asan`) and the race
@@ -282,7 +339,8 @@ exercised without a board.
   a file, `/proc`, `/dev`, the configuration and the drivers of the host, so
   the whole portable system can be debugged without flashing.
 * The x86-64 port is booted in QEMU by `make x86-smoke`: the same sources, a
-  bare processor, a serial console, the shell.
+  bare processor, a serial console, the shell - and, between the banner and
+  the shell, a MOX1 program that the port enters and that writes its line.
 * On the device there is a UART console, and its output is mirrored to the
   TFT at the same time — the dialogue and the boot report are on both; the
   checks are driven by `tools/device-test.sh`.
@@ -290,7 +348,7 @@ exercised without a board.
   portable component no platform header and no `k_port_*`, every port
   implements the whole contract, and the image fits its budget.
 
-## 9. Resource budget
+## 10. Resource budget
 
 | Resource | Available | Comment |
 |---|---|---|

@@ -2,7 +2,7 @@
 
 > Перевод на русский может отставать от английского оригинала: канонический текст — английский.
 
-> English version: [architecture.md](architecture.md)
+> English version: [architecture.md](../architecture.md)
 
 ## 1. Общая схема
 
@@ -169,7 +169,7 @@ struct file_operations {
 Драйверы написаны: `drv_display` (ST7789v2, панель и поворот её картинки),
 `drv_input` (A/B/C), `drv_buzzer`, `drv_imu` (MPU6886), `drv_rtc` (BM8563),
 `drv_mic` (SPM1423), `drv_battery`. Распиновка и особенности — в
-[docs/hardware/stickc-plus2_ru.md](hardware/stickc-plus2_ru.md).
+[docs/ports/esp32/hardware_ru.md](ports/esp32/hardware_ru.md).
 
 Драйвер WiFi построен так же, как само ядро: переносимое ядро
 (`components/wifi`), которому принадлежит состояние станции, и радио

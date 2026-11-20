@@ -1,6 +1,6 @@
 # M5Stack StickC Plus2 hardware
 
-> Russian version: [stickc-plus2_ru.md](stickc-plus2_ru.md)
+> Russian version: [../../ru/ports/esp32/hardware_ru.md](../../ru/ports/esp32/hardware_ru.md)
 
 Source: the official M5Stack documentation (SKU **K016-P2**).
 Check everything below before writing a driver: the board has no PMIC, an unusual
@@ -69,6 +69,29 @@ Devices on that bus:
 |---|---|
 | MIC CLK | G0 |
 | MIC DATA | G34 |
+
+The SPM1423 is a MEMS element with a PDM output: there is no register to
+read and no identification to ask for, the element simply answers with a
+stream of bits. The driver (`drv_mic.c`, `CONFIG_MICRO_OS_MIC`) therefore
+runs the I2S peripheral in **PDM RX** mode, mono, 16 kHz, with the clock
+generated on G0 and the data sampled on G34, and the hardware doctor proves
+the microphone with a short window of signal: it reports the RMS and the
+peak of the audio around the converter's own offset.
+
+Limits worth knowing before writing an application around it:
+
+* G0 is a strapping pin of the ESP32 (it selects the download mode at
+  reset). The microphone only takes it as an output after the boot, but a
+  Grove device that pulls G0 low while the board resets keeps the board in
+  the loader.
+* G34 is an input-only pin without pull-up or pull-down; the element drives
+  it, nothing else should.
+* The channel runs from the boot and owns I2S0. An application that needs
+  the peripheral for something else has to turn the driver off in the
+  configuration (`CONFIG_MICRO_OS_MIC=n`) and take the channel itself.
+* The doctor cannot tell a silent room from a dead element by listening
+  alone: a window under both limits (RMS 2 and peak 8; a quiet room reads
+  about 4 and 16) is reported as `degraded` with the numbers, not as `ok`.
 
 ### Grove / external pins
 

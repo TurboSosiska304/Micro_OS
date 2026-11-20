@@ -19,6 +19,7 @@
 #include "kernel/log.h"
 #include "kernel/net.h"
 #include "kshell/kshell.h"
+#include "net/net_http.h"
 #include "net/ntp.h"
 
 /* --- the transport of the HTTP client --- */
@@ -104,6 +105,96 @@ int net_ntp_sync(const char *server, k_u64_t *unix_seconds)
     return ntp_parse_response(answer, unix_seconds);
 }
 
+/* --- the page of the state --- */
+
+/*
+ * A port of the shell: digits and nothing else, and no more than 65535. The
+ * parser is these few lines and not a call of strtoul, because the component
+ * keeps its dependencies to the kernel.
+ */
+static bool parse_port(const char *text, k_u16_t *out)
+{
+    k_u32_t value = 0;
+    k_size_t i;
+
+    if (text == NULL || text[0] == '\0') {
+        return false;
+    }
+
+    for (i = 0; text[i] != '\0'; i++) {
+        if (text[i] < '0' || text[i] > '9') {
+            return false;
+        }
+
+        value = value * 10u + (k_u32_t)(text[i] - '0');
+        if (value > 65535u) {
+            return false;
+        }
+    }
+
+    if (value == 0) {
+        return false;
+    }
+
+    *out = (k_u16_t)value;
+
+    return true;
+}
+
+/*
+ * The command does not start the server by itself at the boot: a machine of
+ * this size opens a port when its owner says so, from a script of init or
+ * from the shell. The policy is the platform's; the door is here.
+ */
+static int cmd_httpd(int argc, char **argv)
+{
+    k_u16_t port = NET_HTTP_PORT;
+
+    if (argc > 2) {
+        kshell_printf("usage: httpd [port|off]\n");
+        return KSHELL_USAGE;
+    }
+
+    if (argc == 2 && strcmp(argv[1], "off") == 0) {
+        if (!net_http_server_running()) {
+            kshell_printf("httpd: it is not on\n");
+            return KSHELL_OK;
+        }
+
+        net_http_server_stop();
+        kshell_printf("httpd: stopped\n");
+
+        return KSHELL_OK;
+    }
+
+    /*
+     * The argument is read before the state of the server: a mistyped port is
+     * a usage whatever the door is doing.
+     */
+    if (argc == 2 && !parse_port(argv[1], &port)) {
+        kshell_printf("usage: httpd [port|off]\n");
+        return KSHELL_USAGE;
+    }
+
+    /*
+     * One server is one port: a second `httpd` says where the page is and
+     * leaves the server alone. Moving it is `httpd off` and then `httpd`.
+     */
+    if (net_http_server_running()) {
+        kshell_printf("httpd: already on port %u\n", (unsigned)net_http_server_port());
+        return KSHELL_OK;
+    }
+
+    if (net_http_server_start(port) != 0) {
+        kshell_printf("httpd: the port %u is not ours\n", (unsigned)port);
+        return KSHELL_ERROR;
+    }
+
+    kshell_printf("httpd: the page is on port %u\n", (unsigned)port);
+
+    return KSHELL_OK;
+}
+
 /* --- the shell --- */
 
 static int cmd_http(int argc, char **argv)
@@ -180,6 +271,7 @@ int net_register(void)
 
     rc |= kshell_register("http", "the HTTP client: http get <url>", cmd_http);
     rc |= kshell_register("ntp", "set the clock from NTP: ntp [server]", cmd_ntp);
+    rc |= kshell_register("httpd", "the page of the state: httpd [port|off]", cmd_httpd);
 
     return rc;
 }

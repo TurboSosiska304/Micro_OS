@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "kernel/errno.h"
+#include "kernel/exec.h"
 #include "kernel/ksys.h"
 #include "kernel/log.h"
 #include "kernel/sched.h"
@@ -264,6 +265,48 @@ static void test_fork_posix(void)
 }
 
 /*
+ * The property: a pid and a flag that cannot name a child are refused
+ * instead of being guessed at, and the two shapes of "any child" stay
+ * valid.
+ */
+static void test_wait_validation(void)
+{
+    int status = -1;
+    int rc;
+
+    ktest_begin("ksys: a pid that makes no sense is refused");
+
+    setup();
+
+    /* Only 0 and -1 mean "any child": -2 and below name no task. */
+    KT_CHECK_INT_EQ(ksys_waitpid(-2, &status, KSYS_WNOHANG), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_waitpid(-100, &status, 0), KERR_INVAL);
+
+    /* The flags of the call are one bit. */
+    KT_CHECK_INT_EQ(ksys_waitpid(0, &status, 0x0100), KERR_INVAL);
+
+    /* A wide pid must not be cut down to a small child by the cast to int;
+     * the width of the arguments belongs to the target. */
+    if (sizeof(ksys_arg_t) > sizeof(int)) {
+        KT_CHECK_INT_EQ(
+            ksys_call(KSYS_WAITPID, (ksys_arg_t)0x100000005ull, 0, KSYS_WNOHANG, 0, 0, 0),
+            KERR_INVAL);
+    }
+
+    /* "Any child" still means any child, and there is nothing to report. */
+    rc = ksys_waitpid(-1, &status, KSYS_WNOHANG);
+    KT_CHECK(rc >= 0);
+    if (rc == 0) {
+        KT_CHECK_INT_EQ(status, -1);
+    }
+
+    rc = ksys_waitpid(0, &status, KSYS_WNOHANG);
+    KT_CHECK(rc >= 0);
+
+    teardown();
+}
+
+/*
  * The property: waiting for a child that does not exist gives an error
  * instead of hanging forever.
  */
@@ -319,11 +362,156 @@ static void test_fork_data_is_the_same(void)
     teardown();
 }
 
+/* Write a 32-bit field the way the header of an image keeps it: the bytes of
+ * the file, not a struct of the machine that reads them. */
+static void put_u32(k_u8_t *out, k_u32_t value)
+{
+    out[0] = (k_u8_t)(value & 0xFFu);
+    out[1] = (k_u8_t)((value >> 8) & 0xFFu);
+    out[2] = (k_u8_t)((value >> 16) & 0xFFu);
+    out[3] = (k_u8_t)((value >> 24) & 0xFFu);
+}
+
+/*
+ * The smallest program of the format: the header and one word of text. The
+ * word is never run by the test - the machine that runs the tests cannot run
+ * a program at all - it only has to be an image the parser accepts.
+ */
+static k_size_t build_image(k_u8_t *image)
+{
+    put_u32(image + 0, K_EXEC_MAGIC);
+    put_u32(image + 4, K_EXEC_VERSION);
+    put_u32(image + 8, 0);                   /* the flags: none */
+    put_u32(image + 12, K_EXEC_HEADER_SIZE); /* the entry: the first word */
+    put_u32(image + 16, 4);                  /* one word of text */
+    put_u32(image + 20, 0);                  /* no data */
+    put_u32(image + 24, 0);                  /* no bss */
+    put_u32(image + 28, 0);                  /* reserved */
+    put_u32(image + 32, 0xC3u);              /* a return, were it ever run */
+
+    return K_EXEC_HEADER_SIZE + 4;
+}
+
+static int write_file(const char *path, const void *data, k_size_t size)
+{
+    int fd = ksys_open(path, KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+
+    if (fd < 0) {
+        return fd;
+    }
+
+    if (ksys_write(fd, data, size) != (k_ssize_t)size) {
+        ksys_close(fd);
+        return KERR_IO;
+    }
+
+    return ksys_close(fd);
+}
+
+/*
+ * The property: execve reads the file through the VFS, checks the image and
+ * asks the machine; a machine that cannot run a program answers ENOSYS, and
+ * every refusal before that answer is the answer of its own reason. No
+ * descriptor of the caller is spent by a failed exec.
+ */
+static void test_execve(void)
+{
+    static k_u8_t image[K_EXEC_HEADER_SIZE + 4];
+    static const char junk[] = "this is not a program of this system\n";
+    const k_size_t size = build_image(image);
+    char *argv[] = {(char *)"/prog", NULL};
+    int fd;
+
+    ktest_begin("ksys: execve reads a program and asks the machine");
+
+    setup();
+
+    /* A file that is not there is not a program. */
+    KT_CHECK_INT_EQ(ksys_execve("/no/such/program", NULL), KERR_NOENT);
+
+    /* A directory is not a program. */
+    KT_CHECK_INT_EQ(ksys_mkdir("/bin"), 0);
+    KT_CHECK_INT_EQ(ksys_execve("/bin", NULL), KERR_ISDIR);
+
+    /* A file that is not an image of this system, and a file too small to
+     * hold even the header. The mode is opened to execution first, so that
+     * the format is what refuses them. */
+    KT_CHECK_INT_EQ(write_file("/junk", junk, sizeof(junk) - 1), 0);
+    KT_CHECK_INT_EQ(ksys_chmod("/junk", 0755), 0);
+    KT_CHECK_INT_EQ(ksys_execve("/junk", NULL), KERR_INVAL);
+
+    KT_CHECK_INT_EQ(write_file("/tiny", "MOX", 3), 0);
+    KT_CHECK_INT_EQ(ksys_chmod("/tiny", 0755), 0);
+    KT_CHECK_INT_EQ(ksys_execve("/tiny", NULL), KERR_INVAL);
+
+    /* A real image, but a file that may not be executed: the mode decides,
+     * and 0644 has no x bit. */
+    KT_CHECK_INT_EQ(write_file("/prog", image, size), 0);
+    KT_CHECK_INT_EQ(ksys_execve("/prog", NULL), KERR_PERM);
+
+    KT_CHECK_INT_EQ(ksys_chmod("/prog", 0755), 0);
+
+    /*
+     * The image is a program of the format of the system, and this machine
+     * cannot run one: the simulator must not jump into code that is not the
+     * kernel. The answer is ENOSYS, the same as on the board.
+     */
+    KT_CHECK_INT_EQ(ksys_execve("/prog", NULL), KERR_NOSYS);
+    KT_CHECK_INT_EQ(ksys_execve("/prog", argv), KERR_NOSYS);
+
+    /*
+     * A status left by a program of another machine is not a success here:
+     * ENOSYS is the answer of this one whatever the last program ended with,
+     * and a vector of one word is not a reason for a different answer.
+     */
+    k_exec_exit(7);
+    KT_CHECK_INT_EQ(ksys_execve("/prog", argv), KERR_NOSYS);
+
+    /*
+     * The vector of the program is bounded at the edge of the call before
+     * anything is looked at: a word that does not fit the frame of the call
+     * and a vector of too many words are E2BIG, and an empty vector is a
+     * program without arguments - the answer of the machine, not a refusal.
+     */
+    {
+        static char long_word[600];
+        char *long_argv[] = {long_word, NULL};
+        char *empty_argv[] = {NULL};
+        char *many_argv[10];
+        int i;
+
+        memset(long_word, 'a', sizeof(long_word) - 1);
+        KT_CHECK_INT_EQ(ksys_execve("/prog", long_argv), KERR_TOOBIG);
+
+        for (i = 0; i < 9; i++) {
+            many_argv[i] = (char *)"x";
+        }
+        many_argv[9] = NULL;
+        KT_CHECK_INT_EQ(ksys_execve("/prog", many_argv), KERR_TOOBIG);
+
+        KT_CHECK_INT_EQ(ksys_execve("/prog", empty_argv), KERR_NOSYS);
+    }
+
+    /* The raw call answers the same way, and a failed exec left the table of
+     * the descriptors as it was: the file can still be opened. */
+    KT_CHECK_INT_EQ(ksys_call(KSYS_EXECVE, (ksys_arg_t)(uintptr_t)"/prog", 0, 0, 0, 0, 0),
+                    KERR_NOSYS);
+    fd = ksys_open("/prog", KSYS_O_RDONLY);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    teardown();
+}
+
 void test_ksys_process(void)
 {
     test_fork_wait();
     test_fork_numbers();
     test_fork_posix();
     test_wait_errors();
+    test_wait_validation();
     test_fork_data_is_the_same();
+    test_execve();
 }

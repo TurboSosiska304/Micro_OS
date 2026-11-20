@@ -224,6 +224,14 @@ static int vfs_stat_file(void *ctx, const char *path, struct vfs_stat *out)
     out->type = (inode.flags & MFS_INODE_DIR) ? 2 : 1;
     out->size = inode.size;
 
+    /*
+     * The bits of the mode and of the owner live in the flags of the record,
+     * and the adapter is the only place of the kernel that knows that: the
+     * VFS and the system calls ask for the numbers, not for the packing.
+     */
+    out->mode = mfs_inode_mode(&inode);
+    out->owner = mfs_inode_owner(&inode);
+
     return mfs_to_kerr(MFS_OK);
 }
 
@@ -237,6 +245,18 @@ static int vfs_remove(void *ctx, const char *path)
 {
     K_UNUSED(ctx);
     return mfs_to_kerr(mfs_unlink(path));
+}
+
+static int vfs_set_mode(void *ctx, const char *path, k_u32_t mode)
+{
+    K_UNUSED(ctx);
+    return mfs_to_kerr(mfs_chmod(path, mode));
+}
+
+static int vfs_set_owner(void *ctx, const char *path, k_u32_t owner)
+{
+    K_UNUSED(ctx);
+    return mfs_to_kerr(mfs_chown(path, owner));
 }
 
 static int mfs_statfs_volume(void *ctx, struct vfs_statfs *out)
@@ -269,6 +289,8 @@ static const struct vfs_operations g_mfs_operations = {
     .stat = vfs_stat_file,
     .mkdir = vfs_make_dir,
     .unlink = vfs_remove,
+    .chmod = vfs_set_mode,
+    .chown = vfs_set_owner,
     .statfs = mfs_statfs_volume,
     .strerror = vfs_strerror_mfs,
 };

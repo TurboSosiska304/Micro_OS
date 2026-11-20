@@ -46,11 +46,11 @@ Linux-подобное ядро для небольших машин: одно �
 
 Ядро грузится и на второй машине — x86-64 в QEMU, без операционной системы
 под ним (`make x86-smoke`): у ядра своя дорожная карта,
-[docs/kernel-roadmap.md](docs/kernel-roadmap.md). В фазе 6 готовы процесс
+[docs/roadmap.md](docs/roadmap.md). В фазе 6 готовы процесс
 релиза и облачная сборка; OTA при текущей раскладке флеша невозможна.
 
-Подробный план — в [docs/roadmap_ru.md](docs/roadmap_ru.md), архитектура — в
-[docs/architecture_ru.md](docs/architecture_ru.md).
+Подробный план — в [docs/roadmap_ru.md](docs/ru/roadmap_ru.md), архитектура — в
+[docs/architecture_ru.md](docs/ru/architecture_ru.md).
 
 ## Ключевая идея: переносимое ядро
 
@@ -205,6 +205,7 @@ init-процесс запускает шелл — небольшое подм�
 |---|---|
 | `help`, `uname`, `uptime`, `ps`, `dmesg`, `free`, `abi` | ядро: команды, версия, время, задачи, журнал, память, таблица вызовов |
 | `ls`, `cat`, `write`, `mkdir`, `rm`, `cd`, `pwd`, `df`, `mount`, `mkfs` | файловая система платы |
+| `chmod`, `chown`, `exec` | права: режим, владелец и запуск программы |
 | `modules`, `memtest`, `i2c` | доктор, тест памяти, скан шины I2C |
 | `date`, `battery`, `beep`, `led`, `input`, `display` | драйверы: часы, заряд, бузер, светодиод, кнопки, экран |
 | `config` | конфигурация из `/etc` и её копия в NVS |
@@ -266,7 +267,7 @@ saved network: home
 ```
 
 Решение о форме драйвера записано в
-[docs/adr/0003-wifi-driver_ru.md](docs/adr/0003-wifi-driver_ru.md).
+[docs/adr/0003-wifi-driver_ru.md](docs/ru/adr/0003-wifi-driver_ru.md).
 
 ### HTTP и часы
 
@@ -294,7 +295,8 @@ microos> date
 разделов, скрипт прошивки и суммы файлов. Папки нет в репозитории — это
 продукт сборки: `make bundle` собирает её после сборки прошивки, а готовые
 образы уходят в релизы. Скачиваешь папку, подключаешь плату и запускаешь
-`./flash.sh` — исходники, ESP-IDF и тулчейн не нужны.
+`bash flash.sh` (или `chmod +x flash.sh && ./flash.sh`) — исходники, ESP-IDF и
+тулчейн не нужны.
 
 ## Проверки
 

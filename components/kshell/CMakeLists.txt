@@ -14,7 +14,7 @@ if(ESP_PLATFORM)
     idf_component_register(
         SRCS ${MICRO_OS_KSHELL_SRCS}
         INCLUDE_DIRS "include"
-        REQUIRES kernel libc
+        REQUIRES kernel libc mfs
     )
 
     # The discipline of the host build: the sources of the project are
@@ -24,6 +24,6 @@ if(ESP_PLATFORM)
 else()
     add_library(microos_kshell STATIC ${MICRO_OS_KSHELL_SRCS})
     target_include_directories(microos_kshell PUBLIC "${CMAKE_CURRENT_LIST_DIR}/include")
-    target_link_libraries(microos_kshell PUBLIC microos_kernel microos_libc)
+    target_link_libraries(microos_kshell PUBLIC microos_kernel microos_libc microos_mfs)
     target_compile_features(microos_kshell PUBLIC c_std_11)
 endif()

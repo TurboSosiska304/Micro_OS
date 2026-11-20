@@ -2,9 +2,11 @@
 #
 # The same list as `make ci` before a push, and the firmware on top of it:
 # the unit tests, the same tests under valgrind, the sanitizers, the smoke
-# test of the simulator and the integrity of the repository. A fresh
-# checkout has no dist/ (the bundle checks skip until a job builds it) and
-# no clang-format of the right version, so the host job installs the
+# test of the simulator and the integrity of the repository. `make ci` now
+# runs TSan too, and boots the x86-64 port when `qemu-system-x86_64` is on
+# PATH — the cloud installs qemu below, so both halves see the same checks.
+# A fresh checkout has no dist/ (the bundle checks skip until a job builds
+# it) and no clang-format of the right version, so the host job installs the
 # formatter that `make format` uses — the sources are formatted with
 # clang-format 23 and the runner alone would bring an older one and fail
 # on style — and the firmware job runs the integrity check a second time
@@ -59,6 +61,15 @@ jobs:
       - name: the kernel boots on x86-64
         run: make x86-smoke
 
+      # A machine that stops before the shell leaves the binary as the only
+      # witness: the console says where, and the image says which instruction.
+      - name: the build of the machine that did not boot
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: x86-build
+          path: build-x86/
+
       - name: the formatter of the sources (the version of make format)
         run: |
           python3 -m venv "$RUNNER_TEMP/cf" || python -m venv "$RUNNER_TEMP/cf"
@@ -89,8 +100,19 @@ jobs:
           . /opt/esp/idf/export.sh >/dev/null
           idf.py build
 
+      # The container of ESP-IDF carries the toolchain of the board and not
+      # the host tools of the other machine.
+      - name: the tools of the x86-64 port
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends cmake ninja-build build-essential
+
+      - name: the kernel of the x86-64 port
+        run: make x86-build
+
       - name: the bundle of dist/
-        run: tools/bundle.sh build dist
+        shell: bash
+        run: |
+          . /opt/esp/idf/export.sh >/dev/null
+          tools/bundle.sh build dist
 
       - name: the integrity against the bundle
         shell: bash

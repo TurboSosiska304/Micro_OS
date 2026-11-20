@@ -84,5 +84,5 @@ docs: describe the stickc plus2 power model
 ## Железо
 
 Особенности M5StickC Plus2 (питание без PMIC, распиновка, I2C-адреса) описаны в
-[docs/hardware/stickc-plus2_ru.md](docs/hardware/stickc-plus2_ru.md) — сверяйтесь с ними
+[docs/ru/ports/esp32/hardware_ru.md](docs/ru/ports/esp32/hardware_ru.md) — сверяйтесь с ними
 перед тем, как писать драйвер.

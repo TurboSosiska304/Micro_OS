@@ -3,7 +3,7 @@
 * Status: accepted
 * Date: 2026-10-22
 
-> Russian version: [0003-wifi-driver_ru.md](0003-wifi-driver_ru.md)
+> Russian version: [0003-wifi-driver_ru.md](../ru/adr/0003-wifi-driver_ru.md)
 
 ## Context
 

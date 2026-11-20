@@ -3,6 +3,7 @@
 add_library(microos_port_host STATIC
     src/blockdev_file.c
     src/port_host.c
+    src/port_exec.c
     src/port_host_psram.c
     src/port_kv_file.c
     src/port_net_posix.c

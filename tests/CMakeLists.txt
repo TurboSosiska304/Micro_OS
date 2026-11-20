@@ -16,6 +16,8 @@ if(NOT ESP_PLATFORM)
         cases/test_boot.c
         cases/test_kmod.c
         cases/test_kmm.c
+        cases/test_exec.c
+        cases/test_fuzz.c
         cases/test_mfs.c
         cases/test_mfs_persistence.c
         cases/test_vfs.c
@@ -73,4 +75,16 @@ target_compile_definitions(microos_tests PRIVATE
     # to be reported, not waited for.
     add_test(NAME unit COMMAND microos_tests)
     set_tests_properties(unit PROPERTIES TIMEOUT 120)
+
+    # The layout of the image that tools/mkprog.sh writes. The test builds
+    # tiny objects with the compiler of the host and needs no ESP-IDF; a
+    # machine without the binutils skips itself and still passes.
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        add_test(
+            NAME mkprog
+            COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/test_mkprog.py"
+        )
+        set_tests_properties(mkprog PROPERTIES TIMEOUT 60)
+    endif()
 endif()

@@ -90,10 +90,10 @@ static void test_registry(void)
     /*
      * The board has more commands than the tests can see here: the
      * drivers bring their own ("date", "i2c", "wifi", "display", "mkfs")
-     * and those are only on the board. The twenty three commands of the
+     * and those are only on the board. The twenty six commands of the
      * shell itself have to be here, all of them.
      */
-    KT_CHECK(kshell_command_count() >= 23);
+    KT_CHECK(kshell_command_count() >= 26);
 
     port_host_set_sink(NULL);
 }
@@ -220,6 +220,8 @@ static void test_ls(void)
 
     port_host_set_sink(sink);
     KT_CHECK_INT_EQ(kshell_execute("ls /"), KSHELL_OK);
+    /* A device of devfs keeps no mode: stat says so instead of a 0000. */
+    KT_CHECK_INT_EQ(kshell_execute("stat /dev/tty0"), KSHELL_OK);
 
     rewind(sink);
     used = fread(buf, 1, sizeof(buf) - 1, sink);
@@ -235,7 +237,131 @@ static void test_ls(void)
     KT_CHECK(strstr(buf, "hello") != NULL);
     KT_CHECK(strstr(buf, "dev/") != NULL);
 
+    /* stat of a device: no bits to show, and an honest "not set". */
+    KT_CHECK(strstr(buf, "type: device") != NULL);
+    KT_CHECK(strstr(buf, "mode: (not set)") != NULL);
+
     vfs_umount("/dev");
+    ls_teardown();
+}
+
+/*
+ * The commands of the mode, the owner, the path and the programs speak to
+ * the ABI and not to the filesystem: the test checks the words of a refusal,
+ * that a mode and an owner that were accepted are the ones the next stat
+ * reports, and that a name without a slash is looked up in PATH.
+ */
+static void test_attr(void)
+{
+    char buf[2048];
+    size_t used;
+    FILE *sink;
+    struct vfs_stat stat;
+    struct vfs_file file;
+    static k_u8_t data[VFS_FILE_DATA_SIZE];
+
+    ktest_begin("kshell: chmod, chown, stat, path and exec");
+
+    ls_setup();
+    KT_CHECK_INT_EQ(vfs_mkdir("/bin"), 0);
+    KT_CHECK_INT_EQ(vfs_open("/bin/hello", VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, data),
+                    0);
+    KT_CHECK_INT_EQ(vfs_write(&file, "hi\n", 3), 3);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    sink = tmpfile();
+    KT_CHECK(sink != NULL);
+    if (sink == NULL) {
+        ls_teardown();
+        return;
+    }
+
+    port_host_set_sink(sink);
+
+    /* A command with the wrong number of arguments says how it is used. */
+    KT_CHECK_INT_EQ(kshell_execute("chmod 0644"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(kshell_execute("chmod 0644 /bin extra"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(kshell_execute("chown 0"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(kshell_execute("exec"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(kshell_execute("stat"), KSHELL_USAGE);
+
+    /* A mode that is not octal is refused before the call ... */
+    KT_CHECK_INT_EQ(kshell_execute("chmod 0999 /bin"), KSHELL_ERROR);
+    /* ... and so is a uid outside the fifteen bits. */
+    KT_CHECK_INT_EQ(kshell_execute("chown 99999 /bin"), KSHELL_ERROR);
+
+    /* The calls pass what was asked, and the next stat sees it. */
+    KT_CHECK_INT_EQ(kshell_execute("chmod 0711 /bin"), KSHELL_OK);
+    KT_CHECK_INT_EQ(vfs_stat("/bin", &stat), 0);
+    KT_CHECK_INT_EQ(stat.mode, 0711);
+    KT_CHECK_INT_EQ(kshell_execute("chown 7 /bin"), KSHELL_OK);
+    KT_CHECK_INT_EQ(vfs_stat("/bin", &stat), 0);
+    KT_CHECK_INT_EQ(stat.owner, 7);
+
+    /* A zero is a mode the record cannot hold, and the reason is printed. */
+    KT_CHECK_INT_EQ(kshell_execute("chmod 000 /bin"), KSHELL_ERROR);
+
+    /* The program PATH will find: a file with an execute bit and an owner. */
+    KT_CHECK_INT_EQ(kshell_execute("chmod 0711 /bin/hello"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("chown 7 /bin/hello"), KSHELL_OK);
+
+    /* PATH begins at the default, and `path` prints what it holds. */
+    KT_CHECK_INT_EQ(kshell_execute("path"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("path /bin"), KSHELL_OK);
+
+    /*
+     * A name without a slash is looked up in PATH: the answer names the
+     * file that was found, not the name that was typed.
+     */
+    KT_CHECK_INT_EQ(kshell_execute("exec hello"), KSHELL_ERROR);
+
+    /* A name that no entry holds reports the search and the directories. */
+    KT_CHECK_INT_EQ(kshell_execute("path /nosuchdir"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("exec hello"), KSHELL_ERROR);
+
+    /* The empty argument brings the default back. */
+    KT_CHECK_INT_EQ(kshell_execute("path \"\""), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("path"), KSHELL_OK);
+
+    /* stat: the line of ls, then the fields a chmod is checked with. */
+    KT_CHECK_INT_EQ(kshell_execute("stat /bin/hello"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("stat /bin"), KSHELL_OK);
+
+    /* The answer of the ABI reaches the person: a path that is not there. */
+    KT_CHECK_INT_EQ(kshell_execute("chmod 0600 /nosuch"), KSHELL_ERROR);
+    KT_CHECK_INT_EQ(kshell_execute("exec /nosuch"), KSHELL_ERROR);
+    KT_CHECK_INT_EQ(kshell_execute("stat /nosuch"), KSHELL_ERROR);
+
+    rewind(sink);
+    used = fread(buf, 1, sizeof(buf) - 1, sink);
+    buf[used] = '\0';
+
+    port_host_set_sink(NULL);
+
+    KT_CHECK(strstr(buf, "usage: chmod <mode> <path>") != NULL);
+    KT_CHECK(strstr(buf, "usage: chown <uid> <path>") != NULL);
+    KT_CHECK(strstr(buf, "usage: exec <program>") != NULL);
+    KT_CHECK(strstr(buf, "usage: stat <path>") != NULL);
+    KT_CHECK(strstr(buf, "not an octal mode") != NULL);
+    KT_CHECK(strstr(buf, "a uid is 0..32767") != NULL);
+    KT_CHECK(strstr(buf, "filesystem keeps") != NULL);
+    KT_CHECK(strstr(buf, "no such file") != NULL);
+
+    /* The file: nine bits of 0711, the owner 7 and three bytes of text. */
+    KT_CHECK(strstr(buf, "-rwx--x--x 7 3 /bin/hello") != NULL);
+    KT_CHECK(strstr(buf, "mode: 0711") != NULL);
+    KT_CHECK(strstr(buf, "owner: 7") != NULL);
+    KT_CHECK(strstr(buf, "size: 3") != NULL);
+
+    /* The directory is a `d`, and the same mode and owner as the file. */
+    KT_CHECK(strstr(buf, "drwx--x--x 7 ") != NULL);
+    KT_CHECK(strstr(buf, "type: directory") != NULL);
+
+    /* PATH looked the name up, and the search that failed said where. */
+    KT_CHECK(strstr(buf, "exec: /bin/hello: not a MOX1 image of this system") != NULL);
+    KT_CHECK(strstr(buf, "exec: hello: not found in /nosuchdir") != NULL);
+    KT_CHECK(strstr(buf, "/bin:/usr/bin\n") != NULL);
+
     ls_teardown();
 }
 
@@ -249,4 +375,5 @@ void test_kshell(void)
     test_memtest();
     test_mfetch();
     test_ls();
+    test_attr();
 }

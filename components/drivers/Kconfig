@@ -1,5 +1,16 @@
 menu "Micro OS drivers"
 
+config MICRO_OS_MIC
+    bool "SPM1423 microphone on I2S (PDM)"
+    default y
+    help
+      The microphone of the StickC Plus2: an SPM1423 MEMS element with a
+      PDM output, clocked on G0 and sampled on G34 by the I2S peripheral.
+      The hardware doctor listens to a short window at every boot and
+      reports the level it hears, and the shell command "mic" shows the
+      level of one window. Turning this off gives the I2S channel and its
+      DMA buffers back to an application that needs them.
+
 config MICRO_OS_BUZZER_BEEP_ON_CHECK
     bool "Beep at boot to prove that the buzzer works"
     default n

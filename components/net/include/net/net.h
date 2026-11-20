@@ -1,11 +1,11 @@
 /*
  * Micro OS — the network services of the board: HTTP and NTP.
  *
- * The protocol parts (the URL, the request, the packet of NTP) live in
- * http.c and ntp.c and are tested on the host; this file is the two
- * commands of the shell, and the sockets under them belong to the kernel
- * (kernel/net.h), which lends them from the port. Nothing here knows which
- * stack resolved the name.
+ * The protocol parts (the URL, the request, the packet of NTP, the page of
+ * the state) live in http.c, ntp.c and net_http_server.c and are tested on
+ * the host; this file is the three commands of the shell, and the sockets
+ * under them belong to the kernel (kernel/net.h), which lends them from the
+ * port. Nothing here knows which stack resolved the name.
  */
 #ifndef MICRO_OS_NET_NET_H
 #define MICRO_OS_NET_NET_H
@@ -20,7 +20,7 @@
  */
 #define NET_TIMEOUT_MS 5000
 
-/* Register the commands `http` and `ntp`. */
+/* Register the commands `http`, `ntp` and `httpd`. */
 int net_register(void);
 
 /* GET a URL through the sockets of the port. */

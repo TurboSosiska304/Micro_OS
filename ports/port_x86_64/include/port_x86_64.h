@@ -58,6 +58,21 @@ static inline k_u64_t port_rdtsc(void)
 
 /* --- the instructions of the machine -------------------------------------- */
 
+/*
+ * The registers of the machine that are not an I/O port. IA32_FS_BASE
+ * (0xC0000100) is where the thread pointer of the library lives: in long
+ * mode %fs is an offset from this register and not from a descriptor, and a
+ * zero here is a page fault at address zero the first time the library
+ * touches its _Thread_local.
+ */
+static inline void port_wrmsr(k_u32_t msr, k_u64_t value)
+{
+    k_u32_t low = (k_u32_t)value;
+    k_u32_t high = (k_u32_t)(value >> 32);
+
+    __asm__ volatile("wrmsr" : : "c"(msr), "a"(low), "d"(high));
+}
+
 static inline void port_cli(void)
 {
     __asm__ volatile("cli" : : : "memory");
@@ -114,6 +129,13 @@ void port_x86_64_unexpected(void);
 
 /* The body of the timer interrupt, called by interrupts.S. */
 void port_x86_64_irq_tick(void);
+
+/*
+ * Own the block devices of the port: a volume in the memory of the machine,
+ * "ram0", which is where the filesystem of the port lives (blockdev_ram.c).
+ * Called by port_x86_64_init(), before the kernel asks for a device.
+ */
+void port_x86_64_blockdev_init(void);
 
 /*
  * The hook of the task substrate, called on every tick. Weak here: a build

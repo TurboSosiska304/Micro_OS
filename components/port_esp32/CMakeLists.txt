@@ -2,6 +2,7 @@
 
 set(MICRO_OS_PORT_ESP32_SRCS
     "src/port_esp32.c"
+    "src/port_exec.c"
     "src/blockdev_flash.c"
     "src/port_kv_nvs.c"
     "src/port_net_lwip.c"

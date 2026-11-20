@@ -41,6 +41,47 @@
 #define MFS_INODE_USED 0x01u
 #define MFS_INODE_DIR 0x02u
 
+/* The bits of a record that say what the object is, not what may be done to it. */
+#define MFS_INODE_TYPE_MASK (MFS_INODE_USED | MFS_INODE_DIR)
+
+/*
+ * The mode and the owner of an object are packed into the upper bits of
+ * the flags of its record (ADR 0005). The format of the volume has no
+ * field of its own for them, and a volume of 0.3.x has to keep mounting,
+ * so the two low bits keep their meaning and the rest of the word holds
+ * the numbers. The masks below are the masks of the values, not of the
+ * fields: a value is moved by the shift before it is put into the flags.
+ */
+#define MFS_MODE_SHIFT 8
+#define MFS_MODE_BITS 9
+#define MFS_MODE_MASK 0x1FFu /* rwx for the user, the group and the rest */
+
+#define MFS_OWNER_SHIFT 17
+#define MFS_OWNER_BITS 15
+#define MFS_OWNER_MASK 0x7FFFu /* a uid */
+
+_Static_assert(MFS_MODE_SHIFT + MFS_MODE_BITS <= MFS_OWNER_SHIFT, "the mode runs into the owner");
+_Static_assert(MFS_OWNER_SHIFT + MFS_OWNER_BITS <= 32, "the owner does not fit into the flags");
+_Static_assert(MFS_MODE_BITS == 9 && MFS_OWNER_BITS == 15,
+               "the design of ADR 0005 says 9 and 15 bits");
+
+/* What a new file and a new directory are given, as in Linux. */
+#define MFS_MODE_DEFAULT 0644u
+#define MFS_MODE_DIR_DEFAULT 0755u
+
+/*
+ * A zero in the mode bits is not a mode: the records of a volume of 0.3.x
+ * have no modes at all, and mfs_inode_mode() reads such a record as the
+ * mode of the design for its type - 0755 for a directory, 0644 for a
+ * file. Nothing is rewritten to make that true: the volume keeps the
+ * records it was written with.
+ *
+ * The price is that "chmod 000" cannot be expressed: the zero already
+ * means "the record predates the modes", and mfs_chmod() refuses it
+ * instead of storing a number that would not come back. This is a
+ * conscious choice while the board has one user (ADR 0005).
+ */
+
 /* The errors of the filesystem. */
 #define MFS_OK 0
 #define MFS_ENOENT (-2)
@@ -107,13 +148,19 @@ _Static_assert(sizeof(struct mfs_superblock) == 52, "the header of the volume ch
 _Static_assert(sizeof(struct mfs_inode) == 16, "a record of the table of the inodes changed");
 _Static_assert(sizeof(struct mfs_dirent_header) == 8, "an entry of a directory changed");
 
-/* One entry of a directory, as the caller sees it. */
+/*
+ * One entry of a directory, as the caller sees it. The type is the low
+ * two bits of the flags of the object, the mode and the owner are the
+ * same numbers the inode carries: a listing needs no second lookup.
+ */
 struct mfs_dirent {
     k_u32_t inode;
     k_u16_t name_len;
     k_u8_t type;
     k_u8_t reserved;
-    k_u32_t size; /* the size of the object in bytes */
+    k_u32_t size;  /* the size of the object in bytes */
+    k_u32_t mode;  /* MFS_MODE_* of the object */
+    k_u32_t owner; /* the uid of the object */
     char name[MFS_NAME_MAX + 1];
 };
 
@@ -137,6 +184,26 @@ struct mfs_info {
     k_u32_t inodes_used;
     k_u32_t inodes_free;
     k_u32_t block_size;
+};
+
+/* The room for the first problem that mfs_check() finds. */
+#define MFS_CHECK_MESSAGE_MAX 96
+
+/*
+ * What mfs_check() found. The counters describe the volume as it is on the
+ * device: the files and the directories that are in use, the data blocks
+ * that the objects own and the blocks that the map of the free blocks
+ * leaves for them.
+ */
+struct mfs_check_report {
+    k_u32_t files;
+    k_u32_t directories;
+    k_u32_t free_blocks;
+    k_u32_t used_blocks;
+    k_u32_t data_blocks;
+    k_u32_t errors; /* the number of the problems, 0 for a sound volume */
+    /* The first problem in English, an empty string for a sound volume. */
+    char first[MFS_CHECK_MESSAGE_MAX];
 };
 
 /*
@@ -175,6 +242,29 @@ bool mfs_is_mounted(void);
 /* The information about the mounted volume. */
 int mfs_get_info(struct mfs_info *out);
 
+/*
+ * Check the mounted volume. Nothing is written, repaired or reformatted:
+ * the header, the table of the inodes, the entries of the directories and
+ * the map of the free blocks are only read, and the volume stays the way
+ * it was.
+ *
+ * The header of the volume is read again from the device, since the copy
+ * in the memory is the one of the mount; the table of the inodes is then
+ * walked record by record, every chain of the data blocks is followed and
+ * the tree of the directories is walked from the root, with a limit on the
+ * depth, so that a loop in the tree is found instead of followed.
+ *
+ * Returns MFS_OK when the check ran to the end: report->errors is 0 for a
+ * sound volume and greater than 0 for a damaged one, with the first
+ * problem in report->first. A volume that is damaged is still reported
+ * this way, because the call itself did its work; the error code of the
+ * call speaks about the call. MFS_EINVAL means that there is no mounted
+ * volume or no report. MFS_EIO means that the device failed to read a
+ * block: the check stops there, the counters are partial and the block is
+ * the first problem.
+ */
+int mfs_check(struct mfs_check_report *report);
+
 /* The operations on the files and the directories. */
 int mfs_mkdir(const char *path);
 int mfs_create(const char *path);
@@ -185,6 +275,20 @@ int mfs_close(struct mfs_file *file);
 int mfs_unlink(const char *path);
 int mfs_stat(const char *path, struct mfs_inode *out, struct mfs_dirent *dirent);
 int mfs_list(const char *path, struct mfs_dirent *out, k_size_t max);
+
+/*
+ * The mode of an inode is read and written through these, so that the
+ * callers - the shell, the syscalls, the check of the access - never have
+ * to know where the bits live. The mode is refused outside the nine bits
+ * of the rwx triads and the owner outside the fifteen bits of a uid, so
+ * that a number that does not fit can never spill into the type. A mode
+ * of zero is refused too, see above: it means "the record predates the
+ * modes".
+ */
+k_u32_t mfs_inode_mode(const struct mfs_inode *inode);
+k_u32_t mfs_inode_owner(const struct mfs_inode *inode);
+int mfs_chmod(const char *path, k_u32_t mode);
+int mfs_chown(const char *path, k_u32_t owner);
 
 /* The name of an error, for the shell. */
 const char *mfs_strerror(int error);

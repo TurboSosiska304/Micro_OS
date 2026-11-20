@@ -345,3 +345,25 @@ char *strchr(const char *text, int c)
         }
     }
 }
+
+/*
+ * The last place of a character in a string. MicroFS uses it to cut a path
+ * into the directory and the name, which is the one thing of the C library
+ * the filesystem needs beyond the copies and the lengths above.
+ */
+char *strrchr(const char *text, int c)
+{
+    const char *last = NULL;
+
+    for (;; text++) {
+        if (*text == (char)c) {
+            last = text;
+        }
+
+        if (*text == '\0') {
+            /* The terminator is a place the character may be found at, as the
+             * C library says; a string without the character has none. */
+            return (char *)last;
+        }
+    }
+}

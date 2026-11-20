@@ -27,12 +27,14 @@ The exit status is 0 when everything is in order and 1 otherwise.
 from __future__ import annotations
 
 import argparse
+import glob
 import hashlib
 import json
 import os
 import re
 import shutil
 import struct
+import tarfile
 import subprocess
 import sys
 
@@ -400,11 +402,18 @@ def check_bundle(root: str, report: Report) -> dict:
             digest, name = parts[0].lower(), parts[1].strip().lstrip("*")
             sums[name] = digest
 
+        # The single image of the board is a binary of the bundle too, and its
+        # name carries the version: the folder says which one is expected.
+        images = {
+            os.path.basename(path) for path in glob.glob(os.path.join(dist, "MicroOS-*.bin"))
+        }
+        expected = set(BUNDLE_BINARIES) | images
+
         report.add(
             group,
             "checksums.txt covers every binary",
-            set(sums) == set(BUNDLE_BINARIES),
-            f"expected {sorted(BUNDLE_BINARIES)}, got {sorted(sums)}",
+            set(sums) == expected,
+            f"expected {sorted(expected)}, got {sorted(sums)}",
         )
 
         for name, expected in sums.items():
@@ -443,6 +452,79 @@ def check_bundle(root: str, report: Report) -> dict:
         report.add(group, "dist/flash.sh is present", False, "the file is missing")
 
     return sums
+
+
+X86_ARTIFACTS = ("loader32.elf", "microos64.bin", "run.sh", "README.md")
+
+
+def factory_offset(root: str) -> int:
+    """The offset of the application, as partitions.csv says it."""
+    path = os.path.join(root, "partitions.csv")
+    if not os.path.isfile(path):
+        return 0x10000
+
+    for line in read_text(path).splitlines():
+        fields = [field.strip() for field in line.split(",")]
+        if len(fields) >= 4 and fields[0] == "factory":
+            try:
+                return int(fields[3], 0)
+            except ValueError:
+                return 0x10000
+
+    return 0x10000
+
+
+def check_artifacts(root: str, report: Report) -> None:
+    """The bundle carries both machines: a single image and a tarball."""
+    group = "bundle"
+    dist = os.path.join(root, "dist")
+
+    if not os.path.isdir(dist):
+        report.skip(group, "the artifacts of both machines", "dist/ is not there")
+        return
+
+    merged = sorted(glob.glob(os.path.join(dist, "MicroOS-*.bin")))
+    app = os.path.join(dist, "micro_os.bin")
+
+    if not merged:
+        report.add(group, "the single image is there", False, "no MicroOS-*.bin in dist/")
+    else:
+        data = open(merged[0], "rb").read()
+        detail = f"{os.path.basename(merged[0])}, {len(data)} bytes"
+        ok = len(data) > 0x1000 and data[0x1000] == ESP_IMAGE_MAGIC
+        if ok and os.path.isfile(app):
+            application = open(app, "rb").read()
+            offset = factory_offset(root)
+            ok = (
+                len(data) >= offset + len(application)
+                and data[offset : offset + len(application)] == application
+            )
+            detail = (
+                "the application at " + hex(offset) + " is micro_os.bin"
+                if ok
+                else "the application inside the image is not micro_os.bin"
+            )
+        report.add(group, "the single image carries the application", ok, detail)
+
+    tarballs = sorted(glob.glob(os.path.join(dist, "MicroOS-x86_64-*.tar.gz")))
+    if not tarballs:
+        report.add(group, "the bundle of the x86-64 port is there", False, "no tarball in dist/")
+        return
+
+    try:
+        with tarfile.open(tarballs[0], "r:gz") as archive:
+            names = set(archive.getnames())
+    except (OSError, tarfile.TarError) as error:
+        report.add(group, "the bundle of the x86-64 port is readable", False, str(error))
+        return
+
+    missing = [name for name in X86_ARTIFACTS if name not in names]
+    report.add(
+        group,
+        "the bundle of the x86-64 port has what it needs",
+        not missing,
+        "missing: " + ", ".join(missing) if missing else ", ".join(X86_ARTIFACTS),
+    )
 
 
 def check_images(root: str, report: Report) -> dict:
@@ -681,17 +763,48 @@ def check_config(root: str, report: Report, images: dict, table: dict) -> None:
         )
 
 
+def git_directory(root: str) -> str:
+    """The directory of the git objects of this checkout.
+
+    A linked worktree has a .git *file* that names the real directory, so a
+    test of os.path.isdir(root/.git) skips the check exactly where a review
+    runs. `git rev-parse --git-dir` answers for both: a normal clone says
+    .git, which keeps the command of that case the same.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", root, "rev-parse", "--git-dir"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return ""
+
+    if result.returncode != 0:
+        return ""
+
+    path = result.stdout.strip()
+    if not path:
+        return ""
+
+    # rev-parse prints a relative path (".git") in a clone and an absolute
+    # one in a worktree; git is asked from the root, so the join is right.
+    return path if os.path.isabs(path) else os.path.join(root, path)
+
+
 def check_git(root: str, report: Report) -> None:
     """The integrity of the git objects."""
     group = "git"
 
-    if not os.path.isdir(os.path.join(root, ".git")):
+    directory = git_directory(root)
+    if not directory or not os.path.isdir(directory):
         report.skip(group, "git fsck", "the directory is not a git repository")
         return
 
     try:
         result = subprocess.run(
-            ["git", "-C", root, "fsck", "--strict", "--no-progress"],
+            ["git", "-C", root, "--git-dir", directory, "fsck", "--strict", "--no-progress"],
             capture_output=True,
             text=True,
         )
@@ -1339,6 +1452,7 @@ def main(argv: list) -> int:
         report.skip("sources", "the file list is known", "git ls-files is not available")
 
     check_bundle(root, report)
+    check_artifacts(root, report)
     images = check_images(root, report)
     table = check_partitions(root, report)
     check_config(root, report, images, table)

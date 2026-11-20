@@ -5,6 +5,7 @@
 #include "kernel/lock.h"
 #include "kernel/log.h"
 #include "kernel/panic.h"
+#include "mfs_private.h"
 
 /*
  * The state of the mounted volume. The filesystem is a singleton: one
@@ -18,7 +19,7 @@ static struct {
     k_u32_t inode_blocks;   /* the blocks of the table of the inodes */
     k_u32_t inode_capacity; /* the number of the records of the table */
     bool bitmap_dirty;      /* the map in the memory is newer than the device */
-    k_u8_t bitmap[MFS_BLOCK_SIZE * 2];
+    k_u8_t bitmap[MFS_BLOCK_SIZE * MFS_BITMAP_MAX_BLOCKS];
 } g;
 
 /*
@@ -54,9 +55,6 @@ static void mfs_unlock(void)
     (void)k_mutex_unlock(&s_lock);
 }
 
-#define MFS_NEXT_NONE 0xFFFFFFFFu
-#define MFS_BLOCK_DATA (MFS_BLOCK_SIZE - 4)
-
 /* The blocks of one erase sector of the flash (4 KB). */
 #define MFS_SECTOR_BLOCKS 4
 
@@ -87,6 +85,16 @@ static k_u32_t crc32(const void *data, k_size_t size)
     return crc ^ 0xFFFFFFFFu;
 }
 
+/*
+ * The header of the volume is checked again when the volume is checked,
+ * and the checksum is the same one: the checker does not carry a second
+ * copy of the polynomial.
+ */
+k_u32_t mfs_priv_crc32(const void *data, k_size_t size)
+{
+    return crc32(data, size);
+}
+
 /* --- the low level access to the volume --- */
 
 /*
@@ -105,6 +113,12 @@ static int dev_read(k_u32_t block, void *buf)
     }
 
     return MFS_OK;
+}
+
+/* The checker reads the volume the same way the filesystem does. */
+int mfs_priv_block_read(k_u32_t block, void *buf)
+{
+    return dev_read(block, buf);
 }
 
 static int dev_write(k_u32_t block, const void *buf)
@@ -304,6 +318,54 @@ static int inode_alloc(k_u32_t *index)
     }
 
     return MFS_ENOSPC;
+}
+
+/* --- the mode and the owner --- */
+
+/*
+ * The mode and the owner live in the upper bits of the flags of a record,
+ * see mfs.h and ADR 0005. These are the only two places that know the
+ * shift: everything else asks for the numbers.
+ */
+k_u32_t mfs_inode_mode(const struct mfs_inode *inode)
+{
+    k_u32_t mode;
+
+    if (inode == NULL) {
+        return 0;
+    }
+
+    mode = (inode->flags >> MFS_MODE_SHIFT) & MFS_MODE_MASK;
+
+    /*
+     * The record that a volume of 0.3.x holds has no mode in it: the bits
+     * were not there when the object was made. A zero is read as the mode
+     * of the design for the type of the object, so an old volume keeps
+     * working without being rewritten at the mount. The price is that
+     * "chmod 000" is not expressible - mfs_chmod refuses the zero - and
+     * that is a conscious choice while the board has one user.
+     */
+    if (mode == 0u) {
+        return ((inode->flags & MFS_INODE_DIR) != 0u) ? MFS_MODE_DIR_DEFAULT : MFS_MODE_DEFAULT;
+    }
+
+    return mode;
+}
+
+k_u32_t mfs_inode_owner(const struct mfs_inode *inode)
+{
+    if (inode == NULL) {
+        return 0;
+    }
+
+    return (inode->flags >> MFS_OWNER_SHIFT) & MFS_OWNER_MASK;
+}
+
+/* The flags of a new record: the type, the mode and the owner together. */
+static k_u32_t inode_flags(k_u32_t type, k_u32_t mode, k_u32_t owner)
+{
+    return type | ((mode & MFS_MODE_MASK) << MFS_MODE_SHIFT) |
+           ((owner & MFS_OWNER_MASK) << MFS_OWNER_SHIFT);
 }
 
 /* --- the chains of the blocks --- */
@@ -572,6 +634,8 @@ static int dir_write(const struct mfs_inode *inode, const struct dir_buffer *buf
                 }
                 rc = chain_set_next(block, new_block);
                 if (rc != MFS_OK) {
+                    /* The block is not in any chain: the map takes it back. */
+                    block_release(new_block);
                     return rc;
                 }
                 block = new_block;
@@ -615,9 +679,13 @@ static int dir_entries(const struct dir_buffer *buf, struct mfs_dirent *out, k_s
             memcpy(entry.name, buf->data + offset + sizeof(struct mfs_dirent_header), name_len);
             entry.name[name_len] = '\0';
             entry.size = 0;
+            entry.mode = 0;
+            entry.owner = 0;
 
             if (inode_read(entry.inode, &child) == MFS_OK) {
                 entry.size = child.size;
+                entry.mode = mfs_inode_mode(&child);
+                entry.owner = mfs_inode_owner(&child);
             }
 
             out[found] = entry;
@@ -1012,7 +1080,7 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
     bitmap_set(0, true);
 
     memset(&inode, 0, sizeof(inode));
-    inode.flags = MFS_INODE_USED | MFS_INODE_DIR;
+    inode.flags = inode_flags(MFS_INODE_USED | MFS_INODE_DIR, MFS_MODE_DIR_DEFAULT, 0);
     inode.first_block = 0;
     inode.size = 0;
     inode.entries = 0;
@@ -1303,6 +1371,53 @@ static int add_to_parent(const char *dir_path, const char *name, k_u32_t inode, 
     return inode_write(dir_inode, &parent);
 }
 
+/*
+ * Whether the name is free in its parent directory, asked before anything
+ * is taken for the object.
+ *
+ * A new directory takes a block of the data, and the map of the free blocks
+ * reaches the device before the record that points at the block does. A
+ * block that is taken and then given back because the name was taken after
+ * all would be free in the memory and taken on the device: an object that
+ * cannot be made must not take a block at all, or a power cut before the
+ * next sync loses the block for good. This is how the boot of the board
+ * leaked a block on every restart - it makes /log and /etc/init.d again.
+ */
+static int parent_name_free(const char *dir_path, const char *name)
+{
+    struct mfs_inode parent;
+    struct dir_buffer *dir = &g_dir_buffer;
+    int rc;
+
+    rc = path_lookup(dir_path, &parent, NULL, NULL);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    if ((parent.flags & MFS_INODE_DIR) == 0) {
+        return MFS_ENOTDIR;
+    }
+
+    rc = dir_read(&parent, dir);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    return (dir_find(dir, name, NULL) == MFS_OK) ? MFS_EEXIST : MFS_OK;
+}
+
+/*
+ * A directory that could not be made gives its block back to the map, and
+ * the map goes to the device at once: the block was taken on the device
+ * before the record of the directory was written, so a release that stays
+ * in the memory would be lost by a power cut.
+ */
+static void mkdir_give_back(k_u32_t block)
+{
+    block_release(block);
+    (void)mfs_sync();
+}
+
 static int mfs_mkdir_locked(const char *path)
 {
     char dir_path[MFS_PATH_MAX];
@@ -1317,6 +1432,12 @@ static int mfs_mkdir_locked(const char *path)
     }
 
     rc = path_parent(path, dir_path, sizeof(dir_path), name, sizeof(name));
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    /* The name is checked before the inode and the block are taken. */
+    rc = parent_name_free(dir_path, name);
     if (rc != MFS_OK) {
         return rc;
     }
@@ -1354,28 +1475,28 @@ static int mfs_mkdir_locked(const char *path)
 
         rc = dev_write(block, empty);
         if (rc != MFS_OK) {
-            block_release(block);
+            mkdir_give_back(block);
             return rc;
         }
     }
 
     memset(&inode, 0, sizeof(inode));
-    inode.flags = MFS_INODE_USED | MFS_INODE_DIR;
+    inode.flags = inode_flags(MFS_INODE_USED | MFS_INODE_DIR, MFS_MODE_DIR_DEFAULT, 0);
     inode.first_block = block;
     inode.size = 0;
     inode.entries = 0;
 
     rc = inode_write(index, &inode);
     if (rc != MFS_OK) {
-        block_release(block);
+        mkdir_give_back(block);
         return rc;
     }
 
-    rc = add_to_parent(dir_path, name, index, (k_u8_t)inode.flags);
+    rc = add_to_parent(dir_path, name, index, (k_u8_t)(inode.flags & MFS_INODE_TYPE_MASK));
     if (rc != MFS_OK) {
         memset(&inode, 0, sizeof(inode));
         inode_write(index, &inode);
-        block_release(block);
+        mkdir_give_back(block);
         return rc;
     }
 
@@ -1400,13 +1521,19 @@ static int mfs_create_locked(const char *path)
         return rc;
     }
 
+    /* The name is checked before the record of the object is taken. */
+    rc = parent_name_free(dir_path, name);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
     rc = inode_alloc(&index);
     if (rc != MFS_OK) {
         return rc;
     }
 
     memset(&inode, 0, sizeof(inode));
-    inode.flags = MFS_INODE_USED;
+    inode.flags = inode_flags(MFS_INODE_USED, MFS_MODE_DEFAULT, 0);
     inode.first_block = MFS_NEXT_NONE;
     inode.size = 0;
     inode.entries = 0;
@@ -1416,7 +1543,7 @@ static int mfs_create_locked(const char *path)
         return rc;
     }
 
-    rc = add_to_parent(dir_path, name, index, (k_u8_t)inode.flags);
+    rc = add_to_parent(dir_path, name, index, (k_u8_t)(inode.flags & MFS_INODE_TYPE_MASK));
     if (rc != MFS_OK) {
         memset(&inode, 0, sizeof(inode));
         inode_write(index, &inode);
@@ -1828,6 +1955,67 @@ static int mfs_unlink_locked(const char *path)
     return mfs_sync();
 }
 
+/*
+ * A change of the mode or of the owner is a change of the record of the
+ * object: the new flags are written into the table and the volume is
+ * synced, so that the numbers survive the restart like the size of a
+ * file does.
+ */
+static int mfs_set_attr_locked(const char *path, k_u32_t mask, k_u32_t value)
+{
+    struct mfs_inode inode;
+    k_u32_t index = 0;
+    int rc;
+
+    if (!g.mounted) {
+        return MFS_EINVAL;
+    }
+
+    rc = path_lookup(path, &inode, NULL, &index);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    inode.flags = (inode.flags & ~mask) | (value & mask);
+
+    rc = inode_write(index, &inode);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    return mfs_sync();
+}
+
+static int mfs_chmod_locked(const char *path, k_u32_t mode)
+{
+    /*
+     * The mode has to fit into its nine bits: a number with more would
+     * spill into the owner and the record would say something else than
+     * the caller asked for.
+     *
+     * A zero is refused as well: a volume of 0.3.x keeps its mode in the
+     * same bits, where a zero means "the record predates the modes", and
+     * mfs_inode_mode() reads it as the mode of the design. A "chmod 000"
+     * that was written would come back as 0644, so the call says what it
+     * cannot do instead of storing a number it does not keep.
+     */
+    if ((mode & ~MFS_MODE_MASK) != 0u || mode == 0u) {
+        return MFS_EINVAL;
+    }
+
+    return mfs_set_attr_locked(path, MFS_MODE_MASK << MFS_MODE_SHIFT, mode << MFS_MODE_SHIFT);
+}
+
+static int mfs_chown_locked(const char *path, k_u32_t owner)
+{
+    /* The same for the fifteen bits of a uid. */
+    if ((owner & ~MFS_OWNER_MASK) != 0u) {
+        return MFS_EINVAL;
+    }
+
+    return mfs_set_attr_locked(path, MFS_OWNER_MASK << MFS_OWNER_SHIFT, owner << MFS_OWNER_SHIFT);
+}
+
 static int mfs_stat_locked(const char *path, struct mfs_inode *out, struct mfs_dirent *dirent)
 {
     struct mfs_inode inode;
@@ -1840,6 +2028,13 @@ static int mfs_stat_locked(const char *path, struct mfs_inode *out, struct mfs_d
     rc = path_lookup(path, &inode, dirent, NULL);
     if (rc != MFS_OK) {
         return rc;
+    }
+
+    /* The entry describes the same object as the record does. */
+    if (dirent != NULL) {
+        dirent->size = inode.size;
+        dirent->mode = mfs_inode_mode(&inode);
+        dirent->owner = mfs_inode_owner(&inode);
     }
 
     if (out != NULL) {
@@ -1933,6 +2128,47 @@ int mfs_get_info(struct mfs_info *out)
     return rc;
 }
 
+int mfs_check(struct mfs_check_report *report)
+{
+    struct mfs_private view;
+    int rc;
+
+    if (report == NULL) {
+        return MFS_EINVAL;
+    }
+
+    mfs_lock();
+
+    if (!g.mounted) {
+        mfs_unlock();
+        return MFS_EINVAL;
+    }
+
+    memset(report, 0, sizeof(*report));
+    report->data_blocks = g.sb.data_blocks;
+
+    /*
+     * The checker gets the state of the volume, not a copy of it: the lock
+     * is held for the whole walk, so nothing changes under it, and the
+     * buffer of the directories is free for its use.
+     */
+    memset(&view, 0, sizeof(view));
+    view.sb = &g.sb;
+    view.bitmap = g.bitmap;
+    view.dir_scratch = g_dir_buffer.data;
+    view.dir_scratch_size = sizeof(g_dir_buffer.data);
+    view.bitmap_blocks = g.bitmap_blocks;
+    view.inode_blocks = g.inode_blocks;
+    view.inode_capacity = g.inode_capacity;
+    view.device_blocks = g.dev->sectors;
+
+    rc = mfs_check_locked(&view, report);
+
+    mfs_unlock();
+
+    return rc;
+}
+
 int mfs_mkdir(const char *path)
 {
     int rc;
@@ -2016,6 +2252,28 @@ int mfs_stat(const char *path, struct mfs_inode *out, struct mfs_dirent *dirent)
 
     mfs_lock();
     rc = mfs_stat_locked(path, out, dirent);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_chmod(const char *path, k_u32_t mode)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_chmod_locked(path, mode);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_chown(const char *path, k_u32_t owner)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_chown_locked(path, owner);
     mfs_unlock();
 
     return rc;
