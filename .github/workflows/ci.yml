@@ -2,9 +2,11 @@
 #
 # The same list as `make ci` before a push, and the firmware on top of it:
 # the unit tests, the same tests under valgrind, the sanitizers, the smoke
-# test of the simulator and the integrity of the repository. A fresh
-# checkout has no dist/ (the bundle checks skip until a job builds it) and
-# no clang-format of the right version, so the host job installs the
+# test of the simulator and the integrity of the repository. `make ci` now
+# runs TSan too, and boots the x86-64 port when `qemu-system-x86_64` is on
+# PATH — the cloud installs qemu below, so both halves see the same checks.
+# A fresh checkout has no dist/ (the bundle checks skip until a job builds
+# it) and no clang-format of the right version, so the host job installs the
 # formatter that `make format` uses — the sources are formatted with
 # clang-format 23 and the runner alone would bring an older one and fail
 # on style — and the firmware job runs the integrity check a second time

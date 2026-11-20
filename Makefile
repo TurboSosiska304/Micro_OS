@@ -30,9 +30,11 @@ help:
 	@echo "  make build      configure and build the host build"
 	@echo "  make test       build and run the unit tests (host)"
 	@echo "  make test-asan  the same tests with the address and UB sanitizers"
+	@echo "  make test-tsan  the same tests under the race detector"
 	@echo "  make smoke      boot the simulator and check its answers"
 	@echo "  make integrity  the integrity check of the repository and the bundle"
-	@echo "  make ci         build, test, smoke and integrity — run it before pushing"
+	@echo "  make ci         build, test, test-asan, test-tsan, smoke, integrity"
+	@echo "                  (x86-smoke when qemu-system-x86_64 is installed)"
 	@echo "  make sim        build and run the host simulator"
 	@echo "  make clean      remove the host build directory"
 	@echo "  make format     reformat sources with clang-format"
@@ -81,7 +83,25 @@ integrity:
 # What a contributor runs before pushing: the workflows of the cloud
 # repeat this list on every push (and add valgrind and the firmware), so
 # `make ci` stays the local half of the same checks.
-ci: build test test-asan smoke integrity
+#
+# TSan is a part of the list: the host kernel is one address space and the
+# race detector is the closest the tests get to preemption, so a push that
+# passes only the plain and ASan builds has not seen the same code the cloud
+# sees. The boot of the x86-64 port is not: QEMU is a machine of its own and
+# not every laptop has it. The cloud installs it and runs x86-smoke; here it
+# joins the list when `qemu-system-x86_64` is on PATH and is skipped with a
+# message when it is not. A missing optional machine must not fail a run.
+CI_QEMU := $(shell command -v qemu-system-x86_64 2>/dev/null)
+CI_TARGETS := build test test-asan test-tsan smoke
+ifneq ($(CI_QEMU),)
+CI_TARGETS += x86-smoke
+endif
+CI_TARGETS += integrity
+
+ci: $(CI_TARGETS)
+ifeq ($(CI_QEMU),)
+	@echo "ci: qemu-system-x86_64 not found, x86-smoke is skipped"
+endif
 
 sim: build
 	$(BUILD_DIR)/ports/port_host/microos_sim

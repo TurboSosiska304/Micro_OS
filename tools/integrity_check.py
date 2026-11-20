@@ -763,17 +763,48 @@ def check_config(root: str, report: Report, images: dict, table: dict) -> None:
         )
 
 
+def git_directory(root: str) -> str:
+    """The directory of the git objects of this checkout.
+
+    A linked worktree has a .git *file* that names the real directory, so a
+    test of os.path.isdir(root/.git) skips the check exactly where a review
+    runs. `git rev-parse --git-dir` answers for both: a normal clone says
+    .git, which keeps the command of that case the same.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", root, "rev-parse", "--git-dir"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return ""
+
+    if result.returncode != 0:
+        return ""
+
+    path = result.stdout.strip()
+    if not path:
+        return ""
+
+    # rev-parse prints a relative path (".git") in a clone and an absolute
+    # one in a worktree; git is asked from the root, so the join is right.
+    return path if os.path.isabs(path) else os.path.join(root, path)
+
+
 def check_git(root: str, report: Report) -> None:
     """The integrity of the git objects."""
     group = "git"
 
-    if not os.path.isdir(os.path.join(root, ".git")):
+    directory = git_directory(root)
+    if not directory or not os.path.isdir(directory):
         report.skip(group, "git fsck", "the directory is not a git repository")
         return
 
     try:
         result = subprocess.run(
-            ["git", "-C", root, "fsck", "--strict", "--no-progress"],
+            ["git", "-C", root, "--git-dir", directory, "fsck", "--strict", "--no-progress"],
             capture_output=True,
             text=True,
         )
