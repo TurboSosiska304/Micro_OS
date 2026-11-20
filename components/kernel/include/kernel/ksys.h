@@ -44,7 +44,10 @@
 #define KSYS_MALLOC 20  /* malloc(size) */
 #define KSYS_FREE 21    /* free(ptr) */
 #define KSYS_REALLOC 22 /* realloc(ptr, size) */
-#define KSYS_COUNT 23   /* the number of the system calls */
+#define KSYS_CHMOD 23   /* chmod(path, mode) */
+#define KSYS_CHOWN 24   /* chown(path, owner) */
+#define KSYS_EXECVE 25  /* execve(path, argv) */
+#define KSYS_COUNT 26   /* the number of the system calls */
 
 /* The flags of the open call, the same as the ones of the VFS. */
 #define KSYS_O_RDONLY 0x0000
@@ -63,6 +66,20 @@
 
 /* The flags of the waitpid. */
 #define KSYS_WNOHANG 1 /* do not wait, answer 0 when the child is not ready */
+
+/*
+ * The mode and the owner of an object, as the edge of the system accepts
+ * them: the mode is the nine bits of the rwx triads and the owner is a uid
+ * of fifteen bits, which is what every filesystem of the system keeps for
+ * the two numbers (ADR 0005). A wider number is refused at the door instead
+ * of being cut to fit the record.
+ *
+ * The system has one user and its uid is zero; the checks of the mode use
+ * that number and grant it nothing extra.
+ */
+#define KSYS_MODE_MASK 0777u
+#define KSYS_UID 0u
+#define KSYS_UID_MAX 0x7FFFu
 
 /* The whence of the lseek. */
 #define KSYS_SEEK_SET 0
@@ -155,5 +172,8 @@ int ksys_waitpid(int pid, int *status, int flags);
 void *ksys_malloc(k_size_t size);
 void ksys_free(void *ptr);
 void *ksys_realloc(void *ptr, k_size_t size);
+int ksys_chmod(const char *path, k_u32_t mode);
+int ksys_chown(const char *path, k_u32_t owner);
+int ksys_execve(const char *path, char *const argv[]);
 
 #endif /* MICRO_OS_KERNEL_KSYS_H */

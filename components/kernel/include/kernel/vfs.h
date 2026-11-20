@@ -29,11 +29,19 @@ struct vfs_dirent {
     k_u64_t size;
 };
 
-/* The information about an object. */
+/*
+ * The information about an object. The mode and the owner are the numbers
+ * the filesystem keeps for the object (ADR 0005): nine bits of rwx for the
+ * user, the group and the others, and a uid. A filesystem that has no modes
+ * of its own - procfs, devfs - answers with a zero, and a zero means
+ * exactly that: no modes, not a file nobody may touch.
+ */
 struct vfs_stat {
     k_u32_t inode;
     k_u8_t type;
     k_u64_t size;
+    k_u32_t mode;
+    k_u32_t owner;
 };
 
 /* The operations of a filesystem. */
@@ -57,6 +65,14 @@ struct vfs_operations {
     int (*stat)(void *ctx, const char *path, struct vfs_stat *out);
     int (*mkdir)(void *ctx, const char *path);
     int (*unlink)(void *ctx, const char *path);
+    /*
+     * The mode and the owner of an object. They are two calls and not one
+     * "set the attributes", because a filesystem may well be able to change
+     * one and not the other, and a caller that changes one number must not
+     * have to carry the other one through the door.
+     */
+    int (*chmod)(void *ctx, const char *path, k_u32_t mode);
+    int (*chown)(void *ctx, const char *path, k_u32_t owner);
     int (*statfs)(void *ctx, struct vfs_statfs *out);
     const char *(*strerror)(int error);
 };
@@ -107,6 +123,10 @@ int vfs_mkdir(const char *path);
 int vfs_mkdir_p(const char *path);
 int vfs_unlink(const char *path);
 int vfs_statfs(const char *path, struct vfs_statfs *out);
+
+/* The mode and the owner of an object; a filesystem without them says so. */
+int vfs_chmod(const char *path, k_u32_t mode);
+int vfs_chown(const char *path, k_u32_t owner);
 
 /* The message of the last error. */
 const char *vfs_strerror(int error);

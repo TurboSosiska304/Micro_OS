@@ -113,7 +113,7 @@ child"; the flags of `waitpid` are one bit. All of them are `EINVAL`.
 
 **`stat` and `getcwd`** need the place for the answer: NULL there is a
 mistake of the caller, not "the answer is not wanted", and it is `EINVAL`
-rather than a `NOENT` from a filesystem that was asked for nothing.
+instead of a question to a filesystem that has nowhere to put its answer.
 
 **`readdir`** takes whole entries: a count that is not a multiple of
 `struct vfs_dirent` would let the last entry land past the memory of the
@@ -167,7 +167,8 @@ the mode of a directory does not decide the search of its children yet.
   before a byte of it is read;
 * the image must be a `MOX1` of this version, and the port is then asked
   whether the machine can run a program at all. The board and the simulator
-  answer no, and the answer of the call is `ENOSYS`.
+  answer no, and the answer of the call is `ENOSYS`; the x86-64 port names a
+  window of memory, copies the image there and enters it.
 
 The errors: `ENOENT` for a path that names nothing, `EISDIR` for a directory,
 `EPERM` for a file whose mode has no execute bit for the caller (`0400` is not
@@ -175,12 +176,14 @@ a program), `EINVAL` for a file that is not an image of this system, `ENOMEM`
 for an image the port could not place in its window, and `ENOSYS` for a
 machine without a window of programs.
 
-A successful call **does not return**: the program is the caller from then on.
-The vector of the arguments is the memory of the program and the kernel does
-not walk it - without an MMU there is nothing to check an array of pointers
-against - and today the port is entered without a vector, because
-`k_exec_run()` has no place for it: a program of this system reads no
-arguments yet.
+A successful call **does not return** when the program never comes back: the
+program is the caller from then on. A program that returns ends the call
+with 0 - the state of a machine with no process to exit into, where the
+kernel has to notice that the program has finished. The vector of the
+arguments is the memory of the program and the kernel does not walk it -
+without an MMU there is nothing to check an array of pointers against - and
+today the port is entered without a vector, because `k_exec_run()` has no
+place for it: a program of this system reads no arguments yet.
 
 ## The processes
 

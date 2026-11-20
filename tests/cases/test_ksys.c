@@ -286,7 +286,8 @@ static void test_abi_is_stable(void)
         {KSYS_IOCTL, "ioctl"},     {KSYS_YIELD, "yield"},     {KSYS_SLEEP, "sleep"},
         {KSYS_UPTIME, "uptime"},   {KSYS_REBOOT, "reboot"},   {KSYS_FORK, "fork"},
         {KSYS_GETPPID, "getppid"}, {KSYS_WAITPID, "waitpid"}, {KSYS_MALLOC, "malloc"},
-        {KSYS_FREE, "free"},       {KSYS_REALLOC, "realloc"},
+        {KSYS_FREE, "free"},       {KSYS_REALLOC, "realloc"}, {KSYS_CHMOD, "chmod"},
+        {KSYS_CHOWN, "chown"},     {KSYS_EXECVE, "execve"},
     };
     size_t i;
 
@@ -296,7 +297,12 @@ static void test_abi_is_stable(void)
 
     for (i = 0; i < K_ARRAY_SIZE(golden); i++) {
         KT_CHECK_STR_EQ(ksys_name(golden[i].number), golden[i].name);
+        KT_CHECK_INT_EQ(golden[i].number, (k_u32_t)i);
     }
+
+    /* Every call of the table is registered, and no number is left empty. */
+    KT_CHECK_INT_EQ(ksys_count(), KSYS_COUNT);
+    KT_CHECK(ksys_name(KSYS_COUNT) == NULL);
 
     /* The width of the arguments follows the target: 32 bits on the board,
      * 64 on the host. A pointer must never be cut in half. */
@@ -704,6 +710,133 @@ static void test_open_flags(void)
 }
 
 /*
+ * The property: chmod and chown change the numbers that stat reports, one at
+ * a time, and a number the record of the filesystem cannot hold is refused
+ * at the edge instead of being cut to fit.
+ */
+static void test_attributes(void)
+{
+    struct vfs_stat info;
+    int fd;
+
+    ktest_begin("ksys: chmod and chown change what stat reports");
+
+    setup();
+
+    fd = ksys_open("/attr.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    KT_CHECK_INT_EQ(ksys_stat("/attr.txt", &info), 0);
+    KT_CHECK_INT_EQ(info.mode, MFS_MODE_DEFAULT);
+    KT_CHECK_INT_EQ(info.owner, 0);
+
+    KT_CHECK_INT_EQ(ksys_chmod("/attr.txt", 0755), 0);
+    KT_CHECK_INT_EQ(ksys_stat("/attr.txt", &info), 0);
+    KT_CHECK_INT_EQ(info.mode, 0755);
+
+    KT_CHECK_INT_EQ(ksys_chown("/attr.txt", 42), 0);
+    KT_CHECK_INT_EQ(ksys_stat("/attr.txt", &info), 0);
+    KT_CHECK_INT_EQ(info.owner, 42);
+    KT_CHECK_INT_EQ(info.mode, 0755); /* the two numbers are two fields */
+
+    /* The numbers are the numbers of the record, not a window into it. */
+    KT_CHECK_INT_EQ(ksys_chmod("/attr.txt", KSYS_MODE_MASK + 1u), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_chown("/attr.txt", KSYS_UID_MAX + 1u), KERR_INVAL);
+
+    /* A zero mode would come back as the mode of the design: it is refused
+     * where the record is written, and not stored as a number that lies. */
+    KT_CHECK_INT_EQ(ksys_chmod("/attr.txt", 0), KERR_INVAL);
+
+    /* The path is a path, and an object that is not there is not there. */
+    KT_CHECK_INT_EQ(ksys_chmod(NULL, 0644), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_chown("relative", 0), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_chmod("/no-such-file", 0644), KERR_NOENT);
+
+    /* The mode is still the one the last successful call wrote. */
+    KT_CHECK_INT_EQ(ksys_stat("/attr.txt", &info), 0);
+    KT_CHECK_INT_EQ(info.mode, 0755);
+    KT_CHECK_INT_EQ(info.owner, 42);
+
+    teardown();
+}
+
+/*
+ * The property: the access of an open is checked against the mode of the
+ * file, at the edge, before a descriptor exists. There is one user, uid 0,
+ * and no bypass for it: the bits of the owner decide, and a file of the mode
+ * 0200 cannot be read by anybody.
+ */
+static void test_open_mode(void)
+{
+    char byte = 'x';
+    int fd;
+
+    ktest_begin("ksys: the mode of a file decides what an open may ask for");
+
+    setup();
+
+    fd = ksys_open("/mode.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_write(fd, &byte, 1), 1);
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    /* To be read only: an open that writes is refused, and the read still
+     * works and the descriptor still refuses the write. */
+    KT_CHECK_INT_EQ(ksys_chmod("/mode.txt", 0400), 0);
+    KT_CHECK_INT_EQ(ksys_open("/mode.txt", KSYS_O_WRONLY), KERR_PERM);
+    KT_CHECK_INT_EQ(ksys_open("/mode.txt", KSYS_O_RDWR), KERR_PERM);
+
+    fd = ksys_open("/mode.txt", KSYS_O_RDONLY);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_read(fd, &byte, 1), 1);
+        KT_CHECK_INT_EQ(ksys_write(fd, &byte, 1), KERR_BADF);
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    /* To be written only: the open to read does not reach the descriptor.
+     * The owner is uid 0, the only user of the system, and it gets nothing
+     * extra for being the owner. */
+    KT_CHECK_INT_EQ(ksys_chmod("/mode.txt", 0200), 0);
+    KT_CHECK_INT_EQ(ksys_chown("/mode.txt", 0), 0);
+    KT_CHECK_INT_EQ(ksys_open("/mode.txt", KSYS_O_RDONLY), KERR_PERM);
+
+    fd = ksys_open("/mode.txt", KSYS_O_WRONLY);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    /* A file of another owner is answered by the triad of the others: the
+     * caller is not that owner, and there is no group of its own. */
+    KT_CHECK_INT_EQ(ksys_chown("/mode.txt", 7), 0);
+    KT_CHECK_INT_EQ(ksys_chmod("/mode.txt", 0600), 0);
+    KT_CHECK_INT_EQ(ksys_open("/mode.txt", KSYS_O_RDONLY), KERR_PERM);
+
+    KT_CHECK_INT_EQ(ksys_chmod("/mode.txt", 0604), 0);
+    fd = ksys_open("/mode.txt", KSYS_O_RDONLY);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    /* A file that is about to be created is not checked: it is born with the
+     * mode of the design, which allows the access that was asked for. */
+    fd = ksys_open("/fresh.txt", KSYS_O_RDONLY | KSYS_O_CREAT);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    teardown();
+}
+
+/*
  * The property: readdir takes whole entries. A count that is not a multiple
  * of the size of an entry would make the filesystem write the last entry
  * past the end of the buffer of the caller.
@@ -753,5 +886,7 @@ void test_ksys(void)
     test_path_validation();
     test_buffer_validation();
     test_open_flags();
+    test_attributes();
+    test_open_mode();
     test_readdir_validation();
 }

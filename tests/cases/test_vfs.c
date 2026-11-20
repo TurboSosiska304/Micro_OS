@@ -187,6 +187,54 @@ static void test_mount_points(void)
     teardown();
 }
 
+/*
+ * The property: the mode and the owner of an object are the numbers the
+ * filesystem keeps, they travel through the VFS, and chmod and chown are the
+ * two calls that change them - one without the other.
+ */
+static void test_attributes(void)
+{
+    struct vfs_file file;
+    /* The place for the data of the filesystem of an open file. */
+    static k_u8_t file_data[VFS_FILE_DATA_SIZE];
+    struct vfs_stat stat;
+
+    ktest_begin("vfs: the mode and the owner travel through the VFS");
+
+    setup();
+
+    KT_CHECK_INT_EQ(vfs_open("/tool", VFS_O_RDWR | VFS_O_CREAT, &file, file_data), 0);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    /* A new file has the mode of the design and the uid of the one user. */
+    KT_CHECK_INT_EQ(vfs_stat("/tool", &stat), 0);
+    KT_CHECK_INT_EQ(stat.mode, MFS_MODE_DEFAULT);
+    KT_CHECK_INT_EQ(stat.owner, 0);
+    KT_CHECK_INT_EQ(stat.type, 1); /* a file */
+
+    KT_CHECK_INT_EQ(vfs_chmod("/tool", 0755), 0);
+    KT_CHECK_INT_EQ(vfs_stat("/tool", &stat), 0);
+    KT_CHECK_INT_EQ(stat.mode, 0755);
+    KT_CHECK_INT_EQ(stat.type, 1); /* the type did not move with the mode */
+
+    KT_CHECK_INT_EQ(vfs_chown("/tool", 7), 0);
+    KT_CHECK_INT_EQ(vfs_stat("/tool", &stat), 0);
+    KT_CHECK_INT_EQ(stat.owner, 7);
+    KT_CHECK_INT_EQ(stat.mode, 0755); /* and the mode did not move with it */
+
+    /* A directory is born with the mode of a directory. */
+    KT_CHECK_INT_EQ(vfs_mkdir("/bin"), 0);
+    KT_CHECK_INT_EQ(vfs_stat("/bin", &stat), 0);
+    KT_CHECK_INT_EQ(stat.mode, MFS_MODE_DIR_DEFAULT);
+
+    /* The numbers are checked where the two contracts meet. */
+    KT_CHECK_INT_EQ(vfs_chmod("/tool", MFS_MODE_MASK + 1u), KERR_INVAL);
+    KT_CHECK_INT_EQ(vfs_chown("/tool", MFS_OWNER_MASK + 1u), KERR_INVAL);
+    KT_CHECK_INT_EQ(vfs_chmod("/not-here", 0644), KERR_NOENT);
+
+    teardown();
+}
+
 static void test_statfs(void)
 {
     struct vfs_statfs stat;
@@ -211,5 +259,6 @@ void test_vfs(void)
     test_directories();
     test_mkdir_p();
     test_mount_points();
+    test_attributes();
     test_statfs();
 }

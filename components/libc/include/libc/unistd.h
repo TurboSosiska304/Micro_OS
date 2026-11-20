@@ -41,6 +41,9 @@ int microos_getcwd(char *buf, size_t size);
 unsigned microos_sleep(unsigned ms);
 int microos_yield(void);
 void microos_exit(int code);
+int microos_chmod(const char *path, unsigned mode);
+int microos_chown(const char *path, unsigned owner);
+int microos_execve(const char *path, char *const argv[]);
 
 /* The code of the last error, the numbers of POSIX. */
 int microos_errno(void);
@@ -57,8 +60,8 @@ const char *microos_strerror(int code);
 
 /*
  * The mode of open (the third argument of POSIX) is accepted and
- * ignored: the filesystem of the board has no rights yet. The access
- * alone has to be a real one, 3 is not a mode.
+ * ignored: a new file gets the mode of the design, and chmod is the call
+ * that changes it. The access alone has to be a real one, 3 is not a mode.
  */
 #ifndef MICROOS_LIBC_KEEP_NAMES
 #define open microos_open
@@ -77,5 +80,8 @@ const char *microos_strerror(int code);
 #define sleep microos_sleep
 #define yield microos_yield
 #define exit microos_exit
+#define chmod microos_chmod
+#define chown microos_chown
+#define execve microos_execve
 
 #endif /* MICRO_OS_LIBC_UNISTD_H */
