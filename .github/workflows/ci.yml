@@ -89,8 +89,14 @@ jobs:
           . /opt/esp/idf/export.sh >/dev/null
           idf.py build
 
+      - name: the kernel of the x86-64 port
+        run: make x86-build
+
       - name: the bundle of dist/
-        run: tools/bundle.sh build dist
+        shell: bash
+        run: |
+          . /opt/esp/idf/export.sh >/dev/null
+          tools/bundle.sh build dist
 
       - name: the integrity against the bundle
         shell: bash

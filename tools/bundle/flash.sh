@@ -71,10 +71,19 @@ fi
 
 echo "==> flashing $PORT with $ESPTOOL"
 
-$ESPTOOL --chip esp32 -p "$PORT" -b 460800 --before default_reset --after hard_reset write_flash \
-    0x1000 "$HERE/bootloader.bin" \
-    0x8000 "$HERE/partition-table.bin" \
-    0x10000 "$HERE/micro_os.bin"
+# One image when the bundle carries one: the same bytes, one write, no
+# offsets to mistype. The parts stay for the tools that want them.
+MERGED="$(ls "$HERE"/MicroOS-*.bin 2>/dev/null | head -1 || true)"
+
+if [ -n "$MERGED" ]; then
+    $ESPTOOL --chip esp32 -p "$PORT" -b 460800 --before default_reset --after hard_reset write_flash \
+        0x0 "$MERGED"
+else
+    $ESPTOOL --chip esp32 -p "$PORT" -b 460800 --before default_reset --after hard_reset write_flash \
+        0x1000 "$HERE/bootloader.bin" \
+        0x8000 "$HERE/partition-table.bin" \
+        0x10000 "$HERE/micro_os.bin"
+fi
 
 echo "==> done. Start the console with:"
 echo "    python3 tools/console.py $PORT"

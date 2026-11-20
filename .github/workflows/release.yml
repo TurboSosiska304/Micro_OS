@@ -52,8 +52,16 @@ jobs:
           . /opt/esp/idf/export.sh >/dev/null
           idf.py build
 
+      - name: the kernel of the x86-64 port
+        run: make x86-build
+
+      # esptool lives in the python environment of the image, and the step
+      # that builds the bundle is where it is needed (merge_bin).
       - name: the bundle of dist/
-        run: tools/bundle.sh build dist
+        shell: bash
+        run: |
+          . /opt/esp/idf/export.sh >/dev/null
+          tools/bundle.sh build dist
 
       - name: the integrity against the version of the tag
         shell: bash
