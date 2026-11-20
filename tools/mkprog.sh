@@ -123,20 +123,30 @@ if [ "$entry" -lt "$K_EXEC_HEADER_SIZE" ] || [ "$entry" -ge "$entry_end" ]; then
     exit 1
 fi
 
-# A field of the header, little endian.
-le32()
+# A field of the header, little endian. The bytes leave as the octal
+# escapes of printf and not through a hex dumper: the script has to run on a
+# bare build machine, and xxd is a part of an editor that nobody promised.
+emit_le32()
 {
     word=$1
-    printf '%02x%02x%02x%02x' \
-        $(( word & 0xff )) $(( (word >> 8) & 0xff )) \
-        $(( (word >> 16) & 0xff )) $(( (word >> 24) & 0xff ))
+    shift=0
+
+    while [ "$shift" -lt 32 ]; do
+        byte=$(( (word >> shift) & 0xff ))
+        printf "\\$(printf '%03o' "$byte")"
+        shift=$((shift + 8))
+    done
 }
 
-header="$(le32 "$K_EXEC_MAGIC")$(le32 "$K_EXEC_VERSION")$(le32 0)$(le32 "$entry")"
-header="$header$(le32 "$text_aligned")$(le32 "$data_aligned")$(le32 "$bss_size")$(le32 0)"
-
 {
-    printf '%s' "$header" | xxd -r -p
+    emit_le32 "$K_EXEC_MAGIC"
+    emit_le32 "$K_EXEC_VERSION"
+    emit_le32 0
+    emit_le32 "$entry"
+    emit_le32 "$text_aligned"
+    emit_le32 "$data_aligned"
+    emit_le32 "$bss_size"
+    emit_le32 0
     cat "$work/text.bin"
     head -c $((text_aligned - text_size)) /dev/zero
     cat "$work/segment.bin"
