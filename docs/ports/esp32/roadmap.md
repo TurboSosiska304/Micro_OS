@@ -32,6 +32,7 @@ The pins, the chips and the quirks of the board are in
 * [x] The process of a release, the tags, the cloud build, the bundle
 * [x] `v0.3.1`: the first release of the kernel with ports
 * [x] `v0.4.0-rc1`: phase 7, programs and the permissions of a file
+* [x] `v0.4.0-rc2`: the debt pass - entry into the kernel, HTTP page, microphone, fsck
 * [ ] `v0.4.0`: the release candidate accepted (the tag is cut when it ships)
 
 ## P3 - The wearable (planned)

@@ -168,8 +168,8 @@ of an older copy knows what changed.
   in the last erase sector (4 blocks), starts `META` at 4% and grows it until
   the bitmap and the table fit, and stores the three boundaries in the header.
   The example table and the list of improvements are corrected.
-* **`v0.4.0-rc1` exists.** `docs/ports/esp32/roadmap.md` P2 stopped at
-  `v0.3.1`; the tag of the release candidate is added, and `v0.4.0` is left as
+* **`v0.4.0-rc1` and `-rc2` exist.** `docs/ports/esp32/roadmap.md` P2 stopped
+  at `v0.3.1`; both release candidates are named now, and `v0.4.0` is left as
   the next one.
 * **The translations.** `docs/ru/roadmap_ru.md` and the other Russian files
   carry the banner that says they may lag; this document has no translation
