@@ -151,12 +151,10 @@ int k_exec_run(const struct k_exec_image *image)
         return -1;
     }
 
-    (void)k_port_exec_enter(image, NULL);
-
     /*
-     * The contract has no return on success: the entry of the program never
-     * comes back here. A port that returns at all refused the image, whatever
-     * code it chose, so the answer to the caller is the same.
+     * A program that never returns never gets here. A program that returns
+     * ends the call with 0 - it has finished - and a port that refuses the
+     * image answers -1.
      */
-    return -1;
+    return k_port_exec_enter(image, NULL) == 0 ? 0 : -1;
 }

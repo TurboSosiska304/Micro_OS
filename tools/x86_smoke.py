@@ -13,17 +13,21 @@ The prompt paces the typing on its own — the next command goes out when the
 shell prints the prompt of the previous one — so a line is never split by
 the small FIFO of the serial port of the emulated chip.
 
+Between the boot and the shell the port of this machine runs a program: an
+image of the MOX1 format is placed at its base and entered, and the line it
+writes to COM1 is part of the transcript. It is checked below, because it is
+the one thing a kernel that only prints its banner cannot fake.
+
     tools/x86_smoke.py [--timeout SECONDS] [--verbose]
 
-The exit status is 0 when the kernel came up and the shell answered, and 1
-otherwise.
+The exit status is 0 when the kernel came up, the program ran and the shell
+answered, and 1 otherwise.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
-import re
 import re
 import select
 import subprocess
@@ -140,6 +144,17 @@ def check(output: str) -> list:
     # --- the boot
     for line in EXPECTED:
         expect(line, line in output)
+
+    # --- the program of the milestone
+    # The line in the middle is not written by the kernel: it comes out of the
+    # image the port copied to 0x02000000, one byte at a time, so it is the
+    # proof that the program ran and not that the kernel said it would.
+    expect("the port enters a program", "x86-64: a program runs" in output)
+    expect("the program writes to the console", "PROGRAM: hello from 0x02000000" in output)
+    expect(
+        "the kernel is back from the program",
+        "x86-64: the program returned to the port" in output,
+    )
 
     # --- the shell
     expect("the shell starts", "MicroOS shell ready" in output)

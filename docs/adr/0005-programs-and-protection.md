@@ -46,7 +46,9 @@ place for it. `tools/mkprog.sh` turns an object of a program into the image.
   memory at all;
 * `void *k_port_exec_base(void)` — where a program may be placed;
 * `int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])`
-  — copy the image, enter it; the call does not return on success.
+  — copy the image, enter it. A program that never returns never comes
+  back; a program that returns ends the call with 0, which is how a program
+  that finishes is noticed before `execve` has a process to exit into.
 
 The board answers "no" and is honest about it; the x86-64 port loads and
 jumps. The kernel parses the image, checks it against the base and the size
