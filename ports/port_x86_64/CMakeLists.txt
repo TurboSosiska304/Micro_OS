@@ -107,12 +107,12 @@ set_source_files_properties("${KSHELL_DIR}/src/kshell_memtest.c"
 #
 # program.ld puts the text at the base of the window plus the header of the
 # format (0x02000020) and SUBALIGN(4) keeps the 64-byte alignment of the
-# object from moving it.
-# alignment over the address of the script, which moves the code 32 bytes away
-# from every absolute address the program computes for its data. The image has
-# the text right after the header and nowhere else, so the address is pinned
-# here, where the flags of this program are, and the script keeps the shape.
+# object from moving it. The base is named here again and handed to mkprog.sh,
+# which refuses an image linked for another window: a program linked for the
+# wrong address would still run, and every absolute address it computes for
+# its data would name something else.
 set(PROGRAM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/programs")
+set(PROGRAM_BASE 0x02000000)
 set(PROGRAM_IMAGE "${CMAKE_BINARY_DIR}/hello.mox")
 set(PROGRAM_OBJECT "${CMAKE_BINARY_DIR}/hello_mox.o")
 set(MKPROG "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/mkprog.sh")
@@ -127,7 +127,7 @@ add_custom_command(
     COMMAND ${CMAKE_C_COMPILER} -nostdlib -static -no-pie -Wl,--build-id=none
             -Wl,-e,hello_main
             -T "${PROGRAM_DIR}/program.ld" -o hello.elf hello.o
-    COMMAND sh "${MKPROG}" hello.elf hello.mox hello_main
+    COMMAND sh "${MKPROG}" --base ${PROGRAM_BASE} hello.elf hello.mox hello_main
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
     DEPENDS "${PROGRAM_DIR}/hello.c" "${PROGRAM_DIR}/prog.h" "${PROGRAM_DIR}/program.ld"
             "${KERNEL_DIR}/include/kernel/ksys.h" "${MKPROG}"

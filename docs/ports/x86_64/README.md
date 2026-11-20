@@ -32,7 +32,10 @@ the programs are placed at 32 MiB. The program of `/bin` is made first:
 `build-x86/hello.mox` is the image of `ports/port_x86_64/programs/hello.c`
 (`programs/program.ld` links it for the window, `tools/mkprog.sh` turns it
 into the format) and the kernel carries it as a blob, because the machine has
-to have the bytes before it has a filesystem to read them from.
+to have the bytes before it has a filesystem to read them from. The build
+passes `--base 0x02000000` to `mkprog.sh`, which refuses an image linked for
+another window: nothing relocates the program, so a wrong address would run
+and read its data from somewhere else.
 
 ## What works
 
