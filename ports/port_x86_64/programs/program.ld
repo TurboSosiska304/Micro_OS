@@ -41,7 +41,7 @@ SECTIONS
     /* k_port_exec_base() + the header of the format. */
     . = 0x02000020;
 
-    .text : { *(.text .text.*) } :text
+    .text : SUBALIGN(4) { *(.text .text.*) } :text
 
     /*
      * The initialised data and the read-only data are one segment in the

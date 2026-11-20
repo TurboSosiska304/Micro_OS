@@ -141,6 +141,81 @@ isr_irq0:
 .size isr_irq0, . - isr_irq0
 
 /*
+ * The call of a system call: `int $0x80` from the program.
+ *
+ * The program is ring 0 code with no process under it (ADR 0006), so the
+ * processor pushes the same frame as for any interrupt and does not change
+ * the stack: the handler runs on the stack of the program, which is a window
+ * of its own (see port_exec.c) and not the stack of the kernel.
+ *
+ * The registers of the convention are the ones of the kernel call and of
+ * Linux: the number in RAX, six arguments in RDI, RSI, RDX, R10, R8 and R9,
+ * the result in RAX. Everything the caller may lose across a C call is saved
+ * here - the nine registers below plus RBP, which the frame uses - because
+ * the C side is free to clobber them and the program is not compiled against
+ * this handler.
+ *
+ * The interrupts are turned on once the state is on the stack, and not
+ * before: the whole point of the gate is that a call may sleep or yield, and
+ * the scheduler of the port decides by the interrupt flag. The iretq that
+ * ends the stub restores the flags of the program, so the flag is on for the
+ * length of the call and off again in the code that made it.
+ */
+.global isr_syscall
+.type isr_syscall, @function
+isr_syscall:
+    pushq %rax /* the number of the call, then its result */
+    pushq %rdi
+    pushq %rsi
+    pushq %rdx
+    pushq %r10
+    pushq %r8
+    pushq %r9
+    pushq %r11
+    pushq %rcx
+    pushq %rbp
+
+    movq %rsp, %rbp /* the saved frame, for the way back and for its fields */
+    sti             /* a call may sleep, yield or wait for the console */
+
+    /*
+     * The frame, as the pushes above left it: 0 is RBP, then RCX, R11, R9,
+     * R8, R10, RDX, RSI, RDI and finally RAX at 72. The order of the pushes
+     * is the order of the pops read backwards (see the tail of the stub).
+     *
+     * The C call needs the stack 16 bytes aligned and one slot for the
+     * seventh argument: ksys_call() takes the number and the six of the
+     * convention, and a machine of this ABI passes the last one on the
+     * stack.
+     */
+    andq $-16, %rsp
+    subq $16, %rsp
+    movq 24(%rbp), %rax /* the saved R9: the sixth argument */
+    movq %rax, (%rsp)
+    movq 72(%rbp), %rdi /* the number of the call */
+    movq 64(%rbp), %rsi /* the first argument */
+    movq 56(%rbp), %rdx
+    movq 48(%rbp), %rcx
+    movq 40(%rbp), %r8
+    movq 32(%rbp), %r9
+    call ksys_call
+    movq %rbp, %rsp
+    movq %rax, 72(%rbp) /* the result, where the iretq finds it */
+
+    popq %rbp
+    popq %rcx
+    popq %r11
+    popq %r9
+    popq %r8
+    popq %r10
+    popq %rdx
+    popq %rsi
+    popq %rdi
+    popq %rax
+    iretq
+.size isr_syscall, . - isr_syscall
+
+/*
  * A vector nobody claimed. It cannot say which one it was, because it has
  * no stub of its own, but a sentence beats a jump to a zero.
  */

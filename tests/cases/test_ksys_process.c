@@ -459,6 +459,39 @@ static void test_execve(void)
     KT_CHECK_INT_EQ(ksys_execve("/prog", NULL), KERR_NOSYS);
     KT_CHECK_INT_EQ(ksys_execve("/prog", argv), KERR_NOSYS);
 
+    /*
+     * A status left by a program of another machine is not a success here:
+     * ENOSYS is the answer of this one whatever the last program ended with,
+     * and a vector of one word is not a reason for a different answer.
+     */
+    k_exec_exit(7);
+    KT_CHECK_INT_EQ(ksys_execve("/prog", argv), KERR_NOSYS);
+
+    /*
+     * The vector of the program is bounded at the edge of the call before
+     * anything is looked at: a word that does not fit the frame of the call
+     * and a vector of too many words are E2BIG, and an empty vector is a
+     * program without arguments - the answer of the machine, not a refusal.
+     */
+    {
+        static char long_word[600];
+        char *long_argv[] = {long_word, NULL};
+        char *empty_argv[] = {NULL};
+        char *many_argv[10];
+        int i;
+
+        memset(long_word, 'a', sizeof(long_word) - 1);
+        KT_CHECK_INT_EQ(ksys_execve("/prog", long_argv), KERR_TOOBIG);
+
+        for (i = 0; i < 9; i++) {
+            many_argv[i] = (char *)"x";
+        }
+        many_argv[9] = NULL;
+        KT_CHECK_INT_EQ(ksys_execve("/prog", many_argv), KERR_TOOBIG);
+
+        KT_CHECK_INT_EQ(ksys_execve("/prog", empty_argv), KERR_NOSYS);
+    }
+
     /* The raw call answers the same way, and a failed exec left the table of
      * the descriptors as it was: the file can still be opened. */
     KT_CHECK_INT_EQ(ksys_call(KSYS_EXECVE, (ksys_arg_t)(uintptr_t)"/prog", 0, 0, 0, 0, 0),

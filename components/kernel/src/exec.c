@@ -103,12 +103,35 @@ int k_exec_parse(const void *data, k_size_t size, struct k_exec_image *out)
     return 0;
 }
 
-int k_exec_run(const struct k_exec_image *image)
+/*
+ * The status of the program that ran last, in the range every system of
+ * processes uses: eight bits. It is a variable of the kernel and not a return
+ * value carried through the stack of the port, because the port returns to
+ * its own caller with the shape of its own contract (0 is "the program ran
+ * and came back") and the number is a fact about the program, not about the
+ * machine.
+ */
+static int g_exec_exit_code;
+
+void k_exec_exit(int code)
+{
+    /*
+     * A program is code the kernel did not write, and the register it leaves
+     * behind is wider than a status: the low byte is the code, as the status
+     * of a process on every system that has one. A value of -1 then reads as
+     * 255 and not as a refusal of the machine, which is what makes the answer
+     * of execve unambiguous.
+     */
+    g_exec_exit_code = code & 0xFF;
+}
+
+int k_exec_run(const struct k_exec_image *image, char *const argv[])
 {
     void *base;
     k_u64_t entry_limit;
     k_u64_t start;
     k_u64_t end;
+    int rc;
 
     if (image == NULL || image->data == NULL || image->text_size == 0) {
         return -1;
@@ -153,8 +176,14 @@ int k_exec_run(const struct k_exec_image *image)
 
     /*
      * A program that never returns never gets here. A program that returns
-     * ends the call with 0 - it has finished - and a port that refuses the
-     * image answers -1.
+     * ends the call with the status the port reported (k_exec_exit, 0 when it
+     * reported nothing), and a port that refuses the image answers -1.
+     *
+     * The status is cleared first: a port that comes back without reporting
+     * one must not hand out the code of the program that ran before it.
      */
-    return k_port_exec_enter(image, NULL) == 0 ? 0 : -1;
+    g_exec_exit_code = 0;
+    rc = k_port_exec_enter(image, argv);
+
+    return (rc == 0) ? g_exec_exit_code : -1;
 }

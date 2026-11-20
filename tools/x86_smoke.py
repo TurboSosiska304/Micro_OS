@@ -16,9 +16,11 @@ the small FIFO of the serial port of the emulated chip.
 Between the boot and the shell the port of this machine brings up a filesystem
 and runs a program out of it: a volume in its memory is mounted at /, the image
 of /bin/hello is written to it and given the mode of a program, and the boot
-asks for it with execve. The line the program writes to COM1 is part of the
-transcript; it is checked below, because it is the one thing a kernel that only
-prints its banner cannot fake.
+asks for it with execve. The program is not a creature of the port: it prints
+through the system call `write`, asks the kernel its pid and the time, sleeps
+and returns a status, and every line of it below is a line the kernel produced
+for it (ADR 0006). The transcript is the proof: a kernel that only printed a
+banner could not have a number of a task in the middle of it.
 
     tools/x86_smoke.py [--timeout SECONDS] [--verbose]
 
@@ -50,6 +52,7 @@ COMMANDS = [
     "chmod 0755 /bin/hello",
     "chown 0 /bin/hello",
     "exec /bin/hello",
+    "exec /bin/hello one two",
 ]
 
 # The prompt of the shell. It is written in one call, so the log of another
@@ -161,15 +164,29 @@ def check(output: str) -> list:
 
     # --- the program of the milestone
     # The line in the middle is not written by the kernel: it comes out of the
-    # image that was written to and read back from /bin/hello, one byte at a
-    # time, so it is the proof that the program ran and not that the kernel
-    # said it would.
+    # image that was written to and read back from /bin/hello. The lines after
+    # it are answers of the kernel to its calls - a pid, a time and a status
+    # that the program could not invent - so the transcript shows the door and
+    # the way back, not only a string.
     expect("the filesystem takes the image", "x86-64: /bin/hello is written" in output)
     expect(
         "the boot asks for the program through the call",
         "x86-64: running /bin/hello through the call" in output,
     )
     expect("the program writes to the console", "PROGRAM: hello from /bin" in output)
+    # No arguments at the boot: the port is entered without a vector.
+    expect("the program starts without arguments", "PROGRAM: argc 0" in output)
+    expect(
+        "the program asks the kernel for its pid and the time",
+        re.search(r"PROGRAM: pid \d+, up \d+ ms", output) is not None,
+    )
+    # The sleep is the call that proves the interrupts of the stub: the clock
+    # of the kernel has moved by the time the program is back on its feet.
+    expect(
+        "the program sleeps inside a call",
+        re.search(r"PROGRAM: slept 10 ms, up \d+ ms", output) is not None,
+    )
+    expect("the program returns a status", "x86-64: the program exited with 0" in output)
     expect("the kernel is back from the program", "x86-64: the program returned" in output)
 
     # --- the shell
@@ -228,6 +245,24 @@ def check(output: str) -> list:
     expect(
         "the program of the shell writes to the console",
         "PROGRAM: hello from /bin" in answer("exec /bin/hello", 1),
+    )
+    # The status of a program of the shell comes back the same way: the port
+    # reports it, the kernel hands it to the call, and the call ends with 0
+    # because there is no process to exit into yet. The shell is told that the
+    # program finished and not that the machine died.
+    expect(
+        "the program of the shell returns its status",
+        "the program exited with 0" in answer("exec /bin/hello", 1),
+    )
+    expect(
+        "the shell sees the program finish",
+        "the program has finished" in answer("exec /bin/hello", 1),
+    )
+    # The arguments of a line of the shell reach the program: the name of the
+    # program first, then the words of the line.
+    expect(
+        "the arguments of the shell reach the program",
+        "PROGRAM: argc 3, argv[0] /bin/hello" in answer("exec /bin/hello one two"),
     )
     # The mode is a fact of the record and not a word of the kernel: take the
     # bit away with the shell and the same call refuses, give it back and the

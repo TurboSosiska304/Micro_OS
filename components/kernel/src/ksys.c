@@ -1014,11 +1014,65 @@ static k_ssize_t sys_chown(ksys_arg_t path, ksys_arg_t owner, ksys_arg_t a2, ksy
  * but the successful one: a port that enters a program does not return, and
  * the memory of the task goes with the program.
  *
- * The vector of the arguments is the memory of the caller. The kernel does
- * not walk it - without an MMU there is nothing to check an array of
- * pointers against - and it reaches the port as it is; today the port is
- * entered without one, because k_exec_run() has no vector in its signature.
+ * The vector of the arguments is the memory of the caller. The kernel cannot
+ * check an array of pointers without an MMU, but it does not have to walk it
+ * at the moment the port enters the program: the strings are copied into the
+ * frame of this call, which stays alive for as long as the program runs (a
+ * program that returns comes back here, and one that never returns keeps the
+ * stack of its caller). A program is therefore started with a vector the
+ * kernel built, not with the pointers of a caller that could still change
+ * them.
  */
+
+/* The vector of a program, as a line of the shell can make one. */
+#define KSYS_ARGV_MAX 8u
+#define KSYS_ARGV_BYTES 512u
+
+/*
+ * Copy the vector `from` and the strings it points at into `args` and
+ * `words`, and terminate the vector. Returns 0, or E2BIG for a vector or a
+ * string that does not fit. A NULL vector, or one whose first word is NULL,
+ * is a program without arguments and not an error.
+ *
+ * The strings of the caller are read one byte at a time and never past the
+ * room left: a pointer that names memory the machine does not have is a
+ * fault of the caller (no MMU forgives nothing), but a string that never ends
+ * is stopped at the edge of the buffer instead of walking through memory.
+ */
+static int argv_copy(const char *const *from, char *args[], char *words, k_size_t words_size)
+{
+    k_size_t used = 0;
+    k_size_t count = 0;
+
+    while (from != NULL && from[count] != NULL) {
+        const char *word = from[count];
+        k_size_t room;
+        k_size_t length = 0;
+
+        if (count >= KSYS_ARGV_MAX) {
+            return KERR_TOOBIG;
+        }
+
+        room = words_size - used;
+        while (length < room && word[length] != '\0') {
+            length++;
+        }
+
+        if (length == room) {
+            return KERR_TOOBIG;
+        }
+
+        memcpy(words + used, word, length + 1);
+        args[count] = words + used;
+        used += length + 1;
+        count++;
+    }
+
+    args[count] = NULL;
+
+    return 0;
+}
+
 static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksys_arg_t a3,
                             ksys_arg_t a4, ksys_arg_t a5)
 {
@@ -1028,11 +1082,14 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksy
     struct vfs_file file;
     struct vfs_stat info;
     struct k_exec_image image;
+    /* The vector the program starts with: the frame keeps it alive. */
+    char *args[KSYS_ARGV_MAX + 1];
+    char words[KSYS_ARGV_BYTES];
+    char *const *vector = NULL;
     k_u8_t *data;
     k_size_t got = 0;
     int rc;
 
-    K_UNUSED(argv);
     K_UNUSED(a2);
     K_UNUSED(a3);
     K_UNUSED(a4);
@@ -1041,6 +1098,20 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksy
     rc = path_check(name);
     if (rc != 0) {
         return rc;
+    }
+
+    /*
+     * The arguments are copied before the file is read: a refused one ends
+     * the call while nothing has been spent, and the copy is what the port
+     * is going to hand the program.
+     */
+    if (argv != 0) {
+        rc = argv_copy((const char *const *)(uintptr_t)argv, args, words, sizeof(words));
+        if (rc != 0) {
+            return rc;
+        }
+
+        vector = args;
     }
 
     rc = vfs_stat(name, &info);
@@ -1109,19 +1180,20 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksy
         return KERR_INVAL;
     }
 
-    rc = k_exec_run(&image);
+    rc = k_exec_run(&image, vector);
     kmm_free(data);
 
     /*
      * A port that never returns from the program never comes back here. The
-     * three answers below are the contract of k_exec_run: 0 is a program
-     * that ran and returned - the call ends, because a machine without a
-     * process to exit into has to notice a program that finished - -2 is a
-     * machine that cannot run a program at all (the board, the simulator),
-     * and anything else is the image the port could not place in its window
-     * or could not copy.
+     * answers below are the contract of k_exec_run: a number from 0 to 255 is
+     * a program that ran and returned with that status - the call ends with
+     * 0, because the status belongs to a process and a machine without one
+     * has to notice a program that finished instead - -2 is a machine that
+     * cannot run a program at all (the board, the simulator), and anything
+     * else is the image the port could not place in its window or could not
+     * copy.
      */
-    if (rc == 0) {
+    if (rc >= 0) {
         return 0;
     }
 

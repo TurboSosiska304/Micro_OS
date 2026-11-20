@@ -158,8 +158,8 @@ static bool program_install(void)
  *
  * The call comes back only because this program ends with a ret and the port
  * owns the exit; the kernel answers every return with 0, which says "the
- * program ran and has finished". A program of the system never returns, and
- * the call then never comes back at all.
+ * program ran and has finished", and the status the program ended with is the
+ * line the port printed before this one (ADR 0006).
  */
 static void program_run(void)
 {

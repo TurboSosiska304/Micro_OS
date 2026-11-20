@@ -14,6 +14,13 @@
  * scheduler would take the CPU away from code that never asked to give it.
  * The state of the kernel is therefore saved by hand, the interrupts are
  * turned off, and the stack of the program is one of its own.
+ *
+ * The program is not cut off from the kernel, though: it calls the system
+ * through `int $0x80` (src/interrupts.S), and the stub of the vector turns
+ * the interrupts on for the length of the call, so a call that sleeps or
+ * yields really waits. The program itself still runs with the interrupts
+ * off - a program is not a task of the scheduler yet - and comes back to the
+ * port with a `ret` and a status in RAX.
  */
 #include <string.h>
 
@@ -53,6 +60,15 @@
  * the variable is written again by the next one.
  */
 k_u64_t g_port_exec_rsp;
+
+/*
+ * What the program left in RAX when it returned. The stub below stores it
+ * before the stack of the kernel is back in place, because the C function
+ * that called port_exec_jump() may not assume anything about a register the
+ * ABI calls caller-saved; the variable is the one place the two sides of the
+ * jump agree on, as g_port_exec_rsp is for the stack.
+ */
+k_u64_t g_port_exec_exit_code;
 
 /*
  * void port_exec_jump(void *entry, k_u64_t stack_top, k_u64_t argc, char *const *argv)
@@ -100,13 +116,17 @@ __asm__(".section .text, \"ax\", @progbits\n"
         "\n"
         /*
          * The program came back, through a ret or through anything else that
-         * ends at the address above. The stack of the kernel and its
-         * callee-saved registers are restored, and the return goes back into
+         * ends at the address above. The value in RAX is the status of the
+         * program - the result of its last call, or the number a C entry
+         * point returns - and it goes to the port before the stack of the
+         * kernel hides it. The stack of the kernel and its callee-saved
+         * registers are restored next, and the return goes back into
          * k_port_exec_enter() as if the call of port_exec_jump() had just
          * finished. The direction flag is cleared again: the program may have
          * set it, and the kernel copies with rep movsb.
          */
         "port_exec_exit:\n"
+        "    movq %rax, g_port_exec_exit_code(%rip)\n"
         "    movq g_port_exec_rsp(%rip), %rsp\n"
         "    popq %r15\n"
         "    popq %r14\n"
@@ -192,13 +212,14 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
 
     /*
      * The rest is one step: the copy, the clearing and the jump happen with
-     * the interrupts off. The ticks are the first thing the program must not
-     * get, because while it runs there is no task to switch to and a tick
-     * would take the CPU from code that cannot be resumed as a task; and the
-     * copy belongs to the same step, so that a program entered from a task
-     * (a later milestone) never leaves half of a window for the scheduler to
-     * switch into. The flag is the one the kernel found, and it comes back
-     * with the return below.
+     * the interrupts off. The ticks are the first thing the program itself
+     * must not get, because while it runs there is no task to switch to and
+     * a tick would take the CPU from code that cannot be resumed as a task;
+     * the calls of the program turn them on for their own length (see
+     * isr_syscall in src/interrupts.S). The copy belongs to the same step, so
+     * that a program entered from a task never leaves half of a window for
+     * the scheduler to switch into. The flag is the one the kernel found, and
+     * it comes back with the return below.
      */
     flags = port_save_flags_and_cli();
 
@@ -213,6 +234,13 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
         memset(base + source, 0, (k_size_t)image->bss_size);
     }
 
+    /*
+     * The status is set before the jump so that a port that comes back
+     * without a program having written RAX at all still has a defined
+     * answer: 0, "the program finished without a word".
+     */
+    g_port_exec_exit_code = 0;
+
     port_exec_jump(base + image->entry, stack_top, argc, argv);
 
     /*
@@ -220,11 +248,17 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
      * does not return: its last instruction is a halt, a jump into another
      * program or the end of the world. The demonstration program of kmain.c
      * ends with a ret on purpose, so the boot continues into the shell and
-     * the machine of the smoke test still answers; 0 says "the program ran
-     * and came back" and is not an error.
+     * the machine of the smoke test still answers.
+     *
+     * The status goes to the kernel through k_exec_exit(): the port knows the
+     * moment (it is the one that got control back), the kernel knows what to
+     * do with the number (it is the answer of execve). The line in the log
+     * says both, because a program that came back is a fact of the machine
+     * and the first thing a person looking at the console wants to know.
      */
     port_restore_flags(flags);
-    kinfo("x86-64: the program returned to the port");
+    k_exec_exit((int)g_port_exec_exit_code);
+    kinfo("x86-64: the program exited with %d", (int)(g_port_exec_exit_code & 0xFFu));
 
     return 0;
 }

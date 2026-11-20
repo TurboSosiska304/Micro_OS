@@ -217,6 +217,7 @@ struct idt_pointer {
 
 #define IRQ_BASE 0x20u /* the PIC is moved out of the way of the exceptions */
 #define IRQ_TIMER 0u
+
 #define PIT_HZ 1000u
 #define PIT_CRYSTAL_HZ 1193182u
 
@@ -225,6 +226,15 @@ struct idt_pointer {
 #define PIC2_COMMAND 0xA0u
 #define PIC2_DATA 0xA1u
 #define PIC_EOI 0x20u
+
+/*
+ * The vector of the system calls. It is the one Linux has used on this
+ * machine since 1995 and it is in the middle of nothing: the exceptions end
+ * at 31, the lines of the hardware start at 32, and 128 is far from both.
+ * The gate is an interrupt gate of ring 0, so the interrupts are off while
+ * the stub saves its registers and on again when it says so (ADR 0006).
+ */
+#define IDT_SYSCALL 0x80u
 
 static struct idt_gate g_idt[IDT_VECTORS] __attribute__((aligned(16)));
 static struct idt_pointer g_idt_pointer;
@@ -235,6 +245,7 @@ static struct idt_pointer g_idt_pointer;
  * every symbol of the assembly. */
 extern void (*const port_isr_exception_table[32])(void);
 extern void isr_irq0(void);
+extern void isr_syscall(void);
 extern void isr_unexpected(void);
 
 static volatile k_u64_t g_ticks;
@@ -467,6 +478,15 @@ void port_x86_64_interrupts_init(void)
     }
 
     idt_set(IRQ_BASE + IRQ_TIMER, isr_irq0);
+
+    /*
+     * The door of the programs of the port. Without this one line the
+     * `int $0x80` of a program would land on isr_unexpected and stop the
+     * machine: the vector is a part of what the port offers, not of the
+     * kernel, and a port that cannot take a call says so by never setting
+     * this entry.
+     */
+    idt_set(IDT_SYSCALL, isr_syscall);
 
     g_idt_pointer.limit = (k_u16_t)(sizeof(g_idt) - 1u);
     g_idt_pointer.base = (k_u64_t)(uintptr_t)g_idt;

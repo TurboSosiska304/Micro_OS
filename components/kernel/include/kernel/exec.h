@@ -66,11 +66,34 @@ struct k_exec_image {
 int k_exec_parse(const void *data, k_size_t size, struct k_exec_image *out);
 
 /*
- * Hand a parsed image to the port that runs it. Returns -1 when the machine
- * refused the image (it does not fit the window of the port, or the port
- * could not copy it), -2 when the machine cannot run a program at all - the
- * kernel turns that into ENOSYS. A success does not return, so there is no 0.
+ * Hand a parsed image to the port that runs it. A port that enters a program
+ * that never comes back does not return at all, so there are two failures and
+ * one success: -1 when the machine refused the image (it does not fit the
+ * window of the port, or the port could not copy it), -2 when the machine
+ * cannot run a program at all - the kernel turns that into ENOSYS - and a
+ * number from 0 to 255 when the program returned. That number is the status
+ * the program ended with, the low byte of what it left in the register of the
+ * result, and it is not an error: a program that finishes has to be noticed
+ * on a machine whose execve has no process to exit into.
+ *
+ * `argv` is the vector the program starts with, its pointers into memory the
+ * caller keeps for as long as the program runs; NULL is a program with no
+ * arguments. The kernel does not walk it - without an MMU there is nothing to
+ * check an array of pointers against, and a program that never returns keeps
+ * the caller's frame alive anyway. A call that takes the vector from the
+ * memory of a program (execve) copies it somewhere that outlives the call
+ * first: kernel/ksys.c uses the frame of the call for that.
  */
-int k_exec_run(const struct k_exec_image *image);
+int k_exec_run(const struct k_exec_image *image, char *const argv[]);
+
+/*
+ * The status a program ended with, reported by the port when the program
+ * returns and before k_port_exec_enter() returns 0. The port owns the moment
+ * (it is the one that receives control back), the kernel owns the number
+ * (it is the one that hands it to the caller of execve), and this call is
+ * the seam between the two. Outside of a run it is a no-op that no caller
+ * should need; a program that is entered and never returns never calls it.
+ */
+void k_exec_exit(int code);
 
 #endif /* MICRO_OS_KERNEL_EXEC_H */

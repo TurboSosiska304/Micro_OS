@@ -29,6 +29,40 @@ the host, where the pointers are twice as long.
 A negative result is an error, the numbers are the negative error codes of
 `kernel/errno.h` (the same values as the POSIX ones).
 
+## The entry into the kernel
+
+On the board and on the simulator a program is a function of the kernel and
+calls it directly. The x86-64 machine runs a program that the kernel did not
+compile, so the call has to be an instruction of the processor. The port of
+that machine offers one door (ADR 0006):
+
+| What | Where |
+|---|---|
+| the instruction | `int $0x80` |
+| the number of the call | `rax` |
+| the six arguments | `rdi`, `rsi`, `rdx`, `r10`, `r8`, `r9` |
+| the result | `rax` (negative is an error) |
+
+The vector 128 of the table of the interrupts is a gate of the port, not of
+the kernel: the port that can take a call puts its stub there and the port
+that cannot leaves the entry empty. The handler saves every register the
+caller may lose across a C call, turns the interrupts on (they are off for the
+first instructions, and on again for the call itself, which is what lets
+`sleep` and `yield` really wait), calls `ksys_call()` and returns with
+`iretq`. The program is ring 0 code today, and the gate opens for ring 0 only;
+a program of ring 3 waits for the address space of its own (K5).
+
+The registers are the ones of Linux: `rcx` and `r11` are not arguments
+because the instruction `syscall` of a 64-bit machine keeps them for the
+return address and the flags, and one convention for both instructions costs
+nothing.
+
+A program returns with `ret`, and the value in `rax` at that moment is its
+status - the low byte of it, as the status of a process. The port hands the
+status to the kernel (`k_exec_exit()`), `k_exec_run()` answers with it, and
+`execve` answers 0: the machine has no process to exit into yet, so the call
+ends and the caller sees the program finish.
+
 ## The table
 
 | Number | Call | Arguments | Result |
@@ -178,12 +212,18 @@ machine without a window of programs.
 
 A successful call **does not return** when the program never comes back: the
 program is the caller from then on. A program that returns ends the call
-with 0 - the state of a machine with no process to exit into, where the
-kernel has to notice that the program has finished. The vector of the
-arguments is the memory of the program and the kernel does not walk it -
-without an MMU there is nothing to check an array of pointers against - and
-today the port is entered without a vector, because `k_exec_run()` has no
-place for it: a program of this system reads no arguments yet.
+with 0 - the state of a machine with no process to exit into, where the kernel
+has to notice that the program has finished - and the status it ended with
+(the low byte of `rax`, 0 to 255) is the answer of the run, not of the call
+(see "The entry into the kernel").
+
+The vector of the arguments is the memory of the program. Without an MMU the
+kernel cannot check an array of pointers, but it does not hand the port the
+pointers of the caller either: at most eight words and 512 bytes of their
+strings are copied into the frame of the call, which stays alive while the
+program runs, and the program is entered with that vector. A line of the shell
+is `exec /bin/hello one two`: three words, the name of the program first, as
+in Linux.
 
 ## The processes
 

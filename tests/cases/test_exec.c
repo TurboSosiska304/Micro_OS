@@ -201,7 +201,7 @@ static void check_run_without_a_machine(void)
     memcpy(copy, image, sizeof(copy));
     before = parsed;
 
-    KT_CHECK_INT_EQ(k_exec_run(&parsed), -2);
+    KT_CHECK_INT_EQ(k_exec_run(&parsed, NULL), -2);
 
     /* -2 is "this machine cannot", not a reason to touch the image. */
     KT_CHECK(memcmp(copy, image, sizeof(copy)) == 0);
@@ -212,9 +212,18 @@ static void check_run_without_a_machine(void)
     KT_CHECK_INT_EQ(parsed.data_size, before.data_size);
     KT_CHECK_INT_EQ(parsed.bss_size, before.bss_size);
 
+    /*
+     * The status of a program that ran somewhere else is not the answer of a
+     * machine that refuses this one. The refusal comes first, and a caller
+     * that would read the number instead of the refusal would read the
+     * artifact of an earlier run.
+     */
+    k_exec_exit(7);
+    KT_CHECK_INT_EQ(k_exec_run(&parsed, NULL), -2);
+
     /* A call with nothing to run is a refusal of the caller, not of the
      * machine, so it is -1 and not ENOSYS. */
-    KT_CHECK_INT_EQ(k_exec_run(NULL), -1);
+    KT_CHECK_INT_EQ(k_exec_run(NULL, NULL), -1);
 }
 
 void test_exec(void)

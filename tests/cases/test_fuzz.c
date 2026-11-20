@@ -457,7 +457,7 @@ static void check_run_refusals(void)
 
     ktest_begin("fuzz: k_exec_run refuses a structure that is not an image");
 
-    KT_CHECK_INT_EQ(k_exec_run(NULL), -1);
+    KT_CHECK_INT_EQ(k_exec_run(NULL, NULL), -1);
 
     build_case_image(image);
     memset(&parsed, 0, sizeof(parsed));
@@ -469,11 +469,11 @@ static void check_run_refusals(void)
         struct k_exec_image empty = parsed;
 
         empty.data = NULL;
-        KT_CHECK_INT_EQ(k_exec_run(&empty), -1);
+        KT_CHECK_INT_EQ(k_exec_run(&empty, NULL), -1);
 
         empty = parsed;
         empty.text_size = 0;
-        KT_CHECK_INT_EQ(k_exec_run(&empty), -1);
+        KT_CHECK_INT_EQ(k_exec_run(&empty, NULL), -1);
     }
 
     /*
@@ -483,11 +483,11 @@ static void check_run_refusals(void)
      * run one, and the x86-64 smoke test covers it on the machine.
      */
     KT_CHECK(!k_port_exec_supported());
-    KT_CHECK_INT_EQ(k_exec_run(&parsed), -2);
+    KT_CHECK_INT_EQ(k_exec_run(&parsed, NULL), -2);
 
     /* A 32-bit size that fills the address space is not a success either. */
     parsed.text_size = (k_size_t)0xFFFFFFFCu;
-    KT_CHECK(k_exec_run(&parsed) < 0);
+    KT_CHECK(k_exec_run(&parsed, NULL) < 0);
 }
 
 void test_fuzz(void)
