@@ -48,6 +48,7 @@ SECTIONS
      * after it is not the end of the block the compiler addresses.
      */
     __tls_start = ADDR(.tdata);
+    __tls_data_end = ADDR(.tbss);
     __tls_end = ADDR(.tbss) + SIZEOF(.tbss);
 
     .bss : {

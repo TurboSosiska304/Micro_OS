@@ -35,4 +35,22 @@ void *k_port_exec_base(void);
  */
 int k_port_exec_enter(const struct k_exec_image *image, char *const argv[]);
 
+/*
+ * Is a program of this port running right now? A machine that enters a
+ * program and can take control back answers true for as long as the program
+ * is the caller: `exit` from a program is not the end of a kernel task, it is
+ * the end of that program, and the kernel has to know which of the two it is
+ * looking at. A port without a program in flight answers false.
+ */
+bool k_port_exec_active(void);
+
+/*
+ * End the program that is running and return to the call of
+ * k_port_exec_enter() with `code` as its status (the low byte, as the status
+ * of a process). Does not return while a program is active; a port with no
+ * program in flight returns without doing anything. This is the substance
+ * behind KSYS_EXIT on a machine whose programs are not tasks of the kernel.
+ */
+void k_port_exec_exit(int code);
+
 #endif /* MICRO_OS_KERNEL_PORT_EXEC_H */

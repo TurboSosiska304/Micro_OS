@@ -76,18 +76,20 @@ That is exactly what allows the kernel tests to run on a laptop.
 | Processes / threads | yes | yes, simplified, from phase 1 |
 | Filesystem | yes | yes, from phase 2 (in-RAM FS plus a VFS layer) |
 | `/proc`, `/dev`, `/sys` | yes | `/proc` and `/dev` from phase 2, `/sys` later |
-| System calls | yes | yes, from phase 3, but **without hardware isolation** |
-| Memory protection | MMU | **none used**: the ESP32 has no MMU, and the x86-64 port has one
-  but keeps the identity map of its loader and the logical boundary |
+| System calls | yes | yes, from phase 3; hardware isolation on x86-64 (ring 3), logical on the board |
+| Memory protection | MMU | **on x86-64 only**: page tables per program, a user window and ring 3 (ADR 0007); the ESP32 has no MMU and keeps the logical boundary |
 | Multi-user | yes | no (a single user: the device itself) |
 | Dynamic linker | yes | no (everything is statically linked) |
 
 We honestly call this **Linux-like**, not Linux. On the board there is no
 MMU: the separation of user and kernel space is logical, system calls are
 ordinary function calls with a uniform ABI, and the boundary is kept by
-discipline. The x86-64 port has an MMU and does not use it yet - the identity
-map of its loader is the first step, and the address spaces of the tasks are
-the next one (see `docs/roadmap.md`).
+discipline. The x86-64 port has an MMU and uses it: a program gets page tables
+of its own, a 16 MiB window at 32 MiB, a guard page under its stack and ring
+3, and the kernel is supervisor-only and out of its reach. A fault of a
+program is reported and the program is taken down; the shell that ran it is
+alive. The address space of a *task* and copy-on-write `fork()` are the next
+step (ADR 0007).
 
 That is a property of the current port, not the shape of the kernel: everything
 the kernel concedes to a board without an MMU sits behind one compile time flag,
@@ -227,8 +229,10 @@ physical address contract.
   heap).
 * Large objects (frame buffers, file caches) live in PSRAM, small ones in internal
   SRAM (which is scarce — that is the constraint).
-* Virtual memory is emulated: each task has its own "address space", but without
-  an MMU a switch means switching the stack pointer and the data segment base.
+* Virtual memory is emulated on the board: each task has its own "address
+  space", but without an MMU a switch means switching the stack pointer and the
+  data segment base. The x86-64 port has real page tables for the program it
+  runs (ADR 0007); a task with an address space of its own waits for `fork()`.
 
 ## 7. Drivers (phase 4)
 
@@ -317,19 +321,25 @@ a megabyte.
 
 ### `execve` belongs to the port
 
-`kernel/port/exec.h` is a subject of the contract (1.3) with three calls:
+`kernel/port/exec.h` is a subject of the contract (1.4) with five calls:
 `k_port_exec_supported()` (can this machine run a program at all),
-`k_port_exec_base()` (where the window is) and `k_port_exec_enter()` (copy the
-image, clear the bss, jump). The kernel parses the image and asks the port, so
-the answer for a machine that has no window is `ENOSYS` at the edge. The board
-says no: its flash is not executable for a file, and internal SRAM is ~100 KB
-for everything. The host says no too: jumping into the bytes of a program
-inside the address space of the simulator would run it with the libc of the
-host under it. x86-64 says yes and places a program at 32 MiB, with a 64 KiB
-stack at the top of its window; its boot mounts MicroFS on a volume of the
-port's RAM, writes `/bin/hello` there, gives it the mode of a program and asks
-for it with `execve` - the stat, the mode, the read through the VFS, the parse
-and the jump are the ones of the call.
+`k_port_exec_base()` (where the window is), `k_port_exec_enter()` (place the
+image, enter it) and the two halves of the end of a program,
+`k_port_exec_active()` and `k_port_exec_exit()`. The kernel parses the image
+and asks the port, so the answer for a machine that has no window is `ENOSYS`
+at the edge. The board says no: its flash is not executable for a file, and
+internal SRAM is ~100 KB for everything. The host says no too: jumping into
+the bytes of a program inside the address space of the simulator would run it
+with the libc of the host under it. x86-64 says yes: it builds page tables for
+the program, maps the window at 32 MiB onto a physical arena at 64 MiB, keeps
+a 64 KiB stack at the top of the window with an unmapped guard page below it
+and enters ring 3 through an `iretq`. Its boot mounts MicroFS on a volume of
+the port's RAM, writes `/bin/hello` and `/bin/crash` there, gives them the mode
+of a program and asks for `/bin/hello` with `execve` - the stat, the mode, the
+read through the VFS, the parse and the transition are the ones of the call.
+A program ends with `exit` and the port returns to the caller with its status;
+a fault of ring 3 prints `the program faulted: vector N at 0x...` and does the
+same with status 255 (ADR 0007).
 
 ### The rights are checked at the edge
 
@@ -343,12 +353,14 @@ reports. The width of the two numbers is checked at the door, the library
 (`components/libc`) has the three wrappers with the codes of POSIX in
 `errno`, and the shell has `chmod`, `chown` and `exec` over the same calls.
 The directories of a path are not checked for their `x` bit yet, and
-`fork()` with an address space of its own waits for the paging of a port
-(ADR 0005). A program calls the kernel with `int $0x80` on the x86-64 port:
-the register ABI is in [ADR 0006](adr/0006-program-entry.md), and the program
-runs in ring 0 without an address space of its own, so the handler trusts its
-pointers and a program that does not return holds the machine (see
-[debts.md](debts.md)).
+`fork()` with an address space of its own still waits for the copy of the page
+tables and copy on write (ADR 0005, ADR 0007). A program calls the kernel with
+`int $0x80` on the x86-64 port: the register ABI is in
+[ADR 0006](adr/0006-program-entry.md), the program runs in ring 3 with page
+tables of its own, and the processor switches to a kernel stack of the program
+through the TSS on the way in. The pointers of the caller are still read
+directly - a `copy_from_user` is the next debt of the edge - and a program is
+not a task of the scheduler yet (ADR 0007).
 
 ## 9. Testing
 

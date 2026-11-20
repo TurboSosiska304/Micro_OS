@@ -124,11 +124,68 @@ k_u64_t port_x86_64_ticks(void);
  * and the RIP of the moment; both functions print and stop the machine,
  * because neither has anywhere to return to in a kernel this small.
  */
-void port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip);
 void port_x86_64_unexpected(void);
 
 /* The body of the timer interrupt, called by interrupts.S. */
 void port_x86_64_irq_tick(void);
+
+/*
+ * The body of an exception. `cs` is the selector of the interrupted code:
+ * when it names a ring 3 frame the program that faulted is taken down and
+ * the machine continues, and when it names ring 0 the kernel has nowhere to
+ * return to and the machine stops. The RIP and, for a page fault, CR2 say
+ * where.
+ */
+void port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs);
+
+/*
+ * A fault of the program that is running: print the line of the failure, end
+ * the program and return to k_port_exec_enter() with a status of 255. Does
+ * not return to the faulting instruction.
+ */
+void port_x86_64_program_fault(k_u64_t vector, k_u64_t address);
+
+/* --- the descriptors, the page tables and the thread pointer -------------- */
+
+/*
+ * Build the GDT of the port (kernel and user selectors and a 64-bit TSS) and
+ * load it. The loader has a table of its own, but only for the switch to long
+ * mode: the TSS and the selectors of ring 3 are the business of the kernel.
+ */
+void port_x86_64_gdt_init(void);
+
+/* The stack the processor takes on an interrupt from ring 3. */
+void port_x86_64_tss_set_rsp0(k_u64_t rsp0);
+
+/*
+ * Put the identity map of the kernel in CR3. The map covers the first
+ * gigabyte in 2 MiB pages, supervisor-only, the same way the loader made it;
+ * every program gets a copy with the user window replaced.
+ */
+void port_x86_64_paging_init(void);
+k_u64_t port_x86_64_kernel_cr3(void);
+
+/* Build (or destroy) the page tables of one program. Zero on failure. */
+k_u64_t port_x86_64_paging_space_create(void);
+void port_x86_64_paging_space_destroy(k_u64_t cr3);
+
+/*
+ * Map `len` bytes of `vaddr` in the window of the programs onto the physical
+ * pages at `paddr`, readable and writable from ring 3. Both addresses must be
+ * page aligned and inside their windows.
+ */
+int port_x86_64_paging_map_user(k_u64_t vaddr, k_u64_t paddr, k_size_t len);
+
+/* The physical address behind a virtual address of the window of programs. */
+void *port_x86_64_paging_phys(k_u64_t vaddr);
+
+/* Make `cr3` the page table of the processor. */
+void port_x86_64_paging_switch(k_u64_t cr3);
+
+/* The thread pointer of the kernel (the TLS block of the current task) and
+ * the zero a program of ring 3 sees: the kernel's block is not its memory. */
+void port_x86_64_tls_kernel(void);
+void port_x86_64_tls_user(void);
 
 /*
  * Own the block devices of the port: a volume in the memory of the machine,
@@ -156,6 +213,21 @@ const char *port_x86_64_root_device(void);
  * overrides it when the scheduler exists.
  */
 void port_x86_64_task_tick(void);
+
+/* --- the map of the machine ---------------------------------------------- */
+
+/*
+ * The window of the programs is the only memory of the machine that a ring 3
+ * program may touch. It is mapped by the per-program page tables onto the
+ * physical arena below, so the virtual address of a program and the physical
+ * page behind it are two different numbers for the first time on this port.
+ * The arena is outside the heap (which stops at 32 MiB) and inside the
+ * identity map of the kernel, which is how the kernel writes an image the
+ * program will read.
+ */
+#define PORT_X86_64_USER_BASE 0x02000000u  /* 32 MiB */
+#define PORT_X86_64_USER_LIMIT 0x03000000u /* 48 MiB */
+#define PORT_X86_64_USER_PHYS 0x04000000u  /* 64 MiB */
 
 /* --- what the boot of the platform learned -------------------------------- */
 

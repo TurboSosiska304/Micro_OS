@@ -54,6 +54,10 @@ COMMANDS = [
     "exec /bin/hello",
     "exec /bin/hello one two",
     "fsck",
+    # The program that faults: it writes to address zero in ring 3, and the
+    # shell has to answer the command after it for the machine to be alive.
+    "exec /bin/crash",
+    "uname",
 ]
 
 # The prompt of the shell. It is written in one call, so the log of another
@@ -65,7 +69,7 @@ PROMPT = "microos> "
 # console of COM1, the contract of the port and the boot of the kernel.
 EXPECTED = [
     "board: qemu_x86_64",
-    "port: x86_64, contract 1.3",
+    "port: x86_64, contract 1.4",
     "[ ok ] sched",
     "subsystem(s) ready",
     "the kernel is up",
@@ -175,6 +179,9 @@ def check(output: str) -> list:
         "x86-64: running /bin/hello through the call" in output,
     )
     expect("the program writes to the console", "PROGRAM: hello from /bin" in output)
+    # The number is read from CS by the program itself: it is the proof that
+    # the entry went through an iretq into ring 3 and not into a function.
+    expect("the program runs in ring 3", "PROGRAM: cpl 3" in output)
     # No arguments at the boot: the port is entered without a vector.
     expect("the program starts without arguments", "PROGRAM: argc 0" in output)
     expect(
@@ -280,6 +287,20 @@ def check(output: str) -> list:
     # The volume the boot wrote and the shell read is checked by the
     # filesystem itself, and the checker is on the machine, not in the test.
     expect("the volume is consistent", "the volume is consistent" in answer("fsck"))
+
+    # --- the fault of a program is not the fault of the machine
+    crash = answer("exec /bin/crash")
+    expect("the faulting program starts", "PROGRAM: crash writes to address zero" in crash)
+    # The page fault of ring 3 is reported and the program is taken down; the
+    # address is the one the program wrote to, not the RIP of the instruction.
+    expect(
+        "the program fault is reported",
+        "the program faulted: vector 14 at 0x0000000000000000" in crash,
+    )
+    expect(
+        "the shell survives a fault of a program",
+        re.search(r"MicroOS \d+\.\d+\.\d+", answer("uname", 1)) is not None,
+    )
 
     return checks
 

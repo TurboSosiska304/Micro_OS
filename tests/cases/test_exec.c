@@ -195,6 +195,12 @@ static void check_run_without_a_machine(void)
     KT_CHECK(!k_port_exec_supported());
     KT_CHECK(k_port_exec_base() == NULL);
 
+    /* No program of this machine is ever in flight, so an exit is a no-op and
+     * the kernel's exit of a task stays the path of the board and the host. */
+    KT_CHECK(!k_port_exec_active());
+    k_port_exec_exit(3);
+    KT_CHECK(!k_port_exec_active());
+
     memset(&parsed, 0, sizeof(parsed));
     KT_CHECK_INT_EQ(k_exec_parse(image, size, &parsed), 0);
 

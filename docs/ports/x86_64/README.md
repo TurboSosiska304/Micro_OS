@@ -14,7 +14,7 @@ the machine where a program can really be loaded and run (the window of
 | clock | the PIT at 1 kHz; critical sections save and restore the flags |
 | tasks | `switch.S` (callee-saved registers and the stack) and a round robin over the ready queue |
 | store | `ata0`: a raw image on the primary IDE channel, PIO, MicroFS on its first partition, mounted at `/` (ADR 0008); `ram0`, 512 KB of the memory of the machine, when there is no disk |
-| programs | `k_port_exec_supported()` is true; the window is 16 MiB at 32 MiB (`0x02000000`-`0x03000000`); a program is a file in `/bin` (the MOX1 format of `kernel/exec.h`) |
+| programs | `k_port_exec_supported()` is true; the window is 16 MiB at 32 MiB (`0x02000000`-`0x03000000`) over a physical arena at 64 MiB; a program is a file in `/bin` (the MOX1 format of `kernel/exec.h`), runs in ring 3 with page tables of its own and calls the kernel with `int $0x80` (ADR 0007) |
 | build | `make x86-build` (needs `cmake`, `ninja`, `xorriso` is not needed) |
 | check | `make x86-smoke` (serial), `make x86-vga-smoke` (screen and keyboard), `make x86-disk-smoke` (two boots on a disk) - all need `qemu-system-x86` |
 
@@ -72,14 +72,23 @@ picture of the window, which is how a person watches the keys arrive.
 The image is two files: `build-x86/loader32.elf` (the loader) and
 `build-x86/microos64.bin` (the kernel, a flat image). The heap of the kernel
 stops below the window of the programs; the kernel is linked at 16 MiB and
-the programs are placed at 32 MiB. The program of `/bin` is made first:
-`build-x86/hello.mox` is the image of `ports/port_x86_64/programs/hello.c`
-(`programs/program.ld` links it for the window, `tools/mkprog.sh` turns it
-into the format) and the kernel carries it as a blob, because the machine has
-to have the bytes before it has a filesystem to read them from. The build
-passes `--base 0x02000000` to `mkprog.sh`, which refuses an image linked for
-another window: nothing relocates the program, so a wrong address would run
-and read its data from somewhere else.
+the programs are placed at 32 MiB. The programs of `/bin` are made first:
+`build-x86/hello.mox` and `build-x86/crash.mox` are the images of
+`ports/port_x86_64/programs/hello.c` and `crash.c` (`programs/program.ld`
+links them for the window, `tools/mkprog.sh` turns them into the format) and
+the kernel carries both as blobs, because the machine has to have the bytes
+before it has a filesystem to read them from. The build passes
+`--base 0x02000000` to `mkprog.sh`, which refuses an image linked for another
+window: nothing relocates the program, so a wrong address would run and read
+its data from somewhere else.
+
+The virtual and the physical address are no longer the same number for a
+program: `src/paging.c` builds its page tables with the window at 32 MiB
+mapped onto the arena at 64 MiB, and the kernel reaches the bytes through the
+identity map while the program reaches them through its own. `src/gdt.c`
+builds the GDT the loader never had (user code and data, a 64-bit TSS with
+`RSP0` and the double-fault stack), and `src/interrupts.S` takes the stack of
+the TSS on a call from ring 3.
 
 ## The window: the VGA text and the keyboard
 
@@ -156,12 +165,17 @@ on with `ram0`, so `make x86-run` and `make x86-smoke` work without one.
 
 ## What works
 
-* the boot: the loader, long mode, the banner, the contract check at 1.3;
+* the boot: the loader, long mode, the banner, the contract check at 1.4;
 * the console: the VGA text screen and COM1 from one call, the keyboard of
   the PS/2 with Shift, Caps Lock, Backspace and Ctrl+C, and the serial port
   with the console it always had;
 * the clock, the interrupts (IDT with 32 exceptions, PIC, PIT), the context
   switch, the scheduler, `ps`, `uptime`, `free`, `dmesg`;
+* paging and ring 3 (ADR 0007): the kernel is a supervisor-only identity map
+  of the first gigabyte, the window of the programs is 4 KiB user pages with
+  the null page unmapped and a guard page under the 64 KiB stack, and the
+  program prints the `cpl` it reads from CS (`3`); `exit` returns to the call
+  that entered it with the status, and `execve` answers 0;
 * the filesystem: MicroFS mounted at `/`, on the first partition of the disk
   when one is attached and on a volume of 512 KB in the memory of the port
   when there is not; `ls`, `cat`, `write`, `mkdir`, `rm`, `df`, `fsck` and
@@ -172,20 +186,24 @@ on with `ram0`, so `make x86-run` and `make x86-smoke` work without one.
   MBR read by the portable parser, MicroFS on the first partition (`ata0p1`)
   and the volume formatted at the first boot; what is written to it survives
   a reset, which `make x86-disk-smoke` checks (ADR 0008);
-* a program out of a file: the boot writes the image of `hello` to
-  `/bin/hello`, gives it the mode 0755 and asks for it with `execve` - the
-  stat, the check of the mode, the read through the VFS, the parse of the
-  image and the jump are the ones of the call and not a copy of them. The
-  program prints its line on COM1 and returns to the port, which the call
-  reports as 0;
+* a program out of a file: the boot writes the images of `hello` and `crash`
+  to `/bin`, gives them the mode 0755 and asks for `/bin/hello` with
+  `execve` - the stat, the check of the mode, the read through the VFS, the
+  parse of the image and the entry are the ones of the call and not a copy of
+  them. The program prints its lines on the console and calls `exit`; the
+  call reports 0 and the port prints `the program exited with 0`;
+* a fault of a program is not a fault of the machine: `/bin/crash` writes to
+  address zero in ring 3, the port prints `the program faulted: vector 14 at
+  0x0000000000000000`, takes the program down and the shell answers the next
+  command;
 * the shell on the console, which is the window and COM1 at once, with
   `help`, `uname`, `uptime`, `ps`, `free`, `memtest` and the rest of the
   portable commands, plus the commands of the files:
   `chmod`, `chown` and `exec` reach the same calls as the boot, and the
-  thread pointer of the library is there, so their `errno` works;
-* one `errno` for all tasks: they share one address space, so they share the
-  block of the `_Thread_local` the library keeps it in; a block per task
-  waits for the paging.
+  thread pointer of the library follows the task, so their `errno` works;
+* an `errno` per task: each task gets a copy of the TLS block and
+  `IA32_FS_BASE` is written on every context switch and at the door of the
+  kernel, because a program of ring 3 runs with a zero thread pointer.
 
 ## What does not work yet
 
@@ -198,9 +216,17 @@ on with `ram0`, so `make x86-run` and `make x86-smoke` work without one.
   and logical partitions wait, and a medium of 4 KB sectors does not;
 * without a disk the volume is still the memory of the port, and it does not
   survive a reset - the boot then makes the filesystem again;
-* no `fork()` of its own and no paging: the identity map of the loader is the
-  first step, not the model (`KERNEL_NOMMU` is still 1), so a program is not
-  protected from the kernel and the kernel is not protected from a program;
+* no `fork()` with an address space of its own: the page tables are per
+  *program* and one program runs at a time, so `k_port_fork_copy()` still
+  exists only in ADR 0005; the copy of the tables and copy on write are the
+  next milestone (`KERNEL_NOMMU` is still 1);
+* the kernel is not in a higher half and the pointers of a program are still
+  read directly by the kernel: a `copy_from_user` at the edge of the system
+  call is not written yet, so an invalid pointer of a program is a fault of
+  the kernel and not an error of the call;
+* a program is not a task of the scheduler: the shell that runs one is blocked
+  in `execve` until the program exits or faults, and only one program runs at
+  a time;
 * no network: `k_port_net_*` answers "no" and the commands that need a socket
   say so.
 
@@ -209,7 +235,8 @@ on with `ram0`, so `make x86-run` and `make x86-smoke` work without one.
 The kernel is portable only if something other than the board runs it. This
 port caught three things the board never would: a build that needed
 `-U_FORTIFY_SOURCE` on a distribution that fortifies by default; the execution
-of the kernel on a machine with an MMU that is not used yet; and a program
+of the kernel on a machine with an MMU, which now runs a program in ring 3
+with an address space of its own; and a program
 that read its data one byte away from where it was written, because
 `tools/mkprog.sh` padded its segments at the end of the file instead of before
 the data. A machine that really jumps into the image is the only way to notice

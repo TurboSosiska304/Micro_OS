@@ -16,6 +16,7 @@
 #include "port_x86_64.h"
 
 #include <stdarg.h>
+#include <string.h>
 
 #include "kernel/log.h"
 #include "kernel/port.h"
@@ -30,19 +31,24 @@
  * the loader can see the same instructions.
  */
 
-/* The end of the block the linker made for the _Thread_local of the library. */
+/* The block the linker made for the _Thread_local of the library. */
+extern char __tls_start[];
+extern char __tls_data_end[];
 extern char __tls_end[];
 
 /*
  * The library keeps its errno in a _Thread_local, and the compiler reaches it
- * through %fs. The tasks of this machine share one address space and one
- * block, which is enough for the one user of the system: a second task sees
- * the error of the first, and a real errno per task waits for the paging that
- * gives each task a space of its own. The block itself is in the image and
- * zero at the boot, so the register is the whole of the set-up.
+ * through %fs. The boot context has the block of the image; every task gets a
+ * copy of it (port_x86_64_task.c), because a program of ring 3 leaves the
+ * thread pointer at zero and the next call must not inherit that.
+ *
+ * The tbss of the block is NOBITS and the loader clears only .bss, so the
+ * zero-valued _Thread_local of the boot is cleared here, once, before the
+ * register points at it.
  */
 static void tls_init(void)
 {
+    memset(__tls_data_end, 0, (k_size_t)(__tls_end - __tls_data_end));
     port_wrmsr(0xC0000100u, (k_u64_t)(uintptr_t)__tls_end);
 }
 
@@ -250,6 +256,10 @@ struct idt_pointer {
 #define IDT_VECTORS 256u
 #define IDT_CODE_SELECTOR 0x0008u
 #define IDT_GATE_INTERRUPT 0x8Eu /* present, ring 0, interrupts off on entry */
+#define IDT_GATE_USER 0xEEu      /* the same, but a program of ring 3 may raise it */
+
+/* The stack of IST1, for a double fault that finds the current stack broken. */
+#define IDT_IST_DOUBLE_FAULT 1u
 
 #define IRQ_BASE 0x20u /* the PIC is moved out of the way of the exceptions */
 #define IRQ_TIMER 0u
@@ -288,15 +298,15 @@ extern void isr_unexpected(void);
 
 static volatile k_u64_t g_ticks;
 
-static void idt_set(k_u32_t vector, void (*handler)(void))
+static void idt_set(k_u32_t vector, void (*handler)(void), k_u8_t ist, k_u8_t type)
 {
     k_u64_t address = (k_u64_t)(uintptr_t)handler;
     struct idt_gate *gate = &g_idt[vector];
 
     gate->offset_low = (k_u16_t)(address & 0xFFFFu);
     gate->selector = IDT_CODE_SELECTOR;
-    gate->ist = 0;
-    gate->type = IDT_GATE_INTERRUPT;
+    gate->ist = ist;
+    gate->type = type;
     gate->offset_mid = (k_u16_t)((address >> 16) & 0xFFFFu);
     gate->offset_high = (k_u32_t)(address >> 32);
     gate->zero = 0;
@@ -481,8 +491,25 @@ static const char *exception_name(k_u64_t vector)
     return "unknown";
 }
 
-void port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip)
+void port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs)
 {
+    /*
+     * A fault of ring 3 is the failure of a program, not of the machine.
+     * The address that named the failure is CR2 for a page fault and the
+     * instruction itself for the other vectors; either way the program is
+     * taken down and the call that entered it gets control back, so the
+     * shell and every task of the kernel stay alive.
+     */
+    if ((cs & 3u) != 0u) {
+        k_u64_t address = rip;
+
+        if (vector == 14u) {
+            __asm__ volatile("movq %%cr2, %0" : "=r"(address));
+        }
+
+        port_x86_64_program_fault(vector, address);
+    }
+
     com1_puts("\nx86-64: exception ");
     com1_put_dec(vector);
     com1_puts(" (");
@@ -491,6 +518,8 @@ void port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip)
     com1_put_hex64(error);
     com1_puts(", rip 0x");
     com1_put_hex64(rip);
+    com1_puts(", cs 0x");
+    com1_put_hex64(cs);
     com1_puts("\nx86-64: the machine stops here\n");
 
     k_port_halt();
@@ -509,27 +538,31 @@ void port_x86_64_interrupts_init(void)
     /* Every entry starts as "nobody expects this interrupt", so that a
      * stray vector says so instead of jumping through a zero. */
     for (vector = 0; vector < IDT_VECTORS; vector++) {
-        idt_set(vector, isr_unexpected);
+        idt_set(vector, isr_unexpected, 0, IDT_GATE_INTERRUPT);
     }
 
     for (vector = 0; vector < 32u; vector++) {
-        idt_set(vector, port_isr_exception_table[vector]);
+        /* A double fault takes IST1: the stack it interrupted may be the one
+         * that broke, and a fault handler needs a stack of its own. */
+        k_u8_t ist = (vector == 8u) ? IDT_IST_DOUBLE_FAULT : 0u;
+
+        idt_set(vector, port_isr_exception_table[vector], ist, IDT_GATE_INTERRUPT);
     }
 
-    idt_set(IRQ_BASE + IRQ_TIMER, isr_irq0);
+    idt_set(IRQ_BASE + IRQ_TIMER, isr_irq0, 0, IDT_GATE_INTERRUPT);
 
     /* The keyboard is the second line of the master, and the handler behind
      * this stub reads the byte that raised it (src/ps2.c). */
-    idt_set(IRQ_BASE + IRQ_KEYBOARD, isr_irq1);
+    idt_set(IRQ_BASE + IRQ_KEYBOARD, isr_irq1, 0, IDT_GATE_INTERRUPT);
 
     /*
      * The door of the programs of the port. Without this one line the
      * `int $0x80` of a program would land on isr_unexpected and stop the
      * machine: the vector is a part of what the port offers, not of the
      * kernel, and a port that cannot take a call says so by never setting
-     * this entry.
+     * this entry. The gate opens for ring 3: a program is a user now.
      */
-    idt_set(IDT_SYSCALL, isr_syscall);
+    idt_set(IDT_SYSCALL, isr_syscall, 0, IDT_GATE_USER);
 
     g_idt_pointer.limit = (k_u16_t)(sizeof(g_idt) - 1u);
     g_idt_pointer.base = (k_u64_t)(uintptr_t)g_idt;
@@ -1002,7 +1035,7 @@ const char *k_port_arch(void)
 }
 
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 3u
+#define PORT_API_MINOR 4u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_x86_64 does not speak the contract of this kernel");
@@ -1184,11 +1217,19 @@ void port_x86_64_init(k_u64_t multiboot_info)
 {
     const struct mb_info *info = (const struct mb_info *)(uintptr_t)multiboot_info;
 
+    /*
+     * The descriptors come first: the loader's table was only the way into
+     * long mode, and the TSS that gives ring 3 a stack on a call has to exist
+     * before a program can make one. The page tables follow the memory they
+     * describe; both are before the interrupts that use them.
+     */
+    port_x86_64_gdt_init();
     tls_init();
     com1_init();
     port_x86_64_vga_init();
     clock_measure();
     heap_init(multiboot_info);
+    port_x86_64_paging_init();
 
     g_info.cpu_hz = g_tsc_per_second;
     g_info.usable_bytes = 0;

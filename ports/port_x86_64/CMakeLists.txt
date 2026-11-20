@@ -114,46 +114,58 @@ set_source_files_properties("${KSHELL_DIR}/src/kshell_memtest.c"
 # its data would name something else.
 set(PROGRAM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/programs")
 set(PROGRAM_BASE 0x02000000)
-set(PROGRAM_IMAGE "${CMAKE_BINARY_DIR}/hello.mox")
-set(PROGRAM_OBJECT "${CMAKE_BINARY_DIR}/hello_mox.o")
 set(MKPROG "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/mkprog.sh")
 
-add_custom_command(
-    OUTPUT "${PROGRAM_IMAGE}"
-    COMMAND ${CMAKE_C_COMPILER} -c -O2 -ffreestanding -fno-stack-protector
-            -fno-pic -fno-pie -mno-red-zone -mgeneral-regs-only -march=x86-64
-            -fno-asynchronous-unwind-tables -Wall -Wextra -Werror
-            -I "${KERNEL_DIR}/include" -I "${PROGRAM_DIR}"
-            -o hello.o "${PROGRAM_DIR}/hello.c"
-    COMMAND ${CMAKE_C_COMPILER} -nostdlib -static -no-pie -Wl,--build-id=none
-            -Wl,-e,hello_main
-            -T "${PROGRAM_DIR}/program.ld" -o hello.elf hello.o
-    COMMAND sh "${MKPROG}" --base ${PROGRAM_BASE} hello.elf hello.mox hello_main
-    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-    DEPENDS "${PROGRAM_DIR}/hello.c" "${PROGRAM_DIR}/prog.h" "${PROGRAM_DIR}/program.ld"
-            "${KERNEL_DIR}/include/kernel/ksys.h" "${MKPROG}"
-    COMMENT "building the image of /bin/hello"
-    VERBATIM
-)
+# Every program of the port is built the same way: compile the C file for the
+# window, link it with the script of the format, turn the sections into a MOX1
+# image and embed the image in the kernel as a blob. The name of the function
+# is the name of the file in /bin and the symbol of the entry is given here.
+function(add_program_image name entry)
+    set(image "${CMAKE_BINARY_DIR}/${name}.mox")
+    set(object "${CMAKE_BINARY_DIR}/${name}_mox.o")
 
-# The blob of the image as an object of the kernel. It goes to .rodata, which
-# the linker script of the port keeps in the image that the loader copies, and
-# objcopy names its symbols after the file: _binary_hello_mox_start and _end.
-add_custom_command(
-    OUTPUT "${PROGRAM_OBJECT}"
-    COMMAND objcopy -I binary -O elf64-x86-64
-            --rename-section .data=.rodata,alloc,load,readonly,data,contents
-            hello.mox hello_mox.o
-    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-    DEPENDS "${PROGRAM_IMAGE}"
-    COMMENT "embedding the image of /bin/hello"
-    VERBATIM
-)
+    add_custom_command(
+        OUTPUT "${image}"
+        COMMAND ${CMAKE_C_COMPILER} -c -O2 -ffreestanding -fno-stack-protector
+                -fno-pic -fno-pie -mno-red-zone -mgeneral-regs-only -march=x86-64
+                -fno-asynchronous-unwind-tables -Wall -Wextra -Werror
+                -I "${KERNEL_DIR}/include" -I "${PROGRAM_DIR}"
+                -o ${name}.o "${PROGRAM_DIR}/${name}.c"
+        COMMAND ${CMAKE_C_COMPILER} -nostdlib -static -no-pie -Wl,--build-id=none
+                -Wl,-e,${entry}
+                -T "${PROGRAM_DIR}/program.ld" -o ${name}.elf ${name}.o
+        COMMAND sh "${MKPROG}" --base ${PROGRAM_BASE} ${name}.elf ${name}.mox ${entry}
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        DEPENDS "${PROGRAM_DIR}/${name}.c" "${PROGRAM_DIR}/prog.h"
+                "${PROGRAM_DIR}/program.ld" "${KERNEL_DIR}/include/kernel/ksys.h" "${MKPROG}"
+        COMMENT "building the image of /bin/${name}"
+        VERBATIM
+    )
 
-set_source_files_properties("${PROGRAM_OBJECT}" PROPERTIES
-    GENERATED TRUE
-    EXTERNAL_OBJECT TRUE
-)
+    # The blob goes to .rodata, which the linker script of the port keeps in
+    # the image that the loader copies; objcopy names its symbols after the
+    # file: _binary_<name>_mox_start and _end.
+    add_custom_command(
+        OUTPUT "${object}"
+        COMMAND objcopy -I binary -O elf64-x86-64
+                --rename-section .data=.rodata,alloc,load,readonly,data,contents
+                ${name}.mox ${name}_mox.o
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        DEPENDS "${image}"
+        COMMENT "embedding the image of /bin/${name}"
+        VERBATIM
+    )
+
+    set_source_files_properties("${object}" PROPERTIES
+        GENERATED TRUE
+        EXTERNAL_OBJECT TRUE
+    )
+
+    set(${name}_OBJECT "${object}" PARENT_SCOPE)
+endfunction()
+
+add_program_image(hello hello_main)
+add_program_image(crash crash_main)
 
 add_executable(microos64
     ${KERNEL_SOURCES}
@@ -166,6 +178,8 @@ add_executable(microos64
     src/port_x86_64.c
     src/vga.c
     src/ps2.c
+    src/gdt.c
+    src/paging.c
     src/port_exec.c
     src/port_x86_64_task.c
     src/blockdev_ram.c
@@ -173,7 +187,8 @@ add_executable(microos64
     src/libc_shim.c
     src/interrupts.S
     src/switch.S
-    "${PROGRAM_OBJECT}"
+    "${hello_OBJECT}"
+    "${crash_OBJECT}"
 )
 
 target_include_directories(microos64 PRIVATE

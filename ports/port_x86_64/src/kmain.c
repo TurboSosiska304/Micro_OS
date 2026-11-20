@@ -91,9 +91,12 @@ static void shell_task(void *arg)
  */
 extern const k_u8_t _binary_hello_mox_start[];
 extern const k_u8_t _binary_hello_mox_end[];
+extern const k_u8_t _binary_crash_mox_start[];
+extern const k_u8_t _binary_crash_mox_end[];
 
 #define PROGRAM_DIR "/bin"
 #define PROGRAM_PATH "/bin/hello"
+#define PROGRAM_CRASH_PATH "/bin/crash"
 
 /*
  * A program is a file somebody may run, so it is created with the mode of a
@@ -103,22 +106,16 @@ extern const k_u8_t _binary_hello_mox_end[];
  */
 #define PROGRAM_MODE 0755u
 
-/* The image of the program as the build of the kernel left it. */
-static k_size_t program_image_size(void)
-{
-    return (k_size_t)(_binary_hello_mox_end - _binary_hello_mox_start);
-}
-
 /*
- * Write the image to the file. The file is created through the VFS and not
- * through the filesystem: the adapter of MicroFS is the only place that knows
- * which numbers of the filesystem mean what, and the boot is not that place.
+ * Write an image to a file of /bin. The file is created through the VFS and
+ * not through the filesystem: the adapter of MicroFS is the only place that
+ * knows which numbers of the filesystem mean what, and the boot is not that
+ * place.
  */
-static bool program_install(void)
+static bool program_install(const char *path, const k_u8_t *image, k_size_t size)
 {
     struct vfs_file file;
     k_u8_t priv[VFS_FILE_DATA_SIZE];
-    k_size_t size = program_image_size();
     int rc;
 
     rc = vfs_mkdir_p(PROGRAM_DIR);
@@ -127,29 +124,29 @@ static bool program_install(void)
         return false;
     }
 
-    rc = vfs_open(PROGRAM_PATH, VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, priv);
+    rc = vfs_open(path, VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, priv);
     if (rc != 0) {
-        kerror("x86-64: cannot create %s (%s)", PROGRAM_PATH, vfs_strerror(rc));
+        kerror("x86-64: cannot create %s (%s)", path, vfs_strerror(rc));
         return false;
     }
 
-    rc = vfs_write(&file, _binary_hello_mox_start, size);
+    rc = vfs_write(&file, image, size);
     (void)vfs_close(&file);
 
     if (rc != (int)size) {
-        kerror("x86-64: %s took %d byte(s) of %u", PROGRAM_PATH, rc, (unsigned)size);
+        kerror("x86-64: %s took %d byte(s) of %u", path, rc, (unsigned)size);
         return false;
     }
 
     /* The mode is the second half of the file: a file of data is written and
      * read, a program is written and executed, and the difference is here. */
-    rc = vfs_chmod(PROGRAM_PATH, PROGRAM_MODE);
+    rc = vfs_chmod(path, PROGRAM_MODE);
     if (rc != 0) {
-        kerror("x86-64: cannot make %s executable (%s)", PROGRAM_PATH, vfs_strerror(rc));
+        kerror("x86-64: cannot make %s executable (%s)", path, vfs_strerror(rc));
         return false;
     }
 
-    kinfo("x86-64: %s is written (%u bytes)", PROGRAM_PATH, (unsigned)size);
+    kinfo("x86-64: %s is written (%u bytes)", path, (unsigned)size);
 
     return true;
 }
@@ -210,7 +207,18 @@ static void filesystem_bring_up(void)
         return;
     }
 
-    if (!program_install()) {
+    if (!program_install(PROGRAM_PATH, _binary_hello_mox_start,
+                         (k_size_t)(_binary_hello_mox_end - _binary_hello_mox_start))) {
+        return;
+    }
+
+    /*
+     * The second program exists for the smoke test of the fault path: the
+     * shell runs it after the first one, it writes to address zero and the
+     * machine has to be alive for the command after it.
+     */
+    if (!program_install(PROGRAM_CRASH_PATH, _binary_crash_mox_start,
+                         (k_size_t)(_binary_crash_mox_end - _binary_crash_mox_start))) {
         return;
     }
 

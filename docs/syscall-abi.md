@@ -45,23 +45,32 @@ that machine offers one door (ADR 0006):
 
 The vector 128 of the table of the interrupts is a gate of the port, not of
 the kernel: the port that can take a call puts its stub there and the port
-that cannot leaves the entry empty. The handler saves every register the
-caller may lose across a C call, turns the interrupts on (they are off for the
-first instructions, and on again for the call itself, which is what lets
-`sleep` and `yield` really wait), calls `ksys_call()` and returns with
-`iretq`. The program is ring 0 code today, and the gate opens for ring 0 only;
-a program of ring 3 waits for the address space of its own (K5).
+that cannot leaves the entry empty. The gate opens for ring 3, because the
+x86-64 port runs a program as a user with page tables of its own (ADR 0007).
+The processor takes the `RSP0` of the TSS on the way in, so the handler runs
+on a kernel stack of the program and not on the stack of the program, which
+ring 3 could have pointed anywhere. The handler saves every register the
+caller may lose across a C call, puts the kernel's thread pointer back,
+turns the interrupts on (they are off for the first instructions, and on
+again for the call itself, which is what lets `sleep` and `yield` really
+wait), calls `ksys_call()` and returns with `iretq`, setting the thread
+pointer to zero first because the kernel's TLS block is not mapped in ring 3.
 
 The registers are the ones of Linux: `rcx` and `r11` are not arguments
 because the instruction `syscall` of a 64-bit machine keeps them for the
 return address and the flags, and one convention for both instructions costs
 nothing.
 
-A program returns with `ret`, and the value in `rax` at that moment is its
-status - the low byte of it, as the status of a process. The port hands the
-status to the kernel (`k_exec_exit()`), `k_exec_run()` answers with it, and
-`execve` answers 0: the machine has no process to exit into yet, so the call
-ends and the caller sees the program finish.
+A program ends with `exit` (number 0): the kernel asks the port whether a
+program is in flight (`k_port_exec_active()`), and the port unwinds to the
+call that entered it with the status. `k_exec_exit()` carries the number,
+`k_exec_run()` answers with it, and `execve` answers 0 - the machine has no
+process to exit into yet, so the call ends and the caller sees the program
+finish. On the board and in the simulator, where a program is a task, `exit`
+still ends the task. A program that returns with `ret` instead of calling
+`exit` pops the zero at the top of its stack and faults; the port reports the
+fault and recovers, but the status is 255 and not the number the program
+chose.
 
 ## The table
 
@@ -139,8 +148,12 @@ touches more than `KSYS_MAX_IO` (65536 bytes) in one exchange. The number is
 far above any buffer of the system and well below what could not be a real
 transfer on a machine with ~100 KB of RAM. NULL with a length is `EINVAL`, a
 length above the limit is `E2BIG`. A length inside the limit is still not a
-memory range: without an MMU the kernel cannot know where a pointer of the
-caller points, and this document does not pretend otherwise.
+memory range: the kernel does not walk the page tables of the caller, so on
+the board (no MMU) and on the x86-64 port (an MMU, but no copy from the user
+yet) an address inside the limit is read as it is. A valid pointer into the
+window of a program works; a pointer that is not mapped is a fault of the
+kernel and not an error of the call, which is written down as the next debt
+of the edge (ADR 0007).
 
 **The flags of an `open`** (`open_flags_check`) are one of the three access
 modes - both bits at once is not a mode - and no bit outside
@@ -224,7 +237,9 @@ zeroed mode is still "this filesystem keeps no modes", so the roots of
 * the image must be a `MOX1` of this version, and the port is then asked
   whether the machine can run a program at all. The board and the simulator
   answer no, and the answer of the call is `ENOSYS`; the x86-64 port names a
-  window of memory, copies the image there and enters it.
+  window of memory, builds the page tables of the program, copies the image
+  into the physical arena behind the window and enters it through an `iretq`
+  into ring 3 (ADR 0007).
 
 The errors: `ENOENT` for a path that names nothing, `EISDIR` for a directory,
 `EPERM` for a file whose mode has no execute bit for the caller (`0400` is not
@@ -233,27 +248,33 @@ for an image the port could not place in its window, and `ENOSYS` for a
 machine without a window of programs.
 
 A successful call **does not return** when the program never comes back: the
-program is the caller from then on. A program that returns ends the call
-with 0 - the state of a machine with no process to exit into, where the kernel
-has to notice that the program has finished - and the status it ended with
-(the low byte of `rax`, 0 to 255) is the answer of the run, not of the call
-(see "The entry into the kernel").
+program is the caller from then on. A program that ends (by `exit`, or by a
+fault that the port recovers) ends the call with 0 - the state of a machine
+with no process to exit into, where the kernel has to notice that the program
+has finished - and the status it ended with (the low byte of the status, 0 to
+255) is the answer of the run, not of the call (see "The entry into the
+kernel").
 
 The vector of the arguments is the memory of the program. Without an MMU the
 kernel cannot check an array of pointers, but it does not hand the port the
 pointers of the caller either: at most eight words and 512 bytes of their
-strings are copied into the frame of the call, which stays alive while the
-program runs, and the program is entered with that vector. A line of the shell
-is `exec /bin/hello one two`: three words, the name of the program first, as
-in Linux.
+strings are copied into the frame of the call, and on a machine with paging
+the port copies them again into the memory of the program. A line of the
+shell is `exec /bin/hello one two`: three words, the name of the program
+first, as in Linux. The x86-64 port also places a zero at the top of the
+stack, so a program that returns instead of exiting faults on address zero.
 
 ## The processes
 
-The kernel has no memory management, so a `fork` cannot copy the memory of
-the parent: the tasks **share** it, like the flag `CLONE_VM` of Linux. The
-child gets its own number, and the program tells the child by the mark of its
-task (`task_self()->is_child`) - in Linux the child knows it by the zero that
+A `fork` on a machine without an MMU cannot copy the memory of the parent:
+the tasks **share** it, like the flag `CLONE_VM` of Linux. The child gets its
+own number, and the program tells the child by the mark of its task
+(`task_self()->is_child`) - in Linux the child knows it by the zero that
 `fork()` returns, here the child starts the program from the beginning.
+
+The x86-64 port has page tables now, but not yet a space per task: `fork`
+there is the same placeholder. The copy of the page tables and the copy on
+write are the next milestone (`k_port_fork_copy()`, ADR 0005 and ADR 0007).
 
 `waitpid()` waits for a child, the status is the code the child finished
 with. The number 0 or -1 means "any child". A call with no child to wait for

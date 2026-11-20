@@ -80,19 +80,31 @@ isr_exception_err 30
 isr_exception 31
 
 /*
- * The common tail of the exceptions. The handler of C does not return, so
- * the registers of the moment are not worth saving: the body is readable
- * when it only passes the three numbers of the frame.
+ * The common tail of the exceptions. The registers of the moment are not
+ * saved: a fault of the kernel stops the machine and a fault of a program
+ * never resumes the instruction. The four numbers of the frame are all C
+ * needs - the vector, the error code, the RIP and the CS, which says whether
+ * the code that broke was the kernel or a program of ring 3.
+ *
+ * The thread pointer has to come back to the kernel before any C runs: a
+ * program of ring 3 leaves IA32_FS_BASE at zero, and the handler may log or
+ * set an errno.
  */
 .type isr_exception_common, @function
 isr_exception_common:
     movq %rsp, %rbp
-    movq 0(%rbp), %rdi /* the vector */
-    movq 8(%rbp), %rsi /* the error code, or the zero of the stub */
-    movq 16(%rbp), %rdx /* the instruction that was running */
 
     /* The ABI wants the stack of a call aligned to 16 bytes, and an
      * interrupt may have arrived at any alignment. */
+    andq $-16, %rsp
+    call port_x86_64_tls_kernel
+    movq %rbp, %rsp
+
+    movq 0(%rbp), %rdi  /* the vector */
+    movq 8(%rbp), %rsi  /* the error code, or the zero of the stub */
+    movq 16(%rbp), %rdx /* the instruction that was running */
+    movq 24(%rbp), %rcx /* the code selector of the moment */
+
     andq $-16, %rsp
     call port_x86_64_exception
 
@@ -132,6 +144,20 @@ isr_exception_common:
     call \handler
     movq %rbp, %rsp
 
+    /*
+     * A tick that interrupted a program returns to ring 3, and the thread
+     * pointer of the kernel must not follow it: the program has no address
+     * for the block, and IA32_FS_BASE zero is what it had before the tick.
+     * The frame's CS is the selector of the interrupted code (rbp + 88: the
+     * ten saved registers, then RIP and CS).
+     */
+    movq 88(%rbp), %rax
+    testb $3, %al
+    jz 1f
+    andq $-16, %rsp
+    call port_x86_64_tls_user
+    movq %rbp, %rsp
+1:
     popq %rbp
     popq %r11
     popq %r10
@@ -155,10 +181,10 @@ isr_irq isr_irq1, port_x86_64_irq_keyboard
 /*
  * The call of a system call: `int $0x80` from the program.
  *
- * The program is ring 0 code with no process under it (ADR 0006), so the
- * processor pushes the same frame as for any interrupt and does not change
- * the stack: the handler runs on the stack of the program, which is a window
- * of its own (see port_exec.c) and not the stack of the kernel.
+ * The program is ring 3 code with page tables of its own (ADR 0007), so the
+ * processor takes the stack named by RSP0 of the TSS: the handler runs on a
+ * kernel stack that belongs to the program and not on the stack of the
+ * program, which ring 3 could have pointed anywhere.
  *
  * The registers of the convention are the ones of the kernel call and of
  * Linux: the number in RAX, six arguments in RDI, RSI, RDX, R10, R8 and R9,
@@ -188,6 +214,16 @@ isr_syscall:
     pushq %rbp
 
     movq %rsp, %rbp /* the saved frame, for the way back and for its fields */
+
+    /*
+     * The program runs with the thread pointer of ring 3 (zero); the call of
+     * the kernel is about to use its own. The ABI wants the stack aligned
+     * before a call, so the register is set with the frame already safe.
+     */
+    andq $-16, %rsp
+    call port_x86_64_tls_kernel
+    movq %rbp, %rsp
+
     sti             /* a call may sleep, yield or wait for the console */
 
     /*
@@ -213,6 +249,16 @@ isr_syscall:
     call ksys_call
     movq %rbp, %rsp
     movq %rax, 72(%rbp) /* the result, where the iretq finds it */
+
+    /*
+     * The way back is ring 3, where the kernel's TLS block is not mapped.
+     * Setting the pointer to zero here is what makes the next call of the
+     * program enter a kernel with its own errno and not with a page fault.
+     * A call that ended the program never reaches this instruction.
+     */
+    andq $-16, %rsp
+    call port_x86_64_tls_user
+    movq %rbp, %rsp
 
     popq %rbp
     popq %rcx

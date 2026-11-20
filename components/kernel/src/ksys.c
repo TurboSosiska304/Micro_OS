@@ -9,6 +9,7 @@
 #include "kernel/kmm.h"
 #include "kernel/log.h"
 #include "kernel/port.h"
+#include "kernel/port/exec.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
 #include "kernel/vfs.h"
@@ -222,6 +223,18 @@ static k_ssize_t sys_exit(ksys_arg_t code, ksys_arg_t a1, ksys_arg_t a2, ksys_ar
     K_UNUSED(a3);
     K_UNUSED(a4);
     K_UNUSED(a5);
+
+    /*
+     * A program is not a task of the kernel on a machine that runs it in its
+     * own address space: exiting it means coming back to the call that
+     * entered it with the status, not ending the task the caller runs in.
+     * The port knows which of the two is asking; a machine whose programs are
+     * tasks (the board, the simulator) says false and takes the old path.
+     */
+    if (k_port_exec_active()) {
+        k_port_exec_exit((int)code);
+        return 0;
+    }
 
     task_exit((int)code);
     return 0;

@@ -21,3 +21,13 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
     K_UNUSED(argv);
     return -1;
 }
+
+bool k_port_exec_active(void)
+{
+    return false;
+}
+
+void k_port_exec_exit(int code)
+{
+    K_UNUSED(code);
+}

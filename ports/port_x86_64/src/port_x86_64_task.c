@@ -48,7 +48,52 @@ struct port_task {
     k_u64_t rsp;       /* the stack pointer while the context is suspended */
     k_u64_t flags;     /* the RFLAGS a context that has never run starts with */
     void *block;       /* the allocation: this header and the stack above it */
+    k_u8_t *tls;       /* the block behind IA32_FS_BASE of this task */
 };
+
+/*
+ * The block of the C library's _Thread_local variables. The linker puts it
+ * between __tls_start and __tls_end, and the compiler addresses it as an
+ * offset from the end, so a task gets a copy of the same bytes and points the
+ * thread pointer at its own end. Without the copy two tasks share one errno,
+ * and a program of ring 3 (which leaves the pointer at zero) would carry its
+ * zero into the kernel of the next call.
+ */
+extern char __tls_start[];
+extern char __tls_data_end[];
+extern char __tls_end[];
+
+static k_size_t task_tls_size(void)
+{
+    return (k_size_t)(__tls_end - __tls_start);
+}
+
+/*
+ * The initialised part is copied and the rest is zeroed: the tbss of the
+ * image is NOBITS and the loader clears only .bss, so a new task must not
+ * inherit whatever the bytes after the image happen to hold.
+ */
+static void task_tls_copy(k_u8_t *block)
+{
+    k_size_t data_size = (k_size_t)(__tls_data_end - __tls_start);
+    k_size_t size = task_tls_size();
+
+    if (data_size > size) {
+        data_size = size;
+    }
+
+    memcpy(block, __tls_start, data_size);
+    memset(block + data_size, 0, size - data_size);
+}
+
+static k_u64_t task_tls_base(const struct port_task *pt)
+{
+    if (pt == NULL || pt->tls == NULL) {
+        return (k_u64_t)(uintptr_t)__tls_end;
+    }
+
+    return (k_u64_t)(uintptr_t)(pt->tls + task_tls_size());
+}
 
 /* The ABI of the machine wants every stack 16 bytes aligned. */
 #define PORT_STACK_ALIGN 16u
@@ -93,6 +138,12 @@ static void release_pending(void)
     g_pending_free = NULL;
     flags = port_save_flags_and_cli();
     k_port_free(dead->block);
+
+    if (dead->tls != NULL) {
+        k_port_free(dead->tls);
+        dead->tls = NULL;
+    }
+
     port_restore_flags(flags);
 }
 
@@ -135,6 +186,14 @@ static void commit_switch(struct port_task *prev, struct port_task *next)
     k_sched_task_running(next->task);
 
     g_current = next;
+
+    /*
+     * The thread pointer follows the task, not the machine: each one has its
+     * own errno, and the block is put in the register before the other
+     * context is resumed with it.
+     */
+    port_x86_64_tls_kernel();
+
     port_x86_64_switch(&prev->rsp, next->rsp);
 }
 
@@ -253,6 +312,20 @@ int k_port_task_create(struct task *t, k_port_task_entry_fn entry, void *arg)
     pt = (struct port_task *)base;
     pt->task = t;
     pt->block = base;
+    pt->tls = NULL;
+
+    if (task_tls_size() != 0) {
+        pt->tls = (k_u8_t *)k_port_alloc(task_tls_size(), false);
+
+        if (pt->tls == NULL) {
+            k_port_free(base);
+            kerror("x86_64: no memory for the TLS block of a task (%u bytes)",
+                   (unsigned)task_tls_size());
+            return -1;
+        }
+
+        task_tls_copy(pt->tls);
+    }
     /*
      * A task inherits the interrupt state of the context that created it.
      * Before the table of the interrupts exists they are off and a task must
@@ -435,6 +508,24 @@ void port_x86_64_task_trampoline(k_port_task_entry_fn entry, void *arg, k_u64_t 
 
     /* A task that returns from its entry point is a task that has finished. */
     k_port_task_exit(0);
+}
+
+/* --- the thread pointer --- */
+
+/*
+ * The five lines of assembly and C that make an errno belong to a task. The
+ * kernel calls port_x86_64_tls_kernel() on the way into a system call and on
+ * a context switch; the stub of `int $0x80` calls port_x86_64_tls_user()
+ * before the iretq, because the block of the kernel is not mapped in ring 3.
+ */
+void port_x86_64_tls_kernel(void)
+{
+    port_wrmsr(0xC0000100u, task_tls_base(g_current));
+}
+
+void port_x86_64_tls_user(void)
+{
+    port_wrmsr(0xC0000100u, 0);
 }
 
 /* --- the tick of the timer --- */

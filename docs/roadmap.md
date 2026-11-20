@@ -87,12 +87,30 @@ written when the project was an operating system for one board; the numbers
       `open` and `execve`
 * [x] The `x` bit of the directories of a path is walked and checked
 * [ ] A real `fork()`: an address space per task, copy on write - the
-      milestone of the x86-64 paging (ADR 0002, ADR 0005)
+      milestone of the x86-64 paging. The page tables per program and ring 3
+      are done (K5, ADR 0007); the copy of the tables and the fault of the
+      first write are what is left (ADR 0002, ADR 0005)
 
-## K5 - A processor with an MMU (planned)
+## K5 - A processor with an MMU (in progress)
 
-* [ ] The paging of the x86-64 port: page tables per task, the higher half,
-      user and kernel pages, a fault handler that means something
+* [x] Page tables per program on x86-64: the kernel identity map is
+      supervisor-only, the window at 32 MiB is user pages over a physical
+      arena at 64 MiB, the null page is not mapped and the stack has a guard
+      page (ADR 0007)
+* [x] Ring 3: a GDT with user code and data, a TSS with `RSP0` and `IST1`, an
+      `int $0x80` gate with `DPL 3` and an `iretq` entry; the program prints
+      `cpl 3` and `make x86-smoke` checks it
+* [x] A fault handler that means something: a page fault, `#UD` or `#GP` of
+      ring 3 is printed as `the program faulted: vector N at 0x...`, the
+      program is taken down and the shell stays alive
+* [x] `exit` of a program returns to `k_port_exec_enter()` with the status
+      (contract 1.4); `execve` still answers 0
+* [x] An errno per task: the TLS block is copied per task and `IA32_FS_BASE`
+      follows the task and the privilege boundary
+* [ ] Page tables per *task* and copy on write: `fork()` with a space of its
+      own (`k_port_fork_copy()`, the milestone of K4 and ADR 0005)
+* [ ] The kernel in a higher half, and a `copy_from_user` at the edge of the
+      system call
 * [ ] A port for a real ARM with an MMU: the same contract, a second `arch/`
 * [ ] `KERNEL_NOMMU` becomes 0 and the concessions become features
 

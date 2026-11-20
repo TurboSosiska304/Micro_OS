@@ -43,7 +43,7 @@ ports/port_null/      no machine at all: linked by the checks
 The boundary is not a promise, it is a check: `make integrity` refuses a
 platform header in the kernel, a `k_port_*` call above it, a portable
 component the host build does not compile, and a port that leaves a function
-of the contract unimplemented. The contract has a version (1.3 today), and the
+of the contract unimplemented. The contract has a version (1.4 today), and the
 boot compares it with the one the port reports ([ADR 0004](docs/adr/0004-portable-boundary.md)).
 A new machine is a new port directory - see [docs/porting.md](docs/porting.md).
 

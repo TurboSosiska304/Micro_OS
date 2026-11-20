@@ -65,6 +65,18 @@ static inline long prog_sleep(long ms)
     return prog_call(KSYS_SLEEP, ms, 0, 0, 0, 0, 0);
 }
 
+/*
+ * The end of a program of this port: the kernel takes it down and returns to
+ * the call that entered it, so this call does not come back. A program that
+ * returned with `ret` instead would pop the zero at the top of its stack and
+ * fault on address zero; the port would recover, but the status would be the
+ * fault of a mistake and not the number the program chose.
+ */
+static inline long prog_exit(int code)
+{
+    return prog_call(KSYS_EXIT, code, 0, 0, 0, 0, 0);
+}
+
 /* The length of the line, without the library a program does not have. */
 static inline long prog_strlen(const char *text)
 {
