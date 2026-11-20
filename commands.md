@@ -48,7 +48,7 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make integrity` | the integrity check: bundle, image headers, partition table, git, sources, formatting |
 | `make format` | reformat the C sources with `clang-format` |
 | `make clean` | remove `build-host/` and `build-asan/` (the device `build/` stays) |
-| `make ci` | `build`, `test`, `test-asan`, `smoke`, `integrity` — run it before pushing |
+| `make ci` | `build`, `test`, `test-asan`, `test-tsan`, `smoke`, `x86-smoke` when QEMU is there, `integrity` — run it before pushing |
 
 The same build by hand:
 
@@ -151,6 +151,7 @@ read by the kernel, checked against the format `MOX1` and handed to the port.
 
 | Command | What it does |
 |---|---|
+| `fsck` | check the volume read-only: the first problem, sizes, free blocks |
 | `chmod <mode> <path>` | the mode in octal: `0644`, `755`, `0700` (the nine bits `rwx`) |
 | `chown <uid> <path>` | the owner, a decimal uid `0..32767` |
 | `stat <path>` | the type, the mode, the owner and the size of one object |
