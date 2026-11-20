@@ -35,6 +35,12 @@ add_compile_options(
     -fno-pie
     -mno-red-zone
     -mgeneral-regs-only
+    # The machine is the first x86-64 and not the computer of the person who
+    # builds it. A distribution may configure its compiler for a newer model
+    # (the runner of GitHub does) and then a shift becomes SHLX of BMI2,
+    # which the processor of QEMU does not know: an invalid opcode in the
+    # middle of the boot. The explicit model is the oldest one.
+    -march=x86-64
     -Wall
     -Wextra
     -Werror
@@ -105,7 +111,7 @@ set(MKPROG "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/mkprog.sh")
 add_custom_command(
     OUTPUT "${PROGRAM_IMAGE}"
     COMMAND ${CMAKE_C_COMPILER} -c -O2 -ffreestanding -fno-stack-protector
-            -fno-pic -fno-pie -mno-red-zone -mgeneral-regs-only
+            -fno-pic -fno-pie -mno-red-zone -mgeneral-regs-only -march=x86-64
             -fno-asynchronous-unwind-tables -Wall -Wextra -Werror
             -o hello.o "${PROGRAM_DIR}/hello.c"
     COMMAND ${CMAKE_C_COMPILER} -nostdlib -static -no-pie -Wl,--build-id=none
