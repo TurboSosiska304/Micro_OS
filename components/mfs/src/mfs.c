@@ -5,6 +5,7 @@
 #include "kernel/lock.h"
 #include "kernel/log.h"
 #include "kernel/panic.h"
+#include "mfs_private.h"
 
 /*
  * The state of the mounted volume. The filesystem is a singleton: one
@@ -18,7 +19,7 @@ static struct {
     k_u32_t inode_blocks;   /* the blocks of the table of the inodes */
     k_u32_t inode_capacity; /* the number of the records of the table */
     bool bitmap_dirty;      /* the map in the memory is newer than the device */
-    k_u8_t bitmap[MFS_BLOCK_SIZE * 2];
+    k_u8_t bitmap[MFS_BLOCK_SIZE * MFS_BITMAP_MAX_BLOCKS];
 } g;
 
 /*
@@ -54,9 +55,6 @@ static void mfs_unlock(void)
     (void)k_mutex_unlock(&s_lock);
 }
 
-#define MFS_NEXT_NONE 0xFFFFFFFFu
-#define MFS_BLOCK_DATA (MFS_BLOCK_SIZE - 4)
-
 /* The blocks of one erase sector of the flash (4 KB). */
 #define MFS_SECTOR_BLOCKS 4
 
@@ -87,6 +85,16 @@ static k_u32_t crc32(const void *data, k_size_t size)
     return crc ^ 0xFFFFFFFFu;
 }
 
+/*
+ * The header of the volume is checked again when the volume is checked,
+ * and the checksum is the same one: the checker does not carry a second
+ * copy of the polynomial.
+ */
+k_u32_t mfs_priv_crc32(const void *data, k_size_t size)
+{
+    return crc32(data, size);
+}
+
 /* --- the low level access to the volume --- */
 
 /*
@@ -105,6 +113,12 @@ static int dev_read(k_u32_t block, void *buf)
     }
 
     return MFS_OK;
+}
+
+/* The checker reads the volume the same way the filesystem does. */
+int mfs_priv_block_read(k_u32_t block, void *buf)
+{
+    return dev_read(block, buf);
 }
 
 static int dev_write(k_u32_t block, const void *buf)
@@ -2048,6 +2062,46 @@ int mfs_get_info(struct mfs_info *out)
 
     mfs_lock();
     rc = mfs_get_info_locked(out);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_check(struct mfs_check_report *report)
+{
+    struct mfs_private view;
+    int rc;
+
+    if (report == NULL) {
+        return MFS_EINVAL;
+    }
+
+    mfs_lock();
+
+    if (!g.mounted) {
+        mfs_unlock();
+        return MFS_EINVAL;
+    }
+
+    memset(report, 0, sizeof(*report));
+
+    /*
+     * The checker gets the state of the volume, not a copy of it: the lock
+     * is held for the whole walk, so nothing changes under it, and the
+     * buffer of the directories is free for its use.
+     */
+    memset(&view, 0, sizeof(view));
+    view.sb = &g.sb;
+    view.bitmap = g.bitmap;
+    view.dir_scratch = g_dir_buffer.data;
+    view.dir_scratch_size = sizeof(g_dir_buffer.data);
+    view.bitmap_blocks = g.bitmap_blocks;
+    view.inode_blocks = g.inode_blocks;
+    view.inode_capacity = g.inode_capacity;
+    view.device_blocks = g.dev->sectors;
+
+    rc = mfs_check_locked(&view, report);
+
     mfs_unlock();
 
     return rc;

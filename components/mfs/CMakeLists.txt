@@ -2,6 +2,7 @@
 
 set(MICRO_OS_MFS_SRCS
     "src/mfs.c"
+    "src/mfs_check.c"
     "src/mfs_ram_device.c"
     "src/mfs_vfs.c"
     "src/mfs_vfs_mount.c"

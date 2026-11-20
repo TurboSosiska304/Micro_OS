@@ -35,6 +35,44 @@ static void teardown(void)
     mfs_ram_free(&g_volume);
 }
 
+/*
+ * The address of a record of the table of the inodes in the volume of the
+ * test. The layout is computed the way the format computes it, so the
+ * test can put an old record into a volume of today.
+ */
+static k_u8_t *inode_record(k_u32_t index)
+{
+    struct mfs_superblock sb;
+    k_u32_t bitmap_blocks;
+
+    memcpy(&sb, g_volume.data + (size_t)(TEST_BLOCKS - 1) * MFS_BLOCK_SIZE, sizeof(sb));
+    bitmap_blocks = (sb.data_blocks + 8u * MFS_BLOCK_SIZE - 1u) / (8u * MFS_BLOCK_SIZE);
+
+    return g_volume.data + (size_t)(sb.meta_start + bitmap_blocks) * MFS_BLOCK_SIZE +
+           (size_t)index * MFS_INODE_SIZE;
+}
+
+/*
+ * Put a record into the table the way a writer of the device would: the
+ * test goes through the block device and not through the array in the
+ * memory, so the record reaches the volume the way it does on the board.
+ */
+static int store_inode_record(k_u32_t index, const struct mfs_inode *inode)
+{
+    k_u8_t *where = inode_record(index);
+    k_u8_t block[MFS_BLOCK_SIZE];
+    size_t offset = (size_t)(where - g_volume.data);
+    k_u32_t sector = (k_u32_t)(offset / MFS_BLOCK_SIZE);
+
+    if (g_device.ops->read(g_device.ctx, sector, block, 1) != 0) {
+        return -1;
+    }
+
+    memcpy(block + offset % MFS_BLOCK_SIZE, inode, sizeof(*inode));
+
+    return g_device.ops->write(g_device.ctx, sector, block, 1);
+}
+
 static void test_format(void)
 {
     struct mfs_info info;
@@ -52,6 +90,25 @@ static void test_format(void)
     KT_CHECK(info.inodes_total > 0);
     KT_CHECK_INT_EQ(info.inodes_used, 1); /* only the root */
     KT_CHECK(info.data_free > 0);
+
+    /* A fresh volume has nothing to hide: the check finds no problem. */
+    {
+        struct mfs_check_report report;
+        k_u32_t writes = g_volume.writes;
+
+        memset(&report, 0, sizeof(report));
+        KT_CHECK_INT_EQ(mfs_check(&report), MFS_OK);
+        KT_CHECK_INT_EQ(report.errors, 0);
+        KT_CHECK_INT_EQ(report.files, 0);
+        KT_CHECK_INT_EQ(report.directories, 1); /* only the root */
+        KT_CHECK_INT_EQ(report.used_blocks, 1); /* the block of the root */
+        KT_CHECK_INT_EQ(report.free_blocks, info.data_free);
+        KT_CHECK_INT_EQ(report.free_blocks + report.used_blocks, info.data_blocks);
+        KT_CHECK_INT_EQ(report.first[0], '\0');
+
+        /* The check only reads: the medium is written not even once. */
+        KT_CHECK_INT_EQ(g_volume.writes, writes);
+    }
 
     teardown();
 }
@@ -121,6 +178,18 @@ static void test_header_crc(void)
 
     /* A bit that a brownout left half written. */
     info_block[sizeof(struct mfs_superblock) / 2] ^= 0x10;
+
+    /* The check of the mounted volume reads the header again and names it. */
+    {
+        struct mfs_check_report report;
+
+        memset(&report, 0, sizeof(report));
+        KT_CHECK_INT_EQ(mfs_check(&report), MFS_OK);
+        KT_CHECK(report.errors > 0);
+        KT_CHECK(report.first[0] != '\0');
+        KT_CHECK_INT_EQ(strncmp(report.first, "header: ", 8), 0);
+    }
+
     mfs_unmount();
     KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_EINVAL);
     KT_CHECK(!mfs_is_mounted());
@@ -128,6 +197,15 @@ static void test_header_crc(void)
     /* The same volume, the header put back: everything is fine again. */
     memcpy(info_block, saved, MFS_BLOCK_SIZE);
     KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+
+    {
+        struct mfs_check_report report;
+
+        memset(&report, 0, sizeof(report));
+        KT_CHECK_INT_EQ(mfs_check(&report), MFS_OK);
+        KT_CHECK_INT_EQ(report.errors, 0);
+        KT_CHECK_INT_EQ(report.first[0], '\0');
+    }
 
     teardown();
 }
@@ -315,6 +393,22 @@ static void test_big_file(void)
     KT_CHECK_INT_EQ(memcmp(content, check, sizeof(content)), 0);
     KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
 
+    /*
+     * The chain of the file is what the check expects it to be: 5000 bytes
+     * take five blocks of 1020 bytes, and the root holds the sixth.
+     */
+    {
+        struct mfs_check_report report;
+
+        memset(&report, 0, sizeof(report));
+        KT_CHECK_INT_EQ(mfs_check(&report), MFS_OK);
+        KT_CHECK_INT_EQ(report.errors, 0);
+        KT_CHECK_INT_EQ(report.files, 1);
+        KT_CHECK_INT_EQ(report.directories, 1);
+        KT_CHECK_INT_EQ(report.used_blocks, 6);
+        KT_CHECK_INT_EQ(report.first[0], '\0');
+    }
+
     teardown();
 }
 
@@ -343,6 +437,50 @@ static void test_directories(void)
     KT_CHECK_INT_EQ(mfs_list("/etc", entries, 16), MFS_OK);
     KT_CHECK_STR_EQ(entries[0].name, "config.txt");
     KT_CHECK_INT_EQ(entries[0].type & MFS_INODE_DIR, 0);
+
+    /*
+     * The checker agrees with the tree the test has just built: two files,
+     * the root and /etc, and no problem to name.
+     */
+    {
+        struct mfs_check_report report;
+        k_u32_t writes = g_volume.writes;
+
+        memset(&report, 0, sizeof(report));
+        KT_CHECK_INT_EQ(mfs_check(&report), MFS_OK);
+        KT_CHECK_INT_EQ(report.errors, 0);
+        KT_CHECK_INT_EQ(report.files, 2);
+        KT_CHECK_INT_EQ(report.directories, 2);
+        KT_CHECK(report.used_blocks > 0);
+        KT_CHECK(report.free_blocks > 0);
+        KT_CHECK_INT_EQ(report.first[0], '\0');
+        KT_CHECK_INT_EQ(g_volume.writes, writes);
+    }
+
+    /*
+     * The property: a record that a bad write left describing a file that
+     * is larger than the whole volume is named by the check, and the check
+     * does not repair the volume: the record stays the way it was found.
+     */
+    {
+        struct mfs_check_report report;
+        struct mfs_dirent readme;
+        struct mfs_inode record;
+
+        KT_CHECK_INT_EQ(mfs_stat("/readme", NULL, &readme), MFS_OK);
+        memcpy(&record, inode_record(readme.inode), sizeof(record));
+        record.size = 0xFFFFFFFFu;
+        KT_CHECK_INT_EQ(store_inode_record(readme.inode, &record), 0);
+
+        memset(&report, 0, sizeof(report));
+        KT_CHECK_INT_EQ(mfs_check(&report), MFS_OK);
+        KT_CHECK(report.errors > 0);
+        KT_CHECK(report.first[0] != '\0');
+        KT_CHECK_INT_EQ(strncmp(report.first, "inode ", 6), 0);
+
+        /* Read only: what the test broke is still broken, not repaired. */
+        KT_CHECK_INT_EQ(memcmp(inode_record(readme.inode), &record, sizeof(record)), 0);
+    }
 
     teardown();
 }
@@ -374,23 +512,6 @@ static void test_unlink(void)
     KT_CHECK_INT_EQ(mfs_unlink("/dir"), MFS_OK);
 
     teardown();
-}
-
-/*
- * The address of a record of the table of the inodes in the volume of the
- * test. The layout is computed the way the format computes it, so the
- * test can put an old record into a volume of today.
- */
-static k_u8_t *inode_record(k_u32_t index)
-{
-    struct mfs_superblock sb;
-    k_u32_t bitmap_blocks;
-
-    memcpy(&sb, g_volume.data + (size_t)(TEST_BLOCKS - 1) * MFS_BLOCK_SIZE, sizeof(sb));
-    bitmap_blocks = (sb.data_blocks + 8u * MFS_BLOCK_SIZE - 1u) / (8u * MFS_BLOCK_SIZE);
-
-    return g_volume.data + (size_t)(sb.meta_start + bitmap_blocks) * MFS_BLOCK_SIZE +
-           (size_t)index * MFS_INODE_SIZE;
 }
 
 /*
@@ -578,6 +699,16 @@ static void test_volume_without_modes(void)
 
     KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
     KT_CHECK(mfs_is_mounted());
+
+    /* A record of 0.3.x has no mode and no owner, and the check allows it. */
+    {
+        struct mfs_check_report report;
+
+        memset(&report, 0, sizeof(report));
+        KT_CHECK_INT_EQ(mfs_check(&report), MFS_OK);
+        KT_CHECK_INT_EQ(report.errors, 0);
+        KT_CHECK_INT_EQ(report.directories, 1);
+    }
 
     /*
      * The record says nothing about the access, so the reader falls back

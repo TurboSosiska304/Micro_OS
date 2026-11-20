@@ -186,6 +186,25 @@ struct mfs_info {
     k_u32_t block_size;
 };
 
+/* The room for the first problem that mfs_check() finds. */
+#define MFS_CHECK_MESSAGE_MAX 96
+
+/*
+ * What mfs_check() found. The counters describe the volume as it is on the
+ * device: the files and the directories that are in use, the data blocks
+ * that the objects own and the blocks that the map of the free blocks
+ * leaves for them.
+ */
+struct mfs_check_report {
+    k_u32_t files;
+    k_u32_t directories;
+    k_u32_t free_blocks;
+    k_u32_t used_blocks;
+    k_u32_t errors; /* the number of the problems, 0 for a sound volume */
+    /* The first problem in English, an empty string for a sound volume. */
+    char first[MFS_CHECK_MESSAGE_MAX];
+};
+
 /*
  * Prepare a volume: the layout is computed, the bitmap and the table of
  * the inodes are created and the root directory is made.
@@ -221,6 +240,29 @@ bool mfs_is_mounted(void);
 
 /* The information about the mounted volume. */
 int mfs_get_info(struct mfs_info *out);
+
+/*
+ * Check the mounted volume. Nothing is written, repaired or reformatted:
+ * the header, the table of the inodes, the entries of the directories and
+ * the map of the free blocks are only read, and the volume stays the way
+ * it was.
+ *
+ * The header of the volume is read again from the device, since the copy
+ * in the memory is the one of the mount; the table of the inodes is then
+ * walked record by record, every chain of the data blocks is followed and
+ * the tree of the directories is walked from the root, with a limit on the
+ * depth, so that a loop in the tree is found instead of followed.
+ *
+ * Returns MFS_OK when the check ran to the end: report->errors is 0 for a
+ * sound volume and greater than 0 for a damaged one, with the first
+ * problem in report->first. A volume that is damaged is still reported
+ * this way, because the call itself did its work; the error code of the
+ * call speaks about the call. MFS_EINVAL means that there is no mounted
+ * volume or no report. MFS_EIO means that the device failed to read a
+ * block: the check stops there, the counters are partial and the block is
+ * the first problem.
+ */
+int mfs_check(struct mfs_check_report *report);
 
 /* The operations on the files and the directories. */
 int mfs_mkdir(const char *path);

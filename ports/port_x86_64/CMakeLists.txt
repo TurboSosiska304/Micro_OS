@@ -83,6 +83,7 @@ set(LIBC_SOURCES
 # the libc of the process.
 set(MFS_SOURCES
     "${MFS_DIR}/src/mfs.c"
+    "${MFS_DIR}/src/mfs_check.c"
     "${MFS_DIR}/src/mfs_vfs.c"
     "${MFS_DIR}/src/mfs_vfs_mount.c"
 )
