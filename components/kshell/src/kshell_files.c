@@ -11,6 +11,7 @@
 #include "kernel/ksys.h"
 #include "kernel/task.h"
 #include "kernel/vfs.h"
+#include "mfs/mfs.h"
 #include "libc/stdlib.h"
 #include "libc/unistd.h"
 
@@ -636,6 +637,50 @@ static int cmd_stat(int argc, char **argv)
     return KSHELL_OK;
 }
 
+/*
+ * The consistency of the volume, read-only. The filesystem answers with
+ * the report and not with a repair: a person decides what to do about a
+ * broken record, and a checker that writes is a formatter that nobody
+ * asked for.
+ */
+static int cmd_fsck(int argc, char **argv)
+{
+    struct mfs_check_report report;
+    int rc;
+
+    K_UNUSED(argv);
+
+    if (argc != 1) {
+        kshell_printf("usage: fsck\n");
+        return KSHELL_USAGE;
+    }
+
+    rc = mfs_check(&report);
+    if (rc == MFS_EINVAL) {
+        kshell_printf("fsck: no volume is mounted\n");
+        return KSHELL_ERROR;
+    }
+
+    if (rc != MFS_OK) {
+        kshell_printf("fsck: the volume cannot be read (%s)\n", mfs_strerror(rc));
+        return KSHELL_ERROR;
+    }
+
+    kshell_printf("fsck: %u file(s), %u directory(ies), %u of %u block(s) free\n",
+                  (unsigned)report.files, (unsigned)report.directories,
+                  (unsigned)report.free_blocks, (unsigned)report.used_blocks);
+
+    if (report.errors != 0) {
+        kshell_printf("fsck: %u problem(s), the first: %s\n", (unsigned)report.errors,
+                      report.first);
+        return KSHELL_ERROR;
+    }
+
+    kshell_printf("fsck: the volume is consistent\n");
+
+    return KSHELL_OK;
+}
+
 static int cmd_path(int argc, char **argv)
 {
     if (argc < 2) {
@@ -788,6 +833,7 @@ int kshell_register_files(void)
     rc |= kshell_register("rm", "remove a file", cmd_rm);
     rc |= kshell_register("df", "the usage of the filesystem", cmd_df);
     rc |= kshell_register("mount", "the mounted filesystems", cmd_mount);
+    rc |= kshell_register("fsck", "check the volume, read-only", cmd_fsck);
     rc |= kshell_register("chmod", "change the mode of a file", cmd_chmod);
     rc |= kshell_register("chown", "change the owner of a file", cmd_chown);
     rc |= kshell_register("stat", "the type, the mode and the owner", cmd_stat);

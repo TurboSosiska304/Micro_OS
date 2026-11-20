@@ -53,6 +53,7 @@ COMMANDS = [
     "chown 0 /bin/hello",
     "exec /bin/hello",
     "exec /bin/hello one two",
+    "fsck",
 ]
 
 # The prompt of the shell. It is written in one call, so the log of another
@@ -276,6 +277,9 @@ def check(output: str) -> list:
         "the owner is a number of the shell",
         "chown:" not in answer("chown 0 /bin/hello"),
     )
+    # The volume the boot wrote and the shell read is checked by the
+    # filesystem itself, and the checker is on the machine, not in the test.
+    expect("the volume is consistent", "the volume is consistent" in answer("fsck"))
 
     return checks
 
