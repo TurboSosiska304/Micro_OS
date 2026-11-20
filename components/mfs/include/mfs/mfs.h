@@ -200,6 +200,7 @@ struct mfs_check_report {
     k_u32_t directories;
     k_u32_t free_blocks;
     k_u32_t used_blocks;
+    k_u32_t data_blocks;
     k_u32_t errors; /* the number of the problems, 0 for a sound volume */
     /* The first problem in English, an empty string for a sound volume. */
     char first[MFS_CHECK_MESSAGE_MAX];

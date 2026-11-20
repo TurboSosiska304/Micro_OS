@@ -2084,6 +2084,7 @@ int mfs_check(struct mfs_check_report *report)
     }
 
     memset(report, 0, sizeof(*report));
+    report->data_blocks = g.sb.data_blocks;
 
     /*
      * The checker gets the state of the volume, not a copy of it: the lock

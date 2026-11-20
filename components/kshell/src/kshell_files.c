@@ -668,7 +668,7 @@ static int cmd_fsck(int argc, char **argv)
 
     kshell_printf("fsck: %u file(s), %u directory(ies), %u of %u block(s) free\n",
                   (unsigned)report.files, (unsigned)report.directories,
-                  (unsigned)report.free_blocks, (unsigned)report.used_blocks);
+                  (unsigned)report.free_blocks, (unsigned)report.data_blocks);
 
     if (report.errors != 0) {
         kshell_printf("fsck: %u problem(s), the first: %s\n", (unsigned)report.errors,
