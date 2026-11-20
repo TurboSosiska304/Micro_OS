@@ -19,6 +19,7 @@ the board live in `hardware/`.
 | see the libc subset | [libc.md](libc.md) |
 | read why a decision was made | [adr/](adr/) |
 | read what a phase delivered | [phases/](phases/) |
+| read about a port | [ports/esp32](ports/esp32/README.md), [ports/x86_64](ports/x86_64/README.md), [ports/host](ports/host/README.md) |
 | know the board: pins, chips, quirks | [ports/esp32/hardware.md](ports/esp32/hardware.md) |
 | review the portability work | [review.md](review.md) |
 
@@ -32,6 +33,7 @@ may lag behind - when they disagree with a document here, this one is right.
 
 * `adr/` - architecture decision records, one file per decision;
 * `phases/` - the report of each phase: what it delivered and what it cost;
-* `ports/` - one directory per port; the ESP32 port has its plan and the
-  notes of the board there;
+* `ports/` - one directory per port, with its notes and its plan: `esp32`
+  (the board), `x86_64` (bare metal in QEMU), `host` (the tests and the
+  simulator);
 * `ru/` - the Russian translations of the documents above.
