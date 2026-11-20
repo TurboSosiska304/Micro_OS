@@ -18,6 +18,16 @@
 #define SHELL_LS_CHILDREN 16
 #define SHELL_PATH_MAX 128
 
+/*
+ * The value of PATH. It belongs to the shell and not to the filesystem or
+ * the kernel: which directories hold the commands is a matter of the person
+ * at the console, and a program of this system does not inherit it yet.
+ */
+#define SHELL_PATH_DEFAULT "/bin:/usr/bin"
+#define SHELL_PATH_SIZE 96
+
+static char g_shell_path[SHELL_PATH_SIZE] = SHELL_PATH_DEFAULT;
+
 /* The path of the current directory of the task. */
 static const char *shell_cwd(void)
 {
@@ -426,7 +436,7 @@ static int cmd_mount(int argc, char **argv)
     return KSHELL_OK;
 }
 
-/* --- the mode, the owner and the programs --- */
+/* --- the mode, the owner, the path and the programs --- */
 
 /*
  * A number of a command line, in the base the command speaks. The whole text
@@ -549,6 +559,174 @@ static int cmd_chown(int argc, char **argv)
     return KSHELL_OK;
 }
 
+/* The nine bits of a mode as ls writes them: a live bit is a letter. */
+static void mode_text(unsigned mode, char out[10])
+{
+    static const char letters[3] = {'r', 'w', 'x'};
+    int bit;
+
+    for (bit = 0; bit < 9; bit++) {
+        out[bit] = (mode & (1u << (8 - bit))) ? letters[bit % 3] : '-';
+    }
+    out[9] = '\0';
+}
+
+/*
+ * The mode, the owner and the size of one object. The line of `ls -l` comes
+ * first because it is the one a person reads at a glance; the fields below
+ * it are the same numbers without the puzzle of the nine bits.
+ *
+ * A record of an old volume keeps no mode at all. Nine dashes would be read
+ * as "nobody may touch it", which is a different and false statement, so
+ * such an object prints the fields alone and says `mode: (not set)`.
+ */
+static int cmd_stat(int argc, char **argv)
+{
+    char path[SHELL_PATH_MAX];
+    struct vfs_stat info;
+    unsigned mode;
+    const char *type;
+    int rc;
+
+    if (argc != 2) {
+        kshell_printf("usage: stat <path>\n");
+        return KSHELL_USAGE;
+    }
+
+    if (!shell_resolve(argv[1], path, sizeof(path))) {
+        return path_too_long("stat");
+    }
+
+    rc = vfs_stat(path, &info);
+    if (rc != 0) {
+        kshell_printf("stat: %s: %s\n", path, vfs_strerror(rc));
+        return KSHELL_ERROR;
+    }
+
+    mode = info.mode & KSYS_MODE_MASK;
+
+    if (info.type == 2) {
+        type = "directory";
+    } else if (info.type == 1) {
+        type = "file";
+    } else {
+        type = "device";
+    }
+
+    if (mode != 0) {
+        char bits[10];
+        char kind = (info.type == 2) ? 'd' : (info.type == 1 ? '-' : 'c');
+
+        mode_text(mode, bits);
+        kshell_printf("%c%s %u %llu %s\n", kind, bits, (unsigned)info.owner,
+                      (unsigned long long)info.size, path);
+    }
+
+    kshell_printf("type: %s\n", type);
+
+    if (mode == 0) {
+        kshell_printf("mode: (not set)\n");
+    } else {
+        kshell_printf("mode: 0%o\n", mode);
+    }
+
+    kshell_printf("owner: %u\n", (unsigned)info.owner);
+    kshell_printf("size: %llu\n", (unsigned long long)info.size);
+
+    return KSHELL_OK;
+}
+
+static int cmd_path(int argc, char **argv)
+{
+    if (argc < 2) {
+        kshell_printf("%s\n", g_shell_path);
+        return KSHELL_OK;
+    }
+
+    if (argc > 2) {
+        kshell_printf("usage: path [directories]\n");
+        return KSHELL_USAGE;
+    }
+
+    /*
+     * The splitter of the shell has no quotes yet, so the empty argument
+     * that resets the value reaches this command as two quote marks: that
+     * is the only way a person can type "nothing" at the console.
+     */
+    if (argv[1][0] == '\0' || strcmp(argv[1], "\"\"") == 0) {
+        snprintf(g_shell_path, sizeof(g_shell_path), "%s", SHELL_PATH_DEFAULT);
+        return KSHELL_OK;
+    }
+
+    if (strlen(argv[1]) >= sizeof(g_shell_path)) {
+        kshell_printf("path: the value is too long (%u byte(s) at most)\n",
+                      (unsigned)(sizeof(g_shell_path) - 1));
+        return KSHELL_ERROR;
+    }
+
+    snprintf(g_shell_path, sizeof(g_shell_path), "%s", argv[1]);
+
+    return KSHELL_OK;
+}
+
+/* Whether the name carries its own path, in which case PATH has no say. */
+static bool shell_name_has_dir(const char *name)
+{
+    return strchr(name, '/') != NULL;
+}
+
+/*
+ * The first entry of PATH that holds a file with an execute bit. A file
+ * without one is passed over, as Linux does: a broken entry must not hide
+ * the program that waits below it. The answer is the full path that will be
+ * run, because the person has to see which file answered.
+ */
+static bool shell_find_program(const char *name, char *out, k_size_t size)
+{
+    const char *cursor = g_shell_path;
+
+    for (;;) {
+        const char *colon = strchr(cursor, ':');
+        k_size_t len = (colon != NULL) ? (k_size_t)(colon - cursor) : strlen(cursor);
+        char dir[SHELL_PATH_MAX];
+        char candidate[SHELL_PATH_MAX];
+        struct vfs_stat info;
+        int n;
+
+        /*
+         * An empty entry is the current directory, as in Linux; an entry
+         * too long to hold is not a directory that can be named.
+         */
+        if (len == 0) {
+            dir[0] = '.';
+            dir[1] = '\0';
+            len = 1;
+        } else if (len < sizeof(dir)) {
+            memcpy(dir, cursor, len);
+            dir[len] = '\0';
+        } else {
+            dir[0] = '\0';
+        }
+
+        if (dir[0] != '\0') {
+            const char *slash = (dir[len - 1] == '/') ? "" : "/";
+
+            n = snprintf(candidate, sizeof(candidate), "%s%s%s", dir, slash, name);
+            if (n >= 0 && (k_size_t)n < sizeof(candidate) && shell_resolve(candidate, out, size) &&
+                vfs_stat(out, &info) == 0 && info.type == 1 && (info.mode & 0111u) != 0) {
+                return true;
+            }
+        }
+
+        if (colon == NULL) {
+            break;
+        }
+        cursor = colon + 1;
+    }
+
+    return false;
+}
+
 static int cmd_exec(int argc, char **argv)
 {
     char path[SHELL_PATH_MAX];
@@ -566,8 +744,13 @@ static int cmd_exec(int argc, char **argv)
         return KSHELL_USAGE;
     }
 
-    if (!shell_resolve(argv[1], path, sizeof(path))) {
-        return path_too_long("exec");
+    if (shell_name_has_dir(argv[1])) {
+        if (!shell_resolve(argv[1], path, sizeof(path))) {
+            return path_too_long("exec");
+        }
+    } else if (!shell_find_program(argv[1], path, sizeof(path))) {
+        kshell_printf("exec: %s: not found in %s\n", argv[1], g_shell_path);
+        return KSHELL_ERROR;
     }
 
     /*
@@ -607,7 +790,9 @@ int kshell_register_files(void)
     rc |= kshell_register("mount", "the mounted filesystems", cmd_mount);
     rc |= kshell_register("chmod", "change the mode of a file", cmd_chmod);
     rc |= kshell_register("chown", "change the owner of a file", cmd_chown);
-    rc |= kshell_register("exec", "run a program: exec <path> [args...]", cmd_exec);
+    rc |= kshell_register("stat", "the type, the mode and the owner", cmd_stat);
+    rc |= kshell_register("path", "show or set PATH: path [directories]", cmd_path);
+    rc |= kshell_register("exec", "run a program: exec <program> [args...]", cmd_exec);
 
     return rc;
 }

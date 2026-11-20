@@ -142,25 +142,49 @@ config sync        # restore the missing files, save the files of /etc
 config             # list the store
 ```
 
-### The mode, the owner and a program
+### The mode, the owner, a program and the path
 
 A file has a mode and an owner, and the shell changes them through the system
-calls (numbers 23 and 24), not through the filesystem. `exec` asks the same ABI
-for a program: the file is read by the kernel, checked against the format
-`MOX1` and handed to the port.
+calls (numbers 23 and 24), not through the filesystem. `stat` shows what a
+record really holds, and `exec` asks the same ABI for a program: the file is
+read by the kernel, checked against the format `MOX1` and handed to the port.
 
 | Command | What it does |
 |---|---|
 | `chmod <mode> <path>` | the mode in octal: `0644`, `755`, `0700` (the nine bits `rwx`) |
 | `chown <uid> <path>` | the owner, a decimal uid `0..32767` |
-| `exec <path> [arguments...]` | run a file as a program; at most six arguments |
+| `stat <path>` | the type, the mode, the owner and the size of one object |
+| `path` | the directories of `PATH` |
+| `path <dirs>` | set `PATH` with `:` between directories; `path ""` is the default |
+| `exec <program> [arguments...]` | run a program, by a path or found in `PATH` |
 
 ```bash
 # from the shell of the board:
 chmod 0700 /etc/init.d
 chown 0 /etc/setting
-exec /bin/hello one two     # the board answers: this machine cannot run a program
+chmod 0755 /bin/hello
+stat /bin/hello
+# -rwxr-xr-x 0 1234 /bin/hello
+# type: file
+# mode: 0755
+# owner: 0
+# size: 1234
+exec hello one two          # found in PATH; the board cannot run a program
 ```
+
+`stat` prints the line of `ls -l` first and then the same numbers as fields,
+so a `chmod`/`chown` is checked without a calculator. An object of a
+filesystem that keeps no modes (procfs, devfs, a volume written by an older
+release) prints `mode: (not set)` and no `ls` line: nine dashes would read as
+`0000`, which is a statement the record does not make.
+
+`exec` looks at the name before it runs anything. A name with a slash is a
+path and is used as it is; a name without one is looked up in `PATH`, where
+the first regular file with an execute bit wins. A search that found nothing
+says where it looked: `exec: hello: not found in /bin:/usr/bin`. `path` keeps
+that value in the shell and not in `/etc` - it starts at `/bin:/usr/bin`, and
+the splitter of the shell has no quotes, so the two characters `""` are how a
+person types the empty argument that brings the default back.
 
 A mode that is not octal (`0999`), a uid above `32767` and a missing path are
 refused with a sentence: `not an octal mode`, `a uid is 0..32767`, `no such
