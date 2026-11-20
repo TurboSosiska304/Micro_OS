@@ -27,7 +27,6 @@ the row moves to the release notes of the phase that did it.
 
 | Debt | Where | Status | What it needs |
 |---|---|---|---|
-| The entry into the kernel is ring 0: the handler trusts the pointers of the program, there is no kernel stack per task and no `KSYS_EXIT` path from a program; a program that never returns holds the CPU. | `ports/port_x86_64/src/interrupts.S`, `components/kernel/src/ksys.c` (`sys_exit`) | open | K5: page tables per task, ring 3, a TSS/IST and a kernel stack, `copy_from_user`, and an exit call that unwinds the program. |
 | `stat` reports the mode and the owner to anybody and checks nothing. | `components/kernel/src/ksys.c`, `docs/phases/phase7.md` | decision | None: POSIX makes `stat` readable, and the check stays at `open` and `execve`. |
 | `ESRCH` has no number: `-3` is `KERR_EXIST` in this ABI, and renaming it would break the frozen table. `waitpid` answers `ECHILD`. | `components/kernel/include/kernel/errno.h` | decision | None: a new number for `ESRCH` would not be POSIX either; a program that needs it reads `ECHILD`. |
 | The library does not know the two new codes or the directory flag: `microos_strerror` says `unknown error` for `ENAMETOOLONG`/`ECHILD`, and `map_flags` does not pass `O_DIRECTORY`. | `components/libc/src/unistd.c` | open | The names of the two codes and the flag in the library, with a test of `open` of a directory. |
@@ -37,7 +36,9 @@ the row moves to the release notes of the phase that did it.
 Closed in the same pass: the `int $0x80` entry and its ABI, `argv` through
 `k_exec_run()`, `PATH` and `stat` in the shell, the test of the padding of
 `mkprog.sh`, its check of the linked address, the walk of the x bit, the
-directory descriptor for `readdir`, and `ENAMETOOLONG`/`ECHILD`. The row that stays above is the part of the entry that waits for
+directory descriptor for `readdir`, `ENAMETOOLONG`/`ECHILD`, and the entry
+from ring 3 with its kernel stack, the fault handler, `exit` and the errno
+of a task (K5). The row that stays above is the part of the entry that waits for
 K5.
 
 ## K4 - Protection
