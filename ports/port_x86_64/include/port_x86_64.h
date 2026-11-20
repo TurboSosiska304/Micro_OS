@@ -58,6 +58,21 @@ static inline k_u64_t port_rdtsc(void)
 
 /* --- the instructions of the machine -------------------------------------- */
 
+/*
+ * The registers of the machine that are not an I/O port. IA32_FS_BASE
+ * (0xC0000100) is where the thread pointer of the library lives: in long
+ * mode %fs is an offset from this register and not from a descriptor, and a
+ * zero here is a page fault at address zero the first time the library
+ * touches its _Thread_local.
+ */
+static inline void port_wrmsr(k_u32_t msr, k_u64_t value)
+{
+    k_u32_t low = (k_u32_t)value;
+    k_u32_t high = (k_u32_t)(value >> 32);
+
+    __asm__ volatile("wrmsr" : : "c"(msr), "a"(low), "d"(high));
+}
+
 static inline void port_cli(void)
 {
     __asm__ volatile("cli" : : : "memory");

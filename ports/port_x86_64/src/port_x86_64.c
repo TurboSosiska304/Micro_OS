@@ -26,6 +26,22 @@
  * the loader can see the same instructions.
  */
 
+/* The end of the block the linker made for the _Thread_local of the library. */
+extern char __tls_end[];
+
+/*
+ * The library keeps its errno in a _Thread_local, and the compiler reaches it
+ * through %fs. The tasks of this machine share one address space and one
+ * block, which is enough for the one user of the system: a second task sees
+ * the error of the first, and a real errno per task waits for the paging that
+ * gives each task a space of its own. The block itself is in the image and
+ * zero at the boot, so the register is the whole of the set-up.
+ */
+static void tls_init(void)
+{
+    port_wrmsr(0xC0000100u, (k_u64_t)(uintptr_t)__tls_end);
+}
+
 /* --- the console on COM1 --- */
 
 #define COM1 0x3F8
@@ -979,6 +995,7 @@ void port_x86_64_init(k_u64_t multiboot_info)
 {
     const struct mb_info *info = (const struct mb_info *)(uintptr_t)multiboot_info;
 
+    tls_init();
     com1_init();
     clock_measure();
     heap_init(multiboot_info);
