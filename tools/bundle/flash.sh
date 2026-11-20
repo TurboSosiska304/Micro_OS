@@ -14,7 +14,7 @@
 #   0x0000  boot loader
 #   0x8000  partition table
 #   0x10000 the application (2 MB)
-#   0x21000 MicroFS, the rest of the flash (5.75 MB)
+#   0x210000 MicroFS, the rest of the flash (5.75 MB)
 
 set -euo pipefail
 

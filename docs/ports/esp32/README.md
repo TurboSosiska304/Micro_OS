@@ -27,7 +27,8 @@ the repository (`../esp-idf`), then `~/esp/esp-idf`. The board is on
 `/dev/ttyACM0` and belongs to the group `uucp`.
 
 The ready images also go to the releases: download the bundle, connect the
-board, run `./flash.sh` - no sources, no ESP-IDF, no toolchain.
+board, run `bash flash.sh` (or `chmod +x flash.sh && ./flash.sh`) - no
+sources, no ESP-IDF, no toolchain.
 
 ## The hardware doctor
 
