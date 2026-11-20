@@ -13,6 +13,12 @@
 #define VFS_NAME_MAX 32
 #define VFS_PATH_MAX 128
 
+/*
+ * The one user of the system (ADR 0005). The VFS checks the search bit of
+ * the directories of a path for that uid and grants it nothing extra.
+ */
+#define VFS_UID 0u
+
 /* The flags of the open files, they follow the POSIX ones. */
 #define VFS_O_RDONLY 0x0000
 #define VFS_O_WRONLY 0x0001
@@ -20,6 +26,12 @@
 #define VFS_O_CREAT 0x0100
 #define VFS_O_TRUNC 0x0200
 #define VFS_O_APPEND 0x0400
+/*
+ * The open of a directory, which is what a descriptor of `readdir` is. The
+ * value is not the one of Linux on purpose: the flags of this contract are
+ * one small byte and every one of them fits there.
+ */
+#define VFS_O_DIRECTORY 0x0800
 
 /* One entry of a directory. */
 struct vfs_dirent {
@@ -62,6 +74,13 @@ struct vfs_operations {
     int (*write)(void *ctx, struct vfs_file *file, const void *buf, k_size_t size);
     int (*close)(void *ctx, struct vfs_file *file);
     int (*list)(void *ctx, const char *path, struct vfs_dirent *out, k_size_t max, k_size_t *count);
+    /*
+     * The next entries of an open directory. The position lives in the
+     * descriptor, so a second call continues where the first one stopped.
+     * A filesystem without directories leaves the field empty.
+     */
+    int (*readdir)(void *ctx, struct vfs_file *file, struct vfs_dirent *out, k_size_t max,
+                   k_size_t *count);
     int (*stat)(void *ctx, const char *path, struct vfs_stat *out);
     int (*mkdir)(void *ctx, const char *path);
     int (*unlink)(void *ctx, const char *path);
@@ -113,6 +132,12 @@ int vfs_read(struct vfs_file *file, void *buf, k_size_t size);
 int vfs_write(struct vfs_file *file, const void *buf, k_size_t size);
 int vfs_close(struct vfs_file *file);
 int vfs_list(const char *path, struct vfs_dirent *out, k_size_t max, k_size_t *count);
+/*
+ * The entries of a directory that was opened with VFS_O_DIRECTORY. The
+ * descriptor keeps the position; the end of the directory is an empty
+ * answer and not an error. A descriptor that is not a directory is ENOTDIR.
+ */
+int vfs_readdir(struct vfs_file *file, struct vfs_dirent *out, k_size_t max, k_size_t *count);
 int vfs_stat(const char *path, struct vfs_stat *out);
 int vfs_mkdir(const char *path);
 

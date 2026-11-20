@@ -20,13 +20,15 @@
 #define KERR_IO (-5)     /* input/output error */
 #define KERR_TOOBIG (-7) /* argument list too long */
 #define KERR_BADF (-9)   /* bad file descriptor */
-#define KERR_NOMEM (-12) /* out of memory */
+#define KERR_CHILD (-10) /* no child processes */
 #define KERR_AGAIN (-11) /* try again later */
+#define KERR_NOMEM (-12) /* out of memory */
 #define KERR_NOSYS (-38) /* the system call does not exist */
 #define KERR_NOTDIR (-20)
 #define KERR_ISDIR (-21)
 #define KERR_INVAL (-22)
-#define KERR_NOSPC (-28) /* no space left on device */
+#define KERR_NOSPC (-28)       /* no space left on device */
+#define KERR_NAMETOOLONG (-36) /* the path is longer than the window */
 #define KERR_NOTEMPTY (-39)
 
 #endif /* MICRO_OS_KERNEL_ERRNO_H */

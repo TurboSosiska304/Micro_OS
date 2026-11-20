@@ -45,7 +45,7 @@ static int path_check(const char *path)
         }
     }
 
-    return KERR_TOOBIG;
+    return KERR_NAMETOOLONG;
 }
 
 /*
@@ -334,6 +334,15 @@ static k_ssize_t sys_open(ksys_arg_t path, ksys_arg_t flags, ksys_arg_t a2, ksys
     }
 
     /*
+     * A directory is read, never written: O_DIRECTORY goes with O_RDONLY
+     * and with no other flag. The flag of the directory is part of the
+     * flags of the open, so it is checked before a descriptor is spent.
+     */
+    if ((flags & KSYS_O_DIRECTORY) != 0 && flags != KSYS_O_DIRECTORY) {
+        return KERR_INVAL;
+    }
+
+    /*
      * The mode of the file decides whether the access that was asked for is
      * allowed. The check is here, at the edge, and not in the filesystem, so
      * that every filesystem under it answers a forbidden open the same way.
@@ -541,7 +550,13 @@ static k_ssize_t sys_readdir(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ks
         return 0;
     }
 
-    rc = vfs_list(file->path, out, max, &count_files);
+    /*
+     * The entries are read through the descriptor, and its position goes
+     * with them: the next call continues where this one stopped. The
+     * directory is the one that was opened with O_DIRECTORY; a descriptor
+     * of a file answers ENOTDIR in the VFS.
+     */
+    rc = vfs_readdir(&file->file, out, max, &count_files);
     if (rc != 0) {
         return rc;
     }
@@ -774,7 +789,8 @@ static k_ssize_t sys_getppid(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_a
 
 /*
  * Wait for a child. The number 0 or -1 means "any child". The status of
- * the child is the code it finished with.
+ * the child is the code it finished with. A call with no child to wait for
+ * answers ECHILD, whether it was ready to wait or not.
  */
 static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags, ksys_arg_t a3,
                              ksys_arg_t a4, ksys_arg_t a5)
@@ -815,6 +831,7 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
 
     /* Look for a child that has finished. */
     for (waited = 0; waited < limit; waited++) {
+        bool has_child = false;
         k_size_t i;
 
         /*
@@ -836,6 +853,8 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
                 continue;
             }
 
+            has_child = true;
+
             if (t->state == TASK_STATE_ZOMBIE) {
                 child = t;
                 child_pid = t->pid;
@@ -850,6 +869,15 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
             break;
         }
 
+        /*
+         * There is no child that this call could wait for: not a running
+         * one, not a finished one. That is ECHILD, and the answer does not
+         * depend on the flags.
+         */
+        if (!has_child) {
+            return KERR_CHILD;
+        }
+
         if ((flags & KSYS_WNOHANG) != 0) {
             /* The caller does not want to wait: there is nothing yet. */
             return 0;
@@ -859,7 +887,7 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
     }
 
     if (child == NULL) {
-        return KERR_AGAIN;
+        return KERR_CHILD;
     }
 
     if (status != 0) {

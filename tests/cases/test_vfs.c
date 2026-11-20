@@ -252,6 +252,100 @@ static void test_statfs(void)
     teardown();
 }
 
+/*
+ * The property: every directory of a path has to be searchable by the
+ * caller. The VFS checks the `x` bit of the directories it passes through
+ * before it asks the filesystem for the object at the end.
+ */
+static void test_directory_search(void)
+{
+    struct vfs_file file;
+    /* The place for the data of the filesystem of an open file. */
+    static k_u8_t file_data[VFS_FILE_DATA_SIZE];
+    struct vfs_stat stat;
+
+    ktest_begin("vfs: a path is searched through the x bit of its directories");
+
+    setup();
+
+    KT_CHECK_INT_EQ(vfs_mkdir("/locked"), 0);
+    KT_CHECK_INT_EQ(vfs_open("/locked/inside.txt", VFS_O_RDWR | VFS_O_CREAT, &file, file_data), 0);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    /* Read and write for the owner but no search: the child is hidden. */
+    KT_CHECK_INT_EQ(vfs_chmod("/locked", 0600), 0);
+    KT_CHECK_INT_EQ(vfs_open("/locked/inside.txt", VFS_O_RDONLY, &file, file_data), KERR_PERM);
+    KT_CHECK_INT_EQ(vfs_stat("/locked/inside.txt", &stat), KERR_PERM);
+
+    /* The directory itself is not passed through: it is still described. */
+    KT_CHECK_INT_EQ(vfs_stat("/locked", &stat), 0);
+
+    /* Search for the owner: the child is reachable again. */
+    KT_CHECK_INT_EQ(vfs_chmod("/locked", 0700), 0);
+    KT_CHECK_INT_EQ(vfs_open("/locked/inside.txt", VFS_O_RDONLY, &file, file_data), 0);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    KT_CHECK_INT_EQ(vfs_stat("/locked/inside.txt", &stat), 0);
+
+    teardown();
+}
+
+/*
+ * The property: a directory is opened with VFS_O_DIRECTORY and read through
+ * the descriptor, whose position goes from one call to the next; the end of
+ * the directory is an empty answer, and a plain open of a directory is still
+ * EISDIR.
+ */
+static void test_directory_descriptor(void)
+{
+    struct vfs_file file;
+    /* The place for the data of the filesystem of an open file. */
+    static k_u8_t file_data[VFS_FILE_DATA_SIZE];
+    struct vfs_dirent entries[8];
+    k_size_t count = 0;
+    k_size_t i;
+    int saw_etc = 0;
+    char byte = 'x';
+    int rc;
+
+    ktest_begin("vfs: a directory is read through its descriptor");
+
+    setup();
+
+    KT_CHECK_INT_EQ(vfs_mkdir("/etc"), 0);
+
+    /* Without the flag a directory is not an open file. */
+    KT_CHECK_INT_EQ(vfs_open("/", VFS_O_RDONLY, &file, file_data), KERR_ISDIR);
+
+    rc = vfs_open("/", VFS_O_RDONLY | VFS_O_DIRECTORY, &file, file_data);
+    KT_CHECK_INT_EQ(rc, 0);
+    if (rc == 0) {
+        KT_CHECK_INT_EQ(vfs_readdir(&file, entries, 8, &count), 0);
+        KT_CHECK_INT_EQ(count, 1);
+        for (i = 0; i < count; i++) {
+            if (strcmp(entries[i].name, "etc") == 0 && entries[i].type == 2) {
+                saw_etc = 1;
+            }
+        }
+        KT_CHECK(saw_etc);
+
+        /* A directory is read through readdir, not as a stream of bytes. */
+        KT_CHECK_INT_EQ(vfs_read(&file, &byte, 1), KERR_ISDIR);
+        KT_CHECK_INT_EQ(vfs_write(&file, &byte, 1), KERR_ISDIR);
+
+        /* The position is in the descriptor: the end is empty. */
+        KT_CHECK_INT_EQ(vfs_readdir(&file, entries, 8, &count), 0);
+        KT_CHECK_INT_EQ(count, 0);
+        KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    }
+
+    /* A descriptor of a file has no entries to give. */
+    KT_CHECK_INT_EQ(vfs_open("/plain.txt", VFS_O_RDWR | VFS_O_CREAT, &file, file_data), 0);
+    KT_CHECK_INT_EQ(vfs_readdir(&file, entries, 8, &count), KERR_NOTDIR);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    teardown();
+}
+
 void test_vfs(void)
 {
     test_mount();
@@ -260,5 +354,7 @@ void test_vfs(void)
     test_mkdir_p();
     test_mount_points();
     test_attributes();
+    test_directory_search();
+    test_directory_descriptor();
     test_statfs();
 }

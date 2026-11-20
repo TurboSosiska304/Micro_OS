@@ -56,13 +56,20 @@
 #define KSYS_O_CREAT 0x0100
 #define KSYS_O_TRUNC 0x0200
 #define KSYS_O_APPEND 0x0400
+/*
+ * Open a directory as a directory, which is what readdir needs. The flag
+ * goes with O_RDONLY and with nothing else: a directory is read, never
+ * written through a descriptor of this system.
+ */
+#define KSYS_O_DIRECTORY 0x0800
 
 /* The bits of the access: read, write, or both. */
 #define KSYS_O_ACCMODE 0x0003
 
 /* Every bit an open may carry: a flag outside this set is not of the
  * contract, and the call is refused instead of being guessed at. */
-#define KSYS_O_ALLOWED (KSYS_O_ACCMODE | KSYS_O_CREAT | KSYS_O_TRUNC | KSYS_O_APPEND)
+#define KSYS_O_ALLOWED                                                                             \
+    (KSYS_O_ACCMODE | KSYS_O_CREAT | KSYS_O_TRUNC | KSYS_O_APPEND | KSYS_O_DIRECTORY)
 
 /* The flags of the waitpid. */
 #define KSYS_WNOHANG 1 /* do not wait, answer 0 when the child is not ready */

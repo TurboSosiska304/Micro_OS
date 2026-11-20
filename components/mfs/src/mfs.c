@@ -1578,7 +1578,33 @@ static int mfs_open_locked(const char *path, int flags, struct mfs_file *out)
     }
 
     if ((inode.flags & MFS_INODE_DIR) != 0) {
-        return MFS_EISDIR;
+        /*
+         * A directory is opened only as a directory, only to be read and
+         * only to have its entries walked: a descriptor that would write to
+         * it or cut it has no meaning here. A plain open of a directory is
+         * still EISDIR, the answer it has always been.
+         */
+        if ((flags & MFS_O_DIRECTORY) == 0) {
+            return MFS_EISDIR;
+        }
+
+        if ((flags & 0x3) != MFS_O_RDONLY ||
+            (flags & (MFS_O_CREAT | MFS_O_TRUNC | MFS_O_APPEND)) != 0) {
+            return MFS_EINVAL;
+        }
+
+        memset(out, 0, sizeof(*out));
+        out->inode = entry.inode;
+        out->first_block = inode.first_block;
+        out->size = inode.size;
+        out->offset = 0;
+        out->flags = flags;
+
+        return MFS_OK;
+    }
+
+    if ((flags & MFS_O_DIRECTORY) != 0) {
+        return MFS_ENOTDIR;
     }
 
     if ((flags & MFS_O_TRUNC) != 0 && (flags & (MFS_O_WRONLY | MFS_O_RDWR)) != 0) {
@@ -2073,6 +2099,87 @@ static int mfs_list_locked(const char *path, struct mfs_dirent *out, k_size_t ma
 }
 
 /*
+ * The next entries of an open directory. The directory is read whole into
+ * the buffer of the filesystem and the position of the descriptor is a byte
+ * offset into its serialized entries: a call continues where the previous
+ * one stopped, and a directory that grew or shrank between the calls is
+ * seen as it is at the moment of the call, not as it was at the open.
+ */
+static int mfs_readdir_locked(struct mfs_file *file, struct mfs_dirent *out, k_size_t max,
+                              k_size_t *count)
+{
+    struct mfs_inode inode;
+    struct dir_buffer *dir = &g_dir_buffer;
+    k_size_t offset;
+    k_size_t found = 0;
+    int rc;
+
+    if (file == NULL || out == NULL || count == NULL) {
+        return MFS_EINVAL;
+    }
+
+    *count = 0;
+
+    if (!g.mounted) {
+        return MFS_EINVAL;
+    }
+
+    rc = inode_read(file->inode, &inode);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    if ((inode.flags & MFS_INODE_DIR) == 0) {
+        return MFS_ENOTDIR;
+    }
+
+    rc = dir_read(&inode, dir);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    offset = file->offset;
+    while (found < max && offset + sizeof(struct mfs_dirent_header) <= dir->size) {
+        struct mfs_dirent entry;
+        struct mfs_inode child;
+        k_size_t name_len;
+
+        memset(&entry, 0, sizeof(entry));
+        memcpy(&entry.inode, dir->data + offset, sizeof(entry.inode));
+        memcpy(&entry.name_len, dir->data + offset + 4, sizeof(entry.name_len));
+        entry.type = dir->data[offset + 6];
+        name_len = entry.name_len;
+
+        if (name_len > MFS_NAME_MAX ||
+            offset + sizeof(struct mfs_dirent_header) + name_len > dir->size) {
+            return MFS_EIO;
+        }
+
+        memcpy(entry.name, dir->data + offset + sizeof(struct mfs_dirent_header), name_len);
+        entry.name[name_len] = '\0';
+
+        /*
+         * The entry of a directory does not repeat the numbers of its
+         * object; a listing reports them, so the record of the child is
+         * read here. A broken pointer leaves the zeros of "unknown".
+         */
+        if (inode_read(entry.inode, &child) == MFS_OK) {
+            entry.size = child.size;
+            entry.mode = mfs_inode_mode(&child);
+            entry.owner = mfs_inode_owner(&child);
+        }
+
+        out[found++] = entry;
+        offset += sizeof(struct mfs_dirent_header) + name_len;
+    }
+
+    file->offset = (k_u32_t)offset;
+    *count = found;
+
+    return MFS_OK;
+}
+
+/*
  * The public functions of the filesystem hold the lock of the volume
  * for the whole of their work: the volume is one piece of state and
  * two tasks that touch it together corrupt it.
@@ -2285,6 +2392,17 @@ int mfs_list(const char *path, struct mfs_dirent *out, k_size_t max)
 
     mfs_lock();
     rc = mfs_list_locked(path, out, max);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_readdir(struct mfs_file *file, struct mfs_dirent *out, k_size_t max, k_size_t *count)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_readdir_locked(file, out, max, count);
     mfs_unlock();
 
     return rc;

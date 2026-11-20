@@ -108,6 +108,13 @@ The flags of `open` are the same as the ones of the VFS:
 | `KSYS_O_CREAT` | create the file if it is not there |
 | `KSYS_O_TRUNC` | cut the file to zero |
 | `KSYS_O_APPEND` | write at the end |
+| `KSYS_O_DIRECTORY` | open a directory, for `readdir` |
+
+`KSYS_O_DIRECTORY` (`0x0800`) goes with `KSYS_O_RDONLY` and with no other
+flag: a directory of this system is read, never written. The number is not the
+one of Linux, whose flag does not fit the small set of this contract. The
+descriptor of a directory is opened by `open` and read by `readdir`, and the
+plain `open` of a directory without the flag is still `EISDIR`.
 
 The `whence` of `lseek`: `KSYS_SEEK_SET` (from the beginning), `KSYS_SEEK_CUR`
 (from the current position), `KSYS_SEEK_END` (from the end).
@@ -124,7 +131,8 @@ filesystem of the tree hangs below `/` - and it ends inside `KSYS_PATH_MAX`
 (`VFS_PATH_MAX - 1`, 127 characters). The search for the terminator stops at
 the edge of that window, so the kernel never walks past the memory it is
 willing to read. A path that is not a path is `EINVAL`; one that does not end
-in the window is `E2BIG`, because the contract has no `ENAMETOOLONG`.
+in the window is `ENAMETOOLONG` (`KERR_NAMETOOLONG`, the number 36 of POSIX).
+`E2BIG` belongs to a buffer that is too large, not to a name that is too long.
 
 **A buffer** (`buffer_check`) is NULL only with a zero length, and no call
 touches more than `KSYS_MAX_IO` (65536 bytes) in one exchange. The number is
@@ -151,7 +159,11 @@ instead of a question to a filesystem that has nowhere to put its answer.
 
 **`readdir`** takes whole entries: a count that is not a multiple of
 `struct vfs_dirent` would let the last entry land past the memory of the
-caller, so it is `EINVAL`.
+caller, so it is `EINVAL`. The entries come through the descriptor of a
+directory that was opened with `KSYS_O_DIRECTORY`, and the position of the
+next entry lives in that descriptor; the end of the directory is an empty
+answer and not an error. A descriptor that is not a directory is `ENOTDIR`.
+The shell still lists a path with `vfs_list`, which needs no descriptor.
 
 ## The mode and the owner of an object
 
@@ -186,8 +198,18 @@ owner outside the fifteen bits of a uid (`EINVAL`): a number that does not fit
 would spill into the type of the object. `chmod 000` is not expressible
 either: a zero in the record means "the record predates the modes", so the
 filesystem refuses it instead of storing a number it would read back as
-`0644`. `stat` checks nothing and reports the two numbers to whoever asks;
-the mode of a directory does not decide the search of its children yet.
+`0644`. `stat` checks nothing and reports the two numbers to whoever asks.
+
+The **`x` bit of every directory of a path** is checked before the object at
+the end is looked at. The VFS walks the components of the path, calls `stat`
+on each directory on the way and refuses the walk with `EPERM` when the caller
+may not search through it: a directory of the mode `0600` keeps its children
+out of reach for `open`, `stat`, `execve` and every other call that resolves a
+path, and one of `0700` lets them through. The directory that is named at the
+end is not searched through - `stat` of a `0600` directory itself still works,
+and opening it as a directory needs the read bit, not the search bit. A
+zeroed mode is still "this filesystem keeps no modes", so the roots of
+`procfs` and `devfs` are walked the way they always were.
 
 ## The programs
 
@@ -234,7 +256,12 @@ task (`task_self()->is_child`) - in Linux the child knows it by the zero that
 `fork()` returns, here the child starts the program from the beginning.
 
 `waitpid()` waits for a child, the status is the code the child finished
-with. The number 0 or -1 means "any child".
+with. The number 0 or -1 means "any child". A call with no child to wait for
+is `ECHILD` (`KERR_CHILD`, the number 10 of POSIX), whether it was ready to
+wait or not, and the same answer ends the waiting once the internal limit of
+five seconds passes without a finished child. A number that names no child of
+the caller is `ECHILD` too; a pid or a flag that is not of the contract is
+`EINVAL` before that.
 
 ## The descriptors
 
@@ -249,6 +276,11 @@ written to, or writing one that was opened to be read from, gives
 `KERR_BADF`. The mode of the object is a second, earlier check (see "The mode
 and the owner of an object"): an open that the mode does not allow never
 becomes a descriptor at all, and the answer is `EPERM`.
+
+A descriptor of a directory is opened with `KSYS_O_DIRECTORY` and read with
+`readdir`; it has no other use. It is opened for reading only, so a write
+never becomes a descriptor of a directory at all, and `read` of it answers
+`EISDIR`. `readdir` of any other descriptor answers `ENOTDIR`.
 
 ## The wrappers
 
@@ -292,7 +324,13 @@ program breaks it into pieces.
 * **The mode.** A `chmod` is seen by the next `stat`, the triad of the owner
   decides for uid 0 and the triad of the others for any other owner, there is
   no bypass for the only user of the system, and a mode that the record cannot
-  hold is refused instead of stored.
+  hold is refused instead of stored. A directory whose mode has no search bit
+  keeps its children out of reach, and one with the bit lets them through.
+* **The directory.** A directory is opened with `O_DIRECTORY`, its entries
+  come through `readdir` one call after another, the end of it is an empty
+  answer, and a descriptor of a file is `ENOTDIR` to the same call.
+* **The edge.** A path that does not end in the window is `ENAMETOOLONG`, a
+  buffer above the limit is `E2BIG`, and a wait without a child is `ECHILD`.
 * **The program.** A machine without a window of programs answers `ENOSYS` for
   an image of the format of the system, and every refusal before that answer -
   `ENOENT`, `EISDIR`, `EPERM`, `EINVAL` - is the answer of its own reason. A

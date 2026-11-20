@@ -293,15 +293,16 @@ static void test_wait_validation(void)
             KERR_INVAL);
     }
 
-    /* "Any child" still means any child, and there is nothing to report. */
+    /* "Any child" still means any child. A task without a child is told so,
+     * and a child that has not finished yet leaves the call with 0. */
     rc = ksys_waitpid(-1, &status, KSYS_WNOHANG);
-    KT_CHECK(rc >= 0);
+    KT_CHECK(rc >= 0 || rc == KERR_CHILD);
     if (rc == 0) {
         KT_CHECK_INT_EQ(status, -1);
     }
 
     rc = ksys_waitpid(0, &status, KSYS_WNOHANG);
-    KT_CHECK(rc >= 0);
+    KT_CHECK(rc >= 0 || rc == KERR_CHILD);
 
     teardown();
 }
@@ -319,10 +320,10 @@ static void test_wait_errors(void)
     setup();
 
     /*
-     * The call that does not wait answers at once: there is no child that
-     * could finish.
+     * The call that does not wait answers at once: there is no child with
+     * that number, so there is nothing that could finish.
      */
-    KT_CHECK_INT_EQ(ksys_waitpid(4242, &status, KSYS_WNOHANG), 0);
+    KT_CHECK_INT_EQ(ksys_waitpid(4242, &status, KSYS_WNOHANG), KERR_CHILD);
 
     teardown();
 }

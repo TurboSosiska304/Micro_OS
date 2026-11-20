@@ -101,6 +101,11 @@ _Static_assert(MFS_MODE_BITS == 9 && MFS_OWNER_BITS == 15,
 #define MFS_O_CREAT 0x0100
 #define MFS_O_TRUNC 0x0200
 #define MFS_O_APPEND 0x0400
+/*
+ * The open of a directory for reading its entries. Without it mfs_open()
+ * answers MFS_EISDIR for a directory, the way it always did.
+ */
+#define MFS_O_DIRECTORY 0x0800
 
 /* The header of the filesystem, it lives in the INFO section. */
 struct mfs_superblock {
@@ -269,6 +274,13 @@ int mfs_check(struct mfs_check_report *report);
 int mfs_mkdir(const char *path);
 int mfs_create(const char *path);
 int mfs_open(const char *path, int flags, struct mfs_file *out);
+/*
+ * The next entries of a directory that was opened with MFS_O_DIRECTORY. The
+ * position is the one of the open file: the call starts where the previous
+ * one stopped, and the end of the directory is an empty answer. Anything
+ * that is not a directory answers MFS_ENOTDIR.
+ */
+int mfs_readdir(struct mfs_file *file, struct mfs_dirent *out, k_size_t max, k_size_t *count);
 int mfs_read(struct mfs_file *file, void *buf, k_size_t size);
 int mfs_write(struct mfs_file *file, const void *buf, k_size_t size);
 int mfs_close(struct mfs_file *file);

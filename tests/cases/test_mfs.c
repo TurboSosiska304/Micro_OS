@@ -1061,6 +1061,61 @@ static void test_vfs_mount(void)
     mfs_ram_free(&volume);
 }
 
+/*
+ * The property: a directory is opened for reading and its entries come
+ * through the descriptor one call at a time. Without the flag a directory is
+ * still not a file, and a file opened with the flag is not a directory.
+ */
+static void test_directory_descriptor(void)
+{
+    struct mfs_dirent entries[8];
+    struct mfs_file file;
+    k_size_t count = 0;
+
+    ktest_begin("mfs: a directory is read through its descriptor");
+
+    KT_CHECK_INT_EQ(setup(), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+
+    KT_CHECK_INT_EQ(mfs_mkdir("/etc"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_create("/etc/config.txt"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_create("/readme"), MFS_OK);
+
+    /* A plain open of a directory is still EISDIR. */
+    KT_CHECK_INT_EQ(mfs_open("/", MFS_O_RDONLY, &file), MFS_EISDIR);
+
+    /* The flag of a directory goes with the read access only. */
+    KT_CHECK_INT_EQ(mfs_open("/", MFS_O_RDONLY | MFS_O_DIRECTORY | MFS_O_WRONLY, &file),
+                    MFS_EINVAL);
+    KT_CHECK_INT_EQ(mfs_open("/readme", MFS_O_RDONLY | MFS_O_DIRECTORY, &file), MFS_ENOTDIR);
+
+    KT_CHECK_INT_EQ(mfs_open("/", MFS_O_RDONLY | MFS_O_DIRECTORY, &file), MFS_OK);
+
+    /* One entry at a time: the position is the one of the open file. */
+    KT_CHECK_INT_EQ(mfs_readdir(&file, entries, 1, &count), MFS_OK);
+    KT_CHECK_INT_EQ(count, 1);
+    KT_CHECK_STR_EQ(entries[0].name, "etc");
+    KT_CHECK_INT_EQ(entries[0].type & MFS_INODE_DIR, MFS_INODE_DIR);
+
+    KT_CHECK_INT_EQ(mfs_readdir(&file, entries, 8, &count), MFS_OK);
+    KT_CHECK_INT_EQ(count, 1);
+    KT_CHECK_STR_EQ(entries[0].name, "readme");
+    KT_CHECK_INT_EQ(entries[0].type & MFS_INODE_DIR, 0);
+
+    /* The end of the directory is an empty answer, not an error. */
+    KT_CHECK_INT_EQ(mfs_readdir(&file, entries, 8, &count), MFS_OK);
+    KT_CHECK_INT_EQ(count, 0);
+
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+
+    /* A file has no entries to give, however it was opened. */
+    KT_CHECK_INT_EQ(mfs_open("/readme", MFS_O_RDONLY, &file), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_readdir(&file, entries, 8, &count), MFS_ENOTDIR);
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+
+    teardown();
+}
+
 void test_mfs(void)
 {
     test_format();
@@ -1080,4 +1135,5 @@ void test_mfs(void)
     test_volume_without_modes();
     test_persistence();
     test_vfs_mount();
+    test_directory_descriptor();
 }
