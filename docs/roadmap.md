@@ -105,10 +105,10 @@ written when the project was an operating system for one board; the numbers
 
 ## K7 - Quality (in progress)
 
-* [x] The races of the host port under TSan in the cloud CI
-      (`.github/workflows/ci.yml` runs `make test-tsan`; `make ci` stays the
-      local half of the list)
-* [ ] A fuzz of the syscall ABI and of the parsers of the filesystem
+* [x] The races of the host port under TSan, in the cloud CI and in `make ci`
+* [ ] A fuzz of the syscall ABI and of the parsers of the filesystem: MOX1
+      and the edge of `exec` have a deterministic seed, the records of
+      MicroFS have none
 * [x] The budget of the image checked at every release (`make integrity`)
 * [ ] The budget of the internal SRAM checked as well (the stacks, the
       drivers, the kernel)

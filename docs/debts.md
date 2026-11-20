@@ -83,7 +83,7 @@ K5.
 
 | Debt | Where | Status | What it needs |
 |---|---|---|---|
-| No fuzz of the syscall ABI and of the parsers of the filesystem. | `tests/`, `components/kernel/src/ksys.c`, `components/mfs` | open | A harness (libFuzzer or AFL) and a corpus seeded from `tests/corpus/vectors.txt`; the parser of `exec.c` first. |
+| No fuzz of the syscall ABI and of the parsers of the filesystem: MOX1 and the edge of `exec` have a deterministic seed (`tests/cases/test_fuzz.c`), the records of MicroFS have none. | `tests/`, `components/kernel/src/ksys.c`, `components/mfs` | open | A deterministic harness for the records of the filesystem, seeded from a formatted volume and the corpus. |
 | `make ci` is not the whole list of the cloud: it runs build, test, ASan, smoke and integrity, not TSan, valgrind or `x86-smoke`. | `Makefile`, `.github/workflows/ci.yml` | open | Make the local target the same list, or say in `CONTRIBUTING.md` why the two differ. |
 | `tools/device-test.sh` is outside CI: no runner has the board. | `.github/workflows/ci.yml`, `tools/device-test.sh` | open | A self-hosted runner with the board, or a documented manual gate for a release. |
 | The budget of the image is checked; the budget of the SRAM is not. | `tools/integrity_check.py` (`check_budget`), `docs/roadmap.md` K7 | open | A static or a boot-time check of the internal RAM (the stacks, the drivers, the kernel) next to the image budget. |
