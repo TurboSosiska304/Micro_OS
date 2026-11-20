@@ -287,6 +287,30 @@ static void test_mkdir_survives_restart(void)
         KT_CHECK(inode.size > 0);
     }
 
+    /*
+     * The property: a directory that is already there takes no block when
+     * it is made again. The map of the free blocks reaches the device
+     * before the record that points at the block of a new directory, so a
+     * block that is taken and given back only in the memory would stay
+     * taken on the device, and a power cut would lose it for good.
+     */
+    {
+        struct mfs_check_report report;
+
+        KT_CHECK_INT_EQ(mfs_mkdir("/logs"), MFS_EEXIST);
+
+        /*
+         * A power cut: the state of the memory is gone and the mount reads
+         * the map of the free blocks from the device again.
+         */
+        KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+
+        memset(&report, 0, sizeof(report));
+        KT_CHECK_INT_EQ(mfs_check(&report), MFS_OK);
+        KT_CHECK_INT_EQ(report.errors, 0);
+        KT_CHECK_INT_EQ(report.first[0], '\0');
+    }
+
     teardown();
 }
 

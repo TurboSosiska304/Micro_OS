@@ -634,6 +634,8 @@ static int dir_write(const struct mfs_inode *inode, const struct dir_buffer *buf
                 }
                 rc = chain_set_next(block, new_block);
                 if (rc != MFS_OK) {
+                    /* The block is not in any chain: the map takes it back. */
+                    block_release(new_block);
                     return rc;
                 }
                 block = new_block;
@@ -1369,6 +1371,53 @@ static int add_to_parent(const char *dir_path, const char *name, k_u32_t inode, 
     return inode_write(dir_inode, &parent);
 }
 
+/*
+ * Whether the name is free in its parent directory, asked before anything
+ * is taken for the object.
+ *
+ * A new directory takes a block of the data, and the map of the free blocks
+ * reaches the device before the record that points at the block does. A
+ * block that is taken and then given back because the name was taken after
+ * all would be free in the memory and taken on the device: an object that
+ * cannot be made must not take a block at all, or a power cut before the
+ * next sync loses the block for good. This is how the boot of the board
+ * leaked a block on every restart - it makes /log and /etc/init.d again.
+ */
+static int parent_name_free(const char *dir_path, const char *name)
+{
+    struct mfs_inode parent;
+    struct dir_buffer *dir = &g_dir_buffer;
+    int rc;
+
+    rc = path_lookup(dir_path, &parent, NULL, NULL);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    if ((parent.flags & MFS_INODE_DIR) == 0) {
+        return MFS_ENOTDIR;
+    }
+
+    rc = dir_read(&parent, dir);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    return (dir_find(dir, name, NULL) == MFS_OK) ? MFS_EEXIST : MFS_OK;
+}
+
+/*
+ * A directory that could not be made gives its block back to the map, and
+ * the map goes to the device at once: the block was taken on the device
+ * before the record of the directory was written, so a release that stays
+ * in the memory would be lost by a power cut.
+ */
+static void mkdir_give_back(k_u32_t block)
+{
+    block_release(block);
+    (void)mfs_sync();
+}
+
 static int mfs_mkdir_locked(const char *path)
 {
     char dir_path[MFS_PATH_MAX];
@@ -1383,6 +1432,12 @@ static int mfs_mkdir_locked(const char *path)
     }
 
     rc = path_parent(path, dir_path, sizeof(dir_path), name, sizeof(name));
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    /* The name is checked before the inode and the block are taken. */
+    rc = parent_name_free(dir_path, name);
     if (rc != MFS_OK) {
         return rc;
     }
@@ -1420,7 +1475,7 @@ static int mfs_mkdir_locked(const char *path)
 
         rc = dev_write(block, empty);
         if (rc != MFS_OK) {
-            block_release(block);
+            mkdir_give_back(block);
             return rc;
         }
     }
@@ -1433,7 +1488,7 @@ static int mfs_mkdir_locked(const char *path)
 
     rc = inode_write(index, &inode);
     if (rc != MFS_OK) {
-        block_release(block);
+        mkdir_give_back(block);
         return rc;
     }
 
@@ -1441,7 +1496,7 @@ static int mfs_mkdir_locked(const char *path)
     if (rc != MFS_OK) {
         memset(&inode, 0, sizeof(inode));
         inode_write(index, &inode);
-        block_release(block);
+        mkdir_give_back(block);
         return rc;
     }
 
@@ -1462,6 +1517,12 @@ static int mfs_create_locked(const char *path)
     }
 
     rc = path_parent(path, dir_path, sizeof(dir_path), name, sizeof(name));
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    /* The name is checked before the record of the object is taken. */
+    rc = parent_name_free(dir_path, name);
     if (rc != MFS_OK) {
         return rc;
     }
