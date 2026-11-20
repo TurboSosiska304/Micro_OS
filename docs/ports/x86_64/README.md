@@ -31,14 +31,32 @@ make x86-vga-smoke    # check the screen and the keyboard without a display
 make x86-disk-smoke   # two boots on one image: a file written in the first is read in the second
 ```
 
-`make x86-run` opens the window of QEMU with `-display gtk`. A QEMU built
-with SDL and without GTK takes `make x86-run X86_DISPLAY=sdl`; one built
-without a display backend at all cannot open a window, and
-`make x86-run-serial` is the machine for it. The serial port of the window
-run is `-serial null`: the console a person reads is the screen, the bytes of
-COM1 are the same ones, and there is nothing to attach them to. The port
-still takes the keyboard and the UART as two halves of one console, so a
-machine can have both.
+`make x86-run` opens the window of QEMU with `-display gtk`. The display
+backend is a package of its own in some distributions; the target asks QEMU
+for its list of backends first and prints the command to run when the one
+asked for is not there.
+
+| distribution | the package of the GTK window |
+|---|---|
+| Arch, Manjaro | `sudo pacman -S qemu-ui-gtk` |
+| Debian, Ubuntu | `sudo apt install qemu-system-gui` |
+| Fedora | `sudo dnf install qemu-ui-gtk` |
+
+A QEMU built with SDL and without GTK takes `make x86-run X86_DISPLAY=sdl`;
+one built without a display backend at all cannot open a window, and
+`make x86-run-serial` is the machine for it. `X86_DISPLAY=none` runs the
+image without a window and with a serial port that goes nowhere, so with no
+console at all: it says that the machine boots and nothing more.
+
+The serial port of the window run is `-serial null` and not `-serial none`:
+`null` is a backend that takes the bytes and drops them, so the UART of the
+machine is there and behaves; `none` removes the device, and a read of the
+status register of a port nobody answers returns `0xFF`, whose bit 0 says "a
+byte is ready" for ever. The console polls that register, so it would take
+the answer of a missing chip for a key and type a line nobody wrote - the
+window fills with "line too long" while a person does nothing. The console a
+person reads is the screen, and the bytes of COM1 are the same ones; the port
+still takes the keyboard and the UART as two halves of one console.
 
 The two smoke tests check different consoles of the same machine.
 `tools/x86_smoke.py` types into COM1 and reads the transcript of the serial
@@ -47,7 +65,9 @@ memory with the monitor of QEMU (`pmemsave`), takes a screenshot
 (`screendump`) and types with `sendkey`, so it proves the screen and IRQ1
 without a display server. It is a target of its own and not a part of
 `make ci`, because the monitor of QEMU is a tool a build farm does not have
-to have.
+to have. `python3 tools/x86_vga_smoke.py --display gtk` runs the same checks
+against the real window instead of its memory; the screenshot is then the
+picture of the window, which is how a person watches the keys arrive.
 
 The image is two files: `build-x86/loader32.elf` (the loader) and
 `build-x86/microos64.bin` (the kernel, a flat image). The heap of the kernel

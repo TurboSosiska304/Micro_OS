@@ -76,6 +76,21 @@ static k_u32_t g_col;
 
 static k_u8_t g_escape = VGA_TEXT;
 
+/*
+ * The text of the kernel is UTF-8 and a cell of the screen is one byte of the
+ * code page the firmware installed, so a character of more than one byte has
+ * to be translated or dropped. The one the kernel writes is the em dash of
+ * the banner ("board: ... — ..."), and the ASCII form of it is the hyphen the
+ * documentation uses; a byte above 0x7F that belongs to any other character
+ * is dropped, because a byte of a UTF-8 sequence is not a letter of the code
+ * page and shows as a picture nobody wrote.
+ */
+#define VGA_UTF8_NONE 0u
+#define VGA_UTF8_E2 1u
+#define VGA_UTF8_E2_80 2u
+
+static k_u8_t g_utf8 = VGA_UTF8_NONE;
+
 static void cursor_update(void)
 {
     k_u16_t position = (k_u16_t)(g_row * VGA_COLUMNS + g_col);
@@ -153,6 +168,7 @@ void port_x86_64_vga_init(void)
     g_row = 0;
     g_col = 0;
     g_escape = VGA_TEXT;
+    g_utf8 = VGA_UTF8_NONE;
 
     port_outb(CRTC_INDEX, CRTC_CURSOR_START);
     port_outb(CRTC_DATA, CURSOR_FIRST_LINE);
@@ -202,6 +218,27 @@ void port_x86_64_vga_write(const char *data, k_size_t len)
             continue;
         }
 
+        if (g_utf8 == VGA_UTF8_E2) {
+            g_utf8 = ((k_u8_t)character == 0x80u) ? VGA_UTF8_E2_80 : VGA_UTF8_NONE;
+            continue;
+        }
+
+        if (g_utf8 == VGA_UTF8_E2_80) {
+            /* E2 80 94 is the em dash; the other characters of the family
+             * (the quotes, the ellipsis) are not ones the kernel writes, and
+             * the screen has no glyph for them. */
+            if ((k_u8_t)character == 0x94u) {
+                put_char('-');
+            }
+            g_utf8 = VGA_UTF8_NONE;
+            continue;
+        }
+
+        if ((k_u8_t)character == 0xE2u) {
+            g_utf8 = VGA_UTF8_E2;
+            continue;
+        }
+
         switch (character) {
         case '\n':
             next_line();
@@ -225,8 +262,8 @@ void port_x86_64_vga_write(const char *data, k_size_t len)
             backspace();
             break;
         default:
-            if ((k_u8_t)character < 0x20u || (k_u8_t)character == 0x7Fu) {
-                break; /* a control character the window has no picture for */
+            if ((k_u8_t)character < 0x20u || (k_u8_t)character >= 0x7Fu) {
+                break; /* a control character or a byte the font has no letter for */
             }
             put_char(character);
             break;

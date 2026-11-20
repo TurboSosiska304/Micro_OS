@@ -23,12 +23,17 @@ graphics of the host:
      answer "the volume is consistent" is in the video memory, which proves
      the interrupt, the scancode map and the editing keys at once.
 
-    tools/x86_vga_smoke.py [--timeout SECONDS] [--verbose]
+    tools/x86_vga_smoke.py [--timeout SECONDS] [--display none|gtk] [--verbose]
 
 The exit status is 0 when both held and 1 otherwise; 2 when the image or QEMU
 is missing. The test needs no X and no window, so a machine of a build farm
 can run it; it is kept out of `make ci` because the monitor of QEMU is a tool
 of its own and the serial smoke test already guards the boot.
+
+With `--display gtk` the same cards are checked against the real window of
+QEMU instead of its memory: the screendump is then the picture of the window
+of the machine, drawn by the display backend, and a person can watch the
+keys arrive as they are typed.
 """
 
 from __future__ import annotations
@@ -70,7 +75,7 @@ class Machine:
     to be parsed out of the console of QEMU itself.
     """
 
-    def __init__(self, loader: str, kernel: str, workdir: str) -> None:
+    def __init__(self, loader: str, kernel: str, workdir: str, display: str = "none") -> None:
         self.serial_path = os.path.join(workdir, "serial.sock")
         self.monitor_path = os.path.join(workdir, "monitor.sock")
         self.transcript = b""
@@ -84,11 +89,12 @@ class Machine:
             "-m",
             "256",
             "-no-reboot",
-            # The window is the subject of the test and not its instrument:
-            # none of the displays of QEMU is opened, the video memory is
-            # still there and the monitor reads it.
+            # The window is the subject of the test and not its instrument: by
+            # default no display of QEMU is opened, the video memory is still
+            # there and the monitor reads it. `--display gtk` opens the real
+            # window, and the same cards below are then the picture of it.
             "-display",
-            "none",
+            display,
             "-serial",
             f"unix:{self.serial_path},server=on,wait=off",
             "-monitor",
@@ -291,14 +297,14 @@ class Machine:
             self.process.stdout.close()
 
 
-def run(loader: str, kernel: str, timeout: float, verbose: bool) -> list:
+def run(loader: str, kernel: str, timeout: float, verbose: bool, display: str) -> list:
     checks = []
 
     def expect(name: str, condition: bool, detail: str = "") -> None:
         checks.append((name, bool(condition), detail))
 
     with tempfile.TemporaryDirectory(prefix="microos-x86-vga-") as workdir:
-        machine = Machine(loader, kernel, workdir)
+        machine = Machine(loader, kernel, workdir, display)
 
         try:
             # --- the screen after the boot
@@ -393,6 +399,11 @@ def main(argv: list) -> int:
     parser = argparse.ArgumentParser(description="the VGA and keyboard test of the x86-64 port")
     parser.add_argument("--timeout", type=float, default=20.0, help="the seconds the machine gets")
     parser.add_argument("--verbose", action="store_true", help="print the screen of the machine")
+    parser.add_argument(
+        "--display",
+        default="none",
+        help="the display of QEMU: none (the default, no X needed) or gtk for the real window",
+    )
     args = parser.parse_args(argv)
 
     loader = os.path.join(BUILD, "loader32.elf")
@@ -404,7 +415,7 @@ def main(argv: list) -> int:
             return 2
 
     try:
-        checks = run(loader, kernel, args.timeout, args.verbose)
+        checks = run(loader, kernel, args.timeout, args.verbose, args.display)
     except FileNotFoundError:
         print("qemu-system-x86_64 is not installed", file=sys.stderr)
         return 2
