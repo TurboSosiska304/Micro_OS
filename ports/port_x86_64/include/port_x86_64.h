@@ -138,6 +138,19 @@ void port_x86_64_irq_tick(void);
 void port_x86_64_blockdev_init(void);
 
 /*
+ * Own the disk of the port: the drive on the primary ATA channel, read and
+ * written by PIO (ata.c), and its partitions (ADR 0008). A machine without a
+ * drive keeps only the volume in its memory. Called by port_x86_64_init().
+ */
+void port_x86_64_disk_init(void);
+
+/*
+ * The volume the filesystem of the boot is mounted on: the first partition of
+ * the disk, or "ram0" when there is no disk.
+ */
+const char *port_x86_64_root_device(void);
+
+/*
  * The hook of the task substrate, called on every tick. Weak here: a build
  * without a scheduler keeps its clock, and the file of the tasks of the port
  * overrides it when the scheduler exists.

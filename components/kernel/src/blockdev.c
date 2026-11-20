@@ -37,6 +37,38 @@ int k_blockdev_register(const struct k_blockdev *dev)
     return 0;
 }
 
+int k_blockdev_unregister(const struct k_blockdev *dev)
+{
+    k_size_t i;
+    int rc = -1;
+
+    if (dev == NULL) {
+        return -1;
+    }
+
+    k_port_enter_critical();
+
+    for (i = 0; i < g_count; i++) {
+        if (g_devices[i] != dev) {
+            continue;
+        }
+
+        /* The table keeps its order: the devices after this one move down a
+         * place, so "the n-th device" still means what it meant. */
+        for (; i + 1 < g_count; i++) {
+            g_devices[i] = g_devices[i + 1];
+        }
+
+        g_devices[--g_count] = NULL;
+        rc = 0;
+        break;
+    }
+
+    k_port_exit_critical();
+
+    return rc;
+}
+
 k_size_t k_blockdev_count(void)
 {
     k_size_t count;

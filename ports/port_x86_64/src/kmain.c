@@ -40,6 +40,10 @@
 /* The body of the shell task, in src/shell.c. */
 void port_x86_64_shell_run(void);
 
+/* The volume the boot mounts: the first partition of the disk of QEMU when
+ * one was attached, "ram0" otherwise (src/ata.c, ADR 0008). */
+const char *port_x86_64_root_device(void);
+
 /* The nap of the tasks of the port that have nothing to do right now. */
 #define PORT_IDLE_MS 1000u
 
@@ -189,18 +193,20 @@ static void program_run(void)
 }
 
 /*
- * The filesystem of the machine: a volume of the memory of the port, mounted
- * at the root. The device is registered by port_x86_64_blockdev_init() before
- * the kernel boots, and a volume that was never formatted is formatted here
- * (mfs_vfs_mount does that; the RAM of a fresh machine reads as a blank
- * medium, see blockdev_ram.c).
+ * The filesystem of the machine: the disk of the port when QEMU was given one
+ * and the first partition of it (ADR 0008), otherwise a volume of the memory
+ * of the port mounted at the root. The device is registered by
+ * port_x86_64_init() before the kernel boots, and a volume that was never
+ * formatted is formatted here (mfs_vfs_mount does that; a fresh disk reads as
+ * a blank medium, see blockdev_ram.c and ata.c).
  */
 static void filesystem_bring_up(void)
 {
-    int rc = mfs_vfs_mount("/", "ram0");
+    const char *device = port_x86_64_root_device();
+    int rc = mfs_vfs_mount("/", device);
 
     if (rc != 0) {
-        kerror("x86-64: cannot mount ram0 at / (%s), there is no /bin", mfs_strerror(rc));
+        kerror("x86-64: cannot mount %s at / (%s), there is no /bin", device, mfs_strerror(rc));
         return;
     }
 

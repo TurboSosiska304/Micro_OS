@@ -201,6 +201,26 @@ because a board has one store. The ESP32 answers with the NVS, the host with
 a file per key, and the configuration does not know the difference - which
 is why `config sync` can be tested without a board.
 
+### Disks and partitions
+
+A disk is a block device too, and a partition of it is one: the portable
+parser of `components/kernel/src/partition.c` reads the MBR or the GPT in the
+first sectors, holds every entry against the size of the disk and registers a
+child device with the name of the parent and `p` plus the number of the entry
+(`vd0p1`, `ata0p1`). A child adds the first sector of its partition to every
+request and refuses what runs past its end; the filesystem mounted on it does
+not know that a table exists.
+
+Three rules of the layer are worth remembering: the parser never writes to
+the medium (a broken table is a refusal, not a repair); a disk without a table
+is not a volume, there is no "the whole disk is the filesystem" special case;
+and the drivers live in the ports (ATA PIO on x86-64 today, SDHCI and virtio
+planned) while the tables live in the kernel, because a table is a property of
+the medium and not of the controller. ADR 0008 is the design, including what
+the first real disk is and what waits for the queue, the interrupt and a
+physical address contract.
+
+
 ## 6. Memory (phase 3)
 
 * `kmm_alloc`/`kmm_free` — our own allocator (bitmap or slab on top of the ESP-IDF

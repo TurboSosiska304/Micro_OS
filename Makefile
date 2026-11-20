@@ -23,7 +23,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan smoke integrity ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-run x86-run-serial x86-smoke x86-vga-smoke
+.PHONY: help all build test test-asan test-tsan smoke integrity ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-run x86-run-serial x86-smoke x86-vga-smoke x86-run-disk x86-run-disk-serial x86-disk-smoke
 
 help:
 	@echo "Micro OS — available targets:"
@@ -47,6 +47,9 @@ help:
 	@echo "  make x86-run-serial  boot it with the serial console (-nographic)"
 	@echo "  make x86-smoke  boot it and check what it says"
 	@echo "  make x86-vga-smoke   check the screen and the keyboard without a display"
+	@echo "  make x86-run-disk   boot the window with an 8 MB disk on the IDE channel"
+	@echo "  make x86-run-disk-serial  the same disk in a terminal (-nographic)"
+	@echo "  make x86-disk-smoke two boots on one disk image, a file survives both"
 	@echo "  make bundle     collect the firmware into dist/ for distribution"
 
 all: build
@@ -157,7 +160,7 @@ x86-run: x86-build
 		exit 1; }
 	qemu-system-x86_64 -kernel $(X86_BUILD)/loader32.elf \
 		-initrd $(X86_BUILD)/microos64.bin -m 256 -no-reboot \
-		-display $(X86_DISPLAY) -serial none
+		-display $(X86_DISPLAY) -serial null
 
 # The same machine with the console of the serial port and no window: the
 # way it was run before the VGA and the keyboard, kept for a terminal, a
@@ -174,6 +177,34 @@ x86-smoke: x86-build
 # screen and IRQ1. Not a part of `make ci`: the monitor is a tool of its own.
 x86-vga-smoke: x86-build
 	python3 tools/x86_vga_smoke.py
+
+# The disk of the port (ADR 0008): a raw image of 8 MB with the MBR of one
+# partition. The image is made once and then kept: a person boots the machine,
+# writes a file, boots it again and finds the file there, which is the whole
+# point of a disk. `make x86-disk-smoke` works on an image of its own and
+# removes it, so a run of the test never disturbs the disk of a person.
+X86_DISK_IMAGE := $(X86_BUILD)/disk.img
+
+$(X86_DISK_IMAGE):
+	python3 tools/x86_disk_smoke.py --mkimage $(X86_DISK_IMAGE)
+
+x86-run-disk: x86-build $(X86_DISK_IMAGE)
+	@qemu-system-x86_64 -display help 2>&1 | grep -qw "$(X86_DISPLAY)" || { \
+		echo "QEMU has no '$(X86_DISPLAY)' display: install qemu-ui-gtk" >&2; \
+		echo "(Arch: sudo pacman -S qemu-ui-gtk) or use make x86-run-disk-serial" >&2; \
+		exit 1; }
+	qemu-system-x86_64 -kernel $(X86_BUILD)/loader32.elf \
+		-initrd $(X86_BUILD)/microos64.bin -m 256 -no-reboot \
+		-display $(X86_DISPLAY) -serial null \
+		-drive file=$(X86_DISK_IMAGE),format=raw,if=ide,index=0,cache=writethrough
+
+x86-run-disk-serial: x86-build $(X86_DISK_IMAGE)
+	qemu-system-x86_64 -kernel $(X86_BUILD)/loader32.elf \
+		-initrd $(X86_BUILD)/microos64.bin -m 256 -nographic -no-reboot \
+		-drive file=$(X86_DISK_IMAGE),format=raw,if=ide,index=0,cache=writethrough
+
+x86-disk-smoke: x86-build
+	python3 tools/x86_disk_smoke.py
 
 bundle: idf-check
 	. $(IDF_EXPORT) && idf.py -D IDF_TARGET=$(IDF_TARGET) build && \

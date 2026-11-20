@@ -19,6 +19,7 @@ set(MICRO_OS_KERNEL_SRCS
     "src/log.c"
     "src/net.c"
     "src/panic.c"
+    "src/partition.c"
     "src/power.c"
     "src/render.c"
     "src/sched.c"

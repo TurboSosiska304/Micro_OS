@@ -17,8 +17,10 @@
 
 #include "kernel/types.h"
 
-/* The most devices one system can have at the same time. */
-#define K_BLOCKDEV_MAX 4
+/* The most devices one system can have at the same time: the flash or the
+ * disk of the port, its partitions, and the volumes of the tests and of the
+ * simulator. */
+#define K_BLOCKDEV_MAX 8
 
 struct k_blockdev;
 
@@ -55,6 +57,18 @@ struct k_blockdev {
  * Returns 0, -1 when the table is full or the device is not usable.
  */
 int k_blockdev_register(const struct k_blockdev *dev);
+
+/*
+ * Take a device out of the table. The caller guarantees that nobody is using
+ * it: the filesystem mounted on it is unmounted and no task holds a file of
+ * it open. Returns 0, -1 when the device is not in the table.
+ *
+ * It exists for the devices that come and go - the partitions of a disk that
+ * is scanned again, a card that is taken out - and for the tests, which
+ * register a device of their own and have to leave the table as they found
+ * it.
+ */
+int k_blockdev_unregister(const struct k_blockdev *dev);
 
 /* The devices of the system, in the order they were registered. */
 k_size_t k_blockdev_count(void);

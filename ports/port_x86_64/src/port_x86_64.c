@@ -1216,6 +1216,7 @@ void port_x86_64_init(k_u64_t multiboot_info)
     /* The volume of the port is registered before the kernel looks for one:
      * the filesystem mounts a device by name and the name has to be there. */
     port_x86_64_blockdev_init();
+    port_x86_64_disk_init();
 
     /* Last, because it is the point of no return: from here the timer fires
      * every millisecond and the kernel has to be able to take it. */

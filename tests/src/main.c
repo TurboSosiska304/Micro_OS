@@ -28,6 +28,7 @@ static void run_tests(void *arg)
     test_log();
     test_port();
     test_blockdev();
+    test_partition();
     test_render();
     test_task();
     test_sched();

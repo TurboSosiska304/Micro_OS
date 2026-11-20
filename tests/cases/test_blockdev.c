@@ -12,6 +12,8 @@
 #include <string.h>
 
 #include "kernel/blockdev.h"
+#include "kernel/errno.h"
+#include "kernel/partition.h"
 
 #define TEST_SECTORS 8
 #define TEST_SECTOR_SIZE 16
@@ -94,4 +96,339 @@ void test_blockdev(void)
 
     /* The bounds are the bounds of the device. */
     KT_CHECK_INT_EQ(s_device.ops->read(s_device.ctx, TEST_SECTORS, read_back, 1), -1);
+}
+
+/* --- the partitions of a disk -------------------------------------------- */
+
+/*
+ * A disk of 8 MiB in the memory of the test. It is larger than the other
+ * devices on purpose: the tables of the partitions are written in sectors
+ * of 512 bytes at the beginning of a medium, and a table is only worth
+ * reading if the numbers in it can be held against the size of the disk.
+ */
+#define PART_DISK_SECTORS 16384u
+#define PART_SECTOR_SIZE 512u
+#define PART_DISK_BYTES ((k_size_t)PART_DISK_SECTORS * PART_SECTOR_SIZE)
+
+#define PART_LBA_BYTES 512u
+#define PART_MBR_OFFSET 446u
+#define PART_MBR_ENTRY 16u
+#define PART_MBR_SIGNATURE 510u
+
+#define PART_GPT_HEADER 512u
+#define PART_GPT_ENTRIES 1024u
+#define PART_GPT_ENTRY_COUNT 128u
+#define PART_GPT_ENTRY_SIZE 128u
+
+static k_u8_t s_part_disk[PART_DISK_BYTES];
+
+static int part_read(void *ctx, k_u32_t sector, void *buf, k_size_t count)
+{
+    K_UNUSED(ctx);
+
+    if (sector >= PART_DISK_SECTORS || count > (k_size_t)PART_DISK_SECTORS - sector) {
+        return -1;
+    }
+
+    memcpy(buf, s_part_disk + (k_size_t)sector * PART_SECTOR_SIZE, count * PART_SECTOR_SIZE);
+
+    return 0;
+}
+
+static int part_write(void *ctx, k_u32_t sector, const void *buf, k_size_t count)
+{
+    K_UNUSED(ctx);
+
+    if (sector >= PART_DISK_SECTORS || count > (k_size_t)PART_DISK_SECTORS - sector) {
+        return -1;
+    }
+
+    memcpy(s_part_disk + (k_size_t)sector * PART_SECTOR_SIZE, buf, count * PART_SECTOR_SIZE);
+
+    return 0;
+}
+
+static const struct k_blockdev_ops s_part_ops = {
+    .read = part_read,
+    .write = part_write,
+    .erase = NULL,
+    .sync = NULL,
+};
+
+static struct k_blockdev s_part_device = {
+    .name = "pmbr0",
+    .sector_size = PART_SECTOR_SIZE,
+    .sectors = PART_DISK_SECTORS,
+    .ops = &s_part_ops,
+    .ctx = NULL,
+};
+
+static void put_le32(k_u8_t *out, k_u32_t value)
+{
+    out[0] = (k_u8_t)(value & 0xFFu);
+    out[1] = (k_u8_t)((value >> 8) & 0xFFu);
+    out[2] = (k_u8_t)((value >> 16) & 0xFFu);
+    out[3] = (k_u8_t)((value >> 24) & 0xFFu);
+}
+
+static void put_le64(k_u8_t *out, k_u64_t value)
+{
+    put_le32(out, (k_u32_t)value);
+    put_le32(out + 4, (k_u32_t)(value >> 32));
+}
+
+/* The blank medium of the test: what an image that was just made reads as. */
+static void part_disk_blank(void)
+{
+    memset(s_part_disk, 0xFF, sizeof(s_part_disk));
+}
+
+/*
+ * The table area of an MBR that a tool wrote: the four entries are zeroed
+ * where the disk says "empty" and the signature ends the sector. The blank
+ * medium of the test is all ones, and a table of ones is not what a
+ * formatter leaves behind.
+ */
+static void part_mbr_begin(void)
+{
+    memset(s_part_disk + PART_MBR_OFFSET, 0, 4u * PART_MBR_ENTRY);
+    s_part_disk[PART_MBR_SIGNATURE] = 0x55u;
+    s_part_disk[PART_MBR_SIGNATURE + 1u] = 0xAAu;
+}
+
+static void part_mbr_entry(k_size_t slot, k_u8_t type, k_u32_t first, k_u32_t sectors)
+{
+    k_u8_t *entry = s_part_disk + PART_MBR_OFFSET + slot * PART_MBR_ENTRY;
+
+    entry[4] = type;
+    put_le32(entry + 8, first);
+    put_le32(entry + 12, sectors);
+}
+
+/* The checksum of the GPT, written the way the parser reads it back. */
+static k_u32_t part_crc32(const void *data, k_size_t size)
+{
+    const k_u8_t *bytes = (const k_u8_t *)data;
+    k_u32_t crc = 0xFFFFFFFFu;
+    k_size_t i;
+    int bit;
+
+    for (i = 0; i < size; i++) {
+        crc ^= bytes[i];
+
+        for (bit = 0; bit < 8; bit++) {
+            crc = (crc & 1u) != 0u ? (crc >> 1) ^ 0xEDB88320u : crc >> 1;
+        }
+    }
+
+    return crc ^ 0xFFFFFFFFu;
+}
+
+/* A GPT of two partitions, with both checksums: a table a machine would
+ * write. The MBR in front of it only protects the table, as the standard
+ * says, and the parser has to prefer the GPT. */
+static void part_gpt_make(void)
+{
+    k_u8_t *header = s_part_disk + PART_GPT_HEADER;
+    k_u8_t *entry = s_part_disk + PART_GPT_ENTRIES;
+    const char magic[8] = {'E', 'F', 'I', ' ', 'P', 'A', 'R', 'T'};
+    k_size_t i;
+
+    part_disk_blank();
+
+    part_mbr_begin();
+    part_mbr_entry(0, 0xEEu, 1u, 0xFFFFFFFFu);
+
+    for (i = 0; i < sizeof(magic); i++) {
+        header[i] = (k_u8_t)magic[i];
+    }
+
+    put_le32(header + 8, 0x00010000u); /* the revision of the format */
+    put_le32(header + 12, 92u);        /* the size of the header */
+    put_le64(header + 24, 1u);         /* this header is the one of LBA 1 */
+    put_le64(header + 32, PART_DISK_SECTORS - 1u);
+    put_le64(header + 40, 34u); /* the first usable sector */
+    put_le64(header + 48, PART_DISK_SECTORS - 34u);
+    put_le64(header + 72, 2u); /* the array of the entries */
+    put_le32(header + 80, PART_GPT_ENTRY_COUNT);
+    put_le32(header + 84, PART_GPT_ENTRY_SIZE);
+
+    /* An unused entry is sixteen zero bytes, not sixteen ones: the array of
+     * a table a tool wrote is zeroed where it is empty. */
+    memset(s_part_disk + PART_GPT_ENTRIES, 0, PART_GPT_ENTRY_COUNT * PART_GPT_ENTRY_SIZE);
+
+    /* The first entry: sectors 2048 to 4095. */
+    entry[0] = 0x0Cu;
+    put_le64(entry + 32, 2048u);
+    put_le64(entry + 40, 4095u);
+
+    /* The second: 6144 to 8191. */
+    entry += PART_GPT_ENTRY_SIZE;
+    entry[0] = 0x0Cu;
+    put_le64(entry + 32, 6144u);
+    put_le64(entry + 40, 8191u);
+
+    put_le32(header + 88, part_crc32(s_part_disk + PART_GPT_ENTRIES,
+                                     PART_GPT_ENTRY_COUNT * PART_GPT_ENTRY_SIZE));
+
+    /* The CRC of the header is taken with its own field zero. */
+    put_le32(header + 16, 0u);
+    put_le32(header + 16, part_crc32(header, 92u));
+}
+
+void test_partition(void)
+{
+    const struct k_blockdev *child;
+    k_u8_t sector[PART_SECTOR_SIZE];
+    k_u32_t checksum;
+    k_size_t devices;
+
+    ktest_begin("partition");
+
+    s_part_device.sector_size = PART_SECTOR_SIZE;
+    s_part_device.sectors = PART_DISK_SECTORS;
+
+    /* --- a medium without a table is not a volume --------------------- */
+    part_disk_blank();
+    KT_CHECK_INT_EQ(partition_scan(&s_part_device), KERR_NOENT);
+    KT_CHECK(k_blockdev_find("pmbr0p1") == NULL);
+
+    /* --- the MBR: two primaries --------------------------------------- */
+    part_disk_blank();
+    part_mbr_begin();
+    part_mbr_entry(0, 0x83u, 2048u, 4096u);
+    part_mbr_entry(1, 0x0Cu, 8192u, 2048u);
+
+    KT_CHECK_INT_EQ(partition_scan(&s_part_device), 2);
+
+    child = k_blockdev_find("pmbr0p1");
+    KT_CHECK(child != NULL);
+    if (child != NULL) {
+        KT_CHECK_INT_EQ((int)child->sector_size, (int)PART_SECTOR_SIZE);
+        KT_CHECK_INT_EQ((int)child->sectors, 4096);
+        KT_CHECK_INT_EQ(child->name[6], '1');
+        KT_CHECK(child->ctx != NULL);
+    }
+
+    child = k_blockdev_find("pmbr0p2");
+    KT_CHECK(child != NULL);
+    if (child != NULL) {
+        KT_CHECK_INT_EQ((int)child->sectors, 2048);
+    }
+
+    /* The child reads the sector of the disk where the partition starts. */
+    s_part_disk[2048u * PART_LBA_BYTES + 7u] = 0x42u;
+    child = k_blockdev_find("pmbr0p1");
+    if (child != NULL) {
+        KT_CHECK_INT_EQ(child->ops->read(child->ctx, 0, sector, 1), 0);
+        KT_CHECK_INT_EQ(sector[7], 0x42);
+
+        /* ... and a write through it goes to the same place. */
+        memset(sector, 0x5A, sizeof(sector));
+        KT_CHECK_INT_EQ(child->ops->write(child->ctx, 1, sector, 1), 0);
+        KT_CHECK_INT_EQ(s_part_disk[2049u * PART_LBA_BYTES + 100u], 0x5A);
+
+        /* The end of the partition is the end of the device it shows. */
+        KT_CHECK_INT_EQ(child->ops->read(child->ctx, child->sectors, sector, 1), -1);
+        KT_CHECK_INT_EQ(child->ops->read(child->ctx, child->sectors - 1u, sector, 2), -1);
+        KT_CHECK_INT_EQ(child->ops->write(child->ctx, child->sectors, sector, 1), -1);
+    }
+
+    /* A scan of the same disk replaces its children, it does not add them. */
+    devices = k_blockdev_count();
+    KT_CHECK_INT_EQ(partition_scan(&s_part_device), 2);
+    KT_CHECK_INT_EQ((int)k_blockdev_count(), (int)devices);
+
+    /* --- a table that contradicts itself is refused ------------------- */
+    part_disk_blank();
+    part_mbr_begin();
+    part_mbr_entry(0, 0x83u, 16000u, 1024u); /* ends past the disk */
+    KT_CHECK_INT_EQ(partition_scan(&s_part_device), KERR_INVAL);
+
+    part_disk_blank();
+    part_mbr_begin();
+    part_mbr_entry(0, 0x83u, 2048u, 4096u);
+    part_mbr_entry(1, 0x83u, 4096u, 1024u); /* the same sectors twice */
+    KT_CHECK_INT_EQ(partition_scan(&s_part_device), KERR_INVAL);
+
+    part_disk_blank();
+    part_mbr_begin();
+    part_mbr_entry(0, 0x83u, 0u, 1024u); /* LBA 0 is the table itself */
+    KT_CHECK_INT_EQ(partition_scan(&s_part_device), KERR_INVAL);
+
+    /* An MBR without its signature is not a table at all. */
+    part_disk_blank();
+    part_mbr_begin();
+    part_mbr_entry(0, 0x83u, 2048u, 4096u);
+    s_part_disk[PART_MBR_SIGNATURE] = 0x00u; /* no signature, no table */
+    KT_CHECK_INT_EQ(partition_scan(&s_part_device), KERR_NOENT);
+
+    /* --- a disk of 1 KB sectors and a partition that misses a sector -- */
+    s_part_device.sector_size = 1024u;
+    s_part_device.sectors = PART_DISK_SECTORS / 2u;
+
+    part_disk_blank();
+    part_mbr_begin();
+    part_mbr_entry(0, 0x83u, 2049u, 4095u); /* starts in the middle of one */
+    KT_CHECK_INT_EQ(partition_scan(&s_part_device), KERR_INVAL);
+
+    part_disk_blank();
+    part_mbr_begin();
+    part_mbr_entry(0, 0x83u, 2048u, 4096u);
+    KT_CHECK_INT_EQ(partition_scan(&s_part_device), 1);
+
+    child = k_blockdev_find("pmbr0p1");
+    KT_CHECK(child != NULL);
+    if (child != NULL) {
+        KT_CHECK_INT_EQ((int)child->sector_size, 1024);
+        KT_CHECK_INT_EQ((int)child->sectors, 2048);
+    }
+
+    /* --- the GPT ------------------------------------------------------ */
+    s_part_device.sector_size = PART_SECTOR_SIZE;
+    s_part_device.sectors = PART_DISK_SECTORS;
+
+    part_gpt_make();
+    checksum = part_crc32(s_part_disk, sizeof(s_part_disk));
+
+    KT_CHECK_INT_EQ(partition_scan(&s_part_device), 2);
+
+    /* The scan reads: the medium is the same after it as before it. */
+    KT_CHECK_INT_EQ((int)part_crc32(s_part_disk, sizeof(s_part_disk)), (int)checksum);
+
+    child = k_blockdev_find("pmbr0p1");
+    KT_CHECK(child != NULL);
+    if (child != NULL) {
+        KT_CHECK_INT_EQ((int)child->sectors, 2048);
+        KT_CHECK_INT_EQ(child->ops->read(child->ctx, 0, sector, 1), 0);
+        KT_CHECK_INT_EQ(sector[0], s_part_disk[2048u * PART_LBA_BYTES]);
+    }
+
+    child = k_blockdev_find("pmbr0p2");
+    KT_CHECK(child != NULL);
+    if (child != NULL) {
+        KT_CHECK_INT_EQ((int)child->sectors, 2048);
+        KT_CHECK_INT_EQ(child->ops->read(child->ctx, 0, sector, 1), 0);
+        KT_CHECK_INT_EQ(sector[0], s_part_disk[6144u * PART_LBA_BYTES]);
+    }
+
+    /* A table with a broken entry is not half read: the CRC covers it. */
+    s_part_disk[PART_GPT_ENTRIES + 32u] ^= 0xFFu;
+    KT_CHECK_INT_EQ(partition_scan(&s_part_device), KERR_INVAL);
+    s_part_disk[PART_GPT_ENTRIES + 32u] ^= 0xFFu;
+
+    /* The same for a header that does not match its own checksum. */
+    s_part_disk[PART_GPT_HEADER + 16u] ^= 0xFFu;
+    KT_CHECK_INT_EQ(partition_scan(&s_part_device), KERR_INVAL);
+    s_part_disk[PART_GPT_HEADER + 16u] ^= 0xFFu;
+
+    /* A protective MBR of a disk whose GPT is gone is a damaged table. */
+    s_part_disk[PART_GPT_HEADER] = 0xFFu;
+    KT_CHECK_INT_EQ(partition_scan(&s_part_device), KERR_INVAL);
+
+    /* --- the slots go back when the disk is let go -------------------- */
+    partition_release(&s_part_device);
+    KT_CHECK(k_blockdev_find("pmbr0p1") == NULL);
+    KT_CHECK(partition_name(&s_part_device, 0) == NULL);
+    KT_CHECK_INT_EQ(partition_scan(NULL), KERR_INVAL);
 }
