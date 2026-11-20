@@ -781,6 +781,8 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
 {
     struct task *self = task_self();
     struct task *child = NULL;
+    k_u32_t child_pid = 0;
+    int child_exit = 0;
     k_u32_t waited = 0;
     const k_u32_t limit = 5000; /* five seconds */
 
@@ -815,8 +817,16 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
     for (waited = 0; waited < limit; waited++) {
         k_size_t i;
 
+        /*
+         * The state of a task is changed by the scheduler from another
+         * context, so the scan and the copy of what the caller needs happen
+         * under one critical section: reading state and exit code after it
+         * would be a race with the task that has just finished.
+         */
+        k_port_enter_critical();
+
         for (i = 0; i < TASK_MAX_TASKS; i++) {
-            struct task *t = task_get_by_index(i);
+            struct task *t = task_get_by_index_unlocked(i);
 
             if (t == NULL || t->parent != self) {
                 continue;
@@ -828,9 +838,13 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
 
             if (t->state == TASK_STATE_ZOMBIE) {
                 child = t;
+                child_pid = t->pid;
+                child_exit = t->exit_code;
                 break;
             }
         }
+
+        k_port_exit_critical();
 
         if (child != NULL) {
             break;
@@ -849,16 +863,12 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
     }
 
     if (status != 0) {
-        *(int *)(uintptr_t)status = (int)child->exit_code;
+        *(int *)(uintptr_t)status = child_exit;
     }
 
-    {
-        k_u32_t child_pid = child->pid;
+    task_reap(child_pid);
 
-        task_reap(child_pid);
-
-        return (k_ssize_t)child_pid;
-    }
+    return (k_ssize_t)child_pid;
 }
 
 /*
