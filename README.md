@@ -136,9 +136,10 @@ Micro_OS/
   shares the memory of the parent and re-enters its program; the answer (pid
   in the parent, 0 in the child) is the POSIX one. A port with an MMU will copy
   the pages ([ADR 0005](docs/adr/0005-programs-and-protection.md)).
-* **One user, no file owners at the edge yet.** A file has a mode and an owner
-  in its inode, and the mode is checked at the edge of the system; there is a
-  single user (uid 0) on the board today.
+* **One user, with a real mode and owner.** A file has a mode and an owner in
+  its inode, and the mode is checked at the edge of the system; there is a
+  single user (uid 0) on the board today, so the bits of the group and of the
+  others are stored but not exercised.
 * **Programs are young.** The format (MOX1), `execve`, `chmod`/`chown` and
   the window of the x86-64 port exist, and `/bin/hello` runs on that machine.
   A program has no entry into the kernel yet, so `execve` proves the loader

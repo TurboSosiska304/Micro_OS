@@ -13,7 +13,7 @@ the machine where a program can really be loaded and run (the window of
 | clock | the PIT at 1 kHz; critical sections save and restore the flags |
 | tasks | `switch.S` (callee-saved registers and the stack) and a round robin over the ready queue |
 | store | `ram0`: 512 KB of the memory of the machine in sectors of 1 KB, MicroFS, mounted at `/` |
-| programs | `k_port_exec_supported()` is true; the window is 32 MiB at 32 MiB; a program is a file in `/bin` (the MOX1 format of `kernel/exec.h`) |
+| programs | `k_port_exec_supported()` is true; the window is 16 MiB at 32 MiB (`0x02000000`-`0x03000000`); a program is a file in `/bin` (the MOX1 format of `kernel/exec.h`) |
 | build | `make x86-build` (needs `cmake`, `ninja`, `xorriso` is not needed) |
 | check | `make x86-smoke` (needs `qemu-system-x86`) |
 

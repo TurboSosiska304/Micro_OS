@@ -30,9 +30,12 @@ MicroOS uses its own filesystem — **MicroFS** (MFS). The whole available capac
 | `META` | indexing tables, access rights, etc. |
 | `INFO` | the most important section: data about the FS itself (block size, section offsets, etc.) and about the root directory |
 
-## 2. Relative addressing
+## 2. Sections and their addresses
 
-MFS uses relative addressing: section addresses are not stored as fixed values but computed from the drive capacity. To make this possible, each section is described by three parameters:
+MFS computes the sections from the drive capacity when it formats a volume,
+then writes the result into the header; the mount checks the header against
+the design of the volume instead of trusting a fixed address. Each section is
+described by three parameters:
 
 | Field | Meaning |
 |---|---|
@@ -69,36 +72,52 @@ Offset and size formulas:
 | `DATA_start` | `0` |
 | `DATA_blocks` | `N - I - M` |
 
-> **Advantage:** for a volume of any capacity there is no need to store or hard-code the region addresses separately — the whole layout is computed on the fly, for example when a new drive is attached or an existing one is resized.
+> **Advantage:** the formatter works for any capacity without a table of
+> sizes per volume: it computes the sections from `N`, and the mount later
+> refuses a header whose sections do not fill the device it was given.
 
 ## 3. Example for different sizes
 
-For now the following rules apply:
+The rules of the current format:
 
 * a block is 1024 bytes;
-* `INFO` is 1 block;
-* `META` is 4% of the total block count, rounded up;
+* `INFO` is the last erase sector of the volume: up to 4 blocks of 1 KB, so
+  that the header is alone in its sector;
+* `META` is 4% of the space below `INFO`, and grows when that cannot hold the
+  bitmap of the free blocks and the table of the records; the mount asks for
+  256 records (`MFS_MOUNT_RECORDS`);
 * `DATA` takes all the remaining space.
+
+The bitmap is one or two blocks even on the largest volume listed and the
+table is four, so the growth decides only on a small volume; on a large one
+the 4% is generous. For a volume formatted by the mount:
 
 | Volume size | Total blocks | DATA | META | INFO |
 |---|---|---|---|---|
-| 64 KiB | 64 | 60 | 3 | 1 |
-| 256 KiB | 256 | 244 | 11 | 1 |
-| 1 MiB | 1024 | 982 | 41 | 1 |
-| 6 MiB | 6144 | 5897 | 246 | 1 |
-| 16 MiB | 16384 | 15727 | 656 | 1 |
+| 64 KiB | 64 | 55 | 5 | 4 |
+| 256 KiB | 256 | 241 | 11 | 4 |
+| 1 MiB | 1024 | 979 | 41 | 4 |
+| 6 MiB | 6144 | 5894 | 246 | 4 |
+| 16 MiB | 16384 | 15724 | 656 | 4 |
 
-`DATA` and `META` scale automatically, but a percentage split has a catch: on a small drive 4% for `META` may not be enough for a large number of small files, while on a large one it will be more than needed.
+`DATA` and `META` scale automatically, but a percentage split has a catch: on
+a small drive 4% may not hold the table, and on a large one it is more space
+than the table needs.
 
 ## 4. Sizing META by record count
 
-A better approach is to size `META` not as a percentage of the volume but by the expected number of objects:
+The table of the records is sized by count, not by percentage:
 
 ```math
 META_table = ceil(E * 16 / 1024)
 ```
 
-where `E` is the maximum number of records (files and directories) and 16 is the size of one table record in bytes. This approach is not implemented yet (see section 7).
+where `E` is the maximum number of records (files and directories) and 16 is
+the size of one record in bytes. The mount passes `E = 256`, so the table is
+four blocks on every volume; the 4% is only the first guess of `META`, which
+the format then grows until the bitmap and the table fit. A volume cannot ask
+for more records after it was formatted, and the capacity does not follow the
+size of the volume yet (section 7).
 
 ## 5. Data stored in INFO
 
@@ -181,13 +200,18 @@ The rules that go with the layout:
 
 ## 7. Possible improvements
 
-Automatic volume layout:
+The state of the automatic layout:
 
-- [ ] Determine the `META` size automatically at format time.
-- [ ] Compute the `FILE TABLE` capacity from the available space.
-- [ ] Account for service structures and the free-block bitmap in the calculation.
-- [ ] Store the actual `DATA`, `META` and `INFO` boundaries in the filesystem header.
-- [ ] Validate the layout when mounting the volume.
+- [x] Determine the `META` size at format time: 4% is the first guess, grown
+      when the bitmap and the table do not fit.
+- [ ] Compute the `FILE TABLE` capacity from the available space: the mount
+      asks for 256 records, whatever the volume.
+- [x] Account for the free-block bitmap in the calculation (one or two blocks
+      of the section).
+- [x] Store the actual `DATA`, `META` and `INFO` boundaries in the header.
+- [x] Validate the layout when mounting: the sections have to fill the
+      volume, `INFO` has to end at its end, and the root has to be a
+      directory.
 
 ## 8. The device under the volume
 

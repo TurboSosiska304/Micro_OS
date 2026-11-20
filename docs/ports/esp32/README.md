@@ -48,7 +48,7 @@ led/ir     ok        G19, shared with the IR emitter
 battery    ok        4176 mV, 98% (raw 2088 mV)
 wifi       degraded  f4:65:0b:32:00:c0 idle
 telnet     ok        port 23, no auth
-mic        skip      SPM1423 MEMS microphone (I2S)
+mic        ok        16000 Hz, rms 4, peak 17
 ```
 
 `ok` works, `degraded` works with a limitation, `fail` does not work, `skip`

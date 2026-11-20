@@ -14,9 +14,9 @@ one tree: the format and the checks are portable, the jump is the port's.
 The phase as it stands: `chmod`, `chown` and `execve` are numbers 23, 24 and
 25 of the table, the mode of a file is checked at `open` and at `execve`, the
 library has the three wrappers, the shell has the commands, and the x86-64
-port writes a program to `/bin/hello` of a volume in its memory and runs it at
-its boot. The boot calls the parser and the loader itself and not `execve`;
-the end of this document says what that leaves open.
+port writes a program to `/bin/hello` of a volume in its memory and asks for
+it with `execve` at its boot. The end of this document says what that leaves
+open.
 
 This is the first implementation phase of roadmap 7; what is not here is
 listed at its end and in [docs/roadmap.md](../roadmap.md).
@@ -115,9 +115,9 @@ Today the program is `/bin/hello` of that port, and it is a file:
   `programs/program.ld`, turned into a MOX1 image by `tools/mkprog.sh`, and
   embedded in the kernel as a blob by the build of the port;
 * at the boot the port mounts MicroFS on a volume of its RAM
-  (`src/blockdev_ram.c`), writes the image to `/bin/hello`, reads the file
-  back through the VFS, parses it with `k_exec_parse()` and hands it to
-  `k_exec_run()`;
+  (`src/blockdev_ram.c`), writes the image to `/bin/hello` and asks for it
+  with `ksys_execve()`; the call stats the file, checks its mode, reads it
+  through the VFS, parses it and hands it to `k_exec_run()`;
 * the program writes `PROGRAM: hello from /bin` to COM1 one byte at a time,
   with no libc and no kernel under it, and ends with a `ret` so that the boot
   continues into the shell. `make x86-smoke` checks that the port enters a
@@ -127,9 +127,11 @@ Today the program is `/bin/hello` of that port, and it is a file:
 
 The round trip is the point of the milestone: the bytes that are executed have
 been through a block device, MicroFS and the VFS, and the file is what the
-kernel holds and not a variable with the image in it. The boot does not go
-through `sys_execve()` - it has the image in its hands before the shell
-exists, and calls the two halves of the loader itself.
+kernel holds and not a variable with the image in it. The boot goes through
+`sys_execve()`: the image is embedded in the kernel because the machine has
+no filesystem before it mounts one, but the stat of the file, the mode, the
+read through the VFS and the call are exactly the ones a program of `/bin`
+takes.
 
 ### The loader: three calls in the table
 
@@ -438,6 +440,12 @@ not tested because it is not checked at all (see "What is still missing").
 
 ## What is still missing
 
+* **A program cannot call the kernel.** The x86-64 port enters the image with
+  the interrupts off and there is no `int 0x80` (or another trap) that reaches
+  the syscall table, so `execve` proves the loader and the rights, not a
+  process with system calls. The entry is in work; the register ABI and the
+  kernel stack per task are its first two pieces. See
+  [debts.md](../debts.md).
 * **`execve` runs a program only on x86-64.** The boot writes `/bin/hello`
   and asks for it with `ksys_execve()`, and the shell does the same with
   `exec`; the check of the mode, the read into `kmm` and the answer to the
@@ -488,6 +496,11 @@ not tested because it is not checked at all (see "What is still missing").
   base of the window plus the header, but the script does not compare the two:
   an image linked for another address is refused at the run, or worse. A check
   of the first address of `.text` against `k_port_exec_base()` is missing.
+* **The padding of the segments has no test.** The script pads every segment
+  before the next one and the smoke test of the port notices a wrong byte, but
+  the output of `mkprog.sh` - the bytes a program reads its data from - is not
+  checked by a test of the host. The bug that cost a wrong byte is fixed and
+  not guarded.
 * **The board will never run a program**, and that is a decision of ADR 0005
   and not a debt: its flash is not executable for a file, and a copy in
   internal SRAM would take the memory of the kernel and the drivers.

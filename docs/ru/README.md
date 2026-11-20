@@ -14,6 +14,7 @@
 | [memory_ru.md](memory_ru.md) | [../memory.md](../memory.md) |
 | [libc_ru.md](libc_ru.md) | [../libc.md](../libc.md) |
 | [syscall-abi_ru.md](syscall-abi_ru.md) | [../syscall-abi.md](../syscall-abi.md) |
+| — (перевода пока нет) | [../debts.md](../debts.md) |
 | [adr/](adr/) | [../adr/](../adr/) |
 | [phases/](phases/) | [../phases/](../phases/) |
 | [ports/esp32/hardware_ru.md](ports/esp32/hardware_ru.md) | [../ports/esp32/hardware.md](../ports/esp32/hardware.md) |

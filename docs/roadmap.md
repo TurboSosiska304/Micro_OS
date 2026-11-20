@@ -6,7 +6,8 @@ This is the plan of **the kernel**: one portable core, the contract of the
 port, the programs, the protection, the machines it runs on, and the quality
 of all of it. The plan of the board (the ESP32 port) is in
 [ports/esp32/roadmap.md](ports/esp32/roadmap.md); the board is one port of
-several, and its build is `make idf-build`.
+several, and its build is `make idf-build`. What each section leaves open is
+collected, with its status, in [debts.md](debts.md).
 
 ## The builds of the kernel
 
@@ -72,6 +73,11 @@ written when the project was an operating system for one board; the numbers
       RAM volume at the boot and asks for it with `execve`; the shell runs the
       same file with `exec`
 * [ ] `PATH` for the shell
+* [ ] `argv` reaches the port, and the ABI of the entry is written down
+* [ ] An entry into the kernel from a program (`int 0x80`), not a call of the
+      table from the kernel's own code - in work
+* [ ] `mkprog.sh` checks the address a program is linked for against the base
+      of the window of the port
 
 ## K4 - Protection (in progress)
 
@@ -79,6 +85,7 @@ written when the project was an operating system for one board; the numbers
 * [x] The arguments of a system call checked at the edge
 * [x] The permissions enforced at the edge, for the one user of the system, at
       `open` and `execve`
+* [ ] The `x` bit of the directories of a path is walked and checked
 * [ ] A real `fork()`: an address space per task, copy on write - the
       milestone of the x86-64 paging (ADR 0002, ADR 0005)
 
@@ -95,9 +102,12 @@ written when the project was an operating system for one board; the numbers
 * [ ] Timestamps of a file, fed by the clock of the kernel
 * [ ] Protocols above the sockets: MQTT, a page of the state over HTTP
 
-## K7 - Quality (planned)
+## K7 - Quality (in progress)
 
-* [ ] The races of the host port under TSan in `make ci` (the detector is a
-      target of its own today)
+* [x] The races of the host port under TSan in the cloud CI
+      (`.github/workflows/ci.yml` runs `make test-tsan`; `make ci` stays the
+      local half of the list)
 * [ ] A fuzz of the syscall ABI and of the parsers of the filesystem
-* [ ] The budget of the kernel checked at every release (the image, the SRAM)
+* [x] The budget of the image checked at every release (`make integrity`)
+* [ ] The budget of the internal SRAM checked as well (the stacks, the
+      drivers, the kernel)

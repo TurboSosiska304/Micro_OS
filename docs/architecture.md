@@ -225,7 +225,8 @@ struct file_operations {
 
 The drivers are written: `drv_display` (ST7789v2, the panel and the turn of
 its picture), `drv_input` (A/B/C), `drv_buzzer`, `drv_imu` (MPU6886),
-`drv_rtc` (BM8563), `drv_mic` (SPM1423), `drv_battery`. The pinout and the
+`drv_rtc` (BM8563), `drv_battery` and `drv_mic` (SPM1423, a PDM microphone
+on I2S at 16 kHz; the doctor reports its RMS and peak). The pinout and the
 quirks are documented in
 [docs/ports/esp32/hardware.md](ports/esp32/hardware.md).
 
@@ -323,7 +324,9 @@ reports. The width of the two numbers is checked at the door, the library
 `errno`, and the shell has `chmod`, `chown` and `exec` over the same calls.
 The directories of a path are not checked for their `x` bit yet, and
 `fork()` with an address space of its own waits for the paging of a port
-(ADR 0005).
+(ADR 0005). A program has no instruction to call back into the kernel yet:
+the x86-64 port enters it with the interrupts off, and no trap leads to the
+syscall table (see [debts.md](debts.md)).
 
 ## 9. Testing
 

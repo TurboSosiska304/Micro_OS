@@ -15,7 +15,8 @@ The port is built with `make idf-build` and checked on the board with
       IMU (MPU6886), RTC (BM8563), battery, WiFi radio
 * [x] The hardware doctor: a module per piece, a health check and a report
 * [x] The console on the TFT, the 5x7 font, the renderer of the panel
-* [n] The microphone (SPM1423, I2S) - declared, not implemented
+* [x] The microphone (SPM1423, PDM RX on I2S, 16 kHz, RMS and peak in
+      the doctor)
 
 The pins, the chips and the quirks of the board are in
 [hardware.md](hardware.md).
@@ -30,11 +31,14 @@ The pins, the chips and the quirks of the board are in
 
 * [x] The process of a release, the tags, the cloud build, the bundle
 * [x] `v0.3.1`: the first release of the kernel with ports
+* [x] `v0.4.0-rc1`: phase 7, programs and the permissions of a file
+* [ ] `v0.4.0`: the release candidate accepted (the tag is cut when it ships)
 
 ## P3 - The wearable (planned)
 
 * [ ] The RTC alarm and deep sleep, the wake from EXT1
-* [ ] `drv_mic` (SPM1423, I2S) and a simple sound detector
+* [x] `drv_mic` (SPM1423, PDM RX on I2S, 16 kHz)
+* [ ] A simple sound detector on top of `drv_mic`
 * [ ] `drv_ir`: transmit and receive on G19, shared with the LED
 * [ ] A factory reset, the enclosure and display modes
 
