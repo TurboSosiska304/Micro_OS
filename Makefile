@@ -23,7 +23,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan smoke integrity ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-run x86-smoke
+.PHONY: help all build test test-asan test-tsan smoke integrity ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-run x86-run-serial x86-smoke x86-vga-smoke
 
 help:
 	@echo "Micro OS — available targets:"
@@ -43,8 +43,10 @@ help:
 	@echo "  make idf-monitor attach the serial monitor"
 	@echo "  make idf-size   show the firmware size report"
 	@echo "  make x86-build  build the kernel for x86-64 (a multiboot image)"
-	@echo "  make x86-run    boot it in QEMU"
+	@echo "  make x86-run    boot it in a QEMU window (VGA text, PS/2 keyboard)"
+	@echo "  make x86-run-serial  boot it with the serial console (-nographic)"
 	@echo "  make x86-smoke  boot it and check what it says"
+	@echo "  make x86-vga-smoke   check the screen and the keyboard without a display"
 	@echo "  make bundle     collect the firmware into dist/ for distribution"
 
 all: build
@@ -140,16 +142,38 @@ idf-size: idf-check
 # the kernel to its address and turns the long mode on.
 X86_BUILD := build-x86
 
+# The window of `make x86-run`: GTK when QEMU was built with it, SDL for a
+# machine without it. `make x86-run X86_DISPLAY=sdl` picks the other one.
+X86_DISPLAY ?= gtk
+
 x86-build:
 	cmake -B $(X86_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release
 	cmake --build $(X86_BUILD) --target image
 
 x86-run: x86-build
+	@qemu-system-x86_64 -display help 2>&1 | grep -qw "$(X86_DISPLAY)" || { \
+		echo "QEMU has no '$(X86_DISPLAY)' display: install qemu-ui-gtk" >&2; \
+		echo "(Arch: sudo pacman -S qemu-ui-gtk) or use make x86-run-serial" >&2; \
+		exit 1; }
+	qemu-system-x86_64 -kernel $(X86_BUILD)/loader32.elf \
+		-initrd $(X86_BUILD)/microos64.bin -m 256 -no-reboot \
+		-display $(X86_DISPLAY) -serial none
+
+# The same machine with the console of the serial port and no window: the
+# way it was run before the VGA and the keyboard, kept for a terminal, a
+# script or a machine without a display server.
+x86-run-serial: x86-build
 	qemu-system-x86_64 -kernel $(X86_BUILD)/loader32.elf \
 		-initrd $(X86_BUILD)/microos64.bin -m 256 -nographic -no-reboot
 
 x86-smoke: x86-build
 	python3 tools/x86_smoke.py
+
+# The window without a display: the monitor of QEMU reads the text memory of
+# the VGA and presses the keys of the keyboard, so a build farm can check the
+# screen and IRQ1. Not a part of `make ci`: the monitor is a tool of its own.
+x86-vga-smoke: x86-build
+	python3 tools/x86_vga_smoke.py
 
 bundle: idf-check
 	. $(IDF_EXPORT) && idf.py -D IDF_TARGET=$(IDF_TARGET) build && \

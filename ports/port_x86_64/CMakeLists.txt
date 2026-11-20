@@ -11,7 +11,8 @@
 #   cmake -B build-x86 -S ports/port_x86_64 -G Ninja
 #   cmake --build build-x86
 #   qemu-system-x86_64 -kernel build-x86/loader32.elf \
-#                      -initrd build-x86/microos64.bin -m 256 -nographic
+#                      -initrd build-x86/microos64.bin -m 256 \
+#                      -display gtk -serial none
 
 cmake_minimum_required(VERSION 3.16)
 
@@ -163,6 +164,8 @@ add_executable(microos64
     src/kmain.c
     src/shell.c
     src/port_x86_64.c
+    src/vga.c
+    src/ps2.c
     src/port_exec.c
     src/port_x86_64_task.c
     src/blockdev_ram.c

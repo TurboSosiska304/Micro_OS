@@ -103,14 +103,19 @@ isr_exception_common:
 .size isr_exception_common, . - isr_exception_common
 
 /*
- * The timer. It is the only line of the PIC that is unmasked, and it has to
- * return where it interrupted, so everything that C may use is saved: the
- * ten registers below plus the frame the processor pushed are the whole of
- * the state of the kernel.
+ * An interrupt of the hardware is a normal event: the handler does its work
+ * and returns with iretq, so every register it touches is saved around the
+ * call of C. The kernel is built without the red zone and without SSE, so
+ * the stack and the general registers are the whole of the state.
+ *
+ * The stub is the same for every line: the processor has already pushed the
+ * frame it restores with iretq, and the body of C is the only thing that
+ * changes from one line to the next.
  */
-.global isr_irq0
-.type isr_irq0, @function
-isr_irq0:
+.macro isr_irq name, handler
+.global \name
+.type \name, @function
+\name:
     pushq %rax
     pushq %rcx
     pushq %rdx
@@ -124,7 +129,7 @@ isr_irq0:
 
     movq %rsp, %rbp /* the saved stack, for the way back */
     andq $-16, %rsp
-    call port_x86_64_irq_tick
+    call \handler
     movq %rbp, %rsp
 
     popq %rbp
@@ -138,7 +143,14 @@ isr_irq0:
     popq %rcx
     popq %rax
     iretq
-.size isr_irq0, . - isr_irq0
+.size \name, . - \name
+.endm
+
+/* The timer: the clock of the kernel. */
+isr_irq isr_irq0, port_x86_64_irq_tick
+
+/* The keyboard: the byte of the PS/2 controller that raised the line. */
+isr_irq isr_irq1, port_x86_64_irq_keyboard
 
 /*
  * The call of a system call: `int $0x80` from the program.
