@@ -64,17 +64,24 @@ static int map_flags(int flags)
     if (flags & MICROOS_O_APPEND) {
         out |= KSYS_O_APPEND;
     }
+    if (flags & MICROOS_O_DIRECTORY) {
+        out |= KSYS_O_DIRECTORY;
+    }
 
     return out;
 }
 
 /*
  * The text of an error code. The code is the number of POSIX (the same
- * number that microos_errno() gives), the text is the usual one.
+ * number that microos_errno() gives), the text is the usual one. A caller
+ * that passes the result of a system call gives the same number with the
+ * minus sign of the call, so the sign is dropped here: both are the error.
  */
 const char *microos_strerror(int code)
 {
-    switch (code) {
+    long number = (code < 0) ? -(long)code : (long)code;
+
+    switch (number) {
     case 0:
         return "no error";
     case -KERR_PERM:
@@ -89,6 +96,8 @@ const char *microos_strerror(int code)
         return "argument list too long";
     case -KERR_BADF:
         return "bad file descriptor";
+    case -KERR_CHILD:
+        return "no child processes";
     case -KERR_AGAIN:
         return "try again later";
     case -KERR_NOSYS:
@@ -101,6 +110,8 @@ const char *microos_strerror(int code)
         return "invalid argument";
     case -KERR_NOSPC:
         return "no space left on device";
+    case -KERR_NAMETOOLONG:
+        return "file name too long";
     case -KERR_NOTEMPTY:
         return "directory not empty";
     default:

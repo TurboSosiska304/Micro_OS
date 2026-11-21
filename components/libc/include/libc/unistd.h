@@ -17,6 +17,12 @@
 #define MICROOS_O_CREAT 0100
 #define MICROOS_O_TRUNC 01000
 #define MICROOS_O_APPEND 02000
+/*
+ * Open a directory for reading its entries. The bit is the one of Linux, so
+ * that a program carries its usual flags; the kernel keeps its own smaller
+ * bit and the library is where the two meet.
+ */
+#define MICROOS_O_DIRECTORY 0200000
 
 /* The flags of the waitpid. */
 #define MICROOS_WNOHANG 1
@@ -55,7 +61,8 @@ int microos_errno(void);
  */
 void microos_set_errno(int code);
 
-/* The text of an error code, the texts of POSIX. */
+/* The text of an error code, the texts of POSIX. The code may be given with
+ * either sign: microos_errno() and a system call disagree about it. */
 const char *microos_strerror(int code);
 
 /*

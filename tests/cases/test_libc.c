@@ -439,7 +439,18 @@ static void test_errors(void)
     /* The text of the error is the usual one. */
     KT_CHECK_STR_EQ(microos_strerror(2), "no such file or directory");
     KT_CHECK_STR_EQ(microos_strerror(9), "bad file descriptor");
+    KT_CHECK_STR_EQ(microos_strerror(36), "file name too long");
+    KT_CHECK_STR_EQ(microos_strerror(10), "no child processes");
     KT_CHECK_STR_EQ(microos_strerror(0), "no error");
+
+    /*
+     * The call returns its code with the minus sign of a system call and
+     * microos_errno() keeps it positive; both name the same error.
+     */
+    KT_CHECK_STR_EQ(microos_strerror(-36), "file name too long");
+    KT_CHECK_STR_EQ(microos_strerror(-10), "no child processes");
+    KT_CHECK_STR_NE(microos_strerror(-36), "unknown error");
+    KT_CHECK_STR_NE(microos_strerror(-10), "unknown error");
 
     teardown();
 }
@@ -737,6 +748,7 @@ static void test_numbers_match_the_system(void)
 static void test_permissions(void)
 {
     struct vfs_stat info;
+    k_ssize_t got;
     int fd;
 
     ktest_begin("libc: chmod and chown change the mode and the owner");
@@ -769,6 +781,41 @@ static void test_permissions(void)
     /* And an object that is not there gives the error of POSIX. */
     KT_CHECK_INT_EQ(microos_chmod("/nothing-here", 0644), -1);
     KT_CHECK_INT_EQ(microos_errno(), 2); /* ENOENT */
+
+    /*
+     * The directory flag of the library reaches the kernel. Without it the
+     * open of a directory is EISDIR; with it the descriptor reads the
+     * entries through readdir.
+     */
+    KT_CHECK_INT_EQ(microos_mkdir("/lib-dir"), 0);
+    fd = microos_open("/lib-dir/one.txt", MICROOS_O_WRONLY | MICROOS_O_CREAT | MICROOS_O_TRUNC);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK(microos_close(fd) == 0);
+    }
+
+    KT_CHECK_INT_EQ(microos_open("/lib-dir", MICROOS_O_RDONLY), -1);
+    KT_CHECK_INT_EQ(microos_errno(), 21); /* EISDIR */
+
+    fd = microos_open("/lib-dir", MICROOS_O_RDONLY | MICROOS_O_DIRECTORY);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        struct vfs_dirent entries[2];
+
+        memset(entries, 0, sizeof(entries));
+        got = ksys_readdir(fd, entries, sizeof(entries));
+        KT_CHECK_INT_EQ(got, (k_ssize_t)sizeof(struct vfs_dirent)); /* one entry */
+        KT_CHECK_STR_EQ(entries[0].name, "one.txt");
+        KT_CHECK(microos_close(fd) == 0);
+    }
+
+    /* A file is not a directory, even when the flags ask for one. */
+    KT_CHECK_INT_EQ(microos_open("/lib-dir/one.txt", MICROOS_O_RDONLY | MICROOS_O_DIRECTORY), -1);
+    KT_CHECK_INT_EQ(microos_errno(), 20); /* ENOTDIR */
+
+    /* The flag of a directory goes with O_RDONLY and nothing else. */
+    KT_CHECK_INT_EQ(microos_open("/lib-dir", MICROOS_O_WRONLY | MICROOS_O_DIRECTORY), -1);
+    KT_CHECK_INT_EQ(microos_errno(), 22); /* EINVAL */
 
     teardown();
 }
