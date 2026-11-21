@@ -1,12 +1,14 @@
 menu "Micro OS filesystems"
 
     config MICRO_OS_FS_FAT32
-        bool "FAT12/16/32, read-only"
+        bool "FAT12/16/32, read and write"
         default n
         help
-            Read the volume of a card or a disk that another system wrote.
-            The filesystem has no modes, no owners and no time of its own,
-            and it never writes: the board keeps its root on MicroFS, and
-            this reader is for the medium a person brings.
+            Read and write the volume of a card or a disk that another
+            system made. The filesystem has no modes, no owners and no
+            time of its own: stat answers zero for the first two, and
+            chmod and chown are not supported. There is no journal, so a
+            power cut in the middle of a change is a volume a checker has
+            to look at.
 
 endmenu

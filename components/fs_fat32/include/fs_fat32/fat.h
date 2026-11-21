@@ -1,10 +1,15 @@
 /*
- * Micro OS — FAT12/16/32, read-only.
+ * Micro OS — FAT12/16/32, read and write.
  *
  * The filesystem of the cards and of the disks the rest of the world
- * writes. It is a reader on purpose: the kernel has no journal, no cache of
- * the changes and no reason to be the second writer of a volume that a
- * camera, a laptop or a phone believes it owns (ADR 0009).
+ * writes: a camera, a laptop, a phone. The kernel reads it and now writes
+ * it, but with no journal to replay and no cache of its own: every change
+ * reaches the medium before the call returns, and a power cut in the middle
+ * of one is a risk the volume knows about (ADR 0009).
+ *
+ * A FAT record has no mode, no owner and no time, so `stat` answers zero for
+ * the first two and nothing reports the third; `chmod` and `chown` stay
+ * KERR_NOTSUP.
  */
 #ifndef MICRO_OS_FS_FAT32_FAT_H
 #define MICRO_OS_FS_FAT32_FAT_H
@@ -19,7 +24,8 @@
  * Returns 0, or a KERR_* code: KERR_NOENT for a name the registry does not
  * know, KERR_INVAL for a boot sector that is not a FAT volume, KERR_IO for
  * a medium that did not answer, KERR_NOTSUP for a geometry this reader does
- * not speak.
+ * not speak. The mount does not ask whether the medium can be written: a
+ * card with its switch on "read only" mounts and refuses the writes.
  */
 int fat_vfs_mount(const char *point, const char *device);
 

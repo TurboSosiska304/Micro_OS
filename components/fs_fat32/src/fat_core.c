@@ -2,8 +2,13 @@
  * Micro OS — the volume of a FAT filesystem: the boot sector, the table of
  * the clusters and the stream of a file.
  *
- * Everything here is a reader. The only writes to a medium of this project
- * are the ones of MicroFS, which owns the volume it formatted (ADR 0009).
+ * The volume is read and written. A write goes through the same sector cache
+ * as a read: the cache is dropped after every write, so the next read sees
+ * the medium and not the copy of it that the reader had. The order of the
+ * changes is the one that survives a power cut best with no journal to
+ * replay: a cluster joins a chain only after its own entry says it is the
+ * end, and a directory entry names a cluster only after the cluster is
+ * written.
  */
 #include "fat_private.h"
 
@@ -434,5 +439,557 @@ int fat_read_chain(struct fat_volume *vol, k_u32_t first_cluster, k_u64_t offset
     }
 
     *got = done;
+    return 0;
+}
+
+/*
+ * Write bytes of the medium through the cache of the device sector. A write
+ * that does not fill its sector is read first, because the other half of a
+ * 1 KiB sector belongs to another 512-byte sector of the volume. The cache
+ * is dropped after every write, so a read that follows cannot answer with
+ * an older copy of the medium.
+ */
+static int write_device(struct fat_volume *vol, k_u64_t offset, const void *buf, k_size_t size)
+{
+    const k_u8_t *src = (const k_u8_t *)buf;
+    k_u32_t dev_size = vol->dev->sector_size;
+
+    if (dev_size == 0 || dev_size > FAT_DEV_SECTOR_MAX) {
+        return KERR_NOTSUP;
+    }
+
+    if (vol->dev->ops == NULL || vol->dev->ops->write == NULL) {
+        return KERR_NOTSUP;
+    }
+
+    while (size > 0) {
+        k_u32_t sector = (k_u32_t)(offset / dev_size);
+        k_u32_t inside = (k_u32_t)(offset % dev_size);
+        k_size_t chunk = dev_size - inside;
+
+        if (sector >= vol->dev->sectors) {
+            return KERR_IO;
+        }
+
+        if (chunk > size) {
+            chunk = size;
+        }
+
+        if (inside == 0 && chunk == dev_size) {
+            if (vol->dev->ops->write(vol->dev->ctx, sector, src, 1) != 0) {
+                vol->cache_valid = false;
+                return KERR_IO;
+            }
+        } else {
+            if (!vol->cache_valid || vol->cached_sector != sector) {
+                if (vol->dev->ops->read(vol->dev->ctx, sector, vol->sector, 1) != 0) {
+                    vol->cache_valid = false;
+                    return KERR_IO;
+                }
+                vol->cached_sector = sector;
+                vol->cache_valid = true;
+            }
+
+            memcpy(vol->sector + inside, src, chunk);
+
+            if (vol->dev->ops->write(vol->dev->ctx, sector, vol->sector, 1) != 0) {
+                vol->cache_valid = false;
+                return KERR_IO;
+            }
+        }
+
+        vol->cache_valid = false;
+        src += chunk;
+        offset += chunk;
+        size -= chunk;
+    }
+
+    return 0;
+}
+
+int fat_write_volume(struct fat_volume *vol, k_u64_t offset, const void *buf, k_size_t size)
+{
+    if (vol == NULL || !vol->mounted) {
+        return KERR_INVAL;
+    }
+
+    if (buf == NULL && size != 0) {
+        return KERR_INVAL;
+    }
+
+    if (offset > vol->total_bytes || size > vol->total_bytes - offset) {
+        return KERR_IO;
+    }
+
+    return write_device(vol, offset, buf, size);
+}
+
+int fat_flush(struct fat_volume *vol)
+{
+    if (vol == NULL || vol->dev == NULL || vol->dev->ops == NULL || vol->dev->ops->sync == NULL) {
+        return 0;
+    }
+
+    return (vol->dev->ops->sync(vol->dev->ctx) == 0) ? 0 : KERR_IO;
+}
+
+/* The value that ends a chain on this volume. */
+static k_u32_t end_of_chain(const struct fat_volume *vol)
+{
+    switch (vol->type) {
+    case 12:
+        return 0x0FFFu;
+    case 16:
+        return 0xFFFFu;
+    default:
+        return 0x0FFFFFFFu;
+    }
+}
+
+static int table_offset(const struct fat_volume *vol, k_u32_t cluster, k_u64_t *out)
+{
+    k_u64_t base = (k_u64_t)vol->reserved_sectors * vol->bytes_per_sector;
+
+    switch (vol->type) {
+    case 12:
+        *out = base + cluster + cluster / 2u;
+        return 0;
+    case 16:
+        *out = base + (k_u64_t)cluster * 2u;
+        return 0;
+    case 32:
+        *out = base + (k_u64_t)cluster * 4u;
+        return 0;
+    default:
+        return KERR_INVAL;
+    }
+}
+
+int fat_entry_get(struct fat_volume *vol, k_u32_t cluster, k_u32_t *value)
+{
+    k_u8_t raw[4];
+    k_u64_t offset;
+    k_u32_t word;
+    int rc;
+
+    if (vol == NULL || value == NULL || cluster < 2u || cluster >= vol->cluster_count + 2u) {
+        return KERR_INVAL;
+    }
+
+    rc = table_offset(vol, cluster, &offset);
+    if (rc != 0) {
+        return rc;
+    }
+
+    switch (vol->type) {
+    case 12:
+        rc = fat_read_volume(vol, offset, raw, 2);
+        if (rc != 0) {
+            return rc;
+        }
+        word = fat_le16(raw);
+        *value = ((cluster & 1u) != 0u) ? (word >> 4) : (word & 0x0FFFu);
+        return 0;
+    case 16:
+        rc = fat_read_volume(vol, offset, raw, 2);
+        if (rc != 0) {
+            return rc;
+        }
+        *value = fat_le16(raw);
+        return 0;
+    case 32:
+        rc = fat_read_volume(vol, offset, raw, 4);
+        if (rc != 0) {
+            return rc;
+        }
+        *value = fat_le32(raw) & 0x0FFFFFFFu;
+        return 0;
+    default:
+        return KERR_INVAL;
+    }
+}
+
+int fat_entry_set(struct fat_volume *vol, k_u32_t cluster, k_u32_t value)
+{
+    k_u8_t raw[4];
+    k_u64_t base;
+    k_u32_t fat;
+    int rc;
+
+    if (vol == NULL || cluster < 2u || cluster >= vol->cluster_count + 2u) {
+        return KERR_INVAL;
+    }
+
+    base = (k_u64_t)vol->reserved_sectors * vol->bytes_per_sector;
+
+    /* Every table says the same thing: a volume with two copies and one of
+     * them stale is a volume a checker will not understand. */
+    for (fat = 0; fat < vol->num_fats; fat++) {
+        k_u64_t offset = base + (k_u64_t)fat * vol->fat_sectors * vol->bytes_per_sector;
+
+        switch (vol->type) {
+        case 12: {
+            k_u32_t word;
+
+            offset += cluster + cluster / 2u;
+            rc = fat_read_volume(vol, offset, raw, 2);
+            if (rc != 0) {
+                return rc;
+            }
+            word = fat_le16(raw);
+            if ((cluster & 1u) == 0u) {
+                word = (word & 0xF000u) | (value & 0x0FFFu);
+            } else {
+                word = (word & 0x000Fu) | ((value & 0x0FFFu) << 4);
+            }
+            fat_put16(raw, (k_u16_t)word);
+            rc = fat_write_volume(vol, offset, raw, 2);
+            break;
+        }
+        case 16:
+            offset += (k_u64_t)cluster * 2u;
+            fat_put16(raw, (k_u16_t)value);
+            rc = fat_write_volume(vol, offset, raw, 2);
+            break;
+        case 32:
+            offset += (k_u64_t)cluster * 4u;
+            rc = fat_read_volume(vol, offset, raw, 4);
+            if (rc != 0) {
+                return rc;
+            }
+            /* The four high bits of a FAT32 entry belong to nobody here. */
+            fat_put32(raw, (fat_le32(raw) & 0xF0000000u) | (value & 0x0FFFFFFFu));
+            rc = fat_write_volume(vol, offset, raw, 4);
+            break;
+        default:
+            return KERR_INVAL;
+        }
+
+        if (rc != 0) {
+            return rc;
+        }
+    }
+
+    return 0;
+}
+
+int fat_alloc_cluster(struct fat_volume *vol, k_u32_t *cluster)
+{
+    k_u32_t candidate;
+    int rc;
+
+    if (vol == NULL || cluster == NULL) {
+        return KERR_INVAL;
+    }
+
+    for (candidate = 2u; candidate < vol->cluster_count + 2u; candidate++) {
+        k_u32_t value;
+
+        rc = fat_entry_get(vol, candidate, &value);
+        if (rc != 0) {
+            return rc;
+        }
+
+        if (value == 0) {
+            rc = fat_entry_set(vol, candidate, end_of_chain(vol));
+            if (rc != 0) {
+                return rc;
+            }
+            *cluster = candidate;
+            return 0;
+        }
+    }
+
+    return KERR_NOSPC;
+}
+
+int fat_chain_free(struct fat_volume *vol, k_u32_t first)
+{
+    k_u32_t cluster = first;
+    k_u32_t steps = 0;
+
+    if (vol == NULL) {
+        return KERR_INVAL;
+    }
+
+    while (cluster >= 2u && cluster < vol->cluster_count + 2u) {
+        k_u32_t next;
+        int rc;
+
+        /* A chain that is longer than the volume is a loop: stop before a
+         * broken table turns a removal into an endless walk. */
+        if (++steps > vol->cluster_count) {
+            return KERR_IO;
+        }
+
+        rc = fat_entry_get(vol, cluster, &next);
+        if (rc != 0) {
+            return rc;
+        }
+
+        rc = fat_entry_set(vol, cluster, 0);
+        if (rc != 0) {
+            return rc;
+        }
+
+        if (next == 0 || next >= vol->cluster_count + 2u) {
+            return 0;
+        }
+
+        cluster = next;
+    }
+
+    return 0;
+}
+
+int fat_chain_count(struct fat_volume *vol, k_u32_t first, k_u32_t *count)
+{
+    k_u32_t cluster = first;
+    k_u32_t steps = 0;
+
+    if (vol == NULL || count == NULL) {
+        return KERR_INVAL;
+    }
+
+    *count = 0;
+
+    if (first < 2u) {
+        return 0;
+    }
+
+    while (cluster >= 2u) {
+        k_u32_t next;
+        int rc;
+
+        if (++steps > vol->cluster_count) {
+            return KERR_IO;
+        }
+
+        rc = fat_next_cluster(vol, cluster, &next);
+        if (rc != 0) {
+            return rc;
+        }
+
+        if (next == 0) {
+            break;
+        }
+
+        cluster = next;
+    }
+
+    *count = steps;
+    return 0;
+}
+
+int fat_clusters_free(struct fat_volume *vol, k_u32_t *count)
+{
+    k_u32_t cluster;
+    k_u32_t free_count = 0;
+    int rc;
+
+    if (vol == NULL || count == NULL) {
+        return KERR_INVAL;
+    }
+
+    for (cluster = 2u; cluster < vol->cluster_count + 2u; cluster++) {
+        k_u32_t value;
+
+        rc = fat_entry_get(vol, cluster, &value);
+        if (rc != 0) {
+            return rc;
+        }
+
+        if (value == 0) {
+            free_count++;
+        }
+    }
+
+    *count = free_count;
+    return 0;
+}
+
+int fat_zero_cluster(struct fat_volume *vol, k_u32_t cluster)
+{
+    k_u8_t zeros[128];
+    k_u32_t done = 0;
+    int rc;
+
+    if (vol == NULL || cluster < 2u || cluster >= vol->cluster_count + 2u) {
+        return KERR_INVAL;
+    }
+
+    memset(zeros, 0, sizeof(zeros));
+
+    while (done < vol->cluster_bytes) {
+        k_size_t chunk = vol->cluster_bytes - done;
+
+        if (chunk > sizeof(zeros)) {
+            chunk = sizeof(zeros);
+        }
+
+        rc = fat_write_volume(vol, cluster_offset(vol, cluster) + done, zeros, chunk);
+        if (rc != 0) {
+            return rc;
+        }
+
+        done += (k_u32_t)chunk;
+    }
+
+    return 0;
+}
+
+int fat_chain_extend(struct fat_volume *vol, k_u32_t *first, k_u32_t need)
+{
+    k_u32_t count = 0;
+    k_u32_t old_last = 0;
+    k_u32_t segment = 0;
+    k_u32_t previous = 0;
+    k_u32_t cluster;
+    int rc = 0;
+
+    if (vol == NULL || first == NULL) {
+        return KERR_INVAL;
+    }
+
+    if (need == 0) {
+        return 0;
+    }
+
+    if (*first >= 2u) {
+        rc = fat_chain_count(vol, *first, &count);
+        if (rc != 0) {
+            return rc;
+        }
+
+        cluster = *first;
+        for (;;) {
+            k_u32_t next;
+
+            rc = fat_next_cluster(vol, cluster, &next);
+            if (rc != 0) {
+                return rc;
+            }
+            if (next == 0) {
+                break;
+            }
+            cluster = next;
+        }
+        previous = cluster;
+        old_last = cluster;
+    }
+
+    while (count < need) {
+        k_u32_t fresh;
+
+        rc = fat_alloc_cluster(vol, &fresh);
+        if (rc != 0) {
+            break;
+        }
+
+        rc = fat_zero_cluster(vol, fresh);
+        if (rc != 0) {
+            (void)fat_entry_set(vol, fresh, 0);
+            break;
+        }
+
+        if (previous == 0) {
+            *first = fresh;
+        } else {
+            rc = fat_entry_set(vol, previous, fresh);
+            if (rc != 0) {
+                (void)fat_entry_set(vol, fresh, 0);
+                break;
+            }
+        }
+
+        if (segment == 0) {
+            segment = fresh;
+        }
+
+        previous = fresh;
+        count++;
+    }
+
+    if (count >= need) {
+        return 0;
+    }
+
+    /* The volume is full: the file keeps the clusters it had. */
+    if (segment != 0) {
+        (void)fat_chain_free(vol, segment);
+        if (old_last == 0) {
+            *first = 0;
+        } else {
+            (void)fat_entry_set(vol, old_last, end_of_chain(vol));
+        }
+    }
+
+    return (rc != 0) ? rc : KERR_NOSPC;
+}
+
+int fat_write_chain(struct fat_volume *vol, k_u32_t first_cluster, k_u64_t offset, const void *buf,
+                    k_size_t size, k_size_t *done)
+{
+    const k_u8_t *src = (const k_u8_t *)buf;
+    k_u32_t cluster;
+    k_u32_t index;
+    k_u32_t inside;
+    k_size_t written = 0;
+    int rc;
+
+    if (vol == NULL || done == NULL) {
+        return KERR_INVAL;
+    }
+
+    *done = 0;
+
+    if (size == 0) {
+        return 0;
+    }
+
+    if (first_cluster < 2u || buf == NULL) {
+        return KERR_INVAL;
+    }
+
+    index = (k_u32_t)(offset / vol->cluster_bytes);
+    inside = (k_u32_t)(offset % vol->cluster_bytes);
+
+    rc = chain_at(vol, first_cluster, index, &cluster);
+    if (rc != 0) {
+        return rc;
+    }
+    if (cluster == 0) {
+        return KERR_IO;
+    }
+
+    while (written < size) {
+        k_size_t chunk = vol->cluster_bytes - inside;
+
+        if (chunk > size - written) {
+            chunk = size - written;
+        }
+
+        rc = fat_write_volume(vol, cluster_offset(vol, cluster) + inside, src + written, chunk);
+        if (rc != 0) {
+            return rc;
+        }
+
+        written += chunk;
+        inside = 0;
+
+        if (written == size) {
+            break;
+        }
+
+        rc = fat_next_cluster(vol, cluster, &cluster);
+        if (rc != 0) {
+            return rc;
+        }
+        if (cluster == 0) {
+            return KERR_IO; /* the caller promised the chain was long enough */
+        }
+    }
+
+    *done = written;
     return 0;
 }

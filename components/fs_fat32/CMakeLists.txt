@@ -1,4 +1,4 @@
-# Micro OS — FAT12/16/32, read-only.
+# Micro OS — FAT12/16/32, read and write.
 #
 # The component is off by default on the board: the flash of the M5StickC
 # is formatted with MicroFS and a card is not in the enclosure yet (ADR

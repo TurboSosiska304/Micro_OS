@@ -13,6 +13,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "fs_fat32/fat.h"
 #include "kernel/blockdev.h"
@@ -61,6 +62,8 @@ static struct fat_image g_image;
 static struct test_device g_fat_device;
 static struct k_blockdev g_fat_blockdev;
 static k_u8_t g_file_data[VFS_FILE_DATA_SIZE];
+static k_u8_t g_io_buffer[8192];
+static k_u32_t g_sync_count;
 
 static void put16(k_u8_t *p, k_u16_t value)
 {
@@ -482,21 +485,31 @@ static int test_read(void *ctx, k_u32_t sector, void *buf, k_size_t count)
 
 static int test_write(void *ctx, k_u32_t sector, const void *buf, k_size_t count)
 {
-    K_UNUSED(ctx);
-    K_UNUSED(sector);
-    K_UNUSED(buf);
-    K_UNUSED(count);
+    struct test_device *dev = (struct test_device *)ctx;
+    size_t offset = (size_t)sector * TEST_DEV_SECTOR;
+    size_t size = (size_t)count * TEST_DEV_SECTOR;
 
-    /* The reader must never come here. A test that writes to the volume is
-     * a bug of the reader and not a feature of the medium. */
-    return -1;
+    if (dev->data == NULL || sector >= dev->sectors || count > dev->sectors - sector) {
+        return -1;
+    }
+
+    memcpy(dev->data + offset, buf, size);
+    return 0;
+}
+
+static int test_sync(void *ctx)
+{
+    K_UNUSED(ctx);
+
+    g_sync_count++;
+    return 0;
 }
 
 static const struct k_blockdev_ops g_test_ops = {
     .read = test_read,
     .write = test_write,
     .erase = NULL,
-    .sync = NULL,
+    .sync = test_sync,
 };
 
 static void setup(void)
@@ -809,15 +822,14 @@ static void test_errors(void)
     teardown();
 }
 
-static void test_read_only(void)
+static void test_no_mode_no_owner(void)
 {
     struct vfs_file file;
-    struct vfs_dirent entries[4];
     struct vfs_statfs volume;
-    k_size_t count = 0;
+    struct vfs_stat stat;
     char byte = 'x';
 
-    ktest_begin("fat: every write is ENOTSUP, not a permission of a file");
+    ktest_begin("fat: a volume has no modes, no owners and no time");
 
     setup();
     if (mount_image(FAT_KIND_32) != 0) {
@@ -828,21 +840,566 @@ static void test_read_only(void)
 
     KT_CHECK_INT_EQ(vfs_chmod(TEST_ROOT_POINT "/HELLO.TXT", 0644), KERR_NOTSUP);
     KT_CHECK_INT_EQ(vfs_chown(TEST_ROOT_POINT "/HELLO.TXT", 7), KERR_NOTSUP);
-    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/HELLO.TXT"), KERR_NOTSUP);
-    KT_CHECK_INT_EQ(vfs_mkdir(TEST_ROOT_POINT "/newdir"), KERR_NOTSUP);
-    KT_CHECK_INT_EQ(
-        vfs_open(TEST_ROOT_POINT "/new.txt", VFS_O_RDWR | VFS_O_CREAT, &file, g_file_data),
-        KERR_NOTSUP);
-    KT_CHECK_INT_EQ(vfs_list(TEST_ROOT_POINT "/HELLO.TXT", entries, 4, &count), KERR_NOTDIR);
-    KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &volume), KERR_NOTSUP);
 
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/HELLO.TXT", &stat), 0);
+    KT_CHECK_INT_EQ(stat.mode, 0);
+    KT_CHECK_INT_EQ(stat.owner, 0);
+
+    /* The free map is a walk of the table, and the volume reports it. */
+    KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &volume), 0);
+    KT_CHECK_INT_EQ(volume.block_size, g_image.cluster_bytes);
+    KT_CHECK_INT_EQ(volume.total_blocks, g_image.cluster_count);
+    KT_CHECK(volume.free_blocks > 0);
+    KT_CHECK(volume.free_blocks < volume.total_blocks);
+
+    /* A descriptor that was opened for reading is not a place to write. */
     KT_CHECK_INT_EQ(vfs_open(TEST_ROOT_POINT "/HELLO.TXT", VFS_O_RDONLY, &file, g_file_data), 0);
-    KT_CHECK_INT_EQ(vfs_write(&file, &byte, 1), KERR_NOTSUP);
+    KT_CHECK_INT_EQ(vfs_write(&file, &byte, 1), KERR_BADF);
     KT_CHECK_INT_EQ(vfs_close(&file), 0);
 
     /* The text of the refusal does not come from the first mounted
      * filesystem: MicroFS does not know this code. */
     KT_CHECK_STR_EQ(vfs_strerror(KERR_NOTSUP), "operation not supported");
+
+    teardown();
+}
+
+/* Write a whole buffer and close the descriptor; a number is the answer of
+ * the filesystem, an error is its code. */
+static int write_file(const char *path, const void *data, k_size_t size, int flags)
+{
+    struct vfs_file file;
+    int rc;
+
+    rc = vfs_open(path, VFS_O_RDWR | flags, &file, g_file_data);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = vfs_write(&file, data, size);
+    vfs_close(&file);
+
+    return rc;
+}
+
+static void test_write_create_read(void)
+{
+    struct vfs_file file;
+    struct vfs_stat stat;
+    char buffer[64];
+
+    ktest_begin("fat: a file is created, written, read and removed");
+
+    setup();
+    if (mount_image(FAT_KIND_32) != 0) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    g_sync_count = 0;
+
+    KT_CHECK_INT_EQ(
+        vfs_open(TEST_ROOT_POINT "/new.txt", VFS_O_RDWR | VFS_O_CREAT, &file, g_file_data), 0);
+    KT_CHECK_INT_EQ(vfs_write(&file, "hello", 5), 5);
+    KT_CHECK_INT_EQ(vfs_write(&file, " fat", 4), 4);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    KT_CHECK(g_sync_count > 0);
+
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/new.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.type, 1);
+    KT_CHECK_INT_EQ(stat.size, 9);
+    KT_CHECK_INT_EQ(stat.mode, 0);
+    KT_CHECK_INT_EQ(stat.owner, 0);
+
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(read_file(TEST_ROOT_POINT "/new.txt", buffer, sizeof(buffer)), 9);
+    KT_CHECK_STR_EQ(buffer, "hello fat");
+
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/new.txt"), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/new.txt", &stat), KERR_NOENT);
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/new.txt"), KERR_NOENT);
+
+    teardown();
+}
+
+static void test_write_rewrite_append(void)
+{
+    struct vfs_file file;
+    struct vfs_stat stat;
+    char buffer[64];
+    k_size_t i;
+
+    ktest_begin("fat: a file is rewritten, appended and grown across clusters");
+
+    setup();
+    if (mount_image(FAT_KIND_32) != 0) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(write_file(TEST_ROOT_POINT "/plain.txt", "abcdef", 6, VFS_O_CREAT), 6);
+
+    /* Overwrite in the middle: the descriptor decides where the bytes go. */
+    KT_CHECK_INT_EQ(vfs_open(TEST_ROOT_POINT "/plain.txt", VFS_O_RDWR, &file, g_file_data), 0);
+    file.offset = 2;
+    KT_CHECK_INT_EQ(vfs_write(&file, "XY", 2), 2);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(read_file(TEST_ROOT_POINT "/plain.txt", buffer, sizeof(buffer)), 6);
+    KT_CHECK_STR_EQ(buffer, "abXYef");
+
+    /* Append: the write starts at the end of the file, not at the offset
+     * the descriptor happens to have. */
+    KT_CHECK_INT_EQ(write_file(TEST_ROOT_POINT "/plain.txt", "!", 1, VFS_O_APPEND), 1);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/plain.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, 7);
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(read_file(TEST_ROOT_POINT "/plain.txt", buffer, sizeof(buffer)), 7);
+    KT_CHECK_STR_EQ(buffer, "abXYef!");
+
+    /* Truncate: the chain goes back to the free map and the file is new. */
+    KT_CHECK_INT_EQ(write_file(TEST_ROOT_POINT "/plain.txt", "z", 1, VFS_O_TRUNC), 1);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/plain.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, 1);
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(read_file(TEST_ROOT_POINT "/plain.txt", buffer, sizeof(buffer)), 1);
+    KT_CHECK_STR_EQ(buffer, "z");
+
+    /* A write of more than one cluster, byte for byte. */
+    for (i = 0; i < sizeof(g_io_buffer); i++) {
+        g_io_buffer[i] = (k_u8_t)('A' + (i % 26u));
+    }
+    KT_CHECK_INT_EQ(write_file(TEST_ROOT_POINT "/big.bin", g_io_buffer, sizeof(g_io_buffer),
+                               VFS_O_CREAT | VFS_O_TRUNC),
+                    (int)sizeof(g_io_buffer));
+    KT_CHECK_INT_EQ(read_file(TEST_ROOT_POINT "/big.bin", (char *)g_io_buffer, sizeof(g_io_buffer)),
+                    (int)sizeof(g_io_buffer));
+    KT_CHECK_INT_EQ(g_io_buffer[0], 'A');
+    KT_CHECK_INT_EQ(g_io_buffer[511], (k_u8_t)('A' + (511 % 26)));
+    KT_CHECK_INT_EQ(g_io_buffer[512], (k_u8_t)('A' + (512 % 26)));
+    KT_CHECK_INT_EQ(g_io_buffer[sizeof(g_io_buffer) - 1],
+                    (k_u8_t)('A' + ((sizeof(g_io_buffer) - 1) % 26)));
+
+    /* An existing file of the image keeps its entry and takes new bytes. */
+    KT_CHECK_INT_EQ(write_file(TEST_ROOT_POINT "/HELLO.TXT", "rewritten", 9, VFS_O_TRUNC), 9);
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(read_file(TEST_ROOT_POINT "/HELLO.TXT", buffer, sizeof(buffer)), 9);
+    KT_CHECK_STR_EQ(buffer, "rewritten");
+
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/plain.txt"), 0);
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/big.bin"), 0);
+
+    teardown();
+}
+
+static void test_mkdir_and_long_names(void)
+{
+    struct vfs_dirent entries[16];
+    struct vfs_stat stat;
+    k_size_t count = 0;
+    k_size_t i;
+    char buffer[64];
+    int saw_dir = 0;
+
+    ktest_begin("fat: a directory and a long name are created on the volume");
+
+    setup();
+    if (mount_image(FAT_KIND_32) != 0) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(vfs_mkdir(TEST_ROOT_POINT "/A Long Directory Name"), 0);
+    KT_CHECK_INT_EQ(vfs_mkdir(TEST_ROOT_POINT "/A Long Directory Name"), KERR_EXIST);
+
+    KT_CHECK_INT_EQ(write_file(TEST_ROOT_POINT "/A Long Directory Name/a long file name inside.txt",
+                               "inside", 6, VFS_O_CREAT),
+                    6);
+
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(read_file(TEST_ROOT_POINT "/A Long Directory Name/a long file name inside.txt",
+                              buffer, sizeof(buffer)),
+                    6);
+    KT_CHECK_STR_EQ(buffer, "inside");
+
+    KT_CHECK_INT_EQ(vfs_list(TEST_ROOT_POINT, entries, 16, &count), 0);
+    for (i = 0; i < count; i++) {
+        if (strcmp(entries[i].name, "A Long Directory Name") == 0) {
+            saw_dir = 1;
+            KT_CHECK_INT_EQ(entries[i].type, 2);
+        }
+    }
+    KT_CHECK(saw_dir);
+
+    /* A directory that holds a file is not removable. */
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/A Long Directory Name"), KERR_NOTEMPTY);
+    KT_CHECK_INT_EQ(
+        vfs_unlink(TEST_ROOT_POINT "/A Long Directory Name/a long file name inside.txt"), 0);
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/A Long Directory Name"), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/A Long Directory Name", &stat), KERR_NOENT);
+
+    /* Two names that cut to the same 8.3 name: the second gets a "~N". */
+    KT_CHECK_INT_EQ(write_file(TEST_ROOT_POINT "/abcdefgh one.txt", "one", 3, VFS_O_CREAT), 3);
+    KT_CHECK_INT_EQ(write_file(TEST_ROOT_POINT "/abcdefgh two.txt", "two", 3, VFS_O_CREAT), 3);
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(read_file(TEST_ROOT_POINT "/abcdefgh two.txt", buffer, sizeof(buffer)), 3);
+    KT_CHECK_STR_EQ(buffer, "two");
+
+    KT_CHECK_INT_EQ(vfs_list(TEST_ROOT_POINT, entries, 16, &count), 0);
+    {
+        int saw_one = 0;
+        int saw_two = 0;
+
+        for (i = 0; i < count; i++) {
+            if (strcmp(entries[i].name, "abcdefgh one.txt") == 0) {
+                saw_one = 1;
+            }
+            if (strcmp(entries[i].name, "abcdefgh two.txt") == 0) {
+                saw_two = 1;
+            }
+        }
+
+        KT_CHECK(saw_one);
+        KT_CHECK(saw_two);
+    }
+
+    /* A name that is a plain 8.3 name needs no long entry, and the listing
+     * shows exactly what the caller wrote. */
+    KT_CHECK_INT_EQ(write_file(TEST_ROOT_POINT "/SHORT.TXT", "s", 1, VFS_O_CREAT), 1);
+    KT_CHECK_INT_EQ(vfs_list(TEST_ROOT_POINT, entries, 16, &count), 0);
+    {
+        int saw_short = 0;
+
+        for (i = 0; i < count; i++) {
+            if (strcmp(entries[i].name, "SHORT.TXT") == 0) {
+                saw_short = 1;
+            }
+        }
+
+        KT_CHECK(saw_short);
+    }
+
+    /* A name beyond ASCII: the units go down as UTF-16 and the listing
+     * gives the same bytes back. */
+    KT_CHECK_INT_EQ(
+        write_file(TEST_ROOT_POINT "/\xd0\xb8\xd0\xbc\xd1\x8f.txt", "utf8", 4, VFS_O_CREAT), 4);
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(
+        read_file(TEST_ROOT_POINT "/\xd0\xb8\xd0\xbc\xd1\x8f.txt", buffer, sizeof(buffer)), 4);
+    KT_CHECK_STR_EQ(buffer, "utf8");
+    KT_CHECK_INT_EQ(vfs_list(TEST_ROOT_POINT, entries, 16, &count), 0);
+    {
+        int saw_utf8 = 0;
+
+        for (i = 0; i < count; i++) {
+            if (strcmp(entries[i].name, "\xd0\xb8\xd0\xbc\xd1\x8f.txt") == 0) {
+                saw_utf8 = 1;
+            }
+        }
+
+        KT_CHECK(saw_utf8);
+    }
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/\xd0\xb8\xd0\xbc\xd1\x8f.txt"), 0);
+
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/abcdefgh one.txt"), 0);
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/abcdefgh two.txt"), 0);
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/SHORT.TXT"), 0);
+
+    teardown();
+}
+
+static void test_free_space(void)
+{
+    struct vfs_statfs before;
+    struct vfs_statfs after;
+    struct vfs_statfs freed;
+    k_u64_t used;
+
+    ktest_begin("fat: the free clusters go down with a write and come back");
+
+    setup();
+    if (mount_image(FAT_KIND_32) != 0) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &before), 0);
+    KT_CHECK(before.free_blocks > 8);
+
+    memset(g_io_buffer, 0x5A, sizeof(g_io_buffer));
+    KT_CHECK_INT_EQ(
+        write_file(TEST_ROOT_POINT "/space.bin", g_io_buffer, 3 * 512 + 100, VFS_O_CREAT),
+        3 * 512 + 100);
+
+    KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &after), 0);
+    used = before.free_blocks - after.free_blocks;
+    KT_CHECK_INT_EQ(used, 4); /* three clusters and the fourth for 100 bytes */
+
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/space.bin"), 0);
+    KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &freed), 0);
+    KT_CHECK_INT_EQ(freed.free_blocks, before.free_blocks);
+
+    teardown();
+}
+
+static void test_remount_persists(void)
+{
+    struct vfs_stat stat;
+    char buffer[32];
+    k_u32_t fat_bytes;
+
+    ktest_begin("fat: the writes are on the medium after a remount");
+
+    setup();
+    if (mount_image(FAT_KIND_32) != 0) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(write_file(TEST_ROOT_POINT "/kept.txt", "still here", 10, VFS_O_CREAT), 10);
+    KT_CHECK_INT_EQ(vfs_mkdir(TEST_ROOT_POINT "/kept"), 0);
+    KT_CHECK_INT_EQ(write_file(TEST_ROOT_POINT "/kept/inside.txt", "deep", 4, VFS_O_CREAT), 4);
+
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+    KT_CHECK_INT_EQ(vfs_mount_count(), 1);
+
+    KT_CHECK_INT_EQ(vfs_mount_type(TEST_ROOT_POINT, "fat32", "fat0"), 0);
+    KT_CHECK_INT_EQ(vfs_mount_count(), 2);
+
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(read_file(TEST_ROOT_POINT "/kept.txt", buffer, sizeof(buffer)), 10);
+    KT_CHECK_STR_EQ(buffer, "still here");
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/kept/inside.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, 4);
+
+    /* Both copies of the table say the same thing: a write keeps them
+     * together, the way a checker expects. */
+    fat_bytes = g_image.fat_sectors * g_image.bytes_per_sector;
+    KT_CHECK_INT_EQ(memcmp(g_image.data + g_image.reserved_sectors * g_image.bytes_per_sector,
+                           g_image.data + (g_image.reserved_sectors + g_image.fat_sectors) *
+                                              g_image.bytes_per_sector,
+                           fat_bytes),
+                    0);
+
+    teardown();
+}
+
+static void test_fixed_root_write(enum fat_kind kind, const char *title)
+{
+    struct vfs_stat stat;
+    char buffer[32];
+    int rc;
+
+    ktest_begin(title);
+
+    setup();
+    rc = mount_image(kind);
+    KT_CHECK_INT_EQ(rc, 0);
+    if (rc != 0) {
+        teardown();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(write_file(TEST_ROOT_POINT "/WORK.TXT", "fixed root", 10, VFS_O_CREAT), 10);
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(read_file(TEST_ROOT_POINT "/WORK.TXT", buffer, sizeof(buffer)), 10);
+    KT_CHECK_STR_EQ(buffer, "fixed root");
+
+    KT_CHECK_INT_EQ(vfs_mkdir(TEST_ROOT_POINT "/DIR1"), 0);
+    KT_CHECK_INT_EQ(write_file(TEST_ROOT_POINT "/DIR1/IN.TXT", "inner", 5, VFS_O_CREAT), 5);
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(read_file(TEST_ROOT_POINT "/DIR1/IN.TXT", buffer, sizeof(buffer)), 5);
+    KT_CHECK_STR_EQ(buffer, "inner");
+
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/DIR1/IN.TXT"), 0);
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/DIR1"), 0);
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/WORK.TXT"), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/WORK.TXT", &stat), KERR_NOENT);
+
+    teardown();
+}
+
+static void test_read_only_medium(void)
+{
+    struct vfs_file file;
+    k_u8_t byte = 0;
+
+    ktest_begin("fat: a medium without a write of its own takes no write");
+
+    setup();
+    if (mount_image(FAT_KIND_32) != 0) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    /* The reader still works: a device that cannot be written is a card
+     * whose switch says so, and the volume on it is readable. */
+    KT_CHECK_INT_EQ(vfs_open(TEST_ROOT_POINT "/HELLO.TXT", VFS_O_RDONLY, &file, g_file_data), 0);
+    KT_CHECK_INT_EQ(vfs_read(&file, g_io_buffer, 4), 4);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    /* Take the write away for the length of one open. */
+    {
+        static const struct k_blockdev_ops read_only_ops = {
+            .read = test_read,
+            .write = NULL,
+            .erase = NULL,
+            .sync = NULL,
+        };
+        const struct k_blockdev_ops *saved = g_fat_blockdev.ops;
+
+        g_fat_blockdev.ops = &read_only_ops;
+        KT_CHECK_INT_EQ(
+            vfs_open(TEST_ROOT_POINT "/nope.txt", VFS_O_RDWR | VFS_O_CREAT, &file, g_file_data),
+            KERR_NOTSUP);
+        KT_CHECK_INT_EQ(vfs_open(TEST_ROOT_POINT "/HELLO.TXT", VFS_O_RDWR, &file, g_file_data), 0);
+        KT_CHECK_INT_EQ(vfs_write(&file, &byte, 1), KERR_NOTSUP);
+        KT_CHECK_INT_EQ(vfs_close(&file), 0);
+        g_fat_blockdev.ops = saved;
+    }
+
+    teardown();
+}
+
+static void test_full_volume(void)
+{
+    struct vfs_file file;
+    struct vfs_statfs before;
+    struct vfs_statfs after;
+    struct vfs_stat stat;
+    k_u32_t written = 0;
+    int rc;
+
+    ktest_begin("fat: a full volume says ENOSPC and gives the space back");
+
+    setup();
+    if (mount_image(FAT_KIND_12) != 0) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &before), 0);
+    KT_CHECK(before.free_blocks > 0);
+
+    memset(g_io_buffer, 0xA5, 512);
+    KT_CHECK_INT_EQ(
+        vfs_open(TEST_ROOT_POINT "/BIG.BIN", VFS_O_RDWR | VFS_O_CREAT, &file, g_file_data), 0);
+
+    for (;;) {
+        rc = vfs_write(&file, g_io_buffer, 512);
+        if (rc < 0) {
+            break;
+        }
+        written += (k_u32_t)rc;
+        if (written > 1024u * 1024u) {
+            break;
+        }
+    }
+
+    KT_CHECK_INT_EQ(rc, KERR_NOSPC);
+    KT_CHECK(written > 0);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    /* A write that does not fit leaves the file as it was: no half cluster
+     * and no size that promises bytes that are not there. */
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/BIG.BIN", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, written);
+
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/BIG.BIN"), 0);
+    KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &after), 0);
+    KT_CHECK_INT_EQ(after.free_blocks, before.free_blocks);
+
+    teardown();
+}
+
+static void test_full_fixed_root(void)
+{
+    char name[16];
+    char path[48];
+    struct vfs_file file;
+    int created = 0;
+    int rc = 0;
+    int i;
+
+    ktest_begin("fat: the fixed root of the old cards stops at its last entry");
+
+    setup();
+    if (mount_image(FAT_KIND_12) != 0) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    for (i = 0; i < 64; i++) {
+        snprintf(name, sizeof(name), "F%02d.TXT", i);
+        snprintf(path, sizeof(path), "%s/%s", TEST_ROOT_POINT, name);
+
+        rc = vfs_open(path, VFS_O_RDWR | VFS_O_CREAT, &file, g_file_data);
+        if (rc != 0) {
+            break;
+        }
+        KT_CHECK_INT_EQ(vfs_close(&file), 0);
+        created++;
+    }
+
+    KT_CHECK_INT_EQ(rc, KERR_NOSPC);
+    KT_CHECK(created > 0);
+    KT_CHECK(created < 32);
+
+    /* The space of a removed entry is usable again. */
+    snprintf(path, sizeof(path), "%s/F%02d.TXT", TEST_ROOT_POINT, created - 1);
+    KT_CHECK_INT_EQ(vfs_unlink(path), 0);
+    KT_CHECK_INT_EQ(vfs_open(path, VFS_O_RDWR | VFS_O_CREAT, &file, g_file_data), 0);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    teardown();
+}
+
+static void test_write_errors(void)
+{
+    struct vfs_file file;
+    struct vfs_stat stat;
+    struct vfs_statfs volume;
+
+    ktest_begin("fat: a write refuses what the volume cannot hold");
+
+    setup();
+    if (mount_image(FAT_KIND_32) != 0) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(
+        vfs_open(TEST_ROOT_POINT "/nodir/file.txt", VFS_O_RDWR | VFS_O_CREAT, &file, g_file_data),
+        KERR_NOENT);
+    KT_CHECK_INT_EQ(vfs_open(TEST_ROOT_POINT "/sub", VFS_O_RDWR, &file, g_file_data), KERR_ISDIR);
+    KT_CHECK_INT_EQ(vfs_mkdir(TEST_ROOT_POINT "/HELLO.TXT"), KERR_EXIST);
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT), KERR_INVAL);
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/no.txt"), KERR_NOENT);
+
+    /* An offset of 4 GiB is the end of what a FAT file can say. */
+    KT_CHECK_INT_EQ(
+        vfs_open(TEST_ROOT_POINT "/far.bin", VFS_O_RDWR | VFS_O_CREAT, &file, g_file_data), 0);
+    file.offset = 0xFFFFFFF0u;
+    KT_CHECK_INT_EQ(vfs_write(&file, "x", 1), KERR_NOSPC);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/far.bin"), 0);
+
+    /* A path into a file is not a directory. */
+    KT_CHECK_INT_EQ(
+        vfs_open(TEST_ROOT_POINT "/HELLO.TXT/inside", VFS_O_RDWR | VFS_O_CREAT, &file, g_file_data),
+        KERR_NOTDIR);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/HELLO.TXT", &stat), 0);
+    KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &volume), 0);
 
     teardown();
 }
@@ -981,7 +1538,18 @@ void test_fs_fat(void)
     test_long_names();
     test_readdir();
     test_errors();
-    test_read_only();
+    test_no_mode_no_owner();
+    test_write_create_read();
+    test_write_rewrite_append();
+    test_mkdir_and_long_names();
+    test_free_space();
+    test_remount_persists();
+    test_fixed_root_write(FAT_KIND_12, "fat: a FAT12 volume takes a file and a directory");
+    test_fixed_root_write(FAT_KIND_16, "fat: a FAT16 volume takes a file and a directory");
+    test_full_volume();
+    test_full_fixed_root();
+    test_write_errors();
+    test_read_only_medium();
     test_fat12_and_fat16();
     test_null_operations();
     test_types_and_bad_image();

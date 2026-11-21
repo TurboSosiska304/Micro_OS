@@ -2,6 +2,8 @@
 
 * Status: accepted
 * Date: 2026-11-21
+* Updated: 2026-11-21 — the reader became read-write: create, write,
+  truncate, append, unlink, mkdir, long names that are made, `statfs`.
 
 ## Context
 
@@ -21,8 +23,9 @@ filesystem it did not format".
 
 FAT is the answer to that question because it is the volume a person brings:
 a card from a camera, a disk from a laptop, a stick from another machine.
-The kernel must read it, and it must not be the second writer of it. The
-first reader that writes is how a volume that another system owns is lost.
+The kernel must read it, and it must not corrupt it. The first reader that
+writes is how a volume that another system owns is lost, so the reader came
+first and the writer came after it had its tests.
 
 ## Decision
 
@@ -84,34 +87,46 @@ the tests mount MicroFS at `/`, and a host image without it has no `/etc`
 and no program. The option exists so that the matrix is written down and a
 firmware build can say what it contains.
 
-The FAT reader is a component of its own (`components/fs_fat32/`). On the
+The FAT filesystem is a component of its own (`components/fs_fat32/`). On the
 board it is registered only when `CONFIG_MICRO_OS_FS_FAT32=y`; when the
-option is off, the component registers no sources, so no object of the
-reader reaches the firmware. The x86-64 project has the same choice as a
+option is off, the component registers no sources, so no object of it
+reaches the firmware. The x86-64 project has the same choice as a
 CMake option, off for `make x86-smoke` and `make x86-run`, because the disk
 of that machine is one MicroFS volume.
 
-The host tests always cover the reader: `tests/CMakeLists.txt` compiles the
+The host tests always cover both halves: `tests/CMakeLists.txt` compiles the
 three source files of the component into the test binary directly. A test
-that depended on the firmware option would leave the reader untested in the
-default build, and a filesystem without a test is unfinished work
+that depended on the firmware option would leave the component untested in
+the default build, and a filesystem without a test is unfinished work
 (`AGENTS.md`). What the option controls is what an *image* links, not what
 the tests can reach.
 
 ### 3. What FAT means in this kernel
 
-The reader speaks FAT12, FAT16 and FAT32. The type follows the boot sector:
+The component speaks FAT12, FAT16 and FAT32. The type follows the boot sector:
 a zero `FATSize16` with a non-zero `FATSize32` is FAT32; otherwise the count
 of the clusters decides between 12 and 16, as the specification does.
 
-**Read-only.** No call of the component writes to the medium, not even to
-"repair" a table. There is no `write`, no `create`, no `unlink`, no `mkdir`,
-no `chmod` and no `chown` in its operations. A caller that asks for one gets
-`KERR_NOTSUP` (`ENOTSUP`, 95 of POSIX), not `KERR_PERM`: the operation is
-not forbidden by the mode of an object, the filesystem does not have it.
-`open` refuses the write flags (`O_WRONLY`, `O_RDWR`, `O_CREAT`, `O_TRUNC`,
-`O_APPEND`) with the same code. A `write` on a descriptor that was opened
-for reading is `KERR_NOTSUP` through the empty operation of the VFS.
+**Read and write.** The component speaks the whole life of a file: `open`
+with `O_CREAT`, `O_TRUNC` and `O_APPEND`, `write`, `close`, `unlink` and
+`mkdir`; `read`, `list`, `readdir` and `stat` are the reader it always was.
+`chmod` and `chown` are `KERR_NOTSUP`, and `write` on a descriptor that was
+opened for reading is `KERR_BADF`: the operation exists, this descriptor was
+not opened for it. `unlink` removes a file or an empty directory; a directory
+that still holds an entry is `KERR_NOTEMPTY` (the VFS has no `rmdir` of its
+own yet). `rename` is not in the operations of the VFS and is absent here.
+
+A write either fits whole or does not touch the file. The clusters of the new
+length are taken from the free map before the first byte goes down, and a
+volume that runs out in the middle of that says `KERR_NOSPC` and gives back
+what it had just taken. A file stops below 4 GiB, the limit of the size field
+of an entry.
+
+Every change reaches the medium before the call returns, and the device is
+asked to write through its own cache (`ops->sync`) when it has one. There is
+no journal and no cache of the changes: a power cut in the middle of a write
+leaves a cluster that no chain names or a directory entry that is half
+written, and `fsck` is not in this kernel to repair either.
 
 **No modes, no owner.** `stat` answers `mode = 0` and `owner = 0`, the same
 way procfs and devfs answer for an object that has no such attribute. A zero
@@ -121,7 +136,7 @@ filesystem keeps no modes" for the search bit of a directory and for
 `(not set)` where it prints a mode.
 
 **No time.** A FAT entry has a date and a time of its change, and this
-reader ignores both. `struct vfs_stat` has no field for them yet, and
+component ignores both. `struct vfs_stat` has no field for them yet, and
 inventing one here would make the first filesystem with a real timestamp
 a second change of the same contract. The bytes are on the medium and
 the reader does not lose them; it does not report them either.
@@ -139,18 +154,38 @@ cut at a UTF-8 character boundary in a listing. The *lookup* compares the
 whole name, so a path of the tree still reaches a file whose listed name is
 shorter. The path itself is bounded by `VFS_PATH_MAX`, as everywhere else.
 
-**The geometry.** The reader accepts 512, 1024, 2048 and 4096 bytes per FAT
+A name that is created is written the other way round: the 8.3 name is
+generated from it (upper case, the characters FAT allows, `~N` when another
+entry already has that short name) and a run of long-name entries is put in
+front of the short one when the name is not already a plain 8.3 name. The
+checksum of the short name goes into every long entry, as the specification
+requires; a reader of this kernel or of Windows that finds the run broken
+falls back to the short name, which is why the checksum is not optional.
+Names are decoded and encoded as UTF-8, so a long name of the board can hold
+any language the terminal writes.
+
+**The geometry.** It accepts 512, 1024, 2048 and 4096 bytes per FAT
 sector and a cluster up to 64 KiB. It refuses a volume bigger than the
 device, a table that does not cover the clusters, a root cluster that is not
 one, and a chain that is longer than the volume (a loop). The FAT12/16 root
 is the fixed region of the boot sector; every other directory is a chain.
 The block device may hand out sectors of 1 KiB while the volume speaks 512
-bytes: the reader places every read in the sector of the device and caches
-the one it last read.
+bytes: the component places every read and every write in the sector of the
+device and caches the one it touched last.
 
-The medium is never written and never scanned for a second volume: one FAT
-volume at a time, the same way MicroFS has one. A second card is a second
-mount of the same reader in a later version.
+The volume is never scanned for a second one: one FAT volume at a time, the
+same way MicroFS has one. A second card is a second mount of the same
+component in a later version; the static slot holds one volume.
+
+**The table and the free map.** A cluster is allocated by finding the first
+zero entry of the table, marking it as the end of a chain and zeroing the
+cluster. The 8.3 entry of the file names the first cluster only when the
+file has a byte in it: an empty file has cluster 0 and no space at all. The
+chain is extended before a write, never during it. Both copies of the table
+of a volume with two are written on every change; a volume whose copies
+disagree is a volume another system will complain about. The count of the
+free clusters for `statfs` is a walk of the table, the price of having no
+bitmap in the format.
 
 ### 4. Several filesystems at one time
 
@@ -189,23 +224,31 @@ of a second volume are proven today.
 * **ext2**: the next reader, and the first one with inodes, blocks of a
   variable size and a superblock that a checker can walk. `MICRO_OS_FS_EXT2`
   is a name and a configure error, not a component.
-* **write support for FAT**: a journal, a cache of the changes and a
-  decision about the owner of a volume are the price, and none of them is
-  paid here.
+* **a journal or a cache of the changes**: every write goes to the medium
+  before the call returns. The price is the wear of the card and a volume
+  that a power cut can leave inconsistent; the alternative is a third copy
+  of the data to replay, which this kernel does not have the memory for.
+* **`rename`**: the VFS has no such call. When it gets one, FAT can move an
+  entry between two directories of the same volume; across volumes is a copy.
+* **a file that is removed while a descriptor is open**: FAT has no inode to
+  keep alive. A write through the old descriptor finds that the entry no
+  longer names the file and is refused; the caller is expected not to use a
+  descriptor after the name is gone.
 * **timestamps**: see above; the field of `struct vfs_stat` waits for a
-  decision of its own.
+  decision of its own. The date and time fields of a directory entry are
+  written as zero, which a reader shows as an unknown time.
 * **exFAT**, FAT64, the FAT32 extended flags and the backup boot sector:
   a volume that needs them is not one of the volumes this reader promises.
 * **fsck of FAT**: the reader reports `KERR_IO` for a chain it cannot
   follow; it does not repair a volume and it does not walk the whole medium
-  to count the lost clusters.
+  to count the lost clusters. A volume that a power cut caught in the middle
+  of a write needs a checker of the host, not this component.
 * **a second FAT volume, hotplug and eject**: one static volume, like
   MicroFS. A card that comes and goes is a driver question first.
 * **Unicode case folding and normalization**: the lookup is ASCII, the
   bytes of a name are otherwise compared as they are.
-* **`statfs` of FAT**: the count of the free clusters is a walk of the
-  table, and a reader that only reads a file does not need it. The call is
-  `KERR_NOTSUP` today.
+* **a bitmap of the free clusters**: `statfs` walks the table, and that is
+  the whole cost of not keeping a second copy of the free map.
 
 ## Consequences
 
@@ -214,13 +257,16 @@ image can contain one reader or two, and the second one is the volume of the
 world outside the board. The tests build FAT12, FAT16 and FAT32 images in
 the memory and mount them next to MicroFS, which proves the registry, the
 path resolution below a mount point, the long names, the fixed root of the
-old cards and the read-only refusals without a card or a `mkfs.fat`.
+old cards and the write path: a file is created, rewritten, appended,
+removed, a directory is made, the free map goes down and comes back, and a
+volume that is mounted again still has the bytes.
 
-The price: the reader is a second user of `kernel/blockdev.h` with its own
+The price: the component is a second user of `kernel/blockdev.h` with its own
 sector cache (the block layer still has no cache of its own); a FAT volume
 cannot express a mode, an owner or a time, so a program that asks for them
-is told "not supported" and not "here is a default"; and the mount of a
-second volume is still a call of the boot, not a file of `/etc`.
+is told "not supported" and not "here is a default"; a write has no journal
+under it, so the volume is as safe as the medium and the moment; and the
+mount of a second volume is still a call of the boot, not a file of `/etc`.
 
 Next, in an order that makes sense: the `mount` command and `/etc/fstab`
 (they need the registry and a parser of the configuration), the timestamps
@@ -232,5 +278,5 @@ reader with a format the project can also write.
 * ADR 0005 - programs and protection: the mode and the owner of an object.
 * ADR 0008 - block devices, transports and partitions.
 * `docs/memory.md` - the format of MicroFS and the mode stored in a record.
-* `components/fs_fat32/` - the reader; `tests/cases/test_fs_fat.c` - the
-  images and the properties.
+* `components/fs_fat32/` - the filesystem; `tests/cases/test_fs_fat.c` -
+  the images and the properties.

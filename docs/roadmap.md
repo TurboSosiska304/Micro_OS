@@ -126,10 +126,14 @@ written when the project was an operating system for one board; the numbers
 
 * [x] A second filesystem behind the VFS: the block devices and the MBR/GPT
       partitions are there (ADR 0008), the types are registered and
-      mounted by name (`vfs_mount_type`), and FAT12/16/32 is a read-only
-      reader with long names (ADR 0009); a volume of `/mnt/...` is mounted
+      mounted by name (`vfs_mount_type`), and FAT12/16/32 is read and
+      written with long names (ADR 0009); a volume of `/mnt/...` is mounted
       next to MicroFS in the tests
-* [ ] FAT32 write: create, write, unlink, and the free-cluster map a write needs
+* [x] FAT32 write: create, write, append, truncate, unlink, mkdir and the
+      free-cluster map a write needs; both copies of the table, long names
+      made with their checksum, `statfs`; no journal, so a checker of the
+      host is still the repair of a volume a power cut caught
+* [ ] `fsck` of FAT and a journal or a cache of the changes under a write
 * [ ] ext2, the reader with inodes and a superblock a checker can walk
 * [x] `/etc/fstab` and the `mount` command over the type registry: the boot
       mounts the table after the root, `mount <device> <point> <type>` and
