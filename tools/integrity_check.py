@@ -19,7 +19,7 @@ What is checked:
     format     the formatting of the C sources (clang-format)
     layers     the portable layers do not include the platform (ADR 0004)
     port       every function of the port contract has its implementation
-    budget     the image of the kernel stays inside its budget
+    budget     the image of the kernel and its static DRAM stay inside the budget
 
 The exit status is 0 when everything is in order and 1 otherwise.
 """
@@ -1385,6 +1385,56 @@ def check_budget(root: str, report: Report) -> None:
         "; ".join(over) + f" (budget {IMAGE_BUDGET_BYTES})" if over else f"{sizes} of {IMAGE_BUDGET_BYTES}",
     )
 
+
+def sram_module():
+    """The budget of the static DRAM lives in a tool of its own."""
+    import importlib.util
+
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sram_budget.py")
+    spec = importlib.util.spec_from_file_location("microos_sram_budget", path)
+    module = importlib.util.module_from_spec(spec)
+    # The dataclass of the tool looks itself up in sys.modules by name.
+    sys.modules[spec.name] = module
+
+    # A check of the repository does not leave a __pycache__ in the tree.
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = previous
+
+    return module
+
+
+def check_sram(root: str, report: Report) -> None:
+    """The static DRAM of the board (data and bss) stays inside its budget."""
+    group = "budget"
+    name = "the static DRAM fits the budget"
+
+    try:
+        module = sram_module()
+        measurements = module.collect_measurements(root, [], [])
+    except Exception as exc:  # noqa: BLE001 - a build nobody can read is a failed check
+        report.add(group, name, False, f"cannot measure the static DRAM: {exc}")
+        return
+
+    if not measurements:
+        report.skip(
+            group,
+            name,
+            "no ESP-IDF build (build*/micro_os.map or build*/idf_size.json) is there",
+        )
+        return
+
+    over = [item for item in measurements if item.used > module.SRAM_BUDGET_BYTES]
+    detail = "; ".join(module.describe(item) for item in measurements)
+    if over:
+        detail += f" (budget {module.SRAM_BUDGET_BYTES})"
+
+    report.add(group, name, not over, detail)
+
+
 def check_version(root: str, report: Report, expected: str) -> None:
     """The version of the kernel against the expected one (the tag)."""
     group = "version"
@@ -1460,6 +1510,7 @@ def main(argv: list) -> int:
     check_portable_build(root, report)
     check_port_contract(root, report)
     check_budget(root, report)
+    check_sram(root, report)
     if args.expect_version:
         check_version(root, report, args.expect_version)
     if not args.skip_git:
