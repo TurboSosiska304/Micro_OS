@@ -77,11 +77,20 @@ static void com1_init(void)
  */
 void k_port_write(const char *data, k_size_t len)
 {
+    k_u64_t flags;
     k_size_t i;
 
     if (data == NULL) {
         return;
     }
+
+    /*
+     * The console is one resource and a line is written byte by byte to the
+     * UART: a tick in the middle of it would put the bytes of another task
+     * between two of these, and a transcript would read a line that was
+     * never printed. The section is the whole call, and it is short.
+     */
+    flags = port_save_flags_and_cli();
 
     port_x86_64_vga_write(data, len);
 
@@ -99,6 +108,8 @@ void k_port_write(const char *data, k_size_t len)
         }
         port_outb(COM1, (k_u8_t)c);
     }
+
+    port_restore_flags(flags);
 }
 
 int k_port_console_readline(char *buf, k_size_t size)
