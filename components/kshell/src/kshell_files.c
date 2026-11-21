@@ -16,6 +16,20 @@
 #include "libc/stdlib.h"
 #include "libc/unistd.h"
 
+#if defined(MICRO_OS_FS_FAT32) && MICRO_OS_FS_FAT32
+#include "fs_fat32/fat.h"
+#define FSCK_USAGE "fsck [fat <point|device>]"
+#define FSCK_DETAIL                                                                                \
+    "Read-only, for MicroFS and for FAT: the report names the first problem, and\n"                \
+    "nothing is repaired. A person decides what to do about a broken record.\n"                    \
+    "  fat <point|device>  check the FAT volume at the point, or on the device\n"
+#else
+#define FSCK_USAGE "fsck"
+#define FSCK_DETAIL                                                                                \
+    "Read-only: the report names the first problem, and nothing is repaired.\n"                    \
+    "A person decides what to do about a broken record.\n"
+#endif
+
 #define SHELL_MAX_ENTRIES 64
 #define SHELL_LS_CHILDREN 16
 #define SHELL_PATH_MAX 128
@@ -1090,32 +1104,35 @@ static int cmd_stat(int argc, char **argv)
  * broken record, and a checker that writes is a formatter that nobody
  * asked for.
  */
-static int cmd_fsck(int argc, char **argv)
+#if defined(MICRO_OS_FS_FAT32) && MICRO_OS_FS_FAT32
+static int fsck_fat(const char *what)
 {
-    struct mfs_check_report report;
+    struct fat_check_report report;
     int rc;
 
-    K_UNUSED(argv);
-
-    if (argc != 1) {
-        kshell_printf("usage: fsck\n");
-        return KSHELL_USAGE;
-    }
-
-    rc = mfs_check(&report);
-    if (rc == MFS_EINVAL) {
-        kshell_printf("fsck: no volume is mounted\n");
+    rc = fat_check(what, &report);
+    if (rc == KERR_NOENT) {
+        kshell_printf("fsck: %s: no such device\n", what);
         return KSHELL_ERROR;
     }
 
-    if (rc != MFS_OK) {
-        kshell_printf("fsck: the volume cannot be read (%s)\n", mfs_strerror(rc));
+    if (rc == KERR_INVAL) {
+        kshell_printf("fsck: %s: not a FAT volume of this machine\n", what);
         return KSHELL_ERROR;
     }
 
-    kshell_printf("fsck: %u file(s), %u directory(ies), %u of %u block(s) free\n",
-                  (unsigned)report.files, (unsigned)report.directories,
-                  (unsigned)report.free_blocks, (unsigned)report.data_blocks);
+    if (rc != 0) {
+        kshell_printf("fsck: %s: %s\n", what, fat_strerror(rc));
+        return KSHELL_ERROR;
+    }
+
+    kshell_printf("fsck: FAT%u, %u file(s), %u directory(ies), %u of %u cluster(s) free\n",
+                  (unsigned)report.type, (unsigned)report.files, (unsigned)report.directories,
+                  (unsigned)report.free_clusters, (unsigned)report.clusters);
+
+    if (report.lost_clusters != 0) {
+        kshell_printf("fsck: %u lost cluster(s)\n", (unsigned)report.lost_clusters);
+    }
 
     if (report.errors != 0) {
         kshell_printf("fsck: %u problem(s), the first: %s\n", (unsigned)report.errors,
@@ -1126,6 +1143,52 @@ static int cmd_fsck(int argc, char **argv)
     kshell_printf("fsck: the volume is consistent\n");
 
     return KSHELL_OK;
+}
+#endif
+
+static int cmd_fsck(int argc, char **argv)
+{
+    struct mfs_check_report report;
+    int rc;
+
+    if (argc == 1) {
+        rc = mfs_check(&report);
+        if (rc == MFS_EINVAL) {
+            kshell_printf("fsck: no volume is mounted\n");
+            return KSHELL_ERROR;
+        }
+
+        if (rc != MFS_OK) {
+            kshell_printf("fsck: the volume cannot be read (%s)\n", mfs_strerror(rc));
+            return KSHELL_ERROR;
+        }
+
+        kshell_printf("fsck: %u file(s), %u directory(ies), %u of %u block(s) free\n",
+                      (unsigned)report.files, (unsigned)report.directories,
+                      (unsigned)report.free_blocks, (unsigned)report.data_blocks);
+
+        if (report.errors != 0) {
+            kshell_printf("fsck: %u problem(s), the first: %s\n", (unsigned)report.errors,
+                          report.first);
+            return KSHELL_ERROR;
+        }
+
+        kshell_printf("fsck: the volume is consistent\n");
+
+        return KSHELL_OK;
+    }
+
+#if defined(MICRO_OS_FS_FAT32) && MICRO_OS_FS_FAT32
+    if (argc == 3 && strcmp(argv[1], "fat") == 0) {
+        return fsck_fat(argv[2]);
+    }
+#else
+    (void)argv;
+#endif
+
+    kshell_printf("usage: %s\n", FSCK_USAGE);
+
+    return KSHELL_USAGE;
 }
 
 static int cmd_path(int argc, char **argv)
@@ -1335,10 +1398,7 @@ static const struct file_command {
                 "`/` may leave while /proc and /dev stay, which is what mkfs -y does.\n"},
      cmd_umount},
     {"fsck",
-     {.summary = "check the volume, read-only",
-      .usage = "fsck",
-      .detail = "Read-only: the report names the first problem, and nothing is repaired.\n"
-                "A person decides what to do about a broken record.\n"},
+     {.summary = "check the volume, read-only", .usage = FSCK_USAGE, .detail = FSCK_DETAIL},
      cmd_fsck},
     {"chmod",
      {.summary = "change the mode of a file",

@@ -134,9 +134,16 @@ written when the project was an operating system for one board; the numbers
       next to MicroFS in the tests
 * [x] FAT32 write: create, write, append, truncate, unlink, mkdir and the
       free-cluster map a write needs; both copies of the table, long names
-      made with their checksum, `statfs`; no journal, so a checker of the
-      host is still the repair of a volume a power cut caught
-* [ ] `fsck` of FAT and a journal or a cache of the changes under a write
+      made with their checksum, `statfs`; no journal, so a power cut is a
+      volume the check can only describe
+* [x] `fsck` of FAT, read-only: the boot sector and the BPB, both copies of
+      the table, the chains (a loop, a cross-link, a cluster outside the
+      volume), the root and the subdirectories, the checksum of the long
+      names, the lost clusters and the free count; `fsck fat <point|device>`
+      at the console, and a volume beyond 65536 clusters refused with a
+      message
+* [ ] A journal or a cache of the changes under a write, and a repair of the
+      clusters a check calls lost
 * [ ] ext2, the reader with inodes and a superblock a checker can walk
 * [x] `/etc/fstab` and the `mount` command over the type registry: the boot
       mounts the table after the root, `mount <device> <point> <type>` and

@@ -222,4 +222,14 @@ int fat_scan_next(struct fat_volume *vol, k_u32_t dir_cluster, k_u32_t *pos, str
 /* The next cluster of a chain, 0 at the end of the chain. */
 int fat_next_cluster(struct fat_volume *vol, k_u32_t cluster, k_u32_t *next);
 
+/*
+ * The check of a volume, for fat_check(). The volume has to be mounted and
+ * its lock held; the reader of the boot sector and the walk of the table and
+ * of the tree are the ones of the filesystem, not a second parser.
+ */
+int fat_check_volume(struct fat_volume *vol, struct fat_check_report *report);
+
+/* The check of a device that is not mounted, with a volume of its own. */
+int fat_check_device(const struct k_blockdev *dev, struct fat_check_report *report);
+
 #endif /* MICRO_OS_FS_FAT32_FAT_PRIVATE_H */

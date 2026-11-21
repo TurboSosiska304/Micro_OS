@@ -78,13 +78,20 @@ if(NOT ESP_PLATFORM)
         "${CMAKE_SOURCE_DIR}/components/drivers/src/rtc_time.c"
         "${CMAKE_SOURCE_DIR}/components/telnet/src/telnet_proto.c"
         "${CMAKE_SOURCE_DIR}/components/graphics/src/text_wrap.c"
-        # The FAT reader is off in the firmware by default (ADR 0009), so
-        # the test binary compiles its sources of its own: the reader is
-        # covered whether or not an image links it.
-        "${CMAKE_SOURCE_DIR}/components/fs_fat32/src/fat_core.c"
-        "${CMAKE_SOURCE_DIR}/components/fs_fat32/src/fat_dir.c"
-        "${CMAKE_SOURCE_DIR}/components/fs_fat32/src/fat_vfs.c"
     )
+
+    # The FAT reader comes from the component when the host build links it
+    # (the default, ADR 0009). A build that turns it off still compiles the
+    # sources into the test binary: the tests are the place where the reader
+    # is covered, whatever an image links.
+    if(NOT MICRO_OS_FS_FAT32)
+        target_sources(microos_tests PRIVATE
+            "${CMAKE_SOURCE_DIR}/components/fs_fat32/src/fat_core.c"
+            "${CMAKE_SOURCE_DIR}/components/fs_fat32/src/fat_dir.c"
+            "${CMAKE_SOURCE_DIR}/components/fs_fat32/src/fat_check.c"
+            "${CMAKE_SOURCE_DIR}/components/fs_fat32/src/fat_vfs.c"
+        )
+    endif()
 
     set(MICRO_OS_TEST_LIBS
         microos_kernel

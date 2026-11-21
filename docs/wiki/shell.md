@@ -85,7 +85,7 @@ The files, on every machine:
 | `mkdir <dir>`, `rm [-r] <file>` | a directory, a file; a directory needs `-r` |
 | `df [-h] [path]` | the free blocks and inodes; `-h` in KB/MB |
 | `mount` | the mounted filesystems |
-| `fsck` | check the volume, read-only |
+| `fsck [fat <point\|device>]` | check a volume, read-only: MicroFS, or the FAT volume at a point or on a device |
 | `stat <path>` | the type, the mode, the owner and the size |
 | `chmod <mode> <path>`, `chown <uid> <path>` | the mode (octal) and the owner (0..32767) |
 | `path [directories]` | show or set `PATH` |
@@ -193,6 +193,23 @@ fsck: the volume is consistent
 A volume with a problem prints the count and the first problem and exits with
 an error. `fsck: no volume is mounted` means what it says: there is no MicroFS
 at `/` on this machine right now.
+
+The same command checks a FAT volume, by the point it is mounted at or by the
+name of the device; a device that is not mounted is mounted for the length of
+the walk and forgotten again:
+
+```text
+microos> fsck fat /mnt/sd
+fsck: FAT32, 6 file(s), 2 directory(ies), 1974 of 1984 cluster(s) free
+fsck: the volume is consistent
+```
+
+The boot sector and the BPB, both copies of the table, the chains (a loop, a
+cross-link, a cluster outside the volume), the entries of the root and of the
+subdirectories, the checksum of the long names, the lost clusters and the
+free count are read; nothing is written. A volume with more than 65536
+clusters is refused with a message, because the map of the claimed clusters
+of the checker would not cover it. Repair is not in this kernel.
 
 `mkfs -y` unmounts the volume, formats it and mounts it again. The `-y` is
 mandatory: everything in MicroFS is destroyed. The files of `/etc` come back

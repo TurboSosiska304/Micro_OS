@@ -133,6 +133,14 @@ A broken volume prints `N problem(s), the first: ...` and the command exits
 with an error. `fsck: no volume is mounted` means that `/` is not MicroFS on
 this machine at the moment.
 
+The second filesystem is checked by the same command, by the point or by the
+device: `fsck fat /mnt/fat` reads a volume that is mounted, `fsck fat sd0`
+mounts the device for the length of the walk. The report names the cluster,
+the directory or the copy of the table that is wrong, and the counters say
+how much of the volume is free and how many clusters no chain names. It is
+read-only as well, and a volume with more than 65536 clusters is refused with
+a message. See [the second filesystem](#the-second-filesystem).
+
 ## `/etc` and the store
 
 The files of `/etc` are the configuration of the system, and each file is one
@@ -233,10 +241,14 @@ card with its physical write switch on mounts and is refused at the first
 write, because reading it is still useful.
 
 Writes go to the medium before the call returns and the device is synced
-when it has a `sync` of its own, but there is **no journal and no fsck**: a
-power cut in the middle of a write can leave a cluster no chain names or a
-half-written entry, and a checker on the host is the repair. That is the
-price of writing a volume this kernel did not format, and it is written in
+when it has a `sync` of its own, but there is **no journal**: a power cut in
+the middle of a write can leave a cluster no chain names or a half-written
+entry. `fsck fat <point|device>` walks the volume read-only and names the
+first problem, exactly as `fsck` does for MicroFS: the boot sector and the
+BPB, the copies of the table, the chains, the entries and their long names,
+and the clusters no chain names. It does not repair: the clusters it calls
+lost are still lost after it returns. That is the price of writing a volume
+this kernel did not format, and it is written in
 [`docs/debts.md`](../debts.md).
 
 The host test mounts MicroFS at `/` and FAT at `/mnt/fat` at the same time,
@@ -304,7 +316,8 @@ written back to the table: `mount` changes the tree, not the configuration.
 
 * **No ext2, and no journal under a FAT write.** A FAT volume is written
   without a log; a second FAT volume and a mount of a card at runtime are
-  ahead, as is `fsck` of FAT.
+  ahead, and `fsck fat` only reports: a repair of the clusters it calls lost
+  is the next step.
 * **No access time**, so `statx` has two moments of three; a read does not
   rewrite a record.
 * **The options of `/etc/fstab` are not acted on**: only `defaults` is
@@ -312,8 +325,9 @@ written back to the table: `mount` changes the tree, not the configuration.
   table.
 * **MicroFS is one volume at a time**: the type `mfs` mounts the medium the
   filesystem keeps, so a second MicroFS volume is a change of the filesystem.
-* **No journal and no repair**: `fsck` names the first problem of MicroFS, it
-  does not fix it; FAT has no checker at all.
+* **No journal and no repair**: `fsck` names the first problem of MicroFS and
+  `fsck fat` the first problem of a FAT volume; neither fixes it, and FAT has
+  no repair of its lost clusters.
 * **No `mv`, no `cp`**: `rm -r` and the other commands of the shell are there.
 * **One user**, so the owner of a file is a number that is stored and checked
   but not a second party.
