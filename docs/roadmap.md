@@ -124,10 +124,12 @@ written when the project was an operating system for one board; the numbers
 
 ## K6 - The filesystem and the network (planned)
 
-* [ ] A second block device and a second filesystem behind the VFS
+* [ ] A second filesystem behind the VFS: the block devices and the MBR/GPT
+      partitions are there (ADR 0008); the type registry and FAT32/ext2 wait for
+      the decision of ADR 0009
 * [ ] Timestamps of a file, fed by the clock of the kernel
 * [x] A page of the state over HTTP: `httpd` on the sockets, `/` and `/health`
-* [ ] MQTT over the sockets
+* [x] MQTT over the sockets: a 3.1.1 client at QoS 0 and 1, with a fake broker in the tests
 
 ## K7 - Quality (in progress)
 
