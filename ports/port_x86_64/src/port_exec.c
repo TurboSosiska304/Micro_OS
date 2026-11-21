@@ -53,6 +53,15 @@
 #define PORT_EXEC_ARGC_MAX 64u
 #define PORT_EXEC_ARG_BYTES_MAX 1024u
 
+/*
+ * The environment of a program is copied the same way and bounded the same
+ * way as its arguments: the kernel copies at most eight words and 512 bytes
+ * before the port sees the image, and a direct caller of the port is held to
+ * the same numbers. A word of the environment is a "NAME=VALUE" string.
+ */
+#define PORT_EXEC_ENVP_MAX 8u
+#define PORT_EXEC_ENV_BYTES_MAX 512u
+
 /* How long the caller of execve waits for the program it started. */
 #define PORT_EXEC_WAIT_MS 10000u
 
@@ -70,24 +79,34 @@ struct port_exec_start {
     k_u64_t entry;
     k_u64_t argc;
     k_u64_t argv;
+    k_u64_t envp;
     k_u64_t user_rsp;
 };
 
 /*
  * void port_exec_enter_user(void *entry, k_u64_t argc, char *const *argv,
- *                           k_u64_t user_rsp)
+ *                           char *const *envp, k_u64_t user_rsp)
  *
  * Leave the kernel for ring 3 through an iretq frame: SS, RSP, RFLAGS, CS and
  * RIP, in the order the instruction pops them. The selectors are 0x23 (data,
  * DPL 3) and 0x1b (code, DPL 3) of the GDT of gdt.c.
  *
  * The program's first instruction sees the arguments of a C function - the
- * count in RDI, the vector in RSI - on a stack whose top word is zero, so a
- * `ret` that no program of the system writes lands on address zero and faults
- * instead of running through memory. The kernel frames below are abandoned:
- * the task resumes through RSP0 of the TSS on its way back in.
+ * count in RDI, the vector of the arguments in RSI and the vector of the
+ * environment in RDX, which is the entry ABI of this port (ADR 0016) - on a
+ * stack whose top word is zero, so a `ret` that no program of the system
+ * writes lands on address zero and faults instead of running through memory.
+ * The kernel frames below are abandoned: the task resumes through RSP0 of the
+ * TSS on its way back in.
+ *
+ * The five values arrive in RDI, RSI, RDX, RCX and R8 and are kept in the
+ * callee-saved registers across the call of port_x86_64_tls_user(); R8 is the
+ * stack of the program and it goes to RBX for the same reason. The registers
+ * of the program are zeroed after the frame is pushed, so a program starts
+ * with no state of the kernel anywhere - except the three arguments.
  */
-void port_exec_enter_user(void *entry, k_u64_t argc, char *const *argv, k_u64_t user_rsp);
+void port_exec_enter_user(void *entry, k_u64_t argc, char *const *argv, char *const *envp,
+                          k_u64_t user_rsp);
 void port_exec_fork_return(k_u64_t *frame);
 void port_exec_fork_child(void *arg);
 
@@ -98,20 +117,21 @@ __asm__(".section .text, \"ax\", @progbits\n"
         "    movq %rdi, %r12\n" /* the entry of the program */
         "    movq %rsi, %r13\n" /* argc */
         "    movq %rdx, %r14\n" /* argv */
-        "    movq %rcx, %r15\n" /* the stack of the program */
+        "    movq %rcx, %r15\n" /* envp */
+        "    movq %r8, %rbx\n"  /* the stack of the program */
         "    andq $-16, %rsp\n"
         "    call port_x86_64_tls_user\n"
         "    pushq $0x23\n"  /* SS, ring 3 data */
-        "    pushq %r15\n"   /* RSP of the program */
+        "    pushq %rbx\n"   /* RSP of the program */
         "    pushq $0x202\n" /* RFLAGS: interrupts on, the required bit 1 */
         "    pushq $0x1b\n"  /* CS, ring 3 code */
         "    pushq %r12\n"   /* RIP */
         "    movq %r13, %rdi\n"
         "    movq %r14, %rsi\n"
+        "    movq %r15, %rdx\n"
         "    xorl %eax, %eax\n"
         "    xorl %ebx, %ebx\n"
         "    xorl %ecx, %ecx\n"
-        "    xorl %edx, %edx\n"
         "    xorl %ebp, %ebp\n"
         "    xorl %r8d, %r8d\n"
         "    xorl %r9d, %r9d\n"
@@ -259,6 +279,7 @@ static void port_exec_program_task(void *arg)
     k_u64_t entry;
     k_u64_t argc;
     k_u64_t argv;
+    k_u64_t envp;
     k_u64_t user_rsp;
 
     if (start == NULL) {
@@ -270,12 +291,14 @@ static void port_exec_program_task(void *arg)
     entry = start->entry;
     argc = start->argc;
     argv = start->argv;
+    envp = start->envp;
     user_rsp = start->user_rsp;
     k_port_free(start);
 
     port_x86_64_task_set_space(space);
 
-    port_exec_enter_user((void *)(uintptr_t)entry, argc, (char *const *)(uintptr_t)argv, user_rsp);
+    port_exec_enter_user((void *)(uintptr_t)entry, argc, (char *const *)(uintptr_t)argv,
+                         (char *const *)(uintptr_t)envp, user_rsp);
 
     /* Not reached: the only way back from ring 3 is the call of exit. */
     task_exit(255);
@@ -418,12 +441,18 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
     k_u64_t user_rsp;
     k_u64_t user_argc = 0;
     k_u64_t user_argv = 0;
+    k_u64_t user_envc = 0;
+    k_u64_t user_envp = 0;
     k_size_t source;
     k_size_t end;
     k_size_t arg_off = 0;
     k_size_t arg_end = 0;
     k_size_t strings = 0;
     k_size_t array_off = 0;
+    k_size_t env_off = 0;
+    k_size_t env_end = 0;
+    k_size_t env_strings = 0;
+    k_size_t env_array_off = 0;
     k_size_t index;
     int status = 0;
     int rc;
@@ -486,15 +515,44 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
         }
     }
 
+    /*
+     * The environment is a vector of the same shape and is copied the same
+     * way, after the arguments. A vector that is there and empty is a program
+     * with no environment, which is not the same as no vector: the entry then
+     * receives a pointer to a list whose first word is NULL.
+     */
+    if (image->envp != NULL) {
+        while (user_envc < PORT_EXEC_ENVP_MAX && image->envp[user_envc] != NULL) {
+            k_size_t length = (k_size_t)strlen(image->envp[user_envc]);
+
+            if (env_strings + length + 1u > PORT_EXEC_ENV_BYTES_MAX) {
+                return -1;
+            }
+
+            env_strings += length + 1u;
+            user_envc++;
+        }
+    }
+
     if (user_argc > 0) {
         arg_off = align_up(end, 16u);
         array_off = align_up(arg_off + strings, 8u);
         arg_end = array_off + (k_size_t)(user_argc + 1u) * sizeof(k_u64_t);
+    }
 
-        if (arg_end > (k_size_t)PORT_EXEC_GUARD_OFFSET) {
-            kerror("x86_64: the arguments do not fit below the stack of the program");
-            return -1;
-        }
+    if (image->envp != NULL) {
+        env_off = align_up((user_argc > 0) ? arg_end : end, 8u);
+        env_array_off = align_up(env_off + env_strings, 8u);
+        env_end = env_array_off + (k_size_t)(user_envc + 1u) * sizeof(k_u64_t);
+    }
+
+    /*
+     * Both vectors live below the guard page of the stack; the one that ends
+     * last decides. A zero vector occupies nothing and passes.
+     */
+    if (arg_end > (k_size_t)PORT_EXEC_GUARD_OFFSET || env_end > (k_size_t)PORT_EXEC_GUARD_OFFSET) {
+        kerror("x86_64: the arguments or the environment do not fit below the stack");
+        return -1;
     }
 
     space = port_x86_64_paging_space_create();
@@ -512,9 +570,11 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
         goto fail;
     }
 
-    if (user_argc > 0) {
-        k_size_t first = align_down(arg_off, PAGE_SIZE);
-        k_size_t last = align_up(arg_end, PAGE_SIZE);
+    if (user_argc > 0 || image->envp != NULL) {
+        k_size_t vectors_off = (user_argc > 0) ? arg_off : env_off;
+        k_size_t vectors_end = (env_end > arg_end) ? env_end : arg_end;
+        k_size_t first = align_down(vectors_off, PAGE_SIZE);
+        k_size_t last = align_up(vectors_end, PAGE_SIZE);
 
         if (!space_map(space, first, last - first)) {
             goto fail;
@@ -571,6 +631,38 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
         user_argv = PORT_EXEC_BASE + (k_u64_t)array_off;
     }
 
+    if (image->envp != NULL) {
+        k_size_t cursor = env_off;
+
+        for (index = 0; index < (k_size_t)user_envc; index++) {
+            k_size_t length = (k_size_t)strlen(image->envp[index]) + 1u;
+            k_u64_t pointer = PORT_EXEC_BASE + (k_u64_t)cursor;
+
+            if (!space_write(space, pointer, image->envp[index], length) ||
+                !space_write(space,
+                             PORT_EXEC_BASE + (k_u64_t)env_array_off +
+                                 (k_u64_t)index * sizeof(k_u64_t),
+                             &pointer, sizeof(pointer))) {
+                goto fail;
+            }
+
+            cursor += length;
+        }
+
+        {
+            k_u64_t terminator = 0;
+
+            if (!space_write(space,
+                             PORT_EXEC_BASE + (k_u64_t)env_array_off +
+                                 (k_u64_t)user_envc * sizeof(k_u64_t),
+                             &terminator, sizeof(terminator))) {
+                goto fail;
+            }
+        }
+
+        user_envp = PORT_EXEC_BASE + (k_u64_t)env_array_off;
+    }
+
     /*
      * The stack of the program starts as zeros, and the top word is the zero
      * a `ret` would pop. It belongs to this program and not to the frame
@@ -596,6 +688,7 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
     start->entry = PORT_EXEC_BASE + (k_u64_t)image->entry;
     start->argc = user_argc;
     start->argv = user_argv;
+    start->envp = user_envp;
     start->user_rsp = user_rsp;
 
     program = task_create(PORT_EXEC_TASK_NAME, port_exec_program_task, start, TASK_PRIO_DEFAULT);

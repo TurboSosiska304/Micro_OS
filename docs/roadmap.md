@@ -189,3 +189,26 @@ written when the project was an operating system for one board; the numbers
 * [ ] ESP32: the kernel tasks on both cores of the Pico, no driver assuming
       one core
 * [ ] `KERNEL_SMP` (ADR 0010) and the host TSan run as the gate
+
+## K9 - A userland (in progress)
+
+* [x] The entry ABI of a program is `argc`, `argv` and `envp` in `rdi`, `rsi`
+      and `rdx`, written down and checked (`make x86-smoke` prints the
+      environment of `/bin/hello`) - ADR 0016
+* [x] `execve(path, argv, envp)` with the third argument of POSIX; a NULL
+      environment is the one of the system (`k_exec_environ()`), and the
+      arguments and the environment are copied and bounded apart
+* [x] A library of a program, not of the kernel: `components/libc/user` with
+      `_start`, the door of `int $0x80`, `open`, `close`, `read`, `write`,
+      `lseek`, `readdir`, `getpid`, `uptime`, `exit`, `printf`, `puts` and
+      the strings; the numbers come from the header of the kernel
+* [x] Four programs of `/bin` built from C against the library - `cat`,
+      `echo`, `ls` and `spawn` - and `make x86-smoke` runs all four, including
+      a program that starts another with an environment of its own
+* [ ] A shell `export` and the environment of the shell in the programs,
+      instead of the four words of the kernel
+* [ ] Descriptors inherited by `execve` and a `cat` that reads its stdin
+* [ ] `pipe`, `dup2` and a redirection without the help of the kernel
+* [ ] Basic signals: `SIGINT`, `SIGTERM`, `SIGCHLD` and an interrupted wait
+* [ ] Programs are files on a filesystem of the disk, and more than the seven
+      images the boot writes (the format is frozen first, ADR 0011)

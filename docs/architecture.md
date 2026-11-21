@@ -390,7 +390,7 @@ a megabyte.
 
 ### `execve` belongs to the port
 
-`kernel/port/exec.h` is a subject of the contract (1.4) with five calls:
+`kernel/port/exec.h` is a subject of the contract (1.6) with five calls:
 `k_port_exec_supported()` (can this machine run a program at all),
 `k_port_exec_base()` (where the window is), `k_port_exec_enter()` (place the
 image, enter it) and the two halves of the end of a program,
@@ -403,12 +403,31 @@ with the libc of the host under it. x86-64 says yes: it builds page tables for
 the program, maps the window at 32 MiB onto a physical arena at 64 MiB, keeps
 a 64 KiB stack at the top of the window with an unmapped guard page below it
 and enters ring 3 through an `iretq`. Its boot mounts MicroFS on a volume of
-the port's RAM, writes `/bin/hello` and `/bin/crash` there, gives them the mode
-of a program and asks for `/bin/hello` with `execve` - the stat, the mode, the
-read through the VFS, the parse and the transition are the ones of the call.
-A program ends with `exit` and the port returns to the caller with its status;
-a fault of ring 3 prints `the program faulted: vector N at 0x...` and does the
-same with status 255 (ADR 0007).
+the port's RAM, writes eight images to `/bin` - `hello`, `crash`, `fork`,
+`badptr`, `cat`, `echo`, `ls` and `spawn` - gives them the mode of a program
+and asks for `/bin/hello` with `execve` - the stat, the mode, the read through the VFS,
+the parse and the transition are the ones of the call. A program ends with
+`exit` and the port returns to the caller with its status; a fault of ring 3
+prints `the program faulted: vector N at 0x...` and does the same with status
+255 (ADR 0007).
+
+### The entry and the library of a program
+
+The port enters a program with `argc` in `rdi`, `argv` in `rsi` and `envp` in
+`rdx`: the arguments of a C function, on a stack aligned as after a call whose
+top word is zero (ADR 0016). `execve(path, argv, envp)` copies both vectors at
+the edge - at most eight words and 512 bytes each - and a NULL environment is
+the one of the system (`k_exec_environ()`), so every program of the machine
+starts with the same shape. The environment travels to the port in
+`struct k_exec_image.envp`; the contract stays 1.6.
+
+The library of the kernel is linked into the kernel and calls `ksys_*`, which
+a program of ring 3 cannot reach, so a program is linked against
+`components/libc/user`: `_start`, the door of `int $0x80`, `open`, `close`,
+`read`, `write`, `lseek`, `readdir`, `getpid`, `uptime`, `exit`, `printf`,
+`puts` and five functions of strings. The numbers of the calls come from
+`kernel/ksys.h`, the same header the kernel uses. The image carries its copy:
+there is no dynamic linker.
 
 ### The rights are checked at the edge
 

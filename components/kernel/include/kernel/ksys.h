@@ -46,7 +46,7 @@
 #define KSYS_REALLOC 22 /* realloc(ptr, size) */
 #define KSYS_CHMOD 23   /* chmod(path, mode) */
 #define KSYS_CHOWN 24   /* chown(path, owner) */
-#define KSYS_EXECVE 25  /* execve(path, argv) */
+#define KSYS_EXECVE 25  /* execve(path, argv, envp) */
 #define KSYS_STATX 26   /* statx(path, buf) */
 #define KSYS_PIPE 27    /* pipe(fds) */
 #define KSYS_DUP2 28    /* dup2(oldfd, newfd) */
@@ -190,6 +190,14 @@ void ksys_free(void *ptr);
 void *ksys_realloc(void *ptr, k_size_t size);
 int ksys_chmod(const char *path, k_u32_t mode);
 int ksys_chown(const char *path, k_u32_t owner);
+/*
+ * Make the caller a program. `argv` is its vector of arguments (NULL for
+ * none) and `envp` its environment, a vector of "NAME=VALUE" words (NULL for
+ * the environment of the system). Both vectors are the memory of the caller
+ * and are copied before the file is read; each is at most eight words and 512
+ * bytes. The wrapper without an environment is the common case, and it is the
+ * one the call had before the environment existed.
+ */
 int ksys_execve(const char *path, char *const argv[]);
 /*
  * The ends of a pipe: fds[0] reads, fds[1] writes. A descriptor of the
@@ -199,5 +207,7 @@ int ksys_execve(const char *path, char *const argv[]);
 int ksys_pipe(int fds[2]);
 /* A second descriptor of an open file, POSIX style. */
 int ksys_dup2(int oldfd, int newfd);
+/* The same call with an environment of the caller. */
+int ksys_execve_env(const char *path, char *const argv[], char *const envp[]);
 
 #endif /* MICRO_OS_KERNEL_KSYS_H */

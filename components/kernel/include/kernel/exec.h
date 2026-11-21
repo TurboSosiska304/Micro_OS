@@ -43,6 +43,14 @@
  * A parsed image: the bytes stay where the caller has them (the page of the
  * file), the sizes are the ones of the header. `entry` is an offset from the
  * start of the image, header included.
+ *
+ * `envp` is not in the file and not of the parser: it is the environment the
+ * caller of the run hands the program, a vector of "NAME=VALUE" strings
+ * terminated by a NULL. The parser sets it to NULL, which means "the
+ * environment of the system" (k_exec_environ); a caller that copies one from
+ * its own memory - execve does - sets it before k_exec_run. The strings have
+ * to stay alive for as long as the program runs, exactly as the strings of
+ * argv do.
  */
 struct k_exec_image {
     const void *data;
@@ -51,6 +59,7 @@ struct k_exec_image {
     k_size_t text_size;
     k_size_t data_size;
     k_size_t bss_size;
+    const char *const *envp;
 };
 
 /*
@@ -78,13 +87,30 @@ int k_exec_parse(const void *data, k_size_t size, struct k_exec_image *out);
  *
  * `argv` is the vector the program starts with, its pointers into memory the
  * caller keeps for as long as the program runs; NULL is a program with no
- * arguments. The kernel does not walk it - without an MMU there is nothing to
- * check an array of pointers against, and a program that never returns keeps
- * the caller's frame alive anyway. A call that takes the vector from the
- * memory of a program (execve) copies it somewhere that outlives the call
- * first: kernel/ksys.c uses the frame of the call for that.
+ * arguments. The environment comes from `image->envp` and a NULL there is the
+ * environment of the system (k_exec_environ), so a program always starts with
+ * a name it can look for a value in. The kernel does not walk either vector -
+ * without an MMU there is nothing to check an array of pointers against, and a
+ * program that never returns keeps the caller's frame alive anyway. A call
+ * that takes a vector from the memory of a program (execve) copies it
+ * somewhere that outlives the call first: kernel/ksys.c uses the frame of the
+ * call for that.
  */
 int k_exec_run(const struct k_exec_image *image, char *const argv[]);
+
+/*
+ * The environment of the system: what a program started without one sees. It
+ * is a vector of "NAME=VALUE" words terminated by NULL, and it is static
+ * memory of the kernel, so a caller keeps it only for as long as it runs
+ * something that reads it.
+ *
+ * The shell has no `export` yet, so this is the environment of every program
+ * of the machine: the tree of the programs and the home of the one user of
+ * the system. A program that was given one of its own sees that one instead;
+ * the port copies whichever vector the call carries into the memory of the
+ * program.
+ */
+const char *const *k_exec_environ(void);
 
 /*
  * The status a program ended with, reported by the port when the program

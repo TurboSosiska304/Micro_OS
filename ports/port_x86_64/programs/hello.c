@@ -40,17 +40,19 @@ static unsigned long current_cpl(void)
 }
 
 /*
- * The entry of the format: the port enters a program with the count and the
- * vector of the arguments in the registers of the usual ABI (see
- * k_port_exec_enter), which is what the two parameters of a C program mean.
+ * The entry of the format: the port enters a program with the count, the
+ * vector of the arguments and the vector of the environment in the registers
+ * of the usual ABI (see k_port_exec_enter and ADR 0016), which is what the
+ * three parameters of a C program mean.
  *
  * The calls are checked: a failure is printed with its number, because a
  * program that says nothing when the kernel refused it is a program that
  * lies about the machine. A return of 1 says "one of them did not answer".
  */
-int hello_main(int argc, char *const argv[])
+int hello_main(int argc, char *const argv[], char *const envp[])
 {
     long wrote;
+    int envs = 0;
 
     wrote = prog_puts(PROGRAM_LINE);
     if (wrote < 0) {
@@ -80,6 +82,27 @@ int hello_main(int argc, char *const argv[])
     if (argc > 0 && argv != NULL && argv[0] != NULL) {
         prog_puts(", argv[0] ");
         prog_puts(argv[0]);
+    }
+    prog_puts("\n");
+
+    /*
+     * The environment of the program, which the kernel filled in when the
+     * call carried none (k_exec_environ): the count and the first word. The
+     * entry ABI is argc, argv and envp in RDI, RSI and RDX (ADR 0016), and a
+     * program that prints the vector proves that the third register survived
+     * the crossing into ring 3.
+     */
+    if (envp != NULL) {
+        while (envp[envs] != NULL) {
+            envs++;
+        }
+    }
+
+    prog_puts("PROGRAM: envp ");
+    prog_put_dec((unsigned long)envs);
+    if (envs > 0) {
+        prog_puts(", ");
+        prog_puts(envp[0]);
     }
     prog_puts("\n");
 

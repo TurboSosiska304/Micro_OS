@@ -607,6 +607,9 @@ static void test_execve(void)
         char *long_argv[] = {long_word, NULL};
         char *empty_argv[] = {NULL};
         char *many_argv[10];
+        char *long_env[] = {long_word, NULL};
+        char *empty_env[] = {NULL};
+        char *many_env[10];
         int i;
 
         memset(long_word, 'a', sizeof(long_word) - 1);
@@ -619,6 +622,23 @@ static void test_execve(void)
         KT_CHECK_INT_EQ(ksys_execve("/prog", many_argv), KERR_TOOBIG);
 
         KT_CHECK_INT_EQ(ksys_execve("/prog", empty_argv), KERR_NOSYS);
+
+        /*
+         * The environment has the same bound and the same answers: it is a
+         * second vector of the call and not a part of the arguments, so a
+         * program may have a short line and a long environment without the
+         * one deciding the room of the other. A NULL environment is the
+         * environment of the system and not a refusal.
+         */
+        KT_CHECK_INT_EQ(ksys_execve_env("/prog", argv, long_env), KERR_TOOBIG);
+        KT_CHECK_INT_EQ(ksys_execve_env("/prog", argv, NULL), KERR_NOSYS);
+        KT_CHECK_INT_EQ(ksys_execve_env("/prog", argv, empty_env), KERR_NOSYS);
+
+        for (i = 0; i < 9; i++) {
+            many_env[i] = (char *)"NAME=value";
+        }
+        many_env[9] = NULL;
+        KT_CHECK_INT_EQ(ksys_execve_env("/prog", argv, many_env), KERR_TOOBIG);
     }
 
     /* The raw call answers the same way, and a failed exec left the table of

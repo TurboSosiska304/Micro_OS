@@ -104,12 +104,24 @@ extern const k_u8_t _binary_fork_mox_start[];
 extern const k_u8_t _binary_fork_mox_end[];
 extern const k_u8_t _binary_badptr_mox_start[];
 extern const k_u8_t _binary_badptr_mox_end[];
+extern const k_u8_t _binary_cat_mox_start[];
+extern const k_u8_t _binary_cat_mox_end[];
+extern const k_u8_t _binary_echo_mox_start[];
+extern const k_u8_t _binary_echo_mox_end[];
+extern const k_u8_t _binary_ls_mox_start[];
+extern const k_u8_t _binary_ls_mox_end[];
+extern const k_u8_t _binary_spawn_mox_start[];
+extern const k_u8_t _binary_spawn_mox_end[];
 
 #define PROGRAM_DIR "/bin"
 #define PROGRAM_PATH "/bin/hello"
 #define PROGRAM_CRASH_PATH "/bin/crash"
 #define PROGRAM_FORK_PATH "/bin/fork"
 #define PROGRAM_BADPTR_PATH "/bin/badptr"
+#define PROGRAM_CAT_PATH "/bin/cat"
+#define PROGRAM_ECHO_PATH "/bin/echo"
+#define PROGRAM_LS_PATH "/bin/ls"
+#define PROGRAM_SPAWN_PATH "/bin/spawn"
 
 /*
  * A program is a file somebody may run, so it is created with the mode of a
@@ -170,10 +182,10 @@ static bool program_install(const char *path, const k_u8_t *image, k_size_t size
  * kernel, the parse of the image and the jump of the port. The boot does not
  * repeat any of it.
  *
- * The call comes back only because this program ends with a ret and the port
- * owns the exit; the kernel answers every return with 0, which says "the
- * program ran and has finished", and the status the program ended with is the
- * line the port printed before this one (ADR 0006).
+ * The call comes back because this program ends with the call of exit and the
+ * port takes the task down; the kernel answers every end of a program with 0,
+ * which says "the program ran and has finished", and the status the program
+ * ended with is the line the port printed before this one (ADR 0006).
  */
 static void program_run(void)
 {
@@ -268,6 +280,40 @@ static void filesystem_bring_up(void)
      */
     if (!program_install(PROGRAM_BADPTR_PATH, _binary_badptr_mox_start,
                          (k_size_t)(_binary_badptr_mox_end - _binary_badptr_mox_start))) {
+        return;
+    }
+
+    /*
+     * The three programs of the library (ADR 0016) are not creatures of the
+     * port: each was compiled against components/libc/user, enters through
+     * `_start`, takes argc, argv and envp, and talks to the kernel through
+     * the same `int $0x80`. `cat` reads a file, `echo` writes its line and
+     * `ls` walks a directory - the three things a shell of a machine with a
+     * filesystem is asked for first.
+     */
+    if (!program_install(PROGRAM_CAT_PATH, _binary_cat_mox_start,
+                         (k_size_t)(_binary_cat_mox_end - _binary_cat_mox_start))) {
+        return;
+    }
+
+    if (!program_install(PROGRAM_ECHO_PATH, _binary_echo_mox_start,
+                         (k_size_t)(_binary_echo_mox_end - _binary_echo_mox_start))) {
+        return;
+    }
+
+    if (!program_install(PROGRAM_LS_PATH, _binary_ls_mox_start,
+                         (k_size_t)(_binary_ls_mox_end - _binary_ls_mox_start))) {
+        return;
+    }
+
+    /*
+     * `spawn` is a program that asks for another program with an environment
+     * of its own: the third argument of execve, copied at the edge of the
+     * call and carried to a second task. It is the proof from the user side
+     * that the environment is not a word the kernel prints about itself.
+     */
+    if (!program_install(PROGRAM_SPAWN_PATH, _binary_spawn_mox_start,
+                         (k_size_t)(_binary_spawn_mox_end - _binary_spawn_mox_start))) {
         return;
     }
 }

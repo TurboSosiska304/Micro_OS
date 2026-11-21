@@ -1278,7 +1278,11 @@ static k_ssize_t sys_chown(ksys_arg_t path, ksys_arg_t owner, ksys_arg_t a2, ksy
  * `args` and `words`, and terminate the vector. Returns 0, or E2BIG for a
  * vector or a string that does not fit, or EFAULT for a word of the vector or
  * a byte of a string that is not memory of the caller. A zero vector, or one
- * whose first word is zero, is a program without arguments and not an error.
+ * whose first word is zero, is an empty vector and not an error.
+ *
+ * The arguments and the environment of execve are two vectors of the same
+ * shape, so they are copied by the same code into two frames: the bounds of
+ * one never decide the room of the other.
  *
  * Every read goes through copy_from_user: the vector and the strings are the
  * memory of the caller, and on a machine with page tables an address that is
@@ -1356,7 +1360,7 @@ static int argv_copy(ksys_arg_t from, char *args[], char *words, k_size_t words_
 #endif /* KERNEL_EXEC */
 
 #if KERNEL_EXEC
-static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksys_arg_t a3,
+static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t envp, ksys_arg_t a3,
                             ksys_arg_t a4, ksys_arg_t a5)
 {
     char name[KSYS_PATH_MAX + 1];
@@ -1365,15 +1369,17 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksy
     struct vfs_file file;
     struct vfs_stat info;
     struct k_exec_image image;
-    /* The vector the program starts with: the frame keeps it alive. */
+    /* The vectors the program starts with: the frame keeps them alive. */
     char *args[KSYS_ARGV_MAX + 1];
     char words[KSYS_ARGV_BYTES];
+    char *env_args[KSYS_ARGV_MAX + 1];
+    char env_words[KSYS_ARGV_BYTES];
     char *const *vector = NULL;
+    char *const *environment = NULL;
     k_u8_t *data;
     k_size_t got = 0;
     int rc;
 
-    K_UNUSED(a2);
     K_UNUSED(a3);
     K_UNUSED(a4);
     K_UNUSED(a5);
@@ -1384,10 +1390,14 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksy
     }
 
     /*
-     * The arguments are copied before the file is read: a refused one ends
-     * the call while nothing has been spent, and the copy is what the port
-     * is going to hand the program. What the kernel keeps from here on is the
-     * vector it built, not the pointers of the caller.
+     * The vectors are copied before the file is read: a refused one ends
+     * the call while nothing has been spent, and the copies are what the
+     * port is going to hand the program. What the kernel keeps from here on
+     * is the vectors it built, not the pointers of the caller.
+     *
+     * The environment is copied into a frame of its own and not appended to
+     * the words of the arguments: the two are separate vectors in the C
+     * entry, and the strings of one are never the strings of the other.
      */
     if (argv != 0) {
         rc = argv_copy(argv, args, words, sizeof(words));
@@ -1396,6 +1406,15 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksy
         }
 
         vector = args;
+    }
+
+    if (envp != 0) {
+        rc = argv_copy(envp, env_args, env_words, sizeof(env_words));
+        if (rc != 0) {
+            return rc;
+        }
+
+        environment = env_args;
     }
 
     rc = vfs_stat(name, &info);
@@ -1464,6 +1483,15 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksy
         return KERR_INVAL;
     }
 
+    /*
+     * The environment travels with the image: it is not of the file, so the
+     * parser left it empty and the call is the one that knows it. A NULL
+     * vector here is "the environment of the system", which k_exec_run fills
+     * in before the port sees the image. The cast only adds const: the call
+     * owns the strings until the program ends and never writes them.
+     */
+    image.envp = (const char *const *)environment;
+
     rc = k_exec_run(&image, vector);
     kmm_free(data);
 
@@ -1487,12 +1515,12 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksy
  * number of the call stays: a program compiled for the full kernel asks it
  * and gets the answer of a machine that cannot run a program, ENOSYS.
  */
-static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksys_arg_t a3,
+static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t envp, ksys_arg_t a3,
                             ksys_arg_t a4, ksys_arg_t a5)
 {
     K_UNUSED(path);
     K_UNUSED(argv);
-    K_UNUSED(a2);
+    K_UNUSED(envp);
     K_UNUSED(a3);
     K_UNUSED(a4);
     K_UNUSED(a5);
@@ -1718,8 +1746,13 @@ int ksys_chown(const char *path, k_u32_t owner)
 
 int ksys_execve(const char *path, char *const argv[])
 {
-    return (int)ksys_call(KSYS_EXECVE, (ksys_arg_t)(uintptr_t)path, (ksys_arg_t)(uintptr_t)argv, 0,
-                          0, 0, 0);
+    return ksys_execve_env(path, argv, NULL);
+}
+
+int ksys_execve_env(const char *path, char *const argv[], char *const envp[])
+{
+    return (int)ksys_call(KSYS_EXECVE, (ksys_arg_t)(uintptr_t)path, (ksys_arg_t)(uintptr_t)argv,
+                          (ksys_arg_t)(uintptr_t)envp, 0, 0, 0);
 }
 
 int ksys_pipe(int fds[2])

@@ -16,6 +16,22 @@
 #define K_EXEC_RESERVED_NONE 0u
 
 /*
+ * The environment of a program that was given none. The names are the ones
+ * every program of a Unix-like machine looks for, and the values are the
+ * facts of this system: there is one user, its home is the root, and the
+ * programs live in /bin. It is a table of the kernel and not something the
+ * shell builds yet, because the shell has no `export` (see docs/debts.md).
+ */
+static const char *const g_exec_environ[] = {
+    "PATH=/bin", "HOME=/", "USER=root", "PWD=/", NULL,
+};
+
+const char *const *k_exec_environ(void)
+{
+    return g_exec_environ;
+}
+
+/*
  * The header is read byte by byte and not through a struct: the bytes of a
  * file have no alignment in memory, and a cast to a k_u32_t pointer would be
  * a fault on a machine that does not forgive it (or a quiet byte swap on a
@@ -102,6 +118,8 @@ int k_exec_parse(const void *data, k_size_t size, struct k_exec_image *out)
     out->text_size = (k_size_t)text_size;
     out->data_size = (k_size_t)data_size;
     out->bss_size = (k_size_t)bss_size;
+    /* The file carries no environment: the caller of the run may set one. */
+    out->envp = NULL;
 
     return 0;
 }
@@ -130,6 +148,7 @@ void k_exec_exit(int code)
 
 int k_exec_run(const struct k_exec_image *image, char *const argv[])
 {
+    struct k_exec_image run;
     void *base;
     k_u64_t entry_limit;
     k_u64_t start;
@@ -184,7 +203,18 @@ int k_exec_run(const struct k_exec_image *image, char *const argv[])
      *
      * The status is cleared first: a port that comes back without reporting
      * one must not hand out the code of the program that ran before it.
+     *
+     * A program started without a vector of its own gets the environment of
+     * the system, so that the entry of every program is the same shape and a
+     * program does not have to ask whether envp is NULL. The copy is local:
+     * the structure of the caller is not written to.
      */
+    if (image->envp == NULL) {
+        run = *image;
+        run.envp = k_exec_environ();
+        image = &run;
+    }
+
     g_exec_exit_code = 0;
     rc = k_port_exec_enter(image, argv);
 

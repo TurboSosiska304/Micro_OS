@@ -7,6 +7,21 @@ program of Linux does.
 The library is portable C11 and it knows nothing about the kernel: it knows
 the contract of the calls (see [syscall-abi.md](syscall-abi.md)).
 
+## The library of the kernel and the library of a program
+
+This document is about the library **of the kernel** (`components/libc/src`):
+it is linked into the kernel and calls `ksys_*`, so the shell and the
+components use it with no crossing of a privilege boundary.
+
+A program of ring 3 cannot call those functions: their addresses are not in
+its page tables, and the only door it has is `int $0x80`. Its library is
+`components/libc/user` (ADR 0016): `_start`, the door of the call, `open`,
+`close`, `read`, `write`, `lseek`, `readdir`, `getpid`, `uptime`, `exit`,
+`printf`, `puts` and the strings, with the numbers of `kernel/ksys.h` and no
+allocation, no `errno` and no floating point. The two libraries share the
+header of the ABI and nothing else, and that is deliberate: one runs with the
+kernel under it, the other has nothing but the gate.
+
 ## The names
 
 The functions keep their own names in the binary (`microos_printf`,

@@ -31,9 +31,14 @@ void *k_port_exec_base(void);
 
 /*
  * Copy the image to the window, clear the bss, make `argv` (NULL for no
- * arguments) the vector of the program and transfer control to `entry`.
- * Does not return when the program is entered; returns -1 when the image
- * cannot be placed or the machine cannot jump.
+ * arguments) the vector of the program and transfer control to `entry`. The
+ * environment of the program is `image->envp`, a vector of "NAME=VALUE" words
+ * terminated by NULL; k_exec_run() has already replaced a NULL there with the
+ * environment of the system, so a port that is entered through the kernel
+ * always has one. A port called directly may see NULL (no environment) and a
+ * vector whose first word is NULL (an empty one) - two different things at
+ * the entry, as in POSIX. Returns -1 when the image cannot be placed or the
+ * machine cannot jump.
  */
 int k_port_exec_enter(const struct k_exec_image *image, char *const argv[]);
 

@@ -36,7 +36,7 @@ who wants to use the system, not a second copy of the contract.
 | 22 | `realloc` | resize a block |
 | 23 | `chmod` | the mode of an object |
 | 24 | `chown` | the owner of an object |
-| 25 | `execve` | make the caller a program |
+| 25 | `execve` | make the caller a program, with its arguments and environment |
 | 26 | `statx` | the numbers of `stat` and the moments of a change |
 | 27 | `pipe` | two descriptors of one pipe |
 | 28 | `dup2` | a second descriptor of an open file |
@@ -173,10 +173,14 @@ child shares the memory of the parent and re-enters its program, and the port
 says so. `waitpid()` waits for a child and reports its status; no child is
 `ECHILD`.
 
-`execve(path, argv)` reads the file through the VFS, checks the mode, parses a
-`MOX1` image and asks the port to run it. The board and the simulator answer
+`execve(path, argv, envp)` reads the file through the VFS, checks the mode,
+parses a `MOX1` image and asks the port to run it. The environment is the third
+argument, a vector of `NAME=VALUE` words; a NULL one is the environment of the
+system (`PATH=/bin`, `HOME=/`, `USER=root`, `PWD=/`). The port enters the
+program with `argc` in `rdi`, `argv` in `rsi` and `envp` in `rdx`
+([ADR 0016](../adr/0016-userland.md)). The board and the simulator answer
 `ENOSYS`; x86-64 enters ring 3. [programs.md](programs.md) has the details of
-the format and the entry.
+the format, the entry and the library of a program.
 
 ## The contract of the port: 1.6
 

@@ -61,6 +61,13 @@ because the instruction `syscall` of a 64-bit machine keeps them for the
 return address and the flags, and one convention for both instructions costs
 nothing.
 
+A program that was entered with an image starts with the arguments of a C
+function in the registers (ADR 0016): the count of the arguments in `rdi`, the
+vector of the arguments in `rsi` and the vector of the environment in `rdx`.
+The stack is aligned as after a call and its top word is zero, so the entry of
+a program is `int main(int argc, char *const argv[], char *const envp[])`; a
+program that returns instead of calling `exit` faults on address zero.
+
 A program ends with `exit` (number 0): the kernel asks the port whether a
 program is in flight (`k_port_exec_active()`), and the port unwinds to the
 call that entered it with the status. `k_exec_exit()` carries the number,
@@ -101,7 +108,7 @@ chose.
 | 22 | `realloc` | `ptr, size` | the address of the memory, 0 when there is none |
 | 23 | `chmod` | `path, mode` | 0, or an error |
 | 24 | `chown` | `path, owner` | 0, or an error |
-| 25 | `execve` | `path, argv` | never returns; 0 when the program returns; or an error |
+| 25 | `execve` | `path, argv, envp` | never returns; 0 when the program returns; or an error |
 | 26 | `statx` | `path, buf` | 0, or an error |
 | 27 | `pipe` | `fds` | 0 and two descriptors, or an error |
 | 28 | `dup2` | `oldfd, newfd` | `newfd`, or an error |
@@ -280,7 +287,7 @@ microos_statx`, with the types of `<stdint.h>`; it returns -1 and sets
 
 ## The programs
 
-`execve(path, argv)` makes the caller a program:
+`execve(path, argv, envp)` makes the caller a program:
 
 * the file is read through the VFS, not through a descriptor of the caller,
   so a failed call leaves the table of the task exactly as it was;
@@ -320,6 +327,28 @@ pointers of the caller. A line of the shell is `exec /bin/hello one two`:
 three words, the name of the program first, as in Linux. The x86-64 port also
 places a zero at the top of the stack, so a program that returns instead of
 exiting faults on address zero.
+
+### The environment
+
+`envp` is the third argument of the call: a vector of "NAME=VALUE" words
+terminated by NULL, copied into a frame of its own by the same code that
+copies the arguments and bounded the same way (eight words, 512 bytes). A
+NULL vector is **the environment of the system** and not an empty one: the
+kernel fills it with `k_exec_environ()`, which today is four words -
+`PATH=/bin`, `HOME=/`, `USER=root`, `PWD=/` - because the shell has no
+`export` yet. A vector whose first word is NULL is an empty environment, and
+the program sees `envp[0] == NULL`.
+
+The environment travels to the port in `struct k_exec_image.envp`, next to the
+bytes of the image; the port contract (1.6) does not change. `execve` answers
+the same errors for a bad environment as for a bad vector of arguments, before
+the file is read: a refused call spends nothing.
+
+The library of a program (`components/libc/user`) writes the entry as
+`_start(argc, argv, envp)`, calls `main(argc, argv, envp)` and then `exit`.
+`components/libc` (the library of the kernel) keeps `microos_execve(path,
+argv)` for the callers that pass no environment; `ksys_execve_env()` is the
+wrapper of the three-argument call.
 
 ## The processes
 
@@ -430,7 +459,9 @@ names of POSIX: `microos_chmod`, `microos_chown`, `microos_statx`,
 `chown`, `statx`, `execve`, `pipe`, `dup2` when its header is included). They
 return -1 and set `microos_errno()` when something goes wrong, and they
 refuse the two numbers of a mode and of an owner that a record cannot hold
-before the kernel is asked.
+before the kernel is asked. The wrapper of the call itself is
+`ksys_execve(path, argv)` for a caller without an environment and
+`ksys_execve_env(path, argv, envp)` for one with it.
 
 ## The tests
 
@@ -482,6 +513,12 @@ program breaks it into pieces.
   an image of the format of the system, and every refusal before that answer -
   `ENOENT`, `EISDIR`, `EPERM`, `EINVAL` - is the answer of its own reason. A
   failed `execve` spends no descriptor of the caller.
+* **The environment.** A vector of the system is a list of `NAME=VALUE` words
+  with `PATH=/bin` first; an environment of nine words, or one whose string
+  does not end, is `E2BIG`; a NULL environment and an empty one are the answer
+  of the machine and not a refusal. The arguments and the environment are
+  bounded apart, so a long line does not shorten the environment of the same
+  call.
 
 The corpus lives in [tests/corpus/vectors.txt](../tests/corpus/vectors.txt): 512
 numbers with the boundary values mixed in (0, 1, 255, 65535, 2147483647 and so

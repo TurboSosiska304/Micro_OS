@@ -53,6 +53,20 @@ COMMANDS = [
     "chown 0 /bin/hello",
     "exec /bin/hello",
     "exec /bin/hello one two",
+    # The three programs of the library (ADR 0016): a file through open/read/
+    # write and the formatter, a line of arguments, and a directory through
+    # readdir. The file they read is made here, because the disk of the test
+    # is fresh at every boot.
+    "mkdir /etc",
+    "write /etc/setting hello",
+    "exec /bin/cat /etc/setting",
+    "exec /bin/cat /no/such/file",
+    "exec /bin/echo one two",
+    "exec /bin/ls /bin",
+    # A program that starts another program with an environment of its own:
+    # the third argument of execve copied from the memory of a program, not
+    # the four words of the kernel that every call without one gets.
+    "exec /bin/spawn",
     "fsck",
     # The program of K4: it forks, the child writes the shared page and ends
     # with 7, the parent waits and still reads its own 42 (copy on write).
@@ -194,6 +208,13 @@ def check(output: str) -> list:
     expect("the program runs in ring 3", "PROGRAM: cpl 3" in output)
     # No arguments at the boot: the port is entered without a vector.
     expect("the program starts without arguments", "PROGRAM: argc 0" in output)
+    # The environment the kernel fills in when the call carries none: the
+    # entry ABI has argc, argv and envp in RDI, RSI and RDX (ADR 0016), and a
+    # program that prints the vector proves the third register crossed too.
+    expect(
+        "the program starts with the environment of the system",
+        re.search(r"PROGRAM: envp \d+, PATH=/bin", output) is not None,
+    )
     expect(
         "the program asks the kernel for its pid and the time",
         re.search(r"PROGRAM: pid \d+, up \d+ ms", output) is not None,
@@ -277,11 +298,53 @@ def check(output: str) -> list:
         "the program has finished" in answer("exec /bin/hello", 1),
     )
     # The arguments of a line of the shell reach the program: the name of the
-    # program first, then the words of the line.
+    # program first, then the words of the line; and the environment the
+    # shell did not pass is the one of the system.
     expect(
         "the arguments of the shell reach the program",
         "PROGRAM: argc 3, argv[0] /bin/hello" in answer("exec /bin/hello one two"),
     )
+    expect(
+        "the program of the shell sees the environment",
+        re.search(r"PROGRAM: envp \d+, PATH=/bin", answer("exec /bin/hello one two")) is not None,
+    )
+
+    # --- the programs of the library (ADR 0016)
+    # cat opens a file the shell wrote, reads it and writes the bytes to the
+    # console: the call of the file, of the buffer and of the console in one
+    # image that was linked against components/libc/user and not against
+    # programs/prog.h.
+    cat = answer("exec /bin/cat /etc/setting")
+    expect("cat reads a file through the library", "hello" in cat)
+    expect("cat is a program of the shell", "the program has finished" in cat)
+    # The error path is the formatter of the library (%s and %d) and the
+    # status of a program that did not succeed: 1, the code of the shell
+    # command, and not the 255 of a fault.
+    cat = answer("exec /bin/cat /no/such/file")
+    expect("cat reports a file the formatter prints", "cat: /no/such/file: error 2" in cat)
+    expect("a program returns the status the library gives it", "the program exited with 1" in cat)
+    # echo is the vector of the arguments and the formatter of the library.
+    echo = answer("exec /bin/echo one two")
+    expect("echo writes its arguments", "one two" in echo)
+    expect("echo is a program of the shell", "the program has finished" in echo)
+    # ls is a directory through readdir, which is a descriptor with a
+    # position of its own: the names of /bin come back in one line.
+    listing = answer("exec /bin/ls /bin")
+    expect(
+        "ls reads a directory through the library",
+        "hello" in listing and "cat" in listing and "echo" in listing and "ls" in listing,
+    )
+    expect("ls is a program of the shell", "the program has finished" in listing)
+    # A program starts another program with an environment of its own. The
+    # two words are the vector of `spawn.c`, copied by the kernel at the edge
+    # and placed in the memory of the second program: the entry prints them.
+    spawn = answer("exec /bin/spawn")
+    expect(
+        "a program starts another with its own environment",
+        "PROGRAM: envp 2, PATH=/custom" in spawn,
+    )
+    expect("the started program gets its arguments", "PROGRAM: argc 2, argv[0] hello" in spawn)
+    expect("the outer program waits for the inner one", "the program has finished" in spawn)
     # The mode is a fact of the record and not a word of the kernel: take the
     # bit away with the shell and the same call refuses, give it back and the
     # program runs again. The library writes its errno through %fs here, so a
