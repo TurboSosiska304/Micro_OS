@@ -52,6 +52,7 @@ struct port_task {
     k_u64_t stack_top; /* the empty top of the stack: RSP0 when it is a program */
     k_u64_t cr3;       /* the page tables of the task; the kernel's by default */
     bool is_user;      /* a program of ring 3 runs on this context */
+    bool exiting;      /* k_port_task_exit has begun on this context */
 };
 
 /*
@@ -622,6 +623,19 @@ void k_port_task_exit(int code)
         }
     }
 
+    /*
+     * The tick asks this flag before it takes the CPU away: a task that has
+     * been published as a zombie but has not begun its exit is still in the
+     * window of the scheduler's bookkeeping, and a switch there would leave
+     * a context that is in no run queue - its stack and its address space
+     * would never be released. From here on the two slots above are filled,
+     * so a tick may take the CPU: the context that takes it next releases
+     * them, and this one is never resumed.
+     */
+    if (dead != NULL) {
+        dead->exiting = true;
+    }
+
     flags = port_save_flags_and_cli();
     next = k_sched_pick_next();
     next_pt = port_task_of(next);
@@ -718,6 +732,24 @@ void port_x86_64_task_tick(void)
     self = k_port_task_current();
     if (self == NULL) {
         /* The boot context: there is no task to take the CPU away from. */
+        return;
+    }
+
+    /*
+     * A task published as a zombie is between the scheduler's bookkeeping
+     * and the port's own exit (k_port_task_exit), which is what releases its
+     * stack and the page tables of its program. The interrupts come back on
+     * on that way - the console line of the exit is written with them on -
+     * so a tick can land in the window. A switch here would leave a context
+     * that is in no run queue: its release would never happen and every
+     * program of the machine would leak an address space. The task is about
+     * to leave by itself, and the tick keeps it on the CPU for those few
+     * instructions. A task that has begun the exit has already put its stack
+     * and its map in the pending slots, so it may be preempted; that is the
+     * case of the last context of the machine, which waits in the idle loop
+     * for the tick that wakes the parent.
+     */
+    if (self->state == TASK_STATE_ZOMBIE && g_current != NULL && !g_current->exiting) {
         return;
     }
 

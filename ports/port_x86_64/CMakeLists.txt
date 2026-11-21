@@ -309,8 +309,14 @@ endfunction()
 
 add_libc_program(cat)
 add_libc_program(echo)
+add_libc_program(grep)
+add_libc_program(head)
 add_libc_program(ls)
+add_libc_program(mkdir)
+add_libc_program(pwd)
+add_libc_program(rm)
 add_libc_program(spawn)
+add_libc_program(wc)
 
 add_executable(microos64
     ${KERNEL_SOURCES}
@@ -343,8 +349,14 @@ add_executable(microos64
     "${signals_OBJECT}"
     "${cat_OBJECT}"
     "${echo_OBJECT}"
+    "${grep_OBJECT}"
+    "${head_OBJECT}"
     "${ls_OBJECT}"
+    "${mkdir_OBJECT}"
+    "${pwd_OBJECT}"
+    "${rm_OBJECT}"
     "${spawn_OBJECT}"
+    "${wc_OBJECT}"
 )
 
 target_include_directories(microos64 PRIVATE

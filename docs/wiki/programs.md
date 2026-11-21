@@ -7,7 +7,7 @@ own, and the port places it in memory and enters it. The decisions are in
 [ADR 0006](../adr/0006-program-entry.md) (the entry),
 [ADR 0007](../adr/0007-paging-and-user-mode.md) (the address space and ring 3)
 and [ADR 0016](../adr/0016-userland.md) (the environment, the library and the
-three programs of `/bin`); the report of the phase is
+programs of `/bin`); the report of the phase is
 [`docs/phases/phase7.md`](../phases/phase7.md).
 
 Only one machine of the tree can run a program:
@@ -55,14 +55,14 @@ tools/mkprog.sh [--base 0x02000000] hello.elf hello.mox hello_main
 
 The image is not relocated: the code and the data have to be linked for the
 address the port names, and `--base` makes the script refuse an image linked
-for another window. The x86-64 port builds its eight programs this way: the
+for another window. The x86-64 port builds its fifteen images this way: the
 object is compiled for the window, linked with `programs/program.ld`, turned
 into a `.mox` by the script and embedded in the kernel as a blob, because the
 kernel needs the bytes before it has a filesystem to read them from.
 
 ## `/bin` and the boot
 
-The x86-64 port mounts MicroFS at `/`, creates `/bin`, writes nine images
+The x86-64 port mounts MicroFS at `/`, creates `/bin`, writes fifteen images
 there and gives them the mode of a program (`0755`) through the VFS:
 
 | File | What it proves |
@@ -72,15 +72,24 @@ there and gives them the mode of a program (`0755`) through the VFS:
 | `/bin/fork` | `fork()` with copy on write: the child gets 0, the parent the pid |
 | `/bin/badptr` | a pointer outside the window is `EFAULT`, not a fault of ring 0 |
 | `/bin/signals` | a handler, `SIGTERM` ending a child, a wait cut by `SIGINT`, `SIG_IGN`, and the errors of `kill` |
-| `/bin/cat` | `open`, `read`, `write` on a file, through the library of a program |
+| `/bin/cat` | `open`, `read`, `write` on a file or descriptor 0, through the library of a program |
 | `/bin/echo` | the vector of the arguments and `write`, the shortest useful program |
 | `/bin/ls` | a directory through `open(O_DIRECTORY)` and `readdir` |
+| `/bin/grep` | the lines of a source that hold a word (`-i`, `-v`), through `strstr` |
+| `/bin/head` | the first lines of a source (`-n N`), a block at a time |
+| `/bin/mkdir` | a directory through `mkdir`, one for every word of the line |
+| `/bin/pwd` | the directory of the task through `getcwd` |
+| `/bin/rm` | a name through `unlink`; `-r` walks a directory with `readdir` |
 | `/bin/spawn` | `execve` from a program, with an environment of its own |
+| `/bin/wc` | the lines and the bytes of a source (`-l`, `-c`) |
 
 The first five talk to the kernel through `programs/prog.h`, because what they
 test is the raw door, the fault, the fork, the edge and the signals. The last
-four are ordinary C programs linked against `components/libc/user`
-([ADR 0016](../adr/0016-userland.md)).
+ten are ordinary C programs linked against `components/libc/user`
+([ADR 0016](../adr/0016-userland.md)). Every one of them reads descriptor 0
+when it is given no file (or `-`); the shell does not pass its table to a
+program yet, so that read is `EBADF` until a redirection carries a file to
+descriptor 0.
 
 The boot then asks for `/bin/hello` with `ksys_execve()`: the stat, the check
 of the mode, the read through the VFS, the parse and the entry are the ones of
@@ -102,6 +111,12 @@ hello
 the program has finished
 microos> exec /bin/echo one two
 one two
+the program has finished
+microos> exec /bin/wc -l /etc/setting
+1 /etc/setting
+the program has finished
+microos> exec /bin/pwd
+/
 the program has finished
 microos> exec /bin/spawn
 spawn: starting /bin/hello with its own environment
@@ -196,9 +211,9 @@ the library of the kernel, which calls `ksys_*` and has no address in ring 3:
 |---|---|
 | `include/ulibc.h` | the prototypes and the numbers of the calls, from `kernel/ksys.h` |
 | `src/start.c` | `_start`: `main(argc, argv, envp)`, then `exit` |
-| `src/syscall.c` | `int $0x80`, `open`, `close`, `read`, `write`, `lseek`, `readdir`, `getpid`, `uptime`, `execve`, `exit` |
+| `src/syscall.c` | `int $0x80`, `open`, `close`, `read`, `write`, `lseek`, `readdir`, `stat`, `mkdir`, `unlink`, `getcwd`, `getpid`, `uptime`, `execve`, `exit` |
 | `src/stdio.c` | `printf` and `puts` over a buffer of 128 bytes and `write(1, ...)` |
-| `src/string.c` | `strlen`, `strcmp`, `strncmp`, `memcpy`, `memset` |
+| `src/string.c` | `strlen`, `strcmp`, `strncmp`, `strstr`, `memcpy`, `memset` |
 
 ```c
 #include "ulibc.h"
@@ -255,11 +270,13 @@ plan to pretend otherwise.
   library: no allocation, no files of a stream, no `errno`, no floating point
   (the programs are built with `-mgeneral-regs-only`), and the formatter has
   no precision and no `*` width.
-* **No stdin and no inherited descriptors.** A program is a task with a table
-  of four descriptors of its own, and the shell does not pass its own table to
-  it: `cat` with no name explains itself instead of reading descriptor 0. The
-  descriptors 1 and 2 are the console; `pipe`, `dup2` and the inheritance are
-  a debt of the next milestone.
+* **No inherited descriptors.** A program is a task with a table of four
+  descriptors of its own, and the shell does not pass its own table to it.
+  `cat`, `wc`, `head` and `grep` read descriptor 0 when they are given no file
+  (or `-`), but a fresh table has no descriptor 0: the read answers `EBADF`
+  until a redirection or an inherited table opens it. The descriptors 1 and 2
+  are the console; `pipe`, `dup2` and the inheritance are a debt of the
+  milestone after this one.
 * **No `mmap` and no `brk`.** A program cannot ask for a range of its own, and
   the library has no `malloc`.
 * **No shell `export`.** The environment of every program is the four words of

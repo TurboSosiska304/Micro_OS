@@ -110,10 +110,22 @@ extern const k_u8_t _binary_cat_mox_start[];
 extern const k_u8_t _binary_cat_mox_end[];
 extern const k_u8_t _binary_echo_mox_start[];
 extern const k_u8_t _binary_echo_mox_end[];
+extern const k_u8_t _binary_grep_mox_start[];
+extern const k_u8_t _binary_grep_mox_end[];
+extern const k_u8_t _binary_head_mox_start[];
+extern const k_u8_t _binary_head_mox_end[];
 extern const k_u8_t _binary_ls_mox_start[];
 extern const k_u8_t _binary_ls_mox_end[];
+extern const k_u8_t _binary_mkdir_mox_start[];
+extern const k_u8_t _binary_mkdir_mox_end[];
+extern const k_u8_t _binary_pwd_mox_start[];
+extern const k_u8_t _binary_pwd_mox_end[];
+extern const k_u8_t _binary_rm_mox_start[];
+extern const k_u8_t _binary_rm_mox_end[];
 extern const k_u8_t _binary_spawn_mox_start[];
 extern const k_u8_t _binary_spawn_mox_end[];
+extern const k_u8_t _binary_wc_mox_start[];
+extern const k_u8_t _binary_wc_mox_end[];
 
 #define PROGRAM_DIR "/bin"
 #define PROGRAM_PATH "/bin/hello"
@@ -123,8 +135,14 @@ extern const k_u8_t _binary_spawn_mox_end[];
 #define PROGRAM_SIGNALS_PATH "/bin/signals"
 #define PROGRAM_CAT_PATH "/bin/cat"
 #define PROGRAM_ECHO_PATH "/bin/echo"
+#define PROGRAM_GREP_PATH "/bin/grep"
+#define PROGRAM_HEAD_PATH "/bin/head"
 #define PROGRAM_LS_PATH "/bin/ls"
+#define PROGRAM_MKDIR_PATH "/bin/mkdir"
+#define PROGRAM_PWD_PATH "/bin/pwd"
+#define PROGRAM_RM_PATH "/bin/rm"
 #define PROGRAM_SPAWN_PATH "/bin/spawn"
+#define PROGRAM_WC_PATH "/bin/wc"
 
 /*
  * A program is a file somebody may run, so it is created with the mode of a
@@ -316,6 +334,44 @@ static void filesystem_bring_up(void)
 
     if (!program_install(PROGRAM_LS_PATH, _binary_ls_mox_start,
                          (k_size_t)(_binary_ls_mox_end - _binary_ls_mox_start))) {
+        return;
+    }
+
+    /*
+     * The utilities of a line: `wc` counts the newlines and the bytes of a
+     * source, `head` copies the first lines, `grep` prints the lines that
+     * hold a word, `mkdir` and `rm` change the tree through the calls, and
+     * `pwd` reads the directory of the task. The four filters read
+     * descriptor 0 when they are given no file, which is what will make them
+     * the second half of a pipe of the next milestone.
+     */
+    if (!program_install(PROGRAM_WC_PATH, _binary_wc_mox_start,
+                         (k_size_t)(_binary_wc_mox_end - _binary_wc_mox_start))) {
+        return;
+    }
+
+    if (!program_install(PROGRAM_HEAD_PATH, _binary_head_mox_start,
+                         (k_size_t)(_binary_head_mox_end - _binary_head_mox_start))) {
+        return;
+    }
+
+    if (!program_install(PROGRAM_GREP_PATH, _binary_grep_mox_start,
+                         (k_size_t)(_binary_grep_mox_end - _binary_grep_mox_start))) {
+        return;
+    }
+
+    if (!program_install(PROGRAM_MKDIR_PATH, _binary_mkdir_mox_start,
+                         (k_size_t)(_binary_mkdir_mox_end - _binary_mkdir_mox_start))) {
+        return;
+    }
+
+    if (!program_install(PROGRAM_RM_PATH, _binary_rm_mox_start,
+                         (k_size_t)(_binary_rm_mox_end - _binary_rm_mox_start))) {
+        return;
+    }
+
+    if (!program_install(PROGRAM_PWD_PATH, _binary_pwd_mox_start,
+                         (k_size_t)(_binary_pwd_mox_end - _binary_pwd_mox_start))) {
         return;
     }
 

@@ -54,7 +54,7 @@ COMMANDS = [
     "chown 0 /bin/hello",
     "exec /bin/hello",
     "exec /bin/hello one two",
-    # The three programs of the library (ADR 0016): a file through open/read/
+    # The programs of the library (ADR 0016): a file through open/read/
     # write and the formatter, a line of arguments, and a directory through
     # readdir. The file they read is made here, because the disk of the test
     # is fresh at every boot.
@@ -64,6 +64,31 @@ COMMANDS = [
     "exec /bin/cat /no/such/file",
     "exec /bin/echo one two",
     "exec /bin/ls /bin",
+    # The utilities of a line (ADR 0016): a count, the first lines and a
+    # search, each over the file the shell made above. The bytes of the file
+    # are "hello\n", so wc answers one line and six bytes - a number that
+    # comes out of the file and not out of the program's own text.
+    "exec /bin/wc /etc/setting",
+    "exec /bin/wc -l /etc/setting",
+    "exec /bin/wc -c /etc/setting",
+    "exec /bin/head -n 1 /etc/setting",
+    "exec /bin/grep hello /etc/setting",
+    "exec /bin/grep -i HELLO /etc/setting",
+    # The same commands with no file: they read descriptor 0, which the shell
+    # does not pass to a program yet, so the call answers EBADF (9). The line
+    # is the proof that the input is descriptor 0 and not a usage sentence.
+    "exec /bin/cat",
+    "exec /bin/wc -l -",
+    # The tree through the calls: a directory made, a directory refused by
+    # rm without -r, the tree taken down with the flag, and a listing of a
+    # directory that is no longer there.
+    "mkdir /tmp",
+    "exec /bin/mkdir /tmp/d",
+    "exec /bin/ls /tmp",
+    "exec /bin/rm /tmp/d",
+    "exec /bin/rm -r /tmp",
+    "exec /bin/ls /tmp",
+    "exec /bin/pwd",
     # A program that starts another program with an environment of its own:
     # the third argument of execve copied from the memory of a program, not
     # the four words of the kernel that every call without one gets.
@@ -284,6 +309,12 @@ def check(output: str) -> list:
     # the boot, so a listing is the proof that the bytes are on a filesystem and
     # not a line the kernel printed about itself.
     expect("the program is a file in /bin", "hello" in answer("ls /bin"))
+    # The utilities of the library are files of /bin like the first four: the
+    # listing of the shell is the proof the boot wrote every image.
+    expect(
+        "the utilities are files in /bin",
+        all(name in answer("ls /bin") for name in ("wc", "head", "grep", "mkdir", "rm", "pwd")),
+    )
     # The same file, asked for with a command of the shell: the library, the
     # syscall, the mode of the record and the jump are the ones of a user and
     # not the ones of the boot.
@@ -345,6 +376,58 @@ def check(output: str) -> list:
         "hello" in listing and "cat" in listing and "echo" in listing and "ls" in listing,
     )
     expect("ls is a program of the shell", "the program has finished" in listing)
+
+    # --- the utilities of the library: wc, head, grep, mkdir, rm, pwd
+    # The file the shell wrote is "hello\n": one line and six bytes. The
+    # numbers are of the file, and a program that read its own arguments
+    # could not produce them.
+    wc = answer("exec /bin/wc /etc/setting")
+    expect("wc counts the lines and the bytes", "1 6 /etc/setting" in wc)
+    expect("wc counts what it read", "the program has finished" in wc)
+    wc = answer("exec /bin/wc -l /etc/setting")
+    expect("wc -l is a count of the newlines", "1 /etc/setting" in wc)
+    wc = answer("exec /bin/wc -c /etc/setting")
+    expect("wc -c is a count of the bytes", "6 /etc/setting" in wc)
+    # head copies the first line of the file and stops: the file has one, so
+    # the block holds it once and the program has a status of 0.
+    head = answer("exec /bin/head -n 1 /etc/setting")
+    expect("head prints the first line", "hello" in head)
+    expect("head is a program of the shell", "the program has finished" in head)
+    expect("head returns its status", "the program exited with 0" in head)
+    # grep searches a line and prints it; -i folds the case of the word.
+    grep = answer("exec /bin/grep hello /etc/setting")
+    expect("grep prints a line that holds the word", "hello" in grep)
+    expect("grep is a program of the shell", "the program has finished" in grep)
+    grep = answer("exec /bin/grep -i HELLO /etc/setting")
+    expect("grep -i folds the case", "hello" in grep)
+    # No file is descriptor 0. The shell does not pass its table to a
+    # program yet, so the call answers EBADF: the program took the path and
+    # the answer is about the descriptor, not about a usage line.
+    cat = answer("exec /bin/cat")
+    expect("cat reads descriptor 0 when no file is named", "cat: stdin: error 9" in cat)
+    expect("cat of a closed stdin is a failure", "the program exited with 1" in cat)
+    wc = answer("exec /bin/wc -l -")
+    expect("wc reads descriptor 0 for a dash", "wc: stdin: error 9" in wc)
+    # The tree: the shell makes /tmp, the program makes a directory in it.
+    # Without -r a directory is refused, even an empty one; with -r the tree
+    # goes away and the listing of it is ENOENT (2).
+    made = answer("exec /bin/mkdir /tmp/d")
+    expect("mkdir makes a directory through the call", "mkdir:" not in made)
+    expect("mkdir returns its status", "the program exited with 0" in made)
+    listing = answer("exec /bin/ls /tmp")
+    expect("the directory made by the program is there", re.search(r"(?m)^d\s*$", listing) is not None)
+    refused = answer("exec /bin/rm /tmp/d")
+    expect("rm refuses a directory without -r", "is a directory, use -r" in refused)
+    removed = answer("exec /bin/rm -r /tmp")
+    expect("rm -r takes a tree down", "rm:" not in removed)
+    expect("rm -r returns its status", "the program exited with 0" in removed)
+    gone = answer("exec /bin/ls /tmp", 1)
+    expect("the tree is gone", "ls: /tmp: error 2" in gone)
+    # pwd is the directory of the task, read through the call: the shell
+    # starts at /, and the block after the typed line is that one character.
+    pwd = answer("exec /bin/pwd")
+    expect("pwd prints the directory of the task", re.search(r"(?m)^/\r?$", pwd) is not None)
+    expect("pwd is a program of the shell", "the program exited with 0" in pwd)
     # A program starts another program with an environment of its own. The
     # two words are the vector of `spawn.c`, copied by the kernel at the edge
     # and placed in the memory of the second program: the entry prints them.

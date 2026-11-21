@@ -98,6 +98,26 @@ long readdir(int fd, struct vfs_dirent *entries, size_t count)
     return syscall6(KSYS_READDIR, fd, (long)(uintptr_t)entries, (long)count, 0, 0, 0);
 }
 
+int stat(const char *path, struct vfs_stat *info)
+{
+    return (int)syscall6(KSYS_STAT, (long)(uintptr_t)path, (long)(uintptr_t)info, 0, 0, 0, 0);
+}
+
+int mkdir(const char *path)
+{
+    return (int)syscall6(KSYS_MKDIR, (long)(uintptr_t)path, 0, 0, 0, 0, 0);
+}
+
+int unlink(const char *path)
+{
+    return (int)syscall6(KSYS_UNLINK, (long)(uintptr_t)path, 0, 0, 0, 0, 0);
+}
+
+int getcwd(char *buf, size_t size)
+{
+    return (int)syscall6(KSYS_GETCWD, (long)(uintptr_t)buf, (long)size, 0, 0, 0, 0);
+}
+
 int getpid(void)
 {
     return (int)syscall6(KSYS_GETPID, 0, 0, 0, 0, 0, 0);

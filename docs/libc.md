@@ -16,11 +16,23 @@ components use it with no crossing of a privilege boundary.
 A program of ring 3 cannot call those functions: their addresses are not in
 its page tables, and the only door it has is `int $0x80`. Its library is
 `components/libc/user` (ADR 0016): `_start`, the door of the call, `open`,
-`close`, `read`, `write`, `lseek`, `readdir`, `getpid`, `uptime`, `exit`,
-`printf`, `puts` and the strings, with the numbers of `kernel/ksys.h` and no
-allocation, no `errno` and no floating point. The two libraries share the
-header of the ABI and nothing else, and that is deliberate: one runs with the
-kernel under it, the other has nothing but the gate.
+`close`, `read`, `write`, `lseek`, `readdir`, `stat`, `mkdir`, `unlink`,
+`getcwd`, `getpid`, `uptime`, `execve`, `exit`, `printf`, `puts` and the
+strings (`strlen`, `strcmp`, `strncmp`, `strstr`, `memcpy`, `memset`), with
+the numbers of `kernel/ksys.h` and no allocation, no `errno` and no floating
+point. The two libraries share the header of the ABI and nothing else, and
+that is deliberate: one runs with the kernel under it, the other has nothing
+but the gate.
+
+The library of a program grew with its utilities (0.7): `stat` to tell a file
+from a directory (`rm` refuses a directory without `-r`), `mkdir` and
+`unlink` for the tree (`mkdir`, `rm`), `getcwd` for the directory of the task
+(`pwd`), and `strstr` for a word in a line (`grep`). The list is what the ten
+programs of `/bin` use and not a standard library: a function without a caller
+of this tree is not in it. `cat`, `wc`, `head` and `grep` read descriptor 0
+when they are given no file, which is the shape of a filter; a fresh table of
+a program has no descriptor 0 yet, so that read is `EBADF` until a redirection
+opens it ([`docs/debts.md`](debts.md)).
 
 ## The names
 
@@ -148,7 +160,10 @@ const char *microos_strerror(int code);
   output to a file or to another program; the shell does not parse a
   pipeline yet.
 * **The console is not readable through the descriptor 0.** A program that
-  wants the input of the user opens `/dev/tty0`.
+  wants the input of the user opens `/dev/tty0`. The utilities of
+  `components/libc/user` do read descriptor 0 for a line, but the shell does
+  not carry a file or the console into a program, so the call answers
+  `EBADF` and not a line.
 * **There is no `printf` of a floating point with the exact digits of the
   system.** The numbers agree to the precision that was asked for, but the
   rounding of the last digit can differ.

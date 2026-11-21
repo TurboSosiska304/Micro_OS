@@ -2,9 +2,9 @@
  * Micro OS — the strings a program formats and prints.
  *
  * A program of this system has no libc of its own under it: the image carries
- * what it needs. These are the four functions a formatter and a line of
- * arguments need, written without a call of the string library of a host that
- * is not there.
+ * what it needs. These are the functions a formatter, a line of arguments and
+ * a search of a line need, written without a call of the string library of a
+ * host that is not there.
  */
 #include "ulibc.h"
 
@@ -46,6 +46,24 @@ int strncmp(const char *left, const char *right, size_t count)
     }
 
     return 0;
+}
+
+char *strstr(const char *text, const char *needle)
+{
+    size_t length = strlen(needle);
+
+    if (length == 0) {
+        return (char *)text;
+    }
+
+    while (*text != '\0') {
+        if (strncmp(text, needle, length) == 0) {
+            return (char *)text;
+        }
+        text++;
+    }
+
+    return NULL;
 }
 
 void *memcpy(void *dest, const void *source, size_t count)

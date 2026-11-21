@@ -36,7 +36,10 @@
 #include "kernel/ksys.h"
 
 /* The descriptors a program knows without opening them. The console of the
- * port is 1 and 2; there is no stdin until a descriptor can be inherited. */
+ * port is 1 and 2. Descriptor 0 is the input of a program: the shell does not
+ * pass its own table to a program yet (docs/debts.md), so it is open only
+ * when the program opened it - which is the first descriptor a fresh table
+ * gives out - and a read of it answers EBADF otherwise. */
 #define ULIBC_STDIN 0
 #define ULIBC_STDOUT 1
 #define ULIBC_STDERR 2
@@ -73,6 +76,22 @@ long lseek(int fd, long offset, int whence);
  */
 long readdir(int fd, struct vfs_dirent *entries, size_t count);
 
+/*
+ * The objects of the tree: the information of a path, a directory, a name
+ * removed. `stat` answers 0 and fills the structure, `mkdir` and `unlink`
+ * answer 0; a negative number is the error of the call.
+ */
+int stat(const char *path, struct vfs_stat *info);
+int mkdir(const char *path);
+int unlink(const char *path);
+
+/*
+ * The current directory of the task, in the buffer of the caller. The answer
+ * is the length of the path, or a negative error when the buffer is too
+ * small; the text is terminated in every case.
+ */
+int getcwd(char *buf, size_t size);
+
 int getpid(void);
 long uptime(void);
 
@@ -98,6 +117,11 @@ void exit(int code) __attribute__((noreturn));
 size_t strlen(const char *text);
 int strcmp(const char *left, const char *right);
 int strncmp(const char *left, const char *right, size_t count);
+/*
+ * The first place of `needle` in `text`, or NULL. An empty needle is the
+ * text itself, as in the library of a Unix-like system.
+ */
+char *strstr(const char *text, const char *needle);
 void *memcpy(void *dest, const void *source, size_t count);
 void *memset(void *dest, int byte, size_t count);
 

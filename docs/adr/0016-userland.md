@@ -96,10 +96,10 @@ sets the thread pointer.
 | File | What it is |
 |---|---|
 | `include/ulibc.h` | the prototypes, the flags of `open`, the descriptors |
-| `src/syscall.c` | the door, `int $0x80`, and `open`, `close`, `read`, `write`, `lseek`, `readdir`, `getpid`, `uptime`, `execve`, `exit` |
+| `src/syscall.c` | the door, `int $0x80`, and `open`, `close`, `read`, `write`, `lseek`, `readdir`, `stat`, `mkdir`, `unlink`, `getcwd`, `getpid`, `uptime`, `execve`, `exit` |
 | `src/start.c` | `_start`: `main(argc, argv, envp)`, then `exit` |
 | `src/stdio.c` | `printf` and `puts` over a 128-byte buffer and `write(1, ...)` |
-| `src/string.c` | `strlen`, `strcmp`, `strncmp`, `memcpy`, `memset` |
+| `src/string.c` | `strlen`, `strcmp`, `strncmp`, `strstr`, `memcpy`, `memset` |
 
 The header includes `kernel/ksys.h` - the same header the kernel is compiled
 against - so a number of a call or a field of a structure cannot drift between
@@ -119,25 +119,61 @@ dynamic linker (ADR 0005). A program that wants the raw door may still use
 `programs/prog.h`; `hello`, `crash`, `fork` and `badptr` do, because what they
 test is the door, the fault, the fork and the edge - not a library.
 
-### 5. Three programs of the library: `cat`, `echo`, `ls`
+### 5. Ten programs of the library
 
-The x86-64 port writes seven images to `/bin` at the boot. The three new ones
-are the first that are ordinary C programs:
+The x86-64 port writes fifteen images to `/bin` at the boot; ten of them are
+ordinary C programs of this library and not creatures of the port:
 
 | File | What it exercises |
 |---|---|
-| `/bin/cat` | `open`, `read`, `write`, `close` on a file of the volume, and `printf` |
+| `/bin/cat` | `open`, `read`, `write`, `close` on a file of the volume, and `printf`; no name is descriptor 0 |
 | `/bin/echo` | the vector of the arguments and `write`; `-n` is the one option |
 | `/bin/ls` | `open` with `ULIBC_O_DIRECTORY` and `readdir` in batches of eight |
 | `/bin/spawn` | `execve` from a program, with an environment of its own |
+| `/bin/wc` | `-l` and `-c`, a block of the source at a time and a count of the newlines and the bytes |
+| `/bin/head` | `-n N`, the first lines of a source, written as far as the last newline of the count |
+| `/bin/grep` | a line at a time, `strstr` for the word, `-i` and `-v` |
+| `/bin/mkdir` | `mkdir` for every word of the line |
+| `/bin/rm` | `stat` and `unlink`; `-r` walks a directory with `readdir` |
+| `/bin/pwd` | `getcwd` and the directory of the task |
 
-`make x86-smoke` makes `/etc/setting` with the shell, runs
-`exec /bin/cat /etc/setting`, `exec /bin/echo one two`, `exec /bin/ls /bin`
-and `exec /bin/spawn`, and reads the answers back: a program that ran is a
-line on the console that neither the kernel nor the test wrote. `spawn` starts
-`/bin/hello` with a vector of its own, and the line `PROGRAM: envp 2,
-PATH=/custom` is the proof that the environment of a call is the memory of the
-caller copied at the edge, and not the four words of the kernel.
+`make x86-smoke` makes `/etc/setting` with the shell, runs the ten programs
+and reads the answers back: a program that ran is a line on the console that
+neither the kernel nor the test wrote. The numbers of `wc` (one line and six
+bytes of `hello\n`) come out of the file and not out of the program's text,
+`head` stops after the line it was asked for, `grep -i HELLO` finds the
+lowercase line, `mkdir` and `rm` change the tree and the listing of a removed
+directory is `ENOENT`, and `pwd` prints `/`. `spawn` starts `/bin/hello` with
+a vector of its own, and the line `PROGRAM: envp 2, PATH=/custom` is the
+proof that the environment of a call is the memory of the caller copied at the
+edge, and not the four words of the kernel.
+
+The boundaries of the ten, written down because a program of this size is a
+promise about what a shell of the machine can do:
+
+* **A source is a file or descriptor 0.** A program reads one source per name
+  and does not mix the two, and `cat`, `wc`, `head` and `grep` read descriptor
+  0 when there is no name (or the name is `-`). The shell does not pass its
+  table to a program yet, so a fresh descriptor 0 is closed and the read is
+  `EBADF`: the filter shape is in place, the redirection that fills it is the
+  work of the next milestone (docs/debts.md).
+* **A file is opened and closed around its own read.** The first `open` of a
+  fresh table is descriptor 0, which is why a program that reads a file is
+  also a program that reads descriptor 0 - but the two are never the same
+  read of the line.
+* **`grep` is a substring and not an expression.** No regular expressions, no
+  `-o`, no `-n`, no `-c`, and a line longer than 256 bytes is searched as far
+  as it fit.
+* **`head` counts newlines and copies bytes.** `-n N` is one word after the
+  flag; there is no `-c` and no negative count.
+* **`mkdir` has no `-p`** and `rm` has `-r` only: one directory level is
+  created per word, and the recursion of `rm` is bounded at eight levels, a
+  number of the stack of a program and not of the filesystem.
+* **`wc` prints the counts and the name.** There is no total for a line of
+  several files and no word count (`-w`), which the library has no `isspace`
+  for.
+* **`pwd` prints the directory of the task and nothing else**: `-P` and `-L`
+  are the same thing on a system with no symbolic link.
 
 ### 6. `exit` is the end of a program
 
@@ -209,6 +245,8 @@ nothing, the port reports the fault and the status is 255.
   answer of the machine (`ENOSYS` on the host), not a refusal of the call; the
   arguments and the environment are bounded apart.
 * `make x86-smoke`: `/bin/hello` prints `PROGRAM: envp 4, PATH=/bin`, and
-  `cat`, `echo` and `ls` read, write and list through the library, while
-  `spawn` starts another program with its own environment and sees it in the
-  second program.
+  the ten programs of the library read, write, count, search and change the
+  tree through it, while `spawn` starts another program with its own
+  environment and sees it in the second program. The check of `cat` with no
+  name reads descriptor 0 and expects `EBADF` (9), which is a fact about the
+  table of the program and not about the parser of `cat`.
