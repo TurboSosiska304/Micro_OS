@@ -284,7 +284,7 @@ PCI line needs the I/O APIC that K8 brings.
 
 ## What works
 
-* the boot: the loader, long mode, the banner, the contract check at 1.7;
+* the boot: the loader, long mode, the banner, the contract check at 1.8;
 * the console: the VGA text screen and COM1 from one call, the keyboard of
   the PS/2 with Shift, Caps Lock, Backspace and Ctrl+C, and the serial port
   with the console it always had;
@@ -320,7 +320,9 @@ PCI line needs the I/O APIC that K8 brings.
   and the `mount` command do not speak the registry yet;
 * a program out of a file: the boot writes the images of `hello`, `crash`,
   `fork`, `badptr`, `signals`, `cat`, `echo`, `ls`, `spawn` and `wc` to
-  `/bin`, gives them the mode 0755 and asks for `/bin/hello` with `execve` -
+  `/bin` (every image is built with `--arch x86-64`, and `execve` answers
+  `ENOEXEC` for one of another machine before it enters a byte), gives them
+  the mode 0755 and asks for `/bin/hello` with `execve` -
   the stat, the check of the mode, the read through the VFS, the parse of the
   image and the entry are the ones of the call and not a copy of them. The
   program is entered with `argc` in `rdi`, `argv` in `rsi` and `envp` in
@@ -336,7 +338,7 @@ PCI line needs the I/O APIC that K8 brings.
   address zero in ring 3, the port prints `the program faulted: vector 14 at
   0x0000000000000000`, takes the program down and the shell answers the next
   command;
-* the edge of the system call: `k_port_exec_contains()` (contract 1.7) walks
+* the edge of the system call: `k_port_exec_contains()` (a call of the contract since 1.7) walks
   the page tables of the program, `components/kernel/src/ksys.c` copies the
   paths, the vector of `execve` and the buffers of `stat`, `getcwd`, `read`,
   `write` and `readdir` through the check, and a range that is not mapped is

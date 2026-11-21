@@ -50,7 +50,7 @@ architecture own its part in `arch/<arch>/include/asm`:
 | `kernel/port/kv.h` | the store that survives a restart | `k_port_kv_get`, `k_port_kv_next` |
 | `kernel/port/net.h` | TCP and UDP | `k_port_net_connect`, `k_port_net_listen` |
 | `kernel/port/info.h` | identity and contract version | `k_port_name`, `k_port_api_major` |
-| `kernel/port/exec.h` | running a program | `k_port_exec_supported`, `k_port_exec_base`, `k_port_exec_enter` |
+| `kernel/port/exec.h` | running a program | `k_port_exec_supported`, `k_port_exec_arch`, `k_port_exec_base`, `k_port_exec_enter` |
 
 The version of the contract (`KERNEL_PORT_API_VERSION_MAJOR/MINOR`) is the
 vermagic of the pair: the port asserts it at build time and the boot
@@ -399,26 +399,34 @@ parses a format of its own and the port runs it. The decisions are in
 ### The format: MOX1
 
 An executable is a flat image with a 32-byte header (`kernel/exec.h`): the
-magic `MOX1`, a version, flags, the offset of the entry, the sizes of the text,
-the data and the bss, and a reserved word. The image is linked for the window
-of the port - the code at its base plus the 32 bytes of the header - and copied
-as it is, because nothing relocates it; the bss is not in the file and the port
-clears it. `tools/mkprog.sh` turns an object into the image. The parser
-(`components/kernel/src/exec.c`) checks the image against itself and nothing
-else: the magic and the version, sizes that fit the file, a text that is not
-empty, an entry in the text, sizes that are multiples of four, and a bss under
-a megabyte.
+magic `MOX1`, a version (2), flags, the offset of the entry, the sizes of the
+text, the data and the bss, and the machine the bytes are code for (`arch`: 0
+x86-64, 1 Xtensa). The image is linked for the window of the port - the code
+at its base plus the 32 bytes of the header - and copied as it is, because
+nothing relocates it; the bss is not in the file and the port clears it.
+`tools/mkprog.sh` turns an object into the image and writes the machine. The
+parser (`components/kernel/src/exec.c`) checks the image against itself and
+nothing else: the magic and the version, an arch the format knows, sizes that
+fit the file, a text that is not empty, an entry in the text, sizes that are
+multiples of four, and a bss under a megabyte. The machine of the image
+against the machine of the port is the question of `k_exec_run`, which asks
+the port (`k_port_exec_arch`) before it enters a byte.
 
 ### `execve` belongs to the port
 
-`kernel/port/exec.h` is a subject of the contract (1.6) with five calls:
+`kernel/port/exec.h` is a subject of the contract (1.8) with eight calls:
 `k_port_exec_supported()` (can this machine run a program at all),
+`k_port_exec_arch()` (which machine of the format it is, or -1),
 `k_port_exec_base()` (where the window is), `k_port_exec_enter()` (place the
-image, enter it) and the two halves of the end of a program,
-`k_port_exec_active()` and `k_port_exec_exit()`. The kernel parses the image
-and asks the port, so the answer for a machine that has no window is `ENOSYS`
-at the edge. The board says no: its flash is not executable for a file, and
-internal SRAM is ~100 KB for everything. The host says no too: jumping into
+image, enter it), the two halves of the end of a program,
+`k_port_exec_active()` and `k_port_exec_exit()`, the edge of the memory of a
+program, `k_port_exec_contains()`, and the copy of a context for `fork()`,
+`k_port_fork_copy()`. The kernel parses the image and asks the port, so the
+answer for a machine that has no window is `ENOSYS` at the edge, and an image
+of another machine is `ENOEXEC` before the port is asked to enter it. The
+board says no to a program today: its flash is not executable for a file, and
+internal SRAM is ~100 KB for everything (ADR 0018 gives it a partition and a
+loader; the port has the machine, not the loader). The host says no too: jumping into
 the bytes of a program inside the address space of the simulator would run it
 with the libc of the host under it. x86-64 says yes: it builds page tables for
 the program, maps the window at 32 MiB onto a physical arena at 64 MiB, keeps

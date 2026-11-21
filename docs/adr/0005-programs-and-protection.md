@@ -29,8 +29,13 @@ An executable is a flat image with a small header (`kernel/exec.h`):
 
 ```
 magic "MOX1" (the bytes; the little-endian word is 0x31584F4D), version, flags
-entry offset, text size, data size, bss size
+entry offset, text size, data size, bss size, arch
 ```
+
+Version 1 of this header had a reserved last word; version 2 makes it the
+machine of the image (0 x86-64, 1 Xtensa) and refuses a program of the other
+one before it runs, which is the decision of ADR 0018. The rest of the header
+and the rule that nothing relocates the image are unchanged.
 
 It is linked at a fixed address, because without an MMU there is nothing to
 relocate: the port says where a program may be placed

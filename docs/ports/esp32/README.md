@@ -68,9 +68,11 @@ test picture.
 * **No MMU.** The separation of user and kernel space is logical; there is no
   memory protection. `fork()` shares the memory of the parent and re-enters
   its program.
-* **A program cannot be run from the flash.** An arbitrary file is not
-  executable there and the internal SRAM has about 100 KB, so
-  `k_port_exec_supported()` is false and `execve` answers `ENOSYS`.
+* **A program cannot be run from the flash yet.** The header of an image
+  names this machine (`arch` 1, Xtensa) and the port answers with it, but an
+  arbitrary file is not executable there and the internal SRAM has about
+  100 KB: `k_port_exec_supported()` is false, an Xtensa image is `ENOSYS` and
+  an image of another machine is `ENOEXEC` (ADR 0018).
 * **8 MB of flash, one application slot.** `factory` 2 MB and MicroFS 5.75 MB;
   no room for an OTA image, and no OTA ([partitions.csv](../../../partitions.csv)).
 * **No PMIC.** Power and sleep belong to the ESP32 itself: `HOLD` (G4) must be

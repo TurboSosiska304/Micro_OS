@@ -31,13 +31,23 @@ place where the system grows.
 ### 1. MOX1 version 2 carries the machine
 
 The field `reserved` of the header (offset 28) becomes `arch`: `0` is x86-64,
-`1` is Xtensa. The parser refuses an image of another machine with
-`K_EXEC_ARCH` (turned into `ENOEXEC` at the edge) **before a byte of code
-runs**; the version of the header is 2, and an image of version 1 is refused
-with the sentence that says which version the kernel reads.
+`1` is Xtensa (`K_EXEC_ARCH_X86_64`/`K_EXEC_ARCH_XTENSA` in `kernel/exec.h`).
+The version of the header is 2. The parser carries the machine of an image and
+refuses a number that is neither 0 nor 1 with `EINVAL`; whether an image of
+another machine may run is not a fact about the file, so it is the question of
+`k_exec_run()`: it compares `image->arch` with the new call of the port,
+`k_port_exec_arch()` (0 x86-64, 1 Xtensa, -1 for a port that runs no programs),
+and answers `K_EXEC_RUN_OTHER_ARCH`, which `execve` turns into `ENOEXEC`,
+**before a byte of code runs**. A port that cannot run programs still names
+the machine it is, so the wrong file is `ENOEXEC` and only the right file of a
+machine without a loader is `ENOSYS`. The version is part of the answer the
+same way: an image of version 1 (or of a later generation) is refused, and the
+kernel log says which version the kernel reads.
 
-`tools/mkprog.sh` takes `--arch x86-64|xtensa` and writes the number; the
-build of a program names the machine it is built for.
+The port contract moves from 1.7 to 1.8, which is that one call.
+
+`tools/mkprog.sh` takes `--arch x86-64|xtensa` and writes the number (x86-64
+is the default); the build of a program names the machine it is built for.
 
 ### 2. The programs live in flash of their own
 

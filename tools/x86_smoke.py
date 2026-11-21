@@ -143,7 +143,7 @@ PROMPT = "microos> "
 # console of COM1, the contract of the port and the boot of the kernel.
 EXPECTED = [
     "board: qemu_x86_64",
-    "port: x86_64, contract 1.7",
+    "port: x86_64, contract 1.8",
     "[ ok ] sched",
     "subsystem(s) ready",
     "the kernel is up",

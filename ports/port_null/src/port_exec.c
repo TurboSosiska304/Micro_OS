@@ -10,6 +10,12 @@ bool k_port_exec_supported(void)
     return false;
 }
 
+/* The port that is not a machine has no machine of the format to name. */
+int k_port_exec_arch(void)
+{
+    return -1;
+}
+
 void *k_port_exec_base(void)
 {
     return NULL;

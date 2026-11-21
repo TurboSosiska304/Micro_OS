@@ -10,20 +10,24 @@ and [ADR 0016](../adr/0016-userland.md) (the environment, the library and the
 programs of `/bin`); the report of the phase is
 [`docs/phases/phase7.md`](../phases/phase7.md).
 
-Only one machine of the tree can run a program:
+Only one machine of the tree can run a program today:
 
-| Machine | `k_port_exec_supported()` | What `execve` answers |
-|---|---|---|
-| x86-64 in QEMU | true | it runs the image in ring 3 |
-| ESP32 board | false | `ENOSYS` (the flash is not executable for a file) |
-| host simulator | false | `ENOSYS` (a test harness must not jump into an image) |
-| null port | false | `ENOSYS` |
+| Machine | `k_port_exec_supported()` | `k_port_exec_arch()` | What `execve` answers |
+|---|---|---|---|
+| x86-64 in QEMU | true | `0` (x86-64) | it runs the image in ring 3 |
+| ESP32 board | false | `1` (Xtensa) | `ENOSYS` for an Xtensa image; `ENOEXEC` for one of another machine |
+| host simulator | false | `0` on x86-64, `-1` elsewhere | `ENOSYS` for its own machine, `ENOEXEC` for another, `ENOSYS` on a host of a machine the format does not know |
+| null port | false | `-1` | `ENOSYS` |
 
-On the board and in the simulator the shell still has `exec`; it looks for the
-file, checks the execute bit, and then reports that this machine cannot run a
-program. That is the contract working, not a missing build.
+A port that cannot enter a program still names the machine it is, because the
+machine is a fact about the processor and the loader is a separate promise.
+The arch of the header is compared with `k_port_exec_arch()` before the port
+is asked anything: an image of another machine is `ENOEXEC`, and no byte of it
+is entered. On the board and in the simulator the shell still has `exec`; it
+looks for the file, checks the execute bit, and then reports why the program
+did not run. That is the contract working, not a missing build.
 
-## The format: MOX1
+## The format: MOX1, version 2
 
 An executable is a flat image: a header of 32 bytes, then the code, then the
 initialised data. The bss is not in the file; the port clears it. The layout is
@@ -32,33 +36,47 @@ in [`components/kernel/include/kernel/exec.h`](../../components/kernel/include/k
 | Offset | Field | Meaning |
 |---|---|---|
 | 0 | `magic` | the bytes `M`, `O`, `X`, `1` |
-| 4 | `version` | 1 |
+| 4 | `version` | 2 |
 | 8 | `flags` | 0; a flag the kernel does not know is a refusal |
 | 12 | `entry` | the offset of the first instruction, from the start of the image |
 | 16 | `text_size` | the bytes of code |
 | 20 | `data_size` | the bytes of initialised data |
 | 24 | `bss_size` | the bytes to clear, at most 1 MiB |
-| 28 | `reserved` | 0 |
+| 28 | `arch` | the machine of the bytes: `0` x86-64, `1` Xtensa |
 | 32 | | the text, then the data |
 
+Version 2 is version 1 with the machine in the last field, which version 1
+kept reserved and zero. The bytes of one machine are not the bytes of another,
+so an image says which machine it is for, and a reader that does not know a
+version refuses it instead of guessing at the meaning of the bytes. This
+kernel reads version 2 and refuses version 1 (and a later generation) with a
+sentence in the kernel log that names the version it reads; the call answers
+`EINVAL`.
+
 The parser (`components/kernel/src/exec.c`) checks the image against itself
-and nothing else: the magic and the version, the sizes against the file, a
-text that is not empty, an entry inside the text, sizes that are multiples of
-four, a known flag, and a bss under a megabyte. Whether the image fits the
-window of the machine is the port's question, asked later.
+and nothing else: the magic and the version, an arch that is one of the two
+machines of the format, the sizes against the file, a text that is not empty,
+an entry inside the text, sizes that are multiples of four, a known flag, and
+a bss under a megabyte. Whether the image fits the window of the machine, and
+whether it is the right machine at all, is between the caller of `k_exec_run`
+and the port, asked later.
 
 `tools/mkprog.sh` turns a linked object into an image:
 
 ```bash
-tools/mkprog.sh [--base 0x02000000] hello.elf hello.mox hello_main
+tools/mkprog.sh [--base 0x02000000] [--arch x86-64|xtensa] hello.elf hello.mox hello_main
 ```
 
 The image is not relocated: the code and the data have to be linked for the
 address the port names, and `--base` makes the script refuse an image linked
-for another window. The x86-64 port builds its fifteen images this way: the
-object is compiled for the window, linked with `programs/program.ld`, turned
-into a `.mox` by the script and embedded in the kernel as a blob, because the
-kernel needs the bytes before it has a filesystem to read them from.
+for another window. `--arch` writes the machine into offset 28 and defaults to
+`x86-64`; a name the format does not know is refused before an image is
+written. The x86-64 port builds its fifteen images this way: the object is
+compiled for the window, linked with `programs/program.ld`, turned into a
+`.mox` by the script (`--base 0x02000000 --arch x86-64`) and embedded in the
+kernel as a blob, because the kernel needs the bytes before it has a
+filesystem to read them from. A program of the board is built with
+`--arch xtensa` and the toolchain of ESP-IDF (ADR 0018).
 
 ## `/bin` and the boot
 
@@ -146,7 +164,8 @@ The errors, in the order they are met:
 | `ENOENT` | the path names nothing |
 | `EISDIR` | it is a directory |
 | `EPERM` | the file has no `x` bit for the caller (`0400` is not a program) |
-| `EINVAL` | the file is not a `MOX1` image of this system |
+| `EINVAL` | the file is not a `MOX1` image of version 2, or it names a machine the format does not know |
+| `ENOEXEC` | the image is code for another machine (`arch` is not `k_port_exec_arch()`) |
 | `ENOMEM` | the image does not fit the window of the port |
 | `ENOSYS` | this machine has no window of programs |
 
@@ -266,6 +285,10 @@ plan to pretend otherwise.
 
 * **No ELF and no dynamic linker.** The format is `MOX1`, everything is
   statically linked, and there are no shared objects.
+* **No program of the board yet.** The header knows the machine (ADR 0018)
+  and `mkprog.sh` writes it, but the loader of the ESP32 port is not written:
+  an Xtensa image on the board is still `ENOSYS`, and only x86-64 enters a
+  program. The format is ready for the second machine; the port is not.
 * **No libc of the host.** A program has the calls of the ABI, the library of
   `components/libc/user` and nothing else. The library is not a standard C
   library: no allocation, no files of a stream, no `errno`, no floating point

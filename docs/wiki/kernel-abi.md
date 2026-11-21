@@ -212,10 +212,11 @@ argument, a vector of `NAME=VALUE` words; a NULL one is the environment of the
 system (`PATH=/bin`, `HOME=/`, `USER=root`, `PWD=/`). The port enters the
 program with `argc` in `rdi`, `argv` in `rsi` and `envp` in `rdx`
 ([ADR 0016](../adr/0016-userland.md)). The board and the simulator answer
-`ENOSYS`; x86-64 enters ring 3. [programs.md](programs.md) has the details of
-the format, the entry and the library of a program.
+`ENOSYS` for an image of their own machine and `ENOEXEC` for one of another;
+x86-64 enters ring 3. [programs.md](programs.md) has the details of the
+format, the entry and the library of a program.
 
-## The contract of the port: 1.7
+## The contract of the port: 1.8
 
 The kernel and a port are two halves of one pair, and the version of the
 contract is their vermagic. It lives in
@@ -224,16 +225,19 @@ contract:
 
 ```c
 #define KERNEL_PORT_API_VERSION_MAJOR 1u
-#define KERNEL_PORT_API_VERSION_MINOR 6u
+#define KERNEL_PORT_API_VERSION_MINOR 8u
 ```
 
 A port asserts the version at build time, and the boot compares it again and
 panics on a major mismatch instead of failing far from the cause. `make
-integrity` checks that every port implements the whole contract. The latest
-step, 1.7, is the check of the memory of the caller -
-`k_port_exec_contains()`, which is what turns a bad pointer of a program into
-`EFAULT`. Some older pages of `docs/` still name 1.4; the number the boot
-prints is the one in `info.h`, and the boot of this tree prints `contract 1.7`.
+integrity` checks that every port implements the whole contract. The step
+1.7 was the check of the memory of the caller - `k_port_exec_contains()`,
+which turns a bad pointer of a program into `EFAULT`; 1.8 is
+`k_port_exec_arch()` - the machine of the port as the header of an image names
+it (`0` x86-64, `1` Xtensa, `-1` for a port that runs no programs), which is
+what turns an image of another machine into `ENOEXEC` before a byte of it runs
+(ADR 0018). Some older pages of `docs/` still name 1.4; the number the boot
+prints is the one in `info.h`, and the boot of this tree prints `contract 1.8`.
 
 The three builds of one tree are the check of the contract in practice: a
 function that only one port implements is a function the others do not need,

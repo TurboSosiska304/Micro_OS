@@ -122,7 +122,7 @@ written when the project was an operating system for one board; the numbers
 * [x] `copy_from_user`/`copy_to_user` at the edge of the system call: the
       port answers whether a range is memory of the caller, a path and `argv`
       are copied into buffers of the kernel, and a bad pointer is `EFAULT`
-      instead of a fault of ring 0 (contract 1.7, ADR 0007; `/bin/badptr` in
+      instead of a fault of ring 0 (the call of contract 1.7, ADR 0007; `/bin/badptr` in
       `make x86-smoke`)
 * [x] Basic signals: `SIGINT`, `SIGTERM`, `SIGCHLD` and `SIGPIPE`, the
       dispositions `SIG_DFL`/`SIG_IGN`, a handler that runs in ring 3 through

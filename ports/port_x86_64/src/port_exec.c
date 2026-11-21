@@ -394,6 +394,12 @@ bool k_port_exec_supported(void)
     return true;
 }
 
+int k_port_exec_arch(void)
+{
+    /* The bytes of this machine, and the pull of the iretq: x86-64. */
+    return (int)K_EXEC_ARCH_X86_64;
+}
+
 void *k_port_exec_base(void)
 {
     return (void *)(uintptr_t)PORT_EXEC_BASE;

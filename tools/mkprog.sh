@@ -2,7 +2,7 @@
 #
 # Micro OS — turn an object into a program image (the MOX1 format).
 #
-#     tools/mkprog.sh [--base <hex>] <object.o> <out.mox> <entry-symbol>
+#     tools/mkprog.sh [--base <hex>] [--arch x86-64|xtensa] <object.o> <out.mox> <entry-symbol>
 #
 # The image is flat: the header of kernel/exec.h, then .text, then the
 # initialised data (.data and .rodata). The program is not relocated, so the
@@ -14,6 +14,12 @@
 # first address of .text has to be the base plus the header, and the data has
 # to follow the padded text. Without it the object is taken as it is, for the
 # callers that build an image and do not know the port.
+#
+# The machine of the image is written in the field `arch` of the header
+# (offset 28): x86-64 is 0 and is the default, Xtensa (the board) is 1. The
+# kernel refuses an image of another machine before it enters it, so a
+# program built for the wrong one is ENOEXEC and not a jump into bytes that
+# mean nothing there (ADR 0018).
 #
 # The sizes are rounded up to four bytes and the file is padded to match: the
 # port copies segment by segment in words, and a size that is not a multiple
@@ -29,15 +35,22 @@ set -eu
 
 K_EXEC_HEADER_SIZE=32
 K_EXEC_MAGIC=0x31584f4d # the bytes 'M', 'O', 'X', '1' read little endian
-K_EXEC_VERSION=1
+K_EXEC_VERSION=2
+
+# The numbers of the field `arch`, the header of kernel/exec.h.
+K_EXEC_ARCH_X86_64=0
+K_EXEC_ARCH_XTENSA=1
 
 usage()
 {
-    echo "usage: $0 [--base <hex>] <object.o> <out.mox> <entry-symbol>" >&2
+    echo "usage: $0 [--base <hex>] [--arch x86-64|xtensa]" >&2
+    echo "       <object.o> <out.mox> <entry-symbol>" >&2
     exit 2
 }
 
 base=
+arch=x86-64
+arch_number=$K_EXEC_ARCH_X86_64
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -48,6 +61,15 @@ while [ "$#" -gt 0 ]; do
             ;;
         --base=*)
             base=${1#--base=}
+            shift
+            ;;
+        --arch)
+            [ "$#" -ge 2 ] || usage
+            arch=$2
+            shift 2
+            ;;
+        --arch=*)
+            arch=${1#--arch=}
             shift
             ;;
         --)
@@ -68,6 +90,22 @@ done
 object=$1
 output=$2
 symbol=$3
+
+# The machine of the image: the name of the port, the number of the header.
+# A name this format does not know is refused before anything is written, so
+# no image carries an arch the kernel would have to refuse later.
+case "$arch" in
+    x86-64)
+        arch_number=$K_EXEC_ARCH_X86_64
+        ;;
+    xtensa)
+        arch_number=$K_EXEC_ARCH_XTENSA
+        ;;
+    *)
+        echo "mkprog: --arch wants x86-64 or xtensa, not '$arch'" >&2
+        exit 2
+        ;;
+esac
 
 if [ -n "$base" ]; then
     # The number is hexadecimal with its 0x, the way the port and the linker
@@ -238,11 +276,11 @@ emit_le32()
     emit_le32 "$text_aligned"
     emit_le32 "$data_aligned"
     emit_le32 "$bss_size"
-    emit_le32 0
+    emit_le32 "$arch_number"
     cat "$work/text.bin"
     head -c $((text_aligned - text_size)) /dev/zero
     cat "$work/segment.bin"
     head -c $((data_aligned - data_size)) /dev/zero
 } > "$output"
 
-echo "mkprog: $output: text $text_aligned, data $data_aligned, bss $bss_size, entry $entry"
+echo "mkprog: $output: $arch, text $text_aligned, data $data_aligned, bss $bss_size, entry $entry"

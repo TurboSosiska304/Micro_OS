@@ -46,8 +46,9 @@ The pins, the chips and the quirks of the board are in
 
 ## P4 - Programs (for 1.0)
 
-* [ ] MOX1 version 2: the field of the machine in the header (x86-64, Xtensa),
-      `mkprog --arch`; an image of another machine is `ENOEXEC`
+* [x] MOX1 version 2: the field of the machine in the header (x86-64, Xtensa),
+      `mkprog --arch`, and an image of another machine is `ENOEXEC` before it
+      runs (the contract of the port is 1.8)
 * [ ] A `progs` partition of 256 KiB, mapped as instructions with
       `esp_partition_mmap`; a `.mox` at a 64 KiB boundary
 * [x] The spike of the door: code in the flash, mapped as instructions and

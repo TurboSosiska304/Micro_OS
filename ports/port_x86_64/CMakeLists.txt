@@ -167,6 +167,12 @@ set_source_files_properties("${KSHELL_DIR}/src/kshell_memtest.c"
 # which refuses an image linked for another window: a program linked for the
 # wrong address would still run, and every absolute address it computes for
 # its data would name something else.
+#
+# The machine of the image is named as well: --arch x86-64 is the number the
+# kernel compares with k_port_exec_arch() before it enters a byte, so that the
+# image of this window is never mistaken for the code of another machine
+# (ADR 0018). The default of mkprog.sh is the same number; the flag is written
+# out so that a port that builds for two machines says which one this is.
 set(PROGRAM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/programs")
 set(PROGRAM_BASE 0x02000000)
 set(MKPROG "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/mkprog.sh")
@@ -214,7 +220,8 @@ function(add_program_image name entry)
         COMMAND ${CMAKE_C_COMPILER} -nostdlib -static -no-pie -Wl,--build-id=none
                 -Wl,-e,${entry}
                 -T "${PROGRAM_DIR}/program.ld" -o ${name}.elf ${name}.o
-        COMMAND sh "${MKPROG}" --base ${PROGRAM_BASE} ${name}.elf ${name}.mox ${entry}
+        COMMAND sh "${MKPROG}" --base ${PROGRAM_BASE} --arch x86-64
+                ${name}.elf ${name}.mox ${entry}
         WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
         DEPENDS "${PROGRAM_DIR}/${name}.c" "${PROGRAM_DIR}/prog.h"
                 "${PROGRAM_DIR}/program.ld" "${KERNEL_DIR}/include/kernel/ksys.h" "${MKPROG}"
@@ -280,7 +287,8 @@ function(add_libc_program name)
         COMMAND ${CMAKE_C_COMPILER} -nostdlib -static -no-pie -Wl,--build-id=none
                 -Wl,-e,_start
                 -T "${PROGRAM_DIR}/program.ld" -o ${name}.elf ${objects}
-        COMMAND sh "${MKPROG}" --base ${PROGRAM_BASE} ${name}.elf ${name}.mox _start
+        COMMAND sh "${MKPROG}" --base ${PROGRAM_BASE} --arch x86-64
+                ${name}.elf ${name}.mox _start
         WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
         DEPENDS "${PROGRAM_DIR}/${name}.c" "${PROGRAM_DIR}/program.ld"
                 "${KERNEL_DIR}/include/kernel/ksys.h" "${MKPROG}"

@@ -13,6 +13,17 @@ bool k_port_exec_supported(void)
     return false;
 }
 
+/*
+ * The machine itself is Xtensa even while the port cannot enter a program:
+ * the number is what the header of an image has to say, and the loader that
+ * will run one (ADR 0018) is the part that is missing, not the processor.
+ * Until then an x86-64 image is ENOEXEC here and an Xtensa one is ENOSYS.
+ */
+int k_port_exec_arch(void)
+{
+    return (int)K_EXEC_ARCH_XTENSA;
+}
+
 void *k_port_exec_base(void)
 {
     return NULL;

@@ -15,6 +15,7 @@
 #include "kernel/errno.h"
 #include "kernel/exec.h"
 #include "kernel/ksys.h"
+#include "kernel/port/exec.h"
 #include "kernel/log.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
@@ -515,7 +516,7 @@ static k_size_t build_image(k_u8_t *image)
     put_u32(image + 16, 4);                  /* one word of text */
     put_u32(image + 20, 0);                  /* no data */
     put_u32(image + 24, 0);                  /* no bss */
-    put_u32(image + 28, 0);                  /* reserved */
+    put_u32(image + 28, K_EXEC_ARCH_X86_64); /* the machine of the bytes */
     put_u32(image + 32, 0xC3u);              /* a return, were it ever run */
 
     return K_EXEC_HEADER_SIZE + 4;
@@ -595,6 +596,24 @@ static void test_execve(void)
      */
     k_exec_exit(7);
     KT_CHECK_INT_EQ(ksys_execve("/prog", argv), KERR_NOSYS);
+
+    /*
+     * An image of another machine is refused before it is entered: the kernel
+     * compares the arch of the header with the machine of the port. A port
+     * that names itself answers ENOEXEC; one that names no machine has
+     * nothing to compare and keeps ENOSYS.
+     */
+    {
+        const int here = k_port_exec_arch();
+        k_u32_t other = (here == (int)K_EXEC_ARCH_XTENSA) ? K_EXEC_ARCH_X86_64 : K_EXEC_ARCH_XTENSA;
+        k_size_t foreign_size;
+
+        foreign_size = build_image(image);
+        put_u32(image + 28, other);
+        KT_CHECK_INT_EQ(write_file("/foreign", image, foreign_size), 0);
+        KT_CHECK_INT_EQ(ksys_chmod("/foreign", 0755), 0);
+        KT_CHECK_INT_EQ(ksys_execve("/foreign", NULL), (here >= 0) ? KERR_NOEXEC : KERR_NOSYS);
+    }
 
     /*
      * The vector of the program is bounded at the edge of the call before

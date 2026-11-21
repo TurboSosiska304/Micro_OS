@@ -23,6 +23,21 @@ struct task;
 bool k_port_exec_supported(void);
 
 /*
+ * The machine this port is, as the number the header of an image carries in
+ * `arch` (K_EXEC_ARCH_X86_64, K_EXEC_ARCH_XTENSA), or -1 when the port cannot
+ * run a program and has no machine to name. The kernel compares it with the
+ * arch of the image before it asks the port to enter anything: the bytes of
+ * one machine are not the bytes of another, and a program of the wrong one is
+ * ENOEXEC at the edge, never a jump into code that means nothing here.
+ *
+ * A port of a machine that runs programs names itself even when the boot has
+ * not enabled programs yet: the number is a fact about the processor, not a
+ * promise that execve succeeds. -1 is for a port that is not a machine of
+ * programs at all (the simulator, the null port).
+ */
+int k_port_exec_arch(void);
+
+/*
  * The first address of the window of the programs, or NULL when the machine
  * has none. The kernel checks the image against this address before it asks
  * the port to enter it.
