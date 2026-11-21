@@ -1,11 +1,12 @@
-# Micro OS — HTTP and NTP: the client, the clock and the page of the state.
+# Micro OS — HTTP, NTP and MQTT: the clients, the clock and the page of the state.
 #
 # The whole component is portable: the protocol of each lives in plain C
-# (the URL, the request, the packet and the calendar, the page of the state)
-# and the sockets come from the kernel (kernel/net.h), which lends them from
-# the port - so the same sources build for the board and for the host tests.
+# (the URL, the request, the packet and the calendar, the page of the state,
+# the packet of MQTT) and the sockets come from the kernel (kernel/net.h),
+# which lends them from the port - so the same sources build for the board and
+# for the host tests.
 
-set(MICRO_OS_NET_SRCS "src/http.c" "src/ntp.c" "src/net.c" "src/net_http_server.c")
+set(MICRO_OS_NET_SRCS "src/http.c" "src/ntp.c" "src/mqtt.c" "src/net.c" "src/net_http_server.c")
 
 if(ESP_PLATFORM)
     idf_component_register(

@@ -1,5 +1,5 @@
 /*
- * Micro OS — the network services of the board: HTTP and NTP.
+ * Micro OS — the network services of the board: HTTP, NTP and MQTT.
  *
  * One request at a time, one session: the shell is one task and the board
  * is not a server of its own. Every wait has a timeout (NET_TIMEOUT_MS), so
@@ -19,6 +19,7 @@
 #include "kernel/log.h"
 #include "kernel/net.h"
 #include "kshell/kshell.h"
+#include "net/mqtt.h"
 #include "net/net_http.h"
 #include "net/ntp.h"
 
@@ -265,6 +266,51 @@ static int cmd_ntp(int argc, char **argv)
     return KSHELL_OK;
 }
 
+/*
+ * One message and out: the command is a way to send a word to a broker from a
+ * script or from the console, not a client that lives in the board. The
+ * keepalive is zero because the session lasts exactly one packet.
+ */
+static int cmd_mqtt(int argc, char **argv)
+{
+    struct mqtt_client client;
+    k_u16_t port;
+    k_size_t length;
+    int rc;
+
+    if (argc != 5 || !parse_port(argv[2], &port)) {
+        kshell_printf("usage: mqtt <host> <port> <topic> <message>\n");
+        return KSHELL_USAGE;
+    }
+
+    length = strlen(argv[4]);
+    if (length > MQTT_PAYLOAD_MAX) {
+        kshell_printf("mqtt: the message is longer than %d byte(s)\n", MQTT_PAYLOAD_MAX);
+        return KSHELL_ERROR;
+    }
+
+    rc = mqtt_connect(&client, argv[1], port, "microos", 0);
+    if (rc != MQTT_OK) {
+        kshell_printf("mqtt: %s: %s\n", argv[1],
+                      rc == MQTT_REFUSED ? "the broker refused the client"
+                                         : "no session with the broker");
+        return KSHELL_ERROR;
+    }
+
+    rc = mqtt_publish(&client, argv[3], argv[4], length, 0);
+    mqtt_disconnect(&client);
+
+    if (rc != MQTT_OK) {
+        kshell_printf("mqtt: the broker did not take the message\n");
+        return KSHELL_ERROR;
+    }
+
+    kshell_printf("mqtt: %u byte(s) to %s on %s:%u\n", (unsigned)length, argv[3], argv[1],
+                  (unsigned)port);
+
+    return KSHELL_OK;
+}
+
 int net_register(void)
 {
     int rc = 0;
@@ -272,6 +318,8 @@ int net_register(void)
     rc |= kshell_register("http", "the HTTP client: http get <url>", cmd_http);
     rc |= kshell_register("ntp", "set the clock from NTP: ntp [server]", cmd_ntp);
     rc |= kshell_register("httpd", "the page of the state: httpd [port|off]", cmd_httpd);
+    rc |= kshell_register("mqtt", "publish over MQTT: mqtt <host> <port> <topic> <message>",
+                          cmd_mqtt);
 
     return rc;
 }
