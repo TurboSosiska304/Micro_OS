@@ -80,7 +80,15 @@ program of the board can take the machine down, and a program of x86-64 cannot.
 waits for it, and `tools/device-test.sh` runs `/bin/hello` on the board. The
 simulator and the null port stay `ENOSYS`.
 
-### 5. After 1.0 the port is a compatibility port
+### 5. The format after version 2 is not promised to the board
+
+Version 2 of the format is the one the ESP32 receives. A version 3 and later
+are the format of the machines that can grow; the board is not promised a
+reader for them, and a kernel of the board that meets one says `ENOEXEC`
+rather than guessing. A compatibility port keeps the format it was frozen
+with, and a program for the board is built and tagged against that version.
+
+### 6. After 1.0 the port is a compatibility port
 
 From `1.0.0` the ESP32 port:
 
@@ -106,6 +114,8 @@ port roadmap, not promised in advance.
   returns the space with the A/B layout.
 * The `progs` partition and the 64 KiB alignment are a constraint on the
   format's use, not on the format itself.
+* The promise of the format ends at version 2 on this port: a later version
+  is a new contract and the board may be left behind by it.
 * A bytecode VM is not chosen: it is slow on a 240 MHz core and it is a second
   toolchain. If the project writes a compiler of its own, it is a second
   `arch`, and the compatibility rule decides whether the board gets it.
