@@ -127,6 +127,17 @@ written when the project was an operating system for one board; the numbers
       are copied into buffers of the kernel, and a bad pointer is `EFAULT`
       instead of a fault of ring 0 (the call of contract 1.7, ADR 0007; `/bin/badptr` in
       `make x86-smoke`)
+* [x] NX/W^X: `EFER.NXE` is on from the loader, the kernel text is read-only
+      and its rodata, data, bss, stacks and the first gigabyte of devices are
+      NX; a program gets a text of its own (read-only) and data, bss, the
+      stack and the restorer page with the protection each one needs. The
+      port audits its tables at the boot and before every program, and
+      `/bin/nx` proves the faults of a fetch, a write and a call into the
+      text in `make x86-smoke` (ADR 0007, sections 9 and 10)
+* [x] SMAP/SMEP: a decision, not a feature of 1.0 - the default QEMU
+      processor does not advertise either, and SMAP needs `STAC`/`CLAC` in
+      the portable copy edge. The reasons are in ADR 0007 section 10 and the
+      debt in `docs/debts.md`
 * [x] Basic signals: `SIGINT`, `SIGTERM`, `SIGCHLD` and `SIGPIPE`, the
       dispositions `SIG_DFL`/`SIG_IGN`, a handler that runs in ring 3 through
       a frame of the port and returns through `sigreturn`, `waitpid()` cut by

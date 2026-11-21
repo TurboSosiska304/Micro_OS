@@ -266,6 +266,7 @@ add_program_image(crash crash_main)
 add_program_image(fork fork_main)
 add_program_image(badptr badptr_main)
 add_program_image(signals signals_main)
+add_program_image(nx nx_main)
 
 # A program that uses the library of a program: the runtime sources are
 # compiled for the window together with the file of the program, linked with

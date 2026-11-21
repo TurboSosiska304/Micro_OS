@@ -329,6 +329,19 @@ void kmain(k_u64_t multiboot_info)
           (unsigned)(k_port_heap_free() / 1024), (unsigned)(k_port_heap_total() / 1024));
 
     /*
+     * The tables are read back before a program is ever entered: the port
+     * promises that no page is writable and executable at once, and a map
+     * that says otherwise is a bug of the port that the boot names instead of
+     * running with. The audit walks the same tables the processor walks
+     * (ADR 0007, NX and W^X).
+     */
+    if (port_x86_64_paging_audit(port_x86_64_kernel_cr3()) == 0) {
+        kinfo("x86-64: the map is W^X, the text is read-only and the data is NX");
+    } else {
+        kerror("x86-64: the map is not W^X, a page is writable and executable");
+    }
+
+    /*
      * The filesystem, before the tasks: the volume is mounted and the images
      * of the programs are written to /bin. The program itself runs later, in
      * the init task: execve is a wait for a task now, and the boot context

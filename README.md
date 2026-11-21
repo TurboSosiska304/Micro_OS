@@ -137,7 +137,7 @@ Micro_OS/
 * **No MMU on the boards without one.** The kernel/user split is logical
   there: no memory protection, no address-space isolation. The x86-64 port
   has an MMU and uses it: a program is a task of ring 3 with page tables of
-  its own (ADR 0007).
+  its own, the text is read-only code and every data page is NX (ADR 0007).
 * **`fork()` is a placeholder on those ports.** Without an MMU the child
   shares the memory of the parent and re-enters its program; the answer (pid
   in the parent, 0 in the child) is the POSIX one. On x86-64 the pages are

@@ -71,7 +71,7 @@ The image is not relocated: the code and the data have to be linked for the
 address the port names, and `--base` makes the script refuse an image linked
 for another window. `--arch` writes the machine into offset 28 and defaults
 to `x86-64`; a name the format does not know is refused before an image is
-written. The x86-64 port builds its fifteen images this way: the object is
+written. The x86-64 port builds its sixteen images this way: the object is
 compiled for the window, linked with `programs/program.ld`, turned into a
 `.mox` by the script (`--base 0x02000000 --arch x86-64`), and written into
 the MicroFS volume of the disk by `make x86-disk` (see below). The kernel
@@ -105,7 +105,7 @@ calls, mounts the volume and checks `/bin/hello`, `/etc/init.d` and
 ## `/bin` and the boot
 
 The x86-64 port mounts the MicroFS volume of its disk at `/` and finds
-`/bin` already there: the fifteen images are files the tool wrote, with the
+`/bin` already there: the sixteen images are files the tool wrote, with the
 mode of a program (`0755`), and no boot creates one:
 
 | File | What it proves |
@@ -115,6 +115,7 @@ mode of a program (`0755`), and no boot creates one:
 | `/bin/fork` | `fork()` with copy on write: the child gets 0, the parent the pid |
 | `/bin/badptr` | a pointer outside the window is `EFAULT`, not a fault of ring 0 |
 | `/bin/signals` | a handler, `SIGTERM` ending a child, a wait cut by `SIGINT`, `SIG_IGN`, and the errors of `kill` |
+| `/bin/nx` | the protection of the pages: a fetch of its data, a write to its text and a call that hands its text to the kernel, each taken down, and a parent still alive |
 | `/bin/cat` | `open`, `read`, `write` on a file or descriptor 0, through the library of a program |
 | `/bin/echo` | the vector of the arguments and `write`, the shortest useful program |
 | `/bin/ls` | a directory through `open(O_DIRECTORY)` and `readdir`; no path is the working directory |

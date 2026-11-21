@@ -24,7 +24,7 @@ parentheses is the reason.
 | disk | the internal flash | ATA PIO, `ata0` | - | - |
 | network | WiFi, lwIP, telnet, HTTP, MQTT | virtio-net, HTTP, httpd, DNS, MQTT is off | - | - |
 | panel | ST7789v2 and a copy of the console | VGA text | a renderer into a file | - |
-| MMU | - (the chip has none) | yes, used for programs | - | - |
+| MMU | - (the chip has none) | yes: ring 3, NX/W^X | - | - |
 | build | `make idf-build` | `make x86-build` | `make build` | by the host build |
 
 The matrix follows the ports, not a wish: the board has no MMU and its flash is
@@ -75,6 +75,8 @@ make x86-smoke          # boot and check the transcript
 
 What works: the VGA text console and COM1 out of one `k_port_write()`, the
 PS/2 keyboard, the PIT, the context switch, the scheduler, paging and ring 3,
+NX/W^X (the text of the kernel and of a program is read-only code, every data
+page and stack is NX, and the boot audits the tables),
 `execve` with `MOX1` images, `fork()` with copy on write, MicroFS on the first
 partition of an ATA disk (or on 512 KB of RAM without one), the modes and the
 owners, and the network: a virtio-net card, ARP, ICMP, UDP, a client and a
@@ -83,8 +85,9 @@ machine of [`programs.md`](programs.md) and the proof that the kernel is
 portable.
 
 What does not: the key-value store (no `/etc` to persist), a second disk, DMA,
-the kernel in a higher half, and the parts of the network that wait for a real
-link: DHCP, IPv6 and a congestion window. The details are in
+the kernel in a higher half, SMAP/SMEP (a documented decision, ADR 0007), and
+the parts of the network that wait for a real link: DHCP, IPv6 and a
+congestion window. The details are in
 [`docs/ports/x86_64/README.md`](../ports/x86_64/README.md).
 
 ## host: the tests and the simulator

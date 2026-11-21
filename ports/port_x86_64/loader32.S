@@ -87,9 +87,15 @@ _start:
     movl $pml4, %eax
     movl %eax, %cr3
 
+    /* Long mode and the no-execute bit of a page: EFER.NXE (bit 11) has to
+       be on before any table names a page with bit 63, because a bit the
+       processor has not been told to read is a reserved bit and a fault. The
+       map of the loader itself is still the identity of the boot; the kernel
+       rebuilds it in src/paging.c with the text read-only and every data
+       page NX (ADR 0007). */
     movl $0xC0000080, %ecx
     rdmsr
-    orl $0x100, %eax
+    orl $0x900, %eax
     wrmsr
 
     movl %cr0, %eax

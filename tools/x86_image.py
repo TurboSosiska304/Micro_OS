@@ -43,6 +43,7 @@ PROGRAMS = [
     "rm",
     "pwd",
     "spawn",
+    "nx",
 ]
 
 # The one file of /etc the smoke test reads. The tool writes the text and a

@@ -121,7 +121,7 @@ test is the door, the fault, the fork and the edge - not a library.
 
 ### 5. Ten programs of the library
 
-The x86-64 port has fifteen images in `/bin` of the disk it boots from. They
+The x86-64 port has sixteen images in `/bin` of the disk it boots from. They
 are not embedded in the kernel: `make x86-disk` writes them into a MicroFS
 volume of a raw image (`tools/mkfs_mfs.c`, which links `components/mfs`), the
 boot mounts that volume at `/` and reads `/bin/hello` with `execve`. Ten of

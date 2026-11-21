@@ -441,8 +441,8 @@ with the libc of the host under it. x86-64 says yes: it builds page tables for
 the program, maps the window at 32 MiB onto a physical arena at 64 MiB, keeps
 a 64 KiB stack at the top of the window with an unmapped guard page below it
 and enters ring 3 through an `iretq`. Its boot mounts MicroFS on a volume of
-the port's RAM, writes ten images to `/bin` - `hello`, `crash`, `fork`,
-`badptr`, `signals`, `cat`, `echo`, `ls`, `spawn` and `wc` - gives them the
+the port's RAM, writes eleven images to `/bin` - `hello`, `crash`, `fork`,
+`badptr`, `signals`, `nx`, `cat`, `echo`, `ls`, `spawn` and `wc` - gives them the
 mode of a program
 and asks for `/bin/hello` with `execve` - the stat, the mode, the read through the VFS,
 the parse and the transition are the ones of the call. A program ends with

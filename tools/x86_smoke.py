@@ -138,6 +138,14 @@ COMMANDS = [
     # addresses that are not its memory, and every call has to answer EFAULT
     # (14) while the machine stays alive.
     "exec /bin/badptr",
+    # The pages of a program (ADR 0007, NX and W^X): the text is executable
+    # and not writable, the data and the stack are writable and not
+    # executable. A child that fetches its data, a child that writes its text
+    # and a child whose text is the buffer of read() are all taken down by the
+    # fault handler with the error code of the access - 0x15 with the
+    # instruction-fetch bit, 0x7 for a write - and the parent is still alive
+    # to say so.
+    "exec /bin/nx",
     # The program that faults: it writes to address zero in ring 3, and the
     # shell has to answer the command after it for the machine to be alive.
     "exec /bin/crash",
@@ -157,6 +165,9 @@ EXPECTED = [
     "[ ok ] sched",
     "subsystem(s) ready",
     "the kernel is up",
+    # The port reads the tables back at the boot: the text of the kernel is
+    # read-only, every data page is NX, and no page is both (ADR 0007).
+    "x86-64: the map is W^X",
 ]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -721,6 +732,68 @@ def check(output: str) -> list:
     )
     expect("the edge program returns its status", "the program exited with 0" in edge)
     expect("the shell sees the edge program finish", "the program has finished" in edge)
+
+    # --- the pages of a program: NX on the data, W^X for the text
+    # Every fault is vector 14 and the error code is what says which access
+    # broke which rule of the two: 0x15 is a fetch from an NX page, 0x7 a store
+    # into the read-only text. The child that fetched the data never printed
+    # the line after the fetch, and the child that wrote the text never printed
+    # the line after the store: a machine without the protections would print
+    # both and the parent would see a status of 1 instead of the 255 of a
+    # fault.
+    nx = answer("exec /bin/nx")
+    expect("the nx program starts", "PROGRAM: nx starts" in nx)
+    expect(
+        "the child tries to execute the data page",
+        "PROGRAM: the child executes the data page" in nx,
+    )
+    expect(
+        "the data of a program is not executable",
+        "the program faulted: vector 14 at 0x" in nx
+        and "error 0x0000000000000015" in nx,
+        "there is no page fault with the instruction-fetch bit",
+    )
+    expect(
+        "the data page never ran",
+        "PROGRAM: the data page executed" not in nx,
+    )
+    expect(
+        "the child tries to write the text page",
+        "PROGRAM: the child writes the text page" in nx,
+    )
+    expect(
+        "the text of a program is not writable",
+        "error 0x0000000000000007" in nx,
+        "there is no page fault of a write to the text",
+    )
+    expect(
+        "the text page took no write",
+        "PROGRAM: the text page took a write" not in nx,
+    )
+    expect(
+        "the parent waits for both faults",
+        "PROGRAM: execute data, status 255" in nx
+        and "PROGRAM: write text, status 255" in nx,
+    )
+    # The third child hands its text to read(): the kernel's copy edge makes a
+    # private page of data for the store, the call answers, and the next fetch
+    # from that page is the fault of the child. The parent is alive, and the
+    # original frame - the code it shares with the child - was not touched.
+    expect(
+        "a call writes the text in a private copy",
+        "PROGRAM: the child reads into the text page" in nx
+        and "PROGRAM: kernel write text, status 255" in nx,
+    )
+    expect(
+        "the kernel write does not reach the code of the parent",
+        "PROGRAM: the kernel wrote the text page" not in nx,
+    )
+    expect(
+        "the nx program survives the three faults",
+        "PROGRAM: the three faults left the machine alive" in nx
+        and "the program exited with 0" in nx,
+    )
+    expect("the shell sees the nx program finish", "the program has finished" in nx)
 
     # --- the fault of a program is not the fault of the machine
     crash = answer("exec /bin/crash")

@@ -16,6 +16,7 @@ the machine where a program can really be loaded and run (the window of
 | store | `ata0`: a raw image on the primary IDE channel, PIO, MicroFS on its first partition, mounted at `/` (ADR 0008); `ram0`, 512 KB of the memory of the machine, when there is no disk |
 | network | `virtio0`: virtio-net-pci in its legacy I/O interface, polled; ARP, IPv4, ICMP, UDP, a client of TCP (one segment in flight, a timeout retransmission) and a listener with SYN/ACK and `accept`; the resolver of QEMU user-net with a cache of eight names and their time to live; 10.0.2.15/24 on QEMU user-net, gateway 10.0.2.2, resolver 10.0.2.3, no DHCP |
 | programs | `k_port_exec_supported()` is true; the window is 16 MiB at 32 MiB (`0x02000000`-`0x03000000`) over a physical arena at 64 MiB; a program is a file in `/bin` (the MOX1 format of `kernel/exec.h`), runs in ring 3 with page tables of its own and calls the kernel with `int $0x80` (ADR 0007) |
+| protection | NX and W^X: `EFER.NXE` from the loader, the text read-only and executable, every data page - rodata, data, bss, stacks, heap, arena, screen - writable and NX; no page is both (ADR 0007, sections 9 and 10) |
 | build | `make x86-build` (needs `cmake`, `ninja`, `xorriso` is not needed) and `make x86-disk` for the volume with `/bin` |
 | check | `make x86-smoke` (serial), `make x86-vga-smoke` (screen and keyboard), `make x86-disk-smoke` (two boots on a disk), `make x86-net-smoke` (the network) - all need `qemu-system-x86` |
 
@@ -77,7 +78,7 @@ The machine boots from three files: `build-x86/loader32.elf` (the loader),
 `build-x86/microos64.bin` (the kernel, a flat image) and
 `build-x86/programs.img` (the disk). The heap of the kernel stops below the
 window of the programs; the kernel is linked at 16 MiB and the programs are
-placed at 32 MiB. The fifteen programs of `/bin` are built first:
+placed at 32 MiB. The sixteen programs of `/bin` are built first:
 `build-x86/hello.mox`, `crash.mox`, `fork.mox`, `badptr.mox`, `signals.mox`,
 `cat.mox`, `echo.mox`, `ls.mox`, `wc.mox`, `head.mox`, `grep.mox`,
 `mkdir.mox`, `rm.mox`, `pwd.mox` and `spawn.mox` are the images of
@@ -156,7 +157,7 @@ What the window does not do:
 The disk is the machine's, not a test's: `make x86-disk` writes
 `build-x86/programs.img`, an 8 MB raw image with an MBR, one Linux partition
 at LBA 2048 and a MicroFS volume in it. The volume already carries `/bin`
-(the fifteen programs) and `/etc/setting`: the host tool `tools/mkfs_mfs.c`
+(the sixteen programs) and `/etc/setting`: the host tool `tools/mkfs_mfs.c`
 (formats and writes) links `components/mfs`, so the layout of the volume has
 one implementation and the host test `tests/cases/test_mkfs_image.c` mounts
 what the machine boots.
@@ -310,6 +311,25 @@ PCI line needs the I/O APIC that K8 brings.
   the null page unmapped and a guard page under the 64 KiB stack, and the
   program prints the `cpl` it reads from CS (`3`); a program is a task, `exit`
   ends it, the caller of `execve` waits for it, and `execve` answers 0;
+* NX and W^X (ADR 0007, sections 9 and 10): the loader turns `EFER.NXE` on
+  with long mode, and every entry of every table says what the page may do.
+  The text of the kernel is readable and executable and not writable; its
+  rodata is read-only and NX; its data, bss, the stacks, the page tables and
+  the heap are writable and NX, and so is the rest of the first gigabyte -
+  the VGA, the boot information and the arena of the programs. A program has
+  the same two regions of its own: the header and the code are read-only
+  code, and the data, the bss, `argv`/`envp`, the 64 KiB stack and the
+  restorer page carry the protection they need (the restorer is code, so it
+  is executable and not writable). `programs/program.ld` pads the text to a
+  page and `k_port_exec_enter()` refuses an image whose text does not end on
+  one. The port reads the tables back: `kmain` prints
+  `x86-64: the map is W^X` and a program whose window is not W^X is refused
+  before it runs. `/bin/nx` jumps into its data (fault 14 with error `0x15`,
+  the instruction-fetch bit), writes its text (fault 14 with error `0x7`) and
+  hands its text to `read` (the kernel's store into a read-only page makes a
+  private copy of it as data, so the parent's code is untouched and the child
+  dies on its next fetch), and `make x86-smoke` reads the lines and the
+  parent that survives them;
 * the filesystem: MicroFS mounted at `/`, on the first partition of the disk
   when one is attached and on a volume of 512 KB in the memory of the port
   when there is not; `ls`, `cat`, `write`, `mkdir`, `rm`, `df`, `fsck` and
@@ -337,7 +357,7 @@ PCI line needs the I/O APIC that K8 brings.
   boot, because `/etc/fstab` and the `mount` command do not speak the
   registry yet;
 * a program out of a file: `make x86-disk` writes the images of `hello`,
-  `crash`, `fork`, `badptr`, `signals`, `cat`, `echo`, `ls`, `spawn`, `wc`,
+  `crash`, `fork`, `badptr`, `signals`, `nx`, `cat`, `echo`, `ls`, `spawn`, `wc`,
   `head`, `grep`, `mkdir`, `rm` and `pwd` into `/bin` of the MicroFS volume
   (every image is built with `--arch x86-64`, and `execve` answers `ENOEXEC`
   for one of another machine before it enters a byte), gives them the mode
@@ -405,9 +425,12 @@ PCI line needs the I/O APIC that K8 brings.
   gigabyte, so the window of the programs is a hole in the kernel's map. The
   ladder of the change (linker, loader, `page_phys()`, boot and stacks, the
   smoke gate) is in ADR 0007 and is not taken yet;
-* there is no SMAP: the edge checks the page tables of the program and then
-  reads the same pages in ring 0, so the hardware half of the rule waits for
-  the higher half and the flags of the processor;
+* there is no SMAP and no SMEP: the edge checks the page tables of the program
+  and then reads the same pages in ring 0. Both features are a decision of
+  ADR 0007 section 10 and not a part of 1.0: QEMU's default `qemu64` does not
+  advertise them, and SMAP needs `STAC`/`CLAC` in the portable copy edge
+  (`components/kernel/src/ksys.c`), which is a change of the ABI and not of
+  this port. NX is on;
 * the network is small on purpose: no DHCP, no IPv6, no reassembly of
   fragments, no congestion window, one segment in flight, and the driver polls
   because the PCI line needs the I/O APIC that K8 brings. The server is one
