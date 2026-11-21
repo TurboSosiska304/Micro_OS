@@ -34,6 +34,11 @@ The version 1.8 contract is **54 functions in ten headers**: 45 in
 aggregate of the nine subject headers and does not include the task
 substrate; a port includes both.
 
+The list is recorded in [`tests/corpus/port_api.txt`](../tests/corpus/port_api.txt):
+`make integrity` compares the record with the headers, with the version of
+`info.h` and with the implementations of the ESP32 and the x86-64 port, so a
+new call of the contract and a port that forgot one are both a failed check.
+
 | Header | Functions | What it is | Mandatory? |
 |---|---|---|---|
 | `kernel/port_task.h` | 9 | stack, tasks, sleep, signals | **yes** |

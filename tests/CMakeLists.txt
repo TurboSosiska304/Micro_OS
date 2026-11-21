@@ -135,9 +135,13 @@ if(NOT ESP_PLATFORM)
 
     target_link_libraries(microos_tests PRIVATE ${MICRO_OS_TEST_LIBS})
 
-# The corpus of the tests: a fixed set of numbers with the boundary values
+# The corpus of the tests: a fixed set of numbers with the boundary values,
+# the recorded ABI of the release (tests/corpus/abi.txt) and the MOX1 image
+# that 1.0 froze (tests/corpus/mox1).
 target_compile_definitions(microos_tests PRIVATE
     KTEST_CORPUS="${CMAKE_SOURCE_DIR}/tests/corpus/vectors.txt"
+    KTEST_ABI_GOLDEN="${CMAKE_SOURCE_DIR}/tests/corpus/abi.txt"
+    KTEST_MOX_FIXTURE="${CMAKE_SOURCE_DIR}/tests/corpus/mox1/frozen-x86_64.hex"
 )
 
     # A test that hangs is a test that failed: the panic of the kernel

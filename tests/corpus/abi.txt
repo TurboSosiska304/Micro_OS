@@ -1,0 +1,232 @@
+# Micro OS — the ABI of the system, recorded for 1.0.
+#
+# This file is the golden record of the contract between the kernel and the
+# programs: the table of the system calls, the numbers of the errors and of
+# the flags, the layout of the structures that cross the door, and the header
+# of a program image. The test `ksys: the ABI is the recorded one`
+# (tests/cases/test_ksys.c) reads this file and compares it with the running
+# kernel; the test of the format (`tests/cases/test_exec.c`) does the same for
+# the frozen MOX1 image. A number, a name, a flag or a field that changes
+# without a line here is a failed test, which is what "frozen" means.
+#
+# The rules of the file:
+#
+#   * one record per line, the fields separated by spaces, `#` starts a
+#     comment that runs to the end of the line, an empty line is not a line;
+#   * every name is checked against a table in the test, so a name the test
+#     does not know is a failure and a name the file forgot is one too. The
+#     test is the reader: a constant that is added to the kernel is added to
+#     both sides in the same change;
+#   * the number and the name of a call are compared with the live table of
+#     ksys.c (ksys_name() and ksys_count()); the arity and the result are
+#     documentation of the signature that the compiler checks through the
+#     prototypes of kernel/ksys.h;
+#   * a record of the layout names the width of a pointer: 8 is the host and
+#     the x86-64 port, 4 is the board (Xtensa). The test reads the records of
+#     the machine it runs on and requires the others to be there as well, so
+#     the file is the record of both machines and not of one of them.
+#
+# The record is of 1.0 and every 1.x keeps it: a number is never reused, an
+# old call keeps its number and its meaning, and a structure that crosses the
+# door grows a new field only at its end or by a call of its own (statx is the
+# second door of stat, ADR 0013).
+
+# The number of the calls, compared with ksys_count().
+count 34
+
+# The table: number name arity result.
+#
+# The arity is the number of the arguments a call reads, of the six a register
+# holds. The result is one of these words:
+#
+#   int     a number of the system, negative when it is an error
+#   ssize   a count of the bytes, negative when it is an error
+#   u32     an unsigned 32-bit number
+#   u64     an unsigned 64-bit number
+#   ptr     an address, NULL when there is none
+#   void    nothing to read
+#   never   the call does not return
+#   resumed the answer is the one of the call the signal interrupted
+ksys 0 exit 1 never
+ksys 1 read 3 ssize
+ksys 2 write 3 ssize
+ksys 3 open 2 int
+ksys 4 close 1 int
+ksys 5 stat 2 int
+ksys 6 lseek 3 ssize
+ksys 7 unlink 1 int
+ksys 8 mkdir 1 int
+ksys 9 readdir 3 ssize
+ksys 10 getpid 0 u32
+ksys 11 getcwd 2 int
+ksys 12 ioctl 3 int
+ksys 13 yield 0 int
+ksys 14 sleep 1 int
+ksys 15 uptime 0 u64
+ksys 16 reboot 0 never
+ksys 17 fork 0 int
+ksys 18 getppid 0 int
+ksys 19 waitpid 3 int
+ksys 20 malloc 1 ptr
+ksys 21 free 1 void
+ksys 22 realloc 2 ptr
+ksys 23 chmod 2 int
+ksys 24 chown 2 int
+ksys 25 execve 3 int
+ksys 26 statx 2 int
+ksys 27 pipe 1 int
+ksys 28 dup2 2 int
+ksys 29 kill 2 int
+ksys 30 signal 2 ptr
+ksys 31 sigreturn 0 resumed
+ksys 32 getlimit 2 int
+ksys 33 setlimit 2 int
+
+# The errors (kernel/errno.h). EEXIST and ESRCH share the number -3, which is
+# why there are two names on one line of the header: the frozen table had the
+# file error first and the signal error of a pid is the same number (ADR 0015).
+const KERR_NONE 0
+const KERR_PERM -1
+const KERR_NOENT -2
+const KERR_SRCH -3
+const KERR_EXIST -3
+const KERR_INTR -4
+const KERR_IO -5
+const KERR_TOOBIG -7
+const KERR_NOEXEC -8
+const KERR_BADF -9
+const KERR_CHILD -10
+const KERR_AGAIN -11
+const KERR_NOMEM -12
+const KERR_FAULT -14
+const KERR_BUSY -16
+const KERR_NOSYS -38
+const KERR_NOTDIR -20
+const KERR_ISDIR -21
+const KERR_INVAL -22
+const KERR_NOSPC -28
+const KERR_SPIPE -29
+const KERR_PIPE -32
+const KERR_NAMETOOLONG -36
+const KERR_NOTEMPTY -39
+const KERR_NOTSUP -95
+
+# The flags of an open, the whence of a seek, the bits of a wait, the numbers
+# of the signals and the two dispositions of the kernel (kernel/ksys.h).
+const KSYS_O_RDONLY 0
+const KSYS_O_WRONLY 1
+const KSYS_O_RDWR 2
+const KSYS_O_CREAT 256
+const KSYS_O_TRUNC 512
+const KSYS_O_APPEND 1024
+const KSYS_O_DIRECTORY 2048
+const KSYS_O_ACCMODE 3
+const KSYS_O_ALLOWED 3843
+const KSYS_WNOHANG 1
+const KSYS_MODE_MASK 511
+const KSYS_UID 0
+const KSYS_UID_MAX 32767
+const KSYS_SEEK_SET 0
+const KSYS_SEEK_CUR 1
+const KSYS_SEEK_END 2
+const KSYS_SIGINT 2
+const KSYS_SIGPIPE 13
+const KSYS_SIGTERM 15
+const KSYS_SIGCHLD 17
+const KSYS_SIG_DFL 0
+const KSYS_SIG_IGN 1
+
+# The limits of the edge of the table: the longest path a call accepts and
+# the most bytes one call touches. The size of the argument of a call follows
+# the machine and is recorded with the layout below, as ksys_arg_t.
+const KSYS_PATH_MAX 127
+const KSYS_MAX_IO 65536
+
+# The header of a program image (kernel/exec.h): the magic as the four bytes
+# of the file read as a little-endian word, the version, the size of the
+# header, the numbers of the machines and the ceiling of the zeroed part.
+const K_EXEC_MAGIC 827871053
+const K_EXEC_VERSION 2
+const K_EXEC_HEADER_SIZE 32
+const K_EXEC_ARCH_X86_64 0
+const K_EXEC_ARCH_XTENSA 1
+const K_EXEC_BSS_MAX 1048576
+
+# The layout on a 64-bit machine: the host of the tests and the x86-64 port.
+# ksys_arg_t is the width of an argument of a call, a register of the target:
+# it is a name in this list and not a constant, because the board is 32 bits.
+size 8 ksys_arg_t 8
+size 8 vfs_stat 24
+offset 8 vfs_stat inode 0
+offset 8 vfs_stat type 4
+offset 8 vfs_stat size 8
+offset 8 vfs_stat mode 16
+offset 8 vfs_stat owner 20
+
+size 8 vfs_statx 40
+offset 8 vfs_statx inode 0
+offset 8 vfs_statx type 4
+offset 8 vfs_statx size 8
+offset 8 vfs_statx mode 16
+offset 8 vfs_statx owner 20
+offset 8 vfs_statx mtime 24
+offset 8 vfs_statx ctime 32
+
+size 8 vfs_dirent 56
+offset 8 vfs_dirent name 0
+offset 8 vfs_dirent inode 36
+offset 8 vfs_dirent type 40
+offset 8 vfs_dirent size 48
+
+size 8 k_exec_image 64
+offset 8 k_exec_image data 0
+offset 8 k_exec_image size 8
+offset 8 k_exec_image arch 16
+offset 8 k_exec_image entry 24
+offset 8 k_exec_image text_size 32
+offset 8 k_exec_image data_size 40
+offset 8 k_exec_image bss_size 48
+offset 8 k_exec_image envp 56
+
+# The layout on a 32-bit machine: the board (Xtensa). Only the structures with
+# a pointer or an argument of a call in them move: a k_size_t and a ksys_arg_t
+# are four bytes there, and the two times of vfs_statx are eight bytes wide on
+# both machines.
+size 4 ksys_arg_t 4
+size 4 vfs_stat 24
+offset 4 vfs_stat inode 0
+offset 4 vfs_stat type 4
+offset 4 vfs_stat size 8
+offset 4 vfs_stat mode 16
+offset 4 vfs_stat owner 20
+
+size 4 vfs_statx 40
+offset 4 vfs_statx inode 0
+offset 4 vfs_statx type 4
+offset 4 vfs_statx size 8
+offset 4 vfs_statx mode 16
+offset 4 vfs_statx owner 20
+offset 4 vfs_statx mtime 24
+offset 4 vfs_statx ctime 32
+
+size 4 vfs_dirent 56
+offset 4 vfs_dirent name 0
+offset 4 vfs_dirent inode 36
+offset 4 vfs_dirent type 40
+offset 4 vfs_dirent size 48
+
+size 4 k_exec_image 32
+offset 4 k_exec_image data 0
+offset 4 k_exec_image size 4
+offset 4 k_exec_image arch 8
+offset 4 k_exec_image entry 12
+offset 4 k_exec_image text_size 16
+offset 4 k_exec_image data_size 20
+offset 4 k_exec_image bss_size 24
+offset 4 k_exec_image envp 28
+
+# There is no k_rlimit in 1.0: a task of this system has no limit of its own
+# yet, and the limits are a line of the gate of the release (docs/releases/
+# 1.0.md, section 3). The structure is recorded here when it exists, at the
+# end of the list and under both widths, like ksys_arg_t and the four
+# structures above.

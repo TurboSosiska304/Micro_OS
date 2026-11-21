@@ -10,6 +10,8 @@
 #include "ktest.h"
 #include "tests/tests.h"
 
+#include <ctype.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "kernel/config.h"
@@ -18,9 +20,112 @@
 
 #if KERNEL_EXEC
 
+#ifndef KTEST_MOX_FIXTURE
+#define KTEST_MOX_FIXTURE "tests/corpus/mox1/frozen-x86_64.hex"
+#endif
+
 #define TEST_TEXT_BYTES 8u
 #define TEST_DATA_BYTES 4u
 #define TEST_IMAGE_SIZE (K_EXEC_HEADER_SIZE + TEST_TEXT_BYTES + TEST_DATA_BYTES)
+
+/*
+ * The image of 1.0, frozen in the corpus (tests/corpus/mox1): its size, its
+ * sum, and the fields of the header as the file records them. The numbers are
+ * a second lock on the bytes: a changed byte of the fixture fails the sum and
+ * not only the parse.
+ */
+#define FROZEN_SIZE 4128u
+#define FROZEN_SUM 0x94256496u
+#define FROZEN_ENTRY K_EXEC_HEADER_SIZE
+#define FROZEN_TEXT_SIZE 4064u
+#define FROZEN_DATA_SIZE 32u
+#define FROZEN_BSS_SIZE 0u
+
+static k_u8_t g_frozen[8192];
+static k_size_t g_frozen_size;
+
+static int hex_digit(char c)
+{
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+
+    return c - 'A' + 10;
+}
+
+/*
+ * Read the fixture: hex, two digits to a byte, `#` starts a comment. The file
+ * is text on purpose - a diff of the record says which byte of the image
+ * changed, which a binary blob of the tree would not.
+ */
+static int load_frozen(void)
+{
+    FILE *file = fopen(KTEST_MOX_FIXTURE, "r");
+    char line[256];
+    k_size_t used = 0;
+
+    if (file == NULL) {
+        return -1;
+    }
+
+    while (fgets(line, sizeof(line), file) != NULL) {
+        char *comment = strchr(line, '#');
+        const char *cursor = line;
+
+        if (comment != NULL) {
+            *comment = '\0';
+        }
+
+        for (;;) {
+            while (*cursor == ' ' || *cursor == '\t' || *cursor == '\r' || *cursor == '\n') {
+                cursor++;
+            }
+
+            if (*cursor == '\0') {
+                break;
+            }
+
+            if (!isxdigit((unsigned char)cursor[0]) || !isxdigit((unsigned char)cursor[1]) ||
+                used >= sizeof(g_frozen)) {
+                fclose(file);
+                return -1;
+            }
+
+            g_frozen[used++] = (k_u8_t)((hex_digit(cursor[0]) << 4) | hex_digit(cursor[1]));
+            cursor += 2;
+        }
+    }
+
+    fclose(file);
+    g_frozen_size = used;
+
+    return (used > 0) ? 0 : -1;
+}
+
+/* The sum of the bytes, the one the record of the fixture carries. */
+static k_u32_t frozen_sum(const k_u8_t *data, k_size_t size)
+{
+    k_u32_t sum = 2166136261u;
+    k_size_t i;
+
+    for (i = 0; i < size; i++) {
+        sum ^= data[i];
+        sum *= 16777619u;
+    }
+
+    return sum;
+}
+
+/* A field of the header, little endian, read the way the parser reads it. */
+static k_u32_t frozen_word(k_size_t at)
+{
+    return (k_u32_t)g_frozen[at] | ((k_u32_t)g_frozen[at + 1] << 8) |
+           ((k_u32_t)g_frozen[at + 2] << 16) | ((k_u32_t)g_frozen[at + 3] << 24);
+}
 
 static void put_u32(k_u8_t *at, k_u32_t value)
 {
@@ -261,6 +366,65 @@ static void check_arch(void)
     KT_CHECK_INT_EQ(k_exec_parse(image, size, &parsed), -1);
 }
 
+/*
+ * The image of 1.0 (tests/corpus/mox1/frozen-x86_64.hex): a program built for
+ * the format of this release and recorded in the corpus. The property is the
+ * promise of a release: an image that was built for 1.0 is read by every 1.x.
+ * The parser is asked for the fields it would hand to the port, and the bytes
+ * are checked against the sum of the record, so neither the parser nor the
+ * fixture can move without the failure that says so.
+ *
+ * The machine is the one of the file, not the one of the test: the host is a
+ * machine that cannot enter a program, and the parse of the image of x86-64 is
+ * still the parse that a machine of that port would do.
+ */
+static void check_frozen_image(void)
+{
+    struct k_exec_image parsed;
+
+    ktest_begin("exec: the image of 1.0 is read as it was frozen");
+
+    if (load_frozen() != 0) {
+        KT_CHECK(0);
+        return;
+    }
+
+    KT_CHECK_INT_EQ(g_frozen_size, FROZEN_SIZE);
+    KT_CHECK_INT_EQ(frozen_sum(g_frozen, g_frozen_size), FROZEN_SUM);
+
+    /* The header of the record, word by word. */
+    KT_CHECK_INT_EQ(frozen_word(0), K_EXEC_MAGIC);
+    KT_CHECK_INT_EQ(frozen_word(4), K_EXEC_VERSION);
+    KT_CHECK_INT_EQ(frozen_word(8), 0); /* flags: none of the format */
+    KT_CHECK_INT_EQ(frozen_word(12), K_EXEC_HEADER_SIZE);
+    KT_CHECK_INT_EQ(frozen_word(16), FROZEN_TEXT_SIZE);
+    KT_CHECK_INT_EQ(frozen_word(20), FROZEN_DATA_SIZE);
+    KT_CHECK_INT_EQ(frozen_word(24), FROZEN_BSS_SIZE);
+    KT_CHECK_INT_EQ(frozen_word(28), K_EXEC_ARCH_X86_64);
+
+    /* And what the parser makes of it: the fields the port is handed. */
+    memset(&parsed, 0, sizeof(parsed));
+    KT_CHECK_INT_EQ(k_exec_parse(g_frozen, g_frozen_size, &parsed), 0);
+    KT_CHECK(parsed.data == g_frozen);
+    KT_CHECK_INT_EQ(parsed.size, g_frozen_size);
+    KT_CHECK_INT_EQ(parsed.arch, K_EXEC_ARCH_X86_64);
+    KT_CHECK_INT_EQ(parsed.entry, FROZEN_ENTRY);
+    KT_CHECK_INT_EQ(parsed.text_size, FROZEN_TEXT_SIZE);
+    KT_CHECK_INT_EQ(parsed.data_size, FROZEN_DATA_SIZE);
+    KT_CHECK_INT_EQ(parsed.bss_size, FROZEN_BSS_SIZE);
+    KT_CHECK(parsed.envp == NULL);
+
+    /* The rule of the port against the windows of protection: the text ends
+     * on a page of its own, so a machine can give it the one protection of
+     * code and the data the one of memory (NX/W^X, ADR 0007). The fixture has
+     * to be an image a port of 1.0 would accept, not only one the parser
+     * reads. */
+    KT_CHECK_INT_EQ((K_EXEC_HEADER_SIZE + parsed.text_size) % 4096u, 0);
+    KT_CHECK(parsed.entry >= K_EXEC_HEADER_SIZE);
+    KT_CHECK(parsed.entry < parsed.text_size);
+    KT_CHECK(parsed.size >= K_EXEC_HEADER_SIZE + parsed.text_size + parsed.data_size);
+}
+
 static void check_run_without_a_machine(void)
 {
     k_u8_t image[TEST_IMAGE_SIZE];
@@ -369,6 +533,7 @@ void test_exec(void)
     check_bad_sizes();
     check_bad_entry();
     check_arch();
+    check_frozen_image();
     check_environment();
     check_run_without_a_machine();
 }

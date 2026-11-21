@@ -1,0 +1,89 @@
+# Micro OS — the contract of the platform port, 1.8, as it was recorded.
+#
+# This file is the golden record of kernel/port/*.h: the functions a machine
+# has to implement to be a port of this kernel. `make integrity` compares it
+# with the headers and with the sources of every port, and the release gate
+# asks for two independent ports that implement the whole list (the ESP32 and
+# x86-64), with the host and the null port as the cheapest checks of the
+# contract (docs/releases/1.0.md, section 1).
+#
+# The rules of the file:
+#
+#   * `api MAJOR MINOR` is the version of the contract, compared with
+#     KERNEL_PORT_API_VERSION_* of kernel/port/info.h. The minor moves when a
+#     function is added, the major when the meaning of one changes;
+#   * every other line is `k_port_name header`, where the header is the one
+#     that declares the function, from the directory of the headers. A name
+#     that is declared and not recorded (or the other way round) is a failed
+#     check, so a call that is added to the contract is added here too;
+#   * the execution substrate (kernel/port_task.h, the k_port_task_* calls) is
+#     not in this list: it is the part of a port that has no machine behind it
+#     to be checked against, and the tests of the scheduler cover it. The
+#     version of the contract is the version of the nine headers below.
+#
+# Nine headers, 45 functions: console 4, exec 8, info 4, kv 5, lock 6,
+# mem 6, net 8, power 2, time 2.
+api 1 8
+
+# kernel/port/console.h — the bytes in and out
+k_port_write kernel/port/console.h
+k_port_console_readline kernel/port/console.h
+k_port_console_getchar kernel/port/console.h
+k_port_console_poll kernel/port/console.h
+
+# kernel/port/exec.h — the window of the programs and the jump into one
+k_port_exec_supported kernel/port/exec.h
+k_port_exec_arch kernel/port/exec.h
+k_port_exec_base kernel/port/exec.h
+k_port_exec_enter kernel/port/exec.h
+k_port_exec_active kernel/port/exec.h
+k_port_exec_exit kernel/port/exec.h
+k_port_exec_contains kernel/port/exec.h
+k_port_fork_copy kernel/port/exec.h
+
+# kernel/port/info.h — the identity and the version of the contract
+k_port_name kernel/port/info.h
+k_port_arch kernel/port/info.h
+k_port_api_major kernel/port/info.h
+k_port_api_minor kernel/port/info.h
+
+# kernel/port/kv.h — the store that survives a restart
+k_port_kv_get kernel/port/kv.h
+k_port_kv_set kernel/port/kv.h
+k_port_kv_erase kernel/port/kv.h
+k_port_kv_commit kernel/port/kv.h
+k_port_kv_next kernel/port/kv.h
+
+# kernel/port/lock.h — critical sections and recursive mutexes
+k_port_enter_critical kernel/port/lock.h
+k_port_exit_critical kernel/port/lock.h
+k_port_mutex_create kernel/port/lock.h
+k_port_mutex_destroy kernel/port/lock.h
+k_port_mutex_lock kernel/port/lock.h
+k_port_mutex_unlock kernel/port/lock.h
+
+# kernel/port/mem.h — the internal heap and the PSRAM
+k_port_heap_free kernel/port/mem.h
+k_port_heap_total kernel/port/mem.h
+k_port_psram_free kernel/port/mem.h
+k_port_psram_total kernel/port/mem.h
+k_port_alloc kernel/port/mem.h
+k_port_free kernel/port/mem.h
+
+# kernel/port/net.h — TCP and UDP, a request and an answer
+k_port_net_connect kernel/port/net.h
+k_port_net_send kernel/port/net.h
+k_port_net_recv kernel/port/net.h
+k_port_net_close kernel/port/net.h
+k_port_net_listen kernel/port/net.h
+k_port_net_accept kernel/port/net.h
+k_port_net_server_close kernel/port/net.h
+k_port_net_udp_exchange kernel/port/net.h
+
+# kernel/port/power.h — the two ends of the machine
+k_port_halt kernel/port/power.h
+k_port_reset kernel/port/power.h
+
+# kernel/port/time.h — the clock since the boot
+k_port_uptime_ms kernel/port/time.h
+k_port_uptime_us kernel/port/time.h

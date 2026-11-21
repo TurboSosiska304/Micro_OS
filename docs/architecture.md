@@ -67,6 +67,23 @@ where it does not belong.
 
 That is exactly what allows the kernel tests to run on a laptop.
 
+### The contracts are recorded in the tree
+
+Two interfaces are the promise of a release, and both have a golden record
+that a change has to move with the code:
+
+| Record | What it freezes | Checked by |
+|---|---|---|
+| [tests/corpus/abi.txt](../tests/corpus/abi.txt) | the calls (number, name, arity, result), the error codes, the flags, the limits, the header of a program image and the layout of the structures that cross the door, on a 64-bit and on a 32-bit machine | `ksys: the ABI is the recorded one` (`tests/cases/test_ksys.c`), on every `make test` |
+| [tests/corpus/port_api.txt](../tests/corpus/port_api.txt) | the 45 functions of `kernel/port/*.h` and the version of the contract | `make integrity` (`[port]`): the record against the headers, and the whole list against the ESP32 and the x86-64 port |
+
+[tests/corpus/mox1](../tests/corpus/mox1) holds a MOX1 image of version 2,
+built for 1.0 and recorded in hex: `k_exec_parse()` reads it on every
+`make test`, and the format is expected to read it for as long as it is 1.x.
+The golden files are not generated into the build directory on purpose - a
+record that a build rewrites is not a record. A change of the ABI or of the
+contract is therefore two files in one commit, and a reviewer sees it.
+
 ## 2. What is Linux-like here, and what is not
 
 | Property | Linux | Micro OS |

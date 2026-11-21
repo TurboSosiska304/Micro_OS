@@ -609,6 +609,22 @@ The tests of the ABI do not check that "something" works, they check the
 **properties**: the same data has to give the same result no matter how the
 program breaks it into pieces.
 
+* **The golden record.** The table of this document and the numbers around it
+  are recorded in [tests/corpus/abi.txt](../tests/corpus/abi.txt), and the test
+  `ksys: the ABI is the recorded one` reads the file and compares it with the
+  running kernel: the calls (number, name, arity and result), the errors, the
+  flags, the limits of the edge, the header of a program image and the size
+  and the offsets of `vfs_stat`, `vfs_statx`, `vfs_dirent` and
+  `k_exec_image`, for a 64-bit and for a 32-bit machine. A number, a name, a
+  flag or a field that changes without the file is a failed test, and a line
+  of the file without a change of the kernel is one too; the two are one
+  commit. The arity and the result are documentation of the signature that the
+  compiler checks through the prototypes of `kernel/ksys.h`.
+* **The frozen image.** A MOX1 image of version 2, built for 1.0, is recorded
+  in [tests/corpus/mox1](../tests/corpus/mox1) and parsed on every
+  `make test` (`exec: the image of 1.0 is read as it was frozen`): the fields
+  of the header, the sum of the bytes and the rule of the port that the text
+  ends on a page. An image built for 1.0 is read by every 1.x.
 * **The round trip.** The corpus of the numbers is written through the system
   calls in pieces of 1, 3, 7, 64, 512, 1024 and 4096 bytes. Every time the
   same bytes have to come back, and their sum has to be the same.
