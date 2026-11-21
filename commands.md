@@ -151,7 +151,7 @@ read by the kernel, checked against the format `MOX1` and handed to the port.
 
 | Command | What it does |
 |---|---|
-| `fsck` | check the volume read-only: the first problem, sizes, free blocks |
+| `fsck` | check the volume: the first problem, sizes, free blocks; `fsck fat ... -y` repairs the FAT volume |
 | `chmod <mode> <path>` | the mode in octal: `0644`, `755`, `0700` (the nine bits `rwx`) |
 | `chown <uid> <path>` | the owner, a decimal uid `0..32767` |
 | `stat <path>` | the type, the mode, the owner and the size of one object |

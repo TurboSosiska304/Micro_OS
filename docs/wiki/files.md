@@ -123,7 +123,7 @@ is registered on the board (`main/src/main.c`) and in the simulator
 (`ports/port_host/src/sim_main.c`); the x86-64 port has no such command and
 formats a blank volume at the boot instead.
 
-`fsck` is the read-only check:
+`fsck` of MicroFS is the read-only check:
 
 ```text
 microos> fsck
@@ -139,9 +139,45 @@ The second filesystem is checked by the same command, by the point or by the
 device: `fsck fat /mnt/fat` reads a volume that is mounted, `fsck fat sd0`
 mounts the device for the length of the walk. The report names the cluster,
 the directory or the copy of the table that is wrong, and the counters say
-how much of the volume is free and how many clusters no chain names. It is
-read-only as well, and a volume with more than 65536 clusters is refused with
-a message. See [the second filesystem](#the-second-filesystem).
+how much of the volume is free and how many clusters no chain names. A
+volume with more than 65536 clusters is refused with a message. Without a
+flag it is read-only; with `-y` it repairs the damage the medium itself
+explains. See [the second filesystem](#the-second-filesystem).
+
+```text
+microos> fsck fat /mnt/fat -y
+fsck: FAT32, 6 file(s), 2 directory(ies), 1975 of 1984 cluster(s) free
+fsck: 1 lost cluster(s) found, 1 freed
+fsck: 1 repair(s) applied
+fsck: 0 problem(s) after the repair
+fsck: the volume is consistent
+```
+
+`-y` (or `--repair`) gives a lost cluster back to the free map in both
+copies of the table, cuts a chain that loops or leaves the volume, ends the
+second of two chains that share a cluster (an entry whose *own* first
+cluster is the shared one becomes an empty file, so the name stays and the
+data stays reachable through the first name), removes a broken run of
+long-name entries and keeps the 8.3 name, and puts the size of a file right
+against its chain: a chain shorter than the size cuts the size down, a chain
+longer than the file gives the tail back. An entry whose first cluster is
+not in the volume is removed with its long name, because nothing on the
+medium says where its data is, and so is a file whose 8.3 name holds a
+character FAT does not allow. A directory with such a name is left for a
+person: its subtree would go with the entry.
+
+The volume is checked again after the pass, so `0 problem(s)` is about the
+medium and not about the plan. The pass does not guess: a boot sector that
+disagrees with the mount, two copies of the table that differ (the medium
+does not say which one is the volume), an empty file that still names a
+chain (it could be a directory the walk has not reached), and a directory
+whose first cluster another chain holds are left as they are, counted in
+`problem(s)`, and the first one is printed with `(not repaired)`. When the
+tree could not be walked whole (a shared directory head, a depth beyond a
+path), the lost clusters are not freed either: a cluster of the subtree that
+was not entered looks the same. A medium that refuses a write stops the pass
+at the first change.
+MicroFS has no such flag: `fsck` is read-only for it.
 
 ## `/etc` and the store
 
@@ -245,12 +281,14 @@ write, because reading it is still useful.
 Writes go to the medium before the call returns and the device is synced
 when it has a `sync` of its own, but there is **no journal**: a power cut in
 the middle of a write can leave a cluster no chain names or a half-written
-entry. `fsck fat <point|device>` walks the volume read-only and names the
-first problem, exactly as `fsck` does for MicroFS: the boot sector and the
+entry. `fsck fat <point|device>` walks the volume: the boot sector and the
 BPB, the copies of the table, the chains, the entries and their long names,
-and the clusters no chain names. It does not repair: the clusters it calls
-lost are still lost after it returns. That is the price of writing a volume
-this kernel did not format, and it is written in
+and the clusters no chain names. Without a flag it only reports, and a
+damaged volume is left the way it was found so that it can be copied off
+the medium first. With `-y` the safe repairs are applied and the check runs
+again; the rules are in [the section above](#mkfs-and-fsck), and what the
+medium cannot explain is left and named. That is the price of writing a
+volume this kernel did not format, and it is written in
 [`docs/debts.md`](../debts.md).
 
 The host test mounts MicroFS at `/` and FAT at `/mnt/fat` at the same time,
@@ -364,9 +402,11 @@ written back to the table: `mount` changes the tree, not the configuration.
 
 * **No write to an ext2 volume, and no journal under a FAT write.** A FAT
   volume is written without a log; a second FAT volume and a mount of a
-  card at runtime are ahead, and `fsck fat` only reports: a repair of the
-  clusters it calls lost is the next step. ext2 is a reader: a write, a new
-  name, a mode or an owner is `ENOTSUP`, a journal is not replayed, and
+  card at runtime are ahead. `fsck fat -y` repairs the damage the medium
+  explains (lost clusters, a loop, a cross-link, a size against its chain),
+  but the boot sector, two copies of the table that differ and a directory
+  whose head is shared are left for a person. ext2 is a reader: a write, a
+  new name, a mode or an owner is `ENOTSUP`, a journal is not replayed, and
   there is no `fsck ext2` - `e2fsck` is the tool of that format.
 * **No access time**, so `statx` has two moments of three; a read does not
   rewrite a record.
@@ -375,9 +415,9 @@ written back to the table: `mount` changes the tree, not the configuration.
   table.
 * **MicroFS is one volume at a time**: the type `mfs` mounts the medium the
   filesystem keeps, so a second MicroFS volume is a change of the filesystem.
-* **No journal and no repair**: `fsck` names the first problem of MicroFS and
-  `fsck fat` the first problem of a FAT volume; neither fixes it, and FAT has
-  no repair of its lost clusters.
+* **No journal and no repair for MicroFS**: `fsck` names the first problem
+  of MicroFS and fixes nothing; `fsck fat -y` repairs the safe damage of a
+  FAT volume, and a problem the medium cannot explain stays named.
 * **No `mv`, no `cp`**: `rm -r` and the other commands of the shell are there.
 * **One user**, so the owner of a file is a number that is stored and checked
   but not a second party.

@@ -59,7 +59,7 @@ the tools. A row names the sentence you see, the cause and the move.
 |---|---|---|
 | `fsck: no volume is mounted` | `/` is not MicroFS right now | `mkfs -y` formats and mounts; check `MICROOS_VOLUME` |
 | `fsck` reports problems | a volume written by a crash | it only reports; copy what you can, then `mkfs -y` |
-| `fsck fat /mnt/sd` reports problems | a FAT volume a crash left inconsistent | it only reports: copy the files off the volume, then let the system that made it repair it |
+| `fsck fat /mnt/sd` reports problems | a FAT volume a crash left inconsistent | copy what you can first, then `fsck fat /mnt/sd -y` repairs the safe damage; the boot sector, two table copies that differ and a directory whose head is shared stay `(not repaired)` for a person |
 | `stat` prints `mode: (not set)` | `/proc`, `/dev`, or an old volume | expected: those records keep no modes |
 | `chmod 000` is refused | zero means "the modes predate the record" | choose another mode; a real zero needs a format change |
 | "not permitted" for a file you own | uid 0 gets no exemption of root | `chmod` the triad you need, for example `0644` |

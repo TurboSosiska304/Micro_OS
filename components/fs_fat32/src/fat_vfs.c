@@ -705,9 +705,10 @@ int fat_vfs_register_type(void)
  * mounted for the length of the walk and forgotten again. The device of a
  * mounted volume is the same medium, so the mounted copy answers for it;
  * opening a second reader on it would read the same bytes through a second
- * cache and no lock.
+ * cache and no lock. A repair uses the same walk, with the writes of the
+ * repair pass in front of the check.
  */
-int fat_check(const char *what, struct fat_check_report *report)
+static int check_or_repair(const char *what, struct fat_check_report *report, bool write)
 {
     const struct k_blockdev *dev;
     struct fat_volume *vol;
@@ -732,7 +733,7 @@ int fat_check(const char *what, struct fat_check_report *report)
         }
 
         if (!g_fat.mounted || g_fat.dev != dev) {
-            return fat_check_device(dev, report);
+            return fat_check_device(dev, report, write);
         }
 
         vol = &g_fat;
@@ -743,11 +744,21 @@ int fat_check(const char *what, struct fat_check_report *report)
         return rc;
     }
 
-    rc = fat_check_volume(vol, report);
+    rc = fat_check_volume(vol, report, write);
 
     k_mutex_unlock(&vol->lock);
 
     return rc;
+}
+
+int fat_check(const char *what, struct fat_check_report *report)
+{
+    return check_or_repair(what, report, false);
+}
+
+int fat_repair(const char *what, struct fat_check_report *report, bool write)
+{
+    return check_or_repair(what, report, write);
 }
 
 const char *fat_strerror(int error)

@@ -20,11 +20,17 @@
 
 #if defined(MICRO_OS_FS_FAT32) && MICRO_OS_FS_FAT32
 #include "fs_fat32/fat.h"
-#define FSCK_USAGE "fsck [fat <point|device>]"
+#define FSCK_USAGE "fsck [fat <point|device> [-y]]"
 #define FSCK_DETAIL                                                                                \
-    "Read-only, for MicroFS and for FAT: the report names the first problem, and\n"                \
-    "nothing is repaired. A person decides what to do about a broken record.\n"                    \
-    "  fat <point|device>  check the FAT volume at the point, or on the device\n"
+    "Read-only unless the FAT volume is given -y: the report names the first\n"                    \
+    "problem, and without the flag nothing is repaired. A person decides what\n"                   \
+    "to do about a broken record.\n"                                                               \
+    "  fat <point|device>  check the FAT volume at the point, or on the device\n"                  \
+    "  -y                  repair the FAT volume: the lost clusters go back to\n"                  \
+    "                      the free map, a loop or a cluster outside the volume\n"                 \
+    "                      is cut, the second of two names of one cluster gives\n"                 \
+    "                      it up, a broken long name is removed, and a size\n"                     \
+    "                      that does not match its chain is put right\n"
 #else
 #define FSCK_USAGE "fsck"
 #define FSCK_DETAIL                                                                                \
@@ -1327,18 +1333,20 @@ static int cmd_stat(int argc, char **argv)
 }
 
 /*
- * The consistency of the volume, read-only. The filesystem answers with
+ * The consistency of the volume. Without `-y` the filesystem answers with
  * the report and not with a repair: a person decides what to do about a
  * broken record, and a checker that writes is a formatter that nobody
- * asked for.
+ * asked for. With `-y` the safe repairs are applied and the volume is
+ * checked again, so the answer is about the medium and not about the plan;
+ * the problems the pass refused are named as left.
  */
 #if defined(MICRO_OS_FS_FAT32) && MICRO_OS_FS_FAT32
-static int fsck_fat(const char *what)
+static int fsck_fat(const char *what, bool write)
 {
     struct fat_check_report report;
     int rc;
 
-    rc = fat_check(what, &report);
+    rc = fat_repair(what, &report, write);
     if (rc == KERR_NOENT) {
         kshell_printf("fsck: %s: no such device\n", what);
         return KSHELL_ERROR;
@@ -1358,19 +1366,59 @@ static int fsck_fat(const char *what)
                   (unsigned)report.type, (unsigned)report.files, (unsigned)report.directories,
                   (unsigned)report.free_clusters, (unsigned)report.clusters);
 
-    if (report.lost_clusters != 0) {
+    if (write) {
+        if (report.lost_found != 0) {
+            kshell_printf("fsck: %u lost cluster(s) found, %u freed\n", (unsigned)report.lost_found,
+                          (unsigned)report.lost_freed);
+        }
+
+        if (report.fixed != 0) {
+            kshell_printf("fsck: %u repair(s) applied\n", (unsigned)report.fixed);
+        }
+    } else if (report.lost_clusters != 0) {
         kshell_printf("fsck: %u lost cluster(s)\n", (unsigned)report.lost_clusters);
     }
 
     if (report.errors != 0) {
-        kshell_printf("fsck: %u problem(s), the first: %s\n", (unsigned)report.errors,
-                      report.first);
+        kshell_printf("fsck: %u problem(s), the first: %s%s\n", (unsigned)report.errors,
+                      report.first, write ? " (not repaired)" : "");
+        if (!write) {
+            kshell_printf("fsck: -y repairs the lost clusters and cuts the broken chains\n");
+        }
         return KSHELL_ERROR;
+    }
+
+    if (write && report.fixed != 0) {
+        kshell_printf("fsck: 0 problem(s) after the repair\n");
     }
 
     kshell_printf("fsck: the volume is consistent\n");
 
     return KSHELL_OK;
+}
+
+/* The words after `fsck fat`: one point or device, and the flag of the
+ * repair in any place. Anything else is the usage line, not a guess about
+ * which of two volumes the person meant. */
+static bool fsck_fat_words(int argc, char **argv, const char **what, bool *write)
+{
+    int i;
+
+    *what = NULL;
+    *write = false;
+
+    for (i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "-y") == 0 || strcmp(argv[i], "--repair") == 0) {
+            *write = true;
+        } else if (*what == NULL) {
+            *what = argv[i];
+        } else {
+            *what = NULL;
+            return false;
+        }
+    }
+
+    return *what != NULL;
 }
 #endif
 
@@ -1407,8 +1455,13 @@ static int cmd_fsck(int argc, char **argv)
     }
 
 #if defined(MICRO_OS_FS_FAT32) && MICRO_OS_FS_FAT32
-    if (argc == 3 && strcmp(argv[1], "fat") == 0) {
-        return fsck_fat(argv[2]);
+    if (argc >= 3 && strcmp(argv[1], "fat") == 0) {
+        const char *what;
+        bool write;
+
+        if (fsck_fat_words(argc, argv, &what, &write)) {
+            return fsck_fat(what, write);
+        }
     }
 #else
     (void)argv;

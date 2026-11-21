@@ -153,8 +153,12 @@ written when the project was an operating system for one board; the numbers
       names, the lost clusters and the free count; `fsck fat <point|device>`
       at the console, and a volume beyond 65536 clusters refused with a
       message
-* [ ] A journal or a cache of the changes under a write, and a repair of the
-      clusters a check calls lost
+* [x] A repair of FAT under `-y`: the lost clusters go back to the free map
+      in both copies of the table, a loop or a cluster outside the volume is
+      cut, the second of two names of one cluster gives it up, a broken run
+      of long names is removed and its 8.3 name kept, and a size that does
+      not match its chain is put right; the check runs again afterwards
+* [ ] A journal or a cache of the changes under a write
 * [x] ext2, the reader with inodes and a superblock a checker can walk
       (ADR 0019): the superblock, the group descriptors, the inode table,
       the direct blocks and the single, double and triple indirection, the
