@@ -8,6 +8,7 @@
 #include "kernel/sched.h"
 #include "kernel/task.h"
 #include "kshell/kshell.h"
+#include "net/dns.h"
 #include "net/http.h"
 #include "net/mqtt.h"
 #include "net/net.h"
@@ -700,6 +701,287 @@ static void test_mqtt(void)
     KT_CHECK_INT_EQ(__atomic_load_n(&g_mqtt_connects, __ATOMIC_ACQUIRE), 2);
 }
 
+/*
+ * The resolver: the query of a name, the record of an answer and the cache.
+ * The packets are made here byte by byte, because the wire format is the
+ * contract and a server of the internet is not in the test.
+ */
+static k_size_t dns_test_name(k_u8_t *buffer, const char *name)
+{
+    k_size_t length = 0;
+    const char *cursor = name;
+
+    while (*cursor != '\0') {
+        const char *dot = strchr(cursor, '.');
+        k_size_t label = dot == NULL ? strlen(cursor) : (k_size_t)(dot - cursor);
+
+        buffer[length++] = (k_u8_t)label;
+        memcpy(buffer + length, cursor, label);
+        length += label;
+        cursor += label;
+
+        if (*cursor == '.') {
+            cursor++;
+        }
+    }
+
+    buffer[length++] = 0u;
+
+    return length;
+}
+
+/* The header and the question of an answer, for `answers` records to come. */
+static k_size_t dns_test_begin(k_u8_t *packet, k_u16_t identifier, const char *name, int answers)
+{
+    k_size_t length = 12u;
+
+    memset(packet, 0, DNS_PACKET_MAX);
+    packet[0] = (k_u8_t)(identifier >> 8);
+    packet[1] = (k_u8_t)identifier;
+    packet[2] = 0x81u; /* an answer, recursion available */
+    packet[3] = 0x80u; /* no error */
+    packet[5] = 1u;    /* one question */
+    packet[7] = (k_u8_t)answers;
+
+    length += dns_test_name(packet + length, name);
+    packet[length++] = 0u;
+    packet[length++] = 1u; /* type A */
+    packet[length++] = 0u;
+    packet[length++] = 1u; /* class IN */
+
+    return length;
+}
+
+static k_size_t dns_test_record(k_u8_t *packet, k_size_t length, k_u16_t type, k_u32_t ttl,
+                                const k_u8_t *data, k_size_t data_length)
+{
+    packet[length++] = 0xC0u; /* the name of the question */
+    packet[length++] = 0x0Cu;
+    packet[length++] = (k_u8_t)(type >> 8);
+    packet[length++] = (k_u8_t)type;
+    packet[length++] = 0u;
+    packet[length++] = 1u;
+    packet[length++] = (k_u8_t)(ttl >> 24);
+    packet[length++] = (k_u8_t)(ttl >> 16);
+    packet[length++] = (k_u8_t)(ttl >> 8);
+    packet[length++] = (k_u8_t)ttl;
+    packet[length++] = (k_u8_t)(data_length >> 8);
+    packet[length++] = (k_u8_t)data_length;
+    memcpy(packet + length, data, data_length);
+
+    return length + data_length;
+}
+
+static k_size_t dns_test_a(k_u8_t *packet, k_size_t length, k_u32_t address, k_u32_t ttl)
+{
+    k_u8_t data[4];
+
+    put_be32(data, address);
+
+    return dns_test_record(packet, length, 1u, ttl, data, sizeof(data));
+}
+
+static void test_dns(void)
+{
+    k_u8_t packet[DNS_PACKET_MAX];
+    k_u8_t second[DNS_PACKET_MAX];
+    struct dns_answer answer;
+    k_u32_t address;
+    k_u32_t left;
+    k_size_t length;
+    k_size_t i;
+    char long_name[DNS_NAME_MAX + 8];
+
+    ktest_begin("dns: the query of a name, the address of an answer and the cache");
+
+    /* --- the query: a header, the labels, the root and the question */
+    length = (k_size_t)dns_build_query("example.com", 0x1234, packet, sizeof(packet));
+    KT_CHECK_INT_EQ((int)length, 29);
+    KT_CHECK_INT_EQ(packet[0], 0x12);
+    KT_CHECK_INT_EQ(packet[1], 0x34);
+    KT_CHECK_INT_EQ(packet[2], 0x01); /* a query */
+    KT_CHECK_INT_EQ(packet[3], 0x00); /* recursion wanted, no error */
+    KT_CHECK_INT_EQ(packet[5], 1);    /* one question */
+    KT_CHECK_INT_EQ(packet[7], 0);    /* no answer came with the query */
+    KT_CHECK_INT_EQ(packet[12], 7);   /* the label of "example" */
+    KT_CHECK(memcmp(packet + 13, "example", 7) == 0);
+    KT_CHECK_INT_EQ(packet[20], 3);
+    KT_CHECK(memcmp(packet + 21, "com", 3) == 0);
+    KT_CHECK_INT_EQ(packet[24], 0); /* the root */
+    KT_CHECK_INT_EQ(packet[25], 0);
+    KT_CHECK_INT_EQ(packet[26], 1); /* the type: an address */
+    KT_CHECK_INT_EQ(packet[27], 0);
+    KT_CHECK_INT_EQ(packet[28], 1); /* the class: the internet */
+
+    /* A trailing dot is the root and not an empty label. */
+    KT_CHECK_INT_EQ((int)dns_build_query("example.com.", 0x1234, second, sizeof(second)), 29);
+    KT_CHECK(memcmp(packet, second, 29) == 0);
+
+    /* Names that are not names, and a packet that is too small. */
+    KT_CHECK_INT_EQ(dns_build_query("", 1, packet, sizeof(packet)), -1);
+    KT_CHECK_INT_EQ(dns_build_query(NULL, 1, packet, sizeof(packet)), -1);
+    KT_CHECK_INT_EQ(dns_build_query("a..b", 1, packet, sizeof(packet)), -1);
+    KT_CHECK_INT_EQ(dns_build_query(".a", 1, packet, sizeof(packet)), -1);
+    KT_CHECK_INT_EQ(dns_build_query("example.com", 1, packet, 20), -1);
+    KT_CHECK_INT_EQ(dns_build_query("example.com", 1, NULL, 64), -1);
+
+    memset(long_name, 'a', sizeof(long_name) - 1u);
+    long_name[sizeof(long_name) - 1u] = '\0';
+    KT_CHECK_INT_EQ(dns_build_query(long_name, 1, packet, sizeof(packet)), -1);
+
+    /* A label of 64 characters is not a label of the protocol. */
+    memset(long_name, 'a', 64);
+    memcpy(long_name + 64, ".com", 5);
+    KT_CHECK_INT_EQ(dns_build_query(long_name, 1, packet, sizeof(packet)), -1);
+
+    /* --- the answer: the first address of type A and its time to live */
+    length = dns_test_begin(packet, 0x4321, "example.com", 1);
+    length = dns_test_a(packet, length, 0x5DB8D822u, 300u);
+
+    KT_CHECK_INT_EQ(dns_parse_answer(packet, length, 0x4321, &answer), 0);
+    KT_CHECK_INT_EQ(answer.address, 0x5DB8D822u); /* 93.184.216.34 */
+    KT_CHECK_INT_EQ(answer.ttl_s, 300);
+
+    /* The identifier belongs to the exchange, not to the name. */
+    KT_CHECK_INT_EQ(dns_parse_answer(packet, length, 0x4322, &answer), -1);
+
+    /* An error of the server, a query and a message that stops early are not
+     * an address. */
+    packet[3] = 0x83u;
+    KT_CHECK_INT_EQ(dns_parse_answer(packet, length, 0x4321, &answer), -1);
+    packet[3] = 0x80u;
+
+    packet[2] = 0x01u;
+    KT_CHECK_INT_EQ(dns_parse_answer(packet, length, 0x4321, &answer), -1);
+    packet[2] = 0x81u;
+
+    KT_CHECK_INT_EQ(dns_parse_answer(packet, 15, 0x4321, &answer), -1);
+    KT_CHECK_INT_EQ(dns_parse_answer(packet, 0, 0x4321, &answer), -1);
+    KT_CHECK_INT_EQ(dns_parse_answer(NULL, length, 0x4321, &answer), -1);
+    KT_CHECK_INT_EQ(dns_parse_answer(packet, length, 0x4321, NULL), -1);
+
+    /* No answer at all, a record of another type, and a record of four bytes
+     * that says it is five. */
+    packet[7] = 0u;
+    KT_CHECK_INT_EQ(dns_parse_answer(packet, length, 0x4321, &answer), -1);
+
+    {
+        static const k_u8_t v6[16] = {0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
+
+        length = dns_test_begin(packet, 0x0044, "v6.example", 1);
+        length = dns_test_record(packet, length, 28u, 60u, v6, sizeof(v6));
+        KT_CHECK_INT_EQ(dns_parse_answer(packet, length, 0x0044, &answer), -1);
+    }
+
+    {
+        static const k_u8_t five[5] = {1, 2, 3, 4, 5};
+
+        length = dns_test_begin(packet, 0x0045, "odd.example", 1);
+        length = dns_test_record(packet, length, 1u, 60u, five, sizeof(five));
+
+        /* The type says address and the length says otherwise: the record is
+         * skipped and there is nothing left. */
+        KT_CHECK_INT_EQ(dns_parse_answer(packet, length, 0x0045, &answer), -1);
+
+        /* The same record, cut by a byte: the packet is not read past it. */
+        KT_CHECK_INT_EQ(dns_parse_answer(packet, length - 1u, 0x0045, &answer), -1);
+    }
+
+    /* A CNAME on the way to the address is skipped. */
+    {
+        static const k_u8_t alias[2] = {0xC0u, 0x0Cu};
+
+        length = dns_test_begin(packet, 0x0046, "www.example.com", 2);
+        length = dns_test_record(packet, length, 5u, 120u, alias, sizeof(alias));
+        length = dns_test_a(packet, length, 0x09090909u, 60u);
+
+        KT_CHECK_INT_EQ(dns_parse_answer(packet, length, 0x0046, &answer), 0);
+        KT_CHECK_INT_EQ(answer.address, 0x09090909u);
+        KT_CHECK_INT_EQ(answer.ttl_s, 60);
+    }
+
+    /* A week is cut to a day: the cache is a few hundred bytes of SRAM. */
+    length = dns_test_begin(packet, 0x0047, "long.example", 1);
+    length = dns_test_a(packet, length, 0x0A000202u, 604800u);
+    KT_CHECK_INT_EQ(dns_parse_answer(packet, length, 0x0047, &answer), 0);
+    KT_CHECK_INT_EQ(answer.ttl_s, (int)DNS_TTL_MAX_S);
+
+    /* --- the cache */
+    dns_cache_clear();
+    KT_CHECK_INT_EQ((int)dns_cache_count(), 0);
+
+    KT_CHECK_INT_EQ(dns_cache_store("example.com", 0x5DB8D822u, 60u, 1000u), 0);
+    KT_CHECK_INT_EQ((int)dns_cache_count(), 1);
+
+    KT_CHECK(dns_cache_lookup("example.com", 2000u, &address, &left));
+    KT_CHECK_INT_EQ(address, 0x5DB8D822u);
+    KT_CHECK_INT_EQ(left, 59);
+
+    /* The names of the protocol are not case sensitive, and the rest of the
+     * time is what the caller asks for. */
+    KT_CHECK(dns_cache_lookup("EXAMPLE.Com", 3000u, &address, &left));
+    KT_CHECK_INT_EQ(left, 58);
+    KT_CHECK(!dns_cache_lookup("example.org", 3000u, &address, &left));
+
+    /* The entry lives 60 seconds and not 61. */
+    KT_CHECK(dns_cache_lookup("example.com", 60999u, &address, NULL));
+    KT_CHECK(!dns_cache_lookup("example.com", 61000u, &address, NULL));
+    KT_CHECK_INT_EQ((int)dns_cache_count(), 0); /* the expired name is gone */
+
+    /* A time to live of zero is not a cache: "ask me again". */
+    KT_CHECK_INT_EQ(dns_cache_store("fresh.example", 0x01020304u, 0u, 0u), 1);
+    KT_CHECK(!dns_cache_lookup("fresh.example", 0u, &address, NULL));
+
+    memset(long_name, 'a', DNS_NAME_MAX);
+    long_name[DNS_NAME_MAX] = '\0';
+
+    KT_CHECK_INT_EQ(dns_cache_store("", 1u, 60u, 0u), -1);
+    KT_CHECK_INT_EQ(dns_cache_store(NULL, 1u, 60u, 0u), -1);
+    KT_CHECK_INT_EQ(dns_cache_store(long_name, 1u, 60u, 0u), -1);
+
+    /* A time to live of a year is kept for a day. */
+    KT_CHECK_INT_EQ(dns_cache_store("day.example", 0x08080808u, 31536000u, 0u), 0);
+    KT_CHECK(dns_cache_lookup("day.example", 0u, NULL, &left));
+    KT_CHECK_INT_EQ(left, (int)DNS_TTL_MAX_S);
+
+    /* The ninth name makes room for the one that expires first. */
+    dns_cache_clear();
+    for (i = 0; i < DNS_CACHE_ENTRIES; i++) {
+        char name[16];
+
+        snprintf(name, sizeof(name), "host%u.example", (unsigned)i);
+        KT_CHECK_INT_EQ(dns_cache_store(name, (k_u32_t)i, (k_u32_t)(100 + i), 0u), 0);
+    }
+
+    KT_CHECK_INT_EQ((int)dns_cache_count(), (int)DNS_CACHE_ENTRIES);
+    KT_CHECK(dns_cache_lookup("host0.example", 0u, &address, NULL));
+    KT_CHECK_INT_EQ(dns_cache_store("new.example", 0xA0A0A0A0u, 400u, 0u), 0);
+    KT_CHECK_INT_EQ((int)dns_cache_count(), (int)DNS_CACHE_ENTRIES);
+    KT_CHECK(!dns_cache_lookup("host0.example", 0u, &address, NULL));
+    KT_CHECK(dns_cache_lookup("host7.example", 0u, &address, NULL));
+    KT_CHECK(dns_cache_lookup("new.example", 0u, &address, NULL));
+
+    /* The listing of the cache is a walk of its slots. */
+    KT_CHECK(dns_cache_name(DNS_CACHE_ENTRIES, 0u, &address, &left) == NULL);
+    KT_CHECK_INT_EQ(dns_cache_store("list.example", 0x0B0B0B0Bu, 90u, 0u), 0);
+    for (i = 0; i < DNS_CACHE_ENTRIES; i++) {
+        const char *name = dns_cache_name(i, 0u, &address, &left);
+
+        if (name != NULL && strcmp(name, "list.example") == 0) {
+            break;
+        }
+    }
+    KT_CHECK(i < DNS_CACHE_ENTRIES);
+
+    /* The name found above is gone after its time to live. */
+    if (i < DNS_CACHE_ENTRIES) {
+        KT_CHECK(dns_cache_name(i, 200000u, &address, &left) == NULL);
+    }
+
+    dns_cache_clear();
+    KT_CHECK_INT_EQ((int)dns_cache_count(), 0);
+}
+
 void test_net(void)
 {
     static const struct {
@@ -717,6 +999,7 @@ void test_net(void)
     test_url();
     test_get();
     test_ntp();
+    test_dns();
     test_loopback();
 
     /*

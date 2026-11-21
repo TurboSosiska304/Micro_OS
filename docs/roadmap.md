@@ -146,16 +146,21 @@ written when the project was an operating system for one board; the numbers
 * [x] MQTT over the sockets: a 3.1.1 client at QoS 0 and 1, with a fake broker in the tests
 * [x] The network on the x86-64 machine: a virtio-net driver (the legacy I/O
       interface, polled, ADR 0008 for the shape of a device of the port) and a
-      stack of its own - ARP, IPv4, ICMP, UDP and a client of TCP with one
-      segment in flight and a timeout retransmission. `netinfo`, `ping` and
-      `netudp` come from the port, `http get` and `ntp` from `components/net`
-      behind `-DMICRO_OS_X86_NET=ON`, and `make x86-net-smoke` checks the
-      echo of the gateway, a UDP exchange and an HTTP GET against a server of
-      the host over QEMU user-net (10.0.2.15/24, no DHCP)
-* [ ] The server half of the contract on x86-64 (`listen`/`accept`): the
-      stack answers `NULL` and the page of the state waits for it
-* [ ] DNS with a cache: the x86-64 stack asks the resolver of user-net for a
-      name and keeps no answer; the board still resolves through lwIP
+      stack of its own - ARP, IPv4, ICMP, UDP, a client of TCP with one
+      segment in flight and a timeout retransmission, and the server half of
+      the contract: a table of doors, SYN/ACK, a reset for a port nobody
+      listens on and a session that `accept` hands out. `netinfo`, `ping`,
+      `netudp` and `dns` come from the port, `http get`, `httpd` and `ntp`
+      from `components/net` behind `-DMICRO_OS_X86_NET=ON`, and
+      `make x86-net-smoke` checks the echo of the gateway, a UDP exchange, an
+      HTTP GET against a server of the host, the page of the state served by
+      the guest through `hostfwd`, and a name the resolver answers once
+      (10.0.2.15/24 over QEMU user-net, no DHCP)
+* [x] DNS with a cache: the resolver of `components/net` (`net/dns.h`) builds
+      the query, reads the first A record with its time to live and keeps
+      eight names in a cache, and the x86-64 stack asks it for every name, so
+      `http`, `httpd` and `mqtt` get the cache behind `k_socket_connect`; the
+      board still resolves through lwIP, which has one of its own
 
 ## K7 - Quality (done)
 

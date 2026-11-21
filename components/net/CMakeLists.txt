@@ -13,7 +13,10 @@
 
 if(ESP_PLATFORM)
 
-    set(MICRO_OS_NET_SRCS "src/net.c")
+    # The resolver is the one part of the component a port may take without
+    # the clients: the x86-64 stack asks it for a name and gets the cache,
+    # and the board resolves through lwIP and links none of this.
+    set(MICRO_OS_NET_SRCS "src/net.c" "src/dns.c")
 
     if(CONFIG_MICRO_OS_NET)
         if(CONFIG_MICRO_OS_NET_HTTP)
@@ -78,7 +81,7 @@ else()
         return()
     endif()
 
-    set(MICRO_OS_NET_SRCS "src/net.c")
+    set(MICRO_OS_NET_SRCS "src/net.c" "src/dns.c")
 
     if(MICRO_OS_NET_HTTP)
         list(APPEND MICRO_OS_NET_SRCS "src/http.c")

@@ -18,6 +18,7 @@ and the chips on it. None of them replaces another.
 | `make x86-smoke` | the kernel boots, runs `/bin/hello`, the shell answers | `qemu-system-x86_64` |
 | `make x86-vga-smoke` | the VGA screen and the PS/2 keyboard, no display | `qemu-system-x86_64` |
 | `make x86-disk-smoke` | a file written by one boot is read by the next | `qemu-system-x86_64` |
+| `make x86-net-smoke` | the network: ping, UDP, HTTP, `httpd` and DNS | `qemu-system-x86_64` |
 | `make integrity` | the boundary, the bundle, the partitions, the hygiene | `clang-format` |
 | `make ci` | the list a contributor runs before a push | the above, QEMU optional |
 | `tools/device-test.sh` | build, flash and boot the board | ESP-IDF and a board |
@@ -85,6 +86,15 @@ monitor of QEMU is a tool a build farm does not have to have.
 channel, writes a file in one boot and reads it in the next. It is the test of
 the ATA driver, of the MBR parser and of MicroFS on a real medium, and it is
 also not a part of `make ci`.
+
+`make x86-net-smoke` builds the image with `-DMICRO_OS_X86_NET=ON`, gives QEMU
+a virtio-net card on its user-mode network and a forward of a port of the host
+to the guest, and checks the whole contract of the port over the wire: the
+device and its MAC, `ping` of the gateway, a UDP exchange with an echo server
+of the host, an HTTP GET of the client of `components/net`, the page of the
+state served by the guest through `hostfwd`, and a name the resolver answers
+twice (the second from the cache). Like the other two it is not a part of
+`make ci`: it opens a port on the loopback and needs the user-mode network.
 
 ## `make integrity`: the boundary and the hygiene
 

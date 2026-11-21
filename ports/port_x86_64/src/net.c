@@ -1,5 +1,6 @@
 /*
- * Micro OS — the x86-64 port: IPv4, ARP, ICMP, UDP and a TCP client.
+ * Micro OS — the x86-64 port: IPv4, ARP, ICMP, UDP, a TCP client and a TCP
+ * server.
  *
  * The contract of the port (kernel/port/net.h) promises a session of TCP, a
  * server of TCP and one UDP exchange. The board fills it with lwIP and the
@@ -11,34 +12,41 @@
  * Why a stack of its own and not lwIP: the machine has no libc, no memory
  * protection and a kernel of a few hundred kilobytes, and lwIP is a
  * component of a system with sockets and a heap of its own. What the
- * contract needs is one session at a time, opened by a command of the shell:
- * an ARP cache of eight entries, an IPv4 header with a checksum, an echo
- * reply, a datagram, and a client of TCP with one segment in flight. That is
- * this file. A second session at once, a window larger than one segment, a
- * reassembly of fragments and a server are the parts left out on purpose,
- * and each one says so where it would be.
+ * contract needs is a few sessions at a time, opened by a command of the
+ * shell or by the page of the state: an ARP cache of eight entries, an IPv4
+ * header with a checksum, an echo reply, a datagram, a client of TCP with one
+ * segment in flight, and a listener that takes a session the way the server
+ * half of the contract says. A window larger than one segment and a
+ * reassembly of fragments are the parts left out on purpose, and each one
+ * says so where it would be.
  *
  * The configuration is the one QEMU user-net gives every guest, and there is
  * no DHCP: 10.0.2.15/24, the gateway 10.0.2.2 (which is also the host) and
  * the resolver 10.0.2.3. A machine on another network changes the four
  * constants below. The addresses arrive as names in the contract, so dotted
- * quads are parsed here and everything else asks the resolver over UDP - at
- * most one query and one answer, the way NTP asks for the time.
+ * quads are parsed here and everything else goes to the resolver over UDP.
+ * The answer is read by the resolver of components/net (net/dns.h) and kept
+ * for its time to live, so the second command for one name costs no packet.
  *
  * Everything is polled from the task that made the call: the driver has no
  * interrupt (src/virtio_net.c) and the waits of the stack are a poll of the
- * card and a sleep of one tick. The stack is therefore not reentrant, and
- * the port has one task on the network - the shell. A timer of its own would
- * need a task; the retransmissions are the wait of the caller.
+ * card and a sleep of one tick. The tables of the sessions and of the
+ * servers are one state behind one mutex, because the shell and the task of
+ * the page of the state are two tasks on the same card; a frame that arrives
+ * while the other task polls is still dispatched by its addresses, and the
+ * stack has no queue of its own to fill. A timer of its own would need a
+ * task; the retransmissions are the wait of the caller.
  */
 #include "port_x86_64.h"
 
 #include <string.h>
 
 #include "kernel/log.h"
+#include "kernel/lock.h"
 #include "kernel/port.h"
 #include "kernel/sched.h"
 #include "kshell/kshell.h"
+#include "net/dns.h"
 #include "port_x86_64_net.h"
 
 /* --- the sizes and the numbers of the protocols --------------------------- */
@@ -66,6 +74,15 @@
 
 #define NET_TCP_SOCKETS 4u
 
+/* The doors of the machine: the page of the state and a shell of telnet are
+ * enough, and a listener is twenty bytes. */
+#define NET_TCP_SERVERS 2u
+
+/* A session of a listener that never confirmed the handshake is dropped
+ * after this long: the table is small and a half-open session has no owner
+ * to close it. */
+#define NET_TCP_HALFOPEN_MS 5000u
+
 /* One UDP exchange at a time, which is the whole of NTP and of the resolver. */
 #define NET_UDP_PAYLOAD_MAX 1400u
 
@@ -74,6 +91,7 @@
 #define NET_WAIT_DEFAULT_MS 3000u
 #define NET_RETRY_MS 400u
 #define NET_ARP_TIMEOUT_MS 1000u
+#define NET_DNS_TIMEOUT_MS 3000u
 
 #define NET_ARP_ENTRIES 8u
 
@@ -102,6 +120,12 @@ static bool g_configured;
 static k_u64_t g_ip_tx;
 static k_u64_t g_ip_rx;
 static k_u64_t g_ip_dropped;
+
+/* The names: the queries that left the machine, the answers that came from
+ * the cache of the resolver, and the packets a fragmented datagram cost. */
+static k_u64_t g_dns_queries;
+static k_u64_t g_dns_hits;
+static k_u64_t g_fragments_dropped;
 
 /* --- the bytes of a packet ------------------------------------------------- */
 
@@ -585,12 +609,17 @@ static bool udp_send(k_u32_t destination, k_u16_t destination_port, k_u16_t sour
 /* --- TCP ------------------------------------------------------------------- */
 
 /*
- * A session of the client. The peer is named by its address and port, the
- * session by the port of the guest; the two sequence numbers are the next
- * byte to send (snd_nxt), the oldest byte the peer has not acknowledged
- * (snd_una) and the next byte expected from the peer (rcv_nxt). One segment
- * is in flight at a time, so a retransmission is the segment again from the
- * same sequence number and nothing has to be kept between the calls.
+ * A session of TCP. The peer is named by its address and port, the session by
+ * the port of the guest; the three sequence numbers are the next byte to send
+ * (snd_nxt), the oldest byte the peer has not acknowledged (snd_una) and the
+ * next byte expected from the peer (rcv_nxt). One segment is in flight at a
+ * time, so a retransmission is the segment again from the same sequence
+ * number and nothing has to be kept between the calls.
+ *
+ * A session of a listener is the same structure: `listener` is the door it
+ * came from, `accepted` says that accept() handed it out, and a session that
+ * is not established yet is a handshake in flight. The client of the port
+ * leaves `listener` NULL.
  */
 struct k_socket {
     bool used;
@@ -602,10 +631,13 @@ struct k_socket {
     k_u32_t rcv_nxt;
     k_u8_t rx[NET_TCP_RX_SIZE];
     k_size_t rx_len;
+    struct k_server *listener;
+    k_u64_t born_ms;
     bool established;
     bool fin_sent;
     bool fin_received;
     bool reset;
+    bool accepted;
 };
 
 struct k_server {
@@ -614,7 +646,27 @@ struct k_server {
 };
 
 static struct k_socket g_tcp_sockets[NET_TCP_SOCKETS];
+static struct k_server g_tcp_servers[NET_TCP_SERVERS];
 static k_u16_t g_next_port = 49152u;
+
+/*
+ * The tables of the sessions and of the doors are one state, and two tasks
+ * reach them: the shell and the task of the page of the state. The mutex is
+ * held for a look and a change, never across a wait - the waits of both tasks
+ * are what polls the card for both, and a lock held by an accept that waits
+ * would keep the connecting task out of the table it needs.
+ */
+static k_mutex_t g_net_lock = K_MUTEX_INITIALIZER;
+
+static bool net_lock(void)
+{
+    return k_mutex_lock(&g_net_lock) == 0;
+}
+
+static void net_unlock(void)
+{
+    (void)k_mutex_unlock(&g_net_lock);
+}
 
 static k_u16_t net_next_port(void)
 {
@@ -627,20 +679,64 @@ static k_u16_t net_next_port(void)
     return port;
 }
 
-static struct k_socket *tcp_socket_new(void)
+/*
+ * The sequence number of the first byte has no security meaning on this
+ * machine and no clock of its own to borrow: the uptime and a constant are
+ * enough to keep two sessions apart.
+ */
+static k_u32_t tcp_initial_sequence(void)
+{
+    return (k_u32_t)k_port_uptime_us() ^ 0x5A5A0000u;
+}
+
+/* A session of a listener that never confirmed the handshake has no owner to
+ * close it: the table is small, and the oldest of them makes room. */
+static struct k_socket *tcp_socket_expired(k_u64_t now_ms)
 {
     k_size_t i;
 
     for (i = 0; i < NET_TCP_SOCKETS; i++) {
-        if (!g_tcp_sockets[i].used) {
-            memset(&g_tcp_sockets[i], 0, sizeof(g_tcp_sockets[i]));
-            g_tcp_sockets[i].used = true;
+        struct k_socket *socket = &g_tcp_sockets[i];
 
-            return &g_tcp_sockets[i];
+        if (socket->used && socket->listener != NULL && !socket->accepted && !socket->established &&
+            now_ms - socket->born_ms >= NET_TCP_HALFOPEN_MS) {
+            socket->used = false;
+
+            return socket;
         }
     }
 
     return NULL;
+}
+
+static struct k_socket *tcp_socket_new(k_u32_t remote_ip, k_u16_t remote_port, k_u16_t local_port)
+{
+    struct k_socket *socket = NULL;
+    k_size_t i;
+
+    for (i = 0; i < NET_TCP_SOCKETS; i++) {
+        if (!g_tcp_sockets[i].used) {
+            socket = &g_tcp_sockets[i];
+            break;
+        }
+    }
+
+    if (socket == NULL) {
+        socket = tcp_socket_expired(k_port_uptime_ms());
+    }
+
+    if (socket == NULL) {
+        return NULL;
+    }
+
+    memset(socket, 0, sizeof(*socket));
+    socket->used = true;
+    socket->remote_ip = remote_ip;
+    socket->remote_port = remote_port;
+    socket->local_port = local_port;
+    socket->born_ms = k_port_uptime_ms();
+
+    return socket;
 }
 
 static struct k_socket *tcp_find(k_u32_t source, k_u16_t source_port, k_u16_t destination_port)
@@ -659,8 +755,22 @@ static struct k_socket *tcp_find(k_u32_t source, k_u16_t source_port, k_u16_t de
     return NULL;
 }
 
-static bool tcp_send_segment(struct k_socket *socket, k_u8_t flags, k_u32_t sequence,
-                             const k_u8_t *payload, k_size_t length)
+static struct k_server *tcp_server_find(k_u16_t port)
+{
+    k_size_t i;
+
+    for (i = 0; i < NET_TCP_SERVERS; i++) {
+        if (g_tcp_servers[i].used && g_tcp_servers[i].port == port) {
+            return &g_tcp_servers[i];
+        }
+    }
+
+    return NULL;
+}
+
+static bool tcp_send_raw(k_u16_t local_port, k_u32_t remote_ip, k_u16_t remote_port,
+                         k_u32_t sequence, k_u32_t acknowledgement, k_u16_t window, k_u8_t flags,
+                         const k_u8_t *payload, k_size_t length)
 {
     k_u8_t segment[NET_TCP_HDR + NET_MSS];
     k_size_t total = NET_TCP_HDR + length;
@@ -670,13 +780,13 @@ static bool tcp_send_segment(struct k_socket *socket, k_u8_t flags, k_u32_t sequ
         return false;
     }
 
-    net_put_be16(segment + 0, socket->local_port);
-    net_put_be16(segment + 2, socket->remote_port);
+    net_put_be16(segment + 0, local_port);
+    net_put_be16(segment + 2, remote_port);
     net_put_be32(segment + 4, sequence);
-    net_put_be32(segment + 8, socket->rcv_nxt);
+    net_put_be32(segment + 8, acknowledgement);
     segment[12] = (k_u8_t)((NET_TCP_HDR / 4u) << 4);
     segment[13] = flags;
-    net_put_be16(segment + 14, (k_u16_t)(NET_TCP_RX_SIZE - socket->rx_len));
+    net_put_be16(segment + 14, window);
     net_put_be16(segment + 16, 0u);
     net_put_be16(segment + 18, 0u);
 
@@ -684,19 +794,55 @@ static bool tcp_send_segment(struct k_socket *socket, k_u8_t flags, k_u32_t sequ
         memcpy(segment + NET_TCP_HDR, payload, length);
     }
 
-    sum = net_pseudo_sum(g_ip, socket->remote_ip, NET_IP_TCP, total);
+    sum = net_pseudo_sum(g_ip, remote_ip, NET_IP_TCP, total);
     sum = net_sum(sum, segment, total);
     net_put_be16(segment + 16, net_sum_finish(sum));
 
-    return net_send_ip(socket->remote_ip, NET_IP_TCP, segment, total);
+    return net_send_ip(remote_ip, NET_IP_TCP, segment, total);
+}
+
+static bool tcp_send_segment(struct k_socket *socket, k_u8_t flags, k_u32_t sequence,
+                             const k_u8_t *payload, k_size_t length)
+{
+    return tcp_send_raw(socket->local_port, socket->remote_ip, socket->remote_port, sequence,
+                        socket->rcv_nxt, (k_u16_t)(NET_TCP_RX_SIZE - socket->rx_len), flags,
+                        payload, length);
+}
+
+/*
+ * A reset for a port nobody listens on: the peer learns at once that the door
+ * is shut instead of retrying its SYN for a minute. The 20 bytes are built
+ * here and not on a session, because there is no session to build them from.
+ */
+static void tcp_send_reset(k_u32_t source, k_u16_t source_port, k_u16_t destination_port,
+                           k_u32_t sequence, k_u32_t acknowledgement)
+{
+    k_u8_t segment[NET_TCP_HDR];
+    k_u32_t sum;
+
+    net_put_be16(segment + 0, destination_port);
+    net_put_be16(segment + 2, source_port);
+    net_put_be32(segment + 4, sequence);
+    net_put_be32(segment + 8, acknowledgement);
+    segment[12] = (k_u8_t)((NET_TCP_HDR / 4u) << 4);
+    segment[13] = TCP_RST | TCP_ACK;
+    net_put_be16(segment + 14, 0u);
+    net_put_be16(segment + 16, 0u);
+    net_put_be16(segment + 18, 0u);
+
+    sum = net_pseudo_sum(g_ip, source, NET_IP_TCP, NET_TCP_HDR);
+    sum = net_sum(sum, segment, NET_TCP_HDR);
+    net_put_be16(segment + 16, net_sum_finish(sum));
+
+    (void)net_send_ip(source, NET_IP_TCP, segment, NET_TCP_HDR);
 }
 
 /*
  * One segment, and the wait for its acknowledgement. The segment is sent
  * again from the same sequence number every NET_RETRY_MS until the peer has
  * acknowledged every byte of it or the budget is over. This is the whole of
- * the reliability of the client: a lost segment costs a repeat and not a
- * session.
+ * the reliability of a session: a lost segment costs a repeat and not a
+ * session, and a peer that sends a duplicate costs one acknowledgement.
  */
 static bool tcp_send_and_wait(struct k_socket *socket, k_u8_t flags, k_u32_t sequence,
                               const k_u8_t *payload, k_size_t length, k_u32_t timeout_ms)
@@ -734,6 +880,41 @@ static bool tcp_send_and_wait(struct k_socket *socket, k_u8_t flags, k_u32_t seq
     return !socket->reset;
 }
 
+/*
+ * A SYN for a door: the session takes the port of the listener as its own
+ * and answers SYN|ACK from a number of its own. It is not a session of
+ * accept() until the peer confirms the handshake with the last ACK, which
+ * tcp_input() sees as the acknowledgement of our SYN.
+ */
+static void tcp_session_open(struct k_server *server, k_u32_t source, k_u16_t source_port,
+                             k_u16_t destination_port, k_u32_t sequence)
+{
+    struct k_socket *socket;
+
+    if (!net_lock()) {
+        return;
+    }
+
+    socket = tcp_socket_new(source, source_port, destination_port);
+
+    if (socket != NULL) {
+        socket->listener = server;
+        socket->snd_una = tcp_initial_sequence();
+        socket->snd_nxt = socket->snd_una + 1u;
+        socket->rcv_nxt = sequence + 1u;
+    }
+
+    net_unlock();
+
+    if (socket == NULL) {
+        /* A full table is a client that waits: the retransmitted SYN finds a
+         * session as soon as one of the four is closed. */
+        return;
+    }
+
+    (void)tcp_send_segment(socket, TCP_SYN | TCP_ACK, socket->snd_una, NULL, 0);
+}
+
 static void tcp_input(k_u32_t source, const k_u8_t *data, k_size_t length)
 {
     struct k_socket *socket;
@@ -762,14 +943,41 @@ static void tcp_input(k_u32_t source, const k_u8_t *data, k_size_t length)
 
     payload_length = length - header;
 
+    if (!net_lock()) {
+        return;
+    }
+
     socket = tcp_find(source, source_port, destination_port);
 
     if (socket == NULL) {
-        /* There is no listener on this machine: a segment for a port nobody
-         * opened is dropped. A reset would be polite; the port has no server
-         * and the contract says so. */
+        struct k_server *server = NULL;
+
+        if ((flags & TCP_RST) == 0u && (flags & TCP_SYN) != 0u && (flags & TCP_ACK) == 0u) {
+            server = tcp_server_find(destination_port);
+        }
+
+        net_unlock();
+
+        if (server != NULL) {
+            tcp_session_open(server, source, source_port, destination_port, sequence);
+            return;
+        }
+
+        if ((flags & TCP_RST) != 0u) {
+            /* A reset for a session this machine does not have is not
+             * answered with another: two of them would never stop. */
+            return;
+        }
+
+        /* No session and no door: the peer is told, and its connect() fails
+         * with a reset instead of a timeout. */
+        tcp_send_reset(source, source_port, destination_port, acknowledgement,
+                       sequence + (k_u32_t)payload_length + (((flags & TCP_SYN) != 0u) ? 1u : 0u) +
+                           (((flags & TCP_FIN) != 0u) ? 1u : 0u));
         return;
     }
+
+    net_unlock();
 
     if ((flags & TCP_RST) != 0u) {
         socket->reset = true;
@@ -777,6 +985,13 @@ static void tcp_input(k_u32_t source, const k_u8_t *data, k_size_t length)
     }
 
     if ((flags & TCP_SYN) != 0u) {
+        if (socket->listener != NULL && !socket->established) {
+            /* The SYN/ACK was lost and the client asks again: the same
+             * answer from the same number, which is a retransmission. */
+            (void)tcp_send_segment(socket, TCP_SYN | TCP_ACK, socket->snd_una, NULL, 0);
+            return;
+        }
+
         if ((flags & TCP_ACK) != 0u && acknowledgement == socket->snd_nxt && !socket->established) {
             socket->snd_una = acknowledgement;
             socket->rcv_nxt = sequence + 1u;
@@ -788,7 +1003,16 @@ static void tcp_input(k_u32_t source, const k_u8_t *data, k_size_t length)
     }
 
     if (!socket->established) {
-        return;
+        /* The client of a listener confirms the handshake with the ACK of our
+         * SYN|ACK; anything else on a session that is not up is not ours to
+         * read yet. */
+        if (socket->listener != NULL && (flags & TCP_ACK) != 0u &&
+            acknowledgement == socket->snd_nxt) {
+            socket->snd_una = acknowledgement;
+            socket->established = true;
+        } else {
+            return;
+        }
     }
 
     if ((flags & TCP_ACK) != 0u) {
@@ -900,9 +1124,12 @@ static void ip_input(const k_u8_t *frame, k_size_t length)
     }
 
     /* A fragment is not reassembled: the stack sends with DF and the frames
-     * it accepts are the ones a peer of one ethernet segment sends. */
+     * it accepts are the ones a peer of one ethernet segment sends. The
+     * packet is counted and dropped, so a peer that fragments sees silence
+     * and a person sees the number in `netinfo`. */
     if ((net_get_be16(packet + 6) & 0x3FFFu) != 0u) {
         g_ip_dropped++;
+        g_fragments_dropped++;
         return;
     }
 
@@ -969,23 +1196,24 @@ k_port_socket_t *k_port_net_connect(const char *host, k_u16_t port, k_u32_t time
         return NULL;
     }
 
-    socket = tcp_socket_new();
+    if (!net_lock()) {
+        return NULL;
+    }
+
+    socket = tcp_socket_new(address, port, net_next_port());
+
+    if (socket != NULL) {
+        sequence = tcp_initial_sequence();
+        socket->snd_una = sequence;
+        socket->snd_nxt = sequence + 1u;
+    }
+
+    net_unlock();
 
     if (socket == NULL) {
         kwarn("net: no free session");
         return NULL;
     }
-
-    socket->remote_ip = address;
-    socket->remote_port = port;
-    socket->local_port = net_next_port();
-
-    /* The sequence number of the first byte has no security meaning on this
-     * machine and no clock of its own to borrow: the uptime and a constant
-     * are enough to keep two sessions apart. */
-    sequence = (k_u32_t)k_port_uptime_us() ^ 0x5A5A0000u;
-    socket->snd_una = sequence;
-    socket->snd_nxt = sequence + 1u;
 
     if (!tcp_send_and_wait(socket, TCP_SYN, sequence, NULL, 0, timeout_ms) ||
         !socket->established) {
@@ -1111,27 +1339,134 @@ void k_port_net_close(k_port_socket_t *handle)
     socket->used = false;
 }
 
+/* --- the contract: a server of TCP ---------------------------------------- */
+
+/*
+ * A door: the table of the servers holds the ports of the machine, and the
+ * sessions that come to one wait in the same table of sessions as the client
+ * of the port. A port that is already ours, or the fifth door, is a NULL: the
+ * command that asked says which.
+ */
 k_port_server_t *k_port_net_listen(k_u16_t port)
 {
-    K_UNUSED(port);
+    struct k_server *server = NULL;
+    k_size_t i;
 
-    /* The port is a client: the HTTP server of K6 and the console of telnet
-     * need a session that waits for a segment, and the stack has no listener
-     * yet. The contract says NULL and the command that asked says why. */
-    return NULL;
+    if (port == 0u || !net_ready()) {
+        return NULL;
+    }
+
+    if (!net_lock()) {
+        return NULL;
+    }
+
+    if (tcp_server_find(port) != NULL) {
+        net_unlock();
+        return NULL;
+    }
+
+    for (i = 0; i < NET_TCP_SERVERS; i++) {
+        if (!g_tcp_servers[i].used) {
+            server = &g_tcp_servers[i];
+            break;
+        }
+    }
+
+    if (server != NULL) {
+        server->used = true;
+        server->port = port;
+    }
+
+    net_unlock();
+
+    if (server == NULL) {
+        return NULL;
+    }
+
+    kinfo("net: listening on port %u", (unsigned)port);
+
+    return server;
 }
 
-k_port_socket_t *k_port_net_accept(k_port_server_t *server, k_u32_t timeout_ms)
+/*
+ * A session of the door that confirmed its handshake and was not handed out
+ * yet. The wait is a poll of the card: the SYN comes to whoever looks, and
+ * the task that waits is the task that looks.
+ */
+k_port_socket_t *k_port_net_accept(k_port_server_t *handle, k_u32_t timeout_ms)
 {
-    K_UNUSED(server);
-    K_UNUSED(timeout_ms);
+    struct k_server *server = handle;
+    k_u64_t deadline;
 
-    return NULL;
+    if (server == NULL || !server->used) {
+        return NULL;
+    }
+
+    deadline = k_port_uptime_ms() + timeout_ms;
+
+    for (;;) {
+        struct k_socket *ready = NULL;
+        k_size_t i;
+
+        if (net_lock()) {
+            for (i = 0; i < NET_TCP_SOCKETS; i++) {
+                struct k_socket *socket = &g_tcp_sockets[i];
+
+                if (socket->used && socket->listener == server && socket->established &&
+                    !socket->accepted) {
+                    socket->accepted = true;
+                    ready = socket;
+                    break;
+                }
+            }
+
+            net_unlock();
+        }
+
+        if (ready != NULL) {
+            return ready;
+        }
+
+        if (k_port_uptime_ms() >= deadline) {
+            return NULL;
+        }
+
+        net_poll();
+
+        if (k_port_uptime_ms() < deadline) {
+            k_sched_sleep_ms(1);
+        }
+    }
 }
 
-void k_port_net_server_close(k_port_server_t *server)
+void k_port_net_server_close(k_port_server_t *handle)
 {
-    K_UNUSED(server);
+    struct k_server *server = handle;
+    k_size_t i;
+
+    if (server == NULL) {
+        return;
+    }
+
+    if (!net_lock()) {
+        server->used = false;
+        return;
+    }
+
+    /* The sessions accept() handed out belong to their task and stay open:
+     * the contract says so, and the page of the state answers its client
+     * while the door closes. */
+    for (i = 0; i < NET_TCP_SOCKETS; i++) {
+        struct k_socket *socket = &g_tcp_sockets[i];
+
+        if (socket->used && socket->listener == server && !socket->accepted) {
+            socket->used = false;
+        }
+    }
+
+    server->used = false;
+
+    net_unlock();
 }
 
 /* --- the contract: one exchange of UDP ------------------------------------ */
@@ -1260,157 +1595,98 @@ static bool net_parse_ip(const char *text, k_u32_t *address)
     return true;
 }
 
+/* --- the names ------------------------------------------------------------- */
+
 /*
- * A name over the resolver of the user-mode network: one query, one answer,
- * the first address of type A. The format is the one of every DNS packet
- * since 1987 and the parser skips what it does not need; compression is one
- * pointer and nothing more.
+ * One query over the UDP exchange of the port, read by the resolver of
+ * components/net. A name that the server does not answer and a packet that is
+ * not an answer of type A are the same "no" here, and the caller says so.
  */
-static bool dns_skip_name(const k_u8_t *packet, k_size_t length, k_size_t *offset)
+static bool dns_lookup(const char *name, struct dns_answer *record)
 {
-    while (*offset < length) {
-        k_u8_t size = packet[*offset];
-
-        if (size == 0u) {
-            (*offset)++;
-            return true;
-        }
-
-        if ((size & 0xC0u) == 0xC0u) {
-            *offset += 2u;
-            return *offset <= length;
-        }
-
-        *offset += 1u + size;
-    }
-
-    return false;
-}
-
-static bool dns_query(const char *name, k_u32_t *address)
-{
-    k_u8_t query[512];
-    k_u8_t answer[512];
-    k_size_t length = 12u;
-    k_size_t i;
-    k_size_t offset;
-    k_u16_t questions;
-    k_u16_t answers;
-    k_u16_t identifier;
+    k_u8_t query[DNS_PACKET_MAX];
+    k_u8_t answer[DNS_PACKET_MAX];
+    k_u16_t identifier = (k_u16_t)(k_port_uptime_us() & 0xFFFFu);
+    int length;
     int reply;
 
-    /* A name of more than 200 bytes does not fit the buffer with the rest of
-     * the packet, and no name of a network this size does. */
-    if (name == NULL || name[0] == '\0' || strlen(name) > 200u) {
+    length = dns_build_query(name, identifier, query, sizeof(query));
+
+    if (length < 0) {
         return false;
     }
 
-    identifier = (k_u16_t)(k_port_uptime_us() & 0xFFFFu);
+    g_dns_queries++;
 
-    memset(query, 0, sizeof(query));
-    net_put_be16(query + 0, identifier);
-    net_put_be16(query + 2, 0x0100u); /* a query, recursion wanted */
-    net_put_be16(query + 4, 1u);      /* one question */
+    reply = udp_exchange_address(g_dns, DNS_PORT, query, (k_size_t)length, answer, sizeof(answer),
+                                 NET_DNS_TIMEOUT_MS);
 
-    /* The name as labels: a length byte, then the characters, and a zero for
-     * the root. A trailing dot is the root label and not an empty one. */
-    {
-        const char *cursor = name;
-
-        while (*cursor != '\0') {
-            k_size_t label = length++;
-            k_size_t count = 0;
-
-            while (*cursor != '\0' && *cursor != '.') {
-                if (count >= 63u || length + 5u >= sizeof(query)) {
-                    return false;
-                }
-
-                query[length++] = (k_u8_t)*cursor++;
-                count++;
-            }
-
-            if (count == 0u) {
-                /* An empty label is a name this parser does not accept. */
-                return false;
-            }
-
-            query[label] = (k_u8_t)count;
-
-            if (*cursor == '.') {
-                cursor++;
-
-                if (*cursor == '\0') {
-                    break;
-                }
-            }
-        }
-    }
-
-    query[length++] = 0u;                  /* the root label */
-    net_put_be16(query + length, 1u);      /* type A */
-    net_put_be16(query + length + 2u, 1u); /* class IN */
-    length += 4u;
-
-    reply = udp_exchange_address(g_dns, 53u, query, length, answer, sizeof(answer),
-                                 NET_WAIT_DEFAULT_MS);
-
-    if (reply < 12) {
+    if (reply < 0) {
         return false;
     }
 
-    if (net_get_be16(answer) != identifier || (answer[3] & 0x0Fu) != 0u) {
-        return false;
-    }
-
-    questions = net_get_be16(answer + 4);
-    answers = net_get_be16(answer + 6);
-    offset = 12u;
-
-    for (i = 0; i < questions; i++) {
-        if (!dns_skip_name(answer, (k_size_t)reply, &offset) || offset + 4u > (k_size_t)reply) {
-            return false;
-        }
-
-        offset += 4u;
-    }
-
-    for (i = 0; i < answers; i++) {
-        k_u16_t type;
-        k_u16_t class_code;
-        k_u16_t data_length;
-
-        if (!dns_skip_name(answer, (k_size_t)reply, &offset) || offset + 10u > (k_size_t)reply) {
-            return false;
-        }
-
-        type = net_get_be16(answer + offset);
-        class_code = net_get_be16(answer + offset + 2u);
-        data_length = net_get_be16(answer + offset + 8u);
-        offset += 10u;
-
-        if (offset + data_length > (k_size_t)reply) {
-            return false;
-        }
-
-        if (type == 1u && class_code == 1u && data_length == 4u) {
-            *address = net_get_be32(answer + offset);
-            return true;
-        }
-
-        offset += data_length;
-    }
-
-    return false;
+    return dns_parse_answer(answer, (k_size_t)reply, identifier, record) == 0;
 }
 
-static bool net_resolve(const char *host, k_u32_t *address)
+/*
+ * A name is an address, a name in the cache, or one query. The cache is the
+ * one of components/net and its time is the uptime of the machine; it is read
+ * and written under the lock of the tables, because the shell and the page of
+ * the state both resolve names. `cached` tells the caller which of the three
+ * answered, and the command of the resolver prints it.
+ */
+static bool net_resolve_cached(const char *host, k_u32_t *address, bool *cached)
 {
+    struct dns_answer record;
+    k_u64_t now;
+
+    if (cached != NULL) {
+        *cached = false;
+    }
+
     if (net_parse_ip(host, address)) {
         return true;
     }
 
-    return dns_query(host, address);
+    if (host == NULL || host[0] == '\0') {
+        return false;
+    }
+
+    now = k_port_uptime_ms();
+
+    if (net_lock()) {
+        bool hit = dns_cache_lookup(host, now, address, NULL);
+
+        net_unlock();
+
+        if (hit) {
+            g_dns_hits++;
+
+            if (cached != NULL) {
+                *cached = true;
+            }
+
+            return true;
+        }
+    }
+
+    if (!dns_lookup(host, &record)) {
+        return false;
+    }
+
+    *address = record.address;
+
+    if (net_lock()) {
+        (void)dns_cache_store(host, record.address, record.ttl_s, k_port_uptime_ms());
+        net_unlock();
+    }
+
+    return true;
+}
+
+static bool net_resolve(const char *host, k_u32_t *address)
+{
+    return net_resolve_cached(host, address, NULL);
 }
 
 /* --- the commands of the port ---------------------------------------------- */
@@ -1455,6 +1731,10 @@ static int cmd_netinfo(int argc, char **argv)
                   (unsigned)port_x86_64_nic_rx_frames(), (unsigned)port_x86_64_nic_tx_frames(),
                   (unsigned)(port_x86_64_nic_rx_dropped() + g_ip_dropped), (unsigned)g_ip_rx,
                   (unsigned)g_ip_tx);
+
+    kshell_printf("  %u name(s) asked, %u from the cache, %u kept; %u fragment(s) dropped\n",
+                  (unsigned)g_dns_queries, (unsigned)g_dns_hits, (unsigned)dns_cache_count(),
+                  (unsigned)g_fragments_dropped);
 
     return KSHELL_OK;
 }
@@ -1579,6 +1859,103 @@ static int cmd_netudp(int argc, char **argv)
     return KSHELL_OK;
 }
 
+/*
+ * The command of the resolver: `dns <name>` asks for one address and says
+ * where it came from, `dns` prints the names the cache keeps and their rest.
+ * The list is a copy of the slots under the lock and not a pointer into them:
+ * another task may resolve a name while this one prints.
+ */
+static int cmd_dns(int argc, char **argv)
+{
+    k_u32_t address;
+    k_u32_t left = 0;
+
+    if (argc > 2) {
+        kshell_printf("usage: dns [name]\n");
+        return KSHELL_USAGE;
+    }
+
+    if (!net_ready()) {
+        kshell_printf("dns: there is no network device\n");
+        return KSHELL_ERROR;
+    }
+
+    if (argc == 1) {
+        k_u64_t now = k_port_uptime_ms();
+        k_size_t shown = 0;
+        k_size_t i;
+
+        for (i = 0; i < DNS_CACHE_ENTRIES; i++) {
+            char name[DNS_NAME_MAX];
+            const char *entry;
+
+            if (!net_lock()) {
+                return KSHELL_ERROR;
+            }
+
+            entry = dns_cache_name(i, now, &address, &left);
+
+            if (entry != NULL) {
+                memcpy(name, entry, strlen(entry) + 1u);
+            }
+
+            net_unlock();
+
+            if (entry == NULL) {
+                continue;
+            }
+
+            kshell_printf("dns: %s is ", name);
+            print_ip(address);
+            kshell_printf(" (%u s left)\n", (unsigned)left);
+            shown++;
+        }
+
+        if (shown == 0) {
+            kshell_printf("dns: the cache is empty\n");
+        }
+
+        return KSHELL_OK;
+    }
+
+    if (net_parse_ip(argv[1], &address)) {
+        kshell_printf("dns: %s is an address, not a name\n", argv[1]);
+        return KSHELL_ERROR;
+    }
+
+    {
+        bool cached = false;
+
+        if (!net_resolve_cached(argv[1], &address, &cached)) {
+            kshell_printf("dns: %s: no answer from the resolver\n", argv[1]);
+            return KSHELL_ERROR;
+        }
+
+        if (cached) {
+            (void)dns_cache_lookup(argv[1], k_port_uptime_ms(), NULL, &left);
+
+            kshell_printf("dns: %s is ", argv[1]);
+            print_ip(address);
+            kshell_printf(" (from the cache, %u s left)\n", (unsigned)left);
+
+            return KSHELL_OK;
+        }
+    }
+
+    (void)dns_cache_lookup(argv[1], k_port_uptime_ms(), NULL, &left);
+
+    kshell_printf("dns: %s is ", argv[1]);
+    print_ip(address);
+
+    if (left > 0) {
+        kshell_printf(" (ttl %u s)\n", (unsigned)left);
+    } else {
+        kshell_printf("\n");
+    }
+
+    return KSHELL_OK;
+}
+
 int port_x86_64_net_register(void)
 {
     int rc = 0;
@@ -1587,6 +1964,7 @@ int port_x86_64_net_register(void)
                           cmd_netinfo);
     rc |= kshell_register("ping", "test an address: ping <address>", cmd_ping);
     rc |= kshell_register("netudp", "one UDP exchange: netudp <address> <port> <text>", cmd_netudp);
+    rc |= kshell_register("dns", "ask the resolver: dns [name]", cmd_dns);
 
     return rc;
 }

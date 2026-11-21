@@ -42,10 +42,10 @@ option(MICRO_OS_WIFI "the WiFi station" OFF)
 # The network of the machine (K6): the port has its own IPv4 stack and a
 # virtio-net driver (src/net.c, src/virtio_net.c), which are always part of
 # the image and cost nothing when QEMU was given no card. This switch adds
-# the commands of components/net - `http` and `ntp` - on top of that stack.
-# It is off by default: the smoke test of the machine keeps the same command
-# list, and `make x86-net-smoke` builds a second image with it on.
-option(MICRO_OS_X86_NET "the http and ntp commands of components/net" OFF)
+# the commands of components/net - `http`, `httpd` and `ntp` - on top of that
+# stack. It is off by default: the smoke test of the machine keeps the same
+# command list, and `make x86-net-smoke` builds a second image with it on.
+option(MICRO_OS_X86_NET "the http, httpd and ntp commands of components/net" OFF)
 
 set(NET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/net")
 
@@ -124,17 +124,21 @@ if(MICRO_OS_FS_FAT32)
     )
 endif()
 
-# The services over the sockets: the HTTP client and the clock of NTP. They
-# are portable and speak kernel/net.h, so the same sources that run on the
-# board run here over the stack of the port. The component is off by default
-# (MICRO_OS_X86_NET); the sources are named here and not by the CMakeLists of
-# the component, which is written for the tree of ESP-IDF.
-set(NET_SOURCES)
+# The services over the sockets: the HTTP client, the page of the state and
+# the clock of NTP. They are portable and speak kernel/net.h, so the same
+# sources that run on the board run here over the stack of the port. The
+# clients are off by default (MICRO_OS_X86_NET); the sources are named here
+# and not by the CMakeLists of the component, which is written for the tree of
+# ESP-IDF. src/dns.c is the exception: the stack of the port asks it for every
+# name, in every image, and it is the cache the contract of K6 asks for.
+set(NET_SOURCES "${NET_DIR}/src/dns.c")
+
 if(MICRO_OS_X86_NET)
-    set(NET_SOURCES
+    list(APPEND NET_SOURCES
         "${NET_DIR}/src/net.c"
         "${NET_DIR}/src/http.c"
         "${NET_DIR}/src/ntp.c"
+        "${NET_DIR}/src/net_http_server.c"
     )
 endif()
 
@@ -265,7 +269,7 @@ target_compile_definitions(microos64 PRIVATE
     KERNEL_EXEC=$<BOOL:${KERNEL_EXEC}>
     MICRO_OS_NET=$<BOOL:${MICRO_OS_X86_NET}>
     MICRO_OS_NET_HTTP=$<BOOL:${MICRO_OS_X86_NET}>
-    MICRO_OS_NET_HTTP_SERVER=0
+    MICRO_OS_NET_HTTP_SERVER=$<BOOL:${MICRO_OS_X86_NET}>
     MICRO_OS_NET_NTP=$<BOOL:${MICRO_OS_X86_NET}>
     MICRO_OS_NET_MQTT=0
     MICRO_OS_TELNET=$<BOOL:${MICRO_OS_TELNET}>

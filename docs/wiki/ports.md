@@ -22,7 +22,7 @@ parentheses is the reason.
 | `execve` | `ENOSYS` (no executable flash) | ring 3, own page tables | `ENOSYS` (a harness) | `ENOSYS` |
 | `fork()` | shared memory | copy on write | shared memory | shared memory |
 | disk | the internal flash | ATA PIO, `ata0` | - | - |
-| network | WiFi, lwIP, telnet, HTTP, MQTT | - | - | - |
+| network | WiFi, lwIP, telnet, HTTP, MQTT | virtio-net, HTTP, httpd, DNS, MQTT is off | - | - |
 | panel | ST7789v2 and a copy of the console | VGA text | a renderer into a file | - |
 | MMU | - (the chip has none) | yes, used for programs | - | - |
 | build | `make idf-build` | `make x86-build` | `make build` | by the host build |
@@ -77,12 +77,15 @@ What works: the VGA text console and COM1 out of one `k_port_write()`, the
 PS/2 keyboard, the PIT, the context switch, the scheduler, paging and ring 3,
 `execve` with `MOX1` images, `fork()` with copy on write, MicroFS on the first
 partition of an ATA disk (or on 512 KB of RAM without one), the modes and the
-owners. It is the machine of [`programs.md`](programs.md) and the proof that
-the kernel is portable.
+owners, and the network: a virtio-net card, ARP, ICMP, UDP, a client and a
+server of TCP and a resolver with a cache (`make x86-net-smoke`). It is the
+machine of [`programs.md`](programs.md) and the proof that the kernel is
+portable.
 
-What does not: the network (`k_port_net_*` says no), the key-value store (no
-`/etc` to persist), a second disk, DMA, the kernel in a higher half. The
-details are in [`docs/ports/x86_64/README.md`](../ports/x86_64/README.md).
+What does not: the key-value store (no `/etc` to persist), a second disk, DMA,
+the kernel in a higher half, and the parts of the network that wait for a real
+link: DHCP, IPv6 and a congestion window. The details are in
+[`docs/ports/x86_64/README.md`](../ports/x86_64/README.md).
 
 ## host: the tests and the simulator
 

@@ -231,14 +231,20 @@ x86-run-disk-serial: x86-build $(X86_DISK_IMAGE)
 x86-disk-smoke: x86-build
 	python3 tools/x86_disk_smoke.py
 
-# The network of the port (K6): a build of its own, with the HTTP client and
-# the clock of NTP of components/net (-DMICRO_OS_X86_NET=ON) and a QEMU
-# machine on its user-mode network. Not a part of `make ci`: the network of
-# the test is the loopback of the host, and a build farm is not a place to
-# open a port. The default image keeps the flag off, so `make x86-smoke` is
-# the same machine it always was.
+# The network of the port (K6): a build of its own, with the HTTP client, the
+# page of the state and the clock of NTP of components/net
+# (-DMICRO_OS_X86_NET=ON) and a QEMU machine on its user-mode network. Not a
+# part of `make ci`: the network of the test is the loopback of the host, and
+# a build farm is not a place to open a port. The default image keeps the flag
+# off, so `make x86-smoke` is the same machine it always was.
 X86_NET_BUILD := build-x86-net
-X86_NET_DEVICE := -netdev user,id=n0 -device virtio-net-pci,netdev=n0,disable-modern=on
+
+# The machine of `make x86-net-run` forwards 8080 of the loopback to 8080 of
+# the guest, so `httpd` on the console and `curl http://127.0.0.1:8080/` on
+# the host are the same page. The smoke test makes its own forward, on a port
+# it found free.
+X86_NET_RUN_DEVICE := -netdev user,id=n0,hostfwd=tcp:127.0.0.1:8080-:8080 \
+	-device virtio-net-pci,netdev=n0,disable-modern=on
 
 x86-net-build:
 	cmake -B $(X86_NET_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
@@ -248,7 +254,7 @@ x86-net-build:
 x86-net-run: x86-net-build
 	qemu-system-x86_64 -kernel $(X86_NET_BUILD)/loader32.elf \
 		-initrd $(X86_NET_BUILD)/microos64.bin -m 256 -nographic -no-reboot \
-		$(X86_NET_DEVICE)
+		$(X86_NET_RUN_DEVICE)
 
 x86-net-smoke: x86-net-build
 	X86_BUILD=$(X86_NET_BUILD) python3 tools/x86_net_smoke.py

@@ -14,7 +14,7 @@ the machine where a program can really be loaded and run (the window of
 | clock | the PIT at 1 kHz; critical sections save and restore the flags |
 | tasks | `switch.S` (callee-saved registers and the stack) and a round robin over the ready queue |
 | store | `ata0`: a raw image on the primary IDE channel, PIO, MicroFS on its first partition, mounted at `/` (ADR 0008); `ram0`, 512 KB of the memory of the machine, when there is no disk |
-| network | `virtio0`: virtio-net-pci in its legacy I/O interface, polled; ARP, IPv4, ICMP, UDP and a client of TCP (one segment in flight, a timeout retransmission); 10.0.2.15/24 on QEMU user-net, gateway 10.0.2.2, resolver 10.0.2.3, no DHCP |
+| network | `virtio0`: virtio-net-pci in its legacy I/O interface, polled; ARP, IPv4, ICMP, UDP, a client of TCP (one segment in flight, a timeout retransmission) and a listener with SYN/ACK and `accept`; the resolver of QEMU user-net with a cache of eight names and their time to live; 10.0.2.15/24 on QEMU user-net, gateway 10.0.2.2, resolver 10.0.2.3, no DHCP |
 | programs | `k_port_exec_supported()` is true; the window is 16 MiB at 32 MiB (`0x02000000`-`0x03000000`) over a physical arena at 64 MiB; a program is a file in `/bin` (the MOX1 format of `kernel/exec.h`), runs in ring 3 with page tables of its own and calls the kernel with `int $0x80` (ADR 0007) |
 | build | `make x86-build` (needs `cmake`, `ninja`, `xorriso` is not needed) |
 | check | `make x86-smoke` (serial), `make x86-vga-smoke` (screen and keyboard), `make x86-disk-smoke` (two boots on a disk), `make x86-net-smoke` (the network) - all need `qemu-system-x86` |
@@ -31,7 +31,7 @@ make x86-net-run      # the same machine with a virtio-net card, in a terminal
 make x86-smoke        # boot and check the lines of the banner and the shell
 make x86-vga-smoke    # check the screen and the keyboard without a display
 make x86-disk-smoke   # two boots on one image: a file written in the first is read in the second
-make x86-net-smoke    # boot with QEMU user-net and check ping, UDP and HTTP
+make x86-net-smoke    # boot with QEMU user-net and check ping, UDP, HTTP, the page of the state and DNS
 ```
 
 `make x86-run` opens the window of QEMU with `-display gtk`. The display
@@ -175,9 +175,15 @@ answer is reported and the machine goes on with `ram0`, so `make x86-run` and
 The machine gets a card from QEMU and a stack from the port:
 
 ```bash
-make x86-net-run     # -netdev user,id=n0 -device virtio-net-pci,netdev=n0,disable-modern=on
+make x86-net-run     # the card, and 8080 of the loopback forwarded to 8080 of the guest
 make x86-net-smoke   # the same machine, driven by tools/x86_net_smoke.py
 ```
+
+`make x86-net-run` forwards the port 8080 of the loopback to the same port of
+the guest, so a person can try the page of the state the way the smoke test
+does: `httpd 8080` on the console, then `curl http://127.0.0.1:8080/` on the
+host. The smoke test makes its own forward, on a port it found free, so a run
+of the test and a run of the machine do not fight over 8080.
 
 The driver is `src/virtio_net.c` and the protocols are `src/net.c`. The card
 is virtio-net and not e1000, and the reason is the address map of this port:
@@ -201,10 +207,29 @@ bytes) is skipped.
 
 The stack is the smallest one that makes `kernel/port/net.h` true: ARP with a
 cache of eight entries, IPv4 with checksums, ICMP echo (an answer to a ping of
-the guest, and the request of `ping`), UDP with one exchange at a time, and a
+the guest, and the request of `ping`), UDP with one exchange at a time, a
 client of TCP with a 4 KiB receive window, one segment in flight and a fixed
-400 ms retransmission. A name that is not a dotted quad goes to the resolver
-of QEMU user-net (10.0.2.3) as one UDP query; the answer is not cached.
+400 ms retransmission, and the server half of the contract: a table of two
+doors, a SYN that is answered with SYN/ACK from a number of its own, an ACK
+that completes the handshake, and a session that `accept` hands to the caller.
+A segment for a port nobody listens on is answered with a reset, so a client
+of another machine fails at once instead of waiting for its own timeout.
+
+A name that is not a dotted quad goes to the resolver of QEMU user-net
+(10.0.2.3) as one query with a timeout of three seconds, and the answer is
+read by the portable resolver of `components/net` (`src/dns.c`, public as
+`net/dns.h`) and kept for its time to live - at most a day - in a cache of
+eight names. The names are compared without case, the second command for a
+host costs no packet, and `netinfo` counts the queries and the hits. The
+parser of the port is the one the host tests exercise byte by byte, so a
+record of type A, a CNAME on the way and a truncated packet are the same
+answers on the machine and in `make test`.
+
+The tables of the sessions and of the doors are behind one mutex of the
+kernel, because the shell and the task of the page of the state are two tasks
+on one card; the mutex is held for a look and a change and never across a
+wait. A frame is still dispatched by its four addresses, and a task that
+polls while the other waits is a task that serves both.
 
 The configuration is QEMU user-net and there is no DHCP: the guest is
 10.0.2.15/24, the host answers as 10.0.2.2 for everything outside the subnet
@@ -217,11 +242,13 @@ bytes, so the rest is cut).
 
 | command | what it does |
 |---|---|
-| `netinfo` | the device, the MAC, the link, the address and the counters of the driver and of the stack |
+| `netinfo` | the device, the MAC, the link, the address, the counters of the driver and of the stack, and the resolver's queries and hits |
 | `ping <address>` | one ICMP echo and the round trip |
 | `netudp <address> <port> <text>` | one UDP request and one answer, printed |
+| `dns [name]` | resolve a name (and say whether the cache answered) or list the names in the cache |
 | `http get <url>` | the HTTP client of `components/net` (with `-DMICRO_OS_X86_NET=ON`) |
 | `ntp [server]` | the clock from an NTP server (with `-DMICRO_OS_X86_NET=ON`) |
+| `httpd [port\|off]` | the page of the state on the sockets of the port (with `-DMICRO_OS_X86_NET=ON`) |
 
 `make x86-net-build` is a second image (`build-x86-net`) with the components of
 the network linked in; the default image of `make x86-smoke` keeps them out, so
@@ -231,17 +258,26 @@ given no card for finds nothing on the PCI bus and keeps the "no" answers of
 the contract.
 
 `make x86-net-smoke` starts an echo server of UDP and an HTTP server on the
-loopback of the host, boots the machine with the card, and checks four
-protocols in one transcript: the device and its MAC, `ping 10.0.2.2` (ARP and
-ICMP), a UDP exchange with the echo server, and `http get` - the handshake,
-the sequence numbers, the request, the answer and the body - then that the
-counters moved. It is not part of `make ci`: the user-mode network and a port
-on the loopback are tools of a person.
+loopback of the host, boots the machine with the card, and checks the protocols
+in one transcript: the device and its MAC, `ping 10.0.2.2` (ARP and ICMP), a
+UDP exchange with the echo server, and `http get` - the handshake, the sequence
+numbers, the request, the answer and the body. It then opens the page of the
+state in the guest (`httpd 8080`), reaches it from the host through a port
+QEMU forwards to the guest (`hostfwd=tcp:127.0.0.1:<port>-:8080`) and reads
+`/` and `/health` - the listener, the SYN/ACK, the session of `accept`, the
+answer and the close, with a machine that is not the one that asked. The last
+part is the resolver: `dns example.com` twice, the first answer from the
+network and the second from the cache, and `netinfo` says one query and one
+hit. A host with no resolver of its own skips the DNS checks and the rest of
+the run is unchanged. The test is not part of `make ci`: the user-mode network
+and a port on the loopback are tools of a person.
 
-What the network does not do: no DHCP, no IPv6, no reassembly of fragments, no
-server (`listen`/`accept` answer `NULL`), one segment in flight and no
-congestion window, no DNS cache. The client is enough for the commands of K6,
-and the server waits for the page of the state to move to this port.
+What the network does not do: no DHCP, no IPv6, no reassembly of fragments (a
+fragmented packet is counted and dropped, which is what `netinfo` reports), one
+segment in flight and no congestion window. A duplicate segment is answered
+with an acknowledgement and retransmitted data is not reassembled; the fixed
+retransmission is the whole of the reliability. The driver polls, because the
+PCI line needs the I/O APIC that K8 brings.
 
 ## What works
 
@@ -267,11 +303,13 @@ and the server waits for the page of the state to move to this port.
   and the volume formatted at the first boot; what is written to it survives
   a reset, which `make x86-disk-smoke` checks (ADR 0008);
 * a network: a virtio-net card on the PCI bus, its MAC and link read from the
-  config space, ARP, IPv4, ICMP, UDP and a client of TCP under
-  `kernel/port/net.h`; `netinfo`, `ping` and `netudp` from the port, and
-  `http get`/`ntp` from `components/net` with `-DMICRO_OS_X86_NET=ON`.
-  `make x86-net-smoke` checks the echo of the gateway, a UDP exchange with a
-  server of the host and an HTTP GET over the user-mode network of QEMU;
+  config space, ARP, IPv4, ICMP, UDP, a client of TCP and a server of TCP under
+  `kernel/port/net.h`; `netinfo`, `ping`, `netudp` and `dns` from the port,
+  and `http get`, `httpd` and `ntp` from `components/net` with
+  `-DMICRO_OS_X86_NET=ON`. `make x86-net-smoke` checks the echo of the gateway,
+  a UDP exchange with a server of the host, an HTTP GET over the user-mode
+  network of QEMU, the page of the state served by the guest to a client of the
+  host through `hostfwd`, and a name that is asked once and answered twice;
 * a second filesystem: `-DMICRO_OS_FS_FAT32=ON` links the FAT reader and writer
   reader and its `vfs_mount_type()` (ADR 0009). The option is off by default,
   so the smoke tests of the machine keep one MicroFS volume; a machine that
@@ -331,10 +369,11 @@ and the server waits for the page of the state to move to this port.
 * there is no SMAP: the edge checks the page tables of the program and then
   reads the same pages in ring 0, so the hardware half of the rule waits for
   the higher half and the flags of the processor;
-* the network is a client: no `listen`/`accept` (the page of the state of K6
-  does not run here), no DHCP, no IPv6, no reassembly of fragments and no DNS
-  cache. The fixed retransmission is the whole of its idea of congestion, and
-  the driver polls because the PCI line needs the I/O APIC that K8 brings.
+* the network is small on purpose: no DHCP, no IPv6, no reassembly of
+  fragments, no congestion window, one segment in flight, and the driver polls
+  because the PCI line needs the I/O APIC that K8 brings. The server is one
+  session at a time per door (two doors, four sessions), which is what a page
+  of the state and a shell of telnet need.
 
 ## Why it exists
 
