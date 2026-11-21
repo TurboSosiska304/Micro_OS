@@ -46,24 +46,18 @@ knows it does not do yet in [`docs/debts.md`](../debts.md). The ABI is written
 down in [`docs/syscall-abi.md`](../syscall-abi.md); the wiki page is a guide to
 it, not a second copy.
 
-## Serving the wiki as a site
+## The site of the wiki
 
-`mkdocs.yml` in the root of the repository is a draft of a site: it is not a
-part of the build and `make ci` does not need it. The pages are plain Markdown
-and GitHub renders them as they are. To serve them locally:
+The pages of this directory are plain Markdown and GitHub renders them as they
+are. The **site** - the theme, `mkdocs.yml`, the builder of the versions and
+the workflow that publishes them - lives on the `wiki` branch, which is a leaf
+of the history: it merges `mainline` for the pages and the releases from their
+tags, and it is never merged back into `mainline`, a release candidate or a
+feature branch. This tree carries the pages and the link check that
+`make integrity` runs, and nothing else of the site.
 
-```bash
-python3 -m pip install --user mkdocs mkdocs-material
-mkdocs serve                  # http://127.0.0.1:8000
-mkdocs build                  # writes site/, which is generated
-```
-
-`docs_dir` is `docs/wiki`, and MkDocs reads this file as the home page of the
-site. The theme is `material`; if `mkdocs-material` is not installed, replace
-`theme: material` with `theme: readthedocs` in `mkdocs.yml` and plain `mkdocs`
-serves the pages. The wiki links into the rest of `docs/` on purpose, so a
-build may warn about targets that live outside the site; the links themselves
-are checked against the repository by the script below.
+A branch of the kernel mentions the site with a link or a line of Markdown, as
+this paragraph does; it does not carry its code.
 
 ## Checking the links
 
