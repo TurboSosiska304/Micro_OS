@@ -51,21 +51,39 @@ and length is enough for 1.0).
 The layout of the flash is revisited with the safe update of 1.0 (A/B slots);
 this ADR fixes the principle, not the final table.
 
-### 3. The program is built for Xtensa and entered with `call0`
+### 3. The program is built for Xtensa and entered windowed
 
 The same C and the same surface of the library, built with the Xtensa GCC of
-ESP-IDF, `-mabi=call0` (no register windows, so the entry does not depend on
-the window state of the caller), a linker script of the port and the same
-`_start`:
+ESP-IDF with the **windowed ABI** of the machine (the default, the one of
+ESP-IDF itself), a linker script of the port and the same `_start`:
 
 * text stays in the mapped flash and runs there;
 * data is copied to internal RAM (or PSRAM) and bss is cleared by the loader;
 * the stack is 8 KiB of the memory of the program;
-* a system call is the `syscall` instruction: the handler of the port takes the
-  number and the arguments with the same convention as `int $0x80` and calls
-  `ksys_call`. The numbers of `kernel/ksys.h` are the same on both machines;
+* a system call is a **trampoline of the port**, not an instruction: the loader
+  passes the program a pointer to a function with the convention of
+  `ksys_call(number, a0 ... a5)`, the library of the program keeps it and every
+  wrapper calls it. The numbers of `kernel/ksys.h` are the same on both
+  machines;
+* the entry receives the pointer of the door, `argc`, `argv` and `envp` as its
+  four arguments;
 * `exit` ends the task of the program and the `execve` of the shell answers
   with the status.
+
+`call0` (the ABI without register windows) was measured and is not chosen: a
+`call0` image can call a kernel function, but a deep kernel call made through
+it (a handler of a console line, for one) breaks the window bookkeeping and
+panics on the return. The windowed ABI is what the rest of the machine uses and
+what a C compiler of this port expects.
+
+### 3a. The `syscall` instruction is not the door
+
+The vector of ESP-IDF takes `EXCCAUSE_SYSCALL` before the table of exception
+handlers of the port (`components/xtensa/xtensa_vectors.S`), so a program that
+executes `syscall` skips the instruction: the spike measured `-1` and the
+number never arrived. Taking the vector over is a change of the substrate, not
+of this format; the trampoline of the pointer is the door. A trap-based door
+can be a later decision with its own price.
 
 ### 4. There is no protection, and that is the crutch
 
@@ -104,6 +122,25 @@ From `1.0.0` the ESP32 port:
 A feature that is cheap is one an evening of work buys; one that is not is a
 project of its own. The boundary is decided per feature and recorded in the
 port roadmap, not promised in advance.
+
+## What the spike measured
+
+A `feature/esp32-exec-spike` branch (not merged) ran code in the flash of the
+board:
+
+* 256 bytes at `+0x1E0000` of `factory`, erased, written, mapped as
+  instructions at `0x40170000` and called - it returned 42, both as a windowed
+  function and as a `call0` entry;
+* the payload called a kernel function through a pointer, printed a line with
+  `klog` and returned; the windowed form worked, the `call0` form panicked
+  after the callback returned (see 3);
+* the `syscall` instruction came back as `-1` (see 3a);
+* the cache did not serve a stale byte: after the mapping, a `memcmp` through
+  the instruction mapping matched the written bytes, and the loader should keep
+  that check;
+* IDF refuses to erase or write the running application partition
+  (`CHECK_WRITE_ADDRESS` aborts), which is one more reason the programs live in
+  a partition of their own rather than in the tail of `factory`.
 
 ## Consequences
 

@@ -50,8 +50,12 @@ The pins, the chips and the quirks of the board are in
       `mkprog --arch`; an image of another machine is `ENOEXEC`
 * [ ] A `progs` partition of 256 KiB, mapped as instructions with
       `esp_partition_mmap`; a `.mox` at a 64 KiB boundary
-* [ ] A build of a program for Xtensa: `-mabi=call0`, its linker script, the
-      same `_start` and library, `syscall` as the door to `ksys_call`
+* [x] The spike of the door: code in the flash, mapped as instructions and
+      called, talks to a kernel function through a pointer; `call0` and the
+      `syscall` instruction are rejected (ADR 0018)
+* [ ] A build of a program for Xtensa with the windowed ABI, its linker
+      script, the same `_start` and library, and the trampoline of the port as
+      the door to `ksys_call`
 * [ ] `k_port_exec_supported()` is true, `execve` runs the image, and
       `tools/device-test.sh` runs `/bin/hello` on the board
 * [ ] The price in the docs: no MMU, no address space, a bad pointer can take
