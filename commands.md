@@ -44,11 +44,13 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make test` | build and run the unit tests through `ctest` |
 | `make test-asan` | the same tests with the address and UB sanitizers, in `build-asan/` |
 | `make sim` | build and run the kernel simulator `build-host/ports/port_host/microos_sim` |
-| `make smoke` | boot the simulator and check the shell and the subsystems (needs `make build` first) |
+| `make smoke` | boot the simulator and check the shell, the filesystem and the network (needs `make build` first) |
+| `make coverage` | the host build with `--coverage`, the tests, the simulator and the gcov report of `components/kernel` (70% of lines) |
+| `make reproducible` | build the disk image twice and compare the bytes (`SOURCE_DATE_EPOCH`) |
 | `make integrity` | the integrity check: bundle, image headers, partition table, git, sources, formatting |
 | `make format` | reformat the C sources with `clang-format` |
-| `make clean` | remove `build-host/` and `build-asan/` (the device `build/` stays) |
-| `make ci` | `build`, `test`, `test-asan`, `test-tsan`, `smoke`, `x86-smoke` when QEMU is there, `integrity` — run it before pushing |
+| `make clean` | remove `build-host/`, `build-asan/`, `build-coverage/` (the device `build/` stays) |
+| `make ci` | `build`, `test`, `test-asan`, `test-tsan`, `smoke`, `coverage`, `x86-smoke` when QEMU is there, `reproducible`, `integrity` — run it before pushing |
 
 The same build by hand:
 
@@ -268,6 +270,9 @@ ntp time.google.com           # another server
 | `IDF_BUILD` | `build` | the directory of the device build |
 | `BUILD_DIR` | `build-host` | the directory of the host build |
 | `ASAN_DIR` | `build-asan` | the directory of the sanitizer build |
+| `COVERAGE_DIR` | `build-coverage` | the directory of the coverage build |
+| `COVERAGE_THRESHOLD` | `70` | the least percentage of kernel lines the report accepts |
+| `SOURCE_DATE_EPOCH` | `0` | the moment of the records and the build id of a reproducible build |
 | `CONSOLE_SECONDS` | `30` | how long `device-test.sh` reads the console |
 | `IDF_PORT` | auto | the serial port for `make idf-flash`/`idf-monitor` |
 

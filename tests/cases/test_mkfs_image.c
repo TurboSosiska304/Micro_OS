@@ -27,8 +27,25 @@
 
 #define TEST_PROGRAM "MKFS" /* four bytes, the shape of a format that is not run here */
 #define TEST_SETTING "hello\n"
+#define TEST_EPOCH 1700000000ull
 
 static k_u8_t g_mbr[TEST_SECTOR_BYTES];
+
+/* The objects of the small image: the same list the port's tool writes, with
+ * four bytes in the place of a program. */
+static const struct mkfs_mfs_entry g_entries[] = {
+    {.path = "/bin", .directory = true, .mode = MKFS_MFS_MODE_DIR},
+    {.path = "/bin/hello",
+     .data = (const k_u8_t *)TEST_PROGRAM,
+     .size = strlen(TEST_PROGRAM),
+     .mode = MKFS_MFS_MODE_PROGRAM},
+    {.path = "/etc", .directory = true, .mode = MKFS_MFS_MODE_DIR},
+    {.path = "/etc/init.d", .directory = true, .mode = MKFS_MFS_MODE_DIR},
+    {.path = "/etc/setting",
+     .data = (const k_u8_t *)TEST_SETTING,
+     .size = strlen(TEST_SETTING),
+     .mode = MKFS_MFS_MODE_FILE},
+};
 
 static k_u32_t read_le32(const k_u8_t *bytes)
 {
@@ -95,6 +112,10 @@ static void test_image_contents(const char *path)
     KT_CHECK((inode.flags & MFS_INODE_DIR) == 0);
     KT_CHECK_INT_EQ(mfs_inode_mode(&inode), MKFS_MFS_MODE_PROGRAM);
     KT_CHECK_INT_EQ(inode.size, (k_u32_t)strlen(TEST_PROGRAM));
+    /* The tool stamps every record with the one moment it was given, not
+     * with the clock of the run: that is what makes the image reproducible. */
+    KT_CHECK_INT_EQ(inode.mtime, TEST_EPOCH);
+    KT_CHECK_INT_EQ(inode.ctime, TEST_EPOCH);
 
     KT_CHECK_INT_EQ(mfs_open("/bin/hello", MFS_O_RDONLY, &file), MFS_OK);
     KT_CHECK_INT_EQ(mfs_read(&file, content, sizeof(content)), (int)strlen(TEST_PROGRAM));
@@ -117,19 +138,6 @@ static void test_image_contents(const char *path)
 
 static void test_build_and_mount(void)
 {
-    struct mkfs_mfs_entry entries[] = {
-        {.path = "/bin", .directory = true, .mode = MKFS_MFS_MODE_DIR},
-        {.path = "/bin/hello",
-         .data = (const k_u8_t *)TEST_PROGRAM,
-         .size = strlen(TEST_PROGRAM),
-         .mode = MKFS_MFS_MODE_PROGRAM},
-        {.path = "/etc", .directory = true, .mode = MKFS_MFS_MODE_DIR},
-        {.path = "/etc/init.d", .directory = true, .mode = MKFS_MFS_MODE_DIR},
-        {.path = "/etc/setting",
-         .data = (const k_u8_t *)TEST_SETTING,
-         .size = strlen(TEST_SETTING),
-         .mode = MKFS_MFS_MODE_FILE},
-    };
     char path[] = "/tmp/microos-mkfs-XXXXXX";
     int fd;
 
@@ -142,16 +150,95 @@ static void test_build_and_mount(void)
     }
     close(fd);
 
-    KT_CHECK_INT_EQ(
-        mkfs_mfs_build_image(path, TEST_IMAGE_MB, TEST_START_LBA, entries, K_ARRAY_SIZE(entries)),
-        0);
+    KT_CHECK_INT_EQ(mkfs_mfs_build_image(path, TEST_IMAGE_MB, TEST_START_LBA, g_entries,
+                                         K_ARRAY_SIZE(g_entries), TEST_EPOCH),
+                    0);
 
     test_image_contents(path);
 
     unlink(path);
 }
 
+/* Two files of the host, byte by byte, in blocks: an image is megabytes and
+ * the test has no reason to hold two of them. */
+static bool files_are_equal(const char *one, const char *two)
+{
+    k_u8_t first[4096];
+    k_u8_t second[4096];
+    FILE *left = fopen(one, "rb");
+    FILE *right = fopen(two, "rb");
+    bool same = left != NULL && right != NULL;
+
+    while (same) {
+        size_t a = fread(first, 1, sizeof(first), left);
+        size_t b = fread(second, 1, sizeof(second), right);
+
+        if (a != b || memcmp(first, second, a) != 0) {
+            same = false;
+        } else if (a == 0) {
+            break;
+        }
+    }
+
+    if (left != NULL) {
+        fclose(left);
+    }
+    if (right != NULL) {
+        fclose(right);
+    }
+
+    return same;
+}
+
+/*
+ * The property of a reproducible build: the tool is given one moment, not
+ * the clock of the run, so two images of the same objects are the same
+ * bytes. `make reproducible` checks the image of the port; this is the same
+ * promise in the unit suite, where a change of the stamps fails at once.
+ */
+static void test_same_bytes(void)
+{
+    char one[] = "/tmp/microos-mkfs-one-XXXXXX";
+    char two[] = "/tmp/microos-mkfs-two-XXXXXX";
+    int fd_one;
+    int fd_two;
+
+    ktest_begin("mkfs: two images of the same objects are the same bytes");
+
+    fd_one = mkstemp(one);
+    fd_two = mkstemp(two);
+    KT_CHECK(fd_one >= 0);
+    KT_CHECK(fd_two >= 0);
+
+    if (fd_one < 0 || fd_two < 0) {
+        if (fd_one >= 0) {
+            close(fd_one);
+            unlink(one);
+        }
+        if (fd_two >= 0) {
+            close(fd_two);
+            unlink(two);
+        }
+        return;
+    }
+
+    close(fd_one);
+    close(fd_two);
+
+    KT_CHECK_INT_EQ(mkfs_mfs_build_image(one, TEST_IMAGE_MB, TEST_START_LBA, g_entries,
+                                         K_ARRAY_SIZE(g_entries), TEST_EPOCH),
+                    0);
+    KT_CHECK_INT_EQ(mkfs_mfs_build_image(two, TEST_IMAGE_MB, TEST_START_LBA, g_entries,
+                                         K_ARRAY_SIZE(g_entries), TEST_EPOCH),
+                    0);
+    KT_CHECK(files_are_equal(one, two));
+
+    unlink(one);
+    unlink(two);
+}
+
 void test_mkfs_image(void)
 {
     test_build_and_mount();
+    test_same_bytes();
 }

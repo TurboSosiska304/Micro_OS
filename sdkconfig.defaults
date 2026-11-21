@@ -42,6 +42,12 @@ CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 CONFIG_COMPILER_WARN_WRITE_STRINGS=y
 
+# Reproducible builds: the date and the time of the compile leave the app
+# description and the paths leave the binaries, so the same sources and the
+# same SOURCE_DATE_EPOCH give the same .bin. The id of
+# components/kernel/src/version.c is fixed by cmake/reproducible.cmake.
+CONFIG_APP_REPRODUCIBLE_BUILD=y
+
 # UART console / flashing
 CONFIG_ESPTOOLPY_MONITOR_BAUD=115200
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y

@@ -105,10 +105,24 @@ k_u32_t mfs_priv_crc32(const void *data, k_size_t size)
  * own process, and the filesystem must not know the difference (ADR 0013).
  * A machine whose clock was never set still has the seconds since the boot,
  * which order the changes even when they are not a date.
+ *
+ * A caller that builds an image may bring a source of its own
+ * (mfs_set_time_source): one fixed moment makes the bytes of the volume
+ * the same on every run, which a build of a disk needs and a running
+ * machine does not.
  */
+static mfs_now_fn s_now;
+
+void mfs_set_time_source(mfs_now_fn now)
+{
+    mfs_lock();
+    s_now = now;
+    mfs_unlock();
+}
+
 static k_u64_t now_seconds(void)
 {
-    return k_clock_now_unix();
+    return s_now != NULL ? s_now() : k_clock_now_unix();
 }
 
 static void inode_stamp(struct mfs_inode *inode)

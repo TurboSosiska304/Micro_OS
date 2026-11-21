@@ -21,6 +21,13 @@ BUILD_DIR="${1:-$ROOT/build}"
 OUT_DIR="${2:-$ROOT/dist}"
 STATIC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bundle"
 
+# The same inputs, the same bytes: the archive of the x86-64 port gets a
+# fixed mtime, the numeric owner 0 and no name of the machine. The moment is
+# the convention of a reproducible build, and the Makefile exports it.
+SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
+export SOURCE_DATE_EPOCH TZ=UTC LC_ALL=C
+umask 022
+
 # The stage of the x86-64 bundle is another working directory for a moment,
 # so the folder of the bundle has to be absolute before the script gets there.
 case "$OUT_DIR" in
@@ -155,7 +162,9 @@ The same kernel is on the board and in the tests: Micro OS is one portable
 kernel with a port per machine.
 DOC
 
-    (cd "$STAGE" && tar -czf "$OUT_DIR/$X86_NAME.tar.gz" loader32.elf microos64.bin run.sh README.md)
+    (cd "$STAGE" && tar --sort=name --mtime="@$SOURCE_DATE_EPOCH" \
+        --owner=0 --group=0 --numeric-owner --format=gnu -cf - \
+        loader32.elf microos64.bin run.sh README.md | gzip -n > "$OUT_DIR/$X86_NAME.tar.gz")
     echo "    $X86_NAME.tar.gz ($(stat -c %s "$OUT_DIR/$X86_NAME.tar.gz") bytes)"
 else
     echo "==> the x86-64 port is not built ($X86_BUILD), skipped"

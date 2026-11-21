@@ -8,11 +8,11 @@ writes the volume (`tools/mkfs_mfs.c`, which links `components/mfs`), so the
 format has one implementation and not a second one in Python.
 
 The image is a whole disk: an MBR, one Linux partition at LBA 2048 and a
-MicroFS volume in it, with the fifteen `.mox` images of the build in `/bin`,
-an empty `/etc/init.d` and the settings of the machine in `/etc/setting`.
+MicroFS volume in it, with the `.mox` images of the build in `/bin`, an
+empty `/etc/init.d` and the settings of the machine in `/etc/setting`.
 
     tools/x86_image.py [--image PATH] [--build DIR] [--mkfs PATH]
-                       [--size-mb N] [--verbose]
+                       [--size-mb N] [--source-date-epoch N] [--verbose]
 
 The exit status is 0 when the image was written, 2 when the tool or one of
 the images of a program is missing, and 1 when the tool failed.
@@ -54,6 +54,10 @@ SETTING = "hello\nhostname=x86_64\nconsole=vga"
 
 IMAGE_MB = 8
 START_LBA = 2048
+# The moment of the records when SOURCE_DATE_EPOCH does not say another one.
+# Zero is the convention of a reproducible build and "unknown" in MicroFS:
+# an image is not made by a clock, and two runs have to give the same bytes.
+SOURCE_DATE_EPOCH = 0
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_BUILD = os.path.join(ROOT, "build-x86")
@@ -65,9 +69,10 @@ def build_image(
     build_dir: str = DEFAULT_BUILD,
     mkfs: str = DEFAULT_MKFS,
     size_mb: int = IMAGE_MB,
+    epoch: int = SOURCE_DATE_EPOCH,
     verbose: bool = False,
 ) -> int:
-    """Write the image with the fifteen programs and /etc/setting."""
+    """Write the image with the programs of the build and /etc/setting."""
     if not os.path.isfile(mkfs):
         print(f"missing {mkfs}: run make build", file=sys.stderr)
         return 2
@@ -80,6 +85,8 @@ def build_image(
         str(size_mb),
         "--start-lba",
         str(START_LBA),
+        "--source-date-epoch",
+        str(epoch),
         "--dir",
         "/bin",
         "--dir",
@@ -106,16 +113,35 @@ def build_image(
     return result.returncode
 
 
+def parse_epoch(text: str) -> int:
+    """The seconds of SOURCE_DATE_EPOCH, or a value argparse refuses."""
+    try:
+        value = int(text, 10)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(f"not a number of seconds: {text}") from error
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"not a number of seconds: {text}")
+    return value
+
+
 def main(argv: list) -> int:
     parser = argparse.ArgumentParser(description="the disk image of the x86-64 port")
     parser.add_argument("--image", default=os.path.join(DEFAULT_BUILD, "programs.img"))
     parser.add_argument("--build", default=DEFAULT_BUILD, help="the directory of the .mox images")
     parser.add_argument("--mkfs", default=DEFAULT_MKFS, help="the host tool that writes the volume")
     parser.add_argument("--size-mb", type=int, default=IMAGE_MB)
+    parser.add_argument(
+        "--source-date-epoch",
+        type=parse_epoch,
+        default=os.environ.get("SOURCE_DATE_EPOCH", str(SOURCE_DATE_EPOCH)),
+        metavar="N",
+        help="the moment of the records (default: $SOURCE_DATE_EPOCH or 0)",
+    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
 
-    return build_image(args.image, args.build, args.mkfs, args.size_mb, args.verbose)
+    return build_image(args.image, args.build, args.mkfs, args.size_mb, args.source_date_epoch,
+                       args.verbose)
 
 
 if __name__ == "__main__":

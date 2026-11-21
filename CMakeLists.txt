@@ -18,6 +18,10 @@ endif()
 
 if(MICRO_OS_PLATFORM STREQUAL "ESP32")
 
+    # The same moment and the same paths on every build (SOURCE_DATE_EPOCH):
+    # the firmware image is then the same bytes for the same inputs.
+    include("${CMAKE_CURRENT_LIST_DIR}/cmake/reproducible.cmake")
+
     include($ENV{IDF_PATH}/tools/cmake/project.cmake)
     project(micro_os C)
 
@@ -26,6 +30,8 @@ if(MICRO_OS_PLATFORM STREQUAL "ESP32")
 else()
 
     project(micro_os_host C)
+
+    include("${CMAKE_CURRENT_LIST_DIR}/cmake/reproducible.cmake")
 
     set(CMAKE_C_STANDARD 11)
     set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -74,6 +80,18 @@ else()
         message(STATUS "Micro OS: the thread sanitizer is on")
         add_compile_options(-fsanitize=thread -fno-sanitize-recover=all)
         add_link_options(-fsanitize=thread)
+    endif()
+
+    # The coverage build: gcov counts the lines the tests reached. It is a
+    # configuration of its own (make coverage), not a part of the plain
+    # build, because the counters make the binary slower and the files of
+    # the build directory are not the ones of a run.
+    option(MICRO_OS_COVERAGE "the host build instrumented for gcov" OFF)
+
+    if(MICRO_OS_COVERAGE)
+        message(STATUS "Micro OS: coverage is on")
+        add_compile_options(--coverage -O0 -g)
+        add_link_options(--coverage)
     endif()
 
     message(STATUS "Micro OS: host build (simulator + unit tests)")

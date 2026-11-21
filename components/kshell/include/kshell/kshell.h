@@ -16,11 +16,13 @@
 /*
  * The number of the commands of the shell. The board registers 39 today:
  * the built in ones, the drivers (the date, the bus, the radio, the
- * display), the filesystem (mkfs), telnet and mfetch. The table keeps a
- * little room for the commands of the next phases; a command that does not
- * fit is reported at the boot instead of disappearing silently.
+ * display), the filesystem (mkfs), telnet and mfetch. The simulator adds
+ * the stubs of the host and the commands of the network, and the table
+ * keeps room for them and for the commands of the next phases; a command
+ * that does not fit is reported at the boot instead of disappearing
+ * silently.
  */
-#define KSHELL_MAX_COMMANDS 48
+#define KSHELL_MAX_COMMANDS 64
 #define KSHELL_MAX_ARGS 8
 #define KSHELL_LINE_MAX 128
 

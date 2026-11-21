@@ -14,6 +14,8 @@ and the chips on it. None of them replaces another.
 | `make test-tsan` | the same tests under the race detector | the same |
 | `make test-minimal` | the host tests with the optional features off | the same |
 | `make smoke` | the simulator boots and the shell answers | the host build |
+| `make coverage` | the lines of `components/kernel` and the threshold | `gcc`, `gcov`, Python |
+| `make reproducible` | two runs of the disk image are the same bytes | `gcc`, `cmake`, `ninja` |
 | `make x86-build` | the x86-64 kernel and loader compile | `gcc`, `cmake`, `ninja` |
 | `make x86-smoke` | the kernel boots, runs `/bin/hello`, the shell answers | `qemu-system-x86_64` |
 | `make x86-vga-smoke` | the VGA screen and the PS/2 keyboard, no display | `qemu-system-x86_64` |
@@ -59,12 +61,85 @@ still says how many checks the small build has.
 `make smoke` runs `tools/sim_smoke.py`, which boots
 `build-host/ports/port_host/microos_sim` with a volume and a store of its own,
 types a list of commands and checks the transcript: the subsystems, MicroFS,
-`/proc`, `/dev`, the configuration of `/etc`, the shell. It is the cheapest
-end-to-end test of the portable system, and it takes a couple of seconds.
+`/proc`, `/dev`, the configuration of `/etc`, the shell and the network. It is
+the cheapest end-to-end test of the portable system, and it takes a couple of
+seconds.
+
+The simulator links `components/net`, so the same HTTP client, clock of NTP
+and page of the state the board runs over lwIP run there over the sockets of
+the process. The smoke test starts a small page of its own on the loopback and
+asks the guest for it with `http get`, so the path from the shell through the
+client to a real socket is exercised, not only the parser of a unit test. It
+does not open a port on the network of the machine: the page lives in the test
+process, on a port the kernel chose.
 
 `make sim` runs the same binary by hand, with `/tmp/microos-sim.img` and
 `/tmp/microos-kv` by default. `python3 tools/sim_smoke.py --verbose` shows
 every step.
+
+## `make reproducible`: the same inputs, the same bytes
+
+The gate of 1.0 asks for an image that two runs build to the same bytes. Three
+things used to make that fail:
+
+* the records of MicroFS are stamped with `mtime` and `ctime`, and the
+  filesystem took the moment from the clock of the process;
+* `kernel_build_id()` is `__DATE__ " " __TIME__`, which changes on every
+  compile;
+* an absolute path of the source tree reached the debug information and
+  `__FILE__` of a panic message.
+
+`make` exports `SOURCE_DATE_EPOCH` (0 by default, the convention of
+reproducible builds); `make reproducible` builds the disk image, keeps a copy,
+builds it again from nothing and compares the two with `cmp`, then prints
+their `sha256`. What is fixed:
+
+* `tools/mkfs_mfs.c` reads `SOURCE_DATE_EPOCH` (and `--source-date-epoch`) and
+  gives the filesystem one fixed moment for every record
+  (`mfs_set_time_source()`); the running machine keeps the wall clock of the
+  kernel;
+* `cmake/reproducible.cmake` sets `__DATE__` and `__TIME__` from the same
+  moment and maps the paths of the tree with `-ffile-prefix-map`, so the
+  kernel id and the debug information no longer depend on when and where the
+  build ran;
+* `tools/bundle.sh` makes its archive with sorted names, a fixed mtime and the
+  numeric owner 0, and `gzip -n`; the ESP32 firmware uses
+  `CONFIG_APP_REPRODUCIBLE_BUILD` in `sdkconfig.defaults`.
+
+A `sdkconfig` that was generated before this option existed keeps its old
+value: the defaults of the tree are read only when there is no `sdkconfig`.
+On an old checkout, remove `sdkconfig` (or set the option in `idf.py
+menuconfig`) before the build that has to be reproducible.
+
+`SOURCE_DATE_EPOCH` changes the bytes of the image on purpose: two dates are
+two different builds. What is compared is two runs with the same date, the
+same sources and the same tools.
+
+The board is the other half. The cloud builds the firmware twice, in `build/`
+and `build-repro/`, and compares `micro_os.bin`, `bootloader.bin` and
+`partition-table.bin`; it makes the bundle twice as well and compares the two
+`dist/` trees, archive included. Two clean builds of this tree with
+`SOURCE_DATE_EPOCH=0` gave the same three images. A laptop without ESP-IDF can
+only do the half above, which is why `make reproducible` is the image and not
+the firmware.
+
+## `make coverage`: the lines of the kernel
+
+`make coverage` configures `build-coverage/` with `-DMICRO_OS_COVERAGE=ON`
+(`--coverage -O0 -g`), runs the unit tests and the simulator, and then
+`tools/coverage_report.py` hands every `.gcda` to `gcov --json-format` and
+merges the reports by `(source, line)`, so a source compiled into two binaries
+is counted once. A line is covered when any of the runs reached it. The
+report counts `components/kernel` and fails under the threshold: **70% of
+lines**. This tree met **80.6-80.7%** (2581-2584 of 3201 lines) when the gate was added;
+70 leaves room for another compiler and another `gcov`, whose notion of an
+executable line can differ a little, and is high enough that a regression of
+the tests is noticed. `--path` and `--threshold` move the report to another
+subtree or another number.
+
+`gcov` is a part of GCC and no `lcov` is needed: a machine with the compiler
+has the report. The counters are removed before the run, so the number is of
+this run and not of the runs before it.
 
 ## The x86-64 smoke tests
 
@@ -119,13 +194,16 @@ options when a release is prepared; `--verbose` names every check.
 ## `make ci`: the local half
 
 ```text
-build, test, test-asan, test-tsan, smoke, [x86-smoke], integrity
+build, test, test-asan, test-tsan, smoke, coverage, [x86-smoke], reproducible,
+integrity
 ```
 
 `x86-smoke` joins the list when `qemu-system-x86_64` is on `PATH` and is
 skipped with a message when it is not: a missing optional machine must not fail
-a run. `make ci` does **not** build the firmware of the board (that needs
-ESP-IDF) and does not run the VGA or disk smoke tests or the device test.
+a run. `coverage` and `reproducible` are blocking: the first refuses a kernel
+below 70% of lines, the second refuses two images that differ. `make ci` does
+**not** build the firmware of the board (that needs ESP-IDF) and does not run
+the VGA or disk smoke tests or the device test.
 
 The cloud repeats the list on every push to `mainline` and `release_candidate`
 and adds what a build farm has: valgrind over the tests, the firmware build,

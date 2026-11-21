@@ -26,6 +26,7 @@
 #include "kshell/kshell.h"
 #include "mfs/mfs.h"
 #include "mfs/mfs_vfs.h"
+#include "net/net.h"
 #include "port_host.h"
 #include "procfs/procfs.h"
 
@@ -248,6 +249,13 @@ static void init_task(void *arg)
      */
     if (kshell_init() != KSHELL_OK) {
         kwarn("sim: not every command of the shell is registered");
+    }
+
+    /* The commands of the network: the HTTP client, the clock from NTP and
+     * the page of the state. The host port has the sockets of the process,
+     * so the same sources the board takes to lwIP work over the loopback. */
+    if (net_register() != 0) {
+        kwarn("sim: not every command of the network is registered");
     }
 
     if (s_volume_mounted && initd_run(INITD_DIR) < 0) {

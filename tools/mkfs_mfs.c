@@ -20,6 +20,7 @@ struct mkfs_args {
     const char *image;
     k_u32_t size_mb;
     k_u32_t start_lba;
+    k_u64_t epoch;
     struct mkfs_mfs_entry *entries;
     k_size_t count;
     k_size_t capacity;
@@ -35,11 +36,33 @@ static void usage(void)
            "  --image PATH            write the image here\n"
            "  --size-mb N             the size of the image, 8 by default\n"
            "  --start-lba N           the first sector of the partition, 2048 by default\n"
+           "  --source-date-epoch N   the moment of the records, $SOURCE_DATE_EPOCH, 0\n"
            "  --dir PATH              make a directory of the volume\n"
            "  --file PATH=HOST        write a file of the host (mode 0644)\n"
            "  --program PATH=HOST     write a program (mode 0755)\n"
            "  --text PATH=TEXT        write TEXT and a newline (mode 0644)\n"
            "  --help                  this text\n");
+}
+
+/* A number of seconds, or false when the text is not one. */
+static bool parse_epoch(const char *text, k_u64_t *out)
+{
+    char *end;
+    unsigned long long value;
+
+    if (text == NULL || text[0] < '0' || text[0] > '9') {
+        return false;
+    }
+
+    value = strtoull(text, &end, 10);
+
+    if (end == text || *end != '\0') {
+        return false;
+    }
+
+    *out = (k_u64_t)value;
+
+    return true;
 }
 
 static bool reserve_entry(struct mkfs_args *args)
@@ -172,6 +195,18 @@ int main(int argc, char **argv)
     memset(&args, 0, sizeof(args));
     args.size_mb = 8;
     args.start_lba = MKFS_MFS_START_LBA;
+    args.epoch = MKFS_MFS_SOURCE_DATE_EPOCH;
+
+    /* The convention of a reproducible build: the environment names one
+     * moment, and the option below has the last word. */
+    {
+        const char *environment = getenv("SOURCE_DATE_EPOCH");
+
+        if (environment != NULL && !parse_epoch(environment, &args.epoch)) {
+            fprintf(stderr, "mkfs: SOURCE_DATE_EPOCH is not a number: %s\n", environment);
+            return 2;
+        }
+    }
 
     for (index = 1; index < argc; index++) {
         const char *option = argv[index];
@@ -195,6 +230,12 @@ int main(int argc, char **argv)
             args.size_mb = (k_u32_t)strtoul(value, NULL, 10);
         } else if (strcmp(option, "--start-lba") == 0) {
             args.start_lba = (k_u32_t)strtoul(value, NULL, 10);
+        } else if (strcmp(option, "--source-date-epoch") == 0) {
+            if (!parse_epoch(value, &args.epoch)) {
+                fprintf(stderr, "mkfs: %s is not a number of seconds\n", value);
+                rc = 2;
+                goto out;
+            }
         } else if (strcmp(option, "--dir") == 0) {
             if (!add_entry(&args, value, NULL, NULL, 0, MKFS_MFS_MODE_DIR, true)) {
                 rc = 1;
@@ -236,8 +277,8 @@ int main(int argc, char **argv)
         goto out;
     }
 
-    rc = mkfs_mfs_build_image(args.image, args.size_mb, args.start_lba, args.entries, args.count) ==
-                 0
+    rc = mkfs_mfs_build_image(args.image, args.size_mb, args.start_lba, args.entries, args.count,
+                              args.epoch) == 0
              ? 0
              : 1;
 

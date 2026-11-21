@@ -539,7 +539,15 @@ strings of a path or a vector never reach the VFS (ADR 0007).
   detector (`make test-tsan`).
 * The simulator `make sim` runs the very same kernel on Linux with a volume on
   a file, `/proc`, `/dev`, the configuration and the drivers of the host, so
-  the whole portable system can be debugged without flashing.
+  the whole portable system can be debugged without flashing. It links the
+  network of `components/net`, and `make smoke` fetches a page of its own
+  process over the loopback with the HTTP client the board runs.
+* `make coverage` builds the host with `--coverage`, runs the tests and the
+  simulator, and gcov counts the lines of `components/kernel`; the gate is 70%
+  of lines (the tree met about 80.7% when it was added).
+* `make reproducible` builds the disk image twice with `SOURCE_DATE_EPOCH` and
+  compares the bytes. The same moment fixes the records of MicroFS, the build
+  id and the paths of the sources; the cloud does the same for the firmware.
 * The x86-64 port is booted in QEMU by `make x86-smoke`: the same sources, a
   bare processor, a serial console, the shell - and, between the banner and
   the shell, a MOX1 program that the port enters and that writes its line.

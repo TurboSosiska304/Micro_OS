@@ -325,4 +325,19 @@ int mfs_chown(const char *path, k_u32_t owner);
 /* The name of an error, for the shell. */
 const char *mfs_strerror(int error);
 
+/*
+ * The source of the moments of the records.
+ *
+ * The default is the wall clock of the kernel (ADR 0013). A tool that
+ * builds an image sets one fixed moment instead: the same sources and the
+ * same objects then give the same bytes, which is what a reproducible
+ * image means. NULL gives the clock of the kernel back. The source is
+ * asked for every stamp, so a caller that wants a moving time can keep the
+ * default and a caller that wants one date does not have to touch the
+ * records after they are written.
+ */
+typedef k_u64_t (*mfs_now_fn)(void);
+
+void mfs_set_time_source(mfs_now_fn now);
+
 #endif /* MICRO_OS_MFS_MFS_H */

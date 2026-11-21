@@ -18,6 +18,11 @@ cmake_minimum_required(VERSION 3.16)
 
 project(micro_os_x86_64 C ASM)
 
+# The build id and the paths are the same on two builds of one tree when
+# SOURCE_DATE_EPOCH is set (make exports it); this is the same module the
+# host build uses.
+include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/reproducible.cmake")
+
 set(KERNEL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/kernel")
 set(KSHELL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/kshell")
 set(LIBC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/libc")

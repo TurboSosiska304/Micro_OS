@@ -3,7 +3,8 @@
 
 The unit tests check the kernel piece by piece. This script checks the
 whole thing at once: the simulator boots, the subsystems come up, the
-volume of MicroFS and the configuration of /etc work, the shell answers.
+volume of MicroFS and the configuration of /etc work, the shell answers,
+and the HTTP client fetches a page of the test process over the loopback.
 It is the cheapest end to end test of the kernel and it runs in a couple
 of seconds.
 
@@ -16,12 +17,14 @@ The exit status is 0 when the simulator behaved and 1 otherwise.
 from __future__ import annotations
 
 import argparse
+import http.server
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 
 # The commands that are fed to the shell of the simulator, in this order: the
 # checks below read the answer of a command by its place in the list.
@@ -77,7 +80,7 @@ def answers(output: str) -> list:
     return output.split(PROMPT)[1:]
 
 
-def run_simulator(binary: str, timeout: float, env: dict) -> tuple:
+def run_simulator(binary: str, timeout: float, env: dict, commands: list) -> tuple:
     """Feed the commands to the simulator and collect the output."""
     process = subprocess.Popen(
         [binary],
@@ -90,7 +93,7 @@ def run_simulator(binary: str, timeout: float, env: dict) -> tuple:
     )
 
     try:
-        stdout, _ = process.communicate("\n".join(COMMANDS) + "\n", timeout=timeout)
+        stdout, _ = process.communicate("\n".join(commands) + "\n", timeout=timeout)
         status = process.returncode
     except subprocess.TimeoutExpired:
         # The main loop of the simulator never ends, the timeout is the
@@ -106,7 +109,7 @@ def run_simulator(binary: str, timeout: float, env: dict) -> tuple:
     return normalize(stdout or ""), status
 
 
-def check(output: str) -> list:
+def check(output: str, commands: list) -> list:
     """The expectations about the output of the simulator."""
     checks = []
 
@@ -118,7 +121,7 @@ def check(output: str) -> list:
     def answer(command: str) -> str:
         """The answer of one command of the list, empty when it did not run."""
         try:
-            index = COMMANDS.index(command)
+            index = commands.index(command)
         except ValueError:
             return ""
         return blocks[index] if index < len(blocks) else ""
@@ -239,7 +242,42 @@ def check(output: str) -> list:
     expect("battery says the host has none", "no battery" in answer("battery"))
     expect("wifi status says there is no radio", "no radio" in answer("wifi status"))
 
+    # --- the network over the loopback of the process
+    http_command = commands[-1]
+    http_answer = answer(http_command)
+    expect(
+        "http gets the page of the host",
+        re.search(r"HTTP 200, \d+ byte", http_answer) is not None
+        and "microos-sim-http" in http_answer,
+        http_answer,
+    )
+
     return checks
+
+
+class PageHandler(http.server.BaseHTTPRequestHandler):
+    """The page the HTTP client of the simulator fetches over the loopback."""
+
+    def do_GET(self) -> None:  # noqa: N802 - the name of http.server
+        body = b"microos-sim-http\n"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args) -> None:
+        """The smoke test has no access log to print."""
+        del args
+
+
+def start_http_server() -> tuple:
+    """A page of this process on a port of the loopback, and its URL."""
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), PageHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    return server, f"http://127.0.0.1:{server.server_address[1]}/"
 
 
 def make_env(workdir: str) -> dict:
@@ -283,9 +321,15 @@ def main(argv: list) -> int:
         return 2
 
     workdir = tempfile.mkdtemp(prefix="microos-sim-")
+    server, page = start_http_server()
+    commands = list(COMMANDS)
+    commands.append(f"http get {page}")
+
     try:
-        output, status = run_simulator(args.binary, args.timeout, make_env(workdir))
+        output, status = run_simulator(args.binary, args.timeout, make_env(workdir), commands)
     finally:
+        server.shutdown()
+        server.server_close()
         if args.keep:
             print(f"the volume of the run is kept in {workdir}")
         else:
@@ -298,7 +342,7 @@ def main(argv: list) -> int:
         print(f"the simulator died with the signal {-status}", file=sys.stderr)
         return 1
 
-    checks = check(output)
+    checks = check(output, commands)
     failed = [c for c in checks if not c[1]]
 
     print("Micro OS — the smoke test of the simulator")

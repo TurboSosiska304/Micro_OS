@@ -11,6 +11,15 @@
 
 BUILD_DIR   ?= build-host
 ASAN_DIR    ?= build-asan
+COVERAGE_DIR ?= build-coverage
+# The lines of components/kernel that the host tests and the simulator have
+# to reach. The tree met about 80.7% when the gate was added; 70 keeps a margin
+# for another compiler and another gcov. docs/wiki/testing.md explains it.
+COVERAGE_THRESHOLD ?= 70
+# The moment of a reproducible build: one date instead of the clock of the
+# machine. Zero is the convention and "unknown" in a MicroFS record.
+SOURCE_DATE_EPOCH ?= 0
+export SOURCE_DATE_EPOCH
 # ESP-IDF discovery, in order: $IDF_PATH, a checkout beside the repository
 # (../esp-idf), then the conventional ~/esp/esp-idf. Override IDF_EXPORT to
 # point at another export.sh.
@@ -23,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-run x86-run-serial x86-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke
+.PHONY: help all build test test-asan test-tsan test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-run x86-run-serial x86-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke coverage reproducible
 
 help:
 	@echo "Micro OS — available targets:"
@@ -33,9 +42,12 @@ help:
 	@echo "  make test-tsan  the same tests under the race detector"
 	@echo "  make test-minimal  the host tests with the optional features off"
 	@echo "  make smoke      boot the simulator and check its answers"
+	@echo "  make coverage   the host build with gcov and the threshold of lines"
+	@echo "  make reproducible  build the disk image twice and compare the bytes"
 	@echo "  make integrity  the integrity check of the repository and the bundle"
 	@echo "  make wiki-check the links of the user wiki (docs/wiki)"
-	@echo "  make ci         build, test, test-asan, test-tsan, smoke, integrity"
+	@echo "  make ci         build, test, test-asan, test-tsan, smoke, coverage,"
+	@echo "                  x86-smoke when QEMU is there, reproducible, integrity"
 	@echo "                  (x86-smoke when qemu-system-x86_64 is installed)"
 	@echo "  make sim        build and run the host simulator"
 	@echo "  make clean      remove the host build directory"
@@ -98,6 +110,22 @@ test-minimal:
 smoke:
 	python3 tools/sim_smoke.py --verbose
 
+# The lines of components/kernel that the tests and the simulator reach,
+# counted by gcov. The build is a directory of its own: the counters make
+# a binary slower and its files are not the ones of a plain run. The tests
+# run under ctest and the simulator runs the same smoke test as `make
+# smoke`; the report refuses a number below the threshold (70% of lines:
+# this tree met about 80.7% when the gate was added, so the threshold keeps a
+# margin for another compiler and another gcov).
+coverage:
+	cmake -B $(COVERAGE_DIR) -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug -DMICRO_OS_COVERAGE=ON
+	cmake --build $(COVERAGE_DIR)
+	find $(COVERAGE_DIR) -name '*.gcda' -delete
+	ctest --test-dir $(COVERAGE_DIR) --output-on-failure
+	python3 tools/sim_smoke.py --binary $(COVERAGE_DIR)/ports/port_host/microos_sim
+	python3 tools/coverage_report.py --build $(COVERAGE_DIR) --threshold $(COVERAGE_THRESHOLD) \
+		--verbose
+
 # The firmware against the sources: the sums of the bundle, the headers of
 # the images, the partition table against partitions.csv, the flash size
 # against sdkconfig.defaults, the git objects and the hygiene of the sources.
@@ -123,11 +151,11 @@ wiki-check:
 # joins the list when `qemu-system-x86_64` is on PATH and is skipped with a
 # message when it is not. A missing optional machine must not fail a run.
 CI_QEMU := $(shell command -v qemu-system-x86_64 2>/dev/null)
-CI_TARGETS := build test test-asan test-tsan smoke
+CI_TARGETS := build test test-asan test-tsan smoke coverage
 ifneq ($(CI_QEMU),)
 CI_TARGETS += x86-smoke
 endif
-CI_TARGETS += integrity
+CI_TARGETS += reproducible integrity
 
 ci: $(CI_TARGETS)
 ifeq ($(CI_QEMU),)
@@ -138,7 +166,7 @@ sim: build
 	$(BUILD_DIR)/ports/port_host/microos_sim
 
 clean:
-	rm -rf $(BUILD_DIR) $(ASAN_DIR) $(MINIMAL_DIR)
+	rm -rf $(BUILD_DIR) $(ASAN_DIR) $(MINIMAL_DIR) $(COVERAGE_DIR)
 
 format:
 	@command -v clang-format >/dev/null 2>&1 || { echo "clang-format not found"; exit 1; }
@@ -190,6 +218,23 @@ X86_MKFS := $(BUILD_DIR)/tools/microos_mkfs
 x86-disk: x86-build build
 	python3 tools/x86_image.py --image $(X86_PROGRAMS_IMAGE) \
 		--build $(X86_BUILD) --mkfs $(X86_MKFS)
+
+# The gate of a reproducible image: the same inputs, the same bytes. The
+# moments of the MicroFS records come from SOURCE_DATE_EPOCH (the tool has
+# no clock of its own), the build id of version.c is fixed and the paths of
+# the tree are relative. The target builds the image, keeps a copy, builds
+# it again from nothing and compares the two files.
+reproducible: x86-disk
+	@tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; \
+	cp $(X86_PROGRAMS_IMAGE) "$$tmp/first.img"; \
+	rm -f $(X86_PROGRAMS_IMAGE); \
+	$(MAKE) --no-print-directory x86-disk; \
+	if cmp "$$tmp/first.img" $(X86_PROGRAMS_IMAGE); then \
+		echo "reproducible: the two images are the same file"; \
+	else \
+		echo "reproducible: the two images differ" >&2; exit 1; \
+	fi; \
+	sha256sum "$$tmp/first.img" $(X86_PROGRAMS_IMAGE)
 
 X86_DISK_DRIVE := -drive file=$(X86_PROGRAMS_IMAGE),format=raw,if=ide,index=0,cache=writeback
 
