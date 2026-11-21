@@ -114,6 +114,8 @@ const char *microos_strerror(int code)
         return "file name too long";
     case -KERR_NOTEMPTY:
         return "directory not empty";
+    case -KERR_NOTSUP:
+        return "operation not supported";
     default:
         return "unknown error";
     }

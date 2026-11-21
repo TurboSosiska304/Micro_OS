@@ -207,6 +207,33 @@ because a board has one store. The ESP32 answers with the NVS, the host with
 a file per key, and the configuration does not know the difference - which
 is why `config sync` can be tested without a board.
 
+### The types of filesystems
+
+The VFS knows no name of a filesystem. It keeps a table of types
+(`struct vfs_fs_type`: a name and the call that mounts a volume), and
+`vfs_mount_type(point, "fat32", "ata0p1")` finds the call and runs it. The
+call mounts the volume itself with `vfs_mount()`, so the resolution of a
+path, the search bit and the listing of the mount points are the same for
+every type. A mount function may be a wrapper of a format of the board
+(MicroFS) or a reader of a format of the world (FAT); the VFS does not care
+which.
+
+The types are registered by the image, not by the kernel: a build that does
+not link the reader never has its name, and a boot that asks for an unknown
+type gets `KERR_INVAL`. MicroFS is still mounted at the root by
+`mfs_vfs_mount()` as it always was; the registry is for the volumes below
+`/mnt` and for the filesystems that arrive later. The option of the build is
+`MICRO_OS_FS_FAT32` (off by default on the board, compiled into the host
+tests), the design is ADR 0009.
+
+The FAT reader is a few files under `components/fs_fat32/`: the boot sector
+and the table of clusters, the directories with their long UTF-16 names and
+the adapter to the VFS. It is **read-only**; an object of FAT has no mode
+and no owner (the numbers are zero), and every call that would write is
+`KERR_NOTSUP`, not `KERR_PERM`. A FAT volume mounted at `/mnt/fat` is one
+more entry of the mount table, and `ls /mnt` shows it even though MicroFS
+does not have the directory.
+
 ### Disks and partitions
 
 A disk is a block device too, and a partition of it is one: the portable

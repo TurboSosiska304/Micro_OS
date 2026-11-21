@@ -10,6 +10,8 @@
 #include "kernel/types.h"
 
 #define VFS_MAX_MOUNTS 4
+#define VFS_MAX_TYPES 4
+#define VFS_TYPE_NAME_MAX 16
 #define VFS_NAME_MAX 32
 #define VFS_PATH_MAX 128
 
@@ -94,6 +96,13 @@ struct vfs_operations {
     int (*chown)(void *ctx, const char *path, k_u32_t owner);
     int (*statfs)(void *ctx, struct vfs_statfs *out);
     const char *(*strerror)(int error);
+    /*
+     * The filesystem is leaving the tree. The context may be released here:
+     * a filesystem that keeps a volume in a static slot needs the call, a
+     * virtual one that owns nothing leaves the field empty. The call runs
+     * before the mount is forgotten, so it still sees its point.
+     */
+    int (*umount)(void *ctx);
 };
 
 /* An open file. */
@@ -114,8 +123,44 @@ struct vfs_file {
  */
 #define VFS_FILE_DATA_SIZE 64
 
+/*
+ * A type of filesystem is a name and the call that mounts a volume of it.
+ * The VFS keeps a small table of the types the image was built with and
+ * knows nothing else about them: "fat32" and "mfs" are two strings of the
+ * configuration, not two branches of the kernel.
+ *
+ * The call mounts the volume itself by calling vfs_mount(); the VFS then
+ * has the operations and the context of the filesystem and the two are the
+ * same for every volume of every type.
+ */
+typedef int (*vfs_mount_fn)(const char *point, const char *device);
+
+struct vfs_fs_type {
+    char name[VFS_TYPE_NAME_MAX + 1];
+    vfs_mount_fn mount;
+};
+
 /* Mount a filesystem at a point of the tree. */
 int vfs_mount(const char *point, const struct vfs_operations *ops, void *ctx);
+
+/*
+ * Register or forget a type. A name that is already in the table keeps its
+ * slot and takes the new call, so a port may register the same type again
+ * after a re-initialisation. The name is copied; the caller keeps its own.
+ */
+int vfs_register_type(const char *name, vfs_mount_fn mount);
+int vfs_unregister_type(const char *name);
+
+/* The types of the system, for the shell and the tests. */
+k_size_t vfs_type_count(void);
+const char *vfs_type_name(k_size_t index);
+
+/*
+ * Mount a volume of a registered type. An unknown name is KERR_INVAL: the
+ * type is a part of the configuration and a boot that asks for one the
+ * image does not have has a broken configuration, not a broken medium.
+ */
+int vfs_mount_type(const char *point, const char *type, const char *device);
 
 /* Unmount a filesystem. */
 int vfs_umount(const char *point);

@@ -14,6 +14,8 @@ struct mount {
 #define VFS_MAX_FILES 16
 static struct mount g_mounts[VFS_MAX_MOUNTS];
 static k_size_t g_count;
+static struct vfs_fs_type g_types[VFS_MAX_TYPES];
+static k_size_t g_type_count;
 static int g_last_error;
 
 static void copy_str(char *dst, k_size_t size, const char *src)
@@ -43,12 +45,14 @@ int vfs_mount(const char *point, const struct vfs_operations *ops, void *ctx)
     k_size_t i;
 
     if (point == NULL || ops == NULL) {
-        return -1;
+        return KERR_INVAL;
     }
 
     for (i = 0; i < g_count; i++) {
         if (strcmp(g_mounts[i].point, point) == 0) {
-            /* The filesystem is already mounted, replace it. */
+            /* The filesystem is already mounted, replace it. A filesystem
+             * that keeps a volume in a static slot arranges its own
+             * release before it comes here (fat_vfs_mount does). */
             g_mounts[i].ops = ops;
             g_mounts[i].ctx = ctx;
             return 0;
@@ -57,7 +61,7 @@ int vfs_mount(const char *point, const struct vfs_operations *ops, void *ctx)
 
     if (g_count >= VFS_MAX_MOUNTS) {
         kerror("vfs: there is no room for another filesystem");
-        return -1;
+        return KERR_NOSPC;
     }
 
     slot = &g_mounts[g_count];
@@ -76,11 +80,20 @@ int vfs_umount(const char *point)
     k_size_t i;
 
     if (point == NULL) {
-        return -1;
+        return KERR_INVAL;
     }
 
     for (i = 0; i < g_count; i++) {
         if (strcmp(g_mounts[i].point, point) == 0) {
+            int rc = 0;
+
+            if (g_mounts[i].ops->umount != NULL) {
+                rc = g_mounts[i].ops->umount(g_mounts[i].ctx);
+                if (rc != 0) {
+                    return rc;
+                }
+            }
+
             for (; i + 1 < g_count; i++) {
                 g_mounts[i] = g_mounts[i + 1];
             }
@@ -89,7 +102,96 @@ int vfs_umount(const char *point)
         }
     }
 
-    return -1;
+    return KERR_NOENT;
+}
+
+int vfs_register_type(const char *name, vfs_mount_fn mount)
+{
+    k_size_t len;
+    k_size_t i;
+
+    if (name == NULL || mount == NULL) {
+        return KERR_INVAL;
+    }
+
+    len = strlen(name);
+    if (len == 0 || len > VFS_TYPE_NAME_MAX) {
+        return KERR_INVAL;
+    }
+
+    for (i = 0; i < g_type_count; i++) {
+        if (strcmp(g_types[i].name, name) == 0) {
+            g_types[i].mount = mount;
+            return 0;
+        }
+    }
+
+    if (g_type_count >= VFS_MAX_TYPES) {
+        kerror("vfs: there is no room for another type of filesystem");
+        return KERR_NOSPC;
+    }
+
+    memcpy(g_types[g_type_count].name, name, len + 1);
+    g_types[g_type_count].mount = mount;
+    g_type_count++;
+
+    kinfo("vfs: the type '%s' is registered", name);
+
+    return 0;
+}
+
+int vfs_unregister_type(const char *name)
+{
+    k_size_t i;
+
+    if (name == NULL) {
+        return KERR_INVAL;
+    }
+
+    for (i = 0; i < g_type_count; i++) {
+        if (strcmp(g_types[i].name, name) == 0) {
+            for (; i + 1 < g_type_count; i++) {
+                g_types[i] = g_types[i + 1];
+            }
+            g_type_count--;
+            return 0;
+        }
+    }
+
+    return KERR_NOENT;
+}
+
+k_size_t vfs_type_count(void)
+{
+    return g_type_count;
+}
+
+const char *vfs_type_name(k_size_t index)
+{
+    if (index >= g_type_count) {
+        return NULL;
+    }
+
+    return g_types[index].name;
+}
+
+int vfs_mount_type(const char *point, const char *type, const char *device)
+{
+    k_size_t i;
+
+    if (point == NULL || type == NULL) {
+        return KERR_INVAL;
+    }
+
+    for (i = 0; i < g_type_count; i++) {
+        if (strcmp(g_types[i].name, type) == 0) {
+            return g_types[i].mount(point, device);
+        }
+    }
+
+    kerror("vfs: there is no type '%s'", type);
+
+    return KERR_INVAL;
 }
 
 k_size_t vfs_mount_count(void)
@@ -190,9 +292,14 @@ static int stat_raw(const char *path, struct vfs_stat *out)
         return KERR_NOENT;
     }
 
-    if (out == NULL || m->ops->stat == NULL) {
-        g_last_error = KERR_PERM;
-        return KERR_PERM;
+    if (out == NULL) {
+        g_last_error = KERR_INVAL;
+        return KERR_INVAL;
+    }
+
+    if (m->ops->stat == NULL) {
+        g_last_error = KERR_NOTSUP;
+        return KERR_NOTSUP;
     }
 
     /*
@@ -326,6 +433,11 @@ int vfs_open(const char *path, int flags, struct vfs_file *out, void *priv)
         return KERR_NOENT;
     }
 
+    if (m->ops->open == NULL) {
+        g_last_error = KERR_NOTSUP;
+        return KERR_NOTSUP;
+    }
+
     rc = path_search_check(path);
     if (rc != 0) {
         g_last_error = rc;
@@ -356,14 +468,19 @@ int vfs_read(struct vfs_file *file, void *buf, k_size_t size)
 {
     int rc;
 
-    if (file == NULL || file->ops == NULL || file->ops->read == NULL) {
-        return KERR_PERM;
+    if (file == NULL || file->ops == NULL) {
+        return KERR_INVAL;
     }
 
     /* A directory is read through readdir, not as a stream of bytes. */
     if ((file->flags & VFS_O_DIRECTORY) != 0) {
         g_last_error = KERR_ISDIR;
         return KERR_ISDIR;
+    }
+
+    if (file->ops->read == NULL) {
+        g_last_error = KERR_NOTSUP;
+        return KERR_NOTSUP;
     }
 
     rc = file->ops->read(file->fs, file, buf, size);
@@ -376,14 +493,19 @@ int vfs_write(struct vfs_file *file, const void *buf, k_size_t size)
 {
     int rc;
 
-    if (file == NULL || file->ops == NULL || file->ops->write == NULL) {
-        return KERR_PERM;
+    if (file == NULL || file->ops == NULL) {
+        return KERR_INVAL;
     }
 
     /* A directory is read through readdir and never written. */
     if ((file->flags & VFS_O_DIRECTORY) != 0) {
         g_last_error = KERR_ISDIR;
         return KERR_ISDIR;
+    }
+
+    if (file->ops->write == NULL) {
+        g_last_error = KERR_NOTSUP;
+        return KERR_NOTSUP;
     }
 
     rc = file->ops->write(file->fs, file, buf, size);
@@ -396,8 +518,13 @@ int vfs_close(struct vfs_file *file)
 {
     int rc;
 
-    if (file == NULL || file->ops == NULL || file->ops->close == NULL) {
-        return -1;
+    if (file == NULL || file->ops == NULL) {
+        return KERR_INVAL;
+    }
+
+    if (file->ops->close == NULL) {
+        g_last_error = KERR_NOTSUP;
+        return KERR_NOTSUP;
     }
 
     rc = file->ops->close(file->fs, file);
@@ -469,8 +596,8 @@ int vfs_list(const char *path, struct vfs_dirent *out, k_size_t max, k_size_t *c
 
     if (m != NULL) {
         if (m->ops->list == NULL) {
-            g_last_error = -1;
-            return -1;
+            g_last_error = KERR_NOTSUP;
+            return KERR_NOTSUP;
         }
 
         rc = m->ops->list(m->ctx, path, out, max, &used);
@@ -533,10 +660,14 @@ int vfs_readdir(struct vfs_file *file, struct vfs_dirent *out, k_size_t max, k_s
      * Anything else - a file, a filesystem without directories - is not a
      * directory to read.
      */
-    if (file == NULL || file->ops == NULL || file->ops->readdir == NULL ||
-        (file->flags & VFS_O_DIRECTORY) == 0) {
+    if (file == NULL || file->ops == NULL || (file->flags & VFS_O_DIRECTORY) == 0) {
         g_last_error = KERR_NOTDIR;
         return KERR_NOTDIR;
+    }
+
+    if (file->ops->readdir == NULL) {
+        g_last_error = KERR_NOTSUP;
+        return KERR_NOTSUP;
     }
 
     rc = file->ops->readdir(file->fs, file, out, max, count);
@@ -564,8 +695,8 @@ int vfs_mkdir(const char *path)
     int rc;
 
     if (m == NULL) {
-        g_last_error = -2;
-        return -2;
+        g_last_error = KERR_NOENT;
+        return KERR_NOENT;
     }
 
     rc = path_search_check(path);
@@ -575,8 +706,8 @@ int vfs_mkdir(const char *path)
     }
 
     if (m->ops->mkdir == NULL) {
-        g_last_error = -1;
-        return -1;
+        g_last_error = KERR_NOTSUP;
+        return KERR_NOTSUP;
     }
 
     rc = m->ops->mkdir(m->ctx, path);
@@ -632,13 +763,13 @@ int vfs_statfs(const char *path, struct vfs_statfs *out)
     int rc;
 
     if (m == NULL || out == NULL) {
-        g_last_error = -2;
-        return -2;
+        g_last_error = KERR_NOENT;
+        return KERR_NOENT;
     }
 
     if (m->ops->statfs == NULL) {
-        g_last_error = -1;
-        return -1;
+        g_last_error = KERR_NOTSUP;
+        return KERR_NOTSUP;
     }
 
     rc = m->ops->statfs(m->ctx, out);
@@ -653,8 +784,8 @@ int vfs_unlink(const char *path)
     int rc;
 
     if (m == NULL) {
-        g_last_error = -2;
-        return -2;
+        g_last_error = KERR_NOENT;
+        return KERR_NOENT;
     }
 
     rc = path_search_check(path);
@@ -664,8 +795,8 @@ int vfs_unlink(const char *path)
     }
 
     if (m->ops->unlink == NULL) {
-        g_last_error = -1;
-        return -1;
+        g_last_error = KERR_NOTSUP;
+        return KERR_NOTSUP;
     }
 
     rc = m->ops->unlink(m->ctx, path);
@@ -680,8 +811,8 @@ int vfs_chmod(const char *path, k_u32_t mode)
     int rc;
 
     if (m == NULL) {
-        g_last_error = -2;
-        return -2;
+        g_last_error = KERR_NOENT;
+        return KERR_NOENT;
     }
 
     rc = path_search_check(path);
@@ -691,14 +822,14 @@ int vfs_chmod(const char *path, k_u32_t mode)
     }
 
     /*
-     * A filesystem without modes answers what the VFS answers for every
-     * operation it does not have: -1, "not permitted". A virtual filesystem
-     * has no attributes to write, and a number stored nowhere would be a
-     * lie to the caller.
+     * A filesystem without modes answers KERR_NOTSUP, the same as every
+     * operation it does not have: the call is not forbidden, the object has
+     * no such attribute. A number stored nowhere would be a lie to the
+     * caller.
      */
     if (m->ops->chmod == NULL) {
-        g_last_error = -1;
-        return -1;
+        g_last_error = KERR_NOTSUP;
+        return KERR_NOTSUP;
     }
 
     rc = m->ops->chmod(m->ctx, path, mode);
@@ -713,8 +844,8 @@ int vfs_chown(const char *path, k_u32_t owner)
     int rc;
 
     if (m == NULL) {
-        g_last_error = -2;
-        return -2;
+        g_last_error = KERR_NOENT;
+        return KERR_NOENT;
     }
 
     rc = path_search_check(path);
@@ -724,8 +855,8 @@ int vfs_chown(const char *path, k_u32_t owner)
     }
 
     if (m->ops->chown == NULL) {
-        g_last_error = -1;
-        return -1;
+        g_last_error = KERR_NOTSUP;
+        return KERR_NOTSUP;
     }
 
     rc = m->ops->chown(m->ctx, path, owner);
@@ -738,15 +869,39 @@ const char *vfs_strerror(int error)
 {
     k_size_t i;
 
+    /* The refusal of the VFS itself is not a text of a filesystem: the
+     * first mounted one may know nothing about it and would translate it
+     * into its own "I/O error" (ADR 0009). */
+    if (error == KERR_NOTSUP) {
+        return "operation not supported";
+    }
+
     for (i = 0; i < g_count; i++) {
         if (g_mounts[i].ops->strerror != NULL) {
             return g_mounts[i].ops->strerror(error);
         }
     }
 
-    if (error == -2) {
+    switch (error) {
+    case KERR_NONE:
+        return "no error";
+    case KERR_PERM:
+        return "operation not permitted";
+    case KERR_NOENT:
         return "no such file or directory";
+    case KERR_EXIST:
+        return "file exists";
+    case KERR_INVAL:
+        return "invalid argument";
+    case KERR_NOTSUP:
+        return "operation not supported";
+    case KERR_NOTDIR:
+        return "not a directory";
+    case KERR_ISDIR:
+        return "is a directory";
+    case KERR_NOSPC:
+        return "no space left on device";
+    default:
+        return "unknown error";
     }
-
-    return "unknown error";
 }

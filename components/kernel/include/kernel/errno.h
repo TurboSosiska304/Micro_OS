@@ -31,5 +31,6 @@
 #define KERR_NOSPC (-28)       /* no space left on device */
 #define KERR_NAMETOOLONG (-36) /* the path is longer than the window */
 #define KERR_NOTEMPTY (-39)
+#define KERR_NOTSUP (-95) /* operation not supported by the object */
 
 #endif /* MICRO_OS_KERNEL_ERRNO_H */

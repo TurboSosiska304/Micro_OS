@@ -124,9 +124,13 @@ written when the project was an operating system for one board; the numbers
 
 ## K6 - The filesystem and the network (planned)
 
-* [ ] A second filesystem behind the VFS: the block devices and the MBR/GPT
-      partitions are there (ADR 0008); the type registry and FAT32/ext2 wait for
-      the decision of ADR 0009
+* [x] A second filesystem behind the VFS: the block devices and the MBR/GPT
+      partitions are there (ADR 0008), the types are registered and
+      mounted by name (`vfs_mount_type`), and FAT12/16/32 is a read-only
+      reader with long names (ADR 0009); a volume of `/mnt/...` is mounted
+      next to MicroFS in the tests
+* [ ] ext2, the reader with inodes and a superblock a checker can walk
+* [ ] `/etc/fstab` and the `mount` command over the type registry
 * [ ] Timestamps of a file, fed by the clock of the kernel
 * [x] A page of the state over HTTP: `httpd` on the sockets, `/` and `/health`
 * [x] MQTT over the sockets: a 3.1.1 client at QoS 0 and 1, with a fake broker in the tests

@@ -22,6 +22,13 @@ set(KERNEL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/kernel")
 set(KSHELL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/kshell")
 set(LIBC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/libc")
 set(MFS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/mfs")
+set(FAT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/fs_fat32")
+
+# The second filesystem of the machine (ADR 0009). Off by default: the
+# disk of `make x86-smoke` is one MicroFS volume, and a reader that no call
+# of the boot asks for is an object file of no use. A machine with a FAT
+# partition turns it on and mounts the partition with vfs_mount_type().
+option(MICRO_OS_FS_FAT32 "FAT12/16/32, read-only" OFF)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -88,6 +95,15 @@ set(MFS_SOURCES
     "${MFS_DIR}/src/mfs_vfs.c"
     "${MFS_DIR}/src/mfs_vfs_mount.c"
 )
+
+set(FAT_SOURCES)
+if(MICRO_OS_FS_FAT32)
+    set(FAT_SOURCES
+        "${FAT_DIR}/src/fat_core.c"
+        "${FAT_DIR}/src/fat_dir.c"
+        "${FAT_DIR}/src/fat_vfs.c"
+    )
+endif()
 
 # The memory test calls strtoul without including the header of the library;
 # on the board that resolves to the libc of ESP-IDF. Here the name has to
@@ -174,6 +190,7 @@ add_executable(microos64
     ${KSHELL_SOURCES}
     ${LIBC_SOURCES}
     ${MFS_SOURCES}
+    ${FAT_SOURCES}
     src/boot64.S
     src/kmain.c
     src/shell.c
@@ -200,6 +217,7 @@ target_include_directories(microos64 PRIVATE
     "${KSHELL_DIR}/include"
     "${LIBC_DIR}/include"
     "${MFS_DIR}/include"
+    "${FAT_DIR}/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 
@@ -207,6 +225,10 @@ target_compile_definitions(microos64 PRIVATE
     KERNEL_BOARD_NAME="x86_64"
     KERNEL_BOARD_DESC="QEMU x86-64 machine"
 )
+
+if(MICRO_OS_FS_FAT32)
+    target_compile_definitions(microos64 PRIVATE MICRO_OS_FS_FAT32=1)
+endif()
 
 set_target_properties(microos64 PROPERTIES
     LINK_FLAGS "-nostdlib -static -Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/linker64.ld -Wl,--build-id=none"

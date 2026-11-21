@@ -78,6 +78,23 @@ else()
 
     message(STATUS "Micro OS: host build (simulator + unit tests)")
 
+    # The filesystems of the image (ADR 0009). MicroFS is the root of the
+    # board, the simulator and the tests, so it cannot be left out of this
+    # build; the second filesystem is a reader that an image links only when
+    # it has a medium to point it at. The tests compile the FAT sources of
+    # their own, so the reader is always covered.
+    option(MICRO_OS_FS_MFS "MicroFS, the filesystem of the board" ON)
+    option(MICRO_OS_FS_FAT32 "FAT12/16/32, read-only, for the tests and a card" OFF)
+    option(MICRO_OS_FS_EXT2 "ext2, read-only (not written yet)" OFF)
+
+    if(NOT MICRO_OS_FS_MFS)
+        message(FATAL_ERROR "the host simulator and the tests mount MicroFS")
+    endif()
+
+    if(MICRO_OS_FS_EXT2)
+        message(FATAL_ERROR "the ext2 reader is not written yet")
+    endif()
+
     enable_testing()
 
     add_subdirectory(components/kernel)
@@ -87,6 +104,9 @@ else()
     add_subdirectory(components/config)
     add_subdirectory(components/net)
     add_subdirectory(components/mfs)
+    if(MICRO_OS_FS_FAT32)
+        add_subdirectory(components/fs_fat32)
+    endif()
     add_subdirectory(components/procfs)
     add_subdirectory(components/devfs)
     add_subdirectory(components/font)

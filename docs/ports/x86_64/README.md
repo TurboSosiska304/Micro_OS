@@ -190,6 +190,11 @@ answer is reported and the machine goes on with `ram0`, so `make x86-run` and
   MBR read by the portable parser, MicroFS on the first partition (`ata0p1`)
   and the volume formatted at the first boot; what is written to it survives
   a reset, which `make x86-disk-smoke` checks (ADR 0008);
+* a second filesystem: `-DMICRO_OS_FS_FAT32=ON` links the read-only FAT
+  reader and its `vfs_mount_type()` (ADR 0009). The option is off by default,
+  so the smoke tests of the machine keep one MicroFS volume; a machine that
+  has a FAT partition mounts it with a call of the boot, because `/etc/fstab`
+  and the `mount` command do not speak the registry yet;
 * a program out of a file: the boot writes the images of `hello`, `crash` and
   `fork` to `/bin`, gives them the mode 0755 and asks for `/bin/hello` with
   `execve` - the stat, the check of the mode, the read through the VFS, the

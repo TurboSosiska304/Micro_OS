@@ -21,6 +21,7 @@ if(NOT ESP_PLATFORM)
         cases/test_mfs.c
         cases/test_mfs_persistence.c
         cases/test_vfs.c
+        cases/test_fs_fat.c
         cases/test_sysfs.c
         cases/test_input_debounce.c
         cases/test_battery_soc.c
@@ -52,6 +53,7 @@ if(NOT ESP_PLATFORM)
         "${CMAKE_SOURCE_DIR}/components/drivers/include"
         "${CMAKE_SOURCE_DIR}/components/telnet/include"
         "${CMAKE_SOURCE_DIR}/components/graphics/include"
+        "${CMAKE_SOURCE_DIR}/components/fs_fat32/include"
     )
 
     target_sources(microos_tests PRIVATE
@@ -61,6 +63,12 @@ if(NOT ESP_PLATFORM)
         "${CMAKE_SOURCE_DIR}/components/drivers/src/rtc_time.c"
         "${CMAKE_SOURCE_DIR}/components/telnet/src/telnet_proto.c"
         "${CMAKE_SOURCE_DIR}/components/graphics/src/text_wrap.c"
+        # The FAT reader is off in the firmware by default (ADR 0009), so
+        # the test binary compiles its sources of its own: the reader is
+        # covered whether or not an image links it.
+        "${CMAKE_SOURCE_DIR}/components/fs_fat32/src/fat_core.c"
+        "${CMAKE_SOURCE_DIR}/components/fs_fat32/src/fat_dir.c"
+        "${CMAKE_SOURCE_DIR}/components/fs_fat32/src/fat_vfs.c"
     )
 
     target_link_libraries(microos_tests PRIVATE microos_kernel microos_board microos_kshell microos_init microos_config microos_net microos_mfs microos_procfs microos_devfs microos_libc microos_wifi microos_port_host)

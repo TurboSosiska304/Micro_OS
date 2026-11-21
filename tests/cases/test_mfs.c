@@ -1056,8 +1056,11 @@ static void test_vfs_mount(void)
     KT_CHECK_INT_EQ(mfs_vfs_mount("/", "ram0"), 0);
     KT_CHECK_INT_EQ(mfs_open("/first.txt", MFS_O_RDONLY, &file), MFS_ENOENT);
 
-    /* The volume of this test is not the one of setup(): it is freed here. */
+    /* The volume of this test is not the one of setup(): it is freed here,
+     * and the device leaves the registry before its stack frame does - a
+     * later test that looks a device up must not walk into it. */
     mfs_unmount();
+    KT_CHECK_INT_EQ(k_blockdev_unregister(&device), 0);
     mfs_ram_free(&volume);
 }
 
