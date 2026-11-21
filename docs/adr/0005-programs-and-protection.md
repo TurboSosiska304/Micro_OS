@@ -77,8 +77,13 @@ the name of a new field.
 
 A real `fork()` needs page tables; the board has none. The kernel does not
 pretend: the placeholder stays on the board, and the address space of its own
-is the next step of the x86-64 port (page tables per task, copy on write),
+was the next step of the x86-64 port (page tables per task, copy on write),
 not a change of the generic kernel. The syscall keeps its number.
+
+**Update (K4):** the step is taken. The x86-64 port has an address space per
+task, a program is a task of the scheduler, and `fork()` copies the page
+tables and marks both copies copy-on-write (ADR 0007, contract 1.5). The
+board and the host still take the placeholder below.
 
 ### 5. `fork()`: the ABI in the kernel, the mechanism in the port
 
@@ -99,8 +104,14 @@ So the kernel keeps one implementation of the *shape* (`sys_fork` decides the
 pid, the parent relations and the waiting) and asks the port for the
 *substance*: copy the context of the caller (`k_port_fork_copy()`, 0 when the
 caller is the child, the pid of the child in the parent, -1 when the machine
-cannot). Today only the first behaviour exists; the second is the milestone
-of the x86-64 paging.
+cannot).
+
+**Update (K4):** both behaviours exist. The board, the host and the null port
+answer -1 and the kernel falls back to the placeholder described above; the
+x86-64 port answers the pid of the child, having made both the parent and the
+child return from the same call - the parent with the pid, the child with
+zero - and having shared their pages copy-on-write. The call is added to the
+contract as minor 1.5.
 
 ### 6. The syscall table is the only door
 

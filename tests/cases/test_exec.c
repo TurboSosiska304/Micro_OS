@@ -230,6 +230,10 @@ static void check_run_without_a_machine(void)
     /* A call with nothing to run is a refusal of the caller, not of the
      * machine, so it is -1 and not ENOSYS. */
     KT_CHECK_INT_EQ(k_exec_run(NULL, NULL), -1);
+
+    /* This machine has no address space per task: a fork cannot copy the
+     * context of the caller, and the kernel has to keep its placeholder. */
+    KT_CHECK_INT_EQ(k_port_fork_copy(NULL), -1);
 }
 
 void test_exec(void)

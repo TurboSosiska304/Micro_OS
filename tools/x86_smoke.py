@@ -54,6 +54,12 @@ COMMANDS = [
     "exec /bin/hello",
     "exec /bin/hello one two",
     "fsck",
+    # The program of K4: it forks, the child writes the shared page and ends
+    # with 7, the parent waits and still reads its own 42 (copy on write).
+    "exec /bin/fork",
+    # The same again, after the page tables and the frames of the first run
+    # have been released: a leak of a space would show here as a refusal.
+    "exec /bin/fork",
     # The program that faults: it writes to address zero in ring 3, and the
     # shell has to answer the command after it for the machine to be alive.
     "exec /bin/crash",
@@ -69,7 +75,7 @@ PROMPT = "microos> "
 # console of COM1, the contract of the port and the boot of the kernel.
 EXPECTED = [
     "board: qemu_x86_64",
-    "port: x86_64, contract 1.4",
+    "port: x86_64, contract 1.5",
     "[ ok ] sched",
     "subsystem(s) ready",
     "the kernel is up",
@@ -288,6 +294,39 @@ def check(output: str) -> list:
     # filesystem itself, and the checker is on the machine, not in the test.
     expect("the volume is consistent", "the volume is consistent" in answer("fsck"))
 
+    # --- the fork: an address space per task and copy on write
+    fork = answer("exec /bin/fork")
+    expect("the forking program starts", "PROGRAM: fork starts, value 42" in fork)
+    # The child gets the zero of the fork and writes the page it shares with
+    # its parent; the write faults and the handler copies the page.
+    expect(
+        "the child of the fork gets zero and its own page",
+        "PROGRAM: child fork returned 0, value 99" in fork,
+    )
+    expect(
+        "the parent gets the pid of the child",
+        re.search(r"PROGRAM: parent fork returned [1-9][0-9]*", fork) is not None,
+    )
+    # The parent never wrote the page: it still reads the value it had before
+    # the fork. Shared memory without the fault of the first write is 99.
+    expect("the parent keeps its own page", "PROGRAM: parent sees value 42" in fork)
+    expect(
+        "the parent waits and gets the status of the child",
+        re.search(r"PROGRAM: waited, status 7", fork) is not None,
+    )
+    expect("the fork program returns its status", "the program exited with 0" in fork)
+    expect("the shell sees the fork program finish", "the program has finished" in fork)
+
+    # The second run of the same program comes after the tables and frames of
+    # the first were released; a space that leaked would run out by now.
+    fork = answer("exec /bin/fork", 1)
+    expect(
+        "the fork runs again with the same answer",
+        "PROGRAM: parent sees value 42" in fork
+        and "PROGRAM: waited, status 7" in fork
+        and "the program exited with 0" in fork,
+    )
+
     # --- the fault of a program is not the fault of the machine
     crash = answer("exec /bin/crash")
     expect("the faulting program starts", "PROGRAM: crash writes to address zero" in crash)
@@ -307,7 +346,7 @@ def check(output: str) -> list:
 
 def main(argv: list) -> int:
     parser = argparse.ArgumentParser(description="the smoke test of the x86-64 port")
-    parser.add_argument("--timeout", type=float, default=20.0, help="the seconds the machine gets")
+    parser.add_argument("--timeout", type=float, default=30.0, help="the seconds the machine gets")
     parser.add_argument("--verbose", action="store_true", help="print the console of the machine")
     args = parser.parse_args(argv)
 

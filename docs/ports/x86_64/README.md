@@ -169,7 +169,7 @@ answer is reported and the machine goes on with `ram0`, so `make x86-run` and
 
 ## What works
 
-* the boot: the loader, long mode, the banner, the contract check at 1.4;
+* the boot: the loader, long mode, the banner, the contract check at 1.5;
 * the console: the VGA text screen and COM1 from one call, the keyboard of
   the PS/2 with Shift, Caps Lock, Backspace and Ctrl+C, and the serial port
   with the console it always had;
@@ -178,8 +178,8 @@ answer is reported and the machine goes on with `ram0`, so `make x86-run` and
 * paging and ring 3 (ADR 0007): the kernel is a supervisor-only identity map
   of the first gigabyte, the window of the programs is 4 KiB user pages with
   the null page unmapped and a guard page under the 64 KiB stack, and the
-  program prints the `cpl` it reads from CS (`3`); `exit` returns to the call
-  that entered it with the status, and `execve` answers 0;
+  program prints the `cpl` it reads from CS (`3`); a program is a task, `exit`
+  ends it, the caller of `execve` waits for it, and `execve` answers 0;
 * the filesystem: MicroFS mounted at `/`, on the first partition of the disk
   when one is attached and on a volume of 512 KB in the memory of the port
   when there is not; `ls`, `cat`, `write`, `mkdir`, `rm`, `df`, `fsck` and
@@ -190,8 +190,8 @@ answer is reported and the machine goes on with `ram0`, so `make x86-run` and
   MBR read by the portable parser, MicroFS on the first partition (`ata0p1`)
   and the volume formatted at the first boot; what is written to it survives
   a reset, which `make x86-disk-smoke` checks (ADR 0008);
-* a program out of a file: the boot writes the images of `hello` and `crash`
-  to `/bin`, gives them the mode 0755 and asks for `/bin/hello` with
+* a program out of a file: the boot writes the images of `hello`, `crash` and
+  `fork` to `/bin`, gives them the mode 0755 and asks for `/bin/hello` with
   `execve` - the stat, the check of the mode, the read through the VFS, the
   parse of the image and the entry are the ones of the call and not a copy of
   them. The program prints its lines on the console and calls `exit`; the
@@ -221,17 +221,18 @@ answer is reported and the machine goes on with `ram0`, so `make x86-run` and
   and logical partitions wait, and a medium of 4 KB sectors does not;
 * without a disk the volume is still the memory of the port, and it does not
   survive a reset - the boot then makes the filesystem again;
-* no `fork()` with an address space of its own: the page tables are per
-  *program* and one program runs at a time, so `k_port_fork_copy()` still
-  exists only in ADR 0005; the copy of the tables and copy on write are the
-  next milestone (`KERNEL_NOMMU` is still 1);
+* `fork()` and copy on write (K4, contract 1.5): a program is a task of the
+  scheduler with its own CR3 and kernel stack, `execve` makes it and waits for
+  it, and `fork()` copies the page tables, points both copies at the same
+  frames and clears the write bit. The first write of either side faults,
+  copies the 4 KiB page and takes the write bit back; the child returns from
+  the call with 0, the parent with the pid, and `waitpid` sees the status.
+  `/bin/fork` is the program of the smoke test and prints the 42 of the
+  parent next to the 99 of the child;
 * the kernel is not in a higher half and the pointers of a program are still
   read directly by the kernel: a `copy_from_user` at the edge of the system
   call is not written yet, so an invalid pointer of a program is a fault of
   the kernel and not an error of the call;
-* a program is not a task of the scheduler: the shell that runs one is blocked
-  in `execve` until the program exits or faults, and only one program runs at
-  a time;
 * no network: `k_port_net_*` answers "no" and the commands that need a socket
   say so.
 

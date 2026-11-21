@@ -45,7 +45,7 @@ K5.
 
 | Debt | Where | Status | What it needs |
 |---|---|---|---|
-| `fork()` is a placeholder: the child shares the memory of the parent and re-enters its program; `k_port_fork_copy()` exists only in ADR 0005, even on x86-64 where the page tables of a *program* exist. | `components/kernel/src/ksys.c`, ADR 0005, ADR 0007 | open | Page tables per task and copy on write - the milestone of K5, not a change of the generic kernel. |
+| `fork()` on a machine without an MMU is still a placeholder: the child shares the memory of the parent and re-enters its program. On x86-64 the call is real - an address space per task, copy on write and `k_port_fork_copy()` (contract 1.5) - and the board keeps the placeholder because it has no MMU. | `components/kernel/src/ksys.c`, ADR 0005, ADR 0007 | done | An MMU on the board, or the same placeholder for as long as it has none. |
 | `KERNEL_NOMMU` is still 1 everywhere: the x86-64 port protects a program of ring 3, but the generic kernel does not use the MMU for a task and the board has none. | `components/kernel/include/kernel/config.h`, `ports/port_x86_64` | open | Page tables per task and the flag turned off for the ports that have an MMU. |
 | The owner is stored and checked but there is only one user, uid 0, so groups and a second party are not part of the model. | ADR 0005, `components/kernel/src/ksys.c` | decision | None until a second user exists. |
 | The owner of the system gets no exemption of root. | ADR 0005, the mode check | decision | None: this is the rule, not a missing feature. |
@@ -55,7 +55,7 @@ K5.
 
 | Debt | Where | Status | What it needs |
 |---|---|---|---|
-| No address space per *task*: the page tables are built per program and one program runs at a time, so `fork()` still copies no memory and the kernel is not in a higher half. | `ports/port_x86_64/src/paging.c`, `ports/port_x86_64/src/port_exec.c` | open | A copy of the tables per task, copy on write in the fault handler, and `k_port_fork_copy()`. Per-program paging, ring 3 and the fault handler are done (ADR 0007). |
+| An address space per *task*: the page tables are copied for a fork and the pages are copy-on-write, and a program is a task with a CR3 of its own (K4, ADR 0007). | `ports/port_x86_64/src/paging.c`, `ports/port_x86_64/src/port_exec.c` | done | Nothing on x86-64; the kernel is still not in a higher half. |
 | The pointers of a program are read directly by the kernel: no `copy_from_user`, no SMAP, so an unmapped address in a call faults in ring 0 and stops the machine. | `components/kernel/src/ksys.c`, `ports/port_x86_64/src/port_x86_64.c` | open | A range check against the window and a copy at the edge of the table, or SMAP and a per-call copy. |
 | No guard page under the stacks of *kernel tasks* (the stack of a program has one): a kernel stack that overflows walks into the heap of the port. | `ports/port_x86_64/src/port_x86_64_task.c` | open | An unmapped page at the bottom of every kernel stack, and the page tables of a task to put it in. |
 | No IST for the machine check and the NMI: only the double fault has a stack of its own (`IST1`), so a fault in those handlers can still become a triple fault. | `ports/port_x86_64/src/interrupts.S`, `ports/port_x86_64/src/gdt.c` | open | `IST2` and `IST3` in the TSS and the gates that name them. |
@@ -64,7 +64,7 @@ K5.
 | No store: `k_port_kv_get`/`set`/`next` answer "no" (`commit` answers 0). | `ports/port_x86_64/src/port_x86_64.c` | open | A place to keep a few keys (the RAM volume or a medium), and the same tests as the host store. |
 | One `errno` for all tasks in the kernel of the board (the x86-64 port now copies the TLS block per task and follows it with `IA32_FS_BASE`). | `components/port_esp32`, `ports/port_host` | open | A thread pointer per task on the ports whose tasks share the block (the host has threads of its own). |
 | The refusal paths of `k_port_exec_enter()` are not covered on the host: only a good image goes through `make x86-smoke`. | `ports/port_x86_64/src/port_exec.c`, `tests/cases/test_exec.c` | open | A host test of the checks (an image past the window, a bad entry, a bss over the ceiling) or a port test of the refusals. |
-| A program of ring 3 runs with the interrupts on and gets its ticks, but it is not a task of the scheduler: the shell that ran it is blocked in the call, and there is no second program to switch to. | `ports/port_x86_64/src/port_exec.c` | open | A program as a task with its own address space (the `fork()` milestone). |
+| A program is a task of the scheduler now: `execve` makes it, waits for it and the shell is asleep until it exits (K4). A program that calls `execve` starts a second task instead of replacing itself, and the open files are not inherited by a fork. | `ports/port_x86_64/src/port_exec.c`, `components/kernel/src/ksys.c` | partial | The POSIX shape of `execve` and the table of descriptors of a fork. |
 | `exec_enter` accepts a hand-built `struct k_exec_image` and copies from it; the parser's checks are repeated there, but the structure is not tied to the bytes the caller holds. | `ports/port_x86_64/src/port_exec.c` | open | One owner of the validation (the parser) and a port that takes only a parsed image, or a documented rule that the port repeats the checks. |
 
 ## K6 - The filesystem and the network

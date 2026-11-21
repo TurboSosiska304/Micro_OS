@@ -17,6 +17,8 @@
 
 #include "kernel/exec.h"
 
+struct task;
+
 /* Can this machine run a program loaded from a file at all? */
 bool k_port_exec_supported(void);
 
@@ -40,7 +42,8 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[]);
  * program and can take control back answers true for as long as the program
  * is the caller: `exit` from a program is not the end of a kernel task, it is
  * the end of that program, and the kernel has to know which of the two it is
- * looking at. A port without a program in flight answers false.
+ * looking at. A port whose programs are tasks answers true while one runs;
+ * a port without a program in flight answers false.
  */
 bool k_port_exec_active(void);
 
@@ -52,5 +55,19 @@ bool k_port_exec_active(void);
  * behind KSYS_EXIT on a machine whose programs are not tasks of the kernel.
  */
 void k_port_exec_exit(int code);
+
+/*
+ * The substance of fork() on a machine with an MMU: the kernel has made the
+ * record of the child (`struct task`, a pid, the parent), and the port gives
+ * it the context of the caller - the address space, the registers and the
+ * point where the call returns - with the answer zero. The caller is the
+ * parent and gets the pid of the child back.
+ *
+ * Answers the pid of the child on success, -1 when the machine cannot copy a
+ * context (a machine without an address space per task, or a caller that is
+ * not a program), and -2 when the copy failed for want of memory. The kernel
+ * keeps its own placeholder for the -1.
+ */
+int k_port_fork_copy(struct task *child);
 
 #endif /* MICRO_OS_KERNEL_PORT_EXEC_H */

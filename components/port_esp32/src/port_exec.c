@@ -34,3 +34,10 @@ void k_port_exec_exit(int code)
 {
     K_UNUSED(code);
 }
+
+/* Without an MMU the child shares the memory: the kernel's placeholder. */
+int k_port_fork_copy(struct task *child)
+{
+    K_UNUSED(child);
+    return -1;
+}

@@ -272,9 +272,13 @@ own number, and the program tells the child by the mark of its task
 (`task_self()->is_child`) - in Linux the child knows it by the zero that
 `fork()` returns, here the child starts the program from the beginning.
 
-The x86-64 port has page tables now, but not yet a space per task: `fork`
-there is the same placeholder. The copy of the page tables and the copy on
-write are the next milestone (`k_port_fork_copy()`, ADR 0005 and ADR 0007).
+On the x86-64 port the call is real (K4, contract 1.5): a program is a task
+with an address space of its own, `fork()` copies the page tables, both
+copies share the frames read-only, and the first write of either side faults
+and gets a page of its own. The child returns from the same call with 0 and
+the parent with the pid, as POSIX promises, and `waitpid()` sees the child
+the usual way. The port does the copy (`k_port_fork_copy()`); the kernel
+still decides the pid, the parent and the wait.
 
 `waitpid()` waits for a child, the status is the code the child finished
 with. The number 0 or -1 means "any child". A call with no child to wait for

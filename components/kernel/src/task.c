@@ -103,7 +103,13 @@ static void task_trampoline(void *arg)
     task_exit(0);
 }
 
-struct task *task_create(const char *name, task_entry_fn entry, void *arg, k_u8_t prio)
+/*
+ * A free slot of the table with the fields a new task shares with every other
+ * one: a pid, a state, a parent, the directory and the name. The port context
+ * is not made here - an ordinary task and the child of a fork get different
+ * ones - and the slot is not published until the caller says so.
+ */
+static struct task *task_alloc_slot(const char *name, task_entry_fn entry, void *arg, k_u8_t prio)
 {
     struct task *t = NULL;
     k_size_t i;
@@ -139,6 +145,28 @@ struct task *task_create(const char *name, task_entry_fn entry, void *arg, k_u8_
 
     k_port_exit_critical();
 
+    return t;
+}
+
+static void task_free_slot(struct task *t)
+{
+    if (t == NULL) {
+        return;
+    }
+
+    k_port_enter_critical();
+    memset(t, 0, sizeof(*t));
+    if (g_used > 0) {
+        g_used--;
+    }
+    k_port_exit_critical();
+}
+
+struct task *task_create(const char *name, task_entry_fn entry, void *arg, k_u8_t prio)
+{
+    struct task *t;
+
+    t = task_alloc_slot(name, entry, arg, prio);
     if (t == NULL) {
         kerror("task: the task table is full (%u slots)", (unsigned)TASK_MAX_TASKS);
         return NULL;
@@ -149,10 +177,7 @@ struct task *task_create(const char *name, task_entry_fn entry, void *arg, k_u8_
      * registered in the run queue before it can run for the first time.
      */
     if (k_port_task_create(t, task_trampoline, t) != 0) {
-        k_port_enter_critical();
-        t->in_use = false;
-        g_used--;
-        k_port_exit_critical();
+        task_free_slot(t);
         kerror("task: the port refused to create '%s'", name != NULL ? name : "?");
         return NULL;
     }
@@ -163,6 +188,49 @@ struct task *task_create(const char *name, task_entry_fn entry, void *arg, k_u8_
     kinfo("task: created '%s' (pid %u, prio %u)", t->name, (unsigned)t->pid, (unsigned)t->prio);
 
     return t;
+}
+
+/*
+ * The child of a fork on a machine whose port can copy the context of the
+ * caller (ADR 0005, K4). The child has an address space of its own: the port
+ * copies the tables, marks the pages copy-on-write and makes the context
+ * return from the system call with zero. The open files are not copied yet -
+ * a program of this milestone opens nothing - and the rest of the record is
+ * the one of any task.
+ */
+int task_fork(struct task *parent, const char *name, struct task **child)
+{
+    struct task *c;
+    int rc;
+
+    if (parent == NULL || child == NULL) {
+        return -2;
+    }
+
+    *child = NULL;
+
+    c = task_alloc_slot(name, NULL, NULL, parent->prio);
+    if (c == NULL) {
+        return -2;
+    }
+
+    c->parent = parent;
+    task_set_cwd(c, task_get_cwd(parent));
+
+    rc = k_port_fork_copy(c);
+    if (rc < 0) {
+        task_free_slot(c);
+        return (rc == -1) ? -1 : -2;
+    }
+
+    k_sched_task_ready(c);
+    k_port_task_start(c);
+
+    kinfo("task: forked '%s' (pid %u, parent %u)", c->name, (unsigned)c->pid,
+          (unsigned)parent->pid);
+
+    *child = c;
+    return 0;
 }
 
 void task_exit(int code)

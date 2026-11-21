@@ -59,9 +59,10 @@ guard: it is not present, so an overrun of the stack is a page fault of the
 program instead of a write into its own data.
 
 The page tables of a program come from a pool of pages in the kernel image
-(PML4, PDPT, PD and eight PTE tables). One program runs at a time on this
-port, so one set is built per `execve` and destroyed when the program ends.
-The next one gets fresh, zeroed tables.
+(PML4, PDPT, PD and eight PTE tables). One set is built per `execve` and
+destroyed when the program ends; the next one gets fresh, zeroed tables.
+Since K4 the set belongs to the *task* that runs the program (see section 7),
+so a parent and the child of its fork have two sets over the same frames.
 
 ### 2. The descriptors: a new GDT in the 64-bit port
 
@@ -158,12 +159,41 @@ false and do nothing, and the kernel keeps `task_exit()` for a machine whose
 programs are tasks. The minor version moves from 3 to 4 in
 `kernel/port/info.h` and in every port.
 
+### 7. Update (K4): a program is a task, and fork copies it
+
+The program stopped being a call that stays on the stack of its caller. It is
+a task of the scheduler now: `k_port_task_create()` gives it a kernel stack,
+the first body of the task switches CR3 to the space of the program and drops
+to ring 3 through `iretq`, and `exit` or a fault ends the task the way any
+task ends. `k_port_exec_enter()` makes the task and waits for it with
+`task_wait()`, so the shell that asks for a program is asleep until that
+program is a zombie, exactly as a parent waits for a child.
+
+The address space belongs to the task, not to the program: `commit_switch()`
+writes the CR3 of the next context and its `RSP0`, and a task that ends hands
+its tables and frames to the next context to release. The frames of the
+window come from a frame allocator over the arena (with a reference count,
+because a fork shares them), and the tables still come from the pool of pages
+in the image.
+
+`fork()` is real with contract 1.5. `k_port_fork_copy(struct task *child)` is
+the seam: the kernel has made the record and the pid, the port clones the
+tables of the parent, points both copies at the same frames, clears the write
+bit and sets the software copy-on-write bit in both. The frame of the
+`int $0x80` that is being served is copied to the top of the child's kernel
+stack with zero in the slot of its result, so the child's first iretq lands
+at the instruction after the call with the answer 0; the parent returns with
+the pid. The page fault handler copies the 4 KiB page and retries the
+instruction.
+
+`CR0.WP` is set, so a write of the *kernel* to a copy-on-write page (the
+status of `waitpid`, the buffer of a `read`) takes the same path: a kernel
+that wrote through the shared frame would corrupt the child at the edge of
+the system call. The exception stub now saves the registers and can return,
+which is what makes the retry possible.
+
 ## What is not done
 
-* `fork()` with copy on write. `k_port_fork_copy()` still exists only in
-  ADR 0005; `sys_fork` keeps the placeholder of the board. The page tables of
-  a program are rebuilt per `execve` and one program runs at a time, which is
-  not yet an address space per task.
 * The kernel is not in a higher half. It keeps the identity map of the first
   gigabyte, so the window of the programs is a hole in the kernel's map and
   not the other way round.
@@ -176,10 +206,10 @@ programs are tasks. The minor version moves from 3 to 4 in
   map assumes one processor.
 * `KERNEL_NOMMU` is still 1 for the whole tree. Turning it off is a change of
   the generic kernel (and of the board's concessions), not of this port alone.
-* A program is not a task of the scheduler: the shell that runs it is blocked
-  in the call, and a program that never calls or exits keeps the CPU it was
-  given (its interrupts are on, so the clock still ticks, but there is no
-  second program to switch to).
+* The open files are not inherited by the child of a fork, and a program that
+  calls `execve` starts a second task and waits for it instead of replacing
+  itself: both are the program-as-task model taken one step at a time, not
+  the POSIX shape yet.
 * The ARM port with an MMU is still a plan.
 
 ## Consequences
@@ -191,14 +221,18 @@ programs are tasks. The minor version moves from 3 to 4 in
   address zero is not mapped.
 * A bad program is a line and a status, not a dead machine; the shell that
   ran it is alive.
-* `exit` from a program returns to the caller of `execve`, and `execve` keeps
-  answering 0.
+* `exit` from a program ends its task, the caller of `execve` gets the status,
+  and `execve` keeps answering 0.
+* `fork()` returns the pid in the parent and zero in the child, the child has
+  a page table of its own and the first write splits a shared page; `waitpid`
+  and the shell see the status (K4).
 * Each task has its own `errno`.
 
 **Bad**
 
-* One program at a time, one set of page tables, one kernel stack for it: the
-  design of the port, not of the kernel.
-* The kernel's own map is still the low identity map; the road to `fork()`
-  and to a higher half is open and documented, not taken.
+* The address space, the kernel stack and the frame of a task belong to the
+  port; the generic kernel still has `KERNEL_NOMMU` and the board keeps the
+  placeholder for `fork()`.
+* The kernel's own map is still the low identity map; the road to a higher
+  half is open and documented, not taken.
 * The pointers of a program are not yet copied at the edge of the system.

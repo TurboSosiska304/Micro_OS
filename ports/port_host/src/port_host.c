@@ -257,7 +257,7 @@ const char *k_port_arch(void)
  * for a module of Linux.
  */
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 4u
+#define PORT_API_MINOR 5u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_host does not speak the contract of this kernel");

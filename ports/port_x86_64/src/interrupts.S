@@ -80,18 +80,31 @@ isr_exception_err 30
 isr_exception 31
 
 /*
- * The common tail of the exceptions. The registers of the moment are not
- * saved: a fault of the kernel stops the machine and a fault of a program
- * never resumes the instruction. The four numbers of the frame are all C
- * needs - the vector, the error code, the RIP and the CS, which says whether
- * the code that broke was the kernel or a program of ring 3.
+ * The common tail of the exceptions. The registers of the moment are saved
+ * because one exception returns: the first write into a page a fork made
+ * read-only is handled, and the instruction has to be run again with every
+ * register it had. A fault of the kernel or a fault of the program of ring 3
+ * takes the machine or the task down, and the frame is never used.
  *
- * The thread pointer has to come back to the kernel before any C runs: a
+ * The frame below the saved registers is the one the processor and the stub
+ * built: vector, error, RIP, CS (and RSP, SS when the fault came from ring
+ * 3). The thread pointer has to come back to the kernel before any C runs: a
  * program of ring 3 leaves IA32_FS_BASE at zero, and the handler may log or
  * set an errno.
  */
 .type isr_exception_common, @function
 isr_exception_common:
+    pushq %rax
+    pushq %rcx
+    pushq %rdx
+    pushq %rsi
+    pushq %rdi
+    pushq %r8
+    pushq %r9
+    pushq %r10
+    pushq %r11
+    pushq %rbp
+
     movq %rsp, %rbp
 
     /* The ABI wants the stack of a call aligned to 16 bytes, and an
@@ -100,18 +113,41 @@ isr_exception_common:
     call port_x86_64_tls_kernel
     movq %rbp, %rsp
 
-    movq 0(%rbp), %rdi  /* the vector */
-    movq 8(%rbp), %rsi  /* the error code, or the zero of the stub */
-    movq 16(%rbp), %rdx /* the instruction that was running */
-    movq 24(%rbp), %rcx /* the code selector of the moment */
+    movq 80(%rbp), %rdi  /* the vector */
+    movq 88(%rbp), %rsi  /* the error code, or the zero of the stub */
+    movq 96(%rbp), %rdx  /* the instruction that was running */
+    movq 104(%rbp), %rcx /* the code selector of the moment */
 
     andq $-16, %rsp
     call port_x86_64_exception
+    movq %rbp, %rsp
 
+    /*
+     * The only way back into the interrupted code is a page that was copied
+     * for a write. A frame of ring 3 must leave the thread pointer at zero,
+     * because the block of the kernel is not mapped there; a frame of ring 0
+     * keeps the pointer it had.
+     */
+    movq 104(%rbp), %rax
+    testb $3, %al
+    jz 1f
+    andq $-16, %rsp
+    call port_x86_64_tls_user
+    movq %rbp, %rsp
 1:
-    cli
-    hlt
-    jmp 1b
+    popq %rbp
+    popq %r11
+    popq %r10
+    popq %r9
+    popq %r8
+    popq %rdi
+    popq %rsi
+    popq %rdx
+    popq %rcx
+    popq %rax
+
+    addq $16, %rsp /* the vector and the error code, not part of the frame */
+    iretq
 .size isr_exception_common, . - isr_exception_common
 
 /*

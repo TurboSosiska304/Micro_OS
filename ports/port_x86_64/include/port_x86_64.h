@@ -134,14 +134,15 @@ void port_x86_64_irq_tick(void);
  * when it names a ring 3 frame the program that faulted is taken down and
  * the machine continues, and when it names ring 0 the kernel has nowhere to
  * return to and the machine stops. The RIP and, for a page fault, CR2 say
- * where.
+ * where. The one exception is the first write into a page a fork made
+ * read-only: the page is copied and 1 is returned, which sends the stub back
+ * to the instruction that faulted with the registers it had.
  */
-void port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs);
+int port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs);
 
 /*
- * A fault of the program that is running: print the line of the failure, end
- * the program and return to k_port_exec_enter() with a status of 255. Does
- * not return to the faulting instruction.
+ * A fault of the program that is running: print the line of the failure and
+ * end the task it runs in with the status 255. Does not return.
  */
 void port_x86_64_program_fault(k_u64_t vector, k_u64_t address);
 
@@ -158,26 +159,51 @@ void port_x86_64_gdt_init(void);
 void port_x86_64_tss_set_rsp0(k_u64_t rsp0);
 
 /*
- * Put the identity map of the kernel in CR3. The map covers the first
- * gigabyte in 2 MiB pages, supervisor-only, the same way the loader made it;
- * every program gets a copy with the user window replaced.
+ * Build the identity map of the kernel. The map covers the first gigabyte in
+ * 2 MiB pages, supervisor-only, the same way the loader made it; every task
+ * with a program gets a copy with the user window replaced.
  */
 void port_x86_64_paging_init(void);
 k_u64_t port_x86_64_kernel_cr3(void);
 
-/* Build (or destroy) the page tables of one program. Zero on failure. */
+/*
+ * The page tables of one task. A space is a PML4 and the tables under it; the
+ * handle is its physical address, which is also the value that goes into CR3.
+ * Create builds the kernel map with the user window; clone copies the tables
+ * of a parent and turns the pages of the window into copy-on-write pages of
+ * both; destroy gives the tables and the frames back. Zero means failure.
+ */
 k_u64_t port_x86_64_paging_space_create(void);
+k_u64_t port_x86_64_paging_space_clone(k_u64_t parent_cr3);
 void port_x86_64_paging_space_destroy(k_u64_t cr3);
+
+/*
+ * A physical page of the arena behind the user window, already zeroed, or
+ * zero when the arena is full. The frames are shared after a fork: release
+ * drops one reference and the last one makes the page free again.
+ */
+k_u64_t port_x86_64_frame_alloc(void);
+void port_x86_64_frame_release(k_u64_t paddr);
 
 /*
  * Map `len` bytes of `vaddr` in the window of the programs onto the physical
  * pages at `paddr`, readable and writable from ring 3. Both addresses must be
  * page aligned and inside their windows.
  */
-int port_x86_64_paging_map_user(k_u64_t vaddr, k_u64_t paddr, k_size_t len);
+int port_x86_64_paging_map_user(k_u64_t cr3, k_u64_t vaddr, k_u64_t paddr, k_size_t len);
 
 /* The physical address behind a virtual address of the window of programs. */
-void *port_x86_64_paging_phys(k_u64_t vaddr);
+void *port_x86_64_paging_phys(k_u64_t cr3, k_u64_t vaddr);
+
+/*
+ * The copy of the page under `vaddr` for the first write after a fork. The
+ * page belongs to both spaces until then; this one gets a frame of its own
+ * with the write bit back. Returns 1 when the instruction may be retried.
+ */
+int port_x86_64_paging_handle_cow(k_u64_t cr3, k_u64_t vaddr);
+
+/* The CR3 in the register of the processor right now. */
+k_u64_t port_x86_64_current_cr3(void);
 
 /* Make `cr3` the page table of the processor. */
 void port_x86_64_paging_switch(k_u64_t cr3);

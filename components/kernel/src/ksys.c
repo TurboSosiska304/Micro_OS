@@ -726,11 +726,14 @@ static void forked_child(void *arg)
 }
 
 /*
- * The fork: a new task with the same program. The memory of the parent is
- * NOT copied - KERNEL_NOMMU is set, and a kernel without an MMU cannot do
- * that - so the tasks share it, like the flag CLONE_VM of Linux. The child
- * has its own number, so the program tells the child by the mark of its
- * task.
+ * The fork: a task with the same program. On a machine with an address space
+ * per task the port copies the context of the caller (`k_port_fork_copy`):
+ * the child gets its own memory, its own page tables and returns from this
+ * same call with zero, and the parent keeps the pid. A machine without an MMU
+ * cannot copy the memory (KERNEL_NOMMU), so the port refuses and the child is
+ * the placeholder of the kernel: a task that shares the memory of the parent
+ * and re-enters its program from the start. The child of that placeholder
+ * tells itself by the zero and by the mark of its task.
  */
 static k_ssize_t sys_fork(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3, ksys_arg_t a4,
                           ksys_arg_t a5)
@@ -751,11 +754,12 @@ static k_ssize_t sys_fork(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_
     }
 
     /*
-     * A task that is itself the child of a fork and reaches the fork again
-     * is that child: it gets the 0 of POSIX, and no second child is made.
-     * The child of this fork re-runs the program of the parent from its
-     * start, so a program that does not ask "am I the child?" first would
-     * fork again and again without this.
+     * A task that is itself the child of the placeholder and reaches the
+     * fork again is that child: it gets the 0 of POSIX, and no second child
+     * is made. The child of the placeholder re-runs the program of the parent
+     * from its start, so a program that does not ask "am I the child?" first
+     * would fork again and again without this. A child of a real fork does
+     * not take this way: it continues after the call with the zero.
      */
     if (self->is_child) {
         return 0;
@@ -771,6 +775,24 @@ static k_ssize_t sys_fork(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_
         memcpy(name, self->name, len);
         name[len] = '\'';
         name[len + 1] = '\0';
+    }
+
+    /*
+     * The port copies the context of a program of ring 3. It answers -1 when
+     * the machine cannot copy a context at all, which is the case the
+     * placeholder below is for, and -2 when the copy ran out of memory.
+     */
+    {
+        struct task *copied = NULL;
+        int rc = task_fork(self, name, &copied);
+
+        if (rc == 0) {
+            return (k_ssize_t)copied->pid;
+        }
+
+        if (rc == -2) {
+            return KERR_NOSPC;
+        }
     }
 
     child = task_create(name, forked_child, (void *)self, self->prio);
@@ -1225,14 +1247,12 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksy
     kmm_free(data);
 
     /*
-     * A port that never returns from the program never comes back here. The
-     * answers below are the contract of k_exec_run: a number from 0 to 255 is
-     * a program that ran and returned with that status - the call ends with
-     * 0, because the status belongs to a process and a machine without one
-     * has to notice a program that finished instead - -2 is a machine that
-     * cannot run a program at all (the board, the simulator), and anything
-     * else is the image the port could not place in its window or could not
-     * copy.
+     * The answers below are the contract of k_exec_run: a number from 0 to
+     * 255 is a program that ran and returned with that status - the call ends
+     * with 0, because the status belongs to a process and the program is a
+     * task now - -2 is a machine that cannot run a program at all (the board,
+     * the simulator), and anything else is the image the port could not place
+     * in its window or could not copy.
      */
     if (rc >= 0) {
         return 0;

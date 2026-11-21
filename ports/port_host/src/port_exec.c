@@ -36,3 +36,14 @@ void k_port_exec_exit(int code)
 {
     K_UNUSED(code);
 }
+
+/*
+ * A fork of a program: there is no address space per task here, so the child
+ * is the placeholder of the kernel - a task that re-enters the program of its
+ * parent over the same memory.
+ */
+int k_port_fork_copy(struct task *child)
+{
+    K_UNUSED(child);
+    return -1;
+}

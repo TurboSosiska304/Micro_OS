@@ -66,6 +66,21 @@ static inline long prog_sleep(long ms)
 }
 
 /*
+ * The process calls. On a machine with an address space per task fork() is
+ * 0 in the child and the pid of the child in the parent; waitpid() sleeps
+ * until that child finishes and writes its status where the pointer says.
+ */
+static inline long prog_fork(void)
+{
+    return prog_call(KSYS_FORK, 0, 0, 0, 0, 0, 0);
+}
+
+static inline long prog_waitpid(long pid, int *status, long flags)
+{
+    return prog_call(KSYS_WAITPID, pid, (long)(unsigned long)status, flags, 0, 0, 0);
+}
+
+/*
  * The end of a program of this port: the kernel takes it down and returns to
  * the call that entered it, so this call does not come back. A program that
  * returned with `ret` instead would pop the zero at the top of its stack and

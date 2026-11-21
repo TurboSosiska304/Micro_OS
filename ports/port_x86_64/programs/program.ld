@@ -46,9 +46,12 @@ SECTIONS
     /*
      * The initialised data and the read-only data are one segment in the
      * format, in the order mkprog.sh concatenates them: .data first.
+     * SUBALIGN(4) overrides the alignment of an input section: a merged
+     * string of GCC asks for eight bytes, and an output section that pads to
+     * eight would move the data away from where the format puts it.
      */
     . = ALIGN(4);
-    .data : { *(.data .data.*) *(.rodata .rodata.*) } :data
+    .data : SUBALIGN(4) { *(.data .data.*) *(.rodata .rodata.*) } :data
 
     /*
      * The bss is not in the image: the port clears this many bytes right

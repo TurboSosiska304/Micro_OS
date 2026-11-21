@@ -79,17 +79,18 @@ written when the project was an operating system for one board; the numbers
 * [x] `mkprog.sh` checks the address a program is linked for against the base
       of the window of the port
 
-## K4 - Protection (in progress)
+## K4 - Protection (done)
 
 * [x] Mode bits and an owner in the file, set by `chmod`/`chown`
 * [x] The arguments of a system call checked at the edge
 * [x] The permissions enforced at the edge, for the one user of the system, at
       `open` and `execve`
 * [x] The `x` bit of the directories of a path is walked and checked
-* [ ] A real `fork()`: an address space per task, copy on write - the
-      milestone of the x86-64 paging. The page tables per program and ring 3
-      are done (K5, ADR 0007); the copy of the tables and the fault of the
-      first write are what is left (ADR 0002, ADR 0005)
+* [x] A real `fork()`: an address space per task, copy on write - the
+      milestone of the x86-64 paging. The page tables per task, the copy of
+      the tables, the fault of the first write and `k_port_fork_copy()` are
+      done on x86-64 (contract 1.5, ADR 0005 and ADR 0007); the board keeps
+      the placeholder of a machine without an MMU
 
 ## K5 - A processor with an MMU (in progress)
 
@@ -103,12 +104,14 @@ written when the project was an operating system for one board; the numbers
 * [x] A fault handler that means something: a page fault, `#UD` or `#GP` of
       ring 3 is printed as `the program faulted: vector N at 0x...`, the
       program is taken down and the shell stays alive
-* [x] `exit` of a program returns to `k_port_exec_enter()` with the status
-      (contract 1.4); `execve` still answers 0
+* [x] `exit` of a program ends the task it runs in, and the caller of
+      `execve` waits for it; `execve` answers 0 (contract 1.5)
 * [x] An errno per task: the TLS block is copied per task and `IA32_FS_BASE`
       follows the task and the privilege boundary
-* [ ] Page tables per *task* and copy on write: `fork()` with a space of its
-      own (`k_port_fork_copy()`, the milestone of K4 and ADR 0005)
+* [x] Page tables per *task* and copy on write: a program is a task with its
+      own CR3 and kernel stack, `fork()` copies the tables, both copies are
+      read-only until the first write, and `k_port_fork_copy()` is the seam
+      of the contract (K4, ADR 0005 and ADR 0007)
 * [ ] The kernel in a higher half, and a `copy_from_user` at the edge of the
       system call
 * [ ] A port for a real ARM with an MMU: the same contract, a second `arch/`

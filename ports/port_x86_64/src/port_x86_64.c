@@ -491,13 +491,30 @@ static const char *exception_name(k_u64_t vector)
     return "unknown";
 }
 
-void port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs)
+int port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs)
 {
+    /*
+     * The first write into a page a fork made read-only is not a failure:
+     * the page is copied for this address space and the instruction that
+     * faulted is run again by the stub. The write may come from the program
+     * or from the kernel on its behalf (the status of waitpid, the buffer of
+     * a read), so both rings take this way.
+     */
+    if (vector == 14u && (error & 0x3u) == 0x3u) {
+        k_u64_t address;
+
+        __asm__ volatile("movq %%cr2, %0" : "=r"(address));
+
+        if (port_x86_64_paging_handle_cow(port_x86_64_current_cr3(), address)) {
+            return 1;
+        }
+    }
+
     /*
      * A fault of ring 3 is the failure of a program, not of the machine.
      * The address that named the failure is CR2 for a page fault and the
      * instruction itself for the other vectors; either way the program is
-     * taken down and the call that entered it gets control back, so the
+     * taken down and the task that waited for it gets the status, so the
      * shell and every task of the kernel stay alive.
      */
     if ((cs & 3u) != 0u) {
@@ -523,6 +540,7 @@ void port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t c
     com1_puts("\nx86-64: the machine stops here\n");
 
     k_port_halt();
+    return 0;
 }
 
 void port_x86_64_unexpected(void)
@@ -1035,7 +1053,7 @@ const char *k_port_arch(void)
 }
 
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 4u
+#define PORT_API_MINOR 5u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_x86_64 does not speak the contract of this kernel");

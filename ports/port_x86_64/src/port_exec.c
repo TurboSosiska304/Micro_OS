@@ -1,32 +1,36 @@
 /*
  * Micro OS — the x86-64 port: running a program.
  *
- * A program is a user of the machine now (ADR 0007). It has page tables of
- * its own, its own stack in the window of the programs, and the processor
- * drops to ring 3 before its first instruction: the kernel is above it and
- * out of reach, and the only way back in is `int $0x80` through a gate that
- * opens for ring 3.
+ * A program is a task of the scheduler now (K4). It has page tables of its
+ * own, its own stack in the window of the programs and its own kernel stack,
+ * and the processor drops to ring 3 before its first instruction: the kernel
+ * is above it and out of reach, and the only way back in is `int $0x80`
+ * through a gate that opens for ring 3.
  *
  * The window starts at 32 MiB and every page of it that the program may use
- * is backed by the physical arena at 64 MiB. The kernel reaches the bytes
- * through the identity map, the program through its page tables, and an
- * address the program computes is not an address of the kernel.
+ * is backed by a physical page of the arena at 64 MiB. The kernel reaches the
+ * bytes through the identity map, the program through its page tables, and an
+ * address the program computes is not an address of the kernel. The pages
+ * come from an allocator of frames instead of a fixed offset in the arena,
+ * because two programs - a parent and the child of its fork - may run at the
+ * same time.
  *
  * Two duties meet here: placing the image (the pages, the copy of text and
  * data, the zeroed bss, the arguments) and the crossing itself. The crossing
- * is the interesting half. Before it the caller is ordinary kernel code on a
- * kernel stack; after it the processor runs at ring 3. The return is not a
- * `ret`: a program that calls `exit` (or faults) unwinds the call of
- * port_exec_jump_user() from wherever it stands and lands in
- * k_port_exec_enter() with the status, because a program on this port is not
- * a task of the scheduler and has no context to switch to.
+ * is the interesting half. A task of the port starts as the return of a
+ * context switch; this file gives it a program and an iretq, and the task is
+ * then a user of the machine. `exit` ends the task, a fault of ring 3 ends it
+ * with the status 255, and the task that called execve waits for it the way
+ * any parent waits for a child.
  */
 #include <string.h>
 
 #include "kernel/log.h"
 #include "kernel/port.h"
 #include "kernel/port/exec.h"
+#include "kernel/task.h"
 #include "port_x86_64.h"
+#include "port_x86_64_task.h"
 
 #define PAGE_SIZE 4096u
 
@@ -49,71 +53,54 @@
 #define PORT_EXEC_ARGC_MAX 64u
 #define PORT_EXEC_ARG_BYTES_MAX 1024u
 
+/* How long the caller of execve waits for the program it started. */
+#define PORT_EXEC_WAIT_MS 10000u
+
+/* The name of the task a program runs in: the table keeps sixteen bytes. */
+#define PORT_EXEC_TASK_NAME "program"
+
 /*
- * The stack the processor takes when the program calls the kernel or is
- * interrupted: RSP0 of the TSS points at its top. It is separate from the
- * kernel stack of the caller because the call of k_port_exec_enter() stays
- * alive below it for as long as the program runs.
+ * The state of a program between the call of execve and the first instruction
+ * of ring 3. It lives in the heap of the kernel because the task is scheduled
+ * after k_port_exec_enter() has gone to sleep; the body of the task copies
+ * what it needs and gives the block back before it leaves the kernel.
  */
-#define PORT_EXEC_KSTACK_SIZE (32u * 1024u)
+struct port_exec_start {
+    k_u64_t space;
+    k_u64_t entry;
+    k_u64_t argc;
+    k_u64_t argv;
+    k_u64_t user_rsp;
+};
 
 /*
- * The state of the kernel while the program runs. It lives in variables of
- * the file and not in locals because the assembly that enters and leaves the
- * program finds them by symbol; the stack of the kernel and its callee-saved
- * registers are saved in them.
- */
-k_u64_t g_port_exec_rsp;
-k_u64_t g_port_exec_kstack_top;
-k_u64_t g_port_exec_kernel_cr3;
-k_u64_t g_port_exec_program_cr3;
-k_u64_t g_port_exec_exit_code;
-
-static k_u8_t g_program_kstack[PORT_EXEC_KSTACK_SIZE] __attribute__((aligned(16)));
-static volatile bool g_port_exec_active;
-static bool g_port_exec_faulted;
-
-/*
- * void port_exec_jump_user(void *entry, k_u64_t argc, char *const *argv,
- *                          k_u64_t user_rsp)
+ * void port_exec_enter_user(void *entry, k_u64_t argc, char *const *argv,
+ *                           k_u64_t user_rsp)
  *
- * Save the kernel context, put the processor on the kernel stack of the
- * program and return to ring 3 through an iretq frame: SS, RSP, RFLAGS, CS
- * and RIP, in the order the instruction pops them. The user selectors are
- * 0x23 (data, DPL 3) and 0x1b (code, DPL 3) of the GDT of gdt.c.
+ * Leave the kernel for ring 3 through an iretq frame: SS, RSP, RFLAGS, CS and
+ * RIP, in the order the instruction pops them. The selectors are 0x23 (data,
+ * DPL 3) and 0x1b (code, DPL 3) of the GDT of gdt.c.
  *
  * The program's first instruction sees the arguments of a C function - the
  * count in RDI, the vector in RSI - on a stack whose top word is zero, so a
- * `ret` that no program of the system writes lands on address zero and
- * faults instead of running through memory.
- *
- * port_exec_return() is the other half. It is called from the syscall or the
- * fault handler, restores the kernel context saved above and returns from
- * the call of port_exec_jump_user() into k_port_exec_enter(). It never
- * returns to its own caller, which is a frame of the kernel stack that the
- * program's exit makes irrelevant.
+ * `ret` that no program of the system writes lands on address zero and faults
+ * instead of running through memory. The kernel frames below are abandoned:
+ * the task resumes through RSP0 of the TSS on its way back in.
  */
-void port_exec_jump_user(void *entry, k_u64_t argc, char *const *argv, k_u64_t user_rsp);
-void port_exec_return(void);
+void port_exec_enter_user(void *entry, k_u64_t argc, char *const *argv, k_u64_t user_rsp);
+void port_exec_fork_return(k_u64_t *frame);
+void port_exec_fork_child(void *arg);
 
 __asm__(".section .text, \"ax\", @progbits\n"
-        ".globl port_exec_jump_user\n"
-        ".type port_exec_jump_user, @function\n"
-        "port_exec_jump_user:\n"
-        "    pushq %rbp\n"
-        "    pushq %rbx\n"
-        "    pushq %r12\n"
-        "    pushq %r13\n"
-        "    pushq %r14\n"
-        "    pushq %r15\n"
-        "    movq %rsp, g_port_exec_rsp(%rip)\n"
+        ".globl port_exec_enter_user\n"
+        ".type port_exec_enter_user, @function\n"
+        "port_exec_enter_user:\n"
         "    movq %rdi, %r12\n" /* the entry of the program */
         "    movq %rsi, %r13\n" /* argc */
         "    movq %rdx, %r14\n" /* argv */
         "    movq %rcx, %r15\n" /* the stack of the program */
         "    andq $-16, %rsp\n"
         "    call port_x86_64_tls_user\n"
-        "    movq g_port_exec_kstack_top(%rip), %rsp\n"
         "    pushq $0x23\n"  /* SS, ring 3 data */
         "    pushq %r15\n"   /* RSP of the program */
         "    pushq $0x202\n" /* RFLAGS: interrupts on, the required bit 1 */
@@ -135,25 +122,33 @@ __asm__(".section .text, \"ax\", @progbits\n"
         "    xorl %r14d, %r14d\n"
         "    xorl %r15d, %r15d\n"
         "    iretq\n"
-        ".size port_exec_jump_user, . - port_exec_jump_user\n"
+        ".size port_exec_enter_user, . - port_exec_enter_user\n"
         "\n"
-        ".globl port_exec_return\n"
-        ".type port_exec_return, @function\n"
-        "port_exec_return:\n"
+        /*
+         * The way out of fork(): the child's kernel stack carries a copy of
+         * the syscall frame of the parent, with zero where the result of the
+         * call was. The tail below is the tail of isr_syscall - the thread
+         * pointer of ring 3, the ten saved registers, the iretq.
+         */
+        ".globl port_exec_fork_return\n"
+        ".type port_exec_fork_return, @function\n"
+        "port_exec_fork_return:\n"
+        "    movq %rdi, %r12\n"
         "    andq $-16, %rsp\n"
-        "    call port_x86_64_tls_kernel\n" /* the kernel's errno is back */
-        "    movq g_port_exec_kernel_cr3(%rip), %rax\n"
-        "    movq %rax, %cr3\n"
-        "    movq g_port_exec_rsp(%rip), %rsp\n"
-        "    popq %r15\n"
-        "    popq %r14\n"
-        "    popq %r13\n"
-        "    popq %r12\n"
-        "    popq %rbx\n"
+        "    call port_x86_64_tls_user\n"
+        "    movq %r12, %rsp\n"
         "    popq %rbp\n"
-        "    cld\n"
-        "    ret\n"
-        ".size port_exec_return, . - port_exec_return\n");
+        "    popq %rcx\n"
+        "    popq %r11\n"
+        "    popq %r9\n"
+        "    popq %r8\n"
+        "    popq %r10\n"
+        "    popq %rdx\n"
+        "    popq %rsi\n"
+        "    popq %rdi\n"
+        "    popq %rax\n"
+        "    iretq\n"
+        ".size port_exec_fork_return, . - port_exec_fork_return\n");
 
 static k_size_t align_up(k_size_t value, k_size_t alignment)
 {
@@ -177,6 +172,126 @@ static bool image_fits(const struct k_exec_image *image, k_size_t source, k_size
     return end <= (k_size_t)PORT_EXEC_GUARD_OFFSET;
 }
 
+/* Give `len` bytes of the window a frame of the arena, page by page. */
+static bool space_map(k_u64_t space, k_size_t offset, k_size_t len)
+{
+    k_size_t at;
+
+    for (at = 0; at < len; at += PAGE_SIZE) {
+        k_u64_t frame = port_x86_64_frame_alloc();
+
+        if (frame == 0) {
+            kerror("x86_64: no physical page for the program");
+            return false;
+        }
+
+        if (port_x86_64_paging_map_user(space, PORT_EXEC_BASE + offset + at, frame, PAGE_SIZE) !=
+            0) {
+            port_x86_64_frame_release(frame);
+            kerror("x86_64: cannot map a page of the program");
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/* Copy bytes into the memory of a program, across the pages of its window. */
+static bool space_write(k_u64_t space, k_u64_t vaddr, const void *source, k_size_t len)
+{
+    const k_u8_t *bytes = (const k_u8_t *)source;
+
+    while (len > 0) {
+        void *physical = port_x86_64_paging_phys(space, vaddr);
+        k_size_t in_page;
+        k_size_t chunk;
+
+        if (physical == NULL) {
+            return false;
+        }
+
+        in_page = PAGE_SIZE - (k_size_t)(vaddr & (PAGE_SIZE - 1u));
+        chunk = len < in_page ? len : in_page;
+
+        memcpy(physical, bytes, chunk);
+
+        bytes += chunk;
+        vaddr += chunk;
+        len -= chunk;
+    }
+
+    return true;
+}
+
+/* Clear bytes of the memory of a program, across the pages of its window. */
+static bool space_zero(k_u64_t space, k_u64_t vaddr, k_size_t len)
+{
+    while (len > 0) {
+        void *physical = port_x86_64_paging_phys(space, vaddr);
+        k_size_t in_page;
+        k_size_t chunk;
+
+        if (physical == NULL) {
+            return false;
+        }
+
+        in_page = PAGE_SIZE - (k_size_t)(vaddr & (PAGE_SIZE - 1u));
+        chunk = len < in_page ? len : in_page;
+
+        memset(physical, 0, chunk);
+
+        vaddr += chunk;
+        len -= chunk;
+    }
+
+    return true;
+}
+
+/*
+ * The first code of the program in kernel mode. The task was made by
+ * k_port_exec_enter() as an ordinary task of the scheduler; here it takes the
+ * address space that belongs to it and drops to ring 3 on its user stack.
+ */
+static void port_exec_program_task(void *arg)
+{
+    struct port_exec_start *start = (struct port_exec_start *)arg;
+    k_u64_t space;
+    k_u64_t entry;
+    k_u64_t argc;
+    k_u64_t argv;
+    k_u64_t user_rsp;
+
+    if (start == NULL) {
+        task_exit(255);
+        return;
+    }
+
+    space = start->space;
+    entry = start->entry;
+    argc = start->argc;
+    argv = start->argv;
+    user_rsp = start->user_rsp;
+    k_port_free(start);
+
+    port_x86_64_task_set_space(space);
+
+    port_exec_enter_user((void *)(uintptr_t)entry, argc, (char *const *)(uintptr_t)argv, user_rsp);
+
+    /* Not reached: the only way back from ring 3 is the call of exit. */
+    task_exit(255);
+}
+
+/*
+ * The first code of the child of a fork. Its kernel stack carries the frame
+ * of the system call of the parent with zero as the result; the return below
+ * is the tail of the stub of `int $0x80`, so the child lands at the
+ * instruction after the call of fork with the answer of the child.
+ */
+void port_exec_fork_child(void *arg)
+{
+    port_exec_fork_return((k_u64_t *)(uintptr_t)arg);
+}
+
 bool k_port_exec_supported(void)
 {
     return true;
@@ -189,22 +304,64 @@ void *k_port_exec_base(void)
 
 bool k_port_exec_active(void)
 {
-    return g_port_exec_active;
+    /* A program is the task that runs: its exit is the exit of the task. */
+    return port_x86_64_task_is_user();
 }
 
 void k_port_exec_exit(int code)
 {
-    if (!g_port_exec_active) {
-        return;
+    task_exit(code);
+}
+
+/*
+ * The child of a fork on a machine with page tables (K4). The tables of the
+ * parent are copied with every page of the window made read-only in both
+ * spaces; the frame of the system call that is being served is copied to the
+ * top of the child's kernel stack with zero in place of its answer. The child
+ * is then a task that returns from the call at the instruction after it, and
+ * the parent returns from this one with the pid.
+ */
+int k_port_fork_copy(struct task *child)
+{
+    k_u64_t parent_space = port_x86_64_task_space();
+    k_u64_t parent_top = port_x86_64_task_stack_top();
+    k_u64_t child_space;
+    const void *frame;
+    int rc;
+
+    if (child == NULL) {
+        return -2;
     }
 
-    g_port_exec_exit_code = (k_u64_t)(code & 0xFF);
-    g_port_exec_active = false;
-    port_exec_return();
+    /*
+     * The caller has to be a program of ring 3: a fork of a kernel task has
+     * no user frame to copy, and the kernel keeps its placeholder for it.
+     */
+    if (parent_space == 0 || parent_top < PORT_X86_64_SYSCALL_FRAME_SIZE) {
+        return -1;
+    }
+
+    child_space = port_x86_64_paging_space_clone(parent_space);
+    if (child_space == 0) {
+        return -2;
+    }
+
+    frame = (const void *)(uintptr_t)(parent_top - PORT_X86_64_SYSCALL_FRAME_SIZE);
+    rc = port_x86_64_task_fork_create(child, child_space, frame, PORT_X86_64_SYSCALL_FRAME_SIZE,
+                                      port_exec_fork_child);
+    if (rc != 0) {
+        port_x86_64_paging_space_destroy(child_space);
+        return -2;
+    }
+
+    return (int)child->pid;
 }
 
 int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
 {
+    struct task *caller;
+    struct task *program;
+    struct port_exec_start *start;
     k_u64_t space;
     k_u64_t user_rsp;
     k_u64_t user_argc = 0;
@@ -216,10 +373,14 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
     k_size_t strings = 0;
     k_size_t array_off = 0;
     k_size_t index;
-    k_u8_t *physical;
+    int status = 0;
     int rc;
 
-    if (g_port_exec_active) {
+    caller = task_self();
+    if (caller == NULL) {
+        /* The caller has to be a task: execve waits for the program to end,
+         * and a wait is a sleep, which the boot context cannot do. */
+        kerror("x86_64: execve outside of a task");
         return -1;
     }
 
@@ -295,8 +456,7 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
      * purpose, so a program that runs past its data or below its stack meets
      * a page that is not there instead of a page of another program.
      */
-    rc = port_x86_64_paging_map_user(PORT_EXEC_BASE, PORT_EXEC_PHYS, align_up(end, PAGE_SIZE));
-    if (rc != 0) {
+    if (!space_map(space, 0, align_up(end, PAGE_SIZE))) {
         goto fail;
     }
 
@@ -304,99 +464,108 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
         k_size_t first = align_down(arg_off, PAGE_SIZE);
         k_size_t last = align_up(arg_end, PAGE_SIZE);
 
-        rc = port_x86_64_paging_map_user(PORT_EXEC_BASE + first, PORT_EXEC_PHYS + first,
-                                         last - first);
-        if (rc != 0) {
+        if (!space_map(space, first, last - first)) {
             goto fail;
         }
     }
 
-    rc = port_x86_64_paging_map_user(PORT_EXEC_BASE + PORT_EXEC_STACK_OFFSET,
-                                     PORT_EXEC_PHYS + PORT_EXEC_STACK_OFFSET, PORT_EXEC_STACK_SIZE);
-    if (rc != 0) {
+    if (!space_map(space, PORT_EXEC_STACK_OFFSET, PORT_EXEC_STACK_SIZE)) {
         goto fail;
     }
 
     /*
-     * The bytes live in the physical arena; the program sees them through its
-     * page tables at the base of the window. The header is copied with the
-     * segments because the entry of the image is an offset from its start.
+     * The bytes live in the frames of the arena; the program sees them
+     * through its page tables at the base of the window. The header is copied
+     * with the segments because the entry of the image is an offset from its
+     * start.
      */
-    physical = (k_u8_t *)port_x86_64_paging_phys(PORT_EXEC_BASE);
-    if (physical == NULL) {
+    if (!space_write(space, PORT_EXEC_BASE, image->data, source)) {
         goto fail;
     }
 
-    memcpy(physical, image->data, source);
-
-    if (image->bss_size != 0) {
-        memset(physical + source, 0, image->bss_size);
+    if (image->bss_size != 0 &&
+        !space_zero(space, PORT_EXEC_BASE + (k_u64_t)source, image->bss_size)) {
+        goto fail;
     }
 
     if (user_argc > 0) {
-        k_u8_t *strings_at = physical + arg_off;
-        k_u64_t *array = (k_u64_t *)(physical + array_off);
         k_size_t cursor = arg_off;
 
         for (index = 0; index < (k_size_t)user_argc; index++) {
             k_size_t length = (k_size_t)strlen(argv[index]) + 1u;
+            k_u64_t pointer = PORT_EXEC_BASE + (k_u64_t)cursor;
 
-            memcpy(strings_at, argv[index], length);
-            array[index] = PORT_EXEC_BASE + (k_u64_t)cursor;
-            strings_at += length;
+            if (!space_write(space, pointer, argv[index], length) ||
+                !space_write(space,
+                             PORT_EXEC_BASE + (k_u64_t)array_off + (k_u64_t)index * sizeof(k_u64_t),
+                             &pointer, sizeof(pointer))) {
+                goto fail;
+            }
+
             cursor += length;
         }
 
-        array[user_argc] = 0;
+        {
+            k_u64_t terminator = 0;
+
+            if (!space_write(space,
+                             PORT_EXEC_BASE + (k_u64_t)array_off +
+                                 (k_u64_t)user_argc * sizeof(k_u64_t),
+                             &terminator, sizeof(terminator))) {
+                goto fail;
+            }
+        }
+
         user_argv = PORT_EXEC_BASE + (k_u64_t)array_off;
     }
 
     /*
-     * The stack of the program starts as zeros: the arena is the same memory
-     * for the next program, and what the last one left on its stack is not
-     * the business of this one. The top word is the zero a `ret` would pop.
+     * The stack of the program starts as zeros, and the top word is the zero
+     * a `ret` would pop. It belongs to this program and not to the frame
+     * allocator's previous owner: every page was cleared when it was handed
+     * out.
      */
-    memset(port_x86_64_paging_phys(PORT_EXEC_BASE + PORT_EXEC_STACK_OFFSET), 0,
-           PORT_EXEC_STACK_SIZE);
     user_rsp = PORT_EXEC_BASE + PORT_EXEC_STACK_OFFSET + PORT_EXEC_STACK_SIZE - sizeof(k_u64_t);
-    *(k_u64_t *)port_x86_64_paging_phys(user_rsp) = 0;
+    {
+        k_u64_t zero = 0;
 
-    /*
-     * The processor takes RSP0 on the first call of the program and on the
-     * first interrupt of it. The stack belongs to this program and is empty
-     * at the top: the kernel frames of k_port_exec_enter() stay on the stack
-     * of the caller, below the point where the program can reach them.
-     */
-    g_port_exec_kstack_top =
-        (k_u64_t)(uintptr_t)(g_program_kstack + PORT_EXEC_KSTACK_SIZE) & ~(k_u64_t)15u;
-    port_x86_64_tss_set_rsp0(g_port_exec_kstack_top);
-
-    g_port_exec_kernel_cr3 = port_x86_64_kernel_cr3();
-    g_port_exec_program_cr3 = space;
-    g_port_exec_exit_code = 0;
-    g_port_exec_faulted = false;
-    g_port_exec_active = true;
-
-    port_x86_64_paging_switch(space);
-    port_exec_jump_user((void *)(uintptr_t)(PORT_EXEC_BASE + image->entry), user_argc,
-                        (char *const *)(uintptr_t)user_argv, user_rsp);
-
-    /*
-     * Reached only because the program ended - by `exit`, by a fault, or by a
-     * `ret` that landed on address zero. The return stub has put the kernel's
-     * CR3 and stack back; the program's tables and stack are dead now.
-     */
-    g_port_exec_active = false;
-    port_x86_64_paging_space_destroy(space);
-
-    if (g_port_exec_faulted) {
-        /* The fault line has already been printed by the handler. */
-        k_exec_exit(255);
-        return 0;
+        if (!space_write(space, user_rsp, &zero, sizeof(zero))) {
+            goto fail;
+        }
     }
 
-    k_exec_exit((int)(g_port_exec_exit_code & 0xFFu));
-    kinfo("x86-64: the program exited with %d", (int)(g_port_exec_exit_code & 0xFFu));
+    start = (struct port_exec_start *)k_port_alloc(sizeof(*start), false);
+    if (start == NULL) {
+        kerror("x86_64: no memory for the start of a program");
+        goto fail;
+    }
+
+    start->space = space;
+    start->entry = PORT_EXEC_BASE + (k_u64_t)image->entry;
+    start->argc = user_argc;
+    start->argv = user_argv;
+    start->user_rsp = user_rsp;
+
+    program = task_create(PORT_EXEC_TASK_NAME, port_exec_program_task, start, TASK_PRIO_DEFAULT);
+    if (program == NULL) {
+        k_port_free(start);
+        goto fail;
+    }
+
+    /*
+     * The caller of execve waits for the program the way a parent waits for
+     * a child: the program is a task of the scheduler, not a call that stays
+     * on this stack. A program that returns a status goes through exit, and
+     * a program that faults is taken down with 255 by the fault handler.
+     */
+    rc = task_wait(program->pid, &status, PORT_EXEC_WAIT_MS);
+    if (rc != 0) {
+        kerror("x86_64: the program did not end (%d)", rc);
+        return -1;
+    }
+
+    k_exec_exit(status);
+    kinfo("x86-64: the program exited with %d", status & 0xFF);
 
     return 0;
 
@@ -407,17 +576,13 @@ fail:
 
 void port_x86_64_program_fault(k_u64_t vector, k_u64_t address)
 {
-    if (!g_port_exec_active) {
-        /* A fault that is not a program's: the caller of this function does
-         * not exist to return to, and stopping is the honest answer. */
-        k_port_halt();
-    }
-
     klog(K_LOG_LEVEL_ERROR, "the program faulted: vector %u at 0x%08x%08x", (unsigned)vector,
          (unsigned)(address >> 32), (unsigned)(address & 0xFFFFFFFFu));
 
-    g_port_exec_faulted = true;
-    g_port_exec_exit_code = 255;
-    g_port_exec_active = false;
-    port_exec_return();
+    /* A fault of a program is the end of its task, not of the machine. */
+    task_exit(255);
+
+    /* Not reached: the exit of a task does not come back. */
+    for (;;) {
+    }
 }

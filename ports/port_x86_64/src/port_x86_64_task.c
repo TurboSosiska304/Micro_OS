@@ -49,6 +49,9 @@ struct port_task {
     k_u64_t flags;     /* the RFLAGS a context that has never run starts with */
     void *block;       /* the allocation: this header and the stack above it */
     k_u8_t *tls;       /* the block behind IA32_FS_BASE of this task */
+    k_u64_t stack_top; /* the empty top of the stack: RSP0 when it is a program */
+    k_u64_t cr3;       /* the page tables of the task; the kernel's by default */
+    bool is_user;      /* a program of ring 3 runs on this context */
 };
 
 /*
@@ -99,6 +102,14 @@ static k_u64_t task_tls_base(const struct port_task *pt)
 #define PORT_STACK_ALIGN 16u
 
 /*
+ * The frame that `int $0x80` leaves on the kernel stack of a program: the ten
+ * registers the stub saves and the five the processor pushed for the crossing
+ * to ring 3. A fork copies it as it stands, so that the child returns from
+ * the call it did not make - with the result changed to zero.
+ */
+#define PORT_SYSCALL_FRAME_RAX (9u * sizeof(k_u64_t))
+
+/*
  * The frame port_x86_64_switch() pops: six callee-saved registers and the
  * address it returns to. The eighth word is padding that keeps the frame a
  * multiple of 16, so the task starts with the stack alignment the ABI
@@ -109,6 +120,7 @@ static k_u64_t task_tls_base(const struct port_task *pt)
 static struct port_task *g_current;
 static struct port_task g_boot; /* the context of kmain, before the first task */
 static struct port_task *g_pending_free;
+static k_u64_t g_pending_space; /* the page tables of the task being released */
 
 static struct port_task *port_task_of(const struct task *t)
 {
@@ -145,6 +157,18 @@ static void release_pending(void)
     }
 
     port_restore_flags(flags);
+
+    /*
+     * The page tables of a program outlive the switch that leaves it: the
+     * dead context stopped with its own CR3 in the register, and the frames
+     * may be read until the processor is on another map. Here the map of the
+     * running task is the one in the register, so the tables and the frames
+     * of the dead task are only bytes the allocator may have back.
+     */
+    if (g_pending_space != 0) {
+        port_x86_64_paging_space_destroy(g_pending_space);
+        g_pending_space = 0;
+    }
 }
 
 /*
@@ -157,10 +181,10 @@ static void release_pending(void)
  * in switch.S moves them to the registers of the usual ABI and calls the
  * trampoline.
  */
-static void stack_build(struct port_task *pt, void *stack_top, k_port_task_entry_fn entry,
+static void stack_build(struct port_task *pt, k_u64_t frame_rsp, k_port_task_entry_fn entry,
                         void *arg, k_u64_t flags)
 {
-    k_u64_t *frame = (k_u64_t *)((k_u8_t *)stack_top - PORT_FRAME_SIZE);
+    k_u64_t *frame = (k_u64_t *)(uintptr_t)frame_rsp;
 
     frame[0] = 0;                                              /* r15 */
     frame[1] = flags;                                          /* r14: the RFLAGS of the task */
@@ -171,7 +195,7 @@ static void stack_build(struct port_task *pt, void *stack_top, k_port_task_entry
     frame[6] = (k_u64_t)(uintptr_t)port_x86_64_task_bootstrap; /* the ret address */
     frame[7] = 0;                                              /* padding: see PORT_FRAME_SIZE */
 
-    pt->rsp = (k_u64_t)(uintptr_t)frame;
+    pt->rsp = frame_rsp;
 }
 
 /*
@@ -193,6 +217,19 @@ static void commit_switch(struct port_task *prev, struct port_task *next)
      * context is resumed with it.
      */
     port_x86_64_tls_kernel();
+
+    /*
+     * The address space travels with the context. The kernel's own map is
+     * part of every space, so the switch of CR3 here is safe while the
+     * processor is still on the stack of the context that gives up the CPU;
+     * a program is entered with the stack named by RSP0, which is its own
+     * kernel stack and not the stack of the caller.
+     */
+    port_x86_64_paging_switch(next->cr3 != 0 ? next->cr3 : port_x86_64_kernel_cr3());
+
+    if (next->is_user) {
+        port_x86_64_tss_set_rsp0(next->stack_top);
+    }
 
     port_x86_64_switch(&prev->rsp, next->rsp);
 }
@@ -275,6 +312,59 @@ static void idle_forever(void)
     }
 }
 
+/*
+ * The allocation of one execution context: the block that carries the header
+ * and the stack above it, and the copy of the TLS block of the library. Both
+ * the ordinary task of the kernel and the program of a fork are made here;
+ * they only differ in the frame that starts them.
+ */
+static struct port_task *task_context_new(struct task *t, k_u8_t **block, k_u64_t *top)
+{
+    k_size_t size = k_port_task_stack_size();
+    struct port_task *pt;
+    k_u8_t *base;
+
+    base = (k_u8_t *)k_port_alloc(size, false);
+    if (base == NULL) {
+        kerror("x86_64: no memory for the stack of a task (%u bytes)", (unsigned)size);
+        return NULL;
+    }
+
+    /*
+     * The allocator aligns its payload for its own bookkeeping, which is not
+     * the alignment of the ABI; the stack is cut from the top of the block
+     * downwards so that the frame below lands on a 16 byte boundary.
+     */
+    *top = (k_u64_t)(uintptr_t)(base + size) & ~(k_u64_t)(PORT_STACK_ALIGN - 1);
+
+    /* A stack that has never been used reads better as zeros in a dump. */
+    memset(base, 0, size);
+
+    pt = (struct port_task *)base;
+    pt->task = t;
+    pt->block = base;
+    pt->tls = NULL;
+    pt->stack_top = *top;
+    pt->cr3 = port_x86_64_kernel_cr3();
+    pt->is_user = false;
+
+    if (task_tls_size() != 0) {
+        pt->tls = (k_u8_t *)k_port_alloc(task_tls_size(), false);
+
+        if (pt->tls == NULL) {
+            k_port_free(base);
+            kerror("x86_64: no memory for the TLS block of a task (%u bytes)",
+                   (unsigned)task_tls_size());
+            return NULL;
+        }
+
+        task_tls_copy(pt->tls);
+    }
+
+    *block = base;
+    return pt;
+}
+
 /* --- the contract of kernel/port_task.h --- */
 
 k_size_t k_port_task_stack_size(void)
@@ -284,48 +374,19 @@ k_size_t k_port_task_stack_size(void)
 
 int k_port_task_create(struct task *t, k_port_task_entry_fn entry, void *arg)
 {
-    k_size_t size = k_port_task_stack_size();
     struct port_task *pt;
-    k_u8_t *base;
-    k_u64_t top;
+    k_u8_t *base = NULL;
+    k_u64_t top = 0;
 
     if (t == NULL) {
         return -1;
     }
 
-    base = (k_u8_t *)k_port_alloc(size, false);
-    if (base == NULL) {
-        kerror("x86_64: no memory for the stack of a task (%u bytes)", (unsigned)size);
+    pt = task_context_new(t, &base, &top);
+    if (pt == NULL) {
         return -1;
     }
 
-    /*
-     * The allocator aligns its payload for its own bookkeeping, which is not
-     * the alignment of the ABI; the stack is cut from the top of the block
-     * downwards so that the frame below lands on a 16 byte boundary.
-     */
-    top = (k_u64_t)(uintptr_t)(base + size) & ~(k_u64_t)(PORT_STACK_ALIGN - 1);
-
-    /* A stack that has never been used reads better as zeros in a dump. */
-    memset(base, 0, size);
-
-    pt = (struct port_task *)base;
-    pt->task = t;
-    pt->block = base;
-    pt->tls = NULL;
-
-    if (task_tls_size() != 0) {
-        pt->tls = (k_u8_t *)k_port_alloc(task_tls_size(), false);
-
-        if (pt->tls == NULL) {
-            k_port_free(base);
-            kerror("x86_64: no memory for the TLS block of a task (%u bytes)",
-                   (unsigned)task_tls_size());
-            return -1;
-        }
-
-        task_tls_copy(pt->tls);
-    }
     /*
      * A task inherits the interrupt state of the context that created it.
      * Before the table of the interrupts exists they are off and a task must
@@ -333,13 +394,93 @@ int k_port_task_create(struct task *t, k_port_task_entry_fn entry, void *arg)
      * enabled them, every task runs with them on and gets its ticks.
      */
     pt->flags = port_x86_64_read_flags() & PORT_X86_64_RFLAGS_IF;
-    stack_build(pt, (void *)(uintptr_t)top, entry, arg, pt->flags);
+    stack_build(pt, top - PORT_FRAME_SIZE, entry, arg, pt->flags);
 
     t->ctx = pt;
     t->stack = base;
-    t->stack_size = size;
+    t->stack_size = k_port_task_stack_size();
 
     return 0;
+}
+
+/*
+ * The context of the child of a fork (K4). The kernel has made the record of
+ * the task and its pid; the parent's address space has been cloned; what is
+ * left is a stack that starts by returning from the system call the child did
+ * not make. The frame of the parent sits at the top of its kernel stack (the
+ * stub of `int $0x80` put it there and nothing above it moved); the copy goes
+ * to the same place on the child's stack, and the value of RAX - the answer
+ * of fork - becomes the zero of the child.
+ */
+int port_x86_64_task_fork_create(struct task *child, k_u64_t cr3, const void *frame,
+                                 k_size_t frame_size, k_port_task_entry_fn entry)
+{
+    struct port_task *pt;
+    k_u8_t *base = NULL;
+    k_u64_t top = 0;
+    k_u64_t frame_rsp;
+
+    if (child == NULL || frame == NULL || cr3 == 0 || frame_size == 0 ||
+        frame_size + PORT_FRAME_SIZE > k_port_task_stack_size()) {
+        return -1;
+    }
+
+    pt = task_context_new(child, &base, &top);
+    if (pt == NULL) {
+        return -1;
+    }
+
+    frame_rsp = top - frame_size;
+    memcpy((void *)(uintptr_t)frame_rsp, frame, frame_size);
+    *(k_u64_t *)(uintptr_t)(frame_rsp + PORT_SYSCALL_FRAME_RAX) = 0;
+
+    pt->flags = port_x86_64_read_flags() & PORT_X86_64_RFLAGS_IF;
+    stack_build(pt, frame_rsp - PORT_FRAME_SIZE, entry, (void *)(uintptr_t)frame_rsp, pt->flags);
+
+    pt->cr3 = cr3;
+    pt->is_user = true;
+
+    child->ctx = pt;
+    child->stack = base;
+    child->stack_size = k_port_task_stack_size();
+
+    return 0;
+}
+
+k_u64_t port_x86_64_task_space(void)
+{
+    return (g_current != NULL && g_current->is_user) ? g_current->cr3 : 0;
+}
+
+k_u64_t port_x86_64_task_stack_top(void)
+{
+    return g_current != NULL ? g_current->stack_top : 0;
+}
+
+bool port_x86_64_task_is_user(void)
+{
+    return g_current != NULL && g_current->is_user;
+}
+
+/*
+ * A task that the port made as an ordinary kernel task becomes a program: the
+ * space it runs in and the empty kernel stack the processor takes on its way
+ * into the kernel. Called on the first run of the task, just before the iretq
+ * that drops it to ring 3.
+ */
+void port_x86_64_task_set_space(k_u64_t cr3)
+{
+    if (g_current == NULL || cr3 == 0) {
+        return;
+    }
+
+    g_current->cr3 = cr3;
+    g_current->is_user = true;
+    port_x86_64_tss_set_rsp0(g_current->stack_top);
+
+    /* The kernel is part of the new map, so the switch is safe here and the
+     * iretq that follows sees the pages of the program. */
+    port_x86_64_paging_switch(cr3);
 }
 
 void k_port_task_start(struct task *t)
@@ -468,6 +609,17 @@ void k_port_task_exit(int code)
      */
     if (dead != NULL) {
         g_pending_free = dead;
+
+        /*
+         * The address space of a program is released by the next context,
+         * for the same reason as its stack: the tables are the map the
+         * processor is on until the switch below, and the switch cannot be
+         * trusted to be the next instruction.
+         */
+        if (dead->is_user && dead->cr3 != 0 && dead->cr3 != port_x86_64_kernel_cr3()) {
+            g_pending_space = dead->cr3;
+            dead->cr3 = 0;
+        }
     }
 
     flags = port_save_flags_and_cli();
@@ -479,6 +631,15 @@ void k_port_task_exit(int code)
     }
 
     port_restore_flags(flags);
+
+    /*
+     * Nothing else was runnable. This context is dead but it is still the one
+     * the processor runs, so it waits for the tick that wakes somebody - and
+     * the tick has to be able to arrive. A task that ends from an exception
+     * was entered through an interrupt gate, with the interrupts off, and a
+     * halt that waits for an interrupt that is masked waits forever.
+     */
+    port_sti();
     idle_forever();
 }
 

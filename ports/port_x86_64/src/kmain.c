@@ -93,10 +93,13 @@ extern const k_u8_t _binary_hello_mox_start[];
 extern const k_u8_t _binary_hello_mox_end[];
 extern const k_u8_t _binary_crash_mox_start[];
 extern const k_u8_t _binary_crash_mox_end[];
+extern const k_u8_t _binary_fork_mox_start[];
+extern const k_u8_t _binary_fork_mox_end[];
 
 #define PROGRAM_DIR "/bin"
 #define PROGRAM_PATH "/bin/hello"
 #define PROGRAM_CRASH_PATH "/bin/crash"
+#define PROGRAM_FORK_PATH "/bin/fork"
 
 /*
  * A program is a file somebody may run, so it is created with the mode of a
@@ -222,7 +225,16 @@ static void filesystem_bring_up(void)
         return;
     }
 
-    program_run();
+    /*
+     * The third program is the fork of K4: a parent and a child share a page
+     * until one of them writes, and the parent waits for the status of the
+     * child. The shell runs it, so the machine has to keep both tasks apart
+     * and alive at the same time.
+     */
+    if (!program_install(PROGRAM_FORK_PATH, _binary_fork_mox_start,
+                         (k_size_t)(_binary_fork_mox_end - _binary_fork_mox_start))) {
+        return;
+    }
 }
 
 /*
@@ -234,6 +246,14 @@ static void filesystem_bring_up(void)
 static void init_task(void *arg)
 {
     K_UNUSED(arg);
+
+    /*
+     * The program of the milestone runs before the shell: execve is a wait
+     * now, so the init task is its parent and the shell does not exist until
+     * the program has ended. That is the order of the transcript the smoke
+     * test reads: the lines of /bin/hello, then the prompt.
+     */
+    program_run();
 
     if (kshell_init() != KSHELL_OK) {
         kwarn("x86-64: not every command of the shell is registered");
@@ -265,11 +285,10 @@ void kmain(k_u64_t multiboot_info)
           (unsigned)(k_port_heap_free() / 1024), (unsigned)(k_port_heap_total() / 1024));
 
     /*
-     * The filesystem and the program of the milestone, after the boot and
-     * before the tasks: at that point the machine is the boot context of the
-     * port and nothing depends on the scheduler yet. That is the moment a
-     * program can be entered without a task under it; the file it came from
-     * is on the volume for the shell to find later.
+     * The filesystem, before the tasks: the volume is mounted and the images
+     * of the programs are written to /bin. The program itself runs later, in
+     * the init task: execve is a wait for a task now, and the boot context
+     * has no scheduler under it to wait with.
      */
     filesystem_bring_up();
 

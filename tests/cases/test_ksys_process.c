@@ -187,6 +187,20 @@ static void test_fork_numbers(void)
 
     setup();
 
+    /*
+     * A machine without an address space per task refuses the copy of the
+     * caller, and the kernel keeps the placeholder of a fork. The slot it
+     * took for the child before asking the port is given back.
+     */
+    {
+        struct task *copied = (struct task *)0x1;
+        k_size_t before = task_count();
+
+        KT_CHECK_INT_EQ(task_fork(task_self(), "nofork", &copied), -1);
+        KT_CHECK(copied == NULL);
+        KT_CHECK_INT_EQ(task_count(), before);
+    }
+
     parent = task_create("parent", parent_program, NULL, TASK_PRIO_DEFAULT);
     KT_CHECK(parent != NULL);
 
