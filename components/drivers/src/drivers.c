@@ -26,6 +26,7 @@ int drivers_init(void)
     failed += drv_wifi_register() != 0;
 #endif
     failed += drv_mic_register() != 0;
+    failed += drv_power_register() != 0;
     drv_i2c_register_command();
 
     if (failed != 0) {

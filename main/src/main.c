@@ -9,6 +9,9 @@
 #include "board/board.h"
 #include "config/config.h"
 #include "drivers/drivers.h"
+#include "drivers/power.h"
+#include "drivers/rtc.h"
+#include "factory.h"
 #include "kernel/boot.h"
 #include "kernel/kmod.h"
 #include "kernel/log.h"
@@ -113,6 +116,7 @@ static int fs_subsys_init(void)
      * again.
      */
     kshell_register("mkfs", "format the volume: mkfs -y", cmd_mkfs);
+    (void)factory_register();
 
 #if MICRO_OS_FS_FAT32
     /* A second filesystem is a type of the VFS: it is registered whether a
@@ -206,6 +210,18 @@ static void init_task(void *arg)
 
     kinfo("init: system is up, pid %u, uptime %llu ms", (unsigned)(self ? self->pid : 0),
           (unsigned long long)k_sched_uptime_ms());
+
+    /*
+     * Why the board is awake: "timer" or "ext1" says whether the last sleep
+     * did what it was asked for, and "power-on" is a cold boot. The alarm of
+     * the clock is a separate line of the log, because it can have fired
+     * without waking the chip at all.
+     */
+    kinfo("power: woke from %s", drv_power_wakeup_reason());
+
+    if (drv_rtc_alarm_was_fired()) {
+        kinfo("rtc: the alarm went off before this boot");
+    }
 
     /* The first thing the init process does: check that the kernel works. */
     selftest_run();
@@ -311,6 +327,15 @@ void app_main(void)
 {
     const struct kernel_board *info = board_get_info();
     struct kernel_boot_config cfg;
+
+    /*
+     * The board has no PMIC: the power latch is kept closed by HOLD (G4),
+     * and after a deep sleep the pin comes up floating. Driving it high is
+     * the first thing the firmware does, before the console and before the
+     * kernel, so a board on a battery does not cut its own power in the
+     * first milliseconds of the wake.
+     */
+    (void)drv_power_hold();
 
     port_esp32_console_init();
     port_esp32_init();

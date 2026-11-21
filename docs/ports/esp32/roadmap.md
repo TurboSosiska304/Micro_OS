@@ -37,11 +37,12 @@ The pins, the chips and the quirks of the board are in
 
 ## P3 - The wearable (planned)
 
-* [ ] The RTC alarm and deep sleep, the wake from EXT1
+* [x] The RTC alarm and deep sleep, the wake from EXT1
 * [x] `drv_mic` (SPM1423, PDM RX on I2S, 16 kHz)
 * [ ] A simple sound detector on top of `drv_mic`
 * [ ] `drv_ir`: transmit and receive on G19, shared with the LED
-* [ ] A factory reset, the enclosure and display modes
+* [x] A factory reset (the volume and the store)
+* [ ] The enclosure and display modes
 
 ## P4 - Updates (planned)
 

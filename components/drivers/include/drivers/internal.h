@@ -32,5 +32,6 @@ int drv_wifi_register(void);
 int drv_memory_register(void);
 int drv_battery_register(void);
 int drv_mic_register(void);
+int drv_power_register(void);
 
 #endif /* MICRO_OS_DRIVERS_INTERNAL_H */
