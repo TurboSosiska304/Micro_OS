@@ -1,0 +1,177 @@
+<!doctype html>
+{%- set version = config.extra.version|default('dev') -%}
+{%- set kind = config.extra.version_kind|default('dev') -%}
+{%- set has_wiki = config.extra.has_wiki|default(true) -%}
+{%- set base = config.extra.base_path|default('/') -%}
+{%- macro nav_items(items) -%}
+<ul class="nav-list">
+  {%- for item in items %}
+  <li>
+    {%- if item.children %}
+    <span class="nav-group">{{ item.title }}</span>
+    {{ nav_items(item.children) }}
+    {%- else %}
+    <a href="{{ item.url|url }}"{% if page and item.url == page.url %} aria-current="page"{% endif %}>{{ item.title }}</a>
+    {%- endif %}
+  </li>
+  {%- endfor %}
+</ul>
+{%- endmacro -%}
+{%- macro toc_items(items) -%}
+<ul>
+  {%- for item in items %}
+  <li><a href="{{ item.url }}">{{ item.title }}</a>
+    {%- if item.children %}{{ toc_items(item.children) }}{% endif %}
+  </li>
+  {%- endfor %}
+</ul>
+{%- endmacro -%}
+<html lang="{{ config.theme.locale|default('en') }}" data-version="{{ version }}" data-kind="{{ kind }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  {%- if page and page.is_homepage %}
+  <meta name="description" content="{{ config.site_description }}">
+  {%- endif %}
+  {%- if page and page.canonical_url %}
+  <link rel="canonical" href="{{ page.canonical_url }}">
+  {%- endif %}
+  <link rel="icon" href="{{ 'assets/favicon.svg'|url }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ 'assets/wiki.css'|url }}">
+  {%- for path in config.extra_css %}
+  <link rel="stylesheet" href="{{ path|url }}">
+  {%- endfor %}
+  <title>{% if page and page.title and not page.is_homepage %}{{ page.title }} — {% endif %}{{ config.site_name }} wiki {{ version }}</title>
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+
+<header class="top">
+  <div class="top-inner">
+    <a class="brand" href="{{ nav.homepage.url|url }}">Micro&nbsp;OS <span>wiki</span></a>
+
+    {%- if 'search' in config.plugins %}
+    <div class="search" role="search">
+      <input type="search" id="mkdocs-search-query" placeholder="Search this version…"
+             aria-label="Search this version" autocomplete="off">
+      <div id="mkdocs-search-results" class="search-results"
+           data-no-results-text="No results found"></div>
+    </div>
+    {%- endif %}
+
+    <details class="versions">
+      <summary title="Change the version">Version&nbsp;<b>{{ version }}</b></summary>
+      <div class="versions-menu">
+        {%- for group in config.extra.version_groups|default([]) %}
+        {%- if group.versions %}
+        <div class="versions-group">{{ group.label }}</div>
+        <ul>
+          {%- for item in group.versions %}
+          <li>
+            {%- if item.version == version %}
+            <span aria-current="true">{{ item.version }}</span>
+            {%- else %}
+            <a href="{{ base }}{{ item.version }}/">{{ item.version }}</a>
+            {%- endif %}
+          </li>
+          {%- endfor %}
+        </ul>
+        {%- endif %}
+        {%- endfor %}
+        <div class="versions-all"><a href="{{ base }}versions/">All versions</a></div>
+      </div>
+    </details>
+
+    {%- if config.extra.landing_url %}
+    <a class="site" href="{{ config.extra.landing_url }}" rel="noopener">Project&nbsp;site&nbsp;↗</a>
+    {%- endif %}
+    <a class="repo" href="{{ config.repo_url }}" rel="noopener">GitHub&nbsp;↗</a>
+  </div>
+</header>
+
+<div class="shell">
+  <aside>
+    <nav class="nav" aria-label="Documentation">
+      {{ nav_items(nav) }}
+    </nav>
+
+    {%- if page and page.toc %}
+    <nav class="toc" aria-label="On this page">
+      <div class="toc-title">On this page</div>
+      {{ toc_items(page.toc) }}
+    </nav>
+    {%- endif %}
+  </aside>
+
+  <main id="content">
+    {%- if page and not page.is_homepage %}
+    <div class="crumb"><a href="{{ nav.homepage.url|url }}">Micro OS wiki</a> <span aria-hidden="true">/</span> {{ page.title }}</div>
+    {%- endif %}
+
+    {%- if has_wiki and kind == 'prerelease' %}
+    <div class="banner">
+      You are reading <b>{{ version }}</b> — a pre-release.
+      {%- if config.extra.latest_stable %}
+      {%- if config.extra.latest_stable_has_wiki %}
+      The stable documentation is <a href="{{ base }}{{ config.extra.latest_stable }}/">{{ config.extra.latest_stable }}</a>.
+      {%- else %}
+      The latest stable release, {{ config.extra.latest_stable }}, shipped without a wiki.
+      {%- endif %}
+      {%- else %}
+      No stable release has a wiki yet.
+      {%- endif %}
+      {%- if config.extra.newest and config.extra.newest != version %}
+      The newest documentation is <a href="{{ base }}{{ config.extra.newest }}/">{{ config.extra.newest }}</a>.
+      {%- endif %}
+    </div>
+    {%- elif has_wiki and kind == 'dev' %}
+    <div class="banner">
+      You are reading the <b>development</b> documentation, built from
+      <code>{{ config.extra.dev_ref|default('main') }}</code>{% if config.extra.dev_commit %} at <code>{{ config.extra.dev_commit }}</code>{% endif %}.
+      {%- if config.extra.latest %}
+      The latest release is <a href="{{ base }}{{ config.extra.latest }}/">{{ config.extra.latest }}</a>.
+      {%- endif %}
+    </div>
+    {%- endif %}
+
+    {{ page.content }}
+
+    {%- if page and (page.previous_page or page.next_page) %}
+    <nav class="pager" aria-label="Pages">
+      {%- if page.previous_page %}
+      <a class="prev" href="{{ page.previous_page.url|url }}">← {{ page.previous_page.title }}</a>
+      {%- else %}
+      <span></span>
+      {%- endif %}
+      {%- if page.next_page %}
+      <a class="next" href="{{ page.next_page.url|url }}">{{ page.next_page.title }} →</a>
+      {%- endif %}
+    </nav>
+    {%- endif %}
+  </main>
+</div>
+
+<footer>
+  <div class="footer-inner">
+    <div>Micro OS wiki · version {{ version }}</div>
+    <div class="footer-links">
+      <a href="{{ base }}versions/">All versions</a>
+      {%- if config.extra.landing_url %}
+      <a href="{{ config.extra.landing_url }}" rel="noopener">Project site</a>
+      {%- endif %}
+      {%- if page %}
+      <a href="{{ config.extra.edit_base|default(config.repo_url ~ '/blob/main/docs/wiki/') }}{{ page.file.src_path }}"
+         rel="noopener">Edit on GitHub</a>
+      {%- endif %}
+      <span>Built with MkDocs</span>
+    </div>
+  </div>
+</footer>
+
+<script>var base_url = {{ base_url|tojson }};</script>
+{%- for script in config.extra_javascript %}
+<script src="{{ script|url }}"></script>
+{%- endfor %}
+</body>
+</html>

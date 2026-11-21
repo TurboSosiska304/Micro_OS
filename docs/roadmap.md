@@ -181,6 +181,10 @@ written when the project was an operating system for one board; the numbers
       `KERNEL_PSRAM`, `KERNEL_EXEC` and the `MICRO_OS_*` switches of the
       network components, the defaults per build, `make test-minimal` and
       the check of the map
+* [x] The wiki as a site: `docs/wiki` with its own minimal theme, a build per
+      release tag and one for the branch (`tools/wiki_build_versions.py`,
+      mike), published at `/Micro_OS/<version>/` on GitHub Pages, with the
+      links of the pages checked by `tools/wiki_check.py`
 
 ## K8 - Many cores (planned)
 
