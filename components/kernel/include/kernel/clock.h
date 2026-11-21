@@ -32,6 +32,19 @@ void k_clock_register(k_clock_set_fn set);
 /* Set the clock. -1 when there is no clock to set. */
 int k_clock_set_unix(k_u64_t unix_seconds);
 
+/*
+ * The moment of the wall clock, in the seconds of Unix (UTC), for the
+ * filesystem and for anybody who needs a stamp.
+ *
+ * A clock that was never set - a host build with no RTC, an x86-64 machine
+ * with no battery - still gives a number: the seconds since the boot. It is
+ * not a date, but it orders the changes of two records, and zero is kept
+ * for "this filesystem knows no time" rather than for a machine without an
+ * RTC. A caller that prints the number as a date should ask
+ * k_clock_present() first.
+ */
+k_u64_t k_clock_now_unix(void);
+
 /* Is there a clock at all? */
 bool k_clock_present(void);
 

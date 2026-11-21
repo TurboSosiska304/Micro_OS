@@ -9,6 +9,15 @@
 
 #include "kernel/errno.h"
 #include "kernel/ksys.h"
+#include "kernel/vfs.h"
+
+/*
+ * The structure the program passes and the one the kernel copies are the
+ * same bytes: a field moved in one of the two headers would send the moments
+ * of the call to the wrong place.
+ */
+_Static_assert(sizeof(struct microos_statx) == sizeof(struct vfs_statx),
+               "the structure of statx and the ABI of the call changed");
 
 /*
  * The code of the last error belongs to the task that made the call: two
@@ -361,6 +370,33 @@ int microos_chown(const char *path, unsigned owner)
     if (rc < 0) {
         return fail(rc);
     }
+
+    g_errno = 0;
+
+    return 0;
+}
+
+int microos_statx(const char *path, struct microos_statx *out)
+{
+    struct vfs_statx info;
+    int rc;
+
+    if (path == NULL || out == NULL) {
+        return fail(KERR_INVAL);
+    }
+
+    rc = ksys_statx(path, &info);
+    if (rc < 0) {
+        return fail(rc);
+    }
+
+    out->inode = info.inode;
+    out->type = info.type;
+    out->size = info.size;
+    out->mode = info.mode;
+    out->owner = info.owner;
+    out->mtime = info.mtime;
+    out->ctime = info.ctime;
 
     g_errno = 0;
 

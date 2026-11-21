@@ -62,13 +62,16 @@ A volume has three sections and a block is 1 KiB:
 | `META` | the table of the records and the map of the free blocks |
 | `INFO` | the header of the volume and the root record, in the last erase sector |
 
-A record is 16 bytes and keeps the type of the object, its mode and its owner
-in the upper bits of `flags`; a volume of an older release mounts unchanged.
-The formatter asks for 256 records (`MFS_MOUNT_RECORDS`) and sizes `META` from
-the volume; the capacity is fixed at format time and cannot grow later. There
-are **no timestamps** and **no journal**: `fsck` reports the first problem it
-finds and does not repair, and a power cut in the middle of a write is a risk
-the tree knows about ([`docs/debts.md`](../debts.md)).
+A record of today is 32 bytes: it keeps the type of the object, its mode and
+its owner in the upper bits of `flags`, and the two moments of a change
+(`mtime` and `ctime`) in the seconds of Unix after them. A volume of an
+older release has 16-byte records with no room for a time and mounts
+unchanged; its objects report zero, which is "unknown" (ADR 0013). The
+formatter asks for 256 records (`MFS_MOUNT_RECORDS`) and sizes `META` from
+the volume; the capacity is fixed at format time and cannot grow later.
+There is **no journal**: `fsck` reports the first problem it finds and does
+not repair, and a power cut in the middle of a write is a risk the tree
+knows about ([`docs/debts.md`](../debts.md)).
 
 The calls of the filesystem take one recursive lock, so two tasks can use the
 volume at the same time without corrupting it: each open file keeps its
@@ -95,7 +98,10 @@ most 127 bytes. `rm` removes a file, not a directory, and there is no `-r`.
 `df` prints the free blocks and inodes of the filesystem of the path.
 
 `stat` shows the mode, the owner and the size; `chmod` and `chown` change the
-first two. The rules are in [kernel-abi.md](kernel-abi.md) and in
+first two. A program asks for the moments of a change with `statx` (number 26
+of the ABI) and `microos_statx()` in the library; a volume of version 1 has
+none, so the two times come back as zero and not as 1970. The rules are in
+[kernel-abi.md](kernel-abi.md) and in
 [`docs/syscall-abi.md`](../syscall-abi.md): one user (uid 0), no root bypass,
 and a zero mode means "this record predates the modes", so `chmod 000` is
 refused.
@@ -206,7 +212,8 @@ the boot when `MICRO_OS_FS_FAT32` is on; the board has it off by default.
 
 * **No write on FAT and no ext2.** FAT is read-only; ext2 waits for its own
   reader; a second FAT volume and a mount of a card at runtime are ahead.
-* **No timestamps**, so `stat` has no date to show.
+* **No access time**, so `statx` has two moments of three; a read does not
+  rewrite a record.
 * **No journal and no repair**: `fsck` names the first problem, it does not fix
   it.
 * **No `mv`, no `cp`**: `rm -r` and the other commands of the shell are there.

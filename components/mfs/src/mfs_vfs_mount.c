@@ -15,8 +15,8 @@
 #include "kernel/vfs.h"
 
 /*
- * The number of the inodes of a new volume. A record takes 16 bytes, so
- * 256 of them fill four blocks of the table; the number is the one the
+ * The number of the inodes of a new volume. A record takes 32 bytes, so
+ * 256 of them fill eight blocks of the table; the number is the one the
  * volumes of the board were made with, and a volume keeps the count it was
  * formatted with.
  */

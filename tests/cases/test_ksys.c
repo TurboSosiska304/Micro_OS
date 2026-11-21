@@ -288,7 +288,7 @@ static void test_abi_is_stable(void)
         {KSYS_UPTIME, "uptime"},   {KSYS_REBOOT, "reboot"},   {KSYS_FORK, "fork"},
         {KSYS_GETPPID, "getppid"}, {KSYS_WAITPID, "waitpid"}, {KSYS_MALLOC, "malloc"},
         {KSYS_FREE, "free"},       {KSYS_REALLOC, "realloc"}, {KSYS_CHMOD, "chmod"},
-        {KSYS_CHOWN, "chown"},     {KSYS_EXECVE, "execve"},
+        {KSYS_CHOWN, "chown"},     {KSYS_EXECVE, "execve"},   {KSYS_STATX, "statx"},
     };
     size_t i;
 
@@ -786,6 +786,57 @@ static void test_attributes(void)
 }
 
 /*
+ * The property: statx carries the numbers of stat and the two moments of a
+ * change, the old stat keeps its structure and its answer, and without an
+ * object or a place for the answer the call is the error of the edge.
+ */
+static void test_statx(void)
+{
+    struct vfs_stat plain;
+    struct vfs_statx info;
+    int fd;
+
+    ktest_begin("ksys: statx carries the moments that stat has no field for");
+
+    setup();
+
+    fd = ksys_open("/statx.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_write(fd, "abc", 3), 3);
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    memset(&plain, 0, sizeof(plain));
+    memset(&info, 0, sizeof(info));
+    KT_CHECK_INT_EQ(ksys_stat("/statx.txt", &plain), 0);
+    KT_CHECK_INT_EQ(ksys_statx("/statx.txt", &info), 0);
+
+    /* The old call is untouched: the same object, the same numbers. */
+    KT_CHECK_INT_EQ(info.inode, plain.inode);
+    KT_CHECK_INT_EQ(info.type, plain.type);
+    KT_CHECK_INT_EQ(info.mode, plain.mode);
+    KT_CHECK_INT_EQ(info.owner, plain.owner);
+    KT_CHECK_INT_EQ(info.size, (k_u64_t)3);
+
+    /* A create and a write stamp the record; the clock has a moment even
+     * when the machine has no RTC (the seconds since the boot). */
+    KT_CHECK(info.ctime >= info.mtime);
+    KT_CHECK_INT_EQ(info.type, 1);
+
+    KT_CHECK_INT_EQ(ksys_mkdir("/statx-dir"), 0);
+    KT_CHECK_INT_EQ(ksys_statx("/statx-dir", &info), 0);
+    KT_CHECK_INT_EQ(info.type, 2);
+
+    /* The edge: an object that is not there and no place for the answer. */
+    KT_CHECK_INT_EQ(ksys_statx("/no-such-object", &info), KERR_NOENT);
+    KT_CHECK_INT_EQ(ksys_statx("/statx.txt", NULL), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_statx(NULL, &info), KERR_INVAL);
+
+    teardown();
+}
+
+/*
  * The property: the access of an open is checked against the mode of the
  * file, at the edge, before a descriptor exists. There is one user, uid 0,
  * and no bypass for it: the bits of the owner decide, and a file of the mode
@@ -1088,6 +1139,7 @@ void test_ksys(void)
     test_buffer_validation();
     test_open_flags();
     test_attributes();
+    test_statx();
     test_open_mode();
     test_directory_search();
     test_readdir_validation();

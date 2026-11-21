@@ -317,6 +317,59 @@ static int stat_raw(const char *path, struct vfs_stat *out)
 }
 
 /*
+ * The information about an object with the moments of a change. A
+ * filesystem that keeps no time is read through its stat operation: the
+ * two moments stay zero, which is the "unknown" of the contract and not a
+ * moment of 1970.
+ */
+static int statx_raw(const char *path, struct vfs_statx *out)
+{
+    const struct mount *m = resolve(path, NULL);
+    int rc;
+
+    if (m == NULL) {
+        g_last_error = KERR_NOENT;
+        return KERR_NOENT;
+    }
+
+    if (out == NULL) {
+        g_last_error = KERR_INVAL;
+        return KERR_INVAL;
+    }
+
+    memset(out, 0, sizeof(*out));
+
+    if (m->ops->statx != NULL) {
+        rc = m->ops->statx(m->ctx, path, out);
+        g_last_error = rc;
+        return rc;
+    }
+
+    if (m->ops->stat != NULL) {
+        struct vfs_stat info;
+
+        rc = m->ops->stat(m->ctx, path, &info);
+        if (rc != 0) {
+            g_last_error = rc;
+            return rc;
+        }
+
+        out->inode = info.inode;
+        out->type = info.type;
+        out->size = info.size;
+        out->mode = info.mode;
+        out->owner = info.owner;
+        out->mtime = 0;
+        out->ctime = 0;
+        g_last_error = 0;
+        return 0;
+    }
+
+    g_last_error = KERR_NOTSUP;
+    return KERR_NOTSUP;
+}
+
+/*
  * A mount point is a directory of the tree even when the filesystem below
  * it cannot describe it: devfs answers ENOENT for its own root. Such a
  * filesystem keeps no modes, so the search through its root is not denied.
@@ -687,6 +740,19 @@ int vfs_stat(const char *path, struct vfs_stat *out)
     }
 
     return stat_raw(path, out);
+}
+
+int vfs_statx(const char *path, struct vfs_statx *out)
+{
+    int rc;
+
+    rc = path_search_check(path);
+    if (rc != 0) {
+        g_last_error = rc;
+        return rc;
+    }
+
+    return statx_raw(path, out);
 }
 
 int vfs_mkdir(const char *path)

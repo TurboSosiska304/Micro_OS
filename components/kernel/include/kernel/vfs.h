@@ -58,6 +58,27 @@ struct vfs_stat {
     k_u32_t owner;
 };
 
+/*
+ * The information about an object with the moments of a change (ADR 0013).
+ * The two times are the seconds of Unix, 64 bits wide so that the year 2038
+ * is not a wall this filesystem hits; zero means "this filesystem keeps no
+ * time" - a volume of MicroFS of version 1, or a filesystem like procfs that
+ * has no moments of its own.
+ *
+ * The field of the access time is deliberately absent: a read does not
+ * change a record in this system, and a field that is always zero would
+ * promise a moment that nothing keeps.
+ */
+struct vfs_statx {
+    k_u32_t inode;
+    k_u8_t type;
+    k_u64_t size;
+    k_u32_t mode;
+    k_u32_t owner;
+    k_u64_t mtime; /* the last change of the content */
+    k_u64_t ctime; /* the last change of the record, the mode or the owner */
+};
+
 /* The operations of a filesystem. */
 struct vfs_file;
 
@@ -84,6 +105,14 @@ struct vfs_operations {
     int (*readdir)(void *ctx, struct vfs_file *file, struct vfs_dirent *out, k_size_t max,
                    k_size_t *count);
     int (*stat)(void *ctx, const char *path, struct vfs_stat *out);
+    /*
+     * The same information with the moments of a change. A filesystem that
+     * keeps no time leaves the field empty and the VFS answers with the
+     * zeros of "unknown" from the stat call above; the call is separate so
+     * that a reader of an old filesystem is not asked for a number it does
+     * not have.
+     */
+    int (*statx)(void *ctx, const char *path, struct vfs_statx *out);
     int (*mkdir)(void *ctx, const char *path);
     int (*unlink)(void *ctx, const char *path);
     /*
@@ -184,6 +213,12 @@ int vfs_list(const char *path, struct vfs_dirent *out, k_size_t max, k_size_t *c
  */
 int vfs_readdir(struct vfs_file *file, struct vfs_dirent *out, k_size_t max, k_size_t *count);
 int vfs_stat(const char *path, struct vfs_stat *out);
+/*
+ * The same object with its moments. A filesystem without a statx operation
+ * is read through its stat operation and the two times are zero, which is
+ * what "unknown" is in this contract.
+ */
+int vfs_statx(const char *path, struct vfs_statx *out);
 /*
  * Create, remove or change an object. Every directory of the path is walked
  * and its `x` bit is checked first, exactly as for the calls above: the

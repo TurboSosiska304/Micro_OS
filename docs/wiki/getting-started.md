@@ -135,8 +135,9 @@ A short list, so that nothing here reads as a promise:
   but there is no group and no second user.
 * **FAT32 is read-only, ext2 is not there.** MicroFS is the root of the tree;
   a build can also carry a reader of FAT12/16/32 ([ADR 0009](../adr/0009-filesystem-types.md))
-  and mount it beside MicroFS. There are no timestamps and no journal, and
-  writing to FAT, ext2 and a second FAT volume are still ahead.
+  and mount it beside MicroFS. MicroFS has the two moments of a change and
+  no journal; FAT keeps no time yet, and writing to FAT, ext2 and a second
+  FAT volume are still ahead.
 
 [`docs/debts.md`](../debts.md) keeps the full register with the next step of
 each row. [`docs/roadmap.md`](../roadmap.md) is the plan.

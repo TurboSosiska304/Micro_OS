@@ -24,15 +24,27 @@
 #include "kernel/types.h"
 
 #define MFS_MAGIC 0x4D465331u /* "MFS1" */
-#define MFS_VERSION 1
+/*
+ * The format of today and the one of the volumes that came before it.
+ *
+ * A version 1 volume keeps 16-byte records with no time in them; a version
+ * 2 volume keeps 32-byte records with the two moments of Unix seconds.
+ * The mount reads both, and nothing is rewritten to make an old volume
+ * new: its records have no place for a time, so a time is read as zero,
+ * which means "unknown" (ADR 0013).
+ */
+#define MFS_VERSION 2
+#define MFS_VERSION_LEGACY 1
 #define MFS_BLOCK_SIZE 1024
 
 /*
  * The features of the volume. A volume of an older system does not have
  * the bits set and is mounted the way it always was.
  */
-#define MFS_FEATURE_CRC 0x0001u /* the header carries a checksum */
-#define MFS_INODE_SIZE 16
+#define MFS_FEATURE_CRC 0x0001u  /* the header carries a checksum */
+#define MFS_FEATURE_TIME 0x0002u /* the records carry mtime and ctime */
+#define MFS_INODE_SIZE 32
+#define MFS_INODE_SIZE_LEGACY 16
 #define MFS_NAME_MAX 32
 #define MFS_PATH_MAX 128
 #define MFS_ROOT_INODE 1
@@ -130,6 +142,13 @@ struct mfs_inode {
     k_u32_t first_block; /* the first block of the data */
     k_u32_t size;        /* the size of the data in bytes */
     k_u32_t entries;     /* the number of the entries of a directory */
+    /*
+     * The moments of the last change of the data and of the record, in the
+     * seconds of Unix. A volume of version 1 has no room for them, and the
+     * reader answers zero, which means "unknown" (ADR 0013).
+     */
+    k_u64_t mtime; /* the last change of the content */
+    k_u64_t ctime; /* the last change of the record, the mode or the owner */
 };
 
 /*
@@ -150,7 +169,8 @@ struct mfs_dirent_header {
  * of the volume, and the checks below make it a conscious one.
  */
 _Static_assert(sizeof(struct mfs_superblock) == 52, "the header of the volume changed");
-_Static_assert(sizeof(struct mfs_inode) == 16, "a record of the table of the inodes changed");
+_Static_assert(sizeof(struct mfs_inode) == 32, "a record of the table of the inodes changed");
+_Static_assert(MFS_INODE_SIZE_LEGACY == 16, "the record of a legacy volume changed");
 _Static_assert(sizeof(struct mfs_dirent_header) == 8, "an entry of a directory changed");
 
 /*

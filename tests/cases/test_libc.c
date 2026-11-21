@@ -822,6 +822,52 @@ static void test_permissions(void)
 }
 
 /*
+ * The property: statx of the library reports the numbers of the kernel and
+ * the moments of the record, and the errors are the errors of POSIX.
+ */
+static void test_statx(void)
+{
+    struct microos_statx info;
+    int fd;
+
+    ktest_begin("libc: statx reports the object and its moments");
+
+    setup();
+
+    fd = microos_open("/lib-statx.txt", MICROOS_O_WRONLY | MICROOS_O_CREAT | MICROOS_O_TRUNC);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK(microos_write(fd, "hello", 5) == 5);
+        KT_CHECK(microos_close(fd) == 0);
+    }
+
+    memset(&info, 0, sizeof(info));
+    KT_CHECK_INT_EQ(microos_statx("/lib-statx.txt", &info), 0);
+    KT_CHECK_INT_EQ(microos_errno(), 0);
+    KT_CHECK_INT_EQ(info.size, 5u);
+    KT_CHECK_INT_EQ(info.type, 1u);
+    KT_CHECK_INT_EQ(info.mode, MFS_MODE_DEFAULT);
+    KT_CHECK_INT_EQ(info.owner, 0u);
+    KT_CHECK(info.inode != 0u);
+
+    KT_CHECK_INT_EQ(microos_mkdir("/lib-statx-dir"), 0);
+    KT_CHECK_INT_EQ(microos_statx("/lib-statx-dir", &info), 0);
+    KT_CHECK_INT_EQ(info.type, 2u);
+
+    /* An object that is not there is ENOENT, not a zeroed answer. */
+    KT_CHECK_INT_EQ(microos_statx("/lib-statx-missing", &info), -1);
+    KT_CHECK_INT_EQ(microos_errno(), 2);
+
+    /* A NULL path or a NULL answer is a mistake of the caller. */
+    KT_CHECK_INT_EQ(microos_statx(NULL, &info), -1);
+    KT_CHECK_INT_EQ(microos_errno(), 22);
+    KT_CHECK_INT_EQ(microos_statx("/lib-statx.txt", NULL), -1);
+    KT_CHECK_INT_EQ(microos_errno(), 22);
+
+    teardown();
+}
+
+/*
  * The property: execve of the library does not come back on success, and
  * every refusal it does come back with is the code of POSIX - including the
  * ENOSYS of the machine that cannot run a program at all, which is what the
@@ -878,6 +924,7 @@ void test_libc(void)
     test_memory_keeps_the_data();
     test_calloc_is_empty();
     test_permissions();
+    test_statx();
 #if KERNEL_EXEC
     test_execve();
 #endif

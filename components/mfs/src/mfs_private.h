@@ -37,8 +37,34 @@ struct mfs_private {
     k_u32_t bitmap_blocks;  /* the blocks of the bitmap in the META section */
     k_u32_t inode_blocks;   /* the blocks of the table of the inodes */
     k_u32_t inode_capacity; /* the number of the records of the table */
+    k_u32_t inode_size;     /* 16 for a version 1 volume, 32 for version 2 */
     k_u32_t device_blocks;  /* the sectors of the device under the volume */
 };
+
+/*
+ * The record of a version 1 volume. It has the four words of the record of
+ * today and no time, which is why the two formats need a version of their
+ * own (ADR 0013). The decoder below turns it into the record the rest of
+ * the filesystem reads.
+ */
+struct mfs_inode_legacy {
+    k_u32_t flags;
+    k_u32_t first_block;
+    k_u32_t size;
+    k_u32_t entries;
+};
+
+_Static_assert(sizeof(struct mfs_inode_legacy) == MFS_INODE_SIZE_LEGACY,
+               "the record of a legacy volume changed");
+
+/*
+ * Read a record from the table and write one back. The size of the record
+ * is the one of the mounted volume, so a legacy volume is read and written
+ * as the 16 bytes that it has - the bytes after a record belong to the next
+ * one and must not be touched.
+ */
+void mfs_priv_inode_decode(const k_u8_t *raw, k_u32_t inode_size, struct mfs_inode *out);
+void mfs_priv_inode_encode(const struct mfs_inode *inode, k_u32_t inode_size, k_u8_t *raw);
 
 /*
  * Read one block of the mounted volume. The block has to be a block of the

@@ -9,6 +9,22 @@
 #define MICRO_OS_LIBC_UNISTD_H
 
 #include <stddef.h>
+#include <stdint.h>
+
+/*
+ * The information about an object with the moments of a change, the
+ * structure of the statx call (ADR 0013). The times are the seconds of
+ * Unix, 64 bits wide; zero means that the filesystem keeps no time.
+ */
+struct microos_statx {
+    uint32_t inode;
+    uint8_t type;
+    uint64_t size;
+    uint32_t mode;
+    uint32_t owner;
+    uint64_t mtime;
+    uint64_t ctime;
+};
 
 /* The flags of the open, the numbers of POSIX. */
 #define MICROOS_O_RDONLY 0
@@ -49,6 +65,7 @@ int microos_yield(void);
 void microos_exit(int code);
 int microos_chmod(const char *path, unsigned mode);
 int microos_chown(const char *path, unsigned owner);
+int microos_statx(const char *path, struct microos_statx *out);
 int microos_execve(const char *path, char *const argv[]);
 
 /* The code of the last error, the numbers of POSIX. */
@@ -89,6 +106,7 @@ const char *microos_strerror(int code);
 #define exit microos_exit
 #define chmod microos_chmod
 #define chown microos_chown
+#define statx microos_statx
 #define execve microos_execve
 
 #endif /* MICRO_OS_LIBC_UNISTD_H */

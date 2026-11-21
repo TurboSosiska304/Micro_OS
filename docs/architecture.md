@@ -207,6 +207,30 @@ because a board has one store. The ESP32 answers with the NVS, the host with
 a file per key, and the configuration does not know the difference - which
 is why `config sync` can be tested without a board.
 
+### The record, its moments, and `statx`
+
+A record of MicroFS of today is 32 bytes: the type, the first block, the
+size and the count of entries, then `mtime` and `ctime` as the seconds of
+Unix in 64 bits. A volume of version 1 keeps the 16 bytes of the releases
+before the times and is mounted without a rewrite; its records report zero
+for the two moments, which is "unknown" and not 1970. The version in the
+header and the `MFS_FEATURE_TIME` bit of `features` are read together, so a
+header that claims the room without the feature (or the other way around)
+is refused. The design and the migration are ADR 0013; the layout is
+`docs/memory.md`.
+
+The moments come from `k_clock_now_unix()`, the clock of the kernel that the
+RTC, NTP and the host process feed. A machine that was never set falls back
+to the seconds since its boot, so a stamp always orders the changes even
+when it is not a date. The filesystem never calls a library of the caller
+and the number does not travel through a program.
+
+`struct vfs_stat` and `KSYS_STAT` are frozen, so the moments have a call of
+their own: `KSYS_STATX` (26) copies a `struct vfs_statx`, the five fields of
+`stat` followed by the two times. The VFS operation is optional: procfs,
+devfs and the FAT reader answer through their `stat` and leave the times
+zero. The library exposes `microos_statx()` and `struct microos_statx`.
+
 ### The types of filesystems
 
 The VFS knows no name of a filesystem. It keeps a table of types

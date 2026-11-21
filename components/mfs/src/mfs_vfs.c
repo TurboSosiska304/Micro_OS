@@ -286,6 +286,37 @@ static int vfs_stat_file(void *ctx, const char *path, struct vfs_stat *out)
     return mfs_to_kerr(MFS_OK);
 }
 
+static int vfs_statx_file(void *ctx, const char *path, struct vfs_statx *out)
+{
+    struct mfs_inode inode;
+    struct mfs_dirent dirent;
+    int rc;
+
+    K_UNUSED(ctx);
+
+    memset(&dirent, 0, sizeof(dirent));
+
+    rc = mfs_stat(path, &inode, &dirent);
+    if (rc != MFS_OK) {
+        return mfs_to_kerr(rc);
+    }
+
+    out->inode = dirent.inode;
+    out->type = (inode.flags & MFS_INODE_DIR) ? 2 : 1;
+    out->size = inode.size;
+    out->mode = mfs_inode_mode(&inode);
+    out->owner = mfs_inode_owner(&inode);
+    /*
+     * The record of a version 1 volume has no room for the two moments,
+     * and the reader of the filesystem answers zero: "unknown", not a
+     * moment of 1970.
+     */
+    out->mtime = inode.mtime;
+    out->ctime = inode.ctime;
+
+    return mfs_to_kerr(MFS_OK);
+}
+
 static int vfs_make_dir(void *ctx, const char *path)
 {
     K_UNUSED(ctx);
@@ -339,6 +370,7 @@ static const struct vfs_operations g_mfs_operations = {
     .list = vfs_list_dir,
     .readdir = vfs_readdir_dir,
     .stat = vfs_stat_file,
+    .statx = vfs_statx_file,
     .mkdir = vfs_make_dir,
     .unlink = vfs_remove,
     .chmod = vfs_set_mode,

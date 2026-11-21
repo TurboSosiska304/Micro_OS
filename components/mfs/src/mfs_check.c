@@ -167,18 +167,18 @@ static int read_inode(const struct mfs_private *view, struct mfs_check_report *r
     }
 
     rc = mfs_priv_block_read(view->sb->meta_start + view->bitmap_blocks +
-                                 (index * MFS_INODE_SIZE) / MFS_BLOCK_SIZE,
+                                 (index * view->inode_size) / MFS_BLOCK_SIZE,
                              block);
     if (rc != MFS_OK) {
         add_error(report, CHECK_SUBJECT_BLOCK,
                   view->sb->meta_start + view->bitmap_blocks +
-                      (index * MFS_INODE_SIZE) / MFS_BLOCK_SIZE,
+                      (index * view->inode_size) / MFS_BLOCK_SIZE,
                   "cannot be read");
         return rc;
     }
 
-    offset = (index * MFS_INODE_SIZE) % MFS_BLOCK_SIZE;
-    memcpy(out, block + offset, sizeof(*out));
+    offset = (index * view->inode_size) % MFS_BLOCK_SIZE;
+    mfs_priv_inode_decode(block + offset, view->inode_size, out);
 
     return MFS_OK;
 }
@@ -238,8 +238,22 @@ static int check_header(const struct mfs_private *view, struct mfs_check_report 
         sound = false;
     }
 
-    if (sb.version != MFS_VERSION) {
-        add_error(report, CHECK_SUBJECT_HEADER, 0, "the version is not the one of the system");
+    if (sb.version != MFS_VERSION && sb.version != MFS_VERSION_LEGACY) {
+        add_error(report, CHECK_SUBJECT_HEADER, 0, "the version is not one of the system");
+        sound = false;
+    }
+
+    /*
+     * The version and the time feature go together: a record has the room
+     * for the two moments or it has not, and a header that says otherwise
+     * is a header a reader cannot trust (ADR 0013).
+     */
+    if (sb.version == MFS_VERSION && (sb.features & MFS_FEATURE_TIME) == 0u) {
+        add_error(report, CHECK_SUBJECT_HEADER, 0, "version 2 has no time feature");
+        sound = false;
+    }
+    if (sb.version == MFS_VERSION_LEGACY && (sb.features & MFS_FEATURE_TIME) != 0u) {
+        add_error(report, CHECK_SUBJECT_HEADER, 0, "a legacy volume claims the time feature");
         sound = false;
     }
 
@@ -446,7 +460,7 @@ static int check_inode(const struct mfs_private *view, struct mfs_check_report *
 
 static int scan_inodes(const struct mfs_private *view, struct mfs_check_report *report)
 {
-    k_u32_t per_block = MFS_BLOCK_SIZE / MFS_INODE_SIZE;
+    k_u32_t per_block = MFS_BLOCK_SIZE / view->inode_size;
     k_u32_t block_index;
 
     for (block_index = 0; block_index < view->inode_blocks; block_index++) {
@@ -470,7 +484,7 @@ static int scan_inodes(const struct mfs_private *view, struct mfs_check_report *
                 continue;
             }
 
-            memcpy(&inode, block + slot * MFS_INODE_SIZE, sizeof(inode));
+            mfs_priv_inode_decode(block + slot * view->inode_size, view->inode_size, &inode);
 
             rc = check_inode(view, report, index, &inode);
             if (rc != MFS_OK) {

@@ -526,6 +526,42 @@ static k_ssize_t sys_stat(ksys_arg_t path, ksys_arg_t buf, ksys_arg_t a2, ksys_a
     return 0;
 }
 
+static k_ssize_t sys_statx(ksys_arg_t path, ksys_arg_t buf, ksys_arg_t a2, ksys_arg_t a3,
+                           ksys_arg_t a4, ksys_arg_t a5)
+{
+    char name[KSYS_PATH_MAX + 1];
+    struct vfs_statx stat;
+    int rc;
+
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    rc = path_copy(name, path);
+    if (rc != 0) {
+        return rc;
+    }
+
+    /* The place for the answer is the caller's, as for stat. */
+    if (buf == 0) {
+        return KERR_INVAL;
+    }
+
+    if (!k_port_exec_contains((const void *)(uintptr_t)buf, sizeof(stat))) {
+        return KERR_FAULT;
+    }
+
+    rc = vfs_statx(name, &stat);
+    if (rc != 0) {
+        return rc;
+    }
+
+    memcpy((void *)(uintptr_t)buf, &stat, sizeof(stat));
+
+    return 0;
+}
+
 static k_ssize_t sys_lseek(ksys_arg_t fd, ksys_arg_t offset, ksys_arg_t whence, ksys_arg_t a3,
                            ksys_arg_t a4, ksys_arg_t a5)
 {
@@ -1503,6 +1539,7 @@ void ksys_init(void)
     ksys_register(KSYS_CHMOD, "chmod", sys_chmod);
     ksys_register(KSYS_CHOWN, "chown", sys_chown);
     ksys_register(KSYS_EXECVE, "execve", sys_execve);
+    ksys_register(KSYS_STATX, "statx", sys_statx);
 }
 
 /* --- the wrappers --- */
@@ -1532,6 +1569,12 @@ int ksys_close(int fd)
 int ksys_stat(const char *path, void *buf)
 {
     return (int)ksys_call(KSYS_STAT, (ksys_arg_t)(uintptr_t)path, (ksys_arg_t)(uintptr_t)buf, 0, 0,
+                          0, 0);
+}
+
+int ksys_statx(const char *path, void *buf)
+{
+    return (int)ksys_call(KSYS_STATX, (ksys_arg_t)(uintptr_t)path, (ksys_arg_t)(uintptr_t)buf, 0, 0,
                           0, 0);
 }
 

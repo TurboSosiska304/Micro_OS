@@ -37,8 +37,9 @@ who wants to use the system, not a second copy of the contract.
 | 23 | `chmod` | the mode of an object |
 | 24 | `chown` | the owner of an object |
 | 25 | `execve` | make the caller a program |
+| 26 | `statx` | the numbers of `stat` and the moments of a change |
 
-`26` is the count, not a call. A number that is not in the table is `ENOSYS`;
+`27` is the count, not a call. A number that is not in the table is `ENOSYS`;
 a new call always takes the next free number, and an old one never moves. The
 shell prints the same table with `abi`:
 
@@ -49,7 +50,8 @@ nr    name
 0     exit
 ...
 25    execve
-26 call(s) registered
+26    statx
+27 call(s) registered
 ```
 
 The convention is the one of Linux: the number and six arguments, the result in
@@ -107,7 +109,7 @@ A directory is opened with `KSYS_O_DIRECTORY` (`0x0800`) and read with
 ## The mode and the owner
 
 Every object has nine bits of `rwx` and a uid of fifteen bits, stored in the
-spare bits of its MicroFS record ([`docs/memory.md`](../memory.md#6-the-flags-of-an-inode)).
+spare bits of its MicroFS record ([`docs/memory.md`](../memory.md#6-the-record-of-an-inode)).
 A new file is `0644`, a new directory `0755`, and the owner is 0.
 
 The system has **one user**, uid 0, and it gets **no exemption of root**: a file
@@ -126,6 +128,25 @@ writing a number it would read back as `0644`.
 The `x` bit of every directory of a path is walked and checked before the
 object at the end: a directory of mode `0600` keeps its children out of reach
 of `open`, `stat` and `execve`.
+
+## The moments of a file
+
+`stat` has no field for a date and its structure is frozen. `statx` (26) takes
+a `struct vfs_statx`: the five fields of `stat` and then `mtime` (the last
+change of the content) and `ctime` (the last change of the record, the mode or
+the owner), both the seconds of Unix in 64 bits. They come from the clock of
+the kernel; a machine that was never set stamps with the seconds since its
+boot, and `k_clock_present()` says whether the number can be printed as a
+date.
+
+Zero means **this filesystem keeps no time**: a volume of MicroFS of version 1
+has 16-byte records with no room for a moment, and procfs, devfs and the FAT
+reader have no moment of their own. A new MicroFS volume (version 2) moves
+`mtime` on create, write and truncate, and `ctime` on those and on
+`chmod`/`chown`; there is no access time, because a read does not rewrite a
+record. The library has the same call as `microos_statx()` and `struct
+microos_statx`. ADR 0013 has the format and the migration: an old volume
+mounts and stays timeless, it is not converted behind its owner's back.
 
 ## Processes and programs
 

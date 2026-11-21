@@ -102,8 +102,9 @@ chose.
 | 23 | `chmod` | `path, mode` | 0, or an error |
 | 24 | `chown` | `path, owner` | 0, or an error |
 | 25 | `execve` | `path, argv` | never returns; 0 when the program returns; or an error |
+| 26 | `statx` | `path, buf` | 0, or an error |
 
-The numbers 0 to 22 are frozen, and 23 to 25 were the next three free ones.
+The numbers 0 to 22 are frozen, and 23 to 26 were the next free ones.
 A call that is not in the table is `ENOSYS`, never a guess at what it might
 have meant.
 
@@ -174,11 +175,11 @@ not `SEEK_CUR`, and `2^32 + 5` is not the child 5. The `whence` is one of
 three numbers; a pid below -1 names no task, and only 0 and -1 mean "any
 child"; the flags of `waitpid` are one bit. All of them are `EINVAL`.
 
-**`stat` and `getcwd`** need the place for the answer: NULL there is a
-mistake of the caller, not "the answer is not wanted", and it is `EINVAL`
-instead of a question to a filesystem that has nowhere to put its answer. A
-place that is not memory of the caller is `EFAULT`; the answer is copied
-there through `copy_to_user()`, and the same holds for the status of
+**`stat`, `statx` and `getcwd`** need the place for the answer: NULL there
+is a mistake of the caller, not "the answer is not wanted", and it is
+`EINVAL` instead of a question to a filesystem that has nowhere to put its
+answer. A place that is not memory of the caller is `EFAULT`; the answer is
+copied there through `copy_to_user()`, and the same holds for the status of
 `waitpid`.
 
 **`readdir`** takes whole entries: a count that is not a multiple of
@@ -234,6 +235,46 @@ end is not searched through - `stat` of a `0600` directory itself still works,
 and opening it as a directory needs the read bit, not the search bit. A
 zeroed mode is still "this filesystem keeps no modes", so the roots of
 `procfs` and `devfs` are walked the way they always were.
+
+## The moments of a file
+
+`stat` has no field for a time, and its structure and its number are frozen.
+`statx` (number 26) is the second door: the first five fields of `struct
+vfs_statx` are the five fields of `struct vfs_stat`, in the same order, and
+the two last fields are the moments of the object.
+
+```c
+struct vfs_statx {
+    k_u32_t inode;
+    k_u8_t  type;
+    k_u64_t size;
+    k_u32_t mode;
+    k_u32_t owner;
+    k_u64_t mtime; /* the last change of the content */
+    k_u64_t ctime; /* the last change of the record, the mode or the owner */
+};
+```
+
+The moments are the seconds of Unix in 64 bits, so the year 2038 is not a
+wall of the contract. They come from the clock of the kernel
+(`k_clock_now_unix()`): the RTC of the board, the process of the host and the
+NTP service all feed the same number. A machine whose clock was never set -
+the host build, the x86-64 machine without a battery - stamps with the
+seconds since its boot, which orders the changes but is not a date;
+`k_clock_present()` says which one it is.
+
+**Zero means "this filesystem keeps no time".** A volume of MicroFS of
+version 1 has 16-byte records with no room for a moment, and a filesystem
+like procfs, devfs or the FAT reader has no moment of its own; both answer
+zero for the two fields. It is not the first second of 1970, and a caller
+must not print it as a date. MicroFS of version 2 (ADR 0013) moves `mtime`
+on create, write and truncate, and `ctime` on those and on `chmod`/`chown`.
+There is no access time: a read does not rewrite a record, so `statx` has no
+field that would always be zero.
+
+The library has the same call as `microos_statx()` and `struct
+microos_statx`, with the types of `<stdint.h>`; it returns -1 and sets
+`microos_errno()` on an error, like the rest of the library.
 
 ## The programs
 
@@ -336,11 +377,11 @@ ksys_close(fd);
 The wrappers are thin: they only pass the arguments on.
 
 The library of the system (`components/libc`) has the same calls under the
-names of POSIX: `microos_chmod`, `microos_chown` and `microos_execve` (and the
-usual `chmod`, `chown`, `execve` when its header is included). They return -1
-and set `microos_errno()` when something goes wrong, and they refuse the two
-numbers of a mode and of an owner that a record cannot hold before the kernel
-is asked.
+names of POSIX: `microos_chmod`, `microos_chown`, `microos_statx` and
+`microos_execve` (and the usual `chmod`, `chown`, `statx`, `execve` when its
+header is included). They return -1 and set `microos_errno()` when something
+goes wrong, and they refuse the two numbers of a mode and of an owner that a
+record cannot hold before the kernel is asked.
 
 ## The tests
 
@@ -365,6 +406,10 @@ program breaks it into pieces.
   no bypass for the only user of the system, and a mode that the record cannot
   hold is refused instead of stored. A directory whose mode has no search bit
   keeps its children out of reach, and one with the bit lets them through.
+* **The moments.** A create, a write and a truncate move `mtime` and `ctime`;
+  a `chmod` moves `ctime` and leaves `mtime`; a remount keeps both; a volume
+  of version 1 answers zero, which is "unknown" and not 1970. `statx` reports
+  the same five numbers as `stat` and the two moments after them.
 * **The directory.** A directory is opened with `O_DIRECTORY`, its entries
   come through `readdir` one call after another, the end of it is an empty
   answer, and a descriptor of a file is `ENOTDIR` to the same call.

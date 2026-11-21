@@ -132,7 +132,9 @@ written when the project was an operating system for one board; the numbers
 * [ ] FAT32 write: create, write, unlink, and the free-cluster map a write needs
 * [ ] ext2, the reader with inodes and a superblock a checker can walk
 * [ ] `/etc/fstab` and the `mount` command over the type registry
-* [ ] Timestamps of a file, fed by the clock of the kernel
+* [x] Timestamps of a file, fed by the clock of the kernel: the record of
+      MicroFS has `mtime` and `ctime` in version 2, an old volume keeps its
+      16 bytes, and `statx` (26) reports the moments (ADR 0013)
 * [x] A page of the state over HTTP: `httpd` on the sockets, `/` and `/health`
 * [x] MQTT over the sockets: a 3.1.1 client at QoS 0 and 1, with a fake broker in the tests
 
