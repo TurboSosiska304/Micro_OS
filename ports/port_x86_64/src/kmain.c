@@ -36,6 +36,9 @@
 
 #include "mfs/mfs.h"
 #include "mfs/mfs_vfs.h"
+#if MICRO_OS_FS_FAT32
+#include "fs_fat32/fat.h"
+#endif
 
 /* The body of the shell task, in src/shell.c. */
 void port_x86_64_shell_run(void);
@@ -206,7 +209,15 @@ static void program_run(void)
 static void filesystem_bring_up(void)
 {
     const char *device = port_x86_64_root_device();
-    int rc = mfs_vfs_mount("/", device);
+    int rc;
+
+#if MICRO_OS_FS_FAT32
+    if (fat_vfs_register_type() != 0) {
+        kwarn("x86-64: the FAT filesystem could not register its type");
+    }
+#endif
+
+    rc = mfs_vfs_mount("/", device);
 
     if (rc != 0) {
         kerror("x86-64: cannot mount %s at / (%s), there is no /bin", device, mfs_strerror(rc));

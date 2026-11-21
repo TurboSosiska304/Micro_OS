@@ -22,6 +22,9 @@
 #include "init/initd.h"
 #include "mfs/mfs.h"
 #include "mfs/mfs_vfs.h"
+#if MICRO_OS_FS_FAT32
+#include "fs_fat32/fat.h"
+#endif
 #include "net/net.h"
 #include "procfs/procfs.h"
 #include "kshell/kshell.h"
@@ -110,6 +113,14 @@ static int fs_subsys_init(void)
      * again.
      */
     kshell_register("mkfs", "format the volume: mkfs -y", cmd_mkfs);
+
+#if MICRO_OS_FS_FAT32
+    /* A second filesystem is a type of the VFS: it is registered whether a
+     * card is there or not, and the mount of a partition names it. */
+    if (fat_vfs_register_type() != 0) {
+        kwarn("init: the FAT filesystem could not register its type");
+    }
+#endif
 
     rc = mfs_vfs_mount("/", "flash0");
     if (rc != 0) {
