@@ -139,6 +139,13 @@ int vfs_list(const char *path, struct vfs_dirent *out, k_size_t max, k_size_t *c
  */
 int vfs_readdir(struct vfs_file *file, struct vfs_dirent *out, k_size_t max, k_size_t *count);
 int vfs_stat(const char *path, struct vfs_stat *out);
+/*
+ * Create, remove or change an object. Every directory of the path is walked
+ * and its `x` bit is checked first, exactly as for the calls above: the
+ * parent of the object is the last directory that is passed through. The
+ * object itself keeps its own check, and there is no bypass for the one
+ * user of the system (ADR 0005).
+ */
 int vfs_mkdir(const char *path);
 
 /*

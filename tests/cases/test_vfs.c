@@ -253,9 +253,73 @@ static void test_statfs(void)
 }
 
 /*
+ * A filesystem that keeps no modes, for the walk through a directory of the
+ * mode zero. procfs and devfs are the real ones, but neither of them has the
+ * four calls that create, remove or change an object, so the test keeps its
+ * own small filesystem: every object is a directory without a mode, and the
+ * calls succeed, which is what makes the walk observable.
+ */
+static int no_modes_stat(void *ctx, const char *path, struct vfs_stat *out)
+{
+    K_UNUSED(ctx);
+    K_UNUSED(path);
+
+    memset(out, 0, sizeof(*out));
+    out->type = 2; /* a directory */
+    out->mode = 0; /* the filesystem keeps no modes */
+    out->owner = 0;
+
+    return 0;
+}
+
+static int no_modes_mkdir(void *ctx, const char *path)
+{
+    K_UNUSED(ctx);
+    K_UNUSED(path);
+
+    return 0;
+}
+
+static int no_modes_unlink(void *ctx, const char *path)
+{
+    K_UNUSED(ctx);
+    K_UNUSED(path);
+
+    return 0;
+}
+
+static int no_modes_chmod(void *ctx, const char *path, k_u32_t mode)
+{
+    K_UNUSED(ctx);
+    K_UNUSED(path);
+    K_UNUSED(mode);
+
+    return 0;
+}
+
+static int no_modes_chown(void *ctx, const char *path, k_u32_t owner)
+{
+    K_UNUSED(ctx);
+    K_UNUSED(path);
+    K_UNUSED(owner);
+
+    return 0;
+}
+
+static const struct vfs_operations g_no_modes_ops = {
+    .stat = no_modes_stat,
+    .mkdir = no_modes_mkdir,
+    .unlink = no_modes_unlink,
+    .chmod = no_modes_chmod,
+    .chown = no_modes_chown,
+};
+
+/*
  * The property: every directory of a path has to be searchable by the
  * caller. The VFS checks the `x` bit of the directories it passes through
- * before it asks the filesystem for the object at the end.
+ * before it asks the filesystem for the object at the end, and a call that
+ * creates, removes or changes an object passes through the parent like any
+ * other call.
  */
 static void test_directory_search(void)
 {
@@ -277,14 +341,55 @@ static void test_directory_search(void)
     KT_CHECK_INT_EQ(vfs_open("/locked/inside.txt", VFS_O_RDONLY, &file, file_data), KERR_PERM);
     KT_CHECK_INT_EQ(vfs_stat("/locked/inside.txt", &stat), KERR_PERM);
 
+    /* The parent is walked for the calls that make, remove or change an
+     * object of it, so a directory without the search bit keeps them out. */
+    KT_CHECK_INT_EQ(vfs_mkdir("/locked/newdir"), KERR_PERM);
+    KT_CHECK_INT_EQ(vfs_unlink("/locked/inside.txt"), KERR_PERM);
+    KT_CHECK_INT_EQ(vfs_chmod("/locked/inside.txt", 0644), KERR_PERM);
+    KT_CHECK_INT_EQ(vfs_chown("/locked/inside.txt", 7), KERR_PERM);
+
     /* The directory itself is not passed through: it is still described. */
     KT_CHECK_INT_EQ(vfs_stat("/locked", &stat), 0);
 
-    /* Search for the owner: the child is reachable again. */
+    /* Search for the owner: the child is reachable again, and the parent of
+     * a new object is reached as well. */
     KT_CHECK_INT_EQ(vfs_chmod("/locked", 0700), 0);
     KT_CHECK_INT_EQ(vfs_open("/locked/inside.txt", VFS_O_RDONLY, &file, file_data), 0);
     KT_CHECK_INT_EQ(vfs_close(&file), 0);
     KT_CHECK_INT_EQ(vfs_stat("/locked/inside.txt", &stat), 0);
+    KT_CHECK_INT_EQ(vfs_mkdir("/locked/newdir"), 0);
+    KT_CHECK_INT_EQ(vfs_unlink("/locked/newdir"), 0);
+    KT_CHECK_INT_EQ(vfs_chmod("/locked/inside.txt", 0644), 0);
+    KT_CHECK_INT_EQ(vfs_chown("/locked/inside.txt", 7), 0);
+    KT_CHECK_INT_EQ(vfs_stat("/locked/inside.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.mode, 0644);
+    KT_CHECK_INT_EQ(stat.owner, 7);
+
+    /* The object at the end keeps the check it always had: the walk lets the
+     * path through, and the name, the existence and the record are still the
+     * answers of the filesystem. */
+    KT_CHECK_INT_EQ(vfs_mkdir("/locked"), KERR_EXIST);
+    KT_CHECK_INT_EQ(vfs_unlink("/locked/nothing"), KERR_NOENT);
+    KT_CHECK_INT_EQ(vfs_chmod("/locked/nothing", 0644), KERR_NOENT);
+    KT_CHECK_INT_EQ(vfs_chown("/locked/nothing", 7), KERR_NOENT);
+
+    /* The root is passed through by every path and works as before. */
+    KT_CHECK_INT_EQ(vfs_mkdir("/top"), 0);
+    KT_CHECK_INT_EQ(vfs_unlink("/top"), 0);
+
+    /*
+     * A filesystem that keeps no modes is walked the way it always was: a
+     * zero is not "nobody may search it", and the four calls reach the
+     * objects below such a directory.
+     */
+    KT_CHECK_INT_EQ(vfs_mkdir("/virt"), 0);
+    KT_CHECK_INT_EQ(vfs_mount("/virt", &g_no_modes_ops, NULL), 0);
+    KT_CHECK_INT_EQ(vfs_mkdir("/virt/dir"), 0);
+    KT_CHECK_INT_EQ(vfs_mkdir("/virt/dir/deep"), 0);
+    KT_CHECK_INT_EQ(vfs_unlink("/virt/dir/deep"), 0);
+    KT_CHECK_INT_EQ(vfs_chmod("/virt/dir", 0644), 0);
+    KT_CHECK_INT_EQ(vfs_chown("/virt/dir", 7), 0);
+    KT_CHECK_INT_EQ(vfs_umount("/virt"), 0);
 
     teardown();
 }

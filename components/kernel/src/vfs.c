@@ -267,6 +267,11 @@ static int searchable_check(const char *prefix)
  * search bit belongs to the directories that are passed through, not to the
  * one that is named, and the access to the object itself is the business of
  * the call that wants it (open checks the read and the write bits).
+ *
+ * The walk is the same for a call that creates, removes or changes an object:
+ * the parent is the last directory that is passed through, and reaching it is
+ * what those calls need. The object itself keeps the check it always had,
+ * which belongs to the filesystem and not to the tree above it.
  */
 static int path_search_check(const char *path)
 {
@@ -563,6 +568,12 @@ int vfs_mkdir(const char *path)
         return -2;
     }
 
+    rc = path_search_check(path);
+    if (rc != 0) {
+        g_last_error = rc;
+        return rc;
+    }
+
     if (m->ops->mkdir == NULL) {
         g_last_error = -1;
         return -1;
@@ -646,6 +657,12 @@ int vfs_unlink(const char *path)
         return -2;
     }
 
+    rc = path_search_check(path);
+    if (rc != 0) {
+        g_last_error = rc;
+        return rc;
+    }
+
     if (m->ops->unlink == NULL) {
         g_last_error = -1;
         return -1;
@@ -665,6 +682,12 @@ int vfs_chmod(const char *path, k_u32_t mode)
     if (m == NULL) {
         g_last_error = -2;
         return -2;
+    }
+
+    rc = path_search_check(path);
+    if (rc != 0) {
+        g_last_error = rc;
+        return rc;
     }
 
     /*
@@ -692,6 +715,12 @@ int vfs_chown(const char *path, k_u32_t owner)
     if (m == NULL) {
         g_last_error = -2;
         return -2;
+    }
+
+    rc = path_search_check(path);
+    if (rc != 0) {
+        g_last_error = rc;
+        return rc;
     }
 
     if (m->ops->chown == NULL) {
