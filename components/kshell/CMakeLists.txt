@@ -14,6 +14,7 @@ set(MICRO_OS_KSHELL_SRCS
     "src/kshell_files.c"
     "src/kshell_memtest.c"
     "src/kshell_mfetch.c"
+    "src/kshell_pipe.c"
 )
 
 if(ESP_PLATFORM)

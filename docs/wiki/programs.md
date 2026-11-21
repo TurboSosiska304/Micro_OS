@@ -74,22 +74,23 @@ there and gives them the mode of a program (`0755`) through the VFS:
 | `/bin/signals` | a handler, `SIGTERM` ending a child, a wait cut by `SIGINT`, `SIG_IGN`, and the errors of `kill` |
 | `/bin/cat` | `open`, `read`, `write` on a file or descriptor 0, through the library of a program |
 | `/bin/echo` | the vector of the arguments and `write`, the shortest useful program |
-| `/bin/ls` | a directory through `open(O_DIRECTORY)` and `readdir` |
+| `/bin/ls` | a directory through `open(O_DIRECTORY)` and `readdir`; no path is the working directory |
 | `/bin/grep` | the lines of a source that hold a word (`-i`, `-v`), through `strstr` |
 | `/bin/head` | the first lines of a source (`-n N`), a block at a time |
 | `/bin/mkdir` | a directory through `mkdir`, one for every word of the line |
 | `/bin/pwd` | the directory of the task through `getcwd` |
 | `/bin/rm` | a name through `unlink`; `-r` walks a directory with `readdir` |
 | `/bin/spawn` | `execve` from a program, with an environment of its own |
-| `/bin/wc` | the lines and the bytes of a source (`-l`, `-c`) |
+| `/bin/wc` | the lines, words and bytes of a source (`-l`, `-w`, `-c`) or of descriptor 0 |
 
 The first five talk to the kernel through `programs/prog.h`, because what they
 test is the raw door, the fault, the fork, the edge and the signals. The last
 ten are ordinary C programs linked against `components/libc/user`
 ([ADR 0016](../adr/0016-userland.md)). Every one of them reads descriptor 0
-when it is given no file (or `-`); the shell does not pass its table to a
-program yet, so that read is `EBADF` until a redirection carries a file to
-descriptor 0.
+when it is given no file (or `-`); `execve` carries the table of the caller, so
+a redirect or a pipe of the shell fills it (`cat < file`, `ls /bin | wc -l`,
+[ADR 0017](../adr/0017-shell-pipelines.md)). A program at the prompt with no
+redirect still has no descriptor 0 of the console.
 
 The boot then asks for `/bin/hello` with `ksys_execve()`: the stat, the check
 of the mode, the read through the VFS, the parse and the entry are the ones of

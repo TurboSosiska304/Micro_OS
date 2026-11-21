@@ -14,15 +14,13 @@
 int main(int argc, char *const argv[], char *const envp[])
 {
     char path[VFS_PATH_MAX];
-    int length;
 
     (void)argc;
     (void)argv;
     (void)envp;
 
-    length = getcwd(path, sizeof(path));
-    if (length < 0) {
-        printf("pwd: error %d\n", -length);
+    if (getcwd(path, sizeof(path)) == NULL) {
+        printf("pwd: cannot read the working directory\n");
         return ULIBC_EXIT_FAILURE;
     }
 

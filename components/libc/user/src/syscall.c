@@ -113,9 +113,11 @@ int unlink(const char *path)
     return (int)syscall6(KSYS_UNLINK, (long)(uintptr_t)path, 0, 0, 0, 0, 0);
 }
 
-int getcwd(char *buf, size_t size)
+char *getcwd(char *buf, size_t size)
 {
-    return (int)syscall6(KSYS_GETCWD, (long)(uintptr_t)buf, (long)size, 0, 0, 0, 0);
+    long rc = syscall6(KSYS_GETCWD, (long)(uintptr_t)buf, (long)size, 0, 0, 0, 0);
+
+    return (rc < 0) ? NULL : buf;
 }
 
 int getpid(void)

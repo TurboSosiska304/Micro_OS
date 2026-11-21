@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "kshell_internal.h"
+
 #include "kernel/config.h"
 #include "kernel/errno.h"
 #include "kernel/ksys.h"
@@ -86,6 +88,13 @@ static bool shell_resolve(const char *path, char *out, k_size_t size)
     }
 
     return n >= 0 && (k_size_t)n < size;
+}
+
+/* The same resolution for the runner of a pipeline: a redirection names its
+ * file relative to the directory of the task, as every other path does. */
+bool kshell_resolve_path(const char *path, char *out, k_size_t size)
+{
+    return shell_resolve(path, out, size);
 }
 
 /* The answer of a command that was given a path that does not fit. */
@@ -415,6 +424,43 @@ static void cat_numbered(const char *buffer, long len, unsigned *line, bool *at_
     }
 }
 
+/* Copy a descriptor to the output of the shell until the end of the file. */
+static int cat_copy(int fd, const char *label, bool number)
+{
+    char buffer[128];
+    unsigned line = 1;
+    bool at_start = true;
+
+    for (;;) {
+        long got = microos_read(fd, buffer, sizeof(buffer));
+
+        if (got == 0) {
+            return KSHELL_OK; /* the end of the file, or the last writer gone */
+        }
+
+        if (got < 0) {
+            /*
+             * A pipe gives up after half a second with a producer that is
+             * still there (ADR 0014): that is not the end of the file, and
+             * the command of a pipeline has to wait it out.
+             */
+            if (microos_errno() == -KERR_AGAIN) {
+                (void)microos_yield();
+                continue;
+            }
+
+            kshell_eprintf("cat: %s: %s\n", label, microos_strerror(microos_errno()));
+            return KSHELL_ERROR;
+        }
+
+        if (number) {
+            cat_numbered(buffer, got, &line, &at_start);
+        } else {
+            kshell_write(buffer, (k_size_t)got);
+        }
+    }
+}
+
 static int cmd_cat(int argc, char **argv)
 {
     bool number = false;
@@ -423,13 +469,10 @@ static int cmd_cat(int argc, char **argv)
     };
     struct kshell_args args;
     char path[SHELL_PATH_MAX];
-    char buffer[128];
-    unsigned line = 1;
-    bool at_start = true;
     int rc;
     int fd;
 
-    rc = kshell_options(argc, argv, options, K_ARRAY_SIZE(options), "cat [-n] <file>", &args);
+    rc = kshell_options(argc, argv, options, K_ARRAY_SIZE(options), "cat [-n] [file]", &args);
     if (rc == KSHELL_OPTIONS_HELP) {
         return kshell_help_show(argv[0]);
     }
@@ -437,9 +480,19 @@ static int cmd_cat(int argc, char **argv)
         return KSHELL_USAGE;
     }
 
-    if (args.argc != 1) {
-        kshell_printf("usage: cat [-n] <file>\n");
+    if (args.argc > 1) {
+        kshell_printf("usage: cat [-n] [file]\n");
         return KSHELL_USAGE;
+    }
+
+    /*
+     * Without a name `cat` is the second stage of a pipe or a `cat < file`:
+     * it copies its standard input, which is where the console used to be
+     * absent. A descriptor 0 that no line opened is an error of the call and
+     * is said, not invented as an empty file.
+     */
+    if (args.argc == 0) {
+        return cat_copy(0, "(stdin)", number);
     }
 
     if (!shell_resolve(args.argv[0], path, sizeof(path))) {
@@ -453,37 +506,18 @@ static int cmd_cat(int argc, char **argv)
      */
     fd = microos_open(path, MICROOS_O_RDONLY);
     if (fd < 0) {
-        kshell_printf("cat: %s: %s\n", path, microos_strerror(microos_errno()));
+        kshell_eprintf("cat: %s: %s\n", path, microos_strerror(microos_errno()));
         return KSHELL_ERROR;
     }
 
-    for (;;) {
-        long got = microos_read(fd, buffer, sizeof(buffer));
+    rc = cat_copy(fd, path, number);
 
-        if (got == 0) {
-            break; /* the end of the file */
-        }
-
-        if (got < 0) {
-            /* A failed read is not the end of the file: it has to be said. */
-            kshell_printf("cat: %s: %s\n", path, microos_strerror(microos_errno()));
-            microos_close(fd);
-            return KSHELL_ERROR;
-        }
-
-        if (number) {
-            cat_numbered(buffer, got, &line, &at_start);
-        } else {
-            kshell_printf("%.*s", (int)got, buffer);
-        }
-    }
-
-    if (microos_close(fd) != 0) {
-        kshell_printf("cat: %s: %s\n", path, microos_strerror(microos_errno()));
+    if (microos_close(fd) != 0 && rc == KSHELL_OK) {
+        kshell_eprintf("cat: %s: %s\n", path, microos_strerror(microos_errno()));
         return KSHELL_ERROR;
     }
 
-    return KSHELL_OK;
+    return rc;
 }
 
 static int cmd_write(int argc, char **argv)
@@ -1330,6 +1364,52 @@ static int cmd_exec(int argc, char **argv)
 
     return KSHELL_ERROR;
 }
+
+/*
+ * A stage of a pipeline whose name is not a command of the shell: the name
+ * with a slash is a path, a name without one is looked up in PATH, and the
+ * program runs with the descriptors the stage built for it. The answer is
+ * the status of the stage: a program that ran and returned is a success,
+ * because execve of this system waits for it and does not hand its code
+ * back (docs/debts.md).
+ */
+int kshell_run_program(int argc, char **argv)
+{
+    char path[SHELL_PATH_MAX];
+    int rc;
+
+    if (argc < 1 || argv == NULL) {
+        return KSHELL_ERROR;
+    }
+
+    if (shell_name_has_dir(argv[0])) {
+        if (!shell_resolve(argv[0], path, sizeof(path))) {
+            kshell_eprintf("%s: path too long\n", argv[0]);
+            return KSHELL_ERROR;
+        }
+    } else if (!shell_find_program(argv[0], path, sizeof(path))) {
+        kshell_eprintf("%s: command not found. Type 'help' for the list.\n", argv[0]);
+        return KSHELL_ERROR;
+    }
+
+    rc = microos_execve(path, argv);
+    if (rc == 0) {
+        return KSHELL_OK;
+    }
+
+    kshell_eprintf("%s: %s\n", argv[0], exec_error_text(microos_errno()));
+
+    return KSHELL_ERROR;
+}
+#else  /* KERNEL_EXEC */
+int kshell_run_program(int argc, char **argv)
+{
+    if (argc > 0 && argv != NULL) {
+        kshell_eprintf("%s: command not found. Type 'help' for the list.\n", argv[0]);
+    }
+
+    return KSHELL_ERROR;
+}
 #endif /* KERNEL_EXEC */
 
 /*
@@ -1353,9 +1433,11 @@ static const struct file_command {
                 "Without a path the current directory is listed.\n"},
      cmd_ls},
     {"cat",
-     {.summary = "print the content of a file",
-      .usage = "cat [-n] <file>",
-      .detail = "  -n  number the lines, as cat of Linux does\n"},
+     {.summary = "print the content of a file, or of the input",
+      .usage = "cat [-n] [file]",
+      .detail = "  -n  number the lines, as cat of Linux does\n"
+                "Without a file the standard input is copied, which is what makes\n"
+                "`cat < file` and `ls | cat` work.\n"},
      cmd_cat},
     {"write",
      {.summary = "write a file",

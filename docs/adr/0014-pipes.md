@@ -154,8 +154,10 @@ POSIX leaves it.
 * There is no `SIGPIPE` and no `poll`/`select`: a program learns about a
   closed reader by the error of `write` and cannot watch two descriptors at
   once.
-* There is no shell pipeline yet. The kernel side of `cmd | cmd` is here;
-  the parser, the redirects and the wait of a chain are the next step.
+* There is no shell pipeline in this ADR; the parser, the redirects and the
+  wait of a chain are ADR 0017. The kernel side stayed as it is written
+  here: one open file is one description, and a pipe end is an ordinary
+  descriptor.
 * Fork copies every descriptor; there is no close-on-exec flag, so a
   program started by `execve` inherits what its caller had open.
 

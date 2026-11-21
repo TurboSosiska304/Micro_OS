@@ -10,11 +10,14 @@
  *
  * This is the second half of the proof of the library: the first is `cat` and
  * a file, and this one is a directory, which is a different descriptor with
- * a position of its own.
+ * a position of its own. Without a path the directory the program was
+ * started in is listed: the shell puts its working directory into the task of
+ * the stage and the call carries it into the program.
  */
 #include "ulibc.h"
 
 #define LS_BATCH 8
+#define LS_PATH_MAX 128
 
 static int list_one(const char *path)
 {
@@ -78,11 +81,19 @@ int main(int argc, char *const argv[], char *const envp[])
 
     (void)envp;
 
+    /* No path: the directory of the program, which is the one of the shell
+     * that started it. */
     if (argc < 2) {
-        static const char usage[] = "usage: ls <directory>...\n";
+        char cwd[LS_PATH_MAX];
 
-        (void)write(ULIBC_STDERR, usage, sizeof(usage) - 1);
-        return ULIBC_EXIT_FAILURE;
+        if (getcwd(cwd, sizeof(cwd)) == NULL) {
+            static const char usage[] = "ls: cannot read the working directory\n";
+
+            (void)write(ULIBC_STDERR, usage, sizeof(usage) - 1);
+            return ULIBC_EXIT_FAILURE;
+        }
+
+        return list_one(cwd);
     }
 
     for (i = 1; i < argc; i++) {

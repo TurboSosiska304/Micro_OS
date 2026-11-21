@@ -93,7 +93,11 @@ written when the project was an operating system for one board; the numbers
       the placeholder of a machine without an MMU
 * [x] `pipe` (27) and `dup2` (28): an open file is a counted description, the
       two ends of a pipe are ordinary descriptors, and the calls are in the
-      ABI and in the library (ADR 0014); the shell pipeline is the next step
+      ABI and in the library (ADR 0014)
+* [x] The shell pipelines and redirections: `cmd | cmd`, `>`/`>>`/`<`/`2>`,
+      a task per stage over `task_fork_shared()`, a program that inherits
+      the three descriptors of its stage, and Ctrl+C for every stage of the
+      job (ADR 0017; `test_kshell_pipe.c`, `make x86-smoke`)
 
 ## K5 - A processor with an MMU (in progress)
 
@@ -216,13 +220,16 @@ written when the project was an operating system for one board; the numbers
       `_start`, the door of `int $0x80`, `open`, `close`, `read`, `write`,
       `lseek`, `readdir`, `getpid`, `uptime`, `exit`, `printf`, `puts` and
       the strings; the numbers come from the header of the kernel
-* [x] Four programs of `/bin` built from C against the library - `cat`,
-      `echo`, `ls` and `spawn` - and `make x86-smoke` runs all four, including
-      a program that starts another with an environment of its own
+* [x] The programs of `/bin` built from C against the library - `cat`,
+      `echo`, `ls`, `spawn` and `wc` - and `make x86-smoke` runs them,
+      including a program that starts another with an environment of its own
+* [x] Descriptors inherited by `execve`, and a `cat` that reads its stdin:
+      the table of the stage is copied into the program before it runs
+* [x] `pipe`, `dup2` and a redirection without the help of the kernel: the
+      shell of ADR 0017 uses the calls of ADR 0014 (`test_kshell_pipe.c`)
+* [x] Basic signals: `SIGINT`, `SIGTERM`, `SIGCHLD` and an interrupted wait,
+      and Ctrl+C for every stage of a pipeline (the job of ADR 0017)
 * [ ] A shell `export` and the environment of the shell in the programs,
       instead of the four words of the kernel
-* [ ] Descriptors inherited by `execve` and a `cat` that reads its stdin
-* [ ] `pipe`, `dup2` and a redirection without the help of the kernel
-* [ ] Basic signals: `SIGINT`, `SIGTERM`, `SIGCHLD` and an interrupted wait
-* [ ] Programs are files on a filesystem of the disk, and more than the seven
+* [ ] Programs are files on a filesystem of the disk, and more than the ten
       images the boot writes (the format is frozen first, ADR 0011)

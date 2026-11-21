@@ -77,12 +77,12 @@ The image is two files: `build-x86/loader32.elf` (the loader) and
 stops below the window of the programs; the kernel is linked at 16 MiB and
 the programs are placed at 32 MiB. The programs of `/bin` are made first:
 `build-x86/hello.mox`, `crash.mox`, `fork.mox`, `badptr.mox`, `signals.mox`,
-`cat.mox`, `echo.mox`, `ls.mox` and `spawn.mox` are the images of
+`cat.mox`, `echo.mox`, `ls.mox`, `spawn.mox` and `wc.mox` are the images of
 `ports/port_x86_64/programs/`
 (`programs/program.ld` links them for the window, `tools/mkprog.sh` turns them
-into the format) and the kernel carries all nine as blobs, because the
+into the format) and the kernel carries all ten as blobs, because the
 machine has to have the bytes before it has a filesystem to read them from.
-The last four are linked against `components/libc/user` and enter at `_start`
+The last five are linked against `components/libc/user` and enter at `_start`
 (ADR 0016); the first five use the raw `programs/prog.h`. The build passes
 `--base 0x02000000` to `mkprog.sh`, which refuses an image linked for another
 window: nothing relocates the program, so a wrong address would run and read
@@ -319,17 +319,19 @@ PCI line needs the I/O APIC that K8 brings.
   has a FAT partition mounts it with a call of the boot, because `/etc/fstab`
   and the `mount` command do not speak the registry yet;
 * a program out of a file: the boot writes the images of `hello`, `crash`,
-  `fork`, `badptr`, `signals`, `cat`, `echo`, `ls` and `spawn` to `/bin`,
-  gives them the mode 0755 and asks for `/bin/hello` with `execve` - the stat,
-  the check of the mode, the read through the VFS, the parse of the image and
-  the entry are the ones of the call and not a copy of them. The program is
-  entered with `argc` in `rdi`, `argv` in `rsi` and `envp` in `rdx` (ADR 0016),
-  prints its lines on the console and calls `exit`; the call reports 0 and the
-  port prints `the program exited with 0`. The shell runs the same files with
-  `exec`: `cat`, `echo`, `ls` and `spawn` are ordinary C programs of
-  `components/libc/user`, `signals` exercises the dispositions of ADR 0015,
-  and `make x86-smoke` reads their lines back; `spawn` starts another program
-  with an environment of its own;
+  `fork`, `badptr`, `signals`, `cat`, `echo`, `ls`, `spawn` and `wc` to
+  `/bin`, gives them the mode 0755 and asks for `/bin/hello` with `execve` -
+  the stat, the check of the mode, the read through the VFS, the parse of the
+  image and the entry are the ones of the call and not a copy of them. The
+  program is entered with `argc` in `rdi`, `argv` in `rsi` and `envp` in
+  `rdx` (ADR 0016), prints its lines on the console and calls `exit`; the
+  call reports 0 and the port prints `the program exited with 0`. The shell
+  runs the same files with `exec`: `cat`, `echo`, `ls`, `spawn` and `wc` are
+  ordinary C programs of `components/libc/user`, `signals` exercises the
+  dispositions of ADR 0015, and `make x86-smoke` reads their lines back;
+  `spawn` starts another program with an environment of its own, and the
+  programs inherit the descriptors of the stage that started them, so
+  `echo one | /bin/cat` and `ls /bin | wc -l` work (ADR 0017);
 * a fault of a program is not a fault of the machine: `/bin/crash` writes to
   address zero in ring 3, the port prints `the program faulted: vector 14 at
   0x0000000000000000`, takes the program down and the shell answers the next

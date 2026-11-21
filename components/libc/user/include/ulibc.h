@@ -86,11 +86,11 @@ int mkdir(const char *path);
 int unlink(const char *path);
 
 /*
- * The current directory of the task, in the buffer of the caller. The answer
- * is the length of the path, or a negative error when the buffer is too
- * small; the text is terminated in every case.
+ * The current directory of the task, in the buffer of the caller: the path
+ * the shell had when it started the program. The answer is `buf`, or NULL
+ * when the call refused; the text is terminated in every case.
  */
-int getcwd(char *buf, size_t size);
+char *getcwd(char *buf, size_t size);
 
 int getpid(void);
 long uptime(void);

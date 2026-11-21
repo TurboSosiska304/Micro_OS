@@ -777,7 +777,13 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
     start->envp = user_envp;
     start->user_rsp = user_rsp;
 
-    program = task_create(PORT_EXEC_TASK_NAME, port_exec_program_task, start, TASK_PRIO_DEFAULT);
+    /*
+     * The program inherits the descriptors of its caller, as POSIX leaves
+     * them across an exec: the table is copied before the task can run, so a
+     * shell that made a pipe and a redirect finds them in the program at 0,
+     * 1 and 2. The same copy carries the working directory and the job.
+     */
+    program = task_fork_shared(caller, PORT_EXEC_TASK_NAME, port_exec_program_task, start);
     if (program == NULL) {
         k_port_free(start);
         goto fail;
@@ -795,16 +801,23 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
      * read here, by the task that started the program. A key that is not
      * Ctrl+C is dropped: a program that runs does not read a line, and a
      * typeahead nobody asked for is not part of this contract.
+     *
+     * A task that belongs to a job is a stage of a pipeline: the owner of
+     * the job (the shell) reads the console and signals every stage at once,
+     * so this wait must not take the key for itself.
      */
     {
         const k_u32_t step_ms = 5u;
         k_u32_t waited = 0;
+        const bool own_console = (task_get_job(caller) == TASK_JOB_NONE);
 
         for (;;) {
-            int key = k_console_poll();
+            if (own_console) {
+                int key = k_console_poll();
 
-            if (key == 3) {
-                (void)task_signal_send(program->pid, K_SIGINT);
+                if (key == 3) {
+                    (void)task_signal_send(program->pid, K_SIGINT);
+                }
             }
 
             rc = task_wait(program->pid, &status, step_ms);

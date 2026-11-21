@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "kshell_internal.h"
 #include "libc/stdlib.h"
 #include "libc/unistd.h"
 #include "kernel/config.h"
@@ -126,62 +127,91 @@ k_size_t kshell_command_count(void)
     return g_command_count;
 }
 
-void kshell_printf(const char *fmt, ...)
+/*
+ * Every byte of the shell goes through descriptor 1 and every diagnostic
+ * through descriptor 2. When nothing is open at those numbers the kernel
+ * falls back to the console (kfile is not there and ksys_write answers the
+ * serial port), so a line without a redirection looks exactly as it did; a
+ * line with one sends the same bytes to the file or into a pipe.
+ *
+ * A pipe of this system holds 256 bytes and gives up after half a second
+ * (ADR 0014), so a writer waits it out here instead of dropping the tail of
+ * a report that the reader is still draining.
+ */
+static void shell_write_fd(int fd, const char *data, k_size_t len)
+{
+    while (len > 0) {
+        long wrote = microos_write(fd, data, len);
+
+        if (wrote < 0) {
+            if (microos_errno() == -KERR_AGAIN) {
+                (void)microos_yield();
+                continue;
+            }
+
+            /*
+             * A kernel whose table of the calls was never registered (the
+             * runner of the tests) has no descriptor to write to: the
+             * console is still there, and the shell keeps its old voice.
+             */
+            if (microos_errno() == -KERR_NOSYS) {
+                k_console_write(data, len);
+            }
+            return; /* a closed pipe or a redirected file that said no */
+        }
+
+        if (wrote == 0) {
+            return;
+        }
+
+        data += wrote;
+        len -= (k_size_t)wrote;
+    }
+}
+
+void kshell_write(const char *data, k_size_t len)
+{
+    if (data == NULL || len == 0) {
+        return;
+    }
+
+    shell_write_fd(1, data, len);
+}
+
+static void shell_vprintf(int fd, const char *fmt, va_list ap)
 {
     char buf[192];
-    va_list ap;
-    int written;
-
-    va_start(ap, fmt);
-    written = vsnprintf(buf, sizeof(buf), fmt, ap);
-    va_end(ap);
+    int written = vsnprintf(buf, sizeof(buf), fmt, ap);
 
     if (written < 0) {
         return;
     }
 
     buf[sizeof(buf) - 1] = '\0';
+    shell_write_fd(fd, buf, strlen(buf));
+}
 
-    /* The serial port and the display of the board show the same. */
-    k_console_write(buf, strlen(buf));
+void kshell_printf(const char *fmt, ...)
+{
+    va_list ap;
+
+    va_start(ap, fmt);
+    shell_vprintf(1, fmt, ap);
+    va_end(ap);
+}
+
+void kshell_eprintf(const char *fmt, ...)
+{
+    va_list ap;
+
+    va_start(ap, fmt);
+    shell_vprintf(2, fmt, ap);
+    va_end(ap);
 }
 
 void kshell_set_sink(kshell_sink_fn sink)
 {
     k_console_set_sink(sink);
-}
-
-/* Split a line into arguments. Returns the number of arguments. */
-static int split_args(char *line, char **argv, int max_args)
-{
-    int argc = 0;
-    char *cursor = line;
-
-    while (*cursor != '\0' && argc < max_args) {
-        while (*cursor == ' ' || *cursor == '\t') {
-            *cursor++ = '\0';
-        }
-
-        if (*cursor == '\0') {
-            break;
-        }
-
-        argv[argc++] = cursor;
-
-        while (*cursor != '\0' && *cursor != ' ' && *cursor != '\t') {
-            cursor++;
-        }
-    }
-
-    /*
-     * The list has to end with a null pointer: the commands read argv[1]
-     * even when there is only one argument.
-     */
-    if (argc < max_args) {
-        argv[argc] = NULL;
-    }
-
-    return argc;
 }
 
 static struct command *find_command(const char *name);
@@ -350,34 +380,25 @@ int kshell_options(int argc, char **argv, const struct kshell_option *options, k
     return KSHELL_OPTIONS_OK;
 }
 
-int kshell_execute(const char *line)
+/*
+ * One command of the table, or one program of the machine. The help of the
+ * table is answered here, before the handler sees the line, so `-h` and
+ * `--help` mean the same in a pipeline stage as at the prompt.
+ */
+int kshell_invoke(int argc, char **argv, bool child)
 {
-    char buffer[KSHELL_LINE_MAX];
-    char *argv[KSHELL_MAX_ARGS];
-    int argc;
     struct command *cmd;
 
-    if (line == NULL) {
-        return KSHELL_ERROR;
-    }
-
-    copy_str(buffer, sizeof(buffer), line);
-
-    /* Strip the trailing newline. */
-    {
-        k_size_t len = strlen(buffer);
-        while (len > 0 && (buffer[len - 1] == '\n' || buffer[len - 1] == '\r')) {
-            buffer[--len] = '\0';
-        }
-    }
-
-    argc = split_args(buffer, argv, KSHELL_MAX_ARGS);
     if (argc == 0) {
         return KSHELL_OK;
     }
 
     cmd = find_command(argv[0]);
     if (cmd == NULL) {
+        if (child) {
+            return kshell_run_program(argc, argv);
+        }
+
         kshell_printf("%s: command not found. Type 'help' for the list.\n", argv[0]);
         return KSHELL_ERROR;
     }
@@ -399,6 +420,38 @@ int kshell_execute(const char *line)
     }
 
     return cmd->fn(argc, argv);
+}
+
+/*
+ * The two commands that change the task that runs them: `cd` moves the
+ * working directory of the caller and `path` changes the value of the shell.
+ * A stage of a pipe is a task of its own, so either would work on a copy
+ * nobody looks at; the runner refuses such a line instead.
+ */
+bool kshell_command_is_shell_state(const char *name)
+{
+    return name != NULL && (strcmp(name, "cd") == 0 || strcmp(name, "path") == 0);
+}
+
+int kshell_execute(const char *line)
+{
+    char buffer[KSHELL_LINE_MAX];
+
+    if (line == NULL) {
+        return KSHELL_ERROR;
+    }
+
+    copy_str(buffer, sizeof(buffer), line);
+
+    /* Strip the trailing newline. */
+    {
+        k_size_t len = strlen(buffer);
+        while (len > 0 && (buffer[len - 1] == '\n' || buffer[len - 1] == '\r')) {
+            buffer[--len] = '\0';
+        }
+    }
+
+    return kshell_line_run(buffer);
 }
 
 /* --- the built in commands --- */
@@ -552,7 +605,7 @@ static int cmd_dmesg(int argc, char **argv)
     klog_dump(buf, sizeof(buf));
     /* The print buffer of the shell is 192 bytes; the log of the boot is
      * longer, and a person wants all of it. */
-    k_console_write(buf, strlen(buf));
+    kshell_write(buf, strlen(buf));
 
     return KSHELL_OK;
 }

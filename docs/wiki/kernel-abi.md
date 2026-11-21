@@ -126,9 +126,10 @@ kernel and runs in place.
 signal that has to be answered makes the call answer `EINTR` and leaves the
 child to the next wait. The exit of a child marks `SIGCHLD` on its parent. No
 job control: the system has no groups and no `&`, `fg` or `bg`; Ctrl+C while
-the shell runs a program sends `SIGINT` to that program, and `kill` takes a pid
-from `ps`. ADR 0015 has the design, and the x86-64 smoke test runs `/bin/signals`
-through all of it.
+the shell runs a program sends `SIGINT` to that program, and while it runs a
+pipeline to every stage of it and the programs they started (the job of
+ADR 0017). `kill` takes a pid from `ps`. ADR 0015 has the design, and the
+x86-64 smoke test runs `/bin/signals` through all of it.
 
 ## Descriptors
 

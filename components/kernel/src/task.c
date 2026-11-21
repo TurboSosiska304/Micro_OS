@@ -89,6 +89,32 @@ const char *task_get_cwd(struct task *t)
     return t->cwd;
 }
 
+void task_set_job(struct task *t, k_u32_t job)
+{
+    if (t == NULL) {
+        return;
+    }
+
+    k_port_enter_critical();
+    t->job = job;
+    k_port_exit_critical();
+}
+
+k_u32_t task_get_job(const struct task *t)
+{
+    k_u32_t job;
+
+    if (t == NULL) {
+        return TASK_JOB_NONE;
+    }
+
+    k_port_enter_critical();
+    job = t->job;
+    k_port_exit_critical();
+
+    return job;
+}
+
 /*
  * The trampoline: every task starts running here. It marks the task as
  * running and calls the user entry point.
@@ -187,6 +213,7 @@ static struct task *task_spawn(const char *name, task_entry_fn entry, void *arg,
 
     if (inherit != NULL) {
         t->parent = inherit;
+        t->job = inherit->job;
         task_set_cwd(t, task_get_cwd(inherit));
         kfile_table_copy(t, inherit);
     }
@@ -248,6 +275,7 @@ int task_fork(struct task *parent, const char *name, struct task **child)
     }
 
     c->parent = parent;
+    c->job = parent->job;
     task_set_cwd(c, task_get_cwd(parent));
     kfile_table_copy(c, parent);
     task_signal_inherit(c, parent);
@@ -592,6 +620,54 @@ int task_signal_send(k_u32_t pid, int sig)
     k_sched_unblock(t);
 
     return 0;
+}
+
+/*
+ * The signal of a whole job: the stages of a pipeline and the programs they
+ * started. The caller is the task that reads the console for the job, so it
+ * is not a target - Ctrl+C is the end of the work and not of the shell.
+ *
+ * The pids are collected under one critical section because the table can
+ * change while the signals are sent; task_signal_send() checks the state of
+ * each task again, so a task that ended in between is simply passed over.
+ */
+int task_signal_job(k_u32_t job, int sig)
+{
+    struct task *self = task_self();
+    k_u32_t pids[TASK_MAX_TASKS];
+    k_size_t count = 0;
+    k_size_t i;
+    int sent = 0;
+
+    if (job == TASK_JOB_NONE) {
+        return KERR_INVAL;
+    }
+
+    k_port_enter_critical();
+
+    for (i = 0; i < TASK_MAX_TASKS; i++) {
+        struct task *t = &g_tasks[i];
+
+        if (!t->in_use || t == self || t->job != job) {
+            continue;
+        }
+
+        if (t->state == TASK_STATE_ZOMBIE || t->state == TASK_STATE_DEAD) {
+            continue;
+        }
+
+        pids[count++] = t->pid;
+    }
+
+    k_port_exit_critical();
+
+    for (i = 0; i < count; i++) {
+        if (task_signal_send(pids[i], sig) == 0) {
+            sent++;
+        }
+    }
+
+    return (sent > 0) ? 0 : KERR_SRCH;
 }
 
 task_signal_fn task_signal_set(struct task *t, int sig, task_signal_fn handler)

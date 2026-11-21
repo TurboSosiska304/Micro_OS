@@ -22,6 +22,13 @@
  * the next few. The table is small on purpose, the memory of the board is. */
 #define TASK_SIGNALS 8
 
+/*
+ * The job of a task. A job is the set of tasks a terminal interrupts
+ * together: the stages of a shell pipeline and the programs they started.
+ * Zero is no job, and a signal of a job never reaches its owner.
+ */
+#define TASK_JOB_NONE 0u
+
 typedef enum {
     TASK_STATE_NEW = 0,  /* created, not started yet */
     TASK_STATE_READY,    /* in the run queue */
@@ -70,6 +77,12 @@ struct task {
     task_entry_fn entry;
     void *arg;
     struct task *parent;
+    /*
+     * The job of the task (TASK_JOB_NONE when it belongs to none). The
+     * stages of a pipeline and the programs they run share one, so that
+     * Ctrl+C reaches all of them and not only the one that reads the key.
+     */
+    k_u32_t job;
     /*
      * True for the child of a fork. In Linux the child knows it by the zero
      * that fork() returns; here the child starts the program from the
@@ -159,6 +172,21 @@ int task_get_mem_priority(struct task *t);
 /* Working directory of a task. */
 void task_set_cwd(struct task *t, const char *dir);
 const char *task_get_cwd(struct task *t);
+
+/*
+ * The job of a task. A child of a fork and a task started with
+ * task_fork_shared() inherit the job of its parent, and the program that
+ * execve starts inherits it from the stage that asked for it.
+ */
+void task_set_job(struct task *t, k_u32_t job);
+k_u32_t task_get_job(const struct task *t);
+
+/*
+ * Send a signal to every living task of a job except the caller, which is
+ * the task that reads the console of the pipeline. The answer is 0 when at
+ * least one task was named, and ESRCH when the job has no other task.
+ */
+int task_signal_job(k_u32_t job, int sig);
 
 /*
  * Access to the task table without taking the lock. Only for the internals

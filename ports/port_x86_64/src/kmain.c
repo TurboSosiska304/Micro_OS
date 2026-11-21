@@ -342,8 +342,9 @@ static void filesystem_bring_up(void)
      * source, `head` copies the first lines, `grep` prints the lines that
      * hold a word, `mkdir` and `rm` change the tree through the calls, and
      * `pwd` reads the directory of the task. The four filters read
-     * descriptor 0 when they are given no file, which is what will make them
-     * the second half of a pipe of the next milestone.
+     * descriptor 0 when they are given no file, which is what makes them the
+     * second half of a pipe: `ls /bin | wc -l` in `make x86-smoke` is the
+     * chain the shell builds with pipe and dup2 (ADR 0017).
      */
     if (!program_install(PROGRAM_WC_PATH, _binary_wc_mox_start,
                          (k_size_t)(_binary_wc_mox_end - _binary_wc_mox_start))) {

@@ -93,6 +93,23 @@ COMMANDS = [
     # the third argument of execve copied from the memory of a program, not
     # the four words of the kernel that every call without one gets.
     "exec /bin/spawn",
+    # The pipes and the redirects of K7 (ADR 0017). The shell is one
+    # interpreter on every machine, so these lines are the same that the
+    # host tests run; here the last stage is a program of ring 3 as well,
+    # and it reads the descriptor the stage built for it.
+    "mkdir /tmp",
+    "echo hi > /tmp/f",
+    "cat /tmp/f",
+    "cat < /tmp/f",
+    "echo one | cat",
+    "echo one | /bin/cat",
+    "cat /etc/setting | wc -l",
+    "ls /bin | wc -l",
+    # A line that cannot run is a sentence, and the shell answers the next
+    # command: a `cd` has no meaning in a stage, and a file that is not
+    # there is the failure of that stage only.
+    "cd / | cat",
+    "cat /no/such/file | /bin/cat",
     "fsck",
     # The program of K4: it forks, the child writes the shared page and ends
     # with 7, the parent waits and still reads its own 42 (copy on write).
@@ -400,14 +417,14 @@ def check(output: str) -> list:
     expect("grep is a program of the shell", "the program has finished" in grep)
     grep = answer("exec /bin/grep -i HELLO /etc/setting")
     expect("grep -i folds the case", "hello" in grep)
-    # No file is descriptor 0. The shell does not pass its table to a
-    # program yet, so the call answers EBADF: the program took the path and
-    # the answer is about the descriptor, not about a usage line.
+    # No file is descriptor 0. A program inherits the table of the shell
+    # (ADR 0017), but the prompt does not open the console on descriptor 0
+    # yet, so the read answers EBADF; a redirect or a pipe fills it.
     cat = answer("exec /bin/cat")
-    expect("cat reads descriptor 0 when no file is named", "cat: stdin: error 9" in cat)
+    expect("cat reads descriptor 0 when no file is named", "cat: (stdin): error 9" in cat)
     expect("cat of a closed stdin is a failure", "the program exited with 1" in cat)
     wc = answer("exec /bin/wc -l -")
-    expect("wc reads descriptor 0 for a dash", "wc: stdin: error 9" in wc)
+    expect("wc reads descriptor 0 for a dash", "wc: -: cannot read" in wc)
     # The tree: the shell makes /tmp, the program makes a directory in it.
     # Without -r a directory is refused, even an empty one; with -r the tree
     # goes away and the listing of it is ENOENT (2).
@@ -438,6 +455,41 @@ def check(output: str) -> list:
     )
     expect("the started program gets its arguments", "PROGRAM: argc 2, argv[0] hello" in spawn)
     expect("the outer program waits for the inner one", "the program has finished" in spawn)
+
+    # --- the pipes and the redirects of K7 (ADR 0017)
+    # `echo hi > /tmp/f` is a builtin that writes descriptor 1, which the
+    # stage put on the file; `cat /tmp/f` reads it back, so the bytes went
+    # through the filesystem and not through the buffer of the shell.
+    expect("a redirect writes the file", "hi" in answer("cat /tmp/f"))
+    expect("a redirect reads the file", "hi" in answer("cat < /tmp/f"))
+    # Two builtins in a pipe: the consumer prints what the producer wrote.
+    expect("a pipe joins two commands of the shell", "one" in answer("echo one | cat"))
+    # A builtin and a program: the stage of /bin/cat inherits descriptor 0
+    # from the shell, which is the read end of the pipe.
+    expect("a program reads the stdin of a pipe", "one" in answer("echo one | /bin/cat"))
+    # A program of the machine counts the bytes of the shell's command.
+    line_count = answer("cat /etc/setting | wc -l")
+    expect(
+        "wc counts the lines of a pipe",
+        re.search(r"\n1[ \t]*\r?\n", line_count) is not None,
+        repr(line_count[-40:]),
+    )
+    bin_count = answer("ls /bin | wc -l")
+    match = re.search(r"\n(\d+)[ \t]*\r?\n", bin_count)
+    expect(
+        "a listing of the shell is counted by a program",
+        match is not None and int(match.group(1)) > 3,
+        repr(bin_count[-40:]),
+    )
+    # A command that changes the task of the shell cannot be a stage.
+    expect(
+        "cd in a pipeline is refused with a sentence",
+        "cannot run in a pipeline" in answer("cd / | cat"),
+    )
+    expect(
+        "a file that is not there is the failure of one stage",
+        "no such file" in answer("cat /no/such/file | /bin/cat"),
+    )
     # The mode is a fact of the record and not a word of the kernel: take the
     # bit away with the shell and the same call refuses, give it back and the
     # program runs again. The library writes its errno through %fs here, so a

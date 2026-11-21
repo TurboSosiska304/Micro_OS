@@ -14,13 +14,13 @@ list is not the same on every machine.
 
 ## The line
 
-The line is split on spaces and tabs; there are no quotes, no escapes, no
-globs, no pipes, no `;` and no redirection. A line is at most 127 characters
-and at most 8 words. Backspace erases, Ctrl+C throws the line away, and a line
-that did not fit is **not** executed (the shell says `line too long, it was not
-executed`), because a cut line is a different command. While a program runs,
-Ctrl+C is not a line: the port reads it and sends `SIGINT` to the program the
-shell is waiting for (see [kernel-abi.md](kernel-abi.md#signals)).
+The line is split on spaces and tabs; there are no quotes, no escapes and no
+globs. A line is at most 127 characters and at most 8 words per stage.
+Backspace erases, Ctrl+C throws the line away, and a line that did not fit is
+**not** executed (the shell says `line too long, it was not executed`),
+because a cut line is a different command. While a program or a pipe runs,
+Ctrl+C is not a line: the shell reads it and sends `SIGINT` to the program or
+to every stage of the chain (see [kernel-abi.md](kernel-abi.md#signals)).
 
 Because there are no quotes, a command that needs an empty argument accepts
 the two characters `""` as the way to type it. `path ""` is the example.
@@ -28,6 +28,49 @@ the two characters `""` as the way to type it. `path ""` is the example.
 A name that is not registered answers `<name>: command not found`. A command
 that is given the wrong arguments answers with its own `usage:` line and does
 nothing.
+
+## Pipes and redirections
+
+`|` joins two or more stages, and `>`, `>>`, `<`, `2>` and `2>>` send a
+descriptor of a stage to a file. The operators are words of their own, with a
+space around them, because the splitter has no quotes; they may stand before
+or after the arguments of a stage:
+
+```text
+microos> ls /etc | cat
+microos> echo one | cat | cat
+microos> cat /etc/setting > /tmp/f
+microos> cat /etc/setting >> /tmp/f
+microos> cat < /etc/setting
+microos> cat /etc/setting 2> /tmp/errors
+microos> /bin/cat /etc/setting | wc -l
+```
+
+A stage that is a command of the shell (`ls`, `cat`, `echo`, `df`, ...) runs
+in a task of its own and writes descriptor 1, so a redirect or a pipe carries
+its output exactly as it carries a program's. A name that is not a command is
+looked up in `PATH` and started with `execve`; on x86-64 that program
+inherits the three descriptors of the stage, which is what makes
+`echo one | /bin/cat` and `ls /bin | wc -l` work. On the board and in the
+simulator there is no program to run, and only the commands of the shell can
+be stages.
+
+What the line does **not** do:
+
+* no `&&`, `||`, `;` or `&`: they are refused by name, not run as arguments;
+* no `2>&1`, no `>&`, no file-descriptor juggling beyond `0`, `1` and `2`;
+* no quotes, escapes, globs or variables: `*` is a word and not a pattern;
+* no attached forms: `a|b` and `>file` are arguments; write `a | b`, `> file`;
+* at most three stages, because a boundary is a pipe and the shell task has
+  four descriptors;
+* no background job, no `jobs`, no `fg` or `bg`;
+* a command that changes the task of the shell (`cd`, `path`) cannot be a
+  stage or carry a redirection: it is refused with a sentence instead of
+  changing a copy nobody sees.
+
+The status of a line is the status of its last stage. A program that is the
+last stage answers 0 when it ran and 1 when it could not start; its own code
+is not handed back by `execve` yet.
 
 ## `help`
 
@@ -82,7 +125,7 @@ The files, on every machine:
 |---|---|
 | `pwd`, `cd <dir>` | the current directory |
 | `ls [-l] [-a] [path]` | the tree; `-l` adds mode, owner and size, `-a` the hidden `.` and `..` |
-| `cat [-n] <file>` | the content of a file; `-n` numbers the lines |
+| `cat [-n] [file]` | the content of a file, or of the standard input; `-n` numbers the lines |
 | `write <file> <text>` | create or replace a file with one line (at most 127 bytes) |
 | `mkdir <dir>`, `rm [-r] <file>` | a directory, a file; a directory needs `-r` |
 | `df [-h] [path]` | the free blocks and inodes; `-h` in KB/MB |
@@ -148,7 +191,9 @@ exec: hello: not found in /bin:/usr/bin
 On the board and in the simulator there is no program to run: a fresh volume
 has no `/bin`, and `execve` answers `ENOSYS` even for a file that is there. The
 x86-64 port writes `/bin/hello`, `/bin/crash`, `/bin/fork`, `/bin/badptr` and
-`/bin/signals` at the boot, and runs them as programs of ring 3.
+`/bin/signals` at the boot, and runs them as programs of ring 3. It also
+writes the library programs `cat`, `echo`, `ls` and `wc`, whose descriptors
+are inherited from the shell, so a pipeline can end in one of them.
 [programs.md](programs.md) explains what a program is.
 
 ## `kill`, Ctrl+C and no job control
@@ -170,9 +215,11 @@ microos> kill -INT 13
 named: `-INT`, `-TERM`, `-CHLD`, `-PIPE` or the number. A pid that names no
 task answers `kill: 42: no such process`; a signal outside the four is
 refused. During an `exec`, Ctrl+C of the console sends `SIGINT` to the
-program, and a program that ignores it keeps running: there is no `-9` to
-fall back on (a number outside the table is `EINVAL`), and the machine is
-restarted with `reboot` if a program really hangs.
+program; during a pipeline it goes to every stage and the programs they
+started, because they share one job (ADR 0017). A program that ignores it
+keeps running: there is no `-9` to fall back on (a number outside the table
+is `EINVAL`), and the machine is restarted with `reboot` if a program really
+hangs.
 
 ## `stat`, `chmod` and `chown`
 

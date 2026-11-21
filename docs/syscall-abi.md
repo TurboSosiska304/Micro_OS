@@ -413,7 +413,9 @@ meaning. An ignored signal and the default `SIGCHLD` do not cut a wait.
 There is no job control: no `SIGSTOP`, `SIGCONT` or `SIGTSTP`, no groups and
 no `&`. Ctrl+C at the console is the one signal of the terminal: while the
 shell waits for the program it started, a Ctrl+C byte sends `SIGINT` to
-that program, and `kill` from the prompt sends a signal to a pid from `ps`.
+that program, and while it waits for a pipeline to every stage of the job
+and the programs they started (ADR 0017). `kill` from the prompt sends a
+signal to a pid from `ps`.
 
 The library has the same calls as `microos_kill()` and
 `microos_signal()`, with `MICROOS_SIGINT` and the other three numbers, and

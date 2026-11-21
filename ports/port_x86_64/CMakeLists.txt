@@ -88,6 +88,7 @@ set(KSHELL_SOURCES
     "${KSHELL_DIR}/src/kshell_files.c"
     "${KSHELL_DIR}/src/kshell_memtest.c"
     "${KSHELL_DIR}/src/kshell_mfetch.c"
+    "${KSHELL_DIR}/src/kshell_pipe.c"
 )
 
 # The parts of the C library the shell calls. They reach the kernel through
