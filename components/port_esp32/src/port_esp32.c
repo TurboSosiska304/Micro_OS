@@ -378,6 +378,7 @@ int k_port_task_create(struct task *t, k_port_task_entry_fn entry, void *arg)
                      TASK_FREERTOS_PRIO_BASE + t->prio, &slot->handle);
 
     if (rc != pdPASS) {
+        kerror("esp32: xTaskCreate failed: free %u", (unsigned)k_port_heap_free());
         k_port_enter_critical();
         slot->handle = NULL;
         slot->task = NULL;
@@ -430,27 +431,32 @@ void k_port_task_sleep_ms(k_u32_t ms)
 
 void k_port_task_exit(int code)
 {
-    struct task *self = k_port_task_current();
+    TaskHandle_t self = xTaskGetCurrentTaskHandle();
+    size_t i;
 
     K_UNUSED(code);
 
-    if (self != NULL) {
-        esp_task_entry *slot = (esp_task_entry *)self->ctx;
+    /*
+     * The slot is found by the handle of the task that is leaving and not
+     * through the record of the kernel: the parent may reap a zombie as soon
+     * as it is published, which zeroes that record, and the registry slot
+     * would then be lost for the life of the board - after thirty programs
+     * no task could be created. The handle is the port's own name of the
+     * task and the one thing a parent cannot take away.
+     */
+    k_port_enter_critical();
 
-        if (slot != NULL) {
-            /*
-             * The slot is given back in one step, and the thread does not
-             * touch it again: a task that is created in the same moment
-             * finds a slot that is either taken or free, never half.
-             */
-            k_port_enter_critical();
-            slot->handle = NULL;
-            slot->task = NULL;
-            slot->entry = NULL;
-            slot->taken = false;
-            k_port_exit_critical();
+    for (i = 0; i < K_ARRAY_SIZE(s_registry); i++) {
+        if (s_registry[i].taken && s_registry[i].handle == self) {
+            s_registry[i].handle = NULL;
+            s_registry[i].task = NULL;
+            s_registry[i].entry = NULL;
+            s_registry[i].taken = false;
+            break;
         }
     }
+
+    k_port_exit_critical();
 
     vTaskDelete(NULL);
 }

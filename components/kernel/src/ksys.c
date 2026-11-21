@@ -1662,6 +1662,8 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t envp, k
      */
     data = kmm_alloc((k_size_t)info.size, KMM_PRIORITY_USER);
     if (data == NULL) {
+        kwarn("exec: no memory for %s (%u bytes): heap %u, psram %u", name, (unsigned)info.size,
+              (unsigned)k_port_heap_free(), (unsigned)k_port_psram_free());
         return KERR_NOMEM;
     }
 
@@ -1725,7 +1727,12 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t envp, k
         return KERR_NOEXEC;
     }
 
-    return (rc == K_EXEC_RUN_NO_MACHINE) ? KERR_NOSYS : KERR_NOMEM;
+    if (rc != K_EXEC_RUN_NO_MACHINE) {
+        kwarn("exec: the port refused the image (rc=%d)", rc);
+        return KERR_NOMEM;
+    }
+
+    return KERR_NOSYS;
 }
 #else
 /*

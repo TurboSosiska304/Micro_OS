@@ -22,12 +22,12 @@
 #include "kernel/task.h"
 #include "kernel/version.h"
 #include "devfs/devfs.h"
+#include "fs_ext2/ext2.h"
 #include "graphics/tft_console.h"
 #include "init/initd.h"
 #include "mfs/mfs.h"
 #include "mfs/mfs_vfs.h"
 #if MICRO_OS_FS_FAT32
-#include "fs_ext2/ext2.h"
 #include "fs_fat32/fat.h"
 #endif
 #include "net/net.h"
