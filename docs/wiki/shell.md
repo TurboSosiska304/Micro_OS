@@ -115,6 +115,7 @@ The core of the kernel, on every machine:
 | `clear` | clear the screen (the escape sequence the panel and the VGA read) |
 | `modules` | run the hardware doctor and print its report |
 | `abi` | the table of the system calls |
+| `ulimit [-m bytes \| -c ms \| -n fds]` | the limits of the shell, or lower one of them |
 | `memtest [kilobytes]` | measure the memory and its speed |
 | `mfetch [color]` | the system report with a logo |
 | `reboot` | restart the machine |

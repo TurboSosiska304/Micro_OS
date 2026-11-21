@@ -20,6 +20,17 @@ _Static_assert(sizeof(struct microos_statx) == sizeof(struct vfs_statx),
                "the structure of statx and the ABI of the call changed");
 
 /*
+ * The selectors of the limits are the numbers of the ABI: the library maps
+ * its own names onto them and the two must not drift.
+ */
+_Static_assert(MICROOS_RLIMIT_MEMORY == (int)KSYS_RLIMIT_MEMORY,
+               "the memory selector of the library and the ABI differ");
+_Static_assert(MICROOS_RLIMIT_CPU == (int)KSYS_RLIMIT_CPU,
+               "the CPU selector of the library and the ABI differ");
+_Static_assert(MICROOS_RLIMIT_FDS == (int)KSYS_RLIMIT_FDS,
+               "the descriptor selector of the library and the ABI differ");
+
+/*
  * The code of the last error belongs to the task that made the call: two
  * tasks that use the library at the same time must not read each other's
  * error. The standard says the same about errno (C11 7.5).
@@ -121,6 +132,10 @@ const char *microos_strerror(int code)
         return "is a directory";
     case -KERR_INVAL:
         return "invalid argument";
+    case -KERR_MFILE:
+        return "too many open files";
+    case -KERR_NOMEM:
+        return "out of memory";
     case -KERR_NOSPC:
         return "no space left on device";
     case -KERR_SPIPE:
@@ -507,4 +522,86 @@ microos_signal_fn microos_signal(int sig, microos_signal_fn handler)
     g_errno = 0;
 
     return (microos_signal_fn)previous;
+}
+
+/* --- the limits of a task --- */
+
+static int limit_which_valid(int which)
+{
+    return which >= MICROOS_RLIMIT_MEMORY && which <= MICROOS_RLIMIT_FDS;
+}
+
+int microos_getlimit(int which, uint64_t *value)
+{
+    k_u64_t limit = 0;
+    int rc;
+
+    if (!limit_which_valid(which) || value == NULL) {
+        return fail(KERR_INVAL);
+    }
+
+    rc = ksys_getlimit((k_u32_t)which, &limit);
+    if (rc < 0) {
+        return fail(rc);
+    }
+
+    *value = (uint64_t)limit;
+    g_errno = 0;
+
+    return 0;
+}
+
+int microos_setlimit(int which, uint64_t value)
+{
+    int rc;
+
+    if (!limit_which_valid(which)) {
+        return fail(KERR_INVAL);
+    }
+
+    rc = ksys_setlimit((k_u32_t)which, (k_u64_t)value);
+    if (rc < 0) {
+        return fail(rc);
+    }
+
+    g_errno = 0;
+
+    return 0;
+}
+
+/*
+ * The three limits at once. The ABI moves one value at a time, and this is
+ * the shape a caller that prints them wants: the memory, the CPU time and
+ * the descriptors, or -1 and the first error.
+ */
+int microos_getrlimits(struct microos_rlimit *out)
+{
+    k_u64_t value = 0;
+    int rc;
+
+    if (out == NULL) {
+        return fail(KERR_INVAL);
+    }
+
+    rc = ksys_getlimit(KSYS_RLIMIT_MEMORY, &value);
+    if (rc < 0) {
+        return fail(rc);
+    }
+    out->memory = (uint64_t)value;
+
+    rc = ksys_getlimit(KSYS_RLIMIT_CPU, &value);
+    if (rc < 0) {
+        return fail(rc);
+    }
+    out->cpu_ms = (uint32_t)value;
+
+    rc = ksys_getlimit(KSYS_RLIMIT_FDS, &value);
+    if (rc < 0) {
+        return fail(rc);
+    }
+    out->fds = (uint32_t)value;
+
+    g_errno = 0;
+
+    return 0;
 }

@@ -168,6 +168,31 @@ without reaping the child. There is no job control - no groups, no `&`, no
 `fg`, no `bg` - and the documentation says so; Ctrl+C while the shell waits
 for a program is read by the port and becomes `SIGINT` for that program.
 
+### The limits of a task (0.9)
+
+A task has three limits - the memory it holds, the processor time it spends
+and the descriptors it opens - and the calls `getlimit` (32) and `setlimit`
+(33) read and lower them. The limits are fields of `struct task`, so a fork
+inherits them and the scheduler does not have a second table to keep in step.
+They start at the ceiling of the machine (2 MiB of PSRAM, about 49 days of
+CPU, four descriptors) and only go down: with one user, uid 0, there is
+nobody to grant a raise, and the rule of no root bypass applies here too.
+
+The memory is counted by the allocator: `kmm` asks `task_memory_fits()` before
+it looks for a block, charges the user blocks to the task that allocated them
+and gives the charge back on `free`, so a task that is over its budget does
+not spend the memory of the system on the way to `ENOMEM`. The kernel and the
+system priorities have no owner and no limit. The CPU time is the time
+between the points where the task is known to be running - the edge of a
+system call and the tick of a port that can name the running task - with the
+sleep on both sides of a wait set aside; the limit marks the task with
+`SIGTERM`, the closest signal of the four to `SIGXCPU`, and the default action
+ends it with 143. The descriptors stop at the limit in `kfile_alloc()`,
+`kfile_pipe()` and `kfile_dup2()` with `EMFILE`, while a full table of the
+system is `ENOSPC`; lowering the limit never closes what is already open.
+`ulimit` of the shell prints the three numbers and lowers them, and the
+library has `microos_getlimit()`/`microos_setlimit()`.
+
 ## 5. Virtual filesystem (phase 2)
 
 The goal is "everything is a file":

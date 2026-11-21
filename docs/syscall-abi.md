@@ -115,10 +115,13 @@ chose.
 | 29 | `kill` | `pid, sig` | 0, or an error |
 | 30 | `signal` | `sig, handler` | the previous disposition, or an error |
 | 31 | `sigreturn` | - | the saved value of the interrupted call |
+| 32 | `getlimit` | `which, value` | 0 and the limit in the place of the caller, or an error |
+| 33 | `setlimit` | `which, value` | 0, or an error |
 
 The numbers 0 to 22 are frozen, 23 to 26 were the next free ones; pipes took
-27 and 28 (ADR 0014) and signals the three after them (ADR 0015). A call that
-is not in the table is `ENOSYS`, never a guess at what it might have meant.
+27 and 28 (ADR 0014), signals the three after them (ADR 0015), and the limits
+of a task 32 and 33. A call that is not in the table is `ENOSYS`, never a
+guess at what it might have meant.
 
 The flags of `open` are the same as the ones of the VFS:
 
@@ -430,7 +433,10 @@ when the signal is not one of the system.
 
 Every task has its own table of the open files, four of them. The descriptor
 is the number of the slot. A descriptor that was never opened gives
-`KERR_BADF`.
+`KERR_BADF`. The table is the ceiling of the machine; the task also has a
+limit of its own (`KSYS_RLIMIT_FDS`, below), which starts at four and may be
+lowered, so a task may refuse itself a descriptor that the table would still
+hold.
 
 The open file behind a descriptor is a **description** of the kernel, counted
 by the descriptors that refer to it (`kernel/kfile.h`). One task gets two
@@ -491,6 +497,81 @@ A fork copies every descriptor of the parent with one more reference each,
 before the child can run, on the real copy-on-write fork of x86-64 and on the
 placeholder of a machine without an MMU alike.
 
+## The limits of a task
+
+A task has three limits: the memory it may hold, the processor time it may
+spend and the descriptors it may open. They belong to the task and to nobody
+else; there is no call that changes the limit of another task, and no limit of
+a user because the system has one user, uid 0.
+
+```c
+int ksys_getlimit(k_u32_t which, k_u64_t *value);
+int ksys_setlimit(k_u32_t which, k_u64_t value);
+```
+
+`which` names one resource; the value is a 64-bit word, so the three widths
+of the sources (bytes, milliseconds, a count of descriptors) travel without a
+structure. The library composes `struct microos_rlimit` from three calls for
+a caller that wants the set in one place.
+
+| Selector | Resource | Unit | Ceiling |
+|---|---|---|---|
+| `KSYS_RLIMIT_MEMORY` (1) | the user blocks the task holds | bytes | 2 MiB (the PSRAM of the board) |
+| `KSYS_RLIMIT_CPU` (2) | the time the task spent running | milliseconds | 4294967295 (about 49 days) |
+| `KSYS_RLIMIT_FDS` (3) | the descriptors the task may open | descriptors | `TASK_MAX_FDS` (4) |
+
+**The policy: the ceiling is the start and a limit only goes down.** A fresh
+task starts at the ceiling; `setlimit` accepts a value at or below the current
+limit of the resource and refuses a raise with `EPERM`. There is no second
+user to grant a raise, and a program that could raise its own limit would have
+no limit at all - the same rule as the mode check, where uid 0 gets no
+exemption (ADR 0005). A selector outside the three is `EINVAL`; a value above
+the ceiling of the machine is `EPERM` as well, because it is above the current
+limit too. A child of a fork inherits the limits of its parent; a task made by
+`task_create` starts at the ceiling.
+
+`getlimit` copies the current limit into the memory of the caller through the
+edge: NULL or a place that is not there is `EINVAL`/`EFAULT`. `setlimit` takes
+the value in a register and has no pointer to check.
+
+**The memory** is the sum of the blocks a task allocated with the priority of
+a user (`KMM_PRIORITY_USER`, which is what `malloc` of a task uses) and has
+not freed. The kernel and the system utilities are not charged: their
+allocations have no owner, because the kernel must not fail for the budget of
+an application. A block that would take the task over the limit makes `malloc`
+and `realloc` answer 0, and the library turns that into `ENOMEM`
+(`microos_malloc`). The blocks that are already held are not taken away when
+the limit is lowered: the next allocation fails and `free` returns the room.
+`realloc` asks for the new block before it gives the old one back, so a budget
+that would only hold the result can refuse the call; the caller keeps its old
+block, as POSIX promises. A block that outlives the task that allocated it is
+not charged to anybody, because the kernel keeps no list of the blocks of a
+task yet (see [debts.md](debts.md)).
+
+**The CPU time** is counted in the milliseconds the task was running, at the
+edge of every system call and at the tick of a port that can name the running
+task; a sleep and a block set the accounting point again on both sides, so a
+wait costs nothing. When the task reaches the limit it is marked with
+`SIGTERM` once - the system has four signals and no `SIGXCPU`, and a fifth is
+not in the contract. The default action of `SIGTERM` ends the task with the
+status 143; a handler may catch it and the task goes on, as a handler of
+`SIGXCPU` may. A task that never makes a system call is marked at the next
+one; on x86-64 the tick of the timer delivers the mark to a program of ring 3
+without a call.
+
+**The descriptors**: `open`, `pipe` and `dup2` stop at the limit with
+`EMFILE` (`KERR_MFILE`, 24). `dup2` refuses a `newfd` at or above the limit;
+`dup2(fd, fd)` of a descriptor that is already open is still allowed, because
+lowering a limit does not close what is open. A descriptor above a lowered
+limit stays usable and may be closed; a pipe needs two free slots below the
+limit. The table of the task is four slots and the table of the descriptions
+of the system is 24 records: a full limit is `EMFILE`, a full system is
+`ENOSPC`.
+
+A host test covers the three resources (`test_ksys.c`, `test_task.c`,
+`test_kmm.c` and `test_libc.c`), and the shell has `ulimit` to print the limits
+of the shell and to lower them.
+
 ## The wrappers
 
 The programs use the wrappers, they check the arguments before they reach the
@@ -514,6 +595,13 @@ refuse the two numbers of a mode and of an owner that a record cannot hold
 before the kernel is asked. The wrapper of the call itself is
 `ksys_execve(path, argv)` for a caller without an environment and
 `ksys_execve_env(path, argv, envp)` for one with it.
+
+The limits have the same shape: `microos_getlimit(which, &value)` and
+`microos_setlimit(which, value)` with the selectors `MICROOS_RLIMIT_MEMORY`,
+`MICROOS_RLIMIT_CPU` and `MICROOS_RLIMIT_FDS`, and `microos_getrlimits()` for
+the three numbers at once. A raise is -1 with `EPERM` in `microos_errno()`,
+and `microos_strerror()` names `EMFILE`, `ENOMEM` and the rest of the codes
+the library can meet.
 
 ## The tests
 
@@ -571,6 +659,13 @@ program breaks it into pieces.
   of the machine and not a refusal. The arguments and the environment are
   bounded apart, so a long line does not shorten the environment of the same
   call.
+* **The limits.** A fresh task starts at the ceiling of the three resources,
+  a lower value is accepted, a raise and an unknown resource are refused, and
+  the numbers come back from a child task of their own so that a limit lowered
+  by the test does not follow the next one. `open`, `pipe` and `dup2` answer
+  `EMFILE` at the descriptor limit; a block over the memory limit is 0 from
+  `malloc` and `ENOMEM` from the library, and `free` returns the room; a task
+  over its CPU limit is marked with `SIGTERM` and ends with 143.
 
 The corpus lives in [tests/corpus/vectors.txt](../tests/corpus/vectors.txt): 512
 numbers with the boundary values mixed in (0, 1, 255, 65535, 2147483647 and so

@@ -26,6 +26,30 @@ struct microos_statx {
     uint64_t ctime;
 };
 
+/*
+ * The resources of a limit, the selectors of KSYS_RLIMIT_*. A limit starts
+ * at the ceiling of the system and may only be lowered: microos_setlimit()
+ * answers -1 with EPERM for a raise. The memory is the bytes of the user
+ * blocks a task holds, the CPU time is the milliseconds it spent running,
+ * and the descriptors are the open files it may take.
+ */
+#define MICROOS_RLIMIT_MEMORY 1
+#define MICROOS_RLIMIT_CPU 2
+#define MICROOS_RLIMIT_FDS 3
+
+/* The three limits in one place, for a caller that prints or checks them
+ * together. The calls of the ABI move one value at a time. */
+struct microos_rlimit {
+    uint64_t memory;
+    uint32_t cpu_ms;
+    uint32_t fds;
+};
+
+int microos_getlimit(int which, uint64_t *value);
+int microos_setlimit(int which, uint64_t value);
+/* The three limits of the caller, or -1 and microos_errno(). */
+int microos_getrlimits(struct microos_rlimit *out);
+
 /* The flags of the open, the numbers of POSIX. */
 #define MICROOS_O_RDONLY 0
 #define MICROOS_O_WRONLY 1
@@ -140,5 +164,7 @@ const char *microos_strerror(int code);
 #define execve microos_execve
 #define kill microos_kill
 #define signal microos_signal
+#define getlimit microos_getlimit
+#define setlimit microos_setlimit
 
 #endif /* MICRO_OS_LIBC_UNISTD_H */

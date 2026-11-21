@@ -18,6 +18,8 @@
 #include "kernel/errno.h"
 #include "kernel/ksys.h"
 #include "kernel/log.h"
+#include "kernel/sched.h"
+#include "kernel/signal.h"
 #include "kernel/task.h"
 #include "mfs/mfs.h"
 #include "mfs/mfs_ram_device.h"
@@ -280,17 +282,18 @@ static void test_abi_is_stable(void)
         k_u32_t number;
         const char *name;
     } golden[] = {
-        {KSYS_EXIT, "exit"},       {KSYS_READ, "read"},           {KSYS_WRITE, "write"},
-        {KSYS_OPEN, "open"},       {KSYS_CLOSE, "close"},         {KSYS_STAT, "stat"},
-        {KSYS_LSEEK, "lseek"},     {KSYS_UNLINK, "unlink"},       {KSYS_MKDIR, "mkdir"},
-        {KSYS_READDIR, "readdir"}, {KSYS_GETPID, "getpid"},       {KSYS_GETCWD, "getcwd"},
-        {KSYS_IOCTL, "ioctl"},     {KSYS_YIELD, "yield"},         {KSYS_SLEEP, "sleep"},
-        {KSYS_UPTIME, "uptime"},   {KSYS_REBOOT, "reboot"},       {KSYS_FORK, "fork"},
-        {KSYS_GETPPID, "getppid"}, {KSYS_WAITPID, "waitpid"},     {KSYS_MALLOC, "malloc"},
-        {KSYS_FREE, "free"},       {KSYS_REALLOC, "realloc"},     {KSYS_CHMOD, "chmod"},
-        {KSYS_CHOWN, "chown"},     {KSYS_EXECVE, "execve"},       {KSYS_STATX, "statx"},
-        {KSYS_PIPE, "pipe"},       {KSYS_DUP2, "dup2"},           {KSYS_KILL, "kill"},
-        {KSYS_SIGNAL, "signal"},   {KSYS_SIGRETURN, "sigreturn"},
+        {KSYS_EXIT, "exit"},         {KSYS_READ, "read"},           {KSYS_WRITE, "write"},
+        {KSYS_OPEN, "open"},         {KSYS_CLOSE, "close"},         {KSYS_STAT, "stat"},
+        {KSYS_LSEEK, "lseek"},       {KSYS_UNLINK, "unlink"},       {KSYS_MKDIR, "mkdir"},
+        {KSYS_READDIR, "readdir"},   {KSYS_GETPID, "getpid"},       {KSYS_GETCWD, "getcwd"},
+        {KSYS_IOCTL, "ioctl"},       {KSYS_YIELD, "yield"},         {KSYS_SLEEP, "sleep"},
+        {KSYS_UPTIME, "uptime"},     {KSYS_REBOOT, "reboot"},       {KSYS_FORK, "fork"},
+        {KSYS_GETPPID, "getppid"},   {KSYS_WAITPID, "waitpid"},     {KSYS_MALLOC, "malloc"},
+        {KSYS_FREE, "free"},         {KSYS_REALLOC, "realloc"},     {KSYS_CHMOD, "chmod"},
+        {KSYS_CHOWN, "chown"},       {KSYS_EXECVE, "execve"},       {KSYS_STATX, "statx"},
+        {KSYS_PIPE, "pipe"},         {KSYS_DUP2, "dup2"},           {KSYS_KILL, "kill"},
+        {KSYS_SIGNAL, "signal"},     {KSYS_SIGRETURN, "sigreturn"}, {KSYS_GETLIMIT, "getlimit"},
+        {KSYS_SETLIMIT, "setlimit"},
     };
     size_t i;
 
@@ -1323,6 +1326,259 @@ static void test_wait_no_child(void)
     teardown();
 }
 
+/*
+ * The property: a fresh task starts at the ceiling of every resource, a
+ * limit may be lowered, and a raise is refused. The test runs in a task of
+ * its own because a limit belongs to the task and the runner is one task for
+ * every test: a limit lowered here would follow the next test.
+ */
+static int g_limit_rc[8];
+static k_u64_t g_limit_value[4];
+
+static void limits_defaults_task(void *arg)
+{
+    struct task *self = task_self();
+
+    K_UNUSED(arg);
+
+    g_limit_rc[0] = ksys_getlimit(KSYS_RLIMIT_MEMORY, &g_limit_value[0]);
+    g_limit_rc[1] = ksys_getlimit(KSYS_RLIMIT_CPU, &g_limit_value[1]);
+    g_limit_rc[2] = ksys_getlimit(KSYS_RLIMIT_FDS, &g_limit_value[2]);
+    g_limit_value[3] = (self != NULL) ? self->mem_used : 1u;
+
+    /* A selector outside the three and a place that is not there. */
+    g_limit_rc[3] = ksys_getlimit(0, &g_limit_value[0]);
+    g_limit_rc[4] = ksys_getlimit(KSYS_RLIMIT_FDS + 1, &g_limit_value[0]);
+    g_limit_rc[5] = ksys_getlimit(KSYS_RLIMIT_FDS, NULL);
+    g_limit_rc[6] = ksys_setlimit(0, 0);
+    g_limit_rc[7] = ksys_setlimit(KSYS_RLIMIT_MEMORY, (k_u64_t)KSYS_RLIMIT_MEMORY_MAX + 1u);
+}
+
+static void test_limits_defaults(void)
+{
+    struct task *worker;
+
+    ktest_begin("ksys: a task starts at the ceiling of its resources");
+
+    setup();
+
+    worker = task_create("limits-defaults", limits_defaults_task, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(worker != NULL);
+
+    if (worker != NULL) {
+        KT_CHECK_INT_EQ(task_wait(worker->pid, NULL, 2000), 0);
+
+        KT_CHECK_INT_EQ(g_limit_rc[0], 0);
+        KT_CHECK_INT_EQ(g_limit_rc[1], 0);
+        KT_CHECK_INT_EQ(g_limit_rc[2], 0);
+        KT_CHECK_INT_EQ((int)g_limit_value[0], (int)KSYS_RLIMIT_MEMORY_MAX);
+        KT_CHECK_INT_EQ((int)g_limit_value[1], (int)KSYS_RLIMIT_CPU_MAX);
+        KT_CHECK_INT_EQ((int)g_limit_value[2], (int)KSYS_RLIMIT_FDS_MAX);
+        KT_CHECK_INT_EQ((int)g_limit_value[3], 0);
+
+        KT_CHECK_INT_EQ(g_limit_rc[3], KERR_INVAL);
+        KT_CHECK_INT_EQ(g_limit_rc[4], KERR_INVAL);
+        KT_CHECK_INT_EQ(g_limit_rc[5], KERR_INVAL);
+        KT_CHECK_INT_EQ(g_limit_rc[6], KERR_INVAL);
+        KT_CHECK_INT_EQ(g_limit_rc[7], KERR_PERM);
+    }
+
+    teardown();
+}
+
+/*
+ * The property: the descriptor limit decides how many files a task may
+ * open, and a number at or above it is EMFILE. Lowering the limit does not
+ * close what is already open, and no call can raise the limit back.
+ */
+static int g_fd_limit_rc[12];
+
+static void limits_descriptors_task(void *arg)
+{
+    int fds[2];
+
+    K_UNUSED(arg);
+
+    g_fd_limit_rc[0] = ksys_open("/l0.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    g_fd_limit_rc[1] = ksys_open("/l1.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    g_fd_limit_rc[2] = ksys_open("/l2.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+
+    /* The limit of the table is four: all three opened. */
+    g_fd_limit_rc[3] = ksys_setlimit(KSYS_RLIMIT_FDS, 2);
+    /* The descriptor above the limit stays open and usable. */
+    g_fd_limit_rc[4] = (g_fd_limit_rc[2] >= 0) ? ksys_write(g_fd_limit_rc[2], "x", 1) : -1;
+    g_fd_limit_rc[5] = (g_fd_limit_rc[2] >= 0) ? ksys_dup2(g_fd_limit_rc[2], g_fd_limit_rc[2]) : -1;
+    /* A new descriptor, a new number and a pipe all stop at the limit. */
+    g_fd_limit_rc[6] = ksys_open("/l3.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    g_fd_limit_rc[7] = (g_fd_limit_rc[0] >= 0) ? ksys_dup2(g_fd_limit_rc[0], 2) : -1;
+    g_fd_limit_rc[8] = ksys_pipe(fds);
+    /* The one free slot below the limit cannot hold a pipe. */
+    g_fd_limit_rc[9] = (g_fd_limit_rc[1] >= 0) ? ksys_close(g_fd_limit_rc[1]) : -1;
+    g_fd_limit_rc[10] = ksys_pipe(fds);
+    /* And the limit does not go back up. */
+    g_fd_limit_rc[11] = ksys_setlimit(KSYS_RLIMIT_FDS, TASK_MAX_FDS);
+
+    if (g_fd_limit_rc[0] >= 0) {
+        ksys_close(g_fd_limit_rc[0]);
+    }
+    if (g_fd_limit_rc[2] >= 0) {
+        ksys_close(g_fd_limit_rc[2]);
+    }
+}
+
+static void test_limits_descriptors(void)
+{
+    struct task *worker;
+
+    ktest_begin("ksys: the descriptor limit stops open, dup2 and pipe at EMFILE");
+
+    setup();
+
+    worker = task_create("limits-fds", limits_descriptors_task, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(worker != NULL);
+
+    if (worker != NULL) {
+        KT_CHECK_INT_EQ(task_wait(worker->pid, NULL, 2000), 0);
+
+        KT_CHECK(g_fd_limit_rc[0] >= 0);
+        KT_CHECK(g_fd_limit_rc[1] >= 0);
+        KT_CHECK(g_fd_limit_rc[2] >= 0);
+        KT_CHECK_INT_EQ(g_fd_limit_rc[3], 0);
+        KT_CHECK_INT_EQ(g_fd_limit_rc[4], 1);
+        KT_CHECK_INT_EQ(g_fd_limit_rc[5], g_fd_limit_rc[2]);
+        KT_CHECK_INT_EQ(g_fd_limit_rc[6], KERR_MFILE);
+        KT_CHECK_INT_EQ(g_fd_limit_rc[7], KERR_MFILE);
+        KT_CHECK_INT_EQ(g_fd_limit_rc[8], KERR_MFILE);
+        KT_CHECK_INT_EQ(g_fd_limit_rc[9], 0);
+        KT_CHECK_INT_EQ(g_fd_limit_rc[10], KERR_MFILE);
+        KT_CHECK_INT_EQ(g_fd_limit_rc[11], KERR_PERM);
+    }
+
+    teardown();
+}
+
+/*
+ * The property: the memory of the user blocks of a task is counted, a block
+ * over the limit is ENOMEM, and giving a block back returns the room to the
+ * task. The kernel allocations are not charged: the limit is of the task and
+ * not of the system.
+ */
+static k_ssize_t g_mem_limit_rc[6];
+static k_u64_t g_mem_used[3];
+
+static void limits_memory_task(void *arg)
+{
+    struct task *self = task_self();
+    void *block;
+
+    K_UNUSED(arg);
+
+    g_mem_limit_rc[0] = ksys_setlimit(KSYS_RLIMIT_MEMORY, 4096);
+
+    block = ksys_malloc(2048);
+    g_mem_limit_rc[1] = (block != NULL) ? 0 : KERR_NOMEM;
+    g_mem_used[0] = (self != NULL) ? self->mem_used : 1u;
+
+    /* 2048 + 4096 is over the budget: the second block is refused. */
+    g_mem_limit_rc[2] = (ksys_malloc(4096) == NULL) ? KERR_NOMEM : 0;
+
+    ksys_free(block);
+    g_mem_used[1] = (self != NULL) ? self->mem_used : 1u;
+
+    /* The room came back: the same 4096 now fits. */
+    block = ksys_malloc(4096);
+    g_mem_limit_rc[3] = (block != NULL) ? 0 : KERR_NOMEM;
+    ksys_free(block);
+    g_mem_used[2] = (self != NULL) ? self->mem_used : 1u;
+
+    /* A budget of zero refuses any block at all. */
+    g_mem_limit_rc[4] = ksys_setlimit(KSYS_RLIMIT_MEMORY, 0);
+    g_mem_limit_rc[5] = (ksys_malloc(1) == NULL) ? KERR_NOMEM : 0;
+}
+
+static void test_limits_memory(void)
+{
+    struct task *worker;
+
+    ktest_begin("ksys: the memory limit refuses a block and gives the room back");
+
+    setup();
+
+    worker = task_create("limits-memory", limits_memory_task, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(worker != NULL);
+
+    if (worker != NULL) {
+        KT_CHECK_INT_EQ(task_wait(worker->pid, NULL, 2000), 0);
+
+        KT_CHECK_INT_EQ(g_mem_limit_rc[0], 0);
+        KT_CHECK_INT_EQ(g_mem_limit_rc[1], 0);
+        KT_CHECK(g_mem_used[0] >= 2048u);
+        KT_CHECK_INT_EQ(g_mem_limit_rc[2], KERR_NOMEM);
+        KT_CHECK_INT_EQ((int)g_mem_used[1], 0);
+        KT_CHECK_INT_EQ(g_mem_limit_rc[3], 0);
+        KT_CHECK_INT_EQ((int)g_mem_used[2], 0);
+        KT_CHECK_INT_EQ(g_mem_limit_rc[4], 0);
+        KT_CHECK_INT_EQ(g_mem_limit_rc[5], KERR_NOMEM);
+    }
+
+    teardown();
+}
+
+/*
+ * The property: the CPU time of a task is counted in ticks of a millisecond,
+ * and a task that reaches its limit is marked with SIGTERM (the closest
+ * signal of the four to SIGXCPU): the default action ends it with 128 + 15.
+ */
+static int g_cpu_limit_rc;
+static volatile int g_cpu_limit_done;
+
+static void limits_cpu_task(void *arg)
+{
+    k_u64_t start = k_sched_uptime_ms();
+
+    K_UNUSED(arg);
+
+    g_cpu_limit_rc = ksys_setlimit(KSYS_RLIMIT_CPU, 20);
+
+    /*
+     * Every yield is a system call, and the way out of a call is the point
+     * where the mark is answered. The loop is bounded so that a machine on
+     * which the mark never arrives still ends the test: a task that never
+     * exits would keep the next test from running.
+     */
+    while (k_sched_uptime_ms() - start < 3000u) {
+        ksys_yield();
+    }
+
+    g_cpu_limit_done = 1;
+}
+
+static void test_limits_cpu(void)
+{
+    struct task *worker;
+    int status = 0;
+
+    ktest_begin("ksys: the CPU limit marks the task with SIGTERM");
+
+    setup();
+
+    g_cpu_limit_rc = KERR_INVAL;
+    g_cpu_limit_done = 0;
+
+    worker = task_create("limits-cpu", limits_cpu_task, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(worker != NULL);
+
+    if (worker != NULL) {
+        KT_CHECK_INT_EQ(task_wait(worker->pid, &status, 5000), 0);
+        KT_CHECK_INT_EQ(g_cpu_limit_rc, 0);
+        /* The default action of SIGTERM is the end of the task. */
+        KT_CHECK_INT_EQ(status, 128 + K_SIGTERM);
+        KT_CHECK_INT_EQ(g_cpu_limit_done, 0);
+    }
+
+    teardown();
+}
+
 void test_ksys(void)
 {
     test_abi_is_stable();
@@ -1346,4 +1602,8 @@ void test_ksys(void)
     test_dup2();
     test_pipe_errors();
     test_wait_no_child();
+    test_limits_defaults();
+    test_limits_descriptors();
+    test_limits_memory();
+    test_limits_cpu();
 }

@@ -111,6 +111,7 @@ void k_sched_init(void)
 void k_sched_tick(void)
 {
     k_size_t i = 0;
+    struct task *current;
 
     k_port_enter_critical();
 
@@ -151,11 +152,16 @@ void k_sched_tick(void)
         kerror("sched: the run queue of the priority %u is full", (unsigned)prio);
     }
 
+    /*
+     * The processor time of the running task is one tick: the unit of the
+     * CPU limit is the millisecond, and a tick of every port is one.
+     */
+    current = k_port_task_current();
+    task_cpu_tick(current);
+
     k_port_enter_critical();
 
     if (g_quantum > 0) {
-        struct task *current = k_port_task_current();
-
         if (current != NULL && current->state == TASK_STATE_RUNNING) {
             if (current->quantum_left == 0) {
                 current->quantum_left = g_quantum;
@@ -254,6 +260,9 @@ void k_sched_sleep_ms(k_u32_t ms)
         return;
     }
 
+    /* The time before the wait is processor time; the wait itself is not. */
+    task_cpu_tick(self);
+
     k_port_enter_critical();
     previous = self->state;
     self->state = TASK_STATE_SLEEPING;
@@ -263,6 +272,7 @@ void k_sched_sleep_ms(k_u32_t ms)
      */
     self->wake_state = (previous == TASK_STATE_BLOCKED) ? TASK_STATE_BLOCKED : TASK_STATE_READY;
     self->wake_tick = g_ticks + ms;
+    self->cpu_stamp_ms = k_sched_uptime_ms();
     /* A sleeping task is not in the run queue. */
     ready_remove(self);
     if (g_sleeping_count < TASK_MAX_TASKS) {
@@ -273,6 +283,9 @@ void k_sched_sleep_ms(k_u32_t ms)
     k_port_task_sleep_ms(ms);
 
     k_port_enter_critical();
+
+    /* The wait is not processor time: the clock starts again here. */
+    self->cpu_stamp_ms = k_sched_uptime_ms();
 
     /* The task may already have been woken up by the tick handler. */
     for (i = 0; i < g_sleeping_count; i++) {
@@ -314,6 +327,9 @@ void k_sched_block(struct task *t)
         return;
     }
 
+    /* The time before the block is processor time; a waiting task has none. */
+    task_cpu_tick(t);
+
     k_port_enter_critical();
 
     if (t->state == TASK_STATE_SLEEPING) {
@@ -323,6 +339,7 @@ void k_sched_block(struct task *t)
     } else if (t->state == TASK_STATE_READY || t->state == TASK_STATE_RUNNING) {
         ready_remove(t);
         t->state = TASK_STATE_BLOCKED;
+        t->cpu_stamp_ms = k_sched_uptime_ms();
     }
 
     k_port_exit_critical();
@@ -342,6 +359,7 @@ void k_sched_unblock(struct task *t)
         t->pending_block = false;
     } else if (t->state == TASK_STATE_BLOCKED) {
         t->state = TASK_STATE_READY;
+        t->cpu_stamp_ms = k_sched_uptime_ms();
         ready_enqueue(t);
     }
 

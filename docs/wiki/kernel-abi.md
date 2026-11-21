@@ -43,8 +43,10 @@ who wants to use the system, not a second copy of the contract.
 | 29 | `kill` | send a signal to a task |
 | 30 | `signal` | install a handler, get the previous one |
 | 31 | `sigreturn` | return from a handler (the port's page, not a program) |
+| 32 | `getlimit` | the current memory, CPU or descriptor limit of the task |
+| 33 | `setlimit` | lower one of them |
 
-`32` is the count, not a call. A number that is not in the table is `ENOSYS`;
+`34` is the count, not a call. A number that is not in the table is `ENOSYS`;
 a new call always takes the next free number, and an old one never moves. The
 shell prints the same table with `abi`:
 
@@ -61,7 +63,9 @@ nr    name
 29    kill
 30    signal
 31    sigreturn
-32 call(s) registered
+32    getlimit
+33    setlimit
+34 call(s) registered
 ```
 
 The convention is the one of Linux: the number and six arguments, the result in
@@ -155,6 +159,28 @@ of a pipe is `ESPIPE` and `readdir` is `ENOTDIR`. `dup2(oldfd, newfd)` (28)
 makes `newfd` a second descriptor of one open file, closes what was open
 there, and answers `newfd`; a number outside the table is `EBADF`.
 [ADR 0014](../adr/0014-pipes.md) has the design and the limits.
+
+## Limits
+
+A task starts with the ceiling of three resources and may only lower them:
+the memory it holds (2 MiB), the processor time it spends (about 49 days) and
+the descriptors it opens (4). `setlimit` (33) takes a selector
+(`KSYS_RLIMIT_MEMORY`, `_CPU`, `_FDS`) and a value; `getlimit` (32) copies the
+current limit to the caller. A raise is `EPERM`: there is one user, uid 0, and
+it gets no exemption, so a program cannot lift its own ceiling.
+
+The memory is the sum of the user blocks of the task - the kernel and the
+system utilities are not charged - and a block over it is 0 from `malloc`
+(`ENOMEM` from the library); `free` returns the room. The CPU time is counted
+at the system calls and at the tick of the port; when it reaches the limit the
+task is marked with `SIGTERM` (the closest of the four signals to `SIGXCPU`)
+and the default action ends it with 143. The descriptors stop at the limit
+with `EMFILE`: `open`, `pipe` and a `dup2` onto a number at or above it.
+Lowering a limit never closes what is already open.
+
+The library has `microos_getlimit`, `microos_setlimit` and
+`microos_getrlimits`, the shell has `ulimit` to print and lower the limits of
+the shell, and [`docs/syscall-abi.md`](../syscall-abi.md) has the contract.
 
 ## The mode and the owner
 

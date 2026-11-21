@@ -50,6 +50,7 @@ COMMANDS = [
     "kill 9999",
     "uname",
     "uptime",
+    "ulimit",
     "ls /bin",
     # The one file of /etc is on the disk as well, and reading it is the
     # proof that the tree of the image is the tree of the machine.
@@ -368,6 +369,14 @@ def check(output: str) -> list:
     expect(
         "uptime prints the time",
         re.search(r"up \d+ s", answer("uptime")) is not None,
+    )
+    # The limits of the shell come from the kernel: the memory, the CPU time
+    # and the descriptors, at the ceiling of the system after the boot.
+    limits = answer("ulimit")
+    expect(
+        "ulimit prints the limits of the task",
+        all(word in limits for word in ("memory", "cpu", "fds")),
+        limits,
     )
     # The volume is not part of the kernel image: the files were written by
     # the tool of the build, so a listing is the proof that the bytes are on a

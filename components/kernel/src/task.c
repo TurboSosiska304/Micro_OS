@@ -4,6 +4,7 @@
 
 #include "kernel/kfile.h"
 #include "kernel/errno.h"
+#include "kernel/ksys.h"
 #include "kernel/kmm.h"
 #include "kernel/log.h"
 #include "kernel/port.h"
@@ -63,6 +64,195 @@ int task_get_mem_priority(struct task *t)
     }
 
     return (int)t->mem_priority;
+}
+
+/* --- the limits of a task --- */
+
+static bool limit_known(k_u32_t which)
+{
+    return which == KSYS_RLIMIT_MEMORY || which == KSYS_RLIMIT_CPU || which == KSYS_RLIMIT_FDS;
+}
+
+int task_limit_get(struct task *t, k_u32_t which, k_u64_t *out)
+{
+    if (t == NULL || out == NULL || !limit_known(which)) {
+        return KERR_INVAL;
+    }
+
+    k_port_enter_critical();
+
+    switch (which) {
+    case KSYS_RLIMIT_MEMORY:
+        *out = t->limit_memory;
+        break;
+    case KSYS_RLIMIT_CPU:
+        *out = (k_u64_t)t->limit_cpu_ms;
+        break;
+    case KSYS_RLIMIT_FDS:
+        *out = (k_u64_t)t->limit_fds;
+        break;
+    default:
+        k_port_exit_critical();
+        return KERR_INVAL;
+    }
+
+    k_port_exit_critical();
+
+    return 0;
+}
+
+/*
+ * The limits start at the ceiling of the system and only go down. A program
+ * that could raise its own limit would have no limit at all, and there is no
+ * second user to grant the raise: uid 0 is the only user and it gets no
+ * exemption (the rule of the mode check, ADR 0005). The answer to a raise is
+ * EPERM and not EINVAL: the number is a real limit, only the right to set it
+ * is missing.
+ */
+int task_limit_set(struct task *t, k_u32_t which, k_u64_t value)
+{
+    int rc = 0;
+
+    if (t == NULL || !limit_known(which)) {
+        return KERR_INVAL;
+    }
+
+    k_port_enter_critical();
+
+    switch (which) {
+    case KSYS_RLIMIT_MEMORY:
+        if (value > t->limit_memory || value > (k_u64_t)TASK_LIMIT_MEMORY_MAX) {
+            rc = KERR_PERM;
+        } else {
+            t->limit_memory = value;
+        }
+        break;
+    case KSYS_RLIMIT_CPU:
+        if (value > (k_u64_t)t->limit_cpu_ms || value > (k_u64_t)TASK_LIMIT_CPU_MAX) {
+            rc = KERR_PERM;
+        } else {
+            t->limit_cpu_ms = (k_u32_t)value;
+            /* A task that lowered its budget below the time it has already
+             * used is over the limit at the next tick: the mark goes out
+             * then, once. */
+            t->cpu_limit_signalled = false;
+        }
+        break;
+    case KSYS_RLIMIT_FDS:
+        if (value > (k_u64_t)t->limit_fds || value > (k_u64_t)TASK_LIMIT_FDS_MAX) {
+            rc = KERR_PERM;
+        } else {
+            t->limit_fds = (k_u8_t)value;
+        }
+        break;
+    default:
+        rc = KERR_INVAL;
+        break;
+    }
+
+    k_port_exit_critical();
+
+    return rc;
+}
+
+k_u32_t task_fd_limit(const struct task *t)
+{
+    k_u32_t limit;
+
+    if (t == NULL) {
+        return TASK_MAX_FDS;
+    }
+
+    k_port_enter_critical();
+    limit = (k_u32_t)t->limit_fds;
+    k_port_exit_critical();
+
+    return (limit < TASK_MAX_FDS) ? limit : TASK_MAX_FDS;
+}
+
+void task_limits_inherit(struct task *child, const struct task *parent)
+{
+    if (child == NULL || parent == NULL) {
+        return;
+    }
+
+    k_port_enter_critical();
+    child->limit_memory = parent->limit_memory;
+    child->limit_cpu_ms = parent->limit_cpu_ms;
+    child->limit_fds = parent->limit_fds;
+    k_port_exit_critical();
+}
+
+bool task_memory_fits(const struct task *t, k_size_t size)
+{
+    k_u64_t used;
+    k_u64_t limit;
+
+    if (t == NULL) {
+        return true;
+    }
+
+    k_port_enter_critical();
+    used = t->mem_used;
+    limit = t->limit_memory;
+    k_port_exit_critical();
+
+    return ((k_u64_t)size <= limit) && (used <= limit - (k_u64_t)size);
+}
+
+void task_memory_reset(void)
+{
+    k_size_t i;
+
+    k_port_enter_critical();
+    for (i = 0; i < TASK_MAX_TASKS; i++) {
+        g_tasks[i].mem_used = 0;
+    }
+    k_port_exit_critical();
+}
+
+void task_memory_charge(struct task *t, k_size_t size)
+{
+    if (t == NULL) {
+        return;
+    }
+
+    k_port_enter_critical();
+    if (t->in_use) {
+        t->mem_used += (k_u64_t)size;
+    }
+    k_port_exit_critical();
+}
+
+/*
+ * A block may be given back by a task that did not allocate it: the memory
+ * of a fork is shared on a machine without an MMU, and a child may free a
+ * block of its parent. The charge goes to the task that owns the block,
+ * found by the pid the block carries, so the budget of the freer is not
+ * touched by somebody else's allocation.
+ */
+void task_memory_uncharge(k_u32_t pid, k_size_t size)
+{
+    k_size_t i;
+
+    if (pid == 0u) {
+        return;
+    }
+
+    k_port_enter_critical();
+    for (i = 0; i < TASK_MAX_TASKS; i++) {
+        struct task *t = &g_tasks[i];
+
+        if (t->in_use && t->pid == pid) {
+            if (t->mem_used >= (k_u64_t)size) {
+                t->mem_used -= (k_u64_t)size;
+            } else {
+                t->mem_used = 0;
+            }
+            break;
+        }
+    }
+    k_port_exit_critical();
 }
 
 void task_set_cwd(struct task *t, const char *dir)
@@ -167,6 +357,10 @@ static struct task *task_alloc_slot(const char *name, task_entry_fn entry, void 
         t->stack_size = k_port_task_stack_size();
         t->parent = task_self();
         t->mem_priority = KMM_PRIORITY_USER;
+        t->limit_memory = TASK_LIMIT_MEMORY_MAX;
+        t->limit_cpu_ms = TASK_LIMIT_CPU_MAX;
+        t->limit_fds = TASK_LIMIT_FDS_MAX;
+        t->cpu_stamp_ms = k_sched_uptime_ms();
         task_set_cwd(t, "/");
         task_set_name(t, name);
         g_used++;
@@ -215,6 +409,7 @@ static struct task *task_spawn(const char *name, task_entry_fn entry, void *arg,
         t->parent = inherit;
         t->job = inherit->job;
         task_set_cwd(t, task_get_cwd(inherit));
+        task_limits_inherit(t, inherit);
         kfile_table_copy(t, inherit);
     }
 
@@ -277,6 +472,7 @@ int task_fork(struct task *parent, const char *name, struct task **child)
     c->parent = parent;
     c->job = parent->job;
     task_set_cwd(c, task_get_cwd(parent));
+    task_limits_inherit(c, parent);
     kfile_table_copy(c, parent);
     task_signal_inherit(c, parent);
 
@@ -544,6 +740,54 @@ static k_u32_t signal_bit(int sig)
     return (k_u32_t)1u << (k_u32_t)signal_slot(sig);
 }
 
+/*
+ * The processor time of a task is the time between the moments it is known
+ * to be running. The tick of a port that can see the running task is one
+ * such moment, and so is the edge of a system call; the stamp keeps the two
+ * from counting the same milliseconds twice. A task that sleeps has its
+ * stamp set on both sides of the wait, so a long wait is not processor time.
+ * When the task reaches the limit it is marked with SIGTERM, the closest
+ * signal of the four: POSIX has SIGXCPU for this, but a fifth signal is not
+ * in the contract (kernel/signal.h). The default action of SIGTERM ends the
+ * task with 128 + 15; a handler may catch it, exactly as a handler of SIGXCPU
+ * may, and then the task goes on - the limit is a mark and not a kill from
+ * the timer, which would end a task from the context of another.
+ */
+bool task_cpu_tick(struct task *t)
+{
+    k_u64_t now;
+    k_u64_t delta;
+    bool marked = false;
+
+    if (t == NULL) {
+        return false;
+    }
+
+    now = k_sched_uptime_ms();
+
+    k_port_enter_critical();
+
+    if (t->in_use && t->state != TASK_STATE_ZOMBIE && t->state != TASK_STATE_DEAD) {
+        delta = (now > t->cpu_stamp_ms) ? (now - t->cpu_stamp_ms) : 0u;
+        t->cpu_stamp_ms = now;
+
+        if (delta > (k_u64_t)TASK_LIMIT_CPU_MAX - t->cpu_ms) {
+            t->cpu_ms = TASK_LIMIT_CPU_MAX;
+        } else {
+            t->cpu_ms += (k_u32_t)delta;
+        }
+
+        if (!t->cpu_limit_signalled && t->cpu_ms >= t->limit_cpu_ms) {
+            t->cpu_limit_signalled = true;
+            t->sig_pending |= signal_bit(K_SIGTERM);
+            marked = true;
+        }
+    }
+
+    k_port_exit_critical();
+
+    return marked;
+}
 /* The signals whose default answer is the end of the task. SIGCHLD is the
  * one whose default is to be ignored, as everywhere else. */
 static bool signal_ends_by_default(int sig)
