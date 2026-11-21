@@ -104,6 +104,8 @@ extern const k_u8_t _binary_fork_mox_start[];
 extern const k_u8_t _binary_fork_mox_end[];
 extern const k_u8_t _binary_badptr_mox_start[];
 extern const k_u8_t _binary_badptr_mox_end[];
+extern const k_u8_t _binary_signals_mox_start[];
+extern const k_u8_t _binary_signals_mox_end[];
 extern const k_u8_t _binary_cat_mox_start[];
 extern const k_u8_t _binary_cat_mox_end[];
 extern const k_u8_t _binary_echo_mox_start[];
@@ -118,6 +120,7 @@ extern const k_u8_t _binary_spawn_mox_end[];
 #define PROGRAM_CRASH_PATH "/bin/crash"
 #define PROGRAM_FORK_PATH "/bin/fork"
 #define PROGRAM_BADPTR_PATH "/bin/badptr"
+#define PROGRAM_SIGNALS_PATH "/bin/signals"
 #define PROGRAM_CAT_PATH "/bin/cat"
 #define PROGRAM_ECHO_PATH "/bin/echo"
 #define PROGRAM_LS_PATH "/bin/ls"
@@ -284,8 +287,18 @@ static void filesystem_bring_up(void)
     }
 
     /*
-     * The three programs of the library (ADR 0016) are not creatures of the
-     * port: each was compiled against components/libc/user, enters through
+     * The fifth program is the signals of K7: a handler of the program, a
+     * child ended by SIGTERM, a wait cut short by SIGINT and the errors of
+     * kill. The shell runs it as it runs every other file of /bin.
+     */
+    if (!program_install(PROGRAM_SIGNALS_PATH, _binary_signals_mox_start,
+                         (k_size_t)(_binary_signals_mox_end - _binary_signals_mox_start))) {
+        return;
+    }
+
+    /*
+     * The programs of the library (ADR 0016) are not creatures of the port:
+     * each was compiled against components/libc/user, enters through
      * `_start`, takes argc, argv and envp, and talks to the kernel through
      * the same `int $0x80`. `cat` reads a file, `echo` writes its line and
      * `ls` walks a directory - the three things a shell of a machine with a

@@ -12,6 +12,7 @@
 #include "kernel/log.h"
 #include "kernel/port.h"
 #include "kernel/port/exec.h"
+#include "kernel/port_task.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
 #include "kernel/vfs.h"
@@ -996,6 +997,113 @@ static k_ssize_t sys_getppid(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_a
 }
 
 /*
+ * A signal to one task. The system has no process groups, so only a positive
+ * pid is a target: the two meanings of POSIX for 0 and -1 ("the group" and
+ * "everybody") are not guessed at. A pid with no live task is ESRCH.
+ */
+static k_ssize_t sys_kill(ksys_arg_t pid, ksys_arg_t sig, ksys_arg_t a2, ksys_arg_t a3,
+                          ksys_arg_t a4, ksys_arg_t a5)
+{
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    /* The raw register has to survive the round trip through int, as in
+     * waitpid: 2^32 + 5 is not the task 5. */
+    if ((ksys_arg_t)(int)pid != pid || (int)pid <= 0) {
+        return KERR_INVAL;
+    }
+
+    if ((ksys_arg_t)(int)sig != sig) {
+        return KERR_INVAL;
+    }
+
+    return task_signal_send((k_u32_t)(int)pid, (int)sig);
+}
+
+/*
+ * Install the answer of a signal and return the previous one. The handler is
+ * memory of the caller - a program of ring 3 has to hand an address of its
+ * window, and the port tells whether the range is there - so a broken pointer
+ * is EFAULT now and not a fault of the program when the signal arrives.
+ *
+ * The answer travels as the raw value of a register: 0 is the default action,
+ * 1 is "ignore", anything else is the handler, as POSIX and kernel/signal.h
+ * say.
+ */
+static k_ssize_t sys_signal(ksys_arg_t sig, ksys_arg_t handler, ksys_arg_t a2, ksys_arg_t a3,
+                            ksys_arg_t a4, ksys_arg_t a5)
+{
+    struct task *self = task_self();
+    task_signal_fn fn;
+    task_signal_fn previous;
+
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    if (self == NULL) {
+        return KERR_PERM;
+    }
+
+    if ((ksys_arg_t)(int)sig != sig) {
+        return KERR_INVAL;
+    }
+
+    fn = (task_signal_fn)(uintptr_t)handler;
+
+    if (fn != K_SIG_DFL && fn != K_SIG_IGN &&
+        !k_port_exec_contains((const void *)(uintptr_t)handler, 1)) {
+        return KERR_FAULT;
+    }
+
+    previous = task_signal_set(self, (int)sig, fn);
+    if (previous == K_SIG_ERR) {
+        return KERR_INVAL;
+    }
+
+    return (k_ssize_t)(uintptr_t)previous;
+}
+
+/*
+ * The restorer of a signal frame. The port of a machine with ring 3 puts the
+ * address of a few instructions of user code on the stack of a program when
+ * it enters a handler; the last of them is this call, and its answer is the
+ * value the interrupted context had in the register of the result. It is not
+ * a call a program makes by itself, and on a machine without ring 3 there is
+ * no frame to return to.
+ */
+static k_ssize_t sys_sigreturn(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                               ksys_arg_t a4, ksys_arg_t a5)
+{
+    struct task *self = task_self();
+    k_ssize_t restored = 0;
+    int rc;
+
+    K_UNUSED(a0);
+    K_UNUSED(a1);
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    if (self == NULL) {
+        return KERR_PERM;
+    }
+
+    rc = k_port_task_signal_leave(self, &restored);
+    if (rc < 0) {
+        return rc;
+    }
+
+    /* The answer is the value the interrupted context had: it may be a
+     * negative answer of the call the handler interrupted. */
+    return restored;
+}
+
+/*
  * Wait for a child. The number 0 or -1 means "any child". The status of
  * the child is the code it finished with. A call with no child to wait for
  * answers ECHILD, whether it was ready to wait or not.
@@ -1093,6 +1201,18 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
          */
         if (!has_child) {
             return KERR_CHILD;
+        }
+
+        /*
+         * A signal that has to be answered cuts the wait short, and the
+         * answer of the call is EINTR: the caller resumes after the call,
+         * the handler runs before it, and the child is still there to be
+         * waited for on the next try. A child that has finished is scanned
+         * first, so the SIGCHLD of that very child does not turn the wait
+         * into an error on the way to its status.
+         */
+        if (task_signal_interrupts(self)) {
+            return KERR_INTR;
         }
 
         if ((flags & KSYS_WNOHANG) != 0) {
@@ -1551,11 +1671,24 @@ int ksys_register(k_u32_t number, const char *name, ksys_handler_fn handler)
 k_ssize_t ksys_call(k_u32_t number, ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
                     ksys_arg_t a4, ksys_arg_t a5)
 {
+    k_ssize_t rc;
+
     if (number >= KSYS_COUNT || g_table[number].handler == NULL) {
         return KERR_NOSYS;
     }
 
-    return g_table[number].handler(a0, a1, a2, a3, a4, a5);
+    rc = g_table[number].handler(a0, a1, a2, a3, a4, a5);
+
+    /*
+     * The way out of the kernel is the point where a task answers its
+     * signals: the call has its answer and it is the one the interrupted
+     * program will see, and a handler runs before the program gets it. A
+     * task of the kernel with a handler of its own runs the handler here;
+     * a program of ring 3 gets a frame on its stack from the port.
+     */
+    task_signal_check(task_self(), rc, true);
+
+    return rc;
 }
 
 const char *ksys_name(k_u32_t number)
@@ -1613,6 +1746,9 @@ void ksys_init(void)
     ksys_register(KSYS_STATX, "statx", sys_statx);
     ksys_register(KSYS_PIPE, "pipe", sys_pipe);
     ksys_register(KSYS_DUP2, "dup2", sys_dup2);
+    ksys_register(KSYS_KILL, "kill", sys_kill);
+    ksys_register(KSYS_SIGNAL, "signal", sys_signal);
+    ksys_register(KSYS_SIGRETURN, "sigreturn", sys_sigreturn);
 }
 
 /* --- the wrappers --- */
@@ -1763,4 +1899,21 @@ int ksys_pipe(int fds[2])
 int ksys_dup2(int oldfd, int newfd)
 {
     return (int)ksys_call(KSYS_DUP2, (ksys_arg_t)oldfd, (ksys_arg_t)newfd, 0, 0, 0, 0);
+}
+
+int ksys_kill(int pid, int sig)
+{
+    return (int)ksys_call(KSYS_KILL, (ksys_arg_t)pid, (ksys_arg_t)sig, 0, 0, 0, 0);
+}
+
+task_signal_fn ksys_signal(int sig, task_signal_fn handler)
+{
+    k_ssize_t rc =
+        ksys_call(KSYS_SIGNAL, (ksys_arg_t)sig, (ksys_arg_t)(uintptr_t)handler, 0, 0, 0, 0);
+
+    if (rc < 0) {
+        return K_SIG_ERR;
+    }
+
+    return (task_signal_fn)(uintptr_t)rc;
 }

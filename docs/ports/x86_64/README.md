@@ -76,14 +76,14 @@ The image is two files: `build-x86/loader32.elf` (the loader) and
 `build-x86/microos64.bin` (the kernel, a flat image). The heap of the kernel
 stops below the window of the programs; the kernel is linked at 16 MiB and
 the programs are placed at 32 MiB. The programs of `/bin` are made first:
-`build-x86/hello.mox`, `crash.mox`, `fork.mox`, `badptr.mox`, `cat.mox`,
-`echo.mox`, `ls.mox` and `spawn.mox` are the images of
+`build-x86/hello.mox`, `crash.mox`, `fork.mox`, `badptr.mox`, `signals.mox`,
+`cat.mox`, `echo.mox`, `ls.mox` and `spawn.mox` are the images of
 `ports/port_x86_64/programs/`
 (`programs/program.ld` links them for the window, `tools/mkprog.sh` turns them
-into the format) and the kernel carries all eight as blobs, because the
+into the format) and the kernel carries all nine as blobs, because the
 machine has to have the bytes before it has a filesystem to read them from.
 The last four are linked against `components/libc/user` and enter at `_start`
-(ADR 0016); the first four use the raw `programs/prog.h`. The build passes
+(ADR 0016); the first five use the raw `programs/prog.h`. The build passes
 `--base 0x02000000` to `mkprog.sh`, which refuses an image linked for another
 window: nothing relocates the program, so a wrong address would run and read
 its data from somewhere else.
@@ -284,7 +284,7 @@ PCI line needs the I/O APIC that K8 brings.
 
 ## What works
 
-* the boot: the loader, long mode, the banner, the contract check at 1.6;
+* the boot: the loader, long mode, the banner, the contract check at 1.7;
 * the console: the VGA text screen and COM1 from one call, the keyboard of
   the PS/2 with Shift, Caps Lock, Backspace and Ctrl+C, and the serial port
   with the console it always had;
@@ -319,21 +319,22 @@ PCI line needs the I/O APIC that K8 brings.
   has a FAT partition mounts it with a call of the boot, because `/etc/fstab`
   and the `mount` command do not speak the registry yet;
 * a program out of a file: the boot writes the images of `hello`, `crash`,
-  `fork`, `badptr`, `cat`, `echo`, `ls` and `spawn` to `/bin`, gives them the
-  mode 0755 and asks for `/bin/hello` with `execve` - the stat, the check of
-  the mode, the read through the VFS, the parse of the image and the entry are
-  the ones of the call and not a copy of them. The program is entered with
-  `argc` in `rdi`, `argv` in `rsi` and `envp` in `rdx` (ADR 0016), prints its
-  lines on the console and calls `exit`; the call reports 0 and the port prints
-  `the program exited with 0`. The shell runs the same files with `exec`:
-  `cat`, `echo`, `ls` and `spawn` are ordinary C programs of
-  `components/libc/user`, and `make x86-smoke` reads their lines back;
-  `spawn` starts another program with an environment of its own;
+  `fork`, `badptr`, `signals`, `cat`, `echo`, `ls` and `spawn` to `/bin`,
+  gives them the mode 0755 and asks for `/bin/hello` with `execve` - the stat,
+  the check of the mode, the read through the VFS, the parse of the image and
+  the entry are the ones of the call and not a copy of them. The program is
+  entered with `argc` in `rdi`, `argv` in `rsi` and `envp` in `rdx` (ADR 0016),
+  prints its lines on the console and calls `exit`; the call reports 0 and the
+  port prints `the program exited with 0`. The shell runs the same files with
+  `exec`: `cat`, `echo`, `ls` and `spawn` are ordinary C programs of
+  `components/libc/user`, `signals` exercises the dispositions of ADR 0015,
+  and `make x86-smoke` reads their lines back; `spawn` starts another program
+  with an environment of its own;
 * a fault of a program is not a fault of the machine: `/bin/crash` writes to
   address zero in ring 3, the port prints `the program faulted: vector 14 at
   0x0000000000000000`, takes the program down and the shell answers the next
   command;
-* the edge of the system call: `k_port_exec_contains()` (contract 1.6) walks
+* the edge of the system call: `k_port_exec_contains()` (contract 1.7) walks
   the page tables of the program, `components/kernel/src/ksys.c` copies the
   paths, the vector of `execve` and the buffers of `stat`, `getcwd`, `read`,
   `write` and `readdir` through the check, and a range that is not mapped is
@@ -341,6 +342,13 @@ PCI line needs the I/O APIC that K8 brings.
   the window, the last bytes of the window with a request that crosses its
   end and the guard page; every call answers 14 and the machine writes the
   next line with a valid pointer;
+* the signals of K7: `/bin/signals` installs a handler of the program (the
+  kernel builds a frame on the stack and the restorer page calls
+  `sigreturn`), a child ends with `SIGTERM` and the status 143, a `waitpid`
+  is cut by `SIGINT` with `EINTR`, `SIG_IGN` leaves the task alive, the tick
+  of the timer delivers a handler to a program that never calls, and `kill`
+  of a pid that is not there is `ESRCH`. The shell has `kill` as well, and
+  Ctrl+C of the console reaches the program the shell waits for (ADR 0015);
 * the shell on the console, which is the window and COM1 at once, with
   `help`, `uname`, `uptime`, `ps`, `free`, `memtest` and the rest of the
   portable commands, plus the commands of the files:

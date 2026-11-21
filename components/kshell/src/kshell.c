@@ -8,6 +8,7 @@
 #include "libc/stdlib.h"
 #include "libc/unistd.h"
 #include "kernel/config.h"
+#include "kernel/errno.h"
 #include "kernel/kmod.h"
 #include "kernel/ksys.h"
 #include "kernel/console.h"
@@ -641,6 +642,107 @@ static int cmd_clear(int argc, char **argv)
     return KSHELL_OK;
 }
 
+/* The name of a signal after the dash of `kill -INT`, or a negative number
+ * when the word names none of the signals of the system. */
+static int signal_by_name(const char *name)
+{
+    static const struct {
+        const char *name;
+        int number;
+    } names[] = {
+        {"INT", KSYS_SIGINT},
+        {"TERM", KSYS_SIGTERM},
+        {"CHLD", KSYS_SIGCHLD},
+        {"PIPE", KSYS_SIGPIPE},
+    };
+    char *end = NULL;
+    unsigned long number;
+    k_size_t i;
+
+    if (name == NULL || name[0] == '\0') {
+        return -1;
+    }
+
+    for (i = 0; i < K_ARRAY_SIZE(names); i++) {
+        if (strcmp(name, names[i].name) == 0) {
+            return names[i].number;
+        }
+        /* A person types `kill -int 42` as often as uppercase. */
+        if (name[0] >= 'a' && name[0] <= 'z') {
+            char upper[8];
+            k_size_t len = strlen(name);
+
+            if (len < sizeof(upper)) {
+                k_size_t at;
+
+                for (at = 0; at <= len; at++) {
+                    char c = name[at];
+
+                    upper[at] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+                }
+
+                if (strcmp(upper, names[i].name) == 0) {
+                    return names[i].number;
+                }
+            }
+        }
+    }
+
+    number = microos_strtoul(name, &end, 10);
+    if (end != name && end != NULL && *end == '\0' && number > 0 && number < 32) {
+        return (int)number;
+    }
+
+    return -1;
+}
+
+/*
+ * The signal to one task. There is no job control and no group of a
+ * terminal in the system, so the number comes from `ps` and nothing else:
+ * a pid that names no task is answered with the sentence of POSIX, and the
+ * number of the error is the shared -3 of the table of errno.
+ */
+static int cmd_kill(int argc, char **argv)
+{
+    char *end = NULL;
+    unsigned long pid;
+    int sig = KSYS_SIGTERM;
+    int at = 1;
+    int rc;
+
+    if (argc > 1 && argv[1][0] == '-' && argv[1][1] != '\0') {
+        sig = signal_by_name(argv[1] + 1);
+        if (sig < 0) {
+            kshell_printf("kill: %s: no such signal\n", argv[1] + 1);
+            return KSHELL_USAGE;
+        }
+        at = 2;
+    }
+
+    if (at >= argc) {
+        kshell_printf("usage: kill [-signal] <pid>\n");
+        return KSHELL_USAGE;
+    }
+
+    pid = microos_strtoul(argv[at], &end, 10);
+    if (end == argv[at] || (end != NULL && *end != '\0') || pid == 0 || pid > 0x7FFFFFFFu) {
+        kshell_printf("kill: %s: not a pid\n", argv[at]);
+        return KSHELL_USAGE;
+    }
+
+    rc = microos_kill((int)pid, sig);
+    if (rc < 0) {
+        if (microos_errno() == -KERR_SRCH) {
+            kshell_printf("kill: %lu: no such process\n", pid);
+        } else {
+            kshell_printf("kill: %lu: %s\n", pid, microos_strerror(microos_errno()));
+        }
+        return KSHELL_ERROR;
+    }
+
+    return KSHELL_OK;
+}
+
 /*
  * The commands of the shell itself, with the help a person reads. One table,
  * so that a usage line, the one line of the list and the notes of `-h`
@@ -672,6 +774,14 @@ static const struct builtin_command {
       .detail = "The wait is cut at 60 s: the console belongs to the person at the\n"
                 "keyboard, and the shell has to come back.\n"},
      cmd_sleep},
+    {"kill",
+     {.summary = "send a signal to a task",
+      .usage = "kill [-signal] <pid>",
+      .detail = "  -INT, -TERM, -CHLD, -PIPE, or the number of the signal\n"
+                "Without a signal TERM is sent. There is no job control in the system:\n"
+                "the pid comes from `ps`, and Ctrl+C of the console reaches the program\n"
+                "the shell is running.\n"},
+     cmd_kill},
     {"dmesg", {.summary = "the kernel log", .usage = "dmesg"}, cmd_dmesg},
     {"free", {.summary = "the memory usage", .usage = "free"}, cmd_free},
     {"clear", {.summary = "clear the screen", .usage = "clear"}, cmd_clear},

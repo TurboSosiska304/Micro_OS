@@ -75,6 +75,27 @@ static inline long prog_getpid(void)
     return prog_call(KSYS_GETPID, 0, 0, 0, 0, 0, 0);
 }
 
+static inline long prog_getppid(void)
+{
+    return prog_call(KSYS_GETPPID, 0, 0, 0, 0, 0, 0);
+}
+
+/*
+ * The signals of the program. A handler is an ordinary function of the
+ * program; the kernel enters it with the number of the signal and the
+ * program returns from it like from any other call. The two constants of
+ * ksys.h are the dispositions of the kernel.
+ */
+static inline long prog_kill(long pid, long sig)
+{
+    return prog_call(KSYS_KILL, pid, sig, 0, 0, 0, 0);
+}
+
+static inline long prog_signal(long sig, void (*handler)(int))
+{
+    return prog_call(KSYS_SIGNAL, sig, (long)(unsigned long)handler, 0, 0, 0, 0);
+}
+
 static inline long prog_uptime(void)
 {
     return prog_call(KSYS_UPTIME, 0, 0, 0, 0, 0, 0);

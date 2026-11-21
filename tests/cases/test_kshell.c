@@ -131,14 +131,14 @@ static void test_registry(void)
     /*
      * The board has more commands than the tests can see here: the
      * drivers bring their own ("date", "i2c", "wifi", "display", "mkfs")
-     * and those are only on the board. The twenty six commands of the
+     * and those are only on the board. The twenty seven commands of the
      * shell itself have to be here, all of them. A build without the exec
      * path has one command fewer (ADR 0010).
      */
 #if KERNEL_EXEC
-    KT_CHECK(kshell_command_count() >= 26);
+    KT_CHECK(kshell_command_count() >= 27);
 #else
-    KT_CHECK(kshell_command_count() >= 25);
+    KT_CHECK(kshell_command_count() >= 26);
 #endif
 
     port_host_set_sink(NULL);
@@ -149,6 +149,39 @@ static void test_registry(void)
  * with one memory has no PSRAM line, and the line is not a zero that reads
  * like a memory that is there (ADR 0010).
  */
+static void test_kill(void)
+{
+    char buf[512];
+    size_t used;
+    FILE *sink;
+
+    ktest_begin("kshell: kill names a signal and reports a pid that is not there");
+
+    sink = tmpfile();
+    KT_CHECK(sink != NULL);
+    if (sink == NULL) {
+        return;
+    }
+
+    port_host_set_sink(sink);
+
+    /* No pid, a signal outside the table, and a pid no task has. */
+    KT_CHECK_INT_EQ(kshell_execute("kill"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(kshell_execute("kill -NOPE 1"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(kshell_execute("kill 4242"), KSHELL_ERROR);
+
+    rewind(sink);
+    used = fread(buf, 1, sizeof(buf) - 1, sink);
+    buf[used] = '\0';
+
+    /* The sink is closed by the port when it is replaced. */
+    port_host_set_sink(NULL);
+
+    KT_CHECK(strstr(buf, "usage: kill [-signal] <pid>") != NULL);
+    KT_CHECK(strstr(buf, "no such signal") != NULL);
+    KT_CHECK(strstr(buf, "4242: no such process") != NULL);
+}
+
 static void test_free(void)
 {
     char buf[1024];
@@ -692,6 +725,7 @@ void test_kshell(void)
     test_execute();
     test_unknown();
     test_registry();
+    test_kill();
     test_free();
     test_memtest();
     test_mfetch();

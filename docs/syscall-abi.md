@@ -112,10 +112,13 @@ chose.
 | 26 | `statx` | `path, buf` | 0, or an error |
 | 27 | `pipe` | `fds` | 0 and two descriptors, or an error |
 | 28 | `dup2` | `oldfd, newfd` | `newfd`, or an error |
+| 29 | `kill` | `pid, sig` | 0, or an error |
+| 30 | `signal` | `sig, handler` | the previous disposition, or an error |
+| 31 | `sigreturn` | - | the saved value of the interrupted call |
 
-The numbers 0 to 22 are frozen, and 23 to 28 were the next free ones.
-A call that is not in the table is `ENOSYS`, never a guess at what it might
-have meant.
+The numbers 0 to 22 are frozen, 23 to 26 were the next free ones; pipes took
+27 and 28 (ADR 0014) and signals the three after them (ADR 0015). A call that
+is not in the table is `ENOSYS`, never a guess at what it might have meant.
 
 The flags of `open` are the same as the ones of the VFS:
 
@@ -160,7 +163,7 @@ transfer on a machine with ~100 KB of RAM. NULL with a length is `EINVAL`, a
 length above the limit is `E2BIG`.
 
 **The memory of the caller** is checked as well, through the port
-(`k_port_exec_contains`, contract 1.6). On the board, the simulator and the
+(`k_port_exec_contains`, contract 1.7). On the board, the simulator and the
 null port a program shares the kernel's memory and every pointer is the
 kernel's own; on the x86-64 port the kernel walks the page tables of the
 program that made the call and refuses a range that is not there with
@@ -373,6 +376,50 @@ wait or not, and the same answer ends the waiting once the internal limit of
 five seconds passes without a finished child. A number that names no child of
 the caller is `ECHILD` too; a pid or a flag that is not of the contract is
 `EINVAL` before that.
+
+## The signals
+
+Four signals are in the ABI: `KSYS_SIGINT` (2), `KSYS_SIGPIPE` (13),
+`KSYS_SIGTERM` (15) and `KSYS_SIGCHLD` (17). The numbers are the ones of
+POSIX and the names of `kernel/ksys.h`; a number outside the four is
+`EINVAL`. The dispositions are a pointer of the caller or the two values of
+POSIX, `KSYS_SIG_DFL` (0) and `KSYS_SIG_IGN` (1); `signal()` answers the
+previous disposition as the raw value of a register, so a zero and a one
+are the two kernel dispositions and not handler addresses.
+
+`kill(pid, sig)` accepts a positive pid and one of the four signals. The
+system has no process groups: 0 and -1 are `EINVAL`, not "the group" and
+"everybody". A pid that names no live task is `ESRCH`; the number is `-3`,
+the same as `KERR_EXIST`, because `-3` already meant "file exists" in the
+frozen table (ADR 0015), and the shell prints the sentence of the signal
+rather than the text of the file error.
+
+A signal is answered in the context of the task that receives it: on the way
+out of a system call, or on the tick of the timer when the interrupted code
+is a program of ring 3. The default action of `SIGINT`, `SIGTERM` and
+`SIGPIPE` is the end of the task with the status `128 + sig`; the default of
+`SIGCHLD` is to be ignored. A handler runs before the interrupted call
+returns its answer; on x86-64 it is a function of the program in ring 3,
+entered through a frame on the stack of the program and returned from
+through `sigreturn` (29), which is a call of the port and not of a program.
+
+`waitpid()` scans a finished child before the pending signals, so the
+`SIGCHLD` of a child that has just ended does not turn the wait of its
+status into an error. A pending signal that has to be answered - the
+default end, or a handler the task installed - makes the call answer
+`EINTR` (`KERR_INTR`, -4) without reaping the child; `ECHILD` keeps its
+meaning. An ignored signal and the default `SIGCHLD` do not cut a wait.
+
+There is no job control: no `SIGSTOP`, `SIGCONT` or `SIGTSTP`, no groups and
+no `&`. Ctrl+C at the console is the one signal of the terminal: while the
+shell waits for the program it started, a Ctrl+C byte sends `SIGINT` to
+that program, and `kill` from the prompt sends a signal to a pid from `ps`.
+
+The library has the same calls as `microos_kill()` and
+`microos_signal()`, with `MICROOS_SIGINT` and the other three numbers, and
+the two dispositions `MICROOS_SIG_DFL` and `MICROOS_SIG_IGN`;
+`microos_signal()` answers `MICROOS_SIG_ERR` and sets `microos_errno()`
+when the signal is not one of the system.
 
 ## The descriptors
 

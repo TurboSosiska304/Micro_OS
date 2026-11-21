@@ -3,11 +3,13 @@
 #include <string.h>
 
 #include "kernel/kfile.h"
+#include "kernel/errno.h"
 #include "kernel/kmm.h"
 #include "kernel/log.h"
 #include "kernel/port.h"
 #include "kernel/port_task.h"
 #include "kernel/sched.h"
+#include "kernel/signal.h"
 
 static struct task g_tasks[TASK_MAX_TASKS];
 static k_u32_t g_next_pid = 1;
@@ -248,6 +250,7 @@ int task_fork(struct task *parent, const char *name, struct task **child)
     c->parent = parent;
     task_set_cwd(c, task_get_cwd(parent));
     kfile_table_copy(c, parent);
+    task_signal_inherit(c, parent);
 
     rc = k_port_fork_copy(c);
     if (rc < 0) {
@@ -284,6 +287,8 @@ void task_exit(int code)
         memcpy(name, self->name, sizeof(name));
         name[sizeof(name) - 1] = '\0';
         pid = self->pid;
+        /* The parent learns of the end before the slot can be reaped. */
+        task_signal_notify_parent(self);
         k_port_exit_critical();
 
         /*
@@ -472,6 +477,224 @@ int task_wait(k_u32_t pid, int *exit_code, k_u32_t timeout_ms)
 
         k_sched_sleep_ms(1);
         waited++;
+    }
+}
+
+/* --- signals --- */
+
+/* The place of a signal in the table of a task, -1 when it is not one of the
+ * signals of the system. The four are not a range: the numbers are POSIX. */
+static int signal_slot(int sig)
+{
+    switch (sig) {
+    case K_SIGINT:
+        return 0;
+    case K_SIGPIPE:
+        return 1;
+    case K_SIGTERM:
+        return 2;
+    case K_SIGCHLD:
+        return 3;
+    default:
+        return -1;
+    }
+}
+
+static int signal_number(int slot)
+{
+    static const int numbers[] = {K_SIGINT, K_SIGPIPE, K_SIGTERM, K_SIGCHLD};
+
+    if (slot < 0 || (k_size_t)slot >= K_ARRAY_SIZE(numbers)) {
+        return 0;
+    }
+
+    return numbers[slot];
+}
+
+static k_u32_t signal_bit(int sig)
+{
+    return (k_u32_t)1u << (k_u32_t)signal_slot(sig);
+}
+
+/* The signals whose default answer is the end of the task. SIGCHLD is the
+ * one whose default is to be ignored, as everywhere else. */
+static bool signal_ends_by_default(int sig)
+{
+    return sig != K_SIGCHLD;
+}
+
+bool task_signal_interrupts(const struct task *t)
+{
+    int slot;
+
+    if (t == NULL || t->sig_pending == 0u) {
+        return false;
+    }
+
+    for (slot = 0; slot < (int)K_ARRAY_SIZE(t->sig_handlers); slot++) {
+        int sig = signal_number(slot);
+        task_signal_fn handler;
+
+        if (sig == 0 || (t->sig_pending & signal_bit(sig)) == 0u) {
+            continue;
+        }
+
+        handler = t->sig_handlers[slot];
+
+        if (handler == K_SIG_IGN) {
+            continue;
+        }
+
+        if (handler != K_SIG_DFL) {
+            return true;
+        }
+
+        if (signal_ends_by_default(sig)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+k_u32_t task_signal_pending(const struct task *t)
+{
+    return t != NULL ? t->sig_pending : 0u;
+}
+
+int task_signal_send(k_u32_t pid, int sig)
+{
+    struct task *t;
+
+    if (signal_slot(sig) < 0) {
+        return KERR_INVAL;
+    }
+
+    if (pid == 0u) {
+        return KERR_INVAL;
+    }
+
+    t = task_by_pid(pid);
+    if (t == NULL) {
+        return KERR_SRCH;
+    }
+
+    k_port_enter_critical();
+    if (t->state == TASK_STATE_ZOMBIE || t->state == TASK_STATE_DEAD) {
+        k_port_exit_critical();
+        return KERR_SRCH;
+    }
+    t->sig_pending |= signal_bit(sig);
+    k_port_exit_critical();
+
+    /* A task that waits for an event or a timer may come back at once: the
+     * check of the signals is what its wait and its next call look at. */
+    k_sched_unblock(t);
+
+    return 0;
+}
+
+task_signal_fn task_signal_set(struct task *t, int sig, task_signal_fn handler)
+{
+    int slot = signal_slot(sig);
+    task_signal_fn previous;
+
+    if (t == NULL) {
+        t = task_self();
+    }
+
+    if (t == NULL || slot < 0) {
+        return K_SIG_ERR;
+    }
+
+    k_port_enter_critical();
+    previous = t->sig_handlers[slot];
+    t->sig_handlers[slot] = handler;
+
+    /* An ignored signal is thrown away, as POSIX asks: there is no point in
+     * waking the task for a mark it will never answer. */
+    if (handler == K_SIG_IGN) {
+        t->sig_pending &= ~signal_bit(sig);
+    }
+    k_port_exit_critical();
+
+    return previous;
+}
+
+void task_signal_inherit(struct task *child, const struct task *parent)
+{
+    if (child == NULL || parent == NULL) {
+        return;
+    }
+
+    k_port_enter_critical();
+    memcpy(child->sig_handlers, parent->sig_handlers, sizeof(child->sig_handlers));
+    child->sig_pending = 0u;
+    k_port_exit_critical();
+}
+
+void task_signal_notify_parent(struct task *self)
+{
+    if (self == NULL || self->parent == NULL) {
+        return;
+    }
+
+    self->parent->sig_pending |= signal_bit(K_SIGCHLD);
+}
+
+void task_signal_check(struct task *t, k_ssize_t result, bool from_syscall)
+{
+    int slot;
+
+    if (t == NULL || t->sig_pending == 0u) {
+        return;
+    }
+
+    for (slot = 0; slot < (int)K_ARRAY_SIZE(t->sig_handlers); slot++) {
+        int sig = signal_number(slot);
+        task_signal_fn handler;
+        int rc;
+
+        if (sig == 0 || (t->sig_pending & signal_bit(sig)) == 0u) {
+            continue;
+        }
+
+        handler = t->sig_handlers[slot];
+
+        k_port_enter_critical();
+        t->sig_pending &= ~signal_bit(sig);
+        k_port_exit_critical();
+
+        if (handler == K_SIG_IGN) {
+            continue;
+        }
+
+        if (handler == K_SIG_DFL) {
+            if (!signal_ends_by_default(sig)) {
+                continue;
+            }
+            task_exit(128 + sig);
+            return;
+        }
+
+        rc = k_port_task_signal_enter(t, sig, handler, result, from_syscall);
+        if (rc > 0) {
+            /* The port put the handler in the context of the program: it runs
+             * when the task returns to user space. */
+            return;
+        }
+
+        if (rc < 0) {
+            /* The frame of the task cannot carry the handler: the signal ends
+             * it, as it does when the handler cannot be called at all. */
+            task_exit(128 + sig);
+            return;
+        }
+
+        /* A machine whose tasks are not programs: the handler is an ordinary
+         * function of the kernel and runs here, in the task's own context. */
+        handler(sig);
+        return;
     }
 }
 

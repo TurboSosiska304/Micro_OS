@@ -14,6 +14,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "kernel/errno.h"
 #include "kernel/log.h"
 #include "kernel/port.h"
 #include "kernel/port_task.h"
@@ -205,7 +206,7 @@ const char *k_port_arch(void)
  * wrong meaning, the way vermagic does for a module of Linux.
  */
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 6u
+#define PORT_API_MINOR 7u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_esp32 does not speak the contract of this kernel");
@@ -472,6 +473,30 @@ struct task *k_port_task_current(void)
     k_port_exit_critical();
 
     return found;
+}
+
+/*
+ * A task of the board is a FreeRTOS task, not a program of ring 3: the
+ * kernel runs the handler of a signal in the context of the task itself, and
+ * there is no frame to restore (the board cannot enter a program at all,
+ * KERNEL_EXEC is off there).
+ */
+int k_port_task_signal_enter(struct task *t, int sig, void (*handler)(int), k_ssize_t result,
+                             bool from_syscall)
+{
+    K_UNUSED(t);
+    K_UNUSED(sig);
+    K_UNUSED(handler);
+    K_UNUSED(result);
+    K_UNUSED(from_syscall);
+    return 0;
+}
+
+int k_port_task_signal_leave(struct task *t, k_ssize_t *result)
+{
+    K_UNUSED(t);
+    K_UNUSED(result);
+    return KERR_NOSYS;
 }
 
 /* --- time base --- */

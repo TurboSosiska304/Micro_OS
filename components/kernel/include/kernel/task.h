@@ -18,6 +18,10 @@
 #define TASK_MAX_TASKS 32
 #define TASK_CWD_MAX 32
 
+/* The dispositions a task keeps: the signals of kernel/signal.h and room for
+ * the next few. The table is small on purpose, the memory of the board is. */
+#define TASK_SIGNALS 8
+
 typedef enum {
     TASK_STATE_NEW = 0,  /* created, not started yet */
     TASK_STATE_READY,    /* in the run queue */
@@ -72,6 +76,13 @@ struct task {
      * beginning, so the program has to ask.
      */
     bool is_child;
+    /*
+     * The signals of the task: the bits that wait for it and the handlers it
+     * installed. A zero handler is the default action, one is "ignore",
+     * anything else is a function of the task (see kernel/signal.h).
+     */
+    k_u32_t sig_pending;
+    void (*sig_handlers[TASK_SIGNALS])(int);
     struct kfile *files[TASK_MAX_FDS]; /* the open files of the task */
     /*
      * The priority of the memory allocations of the task: the system flag

@@ -47,7 +47,7 @@ void port_x86_64_ps2_init(void);
 
 /* The body of IRQ1: one byte of the keyboard, then the EOI. Called from
  * interrupts.S with the interrupts off. */
-void port_x86_64_irq_keyboard(void);
+void port_x86_64_irq_keyboard(k_u64_t *frame);
 
 /* The next character of the keyboard, or -1 when the ring is empty. */
 int port_x86_64_ps2_poll(void);

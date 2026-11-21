@@ -147,6 +147,27 @@ Plan: start with option 1 (it works immediately), move to option 2 when real
 Linux-like semantics are needed (priorities, states, `fork`). The decision is
 recorded in [ADR 0002](adr/0002-scheduler-substrate.md).
 
+### Signals (ADR 0015)
+
+A signal is a bit of `struct task` (`sig_pending`) and a disposition in a
+small table of the task, not a message on a queue: the sender - `kill(pid,
+sig)` - sets the bit under the critical section and wakes the task, and the
+receiver answers it in its own context. The points of delivery are the way
+out of a system call (`ksys_call()`) and the tick of the timer when the
+interrupted code is a program of ring 3. The default action of `SIGINT`,
+`SIGTERM` and `SIGPIPE` is the end of the task with the status `128 + sig`;
+`SIGCHLD` is ignored by default and is marked on the parent by `task_exit()`.
+An installed handler is a function of the program: on x86-64 the port builds
+a frame below the stack pointer of the program, writes the handler and the
+signal number into the saved frame, and the `iretq` of the stub enters it;
+the return address is a page of the port that calls `sigreturn`, which puts
+the interrupted frame back. The host, the board and the null port have no
+ring 3 and run the handler in place. `waitpid()` looks at a finished child
+before the marks and answers `EINTR` for a mark that has to be answered
+without reaping the child. There is no job control - no groups, no `&`, no
+`fg`, no `bg` - and the documentation says so; Ctrl+C while the shell waits
+for a program is read by the port and becomes `SIGINT` for that program.
+
 ## 5. Virtual filesystem (phase 2)
 
 The goal is "everything is a file":

@@ -14,6 +14,7 @@
 #ifndef MICRO_OS_KERNEL_KSYS_H
 #define MICRO_OS_KERNEL_KSYS_H
 
+#include "kernel/signal.h"
 #include "kernel/task.h"
 #include "kernel/types.h"
 
@@ -21,36 +22,52 @@
  * The system calls. The numbers are frozen: a new call gets the next free
  * number, an old one keeps its number forever.
  */
-#define KSYS_EXIT 0     /* exit(code) */
-#define KSYS_READ 1     /* read(fd, buf, count) */
-#define KSYS_WRITE 2    /* write(fd, buf, count) */
-#define KSYS_OPEN 3     /* open(path, flags) */
-#define KSYS_CLOSE 4    /* close(fd) */
-#define KSYS_STAT 5     /* stat(path, buf) */
-#define KSYS_LSEEK 6    /* lseek(fd, offset, whence) */
-#define KSYS_UNLINK 7   /* unlink(path) */
-#define KSYS_MKDIR 8    /* mkdir(path) */
-#define KSYS_READDIR 9  /* readdir(fd, buf, count) */
-#define KSYS_GETPID 10  /* getpid() */
-#define KSYS_GETCWD 11  /* getcwd(buf, size) */
-#define KSYS_IOCTL 12   /* ioctl(fd, cmd, arg) */
-#define KSYS_YIELD 13   /* yield() */
-#define KSYS_SLEEP 14   /* sleep(ms) */
-#define KSYS_UPTIME 15  /* uptime() */
-#define KSYS_REBOOT 16  /* reboot() */
-#define KSYS_FORK 17    /* fork() */
-#define KSYS_GETPPID 18 /* getppid() */
-#define KSYS_WAITPID 19 /* waitpid(pid, status) */
-#define KSYS_MALLOC 20  /* malloc(size) */
-#define KSYS_FREE 21    /* free(ptr) */
-#define KSYS_REALLOC 22 /* realloc(ptr, size) */
-#define KSYS_CHMOD 23   /* chmod(path, mode) */
-#define KSYS_CHOWN 24   /* chown(path, owner) */
-#define KSYS_EXECVE 25  /* execve(path, argv, envp) */
-#define KSYS_STATX 26   /* statx(path, buf) */
-#define KSYS_PIPE 27    /* pipe(fds) */
-#define KSYS_DUP2 28    /* dup2(oldfd, newfd) */
-#define KSYS_COUNT 29   /* the number of the system calls */
+#define KSYS_EXIT 0       /* exit(code) */
+#define KSYS_READ 1       /* read(fd, buf, count) */
+#define KSYS_WRITE 2      /* write(fd, buf, count) */
+#define KSYS_OPEN 3       /* open(path, flags) */
+#define KSYS_CLOSE 4      /* close(fd) */
+#define KSYS_STAT 5       /* stat(path, buf) */
+#define KSYS_LSEEK 6      /* lseek(fd, offset, whence) */
+#define KSYS_UNLINK 7     /* unlink(path) */
+#define KSYS_MKDIR 8      /* mkdir(path) */
+#define KSYS_READDIR 9    /* readdir(fd, buf, count) */
+#define KSYS_GETPID 10    /* getpid() */
+#define KSYS_GETCWD 11    /* getcwd(buf, size) */
+#define KSYS_IOCTL 12     /* ioctl(fd, cmd, arg) */
+#define KSYS_YIELD 13     /* yield() */
+#define KSYS_SLEEP 14     /* sleep(ms) */
+#define KSYS_UPTIME 15    /* uptime() */
+#define KSYS_REBOOT 16    /* reboot() */
+#define KSYS_FORK 17      /* fork() */
+#define KSYS_GETPPID 18   /* getppid() */
+#define KSYS_WAITPID 19   /* waitpid(pid, status) */
+#define KSYS_MALLOC 20    /* malloc(size) */
+#define KSYS_FREE 21      /* free(ptr) */
+#define KSYS_REALLOC 22   /* realloc(ptr, size) */
+#define KSYS_CHMOD 23     /* chmod(path, mode) */
+#define KSYS_CHOWN 24     /* chown(path, owner) */
+#define KSYS_EXECVE 25    /* execve(path, argv, envp) */
+#define KSYS_STATX 26     /* statx(path, buf) */
+#define KSYS_PIPE 27      /* pipe(fds) */
+#define KSYS_DUP2 28      /* dup2(oldfd, newfd) */
+#define KSYS_KILL 29      /* kill(pid, sig) */
+#define KSYS_SIGNAL 30    /* signal(sig, handler) -> the old handler */
+#define KSYS_SIGRETURN 31 /* the restorer of a signal frame, for the port */
+#define KSYS_COUNT 32     /* the number of the system calls */
+
+/*
+ * The signals of the ABI. The numbers are the ones of POSIX and the set is
+ * the one of the kernel (kernel/signal.h): the terminal interrupt, the end of
+ * a process, the end of a child and a broken pipe. The disposition is a
+ * pointer of the caller, or one of the two values below.
+ */
+#define KSYS_SIGINT K_SIGINT
+#define KSYS_SIGPIPE K_SIGPIPE
+#define KSYS_SIGTERM K_SIGTERM
+#define KSYS_SIGCHLD K_SIGCHLD
+#define KSYS_SIG_DFL 0
+#define KSYS_SIG_IGN 1
 
 /* The flags of the open call, the same as the ones of the VFS. */
 #define KSYS_O_RDONLY 0x0000
@@ -209,5 +226,8 @@ int ksys_pipe(int fds[2]);
 int ksys_dup2(int oldfd, int newfd);
 /* The same call with an environment of the caller. */
 int ksys_execve_env(const char *path, char *const argv[], char *const envp[]);
+int ksys_kill(int pid, int sig);
+/* The old handler, or K_SIG_ERR when the signal is not one of the system. */
+task_signal_fn ksys_signal(int sig, task_signal_fn handler);
 
 #endif /* MICRO_OS_KERNEL_KSYS_H */

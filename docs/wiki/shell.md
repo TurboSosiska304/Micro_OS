@@ -18,7 +18,9 @@ The line is split on spaces and tabs; there are no quotes, no escapes, no
 globs, no pipes, no `;` and no redirection. A line is at most 127 characters
 and at most 8 words. Backspace erases, Ctrl+C throws the line away, and a line
 that did not fit is **not** executed (the shell says `line too long, it was not
-executed`), because a cut line is a different command.
+executed`), because a cut line is a different command. While a program runs,
+Ctrl+C is not a line: the port reads it and sends `SIGINT` to the program the
+shell is waiting for (see [kernel-abi.md](kernel-abi.md#signals)).
 
 Because there are no quotes, a command that needs an empty argument accepts
 the two characters `""` as the way to type it. `path ""` is the example.
@@ -90,6 +92,7 @@ The files, on every machine:
 | `chmod <mode> <path>`, `chown <uid> <path>` | the mode (octal) and the owner (0..32767) |
 | `path [directories]` | show or set `PATH` |
 | `exec <program> [args...]` | run a program, by a path or found in `PATH` |
+| `kill [-signal] <pid>` | send `INT`, `TERM`, `CHLD` or `PIPE` to a task; TERM by default |
 
 The services, where the port registers them:
 
@@ -144,9 +147,32 @@ exec: hello: not found in /bin:/usr/bin
 
 On the board and in the simulator there is no program to run: a fresh volume
 has no `/bin`, and `execve` answers `ENOSYS` even for a file that is there. The
-x86-64 port writes `/bin/hello`, `/bin/crash`, `/bin/fork` and `/bin/badptr` at
-the boot, and runs them as programs of ring 3. [programs.md](programs.md)
-explains what a program is.
+x86-64 port writes `/bin/hello`, `/bin/crash`, `/bin/fork`, `/bin/badptr` and
+`/bin/signals` at the boot, and runs them as programs of ring 3.
+[programs.md](programs.md) explains what a program is.
+
+## `kill`, Ctrl+C and no job control
+
+There is no job control: no `&`, no `fg`, no `bg`, no groups of processes and
+no `SIGSTOP`. A program runs in the foreground until it ends, and the shell
+waits for it. What a person has instead is two ways to stop one:
+
+```text
+microos> ps
+  pid  prio  state     name
+   12     5  running   shell
+   13     5  sleeping  program
+microos> kill 13
+microos> kill -INT 13
+```
+
+`kill` takes a positive pid from `ps` and sends `TERM` unless a signal is
+named: `-INT`, `-TERM`, `-CHLD`, `-PIPE` or the number. A pid that names no
+task answers `kill: 42: no such process`; a signal outside the four is
+refused. During an `exec`, Ctrl+C of the console sends `SIGINT` to the
+program, and a program that ignores it keeps running: there is no `-9` to
+fall back on (a number outside the table is `EINVAL`), and the machine is
+restarted with `reboot` if a program really hangs.
 
 ## `stat`, `chmod` and `chown`
 

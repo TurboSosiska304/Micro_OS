@@ -40,8 +40,11 @@ who wants to use the system, not a second copy of the contract.
 | 26 | `statx` | the numbers of `stat` and the moments of a change |
 | 27 | `pipe` | two descriptors of one pipe |
 | 28 | `dup2` | a second descriptor of an open file |
+| 29 | `kill` | send a signal to a task |
+| 30 | `signal` | install a handler, get the previous one |
+| 31 | `sigreturn` | return from a handler (the port's page, not a program) |
 
-`29` is the count, not a call. A number that is not in the table is `ENOSYS`;
+`32` is the count, not a call. A number that is not in the table is `ENOSYS`;
 a new call always takes the next free number, and an old one never moves. The
 shell prints the same table with `abi`:
 
@@ -55,7 +58,10 @@ nr    name
 26    statx
 27    pipe
 28    dup2
-29 call(s) registered
+29    kill
+30    signal
+31    sigreturn
+32 call(s) registered
 ```
 
 The convention is the one of Linux: the number and six arguments, the result in
@@ -97,6 +103,32 @@ page fault in ring 0. `/bin/badptr` is the program of that test - it hands
 `write`, `stat` and `read` a pointer outside the window, a range that crosses
 its end and the guard page, and every call answers 14 while the machine goes on
 and writes a line with a valid pointer afterwards.
+
+## Signals
+
+Four signals, the numbers of POSIX: `SIGINT` (2), `SIGPIPE` (13), `SIGTERM`
+(15) and `SIGCHLD` (17). `signal(sig, handler)` installs a function of the
+program and answers the previous disposition; `SIG_DFL` ends a task that gets
+`INT`, `TERM` or `PIPE` with the status 128 + the signal, `SIG_IGN` throws the
+signal away, and `SIGCHLD` is ignored by default. `kill(pid, sig)` sends a
+signal to one task with a positive pid; 0 and -1 are not groups here, and a pid
+that names no task is `ESRCH` (`-3`, the number the table already used for
+"file exists").
+
+A signal is answered in the context of the task that gets it, on the way out of
+a system call or on the tick of the timer of x86-64. A handler of a program runs
+in ring 3: the port puts a frame below the stack pointer of the program and the
+program returns through the restorer page, which calls `sigreturn` (29). A
+handler of a task of the host or of the board is an ordinary function of the
+kernel and runs in place.
+
+`waitpid()` looks at a finished child first and then at the signals; a pending
+signal that has to be answered makes the call answer `EINTR` and leaves the
+child to the next wait. The exit of a child marks `SIGCHLD` on its parent. No
+job control: the system has no groups and no `&`, `fg` or `bg`; Ctrl+C while
+the shell runs a program sends `SIGINT` to that program, and `kill` takes a pid
+from `ps`. ADR 0015 has the design, and the x86-64 smoke test runs `/bin/signals`
+through all of it.
 
 ## Descriptors
 
@@ -182,7 +214,7 @@ program with `argc` in `rdi`, `argv` in `rsi` and `envp` in `rdx`
 `ENOSYS`; x86-64 enters ring 3. [programs.md](programs.md) has the details of
 the format, the entry and the library of a program.
 
-## The contract of the port: 1.6
+## The contract of the port: 1.7
 
 The kernel and a port are two halves of one pair, and the version of the
 contract is their vermagic. It lives in
@@ -197,10 +229,10 @@ contract:
 A port asserts the version at build time, and the boot compares it again and
 panics on a major mismatch instead of failing far from the cause. `make
 integrity` checks that every port implements the whole contract. The latest
-step, 1.6, is the check of the memory of the caller -
+step, 1.7, is the check of the memory of the caller -
 `k_port_exec_contains()`, which is what turns a bad pointer of a program into
 `EFAULT`. Some older pages of `docs/` still name 1.4; the number the boot
-prints is the one in `info.h`, and the boot of this tree prints `contract 1.6`.
+prints is the one in `info.h`, and the boot of this tree prints `contract 1.7`.
 
 The three builds of one tree are the check of the contract in practice: a
 function that only one port implements is a function the others do not need,

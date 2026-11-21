@@ -22,7 +22,7 @@ differences is in [`docs/architecture.md`](../architecture.md), section 2.
 | null | no machine at all: linked by the checks | [`docs/ports/null`](../ports/null/README.md) |
 
 The board is one port of several, not the project. The boundary is a contract
-with a version (`kernel/port/*.h`, 1.6 in this tree), checked at the boot and
+with a version (`kernel/port/*.h`, 1.7 in this tree), checked at the boot and
 by `make integrity`; [ADR 0004](../adr/0004-portable-boundary.md) explains why.
 
 ## What you need
@@ -55,7 +55,7 @@ ones of your tree):
 MicroOS 0.5.0-rc1 (build ...)
 board: host_sim - Micro OS host simulator
 arch: x86_64, compiler: gcc ...
-port: host, contract 1.6
+port: host, contract 1.7
 [ ok ] sched
 file0: 512 sector(s) of 1024 bytes on /tmp/microos-sim.img
 sim: the volume is /tmp/microos-sim.img (512 KB)

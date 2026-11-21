@@ -655,6 +655,197 @@ static void test_execve(void)
 }
 #endif /* KERNEL_EXEC */
 
+/* --- signals --- */
+
+static volatile int g_sig_runs;
+static volatile int g_sig_last;
+
+static void test_signal_handler(int sig)
+{
+    g_sig_runs++;
+    g_sig_last = sig;
+}
+
+/*
+ * A task that does nothing but sleep through a system call: the signal has
+ * to cut the sleep and be answered on the way out of the call.
+ */
+static void signal_victim(void *arg)
+{
+    K_UNUSED(arg);
+
+    for (;;) {
+        (void)ksys_sleep(5);
+    }
+}
+
+/*
+ * The sender of one signal, a little after the task that made it has had the
+ * time to enter a wait: a wait that a signal cut has to answer EINTR, and a
+ * sender on the same stack could not arrange that.
+ */
+static void signal_sender(void *arg)
+{
+    struct task *target = (struct task *)arg;
+
+    k_sched_sleep_ms(20);
+    (void)task_signal_send(target->pid, K_SIGINT);
+}
+
+static void test_signal_actions(void)
+{
+    ktest_begin("ksys: a handler runs, an ignored signal is thrown away");
+
+    setup();
+    g_sig_runs = 0;
+    g_sig_last = 0;
+
+    /* The dispositions: default, ignore, a handler, and back. */
+    KT_CHECK(task_signal_set(NULL, K_SIGINT, test_signal_handler) == K_SIG_DFL);
+    KT_CHECK(task_signal_set(NULL, K_SIGINT, K_SIG_IGN) == test_signal_handler);
+    KT_CHECK(task_signal_set(NULL, K_SIGINT, test_signal_handler) == K_SIG_IGN);
+
+    KT_CHECK_INT_EQ(ksys_kill((int)ksys_getpid(), KSYS_SIGINT), 0);
+    KT_CHECK_INT_EQ(g_sig_runs, 1);
+    KT_CHECK_INT_EQ(g_sig_last, KSYS_SIGINT);
+
+    /* An ignored signal leaves no mark and does not end the task. */
+    KT_CHECK(task_signal_set(NULL, K_SIGTERM, K_SIG_IGN) == K_SIG_DFL);
+    KT_CHECK_INT_EQ(ksys_kill((int)ksys_getpid(), KSYS_SIGTERM), 0);
+    KT_CHECK_INT_EQ(task_signal_pending(task_self()), 0u);
+
+    task_signal_set(NULL, K_SIGINT, K_SIG_DFL);
+    task_signal_set(NULL, K_SIGTERM, K_SIG_DFL);
+
+    teardown();
+}
+
+static void test_kill_errors(void)
+{
+    int status = -1;
+
+    ktest_begin("ksys: kill refuses a task that is not there and a signal it does not know");
+
+    setup();
+
+    KT_CHECK_INT_EQ(ksys_kill(4242, KSYS_SIGTERM), KERR_SRCH);
+    KT_CHECK_INT_EQ(ksys_kill((int)ksys_getpid(), 99), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_kill(0, KSYS_SIGTERM), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_kill(-7, KSYS_SIGTERM), KERR_INVAL);
+
+    /* A wide pid must not be cut down to a live task by the cast to int. */
+    if (sizeof(ksys_arg_t) > sizeof(int)) {
+        KT_CHECK_INT_EQ(ksys_call(KSYS_KILL, (ksys_arg_t)0x100000005ull, KSYS_SIGTERM, 0, 0, 0, 0),
+                        KERR_INVAL);
+    }
+
+    /* The failure of a send leaves the wait of a parent as it was. */
+    KT_CHECK_INT_EQ(ksys_waitpid(4242, &status, KSYS_WNOHANG), KERR_CHILD);
+
+    teardown();
+}
+
+static void test_signal_term(void)
+{
+    struct task *child;
+    int child_pid;
+    int status = -1;
+
+    ktest_begin("ksys: SIGTERM ends a task and the parent sees 128 + 15");
+
+    setup();
+
+    child = task_create("victim", signal_victim, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(child != NULL);
+    child_pid = (int)child->pid;
+
+    KT_CHECK_INT_EQ(ksys_kill(child_pid, KSYS_SIGTERM), 0);
+    KT_CHECK_INT_EQ(ksys_waitpid(child_pid, &status, 0), child_pid);
+    KT_CHECK_INT_EQ(status, 128 + KSYS_SIGTERM);
+
+    teardown();
+}
+
+static void test_signal_wait_eintr(void)
+{
+    struct task *self = task_self();
+    struct task *child;
+    struct task *sender;
+    int child_pid;
+    int sender_pid;
+    int status = -1;
+    int rc;
+
+    ktest_begin("ksys: SIGINT cuts a waitpid short with EINTR and runs the handler");
+
+    setup();
+    g_sig_runs = 0;
+    g_sig_last = 0;
+
+    KT_CHECK(task_signal_set(NULL, K_SIGINT, test_signal_handler) == K_SIG_DFL);
+
+    child = task_create("waited", signal_victim, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(child != NULL);
+    child_pid = (int)child->pid;
+
+    sender = task_create("sender", signal_sender, (void *)self, TASK_PRIO_DEFAULT);
+    KT_CHECK(sender != NULL);
+    sender_pid = (int)sender->pid;
+
+    rc = ksys_waitpid(child_pid, &status, 0);
+
+    /* The child did not finish: the wait was cut, not answered. */
+    KT_CHECK_INT_EQ(rc, KERR_INTR);
+    KT_CHECK_INT_EQ(status, -1);
+    KT_CHECK_INT_EQ(g_sig_runs, 1);
+    KT_CHECK_INT_EQ(g_sig_last, KSYS_SIGINT);
+    KT_CHECK(task_state_of(child) != TASK_STATE_ZOMBIE);
+
+    /* The child is still there to be waited for on the next try. */
+    KT_CHECK_INT_EQ(ksys_kill(child_pid, KSYS_SIGTERM), 0);
+    KT_CHECK_INT_EQ(ksys_waitpid(child_pid, &status, 0), child_pid);
+    KT_CHECK_INT_EQ(status, 128 + KSYS_SIGTERM);
+
+    /* The sender is a child as well, and a test that forgets a zombie fills
+     * the table for the tests after it. */
+    KT_CHECK_INT_EQ(ksys_waitpid(sender_pid, &status, 0), sender_pid);
+
+    task_signal_set(NULL, K_SIGINT, K_SIG_DFL);
+
+    teardown();
+}
+
+static void test_signal_chld(void)
+{
+    struct task *child;
+    int child_pid;
+    int status = -1;
+
+    ktest_begin("ksys: the exit of a child marks SIGCHLD on the parent");
+
+    setup();
+    g_sig_runs = 0;
+    g_sig_last = 0;
+
+    KT_CHECK(task_signal_set(NULL, K_SIGCHLD, test_signal_handler) == K_SIG_DFL);
+
+    child = task_create("quick", signal_victim, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(child != NULL);
+    child_pid = (int)child->pid;
+    KT_CHECK_INT_EQ(ksys_kill(child_pid, KSYS_SIGTERM), 0);
+
+    KT_CHECK_INT_EQ(ksys_waitpid(child_pid, &status, 0), child_pid);
+    KT_CHECK_INT_EQ(status, 128 + KSYS_SIGTERM);
+
+    /* The handler of SIGCHLD ran on the way out of the wait. */
+    KT_CHECK_INT_EQ(g_sig_runs, 1);
+    KT_CHECK_INT_EQ(g_sig_last, KSYS_SIGCHLD);
+
+    task_signal_set(NULL, K_SIGCHLD, K_SIG_DFL);
+
+    teardown();
+}
+
 void test_ksys_process(void)
 {
     test_fork_wait();
@@ -664,6 +855,11 @@ void test_ksys_process(void)
     test_wait_errors();
     test_wait_validation();
     test_fork_data_is_the_same();
+    test_signal_actions();
+    test_kill_errors();
+    test_signal_term();
+    test_signal_wait_eintr();
+    test_signal_chld();
 #if KERNEL_EXEC
     test_execve();
 #endif

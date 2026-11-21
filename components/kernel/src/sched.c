@@ -5,6 +5,7 @@
 #include "kernel/log.h"
 #include "kernel/port.h"
 #include "kernel/port_task.h"
+#include "kernel/signal.h"
 #include "kernel/task.h"
 
 typedef struct {
@@ -119,7 +120,14 @@ void k_sched_tick(void)
     while (i < g_sleeping_count) {
         struct task *t = g_sleeping[i];
 
-        if (t->wake_tick <= g_ticks && t->state == TASK_STATE_SLEEPING) {
+        /*
+         * A signal cuts a sleep short: the task has to come back to the
+         * kernel to answer it, and a wait of a second must not delay the
+         * handler of a signal that arrived in the first millisecond. An
+         * ignored signal and the default SIGCHLD do not wake anybody.
+         */
+        if ((t->wake_tick <= g_ticks || task_signal_interrupts(t)) &&
+            t->state == TASK_STATE_SLEEPING) {
             g_sleeping[i] = g_sleeping[g_sleeping_count - 1];
             g_sleeping_count--;
             t->state = t->wake_state;

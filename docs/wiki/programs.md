@@ -62,7 +62,7 @@ kernel needs the bytes before it has a filesystem to read them from.
 
 ## `/bin` and the boot
 
-The x86-64 port mounts MicroFS at `/`, creates `/bin`, writes eight images
+The x86-64 port mounts MicroFS at `/`, creates `/bin`, writes nine images
 there and gives them the mode of a program (`0755`) through the VFS:
 
 | File | What it proves |
@@ -71,14 +71,15 @@ there and gives them the mode of a program (`0755`) through the VFS:
 | `/bin/crash` | a fault of ring 3 is reported and the shell survives |
 | `/bin/fork` | `fork()` with copy on write: the child gets 0, the parent the pid |
 | `/bin/badptr` | a pointer outside the window is `EFAULT`, not a fault of ring 0 |
+| `/bin/signals` | a handler, `SIGTERM` ending a child, a wait cut by `SIGINT`, `SIG_IGN`, and the errors of `kill` |
 | `/bin/cat` | `open`, `read`, `write` on a file, through the library of a program |
 | `/bin/echo` | the vector of the arguments and `write`, the shortest useful program |
 | `/bin/ls` | a directory through `open(O_DIRECTORY)` and `readdir` |
 | `/bin/spawn` | `execve` from a program, with an environment of its own |
 
-The first four talk to the kernel through `programs/prog.h`, because what they
-test is the raw door, the fault, the fork and the edge. The last four are
-ordinary C programs linked against `components/libc/user`
+The first five talk to the kernel through `programs/prog.h`, because what they
+test is the raw door, the fault, the fork, the edge and the signals. The last
+four are ordinary C programs linked against `components/libc/user`
 ([ADR 0016](../adr/0016-userland.md)).
 
 The boot then asks for `/bin/hello` with `ksys_execve()`: the stat, the check

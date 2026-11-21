@@ -186,10 +186,15 @@ set(LIBC_USER_SOURCES
 # The flags of a program: no libc, no PIC and no SSE, the same shape as the
 # kernel's (see add_compile_options above). The include path carries the
 # headers of the kernel (the numbers of the calls) and the library.
+#
+# The string literals are not merged into one section: binutils 2.47 trips an
+# assertion of its merge of sections on the .rodata of a program with many
+# strings and a pointer of a handler in its data, and one shared copy of a few
+# bytes buys nothing here.
 set(PROGRAM_CFLAGS
     -c -O2 -ffreestanding -fno-stack-protector
     -fno-pic -fno-pie -mno-red-zone -mgeneral-regs-only -march=x86-64
-    -fno-asynchronous-unwind-tables -Wall -Wextra -Werror
+    -fno-asynchronous-unwind-tables -fno-merge-constants -Wall -Wextra -Werror
     -I "${KERNEL_DIR}/include" -I "${PROGRAM_DIR}" -I "${LIBC_USER_DIR}/include"
 )
 
@@ -242,6 +247,7 @@ add_program_image(hello hello_main)
 add_program_image(crash crash_main)
 add_program_image(fork fork_main)
 add_program_image(badptr badptr_main)
+add_program_image(signals signals_main)
 
 # A program that uses the library of a program: the runtime sources are
 # compiled for the window together with the file of the program, linked with
@@ -334,6 +340,7 @@ add_executable(microos64
     "${crash_OBJECT}"
     "${fork_OBJECT}"
     "${badptr_OBJECT}"
+    "${signals_OBJECT}"
     "${cat_OBJECT}"
     "${echo_OBJECT}"
     "${ls_OBJECT}"

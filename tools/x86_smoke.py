@@ -44,6 +44,7 @@ import time
 # is a program that is still in /bin afterwards.
 COMMANDS = [
     "help",
+    "kill 9999",
     "uname",
     "uptime",
     "ls /bin",
@@ -74,6 +75,9 @@ COMMANDS = [
     # The same again, after the page tables and the frames of the first run
     # have been released: a leak of a space would show here as a refusal.
     "exec /bin/fork",
+    # The signals of K7: a handler of the program, a child ended by SIGTERM,
+    # a wait cut short by SIGINT and the errors of kill.
+    "exec /bin/signals",
     # The edge of the system call: the program hands write, stat and read
     # addresses that are not its memory, and every call has to answer EFAULT
     # (14) while the machine stays alive.
@@ -93,7 +97,7 @@ PROMPT = "microos> "
 # console of COM1, the contract of the port and the boot of the kernel.
 EXPECTED = [
     "board: qemu_x86_64",
-    "port: x86_64, contract 1.6",
+    "port: x86_64, contract 1.7",
     "[ ok ] sched",
     "subsystem(s) ready",
     "the kernel is up",
@@ -260,6 +264,12 @@ def check(output: str) -> list:
     )
 
     expect("help lists the commands", "list the available commands" in answer("help"))
+    # The shell command of the signal: a pid no task has is a sentence, and
+    # the shell of the machine is alive after it.
+    expect(
+        "kill of a pid that is not there is reported",
+        "kill: 9999: no such process" in answer("kill 9999"),
+    )
     # The version is whatever the build says: the shape is checked, so a
     # release does not break the smoke test.
     expect(
@@ -392,6 +402,55 @@ def check(output: str) -> list:
         "PROGRAM: parent sees value 42" in fork
         and "PROGRAM: waited, status 7" in fork
         and "the program exited with 0" in fork,
+    )
+
+    # --- signals: a handler, SIG_DFL, SIG_IGN and a wait cut short
+    signals = answer("exec /bin/signals")
+    expect("the signals program starts", "PROGRAM: signals starts, pid" in signals)
+    # The handler is the code of the program, entered by the kernel on the
+    # stack of the program and returned from through the restorer page.
+    expect(
+        "a handler of the program runs for its own SIGINT",
+        "PROGRAM: sigint handler, signal 2" in signals,
+    )
+    expect(
+        "the system call of the handler returns its answer",
+        "PROGRAM: self SIGINT returned 0, handler runs 1" in signals,
+    )
+    # SIG_IGN is a disposition of the kernel: the task is still there after
+    # the signal, and its kill() answered 0.
+    expect(
+        "an ignored SIGTERM leaves the task alive",
+        "PROGRAM: ignored SIGTERM, kill 0, still alive" in signals,
+    )
+    # SIGTERM by default ends the child, and the parent sees 128 + 15.
+    expect(
+        "SIGTERM ends the child with 128 + 15",
+        re.search(r"PROGRAM: term child waited \d+, status 143", signals) is not None,
+    )
+    # The wait was cut by SIGINT, the handler ran, and the child was not
+    # taken by the wait: EINTR is 4.
+    expect(
+        "SIGINT cuts a wait with EINTR and runs the handler",
+        "PROGRAM: wait returned 4, handler runs 1" in signals,
+    )
+    expect(
+        "kill of a pid that is not there is ESRCH",
+        "PROGRAM: kill ghost returned 3" in signals,
+    )
+    expect(
+        "a signal outside the table is EINVAL",
+        "PROGRAM: kill signal 99 returned 22" in signals,
+    )
+    # The child of this line never makes a call: the handler can only arrive
+    # from the tick of the timer, with the frame of the interrupt.
+    expect(
+        "the tick delivers a handler to a program that does not call",
+        "PROGRAM: tick handler, waited" in signals,
+    )
+    expect(
+        "the signals program returns its status",
+        "the program exited with 0" in signals and "the program has finished" in signals,
     )
 
     # --- the edge of the system call: a bad pointer is EFAULT, not a fault

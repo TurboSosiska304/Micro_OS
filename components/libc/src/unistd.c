@@ -107,6 +107,8 @@ const char *microos_strerror(int code)
         return "bad file descriptor";
     case -KERR_CHILD:
         return "no child processes";
+    case -KERR_INTR:
+        return "interrupted by a signal";
     case -KERR_AGAIN:
         return "try again later";
     case -KERR_NOSYS:
@@ -470,4 +472,37 @@ int microos_execve(const char *path, char *const argv[])
     g_errno = 0;
 
     return 0;
+}
+
+int microos_kill(int pid, int sig)
+{
+    int rc = ksys_kill(pid, sig);
+
+    if (rc < 0) {
+        return fail(rc);
+    }
+
+    g_errno = 0;
+
+    return 0;
+}
+
+/*
+ * The answer is the previous disposition, as the call of POSIX promises,
+ * and a signal the kernel does not know is the SIG_ERR of POSIX with errno
+ * set. The kernel keeps the handler installed until the task changes it, so
+ * the shape is the one of signal() of Linux and not the SysV reset.
+ */
+microos_signal_fn microos_signal(int sig, microos_signal_fn handler)
+{
+    task_signal_fn previous = ksys_signal(sig, (task_signal_fn)handler);
+
+    if (previous == K_SIG_ERR) {
+        g_errno = KERR_INVAL;
+        return MICROOS_SIG_ERR;
+    }
+
+    g_errno = 0;
+
+    return (microos_signal_fn)previous;
 }
