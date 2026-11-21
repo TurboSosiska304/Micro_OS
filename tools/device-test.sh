@@ -62,4 +62,60 @@ echo "==> flashing $PORT"
 idf.py -p "$PORT" flash
 
 echo "==> reading the console"
-python3 "$ROOT/tools/console.py" "$PORT" "$CONSOLE_SECONDS"
+LOG="$(mktemp "${TMPDIR:-/tmp}/microos-console.XXXXXX")"
+trap 'rm -f "$LOG"' EXIT
+
+set +e
+python3 "$ROOT/tools/console.py" "$PORT" "$CONSOLE_SECONDS" | tee "$LOG"
+console_status=${PIPESTATUS[0]}
+set -e
+
+# The program of the board runs at the boot (the self test), so the console
+# has to carry its lines: the PROGRAM marker and the exit status. A board that
+# boots without them is a failing device test even when the rest of the self
+# test passed.
+missing=0
+for marker in \
+    "PROGRAM: hello from /bin" \
+    "PROGRAM: arch xtensa, no protection" \
+    "PROGRAM: argc 3" \
+    "PROGRAM: envp 4" \
+    "PROGRAM: exit 0" \
+    "module(s), 0 problem(s)"; do
+    if ! grep -qF "$marker" "$LOG"; then
+        echo "the console has no '$marker'" >&2
+        missing=1
+    fi
+done
+
+if [ "$console_status" -ne 0 ] || [ "$missing" -ne 0 ]; then
+    echo "RESULT: FAIL" >&2
+    exit 1
+fi
+
+# The shell is up at the end of the capture. Two lines prove the other half of
+# the door: the same file from the command line, and an image of the other
+# machine, which has to be ENOEXEC before a byte of it runs.
+echo "==> the shell: exec /bin/hello and an image of x86-64"
+set +e
+python3 "$ROOT/tools/console.py" "$PORT" 10 \
+    --send "exec /bin/hello one two" \
+    --send "exec /bin/foreign" | tee -a "$LOG"
+set -e
+
+for marker in \
+    "PROGRAM: argv[1] one" \
+    "the program has finished" \
+    "exec: /bin/foreign: exec format error"; do
+    if ! grep -qF "$marker" "$LOG"; then
+        echo "the console has no '$marker' after the shell commands" >&2
+        missing=1
+    fi
+done
+
+if [ "$missing" -ne 0 ]; then
+    echo "RESULT: FAIL" >&2
+    exit 1
+fi
+
+echo "RESULT: PASS (the self test, /bin/hello and an x86-64 image on the board)"

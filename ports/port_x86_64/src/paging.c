@@ -18,6 +18,15 @@
  * both copies at the same frames and takes the write bit away. The fault of
  * the first write makes a private copy of that one page, which is the whole
  * of copy on write.
+ *
+ * Every page has a protection as well as an owner: the text of the kernel and
+ * of a program is readable and executable and never writable, and every page
+ * of data - the rodata, the bss, the stacks, the page tables, the arena, the
+ * screen - is writable and NX. The bit that says "no code here" is bit 63 of
+ * an entry, and EFER.NXE, which the loader sets, is what makes the processor
+ * read it. No page of this port is writable and executable at once, and
+ * port_x86_64_paging_audit() reads the tables back at the boot and before
+ * every program runs to say so (ADR 0007, NX and W^X).
  */
 #include "port_x86_64.h"
 
@@ -40,7 +49,20 @@
  */
 #define PTE_COW 0x200u
 
+/*
+ * The no-execute bit, the highest of the entry. It only means anything when
+ * EFER.NXE is set, which the loader does before it turns paging on (see
+ * loader32.S); without it bit 63 is a reserved bit and a page fault. Every
+ * page that holds data, a stack, a page table or a device is marked with it,
+ * and only the text of the kernel and of a program is left executable
+ * (ADR 0007, NX and W^X).
+ */
+#define PTE_NX ((k_u64_t)1u << 63)
+
 #define PTE_ADDRESS 0x000FFFFFFFFFF000ull
+
+/* The 2 MiB a single PD entry covers, and the pages under a PTE table. */
+#define LARGE_PAGE_SIZE 0x200000u
 
 #define USER_PD_FIRST ((PORT_X86_64_USER_BASE >> 21) & (TABLE_ENTRIES - 1u))
 #define USER_PD_COUNT ((PORT_X86_64_USER_LIMIT - PORT_X86_64_USER_BASE) >> 21)
@@ -60,6 +82,25 @@
 static k_u64_t g_kernel_pml4[TABLE_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
 static k_u64_t g_kernel_pdpt[TABLE_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
 static k_u64_t g_kernel_pd[TABLE_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
+
+/*
+ * The pages of the kernel image are not uniform: the text is executable and
+ * read-only, the rodata is read-only and NX, and everything after it - data,
+ * bss, the stacks and the tables - is writable and NX. A 2 MiB page cannot
+ * carry three protections, so the chunks of the identity map that the image
+ * sits in are split into 4 KiB pages with a table of their own. The pool is
+ * in the image and sized for a kernel of 16 MiB, which is far more than the
+ * image of the port and still bounded.
+ */
+#define KERNEL_IMAGE_TABLES 8u
+static k_u64_t g_kernel_image_pt[KERNEL_IMAGE_TABLES][TABLE_ENTRIES]
+    __attribute__((aligned(PAGE_SIZE)));
+
+extern char __text_start[];
+extern char __text_end[];
+extern char __rodata_start[];
+extern char __rodata_end[];
+extern char __kernel_end[];
 
 static k_u8_t g_page_pool[PAGE_POOL_PAGES * PAGE_SIZE] __attribute__((aligned(PAGE_SIZE)));
 static k_u64_t g_page_bitmap[PAGE_POOL_WORDS];
@@ -232,6 +273,76 @@ static void invlpg(k_u64_t vaddr)
     __asm__ volatile("invlpg (%0)" : : "r"(vaddr) : "memory");
 }
 
+/*
+ * The protection of one 4 KiB page of the kernel image, by the section it is
+ * in. The text is readable and executable and never writable; the rodata is
+ * readable, not writable and not executable; everything else - data, bss, the
+ * stacks, the page tables and the heap - is writable and NX. A page that
+ * holds the tail of a section (and the padding after it) takes the protection
+ * of that section, which is why the linker separates the sections by whole
+ * pages.
+ */
+static k_u64_t kernel_page_flags(k_u64_t address)
+{
+    k_u64_t page_end = address + PAGE_SIZE;
+    k_u64_t text_start = (k_u64_t)(uintptr_t)__text_start;
+    k_u64_t text_end = (k_u64_t)(uintptr_t)__text_end;
+    k_u64_t rodata_start = (k_u64_t)(uintptr_t)__rodata_start;
+    k_u64_t rodata_end = (k_u64_t)(uintptr_t)__rodata_end;
+
+    if (address < text_end && page_end > text_start) {
+        return PTE_PRESENT;
+    }
+
+    if (address < rodata_end && page_end > rodata_start) {
+        return PTE_PRESENT | PTE_NX;
+    }
+
+    return PTE_PRESENT | PTE_WRITABLE | PTE_NX;
+}
+
+/*
+ * Give the chunks of the identity map that carry the kernel image a table of
+ * 4 KiB pages each, so that the text and the data of the same 2 MiB can have
+ * different protections. The rest of the first gigabyte keeps its 2 MiB
+ * pages, writable and NX: the VGA, the boot information, the heap and the
+ * arena of the programs are data and nothing jumps into them.
+ */
+static void kernel_image_map(void)
+{
+    k_u64_t image_start = (k_u64_t)(uintptr_t)__text_start & ~(k_u64_t)(LARGE_PAGE_SIZE - 1u);
+    k_u64_t image_end = ((k_u64_t)(uintptr_t)__kernel_end + LARGE_PAGE_SIZE - 1u) &
+                        ~(k_u64_t)(LARGE_PAGE_SIZE - 1u);
+    k_u64_t chunk;
+    k_u32_t table = 0;
+
+    for (chunk = image_start; chunk < image_end && table < KERNEL_IMAGE_TABLES;
+         chunk += LARGE_PAGE_SIZE) {
+        k_u32_t index;
+
+        for (index = 0; index < TABLE_ENTRIES; index++) {
+            k_u64_t address = chunk + ((k_u64_t)index << PAGE_SHIFT);
+
+            g_kernel_image_pt[table][index] = (address & PTE_ADDRESS) | kernel_page_flags(address);
+        }
+
+        g_kernel_pd[(chunk >> 21) & (TABLE_ENTRIES - 1u)] =
+            page_phys(g_kernel_image_pt[table]) | PTE_PRESENT | PTE_WRITABLE;
+        table++;
+    }
+
+    if (chunk < image_end) {
+        /* The pool is the bound of the map, and an image that has outgrown it
+         * would run with its text NX and stop at the first instruction. It is
+         * named on COM1 instead, before the console of the kernel exists. */
+        port_x86_64_panic("x86-64: the kernel image is too large for its page map\n");
+
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
+    }
+}
+
 void port_x86_64_paging_init(void)
 {
     k_u32_t index;
@@ -241,11 +352,15 @@ void port_x86_64_paging_init(void)
      * The identity map of the first gigabyte. The kernel image, the heap and
      * the physical arena of the programs are all inside it; a 2 MiB page has
      * no user bit, so ring 3 sees none of them even while its own CR3 is the
-     * one in the register.
+     * one in the register. Every one is NX until kernel_image_map() gives the
+     * text its own table: data is never code on this machine.
      */
     for (index = 0; index < TABLE_ENTRIES; index++) {
-        g_kernel_pd[index] = ((k_u64_t)index << 21) | PTE_PRESENT | PTE_WRITABLE | PTE_PAGE_SIZE;
+        g_kernel_pd[index] =
+            ((k_u64_t)index << 21) | PTE_PRESENT | PTE_WRITABLE | PTE_PAGE_SIZE | PTE_NX;
     }
+
+    kernel_image_map();
 
     g_kernel_pdpt[0] = page_phys(g_kernel_pd) | PTE_PRESENT | PTE_WRITABLE;
     g_kernel_pml4[0] = page_phys(g_kernel_pdpt) | PTE_PRESENT | PTE_WRITABLE;
@@ -321,7 +436,7 @@ k_u64_t port_x86_64_paging_space_create(void)
         if (index == 0) {
             low_pt[index] = 0;
         } else {
-            low_pt[index] = ((k_u64_t)index << PAGE_SHIFT) | PTE_PRESENT | PTE_WRITABLE;
+            low_pt[index] = ((k_u64_t)index << PAGE_SHIFT) | PTE_PRESENT | PTE_WRITABLE | PTE_NX;
         }
     }
 
@@ -419,15 +534,32 @@ k_u64_t port_x86_64_paging_space_clone(k_u64_t parent_cr3)
             address = (k_u64_t)PORT_X86_64_USER_BASE + ((k_u64_t)(USER_PD_FIRST + pd_index) << 21) +
                       ((k_u64_t)pt_index << PAGE_SHIFT);
 
+            /* The frame is shared by the two spaces, even when it is the text:
+             * the last space to leave it is the one that releases it. */
             frame_ref(entry & PTE_ADDRESS);
 
-            /* Both copies read the frame and neither may write it until the
-             * fault of the first write gives one of them a page of its own. */
-            child_pt[pt_index] = (entry & ~PTE_WRITABLE) | PTE_COW;
-            parent_pt[pt_index] = (entry & ~PTE_WRITABLE) | PTE_COW;
+            /*
+             * Only a page that was writable becomes copy-on-write. The text
+             * of a program is read-only before the fork, and a fork does not
+             * change that: clearing a bit it did not have and marking the
+             * page COW would turn the first write into a private writable
+             * copy, and a program could then rewrite its own code (the W^X
+             * rule of ADR 0007).
+             */
+            if ((entry & PTE_WRITABLE) != 0) {
+                /* The complement has to be 64 bits wide: a `~PTE_WRITABLE` of
+                 * the 32-bit constant is zero-extended and takes the NX bit
+                 * of the entry with it. */
+                k_u64_t shared = entry & ~(k_u64_t)PTE_WRITABLE;
 
-            /* The parent wrote through this entry before the fork. */
-            invlpg(address);
+                child_pt[pt_index] = shared | PTE_COW;
+                parent_pt[pt_index] = shared | PTE_COW;
+
+                /* The parent wrote through this entry before the fork. */
+                invlpg(address);
+            } else {
+                child_pt[pt_index] = entry;
+            }
         }
     }
 
@@ -486,9 +618,19 @@ void port_x86_64_paging_space_destroy(k_u64_t cr3)
     page_pool_free(pml4);
 }
 
-int port_x86_64_paging_map_user(k_u64_t cr3, k_u64_t vaddr, k_u64_t paddr, k_size_t len)
+int port_x86_64_paging_map_user(k_u64_t cr3, k_u64_t vaddr, k_u64_t paddr, k_size_t len,
+                                k_u32_t flags)
 {
     k_u64_t address;
+    k_u64_t entry_flags = PTE_PRESENT | PTE_USER;
+
+    if ((flags & PORT_X86_64_PAGE_WRITE) != 0) {
+        entry_flags |= PTE_WRITABLE;
+    }
+
+    if ((flags & PORT_X86_64_PAGE_EXEC) == 0) {
+        entry_flags |= PTE_NX;
+    }
 
     if (cr3 == 0 || (vaddr & (PAGE_SIZE - 1u)) != 0 || (paddr & (PAGE_SIZE - 1u)) != 0 ||
         (len & (PAGE_SIZE - 1u)) != 0) {
@@ -514,11 +656,69 @@ int port_x86_64_paging_map_user(k_u64_t cr3, k_u64_t vaddr, k_u64_t paddr, k_siz
             return -1;
         }
 
-        pt[pt_index] =
-            (physical_address & ~(k_u64_t)(PAGE_SIZE - 1u)) | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
+        pt[pt_index] = (physical_address & ~(k_u64_t)(PAGE_SIZE - 1u)) | entry_flags;
     }
 
     return 0;
+}
+
+/*
+ * A store of the kernel into a read-only page of a program. The kernel copies
+ * to the buffer of a call under the page tables of the caller, and a program
+ * that hands its own text as a buffer asks for a page that is code to take a
+ * write. The page cannot stay code and take the store at once: this space
+ * gets a private copy of it, writable and NX, which is the copy-on-write rule
+ * of a fork used for the other direction. The frame is copied and not
+ * changed in place, because a fork shares the code with the child and a write
+ * of one space must not rewrite the instructions of the other. The program
+ * meets the missing code on its way back to ring 3, where a fetch from it is
+ * a fault of the program and not of the machine. Returns 1 when the
+ * instruction that faulted may be retried.
+ */
+int port_x86_64_paging_allow_kernel_write(k_u64_t cr3, k_u64_t vaddr)
+{
+    k_u64_t pd_index;
+    k_u64_t pt_index;
+    k_u64_t *pt;
+    k_u64_t entry;
+    k_u64_t old_frame;
+    k_u64_t new_frame;
+
+    if (vaddr < PORT_X86_64_USER_BASE || vaddr >= PORT_X86_64_USER_LIMIT) {
+        return 0;
+    }
+
+    pd_index = (vaddr >> 21) & (TABLE_ENTRIES - 1u);
+    pt_index = (vaddr >> PAGE_SHIFT) & (TABLE_ENTRIES - 1u);
+    pt = space_pt(cr3, pd_index);
+
+    if (pt == NULL) {
+        return 0;
+    }
+
+    entry = pt[pt_index];
+
+    /* Only a page of the program that is there, open to ring 3 and not
+     * writable is this case; a kernel page of rodata is a bug of the kernel
+     * and the machine stops there, as it always did. */
+    if ((entry & (PTE_PRESENT | PTE_USER | PTE_WRITABLE)) != (PTE_PRESENT | PTE_USER)) {
+        return 0;
+    }
+
+    old_frame = entry & PTE_ADDRESS;
+    new_frame = port_x86_64_frame_alloc();
+    if (new_frame == 0) {
+        return 0;
+    }
+
+    memcpy((void *)(uintptr_t)new_frame, (const void *)(uintptr_t)old_frame, PAGE_SIZE);
+
+    pt[pt_index] = new_frame | PTE_PRESENT | PTE_WRITABLE | PTE_USER | PTE_NX;
+    invlpg(vaddr & ~(k_u64_t)(PAGE_SIZE - 1u));
+
+    port_x86_64_frame_release(old_frame);
+
+    return 1;
 }
 
 void *port_x86_64_paging_phys(k_u64_t cr3, k_u64_t vaddr)
@@ -589,12 +789,77 @@ int port_x86_64_paging_handle_cow(k_u64_t cr3, k_u64_t vaddr)
 
     memcpy((void *)(uintptr_t)new_frame, (const void *)(uintptr_t)old_frame, PAGE_SIZE);
 
-    pt[pt_index] = new_frame | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
+    /*
+     * The copy takes the protection of the page it replaces: a stack or a
+     * variable stays NX after the first write, and only a page that was
+     * executable before the fork could carry no NX bit. The private copy is
+     * writable now, which is the point of the fault.
+     */
+    pt[pt_index] = new_frame | (entry & PTE_NX) | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
     invlpg(vaddr & ~(k_u64_t)(PAGE_SIZE - 1u));
 
     port_x86_64_frame_release(old_frame);
 
     return 1;
+}
+
+/*
+ * Count the pages of one space that are both writable and executable. The
+ * machine's tables are built by this file, and the audit is the check that
+ * the protection the port promises is the protection the tables carry: the
+ * kernel calls it on its own map at the boot, and port_exec.c on the map of a
+ * program before the first instruction. Zero is the answer of a W^X map.
+ */
+k_u32_t port_x86_64_paging_audit(k_u64_t cr3)
+{
+    k_u64_t *pml4 = (k_u64_t *)(uintptr_t)cr3;
+    k_u64_t *pdpt;
+    k_u64_t *pd;
+    k_u32_t count = 0;
+    k_u32_t index;
+
+    if (pml4 == NULL || (pml4[0] & PTE_PRESENT) == 0) {
+        return 0;
+    }
+
+    pdpt = table_entry(pml4[0]);
+    if ((pdpt[0] & PTE_PRESENT) == 0) {
+        return 0;
+    }
+
+    pd = table_entry(pdpt[0]);
+
+    for (index = 0; index < TABLE_ENTRIES; index++) {
+        k_u64_t entry = pd[index];
+
+        if ((entry & PTE_PRESENT) == 0) {
+            continue;
+        }
+
+        if ((entry & PTE_PAGE_SIZE) != 0) {
+            if ((entry & PTE_WRITABLE) != 0 && (entry & PTE_NX) == 0) {
+                count++;
+            }
+
+            continue;
+        }
+
+        {
+            k_u64_t *pt = table_entry(entry);
+            k_u32_t page;
+
+            for (page = 0; page < TABLE_ENTRIES; page++) {
+                k_u64_t leaf = pt[page];
+
+                if ((leaf & PTE_PRESENT) != 0 && (leaf & PTE_WRITABLE) != 0 &&
+                    (leaf & PTE_NX) == 0) {
+                    count++;
+                }
+            }
+        }
+    }
+
+    return count;
 }
 
 void port_x86_64_paging_switch(k_u64_t cr3)

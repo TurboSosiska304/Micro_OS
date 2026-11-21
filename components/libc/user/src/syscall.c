@@ -1,25 +1,48 @@
 /*
- * Micro OS — the door of a program: `int $0x80`.
+ * Micro OS — the door of a program.
  *
- * The kernel has no function a program can call: the program was not compiled
- * into it, and the address of ksys_call() means nothing in ring 3. The one
- * door is the vector 128 of the table of the interrupts, and a call is the
- * number in RAX with the six arguments in RDI, RSI, RDX, R10, R8 and R9
- * (ADR 0006). RCX and R11 are not arguments because the instruction `syscall`
- * of a 64-bit machine keeps them for itself; the one convention serves both.
+ * On x86-64 the kernel has no function a program can call: the program was
+ * not compiled into it, and the address of ksys_call() means nothing in ring
+ * 3. The one door is the vector 128 of the table of the interrupts, and a
+ * call is the number in RAX with the six arguments in RDI, RSI, RDX, R10, R8
+ * and R9 (ADR 0006). RCX and R11 are not arguments because the instruction
+ * `syscall` of a 64-bit machine keeps them for itself; the one convention
+ * serves both.
  *
- * The register variables pin the arguments to those registers: a plain "r"
- * constraint would let the compiler choose, and the kernel reads the
- * registers of the convention and nothing else. The flags, the memory and the
- * two registers the processor keeps are clobbered because the handler and the
- * kernel behind it are free to change them.
+ * On the board (ADR 0018) there is no instruction of a system call a program
+ * may execute: the vector of ESP-IDF takes `syscall` before the port sees it.
+ * The door is the address of a function of the kernel with the shape of
+ * ksys_call(), handed to _start; the numbers and the arguments are the same.
+ *
+ * The register variables pin the arguments to the registers of x86-64: a
+ * plain "r" constraint would let the compiler choose, and the kernel reads
+ * the registers of the convention and nothing else. The flags, the memory and
+ * the two registers the processor keeps are clobbered because the handler and
+ * the kernel behind it are free to change them.
  */
 #include "ulibc.h"
 
 #include <stdint.h>
 
+#ifdef MOX_ARCH_XTENSA
+/* The pointer _start was entered with (src/start.c). */
+extern void *g_mox_door;
+#endif
+
 static long syscall6(long number, long a0, long a1, long a2, long a3, long a4, long a5)
 {
+#ifdef MOX_ARCH_XTENSA
+    /*
+     * The board has no instruction of a system call (ADR 0018 §3a): the port
+     * passes the address of its door to _start, and the door is an ordinary
+     * function of the kernel with the shape of ksys_call(). The numbers and
+     * the arguments are the same as on x86-64; only the crossing differs.
+     */
+    typedef long (*mox_door_fn)(long number, long a0, long a1, long a2, long a3, long a4, long a5);
+    mox_door_fn door = (mox_door_fn)g_mox_door;
+
+    return door(number, a0, a1, a2, a3, a4, a5);
+#else
     register long rax __asm__("rax") = number;
     register long rdi __asm__("rdi") = a0;
     register long rsi __asm__("rsi") = a1;
@@ -34,6 +57,7 @@ static long syscall6(long number, long a0, long a1, long a2, long a3, long a4, l
                      : "rcx", "r11", "cc", "memory");
 
     return rax;
+#endif /* MOX_ARCH_XTENSA */
 }
 
 /* The flags of the library to the flags of the call. The two sets are not the

@@ -7,13 +7,13 @@
 #include "kernel/exec.h"
 
 #include "kernel/config.h"
+#include "kernel/log.h"
 #include "kernel/port.h"
 
 #if KERNEL_EXEC
 
 /* A flag this generation does not know may change the meaning of the image. */
 #define K_EXEC_FLAGS_NONE 0u
-#define K_EXEC_RESERVED_NONE 0u
 
 /*
  * The environment of a program that was given none. The names are the ones
@@ -50,7 +50,7 @@ int k_exec_parse(const void *data, k_size_t size, struct k_exec_image *out)
     k_u32_t magic;
     k_u32_t version;
     k_u32_t flags;
-    k_u32_t reserved;
+    k_u32_t arch;
     k_u32_t entry;
     k_u32_t text_size;
     k_u32_t data_size;
@@ -69,13 +69,32 @@ int k_exec_parse(const void *data, k_size_t size, struct k_exec_image *out)
     text_size = exec_read_u32(data, 16);
     data_size = exec_read_u32(data, 20);
     bss_size = exec_read_u32(data, 24);
-    reserved = exec_read_u32(data, 28);
+    arch = exec_read_u32(data, 28);
 
-    if (magic != K_EXEC_MAGIC || version != K_EXEC_VERSION) {
+    if (magic != K_EXEC_MAGIC) {
         return -1;
     }
 
-    if (flags != K_EXEC_FLAGS_NONE || reserved != K_EXEC_RESERVED_NONE) {
+    /*
+     * A file that says MOX1 and another version is an image of a generation
+     * this kernel does not read: version 1 kept the machine of the image
+     * implicit, and a reader that guessed it would guess wrong. The line says
+     * which version the reader knows, so a person with an old image learns
+     * why and not only that the kernel said no.
+     */
+    if (version != K_EXEC_VERSION) {
+        kwarn("exec: the image is version %u, this kernel reads version %u", (unsigned)version,
+              (unsigned)K_EXEC_VERSION);
+        return -1;
+    }
+
+    if (flags != K_EXEC_FLAGS_NONE) {
+        return -1;
+    }
+
+    /* A number outside the two machines of the format is not an image this
+     * parser can describe: nothing says what its bytes mean. */
+    if (arch != K_EXEC_ARCH_X86_64 && arch != K_EXEC_ARCH_XTENSA) {
         return -1;
     }
 
@@ -114,6 +133,7 @@ int k_exec_parse(const void *data, k_size_t size, struct k_exec_image *out)
 
     out->data = data;
     out->size = size;
+    out->arch = arch;
     out->entry = (k_size_t)entry;
     out->text_size = (k_size_t)text_size;
     out->data_size = (k_size_t)data_size;
@@ -153,10 +173,24 @@ int k_exec_run(const struct k_exec_image *image, char *const argv[])
     k_u64_t entry_limit;
     k_u64_t start;
     k_u64_t end;
+    int port_arch;
     int rc;
 
     if (image == NULL || image->data == NULL || image->text_size == 0) {
-        return -1;
+        return K_EXEC_RUN_REFUSED;
+    }
+
+    /*
+     * The image names the machine its bytes are code for, and the port names
+     * the machine it is. The two are compared before the machine is asked
+     * whether it can run anything at all: a file of another machine is not a
+     * program of this one whatever this one is able to do, and the answer is
+     * ENOEXEC at the edge rather than ENOSYS. A port with no machine to name
+     * (-1) has nothing to compare; its answer is the NO_MACHINE below.
+     */
+    port_arch = k_port_exec_arch();
+    if (port_arch >= 0 && (k_u32_t)port_arch != image->arch) {
+        return K_EXEC_RUN_OTHER_ARCH;
     }
 
     /*
@@ -165,12 +199,12 @@ int k_exec_run(const struct k_exec_image *image, char *const argv[])
      * the word the syscall layer turns into ENOSYS.
      */
     if (!k_port_exec_supported()) {
-        return -2;
+        return K_EXEC_RUN_NO_MACHINE;
     }
 
     base = k_port_exec_base();
     if (base == NULL) {
-        return -2;
+        return K_EXEC_RUN_NO_MACHINE;
     }
 
     /*
@@ -181,11 +215,11 @@ int k_exec_run(const struct k_exec_image *image, char *const argv[])
      */
     entry_limit = (k_u64_t)K_EXEC_HEADER_SIZE + image->text_size;
     if ((k_u64_t)image->entry < K_EXEC_HEADER_SIZE || (k_u64_t)image->entry >= entry_limit) {
-        return -1;
+        return K_EXEC_RUN_REFUSED;
     }
 
     if (image->bss_size > K_EXEC_BSS_MAX) {
-        return -1;
+        return K_EXEC_RUN_REFUSED;
     }
 
     start = (k_u64_t)(uintptr_t)base;
@@ -193,13 +227,13 @@ int k_exec_run(const struct k_exec_image *image, char *const argv[])
 
     /* A window at the zero page is not a window, and a wrapped sum is not a fit. */
     if (start == 0 || end <= start) {
-        return -1;
+        return K_EXEC_RUN_REFUSED;
     }
 
     /*
      * A program that never returns never gets here. A program that returns
      * ends the call with the status the port reported (k_exec_exit, 0 when it
-     * reported nothing), and a port that refuses the image answers -1.
+     * reported nothing), and a port that refuses the image answers REFUSED.
      *
      * The status is cleared first: a port that comes back without reporting
      * one must not hand out the code of the program that ran before it.
@@ -218,7 +252,7 @@ int k_exec_run(const struct k_exec_image *image, char *const argv[])
     g_exec_exit_code = 0;
     rc = k_port_exec_enter(image, argv);
 
-    return (rc == 0) ? g_exec_exit_code : -1;
+    return (rc == 0) ? g_exec_exit_code : K_EXEC_RUN_REFUSED;
 }
 
 #endif /* KERNEL_EXEC */

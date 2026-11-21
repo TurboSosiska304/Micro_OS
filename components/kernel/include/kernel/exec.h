@@ -10,17 +10,25 @@
  * The header is little endian and every field is a k_u32_t:
  *
  *    0  magic      the bytes 'M', 'O', 'X', '1'
- *    4  version    1
+ *    4  version    2
  *    8  flags      0, a flag this kernel does not know is a refusal
  *   12  entry      offset of the first instruction from the start of the image
  *   16  text_size  bytes of code
  *   20  data_size  bytes of initialised data
  *   24  bss_size   bytes of zeroed data, cleared by the port before the entry
- *   28  reserved   0
+ *   28  arch       the machine the bytes are code for: 0 x86-64, 1 Xtensa
  *   32  ...        the code, then the data
  *
  * The sizes do not count the header, and they are multiples of four. An image
  * may carry padding after the data; the parse ignores it.
+ *
+ * Version 2 is version 1 with the machine in the last field, which version 1
+ * kept reserved and zero. The bytes of one machine are not the bytes of
+ * another - an x86-64 image is not Xtensa code - so the machine travels in
+ * the file and the kernel refuses a program of the other one before a byte of
+ * it runs (ADR 0018). The header of version 1 is not read: a kernel that
+ * guessed which machine an old image was for would guess wrong, so the
+ * parser asks for the version it knows and says which one that is.
  */
 #ifndef MICRO_OS_KERNEL_EXEC_H
 #define MICRO_OS_KERNEL_EXEC_H
@@ -29,8 +37,18 @@
 
 /* The magic as the four bytes of the file read as a little-endian word. */
 #define K_EXEC_MAGIC 0x31584F4Du
-#define K_EXEC_VERSION 1u
+#define K_EXEC_VERSION 2u
 #define K_EXEC_HEADER_SIZE 32u
+
+/*
+ * The machine of an image, the number of the field `arch`. The list is the
+ * list of the ports that run programs: x86-64 (the port of QEMU) and Xtensa
+ * (the board). A number outside the two is not a machine this format knows,
+ * and the parser refuses it instead of carrying it to a port that would have
+ * to guess.
+ */
+#define K_EXEC_ARCH_X86_64 0u
+#define K_EXEC_ARCH_XTENSA 1u
 
 /*
  * The zeroed part is not in the file, so nothing limits it but the memory of
@@ -55,6 +73,8 @@
 struct k_exec_image {
     const void *data;
     k_size_t size;
+    /* The machine of the header: K_EXEC_ARCH_X86_64 or K_EXEC_ARCH_XTENSA. */
+    k_u32_t arch;
     k_size_t entry;
     k_size_t text_size;
     k_size_t data_size;
@@ -64,10 +84,11 @@ struct k_exec_image {
 
 /*
  * Check the header of a file and fill `out`. Returns 0 when the image is
- * consistent, -1 when it is not: a wrong magic or version, sizes that do not
- * fit the file, an entry outside the text, an unaligned size, an unknown flag
- * or a bss that is too large. `out` is written only on success; the bytes of
- * the image are never modified.
+ * consistent, -1 when it is not: a wrong magic, a version this kernel does
+ * not read (anything but 2), an arch that is not a machine of the format,
+ * sizes that do not fit the file, an entry outside the text, an unaligned
+ * size, an unknown flag or a bss that is too large. `out` is written only on
+ * success; the bytes of the image are never modified.
  *
  * This call checks the image against itself, not against the machine: whether
  * the image fits where the port puts a program is the business of k_exec_run.
@@ -75,15 +96,32 @@ struct k_exec_image {
 int k_exec_parse(const void *data, k_size_t size, struct k_exec_image *out);
 
 /*
+ * The answers of k_exec_run() that are not the status of a program. They are
+ * numbers of the call and not of the system: kernel/ksys.c is the one place
+ * that turns them into the errors a program sees (ENOEXEC, ENOSYS, ENOMEM).
+ */
+#define K_EXEC_RUN_REFUSED (-1)    /* the machine refused the image */
+#define K_EXEC_RUN_NO_MACHINE (-2) /* the machine cannot run a program at all */
+#define K_EXEC_RUN_OTHER_ARCH (-3) /* the image is code for another machine */
+
+/*
  * Hand a parsed image to the port that runs it. A port that enters a program
- * that never comes back does not return at all, so there are two failures and
- * one success: -1 when the machine refused the image (it does not fit the
- * window of the port, or the port could not copy it), -2 when the machine
- * cannot run a program at all - the kernel turns that into ENOSYS - and a
- * number from 0 to 255 when the program returned. That number is the status
- * the program ended with, the low byte of what it left in the register of the
- * result, and it is not an error: a program that finishes has to be noticed
- * on a machine whose execve has no process to exit into.
+ * that never comes back does not return at all, so there are three failures
+ * and one success: K_EXEC_RUN_REFUSED when the machine refused the image (it
+ * does not fit the window of the port, or the port could not copy it),
+ * K_EXEC_RUN_NO_MACHINE when the machine cannot run a program at all - the
+ * kernel turns that into ENOSYS - K_EXEC_RUN_OTHER_ARCH when the image names
+ * a machine this port is not - the kernel turns that into ENOEXEC, and no
+ * byte of the image is touched - and a number from 0 to 255 when the program
+ * returned. That number is the status the program ended with, the low byte of
+ * what it left in the register of the result, and it is not an error: a
+ * program that finishes has to be noticed on a machine whose execve has no
+ * process to exit into.
+ *
+ * The machine of the image is `image->arch`, and the machine of the port is
+ * k_port_exec_arch(): a port that names itself (0 or 1) runs only the images
+ * of that number, and a port with no machine to name (-1) has nothing to
+ * compare and answers NO_MACHINE for every image.
  *
  * `argv` is the vector the program starts with, its pointers into memory the
  * caller keeps for as long as the program runs; NULL is a program with no

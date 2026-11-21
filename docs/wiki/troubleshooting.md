@@ -59,19 +59,19 @@ the tools. A row names the sentence you see, the cause and the move.
 |---|---|---|
 | `fsck: no volume is mounted` | `/` is not MicroFS right now | `mkfs -y` formats and mounts; check `MICROOS_VOLUME` |
 | `fsck` reports problems | a volume written by a crash | it only reports; copy what you can, then `mkfs -y` |
-| `fsck fat /mnt/sd` reports problems | a FAT volume a crash left inconsistent | it only reports: copy the files off the volume, then let the system that made it repair it |
+| `fsck fat /mnt/sd` reports problems | a FAT volume a crash left inconsistent | copy what you can first, then `fsck fat /mnt/sd -y` repairs the safe damage; the boot sector, two table copies that differ and a directory whose head is shared stay `(not repaired)` for a person |
 | `stat` prints `mode: (not set)` | `/proc`, `/dev`, or an old volume | expected: those records keep no modes |
 | `chmod 000` is refused | zero means "the modes predate the record" | choose another mode; a real zero needs a format change |
 | "not permitted" for a file you own | uid 0 gets no exemption of root | `chmod` the triad you need, for example `0644` |
 | `rm` of a directory fails | `rm` removes files, there is no `-r` | remove the children first |
 | a file of `/etc` returns after `mkfs -y` | the store restored it | expected; change it, then `config sync` |
-| writes vanish after an x86-64 reset | no disk was attached (`ram0`) | `make x86-run-disk` |
+| writes vanish after an x86-64 reset | the boot ran on the image of the build (`make x86-run`), or no disk was attached (`ram0`) | `make x86-run-disk` keeps `build-x86/disk.img` between runs |
 
 ## Programs
 
 | Symptom | Cause | What to do |
 |---|---|---|
-| `exec: hello: not found in /bin:/usr/bin` | there is no `/bin` here | x86-64 writes `/bin/hello`; `path` shows the search list |
+| `exec: hello: not found in /bin:/usr/bin` | there is no `/bin` here | x86-64 has `/bin` in the disk image: `make x86-disk` builds it; `path` shows the search list |
 | `this machine cannot run a program` | `execve` is `ENOSYS` on this port | expected on the board and in the simulator |
 | `not permitted: the file has no execute bit` | the mode has no `x` for the caller | `chmod 0755 <path>` |
 | `not a MOX1 image of this system` | the file is not an image, or the header is wrong | build it with `mkprog.sh`, for the window of the port |

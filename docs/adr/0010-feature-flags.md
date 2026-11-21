@@ -46,8 +46,9 @@ Kernel:
 * `KERNEL_PSRAM` - the PSRAM pool of `kmm`, the statistics and the `psram`
   line of `free` (default 1; off on x86-64 and on the null port);
 * `KERNEL_EXEC` - the MOX1 parser, `k_exec_run`, the `execve` path and the
-  `exec` command (default 1; off on the board, where `k_port_exec_supported()`
-  is false anyway, and on the host, which cannot enter a program).
+  `exec` command (default 1; every build compiles it, and a machine that
+  cannot enter a program answers `ENOSYS` from `k_port_exec_supported()` -
+  the board entered the group with ADR 0018).
 
 Network (component `net` and the components beside it):
 
@@ -63,7 +64,8 @@ Filesystems (the flags of ADR 0009):
 
 * `MICRO_OS_FS_MFS` - MicroFS, the root of every machine (default 1);
 * `MICRO_OS_FS_FAT32` - FAT12/16/32, read and written (default 0);
-* `MICRO_OS_FS_EXT2` - the second POSIX filesystem (default 0).
+* `MICRO_OS_FS_EXT2` - ext2, read-only, the first reader with inodes
+  (default 1 on the host; 0 elsewhere).
 
 Drivers keep their own Kconfig switches (`MICRO_OS_MIC` is the first); the
 same rule applies to them.
@@ -73,7 +75,7 @@ same rule applies to them.
 | Flag | host | ESP32 | x86-64 | null |
 |---|---|---|---|---|
 | `KERNEL_PSRAM` | 1 | 1 | **0** | 0 |
-| `KERNEL_EXEC` | 1 | 0 | 1 | 1 |
+| `KERNEL_EXEC` | 1 | 1 | 1 | 1 |
 | `MICRO_OS_NET` | 1 | 1 | 0 | 0 |
 | `MICRO_OS_NET_HTTP` | 1 | 1 | 0 | 0 |
 | `MICRO_OS_NET_HTTP_SERVER` | 1 | 0 | 0 | 0 |
@@ -92,6 +94,15 @@ it ships today, with MQTT off until a build asks for it and the page of the
 state off because it is a command a person starts. A release that wants MQTT
 adds `CONFIG_MICRO_OS_NET_MQTT=y` to `sdkconfig.defaults`; a minimal board
 turns the rest off the same way.
+
+The ext2 reader is the one filesystem whose host default is ON and whose
+sources are compiled by the tests even when `make test-minimal` turns the
+flag off: `components/fs_ext2` is linked as a library by `make test`, and
+the three files are compiled into the test binary by the minimal
+configuration, so no path of the reader is ever left uncompiled (ADR 0019).
+On the board and on x86-64 the flag is off, because no image mounts an ext2
+volume at the boot; an image that wants one turns it on and registers the
+type itself.
 
 ### 4. How a disabled feature behaves
 

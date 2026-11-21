@@ -23,12 +23,21 @@ set(KSHELL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/kshell")
 set(LIBC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/libc")
 set(MFS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/mfs")
 set(FAT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/fs_fat32")
+set(EXT2_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/fs_ext2")
+set(PROCFS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/procfs")
+set(DEVFS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/devfs")
 
 # The second filesystem of the machine (ADR 0009). Off by default: the
 # disk of `make x86-smoke` is one MicroFS volume, and a reader that no call
 # of the boot asks for is an object file of no use. A machine with a FAT
 # partition turns it on and mounts the partition with vfs_mount_type().
 option(MICRO_OS_FS_FAT32 "FAT12/16/32, read and written" OFF)
+
+# The ext2 reader of the machine (ADR 0019). Off by default for the same
+# reason: the disk of the smoke tests is one MicroFS volume. A machine with
+# an ext2 partition turns it on and mounts the partition with the type the
+# boot registers.
+option(MICRO_OS_FS_EXT2 "ext2, read-only" OFF)
 
 # The optional features of the image (ADR 0010): the PSRAM pool of the
 # allocator is off, the MOX1 runtime is on (the port can enter a program), and
@@ -126,6 +135,24 @@ if(MICRO_OS_FS_FAT32)
     )
 endif()
 
+set(EXT2_SOURCES)
+if(MICRO_OS_FS_EXT2)
+    set(EXT2_SOURCES
+        "${EXT2_DIR}/src/ext2_core.c"
+        "${EXT2_DIR}/src/ext2_dir.c"
+        "${EXT2_DIR}/src/ext2_vfs.c"
+    )
+endif()
+
+# The two virtual filesystems of the tree: the information about the system
+# (/proc) and the devices (/dev). The board and the simulator mount them at
+# the boot; the x86-64 machine does the same, so the tree of the three is the
+# same tree and the shell of this port has the files the wiki shows.
+set(VIRTUAL_SOURCES
+    "${PROCFS_DIR}/src/procfs.c"
+    "${DEVFS_DIR}/src/devfs.c"
+)
+
 # The services over the sockets: the HTTP client, the page of the state and
 # the clock of NTP. They are portable and speak kernel/net.h, so the same
 # sources that run on the board run here over the stack of the port. The
@@ -167,6 +194,12 @@ set_source_files_properties("${KSHELL_DIR}/src/kshell_memtest.c"
 # which refuses an image linked for another window: a program linked for the
 # wrong address would still run, and every absolute address it computes for
 # its data would name something else.
+#
+# The machine of the image is named as well: --arch x86-64 is the number the
+# kernel compares with k_port_exec_arch() before it enters a byte, so that the
+# image of this window is never mistaken for the code of another machine
+# (ADR 0018). The default of mkprog.sh is the same number; the flag is written
+# out so that a port that builds for two machines says which one this is.
 set(PROGRAM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/programs")
 set(PROGRAM_BASE 0x02000000)
 set(MKPROG "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/mkprog.sh")
@@ -200,12 +233,14 @@ set(PROGRAM_CFLAGS
 )
 
 # Every program of the port is built the same way: compile the C file for the
-# window, link it with the script of the format, turn the sections into a MOX1
-# image and embed the image in the kernel as a blob. The name of the function
-# is the name of the file in /bin and the symbol of the entry is given here.
+# window, link it with the script of the format, and turn the sections into a
+# MOX1 image. The image is a file of the build, and `make x86-disk` writes it
+# into the MicroFS volume of the disk: the kernel has no blob of a program in
+# it any more. The name of the function is the name of the file in /bin and
+# the symbol of the entry is given here.
+set(PROGRAM_IMAGES)
 function(add_program_image name entry)
     set(image "${CMAKE_BINARY_DIR}/${name}.mox")
-    set(object "${CMAKE_BINARY_DIR}/${name}_mox.o")
 
     add_custom_command(
         OUTPUT "${image}"
@@ -214,7 +249,8 @@ function(add_program_image name entry)
         COMMAND ${CMAKE_C_COMPILER} -nostdlib -static -no-pie -Wl,--build-id=none
                 -Wl,-e,${entry}
                 -T "${PROGRAM_DIR}/program.ld" -o ${name}.elf ${name}.o
-        COMMAND sh "${MKPROG}" --base ${PROGRAM_BASE} ${name}.elf ${name}.mox ${entry}
+        COMMAND sh "${MKPROG}" --base ${PROGRAM_BASE} --arch x86-64
+                ${name}.elf ${name}.mox ${entry}
         WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
         DEPENDS "${PROGRAM_DIR}/${name}.c" "${PROGRAM_DIR}/prog.h"
                 "${PROGRAM_DIR}/program.ld" "${KERNEL_DIR}/include/kernel/ksys.h" "${MKPROG}"
@@ -222,26 +258,7 @@ function(add_program_image name entry)
         VERBATIM
     )
 
-    # The blob goes to .rodata, which the linker script of the port keeps in
-    # the image that the loader copies; objcopy names its symbols after the
-    # file: _binary_<name>_mox_start and _end.
-    add_custom_command(
-        OUTPUT "${object}"
-        COMMAND objcopy -I binary -O elf64-x86-64
-                --rename-section .data=.rodata,alloc,load,readonly,data,contents
-                ${name}.mox ${name}_mox.o
-        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-        DEPENDS "${image}"
-        COMMENT "embedding the image of /bin/${name}"
-        VERBATIM
-    )
-
-    set_source_files_properties("${object}" PROPERTIES
-        GENERATED TRUE
-        EXTERNAL_OBJECT TRUE
-    )
-
-    set(${name}_OBJECT "${object}" PARENT_SCOPE)
+    set(PROGRAM_IMAGES ${PROGRAM_IMAGES} "${image}" PARENT_SCOPE)
 endfunction()
 
 add_program_image(hello hello_main)
@@ -249,6 +266,7 @@ add_program_image(crash crash_main)
 add_program_image(fork fork_main)
 add_program_image(badptr badptr_main)
 add_program_image(signals signals_main)
+add_program_image(nx nx_main)
 
 # A program that uses the library of a program: the runtime sources are
 # compiled for the window together with the file of the program, linked with
@@ -256,7 +274,6 @@ add_program_image(signals signals_main)
 # function of the program, not the place the port enters (ADR 0016).
 function(add_libc_program name)
     set(image "${CMAKE_BINARY_DIR}/${name}.mox")
-    set(object "${CMAKE_BINARY_DIR}/${name}_mox.o")
     set(objects
         "${name}_start.o"
         "${name}_syscall.o"
@@ -280,7 +297,8 @@ function(add_libc_program name)
         COMMAND ${CMAKE_C_COMPILER} -nostdlib -static -no-pie -Wl,--build-id=none
                 -Wl,-e,_start
                 -T "${PROGRAM_DIR}/program.ld" -o ${name}.elf ${objects}
-        COMMAND sh "${MKPROG}" --base ${PROGRAM_BASE} ${name}.elf ${name}.mox _start
+        COMMAND sh "${MKPROG}" --base ${PROGRAM_BASE} --arch x86-64
+                ${name}.elf ${name}.mox _start
         WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
         DEPENDS "${PROGRAM_DIR}/${name}.c" "${PROGRAM_DIR}/program.ld"
                 "${KERNEL_DIR}/include/kernel/ksys.h" "${MKPROG}"
@@ -289,23 +307,7 @@ function(add_libc_program name)
         VERBATIM
     )
 
-    add_custom_command(
-        OUTPUT "${object}"
-        COMMAND objcopy -I binary -O elf64-x86-64
-                --rename-section .data=.rodata,alloc,load,readonly,data,contents
-                ${name}.mox ${name}_mox.o
-        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-        DEPENDS "${image}"
-        COMMENT "embedding the image of /bin/${name}"
-        VERBATIM
-    )
-
-    set_source_files_properties("${object}" PROPERTIES
-        GENERATED TRUE
-        EXTERNAL_OBJECT TRUE
-    )
-
-    set(${name}_OBJECT "${object}" PARENT_SCOPE)
+    set(PROGRAM_IMAGES ${PROGRAM_IMAGES} "${image}" PARENT_SCOPE)
 endfunction()
 
 add_libc_program(cat)
@@ -325,6 +327,8 @@ add_executable(microos64
     ${LIBC_SOURCES}
     ${MFS_SOURCES}
     ${FAT_SOURCES}
+    ${EXT2_SOURCES}
+    ${VIRTUAL_SOURCES}
     ${NET_SOURCES}
     src/boot64.S
     src/kmain.c
@@ -343,21 +347,6 @@ add_executable(microos64
     src/libc_shim.c
     src/interrupts.S
     src/switch.S
-    "${hello_OBJECT}"
-    "${crash_OBJECT}"
-    "${fork_OBJECT}"
-    "${badptr_OBJECT}"
-    "${signals_OBJECT}"
-    "${cat_OBJECT}"
-    "${echo_OBJECT}"
-    "${grep_OBJECT}"
-    "${head_OBJECT}"
-    "${ls_OBJECT}"
-    "${mkdir_OBJECT}"
-    "${pwd_OBJECT}"
-    "${rm_OBJECT}"
-    "${spawn_OBJECT}"
-    "${wc_OBJECT}"
 )
 
 target_include_directories(microos64 PRIVATE
@@ -366,6 +355,9 @@ target_include_directories(microos64 PRIVATE
     "${LIBC_DIR}/include"
     "${MFS_DIR}/include"
     "${FAT_DIR}/include"
+    "${EXT2_DIR}/include"
+    "${PROCFS_DIR}/include"
+    "${DEVFS_DIR}/include"
     "${NET_DIR}/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
@@ -386,6 +378,10 @@ target_compile_definitions(microos64 PRIVATE
 
 if(MICRO_OS_FS_FAT32)
     target_compile_definitions(microos64 PRIVATE MICRO_OS_FS_FAT32=1)
+endif()
+
+if(MICRO_OS_FS_EXT2)
+    target_compile_definitions(microos64 PRIVATE MICRO_OS_FS_EXT2=1)
 endif()
 
 set_target_properties(microos64 PROPERTIES
@@ -421,5 +417,6 @@ add_custom_command(
 
 add_custom_target(image
     DEPENDS "${CMAKE_BINARY_DIR}/microos64.bin" "${CMAKE_BINARY_DIR}/loader32.elf"
-    COMMENT "the image of the port: loader32.elf + microos64.bin"
+            ${PROGRAM_IMAGES}
+    COMMENT "the image of the port: loader32.elf + microos64.bin + the programs of /bin"
 )

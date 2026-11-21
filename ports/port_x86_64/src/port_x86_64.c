@@ -516,6 +516,19 @@ int port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs
         if (port_x86_64_paging_handle_cow(port_x86_64_current_cr3(), address)) {
             return 1;
         }
+
+        /*
+         * A store of the kernel into the text of a program is not a copy of a
+         * page a fork shared, but it is the same answer: this space gets a
+         * private copy of the page as data, and the instruction is run again.
+         * A store of ring 3 into a read-only page never comes here - its
+         * error code says user (bit 2) - and is the fault of the program it
+         * always was.
+         */
+        if ((error & 0x4u) == 0u &&
+            port_x86_64_paging_allow_kernel_write(port_x86_64_current_cr3(), address)) {
+            return 1;
+        }
     }
 
     /*
@@ -532,7 +545,7 @@ int port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs
             __asm__ volatile("movq %%cr2, %0" : "=r"(address));
         }
 
-        port_x86_64_program_fault(vector, address);
+        port_x86_64_program_fault(vector, error, address, rip);
     }
 
     com1_puts("\nx86-64: exception ");
@@ -1061,7 +1074,7 @@ const char *k_port_arch(void)
 }
 
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 7u
+#define PORT_API_MINOR 8u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_x86_64 does not speak the contract of this kernel");

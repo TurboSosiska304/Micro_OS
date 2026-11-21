@@ -28,6 +28,9 @@
 #define KERR_INTR (-4)   /* interrupted by a signal */
 #define KERR_IO (-5)     /* input/output error */
 #define KERR_TOOBIG (-7) /* argument list too long */
+/* The file is an executable only in name: not an image of this system, or an
+ * image of another machine (the arch of the header, ADR 0018). */
+#define KERR_NOEXEC (-8) /* exec format error */
 #define KERR_BADF (-9)   /* bad file descriptor */
 #define KERR_CHILD (-10) /* no child processes */
 #define KERR_AGAIN (-11) /* try again later */

@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
 """Micro OS — the smoke test of the disk of the x86-64 port.
 
-The other smoke test of this machine (`x86_smoke.py`) boots a kernel whose
-filesystem lives in the memory of the port: it is gone when the machine is
-switched off. This one gives QEMU a raw image on the primary IDE channel and
-checks the thing that no line of a boot can prove: a file written by one boot
-is read by the next one, out of the same 8 MB of the image.
+The other smoke test of this machine (`x86_smoke.py`) boots on a copy of the
+image `make x86-disk` builds: a volume of MicroFS with /bin and /etc in it.
+This one checks the thing that no line of a boot can prove: a file written by
+one boot is read by the next one, out of the same 8 MB of the image, and the
+programs of /bin are still there and still run.
 
     python3 tools/x86_disk_smoke.py [--image PATH] [--timeout SECONDS]
                                     [--repeat N] [--keep] [--verbose]
 
-The image is made before the run (the MBR of one partition, the partition
-itself blank, the way a formatter of a flash leaves it) and removed after it,
-unless --keep says otherwise. `--mkimage PATH` only writes the image, which is
-what `make x86-run-disk` calls when there is no disk yet.
+The image is a copy of the one build-x86/programs.img (`make x86-disk`) and
+removed after the run, unless --keep says otherwise. `--mkimage PATH` only
+writes the copy and stops.
 
 Two boots of the same machine, the same image:
 
-  1. the boot finds "ata0", reads the MBR, registers "ata0p1" and formats the
-     blank partition, because a volume that has never been written is what a
-     filesystem makes; the shell writes /persist.txt to it;
-  2. the machine starts again on the same file, mounts the volume it finds
-     and the shell reads the file back. The line of /persist.txt below was
-     written in the first boot and exists nowhere else.
+  1. the boot finds "ata0", reads the MBR, registers "ata0p1", mounts the
+     volume the tool built and runs /bin/hello from it; the shell lists /bin,
+     runs the program itself and writes /persist.txt to the volume;
+  2. the machine starts again on the same file, mounts the volume it finds,
+     and the shell reads the file back and runs a program of /bin again. The
+     line of /persist.txt below was written in the first boot and exists
+     nowhere else; /bin is the tree the tool wrote and no boot installs it.
 
-`--repeat N` does the whole pair N times on an image made again each time: a
+`--repeat N` does the whole pair N times on a copy made again each time: a
 driver of a disk is only as good as its worst boot, and one pass of a test
 that flaked once says nothing.
 
@@ -38,15 +38,15 @@ import argparse
 import os
 import re
 import select
+import shutil
 import subprocess
 import sys
 import time
 
-# The size of the image, and where its only partition starts: the 1 MiB that
-# every tool of every system leaves before the first partition.
-IMAGE_MB = 8
-SECTOR = 512
-PARTITION_START = 2048
+# The image of the build, and the image of this run: the test works on a
+# copy, so a failed boot never leaves a half-written disk for the next one.
+BASE_IMAGE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "build-x86", "programs.img")
 
 PROMPT = "microos> "
 
@@ -55,13 +55,21 @@ MESSAGE = "the disk remembers"
 
 FIRST_BOOT = [
     "df",
+    "ls /bin",
+    "exec /bin/hello",
     f"write /persist.txt {MESSAGE}",
     "ls /",
     "cat /persist.txt",
 ]
 
 SECOND_BOOT = [
-    "ls /",
+    "ls /bin",
+    "exec /bin/hello",
+    "cat /etc/setting",
+    "tree /",
+    "ls /proc",
+    "cat /proc/version",
+    "ls /dev",
     "cat /persist.txt",
     "fsck",
 ]
@@ -71,30 +79,19 @@ BUILD = os.path.join(ROOT, "build-x86")
 DEFAULT_IMAGE = os.path.join(BUILD, "disk-smoke.img")
 
 
-def make_image(path: str, size_mb: int = IMAGE_MB) -> None:
-    """Write the image: a blank medium with the MBR of one partition.
+def make_image(path: str, base: str = BASE_IMAGE) -> None:
+    """Seed the image of the run with the tree of the build.
 
-    The blocks of the partition are 0xFF, the state of an erased flash, so
-    that the filesystem of the first boot recognises a volume that was never
-    written and formats it. The MBR itself is what a tool writes: zeros outside
-    the entries, the type 0x83 of a Linux partition and the signature.
+    The bytes of the volume are the tool's (tools/mkfs_mfs.c): this file does
+    not write a partition table or a MicroFS record, it copies what the build
+    made. A machine that starts without that copy has no /bin, which is the
+    state the port is in when QEMU was given no disk.
     """
-    sectors = size_mb * 1024 * 1024 // SECTOR
-    blank = b"\xff" * (1024 * 1024)
+    if not os.path.isfile(base):
+        raise FileNotFoundError(f"missing {base}: run make x86-disk")
 
-    with open(path, "wb") as image:
-        for _ in range(size_mb):
-            image.write(blank)
-
-        table = bytearray(SECTOR)
-        table[446 + 4] = 0x83
-        table[446 + 8 : 446 + 12] = PARTITION_START.to_bytes(4, "little")
-        table[446 + 12 : 446 + 16] = (sectors - PARTITION_START).to_bytes(4, "little")
-        table[510] = 0x55
-        table[511] = 0xAA
-
-        image.seek(0)
-        image.write(table)
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    shutil.copyfile(base, path)
 
 
 def run_machine(image: str, commands: list, timeout: float) -> str:
@@ -209,24 +206,41 @@ def check(first: str, second: str) -> list:
         f"the machine wrote {len(first)} byte(s) and stopped",
     )
 
-    # --- the first boot: a blank partition, formatted, and a file in it
+    # --- the first boot: a volume of the build, its programs, and a file in it
     expect(
-        "the blank partition is formatted at the first boot",
-        "the volume of 'ata0p1' is not formatted yet" in first,
+        "the volume that came with the image is not formatted again",
+        "is not formatted yet" not in first,
+        "the boot formatted the volume of the tool",
     )
 
     first_answers = answers(first, FIRST_BOOT)
     expect("every command of the first boot is answered", all(first_answers), "a command got no answer")
     expect(
-        "the shell writes the file",
-        "write:" not in first_answers[1],
+        "the programs came with the image",
+        "hello" in first_answers[1] and "cat" in first_answers[1],
         first_answers[1],
     )
-    expect("the file is in the tree", "persist.txt" in first_answers[2], first_answers[2])
+    expect(
+        "a program of the disk runs at the first boot",
+        "PROGRAM: hello from /bin" in first_answers[2]
+        and "the program exited with 0" in first_answers[2],
+        first_answers[2],
+    )
+    expect(
+        "the shell writes the file",
+        "write:" not in first_answers[3],
+        first_answers[3],
+    )
+    expect(
+        "the tree of the machine is the tree of every port",
+        all(name in first_answers[4] for name in ("bin/", "etc/", "proc/", "dev/"))
+        and "persist.txt" in first_answers[4],
+        first_answers[4],
+    )
     expect(
         "the file is read back at the first boot",
-        MESSAGE in first_answers[3],
-        first_answers[3],
+        MESSAGE in first_answers[5],
+        first_answers[5],
     )
 
     # --- the second boot: the same image, the same machine
@@ -244,23 +258,58 @@ def check(first: str, second: str) -> list:
         "is not formatted yet" not in second,
         "the filesystem of the first boot did not survive",
     )
+    # The files of /bin were written by the tool, not by a boot: a line that
+    # installs a program is the thing this milestone removed.
     expect(
-        "the program of /bin is written again",
-        "x86-64: /bin/hello is written" in second,
+        "no boot installs a program",
+        "x86-64: /bin/hello is written" not in first
+        and "x86-64: /bin/hello is written" not in second,
     )
 
     second_answers = answers(second, SECOND_BOOT)
     expect("every command of the second boot is answered", all(second_answers), "")
-    expect("the file survived the reset", "persist.txt" in second_answers[0], second_answers[0])
+    expect(
+        "the programs are still on the disk",
+        "hello" in second_answers[0] and "wc" in second_answers[0],
+        second_answers[0],
+    )
+    expect(
+        "a program of the disk runs after the reset",
+        "PROGRAM: hello from /bin" in second_answers[1]
+        and "the program exited with 0" in second_answers[1],
+        second_answers[1],
+    )
+    expect("the setting came with the image", "hello" in second_answers[2], second_answers[2])
+    expect(
+        "tree / shows the tree of the machine after the reset",
+        all(name in second_answers[3] for name in ("bin/", "etc/", "proc/", "dev/")),
+        second_answers[3],
+    )
+    expect(
+        "the procfs is mounted after the reset",
+        all(name in second_answers[4] for name in ("version", "uptime", "meminfo")),
+        second_answers[4],
+    )
+    expect(
+        "the file of the kernel is read after the reset",
+        re.search(r"MicroOS \d+\.\d+\.\d+", second_answers[5]) is not None,
+        second_answers[5],
+    )
+    expect(
+        "the devfs is mounted after the reset",
+        "tty0" in second_answers[6] and "null" in second_answers[6],
+        second_answers[6],
+    )
+    expect("the file survived the reset", "persist.txt" in second_answers[7], second_answers[7])
     expect(
         "the content survived the reset",
-        MESSAGE in second_answers[1],
-        f"cat answered {second_answers[1]!r}",
+        MESSAGE in second_answers[7],
+        f"cat answered {second_answers[7]!r}",
     )
     expect(
         "the volume is still consistent",
-        "the volume is consistent" in second_answers[2],
-        second_answers[2],
+        "the volume is consistent" in second_answers[8],
+        second_answers[8],
     )
 
     return checks
@@ -271,7 +320,7 @@ def run_once(args) -> tuple:
     if os.path.exists(args.image):
         os.remove(args.image)
 
-    make_image(args.image, args.size_mb)
+    make_image(args.image)
 
     started = time.monotonic()
     first = run_machine(args.image, FIRST_BOOT, args.timeout)
@@ -309,8 +358,7 @@ def report(checks: list, runs: int) -> None:
 def main(argv: list) -> int:
     parser = argparse.ArgumentParser(description="the disk smoke test of the x86-64 port")
     parser.add_argument("--image", default=DEFAULT_IMAGE, help="the image of the disk")
-    parser.add_argument("--mkimage", metavar="PATH", help="write the image and stop")
-    parser.add_argument("--size-mb", type=int, default=IMAGE_MB, help="the size of a new image")
+    parser.add_argument("--mkimage", metavar="PATH", help="write the copy of the build image and stop")
     parser.add_argument("--timeout", type=float, default=30.0, help="the seconds a boot gets")
     parser.add_argument("--repeat", type=int, default=1, help="how many times to boot the pair")
     parser.add_argument("--keep", action="store_true", help="keep the image after the run")
@@ -318,9 +366,12 @@ def main(argv: list) -> int:
     args = parser.parse_args(argv)
 
     if args.mkimage:
-        os.makedirs(os.path.dirname(os.path.abspath(args.mkimage)), exist_ok=True)
-        make_image(args.mkimage, args.size_mb)
-        print(f"disk: {args.mkimage} ({args.size_mb} MB, one partition at LBA {PARTITION_START})")
+        try:
+            make_image(args.mkimage)
+        except (FileNotFoundError, OSError) as error:
+            print(f"disk: {error}", file=sys.stderr)
+            return 2
+        print(f"disk: {args.mkimage} (a copy of {BASE_IMAGE})")
         return 0
 
     for path in ("loader32.elf", "microos64.bin"):

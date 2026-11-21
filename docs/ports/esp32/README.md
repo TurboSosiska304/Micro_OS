@@ -68,9 +68,15 @@ test picture.
 * **No MMU.** The separation of user and kernel space is logical; there is no
   memory protection. `fork()` shares the memory of the parent and re-enters
   its program.
-* **A program cannot be run from the flash.** An arbitrary file is not
-  executable there and the internal SRAM has about 100 KB, so
-  `k_port_exec_supported()` is false and `execve` answers `ENOSYS`.
+* **A program runs, without protection.** An image of this machine (`arch` 1,
+  Xtensa) is entered by the port (ADR 0018): the text in 8 KiB of instruction
+  RAM at `0x4009E000`, the data and the bss in 8 KiB of DRAM at
+  `0x3FFCC000`, one program at a time. There is no MMU and no address space:
+  a program shares the memory of the kernel, a bad pointer can panic and
+  reboot the board, and a bigger image is `ENOMEM`. The images are blobs of
+  the firmware written to `/bin` of MicroFS at the boot until the `progs`
+  partition exists; the shell has `exec` and `tools/device-test.sh` runs
+  `/bin/hello`.
 * **8 MB of flash, one application slot.** `factory` 2 MB and MicroFS 5.75 MB;
   no room for an OTA image, and no OTA ([partitions.csv](../../../partitions.csv)).
 * **No PMIC.** Power and sleep belong to the ESP32 itself: `HOLD` (G4) must be

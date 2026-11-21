@@ -168,6 +168,10 @@ static bool parsed_is_consistent(const struct k_exec_image *image)
         return false;
     }
 
+    if (image->arch != K_EXEC_ARCH_X86_64 && image->arch != K_EXEC_ARCH_XTENSA) {
+        return false;
+    }
+
     if (image->text_size == 0 || (image->text_size & 3u) != 0) {
         return false;
     }
@@ -222,8 +226,8 @@ static void build_case_image(k_u8_t *image)
     put_u32(&image[12], K_EXEC_HEADER_SIZE);
     put_u32(&image[16], CASE_TEXT_BYTES);
     put_u32(&image[20], CASE_DATA_BYTES);
-    put_u32(&image[24], 0); /* bss */
-    put_u32(&image[28], 0); /* reserved */
+    put_u32(&image[24], 0);                  /* bss */
+    put_u32(&image[28], K_EXEC_ARCH_X86_64); /* the machine of the bytes */
 
     image[K_EXEC_HEADER_SIZE + 0] = 0xC3; /* ret */
     image[K_EXEC_HEADER_SIZE + 1] = 0x90; /* nop */
@@ -376,16 +380,24 @@ static void check_boundaries(void)
     put_u32(&image[4], K_EXEC_VERSION + 1u);
     expect_parse(image, sizeof(image), -1);
 
-    /* A flag this generation does not know, and a reserved word that is not
-     * zero, are the same thing. */
+    /* A flag this generation does not know is the same kind of refusal. */
     build_case_image(image);
     put_u32(&image[8], 1u);
     expect_parse(image, sizeof(image), -1);
     build_case_image(image);
     put_u32(&image[8], 0xFFFFFFFFu);
     expect_parse(image, sizeof(image), -1);
+
+    /* Both machines of the format are headers the parser describes; a number
+     * outside them is a machine nothing here knows. */
     build_case_image(image);
-    put_u32(&image[28], 1u);
+    put_u32(&image[28], K_EXEC_ARCH_XTENSA);
+    expect_parse(image, sizeof(image), 0);
+    build_case_image(image);
+    put_u32(&image[28], 2u);
+    expect_parse(image, sizeof(image), -1);
+    build_case_image(image);
+    put_u32(&image[28], 0xFFFFFFFFu);
     expect_parse(image, sizeof(image), -1);
 
     /* A file shorter than the header is not an image at all. */

@@ -15,6 +15,22 @@ bool k_port_exec_supported(void)
     return false;
 }
 
+/*
+ * The simulator does not enter programs, but the machine under it has a name:
+ * on x86-64 it is the machine of a program of the port of QEMU, so the kernel
+ * answers ENOEXEC for an image of the board instead of ENOSYS for every file.
+ * A host of another architecture has no machine of the format to name, and -1
+ * leaves the answer to k_port_exec_supported() (ENOSYS).
+ */
+int k_port_exec_arch(void)
+{
+#if defined(__x86_64__)
+    return (int)K_EXEC_ARCH_X86_64;
+#else
+    return -1;
+#endif
+}
+
 void *k_port_exec_base(void)
 {
     return NULL;

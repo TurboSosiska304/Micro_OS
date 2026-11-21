@@ -69,9 +69,12 @@ written when the project was an operating system for one board; the numbers
 * [x] The mode enforced at `open`, through `vfs_stat`, and the `x` bit at
       `execve`
 * [x] `execve`, `chmod` and `chown` in the syscall table, and in the libc
-* [x] A first program in `/bin`: the x86-64 port writes `/bin/hello` to its
-      RAM volume at the boot and asks for it with `execve`; the shell runs the
+* [x] A first program in `/bin`: the x86-64 port mounts the MicroFS volume of
+      its disk and asks for `/bin/hello` with `execve`; the shell runs the
       same file with `exec`
+* [x] Programs are files on a filesystem of the disk, not blobs of the
+      kernel: `make x86-disk` writes `/bin` (fifteen programs) and `/etc` with
+      `tools/mkfs_mfs.c`, and no boot installs an image
 * [x] `PATH` for the shell
 * [x] `argv` reaches the port, and the ABI of the entry is written down
 * [x] An entry into the kernel from a program (`int $0x80`), with the status
@@ -122,8 +125,19 @@ written when the project was an operating system for one board; the numbers
 * [x] `copy_from_user`/`copy_to_user` at the edge of the system call: the
       port answers whether a range is memory of the caller, a path and `argv`
       are copied into buffers of the kernel, and a bad pointer is `EFAULT`
-      instead of a fault of ring 0 (contract 1.7, ADR 0007; `/bin/badptr` in
+      instead of a fault of ring 0 (the call of contract 1.7, ADR 0007; `/bin/badptr` in
       `make x86-smoke`)
+* [x] NX/W^X: `EFER.NXE` is on from the loader, the kernel text is read-only
+      and its rodata, data, bss, stacks and the first gigabyte of devices are
+      NX; a program gets a text of its own (read-only) and data, bss, the
+      stack and the restorer page with the protection each one needs. The
+      port audits its tables at the boot and before every program, and
+      `/bin/nx` proves the faults of a fetch, a write and a call into the
+      text in `make x86-smoke` (ADR 0007, sections 9 and 10)
+* [x] SMAP/SMEP: a decision, not a feature of 1.0 - the default QEMU
+      processor does not advertise either, and SMAP needs `STAC`/`CLAC` in
+      the portable copy edge. The reasons are in ADR 0007 section 10 and the
+      debt in `docs/debts.md`
 * [x] Basic signals: `SIGINT`, `SIGTERM`, `SIGCHLD` and `SIGPIPE`, the
       dispositions `SIG_DFL`/`SIG_IGN`, a handler that runs in ring 3 through
       a frame of the port and returns through `sigreturn`, `waitpid()` cut by
@@ -153,9 +167,18 @@ written when the project was an operating system for one board; the numbers
       names, the lost clusters and the free count; `fsck fat <point|device>`
       at the console, and a volume beyond 65536 clusters refused with a
       message
-* [ ] A journal or a cache of the changes under a write, and a repair of the
-      clusters a check calls lost
-* [ ] ext2, the reader with inodes and a superblock a checker can walk
+* [x] A repair of FAT under `-y`: the lost clusters go back to the free map
+      in both copies of the table, a loop or a cluster outside the volume is
+      cut, the second of two names of one cluster gives it up, a broken run
+      of long names is removed and its 8.3 name kept, and a size that does
+      not match its chain is put right; the check runs again afterwards
+* [ ] A journal or a cache of the changes under a write
+* [x] ext2, the reader with inodes and a superblock a checker can walk
+      (ADR 0019): the superblock, the group descriptors, the inode table,
+      the direct blocks and the single, double and triple indirection, the
+      directories with names up to 255 bytes, and `stat`/`statx` with the
+      mode, the uid and the moments of the inode; read-only, so a write, a
+      new name, a mode or an owner is `KERR_NOTSUP`
 * [x] `/etc/fstab` and the `mount` command over the type registry: the boot
       mounts the table after the root, `mount <device> <point> <type>` and
       `umount <point>` work at the console, and a line that does not mount is
@@ -233,5 +256,6 @@ written when the project was an operating system for one board; the numbers
       date; `-a` with `.` and `..`), and `tree` draws the levels below it
 * [ ] A shell `export` and the environment of the shell in the programs,
       instead of the four words of the kernel
-* [ ] Programs are files on a filesystem of the disk, and more than the ten
-      images the boot writes (the format is frozen first, ADR 0011)
+* [x] Programs are files on a filesystem of the disk, and a program is added
+      by writing a file of the volume (`make x86-disk`), not by embedding it
+      in the kernel

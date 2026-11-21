@@ -56,6 +56,7 @@ struct fat_image {
 struct test_device {
     k_u8_t *data;
     k_u32_t sectors;
+    bool fail_write; /* the repair has to survive a medium that stops */
 };
 
 static struct mfs_ram_device g_mfs_volume;
@@ -84,6 +85,11 @@ static void put32(k_u8_t *p, k_u32_t value)
 static k_u16_t get16(const k_u8_t *p)
 {
     return (k_u16_t)((k_u16_t)p[0] | ((k_u16_t)p[1] << 8));
+}
+
+static k_u32_t get32(const k_u8_t *p)
+{
+    return (k_u32_t)p[0] | ((k_u32_t)p[1] << 8) | ((k_u32_t)p[2] << 16) | ((k_u32_t)p[3] << 24);
 }
 
 static k_u32_t cluster_offset(const struct fat_image *img, k_u32_t cluster)
@@ -236,6 +242,26 @@ static void image_set_fat(struct fat_image *img, k_u32_t cluster, k_u32_t value)
             put32(base + cluster * 4u, value & 0x0FFFFFFFu);
             break;
         }
+    }
+}
+
+/* The value of one cluster in one copy of the table, as the repair left it. */
+static k_u32_t image_get_fat(const struct fat_image *img, k_u32_t fat, k_u32_t cluster)
+{
+    const k_u8_t *base =
+        img->data + (img->reserved_sectors + fat * img->fat_sectors) * img->bytes_per_sector;
+
+    switch (img->type) {
+    case 12: {
+        k_u32_t offset = cluster + cluster / 2u;
+        k_u16_t word = get16(base + offset);
+
+        return ((cluster & 1u) != 0u) ? (word >> 4) : (word & 0x0FFFu);
+    }
+    case 16:
+        return get16(base + cluster * 2u);
+    default:
+        return get32(base + cluster * 4u) & 0x0FFFFFFFu;
     }
 }
 
@@ -490,6 +516,10 @@ static int test_write(void *ctx, k_u32_t sector, const void *buf, k_size_t count
     size_t offset = (size_t)sector * TEST_DEV_SECTOR;
     size_t size = (size_t)count * TEST_DEV_SECTOR;
 
+    if (dev->fail_write) {
+        return -1;
+    }
+
     if (dev->data == NULL || sector >= dev->sectors || count > dev->sectors - sector) {
         return -1;
     }
@@ -547,21 +577,27 @@ static void teardown(void)
     vfs_unregister_type("fat32");
 }
 
-static int mount_image(enum fat_kind kind)
+/* Mount the image the test has just built, without building it again: a
+ * repaired volume is mounted to prove what the repair left. */
+static int mount_built(void)
 {
-    int rc;
+    int rc = vfs_mkdir("/mnt");
 
-    build_image(kind);
-    if (g_image.data == NULL) {
-        return KERR_INVAL;
-    }
-
-    rc = vfs_mkdir("/mnt");
     if (rc != 0 && rc != KERR_EXIST) {
         return rc;
     }
 
     return vfs_mount_type(TEST_ROOT_POINT, "fat32", "fat0");
+}
+
+static int mount_image(enum fat_kind kind)
+{
+    build_image(kind);
+    if (g_image.data == NULL) {
+        return KERR_INVAL;
+    }
+
+    return mount_built();
 }
 
 static int read_file(const char *path, char *buf, k_size_t size)
@@ -1725,6 +1761,449 @@ static void test_check_broken(void)
     teardown();
 }
 
+/*
+ * A repair is a write with a decision under it. The images below carry one
+ * kind of damage each, the way the check test does; the repair has to name
+ * the problem, fix the ones the medium explains, and leave a volume that
+ * the check then calls sound. The bytes are compared around every read-only
+ * call, because a checker that writes is a formatter nobody asked for.
+ */
+static void test_repair_lost(void)
+{
+    struct fat_check_report report;
+    k_u64_t before;
+
+    ktest_begin("fat: a repair gives the lost clusters back, and a check never writes");
+
+    setup();
+    build_image(FAT_KIND_32);
+
+    image_set_fat(&g_image, g_image.cluster_count + 1u, fat_eoc(&g_image));
+    before = image_sum(&g_image);
+    g_sync_count = 0;
+
+    /* Without the flag the walk is a report, and the image is untouched. */
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, false), 0);
+    KT_CHECK_INT_EQ(report.errors > 0, 1);
+    KT_CHECK_INT_EQ(report.lost_clusters, 1);
+    KT_CHECK_INT_EQ(report.fixed, 0);
+    KT_CHECK_INT_EQ(report.unfixed, 0);
+    KT_CHECK_INT_EQ(g_sync_count, 0);
+    KT_CHECK_INT_EQ(image_sum(&g_image), before);
+
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, true), 0);
+    KT_CHECK_INT_EQ(report.errors, 0);
+    KT_CHECK_INT_EQ(report.unfixed, 0);
+    KT_CHECK_INT_EQ(report.lost_found, 1);
+    KT_CHECK_INT_EQ(report.lost_freed, 1);
+    KT_CHECK_INT_EQ(report.lost_clusters, 0);
+    KT_CHECK_INT_EQ(report.fixed >= 1, 1);
+    KT_CHECK_INT_EQ(g_sync_count > 0, 1);
+
+    /* Both copies of the table say the cluster is free again. */
+    KT_CHECK_INT_EQ(image_get_fat(&g_image, 0, g_image.cluster_count + 1u), 0);
+    KT_CHECK_INT_EQ(image_get_fat(&g_image, 1, g_image.cluster_count + 1u), 0);
+
+    /* A second pass has nothing left to do. */
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, true), 0);
+    KT_CHECK_INT_EQ(report.errors, 0);
+    KT_CHECK_INT_EQ(report.fixed, 0);
+    KT_CHECK_INT_EQ(report.lost_freed, 0);
+
+    teardown();
+}
+
+static void expect_untouched(const struct fat_check_report *report, k_u64_t before)
+{
+    KT_CHECK(report->errors > 0);
+    KT_CHECK_INT_EQ(report->fixed, 0);
+    KT_CHECK_INT_EQ(g_sync_count, 0);
+    KT_CHECK_INT_EQ(image_sum(&g_image), before);
+}
+
+static void test_repair_read_only(void)
+{
+    struct fat_check_report report;
+    k_u64_t before;
+
+    ktest_begin("fat: a damaged volume is byte for byte the same without -y");
+
+    setup();
+
+    build_image(FAT_KIND_32);
+    image_set_fat(&g_image, 6, 6);
+    before = image_sum(&g_image);
+    g_sync_count = 0;
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, false), 0);
+    expect_untouched(&report, before);
+
+    build_image(FAT_KIND_32);
+    image_set_fat(&g_image, 7, 6);
+    before = image_sum(&g_image);
+    g_sync_count = 0;
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, false), 0);
+    expect_untouched(&report, before);
+
+    build_image(FAT_KIND_32);
+    dir_slot(&g_image, g_image.root_cluster, 1)[13] ^= 0xFFu;
+    before = image_sum(&g_image);
+    g_sync_count = 0;
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, false), 0);
+    expect_untouched(&report, before);
+
+    build_image(FAT_KIND_32);
+    put32(dir_slot(&g_image, g_image.root_cluster, 0) + 28, 1000);
+    before = image_sum(&g_image);
+    g_sync_count = 0;
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, false), 0);
+    expect_untouched(&report, before);
+
+    teardown();
+}
+
+static void test_repair_chain(void)
+{
+    struct fat_check_report report;
+    k_u8_t *entry;
+
+    ktest_begin("fat: a repair cuts a loop, a cross-link and a cluster outside the volume");
+
+    setup();
+
+    /* A file whose only cluster names itself. */
+    build_image(FAT_KIND_32);
+    image_set_fat(&g_image, 6, 6);
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, true), 0);
+    KT_CHECK_INT_EQ(report.errors, 0);
+    KT_CHECK_INT_EQ(report.fixed >= 1, 1);
+    KT_CHECK_INT_EQ(image_get_fat(&g_image, 0, 6), fat_eoc(&g_image));
+
+    KT_CHECK_INT_EQ(mount_built(), 0);
+    {
+        char text[16];
+
+        KT_CHECK_INT_EQ(read_file(TEST_ROOT_POINT "/HELLO.TXT", text, sizeof(text)), 10);
+        KT_CHECK(text[0] == 'h' && text[9] == '\n');
+    }
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+
+    /* A chain that runs into the chain of another file: the first name to
+     * be walked keeps it, and this one ends at its own last cluster. */
+    build_image(FAT_KIND_32);
+    image_set_fat(&g_image, 7, 6);
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, true), 0);
+    KT_CHECK_INT_EQ(report.errors, 0);
+    KT_CHECK_INT_EQ(image_get_fat(&g_image, 0, 7), fat_eoc(&g_image));
+    KT_CHECK_INT_EQ(image_get_fat(&g_image, 0, 6), fat_eoc(&g_image));
+
+    /* A value that names a cluster the volume does not have. */
+    build_image(FAT_KIND_32);
+    image_set_fat(&g_image, 6, g_image.cluster_count + 50u);
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, true), 0);
+    KT_CHECK_INT_EQ(report.errors, 0);
+    KT_CHECK_INT_EQ(image_get_fat(&g_image, 0, 6), fat_eoc(&g_image));
+
+    /* Two names of one chain, at its head: the second name becomes an
+     * empty file and the data stays with the first. */
+    build_image(FAT_KIND_32);
+    entry = dir_slot(&g_image, g_image.root_cluster, 3);
+    put16(entry + 26, 6);
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, true), 0);
+    KT_CHECK_INT_EQ(report.errors, 0);
+    entry = dir_slot(&g_image, g_image.root_cluster, 3);
+    KT_CHECK_INT_EQ(get16(entry + 26), 0);
+    KT_CHECK_INT_EQ(get32(entry + 28), 0);
+    KT_CHECK_INT_EQ(image_get_fat(&g_image, 0, 6), fat_eoc(&g_image));
+
+    /* A directory whose head is a file's cluster is left alone, and the
+     * pass does not free any lost cluster either: the subtree it refused
+     * to enter could be one. */
+    build_image(FAT_KIND_32);
+    put16(dir_slot(&g_image, g_image.root_cluster, 4) + 26, 6);
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, true), 0);
+    KT_CHECK_INT_EQ(report.errors > 0, 1);
+    KT_CHECK_INT_EQ(report.unfixed, report.errors);
+    KT_CHECK_INT_EQ(report.lost_found, 0);
+    KT_CHECK_INT_EQ(get16(dir_slot(&g_image, g_image.root_cluster, 4) + 26), 6);
+    KT_CHECK_INT_EQ(image_get_fat(&g_image, 0, 4), fat_eoc(&g_image));
+
+    teardown();
+}
+
+static void test_repair_loop_tail(void)
+{
+    struct fat_check_report report;
+    struct vfs_file file;
+    struct vfs_stat stat;
+    k_u32_t first;
+    k_u32_t second;
+    k_u32_t third;
+
+    ktest_begin("fat: a loop of a longer chain is cut where the cluster repeats");
+
+    setup();
+    if (mount_image(FAT_KIND_32) != 0) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    memset(g_io_buffer, 'x', 3u * 512u);
+    KT_CHECK_INT_EQ(vfs_open(TEST_ROOT_POINT "/LOOP.BIN", VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC,
+                             &file, g_file_data),
+                    0);
+    KT_CHECK_INT_EQ(vfs_write(&file, g_io_buffer, 3u * 512u), 3 * 512);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/LOOP.BIN", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, 3u * 512u);
+
+    first = stat.inode;
+    second = image_get_fat(&g_image, 0, first);
+    third = image_get_fat(&g_image, 0, second);
+    KT_CHECK(first >= 2u && second >= 2u && third >= 2u);
+
+    /* The last cluster points back at the first: the chain loops. */
+    image_set_fat(&g_image, third, first);
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, true), 0);
+    KT_CHECK_INT_EQ(report.errors, 0);
+    KT_CHECK_INT_EQ(report.lost_freed, 2);
+    KT_CHECK_INT_EQ(image_get_fat(&g_image, 0, first), fat_eoc(&g_image));
+    KT_CHECK_INT_EQ(image_get_fat(&g_image, 0, second), 0);
+    KT_CHECK_INT_EQ(image_get_fat(&g_image, 0, third), 0);
+
+    KT_CHECK_INT_EQ(mount_built(), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/LOOP.BIN", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, 512);
+    {
+        char text[8];
+
+        KT_CHECK_INT_EQ(read_file(TEST_ROOT_POINT "/LOOP.BIN", text, sizeof(text)), 8);
+        KT_CHECK(text[0] == 'x');
+    }
+
+    teardown();
+}
+
+static void test_repair_size(void)
+{
+    struct fat_check_report report;
+
+    ktest_begin("fat: a repair puts the size of a file right against its chain");
+
+    setup();
+
+    /* A size that promises two clusters of a chain of one: the size is cut. */
+    build_image(FAT_KIND_32);
+    put32(dir_slot(&g_image, g_image.root_cluster, 0) + 28, 1000);
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, true), 0);
+    KT_CHECK_INT_EQ(report.errors, 0);
+    KT_CHECK_INT_EQ(get32(dir_slot(&g_image, g_image.root_cluster, 0) + 28), 512);
+
+    /* A chain longer than its file: the tail goes back to the free map. */
+    build_image(FAT_KIND_32);
+    image_set_fat(&g_image, 6, 200);
+    image_set_fat(&g_image, 200, fat_eoc(&g_image));
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, true), 0);
+    KT_CHECK_INT_EQ(report.errors, 0);
+    KT_CHECK_INT_EQ(report.lost_freed, 1);
+    KT_CHECK_INT_EQ(get32(dir_slot(&g_image, g_image.root_cluster, 0) + 28), 10);
+    KT_CHECK_INT_EQ(image_get_fat(&g_image, 0, 200), 0);
+
+    /* An entry whose first cluster is not in the volume has no data left
+     * to name: the entry goes. */
+    build_image(FAT_KIND_32);
+    put16(dir_slot(&g_image, g_image.root_cluster, 0) + 26, (k_u16_t)(g_image.cluster_count + 50u));
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, true), 0);
+    KT_CHECK_INT_EQ(report.errors, 0);
+    KT_CHECK_INT_EQ(dir_slot(&g_image, g_image.root_cluster, 0)[0], 0xE5);
+
+    /* The same for a directory: its subtree is already out of reach. */
+    build_image(FAT_KIND_32);
+    put16(dir_slot(&g_image, g_image.root_cluster, 4) + 26, (k_u16_t)(g_image.cluster_count + 50u));
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, true), 0);
+    KT_CHECK_INT_EQ(report.errors, 0);
+    KT_CHECK_INT_EQ(dir_slot(&g_image, g_image.root_cluster, 4)[0], 0xE5);
+
+    /* A long name in front of an entry that goes has nothing left to
+     * name: the run is removed with it. */
+    build_image(FAT_KIND_32);
+    put16(dir_slot(&g_image, g_image.root_cluster, 10) + 26,
+          (k_u16_t)(g_image.cluster_count + 50u));
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, true), 0);
+    KT_CHECK_INT_EQ(report.errors, 0);
+    KT_CHECK_INT_EQ(dir_slot(&g_image, g_image.root_cluster, 6)[0], 0xE5);
+    KT_CHECK_INT_EQ(dir_slot(&g_image, g_image.root_cluster, 7)[0], 0xE5);
+    KT_CHECK_INT_EQ(dir_slot(&g_image, g_image.root_cluster, 8)[0], 0xE5);
+    KT_CHECK_INT_EQ(dir_slot(&g_image, g_image.root_cluster, 9)[0], 0xE5);
+    KT_CHECK_INT_EQ(dir_slot(&g_image, g_image.root_cluster, 10)[0], 0xE5);
+
+    /* An empty file that names a chain is left: the chain could be the one
+     * of a directory the walk has not reached yet, and freeing it would
+     * throw the directory away. */
+    build_image(FAT_KIND_32);
+    put32(dir_slot(&g_image, g_image.root_cluster, 0) + 28, 0);
+    put16(dir_slot(&g_image, g_image.root_cluster, 0) + 26, 4);
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, true), 0);
+    KT_CHECK_INT_EQ(report.errors, 1);
+    KT_CHECK_INT_EQ(report.unfixed, 1);
+    KT_CHECK(strstr(report.first, "empty file") != NULL);
+    KT_CHECK_INT_EQ(get16(dir_slot(&g_image, g_image.root_cluster, 4) + 26), 4);
+
+    teardown();
+}
+
+static void test_repair_names(void)
+{
+    struct fat_check_report report;
+
+    ktest_begin("fat: a repair removes a broken run of long names and keeps the 8.3 name");
+
+    setup();
+
+    /* One checksum that does not match the short entry: the whole run
+     * cannot be read, so the run goes and the short name stays. */
+    build_image(FAT_KIND_32);
+    dir_slot(&g_image, g_image.root_cluster, 1)[13] ^= 0xFFu;
+    dir_slot(&g_image, g_image.root_cluster, 2)[13] ^= 0xFFu;
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, true), 0);
+    KT_CHECK_INT_EQ(report.errors, 0);
+    KT_CHECK_INT_EQ(dir_slot(&g_image, g_image.root_cluster, 1)[0], 0xE5);
+    KT_CHECK_INT_EQ(dir_slot(&g_image, g_image.root_cluster, 2)[0], 0xE5);
+    KT_CHECK_INT_EQ(memcmp(dir_slot(&g_image, g_image.root_cluster, 3), "LONGFI~1TXT", 11), 0);
+
+    /* The first entry of the run was removed by somebody: what is left is
+     * an orphan, and it is removed too. */
+    build_image(FAT_KIND_32);
+    dir_slot(&g_image, g_image.root_cluster, 1)[0] = 0xE5;
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, true), 0);
+    KT_CHECK_INT_EQ(report.errors, 0);
+    KT_CHECK_INT_EQ(dir_slot(&g_image, g_image.root_cluster, 2)[0], 0xE5);
+    KT_CHECK_INT_EQ(memcmp(dir_slot(&g_image, g_image.root_cluster, 3), "LONGFI~1TXT", 11), 0);
+
+    /* A short name that FAT does not allow: the file is only a name, so
+     * the entry goes. A directory keeps its name and its subtree, and the
+     * report says that it was left. */
+    build_image(FAT_KIND_32);
+    dir_slot(&g_image, g_image.root_cluster, 0)[0] = '*';
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, true), 0);
+    KT_CHECK_INT_EQ(report.errors, 0);
+    KT_CHECK_INT_EQ(dir_slot(&g_image, g_image.root_cluster, 0)[0], 0xE5);
+
+    build_image(FAT_KIND_32);
+    dir_slot(&g_image, g_image.root_cluster, 4)[0] = '*';
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, true), 0);
+    KT_CHECK_INT_EQ(report.errors, 1);
+    KT_CHECK_INT_EQ(report.unfixed, 1);
+    KT_CHECK_INT_EQ(dir_slot(&g_image, g_image.root_cluster, 4)[0], '*');
+
+    teardown();
+}
+
+static void test_repair_medium(void)
+{
+    static const struct k_blockdev_ops read_only_ops = {
+        .read = test_read,
+        .write = NULL,
+        .erase = NULL,
+        .sync = NULL,
+    };
+    struct fat_check_report report;
+    const struct k_blockdev_ops *saved;
+    k_u64_t before;
+
+    ktest_begin("fat: a repair that cannot write says so and leaves the medium");
+
+    setup();
+    build_image(FAT_KIND_32);
+    image_set_fat(&g_image, g_image.cluster_count + 1u, fat_eoc(&g_image));
+    before = image_sum(&g_image);
+
+    /* A medium that does not answer at all: the check reports it and the
+     * repair has nothing to write to. */
+    g_fat_device.data = NULL;
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, true), 0);
+    KT_CHECK_INT_EQ(report.errors, 1);
+    KT_CHECK(strstr(report.first, "did not answer") != NULL);
+    g_fat_device.data = g_image.data;
+
+    /* A medium with a read and no write: the repair stops at the first
+     * change and the check still names the damage. */
+    saved = g_fat_blockdev.ops;
+    g_fat_blockdev.ops = &read_only_ops;
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, true), 0);
+    KT_CHECK_INT_EQ(report.fixed, 0);
+    KT_CHECK_INT_EQ(report.errors > 0, 1);
+    KT_CHECK_INT_EQ(report.unfixed, report.errors);
+    KT_CHECK_INT_EQ(image_sum(&g_image), before);
+    g_fat_blockdev.ops = saved;
+
+    /* A write that fails in the middle: the pass stops and says so. */
+    g_fat_device.fail_write = true;
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, true), 0);
+    KT_CHECK_INT_EQ(report.errors > 0, 1);
+    KT_CHECK_INT_EQ(report.unfixed, report.errors);
+    g_fat_device.fail_write = false;
+
+    teardown();
+}
+
+static void test_repair_fixed_root(enum fat_kind kind, const char *title)
+{
+    struct fat_check_report report;
+    k_u32_t hello = 3; /* the cluster of HELLO.TXT in both old formats */
+
+    ktest_begin(title);
+
+    setup();
+    build_image(kind);
+
+    /* A loop on a file and a cluster at the end of the volume that no
+     * chain names: the two repairs of a volume with a fixed root. */
+    image_set_fat(&g_image, hello, hello);
+    image_set_fat(&g_image, g_image.cluster_count + 1u, fat_eoc(&g_image));
+
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, true), 0);
+    KT_CHECK_INT_EQ(report.errors, 0);
+    KT_CHECK_INT_EQ(report.fixed >= 2, 1);
+    KT_CHECK_INT_EQ(image_get_fat(&g_image, 0, hello), fat_eoc(&g_image));
+    KT_CHECK_INT_EQ(image_get_fat(&g_image, 0, g_image.cluster_count + 1u), 0);
+    KT_CHECK_INT_EQ(image_get_fat(&g_image, 1, g_image.cluster_count + 1u), 0);
+
+    teardown();
+}
+
+static void test_repair_refused(void)
+{
+    struct fat_check_report report;
+    k_u64_t before;
+
+    ktest_begin("fat: a repair refuses a volume whose two stories disagree");
+
+    setup();
+
+    /* The copies of the table differ and a cluster is lost. The repair
+     * cannot know which copy is the volume, so it writes nothing at all,
+     * and the lost cluster is still lost when it returns. */
+    build_image(FAT_KIND_32);
+    g_image.data[(g_image.reserved_sectors + g_image.fat_sectors) * g_image.bytes_per_sector +
+                 6u * 4u] ^= 0x01u;
+    image_set_fat(&g_image, g_image.cluster_count + 1u, fat_eoc(&g_image));
+    before = image_sum(&g_image);
+
+    KT_CHECK_INT_EQ(fat_repair("fat0", &report, true), 0);
+    KT_CHECK_INT_EQ(report.errors > 0, 1);
+    KT_CHECK_INT_EQ(report.fixed, 0);
+    KT_CHECK_INT_EQ(report.lost_found, 0);
+    KT_CHECK_INT_EQ(report.unfixed, report.errors);
+    KT_CHECK(strstr(report.first, "copy") != NULL);
+    KT_CHECK_INT_EQ(image_sum(&g_image), before);
+
+    teardown();
+}
+
 #if defined(MICRO_OS_FS_FAT32) && MICRO_OS_FS_FAT32
 static void test_check_command(void)
 {
@@ -1765,10 +2244,27 @@ static void test_check_command(void)
     image_set_fat(&g_image, 6, 6);
     KT_CHECK_INT_EQ(kshell_execute("fsck fat fat0"), KSHELL_ERROR);
 
+    /* The same volume with -y: the loop is cut, the volume is proven, and
+     * the command says what it changed. */
+    KT_CHECK_INT_EQ(kshell_execute("fsck fat fat0 -y"), KSHELL_OK);
+
+    rewind(sink);
+    used = fread(buf, 1, sizeof(buf) - 1, sink);
+    buf[used] = '\0';
+    KT_CHECK(strstr(buf, "repair(s) applied") != NULL);
+    KT_CHECK(strstr(buf, "0 problem(s) after the repair") != NULL);
+    KT_CHECK(strstr(buf, "the volume is consistent") != NULL);
+
+    /* A sound volume takes the flag as well and says nothing was left. */
+    KT_CHECK_INT_EQ(kshell_execute("fsck fat fat0 --repair"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("fsck fat " TEST_ROOT_POINT " -y"), KSHELL_OK);
+
     /* The words that this image cannot use are the usage line, and a point
      * that is not the FAT volume of this reader is named. */
     KT_CHECK_INT_EQ(kshell_execute("fsck fat"), KSHELL_USAGE);
     KT_CHECK_INT_EQ(kshell_execute("fsck fat a b"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(kshell_execute("fsck fat -y"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(kshell_execute("fsck fat fat0 -y extra"), KSHELL_USAGE);
     KT_CHECK_INT_EQ(kshell_execute("fsck fat /mnt/notfat"), KSHELL_ERROR);
 
     rewind(sink);
@@ -1815,6 +2311,16 @@ void test_fs_fat(void)
     test_check_wide();
     test_check_unmounted();
     test_check_broken();
+    test_repair_lost();
+    test_repair_read_only();
+    test_repair_chain();
+    test_repair_loop_tail();
+    test_repair_size();
+    test_repair_names();
+    test_repair_medium();
+    test_repair_refused();
+    test_repair_fixed_root(FAT_KIND_12, "fat: a repair of a FAT12 volume with a fixed root");
+    test_repair_fixed_root(FAT_KIND_16, "fat: a repair of a FAT16 volume with a fixed root");
 #if defined(MICRO_OS_FS_FAT32) && MICRO_OS_FS_FAT32
     test_check_command();
 #endif

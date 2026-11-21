@@ -163,7 +163,7 @@ transfer on a machine with ~100 KB of RAM. NULL with a length is `EINVAL`, a
 length above the limit is `E2BIG`.
 
 **The memory of the caller** is checked as well, through the port
-(`k_port_exec_contains`, contract 1.7). On the board, the simulator and the
+(`k_port_exec_contains`, a call of the contract since 1.7). On the board, the simulator and the
 null port a program shares the kernel's memory and every pointer is the
 kernel's own; on the x86-64 port the kernel walks the page tables of the
 program that made the call and refuses a range that is not there with
@@ -298,18 +298,21 @@ microos_statx`, with the types of `<stdint.h>`; it returns -1 and sets
   most `KSYS_MAX_IO` bytes, because the image is read into one block of the
   kernel before the port copies it; a file outside that range is refused
   before a byte of it is read;
-* the image must be a `MOX1` of this version, and the port is then asked
-  whether the machine can run a program at all. The board and the simulator
-  answer no, and the answer of the call is `ENOSYS`; the x86-64 port names a
-  window of memory, builds the page tables of the program, copies the image
-  into the physical arena behind the window and enters it through an `iretq`
-  into ring 3 (ADR 0007).
+* the image must be a `MOX1` of version 2 and of a machine the format knows;
+  the arch of the header is then compared with `k_port_exec_arch()`, and an
+  image of another machine is `ENOEXEC` before a byte of it is entered;
+* the port is then asked whether the machine can run a program at all. The
+  board and the simulator answer no, and the answer of the call is `ENOSYS`;
+  the x86-64 port names a window of memory, builds the page tables of the
+  program, copies the image into the physical arena behind the window and
+  enters it through an `iretq` into ring 3 (ADR 0007).
 
 The errors: `ENOENT` for a path that names nothing, `EISDIR` for a directory,
 `EPERM` for a file whose mode has no execute bit for the caller (`0400` is not
-a program), `EINVAL` for a file that is not an image of this system, `ENOMEM`
-for an image the port could not place in its window, and `ENOSYS` for a
-machine without a window of programs.
+a program), `EINVAL` for a file that is not an image of version 2 of this
+system, `ENOEXEC` (`KERR_NOEXEC`, POSIX 8) for an image of another machine,
+`ENOMEM` for an image the port could not place in its window, and `ENOSYS` for
+a machine without a window of programs.
 
 A successful call **does not return** when the program never comes back: the
 program is the caller from then on. A program that ends (by `exit`, or by a

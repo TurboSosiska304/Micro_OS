@@ -66,6 +66,10 @@ static const k_size_t s_device_count = K_ARRAY_SIZE(s_devices);
 static struct dev_file s_extra[DEV_EXTRA_MAX];
 static k_size_t s_extra_count;
 
+/* The point the filesystem is mounted at: its own root is a directory even
+ * though no device is called by the name of the point. */
+static char s_point[VFS_PATH_MAX];
+
 /* The two tables are read as one: the fixed ones first, the added after. */
 static k_size_t device_count(void)
 {
@@ -217,9 +221,20 @@ static int devfs_list(void *ctx, const char *path, struct vfs_dirent *out, k_siz
 
 static int devfs_stat(void *ctx, const char *path, struct vfs_stat *out)
 {
-    const struct dev_file *dev = find_device(base_name(path));
+    const struct dev_file *dev;
 
     K_UNUSED(ctx);
+
+    /* The point of the mount is a directory of the tree even though no
+     * device is called by its name: `ls /dev` stats the point before it
+     * lists the devices below it. */
+    if (s_point[0] != '\0' && strcmp(path, s_point) == 0) {
+        memset(out, 0, sizeof(*out));
+        out->type = 2;
+        return 0;
+    }
+
+    dev = find_device(base_name(path));
 
     if (dev == NULL) {
         return -2;
@@ -245,5 +260,24 @@ static const struct vfs_operations g_operations = {
 
 int devfs_register(const char *point)
 {
-    return vfs_mount(point, &g_operations, NULL);
+    k_size_t len;
+    int rc;
+
+    if (point == NULL) {
+        return -1;
+    }
+
+    len = strlen(point);
+    if (len >= sizeof(s_point)) {
+        return -1;
+    }
+
+    rc = vfs_mount(point, &g_operations, NULL);
+    if (rc != 0) {
+        return rc;
+    }
+
+    memcpy(s_point, point, len + 1);
+
+    return 0;
 }

@@ -94,6 +94,11 @@ isr_exception 31
  */
 .type isr_exception_common, @function
 isr_exception_common:
+    pushq %r15
+    pushq %r14
+    pushq %r13
+    pushq %r12
+    pushq %rbx
     pushq %rax
     pushq %rcx
     pushq %rdx
@@ -113,10 +118,10 @@ isr_exception_common:
     call port_x86_64_tls_kernel
     movq %rbp, %rsp
 
-    movq 80(%rbp), %rdi  /* the vector */
-    movq 88(%rbp), %rsi  /* the error code, or the zero of the stub */
-    movq 96(%rbp), %rdx  /* the instruction that was running */
-    movq 104(%rbp), %rcx /* the code selector of the moment */
+    movq 120(%rbp), %rdi /* the vector */
+    movq 128(%rbp), %rsi /* the error code, or the zero of the stub */
+    movq 136(%rbp), %rdx /* the instruction that was running */
+    movq 144(%rbp), %rcx /* the code selector of the moment */
 
     andq $-16, %rsp
     call port_x86_64_exception
@@ -128,7 +133,7 @@ isr_exception_common:
      * because the block of the kernel is not mapped there; a frame of ring 0
      * keeps the pointer it had.
      */
-    movq 104(%rbp), %rax
+    movq 144(%rbp), %rax
     testb $3, %al
     jz 1f
     andq $-16, %rsp
@@ -145,6 +150,11 @@ isr_exception_common:
     popq %rdx
     popq %rcx
     popq %rax
+    popq %rbx
+    popq %r12
+    popq %r13
+    popq %r14
+    popq %r15
 
     addq $16, %rsp /* the vector and the error code, not part of the frame */
     iretq
@@ -164,6 +174,11 @@ isr_exception_common:
 .global \name
 .type \name, @function
 \name:
+    pushq %r15
+    pushq %r14
+    pushq %r13
+    pushq %r12
+    pushq %rbx
     pushq %rax
     pushq %rcx
     pushq %rdx
@@ -188,10 +203,10 @@ isr_exception_common:
      * A tick that interrupted a program returns to ring 3, and the thread
      * pointer of the kernel must not follow it: the program has no address
      * for the block, and IA32_FS_BASE zero is what it had before the tick.
-     * The frame's CS is the selector of the interrupted code (rbp + 88: the
-     * ten saved registers, then RIP and CS).
+     * The frame's CS is the selector of the interrupted code (rbp + 128: the
+     * fifteen saved registers, then RIP and CS).
      */
-    movq 88(%rbp), %rax
+    movq 128(%rbp), %rax
     testb $3, %al
     jz 1f
     andq $-16, %rsp
@@ -208,6 +223,11 @@ isr_exception_common:
     popq %rdx
     popq %rcx
     popq %rax
+    popq %rbx
+    popq %r12
+    popq %r13
+    popq %r14
+    popq %r15
     iretq
 .size \name, . - \name
 .endm
@@ -229,9 +249,10 @@ isr_irq isr_irq1, port_x86_64_irq_keyboard
  * The registers of the convention are the ones of the kernel call and of
  * Linux: the number in RAX, six arguments in RDI, RSI, RDX, R10, R8 and R9,
  * the result in RAX. Everything the caller may lose across a C call is saved
- * here - the nine registers below plus RBP, which the frame uses - because
- * the C side is free to clobber them and the program is not compiled against
- * this handler.
+ * here - the nine registers below plus RBP, and the five callee-saved ones
+ * that the C call would keep but that a fork child has to find in the frame
+ * it is copied into - because the C side is free to clobber them and the
+ * program is not compiled against this handler.
  *
  * The interrupts are turned on once the state is on the stack, and not
  * before: the whole point of the gate is that a call may sleep or yield, and
@@ -242,6 +263,11 @@ isr_irq isr_irq1, port_x86_64_irq_keyboard
 .global isr_syscall
 .type isr_syscall, @function
 isr_syscall:
+    pushq %r15 /* the callee-saved registers of the program: a fork copies */
+    pushq %r14 /* the frame, and the child returns into the call of the      */
+    pushq %r13 /* parent through it, so they have to be in the frame          */
+    pushq %r12
+    pushq %rbx
     pushq %rax /* the number of the call, then its result */
     pushq %rdi
     pushq %rsi
@@ -268,8 +294,10 @@ isr_syscall:
 
     /*
      * The frame, as the pushes above left it: 0 is RBP, then RCX, R11, R9,
-     * R8, R10, RDX, RSI, RDI and finally RAX at 72. The order of the pushes
-     * is the order of the pops read backwards (see the tail of the stub).
+     * R8, R10, RDX, RSI, RDI and RAX at 72, then the callee-saved RBX, R12,
+     * R13, R14 and R15, and the five words of the crossing - RIP, CS, RFLAGS,
+     * RSP, SS - after them. The order of the pushes is the order of the pops
+     * read backwards (see the tail of the stub).
      *
      * The C call needs the stack 16 bytes aligned and one slot for the
      * seventh argument: ksys_call() takes the number and the six of the
@@ -310,6 +338,11 @@ isr_syscall:
     popq %rsi
     popq %rdi
     popq %rax
+    popq %rbx
+    popq %r12
+    popq %r13
+    popq %r14
+    popq %r15
     iretq
 .size isr_syscall, . - isr_syscall
 

@@ -30,8 +30,12 @@ static void put_u32(k_u8_t *at, k_u32_t value)
     at[3] = (k_u8_t)((value >> 24) & 0xFFu);
 }
 
-/* A consistent image: header, eight bytes of code, four of data. */
-static k_size_t build_image(k_u8_t *image)
+/*
+ * A consistent image: header, eight bytes of code, four of data. The machine
+ * is a parameter: a file of the board is as well formed as a file of the
+ * simulator, and only the kernel that runs it says which one it accepts.
+ */
+static k_size_t build_image_arch(k_u8_t *image, k_u32_t arch)
 {
     memset(image, 0, TEST_IMAGE_SIZE);
 
@@ -41,8 +45,8 @@ static k_size_t build_image(k_u8_t *image)
     put_u32(&image[12], K_EXEC_HEADER_SIZE);
     put_u32(&image[16], TEST_TEXT_BYTES);
     put_u32(&image[20], TEST_DATA_BYTES);
-    put_u32(&image[24], 0); /* bss */
-    put_u32(&image[28], 0); /* reserved */
+    put_u32(&image[24], 0);    /* bss */
+    put_u32(&image[28], arch); /* the machine of the bytes */
 
     /* Something that looks like code and data; the parser does not run it. */
     image[K_EXEC_HEADER_SIZE + 0] = 0xC3; /* ret */
@@ -50,6 +54,11 @@ static k_size_t build_image(k_u8_t *image)
     image[K_EXEC_HEADER_SIZE + TEST_TEXT_BYTES + 0] = 0x2A;
 
     return TEST_IMAGE_SIZE;
+}
+
+static k_size_t build_image(k_u8_t *image)
+{
+    return build_image_arch(image, K_EXEC_ARCH_X86_64);
 }
 
 static void check_valid_image(void)
@@ -65,6 +74,7 @@ static void check_valid_image(void)
 
     KT_CHECK(parsed.data == image);
     KT_CHECK_INT_EQ(parsed.size, size);
+    KT_CHECK_INT_EQ(parsed.arch, K_EXEC_ARCH_X86_64);
     KT_CHECK_INT_EQ(parsed.entry, K_EXEC_HEADER_SIZE);
     KT_CHECK_INT_EQ(parsed.text_size, TEST_TEXT_BYTES);
     KT_CHECK_INT_EQ(parsed.data_size, TEST_DATA_BYTES);
@@ -117,18 +127,20 @@ static void check_bad_header(void)
     image[0] ^= 0xFFu;
     KT_CHECK_INT_EQ(k_exec_parse(image, size, &parsed), -1);
 
+    /* The version is the one this kernel reads: version 1 kept the machine
+     * of the image implicit, and a later generation is a contract this
+     * reader does not know. Either is a refusal, not a header to guess at. */
+    size = build_image(image);
+    put_u32(&image[4], 1u);
+    KT_CHECK_INT_EQ(k_exec_parse(image, size, &parsed), -1);
+
     size = build_image(image);
     put_u32(&image[4], K_EXEC_VERSION + 1u);
     KT_CHECK_INT_EQ(k_exec_parse(image, size, &parsed), -1);
 
-    /* An unknown flag and a reserved word that is not zero are generations
-     * this kernel does not know, not a header to guess about. */
+    /* An unknown flag is a generation this kernel does not know either. */
     size = build_image(image);
     put_u32(&image[8], 1u);
-    KT_CHECK_INT_EQ(k_exec_parse(image, size, &parsed), -1);
-
-    size = build_image(image);
-    put_u32(&image[28], 1u);
     KT_CHECK_INT_EQ(k_exec_parse(image, size, &parsed), -1);
 
     /* A file shorter than the header is not an image at all. */
@@ -219,6 +231,36 @@ static void check_bad_entry(void)
     KT_CHECK_INT_EQ(k_exec_parse(image, size, &parsed), 0);
 }
 
+/*
+ * The machine is part of the header and the parser carries it: a file of the
+ * board is an image of this format exactly as a file of x86-64 is, and the
+ * machine that runs it is what decides. A number the format does not know is
+ * not an image at all - nothing says what its bytes mean.
+ */
+static void check_arch(void)
+{
+    k_u8_t image[TEST_IMAGE_SIZE];
+    struct k_exec_image parsed;
+    k_size_t size;
+
+    ktest_begin("exec: the machine of an image is read, an unknown one refused");
+
+    memset(&parsed, 0, sizeof(parsed));
+    size = build_image_arch(image, K_EXEC_ARCH_XTENSA);
+    KT_CHECK_INT_EQ(k_exec_parse(image, size, &parsed), 0);
+    KT_CHECK_INT_EQ(parsed.arch, K_EXEC_ARCH_XTENSA);
+
+    size = build_image_arch(image, K_EXEC_ARCH_X86_64);
+    KT_CHECK_INT_EQ(k_exec_parse(image, size, &parsed), 0);
+    KT_CHECK_INT_EQ(parsed.arch, K_EXEC_ARCH_X86_64);
+
+    size = build_image_arch(image, 2u);
+    KT_CHECK_INT_EQ(k_exec_parse(image, size, &parsed), -1);
+
+    size = build_image_arch(image, 0xFFFFFFFFu);
+    KT_CHECK_INT_EQ(k_exec_parse(image, size, &parsed), -1);
+}
+
 static void check_run_without_a_machine(void)
 {
     k_u8_t image[TEST_IMAGE_SIZE];
@@ -258,10 +300,33 @@ static void check_run_without_a_machine(void)
     KT_CHECK(memcmp(copy, image, sizeof(copy)) == 0);
     KT_CHECK(parsed.data == before.data);
     KT_CHECK_INT_EQ(parsed.size, before.size);
+    KT_CHECK_INT_EQ(parsed.arch, before.arch);
     KT_CHECK_INT_EQ(parsed.entry, before.entry);
     KT_CHECK_INT_EQ(parsed.text_size, before.text_size);
     KT_CHECK_INT_EQ(parsed.data_size, before.data_size);
     KT_CHECK_INT_EQ(parsed.bss_size, before.bss_size);
+
+    /*
+     * The machine of the image against the machine of the port. A port that
+     * names itself refuses the number of the other machine before it is
+     * asked whether it can run anything; a port with no machine to name (-1)
+     * has nothing to compare and keeps the answer of "this machine cannot
+     * run a program". The number the port gives is one of the three, never a
+     * machine of the header that this kernel does not know.
+     */
+    {
+        const int here = k_port_exec_arch();
+        struct k_exec_image foreign;
+
+        KT_CHECK(here == -1 || here == (int)K_EXEC_ARCH_X86_64 || here == (int)K_EXEC_ARCH_XTENSA);
+
+        size = build_image_arch(image, (here == (int)K_EXEC_ARCH_XTENSA) ? K_EXEC_ARCH_X86_64
+                                                                         : K_EXEC_ARCH_XTENSA);
+        memset(&foreign, 0, sizeof(foreign));
+        KT_CHECK_INT_EQ(k_exec_parse(image, size, &foreign), 0);
+        KT_CHECK_INT_EQ(k_exec_run(&foreign, NULL),
+                        (here >= 0) ? K_EXEC_RUN_OTHER_ARCH : K_EXEC_RUN_NO_MACHINE);
+    }
 
     /*
      * The status of a program that ran somewhere else is not the answer of a
@@ -303,6 +368,7 @@ void test_exec(void)
     check_bad_header();
     check_bad_sizes();
     check_bad_entry();
+    check_arch();
     check_environment();
     check_run_without_a_machine();
 }

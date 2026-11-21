@@ -131,7 +131,7 @@ The files, on every machine:
 | `mkdir <dir>`, `rm [-r] <file>` | a directory, a file; a directory needs `-r` |
 | `df [-h] [path]` | the free blocks and inodes; `-h` in KB/MB |
 | `mount` | the mounted filesystems |
-| `fsck [fat <point\|device>]` | check a volume, read-only: MicroFS, or the FAT volume at a point or on a device |
+| `fsck [fat <point\|device> [-y]]` | check a volume: MicroFS, or the FAT volume at a point or on a device; `-y` repairs the FAT volume |
 | `stat <path>` | the type, the mode, the owner and the size |
 | `chmod <mode> <path>`, `chown <uid> <path>` | the mode (octal) and the owner (0..32767) |
 | `path [directories]` | show or set `PATH` |
@@ -191,11 +191,13 @@ exec: hello: not found in /bin:/usr/bin
 
 On the board and in the simulator there is no program to run: a fresh volume
 has no `/bin`, and `execve` answers `ENOSYS` even for a file that is there. The
-x86-64 port writes `/bin/hello`, `/bin/crash`, `/bin/fork`, `/bin/badptr` and
-`/bin/signals` at the boot, and runs them as programs of ring 3. It also
-writes the library programs `cat`, `echo`, `ls` and `wc`, whose descriptors
-are inherited from the shell, so a pipeline can end in one of them.
-[programs.md](programs.md) explains what a program is.
+x86-64 port has `/bin` in the MicroFS volume of its disk image
+(`make x86-disk`): `hello`, `crash`, `fork`, `badptr`, `signals`, `cat`,
+`echo`, `ls`, `wc`, `head`, `grep`, `mkdir`, `rm`, `pwd` and `spawn` are
+files with the mode 0755, and the boot and the shell run them as programs of
+ring 3. The library programs inherit the descriptors of the shell, so a
+pipeline can end in one of them. [programs.md](programs.md) explains what a
+program is.
 
 ## `kill`, Ctrl+C and no job control
 
@@ -258,6 +260,9 @@ microos> tree /etc
 1 directory, 2 files
 ```
 
+The simulator has a script in `/etc/init.d` (`clock`); the x86-64 image
+ships the directory empty and the same `/etc/setting`.
+
 A path that does not exist is a sentence with the error of the filesystem and
 the status of the command is not 0: `ls: /nope: no such file or directory`.
 
@@ -295,7 +300,8 @@ call instead of storing a number it would read back as `0644`.
 
 ## `fsck` and `mkfs`
 
-`fsck` reads the volume and reports; it never repairs.
+`fsck` reads the volume and reports. Without a flag it never repairs, and
+that is the only form MicroFS has.
 
 ```text
 microos> fsck
@@ -322,7 +328,25 @@ cross-link, a cluster outside the volume), the entries of the root and of the
 subdirectories, the checksum of the long names, the lost clusters and the
 free count are read; nothing is written. A volume with more than 65536
 clusters is refused with a message, because the map of the claimed clusters
-of the checker would not cover it. Repair is not in this kernel.
+of the checker would not cover it.
+
+With `-y` (or `--repair`) the FAT volume is repaired and then checked again:
+
+```text
+microos> fsck fat /mnt/sd -y
+fsck: FAT32, 6 file(s), 2 directory(ies), 1975 of 1984 cluster(s) free
+fsck: 1 lost cluster(s) found, 1 freed
+fsck: 1 repair(s) applied
+fsck: 0 problem(s) after the repair
+fsck: the volume is consistent
+```
+
+The lost clusters go back to the free map, a loop or a cluster outside the
+volume is cut, the second of two names of one cluster gives it up, a broken
+long name is removed and a size that does not match its chain is put right.
+The boot sector, two copies of the table that differ and a directory whose
+head another chain holds are left and printed as `(not repaired)`; the wiki
+of the files has the rules ([`files.md`](files.md#mkfs-and-fsck)).
 
 `mkfs -y` unmounts the volume, formats it and mounts it again. The `-y` is
 mandatory: everything in MicroFS is destroyed. The files of `/etc` come back

@@ -50,7 +50,7 @@ architecture own its part in `arch/<arch>/include/asm`:
 | `kernel/port/kv.h` | the store that survives a restart | `k_port_kv_get`, `k_port_kv_next` |
 | `kernel/port/net.h` | TCP and UDP | `k_port_net_connect`, `k_port_net_listen` |
 | `kernel/port/info.h` | identity and contract version | `k_port_name`, `k_port_api_major` |
-| `kernel/port/exec.h` | running a program | `k_port_exec_supported`, `k_port_exec_base`, `k_port_exec_enter` |
+| `kernel/port/exec.h` | running a program | `k_port_exec_supported`, `k_port_exec_arch`, `k_port_exec_base`, `k_port_exec_enter` |
 
 The version of the contract (`KERNEL_PORT_API_VERSION_MAJOR/MINOR`) is the
 vermagic of the pair: the port asserts it at build time and the boot
@@ -271,8 +271,8 @@ The VFS knows no name of a filesystem. It keeps a table of types
 call mounts the volume itself with `vfs_mount()`, so the resolution of a
 path, the search bit and the listing of the mount points are the same for
 every type. A mount function may be a wrapper of a format of the board
-(MicroFS) or a reader of a format of the world (FAT); the VFS does not care
-which.
+(MicroFS) or a reader of a format of the world (FAT, ext2); the VFS does not
+care which.
 
 The types are registered by the image, not by the kernel: a build that does
 not link the reader never has its name, and a boot that asks for an unknown
@@ -290,6 +290,15 @@ mode and no owner (the numbers are zero), `chmod` and `chown` are
 power cut can catch. A FAT volume mounted at `/mnt/fat` is one
 more entry of the mount table, and `ls /mnt` shows it even though MicroFS
 does not have the directory.
+
+The ext2 reader under `components/fs_ext2/` is the first one with inodes:
+the superblock, the group descriptors, the inode table, the direct blocks
+and the one, two and three levels of indirection, and directories whose
+names the entry itself holds. It is **read-only**, and that is why it can
+report what FAT cannot: the nine bits of `i_mode` as the mode, `i_uid` as
+the owner and `i_mtime`/`i_ctime` through `statx`. A write, a new name, a
+mode and an owner are `KERR_NOTSUP`, and a journal of ext3 is not replayed,
+so a volume with one is refused. ADR 0019 is the design.
 
 ### Disks and partitions
 
@@ -399,33 +408,41 @@ parses a format of its own and the port runs it. The decisions are in
 ### The format: MOX1
 
 An executable is a flat image with a 32-byte header (`kernel/exec.h`): the
-magic `MOX1`, a version, flags, the offset of the entry, the sizes of the text,
-the data and the bss, and a reserved word. The image is linked for the window
-of the port - the code at its base plus the 32 bytes of the header - and copied
-as it is, because nothing relocates it; the bss is not in the file and the port
-clears it. `tools/mkprog.sh` turns an object into the image. The parser
-(`components/kernel/src/exec.c`) checks the image against itself and nothing
-else: the magic and the version, sizes that fit the file, a text that is not
-empty, an entry in the text, sizes that are multiples of four, and a bss under
-a megabyte.
+magic `MOX1`, a version (2), flags, the offset of the entry, the sizes of the
+text, the data and the bss, and the machine the bytes are code for (`arch`: 0
+x86-64, 1 Xtensa). The image is linked for the window of the port - the code
+at its base plus the 32 bytes of the header - and copied as it is, because
+nothing relocates it; the bss is not in the file and the port clears it.
+`tools/mkprog.sh` turns an object into the image and writes the machine. The
+parser (`components/kernel/src/exec.c`) checks the image against itself and
+nothing else: the magic and the version, an arch the format knows, sizes that
+fit the file, a text that is not empty, an entry in the text, sizes that are
+multiples of four, and a bss under a megabyte. The machine of the image
+against the machine of the port is the question of `k_exec_run`, which asks
+the port (`k_port_exec_arch`) before it enters a byte.
 
 ### `execve` belongs to the port
 
-`kernel/port/exec.h` is a subject of the contract (1.6) with five calls:
+`kernel/port/exec.h` is a subject of the contract (1.8) with eight calls:
 `k_port_exec_supported()` (can this machine run a program at all),
+`k_port_exec_arch()` (which machine of the format it is, or -1),
 `k_port_exec_base()` (where the window is), `k_port_exec_enter()` (place the
-image, enter it) and the two halves of the end of a program,
-`k_port_exec_active()` and `k_port_exec_exit()`. The kernel parses the image
-and asks the port, so the answer for a machine that has no window is `ENOSYS`
-at the edge. The board says no: its flash is not executable for a file, and
-internal SRAM is ~100 KB for everything. The host says no too: jumping into
+image, enter it), the two halves of the end of a program,
+`k_port_exec_active()` and `k_port_exec_exit()`, the edge of the memory of a
+program, `k_port_exec_contains()`, and the copy of a context for `fork()`,
+`k_port_fork_copy()`. The kernel parses the image and asks the port, so the
+answer for a machine that has no window is `ENOSYS` at the edge, and an image
+of another machine is `ENOEXEC` before the port is asked to enter it. The
+board says no to a program today: its flash is not executable for a file, and
+internal SRAM is ~100 KB for everything (ADR 0018 gives it a partition and a
+loader; the port has the machine, not the loader). The host says no too: jumping into
 the bytes of a program inside the address space of the simulator would run it
 with the libc of the host under it. x86-64 says yes: it builds page tables for
 the program, maps the window at 32 MiB onto a physical arena at 64 MiB, keeps
 a 64 KiB stack at the top of the window with an unmapped guard page below it
 and enters ring 3 through an `iretq`. Its boot mounts MicroFS on a volume of
-the port's RAM, writes ten images to `/bin` - `hello`, `crash`, `fork`,
-`badptr`, `signals`, `cat`, `echo`, `ls`, `spawn` and `wc` - gives them the
+the port's RAM, writes eleven images to `/bin` - `hello`, `crash`, `fork`,
+`badptr`, `signals`, `nx`, `cat`, `echo`, `ls`, `spawn` and `wc` - gives them the
 mode of a program
 and asks for `/bin/hello` with `execve` - the stat, the mode, the read through the VFS,
 the parse and the transition are the ones of the call. A program ends with

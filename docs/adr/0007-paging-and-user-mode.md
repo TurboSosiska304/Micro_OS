@@ -232,6 +232,109 @@ without an address space there is nothing to check, and the host tests keep
 the valid side of the edge: the paths, the buffers and the vector of `execve`
 are copied as before.
 
+### 9. Update (K5): NX and W^X - a page is code or it is data
+
+The boundary of section 1 stopped a program from reaching the kernel, and
+section 8 stopped the kernel from trusting a pointer of a program. Neither
+looked at what a page may *do*: a page of the window was readable, writable
+and executable at once, and so was the text of the kernel. One store into an
+image, or one jump into a buffer, was enough to run bytes the program had
+written.
+
+The processor has a bit for this. The highest bit of a page-table entry,
+bit 63, says "no instruction fetch from this page" when `EFER.NXE` is on;
+`loader32.S` sets NXE with LME in the same `wrmsr`, before the first table
+is used. `src/paging.c` names the bit `PTE_NX` and never builds an entry
+without deciding it:
+
+| Map | What | Protection |
+|---|---|---|
+| kernel, text | `__text_start`-`__text_end` | read, execute; not writable |
+| kernel, rodata | `__rodata_start`-`__rodata_end` | read, NX |
+| kernel, data | `.data`, `.tdata`, `.tbss`, `.bss`, the stacks | write, NX |
+| kernel, everything else | low memory, VGA, heap, arena, page tables | write, NX |
+| program, text | header and code, to the next page | read, execute; not writable |
+| program, data | data, bss, `argv`/`envp` | write, NX |
+| program, stack | 64 KiB at the top of the window | write, NX |
+| program, restorer | one page under the guard | read, execute; not writable |
+
+A page carries one protection and sections share it, so the linker gives each
+region whole pages: `linker64.ld` aligns the rodata and the data, and
+`programs/program.ld` pads the text of a program to a page boundary. The
+format did not change: the padding is part of `text_size`, which is why a
+program image grows by up to 4 KiB and why the port can refuse an image whose
+text does not end on a page (`k_port_exec_enter`, the only owner of the
+rule).
+
+The window is mapped by `port_x86_64_paging_map_user()` with two flags of the
+port, `PORT_X86_64_PAGE_WRITE` and `PORT_X86_64_PAGE_EXEC`; a call names the
+two of a page and the function turns the absent one into `PTE_NX` or a
+missing write bit. A fork keeps the rule: only a page that was writable
+becomes copy-on-write, so the text is shared read-only and is not turned into
+a private writable copy by the first write; the copy of a data page keeps its
+NX bit (`entry & PTE_NX`). The copy-on-write code of K4 had a bug the new
+tests found: `entry & ~PTE_WRITABLE` complements a 32-bit constant,
+zero-extends it and clears bit 63 with it, so a data page of a program became
+executable again after a fork. The complement is 64 bits wide now.
+
+The kernel writes the buffer of a call under the page tables of the caller,
+so a program that hands its own text to `read` asks for a store into a page
+without the write bit - a page fault in ring 0, where the machine has nowhere
+to return. The exception handler treats it as the other side of the same
+rule, and as a copy on write: this space gets a private copy of the page,
+writable and NX, and the store is retried; the program meets the missing
+instruction on its way back to ring 3 and is taken down as any faulting
+program. The frame is copied and not changed in place, because a fork shares
+the code with the child and a write of one space must not rewrite the
+instructions of the other. No page is both while it happens, the machine
+stays alive, and the code the parent is running is untouched.
+
+The port reads its own tables back. `port_x86_64_paging_audit()` walks the
+map and counts the pages that are writable and executable at once; `kmain`
+prints `x86-64: the map is W^X ...` when the count is zero, and
+`k_port_exec_enter()` refuses a program whose window is not. The test of the
+rule is `/bin/nx`: a child that jumps into the data and a child that writes
+the text, each taken down by the fault handler with the error code of the
+access - `0x15` for a fetch from an NX page (present, user, instruction
+fetch), `0x7` for a store into the text (present, user, write) - and a parent
+that waits for both and ends with 0. A third child hands the same page to
+`read` and meets the fault on the instruction after the call. `make
+x86-smoke` reads the codes and the lines of the parent, so a machine that
+executed the data, took the write or stopped at the first fault fails several
+checks.
+
+One consequence is worth naming: the system call copies in both directions
+with one answer, `k_port_exec_contains()`, and a read-only page is accepted
+there. A program may read its text through `write` (a pointer to its own code
+is memory), and a program that hands its text as the *destination* of a call
+does not stop the kernel: its page becomes data, as above, and the program
+dies on return.
+
+### 10. SMAP and SMEP: the decision for 1.0
+
+SMEP (CR4 bit 20) would make ring 0 refuse to fetch from a page of ring 3,
+and SMAP (CR4 bit 21) would make it refuse to read or write one without
+`STAC`/`CLAC` around the copy. Both are the hardware half of the edge of
+section 8, and neither is enabled in 1.0:
+
+* the processor of `make x86-smoke` is QEMU's default `qemu64`, whose CPUID
+  does not advertise either feature; a CR4 write it does not know is a `#GP`,
+  so the port would have to ask CPUID first and carry two behaviours of the
+  same map;
+* SMAP needs the kernel's copy edge to open a window with `STAC` and close it
+  with `CLAC`. Contract 1.7 has one predicate and one `memcpy` in
+  `components/kernel/src/ksys.c`, and the window has to be around every copy
+  of every call, including the four path calls that copy nothing and the
+  signal frame the port writes. That is a change of the portable kernel and
+  its ABI, not of this port alone;
+* SMEP would need an audit that no kernel entry executes a byte of the window
+  (the restorer runs in ring 3, so the audit should pass), and it would have
+  to be enabled only when CPUID says so.
+
+NX protects the data of a program from being run and its code from being
+written, and it costs nothing on a machine that has it. SMAP and SMEP stay a
+debt of the port.
+
 ## What is not done
 
 * The kernel is not in a higher half. It keeps the identity map of the first
@@ -239,11 +342,8 @@ are copied as before.
   not the other way round. The plan is in the next section; it is a change of
   the loader, the linker script and `paging.c`, and it is deliberately not
   mixed with the edge of this pass.
-* No SMAP: the check accepts the memory of the program and the kernel still
-  reads it with the processor in ring 0. A pointer that becomes invalid
-  between the check and the copy cannot happen on this single processor, but
-  SMAP/SMEP (and NX) are the hardware half of the same rule and are still
-  ahead.
+* No SMAP and no SMEP: the decision and the reasons are in section 10. NX is
+  on, so the data of a program is never code and its code is never memory.
 * The four path calls of K4 copy nothing: they validate the range and hand
   the pointer to the VFS. The window cannot change under a call on this port,
   so the check is enough there; the copy is the shape the other calls use and
@@ -285,8 +385,9 @@ The risk is concentrated in the loader and in `page_phys()`: one wrong entry
 or one missed conversion and the machine triple-faults before the console, so
 the work is a branch of its own with the smoke test at every step, not a
 change of a pass that also touches the edge of the ABI.
-* No NX, no SMEP/SMAP, no PCID, no SMP: every entry flushes the TLB and the
-  map assumes one processor.
+
+* No PCID and no SMP: every entry flushes the TLB and the map assumes one
+  processor.
 * `KERNEL_NOMMU` is still 1 for the whole tree. Turning it off is a change of
   the generic kernel (and of the board's concessions), not of this port alone.
 * The open files are not inherited by the child of a fork, and a program that
@@ -310,6 +411,9 @@ change of a pass that also touches the edge of the ABI.
   a page table of its own and the first write splits a shared page; `waitpid`
   and the shell see the status (K4).
 * Each task has its own `errno`.
+* No page is writable and executable at once: the text of the kernel and of a
+  program is read-only code, every data page, stack and the arena is NX, and
+  the boot reads the tables back and says so (section 9).
 
 **Bad**
 
@@ -319,5 +423,6 @@ change of a pass that also touches the edge of the ABI.
 * The kernel's own map is still the low identity map; the road to a higher
   half is planned and documented, not taken.
 * The pointers of a program are checked and copied at the edge (contract
-  1.6), but without SMAP: the check and the copy are the same page tables,
-  and the hardware half of the rule is still ahead.
+  1.7), but without SMAP: the check and the copy are the same page tables,
+  and SMAP/SMEP are a decision of their own for a machine that has them
+  (section 10).

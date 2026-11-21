@@ -34,7 +34,7 @@ Every function is documented at its declaration; the table is the summary.
 | `kernel/port/kv.h` | `kv_get/set/erase/commit/next` | a place for a handful of strings that survives a restart, or "there is none" |
 | `kernel/port/net.h` | `net_connect/send/recv/close`, `net_listen/accept/server_close`, `net_udp_exchange` | TCP and UDP, or stubs that answer "no network" |
 | `kernel/port/info.h` | `name`, `arch`, `api_major`, `api_minor` | two words about the platform and the version of the contract |
-| `kernel/port/exec.h` | `exec_supported`, `exec_base`, `exec_enter`, `exec_active`, `exec_exit`, `fork_copy` | whether a program can be loaded and run, where, the entry itself, whether a program is in flight, how it ends, and whether a fork can copy the context of a program (the answer is -1 on a machine without an address space per task) |
+| `kernel/port/exec.h` | `exec_supported`, `exec_arch`, `exec_base`, `exec_enter`, `exec_active`, `exec_exit`, `exec_contains`, `fork_copy` | whether a program can be loaded and run, which machine of the format the port is (0 x86-64, 1 Xtensa, -1 for a port that runs none), where, the entry itself, whether a program is in flight, how it ends, whether a range is the memory of a program, and whether a fork can copy the context of a program (the answer is -1 on a machine without an address space per task) |
 | `kernel/port_task.h` | `stack_size`, `task_create/start/yield/sleep_ms/exit/current` | the execution substrate: FreeRTOS, pthreads, or a switch of your own |
 
 A port that implements the headers but not `kernel/port_task.h` is not a

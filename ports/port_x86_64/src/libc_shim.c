@@ -395,3 +395,18 @@ char *strrchr(const char *text, int c)
         }
     }
 }
+
+/*
+ * The conversion of a number. The procfs reads the pid in the name of a
+ * directory with it (`/proc/12/status`), and the conversion itself is the
+ * one of components/libc/src/stdlib.c, which is linked into the kernel: this
+ * machine has no libc probe that would turn the name of the C library into
+ * the name of the function of the system.
+ */
+unsigned long microos_strtoul(const char *text, char **end, int base);
+unsigned long strtoul(const char *text, char **end, int base);
+
+unsigned long strtoul(const char *text, char **end, int base)
+{
+    return microos_strtoul(text, end, base);
+}

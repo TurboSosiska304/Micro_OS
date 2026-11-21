@@ -562,6 +562,7 @@ static void test_attr(void)
     KT_CHECK_INT_EQ(kshell_execute("stat"), KSHELL_USAGE);
     /* The check of the volume takes the words of the type it checks. */
     KT_CHECK_INT_EQ(kshell_execute("fsck fat"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(kshell_execute("fsck fat -y"), KSHELL_USAGE);
     KT_CHECK_INT_EQ(kshell_execute("help fsck"), KSHELL_OK);
 
     /*
@@ -643,6 +644,9 @@ static void test_attr(void)
 #endif
     KT_CHECK(strstr(buf, "usage: stat <path>") != NULL);
     KT_CHECK(strstr(buf, "usage: fsck") != NULL);
+#if defined(MICRO_OS_FS_FAT32) && MICRO_OS_FS_FAT32
+    KT_CHECK(strstr(buf, "-y") != NULL);
+#endif
     KT_CHECK(strstr(buf, "not an octal mode") != NULL);
     KT_CHECK(strstr(buf, "a uid is 0..32767") != NULL);
     KT_CHECK(strstr(buf, "filesystem keeps") != NULL);

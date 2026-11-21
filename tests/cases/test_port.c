@@ -61,6 +61,7 @@ struct port_contract {
     void (*reset)(void);
 
     bool (*exec_supported)(void);
+    int (*exec_arch)(void);
     void *(*exec_base)(void);
     int (*exec_enter)(const struct k_exec_image *image, char *const argv[]);
 
@@ -114,6 +115,7 @@ static const struct port_contract s_contract = {
     .reset = k_port_reset,
 
     .exec_supported = k_port_exec_supported,
+    .exec_arch = k_port_exec_arch,
     .exec_base = k_port_exec_base,
     .exec_enter = k_port_exec_enter,
 
@@ -168,6 +170,7 @@ static void check_contract_is_closed(void)
     KT_CHECK(s_contract.reset != NULL);
 
     KT_CHECK(s_contract.exec_supported != NULL);
+    KT_CHECK(s_contract.exec_arch != NULL);
     KT_CHECK(s_contract.exec_base != NULL);
     KT_CHECK(s_contract.exec_enter != NULL);
 
@@ -202,6 +205,14 @@ static void check_identity(void)
 
     KT_CHECK_INT_EQ(k_port_api_major(), KERNEL_PORT_API_VERSION_MAJOR);
     KT_CHECK_INT_EQ(k_port_api_minor(), KERNEL_PORT_API_VERSION_MINOR);
+
+    /*
+     * The machine the port runs programs for: one of the two numbers of the
+     * format, which the kernel compares with the header of an image before it
+     * enters anything, or -1 when the port has no machine to name.
+     */
+    KT_CHECK(k_port_exec_arch() == -1 || k_port_exec_arch() == (int)K_EXEC_ARCH_X86_64 ||
+             k_port_exec_arch() == (int)K_EXEC_ARCH_XTENSA);
 }
 
 static void check_clock(void)

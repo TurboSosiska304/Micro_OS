@@ -20,13 +20,31 @@ SECTIONS
         *(.text .text.*)
     }
 
+    /*
+     * The three regions of the kernel are separated by whole pages, because
+     * src/paging.c gives each of them its own protection: the text is
+     * readable and executable, the rodata is read-only and not executable,
+     * and the data, the stacks and the heap are writable and not executable.
+     * One page cannot be two of those at once, so a section does not share a
+     * page with the next one.
+     */
+    __text_start = ADDR(.text);
+    __text_end = ADDR(.text) + SIZEOF(.text);
+
+    . = ALIGN(4096);
     .rodata : {
         *(.rodata .rodata.*)
     }
 
+    __rodata_start = ADDR(.rodata);
+    __rodata_end = ADDR(.rodata) + SIZEOF(.rodata);
+
+    . = ALIGN(4096);
     .data : {
         *(.data .data.*)
     }
+
+    __data_start = ADDR(.data);
 
     /*
      * The thread pointer of the C library. The compiler addresses a

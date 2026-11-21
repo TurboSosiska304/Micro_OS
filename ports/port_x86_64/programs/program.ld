@@ -41,7 +41,16 @@ SECTIONS
     /* k_port_exec_base() + the header of the format. */
     . = 0x02000020;
 
-    .text : SUBALIGN(4) { *(.text .text.*) } :text
+    /*
+     * The text ends on a page of its own, and the data begins on the next
+     * one. The port gives the text the protection of code - readable and
+     * executable, not writable - and the data the protection of memory -
+     * writable and not executable - and one page cannot be both (NX/W^X,
+     * ADR 0007). The padding below is part of the text segment in the image,
+     * so mkprog.sh copies it and the header says where the data starts; the
+     * port refuses an image whose text does not end on a page.
+     */
+    .text : SUBALIGN(4) { *(.text .text.*) . = ALIGN(4096); } :text
 
     /*
      * The initialised data and the read-only data are one segment in the

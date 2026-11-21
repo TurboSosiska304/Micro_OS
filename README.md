@@ -74,6 +74,8 @@ The checks of the board are in [its port](docs/ports/esp32/README.md).
   remembers the access it was opened with;
 * **MicroFS**, a filesystem on a block device (`kernel/blockdev.h`) - the
   partition of the flash on the board, a file in the simulator;
+* **filesystems of the world** behind the VFS types: FAT12/16/32 read and
+  written, ext2 read-only (modes, owners and the moments of `statx`);
 * **a memory manager**: slabs for the small blocks, the heap of the port for
   the large ones;
 * **services**: `init` and the scripts of `/etc/init.d`, the configuration of
@@ -97,6 +99,8 @@ Micro_OS/
 │   ├── kshell/         the command interpreter and its commands
 │   ├── init/           the init process: the scripts of /etc/init.d
 │   ├── mfs/            MicroFS and its VFS adapter
+│   ├── fs_fat32/       FAT12/16/32, read and written
+│   ├── fs_ext2/        ext2, read-only
 │   ├── procfs/         the virtual /proc
 │   ├── devfs/          the virtual /dev
 │   ├── config/         the configuration of /etc, in the store of the port
@@ -133,7 +137,7 @@ Micro_OS/
 * **No MMU on the boards without one.** The kernel/user split is logical
   there: no memory protection, no address-space isolation. The x86-64 port
   has an MMU and uses it: a program is a task of ring 3 with page tables of
-  its own (ADR 0007).
+  its own, the text is read-only code and every data page is NX (ADR 0007).
 * **`fork()` is a placeholder on those ports.** Without an MMU the child
   shares the memory of the parent and re-enters its program; the answer (pid
   in the parent, 0 in the child) is the POSIX one. On x86-64 the pages are
@@ -146,8 +150,12 @@ Micro_OS/
   window of the x86-64 port and a library of a program exist: `/bin` has
   `hello`, `cat`, `echo`, `ls`, `spawn` and the programs of the tests, all of
   them ring 3 tasks with `argc`, `argv` and `envp` and an `exit` that the
-  caller waits for ([ADR 0016](docs/adr/0016-userland.md)). There is no shell
-  `export`, no descriptors inherited by a program and no signals yet.
+  caller waits for ([ADR 0016](docs/adr/0016-userland.md)). The board runs
+  `/bin/hello` and `/bin/cat` too, as tasks of its kernel without an address
+  space: one program at a time, 8 KiB of text and 8 KiB of data, and a bad
+  pointer can reboot the machine ([ADR 0018](docs/adr/0018-esp32-programs.md)).
+  There is no shell `export`, no descriptors inherited by a program and no
+  signals yet.
 * **The board has limits of its own**: no PMIC, 8 MB of flash with one
   application slot and no OTA, a 200 mAh battery. They are in
   [docs/ports/esp32](docs/ports/esp32/README.md).

@@ -103,6 +103,8 @@ const char *microos_strerror(int code)
         return "input/output error";
     case -KERR_TOOBIG:
         return "argument list too long";
+    case -KERR_NOEXEC:
+        return "exec format error";
     case -KERR_BADF:
         return "bad file descriptor";
     case -KERR_CHILD:

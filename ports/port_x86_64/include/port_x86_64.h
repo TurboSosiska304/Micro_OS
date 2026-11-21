@@ -181,9 +181,13 @@ int port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs
 
 /*
  * A fault of the program that is running: print the line of the failure and
- * end the task it runs in with the status 255. Does not return.
+ * end the task it runs in with the status 255. Does not return. `error` is
+ * the error code the processor pushed: for a page fault bit 4 says that the
+ * instruction fetch was the access, which is how a fetch from an NX page is
+ * told from a read or a write. `address` is CR2 for a page fault and the RIP
+ * for the other vectors; `rip` is always the instruction that was running.
  */
-void port_x86_64_program_fault(k_u64_t vector, k_u64_t address);
+void port_x86_64_program_fault(k_u64_t vector, k_u64_t error, k_u64_t address, k_u64_t rip);
 
 /* --- the descriptors, the page tables and the thread pointer -------------- */
 
@@ -198,9 +202,11 @@ void port_x86_64_gdt_init(void);
 void port_x86_64_tss_set_rsp0(k_u64_t rsp0);
 
 /*
- * Build the identity map of the kernel. The map covers the first gigabyte in
- * 2 MiB pages, supervisor-only, the same way the loader made it; every task
- * with a program gets a copy with the user window replaced.
+ * Build the map of the kernel: the first gigabyte identity mapped, 2 MiB
+ * pages writable and NX, except the chunks of the kernel image itself, which
+ * are 4 KiB pages - the text readable and executable, the rodata read-only
+ * and NX, and data, bss and the stacks writable and NX. Every task with a
+ * program gets a copy with the user window replaced (ADR 0007, NX and W^X).
  */
 void port_x86_64_paging_init(void);
 k_u64_t port_x86_64_kernel_cr3(void);
@@ -226,13 +232,35 @@ void port_x86_64_frame_release(k_u64_t paddr);
 
 /*
  * Map `len` bytes of `vaddr` in the window of the programs onto the physical
- * pages at `paddr`, readable and writable from ring 3. Both addresses must be
- * page aligned and inside their windows.
+ * pages at `paddr`. Both addresses must be page aligned and inside their
+ * windows. The protection is the pair of flags below: a page of code is
+ * executable and read-only, every page of data is writable and NX, and the
+ * two are never one page (ADR 0007, NX and W^X).
  */
-int port_x86_64_paging_map_user(k_u64_t cr3, k_u64_t vaddr, k_u64_t paddr, k_size_t len);
+#define PORT_X86_64_PAGE_WRITE 0x1u /* ring 3 may write the page */
+#define PORT_X86_64_PAGE_EXEC 0x2u  /* the processor may fetch from it */
+
+int port_x86_64_paging_map_user(k_u64_t cr3, k_u64_t vaddr, k_u64_t paddr, k_size_t len,
+                                k_u32_t flags);
 
 /* The physical address behind a virtual address of the window of programs. */
 void *port_x86_64_paging_phys(k_u64_t cr3, k_u64_t vaddr);
+
+/*
+ * The store of the kernel into a read-only page of a program: this space gets
+ * a private copy of the page as data (writable and NX) so that the store can
+ * happen, and the code of any space that shares the old frame is untouched.
+ * Returns 1 when the instruction may be retried; see
+ * port_x86_64_paging_allow_kernel_write() in src/paging.c.
+ */
+int port_x86_64_paging_allow_kernel_write(k_u64_t cr3, k_u64_t vaddr);
+
+/*
+ * The number of pages of a space that are both writable and executable. Zero
+ * for a map this port built; a non-zero answer is a bug in the tables and the
+ * callers say so instead of running the code.
+ */
+k_u32_t port_x86_64_paging_audit(k_u64_t cr3);
 
 /*
  * The copy of the page under `vaddr` for the first write after a fork. The

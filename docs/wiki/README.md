@@ -35,7 +35,7 @@ canonical Russian documents are in [`docs/ru/`](../ru/README.md).
 | **Files** | [files.md](files.md) | MicroFS, `/etc`, `mkfs`/`fsck`, disks |
 | **Programs** | [programs.md](programs.md) | `MOX1`, `/bin`, `exec`, ring 3, `fork` |
 | **Ports** | [ports.md](ports.md) | ESP32, x86-64, host, null: what runs where |
-| **Kernel and ABI** | [kernel-abi.md](kernel-abi.md) | the calls, the rights, `EFAULT`, contract 1.7 |
+| **Kernel and ABI** | [kernel-abi.md](kernel-abi.md) | the calls, the rights, `EFAULT`, contract 1.8 |
 | **Testing** | [testing.md](testing.md) | `make ci`, the smoke tests, the device test |
 | **Troubleshooting** | [troubleshooting.md](troubleshooting.md) | symptom, cause, what to do |
 | **Contributing** | [../../CONTRIBUTING.md](../../CONTRIBUTING.md) | the rules, commits, branches, style |

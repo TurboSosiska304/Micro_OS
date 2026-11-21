@@ -1619,15 +1619,21 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t envp, k
      * The answers below are the contract of k_exec_run: a number from 0 to
      * 255 is a program that ran and returned with that status - the call ends
      * with 0, because the status belongs to a process and the program is a
-     * task now - -2 is a machine that cannot run a program at all (the board,
-     * the simulator), and anything else is the image the port could not place
-     * in its window or could not copy.
+     * task now - K_EXEC_RUN_NO_MACHINE is a machine that cannot run a program
+     * at all (the simulator, the board until it can) and is ENOSYS,
+     * K_EXEC_RUN_OTHER_ARCH is an image of another machine and is ENOEXEC
+     * before a byte of it runs, and REFUSED is the image the port could not
+     * place in its window or could not copy.
      */
     if (rc >= 0) {
         return 0;
     }
 
-    return (rc == -2) ? KERR_NOSYS : KERR_NOMEM;
+    if (rc == K_EXEC_RUN_OTHER_ARCH) {
+        return KERR_NOEXEC;
+    }
+
+    return (rc == K_EXEC_RUN_NO_MACHINE) ? KERR_NOSYS : KERR_NOMEM;
 }
 #else
 /*

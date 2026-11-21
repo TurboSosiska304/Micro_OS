@@ -132,11 +132,16 @@ struct port_signal_frame {
  */
 #define PORT_FRAME_RBP 0u
 #define PORT_FRAME_RAX 9u
-#define PORT_FRAME_RIP 10u
-#define PORT_FRAME_CS 11u
-#define PORT_FRAME_RFLAGS 12u
-#define PORT_FRAME_RSP 13u
-#define PORT_FRAME_SS 14u
+#define PORT_FRAME_RBX 10u
+#define PORT_FRAME_R12 11u
+#define PORT_FRAME_R13 12u
+#define PORT_FRAME_R14 13u
+#define PORT_FRAME_R15 14u
+#define PORT_FRAME_RIP 15u
+#define PORT_FRAME_CS 16u
+#define PORT_FRAME_RFLAGS 17u
+#define PORT_FRAME_RSP 18u
+#define PORT_FRAME_SS 19u
 
 /* The name of the task a program runs in: the table keeps sixteen bytes. */
 #define PORT_EXEC_TASK_NAME "program"
@@ -221,15 +226,17 @@ __asm__(".section .text, \"ax\", @progbits\n"
          * The way out of fork(): the child's kernel stack carries a copy of
          * the syscall frame of the parent, with zero where the result of the
          * call was. The tail below is the tail of isr_syscall - the thread
-         * pointer of ring 3, the ten saved registers, the iretq.
+         * pointer of ring 3, the fifteen saved registers, the iretq - and it
+         * restores every one of them from the frame, because a child has no
+         * live registers to inherit: the frame is the whole of its state.
          */
         ".globl port_exec_fork_return\n"
         ".type port_exec_fork_return, @function\n"
         "port_exec_fork_return:\n"
-        "    movq %rdi, %r12\n"
+        "    movq %rdi, %rbx\n" /* the frame; RBX is restored from it below */
         "    andq $-16, %rsp\n"
         "    call port_x86_64_tls_user\n"
-        "    movq %r12, %rsp\n"
+        "    movq %rbx, %rsp\n"
         "    popq %rbp\n"
         "    popq %rcx\n"
         "    popq %r11\n"
@@ -240,17 +247,17 @@ __asm__(".section .text, \"ax\", @progbits\n"
         "    popq %rsi\n"
         "    popq %rdi\n"
         "    popq %rax\n"
+        "    popq %rbx\n"
+        "    popq %r12\n"
+        "    popq %r13\n"
+        "    popq %r14\n"
+        "    popq %r15\n"
         "    iretq\n"
         ".size port_exec_fork_return, . - port_exec_fork_return\n");
 
 static k_size_t align_up(k_size_t value, k_size_t alignment)
 {
     return (value + alignment - 1u) & ~(alignment - 1u);
-}
-
-static k_size_t align_down(k_size_t value, k_size_t alignment)
-{
-    return value & ~(alignment - 1u);
 }
 
 static bool image_fits(const struct k_exec_image *image, k_size_t source, k_size_t end)
@@ -267,7 +274,7 @@ static bool image_fits(const struct k_exec_image *image, k_size_t source, k_size
 }
 
 /* Give `len` bytes of the window a frame of the arena, page by page. */
-static bool space_map(k_u64_t space, k_size_t offset, k_size_t len)
+static bool space_map(k_u64_t space, k_size_t offset, k_size_t len, k_u32_t flags)
 {
     k_size_t at;
 
@@ -279,8 +286,8 @@ static bool space_map(k_u64_t space, k_size_t offset, k_size_t len)
             return false;
         }
 
-        if (port_x86_64_paging_map_user(space, PORT_EXEC_BASE + offset + at, frame, PAGE_SIZE) !=
-            0) {
+        if (port_x86_64_paging_map_user(space, PORT_EXEC_BASE + offset + at, frame, PAGE_SIZE,
+                                        flags) != 0) {
             port_x86_64_frame_release(frame);
             kerror("x86_64: cannot map a page of the program");
             return false;
@@ -394,6 +401,12 @@ bool k_port_exec_supported(void)
     return true;
 }
 
+int k_port_exec_arch(void)
+{
+    /* The bytes of this machine, and the pull of the iretq: x86-64. */
+    return (int)K_EXEC_ARCH_X86_64;
+}
+
 void *k_port_exec_base(void)
 {
     return (void *)(uintptr_t)PORT_EXEC_BASE;
@@ -440,7 +453,11 @@ bool k_port_exec_contains(const void *ptr, k_size_t size)
     /*
      * The frames of the window are not contiguous, but the page tables are
      * the only thing that can say whether a page is part of the program: a
-     * present PTE is the answer, and it covers copy-on-write pages too.
+     * present PTE is the answer, and it covers copy-on-write pages and the
+     * text too. A store of the kernel into a page that is read-only - the
+     * text of the program, the restorer of a handler - does not stop the
+     * machine: port_x86_64_exception() gives the page up as code before the
+     * store is retried (port_x86_64_paging_allow_kernel_write()).
      */
     for (at = start & ~(k_u64_t)(PAGE_SIZE - 1u); at < end; at += PAGE_SIZE) {
         if (port_x86_64_paging_phys(space, at) == NULL) {
@@ -519,6 +536,8 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
     k_u64_t user_envp = 0;
     k_size_t source;
     k_size_t end;
+    k_size_t text_end;
+    k_size_t rw_end;
     k_size_t arg_off = 0;
     k_size_t arg_end = 0;
     k_size_t strings = 0;
@@ -567,6 +586,20 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
     if (!image_fits(image, source, end)) {
         kerror("x86_64: the image (%u bytes) does not fit the window of the programs",
                (unsigned)end);
+        return -1;
+    }
+
+    /*
+     * The text ends on a page of its own. A program is not relocated, so the
+     * pages of the format are the pages of the map: the text is executable
+     * and read-only, the data that follows it is writable and NX, and one
+     * page cannot be both. program.ld pads the text to the boundary and the
+     * port refuses an image that does not (ADR 0007, NX and W^X).
+     */
+    text_end = (k_size_t)K_EXEC_HEADER_SIZE + image->text_size;
+    if ((text_end % PAGE_SIZE) != 0) {
+        kerror("x86_64: the text of the image does not end on a page (%u bytes)",
+               (unsigned)text_end);
         return -1;
     }
 
@@ -641,29 +674,47 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
      * The image is mapped page by page; the rest of the window is left out on
      * purpose, so a program that runs past its data or below its stack meets
      * a page that is not there instead of a page of another program.
+     *
+     * The text - the header and the code - is the one executable region of a
+     * program and it is not writable. Everything after it, the initialised
+     * data, the bss, the vector of the arguments and the environment, is
+     * writable and NX: the program may compute into it, never run it.
      */
-    if (!space_map(space, 0, align_up(end, PAGE_SIZE))) {
+    if (!space_map(space, 0, text_end, PORT_X86_64_PAGE_EXEC)) {
         goto fail;
     }
 
-    if (user_argc > 0 || image->envp != NULL) {
-        k_size_t vectors_off = (user_argc > 0) ? arg_off : env_off;
-        k_size_t vectors_end = (env_end > arg_end) ? env_end : arg_end;
-        k_size_t first = align_down(vectors_off, PAGE_SIZE);
-        k_size_t last = align_up(vectors_end, PAGE_SIZE);
+    rw_end = align_up(end, PAGE_SIZE);
 
-        if (!space_map(space, first, last - first)) {
-            goto fail;
+    if (user_argc > 0 || image->envp != NULL) {
+        k_size_t vectors_end = (env_end > arg_end) ? env_end : arg_end;
+        k_size_t vectors_page = align_up(vectors_end, PAGE_SIZE);
+
+        if (vectors_page > rw_end) {
+            rw_end = vectors_page;
         }
     }
 
-    if (!space_map(space, PORT_EXEC_STACK_OFFSET, PORT_EXEC_STACK_SIZE)) {
+    if (rw_end > text_end &&
+        !space_map(space, text_end, rw_end - text_end, PORT_X86_64_PAGE_WRITE)) {
         goto fail;
     }
 
-    /* The restorer of a handler is a page of the program, written by the
-     * kernel: a signal frame names it as the return address of the handler. */
-    if (!space_map(space, PORT_EXEC_RESTORER_OFFSET, PAGE_SIZE)) {
+    if (!space_map(space, PORT_EXEC_STACK_OFFSET, PORT_EXEC_STACK_SIZE, PORT_X86_64_PAGE_WRITE)) {
+        goto fail;
+    }
+
+    /* The restorer of a handler is a page of code of the program, written by
+     * the kernel before the entry: it is executable and never writable. */
+    if (!space_map(space, PORT_EXEC_RESTORER_OFFSET, PAGE_SIZE, PORT_X86_64_PAGE_EXEC)) {
+        goto fail;
+    }
+
+    /* The tables have to keep the promise before a byte of the program runs:
+     * a page that is writable and executable at once is a refusal here and
+     * not a fault on the machine. */
+    if (port_x86_64_paging_audit(space) != 0) {
+        kerror("x86_64: the map of the program is not W^X");
         goto fail;
     }
 
@@ -852,9 +903,9 @@ fail:
 /*
  * The frame of the running task, when the caller is a program of ring 3. A
  * stub of the port leaves it at the top of the kernel stack of the program:
- * the ten registers it saved and the five of the crossing, 120 bytes. Every
- * entry into the kernel from user space has that shape, so the address is
- * the same for a system call and for the tick of the timer.
+ * the fifteen registers it saved and the five of the crossing, 160 bytes.
+ * Every entry into the kernel from user space has that shape, so the address
+ * is the same for a system call and for the tick of the timer.
  */
 static k_u64_t *user_frame(void)
 {
@@ -1055,10 +1106,19 @@ void port_x86_64_signal_tick(k_u64_t *frame)
     task_signal_check(self, 0, false);
 }
 
-void port_x86_64_program_fault(k_u64_t vector, k_u64_t address)
+void port_x86_64_program_fault(k_u64_t vector, k_u64_t error, k_u64_t address, k_u64_t rip)
 {
-    klog(K_LOG_LEVEL_ERROR, "the program faulted: vector %u at 0x%08x%08x", (unsigned)vector,
-         (unsigned)(address >> 32), (unsigned)(address & 0xFFFFFFFFu));
+    /*
+     * The error code is part of the line because it names the access: the
+     * program that fetched an NX page and the one that wrote its own text
+     * both meet vector 14, and bit 4 of the code is the only thing that tells
+     * the two apart. The smoke test of the port reads it.
+     */
+    klog(K_LOG_LEVEL_ERROR,
+         "the program faulted: vector %u at 0x%08x%08x, error 0x%08x%08x, rip 0x%08x%08x",
+         (unsigned)vector, (unsigned)(address >> 32), (unsigned)(address & 0xFFFFFFFFu),
+         (unsigned)(error >> 32), (unsigned)(error & 0xFFFFFFFFu), (unsigned)(rip >> 32),
+         (unsigned)(rip & 0xFFFFFFFFu));
 
     /* A fault of a program is the end of its task, not of the machine. */
     task_exit(255);

@@ -30,4 +30,20 @@ void port_esp32_wifi_init(void);
 /* Start the 1 ms time base (calls k_sched_tick()). */
 esp_err_t port_esp32_start_tick(uint32_t period_ms);
 
+/*
+ * The door of a program (ADR 0018). The program is entered with the address
+ * of this function; every wrapper of components/libc/user calls it with the
+ * number and the six arguments of the syscall ABI, and it answers what
+ * ksys_call() answers. The shape is the one of ksys_call() on purpose: the
+ * door adds nothing to the argument and nothing to the answer.
+ */
+long port_mox_syscall(long number, long a0, long a1, long a2, long a3, long a4, long a5);
+
+/*
+ * Put the programs that ship with the firmware into /bin and run one of them
+ * through execve. Called by the self test after the filesystem is mounted; a
+ * failure is a line on the console and not a reason to stop the boot.
+ */
+int port_esp32_programs_boot(void);
+
 #endif /* MICRO_OS_PORT_ESP32_H */
