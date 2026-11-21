@@ -124,7 +124,8 @@ The files, on every machine:
 | Command | What it does |
 |---|---|
 | `pwd`, `cd <dir>` | the current directory |
-| `ls [-l] [-a] [path]` | the tree; `-l` adds mode, owner and size, `-a` the hidden `.` and `..` |
+| `ls [-la] [path]` | the names of a directory, one per line; `-l` adds the mode, the owner, the size and the date, `-a` puts `.` and `..` first |
+| `tree [-ad] [path]` | the levels below a path, with `` `-- `` branches; `-d` keeps the directories only |
 | `cat [-n] [file]` | the content of a file, or of the standard input; `-n` numbers the lines |
 | `write <file> <text>` | create or replace a file with one line (at most 127 bytes) |
 | `mkdir <dir>`, `rm [-r] <file>` | a directory, a file; a directory needs `-r` |
@@ -220,6 +221,45 @@ started, because they share one job (ADR 0017). A program that ignores it
 keeps running: there is no `-9` to fall back on (a number outside the table
 is `EINVAL`), and the machine is restarted with `reboot` if a program really
 hangs.
+
+## `ls` and `tree`
+
+`ls` writes the names of a directory, one per line and sorted, a directory
+with a slash at its end. `-l` adds the kind and the nine bits of the mode, the
+owner, the size and the moment; `-a` puts `.` and `..` first. The path itself
+is not a line of the answer — `tree` is the command that draws the levels.
+
+```text
+microos> ls /etc
+fstab
+init.d/
+setting
+microos> ls -l /etc
+drwxr-xr-x root        14 21 Nov 19:03 init.d/
+-rw-r--r-- root         6 21 Nov 19:03 setting
+```
+
+The owner 0 is written `root`, a greater uid as a number. A record without a
+mode prints `?---------`; a record without a moment prints `-` in the date
+column. A file is its name as it was given: `ls hello` answers `hello`.
+
+`tree [-ad] [path]` draws the levels below a path with `|--` and `` `-- ``
+branches and ends with the count of what it drew. `-d` keeps the directories
+only; `-a` is accepted for the hidden names, of which this system has none
+yet. The walk stops at the sixth level with `... (deeper)`, and a directory
+that cannot be read is skipped.
+
+```text
+microos> tree /etc
+/etc
+|-- init.d/
+|   `-- clock
+`-- setting
+1 directory, 2 files
+```
+
+A path that does not exist is a sentence with the error of the filesystem and
+the status of the command is not 0: `ls: /nope: no such file or directory`.
 
 ## `stat`, `chmod` and `chown`
 

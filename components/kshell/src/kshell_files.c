@@ -33,7 +33,8 @@
 #endif
 
 #define SHELL_MAX_ENTRIES 64
-#define SHELL_LS_CHILDREN 16
+#define SHELL_TREE_DEPTH 6
+#define SHELL_TREE_ENTRIES 16
 #define SHELL_PATH_MAX 128
 
 /*
@@ -149,32 +150,6 @@ static int cmd_cd(int argc, char **argv)
     return KSHELL_OK;
 }
 
-/* One line of the tree: the branch, the name of the entry, a slash for a dir. */
-static void ls_print(const char *name, k_size_t type, const char *prefix, bool last)
-{
-    kshell_printf("%s%s %s%s\n", prefix, last ? "`--" : "|--", name, type == 2 ? "/" : "");
-}
-
-/*
- * The entries below one directory of the listing, indented under it: the
- * picture of the root then shows /etc and /etc/init.d at once, while the
- * table of the level above stays in its own static place.
- */
-static void ls_children(const char *path, const char *prefix)
-{
-    static struct vfs_dirent entries[SHELL_LS_CHILDREN];
-    k_size_t count = 0;
-    k_size_t i;
-
-    if (vfs_list(path, entries, SHELL_LS_CHILDREN, &count) != 0) {
-        return;
-    }
-
-    for (i = 0; i < count; i++) {
-        ls_print(entries[i].name, entries[i].type, prefix, i + 1 == count);
-    }
-}
-
 /* The path of a child of `dir`, when it fits; false when it does not. */
 static bool ls_child_path(const char *dir, const char *name, char *out, k_size_t size)
 {
@@ -227,25 +202,107 @@ static void path_parent(const char *path, char *out, k_size_t size)
 }
 
 /*
- * One line of `ls -l`, the same line `stat` prints first. A record of an old
- * volume keeps no mode: the `?` says exactly that, because nine dashes would
- * read as "nobody may touch it", which the record does not say.
+ * The names of a directory in the order a person expects. The filesystems
+ * keep their own order, which is the order of the records on the medium and
+ * not a promise to a reader.
  */
-static void ls_long_stat(const struct vfs_stat *info, const char *name)
+static void entry_sort(struct vfs_dirent *entries, k_size_t count)
 {
-    char bits[10];
-    char kind;
+    k_size_t i;
 
-    if (info->mode == 0) {
-        kshell_printf("?--------- %u %llu %s\n", (unsigned)info->owner,
-                      (unsigned long long)info->size, name);
+    for (i = 1; i < count; i++) {
+        struct vfs_dirent entry = entries[i];
+        k_size_t j = i;
+
+        while (j > 0 && strcmp(entries[j - 1].name, entry.name) > 0) {
+            entries[j] = entries[j - 1];
+            j--;
+        }
+        entries[j] = entry;
+    }
+}
+
+/* A directory is written with a slash, so that the kind of a name is visible
+ * without the long format. `.` and `..` are the two names that keep none. */
+static void ls_name(const char *name, k_size_t type)
+{
+    kshell_printf("%s%s\n", name, type == 2 ? "/" : "");
+}
+
+/*
+ * The moment of a record as `ls -l` writes it: `DD Mon HH:MM`, in UTC, which
+ * is the time the filesystem keeps (ADR 0013). A record without a moment is
+ * a dash; nothing is pretended about it.
+ */
+static void ls_date(k_u64_t when, char out[13])
+{
+    static const char months[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
+    const k_u64_t last_second = 253402300799ULL; /* 9999-12-31 23:59:59 */
+    long long days;
+    long long z;
+    long long era;
+    unsigned doe;
+    unsigned yoe;
+    unsigned doy;
+    unsigned mp;
+    unsigned day;
+    unsigned month;
+    unsigned seconds;
+
+    if (when == 0 || when > last_second) {
+        snprintf(out, 13, "-");
         return;
     }
 
-    kind = (info->type == 2) ? 'd' : (info->type == 1 ? '-' : 'c');
-    mode_text(info->mode & KSYS_MODE_MASK, bits);
-    kshell_printf("%c%s %u %llu %s\n", kind, bits, (unsigned)info->owner,
-                  (unsigned long long)info->size, name);
+    days = (long long)(when / 86400u);
+    seconds = (unsigned)(when % 86400u);
+
+    /* The civil date of a count of days since 1970-01-01, in whole years. */
+    z = days + 719468;
+    era = (z >= 0 ? z : z - 146096) / 146097;
+    doe = (unsigned)(z - era * 146097);
+    yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    mp = (5 * doy + 2) / 153;
+    day = doy - (153 * mp + 2) / 5 + 1;
+    month = mp < 10 ? mp + 3 : mp - 9;
+
+    snprintf(out, 13, "%02u %c%c%c %02u:%02u", day, months[(month - 1) * 3],
+             months[(month - 1) * 3 + 1], months[(month - 1) * 3 + 2], seconds / 3600,
+             (seconds / 60) % 60);
+}
+
+/*
+ * One line of `ls -l`: the kind and the nine bits of the mode, the owner, the
+ * size, the moment and the name, in fixed columns. A record of an old volume
+ * keeps no mode: the `?` says exactly that, because nine dashes would read as
+ * "nobody may touch it", which the record does not say.
+ */
+static void ls_long_stat(const struct vfs_statx *info, const char *name, bool slash)
+{
+    char bits[10];
+    char mode[11];
+    char owner[12];
+    char date[13];
+
+    if (info->mode == 0) {
+        snprintf(mode, sizeof(mode), "?---------");
+    } else {
+        char kind = (info->type == 2) ? 'd' : (info->type == 1 ? '-' : 'c');
+
+        mode_text(info->mode & KSYS_MODE_MASK, bits);
+        snprintf(mode, sizeof(mode), "%c%s", kind, bits);
+    }
+
+    if (info->owner == 0) {
+        snprintf(owner, sizeof(owner), "root");
+    } else {
+        snprintf(owner, sizeof(owner), "%u", (unsigned)info->owner);
+    }
+
+    ls_date(info->mtime, date);
+    kshell_printf("%s %-7s %6llu %12s %s%s\n", mode, owner, (unsigned long long)info->size, date,
+                  name, slash ? "/" : "");
 }
 
 /* One entry of a directory in the long format. The stat is of the path of
@@ -253,16 +310,17 @@ static void ls_long_stat(const struct vfs_stat *info, const char *name)
 static void ls_long_entry(const char *dir, const struct vfs_dirent *entry)
 {
     char child[SHELL_PATH_MAX];
-    struct vfs_stat info;
+    struct vfs_statx info;
 
-    if (!ls_child_path(dir, entry->name, child, sizeof(child)) || vfs_stat(child, &info) != 0) {
+    if (!ls_child_path(dir, entry->name, child, sizeof(child)) || vfs_statx(child, &info) != 0) {
         /* The name is still the answer of the listing; the fields that
          * could not be read are not invented for it. */
-        kshell_printf("?--------- %s\n", entry->name);
+        kshell_printf("?--------- %-7s %6s %12s %s%s\n", "-", "-", "-", entry->name,
+                      entry->type == 2 ? "/" : "");
         return;
     }
 
-    ls_long_stat(&info, entry->name);
+    ls_long_stat(&info, entry->name, entry->type == 2);
 }
 
 static int cmd_ls(int argc, char **argv)
@@ -282,6 +340,7 @@ static int cmd_ls(int argc, char **argv)
     struct kshell_args args;
     struct vfs_stat info;
     char path[SHELL_PATH_MAX];
+    const char *shown;
     k_size_t count = 0;
     k_size_t i;
     int rc;
@@ -309,16 +368,24 @@ static int cmd_ls(int argc, char **argv)
         return KSHELL_ERROR;
     }
 
-    /*
-     * A file has no entries below it: plain `ls` prints its path, as the
-     * listing of a directory begins with the directory, and `-l` prints the
-     * line of stat for it.
-     */
+    /* The name a person typed, not the path the shell made of it: `ls hello`
+     * answers `hello`, exactly as the argument was given. */
+    shown = args.argc > 0 ? args.argv[0] : path;
+
+    /* A file has no entries below it: plain `ls` prints its name, and `-l`
+     * prints the one line of stat for it. */
     if (info.type != 2) {
         if (long_format) {
-            ls_long_stat(&info, path);
+            struct vfs_statx info_x;
+
+            rc = vfs_statx(path, &info_x);
+            if (rc != 0) {
+                kshell_printf("ls: %s: %s\n", path, vfs_strerror(rc));
+                return KSHELL_ERROR;
+            }
+            ls_long_stat(&info_x, shown, false);
         } else {
-            kshell_printf("%s\n", path);
+            kshell_printf("%s\n", shown);
         }
         return KSHELL_OK;
     }
@@ -329,17 +396,22 @@ static int cmd_ls(int argc, char **argv)
         return KSHELL_ERROR;
     }
 
+    entry_sort(entries, count);
+
     if (long_format) {
         if (show_all) {
             char parent[SHELL_PATH_MAX];
-            struct vfs_stat parent_info;
+            struct vfs_statx self_info;
+            struct vfs_statx parent_info;
 
-            ls_long_stat(&info, ".");
+            if (vfs_statx(path, &self_info) == 0) {
+                ls_long_stat(&self_info, ".", false);
+            }
             path_parent(path, parent, sizeof(parent));
             /* A parent that cannot be read is not invented: the row is
              * missing rather than wrong. */
-            if (vfs_stat(parent, &parent_info) == 0) {
-                ls_long_stat(&parent_info, "..");
+            if (vfs_statx(parent, &parent_info) == 0) {
+                ls_long_stat(&parent_info, "..", false);
             }
         }
 
@@ -350,40 +422,162 @@ static int cmd_ls(int argc, char **argv)
         return KSHELL_OK;
     }
 
-    kshell_printf("%s\n", path);
-
     if (show_all) {
         /*
          * `.` and `..` are not entries of a directory and no filesystem here
          * lists them: they are the two names every directory has.
          */
-        ls_print(".", 2, "", false);
-        ls_print("..", 2, "", false);
+        kshell_printf(".\n..\n");
     }
 
     for (i = 0; i < count; i++) {
-        char child_path[SHELL_PATH_MAX];
-        char child_prefix[16];
-        bool last = (i + 1 == count);
+        ls_name(entries[i].name, entries[i].type);
+    }
 
-        ls_print(entries[i].name, entries[i].type, "", last);
+    return KSHELL_OK;
+}
 
-        if (entries[i].type != 2) {
+/*
+ * One directory of the tree. The tables of the levels are apart, because the
+ * walk of a child runs before the parent is done with its own names; a level
+ * has 16 names, which is the table the old listing of the children had.
+ *
+ * The sixth level is the last one drawn: a directory that has entries below
+ * it says `... (deeper)` instead of running the stack of the shell out.
+ */
+static int tree_walk(const char *path, const char *prefix, int level, bool dirs_only,
+                     k_size_t *dirs, k_size_t *files)
+{
+    static struct vfs_dirent entries[SHELL_TREE_DEPTH][SHELL_TREE_ENTRIES];
+    struct vfs_dirent *list;
+    k_size_t count = 0;
+    k_size_t i;
+    int rc;
+
+    if (level < 1 || level > SHELL_TREE_DEPTH) {
+        return 0;
+    }
+
+    list = entries[level - 1];
+    rc = vfs_list(path, list, SHELL_TREE_ENTRIES, &count);
+    if (rc != 0) {
+        return rc;
+    }
+
+    entry_sort(list, count);
+
+    if (level == SHELL_TREE_DEPTH) {
+        bool printable = false;
+
+        for (i = 0; i < count; i++) {
+            if (!dirs_only || list[i].type == 2) {
+                printable = true;
+                break;
+            }
+        }
+        if (printable) {
+            kshell_printf("%s... (deeper)\n", prefix);
+        }
+        return 0;
+    }
+
+    for (i = 0; i < count; i++) {
+        char child[SHELL_PATH_MAX];
+        char child_prefix[SHELL_PATH_MAX];
+        bool last = true;
+        k_size_t j;
+
+        if (dirs_only && list[i].type != 2) {
             continue;
         }
 
-        /* The path of the child, and the prefix its own entries start with. */
-        if (!ls_child_path(path, entries[i].name, child_path, sizeof(child_path))) {
+        for (j = i + 1; j < count; j++) {
+            if (!dirs_only || list[j].type == 2) {
+                last = false;
+                break;
+            }
+        }
+
+        kshell_printf("%s%s %s%s\n", prefix, last ? "`--" : "|--", list[i].name,
+                      list[i].type == 2 ? "/" : "");
+
+        if (list[i].type == 2) {
+            (*dirs)++;
+        } else {
+            (*files)++;
+        }
+
+        if (list[i].type != 2) {
             continue;
         }
-        snprintf(child_prefix, sizeof(child_prefix), "%s", last ? "    " : "|   ");
 
-        ls_children(child_path, child_prefix);
+        if (!ls_child_path(path, list[i].name, child, sizeof(child))) {
+            continue;
+        }
+
+        snprintf(child_prefix, sizeof(child_prefix), "%s%s", prefix, last ? "    " : "|   ");
+        (void)tree_walk(child, child_prefix, level + 1, dirs_only, dirs, files);
     }
 
-    if (count == 0 && !show_all) {
-        kshell_printf("(empty)\n");
+    return 0;
+}
+
+static int cmd_tree(int argc, char **argv)
+{
+    bool show_all = false;
+    bool dirs_only = false;
+    struct kshell_option options[] = {
+        {'a', &show_all},
+        {'d', &dirs_only},
+    };
+    struct kshell_args args;
+    struct vfs_stat info;
+    char path[SHELL_PATH_MAX];
+    k_size_t dirs = 0;
+    k_size_t files = 0;
+    int rc;
+
+    rc = kshell_options(argc, argv, options, K_ARRAY_SIZE(options), "tree [-ad] [path]", &args);
+    if (rc == KSHELL_OPTIONS_HELP) {
+        return kshell_help_show(argv[0]);
     }
+    if (rc != KSHELL_OPTIONS_OK) {
+        return KSHELL_USAGE;
+    }
+
+    if (args.argc > 1) {
+        kshell_printf("usage: tree [-ad] [path]\n");
+        return KSHELL_USAGE;
+    }
+
+    if (!shell_resolve(args.argc > 0 ? args.argv[0] : NULL, path, sizeof(path))) {
+        return path_too_long("tree");
+    }
+
+    rc = vfs_stat(path, &info);
+    if (rc != 0) {
+        kshell_printf("tree: %s: %s\n", path, vfs_strerror(rc));
+        return KSHELL_ERROR;
+    }
+
+    kshell_printf("%s\n", path);
+
+    if (info.type == 2) {
+        rc = tree_walk(path, "", 1, dirs_only, &dirs, &files);
+        if (rc != 0) {
+            kshell_printf("tree: %s: %s\n", path, vfs_strerror(rc));
+            return KSHELL_ERROR;
+        }
+    } else {
+        files = 1;
+    }
+
+    /* `-a` is accepted for the hidden names; no filesystem here lists a
+     * name of that kind yet, and `.` and `..` would be a branch nobody has. */
+    (void)show_all;
+
+    kshell_printf("%u %s, %u %s\n", (unsigned)dirs, dirs == 1 ? "directory" : "directories",
+                  (unsigned)files, files == 1 ? "file" : "files");
 
     return KSHELL_OK;
 }
@@ -1426,12 +1620,20 @@ static const struct file_command {
     {"pwd", {.summary = "the current directory", .usage = "pwd"}, cmd_pwd},
     {"cd", {.summary = "change the current directory", .usage = "cd <directory>"}, cmd_cd},
     {"ls",
-     {.summary = "list the files of a directory",
+     {.summary = "list the names of a directory",
       .usage = "ls [-la] [path]",
-      .detail = "  -l  the mode, the owner and the size of every entry\n"
-                "  -a  show . and .. as well\n"
-                "Without a path the current directory is listed.\n"},
+      .detail = "  -l  the mode, the owner, the size and the date of every entry\n"
+                "  -a  show . and .. first\n"
+                "Without a path the current directory is listed. The names come one\n"
+                "per line, sorted; `tree` draws the levels below a path.\n"},
      cmd_ls},
+    {"tree",
+     {.summary = "draw the tree of a directory",
+      .usage = "tree [-ad] [path]",
+      .detail = "  -a  accept the hidden names, of which this system has none yet\n"
+                "  -d  the directories only\n"
+                "The walk stops at the sixth level and says ... (deeper) there.\n"},
+     cmd_tree},
     {"cat",
      {.summary = "print the content of a file, or of the input",
       .usage = "cat [-n] [file]",

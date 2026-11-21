@@ -60,6 +60,10 @@ COMMANDS = [
     # is fresh at every boot.
     "mkdir /etc",
     "write /etc/setting hello",
+    # The shell lists the names of a directory, and the tree is a command of
+    # its own: `ls` has no branches, `tree` has them and counts what it drew.
+    "ls /",
+    "tree /",
     "exec /bin/cat /etc/setting",
     "exec /bin/cat /no/such/file",
     "exec /bin/echo one two",
@@ -393,6 +397,19 @@ def check(output: str) -> list:
         "hello" in listing and "cat" in listing and "echo" in listing and "ls" in listing,
     )
     expect("ls is a program of the shell", "the program has finished" in listing)
+
+    # The shell's own `ls` is a list of names and not a tree; `tree` is the
+    # command that draws the levels below a path. `/etc` was made above, so
+    # the two answers are of a volume the boot and the shell both wrote.
+    root_listing = answer("ls /")
+    expect("ls / lists the names", "bin/" in root_listing and "etc/" in root_listing)
+    expect("ls is not a tree", "`--" not in root_listing and "|--" not in root_listing)
+    tree_listing = answer("tree /")
+    expect("tree / draws the branches", "|-- " in tree_listing and "`-- " in tree_listing)
+    expect(
+        "tree / counts the directories and the files",
+        re.search(r"\d+ director(?:y|ies), \d+ files?", tree_listing) is not None,
+    )
 
     # --- the utilities of the library: wc, head, grep, mkdir, rm, pwd
     # The file the shell wrote is "hello\n": one line and six bytes. The

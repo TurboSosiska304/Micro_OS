@@ -229,6 +229,8 @@ written when the project was an operating system for one board; the numbers
       shell of ADR 0017 uses the calls of ADR 0014 (`test_kshell_pipe.c`)
 * [x] Basic signals: `SIGINT`, `SIGTERM`, `SIGCHLD` and an interrupted wait,
       and Ctrl+C for every stage of a pipeline (the job of ADR 0017)
+* [x] `ls` lists the names of a directory (`-l` with the mode, owner, size and
+      date; `-a` with `.` and `..`), and `tree` draws the levels below it
 * [ ] A shell `export` and the environment of the shell in the programs,
       instead of the four words of the kernel
 * [ ] Programs are files on a filesystem of the disk, and more than the ten

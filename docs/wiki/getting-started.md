@@ -71,7 +71,7 @@ of a pipe) ends the run:
 ```text
 microos> uname
 MicroOS 0.5.0-rc1 x86_64 (build ...)
-microos> ls /
+microos> tree /
 /
 |-- etc/
 |   `-- init.d/

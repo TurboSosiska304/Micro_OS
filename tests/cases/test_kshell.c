@@ -302,9 +302,25 @@ static void ls_teardown(void)
     mfs_ram_free(&g_ls_volume);
 }
 
+/* Is `needle` in the part of `buf` that one command wrote? The sink is one
+ * file for the whole test, so the offsets keep the answers apart. */
+static bool range_has(const char *buf, long start, long end, const char *needle)
+{
+    const char *at;
+
+    if (start < 0 || end < start) {
+        return false;
+    }
+
+    at = strstr(buf + start, needle);
+    return at != NULL && (long)(at - buf) < end;
+}
+
 /*
- * The listing is a tree: the branches of the level below, the slash of a
- * directory, and the mounts of the root beside the files of the volume.
+ * `ls` lists the names of a directory and `tree` draws the levels below it.
+ * The same volume serves both, so the test reads the two answers of the
+ * commands apart: `ls` has no branch and no path line, `tree` has both and
+ * ends with the count of what it drew.
  */
 static void test_ls(void)
 {
@@ -314,8 +330,20 @@ static void test_ls(void)
     char buf[8192];
     size_t used;
     FILE *sink;
+    long etc_start;
+    long etc_end;
+    long long_start;
+    long long_end;
+    long all_start;
+    long all_end;
+    long long_all_start;
+    long long_all_end;
+    long tree_start;
+    long tree_end;
+    long tree_d_start;
+    long tree_d_end;
 
-    ktest_begin("kshell: ls draws the tree of a directory");
+    ktest_begin("kshell: ls lists a directory, tree draws it");
 
     ls_setup();
     KT_CHECK_INT_EQ(vfs_mkdir("/etc"), 0);
@@ -326,7 +354,8 @@ static void test_ls(void)
     KT_CHECK_INT_EQ(vfs_close(&file), 0);
     KT_CHECK_INT_EQ(devfs_register("/dev"), 0);
 
-    /* A tree of three levels for `rm -r` and a file of two lines. */
+    /* A tree of three levels for `tree` and `rm -r`, and a file of two
+     * lines. */
     KT_CHECK_INT_EQ(vfs_mkdir("/tree"), 0);
     KT_CHECK_INT_EQ(vfs_mkdir("/tree/a"), 0);
     KT_CHECK_INT_EQ(vfs_mkdir("/tree/a/deep"), 0);
@@ -349,21 +378,50 @@ static void test_ls(void)
     }
 
     port_host_set_sink(sink);
-    KT_CHECK_INT_EQ(kshell_execute("ls /"), KSHELL_OK);
+
+    /* `ls /etc` is the first answer of the sink, so its first line is the
+     * first byte of the file: no path line can hide in front of it. */
+    etc_start = ftell(sink);
+    KT_CHECK_INT_EQ(kshell_execute("ls /etc"), KSHELL_OK);
+    etc_end = ftell(sink);
+
+    long_start = ftell(sink);
+    KT_CHECK_INT_EQ(kshell_execute("ls -l /etc"), KSHELL_OK);
+    long_end = ftell(sink);
+
+    all_start = ftell(sink);
+    KT_CHECK_INT_EQ(kshell_execute("ls -a /etc"), KSHELL_OK);
+    all_end = ftell(sink);
+
+    long_all_start = ftell(sink);
+    KT_CHECK_INT_EQ(kshell_execute("ls -la /etc"), KSHELL_OK);
+    long_all_end = ftell(sink);
+
+    /* A file, short and long. */
+    KT_CHECK_INT_EQ(kshell_execute("ls /etc/hello"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("ls -l /etc/hello"), KSHELL_OK);
     /* A device of devfs keeps no mode: stat says so instead of a 0000. */
     KT_CHECK_INT_EQ(kshell_execute("stat /dev/tty0"), KSHELL_OK);
 
-    /* The long format: the line of stat for every entry of a directory, and
-     * one line for a file, which has no entries below it. */
-    KT_CHECK_INT_EQ(kshell_execute("ls -l /etc"), KSHELL_OK);
-    KT_CHECK_INT_EQ(kshell_execute("ls -l /etc/hello"), KSHELL_OK);
-    /* `.` and `..` are the two names every directory has. */
-    KT_CHECK_INT_EQ(kshell_execute("ls -a /etc"), KSHELL_OK);
+    tree_start = ftell(sink);
+    KT_CHECK_INT_EQ(kshell_execute("tree /tree"), KSHELL_OK);
+    tree_end = ftell(sink);
 
-    /* The help lists nothing, and an option ls does not have is refused. */
+    tree_d_start = ftell(sink);
+    KT_CHECK_INT_EQ(kshell_execute("tree -d /tree"), KSHELL_OK);
+    tree_d_end = ftell(sink);
+
+    /* `-a` is accepted and changes nothing: there are no hidden names. */
+    KT_CHECK_INT_EQ(kshell_execute("tree -a /tree"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("tree /nope"), KSHELL_ERROR);
+
+    /* The help of the two commands, and an option they do not have. */
     KT_CHECK_INT_EQ(kshell_execute("ls -h"), KSHELL_OK);
     KT_CHECK_INT_EQ(kshell_execute("ls --help"), KSHELL_OK);
     KT_CHECK_INT_EQ(kshell_execute("ls -z /"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(kshell_execute("tree -h"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("tree --help"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("tree -z /"), KSHELL_USAGE);
 
     /* cat -n numbers the lines; without the flag the bytes are as they are. */
     KT_CHECK_INT_EQ(kshell_execute("cat -n /lines"), KSHELL_OK);
@@ -391,28 +449,55 @@ static void test_ls(void)
 
     port_host_set_sink(NULL);
 
-    /* The root, the branches, the files, and the mount point of /dev. */
-    KT_CHECK(strstr(buf, "/\n") != NULL);
-    KT_CHECK(strstr(buf, "|-- ") != NULL);
-    KT_CHECK(strstr(buf, "etc/") != NULL);
-    KT_CHECK(strstr(buf, "init.d/") != NULL);
-    KT_CHECK(strstr(buf, "hello") != NULL);
-    KT_CHECK(strstr(buf, "dev/") != NULL);
+    /* ls: the names, sorted, one per line; a directory keeps its slash and
+     * no branch or path line is there. */
+    KT_CHECK(strncmp(buf, "hello\n", 6) == 0);
+    KT_CHECK(range_has(buf, etc_start, etc_end, "init.d/\n"));
+    KT_CHECK(!range_has(buf, etc_start, etc_end, "`--"));
+
+    /* The long format: the nine bits, the owner, the size, the date and the
+     * name. */
+    KT_CHECK(range_has(buf, long_start, long_end, "-rw-r--r--"));
+    KT_CHECK(range_has(buf, long_start, long_end, "drwxr-xr-x"));
+    KT_CHECK(range_has(buf, long_start, long_end, "root"));
+    KT_CHECK(range_has(buf, long_start, long_end, "hello"));
+    KT_CHECK(range_has(buf, long_start, long_end, "init.d/"));
+    /* A record without a moment says so; one with a moment carries the
+     * colon of HH:MM. */
+    KT_CHECK(range_has(buf, long_start, long_end, " - ") ||
+             range_has(buf, long_start, long_end, ":"));
+
+    /* -a puts `.` and `..` first, in both formats. */
+    KT_CHECK(range_has(buf, all_start, all_end, ".\n..\n"));
+    KT_CHECK(range_has(buf, long_all_start, long_all_end, " .\n"));
+    KT_CHECK(range_has(buf, long_all_start, long_all_end, " ..\n"));
+
+    /* A file is its name as it was given, or one line of the long format. */
+    KT_CHECK(strstr(buf, "/etc/hello") != NULL);
+
+    /* tree: the branches, the deep name and the counts. The path itself is
+     * not a directory of the answer. */
+    KT_CHECK(range_has(buf, tree_start, tree_end, "|-- "));
+    KT_CHECK(range_has(buf, tree_start, tree_end, "`-- "));
+    KT_CHECK(range_has(buf, tree_start, tree_end, "deep"));
+    KT_CHECK(range_has(buf, tree_start, tree_end, "2 directories, 2 files"));
+
+    /* tree -d: the directories only, and no file is counted. */
+    KT_CHECK(range_has(buf, tree_d_start, tree_d_end, "deep/"));
+    KT_CHECK(!range_has(buf, tree_d_start, tree_d_end, "z"));
+    KT_CHECK(!range_has(buf, tree_d_start, tree_d_end, "f\n"));
+    KT_CHECK(range_has(buf, tree_d_start, tree_d_end, "2 directories, 0 files"));
+
+    /* The errors and the help of the two commands. */
+    KT_CHECK(strstr(buf, "tree: /nope: no such file or directory") != NULL);
+    KT_CHECK(strstr(buf, "usage: ls [-la] [path]") != NULL);
+    KT_CHECK(strstr(buf, "usage: tree [-ad] [path]") != NULL);
+    KT_CHECK(strstr(buf, "ls: unknown option: -z") != NULL);
+    KT_CHECK(strstr(buf, "tree: unknown option: -z") != NULL);
 
     /* stat of a device: no bits to show, and an honest "not set". */
     KT_CHECK(strstr(buf, "type: device") != NULL);
     KT_CHECK(strstr(buf, "mode: (not set)") != NULL);
-
-    /* The long format: the nine bits of 0644, the owner 0 and two bytes. */
-    KT_CHECK(strstr(buf, "-rw-r--r-- 0 2 hello") != NULL);
-    KT_CHECK(strstr(buf, "-rw-r--r-- 0 2 /etc/hello") != NULL);
-    /* The two names of every directory, and the slash of a directory. */
-    KT_CHECK(strstr(buf, "|-- ./") != NULL);
-    KT_CHECK(strstr(buf, "|-- ../") != NULL);
-
-    /* The help of ls, the same for -h and --help, and the refusal. */
-    KT_CHECK(strstr(buf, "usage: ls [-la] [path]") != NULL);
-    KT_CHECK(strstr(buf, "ls: unknown option: -z") != NULL);
 
     /* cat: the lines are numbered with the flag, and not without it. */
     KT_CHECK(strstr(buf, "     1\tone") != NULL);
