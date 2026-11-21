@@ -185,12 +185,26 @@ if [ -n "$base" ]; then
 
     if [ "$data_size" -gt 0 ]; then
         data_address=$(section_address .data)
-        expected_data=$((expected_text + text_aligned))
-        if [ -z "$data_address" ] || [ "$((data_address))" -ne "$expected_data" ]; then
-            printf "mkprog: %s has its data at %s, the window puts it at 0x%x\n" \
-                "$object" "${data_address:-nowhere}" "$expected_data" >&2
+        if [ -z "$data_address" ]; then
+            echo "mkprog: $object has data but no .data section" >&2
             exit 1
         fi
+
+        # The linker may align the data past the padded text (a compiler is
+        # free to ask for eight bytes for a merged string, and not every ld
+        # obeys SUBALIGN the same way). The image can carry that gap as
+        # padding of the text segment: the header says where the data starts,
+        # and the port copies the zeros as part of the text.
+        data_offset=$((data_address - expected_text))
+        if [ "$data_offset" -lt "$text_size" ] ||
+           [ $((data_offset % 4)) -ne 0 ] ||
+           [ "$data_offset" -gt "$((text_aligned + 64))" ]; then
+            printf "mkprog: %s has its data %d byte(s) after the text, the window cannot pad that\n" \
+                "$object" "$data_offset" >&2
+            exit 1
+        fi
+
+        text_aligned=$data_offset
     fi
 fi
 
