@@ -131,12 +131,23 @@ written when the project was an operating system for one board; the numbers
 * [x] A page of the state over HTTP: `httpd` on the sockets, `/` and `/health`
 * [x] MQTT over the sockets: a 3.1.1 client at QoS 0 and 1, with a fake broker in the tests
 
-## K7 - Quality (in progress)
+## K7 - Quality (done)
 
 * [x] The races of the host port under TSan, in the cloud CI and in `make ci`
-* [ ] A fuzz of the syscall ABI and of the parsers of the filesystem: MOX1
-      and the edge of `exec` have a deterministic seed, the records of
-      MicroFS have none
+* [x] A fuzz of the syscall ABI and of the parsers of the filesystem: MOX1,
+      the edge of `exec` and the records of MicroFS have a deterministic seed
 * [x] The budget of the image checked at every release (`make integrity`)
-* [ ] The budget of the internal SRAM checked as well (the stacks, the
-      drivers, the kernel)
+* [x] The budget of the internal SRAM checked as well: 128 KiB of static
+      DRAM, read from the map of the ESP-IDF build
+
+## K8 - Many cores (planned)
+
+* [ ] A `struct k_cpu` per core and a run queue per core; the scheduler never
+      runs one task on two cores (ADR 0012)
+* [ ] The allocator, the VFS, the console and the block layer safe under two
+      cores; the locks that sleep and the locks that spin are named
+* [ ] x86-64: AP bring-up, local APIC timer, I/O APIC and the IPI of a TLB
+      and a reschedule; `make x86-smoke` with `-smp 2`
+* [ ] ESP32: the kernel tasks on both cores of the Pico, no driver assuming
+      one core
+* [ ] `KERNEL_SMP` (ADR 0010) and the host TSan run as the gate

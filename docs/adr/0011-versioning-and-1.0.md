@@ -34,13 +34,15 @@ MMU yet.
 The gate in one paragraph: a stable ABI and two stable formats, a program in
 ring 3 that cannot reach the kernel, a process model with pipes and signals, a
 crash-consistent filesystem with a second one beside it, a network on both
-machines, a safe update path, and a release process with sanitizers, fuzzing,
-budgets, documentation and a migration from 0.x.
+machines, a kernel that runs tasks on more than one core, a safe update path,
+and a release process with sanitizers, fuzzing, budgets, documentation and a
+migration from 0.x.
 
 ### What 1.0 does not require
 
 * binary compatibility with Linux or ELF instead of MOX1;
-* SMP, multiple cores, a general-purpose scheduler;
+* linear scalability of the many-core kernel: correctness on two cores is the
+  gate, a profile and a lock split come after it;
 * TLS/HTTPS, IPv6, a cloud account;
 * more than one uid; one user is the model of the device and is documented;
 * an ARM port with an MMU: it is the first feature after 1.0, not its gate;
@@ -59,6 +61,6 @@ budgets, documentation and a migration from 0.x.
 **Bad**
 
 * The gate is large: pipes, signals, a second writable filesystem, the higher
-  half, NX, fuzzing and the update path are each a project.
+  half, NX, fuzzing, the update path and the second core are each a project.
 * A frozen format is a format with a migration tool and a test, not a file
   that happens to be stable today.
