@@ -722,6 +722,7 @@ int partition_scan(const struct k_blockdev *disk)
 {
     k_u8_t head[PARTITION_HEAD_BYTES];
     struct partition_found found[K_PARTITION_MAX];
+    k_size_t i;
     k_size_t count = 0;
     k_size_t owned;
     k_size_t room;
@@ -733,6 +734,16 @@ int partition_scan(const struct k_blockdev *disk)
 
     if (!head_readable(disk)) {
         return KERR_INVAL;
+    }
+
+    /*
+     * A device that answers "read" without filling every byte of the buffer
+     * would leave the signature of the GPT, which lives in the second half of
+     * the head, to the stack. The zeros make such a device an MBR without a
+     * signature instead of a table read from nowhere.
+     */
+    for (i = 0; i < sizeof(head); i++) {
+        head[i] = 0;
     }
 
     if (!head_read(disk, head)) {
