@@ -8,7 +8,8 @@ kernel sources.
 The theme, the builder and the workflow live on the **`wiki` branch**, and
 that branch is a leaf: it takes the kernel from `mainline` and the releases
 from the tags, builds them, and is never merged back into `mainline`, a
-release candidate or a feature branch. The kernel tree carries the pages
+release candidate or a feature branch. The development pages follow
+`release_candidate` while it exists and `mainline` after it lands. The kernel tree carries the pages
 (`docs/wiki/`) and the link check; it does not carry the site.
 
 The site is a **project page**, so its address and the prefix of every path is

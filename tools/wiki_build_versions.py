@@ -59,8 +59,11 @@ REPO_URL = "https://github.com/TurboSosiska304/Micro_OS"
 FIRST_VERSION = (0, 4, 0)
 DEV_VERSION = "dev"
 # The development pages follow the branch of the kernel, not the branch that
-# builds the site: `wiki` is a leaf and is never merged with `mainline`.
-DEV_REF_DEFAULT = "mainline"
+# builds the site: `wiki` is a leaf and is never merged with them. A release
+# candidate is the newest documentation the project has; `mainline` is where
+# it lands. The builder takes the first branch of this list that exists.
+DEV_REFS = ("release_candidate", "mainline")
+DEV_REF_DEFAULT = "auto"
 BRANCH = "gh-pages"
 
 
@@ -104,6 +107,19 @@ def run(command: list, *, cwd: Path | None = None, env: dict | None = None,
 def git(*arguments: str, cwd: Path | None = None) -> str:
     result = run(["git", "-C", str(cwd or ROOT), *arguments])
     return result.stdout.strip()
+
+
+def exists_ref(name: str) -> str:
+    """The ref as this clone can name it, or an empty string."""
+    for candidate in (name, f"origin/{name}", f"refs/remotes/origin/{name}"):
+        result = subprocess.run(
+            ["git", "-C", str(ROOT), "rev-parse", "--verify", "--quiet", candidate],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return candidate
+    return ""
 
 
 def resolve_ref(name: str) -> str:
@@ -179,6 +195,10 @@ def collect_versions(dev_ref: str = DEV_REF_DEFAULT) -> list:
             }
         )
 
+    if dev_ref == "auto":
+        dev_ref = next(
+            (name for name in DEV_REFS if exists_ref(name)), DEV_REFS[-1]
+        )
     resolved = resolve_ref(dev_ref)
     versions.append(
         {
@@ -577,7 +597,8 @@ def main(argv: list) -> int:
     parser.add_argument(
         "--dev-ref",
         default=DEV_REF_DEFAULT,
-        help="the branch the development pages are read from (default: mainline)",
+        help="the branch the development pages are read from (default: auto: "
+        "release_candidate when it exists, else mainline)",
     )
     parser.add_argument(
         "--keep-temp",
