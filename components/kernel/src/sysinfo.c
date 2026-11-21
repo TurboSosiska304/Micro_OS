@@ -8,6 +8,7 @@
  */
 #include "kernel/sysinfo.h"
 
+#include "kernel/config.h"
 #include "kernel/port.h"
 
 const char *k_sysinfo_platform_name(void)
@@ -32,12 +33,26 @@ k_size_t k_sysinfo_heap_free(void)
 
 k_size_t k_sysinfo_psram_total(void)
 {
+    /*
+     * The port of the x86-64 and the null port have no external memory, but
+     * they still implement the calls: the answer is zero and the kernel
+     * does not ask (ADR 0010). A caller that prints the number is expected
+     * to leave the line out under the same flag.
+     */
+#if KERNEL_PSRAM
     return k_port_psram_total();
+#else
+    return 0;
+#endif
 }
 
 k_size_t k_sysinfo_psram_free(void)
 {
+#if KERNEL_PSRAM
     return k_port_psram_free();
+#else
+    return 0;
+#endif
 }
 
 k_u64_t k_sysinfo_uptime_us(void)

@@ -49,13 +49,24 @@ static int drivers_subsys_init(void)
         return -1;
     }
 
+    /*
+     * The components that the build can leave out (ADR 0010): a build
+     * without the shell over the air or without the network registers no
+     * command of it, and the boot still reaches the shell.
+     */
+#if MICRO_OS_TELNET
     /* The shell over the air: beside the drivers, not among them. */
     if (telnet_register() != 0) {
         return -1;
     }
+#endif
 
+#if MICRO_OS_NET
     /* The network services: the HTTP client and the clock of NTP. */
     return net_register();
+#else
+    return 0;
+#endif
 }
 
 /*

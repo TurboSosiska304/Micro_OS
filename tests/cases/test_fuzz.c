@@ -28,6 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "kernel/config.h"
 #include "kernel/exec.h"
 #include "kernel/kmm.h"
 #include "kernel/port/exec.h"
@@ -82,6 +83,7 @@ static void put_u16(k_u8_t *at, k_u16_t value)
 }
 
 /* A word of a header: a boundary of the corpus, a small number, or noise. */
+#if KERNEL_EXEC
 static k_u32_t pick_word(void)
 {
     switch (next_u32() % 3u) {
@@ -93,6 +95,7 @@ static k_u32_t pick_word(void)
         return next_u32() % 64u;
     }
 }
+#endif /* KERNEL_EXEC */
 
 /*
  * The corpus is a list of real numbers with the negative and the boundary
@@ -155,6 +158,7 @@ static void load_words(void)
 }
 
 /* What the parser promises about an image it accepts. */
+#if KERNEL_EXEC
 static bool parsed_is_consistent(const struct k_exec_image *image)
 {
     k_u64_t text_end;
@@ -505,6 +509,7 @@ static void check_run_refusals(void)
     parsed.text_size = (k_size_t)0xFFFFFFFCu;
     KT_CHECK(k_exec_run(&parsed, NULL) < 0);
 }
+#endif /* KERNEL_EXEC */
 
 /* --- the fuzz of the filesystem --- */
 
@@ -1276,6 +1281,7 @@ void test_fuzz(void)
     load_words();
     KT_CHECK(g_word_count > 0);
 
+#if KERNEL_EXEC
     g_rng = FUZZ_SEED;
 
     check_random_buffers();
@@ -1283,6 +1289,7 @@ void test_fuzz(void)
     check_truncated_images();
     check_boundaries();
     check_run_refusals();
+#endif
 
     /*
      * The records of a volume are another language and get a seed of their

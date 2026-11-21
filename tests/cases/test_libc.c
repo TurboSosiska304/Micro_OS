@@ -25,6 +25,7 @@ static long (*sys_strtol)(const char *, char **, int) = strtol;
 #include "libc/stdlib.h"
 #include "libc/unistd.h"
 
+#include "kernel/config.h"
 #include "kernel/errno.h"
 #include "kernel/kmm.h"
 #include "kernel/ksys.h"
@@ -826,6 +827,7 @@ static void test_permissions(void)
  * ENOSYS of the machine that cannot run a program at all, which is what the
  * simulator says for a file of the format of the system.
  */
+#if KERNEL_EXEC
 static void test_execve(void)
 {
     static const char junk[] = "not a program of this system, honestly\n";
@@ -860,6 +862,7 @@ static void test_execve(void)
 
     teardown();
 }
+#endif /* KERNEL_EXEC */
 
 void test_libc(void)
 {
@@ -875,5 +878,7 @@ void test_libc(void)
     test_memory_keeps_the_data();
     test_calloc_is_empty();
     test_permissions();
+#if KERNEL_EXEC
     test_execve();
+#endif
 }

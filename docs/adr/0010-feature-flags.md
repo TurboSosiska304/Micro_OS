@@ -1,6 +1,6 @@
 # ADR 0010 - Features behind compile-time flags
 
-* Status: accepted
+* Status: accepted, implemented
 * Date: 2026-11-21
 
 ## Context
@@ -115,6 +115,25 @@ turns the rest off the same way.
   `mqtt_` with `MICRO_OS_NET_MQTT=0`).
 * A second host configuration with the optional features off is a target of
   its own (`make test-minimal`), not a part of `make ci` at first.
+
+### 6. The implementation
+
+* `KERNEL_PSRAM` and `KERNEL_EXEC` live in `kernel/config.h` behind
+  `#ifndef`, with the default of a complete kernel. The host CMake options
+  `KERNEL_PSRAM` and `KERNEL_EXEC` turn them into `-DNAME=0|1`; the x86-64
+  port names the same options with its own defaults; the ESP-IDF kernel
+  component passes `KERNEL_PSRAM=1 KERNEL_EXEC=0` to everything that links it.
+* The component flags are CMake options on the host (`MICRO_OS_NET`,
+  `MICRO_OS_NET_HTTP`, `_HTTP_SERVER`, `_NTP`, `_MQTT`, `MICRO_OS_TELNET`,
+  `MICRO_OS_WIFI`) and `CONFIG_MICRO_OS_*` symbols from `Kconfig` on the
+  board. C sources read the numeric `MICRO_OS_*` macros, which the component
+  CMake passes alongside the `CONFIG_*` value.
+* A source of a disabled feature is not in the `SRCS` list of its component;
+  `net.c` registers only the commands of the features that are compiled.
+* `make test-minimal` is the host build with the optional features off; it
+  builds and runs the tests that do not need them (the exec and net cases are
+  guarded in the source). `tools/integrity_check.py` reads the map of an
+  ESP-IDF build and refuses a disabled feature that is still in the image.
 
 ## Consequences
 

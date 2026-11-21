@@ -95,6 +95,35 @@ else()
         message(FATAL_ERROR "the ext2 reader is not written yet")
     endif()
 
+    # The optional features of the image (ADR 0010). The host turns every
+    # one of them on, because the tests are the place where each path is
+    # compiled; a build of its own (make test-minimal) turns them off and
+    # proves that the sources still build and the tests that do not need
+    # the feature still pass.
+    option(KERNEL_PSRAM "the PSRAM pool and its statistics in kmm" ON)
+    option(KERNEL_EXEC "the MOX1 parser, execve and the exec command" ON)
+    option(MICRO_OS_NET "the network services of the component net" ON)
+    option(MICRO_OS_NET_HTTP "the HTTP client of the component net" ON)
+    option(MICRO_OS_NET_HTTP_SERVER "the page of the state (httpd)" ON)
+    option(MICRO_OS_NET_NTP "the clock from NTP" ON)
+    option(MICRO_OS_NET_MQTT "the MQTT client and the mqtt command" ON)
+    option(MICRO_OS_TELNET "the shell on TCP port 23" ON)
+    option(MICRO_OS_WIFI "the WiFi station" ON)
+
+    # The C sources see the numbers, not the words "ON"/"OFF": every flag is
+    # `#if` in the code, and -Wundef makes an undefined one a build error.
+    add_compile_definitions(
+        KERNEL_PSRAM=$<BOOL:${KERNEL_PSRAM}>
+        KERNEL_EXEC=$<BOOL:${KERNEL_EXEC}>
+        MICRO_OS_NET=$<BOOL:${MICRO_OS_NET}>
+        MICRO_OS_NET_HTTP=$<BOOL:${MICRO_OS_NET_HTTP}>
+        MICRO_OS_NET_HTTP_SERVER=$<BOOL:${MICRO_OS_NET_HTTP_SERVER}>
+        MICRO_OS_NET_NTP=$<BOOL:${MICRO_OS_NET_NTP}>
+        MICRO_OS_NET_MQTT=$<BOOL:${MICRO_OS_NET_MQTT}>
+        MICRO_OS_TELNET=$<BOOL:${MICRO_OS_TELNET}>
+        MICRO_OS_WIFI=$<BOOL:${MICRO_OS_WIFI}>
+    )
+
     enable_testing()
 
     add_subdirectory(components/kernel)

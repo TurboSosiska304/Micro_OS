@@ -6,8 +6,17 @@ set(MICRO_OS_PORT_ESP32_SRCS
     "src/blockdev_flash.c"
     "src/port_kv_nvs.c"
     "src/port_net_lwip.c"
-    "src/wifi_radio.c"
 )
+
+# The radio is the backend of the portable core (MICRO_OS_WIFI, ADR 0010):
+# it fills the table of `wifi` and reports its events back to it, and nothing
+# of that appears in the header of the port. Only the source follows the
+# switch: the requirements of a component are read by ESP-IDF before the
+# configuration is known, and a REQUIRES line that depends on CONFIG_ is
+# empty in that pass.
+if(CONFIG_MICRO_OS_WIFI)
+    list(APPEND MICRO_OS_PORT_ESP32_SRCS "src/wifi_radio.c")
+endif()
 
 idf_component_register(
     SRCS ${MICRO_OS_PORT_ESP32_SRCS}

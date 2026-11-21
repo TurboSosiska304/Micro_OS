@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "kernel/config.h"
 #include "kernel/errno.h"
 #include "kernel/ksys.h"
 #include "kernel/log.h"
@@ -660,6 +661,7 @@ static void test_buffer_validation(void)
         KT_CHECK_INT_EQ(ksys_getcwd(NULL, 0), KERR_INVAL);
         KT_CHECK_INT_EQ(ksys_getcwd(buffer, 0), KERR_INVAL);
 
+#if KERNEL_EXEC
         /*
          * The vector of a program is copied at the edge as well: one word
          * more than the frame holds is E2BIG before any file is looked at.
@@ -678,6 +680,7 @@ static void test_buffer_validation(void)
 
             KT_CHECK_INT_EQ(ksys_execve("/edge.txt", many), KERR_TOOBIG);
         }
+#endif
 
         /* The valid forms are unchanged. */
         KT_CHECK_INT_EQ(ksys_lseek(fd, 0, KSYS_SEEK_END), 0);
@@ -928,7 +931,9 @@ static void test_directory_search(void)
     KT_CHECK_INT_EQ(ksys_chmod("/locked", 0600), 0);
     KT_CHECK_INT_EQ(ksys_open("/locked/file.txt", KSYS_O_RDONLY), KERR_PERM);
     KT_CHECK_INT_EQ(ksys_stat("/locked/file.txt", &info), KERR_PERM);
+#if KERNEL_EXEC
     KT_CHECK_INT_EQ(ksys_execve("/locked/file.txt", NULL), KERR_PERM);
+#endif
 
     /* The directory itself is still described: the end of the path is not
      * a directory that is passed through. */
@@ -947,9 +952,11 @@ static void test_directory_search(void)
         KT_CHECK_INT_EQ(ksys_close(fd), 0);
     }
     KT_CHECK_INT_EQ(ksys_stat("/locked/file.txt", &info), 0);
+#if KERNEL_EXEC
     /* The file is still not an image of a program: the walk let it through
      * and the file itself is the next reason. */
     KT_CHECK_INT_EQ(ksys_execve("/locked/file.txt", NULL), KERR_INVAL);
+#endif
 
     /* Search without read: the path is walked, but the directory cannot be
      * opened to list it. */

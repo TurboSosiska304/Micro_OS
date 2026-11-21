@@ -7,6 +7,7 @@
 
 #include "libc/stdlib.h"
 #include "libc/unistd.h"
+#include "kernel/config.h"
 #include "kernel/kmod.h"
 #include "kernel/ksys.h"
 #include "kernel/console.h"
@@ -559,13 +560,23 @@ static int cmd_free(int argc, char **argv)
 {
     k_size_t heap_free = k_sysinfo_heap_free() / 1024;
     k_size_t heap_total = k_sysinfo_heap_total() / 1024;
+#if KERNEL_PSRAM
     k_size_t psram_free = k_sysinfo_psram_free() / 1024;
+#endif
 
     (void)argc;
     (void)argv;
 
+    /*
+     * A machine with one memory has no PSRAM line to print: a zero there
+     * would be a fact about the build, not about the memory (ADR 0010).
+     */
+#if KERNEL_PSRAM
     kshell_printf("heap: %u KB free of %u KB, psram: %u KB free\n", (unsigned)heap_free,
                   (unsigned)heap_total, (unsigned)psram_free);
+#else
+    kshell_printf("heap: %u KB free of %u KB\n", (unsigned)heap_free, (unsigned)heap_total);
+#endif
     kshell_printf("uptime: %llu ms, %u tick(s)\n", (unsigned long long)k_sched_uptime_ms(),
                   (unsigned)k_sched_ticks());
 

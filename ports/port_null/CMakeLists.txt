@@ -5,6 +5,11 @@
 # chip shows up here as a link error, on a laptop. See the header of
 # src/port_null.c.
 
+# The port is not a machine of its own: it is linked inside the host build,
+# so it runs with the flags of the host (ADR 0010 puts KERNEL_PSRAM at 0 for
+# the null port as a machine). The contract stays complete either way - the
+# two PSRAM calls answer zero - and `make test-minimal` is the build that
+# compiles the kernel with the optional features off.
 add_library(microos_port_null STATIC
     src/port_null.c
     src/port_exec.c

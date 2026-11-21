@@ -107,6 +107,7 @@ static void test_priority_pools(void)
 
     kmm_get_stats(&stats);
     KT_CHECK(stats.kernel_bytes > 0);
+#if KERNEL_PSRAM
     KT_CHECK_INT_EQ(stats.psram_bytes, 0);
 
     /* The user gets the PSRAM. */
@@ -117,6 +118,15 @@ static void test_priority_pools(void)
     KT_CHECK(stats.kernel_bytes > 0);
     KT_CHECK(stats.psram_bytes > 0);
     KT_CHECK_INT_EQ(stats.user_bytes, 0);
+#else
+    /* One memory: the user gets the internal RAM after the reserve. */
+    user_block = kmm_alloc(4096, KMM_PRIORITY_USER);
+    KT_CHECK(user_block != NULL);
+
+    kmm_get_stats(&stats);
+    KT_CHECK(stats.kernel_bytes > 0);
+    KT_CHECK(stats.user_bytes > 0);
+#endif
 
     kmm_free(kernel_block);
     kmm_free(user_block);
@@ -136,7 +146,9 @@ static void test_system_priority(void)
 
     kmm_get_stats(&stats);
     KT_CHECK(stats.system_bytes > 0);
+#if KERNEL_PSRAM
     KT_CHECK_INT_EQ(stats.psram_bytes, 0);
+#endif
 
     kmm_free(block);
 }
@@ -169,7 +181,9 @@ static void test_task_priority(void)
 
     kmm_get_stats(&stats);
     KT_CHECK(stats.system_bytes > 0);
+#if KERNEL_PSRAM
     KT_CHECK_INT_EQ(stats.psram_bytes, 0);
+#endif
 
     kmm_free(block);
 
@@ -359,16 +373,22 @@ static void test_small_blocks_follow_the_priority(void)
     KT_CHECK(kernel_block != NULL);
 
     kmm_get_stats(&stats);
-    KT_CHECK(stats.psram_bytes > 0);  /* the user block came from the PSRAM */
-    KT_CHECK(stats.kernel_bytes > 0); /* the kernel block from the internal RAM */
+#if KERNEL_PSRAM
+    KT_CHECK(stats.psram_bytes > 0); /* the user block came from the PSRAM */
     KT_CHECK_INT_EQ(stats.user_bytes, 0);
+#else
+    KT_CHECK(stats.user_bytes > 0); /* the user block from the one memory */
+#endif
+    KT_CHECK(stats.kernel_bytes > 0); /* the kernel block from the internal RAM */
 
     kmm_free(user_block);
     kmm_free(kernel_block);
 
     kmm_get_stats(&stats);
     KT_CHECK_INT_EQ(stats.allocations, 0);
+#if KERNEL_PSRAM
     KT_CHECK_INT_EQ(stats.psram_bytes, 0);
+#endif
     KT_CHECK_INT_EQ(stats.kernel_bytes, 0);
 }
 

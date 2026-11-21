@@ -21,6 +21,7 @@
 #include <string.h>
 
 #include "kernel/board.h"
+#include "kernel/config.h"
 #include "kernel/kmm.h"
 #include "kernel/kmod.h"
 #include "kernel/sched.h"
@@ -178,8 +179,11 @@ static int cmd_mfetch(int argc, char **argv)
                    (unsigned)(k_sysinfo_heap_total() / 1024));
     print_row(row++, color, "Heap", value);
 
+    /* A machine without external memory has no row to show for it. */
+#if KERNEL_PSRAM
     (void)snprintf(value, sizeof(value), "%u KB free", (unsigned)(k_sysinfo_psram_free() / 1024));
     print_row(row++, color, "Psram", value);
+#endif
 
     {
         struct kmm_stats stats;

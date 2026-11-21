@@ -49,3 +49,16 @@ CONFIG_ESP_CONSOLE_UART_DEFAULT=y
 # The crash dump needs a partition of its own, the flash of the board is
 # fully used by the application and the filesystem
 CONFIG_ESP_COREDUMP_ENABLE_TO_NONE=y
+
+# The optional features behind the compile-time flags (ADR 0010). The board
+# keeps what it ships today: the HTTP client, the clock from NTP, the shell
+# over the air and the WiFi station. MQTT and the page of the state are off:
+# the board has no broker of its own, and "httpd" is a command a person
+# starts. A release that wants MQTT turns it on here.
+CONFIG_MICRO_OS_NET=y
+CONFIG_MICRO_OS_NET_HTTP=y
+# CONFIG_MICRO_OS_NET_HTTP_SERVER is not set
+CONFIG_MICRO_OS_NET_NTP=y
+# CONFIG_MICRO_OS_NET_MQTT is not set
+CONFIG_MICRO_OS_TELNET=y
+CONFIG_MICRO_OS_WIFI=y

@@ -30,6 +30,17 @@ set(FAT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/fs_fat32")
 # partition turns it on and mounts the partition with vfs_mount_type().
 option(MICRO_OS_FS_FAT32 "FAT12/16/32, read-only" OFF)
 
+# The optional features of the image (ADR 0010). The machine has one memory
+# and no network: the PSRAM pool of the allocator is off, the MOX1 runtime
+# is on (the port can enter a program), and the components of the network
+# are not part of the project at all - their flags are written here so that
+# the defaults of the port are in one place.
+option(KERNEL_PSRAM "the PSRAM pool and its statistics in kmm" OFF)
+option(KERNEL_EXEC "the MOX1 parser, execve and the exec command" ON)
+option(MICRO_OS_NET "the network services of the component net" OFF)
+option(MICRO_OS_TELNET "the shell on TCP port 23" OFF)
+option(MICRO_OS_WIFI "the WiFi station" OFF)
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
@@ -224,6 +235,11 @@ target_include_directories(microos64 PRIVATE
 target_compile_definitions(microos64 PRIVATE
     KERNEL_BOARD_NAME="x86_64"
     KERNEL_BOARD_DESC="QEMU x86-64 machine"
+    KERNEL_PSRAM=$<BOOL:${KERNEL_PSRAM}>
+    KERNEL_EXEC=$<BOOL:${KERNEL_EXEC}>
+    MICRO_OS_NET=$<BOOL:${MICRO_OS_NET}>
+    MICRO_OS_TELNET=$<BOOL:${MICRO_OS_TELNET}>
+    MICRO_OS_WIFI=$<BOOL:${MICRO_OS_WIFI}>
 )
 
 if(MICRO_OS_FS_FAT32)

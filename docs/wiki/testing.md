@@ -12,6 +12,7 @@ and the chips on it. None of them replaces another.
 | `make test` | the host build, the unit tests, the null probe | `gcc`, `cmake`, `ninja` |
 | `make test-asan` | the same tests with the sanitizers | the same |
 | `make test-tsan` | the same tests under the race detector | the same |
+| `make test-minimal` | the host tests with the optional features off | the same |
 | `make smoke` | the simulator boots and the shell answers | the host build |
 | `make x86-build` | the x86-64 kernel and loader compile | `gcc`, `cmake`, `ninja` |
 | `make x86-smoke` | the kernel boots, runs `/bin/hello`, the shell answers | `qemu-system-x86_64` |
@@ -44,6 +45,13 @@ numeric behaviour reuses it rather than inventing a second list.
 `build-tsan/`. The board has no debugger, so the host is the place where a
 wrong pointer or undefined behaviour has to be caught; TSan is the only thing
 that sees a race, because the host port cannot reproduce preemption.
+
+`make test-minimal` is the second configuration of the host build (ADR 0010):
+`KERNEL_PSRAM`, `KERNEL_EXEC`, the network components and the second
+filesystem are off, in `build-minimal/`. It proves that the sources still
+build without them and runs the tests that do not need the feature - the
+cases of `exec` and of the network are guarded in the source, so the report
+still says how many checks the small build has.
 
 ## `make smoke`: the simulator
 
@@ -89,6 +97,8 @@ also not a part of `make ci`.
 * the **partition table**: `partitions.csv` against the flash size and the
   build;
 * the **budget** of the image: the firmware fits its 2 MB slot;
+* the **features** (ADR 0010): a flag that is off leaves no symbol in the map
+  of the ESP-IDF build and no library in the host build;
 * **git**: the objects, through `git fsck --strict`;
 * the **hygiene** of the sources: UTF-8, LF, no trailing whitespace, no tabs,
   100 columns in C, and `clang-format` when it is installed.

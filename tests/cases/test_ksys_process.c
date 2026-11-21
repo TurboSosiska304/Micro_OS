@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "kernel/config.h"
 #include "kernel/errno.h"
 #include "kernel/exec.h"
 #include "kernel/ksys.h"
@@ -377,6 +378,7 @@ static void test_fork_data_is_the_same(void)
     teardown();
 }
 
+#if KERNEL_EXEC
 /* Write a 32-bit field the way the header of an image keeps it: the bytes of
  * the file, not a struct of the machine that reads them. */
 static void put_u32(k_u8_t *out, k_u32_t value)
@@ -519,6 +521,7 @@ static void test_execve(void)
 
     teardown();
 }
+#endif /* KERNEL_EXEC */
 
 void test_ksys_process(void)
 {
@@ -528,5 +531,7 @@ void test_ksys_process(void)
     test_wait_errors();
     test_wait_validation();
     test_fork_data_is_the_same();
+#if KERNEL_EXEC
     test_execve();
+#endif
 }

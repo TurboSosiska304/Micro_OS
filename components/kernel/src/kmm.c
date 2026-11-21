@@ -65,8 +65,17 @@ static struct kmm_stats g_stats;
 static struct kmm_slab g_slabs[KMM_MAX_SLABS];
 static k_size_t g_slab_count;
 
-/* The slabs of every class, for every pool. */
-static struct kmm_slab *g_class_slabs[2][KMM_SLAB_CLASSES];
+/*
+ * The slabs of every class, for every pool. Without the PSRAM there is one
+ * pool, and the second row of the table does not exist at all (ADR 0010).
+ */
+#if KERNEL_PSRAM
+#define KMM_POOLS 2
+#else
+#define KMM_POOLS 1
+#endif
+
+static struct kmm_slab *g_class_slabs[KMM_POOLS][KMM_SLAB_CLASSES];
 
 /*
  * The allocator is one piece: two tasks inside the slabs at the same
@@ -239,6 +248,22 @@ int kmm_current_priority(void)
     return (int)self->mem_priority;
 }
 
+#if KERNEL_PSRAM
+/*
+ * The external pool of the statistics. A build without the PSRAM does not
+ * have the two helpers and the field they change (ADR 0010).
+ */
+static void kmm_psram_add(k_size_t size)
+{
+    g_stats.psram_bytes += size;
+}
+
+static void kmm_psram_sub(k_size_t size)
+{
+    g_stats.psram_bytes -= size;
+}
+#endif
+
 /* The memory of a block is counted for the pool and the priority. */
 static void account_alloc(k_size_t size, int priority, k_u8_t pool)
 {
@@ -250,9 +275,12 @@ static void account_alloc(k_size_t size, int priority, k_u8_t pool)
         } else {
             g_stats.user_bytes += size;
         }
-    } else {
-        g_stats.psram_bytes += size;
     }
+#if KERNEL_PSRAM
+    else {
+        kmm_psram_add(size);
+    }
+#endif
 
     g_stats.allocations++;
     g_stats.total_bytes += size;
@@ -268,9 +296,12 @@ static void account_free(k_size_t size, int priority, k_u8_t pool)
         } else {
             g_stats.user_bytes -= size;
         }
-    } else {
-        g_stats.psram_bytes -= size;
     }
+#if KERNEL_PSRAM
+    else {
+        kmm_psram_sub(size);
+    }
+#endif
 
     g_stats.allocations--;
     g_stats.total_bytes -= size;
@@ -386,7 +417,11 @@ static void *kmm_alloc_locked(k_size_t size, int priority)
 {
     k_size_t total;
     void *block;
+#if KERNEL_PSRAM
     k_u8_t pool = 1; /* the PSRAM, the default for the user */
+#else
+    k_u8_t pool = 0; /* the internal RAM, the only one */
+#endif
 
     if (size == 0) {
         return NULL;
@@ -394,6 +429,7 @@ static void *kmm_alloc_locked(k_size_t size, int priority)
 
     if (size <= KMM_SLAB_MAX) {
         /* A small block: it comes from a slab. */
+#if KERNEL_PSRAM
         if (priority >= KMM_PRIORITY_SYSTEM) {
             block = alloc_small(size, priority, 0);
             if (block != NULL) {
@@ -413,11 +449,24 @@ static void *kmm_alloc_locked(k_size_t size, int priority)
         }
 
         return NULL;
+#else
+        /*
+         * The user gets the internal RAM when the reserve of the kernel is
+         * still untouched; the kernel and the system utilities get it
+         * without asking, because they must not fail first.
+         */
+        if (priority < KMM_PRIORITY_SYSTEM && k_port_heap_free() <= KMM_RESERVED_INTERNAL + size) {
+            return NULL;
+        }
+
+        return alloc_small(size, priority, 0);
+#endif
     }
 
     /* A large block: it comes from the allocator of the port. */
     total = align_up(size + sizeof(struct kmm_header));
 
+#if KERNEL_PSRAM
     if (priority >= KMM_PRIORITY_SYSTEM) {
         /*
          * The kernel and the system utilities: the internal RAM first, the
@@ -458,8 +507,21 @@ static void *kmm_alloc_locked(k_size_t size, int priority)
     }
 
     return NULL;
+#else
+    /* Without the PSRAM the user keeps the reserve of the kernel intact. */
+    if (priority < KMM_PRIORITY_SYSTEM && k_port_heap_free() <= KMM_RESERVED_INTERNAL + total) {
+        return NULL;
+    }
 
+    block = k_port_alloc(total, false);
+    if (block == NULL) {
+        return NULL;
+    }
+#endif
+
+#if KERNEL_PSRAM
 found:
+#endif
     {
         struct kmm_header *header = (struct kmm_header *)block;
 

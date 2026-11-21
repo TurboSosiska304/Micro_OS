@@ -143,6 +143,10 @@ written when the project was an operating system for one board; the numbers
 * [x] The budget of the image checked at every release (`make integrity`)
 * [x] The budget of the internal SRAM checked as well: 128 KiB of static
       DRAM, read from the map of the ESP-IDF build
+* [x] The optional features behind compile-time flags (ADR 0010):
+      `KERNEL_PSRAM`, `KERNEL_EXEC` and the `MICRO_OS_*` switches of the
+      network components, the defaults per build, `make test-minimal` and
+      the check of the map
 
 ## K8 - Many cores (planned)
 

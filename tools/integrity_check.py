@@ -20,6 +20,7 @@ What is checked:
     layers     the portable layers do not include the platform (ADR 0004)
     port       every function of the port contract has its implementation
     budget     the image of the kernel and its static DRAM stay inside the budget
+    features   a feature that is off leaves no symbol in the map (ADR 0010)
 
 The exit status is 0 when everything is in order and 1 otherwise.
 """
@@ -32,6 +33,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import struct
 import tarfile
@@ -1435,6 +1437,161 @@ def check_sram(root: str, report: Report) -> None:
     report.add(group, name, not over, detail)
 
 
+# The names a feature leaves in the map when its sources are linked. A flag
+# that is off must leave none of them: the component was not compiled, not
+# merely not called (ADR 0010).
+COMPONENT_FEATURES = (
+    ("MICRO_OS_NET", ("net_register",)),
+    ("MICRO_OS_NET_HTTP", ("http_get",)),
+    ("MICRO_OS_NET_HTTP_SERVER", ("net_http_server_start",)),
+    ("MICRO_OS_NET_NTP", ("ntp_parse_response",)),
+    ("MICRO_OS_NET_MQTT", ("mqtt_connect", "mqtt_publish")),
+    ("MICRO_OS_TELNET", ("telnet_register",)),
+    ("MICRO_OS_WIFI", ("wifi_init",)),
+)
+
+# The kernel flags are compile definitions, not Kconfig symbols: the value is
+# read from the flags of the kernel sources in compile_commands.json.
+KERNEL_FEATURES = (
+    ("KERNEL_PSRAM", ("kmm_psram",)),
+    ("KERNEL_EXEC", ("k_exec_parse", "k_exec_run")),
+)
+
+
+def build_definitions(build_dir: str) -> dict:
+    """The -D flags of the kernel sources of one build, from its commands."""
+    path = os.path.join(build_dir, "compile_commands.json")
+    if not os.path.isfile(path):
+        return {}
+
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            entries = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+
+    definitions = {}
+    for entry in entries:
+        source = str(entry.get("file", "")).replace("\\", "/")
+        if "/components/kernel/src/" not in source:
+            continue
+
+        arguments = entry.get("arguments")
+        if arguments is None:
+            try:
+                arguments = shlex.split(entry.get("command", ""))
+            except ValueError:
+                continue
+
+        for argument in arguments:
+            if argument.startswith("-D") and "=" in argument:
+                name, value = argument[2:].split("=", 1)
+                try:
+                    value = int(value)
+                except ValueError:
+                    pass
+                definitions.setdefault(name, value)
+
+    return definitions
+
+
+def feature_values(build_dir: str) -> dict:
+    """The flags of one build: the component ones from sdkconfig, the rest.
+
+    ESP-IDF writes the enabled CONFIG_ symbols to build/config/sdkconfig.h
+    and leaves a disabled one out entirely, so a known component flag that
+    is not defined there was off in that build.
+    """
+    values = {}
+
+    path = os.path.join(build_dir, "config", "sdkconfig.h")
+    if os.path.isfile(path):
+        text = read_text(path)
+        for name, _ in COMPONENT_FEATURES:
+            pattern = r"^#define\s+CONFIG_" + re.escape(name) + r"\s+1\b"
+            values[name] = 1 if re.search(pattern, text, re.MULTILINE) else 0
+
+    values.update(build_definitions(build_dir))
+
+    return values
+
+
+def check_features(root: str, report: Report) -> None:
+    """A disabled feature leaves no symbol of itself in the image map.
+
+    The check needs a build: without one it skips and never fails a checkout
+    that has not been compiled yet. With a build it compares the flags of
+    that build with the names in its map - the mistake it catches is a
+    feature that the build system says is off while its object is still in
+    the image.
+    """
+    group = "features"
+    maps = []
+
+    for entry in sorted(os.listdir(root)):
+        if not entry.startswith("build"):
+            continue
+        candidate = os.path.join(root, entry, "micro_os.map")
+        if os.path.isfile(candidate):
+            maps.append(candidate)
+
+    if not maps:
+        report.skip(group, "the disabled features are absent from the map", "no build*/micro_os.map")
+        return
+
+    for path in maps:
+        build_dir = os.path.dirname(path)
+        name = os.path.basename(build_dir)
+        values = feature_values(build_dir)
+        map_text = read_text(path)
+        checked = 0
+
+        for flag, symbols in COMPONENT_FEATURES + KERNEL_FEATURES:
+            if values.get(flag) != 0:
+                continue
+
+            present = [symbol for symbol in symbols if symbol in map_text]
+            report.add(
+                group,
+                f"{name}: {flag}=0 leaves no {'/'.join(symbols)}",
+                not present,
+                "still in the map: " + ", ".join(present) if present else "absent",
+            )
+            checked += 1
+
+        if checked == 0:
+            report.skip(
+                group,
+                f"{name}: the map agrees with the flags",
+                "no disabled feature to check",
+            )
+
+    # The host build has no map, but a component that is off leaves no
+    # library either: that is the cheapest proof that CMake did not compile
+    # its sources (make test-minimal).
+    for entry in sorted(os.listdir(root)):
+        cache_path = os.path.join(root, entry, "CMakeCache.txt")
+        if not entry.startswith("build") or not os.path.isfile(cache_path):
+            continue
+
+        cache = parse_sdkconfig(cache_path)
+        for flag, component, library in (
+            ("MICRO_OS_NET", "net", "microos_net"),
+            ("MICRO_OS_TELNET", "telnet", "microos_telnet"),
+            ("MICRO_OS_WIFI", "wifi", "microos_wifi"),
+        ):
+            if cache.get(flag + ":BOOL") != "OFF":
+                continue
+
+            path = os.path.join(root, entry, "components", component, "lib" + library + ".a")
+            report.add(
+                group,
+                f"{entry}: {flag}=OFF leaves no lib{library}.a",
+                not os.path.isfile(path),
+                "the library is still there" if os.path.isfile(path) else "absent",
+            )
+
+
 def check_version(root: str, report: Report, expected: str) -> None:
     """The version of the kernel against the expected one (the tag)."""
     group = "version"
@@ -1511,6 +1668,7 @@ def main(argv: list) -> int:
     check_port_contract(root, report)
     check_budget(root, report)
     check_sram(root, report)
+    check_features(root, report)
     if args.expect_version:
         check_version(root, report, args.expect_version)
     if not args.skip_git:

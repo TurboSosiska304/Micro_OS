@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "kernel/config.h"
 #include "kernel/errno.h"
 #include "kernel/ksys.h"
 #include "kernel/task.h"
@@ -825,6 +826,7 @@ static const char *attr_error_text(int code, const char *invalid)
     }
 }
 
+#if KERNEL_EXEC
 /*
  * The words for a program that did not run. Every reason of the call has a
  * face of its own: "function not implemented" would hide that this machine
@@ -846,6 +848,7 @@ static const char *exec_error_text(int code)
 
     return attr_error_text(code, "not a MOX1 image of this system");
 }
+#endif /* KERNEL_EXEC */
 
 static int cmd_chmod(int argc, char **argv)
 {
@@ -1061,6 +1064,7 @@ static int cmd_path(int argc, char **argv)
     return KSHELL_OK;
 }
 
+#if KERNEL_EXEC
 /* Whether the name carries its own path, in which case PATH has no say. */
 static bool shell_name_has_dir(const char *name)
 {
@@ -1166,6 +1170,7 @@ static int cmd_exec(int argc, char **argv)
 
     return KSHELL_ERROR;
 }
+#endif /* KERNEL_EXEC */
 
 /*
  * The commands of the files, with the whole help of the table. The usage
@@ -1249,6 +1254,7 @@ static const struct file_command {
       .detail = "Without a word the value is printed. With one it is set, the directories\n"
                 "separated by ':'; the two characters \"\" bring /bin:/usr/bin back.\n"},
      cmd_path},
+#if KERNEL_EXEC
     {"exec",
      {.summary = "run a program",
       .usage = "exec <program> [arguments...]",
@@ -1256,6 +1262,7 @@ static const struct file_command {
                 "The file must be a MOX1 image with an execute bit, and not every machine\n"
                 "can run one: the answer says which of the two it was.\n"},
      cmd_exec},
+#endif
 };
 
 int kshell_register_files(void)

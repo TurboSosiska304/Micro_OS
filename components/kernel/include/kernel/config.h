@@ -57,6 +57,30 @@
 #error "the port for a processor with an MMU is not written yet: see docs/roadmap.md"
 #endif
 
+/*
+ * The PSRAM pool of the allocator (ADR 0010). A port without external
+ * memory still implements k_port_psram_total(), k_port_psram_free() and the
+ * k_port_alloc(size, true) call, because the contract of the port does not
+ * depend on the features of the image; the kernel simply never asks it. The
+ * x86-64 port builds with this flag at 0, and the null port has no memory of
+ * its own: it is linked inside the host build and answers the two calls with
+ * zero.
+ */
+#ifndef KERNEL_PSRAM
+#define KERNEL_PSRAM 1
+#endif
+
+/*
+ * The MOX1 parser, k_exec_run() and the path of execve (ADR 0010). Turning
+ * it off removes the parser and the runtime, keeps the number of the system
+ * call and answers ENOSYS: the ABI is frozen, the implementation is not.
+ * The board builds with this flag at 0, because k_port_exec_supported() is
+ * false there anyway.
+ */
+#ifndef KERNEL_EXEC
+#define KERNEL_EXEC 1
+#endif
+
 /* Board identification (set by the build system). */
 #ifndef KERNEL_BOARD_NAME
 #define KERNEL_BOARD_NAME "unknown"

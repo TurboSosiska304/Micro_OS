@@ -12,8 +12,11 @@
 
 #include <string.h>
 
+#include "kernel/config.h"
 #include "kernel/exec.h"
 #include "kernel/port/exec.h"
+
+#if KERNEL_EXEC
 
 #define TEST_TEXT_BYTES 8u
 #define TEST_DATA_BYTES 4u
@@ -252,3 +255,17 @@ void test_exec(void)
     check_bad_entry();
     check_run_without_a_machine();
 }
+
+#else /* !KERNEL_EXEC */
+
+/*
+ * A build without the parser has nothing to test here, and the test says so
+ * instead of disappearing: a reader of the report knows which build ran.
+ */
+void test_exec(void)
+{
+    ktest_begin("exec: the MOX1 parser is not in this build (KERNEL_EXEC=0)");
+    KT_CHECK_INT_EQ(KERNEL_EXEC, 0);
+}
+
+#endif /* KERNEL_EXEC */

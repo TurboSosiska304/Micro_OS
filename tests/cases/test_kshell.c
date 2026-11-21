@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "devfs/devfs.h"
+#include "kernel/config.h"
 #include "kernel/version.h"
 #include "kernel/vfs.h"
 #include "kshell/kshell.h"
@@ -130,11 +131,52 @@ static void test_registry(void)
      * The board has more commands than the tests can see here: the
      * drivers bring their own ("date", "i2c", "wifi", "display", "mkfs")
      * and those are only on the board. The twenty six commands of the
-     * shell itself have to be here, all of them.
+     * shell itself have to be here, all of them. A build without the exec
+     * path has one command fewer (ADR 0010).
      */
+#if KERNEL_EXEC
     KT_CHECK(kshell_command_count() >= 26);
+#else
+    KT_CHECK(kshell_command_count() >= 25);
+#endif
 
     port_host_set_sink(NULL);
+}
+
+/*
+ * The report of `free` is a fact about the memory of this build: a machine
+ * with one memory has no PSRAM line, and the line is not a zero that reads
+ * like a memory that is there (ADR 0010).
+ */
+static void test_free(void)
+{
+    char buf[1024];
+    size_t used;
+    FILE *sink;
+
+    ktest_begin("kshell: free reports the memory of this machine");
+
+    sink = tmpfile();
+    KT_CHECK(sink != NULL);
+    if (sink == NULL) {
+        return;
+    }
+
+    port_host_set_sink(sink);
+    KT_CHECK_INT_EQ(kshell_execute("free"), KSHELL_OK);
+
+    rewind(sink);
+    used = fread(buf, 1, sizeof(buf) - 1, sink);
+    buf[used] = '\0';
+
+    port_host_set_sink(NULL);
+
+    KT_CHECK(strstr(buf, "heap:") != NULL);
+#if KERNEL_PSRAM
+    KT_CHECK(strstr(buf, "psram:") != NULL);
+#else
+    KT_CHECK(strstr(buf, "psram") == NULL);
+#endif
 }
 
 static void test_memtest(void)
@@ -395,7 +437,9 @@ static void test_attr(void)
     KT_CHECK_INT_EQ(kshell_execute("chmod 0644"), KSHELL_USAGE);
     KT_CHECK_INT_EQ(kshell_execute("chmod 0644 /bin extra"), KSHELL_USAGE);
     KT_CHECK_INT_EQ(kshell_execute("chown 0"), KSHELL_USAGE);
+#if KERNEL_EXEC
     KT_CHECK_INT_EQ(kshell_execute("exec"), KSHELL_USAGE);
+#endif
     KT_CHECK_INT_EQ(kshell_execute("stat"), KSHELL_USAGE);
 
     /*
@@ -435,6 +479,7 @@ static void test_attr(void)
     KT_CHECK_INT_EQ(kshell_execute("path"), KSHELL_OK);
     KT_CHECK_INT_EQ(kshell_execute("path /bin"), KSHELL_OK);
 
+#if KERNEL_EXEC
     /*
      * A name without a slash is looked up in PATH: the answer names the
      * file that was found, not the name that was typed.
@@ -444,6 +489,9 @@ static void test_attr(void)
     /* A name that no entry holds reports the search and the directories. */
     KT_CHECK_INT_EQ(kshell_execute("path /nosuchdir"), KSHELL_OK);
     KT_CHECK_INT_EQ(kshell_execute("exec hello"), KSHELL_ERROR);
+#else
+    KT_CHECK_INT_EQ(kshell_execute("path /nosuchdir"), KSHELL_OK);
+#endif
 
     /* The empty argument brings the default back. */
     KT_CHECK_INT_EQ(kshell_execute("path \"\""), KSHELL_OK);
@@ -455,7 +503,9 @@ static void test_attr(void)
 
     /* The answer of the ABI reaches the person: a path that is not there. */
     KT_CHECK_INT_EQ(kshell_execute("chmod 0600 /nosuch"), KSHELL_ERROR);
+#if KERNEL_EXEC
     KT_CHECK_INT_EQ(kshell_execute("exec /nosuch"), KSHELL_ERROR);
+#endif
     KT_CHECK_INT_EQ(kshell_execute("stat /nosuch"), KSHELL_ERROR);
 
     rewind(sink);
@@ -466,7 +516,9 @@ static void test_attr(void)
 
     KT_CHECK(strstr(buf, "usage: chmod <mode> <path>") != NULL);
     KT_CHECK(strstr(buf, "usage: chown <uid> <path>") != NULL);
+#if KERNEL_EXEC
     KT_CHECK(strstr(buf, "usage: exec <program>") != NULL);
+#endif
     KT_CHECK(strstr(buf, "usage: stat <path>") != NULL);
     KT_CHECK(strstr(buf, "not an octal mode") != NULL);
     KT_CHECK(strstr(buf, "a uid is 0..32767") != NULL);
@@ -489,8 +541,10 @@ static void test_attr(void)
     KT_CHECK(strstr(buf, "type: directory") != NULL);
 
     /* PATH looked the name up, and the search that failed said where. */
+#if KERNEL_EXEC
     KT_CHECK(strstr(buf, "exec: /bin/hello: not a MOX1 image of this system") != NULL);
     KT_CHECK(strstr(buf, "exec: hello: not found in /nosuchdir") != NULL);
+#endif
     KT_CHECK(strstr(buf, "/bin:/usr/bin\n") != NULL);
 
     ls_teardown();
@@ -503,6 +557,7 @@ void test_kshell(void)
     test_execute();
     test_unknown();
     test_registry();
+    test_free();
     test_memtest();
     test_mfetch();
     test_ls();

@@ -23,7 +23,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-run x86-run-serial x86-smoke x86-vga-smoke x86-run-disk x86-run-disk-serial x86-disk-smoke
+.PHONY: help all build test test-asan test-tsan test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-run x86-run-serial x86-smoke x86-vga-smoke x86-run-disk x86-run-disk-serial x86-disk-smoke
 
 help:
 	@echo "Micro OS — available targets:"
@@ -31,6 +31,7 @@ help:
 	@echo "  make test       build and run the unit tests (host)"
 	@echo "  make test-asan  the same tests with the address and UB sanitizers"
 	@echo "  make test-tsan  the same tests under the race detector"
+	@echo "  make test-minimal  the host tests with the optional features off"
 	@echo "  make smoke      boot the simulator and check its answers"
 	@echo "  make integrity  the integrity check of the repository and the bundle"
 	@echo "  make wiki-check the links of the user wiki (docs/wiki)"
@@ -73,6 +74,21 @@ test-asan:
 	cmake -B $(ASAN_DIR) -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug -DMICRO_OS_SANITIZE=ON
 	cmake --build $(ASAN_DIR)
 	ctest --test-dir $(ASAN_DIR) --output-on-failure
+
+# The second host configuration (ADR 0010): the optional features off. It is
+# a target of its own, not a part of `make ci` at first: it proves that the
+# sources still build without the PSRAM, the MOX1 runtime and the network,
+# and that the tests which do not need them still pass. The tests of a
+# feature that is off are guarded in the source, not skipped by the runner.
+MINIMAL_DIR ?= build-minimal
+MINIMAL_FLAGS := -DKERNEL_PSRAM=OFF -DKERNEL_EXEC=OFF \
+                 -DMICRO_OS_NET=OFF -DMICRO_OS_TELNET=OFF -DMICRO_OS_WIFI=OFF \
+                 -DMICRO_OS_FS_FAT32=OFF -DMICRO_OS_FS_EXT2=OFF
+
+test-minimal:
+	cmake -B $(MINIMAL_DIR) -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug $(MINIMAL_FLAGS)
+	cmake --build $(MINIMAL_DIR)
+	ctest --test-dir $(MINIMAL_DIR) --output-on-failure
 
 # The whole simulator at once, not a piece of it: the kernel boots and the
 # shell answers. The first line of the kernel after every command is the
@@ -120,7 +136,7 @@ sim: build
 	$(BUILD_DIR)/ports/port_host/microos_sim
 
 clean:
-	rm -rf $(BUILD_DIR) $(ASAN_DIR)
+	rm -rf $(BUILD_DIR) $(ASAN_DIR) $(MINIMAL_DIR)
 
 format:
 	@command -v clang-format >/dev/null 2>&1 || { echo "clang-format not found"; exit 1; }

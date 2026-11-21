@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "kernel/config.h"
 #include "kernel/console.h"
 #include "kernel/errno.h"
 #include "kernel/exec.h"
@@ -1214,6 +1215,7 @@ static k_ssize_t sys_chown(ksys_arg_t path, ksys_arg_t owner, ksys_arg_t a2, ksy
  * never ends is stopped at the edge of the buffer instead of walking through
  * memory.
  */
+#if KERNEL_EXEC
 static int argv_copy(ksys_arg_t from, char *args[], char *words, k_size_t words_size)
 {
     k_size_t used = 0;
@@ -1279,7 +1281,9 @@ static int argv_copy(ksys_arg_t from, char *args[], char *words, k_size_t words_
 
     return 0;
 }
+#endif /* KERNEL_EXEC */
 
+#if KERNEL_EXEC
 static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksys_arg_t a3,
                             ksys_arg_t a4, ksys_arg_t a5)
 {
@@ -1405,6 +1409,25 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksy
 
     return (rc == -2) ? KERR_NOSYS : KERR_NOMEM;
 }
+#else
+/*
+ * The image was built without the parser and the runtime (ADR 0010). The
+ * number of the call stays: a program compiled for the full kernel asks it
+ * and gets the answer of a machine that cannot run a program, ENOSYS.
+ */
+static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksys_arg_t a3,
+                            ksys_arg_t a4, ksys_arg_t a5)
+{
+    K_UNUSED(path);
+    K_UNUSED(argv);
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    return KERR_NOSYS;
+}
+#endif /* KERNEL_EXEC */
 
 /* --- the table --- */
 

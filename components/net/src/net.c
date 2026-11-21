@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "kernel/clock.h"
+#include "kernel/config.h"
 #include "kernel/log.h"
 #include "kernel/net.h"
 #include "kshell/kshell.h"
@@ -23,6 +24,7 @@
 #include "net/net_http.h"
 #include "net/ntp.h"
 
+#if MICRO_OS_NET_HTTP
 /* --- the transport of the HTTP client --- */
 
 static int sock_open(const char *host, int port, void **ctx)
@@ -76,7 +78,9 @@ int net_http_get(const char *url, char *body, k_size_t size, struct http_respons
 {
     return http_get(&s_transport, url, body, size, out);
 }
+#endif /* MICRO_OS_NET_HTTP */
 
+#if MICRO_OS_NET_NTP
 /* --- the clock --- */
 
 int net_ntp_sync(const char *server, k_u64_t *unix_seconds)
@@ -105,9 +109,9 @@ int net_ntp_sync(const char *server, k_u64_t *unix_seconds)
 
     return ntp_parse_response(answer, unix_seconds);
 }
+#endif /* MICRO_OS_NET_NTP */
 
-/* --- the page of the state --- */
-
+#if MICRO_OS_NET_HTTP_SERVER || MICRO_OS_NET_MQTT
 /*
  * A port of the shell: digits and nothing else, and no more than 65535. The
  * parser is these few lines and not a call of strtoul, because the component
@@ -141,6 +145,10 @@ static bool parse_port(const char *text, k_u16_t *out)
 
     return true;
 }
+#endif /* MICRO_OS_NET_HTTP_SERVER || MICRO_OS_NET_MQTT */
+
+#if MICRO_OS_NET_HTTP_SERVER
+/* --- the page of the state --- */
 
 /*
  * The command does not start the server by itself at the boot: a machine of
@@ -195,8 +203,10 @@ static int cmd_httpd(int argc, char **argv)
 
     return KSHELL_OK;
 }
+#endif /* MICRO_OS_NET_HTTP_SERVER */
 
-/* --- the shell --- */
+#if MICRO_OS_NET_HTTP
+/* --- the HTTP client --- */
 
 static int cmd_http(int argc, char **argv)
 {
@@ -223,7 +233,9 @@ static int cmd_http(int argc, char **argv)
 
     return KSHELL_OK;
 }
+#endif /* MICRO_OS_NET_HTTP */
 
+#if MICRO_OS_NET_NTP
 /*
  * Give the moment to the clock of the board. The chip that keeps the date
  * is a driver, the kernel keeps the door to it, and the network only knows
@@ -265,7 +277,9 @@ static int cmd_ntp(int argc, char **argv)
 
     return KSHELL_OK;
 }
+#endif /* MICRO_OS_NET_NTP */
 
+#if MICRO_OS_NET_MQTT
 /*
  * One message and out: the command is a way to send a word to a broker from a
  * script or from the console, not a client that lives in the board. The
@@ -310,16 +324,29 @@ static int cmd_mqtt(int argc, char **argv)
 
     return KSHELL_OK;
 }
+#endif /* MICRO_OS_NET_MQTT */
 
 int net_register(void)
 {
     int rc = 0;
 
+    /*
+     * One command per feature: a build that leaves the client out has no
+     * command to answer with, and `help` does not list it (ADR 0010).
+     */
+#if MICRO_OS_NET_HTTP
     rc |= kshell_register("http", "the HTTP client: http get <url>", cmd_http);
+#endif
+#if MICRO_OS_NET_NTP
     rc |= kshell_register("ntp", "set the clock from NTP: ntp [server]", cmd_ntp);
+#endif
+#if MICRO_OS_NET_HTTP_SERVER
     rc |= kshell_register("httpd", "the page of the state: httpd [port|off]", cmd_httpd);
+#endif
+#if MICRO_OS_NET_MQTT
     rc |= kshell_register("mqtt", "publish over MQTT: mqtt <host> <port> <topic> <message>",
                           cmd_mqtt);
+#endif
 
     return rc;
 }

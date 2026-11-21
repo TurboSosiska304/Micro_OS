@@ -55,9 +55,14 @@ static void run_tests(void *arg)
     test_kshell();
     test_initd();
     test_config();
+#if MICRO_OS_NET && MICRO_OS_NET_HTTP && MICRO_OS_NET_HTTP_SERVER && MICRO_OS_NET_NTP &&           \
+    MICRO_OS_NET_MQTT
     test_net();
+#endif
     test_boot();
+#if MICRO_OS_WIFI
     test_wifi();
+#endif
 
     g_result = ktest_summary();
     atomic_store_explicit(&g_done, true, memory_order_release);
