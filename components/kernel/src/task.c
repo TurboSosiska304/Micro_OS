@@ -955,18 +955,27 @@ void task_signal_inherit(struct task *child, const struct task *parent)
 
 void task_signal_notify_parent(struct task *self)
 {
-    if (self == NULL || self->parent == NULL) {
+    struct task *parent;
+
+    if (self == NULL) {
         return;
     }
 
-    self->parent->sig_pending |= signal_bit(K_SIGCHLD);
+    /* The parent may be on another core of the host and is reading its own
+     * marks: the write is in the same critical section as the reader. */
+    k_port_enter_critical();
+    parent = self->parent;
+    if (parent != NULL) {
+        parent->sig_pending |= signal_bit(K_SIGCHLD);
+    }
+    k_port_exit_critical();
 }
 
 void task_signal_check(struct task *t, k_ssize_t result, bool from_syscall)
 {
     int slot;
 
-    if (t == NULL || t->sig_pending == 0u) {
+    if (t == NULL) {
         return;
     }
 
@@ -975,13 +984,19 @@ void task_signal_check(struct task *t, k_ssize_t result, bool from_syscall)
         task_signal_fn handler;
         int rc;
 
-        if (sig == 0 || (t->sig_pending & signal_bit(sig)) == 0u) {
+        if (sig == 0) {
             continue;
         }
 
-        handler = t->sig_handlers[slot];
-
+        /* The mark and the handler are one pair: a task that installs a
+         * handler on another core must not be seen half way, and a clear of
+         * the mark must not race the write of a child's exit. */
         k_port_enter_critical();
+        if ((t->sig_pending & signal_bit(sig)) == 0u) {
+            k_port_exit_critical();
+            continue;
+        }
+        handler = t->sig_handlers[slot];
         t->sig_pending &= ~signal_bit(sig);
         k_port_exit_critical();
 
