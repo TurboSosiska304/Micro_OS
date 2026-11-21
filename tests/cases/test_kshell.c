@@ -32,9 +32,19 @@ static int test_command(int argc, char **argv)
 
 static void test_execute(void)
 {
+    char buf[2048];
+    size_t used;
+    FILE *sink;
+
     ktest_begin("kshell: a command is executed with its arguments");
 
-    port_host_set_sink(tmpfile());
+    sink = tmpfile();
+    KT_CHECK(sink != NULL);
+    if (sink == NULL) {
+        return;
+    }
+
+    port_host_set_sink(sink);
     g_argc = 0;
     g_result = 42;
 
@@ -53,7 +63,36 @@ static void test_execute(void)
     /* An empty line does nothing. */
     KT_CHECK_INT_EQ(kshell_execute("   "), KSHELL_OK);
 
+    /*
+     * `-h` and `--help` are answered by the shell and not by the handler:
+     * nothing is done, and the status is a success, because the help that
+     * was asked for was given.
+     */
+    g_argc = 0;
+    KT_CHECK_INT_EQ(kshell_execute("testcmd -h"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("testcmd --help"), KSHELL_OK);
+    KT_CHECK_INT_EQ(g_argc, 0);
+
+    /* The same text for `help <command>`, and a name that is no command. */
+    KT_CHECK_INT_EQ(kshell_execute("help testcmd"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("help nosuch"), KSHELL_ERROR);
+
+    /* `help` answers -h like every command, and one name at most. */
+    KT_CHECK_INT_EQ(kshell_execute("help -h"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("help a b"), KSHELL_USAGE);
+
+    rewind(sink);
+    used = fread(buf, 1, sizeof(buf) - 1, sink);
+    buf[used] = '\0';
+
     port_host_set_sink(NULL);
+
+    /* A command that was registered with one line promises its name and
+     * that line, and says so instead of inventing a usage of its own. */
+    KT_CHECK(strstr(buf, "usage: testcmd [arguments]") != NULL);
+    KT_CHECK(strstr(buf, "a command for the unit tests") != NULL);
+    KT_CHECK(strstr(buf, "help: nosuch: no such command") != NULL);
+    KT_CHECK(strstr(buf, "usage: help [command]") != NULL);
 }
 
 static void test_unknown(void)
@@ -194,8 +233,9 @@ static void ls_teardown(void)
 static void test_ls(void)
 {
     struct vfs_file file;
+    struct vfs_stat info;
     static k_u8_t data[VFS_FILE_DATA_SIZE];
-    char buf[2048];
+    char buf[8192];
     size_t used;
     FILE *sink;
 
@@ -210,6 +250,20 @@ static void test_ls(void)
     KT_CHECK_INT_EQ(vfs_close(&file), 0);
     KT_CHECK_INT_EQ(devfs_register("/dev"), 0);
 
+    /* A tree of three levels for `rm -r` and a file of two lines. */
+    KT_CHECK_INT_EQ(vfs_mkdir("/tree"), 0);
+    KT_CHECK_INT_EQ(vfs_mkdir("/tree/a"), 0);
+    KT_CHECK_INT_EQ(vfs_mkdir("/tree/a/deep"), 0);
+    KT_CHECK_INT_EQ(
+        vfs_open("/tree/a/deep/f", VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, data), 0);
+    KT_CHECK_INT_EQ(vfs_write(&file, "x", 1), 1);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    KT_CHECK_INT_EQ(vfs_open("/tree/z", VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, data), 0);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    KT_CHECK_INT_EQ(vfs_open("/lines", VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, data), 0);
+    KT_CHECK_INT_EQ(vfs_write(&file, "one\ntwo\n", 8), 8);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
     sink = tmpfile();
     KT_CHECK(sink != NULL);
     if (sink == NULL) {
@@ -222,6 +276,38 @@ static void test_ls(void)
     KT_CHECK_INT_EQ(kshell_execute("ls /"), KSHELL_OK);
     /* A device of devfs keeps no mode: stat says so instead of a 0000. */
     KT_CHECK_INT_EQ(kshell_execute("stat /dev/tty0"), KSHELL_OK);
+
+    /* The long format: the line of stat for every entry of a directory, and
+     * one line for a file, which has no entries below it. */
+    KT_CHECK_INT_EQ(kshell_execute("ls -l /etc"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("ls -l /etc/hello"), KSHELL_OK);
+    /* `.` and `..` are the two names every directory has. */
+    KT_CHECK_INT_EQ(kshell_execute("ls -a /etc"), KSHELL_OK);
+
+    /* The help lists nothing, and an option ls does not have is refused. */
+    KT_CHECK_INT_EQ(kshell_execute("ls -h"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("ls --help"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("ls -z /"), KSHELL_USAGE);
+
+    /* cat -n numbers the lines; without the flag the bytes are as they are. */
+    KT_CHECK_INT_EQ(kshell_execute("cat -n /lines"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("cat /lines"), KSHELL_OK);
+
+    /* A name that begins with a dash is a file once `--` says so. */
+    KT_CHECK_INT_EQ(kshell_execute("write -dash hi"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("cat -dash"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(kshell_execute("cat -- -dash"), KSHELL_OK);
+
+    /* The sizes of the volume for a person; here -h is the flag of df and
+     * not the help, as in df of Linux. */
+    KT_CHECK_INT_EQ(kshell_execute("df -h"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("df --help"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("df -z"), KSHELL_USAGE);
+
+    /* A directory needs -r, and -r takes the whole tree down. */
+    KT_CHECK_INT_EQ(kshell_execute("rm /tree"), KSHELL_ERROR);
+    KT_CHECK_INT_EQ(kshell_execute("rm -r /tree"), KSHELL_OK);
+    KT_CHECK(vfs_stat("/tree", &info) != 0);
 
     rewind(sink);
     used = fread(buf, 1, sizeof(buf) - 1, sink);
@@ -241,6 +327,33 @@ static void test_ls(void)
     KT_CHECK(strstr(buf, "type: device") != NULL);
     KT_CHECK(strstr(buf, "mode: (not set)") != NULL);
 
+    /* The long format: the nine bits of 0644, the owner 0 and two bytes. */
+    KT_CHECK(strstr(buf, "-rw-r--r-- 0 2 hello") != NULL);
+    KT_CHECK(strstr(buf, "-rw-r--r-- 0 2 /etc/hello") != NULL);
+    /* The two names of every directory, and the slash of a directory. */
+    KT_CHECK(strstr(buf, "|-- ./") != NULL);
+    KT_CHECK(strstr(buf, "|-- ../") != NULL);
+
+    /* The help of ls, the same for -h and --help, and the refusal. */
+    KT_CHECK(strstr(buf, "usage: ls [-la] [path]") != NULL);
+    KT_CHECK(strstr(buf, "ls: unknown option: -z") != NULL);
+
+    /* cat: the lines are numbered with the flag, and not without it. */
+    KT_CHECK(strstr(buf, "     1\tone") != NULL);
+    KT_CHECK(strstr(buf, "     2\ttwo") != NULL);
+    KT_CHECK(strstr(buf, "one\ntwo\n") != NULL);
+
+    /* A dash is an option until `--` says otherwise. */
+    KT_CHECK(strstr(buf, "cat: unknown option: -d") != NULL);
+    KT_CHECK(strstr(buf, "hi\n") != NULL);
+
+    /* df -h: the sizes in KB or MB, then the fields of the volume. */
+    KT_CHECK(strstr(buf, "total,") != NULL);
+    KT_CHECK(strstr(buf, "df: unknown option: -z") != NULL);
+
+    /* rm: the sentence about a directory, then the tree is gone. */
+    KT_CHECK(strstr(buf, "is a directory, use -r") != NULL);
+
     vfs_umount("/dev");
     ls_teardown();
 }
@@ -253,7 +366,7 @@ static void test_ls(void)
  */
 static void test_attr(void)
 {
-    char buf[2048];
+    char buf[8192];
     size_t used;
     FILE *sink;
     struct vfs_stat stat;
@@ -284,6 +397,19 @@ static void test_attr(void)
     KT_CHECK_INT_EQ(kshell_execute("chown 0"), KSHELL_USAGE);
     KT_CHECK_INT_EQ(kshell_execute("exec"), KSHELL_USAGE);
     KT_CHECK_INT_EQ(kshell_execute("stat"), KSHELL_USAGE);
+
+    /*
+     * The help of a command is the text of the table: the usage line, the
+     * one line of the list and the notes of the flags. The handler does not
+     * run, so a chmod with no arguments is a request for the text and not a
+     * failure of the command.
+     */
+    KT_CHECK_INT_EQ(kshell_execute("chmod -h"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("chmod --help"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("stat --help"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("help stat"), KSHELL_OK);
+    /* A name that is no command is an error with the name in it. */
+    KT_CHECK_INT_EQ(kshell_execute("help nosuch"), KSHELL_ERROR);
 
     /* A mode that is not octal is refused before the call ... */
     KT_CHECK_INT_EQ(kshell_execute("chmod 0999 /bin"), KSHELL_ERROR);
@@ -346,6 +472,11 @@ static void test_attr(void)
     KT_CHECK(strstr(buf, "a uid is 0..32767") != NULL);
     KT_CHECK(strstr(buf, "filesystem keeps") != NULL);
     KT_CHECK(strstr(buf, "no such file") != NULL);
+
+    /* The notes of the help come from the table, once per request. */
+    KT_CHECK(strstr(buf, "The mode is the nine bits in octal") != NULL);
+    KT_CHECK(strstr(buf, "the type, the mode, the owner and the size") != NULL);
+    KT_CHECK(strstr(buf, "help: nosuch: no such command") != NULL);
 
     /* The file: nine bits of 0711, the owner 7 and three bytes of text. */
     KT_CHECK(strstr(buf, "-rwx--x--x 7 3 /bin/hello") != NULL);

@@ -198,6 +198,56 @@ becomes "this machine cannot run a program", `EPERM` "the file has no execute
 bit", `EINVAL` "not a MOX1 image of this system". The board and the simulator
 have no window of programs; the x86-64 port is the machine that runs one.
 
+### Flags and the help
+
+Every command answers `-h` and `--help` with its usage line, the one line of the
+list of `help` and the notes about its flags; the command does not do its work,
+and the status is 0, because the help that was asked for was given. A command
+whose words are its own (`write`, `exec`) only answers a help request that
+stands before them: `write /etc/setting -h` writes the two characters.
+
+```bash
+# from the shell of the board:
+help                     # the list of the commands
+help ls                  # the usage and the notes of one command
+ls -h                    # the same text
+chmod --help             # ... for a command that parses no flags
+help nosuch              # help: nosuch: no such command
+```
+
+The flags are read by the shell itself, not by a `getopt` of libc: `-la` and
+`-l -a` are the same, an option the command does not have is refused with its
+usage line (`ls: unknown option: -z`), and `--` ends the options, so a name
+that begins with a dash can still be given:
+
+```bash
+# from the shell of the board:
+cat -- -notes            # a file whose name is "-notes"
+rm -- -notes
+```
+
+| Command | Flag | Meaning |
+|---|---|---|
+| `ls` | `-l` | the mode, the owner and the size of every entry |
+| `ls` | `-a` | `.` and `..` as well |
+| `cat` | `-n` | the number of the line in front of every line |
+| `rm` | `-r` | a directory with everything in it; without it a directory is refused |
+| `df` | `-h` | the sizes in KB and MB instead of blocks |
+
+`df` is the one command where `-h` is not the help but a flag of its own, as in
+`df` of Linux: `df --help` prints its text. `ls -l` writes `?` where an object
+keeps no mode (devfs, a volume of an older release): nine dashes would read as
+"nobody may touch it", which the record does not say.
+
+```bash
+# from the shell of the board:
+ls -l /etc               # drwxr-xr-x 0 0 init.d
+ls -a /                 # . and .. beside the real entries
+df -h                    # /: 487 KB total, 482 KB free
+cat -n /etc/setting      # "     1" and the line of the file, a tab between
+rm -r /tmp/mine          # the directory and everything in it
+```
+
 ### HTTP and the clock
 
 ```bash

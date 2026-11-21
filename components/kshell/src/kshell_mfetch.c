@@ -221,5 +221,14 @@ static int cmd_mfetch(int argc, char **argv)
 
 int kshell_register_mfetch(void)
 {
-    return kshell_register("mfetch", "the system report with the logo", cmd_mfetch);
+    static const struct kshell_help help = {
+        .summary = "the system report with the logo",
+        .usage = "mfetch [color]",
+        .detail = "The logo beside a short report: the name and the build, the board, the\n"
+                  "memory, the volume, the uptime, the modules and the shell.\n"
+                  "`color` brings the escape sequences of the terminal; the plain report\n"
+                  "stays printable on the screen of the board.\n",
+    };
+
+    return kshell_register_help("mfetch", &help, cmd_mfetch);
 }
