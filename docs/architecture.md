@@ -252,9 +252,10 @@ tests), the design is ADR 0009.
 
 The FAT reader is a few files under `components/fs_fat32/`: the boot sector
 and the table of clusters, the directories with their long UTF-16 names and
-the adapter to the VFS. It is **read-only**; an object of FAT has no mode
-and no owner (the numbers are zero), and every call that would write is
-`KERR_NOTSUP`, not `KERR_PERM`. A FAT volume mounted at `/mnt/fat` is one
+the adapter to the VFS. It is **read and written**; an object of FAT has no
+mode and no owner (the numbers are zero), `chmod` and `chown` are
+`KERR_NOTSUP`, not `KERR_PERM`, and a write without a journal is what a
+power cut can catch. A FAT volume mounted at `/mnt/fat` is one
 more entry of the mount table, and `ls /mnt` shows it even though MicroFS
 does not have the directory.
 

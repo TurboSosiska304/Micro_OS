@@ -28,7 +28,7 @@ set(FAT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/fs_fat32")
 # disk of `make x86-smoke` is one MicroFS volume, and a reader that no call
 # of the boot asks for is an object file of no use. A machine with a FAT
 # partition turns it on and mounts the partition with vfs_mount_type().
-option(MICRO_OS_FS_FAT32 "FAT12/16/32, read-only" OFF)
+option(MICRO_OS_FS_FAT32 "FAT12/16/32, read and written" OFF)
 
 # The optional features of the image (ADR 0010): the PSRAM pool of the
 # allocator is off, the MOX1 runtime is on (the port can enter a program), and

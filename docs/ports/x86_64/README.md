@@ -272,7 +272,7 @@ and the server waits for the page of the state to move to this port.
   `http get`/`ntp` from `components/net` with `-DMICRO_OS_X86_NET=ON`.
   `make x86-net-smoke` checks the echo of the gateway, a UDP exchange with a
   server of the host and an HTTP GET over the user-mode network of QEMU;
-* a second filesystem: `-DMICRO_OS_FS_FAT32=ON` links the read-only FAT
+* a second filesystem: `-DMICRO_OS_FS_FAT32=ON` links the FAT reader and writer
   reader and its `vfs_mount_type()` (ADR 0009). The option is off by default,
   so the smoke tests of the machine keep one MicroFS volume; a machine that
   has a FAT partition mounts it with a call of the boot, because `/etc/fstab`

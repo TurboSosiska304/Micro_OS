@@ -62,7 +62,7 @@ Network (component `net` and the components beside it):
 Filesystems (the flags of ADR 0009):
 
 * `MICRO_OS_FS_MFS` - MicroFS, the root of every machine (default 1);
-* `MICRO_OS_FS_FAT32` - FAT12/16/32, read-only first (default 0);
+* `MICRO_OS_FS_FAT32` - FAT12/16/32, read and written (default 0);
 * `MICRO_OS_FS_EXT2` - the second POSIX filesystem (default 0).
 
 Drivers keep their own Kconfig switches (`MICRO_OS_MIC` is the first); the

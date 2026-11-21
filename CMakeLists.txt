@@ -84,7 +84,7 @@ else()
     # it has a medium to point it at. The tests compile the FAT sources of
     # their own, so the reader is always covered.
     option(MICRO_OS_FS_MFS "MicroFS, the filesystem of the board" ON)
-    option(MICRO_OS_FS_FAT32 "FAT12/16/32, read-only, for the tests and a card" OFF)
+    option(MICRO_OS_FS_FAT32 "FAT12/16/32, read and written, for the tests and a card" OFF)
     option(MICRO_OS_FS_EXT2 "ext2, read-only (not written yet)" OFF)
 
     if(NOT MICRO_OS_FS_MFS)
