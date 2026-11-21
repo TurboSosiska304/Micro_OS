@@ -13,7 +13,8 @@ in [`docs/memory.md`](../memory.md); this page is about using it.
 
 ## The tree after a boot
 
-The simulator, right after a boot (the board adds `/log`, x86-64 adds `/bin`):
+The simulator, right after a boot (the board adds `/log`; x86-64 has the same
+tree and adds `/bin` with the programs of its disk image):
 
 ```text
 microos> tree /
@@ -43,7 +44,7 @@ microos> tree /
 | `/proc` | the kernel: `version`, `uptime`, `meminfo`, `tasks`, `modules`, one directory per task |
 | `/dev` | the devices: `tty0`, `null`, `input` and the ones the port adds |
 | `/log` | on the board: `start.log`, the log of the boot |
-| `/bin` | on x86-64: the programs the boot writes (`hello`, `crash`, `fork`, `badptr`) |
+| `/bin` | on x86-64: the programs of the disk image (`hello`, `crash`, `fork`, ...), written by `make x86-disk` and read by `execve`; no boot installs them |
 
 `ls` prints the names of a directory, one per line; `-l` adds the mode, the
 owner, the size and the date, and `-a` the two names `.` and `..`. `tree`
@@ -120,8 +121,9 @@ mkfs: the volume is formatted
 `mkfs -y` unmounts `/`, formats the volume and mounts it again. Without `-y` it
 does nothing but print its usage; with `-y` everything in MicroFS is gone. It
 is registered on the board (`main/src/main.c`) and in the simulator
-(`ports/port_host/src/sim_main.c`); the x86-64 port has no such command and
-formats a blank volume at the boot instead.
+(`ports/port_host/src/sim_main.c`); the x86-64 port has no such command: its
+volume comes with the disk image (`make x86-disk`), and a boot that finds
+only the memory volume formats that one.
 
 `fsck` of MicroFS is the read-only check:
 

@@ -69,23 +69,26 @@ a list of commands and checks the transcript. `make clean` removes
 ## The x86-64 build
 
 ```bash
-make x86-build            # the loader and the kernel, into build-x86/
+make x86-build            # the loader, the kernel and the programs, into build-x86/
+make x86-disk             # build-x86/programs.img: /bin and /etc of MicroFS
 make x86-run              # a QEMU window: VGA text and the PS/2 keyboard
 make x86-run-serial       # the same machine in a terminal (-nographic)
 make x86-smoke            # boot and check the transcript, no window
 make x86-vga-smoke        # check the screen and the keyboard without a display
-make x86-run-disk         # the window with an 8 MB disk on the IDE channel
+make x86-run-disk         # the window with a disk of its own, kept between runs
 make x86-run-disk-serial  # the same disk in a terminal
 make x86-disk-smoke       # two boots on one image: a file survives both
 ```
 
 The build is a CMake project of its own (`ports/port_x86_64`), because the
-kernel there has no libc under it. The image is two files:
-`build-x86/loader32.elf` (a multiboot loader that QEMU takes with `-kernel`)
-and `build-x86/microos64.bin` (the flat kernel image). The programs of `/bin`
-are built first (`hello.mox`, `crash.mox`, `fork.mox`, `badptr.mox`) and the
-kernel carries them as blobs, because it needs the bytes before it has a
-filesystem to read them from.
+kernel there has no libc under it. The machine boots from three files:
+`build-x86/loader32.elf` (a multiboot loader that QEMU takes with `-kernel`),
+`build-x86/microos64.bin` (the flat kernel image) and
+`build-x86/programs.img` (the disk). The programs of `/bin` are built first
+(`hello.mox`, `crash.mox`, `fork.mox`, `badptr.mox`, ...) and written into a
+MicroFS volume of the disk by `tools/mkfs_mfs.c`; the kernel carries no copy
+of a program, and the boot mounts the volume and reads `/bin/hello` with
+`execve`.
 
 The display backend is a package of its own in some distributions: the target
 asks QEMU for its list of backends first and prints the command to run when
@@ -93,9 +96,11 @@ the one asked for is missing. `make x86-run X86_DISPLAY=sdl` picks SDL, and
 `make x86-run-serial` is the machine for a box without a display server at
 all.
 
-The disk is a raw image of 8 MB, made the first time it is needed
-(`tools/x86_disk_smoke.py --mkimage`) and kept in `build-x86/disk.img`. It is
-generated, not committed; `make clean` does not remove `build-x86/`, so
+The disk is a raw image of 8 MB, made by `make x86-disk`
+(`tools/mkfs_mfs.c`, which links `components/mfs`) and kept in
+`build-x86/programs.img`; `make x86-run-disk` copies it once to
+`build-x86/disk.img` and keeps that copy between runs. Both are generated,
+not committed; `make clean` does not remove `build-x86/`, so
 `rm -rf build-x86` is the way to start over. The details are in the port's
 README, [`docs/ports/x86_64/README.md`](../ports/x86_64/README.md).
 

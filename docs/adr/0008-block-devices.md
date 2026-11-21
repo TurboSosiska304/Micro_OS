@@ -15,8 +15,9 @@ answered, though, was never a disk:
 * in the simulator, a file of the host (`file0`);
 * on x86-64, an array of 512 KB in the memory of the port (`ram0`), which is
   a good model of a flash and a poor model of storage: every reset makes the
-  volume again, and the program of `/bin` is written into it again at every
-  boot.
+  volume again, and the programs of `/bin` had to be written into it again at
+  every boot. The disk of the port (`ata0`) replaced that arrangement, and
+  the programs are now files of the volume the image carries.
 
 The platform roadmap asks for a second block device (K6), the kernel roadmap
 for a machine that keeps the programs it runs. There is also a larger

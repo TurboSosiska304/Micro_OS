@@ -12,11 +12,12 @@
  * stays alive is the difference between "the tasks are not done yet" and
  * "the boot is broken".
  *
- * Between the banner and the init process the boot brings up a filesystem and
- * runs a program out of it (see the section at the end of this file): this is
- * the machine of the project that has the memory to place an image and the
- * processor to jump into it, so a program of the phase is a program that
- * really runs, out of a file, and not a figure of speech.
+ * Between the banner and the init process the boot brings up the filesystem
+ * of the machine and runs a program out of it (see the section at the end of
+ * this file): this is the machine of the project that has the memory to place
+ * an image and the processor to jump into it, so a program of the phase is a
+ * program that really runs, out of a file of the disk, and not a figure of
+ * speech.
  */
 #include "port_x86_64.h"
 
@@ -38,8 +39,10 @@
 #include "net/net.h"
 #endif
 
+#include "devfs/devfs.h"
 #include "mfs/mfs.h"
 #include "mfs/mfs_vfs.h"
+#include "procfs/procfs.h"
 #if MICRO_OS_FS_FAT32
 #include "fs_fat32/fat.h"
 #endif
@@ -81,124 +84,26 @@ static void shell_task(void *arg)
     port_x86_64_shell_run();
 }
 
-/* --- the filesystem and the program of the milestone --------------------- */
+/* --- the filesystem and the program of the boot -------------------------- */
 
 /*
- * The program of the phase is a file, and the boot reaches it the way any
- * caller does: through the call. The image is built at the build time out of
- * programs/hello.c and embedded in the kernel (see the CMakeLists of the
- * port), because the kernel has to have the bytes before it has anywhere to
- * put them; at the boot they are written to /bin/hello of a volume of the
- * memory of the port, and then the boot asks the system for that file with
- * execve.
+ * The programs are files of the disk, not blobs of the kernel. The image of
+ * the machine carries a MicroFS volume (tools/mkfs_mfs.c, `make x86-disk`),
+ * the boot mounts it at `/` and finds `/bin` where the tool left it; the
+ * file is then reached the way any caller reaches it: through execve.
  *
- * The shape is deliberate. A boot that read the image and jumped into it would
- * prove the port and the parser, and nothing of the edge of the system: the
- * stat of the file, the bit of execution in its mode, the read through the
- * VFS, the memory of the kernel and the call itself are exactly what a program
- * from /bin has to go through, and the line of the program on COM1 is the proof
- * that all of it happened in that order.
+ * A boot that reads the image and jumps into it would prove the port and the
+ * parser, and nothing of the edge of the system: the stat of the file, the
+ * bit of execution in its mode, the read through the VFS, the memory of the
+ * kernel and the call itself are exactly what a program from /bin has to go
+ * through, and the line of the program on COM1 is the proof that all of it
+ * happened in that order.
+ *
+ * A machine without a disk still mounts a volume in its memory (ram0, ADR
+ * 0008); that volume has no /bin, and the boot says which file it could not
+ * find instead of pretending to have one.
  */
-extern const k_u8_t _binary_hello_mox_start[];
-extern const k_u8_t _binary_hello_mox_end[];
-extern const k_u8_t _binary_crash_mox_start[];
-extern const k_u8_t _binary_crash_mox_end[];
-extern const k_u8_t _binary_fork_mox_start[];
-extern const k_u8_t _binary_fork_mox_end[];
-extern const k_u8_t _binary_badptr_mox_start[];
-extern const k_u8_t _binary_badptr_mox_end[];
-extern const k_u8_t _binary_signals_mox_start[];
-extern const k_u8_t _binary_signals_mox_end[];
-extern const k_u8_t _binary_cat_mox_start[];
-extern const k_u8_t _binary_cat_mox_end[];
-extern const k_u8_t _binary_echo_mox_start[];
-extern const k_u8_t _binary_echo_mox_end[];
-extern const k_u8_t _binary_grep_mox_start[];
-extern const k_u8_t _binary_grep_mox_end[];
-extern const k_u8_t _binary_head_mox_start[];
-extern const k_u8_t _binary_head_mox_end[];
-extern const k_u8_t _binary_ls_mox_start[];
-extern const k_u8_t _binary_ls_mox_end[];
-extern const k_u8_t _binary_mkdir_mox_start[];
-extern const k_u8_t _binary_mkdir_mox_end[];
-extern const k_u8_t _binary_pwd_mox_start[];
-extern const k_u8_t _binary_pwd_mox_end[];
-extern const k_u8_t _binary_rm_mox_start[];
-extern const k_u8_t _binary_rm_mox_end[];
-extern const k_u8_t _binary_spawn_mox_start[];
-extern const k_u8_t _binary_spawn_mox_end[];
-extern const k_u8_t _binary_wc_mox_start[];
-extern const k_u8_t _binary_wc_mox_end[];
-
-#define PROGRAM_DIR "/bin"
 #define PROGRAM_PATH "/bin/hello"
-#define PROGRAM_CRASH_PATH "/bin/crash"
-#define PROGRAM_FORK_PATH "/bin/fork"
-#define PROGRAM_BADPTR_PATH "/bin/badptr"
-#define PROGRAM_SIGNALS_PATH "/bin/signals"
-#define PROGRAM_CAT_PATH "/bin/cat"
-#define PROGRAM_ECHO_PATH "/bin/echo"
-#define PROGRAM_GREP_PATH "/bin/grep"
-#define PROGRAM_HEAD_PATH "/bin/head"
-#define PROGRAM_LS_PATH "/bin/ls"
-#define PROGRAM_MKDIR_PATH "/bin/mkdir"
-#define PROGRAM_PWD_PATH "/bin/pwd"
-#define PROGRAM_RM_PATH "/bin/rm"
-#define PROGRAM_SPAWN_PATH "/bin/spawn"
-#define PROGRAM_WC_PATH "/bin/wc"
-
-/*
- * A program is a file somebody may run, so it is created with the mode of a
- * program and not with the 0644 of a file of data: without the three bits of
- * execution the call answers EPERM, and an image that cannot be run proves
- * nothing about the machine that was supposed to run it.
- */
-#define PROGRAM_MODE 0755u
-
-/*
- * Write an image to a file of /bin. The file is created through the VFS and
- * not through the filesystem: the adapter of MicroFS is the only place that
- * knows which numbers of the filesystem mean what, and the boot is not that
- * place.
- */
-static bool program_install(const char *path, const k_u8_t *image, k_size_t size)
-{
-    struct vfs_file file;
-    k_u8_t priv[VFS_FILE_DATA_SIZE];
-    int rc;
-
-    rc = vfs_mkdir_p(PROGRAM_DIR);
-    if (rc != 0) {
-        kerror("x86-64: cannot make %s (%s)", PROGRAM_DIR, vfs_strerror(rc));
-        return false;
-    }
-
-    rc = vfs_open(path, VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, priv);
-    if (rc != 0) {
-        kerror("x86-64: cannot create %s (%s)", path, vfs_strerror(rc));
-        return false;
-    }
-
-    rc = vfs_write(&file, image, size);
-    (void)vfs_close(&file);
-
-    if (rc != (int)size) {
-        kerror("x86-64: %s took %d byte(s) of %u", path, rc, (unsigned)size);
-        return false;
-    }
-
-    /* The mode is the second half of the file: a file of data is written and
-     * read, a program is written and executed, and the difference is here. */
-    rc = vfs_chmod(path, PROGRAM_MODE);
-    if (rc != 0) {
-        kerror("x86-64: cannot make %s executable (%s)", path, vfs_strerror(rc));
-        return false;
-    }
-
-    kinfo("x86-64: %s is written (%u bytes)", path, (unsigned)size);
-
-    return true;
-}
 
 /*
  * Run the file through the call. The call is the whole of the path: the stat,
@@ -228,6 +133,15 @@ static void program_run(void)
         return;
     }
 
+    /* A volume without the file is a machine without a userland: the boot
+     * says so once and goes on to the shell. The disks of the tests carry
+     * /bin, and the ones of a person may not. */
+    if (rc == KERR_NOENT) {
+        kwarn("x86-64: there is no %s on %s, no program at the boot", PROGRAM_PATH,
+              port_x86_64_root_device());
+        return;
+    }
+
     /* The one refusal that is about the file and not about the medium: the
      * call answered EPERM, so the mode of /bin/hello lost its `x` bits. */
     if (rc == KERR_PERM) {
@@ -236,6 +150,77 @@ static void program_run(void)
     }
 
     kerror("x86-64: %s did not run (%s, %d)", PROGRAM_PATH, vfs_strerror(rc), rc);
+}
+
+/*
+ * The tree a machine of this system has: /etc with the file of the settings
+ * and the directory of the init scripts. The image of the disk carries them
+ * (`make x86-disk`), so a boot on that image writes nothing; a volume
+ * without them - the RAM volume of a machine QEMU was given no disk for -
+ * gets them here, and the tree of x86-64 is the tree of the board and of the
+ * simulator. A setting that is already there is never replaced: it belongs to
+ * the person who wrote it.
+ */
+#define ETC_DIR "/etc"
+#define ETC_INITD "/etc/init.d"
+#define ETC_SETTING "/etc/setting"
+#define ETC_SETTING_TEXT "hello\nhostname=x86_64\nconsole=vga\n"
+
+static void etc_bring_up(void)
+{
+    struct vfs_stat info;
+    struct vfs_file file;
+    k_u8_t priv[VFS_FILE_DATA_SIZE];
+    const k_size_t size = (k_size_t)strlen(ETC_SETTING_TEXT);
+    int rc;
+
+    rc = vfs_stat(ETC_DIR, &info);
+    if (rc != 0) {
+        if (rc != KERR_NOENT) {
+            kwarn("x86-64: cannot look at %s (%s)", ETC_DIR, vfs_strerror(rc));
+            return;
+        }
+
+        rc = vfs_mkdir_p(ETC_DIR);
+        if (rc != 0) {
+            kwarn("x86-64: cannot make %s (%s)", ETC_DIR, vfs_strerror(rc));
+            return;
+        }
+
+        kinfo("x86-64: %s is made on the volume", ETC_DIR);
+    }
+
+    rc = vfs_mkdir_p(ETC_INITD);
+    if (rc != 0) {
+        kwarn("x86-64: cannot make %s (%s)", ETC_INITD, vfs_strerror(rc));
+    }
+
+    rc = vfs_stat(ETC_SETTING, &info);
+    if (rc == 0) {
+        return;
+    }
+
+    if (rc != KERR_NOENT) {
+        kwarn("x86-64: cannot look at %s (%s)", ETC_SETTING, vfs_strerror(rc));
+        return;
+    }
+
+    rc = vfs_open(ETC_SETTING, VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, priv);
+    if (rc != 0) {
+        kwarn("x86-64: cannot write %s (%s)", ETC_SETTING, vfs_strerror(rc));
+        return;
+    }
+
+    rc = vfs_write(&file, ETC_SETTING_TEXT, size);
+    (void)vfs_close(&file);
+
+    if (rc != (int)size) {
+        kwarn("x86-64: %s took %d byte(s) of %u", ETC_SETTING, rc, (unsigned)size);
+        return;
+    }
+
+    (void)vfs_chmod(ETC_SETTING, 0644u);
+    kinfo("x86-64: %s is made on the volume", ETC_SETTING);
 }
 
 /*
@@ -276,125 +261,23 @@ static void filesystem_bring_up(void)
         return;
     }
 
-    if (!program_install(PROGRAM_PATH, _binary_hello_mox_start,
-                         (k_size_t)(_binary_hello_mox_end - _binary_hello_mox_start))) {
-        return;
+    /* The tree of the machine: /etc of the volume or of the memory, then the
+     * two virtual filesystems the board and the simulator mount. Their
+     * failure costs a directory and not the boot. */
+    etc_bring_up();
+
+    if (procfs_register("/proc") != 0) {
+        kwarn("x86-64: cannot mount the procfs at /proc");
     }
 
-    /*
-     * The second program exists for the smoke test of the fault path: the
-     * shell runs it after the first one, it writes to address zero and the
-     * machine has to be alive for the command after it.
-     */
-    if (!program_install(PROGRAM_CRASH_PATH, _binary_crash_mox_start,
-                         (k_size_t)(_binary_crash_mox_end - _binary_crash_mox_start))) {
-        return;
+    if (devfs_register("/dev") != 0) {
+        kwarn("x86-64: cannot mount the devfs at /dev");
     }
 
-    /*
-     * The third program is the fork of K4: a parent and a child share a page
-     * until one of them writes, and the parent waits for the status of the
-     * child. The shell runs it, so the machine has to keep both tasks apart
-     * and alive at the same time.
-     */
-    if (!program_install(PROGRAM_FORK_PATH, _binary_fork_mox_start,
-                         (k_size_t)(_binary_fork_mox_end - _binary_fork_mox_start))) {
-        return;
-    }
-
-    /*
-     * The fourth program is the edge of the system call: it hands write,
-     * stat and read addresses that are not its memory, and the machine has
-     * to answer EFAULT and stay alive. The addresses and the lines are in
-     * programs/badptr.c; the smoke test reads them.
-     */
-    if (!program_install(PROGRAM_BADPTR_PATH, _binary_badptr_mox_start,
-                         (k_size_t)(_binary_badptr_mox_end - _binary_badptr_mox_start))) {
-        return;
-    }
-
-    /*
-     * The fifth program is the signals of K7: a handler of the program, a
-     * child ended by SIGTERM, a wait cut short by SIGINT and the errors of
-     * kill. The shell runs it as it runs every other file of /bin.
-     */
-    if (!program_install(PROGRAM_SIGNALS_PATH, _binary_signals_mox_start,
-                         (k_size_t)(_binary_signals_mox_end - _binary_signals_mox_start))) {
-        return;
-    }
-
-    /*
-     * The programs of the library (ADR 0016) are not creatures of the port:
-     * each was compiled against components/libc/user, enters through
-     * `_start`, takes argc, argv and envp, and talks to the kernel through
-     * the same `int $0x80`. `cat` reads a file, `echo` writes its line and
-     * `ls` walks a directory - the three things a shell of a machine with a
-     * filesystem is asked for first.
-     */
-    if (!program_install(PROGRAM_CAT_PATH, _binary_cat_mox_start,
-                         (k_size_t)(_binary_cat_mox_end - _binary_cat_mox_start))) {
-        return;
-    }
-
-    if (!program_install(PROGRAM_ECHO_PATH, _binary_echo_mox_start,
-                         (k_size_t)(_binary_echo_mox_end - _binary_echo_mox_start))) {
-        return;
-    }
-
-    if (!program_install(PROGRAM_LS_PATH, _binary_ls_mox_start,
-                         (k_size_t)(_binary_ls_mox_end - _binary_ls_mox_start))) {
-        return;
-    }
-
-    /*
-     * The utilities of a line: `wc` counts the newlines and the bytes of a
-     * source, `head` copies the first lines, `grep` prints the lines that
-     * hold a word, `mkdir` and `rm` change the tree through the calls, and
-     * `pwd` reads the directory of the task. The four filters read
-     * descriptor 0 when they are given no file, which is what makes them the
-     * second half of a pipe: `ls /bin | wc -l` in `make x86-smoke` is the
-     * chain the shell builds with pipe and dup2 (ADR 0017).
-     */
-    if (!program_install(PROGRAM_WC_PATH, _binary_wc_mox_start,
-                         (k_size_t)(_binary_wc_mox_end - _binary_wc_mox_start))) {
-        return;
-    }
-
-    if (!program_install(PROGRAM_HEAD_PATH, _binary_head_mox_start,
-                         (k_size_t)(_binary_head_mox_end - _binary_head_mox_start))) {
-        return;
-    }
-
-    if (!program_install(PROGRAM_GREP_PATH, _binary_grep_mox_start,
-                         (k_size_t)(_binary_grep_mox_end - _binary_grep_mox_start))) {
-        return;
-    }
-
-    if (!program_install(PROGRAM_MKDIR_PATH, _binary_mkdir_mox_start,
-                         (k_size_t)(_binary_mkdir_mox_end - _binary_mkdir_mox_start))) {
-        return;
-    }
-
-    if (!program_install(PROGRAM_RM_PATH, _binary_rm_mox_start,
-                         (k_size_t)(_binary_rm_mox_end - _binary_rm_mox_start))) {
-        return;
-    }
-
-    if (!program_install(PROGRAM_PWD_PATH, _binary_pwd_mox_start,
-                         (k_size_t)(_binary_pwd_mox_end - _binary_pwd_mox_start))) {
-        return;
-    }
-
-    /*
-     * `spawn` is a program that asks for another program with an environment
-     * of its own: the third argument of execve, copied at the edge of the
-     * call and carried to a second task. It is the proof from the user side
-     * that the environment is not a word the kernel prints about itself.
-     */
-    if (!program_install(PROGRAM_SPAWN_PATH, _binary_spawn_mox_start,
-                         (k_size_t)(_binary_spawn_mox_end - _binary_spawn_mox_start))) {
-        return;
-    }
+    /* The programs are files the tool left in the volume; nothing is
+     * written here. A volume a person made without /bin is a machine
+     * without programs, and the boot says so when it asks for one. */
+    kinfo("x86-64: the programs come from %s:/bin", device);
 }
 
 /*
@@ -408,10 +291,10 @@ static void init_task(void *arg)
     K_UNUSED(arg);
 
     /*
-     * The program of the milestone runs before the shell: execve is a wait
-     * now, so the init task is its parent and the shell does not exist until
-     * the program has ended. That is the order of the transcript the smoke
-     * test reads: the lines of /bin/hello, then the prompt.
+     * The program of the boot runs before the shell: execve is a wait now,
+     * so the init task is its parent and the shell does not exist until the
+     * program has ended. That is the order of the transcript the smoke test
+     * reads: the lines of /bin/hello, then the prompt.
      */
     program_run();
 

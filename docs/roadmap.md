@@ -69,9 +69,12 @@ written when the project was an operating system for one board; the numbers
 * [x] The mode enforced at `open`, through `vfs_stat`, and the `x` bit at
       `execve`
 * [x] `execve`, `chmod` and `chown` in the syscall table, and in the libc
-* [x] A first program in `/bin`: the x86-64 port writes `/bin/hello` to its
-      RAM volume at the boot and asks for it with `execve`; the shell runs the
+* [x] A first program in `/bin`: the x86-64 port mounts the MicroFS volume of
+      its disk and asks for `/bin/hello` with `execve`; the shell runs the
       same file with `exec`
+* [x] Programs are files on a filesystem of the disk, not blobs of the
+      kernel: `make x86-disk` writes `/bin` (fifteen programs) and `/etc` with
+      `tools/mkfs_mfs.c`, and no boot installs an image
 * [x] `PATH` for the shell
 * [x] `argv` reaches the port, and the ABI of the entry is written down
 * [x] An entry into the kernel from a program (`int $0x80`), with the status
@@ -242,5 +245,6 @@ written when the project was an operating system for one board; the numbers
       date; `-a` with `.` and `..`), and `tree` draws the levels below it
 * [ ] A shell `export` and the environment of the shell in the programs,
       instead of the four words of the kernel
-* [ ] Programs are files on a filesystem of the disk, and more than the ten
-      images the boot writes (the format is frozen first, ADR 0011)
+* [x] Programs are files on a filesystem of the disk, and a program is added
+      by writing a file of the volume (`make x86-disk`), not by embedding it
+      in the kernel

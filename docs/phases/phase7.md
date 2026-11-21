@@ -461,6 +461,10 @@ not tested because it is not checked at all (see "What is still missing").
   `/bin`. The smoke test of the port does drive the file through the shell:
   `chmod 0644` makes `exec` refuse with `EPERM`, `chmod 0755` gives it back,
   and `exec` runs the program and reports that it has finished.
+  **Update (1.0):** the RAM array is no longer the home of `/bin`;
+  `make x86-disk` writes the programs into the MicroFS volume of the disk and
+  the boot mounts it, so the files survive a reset
+  ([programs](../wiki/programs.md), ADR 0008).
 * **`PATH` is missing.** `exec` takes the path it is given, resolved against
   the working directory; there is no list of directories to search.
 * **`argv` does not reach the port.** `sys_execve()` takes the vector and

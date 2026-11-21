@@ -16,16 +16,17 @@ the machine where a program can really be loaded and run (the window of
 | store | `ata0`: a raw image on the primary IDE channel, PIO, MicroFS on its first partition, mounted at `/` (ADR 0008); `ram0`, 512 KB of the memory of the machine, when there is no disk |
 | network | `virtio0`: virtio-net-pci in its legacy I/O interface, polled; ARP, IPv4, ICMP, UDP, a client of TCP (one segment in flight, a timeout retransmission) and a listener with SYN/ACK and `accept`; the resolver of QEMU user-net with a cache of eight names and their time to live; 10.0.2.15/24 on QEMU user-net, gateway 10.0.2.2, resolver 10.0.2.3, no DHCP |
 | programs | `k_port_exec_supported()` is true; the window is 16 MiB at 32 MiB (`0x02000000`-`0x03000000`) over a physical arena at 64 MiB; a program is a file in `/bin` (the MOX1 format of `kernel/exec.h`), runs in ring 3 with page tables of its own and calls the kernel with `int $0x80` (ADR 0007) |
-| build | `make x86-build` (needs `cmake`, `ninja`, `xorriso` is not needed) |
+| build | `make x86-build` (needs `cmake`, `ninja`, `xorriso` is not needed) and `make x86-disk` for the volume with `/bin` |
 | check | `make x86-smoke` (serial), `make x86-vga-smoke` (screen and keyboard), `make x86-disk-smoke` (two boots on a disk), `make x86-net-smoke` (the network) - all need `qemu-system-x86` |
 
 ## Run it
 
 ```bash
 make x86-build
+make x86-disk         # the image of the disk: /bin and /etc of MicroFS
 make x86-run          # a QEMU window: the VGA console and its keyboard
 make x86-run-serial   # the same machine in a terminal (-nographic)
-make x86-run-disk     # the window with an 8 MB disk on the IDE channel
+make x86-run-disk     # the window with a disk of its own, kept between runs
 make x86-run-disk-serial  # the same disk in a terminal
 make x86-net-run      # the same machine with a virtio-net card, in a terminal
 make x86-smoke        # boot and check the lines of the banner and the shell
@@ -72,21 +73,24 @@ to have. `python3 tools/x86_vga_smoke.py --display gtk` runs the same checks
 against the real window instead of its memory; the screenshot is then the
 picture of the window, which is how a person watches the keys arrive.
 
-The image is two files: `build-x86/loader32.elf` (the loader) and
-`build-x86/microos64.bin` (the kernel, a flat image). The heap of the kernel
-stops below the window of the programs; the kernel is linked at 16 MiB and
-the programs are placed at 32 MiB. The programs of `/bin` are made first:
+The machine boots from three files: `build-x86/loader32.elf` (the loader),
+`build-x86/microos64.bin` (the kernel, a flat image) and
+`build-x86/programs.img` (the disk). The heap of the kernel stops below the
+window of the programs; the kernel is linked at 16 MiB and the programs are
+placed at 32 MiB. The fifteen programs of `/bin` are built first:
 `build-x86/hello.mox`, `crash.mox`, `fork.mox`, `badptr.mox`, `signals.mox`,
-`cat.mox`, `echo.mox`, `ls.mox`, `spawn.mox` and `wc.mox` are the images of
-`ports/port_x86_64/programs/`
-(`programs/program.ld` links them for the window, `tools/mkprog.sh` turns them
-into the format) and the kernel carries all ten as blobs, because the
-machine has to have the bytes before it has a filesystem to read them from.
-The last five are linked against `components/libc/user` and enter at `_start`
-(ADR 0016); the first five use the raw `programs/prog.h`. The build passes
-`--base 0x02000000` to `mkprog.sh`, which refuses an image linked for another
-window: nothing relocates the program, so a wrong address would run and read
-its data from somewhere else.
+`cat.mox`, `echo.mox`, `ls.mox`, `wc.mox`, `head.mox`, `grep.mox`,
+`mkdir.mox`, `rm.mox`, `pwd.mox` and `spawn.mox` are the images of
+`ports/port_x86_64/programs/` (`programs/program.ld` links them for the
+window, `tools/mkprog.sh` turns them into the format). They are not blobs of
+the kernel: `make x86-disk` writes them into a MicroFS volume of a raw disk
+image with `tools/mkfs_mfs.c`, and the boot mounts that volume and runs
+`/bin/hello` through `execve`. The last ten are linked against
+`components/libc/user` and enter at `_start` (ADR 0016); the first five use
+the raw `programs/prog.h`. The build passes `--base 0x02000000` to
+`mkprog.sh`, which refuses an image linked for another window: nothing
+relocates the program, so a wrong address would run and read its data from
+somewhere else.
 
 The virtual and the physical address are no longer the same number for a
 program: `src/paging.c` builds its page tables with the window at 32 MiB
@@ -149,18 +153,29 @@ What the window does not do:
 
 ## The disk
 
-`make x86-run-disk` attaches a raw image of 8 MB to the primary IDE channel
-(`-drive file=build-x86/disk.img,format=raw,if=ide,cache=writeback`), and the
-image the first time it needs it: 8 MB of an erased medium with the MBR of one
-partition at LBA 2048 (`tools/x86_disk_smoke.py --mkimage`). The boot finds the
-drive (`ata0`), reads the MBR, registers the partition (`ata0p1`) and mounts it
-at `/`; the first time the filesystem finds it blank and formats it, and after
-that the volume it finds is the one it left.
+The disk is the machine's, not a test's: `make x86-disk` writes
+`build-x86/programs.img`, an 8 MB raw image with an MBR, one Linux partition
+at LBA 2048 and a MicroFS volume in it. The volume already carries `/bin`
+(the fifteen programs) and `/etc/setting`: the host tool `tools/mkfs_mfs.c`
+(formats and writes) links `components/mfs`, so the layout of the volume has
+one implementation and the host test `tests/cases/test_mkfs_image.c` mounts
+what the machine boots.
 
-So this machine keeps what it writes: a file created in the shell, a program
-in `/bin`, the mode and the owner of both, survive a reset. `make
-x86-disk-smoke` is the proof and the regression test: one image, two boots,
-`write /persist.txt` in the first, `cat /persist.txt` in the second.
+`make x86-run` and `make x86-run-serial` boot on that image: the machine finds
+the drive (`ata0`), reads the MBR, registers the partition (`ata0p1`), mounts
+it at `/` and runs `/bin/hello` before the shell. A boot writes nothing to the
+volume; the programs are files the tool left there. The boot also mounts
+`/proc` (procfs) and `/dev` (devfs), so `tree /` draws the same `bin/`,
+`etc/`, `proc/`, `dev/` tree the board and the simulator have. A volume
+without `/etc` (the memory volume of a machine with no disk) gets `/etc`,
+`/etc/init.d` and `/etc/setting` from the boot; a volume that has them is
+never changed.
+
+`make x86-run-disk` copies the image once to `build-x86/disk.img` and keeps
+that copy: a person boots the machine, writes a file, boots it again and finds
+the file there. `make x86-disk-smoke` is the proof and the regression test:
+one image, two boots, `/bin` and a program from the disk in both,
+`write /persist.txt` in the first and `cat /persist.txt` in the second.
 
 The driver is `src/ata.c`: the ATA registers at 0x1F0, LBA28, PIO, polled -
 no DMA (the port has no contract for a physical address yet) and no interrupt
@@ -168,10 +183,10 @@ of the channel. A command runs with the interrupts off, so the timer and the
 keyboard of this machine cannot interleave another task's request with the
 transfer; every wait has a budget of five seconds, a failed command is
 repeated once and reported with the sector that failed. A disk that does not
-answer is reported and the machine goes on with `ram0`, so `make x86-run` and
-`make x86-smoke` work without one.
-`disk.img` is generated and not committed; `make clean` does not remove
-`build-x86`, `rm -rf build-x86` does.
+answer is reported and the machine goes on with `ram0`; that volume has no
+`/bin`, so the boot says which file it could not find and starts the shell.
+`programs.img` and `disk.img` are generated and not committed; `make clean`
+does not remove `build-x86`, `rm -rf build-x86` does.
 
 ## The network
 
@@ -321,11 +336,12 @@ PCI line needs the I/O APIC that K8 brings.
   machine that has a FAT or an ext2 partition mounts it with a call of the
   boot, because `/etc/fstab` and the `mount` command do not speak the
   registry yet;
-* a program out of a file: the boot writes the images of `hello`, `crash`,
-  `fork`, `badptr`, `signals`, `cat`, `echo`, `ls`, `spawn` and `wc` to
-  `/bin` (every image is built with `--arch x86-64`, and `execve` answers
-  `ENOEXEC` for one of another machine before it enters a byte), gives them
-  the mode 0755 and asks for `/bin/hello` with `execve` -
+* a program out of a file: `make x86-disk` writes the images of `hello`,
+  `crash`, `fork`, `badptr`, `signals`, `cat`, `echo`, `ls`, `spawn`, `wc`,
+  `head`, `grep`, `mkdir`, `rm` and `pwd` into `/bin` of the MicroFS volume
+  (every image is built with `--arch x86-64`, and `execve` answers `ENOEXEC`
+  for one of another machine before it enters a byte), gives them the mode
+  0755, and the boot asks for `/bin/hello` with `execve` -
   the stat, the check of the mode, the read through the VFS, the parse of the
   image and the entry are the ones of the call and not a copy of them. The
   program is entered with `argc` in `rdi`, `argv` in `rsi` and `envp` in

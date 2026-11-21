@@ -13,19 +13,21 @@ The prompt paces the typing on its own — the next command goes out when the
 shell prints the prompt of the previous one — so a line is never split by
 the small FIFO of the serial port of the emulated chip.
 
-Between the boot and the shell the port of this machine brings up a filesystem
-and runs a program out of it: a volume in its memory is mounted at /, the image
-of /bin/hello is written to it and given the mode of a program, and the boot
-asks for it with execve. The program is not a creature of the port: it prints
+Between the boot and the shell the port of this machine brings up the
+filesystem of the disk and runs a program out of it: the image of the machine
+carries a MicroFS volume with /bin and /etc already written (tools/mkfs_mfs.c,
+`make x86-disk`), the boot mounts it at / and asks for /bin/hello with execve.
+Nothing is written to the volume at the boot; the program is a file the tool
+left there. The program is not a creature of the port either: it prints
 through the system call `write`, asks the kernel its pid and the time, sleeps
-and returns a status, and every line of it below is a line the kernel produced
-for it (ADR 0006). The transcript is the proof: a kernel that only printed a
-banner could not have a number of a task in the middle of it.
+and returns a status, and every line of it below is a line the kernel
+produced for it (ADR 0006). The transcript is the proof: a kernel that only
+printed a banner could not have a number of a task in the middle of it.
 
-    tools/x86_smoke.py [--timeout SECONDS] [--verbose]
+    tools/x86_smoke.py [--image PATH] [--timeout SECONDS] [--verbose]
 
-The exit status is 0 when the kernel came up, the program ran out of a file and
-the shell answered, and 1 otherwise.
+The exit status is 0 when the kernel came up, the program ran out of a file
+and the shell answered, and 1 otherwise.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ import argparse
 import os
 import re
 import select
+import shutil
 import subprocess
 import sys
 import time
@@ -48,6 +51,9 @@ COMMANDS = [
     "uname",
     "uptime",
     "ls /bin",
+    # The one file of /etc is on the disk as well, and reading it is the
+    # proof that the tree of the image is the tree of the machine.
+    "cat /etc/setting",
     "chmod 0644 /bin/hello",
     "exec /bin/hello",
     "chmod 0755 /bin/hello",
@@ -56,22 +62,26 @@ COMMANDS = [
     "exec /bin/hello one two",
     # The programs of the library (ADR 0016): a file through open/read/
     # write and the formatter, a line of arguments, and a directory through
-    # readdir. The file they read is made here, because the disk of the test
-    # is fresh at every boot.
-    "mkdir /etc",
-    "write /etc/setting hello",
+    # readdir. The file they read is /etc/setting of the image.
     # The shell lists the names of a directory, and the tree is a command of
     # its own: `ls` has no branches, `tree` has them and counts what it drew.
     "ls /",
     "tree /",
+    # The virtual filesystems of the tree: the information about the system
+    # and the devices, mounted by the boot like the board and the simulator
+    # mount them. A machine of this system has the same root.
+    "ls /proc",
+    "cat /proc/version",
+    "ls /dev",
     "exec /bin/cat /etc/setting",
     "exec /bin/cat /no/such/file",
     "exec /bin/echo one two",
     "exec /bin/ls /bin",
     # The utilities of a line (ADR 0016): a count, the first lines and a
-    # search, each over the file the shell made above. The bytes of the file
-    # are "hello\n", so wc answers one line and six bytes - a number that
-    # comes out of the file and not out of the program's own text.
+    # search, each over the file the image carries. The bytes of the file are
+    # "hello\nhostname=x86_64\nconsole=vga\n", so wc answers three lines and
+    # 34 bytes - a number that comes out of the file and not out of the
+    # program's own text.
     "exec /bin/wc /etc/setting",
     "exec /bin/wc -l /etc/setting",
     "exec /bin/wc -c /etc/setting",
@@ -151,9 +161,11 @@ EXPECTED = [
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, "build-x86")
+DEFAULT_IMAGE = os.path.join(BUILD, "programs.img")
+RUN_IMAGE = os.path.join(BUILD, "programs-smoke.img")
 
 
-def run_machine(loader: str, kernel: str, timeout: float) -> str:
+def run_machine(loader: str, kernel: str, image: str, timeout: float) -> str:
     """Boot the machine, drive the shell and return the transcript.
 
     The output is read while the machine runs, not after it stops: the
@@ -170,6 +182,11 @@ def run_machine(loader: str, kernel: str, timeout: float) -> str:
         "256",
         "-nographic",
         "-no-reboot",
+        # The disk of the machine: a raw image on the primary IDE channel.
+        # The programs of /bin are files of the MicroFS volume in it; the
+        # boot writes nothing to the volume (ADR 0008).
+        "-drive",
+        f"file={image},format=raw,if=ide,index=0,cache=writeback",
     ]
 
     process = subprocess.Popen(
@@ -241,13 +258,28 @@ def check(output: str) -> list:
     for line in EXPECTED:
         expect(line, line in output)
 
-    # --- the program of the milestone
+    # --- the program of the boot
     # The line in the middle is not written by the kernel: it comes out of the
-    # image that was written to and read back from /bin/hello. The lines after
-    # it are answers of the kernel to its calls - a pid, a time and a status
-    # that the program could not invent - so the transcript shows the door and
-    # the way back, not only a string.
-    expect("the filesystem takes the image", "x86-64: /bin/hello is written" in output)
+    # image that was read from /bin/hello of the disk. The lines after it are
+    # answers of the kernel to its calls - a pid, a time and a status that the
+    # program could not invent - so the transcript shows the door and the way
+    # back, not only a string.
+    expect(
+        "the volume of the machine is the disk",
+        "x86-64: the root volume is ata0p1" in output,
+        "the machine booted without the image of the disk",
+    )
+    expect(
+        "the boot finds the programs on the disk",
+        "x86-64: the programs come from ata0p1:/bin" in output,
+    )
+    # Nothing is written to the volume at the boot: the program is a file the
+    # tool left there, not a blob of the kernel that was installed first.
+    expect(
+        "the boot does not install the programs",
+        "is written" not in output,
+        "a line of the boot wrote a file of /bin",
+    )
     expect(
         "the boot asks for the program through the call",
         "x86-64: running /bin/hello through the call" in output,
@@ -326,12 +358,46 @@ def check(output: str) -> list:
         "uptime prints the time",
         re.search(r"up \d+ s", answer("uptime")) is not None,
     )
-    # The volume is not part of the kernel image: the file was written to it at
-    # the boot, so a listing is the proof that the bytes are on a filesystem and
-    # not a line the kernel printed about itself.
-    expect("the program is a file in /bin", "hello" in answer("ls /bin"))
+    # The volume is not part of the kernel image: the files were written by
+    # the tool of the build, so a listing is the proof that the bytes are on a
+    # filesystem and not a line the kernel printed about itself.
+    bin_listing = answer("ls /bin")
+    expect("the program is a file in /bin", "hello" in bin_listing)
+    # All fifteen are objects of the volume the boot mounted, with the mode
+    # the tool gave them; a missing one is a tool or a build that lost it.
+    expect(
+        "the fifteen programs are files of the disk",
+        all(
+            name in bin_listing
+            for name in (
+                "hello",
+                "crash",
+                "fork",
+                "badptr",
+                "signals",
+                "cat",
+                "echo",
+                "ls",
+                "wc",
+                "head",
+                "grep",
+                "mkdir",
+                "rm",
+                "pwd",
+                "spawn",
+            )
+        ),
+        bin_listing[-200:],
+    )
+    # /etc/setting came with the image: the shell reads it through the same
+    # filesystem and no command of this run wrote it.
+    expect(
+        "the setting is a file of the disk",
+        "hello" in answer("cat /etc/setting"),
+        answer("cat /etc/setting"),
+    )
     # The utilities of the library are files of /bin like the first four: the
-    # listing of the shell is the proof the boot wrote every image.
+    # listing of the shell is the proof the tool wrote every image.
     expect(
         "the utilities are files in /bin",
         all(name in answer("ls /bin") for name in ("wc", "head", "grep", "mkdir", "rm", "pwd")),
@@ -402,26 +468,56 @@ def check(output: str) -> list:
     # command that draws the levels below a path. `/etc` was made above, so
     # the two answers are of a volume the boot and the shell both wrote.
     root_listing = answer("ls /")
-    expect("ls / lists the names", "bin/" in root_listing and "etc/" in root_listing)
+    expect(
+        "ls / lists the names",
+        all(name in root_listing for name in ("bin/", "etc/", "proc/", "dev/")),
+        root_listing,
+    )
     expect("ls is not a tree", "`--" not in root_listing and "|--" not in root_listing)
     tree_listing = answer("tree /")
     expect("tree / draws the branches", "|-- " in tree_listing and "`-- " in tree_listing)
     expect(
+        "tree / shows the tree of the machine",
+        all(name in tree_listing for name in ("bin/", "etc/", "proc/", "dev/")),
+        tree_listing,
+    )
+    expect(
         "tree / counts the directories and the files",
         re.search(r"\d+ director(?:y|ies), \d+ files?", tree_listing) is not None,
     )
+    # --- the virtual filesystems of the tree
+    # The board and the simulator mount procfs and devfs at the boot; the
+    # x86-64 machine does the same, so the wiki's `tree /` is true here too.
+    proc_listing = answer("ls /proc")
+    expect(
+        "ls /proc shows the information of the system",
+        all(name in proc_listing for name in ("version", "uptime", "meminfo")),
+        proc_listing,
+    )
+    version = answer("cat /proc/version")
+    expect(
+        "cat /proc/version reads the file of the kernel",
+        re.search(r"MicroOS \d+\.\d+\.\d+", version) is not None,
+        version,
+    )
+    dev_listing = answer("ls /dev")
+    expect(
+        "ls /dev shows the console and the sink",
+        "tty0" in dev_listing and "null" in dev_listing,
+        dev_listing,
+    )
 
     # --- the utilities of the library: wc, head, grep, mkdir, rm, pwd
-    # The file the shell wrote is "hello\n": one line and six bytes. The
-    # numbers are of the file, and a program that read its own arguments
-    # could not produce them.
+    # The file the image carries is "hello\nhostname=x86_64\nconsole=vga\n":
+    # three lines and 34 bytes. The numbers are of the file, and a program
+    # that read its own arguments could not produce them.
     wc = answer("exec /bin/wc /etc/setting")
-    expect("wc counts the lines and the bytes", "1 6 /etc/setting" in wc)
+    expect("wc counts the lines and the bytes", "3 34 /etc/setting" in wc)
     expect("wc counts what it read", "the program has finished" in wc)
     wc = answer("exec /bin/wc -l /etc/setting")
-    expect("wc -l is a count of the newlines", "1 /etc/setting" in wc)
+    expect("wc -l is a count of the newlines", "3 /etc/setting" in wc)
     wc = answer("exec /bin/wc -c /etc/setting")
-    expect("wc -c is a count of the bytes", "6 /etc/setting" in wc)
+    expect("wc -c is a count of the bytes", "34 /etc/setting" in wc)
     # head copies the first line of the file and stops: the file has one, so
     # the block holds it once and the program has a status of 0.
     head = answer("exec /bin/head -n 1 /etc/setting")
@@ -484,11 +580,12 @@ def check(output: str) -> list:
     # A builtin and a program: the stage of /bin/cat inherits descriptor 0
     # from the shell, which is the read end of the pipe.
     expect("a program reads the stdin of a pipe", "one" in answer("echo one | /bin/cat"))
-    # A program of the machine counts the bytes of the shell's command.
+    # A program of the machine counts the lines of the shell's command: the
+    # setting has three, and the program read them through the pipe.
     line_count = answer("cat /etc/setting | wc -l")
     expect(
         "wc counts the lines of a pipe",
-        re.search(r"\n1[ \t]*\r?\n", line_count) is not None,
+        re.search(r"\n3[ \t]*\r?\n", line_count) is not None,
         repr(line_count[-40:]),
     )
     bin_count = answer("ls /bin | wc -l")
@@ -644,6 +741,7 @@ def check(output: str) -> list:
 
 def main(argv: list) -> int:
     parser = argparse.ArgumentParser(description="the smoke test of the x86-64 port")
+    parser.add_argument("--image", default=DEFAULT_IMAGE, help="the image with /bin of the disk")
     parser.add_argument("--timeout", type=float, default=30.0, help="the seconds the machine gets")
     parser.add_argument("--verbose", action="store_true", help="print the console of the machine")
     args = parser.parse_args(argv)
@@ -651,16 +749,24 @@ def main(argv: list) -> int:
     loader = os.path.join(BUILD, "loader32.elf")
     kernel = os.path.join(BUILD, "microos64.bin")
 
-    for path in (loader, kernel):
+    for path in (loader, kernel, args.image):
         if not os.path.isfile(path):
-            print(f"missing {path}: run make x86-build", file=sys.stderr)
+            print(f"missing {path}: run make x86-disk", file=sys.stderr)
             return 2
 
+    # The commands of the shell change the volume (chmod, mkdir, rm), so the
+    # run gets a copy of the image the build made: a test that failed in the
+    # middle must not leave /bin/hello without its x bit for the next one.
+    shutil.copyfile(args.image, RUN_IMAGE)
+
     try:
-        output = run_machine(loader, kernel, args.timeout)
+        output = run_machine(loader, kernel, RUN_IMAGE, args.timeout)
     except FileNotFoundError:
         print("qemu-system-x86_64 is not installed", file=sys.stderr)
         return 2
+    finally:
+        if os.path.exists(RUN_IMAGE):
+            os.remove(RUN_IMAGE)
 
     if args.verbose:
         print(output)

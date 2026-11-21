@@ -18,6 +18,7 @@ if(NOT ESP_PLATFORM)
         cases/test_fuzz.c
         cases/test_mfs.c
         cases/test_mfs_persistence.c
+        cases/test_mkfs_image.c
         cases/test_vfs.c
         cases/test_fs_fat.c
         cases/test_fs_ext2.c
@@ -109,6 +110,7 @@ if(NOT ESP_PLATFORM)
     endif()
 
     set(MICRO_OS_TEST_LIBS
+        mkfs_mfs_image
         microos_kernel
         microos_board
         microos_kshell

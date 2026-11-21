@@ -69,19 +69,44 @@ tools/mkprog.sh [--base 0x02000000] [--arch x86-64|xtensa] hello.elf hello.mox h
 
 The image is not relocated: the code and the data have to be linked for the
 address the port names, and `--base` makes the script refuse an image linked
-for another window. `--arch` writes the machine into offset 28 and defaults to
-`x86-64`; a name the format does not know is refused before an image is
+for another window. `--arch` writes the machine into offset 28 and defaults
+to `x86-64`; a name the format does not know is refused before an image is
 written. The x86-64 port builds its fifteen images this way: the object is
 compiled for the window, linked with `programs/program.ld`, turned into a
-`.mox` by the script (`--base 0x02000000 --arch x86-64`) and embedded in the
-kernel as a blob, because the kernel needs the bytes before it has a
-filesystem to read them from. A program of the board is built with
+`.mox` by the script (`--base 0x02000000 --arch x86-64`), and written into
+the MicroFS volume of the disk by `make x86-disk` (see below). The kernel
+carries no copy of a program. A program of the board is built with
 `--arch xtensa` and the toolchain of ESP-IDF (ADR 0018).
+
+## The programs on the disk
+
+A program is a file of a volume, and the volume is a property of the disk of
+the machine. The image of the x86-64 port is made by a host tool that links
+the filesystem of the board, so the format of the volume has one
+implementation:
+
+```bash
+make x86-disk      # build-x86/programs.img: MBR, one partition, MicroFS
+make x86-run       # boot that image; /bin/hello runs before the shell
+make x86-smoke     # the same, driven by the smoke test
+```
+
+`tools/mkfs_mfs.c` writes the image: an MBR with one Linux partition at LBA
+2048, a MicroFS volume in it, `/bin`, `/etc` and an empty `/etc/init.d`, the
+fifteen `.mox` images of the build written to `/bin` with mode `0755`, and
+the settings of the machine in `/etc/setting`. It does not repeat the layout
+of MicroFS: it is a block device over a range of the file, and
+`components/mfs` formats it and writes the objects through `mfs_create`,
+`mfs_write` and `mfs_chmod`. The host test
+`tests/cases/test_mkfs_image.c` reads the bytes back with the same `mfs_*`
+calls, mounts the volume and checks `/bin/hello`, `/etc/init.d` and
+`/etc/setting`.
 
 ## `/bin` and the boot
 
-The x86-64 port mounts MicroFS at `/`, creates `/bin`, writes fifteen images
-there and gives them the mode of a program (`0755`) through the VFS:
+The x86-64 port mounts the MicroFS volume of its disk at `/` and finds
+`/bin` already there: the fifteen images are files the tool wrote, with the
+mode of a program (`0755`), and no boot creates one:
 
 | File | What it proves |
 |---|---|
@@ -114,6 +139,21 @@ The boot then asks for `/bin/hello` with `ksys_execve()`: the stat, the check
 of the mode, the read through the VFS, the parse and the entry are the ones of
 the call and not a copy of them. The shell runs the same file with `exec`.
 
+The boot also mounts `/proc` and `/dev` (the same procfs and devfs the board
+and the simulator mount), so the root of x86-64 is the root of every port:
+`tree /` draws `bin/`, `etc/` (with `init.d/` and `setting`), `proc/` and
+`dev/`. `/etc/setting` is data of the image:
+
+```text
+hello
+hostname=x86_64
+console=vga
+```
+
+A volume without `/etc` (the memory volume of a machine with no disk) gets
+the directory and the file from the boot; a volume that already has them is
+never changed.
+
 ## `exec` at the console
 
 ```text
@@ -127,12 +167,14 @@ PROGRAM: slept 10 ms, up 2880 ms
 the program has finished
 microos> exec /bin/cat /etc/setting
 hello
+hostname=x86_64
+console=vga
 the program has finished
 microos> exec /bin/echo one two
 one two
 the program has finished
 microos> exec /bin/wc -l /etc/setting
-1 /etc/setting
+3 /etc/setting
 the program has finished
 microos> exec /bin/pwd
 /

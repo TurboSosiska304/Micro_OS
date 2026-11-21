@@ -121,8 +121,11 @@ test is the door, the fault, the fork and the edge - not a library.
 
 ### 5. Ten programs of the library
 
-The x86-64 port writes fifteen images to `/bin` at the boot; ten of them are
-ordinary C programs of this library and not creatures of the port:
+The x86-64 port has fifteen images in `/bin` of the disk it boots from. They
+are not embedded in the kernel: `make x86-disk` writes them into a MicroFS
+volume of a raw image (`tools/mkfs_mfs.c`, which links `components/mfs`), the
+boot mounts that volume at `/` and reads `/bin/hello` with `execve`. Ten of
+them are ordinary C programs of this library and not creatures of the port:
 
 | File | What it exercises |
 |---|---|
@@ -137,16 +140,17 @@ ordinary C programs of this library and not creatures of the port:
 | `/bin/rm` | `stat` and `unlink`; `-r` walks a directory with `readdir` |
 | `/bin/pwd` | `getcwd` and the directory of the task |
 
-`make x86-smoke` makes `/etc/setting` with the shell, runs the ten programs
-and reads the answers back: a program that ran is a line on the console that
-neither the kernel nor the test wrote. The numbers of `wc` (one line and six
-bytes of `hello\n`) come out of the file and not out of the program's text,
-`head` stops after the line it was asked for, `grep -i HELLO` finds the
+`make x86-smoke` boots on a copy of that image, runs the ten programs and
+reads the answers back: a program that ran is a line on the console that
+neither the kernel nor the test wrote. The numbers of `wc` (three lines and
+34 bytes of `/etc/setting`) come out of the file and not out of the program's
+text, `head` stops after the line it was asked for, `grep -i HELLO` finds the
 lowercase line, `mkdir` and `rm` change the tree and the listing of a removed
 directory is `ENOENT`, and `pwd` prints `/`. `spawn` starts `/bin/hello` with
 a vector of its own, and the line `PROGRAM: envp 2, PATH=/custom` is the
 proof that the environment of a call is the memory of the caller copied at the
-edge, and not the four words of the kernel.
+edge, and not the four words of the kernel. The test also boots the same
+`tree /` as the board: `bin/`, `etc/`, `proc/` and `dev/`.
 
 The boundaries of the ten, written down because a program of this size is a
 promise about what a shell of the machine can do:

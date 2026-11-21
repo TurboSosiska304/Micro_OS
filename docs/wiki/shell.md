@@ -191,11 +191,13 @@ exec: hello: not found in /bin:/usr/bin
 
 On the board and in the simulator there is no program to run: a fresh volume
 has no `/bin`, and `execve` answers `ENOSYS` even for a file that is there. The
-x86-64 port writes `/bin/hello`, `/bin/crash`, `/bin/fork`, `/bin/badptr` and
-`/bin/signals` at the boot, and runs them as programs of ring 3. It also
-writes the library programs `cat`, `echo`, `ls` and `wc`, whose descriptors
-are inherited from the shell, so a pipeline can end in one of them.
-[programs.md](programs.md) explains what a program is.
+x86-64 port has `/bin` in the MicroFS volume of its disk image
+(`make x86-disk`): `hello`, `crash`, `fork`, `badptr`, `signals`, `cat`,
+`echo`, `ls`, `wc`, `head`, `grep`, `mkdir`, `rm`, `pwd` and `spawn` are
+files with the mode 0755, and the boot and the shell run them as programs of
+ring 3. The library programs inherit the descriptors of the shell, so a
+pipeline can end in one of them. [programs.md](programs.md) explains what a
+program is.
 
 ## `kill`, Ctrl+C and no job control
 
@@ -257,6 +259,9 @@ microos> tree /etc
 `-- setting
 1 directory, 2 files
 ```
+
+The simulator has a script in `/etc/init.d` (`clock`); the x86-64 image
+ships the directory empty and the same `/etc/setting`.
 
 A path that does not exist is a sentence with the error of the filesystem and
 the status of the command is not 0: `ls: /nope: no such file or directory`.

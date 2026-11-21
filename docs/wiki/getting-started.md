@@ -91,16 +91,26 @@ The x86-64 port is the one that proves the kernel is portable, and the only
 machine that runs a program out of a file:
 
 ```bash
-make x86-build       # the loader and the kernel image, in build-x86/
+make x86-build       # the loader, the kernel image and the programs, in build-x86/
+make x86-disk        # build-x86/programs.img: /bin and /etc of MicroFS
 make x86-run         # a QEMU window: VGA text and the PS/2 keyboard
 make x86-run-serial  # the same machine on the serial console (-nographic)
 make x86-smoke       # boot it and check the transcript, without a window
 ```
 
+The machine boots from the disk image: `/bin` (fifteen programs) and `/etc`
+are objects of a MicroFS volume that `make x86-disk` writes with the host
+tool `tools/mkfs_mfs.c`, and the boot mounts the volume and runs `/bin/hello`
+through `execve`. The tree is the tree of the other ports - `/bin`, `/etc`,
+`/proc` and `/dev` - so `tree /` shows the same shape here as on the board
+and in the simulator.
+
 The window needs a QEMU built with a display backend (the GTK one is a package
 of its own in some distributions); [build.md](build.md) has the package names
-and the fallbacks. A disk is optional: `make x86-run-disk` gives the machine
-an 8 MB raw image, and what it writes survives a reset.
+and the fallbacks. `make x86-run-disk` keeps a disk of its own between runs
+(`build-x86/disk.img`), so a file written at the console is there after a
+reset; `make x86-run` and `make x86-smoke` start from a fresh build of the
+image every time.
 
 The board:
 

@@ -23,7 +23,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-run x86-run-serial x86-smoke x86-vga-smoke x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke
+.PHONY: help all build test test-asan test-tsan test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-run x86-run-serial x86-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke
 
 help:
 	@echo "Micro OS — available targets:"
@@ -48,6 +48,7 @@ help:
 	@echo "  make x86-run    boot it in a QEMU window (VGA text, PS/2 keyboard)"
 	@echo "  make x86-run-serial  boot it with the serial console (-nographic)"
 	@echo "  make x86-smoke  boot it and check what it says"
+	@echo "  make x86-disk   the image of the disk: /bin and /etc of MicroFS"
 	@echo "  make x86-vga-smoke   check the screen and the keyboard without a display"
 	@echo "  make x86-run-disk   boot the window with an 8 MB disk on the IDE channel"
 	@echo "  make x86-run-disk-serial  the same disk in a terminal (-nographic)"
@@ -178,24 +179,40 @@ x86-build:
 	cmake -B $(X86_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release
 	cmake --build $(X86_BUILD) --target image
 
-x86-run: x86-build
+# The disk of the machine: an MBR, one partition and a MicroFS volume with
+# /bin and /etc already written. The volume is made by the host tool
+# (tools/mkfs_mfs.c, which links components/mfs), not by a second
+# implementation of the format in a script; the images of the programs are
+# the .mox files `make x86-build` leaves in the build directory.
+X86_PROGRAMS_IMAGE := $(X86_BUILD)/programs.img
+X86_MKFS := $(BUILD_DIR)/tools/microos_mkfs
+
+x86-disk: x86-build build
+	python3 tools/x86_image.py --image $(X86_PROGRAMS_IMAGE) \
+		--build $(X86_BUILD) --mkfs $(X86_MKFS)
+
+X86_DISK_DRIVE := -drive file=$(X86_PROGRAMS_IMAGE),format=raw,if=ide,index=0,cache=writeback
+
+x86-run: x86-disk
 	@qemu-system-x86_64 -display help 2>&1 | grep -qw "$(X86_DISPLAY)" || { \
 		echo "QEMU has no '$(X86_DISPLAY)' display: install qemu-ui-gtk" >&2; \
 		echo "(Arch: sudo pacman -S qemu-ui-gtk) or use make x86-run-serial" >&2; \
 		exit 1; }
 	qemu-system-x86_64 -kernel $(X86_BUILD)/loader32.elf \
 		-initrd $(X86_BUILD)/microos64.bin -m 256 -no-reboot \
-		-display $(X86_DISPLAY) -serial null
+		-display $(X86_DISPLAY) -serial null \
+		$(X86_DISK_DRIVE)
 
 # The same machine with the console of the serial port and no window: the
 # way it was run before the VGA and the keyboard, kept for a terminal, a
 # script or a machine without a display server.
-x86-run-serial: x86-build
+x86-run-serial: x86-disk
 	qemu-system-x86_64 -kernel $(X86_BUILD)/loader32.elf \
-		-initrd $(X86_BUILD)/microos64.bin -m 256 -nographic -no-reboot
+		-initrd $(X86_BUILD)/microos64.bin -m 256 -nographic -no-reboot \
+		$(X86_DISK_DRIVE)
 
-x86-smoke: x86-build
-	python3 tools/x86_smoke.py
+x86-smoke: x86-disk
+	python3 tools/x86_smoke.py --image $(X86_PROGRAMS_IMAGE)
 
 # The window without a display: the monitor of QEMU reads the text memory of
 # the VGA and presses the keys of the keyboard, so a build farm can check the
@@ -203,15 +220,17 @@ x86-smoke: x86-build
 x86-vga-smoke: x86-build
 	python3 tools/x86_vga_smoke.py
 
-# The disk of the port (ADR 0008): a raw image of 8 MB with the MBR of one
-# partition. The image is made once and then kept: a person boots the machine,
-# writes a file, boots it again and finds the file there, which is the whole
-# point of a disk. `make x86-disk-smoke` works on an image of its own and
-# removes it, so a run of the test never disturbs the disk of a person.
+# The disk of the port (ADR 0008): the same image of `make x86-disk`, copied
+# once to a disk of its own. A person boots the machine, writes a file, boots
+# it again and finds the file there, which is the whole point of a disk.
+# `make x86-disk-smoke` works on an image of its own and removes it, so a run
+# of the test never disturbs the disk of a person.
 X86_DISK_IMAGE := $(X86_BUILD)/disk.img
 
-$(X86_DISK_IMAGE):
-	python3 tools/x86_disk_smoke.py --mkimage $(X86_DISK_IMAGE)
+# An order-only prerequisite: the image is written only when it is not there,
+# so the file a person wrote survives the next `make x86-run-disk`.
+$(X86_DISK_IMAGE): | x86-disk
+	cp $(X86_PROGRAMS_IMAGE) $(X86_DISK_IMAGE)
 
 x86-run-disk: x86-build $(X86_DISK_IMAGE)
 	@qemu-system-x86_64 -display help 2>&1 | grep -qw "$(X86_DISPLAY)" || { \
@@ -228,8 +247,8 @@ x86-run-disk-serial: x86-build $(X86_DISK_IMAGE)
 		-initrd $(X86_BUILD)/microos64.bin -m 256 -nographic -no-reboot \
 		-drive file=$(X86_DISK_IMAGE),format=raw,if=ide,index=0,cache=writeback
 
-x86-disk-smoke: x86-build
-	python3 tools/x86_disk_smoke.py
+x86-disk-smoke: x86-disk
+	python3 tools/x86_disk_smoke.py --image $(X86_BUILD)/disk-smoke.img
 
 # The network of the port (K6): a build of its own, with the HTTP client, the
 # page of the state and the clock of NTP of components/net
