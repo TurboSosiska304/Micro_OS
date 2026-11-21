@@ -49,6 +49,8 @@ static void run_tests(void *arg)
     test_battery_soc();
     test_fb_draw();
     test_rtc();
+    test_ir_nec();
+    test_sound_detect();
     test_console_sinks();
     test_telnet();
     test_text_wrap();

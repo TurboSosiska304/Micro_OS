@@ -99,7 +99,7 @@ function(add_board_program name entry)
                 ${name}_string.o ${name}_main.o
         COMMAND ${CMAKE_COMMAND} -E env
                 "OBJCOPY=${CMAKE_OBJCOPY}" "OBJDUMP=${CMAKE_OBJDUMP}" "NM=${CMAKE_NM}"
-                sh "${MICRO_OS_MKPROG}" --base 0x4009E000 --data-base 0x3FFCC000
+                sh "${MICRO_OS_MKPROG}" --base 0x4009E000 --data-base 0x3FFCE000
                 --arch xtensa ${name}.elf ${name}.mox ${entry}
         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
         DEPENDS "${MICRO_OS_PROGRAM_DIR}/${name}.c" "${MICRO_OS_PROGRAM_DIR}/program_esp32.ld"

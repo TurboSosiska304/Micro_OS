@@ -241,3 +241,95 @@ bool rtc_from_unix(uint64_t seconds, struct rtc_datetime *dt)
 
     return rtc_datetime_in_range(dt);
 }
+
+/* One minute later, with the calendar of the month taken into account. */
+static bool rtc_next_minute(int *year, int *month, int *day, int *hour, int *minute)
+{
+    if (++(*minute) < 60) {
+        return true;
+    }
+
+    *minute = 0;
+
+    if (++(*hour) < 24) {
+        return true;
+    }
+
+    *hour = 0;
+
+    if (++(*day) <= rtc_days_in_month(*year, *month)) {
+        return true;
+    }
+
+    *day = 1;
+
+    if (++(*month) <= 12) {
+        return true;
+    }
+
+    *month = 1;
+
+    /* The chip keeps two digits of the year: 2099 is the last one it can hold. */
+    return ++(*year) <= 2099;
+}
+
+bool rtc_alarm_seconds_ahead(const struct rtc_datetime *now, const struct drv_rtc_alarm *alarm,
+                             unsigned limit_days, uint32_t *seconds)
+{
+    int year;
+    int month;
+    int day;
+    int hour;
+    int minute;
+    unsigned long long limit;
+    unsigned long long m;
+
+    if (now == NULL || alarm == NULL || seconds == NULL) {
+        return false;
+    }
+
+    if (alarm->hour < -1 || alarm->hour > 23 || alarm->minute < -1 || alarm->minute > 59 ||
+        alarm->day < -1 || alarm->day > 31) {
+        return false;
+    }
+
+    /* An alarm without a single field would match at any moment, which is
+     * not an alarm. */
+    if (alarm->hour < 0 && alarm->minute < 0 && alarm->day < 0) {
+        return false;
+    }
+
+    year = now->year;
+    month = now->month;
+    day = now->day;
+    hour = now->hour;
+    minute = now->minute;
+    limit = (unsigned long long)limit_days * 24ULL * 60ULL;
+    if (limit == 0) {
+        return false;
+    }
+
+    for (m = 1; m <= limit; m++) {
+        if (!rtc_next_minute(&year, &month, &day, &hour, &minute)) {
+            return false;
+        }
+
+        if (alarm->day >= 0 && alarm->day != day) {
+            continue;
+        }
+        if (alarm->hour >= 0 && alarm->hour != hour) {
+            continue;
+        }
+        if (alarm->minute >= 0 && alarm->minute != minute) {
+            continue;
+        }
+
+        /* The match begins at the second 0 of that minute; a moment already
+         * past the 0 counts from where it is. */
+        *seconds = (uint32_t)(m * 60ULL - (unsigned long long)now->second);
+
+        return true;
+    }
+
+    return false;
+}

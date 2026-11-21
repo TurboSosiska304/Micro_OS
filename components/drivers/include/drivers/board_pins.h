@@ -33,8 +33,14 @@
 /* Buzzer (passive, PWM) */
 #define PIN_BUZZER 2
 
-/* Red LED and IR emitter share this pin */
+/* Red LED and IR emitter share this pin: driving the emitter turns the light
+ * off and the other way round (drivers/ir.h). */
 #define PIN_LED 19
+#define PIN_IR 19
+
+/* The board has no IR receiver: this is the free pin an external demodulating
+ * element (a 38 kHz receiver) is wired to, and `ir rx` listens there. */
+#define PIN_IR_RX 26
 
 /* I2C bus */
 #define PIN_I2C_SDA 21

@@ -65,7 +65,7 @@ and the port, asked later.
 `tools/mkprog.sh` turns a linked object into an image:
 
 ```bash
-tools/mkprog.sh [--base 0x02000000] [--data-base 0x3FFCC000] \
+tools/mkprog.sh [--base 0x02000000] [--data-base 0x3FFCE000] \
                 [--arch x86-64|xtensa] hello.elf hello.mox hello_main
 ```
 
@@ -81,7 +81,7 @@ object is compiled for the window, linked with `programs/program.ld`, turned
 into a `.mox` by the script (`--base 0x02000000 --arch x86-64`), and written
 into the MicroFS volume of the disk by `make x86-disk` (see below). The kernel
 carries no copy of a program. The board builds `hello` and `cat` with
-`--arch xtensa --base 0x4009E000 --data-base 0x3FFCC000` and the toolchain of
+`--arch xtensa --base 0x4009E000 --data-base 0x3FFCE000` and the toolchain of
 ESP-IDF (ADR 0018).
 
 ## The programs on the disk
@@ -175,7 +175,7 @@ memory and the code needs both:
 | Window | Address | Size | What lives there |
 |---|---|---|---|
 | instruction RAM | `0x4009E000`..`0x400A0000` | 8 KiB | the text and its `.literal` pools |
-| DRAM | `0x3FFCC000`..`0x3FFCE000` | 8 KiB | the data, the bss and the vectors (`argc`, `argv`, `envp`) |
+| DRAM | `0x3FFCE000`..`0x3FFD0000` | 8 KiB | the data, the bss and the vectors (`argc`, `argv`, `envp`) |
 
 The instruction RAM is executable and writable but only 32-bit accessible for
 data; a byte read of a string there is a `LoadStoreError` (the Kconfig option
@@ -183,7 +183,7 @@ that emulates it would turn every character of `printf` into an exception).
 The DRAM is byte-addressed and not executable. The two windows are the top of
 `iram0_0_seg` and the top of the static DRAM segment; the build fixes the size
 of the static segment (`CONFIG_ESP32_USE_FIXED_STATIC_RAM_SIZE`) so the heap
-starts at `0x3FFCE000`, and `components/port_esp32/exec_windows.ld` refuses a
+starts at `0x3FFD0000`, and `components/port_esp32/exec_windows.ld` refuses a
 kernel that grows into either window. A program of the board is therefore
 limited to 8 KiB of text and 8 KiB of data, one at a time: a program that calls
 `execve` would overwrite the code it is running from, and the port answers

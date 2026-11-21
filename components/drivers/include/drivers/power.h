@@ -5,9 +5,15 @@
  * through HOLD (G4): the line must be driven high at every boot, including
  * the boot that follows a deep sleep, or the board cuts its own power. The
  * wake line of the chip is the one of BUTTON C (G35): the button closes that
- * net to ground, and the timer of the chip is the other way back. The alarm
- * of the RTC is not on that line — it drives the latch and can switch on a
- * board that is off — so it does not wake a chip that is asleep.
+ * net to ground, and the timer of the chip is the other way back.
+ *
+ * The alarm of the RTC is not on that line — its INT drives the latch and can
+ * switch on a board that is off — but a sleep can still end with it: the
+ * driver asks the clock for the seconds to the next match and arms the same
+ * timer of the chip for that moment, so the chip wakes when the alarm would
+ * have fired and the flag of the clock confirms it. Without that the alarm
+ * would sit in the clock while the board slept through it, which is exactly
+ * what the first firmware did.
  */
 #ifndef MICRO_OS_DRIVERS_POWER_H
 #define MICRO_OS_DRIVERS_POWER_H
@@ -25,11 +31,20 @@ int drv_power_hold(void);
 const char *drv_power_wakeup_reason(void);
 
 /*
- * Deep sleep. With seconds > 0 the timer wakes the board; BUTTON C wakes it
+ * Deep sleep for `seconds`: the timer wakes the board, and an armed alarm of
+ * the clock wakes it sooner, at the moment the alarm fires. BUTTON C wakes it
  * in any case, sooner if it is pressed. The call does not return on success;
  * a negative answer is the failure to arm the wake-up sources.
  */
 int drv_power_sleep(k_u32_t seconds);
+
+/*
+ * Deep sleep until the next match of the alarm of the clock. Returns -1 when
+ * there is no clock, -2 when no alarm is armed, -3 when the clock has no time
+ * to count from, -4 when the alarm matches nothing in the next month; the
+ * other negative answers are the failure of drv_power_sleep().
+ */
+int drv_power_sleep_until_alarm(void);
 
 /*
  * Cut the power by dropping HOLD. On a battery the board goes away and this

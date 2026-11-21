@@ -394,9 +394,12 @@ struct file_operations {
 
 The drivers are written: `drv_display` (ST7789v2, the panel and the turn of
 its picture), `drv_input` (A/B/C), `drv_buzzer`, `drv_imu` (MPU6886),
-`drv_rtc` (BM8563), `drv_battery` and `drv_mic` (SPM1423, a PDM microphone
-on I2S at 16 kHz; the doctor reports its RMS and peak). The pinout and the
-quirks are documented in
+`drv_rtc` (BM8563), `drv_battery`, `drv_mic` (SPM1423, a PDM microphone on
+I2S at 16 kHz; the doctor reports its RMS and peak), the sound detector on top
+of it, `drv_ir` (NEC on the pin of the red LED, with the arbitration of the
+pad between the two) and `drv_power` (deep sleep, `HOLD` and the wake of the
+timer, of BUTTON C and of the alarm of the clock through the timer of the
+chip). The pinout and the quirks are documented in
 [docs/ports/esp32/hardware.md](ports/esp32/hardware.md).
 
 The WiFi driver is built like the kernel itself: a portable core

@@ -8,6 +8,13 @@
  * life is left — and the port knows how to bring a store of a fresh
  * partition up, so the next boot finds an empty one and creates it.
  *
+ * A reset does not leave /etc empty: the board of a person who has never
+ * used it has the setting of its own, and the boot writes it whenever the
+ * file is missing, so a formatted volume, a lost store and a reset all end in
+ * the same tree. The alarm of the clock is not touched at all: it lives in
+ * the BM8563 and is the one way an off board comes back, so a reset that
+ * wiped it would leave a board on a battery that nobody can wake.
+ *
  * The order matters: the volume is unmounted before it is formatted, and
  * the reboot happens after both erases, so a failure leaves a board that
  * still has a console to say what went wrong. The command that formats the
@@ -20,6 +27,7 @@
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "kernel/errno.h"
 #include "kernel/log.h"
 #include "kernel/vfs.h"
 #include "kshell/kshell.h"
@@ -29,6 +37,92 @@
 
 /* The last line of the console must leave the UART before the chip resets. */
 #define FACTORY_QUIET_MS 300
+
+/* The directory of the configuration and the scripts of the init process. */
+#define FACTORY_ETC_DIR "/etc"
+#define FACTORY_INITD_DIR "/etc/init.d"
+
+/*
+ * The files of /etc that a board of this model has before anybody writes to
+ * it: one setting, in the shape the other ports use (`hello`, `hostname`,
+ * `console`). The store keeps them like any other file after the boot, so
+ * after a reset they come from here and not from the NVS.
+ */
+static const struct factory_file {
+    const char *path;
+    const char *text;
+} g_factory_files[] = {
+    {FACTORY_ETC_DIR "/setting", "hello\nhostname=stickc-plus2\nconsole=tft\n"},
+};
+
+/* One file of the defaults, written only when it is not there: a file of the
+ * person is never replaced by the firmware. */
+static int write_default(const struct factory_file *file)
+{
+    struct vfs_stat info;
+    struct vfs_file handle;
+    /* The private area of the open file: 64 bytes, on the stack of the task
+     * that writes the default. */
+    k_u8_t data[VFS_FILE_DATA_SIZE];
+    k_size_t size = strlen(file->text);
+    int rc;
+
+    rc = vfs_stat(file->path, &info);
+    if (rc == 0) {
+        return 0;
+    }
+    if (rc != KERR_NOENT) {
+        kwarn("factory: cannot look at %s (rc=%d)", file->path, rc);
+        return rc;
+    }
+
+    rc = vfs_open(file->path, VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &handle, data);
+    if (rc != 0) {
+        kwarn("factory: cannot write %s (rc=%d)", file->path, rc);
+        return rc;
+    }
+
+    rc = vfs_write(&handle, file->text, size);
+    if (rc < 0) {
+        (void)vfs_close(&handle);
+        kwarn("factory: cannot write %s (rc=%d)", file->path, rc);
+        return rc;
+    }
+
+    (void)vfs_close(&handle);
+    (void)vfs_chmod(file->path, 0644u);
+
+    return 1;
+}
+
+int factory_defaults(void)
+{
+    int written = 0;
+    k_size_t i;
+    int rc;
+
+    rc = vfs_mkdir_p(FACTORY_ETC_DIR);
+    if (rc != 0) {
+        kwarn("factory: cannot create %s (rc=%d)", FACTORY_ETC_DIR, rc);
+        return rc;
+    }
+
+    /* The scripts of the init process have their directory even when no
+     * script asks for it: it is where a person puts one. */
+    rc = vfs_mkdir_p(FACTORY_INITD_DIR);
+    if (rc != 0) {
+        kwarn("factory: cannot create %s (rc=%d)", FACTORY_INITD_DIR, rc);
+    }
+
+    for (i = 0; i < K_ARRAY_SIZE(g_factory_files); i++) {
+        rc = write_default(&g_factory_files[i]);
+        if (rc > 0) {
+            written++;
+        }
+    }
+
+    return written;
+}
 
 int factory_reset(void)
 {
@@ -55,6 +149,19 @@ int factory_reset(void)
     if (rc != ESP_OK) {
         kerror("factory: the store cannot be erased (rc=%d)", (int)rc);
         return -2;
+    }
+
+    /*
+     * The next boot would write the defaults anyway, but the volume of a
+     * board that never reaches the boot would stay empty and a person who
+     * reads the flash would think the reset erased more than it did.
+     */
+    if (mfs_vfs_mount("/", "flash0") == 0) {
+        int files = factory_defaults();
+
+        if (files >= 0) {
+            kinfo("factory: %d default file(s) of /etc written", files);
+        }
     }
 
     return 0;

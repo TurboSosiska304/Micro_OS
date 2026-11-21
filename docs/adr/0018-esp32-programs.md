@@ -79,7 +79,7 @@ ESP-IDF itself), a linker script of the port and the same `_start`:
 * the text runs from **internal instruction RAM**, in a fixed 8 KiB window at
   `0x4009E000` (below the top of the linker's `iram0_0_seg`);
 * the initialised data, the bss and the vectors of the program are in **DRAM**,
-  in a fixed 8 KiB window at `0x3FFCC000` (the top of the static segment,
+  in a fixed 8 KiB window at `0x3FFCE000` (the top of the static segment,
   which `CONFIG_ESP32_USE_FIXED_STATIC_RAM_SIZE` keeps out of the heap);
 * a system call is a **trampoline of the port**, not an instruction: the loader
   passes the program a pointer to a function with the convention of
@@ -173,7 +173,7 @@ port roadmap, not promised in advance.
 A `feature/esp32-exec-spike` branch (not merged) ran code in the flash of the
 board:
 
-* 256 bytes at `+0x1E0000` of `factory`, erased, written, mapped as
+* 256 bytes at `+0x200000` of `factory`, erased, written, mapped as
   instructions at `0x40170000` and called - it returned 42, both as a windowed
   function and as a `call0` entry;
 * the payload called a kernel function through a pointer, printed a line with
@@ -193,8 +193,8 @@ board:
 
 * `components/port_esp32/programs/{hello.c,cat.c}` are built by the component
   with the Xtensa GCC, `program_esp32.ld` (text at `0x4009E020`, data at
-  `0x3FFCC000`) and `tools/mkprog.sh --base 0x4009E000 --data-base
-  0x3FFCC000 --arch xtensa`, and embedded in the firmware as blobs;
+  `0x3FFCE000`) and `tools/mkprog.sh --base 0x4009E000 --data-base
+  0x3FFCE000 --arch xtensa`, and embedded in the firmware as blobs;
 * at the boot, after MicroFS is mounted, `/bin/hello` and `/bin/cat` are
   written through the VFS (only when the bytes are not already there) and the
   self test runs `hello` twice through `execve`; the second run proves the

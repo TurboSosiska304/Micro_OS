@@ -45,10 +45,12 @@ display    ok        135x240, fb 63 KB
 input      ok        A=up B=up C=up
 buzzer     ok        passive, 2 kHz via LEDC
 led/ir     ok        G19, shared with the IR emitter
+ir         ok        NEC tx on G19, shared with the led; no rx
 battery    ok        4176 mV, 98% (raw 2088 mV)
-wifi       degraded  f4:65:0b:32:00:c0 idle
+mic        ok        16000 Hz, rms 20, peak 60
+sound      ok        quiet: rms 20, peak 60, threshold 200
+power      ok        hold on, wake power-on
 telnet     ok        port 23, no auth
-mic        ok        16000 Hz, rms 4, peak 17
 ```
 
 `ok` works, `degraded` works with a limitation, `fail` does not work, `skip`
@@ -71,7 +73,7 @@ test picture.
 * **A program runs, without protection.** An image of this machine (`arch` 1,
   Xtensa) is entered by the port (ADR 0018): the text in 8 KiB of instruction
   RAM at `0x4009E000`, the data and the bss in 8 KiB of DRAM at
-  `0x3FFCC000`, one program at a time. There is no MMU and no address space:
+  `0x3FFCE000`, one program at a time. There is no MMU and no address space:
   a program shares the memory of the kernel, a bad pointer can panic and
   reboot the board, and a bigger image is `ENOMEM`. The images are blobs of
   the firmware written to `/bin` of MicroFS at the boot until the `progs`
@@ -80,7 +82,13 @@ test picture.
 * **8 MB of flash, one application slot.** `factory` 2 MB and MicroFS 5.75 MB;
   no room for an OTA image, and no OTA ([partitions.csv](../../../partitions.csv)).
 * **No PMIC.** Power and sleep belong to the ESP32 itself: `HOLD` (G4) must be
-  high after a wake-up or the board powers off.
+  high after a wake-up or the board powers off. The alarm of the clock wakes a
+  sleeping board only because the firmware sets the timer of the chip for its
+  moment — the INT of the BM8563 is not on the wake line.
+* **The IR pin is shared with the red LED** (G19): the drivers arbitrate it,
+  and the two never shine at once.
+* **There is no IR receiver on the board.** `ir send` and `ir frame` work by
+  themselves; `ir rx` waits for a demodulating element a person wires to G26.
 * **The battery percent is a curve, not a fuel gauge.** The charge is looked
   up from the voltage of the cell; while the cable is connected the divider
   sees the charging voltage and the percent sits at the top.

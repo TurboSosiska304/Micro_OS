@@ -123,10 +123,9 @@ K5.
 
 | Debt | Where | Status | What it needs |
 |---|---|---|---|
-| No sound detector on top of `drv_mic`: the driver reads RMS and peak, nothing acts on them. | `components/drivers/src/drv_mic.c` | open | A task that watches the level and a threshold of the person. |
-| No RTC alarm and no deep sleep, and no wake from EXT1. | `docs/ports/esp32/roadmap.md` P3, `components/drivers/src/drv_rtc.c` | open | The alarm of the BM8563, `esp_sleep` and `HOLD` (G4) high after the wake. |
-| No `drv_ir`: G19 is shared with the LED and nothing transmits or receives. | `docs/ports/esp32/roadmap.md` P3, `components/drivers` | open | A driver of the IR pin and a rule that arbitrates it with the LED. |
-| No factory reset, no enclosure and display modes of the wearable. | `docs/ports/esp32/roadmap.md` P3 | open | A command that erases the volume and the store, and the modes of the case. |
+| The IR receiver is written (RMT on G26) but the board has no receiver, so reception is a path that no test of this tree has ever run: `ir rx` waits for an element a person wires to G26, and without one it can only prove the idle line. The transmission is checked by the frame of `ir frame` and by the eye on the emitter. | `components/drivers/src/drv_ir.c`, `docs/ports/esp32/hardware.md` | open | An element on G26 and a remote, or a receiver of the same protocol on a second board; then the loop of a frame from one board to the other is a test. |
+| The sound detector is a threshold and a run of windows, not a classifier: a clap, a door and a spoken word are all an event, and the detections are not logged beyond the line of the event. | `components/drivers/src/drv_sound.c`, `sound_detect.c` | open | A level of confidence (the shape of the window, a band of frequencies) and a place for the events (the log is the place today). |
+| No enclosure modes of the wearable: the panel has its rotation and the console, nothing knows how the case holds the board. | `docs/ports/esp32/roadmap.md` P3 | open | The modes of the case (the orientation, what the buttons mean in each) and the drawing of them. |
 | No OTA and no second application slot: `factory` 2 MB and MicroFS 5.75 MB leave no room, and repartitioning loses the volume. | `partitions.csv`, `docs/ports/esp32/roadmap.md` P4 | open | A new partition table (`factory` + `ota`), an update client and a rollback; the volume has to be backed up first. |
 | No PMIC: power and sleep belong to the ESP32, and `HOLD` (G4) must be high after a wake. | `docs/ports/esp32/README.md` "Limits" | decision | None: the board has no fuel gauge, and the power switch is the ESP32. |
 | The battery percent is a curve of the voltage, not a measurement of the charge. | `components/drivers/src/battery_soc.c` | open | A discharge model and its calibration at the known points of the cell. |
@@ -182,6 +181,15 @@ of an older copy knows what changed.
   finished drivers while the module had no check and the doctor said `skip`.
   The driver is written now (PDM RX at 16 kHz, RMS and peak) and the notes
   say what it does; only the detector on top of it is still ahead.
+* **The board has deep sleep, the RTC alarm wakes it and there is a factory
+  reset.** This register kept three rows of the board open ("no RTC alarm and
+  no deep sleep", "no sound detector", "no factory reset") that the tree had
+  already closed in code and in `docs/ports/esp32/roadmap.md` P3. The sleep of
+  a board whose alarm is armed sets the timer of the chip for the moment of
+  the match, because the INT of the clock is not a wake line; the detector on
+  top of `drv_mic` and the factory reset that writes the defaults of `/etc`
+  back are in the tree. What is left of the three is the receiver of the IR
+  and the case of the wearable, and those have rows of their own now.
 * **README said there were no file owners at the edge.** Every record has a
   mode and an owner, `chmod`/`chown` reach them and `open`/`execve` check the
   triad; what is missing is the second user, not the ownership. The bullet is

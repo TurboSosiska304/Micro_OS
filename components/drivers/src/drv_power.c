@@ -15,13 +15,16 @@
  *
  * The INT of the RTC is not on that line: it drives the latch of the power
  * supply (D22 of the schematic), so an alarm can switch on a board that is
- * off and only sets a flag while the board is on. That is why `power sleep`
- * says a word when an alarm is armed: somebody who waits for it would wait
- * until the timer, if a timer was given at all.
+ * off and only sets a flag while the board is on. A sleeping board still has
+ * to obey its alarm, so a sleep asks the clock for the seconds to the next
+ * match and arms the timer of the chip for that moment: the chip comes back
+ * when the alarm fires, and the flag of the clock in the next boot says that
+ * the alarm was the reason. That is the only way this wiring allows, and the
+ * log says which of the two timers woke the board.
  *
- * The driver also owns the command that makes the sleep visible:
- * `power sleep <seconds>` and `power off`. A board that goes silent without
- * a word is a board that looks broken.
+ * The driver also owns the commands that make the sleep visible:
+ * `power sleep <seconds>`, `power sleep alarm` and `power off`. A board that
+ * goes silent without a word is a board that looks broken.
  */
 #include "drivers/board_pins.h"
 #include "drivers/power.h"
@@ -99,16 +102,43 @@ const char *drv_power_wakeup_reason(void)
     }
 }
 
-int drv_power_sleep(k_u32_t seconds)
+/*
+ * The seconds until the alarm of the clock, when one is armed and its time
+ * can be counted: a negative answer means that the alarm cannot be a wake
+ * source and the caller should carry on with its own timer.
+ */
+static int alarm_wake_seconds(k_u32_t *seconds)
 {
+    return drv_rtc_alarm_seconds_ahead(seconds);
+}
+
+/*
+ * Arm the timer for the sooner of `seconds` and the alarm, keep HOLD, and go
+ * down. `seconds` of 0 means "no timer of its own": the board then sleeps
+ * until the alarm, or until the button when no alarm is armed.
+ */
+static int power_sleep_start(k_u32_t seconds)
+{
+    k_u32_t alarm_s = 0;
+    k_u32_t wake_s = seconds;
     esp_err_t rc;
 
-    if (seconds > POWER_SLEEP_MAX_S) {
+    /*
+     * The alarm is a wake source even though its INT is not on the wake
+     * line: the timer of the chip is set for the moment of the match, and
+     * the clock's own flag tells the next boot that the alarm was the
+     * reason. It wakes the board sooner than the timer when it is sooner.
+     */
+    if (alarm_wake_seconds(&alarm_s) == 0 && (wake_s == 0 || alarm_s < wake_s)) {
+        wake_s = alarm_s;
+    }
+
+    if (wake_s > POWER_SLEEP_MAX_S) {
         return -1;
     }
 
-    if (seconds > 0) {
-        rc = esp_sleep_enable_timer_wakeup((uint64_t)seconds * 1000ULL * 1000ULL);
+    if (wake_s > 0) {
+        rc = esp_sleep_enable_timer_wakeup((uint64_t)wake_s * 1000ULL * 1000ULL);
         if (rc != ESP_OK) {
             return -2;
         }
@@ -138,6 +168,28 @@ int drv_power_sleep(k_u32_t seconds)
     /* esp_deep_sleep_start() is declared noreturn; the line keeps the
      * compiler happy when the attribute is not seen. */
     return -5;
+}
+
+int drv_power_sleep(k_u32_t seconds)
+{
+    if (seconds > POWER_SLEEP_MAX_S) {
+        return -1;
+    }
+
+    return power_sleep_start(seconds);
+}
+
+int drv_power_sleep_until_alarm(void)
+{
+    k_u32_t alarm_s = 0;
+    int rc;
+
+    rc = alarm_wake_seconds(&alarm_s);
+    if (rc != 0) {
+        return rc;
+    }
+
+    return power_sleep_start(alarm_s);
 }
 
 int drv_power_off(void)
@@ -175,9 +227,20 @@ static int drv_power_check(void)
 static const char *drv_power_detail(void)
 {
     static char buf[KMOD_INFO_MAX];
+    k_u32_t alarm_s = 0;
 
-    snprintf(buf, sizeof(buf), "hold %s, wake %s", s_hold ? "on" : "off",
-             drv_power_wakeup_reason());
+    /*
+     * The alarm is the part of the line a person cannot guess: an armed
+     * alarm is a wake of the board in so many seconds, and a board that
+     * sleeps "until its alarm" has to say when that is.
+     */
+    if (alarm_wake_seconds(&alarm_s) == 0) {
+        snprintf(buf, sizeof(buf), "hold %s, wake %s, alarm in %lu s", s_hold ? "on" : "off",
+                 drv_power_wakeup_reason(), (unsigned long)alarm_s);
+    } else {
+        snprintf(buf, sizeof(buf), "hold %s, wake %s", s_hold ? "on" : "off",
+                 drv_power_wakeup_reason());
+    }
 
     return buf;
 }
@@ -206,25 +269,68 @@ static const char *power_error_text(int rc)
     }
 }
 
+/* Why a sleep that waits for the alarm cannot be arranged. */
+static const char *alarm_error_text(int rc)
+{
+    switch (rc) {
+    case -1:
+        return "there is no clock";
+    case -2:
+        return "no alarm is armed: rtc alarm <HH:MM> first";
+    case -3:
+        return "the clock has no time to count from: date set first";
+    case -4:
+        return "the alarm matches no minute of the next month";
+    default:
+        return power_error_text(rc);
+    }
+}
+
+/* `power sleep alarm`: the clock of the board decides when it comes back. */
+static int sleep_until_alarm(void)
+{
+    k_u32_t alarm_s = 0;
+    int rc;
+
+    rc = drv_rtc_alarm_seconds_ahead(&alarm_s);
+    if (rc != 0) {
+        kshell_printf("power sleep: %s\n", alarm_error_text(rc));
+        return KSHELL_ERROR;
+    }
+
+    kshell_printf("power sleep: the rtc alarm wakes the board in %lu s\n", (unsigned long)alarm_s);
+
+    rc = drv_power_sleep_until_alarm();
+
+    kshell_printf("power sleep: %s\n", alarm_error_text(rc));
+
+    return KSHELL_ERROR;
+}
+
 /* `power sleep <seconds>`: the timer wakes the board, the button sooner. */
 static int cmd_sleep(int argc, char **argv)
 {
-    struct drv_rtc_alarm alarm;
-    bool fired = false;
+    k_u32_t alarm_s = 0;
     char *end = NULL;
     unsigned long seconds;
     int rc;
 
     if (argc != 3) {
-        kshell_printf("usage: power sleep <seconds>   (button C wakes it sooner)\n");
+        kshell_printf("usage: power sleep <seconds> | power sleep alarm\n");
+        kshell_printf("       (button C wakes it sooner)\n");
         return KSHELL_USAGE;
+    }
+
+    if (strcmp(argv[2], "alarm") == 0) {
+        return sleep_until_alarm();
     }
 
     seconds = strtoul(argv[2], &end, 10);
     if (argv[2][0] == '\0' || end == NULL || *end != '\0' || seconds == 0 ||
         seconds > POWER_SLEEP_MAX_S) {
         kshell_printf("power sleep: no such number of seconds: %s\n", argv[2]);
-        kshell_printf("power sleep: 1..%lu seconds\n", (unsigned long)POWER_SLEEP_MAX_S);
+        kshell_printf("power sleep: 1..%lu seconds, or `alarm`\n",
+                      (unsigned long)POWER_SLEEP_MAX_S);
         return KSHELL_ERROR;
     }
 
@@ -232,13 +338,18 @@ static int cmd_sleep(int argc, char **argv)
 
     /*
      * A person who armed the alarm of the clock and then went to sleep waits
-     * for the alarm, and waits for ever: the INT of the clock is not on the
-     * wake line of the chip. The sentence costs one line and saves an hour
-     * of guessing.
+     * for the alarm. The chip has no way to hear the INT of the clock, so
+     * the sleep sets its timer for the alarm: the line says when that is, so
+     * the wait is a number and not a hope.
      */
-    if (drv_rtc_alarm_read(&alarm, &fired) == 0 &&
-        (alarm.hour >= 0 || alarm.minute >= 0 || alarm.day >= 0)) {
-        kshell_printf("power sleep: the rtc alarm does not wake a sleeping chip\n");
+    if (drv_rtc_alarm_seconds_ahead(&alarm_s) == 0) {
+        if (alarm_s < (k_u32_t)seconds) {
+            kshell_printf("power sleep: the rtc alarm wakes the board sooner, in %lu s\n",
+                          (unsigned long)alarm_s);
+        } else {
+            kshell_printf("power sleep: the rtc alarm is armed for %lu s from now\n",
+                          (unsigned long)alarm_s);
+        }
     }
 
     rc = drv_power_sleep((k_u32_t)seconds);
@@ -270,6 +381,21 @@ static int cmd_power(int argc, char **argv)
     if (argc == 1) {
         kshell_printf("power: hold %s, woke from %s\n", s_hold ? "high" : "not high",
                       drv_power_wakeup_reason());
+
+        /*
+         * The alarm of the clock is the one wake a person cannot see in the
+         * reason of the chip: its INT is not on the wake line, so the timer
+         * of the chip was set for its moment. The flag of the clock is what
+         * tells the two apart, and the line says which one it was.
+         */
+        if (drv_rtc_alarm_was_fired()) {
+            if (strcmp(drv_power_wakeup_reason(), "timer") == 0 && drv_rtc_alarm_was_armed()) {
+                kshell_printf("power: the rtc alarm woke the board\n");
+            } else {
+                kshell_printf("power: the rtc alarm went off before this boot\n");
+            }
+        }
+
         return KSHELL_OK;
     }
 
@@ -281,14 +407,14 @@ static int cmd_power(int argc, char **argv)
         return cmd_poweroff();
     }
 
-    kshell_printf("usage: power | power sleep <seconds> | power off\n");
+    kshell_printf("usage: power | power sleep <seconds> | power sleep alarm | power off\n");
 
     return KSHELL_USAGE;
 }
 
 int drv_power_register(void)
 {
-    kshell_register("power", "the power: power, power sleep <s>, power off", cmd_power);
+    kshell_register("power", "the power: power, power sleep <s>|alarm, power off", cmd_power);
 
     return kmod_register(&s_power_module);
 }

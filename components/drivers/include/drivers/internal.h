@@ -22,6 +22,10 @@ int drv_buzzer_register(void);
 int drv_buzzer_beep(unsigned freq_hz, unsigned ms);
 int drv_led_set(bool on);
 int drv_led_register(void);
+/* G19 belongs to the red LED and to the IR emitter: the emitter takes the
+ * pad for a frame and gives it back, so the light cannot shine through it. */
+int drv_led_suspend(void);
+int drv_led_resume(void);
 int drv_imu_register(void);
 int drv_rtc_register(void);
 
@@ -33,5 +37,7 @@ int drv_memory_register(void);
 int drv_battery_register(void);
 int drv_mic_register(void);
 int drv_power_register(void);
+int drv_ir_register(void);
+int drv_sound_register(void);
 
 #endif /* MICRO_OS_DRIVERS_INTERNAL_H */

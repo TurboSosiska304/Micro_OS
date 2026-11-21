@@ -59,7 +59,7 @@
  */
 #define PORT_EXEC_TEXT_BASE ((k_size_t)0x4009E000u)
 #define PORT_EXEC_TEXT_SIZE (8u * 1024u)
-#define PORT_EXEC_DATA_BASE ((k_size_t)0x3FFCC000u)
+#define PORT_EXEC_DATA_BASE ((k_size_t)0x3FFCE000u)
 #define PORT_EXEC_DATA_SIZE (8u * 1024u)
 
 /*
@@ -72,7 +72,7 @@
  *
  * The data window needs no reservation here: it is inside the static DRAM
  * segment, which the heap already excludes as a whole, and the build fixes
- * the end of that segment at 0x3FFCE000 (see exec_windows.ld). A second
+ * the end of that segment at 0x3FFD0000 (see exec_windows.ld). A second
  * reservation over the static range is an overlap the heap refuses, so the
  * fixed size is what protects the data and this line protects the text.
  */

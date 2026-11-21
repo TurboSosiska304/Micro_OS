@@ -28,6 +28,8 @@ if(NOT ESP_PLATFORM)
         cases/test_battery_soc.c
         cases/test_fb_draw.c
         cases/test_rtc.c
+        cases/test_ir_nec.c
+        cases/test_sound_detect.c
         cases/test_console.c
         cases/test_telnet.c
         cases/test_text_wrap.c
@@ -81,6 +83,8 @@ if(NOT ESP_PLATFORM)
         "${CMAKE_SOURCE_DIR}/components/drivers/src/battery_soc.c"
         "${CMAKE_SOURCE_DIR}/components/drivers/src/fb_draw.c"
         "${CMAKE_SOURCE_DIR}/components/drivers/src/rtc_time.c"
+        "${CMAKE_SOURCE_DIR}/components/drivers/src/ir_nec.c"
+        "${CMAKE_SOURCE_DIR}/components/drivers/src/sound_detect.c"
         "${CMAKE_SOURCE_DIR}/components/telnet/src/telnet_proto.c"
         "${CMAKE_SOURCE_DIR}/components/graphics/src/text_wrap.c"
     )

@@ -218,6 +218,7 @@ static void init_task(void *arg)
 {
     struct task *self = task_self();
     int restored;
+    int defaults;
     int saved;
     int mounted;
 
@@ -229,13 +230,20 @@ static void init_task(void *arg)
     /*
      * Why the board is awake: "timer" or "ext1" says whether the last sleep
      * did what it was asked for, and "power-on" is a cold boot. The alarm of
-     * the clock is a separate line of the log, because it can have fired
-     * without waking the chip at all.
+     * the clock is a separate line of the log: the chip's timer is set for
+     * its moment, so a wake by the timer with the flag of the alarm set is
+     * the alarm doing its work.
      */
     kinfo("power: woke from %s", drv_power_wakeup_reason());
 
     if (drv_rtc_alarm_was_fired()) {
-        kinfo("rtc: the alarm went off before this boot");
+        if (strcmp(drv_power_wakeup_reason(), "timer") == 0 && drv_rtc_alarm_was_armed()) {
+            /* The alarm is armed and the flag is set: the timer of the chip
+             * was set for the match, see drivers/power.h. */
+            kinfo("rtc: the alarm woke the board");
+        } else {
+            kinfo("rtc: the alarm went off before this boot");
+        }
     }
 
     /* The first thing the init process does: check that the kernel works. */
@@ -277,13 +285,27 @@ static void init_task(void *arg)
      */
     if (config_store_get() != NULL) {
         restored = config_restore(CONFIG_DIR);
-        saved = config_persist(CONFIG_DIR);
 
         if (restored < 0) {
             kwarn("init: the configuration cannot be restored (rc=%d)", restored);
         } else if (restored > 0) {
             kinfo("init: %d configuration file(s) restored from the NVS", restored);
         }
+
+        /*
+         * The files of /etc that the model has: a volume of a board that has
+         * never been used has none, and a factory reset leaves a store as
+         * empty as the first boot. They are written before the save below,
+         * so the NVS keeps a copy of them like of any other file.
+         */
+        defaults = factory_defaults();
+        if (defaults > 0) {
+            kinfo("init: %d default file(s) of /etc written", defaults);
+        } else if (defaults < 0) {
+            kwarn("init: the default files of /etc are not written (rc=%d)", defaults);
+        }
+
+        saved = config_persist(CONFIG_DIR);
 
         if (saved < 0) {
             kwarn("init: the configuration cannot be saved (rc=%d)", saved);
