@@ -37,7 +37,3 @@ site/
 # --- Runtime artifacts ---
 core*.csv
 core*.txt
-
-# --- Python bytecode (a hook of the wiki imports tools/wiki_hooks.py) ---
-__pycache__/
-*.pyc

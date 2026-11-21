@@ -48,29 +48,22 @@ it, not a second copy.
 
 ## Serving the wiki as a site
 
-`mkdocs.yml` builds the wiki of the current tree with a theme of its own
-(`docs/theme`): no Material, no framework of JavaScript, a light page and a
-dark one that follows the system. The pages are plain Markdown and GitHub
-renders them as they are; the site is for the reader who wants the search, the
-navigation and the version switch.
+`mkdocs.yml` in the root of the repository is a draft of a site: it is not a
+part of the build and `make ci` does not need it. The pages are plain Markdown
+and GitHub renders them as they are. To serve them locally:
 
 ```bash
-python3 -m venv ~/.local/share/microos-wiki-venv
-~/.local/share/microos-wiki-venv/bin/pip install mkdocs mike
-~/.local/share/microos-wiki-venv/bin/mkdocs serve   # http://127.0.0.1:8000/Micro_OS/
-~/.local/share/microos-wiki-venv/bin/mkdocs build   # writes site/, which is generated
+python3 -m pip install --user mkdocs mkdocs-material
+mkdocs serve                  # http://127.0.0.1:8000
+mkdocs build                  # writes site/, which is generated
 ```
 
-The site of **every release** is `tools/wiki_build_versions.py`: it reads the
-tags from `v0.4.0`, shelves the pages of a version that shipped without a wiki,
-builds each one with the theme of the tree and writes `site/` in the layout of
-mike - `<version>/`, `versions.json`, `latest` and a redirect at the root.
-`docs/wiki/deploy.md` is the deployment: the `gh-pages` branch of this
-repository, served at `https://turbososiska304.github.io/Micro_OS/`, with the
-path of the site under `/Micro_OS/`. The links that leave `docs/wiki` (into
-`docs/`, `CONTRIBUTING.md`, a header of a component) are rewritten by
-`tools/wiki_hooks.py` to the GitHub tree of the tag, so a page of `0.4.0` does
-not point at the file of the current branch.
+`docs_dir` is `docs/wiki`, and MkDocs reads this file as the home page of the
+site. The theme is `material`; if `mkdocs-material` is not installed, replace
+`theme: material` with `theme: readthedocs` in `mkdocs.yml` and plain `mkdocs`
+serves the pages. The wiki links into the rest of `docs/` on purpose, so a
+build may warn about targets that live outside the site; the links themselves
+are checked against the repository by the script below.
 
 ## Checking the links
 
