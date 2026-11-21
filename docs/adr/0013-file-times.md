@@ -158,6 +158,17 @@ damaged new one. The `CRC` of the header covers the version and the
 features; a record has no checksum of its own, the same as before, because
 a checksum per record would take another four bytes from every object.
 
+The repair pass (`mfs_repair()`, `fsck -y`) is the second reader of the
+version: it writes through `mfs_priv_inode_write()`, which encodes the record
+with the size of the mounted volume, so a repair of a version 1 volume writes
+the 16 bytes a record has and never the two moments of a version 2 record
+over the record that follows. The two formats share the repair because the
+damage it puts right is the same in both: an orphan block, an unreachable
+entry or name, a chain, a size, the counter of a directory, a record no name
+reaches. The moments of a record are not touched by a repair: a repair is not
+a change of the object by its owner, and a time it would write would be the
+time of the fsck and not the time of the data.
+
 ## Consequences
 
 **Good**
@@ -177,5 +188,9 @@ a checksum per record would take another four bytes from every object.
   stat of a descriptor that is still open sees the record of the last close.
 * There is no `atime`, so a tool that expects all three moments of POSIX
   gets two and a zero it must read as "unknown".
+* A record has no checksum, so a repair can free the record a half-written
+  create left, but cannot tell a record or a content of a write that stopped
+  in the middle of its bytes from a whole one: the record is the object and
+  the bytes are the data, and only the object is checkable.
 * The table of a new volume is twice as large for the same record count, so
   a small volume has fewer data blocks than it did.

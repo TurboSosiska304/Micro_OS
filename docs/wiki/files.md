@@ -76,9 +76,10 @@ unchanged; its objects report zero, which is "unknown" (ADR 0013). Moving a
 [`docs/migration.md`](../migration.md). The formatter asks for 256 records
 (`MFS_MOUNT_RECORDS`) and sizes `META` from the volume; the capacity is
 fixed at format time and cannot grow later.
-There is **no journal**: `fsck` reports the first problem it finds and does
-not repair, and a power cut in the middle of a write is a risk the tree
-knows about ([`docs/debts.md`](../debts.md)).
+There is **no journal**: a power cut in the middle of a write leaves whatever
+it leaves, and `fsck -y` is the way back (see
+[`mkfs` and `fsck`](#mkfs-and-fsck)); a content that was half written is not
+recoverable, and the check says so ([`docs/debts.md`](../debts.md)).
 
 The calls of the filesystem take one recursive lock, so two tasks can use the
 volume at the same time without corrupting it: each open file keeps its
@@ -139,6 +140,43 @@ A broken volume prints `N problem(s), the first: ...` and the command exits
 with an error. `fsck: no volume is mounted` means that `/` is not MicroFS on
 this machine at the moment.
 
+With `-y` (or `--repair`) MicroFS is repaired where the medium itself proves
+the change, and the volume is checked again:
+
+```text
+microos> fsck -y
+fsck: 0 file(s), 3 directory(ies), 484 of 487 block(s) free
+fsck: 4 repair(s) applied
+fsck: 0 problem(s) after the repair
+fsck: the volume is consistent
+```
+
+The pass gives an orphan block back to the map of the free blocks, removes an
+entry that no path can reach (the name of a free or of a vanished record, a
+name that holds a slash, the later of two equal names), takes the type of the
+record when the entry and the record disagree about it, cuts a chain that
+loops or leaves the data section, ends the second of two objects that share a
+block (the first owner in the walk of the tree keeps it, and the other keeps
+its name as an empty file - the rule of FAT), puts the size of a file right
+against its chain in both directions, counts the entries of a directory
+again, and frees a record that no name reaches - a create or an unlink that
+stopped half way - with its blocks. A directory whose first block is not in
+the data section is given an empty block: its entries could not be reached,
+and nothing on the medium says where they were.
+
+A record has no checksum and neither has the content of a file, so a record
+or a *content* that a power cut wrote half way cannot be told from a whole
+one: the repair promises a volume that mounts and walks, not the data of an
+interrupted write. It does not guess either: a damaged header (a volume the
+mount would refuse), a header that disagrees with the mount, and a directory
+whose first block another object holds are left as they are, counted in
+`problem(s)` and printed with `(not repaired)`. When the tree cannot be
+walked whole, no block and no record is given back: a block of a subtree the
+walk did not enter looks exactly like an orphan.
+
+Without the flag nothing is written at all: the bytes of the medium are the
+same before and after `fsck`, which the tests compare byte by byte.
+
 The second filesystem is checked by the same command, by the point or by the
 device: `fsck fat /mnt/fat` reads a volume that is mounted, `fsck fat sd0`
 mounts the device for the length of the walk. The report names the cluster,
@@ -180,8 +218,8 @@ whose first cluster another chain holds are left as they are, counted in
 tree could not be walked whole (a shared directory head, a depth beyond a
 path), the lost clusters are not freed either: a cluster of the subtree that
 was not entered looks the same. A medium that refuses a write stops the pass
-at the first change.
-MicroFS has no such flag: `fsck` is read-only for it.
+at the first change. The same command and the same flag repair MicroFS, with
+the rules of the section above.
 
 ## `/etc` and the store
 
@@ -420,9 +458,9 @@ written back to the table: `mount` changes the tree, not the configuration.
   table.
 * **MicroFS is one volume at a time**: the type `mfs` mounts the medium the
   filesystem keeps, so a second MicroFS volume is a change of the filesystem.
-* **No journal and no repair for MicroFS**: `fsck` names the first problem
-  of MicroFS and fixes nothing; `fsck fat -y` repairs the safe damage of a
-  FAT volume, and a problem the medium cannot explain stays named.
+* **No journal under a write**: `fsck -y` repairs the damage that the medium
+  of MicroFS or of FAT explains, and leaves what it cannot prove for a
+  person; the data of a write that was in flight is not recovered.
 * **No `mv`, no `cp`**: `rm -r` and the other commands of the shell are there.
 * **One user**, so the owner of a file is a number that is stored and checked
   but not a second party.

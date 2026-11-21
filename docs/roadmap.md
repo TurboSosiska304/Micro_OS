@@ -172,6 +172,18 @@ written when the project was an operating system for one board; the numbers
       cut, the second of two names of one cluster gives it up, a broken run
       of long names is removed and its 8.3 name kept, and a size that does
       not match its chain is put right; the check runs again afterwards
+* [x] Crash consistency of MicroFS: `fsck -y` (or `--repair`) repairs what the
+      format itself proves - an orphan block goes back to the free map, an
+      entry that names a free record or a name no path can reach is removed,
+      an entry whose record disagrees with it about the type takes the type
+      of the record, a chain that loops or leaves the data section is cut,
+      the second of two objects that share a block gives it up (the first
+      owner of the walk of the tree keeps it), a size that does not match its
+      chain is put right in both directions, the counter of the entries of a
+      directory is counted again, and a record that no name reaches - the
+      half-written create or unlink - is freed with its blocks; the check runs
+      again afterwards, and the header, the data of a file and a shared
+      directory stay `(not repaired)` for a person
 * [ ] A journal or a cache of the changes under a write
 * [x] ext2, the reader with inodes and a superblock a checker can walk
       (ADR 0019): the superblock, the group descriptors, the inode table,

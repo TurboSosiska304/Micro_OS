@@ -684,14 +684,14 @@ static int dir_read(const struct mfs_inode *inode, struct dir_buffer *buf)
 }
 
 /* Write the whole content of a directory back. */
-static int dir_write(const struct mfs_inode *inode, const struct dir_buffer *buf)
+static int dir_write_data(const struct mfs_inode *inode, const k_u8_t *data, k_size_t size)
 {
     k_u32_t block = inode->first_block;
     k_u32_t offset = 0;
     k_u32_t guard = 0;
 
-    while (offset < buf->size) {
-        k_size_t chunk = buf->size - offset;
+    while (offset < size) {
+        k_size_t chunk = size - offset;
         k_u8_t block_data[MFS_BLOCK_SIZE];
         int rc;
 
@@ -705,7 +705,7 @@ static int dir_write(const struct mfs_inode *inode, const struct dir_buffer *buf
             return rc;
         }
 
-        memcpy(block_data + 4, buf->data + offset, chunk);
+        memcpy(block_data + 4, data + offset, chunk);
         rc = dev_write(block, block_data);
         if (rc != MFS_OK) {
             return rc;
@@ -713,7 +713,7 @@ static int dir_write(const struct mfs_inode *inode, const struct dir_buffer *buf
 
         offset += (k_u32_t)chunk;
 
-        if (offset < buf->size) {
+        if (offset < size) {
             k_u32_t next;
             k_u32_t new_block;
 
@@ -745,6 +745,12 @@ static int dir_write(const struct mfs_inode *inode, const struct dir_buffer *buf
     }
 
     return MFS_OK;
+}
+
+/* Write the whole content of a directory from the buffer of the filesystem. */
+static int dir_write(const struct mfs_inode *inode, const struct dir_buffer *buf)
+{
+    return dir_write_data(inode, buf->data, buf->size);
 }
 
 /* The entries of a directory. */
@@ -1396,6 +1402,44 @@ static int mfs_sync_locked(void)
 
     /* A device that holds its writes back learns that the work is done. */
     return dev_sync();
+}
+
+/* --- the pieces the repair pass of the check uses --- */
+
+/*
+ * A repair is a write of the filesystem like any other, so it goes through
+ * the same helpers: the map of the free blocks in the memory stays the map
+ * of the device, and a task that asks for a block after the repair gets a
+ * block the repair freed. The check itself never calls these.
+ */
+void mfs_priv_bitmap_set(k_u32_t index, bool used)
+{
+    bitmap_set(index, used);
+}
+
+int mfs_priv_inode_write(k_u32_t index, const struct mfs_inode *inode)
+{
+    return inode_write(index, inode);
+}
+
+int mfs_priv_chain_set_next(k_u32_t block, k_u32_t next)
+{
+    return chain_set_next(block, next);
+}
+
+int mfs_priv_block_alloc(k_u32_t *block)
+{
+    return block_alloc(block);
+}
+
+int mfs_priv_dir_write(const struct mfs_inode *inode, const k_u8_t *data, k_size_t size)
+{
+    return dir_write_data(inode, data, size);
+}
+
+int mfs_priv_sync(void)
+{
+    return mfs_sync_locked();
 }
 
 bool mfs_is_mounted(void)
@@ -2363,6 +2407,25 @@ int mfs_get_info(struct mfs_info *out)
     return rc;
 }
 
+/*
+ * The view of the mounted volume that the check and the repair walk. The
+ * caller holds the lock, so the pointers are the live state and nothing
+ * changes under the walk.
+ */
+static void checker_view(struct mfs_private *view)
+{
+    memset(view, 0, sizeof(*view));
+    view->sb = &g.sb;
+    view->bitmap = g.bitmap;
+    view->dir_scratch = g_dir_buffer.data;
+    view->dir_scratch_size = sizeof(g_dir_buffer.data);
+    view->bitmap_blocks = g.bitmap_blocks;
+    view->inode_blocks = g.inode_blocks;
+    view->inode_capacity = g.inode_capacity;
+    view->inode_size = g.inode_size;
+    view->device_blocks = g.dev->sectors;
+}
+
 int mfs_check(struct mfs_check_report *report)
 {
     struct mfs_private view;
@@ -2387,18 +2450,78 @@ int mfs_check(struct mfs_check_report *report)
      * is held for the whole walk, so nothing changes under it, and the
      * buffer of the directories is free for its use.
      */
-    memset(&view, 0, sizeof(view));
-    view.sb = &g.sb;
-    view.bitmap = g.bitmap;
-    view.dir_scratch = g_dir_buffer.data;
-    view.dir_scratch_size = sizeof(g_dir_buffer.data);
-    view.bitmap_blocks = g.bitmap_blocks;
-    view.inode_blocks = g.inode_blocks;
-    view.inode_capacity = g.inode_capacity;
-    view.inode_size = g.inode_size;
-    view.device_blocks = g.dev->sectors;
+    checker_view(&view);
 
     rc = mfs_check_locked(&view, report);
+
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_repair(struct mfs_check_report *report)
+{
+    struct mfs_private view;
+    struct mfs_check_report pass;
+    struct mfs_check_report after;
+    int rc;
+
+    if (report == NULL) {
+        return MFS_EINVAL;
+    }
+
+    mfs_lock();
+
+    if (!g.mounted) {
+        mfs_unlock();
+        return MFS_EINVAL;
+    }
+
+    memset(report, 0, sizeof(*report));
+    report->data_blocks = g.sb.data_blocks;
+
+    checker_view(&view);
+
+    /*
+     * The pass writes with the state of the mount, so it runs before the
+     * report is made: the counters below are the volume as the pass left
+     * it, which is what a person wants to read after a repair.
+     */
+    memset(&pass, 0, sizeof(pass));
+    pass.data_blocks = g.sb.data_blocks;
+    rc = mfs_repair_locked(&view, &pass);
+    if (rc != MFS_OK) {
+        mfs_unlock();
+        return rc;
+    }
+
+    /*
+     * The check runs once more, with a map of its own, so the answer is
+     * about the medium after the repair and not about the plan of the pass.
+     */
+    memset(&after, 0, sizeof(after));
+    after.data_blocks = g.sb.data_blocks;
+    rc = mfs_check_locked(&view, &after);
+    if (rc != MFS_OK) {
+        mfs_unlock();
+        return rc;
+    }
+
+    *report = after;
+    report->fixed = pass.fixed;
+    report->unfixed = after.errors;
+
+    /*
+     * A pass that could not do its work - a medium that refused a write, a
+     * table too big to map - says so even when the walk of the volume finds
+     * nothing to name: the volume is not proven whole, and a person has to
+     * know why.
+     */
+    if (after.errors == 0 && pass.errors != 0) {
+        memcpy(report->first, pass.first, sizeof(report->first));
+        report->errors = pass.errors;
+        report->unfixed = pass.errors;
+    }
 
     mfs_unlock();
 

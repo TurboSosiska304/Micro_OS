@@ -540,6 +540,7 @@ static void check_run_refusals(void)
 #define FS_FUZZ_RANDOM_VOLUMES 64u
 #define FS_FUZZ_RANDOM_RECORDS 64u
 #define FS_FUZZ_RANDOM_BLOCKS 96u
+#define FS_FUZZ_REPAIR_ITERATIONS 64u
 
 /* The bytes of data in a block: the first four hold the next block. */
 #define FS_FUZZ_BLOCK_DATA (MFS_BLOCK_SIZE - 4u)
@@ -1287,6 +1288,73 @@ static void fs_fuzz_random_blocks(void)
     }
 }
 
+/*
+ * The repair of a volume of noise. The pass is allowed to refuse to put the
+ * volume right - a header and a chain it cannot prove are left alone - but it
+ * is not allowed to make the volume worse, to take the mount away, or to find
+ * work for itself on the second run: a repair that does not converge is a
+ * repair that is still guessing.
+ */
+static void fs_fuzz_repair(void)
+{
+    k_u32_t iteration;
+
+    ktest_begin("fuzz: the repair of a damaged volume does not make it worse");
+
+    for (iteration = 0; iteration < FS_FUZZ_REPAIR_ITERATIONS; iteration++) {
+        struct mfs_check_report found;
+        struct mfs_check_report after;
+        struct mfs_check_report again;
+        struct mfs_inode inode;
+        k_u32_t index = 2u + next_u32() % (g_fs.capacity - 1u);
+
+        fs_restore();
+
+        if (next_u32() % 2u == 0u) {
+            /* A record with every field wrong at once. */
+            fs_noise((k_u8_t *)&inode, sizeof(inode));
+            inode.flags |= MFS_INODE_USED;
+            inode.first_block = next_u32() % g_fs.sb.data_blocks;
+            inode.size = next_u32() % 4096u;
+            inode.entries = next_u32() % 16u;
+
+            if (!fs_write_inode(index, &inode)) {
+                KT_CHECK(false);
+                return;
+            }
+        } else {
+            /* A bit of the map of the free blocks, on or off. */
+            if (!fs_bitmap_set(next_u32() % g_fs.sb.data_blocks, (next_u32() & 1u) != 0u)) {
+                KT_CHECK(false);
+                return;
+            }
+        }
+
+        if (mfs_mount(&g_fs.dev) != MFS_OK) {
+            KT_CHECK(!mfs_is_mounted());
+            continue;
+        }
+
+        KT_CHECK_INT_EQ(mfs_check(&found), MFS_OK);
+        KT_CHECK_INT_EQ(mfs_repair(&after), MFS_OK);
+
+        /* The walk after the pass is no worse than the walk before it. */
+        KT_CHECK(after.errors <= found.errors);
+
+        KT_CHECK_INT_EQ(mfs_repair(&again), MFS_OK);
+        KT_CHECK_INT_EQ(again.fixed, 0);
+        KT_CHECK_INT_EQ(again.errors, after.errors);
+
+        /*
+         * The volume still mounts and still reads: a repair that leaves a
+         * volume no mount can open has destroyed it.
+         */
+        mfs_unmount();
+        KT_CHECK_INT_EQ(mfs_mount(&g_fs.dev), MFS_OK);
+        mfs_unmount();
+    }
+}
+
 void test_fuzz(void)
 {
     kmm_init();
@@ -1322,6 +1390,7 @@ void test_fuzz(void)
         fs_fuzz_directory();
         fs_fuzz_random_records();
         fs_fuzz_random_blocks();
+        fs_fuzz_repair();
         fs_fuzz_teardown();
     } else {
         KT_CHECK(false);

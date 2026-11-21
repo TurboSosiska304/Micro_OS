@@ -18,6 +18,7 @@ if(NOT ESP_PLATFORM)
         cases/test_fuzz.c
         cases/test_mfs.c
         cases/test_mfs_persistence.c
+        cases/test_mfs_repair.c
         cases/test_mkfs_image.c
         cases/test_vfs.c
         cases/test_fs_fat.c

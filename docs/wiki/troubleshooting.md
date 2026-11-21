@@ -58,7 +58,7 @@ the tools. A row names the sentence you see, the cause and the move.
 | Symptom | Cause | What to do |
 |---|---|---|
 | `fsck: no volume is mounted` | `/` is not MicroFS right now | `mkfs -y` formats and mounts; check `MICROOS_VOLUME` |
-| `fsck` reports problems | a volume written by a crash | it only reports; copy what you can, then `mkfs -y` |
+| `fsck` reports problems | a volume written by a crash | `fsck -y` repairs what the medium proves (an orphan block, an entry nobody can reach, a loop, a shared block, a size, a counter, a record no name reaches); what it cannot prove stays `(not repaired)` - copy that off, and `mkfs -y` erases the volume |
 | `fsck fat /mnt/sd` reports problems | a FAT volume a crash left inconsistent | copy what you can first, then `fsck fat /mnt/sd -y` repairs the safe damage; the boot sector, two table copies that differ and a directory whose head is shared stay `(not repaired)` for a person |
 | `stat` prints `mode: (not set)` | `/proc`, `/dev`, or an old volume | expected: those records keep no modes |
 | `chmod 000` is refused | zero means "the modes predate the record" | choose another mode; a real zero needs a format change |

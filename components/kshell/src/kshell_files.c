@@ -20,22 +20,32 @@
 
 #if defined(MICRO_OS_FS_FAT32) && MICRO_OS_FS_FAT32
 #include "fs_fat32/fat.h"
-#define FSCK_USAGE "fsck [fat <point|device> [-y]]"
+#define FSCK_USAGE "fsck [-y] [fat <point|device>]"
 #define FSCK_DETAIL                                                                                \
-    "Read-only unless the FAT volume is given -y: the report names the first\n"                    \
-    "problem, and without the flag nothing is repaired. A person decides what\n"                   \
-    "to do about a broken record.\n"                                                               \
-    "  fat <point|device>  check the FAT volume at the point, or on the device\n"                  \
-    "  -y                  repair the FAT volume: the lost clusters go back to\n"                  \
-    "                      the free map, a loop or a cluster outside the volume\n"                 \
-    "                      is cut, the second of two names of one cluster gives\n"                 \
-    "                      it up, a broken long name is removed, and a size\n"                     \
-    "                      that does not match its chain is put right\n"
+    "Without -y the volume is only read: the report names the first problem and\n"                 \
+    "nothing is repaired. With -y the damage the medium itself explains is put\n"                  \
+    "right and the volume is checked again; what the medium cannot explain is\n"                   \
+    "reported as (not repaired) for a person.\n"                                                   \
+    "  -y, --repair        repair MicroFS: an orphan block goes back to the free\n"                \
+    "                      map, an entry nobody can reach or that names a free\n"                  \
+    "                      record is removed, a chain that loops or leaves the\n"                  \
+    "                      volume is cut, the second of two objects that share a\n"                \
+    "                      block gives it up, a size that does not match its chain\n"              \
+    "                      is put right, and a record no name reaches is freed\n"                  \
+    "  fat <point|device>  check the FAT volume at the point, or on the device;\n"                 \
+    "                      -y repairs it the same way\n"
 #else
-#define FSCK_USAGE "fsck"
+#define FSCK_USAGE "fsck [-y]"
 #define FSCK_DETAIL                                                                                \
-    "Read-only: the report names the first problem, and nothing is repaired.\n"                    \
-    "A person decides what to do about a broken record.\n"
+    "Without -y the volume is only read: the report names the first problem and\n"                 \
+    "nothing is repaired.\n"                                                                       \
+    "  -y, --repair        repair what the medium itself explains: an orphan\n"                    \
+    "                      block goes back to the free map, an entry nobody can\n"                 \
+    "                      reach or that names a free record is removed, a chain\n"                \
+    "                      that loops or leaves the volume is cut, a size that\n"                  \
+    "                      does not match its chain is put right, and a record\n"                  \
+    "                      no name reaches is freed. The volume is checked again\n"                \
+    "                      afterwards, and what is left is (not repaired).\n"
 #endif
 
 #define SHELL_MAX_ENTRIES 64
@@ -1422,36 +1432,63 @@ static bool fsck_fat_words(int argc, char **argv, const char **what, bool *write
 }
 #endif
 
-static int cmd_fsck(int argc, char **argv)
+/*
+ * The check of MicroFS, and its repair when `write` is set. The report of a
+ * repair is about the volume after the pass: the counters are the volume as
+ * it is now, `fixed` is what the pass changed and `errors` is what is still
+ * wrong, which is why the words after -y are "after the repair" and not
+ * "was repaired".
+ */
+static int fsck_mfs(bool write)
 {
     struct mfs_check_report report;
     int rc;
 
+    rc = write ? mfs_repair(&report) : mfs_check(&report);
+    if (rc == MFS_EINVAL) {
+        kshell_printf("fsck: no volume is mounted\n");
+        return KSHELL_ERROR;
+    }
+
+    if (rc != MFS_OK) {
+        kshell_printf("fsck: the volume cannot be read (%s)\n", mfs_strerror(rc));
+        return KSHELL_ERROR;
+    }
+
+    kshell_printf("fsck: %u file(s), %u directory(ies), %u of %u block(s) free\n",
+                  (unsigned)report.files, (unsigned)report.directories,
+                  (unsigned)report.free_blocks, (unsigned)report.data_blocks);
+
+    if (write && report.fixed != 0) {
+        kshell_printf("fsck: %u repair(s) applied\n", (unsigned)report.fixed);
+    }
+
+    if (report.errors != 0) {
+        kshell_printf("fsck: %u problem(s), the first: %s%s\n", (unsigned)report.errors,
+                      report.first, write ? " (not repaired)" : "");
+        if (!write) {
+            kshell_printf("fsck: -y repairs the orphan blocks, the entries and the chains\n");
+        }
+        return KSHELL_ERROR;
+    }
+
+    if (write && report.fixed != 0) {
+        kshell_printf("fsck: 0 problem(s) after the repair\n");
+    }
+
+    kshell_printf("fsck: the volume is consistent\n");
+
+    return KSHELL_OK;
+}
+
+static int cmd_fsck(int argc, char **argv)
+{
     if (argc == 1) {
-        rc = mfs_check(&report);
-        if (rc == MFS_EINVAL) {
-            kshell_printf("fsck: no volume is mounted\n");
-            return KSHELL_ERROR;
-        }
+        return fsck_mfs(false);
+    }
 
-        if (rc != MFS_OK) {
-            kshell_printf("fsck: the volume cannot be read (%s)\n", mfs_strerror(rc));
-            return KSHELL_ERROR;
-        }
-
-        kshell_printf("fsck: %u file(s), %u directory(ies), %u of %u block(s) free\n",
-                      (unsigned)report.files, (unsigned)report.directories,
-                      (unsigned)report.free_blocks, (unsigned)report.data_blocks);
-
-        if (report.errors != 0) {
-            kshell_printf("fsck: %u problem(s), the first: %s\n", (unsigned)report.errors,
-                          report.first);
-            return KSHELL_ERROR;
-        }
-
-        kshell_printf("fsck: the volume is consistent\n");
-
-        return KSHELL_OK;
+    if (argc == 2 && (strcmp(argv[1], "-y") == 0 || strcmp(argv[1], "--repair") == 0)) {
+        return fsck_mfs(true);
     }
 
 #if defined(MICRO_OS_FS_FAT32) && MICRO_OS_FS_FAT32
@@ -1463,8 +1500,6 @@ static int cmd_fsck(int argc, char **argv)
             return fsck_fat(what, write);
         }
     }
-#else
-    (void)argv;
 #endif
 
     kshell_printf("usage: %s\n", FSCK_USAGE);
@@ -1735,7 +1770,9 @@ static const struct file_command {
                 "`/` may leave while /proc and /dev stay, which is what mkfs -y does.\n"},
      cmd_umount},
     {"fsck",
-     {.summary = "check the volume, read-only", .usage = FSCK_USAGE, .detail = FSCK_DETAIL},
+     {.summary = "check the volume, or repair it with -y",
+      .usage = FSCK_USAGE,
+      .detail = FSCK_DETAIL},
      cmd_fsck},
     {"chmod",
      {.summary = "change the mode of a file",
