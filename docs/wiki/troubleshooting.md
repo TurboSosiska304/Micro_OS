@@ -51,7 +51,7 @@ the tools. A row names the sentence you see, the cause and the move.
 | the last words are ignored | the line is cut at 8 words | split the command |
 | `usage: ...` and nothing happens | the wrong number of arguments | the line says what it wants; `help <command>` repeats it |
 | `help: no such command` | the name is not registered | `help` alone lists them |
-| `-h` / `--help` does nothing | there is no option parser in this tree | `help <command>`; a common flag is planned |
+| `-h` / `--help` prints nothing | the flag is not the first word of the line | put it first, or use `help <command>`; `df -h` is sizes, so `df --help` |
 
 ## Files and `/etc`
 

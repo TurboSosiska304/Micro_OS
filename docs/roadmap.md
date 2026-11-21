@@ -122,13 +122,14 @@ written when the project was an operating system for one board; the numbers
 * [ ] A port for a real ARM with an MMU: the same contract, a second `arch/`
 * [ ] `KERNEL_NOMMU` becomes 0 and the concessions become features
 
-## K6 - The filesystem and the network (planned)
+## K6 - The filesystem and the network (in progress)
 
 * [x] A second filesystem behind the VFS: the block devices and the MBR/GPT
       partitions are there (ADR 0008), the types are registered and
       mounted by name (`vfs_mount_type`), and FAT12/16/32 is a read-only
       reader with long names (ADR 0009); a volume of `/mnt/...` is mounted
       next to MicroFS in the tests
+* [ ] FAT32 write: create, write, unlink, and the free-cluster map a write needs
 * [ ] ext2, the reader with inodes and a superblock a checker can walk
 * [ ] `/etc/fstab` and the `mount` command over the type registry
 * [ ] Timestamps of a file, fed by the clock of the kernel

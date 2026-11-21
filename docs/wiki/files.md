@@ -188,16 +188,28 @@ The x86-64 disk is a raw 8 MB image, made by `tools/x86_disk_smoke.py
 reset, which `make x86-disk-smoke` proves with two boots. See
 [`docs/ports/x86_64/README.md`](../ports/x86_64/README.md#the-disk).
 
+## The second filesystem
+
+The VFS knows filesystem **types** ([ADR 0009](../adr/0009-filesystem-types.md)):
+`vfs_register_type()` puts a name and a mount function in the table, and
+`vfs_mount_type(point, "fat32", device)` mounts a type on a point. MicroFS is
+one type; `components/fs_fat32` is a second one, a reader of FAT12/16/32 with
+the long names, the fixed and the cluster root and the subdirectories. It
+reports `mode = 0` and owner 0 (a FAT record keeps no mode) and answers
+`ENOTSUP` to write, create, unlink, chmod and chown.
+
+The host test mounts MicroFS at `/` and FAT at `/mnt/fat` at the same time and
+reads through the VFS. On a board or an x86-64 image the type is registered at
+the boot when `MICRO_OS_FS_FAT32` is on; the board has it off by default.
+
 ## What is not there yet
 
-* **No second filesystem.** FAT32 and ext2 wait for a decision that the roadmap
-  names as ADR 0009 and that is not written; the block devices and the
-  partitions under the VFS are done.
+* **No write on FAT and no ext2.** FAT is read-only; ext2 waits for its own
+  reader; a second FAT volume and a mount of a card at runtime are ahead.
 * **No timestamps**, so `stat` has no date to show.
 * **No journal and no repair**: `fsck` names the first problem, it does not fix
   it.
-* **No `rm -r`, no `mv`, no `cp`**: the shell has the commands of the table and
-  nothing more.
+* **No `mv`, no `cp`**: `rm -r` and the other commands of the shell are there.
 * **One user**, so the owner of a file is a number that is stored and checked
   but not a second party.
 

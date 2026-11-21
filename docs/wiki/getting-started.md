@@ -133,9 +133,10 @@ A short list, so that nothing here reads as a promise:
   answers `ENOSYS` there.
 * **One user, uid 0.** A file has a mode and an owner, and the mode is checked,
   but there is no group and no second user.
-* **No FAT, no ext2, no timestamps, no journal.** MicroFS is the filesystem of
-  the tree; the block devices and the partition tables under it are written
-  ([ADR 0008](../adr/0008-block-devices.md)), a second filesystem is planned.
+* **FAT32 is read-only, ext2 is not there.** MicroFS is the root of the tree;
+  a build can also carry a reader of FAT12/16/32 ([ADR 0009](../adr/0009-filesystem-types.md))
+  and mount it beside MicroFS. There are no timestamps and no journal, and
+  writing to FAT, ext2 and a second FAT volume are still ahead.
 
 [`docs/debts.md`](../debts.md) keeps the full register with the next step of
 each row. [`docs/roadmap.md`](../roadmap.md) is the plan.

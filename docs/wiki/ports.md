@@ -51,8 +51,10 @@ the UART and on the TFT, MicroFS on the flash, `/log/start.log`, the scripts of
 microphone, WiFi), `telnet` on port 23, `httpd`, `mqtt`, `http` and `ntp`.
 
 What does not: memory protection (`fork()` is the placeholder of a machine
-without an MMU), running a program out of the flash, OTA, an RTC alarm and deep
-sleep, the IR driver, a second user. The flash is 8 MB: `factory` 2 MB and
+without an MMU), running a program out of the flash, OTA, the IR driver, the
+sound detector, the enclosure modes, a second user. The RTC alarm turns the
+board on from off; it does not wake a chip that is already asleep (the INT is
+wired to the power latch, the notes say so). The flash is 8 MB: `factory` 2 MB and
 MicroFS 5.75 MB, with no OTA slot. The details, the pins and the quirks are in
 [`docs/ports/esp32/README.md`](../ports/esp32/README.md) and
 [`docs/ports/esp32/hardware.md`](../ports/esp32/hardware.md).

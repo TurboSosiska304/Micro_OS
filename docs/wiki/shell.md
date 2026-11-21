@@ -109,6 +109,9 @@ The services, where the port registers them:
 | `display [<x> <y>] \| rotate <0\|90\|180\|270> \| invert [on\|off] \| draw [seconds]` | the panel | board |
 | `i2c` | scan the I2C bus | board |
 | `mic` | the level of the microphone | board |
+| `rtc alarm [HH:MM\|+<seconds>\|day <1-31> HH:MM\|clear]` | the alarm of the BM8563 and its flag | board |
+| `power [sleep <seconds>\|off]` | deep sleep with the timer or button C, or power off | board |
+| `factory reset -y` | erase MicroFS and the NVS, then restart; without `-y` it only explains | board |
 
 The simulator has no network and no drivers: `http`, `ntp`, `httpd`, `mqtt`
 and `telnet` are not registered there at all, and the driver commands of the
