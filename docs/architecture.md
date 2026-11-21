@@ -271,8 +271,8 @@ The VFS knows no name of a filesystem. It keeps a table of types
 call mounts the volume itself with `vfs_mount()`, so the resolution of a
 path, the search bit and the listing of the mount points are the same for
 every type. A mount function may be a wrapper of a format of the board
-(MicroFS) or a reader of a format of the world (FAT); the VFS does not care
-which.
+(MicroFS) or a reader of a format of the world (FAT, ext2); the VFS does not
+care which.
 
 The types are registered by the image, not by the kernel: a build that does
 not link the reader never has its name, and a boot that asks for an unknown
@@ -290,6 +290,15 @@ mode and no owner (the numbers are zero), `chmod` and `chown` are
 power cut can catch. A FAT volume mounted at `/mnt/fat` is one
 more entry of the mount table, and `ls /mnt` shows it even though MicroFS
 does not have the directory.
+
+The ext2 reader under `components/fs_ext2/` is the first one with inodes:
+the superblock, the group descriptors, the inode table, the direct blocks
+and the one, two and three levels of indirection, and directories whose
+names the entry itself holds. It is **read-only**, and that is why it can
+report what FAT cannot: the nine bits of `i_mode` as the mode, `i_uid` as
+the owner and `i_mtime`/`i_ctime` through `statx`. A write, a new name, a
+mode and an owner are `KERR_NOTSUP`, and a journal of ext3 is not replayed,
+so a volume with one is refused. ADR 0019 is the design.
 
 ### Disks and partitions
 

@@ -133,11 +133,12 @@ A short list, so that nothing here reads as a promise:
   answers `ENOSYS` there.
 * **One user, uid 0.** A file has a mode and an owner, and the mode is checked,
   but there is no group and no second user.
-* **FAT32 is read and written, ext2 is not there.** MicroFS is the root of
+* **FAT32 is read and written, ext2 is read-only.** MicroFS is the root of
   the tree; a build can also carry FAT12/16/32 ([ADR 0009](../adr/0009-filesystem-types.md))
-  and mount it beside MicroFS. MicroFS keeps the two moments of a change and
-  no journal; FAT keeps no time yet, and ext2 and a second FAT volume are
-  still ahead.
+  and mount it beside MicroFS, and it can read an ext2 volume with its
+  modes, its owner and its moments ([ADR 0019](../adr/0019-ext2.md)).
+  MicroFS keeps the two moments of a change and no journal; FAT keeps no
+  time yet, and a writable ext2 and a second FAT volume are still ahead.
 
 [`docs/debts.md`](../debts.md) keeps the full register with the next step of
 each row. [`docs/roadmap.md`](../roadmap.md) is the plan.

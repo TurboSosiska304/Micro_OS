@@ -27,6 +27,7 @@
 #include "mfs/mfs.h"
 #include "mfs/mfs_vfs.h"
 #if MICRO_OS_FS_FAT32
+#include "fs_ext2/ext2.h"
 #include "fs_fat32/fat.h"
 #endif
 #include "net/net.h"
@@ -124,6 +125,12 @@ static int fs_subsys_init(void)
      * card is there or not, and the mount of a partition names it. */
     if (fat_vfs_register_type() != 0) {
         kwarn("init: the FAT filesystem could not register its type");
+    }
+#endif
+
+#if CONFIG_MICRO_OS_FS_EXT2
+    if (ext2_vfs_register_type() != 0) {
+        kwarn("init: the ext2 filesystem could not register its type");
     }
 #endif
 

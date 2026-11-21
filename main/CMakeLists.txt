@@ -4,7 +4,7 @@ idf_component_register(
     SRCS "src/main.c" "src/selftest.c" "src/factory.c"
     INCLUDE_DIRS "."
     REQUIRES kernel board port_esp32 drivers kshell init config net mfs procfs devfs graphics
-             libc telnet nvs_flash
+             libc telnet nvs_flash fs_ext2
 )
 
     # The discipline of the host build: the sources of the project are

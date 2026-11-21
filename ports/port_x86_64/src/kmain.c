@@ -43,6 +43,9 @@
 #if MICRO_OS_FS_FAT32
 #include "fs_fat32/fat.h"
 #endif
+#if defined(MICRO_OS_FS_EXT2) && MICRO_OS_FS_EXT2
+#include "fs_ext2/ext2.h"
+#endif
 
 /* The body of the shell task, in src/shell.c. */
 void port_x86_64_shell_run(void);
@@ -251,6 +254,12 @@ static void filesystem_bring_up(void)
 #if MICRO_OS_FS_FAT32
     if (fat_vfs_register_type() != 0) {
         kwarn("x86-64: the FAT filesystem could not register its type");
+    }
+#endif
+
+#if defined(MICRO_OS_FS_EXT2) && MICRO_OS_FS_EXT2
+    if (ext2_vfs_register_type() != 0) {
+        kwarn("x86-64: the ext2 filesystem could not register its type");
     }
 #endif
 

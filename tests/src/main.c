@@ -41,6 +41,7 @@ static void run_tests(void *arg)
     test_mfs_persistence();
     test_vfs();
     test_fs_fat();
+    test_fs_ext2();
     test_sysfs();
     test_input_debounce();
     test_battery_soc();

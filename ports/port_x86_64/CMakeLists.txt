@@ -23,12 +23,19 @@ set(KSHELL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/kshell")
 set(LIBC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/libc")
 set(MFS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/mfs")
 set(FAT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/fs_fat32")
+set(EXT2_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/fs_ext2")
 
 # The second filesystem of the machine (ADR 0009). Off by default: the
 # disk of `make x86-smoke` is one MicroFS volume, and a reader that no call
 # of the boot asks for is an object file of no use. A machine with a FAT
 # partition turns it on and mounts the partition with vfs_mount_type().
 option(MICRO_OS_FS_FAT32 "FAT12/16/32, read and written" OFF)
+
+# The ext2 reader of the machine (ADR 0019). Off by default for the same
+# reason: the disk of the smoke tests is one MicroFS volume. A machine with
+# an ext2 partition turns it on and mounts the partition with the type the
+# boot registers.
+option(MICRO_OS_FS_EXT2 "ext2, read-only" OFF)
 
 # The optional features of the image (ADR 0010): the PSRAM pool of the
 # allocator is off, the MOX1 runtime is on (the port can enter a program), and
@@ -123,6 +130,15 @@ if(MICRO_OS_FS_FAT32)
         "${FAT_DIR}/src/fat_dir.c"
         "${FAT_DIR}/src/fat_check.c"
         "${FAT_DIR}/src/fat_vfs.c"
+    )
+endif()
+
+set(EXT2_SOURCES)
+if(MICRO_OS_FS_EXT2)
+    set(EXT2_SOURCES
+        "${EXT2_DIR}/src/ext2_core.c"
+        "${EXT2_DIR}/src/ext2_dir.c"
+        "${EXT2_DIR}/src/ext2_vfs.c"
     )
 endif()
 
@@ -333,6 +349,7 @@ add_executable(microos64
     ${LIBC_SOURCES}
     ${MFS_SOURCES}
     ${FAT_SOURCES}
+    ${EXT2_SOURCES}
     ${NET_SOURCES}
     src/boot64.S
     src/kmain.c
@@ -374,6 +391,7 @@ target_include_directories(microos64 PRIVATE
     "${LIBC_DIR}/include"
     "${MFS_DIR}/include"
     "${FAT_DIR}/include"
+    "${EXT2_DIR}/include"
     "${NET_DIR}/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
@@ -394,6 +412,10 @@ target_compile_definitions(microos64 PRIVATE
 
 if(MICRO_OS_FS_FAT32)
     target_compile_definitions(microos64 PRIVATE MICRO_OS_FS_FAT32=1)
+endif()
+
+if(MICRO_OS_FS_EXT2)
+    target_compile_definitions(microos64 PRIVATE MICRO_OS_FS_EXT2=1)
 endif()
 
 set_target_properties(microos64 PROPERTIES

@@ -87,14 +87,10 @@ else()
     # either way.
     option(MICRO_OS_FS_MFS "MicroFS, the filesystem of the board" ON)
     option(MICRO_OS_FS_FAT32 "FAT12/16/32, read and written, for the tests and a card" ON)
-    option(MICRO_OS_FS_EXT2 "ext2, read-only (not written yet)" OFF)
+    option(MICRO_OS_FS_EXT2 "ext2, read-only, for the tests and a disk of the world" ON)
 
     if(NOT MICRO_OS_FS_MFS)
         message(FATAL_ERROR "the host simulator and the tests mount MicroFS")
-    endif()
-
-    if(MICRO_OS_FS_EXT2)
-        message(FATAL_ERROR "the ext2 reader is not written yet")
     endif()
 
     # The optional features of the image (ADR 0010). The host turns every
@@ -124,6 +120,8 @@ else()
         MICRO_OS_NET_MQTT=$<BOOL:${MICRO_OS_NET_MQTT}>
         MICRO_OS_TELNET=$<BOOL:${MICRO_OS_TELNET}>
         MICRO_OS_WIFI=$<BOOL:${MICRO_OS_WIFI}>
+        MICRO_OS_FS_FAT32=$<BOOL:${MICRO_OS_FS_FAT32}>
+        MICRO_OS_FS_EXT2=$<BOOL:${MICRO_OS_FS_EXT2}>
     )
 
     enable_testing()
@@ -137,6 +135,9 @@ else()
     add_subdirectory(components/mfs)
     if(MICRO_OS_FS_FAT32)
         add_subdirectory(components/fs_fat32)
+    endif()
+    if(MICRO_OS_FS_EXT2)
+        add_subdirectory(components/fs_ext2)
     endif()
     add_subdirectory(components/procfs)
     add_subdirectory(components/devfs)

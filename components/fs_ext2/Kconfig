@@ -1,0 +1,10 @@
+config MICRO_OS_FS_EXT2
+    bool "ext2, read-only"
+    default n
+    help
+        Read an ext2 volume: the superblock, the group descriptors, the
+        inode table, the direct and the indirect blocks and the
+        directories. The reader never writes, so write, mkdir, unlink,
+        chmod and chown answer "not supported". A record of ext2 keeps a
+        mode, an owner and the moments of a change, so stat, statx and
+        ls -l answer with what the medium holds.

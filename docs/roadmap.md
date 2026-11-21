@@ -155,7 +155,12 @@ written when the project was an operating system for one board; the numbers
       message
 * [ ] A journal or a cache of the changes under a write, and a repair of the
       clusters a check calls lost
-* [ ] ext2, the reader with inodes and a superblock a checker can walk
+* [x] ext2, the reader with inodes and a superblock a checker can walk
+      (ADR 0019): the superblock, the group descriptors, the inode table,
+      the direct blocks and the single, double and triple indirection, the
+      directories with names up to 255 bytes, and `stat`/`statx` with the
+      mode, the uid and the moments of the inode; read-only, so a write, a
+      new name, a mode or an owner is `KERR_NOTSUP`
 * [x] `/etc/fstab` and the `mount` command over the type registry: the boot
       mounts the table after the root, `mount <device> <point> <type>` and
       `umount <point>` work at the console, and a line that does not mount is

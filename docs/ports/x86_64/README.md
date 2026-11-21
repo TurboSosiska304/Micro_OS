@@ -314,10 +314,13 @@ PCI line needs the I/O APIC that K8 brings.
   network of QEMU, the page of the state served by the guest to a client of the
   host through `hostfwd`, and a name that is asked once and answered twice;
 * a second filesystem: `-DMICRO_OS_FS_FAT32=ON` links the FAT reader and writer
-  reader and its `vfs_mount_type()` (ADR 0009). The option is off by default,
-  so the smoke tests of the machine keep one MicroFS volume; a machine that
-  has a FAT partition mounts it with a call of the boot, because `/etc/fstab`
-  and the `mount` command do not speak the registry yet;
+  reader and its `vfs_mount_type()` (ADR 0009). The ext2 reader is the same
+  choice under `-DMICRO_OS_FS_EXT2=ON`: a read-only volume mounted by its
+  type, with modes, owners and `statx` (ADR 0019). The options are off by
+  default, so the smoke tests of the machine keep one MicroFS volume; a
+  machine that has a FAT or an ext2 partition mounts it with a call of the
+  boot, because `/etc/fstab` and the `mount` command do not speak the
+  registry yet;
 * a program out of a file: the boot writes the images of `hello`, `crash`,
   `fork`, `badptr`, `signals`, `cat`, `echo`, `ls`, `spawn` and `wc` to
   `/bin` (every image is built with `--arch x86-64`, and `execve` answers

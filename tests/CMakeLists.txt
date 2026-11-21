@@ -20,6 +20,7 @@ if(NOT ESP_PLATFORM)
         cases/test_mfs_persistence.c
         cases/test_vfs.c
         cases/test_fs_fat.c
+        cases/test_fs_ext2.c
         cases/test_sysfs.c
         cases/test_input_debounce.c
         cases/test_battery_soc.c
@@ -70,6 +71,7 @@ if(NOT ESP_PLATFORM)
         "${CMAKE_SOURCE_DIR}/components/telnet/include"
         "${CMAKE_SOURCE_DIR}/components/graphics/include"
         "${CMAKE_SOURCE_DIR}/components/fs_fat32/include"
+        "${CMAKE_SOURCE_DIR}/components/fs_ext2/include"
     )
 
     target_sources(microos_tests PRIVATE
@@ -94,6 +96,18 @@ if(NOT ESP_PLATFORM)
         )
     endif()
 
+    # The ext2 reader is a reader and never a writer: the host build links it
+    # by default, and a build that turns the option off (make test-minimal)
+    # still compiles the sources into the test binary, so the reader is
+    # covered whatever an image links (ADR 0019).
+    if(NOT MICRO_OS_FS_EXT2)
+        target_sources(microos_tests PRIVATE
+            "${CMAKE_SOURCE_DIR}/components/fs_ext2/src/ext2_core.c"
+            "${CMAKE_SOURCE_DIR}/components/fs_ext2/src/ext2_dir.c"
+            "${CMAKE_SOURCE_DIR}/components/fs_ext2/src/ext2_vfs.c"
+        )
+    endif()
+
     set(MICRO_OS_TEST_LIBS
         microos_kernel
         microos_board
@@ -112,6 +126,9 @@ if(NOT ESP_PLATFORM)
     endif()
     if(MICRO_OS_WIFI)
         list(APPEND MICRO_OS_TEST_LIBS microos_wifi)
+    endif()
+    if(MICRO_OS_FS_EXT2)
+        list(APPEND MICRO_OS_TEST_LIBS microos_fs_ext2)
     endif()
 
     target_link_libraries(microos_tests PRIVATE ${MICRO_OS_TEST_LIBS})

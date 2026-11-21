@@ -5,6 +5,9 @@
 * Updated: 2026-11-21 — the reader became read-write: create, write,
   truncate, append, unlink, mkdir, long names that are made, `statfs`, and a
   read-only check of the volume (`fsck` of FAT).
+* Updated: 2026-11-21 — ext2 arrived as the next reader: read-only, with
+  inodes, modes, owners and the moments of `statx` (ADR 0019). The paragraph
+  below about it being only a name is the history of this decision.
 
 ## Context
 

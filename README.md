@@ -74,6 +74,8 @@ The checks of the board are in [its port](docs/ports/esp32/README.md).
   remembers the access it was opened with;
 * **MicroFS**, a filesystem on a block device (`kernel/blockdev.h`) - the
   partition of the flash on the board, a file in the simulator;
+* **filesystems of the world** behind the VFS types: FAT12/16/32 read and
+  written, ext2 read-only (modes, owners and the moments of `statx`);
 * **a memory manager**: slabs for the small blocks, the heap of the port for
   the large ones;
 * **services**: `init` and the scripts of `/etc/init.d`, the configuration of
@@ -97,6 +99,8 @@ Micro_OS/
 │   ├── kshell/         the command interpreter and its commands
 │   ├── init/           the init process: the scripts of /etc/init.d
 │   ├── mfs/            MicroFS and its VFS adapter
+│   ├── fs_fat32/       FAT12/16/32, read and written
+│   ├── fs_ext2/        ext2, read-only
 │   ├── procfs/         the virtual /proc
 │   ├── devfs/          the virtual /dev
 │   ├── config/         the configuration of /etc, in the store of the port
