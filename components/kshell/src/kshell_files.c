@@ -765,22 +765,119 @@ static int cmd_df(int argc, char **argv)
     return KSHELL_OK;
 }
 
+/* The filesystems of the tree: the list, the mount and the unmount. */
+
+/*
+ * Tell a person why a mount or an unmount was refused. The text of a code
+ * is the text of the VFS (and of the filesystem that knows the code), not
+ * the "unknown error" of a library that was never told about EBUSY.
+ */
+static int mount_error_text(const char *what, const char *name, int code)
+{
+    kshell_printf("%s: %s: %s\n", what, name, vfs_strerror(code));
+
+    return KSHELL_ERROR;
+}
+
 static int cmd_mount(int argc, char **argv)
 {
-    k_size_t count = vfs_mount_count();
+    struct kshell_args args;
+    bool all = false;
+    struct kshell_option options[1];
+    k_size_t count;
     k_size_t i;
+    int rc;
 
-    (void)argc;
-    (void)argv;
+    options[0].letter = 'a';
+    options[0].value = &all;
 
-    if (count == 0) {
-        kshell_printf("no filesystem is mounted\n");
+    rc = kshell_options(argc, argv, options, 1, "mount [-a] [<device> <point> <type>]", &args);
+    if (rc == KSHELL_OPTIONS_HELP) {
+        return kshell_help_show(argv[0]);
+    }
+    if (rc != KSHELL_OPTIONS_OK) {
+        return KSHELL_USAGE;
+    }
+
+    if (all) {
+        if (args.argc != 0) {
+            kshell_printf("usage: mount -a\n");
+            return KSHELL_USAGE;
+        }
+
+        rc = vfs_mount_fstab(VFS_FSTAB_PATH);
+        if (rc < 0) {
+            return mount_error_text("mount", VFS_FSTAB_PATH, rc);
+        }
+
+        kshell_printf("mount: %d filesystem(s) mounted from %s\n", rc, VFS_FSTAB_PATH);
+
         return KSHELL_OK;
     }
 
-    for (i = 0; i < count; i++) {
-        kshell_printf("%s\n", vfs_mount_name(i));
+    if (args.argc == 0) {
+        count = vfs_mount_count();
+
+        if (count == 0) {
+            kshell_printf("no filesystem is mounted\n");
+            return KSHELL_OK;
+        }
+
+        for (i = 0; i < count; i++) {
+            kshell_printf("%s\n", vfs_mount_name(i));
+        }
+
+        return KSHELL_OK;
     }
+
+    if (args.argc != 3) {
+        kshell_printf("usage: mount [<device> <point> <type>] | mount -a\n");
+        return KSHELL_USAGE;
+    }
+
+    /*
+     * The words are `device point type`, as in the table of /etc/fstab and
+     * in the mount of Linux; the call of the VFS takes the point first.
+     */
+    if (vfs_type_find(args.argv[2]) < 0) {
+        kshell_printf("mount: there is no filesystem type '%s'\n", args.argv[2]);
+        return KSHELL_ERROR;
+    }
+
+    rc = vfs_mount_type(args.argv[1], args.argv[2], args.argv[0]);
+    if (rc != 0) {
+        return mount_error_text("mount", args.argv[1], rc);
+    }
+
+    kshell_printf("mount: %s is mounted at %s\n", args.argv[0], args.argv[1]);
+
+    return KSHELL_OK;
+}
+
+static int cmd_umount(int argc, char **argv)
+{
+    struct kshell_args args;
+    int rc;
+
+    rc = kshell_options(argc, argv, NULL, 0, "umount <point>", &args);
+    if (rc == KSHELL_OPTIONS_HELP) {
+        return kshell_help_show(argv[0]);
+    }
+    if (rc != KSHELL_OPTIONS_OK) {
+        return KSHELL_USAGE;
+    }
+
+    if (args.argc != 1) {
+        kshell_printf("usage: umount <point>\n");
+        return KSHELL_USAGE;
+    }
+
+    rc = vfs_umount(args.argv[0]);
+    if (rc != 0) {
+        return mount_error_text("umount", args.argv[0], rc);
+    }
+
+    kshell_printf("umount: %s is out of the tree\n", args.argv[0]);
 
     return KSHELL_OK;
 }
@@ -1224,7 +1321,19 @@ static const struct file_command {
                 "Here -h is the sizes, as in df of Linux: --help prints this.\n",
       .owns_short_h = true},
      cmd_df},
-    {"mount", {.summary = "the mounted filesystems", .usage = "mount"}, cmd_mount},
+    {"mount",
+     {.summary = "list, mount or unmount the filesystems",
+      .usage = "mount [-a] [<device> <point> <type>]",
+      .detail = "Without a word the mounted filesystems are listed, one point per line.\n"
+                "  -a  mount every volume of " VFS_FSTAB_PATH "\n"
+                "The words are `device point type`, as in the table and in Linux.\n"},
+     cmd_mount},
+    {"umount",
+     {.summary = "take a filesystem out of the tree",
+      .usage = "umount <point>",
+      .detail = "A point with a mount below it stays until the smaller one leaves.\n"
+                "`/` may leave while /proc and /dev stay, which is what mkfs -y does.\n"},
+     cmd_umount},
     {"fsck",
      {.summary = "check the volume, read-only",
       .usage = "fsck",

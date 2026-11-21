@@ -221,6 +221,12 @@ static void filesystem_bring_up(void)
     }
 #endif
 
+    /* MicroFS is a type as well, so that /etc/fstab and the shell can name
+     * the volume of the machine like any other volume. */
+    if (mfs_vfs_register_type() != 0) {
+        kwarn("x86-64: MicroFS could not register its type");
+    }
+
     rc = mfs_vfs_mount("/", device);
 
     if (rc != 0) {
@@ -300,6 +306,7 @@ static void init_task(void *arg)
 void kmain(k_u64_t multiboot_info)
 {
     struct kernel_boot_config cfg;
+    int mounted;
 
     port_x86_64_init(multiboot_info);
 
@@ -333,6 +340,22 @@ void kmain(k_u64_t multiboot_info)
         kwarn("x86-64: not every command of components/net is registered");
     }
 #endif
+
+    /*
+     * The other volumes: /etc/fstab, when the disk of the machine carries
+     * one. The root is the first mount, so the file has a place to live. A
+     * line that does not mount is in the log and the boot goes on - the
+     * machine has no config store of its own, so the table is exactly what
+     * the volume keeps.
+     */
+    mounted = vfs_mount_fstab(VFS_FSTAB_PATH);
+    if (mounted < 0) {
+        if (mounted != KERR_NOENT) {
+            kwarn("x86-64: cannot read the table %s (rc=%d)", VFS_FSTAB_PATH, mounted);
+        }
+    } else if (mounted > 0) {
+        kinfo("x86-64: %d volume(s) mounted from %s", mounted, VFS_FSTAB_PATH);
+    }
 
     if (task_create("init", init_task, NULL, TASK_PRIO_DEFAULT) == NULL) {
         /*

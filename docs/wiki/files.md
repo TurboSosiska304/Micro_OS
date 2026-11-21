@@ -37,6 +37,7 @@ microos> ls /
 | `/` | MicroFS on the volume of the port |
 | `/etc` | the configuration: a file name is the key, its content the value |
 | `/etc/init.d` | the scripts of the init process, one command per line |
+| `/etc/fstab` | the volumes the boot mounts after the root, when the file is there |
 | `/proc` | the kernel: `version`, `uptime`, `meminfo`, `tasks`, `modules`, one directory per task |
 | `/dev` | the devices: `tty0`, `null`, `input` and the ones the port adds |
 | `/log` | on the board: `start.log`, the log of the boot |
@@ -207,13 +208,72 @@ reports `mode = 0` and owner 0 (a FAT record keeps no mode) and answers
 The host test mounts MicroFS at `/` and FAT at `/mnt/fat` at the same time and
 reads through the VFS. On a board or an x86-64 image the type is registered at
 the boot when `MICRO_OS_FS_FAT32` is on; the board has it off by default.
+MicroFS registers its own type (`mfs`) as well, so the volume of the flash can
+be named like any other.
+
+## Mounting a volume
+
+`mount` without a word lists the points of the tree, in the order the boot
+mounted them. With the three words `device point type` it mounts a volume of a
+registered type; `umount` gives the point back:
+
+```text
+microos> mount
+/
+/mnt/fat
+microos> mount ata0p1 /mnt/fat fat32
+mount: ata0p1 is mounted at /mnt/fat
+microos> ls /mnt/fat
+...
+microos> umount /mnt/fat
+umount: /mnt/fat is out of the tree
+```
+
+The point need not exist in the filesystem above it, and neither does its
+parent: a mount is shown in the listing of the directory above, which is how
+`/proc`, `/dev` and `/mnt/fat` appear in `ls`. What is already there has to be
+a directory, so a mount over a file is `not a directory`; a point that already
+holds another filesystem is `device or resource busy`, and a point with a
+mount below it stays until the smaller one leaves. `/` is the exception: the
+mounts of `/proc` and `/dev` do not live on its volume, so `mkfs -y` may take
+the root out while they stay.
+
+## `/etc/fstab`
+
+The boot mounts the volumes of `/etc/fstab` after the root, when the file is
+there. Each line is `device point type [options]`, `#` starts a comment and an
+empty line is not a line:
+
+```text
+# the volumes of the machine: the device, the point and the type
+vfsfat0  /mnt/fat  fat32
+
+# a line of Linux with the options of a mount is read as well
+ata0p1   /mnt/card fat32  defaults
+```
+
+Only `defaults` is a known option for now: an option that the kernel cannot
+honour (`ro`, a comma-separated list) is named in the log and its line is
+skipped. A line that does not mount for any other reason - a type the image
+does not have, a device that is not there, a point that is busy - is skipped
+the same way: a broken table does not stop the boot, and the shell still
+starts with `mount -a` to read it again after a repair.
+
+The file lives in MicroFS, so it is one of the files of `/etc` that the store
+of the port keeps across a format. A volume mounted at the console is not
+written back to the table: `mount` changes the tree, not the configuration.
 
 ## What is not there yet
 
 * **No write on FAT and no ext2.** FAT is read-only; ext2 waits for its own
-  reader; a second FAT volume and a mount of a card at runtime are ahead.
+  reader; a second FAT volume is ahead.
 * **No access time**, so `statx` has two moments of three; a read does not
   rewrite a record.
+* **The options of `/etc/fstab` are not acted on**: only `defaults` is
+  accepted, and a volume mounted at the console is not written back to the
+  table.
+* **MicroFS is one volume at a time**: the type `mfs` mounts the medium the
+  filesystem keeps, so a second MicroFS volume is a change of the filesystem.
 * **No journal and no repair**: `fsck` names the first problem, it does not fix
   it.
 * **No `mv`, no `cp`**: `rm -r` and the other commands of the shell are there.

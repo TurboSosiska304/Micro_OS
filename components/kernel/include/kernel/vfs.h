@@ -169,7 +169,24 @@ struct vfs_fs_type {
     vfs_mount_fn mount;
 };
 
-/* Mount a filesystem at a point of the tree. */
+/*
+ * Mount a filesystem at a point of the tree.
+ *
+ * The point is an absolute path of its own: it begins with '/', it carries
+ * no trailing slash except for the root itself. The point need not exist in
+ * the filesystem above it, and neither need its parent (ADR 0009); what is
+ * already there has to be a directory. The errors are therefore:
+ *
+ *   KERR_INVAL    the point is not a path of that shape;
+ *   KERR_NOTDIR   the parent, or the point itself, is not a directory;
+ *   KERR_BUSY     another filesystem is mounted at the point already;
+ *   KERR_NOSPC    the table of the mounts has no room for another one.
+ *
+ * A second mount of the very same operations and context is a re-mount: the
+ * call keeps the entry and takes the new pair, which is how a filesystem
+ * that keeps a volume in a static slot replaces it. A different filesystem
+ * at the same point is refused instead of hidden behind the new one.
+ */
 int vfs_mount(const char *point, const struct vfs_operations *ops, void *ctx);
 
 /*
@@ -183,15 +200,37 @@ int vfs_unregister_type(const char *name);
 /* The types of the system, for the shell and the tests. */
 k_size_t vfs_type_count(void);
 const char *vfs_type_name(k_size_t index);
+/*
+ * The slot of a type, or -1 when the image has no type of that name. The
+ * shell asks before it mounts, so that "there is no type 'fat32'" names the
+ * word a person typed and not the number of an error.
+ */
+int vfs_type_find(const char *name);
 
 /*
  * Mount a volume of a registered type. An unknown name is KERR_INVAL: the
  * type is a part of the configuration and a boot that asks for one the
  * image does not have has a broken configuration, not a broken medium.
+ *
+ * The point is checked before the mount function of the type runs, so a
+ * point that is busy or malformed costs no volume: the caller gets the same
+ * errors as vfs_mount() and the type is not called.
  */
 int vfs_mount_type(const char *point, const char *type, const char *device);
 
-/* Unmount a filesystem. */
+/*
+ * Unmount a filesystem.
+ *
+ * KERR_NOENT means that nothing is mounted at the point, KERR_INVAL that
+ * the point is not a path of the tree. A filesystem that lies below the
+ * point is KERR_BUSY, because the directory the smaller mount hangs from
+ * would leave the tree with it. The root is the exception: the mounts of
+ * /proc and /dev do not live on the volume of `/`, so `/` may leave while
+ * they stay (which is what `mkfs -y` does with the volume of the board).
+ *
+ * A filesystem that refuses to leave - its `umount` operation returns an
+ * error, KERR_NOTSUP among them - stays mounted and its error is returned.
+ */
 int vfs_umount(const char *point);
 
 /* The number of the mounted filesystems. */
@@ -199,6 +238,31 @@ k_size_t vfs_mount_count(void);
 
 /* The name of a mounted filesystem. */
 const char *vfs_mount_name(k_size_t index);
+
+/* The table of the volumes mounted by the boot. */
+#define VFS_FSTAB_PATH "/etc/fstab"
+
+/* The longest line of the table; a longer one is reported and skipped. */
+#define VFS_FSTAB_LINE_MAX 128
+
+/*
+ * Mount every volume of a table of the form of /etc/fstab: one line of
+ * `device point type [options]` per volume, '#' starts a comment and an
+ * empty line is not a line at all.
+ *
+ * The table is read through the VFS in the current task, so it has to live
+ * in a mounted filesystem (MicroFS has /etc). No memory is allocated: the
+ * lines are assembled in a buffer of the stack.
+ *
+ * Returns the number of the volumes mounted, or a negative error when the
+ * file cannot be opened or read. A line that does not mount - few fields, a
+ * type the image does not have, an unknown option, a device that is not
+ * there - is reported in the log and skipped: a broken line of the table
+ * does not stop the boot. Only `defaults` is a known option for now; the
+ * field is read so that a table of Linux does not have to be edited, and its
+ * other words are refused instead of silently ignored.
+ */
+int vfs_mount_fstab(const char *path);
 
 /* The operations of a filesystem, for the shell. */
 int vfs_open(const char *path, int flags, struct vfs_file *out, void *priv);

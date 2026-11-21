@@ -17,6 +17,7 @@
 #include "graphics/tft_console.h"
 #include "init/initd.h"
 #include "kernel/boot.h"
+#include "kernel/errno.h"
 #include "kernel/log.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
@@ -121,6 +122,11 @@ static int fs_subsys_init(void)
      */
     kshell_register("mkfs", "format the volume: mkfs -y", cmd_mkfs);
 
+    /* MicroFS is a type of the VFS, as it is on the board. */
+    if (mfs_vfs_register_type() != 0) {
+        kwarn("sim: MicroFS could not register its type");
+    }
+
     rc = mfs_vfs_mount("/", SIM_VOLUME_DEVICE);
     if (rc != 0) {
         /*
@@ -184,6 +190,7 @@ static void init_task(void *arg)
 {
     int restored;
     int saved;
+    int mounted;
 
     K_UNUSED(arg);
 
@@ -215,6 +222,23 @@ static void init_task(void *arg)
         }
     } else {
         kwarn("sim: the configuration has no store");
+    }
+
+    /*
+     * The volumes of the table of /etc/fstab: the root is mounted, so the
+     * file has a place. A line that does not mount is in the log and is
+     * skipped, the same way the board does it.
+     */
+    if (s_volume_mounted) {
+        mounted = vfs_mount_fstab(VFS_FSTAB_PATH);
+
+        if (mounted < 0) {
+            if (mounted != KERR_NOENT) {
+                kwarn("sim: cannot read the table %s (rc=%d)", VFS_FSTAB_PATH, mounted);
+            }
+        } else if (mounted > 0) {
+            kinfo("sim: %d volume(s) mounted from %s", mounted, VFS_FSTAB_PATH);
+        }
     }
 
     /*

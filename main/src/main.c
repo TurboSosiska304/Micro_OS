@@ -13,6 +13,7 @@
 #include "drivers/rtc.h"
 #include "factory.h"
 #include "kernel/boot.h"
+#include "kernel/errno.h"
 #include "kernel/kmod.h"
 #include "kernel/log.h"
 #include "kernel/vfs.h"
@@ -126,6 +127,12 @@ static int fs_subsys_init(void)
     }
 #endif
 
+    /* The volume of the flash is a type as well, so that a line of
+     * /etc/fstab or a command of the shell can name it like any other. */
+    if (mfs_vfs_register_type() != 0) {
+        kwarn("init: MicroFS could not register its type");
+    }
+
     rc = mfs_vfs_mount("/", "flash0");
     if (rc != 0) {
         /*
@@ -205,6 +212,7 @@ static void init_task(void *arg)
     struct task *self = task_self();
     int restored;
     int saved;
+    int mounted;
 
     K_UNUSED(arg);
 
@@ -277,6 +285,22 @@ static void init_task(void *arg)
         }
     } else {
         kwarn("init: the configuration has no store");
+    }
+
+    /*
+     * The other volumes: /etc/fstab is read after the root, whose /etc
+     * holds the file. A line that cannot be mounted is named in the log and
+     * skipped: the board is useful without the card of the camera, and a
+     * boot that stopped for it would not even reach the shell that repairs
+     * it.
+     */
+    mounted = vfs_mount_fstab(VFS_FSTAB_PATH);
+    if (mounted < 0) {
+        if (mounted != KERR_NOENT) {
+            kwarn("init: cannot read the table %s (rc=%d)", VFS_FSTAB_PATH, mounted);
+        }
+    } else if (mounted > 0) {
+        kinfo("init: %d volume(s) mounted from %s", mounted, VFS_FSTAB_PATH);
     }
 
     /*

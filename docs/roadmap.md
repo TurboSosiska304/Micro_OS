@@ -131,7 +131,10 @@ written when the project was an operating system for one board; the numbers
       next to MicroFS in the tests
 * [ ] FAT32 write: create, write, unlink, and the free-cluster map a write needs
 * [ ] ext2, the reader with inodes and a superblock a checker can walk
-* [ ] `/etc/fstab` and the `mount` command over the type registry
+* [x] `/etc/fstab` and the `mount` command over the type registry: the boot
+      mounts the table after the root, `mount <device> <point> <type>` and
+      `umount <point>` work at the console, and a line that does not mount is
+      reported and skipped
 * [x] Timestamps of a file, fed by the clock of the kernel: the record of
       MicroFS has `mtime` and `ctime` in version 2, an old volume keeps its
       16 bytes, and `statx` (26) reports the moments (ADR 0013)

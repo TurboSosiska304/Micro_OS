@@ -6,6 +6,7 @@
 
 #include "devfs/devfs.h"
 #include "kernel/config.h"
+#include "kernel/errno.h"
 #include "kernel/version.h"
 #include "kernel/vfs.h"
 #include "kshell/kshell.h"
@@ -550,6 +551,136 @@ static void test_attr(void)
     ls_teardown();
 }
 
+/* The type that the mount commands of this test speak: devfs has objects to
+ * read and no volume, so two mounts of it cost nothing. */
+static int kshell_devfs_mount(const char *point, const char *device)
+{
+    K_UNUSED(device);
+
+    return devfs_register(point);
+}
+
+static int kshell_write_text(const char *path, const char *text)
+{
+    struct vfs_file file;
+    static k_u8_t data[VFS_FILE_DATA_SIZE];
+    int rc;
+
+    rc = vfs_open(path, VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, data);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = vfs_write(&file, text, strlen(text));
+    if (rc < 0) {
+        vfs_close(&file);
+        return rc;
+    }
+
+    return vfs_close(&file);
+}
+
+/*
+ * The commands of the mount table: the list without a word, a volume by its
+ * device, point and type, -a over /etc/fstab, and the unmount that gives
+ * the point back. A refusal has to say which point and why.
+ */
+static void test_mount(void)
+{
+    char buf[8192];
+    size_t used;
+    FILE *sink;
+    struct vfs_stat stat;
+
+    ktest_begin("kshell: mount, umount and the table of the boot");
+
+    ls_setup();
+    KT_CHECK_INT_EQ(vfs_mkdir("/mnt"), 0);
+    KT_CHECK_INT_EQ(vfs_mkdir("/etc"), 0);
+    KT_CHECK_INT_EQ(vfs_register_type("dev", kshell_devfs_mount), 0);
+
+    sink = tmpfile();
+    KT_CHECK(sink != NULL);
+    if (sink == NULL) {
+        vfs_unregister_type("dev");
+        ls_teardown();
+        return;
+    }
+
+    port_host_set_sink(sink);
+
+    /* Without a word the mounted filesystems are listed. */
+    KT_CHECK_INT_EQ(kshell_execute("mount"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("mount fake0 /mnt/dev dev"), KSHELL_OK);
+    KT_CHECK_INT_EQ(vfs_mount_count(), 2);
+    KT_CHECK_INT_EQ(vfs_stat("/mnt/dev/tty0", &stat), 0);
+
+    /* The same point is busy, and the same line of the table says so. */
+    KT_CHECK_INT_EQ(kshell_execute("mount fake0 /mnt/dev dev"), KSHELL_ERROR);
+
+    /* A type the image does not have, a wrong number of words, an option
+     * that is not there. */
+    KT_CHECK_INT_EQ(kshell_execute("mount fake0 /mnt/x nosuch"), KSHELL_ERROR);
+    KT_CHECK_INT_EQ(kshell_execute("mount fake0 /mnt/x"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(kshell_execute("mount -z"), KSHELL_USAGE);
+
+    /* The help of the table, for -h and for --help. */
+    KT_CHECK_INT_EQ(kshell_execute("mount -h"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("mount --help"), KSHELL_OK);
+
+    /*
+     * -a mounts the two volumes of /etc/fstab; the third line is broken and
+     * the command is still a success. The second run mounts nothing and the
+     * points that are busy do not make it a failure either.
+     */
+    KT_CHECK_INT_EQ(kshell_write_text(VFS_FSTAB_PATH, "fake0 /mnt/one dev\n"
+                                                      "fake0 /mnt/two dev\n"
+                                                      "broken-line\n"),
+                    0);
+    KT_CHECK_INT_EQ(kshell_execute("mount -a"), KSHELL_OK);
+    KT_CHECK_INT_EQ(vfs_mount_count(), 4);
+    KT_CHECK_INT_EQ(kshell_execute("mount -a"), KSHELL_OK);
+    KT_CHECK_INT_EQ(vfs_mount_count(), 4);
+
+    /* The unmount, and the point that is empty again. */
+    KT_CHECK_INT_EQ(kshell_execute("umount /mnt/dev"), KSHELL_OK);
+    KT_CHECK_INT_EQ(vfs_stat("/mnt/dev/tty0", &stat), KERR_NOENT);
+    KT_CHECK_INT_EQ(kshell_execute("umount /mnt/dev"), KSHELL_ERROR);
+    KT_CHECK_INT_EQ(kshell_execute("umount"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(kshell_execute("umount -h"), KSHELL_OK);
+
+    KT_CHECK_INT_EQ(kshell_execute("umount /mnt/one"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("umount /mnt/two"), KSHELL_OK);
+    KT_CHECK_INT_EQ(vfs_mount_count(), 1);
+
+    rewind(sink);
+    used = fread(buf, 1, sizeof(buf) - 1, sink);
+    buf[used] = '\0';
+
+    port_host_set_sink(NULL);
+
+    /* The list, the mount and the line it printed. */
+    KT_CHECK(strstr(buf, "/\n") != NULL);
+    KT_CHECK(strstr(buf, "mount: fake0 is mounted at /mnt/dev") != NULL);
+
+    /* Every refusal names the point and the reason in words. */
+    KT_CHECK(strstr(buf, "mount: /mnt/dev: device or resource busy") != NULL);
+    KT_CHECK(strstr(buf, "mount: there is no filesystem type 'nosuch'") != NULL);
+    KT_CHECK(strstr(buf, "umount: /mnt/dev: no such file or directory") != NULL);
+    KT_CHECK(strstr(buf, "umount: /mnt/dev is out of the tree") != NULL);
+    KT_CHECK(strstr(buf, "mount: unknown option: -z") != NULL);
+
+    /* The two tables of the command: the words and the flags. */
+    KT_CHECK(strstr(buf, "usage: mount [<device> <point> <type>] | mount -a") != NULL);
+    KT_CHECK(strstr(buf, "usage: umount <point>") != NULL);
+    KT_CHECK(strstr(buf, "mount: 2 filesystem(s) mounted from /etc/fstab") != NULL);
+    KT_CHECK(strstr(buf, "mount: 0 filesystem(s) mounted from /etc/fstab") != NULL);
+    KT_CHECK(strstr(buf, "mount every volume of /etc/fstab") != NULL);
+
+    KT_CHECK_INT_EQ(vfs_unregister_type("dev"), 0);
+    ls_teardown();
+}
+
 void test_kshell(void)
 { /* The built in commands are registered by the shell itself. */
     KT_CHECK_INT_EQ(kshell_init(), KSHELL_OK);
@@ -562,4 +693,5 @@ void test_kshell(void)
     test_mfetch();
     test_ls();
     test_attr();
+    test_mount();
 }
