@@ -1,0 +1,433 @@
+<!doctype html><html lang="en" data-version="0.5.0-rc2" data-kind="prerelease">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <link rel="canonical" href="https://turbososiska304.github.io/Micro_OS/0.5.0-rc2/files/">
+  <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../assets/wiki.css">
+  <title>Files — Micro OS wiki 0.5.0-rc2</title>
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+
+<header class="top">
+  <div class="top-inner">
+    <a class="brand" href="..">Micro&nbsp;OS <span>wiki</span></a>
+    <div class="search" role="search">
+      <input type="search" id="mkdocs-search-query" placeholder="Search this version…"
+             aria-label="Search this version" autocomplete="off">
+      <div id="mkdocs-search-results" class="search-results"
+           data-no-results-text="No results found"></div>
+    </div>
+
+    <details class="versions">
+      <summary title="Change the version">Version&nbsp;<b>0.5.0-rc2</b></summary>
+      <div class="versions-menu">
+        <div class="versions-group">Stable</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/0.8.0/">0.8.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.7.0/">0.7.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0/">0.6.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0/">0.4.0</a>
+          </li>
+        </ul>
+        <div class="versions-group">Pre-release</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/0.8.0-rc1/">0.8.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.7.0-rc1/">0.7.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0-rc2/">0.6.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0-rc1/">0.6.0-rc1</a>
+          </li>
+          <li>
+            <span aria-current="true">0.5.0-rc2</span>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.5.0-rc1/">0.5.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0-rc2/">0.4.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0-rc1/">0.4.0-rc1</a>
+          </li>
+        </ul>
+        <div class="versions-group">Development</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/dev/">dev</a>
+          </li>
+        </ul>
+        <div class="versions-all"><a href="/Micro_OS/versions/">All versions</a></div>
+      </div>
+    </details>
+    <a class="site" href="https://turbososiska304.github.io/microos-site/" rel="noopener">Project&nbsp;site&nbsp;↗</a>
+    <a class="repo" href="https://github.com/TurboSosiska304/Micro_OS" rel="noopener">GitHub&nbsp;↗</a>
+  </div>
+</header>
+
+<div class="shell">
+  <aside>
+    <nav class="nav" aria-label="Documentation">
+      <ul class="nav-list">
+  <li>
+    <a href="..">Home</a>
+  </li>
+  <li>
+    <a href="../getting-started/">Start here</a>
+  </li>
+  <li>
+    <a href="../build/">Build and run</a>
+  </li>
+  <li>
+    <a href="../shell/">Shell</a>
+  </li>
+  <li>
+    <a href="./" aria-current="page">Files</a>
+  </li>
+  <li>
+    <a href="../programs/">Programs</a>
+  </li>
+  <li>
+    <a href="../ports/">Ports</a>
+  </li>
+  <li>
+    <a href="../kernel-abi/">Kernel and ABI</a>
+  </li>
+  <li>
+    <a href="../testing/">Testing</a>
+  </li>
+  <li>
+    <a href="../troubleshooting/">Troubleshooting</a>
+  </li>
+</ul>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="toc-title">On this page</div>
+      <ul>
+  <li><a href="#files">Files</a><ul>
+  <li><a href="#the-tree-after-a-boot">The tree after a boot</a>
+  </li>
+  <li><a href="#microfs">MicroFS</a>
+  </li>
+  <li><a href="#working-with-files">Working with files</a>
+  </li>
+  <li><a href="#mkfs-and-fsck">mkfs and fsck</a>
+  </li>
+  <li><a href="#etc-and-the-store">/etc and the store</a>
+  </li>
+  <li><a href="#etcinitd">/etc/init.d</a>
+  </li>
+  <li><a href="#disks-and-partitions">Disks and partitions</a>
+  </li>
+  <li><a href="#the-second-filesystem">The second filesystem</a>
+  </li>
+  <li><a href="#what-is-not-there-yet">What is not there yet</a>
+  </li>
+</ul>
+  </li>
+</ul>
+    </nav>
+  </aside>
+
+  <main id="content">
+    <div class="crumb"><a href="..">Micro OS wiki</a> <span aria-hidden="true">/</span> Files</div>
+    <div class="banner">
+      You are reading <b>0.5.0-rc2</b> — a pre-release.
+      The stable documentation is <a href="/Micro_OS/0.8.0/">0.8.0</a>.
+      The newest documentation is <a href="/Micro_OS/0.8.0/">0.8.0</a>.
+    </div>
+
+    <h1 id="files">Files<a class="headerlink" href="#files" title="Permanent link">&para;</a></h1>
+<p>Micro OS has one filesystem of its own, <strong>MicroFS</strong>, and two virtual
+filesystems. The root <code>/</code> is MicroFS on a block device; <code>/proc</code> and <code>/dev</code> are
+generated by the kernel. Everything a person writes at the console lands in
+MicroFS, and the configuration of <code>/etc</code> has a second copy in the store of the
+port, which is why a format does not have to lose it.</p>
+<p>The layout of the volume, the sections and the flags of a record are described
+in <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v0.5.0-rc2/docs/memory.md"><code>docs/memory.md</code></a>; this page is about using it.</p>
+<h2 id="the-tree-after-a-boot">The tree after a boot<a class="headerlink" href="#the-tree-after-a-boot" title="Permanent link">&para;</a></h2>
+<p>The simulator, right after a boot (the board adds <code>/log</code>, x86-64 adds <code>/bin</code>):</p>
+<div class="highlight"><pre><span></span><code>microos&gt; ls /
+/
+|-- etc/
+|   `-- init.d/
+|-- proc/
+|   |-- version
+|   |-- uptime
+|   |-- meminfo
+|   |-- tasks
+|   |-- modules
+|   |-- self/
+|   |-- 1/
+|   `-- ...
+`-- dev/
+    |-- tty0
+    `-- ...
+</code></pre></div>
+
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>What it is</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/</code></td>
+<td>MicroFS on the volume of the port</td>
+</tr>
+<tr>
+<td><code>/etc</code></td>
+<td>the configuration: a file name is the key, its content the value</td>
+</tr>
+<tr>
+<td><code>/etc/init.d</code></td>
+<td>the scripts of the init process, one command per line</td>
+</tr>
+<tr>
+<td><code>/proc</code></td>
+<td>the kernel: <code>version</code>, <code>uptime</code>, <code>meminfo</code>, <code>tasks</code>, <code>modules</code>, one directory per task</td>
+</tr>
+<tr>
+<td><code>/dev</code></td>
+<td>the devices: <code>tty0</code>, <code>null</code>, <code>input</code> and the ones the port adds</td>
+</tr>
+<tr>
+<td><code>/log</code></td>
+<td>on the board: <code>start.log</code>, the log of the boot</td>
+</tr>
+<tr>
+<td><code>/bin</code></td>
+<td>on x86-64: the programs the boot writes (<code>hello</code>, <code>crash</code>, <code>fork</code>, <code>badptr</code>)</td>
+</tr>
+</tbody>
+</table>
+<p><code>ls</code> prints the tree below a path and takes no flags; <code>stat</code> is the detailed
+view of one object.</p>
+<h2 id="microfs">MicroFS<a class="headerlink" href="#microfs" title="Permanent link">&para;</a></h2>
+<p>MicroFS is a consumer of blocks, not of a flash chip: the device under it is
+described by <code>kernel/blockdev.h</code> and registered by the port. On the board it is
+the <code>mfs</code> partition of the internal flash (<code>flash0</code>, 5.75 MB); in the simulator
+a file of the host (<code>file0</code>, 512 KB by default); on x86-64 the first partition
+of the ATA disk (<code>ata0p1</code>) when one is attached, and a volume in the RAM
+(<code>ram0</code>, 512 KB) when it is not.</p>
+<p>A volume has three sections and a block is 1 KiB:</p>
+<table>
+<thead>
+<tr>
+<th>Section</th>
+<th>Holds</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DATA</code></td>
+<td>the content of the files</td>
+</tr>
+<tr>
+<td><code>META</code></td>
+<td>the table of the records and the map of the free blocks</td>
+</tr>
+<tr>
+<td><code>INFO</code></td>
+<td>the header of the volume and the root record, in the last erase sector</td>
+</tr>
+</tbody>
+</table>
+<p>A record is 16 bytes and keeps the type of the object, its mode and its owner
+in the upper bits of <code>flags</code>; a volume of an older release mounts unchanged.
+The formatter asks for 256 records (<code>MFS_MOUNT_RECORDS</code>) and sizes <code>META</code> from
+the volume; the capacity is fixed at format time and cannot grow later. There
+are <strong>no timestamps</strong> and <strong>no journal</strong>: <code>fsck</code> reports the first problem it
+finds and does not repair, and a power cut in the middle of a write is a risk
+the tree knows about (<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v0.5.0-rc2/docs/debts.md"><code>docs/debts.md</code></a>).</p>
+<p>The calls of the filesystem take one recursive lock, so two tasks can use the
+volume at the same time without corrupting it: each open file keeps its
+position in its descriptor, and the volume itself is one piece of state behind
+a mutex. The codes of the filesystem are translated into the codes of the
+system calls in one place, <code>components/mfs/src/mfs_vfs.c</code>.</p>
+<h2 id="working-with-files">Working with files<a class="headerlink" href="#working-with-files" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>microos&gt; write /hello.txt one two three
+14 byte(s) written to /hello.txt
+microos&gt; cat /hello.txt
+one two three
+microos&gt; mkdir /data
+microos&gt; df /data
+blocks: 482 of 487 free (1 KB each)
+inodes: 1274 of 1279 free
+microos&gt; rm /hello.txt
+</code></pre></div>
+
+<p><code>write</code> replaces the file and appends a newline; the text is one line of at
+most 127 bytes. <code>rm</code> removes a file, not a directory, and there is no <code>-r</code>.
+<code>df</code> prints the free blocks and inodes of the filesystem of the path.</p>
+<p><code>stat</code> shows the mode, the owner and the size; <code>chmod</code> and <code>chown</code> change the
+first two. The rules are in <a href="https://github.com/TurboSosiska304/Micro_OS/tree/v0.5.0-rc2/docs/kernel-abi">kernel-abi.md</a> and in
+<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v0.5.0-rc2/docs/syscall-abi.md"><code>docs/syscall-abi.md</code></a>: one user (uid 0), no root bypass,
+and a zero mode means "this record predates the modes", so <code>chmod 000</code> is
+refused.</p>
+<h2 id="mkfs-and-fsck"><code>mkfs</code> and <code>fsck</code><a class="headerlink" href="#mkfs-and-fsck" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>microos&gt; mkfs -y
+mkfs: the volume is formatted
+</code></pre></div>
+
+<p><code>mkfs -y</code> unmounts <code>/</code>, formats the volume and mounts it again. Without <code>-y</code> it
+does nothing but print its usage; with <code>-y</code> everything in MicroFS is gone. It
+is registered on the board (<code>main/src/main.c</code>) and in the simulator
+(<code>ports/port_host/src/sim_main.c</code>); the x86-64 port has no such command and
+formats a blank volume at the boot instead.</p>
+<p><code>fsck</code> is the read-only check:</p>
+<div class="highlight"><pre><span></span><code>microos&gt; fsck
+fsck: 0 file(s), 3 directory(ies), 484 of 487 block(s) free
+fsck: the volume is consistent
+</code></pre></div>
+
+<p>A broken volume prints <code>N problem(s), the first: ...</code> and the command exits
+with an error. <code>fsck: no volume is mounted</code> means that <code>/</code> is not MicroFS on
+this machine at the moment.</p>
+<h2 id="etc-and-the-store"><code>/etc</code> and the store<a class="headerlink" href="#etc-and-the-store" title="Permanent link">&para;</a></h2>
+<p>The files of <code>/etc</code> are the configuration of the system, and each file is one
+key of the key-value store of the port (NVS on the board, a file per key in
+the simulator). The boot restores the files that are missing and saves the
+ones it finds; the file wins when the two disagree.</p>
+<div class="highlight"><pre><span></span><code>microos&gt; write /etc/setting hello
+microos&gt; config sync
+config: 0 file(s) restored, 1 saved
+microos&gt; config
+setting=hello
+</code></pre></div>
+
+<p>This is why <code>mkfs -y</code> does not take the settings away: the store survives the
+volume. <code>idf.py erase-flash</code> destroys both. In the simulator the store is the
+directory <code>MICROOS_KV_DIR</code> (<code>/tmp/microos-kv</code> by default), and a run with a
+volume of its own should have a store of its own too.</p>
+<h2 id="etcinitd"><code>/etc/init.d</code><a class="headerlink" href="#etcinitd" title="Permanent link">&para;</a></h2>
+<p>Every file of <code>/etc/init.d</code> is a script of the init process: one shell command
+per line, <code>#</code> starts a comment, and each script runs in a task of its own. The
+directory is created at the boot when it is missing. The commands are the ones
+of <a href="https://github.com/TurboSosiska304/Micro_OS/tree/v0.5.0-rc2/docs/shell">shell.md</a>, so a script can only use what the machine registers:</p>
+<div class="highlight"><pre><span></span><code>microos&gt; write /etc/init.d/clock date
+microos&gt; reboot
+</code></pre></div>
+
+<h2 id="disks-and-partitions">Disks and partitions<a class="headerlink" href="#disks-and-partitions" title="Permanent link">&para;</a></h2>
+<p>The kernel has a portable parser of the partition tables
+(<code>components/kernel/src/partition.c</code>, <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v0.5.0-rc2/docs/adr/0008-block-devices.md">ADR 0008</a>):
+it reads the MBR or the GPT in the first sectors, holds every entry against the
+size of the disk, and registers a child device named after the parent plus <code>p</code>
+and the number of the entry. A child adds the first sector of its partition to
+every request and refuses what runs past its end.</p>
+<table>
+<thead>
+<tr>
+<th>Device</th>
+<th>Where</th>
+<th>What</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>flash0</code></td>
+<td>board</td>
+<td>the internal flash; the <code>mfs</code> partition mounted at <code>/</code></td>
+</tr>
+<tr>
+<td><code>file0</code></td>
+<td>simulator</td>
+<td>a file of the host</td>
+</tr>
+<tr>
+<td><code>ram0</code></td>
+<td>x86-64</td>
+<td>memory, 512 KB, not persistent</td>
+</tr>
+<tr>
+<td><code>ata0</code>, <code>ata0p1</code></td>
+<td>x86-64</td>
+<td>the IDE disk and its first partition</td>
+</tr>
+<tr>
+<td><code>vd0</code>, <code>sd0</code>, <code>nvme0n1</code>, <code>mmcblk0</code></td>
+<td>planned</td>
+<td>virtio, AHCI, NVMe, SDHCI</td>
+</tr>
+</tbody>
+</table>
+<p>Three rules of the layer matter at the console:</p>
+<ul>
+<li>the parser <strong>never writes</strong> to the medium: a broken table is a refusal, not a
+  repair;</li>
+<li>a disk without a table is not a volume, and there is no "the whole disk is
+  the filesystem" special case;</li>
+<li>what a filesystem sees is a device, so MicroFS on <code>ata0p1</code> does not know that
+  a partition table exists.</li>
+</ul>
+<p>The x86-64 disk is a raw 8 MB image, made by <code>tools/x86_disk_smoke.py
+--mkimage</code> and kept in <code>build-x86/disk.img</code>; what is written to it survives a
+reset, which <code>make x86-disk-smoke</code> proves with two boots. See
+<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v0.5.0-rc2/docs/ports/x86_64/README.md#the-disk"><code>docs/ports/x86_64/README.md</code></a>.</p>
+<h2 id="the-second-filesystem">The second filesystem<a class="headerlink" href="#the-second-filesystem" title="Permanent link">&para;</a></h2>
+<p>The VFS knows filesystem <strong>types</strong> (<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v0.5.0-rc2/docs/adr/0009-filesystem-types.md">ADR 0009</a>):
+<code>vfs_register_type()</code> puts a name and a mount function in the table, and
+<code>vfs_mount_type(point, "fat32", device)</code> mounts a type on a point. MicroFS is
+one type; <code>components/fs_fat32</code> is a second one, a reader of FAT12/16/32 with
+the long names, the fixed and the cluster root and the subdirectories. It
+reports <code>mode = 0</code> and owner 0 (a FAT record keeps no mode) and answers
+<code>ENOTSUP</code> to write, create, unlink, chmod and chown.</p>
+<p>The host test mounts MicroFS at <code>/</code> and FAT at <code>/mnt/fat</code> at the same time and
+reads through the VFS. On a board or an x86-64 image the type is registered at
+the boot when <code>MICRO_OS_FS_FAT32</code> is on; the board has it off by default.</p>
+<h2 id="what-is-not-there-yet">What is not there yet<a class="headerlink" href="#what-is-not-there-yet" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>No write on FAT and no ext2.</strong> FAT is read-only; ext2 waits for its own
+  reader; a second FAT volume and a mount of a card at runtime are ahead.</li>
+<li><strong>No timestamps</strong>, so <code>stat</code> has no date to show.</li>
+<li><strong>No journal and no repair</strong>: <code>fsck</code> names the first problem, it does not fix
+  it.</li>
+<li><strong>No <code>mv</code>, no <code>cp</code></strong>: <code>rm -r</code> and the other commands of the shell are there.</li>
+<li><strong>One user</strong>, so the owner of a file is a number that is stored and checked
+  but not a second party.</li>
+</ul>
+<p>The register with the next step of each row is <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v0.5.0-rc2/docs/debts.md"><code>docs/debts.md</code></a>;
+the plan is <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v0.5.0-rc2/docs/roadmap.md"><code>docs/roadmap.md</code></a>, section K6.</p>
+<p><a href="https://github.com/TurboSosiska304/Micro_OS/tree/v0.5.0-rc2/docs">Back to the wiki index</a></p>
+    <nav class="pager" aria-label="Pages">
+      <a class="prev" href="../shell/">← Shell</a>
+      <a class="next" href="../programs/">Programs →</a>
+    </nav>
+  </main>
+</div>
+
+<footer>
+  <div class="footer-inner">
+    <div>Micro OS wiki · version 0.5.0-rc2</div>
+    <div class="footer-links">
+      <a href="/Micro_OS/versions/">All versions</a>
+      <a href="https://turbososiska304.github.io/microos-site/" rel="noopener">Project site</a>
+      <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v0.5.0-rc2/docs/wiki/files.md"
+         rel="noopener">Edit on GitHub</a>
+      <span>Built with MkDocs</span>
+    </div>
+  </div>
+</footer>
+
+<script>var base_url = "..";</script>
+<script src="../search/main.js"></script>
+</body>
+</html>

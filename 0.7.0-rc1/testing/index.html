@@ -1,0 +1,379 @@
+<!doctype html><html lang="en" data-version="0.7.0-rc1" data-kind="prerelease">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <link rel="canonical" href="https://turbososiska304.github.io/Micro_OS/0.7.0-rc1/testing/">
+  <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../assets/wiki.css">
+  <title>Testing — Micro OS wiki 0.7.0-rc1</title>
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+
+<header class="top">
+  <div class="top-inner">
+    <a class="brand" href="..">Micro&nbsp;OS <span>wiki</span></a>
+    <div class="search" role="search">
+      <input type="search" id="mkdocs-search-query" placeholder="Search this version…"
+             aria-label="Search this version" autocomplete="off">
+      <div id="mkdocs-search-results" class="search-results"
+           data-no-results-text="No results found"></div>
+    </div>
+
+    <details class="versions">
+      <summary title="Change the version">Version&nbsp;<b>0.7.0-rc1</b></summary>
+      <div class="versions-menu">
+        <div class="versions-group">Stable</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/0.8.0/">0.8.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.7.0/">0.7.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0/">0.6.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0/">0.4.0</a>
+          </li>
+        </ul>
+        <div class="versions-group">Pre-release</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/0.8.0-rc1/">0.8.0-rc1</a>
+          </li>
+          <li>
+            <span aria-current="true">0.7.0-rc1</span>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0-rc2/">0.6.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0-rc1/">0.6.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.5.0-rc2/">0.5.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.5.0-rc1/">0.5.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0-rc2/">0.4.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0-rc1/">0.4.0-rc1</a>
+          </li>
+        </ul>
+        <div class="versions-group">Development</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/dev/">dev</a>
+          </li>
+        </ul>
+        <div class="versions-all"><a href="/Micro_OS/versions/">All versions</a></div>
+      </div>
+    </details>
+    <a class="site" href="https://turbososiska304.github.io/microos-site/" rel="noopener">Project&nbsp;site&nbsp;↗</a>
+    <a class="repo" href="https://github.com/TurboSosiska304/Micro_OS" rel="noopener">GitHub&nbsp;↗</a>
+  </div>
+</header>
+
+<div class="shell">
+  <aside>
+    <nav class="nav" aria-label="Documentation">
+      <ul class="nav-list">
+  <li>
+    <a href="..">Home</a>
+  </li>
+  <li>
+    <a href="../getting-started/">Start here</a>
+  </li>
+  <li>
+    <a href="../build/">Build and run</a>
+  </li>
+  <li>
+    <a href="../shell/">Shell</a>
+  </li>
+  <li>
+    <a href="../files/">Files</a>
+  </li>
+  <li>
+    <a href="../programs/">Programs</a>
+  </li>
+  <li>
+    <a href="../ports/">Ports</a>
+  </li>
+  <li>
+    <a href="../kernel-abi/">Kernel and ABI</a>
+  </li>
+  <li>
+    <a href="./" aria-current="page">Testing</a>
+  </li>
+  <li>
+    <a href="../troubleshooting/">Troubleshooting</a>
+  </li>
+</ul>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="toc-title">On this page</div>
+      <ul>
+  <li><a href="#testing">Testing</a><ul>
+  <li><a href="#the-commands">The commands</a>
+  </li>
+  <li><a href="#make-test-the-unit-tests">make test: the unit tests</a>
+  </li>
+  <li><a href="#make-smoke-the-simulator">make smoke: the simulator</a>
+  </li>
+  <li><a href="#the-x86-64-smoke-tests">The x86-64 smoke tests</a>
+  </li>
+  <li><a href="#make-integrity-the-boundary-and-the-hygiene">make integrity: the boundary and the hygiene</a>
+  </li>
+  <li><a href="#make-ci-the-local-half">make ci: the local half</a>
+  </li>
+  <li><a href="#the-device-test">The device test</a>
+  </li>
+  <li><a href="#adding-a-test">Adding a test</a>
+  </li>
+</ul>
+  </li>
+</ul>
+    </nav>
+  </aside>
+
+  <main id="content">
+    <div class="crumb"><a href="..">Micro OS wiki</a> <span aria-hidden="true">/</span> Testing</div>
+    <div class="banner">
+      You are reading <b>0.7.0-rc1</b> — a pre-release.
+      The stable documentation is <a href="/Micro_OS/0.8.0/">0.8.0</a>.
+      The newest documentation is <a href="/Micro_OS/0.8.0/">0.8.0</a>.
+    </div>
+
+    <h1 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h1>
+<p>The checks are layered by what they can see. A unit test sees one piece of the
+kernel; the simulator sees the whole portable system as a process; the x86-64
+smoke test sees a bare machine and a processor; the device test sees the board
+and the chips on it. None of them replaces another.</p>
+<h2 id="the-commands">The commands<a class="headerlink" href="#the-commands" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it proves</th>
+<th>Needs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>make test</code></td>
+<td>the host build, the unit tests, the null probe</td>
+<td><code>gcc</code>, <code>cmake</code>, <code>ninja</code></td>
+</tr>
+<tr>
+<td><code>make test-asan</code></td>
+<td>the same tests with the sanitizers</td>
+<td>the same</td>
+</tr>
+<tr>
+<td><code>make test-tsan</code></td>
+<td>the same tests under the race detector</td>
+<td>the same</td>
+</tr>
+<tr>
+<td><code>make test-minimal</code></td>
+<td>the host tests with the optional features off</td>
+<td>the same</td>
+</tr>
+<tr>
+<td><code>make smoke</code></td>
+<td>the simulator boots and the shell answers</td>
+<td>the host build</td>
+</tr>
+<tr>
+<td><code>make x86-build</code></td>
+<td>the x86-64 kernel and loader compile</td>
+<td><code>gcc</code>, <code>cmake</code>, <code>ninja</code></td>
+</tr>
+<tr>
+<td><code>make x86-smoke</code></td>
+<td>the kernel boots, runs <code>/bin/hello</code>, the shell answers</td>
+<td><code>qemu-system-x86_64</code></td>
+</tr>
+<tr>
+<td><code>make x86-vga-smoke</code></td>
+<td>the VGA screen and the PS/2 keyboard, no display</td>
+<td><code>qemu-system-x86_64</code></td>
+</tr>
+<tr>
+<td><code>make x86-disk-smoke</code></td>
+<td>a file written by one boot is read by the next</td>
+<td><code>qemu-system-x86_64</code></td>
+</tr>
+<tr>
+<td><code>make x86-net-smoke</code></td>
+<td>the network: ping, UDP, HTTP, <code>httpd</code> and DNS</td>
+<td><code>qemu-system-x86_64</code></td>
+</tr>
+<tr>
+<td><code>make integrity</code></td>
+<td>the boundary, the bundle, the partitions, the hygiene</td>
+<td><code>clang-format</code></td>
+</tr>
+<tr>
+<td><code>make ci</code></td>
+<td>the list a contributor runs before a push</td>
+<td>the above, QEMU optional</td>
+</tr>
+<tr>
+<td><code>tools/device-test.sh</code></td>
+<td>build, flash and boot the board</td>
+<td>ESP-IDF and a board</td>
+</tr>
+</tbody>
+</table>
+<h2 id="make-test-the-unit-tests"><code>make test</code>: the unit tests<a class="headerlink" href="#make-test-the-unit-tests" title="Permanent link">&para;</a></h2>
+<p><code>make test</code> configures and builds <code>build-host/</code> and runs <code>ctest</code>, which runs
+three tests:</p>
+<ul>
+<li><code>microos_tests</code> - the unit tests, in <code>tests/cases/</code>, on the framework of
+  <code>tests/framework/ktest.h</code>. There is no external dependency; the tests run
+  inside a real kernel task, so they exercise the task API as well.</li>
+<li><code>mkprog</code> - <code>tools/test_mkprog.py</code>, the layout of the image that
+  <code>tools/mkprog.sh</code> writes; it builds tiny objects with the compiler of the
+  host and skips itself when Python is not found.</li>
+<li><code>null_probe</code> - the kernel and every portable component linked against the
+  null port. A symbol that portable code takes from a machine by accident is a
+  link error here, on a laptop.</li>
+</ul>
+<p>The numeric corpus is <code>tests/corpus/vectors.txt</code>: 512 numbers with the
+boundary values (0, 1, 255, 65535, 2147483647 and so on) mixed in. A new
+numeric behaviour reuses it rather than inventing a second list.</p>
+<p><code>make test-asan</code> and <code>make test-tsan</code> are the same tests in <code>build-asan/</code> and
+<code>build-tsan/</code>. The board has no debugger, so the host is the place where a
+wrong pointer or undefined behaviour has to be caught; TSan is the only thing
+that sees a race, because the host port cannot reproduce preemption.</p>
+<p><code>make test-minimal</code> is the second configuration of the host build (ADR 0010):
+<code>KERNEL_PSRAM</code>, <code>KERNEL_EXEC</code>, the network components and the second
+filesystem are off, in <code>build-minimal/</code>. It proves that the sources still
+build without them and runs the tests that do not need the feature - the
+cases of <code>exec</code> and of the network are guarded in the source, so the report
+still says how many checks the small build has.</p>
+<h2 id="make-smoke-the-simulator"><code>make smoke</code>: the simulator<a class="headerlink" href="#make-smoke-the-simulator" title="Permanent link">&para;</a></h2>
+<p><code>make smoke</code> runs <code>tools/sim_smoke.py</code>, which boots
+<code>build-host/ports/port_host/microos_sim</code> with a volume and a store of its own,
+types a list of commands and checks the transcript: the subsystems, MicroFS,
+<code>/proc</code>, <code>/dev</code>, the configuration of <code>/etc</code>, the shell. It is the cheapest
+end-to-end test of the portable system, and it takes a couple of seconds.</p>
+<p><code>make sim</code> runs the same binary by hand, with <code>/tmp/microos-sim.img</code> and
+<code>/tmp/microos-kv</code> by default. <code>python3 tools/sim_smoke.py --verbose</code> shows
+every step.</p>
+<h2 id="the-x86-64-smoke-tests">The x86-64 smoke tests<a class="headerlink" href="#the-x86-64-smoke-tests" title="Permanent link">&para;</a></h2>
+<p><code>make x86-smoke</code> boots the kernel on a real (emulated) processor: QEMU loads
+the loader of the port, the loader turns long mode on and copies the kernel,
+and the kernel prints its banner on the serial port. Then the script types
+commands into COM1 and checks the answers: the boot, the filesystem, the
+program of <code>/bin</code> (the <code>execve</code> path, the arguments, the status), the fork with
+copy on write, the fault of <code>/bin/crash</code>, and the <code>EFAULT</code> of <code>/bin/badptr</code>.
+The run of this tree passes 48 checks and ends with <code>RESULT: PASS</code>.</p>
+<p><code>make x86-vga-smoke</code> looks at the other console: it boots with <code>-display none</code>,
+reads the text memory at <code>0xB8000</code> through the monitor of QEMU, takes a
+screenshot and types with <code>sendkey</code>, so it proves the screen and IRQ1 without a
+display server. It is a target of its own and <strong>not</strong> a part of <code>make ci</code>: the
+monitor of QEMU is a tool a build farm does not have to have.</p>
+<p><code>make x86-disk-smoke</code> gives the machine an 8 MB image on the primary IDE
+channel, writes a file in one boot and reads it in the next. It is the test of
+the ATA driver, of the MBR parser and of MicroFS on a real medium, and it is
+also not a part of <code>make ci</code>.</p>
+<p><code>make x86-net-smoke</code> builds the image with <code>-DMICRO_OS_X86_NET=ON</code>, gives QEMU
+a virtio-net card on its user-mode network and a forward of a port of the host
+to the guest, and checks the whole contract of the port over the wire: the
+device and its MAC, <code>ping</code> of the gateway, a UDP exchange with an echo server
+of the host, an HTTP GET of the client of <code>components/net</code>, the page of the
+state served by the guest through <code>hostfwd</code>, and a name the resolver answers
+twice (the second from the cache). Like the other two it is not a part of
+<code>make ci</code>: it opens a port on the loopback and needs the user-mode network.</p>
+<h2 id="make-integrity-the-boundary-and-the-hygiene"><code>make integrity</code>: the boundary and the hygiene<a class="headerlink" href="#make-integrity-the-boundary-and-the-hygiene" title="Permanent link">&para;</a></h2>
+<p><code>tools/integrity_check.py</code> checks what a compiler cannot:</p>
+<ul>
+<li>the <strong>layers</strong>: the kernel includes only the kernel, a portable component no
+  platform header and no <code>k_port_*</code> call, and a port implements the whole
+  contract of <code>kernel/port/*.h</code>;</li>
+<li>the <strong>bundle</strong> in <code>dist/</code>, when there is one: the sums and the images;</li>
+<li>the <strong>partition table</strong>: <code>partitions.csv</code> against the flash size and the
+  build;</li>
+<li>the <strong>budget</strong> of the image: the firmware fits its 2 MB slot;</li>
+<li>the <strong>features</strong> (ADR 0010): a flag that is off leaves no symbol in the map
+  of the ESP-IDF build and no library in the host build;</li>
+<li><strong>git</strong>: the objects, through <code>git fsck --strict</code>;</li>
+<li>the <strong>hygiene</strong> of the sources: UTF-8, LF, no trailing whitespace, no tabs,
+  100 columns in C, and <code>clang-format</code> when it is installed.</li>
+</ul>
+<p><code>--skip-format --skip-git</code> and <code>--expect-version &lt;version&gt;</code> are the useful
+options when a release is prepared; <code>--verbose</code> names every check.</p>
+<h2 id="make-ci-the-local-half"><code>make ci</code>: the local half<a class="headerlink" href="#make-ci-the-local-half" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>build, test, test-asan, test-tsan, smoke, [x86-smoke], integrity
+</code></pre></div>
+
+<p><code>x86-smoke</code> joins the list when <code>qemu-system-x86_64</code> is on <code>PATH</code> and is
+skipped with a message when it is not: a missing optional machine must not fail
+a run. <code>make ci</code> does <strong>not</strong> build the firmware of the board (that needs
+ESP-IDF) and does not run the VGA or disk smoke tests or the device test.</p>
+<p>The cloud repeats the list on every push to <code>mainline</code> and <code>release_candidate</code>
+and adds what a build farm has: valgrind over the tests, the firmware build,
+the bundle, and <code>x86-smoke</code>. The local half and the cloud half are close but
+not identical; <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v0.7.0-rc1/docs/debts.md"><code>docs/debts.md</code></a> keeps the difference as a debt.</p>
+<h2 id="the-device-test">The device test<a class="headerlink" href="#the-device-test" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>tools/device-test.sh<span class="w">                  </span><span class="c1"># auto-detected port</span>
+tools/device-test.sh<span class="w"> </span>/dev/ttyACM0
+<span class="nv">CONSOLE_SECONDS</span><span class="o">=</span><span class="m">60</span><span class="w"> </span>tools/device-test.sh<span class="w"> </span>/dev/ttyACM0
+</code></pre></div>
+
+<p>The script finds ESP-IDF (<code>$IDF_PATH</code>, <code>../esp-idf</code>, <code>~/esp/esp-idf</code>), builds,
+flashes, reads the console for <code>CONSOLE_SECONDS</code> (30 by default) and prints
+<code>RESULT: PASS</code> when the self test, the hardware doctor and the shell came up.
+It is outside CI: no runner has the board. A release is gated on it by hand.</p>
+<p><code>tools/console.py</code> reads the console without flashing; <code>tools/stream_console.py</code>
+is the interactive version. Both need <code>pyserial</code>, which the ESP-IDF Python
+environment already has.</p>
+<h2 id="adding-a-test">Adding a test<a class="headerlink" href="#adding-a-test" title="Permanent link">&para;</a></h2>
+<p>A new case needs four touches (the same list as in
+<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v0.7.0-rc1/AGENTS.md"><code>AGENTS.md</code></a>):</p>
+<ol>
+<li><code>tests/cases/test_&lt;thing&gt;.c</code>;</li>
+<li>the <code>void test_&lt;thing&gt;(void);</code> declaration in <code>tests/include/tests/tests.h</code>;</li>
+<li>the call in <code>run_tests()</code> in <code>tests/src/main.c</code>;</li>
+<li>the file in <code>add_executable(microos_tests ...)</code> in <code>tests/CMakeLists.txt</code>.</li>
+</ol>
+<p>Kernel behaviour without a test is unfinished work. A test that needs real
+hardware is a sign that platform and portable code got mixed: the kernel tests
+run on the host, and the board is checked by the device test and by the smoke
+tests of its port.</p>
+<p>The fuzz of the ABI and of <code>MOX1</code> has a deterministic seed
+(<code>tests/cases/test_fuzz.c</code>); the records of MicroFS have none yet, which is an
+open row of the register.</p>
+<p><a href="https://github.com/TurboSosiska304/Micro_OS/tree/v0.7.0-rc1/docs">Back to the wiki index</a></p>
+    <nav class="pager" aria-label="Pages">
+      <a class="prev" href="../kernel-abi/">← Kernel and ABI</a>
+      <a class="next" href="../troubleshooting/">Troubleshooting →</a>
+    </nav>
+  </main>
+</div>
+
+<footer>
+  <div class="footer-inner">
+    <div>Micro OS wiki · version 0.7.0-rc1</div>
+    <div class="footer-links">
+      <a href="/Micro_OS/versions/">All versions</a>
+      <a href="https://turbososiska304.github.io/microos-site/" rel="noopener">Project site</a>
+      <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v0.7.0-rc1/docs/wiki/testing.md"
+         rel="noopener">Edit on GitHub</a>
+      <span>Built with MkDocs</span>
+    </div>
+  </div>
+</footer>
+
+<script>var base_url = "..";</script>
+<script src="../search/main.js"></script>
+</body>
+</html>
