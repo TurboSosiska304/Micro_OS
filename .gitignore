@@ -37,3 +37,7 @@ site/
 # --- Runtime artifacts ---
 core*.csv
 core*.txt
+
+# Python caches of the tools
+__pycache__/
+*.pyc
