@@ -88,8 +88,10 @@ discipline. The x86-64 port has an MMU and uses it: a program gets page tables
 of its own, a 16 MiB window at 32 MiB, a guard page under its stack and ring
 3, and the kernel is supervisor-only and out of its reach. A fault of a
 program is reported and the program is taken down; the shell that ran it is
-alive. The address space of a *task* and copy-on-write `fork()` are the next
-step (ADR 0007).
+alive. A program is a task of the scheduler with a CR3 of its own, and `fork()`
+clones its page tables and copies a page on the first write (ADR 0007). The
+kernel is not in a higher half yet and the pointers of a program are still
+read by the kernel without `copy_from_user`; that is the next step.
 
 That is a property of the current port, not the shape of the kernel: everything
 the kernel concedes to a board without an MMU sits behind one compile time flag,
@@ -231,8 +233,9 @@ physical address contract.
   SRAM (which is scarce — that is the constraint).
 * Virtual memory is emulated on the board: each task has its own "address
   space", but without an MMU a switch means switching the stack pointer and the
-  data segment base. The x86-64 port has real page tables for the program it
-  runs (ADR 0007); a task with an address space of its own waits for `fork()`.
+  data segment base. The x86-64 port gives a program real page tables and a
+  `fork()` that copies them with copy-on-write (ADR 0007); the kernel of that
+  port is still identity mapped and not in a higher half.
 
 ## 7. Drivers (phase 4)
 
