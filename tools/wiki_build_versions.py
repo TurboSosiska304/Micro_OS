@@ -106,6 +106,24 @@ def git(*arguments: str, cwd: Path | None = None) -> str:
     return result.stdout.strip()
 
 
+def resolve_ref(name: str) -> str:
+    """A branch of the kernel, whether the clone has it as a local ref or not.
+
+    A CI checkout of `wiki` has its own branch and the tags; `mainline` is
+    only there as `origin/mainline`, and a local name would not resolve.
+    """
+    for candidate in (name, f"origin/{name}", f"refs/remotes/origin/{name}"):
+        result = subprocess.run(
+            ["git", "-C", str(ROOT), "rev-parse", "--verify", "--quiet", candidate],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return candidate
+    die(f"the branch {name!r} is not in the clone")
+    raise AssertionError
+
+
 # --- the versions of the tags ------------------------------------------------
 
 
@@ -161,15 +179,16 @@ def collect_versions(dev_ref: str = DEV_REF_DEFAULT) -> list:
             }
         )
 
+    resolved = resolve_ref(dev_ref)
     versions.append(
         {
             "version": DEV_VERSION,
             "tag": None,
             "kind": "dev",
             "has_wiki": True,
-            "docs_ref": dev_ref,
+            "docs_ref": resolved,
             "ref": dev_ref,
-            "commit": git("rev-parse", "--short", dev_ref),
+            "commit": git("rev-parse", "--short", resolved),
         }
     )
     return versions
