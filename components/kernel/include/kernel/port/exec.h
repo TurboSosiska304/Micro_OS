@@ -57,6 +57,26 @@ bool k_port_exec_active(void);
 void k_port_exec_exit(int code);
 
 /*
+ * Is the range `ptr`..`ptr + size` memory the kernel may touch on behalf of
+ * the caller? This is the seam of `copy_from_user`: the kernel must not
+ * trust a pointer a program hands it, because reading an unmapped address in
+ * ring 0 stops the machine instead of failing the call.
+ *
+ * A port whose programs share the memory of the kernel (the board, the host,
+ * the null port) answers true: every pointer it is given is already the
+ * kernel's own. A port with an address space per program checks the range
+ * against the window that program may use, page by page, and answers false
+ * for the null page, the guard page of the stack, the rest of the window that
+ * was never mapped, and a range that runs past its end. A kernel task answers
+ * true even on such a port: only a program has an address space to check.
+ *
+ * The call does not copy and does not fault; the caller copies the bytes with
+ * its own `memcpy` after the range is known to be there. `size` of zero names
+ * no bytes and is always true.
+ */
+bool k_port_exec_contains(const void *ptr, k_size_t size);
+
+/*
  * The substance of fork() on a machine with an MMU: the kernel has made the
  * record of the child (`struct task`, a pid, the parent), and the port gives
  * it the context of the caller - the address space, the registers and the

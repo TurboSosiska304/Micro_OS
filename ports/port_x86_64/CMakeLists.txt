@@ -167,6 +167,7 @@ endfunction()
 add_program_image(hello hello_main)
 add_program_image(crash crash_main)
 add_program_image(fork fork_main)
+add_program_image(badptr badptr_main)
 
 add_executable(microos64
     ${KERNEL_SOURCES}
@@ -191,6 +192,7 @@ add_executable(microos64
     "${hello_OBJECT}"
     "${crash_OBJECT}"
     "${fork_OBJECT}"
+    "${badptr_OBJECT}"
 )
 
 target_include_directories(microos64 PRIVATE

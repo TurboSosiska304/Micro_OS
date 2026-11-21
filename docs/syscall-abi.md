@@ -147,13 +147,21 @@ in the window is `ENAMETOOLONG` (`KERR_NAMETOOLONG`, the number 36 of POSIX).
 touches more than `KSYS_MAX_IO` (65536 bytes) in one exchange. The number is
 far above any buffer of the system and well below what could not be a real
 transfer on a machine with ~100 KB of RAM. NULL with a length is `EINVAL`, a
-length above the limit is `E2BIG`. A length inside the limit is still not a
-memory range: the kernel does not walk the page tables of the caller, so on
-the board (no MMU) and on the x86-64 port (an MMU, but no copy from the user
-yet) an address inside the limit is read as it is. A valid pointer into the
-window of a program works; a pointer that is not mapped is a fault of the
-kernel and not an error of the call, which is written down as the next debt
-of the edge (ADR 0007).
+length above the limit is `E2BIG`.
+
+**The memory of the caller** is checked as well, through the port
+(`k_port_exec_contains`, contract 1.6). On the board, the simulator and the
+null port a program shares the kernel's memory and every pointer is the
+kernel's own; on the x86-64 port the kernel walks the page tables of the
+program that made the call and refuses a range that is not there with
+`EFAULT` (`KERR_FAULT`, POSIX 14). The null page, the guard page under the
+stack, the part of the window that was never mapped and a range that runs past
+`0x03000000` are all "not there". The kernel then copies the bytes with
+`copy_from_user()`/`copy_to_user()`; a path is first checked byte by byte and
+copied into a buffer of the kernel, so the VFS and the filesystems under it
+never see a pointer of the program. A pointer that is not mapped is therefore
+an error of the call and not a page fault of ring 0 that stops the machine
+(ADR 0007).
 
 **The flags of an `open`** (`open_flags_check`) are one of the three access
 modes - both bits at once is not a mode - and no bit outside
@@ -168,7 +176,10 @@ child"; the flags of `waitpid` are one bit. All of them are `EINVAL`.
 
 **`stat` and `getcwd`** need the place for the answer: NULL there is a
 mistake of the caller, not "the answer is not wanted", and it is `EINVAL`
-instead of a question to a filesystem that has nowhere to put its answer.
+instead of a question to a filesystem that has nowhere to put its answer. A
+place that is not memory of the caller is `EFAULT`; the answer is copied
+there through `copy_to_user()`, and the same holds for the status of
+`waitpid`.
 
 **`readdir`** takes whole entries: a count that is not a multiple of
 `struct vfs_dirent` would let the last entry land past the memory of the
@@ -255,14 +266,17 @@ has finished - and the status it ended with (the low byte of the status, 0 to
 255) is the answer of the run, not of the call (see "The entry into the
 kernel").
 
-The vector of the arguments is the memory of the program. Without an MMU the
-kernel cannot check an array of pointers, but it does not hand the port the
-pointers of the caller either: at most eight words and 512 bytes of their
-strings are copied into the frame of the call, and on a machine with paging
-the port copies them again into the memory of the program. A line of the
-shell is `exec /bin/hello one two`: three words, the name of the program
-first, as in Linux. The x86-64 port also places a zero at the top of the
-stack, so a program that returns instead of exiting faults on address zero.
+The vector of the arguments is the memory of the program. It is copied word
+by word through `copy_from_user()`; on a machine with paging a word or a byte
+that is not the memory of the caller is `EFAULT`, and a vector that is too
+long or a string that does not end in the frame is `E2BIG`. At most eight
+words and 512 bytes of their strings are copied into the frame of the call,
+and on a machine with paging the port copies them again into the memory of
+the program. The kernel therefore hands the port a vector it built, not the
+pointers of the caller. A line of the shell is `exec /bin/hello one two`:
+three words, the name of the program first, as in Linux. The x86-64 port also
+places a zero at the top of the stack, so a program that returns instead of
+exiting faults on address zero.
 
 ## The processes
 
@@ -355,7 +369,12 @@ program breaks it into pieces.
   come through `readdir` one call after another, the end of it is an empty
   answer, and a descriptor of a file is `ENOTDIR` to the same call.
 * **The edge.** A path that does not end in the window is `ENAMETOOLONG`, a
-  buffer above the limit is `E2BIG`, and a wait without a child is `ECHILD`.
+  buffer above the limit is `E2BIG`, a pointer that is not memory of the
+  caller is `EFAULT`, and a wait without a child is `ECHILD`. The last one is
+  covered on the machine: `/bin/badptr` hands `write`, `stat` and `read` an
+  address outside the window, a range that crosses its end and the guard page
+  of its stack, reads `14` from each and writes a line with a valid pointer
+  afterwards (`make x86-smoke`).
 * **The program.** A machine without a window of programs answers `ENOSYS` for
   an image of the format of the system, and every refusal before that answer -
   `ENOENT`, `EISDIR`, `EPERM`, `EINVAL` - is the answer of its own reason. A

@@ -50,6 +50,26 @@ static inline long prog_write(int fd, const void *buf, unsigned long count)
     return prog_call(KSYS_WRITE, fd, (long)(unsigned long)buf, (long)count, 0, 0, 0);
 }
 
+static inline long prog_open(const char *path, long flags)
+{
+    return prog_call(KSYS_OPEN, (long)(unsigned long)path, flags, 0, 0, 0, 0);
+}
+
+static inline long prog_close(int fd)
+{
+    return prog_call(KSYS_CLOSE, fd, 0, 0, 0, 0, 0);
+}
+
+static inline long prog_read(int fd, void *buf, unsigned long count)
+{
+    return prog_call(KSYS_READ, fd, (long)(unsigned long)buf, (long)count, 0, 0, 0);
+}
+
+static inline long prog_stat(const char *path, void *buf)
+{
+    return prog_call(KSYS_STAT, (long)(unsigned long)path, (long)(unsigned long)buf, 0, 0, 0, 0);
+}
+
 static inline long prog_getpid(void)
 {
     return prog_call(KSYS_GETPID, 0, 0, 0, 0, 0, 0);

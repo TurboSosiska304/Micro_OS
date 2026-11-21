@@ -60,6 +60,10 @@ COMMANDS = [
     # The same again, after the page tables and the frames of the first run
     # have been released: a leak of a space would show here as a refusal.
     "exec /bin/fork",
+    # The edge of the system call: the program hands write, stat and read
+    # addresses that are not its memory, and every call has to answer EFAULT
+    # (14) while the machine stays alive.
+    "exec /bin/badptr",
     # The program that faults: it writes to address zero in ring 3, and the
     # shell has to answer the command after it for the machine to be alive.
     "exec /bin/crash",
@@ -75,7 +79,7 @@ PROMPT = "microos> "
 # console of COM1, the contract of the port and the boot of the kernel.
 EXPECTED = [
     "board: qemu_x86_64",
-    "port: x86_64, contract 1.5",
+    "port: x86_64, contract 1.6",
     "[ ok ] sched",
     "subsystem(s) ready",
     "the kernel is up",
@@ -326,6 +330,26 @@ def check(output: str) -> list:
         and "PROGRAM: waited, status 7" in fork
         and "the program exited with 0" in fork,
     )
+
+    # --- the edge of the system call: a bad pointer is EFAULT, not a fault
+    # The numbers below are the answer of the call: 14 is EFAULT (POSIX 14,
+    # the minus of the kernel dropped when the program prints it). The three
+    # addresses are a window that is not there, the last bytes of the window
+    # with a request that crosses its end, and the guard page under the stack.
+    edge = answer("exec /bin/badptr")
+    expect("the edge refuses a far pointer", "PROGRAM: write far 14" in edge)
+    expect("the edge refuses a range past the window", "PROGRAM: write edge 14" in edge)
+    expect("the edge refuses the guard page", "PROGRAM: write guard 14" in edge)
+    expect("the edge refuses the buffer of stat", "PROGRAM: stat far 14" in edge)
+    expect("the edge refuses the buffer of read", "PROGRAM: read far 14" in edge)
+    # The same call with a valid pointer still works: the answer is about the
+    # address, not about a call that refuses everything.
+    expect(
+        "the edge keeps the valid pointer",
+        "PROGRAM: the good pointer still writes" in edge,
+    )
+    expect("the edge program returns its status", "the program exited with 0" in edge)
+    expect("the shell sees the edge program finish", "the program has finished" in edge)
 
     # --- the fault of a program is not the fault of the machine
     crash = answer("exec /bin/crash")

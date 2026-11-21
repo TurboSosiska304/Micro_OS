@@ -302,6 +302,58 @@ void *k_port_exec_base(void)
     return (void *)(uintptr_t)PORT_EXEC_BASE;
 }
 
+/*
+ * The edge of the system call on a machine with page tables. The syscall stub
+ * runs in ring 0 but under the CR3 of the program that called it, so a user
+ * address of that program is readable by the kernel - once every page of the
+ * range is known to be there. The walk below answers that question without a
+ * fault: an address outside the window, the null page, the guard page of the
+ * stack and the rest of the window that was never mapped all name no page.
+ *
+ * A kernel task has no such window: its pointers are the memory of the kernel
+ * and are accepted as they are, which is the same answer as the host port.
+ */
+bool k_port_exec_contains(const void *ptr, k_size_t size)
+{
+    k_u64_t space = port_x86_64_task_space();
+    k_u64_t start;
+    k_u64_t end;
+    k_u64_t at;
+
+    if (space == 0) {
+        return true;
+    }
+
+    if (size == 0) {
+        return true;
+    }
+
+    start = (k_u64_t)(uintptr_t)ptr;
+    end = start + (k_u64_t)size;
+
+    /* A range that wraps the address space is not a range. */
+    if (end < start) {
+        return false;
+    }
+
+    if (start < PORT_EXEC_BASE || end > PORT_EXEC_LIMIT) {
+        return false;
+    }
+
+    /*
+     * The frames of the window are not contiguous, but the page tables are
+     * the only thing that can say whether a page is part of the program: a
+     * present PTE is the answer, and it covers copy-on-write pages too.
+     */
+    for (at = start & ~(k_u64_t)(PAGE_SIZE - 1u); at < end; at += PAGE_SIZE) {
+        if (port_x86_64_paging_phys(space, at) == NULL) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 bool k_port_exec_active(void)
 {
     /* A program is the task that runs: its exit is the exit of the task. */

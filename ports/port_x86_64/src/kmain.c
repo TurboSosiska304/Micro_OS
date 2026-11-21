@@ -95,11 +95,14 @@ extern const k_u8_t _binary_crash_mox_start[];
 extern const k_u8_t _binary_crash_mox_end[];
 extern const k_u8_t _binary_fork_mox_start[];
 extern const k_u8_t _binary_fork_mox_end[];
+extern const k_u8_t _binary_badptr_mox_start[];
+extern const k_u8_t _binary_badptr_mox_end[];
 
 #define PROGRAM_DIR "/bin"
 #define PROGRAM_PATH "/bin/hello"
 #define PROGRAM_CRASH_PATH "/bin/crash"
 #define PROGRAM_FORK_PATH "/bin/fork"
+#define PROGRAM_BADPTR_PATH "/bin/badptr"
 
 /*
  * A program is a file somebody may run, so it is created with the mode of a
@@ -233,6 +236,17 @@ static void filesystem_bring_up(void)
      */
     if (!program_install(PROGRAM_FORK_PATH, _binary_fork_mox_start,
                          (k_size_t)(_binary_fork_mox_end - _binary_fork_mox_start))) {
+        return;
+    }
+
+    /*
+     * The fourth program is the edge of the system call: it hands write,
+     * stat and read addresses that are not its memory, and the machine has
+     * to answer EFAULT and stay alive. The addresses and the lines are in
+     * programs/badptr.c; the smoke test reads them.
+     */
+    if (!program_install(PROGRAM_BADPTR_PATH, _binary_badptr_mox_start,
+                         (k_size_t)(_binary_badptr_mox_end - _binary_badptr_mox_start))) {
         return;
     }
 }

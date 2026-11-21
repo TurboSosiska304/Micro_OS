@@ -112,8 +112,13 @@ written when the project was an operating system for one board; the numbers
       own CR3 and kernel stack, `fork()` copies the tables, both copies are
       read-only until the first write, and `k_port_fork_copy()` is the seam
       of the contract (K4, ADR 0005 and ADR 0007)
-* [ ] The kernel in a higher half, and a `copy_from_user` at the edge of the
-      system call
+* [x] `copy_from_user`/`copy_to_user` at the edge of the system call: the
+      port answers whether a range is memory of the caller, a path and `argv`
+      are copied into buffers of the kernel, and a bad pointer is `EFAULT`
+      instead of a fault of ring 0 (contract 1.6, ADR 0007; `/bin/badptr` in
+      `make x86-smoke`)
+* [ ] The kernel in a higher half: the plan of the loader, the linker script
+      and `page_phys()` is written down in ADR 0007, not taken
 * [ ] A port for a real ARM with an MMU: the same contract, a second `arch/`
 * [ ] `KERNEL_NOMMU` becomes 0 and the concessions become features
 

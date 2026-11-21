@@ -38,6 +38,19 @@ void k_port_exec_exit(int code)
 }
 
 /*
+ * The simulator has no address space per program: a program is a task of the
+ * kernel and every pointer of a call is memory the kernel already owns. The
+ * range check has nothing to check here, and answering "yes" keeps the host
+ * build the reference for the calls that are not about translation.
+ */
+bool k_port_exec_contains(const void *ptr, k_size_t size)
+{
+    K_UNUSED(ptr);
+    K_UNUSED(size);
+    return true;
+}
+
+/*
  * A fork of a program: there is no address space per task here, so the child
  * is the placeholder of the kernel - a task that re-enters the program of its
  * parent over the same memory.

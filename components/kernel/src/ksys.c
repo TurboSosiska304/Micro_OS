@@ -25,23 +25,74 @@ static k_u32_t g_registered;
 /* --- the checks at the edge --- */
 
 /*
+ * Copy bytes to and from the memory of the caller. On a machine with an
+ * address space per program the port walks the page tables of the program
+ * and answers whether the whole range is there; on the board, the simulator
+ * and the null port the pointer is memory of the kernel already and the copy
+ * is an ordinary one. The check is the reason the helper exists: a program
+ * that hands the kernel an address of no page has to get EFAULT from the
+ * call, not a page fault of ring 0 that takes the machine down with it.
+ */
+static int copy_from_user(void *dst, ksys_arg_t src, k_size_t size)
+{
+    if (size == 0) {
+        return 0;
+    }
+
+    if (!k_port_exec_contains((const void *)(uintptr_t)src, size)) {
+        return KERR_FAULT;
+    }
+
+    memcpy(dst, (const void *)(uintptr_t)src, size);
+    return 0;
+}
+
+static int copy_to_user(ksys_arg_t dst, const void *src, k_size_t size)
+{
+    if (size == 0) {
+        return 0;
+    }
+
+    if (!k_port_exec_contains((const void *)(uintptr_t)dst, size)) {
+        return KERR_FAULT;
+    }
+
+    memcpy((void *)(uintptr_t)dst, src, size);
+    return 0;
+}
+
+/*
  * A path of a program is not trusted. The kernel must not walk past the end
  * of the memory of the caller looking for the terminator, so the search is
  * limited to the window the VFS keeps a path in: a path that does not end
  * inside it is refused before any filesystem sees it. Every filesystem of
  * the tree is mounted below the root, so a path that does not begin there
  * cannot name an object at all, and NULL or the empty string is not a path.
+ *
+ * Every byte is checked before it is read. On a machine with page tables a
+ * byte that is not the memory of the program is EFAULT, which is an answer of
+ * the call and not a fault that stops the machine; on the other ports the
+ * check accepts the pointer as the kernel's own.
  */
 static int path_check(const char *path)
 {
+    ksys_arg_t address = (ksys_arg_t)(uintptr_t)path;
     k_size_t i;
 
-    if (path == NULL || path[0] != '/') {
+    if (path == NULL) {
         return KERR_INVAL;
     }
 
-    for (i = 1; i <= KSYS_PATH_MAX; i++) {
-        if (path[i] == '\0') {
+    for (i = 0; i <= KSYS_PATH_MAX; i++) {
+        if (!k_port_exec_contains((const void *)(uintptr_t)(address + i), 1)) {
+            return KERR_FAULT;
+        }
+
+        if (i == 0) {
+            if (path[0] != '/') {
+                return KERR_INVAL;
+            }
+        } else if (path[i] == '\0') {
             return 0;
         }
     }
@@ -50,9 +101,29 @@ static int path_check(const char *path)
 }
 
 /*
- * The buffer of a call. NULL is only meaningful with a zero length, and a
- * length above KSYS_MAX_IO cannot be a buffer of this system: the call is
- * refused before the kernel touches a byte of it.
+ * Copy a path of the caller into the kernel's own window. The VFS and every
+ * filesystem under it then work with memory of the kernel, not with a pointer
+ * the caller could still change; path_check has already found the terminator
+ * inside the window, so the length is known and the whole string is memory of
+ * the caller. The buffer of the caller is KSYS_PATH_MAX characters plus the
+ * terminator, which is the buffer the VFS keeps.
+ */
+static int path_copy(char *out, ksys_arg_t path)
+{
+    const char *name = (const char *)(uintptr_t)path;
+    int rc = path_check(name);
+
+    if (rc != 0) {
+        return rc;
+    }
+
+    return copy_from_user(out, path, strlen(name) + 1);
+}
+
+/*
+ * The buffer of a call. NULL is only meaningful with a zero length, a length
+ * above KSYS_MAX_IO cannot be a buffer of this system, and the range has to
+ * be memory of the caller: each is refused before the kernel touches a byte.
  */
 static int buffer_check(ksys_arg_t buf, ksys_arg_t count)
 {
@@ -62,6 +133,10 @@ static int buffer_check(ksys_arg_t buf, ksys_arg_t count)
 
     if (buf == 0 && count != 0) {
         return KERR_INVAL;
+    }
+
+    if (count != 0 && !k_port_exec_contains((const void *)(uintptr_t)buf, count)) {
+        return KERR_FAULT;
     }
 
     return 0;
@@ -326,8 +401,8 @@ static k_ssize_t sys_write(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys
 static k_ssize_t sys_open(ksys_arg_t path, ksys_arg_t flags, ksys_arg_t a2, ksys_arg_t a3,
                           ksys_arg_t a4, ksys_arg_t a5)
 {
+    char name[KSYS_PATH_MAX + 1];
     struct kfile *file;
-    const char *name = (const char *)(uintptr_t)path;
     int fd;
     int rc;
 
@@ -336,7 +411,7 @@ static k_ssize_t sys_open(ksys_arg_t path, ksys_arg_t flags, ksys_arg_t a2, ksys
     K_UNUSED(a4);
     K_UNUSED(a5);
 
-    rc = path_check(name);
+    rc = path_copy(name, path);
     if (rc != 0) {
         return rc;
     }
@@ -408,6 +483,7 @@ static k_ssize_t sys_close(ksys_arg_t fd, ksys_arg_t a1, ksys_arg_t a2, ksys_arg
 static k_ssize_t sys_stat(ksys_arg_t path, ksys_arg_t buf, ksys_arg_t a2, ksys_arg_t a3,
                           ksys_arg_t a4, ksys_arg_t a5)
 {
+    char name[KSYS_PATH_MAX + 1];
     struct vfs_stat stat;
     int rc;
 
@@ -416,7 +492,7 @@ static k_ssize_t sys_stat(ksys_arg_t path, ksys_arg_t buf, ksys_arg_t a2, ksys_a
     K_UNUSED(a4);
     K_UNUSED(a5);
 
-    rc = path_check((const char *)(uintptr_t)path);
+    rc = path_copy(name, path);
     if (rc != 0) {
         return rc;
     }
@@ -430,7 +506,16 @@ static k_ssize_t sys_stat(ksys_arg_t path, ksys_arg_t buf, ksys_arg_t a2, ksys_a
         return KERR_INVAL;
     }
 
-    rc = vfs_stat((const char *)(uintptr_t)path, &stat);
+    /*
+     * The answer goes to the memory of the caller through the copy at the
+     * edge: an address that is not part of the program is EFAULT and not a
+     * write of ring 0 into a page that is not there.
+     */
+    if (!k_port_exec_contains((const void *)(uintptr_t)buf, sizeof(stat))) {
+        return KERR_FAULT;
+    }
+
+    rc = vfs_stat(name, &stat);
     if (rc != 0) {
         return rc;
     }
@@ -558,6 +643,16 @@ static k_ssize_t sys_readdir(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ks
         return KERR_INVAL;
     }
 
+    /*
+     * The array is written in place through the descriptor, so the whole
+     * range is checked before the directory is asked of a byte of it: a
+     * program that names the guard page or a page it never mapped gets
+     * EFAULT, not a write of ring 0 into no page.
+     */
+    if (!k_port_exec_contains(out, count)) {
+        return KERR_FAULT;
+    }
+
     max = count / sizeof(struct vfs_dirent);
     if (max == 0) {
         return 0;
@@ -620,11 +715,16 @@ static k_ssize_t sys_getcwd(ksys_arg_t buf, ksys_arg_t size, ksys_arg_t a2, ksys
 
     {
         k_size_t len = strlen(cwd) + 1;
+        int rc;
 
         if (len > size) {
             return KERR_TOOBIG;
         }
-        memcpy((void *)(uintptr_t)buf, cwd, len);
+
+        rc = copy_to_user(buf, cwd, len);
+        if (rc != 0) {
+            return rc;
+        }
     }
 
     return (k_ssize_t)strlen(cwd);
@@ -864,6 +964,15 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
         return KERR_INVAL;
     }
 
+    /*
+     * The place for the status is checked before the wait starts: a bad
+     * pointer is EFAULT now, not after five seconds of waiting for a child
+     * whose status cannot be delivered.
+     */
+    if (status != 0 && !k_port_exec_contains((const void *)(uintptr_t)status, sizeof(int))) {
+        return KERR_FAULT;
+    }
+
     /* Look for a child that has finished. */
     for (waited = 0; waited < limit; waited++) {
         bool has_child = false;
@@ -1092,32 +1201,67 @@ static k_ssize_t sys_chown(ksys_arg_t path, ksys_arg_t owner, ksys_arg_t a2, ksy
 #define KSYS_ARGV_BYTES 512u
 
 /*
- * Copy the vector `from` and the strings it points at into `args` and
- * `words`, and terminate the vector. Returns 0, or E2BIG for a vector or a
- * string that does not fit. A NULL vector, or one whose first word is NULL,
- * is a program without arguments and not an error.
+ * Copy the vector at the address `from` and the strings it points at into
+ * `args` and `words`, and terminate the vector. Returns 0, or E2BIG for a
+ * vector or a string that does not fit, or EFAULT for a word of the vector or
+ * a byte of a string that is not memory of the caller. A zero vector, or one
+ * whose first word is zero, is a program without arguments and not an error.
  *
- * The strings of the caller are read one byte at a time and never past the
- * room left: a pointer that names memory the machine does not have is a
- * fault of the caller (no MMU forgives nothing), but a string that never ends
- * is stopped at the edge of the buffer instead of walking through memory.
+ * Every read goes through copy_from_user: the vector and the strings are the
+ * memory of the caller, and on a machine with page tables an address that is
+ * not mapped there is EFAULT instead of a fault of ring 0. The strings are
+ * read one byte at a time and never past the room left, so a string that
+ * never ends is stopped at the edge of the buffer instead of walking through
+ * memory.
  */
-static int argv_copy(const char *const *from, char *args[], char *words, k_size_t words_size)
+static int argv_copy(ksys_arg_t from, char *args[], char *words, k_size_t words_size)
 {
     k_size_t used = 0;
     k_size_t count = 0;
 
-    while (from != NULL && from[count] != NULL) {
-        const char *word = from[count];
+    while (from != 0) {
+        ksys_arg_t word = 0;
         k_size_t room;
         k_size_t length = 0;
+        int rc;
+
+        /* A vector whose end would wrap the address space has no words. */
+        if (from > (ksys_arg_t)-1 - count * (ksys_arg_t)sizeof(ksys_arg_t)) {
+            return KERR_FAULT;
+        }
+
+        rc = copy_from_user(&word, from + count * (ksys_arg_t)sizeof(ksys_arg_t), sizeof(word));
+        if (rc != 0) {
+            return rc;
+        }
+
+        if (word == 0) {
+            break;
+        }
 
         if (count >= KSYS_ARGV_MAX) {
             return KERR_TOOBIG;
         }
 
         room = words_size - used;
-        while (length < room && word[length] != '\0') {
+        while (length < room) {
+            char byte;
+
+            /* The end of the address space is not the end of a string. */
+            if (word > (ksys_arg_t)-1 - length) {
+                return KERR_FAULT;
+            }
+
+            rc = copy_from_user(&byte, word + length, 1);
+            if (rc != 0) {
+                return rc;
+            }
+
+            if (byte == '\0') {
+                break;
+            }
+
+            words[used + length] = byte;
             length++;
         }
 
@@ -1125,7 +1269,7 @@ static int argv_copy(const char *const *from, char *args[], char *words, k_size_
             return KERR_TOOBIG;
         }
 
-        memcpy(words + used, word, length + 1);
+        words[used + length] = '\0';
         args[count] = words + used;
         used += length + 1;
         count++;
@@ -1139,7 +1283,7 @@ static int argv_copy(const char *const *from, char *args[], char *words, k_size_
 static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksys_arg_t a3,
                             ksys_arg_t a4, ksys_arg_t a5)
 {
-    const char *name = (const char *)(uintptr_t)path;
+    char name[KSYS_PATH_MAX + 1];
     /* The place for the data of the filesystem of an open file. */
     k_u8_t file_data[VFS_FILE_DATA_SIZE];
     struct vfs_file file;
@@ -1158,7 +1302,7 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksy
     K_UNUSED(a4);
     K_UNUSED(a5);
 
-    rc = path_check(name);
+    rc = path_copy(name, path);
     if (rc != 0) {
         return rc;
     }
@@ -1166,10 +1310,11 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksy
     /*
      * The arguments are copied before the file is read: a refused one ends
      * the call while nothing has been spent, and the copy is what the port
-     * is going to hand the program.
+     * is going to hand the program. What the kernel keeps from here on is the
+     * vector it built, not the pointers of the caller.
      */
     if (argv != 0) {
-        rc = argv_copy((const char *const *)(uintptr_t)argv, args, words, sizeof(words));
+        rc = argv_copy(argv, args, words, sizeof(words));
         if (rc != 0) {
             return rc;
         }

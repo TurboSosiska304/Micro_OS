@@ -90,8 +90,10 @@ of its own, a 16 MiB window at 32 MiB, a guard page under its stack and ring
 program is reported and the program is taken down; the shell that ran it is
 alive. A program is a task of the scheduler with a CR3 of its own, and `fork()`
 clones its page tables and copies a page on the first write (ADR 0007). The
-kernel is not in a higher half yet and the pointers of a program are still
-read by the kernel without `copy_from_user`; that is the next step.
+pointers of a program are checked and copied at the edge of the call: the
+port says whether a range is memory of the caller, and an address that is not
+mapped is `EFAULT` instead of a page fault of ring 0. The kernel is not in a
+higher half yet; that is the next step, with a plan in ADR 0007.
 
 That is a property of the current port, not the shape of the kernel: everything
 the kernel concedes to a board without an MMU sits behind one compile time flag,
@@ -235,7 +237,8 @@ physical address contract.
   space", but without an MMU a switch means switching the stack pointer and the
   data segment base. The x86-64 port gives a program real page tables and a
   `fork()` that copies them with copy-on-write (ADR 0007); the kernel of that
-  port is still identity mapped and not in a higher half.
+  port is still identity mapped and not in a higher half, and the plan to move
+  it is written down in the same ADR.
 
 ## 7. Drivers (phase 4)
 
@@ -361,9 +364,10 @@ tables and copy on write (ADR 0005, ADR 0007). A program calls the kernel with
 `int $0x80` on the x86-64 port: the register ABI is in
 [ADR 0006](adr/0006-program-entry.md), the program runs in ring 3 with page
 tables of its own, and the processor switches to a kernel stack of the program
-through the TSS on the way in. The pointers of the caller are still read
-directly - a `copy_from_user` is the next debt of the edge - and a program is
-not a task of the scheduler yet (ADR 0007).
+through the TSS on the way in. The pointers of the caller are checked at the
+edge and copied there (`k_port_exec_contains`, `copy_from_user`): a range
+that is not memory of the program is `EFAULT`, not a fault of ring 0, and the
+strings of a path or a vector never reach the VFS (ADR 0007).
 
 ## 9. Testing
 

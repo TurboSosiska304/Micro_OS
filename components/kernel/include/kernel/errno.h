@@ -23,6 +23,7 @@
 #define KERR_CHILD (-10) /* no child processes */
 #define KERR_AGAIN (-11) /* try again later */
 #define KERR_NOMEM (-12) /* out of memory */
+#define KERR_FAULT (-14) /* a pointer of the caller is not its memory */
 #define KERR_NOSYS (-38) /* the system call does not exist */
 #define KERR_NOTDIR (-20)
 #define KERR_ISDIR (-21)

@@ -73,11 +73,11 @@ The image is two files: `build-x86/loader32.elf` (the loader) and
 `build-x86/microos64.bin` (the kernel, a flat image). The heap of the kernel
 stops below the window of the programs; the kernel is linked at 16 MiB and
 the programs are placed at 32 MiB. The programs of `/bin` are made first:
-`build-x86/hello.mox` and `build-x86/crash.mox` are the images of
-`ports/port_x86_64/programs/hello.c` and `crash.c` (`programs/program.ld`
-links them for the window, `tools/mkprog.sh` turns them into the format) and
-the kernel carries both as blobs, because the machine has to have the bytes
-before it has a filesystem to read them from. The build passes
+`build-x86/hello.mox`, `crash.mox`, `fork.mox` and `badptr.mox` are the images
+of `ports/port_x86_64/programs/` (`programs/program.ld` links them for the
+window, `tools/mkprog.sh` turns them into the format) and the kernel carries
+all four as blobs, because the machine has to have the bytes before it has a
+filesystem to read them from. The build passes
 `--base 0x02000000` to `mkprog.sh`, which refuses an image linked for another
 window: nothing relocates the program, so a wrong address would run and read
 its data from somewhere else.
@@ -169,7 +169,7 @@ answer is reported and the machine goes on with `ram0`, so `make x86-run` and
 
 ## What works
 
-* the boot: the loader, long mode, the banner, the contract check at 1.5;
+* the boot: the loader, long mode, the banner, the contract check at 1.6;
 * the console: the VGA text screen and COM1 from one call, the keyboard of
   the PS/2 with Shift, Caps Lock, Backspace and Ctrl+C, and the serial port
   with the console it always had;
@@ -200,6 +200,14 @@ answer is reported and the machine goes on with `ram0`, so `make x86-run` and
   address zero in ring 3, the port prints `the program faulted: vector 14 at
   0x0000000000000000`, takes the program down and the shell answers the next
   command;
+* the edge of the system call: `k_port_exec_contains()` (contract 1.6) walks
+  the page tables of the program, `components/kernel/src/ksys.c` copies the
+  paths, the vector of `execve` and the buffers of `stat`, `getcwd`, `read`,
+  `write` and `readdir` through the check, and a range that is not mapped is
+  `EFAULT`. `/bin/badptr` hands `write`, `stat` and `read` an address outside
+  the window, the last bytes of the window with a request that crosses its
+  end and the guard page; every call answers 14 and the machine writes the
+  next line with a valid pointer;
 * the shell on the console, which is the window and COM1 at once, with
   `help`, `uname`, `uptime`, `ps`, `free`, `memtest` and the rest of the
   portable commands, plus the commands of the files:
@@ -229,10 +237,13 @@ answer is reported and the machine goes on with `ram0`, so `make x86-run` and
   the call with 0, the parent with the pid, and `waitpid` sees the status.
   `/bin/fork` is the program of the smoke test and prints the 42 of the
   parent next to the 99 of the child;
-* the kernel is not in a higher half and the pointers of a program are still
-  read directly by the kernel: a `copy_from_user` at the edge of the system
-  call is not written yet, so an invalid pointer of a program is a fault of
-  the kernel and not an error of the call;
+* the kernel is not in a higher half: it is the identity map of the first
+  gigabyte, so the window of the programs is a hole in the kernel's map. The
+  ladder of the change (linker, loader, `page_phys()`, boot and stacks, the
+  smoke gate) is in ADR 0007 and is not taken yet;
+* there is no SMAP: the edge checks the page tables of the program and then
+  reads the same pages in ring 0, so the hardware half of the rule waits for
+  the higher half and the flags of the processor;
 * no network: `k_port_net_*` answers "no" and the commands that need a socket
   say so.
 

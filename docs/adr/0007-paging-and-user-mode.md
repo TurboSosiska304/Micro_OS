@@ -192,16 +192,99 @@ that wrote through the shared frame would corrupt the child at the edge of
 the system call. The exception stub now saves the registers and can return,
 which is what makes the retry possible.
 
+### 8. Update (K5): the edge of the system call copies
+
+The privilege boundary of section 1 stops a program from reaching the kernel,
+but it did not stop the kernel from trusting the program's pointers. A call
+ran on the program's CR3, so a valid address of the window was readable and an
+invalid one raised a page fault in ring 0 - and ring 0 has nowhere to return
+to, so one bad `write` stopped the machine.
+
+The contract 1.6 adds one seam, `bool k_port_exec_contains(const void *ptr,
+k_size_t size)`, to `kernel/port/exec.h`:
+
+* a port whose programs share the kernel's memory (the board, the host, the
+  null port) answers true: every pointer a call receives is the kernel's own;
+* the x86-64 port answers true when the caller is a kernel task, and
+  otherwise walks the page tables of the running program page by page. The
+  null page, the guard page under the stack, the part of the window that was
+  never mapped and a range that ends past `0x03000000` are all "not there";
+  a copy-on-write page is there and is accepted, because the fault of the
+  first write already has a handler.
+
+`components/kernel/src/ksys.c` keeps two helpers, `copy_from_user()` and
+`copy_to_user()`, which ask the port and then `memcpy`; a false answer is
+`EFAULT` (`KERR_FAULT`, POSIX 14), the answer of the call and not a fault of
+the machine. Every pointer of the ABI goes through them: a path is checked
+byte by byte and copied into a buffer of the kernel before the VFS sees it,
+`argv` is copied word by word and string by string (never past the frame),
+the buffers of `read`, `write`, `readdir`, `stat`, `getcwd` and the status of
+`waitpid` are range-checked before a filesystem writes to them. The four path
+calls that other work owns (`mkdir`, `unlink`, `chmod`, `chown`) share
+`path_check`, which now checks every byte it reads, so they are safe without
+being rewritten.
+
+The failure is covered on the machine: `/bin/badptr` hands `write`, `stat` and
+`read` an address outside the window, the last four bytes of the window with
+a request that runs past it, and the guard page; every call answers 14
+(`EFAULT`) and the shell answers the command after the program. On a machine
+without an address space there is nothing to check, and the host tests keep
+the valid side of the edge: the paths, the buffers and the vector of `execve`
+are copied as before.
+
 ## What is not done
 
 * The kernel is not in a higher half. It keeps the identity map of the first
   gigabyte, so the window of the programs is a hole in the kernel's map and
-  not the other way round.
-* A pointer of a program is still read by the kernel directly (no
-  `copy_from_user`, no SMAP): a program can hand a system call an unmapped
-  address and fault in ring 0, which stops the machine. The memory of the
-  window is mapped in the program's CR3, so a valid pointer works; an invalid
-  one is a known hole, not a check.
+  not the other way round. The plan is in the next section; it is a change of
+  the loader, the linker script and `paging.c`, and it is deliberately not
+  mixed with the edge of this pass.
+* No SMAP: the check accepts the memory of the program and the kernel still
+  reads it with the processor in ring 0. A pointer that becomes invalid
+  between the check and the copy cannot happen on this single processor, but
+  SMAP/SMEP (and NX) are the hardware half of the same rule and are still
+  ahead.
+* The four path calls of K4 copy nothing: they validate the range and hand
+  the pointer to the VFS. The window cannot change under a call on this port,
+  so the check is enough there; the copy is the shape the other calls use and
+  the one a policy with SMAP would need everywhere.
+
+## The higher half: a plan, not taken
+
+Moving the kernel to `0xFFFF800000000000` is a change of the port, not of
+`components/kernel`, and it has a fixed shape:
+
+1. **The linker.** `linker64.ld` sets `KERNEL_BASE = 0xFFFFFFFF80000000` (the
+   top 2 GiB, where the small model of the kernel fits) and keeps
+   `KERNEL_PHYS = 0x01000000`. The build adds `-mcmodel=kernel`, since the
+   small model cannot name an address above 2 GiB.
+2. **The loader.** `loader32.S` already builds the PML4/PDPT of the identity
+   map before the switch to long mode. It adds one PDPT entry (index 510 of
+   PML4 entry 511) mapping the physical range `0x01000000` and up to the same
+   virtual range in 2 MiB pages, and jumps to `KERNEL_BASE + _start64`
+   instead of the physical entry. The low identity map stays: the VGA at
+   `0xB8000`, the arena at `0x04000000` and the multiboot information are
+   still reached at their physical addresses.
+3. **The link between the two.** `page_phys()` in `paging.c` stops being the
+   identity and becomes `virtual - KERNEL_BASE + KERNEL_PHYS`; every static
+   page table, the GDT and the TSS are linked high, and `table_entry()` keeps
+   returning the low identity because the kernel is mapped there too. The
+   kernel's own map is then "the first gigabyte identity, supervisor only"
+   plus "the kernel image at the top", and a program's map is a copy with the
+   user window, exactly as now.
+4. **The boot and the stacks.** `boot64.S` takes the high entry, the kernel
+   stack and the double-fault stack are high addresses, `kmain` keeps the
+   multiboot pointer as the physical address it is, and the fault handler's
+   dump prints high addresses.
+5. **The tests.** `make x86-smoke` is the gate: the banner, the program in
+   ring 3, the fork and the fault of `/bin/crash` have to pass unchanged. A
+   separate check reads a symbol from the ELF to prove the link address is
+   the high one, so a linker script that quietly falls back is noticed.
+
+The risk is concentrated in the loader and in `page_phys()`: one wrong entry
+or one missed conversion and the machine triple-faults before the console, so
+the work is a branch of its own with the smoke test at every step, not a
+change of a pass that also touches the edge of the ABI.
 * No NX, no SMEP/SMAP, no PCID, no SMP: every entry flushes the TLB and the
   map assumes one processor.
 * `KERNEL_NOMMU` is still 1 for the whole tree. Turning it off is a change of
@@ -234,5 +317,7 @@ which is what makes the retry possible.
   port; the generic kernel still has `KERNEL_NOMMU` and the board keeps the
   placeholder for `fork()`.
 * The kernel's own map is still the low identity map; the road to a higher
-  half is open and documented, not taken.
-* The pointers of a program are not yet copied at the edge of the system.
+  half is planned and documented, not taken.
+* The pointers of a program are checked and copied at the edge (contract
+  1.6), but without SMAP: the check and the copy are the same page tables,
+  and the hardware half of the rule is still ahead.

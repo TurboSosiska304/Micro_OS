@@ -660,6 +660,25 @@ static void test_buffer_validation(void)
         KT_CHECK_INT_EQ(ksys_getcwd(NULL, 0), KERR_INVAL);
         KT_CHECK_INT_EQ(ksys_getcwd(buffer, 0), KERR_INVAL);
 
+        /*
+         * The vector of a program is copied at the edge as well: one word
+         * more than the frame holds is E2BIG before any file is looked at.
+         * (The addresses that are not memory of the caller are EFAULT only
+         * where a port has an address space to check; that half is
+         * programs/badptr.c and make x86-smoke.)
+         */
+        {
+            static const char word[] = "x";
+            char *many[16];
+            k_size_t i;
+
+            for (i = 0; i < 16u; i++) {
+                many[i] = (char *)word;
+            }
+
+            KT_CHECK_INT_EQ(ksys_execve("/edge.txt", many), KERR_TOOBIG);
+        }
+
         /* The valid forms are unchanged. */
         KT_CHECK_INT_EQ(ksys_lseek(fd, 0, KSYS_SEEK_END), 0);
         KT_CHECK_INT_EQ(ksys_stat("/edge.txt", &info), 0);

@@ -195,6 +195,14 @@ static void check_run_without_a_machine(void)
     KT_CHECK(!k_port_exec_supported());
     KT_CHECK(k_port_exec_base() == NULL);
 
+    /*
+     * The seam of copy_from_user on a machine without an address space per
+     * program: a pointer of a call is memory of the kernel already, so the
+     * range at the edge is accepted and the empty range is always accepted.
+     */
+    KT_CHECK(k_port_exec_contains(image, size));
+    KT_CHECK(k_port_exec_contains(NULL, 0));
+
     /* No program of this machine is ever in flight, so an exit is a no-op and
      * the kernel's exit of a task stays the path of the board and the host. */
     KT_CHECK(!k_port_exec_active());

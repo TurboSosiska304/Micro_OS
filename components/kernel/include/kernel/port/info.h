@@ -17,7 +17,7 @@
 
 /* The contract the kernel itself speaks. */
 #define KERNEL_PORT_API_VERSION_MAJOR 1u
-#define KERNEL_PORT_API_VERSION_MINOR 5u
+#define KERNEL_PORT_API_VERSION_MINOR 6u
 
 /* Short platform identifier: "esp32", "host", ... */
 const char *k_port_name(void);
