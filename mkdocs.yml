@@ -37,6 +37,7 @@ nav:
   - Files: files.md
   - Programs: programs.md
   - Ports: ports.md
+  - Porting: porting.md
   - Kernel and ABI: kernel-abi.md
   - Testing: testing.md
   - Troubleshooting: troubleshooting.md
