@@ -1,0 +1,95 @@
+# Build the wiki and publish it to the `gh-pages` branch of this repository.
+#
+# The site is a project page: https://turbososiska304.github.io/Micro_OS/ .
+# The build itself is tools/wiki_build_versions.py (MkDocs + mike); the
+# deployment is the whole `site/` directory, forced onto an orphan branch, so
+# the kernel history never carries the generated HTML.
+#
+# The workflow runs on `main` (the `dev` version), on every `v*` tag (the
+# release versions) and by hand. It builds every version from scratch each
+# time: the tags are the source of the versions, and the branch is derived,
+# not edited. See docs/wiki/deploy.md.
+
+name: wiki
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - "docs/wiki/**"
+      - "docs/theme/**"
+      - "mkdocs.yml"
+      - "tools/wiki_build_versions.py"
+      - "tools/wiki_check.py"
+      - ".github/workflows/wiki.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wiki-gh-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build the versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Every tag is a version of the wiki; a shallow clone would hide
+          # the history that the build reads with `git archive`.
+          fetch-depth: 0
+          # A tag push only says that a version appeared. The builder, the
+          # theme and the `dev` pages come from the default branch, which is
+          # the tree that can actually build all of them.
+          ref: ${{ github.event.repository.default_branch }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch every tag
+        # A tag is a version of the wiki even if it points outside the branch
+        # that was checked out; `git archive` reads the tag, not the worktree.
+        run: git fetch --tags --force
+
+      - name: Install MkDocs, mike and Pygments
+        run: pip install "mkdocs==1.6.1" "mike==2.2.0" "pygments==2.21.0"
+
+      - name: Check the links of the pages
+        run: python tools/wiki_check.py
+
+      - name: Build every version
+        run: python tools/wiki_build_versions.py --site site
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wiki-site
+          path: site
+          retention-days: 7
+
+  deploy:
+    name: publish gh-pages
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wiki-site
+          path: site
+
+      - uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: ./site
+          force_orphan: true
+          user_name: "Micro OS wiki builder"
+          user_email: "wiki@microos.org"
+          commit_message: "docs: build the wiki (${{ github.ref_name }})"

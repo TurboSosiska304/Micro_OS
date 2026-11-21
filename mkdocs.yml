@@ -1,22 +1,33 @@
-# The site of the Micro OS wiki: a draft, served by hand.
+# The site of the Micro OS wiki: its own minimal theme, one directory per
+# version under the GitHub Pages address of the repository. That address is a
+# project page, not a domain: everything lives under /Micro_OS/, and the links
+# of the theme and of the version switch carry that prefix. When a domain
+# exists, `site_url` and `extra.base_path` change together, and the build
+# writes a CNAME file into the site.
 #
-#     python3 -m pip install --user mkdocs mkdocs-material
-#     mkdocs serve
+#     python3 -m venv ~/.local/share/opencode/wiki-venv
+#     ~/.local/share/opencode/wiki-venv/bin/pip install mkdocs mike pygments
+#     ~/.local/share/opencode/wiki-venv/bin/mkdocs serve
 #
-# The site is not a part of the build: `make ci` does not need mkdocs, the
-# pages are plain Markdown that GitHub renders on its own, and `site/` is a
-# generated directory that is never committed. If mkdocs-material is not
-# installed, replace the theme below with `readthedocs`, which ships with
-# plain mkdocs.
+# A single version is `mkdocs build`; every version of every tag is
+# `tools/wiki_build_versions.py`, which also writes the mike-compatible layout
+# and is what the deployment uses. The pages are plain Markdown and GitHub
+# renders them as they are, so `make ci` does not need MkDocs.
+
 site_name: Micro OS
 site_description: A Linux-like kernel for small machines
+site_url: https://turbososiska304.github.io/Micro_OS/
 repo_url: https://github.com/TurboSosiska304/Micro_OS
+repo_name: TurboSosiska304/Micro_OS
 
 docs_dir: docs/wiki
 site_dir: site
 
+# The theme is local and has no framework: one template, one stylesheet.
 theme:
-  name: material
+  name: null
+  custom_dir: docs/theme
+  locale: en
 
 nav:
   - Home: README.md
@@ -29,12 +40,52 @@ nav:
   - Kernel and ABI: kernel-abi.md
   - Testing: testing.md
   - Troubleshooting: troubleshooting.md
+  - Versions: versions.md
+  - Deploying the site: deploy.md
+
+plugins:
+  - search
+
+# A link that leaves docs_dir is a canonical document of the repository; the
+# hook rewrites it to GitHub at the ref of the build instead of a 404.
+hooks:
+  - tools/wiki_hooks.py
 
 markdown_extensions:
   - admonition
   - tables
+  - fenced_code
+  - codehilite:
+      guess_lang: false
+      css_class: highlight
   - toc:
       permalink: true
+
+# The values below are the ones of a local `mkdocs serve`: the build script
+# replaces them per version (and the template only reads them). `base_path`
+# is the prefix of the deployment, not of a bare local server; the preview of
+# the whole site is served from a directory that has a `Micro_OS/` entry.
+extra:
+  version: dev
+  version_kind: dev
+  has_wiki: true
+  latest: ""
+  latest_stable: ""
+  latest_stable_has_wiki: false
+  newest: ""
+  dev_ref: main
+  dev_commit: ""
+  wiki_ref: main
+  wiki_docs_prefix: docs/wiki
+  base_path: /Micro_OS/
+  landing_url: https://turbososiska304.github.io/microos-site/
+  edit_base: https://github.com/TurboSosiska304/Micro_OS/blob/main/docs/wiki/
+  version_groups:
+    - label: Development
+      versions:
+        - version: dev
+          kind: dev
+          has_wiki: true
 
 # The wiki links into the rest of docs/ on purpose, and those targets live
 # outside docs_dir: the site has no copy of them to check, so a missing one is
