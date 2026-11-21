@@ -103,8 +103,10 @@ chose.
 | 24 | `chown` | `path, owner` | 0, or an error |
 | 25 | `execve` | `path, argv` | never returns; 0 when the program returns; or an error |
 | 26 | `statx` | `path, buf` | 0, or an error |
+| 27 | `pipe` | `fds` | 0 and two descriptors, or an error |
+| 28 | `dup2` | `oldfd, newfd` | `newfd`, or an error |
 
-The numbers 0 to 22 are frozen, and 23 to 26 were the next free ones.
+The numbers 0 to 22 are frozen, and 23 to 28 were the next free ones.
 A call that is not in the table is `ENOSYS`, never a guess at what it might
 have meant.
 
@@ -349,6 +351,15 @@ Every task has its own table of the open files, four of them. The descriptor
 is the number of the slot. A descriptor that was never opened gives
 `KERR_BADF`.
 
+The open file behind a descriptor is a **description** of the kernel, counted
+by the descriptors that refer to it (`kernel/kfile.h`). One task gets two
+descriptors of one description from `dup2`, and the parent and the child of a
+fork each get one, so the position of a file and the ends of a pipe are one
+state: closing a descriptor does not close the others, and a write through one
+descriptor continues where the other stopped. A description lives in a fixed
+table of 24 records and is given back by the last close. A task that exits
+closes its descriptors.
+
 A descriptor remembers the access it was opened with - read, write, or both.
 The kernel checks that access at the edge of the system, so every filesystem
 under it answers the same way: reading a descriptor that was opened to be
@@ -361,6 +372,43 @@ A descriptor of a directory is opened with `KSYS_O_DIRECTORY` and read with
 `readdir`; it has no other use. It is opened for reading only, so a write
 never becomes a descriptor of a directory at all, and `read` of it answers
 `EISDIR`. `readdir` of any other descriptor answers `ENOTDIR`.
+
+## The pipes and `dup2`
+
+`pipe(fds)` (number 27) makes a pipe and gives the caller two ordinary
+descriptors: `fds[0]` reads and `fds[1]` writes. The two are the first free
+slots of the task, so a program that has closed its console gets 0 and 1.
+The pipe is a ring of 256 bytes of the kernel; the system keeps eight of
+them. The place for the answer is checked at the edge: NULL is `EINVAL`, a
+place that is not the memory of the caller is `EFAULT`.
+
+* A read of an empty pipe whose writing end is still open waits, and then
+  answers `EAGAIN` if the wait passed its bound: a timeout is not the end of
+  the file. A read of an empty pipe with no writer is 0, the end of the file.
+* A write with no reading end is `EPIPE` (`KERR_PIPE`, the number 32 of
+  POSIX). There is no `SIGPIPE` in this system yet, so the error is the whole
+  answer; the bytes written before the reader went away are the count.
+* The access of each end is the flag of its descriptor: `read` of the writing
+  end and `write` of the reading end are `EBADF`. A pipe has no position, so
+  `lseek` is `ESPIPE` (`KERR_SPIPE`, 29), and it has no entries, so `readdir`
+  is `ENOTDIR`.
+* A wait of a pipe is a poll with a bound, not a queue of waiters: 500 ms.
+  A read that found no byte in that time is `EAGAIN`; a write that placed no
+  byte is `EAGAIN` too, and one that placed some bytes answers the count it
+  placed. A queue with a wakeup is the next step.
+
+`dup2(oldfd, newfd)` (number 28) makes `newfd` a second descriptor of the
+open file of `oldfd` and answers `newfd`. A descriptor that was open at
+`newfd` is closed by the call, and `oldfd == newfd` changes nothing. A
+number outside the table of the task, or a descriptor that is not open, is
+`EBADF`. Because the two descriptors name one description, the copy of a
+write to a file continues at the position of the original, and a duplicated
+end of a pipe keeps the pipe open until the last of its descriptors is
+closed.
+
+A fork copies every descriptor of the parent with one more reference each,
+before the child can run, on the real copy-on-write fork of x86-64 and on the
+placeholder of a machine without an MMU alike.
 
 ## The wrappers
 
@@ -377,11 +425,12 @@ ksys_close(fd);
 The wrappers are thin: they only pass the arguments on.
 
 The library of the system (`components/libc`) has the same calls under the
-names of POSIX: `microos_chmod`, `microos_chown`, `microos_statx` and
-`microos_execve` (and the usual `chmod`, `chown`, `statx`, `execve` when its
-header is included). They return -1 and set `microos_errno()` when something
-goes wrong, and they refuse the two numbers of a mode and of an owner that a
-record cannot hold before the kernel is asked.
+names of POSIX: `microos_chmod`, `microos_chown`, `microos_statx`,
+`microos_execve`, `microos_pipe` and `microos_dup2` (and the usual `chmod`,
+`chown`, `statx`, `execve`, `pipe`, `dup2` when its header is included). They
+return -1 and set `microos_errno()` when something goes wrong, and they
+refuse the two numbers of a mode and of an owner that a record cannot hold
+before the kernel is asked.
 
 ## The tests
 
@@ -413,6 +462,15 @@ program breaks it into pieces.
 * **The directory.** A directory is opened with `O_DIRECTORY`, its entries
   come through `readdir` one call after another, the end of it is an empty
   answer, and a descriptor of a file is `ENOTDIR` to the same call.
+* **The pipes.** The bytes of one end come back from the other, the end of
+  the writing end is the end of the file, a pipe without a reading end is
+  `EPIPE`, the wait of an empty or a full pipe passes its bound as `EAGAIN`,
+  and `lseek`/`readdir` of a pipe are `ESPIPE`/`ENOTDIR`.
+* **The sharing.** `dup2` makes a second descriptor of one open file: the
+  write through it reaches the object the number now names, the copy
+  outlives the original, and the old descriptor at the new number is closed.
+  A pipe crosses a fork: the child writes, the parent reads to the end and
+  sees the status of the child.
 * **The edge.** A path that does not end in the window is `ENAMETOOLONG`, a
   buffer above the limit is `E2BIG`, a pointer that is not memory of the
   caller is `EFAULT`, and a wait without a child is `ECHILD`. The last one is

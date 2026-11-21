@@ -44,6 +44,16 @@ static volatile int g_parent_pid;
 static volatile int g_child_pid;
 static volatile int g_child_waits;
 
+/* A pipe across a fork: the child writes, the parent reads to the end. */
+static int g_pipe_fds[2];
+static volatile int g_pipe_wrote = -1;
+static volatile int g_pipe_got;
+static volatile int g_pipe_child;
+static volatile int g_pipe_wait = -1;
+static volatile int g_pipe_status = -1;
+static volatile int g_pipe_result;
+static char g_pipe_text[32];
+
 /* The result of the test, the parent writes it. */
 static volatile int g_result;
 
@@ -103,6 +113,13 @@ static void setup(void)
     g_child_pid = -1;
     g_child_waits = 0;
     g_result = -1;
+    g_pipe_wrote = -1;
+    g_pipe_got = 0;
+    g_pipe_child = -1;
+    g_pipe_wait = -1;
+    g_pipe_status = -1;
+    g_pipe_result = 0;
+    memset(g_pipe_text, 0, sizeof(g_pipe_text));
 }
 
 static void teardown(void)
@@ -275,6 +292,101 @@ static void test_fork_posix(void)
     KT_CHECK_INT_EQ(g_wait_status, 7);
     /* The child took the branch of the 0. */
     KT_CHECK_INT_EQ(g_child_done, 1);
+
+    teardown();
+}
+
+/*
+ * The program of a pipe across a fork. The parent makes the pipe and forks;
+ * the child of a machine without an MMU re-enters this program from the
+ * start, sees its mark and takes the way of the child. Both hold the two
+ * ends, because the table of the parent was copied - closing the right copy
+ * is what lets the reader reach the end of the file.
+ */
+static void pipe_program(void *arg)
+{
+    struct task *self = task_self();
+    int pid;
+
+    K_UNUSED(arg);
+
+    if (!self->is_child) {
+        if (ksys_pipe(g_pipe_fds) != 0) {
+            g_pipe_result = -1;
+            return;
+        }
+    }
+
+    pid = ksys_fork();
+    if (pid == 0) {
+        /* The child: it keeps the writing end and says its line. */
+        ksys_close(g_pipe_fds[0]);
+        g_pipe_wrote = (int)ksys_write(g_pipe_fds[1], "from the child", 14);
+        ksys_close(g_pipe_fds[1]);
+        task_exit(0);
+        return;
+    }
+
+    g_pipe_child = pid;
+
+    /* The parent closes its copy of the writing end: once the child is
+     * done, no writer is left and the read reaches the end of the file. */
+    ksys_close(g_pipe_fds[1]);
+
+    for (;;) {
+        k_size_t room = sizeof(g_pipe_text) - 1 - (k_size_t)g_pipe_got;
+        k_ssize_t got;
+
+        if (room == 0) {
+            break;
+        }
+
+        got = ksys_read(g_pipe_fds[0], g_pipe_text + g_pipe_got, room);
+        if (got <= 0) {
+            break;
+        }
+
+        g_pipe_got += (int)got;
+    }
+
+    g_pipe_text[g_pipe_got] = '\0';
+    ksys_close(g_pipe_fds[0]);
+
+    if (pid > 0) {
+        g_pipe_wait = ksys_waitpid(pid, (int *)&g_pipe_status, 0);
+    }
+
+    g_pipe_result = 1;
+}
+
+/*
+ * The property: the descriptors of a pipe cross a fork, the child's bytes
+ * reach the parent through the pipe, and the parent sees the end of the file
+ * once the child has closed its end and finished.
+ */
+static void test_fork_pipe(void)
+{
+    struct task *parent;
+    int waited;
+
+    ktest_begin("ksys: a pipe crosses a fork and the child's bytes reach the parent");
+
+    setup();
+
+    parent = task_create("piper", pipe_program, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(parent != NULL);
+
+    for (waited = 0; waited < 3000 && g_pipe_result == 0; waited++) {
+        k_sched_sleep_ms(1);
+    }
+
+    KT_CHECK_INT_EQ(g_pipe_result, 1);
+    KT_CHECK_INT_EQ(g_pipe_wrote, 14);
+    KT_CHECK_INT_EQ(g_pipe_got, 14);
+    KT_CHECK_STR_EQ(g_pipe_text, "from the child");
+    KT_CHECK(g_pipe_child > 0);
+    KT_CHECK_INT_EQ(g_pipe_wait, g_pipe_child);
+    KT_CHECK_INT_EQ(g_pipe_status, 0);
 
     teardown();
 }
@@ -528,6 +640,7 @@ void test_ksys_process(void)
     test_fork_wait();
     test_fork_numbers();
     test_fork_posix();
+    test_fork_pipe();
     test_wait_errors();
     test_wait_validation();
     test_fork_data_is_the_same();

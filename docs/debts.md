@@ -109,7 +109,8 @@ K5.
 | Debt | Where | Status | What it needs |
 |---|---|---|---|
 | No `mmap` and no `brk`: the memory of the tasks is shared and a program cannot ask for a range of its own. | `docs/libc.md` "What the library cannot do" | open | The address space of K5 and a call over it. |
-| No `dup2`: a program cannot send its output to a file. | `docs/libc.md`, `components/libc/src` | open | Duplicate an entry of the descriptor table and test the two descriptors on one file. |
+| No `dup2`: a program cannot send its output to a file. | `docs/libc.md`, `components/libc/src` | done | `dup2` (28) and `pipe` (27) are in the ABI and the library, and an open file is a counted description (ADR 0014). Closed in 0.7. |
+| A wait of a pipe is a poll with a bound of 500 ms, not a queue of waiters: a read or a write that finds nothing in time is `EAGAIN`. | `components/kernel/src/kfile.c` | open | A queue of waiters per pipe and a wakeup from the reader or the writer. |
 | The descriptor 0 is not the console; a program that wants the input opens `/dev/tty0`. | `docs/libc.md`, `components/devfs/src/devfs.c` | open | Bind 0 to `tty0` for a program (or a decision that it never is). |
 | `printf` of a float agrees with the host only to the precision asked for; the last digit can differ. | `docs/libc.md` | open | A `dtoa` with the exact rounding, or a documented precision. |
 

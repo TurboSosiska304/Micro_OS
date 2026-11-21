@@ -174,10 +174,11 @@ the inodes and the cache of the sector of the header all describe the same
 storage - so two tasks that write files at the same time have to be kept
 apart:
 
-* every open file belongs to the one that opened it: the position and the
-  flags of the file live in the descriptor (`VFS_FILE_DATA_SIZE` bytes of
-  private data), not in a table of the filesystem. Two tasks that read
-  their own files never touch each other's position;
+* every open file is a description of the kernel, counted by the descriptors
+  that refer to it (`kernel/kfile.h`): the position and the flags of the file
+  live there, not in a table of the filesystem, and `dup2` or a fork gives a
+  second descriptor the same open file. Two tasks that read their own files
+  never touch each other's position;
 * the filesystem itself has one lock, taken by every public call of
   `mfs_*`. It is a recursive `k_mutex` of the kernel (`kernel/lock.h`),
   so a task that has to wait is put to sleep by the platform and does not
@@ -190,6 +191,16 @@ apart:
   contract of the system calls: the two sets are close but not the same
   (`-9` is "the directory is not empty" of the filesystem and a "bad file
   descriptor" of the kernel).
+
+### The pipes
+
+A pipe is a ring of 256 bytes in a table of eight entries of the kernel,
+with the counts of the reading and the writing descriptions over it
+(ADR 0014). The two ends are ordinary descriptors of the task, so the access
+check, the close, `dup2` and the copy of a fork need no special case; a write
+with no reader is `EPIPE`, because the kernel has no signals yet. A wait of a
+pipe is a poll with a bound of half a second, not a queue of waiters; the
+queue and its wakeup are the next step.
 
 ### The blocks under the filesystem
 

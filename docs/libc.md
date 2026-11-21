@@ -128,8 +128,10 @@ const char *microos_strerror(int code);
   `brk`: the memory of the tasks is shared, the same way as the tasks
   themselves share it after a `fork`.
 * **The standard descriptors are the console.** The descriptors 1 and 2 are
-  the console of the system when they are not open as a file. There is no
-  `dup2` yet, so a program cannot send its output to a file.
+  the console of the system when they are not open as a file. `dup2` and
+  `pipe` are there (`microos_dup2`, `microos_pipe`), so a program sends its
+  output to a file or to another program; the shell does not parse a
+  pipeline yet.
 * **The console is not readable through the descriptor 0.** A program that
   wants the input of the user opens `/dev/tty0`.
 * **There is no `printf` of a floating point with the exact digits of the

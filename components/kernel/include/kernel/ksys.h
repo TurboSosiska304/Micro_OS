@@ -48,7 +48,9 @@
 #define KSYS_CHOWN 24   /* chown(path, owner) */
 #define KSYS_EXECVE 25  /* execve(path, argv) */
 #define KSYS_STATX 26   /* statx(path, buf) */
-#define KSYS_COUNT 27   /* the number of the system calls */
+#define KSYS_PIPE 27    /* pipe(fds) */
+#define KSYS_DUP2 28    /* dup2(oldfd, newfd) */
+#define KSYS_COUNT 29   /* the number of the system calls */
 
 /* The flags of the open call, the same as the ones of the VFS. */
 #define KSYS_O_RDONLY 0x0000
@@ -189,5 +191,13 @@ void *ksys_realloc(void *ptr, k_size_t size);
 int ksys_chmod(const char *path, k_u32_t mode);
 int ksys_chown(const char *path, k_u32_t owner);
 int ksys_execve(const char *path, char *const argv[]);
+/*
+ * The ends of a pipe: fds[0] reads, fds[1] writes. A descriptor of the
+ * table of the task each, so dup2 and a fork treat them as any other file;
+ * the pipe goes with the last descriptor of either end.
+ */
+int ksys_pipe(int fds[2]);
+/* A second descriptor of an open file, POSIX style. */
+int ksys_dup2(int oldfd, int newfd);
 
 #endif /* MICRO_OS_KERNEL_KSYS_H */

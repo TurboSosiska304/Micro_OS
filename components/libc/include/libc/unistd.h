@@ -52,6 +52,14 @@ int microos_open(const char *path, int flags, ...);
 int microos_close(int fd);
 long microos_read(int fd, void *buf, size_t count);
 long microos_write(int fd, const void *buf, size_t count);
+/*
+ * The ends of a pipe: fds[0] reads, fds[1] writes. The descriptors are
+ * ordinary ones of the task, so dup2 and fork treat them as any other file;
+ * a read of a pipe whose writing end is closed is the end of the file (0).
+ */
+int microos_pipe(int fds[2]);
+/* A second descriptor of an open file, POSIX style: the old one first. */
+int microos_dup2(int oldfd, int newfd);
 long microos_lseek(int fd, long offset, int whence);
 int microos_unlink(const char *path);
 int microos_mkdir(const char *path);
@@ -92,6 +100,8 @@ const char *microos_strerror(int code);
 #define close microos_close
 #define read microos_read
 #define write microos_write
+#define pipe microos_pipe
+#define dup2 microos_dup2
 #define lseek microos_lseek
 #endif /* MICROOS_LIBC_KEEP_NAMES */
 #define unlink microos_unlink

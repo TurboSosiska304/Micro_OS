@@ -38,8 +38,10 @@ who wants to use the system, not a second copy of the contract.
 | 24 | `chown` | the owner of an object |
 | 25 | `execve` | make the caller a program |
 | 26 | `statx` | the numbers of `stat` and the moments of a change |
+| 27 | `pipe` | two descriptors of one pipe |
+| 28 | `dup2` | a second descriptor of an open file |
 
-`27` is the count, not a call. A number that is not in the table is `ENOSYS`;
+`29` is the count, not a call. A number that is not in the table is `ENOSYS`;
 a new call always takes the next free number, and an old one never moves. The
 shell prints the same table with `abi`:
 
@@ -51,7 +53,9 @@ nr    name
 ...
 25    execve
 26    statx
-27 call(s) registered
+27    pipe
+28    dup2
+29 call(s) registered
 ```
 
 The convention is the one of Linux: the number and six arguments, the result in
@@ -97,14 +101,27 @@ and writes a line with a valid pointer afterwards.
 ## Descriptors
 
 Every task has a table of four descriptors, and the descriptor is the number of
-the slot. A descriptor remembers the access it was opened with: reading one
-opened for writing, or writing one opened for reading, is `EBADF` before a
-filesystem is asked. The position of a file lives in the descriptor, not in the
-filesystem, so two tasks do not move each other's cursor.
+the slot. The open file behind it is a counted description of the kernel: two
+descriptors of one task (`dup2`) and the copies of the parent and the child of
+a fork name one open file, with one position and one set of flags. A
+descriptor remembers the access it was opened with: reading one opened for
+writing, or writing one opened for reading, is `EBADF` before a filesystem is
+asked. The position lives in the description, so two tasks that opened their
+own files do not move each other's cursor.
 
 A directory is opened with `KSYS_O_DIRECTORY` (`0x0800`) and read with
 `readdir`; it is read, never written. A plain `open` of a directory is
 `EISDIR`, and `readdir` of a file is `ENOTDIR`.
+
+`pipe(fds)` (27) gives two ordinary descriptors, `fds[0]` reading and `fds[1]`
+writing; the pipe is a ring of 256 bytes in the kernel. The end of the writing
+end is the end of the file (a read gives 0), and a write with no reader is
+`EPIPE` - there is no `SIGPIPE` yet, so the error is the whole answer. A wait
+of a pipe is a poll with a bound of half a second and then `EAGAIN`; `lseek`
+of a pipe is `ESPIPE` and `readdir` is `ENOTDIR`. `dup2(oldfd, newfd)` (28)
+makes `newfd` a second descriptor of one open file, closes what was open
+there, and answers `newfd`; a number outside the table is `EBADF`.
+[ADR 0014](../adr/0014-pipes.md) has the design and the limits.
 
 ## The mode and the owner
 

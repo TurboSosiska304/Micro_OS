@@ -30,6 +30,8 @@
 #define KERR_ISDIR (-21)
 #define KERR_INVAL (-22)
 #define KERR_NOSPC (-28)       /* no space left on device */
+#define KERR_SPIPE (-29)       /* illegal seek: a pipe has no position */
+#define KERR_PIPE (-32)        /* broken pipe: the reading end is closed */
 #define KERR_NAMETOOLONG (-36) /* the path is longer than the window */
 #define KERR_NOTEMPTY (-39)
 #define KERR_NOTSUP (-95) /* operation not supported by the object */

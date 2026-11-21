@@ -119,6 +119,10 @@ const char *microos_strerror(int code)
         return "invalid argument";
     case -KERR_NOSPC:
         return "no space left on device";
+    case -KERR_SPIPE:
+        return "illegal seek";
+    case -KERR_PIPE:
+        return "broken pipe";
     case -KERR_NAMETOOLONG:
         return "file name too long";
     case -KERR_NOTEMPTY:
@@ -170,6 +174,47 @@ int microos_close(int fd)
     g_errno = 0;
 
     return 0;
+}
+
+int microos_pipe(int fds[2])
+{
+    int rc;
+
+    if (fds == NULL) {
+        return fail(KERR_INVAL);
+    }
+
+    rc = ksys_pipe(fds);
+    if (rc < 0) {
+        return fail(rc);
+    }
+
+    g_errno = 0;
+
+    return 0;
+}
+
+int microos_dup2(int oldfd, int newfd)
+{
+    int rc;
+
+    /*
+     * The numbers are checked here as they are at the edge; a negative one
+     * never names a descriptor, and the library does not have to ask the
+     * kernel to say so.
+     */
+    if (oldfd < 0 || newfd < 0) {
+        return fail(KERR_BADF);
+    }
+
+    rc = ksys_dup2(oldfd, newfd);
+    if (rc < 0) {
+        return fail(rc);
+    }
+
+    g_errno = 0;
+
+    return rc;
 }
 
 long microos_read(int fd, void *buf, size_t count)

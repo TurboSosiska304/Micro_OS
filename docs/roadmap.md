@@ -91,6 +91,9 @@ written when the project was an operating system for one board; the numbers
       the tables, the fault of the first write and `k_port_fork_copy()` are
       done on x86-64 (contract 1.5, ADR 0005 and ADR 0007); the board keeps
       the placeholder of a machine without an MMU
+* [x] `pipe` (27) and `dup2` (28): an open file is a counted description, the
+      two ends of a pipe are ordinary descriptors, and the calls are in the
+      ABI and in the library (ADR 0014); the shell pipeline is the next step
 
 ## K5 - A processor with an MMU (in progress)
 

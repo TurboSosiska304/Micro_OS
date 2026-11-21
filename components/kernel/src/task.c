@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "kernel/kfile.h"
 #include "kernel/kmm.h"
 #include "kernel/log.h"
 #include "kernel/port.h"
@@ -154,6 +155,8 @@ static void task_free_slot(struct task *t)
         return;
     }
 
+    kfile_table_close(t);
+
     k_port_enter_critical();
     memset(t, 0, sizeof(*t));
     if (g_used > 0) {
@@ -162,7 +165,15 @@ static void task_free_slot(struct task *t)
     k_port_exit_critical();
 }
 
-struct task *task_create(const char *name, task_entry_fn entry, void *arg, k_u8_t prio)
+/*
+ * The common part of a started task: a fresh slot, the descriptors it
+ * inherits - none for an ordinary task, the ones of the parent for the
+ * child of a fork - and the context of the port. The copy of the open files
+ * happens before the port starts the task, so a child of a fork can never
+ * run with a half-copied table.
+ */
+static struct task *task_spawn(const char *name, task_entry_fn entry, void *arg, k_u8_t prio,
+                               struct task *inherit)
 {
     struct task *t;
 
@@ -170,6 +181,12 @@ struct task *task_create(const char *name, task_entry_fn entry, void *arg, k_u8_
     if (t == NULL) {
         kerror("task: the task table is full (%u slots)", (unsigned)TASK_MAX_TASKS);
         return NULL;
+    }
+
+    if (inherit != NULL) {
+        t->parent = inherit;
+        task_set_cwd(t, task_get_cwd(inherit));
+        kfile_table_copy(t, inherit);
     }
 
     /*
@@ -190,13 +207,27 @@ struct task *task_create(const char *name, task_entry_fn entry, void *arg, k_u8_
     return t;
 }
 
+struct task *task_create(const char *name, task_entry_fn entry, void *arg, k_u8_t prio)
+{
+    return task_spawn(name, entry, arg, prio, NULL);
+}
+
+struct task *task_fork_shared(struct task *parent, const char *name, task_entry_fn entry, void *arg)
+{
+    if (parent == NULL) {
+        return NULL;
+    }
+
+    return task_spawn(name, entry, arg, parent->prio, parent);
+}
+
 /*
  * The child of a fork on a machine whose port can copy the context of the
  * caller (ADR 0005, K4). The child has an address space of its own: the port
  * copies the tables, marks the pages copy-on-write and makes the context
- * return from the system call with zero. The open files are not copied yet -
- * a program of this milestone opens nothing - and the rest of the record is
- * the one of any task.
+ * return from the system call with zero. The open files are copied with a
+ * reference each, as POSIX leaves them across a fork; the rest of the record
+ * is the one of any task.
  */
 int task_fork(struct task *parent, const char *name, struct task **child)
 {
@@ -216,6 +247,7 @@ int task_fork(struct task *parent, const char *name, struct task **child)
 
     c->parent = parent;
     task_set_cwd(c, task_get_cwd(parent));
+    kfile_table_copy(c, parent);
 
     rc = k_port_fork_copy(c);
     if (rc < 0) {
@@ -253,6 +285,14 @@ void task_exit(int code)
         name[sizeof(name) - 1] = '\0';
         pid = self->pid;
         k_port_exit_critical();
+
+        /*
+         * The descriptors of the task go with it, as POSIX closes the files
+         * of a process that exits. This happens before the task is published
+         * as a zombie: from then on its parent may reap the slot, and a
+         * descriptor that was not closed would be lost from both tables.
+         */
+        kfile_table_close(self);
 
         k_sched_task_terminated(self);
 

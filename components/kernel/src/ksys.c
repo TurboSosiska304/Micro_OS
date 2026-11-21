@@ -7,6 +7,7 @@
 #include "kernel/console.h"
 #include "kernel/errno.h"
 #include "kernel/exec.h"
+#include "kernel/kfile.h"
 #include "kernel/kmm.h"
 #include "kernel/log.h"
 #include "kernel/port.h"
@@ -250,43 +251,7 @@ static struct kfile *fd_get(ksys_arg_t fd)
         return NULL;
     }
 
-    if (self == NULL || !self->files[fd].used) {
-        return NULL;
-    }
-
-    return &self->files[fd];
-}
-
-/* Find a free slot and return its number, -1 when there is none. */
-static int fd_alloc(void)
-{
-    struct task *self = task_self();
-    int i;
-
-    if (self == NULL) {
-        return -1;
-    }
-
-    for (i = 0; i < TASK_MAX_FDS; i++) {
-        if (!self->files[i].used) {
-            memset(&self->files[i], 0, sizeof(self->files[i]));
-            self->files[i].used = true;
-            return i;
-        }
-    }
-
-    return -1;
-}
-
-static void fd_release(int fd)
-{
-    struct task *self = task_self();
-
-    if (self == NULL || fd < 0 || fd >= TASK_MAX_FDS) {
-        return;
-    }
-
-    memset(&self->files[fd], 0, sizeof(self->files[fd]));
+    return kfile_get(self, (k_u32_t)fd);
 }
 
 /* --- the handlers --- */
@@ -350,7 +315,7 @@ static k_ssize_t sys_read(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys_
         return 0;
     }
 
-    return vfs_read(&file->file, (void *)(uintptr_t)buf, count);
+    return kfile_read(file, (void *)(uintptr_t)buf, count);
 }
 
 static k_ssize_t sys_write(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys_arg_t a3,
@@ -379,7 +344,7 @@ static k_ssize_t sys_write(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys
             return 0;
         }
 
-        return vfs_write(&file->file, (const void *)(uintptr_t)buf, count);
+        return kfile_write(file, (const void *)(uintptr_t)buf, count);
     }
 
     /*
@@ -403,7 +368,7 @@ static k_ssize_t sys_open(ksys_arg_t path, ksys_arg_t flags, ksys_arg_t a2, ksys
                           ksys_arg_t a4, ksys_arg_t a5)
 {
     char name[KSYS_PATH_MAX + 1];
-    struct kfile *file;
+    struct kfile *file = NULL;
     int fd;
     int rc;
 
@@ -441,16 +406,14 @@ static k_ssize_t sys_open(ksys_arg_t path, ksys_arg_t flags, ksys_arg_t a2, ksys
         return rc;
     }
 
-    fd = fd_alloc();
+    fd = kfile_alloc(task_self(), &file);
     if (fd < 0) {
-        return KERR_NOSPC;
+        return fd;
     }
-
-    file = &((struct task *)task_self())->files[fd];
 
     rc = vfs_open(name, (int)flags, &file->file, file->priv);
     if (rc != 0) {
-        fd_release(fd);
+        kfile_discard(task_self(), fd);
         return rc;
     }
 
@@ -463,7 +426,7 @@ static k_ssize_t sys_open(ksys_arg_t path, ksys_arg_t flags, ksys_arg_t a2, ksys
 static k_ssize_t sys_close(ksys_arg_t fd, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
                            ksys_arg_t a4, ksys_arg_t a5)
 {
-    struct kfile *file = fd_get(fd);
+    struct task *self = task_self();
 
     K_UNUSED(a1);
     K_UNUSED(a2);
@@ -471,14 +434,77 @@ static k_ssize_t sys_close(ksys_arg_t fd, ksys_arg_t a1, ksys_arg_t a2, ksys_arg
     K_UNUSED(a4);
     K_UNUSED(a5);
 
-    if (file == NULL) {
+    if (self == NULL || fd >= (ksys_arg_t)TASK_MAX_FDS) {
         return KERR_BADF;
     }
 
-    vfs_close(&file->file);
-    fd_release((int)fd);
+    return kfile_close(self, (int)fd);
+}
+
+static k_ssize_t sys_pipe(ksys_arg_t fds, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                          ksys_arg_t a4, ksys_arg_t a5)
+{
+    struct task *self = task_self();
+    int ends[2];
+    int rc;
+
+    K_UNUSED(a1);
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    if (self == NULL) {
+        return KERR_PERM;
+    }
+
+    /*
+     * The answer is two descriptors and the caller has to give the place
+     * for them: NULL is a mistake, and a place outside the memory of the
+     * caller is EFAULT before a pipe is spent on it.
+     */
+    if (fds == 0) {
+        return KERR_INVAL;
+    }
+
+    if (!k_port_exec_contains((const void *)(uintptr_t)fds, sizeof(ends))) {
+        return KERR_FAULT;
+    }
+
+    rc = kfile_pipe(self, ends);
+    if (rc != 0) {
+        return rc;
+    }
+
+    memcpy((void *)(uintptr_t)fds, ends, sizeof(ends));
 
     return 0;
+}
+
+static k_ssize_t sys_dup2(ksys_arg_t oldfd, ksys_arg_t newfd, ksys_arg_t a2, ksys_arg_t a3,
+                          ksys_arg_t a4, ksys_arg_t a5)
+{
+    struct task *self = task_self();
+
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    if (self == NULL) {
+        return KERR_PERM;
+    }
+
+    /*
+     * Both numbers are indexes of the table of the task. A register that
+     * holds a wider number is not a descriptor, and POSIX answers EBADF for
+     * a descriptor that is not open or a number that is not one.
+     */
+    if (oldfd >= (ksys_arg_t)TASK_MAX_FDS || newfd >= (ksys_arg_t)TASK_MAX_FDS) {
+        return KERR_BADF;
+    }
+
+    return kfile_dup2(self, (int)oldfd, (int)newfd);
 }
 
 static k_ssize_t sys_stat(ksys_arg_t path, ksys_arg_t buf, ksys_arg_t a2, ksys_arg_t a3,
@@ -576,6 +602,11 @@ static k_ssize_t sys_lseek(ksys_arg_t fd, ksys_arg_t offset, ksys_arg_t whence, 
         return KERR_BADF;
     }
 
+    /* A pipe has no position: there is nothing to seek in it. */
+    if (file->kind == KFILE_PIPE) {
+        return KERR_SPIPE;
+    }
+
     /*
      * The whence is part of the signature of the call: three values, and
      * the number arrives as a raw register, so it is compared before the
@@ -661,6 +692,11 @@ static k_ssize_t sys_readdir(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ks
 
     if (file == NULL) {
         return KERR_BADF;
+    }
+
+    /* A pipe has no entries: only a descriptor of a directory does. */
+    if (file->kind == KFILE_PIPE) {
+        return KERR_NOTDIR;
     }
 
     if (out == NULL) {
@@ -932,7 +968,7 @@ static k_ssize_t sys_fork(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_
         }
     }
 
-    child = task_create(name, forked_child, (void *)self, self->prio);
+    child = task_fork_shared(self, name, forked_child, (void *)self);
     if (child == NULL) {
         return KERR_NOSPC;
     }
@@ -1513,6 +1549,13 @@ void ksys_init(void)
     memset(g_table, 0, sizeof(g_table));
     g_registered = 0;
 
+    /*
+     * The open files are forgotten with the table: a boot and a test that
+     * resets the calls start from an empty system, not from the
+     * descriptors of the run before.
+     */
+    kfile_init();
+
     ksys_register(KSYS_EXIT, "exit", sys_exit);
     ksys_register(KSYS_READ, "read", sys_read);
     ksys_register(KSYS_WRITE, "write", sys_write);
@@ -1540,6 +1583,8 @@ void ksys_init(void)
     ksys_register(KSYS_CHOWN, "chown", sys_chown);
     ksys_register(KSYS_EXECVE, "execve", sys_execve);
     ksys_register(KSYS_STATX, "statx", sys_statx);
+    ksys_register(KSYS_PIPE, "pipe", sys_pipe);
+    ksys_register(KSYS_DUP2, "dup2", sys_dup2);
 }
 
 /* --- the wrappers --- */
@@ -1675,4 +1720,14 @@ int ksys_execve(const char *path, char *const argv[])
 {
     return (int)ksys_call(KSYS_EXECVE, (ksys_arg_t)(uintptr_t)path, (ksys_arg_t)(uintptr_t)argv, 0,
                           0, 0, 0);
+}
+
+int ksys_pipe(int fds[2])
+{
+    return (int)ksys_call(KSYS_PIPE, (ksys_arg_t)(uintptr_t)fds, 0, 0, 0, 0, 0);
+}
+
+int ksys_dup2(int oldfd, int newfd)
+{
+    return (int)ksys_call(KSYS_DUP2, (ksys_arg_t)oldfd, (ksys_arg_t)newfd, 0, 0, 0, 0);
 }
