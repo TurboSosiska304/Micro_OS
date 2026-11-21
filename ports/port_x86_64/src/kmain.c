@@ -34,6 +34,10 @@
 
 #include "kshell/kshell.h"
 
+#if MICRO_OS_NET
+#include "net/net.h"
+#endif
+
 #include "mfs/mfs.h"
 #include "mfs/mfs_vfs.h"
 #if MICRO_OS_FS_FAT32
@@ -316,6 +320,19 @@ void kmain(k_u64_t multiboot_info)
      * has no scheduler under it to wait with.
      */
     filesystem_bring_up();
+
+    /* The commands of the network, before the shell exists: `netinfo`,
+     * `ping` and `netudp` come from the port, and the client of HTTP and the
+     * clock of NTP from components/net when the image has them. */
+    if (port_x86_64_net_register() != 0) {
+        kwarn("x86-64: not every command of the network is registered");
+    }
+
+#if MICRO_OS_NET
+    if (net_register() != 0) {
+        kwarn("x86-64: not every command of components/net is registered");
+    }
+#endif
 
     if (task_create("init", init_task, NULL, TASK_PRIO_DEFAULT) == NULL) {
         /*

@@ -32,6 +32,32 @@ static inline k_u8_t port_inb(k_u16_t port)
     return value;
 }
 
+static inline void port_outw(k_u16_t port, k_u16_t value)
+{
+    __asm__ volatile("outw %0, %1" : : "a"(value), "Nd"(port));
+}
+
+static inline k_u16_t port_inw(k_u16_t port)
+{
+    k_u16_t value;
+
+    __asm__ volatile("inw %1, %0" : "=a"(value) : "Nd"(port));
+    return value;
+}
+
+static inline void port_outl(k_u16_t port, k_u32_t value)
+{
+    __asm__ volatile("outl %0, %1" : : "a"(value), "Nd"(port));
+}
+
+static inline k_u32_t port_inl(k_u16_t port)
+{
+    k_u32_t value;
+
+    __asm__ volatile("inl %1, %0" : "=a"(value) : "Nd"(port));
+    return value;
+}
+
 /*
  * The old chips of the PC need a moment between two writes to notice the
  * first one; writing to the unused port 0x80 is the traditional way to spend
@@ -232,6 +258,22 @@ void port_x86_64_disk_init(void);
  * the disk, or "ram0" when there is no disk.
  */
 const char *port_x86_64_root_device(void);
+
+/*
+ * Own the network of the port: find the virtio-net device on the PCI bus,
+ * bring it up and keep the four bytes of the configuration QEMU user-net
+ * gives every guest (src/virtio_net.c for the driver, src/net.c for the
+ * protocols). Called by port_x86_64_init(); a machine without a NIC keeps
+ * the "no network" answers of the contract.
+ */
+void port_x86_64_net_init(void);
+
+/*
+ * Register the commands of the network with the shell: `netinfo`, `ping` and
+ * `netudp`. The components of the network are registered by the boot when
+ * they are part of the image (MICRO_OS_X86_NET, see kmain.c).
+ */
+int port_x86_64_net_register(void);
 
 /*
  * The hook of the task substrate, called on every tick. Weak here: a build

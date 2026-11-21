@@ -67,6 +67,34 @@ int strncmp(const char *left, const char *right, size_t size)
     return 0;
 }
 
+/*
+ * The first place a text appears in another. The HTTP client looks for the
+ * empty line that ends the header of an answer, and the request and the
+ * answer are the only strings of the machine that need it.
+ */
+char *strstr(const char *text, const char *needle)
+{
+    size_t i;
+
+    if (needle[0] == '\0') {
+        return (char *)text;
+    }
+
+    for (i = 0; text[i] != '\0'; i++) {
+        size_t j = 0;
+
+        while (needle[j] != '\0' && text[i + j] == needle[j]) {
+            j++;
+        }
+
+        if (needle[j] == '\0') {
+            return (char *)(text + i);
+        }
+    }
+
+    return NULL;
+}
+
 /* --- the formatter --- */
 
 struct sink {

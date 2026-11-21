@@ -30,16 +30,24 @@ set(FAT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/fs_fat32")
 # partition turns it on and mounts the partition with vfs_mount_type().
 option(MICRO_OS_FS_FAT32 "FAT12/16/32, read-only" OFF)
 
-# The optional features of the image (ADR 0010). The machine has one memory
-# and no network: the PSRAM pool of the allocator is off, the MOX1 runtime
-# is on (the port can enter a program), and the components of the network
-# are not part of the project at all - their flags are written here so that
-# the defaults of the port are in one place.
+# The optional features of the image (ADR 0010): the PSRAM pool of the
+# allocator is off, the MOX1 runtime is on (the port can enter a program), and
+# the two wireless services of the board are off. Their flags are written
+# here so that the defaults of the port are in one place.
 option(KERNEL_PSRAM "the PSRAM pool and its statistics in kmm" OFF)
 option(KERNEL_EXEC "the MOX1 parser, execve and the exec command" ON)
-option(MICRO_OS_NET "the network services of the component net" OFF)
 option(MICRO_OS_TELNET "the shell on TCP port 23" OFF)
 option(MICRO_OS_WIFI "the WiFi station" OFF)
+
+# The network of the machine (K6): the port has its own IPv4 stack and a
+# virtio-net driver (src/net.c, src/virtio_net.c), which are always part of
+# the image and cost nothing when QEMU was given no card. This switch adds
+# the commands of components/net - `http` and `ntp` - on top of that stack.
+# It is off by default: the smoke test of the machine keeps the same command
+# list, and `make x86-net-smoke` builds a second image with it on.
+option(MICRO_OS_X86_NET "the http and ntp commands of components/net" OFF)
+
+set(NET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/net")
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -113,6 +121,20 @@ if(MICRO_OS_FS_FAT32)
         "${FAT_DIR}/src/fat_core.c"
         "${FAT_DIR}/src/fat_dir.c"
         "${FAT_DIR}/src/fat_vfs.c"
+    )
+endif()
+
+# The services over the sockets: the HTTP client and the clock of NTP. They
+# are portable and speak kernel/net.h, so the same sources that run on the
+# board run here over the stack of the port. The component is off by default
+# (MICRO_OS_X86_NET); the sources are named here and not by the CMakeLists of
+# the component, which is written for the tree of ESP-IDF.
+set(NET_SOURCES)
+if(MICRO_OS_X86_NET)
+    set(NET_SOURCES
+        "${NET_DIR}/src/net.c"
+        "${NET_DIR}/src/http.c"
+        "${NET_DIR}/src/ntp.c"
     )
 endif()
 
@@ -202,6 +224,7 @@ add_executable(microos64
     ${LIBC_SOURCES}
     ${MFS_SOURCES}
     ${FAT_SOURCES}
+    ${NET_SOURCES}
     src/boot64.S
     src/kmain.c
     src/shell.c
@@ -214,6 +237,8 @@ add_executable(microos64
     src/port_x86_64_task.c
     src/blockdev_ram.c
     src/ata.c
+    src/virtio_net.c
+    src/net.c
     src/libc_shim.c
     src/interrupts.S
     src/switch.S
@@ -229,6 +254,7 @@ target_include_directories(microos64 PRIVATE
     "${LIBC_DIR}/include"
     "${MFS_DIR}/include"
     "${FAT_DIR}/include"
+    "${NET_DIR}/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 
@@ -237,7 +263,11 @@ target_compile_definitions(microos64 PRIVATE
     KERNEL_BOARD_DESC="QEMU x86-64 machine"
     KERNEL_PSRAM=$<BOOL:${KERNEL_PSRAM}>
     KERNEL_EXEC=$<BOOL:${KERNEL_EXEC}>
-    MICRO_OS_NET=$<BOOL:${MICRO_OS_NET}>
+    MICRO_OS_NET=$<BOOL:${MICRO_OS_X86_NET}>
+    MICRO_OS_NET_HTTP=$<BOOL:${MICRO_OS_X86_NET}>
+    MICRO_OS_NET_HTTP_SERVER=0
+    MICRO_OS_NET_NTP=$<BOOL:${MICRO_OS_X86_NET}>
+    MICRO_OS_NET_MQTT=0
     MICRO_OS_TELNET=$<BOOL:${MICRO_OS_TELNET}>
     MICRO_OS_WIFI=$<BOOL:${MICRO_OS_WIFI}>
 )

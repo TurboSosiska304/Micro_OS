@@ -23,7 +23,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-run x86-run-serial x86-smoke x86-vga-smoke x86-run-disk x86-run-disk-serial x86-disk-smoke
+.PHONY: help all build test test-asan test-tsan test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-run x86-run-serial x86-smoke x86-vga-smoke x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke
 
 help:
 	@echo "Micro OS — available targets:"
@@ -52,6 +52,7 @@ help:
 	@echo "  make x86-run-disk   boot the window with an 8 MB disk on the IDE channel"
 	@echo "  make x86-run-disk-serial  the same disk in a terminal (-nographic)"
 	@echo "  make x86-disk-smoke two boots on one disk image, a file survives both"
+	@echo "  make x86-net-smoke   the network: ping, UDP and HTTP on QEMU user-net"
 	@echo "  make bundle     collect the firmware into dist/ for distribution"
 
 all: build
@@ -229,6 +230,28 @@ x86-run-disk-serial: x86-build $(X86_DISK_IMAGE)
 
 x86-disk-smoke: x86-build
 	python3 tools/x86_disk_smoke.py
+
+# The network of the port (K6): a build of its own, with the HTTP client and
+# the clock of NTP of components/net (-DMICRO_OS_X86_NET=ON) and a QEMU
+# machine on its user-mode network. Not a part of `make ci`: the network of
+# the test is the loopback of the host, and a build farm is not a place to
+# open a port. The default image keeps the flag off, so `make x86-smoke` is
+# the same machine it always was.
+X86_NET_BUILD := build-x86-net
+X86_NET_DEVICE := -netdev user,id=n0 -device virtio-net-pci,netdev=n0,disable-modern=on
+
+x86-net-build:
+	cmake -B $(X86_NET_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
+		-DMICRO_OS_X86_NET=ON
+	cmake --build $(X86_NET_BUILD) --target image
+
+x86-net-run: x86-net-build
+	qemu-system-x86_64 -kernel $(X86_NET_BUILD)/loader32.elf \
+		-initrd $(X86_NET_BUILD)/microos64.bin -m 256 -nographic -no-reboot \
+		$(X86_NET_DEVICE)
+
+x86-net-smoke: x86-net-build
+	X86_BUILD=$(X86_NET_BUILD) python3 tools/x86_net_smoke.py
 
 bundle: idf-check
 	. $(IDF_EXPORT) && idf.py -D IDF_TARGET=$(IDF_TARGET) build && \
