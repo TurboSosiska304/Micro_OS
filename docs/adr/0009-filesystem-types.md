@@ -3,7 +3,8 @@
 * Status: accepted
 * Date: 2026-11-21
 * Updated: 2026-11-21 — the reader became read-write: create, write,
-  truncate, append, unlink, mkdir, long names that are made, `statfs`.
+  truncate, append, unlink, mkdir, long names that are made, `statfs`, and a
+  read-only check of the volume (`fsck` of FAT).
 
 ## Context
 
@@ -79,7 +80,7 @@ name of the device and the name of the filesystem are two different facts.
 | Option | Host build | ESP32 (Kconfig) | x86-64 (CMake) | Null port |
 |---|---|---|---|---|
 | `MICRO_OS_FS_MFS` | ON | always (the root) | always (the root) | not linked |
-| `MICRO_OS_FS_FAT32` | OFF, tests compile it | `n` by default | OFF by default | not linked |
+| `MICRO_OS_FS_FAT32` | ON (tests and simulator) | `n` by default | OFF by default | not linked |
 | `MICRO_OS_FS_EXT2` | OFF, not written | - | - | not linked |
 
 `MICRO_OS_FS_MFS` cannot be turned off in the host build: the simulator and
@@ -94,10 +95,10 @@ reaches the firmware. The x86-64 project has the same choice as a
 CMake option, off for `make x86-smoke` and `make x86-run`, because the disk
 of that machine is one MicroFS volume.
 
-The host tests always cover both halves: `tests/CMakeLists.txt` compiles the
-three source files of the component into the test binary directly. A test
-that depended on the firmware option would leave the component untested in
-the default build, and a filesystem without a test is unfinished work
+The host build turns the option on: the simulator and the tests link the
+component as a library. A build that turns it off (`make test-minimal`)
+compiles the four source files into the test binary directly, so the reader
+stays covered and a filesystem without a test is not left in the tree
 (`AGENTS.md`). What the option controls is what an *image* links, not what
 the tests can reach.
 
@@ -126,7 +127,7 @@ Every change reaches the medium before the call returns, and the device is
 asked to write through its own cache (`ops->sync`) when it has one. There is
 no journal and no cache of the changes: a power cut in the middle of a write
 leaves a cluster that no chain names or a directory entry that is half
-written, and `fsck` is not in this kernel to repair either.
+written. `fsck fat` finds both and repairs neither.
 
 **No modes, no owner.** `stat` answers `mode = 0` and `owner = 0`, the same
 way procfs and devfs answer for an object that has no such attribute. A zero
@@ -187,6 +188,21 @@ disagree is a volume another system will complain about. The count of the
 free clusters for `statfs` is a walk of the table, the price of having no
 bitmap in the format.
 
+**The check.** `fat_check()` walks the volume and reports; it does not write,
+and `fsck fat <point|device>` is its command. A volume of this reader is
+never repaired by the kernel: a person decides what to do about a broken
+chain, and a checker that writes is a formatter nobody asked for. The walk
+covers the boot sector and the BPB (the bytes on the medium have to describe
+the volume that is mounted), every copy of the table against the first, the
+chains (a loop, a cross-link, a cluster outside the volume), the entries of
+the fixed root and of every subdirectory, the checksum and the order of the
+long-name runs, and the clusters that the table marks used while no chain
+names them. A volume that is mounted is checked under its own lock; a device
+that is not is mounted for the length of the walk and forgotten again. The
+clusters that the walk has claimed live in one static map of 65536 bits, so
+FAT12 and FAT16 fit whole and a bigger FAT32 volume is refused with a
+message instead of being walked with a map that would hide a cross-link.
+
 ### 4. Several filesystems at one time
 
 The VFS resolves a path by the longest mount point that is a whole
@@ -239,10 +255,11 @@ of a second volume are proven today.
   written as zero, which a reader shows as an unknown time.
 * **exFAT**, FAT64, the FAT32 extended flags and the backup boot sector:
   a volume that needs them is not one of the volumes this reader promises.
-* **fsck of FAT**: the reader reports `KERR_IO` for a chain it cannot
-  follow; it does not repair a volume and it does not walk the whole medium
-  to count the lost clusters. A volume that a power cut caught in the middle
-  of a write needs a checker of the host, not this component.
+* **repair of FAT**: `fat_check()` reports and never writes, so a cluster it
+  calls lost is still lost when it returns, and a half-written entry stays
+  half written. A volume that a power cut caught needs a repair pass with a
+  decision about the data it throws away, and that decision is not in this
+  component yet.
 * **a second FAT volume, hotplug and eject**: one static volume, like
   MicroFS. A card that comes and goes is a driver question first.
 * **Unicode case folding and normalization**: the lookup is ASCII, the
@@ -259,19 +276,25 @@ the memory and mount them next to MicroFS, which proves the registry, the
 path resolution below a mount point, the long names, the fixed root of the
 old cards and the write path: a file is created, rewritten, appended,
 removed, a directory is made, the free map goes down and comes back, and a
-volume that is mounted again still has the bytes.
+volume that is mounted again still has the bytes. The check is proven the
+same way: a clean image of each of the three formats passes whole, and an
+image with a table copy that differs, a loop, a cross-link, a cluster
+outside the volume, a broken long name, a lost cluster or a chain too short
+for its file is named and left untouched.
 
 The price: the component is a second user of `kernel/blockdev.h` with its own
 sector cache (the block layer still has no cache of its own); a FAT volume
 cannot express a mode, an owner or a time, so a program that asks for them
 is told "not supported" and not "here is a default"; a write has no journal
-under it, so the volume is as safe as the medium and the moment; and the
-mount of a second volume is still a call of the boot, not a file of `/etc`.
+under it, so the volume is as safe as the medium and the moment and the
+check can only report what a power cut left; and the mount of a second
+volume is still a call of the boot, not a file of `/etc`.
 
 Next, in an order that makes sense: the `mount` command and `/etc/fstab`
 (they need the registry and a parser of the configuration), the timestamps
-of `struct vfs_stat` and the writers that fill them, and ext2 as the second
-reader with a format the project can also write.
+of `struct vfs_stat` and the writers that fill them, a repair of the lost
+clusters under `-y`, and ext2 as the second reader with a format the project
+can also write.
 
 ## References
 

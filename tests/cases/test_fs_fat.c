@@ -19,9 +19,11 @@
 #include "kernel/blockdev.h"
 #include "kernel/errno.h"
 #include "kernel/vfs.h"
+#include "kshell/kshell.h"
 #include "mfs/mfs.h"
 #include "mfs/mfs_ram_device.h"
 #include "mfs/mfs_vfs.h"
+#include "port_host.h"
 #include "procfs/procfs.h"
 
 #define TEST_DEV_SECTOR 1024u
@@ -431,7 +433,6 @@ static void image_content(struct fat_image *img)
 
         image_dir_add(img, root, &index, "AVERYL~1.TXT",
                       "A rather long file name that will not fit.txt", 0x20, long_file, 10);
-        image_dir_add(img, root, &index, "NESTED", NULL, 0x10, nested, 0);
     }
 
     image_dir_add(img, sub, &sub_index, ".", NULL, 0x10, sub, 0);
@@ -772,7 +773,7 @@ static void test_readdir(void)
         KT_CHECK_INT_EQ(vfs_close(&file), 0);
     }
 
-    KT_CHECK_INT_EQ(total, 6); /* the root of the image: no dot entries */
+    KT_CHECK_INT_EQ(total, 5); /* the root of the image: no dot entries */
     KT_CHECK(saw_hello);
     KT_CHECK(saw_sub);
     KT_CHECK(saw_lfn);
@@ -1531,6 +1532,260 @@ static void test_remount(void)
     teardown();
 }
 
+/* The bytes of the image, so that a check that wrote would be seen. */
+static k_u64_t image_sum(const struct fat_image *img)
+{
+    size_t bytes = (size_t)img->total_sectors * img->bytes_per_sector;
+    k_u64_t sum = 0;
+    size_t i;
+
+    for (i = 0; i < bytes; i++) {
+        sum = sum * 131u + img->data[i];
+    }
+
+    return sum;
+}
+
+/*
+ * The checker of the volume next to the reader. A clean image has to pass
+ * whole, and every kind of damage the reader would meet has to be named:
+ * the two copies of the table, a loop, a cross-link, a cluster outside the
+ * volume, a broken long name, a lost cluster and a chain too short for its
+ * file. Nothing here writes, so the image is the same after every call.
+ */
+static void test_check_clean(enum fat_kind kind, const char *title)
+{
+    struct fat_check_report report;
+    struct vfs_statfs volume;
+    k_u64_t before;
+    int files;
+    int directories;
+
+    ktest_begin(title);
+
+    setup();
+    if (mount_image(kind) != 0) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    files = (kind == FAT_KIND_32) ? 6 : 4;
+    directories = (kind == FAT_KIND_32) ? 2 : 1;
+
+    before = image_sum(&g_image);
+    g_sync_count = 0;
+
+    KT_CHECK_INT_EQ(fat_check(TEST_ROOT_POINT, &report), 0);
+    KT_CHECK_INT_EQ(report.errors, 0);
+    KT_CHECK_INT_EQ(report.type, g_image.type);
+    KT_CHECK_INT_EQ(report.clusters, g_image.cluster_count);
+    KT_CHECK_INT_EQ(report.files, (k_u32_t)files);
+    KT_CHECK_INT_EQ(report.directories, (k_u32_t)directories);
+    KT_CHECK_INT_EQ(report.lost_clusters, 0);
+
+    KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &volume), 0);
+    KT_CHECK_INT_EQ(report.free_clusters, volume.free_blocks);
+
+    /* The device of a mounted volume is the same medium: the check of the
+     * name answers with the mounted copy, not with a second reader. */
+    KT_CHECK_INT_EQ(fat_check("fat0", &report), 0);
+    KT_CHECK_INT_EQ(report.errors, 0);
+
+    /* Read-only: nothing reached the medium and the device was not synced. */
+    KT_CHECK_INT_EQ(g_sync_count, 0);
+    KT_CHECK_INT_EQ(image_sum(&g_image), before);
+
+    teardown();
+}
+
+static void test_check_wide(void)
+{
+    struct fat_check_report report;
+    char path[32];
+    int made;
+    int i;
+
+    ktest_begin("fat: the check follows many directories beside each other");
+
+    setup();
+    if (mount_image(FAT_KIND_32) != 0) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    made = 0;
+    for (i = 0; i < 80; i++) {
+        snprintf(path, sizeof(path), TEST_ROOT_POINT "/dir%02d", i);
+        if (vfs_mkdir(path) != 0) {
+            break;
+        }
+        made++;
+    }
+
+    KT_CHECK_INT_EQ(made, 80);
+
+    KT_CHECK_INT_EQ(fat_check(TEST_ROOT_POINT, &report), 0);
+    KT_CHECK_INT_EQ(report.errors, 0);
+    KT_CHECK_INT_EQ(report.directories, 82); /* SUB, NESTED and the eighty */
+    KT_CHECK_INT_EQ(report.files, 6);
+
+    teardown();
+}
+
+static void test_check_unmounted(void)
+{
+    struct fat_check_report report;
+
+    ktest_begin("fat: a volume that is not mounted is checked by its device");
+
+    setup();
+    build_image(FAT_KIND_32);
+
+    KT_CHECK_INT_EQ(fat_check("fat0", &report), 0);
+    KT_CHECK_INT_EQ(report.errors, 0);
+    KT_CHECK_INT_EQ(report.files, 6);
+
+    /* A boot sector that is not one is a problem of the report, not a
+     * refusal of the call: the person asked about this medium. */
+    g_image.data[510] = 0;
+    KT_CHECK_INT_EQ(fat_check("fat0", &report), 0);
+    KT_CHECK_INT_EQ(report.errors, 1);
+    KT_CHECK(strncmp(report.first, "boot sector: ", 13) == 0);
+
+    /* A point is a point and a device is a device. */
+    KT_CHECK_INT_EQ(fat_check("no-such-device", &report), KERR_NOENT);
+    KT_CHECK_INT_EQ(fat_check("/mnt/nowhere", &report), KERR_INVAL);
+    KT_CHECK_INT_EQ(fat_check("", &report), KERR_INVAL);
+
+    teardown();
+}
+
+static void check_broken(const char *expected)
+{
+    struct fat_check_report report;
+
+    KT_CHECK_INT_EQ(fat_check("fat0", &report), 0);
+    KT_CHECK(report.errors > 0);
+    KT_CHECK(strstr(report.first, expected) != NULL);
+}
+
+static void test_check_broken(void)
+{
+    struct fat_check_report report;
+    k_u8_t *lfn;
+
+    ktest_begin("fat: the check names the table, the chains and the names that are broken");
+
+    setup();
+
+    /* One copy of the table says something else than the first. */
+    build_image(FAT_KIND_32);
+    g_image.data[(g_image.reserved_sectors + g_image.fat_sectors) * g_image.bytes_per_sector +
+                 6u * 4u] ^= 0x01u;
+    check_broken("copy");
+
+    /* A chain that comes back to itself. */
+    build_image(FAT_KIND_32);
+    image_set_fat(&g_image, 6, 6);
+    check_broken("loops");
+
+    /* A chain that runs into the chain of another file. */
+    build_image(FAT_KIND_32);
+    image_set_fat(&g_image, 7, 6);
+    check_broken("more than one");
+
+    /* A cluster beyond the last one of the volume. */
+    build_image(FAT_KIND_32);
+    image_set_fat(&g_image, 6, g_image.cluster_count + 50u);
+    check_broken("outside the volume");
+
+    /* A long name whose checksum does not match its short entry. */
+    build_image(FAT_KIND_32);
+    lfn = dir_slot(&g_image, g_image.root_cluster, 1);
+    lfn[13] ^= 0xFFu;
+    lfn = dir_slot(&g_image, g_image.root_cluster, 2);
+    lfn[13] ^= 0xFFu;
+    check_broken("long name");
+
+    /* A cluster marked used that no chain names. */
+    build_image(FAT_KIND_32);
+    image_set_fat(&g_image, g_image.cluster_count + 1u, fat_eoc(&g_image));
+    KT_CHECK_INT_EQ(fat_check("fat0", &report), 0);
+    KT_CHECK(report.errors > 0);
+    KT_CHECK_INT_EQ(report.lost_clusters, 1);
+    KT_CHECK(strstr(report.first, "no chain names") != NULL);
+
+    /* The size of a file promises more clusters than its chain holds. */
+    build_image(FAT_KIND_32);
+    put32(dir_slot(&g_image, g_image.root_cluster, 0) + 28, 1000);
+    check_broken("shorter than the file");
+
+    teardown();
+}
+
+#if defined(MICRO_OS_FS_FAT32) && MICRO_OS_FS_FAT32
+static void test_check_command(void)
+{
+    char buf[1024];
+    size_t used;
+    FILE *sink;
+
+    ktest_begin("fat: fsck fat checks the point, the device and the usage");
+
+    setup();
+    if (mount_image(FAT_KIND_32) != 0) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(kshell_init(), KSHELL_OK);
+
+    sink = tmpfile();
+    KT_CHECK(sink != NULL);
+    if (sink == NULL) {
+        teardown();
+        return;
+    }
+
+    port_host_set_sink(sink);
+    KT_CHECK_INT_EQ(kshell_execute("fsck fat " TEST_ROOT_POINT), KSHELL_OK);
+
+    rewind(sink);
+    used = fread(buf, 1, sizeof(buf) - 1, sink);
+    buf[used] = '\0';
+
+    KT_CHECK(strstr(buf, "FAT32") != NULL);
+    KT_CHECK(strstr(buf, "the volume is consistent") != NULL);
+
+    /* A damaged volume is a failure of the command, and the first problem
+     * comes from the volume and not from the shell. */
+    image_set_fat(&g_image, 6, 6);
+    KT_CHECK_INT_EQ(kshell_execute("fsck fat fat0"), KSHELL_ERROR);
+
+    /* The words that this image cannot use are the usage line, and a point
+     * that is not the FAT volume of this reader is named. */
+    KT_CHECK_INT_EQ(kshell_execute("fsck fat"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(kshell_execute("fsck fat a b"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(kshell_execute("fsck fat /mnt/notfat"), KSHELL_ERROR);
+
+    rewind(sink);
+    used = fread(buf, 1, sizeof(buf) - 1, sink);
+    buf[used] = '\0';
+    KT_CHECK(strstr(buf, "problem(s), the first:") != NULL);
+    KT_CHECK(strstr(buf, "not a FAT volume of this machine") != NULL);
+
+    /* MicroFS is still checked the way it was. */
+    KT_CHECK_INT_EQ(kshell_execute("fsck"), KSHELL_OK);
+
+    port_host_set_sink(NULL);
+
+    teardown();
+}
+#endif
+
 void test_fs_fat(void)
 {
     test_mount_and_stat();
@@ -1554,4 +1809,13 @@ void test_fs_fat(void)
     test_null_operations();
     test_types_and_bad_image();
     test_remount();
+    test_check_clean(FAT_KIND_12, "fat: the check of a clean FAT12 volume");
+    test_check_clean(FAT_KIND_16, "fat: the check of a clean FAT16 volume");
+    test_check_clean(FAT_KIND_32, "fat: the check of a clean FAT32 volume");
+    test_check_wide();
+    test_check_unmounted();
+    test_check_broken();
+#if defined(MICRO_OS_FS_FAT32) && MICRO_OS_FS_FAT32
+    test_check_command();
+#endif
 }

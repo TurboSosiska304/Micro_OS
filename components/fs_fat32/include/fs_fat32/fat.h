@@ -40,4 +40,47 @@ int fat_vfs_register_type(void);
 /* The text of an error of this filesystem, for the shell and the tests. */
 const char *fat_strerror(int error);
 
+/* The room for the first problem that fat_check() finds. */
+#define FAT_CHECK_MESSAGE_MAX 96
+
+/*
+ * What fat_check() found. The counters describe the volume as it is on the
+ * medium: the clusters of the data, the ones no chain names, the entries of
+ * the tree and the free clusters of the table.
+ */
+struct fat_check_report {
+    k_u32_t type;          /* 12, 16 or 32 */
+    k_u32_t clusters;      /* the clusters of the data section */
+    k_u32_t free_clusters; /* the entries of the table that are zero */
+    k_u32_t lost_clusters; /* used in the table, named by no chain */
+    k_u32_t files;
+    k_u32_t directories;
+    k_u32_t errors; /* 0 for a sound volume */
+    /* The first problem in English, an empty string for a sound volume. */
+    char first[FAT_CHECK_MESSAGE_MAX];
+};
+
+/*
+ * Check the volume of a mount point or of a block device, read-only.
+ *
+ * `what` is either the point the volume of this reader is mounted at
+ * ("/mnt/fat") or the name of a block device ("sd0"). A device that is not
+ * mounted is mounted for the length of the check and forgotten again; a
+ * volume that is already mounted is checked where it is, under its lock.
+ *
+ * Returns 0 when the report was made, even when it names problems; the
+ * caller reads report.errors for the answer. KERR_INVAL is a point that is
+ * not the volume of this reader, KERR_NOENT a device the kernel does not
+ * know, and KERR_NOMEM a check that could not take the lock.
+ *
+ * The check never writes: a damaged volume is left exactly as it was found.
+ * It covers the boot sector and the BPB, the copies of the table, the
+ * chains (a loop, a cross-link, a cluster outside the volume), the entries
+ * of the root and of the subdirectories, the checksum of the long names,
+ * and the clusters that no chain names. The volumes up to 65536 clusters
+ * are checked whole; a bigger one is refused with a message instead of
+ * being walked with a map that would hide a cross-link.
+ */
+int fat_check(const char *what, struct fat_check_report *report);
+
 #endif /* MICRO_OS_FS_FAT32_FAT_H */

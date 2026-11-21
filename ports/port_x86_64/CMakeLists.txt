@@ -120,6 +120,7 @@ if(MICRO_OS_FS_FAT32)
     set(FAT_SOURCES
         "${FAT_DIR}/src/fat_core.c"
         "${FAT_DIR}/src/fat_dir.c"
+        "${FAT_DIR}/src/fat_check.c"
         "${FAT_DIR}/src/fat_vfs.c"
     )
 endif()

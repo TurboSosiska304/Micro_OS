@@ -699,6 +699,57 @@ int fat_vfs_register_type(void)
     return vfs_register_type("fat32", fat_vfs_mount);
 }
 
+/*
+ * The volume of a point or of a device is checked where it lives: a volume
+ * that is mounted is read under its own lock, a device that is not is
+ * mounted for the length of the walk and forgotten again. The device of a
+ * mounted volume is the same medium, so the mounted copy answers for it;
+ * opening a second reader on it would read the same bytes through a second
+ * cache and no lock.
+ */
+int fat_check(const char *what, struct fat_check_report *report)
+{
+    const struct k_blockdev *dev;
+    struct fat_volume *vol;
+    int rc;
+
+    if (what == NULL || what[0] == '\0' || report == NULL) {
+        return KERR_INVAL;
+    }
+
+    memset(report, 0, sizeof(*report));
+
+    if (g_fat.mounted && strcmp(what, g_fat.point) == 0) {
+        vol = &g_fat;
+    } else if (what[0] == '/') {
+        /* A point that is not the volume of this reader: another
+         * filesystem is mounted there, or nothing is. */
+        return KERR_INVAL;
+    } else {
+        dev = k_blockdev_find(what);
+        if (dev == NULL) {
+            return KERR_NOENT;
+        }
+
+        if (!g_fat.mounted || g_fat.dev != dev) {
+            return fat_check_device(dev, report);
+        }
+
+        vol = &g_fat;
+    }
+
+    rc = (k_mutex_lock(&vol->lock) == 0) ? 0 : KERR_NOMEM;
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = fat_check_volume(vol, report);
+
+    k_mutex_unlock(&vol->lock);
+
+    return rc;
+}
+
 const char *fat_strerror(int error)
 {
     switch (error) {

@@ -81,10 +81,12 @@ else()
     # The filesystems of the image (ADR 0009). MicroFS is the root of the
     # board, the simulator and the tests, so it cannot be left out of this
     # build; the second filesystem is a reader that an image links only when
-    # it has a medium to point it at. The tests compile the FAT sources of
-    # their own, so the reader is always covered.
+    # it has a medium to point it at. The host build has one (the tests and
+    # the simulator check a volume), and a build that turns the option off
+    # still compiles the sources into the tests, so the reader is covered
+    # either way.
     option(MICRO_OS_FS_MFS "MicroFS, the filesystem of the board" ON)
-    option(MICRO_OS_FS_FAT32 "FAT12/16/32, read and written, for the tests and a card" OFF)
+    option(MICRO_OS_FS_FAT32 "FAT12/16/32, read and written, for the tests and a card" ON)
     option(MICRO_OS_FS_EXT2 "ext2, read-only (not written yet)" OFF)
 
     if(NOT MICRO_OS_FS_MFS)

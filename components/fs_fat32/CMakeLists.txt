@@ -2,12 +2,14 @@
 #
 # The component is off by default on the board: the flash of the M5StickC
 # is formatted with MicroFS and a card is not in the enclosure yet (ADR
-# 0009). The host tests compile the sources directly, so they are never
-# left out of the test binary by a firmware option.
+# 0009). The host build links it, and a build that turns it off compiles the
+# sources into the test binary, so the reader is never left untested by a
+# firmware option.
 
 set(MICRO_OS_FAT_SRCS
     "src/fat_core.c"
     "src/fat_dir.c"
+    "src/fat_check.c"
     "src/fat_vfs.c"
 )
 
