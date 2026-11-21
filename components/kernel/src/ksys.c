@@ -1652,7 +1652,15 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t envp, k
         return KERR_INVAL;
     }
 
-    data = kmm_alloc((k_size_t)info.size, kmm_current_priority());
+    /*
+     * The image is the largest block a call of this system asks for (up to
+     * 64 KiB), and it lives for the time of the copy, not for the life of
+     * the program. It is asked with the priority of a user buffer: on the
+     * board that is the PSRAM, so a run of programs does not fragment the
+     * internal RAM the kernel and the drivers keep, and a machine without
+     * the PSRAM has one pool and behaves as before.
+     */
+    data = kmm_alloc((k_size_t)info.size, KMM_PRIORITY_USER);
     if (data == NULL) {
         return KERR_NOMEM;
     }
