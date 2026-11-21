@@ -207,6 +207,36 @@ The tree ships no default files of `/etc`: after a reset `/etc` and
 `/etc/init.d` exist and are empty, and the configuration is the one the next
 life writes and the NVS keeps.
 
+## The memory of a program
+
+The ESP32 has no MMU and two kinds of memory that a program needs both of
+(ADR 0018):
+
+| Memory | Range | What it can do | Window of a program |
+|---|---|---|---|
+| instruction RAM | `0x40080000`..`0x400A0000` (128 KiB) | fetch instructions, 32-bit data only | `0x4009E000`..`0x400A0000` (8 KiB) |
+| DRAM (static) | `0x3FFB0000`.. up to the fixed size | byte-addressed data, not executable | `0x3FFCC000`..`0x3FFCE000` (8 KiB) |
+| PSRAM | `0x3F800000`.. | byte-addressed data, not executable | none: a program's data is linked |
+
+The instruction RAM is not byte-addressed. Without
+`CONFIG_ESP32_IRAM_AS_8BIT_ACCESSIBLE_MEMORY` a `l8ui`/`s8i` of an address in
+`0x400xxxxx` raises `LoadStoreError`; with the option, a handler emulates it at
+up to 167 cycles per access. A C program reads its strings byte by byte, so the
+loader puts the code in IRAM and the data in DRAM rather than enabling the
+emulation for every character of a `printf`.
+
+The DRAM window is the top of the static segment, and the build sets
+`CONFIG_ESP32_USE_FIXED_STATIC_RAM_SIZE=0x1E000` so that the heap begins at
+`0x3FFCE000` whatever the static sections do. The free IRAM at the time of the
+loader was 15 054 bytes (`idf.py size`); 8 KiB of it is the window of the text
+and the linker refuses a kernel that reaches it
+(`components/port_esp32/exec_windows.ld`). The text window is also reserved
+from the IRAM heap at startup, because an allocation with `MALLOC_CAP_EXEC`
+prefers IRAM; the other pools of instruction RAM stay in the heap (96 076 bytes
+were free after the boot). The program itself has an 8 KiB stack: the stack of
+the kernel task it runs in (`TASK_STACK_SIZE` in
+`components/port_esp32/src/port_esp32.c`).
+
 ## Known pitfalls
 
 * **C-to-C cable**: the port may not be detected. Fix: power the board off (long

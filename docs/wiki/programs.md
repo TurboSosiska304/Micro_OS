@@ -10,12 +10,12 @@ and [ADR 0016](../adr/0016-userland.md) (the environment, the library and the
 programs of `/bin`); the report of the phase is
 [`docs/phases/phase7.md`](../phases/phase7.md).
 
-Only one machine of the tree can run a program today:
+Two machines of the tree can run a program today:
 
 | Machine | `k_port_exec_supported()` | `k_port_exec_arch()` | What `execve` answers |
 |---|---|---|---|
 | x86-64 in QEMU | true | `0` (x86-64) | it runs the image in ring 3 |
-| ESP32 board | false | `1` (Xtensa) | `ENOSYS` for an Xtensa image; `ENOEXEC` for one of another machine |
+| ESP32 board | true | `1` (Xtensa) | it runs the image in the kernel's address space (no protection) |
 | host simulator | false | `0` on x86-64, `-1` elsewhere | `ENOSYS` for its own machine, `ENOEXEC` for another, `ENOSYS` on a host of a machine the format does not know |
 | null port | false | `-1` | `ENOSYS` |
 
@@ -23,9 +23,10 @@ A port that cannot enter a program still names the machine it is, because the
 machine is a fact about the processor and the loader is a separate promise.
 The arch of the header is compared with `k_port_exec_arch()` before the port
 is asked anything: an image of another machine is `ENOEXEC`, and no byte of it
-is entered. On the board and in the simulator the shell still has `exec`; it
-looks for the file, checks the execute bit, and then reports why the program
-did not run. That is the contract working, not a missing build.
+is entered - the board checks this against a hand-made x86-64 image at every
+boot. In the simulator the shell still has `exec`; it looks for the file,
+checks the execute bit, and then reports why the program did not run. That is
+the contract working, not a missing build.
 
 ## The format: MOX1, version 2
 
@@ -64,19 +65,24 @@ and the port, asked later.
 `tools/mkprog.sh` turns a linked object into an image:
 
 ```bash
-tools/mkprog.sh [--base 0x02000000] [--arch x86-64|xtensa] hello.elf hello.mox hello_main
+tools/mkprog.sh [--base 0x02000000] [--data-base 0x3FFCC000] \
+                [--arch x86-64|xtensa] hello.elf hello.mox hello_main
 ```
 
 The image is not relocated: the code and the data have to be linked for the
 address the port names, and `--base` makes the script refuse an image linked
 for another window. `--arch` writes the machine into offset 28 and defaults
 to `x86-64`; a name the format does not know is refused before an image is
-written. The x86-64 port builds its sixteen images this way: the object is
-compiled for the window, linked with `programs/program.ld`, turned into a
-`.mox` by the script (`--base 0x02000000 --arch x86-64`), and written into
-the MicroFS volume of the disk by `make x86-disk` (see below). The kernel
-carries no copy of a program. A program of the board is built with
-`--arch xtensa` and the toolchain of ESP-IDF (ADR 0018).
+written. `--data-base` is for a port whose data is a window of its own (the
+board): the data no longer follows the text, so the script checks its address
+against that number instead of the contiguous rule and also checks where the
+bss will be cleared. The x86-64 port builds its sixteen images this way: the
+object is compiled for the window, linked with `programs/program.ld`, turned
+into a `.mox` by the script (`--base 0x02000000 --arch x86-64`), and written
+into the MicroFS volume of the disk by `make x86-disk` (see below). The kernel
+carries no copy of a program. The board builds `hello` and `cat` with
+`--arch xtensa --base 0x4009E000 --data-base 0x3FFCC000` and the toolchain of
+ESP-IDF (ADR 0018).
 
 ## The programs on the disk
 
@@ -93,7 +99,7 @@ make x86-smoke     # the same, driven by the smoke test
 
 `tools/mkfs_mfs.c` writes the image: an MBR with one Linux partition at LBA
 2048, a MicroFS volume in it, `/bin`, `/etc` and an empty `/etc/init.d`, the
-fifteen `.mox` images of the build written to `/bin` with mode `0755`, and
+sixteen `.mox` images of the build written to `/bin` with mode `0755`, and
 the settings of the machine in `/etc/setting`. It does not repeat the layout
 of MicroFS: it is a block device over a range of the file, and
 `components/mfs` formats it and writes the objects through `mfs_create`,
@@ -101,6 +107,21 @@ of MicroFS: it is a block device over a range of the file, and
 `tests/cases/test_mkfs_image.c` reads the bytes back with the same `mfs_*`
 calls, mounts the volume and checks `/bin/hello`, `/etc/init.d` and
 `/etc/setting`.
+
+The boot also mounts `/proc` and `/dev` (the same procfs and devfs the board
+and the simulator mount), so the root of x86-64 is the root of every port:
+`tree /` draws `bin/`, `etc/` (with `init.d/` and `setting`), `proc/` and
+`dev/`. `/etc/setting` is data of the image:
+
+```text
+hello
+hostname=x86_64
+console=vga
+```
+
+A volume without `/etc` (the memory volume of a machine with no disk) gets
+the directory and the file from the boot; a volume that already has them is
+never changed.
 
 ## `/bin` and the boot
 
@@ -140,20 +161,73 @@ The boot then asks for `/bin/hello` with `ksys_execve()`: the stat, the check
 of the mode, the read through the VFS, the parse and the entry are the ones of
 the call and not a copy of them. The shell runs the same file with `exec`.
 
-The boot also mounts `/proc` and `/dev` (the same procfs and devfs the board
-and the simulator mount), so the root of x86-64 is the root of every port:
-`tree /` draws `bin/`, `etc/` (with `init.d/` and `setting`), `proc/` and
-`dev/`. `/etc/setting` is data of the image:
+## The board: Xtensa code without an MMU
+
+The board runs a `.mox` of arch `1` (Xtensa), and the price is written on the
+first line the program prints: **there is no protection**. The program is a
+task of the kernel with the kernel's own address space; a write to its text or
+a bad pointer that reaches the kernel is a fault of the machine, and the board
+prints `Guru Meditation` and reboots (ADR 0018 §4, `docs/debts.md`).
+
+The loader cannot put a C program in one window. The ESP32 has two kinds of
+memory and the code needs both:
+
+| Window | Address | Size | What lives there |
+|---|---|---|---|
+| instruction RAM | `0x4009E000`..`0x400A0000` | 8 KiB | the text and its `.literal` pools |
+| DRAM | `0x3FFCC000`..`0x3FFCE000` | 8 KiB | the data, the bss and the vectors (`argc`, `argv`, `envp`) |
+
+The instruction RAM is executable and writable but only 32-bit accessible for
+data; a byte read of a string there is a `LoadStoreError` (the Kconfig option
+that emulates it would turn every character of `printf` into an exception).
+The DRAM is byte-addressed and not executable. The two windows are the top of
+`iram0_0_seg` and the top of the static DRAM segment; the build fixes the size
+of the static segment (`CONFIG_ESP32_USE_FIXED_STATIC_RAM_SIZE`) so the heap
+starts at `0x3FFCE000`, and `components/port_esp32/exec_windows.ld` refuses a
+kernel that grows into either window. A program of the board is therefore
+limited to 8 KiB of text and 8 KiB of data, one at a time: a program that calls
+`execve` would overwrite the code it is running from, and the port answers
+`ENOMEM`.
+
+The door is a function, not an instruction. The `syscall` instruction of the
+Xtensa is taken by the vector of ESP-IDF before the port sees it (ADR 0018
+§3a), so the loader passes the address of `port_mox_syscall(nr, a0 ... a5)` -
+the shape of `ksys_call()` - as the first argument of `_start`, and the
+library keeps it for every wrapper. The numbers and the results are the ones
+of `kernel/ksys.h`, the same as on x86-64; only the crossing differs. The
+entry is `_start(void *door, long argc, char *const argv[], char *const
+envp[])` in the windowed ABI of the machine.
+
+The images travel in the firmware as blobs and are written to `/bin` of MicroFS
+at the boot, because there is no `progs` partition in the table yet; the bytes
+go through a file and the VFS before `execve` reads them back. The `progs`
+partition and the mapping of flash as instructions are the next step (ADR
+0018 §2). The board ships `/bin/hello`, `/bin/cat`, and `/bin/foreign` - a
+hand-made x86-64 image that exists only to be refused. `tools/device-test.sh`
+runs `hello` at the boot (twice, through `execve`) and from the shell, and
+checks that `/bin/foreign` answers `ENOEXEC` before a byte of it runs:
 
 ```text
-hello
-hostname=x86_64
-console=vga
+microos> exec /bin/hello one two
+PROGRAM: hello from /bin
+PROGRAM: arch xtensa, no protection
+PROGRAM: /bin/hello is 2152 bytes, mode 493
+PROGRAM: argc 3
+PROGRAM: argv[0] /bin/hello
+PROGRAM: argv[1] one
+PROGRAM: argv[2] two
+PROGRAM: envp 4, PATH=/bin
+PROGRAM: pid 10, up 32477 ms
+PROGRAM: exit 0
+task: 'program' (pid 10) exited with code 0
+esp32: the program exited with 0
+the program has finished
 ```
 
-A volume without `/etc` (the memory volume of a machine with no disk) gets
-the directory and the file from the boot; a volume that already has them is
-never changed.
+The mode is printed in decimal (`493` is `0755`), and the lines of the kernel
+(`task: ...`, `esp32: ...`) are left in the transcript because they are part of
+the boot console of the board.
+
 
 ## `exec` at the console
 
@@ -215,7 +289,7 @@ The errors, in the order they are met:
 A failed `execve` spends no descriptor of the caller: the file is read through
 the VFS, not through the table of the task.
 
-## The entry: `int $0x80`
+## The entry on x86-64: `int $0x80`
 
 A program of x86-64 is not a function of the kernel, so the call has to be an
 instruction of the processor. The vector 128 is a gate of the port:
@@ -255,9 +329,12 @@ The port enters an image with the arguments of a C function in the registers
 
 The stack is aligned as after a call and its top word is zero, so the C entry
 is `main(argc, argv, envp)`; a program that returns instead of calling `exit`
-faults on address zero. `envp` is never NULL: a program started without an
-environment of its own sees the four words of the system - `PATH=/bin`,
-`HOME=/`, `USER=root`, `PWD=/` - because the shell has no `export` yet.
+faults on address zero. The board has one argument in front of the three - the
+door of the port - and passes the four in `a2`..`a5` of the windowed ABI; the
+`_start` of `components/libc/user` hides the difference from `main`. `envp` is
+never NULL: a program started without an environment of its own sees the four
+words of the system - `PATH=/bin`, `HOME=/`, `USER=root`, `PWD=/` - because the
+shell has no `export` yet.
 
 `execve(path, argv, envp)` is number 25, and the environment is its third
 argument, as in POSIX. Both vectors are copied at the edge of the call: at most
@@ -273,8 +350,8 @@ the library of the kernel, which calls `ksys_*` and has no address in ring 3:
 | File | What it has |
 |---|---|
 | `include/ulibc.h` | the prototypes and the numbers of the calls, from `kernel/ksys.h` |
-| `src/start.c` | `_start`: `main(argc, argv, envp)`, then `exit` |
-| `src/syscall.c` | `int $0x80`, `open`, `close`, `read`, `write`, `lseek`, `readdir`, `stat`, `mkdir`, `unlink`, `getcwd`, `getpid`, `uptime`, `execve`, `exit` |
+| `src/start.c` | `_start`: `main(argc, argv, envp)`, then `exit`; on the board also the door, as the first argument |
+| `src/syscall.c` | `int $0x80` on x86-64 and the door of the port on the board; `open`, `close`, `read`, `write`, `lseek`, `readdir`, `stat`, `mkdir`, `unlink`, `getcwd`, `getpid`, `uptime`, `execve`, `exit` |
 | `src/stdio.c` | `printf` and `puts` over a buffer of 128 bytes and `write(1, ...)` |
 | `src/string.c` | `strlen`, `strcmp`, `strncmp`, `strstr`, `memcpy`, `memset` |
 

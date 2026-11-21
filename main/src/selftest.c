@@ -14,6 +14,8 @@
 #include "kernel/sched.h"
 #include "kernel/task.h"
 
+#include "port_esp32.h"
+
 #define SELFTEST_TASKS 3
 #define SELFTEST_STEPS 5
 #define SELFTEST_STEP_MS 50
@@ -143,6 +145,18 @@ int selftest_run(void)
          s_context_switches);
 
     print_task_table();
+
+    /*
+     * The programs of the board (ADR 0018). The volume of the flash is
+     * mounted before the init task runs, so /bin is there and the images of
+     * the firmware can be written to it. The program prints its own lines
+     * under the "PROGRAM:" marker, which is what tools/device-test.sh looks
+     * for; a refusal here is a failure of the self test.
+     */
+    if (port_esp32_programs_boot() != 0) {
+        kerror("selftest: the programs of the board did not run");
+        failures++;
+    }
 
     if (failures == 0) {
         klog(K_LOG_LEVEL_INFO, "selftest: PASS");

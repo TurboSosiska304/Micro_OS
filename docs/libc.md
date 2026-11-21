@@ -13,16 +13,18 @@ This document is about the library **of the kernel** (`components/libc/src`):
 it is linked into the kernel and calls `ksys_*`, so the shell and the
 components use it with no crossing of a privilege boundary.
 
-A program of ring 3 cannot call those functions: their addresses are not in
-its page tables, and the only door it has is `int $0x80`. Its library is
-`components/libc/user` (ADR 0016): `_start`, the door of the call, `open`,
-`close`, `read`, `write`, `lseek`, `readdir`, `stat`, `mkdir`, `unlink`,
-`getcwd`, `getpid`, `uptime`, `execve`, `exit`, `printf`, `puts` and the
-strings (`strlen`, `strcmp`, `strncmp`, `strstr`, `memcpy`, `memset`), with
-the numbers of `kernel/ksys.h` and no allocation, no `errno` and no floating
-point. The two libraries share the header of the ABI and nothing else, and
-that is deliberate: one runs with the kernel under it, the other has nothing
-but the gate.
+A program cannot call those functions: it was not compiled into the kernel and
+their addresses are not its own. Its library is `components/libc/user` (ADR
+0016): `_start`, the door of the call, `open`, `close`, `read`, `write`,
+`lseek`, `readdir`, `stat`, `mkdir`, `unlink`, `getcwd`, `getpid`, `uptime`,
+`execve`, `exit`, `printf`, `puts` and the strings (`strlen`, `strcmp`,
+`strncmp`, `strstr`, `memcpy`, `memset`), with the numbers of `kernel/ksys.h`
+and no allocation, no `errno` and no floating point. The door is `int $0x80`
+on x86-64 and the address of a function of the port on the board (ADR 0018);
+the numbers and the arguments of the calls are the same on both machines. The
+two libraries share the header of the ABI and nothing else, and that is
+deliberate: one runs with the kernel under it, the other has nothing but the
+gate.
 
 The library of a program grew with its utilities (0.7): `stat` to tell a file
 from a directory (`rm` refuses a directory without `-r`), `mkdir` and

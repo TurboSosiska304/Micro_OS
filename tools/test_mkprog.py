@@ -20,7 +20,10 @@ The field `arch` (offset 28, version 2 of the format) is checked the same
 way: the default is x86-64, both spellings of a machine write its number, and
 a machine the format does not know is refused before an image exists. The
 rest of the header stays where it was, so the test of the layout is also the
-test that a new field did not move the others. It needs no ESP-IDF and no
+test that a new field did not move the others. A port whose data is a window
+of its own - the board - passes --data-base: the test links an object with
+the data at another address and checks that the script holds it there and
+refuses a window the object was not linked for. It needs no ESP-IDF and no
 board, only the binutils that mkprog.sh itself uses:
 
     python3 tools/test_mkprog.py
@@ -63,6 +66,11 @@ CASES = ((1, 0), (3, 3), (5, 1), (7, 4), (9, 2))
 # is not important; what is important is that the object is linked for it and
 # that a different one is refused.
 PROGRAM_BASE = 0x02000000
+
+# The two windows of the board, for the case of --data-base: they are not
+# contiguous, and the script has to check both.
+PROGRAM_TEXT_BASE = 0x02000000
+PROGRAM_DATA_BASE = 0x03000000
 
 
 def build_linker_script(base: int) -> str:
@@ -268,6 +276,100 @@ def check_base_case(work: Path, script: Path) -> None:
     assert not refused.exists(), "base: the refusal left an image behind"
 
 
+def build_split_linker_script(text_base: int, data_base: int) -> str:
+    """The rule of program_esp32.ld: the text above, the data in its own window."""
+    return f"""\
+SECTIONS
+{{
+    . = 0x{text_base + K_EXEC_HEADER_SIZE:08x};
+    .text : SUBALIGN(4) {{ *(.text .text.*) }}
+    . = 0x{data_base:08x};
+    .data : SUBALIGN(4) {{ *(.data .data.*) *(.rodata .rodata.*) }}
+    . = ALIGN(4);
+    .bss (NOLOAD) : SUBALIGN(4) {{ *(.bss .bss.*) *(COMMON) }}
+    /DISCARD/ : {{ *(.comment) *(.eh_frame) *(.note .note.*) }}
+}}
+"""
+
+
+def check_data_base_case(work: Path, script: Path) -> None:
+    """A split image: the data is in its own window and the script holds it there."""
+    text = bytes(0x90 + index % 8 for index in range(5))
+    data = bytes(0x40 + 3 * index for index in range(3))
+
+    source = work / "split.c"
+    obj = work / "split.o"
+    linker = work / "split.ld"
+    elf = work / "split.elf"
+
+    # A bss of four words: the image does not carry it, and the loader clears
+    # it at the address the script gives it. The test checks that address too.
+    source.write_text(
+        build_source(text, data) + "\nint test_bss[4];\n", encoding="utf-8"
+    )
+    linker.write_text(
+        build_split_linker_script(PROGRAM_TEXT_BASE, PROGRAM_DATA_BASE), encoding="utf-8"
+    )
+    subprocess.run(
+        ["gcc", "-c", "-fno-pic", "-fno-pie", "-fno-stack-protector",
+         "-fno-asynchronous-unwind-tables", "-o", str(obj), str(source)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["gcc", "-nostdlib", "-static", "-no-pie", "-Wl,--build-id=none",
+         "-Wl,-e,test_entry", f"-Wl,-T,{linker}", "-o", str(elf), str(obj)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    image = work / "split.mox"
+    subprocess.run(
+        [str(script), "--base", hex(PROGRAM_TEXT_BASE), "--data-base", hex(PROGRAM_DATA_BASE),
+         "--arch", "xtensa", str(elf), str(image), "test_entry"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    header, payload = parse_image(image)
+    fields = dict(zip(HEADER_FIELDS, header))
+    assert fields["arch"] == K_EXEC_ARCH_XTENSA, f"split: arch is {fields['arch']}"
+    assert fields["entry"] == K_EXEC_HEADER_SIZE, f"split: entry is {fields['entry']}"
+    assert fields["text_size"] == align4(len(text)), f"split: text size is {fields['text_size']}"
+    assert fields["data_size"] == align4(len(data)), f"split: data size is {fields['data_size']}"
+    assert fields["bss_size"] == 16, f"split: bss size is {fields['bss_size']}"
+    assert payload[: len(text)] == text, "split: the text bytes moved"
+    assert payload[align4(len(text)) : align4(len(text)) + len(data)] == data, (
+        "split: the data is not after the padded text in the file"
+    )
+
+    # The data window the object was not linked for is refused, and so is the
+    # text window: an image at the wrong addresses is a fault, not a program.
+    for option, wrong, message in (
+        ("--data-base", PROGRAM_DATA_BASE + 0x00100000, "the data window starts at"),
+        ("--base", PROGRAM_TEXT_BASE + 0x00100000, "is linked for"),
+    ):
+        if option == "--base":
+            args = ["--base", hex(wrong), "--data-base", hex(PROGRAM_DATA_BASE)]
+        else:
+            args = ["--base", hex(PROGRAM_TEXT_BASE), "--data-base", hex(wrong)]
+
+        refused = work / f"refused{option}.mox"
+        result = subprocess.run(
+            [str(script), *args, "--arch", "xtensa", str(elf), str(refused), "test_entry"],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode != 0, f"split: a wrong {option} was accepted"
+        assert message in result.stderr, (
+            f"split: the refusal of {option} does not say why: {result.stderr!r}"
+        )
+        assert not refused.exists(), f"split: the refusal of {option} left an image behind"
+
+
 def check_bad_arch(work: Path, script: Path) -> None:
     """A machine the format does not know is refused, and no image is left."""
     text = bytes(0x90 + index % 8 for index in range(5))
@@ -343,10 +445,11 @@ def main() -> int:
 
         check_bad_arch(work, script)
         check_base_case(work, script)
+        check_data_base_case(work, script)
 
     print(
         f"test_mkprog: OK, {len(CASES)} image(s) laid out as the header says, "
-        "both machines written and the base of the window checked"
+        "both machines written, the base of the window and the data window checked"
     )
     return 0
 

@@ -2,7 +2,8 @@
 #
 # Micro OS — turn an object into a program image (the MOX1 format).
 #
-#     tools/mkprog.sh [--base <hex>] [--arch x86-64|xtensa] <object.o> <out.mox> <entry-symbol>
+#     tools/mkprog.sh [--base <hex>] [--data-base <hex>] [--arch x86-64|xtensa] \
+#                     <object.o> <out.mox> <entry-symbol>
 #
 # The image is flat: the header of kernel/exec.h, then .text, then the
 # initialised data (.data and .rodata). The program is not relocated, so the
@@ -14,6 +15,16 @@
 # first address of .text has to be the base plus the header, and the data has
 # to follow the padded text. Without it the object is taken as it is, for the
 # callers that build an image and do not know the port.
+#
+# A port whose data is a window of its own (the board, ADR 0018) passes
+# --data-base as well: the data no longer follows the text, so the script
+# checks the address of .data against that number instead of the contiguous
+# rule above. A program linked for the wrong data window would read and write
+# memory that belongs to something else.
+#
+# The tools come from OBJCOPY, OBJDUMP and NM when a build names them, because
+# a cross build has no host objcopy that can read its ELF; the defaults are
+# the ones of the host (the x86-64 port).
 #
 # The machine of the image is written in the field `arch` of the header
 # (offset 28): x86-64 is 0 and is the default, Xtensa (the board) is 1. The
@@ -43,12 +54,13 @@ K_EXEC_ARCH_XTENSA=1
 
 usage()
 {
-    echo "usage: $0 [--base <hex>] [--arch x86-64|xtensa]" >&2
-    echo "       <object.o> <out.mox> <entry-symbol>" >&2
+    echo "usage: $0 [--base <hex>] [--data-base <hex>]" >&2
+    echo "       [--arch x86-64|xtensa] <object.o> <out.mox> <entry-symbol>" >&2
     exit 2
 }
 
 base=
+data_base=
 arch=x86-64
 arch_number=$K_EXEC_ARCH_X86_64
 
@@ -61,6 +73,15 @@ while [ "$#" -gt 0 ]; do
             ;;
         --base=*)
             base=${1#--base=}
+            shift
+            ;;
+        --data-base)
+            [ "$#" -ge 2 ] || usage
+            data_base=$2
+            shift 2
+            ;;
+        --data-base=*)
+            data_base=${1#--data-base=}
             shift
             ;;
         --arch)
@@ -129,10 +150,37 @@ if [ -n "$base" ]; then
     base=$((base))
 fi
 
+if [ -n "$data_base" ]; then
+    # The same shape of number, one window down: a program of the board has
+    # its data in a window of its own and is linked for that address.
+    case "$data_base" in
+        0x*|0X*) ;;
+        *)
+            echo "mkprog: --data-base wants a hexadecimal address with 0x, not '$data_base'" >&2
+            exit 2
+            ;;
+    esac
+    data_base_digits=${data_base#0x}
+    data_base_digits=${data_base_digits#0X}
+    case "$data_base_digits" in
+        ""|*[!0-9a-fA-F]*)
+            echo "mkprog: --data-base wants a hexadecimal address, not '$data_base'" >&2
+            exit 2
+            ;;
+    esac
+    data_base=$((data_base))
+fi
+
 [ -f "$object" ] || {
     echo "mkprog: no such file: $object" >&2
     exit 1
 }
+
+# The tools of the build: a cross build names its own (the environment of
+# ESP-IDF has no host objcopy that can read an Xtensa ELF).
+OBJCOPY=${OBJCOPY:-objcopy}
+OBJDUMP=${OBJDUMP:-objdump}
+NM=${NM:-nm}
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT INT TERM
@@ -141,7 +189,7 @@ trap 'rm -rf "$work"' EXIT INT TERM
 extract()
 {
     : > "$2"
-    objcopy -O binary --only-section="$1" "$object" "$2" 2>/dev/null || true
+    "$OBJCOPY" -O binary --only-section="$1" "$object" "$2" 2>/dev/null || true
 }
 
 file_size()
@@ -157,12 +205,12 @@ align4()
 
 section_address()
 {
-    objdump -h "$object" | awk -v name="$1" '$2 == name { print "0x" $4; exit }'
+    "$OBJDUMP" -h "$object" | awk -v name="$1" '$2 == name { print "0x" $4; exit }'
 }
 
 section_size()
 {
-    objdump -h "$object" | awk -v name="$1" '$2 == name { print "0x" $3; exit }'
+    "$OBJDUMP" -h "$object" | awk -v name="$1" '$2 == name { print "0x" $3; exit }'
 }
 
 extract .text "$work/text.bin"
@@ -175,7 +223,7 @@ if [ -z "$text_address" ]; then
     exit 1
 fi
 
-symbol_address=$(nm "$object" | awk -v name="$symbol" '$NF == name { print "0x" $1; exit }')
+symbol_address=$("$NM" "$object" | awk -v name="$symbol" '$NF == name { print "0x" $1; exit }')
 if [ -z "$symbol_address" ]; then
     echo "mkprog: no symbol '$symbol' in $object" >&2
     exit 1
@@ -184,7 +232,7 @@ fi
 # The address of a symbol of a relocatable object is relative to its section,
 # so only the section table says whether the entry is code. The image carries
 # .text and nothing else of the executable sections.
-symbol_section=$(objdump -t "$object" | awk -v name="$symbol" '$NF == name { print $4; exit }')
+symbol_section=$("$OBJDUMP" -t "$object" | awk -v name="$symbol" '$NF == name { print $4; exit }')
 if [ "$symbol_section" != ".text" ]; then
     echo "mkprog: '$symbol' is not in .text (it is in '$symbol_section')" >&2
     exit 1
@@ -220,7 +268,43 @@ if [ -n "$base" ]; then
             "$object" "$((text_address))" "$base" "$expected_text" >&2
         exit 1
     fi
+fi
 
+if [ -n "$data_base" ]; then
+    # The port of the board puts the data in a window of its own, so the
+    # contiguous rule below does not apply; what matters is that the data and
+    # the bss are where the loader will copy and clear them.
+    if [ "$data_size" -gt 0 ]; then
+        data_address=$(section_address .data)
+        if [ -z "$data_address" ]; then
+            echo "mkprog: $object has data but no .data section" >&2
+            exit 1
+        fi
+
+        if [ "$((data_address))" -ne "$data_base" ]; then
+            printf "mkprog: %s has its data at 0x%x, the data window starts at 0x%x\n" \
+                "$object" "$((data_address))" "$data_base" >&2
+            exit 1
+        fi
+    elif [ "$bss_size" -gt 0 ]; then
+        bss_address=$(section_address .bss)
+        if [ -z "$bss_address" ] || [ "$((bss_address))" -ne "$data_base" ]; then
+            printf "mkprog: %s has its bss at 0x%x, the data window starts at 0x%x\n" \
+                "$object" "${bss_address:-0}" "$data_base" >&2
+            exit 1
+        fi
+    fi
+
+    if [ "$bss_size" -gt 0 ]; then
+        bss_address=$(section_address .bss)
+        expected_bss=$((data_base + data_aligned))
+        if [ -z "$bss_address" ] || [ "$((bss_address))" -ne "$expected_bss" ]; then
+            printf "mkprog: %s has its bss at 0x%x, the loader clears 0x%x\n" \
+                "$object" "${bss_address:-0}" "$expected_bss" >&2
+            exit 1
+        fi
+    fi
+elif [ -n "$base" ]; then
     if [ "$data_size" -gt 0 ]; then
         data_address=$(section_address .data)
         if [ -z "$data_address" ]; then

@@ -50,17 +50,24 @@ The pins, the chips and the quirks of the board are in
       `mkprog --arch`, and an image of another machine is `ENOEXEC` before it
       runs (the contract of the port is 1.8)
 * [ ] A `progs` partition of 256 KiB, mapped as instructions with
-      `esp_partition_mmap`; a `.mox` at a 64 KiB boundary
+      `esp_partition_mmap`; a `.mox` at a 64 KiB boundary. The first loader
+      does not wait for it: the images travel in the firmware and are written
+      to `/bin` of MicroFS at the boot (ADR 0018 §2)
 * [x] The spike of the door: code in the flash, mapped as instructions and
       called, talks to a kernel function through a pointer; `call0` and the
       `syscall` instruction are rejected (ADR 0018)
-* [ ] A build of a program for Xtensa with the windowed ABI, its linker
+* [x] The two windows of the loader: the text in the 8 KiB of IRAM below
+      `0x400A0000`, the data and the bss in the 8 KiB above `0x3FFCC000`,
+      and the linker refuses a kernel that grows into either
+      (`exec_windows.ld`)
+* [x] A build of a program for Xtensa with the windowed ABI, its linker
       script, the same `_start` and library, and the trampoline of the port as
-      the door to `ksys_call`
-* [ ] `k_port_exec_supported()` is true, `execve` runs the image, and
-      `tools/device-test.sh` runs `/bin/hello` on the board
-* [ ] The price in the docs: no MMU, no address space, a bad pointer can take
-      the machine down
+      the door to `ksys_call` (`programs/hello.c`, `programs/cat.c`)
+* [x] `k_port_exec_supported()` is true, `execve` runs the image, and
+      `tools/device-test.sh` runs `/bin/hello` on the board and checks the
+      `ENOEXEC` of an x86-64 image
+* [x] The price in the docs: no MMU, no address space, a bad pointer can take
+      the machine down (ADR 0018 §4, `docs/debts.md`)
 
 After 1.0 the port is a **compatibility port**: it builds and passes the device
 test, and receives only the features that are cheap on this board - memory,

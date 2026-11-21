@@ -150,8 +150,12 @@ Micro_OS/
   window of the x86-64 port and a library of a program exist: `/bin` has
   `hello`, `cat`, `echo`, `ls`, `spawn` and the programs of the tests, all of
   them ring 3 tasks with `argc`, `argv` and `envp` and an `exit` that the
-  caller waits for ([ADR 0016](docs/adr/0016-userland.md)). There is no shell
-  `export`, no descriptors inherited by a program and no signals yet.
+  caller waits for ([ADR 0016](docs/adr/0016-userland.md)). The board runs
+  `/bin/hello` and `/bin/cat` too, as tasks of its kernel without an address
+  space: one program at a time, 8 KiB of text and 8 KiB of data, and a bad
+  pointer can reboot the machine ([ADR 0018](docs/adr/0018-esp32-programs.md)).
+  There is no shell `export`, no descriptors inherited by a program and no
+  signals yet.
 * **The board has limits of its own**: no PMIC, 8 MB of flash with one
   application slot and no OTA, a 200 mAh battery. They are in
   [docs/ports/esp32](docs/ports/esp32/README.md).

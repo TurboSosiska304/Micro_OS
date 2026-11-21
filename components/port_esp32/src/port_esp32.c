@@ -476,10 +476,14 @@ struct task *k_port_task_current(void)
 }
 
 /*
- * A task of the board is a FreeRTOS task, not a program of ring 3: the
- * kernel runs the handler of a signal in the context of the task itself, and
- * there is no frame to restore (the board cannot enter a program at all,
- * KERNEL_EXEC is off there).
+ * A task of the board is a FreeRTOS task, not a program of ring 3: the kernel
+ * runs the handler of a signal in the context of the task itself, and there
+ * is no frame to restore. A program of the board (ADR 0018) is a task of the
+ * kernel as well, so its handler is an ordinary function of the program's
+ * text called on the stack of its task; the door of the port is what the
+ * handler calls back. The handler's answer takes the place of the interrupted
+ * call only on a machine with a frame of its own (x86-64), so the answer here
+ * is the one the call had.
  */
 int k_port_task_signal_enter(struct task *t, int sig, void (*handler)(int), k_ssize_t result,
                              bool from_syscall)

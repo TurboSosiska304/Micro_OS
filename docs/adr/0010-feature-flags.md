@@ -46,8 +46,9 @@ Kernel:
 * `KERNEL_PSRAM` - the PSRAM pool of `kmm`, the statistics and the `psram`
   line of `free` (default 1; off on x86-64 and on the null port);
 * `KERNEL_EXEC` - the MOX1 parser, `k_exec_run`, the `execve` path and the
-  `exec` command (default 1; off on the board, where `k_port_exec_supported()`
-  is false anyway, and on the host, which cannot enter a program).
+  `exec` command (default 1; every build compiles it, and a machine that
+  cannot enter a program answers `ENOSYS` from `k_port_exec_supported()` -
+  the board entered the group with ADR 0018).
 
 Network (component `net` and the components beside it):
 
@@ -74,7 +75,7 @@ same rule applies to them.
 | Flag | host | ESP32 | x86-64 | null |
 |---|---|---|---|---|
 | `KERNEL_PSRAM` | 1 | 1 | **0** | 0 |
-| `KERNEL_EXEC` | 1 | 0 | 1 | 1 |
+| `KERNEL_EXEC` | 1 | 1 | 1 | 1 |
 | `MICRO_OS_NET` | 1 | 1 | 0 | 0 |
 | `MICRO_OS_NET_HTTP` | 1 | 1 | 0 | 0 |
 | `MICRO_OS_NET_HTTP_SERVER` | 1 | 0 | 0 | 0 |

@@ -1,18 +1,20 @@
 /*
- * Micro OS — the library of a program of the x86-64 port.
+ * Micro OS — the library of a program.
  *
  * This is not the library of the kernel (components/libc/src): that one is
  * linked into the kernel and calls the wrappers of `ksys_*`, which a program
- * of ring 3 cannot reach. Here every function is a thin layer over the one
- * door a program has - `int $0x80` (ADR 0006, ADR 0016) - and nothing else.
+ * cannot reach. Here every function is a thin layer over the one door a
+ * program has - `int $0x80` on x86-64 (ADR 0006, ADR 0016), the function the
+ * port of the board hands to _start on the ESP32 (ADR 0018) - and nothing
+ * else.
  *
  * The numbers of the calls and the structures they speak come from the same
  * header the kernel is compiled against (kernel/ksys.h, which carries the VFS
  * structures with it), so a number or a field can never drift between the two
  * sides of the door.
  *
- * The entry of a program of this port is the C entry with three arguments
- * (ADR 0016):
+ * The entry of a program of x86-64 is the C entry with three arguments (ADR
+ * 0016):
  *
  *     int main(int argc, char *const argv[], char *const envp[]);
  *
@@ -21,6 +23,11 @@
  * return from main() into anything, because there is no kernel frame under
  * it. A program that ends with `ret` instead faults on address zero, which is
  * the guard the port leaves at the top of the stack.
+ *
+ * On the board `_start` takes one argument more, the door, and the build
+ * defines MOX_ARCH_XTENSA so that src/start.c and src/syscall.c keep it. The
+ * `main` of the program is the same function, and the numbers of the calls
+ * are the same numbers.
  *
  * The result of a call is the result of the system call: a negative number is
  * the error with its minus sign (-2 is ENOENT), exactly as kernel/errno.h

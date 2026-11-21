@@ -37,10 +37,11 @@ if(ESP_PLATFORM)
     )
 
     # The kernel flags of the board (ADR 0010): the PSRAM is there, and the
-    # machine cannot enter a program (k_port_exec_supported() is false), so
-    # the MOX1 parser and the exec path are not compiled. PUBLIC, because
-    # the shell, the library and the syscalls ask the same questions.
-    target_compile_definitions(${COMPONENT_LIB} PUBLIC KERNEL_PSRAM=1 KERNEL_EXEC=0)
+    # machine runs a program of its own machine (ADR 0018): the MOX1 parser,
+    # execve and the exec command are compiled, and the port enters an Xtensa
+    # image in the windows of src/port_exec.c. PUBLIC, because the shell, the
+    # library and the syscalls ask the same questions.
+    target_compile_definitions(${COMPONENT_LIB} PUBLIC KERNEL_PSRAM=1 KERNEL_EXEC=1)
 
     # The discipline of the host build: the sources of the project are
     # compiled with the extra warnings, so a mistake is a message at
