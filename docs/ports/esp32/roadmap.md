@@ -44,12 +44,30 @@ The pins, the chips and the quirks of the board are in
 * [x] A factory reset (the volume and the store)
 * [ ] The enclosure and display modes
 
-## P4 - Updates (planned)
+## P4 - Programs (for 1.0)
+
+* [ ] MOX1 version 2: the field of the machine in the header (x86-64, Xtensa),
+      `mkprog --arch`; an image of another machine is `ENOEXEC`
+* [ ] A `progs` partition of 256 KiB, mapped as instructions with
+      `esp_partition_mmap`; a `.mox` at a 64 KiB boundary
+* [ ] A build of a program for Xtensa: `-mabi=call0`, its linker script, the
+      same `_start` and library, `syscall` as the door to `ksys_call`
+* [ ] `k_port_exec_supported()` is true, `execve` runs the image, and
+      `tools/device-test.sh` runs `/bin/hello` on the board
+* [ ] The price in the docs: no MMU, no address space, a bad pointer can take
+      the machine down
+
+After 1.0 the port is a **compatibility port**: it builds and passes the device
+test, and receives only the features that are cheap on this board - memory,
+the concurrency FreeRTOS gives for free, drivers, the console. A compiler of
+our own, the higher half, NX and full SMP are not for it. ADR 0018.
+
+## P5 - Updates (planned)
 
 * [ ] OTA with two application slots and a rollback: the flash has to be
       repartitioned first, which is a data-loss operation on the volume
 
-## P5 - Applications (not in this tree)
+## P6 - Applications (not in this tree)
 
 * [n] The sensor logger, the clock, the weather station: a repository of their
       own. A board with 8 MB of flash does not carry programs nobody asked
