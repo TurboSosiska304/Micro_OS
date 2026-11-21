@@ -52,12 +52,15 @@ static void blocker(void *arg)
 void test_sched_queue(void)
 {
     bool seen[MANY_TASKS];
+    k_u32_t pids[MANY_TASKS];
+    k_size_t tasks_before;
     int i;
     int waited = 0;
     int picked = 0;
 
     ktest_begin("sched: the run queue holds every task of the system");
 
+    tasks_before = task_count();
     port_host_set_sink(tmpfile());
     (void)__atomic_store_n(&g_blocked, 0, __ATOMIC_SEQ_CST);
     (void)__atomic_store_n(&g_release, 0, __ATOMIC_SEQ_CST);
@@ -68,6 +71,7 @@ void test_sched_queue(void)
         snprintf(name, sizeof(name), "q%d", i);
         g_tasks[i] = task_create(name, blocker, (void *)(intptr_t)i, TEST_PRIO);
         KT_CHECK(g_tasks[i] != NULL);
+        pids[i] = (g_tasks[i] != NULL) ? g_tasks[i]->pid : 0u;
     }
 
     while (__atomic_load_n(&g_blocked, __ATOMIC_SEQ_CST) < MANY_TASKS && waited < 4000) {
@@ -133,9 +137,28 @@ void test_sched_queue(void)
     KT_CHECK_INT_EQ(picked, MANY_TASKS);
     KT_CHECK_INT_EQ(k_sched_validate(), 0);
 
-    /* Let the tasks finish and free their slots for the next tests. */
+    /*
+     * Let the tasks finish and free their slots for the next tests. The
+     * pick loop blocked every one of them: a blocked task never sees the
+     * release, so an unblock comes first, and the wait reaps the zombie -
+     * a slot that is not reaped here is a slot the tests of the filesystem
+     * and the programs do not have.
+     */
+    for (i = 0; i < MANY_TASKS; i++) {
+        if (g_tasks[i] != NULL && g_tasks[i]->state == TASK_STATE_BLOCKED) {
+            k_sched_unblock(g_tasks[i]);
+        }
+    }
+
     (void)__atomic_store_n(&g_release, 1, __ATOMIC_SEQ_CST);
-    k_sched_sleep_ms(50);
+
+    for (i = 0; i < MANY_TASKS; i++) {
+        if (pids[i] != 0u) {
+            (void)task_wait(pids[i], NULL, 2000);
+        }
+    }
+
+    KT_CHECK_INT_EQ(task_count(), tasks_before);
 
     port_host_set_sink(NULL);
 }
