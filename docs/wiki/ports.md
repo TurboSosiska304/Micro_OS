@@ -126,7 +126,8 @@ complete. The details are in
 
 * [build.md](build.md) - the commands and the dependencies of each build.
 * [testing.md](testing.md) - what each machine is checked with.
-* [programs.md](programs.md) - why only x86-64 runs a program.
-* [`docs/porting.md`](../porting.md) - bringing the kernel to another machine.
+* [programs.md](programs.md) - why only x86-64 runs a program with protection.
+* [porting.md](porting.md) - the contract, the bring-up order and the checks.
+* [`docs/porting.md`](../porting.md) - bringing the kernel to another machine, in full.
 
 [Back to the wiki index](README.md)

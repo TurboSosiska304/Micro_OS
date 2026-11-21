@@ -71,9 +71,11 @@ A record of today is 32 bytes: it keeps the type of the object, its mode and
 its owner in the upper bits of `flags`, and the two moments of a change
 (`mtime` and `ctime`) in the seconds of Unix after them. A volume of an
 older release has 16-byte records with no room for a time and mounts
-unchanged; its objects report zero, which is "unknown" (ADR 0013). The
-formatter asks for 256 records (`MFS_MOUNT_RECORDS`) and sizes `META` from
-the volume; the capacity is fixed at format time and cannot grow later.
+unchanged; its objects report zero, which is "unknown" (ADR 0013). Moving a
+0.x machine, and what a version 1 volume keeps, is in
+[`docs/migration.md`](../migration.md). The formatter asks for 256 records
+(`MFS_MOUNT_RECORDS`) and sizes `META` from the volume; the capacity is
+fixed at format time and cannot grow later.
 There is **no journal**: `fsck` reports the first problem it finds and does
 not repair, and a power cut in the middle of a write is a risk the tree
 knows about ([`docs/debts.md`](../debts.md)).
@@ -267,9 +269,10 @@ microos> cat /mnt/sd/note.txt
 hello
 ```
 
-`mount` and `/etc/fstab` are still ahead; an image that wants a FAT volume
-asks for one in its boot, after `fat_vfs_register_type()`. On the board the
-component is behind `CONFIG_MICRO_OS_FS_FAT32`, off by default; the host
+A volume is mounted by `mount <device> <point> <type>` or by `/etc/fstab` at
+the boot (see [Mounting a volume](#mounting-a-volume)); an image that wants a
+FAT volume registers the type and mounts it, and the board's kernel carries
+the component behind `CONFIG_MICRO_OS_FS_FAT32`, off by default. The host
 tests always build it.
 
 What a FAT record cannot carry is still absent: `stat` answers `mode = 0`

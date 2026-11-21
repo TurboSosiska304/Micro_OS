@@ -69,29 +69,51 @@ the tools. A row names the sentence you see, the cause and the move.
 
 ## Programs
 
-| Symptom | Cause | What to do |
-|---|---|---|
-| `exec: hello: not found in /bin:/usr/bin` | there is no `/bin` here | x86-64 has `/bin` in the disk image: `make x86-disk` builds it; `path` shows the search list |
-| `this machine cannot run a program` | `execve` is `ENOSYS` on this port | expected on the board and in the simulator |
-| `not permitted: the file has no execute bit` | the mode has no `x` for the caller | `chmod 0755 <path>` |
-| `not a MOX1 image of this system` | the file is not an image, or the header is wrong | build it with `mkprog.sh`, for the window of the port |
-| `not enough memory for the image` | the image does not fit the window | a smaller image; the window is 16 MiB at 32 MiB |
-| `the program faulted: vector N at 0x...` | the program touched memory not its own | the report of ring 3, not a crash; the shell survives |
-| a program gets 14 from a call | `EFAULT`: the pointer is not its memory | fix the pointer; the null and guard pages are unmapped |
+* `exec: hello: not found in /bin:/usr/bin` — there is no `/bin` here.
+  x86-64 has `/bin` in the disk image (`make x86-disk` builds it); `path`
+  shows the search list.
+* `this machine cannot run a program` — `execve` is `ENOSYS` on this port.
+  Expected in the simulator and the null port; the board runs Xtensa `.mox`.
+* `not permitted: the file has no execute bit` — the mode has no `x` for
+  the caller. `chmod 0755 <path>`.
+* `not a MOX1 image of this system` — not an image, a version 1 image, or
+  another machine. Rebuild with `mkprog.sh` (version 2, the right `--arch`).
+* `not enough memory for the image` — the image does not fit the window.
+  A smaller image; 16 MiB on x86-64, 8+8 KiB on the board.
+* `the program faulted: vector N at 0x...` — the program touched memory not
+  its own. That is the report of ring 3, not a crash; the shell survives.
+* a program gets 14 from a call — `EFAULT`: the pointer is not its memory.
+  Fix the pointer; the null and guard pages are unmapped.
 
 ## Network commands
 
-| Symptom | Cause | What to do |
-|---|---|---|
-| `httpd: the port 80 is not ours` | the port is held, or the stack refused | try `httpd 8080`; check `wifi status` |
-| `httpd: already on port 80` | the server is on | `httpd off`, then `httpd <port>` |
-| `http: <url>: the connection failed` | no route, no DNS, or the server is down | `wifi status`; try an address; there is no TLS |
-| `the URL is not one we speak` | the scheme is not plain HTTP | only `http://` with a host is understood |
-| `ntp: no answer from ...` | UDP 123 is blocked, or the server is silent | try `ntp time.google.com` |
-| `mqtt: no session with the broker` | the broker is unreachable on that port | check host and port; there is no TLS |
-| `mqtt: the broker refused the client` | the broker said no | the client id is `microos`; check its rules |
-| `mqtt: the message is longer than 256 byte(s)` | the payload limit | shorten it; a topic is 128 bytes at most |
-| `telnet` connects but nothing happens | the door is off | `telnet on`; the port is 23, no authentication |
+The network of 1.0 is the **LAN**: HTTP, MQTT and telnet are plain text, there
+is no TLS/HTTPS, no certificate store, no IPv6 and no raw sockets, and
+`httpd` and `telnet` take no password. Keep the machine on the network of its
+owner; [SECURITY.md](../../SECURITY.md) says what that means.
+
+* `httpd: the port 80 is not ours` — the port is held, or the stack
+  refused. Try `httpd 8080` and check `wifi status`.
+* `httpd: already on port 80` — the server is on. `httpd off`, then
+  `httpd <port>`.
+* `http: <url>: the connection failed` — no route, no DNS, or the server is
+  down. Check `wifi status`, try an address; there is no TLS.
+* `the URL is not one we speak` — the scheme is not plain HTTP, or there is
+  no host. Only `http://` with a host is understood; there is no `https://`.
+* `ntp: no answer from ...` — UDP 123 is blocked, or the server is silent.
+  Try `ntp time.google.com`.
+* `mqtt: no session with the broker` — the broker is unreachable on that
+  port. Check host and port; there is no TLS.
+* `mqtt: the broker refused the client` — the broker said no. The client id
+  is `microos`; check its rules.
+* `mqtt: the message is longer than 256 byte(s)` — the payload limit.
+  Shorten it; a topic is 128 bytes at most.
+* `mqtt` cannot reach a broker on 8883 — that is the TLS port, and 1.0 has
+  no TLS. Use 1883 on the LAN, or terminate TLS on another machine.
+* `telnet` connects but nothing happens — the door is off. `telnet on`; the
+  port is 23, no authentication.
+* `telnet` answers anyone who connects — there is no password and no TLS.
+  Keep it on the LAN and run `telnet off` when it is not needed.
 
 ## The checks and the tools
 

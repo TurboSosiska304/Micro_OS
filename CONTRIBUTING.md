@@ -71,6 +71,25 @@ Rules:
 * Features go to `feature/<what>`, bugs to `fix/<what>`.
 * Every significant architectural change comes with an ADR in `docs/adr/`.
 
+### Versions and the changelog
+
+The rule is [ADR 0011](docs/adr/0011-versioning-and-1.0.md), and every
+release has a section in [CHANGELOG.md](CHANGELOG.md).
+
+* **Before 1.0 the minor number is a phase, not a compatibility promise.**
+  0.5, 0.6, 0.7 may break the syscall table, the image format or the volume
+  when the release notes and the migration guide say so.
+* **1.0 freezes the contracts.** After `1.0.0` the numbers and the meaning of
+  the system calls, MOX1 and the MicroFS volume change only by adding; a
+  breaking change is `2.0.0`. A new call takes the next free number, and a
+  number is never reused.
+* A release candidate (`vX.Y.Z-rcN`) is cut before a major; only fixes are
+  allowed after it. A pre-release tag with a dash must match
+  `kernel_version()` in `components/kernel/include/kernel/config.h`.
+* The changelog says what changed, not what is planned: a feature is written
+  there when its commit is in the tag, and a gate that is still open stays
+  open in [`docs/releases/1.0.md`](docs/releases/1.0.md).
+
 ## Tests
 
 * Unit tests live in `tests/`; the framework is our own minimal one
