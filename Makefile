@@ -23,7 +23,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan smoke integrity ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-run x86-smoke
+.PHONY: help all build test test-asan test-tsan test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-run x86-run-serial x86-smoke x86-vga-smoke x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke
 
 help:
 	@echo "Micro OS — available targets:"
@@ -31,8 +31,10 @@ help:
 	@echo "  make test       build and run the unit tests (host)"
 	@echo "  make test-asan  the same tests with the address and UB sanitizers"
 	@echo "  make test-tsan  the same tests under the race detector"
+	@echo "  make test-minimal  the host tests with the optional features off"
 	@echo "  make smoke      boot the simulator and check its answers"
 	@echo "  make integrity  the integrity check of the repository and the bundle"
+	@echo "  make wiki-check the links of the user wiki (docs/wiki)"
 	@echo "  make ci         build, test, test-asan, test-tsan, smoke, integrity"
 	@echo "                  (x86-smoke when qemu-system-x86_64 is installed)"
 	@echo "  make sim        build and run the host simulator"
@@ -43,8 +45,14 @@ help:
 	@echo "  make idf-monitor attach the serial monitor"
 	@echo "  make idf-size   show the firmware size report"
 	@echo "  make x86-build  build the kernel for x86-64 (a multiboot image)"
-	@echo "  make x86-run    boot it in QEMU"
+	@echo "  make x86-run    boot it in a QEMU window (VGA text, PS/2 keyboard)"
+	@echo "  make x86-run-serial  boot it with the serial console (-nographic)"
 	@echo "  make x86-smoke  boot it and check what it says"
+	@echo "  make x86-vga-smoke   check the screen and the keyboard without a display"
+	@echo "  make x86-run-disk   boot the window with an 8 MB disk on the IDE channel"
+	@echo "  make x86-run-disk-serial  the same disk in a terminal (-nographic)"
+	@echo "  make x86-disk-smoke two boots on one disk image, a file survives both"
+	@echo "  make x86-net-smoke   the network: ping, UDP and HTTP on QEMU user-net"
 	@echo "  make bundle     collect the firmware into dist/ for distribution"
 
 all: build
@@ -68,6 +76,21 @@ test-asan:
 	cmake --build $(ASAN_DIR)
 	ctest --test-dir $(ASAN_DIR) --output-on-failure
 
+# The second host configuration (ADR 0010): the optional features off. It is
+# a target of its own, not a part of `make ci` at first: it proves that the
+# sources still build without the PSRAM, the MOX1 runtime and the network,
+# and that the tests which do not need them still pass. The tests of a
+# feature that is off are guarded in the source, not skipped by the runner.
+MINIMAL_DIR ?= build-minimal
+MINIMAL_FLAGS := -DKERNEL_PSRAM=OFF -DKERNEL_EXEC=OFF \
+                 -DMICRO_OS_NET=OFF -DMICRO_OS_TELNET=OFF -DMICRO_OS_WIFI=OFF \
+                 -DMICRO_OS_FS_FAT32=OFF -DMICRO_OS_FS_EXT2=OFF
+
+test-minimal:
+	cmake -B $(MINIMAL_DIR) -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug $(MINIMAL_FLAGS)
+	cmake --build $(MINIMAL_DIR)
+	ctest --test-dir $(MINIMAL_DIR) --output-on-failure
+
 # The whole simulator at once, not a piece of it: the kernel boots and the
 # shell answers. The first line of the kernel after every command is the
 # exit status of the command (0 is success) — the smoke test keys on it.
@@ -79,6 +102,13 @@ smoke:
 # against sdkconfig.defaults, the git objects and the hygiene of the sources.
 integrity:
 	python3 tools/integrity_check.py --verbose
+	python3 tools/wiki_check.py
+
+# The links of the user wiki (docs/wiki, the pages are Markdown with relative
+# links). The integrity check calls it too; the target is for one page at a
+# time while the wiki is edited.
+wiki-check:
+	python3 tools/wiki_check.py
 
 # What a contributor runs before pushing: the workflows of the cloud
 # repeat this list on every push (and add valgrind and the firmware), so
@@ -107,7 +137,7 @@ sim: build
 	$(BUILD_DIR)/ports/port_host/microos_sim
 
 clean:
-	rm -rf $(BUILD_DIR) $(ASAN_DIR)
+	rm -rf $(BUILD_DIR) $(ASAN_DIR) $(MINIMAL_DIR)
 
 format:
 	@command -v clang-format >/dev/null 2>&1 || { echo "clang-format not found"; exit 1; }
@@ -140,16 +170,94 @@ idf-size: idf-check
 # the kernel to its address and turns the long mode on.
 X86_BUILD := build-x86
 
+# The window of `make x86-run`: GTK when QEMU was built with it, SDL for a
+# machine without it. `make x86-run X86_DISPLAY=sdl` picks the other one.
+X86_DISPLAY ?= gtk
+
 x86-build:
 	cmake -B $(X86_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release
 	cmake --build $(X86_BUILD) --target image
 
 x86-run: x86-build
+	@qemu-system-x86_64 -display help 2>&1 | grep -qw "$(X86_DISPLAY)" || { \
+		echo "QEMU has no '$(X86_DISPLAY)' display: install qemu-ui-gtk" >&2; \
+		echo "(Arch: sudo pacman -S qemu-ui-gtk) or use make x86-run-serial" >&2; \
+		exit 1; }
+	qemu-system-x86_64 -kernel $(X86_BUILD)/loader32.elf \
+		-initrd $(X86_BUILD)/microos64.bin -m 256 -no-reboot \
+		-display $(X86_DISPLAY) -serial null
+
+# The same machine with the console of the serial port and no window: the
+# way it was run before the VGA and the keyboard, kept for a terminal, a
+# script or a machine without a display server.
+x86-run-serial: x86-build
 	qemu-system-x86_64 -kernel $(X86_BUILD)/loader32.elf \
 		-initrd $(X86_BUILD)/microos64.bin -m 256 -nographic -no-reboot
 
 x86-smoke: x86-build
 	python3 tools/x86_smoke.py
+
+# The window without a display: the monitor of QEMU reads the text memory of
+# the VGA and presses the keys of the keyboard, so a build farm can check the
+# screen and IRQ1. Not a part of `make ci`: the monitor is a tool of its own.
+x86-vga-smoke: x86-build
+	python3 tools/x86_vga_smoke.py
+
+# The disk of the port (ADR 0008): a raw image of 8 MB with the MBR of one
+# partition. The image is made once and then kept: a person boots the machine,
+# writes a file, boots it again and finds the file there, which is the whole
+# point of a disk. `make x86-disk-smoke` works on an image of its own and
+# removes it, so a run of the test never disturbs the disk of a person.
+X86_DISK_IMAGE := $(X86_BUILD)/disk.img
+
+$(X86_DISK_IMAGE):
+	python3 tools/x86_disk_smoke.py --mkimage $(X86_DISK_IMAGE)
+
+x86-run-disk: x86-build $(X86_DISK_IMAGE)
+	@qemu-system-x86_64 -display help 2>&1 | grep -qw "$(X86_DISPLAY)" || { \
+		echo "QEMU has no '$(X86_DISPLAY)' display: install qemu-ui-gtk" >&2; \
+		echo "(Arch: sudo pacman -S qemu-ui-gtk) or use make x86-run-disk-serial" >&2; \
+		exit 1; }
+	qemu-system-x86_64 -kernel $(X86_BUILD)/loader32.elf \
+		-initrd $(X86_BUILD)/microos64.bin -m 256 -no-reboot \
+		-display $(X86_DISPLAY) -serial null \
+		-drive file=$(X86_DISK_IMAGE),format=raw,if=ide,index=0,cache=writeback
+
+x86-run-disk-serial: x86-build $(X86_DISK_IMAGE)
+	qemu-system-x86_64 -kernel $(X86_BUILD)/loader32.elf \
+		-initrd $(X86_BUILD)/microos64.bin -m 256 -nographic -no-reboot \
+		-drive file=$(X86_DISK_IMAGE),format=raw,if=ide,index=0,cache=writeback
+
+x86-disk-smoke: x86-build
+	python3 tools/x86_disk_smoke.py
+
+# The network of the port (K6): a build of its own, with the HTTP client, the
+# page of the state and the clock of NTP of components/net
+# (-DMICRO_OS_X86_NET=ON) and a QEMU machine on its user-mode network. Not a
+# part of `make ci`: the network of the test is the loopback of the host, and
+# a build farm is not a place to open a port. The default image keeps the flag
+# off, so `make x86-smoke` is the same machine it always was.
+X86_NET_BUILD := build-x86-net
+
+# The machine of `make x86-net-run` forwards 8080 of the loopback to 8080 of
+# the guest, so `httpd` on the console and `curl http://127.0.0.1:8080/` on
+# the host are the same page. The smoke test makes its own forward, on a port
+# it found free.
+X86_NET_RUN_DEVICE := -netdev user,id=n0,hostfwd=tcp:127.0.0.1:8080-:8080 \
+	-device virtio-net-pci,netdev=n0,disable-modern=on
+
+x86-net-build:
+	cmake -B $(X86_NET_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
+		-DMICRO_OS_X86_NET=ON
+	cmake --build $(X86_NET_BUILD) --target image
+
+x86-net-run: x86-net-build
+	qemu-system-x86_64 -kernel $(X86_NET_BUILD)/loader32.elf \
+		-initrd $(X86_NET_BUILD)/microos64.bin -m 256 -nographic -no-reboot \
+		$(X86_NET_RUN_DEVICE)
+
+x86-net-smoke: x86-net-build
+	X86_BUILD=$(X86_NET_BUILD) python3 tools/x86_net_smoke.py
 
 bundle: idf-check
 	. $(IDF_EXPORT) && idf.py -D IDF_TARGET=$(IDF_TARGET) build && \

@@ -79,7 +79,11 @@ static void test_procfs(void)
 
     rc = read_file("/proc/meminfo", buffer, sizeof(buffer));
     KT_CHECK(rc > 0);
+#if KERNEL_PSRAM
     KT_CHECK(strstr(buffer, "psram") != NULL);
+#else
+    KT_CHECK(strstr(buffer, "psram") == NULL);
+#endif
 
     rc = read_file("/proc/tasks", buffer, sizeof(buffer));
     KT_CHECK(rc > 0);

@@ -1,0 +1,12 @@
+menu "Micro OS WiFi"
+
+    config MICRO_OS_WIFI
+        bool "the WiFi station"
+        default y
+        help
+            The portable core of the station, the radio of the port and the
+            driver that registers the module and the command. A build
+            without a network turns this off and links none of the three:
+            the ESP-IDF WiFi stack is not asked for either.
+
+endmenu

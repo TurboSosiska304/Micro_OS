@@ -24,3 +24,32 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
     K_UNUSED(argv);
     return -1;
 }
+
+bool k_port_exec_active(void)
+{
+    return false;
+}
+
+void k_port_exec_exit(int code)
+{
+    K_UNUSED(code);
+}
+
+/*
+ * The board has no address space per task: a program would be a task of the
+ * kernel and its pointers would be the kernel's own. Every range is accepted,
+ * exactly as on a machine where the pointer check has nothing to check.
+ */
+bool k_port_exec_contains(const void *ptr, k_size_t size)
+{
+    K_UNUSED(ptr);
+    K_UNUSED(size);
+    return true;
+}
+
+/* Without an MMU the child shares the memory: the kernel's placeholder. */
+int k_port_fork_copy(struct task *child)
+{
+    K_UNUSED(child);
+    return -1;
+}

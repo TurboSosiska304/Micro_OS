@@ -25,6 +25,7 @@ static long (*sys_strtol)(const char *, char **, int) = strtol;
 #include "libc/stdlib.h"
 #include "libc/unistd.h"
 
+#include "kernel/config.h"
 #include "kernel/errno.h"
 #include "kernel/kmm.h"
 #include "kernel/ksys.h"
@@ -439,7 +440,18 @@ static void test_errors(void)
     /* The text of the error is the usual one. */
     KT_CHECK_STR_EQ(microos_strerror(2), "no such file or directory");
     KT_CHECK_STR_EQ(microos_strerror(9), "bad file descriptor");
+    KT_CHECK_STR_EQ(microos_strerror(36), "file name too long");
+    KT_CHECK_STR_EQ(microos_strerror(10), "no child processes");
     KT_CHECK_STR_EQ(microos_strerror(0), "no error");
+
+    /*
+     * The call returns its code with the minus sign of a system call and
+     * microos_errno() keeps it positive; both name the same error.
+     */
+    KT_CHECK_STR_EQ(microos_strerror(-36), "file name too long");
+    KT_CHECK_STR_EQ(microos_strerror(-10), "no child processes");
+    KT_CHECK_STR_NE(microos_strerror(-36), "unknown error");
+    KT_CHECK_STR_NE(microos_strerror(-10), "unknown error");
 
     teardown();
 }
@@ -737,6 +749,7 @@ static void test_numbers_match_the_system(void)
 static void test_permissions(void)
 {
     struct vfs_stat info;
+    k_ssize_t got;
     int fd;
 
     ktest_begin("libc: chmod and chown change the mode and the owner");
@@ -770,6 +783,87 @@ static void test_permissions(void)
     KT_CHECK_INT_EQ(microos_chmod("/nothing-here", 0644), -1);
     KT_CHECK_INT_EQ(microos_errno(), 2); /* ENOENT */
 
+    /*
+     * The directory flag of the library reaches the kernel. Without it the
+     * open of a directory is EISDIR; with it the descriptor reads the
+     * entries through readdir.
+     */
+    KT_CHECK_INT_EQ(microos_mkdir("/lib-dir"), 0);
+    fd = microos_open("/lib-dir/one.txt", MICROOS_O_WRONLY | MICROOS_O_CREAT | MICROOS_O_TRUNC);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK(microos_close(fd) == 0);
+    }
+
+    KT_CHECK_INT_EQ(microos_open("/lib-dir", MICROOS_O_RDONLY), -1);
+    KT_CHECK_INT_EQ(microos_errno(), 21); /* EISDIR */
+
+    fd = microos_open("/lib-dir", MICROOS_O_RDONLY | MICROOS_O_DIRECTORY);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        struct vfs_dirent entries[2];
+
+        memset(entries, 0, sizeof(entries));
+        got = ksys_readdir(fd, entries, sizeof(entries));
+        KT_CHECK_INT_EQ(got, (k_ssize_t)sizeof(struct vfs_dirent)); /* one entry */
+        KT_CHECK_STR_EQ(entries[0].name, "one.txt");
+        KT_CHECK(microos_close(fd) == 0);
+    }
+
+    /* A file is not a directory, even when the flags ask for one. */
+    KT_CHECK_INT_EQ(microos_open("/lib-dir/one.txt", MICROOS_O_RDONLY | MICROOS_O_DIRECTORY), -1);
+    KT_CHECK_INT_EQ(microos_errno(), 20); /* ENOTDIR */
+
+    /* The flag of a directory goes with O_RDONLY and nothing else. */
+    KT_CHECK_INT_EQ(microos_open("/lib-dir", MICROOS_O_WRONLY | MICROOS_O_DIRECTORY), -1);
+    KT_CHECK_INT_EQ(microos_errno(), 22); /* EINVAL */
+
+    teardown();
+}
+
+/*
+ * The property: statx of the library reports the numbers of the kernel and
+ * the moments of the record, and the errors are the errors of POSIX.
+ */
+static void test_statx(void)
+{
+    struct microos_statx info;
+    int fd;
+
+    ktest_begin("libc: statx reports the object and its moments");
+
+    setup();
+
+    fd = microos_open("/lib-statx.txt", MICROOS_O_WRONLY | MICROOS_O_CREAT | MICROOS_O_TRUNC);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK(microos_write(fd, "hello", 5) == 5);
+        KT_CHECK(microos_close(fd) == 0);
+    }
+
+    memset(&info, 0, sizeof(info));
+    KT_CHECK_INT_EQ(microos_statx("/lib-statx.txt", &info), 0);
+    KT_CHECK_INT_EQ(microos_errno(), 0);
+    KT_CHECK_INT_EQ(info.size, 5u);
+    KT_CHECK_INT_EQ(info.type, 1u);
+    KT_CHECK_INT_EQ(info.mode, MFS_MODE_DEFAULT);
+    KT_CHECK_INT_EQ(info.owner, 0u);
+    KT_CHECK(info.inode != 0u);
+
+    KT_CHECK_INT_EQ(microos_mkdir("/lib-statx-dir"), 0);
+    KT_CHECK_INT_EQ(microos_statx("/lib-statx-dir", &info), 0);
+    KT_CHECK_INT_EQ(info.type, 2u);
+
+    /* An object that is not there is ENOENT, not a zeroed answer. */
+    KT_CHECK_INT_EQ(microos_statx("/lib-statx-missing", &info), -1);
+    KT_CHECK_INT_EQ(microos_errno(), 2);
+
+    /* A NULL path or a NULL answer is a mistake of the caller. */
+    KT_CHECK_INT_EQ(microos_statx(NULL, &info), -1);
+    KT_CHECK_INT_EQ(microos_errno(), 22);
+    KT_CHECK_INT_EQ(microos_statx("/lib-statx.txt", NULL), -1);
+    KT_CHECK_INT_EQ(microos_errno(), 22);
+
     teardown();
 }
 
@@ -779,6 +873,7 @@ static void test_permissions(void)
  * ENOSYS of the machine that cannot run a program at all, which is what the
  * simulator says for a file of the format of the system.
  */
+#if KERNEL_EXEC
 static void test_execve(void)
 {
     static const char junk[] = "not a program of this system, honestly\n";
@@ -813,6 +908,7 @@ static void test_execve(void)
 
     teardown();
 }
+#endif /* KERNEL_EXEC */
 
 void test_libc(void)
 {
@@ -828,5 +924,8 @@ void test_libc(void)
     test_memory_keeps_the_data();
     test_calloc_is_empty();
     test_permissions();
+    test_statx();
+#if KERNEL_EXEC
     test_execve();
+#endif
 }

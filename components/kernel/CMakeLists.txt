@@ -19,6 +19,7 @@ set(MICRO_OS_KERNEL_SRCS
     "src/log.c"
     "src/net.c"
     "src/panic.c"
+    "src/partition.c"
     "src/power.c"
     "src/render.c"
     "src/sched.c"
@@ -33,6 +34,12 @@ if(ESP_PLATFORM)
         SRCS ${MICRO_OS_KERNEL_SRCS}
         INCLUDE_DIRS "include"
     )
+
+    # The kernel flags of the board (ADR 0010): the PSRAM is there, and the
+    # machine cannot enter a program (k_port_exec_supported() is false), so
+    # the MOX1 parser and the exec path are not compiled. PUBLIC, because
+    # the shell, the library and the syscalls ask the same questions.
+    target_compile_definitions(${COMPONENT_LIB} PUBLIC KERNEL_PSRAM=1 KERNEL_EXEC=0)
 
     # The discipline of the host build: the sources of the project are
     # compiled with the extra warnings, so a mistake is a message at

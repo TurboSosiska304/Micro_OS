@@ -50,6 +50,26 @@ static inline long prog_write(int fd, const void *buf, unsigned long count)
     return prog_call(KSYS_WRITE, fd, (long)(unsigned long)buf, (long)count, 0, 0, 0);
 }
 
+static inline long prog_open(const char *path, long flags)
+{
+    return prog_call(KSYS_OPEN, (long)(unsigned long)path, flags, 0, 0, 0, 0);
+}
+
+static inline long prog_close(int fd)
+{
+    return prog_call(KSYS_CLOSE, fd, 0, 0, 0, 0, 0);
+}
+
+static inline long prog_read(int fd, void *buf, unsigned long count)
+{
+    return prog_call(KSYS_READ, fd, (long)(unsigned long)buf, (long)count, 0, 0, 0);
+}
+
+static inline long prog_stat(const char *path, void *buf)
+{
+    return prog_call(KSYS_STAT, (long)(unsigned long)path, (long)(unsigned long)buf, 0, 0, 0, 0);
+}
+
 static inline long prog_getpid(void)
 {
     return prog_call(KSYS_GETPID, 0, 0, 0, 0, 0, 0);
@@ -63,6 +83,33 @@ static inline long prog_uptime(void)
 static inline long prog_sleep(long ms)
 {
     return prog_call(KSYS_SLEEP, ms, 0, 0, 0, 0, 0);
+}
+
+/*
+ * The process calls. On a machine with an address space per task fork() is
+ * 0 in the child and the pid of the child in the parent; waitpid() sleeps
+ * until that child finishes and writes its status where the pointer says.
+ */
+static inline long prog_fork(void)
+{
+    return prog_call(KSYS_FORK, 0, 0, 0, 0, 0, 0);
+}
+
+static inline long prog_waitpid(long pid, int *status, long flags)
+{
+    return prog_call(KSYS_WAITPID, pid, (long)(unsigned long)status, flags, 0, 0, 0);
+}
+
+/*
+ * The end of a program of this port: the kernel takes it down and returns to
+ * the call that entered it, so this call does not come back. A program that
+ * returned with `ret` instead would pop the zero at the top of its stack and
+ * fault on address zero; the port would recover, but the status would be the
+ * fault of a mistake and not the number the program chose.
+ */
+static inline long prog_exit(int code)
+{
+    return prog_call(KSYS_EXIT, code, 0, 0, 0, 0, 0);
 }
 
 /* The length of the line, without the library a program does not have. */

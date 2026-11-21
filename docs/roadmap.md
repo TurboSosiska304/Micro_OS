@@ -57,7 +57,7 @@ written when the project was an operating system for one board; the numbers
 * [x] `make smoke` drives it and checks the transcript
 * [x] A second bare-metal machine: x86-64 in QEMU (`make x86-smoke`)
 
-## K3 - Programs (in progress)
+## K3 - Programs (done)
 
 * [x] The format of a program: MOX1, a flat image linked for the window of the
       port; the parser checks the header against the image
@@ -76,39 +76,120 @@ written when the project was an operating system for one board; the numbers
 * [x] `argv` reaches the port, and the ABI of the entry is written down
 * [x] An entry into the kernel from a program (`int $0x80`), with the status
       of a returned program and its arguments
-* [ ] `mkprog.sh` checks the address a program is linked for against the base
+* [x] `mkprog.sh` checks the address a program is linked for against the base
       of the window of the port
 
-## K4 - Protection (in progress)
+## K4 - Protection (done)
 
 * [x] Mode bits and an owner in the file, set by `chmod`/`chown`
 * [x] The arguments of a system call checked at the edge
 * [x] The permissions enforced at the edge, for the one user of the system, at
       `open` and `execve`
-* [ ] The `x` bit of the directories of a path is walked and checked
-* [ ] A real `fork()`: an address space per task, copy on write - the
-      milestone of the x86-64 paging (ADR 0002, ADR 0005)
+* [x] The `x` bit of the directories of a path is walked and checked
+* [x] A real `fork()`: an address space per task, copy on write - the
+      milestone of the x86-64 paging. The page tables per task, the copy of
+      the tables, the fault of the first write and `k_port_fork_copy()` are
+      done on x86-64 (contract 1.5, ADR 0005 and ADR 0007); the board keeps
+      the placeholder of a machine without an MMU
 
-## K5 - A processor with an MMU (planned)
+## K5 - A processor with an MMU (in progress)
 
-* [ ] The paging of the x86-64 port: page tables per task, the higher half,
-      user and kernel pages, a fault handler that means something
+* [x] Page tables per program on x86-64: the kernel identity map is
+      supervisor-only, the window at 32 MiB is user pages over a physical
+      arena at 64 MiB, the null page is not mapped and the stack has a guard
+      page (ADR 0007)
+* [x] Ring 3: a GDT with user code and data, a TSS with `RSP0` and `IST1`, an
+      `int $0x80` gate with `DPL 3` and an `iretq` entry; the program prints
+      `cpl 3` and `make x86-smoke` checks it
+* [x] A fault handler that means something: a page fault, `#UD` or `#GP` of
+      ring 3 is printed as `the program faulted: vector N at 0x...`, the
+      program is taken down and the shell stays alive
+* [x] `exit` of a program ends the task it runs in, and the caller of
+      `execve` waits for it; `execve` answers 0 (contract 1.5)
+* [x] An errno per task: the TLS block is copied per task and `IA32_FS_BASE`
+      follows the task and the privilege boundary
+* [x] Page tables per *task* and copy on write: a program is a task with its
+      own CR3 and kernel stack, `fork()` copies the tables, both copies are
+      read-only until the first write, and `k_port_fork_copy()` is the seam
+      of the contract (K4, ADR 0005 and ADR 0007)
+* [x] `copy_from_user`/`copy_to_user` at the edge of the system call: the
+      port answers whether a range is memory of the caller, a path and `argv`
+      are copied into buffers of the kernel, and a bad pointer is `EFAULT`
+      instead of a fault of ring 0 (contract 1.6, ADR 0007; `/bin/badptr` in
+      `make x86-smoke`)
+* [ ] The kernel in a higher half: the plan of the loader, the linker script
+      and `page_phys()` is written down in ADR 0007, not taken
 * [ ] A port for a real ARM with an MMU: the same contract, a second `arch/`
 * [ ] `KERNEL_NOMMU` becomes 0 and the concessions become features
 
-## K6 - The filesystem and the network (planned)
+## K6 - The filesystem and the network (in progress)
 
-* [ ] A second block device and a second filesystem behind the VFS
-* [ ] Timestamps of a file, fed by the clock of the kernel
+* [x] A second filesystem behind the VFS: the block devices and the MBR/GPT
+      partitions are there (ADR 0008), the types are registered and
+      mounted by name (`vfs_mount_type`), and FAT12/16/32 is read and
+      written with long names (ADR 0009); a volume of `/mnt/...` is mounted
+      next to MicroFS in the tests
+* [x] FAT32 write: create, write, append, truncate, unlink, mkdir and the
+      free-cluster map a write needs; both copies of the table, long names
+      made with their checksum, `statfs`; no journal, so a power cut is a
+      volume the check can only describe
+* [x] `fsck` of FAT, read-only: the boot sector and the BPB, both copies of
+      the table, the chains (a loop, a cross-link, a cluster outside the
+      volume), the root and the subdirectories, the checksum of the long
+      names, the lost clusters and the free count; `fsck fat <point|device>`
+      at the console, and a volume beyond 65536 clusters refused with a
+      message
+* [ ] A journal or a cache of the changes under a write, and a repair of the
+      clusters a check calls lost
+* [ ] ext2, the reader with inodes and a superblock a checker can walk
+* [x] `/etc/fstab` and the `mount` command over the type registry: the boot
+      mounts the table after the root, `mount <device> <point> <type>` and
+      `umount <point>` work at the console, and a line that does not mount is
+      reported and skipped
+* [x] Timestamps of a file, fed by the clock of the kernel: the record of
+      MicroFS has `mtime` and `ctime` in version 2, an old volume keeps its
+      16 bytes, and `statx` (26) reports the moments (ADR 0013)
 * [x] A page of the state over HTTP: `httpd` on the sockets, `/` and `/health`
-* [ ] MQTT over the sockets
+* [x] MQTT over the sockets: a 3.1.1 client at QoS 0 and 1, with a fake broker in the tests
+* [x] The network on the x86-64 machine: a virtio-net driver (the legacy I/O
+      interface, polled, ADR 0008 for the shape of a device of the port) and a
+      stack of its own - ARP, IPv4, ICMP, UDP, a client of TCP with one
+      segment in flight and a timeout retransmission, and the server half of
+      the contract: a table of doors, SYN/ACK, a reset for a port nobody
+      listens on and a session that `accept` hands out. `netinfo`, `ping`,
+      `netudp` and `dns` come from the port, `http get`, `httpd` and `ntp`
+      from `components/net` behind `-DMICRO_OS_X86_NET=ON`, and
+      `make x86-net-smoke` checks the echo of the gateway, a UDP exchange, an
+      HTTP GET against a server of the host, the page of the state served by
+      the guest through `hostfwd`, and a name the resolver answers once
+      (10.0.2.15/24 over QEMU user-net, no DHCP)
+* [x] DNS with a cache: the resolver of `components/net` (`net/dns.h`) builds
+      the query, reads the first A record with its time to live and keeps
+      eight names in a cache, and the x86-64 stack asks it for every name, so
+      `http`, `httpd` and `mqtt` get the cache behind `k_socket_connect`; the
+      board still resolves through lwIP, which has one of its own
 
-## K7 - Quality (in progress)
+## K7 - Quality (done)
 
 * [x] The races of the host port under TSan, in the cloud CI and in `make ci`
-* [ ] A fuzz of the syscall ABI and of the parsers of the filesystem: MOX1
-      and the edge of `exec` have a deterministic seed, the records of
-      MicroFS have none
+* [x] A fuzz of the syscall ABI and of the parsers of the filesystem: MOX1,
+      the edge of `exec` and the records of MicroFS have a deterministic seed
 * [x] The budget of the image checked at every release (`make integrity`)
-* [ ] The budget of the internal SRAM checked as well (the stacks, the
-      drivers, the kernel)
+* [x] The budget of the internal SRAM checked as well: 128 KiB of static
+      DRAM, read from the map of the ESP-IDF build
+* [x] The optional features behind compile-time flags (ADR 0010):
+      `KERNEL_PSRAM`, `KERNEL_EXEC` and the `MICRO_OS_*` switches of the
+      network components, the defaults per build, `make test-minimal` and
+      the check of the map
+
+## K8 - Many cores (planned)
+
+* [ ] A `struct k_cpu` per core and a run queue per core; the scheduler never
+      runs one task on two cores (ADR 0012)
+* [ ] The allocator, the VFS, the console and the block layer safe under two
+      cores; the locks that sleep and the locks that spin are named
+* [ ] x86-64: AP bring-up, local APIC timer, I/O APIC and the IPI of a TLB
+      and a reschedule; `make x86-smoke` with `-smp 2`
+* [ ] ESP32: the kernel tasks on both cores of the Pico, no driver assuming
+      one core
+* [ ] `KERNEL_SMP` (ADR 0010) and the host TSan run as the gate

@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "kernel/config.h"
 #include "kernel/errno.h"
 #include "kernel/ksys.h"
 #include "kernel/log.h"
@@ -287,7 +288,7 @@ static void test_abi_is_stable(void)
         {KSYS_UPTIME, "uptime"},   {KSYS_REBOOT, "reboot"},   {KSYS_FORK, "fork"},
         {KSYS_GETPPID, "getppid"}, {KSYS_WAITPID, "waitpid"}, {KSYS_MALLOC, "malloc"},
         {KSYS_FREE, "free"},       {KSYS_REALLOC, "realloc"}, {KSYS_CHMOD, "chmod"},
-        {KSYS_CHOWN, "chown"},     {KSYS_EXECVE, "execve"},
+        {KSYS_CHOWN, "chown"},     {KSYS_EXECVE, "execve"},   {KSYS_STATX, "statx"},
     };
     size_t i;
 
@@ -583,13 +584,13 @@ static void test_path_validation(void)
 
     memset(unterminated, 'a', sizeof(unterminated));
     unterminated[0] = '/';
-    KT_CHECK_INT_EQ(ksys_open(unterminated, KSYS_O_RDONLY), KERR_TOOBIG);
+    KT_CHECK_INT_EQ(ksys_open(unterminated, KSYS_O_RDONLY), KERR_NAMETOOLONG);
 
     /* One byte more than the window, with the terminator outside of it. */
     memset(too_long, 'a', sizeof(too_long));
     too_long[0] = '/';
     too_long[sizeof(too_long) - 1] = '\0';
-    KT_CHECK_INT_EQ(ksys_stat(too_long, &info), KERR_TOOBIG);
+    KT_CHECK_INT_EQ(ksys_stat(too_long, &info), KERR_NAMETOOLONG);
 
     /* The bound itself is still a path: 127 characters are accepted, and the
      * filesystem has the last word about what they name. */
@@ -659,6 +660,27 @@ static void test_buffer_validation(void)
         KT_CHECK_INT_EQ(ksys_stat("/edge.txt", NULL), KERR_INVAL);
         KT_CHECK_INT_EQ(ksys_getcwd(NULL, 0), KERR_INVAL);
         KT_CHECK_INT_EQ(ksys_getcwd(buffer, 0), KERR_INVAL);
+
+#if KERNEL_EXEC
+        /*
+         * The vector of a program is copied at the edge as well: one word
+         * more than the frame holds is E2BIG before any file is looked at.
+         * (The addresses that are not memory of the caller are EFAULT only
+         * where a port has an address space to check; that half is
+         * programs/badptr.c and make x86-smoke.)
+         */
+        {
+            static const char word[] = "x";
+            char *many[16];
+            k_size_t i;
+
+            for (i = 0; i < 16u; i++) {
+                many[i] = (char *)word;
+            }
+
+            KT_CHECK_INT_EQ(ksys_execve("/edge.txt", many), KERR_TOOBIG);
+        }
+#endif
 
         /* The valid forms are unchanged. */
         KT_CHECK_INT_EQ(ksys_lseek(fd, 0, KSYS_SEEK_END), 0);
@@ -764,6 +786,57 @@ static void test_attributes(void)
 }
 
 /*
+ * The property: statx carries the numbers of stat and the two moments of a
+ * change, the old stat keeps its structure and its answer, and without an
+ * object or a place for the answer the call is the error of the edge.
+ */
+static void test_statx(void)
+{
+    struct vfs_stat plain;
+    struct vfs_statx info;
+    int fd;
+
+    ktest_begin("ksys: statx carries the moments that stat has no field for");
+
+    setup();
+
+    fd = ksys_open("/statx.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_write(fd, "abc", 3), 3);
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    memset(&plain, 0, sizeof(plain));
+    memset(&info, 0, sizeof(info));
+    KT_CHECK_INT_EQ(ksys_stat("/statx.txt", &plain), 0);
+    KT_CHECK_INT_EQ(ksys_statx("/statx.txt", &info), 0);
+
+    /* The old call is untouched: the same object, the same numbers. */
+    KT_CHECK_INT_EQ(info.inode, plain.inode);
+    KT_CHECK_INT_EQ(info.type, plain.type);
+    KT_CHECK_INT_EQ(info.mode, plain.mode);
+    KT_CHECK_INT_EQ(info.owner, plain.owner);
+    KT_CHECK_INT_EQ(info.size, (k_u64_t)3);
+
+    /* A create and a write stamp the record; the clock has a moment even
+     * when the machine has no RTC (the seconds since the boot). */
+    KT_CHECK(info.ctime >= info.mtime);
+    KT_CHECK_INT_EQ(info.type, 1);
+
+    KT_CHECK_INT_EQ(ksys_mkdir("/statx-dir"), 0);
+    KT_CHECK_INT_EQ(ksys_statx("/statx-dir", &info), 0);
+    KT_CHECK_INT_EQ(info.type, 2);
+
+    /* The edge: an object that is not there and no place for the answer. */
+    KT_CHECK_INT_EQ(ksys_statx("/no-such-object", &info), KERR_NOENT);
+    KT_CHECK_INT_EQ(ksys_statx("/statx.txt", NULL), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_statx(NULL, &info), KERR_INVAL);
+
+    teardown();
+}
+
+/*
  * The property: the access of an open is checked against the mode of the
  * file, at the edge, before a descriptor exists. There is one user, uid 0,
  * and no bypass for it: the bits of the owner decide, and a file of the mode
@@ -839,7 +912,8 @@ static void test_open_mode(void)
 /*
  * The property: readdir takes whole entries. A count that is not a multiple
  * of the size of an entry would make the filesystem write the last entry
- * past the end of the buffer of the caller.
+ * past the end of the buffer of the caller, and a descriptor that is not a
+ * directory has no entries to give.
  */
 static void test_readdir_validation(void)
 {
@@ -852,8 +926,7 @@ static void test_readdir_validation(void)
 
     /*
      * The arguments are checked before the filesystem is asked, so a file
-     * of this directory is enough to reach the checks: a directory cannot
-     * be opened through this ABI yet.
+     * of this directory is enough to reach the checks.
      */
     fd = ksys_open("/dir.txt", KSYS_O_RDONLY | KSYS_O_CREAT);
     KT_CHECK(fd >= 0);
@@ -865,11 +938,190 @@ static void test_readdir_validation(void)
 
         /* No space for an entry is not an error: there is nothing to list. */
         KT_CHECK_INT_EQ(ksys_readdir(fd, &entry, 0), 0);
+
+        /* A file is not a directory: the descriptor has no entries. */
+        KT_CHECK_INT_EQ(ksys_readdir(fd, &entry, sizeof(entry)), KERR_NOTDIR);
         KT_CHECK_INT_EQ(ksys_close(fd), 0);
     }
 
     /* The descriptor is checked first, as for every call on a file. */
     KT_CHECK_INT_EQ(ksys_readdir(99, &entry, sizeof(entry)), KERR_BADF);
+
+    teardown();
+}
+
+/*
+ * The property: a directory of the path that the caller may not search
+ * through keeps its children out of reach. The check is the `x` bit of every
+ * directory on the way, and the object at the end has its own check for the
+ * access that is asked of it.
+ */
+static void test_directory_search(void)
+{
+    struct vfs_stat info;
+    char byte = 'x';
+    int fd;
+
+    ktest_begin("ksys: the x bit of every directory decides the search");
+
+    setup();
+
+    KT_CHECK_INT_EQ(ksys_mkdir("/locked"), 0);
+    fd = ksys_open("/locked/file.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_write(fd, &byte, 1), 1);
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    /* A one-byte file is not a program, but the directory is asked first. */
+    KT_CHECK_INT_EQ(ksys_chmod("/locked/file.txt", 0755), 0);
+
+    /* Read and write for the owner but no search: the child is out of
+     * reach for every call that has to pass the directory. */
+    KT_CHECK_INT_EQ(ksys_chmod("/locked", 0600), 0);
+    KT_CHECK_INT_EQ(ksys_open("/locked/file.txt", KSYS_O_RDONLY), KERR_PERM);
+    KT_CHECK_INT_EQ(ksys_stat("/locked/file.txt", &info), KERR_PERM);
+#if KERNEL_EXEC
+    KT_CHECK_INT_EQ(ksys_execve("/locked/file.txt", NULL), KERR_PERM);
+#endif
+
+    /* The directory itself is still described: the end of the path is not
+     * a directory that is passed through. */
+    KT_CHECK_INT_EQ(ksys_stat("/locked", &info), 0);
+    fd = ksys_open("/locked", KSYS_O_RDONLY | KSYS_O_DIRECTORY);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    /* Search for the owner: the child comes back. */
+    KT_CHECK_INT_EQ(ksys_chmod("/locked", 0700), 0);
+    fd = ksys_open("/locked/file.txt", KSYS_O_RDONLY);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+    KT_CHECK_INT_EQ(ksys_stat("/locked/file.txt", &info), 0);
+#if KERNEL_EXEC
+    /* The file is still not an image of a program: the walk let it through
+     * and the file itself is the next reason. */
+    KT_CHECK_INT_EQ(ksys_execve("/locked/file.txt", NULL), KERR_INVAL);
+#endif
+
+    /* Search without read: the path is walked, but the directory cannot be
+     * opened to list it. */
+    KT_CHECK_INT_EQ(ksys_chmod("/locked", 0100), 0);
+    KT_CHECK_INT_EQ(ksys_stat("/locked/file.txt", &info), 0);
+    KT_CHECK_INT_EQ(ksys_open("/locked", KSYS_O_RDONLY | KSYS_O_DIRECTORY), KERR_PERM);
+
+    teardown();
+}
+
+/*
+ * The property: readdir reads the entries of a directory that was opened
+ * with O_DIRECTORY, the position lives in the descriptor, and the end of
+ * the directory is an empty answer and not an error.
+ */
+static void test_readdir_directory(void)
+{
+    struct vfs_dirent entries[8];
+    k_ssize_t got;
+    k_size_t i;
+    int saw_etc = 0;
+    char byte = 'x';
+    int fd;
+
+    ktest_begin("ksys: readdir reads the entries of an open directory");
+
+    setup();
+
+    KT_CHECK_INT_EQ(ksys_mkdir("/etc"), 0);
+
+    fd = ksys_open("/", KSYS_O_RDONLY | KSYS_O_DIRECTORY);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        got = ksys_readdir(fd, entries, sizeof(entries));
+        KT_CHECK(got > 0);
+        if (got > 0) {
+            k_size_t count = (k_size_t)got / sizeof(struct vfs_dirent);
+
+            for (i = 0; i < count; i++) {
+                KT_CHECK(entries[i].name[0] != '\0');
+                if (strcmp(entries[i].name, "etc") == 0 && entries[i].type == 2) {
+                    saw_etc = 1;
+                }
+            }
+        }
+        KT_CHECK(saw_etc);
+
+        /* The position belongs to the descriptor: the next calls go on,
+         * and the end of the directory is an empty answer. */
+        while (ksys_readdir(fd, entries, sizeof(entries)) > 0) {
+        }
+        KT_CHECK_INT_EQ(ksys_readdir(fd, entries, sizeof(entries)), 0);
+
+        /* A directory is read by readdir, not as a stream of bytes. */
+        KT_CHECK_INT_EQ(ksys_read(fd, &byte, 1), KERR_ISDIR);
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    /* O_DIRECTORY goes with O_RDONLY and with nothing else. */
+    KT_CHECK_INT_EQ(ksys_open("/", KSYS_O_RDONLY | KSYS_O_DIRECTORY | KSYS_O_WRONLY), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_open("/", KSYS_O_RDWR | KSYS_O_DIRECTORY), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_open("/", KSYS_O_RDONLY | KSYS_O_DIRECTORY | KSYS_O_TRUNC), KERR_INVAL);
+
+    /* A file is not a directory, whatever the flag of the open says. */
+    fd = ksys_open("/plain.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+    KT_CHECK_INT_EQ(ksys_open("/plain.txt", KSYS_O_RDONLY | KSYS_O_DIRECTORY), KERR_NOTDIR);
+
+    teardown();
+}
+
+/* The answer of a task that waits without having a child of its own. */
+static int g_no_child_any = 1;
+static int g_no_child_blocking = 1;
+
+static void wait_without_a_child(void *arg)
+{
+    int status = -1;
+
+    K_UNUSED(arg);
+
+    g_no_child_any = ksys_waitpid(-1, &status, KSYS_WNOHANG);
+    g_no_child_blocking = ksys_waitpid(-1, &status, 0);
+}
+
+/*
+ * The property: a wait without a child is ECHILD. There is nothing to wait
+ * for, whether the caller was ready to wait or not. The task of the test may
+ * have children of its own by now, so the wait is made in a task that has
+ * none.
+ */
+static void test_wait_no_child(void)
+{
+    struct task *waiter;
+    int status = -1;
+
+    ktest_begin("ksys: a wait without a child is ECHILD");
+
+    setup();
+
+    /* A number that names no child of this task is one more way. */
+    KT_CHECK_INT_EQ(ksys_waitpid(4242, &status, KSYS_WNOHANG), KERR_CHILD);
+    KT_CHECK_INT_EQ(ksys_waitpid(4242, &status, 0), KERR_CHILD);
+
+    waiter = task_create("waiter", wait_without_a_child, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(waiter != NULL);
+    if (waiter != NULL) {
+        KT_CHECK_INT_EQ(task_wait(waiter->pid, NULL, 2000), 0);
+        KT_CHECK_INT_EQ(g_no_child_any, KERR_CHILD);
+        KT_CHECK_INT_EQ(g_no_child_blocking, KERR_CHILD);
+    }
 
     teardown();
 }
@@ -887,6 +1139,10 @@ void test_ksys(void)
     test_buffer_validation();
     test_open_flags();
     test_attributes();
+    test_statx();
     test_open_mode();
+    test_directory_search();
     test_readdir_validation();
+    test_readdir_directory();
+    test_wait_no_child();
 }

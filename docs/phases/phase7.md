@@ -53,7 +53,10 @@ listed at its end and in [docs/roadmap.md](../roadmap.md).
   entry as an offset from the start of the image. It refuses an entry symbol
   that is not in `.text`, and it pads every segment to four bytes before the
   next one starts, so that the copy in words has no tear and the data lands
-  where a program linked for the window reads it.
+  where a program linked for the window reads it. With `--base <hex>` it also
+  checks the window: the first address of `.text` has to be the base plus the
+  header and the data has to follow the padded text, because nothing relocates
+  the image and a program linked for another address would run.
 
 ### `execve` is a duty of the port
 

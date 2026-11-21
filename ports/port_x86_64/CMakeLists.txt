@@ -11,7 +11,8 @@
 #   cmake -B build-x86 -S ports/port_x86_64 -G Ninja
 #   cmake --build build-x86
 #   qemu-system-x86_64 -kernel build-x86/loader32.elf \
-#                      -initrd build-x86/microos64.bin -m 256 -nographic
+#                      -initrd build-x86/microos64.bin -m 256 \
+#                      -display gtk -serial none
 
 cmake_minimum_required(VERSION 3.16)
 
@@ -21,6 +22,32 @@ set(KERNEL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/kernel")
 set(KSHELL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/kshell")
 set(LIBC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/libc")
 set(MFS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/mfs")
+set(FAT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/fs_fat32")
+
+# The second filesystem of the machine (ADR 0009). Off by default: the
+# disk of `make x86-smoke` is one MicroFS volume, and a reader that no call
+# of the boot asks for is an object file of no use. A machine with a FAT
+# partition turns it on and mounts the partition with vfs_mount_type().
+option(MICRO_OS_FS_FAT32 "FAT12/16/32, read and written" OFF)
+
+# The optional features of the image (ADR 0010): the PSRAM pool of the
+# allocator is off, the MOX1 runtime is on (the port can enter a program), and
+# the two wireless services of the board are off. Their flags are written
+# here so that the defaults of the port are in one place.
+option(KERNEL_PSRAM "the PSRAM pool and its statistics in kmm" OFF)
+option(KERNEL_EXEC "the MOX1 parser, execve and the exec command" ON)
+option(MICRO_OS_TELNET "the shell on TCP port 23" OFF)
+option(MICRO_OS_WIFI "the WiFi station" OFF)
+
+# The network of the machine (K6): the port has its own IPv4 stack and a
+# virtio-net driver (src/net.c, src/virtio_net.c), which are always part of
+# the image and cost nothing when QEMU was given no card. This switch adds
+# the commands of components/net - `http`, `httpd` and `ntp` - on top of that
+# stack. It is off by default: the smoke test of the machine keeps the same
+# command list, and `make x86-net-smoke` builds a second image with it on.
+option(MICRO_OS_X86_NET "the http, httpd and ntp commands of components/net" OFF)
+
+set(NET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/net")
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -88,6 +115,34 @@ set(MFS_SOURCES
     "${MFS_DIR}/src/mfs_vfs_mount.c"
 )
 
+set(FAT_SOURCES)
+if(MICRO_OS_FS_FAT32)
+    set(FAT_SOURCES
+        "${FAT_DIR}/src/fat_core.c"
+        "${FAT_DIR}/src/fat_dir.c"
+        "${FAT_DIR}/src/fat_check.c"
+        "${FAT_DIR}/src/fat_vfs.c"
+    )
+endif()
+
+# The services over the sockets: the HTTP client, the page of the state and
+# the clock of NTP. They are portable and speak kernel/net.h, so the same
+# sources that run on the board run here over the stack of the port. The
+# clients are off by default (MICRO_OS_X86_NET); the sources are named here
+# and not by the CMakeLists of the component, which is written for the tree of
+# ESP-IDF. src/dns.c is the exception: the stack of the port asks it for every
+# name, in every image, and it is the cache the contract of K6 asks for.
+set(NET_SOURCES "${NET_DIR}/src/dns.c")
+
+if(MICRO_OS_X86_NET)
+    list(APPEND NET_SOURCES
+        "${NET_DIR}/src/net.c"
+        "${NET_DIR}/src/http.c"
+        "${NET_DIR}/src/ntp.c"
+        "${NET_DIR}/src/net_http_server.c"
+    )
+endif()
+
 # The memory test calls strtoul without including the header of the library;
 # on the board that resolves to the libc of ESP-IDF. Here the name has to
 # point at the conversion of the system, so the header is put in front of
@@ -107,69 +162,95 @@ set_source_files_properties("${KSHELL_DIR}/src/kshell_memtest.c"
 #
 # program.ld puts the text at the base of the window plus the header of the
 # format (0x02000020) and SUBALIGN(4) keeps the 64-byte alignment of the
-# object from moving it.
-# alignment over the address of the script, which moves the code 32 bytes away
-# from every absolute address the program computes for its data. The image has
-# the text right after the header and nowhere else, so the address is pinned
-# here, where the flags of this program are, and the script keeps the shape.
+# object from moving it. The base is named here again and handed to mkprog.sh,
+# which refuses an image linked for another window: a program linked for the
+# wrong address would still run, and every absolute address it computes for
+# its data would name something else.
 set(PROGRAM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/programs")
-set(PROGRAM_IMAGE "${CMAKE_BINARY_DIR}/hello.mox")
-set(PROGRAM_OBJECT "${CMAKE_BINARY_DIR}/hello_mox.o")
+set(PROGRAM_BASE 0x02000000)
 set(MKPROG "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/mkprog.sh")
 
-add_custom_command(
-    OUTPUT "${PROGRAM_IMAGE}"
-    COMMAND ${CMAKE_C_COMPILER} -c -O2 -ffreestanding -fno-stack-protector
-            -fno-pic -fno-pie -mno-red-zone -mgeneral-regs-only -march=x86-64
-            -fno-asynchronous-unwind-tables -Wall -Wextra -Werror
-            -I "${KERNEL_DIR}/include" -I "${PROGRAM_DIR}"
-            -o hello.o "${PROGRAM_DIR}/hello.c"
-    COMMAND ${CMAKE_C_COMPILER} -nostdlib -static -no-pie -Wl,--build-id=none
-            -Wl,-e,hello_main
-            -T "${PROGRAM_DIR}/program.ld" -o hello.elf hello.o
-    COMMAND sh "${MKPROG}" hello.elf hello.mox hello_main
-    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-    DEPENDS "${PROGRAM_DIR}/hello.c" "${PROGRAM_DIR}/prog.h" "${PROGRAM_DIR}/program.ld"
-            "${KERNEL_DIR}/include/kernel/ksys.h" "${MKPROG}"
-    COMMENT "building the image of /bin/hello"
-    VERBATIM
-)
+# Every program of the port is built the same way: compile the C file for the
+# window, link it with the script of the format, turn the sections into a MOX1
+# image and embed the image in the kernel as a blob. The name of the function
+# is the name of the file in /bin and the symbol of the entry is given here.
+function(add_program_image name entry)
+    set(image "${CMAKE_BINARY_DIR}/${name}.mox")
+    set(object "${CMAKE_BINARY_DIR}/${name}_mox.o")
 
-# The blob of the image as an object of the kernel. It goes to .rodata, which
-# the linker script of the port keeps in the image that the loader copies, and
-# objcopy names its symbols after the file: _binary_hello_mox_start and _end.
-add_custom_command(
-    OUTPUT "${PROGRAM_OBJECT}"
-    COMMAND objcopy -I binary -O elf64-x86-64
-            --rename-section .data=.rodata,alloc,load,readonly,data,contents
-            hello.mox hello_mox.o
-    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-    DEPENDS "${PROGRAM_IMAGE}"
-    COMMENT "embedding the image of /bin/hello"
-    VERBATIM
-)
+    add_custom_command(
+        OUTPUT "${image}"
+        COMMAND ${CMAKE_C_COMPILER} -c -O2 -ffreestanding -fno-stack-protector
+                -fno-pic -fno-pie -mno-red-zone -mgeneral-regs-only -march=x86-64
+                -fno-asynchronous-unwind-tables -Wall -Wextra -Werror
+                -I "${KERNEL_DIR}/include" -I "${PROGRAM_DIR}"
+                -o ${name}.o "${PROGRAM_DIR}/${name}.c"
+        COMMAND ${CMAKE_C_COMPILER} -nostdlib -static -no-pie -Wl,--build-id=none
+                -Wl,-e,${entry}
+                -T "${PROGRAM_DIR}/program.ld" -o ${name}.elf ${name}.o
+        COMMAND sh "${MKPROG}" --base ${PROGRAM_BASE} ${name}.elf ${name}.mox ${entry}
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        DEPENDS "${PROGRAM_DIR}/${name}.c" "${PROGRAM_DIR}/prog.h"
+                "${PROGRAM_DIR}/program.ld" "${KERNEL_DIR}/include/kernel/ksys.h" "${MKPROG}"
+        COMMENT "building the image of /bin/${name}"
+        VERBATIM
+    )
 
-set_source_files_properties("${PROGRAM_OBJECT}" PROPERTIES
-    GENERATED TRUE
-    EXTERNAL_OBJECT TRUE
-)
+    # The blob goes to .rodata, which the linker script of the port keeps in
+    # the image that the loader copies; objcopy names its symbols after the
+    # file: _binary_<name>_mox_start and _end.
+    add_custom_command(
+        OUTPUT "${object}"
+        COMMAND objcopy -I binary -O elf64-x86-64
+                --rename-section .data=.rodata,alloc,load,readonly,data,contents
+                ${name}.mox ${name}_mox.o
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        DEPENDS "${image}"
+        COMMENT "embedding the image of /bin/${name}"
+        VERBATIM
+    )
+
+    set_source_files_properties("${object}" PROPERTIES
+        GENERATED TRUE
+        EXTERNAL_OBJECT TRUE
+    )
+
+    set(${name}_OBJECT "${object}" PARENT_SCOPE)
+endfunction()
+
+add_program_image(hello hello_main)
+add_program_image(crash crash_main)
+add_program_image(fork fork_main)
+add_program_image(badptr badptr_main)
 
 add_executable(microos64
     ${KERNEL_SOURCES}
     ${KSHELL_SOURCES}
     ${LIBC_SOURCES}
     ${MFS_SOURCES}
+    ${FAT_SOURCES}
+    ${NET_SOURCES}
     src/boot64.S
     src/kmain.c
     src/shell.c
     src/port_x86_64.c
+    src/vga.c
+    src/ps2.c
+    src/gdt.c
+    src/paging.c
     src/port_exec.c
     src/port_x86_64_task.c
     src/blockdev_ram.c
+    src/ata.c
+    src/virtio_net.c
+    src/net.c
     src/libc_shim.c
     src/interrupts.S
     src/switch.S
-    "${PROGRAM_OBJECT}"
+    "${hello_OBJECT}"
+    "${crash_OBJECT}"
+    "${fork_OBJECT}"
+    "${badptr_OBJECT}"
 )
 
 target_include_directories(microos64 PRIVATE
@@ -177,13 +258,28 @@ target_include_directories(microos64 PRIVATE
     "${KSHELL_DIR}/include"
     "${LIBC_DIR}/include"
     "${MFS_DIR}/include"
+    "${FAT_DIR}/include"
+    "${NET_DIR}/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 
 target_compile_definitions(microos64 PRIVATE
     KERNEL_BOARD_NAME="x86_64"
     KERNEL_BOARD_DESC="QEMU x86-64 machine"
+    KERNEL_PSRAM=$<BOOL:${KERNEL_PSRAM}>
+    KERNEL_EXEC=$<BOOL:${KERNEL_EXEC}>
+    MICRO_OS_NET=$<BOOL:${MICRO_OS_X86_NET}>
+    MICRO_OS_NET_HTTP=$<BOOL:${MICRO_OS_X86_NET}>
+    MICRO_OS_NET_HTTP_SERVER=$<BOOL:${MICRO_OS_X86_NET}>
+    MICRO_OS_NET_NTP=$<BOOL:${MICRO_OS_X86_NET}>
+    MICRO_OS_NET_MQTT=0
+    MICRO_OS_TELNET=$<BOOL:${MICRO_OS_TELNET}>
+    MICRO_OS_WIFI=$<BOOL:${MICRO_OS_WIFI}>
 )
+
+if(MICRO_OS_FS_FAT32)
+    target_compile_definitions(microos64 PRIVATE MICRO_OS_FS_FAT32=1)
+endif()
 
 set_target_properties(microos64 PROPERTIES
     LINK_FLAGS "-nostdlib -static -Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/linker64.ld -Wl,--build-id=none"

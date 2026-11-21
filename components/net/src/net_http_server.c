@@ -20,6 +20,7 @@
 
 #include <string.h>
 
+#include "kernel/config.h"
 #include "kernel/log.h"
 #include "kernel/net.h"
 #include "kernel/sched.h"
@@ -143,9 +144,11 @@ static k_size_t page_of_state(char *buf, k_size_t size)
     text_append_u64(buf, size, &len, k_sysinfo_heap_total() / 1024u);
     text_append(buf, size, &len, " KB\n");
 
+#if KERNEL_PSRAM
     text_append(buf, size, &len, "psram: ");
     text_append_u64(buf, size, &len, k_sysinfo_psram_free() / 1024u);
     text_append(buf, size, &len, " KB free\n");
+#endif
 
     text_append(buf, size, &len, "tasks: ");
     text_append_u64(buf, size, &len, task_count());

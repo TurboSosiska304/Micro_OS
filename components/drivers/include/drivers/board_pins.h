@@ -22,6 +22,14 @@
 #define PIN_BUTTON_B 39
 #define PIN_BUTTON_C 35
 
+/*
+ * The pin that wakes the chip from deep sleep: BUTTON C. The button pulls
+ * the WAKEn net low and a diode carries that to this pin; the INT of the
+ * BM8563 is not on this net (it drives the power latch), so an alarm does
+ * not wake a sleeping chip.
+ */
+#define PIN_WAKE PIN_BUTTON_C
+
 /* Buzzer (passive, PWM) */
 #define PIN_BUZZER 2
 

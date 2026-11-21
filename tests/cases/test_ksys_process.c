@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "kernel/config.h"
 #include "kernel/errno.h"
 #include "kernel/exec.h"
 #include "kernel/ksys.h"
@@ -187,6 +188,20 @@ static void test_fork_numbers(void)
 
     setup();
 
+    /*
+     * A machine without an address space per task refuses the copy of the
+     * caller, and the kernel keeps the placeholder of a fork. The slot it
+     * took for the child before asking the port is given back.
+     */
+    {
+        struct task *copied = (struct task *)0x1;
+        k_size_t before = task_count();
+
+        KT_CHECK_INT_EQ(task_fork(task_self(), "nofork", &copied), -1);
+        KT_CHECK(copied == NULL);
+        KT_CHECK_INT_EQ(task_count(), before);
+    }
+
     parent = task_create("parent", parent_program, NULL, TASK_PRIO_DEFAULT);
     KT_CHECK(parent != NULL);
 
@@ -293,15 +308,16 @@ static void test_wait_validation(void)
             KERR_INVAL);
     }
 
-    /* "Any child" still means any child, and there is nothing to report. */
+    /* "Any child" still means any child. A task without a child is told so,
+     * and a child that has not finished yet leaves the call with 0. */
     rc = ksys_waitpid(-1, &status, KSYS_WNOHANG);
-    KT_CHECK(rc >= 0);
+    KT_CHECK(rc >= 0 || rc == KERR_CHILD);
     if (rc == 0) {
         KT_CHECK_INT_EQ(status, -1);
     }
 
     rc = ksys_waitpid(0, &status, KSYS_WNOHANG);
-    KT_CHECK(rc >= 0);
+    KT_CHECK(rc >= 0 || rc == KERR_CHILD);
 
     teardown();
 }
@@ -319,10 +335,10 @@ static void test_wait_errors(void)
     setup();
 
     /*
-     * The call that does not wait answers at once: there is no child that
-     * could finish.
+     * The call that does not wait answers at once: there is no child with
+     * that number, so there is nothing that could finish.
      */
-    KT_CHECK_INT_EQ(ksys_waitpid(4242, &status, KSYS_WNOHANG), 0);
+    KT_CHECK_INT_EQ(ksys_waitpid(4242, &status, KSYS_WNOHANG), KERR_CHILD);
 
     teardown();
 }
@@ -362,6 +378,7 @@ static void test_fork_data_is_the_same(void)
     teardown();
 }
 
+#if KERNEL_EXEC
 /* Write a 32-bit field the way the header of an image keeps it: the bytes of
  * the file, not a struct of the machine that reads them. */
 static void put_u32(k_u8_t *out, k_u32_t value)
@@ -504,6 +521,7 @@ static void test_execve(void)
 
     teardown();
 }
+#endif /* KERNEL_EXEC */
 
 void test_ksys_process(void)
 {
@@ -513,5 +531,7 @@ void test_ksys_process(void)
     test_wait_errors();
     test_wait_validation();
     test_fork_data_is_the_same();
+#if KERNEL_EXEC
     test_execve();
+#endif
 }

@@ -13,13 +13,20 @@ set(MICRO_OS_DRIVERS_SRCS
     "src/drv_input.c"
     "src/drv_memory.c"
     "src/drv_mic.c"
+    "src/drv_power.c"
     "src/drv_rtc.c"
-    "src/drv_wifi.c"
     "src/fb_draw.c"
     "src/input_debounce.c"
     "src/battery_soc.c"
     "src/rtc_time.c"
 )
+
+# The driver of the station is the glue of the portable core (MICRO_OS_WIFI,
+# ADR 0010): a build without the station registers no module, and the source
+# is not compiled.
+if(CONFIG_MICRO_OS_WIFI)
+    list(APPEND MICRO_OS_DRIVERS_SRCS "src/drv_wifi.c")
+endif()
 
 idf_component_register(
     SRCS ${MICRO_OS_DRIVERS_SRCS}
@@ -27,6 +34,7 @@ idf_component_register(
     REQUIRES kernel font kshell devfs freertos wifi spi_flash esp_psram
              esp_driver_gpio esp_driver_i2c driver esp_driver_spi esp_driver_ledc
              esp_adc esp_driver_i2s esp_timer esp_wifi esp_netif esp_event nvs_flash
+             esp_hw_support
 )
 
     # The discipline of the host build: the sources of the project are

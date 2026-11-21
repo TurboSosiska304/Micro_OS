@@ -21,6 +21,7 @@
 #include <string.h>
 
 #include "kernel/board.h"
+#include "kernel/config.h"
 #include "kernel/kmm.h"
 #include "kernel/kmod.h"
 #include "kernel/sched.h"
@@ -178,8 +179,11 @@ static int cmd_mfetch(int argc, char **argv)
                    (unsigned)(k_sysinfo_heap_total() / 1024));
     print_row(row++, color, "Heap", value);
 
+    /* A machine without external memory has no row to show for it. */
+#if KERNEL_PSRAM
     (void)snprintf(value, sizeof(value), "%u KB free", (unsigned)(k_sysinfo_psram_free() / 1024));
     print_row(row++, color, "Psram", value);
+#endif
 
     {
         struct kmm_stats stats;
@@ -221,5 +225,14 @@ static int cmd_mfetch(int argc, char **argv)
 
 int kshell_register_mfetch(void)
 {
-    return kshell_register("mfetch", "the system report with the logo", cmd_mfetch);
+    static const struct kshell_help help = {
+        .summary = "the system report with the logo",
+        .usage = "mfetch [color]",
+        .detail = "The logo beside a short report: the name and the build, the board, the\n"
+                  "memory, the volume, the uptime, the modules and the shell.\n"
+                  "`color` brings the escape sequences of the terminal; the plain report\n"
+                  "stays printable on the screen of the board.\n",
+    };
+
+    return kshell_register_help("mfetch", &help, cmd_mfetch);
 }

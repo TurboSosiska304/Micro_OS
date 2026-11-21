@@ -72,6 +72,13 @@ struct mfs_vfs_file {
     struct mfs_file file;
 };
 
+/*
+ * The buffer of one directory, for the calls that list it. It is not on the
+ * stack: the entries of a directory of MicroFS do not fit there, and the
+ * filesystem is one volume anyway.
+ */
+static struct mfs_dirent g_entries[MFS_MAX_ENTRIES];
+
 static int vfs_open_file(void *ctx, const char *path, int flags, struct vfs_file *out)
 {
     struct mfs_vfs_file *file;
@@ -165,7 +172,6 @@ static int vfs_close_file(void *ctx, struct vfs_file *vfs_file)
 static int vfs_list_dir(void *ctx, const char *path, struct vfs_dirent *out, k_size_t max,
                         k_size_t *count)
 {
-    static struct mfs_dirent entries[MFS_MAX_ENTRIES];
     k_size_t found = 0;
     k_size_t i;
     int rc;
@@ -173,15 +179,15 @@ static int vfs_list_dir(void *ctx, const char *path, struct vfs_dirent *out, k_s
     K_UNUSED(ctx);
 
     /* The entries of the previous call must not be counted again. */
-    memset(entries, 0, sizeof(entries));
+    memset(g_entries, 0, sizeof(g_entries));
 
-    rc = mfs_list(path, entries, MFS_MAX_ENTRIES);
+    rc = mfs_list(path, g_entries, MFS_MAX_ENTRIES);
     if (rc != MFS_OK) {
         return mfs_to_kerr(rc);
     }
 
     for (i = 0; i < MFS_MAX_ENTRIES; i++) {
-        if (entries[i].name_len == 0 && entries[i].inode == 0) {
+        if (g_entries[i].name_len == 0 && g_entries[i].inode == 0) {
             continue;
         }
 
@@ -189,17 +195,62 @@ static int vfs_list_dir(void *ctx, const char *path, struct vfs_dirent *out, k_s
             break;
         }
 
-        memcpy(out[found].name, entries[i].name, sizeof(out[found].name));
+        memcpy(out[found].name, g_entries[i].name, sizeof(out[found].name));
         out[found].name[MFS_NAME_MAX] = '\0';
-        out[found].inode = entries[i].inode;
-        out[found].type = (entries[i].type & MFS_INODE_DIR) ? 2 : 1;
-        out[found].size = entries[i].size;
+        out[found].inode = g_entries[i].inode;
+        out[found].type = (g_entries[i].type & MFS_INODE_DIR) ? 2 : 1;
+        out[found].size = g_entries[i].size;
         found++;
     }
 
     if (count != NULL) {
         *count = found;
     }
+
+    return MFS_OK;
+}
+
+static int vfs_readdir_dir(void *ctx, struct vfs_file *vfs_file, struct vfs_dirent *out,
+                           k_size_t max, k_size_t *count)
+{
+    struct mfs_vfs_file *file = (struct mfs_vfs_file *)vfs_file->priv;
+    k_size_t found = 0;
+    k_size_t i;
+    int rc;
+
+    K_UNUSED(ctx);
+
+    if (file == NULL || out == NULL || count == NULL) {
+        return mfs_to_kerr(MFS_EINVAL);
+    }
+
+    *count = 0;
+
+    if (max == 0) {
+        return MFS_OK;
+    }
+
+    /* The buffer of the adapter is one directory of this volume. */
+    if (max > MFS_MAX_ENTRIES) {
+        max = MFS_MAX_ENTRIES;
+    }
+
+    memset(g_entries, 0, sizeof(g_entries));
+
+    rc = mfs_readdir(&file->file, g_entries, max, &found);
+    if (rc != MFS_OK) {
+        return mfs_to_kerr(rc);
+    }
+
+    for (i = 0; i < found; i++) {
+        memcpy(out[i].name, g_entries[i].name, sizeof(out[i].name));
+        out[i].name[MFS_NAME_MAX] = '\0';
+        out[i].inode = g_entries[i].inode;
+        out[i].type = (g_entries[i].type & MFS_INODE_DIR) ? 2 : 1;
+        out[i].size = g_entries[i].size;
+    }
+
+    *count = found;
 
     return MFS_OK;
 }
@@ -231,6 +282,37 @@ static int vfs_stat_file(void *ctx, const char *path, struct vfs_stat *out)
      */
     out->mode = mfs_inode_mode(&inode);
     out->owner = mfs_inode_owner(&inode);
+
+    return mfs_to_kerr(MFS_OK);
+}
+
+static int vfs_statx_file(void *ctx, const char *path, struct vfs_statx *out)
+{
+    struct mfs_inode inode;
+    struct mfs_dirent dirent;
+    int rc;
+
+    K_UNUSED(ctx);
+
+    memset(&dirent, 0, sizeof(dirent));
+
+    rc = mfs_stat(path, &inode, &dirent);
+    if (rc != MFS_OK) {
+        return mfs_to_kerr(rc);
+    }
+
+    out->inode = dirent.inode;
+    out->type = (inode.flags & MFS_INODE_DIR) ? 2 : 1;
+    out->size = inode.size;
+    out->mode = mfs_inode_mode(&inode);
+    out->owner = mfs_inode_owner(&inode);
+    /*
+     * The record of a version 1 volume has no room for the two moments,
+     * and the reader of the filesystem answers zero: "unknown", not a
+     * moment of 1970.
+     */
+    out->mtime = inode.mtime;
+    out->ctime = inode.ctime;
 
     return mfs_to_kerr(MFS_OK);
 }
@@ -286,7 +368,9 @@ static const struct vfs_operations g_mfs_operations = {
     .write = vfs_write_file,
     .close = vfs_close_file,
     .list = vfs_list_dir,
+    .readdir = vfs_readdir_dir,
     .stat = vfs_stat_file,
+    .statx = vfs_statx_file,
     .mkdir = vfs_make_dir,
     .unlink = vfs_remove,
     .chmod = vfs_set_mode,

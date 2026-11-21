@@ -28,10 +28,80 @@
 #define KSHELL_ERROR (-1)
 #define KSHELL_USAGE (-2)
 
+/*
+ * A command is not called for `-h` or `--help` as its first word: the shell
+ * answers the help of the table itself, returns KSHELL_OK and does nothing
+ * else. A command with options of its own asks kshell_options() about the
+ * help that stands behind them.
+ */
+
 typedef int (*kshell_cmd_fn)(int argc, char **argv);
 
-/* Register a command. Returns 0 on success. */
+/*
+ * What the help of a command says. It lives in the table of the commands and
+ * not in the handler, so that `-h`, `help <command>` and the list of `help`
+ * cannot disagree after a flag was added, renamed or dropped.
+ *
+ * `detail` is printed as it is and ends with a newline; it holds the lines
+ * that the usage line cannot: what a flag means, what the command refuses.
+ */
+struct kshell_help {
+    const char *summary; /* one line, in the list of the commands */
+    const char *usage;   /* after "usage: ", the name of the command first */
+    const char *detail;  /* a few lines for `-h` and `help <command>` */
+    /*
+     * True when the command has a flag of its own written `-h` (the human
+     * numbers of `df`): the word then reaches the command, and `--help` is
+     * the way to the help of that command. A command that claims the letter
+     * has to say so in its detail, because every other command follows the
+     * rule that -h is the help.
+     */
+    bool owns_short_h;
+};
+
+/* Register a command with one line of help and no usage line of its own. */
 int kshell_register(const char *name, const char *help, kshell_cmd_fn fn);
+
+/* Register a command with the whole help of the table. */
+int kshell_register_help(const char *name, const struct kshell_help *help, kshell_cmd_fn fn);
+
+/*
+ * Print the usage, the summary and the detail of a command. This is the
+ * answer of `-h`, `--help` and `help <command>`: the help was asked for and
+ * given, so the status is KSHELL_OK, and no command does its work for it.
+ * An unknown name answers KSHELL_ERROR and says that there is no such
+ * command.
+ */
+int kshell_help_show(const char *name);
+
+/* The words of a command line, after the options were taken out. */
+struct kshell_args {
+    int argc;
+    char *argv[KSHELL_MAX_ARGS + 1];
+};
+
+/* One option of a command: the letter of "-l" and where to remember it. */
+struct kshell_option {
+    char letter;
+    bool *value;
+};
+
+/* The answers of kshell_options(); they are not the statuses of a command. */
+#define KSHELL_OPTIONS_OK 0
+#define KSHELL_OPTIONS_HELP 1
+#define KSHELL_OPTIONS_ERROR 2
+
+/*
+ * Take the options out of a command line. The helper understands `--` (every
+ * word after it is an argument, even one that begins with a dash), `-h` and
+ * `--help` (KSHELL_OPTIONS_HELP: the caller prints the help with
+ * kshell_help_show(), the request is not a failure), groups of short letters
+ * like "-la", and nothing else: an unknown option prints the usage line of
+ * `usage` and answers KSHELL_OPTIONS_ERROR, which the caller returns as
+ * KSHELL_USAGE.
+ */
+int kshell_options(int argc, char **argv, const struct kshell_option *options, k_size_t count,
+                   const char *usage, struct kshell_args *out);
 
 /* Remove a command. */
 int kshell_unregister(const char *name);

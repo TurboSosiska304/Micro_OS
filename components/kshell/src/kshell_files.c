@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "kernel/config.h"
 #include "kernel/errno.h"
 #include "kernel/ksys.h"
 #include "kernel/task.h"
@@ -14,6 +15,20 @@
 #include "mfs/mfs.h"
 #include "libc/stdlib.h"
 #include "libc/unistd.h"
+
+#if defined(MICRO_OS_FS_FAT32) && MICRO_OS_FS_FAT32
+#include "fs_fat32/fat.h"
+#define FSCK_USAGE "fsck [fat <point|device>]"
+#define FSCK_DETAIL                                                                                \
+    "Read-only, for MicroFS and for FAT: the report names the first problem, and\n"                \
+    "nothing is repaired. A person decides what to do about a broken record.\n"                    \
+    "  fat <point|device>  check the FAT volume at the point, or on the device\n"
+#else
+#define FSCK_USAGE "fsck"
+#define FSCK_DETAIL                                                                                \
+    "Read-only: the report names the first problem, and nothing is repaired.\n"                    \
+    "A person decides what to do about a broken record.\n"
+#endif
 
 #define SHELL_MAX_ENTRIES 64
 #define SHELL_LS_CHILDREN 16
@@ -28,6 +43,10 @@
 #define SHELL_PATH_SIZE 96
 
 static char g_shell_path[SHELL_PATH_SIZE] = SHELL_PATH_DEFAULT;
+
+/* The nine bits of a mode as `ls -l` writes them; the body is below, with the
+ * commands of the mode and the owner. */
+static void mode_text(unsigned mode, char out[10]);
 
 /* The path of the current directory of the task. */
 static const char *shell_cwd(void)
@@ -167,6 +186,76 @@ static bool ls_child_path(const char *dir, const char *name, char *out, k_size_t
     return true;
 }
 
+/*
+ * The directory above a path: the text of the path without its last entry.
+ * The VFS does not resolve `..` inside a path, and the parent of `ls -a` does
+ * not need it to: the path the shell holds is already absolute.
+ */
+static void path_parent(const char *path, char *out, k_size_t size)
+{
+    k_size_t len = strlen(path);
+
+    if (size == 0) {
+        return;
+    }
+
+    while (len > 1 && path[len - 1] == '/') {
+        len--;
+    }
+    while (len > 1 && path[len - 1] != '/') {
+        len--;
+    }
+    while (len > 1 && path[len - 1] == '/') {
+        len--;
+    }
+
+    if (len >= size) {
+        len = size - 1;
+    }
+
+    memcpy(out, path, len);
+    out[len] = '\0';
+}
+
+/*
+ * One line of `ls -l`, the same line `stat` prints first. A record of an old
+ * volume keeps no mode: the `?` says exactly that, because nine dashes would
+ * read as "nobody may touch it", which the record does not say.
+ */
+static void ls_long_stat(const struct vfs_stat *info, const char *name)
+{
+    char bits[10];
+    char kind;
+
+    if (info->mode == 0) {
+        kshell_printf("?--------- %u %llu %s\n", (unsigned)info->owner,
+                      (unsigned long long)info->size, name);
+        return;
+    }
+
+    kind = (info->type == 2) ? 'd' : (info->type == 1 ? '-' : 'c');
+    mode_text(info->mode & KSYS_MODE_MASK, bits);
+    kshell_printf("%c%s %u %llu %s\n", kind, bits, (unsigned)info->owner,
+                  (unsigned long long)info->size, name);
+}
+
+/* One entry of a directory in the long format. The stat is of the path of
+ * the entry and not of its name, which would find another file. */
+static void ls_long_entry(const char *dir, const struct vfs_dirent *entry)
+{
+    char child[SHELL_PATH_MAX];
+    struct vfs_stat info;
+
+    if (!ls_child_path(dir, entry->name, child, sizeof(child)) || vfs_stat(child, &info) != 0) {
+        /* The name is still the answer of the listing; the fields that
+         * could not be read are not invented for it. */
+        kshell_printf("?--------- %s\n", entry->name);
+        return;
+    }
+
+    ls_long_stat(&info, entry->name);
+}
+
 static int cmd_ls(int argc, char **argv)
 {
     /*
@@ -175,13 +264,54 @@ static int cmd_ls(int argc, char **argv)
      * at the same time.
      */
     static struct vfs_dirent entries[SHELL_MAX_ENTRIES];
+    bool long_format = false;
+    bool show_all = false;
+    struct kshell_option options[] = {
+        {'l', &long_format},
+        {'a', &show_all},
+    };
+    struct kshell_args args;
+    struct vfs_stat info;
     char path[SHELL_PATH_MAX];
     k_size_t count = 0;
     k_size_t i;
     int rc;
 
-    if (!shell_resolve(argc > 1 ? argv[1] : NULL, path, sizeof(path))) {
+    rc = kshell_options(argc, argv, options, K_ARRAY_SIZE(options), "ls [-la] [path]", &args);
+    if (rc == KSHELL_OPTIONS_HELP) {
+        return kshell_help_show(argv[0]);
+    }
+    if (rc != KSHELL_OPTIONS_OK) {
+        return KSHELL_USAGE;
+    }
+
+    if (args.argc > 1) {
+        kshell_printf("usage: ls [-la] [path]\n");
+        return KSHELL_USAGE;
+    }
+
+    if (!shell_resolve(args.argc > 0 ? args.argv[0] : NULL, path, sizeof(path))) {
         return path_too_long("ls");
+    }
+
+    rc = vfs_stat(path, &info);
+    if (rc != 0) {
+        kshell_printf("ls: %s: %s\n", path, vfs_strerror(rc));
+        return KSHELL_ERROR;
+    }
+
+    /*
+     * A file has no entries below it: plain `ls` prints its path, as the
+     * listing of a directory begins with the directory, and `-l` prints the
+     * line of stat for it.
+     */
+    if (info.type != 2) {
+        if (long_format) {
+            ls_long_stat(&info, path);
+        } else {
+            kshell_printf("%s\n", path);
+        }
+        return KSHELL_OK;
     }
 
     rc = vfs_list(path, entries, SHELL_MAX_ENTRIES, &count);
@@ -190,7 +320,37 @@ static int cmd_ls(int argc, char **argv)
         return KSHELL_ERROR;
     }
 
+    if (long_format) {
+        if (show_all) {
+            char parent[SHELL_PATH_MAX];
+            struct vfs_stat parent_info;
+
+            ls_long_stat(&info, ".");
+            path_parent(path, parent, sizeof(parent));
+            /* A parent that cannot be read is not invented: the row is
+             * missing rather than wrong. */
+            if (vfs_stat(parent, &parent_info) == 0) {
+                ls_long_stat(&parent_info, "..");
+            }
+        }
+
+        for (i = 0; i < count; i++) {
+            ls_long_entry(path, &entries[i]);
+        }
+
+        return KSHELL_OK;
+    }
+
     kshell_printf("%s\n", path);
+
+    if (show_all) {
+        /*
+         * `.` and `..` are not entries of a directory and no filesystem here
+         * lists them: they are the two names every directory has.
+         */
+        ls_print(".", 2, "", false);
+        ls_print("..", 2, "", false);
+    }
 
     for (i = 0; i < count; i++) {
         char child_path[SHELL_PATH_MAX];
@@ -212,25 +372,77 @@ static int cmd_ls(int argc, char **argv)
         ls_children(child_path, child_prefix);
     }
 
-    if (count == 0) {
+    if (count == 0 && !show_all) {
         kshell_printf("(empty)\n");
     }
 
     return KSHELL_OK;
 }
 
+/*
+ * The bytes of the file with the number of the line in front of every line.
+ * The state of the numbering belongs to the caller: a line that spans two
+ * reads of 128 bytes is numbered once, at its first byte.
+ */
+static void cat_numbered(const char *buffer, long len, unsigned *line, bool *at_start)
+{
+    long i = 0;
+
+    while (i < len) {
+        long start = i;
+
+        while (i < len && buffer[i] != '\n') {
+            i++;
+        }
+
+        if (*at_start) {
+            kshell_printf("%6u\t", *line);
+            (*line)++;
+            *at_start = false;
+        }
+
+        if (i > start) {
+            kshell_printf("%.*s", (int)(i - start), buffer + start);
+        }
+
+        if (i < len) {
+            /* The newline itself closes the line; the next one begins after
+             * it, even when it is empty. */
+            kshell_printf("\n");
+            i++;
+            *at_start = true;
+        }
+    }
+}
+
 static int cmd_cat(int argc, char **argv)
 {
+    bool number = false;
+    struct kshell_option options[] = {
+        {'n', &number},
+    };
+    struct kshell_args args;
     char path[SHELL_PATH_MAX];
     char buffer[128];
+    unsigned line = 1;
+    bool at_start = true;
+    int rc;
     int fd;
 
-    if (argc < 2) {
-        kshell_printf("usage: cat <file>\n");
+    rc = kshell_options(argc, argv, options, K_ARRAY_SIZE(options), "cat [-n] <file>", &args);
+    if (rc == KSHELL_OPTIONS_HELP) {
+        return kshell_help_show(argv[0]);
+    }
+    if (rc != KSHELL_OPTIONS_OK) {
         return KSHELL_USAGE;
     }
 
-    if (!shell_resolve(argv[1], path, sizeof(path))) {
+    if (args.argc != 1) {
+        kshell_printf("usage: cat [-n] <file>\n");
+        return KSHELL_USAGE;
+    }
+
+    if (!shell_resolve(args.argv[0], path, sizeof(path))) {
         return path_too_long("cat");
     }
 
@@ -259,7 +471,11 @@ static int cmd_cat(int argc, char **argv)
             return KSHELL_ERROR;
         }
 
-        kshell_printf("%.*s", (int)got, buffer);
+        if (number) {
+            cat_numbered(buffer, got, &line, &at_start);
+        } else {
+            kshell_printf("%.*s", (int)got, buffer);
+        }
     }
 
     if (microos_close(fd) != 0) {
@@ -368,18 +584,86 @@ static int cmd_mkdir(int argc, char **argv)
     return KSHELL_OK;
 }
 
-static int cmd_rm(int argc, char **argv)
+/*
+ * The deepest tree `rm -r` walks. The stack of the shell task is 8 KB and a
+ * path is 128 bytes; a tree deeper than this is refused with a sentence
+ * instead of running the stack out in the middle of a removal.
+ */
+#define SHELL_RM_DEPTH 8
+
+/* The names of one pass over a directory. The walk below uses the same static
+ * table for every directory, so only the first entry is taken at a time: the
+ * listing is read again after each removal, and the loop ends on the empty
+ * answer of the filesystem and not on a guess about the size of the tree. */
+#define SHELL_RM_ENTRIES 16
+
+static int rm_path(const char *path, bool recursive, int depth);
+
+/* Remove every entry of a directory that is already known to be a directory. */
+static int rm_children(const char *path, int depth)
 {
-    char path[SHELL_PATH_MAX];
+    static struct vfs_dirent entries[SHELL_RM_ENTRIES];
+    char name[VFS_NAME_MAX + 1];
+    char child[SHELL_PATH_MAX];
+
+    for (;;) {
+        k_size_t count = 0;
+        int rc = vfs_list(path, entries, SHELL_RM_ENTRIES, &count);
+
+        if (rc != 0) {
+            kshell_printf("rm: %s: %s\n", path, vfs_strerror(rc));
+            return KSHELL_ERROR;
+        }
+
+        if (count == 0) {
+            return KSHELL_OK;
+        }
+
+        /* The name is copied before the walk goes one level down: the table
+         * belongs to the directory that was listed last. */
+        snprintf(name, sizeof(name), "%s", entries[0].name);
+
+        if (!ls_child_path(path, name, child, sizeof(child))) {
+            return path_too_long("rm");
+        }
+
+        if (rm_path(child, true, depth + 1) != KSHELL_OK) {
+            return KSHELL_ERROR;
+        }
+    }
+}
+
+/*
+ * Remove one object. A directory goes away only with `-r`, and a directory
+ * that is not empty goes away only after its entries: the filesystem refuses
+ * to drop a record that still holds names, which is what the check of the
+ * non-empty directory is.
+ */
+static int rm_path(const char *path, bool recursive, int depth)
+{
+    struct vfs_stat info;
     int rc;
 
-    if (argc < 2) {
-        kshell_printf("usage: rm <file>\n");
-        return KSHELL_USAGE;
+    rc = vfs_stat(path, &info);
+    if (rc != 0) {
+        kshell_printf("rm: %s: %s\n", path, vfs_strerror(rc));
+        return KSHELL_ERROR;
     }
 
-    if (!shell_resolve(argv[1], path, sizeof(path))) {
-        return path_too_long("rm");
+    if (info.type == 2) {
+        if (!recursive) {
+            kshell_printf("rm: %s: is a directory, use -r\n", path);
+            return KSHELL_ERROR;
+        }
+
+        if (depth >= SHELL_RM_DEPTH) {
+            kshell_printf("rm: %s: the tree is too deep\n", path);
+            return KSHELL_ERROR;
+        }
+
+        if (rm_children(path, depth) != KSHELL_OK) {
+            return KSHELL_ERROR;
+        }
     }
 
     rc = vfs_unlink(path);
@@ -391,15 +675,77 @@ static int cmd_rm(int argc, char **argv)
     return KSHELL_OK;
 }
 
-static int cmd_df(int argc, char **argv)
+static int cmd_rm(int argc, char **argv)
 {
-    struct vfs_statfs stat;
+    bool recursive = false;
+    struct kshell_option options[] = {
+        {'r', &recursive},
+    };
+    struct kshell_args args;
     char path[SHELL_PATH_MAX];
     int rc;
 
-    (void)argc;
+    rc = kshell_options(argc, argv, options, K_ARRAY_SIZE(options), "rm [-r] <path>", &args);
+    if (rc == KSHELL_OPTIONS_HELP) {
+        return kshell_help_show(argv[0]);
+    }
+    if (rc != KSHELL_OPTIONS_OK) {
+        return KSHELL_USAGE;
+    }
 
-    if (!shell_resolve(argv[1] != NULL ? argv[1] : NULL, path, sizeof(path))) {
+    if (args.argc != 1) {
+        kshell_printf("usage: rm [-r] <path>\n");
+        return KSHELL_USAGE;
+    }
+
+    if (!shell_resolve(args.argv[0], path, sizeof(path))) {
+        return path_too_long("rm");
+    }
+
+    return rm_path(path, recursive, 0);
+}
+
+/* A number of bytes for a person: whole kilobytes below a megabyte, one
+ * decimal of a megabyte above it. */
+static void df_human(k_u64_t bytes, char *out, k_size_t size)
+{
+    const k_u64_t mb = 1024u * 1024u;
+
+    if (bytes >= mb) {
+        (void)snprintf(out, size, "%u.%u MB", (unsigned)(bytes / mb),
+                       (unsigned)((bytes % mb) * 10u / mb));
+    } else if (bytes >= 1024u) {
+        (void)snprintf(out, size, "%u KB", (unsigned)(bytes / 1024u));
+    } else {
+        (void)snprintf(out, size, "%u bytes", (unsigned)bytes);
+    }
+}
+
+static int cmd_df(int argc, char **argv)
+{
+    bool human = false;
+    struct kshell_option options[] = {
+        {'h', &human},
+    };
+    struct vfs_statfs stat;
+    struct kshell_args args;
+    char path[SHELL_PATH_MAX];
+    int rc;
+
+    rc = kshell_options(argc, argv, options, K_ARRAY_SIZE(options), "df [-h] [path]", &args);
+    if (rc == KSHELL_OPTIONS_HELP) {
+        return kshell_help_show(argv[0]);
+    }
+    if (rc != KSHELL_OPTIONS_OK) {
+        return KSHELL_USAGE;
+    }
+
+    if (args.argc > 1) {
+        kshell_printf("usage: df [-h] [path]\n");
+        return KSHELL_USAGE;
+    }
+
+    if (!shell_resolve(args.argc > 0 ? args.argv[0] : NULL, path, sizeof(path))) {
         return path_too_long("df");
     }
 
@@ -407,6 +753,22 @@ static int cmd_df(int argc, char **argv)
     if (rc != 0) {
         kshell_printf("df: %s: %s\n", path, vfs_strerror(rc));
         return KSHELL_ERROR;
+    }
+
+    if (human) {
+        char total[24];
+        char free_bytes[24];
+
+        /* The blocks of the volume are its own unit; a person reads the
+         * bytes, and that is all `-h` changes. */
+        df_human(stat.total_blocks * (k_u64_t)stat.block_size, total, sizeof(total));
+        df_human(stat.free_blocks * (k_u64_t)stat.block_size, free_bytes, sizeof(free_bytes));
+
+        kshell_printf("%s: %s total, %s free\n", path, total, free_bytes);
+        kshell_printf("inodes: %u of %u free\n", (unsigned)stat.free_inodes,
+                      (unsigned)stat.total_inodes);
+
+        return KSHELL_OK;
     }
 
     kshell_printf("blocks: %u of %u free (%u KB each)\n", (unsigned)stat.free_blocks,
@@ -417,22 +779,119 @@ static int cmd_df(int argc, char **argv)
     return KSHELL_OK;
 }
 
+/* The filesystems of the tree: the list, the mount and the unmount. */
+
+/*
+ * Tell a person why a mount or an unmount was refused. The text of a code
+ * is the text of the VFS (and of the filesystem that knows the code), not
+ * the "unknown error" of a library that was never told about EBUSY.
+ */
+static int mount_error_text(const char *what, const char *name, int code)
+{
+    kshell_printf("%s: %s: %s\n", what, name, vfs_strerror(code));
+
+    return KSHELL_ERROR;
+}
+
 static int cmd_mount(int argc, char **argv)
 {
-    k_size_t count = vfs_mount_count();
+    struct kshell_args args;
+    bool all = false;
+    struct kshell_option options[1];
+    k_size_t count;
     k_size_t i;
+    int rc;
 
-    (void)argc;
-    (void)argv;
+    options[0].letter = 'a';
+    options[0].value = &all;
 
-    if (count == 0) {
-        kshell_printf("no filesystem is mounted\n");
+    rc = kshell_options(argc, argv, options, 1, "mount [-a] [<device> <point> <type>]", &args);
+    if (rc == KSHELL_OPTIONS_HELP) {
+        return kshell_help_show(argv[0]);
+    }
+    if (rc != KSHELL_OPTIONS_OK) {
+        return KSHELL_USAGE;
+    }
+
+    if (all) {
+        if (args.argc != 0) {
+            kshell_printf("usage: mount -a\n");
+            return KSHELL_USAGE;
+        }
+
+        rc = vfs_mount_fstab(VFS_FSTAB_PATH);
+        if (rc < 0) {
+            return mount_error_text("mount", VFS_FSTAB_PATH, rc);
+        }
+
+        kshell_printf("mount: %d filesystem(s) mounted from %s\n", rc, VFS_FSTAB_PATH);
+
         return KSHELL_OK;
     }
 
-    for (i = 0; i < count; i++) {
-        kshell_printf("%s\n", vfs_mount_name(i));
+    if (args.argc == 0) {
+        count = vfs_mount_count();
+
+        if (count == 0) {
+            kshell_printf("no filesystem is mounted\n");
+            return KSHELL_OK;
+        }
+
+        for (i = 0; i < count; i++) {
+            kshell_printf("%s\n", vfs_mount_name(i));
+        }
+
+        return KSHELL_OK;
     }
+
+    if (args.argc != 3) {
+        kshell_printf("usage: mount [<device> <point> <type>] | mount -a\n");
+        return KSHELL_USAGE;
+    }
+
+    /*
+     * The words are `device point type`, as in the table of /etc/fstab and
+     * in the mount of Linux; the call of the VFS takes the point first.
+     */
+    if (vfs_type_find(args.argv[2]) < 0) {
+        kshell_printf("mount: there is no filesystem type '%s'\n", args.argv[2]);
+        return KSHELL_ERROR;
+    }
+
+    rc = vfs_mount_type(args.argv[1], args.argv[2], args.argv[0]);
+    if (rc != 0) {
+        return mount_error_text("mount", args.argv[1], rc);
+    }
+
+    kshell_printf("mount: %s is mounted at %s\n", args.argv[0], args.argv[1]);
+
+    return KSHELL_OK;
+}
+
+static int cmd_umount(int argc, char **argv)
+{
+    struct kshell_args args;
+    int rc;
+
+    rc = kshell_options(argc, argv, NULL, 0, "umount <point>", &args);
+    if (rc == KSHELL_OPTIONS_HELP) {
+        return kshell_help_show(argv[0]);
+    }
+    if (rc != KSHELL_OPTIONS_OK) {
+        return KSHELL_USAGE;
+    }
+
+    if (args.argc != 1) {
+        kshell_printf("usage: umount <point>\n");
+        return KSHELL_USAGE;
+    }
+
+    rc = vfs_umount(args.argv[0]);
+    if (rc != 0) {
+        return mount_error_text("umount", args.argv[0], rc);
+    }
+
+    kshell_printf("umount: %s is out of the tree\n", args.argv[0]);
 
     return KSHELL_OK;
 }
@@ -478,6 +937,7 @@ static const char *attr_error_text(int code, const char *invalid)
     }
 }
 
+#if KERNEL_EXEC
 /*
  * The words for a program that did not run. Every reason of the call has a
  * face of its own: "function not implemented" would hide that this machine
@@ -499,6 +959,7 @@ static const char *exec_error_text(int code)
 
     return attr_error_text(code, "not a MOX1 image of this system");
 }
+#endif /* KERNEL_EXEC */
 
 static int cmd_chmod(int argc, char **argv)
 {
@@ -643,32 +1104,35 @@ static int cmd_stat(int argc, char **argv)
  * broken record, and a checker that writes is a formatter that nobody
  * asked for.
  */
-static int cmd_fsck(int argc, char **argv)
+#if defined(MICRO_OS_FS_FAT32) && MICRO_OS_FS_FAT32
+static int fsck_fat(const char *what)
 {
-    struct mfs_check_report report;
+    struct fat_check_report report;
     int rc;
 
-    K_UNUSED(argv);
-
-    if (argc != 1) {
-        kshell_printf("usage: fsck\n");
-        return KSHELL_USAGE;
-    }
-
-    rc = mfs_check(&report);
-    if (rc == MFS_EINVAL) {
-        kshell_printf("fsck: no volume is mounted\n");
+    rc = fat_check(what, &report);
+    if (rc == KERR_NOENT) {
+        kshell_printf("fsck: %s: no such device\n", what);
         return KSHELL_ERROR;
     }
 
-    if (rc != MFS_OK) {
-        kshell_printf("fsck: the volume cannot be read (%s)\n", mfs_strerror(rc));
+    if (rc == KERR_INVAL) {
+        kshell_printf("fsck: %s: not a FAT volume of this machine\n", what);
         return KSHELL_ERROR;
     }
 
-    kshell_printf("fsck: %u file(s), %u directory(ies), %u of %u block(s) free\n",
-                  (unsigned)report.files, (unsigned)report.directories,
-                  (unsigned)report.free_blocks, (unsigned)report.data_blocks);
+    if (rc != 0) {
+        kshell_printf("fsck: %s: %s\n", what, fat_strerror(rc));
+        return KSHELL_ERROR;
+    }
+
+    kshell_printf("fsck: FAT%u, %u file(s), %u directory(ies), %u of %u cluster(s) free\n",
+                  (unsigned)report.type, (unsigned)report.files, (unsigned)report.directories,
+                  (unsigned)report.free_clusters, (unsigned)report.clusters);
+
+    if (report.lost_clusters != 0) {
+        kshell_printf("fsck: %u lost cluster(s)\n", (unsigned)report.lost_clusters);
+    }
 
     if (report.errors != 0) {
         kshell_printf("fsck: %u problem(s), the first: %s\n", (unsigned)report.errors,
@@ -679,6 +1143,52 @@ static int cmd_fsck(int argc, char **argv)
     kshell_printf("fsck: the volume is consistent\n");
 
     return KSHELL_OK;
+}
+#endif
+
+static int cmd_fsck(int argc, char **argv)
+{
+    struct mfs_check_report report;
+    int rc;
+
+    if (argc == 1) {
+        rc = mfs_check(&report);
+        if (rc == MFS_EINVAL) {
+            kshell_printf("fsck: no volume is mounted\n");
+            return KSHELL_ERROR;
+        }
+
+        if (rc != MFS_OK) {
+            kshell_printf("fsck: the volume cannot be read (%s)\n", mfs_strerror(rc));
+            return KSHELL_ERROR;
+        }
+
+        kshell_printf("fsck: %u file(s), %u directory(ies), %u of %u block(s) free\n",
+                      (unsigned)report.files, (unsigned)report.directories,
+                      (unsigned)report.free_blocks, (unsigned)report.data_blocks);
+
+        if (report.errors != 0) {
+            kshell_printf("fsck: %u problem(s), the first: %s\n", (unsigned)report.errors,
+                          report.first);
+            return KSHELL_ERROR;
+        }
+
+        kshell_printf("fsck: the volume is consistent\n");
+
+        return KSHELL_OK;
+    }
+
+#if defined(MICRO_OS_FS_FAT32) && MICRO_OS_FS_FAT32
+    if (argc == 3 && strcmp(argv[1], "fat") == 0) {
+        return fsck_fat(argv[2]);
+    }
+#else
+    (void)argv;
+#endif
+
+    kshell_printf("usage: %s\n", FSCK_USAGE);
+
+    return KSHELL_USAGE;
 }
 
 static int cmd_path(int argc, char **argv)
@@ -714,6 +1224,7 @@ static int cmd_path(int argc, char **argv)
     return KSHELL_OK;
 }
 
+#if KERNEL_EXEC
 /* Whether the name carries its own path, in which case PATH has no say. */
 static bool shell_name_has_dir(const char *name)
 {
@@ -819,26 +1330,119 @@ static int cmd_exec(int argc, char **argv)
 
     return KSHELL_ERROR;
 }
+#endif /* KERNEL_EXEC */
+
+/*
+ * The commands of the files, with the whole help of the table. The usage
+ * line is the one the option parser enforces and the detail carries the
+ * flags, so that `-h`, `help <command>` and the list of `help` cannot tell
+ * different stories about the same command.
+ */
+static const struct file_command {
+    const char *name;
+    struct kshell_help help;
+    kshell_cmd_fn fn;
+} g_file_commands[] = {
+    {"pwd", {.summary = "the current directory", .usage = "pwd"}, cmd_pwd},
+    {"cd", {.summary = "change the current directory", .usage = "cd <directory>"}, cmd_cd},
+    {"ls",
+     {.summary = "list the files of a directory",
+      .usage = "ls [-la] [path]",
+      .detail = "  -l  the mode, the owner and the size of every entry\n"
+                "  -a  show . and .. as well\n"
+                "Without a path the current directory is listed.\n"},
+     cmd_ls},
+    {"cat",
+     {.summary = "print the content of a file",
+      .usage = "cat [-n] <file>",
+      .detail = "  -n  number the lines, as cat of Linux does\n"},
+     cmd_cat},
+    {"write",
+     {.summary = "write a file",
+      .usage = "write <file> <text...>",
+      .detail = "The text is the rest of the line, joined by single spaces: the splitter\n"
+                "of the shell has no quotes yet. The file is created or replaced.\n"},
+     cmd_write},
+    {"mkdir",
+     {.summary = "create a directory",
+      .usage = "mkdir <directory>",
+      .detail = "The parent has to exist: there is no -p here yet.\n"},
+     cmd_mkdir},
+    {"rm",
+     {.summary = "remove a file or a directory",
+      .usage = "rm [-r] <path>",
+      .detail = "  -r  remove a directory with everything in it\n"
+                "Without -r a directory is refused, even an empty one: taking a tree\n"
+                "down asks for the flag that says so. `rm -- -name` removes a file whose\n"
+                "name begins with a dash.\n"},
+     cmd_rm},
+    {"df",
+     {.summary = "the usage of the filesystem",
+      .usage = "df [-h] [path]",
+      .detail = "  -h  the sizes in KB and MB instead of blocks\n"
+                "Without a path the volume of the current directory is shown.\n"
+                "Here -h is the sizes, as in df of Linux: --help prints this.\n",
+      .owns_short_h = true},
+     cmd_df},
+    {"mount",
+     {.summary = "list, mount or unmount the filesystems",
+      .usage = "mount [-a] [<device> <point> <type>]",
+      .detail = "Without a word the mounted filesystems are listed, one point per line.\n"
+                "  -a  mount every volume of " VFS_FSTAB_PATH "\n"
+                "The words are `device point type`, as in the table and in Linux.\n"},
+     cmd_mount},
+    {"umount",
+     {.summary = "take a filesystem out of the tree",
+      .usage = "umount <point>",
+      .detail = "A point with a mount below it stays until the smaller one leaves.\n"
+                "`/` may leave while /proc and /dev stay, which is what mkfs -y does.\n"},
+     cmd_umount},
+    {"fsck",
+     {.summary = "check the volume, read-only", .usage = FSCK_USAGE, .detail = FSCK_DETAIL},
+     cmd_fsck},
+    {"chmod",
+     {.summary = "change the mode of a file",
+      .usage = "chmod <mode> <path>",
+      .detail = "The mode is the nine bits in octal: 0644, 755, 0700. A zero is refused,\n"
+                "because a record without a mode means one written before the modes.\n"},
+     cmd_chmod},
+    {"chown",
+     {.summary = "change the owner of a file",
+      .usage = "chown <uid> <path>",
+      .detail = "The uid is a decimal number, 0..32767.\n"},
+     cmd_chown},
+    {"stat",
+     {.summary = "the type, the mode, the owner and the size",
+      .usage = "stat <path>",
+      .detail = "Prints the line of `ls -l` first and then the same numbers as fields, so\n"
+                "that a chmod or a chown is checked without a calculator.\n"},
+     cmd_stat},
+    {"path",
+     {.summary = "show or set PATH",
+      .usage = "path [directories]",
+      .detail = "Without a word the value is printed. With one it is set, the directories\n"
+                "separated by ':'; the two characters \"\" bring /bin:/usr/bin back.\n"},
+     cmd_path},
+#if KERNEL_EXEC
+    {"exec",
+     {.summary = "run a program",
+      .usage = "exec <program> [arguments...]",
+      .detail = "A name with a slash is a path; a name without one is looked up in PATH.\n"
+                "The file must be a MOX1 image with an execute bit, and not every machine\n"
+                "can run one: the answer says which of the two it was.\n"},
+     cmd_exec},
+#endif
+};
 
 int kshell_register_files(void)
 {
+    k_size_t i;
     int rc = 0;
 
-    rc |= kshell_register("pwd", "the current directory", cmd_pwd);
-    rc |= kshell_register("cd", "change the current directory", cmd_cd);
-    rc |= kshell_register("ls", "list the files of a directory", cmd_ls);
-    rc |= kshell_register("cat", "print the content of a file", cmd_cat);
-    rc |= kshell_register("write", "write a file: write <file> <text>", cmd_write);
-    rc |= kshell_register("mkdir", "create a directory", cmd_mkdir);
-    rc |= kshell_register("rm", "remove a file", cmd_rm);
-    rc |= kshell_register("df", "the usage of the filesystem", cmd_df);
-    rc |= kshell_register("mount", "the mounted filesystems", cmd_mount);
-    rc |= kshell_register("fsck", "check the volume, read-only", cmd_fsck);
-    rc |= kshell_register("chmod", "change the mode of a file", cmd_chmod);
-    rc |= kshell_register("chown", "change the owner of a file", cmd_chown);
-    rc |= kshell_register("stat", "the type, the mode and the owner", cmd_stat);
-    rc |= kshell_register("path", "show or set PATH: path [directories]", cmd_path);
-    rc |= kshell_register("exec", "run a program: exec <program> [args...]", cmd_exec);
+    for (i = 0; i < K_ARRAY_SIZE(g_file_commands); i++) {
+        rc |= kshell_register_help(g_file_commands[i].name, &g_file_commands[i].help,
+                                   g_file_commands[i].fn);
+    }
 
     return rc;
 }

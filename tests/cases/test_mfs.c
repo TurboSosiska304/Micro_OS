@@ -4,8 +4,10 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "kernel/clock.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
+#include "kernel/vfs.h"
 #include "mfs/mfs.h"
 #include "mfs/mfs_ram_device.h"
 #include "mfs/mfs_vfs.h"
@@ -71,6 +73,90 @@ static int store_inode_record(k_u32_t index, const struct mfs_inode *inode)
     memcpy(block + offset % MFS_BLOCK_SIZE, inode, sizeof(*inode));
 
     return g_device.ops->write(g_device.ctx, sector, block, 1);
+}
+
+/*
+ * The clock of the tests: a setter that takes every moment, so that a
+ * record can be stamped with a known number. k_clock_now_unix() adds the
+ * uptime that passed since the set, which is a second or two at most in a
+ * test - the moments below are chosen far enough apart for it.
+ */
+static int test_clock_set(k_u64_t unix_seconds)
+{
+    (void)unix_seconds;
+    return 0;
+}
+
+static k_u32_t test_crc32(const void *data, k_size_t size)
+{
+    const k_u8_t *bytes = (const k_u8_t *)data;
+    k_u32_t crc = 0xFFFFFFFFu;
+    k_size_t i;
+    int bit;
+
+    for (i = 0; i < size; i++) {
+        crc ^= bytes[i];
+
+        for (bit = 0; bit < 8; bit++) {
+            if ((crc & 1u) != 0u) {
+                crc = (crc >> 1) ^ 0xEDB88320u;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+
+    return crc ^ 0xFFFFFFFFu;
+}
+
+/*
+ * Turn the volume of the test into the version 1 that came before the
+ * times: the same DATA, the same directories, the same records in the 16
+ * bytes they had. The records are read into the memory first, because the
+ * smaller record moves over the bytes of the larger one.
+ */
+static void volume_to_legacy(void)
+{
+    struct mfs_superblock sb;
+    struct mfs_inode records[256];
+    bool used[256];
+    k_u8_t *table;
+    k_u32_t bitmap_blocks;
+    k_u32_t inode_blocks;
+    k_u32_t capacity;
+    k_u32_t i;
+
+    memcpy(&sb, g_volume.data + (size_t)(TEST_BLOCKS - 1) * MFS_BLOCK_SIZE, sizeof(sb));
+    bitmap_blocks = (sb.data_blocks + 8u * MFS_BLOCK_SIZE - 1u) / (8u * MFS_BLOCK_SIZE);
+    inode_blocks = sb.meta_blocks - bitmap_blocks;
+    capacity = (inode_blocks * MFS_BLOCK_SIZE) / MFS_INODE_SIZE - 1u;
+    if (capacity >= K_ARRAY_SIZE(records)) {
+        capacity = K_ARRAY_SIZE(records) - 1u;
+    }
+
+    table = g_volume.data + (size_t)(sb.meta_start + bitmap_blocks) * MFS_BLOCK_SIZE;
+
+    memset(records, 0, sizeof(records));
+    memset(used, 0, sizeof(used));
+
+    for (i = 1; i <= capacity; i++) {
+        memcpy(&records[i], table + (size_t)i * MFS_INODE_SIZE, sizeof(records[i]));
+        used[i] = (records[i].flags & MFS_INODE_USED) != 0u;
+    }
+
+    memset(table, 0, (size_t)inode_blocks * MFS_BLOCK_SIZE);
+
+    for (i = 1; i <= capacity; i++) {
+        if (used[i]) {
+            memcpy(table + (size_t)i * MFS_INODE_SIZE_LEGACY, &records[i], MFS_INODE_SIZE_LEGACY);
+        }
+    }
+
+    sb.version = MFS_VERSION_LEGACY;
+    sb.features &= (k_u32_t)~MFS_FEATURE_TIME;
+    sb.crc = test_crc32(&sb, sizeof(sb) - sizeof(sb.crc));
+
+    memcpy(g_volume.data + (size_t)(TEST_BLOCKS - 1) * MFS_BLOCK_SIZE, &sb, sizeof(sb));
 }
 
 static void test_format(void)
@@ -790,6 +876,188 @@ static void test_volume_without_modes(void)
     teardown();
 }
 
+/*
+ * The property: the record carries the moments of the change, they move
+ * when the content or the record changes, and nothing rewrites them on the
+ * way to the device. The clock is the one of the kernel, and the fake of
+ * the test is a setter like the RTC of the board.
+ */
+static void test_timestamps(void)
+{
+    struct mfs_inode inode;
+    struct mfs_file file;
+    k_u64_t created;
+    k_u64_t written;
+    k_u64_t truncated;
+    k_u64_t directory;
+    k_u64_t with_child;
+    k_u64_t without_child;
+    k_u64_t after_chmod;
+
+    ktest_begin("mfs: create, write and truncate move the moments of a record");
+
+    KT_CHECK_INT_EQ(setup(), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+
+    k_clock_register(test_clock_set);
+    KT_CHECK_INT_EQ(k_clock_set_unix(1000), 0);
+
+    KT_CHECK_INT_EQ(mfs_create("/time.txt"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/time.txt", &inode, NULL), MFS_OK);
+    created = inode.mtime;
+    KT_CHECK(created >= 1000);
+    KT_CHECK_INT_EQ(inode.ctime, created);
+
+    /* A write moves both: the content and the record are new. */
+    KT_CHECK_INT_EQ(k_clock_set_unix(2000), 0);
+    KT_CHECK_INT_EQ(mfs_open("/time.txt", MFS_O_RDWR, &file), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_write(&file, "hello", 5), 5);
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/time.txt", &inode, NULL), MFS_OK);
+    written = inode.mtime;
+    KT_CHECK(written > created);
+    KT_CHECK_INT_EQ(inode.ctime, written);
+
+    /* A truncation is a change of the content, even when there was little. */
+    KT_CHECK_INT_EQ(k_clock_set_unix(3000), 0);
+    KT_CHECK_INT_EQ(mfs_open("/time.txt", MFS_O_RDWR | MFS_O_TRUNC, &file), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/time.txt", &inode, NULL), MFS_OK);
+    truncated = inode.mtime;
+    KT_CHECK(truncated > written);
+    KT_CHECK_INT_EQ(inode.ctime, truncated);
+
+    /* A directory is stamped when it is made and when its entries change. */
+    KT_CHECK_INT_EQ(k_clock_set_unix(4000), 0);
+    KT_CHECK_INT_EQ(mfs_mkdir("/time-dir"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/time-dir", &inode, NULL), MFS_OK);
+    directory = inode.mtime;
+    KT_CHECK(directory > truncated);
+
+    KT_CHECK_INT_EQ(k_clock_set_unix(5000), 0);
+    KT_CHECK_INT_EQ(mfs_create("/time-dir/child"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/time-dir", &inode, NULL), MFS_OK);
+    with_child = inode.mtime;
+    KT_CHECK(with_child > directory);
+
+    KT_CHECK_INT_EQ(k_clock_set_unix(6000), 0);
+    KT_CHECK_INT_EQ(mfs_unlink("/time-dir/child"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/time-dir", &inode, NULL), MFS_OK);
+    without_child = inode.mtime;
+    KT_CHECK(without_child > with_child);
+
+    /*
+     * A change of the record alone moves ctime and leaves mtime where the
+     * content left it.
+     */
+    KT_CHECK_INT_EQ(k_clock_set_unix(7000), 0);
+    KT_CHECK_INT_EQ(mfs_chmod("/time.txt", 0600), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/time.txt", &inode, NULL), MFS_OK);
+    after_chmod = inode.ctime;
+    KT_CHECK(after_chmod > truncated);
+    KT_CHECK_INT_EQ(inode.mtime, truncated);
+
+    /* The moments are on the volume, not only in the memory of the mount. */
+    mfs_unmount();
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/time.txt", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(inode.mtime, truncated);
+    KT_CHECK_INT_EQ(inode.ctime, after_chmod);
+
+    /*
+     * A moment past 2^32 is a moment of this format: the field is 64 bits
+     * wide, and the year 2038 is not the end of it.
+     */
+    KT_CHECK_INT_EQ(k_clock_set_unix(0x100000000ull), 0);
+    KT_CHECK_INT_EQ(mfs_create("/wide-time.txt"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/wide-time.txt", &inode, NULL), MFS_OK);
+    KT_CHECK(inode.mtime >= 0x100000000ull);
+    created = inode.mtime;
+
+    mfs_unmount();
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/wide-time.txt", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(inode.mtime, created);
+
+    k_clock_register(NULL);
+
+    teardown();
+}
+
+/*
+ * The property: the volume of the version before the times mounts, keeps
+ * its data and reports no time - zero, which is "unknown" and not 1970.
+ * Nothing is rewritten to make the old record new, and a write to it stays
+ * timeless because the 16 bytes of its record have no room for a moment.
+ */
+static void test_legacy_volume_without_time(void)
+{
+    struct mfs_superblock sb;
+    struct mfs_inode inode;
+    struct mfs_file file;
+    struct mfs_check_report report;
+    struct vfs_statx info;
+
+    ktest_begin("mfs: a version 1 volume mounts and reports no time");
+
+    KT_CHECK_INT_EQ(setup(), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+
+    k_clock_register(test_clock_set);
+    KT_CHECK_INT_EQ(k_clock_set_unix(1234), 0);
+
+    KT_CHECK_INT_EQ(mfs_create("/old.txt"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_open("/old.txt", MFS_O_RDWR, &file), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_write(&file, "old volume", 10), 10);
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+
+    /* The medium of a release before the times. */
+    mfs_unmount();
+    volume_to_legacy();
+
+    memcpy(&sb, g_volume.data + (size_t)(TEST_BLOCKS - 1) * MFS_BLOCK_SIZE, sizeof(sb));
+    KT_CHECK_INT_EQ(sb.version, MFS_VERSION_LEGACY);
+    KT_CHECK_INT_EQ(sb.features & MFS_FEATURE_TIME, 0);
+
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/old.txt", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(inode.size, 10);
+    KT_CHECK_INT_EQ(inode.mtime, 0);
+    KT_CHECK_INT_EQ(inode.ctime, 0);
+
+    KT_CHECK_INT_EQ(mfs_stat("/", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(inode.mtime, 0);
+    KT_CHECK_INT_EQ(inode.ctime, 0);
+
+    /* A write to a legacy record has nowhere to put a moment. */
+    KT_CHECK_INT_EQ(k_clock_set_unix(9999), 0);
+    KT_CHECK_INT_EQ(mfs_open("/old.txt", MFS_O_WRONLY | MFS_O_APPEND, &file), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_write(&file, " again", 6), 6);
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/old.txt", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(inode.size, 16);
+    KT_CHECK_INT_EQ(inode.mtime, 0);
+    KT_CHECK_INT_EQ(inode.ctime, 0);
+
+    memset(&report, 0, sizeof(report));
+    KT_CHECK_INT_EQ(mfs_check(&report), MFS_OK);
+    KT_CHECK_INT_EQ(report.errors, 0);
+    KT_CHECK_INT_EQ(report.first[0], '\0');
+
+    /* Through the VFS the same record answers the zeros of "unknown". */
+    KT_CHECK_INT_EQ(mfs_vfs_register("/"), 0);
+    memset(&info, 0, sizeof(info));
+    KT_CHECK_INT_EQ(vfs_statx("/old.txt", &info), 0);
+    KT_CHECK_INT_EQ(info.size, 16);
+    KT_CHECK_INT_EQ(info.mtime, 0);
+    KT_CHECK_INT_EQ(info.ctime, 0);
+    KT_CHECK_INT_EQ(vfs_umount("/"), 0);
+
+    k_clock_register(NULL);
+
+    teardown();
+}
+
 static void test_persistence(void)
 {
     struct mfs_file file;
@@ -1056,9 +1324,67 @@ static void test_vfs_mount(void)
     KT_CHECK_INT_EQ(mfs_vfs_mount("/", "ram0"), 0);
     KT_CHECK_INT_EQ(mfs_open("/first.txt", MFS_O_RDONLY, &file), MFS_ENOENT);
 
-    /* The volume of this test is not the one of setup(): it is freed here. */
+    /* The volume of this test is not the one of setup(): it is freed here,
+     * and the device leaves the registry before its stack frame does - a
+     * later test that looks a device up must not walk into it. */
     mfs_unmount();
+    KT_CHECK_INT_EQ(k_blockdev_unregister(&device), 0);
     mfs_ram_free(&volume);
+}
+
+/*
+ * The property: a directory is opened for reading and its entries come
+ * through the descriptor one call at a time. Without the flag a directory is
+ * still not a file, and a file opened with the flag is not a directory.
+ */
+static void test_directory_descriptor(void)
+{
+    struct mfs_dirent entries[8];
+    struct mfs_file file;
+    k_size_t count = 0;
+
+    ktest_begin("mfs: a directory is read through its descriptor");
+
+    KT_CHECK_INT_EQ(setup(), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+
+    KT_CHECK_INT_EQ(mfs_mkdir("/etc"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_create("/etc/config.txt"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_create("/readme"), MFS_OK);
+
+    /* A plain open of a directory is still EISDIR. */
+    KT_CHECK_INT_EQ(mfs_open("/", MFS_O_RDONLY, &file), MFS_EISDIR);
+
+    /* The flag of a directory goes with the read access only. */
+    KT_CHECK_INT_EQ(mfs_open("/", MFS_O_RDONLY | MFS_O_DIRECTORY | MFS_O_WRONLY, &file),
+                    MFS_EINVAL);
+    KT_CHECK_INT_EQ(mfs_open("/readme", MFS_O_RDONLY | MFS_O_DIRECTORY, &file), MFS_ENOTDIR);
+
+    KT_CHECK_INT_EQ(mfs_open("/", MFS_O_RDONLY | MFS_O_DIRECTORY, &file), MFS_OK);
+
+    /* One entry at a time: the position is the one of the open file. */
+    KT_CHECK_INT_EQ(mfs_readdir(&file, entries, 1, &count), MFS_OK);
+    KT_CHECK_INT_EQ(count, 1);
+    KT_CHECK_STR_EQ(entries[0].name, "etc");
+    KT_CHECK_INT_EQ(entries[0].type & MFS_INODE_DIR, MFS_INODE_DIR);
+
+    KT_CHECK_INT_EQ(mfs_readdir(&file, entries, 8, &count), MFS_OK);
+    KT_CHECK_INT_EQ(count, 1);
+    KT_CHECK_STR_EQ(entries[0].name, "readme");
+    KT_CHECK_INT_EQ(entries[0].type & MFS_INODE_DIR, 0);
+
+    /* The end of the directory is an empty answer, not an error. */
+    KT_CHECK_INT_EQ(mfs_readdir(&file, entries, 8, &count), MFS_OK);
+    KT_CHECK_INT_EQ(count, 0);
+
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+
+    /* A file has no entries to give, however it was opened. */
+    KT_CHECK_INT_EQ(mfs_open("/readme", MFS_O_RDONLY, &file), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_readdir(&file, entries, 8, &count), MFS_ENOTDIR);
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+
+    teardown();
 }
 
 void test_mfs(void)
@@ -1078,6 +1404,9 @@ void test_mfs(void)
     test_chmod();
     test_chmod_chown_bounds();
     test_volume_without_modes();
+    test_timestamps();
+    test_legacy_volume_without_time();
     test_persistence();
     test_vfs_mount();
+    test_directory_descriptor();
 }

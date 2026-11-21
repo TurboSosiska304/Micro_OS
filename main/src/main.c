@@ -9,7 +9,11 @@
 #include "board/board.h"
 #include "config/config.h"
 #include "drivers/drivers.h"
+#include "drivers/power.h"
+#include "drivers/rtc.h"
+#include "factory.h"
 #include "kernel/boot.h"
+#include "kernel/errno.h"
 #include "kernel/kmod.h"
 #include "kernel/log.h"
 #include "kernel/vfs.h"
@@ -22,6 +26,9 @@
 #include "init/initd.h"
 #include "mfs/mfs.h"
 #include "mfs/mfs_vfs.h"
+#if MICRO_OS_FS_FAT32
+#include "fs_fat32/fat.h"
+#endif
 #include "net/net.h"
 #include "procfs/procfs.h"
 #include "kshell/kshell.h"
@@ -49,13 +56,24 @@ static int drivers_subsys_init(void)
         return -1;
     }
 
+    /*
+     * The components that the build can leave out (ADR 0010): a build
+     * without the shell over the air or without the network registers no
+     * command of it, and the boot still reaches the shell.
+     */
+#if MICRO_OS_TELNET
     /* The shell over the air: beside the drivers, not among them. */
     if (telnet_register() != 0) {
         return -1;
     }
+#endif
 
+#if MICRO_OS_NET
     /* The network services: the HTTP client and the clock of NTP. */
     return net_register();
+#else
+    return 0;
+#endif
 }
 
 /*
@@ -99,6 +117,21 @@ static int fs_subsys_init(void)
      * again.
      */
     kshell_register("mkfs", "format the volume: mkfs -y", cmd_mkfs);
+    (void)factory_register();
+
+#if MICRO_OS_FS_FAT32
+    /* A second filesystem is a type of the VFS: it is registered whether a
+     * card is there or not, and the mount of a partition names it. */
+    if (fat_vfs_register_type() != 0) {
+        kwarn("init: the FAT filesystem could not register its type");
+    }
+#endif
+
+    /* The volume of the flash is a type as well, so that a line of
+     * /etc/fstab or a command of the shell can name it like any other. */
+    if (mfs_vfs_register_type() != 0) {
+        kwarn("init: MicroFS could not register its type");
+    }
 
     rc = mfs_vfs_mount("/", "flash0");
     if (rc != 0) {
@@ -179,11 +212,24 @@ static void init_task(void *arg)
     struct task *self = task_self();
     int restored;
     int saved;
+    int mounted;
 
     K_UNUSED(arg);
 
     kinfo("init: system is up, pid %u, uptime %llu ms", (unsigned)(self ? self->pid : 0),
           (unsigned long long)k_sched_uptime_ms());
+
+    /*
+     * Why the board is awake: "timer" or "ext1" says whether the last sleep
+     * did what it was asked for, and "power-on" is a cold boot. The alarm of
+     * the clock is a separate line of the log, because it can have fired
+     * without waking the chip at all.
+     */
+    kinfo("power: woke from %s", drv_power_wakeup_reason());
+
+    if (drv_rtc_alarm_was_fired()) {
+        kinfo("rtc: the alarm went off before this boot");
+    }
 
     /* The first thing the init process does: check that the kernel works. */
     selftest_run();
@@ -242,6 +288,22 @@ static void init_task(void *arg)
     }
 
     /*
+     * The other volumes: /etc/fstab is read after the root, whose /etc
+     * holds the file. A line that cannot be mounted is named in the log and
+     * skipped: the board is useful without the card of the camera, and a
+     * boot that stopped for it would not even reach the shell that repairs
+     * it.
+     */
+    mounted = vfs_mount_fstab(VFS_FSTAB_PATH);
+    if (mounted < 0) {
+        if (mounted != KERR_NOENT) {
+            kwarn("init: cannot read the table %s (rc=%d)", VFS_FSTAB_PATH, mounted);
+        }
+    } else if (mounted > 0) {
+        kinfo("init: %d volume(s) mounted from %s", mounted, VFS_FSTAB_PATH);
+    }
+
+    /*
      * The commands of the shell have to exist before a script names one:
      * the shell registers them when it starts, and the scripts of the init
      * process run before it.
@@ -289,6 +351,15 @@ void app_main(void)
 {
     const struct kernel_board *info = board_get_info();
     struct kernel_boot_config cfg;
+
+    /*
+     * The board has no PMIC: the power latch is kept closed by HOLD (G4),
+     * and after a deep sleep the pin comes up floating. Driving it high is
+     * the first thing the firmware does, before the console and before the
+     * kernel, so a board on a battery does not cut its own power in the
+     * first milliseconds of the wake.
+     */
+    (void)drv_power_hold();
 
     port_esp32_console_init();
     port_esp32_init();

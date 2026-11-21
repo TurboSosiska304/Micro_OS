@@ -1,11 +1,16 @@
 #include "ktest.h"
 #include "tests/tests.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "kernel/net.h"
+#include "kernel/sched.h"
+#include "kernel/task.h"
 #include "kshell/kshell.h"
+#include "net/dns.h"
 #include "net/http.h"
+#include "net/mqtt.h"
 #include "net/net.h"
 #include "net/net_http.h"
 #include "net/ntp.h"
@@ -275,6 +280,708 @@ static void test_loopback(void)
     k_server_close(server);
 }
 
+/* --- the fake broker of the MQTT test --- */
+
+/*
+ * The broker is a task of its own: the client waits inside `mqtt_connect`
+ * and `mqtt_publish` for the answer of the broker, so somebody has to answer
+ * while the task that calls them sleeps. It speaks only the packets of the
+ * test — one session at a time, no store, no wildcards — and lives for as
+ * long as the test needs it.
+ */
+#define TEST_MQTT_PORT 45884
+#define TEST_MQTT_BODY_MAX 512
+#define TEST_BROKER_TIMEOUT_MS 2000
+
+static char g_mqtt_topic[MQTT_TOPIC_MAX + 1];
+static char g_mqtt_payload[MQTT_PAYLOAD_MAX + 1];
+static int g_mqtt_payload_len;
+static int g_mqtt_connects;
+static int g_mqtt_publishes;
+static int g_mqtt_subscribes;
+static int g_mqtt_pubacks;
+static int g_mqtt_pings;
+static int g_mqtt_stop;
+
+static k_size_t broker_varint(k_u8_t *buf, k_size_t value)
+{
+    k_size_t used = 0;
+
+    do {
+        k_u8_t byte = (k_u8_t)(value % 128u);
+
+        value /= 128u;
+        if (value > 0) {
+            byte |= 0x80;
+        }
+
+        buf[used++] = byte;
+    } while (value > 0);
+
+    return used;
+}
+
+static int broker_read_exact(k_socket_t *session, k_u8_t *buf, k_size_t length)
+{
+    k_u32_t waited = 0;
+    k_size_t got = 0;
+
+    while (got < length) {
+        int n = k_socket_recv(session, buf + got, length - got);
+
+        if (n > 0) {
+            got += (k_size_t)n;
+            continue;
+        }
+
+        if (n == 0 || waited >= TEST_BROKER_TIMEOUT_MS) {
+            return -1;
+        }
+
+        k_sched_sleep_ms(10);
+        waited += 10;
+    }
+
+    return 0;
+}
+
+static int broker_read_packet(k_socket_t *session, k_u8_t *type, k_u8_t *flags, k_u8_t *body,
+                              k_size_t *length)
+{
+    k_u8_t header;
+    k_u8_t byte;
+    k_size_t remaining = 0;
+    k_size_t multiplier = 1;
+    int i;
+
+    if (broker_read_exact(session, &header, 1) != 0) {
+        return -1;
+    }
+
+    for (i = 0; i < 4; i++) {
+        if (broker_read_exact(session, &byte, 1) != 0) {
+            return -1;
+        }
+
+        remaining += (k_size_t)(byte & 0x7f) * multiplier;
+        if ((byte & 0x80) == 0) {
+            break;
+        }
+
+        multiplier *= 128u;
+    }
+
+    if (i == 4 || remaining > TEST_MQTT_BODY_MAX) {
+        return -1;
+    }
+
+    if (remaining > 0 && broker_read_exact(session, body, remaining) != 0) {
+        return -1;
+    }
+
+    *type = (k_u8_t)(header >> 4);
+    *flags = (k_u8_t)(header & 0x0f);
+    *length = remaining;
+
+    return 0;
+}
+
+static int broker_send(k_socket_t *session, const k_u8_t *data, k_size_t length)
+{
+    return k_socket_send(session, data, length, true) == (int)length ? 0 : -1;
+}
+
+static void broker_session(k_socket_t *session)
+{
+    k_u8_t body[TEST_MQTT_BODY_MAX];
+    k_u8_t out[TEST_MQTT_BODY_MAX];
+    k_u8_t type;
+    k_u8_t flags;
+    k_size_t length;
+    k_size_t topic_length;
+    k_size_t payload_length;
+    k_size_t pos;
+    k_u16_t id;
+    int qos;
+
+    /* CONNECT: the protocol name, level 4 and a clean session are what we speak. */
+    if (broker_read_packet(session, &type, &flags, body, &length) != 0 || type != 1) {
+        return;
+    }
+
+    if (length < 12 || body[1] != 4 || memcmp(body + 2, "MQTT", 4) != 0 || body[6] != 4) {
+        return;
+    }
+
+    __atomic_add_fetch(&g_mqtt_connects, 1, __ATOMIC_RELEASE);
+
+    out[0] = 0x20; /* CONNACK */
+    out[1] = 0x02;
+    out[2] = 0x00;
+    out[3] = 0x00;
+    if (broker_send(session, out, 4) != 0) {
+        return;
+    }
+
+    for (;;) {
+        if (broker_read_packet(session, &type, &flags, body, &length) != 0) {
+            return;
+        }
+
+        switch (type) {
+        case 3: /* PUBLISH */
+            if (length < 2) {
+                return;
+            }
+
+            topic_length = ((k_size_t)body[0] << 8) | body[1];
+            pos = 2;
+            qos = (flags >> 1) & 0x03;
+
+            if (topic_length == 0 || topic_length > MQTT_TOPIC_MAX || pos + topic_length > length) {
+                return;
+            }
+
+            if (qos == 1) {
+                if (pos + topic_length + 2 > length) {
+                    return;
+                }
+                id = (k_u16_t)(((k_u16_t)body[pos + topic_length] << 8) |
+                               body[pos + topic_length + 1]);
+            } else {
+                id = 0;
+            }
+
+            /* The packet id sits between the topic and the payload. */
+            pos += topic_length + (qos == 1 ? 2 : 0);
+            payload_length = length - pos;
+            if (payload_length > MQTT_PAYLOAD_MAX) {
+                return;
+            }
+
+            memcpy(g_mqtt_topic, body + 2, topic_length);
+            g_mqtt_topic[topic_length] = '\0';
+            memcpy(g_mqtt_payload, body + pos, payload_length);
+            g_mqtt_payload[payload_length] = '\0';
+            g_mqtt_payload_len = (int)payload_length;
+
+            if (qos == 1) {
+                out[0] = 0x40; /* PUBACK */
+                out[1] = 0x02;
+                out[2] = (k_u8_t)(id >> 8);
+                out[3] = (k_u8_t)id;
+                if (broker_send(session, out, 4) != 0) {
+                    return;
+                }
+            }
+
+            /* The count is the last word about the message: every field above
+             * is complete before the test task can see it. */
+            __atomic_add_fetch(&g_mqtt_publishes, 1, __ATOMIC_RELEASE);
+            break;
+
+        case 8: /* SUBSCRIBE */
+            if (length < 5) {
+                return;
+            }
+
+            id = (k_u16_t)(((k_u16_t)body[0] << 8) | body[1]);
+            topic_length = ((k_size_t)body[2] << 8) | body[3];
+
+            if (topic_length == 0 || topic_length > MQTT_TOPIC_MAX ||
+                4 + topic_length + 1 > length) {
+                return;
+            }
+
+            qos = body[4 + topic_length];
+            __atomic_add_fetch(&g_mqtt_subscribes, 1, __ATOMIC_RELEASE);
+
+            out[0] = 0x90; /* SUBACK */
+            out[1] = 0x03;
+            out[2] = (k_u8_t)(id >> 8);
+            out[3] = (k_u8_t)id;
+            out[4] = (k_u8_t)qos;
+            if (broker_send(session, out, 5) != 0) {
+                return;
+            }
+
+            /* One message of the broker on the filter just subscribed: the
+             * client reads it from `mqtt_poll`, acknowledges it and only then
+             * does the broker see the PUBACK in the loop below. */
+            pos = 0;
+            out[pos++] = 0x32; /* PUBLISH, QoS 1 */
+            pos += broker_varint(out + pos, 2 + topic_length + 2 + 11);
+            out[pos++] = (k_u8_t)(topic_length >> 8);
+            out[pos++] = (k_u8_t)topic_length;
+            memcpy(out + pos, body + 4, topic_length);
+            pos += topic_length;
+            out[pos++] = 0x00; /* the packet id of the broker's message */
+            out[pos++] = 0x07;
+            memcpy(out + pos, "from-broker", 11);
+            pos += 11;
+            if (broker_send(session, out, pos) != 0) {
+                return;
+            }
+            break;
+
+        case 4: /* PUBACK of the message above */
+            if (length != 2) {
+                return;
+            }
+            __atomic_add_fetch(&g_mqtt_pubacks, 1, __ATOMIC_RELEASE);
+            break;
+
+        case 12: /* PINGREQ */
+            if (length != 0) {
+                return;
+            }
+            __atomic_add_fetch(&g_mqtt_pings, 1, __ATOMIC_RELEASE);
+            out[0] = 0xd0; /* PINGRESP */
+            out[1] = 0x00;
+            if (broker_send(session, out, 2) != 0) {
+                return;
+            }
+            break;
+
+        case 14: /* DISCONNECT */
+            return;
+
+        default:
+            return;
+        }
+    }
+}
+
+static void mqtt_broker_task(void *arg)
+{
+    k_server_t *server = arg;
+
+    while (!__atomic_load_n(&g_mqtt_stop, __ATOMIC_ACQUIRE)) {
+        k_socket_t *session = k_server_accept(server, 100);
+
+        if (session == NULL) {
+            continue;
+        }
+
+        broker_session(session);
+        k_socket_close(session);
+    }
+
+    k_server_close(server);
+}
+
+static bool mqtt_wait_for(int *value, int want, k_u32_t timeout_ms)
+{
+    k_u32_t waited = 0;
+
+    while (waited <= timeout_ms) {
+        if (__atomic_load_n(value, __ATOMIC_ACQUIRE) >= want) {
+            return true;
+        }
+
+        k_sched_sleep_ms(10);
+        waited += 10;
+    }
+
+    return false;
+}
+
+static void mqtt_broker_stop(struct task *broker)
+{
+    __atomic_store_n(&g_mqtt_stop, 1, __ATOMIC_RELEASE);
+
+    if (broker != NULL) {
+        (void)task_wait(broker->pid, NULL, 5000);
+    }
+}
+
+/*
+ * The whole client over the loopback of the port: a broker of the test says
+ * CONNACK, takes the two publishes, answers SUBSCRIBE with a message of its
+ * own and answers the pings. The command of the shell is then the second
+ * session of the same broker, so the one-shot path is covered too.
+ */
+static void test_mqtt(void)
+{
+    static const char topic[] = "test/one";
+    static const char acked_topic[] = "test/two";
+    static const char filter[] = "test/three";
+    struct mqtt_client client;
+    struct mqtt_message message;
+    struct task *broker;
+    k_server_t *server;
+    char command[96];
+    int rc;
+
+    ktest_begin("mqtt: a fake broker takes CONNECT, PUBLISH, SUBSCRIBE, PUBACK and PINGREQ");
+
+    memset(g_mqtt_topic, 0, sizeof(g_mqtt_topic));
+    memset(g_mqtt_payload, 0, sizeof(g_mqtt_payload));
+    __atomic_store_n(&g_mqtt_payload_len, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_mqtt_connects, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_mqtt_publishes, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_mqtt_subscribes, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_mqtt_pubacks, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_mqtt_pings, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_mqtt_stop, 0, __ATOMIC_RELEASE);
+
+    server = k_server_listen(TEST_MQTT_PORT);
+    KT_CHECK(server != NULL);
+    if (server == NULL) {
+        return;
+    }
+
+    broker = task_create("mqtt-broker", mqtt_broker_task, server, TASK_PRIO_DEFAULT);
+    KT_CHECK(broker != NULL);
+    if (broker == NULL) {
+        k_server_close(server);
+        return;
+    }
+
+    rc = mqtt_connect(&client, "127.0.0.1", TEST_MQTT_PORT, "microos-test", 1);
+    KT_CHECK_INT_EQ(rc, MQTT_OK);
+    if (rc != MQTT_OK) {
+        mqtt_broker_stop(broker);
+        return;
+    }
+
+    KT_CHECK(mqtt_wait_for(&g_mqtt_connects, 1, 2000));
+
+    /* QoS 0: the command of the shell is the same path. */
+    KT_CHECK_INT_EQ(mqtt_publish(&client, topic, "hello", 5, 0), MQTT_OK);
+    KT_CHECK(mqtt_wait_for(&g_mqtt_publishes, 1, 2000));
+    KT_CHECK_STR_EQ(g_mqtt_topic, topic);
+    KT_CHECK_STR_EQ(g_mqtt_payload, "hello");
+    KT_CHECK_INT_EQ(g_mqtt_payload_len, 5);
+
+    /* QoS 1: the call does not return before the PUBACK of the broker. */
+    KT_CHECK_INT_EQ(mqtt_publish(&client, acked_topic, "with-ack", 8, 1), MQTT_OK);
+    KT_CHECK(mqtt_wait_for(&g_mqtt_publishes, 2, 2000));
+    KT_CHECK_STR_EQ(g_mqtt_topic, acked_topic);
+    KT_CHECK_STR_EQ(g_mqtt_payload, "with-ack");
+
+    /* SUBSCRIBE QoS 1, and the message the broker sends on the new filter. */
+    KT_CHECK_INT_EQ(mqtt_subscribe(&client, filter, 1), MQTT_OK);
+    KT_CHECK(mqtt_wait_for(&g_mqtt_subscribes, 1, 2000));
+
+    rc = mqtt_poll(&client, &message);
+    KT_CHECK_INT_EQ(rc, 1);
+    if (rc == 1) {
+        KT_CHECK_STR_EQ(message.topic, filter);
+        KT_CHECK_STR_EQ((const char *)message.payload, "from-broker");
+        KT_CHECK_INT_EQ(message.length, 11);
+        KT_CHECK_INT_EQ(message.qos, 1);
+    }
+
+    /* The reader acknowledged the message of the broker by itself. */
+    KT_CHECK(mqtt_wait_for(&g_mqtt_pubacks, 1, 2000));
+
+    /* Half of the keepalive has passed: the clock sends the PINGREQ itself. */
+    k_sched_sleep_ms(600);
+    KT_CHECK_INT_EQ(mqtt_keepalive(&client), 1);
+    KT_CHECK(mqtt_wait_for(&g_mqtt_pings, 1, 2000));
+    KT_CHECK_INT_EQ(mqtt_keepalive(&client), 0);
+
+    KT_CHECK_INT_EQ(mqtt_ping(&client), MQTT_OK);
+    KT_CHECK(mqtt_wait_for(&g_mqtt_pings, 2, 2000));
+
+    mqtt_disconnect(&client);
+    KT_CHECK(!client.connected);
+
+    /* The one-shot command, against a second session of the same broker. */
+    KT_CHECK_INT_EQ(kshell_execute("mqtt"), KSHELL_USAGE);
+
+    snprintf(command, sizeof(command), "mqtt 127.0.0.1 %d cmd/topic hello", TEST_MQTT_PORT);
+    KT_CHECK_INT_EQ(kshell_execute(command), KSHELL_OK);
+    KT_CHECK(mqtt_wait_for(&g_mqtt_publishes, 3, 2000));
+    KT_CHECK_STR_EQ(g_mqtt_topic, "cmd/topic");
+    KT_CHECK_STR_EQ(g_mqtt_payload, "hello");
+
+    mqtt_broker_stop(broker);
+    KT_CHECK_INT_EQ(__atomic_load_n(&g_mqtt_connects, __ATOMIC_ACQUIRE), 2);
+}
+
+/*
+ * The resolver: the query of a name, the record of an answer and the cache.
+ * The packets are made here byte by byte, because the wire format is the
+ * contract and a server of the internet is not in the test.
+ */
+static k_size_t dns_test_name(k_u8_t *buffer, const char *name)
+{
+    k_size_t length = 0;
+    const char *cursor = name;
+
+    while (*cursor != '\0') {
+        const char *dot = strchr(cursor, '.');
+        k_size_t label = dot == NULL ? strlen(cursor) : (k_size_t)(dot - cursor);
+
+        buffer[length++] = (k_u8_t)label;
+        memcpy(buffer + length, cursor, label);
+        length += label;
+        cursor += label;
+
+        if (*cursor == '.') {
+            cursor++;
+        }
+    }
+
+    buffer[length++] = 0u;
+
+    return length;
+}
+
+/* The header and the question of an answer, for `answers` records to come. */
+static k_size_t dns_test_begin(k_u8_t *packet, k_u16_t identifier, const char *name, int answers)
+{
+    k_size_t length = 12u;
+
+    memset(packet, 0, DNS_PACKET_MAX);
+    packet[0] = (k_u8_t)(identifier >> 8);
+    packet[1] = (k_u8_t)identifier;
+    packet[2] = 0x81u; /* an answer, recursion available */
+    packet[3] = 0x80u; /* no error */
+    packet[5] = 1u;    /* one question */
+    packet[7] = (k_u8_t)answers;
+
+    length += dns_test_name(packet + length, name);
+    packet[length++] = 0u;
+    packet[length++] = 1u; /* type A */
+    packet[length++] = 0u;
+    packet[length++] = 1u; /* class IN */
+
+    return length;
+}
+
+static k_size_t dns_test_record(k_u8_t *packet, k_size_t length, k_u16_t type, k_u32_t ttl,
+                                const k_u8_t *data, k_size_t data_length)
+{
+    packet[length++] = 0xC0u; /* the name of the question */
+    packet[length++] = 0x0Cu;
+    packet[length++] = (k_u8_t)(type >> 8);
+    packet[length++] = (k_u8_t)type;
+    packet[length++] = 0u;
+    packet[length++] = 1u;
+    packet[length++] = (k_u8_t)(ttl >> 24);
+    packet[length++] = (k_u8_t)(ttl >> 16);
+    packet[length++] = (k_u8_t)(ttl >> 8);
+    packet[length++] = (k_u8_t)ttl;
+    packet[length++] = (k_u8_t)(data_length >> 8);
+    packet[length++] = (k_u8_t)data_length;
+    memcpy(packet + length, data, data_length);
+
+    return length + data_length;
+}
+
+static k_size_t dns_test_a(k_u8_t *packet, k_size_t length, k_u32_t address, k_u32_t ttl)
+{
+    k_u8_t data[4];
+
+    put_be32(data, address);
+
+    return dns_test_record(packet, length, 1u, ttl, data, sizeof(data));
+}
+
+static void test_dns(void)
+{
+    k_u8_t packet[DNS_PACKET_MAX];
+    k_u8_t second[DNS_PACKET_MAX];
+    struct dns_answer answer;
+    k_u32_t address;
+    k_u32_t left;
+    k_size_t length;
+    k_size_t i;
+    char long_name[DNS_NAME_MAX + 8];
+
+    ktest_begin("dns: the query of a name, the address of an answer and the cache");
+
+    /* --- the query: a header, the labels, the root and the question */
+    length = (k_size_t)dns_build_query("example.com", 0x1234, packet, sizeof(packet));
+    KT_CHECK_INT_EQ((int)length, 29);
+    KT_CHECK_INT_EQ(packet[0], 0x12);
+    KT_CHECK_INT_EQ(packet[1], 0x34);
+    KT_CHECK_INT_EQ(packet[2], 0x01); /* a query */
+    KT_CHECK_INT_EQ(packet[3], 0x00); /* recursion wanted, no error */
+    KT_CHECK_INT_EQ(packet[5], 1);    /* one question */
+    KT_CHECK_INT_EQ(packet[7], 0);    /* no answer came with the query */
+    KT_CHECK_INT_EQ(packet[12], 7);   /* the label of "example" */
+    KT_CHECK(memcmp(packet + 13, "example", 7) == 0);
+    KT_CHECK_INT_EQ(packet[20], 3);
+    KT_CHECK(memcmp(packet + 21, "com", 3) == 0);
+    KT_CHECK_INT_EQ(packet[24], 0); /* the root */
+    KT_CHECK_INT_EQ(packet[25], 0);
+    KT_CHECK_INT_EQ(packet[26], 1); /* the type: an address */
+    KT_CHECK_INT_EQ(packet[27], 0);
+    KT_CHECK_INT_EQ(packet[28], 1); /* the class: the internet */
+
+    /* A trailing dot is the root and not an empty label. */
+    KT_CHECK_INT_EQ((int)dns_build_query("example.com.", 0x1234, second, sizeof(second)), 29);
+    KT_CHECK(memcmp(packet, second, 29) == 0);
+
+    /* Names that are not names, and a packet that is too small. */
+    KT_CHECK_INT_EQ(dns_build_query("", 1, packet, sizeof(packet)), -1);
+    KT_CHECK_INT_EQ(dns_build_query(NULL, 1, packet, sizeof(packet)), -1);
+    KT_CHECK_INT_EQ(dns_build_query("a..b", 1, packet, sizeof(packet)), -1);
+    KT_CHECK_INT_EQ(dns_build_query(".a", 1, packet, sizeof(packet)), -1);
+    KT_CHECK_INT_EQ(dns_build_query("example.com", 1, packet, 20), -1);
+    KT_CHECK_INT_EQ(dns_build_query("example.com", 1, NULL, 64), -1);
+
+    memset(long_name, 'a', sizeof(long_name) - 1u);
+    long_name[sizeof(long_name) - 1u] = '\0';
+    KT_CHECK_INT_EQ(dns_build_query(long_name, 1, packet, sizeof(packet)), -1);
+
+    /* A label of 64 characters is not a label of the protocol. */
+    memset(long_name, 'a', 64);
+    memcpy(long_name + 64, ".com", 5);
+    KT_CHECK_INT_EQ(dns_build_query(long_name, 1, packet, sizeof(packet)), -1);
+
+    /* --- the answer: the first address of type A and its time to live */
+    length = dns_test_begin(packet, 0x4321, "example.com", 1);
+    length = dns_test_a(packet, length, 0x5DB8D822u, 300u);
+
+    KT_CHECK_INT_EQ(dns_parse_answer(packet, length, 0x4321, &answer), 0);
+    KT_CHECK_INT_EQ(answer.address, 0x5DB8D822u); /* 93.184.216.34 */
+    KT_CHECK_INT_EQ(answer.ttl_s, 300);
+
+    /* The identifier belongs to the exchange, not to the name. */
+    KT_CHECK_INT_EQ(dns_parse_answer(packet, length, 0x4322, &answer), -1);
+
+    /* An error of the server, a query and a message that stops early are not
+     * an address. */
+    packet[3] = 0x83u;
+    KT_CHECK_INT_EQ(dns_parse_answer(packet, length, 0x4321, &answer), -1);
+    packet[3] = 0x80u;
+
+    packet[2] = 0x01u;
+    KT_CHECK_INT_EQ(dns_parse_answer(packet, length, 0x4321, &answer), -1);
+    packet[2] = 0x81u;
+
+    KT_CHECK_INT_EQ(dns_parse_answer(packet, 15, 0x4321, &answer), -1);
+    KT_CHECK_INT_EQ(dns_parse_answer(packet, 0, 0x4321, &answer), -1);
+    KT_CHECK_INT_EQ(dns_parse_answer(NULL, length, 0x4321, &answer), -1);
+    KT_CHECK_INT_EQ(dns_parse_answer(packet, length, 0x4321, NULL), -1);
+
+    /* No answer at all, a record of another type, and a record of four bytes
+     * that says it is five. */
+    packet[7] = 0u;
+    KT_CHECK_INT_EQ(dns_parse_answer(packet, length, 0x4321, &answer), -1);
+
+    {
+        static const k_u8_t v6[16] = {0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
+
+        length = dns_test_begin(packet, 0x0044, "v6.example", 1);
+        length = dns_test_record(packet, length, 28u, 60u, v6, sizeof(v6));
+        KT_CHECK_INT_EQ(dns_parse_answer(packet, length, 0x0044, &answer), -1);
+    }
+
+    {
+        static const k_u8_t five[5] = {1, 2, 3, 4, 5};
+
+        length = dns_test_begin(packet, 0x0045, "odd.example", 1);
+        length = dns_test_record(packet, length, 1u, 60u, five, sizeof(five));
+
+        /* The type says address and the length says otherwise: the record is
+         * skipped and there is nothing left. */
+        KT_CHECK_INT_EQ(dns_parse_answer(packet, length, 0x0045, &answer), -1);
+
+        /* The same record, cut by a byte: the packet is not read past it. */
+        KT_CHECK_INT_EQ(dns_parse_answer(packet, length - 1u, 0x0045, &answer), -1);
+    }
+
+    /* A CNAME on the way to the address is skipped. */
+    {
+        static const k_u8_t alias[2] = {0xC0u, 0x0Cu};
+
+        length = dns_test_begin(packet, 0x0046, "www.example.com", 2);
+        length = dns_test_record(packet, length, 5u, 120u, alias, sizeof(alias));
+        length = dns_test_a(packet, length, 0x09090909u, 60u);
+
+        KT_CHECK_INT_EQ(dns_parse_answer(packet, length, 0x0046, &answer), 0);
+        KT_CHECK_INT_EQ(answer.address, 0x09090909u);
+        KT_CHECK_INT_EQ(answer.ttl_s, 60);
+    }
+
+    /* A week is cut to a day: the cache is a few hundred bytes of SRAM. */
+    length = dns_test_begin(packet, 0x0047, "long.example", 1);
+    length = dns_test_a(packet, length, 0x0A000202u, 604800u);
+    KT_CHECK_INT_EQ(dns_parse_answer(packet, length, 0x0047, &answer), 0);
+    KT_CHECK_INT_EQ(answer.ttl_s, (int)DNS_TTL_MAX_S);
+
+    /* --- the cache */
+    dns_cache_clear();
+    KT_CHECK_INT_EQ((int)dns_cache_count(), 0);
+
+    KT_CHECK_INT_EQ(dns_cache_store("example.com", 0x5DB8D822u, 60u, 1000u), 0);
+    KT_CHECK_INT_EQ((int)dns_cache_count(), 1);
+
+    KT_CHECK(dns_cache_lookup("example.com", 2000u, &address, &left));
+    KT_CHECK_INT_EQ(address, 0x5DB8D822u);
+    KT_CHECK_INT_EQ(left, 59);
+
+    /* The names of the protocol are not case sensitive, and the rest of the
+     * time is what the caller asks for. */
+    KT_CHECK(dns_cache_lookup("EXAMPLE.Com", 3000u, &address, &left));
+    KT_CHECK_INT_EQ(left, 58);
+    KT_CHECK(!dns_cache_lookup("example.org", 3000u, &address, &left));
+
+    /* The entry lives 60 seconds and not 61. */
+    KT_CHECK(dns_cache_lookup("example.com", 60999u, &address, NULL));
+    KT_CHECK(!dns_cache_lookup("example.com", 61000u, &address, NULL));
+    KT_CHECK_INT_EQ((int)dns_cache_count(), 0); /* the expired name is gone */
+
+    /* A time to live of zero is not a cache: "ask me again". */
+    KT_CHECK_INT_EQ(dns_cache_store("fresh.example", 0x01020304u, 0u, 0u), 1);
+    KT_CHECK(!dns_cache_lookup("fresh.example", 0u, &address, NULL));
+
+    memset(long_name, 'a', DNS_NAME_MAX);
+    long_name[DNS_NAME_MAX] = '\0';
+
+    KT_CHECK_INT_EQ(dns_cache_store("", 1u, 60u, 0u), -1);
+    KT_CHECK_INT_EQ(dns_cache_store(NULL, 1u, 60u, 0u), -1);
+    KT_CHECK_INT_EQ(dns_cache_store(long_name, 1u, 60u, 0u), -1);
+
+    /* A time to live of a year is kept for a day. */
+    KT_CHECK_INT_EQ(dns_cache_store("day.example", 0x08080808u, 31536000u, 0u), 0);
+    KT_CHECK(dns_cache_lookup("day.example", 0u, NULL, &left));
+    KT_CHECK_INT_EQ(left, (int)DNS_TTL_MAX_S);
+
+    /* The ninth name makes room for the one that expires first. */
+    dns_cache_clear();
+    for (i = 0; i < DNS_CACHE_ENTRIES; i++) {
+        char name[16];
+
+        snprintf(name, sizeof(name), "host%u.example", (unsigned)i);
+        KT_CHECK_INT_EQ(dns_cache_store(name, (k_u32_t)i, (k_u32_t)(100 + i), 0u), 0);
+    }
+
+    KT_CHECK_INT_EQ((int)dns_cache_count(), (int)DNS_CACHE_ENTRIES);
+    KT_CHECK(dns_cache_lookup("host0.example", 0u, &address, NULL));
+    KT_CHECK_INT_EQ(dns_cache_store("new.example", 0xA0A0A0A0u, 400u, 0u), 0);
+    KT_CHECK_INT_EQ((int)dns_cache_count(), (int)DNS_CACHE_ENTRIES);
+    KT_CHECK(!dns_cache_lookup("host0.example", 0u, &address, NULL));
+    KT_CHECK(dns_cache_lookup("host7.example", 0u, &address, NULL));
+    KT_CHECK(dns_cache_lookup("new.example", 0u, &address, NULL));
+
+    /* The listing of the cache is a walk of its slots. */
+    KT_CHECK(dns_cache_name(DNS_CACHE_ENTRIES, 0u, &address, &left) == NULL);
+    KT_CHECK_INT_EQ(dns_cache_store("list.example", 0x0B0B0B0Bu, 90u, 0u), 0);
+    for (i = 0; i < DNS_CACHE_ENTRIES; i++) {
+        const char *name = dns_cache_name(i, 0u, &address, &left);
+
+        if (name != NULL && strcmp(name, "list.example") == 0) {
+            break;
+        }
+    }
+    KT_CHECK(i < DNS_CACHE_ENTRIES);
+
+    /* The name found above is gone after its time to live. */
+    if (i < DNS_CACHE_ENTRIES) {
+        KT_CHECK(dns_cache_name(i, 200000u, &address, &left) == NULL);
+    }
+
+    dns_cache_clear();
+    KT_CHECK_INT_EQ((int)dns_cache_count(), 0);
+}
+
 void test_net(void)
 {
     static const struct {
@@ -292,6 +999,7 @@ void test_net(void)
     test_url();
     test_get();
     test_ntp();
+    test_dns();
     test_loopback();
 
     /*
@@ -387,4 +1095,6 @@ void test_net(void)
 
     /* Off when it is already off is an answer, not an error. */
     KT_CHECK_INT_EQ(kshell_execute("httpd off"), KSHELL_OK);
+
+    test_mqtt();
 }

@@ -4,9 +4,7 @@
 # compiled into the firmware.
 
 if(NOT ESP_PLATFORM)
-    add_executable(microos_tests
-        src/main.c
-        framework/ktest.c
+    set(MICRO_OS_TEST_CASES
         cases/test_version.c
         cases/test_board.c
         cases/test_log.c
@@ -21,6 +19,7 @@ if(NOT ESP_PLATFORM)
         cases/test_mfs.c
         cases/test_mfs_persistence.c
         cases/test_vfs.c
+        cases/test_fs_fat.c
         cases/test_sysfs.c
         cases/test_input_debounce.c
         cases/test_battery_soc.c
@@ -35,11 +34,28 @@ if(NOT ESP_PLATFORM)
         cases/test_kshell.c
         cases/test_initd.c
         cases/test_config.c
-        cases/test_net.c
         cases/test_task.c
         cases/test_sched.c
         cases/test_sched_queue.c
-        cases/test_wifi.c
+    )
+
+    # The tests of a component that a build leaves out are left out with it:
+    # they name the sources and the commands that are not in the image
+    # (ADR 0010, make test-minimal). The test of the network covers every
+    # protocol at once, so it needs the whole component: a build that turns
+    # one client off keeps the component and loses that case, not the build.
+    if(MICRO_OS_NET AND MICRO_OS_NET_HTTP AND MICRO_OS_NET_HTTP_SERVER
+       AND MICRO_OS_NET_NTP AND MICRO_OS_NET_MQTT)
+        list(APPEND MICRO_OS_TEST_CASES cases/test_net.c)
+    endif()
+    if(MICRO_OS_WIFI)
+        list(APPEND MICRO_OS_TEST_CASES cases/test_wifi.c)
+    endif()
+
+    add_executable(microos_tests
+        src/main.c
+        framework/ktest.c
+        ${MICRO_OS_TEST_CASES}
     )
 
     target_include_directories(microos_tests PRIVATE
@@ -52,6 +68,7 @@ if(NOT ESP_PLATFORM)
         "${CMAKE_SOURCE_DIR}/components/drivers/include"
         "${CMAKE_SOURCE_DIR}/components/telnet/include"
         "${CMAKE_SOURCE_DIR}/components/graphics/include"
+        "${CMAKE_SOURCE_DIR}/components/fs_fat32/include"
     )
 
     target_sources(microos_tests PRIVATE
@@ -63,7 +80,40 @@ if(NOT ESP_PLATFORM)
         "${CMAKE_SOURCE_DIR}/components/graphics/src/text_wrap.c"
     )
 
-    target_link_libraries(microos_tests PRIVATE microos_kernel microos_board microos_kshell microos_init microos_config microos_net microos_mfs microos_procfs microos_devfs microos_libc microos_wifi microos_port_host)
+    # The FAT reader comes from the component when the host build links it
+    # (the default, ADR 0009). A build that turns it off still compiles the
+    # sources into the test binary: the tests are the place where the reader
+    # is covered, whatever an image links.
+    if(NOT MICRO_OS_FS_FAT32)
+        target_sources(microos_tests PRIVATE
+            "${CMAKE_SOURCE_DIR}/components/fs_fat32/src/fat_core.c"
+            "${CMAKE_SOURCE_DIR}/components/fs_fat32/src/fat_dir.c"
+            "${CMAKE_SOURCE_DIR}/components/fs_fat32/src/fat_check.c"
+            "${CMAKE_SOURCE_DIR}/components/fs_fat32/src/fat_vfs.c"
+        )
+    endif()
+
+    set(MICRO_OS_TEST_LIBS
+        microos_kernel
+        microos_board
+        microos_kshell
+        microos_init
+        microos_config
+        microos_mfs
+        microos_procfs
+        microos_devfs
+        microos_libc
+        microos_port_host
+    )
+
+    if(MICRO_OS_NET)
+        list(APPEND MICRO_OS_TEST_LIBS microos_net)
+    endif()
+    if(MICRO_OS_WIFI)
+        list(APPEND MICRO_OS_TEST_LIBS microos_wifi)
+    endif()
+
+    target_link_libraries(microos_tests PRIVATE ${MICRO_OS_TEST_LIBS})
 
 # The corpus of the tests: a fixed set of numbers with the boundary values
 target_compile_definitions(microos_tests PRIVATE

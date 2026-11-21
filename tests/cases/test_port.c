@@ -272,8 +272,14 @@ static void check_kernel_layer(void)
     KT_CHECK_STR_EQ(k_sysinfo_arch(), k_port_arch());
     KT_CHECK_INT_EQ(k_sysinfo_heap_total(), k_port_heap_total());
     KT_CHECK_INT_EQ(k_sysinfo_heap_free(), k_port_heap_free());
+#if KERNEL_PSRAM
     KT_CHECK_INT_EQ(k_sysinfo_psram_total(), k_port_psram_total());
     KT_CHECK_INT_EQ(k_sysinfo_psram_free(), k_port_psram_free());
+#else
+    /* The port keeps the contract; the kernel does not ask it (ADR 0010). */
+    KT_CHECK_INT_EQ(k_sysinfo_psram_total(), 0);
+    KT_CHECK_INT_EQ(k_sysinfo_psram_free(), 0);
+#endif
     KT_CHECK(k_sysinfo_uptime_us() <= k_port_uptime_us());
 
     /* A NULL mutex is refused, not dereferenced. */

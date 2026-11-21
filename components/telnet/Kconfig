@@ -1,0 +1,12 @@
+menu "Micro OS telnet"
+
+    config MICRO_OS_TELNET
+        bool "the shell on TCP port 23"
+        default y
+        help
+            The telnet server and the commands of the session: the same
+            shell the UART and the display show, on the local network. There
+            is no authentication, and "telnet off" closes the door. A build
+            that leaves it out keeps the shell itself.
+
+endmenu

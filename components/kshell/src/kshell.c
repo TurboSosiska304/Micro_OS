@@ -7,6 +7,7 @@
 
 #include "libc/stdlib.h"
 #include "libc/unistd.h"
+#include "kernel/config.h"
 #include "kernel/kmod.h"
 #include "kernel/ksys.h"
 #include "kernel/console.h"
@@ -19,7 +20,10 @@
 
 struct command {
     const char *name;
-    const char *help;
+    const char *summary;
+    const char *usage;
+    const char *detail;
+    bool owns_short_h;
     kshell_cmd_fn fn;
 };
 
@@ -39,7 +43,7 @@ static void copy_str(char *dst, k_size_t size, const char *src)
     dst[size - 1] = '\0';
 }
 
-int kshell_register(const char *name, const char *help, kshell_cmd_fn fn)
+int kshell_register_help(const char *name, const struct kshell_help *help, kshell_cmd_fn fn)
 {
     k_size_t i;
 
@@ -49,7 +53,10 @@ int kshell_register(const char *name, const char *help, kshell_cmd_fn fn)
 
     for (i = 0; i < g_command_count; i++) {
         if (strcmp(g_commands[i].name, name) == 0) {
-            g_commands[i].help = help;
+            g_commands[i].summary = help != NULL ? help->summary : NULL;
+            g_commands[i].usage = help != NULL ? help->usage : NULL;
+            g_commands[i].detail = help != NULL ? help->detail : NULL;
+            g_commands[i].owns_short_h = help != NULL ? help->owns_short_h : false;
             g_commands[i].fn = fn;
             return KSHELL_OK;
         }
@@ -66,11 +73,32 @@ int kshell_register(const char *name, const char *help, kshell_cmd_fn fn)
     }
 
     g_commands[g_command_count].name = name;
-    g_commands[g_command_count].help = help;
+    g_commands[g_command_count].summary = help != NULL ? help->summary : NULL;
+    g_commands[g_command_count].usage = help != NULL ? help->usage : NULL;
+    g_commands[g_command_count].detail = help != NULL ? help->detail : NULL;
+    g_commands[g_command_count].owns_short_h = help != NULL ? help->owns_short_h : false;
     g_commands[g_command_count].fn = fn;
     g_command_count++;
 
     return KSHELL_OK;
+}
+
+/*
+ * The old shape of the registration: one line of help, no usage line and no
+ * detail. The commands of the drivers, the network and the ports still come
+ * through here, and `-h` answers them with their summary and a name to
+ * start from.
+ */
+int kshell_register(const char *name, const char *help, kshell_cmd_fn fn)
+{
+    struct kshell_help info;
+
+    info.summary = help;
+    info.usage = NULL;
+    info.detail = NULL;
+    info.owns_short_h = false;
+
+    return kshell_register_help(name, &info, fn);
 }
 
 int kshell_unregister(const char *name)
@@ -170,6 +198,157 @@ static struct command *find_command(const char *name)
     return NULL;
 }
 
+int kshell_help_show(const char *name)
+{
+    struct command *cmd;
+
+    if (name == NULL) {
+        return KSHELL_USAGE;
+    }
+
+    cmd = find_command(name);
+
+    if (cmd == NULL) {
+        /*
+         * A name that is not in the table is not a command that was used
+         * wrong: it is a name the shell does not know, and `help` says so
+         * with the name the person typed.
+         */
+        kshell_printf("help: %s: no such command. Type 'help' for the list.\n", name);
+        return KSHELL_ERROR;
+    }
+
+    if (cmd->usage != NULL) {
+        kshell_printf("usage: %s\n", cmd->usage);
+    } else {
+        /*
+         * A command that was registered with one line only promises no
+         * more than its name and whatever words its summary holds. A made
+         * up usage line would be a promise nobody checked.
+         */
+        kshell_printf("usage: %s [arguments]\n", cmd->name);
+    }
+
+    if (cmd->summary != NULL) {
+        kshell_printf("%s\n", cmd->summary);
+    }
+
+    if (cmd->detail != NULL) {
+        kshell_printf("%s", cmd->detail);
+    }
+
+    return KSHELL_OK;
+}
+
+/* Remember one flag of the table; false when the command does not know it. */
+static bool option_take(const struct kshell_option *options, k_size_t count, char letter)
+{
+    k_size_t i;
+
+    for (i = 0; i < count; i++) {
+        if (options[i].letter == letter) {
+            if (options[i].value != NULL) {
+                *options[i].value = true;
+            }
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/* The answer of a line with an option the command does not have. */
+static int options_refused(const char *name, const char *option, const char *usage)
+{
+    kshell_printf("%s: unknown option: %s\n", name, option);
+
+    if (usage != NULL) {
+        kshell_printf("usage: %s\n", usage);
+    }
+
+    return KSHELL_OPTIONS_ERROR;
+}
+
+int kshell_options(int argc, char **argv, const struct kshell_option *options, k_size_t count,
+                   const char *usage, struct kshell_args *out)
+{
+    bool flags_done = false;
+    const char *name;
+    int positionals = 0;
+    int i;
+
+    if (out == NULL || argc < 1 || argv == NULL) {
+        return KSHELL_OPTIONS_ERROR;
+    }
+
+    name = argv[0];
+    out->argc = 0;
+    out->argv[0] = NULL;
+
+    for (i = 1; i < argc; i++) {
+        const char *word = argv[i];
+
+        if (!flags_done && strcmp(word, "--") == 0) {
+            flags_done = true;
+            continue;
+        }
+
+        if (!flags_done && word[0] == '-' && word[1] == '-' && word[2] != '\0') {
+            if (strcmp(word, "--help") == 0) {
+                return KSHELL_OPTIONS_HELP;
+            }
+            return options_refused(name, word, usage);
+        }
+
+        if (!flags_done && word[0] == '-' && word[1] != '\0') {
+            const char *letter = word + 1;
+
+            for (; *letter != '\0'; letter++) {
+                /*
+                 * A command may have a flag of its own on the letter `h`
+                 * (the human numbers of `df`): the table of the command is
+                 * asked first, and `--help` stays the way to its help.
+                 */
+                if (option_take(options, count, *letter)) {
+                    continue;
+                }
+
+                if (*letter == 'h') {
+                    return KSHELL_OPTIONS_HELP;
+                }
+
+                {
+                    char option[3];
+
+                    option[0] = '-';
+                    option[1] = *letter;
+                    option[2] = '\0';
+
+                    return options_refused(name, option, usage);
+                }
+            }
+            continue;
+        }
+
+        /*
+         * Every word that is not an option is an argument, and the
+         * arguments are counted: a command that got one too many has to
+         * say how it is used instead of ignoring the word.
+         */
+        if (positionals >= KSHELL_MAX_ARGS) {
+            kshell_printf("%s: too many arguments\n", name);
+            return KSHELL_OPTIONS_ERROR;
+        }
+
+        out->argv[positionals++] = argv[i];
+    }
+
+    out->argc = positionals;
+    out->argv[positionals] = NULL;
+
+    return KSHELL_OPTIONS_OK;
+}
+
 int kshell_execute(const char *line)
 {
     char buffer[KSHELL_LINE_MAX];
@@ -198,8 +377,24 @@ int kshell_execute(const char *line)
 
     cmd = find_command(argv[0]);
     if (cmd == NULL) {
-        kshell_printf("%s: command not found\n", argv[0]);
+        kshell_printf("%s: command not found. Type 'help' for the list.\n", argv[0]);
         return KSHELL_ERROR;
+    }
+
+    /*
+     * Every command answers -h and --help, the ones of the drivers too, and
+     * none of them does its work for that answer. Only the first word is
+     * looked at: `write /etc/x -h` writes the two characters, and a command
+     * with options of its own finds the help behind them with
+     * kshell_options(). A leading `--` says that even the first word is an
+     * argument, and a command that claims `-h` for itself (df) is left alone.
+     */
+    if (argc > 1 && strcmp(argv[1], "--help") == 0) {
+        return kshell_help_show(argv[0]);
+    }
+
+    if (argc > 1 && !cmd->owns_short_h && strcmp(argv[1], "-h") == 0) {
+        return kshell_help_show(argv[0]);
     }
 
     return cmd->fn(argc, argv);
@@ -209,29 +404,36 @@ int kshell_execute(const char *line)
 
 /*
  * The help is deliberately short: the screen of the board is small and the
- * flash is not big either. "help <command>" tells more about one command.
+ * flash is not big either. The list is one line per command; "help <command>"
+ * prints the usage and the notes of that one command.
  */
 static int cmd_help(int argc, char **argv)
 {
+    struct kshell_args args;
     k_size_t i;
+    int rc;
 
-    if (argc > 1) {
-        struct command *cmd = find_command(argv[1]);
+    rc = kshell_options(argc, argv, NULL, 0, "help [command]", &args);
+    if (rc == KSHELL_OPTIONS_HELP) {
+        return kshell_help_show(argv[0]);
+    }
+    if (rc != KSHELL_OPTIONS_OK) {
+        return KSHELL_USAGE;
+    }
 
-        if (cmd == NULL) {
-            kshell_printf("help: no such command\n");
-            return KSHELL_ERROR;
-        }
+    if (args.argc > 1) {
+        kshell_printf("usage: help [command]\n");
+        return KSHELL_USAGE;
+    }
 
-        kshell_printf("%s: %s\n", cmd->name, cmd->help != NULL ? cmd->help : "");
-
-        return KSHELL_OK;
+    if (args.argc == 1) {
+        return kshell_help_show(args.argv[0]);
     }
 
     kshell_printf("%-9s %s\n", "command", "what it does");
     for (i = 0; i < g_command_count; i++) {
         kshell_printf("%-9s %s\n", g_commands[i].name,
-                      g_commands[i].help != NULL ? g_commands[i].help : "");
+                      g_commands[i].summary != NULL ? g_commands[i].summary : "");
     }
 
     return KSHELL_OK;
@@ -358,13 +560,23 @@ static int cmd_free(int argc, char **argv)
 {
     k_size_t heap_free = k_sysinfo_heap_free() / 1024;
     k_size_t heap_total = k_sysinfo_heap_total() / 1024;
+#if KERNEL_PSRAM
     k_size_t psram_free = k_sysinfo_psram_free() / 1024;
+#endif
 
     (void)argc;
     (void)argv;
 
+    /*
+     * A machine with one memory has no PSRAM line to print: a zero there
+     * would be a fact about the build, not about the memory (ADR 0010).
+     */
+#if KERNEL_PSRAM
     kshell_printf("heap: %u KB free of %u KB, psram: %u KB free\n", (unsigned)heap_free,
                   (unsigned)heap_total, (unsigned)psram_free);
+#else
+    kshell_printf("heap: %u KB free of %u KB\n", (unsigned)heap_free, (unsigned)heap_total);
+#endif
     kshell_printf("uptime: %llu ms, %u tick(s)\n", (unsigned long long)k_sched_uptime_ms(),
                   (unsigned)k_sched_ticks());
 
@@ -429,25 +641,67 @@ static int cmd_clear(int argc, char **argv)
     return KSHELL_OK;
 }
 
+/*
+ * The commands of the shell itself, with the help a person reads. One table,
+ * so that a usage line, the one line of the list and the notes of `-h`
+ * cannot drift apart when a flag is added.
+ */
+static const struct builtin_command {
+    const char *name;
+    struct kshell_help help;
+    kshell_cmd_fn fn;
+} g_builtin_commands[] = {
+    {"help",
+     {.summary = "list the available commands, or describe one of them",
+      .usage = "help [command]",
+      .detail = "With a command the usage and the notes of that command are printed;\n"
+                "`<command> -h` prints the same. Without one every command is listed\n"
+                "with one line.\n"},
+     cmd_help},
+    {"uname",
+     {.summary = "kernel name and version",
+      .usage = "uname",
+      .detail = "The name, the version, the architecture and the build of the kernel.\n"},
+     cmd_uname},
+    {"uptime", {.summary = "time since the boot", .usage = "uptime"}, cmd_uptime},
+    {"ps", {.summary = "list the tasks", .usage = "ps"}, cmd_ps},
+    {"echo", {.summary = "print the arguments", .usage = "echo [text...]"}, cmd_echo},
+    {"sleep",
+     {.summary = "wait for a while",
+      .usage = "sleep <milliseconds>",
+      .detail = "The wait is cut at 60 s: the console belongs to the person at the\n"
+                "keyboard, and the shell has to come back.\n"},
+     cmd_sleep},
+    {"dmesg", {.summary = "the kernel log", .usage = "dmesg"}, cmd_dmesg},
+    {"free", {.summary = "the memory usage", .usage = "free"}, cmd_free},
+    {"clear", {.summary = "clear the screen", .usage = "clear"}, cmd_clear},
+    {"modules",
+     {.summary = "check the hardware modules",
+      .usage = "modules",
+      .detail = "Runs the doctor of the modules and prints its report; the status is an\n"
+                "error when it found a problem.\n"},
+     cmd_modules},
+    {"abi",
+     {.summary = "the system calls of the kernel",
+      .usage = "abi",
+      .detail = "The number and the name of every system call of this kernel.\n"},
+     cmd_abi},
+    {"reboot", {.summary = "restart the board", .usage = "reboot"}, cmd_reboot},
+};
+
 int kshell_init(void)
 {
+    k_size_t i;
     int rc = 0;
 
-    rc |= kshell_register("help", "list the available commands", cmd_help);
-    rc |= kshell_register("uname", "kernel name and version", cmd_uname);
-    rc |= kshell_register("uptime", "time since the boot", cmd_uptime);
-    rc |= kshell_register("ps", "list the tasks", cmd_ps);
-    rc |= kshell_register("echo", "print the arguments", cmd_echo);
-    rc |= kshell_register("sleep", "sleep <milliseconds>", cmd_sleep);
-    rc |= kshell_register("dmesg", "the kernel log", cmd_dmesg);
-    rc |= kshell_register("free", "the memory usage", cmd_free);
-    rc |= kshell_register("clear", "clear the screen", cmd_clear);
-    rc |= kshell_register("modules", "check the hardware modules", cmd_modules);
-    rc |= kshell_register("abi", "the system calls of the kernel", cmd_abi);
+    for (i = 0; i < K_ARRAY_SIZE(g_builtin_commands); i++) {
+        rc |= kshell_register_help(g_builtin_commands[i].name, &g_builtin_commands[i].help,
+                                   g_builtin_commands[i].fn);
+    }
+
     rc |= kshell_register_memtest();
     rc |= kshell_register_files();
     rc |= kshell_register_mfetch();
-    rc |= kshell_register("reboot", "restart the board", cmd_reboot);
 
     return rc;
 }

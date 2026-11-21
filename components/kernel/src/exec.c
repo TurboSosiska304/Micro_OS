@@ -6,7 +6,10 @@
  */
 #include "kernel/exec.h"
 
+#include "kernel/config.h"
 #include "kernel/port.h"
+
+#if KERNEL_EXEC
 
 /* A flag this generation does not know may change the meaning of the image. */
 #define K_EXEC_FLAGS_NONE 0u
@@ -187,3 +190,5 @@ int k_exec_run(const struct k_exec_image *image, char *const argv[])
 
     return (rc == 0) ? g_exec_exit_code : -1;
 }
+
+#endif /* KERNEL_EXEC */

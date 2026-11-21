@@ -10,6 +10,7 @@ the board live in `hardware/`.
 | If you want to... | Read |
 |---|---|
 | know what the system is | [../README.md](../README.md) |
+| use the system, not read about it | [wiki/](wiki/README.md) (build, shell, files, programs, ports, troubleshooting) |
 | contribute, build, run the checks | [../CONTRIBUTING.md](../CONTRIBUTING.md) |
 | understand the design | [architecture.md](architecture.md) |
 | know what is done and what is next | [roadmap.md](roadmap.md) (the kernel) and [ports/esp32/roadmap.md](ports/esp32/roadmap.md) (the board) |

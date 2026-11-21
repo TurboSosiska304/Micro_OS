@@ -276,5 +276,13 @@ static int cmd_memtest(int argc, char **argv)
 
 int kshell_register_memtest(void)
 {
-    return kshell_register("memtest", "measure the memory and its speed", cmd_memtest);
+    static const struct kshell_help help = {
+        .summary = "measure the memory and its speed",
+        .usage = "memtest [kilobytes]",
+        .detail = "Fills a block, sums it and copies it, for the internal heap and the\n"
+                  "PSRAM one after the other: the sizes and the speeds are the answer.\n"
+                  "The block is 32 KB unless a size is given, up to 1024 KB.\n",
+    };
+
+    return kshell_register_help("memtest", &help, cmd_memtest);
 }

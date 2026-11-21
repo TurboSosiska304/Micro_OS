@@ -11,12 +11,13 @@
 #include "mfs/mfs_vfs.h"
 
 #include "kernel/blockdev.h"
+#include "kernel/errno.h"
 #include "kernel/log.h"
 #include "kernel/vfs.h"
 
 /*
- * The number of the inodes of a new volume. A record takes 16 bytes, so
- * 256 of them fill four blocks of the table; the number is the one the
+ * The number of the inodes of a new volume. A record takes 32 bytes, so
+ * 256 of them fill eight blocks of the table; the number is the one the
  * volumes of the board were made with, and a volume keeps the count it was
  * formatted with.
  */
@@ -143,4 +144,35 @@ int mfs_vfs_mount(const char *point, const char *device)
     }
 
     return mfs_vfs_register(point);
+}
+
+/*
+ * The mount function of the type. The call of the filesystem speaks its own
+ * numbers, and a type of the VFS speaks the numbers of the kernel: the
+ * shell that prints the reason of a mount has no table of MicroFS codes, so
+ * the translation happens here, at the door where the two contracts meet
+ * (the other half of the adapter, mfs_vfs.c, does it for the calls of an
+ * open volume).
+ */
+static int mfs_vfs_mount_type(const char *point, const char *device)
+{
+    switch (mfs_vfs_mount(point, device)) {
+    case MFS_OK:
+        return KERR_NONE;
+    case MFS_ENOENT:
+        return KERR_NOENT;
+    case MFS_ENOTDIR:
+        return KERR_NOTDIR;
+    case MFS_EINVAL:
+        return KERR_INVAL;
+    case MFS_ENOSPC:
+        return KERR_NOSPC;
+    default:
+        return KERR_IO;
+    }
+}
+
+int mfs_vfs_register_type(void)
+{
+    return vfs_register_type("mfs", mfs_vfs_mount_type);
 }

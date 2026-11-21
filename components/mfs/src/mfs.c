@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "kernel/clock.h"
 #include "kernel/lock.h"
 #include "kernel/log.h"
 #include "kernel/panic.h"
@@ -15,6 +16,7 @@ static struct {
     bool mounted;
     const struct k_blockdev *dev;
     struct mfs_superblock sb;
+    k_u32_t inode_size;     /* 16 for a version 1 volume, 32 for version 2 */
     k_u32_t bitmap_blocks;  /* the blocks of the bitmap of the free blocks */
     k_u32_t inode_blocks;   /* the blocks of the table of the inodes */
     k_u32_t inode_capacity; /* the number of the records of the table */
@@ -93,6 +95,83 @@ static k_u32_t crc32(const void *data, k_size_t size)
 k_u32_t mfs_priv_crc32(const void *data, k_size_t size)
 {
     return crc32(data, size);
+}
+
+/* --- the moments of a record --- */
+
+/*
+ * The time of a stamp comes from the clock of the kernel, never from a
+ * library of the caller: the board keeps it in the RTC and the host in its
+ * own process, and the filesystem must not know the difference (ADR 0013).
+ * A machine whose clock was never set still has the seconds since the boot,
+ * which order the changes even when they are not a date.
+ */
+static k_u64_t now_seconds(void)
+{
+    return k_clock_now_unix();
+}
+
+static void inode_stamp(struct mfs_inode *inode)
+{
+    k_u64_t now = now_seconds();
+
+    inode->mtime = now;
+    inode->ctime = now;
+}
+
+/* A change of the record alone: the content keeps the moment it had. */
+static void inode_stamp_record(struct mfs_inode *inode)
+{
+    inode->ctime = now_seconds();
+}
+
+/*
+ * The two formats of a record. The functions are the only places that know
+ * the difference between the 16 bytes of a version 1 volume and the 32
+ * bytes of version 2: the rest of the filesystem works with struct
+ * mfs_inode and never writes past the record of the volume.
+ */
+void mfs_priv_inode_decode(const k_u8_t *raw, k_u32_t inode_size, struct mfs_inode *out)
+{
+    memset(out, 0, sizeof(*out));
+
+    if (inode_size == MFS_INODE_SIZE) {
+        memcpy(out, raw, sizeof(*out));
+        return;
+    }
+
+    {
+        struct mfs_inode_legacy legacy;
+
+        memcpy(&legacy, raw, sizeof(legacy));
+        out->flags = legacy.flags;
+        out->first_block = legacy.first_block;
+        out->size = legacy.size;
+        out->entries = legacy.entries;
+        /* No room for a time: zero says "unknown", and it is not a date. */
+        out->mtime = 0;
+        out->ctime = 0;
+    }
+}
+
+void mfs_priv_inode_encode(const struct mfs_inode *inode, k_u32_t inode_size, k_u8_t *raw)
+{
+    memset(raw, 0, inode_size);
+
+    if (inode_size == MFS_INODE_SIZE) {
+        memcpy(raw, inode, sizeof(*inode));
+        return;
+    }
+
+    {
+        struct mfs_inode_legacy legacy;
+
+        legacy.flags = inode->flags;
+        legacy.first_block = inode->first_block;
+        legacy.size = inode->size;
+        legacy.entries = inode->entries;
+        memcpy(raw, &legacy, sizeof(legacy));
+    }
 }
 
 /* --- the low level access to the volume --- */
@@ -246,14 +325,14 @@ static void block_release(k_u32_t block)
 
 static k_u32_t inode_table_block(k_u32_t index)
 {
-    k_u32_t offset = index * MFS_INODE_SIZE;
+    k_u32_t offset = index * g.inode_size;
 
     return g.sb.meta_start + g.bitmap_blocks + offset / MFS_BLOCK_SIZE;
 }
 
 static k_u32_t inode_table_offset(k_u32_t index)
 {
-    return (index * MFS_INODE_SIZE) % MFS_BLOCK_SIZE;
+    return (index * g.inode_size) % MFS_BLOCK_SIZE;
 }
 
 static int inode_read(k_u32_t index, struct mfs_inode *out)
@@ -272,7 +351,7 @@ static int inode_read(k_u32_t index, struct mfs_inode *out)
     }
 
     offset = inode_table_offset(index);
-    memcpy(out, block + offset, sizeof(*out));
+    mfs_priv_inode_decode(block + offset, g.inode_size, out);
 
     return MFS_OK;
 }
@@ -280,6 +359,7 @@ static int inode_read(k_u32_t index, struct mfs_inode *out)
 static int inode_write(k_u32_t index, const struct mfs_inode *inode)
 {
     k_u8_t block[MFS_BLOCK_SIZE];
+    k_u8_t raw[MFS_INODE_SIZE];
     k_u32_t offset;
     int rc;
 
@@ -293,7 +373,8 @@ static int inode_write(k_u32_t index, const struct mfs_inode *inode)
     }
 
     offset = inode_table_offset(index);
-    memcpy(block + offset, inode, sizeof(*inode));
+    mfs_priv_inode_encode(inode, g.inode_size, raw);
+    memcpy(block + offset, raw, g.inode_size);
 
     return dev_write(inode_table_block(index), block);
 }
@@ -1024,17 +1105,18 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
     sb.info_start = info_start;
     sb.info_blocks = info_blocks;
     sb.root_inode = MFS_ROOT_INODE;
-    sb.features = MFS_FEATURE_CRC;
+    sb.features = MFS_FEATURE_CRC | MFS_FEATURE_TIME;
     sb.crc = crc32(&sb, sizeof(sb) - sizeof(sb.crc));
 
     /* The state is needed by the helpers below. */
     memset(&g, 0, sizeof(g));
     g.dev = dev;
     g.sb = sb;
+    g.inode_size = MFS_INODE_SIZE;
     g.bitmap_blocks = bitmap_blocks;
     g.inode_blocks = inode_blocks;
     /* The record 0 is not used, the inodes start at 1. */
-    g.inode_capacity = (inode_blocks * MFS_BLOCK_SIZE) / MFS_INODE_SIZE - 1u;
+    g.inode_capacity = (inode_blocks * MFS_BLOCK_SIZE) / g.inode_size - 1u;
 
     /*
      * The bitmap: a bit of zero means that the block is free. The bits of
@@ -1084,6 +1166,7 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
     inode.first_block = 0;
     inode.size = 0;
     inode.entries = 0;
+    inode_stamp(&inode);
 
     if (inode_write(MFS_ROOT_INODE, &inode) != MFS_OK) {
         return MFS_EIO;
@@ -1158,7 +1241,30 @@ static int mfs_mount_locked(const struct k_blockdev *dev)
         return MFS_EINVAL;
     }
 
-    if (sb.version != MFS_VERSION || sb.block_size != MFS_BLOCK_SIZE) {
+    if (sb.block_size != MFS_BLOCK_SIZE) {
+        return MFS_EINVAL;
+    }
+
+    /*
+     * The version is the size of a record (ADR 0013). A version 1 volume
+     * has 16-byte records and no time; a version 2 volume has 32 bytes and
+     * the time feature. A header that claims the feature without the room,
+     * or the room without the feature, describes a volume this system does
+     * not know how to read.
+     */
+    if (sb.version == MFS_VERSION_LEGACY) {
+        if ((sb.features & MFS_FEATURE_TIME) != 0u) {
+            kerror("mfs: a legacy volume claims the time it has no room for");
+            return MFS_EINVAL;
+        }
+        g.inode_size = MFS_INODE_SIZE_LEGACY;
+    } else if (sb.version == MFS_VERSION) {
+        if ((sb.features & MFS_FEATURE_TIME) == 0u) {
+            kerror("mfs: a volume of version %u has no time feature", (unsigned)sb.version);
+            return MFS_EINVAL;
+        }
+        g.inode_size = MFS_INODE_SIZE;
+    } else {
         return MFS_EINVAL;
     }
 
@@ -1214,7 +1320,7 @@ static int mfs_mount_locked(const struct k_blockdev *dev)
 
     g.inode_blocks = sb.meta_blocks - g.bitmap_blocks;
     /* The record 0 is not used, the inodes start at 1. */
-    g.inode_capacity = (g.inode_blocks * MFS_BLOCK_SIZE) / MFS_INODE_SIZE - 1u;
+    g.inode_capacity = (g.inode_blocks * MFS_BLOCK_SIZE) / g.inode_size - 1u;
 
     if (g.inode_capacity < MFS_ROOT_INODE) {
         return MFS_EINVAL;
@@ -1363,6 +1469,7 @@ static int add_to_parent(const char *dir_path, const char *name, k_u32_t inode, 
 
     parent.size = (k_u32_t)dir->size;
     parent.entries++;
+    inode_stamp(&parent);
     rc = dir_write(&parent, dir);
     if (rc != MFS_OK) {
         return rc;
@@ -1485,6 +1592,7 @@ static int mfs_mkdir_locked(const char *path)
     inode.first_block = block;
     inode.size = 0;
     inode.entries = 0;
+    inode_stamp(&inode);
 
     rc = inode_write(index, &inode);
     if (rc != MFS_OK) {
@@ -1537,6 +1645,7 @@ static int mfs_create_locked(const char *path)
     inode.first_block = MFS_NEXT_NONE;
     inode.size = 0;
     inode.entries = 0;
+    inode_stamp(&inode);
 
     rc = inode_write(index, &inode);
     if (rc != MFS_OK) {
@@ -1578,7 +1687,33 @@ static int mfs_open_locked(const char *path, int flags, struct mfs_file *out)
     }
 
     if ((inode.flags & MFS_INODE_DIR) != 0) {
-        return MFS_EISDIR;
+        /*
+         * A directory is opened only as a directory, only to be read and
+         * only to have its entries walked: a descriptor that would write to
+         * it or cut it has no meaning here. A plain open of a directory is
+         * still EISDIR, the answer it has always been.
+         */
+        if ((flags & MFS_O_DIRECTORY) == 0) {
+            return MFS_EISDIR;
+        }
+
+        if ((flags & 0x3) != MFS_O_RDONLY ||
+            (flags & (MFS_O_CREAT | MFS_O_TRUNC | MFS_O_APPEND)) != 0) {
+            return MFS_EINVAL;
+        }
+
+        memset(out, 0, sizeof(*out));
+        out->inode = entry.inode;
+        out->first_block = inode.first_block;
+        out->size = inode.size;
+        out->offset = 0;
+        out->flags = flags;
+
+        return MFS_OK;
+    }
+
+    if ((flags & MFS_O_DIRECTORY) != 0) {
+        return MFS_ENOTDIR;
     }
 
     if ((flags & MFS_O_TRUNC) != 0 && (flags & (MFS_O_WRONLY | MFS_O_RDWR)) != 0) {
@@ -1593,6 +1728,7 @@ static int mfs_open_locked(const char *path, int flags, struct mfs_file *out)
 
         inode.size = 0;
         inode.first_block = MFS_NEXT_NONE;
+        inode_stamp(&inode);
 
         rc = inode_write(entry.inode, &inode);
         if (rc != MFS_OK) {
@@ -1849,6 +1985,7 @@ static int mfs_close_locked(struct mfs_file *file)
         }
         inode.size = file->size;
         inode.first_block = file->first_block;
+        inode_stamp(&inode);
         rc = inode_write(file->inode, &inode);
         if (rc != MFS_OK) {
             return rc;
@@ -1930,6 +2067,7 @@ static int mfs_unlink_locked(const char *path)
     if (parent.entries > 0) {
         parent.entries--;
     }
+    inode_stamp(&parent);
 
     rc = dir_write(&parent, dir);
     if (rc != MFS_OK) {
@@ -1977,6 +2115,8 @@ static int mfs_set_attr_locked(const char *path, k_u32_t mask, k_u32_t value)
     }
 
     inode.flags = (inode.flags & ~mask) | (value & mask);
+    /* The content did not change; the record did, so ctime moves. */
+    inode_stamp_record(&inode);
 
     rc = inode_write(index, &inode);
     if (rc != MFS_OK) {
@@ -2073,6 +2213,87 @@ static int mfs_list_locked(const char *path, struct mfs_dirent *out, k_size_t ma
 }
 
 /*
+ * The next entries of an open directory. The directory is read whole into
+ * the buffer of the filesystem and the position of the descriptor is a byte
+ * offset into its serialized entries: a call continues where the previous
+ * one stopped, and a directory that grew or shrank between the calls is
+ * seen as it is at the moment of the call, not as it was at the open.
+ */
+static int mfs_readdir_locked(struct mfs_file *file, struct mfs_dirent *out, k_size_t max,
+                              k_size_t *count)
+{
+    struct mfs_inode inode;
+    struct dir_buffer *dir = &g_dir_buffer;
+    k_size_t offset;
+    k_size_t found = 0;
+    int rc;
+
+    if (file == NULL || out == NULL || count == NULL) {
+        return MFS_EINVAL;
+    }
+
+    *count = 0;
+
+    if (!g.mounted) {
+        return MFS_EINVAL;
+    }
+
+    rc = inode_read(file->inode, &inode);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    if ((inode.flags & MFS_INODE_DIR) == 0) {
+        return MFS_ENOTDIR;
+    }
+
+    rc = dir_read(&inode, dir);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    offset = file->offset;
+    while (found < max && offset + sizeof(struct mfs_dirent_header) <= dir->size) {
+        struct mfs_dirent entry;
+        struct mfs_inode child;
+        k_size_t name_len;
+
+        memset(&entry, 0, sizeof(entry));
+        memcpy(&entry.inode, dir->data + offset, sizeof(entry.inode));
+        memcpy(&entry.name_len, dir->data + offset + 4, sizeof(entry.name_len));
+        entry.type = dir->data[offset + 6];
+        name_len = entry.name_len;
+
+        if (name_len > MFS_NAME_MAX ||
+            offset + sizeof(struct mfs_dirent_header) + name_len > dir->size) {
+            return MFS_EIO;
+        }
+
+        memcpy(entry.name, dir->data + offset + sizeof(struct mfs_dirent_header), name_len);
+        entry.name[name_len] = '\0';
+
+        /*
+         * The entry of a directory does not repeat the numbers of its
+         * object; a listing reports them, so the record of the child is
+         * read here. A broken pointer leaves the zeros of "unknown".
+         */
+        if (inode_read(entry.inode, &child) == MFS_OK) {
+            entry.size = child.size;
+            entry.mode = mfs_inode_mode(&child);
+            entry.owner = mfs_inode_owner(&child);
+        }
+
+        out[found++] = entry;
+        offset += sizeof(struct mfs_dirent_header) + name_len;
+    }
+
+    file->offset = (k_u32_t)offset;
+    *count = found;
+
+    return MFS_OK;
+}
+
+/*
  * The public functions of the filesystem hold the lock of the volume
  * for the whole of their work: the volume is one piece of state and
  * two tasks that touch it together corrupt it.
@@ -2160,6 +2381,7 @@ int mfs_check(struct mfs_check_report *report)
     view.bitmap_blocks = g.bitmap_blocks;
     view.inode_blocks = g.inode_blocks;
     view.inode_capacity = g.inode_capacity;
+    view.inode_size = g.inode_size;
     view.device_blocks = g.dev->sectors;
 
     rc = mfs_check_locked(&view, report);
@@ -2285,6 +2507,17 @@ int mfs_list(const char *path, struct mfs_dirent *out, k_size_t max)
 
     mfs_lock();
     rc = mfs_list_locked(path, out, max);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_readdir(struct mfs_file *file, struct mfs_dirent *out, k_size_t max, k_size_t *count)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_readdir_locked(file, out, max, count);
     mfs_unlock();
 
     return rc;

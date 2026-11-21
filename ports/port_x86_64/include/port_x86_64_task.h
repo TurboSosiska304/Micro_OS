@@ -25,6 +25,28 @@ void port_x86_64_switch(k_u64_t *old_rsp, k_u64_t new_rsp);
 void port_x86_64_task_bootstrap(void);
 
 /*
+ * A task whose program was forked: its kernel stack already carries the frame
+ * of the system call of the parent, with the result of fork set to zero, and
+ * its first return goes to ring 3 through it. `frame` is the parent's frame
+ * (the ten saved registers and the iretq frame, 120 bytes), copied below the
+ * top of the new stack. `entry` runs in ring 0 first and never returns.
+ */
+int port_x86_64_task_fork_create(struct task *child, k_u64_t cr3, const void *frame,
+                                 k_size_t frame_size, k_port_task_entry_fn entry);
+
+/*
+ * The address space of the program that runs now, zero when the caller is a
+ * kernel task; the top of its kernel stack (RSP0 of the TSS); and the call
+ * that makes the current context a program with a space of its own.
+ */
+k_u64_t port_x86_64_task_space(void);
+k_u64_t port_x86_64_task_stack_top(void);
+void port_x86_64_task_set_space(k_u64_t cr3);
+
+/* Is the task that runs now a program of ring 3? */
+bool port_x86_64_task_is_user(void);
+
+/*
  * The C side of the first instruction of a task. The arguments arrive in the
  * registers the frame carries, not from a caller; the RFLAGS are applied
  * here, because the interrupts of a new task were never saved on its stack.
@@ -33,6 +55,14 @@ void port_x86_64_task_trampoline(k_port_task_entry_fn entry, void *arg, k_u64_t 
 
 /* The interrupt flag of RFLAGS. */
 #define PORT_X86_64_RFLAGS_IF 0x200u
+
+/*
+ * The frame that `int $0x80` leaves on the kernel stack of a program: the ten
+ * registers the stub saves and the five the processor pushed for the crossing
+ * to ring 3. A fork copies it as it stands, so that the child returns from
+ * the call it did not make.
+ */
+#define PORT_X86_64_SYSCALL_FRAME_SIZE 120u
 
 /* The flags of the machine right now, without changing them. */
 static inline k_u64_t port_x86_64_read_flags(void)

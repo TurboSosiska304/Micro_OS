@@ -3,12 +3,14 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "kernel/config.h"
 #include "kernel/console.h"
 #include "kernel/errno.h"
 #include "kernel/exec.h"
 #include "kernel/kmm.h"
 #include "kernel/log.h"
 #include "kernel/port.h"
+#include "kernel/port/exec.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
 #include "kernel/vfs.h"
@@ -24,34 +26,105 @@ static k_u32_t g_registered;
 /* --- the checks at the edge --- */
 
 /*
+ * Copy bytes to and from the memory of the caller. On a machine with an
+ * address space per program the port walks the page tables of the program
+ * and answers whether the whole range is there; on the board, the simulator
+ * and the null port the pointer is memory of the kernel already and the copy
+ * is an ordinary one. The check is the reason the helper exists: a program
+ * that hands the kernel an address of no page has to get EFAULT from the
+ * call, not a page fault of ring 0 that takes the machine down with it.
+ */
+static int copy_from_user(void *dst, ksys_arg_t src, k_size_t size)
+{
+    if (size == 0) {
+        return 0;
+    }
+
+    if (!k_port_exec_contains((const void *)(uintptr_t)src, size)) {
+        return KERR_FAULT;
+    }
+
+    memcpy(dst, (const void *)(uintptr_t)src, size);
+    return 0;
+}
+
+static int copy_to_user(ksys_arg_t dst, const void *src, k_size_t size)
+{
+    if (size == 0) {
+        return 0;
+    }
+
+    if (!k_port_exec_contains((const void *)(uintptr_t)dst, size)) {
+        return KERR_FAULT;
+    }
+
+    memcpy((void *)(uintptr_t)dst, src, size);
+    return 0;
+}
+
+/*
  * A path of a program is not trusted. The kernel must not walk past the end
  * of the memory of the caller looking for the terminator, so the search is
  * limited to the window the VFS keeps a path in: a path that does not end
  * inside it is refused before any filesystem sees it. Every filesystem of
  * the tree is mounted below the root, so a path that does not begin there
  * cannot name an object at all, and NULL or the empty string is not a path.
+ *
+ * Every byte is checked before it is read. On a machine with page tables a
+ * byte that is not the memory of the program is EFAULT, which is an answer of
+ * the call and not a fault that stops the machine; on the other ports the
+ * check accepts the pointer as the kernel's own.
  */
 static int path_check(const char *path)
 {
+    ksys_arg_t address = (ksys_arg_t)(uintptr_t)path;
     k_size_t i;
 
-    if (path == NULL || path[0] != '/') {
+    if (path == NULL) {
         return KERR_INVAL;
     }
 
-    for (i = 1; i <= KSYS_PATH_MAX; i++) {
-        if (path[i] == '\0') {
+    for (i = 0; i <= KSYS_PATH_MAX; i++) {
+        if (!k_port_exec_contains((const void *)(uintptr_t)(address + i), 1)) {
+            return KERR_FAULT;
+        }
+
+        if (i == 0) {
+            if (path[0] != '/') {
+                return KERR_INVAL;
+            }
+        } else if (path[i] == '\0') {
             return 0;
         }
     }
 
-    return KERR_TOOBIG;
+    return KERR_NAMETOOLONG;
 }
 
 /*
- * The buffer of a call. NULL is only meaningful with a zero length, and a
- * length above KSYS_MAX_IO cannot be a buffer of this system: the call is
- * refused before the kernel touches a byte of it.
+ * Copy a path of the caller into the kernel's own window. The VFS and every
+ * filesystem under it then work with memory of the kernel, not with a pointer
+ * the caller could still change; path_check has already found the terminator
+ * inside the window, so the length is known and the whole string is memory of
+ * the caller. The buffer of the caller is KSYS_PATH_MAX characters plus the
+ * terminator, which is the buffer the VFS keeps.
+ */
+static int path_copy(char *out, ksys_arg_t path)
+{
+    const char *name = (const char *)(uintptr_t)path;
+    int rc = path_check(name);
+
+    if (rc != 0) {
+        return rc;
+    }
+
+    return copy_from_user(out, path, strlen(name) + 1);
+}
+
+/*
+ * The buffer of a call. NULL is only meaningful with a zero length, a length
+ * above KSYS_MAX_IO cannot be a buffer of this system, and the range has to
+ * be memory of the caller: each is refused before the kernel touches a byte.
  */
 static int buffer_check(ksys_arg_t buf, ksys_arg_t count)
 {
@@ -61,6 +134,10 @@ static int buffer_check(ksys_arg_t buf, ksys_arg_t count)
 
     if (buf == 0 && count != 0) {
         return KERR_INVAL;
+    }
+
+    if (count != 0 && !k_port_exec_contains((const void *)(uintptr_t)buf, count)) {
+        return KERR_FAULT;
     }
 
     return 0;
@@ -223,6 +300,18 @@ static k_ssize_t sys_exit(ksys_arg_t code, ksys_arg_t a1, ksys_arg_t a2, ksys_ar
     K_UNUSED(a4);
     K_UNUSED(a5);
 
+    /*
+     * A program is not a task of the kernel on a machine that runs it in its
+     * own address space: exiting it means coming back to the call that
+     * entered it with the status, not ending the task the caller runs in.
+     * The port knows which of the two is asking; a machine whose programs are
+     * tasks (the board, the simulator) says false and takes the old path.
+     */
+    if (k_port_exec_active()) {
+        k_port_exec_exit((int)code);
+        return 0;
+    }
+
     task_exit((int)code);
     return 0;
 }
@@ -313,8 +402,8 @@ static k_ssize_t sys_write(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys
 static k_ssize_t sys_open(ksys_arg_t path, ksys_arg_t flags, ksys_arg_t a2, ksys_arg_t a3,
                           ksys_arg_t a4, ksys_arg_t a5)
 {
+    char name[KSYS_PATH_MAX + 1];
     struct kfile *file;
-    const char *name = (const char *)(uintptr_t)path;
     int fd;
     int rc;
 
@@ -323,7 +412,7 @@ static k_ssize_t sys_open(ksys_arg_t path, ksys_arg_t flags, ksys_arg_t a2, ksys
     K_UNUSED(a4);
     K_UNUSED(a5);
 
-    rc = path_check(name);
+    rc = path_copy(name, path);
     if (rc != 0) {
         return rc;
     }
@@ -331,6 +420,15 @@ static k_ssize_t sys_open(ksys_arg_t path, ksys_arg_t flags, ksys_arg_t a2, ksys
     rc = open_flags_check(flags);
     if (rc != 0) {
         return rc;
+    }
+
+    /*
+     * A directory is read, never written: O_DIRECTORY goes with O_RDONLY
+     * and with no other flag. The flag of the directory is part of the
+     * flags of the open, so it is checked before a descriptor is spent.
+     */
+    if ((flags & KSYS_O_DIRECTORY) != 0 && flags != KSYS_O_DIRECTORY) {
+        return KERR_INVAL;
     }
 
     /*
@@ -386,6 +484,7 @@ static k_ssize_t sys_close(ksys_arg_t fd, ksys_arg_t a1, ksys_arg_t a2, ksys_arg
 static k_ssize_t sys_stat(ksys_arg_t path, ksys_arg_t buf, ksys_arg_t a2, ksys_arg_t a3,
                           ksys_arg_t a4, ksys_arg_t a5)
 {
+    char name[KSYS_PATH_MAX + 1];
     struct vfs_stat stat;
     int rc;
 
@@ -394,7 +493,7 @@ static k_ssize_t sys_stat(ksys_arg_t path, ksys_arg_t buf, ksys_arg_t a2, ksys_a
     K_UNUSED(a4);
     K_UNUSED(a5);
 
-    rc = path_check((const char *)(uintptr_t)path);
+    rc = path_copy(name, path);
     if (rc != 0) {
         return rc;
     }
@@ -408,7 +507,52 @@ static k_ssize_t sys_stat(ksys_arg_t path, ksys_arg_t buf, ksys_arg_t a2, ksys_a
         return KERR_INVAL;
     }
 
-    rc = vfs_stat((const char *)(uintptr_t)path, &stat);
+    /*
+     * The answer goes to the memory of the caller through the copy at the
+     * edge: an address that is not part of the program is EFAULT and not a
+     * write of ring 0 into a page that is not there.
+     */
+    if (!k_port_exec_contains((const void *)(uintptr_t)buf, sizeof(stat))) {
+        return KERR_FAULT;
+    }
+
+    rc = vfs_stat(name, &stat);
+    if (rc != 0) {
+        return rc;
+    }
+
+    memcpy((void *)(uintptr_t)buf, &stat, sizeof(stat));
+
+    return 0;
+}
+
+static k_ssize_t sys_statx(ksys_arg_t path, ksys_arg_t buf, ksys_arg_t a2, ksys_arg_t a3,
+                           ksys_arg_t a4, ksys_arg_t a5)
+{
+    char name[KSYS_PATH_MAX + 1];
+    struct vfs_statx stat;
+    int rc;
+
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    rc = path_copy(name, path);
+    if (rc != 0) {
+        return rc;
+    }
+
+    /* The place for the answer is the caller's, as for stat. */
+    if (buf == 0) {
+        return KERR_INVAL;
+    }
+
+    if (!k_port_exec_contains((const void *)(uintptr_t)buf, sizeof(stat))) {
+        return KERR_FAULT;
+    }
+
+    rc = vfs_statx(name, &stat);
     if (rc != 0) {
         return rc;
     }
@@ -536,12 +680,28 @@ static k_ssize_t sys_readdir(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ks
         return KERR_INVAL;
     }
 
+    /*
+     * The array is written in place through the descriptor, so the whole
+     * range is checked before the directory is asked of a byte of it: a
+     * program that names the guard page or a page it never mapped gets
+     * EFAULT, not a write of ring 0 into no page.
+     */
+    if (!k_port_exec_contains(out, count)) {
+        return KERR_FAULT;
+    }
+
     max = count / sizeof(struct vfs_dirent);
     if (max == 0) {
         return 0;
     }
 
-    rc = vfs_list(file->path, out, max, &count_files);
+    /*
+     * The entries are read through the descriptor, and its position goes
+     * with them: the next call continues where this one stopped. The
+     * directory is the one that was opened with O_DIRECTORY; a descriptor
+     * of a file answers ENOTDIR in the VFS.
+     */
+    rc = vfs_readdir(&file->file, out, max, &count_files);
     if (rc != 0) {
         return rc;
     }
@@ -592,11 +752,16 @@ static k_ssize_t sys_getcwd(ksys_arg_t buf, ksys_arg_t size, ksys_arg_t a2, ksys
 
     {
         k_size_t len = strlen(cwd) + 1;
+        int rc;
 
         if (len > size) {
             return KERR_TOOBIG;
         }
-        memcpy((void *)(uintptr_t)buf, cwd, len);
+
+        rc = copy_to_user(buf, cwd, len);
+        if (rc != 0) {
+            return rc;
+        }
     }
 
     return (k_ssize_t)strlen(cwd);
@@ -698,11 +863,14 @@ static void forked_child(void *arg)
 }
 
 /*
- * The fork: a new task with the same program. The memory of the parent is
- * NOT copied - KERNEL_NOMMU is set, and a kernel without an MMU cannot do
- * that - so the tasks share it, like the flag CLONE_VM of Linux. The child
- * has its own number, so the program tells the child by the mark of its
- * task.
+ * The fork: a task with the same program. On a machine with an address space
+ * per task the port copies the context of the caller (`k_port_fork_copy`):
+ * the child gets its own memory, its own page tables and returns from this
+ * same call with zero, and the parent keeps the pid. A machine without an MMU
+ * cannot copy the memory (KERNEL_NOMMU), so the port refuses and the child is
+ * the placeholder of the kernel: a task that shares the memory of the parent
+ * and re-enters its program from the start. The child of that placeholder
+ * tells itself by the zero and by the mark of its task.
  */
 static k_ssize_t sys_fork(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3, ksys_arg_t a4,
                           ksys_arg_t a5)
@@ -723,11 +891,12 @@ static k_ssize_t sys_fork(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_
     }
 
     /*
-     * A task that is itself the child of a fork and reaches the fork again
-     * is that child: it gets the 0 of POSIX, and no second child is made.
-     * The child of this fork re-runs the program of the parent from its
-     * start, so a program that does not ask "am I the child?" first would
-     * fork again and again without this.
+     * A task that is itself the child of the placeholder and reaches the
+     * fork again is that child: it gets the 0 of POSIX, and no second child
+     * is made. The child of the placeholder re-runs the program of the parent
+     * from its start, so a program that does not ask "am I the child?" first
+     * would fork again and again without this. A child of a real fork does
+     * not take this way: it continues after the call with the zero.
      */
     if (self->is_child) {
         return 0;
@@ -743,6 +912,24 @@ static k_ssize_t sys_fork(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_
         memcpy(name, self->name, len);
         name[len] = '\'';
         name[len + 1] = '\0';
+    }
+
+    /*
+     * The port copies the context of a program of ring 3. It answers -1 when
+     * the machine cannot copy a context at all, which is the case the
+     * placeholder below is for, and -2 when the copy ran out of memory.
+     */
+    {
+        struct task *copied = NULL;
+        int rc = task_fork(self, name, &copied);
+
+        if (rc == 0) {
+            return (k_ssize_t)copied->pid;
+        }
+
+        if (rc == -2) {
+            return KERR_NOSPC;
+        }
     }
 
     child = task_create(name, forked_child, (void *)self, self->prio);
@@ -774,7 +961,8 @@ static k_ssize_t sys_getppid(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_a
 
 /*
  * Wait for a child. The number 0 or -1 means "any child". The status of
- * the child is the code it finished with.
+ * the child is the code it finished with. A call with no child to wait for
+ * answers ECHILD, whether it was ready to wait or not.
  */
 static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags, ksys_arg_t a3,
                              ksys_arg_t a4, ksys_arg_t a5)
@@ -813,8 +1001,18 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
         return KERR_INVAL;
     }
 
+    /*
+     * The place for the status is checked before the wait starts: a bad
+     * pointer is EFAULT now, not after five seconds of waiting for a child
+     * whose status cannot be delivered.
+     */
+    if (status != 0 && !k_port_exec_contains((const void *)(uintptr_t)status, sizeof(int))) {
+        return KERR_FAULT;
+    }
+
     /* Look for a child that has finished. */
     for (waited = 0; waited < limit; waited++) {
+        bool has_child = false;
         k_size_t i;
 
         /*
@@ -836,6 +1034,8 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
                 continue;
             }
 
+            has_child = true;
+
             if (t->state == TASK_STATE_ZOMBIE) {
                 child = t;
                 child_pid = t->pid;
@@ -850,6 +1050,15 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
             break;
         }
 
+        /*
+         * There is no child that this call could wait for: not a running
+         * one, not a finished one. That is ECHILD, and the answer does not
+         * depend on the flags.
+         */
+        if (!has_child) {
+            return KERR_CHILD;
+        }
+
         if ((flags & KSYS_WNOHANG) != 0) {
             /* The caller does not want to wait: there is nothing yet. */
             return 0;
@@ -859,7 +1068,7 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
     }
 
     if (child == NULL) {
-        return KERR_AGAIN;
+        return KERR_CHILD;
     }
 
     if (status != 0) {
@@ -1029,32 +1238,68 @@ static k_ssize_t sys_chown(ksys_arg_t path, ksys_arg_t owner, ksys_arg_t a2, ksy
 #define KSYS_ARGV_BYTES 512u
 
 /*
- * Copy the vector `from` and the strings it points at into `args` and
- * `words`, and terminate the vector. Returns 0, or E2BIG for a vector or a
- * string that does not fit. A NULL vector, or one whose first word is NULL,
- * is a program without arguments and not an error.
+ * Copy the vector at the address `from` and the strings it points at into
+ * `args` and `words`, and terminate the vector. Returns 0, or E2BIG for a
+ * vector or a string that does not fit, or EFAULT for a word of the vector or
+ * a byte of a string that is not memory of the caller. A zero vector, or one
+ * whose first word is zero, is a program without arguments and not an error.
  *
- * The strings of the caller are read one byte at a time and never past the
- * room left: a pointer that names memory the machine does not have is a
- * fault of the caller (no MMU forgives nothing), but a string that never ends
- * is stopped at the edge of the buffer instead of walking through memory.
+ * Every read goes through copy_from_user: the vector and the strings are the
+ * memory of the caller, and on a machine with page tables an address that is
+ * not mapped there is EFAULT instead of a fault of ring 0. The strings are
+ * read one byte at a time and never past the room left, so a string that
+ * never ends is stopped at the edge of the buffer instead of walking through
+ * memory.
  */
-static int argv_copy(const char *const *from, char *args[], char *words, k_size_t words_size)
+#if KERNEL_EXEC
+static int argv_copy(ksys_arg_t from, char *args[], char *words, k_size_t words_size)
 {
     k_size_t used = 0;
     k_size_t count = 0;
 
-    while (from != NULL && from[count] != NULL) {
-        const char *word = from[count];
+    while (from != 0) {
+        ksys_arg_t word = 0;
         k_size_t room;
         k_size_t length = 0;
+        int rc;
+
+        /* A vector whose end would wrap the address space has no words. */
+        if (from > (ksys_arg_t)-1 - count * (ksys_arg_t)sizeof(ksys_arg_t)) {
+            return KERR_FAULT;
+        }
+
+        rc = copy_from_user(&word, from + count * (ksys_arg_t)sizeof(ksys_arg_t), sizeof(word));
+        if (rc != 0) {
+            return rc;
+        }
+
+        if (word == 0) {
+            break;
+        }
 
         if (count >= KSYS_ARGV_MAX) {
             return KERR_TOOBIG;
         }
 
         room = words_size - used;
-        while (length < room && word[length] != '\0') {
+        while (length < room) {
+            char byte;
+
+            /* The end of the address space is not the end of a string. */
+            if (word > (ksys_arg_t)-1 - length) {
+                return KERR_FAULT;
+            }
+
+            rc = copy_from_user(&byte, word + length, 1);
+            if (rc != 0) {
+                return rc;
+            }
+
+            if (byte == '\0') {
+                break;
+            }
+
+            words[used + length] = byte;
             length++;
         }
 
@@ -1062,7 +1307,7 @@ static int argv_copy(const char *const *from, char *args[], char *words, k_size_
             return KERR_TOOBIG;
         }
 
-        memcpy(words + used, word, length + 1);
+        words[used + length] = '\0';
         args[count] = words + used;
         used += length + 1;
         count++;
@@ -1072,11 +1317,13 @@ static int argv_copy(const char *const *from, char *args[], char *words, k_size_
 
     return 0;
 }
+#endif /* KERNEL_EXEC */
 
+#if KERNEL_EXEC
 static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksys_arg_t a3,
                             ksys_arg_t a4, ksys_arg_t a5)
 {
-    const char *name = (const char *)(uintptr_t)path;
+    char name[KSYS_PATH_MAX + 1];
     /* The place for the data of the filesystem of an open file. */
     k_u8_t file_data[VFS_FILE_DATA_SIZE];
     struct vfs_file file;
@@ -1095,7 +1342,7 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksy
     K_UNUSED(a4);
     K_UNUSED(a5);
 
-    rc = path_check(name);
+    rc = path_copy(name, path);
     if (rc != 0) {
         return rc;
     }
@@ -1103,10 +1350,11 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksy
     /*
      * The arguments are copied before the file is read: a refused one ends
      * the call while nothing has been spent, and the copy is what the port
-     * is going to hand the program.
+     * is going to hand the program. What the kernel keeps from here on is the
+     * vector it built, not the pointers of the caller.
      */
     if (argv != 0) {
-        rc = argv_copy((const char *const *)(uintptr_t)argv, args, words, sizeof(words));
+        rc = argv_copy(argv, args, words, sizeof(words));
         if (rc != 0) {
             return rc;
         }
@@ -1184,14 +1432,12 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksy
     kmm_free(data);
 
     /*
-     * A port that never returns from the program never comes back here. The
-     * answers below are the contract of k_exec_run: a number from 0 to 255 is
-     * a program that ran and returned with that status - the call ends with
-     * 0, because the status belongs to a process and a machine without one
-     * has to notice a program that finished instead - -2 is a machine that
-     * cannot run a program at all (the board, the simulator), and anything
-     * else is the image the port could not place in its window or could not
-     * copy.
+     * The answers below are the contract of k_exec_run: a number from 0 to
+     * 255 is a program that ran and returned with that status - the call ends
+     * with 0, because the status belongs to a process and the program is a
+     * task now - -2 is a machine that cannot run a program at all (the board,
+     * the simulator), and anything else is the image the port could not place
+     * in its window or could not copy.
      */
     if (rc >= 0) {
         return 0;
@@ -1199,6 +1445,25 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksy
 
     return (rc == -2) ? KERR_NOSYS : KERR_NOMEM;
 }
+#else
+/*
+ * The image was built without the parser and the runtime (ADR 0010). The
+ * number of the call stays: a program compiled for the full kernel asks it
+ * and gets the answer of a machine that cannot run a program, ENOSYS.
+ */
+static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksys_arg_t a3,
+                            ksys_arg_t a4, ksys_arg_t a5)
+{
+    K_UNUSED(path);
+    K_UNUSED(argv);
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    return KERR_NOSYS;
+}
+#endif /* KERNEL_EXEC */
 
 /* --- the table --- */
 
@@ -1274,6 +1539,7 @@ void ksys_init(void)
     ksys_register(KSYS_CHMOD, "chmod", sys_chmod);
     ksys_register(KSYS_CHOWN, "chown", sys_chown);
     ksys_register(KSYS_EXECVE, "execve", sys_execve);
+    ksys_register(KSYS_STATX, "statx", sys_statx);
 }
 
 /* --- the wrappers --- */
@@ -1303,6 +1569,12 @@ int ksys_close(int fd)
 int ksys_stat(const char *path, void *buf)
 {
     return (int)ksys_call(KSYS_STAT, (ksys_arg_t)(uintptr_t)path, (ksys_arg_t)(uintptr_t)buf, 0, 0,
+                          0, 0);
+}
+
+int ksys_statx(const char *path, void *buf)
+{
+    return (int)ksys_call(KSYS_STATX, (ksys_arg_t)(uintptr_t)path, (ksys_arg_t)(uintptr_t)buf, 0, 0,
                           0, 0);
 }
 

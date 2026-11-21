@@ -76,18 +76,24 @@ That is exactly what allows the kernel tests to run on a laptop.
 | Processes / threads | yes | yes, simplified, from phase 1 |
 | Filesystem | yes | yes, from phase 2 (in-RAM FS plus a VFS layer) |
 | `/proc`, `/dev`, `/sys` | yes | `/proc` and `/dev` from phase 2, `/sys` later |
-| System calls | yes | yes, from phase 3, but **without hardware isolation** |
-| Memory protection | MMU | **none used**: the ESP32 has no MMU, and the x86-64 port has one
-  but keeps the identity map of its loader and the logical boundary |
+| System calls | yes | yes, from phase 3; hardware isolation on x86-64 (ring 3), logical on the board |
+| Memory protection | MMU | **on x86-64 only**: page tables per program, a user window and ring 3 (ADR 0007); the ESP32 has no MMU and keeps the logical boundary |
 | Multi-user | yes | no (a single user: the device itself) |
 | Dynamic linker | yes | no (everything is statically linked) |
 
 We honestly call this **Linux-like**, not Linux. On the board there is no
 MMU: the separation of user and kernel space is logical, system calls are
 ordinary function calls with a uniform ABI, and the boundary is kept by
-discipline. The x86-64 port has an MMU and does not use it yet - the identity
-map of its loader is the first step, and the address spaces of the tasks are
-the next one (see `docs/roadmap.md`).
+discipline. The x86-64 port has an MMU and uses it: a program gets page tables
+of its own, a 16 MiB window at 32 MiB, a guard page under its stack and ring
+3, and the kernel is supervisor-only and out of its reach. A fault of a
+program is reported and the program is taken down; the shell that ran it is
+alive. A program is a task of the scheduler with a CR3 of its own, and `fork()`
+clones its page tables and copies a page on the first write (ADR 0007). The
+pointers of a program are checked and copied at the edge of the call: the
+port says whether a range is memory of the caller, and an address that is not
+mapped is `EFAULT` instead of a page fault of ring 0. The kernel is not in a
+higher half yet; that is the next step, with a plan in ADR 0007.
 
 That is a property of the current port, not the shape of the kernel: everything
 the kernel concedes to a board without an MMU sits behind one compile time flag,
@@ -201,14 +207,90 @@ because a board has one store. The ESP32 answers with the NVS, the host with
 a file per key, and the configuration does not know the difference - which
 is why `config sync` can be tested without a board.
 
+### The record, its moments, and `statx`
+
+A record of MicroFS of today is 32 bytes: the type, the first block, the
+size and the count of entries, then `mtime` and `ctime` as the seconds of
+Unix in 64 bits. A volume of version 1 keeps the 16 bytes of the releases
+before the times and is mounted without a rewrite; its records report zero
+for the two moments, which is "unknown" and not 1970. The version in the
+header and the `MFS_FEATURE_TIME` bit of `features` are read together, so a
+header that claims the room without the feature (or the other way around)
+is refused. The design and the migration are ADR 0013; the layout is
+`docs/memory.md`.
+
+The moments come from `k_clock_now_unix()`, the clock of the kernel that the
+RTC, NTP and the host process feed. A machine that was never set falls back
+to the seconds since its boot, so a stamp always orders the changes even
+when it is not a date. The filesystem never calls a library of the caller
+and the number does not travel through a program.
+
+`struct vfs_stat` and `KSYS_STAT` are frozen, so the moments have a call of
+their own: `KSYS_STATX` (26) copies a `struct vfs_statx`, the five fields of
+`stat` followed by the two times. The VFS operation is optional: procfs,
+devfs and the FAT reader answer through their `stat` and leave the times
+zero. The library exposes `microos_statx()` and `struct microos_statx`.
+
+### The types of filesystems
+
+The VFS knows no name of a filesystem. It keeps a table of types
+(`struct vfs_fs_type`: a name and the call that mounts a volume), and
+`vfs_mount_type(point, "fat32", "ata0p1")` finds the call and runs it. The
+call mounts the volume itself with `vfs_mount()`, so the resolution of a
+path, the search bit and the listing of the mount points are the same for
+every type. A mount function may be a wrapper of a format of the board
+(MicroFS) or a reader of a format of the world (FAT); the VFS does not care
+which.
+
+The types are registered by the image, not by the kernel: a build that does
+not link the reader never has its name, and a boot that asks for an unknown
+type gets `KERR_INVAL`. MicroFS is still mounted at the root by
+`mfs_vfs_mount()` as it always was; the registry is for the volumes below
+`/mnt` and for the filesystems that arrive later. The option of the build is
+`MICRO_OS_FS_FAT32` (off by default on the board, compiled into the host
+tests), the design is ADR 0009.
+
+The FAT reader is a few files under `components/fs_fat32/`: the boot sector
+and the table of clusters, the directories with their long UTF-16 names and
+the adapter to the VFS. It is **read and written**; an object of FAT has no
+mode and no owner (the numbers are zero), `chmod` and `chown` are
+`KERR_NOTSUP`, not `KERR_PERM`, and a write without a journal is what a
+power cut can catch. A FAT volume mounted at `/mnt/fat` is one
+more entry of the mount table, and `ls /mnt` shows it even though MicroFS
+does not have the directory.
+
+### Disks and partitions
+
+A disk is a block device too, and a partition of it is one: the portable
+parser of `components/kernel/src/partition.c` reads the MBR or the GPT in the
+first sectors, holds every entry against the size of the disk and registers a
+child device with the name of the parent and `p` plus the number of the entry
+(`vd0p1`, `ata0p1`). A child adds the first sector of its partition to every
+request and refuses what runs past its end; the filesystem mounted on it does
+not know that a table exists.
+
+Three rules of the layer are worth remembering: the parser never writes to
+the medium (a broken table is a refusal, not a repair); a disk without a table
+is not a volume, there is no "the whole disk is the filesystem" special case;
+and the drivers live in the ports (ATA PIO on x86-64 today, SDHCI and virtio
+planned) while the tables live in the kernel, because a table is a property of
+the medium and not of the controller. ADR 0008 is the design, including what
+the first real disk is and what waits for the queue, the interrupt and a
+physical address contract.
+
+
 ## 6. Memory (phase 3)
 
 * `kmm_alloc`/`kmm_free` — our own allocator (bitmap or slab on top of the ESP-IDF
   heap).
 * Large objects (frame buffers, file caches) live in PSRAM, small ones in internal
   SRAM (which is scarce — that is the constraint).
-* Virtual memory is emulated: each task has its own "address space", but without
-  an MMU a switch means switching the stack pointer and the data segment base.
+* Virtual memory is emulated on the board: each task has its own "address
+  space", but without an MMU a switch means switching the stack pointer and the
+  data segment base. The x86-64 port gives a program real page tables and a
+  `fork()` that copies them with copy-on-write (ADR 0007); the kernel of that
+  port is still identity mapped and not in a higher half, and the plan to move
+  it is written down in the same ADR.
 
 ## 7. Drivers (phase 4)
 
@@ -297,19 +379,25 @@ a megabyte.
 
 ### `execve` belongs to the port
 
-`kernel/port/exec.h` is a subject of the contract (1.3) with three calls:
+`kernel/port/exec.h` is a subject of the contract (1.4) with five calls:
 `k_port_exec_supported()` (can this machine run a program at all),
-`k_port_exec_base()` (where the window is) and `k_port_exec_enter()` (copy the
-image, clear the bss, jump). The kernel parses the image and asks the port, so
-the answer for a machine that has no window is `ENOSYS` at the edge. The board
-says no: its flash is not executable for a file, and internal SRAM is ~100 KB
-for everything. The host says no too: jumping into the bytes of a program
-inside the address space of the simulator would run it with the libc of the
-host under it. x86-64 says yes and places a program at 32 MiB, with a 64 KiB
-stack at the top of its window; its boot mounts MicroFS on a volume of the
-port's RAM, writes `/bin/hello` there, gives it the mode of a program and asks
-for it with `execve` - the stat, the mode, the read through the VFS, the parse
-and the jump are the ones of the call.
+`k_port_exec_base()` (where the window is), `k_port_exec_enter()` (place the
+image, enter it) and the two halves of the end of a program,
+`k_port_exec_active()` and `k_port_exec_exit()`. The kernel parses the image
+and asks the port, so the answer for a machine that has no window is `ENOSYS`
+at the edge. The board says no: its flash is not executable for a file, and
+internal SRAM is ~100 KB for everything. The host says no too: jumping into
+the bytes of a program inside the address space of the simulator would run it
+with the libc of the host under it. x86-64 says yes: it builds page tables for
+the program, maps the window at 32 MiB onto a physical arena at 64 MiB, keeps
+a 64 KiB stack at the top of the window with an unmapped guard page below it
+and enters ring 3 through an `iretq`. Its boot mounts MicroFS on a volume of
+the port's RAM, writes `/bin/hello` and `/bin/crash` there, gives them the mode
+of a program and asks for `/bin/hello` with `execve` - the stat, the mode, the
+read through the VFS, the parse and the transition are the ones of the call.
+A program ends with `exit` and the port returns to the caller with its status;
+a fault of ring 3 prints `the program faulted: vector N at 0x...` and does the
+same with status 255 (ADR 0007).
 
 ### The rights are checked at the edge
 
@@ -323,12 +411,15 @@ reports. The width of the two numbers is checked at the door, the library
 (`components/libc`) has the three wrappers with the codes of POSIX in
 `errno`, and the shell has `chmod`, `chown` and `exec` over the same calls.
 The directories of a path are not checked for their `x` bit yet, and
-`fork()` with an address space of its own waits for the paging of a port
-(ADR 0005). A program calls the kernel with `int $0x80` on the x86-64 port:
-the register ABI is in [ADR 0006](adr/0006-program-entry.md), and the program
-runs in ring 0 without an address space of its own, so the handler trusts its
-pointers and a program that does not return holds the machine (see
-[debts.md](debts.md)).
+`fork()` with an address space of its own still waits for the copy of the page
+tables and copy on write (ADR 0005, ADR 0007). A program calls the kernel with
+`int $0x80` on the x86-64 port: the register ABI is in
+[ADR 0006](adr/0006-program-entry.md), the program runs in ring 3 with page
+tables of its own, and the processor switches to a kernel stack of the program
+through the TSS on the way in. The pointers of the caller are checked at the
+edge and copied there (`k_port_exec_contains`, `copy_from_user`): a range
+that is not memory of the program is `EFAULT`, not a fault of ring 0, and the
+strings of a path or a vector never reach the VFS (ADR 0007).
 
 ## 9. Testing
 

@@ -10,19 +10,34 @@
  *
  * Nothing of the kernel is linked here and there is no libc: a program talks
  * to the system through the vector 0x80 and to nothing else (programs/prog.h,
- * ADR 0006). Every line below is a call - the console, the arguments, the
- * number of the task, the clock, a sleep - so the transcript of the machine
- * shows that the way back into the kernel works and that a result comes back:
- * a program that could only write would prove the door, not the answer.
+ * ADRs 0006 and 0007). Every line below is a call - the console, the
+ * arguments, the number of the task, the clock, a sleep - so the transcript
+ * of the machine shows that the way back into the kernel works and that a
+ * result comes back: a program that could only write would prove the door,
+ * not the answer.
  *
- * The program returns, and the port takes it back with the value of the
- * return in RAX as its status. A program of the system ends in a halt or in
- * the exit call of a process, neither of which exists yet; a demonstration
- * that comes back is also what lets the shell of the smoke test start at all.
+ * The program is ring 3 code with page tables of its own. The line that says
+ * the current privilege level reads CS and prints its low two bits: it is the
+ * one number of this transcript that the kernel could not write for it, and
+ * it is 3 when the program is a user and not a function of the kernel.
+ *
+ * The program ends with the exit call of a process (KSYS_EXIT), not with a
+ * return: a return in ring 3 has no kernel frame to land in, and the port
+ * takes the program down through the call so that the shell that ran it is
+ * still alive afterwards.
  */
 #include "prog.h"
 
 #define PROGRAM_LINE "PROGRAM: hello from /bin\n"
+
+/* The low two bits of CS: 0 for the kernel, 3 for a program of ring 3. */
+static unsigned long current_cpl(void)
+{
+    unsigned short cs;
+
+    __asm__ volatile("mov %%cs, %0" : "=r"(cs));
+    return (unsigned long)(cs & 3u);
+}
 
 /*
  * The entry of the format: the port enters a program with the count and the
@@ -31,10 +46,7 @@
  *
  * The calls are checked: a failure is printed with its number, because a
  * program that says nothing when the kernel refused it is a program that
- * lies about the machine. The entry returns an int, and the value of that
- * return is the status the port reports to the kernel (they share the
- * convention of a C function of this machine): 0 is "every call answered",
- * 1 is "one of them did not", and the transcript says which one.
+ * lies about the machine. A return of 1 says "one of them did not answer".
  */
 int hello_main(int argc, char *const argv[])
 {
@@ -47,6 +59,15 @@ int hello_main(int argc, char *const argv[])
         prog_puts("\n");
         return 1;
     }
+
+    /*
+     * The privilege level of the moment. It is read by the program and not
+     * handed to it: a kernel could print "cpl 3" without ever leaving ring 0,
+     * and the smoke test would have no way to tell.
+     */
+    prog_puts("PROGRAM: cpl ");
+    prog_put_dec(current_cpl());
+    prog_puts("\n");
 
     /*
      * The vector the kernel built for this program. The count and the words
@@ -83,6 +104,8 @@ int hello_main(int argc, char *const argv[])
     prog_puts("PROGRAM: slept 10 ms, up ");
     prog_put_dec((unsigned long)prog_uptime());
     prog_puts(" ms\n");
+
+    prog_exit(0);
 
     return 0;
 }

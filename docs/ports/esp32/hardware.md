@@ -63,6 +63,11 @@ Devices on that bus:
 | MPU6886 (IMU) | 0x68 |
 | BM8563 (RTC) | 0x51 |
 
+The INT of the BM8563 is not a GPIO of the ESP32 in the schematics: it drives
+the latch of the power supply through D22, so an alarm can switch on a board
+that is off. It is not on the EXT1 wake line either, so an alarm of the clock
+does not wake a chip that is in deep sleep — see "Power and sleep".
+
 ### Microphone (I2S)
 
 | Signal | GPIO |
@@ -105,12 +110,102 @@ Limits worth knowing before writing an application around it:
 ## Power and sleep (important!)
 
 * The **AXP192 PMIC is absent** — charging and power are handled by the ESP32.
-* Power on: hold **BUTTON C** for more than 2 seconds.
+* Power on: hold **BUTTON C** for more than 2 seconds, or let the alarm of the
+  RTC switch the board on.
 * After a wake-up from the RTC or the button, the program must set
-  **HOLD (G4) = 1**, otherwise the board powers off again.
-* Power off: hold BUTTON C (or call `esp_restart()` / `esp_deep_sleep`).
+  **HOLD (G4) = 1**, otherwise the board powers off again. The firmware does
+  it in the first statement of `app_main`, before the console or the kernel.
+* Power off: hold BUTTON C (or `power off` in the shell, which drops HOLD).
+  With the cable plugged in the board keeps running — USB feeds the 3.3 V rail
+  whether the latch is closed or not — and the command says so instead of
+  pretending.
 * Battery charging: with USB power the battery charges; the charge current and
   the state are read through the ADC divider on G38.
+
+### Deep sleep and the wake line
+
+The chip sleeps in the deep sleep of the ESP32: everything but the RTC domain
+is off, `app_main` runs again from the start after the wake, and the firmware
+drives HOLD high in its first statement. Two things bring the board back:
+
+| Source | How |
+|---|---|
+| the timer of the chip | `power sleep <seconds>` in the shell; the kernel tick stops with the chip |
+| BUTTON C (G35) | the button closes the **WAKEn** net to ground and the diode D1 carries the low to G35 |
+
+The alarm of the RTC is **not** a wake source of a sleeping chip: its INT
+drives the latch of the power supply and not the wake line. It sets its flag
+while the chip sleeps and the next boot reports it
+(`rtc: the alarm went off before this boot`); `power sleep` says a word when
+an alarm is armed, so nobody waits for it by mistake. From the **off** state
+the alarm can switch the board on through the same latch, which is the way
+the product documentation describes the RTC wake — the firmware cannot check
+that part with the cable plugged in, because USB feeds the 3.3 V rail on its
+own.
+
+The deep sleep arms EXT1 on G35 with the level "all low" — the only group
+level the ESP32 has — and the timer beside it, and it keeps HOLD (G4) by the
+pad hold of the RTC domain: without the hold the pin floats, the latch opens
+and a board on a battery switches itself off instead of sleeping. The boot
+reports the reason in one line of the log: `power: woke from timer`, `ext1` or
+`power-on`, and the doctor shows it as `hold on, wake timer`.
+
+G35 is input-only and has **no internal pull-up**: the 10 kOhm resistor of the
+WAKEn net is what holds it high. A board whose line reads low never sleeps —
+the wake fires in the same instant — so an external pull-down on G35 (or a
+jammed button) is the first thing to look at.
+
+The panel keeps the picture it had when the chip went down, and the green LED
+of the board is the sleep indicator. The current of the deep sleep is not
+measured by the firmware: the radio and the panel decide it, and only the
+hardware can tell.
+
+### The alarm of the RTC (BM8563)
+
+The clock has one alarm: a match of a minute, an hour and a day of the month.
+The weekday register is not used — the driver computes the weekday from the
+date, and after a dead battery the register of the chip means nothing. A field
+that is not given is not compared (the AE bit of its register is set), so an
+alarm on `12:34` with no day fires every day until it is cleared.
+
+```
+rtc alarm                  # what is armed, and whether it fired
+rtc alarm 07:30            # every day at 07:30
+rtc alarm +600             # the next whole minute at or after now + 600 s
+rtc alarm day 5 07:30      # on the 5th of every month
+rtc alarm clear            # disable it and release the INT line
+```
+
+The chip compares minutes: `+30` fires at the start of the next minute, not in
+thirty seconds. The alarm does not survive a restart: the driver reads the
+flag of an alarm that fired (the line stays low until somebody answers it),
+says so on the boot (`rtc: the alarm went off before this boot`), and then
+puts the control registers into their plain state.
+
+While the board runs, the INT line of a fired alarm sits low. The line holds
+the latch of the power supply closed, so `power off` clears the alarm first, or
+the board would stay on with HOLD dropped.
+
+**The bits of the control register are not the PCF8563 ones.** The BM8563
+orders register 01H as `TIE, AIE, TF, AF` from bit 0 up, where the PCF8563 has
+`AIE, AF, TIE, TF`. A driver copied from the PCF8563 writes 0x01 to enable the
+alarm — which arms the timer of the chip — and then polls bit 1 for the flag,
+which never moves. That was the first version of `drv_rtc.c`; the alarm fired
+on time and nobody noticed.
+
+### Factory reset
+
+`factory reset -y` erases the volume of MicroFS (every file of the user and
+the boot log) and the whole NVS partition (the files of `/etc`, the network of
+the last time, the calibration of the radio), then restarts the board. The
+firmware and the bootloader live in partitions of their own and are not
+touched, so the board comes back with the same firmware and none of the last
+life. Without `-y` the command explains what would be lost and changes
+nothing; there is no undo.
+
+The tree ships no default files of `/etc`: after a reset `/etc` and
+`/etc/init.d` exist and are empty, and the configuration is the one the next
+life writes and the NVS keeps.
 
 ## Known pitfalls
 
@@ -129,7 +224,8 @@ Limits worth knowing before writing an application around it:
 ## Clocks and timers
 
 * Main clock: 240 MHz.
-* Exact 32.768 kHz RTC oscillator — it is also the deep-sleep alarm source.
+* Exact 32.768 kHz RTC oscillator — it is also the source of the deep-sleep
+  timer and of the clock.
 * ESP32 timers: two blocks of four timers each, 64 bit — used for the system tick.
 
 ## Sources

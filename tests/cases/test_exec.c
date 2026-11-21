@@ -12,8 +12,11 @@
 
 #include <string.h>
 
+#include "kernel/config.h"
 #include "kernel/exec.h"
 #include "kernel/port/exec.h"
+
+#if KERNEL_EXEC
 
 #define TEST_TEXT_BYTES 8u
 #define TEST_DATA_BYTES 4u
@@ -195,6 +198,20 @@ static void check_run_without_a_machine(void)
     KT_CHECK(!k_port_exec_supported());
     KT_CHECK(k_port_exec_base() == NULL);
 
+    /*
+     * The seam of copy_from_user on a machine without an address space per
+     * program: a pointer of a call is memory of the kernel already, so the
+     * range at the edge is accepted and the empty range is always accepted.
+     */
+    KT_CHECK(k_port_exec_contains(image, size));
+    KT_CHECK(k_port_exec_contains(NULL, 0));
+
+    /* No program of this machine is ever in flight, so an exit is a no-op and
+     * the kernel's exit of a task stays the path of the board and the host. */
+    KT_CHECK(!k_port_exec_active());
+    k_port_exec_exit(3);
+    KT_CHECK(!k_port_exec_active());
+
     memset(&parsed, 0, sizeof(parsed));
     KT_CHECK_INT_EQ(k_exec_parse(image, size, &parsed), 0);
 
@@ -224,6 +241,10 @@ static void check_run_without_a_machine(void)
     /* A call with nothing to run is a refusal of the caller, not of the
      * machine, so it is -1 and not ENOSYS. */
     KT_CHECK_INT_EQ(k_exec_run(NULL, NULL), -1);
+
+    /* This machine has no address space per task: a fork cannot copy the
+     * context of the caller, and the kernel has to keep its placeholder. */
+    KT_CHECK_INT_EQ(k_port_fork_copy(NULL), -1);
 }
 
 void test_exec(void)
@@ -234,3 +255,17 @@ void test_exec(void)
     check_bad_entry();
     check_run_without_a_machine();
 }
+
+#else /* !KERNEL_EXEC */
+
+/*
+ * A build without the parser has nothing to test here, and the test says so
+ * instead of disappearing: a reader of the report knows which build ran.
+ */
+void test_exec(void)
+{
+    ktest_begin("exec: the MOX1 parser is not in this build (KERNEL_EXEC=0)");
+    KT_CHECK_INT_EQ(KERNEL_EXEC, 0);
+}
+
+#endif /* KERNEL_EXEC */

@@ -54,6 +54,20 @@ COMMANDS = [
     "exec /bin/hello",
     "exec /bin/hello one two",
     "fsck",
+    # The program of K4: it forks, the child writes the shared page and ends
+    # with 7, the parent waits and still reads its own 42 (copy on write).
+    "exec /bin/fork",
+    # The same again, after the page tables and the frames of the first run
+    # have been released: a leak of a space would show here as a refusal.
+    "exec /bin/fork",
+    # The edge of the system call: the program hands write, stat and read
+    # addresses that are not its memory, and every call has to answer EFAULT
+    # (14) while the machine stays alive.
+    "exec /bin/badptr",
+    # The program that faults: it writes to address zero in ring 3, and the
+    # shell has to answer the command after it for the machine to be alive.
+    "exec /bin/crash",
+    "uname",
 ]
 
 # The prompt of the shell. It is written in one call, so the log of another
@@ -65,7 +79,7 @@ PROMPT = "microos> "
 # console of COM1, the contract of the port and the boot of the kernel.
 EXPECTED = [
     "board: qemu_x86_64",
-    "port: x86_64, contract 1.3",
+    "port: x86_64, contract 1.6",
     "[ ok ] sched",
     "subsystem(s) ready",
     "the kernel is up",
@@ -175,6 +189,9 @@ def check(output: str) -> list:
         "x86-64: running /bin/hello through the call" in output,
     )
     expect("the program writes to the console", "PROGRAM: hello from /bin" in output)
+    # The number is read from CS by the program itself: it is the proof that
+    # the entry went through an iretq into ring 3 and not into a function.
+    expect("the program runs in ring 3", "PROGRAM: cpl 3" in output)
     # No arguments at the boot: the port is entered without a vector.
     expect("the program starts without arguments", "PROGRAM: argc 0" in output)
     expect(
@@ -281,12 +298,79 @@ def check(output: str) -> list:
     # filesystem itself, and the checker is on the machine, not in the test.
     expect("the volume is consistent", "the volume is consistent" in answer("fsck"))
 
+    # --- the fork: an address space per task and copy on write
+    fork = answer("exec /bin/fork")
+    expect("the forking program starts", "PROGRAM: fork starts, value 42" in fork)
+    # The child gets the zero of the fork and writes the page it shares with
+    # its parent; the write faults and the handler copies the page.
+    expect(
+        "the child of the fork gets zero and its own page",
+        "PROGRAM: child fork returned 0, value 99" in fork,
+    )
+    expect(
+        "the parent gets the pid of the child",
+        re.search(r"PROGRAM: parent fork returned [1-9][0-9]*", fork) is not None,
+    )
+    # The parent never wrote the page: it still reads the value it had before
+    # the fork. Shared memory without the fault of the first write is 99.
+    expect("the parent keeps its own page", "PROGRAM: parent sees value 42" in fork)
+    expect(
+        "the parent waits and gets the status of the child",
+        re.search(r"PROGRAM: waited, status 7", fork) is not None,
+    )
+    expect("the fork program returns its status", "the program exited with 0" in fork)
+    expect("the shell sees the fork program finish", "the program has finished" in fork)
+
+    # The second run of the same program comes after the tables and frames of
+    # the first were released; a space that leaked would run out by now.
+    fork = answer("exec /bin/fork", 1)
+    expect(
+        "the fork runs again with the same answer",
+        "PROGRAM: parent sees value 42" in fork
+        and "PROGRAM: waited, status 7" in fork
+        and "the program exited with 0" in fork,
+    )
+
+    # --- the edge of the system call: a bad pointer is EFAULT, not a fault
+    # The numbers below are the answer of the call: 14 is EFAULT (POSIX 14,
+    # the minus of the kernel dropped when the program prints it). The three
+    # addresses are a window that is not there, the last bytes of the window
+    # with a request that crosses its end, and the guard page under the stack.
+    edge = answer("exec /bin/badptr")
+    expect("the edge refuses a far pointer", "PROGRAM: write far 14" in edge)
+    expect("the edge refuses a range past the window", "PROGRAM: write edge 14" in edge)
+    expect("the edge refuses the guard page", "PROGRAM: write guard 14" in edge)
+    expect("the edge refuses the buffer of stat", "PROGRAM: stat far 14" in edge)
+    expect("the edge refuses the buffer of read", "PROGRAM: read far 14" in edge)
+    # The same call with a valid pointer still works: the answer is about the
+    # address, not about a call that refuses everything.
+    expect(
+        "the edge keeps the valid pointer",
+        "PROGRAM: the good pointer still writes" in edge,
+    )
+    expect("the edge program returns its status", "the program exited with 0" in edge)
+    expect("the shell sees the edge program finish", "the program has finished" in edge)
+
+    # --- the fault of a program is not the fault of the machine
+    crash = answer("exec /bin/crash")
+    expect("the faulting program starts", "PROGRAM: crash writes to address zero" in crash)
+    # The page fault of ring 3 is reported and the program is taken down; the
+    # address is the one the program wrote to, not the RIP of the instruction.
+    expect(
+        "the program fault is reported",
+        "the program faulted: vector 14 at 0x0000000000000000" in crash,
+    )
+    expect(
+        "the shell survives a fault of a program",
+        re.search(r"MicroOS \d+\.\d+\.\d+", answer("uname", 1)) is not None,
+    )
+
     return checks
 
 
 def main(argv: list) -> int:
     parser = argparse.ArgumentParser(description="the smoke test of the x86-64 port")
-    parser.add_argument("--timeout", type=float, default=20.0, help="the seconds the machine gets")
+    parser.add_argument("--timeout", type=float, default=30.0, help="the seconds the machine gets")
     parser.add_argument("--verbose", action="store_true", help="print the console of the machine")
     args = parser.parse_args(argv)
 

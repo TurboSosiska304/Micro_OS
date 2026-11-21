@@ -1,0 +1,49 @@
+menu "Micro OS network"
+
+    config MICRO_OS_NET
+        bool "the network services of the board"
+        default y
+        help
+            The HTTP client, the clock from NTP, the page of the state and
+            the MQTT client. The sockets come from the port; the protocols
+            are portable and are tested on the host. Turn this off for an
+            image that has no network at all: no source of the component is
+            compiled and no command of it is registered.
+
+    config MICRO_OS_NET_HTTP
+        bool "the HTTP client and the http command"
+        depends on MICRO_OS_NET
+        default y
+        help
+            GET a URL and print the status and the body: the command
+            "http get <url>", and the transport the page of the state uses.
+
+    config MICRO_OS_NET_HTTP_SERVER
+        bool "the page of the state (httpd)"
+        depends on MICRO_OS_NET
+        default n
+        help
+            The page on port 80 that a person starts with "httpd". It is off
+            by default: a command a person starts is a feature of the
+            session, not of the boot, and the listener task costs the static
+            memory of the board.
+
+    config MICRO_OS_NET_NTP
+        bool "the clock from NTP and the ntp command"
+        depends on MICRO_OS_NET
+        default y
+        help
+            Ask an NTP server for the time of Unix and give it to the clock
+            of the board. A board without a network to a time server can
+            leave it out.
+
+    config MICRO_OS_NET_MQTT
+        bool "the MQTT client and the mqtt command"
+        depends on MICRO_OS_NET
+        default n
+        help
+            Publish one message over MQTT 3.1.1. Off by default: the board
+            has no broker of its own, and a release that wants the client
+            turns it on in sdkconfig.defaults (ADR 0010).
+
+endmenu

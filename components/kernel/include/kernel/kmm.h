@@ -12,6 +12,7 @@
 #ifndef MICRO_OS_KERNEL_KMM_H
 #define MICRO_OS_KERNEL_KMM_H
 
+#include "kernel/config.h"
 #include "kernel/types.h"
 
 /*
@@ -42,10 +43,12 @@
 #define KMM_SLAB_CLASSES 6
 
 struct kmm_stats {
-    k_size_t kernel_bytes;    /* the internal RAM used by the kernel and the drivers */
-    k_size_t system_bytes;    /* the internal RAM used by the system utilities */
-    k_size_t user_bytes;      /* the internal RAM used by the user applications */
-    k_size_t psram_bytes;     /* the PSRAM used by everybody */
+    k_size_t kernel_bytes; /* the internal RAM used by the kernel and the drivers */
+    k_size_t system_bytes; /* the internal RAM used by the system utilities */
+    k_size_t user_bytes;   /* the internal RAM used by the user applications */
+#if KERNEL_PSRAM
+    k_size_t psram_bytes; /* the PSRAM used by everybody */
+#endif
     k_size_t allocations;     /* the number of the living blocks */
     k_size_t total_bytes;     /* the total of the allocated bytes */
     k_size_t slabs;           /* the number of the slabs of the system */

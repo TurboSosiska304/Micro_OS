@@ -94,7 +94,7 @@ the 4% is generous. For a volume formatted by the mount:
 
 | Volume size | Total blocks | DATA | META | INFO |
 |---|---|---|---|---|
-| 64 KiB | 64 | 55 | 5 | 4 |
+| 64 KiB | 64 | 51 | 9 | 4 |
 | 256 KiB | 256 | 241 | 11 | 4 |
 | 1 MiB | 1024 | 979 | 41 | 4 |
 | 6 MiB | 6144 | 5894 | 246 | 4 |
@@ -109,19 +109,27 @@ than the table needs.
 The table of the records is sized by count, not by percentage:
 
 ```math
-META_table = ceil(E * 16 / 1024)
+META_table = ceil(E * 32 / 1024)
 ```
 
-where `E` is the maximum number of records (files and directories) and 16 is
+where `E` is the maximum number of records (files and directories) and 32 is
 the size of one record in bytes. The mount passes `E = 256`, so the table is
-four blocks on every volume; the 4% is only the first guess of `META`, which
+eight blocks on every volume; the 4% is only the first guess of `META`, which
 the format then grows until the bitmap and the table fit. A volume cannot ask
 for more records after it was formatted, and the capacity does not follow the
 size of the volume yet (section 7).
 
 ## 5. Data stored in INFO
 
-Instead of fixed addresses, `INFO` stores a universal description of the regions. The header additionally holds `magic`, `version`, `block_size`, `total_blocks`, `root_inode` and `features`.
+Instead of fixed addresses, `INFO` stores a universal description of the regions. The header additionally holds `magic`, `version`, `block_size`, `total_blocks`, `root_inode`, `features` and `crc`.
+
+The `version` says which record the table holds: 1 is the 16-byte record of
+the volumes before the times, 2 is the 32-byte record with `mtime` and
+`ctime`. `features` has the bit `MFS_FEATURE_CRC` (the header carries its
+checksum) and the bit `MFS_FEATURE_TIME` (the records carry the two moments);
+the two bits go together with the version, and a header that disagrees with
+itself is refused at the mount. A version 1 volume has neither the bit nor
+the room, and it is read as it always was (ADR 0013).
 
 ```
 INFO
@@ -145,12 +153,32 @@ INFO
 +--------------------------------+
 ```
 
-## 6. The flags of an inode
+## 6. The record of an inode
 
-A record of MicroFS is 16 bytes and has no field of its own for the mode and
-the owner of an object: the two numbers are packed into the upper bits of its
-`flags` word, while the two low bits keep the type they always had. The volume
-of 0.3.x therefore mounts unchanged (ADR 0005).
+A record of MicroFS of today is 32 bytes: four words of the design and the
+two moments of a change. A volume of version 1 has a record of 16 bytes, the
+four words without the moments; the mount reads both and the version of the
+header decides which one the table holds (ADR 0013).
+
+```
++--------+-------------+--------+---------+---------+---------+
+| flags  | first_block | size   | entries | mtime   | ctime   |
+| 4      | 4           | 4      | 4       | 8       | 8       |
++--------+-------------+--------+---------+---------+---------+
+  0        4             8        12        16        24
+```
+
+`mtime` is the last change of the content (create, write, truncate) and
+`ctime` the last change of the record (the same moments, and also `chmod`
+and `chown`). Both are the seconds of Unix in 64 bits, fed by the clock of
+the kernel, not by a library of the caller. A version 1 record has no room
+for them and the reader answers zero, which means "unknown" and not 1970.
+There is no access time: a read does not rewrite a record.
+
+The four first words have not moved, and they still have no field of their
+own for the mode and the owner: the two numbers are packed into the upper
+bits of `flags`, while the two low bits keep the type they always had. The
+volume of 0.3.x therefore mounts unchanged (ADR 0005).
 
 ```
 bit  31          17 16        8 7      2 1  0
@@ -212,6 +240,11 @@ The state of the automatic layout:
 - [x] Validate the layout when mounting: the sections have to fill the
       volume, `INFO` has to end at its end, and the root has to be a
       directory.
+- [x] Store the moments of a record and read them through `statx`: the
+      record of version 2 is 32 bytes, a version 1 volume keeps its 16
+      bytes and mounts without a conversion (ADR 0013).
+- [ ] An access time: a read would have to rewrite the record, and the
+      system does not spend a write on a read yet.
 
 ## 8. The device under the volume
 

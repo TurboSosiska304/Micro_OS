@@ -10,8 +10,12 @@ every segment is checked here and not by eye.
 
 The test builds a few tiny objects with gcc: the .text and the .data are not
 multiples of four on purpose, which is the only case where the padding is
-visible. It needs no ESP-IDF and no board, only the binutils that mkprog.sh
-itself uses:
+visible. One case goes one step further and links an object for a window with
+program.ld's rule (the text at the base plus the header), then asks the script
+to check that window: the right base has to pass, and a base the object was
+not linked for has to be refused instead of producing an image that runs at
+the wrong addresses. It needs no ESP-IDF and no board, only the binutils that
+mkprog.sh itself uses:
 
     python3 tools/test_mkprog.py
 """
@@ -44,6 +48,25 @@ HEADER_FIELDS = (
 # The lengths of the segments the test builds: every remainder of a division
 # by four, and a couple of longer segments. (text, data).
 CASES = ((1, 0), (3, 3), (5, 1), (7, 4), (9, 2))
+
+# A window for the case of the base check, the kind a port names. The number
+# is not important; what is important is that the object is linked for it and
+# that a different one is refused.
+PROGRAM_BASE = 0x02000000
+
+
+def build_linker_script(base: int) -> str:
+    """The rule of program.ld: the text at base + 32, the data after it."""
+    return f"""\
+SECTIONS
+{{
+    . = 0x{base + K_EXEC_HEADER_SIZE:08x};
+    .text : SUBALIGN(4) {{ *(.text .text.*) }}
+    . = ALIGN(4);
+    .data : {{ *(.data .data.*) *(.rodata .rodata.*) }}
+    /DISCARD/ : {{ *(.comment) *(.eh_frame) *(.note .note.*) }}
+}}
+"""
 
 
 def align4(value: int) -> int:
@@ -155,6 +178,75 @@ def check_case(work: Path, script: Path, text: bytes, data: bytes) -> None:
     )
 
 
+def check_base_case(work: Path, script: Path) -> None:
+    """An object linked for a window: the right base passes, another refuses."""
+    text = bytes(0x90 + index % 8 for index in range(5))
+    data = bytes(0x40 + 3 * index for index in range(3))
+
+    source = work / "base.c"
+    obj = work / "base.o"
+    linker = work / "base.ld"
+    elf = work / "base.elf"
+
+    source.write_text(build_source(text, data), encoding="utf-8")
+    linker.write_text(build_linker_script(PROGRAM_BASE), encoding="utf-8")
+    subprocess.run(
+        ["gcc", "-c", "-fno-pic", "-fno-pie", "-fno-stack-protector",
+         "-fno-asynchronous-unwind-tables", "-o", str(obj), str(source)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["gcc", "-nostdlib", "-static", "-no-pie", "-Wl,--build-id=none",
+         "-Wl,-e,test_entry", f"-Wl,-T,{linker}", "-o", str(elf), str(obj)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    # The base the linker used is the one the script is given: a success, and
+    # the image is still laid out the way the header says.
+    image = work / "base.mox"
+    subprocess.run(
+        [str(script), "--base", hex(PROGRAM_BASE), str(elf), str(image), "test_entry"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    header, payload = parse_image(image)
+    fields = dict(zip(HEADER_FIELDS, header))
+    assert fields["entry"] == K_EXEC_HEADER_SIZE, f"base: entry is {fields['entry']}"
+    assert fields["text_size"] == align4(len(text)), (
+        f"base: text size is {fields['text_size']}"
+    )
+    assert fields["data_size"] == align4(len(data)), (
+        f"base: data size is {fields['data_size']}"
+    )
+    assert payload[: len(text)] == text, "base: the text bytes moved"
+    assert payload[align4(len(text)) : align4(len(text)) + len(data)] == data, (
+        "base: the data is not after the padded text"
+    )
+
+    # A different window means the image was linked for addresses this port
+    # will not give it. The script has to refuse and not write the image.
+    wrong = PROGRAM_BASE + 0x00100000
+    refused = work / "refused.mox"
+    result = subprocess.run(
+        [str(script), "--base", hex(wrong), str(elf), str(refused), "test_entry"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0, "base: a wrong window was accepted"
+    assert "is linked for" in result.stderr, (
+        f"base: the refusal does not say what the object was linked for: {result.stderr!r}"
+    )
+    assert "the window starts at" in result.stderr, (
+        f"base: the refusal does not say where the window starts: {result.stderr!r}"
+    )
+    assert not refused.exists(), "base: the refusal left an image behind"
+
+
 def main() -> int:
     tools = ("gcc", "nm", "objcopy", "objdump")
     missing = [tool for tool in tools if shutil.which(tool) is None]
@@ -177,8 +269,12 @@ def main() -> int:
             text = bytes(0x90 + index % 8 for index in range(text_size))
             data = bytes(0x40 + 3 * index for index in range(data_size))
             check_case(work, script, text, data)
+        check_base_case(work, script)
 
-    print(f"test_mkprog: OK, {len(CASES)} image(s) laid out as the header says")
+    print(
+        f"test_mkprog: OK, {len(CASES)} image(s) laid out as the header says "
+        "and the base of the window checked"
+    )
     return 0
 
 

@@ -87,7 +87,9 @@ void port_esp32_init(void)
 {
     /* The critical section needs no preparation: the spinlock is static. */
     port_esp32_blockdev_init();
+#ifdef CONFIG_MICRO_OS_WIFI
     port_esp32_wifi_init();
+#endif
 }
 
 void k_port_write(const char *data, k_size_t len)
@@ -203,7 +205,7 @@ const char *k_port_arch(void)
  * wrong meaning, the way vermagic does for a module of Linux.
  */
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 3u
+#define PORT_API_MINOR 6u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_esp32 does not speak the contract of this kernel");

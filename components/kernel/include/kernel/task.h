@@ -91,6 +91,19 @@ struct task {
 /* Create a task. Returns NULL if the table is full or the port refused. */
 struct task *task_create(const char *name, task_entry_fn entry, void *arg, k_u8_t prio);
 
+/*
+ * The shape of a fork on a machine with an address space per task. The record
+ * of the child is made here (a pid, the parent, the working directory) and
+ * the port is asked to copy the context of the caller into it: the memory,
+ * the registers and the point where the system call returns, with the answer
+ * zero. The caller gets the child back and its pid through `child`.
+ *
+ * Returns 0 on success, -1 when the port cannot copy a context (the caller
+ * keeps the placeholder of a machine without an MMU), and -2 when there is no
+ * room for the child.
+ */
+int task_fork(struct task *parent, const char *name, struct task **child);
+
 /* Terminate the current task. Does not return. */
 void task_exit(int code);
 

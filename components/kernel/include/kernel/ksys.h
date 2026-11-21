@@ -47,7 +47,8 @@
 #define KSYS_CHMOD 23   /* chmod(path, mode) */
 #define KSYS_CHOWN 24   /* chown(path, owner) */
 #define KSYS_EXECVE 25  /* execve(path, argv) */
-#define KSYS_COUNT 26   /* the number of the system calls */
+#define KSYS_STATX 26   /* statx(path, buf) */
+#define KSYS_COUNT 27   /* the number of the system calls */
 
 /* The flags of the open call, the same as the ones of the VFS. */
 #define KSYS_O_RDONLY 0x0000
@@ -56,13 +57,20 @@
 #define KSYS_O_CREAT 0x0100
 #define KSYS_O_TRUNC 0x0200
 #define KSYS_O_APPEND 0x0400
+/*
+ * Open a directory as a directory, which is what readdir needs. The flag
+ * goes with O_RDONLY and with nothing else: a directory is read, never
+ * written through a descriptor of this system.
+ */
+#define KSYS_O_DIRECTORY 0x0800
 
 /* The bits of the access: read, write, or both. */
 #define KSYS_O_ACCMODE 0x0003
 
 /* Every bit an open may carry: a flag outside this set is not of the
  * contract, and the call is refused instead of being guessed at. */
-#define KSYS_O_ALLOWED (KSYS_O_ACCMODE | KSYS_O_CREAT | KSYS_O_TRUNC | KSYS_O_APPEND)
+#define KSYS_O_ALLOWED                                                                             \
+    (KSYS_O_ACCMODE | KSYS_O_CREAT | KSYS_O_TRUNC | KSYS_O_APPEND | KSYS_O_DIRECTORY)
 
 /* The flags of the waitpid. */
 #define KSYS_WNOHANG 1 /* do not wait, answer 0 when the child is not ready */
@@ -156,6 +164,12 @@ k_ssize_t ksys_write(int fd, const void *buf, k_size_t count);
 int ksys_open(const char *path, int flags);
 int ksys_close(int fd);
 int ksys_stat(const char *path, void *buf);
+/*
+ * The information about an object with the moments of a change. The old
+ * stat keeps its structure and its number; this is the second door for a
+ * caller that wants the two times (ADR 0013).
+ */
+int ksys_statx(const char *path, void *buf);
 k_ssize_t ksys_lseek(int fd, k_ssize_t offset, int whence);
 int ksys_unlink(const char *path);
 int ksys_mkdir(const char *path);

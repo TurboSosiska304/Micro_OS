@@ -2,11 +2,12 @@
  * Micro OS — the port of a QEMU x86-64 machine.
  *
  * The kernel is loaded by the loader of the port in long mode with the page
- * tables already built, so this file is plain C: the console is COM1, the
- * clock is the tick of the programmable interval timer, the memory comes
- * from the map the bootloader hands over, and a critical section saves the
- * interrupt flag and turns the interrupts off, which on one core of this
- * machine is exactly what it says.
+ * tables already built, so this file is plain C: the console is the text
+ * screen of the VGA and COM1 at once, the keys come from the PS/2 keyboard
+ * or from the UART, the clock is the tick of the programmable interval
+ * timer, the memory comes from the map the bootloader hands over, and a
+ * critical section saves the interrupt flag and turns the interrupts off,
+ * which on one core of this machine is exactly what it says.
  *
  * There is no task substrate yet (see port_x86_64_task.c): the kernel boots,
  * checks the contract, prints its banner, keeps its clock and stops.
@@ -15,11 +16,13 @@
 #include "port_x86_64.h"
 
 #include <stdarg.h>
+#include <string.h>
 
 #include "kernel/log.h"
 #include "kernel/port.h"
 #include "kernel/port_task.h"
 #include "kernel/sched.h"
+#include "port_x86_64_console.h"
 
 /* --- the machine --- */
 
@@ -28,23 +31,28 @@
  * the loader can see the same instructions.
  */
 
-/* The end of the block the linker made for the _Thread_local of the library. */
+/* The block the linker made for the _Thread_local of the library. */
+extern char __tls_start[];
+extern char __tls_data_end[];
 extern char __tls_end[];
 
 /*
  * The library keeps its errno in a _Thread_local, and the compiler reaches it
- * through %fs. The tasks of this machine share one address space and one
- * block, which is enough for the one user of the system: a second task sees
- * the error of the first, and a real errno per task waits for the paging that
- * gives each task a space of its own. The block itself is in the image and
- * zero at the boot, so the register is the whole of the set-up.
+ * through %fs. The boot context has the block of the image; every task gets a
+ * copy of it (port_x86_64_task.c), because a program of ring 3 leaves the
+ * thread pointer at zero and the next call must not inherit that.
+ *
+ * The tbss of the block is NOBITS and the loader clears only .bss, so the
+ * zero-valued _Thread_local of the boot is cleared here, once, before the
+ * register points at it.
  */
 static void tls_init(void)
 {
+    memset(__tls_data_end, 0, (k_size_t)(__tls_end - __tls_data_end));
     port_wrmsr(0xC0000100u, (k_u64_t)(uintptr_t)__tls_end);
 }
 
-/* --- the console on COM1 --- */
+/* --- the console: the text screen, COM1, and the keyboard --- */
 
 #define COM1 0x3F8
 #define COM1_LSR 0x3FD /* line status: bit 5 "can write", bit 0 "can read" */
@@ -60,6 +68,13 @@ static void com1_init(void)
     port_outb(COM1 + 4, 0x03); /* DTR and RTS */
 }
 
+/*
+ * One call, two sinks: the window of the machine and the log of the serial
+ * port. A person with the window open reads the screen and a person without
+ * one reads the file, and neither of them has to know that the other exists
+ * - the same bytes go to both, and the port does not have a "console" that
+ * has to be chosen before the boot.
+ */
 void k_port_write(const char *data, k_size_t len)
 {
     k_size_t i;
@@ -67,6 +82,8 @@ void k_port_write(const char *data, k_size_t len)
     if (data == NULL) {
         return;
     }
+
+    port_x86_64_vga_write(data, len);
 
     for (i = 0; i < len; i++) {
         char c = data[i];
@@ -122,14 +139,24 @@ static bool interrupts_enabled(void)
 }
 
 /*
- * The contract says this call waits for the character, and it does: the
- * byte in the buffer of the UART is taken at once, and an idle machine
- * waits for the next interrupt of the timer instead of spinning - HLT is a
- * core asleep, and the tick wakes it a thousand times a second.
+ * The contract says this call waits for the character, and it does: a key
+ * that the keyboard put in the ring is taken at once, the byte in the buffer
+ * of the UART is taken at once, and an idle machine waits for the next
+ * interrupt of the timer instead of spinning - HLT is a core asleep, and the
+ * tick wakes it a thousand times a second.
+ *
+ * The keyboard comes first: it is the device of the person in front of the
+ * screen, and a serial console that is quiet has nothing to say anyway.
  */
 int k_port_console_getchar(void)
 {
     for (;;) {
+        int key = port_x86_64_ps2_poll();
+
+        if (key >= 0) {
+            return key;
+        }
+
         if ((port_inb(COM1_LSR) & 0x01) != 0) {
             return (int)port_inb(COM1);
         }
@@ -140,9 +167,24 @@ int k_port_console_getchar(void)
     }
 }
 
+/*
+ * The non-blocking reading of the same two devices. The shell of the kernel
+ * polls and sleeps between two calls, and a poll that waited for a key would
+ * keep the machine from doing anything else while the person thinks.
+ */
 int k_port_console_poll(void)
 {
-    return k_port_console_getchar();
+    int key = port_x86_64_ps2_poll();
+
+    if (key >= 0) {
+        return key;
+    }
+
+    if ((port_inb(COM1_LSR) & 0x01) != 0) {
+        return (int)port_inb(COM1);
+    }
+
+    return -1;
 }
 
 /* --- the calibration of the processor clock --- */
@@ -214,9 +256,14 @@ struct idt_pointer {
 #define IDT_VECTORS 256u
 #define IDT_CODE_SELECTOR 0x0008u
 #define IDT_GATE_INTERRUPT 0x8Eu /* present, ring 0, interrupts off on entry */
+#define IDT_GATE_USER 0xEEu      /* the same, but a program of ring 3 may raise it */
+
+/* The stack of IST1, for a double fault that finds the current stack broken. */
+#define IDT_IST_DOUBLE_FAULT 1u
 
 #define IRQ_BASE 0x20u /* the PIC is moved out of the way of the exceptions */
 #define IRQ_TIMER 0u
+#define IRQ_KEYBOARD 1u
 
 #define PIT_HZ 1000u
 #define PIT_CRYSTAL_HZ 1193182u
@@ -245,20 +292,21 @@ static struct idt_pointer g_idt_pointer;
  * every symbol of the assembly. */
 extern void (*const port_isr_exception_table[32])(void);
 extern void isr_irq0(void);
+extern void isr_irq1(void);
 extern void isr_syscall(void);
 extern void isr_unexpected(void);
 
 static volatile k_u64_t g_ticks;
 
-static void idt_set(k_u32_t vector, void (*handler)(void))
+static void idt_set(k_u32_t vector, void (*handler)(void), k_u8_t ist, k_u8_t type)
 {
     k_u64_t address = (k_u64_t)(uintptr_t)handler;
     struct idt_gate *gate = &g_idt[vector];
 
     gate->offset_low = (k_u16_t)(address & 0xFFFFu);
     gate->selector = IDT_CODE_SELECTOR;
-    gate->ist = 0;
-    gate->type = IDT_GATE_INTERRUPT;
+    gate->ist = ist;
+    gate->type = type;
     gate->offset_mid = (k_u16_t)((address >> 16) & 0xFFFFu);
     gate->offset_high = (k_u32_t)(address >> 32);
     gate->zero = 0;
@@ -269,9 +317,10 @@ static void idt_set(k_u32_t vector, void (*handler)(void))
  * four commands in a row (ICW1..ICW4), then the mask. The exceptions take
  * the vectors 0..31, so the lines of the hardware start at 0x20.
  *
- * Everything is masked but the timer. This port has no keyboard and no disk
- * yet; when it gets one, the line is unmasked here and a handler is put on
- * its vector, and the EOI stays where it is.
+ * The timer and the keyboard are open, the rest of the machine is not
+ * unmasked until the port has a driver that could answer: the mask of the
+ * master is 0xFC, two zeros at the bottom for the two lines that have a
+ * handler in the table.
  */
 static void pic_init(void)
 {
@@ -295,7 +344,7 @@ static void pic_init(void)
     port_outb(PIC2_DATA, 0x01);
     port_io_wait();
 
-    port_outb(PIC1_DATA, 0xFE); /* bit 0 clear: the line of the timer is open */
+    port_outb(PIC1_DATA, 0xFC); /* bits 0 and 1 clear: the timer, the keyboard */
     port_outb(PIC2_DATA, 0xFF); /* nothing of the slave is */
 }
 
@@ -442,8 +491,42 @@ static const char *exception_name(k_u64_t vector)
     return "unknown";
 }
 
-void port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip)
+int port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs)
 {
+    /*
+     * The first write into a page a fork made read-only is not a failure:
+     * the page is copied for this address space and the instruction that
+     * faulted is run again by the stub. The write may come from the program
+     * or from the kernel on its behalf (the status of waitpid, the buffer of
+     * a read), so both rings take this way.
+     */
+    if (vector == 14u && (error & 0x3u) == 0x3u) {
+        k_u64_t address;
+
+        __asm__ volatile("movq %%cr2, %0" : "=r"(address));
+
+        if (port_x86_64_paging_handle_cow(port_x86_64_current_cr3(), address)) {
+            return 1;
+        }
+    }
+
+    /*
+     * A fault of ring 3 is the failure of a program, not of the machine.
+     * The address that named the failure is CR2 for a page fault and the
+     * instruction itself for the other vectors; either way the program is
+     * taken down and the task that waited for it gets the status, so the
+     * shell and every task of the kernel stay alive.
+     */
+    if ((cs & 3u) != 0u) {
+        k_u64_t address = rip;
+
+        if (vector == 14u) {
+            __asm__ volatile("movq %%cr2, %0" : "=r"(address));
+        }
+
+        port_x86_64_program_fault(vector, address);
+    }
+
     com1_puts("\nx86-64: exception ");
     com1_put_dec(vector);
     com1_puts(" (");
@@ -452,9 +535,12 @@ void port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip)
     com1_put_hex64(error);
     com1_puts(", rip 0x");
     com1_put_hex64(rip);
+    com1_puts(", cs 0x");
+    com1_put_hex64(cs);
     com1_puts("\nx86-64: the machine stops here\n");
 
     k_port_halt();
+    return 0;
 }
 
 void port_x86_64_unexpected(void)
@@ -470,28 +556,39 @@ void port_x86_64_interrupts_init(void)
     /* Every entry starts as "nobody expects this interrupt", so that a
      * stray vector says so instead of jumping through a zero. */
     for (vector = 0; vector < IDT_VECTORS; vector++) {
-        idt_set(vector, isr_unexpected);
+        idt_set(vector, isr_unexpected, 0, IDT_GATE_INTERRUPT);
     }
 
     for (vector = 0; vector < 32u; vector++) {
-        idt_set(vector, port_isr_exception_table[vector]);
+        /* A double fault takes IST1: the stack it interrupted may be the one
+         * that broke, and a fault handler needs a stack of its own. */
+        k_u8_t ist = (vector == 8u) ? IDT_IST_DOUBLE_FAULT : 0u;
+
+        idt_set(vector, port_isr_exception_table[vector], ist, IDT_GATE_INTERRUPT);
     }
 
-    idt_set(IRQ_BASE + IRQ_TIMER, isr_irq0);
+    idt_set(IRQ_BASE + IRQ_TIMER, isr_irq0, 0, IDT_GATE_INTERRUPT);
+
+    /* The keyboard is the second line of the master, and the handler behind
+     * this stub reads the byte that raised it (src/ps2.c). */
+    idt_set(IRQ_BASE + IRQ_KEYBOARD, isr_irq1, 0, IDT_GATE_INTERRUPT);
 
     /*
      * The door of the programs of the port. Without this one line the
      * `int $0x80` of a program would land on isr_unexpected and stop the
      * machine: the vector is a part of what the port offers, not of the
      * kernel, and a port that cannot take a call says so by never setting
-     * this entry.
+     * this entry. The gate opens for ring 3: a program is a user now.
      */
-    idt_set(IDT_SYSCALL, isr_syscall);
+    idt_set(IDT_SYSCALL, isr_syscall, 0, IDT_GATE_USER);
 
     g_idt_pointer.limit = (k_u16_t)(sizeof(g_idt) - 1u);
     g_idt_pointer.base = (k_u64_t)(uintptr_t)g_idt;
     __asm__ volatile("lidt %0" : : "m"(g_idt_pointer));
 
+    /* The controller of the keyboard is armed before its line is opened: a
+     * key that arrives into a controller nobody prepared is a key lost. */
+    port_x86_64_ps2_init();
     pic_init();
     pit_init(PIT_HZ);
 
@@ -956,7 +1053,7 @@ const char *k_port_arch(void)
 }
 
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 3u
+#define PORT_API_MINOR 6u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_x86_64 does not speak the contract of this kernel");
@@ -1007,67 +1104,8 @@ int k_port_kv_next(k_size_t index, char *key, k_size_t size)
     return -2;
 }
 
-k_port_socket_t *k_port_net_connect(const char *host, k_u16_t port, k_u32_t timeout_ms)
-{
-    K_UNUSED(host);
-    K_UNUSED(port);
-    K_UNUSED(timeout_ms);
-    return NULL;
-}
-
-int k_port_net_send(k_port_socket_t *socket, const void *data, k_size_t size, bool wait)
-{
-    K_UNUSED(socket);
-    K_UNUSED(data);
-    K_UNUSED(size);
-    K_UNUSED(wait);
-    return -1;
-}
-
-int k_port_net_recv(k_port_socket_t *socket, void *data, k_size_t size)
-{
-    K_UNUSED(socket);
-    K_UNUSED(data);
-    K_UNUSED(size);
-    return -1;
-}
-
-void k_port_net_close(k_port_socket_t *socket)
-{
-    K_UNUSED(socket);
-}
-
-k_port_server_t *k_port_net_listen(k_u16_t port)
-{
-    K_UNUSED(port);
-    return NULL;
-}
-
-k_port_socket_t *k_port_net_accept(k_port_server_t *server, k_u32_t timeout_ms)
-{
-    K_UNUSED(server);
-    K_UNUSED(timeout_ms);
-    return NULL;
-}
-
-void k_port_net_server_close(k_port_server_t *server)
-{
-    K_UNUSED(server);
-}
-
-int k_port_net_udp_exchange(const char *host, k_u16_t port, const void *request,
-                            k_size_t request_size, void *answer, k_size_t answer_size,
-                            k_u32_t timeout_ms)
-{
-    K_UNUSED(host);
-    K_UNUSED(port);
-    K_UNUSED(request);
-    K_UNUSED(request_size);
-    K_UNUSED(answer);
-    K_UNUSED(answer_size);
-    K_UNUSED(timeout_ms);
-    return -1;
-}
+/* The network of the port is src/net.c and src/virtio_net.c: the contract is
+ * there, and a machine without a card answers "no" from it. */
 
 /* --- the strings the compiler may ask for (there is no libc here) --- */
 
@@ -1138,10 +1176,19 @@ void port_x86_64_init(k_u64_t multiboot_info)
 {
     const struct mb_info *info = (const struct mb_info *)(uintptr_t)multiboot_info;
 
+    /*
+     * The descriptors come first: the loader's table was only the way into
+     * long mode, and the TSS that gives ring 3 a stack on a call has to exist
+     * before a program can make one. The page tables follow the memory they
+     * describe; both are before the interrupts that use them.
+     */
+    port_x86_64_gdt_init();
     tls_init();
     com1_init();
+    port_x86_64_vga_init();
     clock_measure();
     heap_init(multiboot_info);
+    port_x86_64_paging_init();
 
     g_info.cpu_hz = g_tsc_per_second;
     g_info.usable_bytes = 0;
@@ -1169,6 +1216,12 @@ void port_x86_64_init(k_u64_t multiboot_info)
     /* The volume of the port is registered before the kernel looks for one:
      * the filesystem mounts a device by name and the name has to be there. */
     port_x86_64_blockdev_init();
+    port_x86_64_disk_init();
+
+    /* The network is the last device of the boot before the interrupts: it
+     * asks the PCI bus for a card, and a machine without one keeps the "no"
+     * answers of the contract. */
+    port_x86_64_net_init();
 
     /* Last, because it is the point of no return: from here the timer fires
      * every millisecond and the kernel has to be able to take it. */
