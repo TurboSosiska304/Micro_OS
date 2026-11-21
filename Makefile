@@ -23,7 +23,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan smoke integrity ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-run x86-run-serial x86-smoke x86-vga-smoke x86-run-disk x86-run-disk-serial x86-disk-smoke
+.PHONY: help all build test test-asan test-tsan smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-run x86-run-serial x86-smoke x86-vga-smoke x86-run-disk x86-run-disk-serial x86-disk-smoke
 
 help:
 	@echo "Micro OS — available targets:"
@@ -33,6 +33,7 @@ help:
 	@echo "  make test-tsan  the same tests under the race detector"
 	@echo "  make smoke      boot the simulator and check its answers"
 	@echo "  make integrity  the integrity check of the repository and the bundle"
+	@echo "  make wiki-check the links of the user wiki (docs/wiki)"
 	@echo "  make ci         build, test, test-asan, test-tsan, smoke, integrity"
 	@echo "                  (x86-smoke when qemu-system-x86_64 is installed)"
 	@echo "  make sim        build and run the host simulator"
@@ -84,6 +85,13 @@ smoke:
 # against sdkconfig.defaults, the git objects and the hygiene of the sources.
 integrity:
 	python3 tools/integrity_check.py --verbose
+	python3 tools/wiki_check.py
+
+# The links of the user wiki (docs/wiki, the pages are Markdown with relative
+# links). The integrity check calls it too; the target is for one page at a
+# time while the wiki is edited.
+wiki-check:
+	python3 tools/wiki_check.py
 
 # What a contributor runs before pushing: the workflows of the cloud
 # repeat this list on every push (and add valgrind and the firmware), so

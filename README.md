@@ -25,6 +25,8 @@ machine runs it, and the x86-64 port is the proof that this one does.
 
 The plan of the kernel is [docs/roadmap.md](docs/roadmap.md). The board has a
 plan of its own, with the port: [docs/ports/esp32/roadmap.md](docs/ports/esp32/roadmap.md).
+The user guide is the wiki in [docs/wiki](docs/wiki/README.md); the same pages
+build a site with `mkdocs build` and `mkdocs.yml`.
 The reports of the old numbered phases are in [docs/phases/](docs/phases/) -
 history, kept by name.
 
