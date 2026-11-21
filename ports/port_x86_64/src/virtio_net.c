@@ -379,7 +379,7 @@ static bool vio_queue_setup(struct virtqueue *queue, k_u16_t index)
     queue->used[0] = (k_u8_t)VIRTQ_USED_F_NO_NOTIFY;
     queue->used[1] = 0;
 
-    phys = (k_u64_t)(uintptr_t)queue->desc;
+    phys = port_x86_64_bus_phys(queue->desc);
 
     vio_barrier();
     vio_out32(VIRTIO_PCI_QUEUE_ADDRESS, (k_u32_t)(phys >> 12));
@@ -390,7 +390,7 @@ static bool vio_queue_setup(struct virtqueue *queue, k_u16_t index)
 static bool vio_rx_fill(void)
 {
     k_u16_t i;
-    k_u64_t base = (k_u64_t)(uintptr_t)g_rx_buffers;
+    k_u64_t base = port_x86_64_bus_phys(g_rx_buffers);
 
     for (i = 0; i < g_rx_queue.size; i++) {
         vq_descriptor(&g_rx_queue, i, base + (k_u64_t)i * VIRTIO_NET_RX_BUFFER,
@@ -518,7 +518,7 @@ static bool vio_start(void)
     }
 
     memset(g_rx_buffers, 0, (k_size_t)g_rx_queue.size * VIRTIO_NET_RX_BUFFER);
-    g_rx_buffers_phys = (k_u64_t)(uintptr_t)g_rx_buffers;
+    g_rx_buffers_phys = port_x86_64_bus_phys(g_rx_buffers);
 
     g_tx_buffer = (k_u8_t *)k_port_alloc(VIRTIO_NET_TX_BUFFER, false);
 
@@ -529,7 +529,7 @@ static bool vio_start(void)
     }
 
     memset(g_tx_buffer, 0, VIRTIO_NET_TX_BUFFER);
-    g_tx_buffer_phys = (k_u64_t)(uintptr_t)g_tx_buffer;
+    g_tx_buffer_phys = port_x86_64_bus_phys(g_tx_buffer);
 
     vq_descriptor(&g_tx_queue, 0, g_tx_buffer_phys, VIRTIO_NET_HDR_LEGACY, 0, 0);
 

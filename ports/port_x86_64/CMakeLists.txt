@@ -3,7 +3,8 @@
 # There is no libc, no POSIX and no operating system under the kernel. Two
 # images are built:
 #
-#   microos64.bin  the kernel itself, linked at 16 MiB, a flat binary;
+#   microos64.bin  the kernel itself, linked in the higher half (the top
+#                  2 GiB) and copied by the loader to 16 MiB, a flat binary;
 #   loader32.elf   the bootloader of the port, a multiboot image that QEMU
 #                  loads with -kernel, which copies the kernel and turns the
 #                  long mode on.
@@ -66,9 +67,12 @@ set(NET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/net")
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-# The kernel of the low memory: no red zone (an interrupt may use the stack
+# The kernel of the higher half: no red zone (an interrupt may use the stack
 # under us), no PIC, no SSE (there is no floating point state to save), and
-# the small memory model, which the identity map of the loader expects.
+# the kernel memory model, which names the top 2 GiB where the image is
+# linked and leaves the low identity map to the pointers the boot hands over
+# (ADR 0007). It is a flag of the C code alone: the assembly is written in
+# absolute 64-bit numbers and the programs of /bin stay in the low window.
 add_compile_options(
     -ffreestanding
     -fno-stack-protector
@@ -388,6 +392,12 @@ endif()
 if(MICRO_OS_FS_EXT2)
     target_compile_definitions(microos64 PRIVATE MICRO_OS_FS_EXT2=1)
 endif()
+
+# The top 2 GiB, the one region the small model of the compiler can name with
+# a sign-extended 32-bit immediate. The assembly does not need it (its
+# addresses are 64-bit numbers of their own) and a program has no use for it
+# (it lives at 32 MiB), so the flag is for the C of the kernel only.
+target_compile_options(microos64 PRIVATE $<$<COMPILE_LANGUAGE:C>:-mcmodel=kernel>)
 
 set_target_properties(microos64 PROPERTIES
     LINK_FLAGS "-nostdlib -static -Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/linker64.ld -Wl,--build-id=none"

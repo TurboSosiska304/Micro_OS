@@ -145,8 +145,14 @@ written when the project was an operating system for one board; the numbers
       shell and Ctrl+C of the foreground program (`/bin/signals` in
       `make x86-smoke`, ADR 0015). No job control: there are no groups and
       the shell says so.
-* [ ] The kernel in a higher half: the plan of the loader, the linker script
-      and `page_phys()` is written down in ADR 0007, not taken
+* [x] The kernel in a higher half: the image is linked at
+      `0xFFFFFFFF80000000` and the loader copies it to 16 MiB and maps the
+      same bytes at the top, with `-mcmodel=kernel` for the C, `page_phys()`
+      as `virtual - KERNEL_BASE + KERNEL_PHYS`, the GDT, the TSS, the IDT and
+      the stacks high, and a program's space naming the kernel's high half as
+      supervisor-only. The W^X audit walks both halves and `make x86-smoke`
+      checks the link address against the ELF (ADR 0007, "The higher half:
+      taken")
 * [ ] A port for a real ARM with an MMU: the same contract, a second `arch/`
 * [ ] `KERNEL_NOMMU` becomes 0 and the concessions become features
 

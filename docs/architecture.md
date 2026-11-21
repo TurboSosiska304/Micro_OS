@@ -109,8 +109,11 @@ alive. A program is a task of the scheduler with a CR3 of its own, and `fork()`
 clones its page tables and copies a page on the first write (ADR 0007). The
 pointers of a program are checked and copied at the edge of the call: the
 port says whether a range is memory of the caller, and an address that is not
-mapped is `EFAULT` instead of a page fault of ring 0. The kernel is not in a
-higher half yet; that is the next step, with a plan in ADR 0007.
+mapped is `EFAULT` instead of a page fault of ring 0. The kernel is in the
+higher half: the image is linked at `0xFFFFFFFF80000000`, the loader maps it
+there beside the low identity map, and the C of the kernel is built with
+`-mcmodel=kernel` (ADR 0007). The heap and the devices stay in the identity
+map, which is what lets a driver hand a buffer to a card.
 
 That is a property of the current port, not the shape of the kernel: everything
 the kernel concedes to a board without an MMU sits behind one compile time flag,
@@ -372,8 +375,9 @@ physical address contract.
   space", but without an MMU a switch means switching the stack pointer and the
   data segment base. The x86-64 port gives a program real page tables and a
   `fork()` that copies them with copy-on-write (ADR 0007); the kernel of that
-  port is still identity mapped and not in a higher half, and the plan to move
-  it is written down in the same ADR.
+  port is linked in the higher half and mapped at the top, and the low identity
+  map is kept for the heap, the arena and the devices (ADR 0007, "The higher
+  half: taken").
 
 ## 7. Drivers (phase 4)
 

@@ -2,13 +2,16 @@
  * Micro OS — the page tables of the x86-64 port.
  *
  * Two maps live here. The kernel's is the one the loader used to make: the
- * first gigabyte of the machine, identity mapped in 2 MiB pages and reachable
- * from ring 0 only. Every task with a program gets a set of its own whose
- * first gigabyte is a copy of that map, except for the window of the programs:
- * those 16 MiB are 4 KiB pages with the user bit, and the physical pages
- * behind them come from an arena outside the heap. That is what makes a
- * program a user of the machine and not a function of the kernel: the address
- * it computes is not the address the page lives at, and nothing of the kernel
+ * first gigabyte of the machine identity mapped in 2 MiB pages, and the image
+ * itself at the top of the address space (PORT_X86_64_KERNEL_BASE), where the
+ * code, the GDT, the TSS, the stacks and every static page table live. Both
+ * halves are ring 0 only. Every task with a program gets a set of its own
+ * whose first gigabyte is a copy of the low map and whose high half is the
+ * kernel's map itself, shared, except for the window of the programs: those
+ * 16 MiB are 4 KiB pages with the user bit, and the physical pages behind
+ * them come from an arena outside the heap. That is what makes a program a
+ * user of the machine and not a function of the kernel: the address it
+ * computes is not the address the page lives at, and nothing of the kernel
  * is under it.
  *
  * A set of tables is one address space and it belongs to a task (ADR 0007,
@@ -35,6 +38,14 @@
 #define PAGE_SIZE 4096u
 #define PAGE_SHIFT 12u
 #define TABLE_ENTRIES 512u
+
+/*
+ * The two entries of the low tables that name the top 2 GiB, where the
+ * kernel image is linked: PML4 entry 511 and, inside it, PDPT entry 510.
+ * PORT_X86_64_KERNEL_BASE is 0xFFFFFFFF80000000, the base of that gigabyte.
+ */
+#define PML4_HIGH_ENTRY 511u
+#define PDPT_HIGH_ENTRY 510u
 
 #define PTE_PRESENT 0x001u
 #define PTE_WRITABLE 0x002u
@@ -80,17 +91,25 @@
 #define PAGE_POOL_WORDS (PAGE_POOL_PAGES / 64u)
 
 static k_u64_t g_kernel_pml4[TABLE_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
-static k_u64_t g_kernel_pdpt[TABLE_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
-static k_u64_t g_kernel_pd[TABLE_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
+static k_u64_t g_kernel_pdpt_low[TABLE_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
+static k_u64_t g_kernel_pd_low[TABLE_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
+static k_u64_t g_kernel_pdpt_high[TABLE_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
+static k_u64_t g_kernel_pd_high[TABLE_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
 
 /*
  * The pages of the kernel image are not uniform: the text is executable and
  * read-only, the rodata is read-only and NX, and everything after it - data,
  * bss, the stacks and the tables - is writable and NX. A 2 MiB page cannot
- * carry three protections, so the chunks of the identity map that the image
- * sits in are split into 4 KiB pages with a table of their own. The pool is
- * in the image and sized for a kernel of 16 MiB, which is far more than the
- * image of the port and still bounded.
+ * carry three protections, so the chunks of the map that the image sits in
+ * are split into 4 KiB pages with a table of their own. The pool is in the
+ * image and sized for a kernel of 16 MiB, which is far more than the image of
+ * the port and still bounded.
+ *
+ * One table serves both names of a chunk: an entry holds the physical
+ * address, so the low identity map and the map at the top differ only in the
+ * index of the PD entry that names the table. The text is therefore read-only
+ * and the data NX through either address, which is what keeps W^X true for
+ * the kernel itself.
  */
 #define KERNEL_IMAGE_TABLES 8u
 static k_u64_t g_kernel_image_pt[KERNEL_IMAGE_TABLES][TABLE_ENTRIES]
@@ -112,11 +131,34 @@ static k_u64_t g_page_bitmap[PAGE_POOL_WORDS];
  */
 static k_u16_t g_frame_ref[USER_FRAME_COUNT];
 
+/*
+ * The address a page-table entry has to carry for a page of the image. The
+ * kernel is linked in the higher half and the loader puts the bytes at
+ * KERNEL_PHYS, so a pointer of the image is not a physical address any more
+ * (ADR 0007). A pointer of the heap still is, because the heap is the low
+ * identity map.
+ */
 static k_u64_t page_phys(const void *page)
 {
-    /* The identity map makes the virtual and the physical address the same
-     * number for everything the kernel owns, page tables included. */
-    return (k_u64_t)(uintptr_t)page;
+    return port_x86_64_kernel_phys(page);
+}
+
+/*
+ * The pool page behind either of the two names of it. A page that comes back
+ * from a walk of the tables is a physical address, because that is what an
+ * entry holds; the pool hands its pages out by their high address. The free
+ * list has one entry per page, so the two names have to meet here.
+ */
+static k_u8_t *pool_page(k_u8_t *page)
+{
+    k_u64_t physical = (k_u64_t)(uintptr_t)page;
+    k_u64_t pool_phys = page_phys(g_page_pool);
+
+    if (physical < pool_phys || physical >= pool_phys + sizeof(g_page_pool)) {
+        return page;
+    }
+
+    return g_page_pool + (physical - pool_phys);
 }
 
 static void *page_pool_alloc(void)
@@ -153,7 +195,7 @@ static void *page_pool_alloc(void)
 
 static void page_pool_free(void *page)
 {
-    k_u8_t *base = (k_u8_t *)page;
+    k_u8_t *base = pool_page((k_u8_t *)page);
     k_size_t index;
     k_u32_t word;
     k_u32_t bit;
@@ -235,6 +277,14 @@ void port_x86_64_frame_release(k_u64_t address)
 
 /* --- the tables of one address space -------------------------------------- */
 
+/*
+ * A table of a walk as the processor names it: the entry holds a physical
+ * address, and the port reads the table through the low identity map, which
+ * is a name of every frame of the image. The tables of the address spaces
+ * and the kernel's own are all in the image; a caller that keeps the high
+ * name of a page (page_pool_alloc) and one that keeps the low one (this
+ * function) reach the same bytes.
+ */
 static k_u64_t *table_entry(k_u64_t entry)
 {
     return (k_u64_t *)(uintptr_t)(entry & PTE_ADDRESS);
@@ -302,31 +352,45 @@ static k_u64_t kernel_page_flags(k_u64_t address)
 }
 
 /*
- * Give the chunks of the identity map that carry the kernel image a table of
- * 4 KiB pages each, so that the text and the data of the same 2 MiB can have
+ * Give the chunks of the map that carry the kernel image a table of 4 KiB
+ * pages each, so that the text and the data of the same 2 MiB can have
  * different protections. The rest of the first gigabyte keeps its 2 MiB
  * pages, writable and NX: the VGA, the boot information, the heap and the
  * arena of the programs are data and nothing jumps into them.
+ *
+ * The image has two names: the physical address the loader copied the bytes
+ * to, in the low identity map, and the link address at the top, where the
+ * code runs. Both PD entries name the same table, so the protection of a
+ * page is the same whichever one the walk came through.
  */
 static void kernel_image_map(void)
 {
-    k_u64_t image_start = (k_u64_t)(uintptr_t)__text_start & ~(k_u64_t)(LARGE_PAGE_SIZE - 1u);
-    k_u64_t image_end = ((k_u64_t)(uintptr_t)__kernel_end + LARGE_PAGE_SIZE - 1u) &
-                        ~(k_u64_t)(LARGE_PAGE_SIZE - 1u);
+    k_u64_t image_phys = page_phys(__text_start);
+    k_u64_t image_virt = (k_u64_t)(uintptr_t)__text_start;
+    k_u64_t image_start = image_phys & ~(k_u64_t)(LARGE_PAGE_SIZE - 1u);
+    k_u64_t image_end =
+        (page_phys(__kernel_end) + LARGE_PAGE_SIZE - 1u) & ~(k_u64_t)(LARGE_PAGE_SIZE - 1u);
     k_u64_t chunk;
     k_u32_t table = 0;
 
     for (chunk = image_start; chunk < image_end && table < KERNEL_IMAGE_TABLES;
          chunk += LARGE_PAGE_SIZE) {
+        k_u64_t virtual_chunk = chunk - image_phys + image_virt;
+        k_u32_t low_index = (k_u32_t)((chunk >> 21) & (TABLE_ENTRIES - 1u));
+        k_u32_t high_index = (k_u32_t)((virtual_chunk >> 21) & (TABLE_ENTRIES - 1u));
         k_u32_t index;
 
         for (index = 0; index < TABLE_ENTRIES; index++) {
-            k_u64_t address = chunk + ((k_u64_t)index << PAGE_SHIFT);
+            k_u64_t physical = chunk + ((k_u64_t)index << PAGE_SHIFT);
 
-            g_kernel_image_pt[table][index] = (address & PTE_ADDRESS) | kernel_page_flags(address);
+            g_kernel_image_pt[table][index] =
+                (physical & PTE_ADDRESS) |
+                kernel_page_flags(virtual_chunk + ((k_u64_t)index) * PAGE_SIZE);
         }
 
-        g_kernel_pd[(chunk >> 21) & (TABLE_ENTRIES - 1u)] =
+        g_kernel_pd_low[low_index] =
+            page_phys(g_kernel_image_pt[table]) | PTE_PRESENT | PTE_WRITABLE;
+        g_kernel_pd_high[high_index] =
             page_phys(g_kernel_image_pt[table]) | PTE_PRESENT | PTE_WRITABLE;
         table++;
     }
@@ -349,21 +413,34 @@ void port_x86_64_paging_init(void)
     k_u64_t cr0;
 
     /*
-     * The identity map of the first gigabyte. The kernel image, the heap and
-     * the physical arena of the programs are all inside it; a 2 MiB page has
-     * no user bit, so ring 3 sees none of them even while its own CR3 is the
-     * one in the register. Every one is NX until kernel_image_map() gives the
-     * text its own table: data is never code on this machine.
+     * The identity map of the first gigabyte. The heap and the physical arena
+     * of the programs are inside it, and the image of the kernel is reached
+     * there as well until kernel_image_map() gives its chunks a table; a
+     * 2 MiB page has no user bit, so ring 3 sees none of them even while its
+     * own CR3 is the one in the register. Every one is NX until the text gets
+     * its own table: data is never code on this machine.
+     *
+     * The map at the top starts empty and kernel_image_map() fills the chunks
+     * of the image: the rest of the top 2 GiB is not memory of the kernel.
      */
     for (index = 0; index < TABLE_ENTRIES; index++) {
-        g_kernel_pd[index] =
+        g_kernel_pd_low[index] =
             ((k_u64_t)index << 21) | PTE_PRESENT | PTE_WRITABLE | PTE_PAGE_SIZE | PTE_NX;
+        g_kernel_pd_high[index] = 0;
     }
 
     kernel_image_map();
 
-    g_kernel_pdpt[0] = page_phys(g_kernel_pd) | PTE_PRESENT | PTE_WRITABLE;
-    g_kernel_pml4[0] = page_phys(g_kernel_pdpt) | PTE_PRESENT | PTE_WRITABLE;
+    g_kernel_pdpt_low[0] = page_phys(g_kernel_pd_low) | PTE_PRESENT | PTE_WRITABLE;
+    g_kernel_pdpt_high[PDPT_HIGH_ENTRY] = page_phys(g_kernel_pd_high) | PTE_PRESENT | PTE_WRITABLE;
+
+    /*
+     * Two PML4 entries, two PDPTs: the low half is a map the port makes for
+     * this address space (a program gets a copy of the PD), and the high half
+     * is the image, shared by every space and supervisor-only.
+     */
+    g_kernel_pml4[0] = page_phys(g_kernel_pdpt_low) | PTE_PRESENT | PTE_WRITABLE;
+    g_kernel_pml4[PML4_HIGH_ENTRY] = page_phys(g_kernel_pdpt_high) | PTE_PRESENT | PTE_WRITABLE;
 
     write_cr3(page_phys(g_kernel_pml4));
 
@@ -419,11 +496,11 @@ k_u64_t port_x86_64_paging_space_create(void)
     }
 
     /*
-     * The kernel map is copied, not shared: the program's PD replaces the
-     * entries of the window and the kernel's table must keep the 2 MiB pages
-     * it was built with.
+     * The low half of the kernel map is copied, not shared: the program's PD
+     * replaces the entries of the window and the kernel's table must keep the
+     * 2 MiB pages it was built with.
      */
-    memcpy(pd, g_kernel_pd, sizeof(g_kernel_pd));
+    memcpy(pd, g_kernel_pd_low, sizeof(g_kernel_pd_low));
 
     /*
      * The first 2 MiB stay reachable for the kernel - the console writes the
@@ -455,6 +532,16 @@ k_u64_t port_x86_64_paging_space_create(void)
      */
     pdpt[0] = page_phys(pd) | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
     pml4[0] = page_phys(pdpt) | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
+
+    /*
+     * The high half of the map is the kernel's own, shared and not copied: a
+     * program runs on this CR3 only while it is inside a call, and the code
+     * it returns to, the GDT, the TSS, the stacks and the tables of the port
+     * are all up there. Without the shared entry the first call of a program
+     * would jump to an address that its space does not map. It carries no
+     * user bit at any level, so ring 3 still cannot read a byte of it.
+     */
+    pml4[PML4_HIGH_ENTRY] = page_phys(g_kernel_pdpt_high) | PTE_PRESENT | PTE_WRITABLE;
 
     return page_phys(pml4);
 
@@ -809,51 +896,80 @@ int port_x86_64_paging_handle_cow(k_u64_t cr3, k_u64_t vaddr)
  * the protection the port promises is the protection the tables carry: the
  * kernel calls it on its own map at the boot, and port_exec.c on the map of a
  * program before the first instruction. Zero is the answer of a W^X map.
+ *
+ * Every PML4 entry is walked, not only the low one: since the kernel moved to
+ * the higher half a map has two halves, and the high half is where the text
+ * of the kernel lives. The chunks of the image share one table between the
+ * two halves by design, so a leaf may be counted twice; a count that is zero
+ * either way is the property, and a non-zero one is a bug.
  */
 k_u32_t port_x86_64_paging_audit(k_u64_t cr3)
 {
-    k_u64_t *pml4 = (k_u64_t *)(uintptr_t)cr3;
-    k_u64_t *pdpt;
-    k_u64_t *pd;
+    const k_u64_t *pml4 = (const k_u64_t *)(uintptr_t)cr3;
     k_u32_t count = 0;
-    k_u32_t index;
+    k_u32_t pm;
+    k_u32_t pdpt_index;
+    k_u32_t pd_index;
+    k_u32_t pt_index;
 
-    if (pml4 == NULL || (pml4[0] & PTE_PRESENT) == 0) {
+    if (pml4 == NULL) {
         return 0;
     }
 
-    pdpt = table_entry(pml4[0]);
-    if ((pdpt[0] & PTE_PRESENT) == 0) {
-        return 0;
-    }
+    for (pm = 0; pm < TABLE_ENTRIES; pm++) {
+        const k_u64_t *pdpt;
 
-    pd = table_entry(pdpt[0]);
-
-    for (index = 0; index < TABLE_ENTRIES; index++) {
-        k_u64_t entry = pd[index];
-
-        if ((entry & PTE_PRESENT) == 0) {
+        if ((pml4[pm] & PTE_PRESENT) == 0) {
             continue;
         }
 
-        if ((entry & PTE_PAGE_SIZE) != 0) {
-            if ((entry & PTE_WRITABLE) != 0 && (entry & PTE_NX) == 0) {
-                count++;
+        pdpt = table_entry(pml4[pm]);
+
+        for (pdpt_index = 0; pdpt_index < TABLE_ENTRIES; pdpt_index++) {
+            const k_u64_t *pd;
+
+            if ((pdpt[pdpt_index] & PTE_PRESENT) == 0) {
+                continue;
             }
 
-            continue;
-        }
-
-        {
-            k_u64_t *pt = table_entry(entry);
-            k_u32_t page;
-
-            for (page = 0; page < TABLE_ENTRIES; page++) {
-                k_u64_t leaf = pt[page];
-
-                if ((leaf & PTE_PRESENT) != 0 && (leaf & PTE_WRITABLE) != 0 &&
-                    (leaf & PTE_NX) == 0) {
+            if ((pdpt[pdpt_index] & PTE_PAGE_SIZE) != 0) {
+                /* A 1 GiB page of a PDPT: the port builds none, and one that
+                 * is here is a table the audit has to judge anyway. */
+                if ((pdpt[pdpt_index] & PTE_WRITABLE) != 0 && (pdpt[pdpt_index] & PTE_NX) == 0) {
                     count++;
+                }
+
+                continue;
+            }
+
+            pd = table_entry(pdpt[pdpt_index]);
+
+            for (pd_index = 0; pd_index < TABLE_ENTRIES; pd_index++) {
+                k_u64_t entry = pd[pd_index];
+
+                if ((entry & PTE_PRESENT) == 0) {
+                    continue;
+                }
+
+                if ((entry & PTE_PAGE_SIZE) != 0) {
+                    if ((entry & PTE_WRITABLE) != 0 && (entry & PTE_NX) == 0) {
+                        count++;
+                    }
+
+                    continue;
+                }
+
+                {
+                    const k_u64_t *pt = table_entry(entry);
+
+                    for (pt_index = 0; pt_index < TABLE_ENTRIES; pt_index++) {
+                        k_u64_t leaf = pt[pt_index];
+
+                        if ((leaf & PTE_PRESENT) != 0 && (leaf & PTE_WRITABLE) != 0 &&
+                            (leaf & PTE_NX) == 0) {
+                            count++;
+                        }
+                    }
                 }
             }
         }

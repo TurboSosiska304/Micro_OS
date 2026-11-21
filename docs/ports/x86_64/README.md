@@ -8,7 +8,7 @@ the machine where a program can really be loaded and run (the window of
 | | |
 |---|---|
 | port | `ports/port_x86_64` |
-| loader | `loader32.S`: a multiboot image that QEMU loads with `-kernel`; it copies the kernel to 16 MiB, builds the identity map of the first gigabyte and turns the long mode on |
+| loader | `loader32.S`: a multiboot image that QEMU loads with `-kernel`; it copies the kernel to 16 MiB, maps the same bytes at `0xFFFFFFFF80000000` (the top 2 GiB, where the image is linked), builds the identity map of the first gigabyte and turns the long mode on |
 | console | the text screen of the VGA (80x25, `0xB8000`, light grey on black) and COM1, 115200, `\r\n`, out of one `k_port_write()` |
 | input | the PS/2 keyboard on IRQ1 (scancode set 1, Shift and Caps Lock) or COM1 |
 | clock | the PIT at 1 kHz; critical sections save and restore the flags |
@@ -16,7 +16,7 @@ the machine where a program can really be loaded and run (the window of
 | store | `ata0`: a raw image on the primary IDE channel, PIO, MicroFS on its first partition, mounted at `/` (ADR 0008); `ram0`, 512 KB of the memory of the machine, when there is no disk |
 | network | `virtio0`: virtio-net-pci in its legacy I/O interface, polled; ARP, IPv4, ICMP, UDP, a client of TCP (one segment in flight, a timeout retransmission) and a listener with SYN/ACK and `accept`; the resolver of QEMU user-net with a cache of eight names and their time to live; 10.0.2.15/24 on QEMU user-net, gateway 10.0.2.2, resolver 10.0.2.3, no DHCP |
 | programs | `k_port_exec_supported()` is true; the window is 16 MiB at 32 MiB (`0x02000000`-`0x03000000`) over a physical arena at 64 MiB; a program is a file in `/bin` (the MOX1 format of `kernel/exec.h`), runs in ring 3 with page tables of its own and calls the kernel with `int $0x80` (ADR 0007) |
-| protection | NX and W^X: `EFER.NXE` from the loader, the text read-only and executable, every data page - rodata, data, bss, stacks, heap, arena, screen - writable and NX; no page is both (ADR 0007, sections 9 and 10) |
+| protection | NX and W^X: `EFER.NXE` from the loader, the text read-only and executable, every data page - rodata, data, bss, stacks, heap, arena, screen - writable and NX; no page is both (ADR 0007, sections 9 and 10). The kernel is in the higher half: the image is linked at `0xFFFFFFFF80000000` and mapped there beside the low identity map |
 | build | `make x86-build` (needs `cmake`, `ninja`, `xorriso` is not needed) and `make x86-disk` for the volume with `/bin` |
 | check | `make x86-smoke` (serial), `make x86-vga-smoke` (screen and keyboard), `make x86-disk-smoke` (two boots on a disk), `make x86-net-smoke` (the network) - all need `qemu-system-x86` |
 
@@ -76,9 +76,13 @@ picture of the window, which is how a person watches the keys arrive.
 
 The machine boots from three files: `build-x86/loader32.elf` (the loader),
 `build-x86/microos64.bin` (the kernel, a flat image) and
-`build-x86/programs.img` (the disk). The heap of the kernel stops below the
-window of the programs; the kernel is linked at 16 MiB and the programs are
-placed at 32 MiB. The sixteen programs of `/bin` are built first:
+`build-x86/programs.img` (the disk). The kernel is linked in the higher half
+at `0xFFFFFFFF80000000`, the loader copies the bytes to 16 MiB and maps them
+there, and the C of the kernel is built with `-mcmodel=kernel` (ADR 0007).
+The heap is the low identity map and stops below the window of the programs,
+which are placed at 32 MiB; the image of 1.0 ends 1.9 MiB after the base and
+the port allows it up to 16 MiB. The sixteen programs of `/bin` are built
+first:
 `build-x86/hello.mox`, `crash.mox`, `fork.mox`, `badptr.mox`, `signals.mox`,
 `cat.mox`, `echo.mox`, `ls.mox`, `wc.mox`, `head.mox`, `grep.mox`,
 `mkdir.mox`, `rm.mox`, `pwd.mox` and `spawn.mox` are the images of
@@ -100,6 +104,15 @@ identity map while the program reaches them through its own. `src/gdt.c`
 builds the GDT the loader never had (user code and data, a 64-bit TSS with
 `RSP0` and the double-fault stack), and `src/interrupts.S` takes the stack of
 the TSS on a call from ring 3.
+
+The kernel has two names too. The image is linked at the top and the loader
+also leaves its bytes in the low identity map, which is why `page_phys()`
+subtracts the base for a page-table entry and `table_entry()` can walk a table
+by the physical address an entry holds. `kernel_image_map()` gives the image
+chunks one table of 4 KiB pages and names it from both PD entries, so the text
+is read-only and the data NX whichever name the processor came through; the
+space of a program inherits the high half as it is, supervisor-only, because
+the kernel runs on that CR3 during a call.
 
 ## The window: the VGA text and the keyboard
 
@@ -421,10 +434,13 @@ PCI line needs the I/O APIC that K8 brings.
   the call with 0, the parent with the pid, and `waitpid` sees the status.
   `/bin/fork` is the program of the smoke test and prints the 42 of the
   parent next to the 99 of the child;
-* the kernel is not in a higher half: it is the identity map of the first
-  gigabyte, so the window of the programs is a hole in the kernel's map. The
-  ladder of the change (linker, loader, `page_phys()`, boot and stacks, the
-  smoke gate) is in ADR 0007 and is not taken yet;
+* the kernel is in the higher half: the image is linked at
+  `0xFFFFFFFF80000000`, the loader copies it to 16 MiB and maps it there, and
+  the C of the kernel is built with `-mcmodel=kernel`. The low identity map of
+  the first gigabyte stays for the heap, the arena and the devices, so the
+  window of the programs is part of a space whose kernel is out of the reach
+  of ring 3 at the top. ADR 0007, "The higher half: taken", has the addresses
+  and what the change still does not do;
 * there is no SMAP and no SMEP: the edge checks the page tables of the program
   and then reads the same pages in ring 0. Both features are a decision of
   ADR 0007 section 10 and not a part of 1.0: QEMU's default `qemu64` does not

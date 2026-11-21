@@ -3,9 +3,9 @@
 
 The kernel of the host build is a process, and its smoke test runs it. This
 one boots the kernel on a real (emulated) processor: QEMU loads the loader
-of the port, the loader turns the long mode on and copies the kernel, and
-the kernel prints its banner on the serial port. There is no operating
-system under it and no libc.
+of the port, the loader turns the long mode on, copies the kernel to 16 MiB
+and maps it at `0xFFFFFFFF80000000`, and the kernel prints its banner on the
+serial port. There is no operating system under it and no libc.
 
 Then the shell has to answer: the commands are typed into the machine once
 the console is up, and their answers are read back from the same transcript.
@@ -25,6 +25,11 @@ produced for it (ADR 0006). The transcript is the proof: a kernel that only
 printed a banner could not have a number of a task in the middle of it.
 
     tools/x86_smoke.py [--image PATH] [--timeout SECONDS] [--verbose]
+
+The run also reads the ELF of the kernel and checks that the image is linked
+in the higher half (ADR 0007): a linker script that fell back to the physical
+address boots the same and would pass every line of the transcript, so the
+symbols `_start64` and `__kernel_end` are checked against the base.
 
 The exit status is 0 when the kernel came up, the program ran out of a file
 and the shell answered, and 1 otherwise.
@@ -175,6 +180,65 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, "build-x86")
 DEFAULT_IMAGE = os.path.join(BUILD, "programs.img")
 RUN_IMAGE = os.path.join(BUILD, "programs-smoke.img")
+
+# The base of the higher half (ADR 0007): the kernel is linked there and the
+# loader copies the bytes to 16 MiB. The two are the same boot when the
+# linker script falls back to the physical address - the kernel would run in
+# the low identity map and every line of this transcript would still appear -
+# so the link address is read out of the ELF and not out of the console.
+KERNEL_BASE = 0xFFFFFFFF80000000
+KERNEL_ELF = os.path.join(BUILD, "microos64")
+
+
+def linker_checks(elf_path: str) -> list:
+    """The checks that the kernel is linked where the port says it is.
+
+    A symbol of the image is the only thing that tells the link address from
+    the address the loader copied the bytes to; nm and readelf are the tools
+    of the same binutils as the ld and objcopy of the build.
+    """
+    checks = []
+
+    def expect(name: str, condition: bool, detail: str = "") -> None:
+        checks.append((name, bool(condition), detail))
+
+    try:
+        header = subprocess.run(
+            ["readelf", "-h", elf_path], capture_output=True, text=True, check=True
+        ).stdout
+        symbols = subprocess.run(
+            ["nm", "-n", elf_path], capture_output=True, text=True, check=True
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as error:
+        expect("the ELF of the kernel is readable", False, str(error))
+        return checks
+
+    def symbol(name: str):
+        for line in symbols.splitlines():
+            parts = line.split()
+            if len(parts) == 3 and parts[2] == name:
+                return int(parts[0], 16)
+        return None
+
+    entry = re.search(r"Entry point address:\s*(0x[0-9a-fA-F]+)", header)
+    entry = int(entry.group(1), 16) if entry else None
+    start = symbol("_start64")
+    end = symbol("__kernel_end")
+
+    # The entry point of the ELF and the first symbol of the image are the
+    # same address by the linker script; both have to be the high base.
+    expect(
+        "the kernel is linked in the higher half",
+        entry == KERNEL_BASE and start == KERNEL_BASE,
+        f"entry {entry!r}, _start64 {start!r}, expected {KERNEL_BASE:#x}",
+    )
+    expect(
+        "the image stays in the top 2 GiB",
+        end is not None and KERNEL_BASE < end < KERNEL_BASE + 0x80000000,
+        f"__kernel_end {end!r}",
+    )
+
+    return checks
 
 
 def run_machine(loader: str, kernel: str, image: str, timeout: float) -> str:
@@ -853,7 +917,7 @@ def main(argv: list) -> int:
     if args.verbose:
         print(output)
 
-    checks = check(output)
+    checks = linker_checks(KERNEL_ELF) + check(output)
     failed = [item for item in checks if not item[1]]
 
     print("Micro OS — the smoke test of the x86-64 port")

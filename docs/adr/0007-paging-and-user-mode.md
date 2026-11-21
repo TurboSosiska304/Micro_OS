@@ -35,17 +35,22 @@ The layout is fixed and small enough to be read in one table:
 | `0x00000000`-`0x40000000` | identity map of the machine, 2 MiB pages | 0 |
 | `0x02000000`-`0x03000000` | the window of the programs, 4 KiB pages | 3 |
 | `0x04000000`-`0x05000000` | the physical arena behind the window | 0 |
+| `0xFFFFFFFF80000000`-`0xFFFFFFFF80200000` | the kernel image, 4 KiB pages in a 2 MiB chunk | 0 |
 
 The kernel map is the one the loader made: the first gigabyte in 2 MiB
-pages, supervisor-only, rebuilt by `src/paging.c` so that the port owns it
-and not the loader. A program gets a copy of that page directory with two
-differences: the entries of the window point at PTE tables (user, read and
-write), and the first 2 MiB are split into 4 KiB pages with page zero not
-present at all; the rest of the low memory stays mapped supervisor-only,
-because a system call of the program still writes the text screen at
-`0xB8000` (and the disk and the keyboard are ports, not memory). The upper
-entries of the program's map carry the user bit as well: the processor checks
-it at every level of the walk, not only at the leaf.
+pages, and the image itself at the top of the address space in the 2 MiB
+chunks the linker script allows (one chunk of the eight at the image of 1.0),
+both supervisor-only, rebuilt by `src/paging.c` so that the port owns it and
+not the loader. A program gets a copy of the low half with two differences: the entries of the window point at
+PTE tables (user, read and write), and the first 2 MiB are split into 4 KiB
+pages with page zero not present at all; the rest of the low memory stays
+mapped supervisor-only, because a system call of the program still writes the
+text screen at `0xB8000` (and the disk and the keyboard are ports, not
+memory). The high half is not copied: every space names the kernel's own
+tables with a PML4 entry that has no user bit, because the kernel runs on the
+program's CR3 during a call. The upper entries of the program's low half
+carry the user bit as well: the processor checks it at every level of the
+walk, not only at the leaf.
 
 The window is not identity mapped. Virtual `0x02000000` is physical
 `0x04000000`, well above the heap (which stops at 32 MiB) and outside the
@@ -337,11 +342,12 @@ debt of the port.
 
 ## What is not done
 
-* The kernel is not in a higher half. It keeps the identity map of the first
-  gigabyte, so the window of the programs is a hole in the kernel's map and
-  not the other way round. The plan is in the next section; it is a change of
-  the loader, the linker script and `paging.c`, and it is deliberately not
-  mixed with the edge of this pass.
+* The higher half is the image, not all of the kernel. The heap, the arena,
+  the VGA and the information of the boot are still the low identity map, and
+  a block of `k_port_alloc()` is its own bus address, which is what lets a
+  driver hand a buffer to a device (`port_x86_64_bus_phys()` in
+  `src/virtio_net.c`). A kernel whose heap moved high would need a translation
+  in every driver.
 * No SMAP and no SMEP: the decision and the reasons are in section 10. NX is
   on, so the data of a program is never code and its code is never memory.
 * The four path calls of K4 copy nothing: they validate the range and hand
@@ -349,10 +355,12 @@ debt of the port.
   so the check is enough there; the copy is the shape the other calls use and
   the one a policy with SMAP would need everywhere.
 
-## The higher half: a plan, not taken
+## The higher half: taken
 
-Moving the kernel to `0xFFFF800000000000` is a change of the port, not of
-`components/kernel`, and it has a fixed shape:
+The plan below was written before the pass and is kept as it was; the section
+after it is what the port does now. Moving the kernel to the top of the
+address space is a change of the port, not of `components/kernel`, and it had
+a fixed shape:
 
 1. **The linker.** `linker64.ld` sets `KERNEL_BASE = 0xFFFFFFFF80000000` (the
    top 2 GiB, where the small model of the kernel fits) and keeps
@@ -381,11 +389,48 @@ Moving the kernel to `0xFFFF800000000000` is a change of the port, not of
    separate check reads a symbol from the ELF to prove the link address is
    the high one, so a linker script that quietly falls back is noticed.
 
-The risk is concentrated in the loader and in `page_phys()`: one wrong entry
-or one missed conversion and the machine triple-faults before the console, so
-the work is a branch of its own with the smoke test at every step, not a
-change of a pass that also touches the edge of the ABI.
+### What the port does now
 
+The entry is `0xFFFFFFFF80000000`, the image is copied to `0x01000000`, and
+the C of `microos64` is built with `-mcmodel=kernel` (the assembly has its own
+64-bit numbers, and a program of the window has no use for the flag). The
+image of 1.0 ends at `0xFFFFFFFF801F5000`, so it fits one 2 MiB chunk of the
+eight the port allows; `kernel_image_map()` splits that chunk into 4 KiB pages
+and names the same table from the low PD entry (index 8) and the high one
+(index 0), which gives the text and the data the same protection through both
+addresses. `port_x86_64_paging_audit()` walks every PML4 entry, so the W^X
+check covers the half where the kernel really runs.
+
+`loader32.S` makes two PDPTs: the low one for the identity map of the first
+gigabyte, the high one with entry 510 for `0xFFFFFFFF80000000`. A program's
+space names the kernel's high PDPT in `PML4[511]` with no user bit; without it
+the first `int $0x80` of a program would return into an address that its space
+does not map. `kmain` receives the multiboot pointer as the physical address
+the loader wrote into RDI, and the heap keeps starting at the physical end of
+the image (`__kernel_end - KERNEL_BASE + KERNEL_PHYS`) because it is the low
+identity map - the rule `port_x86_64_bus_phys()` states for a driver.
+
+`make x86-smoke` passes with the same 129 checks of before plus two that read
+the ELF: `_start64` and the entry point of the file are
+`0xFFFFFFFF80000000`, and `__kernel_end` is inside the top 2 GiB. A linker
+script that fell back to the physical address would fail both and still boot,
+which is the failure the checks exist for.
+
+The risk stayed where the plan said: the loader and `page_phys()`. The heap
+was the one caller of a link address that had to become a physical number
+(`__kernel_end`), and a boot that forgot it would put the heap at a negative
+address; the boot prints the heap, so the conversion is in the first lines of
+the transcript. The five steps were applied in order with `make x86-smoke`
+after each.
+
+What the higher half does not do yet:
+
+* The kernel's map is the image and the low identity map, not the whole of the
+  kernel's memory. The heap stays low, where a pointer is a bus address, and
+  the rest of the top 2 GiB is unmapped.
+* The image can grow to 16 MiB (eight 2 MiB chunks) before the boot stops with
+  a line on COM1; a larger kernel needs a bigger allowance in `paging.c` and
+  in the loader.
 * No PCID and no SMP: every entry flushes the TLB and the map assumes one
   processor.
 * `KERNEL_NOMMU` is still 1 for the whole tree. Turning it off is a change of
@@ -414,14 +459,20 @@ change of a pass that also touches the edge of the ABI.
 * No page is writable and executable at once: the text of the kernel and of a
   program is read-only code, every data page, stack and the arena is NX, and
   the boot reads the tables back and says so (section 9).
+* The kernel is in the higher half: the image is linked at
+  `0xFFFFFFFF80000000`, the loader maps the same 2 MiB chunks there, and a
+  program's space inherits that map as supervisor-only. The window of a
+  program is no longer a hole in a low map of the kernel: the kernel is at
+  the top and the program cannot name a byte of it.
 
 **Bad**
 
 * The address space, the kernel stack and the frame of a task belong to the
   port; the generic kernel still has `KERNEL_NOMMU` and the board keeps the
   placeholder for `fork()`.
-* The kernel's own map is still the low identity map; the road to a higher
-  half is planned and documented, not taken.
+* The higher half is the image: the heap, the arena and the devices are still
+  the low identity map, and the image may grow to 16 MiB before the boot
+  refuses a larger one (see "The higher half: taken").
 * The pointers of a program are checked and copied at the edge (contract
   1.7), but without SMAP: the check and the copy are the same page tables,
   and SMAP/SMEP are a decision of their own for a machine that has them

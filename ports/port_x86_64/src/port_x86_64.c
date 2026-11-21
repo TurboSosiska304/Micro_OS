@@ -696,7 +696,14 @@ static void heap_init(k_u64_t multiboot_info)
     const struct mb_info *info = (const struct mb_info *)(uintptr_t)multiboot_info;
     k_u64_t best_base = 0;
     k_u64_t best_size = 0;
-    k_u64_t kernel_end = (k_u64_t)(uintptr_t)__kernel_end;
+    /*
+     * The map of the boot describes physical memory, and the heap is the low
+     * identity map: a block handed out by k_port_alloc() is an address the
+     * card drivers may hand to a device as it stands (src/virtio_net.c). The
+     * kernel image is linked at the top, so its end has to come back to the
+     * physical number before it can bound a region of the map.
+     */
+    k_u64_t kernel_end = port_x86_64_kernel_phys(__kernel_end);
     k_u64_t cursor;
     k_u64_t limit;
 

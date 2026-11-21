@@ -390,7 +390,9 @@ A program is a task of the scheduler with page tables of its own:
   below it; the null page is not mapped, so a write to address zero is a fault
   and not a silent success;
 * the kernel is supervisor-only and out of the reach of ring 3; the program
-  runs with `cpl 3` and calls the kernel only through the gate;
+  runs with `cpl 3` and calls the kernel only through the gate. The kernel
+  image itself is in the higher half (`0xFFFFFFFF80000000`), and a program's
+  space names that map as it is, without the user bit;
 * `fork()` copies the page tables, points both copies at the same frames
   read-only, and the first write of either side faults, copies the 4 KiB page
   and takes the write bit back. The child returns 0, the parent returns the
@@ -427,7 +429,8 @@ plan to pretend otherwise.
   the kernel; a program that wants its own passes one to `execve`.
 * **No protection by SMAP yet.** The edge checks the page tables of the caller
   and then reads the same pages in ring 0; the hardware half of the rule waits
-  for the higher half and the flags of the processor.
+  for the flags of the processor (SMEP) and the `STAC`/`CLAC` window of the
+  copy (SMAP). The higher half is there.
 
 The open rows are in [`docs/debts.md`](../debts.md); the plan is
 [`docs/roadmap.md`](../roadmap.md), K4 and K5.
