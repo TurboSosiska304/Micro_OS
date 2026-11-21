@@ -111,6 +111,9 @@ K5.
 | Debt | Where | Status | What it needs |
 |---|---|---|---|
 | No fuzz of the syscall ABI and of the parsers of the filesystem: MOX1 and the edge of `exec` have a deterministic seed (`tests/cases/test_fuzz.c`), the records of MicroFS have none. | `tests/`, `components/kernel/src/ksys.c`, `components/mfs` | open | A deterministic harness for the records of the filesystem, seeded from a formatted volume and the corpus. |
+| `g_last_error` in the VFS is a write-only global written by every call of every task. The host stress of the campaign (`make soak-host`) runs several tasks over the VFS at once and TSan reports the race 91 times in a minute; nothing reads the variable, so no answer is wrong today, but the write is undefined behaviour under the C memory model and a future reader would read another task's error. | `components/kernel/src/vfs.c` | open | Remove the variable (the callers already get the code as the answer), or keep the error in the task and read it through the thread pointer. The host session of the campaign stays a blocker until one of the two is done. |
+| The network half of `make soak` skips NTP unless the process can bind UDP 123: the client of the kernel asks `10.0.2.2:123`, which is the loopback of the host, and an ordinary user has no privilege for the port. | `tools/soak.py`, `components/net/src/net.c` | open | A runner with `CAP_NET_BIND_SERVICE` (or a network namespace) for the campaign, or a port option in the client of the test. The report says `skip`, so a session without it is not a silent pass. |
+| The FAT half of `make disk-stress` needs `mkfs.vfat` (dosfstools) and `mcopy` (mtools) on the machine that runs the campaign; without them the half is skipped with a line, and `--require-fat` turns it into a failure for a runner that must have them. | `tools/disk_stress.py`, `Makefile` (`disk-stress`) | decision | None for the tool: a file image of FAT is not written by this tree (the tests build their own bytes), and a second formatter in Python would be a second definition of the format. The runner of the release installs the two packages. |
 | The coverage gate is line coverage of `components/kernel` only: branches and functions are not counted, and the components outside the kernel (kshell, mfs, net, the ports) are not in the threshold. `panic.c` and `power.c` are at 0% because the tests do not take the machine down or sleep it, and `kmod.c` is at 55.6%; the last is the next place to test. | `tools/coverage_report.py`, `Makefile`, `components/kernel/src/panic.c`, `src/power.c`, `src/kmod.c` | open | A branch view next to the lines, the components in a report of their own, and a test of the module loader that reaches its refusals. |
 | TSan reported a race between the write of `task_signal_notify_parent` and the read of `task_signal_check` on the flag of a task in the pipe tests. Three runs after it passed without a report, so the window is small; the kernel is out of this pass. | `components/kernel/src/task.c:718`, `tests/cases/test_kshell_pipe.c` | open | A lock (or an atomic) around the flag of the signal, and a loop of the pipe case under TSan that makes the window certain. |
 | The reproducible gate builds `programs.img` twice on one machine. The firmware is checked in the cloud (a second `idf.py -B build-repro build` and a `cmp` of the three images, and two bundles with a `diff`), but no local target does it: that needs ESP-IDF and a second clean build. | `Makefile` (`reproducible`), `tools/bundle.sh`, `.github/workflows/ci.yml` | open | A `make reproducible-firmware` that finds ESP-IDF the way `make idf-build` does, builds twice and compares the three `.bin`. |
@@ -142,6 +145,13 @@ K5.
 | `printf` of a float agrees with the host only to the precision asked for; the last digit can differ. | `docs/libc.md` | open | A `dtoa` with the exact rounding, or a documented precision. |
 
 ## Decisions, not debts
+
+* **The campaign of 1.0 is a release duty, not a push check.** `make soak`,
+  `make soak-host`, `make fuzz-long`, `make disk-stress` and
+  `tools/board_soak.sh` are not part of `make ci`: they take ten minutes of
+  QEMU or a board, and they are run for a release candidate. The tools and
+  their criteria are in [`docs/wiki/testing.md`](wiki/testing.md), "The
+  campaign of 1.0".
 
 * **The board never runs a program.** Its flash is not executable for a file,
   and internal SRAM is the memory of the kernel and the drivers; `execve`

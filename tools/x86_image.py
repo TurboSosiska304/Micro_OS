@@ -71,8 +71,15 @@ def build_image(
     size_mb: int = IMAGE_MB,
     epoch: int = SOURCE_DATE_EPOCH,
     verbose: bool = False,
+    extra: list | None = None,
 ) -> int:
-    """Write the image with the programs of the build and /etc/setting."""
+    """Write the image with the programs of the build and /etc/setting.
+
+    `extra` is a list of the arguments of the tool that a caller needs on top
+    of the tree of the machine: `--file PATH=HOST`, `--text PATH=TEXT` and
+    `--dir PATH`. The stress tools use it to put a filler on the volume and
+    reach `ENOSPC` in a boot; the image of a person stays the default tree.
+    """
     if not os.path.isfile(mkfs):
         print(f"missing {mkfs}: run make build", file=sys.stderr)
         return 2
@@ -103,6 +110,7 @@ def build_image(
         command += ["--program", f"/bin/{name}={path}"]
 
     command += ["--text", f"/etc/setting={SETTING}"]
+    command += extra or []
 
     os.makedirs(os.path.dirname(os.path.abspath(image)), exist_ok=True)
 
@@ -137,11 +145,47 @@ def main(argv: list) -> int:
         metavar="N",
         help="the moment of the records (default: $SOURCE_DATE_EPOCH or 0)",
     )
+    parser.add_argument(
+        "--file",
+        action="append",
+        default=[],
+        metavar="PATH=HOST",
+        help="write a file of the host into the volume (mode 0644)",
+    )
+    parser.add_argument(
+        "--text",
+        action="append",
+        default=[],
+        metavar="PATH=TEXT",
+        help="write TEXT and a newline into the volume",
+    )
+    parser.add_argument(
+        "--dir",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="make a directory of the volume",
+    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
 
-    return build_image(args.image, args.build, args.mkfs, args.size_mb, args.source_date_epoch,
-                       args.verbose)
+    extra: list = []
+    for pair in args.file:
+        extra += ["--file", pair]
+    for pair in args.text:
+        extra += ["--text", pair]
+    for path in args.dir:
+        extra += ["--dir", path]
+
+    return build_image(
+        args.image,
+        args.build,
+        args.mkfs,
+        args.size_mb,
+        args.source_date_epoch,
+        args.verbose,
+        extra,
+    )
 
 
 if __name__ == "__main__":

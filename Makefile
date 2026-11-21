@@ -32,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-run x86-run-serial x86-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke coverage reproducible
+.PHONY: help all build test test-asan test-tsan test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-run x86-run-serial x86-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak
 
 help:
 	@echo "Micro OS — available targets:"
@@ -66,6 +66,13 @@ help:
 	@echo "  make x86-run-disk-serial  the same disk in a terminal (-nographic)"
 	@echo "  make x86-disk-smoke two boots on one disk image, a file survives both"
 	@echo "  make x86-net-smoke   the network: ping, UDP and HTTP on QEMU user-net"
+	@echo "  make soak       the session of 600 seconds on x86-64 (one boot)"
+	@echo "  make soak SOAK_MINUTES=1  the same, short, to check the tool"
+	@echo "  make soak SOAK_ITERATIONS=5  five short boots, one pass each"
+	@echo "  make soak-host  the same ten minutes on the host, under TSan"
+	@echo "  make fuzz-long  the fuzzers with a multiplier and a seed"
+	@echo "  make disk-stress  a full volume, fsck -y and two boots (MicroFS, FAT)"
+	@echo "  make board-soak the same session on the board (needs the board)"
 	@echo "  make bundle     collect the firmware into dist/ for distribution"
 
 all: build
@@ -322,6 +329,80 @@ x86-net-run: x86-net-build
 
 x86-net-smoke: x86-net-build
 	X86_BUILD=$(X86_NET_BUILD) python3 tools/x86_net_smoke.py
+
+# The campaign of 1.0 (docs/wiki/testing.md). The session is one boot of the
+# x86-64 machine, ten minutes long by default, under the mixed load of
+# tools/soak.py. It is not a part of `make ci`: it takes ten minutes and it
+# is run for a release candidate, not for a push.
+SOAK_BUILD   ?= $(X86_NET_BUILD)
+SOAK_IMAGE   ?= $(SOAK_BUILD)/soak.img
+SOAK_MINUTES ?= 10
+SOAK_ITERATIONS ?=
+SOAK_ARGS    ?=
+
+# The image of the session has no free block (tools/soak_image.py): the
+# ENOSPC of a full volume is part of the load. The tool keeps the image
+# while it is newer than the kernel.
+soak-image: x86-net-build build
+	python3 tools/soak_image.py --build $(SOAK_BUILD) --image $(SOAK_IMAGE) \
+		--mkfs $(X86_MKFS) --if-needed
+
+soak: soak-image
+	python3 tools/soak.py --build $(SOAK_BUILD) --image $(SOAK_IMAGE) \
+		--mkfs $(X86_MKFS) \
+		$(if $(SOAK_ITERATIONS),--iterations $(SOAK_ITERATIONS),--minutes $(SOAK_MINUTES)) \
+		$(SOAK_ARGS)
+
+# The other half of the same ten minutes: the portable kernel over the host
+# port, several tasks at once, under TSan. A warning of TSan, a deadlock, a
+# leaked block or a definite leak of valgrind fails it.
+HOST_SOAK_MINUTES ?= 10
+HOST_SOAK_ARGS    ?=
+
+soak-host:
+	cmake -B $(BUILD_DIR) -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug
+	cmake --build $(BUILD_DIR) --target microos_stress
+	cmake -B build-tsan -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug -DMICRO_OS_SANITIZE_THREAD=ON
+	cmake --build build-tsan --target microos_stress
+	python3 tools/soak_host.py \
+		--plain $(BUILD_DIR)/tools/microos_stress \
+		--tsan build-tsan/tools/microos_stress \
+		--minutes $(HOST_SOAK_MINUTES) $(HOST_SOAK_ARGS)
+
+# The fuzz of the campaign: the same suite as `make test`, in the sanitizer
+# build, with the iterations of tests/cases/test_fuzz.c multiplied and a
+# seed of its own (KTEST_FUZZ_ITERATIONS and KTEST_FUZZ_SEED). The binary
+# covers the ABI edge, MOX1, MicroFS, FAT, ext2 and the network with the
+# same run, because the suite runs every case.
+FUZZ_ITERATIONS ?= 20
+FUZZ_SEED       ?= 0
+
+fuzz-long:
+	cmake -B $(ASAN_DIR) -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug -DMICRO_OS_SANITIZE=ON
+	cmake --build $(ASAN_DIR) --target microos_tests
+	KTEST_FUZZ_ITERATIONS=$(FUZZ_ITERATIONS) KTEST_FUZZ_SEED=$(FUZZ_SEED) \
+		./$(ASAN_DIR)/tests/microos_tests
+
+# The disk stress of the campaign: MicroFS and FAT, a volume filled to
+# ENOSPC, fsck -y and two boots of the same image. The FAT half needs
+# dosfstools and mtools; when they are absent it is reported as skipped.
+DISK_STRESS_FS ?= both
+
+x86-fat-build:
+	cmake -B build-x86-fat -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
+		-DMICRO_OS_FS_FAT32=ON
+	cmake --build build-x86-fat --target image
+
+disk-stress: x86-disk x86-fat-build build
+	python3 tools/disk_stress.py --fs $(DISK_STRESS_FS)
+
+# The board half of the session: build, flash and ten minutes with one
+# boot. It is a target of the campaign and not of `make ci` (no runner has
+# the board).
+BOARD_SOAK_MINUTES ?= 10
+
+board-soak:
+	tools/board_soak.sh --minutes $(BOARD_SOAK_MINUTES)
 
 bundle: idf-check
 	. $(IDF_EXPORT) && idf.py -D IDF_TARGET=$(IDF_TARGET) build && \

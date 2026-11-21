@@ -21,6 +21,11 @@ and the chips on it. None of them replaces another.
 | `make x86-vga-smoke` | the VGA screen and the PS/2 keyboard, no display | `qemu-system-x86_64` |
 | `make x86-disk-smoke` | a file written by one boot is read by the next | `qemu-system-x86_64` |
 | `make x86-net-smoke` | the network: ping, UDP, HTTP, `httpd` and DNS | `qemu-system-x86_64` |
+| `make soak` | one boot of x86-64 for 600 s under the mixed load | QEMU, the host build |
+| `make soak-host` | the portable kernel on the host under TSan for 600 s | GCC, TSan, valgrind |
+| `make fuzz-long` | the fuzz of the ABI and the parsers, with a multiplier | GCC, ASan |
+| `make disk-stress` | a full volume, `fsck -y` and two boots (MicroFS, FAT) | QEMU, dosfstools, mtools |
+| `make board-soak` | the same session on the board, one boot | ESP-IDF and a board |
 | `make integrity` | the boundary, the bundle, the partitions, the hygiene | `clang-format` |
 | `make ci` | the list a contributor runs before a push | the above, QEMU optional |
 | `tools/device-test.sh` | build, flash and boot the board | ESP-IDF and a board |
@@ -243,7 +248,193 @@ run on the host, and the board is checked by the device test and by the smoke
 tests of its port.
 
 The fuzz of the ABI and of `MOX1` has a deterministic seed
-(`tests/cases/test_fuzz.c`); the records of MicroFS have none yet, which is an
-open row of the register.
+(`tests/cases/test_fuzz.c`); the numbers of the campaign are in the next
+section, and the records of MicroFS are fuzzed there too.
+
+## The campaign of 1.0
+
+The gate of the release is written in
+[`docs/releases/1.0.md`](../releases/1.0.md): **one session runs 600 seconds
+under a mixed load without a bug, and the session is one boot.** A loop of
+twenty-five short boots is a useful smoke test of the tools, but it is not
+the gate: a leak, a lost wakeup or a slow corruption needs the same machine
+to stay up.
+
+The campaign is the four tools below, on the three machines:
+
+| | unit | soak | fuzz | stress |
+|---|---|---|---|---|
+| **host** | `make test`, `make test-asan`, `make test-tsan` | `make soak-host` (TSan, 600 s) | `make fuzz-long` | valgrind, inside `soak-host` |
+| **x86-64** | `make test` (the same sources) | `make soak` (one boot, 600 s) | `make fuzz-long` | `make disk-stress` |
+| **board** | `tools/device-test.sh` | `tools/board_soak.sh` (600 s) | — | `fsck` in the board session |
+
+`make ci` does **not** include the campaign: ten minutes of QEMU and a board
+do not belong to a push. The campaign runs on a release candidate and its
+report is attached to the candidate.
+
+### One boot, 600 seconds: `make soak`
+
+```bash
+make soak                      # 600 s, one boot of the x86-64 machine
+make soak SOAK_MINUTES=1       # the smoke test of the tool itself
+```
+
+The target builds `build-x86-net` (the port with the network and its disk)
+and a full volume (`tools/soak_image.py`), then `tools/soak.py` boots the
+machine once and types a cycle of commands until the clock says stop:
+
+* the shell: `uname`, `uptime`, `free`, `df`, `ulimit`, `ps`, `mount`,
+  `tree`, `fsck`, `kill` of a pid nobody has, `sleep`;
+* every program of `/bin` through `exec`: `hello`, `cat`, `echo`, `ls`,
+  `wc`, `grep`, `head`, `mkdir`, `rm`, `pwd`, `spawn`, `fork`, `signals`,
+  `nx`, `badptr`, `crash`;
+* pipelines and redirections: `ls /bin | wc -l`, `cat < f | wc -l`,
+  `echo x > f`, `echo y >> f`, and a read of the file back;
+* the filesystem: a directory, a program's `rm -r`, files written, appended
+  and removed; once per boot the volume starts with **no free block**, one
+  write is refused with `ENOSPC`, the filler leaves, `fsck -y` repairs and
+  the volume is used again;
+* signals: `exec /bin/signals` and Ctrl+C typed into the console while the
+  program runs;
+* the network: `ping 10.0.2.2`, the HTTP client against a page of the
+  process, the `httpd` page reached through `hostfwd`, and DNS when this
+  host can resolve a name.
+
+The direct form has the same options: `tools/soak.py --minutes 1`,
+`--seconds`, `--seed`, `--keep-logs`, `--no-net`, `--hang-seconds`.
+`--iterations N` is the other mode: N short boots, one cycle each, with the
+average boot reported. It is for the days before the higher half; the gate
+is the single 600-second session.
+
+A session fails on any of:
+
+* a `Panic`, a `Guru Meditation`, a `triple fault`, `Rebooting`, a failed
+  assertion or `*** ERROR` in the console;
+* QEMU going away before the clock ends (a reset is the end of the boot);
+* the console silent for `--hang-seconds` (30 by default), or a command that
+  does not answer inside `--timeout`;
+* a command of the load whose answer lacks the word it must have;
+* a heap that lost more than `--mem-drift-kb` (16 KB by default), a shell
+  that holds memory at rest, a changed descriptor limit, or a task table
+  that grew;
+* a difference between the `free`/`ulimit`/`ps`/`df` samples before and
+  after the load. The numbers are printed in the report.
+
+NTP is skipped with a line of the report when the process cannot bind UDP
+123: the kernel asks `10.0.2.2:123`, which QEMU maps to the loopback of the
+host, and a laptop has no privilege for the port. That is a skip and not a
+pass; a runner with `CAP_NET_BIND_SERVICE` (or a network namespace) runs it.
+
+The transcript of a failed session is written to `build-x86-net/soak-logs/`
+(and `--keep-logs` writes the one of a pass); the report prints the path.
+
+### The host half: `make soak-host`
+
+```bash
+make soak-host                   # TSan for 600 s and one valgrind run
+make soak-host HOST_SOAK_MINUTES=1
+```
+
+`tools/host_stress.c` is the load: four tasks of the host port at once,
+each allocating and freeing blocks of `kmm`, making pipes, creating,
+rewriting and removing files, and forking a child that exits
+(`task_fork_shared`). The version built in `build-tsan` is the one that
+matters: the host port stands in for the critical section with a mutex and
+cannot show preemption, so TSan is the only reader of a race here.
+
+The tool fails on a `WARNING: ThreadSanitizer` (and prints the location it
+names), on a stress that stops printing (a deadlock), on a run that ends
+before its time, on a block the allocator still holds, on a task left in
+the table, or on a definite leak of valgrind. One run of 5 seconds under
+valgrind is a part of the target; `--skip-valgrind` is for a machine without
+it.
+
+The first campaign of this tree named a race that the shorter tests never
+saw: `g_last_error` in `components/kernel/src/vfs.c` is written by every
+VFS call from the tasks' threads and is read by nobody. It is an open debt
+in [`docs/debts.md`](../debts.md); until it is closed, `make soak-host`
+fails, which is the correct answer of the tool.
+
+### The fuzz: `make fuzz-long`
+
+```bash
+make fuzz-long                                # 20x the iterations, seed 0
+make fuzz-long FUZZ_ITERATIONS=200 FUZZ_SEED=7
+```
+
+The suite is the ordinary one in the sanitizer build; the campaign only
+moves two numbers of `tests/cases/test_fuzz.c` through the environment:
+`KTEST_FUZZ_ITERATIONS` multiplies the loops and `KTEST_FUZZ_SEED` changes
+the seed of the MOX1 and MicroFS streams. The binary still runs every case,
+so the ABI edge (`test_ksys`), FAT, ext2 and the network are exercised in
+the same run. A long run is repeatable: the same seed and the same
+multiplier give the same sequence on every machine.
+
+### The disk: `make disk-stress`
+
+`tools/disk_stress.py` boots the image twice. The first boot finds a full
+volume (`ENOSPC`), removes the filler, repairs with `fsck -y`, writes,
+appends, makes and removes a directory, and leaves a file for the second
+boot. The second boot checks the volume, reads the file, and runs and
+removes again. The verdict is that the volume is either whole or made whole
+by the repair: `fsck` says `the volume is consistent`, or `0 problem(s)
+after the repair`, and never a problem after it.
+
+MicroFS is checked on `build-x86`; FAT is checked in a second partition of
+an image of `build-x86-fat` (the port with `MICRO_OS_FS_FAT32=ON`), filled
+with `mcopy` and repaired with `fsck fat -y`. Those two halves need
+`mkfs.vfat` and `mcopy`; when they are not installed the FAT half is
+reported as skipped, and `--require-fat` turns that skip into a failure for
+a runner that must have them.
+
+### The board: `tools/board_soak.sh`
+
+```bash
+tools/board_soak.sh                         # build, flash, 600 s
+tools/board_soak.sh --minutes 1             # the tool itself
+tools/board_soak.sh --no-build --no-flash   # the firmware already there
+```
+
+The script does what `tools/device-test.sh` does (finds ESP-IDF, builds,
+flashes) and then `tools/board_soak_session.py` resets the board once and
+spends one boot with it: `exec /bin/hello` with arguments, `cat` of a file
+written by the shell, files appended and removed, `mkdir`/`rm -r`, the
+foreign image's `exec format error`, `fsck`, `telnet on/off`, `wifi status`,
+`display rotate`, `mfetch`, `modules`, `sleep`, `abi`, `ps` and `ulimit`.
+A panic, a `Guru Meditation`, a backtrace, a reboot, a silence or a
+descriptor/memory/volume/task drift beyond the small allowance fails it.
+The report prints the heap, the free blocks, the descriptors and the tasks
+before and after, and the drift the run allows.
+
+### Reading a result and the levels of a bug
+
+A pass is the last line `RESULT: PASS 600s` (the x86 and host sessions),
+`RESULT: PASS (N short iteration(s))` for `--iterations`, or
+`RESULT: PASS 600s` from the board. The report above it is the evidence:
+duration, boot, cycles, commands, memory/descriptors/tasks before and
+after, and the first failures with the line of the answer. Attach it to the
+candidate with the `uname` of the build, the command, the seed, the logs of
+`build-*/soak-logs/`, and the lines `network ... ntp ... dns ...` that say
+which halves actually ran.
+
+The campaign classifies what it finds:
+
+* **L1 — a crash, a loss of data or a security hole.** A panic, a reboot, a
+  triple fault, a corrupted volume that `fsck -y` cannot repair, a file
+  that disappears, a task that faults where the kernel should have answered
+  `EFAULT`. Always a blocker.
+* **L2 — a feature is broken.** A command of the load that must pass and
+  does not, a `fsck` that leaves a problem, a fork or a signal with a wrong
+  answer, a leak that grows with the load. Always a blocker.
+* **L3 — an edge or a rare race.** A TSan warning, a window that needs a
+  seed and many iterations, an `ENOSPC` path that leaves a surprise. A
+  blocker for 1.0 unless it is recorded as a debt with its next step and
+  its workaround; the `g_last_error` above is such a case.
+* **L4 — cosmetic.** A line of output, a message of the log, a spelling.
+  It changes no result and may stay at the release.
+
+The four levels are the same on every machine. A failure of a tool that has
+not been run (a skipped network or a missing `mcopy`) is not a pass: the
+report says `skip`, and the release notes say which halves were skipped.
 
 [Back to the wiki index](README.md)
