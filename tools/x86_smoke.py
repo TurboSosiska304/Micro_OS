@@ -44,6 +44,7 @@ import time
 # is a program that is still in /bin afterwards.
 COMMANDS = [
     "help",
+    "kill 9999",
     "uname",
     "uptime",
     "ls /bin",
@@ -53,6 +54,66 @@ COMMANDS = [
     "chown 0 /bin/hello",
     "exec /bin/hello",
     "exec /bin/hello one two",
+    # The programs of the library (ADR 0016): a file through open/read/
+    # write and the formatter, a line of arguments, and a directory through
+    # readdir. The file they read is made here, because the disk of the test
+    # is fresh at every boot.
+    "mkdir /etc",
+    "write /etc/setting hello",
+    # The shell lists the names of a directory, and the tree is a command of
+    # its own: `ls` has no branches, `tree` has them and counts what it drew.
+    "ls /",
+    "tree /",
+    "exec /bin/cat /etc/setting",
+    "exec /bin/cat /no/such/file",
+    "exec /bin/echo one two",
+    "exec /bin/ls /bin",
+    # The utilities of a line (ADR 0016): a count, the first lines and a
+    # search, each over the file the shell made above. The bytes of the file
+    # are "hello\n", so wc answers one line and six bytes - a number that
+    # comes out of the file and not out of the program's own text.
+    "exec /bin/wc /etc/setting",
+    "exec /bin/wc -l /etc/setting",
+    "exec /bin/wc -c /etc/setting",
+    "exec /bin/head -n 1 /etc/setting",
+    "exec /bin/grep hello /etc/setting",
+    "exec /bin/grep -i HELLO /etc/setting",
+    # The same commands with no file: they read descriptor 0, which the shell
+    # does not pass to a program yet, so the call answers EBADF (9). The line
+    # is the proof that the input is descriptor 0 and not a usage sentence.
+    "exec /bin/cat",
+    "exec /bin/wc -l -",
+    # The tree through the calls: a directory made, a directory refused by
+    # rm without -r, the tree taken down with the flag, and a listing of a
+    # directory that is no longer there.
+    "mkdir /tmp",
+    "exec /bin/mkdir /tmp/d",
+    "exec /bin/ls /tmp",
+    "exec /bin/rm /tmp/d",
+    "exec /bin/rm -r /tmp",
+    "exec /bin/ls /tmp",
+    "exec /bin/pwd",
+    # A program that starts another program with an environment of its own:
+    # the third argument of execve copied from the memory of a program, not
+    # the four words of the kernel that every call without one gets.
+    "exec /bin/spawn",
+    # The pipes and the redirects of K7 (ADR 0017). The shell is one
+    # interpreter on every machine, so these lines are the same that the
+    # host tests run; here the last stage is a program of ring 3 as well,
+    # and it reads the descriptor the stage built for it.
+    "mkdir /tmp",
+    "echo hi > /tmp/f",
+    "cat /tmp/f",
+    "cat < /tmp/f",
+    "echo one | cat",
+    "echo one | /bin/cat",
+    "cat /etc/setting | wc -l",
+    "ls /bin | wc -l",
+    # A line that cannot run is a sentence, and the shell answers the next
+    # command: a `cd` has no meaning in a stage, and a file that is not
+    # there is the failure of that stage only.
+    "cd / | cat",
+    "cat /no/such/file | /bin/cat",
     "fsck",
     # The program of K4: it forks, the child writes the shared page and ends
     # with 7, the parent waits and still reads its own 42 (copy on write).
@@ -60,6 +121,9 @@ COMMANDS = [
     # The same again, after the page tables and the frames of the first run
     # have been released: a leak of a space would show here as a refusal.
     "exec /bin/fork",
+    # The signals of K7: a handler of the program, a child ended by SIGTERM,
+    # a wait cut short by SIGINT and the errors of kill.
+    "exec /bin/signals",
     # The edge of the system call: the program hands write, stat and read
     # addresses that are not its memory, and every call has to answer EFAULT
     # (14) while the machine stays alive.
@@ -79,7 +143,7 @@ PROMPT = "microos> "
 # console of COM1, the contract of the port and the boot of the kernel.
 EXPECTED = [
     "board: qemu_x86_64",
-    "port: x86_64, contract 1.6",
+    "port: x86_64, contract 1.7",
     "[ ok ] sched",
     "subsystem(s) ready",
     "the kernel is up",
@@ -194,6 +258,13 @@ def check(output: str) -> list:
     expect("the program runs in ring 3", "PROGRAM: cpl 3" in output)
     # No arguments at the boot: the port is entered without a vector.
     expect("the program starts without arguments", "PROGRAM: argc 0" in output)
+    # The environment the kernel fills in when the call carries none: the
+    # entry ABI has argc, argv and envp in RDI, RSI and RDX (ADR 0016), and a
+    # program that prints the vector proves the third register crossed too.
+    expect(
+        "the program starts with the environment of the system",
+        re.search(r"PROGRAM: envp \d+, PATH=/bin", output) is not None,
+    )
     expect(
         "the program asks the kernel for its pid and the time",
         re.search(r"PROGRAM: pid \d+, up \d+ ms", output) is not None,
@@ -239,6 +310,12 @@ def check(output: str) -> list:
     )
 
     expect("help lists the commands", "list the available commands" in answer("help"))
+    # The shell command of the signal: a pid no task has is a sentence, and
+    # the shell of the machine is alive after it.
+    expect(
+        "kill of a pid that is not there is reported",
+        "kill: 9999: no such process" in answer("kill 9999"),
+    )
     # The version is whatever the build says: the shape is checked, so a
     # release does not break the smoke test.
     expect(
@@ -253,6 +330,12 @@ def check(output: str) -> list:
     # the boot, so a listing is the proof that the bytes are on a filesystem and
     # not a line the kernel printed about itself.
     expect("the program is a file in /bin", "hello" in answer("ls /bin"))
+    # The utilities of the library are files of /bin like the first four: the
+    # listing of the shell is the proof the boot wrote every image.
+    expect(
+        "the utilities are files in /bin",
+        all(name in answer("ls /bin") for name in ("wc", "head", "grep", "mkdir", "rm", "pwd")),
+    )
     # The same file, asked for with a command of the shell: the library, the
     # syscall, the mode of the record and the jump are the ones of a user and
     # not the ones of the boot.
@@ -277,10 +360,152 @@ def check(output: str) -> list:
         "the program has finished" in answer("exec /bin/hello", 1),
     )
     # The arguments of a line of the shell reach the program: the name of the
-    # program first, then the words of the line.
+    # program first, then the words of the line; and the environment the
+    # shell did not pass is the one of the system.
     expect(
         "the arguments of the shell reach the program",
         "PROGRAM: argc 3, argv[0] /bin/hello" in answer("exec /bin/hello one two"),
+    )
+    expect(
+        "the program of the shell sees the environment",
+        re.search(r"PROGRAM: envp \d+, PATH=/bin", answer("exec /bin/hello one two")) is not None,
+    )
+
+    # --- the programs of the library (ADR 0016)
+    # cat opens a file the shell wrote, reads it and writes the bytes to the
+    # console: the call of the file, of the buffer and of the console in one
+    # image that was linked against components/libc/user and not against
+    # programs/prog.h.
+    cat = answer("exec /bin/cat /etc/setting")
+    expect("cat reads a file through the library", "hello" in cat)
+    expect("cat is a program of the shell", "the program has finished" in cat)
+    # The error path is the formatter of the library (%s and %d) and the
+    # status of a program that did not succeed: 1, the code of the shell
+    # command, and not the 255 of a fault.
+    cat = answer("exec /bin/cat /no/such/file")
+    expect("cat reports a file the formatter prints", "cat: /no/such/file: error 2" in cat)
+    expect("a program returns the status the library gives it", "the program exited with 1" in cat)
+    # echo is the vector of the arguments and the formatter of the library.
+    echo = answer("exec /bin/echo one two")
+    expect("echo writes its arguments", "one two" in echo)
+    expect("echo is a program of the shell", "the program has finished" in echo)
+    # ls is a directory through readdir, which is a descriptor with a
+    # position of its own: the names of /bin come back in one line.
+    listing = answer("exec /bin/ls /bin")
+    expect(
+        "ls reads a directory through the library",
+        "hello" in listing and "cat" in listing and "echo" in listing and "ls" in listing,
+    )
+    expect("ls is a program of the shell", "the program has finished" in listing)
+
+    # The shell's own `ls` is a list of names and not a tree; `tree` is the
+    # command that draws the levels below a path. `/etc` was made above, so
+    # the two answers are of a volume the boot and the shell both wrote.
+    root_listing = answer("ls /")
+    expect("ls / lists the names", "bin/" in root_listing and "etc/" in root_listing)
+    expect("ls is not a tree", "`--" not in root_listing and "|--" not in root_listing)
+    tree_listing = answer("tree /")
+    expect("tree / draws the branches", "|-- " in tree_listing and "`-- " in tree_listing)
+    expect(
+        "tree / counts the directories and the files",
+        re.search(r"\d+ director(?:y|ies), \d+ files?", tree_listing) is not None,
+    )
+
+    # --- the utilities of the library: wc, head, grep, mkdir, rm, pwd
+    # The file the shell wrote is "hello\n": one line and six bytes. The
+    # numbers are of the file, and a program that read its own arguments
+    # could not produce them.
+    wc = answer("exec /bin/wc /etc/setting")
+    expect("wc counts the lines and the bytes", "1 6 /etc/setting" in wc)
+    expect("wc counts what it read", "the program has finished" in wc)
+    wc = answer("exec /bin/wc -l /etc/setting")
+    expect("wc -l is a count of the newlines", "1 /etc/setting" in wc)
+    wc = answer("exec /bin/wc -c /etc/setting")
+    expect("wc -c is a count of the bytes", "6 /etc/setting" in wc)
+    # head copies the first line of the file and stops: the file has one, so
+    # the block holds it once and the program has a status of 0.
+    head = answer("exec /bin/head -n 1 /etc/setting")
+    expect("head prints the first line", "hello" in head)
+    expect("head is a program of the shell", "the program has finished" in head)
+    expect("head returns its status", "the program exited with 0" in head)
+    # grep searches a line and prints it; -i folds the case of the word.
+    grep = answer("exec /bin/grep hello /etc/setting")
+    expect("grep prints a line that holds the word", "hello" in grep)
+    expect("grep is a program of the shell", "the program has finished" in grep)
+    grep = answer("exec /bin/grep -i HELLO /etc/setting")
+    expect("grep -i folds the case", "hello" in grep)
+    # No file is descriptor 0. A program inherits the table of the shell
+    # (ADR 0017), but the prompt does not open the console on descriptor 0
+    # yet, so the read answers EBADF; a redirect or a pipe fills it.
+    cat = answer("exec /bin/cat")
+    expect("cat reads descriptor 0 when no file is named", "cat: (stdin): error 9" in cat)
+    expect("cat of a closed stdin is a failure", "the program exited with 1" in cat)
+    wc = answer("exec /bin/wc -l -")
+    expect("wc reads descriptor 0 for a dash", "wc: -: cannot read" in wc)
+    # The tree: the shell makes /tmp, the program makes a directory in it.
+    # Without -r a directory is refused, even an empty one; with -r the tree
+    # goes away and the listing of it is ENOENT (2).
+    made = answer("exec /bin/mkdir /tmp/d")
+    expect("mkdir makes a directory through the call", "mkdir:" not in made)
+    expect("mkdir returns its status", "the program exited with 0" in made)
+    listing = answer("exec /bin/ls /tmp")
+    expect("the directory made by the program is there", re.search(r"(?m)^d\s*$", listing) is not None)
+    refused = answer("exec /bin/rm /tmp/d")
+    expect("rm refuses a directory without -r", "is a directory, use -r" in refused)
+    removed = answer("exec /bin/rm -r /tmp")
+    expect("rm -r takes a tree down", "rm:" not in removed)
+    expect("rm -r returns its status", "the program exited with 0" in removed)
+    gone = answer("exec /bin/ls /tmp", 1)
+    expect("the tree is gone", "ls: /tmp: error 2" in gone)
+    # pwd is the directory of the task, read through the call: the shell
+    # starts at /, and the block after the typed line is that one character.
+    pwd = answer("exec /bin/pwd")
+    expect("pwd prints the directory of the task", re.search(r"(?m)^/\r?$", pwd) is not None)
+    expect("pwd is a program of the shell", "the program exited with 0" in pwd)
+    # A program starts another program with an environment of its own. The
+    # two words are the vector of `spawn.c`, copied by the kernel at the edge
+    # and placed in the memory of the second program: the entry prints them.
+    spawn = answer("exec /bin/spawn")
+    expect(
+        "a program starts another with its own environment",
+        "PROGRAM: envp 2, PATH=/custom" in spawn,
+    )
+    expect("the started program gets its arguments", "PROGRAM: argc 2, argv[0] hello" in spawn)
+    expect("the outer program waits for the inner one", "the program has finished" in spawn)
+
+    # --- the pipes and the redirects of K7 (ADR 0017)
+    # `echo hi > /tmp/f` is a builtin that writes descriptor 1, which the
+    # stage put on the file; `cat /tmp/f` reads it back, so the bytes went
+    # through the filesystem and not through the buffer of the shell.
+    expect("a redirect writes the file", "hi" in answer("cat /tmp/f"))
+    expect("a redirect reads the file", "hi" in answer("cat < /tmp/f"))
+    # Two builtins in a pipe: the consumer prints what the producer wrote.
+    expect("a pipe joins two commands of the shell", "one" in answer("echo one | cat"))
+    # A builtin and a program: the stage of /bin/cat inherits descriptor 0
+    # from the shell, which is the read end of the pipe.
+    expect("a program reads the stdin of a pipe", "one" in answer("echo one | /bin/cat"))
+    # A program of the machine counts the bytes of the shell's command.
+    line_count = answer("cat /etc/setting | wc -l")
+    expect(
+        "wc counts the lines of a pipe",
+        re.search(r"\n1[ \t]*\r?\n", line_count) is not None,
+        repr(line_count[-40:]),
+    )
+    bin_count = answer("ls /bin | wc -l")
+    match = re.search(r"\n(\d+)[ \t]*\r?\n", bin_count)
+    expect(
+        "a listing of the shell is counted by a program",
+        match is not None and int(match.group(1)) > 3,
+        repr(bin_count[-40:]),
+    )
+    # A command that changes the task of the shell cannot be a stage.
+    expect(
+        "cd in a pipeline is refused with a sentence",
+        "cannot run in a pipeline" in answer("cd / | cat"),
+    )
+    expect(
+        "a file that is not there is the failure of one stage",
+        "no such file" in answer("cat /no/such/file | /bin/cat"),
     )
     # The mode is a fact of the record and not a word of the kernel: take the
     # bit away with the shell and the same call refuses, give it back and the
@@ -329,6 +554,55 @@ def check(output: str) -> list:
         "PROGRAM: parent sees value 42" in fork
         and "PROGRAM: waited, status 7" in fork
         and "the program exited with 0" in fork,
+    )
+
+    # --- signals: a handler, SIG_DFL, SIG_IGN and a wait cut short
+    signals = answer("exec /bin/signals")
+    expect("the signals program starts", "PROGRAM: signals starts, pid" in signals)
+    # The handler is the code of the program, entered by the kernel on the
+    # stack of the program and returned from through the restorer page.
+    expect(
+        "a handler of the program runs for its own SIGINT",
+        "PROGRAM: sigint handler, signal 2" in signals,
+    )
+    expect(
+        "the system call of the handler returns its answer",
+        "PROGRAM: self SIGINT returned 0, handler runs 1" in signals,
+    )
+    # SIG_IGN is a disposition of the kernel: the task is still there after
+    # the signal, and its kill() answered 0.
+    expect(
+        "an ignored SIGTERM leaves the task alive",
+        "PROGRAM: ignored SIGTERM, kill 0, still alive" in signals,
+    )
+    # SIGTERM by default ends the child, and the parent sees 128 + 15.
+    expect(
+        "SIGTERM ends the child with 128 + 15",
+        re.search(r"PROGRAM: term child waited \d+, status 143", signals) is not None,
+    )
+    # The wait was cut by SIGINT, the handler ran, and the child was not
+    # taken by the wait: EINTR is 4.
+    expect(
+        "SIGINT cuts a wait with EINTR and runs the handler",
+        "PROGRAM: wait returned 4, handler runs 1" in signals,
+    )
+    expect(
+        "kill of a pid that is not there is ESRCH",
+        "PROGRAM: kill ghost returned 3" in signals,
+    )
+    expect(
+        "a signal outside the table is EINVAL",
+        "PROGRAM: kill signal 99 returned 22" in signals,
+    )
+    # The child of this line never makes a call: the handler can only arrive
+    # from the tick of the timer, with the frame of the interrupt.
+    expect(
+        "the tick delivers a handler to a program that does not call",
+        "PROGRAM: tick handler, waited" in signals,
+    )
+    expect(
+        "the signals program returns its status",
+        "the program exited with 0" in signals and "the program has finished" in signals,
     )
 
     # --- the edge of the system call: a bad pointer is EFAULT, not a fault

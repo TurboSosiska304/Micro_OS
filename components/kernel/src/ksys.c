@@ -7,10 +7,12 @@
 #include "kernel/console.h"
 #include "kernel/errno.h"
 #include "kernel/exec.h"
+#include "kernel/kfile.h"
 #include "kernel/kmm.h"
 #include "kernel/log.h"
 #include "kernel/port.h"
 #include "kernel/port/exec.h"
+#include "kernel/port_task.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
 #include "kernel/vfs.h"
@@ -250,43 +252,7 @@ static struct kfile *fd_get(ksys_arg_t fd)
         return NULL;
     }
 
-    if (self == NULL || !self->files[fd].used) {
-        return NULL;
-    }
-
-    return &self->files[fd];
-}
-
-/* Find a free slot and return its number, -1 when there is none. */
-static int fd_alloc(void)
-{
-    struct task *self = task_self();
-    int i;
-
-    if (self == NULL) {
-        return -1;
-    }
-
-    for (i = 0; i < TASK_MAX_FDS; i++) {
-        if (!self->files[i].used) {
-            memset(&self->files[i], 0, sizeof(self->files[i]));
-            self->files[i].used = true;
-            return i;
-        }
-    }
-
-    return -1;
-}
-
-static void fd_release(int fd)
-{
-    struct task *self = task_self();
-
-    if (self == NULL || fd < 0 || fd >= TASK_MAX_FDS) {
-        return;
-    }
-
-    memset(&self->files[fd], 0, sizeof(self->files[fd]));
+    return kfile_get(self, (k_u32_t)fd);
 }
 
 /* --- the handlers --- */
@@ -350,7 +316,7 @@ static k_ssize_t sys_read(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys_
         return 0;
     }
 
-    return vfs_read(&file->file, (void *)(uintptr_t)buf, count);
+    return kfile_read(file, (void *)(uintptr_t)buf, count);
 }
 
 static k_ssize_t sys_write(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys_arg_t a3,
@@ -379,7 +345,7 @@ static k_ssize_t sys_write(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys
             return 0;
         }
 
-        return vfs_write(&file->file, (const void *)(uintptr_t)buf, count);
+        return kfile_write(file, (const void *)(uintptr_t)buf, count);
     }
 
     /*
@@ -403,7 +369,7 @@ static k_ssize_t sys_open(ksys_arg_t path, ksys_arg_t flags, ksys_arg_t a2, ksys
                           ksys_arg_t a4, ksys_arg_t a5)
 {
     char name[KSYS_PATH_MAX + 1];
-    struct kfile *file;
+    struct kfile *file = NULL;
     int fd;
     int rc;
 
@@ -441,16 +407,14 @@ static k_ssize_t sys_open(ksys_arg_t path, ksys_arg_t flags, ksys_arg_t a2, ksys
         return rc;
     }
 
-    fd = fd_alloc();
+    fd = kfile_alloc(task_self(), &file);
     if (fd < 0) {
-        return KERR_NOSPC;
+        return fd;
     }
-
-    file = &((struct task *)task_self())->files[fd];
 
     rc = vfs_open(name, (int)flags, &file->file, file->priv);
     if (rc != 0) {
-        fd_release(fd);
+        kfile_discard(task_self(), fd);
         return rc;
     }
 
@@ -463,7 +427,7 @@ static k_ssize_t sys_open(ksys_arg_t path, ksys_arg_t flags, ksys_arg_t a2, ksys
 static k_ssize_t sys_close(ksys_arg_t fd, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
                            ksys_arg_t a4, ksys_arg_t a5)
 {
-    struct kfile *file = fd_get(fd);
+    struct task *self = task_self();
 
     K_UNUSED(a1);
     K_UNUSED(a2);
@@ -471,14 +435,77 @@ static k_ssize_t sys_close(ksys_arg_t fd, ksys_arg_t a1, ksys_arg_t a2, ksys_arg
     K_UNUSED(a4);
     K_UNUSED(a5);
 
-    if (file == NULL) {
+    if (self == NULL || fd >= (ksys_arg_t)TASK_MAX_FDS) {
         return KERR_BADF;
     }
 
-    vfs_close(&file->file);
-    fd_release((int)fd);
+    return kfile_close(self, (int)fd);
+}
+
+static k_ssize_t sys_pipe(ksys_arg_t fds, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                          ksys_arg_t a4, ksys_arg_t a5)
+{
+    struct task *self = task_self();
+    int ends[2];
+    int rc;
+
+    K_UNUSED(a1);
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    if (self == NULL) {
+        return KERR_PERM;
+    }
+
+    /*
+     * The answer is two descriptors and the caller has to give the place
+     * for them: NULL is a mistake, and a place outside the memory of the
+     * caller is EFAULT before a pipe is spent on it.
+     */
+    if (fds == 0) {
+        return KERR_INVAL;
+    }
+
+    if (!k_port_exec_contains((const void *)(uintptr_t)fds, sizeof(ends))) {
+        return KERR_FAULT;
+    }
+
+    rc = kfile_pipe(self, ends);
+    if (rc != 0) {
+        return rc;
+    }
+
+    memcpy((void *)(uintptr_t)fds, ends, sizeof(ends));
 
     return 0;
+}
+
+static k_ssize_t sys_dup2(ksys_arg_t oldfd, ksys_arg_t newfd, ksys_arg_t a2, ksys_arg_t a3,
+                          ksys_arg_t a4, ksys_arg_t a5)
+{
+    struct task *self = task_self();
+
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    if (self == NULL) {
+        return KERR_PERM;
+    }
+
+    /*
+     * Both numbers are indexes of the table of the task. A register that
+     * holds a wider number is not a descriptor, and POSIX answers EBADF for
+     * a descriptor that is not open or a number that is not one.
+     */
+    if (oldfd >= (ksys_arg_t)TASK_MAX_FDS || newfd >= (ksys_arg_t)TASK_MAX_FDS) {
+        return KERR_BADF;
+    }
+
+    return kfile_dup2(self, (int)oldfd, (int)newfd);
 }
 
 static k_ssize_t sys_stat(ksys_arg_t path, ksys_arg_t buf, ksys_arg_t a2, ksys_arg_t a3,
@@ -576,6 +603,11 @@ static k_ssize_t sys_lseek(ksys_arg_t fd, ksys_arg_t offset, ksys_arg_t whence, 
         return KERR_BADF;
     }
 
+    /* A pipe has no position: there is nothing to seek in it. */
+    if (file->kind == KFILE_PIPE) {
+        return KERR_SPIPE;
+    }
+
     /*
      * The whence is part of the signature of the call: three values, and
      * the number arrives as a raw register, so it is compared before the
@@ -661,6 +693,11 @@ static k_ssize_t sys_readdir(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ks
 
     if (file == NULL) {
         return KERR_BADF;
+    }
+
+    /* A pipe has no entries: only a descriptor of a directory does. */
+    if (file->kind == KFILE_PIPE) {
+        return KERR_NOTDIR;
     }
 
     if (out == NULL) {
@@ -932,7 +969,7 @@ static k_ssize_t sys_fork(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_
         }
     }
 
-    child = task_create(name, forked_child, (void *)self, self->prio);
+    child = task_fork_shared(self, name, forked_child, (void *)self);
     if (child == NULL) {
         return KERR_NOSPC;
     }
@@ -957,6 +994,113 @@ static k_ssize_t sys_getppid(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_a
     }
 
     return (k_ssize_t)self->parent->pid;
+}
+
+/*
+ * A signal to one task. The system has no process groups, so only a positive
+ * pid is a target: the two meanings of POSIX for 0 and -1 ("the group" and
+ * "everybody") are not guessed at. A pid with no live task is ESRCH.
+ */
+static k_ssize_t sys_kill(ksys_arg_t pid, ksys_arg_t sig, ksys_arg_t a2, ksys_arg_t a3,
+                          ksys_arg_t a4, ksys_arg_t a5)
+{
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    /* The raw register has to survive the round trip through int, as in
+     * waitpid: 2^32 + 5 is not the task 5. */
+    if ((ksys_arg_t)(int)pid != pid || (int)pid <= 0) {
+        return KERR_INVAL;
+    }
+
+    if ((ksys_arg_t)(int)sig != sig) {
+        return KERR_INVAL;
+    }
+
+    return task_signal_send((k_u32_t)(int)pid, (int)sig);
+}
+
+/*
+ * Install the answer of a signal and return the previous one. The handler is
+ * memory of the caller - a program of ring 3 has to hand an address of its
+ * window, and the port tells whether the range is there - so a broken pointer
+ * is EFAULT now and not a fault of the program when the signal arrives.
+ *
+ * The answer travels as the raw value of a register: 0 is the default action,
+ * 1 is "ignore", anything else is the handler, as POSIX and kernel/signal.h
+ * say.
+ */
+static k_ssize_t sys_signal(ksys_arg_t sig, ksys_arg_t handler, ksys_arg_t a2, ksys_arg_t a3,
+                            ksys_arg_t a4, ksys_arg_t a5)
+{
+    struct task *self = task_self();
+    task_signal_fn fn;
+    task_signal_fn previous;
+
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    if (self == NULL) {
+        return KERR_PERM;
+    }
+
+    if ((ksys_arg_t)(int)sig != sig) {
+        return KERR_INVAL;
+    }
+
+    fn = (task_signal_fn)(uintptr_t)handler;
+
+    if (fn != K_SIG_DFL && fn != K_SIG_IGN &&
+        !k_port_exec_contains((const void *)(uintptr_t)handler, 1)) {
+        return KERR_FAULT;
+    }
+
+    previous = task_signal_set(self, (int)sig, fn);
+    if (previous == K_SIG_ERR) {
+        return KERR_INVAL;
+    }
+
+    return (k_ssize_t)(uintptr_t)previous;
+}
+
+/*
+ * The restorer of a signal frame. The port of a machine with ring 3 puts the
+ * address of a few instructions of user code on the stack of a program when
+ * it enters a handler; the last of them is this call, and its answer is the
+ * value the interrupted context had in the register of the result. It is not
+ * a call a program makes by itself, and on a machine without ring 3 there is
+ * no frame to return to.
+ */
+static k_ssize_t sys_sigreturn(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                               ksys_arg_t a4, ksys_arg_t a5)
+{
+    struct task *self = task_self();
+    k_ssize_t restored = 0;
+    int rc;
+
+    K_UNUSED(a0);
+    K_UNUSED(a1);
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    if (self == NULL) {
+        return KERR_PERM;
+    }
+
+    rc = k_port_task_signal_leave(self, &restored);
+    if (rc < 0) {
+        return rc;
+    }
+
+    /* The answer is the value the interrupted context had: it may be a
+     * negative answer of the call the handler interrupted. */
+    return restored;
 }
 
 /*
@@ -1057,6 +1201,18 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
          */
         if (!has_child) {
             return KERR_CHILD;
+        }
+
+        /*
+         * A signal that has to be answered cuts the wait short, and the
+         * answer of the call is EINTR: the caller resumes after the call,
+         * the handler runs before it, and the child is still there to be
+         * waited for on the next try. A child that has finished is scanned
+         * first, so the SIGCHLD of that very child does not turn the wait
+         * into an error on the way to its status.
+         */
+        if (task_signal_interrupts(self)) {
+            return KERR_INTR;
         }
 
         if ((flags & KSYS_WNOHANG) != 0) {
@@ -1242,7 +1398,11 @@ static k_ssize_t sys_chown(ksys_arg_t path, ksys_arg_t owner, ksys_arg_t a2, ksy
  * `args` and `words`, and terminate the vector. Returns 0, or E2BIG for a
  * vector or a string that does not fit, or EFAULT for a word of the vector or
  * a byte of a string that is not memory of the caller. A zero vector, or one
- * whose first word is zero, is a program without arguments and not an error.
+ * whose first word is zero, is an empty vector and not an error.
+ *
+ * The arguments and the environment of execve are two vectors of the same
+ * shape, so they are copied by the same code into two frames: the bounds of
+ * one never decide the room of the other.
  *
  * Every read goes through copy_from_user: the vector and the strings are the
  * memory of the caller, and on a machine with page tables an address that is
@@ -1320,7 +1480,7 @@ static int argv_copy(ksys_arg_t from, char *args[], char *words, k_size_t words_
 #endif /* KERNEL_EXEC */
 
 #if KERNEL_EXEC
-static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksys_arg_t a3,
+static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t envp, ksys_arg_t a3,
                             ksys_arg_t a4, ksys_arg_t a5)
 {
     char name[KSYS_PATH_MAX + 1];
@@ -1329,15 +1489,17 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksy
     struct vfs_file file;
     struct vfs_stat info;
     struct k_exec_image image;
-    /* The vector the program starts with: the frame keeps it alive. */
+    /* The vectors the program starts with: the frame keeps them alive. */
     char *args[KSYS_ARGV_MAX + 1];
     char words[KSYS_ARGV_BYTES];
+    char *env_args[KSYS_ARGV_MAX + 1];
+    char env_words[KSYS_ARGV_BYTES];
     char *const *vector = NULL;
+    char *const *environment = NULL;
     k_u8_t *data;
     k_size_t got = 0;
     int rc;
 
-    K_UNUSED(a2);
     K_UNUSED(a3);
     K_UNUSED(a4);
     K_UNUSED(a5);
@@ -1348,10 +1510,14 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksy
     }
 
     /*
-     * The arguments are copied before the file is read: a refused one ends
-     * the call while nothing has been spent, and the copy is what the port
-     * is going to hand the program. What the kernel keeps from here on is the
-     * vector it built, not the pointers of the caller.
+     * The vectors are copied before the file is read: a refused one ends
+     * the call while nothing has been spent, and the copies are what the
+     * port is going to hand the program. What the kernel keeps from here on
+     * is the vectors it built, not the pointers of the caller.
+     *
+     * The environment is copied into a frame of its own and not appended to
+     * the words of the arguments: the two are separate vectors in the C
+     * entry, and the strings of one are never the strings of the other.
      */
     if (argv != 0) {
         rc = argv_copy(argv, args, words, sizeof(words));
@@ -1360,6 +1526,15 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksy
         }
 
         vector = args;
+    }
+
+    if (envp != 0) {
+        rc = argv_copy(envp, env_args, env_words, sizeof(env_words));
+        if (rc != 0) {
+            return rc;
+        }
+
+        environment = env_args;
     }
 
     rc = vfs_stat(name, &info);
@@ -1428,6 +1603,15 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksy
         return KERR_INVAL;
     }
 
+    /*
+     * The environment travels with the image: it is not of the file, so the
+     * parser left it empty and the call is the one that knows it. A NULL
+     * vector here is "the environment of the system", which k_exec_run fills
+     * in before the port sees the image. The cast only adds const: the call
+     * owns the strings until the program ends and never writes them.
+     */
+    image.envp = (const char *const *)environment;
+
     rc = k_exec_run(&image, vector);
     kmm_free(data);
 
@@ -1451,12 +1635,12 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksy
  * number of the call stays: a program compiled for the full kernel asks it
  * and gets the answer of a machine that cannot run a program, ENOSYS.
  */
-static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t a2, ksys_arg_t a3,
+static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t envp, ksys_arg_t a3,
                             ksys_arg_t a4, ksys_arg_t a5)
 {
     K_UNUSED(path);
     K_UNUSED(argv);
-    K_UNUSED(a2);
+    K_UNUSED(envp);
     K_UNUSED(a3);
     K_UNUSED(a4);
     K_UNUSED(a5);
@@ -1487,11 +1671,24 @@ int ksys_register(k_u32_t number, const char *name, ksys_handler_fn handler)
 k_ssize_t ksys_call(k_u32_t number, ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
                     ksys_arg_t a4, ksys_arg_t a5)
 {
+    k_ssize_t rc;
+
     if (number >= KSYS_COUNT || g_table[number].handler == NULL) {
         return KERR_NOSYS;
     }
 
-    return g_table[number].handler(a0, a1, a2, a3, a4, a5);
+    rc = g_table[number].handler(a0, a1, a2, a3, a4, a5);
+
+    /*
+     * The way out of the kernel is the point where a task answers its
+     * signals: the call has its answer and it is the one the interrupted
+     * program will see, and a handler runs before the program gets it. A
+     * task of the kernel with a handler of its own runs the handler here;
+     * a program of ring 3 gets a frame on its stack from the port.
+     */
+    task_signal_check(task_self(), rc, true);
+
+    return rc;
 }
 
 const char *ksys_name(k_u32_t number)
@@ -1512,6 +1709,13 @@ void ksys_init(void)
 {
     memset(g_table, 0, sizeof(g_table));
     g_registered = 0;
+
+    /*
+     * The open files are forgotten with the table: a boot and a test that
+     * resets the calls start from an empty system, not from the
+     * descriptors of the run before.
+     */
+    kfile_init();
 
     ksys_register(KSYS_EXIT, "exit", sys_exit);
     ksys_register(KSYS_READ, "read", sys_read);
@@ -1540,6 +1744,11 @@ void ksys_init(void)
     ksys_register(KSYS_CHOWN, "chown", sys_chown);
     ksys_register(KSYS_EXECVE, "execve", sys_execve);
     ksys_register(KSYS_STATX, "statx", sys_statx);
+    ksys_register(KSYS_PIPE, "pipe", sys_pipe);
+    ksys_register(KSYS_DUP2, "dup2", sys_dup2);
+    ksys_register(KSYS_KILL, "kill", sys_kill);
+    ksys_register(KSYS_SIGNAL, "signal", sys_signal);
+    ksys_register(KSYS_SIGRETURN, "sigreturn", sys_sigreturn);
 }
 
 /* --- the wrappers --- */
@@ -1673,6 +1882,38 @@ int ksys_chown(const char *path, k_u32_t owner)
 
 int ksys_execve(const char *path, char *const argv[])
 {
-    return (int)ksys_call(KSYS_EXECVE, (ksys_arg_t)(uintptr_t)path, (ksys_arg_t)(uintptr_t)argv, 0,
-                          0, 0, 0);
+    return ksys_execve_env(path, argv, NULL);
+}
+
+int ksys_execve_env(const char *path, char *const argv[], char *const envp[])
+{
+    return (int)ksys_call(KSYS_EXECVE, (ksys_arg_t)(uintptr_t)path, (ksys_arg_t)(uintptr_t)argv,
+                          (ksys_arg_t)(uintptr_t)envp, 0, 0, 0);
+}
+
+int ksys_pipe(int fds[2])
+{
+    return (int)ksys_call(KSYS_PIPE, (ksys_arg_t)(uintptr_t)fds, 0, 0, 0, 0, 0);
+}
+
+int ksys_dup2(int oldfd, int newfd)
+{
+    return (int)ksys_call(KSYS_DUP2, (ksys_arg_t)oldfd, (ksys_arg_t)newfd, 0, 0, 0, 0);
+}
+
+int ksys_kill(int pid, int sig)
+{
+    return (int)ksys_call(KSYS_KILL, (ksys_arg_t)pid, (ksys_arg_t)sig, 0, 0, 0, 0);
+}
+
+task_signal_fn ksys_signal(int sig, task_signal_fn handler)
+{
+    k_ssize_t rc =
+        ksys_call(KSYS_SIGNAL, (ksys_arg_t)sig, (ksys_arg_t)(uintptr_t)handler, 0, 0, 0, 0);
+
+    if (rc < 0) {
+        return K_SIG_ERR;
+    }
+
+    return (task_signal_fn)(uintptr_t)rc;
 }

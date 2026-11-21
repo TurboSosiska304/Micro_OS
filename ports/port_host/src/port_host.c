@@ -12,6 +12,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "kernel/errno.h"
 #include "kernel/port.h"
 #include "kernel/port_task.h"
 #include "kernel/sched.h"
@@ -257,7 +258,7 @@ const char *k_port_arch(void)
  * for a module of Linux.
  */
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 6u
+#define PORT_API_MINOR 7u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_host does not speak the contract of this kernel");
@@ -525,6 +526,29 @@ struct task *k_port_task_current(void)
 
     t = (struct task *)pthread_getspecific(s_task_key);
     return t;
+}
+
+/*
+ * The tasks of the host are functions of the process: there is no ring 3 and
+ * no frame of a program to put a handler on, so the kernel runs the handler
+ * in place (the answer 0) and a restorer has nothing to restore (ENOSYS).
+ */
+int k_port_task_signal_enter(struct task *t, int sig, void (*handler)(int), k_ssize_t result,
+                             bool from_syscall)
+{
+    K_UNUSED(t);
+    K_UNUSED(sig);
+    K_UNUSED(handler);
+    K_UNUSED(result);
+    K_UNUSED(from_syscall);
+    return 0;
+}
+
+int k_port_task_signal_leave(struct task *t, k_ssize_t *result)
+{
+    K_UNUSED(t);
+    K_UNUSED(result);
+    return KERR_NOSYS;
 }
 
 /* --- time base --- */

@@ -2,9 +2,10 @@
  * Micro OS — the shell.
  *
  * A small command interpreter, close to a Linux shell: commands are
- * registered by name, the line is split into arguments and the command
- * handler decides what to do. Other components (the drivers for example)
- * can register their own commands.
+ * registered by name, the line is split into arguments (with `|` and the
+ * redirections of ADR 0017 between the stages) and the command handler
+ * decides what to do. Other components (the drivers for example) can
+ * register their own commands.
  */
 #ifndef MICRO_OS_KSHELL_KSHELL_H
 #define MICRO_OS_KSHELL_KSHELL_H

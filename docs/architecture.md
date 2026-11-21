@@ -147,6 +147,27 @@ Plan: start with option 1 (it works immediately), move to option 2 when real
 Linux-like semantics are needed (priorities, states, `fork`). The decision is
 recorded in [ADR 0002](adr/0002-scheduler-substrate.md).
 
+### Signals (ADR 0015)
+
+A signal is a bit of `struct task` (`sig_pending`) and a disposition in a
+small table of the task, not a message on a queue: the sender - `kill(pid,
+sig)` - sets the bit under the critical section and wakes the task, and the
+receiver answers it in its own context. The points of delivery are the way
+out of a system call (`ksys_call()`) and the tick of the timer when the
+interrupted code is a program of ring 3. The default action of `SIGINT`,
+`SIGTERM` and `SIGPIPE` is the end of the task with the status `128 + sig`;
+`SIGCHLD` is ignored by default and is marked on the parent by `task_exit()`.
+An installed handler is a function of the program: on x86-64 the port builds
+a frame below the stack pointer of the program, writes the handler and the
+signal number into the saved frame, and the `iretq` of the stub enters it;
+the return address is a page of the port that calls `sigreturn`, which puts
+the interrupted frame back. The host, the board and the null port have no
+ring 3 and run the handler in place. `waitpid()` looks at a finished child
+before the marks and answers `EINTR` for a mark that has to be answered
+without reaping the child. There is no job control - no groups, no `&`, no
+`fg`, no `bg` - and the documentation says so; Ctrl+C while the shell waits
+for a program is read by the port and becomes `SIGINT` for that program.
+
 ## 5. Virtual filesystem (phase 2)
 
 The goal is "everything is a file":
@@ -174,10 +195,11 @@ the inodes and the cache of the sector of the header all describe the same
 storage - so two tasks that write files at the same time have to be kept
 apart:
 
-* every open file belongs to the one that opened it: the position and the
-  flags of the file live in the descriptor (`VFS_FILE_DATA_SIZE` bytes of
-  private data), not in a table of the filesystem. Two tasks that read
-  their own files never touch each other's position;
+* every open file is a description of the kernel, counted by the descriptors
+  that refer to it (`kernel/kfile.h`): the position and the flags of the file
+  live there, not in a table of the filesystem, and `dup2` or a fork gives a
+  second descriptor the same open file. Two tasks that read their own files
+  never touch each other's position;
 * the filesystem itself has one lock, taken by every public call of
   `mfs_*`. It is a recursive `k_mutex` of the kernel (`kernel/lock.h`),
   so a task that has to wait is put to sleep by the platform and does not
@@ -190,6 +212,16 @@ apart:
   contract of the system calls: the two sets are close but not the same
   (`-9` is "the directory is not empty" of the filesystem and a "bad file
   descriptor" of the kernel).
+
+### The pipes
+
+A pipe is a ring of 256 bytes in a table of eight entries of the kernel,
+with the counts of the reading and the writing descriptions over it
+(ADR 0014). The two ends are ordinary descriptors of the task, so the access
+check, the close, `dup2` and the copy of a fork need no special case; a write
+with no reader is `EPIPE`, because the kernel has no signals yet. A wait of a
+pipe is a poll with a bound of half a second, not a queue of waiters; the
+queue and its wakeup are the next step.
 
 ### The blocks under the filesystem
 
@@ -379,7 +411,7 @@ a megabyte.
 
 ### `execve` belongs to the port
 
-`kernel/port/exec.h` is a subject of the contract (1.4) with five calls:
+`kernel/port/exec.h` is a subject of the contract (1.6) with five calls:
 `k_port_exec_supported()` (can this machine run a program at all),
 `k_port_exec_base()` (where the window is), `k_port_exec_enter()` (place the
 image, enter it) and the two halves of the end of a program,
@@ -392,12 +424,32 @@ with the libc of the host under it. x86-64 says yes: it builds page tables for
 the program, maps the window at 32 MiB onto a physical arena at 64 MiB, keeps
 a 64 KiB stack at the top of the window with an unmapped guard page below it
 and enters ring 3 through an `iretq`. Its boot mounts MicroFS on a volume of
-the port's RAM, writes `/bin/hello` and `/bin/crash` there, gives them the mode
-of a program and asks for `/bin/hello` with `execve` - the stat, the mode, the
-read through the VFS, the parse and the transition are the ones of the call.
-A program ends with `exit` and the port returns to the caller with its status;
-a fault of ring 3 prints `the program faulted: vector N at 0x...` and does the
-same with status 255 (ADR 0007).
+the port's RAM, writes ten images to `/bin` - `hello`, `crash`, `fork`,
+`badptr`, `signals`, `cat`, `echo`, `ls`, `spawn` and `wc` - gives them the
+mode of a program
+and asks for `/bin/hello` with `execve` - the stat, the mode, the read through the VFS,
+the parse and the transition are the ones of the call. A program ends with
+`exit` and the port returns to the caller with its status; a fault of ring 3
+prints `the program faulted: vector N at 0x...` and does the same with status
+255 (ADR 0007).
+
+### The entry and the library of a program
+
+The port enters a program with `argc` in `rdi`, `argv` in `rsi` and `envp` in
+`rdx`: the arguments of a C function, on a stack aligned as after a call whose
+top word is zero (ADR 0016). `execve(path, argv, envp)` copies both vectors at
+the edge - at most eight words and 512 bytes each - and a NULL environment is
+the one of the system (`k_exec_environ()`), so every program of the machine
+starts with the same shape. The environment travels to the port in
+`struct k_exec_image.envp`; the contract stays 1.6.
+
+The library of the kernel is linked into the kernel and calls `ksys_*`, which
+a program of ring 3 cannot reach, so a program is linked against
+`components/libc/user`: `_start`, the door of `int $0x80`, `open`, `close`,
+`read`, `write`, `lseek`, `readdir`, `getpid`, `uptime`, `exit`, `printf`,
+`puts` and five functions of strings. The numbers of the calls come from
+`kernel/ksys.h`, the same header the kernel uses. The image carries its copy:
+there is no dynamic linker.
 
 ### The rights are checked at the edge
 

@@ -376,7 +376,7 @@ static void pit_init(k_u32_t hz)
  * interrupts off. The EOI goes to the master alone: the timer is the only
  * unmasked line and the slave is masked as a whole.
  */
-void port_x86_64_irq_tick(void)
+void port_x86_64_irq_tick(k_u64_t *frame)
 {
     g_ticks++;
 
@@ -385,6 +385,14 @@ void port_x86_64_irq_tick(void)
      * masked as a whole and the timer is its only line, so the master is the
      * only chip to tell. */
     port_outb(PIC1_COMMAND, PIC_EOI);
+
+    /*
+     * A program of ring 3 that has a signal waiting answers it when the tick
+     * returns to it. The frame is the one of the interrupted code, and the
+     * delivery puts the handler in it; a kernel task has no such frame and
+     * is checked on its way out of the system call instead.
+     */
+    port_x86_64_signal_tick(frame);
 
     port_x86_64_task_tick();
 }
@@ -1053,7 +1061,7 @@ const char *k_port_arch(void)
 }
 
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 6u
+#define PORT_API_MINOR 7u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_x86_64 does not speak the contract of this kernel");

@@ -176,6 +176,10 @@ isr_exception_common:
     pushq %rbp
 
     movq %rsp, %rbp /* the saved stack, for the way back */
+
+    /* The C side is told where the frame is: the tick looks at the selector
+     * of the interrupted code and may hand a signal to a program of ring 3. */
+    movq %rbp, %rdi
     andq $-16, %rsp
     call \handler
     movq %rbp, %rsp

@@ -104,12 +104,45 @@ extern const k_u8_t _binary_fork_mox_start[];
 extern const k_u8_t _binary_fork_mox_end[];
 extern const k_u8_t _binary_badptr_mox_start[];
 extern const k_u8_t _binary_badptr_mox_end[];
+extern const k_u8_t _binary_signals_mox_start[];
+extern const k_u8_t _binary_signals_mox_end[];
+extern const k_u8_t _binary_cat_mox_start[];
+extern const k_u8_t _binary_cat_mox_end[];
+extern const k_u8_t _binary_echo_mox_start[];
+extern const k_u8_t _binary_echo_mox_end[];
+extern const k_u8_t _binary_grep_mox_start[];
+extern const k_u8_t _binary_grep_mox_end[];
+extern const k_u8_t _binary_head_mox_start[];
+extern const k_u8_t _binary_head_mox_end[];
+extern const k_u8_t _binary_ls_mox_start[];
+extern const k_u8_t _binary_ls_mox_end[];
+extern const k_u8_t _binary_mkdir_mox_start[];
+extern const k_u8_t _binary_mkdir_mox_end[];
+extern const k_u8_t _binary_pwd_mox_start[];
+extern const k_u8_t _binary_pwd_mox_end[];
+extern const k_u8_t _binary_rm_mox_start[];
+extern const k_u8_t _binary_rm_mox_end[];
+extern const k_u8_t _binary_spawn_mox_start[];
+extern const k_u8_t _binary_spawn_mox_end[];
+extern const k_u8_t _binary_wc_mox_start[];
+extern const k_u8_t _binary_wc_mox_end[];
 
 #define PROGRAM_DIR "/bin"
 #define PROGRAM_PATH "/bin/hello"
 #define PROGRAM_CRASH_PATH "/bin/crash"
 #define PROGRAM_FORK_PATH "/bin/fork"
 #define PROGRAM_BADPTR_PATH "/bin/badptr"
+#define PROGRAM_SIGNALS_PATH "/bin/signals"
+#define PROGRAM_CAT_PATH "/bin/cat"
+#define PROGRAM_ECHO_PATH "/bin/echo"
+#define PROGRAM_GREP_PATH "/bin/grep"
+#define PROGRAM_HEAD_PATH "/bin/head"
+#define PROGRAM_LS_PATH "/bin/ls"
+#define PROGRAM_MKDIR_PATH "/bin/mkdir"
+#define PROGRAM_PWD_PATH "/bin/pwd"
+#define PROGRAM_RM_PATH "/bin/rm"
+#define PROGRAM_SPAWN_PATH "/bin/spawn"
+#define PROGRAM_WC_PATH "/bin/wc"
 
 /*
  * A program is a file somebody may run, so it is created with the mode of a
@@ -170,10 +203,10 @@ static bool program_install(const char *path, const k_u8_t *image, k_size_t size
  * kernel, the parse of the image and the jump of the port. The boot does not
  * repeat any of it.
  *
- * The call comes back only because this program ends with a ret and the port
- * owns the exit; the kernel answers every return with 0, which says "the
- * program ran and has finished", and the status the program ended with is the
- * line the port printed before this one (ADR 0006).
+ * The call comes back because this program ends with the call of exit and the
+ * port takes the task down; the kernel answers every end of a program with 0,
+ * which says "the program ran and has finished", and the status the program
+ * ended with is the line the port printed before this one (ADR 0006).
  */
 static void program_run(void)
 {
@@ -268,6 +301,89 @@ static void filesystem_bring_up(void)
      */
     if (!program_install(PROGRAM_BADPTR_PATH, _binary_badptr_mox_start,
                          (k_size_t)(_binary_badptr_mox_end - _binary_badptr_mox_start))) {
+        return;
+    }
+
+    /*
+     * The fifth program is the signals of K7: a handler of the program, a
+     * child ended by SIGTERM, a wait cut short by SIGINT and the errors of
+     * kill. The shell runs it as it runs every other file of /bin.
+     */
+    if (!program_install(PROGRAM_SIGNALS_PATH, _binary_signals_mox_start,
+                         (k_size_t)(_binary_signals_mox_end - _binary_signals_mox_start))) {
+        return;
+    }
+
+    /*
+     * The programs of the library (ADR 0016) are not creatures of the port:
+     * each was compiled against components/libc/user, enters through
+     * `_start`, takes argc, argv and envp, and talks to the kernel through
+     * the same `int $0x80`. `cat` reads a file, `echo` writes its line and
+     * `ls` walks a directory - the three things a shell of a machine with a
+     * filesystem is asked for first.
+     */
+    if (!program_install(PROGRAM_CAT_PATH, _binary_cat_mox_start,
+                         (k_size_t)(_binary_cat_mox_end - _binary_cat_mox_start))) {
+        return;
+    }
+
+    if (!program_install(PROGRAM_ECHO_PATH, _binary_echo_mox_start,
+                         (k_size_t)(_binary_echo_mox_end - _binary_echo_mox_start))) {
+        return;
+    }
+
+    if (!program_install(PROGRAM_LS_PATH, _binary_ls_mox_start,
+                         (k_size_t)(_binary_ls_mox_end - _binary_ls_mox_start))) {
+        return;
+    }
+
+    /*
+     * The utilities of a line: `wc` counts the newlines and the bytes of a
+     * source, `head` copies the first lines, `grep` prints the lines that
+     * hold a word, `mkdir` and `rm` change the tree through the calls, and
+     * `pwd` reads the directory of the task. The four filters read
+     * descriptor 0 when they are given no file, which is what makes them the
+     * second half of a pipe: `ls /bin | wc -l` in `make x86-smoke` is the
+     * chain the shell builds with pipe and dup2 (ADR 0017).
+     */
+    if (!program_install(PROGRAM_WC_PATH, _binary_wc_mox_start,
+                         (k_size_t)(_binary_wc_mox_end - _binary_wc_mox_start))) {
+        return;
+    }
+
+    if (!program_install(PROGRAM_HEAD_PATH, _binary_head_mox_start,
+                         (k_size_t)(_binary_head_mox_end - _binary_head_mox_start))) {
+        return;
+    }
+
+    if (!program_install(PROGRAM_GREP_PATH, _binary_grep_mox_start,
+                         (k_size_t)(_binary_grep_mox_end - _binary_grep_mox_start))) {
+        return;
+    }
+
+    if (!program_install(PROGRAM_MKDIR_PATH, _binary_mkdir_mox_start,
+                         (k_size_t)(_binary_mkdir_mox_end - _binary_mkdir_mox_start))) {
+        return;
+    }
+
+    if (!program_install(PROGRAM_RM_PATH, _binary_rm_mox_start,
+                         (k_size_t)(_binary_rm_mox_end - _binary_rm_mox_start))) {
+        return;
+    }
+
+    if (!program_install(PROGRAM_PWD_PATH, _binary_pwd_mox_start,
+                         (k_size_t)(_binary_pwd_mox_end - _binary_pwd_mox_start))) {
+        return;
+    }
+
+    /*
+     * `spawn` is a program that asks for another program with an environment
+     * of its own: the third argument of execve, copied at the edge of the
+     * call and carried to a second task. It is the proof from the user side
+     * that the environment is not a word the kernel prints about itself.
+     */
+    if (!program_install(PROGRAM_SPAWN_PATH, _binary_spawn_mox_start,
+                         (k_size_t)(_binary_spawn_mox_end - _binary_spawn_mox_start))) {
         return;
     }
 }

@@ -227,8 +227,10 @@ static void key_handle(k_u8_t code)
     }
 }
 
-void port_x86_64_irq_keyboard(void)
+void port_x86_64_irq_keyboard(k_u64_t *frame)
 {
+    K_UNUSED(frame);
+
     k_u8_t status = port_inb(PS2_STATUS);
 
     /* The line is level triggered and the byte that raised it is the one to

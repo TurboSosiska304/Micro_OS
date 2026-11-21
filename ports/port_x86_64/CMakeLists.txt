@@ -88,6 +88,7 @@ set(KSHELL_SOURCES
     "${KSHELL_DIR}/src/kshell_files.c"
     "${KSHELL_DIR}/src/kshell_memtest.c"
     "${KSHELL_DIR}/src/kshell_mfetch.c"
+    "${KSHELL_DIR}/src/kshell_pipe.c"
 )
 
 # The parts of the C library the shell calls. They reach the kernel through
@@ -170,6 +171,34 @@ set(PROGRAM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/programs")
 set(PROGRAM_BASE 0x02000000)
 set(MKPROG "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/mkprog.sh")
 
+# The library of a program (components/libc/user): `_start`, the door of the
+# syscall, the formatter and the strings. It is not the library of the kernel
+# (${LIBC_DIR}/src), which is linked into the kernel and calls ksys_*: a
+# program has no such address, only `int $0x80`. Every program that uses it
+# carries its own copy, which is what "statically linked" means here.
+set(LIBC_USER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/libc/user")
+set(LIBC_USER_SOURCES
+    "${LIBC_USER_DIR}/src/start.c"
+    "${LIBC_USER_DIR}/src/syscall.c"
+    "${LIBC_USER_DIR}/src/stdio.c"
+    "${LIBC_USER_DIR}/src/string.c"
+)
+
+# The flags of a program: no libc, no PIC and no SSE, the same shape as the
+# kernel's (see add_compile_options above). The include path carries the
+# headers of the kernel (the numbers of the calls) and the library.
+#
+# The string literals are not merged into one section: binutils 2.47 trips an
+# assertion of its merge of sections on the .rodata of a program with many
+# strings and a pointer of a handler in its data, and one shared copy of a few
+# bytes buys nothing here.
+set(PROGRAM_CFLAGS
+    -c -O2 -ffreestanding -fno-stack-protector
+    -fno-pic -fno-pie -mno-red-zone -mgeneral-regs-only -march=x86-64
+    -fno-asynchronous-unwind-tables -fno-merge-constants -Wall -Wextra -Werror
+    -I "${KERNEL_DIR}/include" -I "${PROGRAM_DIR}" -I "${LIBC_USER_DIR}/include"
+)
+
 # Every program of the port is built the same way: compile the C file for the
 # window, link it with the script of the format, turn the sections into a MOX1
 # image and embed the image in the kernel as a blob. The name of the function
@@ -180,10 +209,7 @@ function(add_program_image name entry)
 
     add_custom_command(
         OUTPUT "${image}"
-        COMMAND ${CMAKE_C_COMPILER} -c -O2 -ffreestanding -fno-stack-protector
-                -fno-pic -fno-pie -mno-red-zone -mgeneral-regs-only -march=x86-64
-                -fno-asynchronous-unwind-tables -Wall -Wextra -Werror
-                -I "${KERNEL_DIR}/include" -I "${PROGRAM_DIR}"
+        COMMAND ${CMAKE_C_COMPILER} ${PROGRAM_CFLAGS}
                 -o ${name}.o "${PROGRAM_DIR}/${name}.c"
         COMMAND ${CMAKE_C_COMPILER} -nostdlib -static -no-pie -Wl,--build-id=none
                 -Wl,-e,${entry}
@@ -222,6 +248,76 @@ add_program_image(hello hello_main)
 add_program_image(crash crash_main)
 add_program_image(fork fork_main)
 add_program_image(badptr badptr_main)
+add_program_image(signals signals_main)
+
+# A program that uses the library of a program: the runtime sources are
+# compiled for the window together with the file of the program, linked with
+# the same script, and the entry is `_start` of the library - main() is a
+# function of the program, not the place the port enters (ADR 0016).
+function(add_libc_program name)
+    set(image "${CMAKE_BINARY_DIR}/${name}.mox")
+    set(object "${CMAKE_BINARY_DIR}/${name}_mox.o")
+    set(objects
+        "${name}_start.o"
+        "${name}_syscall.o"
+        "${name}_stdio.o"
+        "${name}_string.o"
+        "${name}.o"
+    )
+
+    add_custom_command(
+        OUTPUT "${image}"
+        COMMAND ${CMAKE_C_COMPILER} ${PROGRAM_CFLAGS}
+                -o ${name}_start.o "${LIBC_USER_DIR}/src/start.c"
+        COMMAND ${CMAKE_C_COMPILER} ${PROGRAM_CFLAGS}
+                -o ${name}_syscall.o "${LIBC_USER_DIR}/src/syscall.c"
+        COMMAND ${CMAKE_C_COMPILER} ${PROGRAM_CFLAGS}
+                -o ${name}_stdio.o "${LIBC_USER_DIR}/src/stdio.c"
+        COMMAND ${CMAKE_C_COMPILER} ${PROGRAM_CFLAGS}
+                -o ${name}_string.o "${LIBC_USER_DIR}/src/string.c"
+        COMMAND ${CMAKE_C_COMPILER} ${PROGRAM_CFLAGS}
+                -o ${name}.o "${PROGRAM_DIR}/${name}.c"
+        COMMAND ${CMAKE_C_COMPILER} -nostdlib -static -no-pie -Wl,--build-id=none
+                -Wl,-e,_start
+                -T "${PROGRAM_DIR}/program.ld" -o ${name}.elf ${objects}
+        COMMAND sh "${MKPROG}" --base ${PROGRAM_BASE} ${name}.elf ${name}.mox _start
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        DEPENDS "${PROGRAM_DIR}/${name}.c" "${PROGRAM_DIR}/program.ld"
+                "${KERNEL_DIR}/include/kernel/ksys.h" "${MKPROG}"
+                ${LIBC_USER_SOURCES} "${LIBC_USER_DIR}/include/ulibc.h"
+        COMMENT "building the image of /bin/${name} with the library of a program"
+        VERBATIM
+    )
+
+    add_custom_command(
+        OUTPUT "${object}"
+        COMMAND objcopy -I binary -O elf64-x86-64
+                --rename-section .data=.rodata,alloc,load,readonly,data,contents
+                ${name}.mox ${name}_mox.o
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        DEPENDS "${image}"
+        COMMENT "embedding the image of /bin/${name}"
+        VERBATIM
+    )
+
+    set_source_files_properties("${object}" PROPERTIES
+        GENERATED TRUE
+        EXTERNAL_OBJECT TRUE
+    )
+
+    set(${name}_OBJECT "${object}" PARENT_SCOPE)
+endfunction()
+
+add_libc_program(cat)
+add_libc_program(echo)
+add_libc_program(grep)
+add_libc_program(head)
+add_libc_program(ls)
+add_libc_program(mkdir)
+add_libc_program(pwd)
+add_libc_program(rm)
+add_libc_program(spawn)
+add_libc_program(wc)
 
 add_executable(microos64
     ${KERNEL_SOURCES}
@@ -251,6 +347,17 @@ add_executable(microos64
     "${crash_OBJECT}"
     "${fork_OBJECT}"
     "${badptr_OBJECT}"
+    "${signals_OBJECT}"
+    "${cat_OBJECT}"
+    "${echo_OBJECT}"
+    "${grep_OBJECT}"
+    "${head_OBJECT}"
+    "${ls_OBJECT}"
+    "${mkdir_OBJECT}"
+    "${pwd_OBJECT}"
+    "${rm_OBJECT}"
+    "${spawn_OBJECT}"
+    "${wc_OBJECT}"
 )
 
 target_include_directories(microos64 PRIVATE

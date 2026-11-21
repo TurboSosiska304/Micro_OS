@@ -2,11 +2,14 @@
 
 #include <string.h>
 
+#include "kernel/kfile.h"
+#include "kernel/errno.h"
 #include "kernel/kmm.h"
 #include "kernel/log.h"
 #include "kernel/port.h"
 #include "kernel/port_task.h"
 #include "kernel/sched.h"
+#include "kernel/signal.h"
 
 static struct task g_tasks[TASK_MAX_TASKS];
 static k_u32_t g_next_pid = 1;
@@ -86,6 +89,32 @@ const char *task_get_cwd(struct task *t)
     return t->cwd;
 }
 
+void task_set_job(struct task *t, k_u32_t job)
+{
+    if (t == NULL) {
+        return;
+    }
+
+    k_port_enter_critical();
+    t->job = job;
+    k_port_exit_critical();
+}
+
+k_u32_t task_get_job(const struct task *t)
+{
+    k_u32_t job;
+
+    if (t == NULL) {
+        return TASK_JOB_NONE;
+    }
+
+    k_port_enter_critical();
+    job = t->job;
+    k_port_exit_critical();
+
+    return job;
+}
+
 /*
  * The trampoline: every task starts running here. It marks the task as
  * running and calls the user entry point.
@@ -154,6 +183,8 @@ static void task_free_slot(struct task *t)
         return;
     }
 
+    kfile_table_close(t);
+
     k_port_enter_critical();
     memset(t, 0, sizeof(*t));
     if (g_used > 0) {
@@ -162,7 +193,15 @@ static void task_free_slot(struct task *t)
     k_port_exit_critical();
 }
 
-struct task *task_create(const char *name, task_entry_fn entry, void *arg, k_u8_t prio)
+/*
+ * The common part of a started task: a fresh slot, the descriptors it
+ * inherits - none for an ordinary task, the ones of the parent for the
+ * child of a fork - and the context of the port. The copy of the open files
+ * happens before the port starts the task, so a child of a fork can never
+ * run with a half-copied table.
+ */
+static struct task *task_spawn(const char *name, task_entry_fn entry, void *arg, k_u8_t prio,
+                               struct task *inherit)
 {
     struct task *t;
 
@@ -170,6 +209,13 @@ struct task *task_create(const char *name, task_entry_fn entry, void *arg, k_u8_
     if (t == NULL) {
         kerror("task: the task table is full (%u slots)", (unsigned)TASK_MAX_TASKS);
         return NULL;
+    }
+
+    if (inherit != NULL) {
+        t->parent = inherit;
+        t->job = inherit->job;
+        task_set_cwd(t, task_get_cwd(inherit));
+        kfile_table_copy(t, inherit);
     }
 
     /*
@@ -190,13 +236,27 @@ struct task *task_create(const char *name, task_entry_fn entry, void *arg, k_u8_
     return t;
 }
 
+struct task *task_create(const char *name, task_entry_fn entry, void *arg, k_u8_t prio)
+{
+    return task_spawn(name, entry, arg, prio, NULL);
+}
+
+struct task *task_fork_shared(struct task *parent, const char *name, task_entry_fn entry, void *arg)
+{
+    if (parent == NULL) {
+        return NULL;
+    }
+
+    return task_spawn(name, entry, arg, parent->prio, parent);
+}
+
 /*
  * The child of a fork on a machine whose port can copy the context of the
  * caller (ADR 0005, K4). The child has an address space of its own: the port
  * copies the tables, marks the pages copy-on-write and makes the context
- * return from the system call with zero. The open files are not copied yet -
- * a program of this milestone opens nothing - and the rest of the record is
- * the one of any task.
+ * return from the system call with zero. The open files are copied with a
+ * reference each, as POSIX leaves them across a fork; the rest of the record
+ * is the one of any task.
  */
 int task_fork(struct task *parent, const char *name, struct task **child)
 {
@@ -215,7 +275,10 @@ int task_fork(struct task *parent, const char *name, struct task **child)
     }
 
     c->parent = parent;
+    c->job = parent->job;
     task_set_cwd(c, task_get_cwd(parent));
+    kfile_table_copy(c, parent);
+    task_signal_inherit(c, parent);
 
     rc = k_port_fork_copy(c);
     if (rc < 0) {
@@ -252,7 +315,17 @@ void task_exit(int code)
         memcpy(name, self->name, sizeof(name));
         name[sizeof(name) - 1] = '\0';
         pid = self->pid;
+        /* The parent learns of the end before the slot can be reaped. */
+        task_signal_notify_parent(self);
         k_port_exit_critical();
+
+        /*
+         * The descriptors of the task go with it, as POSIX closes the files
+         * of a process that exits. This happens before the task is published
+         * as a zombie: from then on its parent may reap the slot, and a
+         * descriptor that was not closed would be lost from both tables.
+         */
+        kfile_table_close(self);
 
         k_sched_task_terminated(self);
 
@@ -432,6 +505,272 @@ int task_wait(k_u32_t pid, int *exit_code, k_u32_t timeout_ms)
 
         k_sched_sleep_ms(1);
         waited++;
+    }
+}
+
+/* --- signals --- */
+
+/* The place of a signal in the table of a task, -1 when it is not one of the
+ * signals of the system. The four are not a range: the numbers are POSIX. */
+static int signal_slot(int sig)
+{
+    switch (sig) {
+    case K_SIGINT:
+        return 0;
+    case K_SIGPIPE:
+        return 1;
+    case K_SIGTERM:
+        return 2;
+    case K_SIGCHLD:
+        return 3;
+    default:
+        return -1;
+    }
+}
+
+static int signal_number(int slot)
+{
+    static const int numbers[] = {K_SIGINT, K_SIGPIPE, K_SIGTERM, K_SIGCHLD};
+
+    if (slot < 0 || (k_size_t)slot >= K_ARRAY_SIZE(numbers)) {
+        return 0;
+    }
+
+    return numbers[slot];
+}
+
+static k_u32_t signal_bit(int sig)
+{
+    return (k_u32_t)1u << (k_u32_t)signal_slot(sig);
+}
+
+/* The signals whose default answer is the end of the task. SIGCHLD is the
+ * one whose default is to be ignored, as everywhere else. */
+static bool signal_ends_by_default(int sig)
+{
+    return sig != K_SIGCHLD;
+}
+
+bool task_signal_interrupts(const struct task *t)
+{
+    int slot;
+
+    if (t == NULL || t->sig_pending == 0u) {
+        return false;
+    }
+
+    for (slot = 0; slot < (int)K_ARRAY_SIZE(t->sig_handlers); slot++) {
+        int sig = signal_number(slot);
+        task_signal_fn handler;
+
+        if (sig == 0 || (t->sig_pending & signal_bit(sig)) == 0u) {
+            continue;
+        }
+
+        handler = t->sig_handlers[slot];
+
+        if (handler == K_SIG_IGN) {
+            continue;
+        }
+
+        if (handler != K_SIG_DFL) {
+            return true;
+        }
+
+        if (signal_ends_by_default(sig)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+k_u32_t task_signal_pending(const struct task *t)
+{
+    return t != NULL ? t->sig_pending : 0u;
+}
+
+int task_signal_send(k_u32_t pid, int sig)
+{
+    struct task *t;
+
+    if (signal_slot(sig) < 0) {
+        return KERR_INVAL;
+    }
+
+    if (pid == 0u) {
+        return KERR_INVAL;
+    }
+
+    t = task_by_pid(pid);
+    if (t == NULL) {
+        return KERR_SRCH;
+    }
+
+    k_port_enter_critical();
+    if (t->state == TASK_STATE_ZOMBIE || t->state == TASK_STATE_DEAD) {
+        k_port_exit_critical();
+        return KERR_SRCH;
+    }
+    t->sig_pending |= signal_bit(sig);
+    k_port_exit_critical();
+
+    /* A task that waits for an event or a timer may come back at once: the
+     * check of the signals is what its wait and its next call look at. */
+    k_sched_unblock(t);
+
+    return 0;
+}
+
+/*
+ * The signal of a whole job: the stages of a pipeline and the programs they
+ * started. The caller is the task that reads the console for the job, so it
+ * is not a target - Ctrl+C is the end of the work and not of the shell.
+ *
+ * The pids are collected under one critical section because the table can
+ * change while the signals are sent; task_signal_send() checks the state of
+ * each task again, so a task that ended in between is simply passed over.
+ */
+int task_signal_job(k_u32_t job, int sig)
+{
+    struct task *self = task_self();
+    k_u32_t pids[TASK_MAX_TASKS];
+    k_size_t count = 0;
+    k_size_t i;
+    int sent = 0;
+
+    if (job == TASK_JOB_NONE) {
+        return KERR_INVAL;
+    }
+
+    k_port_enter_critical();
+
+    for (i = 0; i < TASK_MAX_TASKS; i++) {
+        struct task *t = &g_tasks[i];
+
+        if (!t->in_use || t == self || t->job != job) {
+            continue;
+        }
+
+        if (t->state == TASK_STATE_ZOMBIE || t->state == TASK_STATE_DEAD) {
+            continue;
+        }
+
+        pids[count++] = t->pid;
+    }
+
+    k_port_exit_critical();
+
+    for (i = 0; i < count; i++) {
+        if (task_signal_send(pids[i], sig) == 0) {
+            sent++;
+        }
+    }
+
+    return (sent > 0) ? 0 : KERR_SRCH;
+}
+
+task_signal_fn task_signal_set(struct task *t, int sig, task_signal_fn handler)
+{
+    int slot = signal_slot(sig);
+    task_signal_fn previous;
+
+    if (t == NULL) {
+        t = task_self();
+    }
+
+    if (t == NULL || slot < 0) {
+        return K_SIG_ERR;
+    }
+
+    k_port_enter_critical();
+    previous = t->sig_handlers[slot];
+    t->sig_handlers[slot] = handler;
+
+    /* An ignored signal is thrown away, as POSIX asks: there is no point in
+     * waking the task for a mark it will never answer. */
+    if (handler == K_SIG_IGN) {
+        t->sig_pending &= ~signal_bit(sig);
+    }
+    k_port_exit_critical();
+
+    return previous;
+}
+
+void task_signal_inherit(struct task *child, const struct task *parent)
+{
+    if (child == NULL || parent == NULL) {
+        return;
+    }
+
+    k_port_enter_critical();
+    memcpy(child->sig_handlers, parent->sig_handlers, sizeof(child->sig_handlers));
+    child->sig_pending = 0u;
+    k_port_exit_critical();
+}
+
+void task_signal_notify_parent(struct task *self)
+{
+    if (self == NULL || self->parent == NULL) {
+        return;
+    }
+
+    self->parent->sig_pending |= signal_bit(K_SIGCHLD);
+}
+
+void task_signal_check(struct task *t, k_ssize_t result, bool from_syscall)
+{
+    int slot;
+
+    if (t == NULL || t->sig_pending == 0u) {
+        return;
+    }
+
+    for (slot = 0; slot < (int)K_ARRAY_SIZE(t->sig_handlers); slot++) {
+        int sig = signal_number(slot);
+        task_signal_fn handler;
+        int rc;
+
+        if (sig == 0 || (t->sig_pending & signal_bit(sig)) == 0u) {
+            continue;
+        }
+
+        handler = t->sig_handlers[slot];
+
+        k_port_enter_critical();
+        t->sig_pending &= ~signal_bit(sig);
+        k_port_exit_critical();
+
+        if (handler == K_SIG_IGN) {
+            continue;
+        }
+
+        if (handler == K_SIG_DFL) {
+            if (!signal_ends_by_default(sig)) {
+                continue;
+            }
+            task_exit(128 + sig);
+            return;
+        }
+
+        rc = k_port_task_signal_enter(t, sig, handler, result, from_syscall);
+        if (rc > 0) {
+            /* The port put the handler in the context of the program: it runs
+             * when the task returns to user space. */
+            return;
+        }
+
+        if (rc < 0) {
+            /* The frame of the task cannot carry the handler: the signal ends
+             * it, as it does when the handler cannot be called at all. */
+            task_exit(128 + sig);
+            return;
+        }
+
+        /* A machine whose tasks are not programs: the handler is an ordinary
+         * function of the kernel and runs here, in the task's own context. */
+        handler(sig);
+        return;
     }
 }
 

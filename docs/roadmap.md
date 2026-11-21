@@ -91,6 +91,13 @@ written when the project was an operating system for one board; the numbers
       the tables, the fault of the first write and `k_port_fork_copy()` are
       done on x86-64 (contract 1.5, ADR 0005 and ADR 0007); the board keeps
       the placeholder of a machine without an MMU
+* [x] `pipe` (27) and `dup2` (28): an open file is a counted description, the
+      two ends of a pipe are ordinary descriptors, and the calls are in the
+      ABI and in the library (ADR 0014)
+* [x] The shell pipelines and redirections: `cmd | cmd`, `>`/`>>`/`<`/`2>`,
+      a task per stage over `task_fork_shared()`, a program that inherits
+      the three descriptors of its stage, and Ctrl+C for every stage of the
+      job (ADR 0017; `test_kshell_pipe.c`, `make x86-smoke`)
 
 ## K5 - A processor with an MMU (in progress)
 
@@ -115,8 +122,15 @@ written when the project was an operating system for one board; the numbers
 * [x] `copy_from_user`/`copy_to_user` at the edge of the system call: the
       port answers whether a range is memory of the caller, a path and `argv`
       are copied into buffers of the kernel, and a bad pointer is `EFAULT`
-      instead of a fault of ring 0 (contract 1.6, ADR 0007; `/bin/badptr` in
+      instead of a fault of ring 0 (contract 1.7, ADR 0007; `/bin/badptr` in
       `make x86-smoke`)
+* [x] Basic signals: `SIGINT`, `SIGTERM`, `SIGCHLD` and `SIGPIPE`, the
+      dispositions `SIG_DFL`/`SIG_IGN`, a handler that runs in ring 3 through
+      a frame of the port and returns through `sigreturn`, `waitpid()` cut by
+      a signal with `EINTR`, `SIGCHLD` on the exit of a child, `kill` in the
+      shell and Ctrl+C of the foreground program (`/bin/signals` in
+      `make x86-smoke`, ADR 0015). No job control: there are no groups and
+      the shell says so.
 * [ ] The kernel in a higher half: the plan of the loader, the linker script
       and `page_phys()` is written down in ADR 0007, not taken
 * [ ] A port for a real ARM with an MMU: the same contract, a second `arch/`
@@ -193,3 +207,31 @@ written when the project was an operating system for one board; the numbers
 * [ ] ESP32: the kernel tasks on both cores of the Pico, no driver assuming
       one core
 * [ ] `KERNEL_SMP` (ADR 0010) and the host TSan run as the gate
+
+## K9 - A userland (in progress)
+
+* [x] The entry ABI of a program is `argc`, `argv` and `envp` in `rdi`, `rsi`
+      and `rdx`, written down and checked (`make x86-smoke` prints the
+      environment of `/bin/hello`) - ADR 0016
+* [x] `execve(path, argv, envp)` with the third argument of POSIX; a NULL
+      environment is the one of the system (`k_exec_environ()`), and the
+      arguments and the environment are copied and bounded apart
+* [x] A library of a program, not of the kernel: `components/libc/user` with
+      `_start`, the door of `int $0x80`, `open`, `close`, `read`, `write`,
+      `lseek`, `readdir`, `getpid`, `uptime`, `exit`, `printf`, `puts` and
+      the strings; the numbers come from the header of the kernel
+* [x] The programs of `/bin` built from C against the library - `cat`,
+      `echo`, `ls`, `spawn` and `wc` - and `make x86-smoke` runs them,
+      including a program that starts another with an environment of its own
+* [x] Descriptors inherited by `execve`, and a `cat` that reads its stdin:
+      the table of the stage is copied into the program before it runs
+* [x] `pipe`, `dup2` and a redirection without the help of the kernel: the
+      shell of ADR 0017 uses the calls of ADR 0014 (`test_kshell_pipe.c`)
+* [x] Basic signals: `SIGINT`, `SIGTERM`, `SIGCHLD` and an interrupted wait,
+      and Ctrl+C for every stage of a pipeline (the job of ADR 0017)
+* [x] `ls` lists the names of a directory (`-l` with the mode, owner, size and
+      date; `-a` with `.` and `..`), and `tree` draws the levels below it
+* [ ] A shell `export` and the environment of the shell in the programs,
+      instead of the four words of the kernel
+* [ ] Programs are files on a filesystem of the disk, and more than the ten
+      images the boot writes (the format is frozen first, ADR 0011)

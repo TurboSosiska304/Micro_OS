@@ -35,6 +35,7 @@ void test_ksys(void);
 void test_ksys_process(void);
 void test_libc(void);
 void test_kshell(void);
+void test_kshell_pipe(void);
 void test_initd(void);
 void test_config(void);
 void test_net(void);

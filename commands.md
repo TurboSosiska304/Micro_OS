@@ -228,8 +228,10 @@ rm -- -notes
 
 | Command | Flag | Meaning |
 |---|---|---|
-| `ls` | `-l` | the mode, the owner and the size of every entry |
-| `ls` | `-a` | `.` and `..` as well |
+| `ls` | `-l` | the mode, the owner, the size and the date of every entry |
+| `ls` | `-a` | `.` and `..` first |
+| `tree` | `-d` | the directories only |
+| `tree` | `-a` | accepted for hidden names; this system has none yet |
 | `cat` | `-n` | the number of the line in front of every line |
 | `rm` | `-r` | a directory with everything in it; without it a directory is refused |
 | `df` | `-h` | the sizes in KB and MB instead of blocks |

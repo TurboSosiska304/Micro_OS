@@ -15,7 +15,7 @@ in [`docs/memory.md`](../memory.md); this page is about using it.
 The simulator, right after a boot (the board adds `/log`, x86-64 adds `/bin`):
 
 ```text
-microos> ls /
+microos> tree /
 /
 |-- etc/
 |   `-- init.d/
@@ -44,8 +44,9 @@ microos> ls /
 | `/log` | on the board: `start.log`, the log of the boot |
 | `/bin` | on x86-64: the programs the boot writes (`hello`, `crash`, `fork`, `badptr`) |
 
-`ls` prints the tree below a path and takes no flags; `stat` is the detailed
-view of one object.
+`ls` prints the names of a directory, one per line; `-l` adds the mode, the
+owner, the size and the date, and `-a` the two names `.` and `..`. `tree`
+draws the levels below a path, and `stat` is the detailed view of one object.
 
 ## MicroFS
 

@@ -3,9 +3,11 @@
 
 #include <string.h>
 
+#include "kernel/errno.h"
 #include "kernel/log.h"
 #include "kernel/lock.h"
 #include "kernel/sched.h"
+#include "kernel/signal.h"
 #include "kernel/task.h"
 #include "port_host.h"
 
@@ -266,6 +268,54 @@ static void contending_task(void *arg)
     }
 }
 
+/* A task of a job that is still alive when the signal of the job arrives. */
+static void job_worker(void *arg)
+{
+    K_UNUSED(arg);
+
+    k_sched_sleep_ms(50);
+}
+
+/*
+ * The job of a pipeline (ADR 0017): the child of task_fork_shared() gets the
+ * job of its parent, a signal of the job reaches every task of it, and the
+ * caller that reads the console for the chain is not a target.
+ */
+static void test_task_job(void)
+{
+    struct task *self = task_self();
+    struct task *child;
+    k_u32_t previous;
+    k_u32_t job;
+    int code = -1;
+
+    ktest_begin("task: a job is inherited and a signal reaches the whole job");
+
+    port_host_set_sink(tmpfile());
+
+    previous = task_get_job(self);
+    job = self->pid;
+
+    task_set_job(self, job);
+    child = task_fork_shared(self, "job-child", job_worker, NULL);
+    task_set_job(self, previous);
+
+    KT_CHECK(child != NULL);
+
+    if (child != NULL) {
+        KT_CHECK_INT_EQ(task_get_job(child), job);
+        /* The caller is the owner of the job, so only the child is named. */
+        KT_CHECK_INT_EQ(task_signal_job(job, K_SIGINT), 0);
+        KT_CHECK(task_signal_pending(child) != 0);
+        KT_CHECK_INT_EQ(task_wait(child->pid, &code, 2000), 0);
+    }
+
+    KT_CHECK_INT_EQ(task_signal_job(TASK_JOB_NONE, K_SIGINT), KERR_INVAL);
+    KT_CHECK_INT_EQ(task_get_job(self), previous);
+
+    port_host_set_sink(NULL);
+}
+
 static void test_mutex_creation_race(void)
 {
     struct task *a;
@@ -308,5 +358,6 @@ void test_task(void)
     test_task_parent();
     test_task_wait();
     test_task_wait_timeout();
+    test_task_job();
     test_mutex_creation_race();
 }

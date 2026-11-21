@@ -43,6 +43,23 @@ struct microos_statx {
 /* The flags of the waitpid. */
 #define MICROOS_WNOHANG 1
 
+/*
+ * The signals of the system, the numbers of POSIX. The set is the one of
+ * kernel/signal.h: the terminal interrupt, the end of the process, the end
+ * of a child and a broken pipe.
+ */
+#define MICROOS_SIGINT 2
+#define MICROOS_SIGPIPE 13
+#define MICROOS_SIGTERM 15
+#define MICROOS_SIGCHLD 17
+
+typedef void (*microos_signal_fn)(int);
+
+/* The two dispositions of the kernel, and the answer of a refused signal(). */
+#define MICROOS_SIG_DFL ((microos_signal_fn)0)
+#define MICROOS_SIG_IGN ((microos_signal_fn)1)
+#define MICROOS_SIG_ERR ((microos_signal_fn) - 1)
+
 /* The whence of the lseek, the numbers of POSIX. */
 #define MICROOS_SEEK_SET 0
 #define MICROOS_SEEK_CUR 1
@@ -52,6 +69,14 @@ int microos_open(const char *path, int flags, ...);
 int microos_close(int fd);
 long microos_read(int fd, void *buf, size_t count);
 long microos_write(int fd, const void *buf, size_t count);
+/*
+ * The ends of a pipe: fds[0] reads, fds[1] writes. The descriptors are
+ * ordinary ones of the task, so dup2 and fork treat them as any other file;
+ * a read of a pipe whose writing end is closed is the end of the file (0).
+ */
+int microos_pipe(int fds[2]);
+/* A second descriptor of an open file, POSIX style: the old one first. */
+int microos_dup2(int oldfd, int newfd);
 long microos_lseek(int fd, long offset, int whence);
 int microos_unlink(const char *path);
 int microos_mkdir(const char *path);
@@ -67,6 +92,9 @@ int microos_chmod(const char *path, unsigned mode);
 int microos_chown(const char *path, unsigned owner);
 int microos_statx(const char *path, struct microos_statx *out);
 int microos_execve(const char *path, char *const argv[]);
+int microos_kill(int pid, int sig);
+/* The previous disposition, or MICROOS_SIG_ERR. */
+microos_signal_fn microos_signal(int sig, microos_signal_fn handler);
 
 /* The code of the last error, the numbers of POSIX. */
 int microos_errno(void);
@@ -92,6 +120,8 @@ const char *microos_strerror(int code);
 #define close microos_close
 #define read microos_read
 #define write microos_write
+#define pipe microos_pipe
+#define dup2 microos_dup2
 #define lseek microos_lseek
 #endif /* MICROOS_LIBC_KEEP_NAMES */
 #define unlink microos_unlink
@@ -108,5 +138,7 @@ const char *microos_strerror(int code);
 #define chown microos_chown
 #define statx microos_statx
 #define execve microos_execve
+#define kill microos_kill
+#define signal microos_signal
 
 #endif /* MICRO_OS_LIBC_UNISTD_H */

@@ -69,6 +69,40 @@ static void check_valid_image(void)
     KT_CHECK_INT_EQ(parsed.text_size, TEST_TEXT_BYTES);
     KT_CHECK_INT_EQ(parsed.data_size, TEST_DATA_BYTES);
     KT_CHECK_INT_EQ(parsed.bss_size, 0);
+    /* The file carries no environment; the caller of the run sets one. */
+    KT_CHECK(parsed.envp == NULL);
+}
+
+/*
+ * The environment of the system is the one every program started without a
+ * vector of its own sees. The property that matters is the shape of the
+ * vector and not the words: PATH is a value a program of this system looks
+ * for, and no word may be a name without a value.
+ */
+static void check_environment(void)
+{
+    const char *const *envp = k_exec_environ();
+    k_size_t count = 0;
+
+    ktest_begin("exec: the environment of the system is a vector of names");
+
+    KT_CHECK(envp != NULL);
+    KT_CHECK(k_exec_environ() == envp);
+
+    while (envp != NULL && envp[count] != NULL && count < 32u) {
+        const char *word = envp[count];
+        const char *equals = strchr(word, '=');
+
+        KT_CHECK(equals != NULL);
+        KT_CHECK(equals != word);
+        KT_CHECK(equals == NULL || equals[1] != '\0');
+        count++;
+    }
+
+    KT_CHECK(count > 0);
+    KT_CHECK(count < 32u);
+    KT_CHECK(envp != NULL && envp[count] == NULL);
+    KT_CHECK(envp != NULL && strcmp(envp[0], "PATH=/bin") == 0);
 }
 
 static void check_bad_header(void)
@@ -238,6 +272,22 @@ static void check_run_without_a_machine(void)
     k_exec_exit(7);
     KT_CHECK_INT_EQ(k_exec_run(&parsed, NULL), -2);
 
+    /*
+     * An environment of the caller is carried by the image and not by the
+     * machine: a machine that cannot enter a program says so whatever the
+     * vector is, and the structure of the caller is not written to - the
+     * default of the system is a copy of the call, not a field of the image.
+     */
+    {
+        char *env[] = {(char *)"PATH=/bin", (char *)"HOME=/", NULL};
+        struct k_exec_image with_env = parsed;
+
+        with_env.envp = (const char *const *)env;
+        KT_CHECK_INT_EQ(k_exec_run(&with_env, NULL), -2);
+        KT_CHECK(with_env.envp != NULL);
+        KT_CHECK(with_env.envp[0] == env[0]);
+    }
+
     /* A call with nothing to run is a refusal of the caller, not of the
      * machine, so it is -1 and not ENOSYS. */
     KT_CHECK_INT_EQ(k_exec_run(NULL, NULL), -1);
@@ -253,6 +303,7 @@ void test_exec(void)
     check_bad_header();
     check_bad_sizes();
     check_bad_entry();
+    check_environment();
     check_run_without_a_machine();
 }
 

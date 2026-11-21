@@ -131,22 +131,23 @@ Micro_OS/
 ## Known limitations
 
 * **No MMU on the boards without one.** The kernel/user split is logical
-  there: no memory protection, no address-space isolation. A port with an MMU
-  (x86-64) has one and does not use it yet - the page tables per task are the
-  next step of the kernel roadmap.
+  there: no memory protection, no address-space isolation. The x86-64 port
+  has an MMU and uses it: a program is a task of ring 3 with page tables of
+  its own (ADR 0007).
 * **`fork()` is a placeholder on those ports.** Without an MMU the child
   shares the memory of the parent and re-enters its program; the answer (pid
-  in the parent, 0 in the child) is the POSIX one. A port with an MMU will copy
-  the pages ([ADR 0005](docs/adr/0005-programs-and-protection.md)).
+  in the parent, 0 in the child) is the POSIX one. On x86-64 the pages are
+  copied on write ([ADR 0005](docs/adr/0005-programs-and-protection.md)).
 * **One user, with a real mode and owner.** A file has a mode and an owner in
   its inode, and the mode is checked at the edge of the system; there is a
   single user (uid 0) on the board today, so the bits of the group and of the
   others are stored but not exercised.
-* **Programs are young.** The format (MOX1), `execve`, `chmod`/`chown` and
-  the window of the x86-64 port exist, and `/bin/hello` runs on that machine
-  and calls the kernel through `int $0x80`, with its arguments and a status.
-  The program is still ring 0 code without an address space of its own: there
-  is no `exit` call from a program and no isolation (K5).
+* **Programs are young.** The format (MOX1), `execve`, `chmod`/`chown`, the
+  window of the x86-64 port and a library of a program exist: `/bin` has
+  `hello`, `cat`, `echo`, `ls`, `spawn` and the programs of the tests, all of
+  them ring 3 tasks with `argc`, `argv` and `envp` and an `exit` that the
+  caller waits for ([ADR 0016](docs/adr/0016-userland.md)). There is no shell
+  `export`, no descriptors inherited by a program and no signals yet.
 * **The board has limits of its own**: no PMIC, 8 MB of flash with one
   application slot and no OTA, a 200 mAh battery. They are in
   [docs/ports/esp32](docs/ports/esp32/README.md).

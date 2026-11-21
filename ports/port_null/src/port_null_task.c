@@ -8,6 +8,7 @@
  */
 #include "kernel/port_task.h"
 
+#include "kernel/errno.h"
 #include "kernel/types.h"
 
 k_size_t k_port_task_stack_size(void)
@@ -43,4 +44,23 @@ void k_port_task_exit(int code)
 struct task *k_port_task_current(void)
 {
     return NULL;
+}
+
+/* There is no context at all here: the kernel runs a handler in place. */
+int k_port_task_signal_enter(struct task *t, int sig, void (*handler)(int), k_ssize_t result,
+                             bool from_syscall)
+{
+    K_UNUSED(t);
+    K_UNUSED(sig);
+    K_UNUSED(handler);
+    K_UNUSED(result);
+    K_UNUSED(from_syscall);
+    return 0;
+}
+
+int k_port_task_signal_leave(struct task *t, k_ssize_t *result)
+{
+    K_UNUSED(t);
+    K_UNUSED(result);
+    return KERR_NOSYS;
 }

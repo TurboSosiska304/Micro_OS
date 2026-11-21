@@ -280,15 +280,17 @@ static void test_abi_is_stable(void)
         k_u32_t number;
         const char *name;
     } golden[] = {
-        {KSYS_EXIT, "exit"},       {KSYS_READ, "read"},       {KSYS_WRITE, "write"},
-        {KSYS_OPEN, "open"},       {KSYS_CLOSE, "close"},     {KSYS_STAT, "stat"},
-        {KSYS_LSEEK, "lseek"},     {KSYS_UNLINK, "unlink"},   {KSYS_MKDIR, "mkdir"},
-        {KSYS_READDIR, "readdir"}, {KSYS_GETPID, "getpid"},   {KSYS_GETCWD, "getcwd"},
-        {KSYS_IOCTL, "ioctl"},     {KSYS_YIELD, "yield"},     {KSYS_SLEEP, "sleep"},
-        {KSYS_UPTIME, "uptime"},   {KSYS_REBOOT, "reboot"},   {KSYS_FORK, "fork"},
-        {KSYS_GETPPID, "getppid"}, {KSYS_WAITPID, "waitpid"}, {KSYS_MALLOC, "malloc"},
-        {KSYS_FREE, "free"},       {KSYS_REALLOC, "realloc"}, {KSYS_CHMOD, "chmod"},
-        {KSYS_CHOWN, "chown"},     {KSYS_EXECVE, "execve"},   {KSYS_STATX, "statx"},
+        {KSYS_EXIT, "exit"},       {KSYS_READ, "read"},           {KSYS_WRITE, "write"},
+        {KSYS_OPEN, "open"},       {KSYS_CLOSE, "close"},         {KSYS_STAT, "stat"},
+        {KSYS_LSEEK, "lseek"},     {KSYS_UNLINK, "unlink"},       {KSYS_MKDIR, "mkdir"},
+        {KSYS_READDIR, "readdir"}, {KSYS_GETPID, "getpid"},       {KSYS_GETCWD, "getcwd"},
+        {KSYS_IOCTL, "ioctl"},     {KSYS_YIELD, "yield"},         {KSYS_SLEEP, "sleep"},
+        {KSYS_UPTIME, "uptime"},   {KSYS_REBOOT, "reboot"},       {KSYS_FORK, "fork"},
+        {KSYS_GETPPID, "getppid"}, {KSYS_WAITPID, "waitpid"},     {KSYS_MALLOC, "malloc"},
+        {KSYS_FREE, "free"},       {KSYS_REALLOC, "realloc"},     {KSYS_CHMOD, "chmod"},
+        {KSYS_CHOWN, "chown"},     {KSYS_EXECVE, "execve"},       {KSYS_STATX, "statx"},
+        {KSYS_PIPE, "pipe"},       {KSYS_DUP2, "dup2"},           {KSYS_KILL, "kill"},
+        {KSYS_SIGNAL, "signal"},   {KSYS_SIGRETURN, "sigreturn"},
     };
     size_t i;
 
@@ -1082,6 +1084,201 @@ static void test_readdir_directory(void)
     teardown();
 }
 
+/*
+ * The property: the two ends of a pipe are descriptors of the task, the
+ * bytes come back in the order they went in, and the end of the writing end
+ * is the end of the file.
+ */
+static void test_pipe(void)
+{
+    char out[32];
+    char in[8];
+    int fds[2];
+
+    ktest_begin("ksys: a pipe carries the bytes from the writer to the reader");
+
+    setup();
+
+    KT_CHECK_INT_EQ(ksys_pipe(fds), 0);
+    KT_CHECK(fds[0] >= 0 && fds[0] < TASK_MAX_FDS);
+    KT_CHECK(fds[1] >= 0 && fds[1] < TASK_MAX_FDS);
+    KT_CHECK(fds[0] != fds[1]);
+
+    KT_CHECK_INT_EQ(ksys_write(fds[1], "hello", 5), 5);
+    memset(out, 0, sizeof(out));
+    KT_CHECK_INT_EQ(ksys_read(fds[0], out, sizeof(out)), 5);
+    KT_CHECK_STR_EQ(out, "hello");
+
+    /* A pipe has no position and no entries. */
+    KT_CHECK_INT_EQ(ksys_lseek(fds[0], 0, KSYS_SEEK_SET), KERR_SPIPE);
+    KT_CHECK_INT_EQ(ksys_readdir(fds[0], out, sizeof(struct vfs_dirent)), KERR_NOTDIR);
+
+    /* Each end remembers its access: the reader cannot write and the writer
+     * cannot read. */
+    KT_CHECK_INT_EQ(ksys_write(fds[0], "x", 1), KERR_BADF);
+    KT_CHECK_INT_EQ(ksys_read(fds[1], in, 1), KERR_BADF);
+
+    /* The end of the writing end is the end of the file. */
+    KT_CHECK_INT_EQ(ksys_close(fds[1]), 0);
+    KT_CHECK_INT_EQ(ksys_read(fds[0], out, sizeof(out)), 0);
+    KT_CHECK_INT_EQ(ksys_close(fds[0]), 0);
+
+    /* A pipe whose reading end is closed is EPIPE: there are no signals in
+     * this system, so the error is the whole answer. */
+    KT_CHECK_INT_EQ(ksys_pipe(fds), 0);
+    KT_CHECK_INT_EQ(ksys_close(fds[0]), 0);
+    KT_CHECK_INT_EQ(ksys_write(fds[1], "lost", 4), KERR_PIPE);
+    KT_CHECK_INT_EQ(ksys_close(fds[1]), 0);
+
+    teardown();
+}
+
+/*
+ * The property: a pipe waits for the other end, and a wait that passes the
+ * bound is EAGAIN and not the end of the file and not a lost byte.
+ */
+static void test_pipe_waits(void)
+{
+    char chunk[64];
+    int fds[2];
+    int total = 0;
+    int next = 0;
+    int rc;
+
+    ktest_begin("ksys: a pipe waits for the other end and then says so");
+
+    setup();
+    memset(chunk, 'a', sizeof(chunk));
+
+    KT_CHECK_INT_EQ(ksys_pipe(fds), 0);
+
+    /* An empty pipe with the writer still open is a wait, not an end. */
+    KT_CHECK_INT_EQ(ksys_read(fds[0], chunk, sizeof(chunk)), KERR_AGAIN);
+
+    /* Fill the pipe: the write that finds no room waits and then says that
+     * nothing of it was placed. */
+    for (next = 0; next < 64; next++) {
+        rc = (int)ksys_write(fds[1], chunk, sizeof(chunk));
+        if (rc < 0) {
+            break;
+        }
+        total += rc;
+    }
+
+    KT_CHECK(total > 0);
+    KT_CHECK(next < 64);
+    KT_CHECK_INT_EQ(rc, KERR_AGAIN);
+
+    /* The reader drains a piece, and the writer goes on. */
+    KT_CHECK(ksys_read(fds[0], chunk, sizeof(chunk)) > 0);
+    KT_CHECK_INT_EQ(ksys_write(fds[1], "x", 1), 1);
+
+    KT_CHECK_INT_EQ(ksys_close(fds[0]), 0);
+    KT_CHECK_INT_EQ(ksys_close(fds[1]), 0);
+
+    teardown();
+}
+
+/*
+ * The property: dup2 gives a second descriptor of one open file, the write
+ * goes to the object the number now names, and closing the original leaves
+ * the copy alive.
+ */
+static void test_dup2(void)
+{
+    char out[16];
+    int fds[2];
+    int file;
+    int copy;
+
+    ktest_begin("ksys: dup2 makes a second descriptor of one open file");
+
+    setup();
+    memset(out, 0, sizeof(out));
+
+    file = ksys_open("/dup.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    KT_CHECK(file >= 0);
+
+    copy = ksys_dup2(file, 1);
+    KT_CHECK_INT_EQ(copy, 1);
+
+    KT_CHECK_INT_EQ(ksys_write(1, "abc", 3), 3);
+    KT_CHECK_INT_EQ(ksys_close(file), 0); /* the copy keeps the file open */
+    KT_CHECK_INT_EQ(ksys_write(1, "def", 3), 3);
+    KT_CHECK_INT_EQ(ksys_close(1), 0);
+
+    file = ksys_open("/dup.txt", KSYS_O_RDONLY);
+    KT_CHECK(file >= 0);
+    KT_CHECK_INT_EQ(ksys_read(file, out, sizeof(out)), 6);
+    KT_CHECK_STR_EQ(out, "abcdef");
+    KT_CHECK_INT_EQ(ksys_close(file), 0);
+
+    /* The descriptor that was open at the new number is closed by the call:
+     * the pipe loses its writing end and the reader gets the end of the
+     * file without waiting. */
+    KT_CHECK_INT_EQ(ksys_pipe(fds), 0);
+    file = ksys_open("/dup2.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    KT_CHECK(file >= 0);
+    KT_CHECK_INT_EQ(ksys_dup2(file, fds[1]), fds[1]);
+    KT_CHECK_INT_EQ(ksys_read(fds[0], out, sizeof(out)), 0);
+    KT_CHECK_INT_EQ(ksys_close(fds[0]), 0);
+    KT_CHECK_INT_EQ(ksys_write(fds[1], "pipe", 4), 4);
+    KT_CHECK_INT_EQ(ksys_close(file), 0);
+    KT_CHECK_INT_EQ(ksys_close(fds[1]), 0);
+
+    /* dup2 sends the writes of the number 1 into a pipe: the ends take the
+     * first free slots, so two files hold 0 and 1 and the new number 1
+     * closes the second of them. */
+    KT_CHECK_INT_EQ(ksys_open("/dup4.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC), 0);
+    KT_CHECK_INT_EQ(ksys_open("/dup5.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC), 1);
+    KT_CHECK_INT_EQ(ksys_pipe(fds), 0);
+    KT_CHECK_INT_EQ(ksys_dup2(fds[1], 1), 1);
+    KT_CHECK_INT_EQ(ksys_close(fds[1]), 0);
+    KT_CHECK_INT_EQ(ksys_write(1, "pipe", 4), 4);
+    KT_CHECK_INT_EQ(ksys_close(1), 0);
+    KT_CHECK_INT_EQ(ksys_close(0), 0);
+    memset(out, 0, sizeof(out));
+    KT_CHECK_INT_EQ(ksys_read(fds[0], out, sizeof(out)), 4);
+    KT_CHECK_STR_EQ(out, "pipe");
+    KT_CHECK_INT_EQ(ksys_close(fds[0]), 0);
+
+    teardown();
+}
+
+/*
+ * The property: a number that is not a descriptor of the task is refused,
+ * and the two calls leave the table as it was.
+ */
+static void test_pipe_errors(void)
+{
+    int file;
+
+    ktest_begin("ksys: a descriptor a pipe or a dup2 cannot use is refused");
+
+    setup();
+
+    KT_CHECK_INT_EQ(ksys_pipe(NULL), KERR_INVAL);
+
+    /* The table is empty: there is nothing to copy. */
+    KT_CHECK_INT_EQ(ksys_dup2(0, 1), KERR_BADF);
+    KT_CHECK_INT_EQ(ksys_dup2(-1, 0), KERR_BADF);
+    KT_CHECK_INT_EQ(ksys_dup2(0, TASK_MAX_FDS), KERR_BADF);
+    KT_CHECK_INT_EQ(ksys_dup2(TASK_MAX_FDS, 0), KERR_BADF);
+
+    file = ksys_open("/dup3.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    KT_CHECK(file >= 0);
+    if (file >= 0) {
+        /* The same number twice changes nothing, and a number past the
+         * table is not a descriptor. */
+        KT_CHECK_INT_EQ(ksys_dup2(file, file), file);
+        KT_CHECK_INT_EQ(ksys_dup2(file, TASK_MAX_FDS), KERR_BADF);
+        KT_CHECK_INT_EQ(ksys_close(file), 0);
+    }
+    KT_CHECK_INT_EQ(ksys_close(file), KERR_BADF);
+
+    teardown();
+}
+
 /* The answer of a task that waits without having a child of its own. */
 static int g_no_child_any = 1;
 static int g_no_child_blocking = 1;
@@ -1144,5 +1341,9 @@ void test_ksys(void)
     test_directory_search();
     test_readdir_validation();
     test_readdir_directory();
+    test_pipe();
+    test_pipe_waits();
+    test_dup2();
+    test_pipe_errors();
     test_wait_no_child();
 }

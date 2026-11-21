@@ -4,9 +4,11 @@ A program in Micro OS is a **file**, not a function of the kernel: `execve`
 reads the file through the VFS, the kernel checks it against a format of its
 own, and the port places it in memory and enters it. The decisions are in
 [ADR 0005](../adr/0005-programs-and-protection.md) (the format and the rights),
-[ADR 0006](../adr/0006-program-entry.md) (the entry) and
-[ADR 0007](../adr/0007-paging-and-user-mode.md) (the address space and ring 3);
-the report of the phase is [`docs/phases/phase7.md`](../phases/phase7.md).
+[ADR 0006](../adr/0006-program-entry.md) (the entry),
+[ADR 0007](../adr/0007-paging-and-user-mode.md) (the address space and ring 3)
+and [ADR 0016](../adr/0016-userland.md) (the environment, the library and the
+programs of `/bin`); the report of the phase is
+[`docs/phases/phase7.md`](../phases/phase7.md).
 
 Only one machine of the tree can run a program:
 
@@ -53,22 +55,42 @@ tools/mkprog.sh [--base 0x02000000] hello.elf hello.mox hello_main
 
 The image is not relocated: the code and the data have to be linked for the
 address the port names, and `--base` makes the script refuse an image linked
-for another window. The x86-64 port builds its four programs this way: the
+for another window. The x86-64 port builds its fifteen images this way: the
 object is compiled for the window, linked with `programs/program.ld`, turned
 into a `.mox` by the script and embedded in the kernel as a blob, because the
 kernel needs the bytes before it has a filesystem to read them from.
 
 ## `/bin` and the boot
 
-The x86-64 port mounts MicroFS at `/`, creates `/bin`, writes four images
+The x86-64 port mounts MicroFS at `/`, creates `/bin`, writes fifteen images
 there and gives them the mode of a program (`0755`) through the VFS:
 
 | File | What it proves |
 |---|---|
-| `/bin/hello` | the door: `write`, arguments, pid, clock, `sleep`, `exit`; it prints `cpl 3` |
+| `/bin/hello` | the door: `write`, arguments, environment, pid, clock, `sleep`, `exit`; it prints `cpl 3` |
 | `/bin/crash` | a fault of ring 3 is reported and the shell survives |
 | `/bin/fork` | `fork()` with copy on write: the child gets 0, the parent the pid |
 | `/bin/badptr` | a pointer outside the window is `EFAULT`, not a fault of ring 0 |
+| `/bin/signals` | a handler, `SIGTERM` ending a child, a wait cut by `SIGINT`, `SIG_IGN`, and the errors of `kill` |
+| `/bin/cat` | `open`, `read`, `write` on a file or descriptor 0, through the library of a program |
+| `/bin/echo` | the vector of the arguments and `write`, the shortest useful program |
+| `/bin/ls` | a directory through `open(O_DIRECTORY)` and `readdir`; no path is the working directory |
+| `/bin/grep` | the lines of a source that hold a word (`-i`, `-v`), through `strstr` |
+| `/bin/head` | the first lines of a source (`-n N`), a block at a time |
+| `/bin/mkdir` | a directory through `mkdir`, one for every word of the line |
+| `/bin/pwd` | the directory of the task through `getcwd` |
+| `/bin/rm` | a name through `unlink`; `-r` walks a directory with `readdir` |
+| `/bin/spawn` | `execve` from a program, with an environment of its own |
+| `/bin/wc` | the lines, words and bytes of a source (`-l`, `-w`, `-c`) or of descriptor 0 |
+
+The first five talk to the kernel through `programs/prog.h`, because what they
+test is the raw door, the fault, the fork, the edge and the signals. The last
+ten are ordinary C programs linked against `components/libc/user`
+([ADR 0016](../adr/0016-userland.md)). Every one of them reads descriptor 0
+when it is given no file (or `-`); `execve` carries the table of the caller, so
+a redirect or a pipe of the shell fills it (`cat < file`, `ls /bin | wc -l`,
+[ADR 0017](../adr/0017-shell-pipelines.md)). A program at the prompt with no
+redirect still has no descriptor 0 of the console.
 
 The boot then asks for `/bin/hello` with `ksys_execve()`: the stat, the check
 of the mode, the read through the VFS, the parse and the entry are the ones of
@@ -81,8 +103,26 @@ microos> exec hello
 PROGRAM: hello from /bin
 PROGRAM: cpl 3
 PROGRAM: argc 1, argv[0] hello
+PROGRAM: envp 4, PATH=/bin
 PROGRAM: pid 4, up 2869 ms
 PROGRAM: slept 10 ms, up 2880 ms
+the program has finished
+microos> exec /bin/cat /etc/setting
+hello
+the program has finished
+microos> exec /bin/echo one two
+one two
+the program has finished
+microos> exec /bin/wc -l /etc/setting
+1 /etc/setting
+the program has finished
+microos> exec /bin/pwd
+/
+the program has finished
+microos> exec /bin/spawn
+spawn: starting /bin/hello with its own environment
+PROGRAM: argc 2, argv[0] hello
+PROGRAM: envp 2, PATH=/custom
 the program has finished
 microos> exec crash
 PROGRAM: crash writes to address zero
@@ -140,6 +180,66 @@ entered it and reports the status (0..255). A program that faults is printed as
 `the program faulted: vector N at 0x...`, taken down, and its status is 255;
 the shell that ran it is alive and answers the next command.
 
+## The entry of a program: `argc`, `argv`, `envp`
+
+The port enters an image with the arguments of a C function in the registers
+([ADR 0016](../adr/0016-userland.md)):
+
+| Register | Argument |
+|---|---|
+| `rdi` | `argc`, the number of the words of `argv` |
+| `rsi` | `argv`, the vector of the arguments, ended by NULL |
+| `rdx` | `envp`, the vector of `NAME=VALUE` words, ended by NULL |
+
+The stack is aligned as after a call and its top word is zero, so the C entry
+is `main(argc, argv, envp)`; a program that returns instead of calling `exit`
+faults on address zero. `envp` is never NULL: a program started without an
+environment of its own sees the four words of the system - `PATH=/bin`,
+`HOME=/`, `USER=root`, `PWD=/` - because the shell has no `export` yet.
+
+`execve(path, argv, envp)` is number 25, and the environment is its third
+argument, as in POSIX. Both vectors are copied at the edge of the call: at most
+eight words and 512 bytes each, and a bad one is `EFAULT` or `E2BIG` before the
+file is read. `exec /bin/cat /etc/setting` passes no environment, and the
+kernel fills in the one of the system.
+
+## The library of a program
+
+`components/libc/user/` is the library a program is linked against; it is not
+the library of the kernel, which calls `ksys_*` and has no address in ring 3:
+
+| File | What it has |
+|---|---|
+| `include/ulibc.h` | the prototypes and the numbers of the calls, from `kernel/ksys.h` |
+| `src/start.c` | `_start`: `main(argc, argv, envp)`, then `exit` |
+| `src/syscall.c` | `int $0x80`, `open`, `close`, `read`, `write`, `lseek`, `readdir`, `stat`, `mkdir`, `unlink`, `getcwd`, `getpid`, `uptime`, `execve`, `exit` |
+| `src/stdio.c` | `printf` and `puts` over a buffer of 128 bytes and `write(1, ...)` |
+| `src/string.c` | `strlen`, `strcmp`, `strncmp`, `strstr`, `memcpy`, `memset` |
+
+```c
+#include "ulibc.h"
+
+int main(int argc, char *const argv[], char *const envp[])
+{
+    int fd = open(argv[1], ULIBC_O_RDONLY);
+
+    if (fd < 0) {
+        printf("cat: %s: error %d\n", argv[1], -fd);
+        return ULIBC_EXIT_FAILURE;
+    }
+    /* ... read and write ... */
+    close(fd);
+    return ULIBC_EXIT_SUCCESS;
+}
+```
+
+The functions return the result of the call, so a negative number is `-errno`:
+the library has no `errno` of its own. A program of the library is built by
+`ports/port_x86_64/CMakeLists.txt` (the runtime sources are linked with the
+file of the program, the entry is `_start`), and the image is a `.mox` like
+every other. There is no dynamic linker: each image carries its copy of the
+library.
+
 ## The address space and `fork`
 
 A program is a task of the scheduler with page tables of its own:
@@ -166,15 +266,22 @@ plan to pretend otherwise.
 
 * **No ELF and no dynamic linker.** The format is `MOX1`, everything is
   statically linked, and there are no shared objects.
-* **No libc of the host.** A program has the calls of the ABI and whatever the
-  image carries; the x86-64 programs talk to the kernel through
-  `programs/prog.h`, and the libc subset of `components/libc` is what the shell
-  and the components of the kernel use, not a library a program is linked
-  against.
-* **No descriptors inherited by a fork**, and a program that calls `execve`
-  starts a second task instead of replacing itself. The POSIX shape is on the
-  list of debts.
-* **No `mmap` and no `brk`.** A program cannot ask for a range of its own.
+* **No libc of the host.** A program has the calls of the ABI, the library of
+  `components/libc/user` and nothing else. The library is not a standard C
+  library: no allocation, no files of a stream, no `errno`, no floating point
+  (the programs are built with `-mgeneral-regs-only`), and the formatter has
+  no precision and no `*` width.
+* **No inherited descriptors.** A program is a task with a table of four
+  descriptors of its own, and the shell does not pass its own table to it.
+  `cat`, `wc`, `head` and `grep` read descriptor 0 when they are given no file
+  (or `-`), but a fresh table has no descriptor 0: the read answers `EBADF`
+  until a redirection or an inherited table opens it. The descriptors 1 and 2
+  are the console; `pipe`, `dup2` and the inheritance are a debt of the
+  milestone after this one.
+* **No `mmap` and no `brk`.** A program cannot ask for a range of its own, and
+  the library has no `malloc`.
+* **No shell `export`.** The environment of every program is the four words of
+  the kernel; a program that wants its own passes one to `execve`.
 * **No protection by SMAP yet.** The edge checks the page tables of the caller
   and then reads the same pages in ring 0; the hardware half of the rule waits
   for the higher half and the flags of the processor.

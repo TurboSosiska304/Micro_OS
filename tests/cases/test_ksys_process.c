@@ -44,6 +44,16 @@ static volatile int g_parent_pid;
 static volatile int g_child_pid;
 static volatile int g_child_waits;
 
+/* A pipe across a fork: the child writes, the parent reads to the end. */
+static int g_pipe_fds[2];
+static volatile int g_pipe_wrote = -1;
+static volatile int g_pipe_got;
+static volatile int g_pipe_child;
+static volatile int g_pipe_wait = -1;
+static volatile int g_pipe_status = -1;
+static volatile int g_pipe_result;
+static char g_pipe_text[32];
+
 /* The result of the test, the parent writes it. */
 static volatile int g_result;
 
@@ -103,6 +113,13 @@ static void setup(void)
     g_child_pid = -1;
     g_child_waits = 0;
     g_result = -1;
+    g_pipe_wrote = -1;
+    g_pipe_got = 0;
+    g_pipe_child = -1;
+    g_pipe_wait = -1;
+    g_pipe_status = -1;
+    g_pipe_result = 0;
+    memset(g_pipe_text, 0, sizeof(g_pipe_text));
 }
 
 static void teardown(void)
@@ -275,6 +292,101 @@ static void test_fork_posix(void)
     KT_CHECK_INT_EQ(g_wait_status, 7);
     /* The child took the branch of the 0. */
     KT_CHECK_INT_EQ(g_child_done, 1);
+
+    teardown();
+}
+
+/*
+ * The program of a pipe across a fork. The parent makes the pipe and forks;
+ * the child of a machine without an MMU re-enters this program from the
+ * start, sees its mark and takes the way of the child. Both hold the two
+ * ends, because the table of the parent was copied - closing the right copy
+ * is what lets the reader reach the end of the file.
+ */
+static void pipe_program(void *arg)
+{
+    struct task *self = task_self();
+    int pid;
+
+    K_UNUSED(arg);
+
+    if (!self->is_child) {
+        if (ksys_pipe(g_pipe_fds) != 0) {
+            g_pipe_result = -1;
+            return;
+        }
+    }
+
+    pid = ksys_fork();
+    if (pid == 0) {
+        /* The child: it keeps the writing end and says its line. */
+        ksys_close(g_pipe_fds[0]);
+        g_pipe_wrote = (int)ksys_write(g_pipe_fds[1], "from the child", 14);
+        ksys_close(g_pipe_fds[1]);
+        task_exit(0);
+        return;
+    }
+
+    g_pipe_child = pid;
+
+    /* The parent closes its copy of the writing end: once the child is
+     * done, no writer is left and the read reaches the end of the file. */
+    ksys_close(g_pipe_fds[1]);
+
+    for (;;) {
+        k_size_t room = sizeof(g_pipe_text) - 1 - (k_size_t)g_pipe_got;
+        k_ssize_t got;
+
+        if (room == 0) {
+            break;
+        }
+
+        got = ksys_read(g_pipe_fds[0], g_pipe_text + g_pipe_got, room);
+        if (got <= 0) {
+            break;
+        }
+
+        g_pipe_got += (int)got;
+    }
+
+    g_pipe_text[g_pipe_got] = '\0';
+    ksys_close(g_pipe_fds[0]);
+
+    if (pid > 0) {
+        g_pipe_wait = ksys_waitpid(pid, (int *)&g_pipe_status, 0);
+    }
+
+    g_pipe_result = 1;
+}
+
+/*
+ * The property: the descriptors of a pipe cross a fork, the child's bytes
+ * reach the parent through the pipe, and the parent sees the end of the file
+ * once the child has closed its end and finished.
+ */
+static void test_fork_pipe(void)
+{
+    struct task *parent;
+    int waited;
+
+    ktest_begin("ksys: a pipe crosses a fork and the child's bytes reach the parent");
+
+    setup();
+
+    parent = task_create("piper", pipe_program, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(parent != NULL);
+
+    for (waited = 0; waited < 3000 && g_pipe_result == 0; waited++) {
+        k_sched_sleep_ms(1);
+    }
+
+    KT_CHECK_INT_EQ(g_pipe_result, 1);
+    KT_CHECK_INT_EQ(g_pipe_wrote, 14);
+    KT_CHECK_INT_EQ(g_pipe_got, 14);
+    KT_CHECK_STR_EQ(g_pipe_text, "from the child");
+    KT_CHECK(g_pipe_child > 0);
+    KT_CHECK_INT_EQ(g_pipe_wait, g_pipe_child);
+    KT_CHECK_INT_EQ(g_pipe_status, 0);
 
     teardown();
 }
@@ -495,6 +607,9 @@ static void test_execve(void)
         char *long_argv[] = {long_word, NULL};
         char *empty_argv[] = {NULL};
         char *many_argv[10];
+        char *long_env[] = {long_word, NULL};
+        char *empty_env[] = {NULL};
+        char *many_env[10];
         int i;
 
         memset(long_word, 'a', sizeof(long_word) - 1);
@@ -507,6 +622,23 @@ static void test_execve(void)
         KT_CHECK_INT_EQ(ksys_execve("/prog", many_argv), KERR_TOOBIG);
 
         KT_CHECK_INT_EQ(ksys_execve("/prog", empty_argv), KERR_NOSYS);
+
+        /*
+         * The environment has the same bound and the same answers: it is a
+         * second vector of the call and not a part of the arguments, so a
+         * program may have a short line and a long environment without the
+         * one deciding the room of the other. A NULL environment is the
+         * environment of the system and not a refusal.
+         */
+        KT_CHECK_INT_EQ(ksys_execve_env("/prog", argv, long_env), KERR_TOOBIG);
+        KT_CHECK_INT_EQ(ksys_execve_env("/prog", argv, NULL), KERR_NOSYS);
+        KT_CHECK_INT_EQ(ksys_execve_env("/prog", argv, empty_env), KERR_NOSYS);
+
+        for (i = 0; i < 9; i++) {
+            many_env[i] = (char *)"NAME=value";
+        }
+        many_env[9] = NULL;
+        KT_CHECK_INT_EQ(ksys_execve_env("/prog", argv, many_env), KERR_TOOBIG);
     }
 
     /* The raw call answers the same way, and a failed exec left the table of
@@ -523,14 +655,211 @@ static void test_execve(void)
 }
 #endif /* KERNEL_EXEC */
 
+/* --- signals --- */
+
+static volatile int g_sig_runs;
+static volatile int g_sig_last;
+
+static void test_signal_handler(int sig)
+{
+    g_sig_runs++;
+    g_sig_last = sig;
+}
+
+/*
+ * A task that does nothing but sleep through a system call: the signal has
+ * to cut the sleep and be answered on the way out of the call.
+ */
+static void signal_victim(void *arg)
+{
+    K_UNUSED(arg);
+
+    for (;;) {
+        (void)ksys_sleep(5);
+    }
+}
+
+/*
+ * The sender of one signal, a little after the task that made it has had the
+ * time to enter a wait: a wait that a signal cut has to answer EINTR, and a
+ * sender on the same stack could not arrange that.
+ */
+static void signal_sender(void *arg)
+{
+    struct task *target = (struct task *)arg;
+
+    k_sched_sleep_ms(20);
+    (void)task_signal_send(target->pid, K_SIGINT);
+}
+
+static void test_signal_actions(void)
+{
+    ktest_begin("ksys: a handler runs, an ignored signal is thrown away");
+
+    setup();
+    g_sig_runs = 0;
+    g_sig_last = 0;
+
+    /* The dispositions: default, ignore, a handler, and back. */
+    KT_CHECK(task_signal_set(NULL, K_SIGINT, test_signal_handler) == K_SIG_DFL);
+    KT_CHECK(task_signal_set(NULL, K_SIGINT, K_SIG_IGN) == test_signal_handler);
+    KT_CHECK(task_signal_set(NULL, K_SIGINT, test_signal_handler) == K_SIG_IGN);
+
+    KT_CHECK_INT_EQ(ksys_kill((int)ksys_getpid(), KSYS_SIGINT), 0);
+    KT_CHECK_INT_EQ(g_sig_runs, 1);
+    KT_CHECK_INT_EQ(g_sig_last, KSYS_SIGINT);
+
+    /* An ignored signal leaves no mark and does not end the task. */
+    KT_CHECK(task_signal_set(NULL, K_SIGTERM, K_SIG_IGN) == K_SIG_DFL);
+    KT_CHECK_INT_EQ(ksys_kill((int)ksys_getpid(), KSYS_SIGTERM), 0);
+    KT_CHECK_INT_EQ(task_signal_pending(task_self()), 0u);
+
+    task_signal_set(NULL, K_SIGINT, K_SIG_DFL);
+    task_signal_set(NULL, K_SIGTERM, K_SIG_DFL);
+
+    teardown();
+}
+
+static void test_kill_errors(void)
+{
+    int status = -1;
+
+    ktest_begin("ksys: kill refuses a task that is not there and a signal it does not know");
+
+    setup();
+
+    KT_CHECK_INT_EQ(ksys_kill(4242, KSYS_SIGTERM), KERR_SRCH);
+    KT_CHECK_INT_EQ(ksys_kill((int)ksys_getpid(), 99), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_kill(0, KSYS_SIGTERM), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_kill(-7, KSYS_SIGTERM), KERR_INVAL);
+
+    /* A wide pid must not be cut down to a live task by the cast to int. */
+    if (sizeof(ksys_arg_t) > sizeof(int)) {
+        KT_CHECK_INT_EQ(ksys_call(KSYS_KILL, (ksys_arg_t)0x100000005ull, KSYS_SIGTERM, 0, 0, 0, 0),
+                        KERR_INVAL);
+    }
+
+    /* The failure of a send leaves the wait of a parent as it was. */
+    KT_CHECK_INT_EQ(ksys_waitpid(4242, &status, KSYS_WNOHANG), KERR_CHILD);
+
+    teardown();
+}
+
+static void test_signal_term(void)
+{
+    struct task *child;
+    int child_pid;
+    int status = -1;
+
+    ktest_begin("ksys: SIGTERM ends a task and the parent sees 128 + 15");
+
+    setup();
+
+    child = task_create("victim", signal_victim, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(child != NULL);
+    child_pid = (int)child->pid;
+
+    KT_CHECK_INT_EQ(ksys_kill(child_pid, KSYS_SIGTERM), 0);
+    KT_CHECK_INT_EQ(ksys_waitpid(child_pid, &status, 0), child_pid);
+    KT_CHECK_INT_EQ(status, 128 + KSYS_SIGTERM);
+
+    teardown();
+}
+
+static void test_signal_wait_eintr(void)
+{
+    struct task *self = task_self();
+    struct task *child;
+    struct task *sender;
+    int child_pid;
+    int sender_pid;
+    int status = -1;
+    int rc;
+
+    ktest_begin("ksys: SIGINT cuts a waitpid short with EINTR and runs the handler");
+
+    setup();
+    g_sig_runs = 0;
+    g_sig_last = 0;
+
+    KT_CHECK(task_signal_set(NULL, K_SIGINT, test_signal_handler) == K_SIG_DFL);
+
+    child = task_create("waited", signal_victim, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(child != NULL);
+    child_pid = (int)child->pid;
+
+    sender = task_create("sender", signal_sender, (void *)self, TASK_PRIO_DEFAULT);
+    KT_CHECK(sender != NULL);
+    sender_pid = (int)sender->pid;
+
+    rc = ksys_waitpid(child_pid, &status, 0);
+
+    /* The child did not finish: the wait was cut, not answered. */
+    KT_CHECK_INT_EQ(rc, KERR_INTR);
+    KT_CHECK_INT_EQ(status, -1);
+    KT_CHECK_INT_EQ(g_sig_runs, 1);
+    KT_CHECK_INT_EQ(g_sig_last, KSYS_SIGINT);
+    KT_CHECK(task_state_of(child) != TASK_STATE_ZOMBIE);
+
+    /* The child is still there to be waited for on the next try. */
+    KT_CHECK_INT_EQ(ksys_kill(child_pid, KSYS_SIGTERM), 0);
+    KT_CHECK_INT_EQ(ksys_waitpid(child_pid, &status, 0), child_pid);
+    KT_CHECK_INT_EQ(status, 128 + KSYS_SIGTERM);
+
+    /* The sender is a child as well, and a test that forgets a zombie fills
+     * the table for the tests after it. */
+    KT_CHECK_INT_EQ(ksys_waitpid(sender_pid, &status, 0), sender_pid);
+
+    task_signal_set(NULL, K_SIGINT, K_SIG_DFL);
+
+    teardown();
+}
+
+static void test_signal_chld(void)
+{
+    struct task *child;
+    int child_pid;
+    int status = -1;
+
+    ktest_begin("ksys: the exit of a child marks SIGCHLD on the parent");
+
+    setup();
+    g_sig_runs = 0;
+    g_sig_last = 0;
+
+    KT_CHECK(task_signal_set(NULL, K_SIGCHLD, test_signal_handler) == K_SIG_DFL);
+
+    child = task_create("quick", signal_victim, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(child != NULL);
+    child_pid = (int)child->pid;
+    KT_CHECK_INT_EQ(ksys_kill(child_pid, KSYS_SIGTERM), 0);
+
+    KT_CHECK_INT_EQ(ksys_waitpid(child_pid, &status, 0), child_pid);
+    KT_CHECK_INT_EQ(status, 128 + KSYS_SIGTERM);
+
+    /* The handler of SIGCHLD ran on the way out of the wait. */
+    KT_CHECK_INT_EQ(g_sig_runs, 1);
+    KT_CHECK_INT_EQ(g_sig_last, KSYS_SIGCHLD);
+
+    task_signal_set(NULL, K_SIGCHLD, K_SIG_DFL);
+
+    teardown();
+}
+
 void test_ksys_process(void)
 {
     test_fork_wait();
     test_fork_numbers();
     test_fork_posix();
+    test_fork_pipe();
     test_wait_errors();
     test_wait_validation();
     test_fork_data_is_the_same();
+    test_signal_actions();
+    test_kill_errors();
+    test_signal_term();
+    test_signal_wait_eintr();
+    test_signal_chld();
 #if KERNEL_EXEC
     test_execve();
 #endif

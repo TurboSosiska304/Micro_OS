@@ -910,6 +910,68 @@ static void test_execve(void)
 }
 #endif /* KERNEL_EXEC */
 
+/*
+ * The property: pipe and dup2 of the library are the calls of POSIX - two
+ * descriptors of one pipe, the output of a number sent to a file, and the
+ * code of the error in microos_errno().
+ */
+static void test_pipe_and_dup2(void)
+{
+    char buf[16];
+    int ends[2];
+    int fd;
+
+    ktest_begin("libc: pipe and dup2 are the calls of POSIX");
+
+    setup();
+
+    KT_CHECK_INT_EQ(microos_pipe(ends), 0);
+    KT_CHECK_INT_EQ(microos_errno(), 0);
+    KT_CHECK(ends[0] != ends[1]);
+    KT_CHECK_INT_EQ((int)microos_write(ends[1], "libc", 4), 4);
+    memset(buf, 0, sizeof(buf));
+    KT_CHECK_INT_EQ((int)microos_read(ends[0], buf, sizeof(buf)), 4);
+    KT_CHECK_STR_EQ(buf, "libc");
+    KT_CHECK_INT_EQ(microos_close(ends[0]), 0);
+    KT_CHECK_INT_EQ(microos_close(ends[1]), 0);
+
+    /* A write with the reading end closed is EPIPE, and the library names
+     * it as such instead of keeping the code of the system call. */
+    KT_CHECK_INT_EQ(microos_pipe(ends), 0);
+    KT_CHECK_INT_EQ(microos_close(ends[0]), 0);
+    KT_CHECK_INT_EQ(microos_write(ends[1], "x", 1), -1);
+    KT_CHECK_INT_EQ(microos_errno(), 32); /* EPIPE */
+    KT_CHECK_STR_EQ(microos_strerror(microos_errno()), "broken pipe");
+    KT_CHECK_INT_EQ(microos_close(ends[1]), 0);
+
+    /* dup2 sends the output of a number to a file, and the copy outlives
+     * the descriptor it was made from. */
+    fd = microos_open("/lib-pipe.txt", MICROOS_O_WRONLY | MICROOS_O_CREAT | MICROOS_O_TRUNC);
+    KT_CHECK(fd >= 0);
+    KT_CHECK_INT_EQ(microos_dup2(fd, 1), 1);
+    KT_CHECK_INT_EQ(microos_close(fd), 0);
+    KT_CHECK_INT_EQ((int)microos_write(1, "redirected", 10), 10);
+    KT_CHECK_INT_EQ(microos_close(1), 0);
+
+    fd = microos_open("/lib-pipe.txt", MICROOS_O_RDONLY);
+    KT_CHECK(fd >= 0);
+    memset(buf, 0, sizeof(buf));
+    KT_CHECK_INT_EQ((int)microos_read(fd, buf, sizeof(buf)), 10);
+    KT_CHECK_STR_EQ(buf, "redirected");
+    KT_CHECK_INT_EQ(microos_close(fd), 0);
+
+    /* The mistakes of the caller are caught by the library, and the
+     * numbers it answers are the ones of POSIX. */
+    KT_CHECK_INT_EQ(microos_pipe(NULL), -1);
+    KT_CHECK_INT_EQ(microos_errno(), 22); /* EINVAL */
+    KT_CHECK_INT_EQ(microos_dup2(-1, 0), -1);
+    KT_CHECK_INT_EQ(microos_errno(), 9); /* EBADF */
+    KT_CHECK_INT_EQ(microos_dup2(0, 1), -1);
+    KT_CHECK_INT_EQ(microos_errno(), 9);
+
+    teardown();
+}
+
 void test_libc(void)
 {
     test_float_matches_the_system();
@@ -925,6 +987,7 @@ void test_libc(void)
     test_calloc_is_empty();
     test_permissions();
     test_statx();
+    test_pipe_and_dup2();
 #if KERNEL_EXEC
     test_execve();
 #endif

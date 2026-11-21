@@ -53,6 +53,7 @@ static void run_tests(void *arg)
     test_ksys_process();
     test_libc();
     test_kshell();
+    test_kshell_pipe();
     test_initd();
     test_config();
 #if MICRO_OS_NET && MICRO_OS_NET_HTTP && MICRO_OS_NET_HTTP_SERVER && MICRO_OS_NET_NTP &&           \

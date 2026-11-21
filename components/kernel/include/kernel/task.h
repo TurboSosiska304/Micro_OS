@@ -18,6 +18,17 @@
 #define TASK_MAX_TASKS 32
 #define TASK_CWD_MAX 32
 
+/* The dispositions a task keeps: the signals of kernel/signal.h and room for
+ * the next few. The table is small on purpose, the memory of the board is. */
+#define TASK_SIGNALS 8
+
+/*
+ * The job of a task. A job is the set of tasks a terminal interrupts
+ * together: the stages of a shell pipeline and the programs they started.
+ * Zero is no job, and a signal of a job never reaches its owner.
+ */
+#define TASK_JOB_NONE 0u
+
 typedef enum {
     TASK_STATE_NEW = 0,  /* created, not started yet */
     TASK_STATE_READY,    /* in the run queue */
@@ -36,18 +47,12 @@ typedef void (*task_entry_fn)(void *arg);
 /* The length of the path that is kept with an open file. */
 #define TASK_PATH_MAX 48
 
-/* One open file of a task. */
-struct kfile {
-    bool used;
-    int flags;
-    char path[TASK_PATH_MAX]; /* the path the file was opened with */
-    struct vfs_file file;
-    /*
-     * The private data of the filesystem for this open file. It belongs to
-     * the task: two tasks that both have the descriptor 0 never share it.
-     */
-    k_u8_t priv[VFS_FILE_DATA_SIZE];
-};
+/*
+ * One open file of a task: a descriptor is a reference to a description of
+ * the kernel (kernel/kfile.h). Two descriptors of one task, and the
+ * descriptors of the parent and of the child of a fork, may share one.
+ */
+struct kfile;
 
 struct task {
     k_u32_t pid;
@@ -73,12 +78,25 @@ struct task {
     void *arg;
     struct task *parent;
     /*
+     * The job of the task (TASK_JOB_NONE when it belongs to none). The
+     * stages of a pipeline and the programs they run share one, so that
+     * Ctrl+C reaches all of them and not only the one that reads the key.
+     */
+    k_u32_t job;
+    /*
      * True for the child of a fork. In Linux the child knows it by the zero
      * that fork() returns; here the child starts the program from the
      * beginning, so the program has to ask.
      */
     bool is_child;
-    struct kfile files[TASK_MAX_FDS]; /* the open files of the task */
+    /*
+     * The signals of the task: the bits that wait for it and the handlers it
+     * installed. A zero handler is the default action, one is "ignore",
+     * anything else is a function of the task (see kernel/signal.h).
+     */
+    k_u32_t sig_pending;
+    void (*sig_handlers[TASK_SIGNALS])(int);
+    struct kfile *files[TASK_MAX_FDS]; /* the open files of the task */
     /*
      * The priority of the memory allocations of the task: the system flag
      * raises it from KMM_PRIORITY_USER to KMM_PRIORITY_SYSTEM.
@@ -90,6 +108,16 @@ struct task {
 
 /* Create a task. Returns NULL if the table is full or the port refused. */
 struct task *task_create(const char *name, task_entry_fn entry, void *arg, k_u8_t prio);
+
+/*
+ * The placeholder of a fork on a machine without an MMU: a task that shares
+ * the memory of the parent and re-enters its program from the start. The
+ * open files are copied before the child can run, so the child holds the
+ * ends of a pipe the parent made before the call, exactly as a real fork
+ * would leave them.
+ */
+struct task *task_fork_shared(struct task *parent, const char *name, task_entry_fn entry,
+                              void *arg);
 
 /*
  * The shape of a fork on a machine with an address space per task. The record
@@ -144,6 +172,21 @@ int task_get_mem_priority(struct task *t);
 /* Working directory of a task. */
 void task_set_cwd(struct task *t, const char *dir);
 const char *task_get_cwd(struct task *t);
+
+/*
+ * The job of a task. A child of a fork and a task started with
+ * task_fork_shared() inherit the job of its parent, and the program that
+ * execve starts inherits it from the stage that asked for it.
+ */
+void task_set_job(struct task *t, k_u32_t job);
+k_u32_t task_get_job(const struct task *t);
+
+/*
+ * Send a signal to every living task of a job except the caller, which is
+ * the task that reads the console of the pipeline. The answer is 0 when at
+ * least one task was named, and ESRCH when the job has no other task.
+ */
+int task_signal_job(k_u32_t job, int sig);
 
 /*
  * Access to the task table without taking the lock. Only for the internals

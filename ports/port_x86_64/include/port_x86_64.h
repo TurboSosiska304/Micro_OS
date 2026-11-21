@@ -152,8 +152,21 @@ k_u64_t port_x86_64_ticks(void);
  */
 void port_x86_64_unexpected(void);
 
-/* The body of the timer interrupt, called by interrupts.S. */
-void port_x86_64_irq_tick(void);
+/*
+ * The body of the timer interrupt, called by interrupts.S. `frame` is the
+ * frame the stub left on the stack: the registers and the iretq fields of
+ * the code the tick interrupted (the layout is the one of
+ * PORT_X86_64_SYSCALL_FRAME_SIZE, with the order of the interrupt stub).
+ */
+void port_x86_64_irq_tick(k_u64_t *frame);
+
+/*
+ * Answer the pending signals of the program the timer interrupted. The
+ * signal frame is built on the stack of the program and the iretq of the
+ * stub goes to the handler; a task of ring 0 has no such frame and is asked
+ * again on its way out of the system call.
+ */
+void port_x86_64_signal_tick(k_u64_t *frame);
 
 /*
  * The body of an exception. `cs` is the selector of the interrupted code:
