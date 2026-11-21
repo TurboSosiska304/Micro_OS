@@ -58,6 +58,9 @@ BASE_PATH = "/Micro_OS/"
 REPO_URL = "https://github.com/TurboSosiska304/Micro_OS"
 FIRST_VERSION = (0, 4, 0)
 DEV_VERSION = "dev"
+# The development pages follow the branch of the kernel, not the branch that
+# builds the site: `wiki` is a leaf and is never merged with `mainline`.
+DEV_REF_DEFAULT = "mainline"
 BRANCH = "gh-pages"
 
 
@@ -138,7 +141,7 @@ def tag_has_wiki(tag: str) -> bool:
     return any(name.endswith(".md") for name in names)
 
 
-def collect_versions() -> list:
+def collect_versions(dev_ref: str = DEV_REF_DEFAULT) -> list:
     tags = []
     for tag in git("tag", "--list", "v*").splitlines():
         core, _ = parse_tag(tag)
@@ -158,17 +161,15 @@ def collect_versions() -> list:
             }
         )
 
-    branch = git("rev-parse", "--abbrev-ref", "HEAD")
-    if branch == "HEAD":
-        branch = "main"
     versions.append(
         {
             "version": DEV_VERSION,
             "tag": None,
             "kind": "dev",
             "has_wiki": True,
-            "ref": branch,
-            "commit": git("rev-parse", "--short", "HEAD"),
+            "docs_ref": dev_ref,
+            "ref": dev_ref,
+            "commit": git("rev-parse", "--short", dev_ref),
         }
     )
     return versions
@@ -348,7 +349,9 @@ def build_one(mike: str, env: dict, entry: dict, versions: list, latest: dict,
         if entry["tag"] is not None:
             docs_dir = archive_wiki(entry["tag"], work / "docs" / version)
         else:
-            docs_dir = ROOT / "docs" / "wiki"
+            docs_dir = archive_wiki(
+                entry.get("docs_ref", DEV_REF_DEFAULT), work / "docs" / version
+            )
     else:
         docs_dir = work / "docs" / version / "docs" / "wiki"
         docs_dir.mkdir(parents=True, exist_ok=True)
@@ -553,6 +556,11 @@ def main(argv: list) -> int:
         help="a comma-separated list of versions to build, for a quick look",
     )
     parser.add_argument(
+        "--dev-ref",
+        default=DEV_REF_DEFAULT,
+        help="the branch the development pages are read from (default: mainline)",
+    )
+    parser.add_argument(
         "--keep-temp",
         action="store_true",
         help="keep the temporary clone and the builds for debugging",
@@ -577,7 +585,7 @@ def main(argv: list) -> int:
     except ImportError:
         die("PyYAML is not installed; use the wiki venv")
 
-    versions = collect_versions()
+    versions = collect_versions(args.dev_ref)
     latest = newest(versions, lambda v: v["kind"] == "stable")
     if latest is None:
         latest = newest(versions, lambda v: v["has_wiki"] and v["tag"] is not None)

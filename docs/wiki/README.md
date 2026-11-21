@@ -46,31 +46,18 @@ knows it does not do yet in [`docs/debts.md`](../debts.md). The ABI is written
 down in [`docs/syscall-abi.md`](../syscall-abi.md); the wiki page is a guide to
 it, not a second copy.
 
-## Serving the wiki as a site
+## The site of the wiki
 
-`mkdocs.yml` builds the wiki of the current tree with a theme of its own
-(`docs/theme`): no Material, no framework of JavaScript, a light page and a
-dark one that follows the system. The pages are plain Markdown and GitHub
-renders them as they are; the site is for the reader who wants the search, the
-navigation and the version switch.
+The pages of this directory are plain Markdown and GitHub renders them as they
+are. The **site** - the theme, `mkdocs.yml`, the builder of the versions and
+the workflow that publishes them - lives on the `wiki` branch, which is a leaf
+of the history: it merges `mainline` for the pages and the releases from their
+tags, and it is never merged back into `mainline`, a release candidate or a
+feature branch. This tree carries the pages and the link check that
+`make integrity` runs, and nothing else of the site.
 
-```bash
-python3 -m venv ~/.local/share/microos-wiki-venv
-~/.local/share/microos-wiki-venv/bin/pip install mkdocs mike
-~/.local/share/microos-wiki-venv/bin/mkdocs serve   # http://127.0.0.1:8000/Micro_OS/
-~/.local/share/microos-wiki-venv/bin/mkdocs build   # writes site/, which is generated
-```
-
-The site of **every release** is `tools/wiki_build_versions.py`: it reads the
-tags from `v0.4.0`, shelves the pages of a version that shipped without a wiki,
-builds each one with the theme of the tree and writes `site/` in the layout of
-mike - `<version>/`, `versions.json`, `latest` and a redirect at the root.
-`docs/wiki/deploy.md` is the deployment: the `gh-pages` branch of this
-repository, served at `https://turbososiska304.github.io/Micro_OS/`, with the
-path of the site under `/Micro_OS/`. The links that leave `docs/wiki` (into
-`docs/`, `CONTRIBUTING.md`, a header of a component) are rewritten by
-`tools/wiki_hooks.py` to the GitHub tree of the tag, so a page of `0.4.0` does
-not point at the file of the current branch.
+A branch of the kernel mentions the site with a link or a line of Markdown, as
+this paragraph does; it does not carry its code.
 
 ## Checking the links
 

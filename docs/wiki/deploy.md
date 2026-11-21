@@ -5,6 +5,12 @@ for the branch. The result is a static site with a mike-compatible layout; it
 is published to GitHub Pages from a branch, never from the tree that holds the
 kernel sources.
 
+The theme, the builder and the workflow live on the **`wiki` branch**, and
+that branch is a leaf: it takes the kernel from `mainline` and the releases
+from the tags, builds them, and is never merged back into `mainline`, a
+release candidate or a feature branch. The kernel tree carries the pages
+(`docs/wiki/`) and the link check; it does not carry the site.
+
 The site is a **project page**, so its address and the prefix of every path is
 fixed by the repository, not by a domain:
 
@@ -123,15 +129,16 @@ first is the one this repository uses today.
 
 The built site is a branch of the same repository: `gh-pages`, at its root, no
 Jekyll, served by GitHub Pages at `/Micro_OS/`. The kernel sources never carry
-the generated HTML; the branch is an orphan of the `main` history.
+the generated HTML; the branch is an orphan of the `wiki` history.
 
-The GitHub Actions workflow `.github/workflows/wiki.yml` builds on every push
-to `main` and on every `v*` tag, then publishes `site/` to `gh-pages` with
-`GITHUB_TOKEN` (`permissions: contents: write`). A tag push is only the signal
-that a version appeared: the checkout is the default branch, which carries the
-builder and the theme, and the tag itself is read with `git archive`. No
-secret is needed for this path; the workflow uses the token GitHub gives the
-run.
+The GitHub Actions workflow `.github/workflows/wiki.yml` lives on the `wiki`
+branch, builds on every push to it, every night (a release is a tag on
+`mainline`, which this branch does not see as a push) and by hand
+(`gh workflow run wiki.yml --ref wiki`), then publishes `site/` to `gh-pages`
+with `GITHUB_TOKEN` (`permissions: contents: write`). The checkout is the
+`wiki` branch, which carries the builder and the theme; each release is read
+from its tag with `git archive`. No secret is needed for this path; the
+workflow uses the token GitHub gives the run.
 
 To do the same by hand (and **only** when publishing is intended):
 
@@ -208,8 +215,8 @@ the newest stable tag on its own, so `latest` and the root move from `0.4.0`
 to `0.6.0` in the same run, and the note of `0.4.0` starts pointing at the
 pages of `0.6.0`.
 
-`dev` is not a tag: it is built from the branch of the run (`main` in CI),
-and its banner names the commit. A push to `main` is enough.
+`dev` is not a tag: it is built from the branch of the run (`wiki` in CI),
+and its banner names the commit. A push to `wiki` is enough.
 
 With mike, the same operations on the branch are:
 

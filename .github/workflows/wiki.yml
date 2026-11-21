@@ -5,17 +5,19 @@
 # deployment is the whole `site/` directory, forced onto an orphan branch, so
 # the kernel history never carries the generated HTML.
 #
-# The workflow runs on `mainline` (the `dev` version), on every `v*` tag (the
-# release versions) and by hand. It builds every version from scratch each
-# time: the tags are the source of the versions, and the branch is derived,
-# not edited. See docs/wiki/deploy.md.
+# The workflow lives on the `wiki` branch, which is where the site is built
+# from - it is never merged into `mainline`, a release candidate or a feature
+# branch. It runs on a push to `wiki`, every night (so a new release tag is
+# picked up without a push) and by hand
+# (`gh workflow run wiki.yml --ref wiki`). It builds every version from
+# scratch each time: the tags are the source of the versions, and the branch
+# is derived, not edited. See docs/wiki/deploy.md.
 
 name: wiki
 
 on:
   push:
-    branches: [mainline]
-    tags: ["v*"]
+    branches: [wiki]
     paths:
       - "docs/wiki/**"
       - "docs/theme/**"
@@ -23,6 +25,9 @@ on:
       - "tools/wiki_build_versions.py"
       - "tools/wiki_check.py"
       - ".github/workflows/wiki.yml"
+  schedule:
+    # A release is a tag on mainline; this branch does not see that push.
+    - cron: "17 4 * * *"
   workflow_dispatch:
 
 permissions:
@@ -42,10 +47,9 @@ jobs:
           # Every tag is a version of the wiki; a shallow clone would hide
           # the history that the build reads with `git archive`.
           fetch-depth: 0
-          # A tag push only says that a version appeared. The builder, the
-          # theme and the `dev` pages come from the default branch, which is
-          # the tree that can actually build all of them.
-          ref: ${{ github.event.repository.default_branch }}
+          # The theme, the builder and the `dev` pages are this branch; the
+          # releases come from the tags, which live on mainline.
+          ref: wiki
 
       - uses: actions/setup-python@v5
         with:
