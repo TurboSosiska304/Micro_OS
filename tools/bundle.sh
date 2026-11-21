@@ -111,8 +111,42 @@ python3 -m esptool --chip esp32 merge_bin -o "$OUT_DIR/$MERGED" \
     "$FACTORY_OFFSET" "$OUT_DIR/micro_os.bin"
 echo "    $MERGED ($(stat -c %s "$OUT_DIR/$MERGED") bytes)"
 
+# The signature of the bundle (ADR 0020). The key of a release is named by
+# MICROOS_SIGN_KEY and lives outside this tree; a build that has no key of its
+# own is signed with the key of the x86-64 image, which is the dev key of the
+# build and not a secret. The trailer is appended and a copy of it is the
+# .sig file, so a person can verify the bytes with `microos_sign verify`.
+X86_BUILD="${X86_BUILD:-$ROOT/build-x86}"
+SIGNER="${MICROOS_SIGNER:-}"
+if [ -z "$SIGNER" ]; then
+    for candidate in "$ROOT/build-host/tools/microos_sign" "$X86_BUILD/microos_sign"; do
+        if [ -x "$candidate" ]; then
+            SIGNER="$candidate"
+            break
+        fi
+    done
+fi
+
+SIGN_KEY="${MICROOS_SIGN_KEY:-}"
+if [ -z "$SIGN_KEY" ] && [ -f "$X86_BUILD/signing.key" ]; then
+    SIGN_KEY="$X86_BUILD/signing.key"
+fi
+
+if [ -n "$SIGNER" ] && [ -n "$SIGN_KEY" ]; then
+    echo "==> the signature: $MERGED"
+    "$SIGNER" pubkey --key "$SIGN_KEY" --pub "$OUT_DIR/microos-sign.pub"
+    "$SIGNER" sign --key "$SIGN_KEY" --in "$OUT_DIR/$MERGED" --out "$OUT_DIR/$MERGED" \
+        --sig "$OUT_DIR/$MERGED.sig"
+    "$SIGNER" verify --pub "$OUT_DIR/microos-sign.pub" "$OUT_DIR/$MERGED"
+else
+    echo "==> no signing key (MICROOS_SIGN_KEY): the bundle is not signed" >&2
+fi
+
 # The sums of the binaries: they are the proof that the bundle is intact.
 (cd "$OUT_DIR" && sha256sum "$MERGED" micro_os.bin bootloader.bin partition-table.bin > checksums.txt)
+if [ -f "$OUT_DIR/$MERGED.sig" ]; then
+    (cd "$OUT_DIR" && sha256sum "$MERGED.sig" microos-sign.pub >> checksums.txt)
+fi
 
 echo "==> the sums"
 cat "$OUT_DIR/checksums.txt"
@@ -120,7 +154,6 @@ cat "$OUT_DIR/checksums.txt"
 # The other machine: the loader and the kernel of the x86-64 port, when the
 # build of that port is there. It is a bundle of its own, because a machine
 # without a board is run, not flashed.
-X86_BUILD="${X86_BUILD:-$ROOT/build-x86}"
 X86_NAME="MicroOS-x86_64-${VERSION}"
 
 if [ -f "$X86_BUILD/loader32.elf" ] && [ -f "$X86_BUILD/microos64.bin" ]; then
@@ -131,6 +164,10 @@ if [ -f "$X86_BUILD/loader32.elf" ] && [ -f "$X86_BUILD/microos64.bin" ]; then
 
     cp -f "$X86_BUILD/loader32.elf" "$STAGE/loader32.elf"
     cp -f "$X86_BUILD/microos64.bin" "$STAGE/microos64.bin"
+    if [ -f "$X86_BUILD/microos64.sig" ] && [ -f "$X86_BUILD/signing.pub" ]; then
+        cp -f "$X86_BUILD/microos64.sig" "$STAGE/microos64.sig"
+        cp -f "$X86_BUILD/signing.pub" "$STAGE/microos-sign.pub"
+    fi
 
     cat > "$STAGE/run.sh" <<'RUN'
 #!/usr/bin/env bash
@@ -158,14 +195,28 @@ Run it with QEMU:
 The console is COM1. The machine has the shell, the interrupts, the
 scheduler; the filesystem and the network of this port are still ahead.
 
+The kernel carries a signature trailer (ADR 0020), and the loader verifies it
+before it copies a byte: an image with a changed byte, without a trailer or
+signed by another key stops with `the image is refused` and never reaches the
+kernel. `microos64.sig` is a copy of the trailer and `microos-sign.pub` is the
+public key of the build; the tool in `tools/` of the sources verifies them:
+
+    microos_sign verify --pub microos-sign.pub microos64.bin
+
 The same kernel is on the board and in the tests: Micro OS is one portable
 kernel with a port per machine.
 DOC
 
+    STAGE_FILES=(loader32.elf microos64.bin run.sh README.md)
+    if [ -f "$STAGE/microos64.sig" ]; then
+        STAGE_FILES+=(microos64.sig microos-sign.pub)
+    fi
+
     (cd "$STAGE" && tar --sort=name --mtime="@$SOURCE_DATE_EPOCH" \
         --owner=0 --group=0 --numeric-owner --format=gnu -cf - \
-        loader32.elf microos64.bin run.sh README.md | gzip -n > "$OUT_DIR/$X86_NAME.tar.gz")
+        "${STAGE_FILES[@]}" | gzip -n > "$OUT_DIR/$X86_NAME.tar.gz")
     echo "    $X86_NAME.tar.gz ($(stat -c %s "$OUT_DIR/$X86_NAME.tar.gz") bytes)"
+    (cd "$OUT_DIR" && sha256sum "$X86_NAME.tar.gz" >> checksums.txt)
 else
     echo "==> the x86-64 port is not built ($X86_BUILD), skipped"
 fi

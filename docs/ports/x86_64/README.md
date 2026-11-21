@@ -17,6 +17,7 @@ the machine where a program can really be loaded and run (the window of
 | network | `virtio0`: virtio-net-pci in its legacy I/O interface, polled; ARP, IPv4, ICMP, UDP, a client of TCP (one segment in flight, a timeout retransmission) and a listener with SYN/ACK and `accept`; the resolver of QEMU user-net with a cache of eight names and their time to live; 10.0.2.15/24 on QEMU user-net, gateway 10.0.2.2, resolver 10.0.2.3, no DHCP |
 | programs | `k_port_exec_supported()` is true; the window is 16 MiB at 32 MiB (`0x02000000`-`0x03000000`) over a physical arena at 64 MiB; a program is a file in `/bin` (the MOX1 format of `kernel/exec.h`), runs in ring 3 with page tables of its own and calls the kernel with `int $0x80` (ADR 0007) |
 | protection | NX and W^X: `EFER.NXE` from the loader, the text read-only and executable, every data page - rodata, data, bss, stacks, heap, arena, screen - writable and NX; no page is both (ADR 0007, sections 9 and 10). The kernel is in the higher half: the image is linked at `0xFFFFFFFF80000000` and mapped there beside the low identity map |
+| signature | the kernel carries a 120-byte trailer (magic, size, SHA-256 and Ed25519) and the loader verifies it before it copies a byte (ADR 0020); the public key is compiled into `loader32.elf`, the private key is outside the tree (`MICROOS_SIGN_KEY`), and `tools/microos_sign` signs and verifies |
 | build | `make x86-build` (needs `cmake`, `ninja`, `xorriso` is not needed) and `make x86-disk` for the volume with `/bin` |
 | check | `make x86-smoke` (serial), `make x86-vga-smoke` (screen and keyboard), `make x86-disk-smoke` (two boots on a disk), `make x86-net-smoke` (the network) - all need `qemu-system-x86` |
 
@@ -79,6 +80,41 @@ The machine boots from three files: `build-x86/loader32.elf` (the loader),
 `build-x86/programs.img` (the disk). The kernel is linked in the higher half
 at `0xFFFFFFFF80000000`, the loader copies the bytes to 16 MiB and maps them
 there, and the C of the kernel is built with `-mcmodel=kernel` (ADR 0007).
+
+## The signature of the kernel
+
+`microos64.bin` is the flat kernel followed by the 120-byte trailer of
+ADR 0020: `MOSIGN01`, the version, the algorithm, the size of the payload,
+its SHA-256 and an Ed25519 signature over those 56 bytes. The loader carries
+the public key (`sign_public_key.h`, generated from the key of the build) and
+calls `loader_verify_image()` before it builds the page tables, copies the
+kernel or enters the long mode. A refusal prints `Micro OS: the image is
+refused: <reason>` on COM1 and on the bottom row of the screen, and halts:
+the damaged kernel never runs. A good image prints one line first:
+
+    Micro OS: image signature ok (sha-256, ed25519)
+
+The key of a build is the private file named by `MICROOS_SIGN_KEY`, or a fresh
+one in `build-x86/signing.key` when the variable is empty. The second case is
+the development loop and CI: the check is real, the key is not a secret, and
+two builds do not produce the same bytes. A release passes the key:
+
+    make x86-build MICROOS_SIGN_KEY=/path/outside/the/tree/release.key
+    make x86-smoke
+
+`tools/microos_sign` does the work by hand:
+
+    microos_sign keygen --key dev.key --pub dev.pub --header build-x86/sign_public_key.h
+    microos_sign sign   --key dev.key --in microos64.raw --out microos64.bin --sig microos64.sig
+    microos_sign verify --pub dev.pub microos64.bin
+    microos_sign info   microos64.bin
+
+`make x86-smoke` checks both answers: the normal boot accepts the image, and a
+kernel with one changed byte, a kernel without a trailer and a kernel signed
+by another key are each refused by the loader before `board: qemu_x86_64`
+appears. The tests call the same verifier on the host
+(`tests/cases/test_sign.c`), with the vectors of RFC 8032 and FIPS 180-4.
+
 The heap is the low identity map and stops below the window of the programs,
 which are placed at 32 MiB; the image of 1.0 ends 1.9 MiB after the base and
 the port allows it up to 16 MiB. The sixteen programs of `/bin` are built
@@ -314,6 +350,10 @@ PCI line needs the I/O APIC that K8 brings.
 ## What works
 
 * the boot: the loader, long mode, the banner, the contract check at 1.8;
+* the signature of the kernel (ADR 0020): the loader verifies the trailer of
+  SHA-256 and Ed25519 with the key compiled into it before it copies a byte,
+  and a damaged, unsigned or foreign-key image stops with the reason and
+  never reaches the kernel;
 * the console: the VGA text screen and COM1 from one call, the keyboard of
   the PS/2 with Shift, Caps Lock, Backspace and Ctrl+C, and the serial port
   with the console it always had;

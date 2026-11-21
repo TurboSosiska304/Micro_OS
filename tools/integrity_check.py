@@ -94,6 +94,7 @@ BUNDLE_EXTRA = ("checksums.txt", "flash.sh", "README.md")
 # The extensions that are never treated as a text file.
 BINARY_EXTENSIONS = {
     ".bin",
+    ".sig",
     ".png",
     ".jpg",
     ".jpeg",
@@ -409,7 +410,18 @@ def check_bundle(root: str, report: Report) -> dict:
         images = {
             os.path.basename(path) for path in glob.glob(os.path.join(dist, "MicroOS-*.bin"))
         }
-        expected = set(BUNDLE_BINARIES) | images
+        tarballs = {
+            os.path.basename(path)
+            for path in glob.glob(os.path.join(dist, "MicroOS-x86_64-*.tar.gz"))
+        }
+        # The signature trailer and the public key are parts of the bundle
+        # (ADR 0020), and so is the tarball of the other machine.
+        signature = {
+            name
+            for name in os.listdir(dist)
+            if name.endswith(".sig") or name == "microos-sign.pub"
+        }
+        expected = set(BUNDLE_BINARIES) | images | tarballs | signature
 
         report.add(
             group,

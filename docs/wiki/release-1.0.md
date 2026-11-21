@@ -49,6 +49,31 @@ stop moving:
   cache on x86-64. No TLS: 1.0 is a LAN system, and that is the sentence of
   the readme and the release notes.
 
+## The signature of an image
+
+The x86-64 machine boots a kernel only if its trailer says who signed it
+(ADR 0020). The image is the kernel and 120 bytes after it: the magic, the
+size, the SHA-256 of the bytes and an Ed25519 signature of those fields. The
+public key is compiled into the loader, so the image cannot bring a key of
+its own; the private key is not in this tree, and a release sets it with
+`MICROOS_SIGN_KEY`.
+
+The loader checks the trailer before it copies a byte of the kernel and before
+it turns the long mode on. A changed byte, a missing trailer and a signature
+of another key each print `Micro OS: the image is refused: <reason>` and halt;
+`make x86-smoke` proves all three, and the normal boot prints `Micro OS: image
+signature ok (sha-256, ed25519)`. `tools/microos_sign sign` and `verify` are
+the tools; `make bundle` signs the merged board image and leaves the `.sig`
+and `checksums.txt` beside it.
+
+The board is the honest exception: its ROM and the ESP-IDF bootloader verify a
+checksum, not a signature. A signature in that chain means secure boot v2,
+which burns eFuses, or a custom bootloader that does not fit the 28 KB
+bootloader partition. Neither is in 1.0, so the signature of `MicroOS-<version>.bin`
+is a check for the person or the tool that flashes it, not a check the board
+makes. The gate line of section 7 of [the checklist](../releases/1.0.md) is
+open for that reason.
+
 ## The session of 600 seconds
 
 No `1.0.0` is cut before one session of one boot runs **600 seconds under a

@@ -122,6 +122,16 @@ K5.
 | The null probe cannot catch a libc call: it is linked with the libc of the host, so `printf` in portable code would link. | `ports/port_null/README.md`, `tools/integrity_check.py` | open | Scan the portable sources for the names of the libc, or link the probe without the libc. |
 | The host port cannot reproduce preemption: the critical section is one recursive `pthread` mutex, so a race is invisible unless TSan looks for it. | `ports/port_host/README.md` | open | A model of preemption, or TSan as the only detector (it is in the cloud CI). |
 
+## The signature of an image
+
+| Debt | Where | Status | What it needs |
+|---|---|---|---|
+| The board does not check a signature at the boot: the ROM verifies the bootloader and the ESP-IDF bootloader verifies the checksum and SHA-256 of the application, but neither verifies a signature. `MicroOS-<version>.bin` carries a trailer that a person or a tool checks before flashing; the board does not read it. | `tools/bundle.sh`, ADR 0020 section 6 | open | Secure boot v2 with a documented key ceremony (eFuses, irreversible), or a custom bootloader component and a partition layout that fits Ed25519 and SHA-512 in 28 KB. |
+| The release workflow has no signing secret: `MICROOS_SIGN_KEY` is empty in CI, so the bundle is signed with the key generated in `build-x86/` and that public key travels in `microos-sign.pub`. It proves the mechanism, not the identity of the release. | `.github/workflows/release.yml`, `tools/bundle.sh` | open | The secret of the release key, a documented owner and rotation, and a step that fails when the variable is missing on a tag. |
+| Only the x86-64 kernel and the merged board image are signed. A `.mox`, a MicroFS volume, a FAT volume and `/etc` have no signature: a program is a file of a volume, and `execve` trusts the mode bit and the parser. | `components/kernel/src/exec.c`, `tools/mkfs_mfs.c`, ADR 0020 section 3 | open | A field in the program format or a detached signature beside the file, a key in the kernel, and a policy for the files a user writes. |
+| There is no anti-rollback: an old, correctly signed image boots. | `ports/port_x86_64/loader/verify.c`, ADR 0020 | open | A version in the trailer (it has one), a floor in the loader or in the NVS, and the rule of what a downgrade means. |
+| The key of a development build is generated per build directory: two builds of the same sources with no `MICROOS_SIGN_KEY` produce different images and different loaders. | `ports/port_x86_64/CMakeLists.txt` | decision | None: a reproducible build names a fixed key, and a key that is not a secret must not be committed. `make x86-build MICROOS_SIGN_KEY=...` is the release path. |
+
 ## The board (ESP32, P3-P5)
 
 | Debt | Where | Status | What it needs |

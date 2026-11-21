@@ -36,12 +36,28 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     container: espressif/idf:v5.3
+    env:
+      # The private key of the release (ADR 0020). It is a secret of the
+      # repository and lives outside the tree; an empty one signs the bundle
+      # with the key of the x86-64 build and the release notes say so.
+      MICROOS_SIGN_KEY: ${{ secrets.MICROOS_SIGN_KEY }}
     steps:
       - name: the repository
         uses: actions/checkout@v4
 
       - name: the checkout is safe for git
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # The secret is the key material (hex), not a path: write it where the
+      # tool expects a file. A value that is already a path is left alone.
+      - name: the key of the release
+        shell: bash
+        run: |
+          if [ -n "${MICROOS_SIGN_KEY:-}" ] && [ ! -f "$MICROOS_SIGN_KEY" ]; then
+            umask 077
+            printf '%s\n' "$MICROOS_SIGN_KEY" > "$RUNNER_TEMP/release.key"
+            echo "MICROOS_SIGN_KEY=$RUNNER_TEMP/release.key" >> "$GITHUB_ENV"
+          fi
 
       # The steps of Actions run through docker exec and miss the
       # entrypoint of the image, the one that sources export.sh — the
@@ -59,6 +75,11 @@ jobs:
 
       - name: the kernel of the x86-64 port
         run: make x86-build
+
+      # The host tools include microos_sign, which signs the bundle and is
+      # needed by the step below. The x86-64 build has its own copy.
+      - name: the tools of the host
+        run: make build
 
       # esptool lives in the python environment of the image, and the step
       # that builds the bundle is where it is needed (merge_bin).
@@ -112,6 +133,6 @@ jobs:
           esac
           gh release create "$GITHUB_REF_NAME" dist/* \
             --title "Micro OS $GITHUB_REF_NAME" \
-            --notes "The firmware for the M5Stack StickC Plus2 is one file: MicroOS-<version>.bin, which flash.sh writes at offset 0x0. The parts (micro_os.bin, bootloader.bin, partition-table.bin) and the SHA-256 sums of all of them stay for the tools that want them; NVS and MicroFS are not part of the image, so a flash keeps the data of the volume. For a PC, MicroOS-x86_64-<version>.tar.gz carries the same kernel for QEMU: unpack and run ./run.sh. Unpack the board bundle, connect over USB and run bash flash.sh (the release keeps no executable bit, so ./flash.sh needs a chmod +x first). The notes about the commits are generated below." \
+            --notes "The firmware for the M5Stack StickC Plus2 is one file: MicroOS-<version>.bin, which flash.sh writes at offset 0x0. The parts (micro_os.bin, bootloader.bin, partition-table.bin) and the SHA-256 sums of all of them stay for the tools that want them; NVS and MicroFS are not part of the image, so a flash keeps the data of the volume. The bundle carries a signature trailer (ADR 0020) and microos-sign.pub; verify it with tools/microos_sign before flashing. The board's ROM and ESP-IDF bootloader check a checksum, not a signature: the signature is a check of the download, not a check the board makes, and the release notes of the gate say so. For a PC, MicroOS-x86_64-<version>.tar.gz carries the same kernel for QEMU: unpack and run ./run.sh. The x86-64 loader verifies the kernel with SHA-256 and Ed25519 before it copies a byte and refuses a damaged image. Unpack the board bundle, connect over USB and run bash flash.sh (the release keeps no executable bit, so ./flash.sh needs a chmod +x first). The notes about the commits are generated below." \
             --generate-notes \
             $flags

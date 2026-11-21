@@ -70,6 +70,26 @@ python3 tools/integrity_check.py --skip-format --skip-git
 python3 tools/integrity_check.py --expect-version 0.2.0
 ```
 
+### Signing an image (ADR 0020)
+
+The x86-64 kernel is signed and the loader checks it before it copies a byte.
+A development build generates `build-x86/signing.key`; a release names a key
+outside the tree:
+
+```bash
+make x86-build MICROOS_SIGN_KEY=/path/outside/the/tree/release.key
+build-host/tools/microos_sign verify --pub build-x86/signing.pub build-x86/microos64.bin
+build-host/tools/microos_sign info   build-x86/microos64.bin
+make x86-smoke                         # accepts the signed image, refuses a damaged one
+```
+
+`tools/microos_sign keygen|sign|verify|info` is the tool; `make bundle` signs
+the merged board image with the same key when `MICROOS_SIGN_KEY` is set, and
+always writes the sums. `make x86-smoke` boots a changed byte, a kernel without
+a trailer and a kernel of another key, and every one is refused before the
+kernel starts. The board's own boot chain verifies a checksum, not a signature:
+see the note in `docs/releases/1.0.md` section 7.
+
 ## 3. Device build and flashing
 
 | Command | What it does |

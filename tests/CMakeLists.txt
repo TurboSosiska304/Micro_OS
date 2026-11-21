@@ -43,6 +43,7 @@ if(NOT ESP_PLATFORM)
         cases/test_task.c
         cases/test_sched.c
         cases/test_sched_queue.c
+        cases/test_sign.c
     )
 
     # The tests of a component that a build leaves out are left out with it:
@@ -76,17 +77,22 @@ if(NOT ESP_PLATFORM)
         "${CMAKE_SOURCE_DIR}/components/graphics/include"
         "${CMAKE_SOURCE_DIR}/components/fs_fat32/include"
         "${CMAKE_SOURCE_DIR}/components/fs_ext2/include"
+        # The verifier of ADR 0020 and its two primitives: the boot loader and
+        # the tool compile the same files, and the test is the third caller.
+        "${CMAKE_SOURCE_DIR}/ports/port_x86_64/loader"
     )
 
     target_sources(microos_tests PRIVATE
-        "${CMAKE_SOURCE_DIR}/components/drivers/src/input_debounce.c"
-        "${CMAKE_SOURCE_DIR}/components/drivers/src/battery_soc.c"
+        "${CMAKE_SOURCE_DIR}/components/drivers/src/input_debounce.c"        "${CMAKE_SOURCE_DIR}/components/drivers/src/battery_soc.c"
         "${CMAKE_SOURCE_DIR}/components/drivers/src/fb_draw.c"
         "${CMAKE_SOURCE_DIR}/components/drivers/src/rtc_time.c"
         "${CMAKE_SOURCE_DIR}/components/drivers/src/ir_nec.c"
         "${CMAKE_SOURCE_DIR}/components/drivers/src/sound_detect.c"
         "${CMAKE_SOURCE_DIR}/components/telnet/src/telnet_proto.c"
         "${CMAKE_SOURCE_DIR}/components/graphics/src/text_wrap.c"
+        "${CMAKE_SOURCE_DIR}/ports/port_x86_64/loader/sha256.c"
+        "${CMAKE_SOURCE_DIR}/ports/port_x86_64/loader/ed25519.c"
+        "${CMAKE_SOURCE_DIR}/ports/port_x86_64/loader/sign_image.c"
     )
 
     # The FAT reader comes from the component when the host build links it

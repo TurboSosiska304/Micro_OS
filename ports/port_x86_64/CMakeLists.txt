@@ -403,16 +403,102 @@ set_target_properties(microos64 PROPERTIES
     LINK_FLAGS "-nostdlib -static -Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/linker64.ld -Wl,--build-id=none"
 )
 
-add_custom_command(
-    OUTPUT "${CMAKE_BINARY_DIR}/microos64.bin"
-    COMMAND objcopy -O binary "$<TARGET_FILE:microos64>" "${CMAKE_BINARY_DIR}/microos64.bin"
-    DEPENDS microos64
-    COMMENT "the flat image of the kernel"
-    VERBATIM
+# --- the signature of the image (ADR 0020) ---------------------------------
+#
+# The kernel is a file the loader reads, and the loader verifies it before it
+# copies a byte: an image with no trailer, with another digest or with a
+# signature of another key never reaches the kernel. The public key is part
+# of the loader, so the image cannot bring a key of its own.
+#
+# The key of a build is a private one chosen by MICROOS_SIGN_KEY, or a fresh
+# one in the build directory when the variable is empty. The second case is
+# the development loop and CI: the boot check is real, and the key is not a
+# secret because it signs nothing that leaves the machine. A release sets the
+# variable to the key of the release, which lives outside this tree.
+set(SIGN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/loader")
+set(SIGN_SHARED
+    "${SIGN_DIR}/sha256.c"
+    "${SIGN_DIR}/ed25519.c"
+    "${SIGN_DIR}/sign_image.c"
 )
 
-# The loader is 32-bit and has no C in it: the assembler and the linker of
-# the host do the whole job.
+add_executable(microos_sign
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/microos_sign.c"
+    ${SIGN_SHARED}
+)
+
+target_include_directories(microos_sign PRIVATE "${SIGN_DIR}")
+
+# The tool is a host program, not a kernel: the project gives every C file of
+# this build -fno-pic -fno-pie, and an executable of the host has to be
+# allowed to be a non-PIE one.
+target_link_options(microos_sign PRIVATE -no-pie)
+
+set(MICROOS_SIGN_KEY "" CACHE FILEPATH
+    "the private key of the image (default: a key generated in the build directory)")
+
+if(MICROOS_SIGN_KEY)
+    set(SIGN_KEY "${MICROOS_SIGN_KEY}")
+    add_custom_command(
+        OUTPUT "${CMAKE_BINARY_DIR}/signing.pub" "${CMAKE_BINARY_DIR}/sign_public_key.h"
+        COMMAND $<TARGET_FILE:microos_sign> pubkey
+                --key "${SIGN_KEY}"
+                --pub "${CMAKE_BINARY_DIR}/signing.pub"
+                --header "${CMAKE_BINARY_DIR}/sign_public_key.h"
+        DEPENDS microos_sign "${SIGN_KEY}"
+        COMMENT "reading the public half of the signing key"
+        VERBATIM
+    )
+else()
+    set(SIGN_KEY "${CMAKE_BINARY_DIR}/signing.key")
+    # The key of a development build is generated once and kept: a rebuild
+    # of the loader must not change the key of an image that is already on
+    # the disk of QEMU, and a guard keeps the file across a reconfigure.
+    add_custom_command(
+        OUTPUT "${SIGN_KEY}" "${CMAKE_BINARY_DIR}/signing.pub"
+               "${CMAKE_BINARY_DIR}/sign_public_key.h"
+        COMMAND sh -c "test -f '${SIGN_KEY}' || '$<TARGET_FILE:microos_sign>' keygen --key '${SIGN_KEY}' --pub '${CMAKE_BINARY_DIR}/signing.pub' --header '${CMAKE_BINARY_DIR}/sign_public_key.h'"
+        COMMAND $<TARGET_FILE:microos_sign> pubkey
+                --key "${SIGN_KEY}"
+                --pub "${CMAKE_BINARY_DIR}/signing.pub"
+                --header "${CMAKE_BINARY_DIR}/sign_public_key.h"
+        DEPENDS microos_sign
+        COMMENT "generating the key of the image of this build"
+        VERBATIM
+    )
+endif()
+
+# The C of the loader is 32-bit and freestanding: no libc, no red zone, no
+# SSE (nothing here saves an XMM register), and the oldest model of the
+# processor, because the machine of QEMU is not the machine of the builder.
+set(LOADER_CFLAGS
+    -m32 -O2 -ffreestanding -fno-builtin -fno-stack-protector
+    -fno-pic -fno-pie -fno-asynchronous-unwind-tables -fno-unwind-tables
+    -mno-sse -mno-mmx -march=i386
+    -Wall -Wextra -Werror -Wno-unused-parameter
+    -I "${SIGN_DIR}" -I "${CMAKE_BINARY_DIR}"
+)
+
+set(LOADER_C_OBJECTS)
+foreach(name sha256 ed25519 sign_image loader_io verify memory)
+    add_custom_command(
+        OUTPUT "${CMAKE_BINARY_DIR}/loader_${name}.o"
+        COMMAND ${CMAKE_C_COMPILER} ${LOADER_CFLAGS}
+                -c "${SIGN_DIR}/${name}.c"
+                -o "${CMAKE_BINARY_DIR}/loader_${name}.o"
+        DEPENDS "${SIGN_DIR}/${name}.c"
+                "${SIGN_DIR}/sha256.h" "${SIGN_DIR}/ed25519.h"
+                "${SIGN_DIR}/sign_image.h" "${SIGN_DIR}/loader_io.h"
+                "${CMAKE_BINARY_DIR}/sign_public_key.h"
+        COMMENT "compiling the loader's ${name}"
+        VERBATIM
+    )
+    list(APPEND LOADER_C_OBJECTS "${CMAKE_BINARY_DIR}/loader_${name}.o")
+endforeach()
+
+# The loader is 32-bit and has no libc in it: the assembler, the compiler and
+# the linker of the host do the whole job. The object of the C is 32-bit as
+# well, so ld sees one machine.
 add_custom_command(
     OUTPUT "${CMAKE_BINARY_DIR}/loader32.o"
     COMMAND as --32 -o "${CMAKE_BINARY_DIR}/loader32.o" "${CMAKE_CURRENT_SOURCE_DIR}/loader32.S"
@@ -425,8 +511,33 @@ add_custom_command(
     OUTPUT "${CMAKE_BINARY_DIR}/loader32.elf"
     COMMAND ld -m elf_i386 -T "${CMAKE_CURRENT_SOURCE_DIR}/loader32.ld"
             -o "${CMAKE_BINARY_DIR}/loader32.elf" "${CMAKE_BINARY_DIR}/loader32.o"
-    DEPENDS "${CMAKE_BINARY_DIR}/loader32.o"
+            ${LOADER_C_OBJECTS}
+    DEPENDS "${CMAKE_BINARY_DIR}/loader32.o" ${LOADER_C_OBJECTS}
+            "${CMAKE_CURRENT_SOURCE_DIR}/loader32.ld"
     COMMENT "linking the loader"
+    VERBATIM
+)
+
+# The flat image of the kernel and its trailer. The loader checks the trailer
+# before it copies a byte, so the file QEMU gets is the signed one and the raw
+# bytes are only a step of the build.
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/microos64.raw"
+    COMMAND objcopy -O binary "$<TARGET_FILE:microos64>" "${CMAKE_BINARY_DIR}/microos64.raw"
+    DEPENDS microos64
+    COMMENT "the flat image of the kernel"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/microos64.bin"
+    COMMAND $<TARGET_FILE:microos_sign> sign
+            --key "${SIGN_KEY}"
+            --in "${CMAKE_BINARY_DIR}/microos64.raw"
+            --out "${CMAKE_BINARY_DIR}/microos64.bin"
+            --sig "${CMAKE_BINARY_DIR}/microos64.sig"
+    DEPENDS microos_sign "${SIGN_KEY}" "${CMAKE_BINARY_DIR}/microos64.raw"
+    COMMENT "signing the flat image of the kernel"
     VERBATIM
 )
 

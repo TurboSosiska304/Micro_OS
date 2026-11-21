@@ -104,13 +104,22 @@ the serial console gives a shell without a password.
 
 ### The image and the update path
 
-In the tree of 0.8.0-rc1 the firmware image and a program image are checked
-for their shape (magic, version, machine, sizes), not for a cryptographic
-signature. A checksum and a signature that the boot checks are a gate of 1.0
-and are not in this tree yet ([docs/releases/1.0.md](docs/releases/1.0.md)
-§7). The firmware in this tree does not enable secure boot or flash
-encryption; physical access to the board is the boundary. Flash the board
-from a source you trust.
+The x86-64 kernel is signed: the image is the kernel and a 120-byte trailer
+(SHA-256 and Ed25519), and `loader32.S` verifies it with the public key
+compiled into the loader before it copies a byte of the kernel (ADR 0020). A
+damaged, unsigned or foreign-key image is refused and never runs. The public
+key of a build travels in `dist/`; the private key is outside this tree.
+
+The board is not boot-checked with a signature: its ROM and the ESP-IDF
+bootloader check a checksum, not a signature, and the board bundle is signed
+for the person or the tool that flashes it. The tree does not enable secure
+boot or flash encryption; that path burns eFuses and is not in 1.0. A program
+image (MOX1) and a filesystem volume are checked for their shape (magic,
+version, machine, sizes), not for a cryptographic signature. A checksum and a
+signature that the boot checks are a gate of 1.0
+([docs/releases/1.0.md](docs/releases/1.0.md) §7), met on x86-64 and open for
+the board. Physical access to the board is the boundary; flash it from a
+source you trust.
 
 ## Out of scope
 

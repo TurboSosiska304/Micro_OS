@@ -69,6 +69,7 @@ static void run_tests(void *arg)
 #if MICRO_OS_WIFI
     test_wifi();
 #endif
+    test_sign();
 
     g_result = ktest_summary();
     atomic_store_explicit(&g_done, true, memory_order_release);

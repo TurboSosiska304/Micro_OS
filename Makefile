@@ -206,12 +206,18 @@ idf-size: idf-check
 # the kernel to its address and turns the long mode on.
 X86_BUILD := build-x86
 
+# The private key of the signed image (ADR 0020). It is not in this tree:
+# a release names it with the variable, and a build without one generates a
+# key of its own in the build directory.
+MICROOS_SIGN_KEY ?=
+X86_SIGN_ARGS := -DMICROOS_SIGN_KEY=$(MICROOS_SIGN_KEY)
+
 # The window of `make x86-run`: GTK when QEMU was built with it, SDL for a
 # machine without it. `make x86-run X86_DISPLAY=sdl` picks the other one.
 X86_DISPLAY ?= gtk
 
 x86-build:
-	cmake -B $(X86_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release
+	cmake -B $(X86_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release $(X86_SIGN_ARGS)
 	cmake --build $(X86_BUILD) --target image
 
 # The disk of the machine: an MBR, one partition and a MicroFS volume with
@@ -319,7 +325,7 @@ X86_NET_RUN_DEVICE := -netdev user,id=n0,hostfwd=tcp:127.0.0.1:8080-:8080 \
 
 x86-net-build:
 	cmake -B $(X86_NET_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
-		-DMICRO_OS_X86_NET=ON
+		-DMICRO_OS_X86_NET=ON $(X86_SIGN_ARGS)
 	cmake --build $(X86_NET_BUILD) --target image
 
 x86-net-run: x86-net-build
@@ -406,6 +412,6 @@ board-soak:
 
 bundle: idf-check
 	. $(IDF_EXPORT) && idf.py -D IDF_TARGET=$(IDF_TARGET) build && \
-		cmake -B $(X86_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release && \
+		cmake -B $(X86_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release $(X86_SIGN_ARGS) && \
 		cmake --build $(X86_BUILD) --target image && \
 		tools/bundle.sh $(IDF_BUILD) dist

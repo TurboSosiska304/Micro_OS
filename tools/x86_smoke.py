@@ -44,6 +44,7 @@ import select
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 # The commands that are typed into the shell. The answers are read by their
@@ -166,6 +167,9 @@ PROMPT = "microos> "
 # that the whole chain works: the loader, the switch to long mode, the
 # console of COM1, the contract of the port and the boot of the kernel.
 EXPECTED = [
+    # The loader checked the trailer of the kernel before it copied a byte of
+    # it (ADR 0020); the line is the proof that the check ran and passed.
+    "Micro OS: image signature ok (sha-256, ed25519)",
     "board: qemu_x86_64",
     "port: x86_64, contract 1.8",
     "[ ok ] sched",
@@ -239,6 +243,188 @@ def linker_checks(elf_path: str) -> list:
     )
 
     return checks
+
+
+def run_refused_boot(loader: str, kernel: str, timeout: float = 10.0) -> str:
+    """Boot an image the loader should refuse, and return what it said.
+
+    There is no shell and no disk: a good image would reach the kernel and
+    print its banner, a bad one is stopped by the loader before the copy with
+    the sentence of the reason. The machine is left to run until the sentence
+    and a newline are there, and is then stopped by the test.
+    """
+    command = [
+        "qemu-system-x86_64",
+        "-kernel",
+        loader,
+        "-initrd",
+        kernel,
+        "-m",
+        "256",
+        "-nographic",
+        "-no-reboot",
+    ]
+
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    assert process.stdout is not None
+    fd = process.stdout.fileno()
+    transcript = b""
+    deadline = time.monotonic() + timeout
+
+    try:
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([fd], [], [], 0.1)
+            if ready:
+                chunk = os.read(fd, 4096)
+                if not chunk:
+                    break
+                transcript += chunk
+                if b"Micro OS: the image is refused" in transcript and transcript.endswith(
+                    b"\n"
+                ):
+                    break
+            if process.poll() is not None:
+                break
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        while True:
+            chunk = os.read(fd, 4096)
+            if not chunk:
+                break
+            transcript += chunk
+        process.stdout.close()
+
+    return transcript.decode("utf-8", errors="replace")
+
+
+def signature_checks(loader: str, kernel: str) -> list:
+    """The trailer of the kernel and the boot that refuses a damaged one.
+
+    The normal run of the smoke test proves the boot accepts the image. These
+    runs prove the other half: a byte changed, a trailer removed and a
+    signature of another key are each refused by the loader before any byte of
+    the kernel runs, and the sentence says which check failed.
+    """
+    checks = []
+
+    def expect(name: str, condition: bool, detail: str = "") -> None:
+        checks.append((name, bool(condition), detail))
+
+    tool = os.path.join(BUILD, "microos_sign")
+    public_key = os.path.join(BUILD, "signing.pub")
+    for path in (tool, public_key):
+        if not os.path.isfile(path):
+            expect("the build has the signature tool and its public key", False, path)
+            return checks
+        expect(f"the build has {os.path.basename(path)}", True)
+
+    try:
+        with open(kernel, "rb") as file:
+            signed = file.read()
+    except OSError as error:
+        expect("the signed image is readable", False, str(error))
+        return checks
+
+    expect(
+        "the kernel carries a signature trailer",
+        len(signed) > 120 and signed[-120:-112] == b"MOSIGN01",
+    )
+    verified = subprocess.run(
+        [tool, "verify", "--pub", public_key, kernel],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    expect(
+        "the tool verifies the image of the boot",
+        verified.returncode == 0,
+        verified.stderr.strip() or verified.stdout.strip(),
+    )
+
+    # A byte in the middle of the kernel: the SHA-256 refuses it.
+    damaged = bytearray(signed)
+    damaged[len(damaged) // 2] ^= 0x01
+    refused = run_refused_boot(loader, _write_bad_image(bytes(damaged)))
+    expect(
+        "a damaged kernel is refused before it runs",
+        "the image is refused" in refused and "the checksum does not match" in refused,
+        refused[-200:],
+    )
+    expect(
+        "the damaged kernel never reached the kernel",
+        "the kernel is up" not in refused and "board: qemu_x86_64" not in refused,
+        refused[-200:],
+    )
+
+    # The trailer removed: the image is a bare binary, not a signed one.
+    refused = run_refused_boot(loader, _write_bad_image(signed[:-120]))
+    expect(
+        "an image without a signature is refused",
+        "the image is refused" in refused and "no signature" in refused,
+        refused[-200:],
+    )
+
+    # The same bytes signed by a key the loader does not carry.
+    with tempfile.TemporaryDirectory(prefix="microos-sign-") as folder:
+        foreign_key = os.path.join(folder, "foreign.key")
+        foreign_image = os.path.join(folder, "foreign.bin")
+        made = subprocess.run(
+            [tool, "keygen", "--key", foreign_key, "--pub", os.path.join(folder, "foreign.pub")],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        signed_foreign = subprocess.run(
+            [
+                tool,
+                "sign",
+                "--key",
+                foreign_key,
+                "--in",
+                os.path.join(BUILD, "microos64.raw"),
+                "--out",
+                foreign_image,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if made.returncode != 0 or signed_foreign.returncode != 0:
+            expect(
+                "a second key signs the raw image",
+                False,
+                (made.stderr + signed_foreign.stderr).strip(),
+            )
+        else:
+            refused = run_refused_boot(loader, foreign_image)
+            expect(
+                "an image of another key is refused",
+                "the image is refused" in refused
+                and "the signature does not match" in refused,
+                refused[-200:],
+            )
+
+    return checks
+
+
+def _write_bad_image(data: bytes) -> str:
+    """A temporary kernel image for one refused boot."""
+    folder = os.path.join(BUILD, "refused")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, f"image-{len(data)}.bin")
+    with open(path, "wb") as file:
+        file.write(data)
+    return path
 
 
 def run_machine(loader: str, kernel: str, image: str, timeout: float) -> str:
@@ -917,7 +1103,7 @@ def main(argv: list) -> int:
     if args.verbose:
         print(output)
 
-    checks = linker_checks(KERNEL_ELF) + check(output)
+    checks = linker_checks(KERNEL_ELF) + signature_checks(loader, kernel) + check(output)
     failed = [item for item in checks if not item[1]]
 
     print("Micro OS — the smoke test of the x86-64 port")

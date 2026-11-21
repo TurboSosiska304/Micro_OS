@@ -50,6 +50,8 @@
 .global _start
 .type _start, @function
 
+.extern loader_verify_image
+
 _start:
     cli
     cld
@@ -64,6 +66,32 @@ _start:
     /* The map of the memory is in EBX; it lives below 1 GiB and stays
        reachable through the identity map. */
     movl %ebx, mbi_ptr
+
+    /*
+     * The C of the signature check runs before the page tables exist, so its
+     * stack is the one in .bss and every address is still the physical one
+     * of the boot. loader_verify_image() prints the reason and returns a
+     * failure when the image did not pass; the loader then halts, and no
+     * byte of the kernel has run.
+     */
+    movl $stack_top, %esp
+
+    movl mbi_ptr, %eax
+    movl 20(%eax), %ecx /* mods_count */
+    testl %ecx, %ecx
+    jz halt
+    movl 24(%eax), %edx /* mods_addr */
+    testl %edx, %edx
+    jz halt
+    movl (%edx), %esi /* mod_start */
+    movl 4(%edx), %edi /* mod_end */
+    subl %esi, %edi
+    pushl %edi
+    pushl %esi
+    call loader_verify_image
+    addl $8, %esp
+    testl %eax, %eax
+    jnz halt
 
     /* PML4[0] -> PDPT_LOW, PDPT_LOW[0] -> PD_LOW: the first gigabyte through
        2 MiB pages, so that every address of the boot keeps its meaning. */
