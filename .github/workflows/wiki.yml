@@ -5,7 +5,7 @@
 # deployment is the whole `site/` directory, forced onto an orphan branch, so
 # the kernel history never carries the generated HTML.
 #
-# The workflow runs on `main` (the `dev` version), on every `v*` tag (the
+# The workflow runs on `mainline` (the `dev` version), on every `v*` tag (the
 # release versions) and by hand. It builds every version from scratch each
 # time: the tags are the source of the versions, and the branch is derived,
 # not edited. See docs/wiki/deploy.md.
@@ -14,7 +14,7 @@ name: wiki
 
 on:
   push:
-    branches: [main]
+    branches: [mainline]
     tags: ["v*"]
     paths:
       - "docs/wiki/**"
@@ -91,5 +91,5 @@ jobs:
           publish_dir: ./site
           force_orphan: true
           user_name: "Micro OS wiki builder"
-          user_email: "wiki@microos.org"
+          user_email: "microos-wiki@users.noreply.github.com"
           commit_message: "docs: build the wiki (${{ github.ref_name }})"
