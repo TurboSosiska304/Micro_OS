@@ -219,7 +219,10 @@ written when the project was an operating system for one board; the numbers
       network components, the defaults per build, `make test-minimal` and
       the check of the map
 
-## K8 - Many cores (planned)
+## K8 - Many cores (planned, after 1.0)
+
+> Not a gate of 1.0 (ADR 0012, updated): the release promises a correct
+> single-core kernel; the second core is the first project after it.
 
 * [ ] A `struct k_cpu` per core and a run queue per core; the scheduler never
       runs one task on two cores (ADR 0012)
