@@ -1026,11 +1026,33 @@ def check_sources(root: str, report: Report, files: list) -> None:
     )
 
 
+def _bounded_formatter() -> None:
+    """Runs in the child: a formatter that goes wild must not take the host.
+
+    clang-format parses a translation unit before it decides how to lay it
+    out, and a pathological file - a generated table, a macro that expands
+    into a kilobyte of one line, a header caught half-written - makes that
+    parse grow without a bound: one file took 17 GB of the machine before it
+    was killed. The limit turns that into a failed check that names the file.
+    """
+    try:
+        import resource
+
+        resource.setrlimit(resource.RLIMIT_AS, (2 * 1024 * 1024 * 1024,) * 2)
+    except (ImportError, ValueError, OSError):
+        pass
+
+
 def check_format(root: str, report: Report, files: list, formatter: str) -> None:
-    """The formatting of the C sources."""
+    """The formatting of the C sources, one file at a time and bounded."""
     group = "format"
 
-    sources = [f for f in files if f.endswith((".c", ".h"))]
+    # A vendored tree is not ours to format: every port carries a
+    # `.clang-format` with `DisableFormat`, and reading a 9 MB amalgamation
+    # only to learn that is a waste of a minute and of a gigabyte.
+    sources = sorted(
+        f for f in files if f.endswith((".c", ".h")) and not f.startswith("third_party/")
+    )
     if not sources:
         report.skip(group, "clang-format", "there are no C sources")
         return
@@ -1039,27 +1061,40 @@ def check_format(root: str, report: Report, files: list, formatter: str) -> None
         report.skip(group, "clang-format", f"{formatter} is not installed")
         return
 
-    try:
-        result = subprocess.run(
-            [formatter, "--dry-run", "--Werror", *sources],
-            cwd=root,
-            capture_output=True,
-            text=True,
-        )
-    except OSError as error:
-        report.skip(group, "clang-format", str(error))
-        return
+    broken = []
+    for source in sources:
+        try:
+            result = subprocess.run(
+                [formatter, "--dry-run", "--Werror", source],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                preexec_fn=_bounded_formatter,
+            )
+        except subprocess.TimeoutExpired:
+            broken.append((source, "the formatter did not finish in a minute"))
+            continue
+        except OSError as error:
+            report.skip(group, "clang-format", str(error))
+            return
 
-    output = (result.stdout + result.stderr).strip()
-    lines = [line for line in output.splitlines() if line.strip()]
-    detail = "; ".join(lines[:MAX_REPORTED])
-    if len(lines) > MAX_REPORTED:
-        detail += f" and {len(lines) - MAX_REPORTED} more"
+        if result.returncode == 0:
+            continue
+        if result.returncode not in (1, 2):
+            broken.append((source, "the formatter gave up on it"))
+            continue
+        lines = [line for line in (result.stdout + result.stderr).splitlines() if line.strip()]
+        broken.append((source, lines[0] if lines else "not formatted"))
+
+    detail = "; ".join(f"{name}: {why}" for name, why in broken[:MAX_REPORTED])
+    if len(broken) > MAX_REPORTED:
+        detail += f" and {len(broken) - MAX_REPORTED} more"
 
     report.add(
         group,
         f"the C sources are formatted ({formatter})",
-        result.returncode == 0,
+        not broken,
         detail,
     )
 
