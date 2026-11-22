@@ -193,6 +193,13 @@ release. The notes are in [`docs/releases/1.2.md`](docs/releases/1.2.md).
 
 ### Fixed
 
+- `libc`: a stream of a program reads a block of 512 bytes from its descriptor
+  instead of one byte at a time, so the line readers of the release stop being
+  a system call per byte: `wc -c` of a 168 KB file was 11.6 s and is 0.13 s,
+  `grep` over a file of a few hundred kilobytes no longer trips the ten-second
+  patience of the shell. The block lives in the `FILE` object (no allocation),
+  `fseek` drops it and `ftell` counts what is still in it; the write side is
+  unchanged.
 - `mfs`: a read of a file follows the chain from the cursor of its descriptor
   (`chain_block`/`chain_index` in `struct mfs_file`) instead of walking from
   the head for every block: a read of 540 KB is 28.6 s before and 0.18 s

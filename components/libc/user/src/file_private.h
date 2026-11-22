@@ -21,6 +21,13 @@ struct ulibc_file {
      * number did not want, and `fgetc` answers it before the next read. The
      * standard promises one byte and no more. */
     int pushback;
+    /* The bytes read from the descriptor and not yet given to the caller:
+     * without the block a line reader is one system call per byte, which the
+     * `grep` of sbase over a file of a few hundred kilobytes makes visible.
+     * The block is part of the object, so a stream allocates nothing. */
+    unsigned char chunk[BUFSIZ];
+    size_t chunk_at;
+    size_t chunk_len;
     /* The block of a stream of memory (`fmemopen`), or NULL. The memory is
      * the caller's, never freed by `fclose`, and the position is the index of
      * the next byte. */

@@ -2,10 +2,12 @@
  * Micro OS — the streams of a program.
  *
  * A stream is a descriptor of the VFS and the little state a caller reads
- * back: the end of the file and the error of the last call. There is no
- * buffer between the stream and the kernel on purpose -
- * the files of this system are small, the calls are cheap, and a buffer of
- * the host library would be a second allocator with a second policy.
+ * back: the end of the file and the error of the last call. A block of the
+ * stream holds the bytes of the descriptor that a `fgetc` has not asked for:
+ * without it a line reader of the release (the `grep` of sbase over a file of
+ * a few hundred kilobytes) is one system call per byte, which the machine
+ * feels. The block lives in the object of the stream and not in the arena, so
+ * a program of four streams has no allocation to make.
  *
  * A stream that is not a file is a block of memory: `fmemopen` gives a source
  * the stream it asks for over a word of its own, which is how `grep` reads a
@@ -25,9 +27,9 @@
 
 #include "file_private.h"
 
-static struct ulibc_file g_stdin_s = {ULIBC_STDIN, 0, 0, -1, NULL, 0, 0, 0};
-static struct ulibc_file g_stdout_s = {ULIBC_STDOUT, 0, 0, -1, NULL, 0, 0, 0};
-static struct ulibc_file g_stderr_s = {ULIBC_STDERR, 0, 0, -1, NULL, 0, 0, 0};
+static struct ulibc_file g_stdin_s = {.fd = ULIBC_STDIN, .pushback = -1};
+static struct ulibc_file g_stdout_s = {.fd = ULIBC_STDOUT, .pushback = -1};
+static struct ulibc_file g_stderr_s = {.fd = ULIBC_STDERR, .pushback = -1};
 
 FILE *stdin = &g_stdin_s;
 FILE *stdout = &g_stdout_s;
@@ -51,8 +53,43 @@ static FILE *stream_new(int fd)
     stream->position = 0;
     stream->memory = 0;
     stream->pushback = -1;
+    stream->chunk_at = 0;
+    stream->chunk_len = 0;
 
     return stream;
+}
+
+/*
+ * Fill the block of the stream from its descriptor. A pipe of this system
+ * answers EAGAIN while its producer is there (ADR 0014), which is not the end
+ * of the stream: the call waits the condition out. The answer is 1 when bytes
+ * arrived, 0 at the end of the file and -1 on an error.
+ */
+static int stream_fill(FILE *stream)
+{
+    long rc;
+
+    stream->chunk_at = 0;
+    stream->chunk_len = 0;
+    if (stream->eof) {
+        return 0;
+    }
+
+    do {
+        rc = read(stream->fd, stream->chunk, sizeof(stream->chunk));
+    } while (rc < 0 && errno == EAGAIN);
+
+    if (rc < 0) {
+        stream->error = 1;
+        return -1;
+    }
+    if (rc == 0) {
+        stream->eof = 1;
+        return 0;
+    }
+
+    stream->chunk_len = (size_t)rc;
+    return 1;
 }
 
 FILE *fopen(const char *path, const char *mode)
@@ -221,17 +258,47 @@ size_t fread(void *buffer, size_t size, size_t count, FILE *stream)
     }
 
     while (got < total) {
-        long rc = read(stream->fd, bytes + got, total - got);
+        size_t left = total - got;
 
-        if (rc < 0) {
-            stream->error = 1;
-            break;
+        if (stream->chunk_at < stream->chunk_len) {
+            size_t take = stream->chunk_len - stream->chunk_at;
+
+            if (take > left) {
+                take = left;
+            }
+            memcpy(bytes + got, stream->chunk + stream->chunk_at, take);
+            stream->chunk_at += take;
+            got += take;
+            continue;
         }
-        if (rc == 0) {
-            stream->eof = 1;
-            break;
+
+        /* A request larger than the block is read into the caller's memory
+         * and not through the block: a copy of the whole file is one read. */
+        if (left >= sizeof(stream->chunk)) {
+            long rc = read(stream->fd, bytes + got, left);
+
+            if (rc < 0 && errno == EAGAIN) {
+                continue;
+            }
+            if (rc < 0) {
+                stream->error = 1;
+                break;
+            }
+            if (rc == 0) {
+                stream->eof = 1;
+                break;
+            }
+            got += (size_t)rc;
+            continue;
         }
-        got += (size_t)rc;
+
+        {
+            int filled = stream_fill(stream);
+
+            if (filled <= 0) {
+                break;
+            }
+        }
     }
 
     return got / size;
@@ -461,6 +528,8 @@ int fseek(FILE *stream, long offset, int whence)
     }
 
     stream->pushback = -1;
+    stream->chunk_at = 0;
+    stream->chunk_len = 0;
     rc = lseek(stream->fd, offset, whence);
     if (rc < 0) {
         stream->error = 1;
@@ -488,9 +557,12 @@ long ftell(FILE *stream)
     rc = lseek(stream->fd, 0, ULIBC_SEEK_CUR);
     if (rc < 0) {
         stream->error = 1;
+        return rc;
     }
 
-    return rc;
+    /* The bytes of the block are ahead of the descriptor: the position of the
+     * stream is the one of the descriptor less what is still in the block. */
+    return rc - (long)(stream->chunk_len - stream->chunk_at);
 }
 
 void rewind(FILE *stream)
