@@ -147,6 +147,15 @@ COMMANDS = [
     # layer waits out the EAGAIN of the producer that is still writing.
     "cat /etc/greeting.gz | /bin/zcat",
     "exec /bin/ls /etc/licenses",
+    # The second port of a program of somebody else (Lua): the interpreter is
+    # a file of /bin and its first script and license are files of /etc. The
+    # image of the interpreter is 164 KiB, past the 64 KiB the kernel reads in
+    # one block (KSYS_MAX_IO, docs/debts.md K3), so `exec` refuses it and no
+    # byte of it runs; the run of the library is the host test
+    # `tests/cases/test_lua.c`, and this line keeps the refusal honest until
+    # the kernel streams or maps an image of any size.
+    "exec /bin/lua -e print(2^10)",
+    "exec /bin/cat /etc/hello.lua",
     "echo hi > /tmp/f",
     "cat /tmp/f",
     "cat < /tmp/f",
@@ -889,6 +898,7 @@ def check(output: str) -> list:
                 "pwd",
                 "spawn",
                 "zcat",
+                "lua",
             )
         ),
         bin_listing[-200:],
@@ -1174,6 +1184,27 @@ def check(output: str) -> list:
     )
     licenses = answer("exec /bin/ls /etc/licenses")
     expect("the license of zlib travels with the image", "zlib" in licenses, licenses)
+
+    # --- the second port of somebody else's program: Lua and /bin/lua
+    # The script and the license are files of the image, and the program is a
+    # file of /bin. The interpreter itself does not run yet: its image is past
+    # the 64 KiB the kernel reads in one block (KSYS_MAX_IO, K3 of the debts),
+    # so the call refuses it before a byte of it is copied. The refusal is
+    # checked here so that the day the kernel streams an image, this line
+    # becomes the run of Lua and nothing of the port changes.
+    lua_script = answer("exec /bin/cat /etc/hello.lua")
+    expect(
+        "the script of the first Lua program is a file of the image",
+        "the first script of the machine" in lua_script,
+        lua_script[:200],
+    )
+    expect("the license of Lua travels with the image", "lua" in licenses, licenses)
+    lua_program = answer("exec /bin/lua -e print(2^10)")
+    expect(
+        "an image past the transfer edge of exec is refused",
+        "exec: /bin/lua:" in lua_program and "the program exited" not in lua_program,
+        lua_program,
+    )
 
     # A program starts another program with an environment of its own. The
     # two words are the vector of `spawn.c`, copied by the kernel at the edge

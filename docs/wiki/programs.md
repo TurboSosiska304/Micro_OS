@@ -147,6 +147,8 @@ mode of a program (`0755`), and no boot creates one:
 | `/bin/rm` | a name through `unlink`; `-r` walks a directory with `readdir` |
 | `/bin/spawn` | `execve` from a program, with an environment of its own |
 | `/bin/wc` | the lines, words and bytes of a source (`-l`, `-w`, `-c`) or of descriptor 0 |
+| `/bin/zcat` | a `.gz` of the volume inflated by zlib, to the console or a file |
+| `/bin/lua` | the interpreter of Lua 5.4.7 and its script `/etc/hello.lua`; the image is 164 KiB and `exec` refuses it in 1.1 (see below) |
 | `/bin/zcat` | a `.gz` of the VFS inflated by zlib 1.3.1 and written to the console or a file |
 
 The first five talk to the kernel through `programs/prog.h`, because what they
@@ -443,10 +445,13 @@ plan to pretend otherwise.
   program. The format is ready for the second machine; the port is not.
 * **No libc of the host.** A program has the calls of the ABI, the library of
   `components/libc/user` and nothing else. The library is not a standard C
-  library: the allocation is a fixed arena of the program, the streams are a
-  descriptor and not a buffer, and there is no floating point (the programs
-  are built with `-mgeneral-regs-only`); the formatter has no precision and
-  no `*` width.
+  library: it has what the programs of `/bin` and the ports of zlib and Lua
+  use. A program with a `double` (Lua) is built without
+  `-mgeneral-regs-only`, and the port saves no XMM or x87 state, so it runs
+  one at a time; the arithmetic is `src/math.c` and not a `libm`.
+* **No image larger than 64 KiB.** `execve` reads the image in one block of
+  `KSYS_MAX_IO`, so `/bin/lua` (164 KiB) is refused in 1.1; its library, its
+  script and its license are on the volume and the host test runs them.
 * **No inherited descriptors.** A program is a task with a table of four
   descriptors of its own, and the shell does not pass its own table to it.
   `cat`, `wc`, `head` and `grep` read descriptor 0 when they are given no file

@@ -14,6 +14,7 @@ commercially; the note here is what the tree does.
 |---|---|---|---|---|
 | Spleen 8x16 | 2.3.0 | BSD-2-Clause | `third_party/spleen`, `ports/port_x86_64/src/font_spleen.c` | the x86-64 kernel image; `LICENSE.spleen` in its tar |
 | zlib | 1.3.1 | zlib | `third_party/zlib`, `ports/port_x86_64/programs/zcat.c` | `/bin/zcat` of the x86-64 MicroFS image; `/etc/licenses/zlib` in the image and `LICENSE.zlib` in the x86-64 tar |
+| Lua | 5.4.7 | MIT | `third_party/lua`, `ports/port_x86_64/programs` (the `main` is the release's `lua.c`) | `/bin/lua` of the x86-64 MicroFS image; `/etc/licenses/lua` in the image and `LICENSE.lua` in the x86-64 tar |
 
 Spleen is a font by Frederic Cambus; the license and the note are in
 [`third_party/spleen`](../third_party/spleen/README.md). The 8x16 table is
@@ -30,6 +31,15 @@ and `tools/bundle.sh` puts `LICENSE.zlib` into the x86-64 archive. A package
 that installs `zcat` (`microos-progs` of a release) copies the same file
 beside the program. The file stays zlib: it is not merged into the MIT
 `LICENSE` of the tree.
+
+Lua is a language by the team of PUC-Rio; the version, the files, the port
+layer and the one configuration file of the port are in
+[`third_party/lua`](../third_party/lua/README.md). Its MIT license asks for
+the copyright notice and the permission text to travel with a copy of the
+software, so the image carries `/etc/licenses/lua` beside `/bin/lua` and
+`tools/bundle.sh` puts `LICENSE.lua` into the x86-64 archive. The text is the
+MIT of the release and not a second copy of the MIT of this tree: the two
+notice lines are different and the tree keeps both.
 
 ## The rule
 

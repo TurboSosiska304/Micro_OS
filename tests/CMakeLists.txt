@@ -49,6 +49,8 @@ if(NOT ESP_PLATFORM)
         cases/test_sign.c
         cases/test_progs.c
         cases/test_zlib.c
+        cases/test_lua.c
+        cases/test_userland_float.c
     )
 
     # The tests of a component that a build leaves out are left out with it:
@@ -74,6 +76,7 @@ if(NOT ESP_PLATFORM)
     )
 
     set(MICROOS_ZLIB_DIR "${CMAKE_SOURCE_DIR}/third_party/zlib")
+    set(MICROOS_LUA_DIR "${CMAKE_SOURCE_DIR}/third_party/lua")
 
     target_include_directories(microos_tests PRIVATE
         "${CMAKE_CURRENT_LIST_DIR}/include"
@@ -96,6 +99,11 @@ if(NOT ESP_PLATFORM)
         # zlib and the headers of its port (the two allocation hooks).
         "${MICROOS_ZLIB_DIR}"
         "${MICROOS_ZLIB_DIR}/port"
+        # The headers of Lua. The host build keeps the default configuration
+        # of the release: the port layer of the machine
+        # (`third_party/lua/port/luaconf_port.h`) is for the guest, where
+        # there is no shell and no temporary name.
+        "${MICROOS_LUA_DIR}"
     )
 
     # zlib is the first third-party library of the tree, and the host test is
@@ -103,6 +111,57 @@ if(NOT ESP_PLATFORM)
     # port layer of `third_party/zlib/port` for the two allocation hooks. The
     # guest build (the static archive of `ports/port_x86_64`) is checked by
     # `make x86-smoke`, which runs /bin/zcat on a .gz of MicroFS.
+    # Lua is the second ported library. The whole core of the release is
+    # compiled for the host - the lexer, the parser, the code generator, the
+    # virtual machine and the standard libraries - and the test runs chunks
+    # through it. `lua.c` and `luac.c` are the two programs of the release
+    # and not a part of the library.
+    set(MICROOS_LUA_SOURCES
+        "${MICROOS_LUA_DIR}/lapi.c"
+        "${MICROOS_LUA_DIR}/lauxlib.c"
+        "${MICROOS_LUA_DIR}/lbaselib.c"
+        "${MICROOS_LUA_DIR}/lcode.c"
+        "${MICROOS_LUA_DIR}/lcorolib.c"
+        "${MICROOS_LUA_DIR}/lctype.c"
+        "${MICROOS_LUA_DIR}/ldblib.c"
+        "${MICROOS_LUA_DIR}/ldebug.c"
+        "${MICROOS_LUA_DIR}/ldo.c"
+        "${MICROOS_LUA_DIR}/ldump.c"
+        "${MICROOS_LUA_DIR}/lfunc.c"
+        "${MICROOS_LUA_DIR}/lgc.c"
+        "${MICROOS_LUA_DIR}/linit.c"
+        "${MICROOS_LUA_DIR}/liolib.c"
+        "${MICROOS_LUA_DIR}/llex.c"
+        "${MICROOS_LUA_DIR}/lmathlib.c"
+        "${MICROOS_LUA_DIR}/lmem.c"
+        "${MICROOS_LUA_DIR}/loadlib.c"
+        "${MICROOS_LUA_DIR}/lobject.c"
+        "${MICROOS_LUA_DIR}/lopcodes.c"
+        "${MICROOS_LUA_DIR}/loslib.c"
+        "${MICROOS_LUA_DIR}/lparser.c"
+        "${MICROOS_LUA_DIR}/lstate.c"
+        "${MICROOS_LUA_DIR}/lstring.c"
+        "${MICROOS_LUA_DIR}/lstrlib.c"
+        "${MICROOS_LUA_DIR}/ltable.c"
+        "${MICROOS_LUA_DIR}/ltablib.c"
+        "${MICROOS_LUA_DIR}/ltm.c"
+        "${MICROOS_LUA_DIR}/lundump.c"
+        "${MICROOS_LUA_DIR}/lutf8lib.c"
+        "${MICROOS_LUA_DIR}/lvm.c"
+        "${MICROOS_LUA_DIR}/lzio.c"
+    )
+    set_source_files_properties(${MICROOS_LUA_SOURCES}
+        PROPERTIES COMPILE_OPTIONS "-Wno-sign-compare;-Wno-unused-parameter")
+
+    # The formatter of the guest, compiled for the host into a unit of its
+    # own: the release of the test binary is linked against the C library of
+    # the host, and `FILE` is not the same type in the two libraries. The
+    # include directories are for this file only, so the rest of the binary
+    # keeps the headers of the host.
+    set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/cases/userland_float_shim.c"
+        PROPERTIES COMPILE_OPTIONS
+        "-I${CMAKE_SOURCE_DIR}/components/libc/user/include;-I${CMAKE_SOURCE_DIR}/components/kernel/include")
+
     set(MICROOS_ZLIB_SOURCES
         "${MICROOS_ZLIB_DIR}/adler32.c"
         "${MICROOS_ZLIB_DIR}/compress.c"
@@ -140,6 +199,8 @@ if(NOT ESP_PLATFORM)
         "${CMAKE_SOURCE_DIR}/components/port_esp32/src/progs_format.c"
         ${MICROOS_ZLIB_SOURCES}
         "${MICROOS_ZLIB_DIR}/port/zlib_os.c"
+        ${MICROOS_LUA_SOURCES}
+        "${CMAKE_CURRENT_LIST_DIR}/cases/userland_float_shim.c"
     )
 
     # The FAT reader comes from the component when the host build links it
@@ -195,7 +256,20 @@ if(NOT ESP_PLATFORM)
         list(APPEND MICRO_OS_TEST_LIBS microos_fs_ext2)
     endif()
 
-    target_link_libraries(microos_tests PRIVATE ${MICRO_OS_TEST_LIBS})
+    # The math of the host: the core of Lua calls the functions of the C
+    # library of the release (pow, fmod, floor, ...) and the host keeps them
+    # in libm, which the linker does not take by itself.
+    target_link_libraries(microos_tests PRIVATE ${MICRO_OS_TEST_LIBS} m)
+
+    # The race detector of this toolchain crashes on any `longjmp` after a
+    # `setjmp` ("can't find longjmp buf"), and a ten-line C program reproduces
+    # it: the library of the runner and the C library of the machine do not
+    # agree about the buffer. The error path of Lua is a long jump, so the one
+    # case that takes it is left out of the build under the detector; the
+    # other cases of the port and every case of the kernel still run.
+    if(MICRO_OS_SANITIZE_THREAD)
+        target_compile_definitions(microos_tests PRIVATE MICROOS_TSAN=1)
+    endif()
 
 # The corpus of the tests: a fixed set of numbers with the boundary values,
 # the recorded ABI of the release (tests/corpus/abi.txt) and the MOX1 image

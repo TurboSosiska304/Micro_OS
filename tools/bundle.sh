@@ -225,6 +225,8 @@ if [ -f "$X86_BUILD/loader32.elf" ] && [ -f "$X86_BUILD/microos64.bin" ]; then
     # zlib is linked into /bin/zcat of the disk image, and its license travels
     # with the distribution even when the image itself is built separately.
     cp -f "$ROOT/third_party/zlib/LICENSE" "$STAGE/LICENSE.zlib"
+    # Lua is /bin/lua of the same image, under the MIT license of its release.
+    cp -f "$ROOT/third_party/lua/LICENSE" "$STAGE/LICENSE.lua"
     if [ -f "$X86_BUILD/microos64.sig" ] && [ -f "$X86_BUILD/signing.pub" ]; then
         cp -f "$X86_BUILD/microos64.sig" "$STAGE/microos64.sig"
         cp -f "$X86_BUILD/signing.pub" "$STAGE/microos-sign.pub"
@@ -265,6 +267,12 @@ the note and the original BDF.
 `LICENSE.zlib` is its license and `third_party/zlib` of the sources has the
 note, the version and the port layer.
 
+`/bin/lua` of the disk image is Lua 5.4.7 (MIT license); `LICENSE.lua` is its
+license and `third_party/lua` of the sources has the note, the version, the
+port layer and the one setting of the port (`port/luaconf_port.h`). The
+interpreter of this release does not run yet: its image is past the block the
+kernel reads in one call (`docs/debts.md`).
+
 The kernel carries a signature trailer (ADR 0020), and the loader verifies it
 before it copies a byte: an image with a changed byte, without a trailer or
 signed by another key stops with `the image is refused` and never reaches the
@@ -277,7 +285,8 @@ The same kernel is on the board and in the tests: Micro OS is one portable
 kernel with a port per machine.
 DOC
 
-    STAGE_FILES=(loader32.elf microos64.bin run.sh README.md LICENSE.spleen LICENSE.zlib)
+    STAGE_FILES=(loader32.elf microos64.bin run.sh README.md LICENSE.spleen LICENSE.zlib
+        LICENSE.lua)
     if [ -f "$STAGE/microos64.sig" ]; then
         STAGE_FILES+=(microos64.sig microos-sign.pub)
     fi

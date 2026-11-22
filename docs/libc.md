@@ -36,7 +36,11 @@ because a program selects the files it links:
 |---|---|---|
 | the allocation | `src/malloc.c` | an arena in the bss of the program (`-DULIBC_HEAP_SIZE`, 256 KiB by default, 512 KiB for `zcat`), not `KSYS_MALLOC`: the block of the kernel is memory of ring 0 and a program cannot read it |
 | the error | `src/errno.c` | `errno` as a global of the program and `strerror`; the calls keep the negative number of the ABI and the wrappers also store its magnitude, so a portable library reads `errno` after `read` |
-| the streams | `src/file.c` | `fopen`, `fclose`, `fread`, `fwrite`, `fgetc`, `fputc`, `fgets`, `fputs`, `feof`, `ferror`, `fseek`, `ftell`, `rewind` over a descriptor; the binary mode is accepted and ignored because no file of the system translates a byte |
+| the streams | `src/file.c` | `fopen`, `freopen`, `fclose`, `fread`, `fwrite`, `fgetc`, `getc`, `ungetc`, `fputc`, `fgets`, `fputs`, `feof`, `ferror`, `fseek`, `ftell`, `rewind`, `fileno` over a descriptor; the binary mode is accepted and ignored because no file of the system translates a byte; `tmpfile` is a failure (no `/tmp`) |
+| the conversions and the sort | `src/stdlib.c` | `strtod`, `strtol`/`strtoul`/`strtoll`/`strtoull`, `atoi`/`atol`/`atof`, `abs`/`labs`, `qsort` (a merge sort in the arena, insertion when it has no room), `getenv` over `environ` |
+| the arithmetic | `src/math.c` | the functions of `<math.h>` for a `double`: the square root, the logarithm and the exponential of the x87 unit, the trigonometric functions of the unit with an argument reduced by `fprem`, and the rounding and the split of the exponent in integers |
+| the long jump | `src/setjmp.c` | `setjmp`/`longjmp` in the six callee-saved registers, the stack pointer and the return address of x86-64 |
+| the clock and the locale | `src/time.c`, `src/locale.c`, `src/ctype.c`, `src/assert.c` | `time` (the uptime: the ABI has no wall clock), `clock`, `gmtime`/`localtime`/`mktime`/`strftime` of the C locale, `localeconv`, the classes of a byte, `assert` |
 
 The names a portable source includes (`<string.h>`, `<stdlib.h>`, `<stdio.h>`,
 `<errno.h>`, `<unistd.h>`, `<fcntl.h>`, `<sys/types.h>`) are thin headers in
@@ -45,8 +49,21 @@ library is still `ulibc.h`, and a program that wants the functions of the
 system includes `ulibc.h` and not the headers of the host.
 
 The formatter is the one of a program: `%d %i %u %o %x %X %c %s %p %%`, the
-flags `-` and `0`, the width, and the length `l`/`z`. There is no precision
-and no floating point, and the programs are built with `-mgeneral-regs-only`.
+flags `- + space # 0`, the width and the precision (a `*` takes either from
+the arguments), and the length `l`/`ll`/`z`/`j`/`h`. A build that defines
+`ULIBC_WITH_FLOAT` adds `%f %F %e %E %g %G`: the digits come from
+`src/format_float.c`, and the include of that source is the choice of a
+program with a `double` in it (Lua). A program of the tree that does not
+define the name is built with `-mgeneral-regs-only`, where a double has no
+register, and prints such a conversion as the characters it was written with.
+`%a` is not implemented.
+
+Floating point in the guest is the one place the port leaves its rule:
+`CR4.OSFXSR`, `CR4.OSXMMEXCPT` and `CR0.NE` are set by the loader, the
+program is built without `-mgeneral-regs-only`, and the scheduler saves
+neither the XMM registers nor the x87 state. A program with a point in its
+numbers therefore runs alone - `execve` waits for it - and a second one at the
+same time needs the save of the state (`docs/debts.md`).
 
 The list is what the programs of `/bin` and the first port use and not a
 standard library: a function without a caller of this tree is not in it.

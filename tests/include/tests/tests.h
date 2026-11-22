@@ -52,5 +52,7 @@ void test_wifi(void);
 void test_sign(void);
 void test_progs(void);
 void test_zlib(void);
+void test_lua(void);
+void test_userland_float(void);
 
 #endif /* MICRO_OS_TESTS_H */

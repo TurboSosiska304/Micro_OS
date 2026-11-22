@@ -26,6 +26,33 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   the headers are thin shims over `ulibc.h`, and `snprintf`/`vsnprintf` share
   the formatter with `printf`. The host test `tests/cases/test_zlib.c` covers
   the checksums, the three stream wrappers and a `gz` file.
+- The second port of a program of somebody else: Lua 5.4.7 (MIT) as a static
+  archive of the guest and `/bin/lua`, with the first script of the machine
+  `/etc/hello.lua` and the license at `/etc/licenses/lua`. The release is
+  vendored unchanged in `third_party/lua`; the settings of the system are one
+  force-included header (`port/luaconf_port.h`: no shell, no `popen`, no
+  `tmpnam`, no dynamic linker, the C radix) and its `port/lua_os.c`. The
+  recipe is a new section of `docs/porting-programs.md`.
+- The library of a program learned the last pieces a language asks for: the
+  conversions `%f`/`%F`/`%e`/`%E`/`%g`/`%G` and a precision, `fprintf`/
+  `vfprintf`/`sprintf`, `strtod`/`strtoll`/`strtoull`/`qsort`/`getenv`,
+  `setjmp`/`longjmp` in the registers of x86-64, `math.h` on the x87 unit,
+  `time`/`localtime`/`mktime`/`strftime`, `locale`, `ctype`, `assert`,
+  `signal`/`raise`, and `remove`/`rename`/`fileno`/`ungetc`/`freopen`. A
+  program that computes in `double` is built without `-mgeneral-regs-only`
+  (the `FLOAT` option of `cmake/userland.cmake`), and the loader sets
+  `CR4.OSFXSR`, `CR4.OSXMMEXCPT` and `CR0.NE` for it. The host test
+  `tests/cases/test_lua.c` runs the language, its formatter, its tables, an
+  error caught by `pcall` and a script file.
+- The image of `execve` is padded to sixteen bytes now: a constant of a
+  program with floating point is a sixteen-byte object and `movaps`/`andps`
+  fault when it is not aligned. `tools/mkprog.sh` pads both segments to
+  sixteen for the contiguous window of x86-64 and keeps the four bytes of the
+  split windows of the board.
+- `make x86-smoke` and `make x86-disk-smoke` check that `/bin/lua` and its
+  script and license are files of the volume. The interpreter does not run
+  yet: its image is 164 KiB, past the 64 KiB `sys_execve` reads in one block,
+  so the call refuses it and the check names the debt (`docs/debts.md` K3).
 
 ## [1.1.1] - 2026-11-22
 
@@ -56,6 +83,15 @@ is.
   its own command.
 - x86-64: the small `printf` of the kernel prints octal, so `stat` says
   `mode: 0644` instead of the literal `0%o`.
+
+### Fixed
+
+- `esp32`: the two programs of the board link the `errno` of the library and
+  the compiler's runtime (`-lgcc`). The merge of the zlib userland put an
+  `errno` in the wrappers of the calls and the 64-bit division of the
+  formatter in `stdio.c`; the board's link had neither, so `make idf-build`
+  stopped at `/bin/hello`. The text of a program is 4540 bytes of the 8 KiB
+  window.
 
 ### Changed
 
@@ -105,6 +141,15 @@ many cores in the kernel. After `1.1.0` the ESP32 port is a compatibility port
 - The port contract is version 1.9: `kernel/port/cpu.h` with
   `k_port_cpu_count` and `k_port_cpu_id`, and a weak default of one core for a
   port that predates them.
+
+### Fixed
+
+- `esp32`: the two programs of the board link the `errno` of the library and
+  the compiler's runtime (`-lgcc`). The merge of the zlib userland put an
+  `errno` in the wrappers of the calls and the 64-bit division of the
+  formatter in `stdio.c`; the board's link had neither, so `make idf-build`
+  stopped at `/bin/hello`. The text of a program is 4540 bytes of the 8 KiB
+  window.
 
 ### Changed
 
@@ -164,6 +209,15 @@ them and on the host substrate. The gate is
   the three tools of the 600-second campaign (`make soak`, `make soak-host`,
   `make board-soak`).
 
+### Fixed
+
+- `esp32`: the two programs of the board link the `errno` of the library and
+  the compiler's runtime (`-lgcc`). The merge of the zlib userland put an
+  `errno` in the wrappers of the calls and the 64-bit division of the
+  formatter in `stdio.c`; the board's link had neither, so `make idf-build`
+  stopped at `/bin/hello`. The text of a program is 4540 bytes of the 8 KiB
+  window.
+
 ### Changed
 
 - Programs are files of a MicroFS volume (`make x86-disk`), not blobs of the
@@ -212,6 +266,15 @@ W^X, and a `.mox` runs on the board.
   table, a loop, a cross-link, a broken long name and a size against its
   chain; what the medium cannot explain is named as not repaired.
 
+### Fixed
+
+- `esp32`: the two programs of the board link the `errno` of the library and
+  the compiler's runtime (`-lgcc`). The merge of the zlib userland put an
+  `errno` in the wrappers of the calls and the 64-bit division of the
+  formatter in `stdio.c`; the board's link had neither, so `make idf-build`
+  stopped at `/bin/hello`. The text of a program is 4540 bytes of the 8 KiB
+  window.
+
 ### Changed
 
 - The port contract is 1.8: `k_port_exec_arch()` names the machine of the
@@ -242,6 +305,15 @@ decision and a plan.
   (ADR 0017). `ls` and `tree` are two commands.
 - `fork()` keeps a zombie on the CPU until its exit runs, so a parent that
   waits sees the status it expects.
+
+### Fixed
+
+- `esp32`: the two programs of the board link the `errno` of the library and
+  the compiler's runtime (`-lgcc`). The merge of the zlib userland put an
+  `errno` in the wrappers of the calls and the 64-bit division of the
+  formatter in `stdio.c`; the board's link had neither, so `make idf-build`
+  stopped at `/bin/hello`. The text of a program is 4540 bytes of the 8 KiB
+  window.
 
 ### Changed
 

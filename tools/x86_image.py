@@ -47,6 +47,7 @@ PROGRAMS = [
     "spawn",
     "nx",
     "zcat",
+    "lua",
 ]
 
 # The stream of the test of zlib: a fixed text, a fixed moment and the level
@@ -65,6 +66,27 @@ GREETING = (
 # is not linked here, so the file is data of the image).
 SETTING = "hello\nhostname=x86_64\nconsole=vga"
 
+# The first script of the machine: a table, a number with a point in it, a
+# file of the volume written and read back, and the clock. The text is a
+# fixture like the greeting of zlib: the smoke test knows every line of it and
+# the two runs of a reproducible build write the same bytes.
+HELLO_LUA = """-- /etc/hello.lua: the first script of the machine
+local kinds = { "alpha", "beta", "gamma" }
+print("lua: hello from /etc/hello.lua")
+print("lua: table", #kinds, kinds[1], kinds[3])
+print(string.format("lua: pi %.3f, 2^10 %.0f", math.pi, 2 ^ 10))
+print("lua: sqrt", math.sqrt(2), "floor", math.floor(-3.5))
+local out = assert(io.open("/hello.txt", "w"))
+out:write("a line written by lua\\n")
+out:close()
+local input = assert(io.open("/hello.txt", "r"))
+print("lua: read", input:read("l"))
+input:close()
+os.remove("/hello.txt")
+print("lua: os.time", os.time() >= 0)
+print("lua: string", ("abc"):upper(), string.rep("x", 3))
+"""
+
 IMAGE_MB = 8
 START_LBA = 2048
 # The moment of the records when SOURCE_DATE_EPOCH does not say another one.
@@ -76,6 +98,17 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_BUILD = os.path.join(ROOT, "build-x86")
 DEFAULT_MKFS = os.path.join(ROOT, "build-host", "tools", "microos_mkfs")
 ZLIB_LICENSE = os.path.join(ROOT, "third_party", "zlib", "LICENSE")
+LUA_LICENSE = os.path.join(ROOT, "third_party", "lua", "LICENSE")
+
+
+def write_hello_lua(build_dir: str) -> str:
+    """Write the script of the first Lua program, the same bytes every run."""
+    path = os.path.join(build_dir, "hello.lua")
+
+    with open(path, "w", encoding="utf-8", newline="\n") as file:
+        file.write(HELLO_LUA)
+
+    return path
 
 
 def write_greeting(build_dir: str, epoch: int) -> str:
@@ -154,6 +187,9 @@ def build_image(
     if not os.path.isfile(ZLIB_LICENSE):
         print(f"missing {ZLIB_LICENSE}", file=sys.stderr)
         return 2
+    if not os.path.isfile(LUA_LICENSE):
+        print(f"missing {LUA_LICENSE}", file=sys.stderr)
+        return 2
 
     # The fixture of zcat and the license that travels with its bytes. The
     # program is part of the image, so the image carries the notice of the
@@ -162,6 +198,13 @@ def build_image(
     greeting = write_greeting(build_dir, epoch)
     command += ["--file", f"/etc/greeting.gz={greeting}"]
     command += ["--file", f"/etc/licenses/zlib={ZLIB_LICENSE}"]
+
+    # The script of Lua and the license of its library. The script is a file
+    # of the volume and not a line of a test: the program reads it through
+    # the VFS and the smoke test reads the lines the program printed.
+    script = write_hello_lua(build_dir)
+    command += ["--file", f"/etc/hello.lua={script}"]
+    command += ["--file", f"/etc/licenses/lua={LUA_LICENSE}"]
 
     command += ["--text", f"/etc/setting={SETTING}"]
     command += extra or []

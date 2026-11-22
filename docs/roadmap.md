@@ -304,10 +304,27 @@ written when the project was an operating system for one board; the numbers
       `tests/cases/test_zlib.c`, and `make x86-smoke` and
       `make x86-disk-smoke` check the inflated bytes of a fixed fixture. Lua,
       sbase and SQLite are the next copies of the recipe
-* [ ] The gaps of the next port: a formatter with `%f` and a precision, a
-      `malloc` larger than the bss of an image (`brk`/`mmap` of a program), a
-      `poll` for a library that waits on a pipe, and the package that ships
-      `zcat` with `/etc/licenses/zlib` beside it (`docs/debts.md`)
+* [x] The second port of a program of somebody else: Lua 5.4.7 (MIT) as a
+      static archive built by the compiler of the window and `/bin/lua`, with
+      the script `/etc/hello.lua` and `/etc/licenses/lua` in the image. The
+      library of a program learned the last pieces a language asks for -
+      `%f`/`%e`/`%g` with a precision, `strtod`, `qsort`, `setjmp`/`longjmp`,
+      `math.h` on the x87 unit, `time`/`localtime`, `getenv`, `signal` and
+      `fprintf` - and the port sets `CR4.OSFXSR` for a program with a
+      `double`. The host test is `tests/cases/test_lua.c`; the interpreter
+      itself waits for K3 below, because 164 KiB is past the block
+      `sys_execve` reads in one call
+* [ ] The image of a program larger than `KSYS_MAX_IO`: `execve` reads the
+      image into one block of 64 KiB and refuses a larger one (`/bin/lua`),
+      and the answer of the refusal names the wrong reason. A cap that is the
+      window and not the transfer edge, the block of `kmm` of the user
+      priority (the PSRAM on the board), and `E2BIG` for a machine that
+      cannot place it (`docs/debts.md`)
+* [ ] The gaps of the next port: a `malloc` larger than the bss of an image
+      (`brk`/`mmap` of a program), a `poll` for a library that waits on a
+      pipe, an `fxsave` of the XMM state for two programs with a point in
+      their numbers, and the package that ships `zcat` and `lua` with their
+      licenses beside them (`docs/debts.md`)
 
 ## The last major changes of the board (1.1.0)
 

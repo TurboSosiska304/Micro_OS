@@ -969,14 +969,21 @@ def check_sources(root: str, report: Report, files: list) -> None:
                     trailing.append(f"{name}:{number}")
                     break
 
+        # A vendored release keeps the bytes of its author: Lua indents with
+        # tabs and zlib writes long lines of the tables it generates. The two
+        # rules of the style are ours and stop at `third_party/`; the rules of
+        # the file itself (UTF-8, LF, a newline at the end) still apply, and
+        # `third_party/<name>/.clang-format` keeps the formatter away.
+        vendored = any(name.startswith(prefix) for prefix in VENDORED_PREFIXES)
+
         is_makefile = name == "Makefile" or name.endswith(".mk")
-        if not is_makefile:
+        if not is_makefile and not vendored:
             for number, line in enumerate(lines, 1):
                 if b"\t" in line:
                     tabs.append(f"{name}:{number}")
                     break
 
-        if name.endswith((".c", ".h")):
+        if not vendored and name.endswith((".c", ".h")):
             for number, line in enumerate(lines, 1):
                 if len(line) > 100:
                     too_long.append(f"{name}:{number} ({len(line)} characters)")
@@ -1928,6 +1935,12 @@ def check_version(root: str, report: Report, expected: str) -> None:
         version == expected,
         "" if version == expected else f"the kernel says {version}, expected {expected}",
     )
+
+
+# The trees that are somebody else's: their bytes are not ours to reformat,
+# and the style checks of this repository stop at their door. A file there is
+# still a file of the tree for UTF-8, LF and the newline at the end.
+VENDORED_PREFIXES = ("third_party/",)
 
 
 # --- the entry point ---------------------------------------------------------
