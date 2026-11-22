@@ -51,6 +51,7 @@ if(NOT ESP_PLATFORM)
         cases/test_zlib.c
         cases/test_lua.c
         cases/test_userland_float.c
+        cases/test_bc.c
     )
 
     # The tests of a component that a build leaves out are left out with it:
@@ -77,6 +78,7 @@ if(NOT ESP_PLATFORM)
 
     set(MICROOS_ZLIB_DIR "${CMAKE_SOURCE_DIR}/third_party/zlib")
     set(MICROOS_LUA_DIR "${CMAKE_SOURCE_DIR}/third_party/lua")
+    set(MICROOS_BC_DIR "${CMAKE_SOURCE_DIR}/third_party/bc")
 
     target_include_directories(microos_tests PRIVATE
         "${CMAKE_CURRENT_LIST_DIR}/include"
@@ -184,6 +186,66 @@ if(NOT ESP_PLATFORM)
                    COMPILE_OPTIONS "-Wno-sign-compare")
     set_source_files_properties("${MICROOS_ZLIB_DIR}/port/zlib_os.c"
         PROPERTIES COMPILE_DEFINITIONS "MY_ZCALLOC=1")
+
+    # --- bc and dc, the calculators of the third port ---------------------
+    #
+    # The release is one library and one `main`: `argv[0]` picks the engine.
+    # The test compiles the same sources for the host and runs the command as
+    # a process of the test machine (`cases/test_bc.c`), so the vector of the
+    # arguments, the file of `-f`, descriptor 0 and the status are the ones
+    # of a program of a Unix-like system. The host sees its own `fstat` and
+    # `sigaction` (`BC_PORT_HOST`): the port layer of the machine answers
+    # those two calls only in the image.
+    set(MICROOS_BC_SOURCES
+        "${MICROOS_BC_DIR}/src/args.c"
+        "${MICROOS_BC_DIR}/src/bc.c"
+        "${MICROOS_BC_DIR}/src/bc_lex.c"
+        "${MICROOS_BC_DIR}/src/bc_parse.c"
+        "${MICROOS_BC_DIR}/src/data.c"
+        "${MICROOS_BC_DIR}/src/dc.c"
+        "${MICROOS_BC_DIR}/src/dc_lex.c"
+        "${MICROOS_BC_DIR}/src/dc_parse.c"
+        "${MICROOS_BC_DIR}/src/file.c"
+        "${MICROOS_BC_DIR}/src/lang.c"
+        "${MICROOS_BC_DIR}/src/lex.c"
+        "${MICROOS_BC_DIR}/src/main.c"
+        "${MICROOS_BC_DIR}/src/num.c"
+        "${MICROOS_BC_DIR}/src/opt.c"
+        "${MICROOS_BC_DIR}/src/parse.c"
+        "${MICROOS_BC_DIR}/src/program.c"
+        "${MICROOS_BC_DIR}/src/rand.c"
+        "${MICROOS_BC_DIR}/src/read.c"
+        "${MICROOS_BC_DIR}/src/vector.c"
+        "${MICROOS_BC_DIR}/src/vm.c"
+        "${MICROOS_BC_DIR}/port/generated/bc_help.c"
+        "${MICROOS_BC_DIR}/port/generated/dc_help.c"
+        "${MICROOS_BC_DIR}/port/generated/lib.c"
+        "${MICROOS_BC_DIR}/port/generated/lib2.c"
+    )
+
+    add_executable(microos_bc_host ${MICROOS_BC_SOURCES})
+    target_include_directories(microos_bc_host PRIVATE
+        "${MICROOS_BC_DIR}/include"
+        "${MICROOS_BC_DIR}/port"
+    )
+    target_compile_definitions(microos_bc_host PRIVATE BC_PORT_HOST=1)
+    target_compile_options(microos_bc_host PRIVATE
+        "-include" "${MICROOS_BC_DIR}/port/bc_port.h"
+        # Upstream C compiled with the warnings of this tree: the ones that
+        # the release's own build does not ask for are turned off here.
+        -Wno-sign-compare -Wno-unused-parameter -Wno-clobbered
+        -Wno-missing-prototypes -Wno-strict-prototypes
+        # The calculator is the program under test: the sanitizer of the test
+        # binary is for the kernel, and a leak of the release at its exit (the
+        # release frees its state only in a debug build) must not turn a good
+        # answer of the calculator into a failure of the test.
+        -fno-sanitize=all
+    )
+    target_link_options(microos_bc_host PRIVATE -fno-sanitize=all)
+
+    target_compile_definitions(microos_tests PRIVATE
+        MICROOS_BC_HOST="$<TARGET_FILE:microos_bc_host>")
+    add_dependencies(microos_tests microos_bc_host)
 
     target_sources(microos_tests PRIVATE
         "${CMAKE_SOURCE_DIR}/components/drivers/src/input_debounce.c"        "${CMAKE_SOURCE_DIR}/components/drivers/src/battery_soc.c"
