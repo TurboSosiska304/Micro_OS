@@ -28,5 +28,14 @@
 #ifndef CHAR_BIT
 #define CHAR_BIT 8
 #endif
+/*
+ * The size of a pipe buffer. The kernel's pipe is a ring in PSRAM and the
+ * reader of a short pipe gets what is there; libmagic uses the number to
+ * decide whether a read is the end of the stream (`magic.c`), and the POSIX
+ * minimum is the honest answer of a port that does not know the ring.
+ */
+#ifndef PIPE_BUF
+#define PIPE_BUF 512
+#endif
 
 #endif /* MICRO_OS_LIBC_USER_LIMITS_H */

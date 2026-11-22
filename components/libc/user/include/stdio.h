@@ -62,6 +62,14 @@ int ungetc(int byte, FILE *stream);
 ssize_t getline(char **line, size_t *capacity, FILE *stream);
 ssize_t getdelim(char **line, size_t *capacity, int delimiter, FILE *stream);
 
+/*
+ * A string of the format in a block of the arena: `asprintf` is the formatter
+ * and the allocator of `src/asprintf.c`, the answer is the length of the text
+ * or -1 with `ENOMEM`, and the caller frees the block.
+ */
+int asprintf(char **out, const char *format, ...);
+int vasprintf(char **out, const char *format, va_list args);
+
 #define getc(stream) fgetc(stream)
 #define putc(byte, stream) fputc((byte), (stream))
 

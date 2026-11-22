@@ -51,6 +51,13 @@ int close(int fd);
 ssize_t read(int fd, void *buffer, size_t count);
 ssize_t write(int fd, const void *buffer, size_t count);
 off_t lseek(int fd, off_t offset, int whence);
+/*
+ * The read at an offset of a file, for a library that reads the tail of it
+ * without moving the descriptor (libmagic reads the end of a core file). The
+ * port answers it with `src/pread.c` of `third_party/file`, because the VFS
+ * has no call of its own yet.
+ */
+ssize_t pread(int fd, void *buffer, size_t count, off_t offset);
 int unlink(const char *path);
 int rmdir(const char *path);
 int access(const char *path, int mode);

@@ -36,11 +36,18 @@ because a program selects the files it links:
 |---|---|---|
 | the allocation | `src/malloc.c` | an arena in the bss of the program (`-DULIBC_HEAP_SIZE`, 256 KiB by default, 512 KiB for `zcat`), not `KSYS_MALLOC`: the block of the kernel is memory of ring 0 and a program cannot read it |
 | the error | `src/errno.c` | `errno` as a global of the program and `strerror`; the calls keep the negative number of the ABI and the wrappers also store its magnitude, so a portable library reads `errno` after `read` |
-| the streams | `src/file.c` | `fopen`, `fclose`, `fread`, `fwrite`, `fgetc`, `fputc`, `fgets`, `fputs`, `feof`, `ferror`, `fseek`, `ftell`, `rewind` over a descriptor; the binary mode is accepted and ignored because no file of the system translates a byte |
+| the streams | `src/file.c` | `fopen`, `fclose`, `fread`, `fwrite`, `fgetc`, `fputc`, `fgets`, `fputs`, `feof`, `ferror`, `fseek`, `ftell`, `rewind` over a descriptor; a block of 512 bytes of the object holds the read-ahead, so a line reader of a few hundred kilobytes is not one call per byte; the binary mode is accepted and ignored because no file of the system translates a byte |
 
 The names a portable source includes (`<string.h>`, `<stdlib.h>`, `<stdio.h>`,
 `<errno.h>`, `<unistd.h>`, `<fcntl.h>`, `<sys/types.h>`) are thin headers in
-`components/libc/user/include`, each one including `ulibc.h`. The body of the
+`components/libc/user/include`, each one including `ulibc.h`. The port of
+file added the headers a library of a Unix-like system asks for beside them:
+`<stdint.h>` and `<inttypes.h>` (the types of a width in bits and the `PRIx64`
+of the formatter), `<sys/param.h>` (`MIN`, `MAX`, `howmany`) and `<locale.h>`
+(the C locale, `setlocale` and `localeconv`); the functions it needed are
+`asprintf`/`vasprintf` (a formatted string of the arena), `asctime`/`ctime`
+(the 26 bytes of a moment), `pread` (the read at an offset of a descriptor,
+in `third_party/file/src/pread.c`) and the `PIPE_BUF` of `<limits.h>`. The body of the
 library is still `ulibc.h`, and a program that wants the functions of the
 system includes `ulibc.h` and not the headers of the host.
 

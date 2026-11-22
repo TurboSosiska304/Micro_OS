@@ -53,5 +53,7 @@ struct tm *gmtime(const time_t *when);
 struct tm *localtime(const time_t *when);
 time_t mktime(struct tm *parts);
 size_t strftime(char *buffer, size_t size, const char *format, const struct tm *parts);
+char *asctime(const struct tm *parts);
+char *ctime(const time_t *when);
 
 #endif /* MICRO_OS_LIBC_USER_TIME_H */
