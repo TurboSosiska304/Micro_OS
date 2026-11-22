@@ -371,6 +371,15 @@ answer is reported and the machine goes on with `ram0`; that volume has no
 `programs.img` and `disk.img` are generated and not committed; `make clean`
 does not remove `build-x86`, `rm -rf build-x86` does.
 
+## The tar of a release
+
+`make x86-user` builds the complete machine and the release bundle, unpacks
+the x86-64 tar and starts its `run.sh`; the tar carries the loader, the
+kernel, `x86-all.img` (the disk of MicroFS with `/bin` and `/etc`), the
+licenses and a `run.sh` with the disk and the virtio-net card. The tar is
+the artifact of a release, not a build directory: what the target starts is
+what a person downloads. `make x86-user-serial` is the same with `-nographic`.
+
 ## The network
 
 The machine gets a card from QEMU and a stack from the port:

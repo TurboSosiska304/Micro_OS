@@ -14,6 +14,12 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Added
 
+- `make x86-user`: the complete machine and the x86-64 tar of the release,
+  unpacked and started from the tar itself, so the artifact a person
+  downloads is the one that runs. `make x86-user-serial` is its console.
+  The x86-64 tar now carries `x86-all.img`, the disk of `/bin` and `/etc`,
+  and a `run.sh` with the disk and the network; the release workflow builds
+  the complete machine before the bundle.
 - TLS on x86-64 (ADR 0024 §3): Mbed TLS 3.6.2 vendored in
   `third_party/mbedtls` with a client-only configuration, and a freestanding
   platform layer - `kmm` for the allocator, the formatter of the kernel,
