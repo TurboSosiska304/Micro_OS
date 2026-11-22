@@ -30,6 +30,7 @@
 #include "kernel/ksys.h"
 #include "kernel/log.h"
 #include "kernel/port.h"
+#include "kernel/port/cpu.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
 #include "kernel/vfs.h"
@@ -38,6 +39,7 @@
 #include "kshell/kshell.h"
 #include "port_x86_64_console.h"
 #include "port_x86_64_screen.h"
+#include "port_x86_64_smp.h"
 #include "settings/settings.h"
 
 #if MICRO_OS_NET
@@ -346,6 +348,15 @@ void kmain(k_u64_t multiboot_info)
 
     kernel_boot(&cfg);
 
+    /*
+     * The cores that stopped before the scheduler may enter it now: the
+     * array of kernel/cpu.c exists (k_sched_init ran inside kernel_boot) and
+     * its count is the number of cores that reached C. The release comes
+     * before the first task_create(), because a core that entered the
+     * scheduler has to find the queues it is going to share.
+     */
+    port_x86_64_smp_release();
+
     kinfo("x86-64: the kernel is up, heap %u KB free of %u KB",
           (unsigned)(k_port_heap_free() / 1024), (unsigned)(k_port_heap_total() / 1024));
 
@@ -358,18 +369,29 @@ void kmain(k_u64_t multiboot_info)
     /*
      * The processors of the machine (ADR 0012). The count on the left is what
      * the firmware (the MADT of ACPI) says, the one on the right is what the
-     * kernel runs: the APs need the trampoline, INIT/SIPI, a local APIC timer
-     * and an I/O APIC, and this port does not have them yet. Saying both
-     * numbers is the honest line; putting a task in the queue of a core that
-     * never runs it would hang the machine instead.
+     * kernel runs: a core counts here only when it reached C and was accepted
+     * by the boot. Saying both numbers is the honest line; putting a task in
+     * the queue of a core that never runs it would hang the machine instead.
      */
     kinfo("x86-64: %u cpu(s) reported by the firmware, %u in use (apic 0x%x)",
           (unsigned)port_x86_64_cpu_available(), (unsigned)port_x86_64_cpu_started(),
           (unsigned)port_x86_64_apic_base());
 
-    if (port_x86_64_cpu_available() > port_x86_64_cpu_started()) {
-        kwarn("x86-64: the AP bring-up is not written yet, the kernel runs on the core 0");
+#if KERNEL_SMP
+    if (!port_x86_64_smp_apic_ready()) {
+        kwarn("x86-64: no local APIC, the machine runs on the core 0");
+    } else if (port_x86_64_cpu_started() < port_x86_64_cpu_available()) {
+        kwarn("x86-64: %u core(s) of the firmware did not answer the start-up IPI",
+              (unsigned)(port_x86_64_cpu_available() - port_x86_64_cpu_started()));
     }
+#else
+    /* A one-core build does not start an AP whatever the firmware lists: the
+     * flag is the promise of 1.2 behaviour, and the line says so instead of
+     * blaming an APIC that the machine may well have. */
+    kinfo("x86-64: this kernel is built without KERNEL_SMP, the core 0 runs alone");
+#endif
+
+    kinfo("DIAG bsp raw core %u", (unsigned)k_port_cpu_id());
 
     /*
      * The tables are read back before a program is ever entered: the port
@@ -437,6 +459,15 @@ void kmain(k_u64_t multiboot_info)
     if (port_x86_64_net_register() != 0) {
         kwarn("x86-64: not every command of the network is registered");
     }
+
+#if KERNEL_SMP
+    /* The cores of the machine: the state of the scheduler of every core, a
+     * run of workers and the IPI of one core to another (ADR 0012). A
+     * one-core build has no second core to name and no command. */
+    if (port_x86_64_smp_register() != 0) {
+        kwarn("x86-64: the smp command is not registered");
+    }
+#endif
 
 #if MICRO_OS_NET
     if (net_register() != 0) {

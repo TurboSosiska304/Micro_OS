@@ -53,6 +53,31 @@ bool port_x86_64_task_is_user(void);
  */
 void port_x86_64_task_trampoline(k_port_task_entry_fn entry, void *arg, k_u64_t flags);
 
+/* --- the context of a core that is not the processor of the boot --- */
+
+/*
+ * Prepare the boot context of an application processor: the context its first
+ * switch saves, and the one that comes back when the core has no task to run.
+ * Called by the core itself on its way up (src/smp.c), before the first
+ * switch, with the top of the stack the trampoline gave it.
+ */
+void port_x86_64_ap_sched_init(k_u32_t cpu, k_u64_t stack_top);
+
+/*
+ * The idle loop of an application processor: look at the queue, then wait for
+ * the interrupt that brings work. It is the code the boot context of the core
+ * resumes into, and it never returns; the interrupts are on in it, because
+ * the timer of the core is what ends the wait.
+ */
+void port_x86_64_ap_idle(void) __attribute__((noreturn));
+
+/*
+ * Say whether the local APIC timer of a core started. A core without a clock
+ * has no wake-up, so its idle loop polls the queue instead of halting on it:
+ * the kernel counts that core and must still be able to run a task there.
+ */
+void port_x86_64_ap_timer_ready(k_u32_t cpu, bool ready);
+
 /* The interrupt flag of RFLAGS. */
 #define PORT_X86_64_RFLAGS_IF 0x200u
 

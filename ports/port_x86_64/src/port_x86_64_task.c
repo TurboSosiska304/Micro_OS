@@ -29,7 +29,9 @@
 
 #include <string.h>
 
+#include "kernel/cpu.h"
 #include "kernel/log.h"
+#include "kernel/port/cpu.h"
 #include "kernel/port/lock.h"
 #include "kernel/port/mem.h"
 #include "kernel/port/time.h"
@@ -118,10 +120,37 @@ static k_u64_t task_tls_base(const struct port_task *pt)
  */
 #define PORT_FRAME_SIZE (8u * sizeof(k_u64_t))
 
-static struct port_task *g_current;
-static struct port_task g_boot; /* the context of kmain, before the first task */
-static struct port_task *g_pending_free;
-static k_u64_t g_pending_space; /* the page tables of the task being released */
+/*
+ * The contexts of one core (ADR 0012). Every core has the context it runs,
+ * the context it was before its first task - kmain() on the core 0, the idle
+ * loop of an application processor - and the two slots of the switch that
+ * leaves a dead task behind. The slots belong to the core and not to the
+ * machine: with one core the array has one entry and this is the code of 1.0.
+ */
+struct port_cpu {
+    struct port_task *current;
+    struct port_task boot; /* the context of this core before its first task */
+    struct port_task *pending_free;
+    k_u64_t pending_space; /* the page tables of the task being released */
+};
+
+static struct port_cpu g_ports[KERNEL_CPUS_MAX];
+
+/*
+ * The cores whose local APIC timer did not start. A core without a clock has
+ * no wake-up of its own, so an idle loop that halted there would never look
+ * at its run queue again: the wait spins instead (see wait_for_interrupt()).
+ * A core with a timer - the core 0 with the PIT, an AP with its APIC - halts.
+ */
+static bool g_timer_missing[KERNEL_CPUS_MAX];
+
+/* The slots of the core that is asking. k_cpu_id() is a load of %gs:0. */
+static struct port_cpu *this_cpu(void)
+{
+    k_u32_t cpu = k_cpu_id();
+
+    return &g_ports[cpu < KERNEL_CPUS_MAX ? cpu : 0u];
+}
 
 static struct port_task *port_task_of(const struct task *t)
 {
@@ -136,19 +165,22 @@ static struct port_task *port_task_of(const struct task *t)
  * Release the stack of a task that exited. It cannot be done by the task
  * itself: the block holds the stack it is running on, and the switch that
  * leaves it saves the stack pointer inside that same block. The next context
- * that gets the CPU does it instead, before it runs any kernel code, and the
- * dead context is never resumed, so nothing uses the bytes afterwards.
+ * of this core that gets the CPU does it instead, before it runs any kernel
+ * code, and the dead context is never resumed, so nothing uses the bytes
+ * afterwards. The slot is the core's: each core releases the context it last
+ * left behind.
  */
 static void release_pending(void)
 {
-    struct port_task *dead = g_pending_free;
+    struct port_cpu *self = this_cpu();
+    struct port_task *dead = self->pending_free;
     k_u64_t flags;
 
-    if (dead == NULL || dead == g_current) {
+    if (dead == NULL || dead == self->current) {
         return;
     }
 
-    g_pending_free = NULL;
+    self->pending_free = NULL;
     flags = port_save_flags_and_cli();
     k_port_free(dead->block);
 
@@ -166,9 +198,9 @@ static void release_pending(void)
      * running task is the one in the register, so the tables and the frames
      * of the dead task are only bytes the allocator may have back.
      */
-    if (g_pending_space != 0) {
-        port_x86_64_paging_space_destroy(g_pending_space);
-        g_pending_space = 0;
+    if (self->pending_space != 0) {
+        port_x86_64_paging_space_destroy(self->pending_space);
+        self->pending_space = 0;
     }
 }
 
@@ -208,7 +240,7 @@ static void stack_build(struct port_task *pt, k_u64_t frame_rsp, k_port_task_ent
  */
 static void commit_switch(struct port_task *prev, struct port_task *next)
 {
-    g_current = next;
+    this_cpu()->current = next;
 
     /*
      * The thread pointer follows the task, not the machine: each one has its
@@ -246,6 +278,7 @@ static void commit_switch(struct port_task *prev, struct port_task *next)
  */
 static void schedule(void)
 {
+    struct port_cpu *self = this_cpu();
     struct port_task *prev;
     struct port_task *next_pt;
     struct task *next;
@@ -253,7 +286,7 @@ static void schedule(void)
 
     flags = port_save_flags_and_cli();
 
-    prev = g_current;
+    prev = self->current;
     next = k_sched_claim_next();
 
     if (next == NULL) {
@@ -278,7 +311,7 @@ static void schedule(void)
         return;
     }
 
-    commit_switch(prev != NULL ? prev : &g_boot, next_pt);
+    commit_switch(prev != NULL ? prev : &self->boot, next_pt);
 
     /*
      * We are back in this context after one or many switches elsewhere. The
@@ -294,9 +327,20 @@ static void schedule(void)
  * for. The state of the flag is the whole difference: before the table of
  * the interrupts exists a hlt would stop the machine for good, and after it
  * a hlt is the cheapest way to pass the time until the tick.
+ *
+ * A core whose timer did not start is the third case: it has no clock and no
+ * other wake-up, and a halt there would be a core the kernel counts and never
+ * runs a task on again. It polls its queue instead - slower, but the truth.
  */
 static void wait_for_interrupt(void)
 {
+    k_u32_t cpu = k_cpu_id();
+
+    if (cpu < KERNEL_CPUS_MAX && g_timer_missing[cpu]) {
+        __asm__ volatile("pause");
+        return;
+    }
+
     if ((port_x86_64_read_flags() & PORT_X86_64_RFLAGS_IF) != 0) {
         port_hlt();
     } else {
@@ -459,17 +503,23 @@ int port_x86_64_task_fork_create(struct task *child, k_u64_t cr3, const void *fr
 
 k_u64_t port_x86_64_task_space(void)
 {
-    return (g_current != NULL && g_current->is_user) ? g_current->cr3 : 0;
+    struct port_task *current = this_cpu()->current;
+
+    return (current != NULL && current->is_user) ? current->cr3 : 0;
 }
 
 k_u64_t port_x86_64_task_stack_top(void)
 {
-    return g_current != NULL ? g_current->stack_top : 0;
+    struct port_task *current = this_cpu()->current;
+
+    return current != NULL ? current->stack_top : 0;
 }
 
 bool port_x86_64_task_is_user(void)
 {
-    return g_current != NULL && g_current->is_user;
+    struct port_task *current = this_cpu()->current;
+
+    return current != NULL && current->is_user;
 }
 
 /*
@@ -480,13 +530,15 @@ bool port_x86_64_task_is_user(void)
  */
 void port_x86_64_task_set_space(k_u64_t cr3)
 {
-    if (g_current == NULL || cr3 == 0) {
+    struct port_task *current = this_cpu()->current;
+
+    if (current == NULL || cr3 == 0) {
         return;
     }
 
-    g_current->cr3 = cr3;
-    g_current->is_user = true;
-    port_x86_64_tss_set_rsp0(g_current->stack_top);
+    current->cr3 = cr3;
+    current->is_user = true;
+    port_x86_64_tss_set_rsp0(current->stack_top);
 
     /* The kernel is part of the new map, so the switch is safe here and the
      * iretq that follows sees the pages of the program. */
@@ -509,7 +561,7 @@ void k_port_task_start(struct task *t)
      * of the shape "create the init task, halt" work: the halt is never
      * reached.
      */
-    if (g_current == NULL) {
+    if (this_cpu()->current == NULL) {
         schedule();
     }
 }
@@ -522,10 +574,12 @@ void k_port_task_yield(void)
      * the test is on the state: only a task that still believes it is
      * running needs to be queued here.
      */
-    if (g_current != NULL) {
+    struct port_task *current = this_cpu()->current;
+
+    if (current != NULL) {
         k_port_enter_critical();
-        if (g_current->task != NULL && g_current->task->state == TASK_STATE_RUNNING) {
-            k_sched_task_ready(g_current->task);
+        if (current->task != NULL && current->task->state == TASK_STATE_RUNNING) {
+            k_sched_task_ready(current->task);
         }
         k_port_exit_critical();
     }
@@ -550,7 +604,8 @@ static bool sleep_is_over(const struct task *self, k_u32_t ticks, k_u64_t deadli
 
 void k_port_task_sleep_ms(k_u32_t ms)
 {
-    struct task *self = g_current != NULL ? g_current->task : NULL;
+    struct port_task *current = this_cpu()->current;
+    struct task *self = current != NULL ? current->task : NULL;
     k_u64_t deadline_us;
     k_u32_t ticks;
 
@@ -604,7 +659,8 @@ void k_port_task_sleep_ms(k_u32_t ms)
 
 void k_port_task_exit(int code)
 {
-    struct port_task *dead = g_current;
+    struct port_cpu *self = this_cpu();
+    struct port_task *dead = self->current;
     struct port_task *next_pt;
     struct task *next;
     k_u64_t flags;
@@ -618,7 +674,7 @@ void k_port_task_exit(int code)
      * queue, so this one is never resumed.
      */
     if (dead != NULL) {
-        g_pending_free = dead;
+        self->pending_free = dead;
 
         /*
          * The address space of a program is released by the next context,
@@ -627,7 +683,7 @@ void k_port_task_exit(int code)
          * trusted to be the next instruction.
          */
         if (dead->is_user && dead->cr3 != 0 && dead->cr3 != port_x86_64_kernel_cr3()) {
-            g_pending_space = dead->cr3;
+            self->pending_space = dead->cr3;
             dead->cr3 = 0;
         }
     }
@@ -650,7 +706,7 @@ void k_port_task_exit(int code)
     next_pt = port_task_of(next);
 
     if (next_pt != NULL && next_pt != dead) {
-        commit_switch(dead != NULL ? dead : &g_boot, next_pt);
+        commit_switch(dead != NULL ? dead : &self->boot, next_pt);
     }
 
     port_restore_flags(flags);
@@ -668,7 +724,9 @@ void k_port_task_exit(int code)
 
 struct task *k_port_task_current(void)
 {
-    return g_current != NULL ? g_current->task : NULL;
+    struct port_task *current = this_cpu()->current;
+
+    return current != NULL ? current->task : NULL;
 }
 
 /*
@@ -704,7 +762,7 @@ void port_x86_64_task_trampoline(k_port_task_entry_fn entry, void *arg, k_u64_t 
  */
 void port_x86_64_tls_kernel(void)
 {
-    port_wrmsr(0xC0000100u, task_tls_base(g_current));
+    port_wrmsr(0xC0000100u, task_tls_base(this_cpu()->current));
 }
 
 void port_x86_64_tls_user(void)
@@ -731,9 +789,21 @@ void port_x86_64_tls_user(void)
  */
 void port_x86_64_task_tick(void)
 {
+    struct port_cpu *cpu = this_cpu();
     struct task *self;
     struct port_task *self_pt;
     struct port_task *next_pt;
+
+    {
+        static bool diag[KERNEL_CPUS_MAX];
+        k_u32_t c = k_cpu_id();
+
+        if (c < KERNEL_CPUS_MAX && !diag[c]) {
+            diag[c] = true;
+            kerror("DIAG tick raw %u clamped %u self id %u g_ticks %u", (unsigned)k_port_cpu_id(),
+                   (unsigned)c, (unsigned)k_cpu_self()->id, (unsigned)k_sched_ticks());
+        }
+    }
 
     /* The clock, the sleeping tasks and the quantum of the running one. */
     k_sched_tick();
@@ -758,7 +828,7 @@ void port_x86_64_task_tick(void)
      * case of the last context of the machine, which waits in the idle loop
      * for the tick that wakes the parent.
      */
-    if (self->state == TASK_STATE_ZOMBIE && g_current != NULL && !g_current->exiting) {
+    if (self->state == TASK_STATE_ZOMBIE && cpu->current != NULL && !cpu->current->exiting) {
         return;
     }
 
@@ -796,4 +866,112 @@ void port_x86_64_task_tick(void)
     commit_switch(self_pt, next_pt);
     /* Resumed inside the handler: the interrupts stay off until its iretq. */
     release_pending();
+}
+
+/*
+ * The other core asks this one to look at its run queue (the body of the IPI
+ * vector, called with the interrupts off, ADR 0012).
+ *
+ * It is the short path of the tick and not a second scheduler: the claim is
+ * the same call the tick makes, under the same lock, and the task it returns
+ * is already RUNNING on this core when the switch leaves. A core that has
+ * nothing to run - or whose running task is the one the claim names - simply
+ * returns and the vector acknowledges the interrupt.
+ *
+ * The EOI belongs to the vector body: this function must not send it, because
+ * the switch below may not come back for a long time and the line has to be
+ * free for the next IPI.
+ */
+void port_x86_64_task_ipi(void)
+{
+    struct port_cpu *self = this_cpu();
+    struct port_task *next_pt;
+    struct task *next;
+
+    next = k_sched_claim_next();
+
+    if (next == NULL) {
+        return;
+    }
+
+    if (self->current != NULL && next == self->current->task) {
+        /* The claim of the task that already runs here: nothing to do. */
+        return;
+    }
+
+    next_pt = port_task_of(next);
+    if (next_pt == NULL) {
+        kerror("x86_64: the task '%s' has no context", next->name);
+        return;
+    }
+
+    commit_switch(self->current != NULL ? self->current : &self->boot, next_pt);
+    /* Resumed inside the handler: the interrupts stay off until its iretq. */
+    release_pending();
+}
+
+/* --- the context of an application processor --- */
+
+/*
+ * Prepare the boot context of a core that has just reached C. The idle loop
+ * of the core is the code the first switch saves there, and it is the context
+ * that comes back when the core has no task to run. Called by the core itself
+ * (src/smp.c), before the first switch; `stack_top` is the top of the stack
+ * the trampoline put the core on.
+ */
+void port_x86_64_ap_sched_init(k_u32_t cpu, k_u64_t stack_top)
+{
+    struct port_cpu *self;
+
+    if (cpu >= KERNEL_CPUS_MAX) {
+        return;
+    }
+
+    self = &g_ports[cpu];
+    memset(&self->boot, 0, sizeof(self->boot));
+    self->boot.task = NULL;
+    self->boot.stack_top = stack_top;
+    self->boot.cr3 = port_x86_64_kernel_cr3();
+    self->boot.is_user = false;
+    self->current = NULL;
+    self->pending_free = NULL;
+    self->pending_space = 0;
+
+    /*
+     * The thread pointer of this core before its first switch: the kernel's
+     * own TLS block, because the idle context has no task. A processor that
+     * has just left the reset has zero in IA32_FS_BASE, and the first
+     * _Thread_local of the kernel would be a load from address zero.
+     */
+    port_x86_64_tls_kernel();
+}
+
+/*
+ * What an application processor does when it has nothing to run: look at its
+ * queue, and wait for the interrupt that brings it work. The interrupts are
+ * on - that is the rule of a context of this port, and this is the context of
+ * the core itself - so the wait of wait_for_interrupt() is the halt that the
+ * local APIC timer, an IPI or the next task ends.
+ */
+void port_x86_64_ap_idle(void)
+{
+    for (;;) {
+        schedule();
+        wait_for_interrupt();
+    }
+}
+
+/*
+ * Record whether the local APIC timer of a core started. The bring-up of an
+ * application processor calls this before it enters the idle loop; a core
+ * without a clock cannot halt (see wait_for_interrupt()), so this is the one
+ * bit that keeps a core the kernel counts from stopping for good.
+ */
+void port_x86_64_ap_timer_ready(k_u32_t cpu, bool ready)
+{
+    if (cpu >= KERNEL_CPUS_MAX) {
+        return;
+    }
+
+    g_timer_missing[cpu] = !ready;
 }
