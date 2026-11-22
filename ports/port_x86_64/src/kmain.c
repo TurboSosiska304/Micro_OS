@@ -39,6 +39,7 @@
 #include "kshell/kshell.h"
 #include "port_x86_64_console.h"
 #include "port_x86_64_screen.h"
+#include "port_x86_64_task.h"
 #include "port_x86_64_smp.h"
 #include "settings/settings.h"
 
@@ -391,8 +392,6 @@ void kmain(k_u64_t multiboot_info)
     kinfo("x86-64: this kernel is built without KERNEL_SMP, the core 0 runs alone");
 #endif
 
-    kinfo("DIAG bsp raw core %u", (unsigned)k_port_cpu_id());
-
     /*
      * The tables are read back before a program is ever entered: the port
      * promises that no page is writable and executable at once, and a map
@@ -501,19 +500,20 @@ void kmain(k_u64_t multiboot_info)
 
     if (task_create("init", init_task, NULL, TASK_PRIO_DEFAULT) == NULL) {
         /*
-         * The context switch and the timer are the next milestone of the
-         * port. Saying it once and sleeping is honest, and it keeps the
-         * console of the machine alive for whoever looks at it.
+         * A machine without a task cannot switch: the boot says so and keeps
+         * the core looking at its queue, which is the idle loop of a port
+         * whose scheduler exists and has nothing to run.
          */
         kinfo("x86-64: no tasks yet");
-
-        for (;;) {
-            k_sched_sleep_ms(PORT_IDLE_MS);
-        }
+        port_x86_64_idle();
     }
 
-    /* The init process owns the rest of the boot: the shell comes from it. */
-    for (;;) {
-        k_sched_sleep_ms(PORT_IDLE_MS);
-    }
+    /*
+     * The init process owns the rest of the boot: the shell comes from it.
+     * The context of kmain is the idle context of the core 0: it looks at the
+     * queue and waits, and it is where the port returns when the last task of
+     * this core ends. It is reached again only if a task ends and gives the
+     * core back, so the return of task_create() above is the normal way here.
+     */
+    port_x86_64_idle();
 }

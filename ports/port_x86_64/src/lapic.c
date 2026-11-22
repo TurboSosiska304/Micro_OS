@@ -15,6 +15,8 @@
  */
 #include "port_x86_64_apic.h"
 
+#include "kernel/port/cpu.h"
+
 /* The registers of the local APIC, as offsets into its 4 KiB page (Intel
  * SDM volume 3A, 10.4.1). Only the ones this port programs are named. */
 #define LAPIC_REG_ID 0x020u            /* the identifier of the core */
@@ -151,7 +153,21 @@ bool port_x86_64_apic_init(void)
      * the NMI. A bring-up that changed them would take the clock and the
      * console of the machine away in one store.
      */
-    lapic_write(LAPIC_REG_LVT_LINT0, LAPIC_LVT_EXTINT);
+    /*
+     * The external mode belongs to the core 0 alone: the 8259 has one output
+     * and the firmware wires it to the boot processor. With every core in
+     * the external mode QEMU handed the timer of the 8259 to either of them
+     * (measured: 1889 ticks on the core 0 and 4933 on the core 1 of 6822),
+     * and the clock of the kernel, which only the core 0 advances, ran at a
+     * third of real time. The other cores keep the pin masked and take their
+     * ticks from their own APIC timer.
+     */
+    if (k_port_cpu_id() == 0u) {
+        lapic_write(LAPIC_REG_LVT_LINT0, LAPIC_LVT_EXTINT);
+    } else {
+        lapic_write(LAPIC_REG_LVT_LINT0, LAPIC_LVT_MASK | LAPIC_LVT_EXTINT);
+    }
+
     lapic_write(LAPIC_REG_LVT_LINT1, LAPIC_LVT_NMI);
 
     /* Everything this core takes is at the lowest priority: there is no

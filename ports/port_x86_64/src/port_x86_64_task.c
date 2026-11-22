@@ -707,16 +707,26 @@ void k_port_task_exit(int code)
 
     if (next_pt != NULL && next_pt != dead) {
         commit_switch(dead != NULL ? dead : &self->boot, next_pt);
+    } else if (self->boot.rsp != 0u) {
+        /*
+         * Nothing else is runnable: the core goes back to the context it
+         * booted on - kmain() on the core 0, the idle loop of an application
+         * processor - instead of waiting here, in a context that is dead and
+         * whose task slot the parent may reap at any moment. The next task of
+         * this core is claimed by that context, and the context releases the
+         * stack of this one on the way (release_pending).
+         */
+        commit_switch(dead != NULL ? dead : &self->boot, &self->boot);
     }
 
     port_restore_flags(flags);
 
     /*
-     * Nothing else was runnable. This context is dead but it is still the one
-     * the processor runs, so it waits for the tick that wakes somebody - and
-     * the tick has to be able to arrive. A task that ends from an exception
-     * was entered through an interrupt gate, with the interrupts off, and a
-     * halt that waits for an interrupt that is masked waits forever.
+     * Only a core whose boot context was never switched away from (rsp == 0)
+     * reaches this: there is nothing to return to, and the dead context waits
+     * for the tick that wakes somebody. The interrupts have to be on for that
+     * wait: a task that ends from an exception was entered through an
+     * interrupt gate, with the interrupts off.
      */
     port_sti();
     idle_forever();
@@ -790,80 +800,63 @@ void port_x86_64_tls_user(void)
 void port_x86_64_task_tick(void)
 {
     struct port_cpu *cpu = this_cpu();
-    struct task *self;
     struct port_task *self_pt;
     struct port_task *next_pt;
-
-    {
-        static bool diag[KERNEL_CPUS_MAX];
-        k_u32_t c = k_cpu_id();
-
-        if (c < KERNEL_CPUS_MAX && !diag[c]) {
-            diag[c] = true;
-            kerror("DIAG tick raw %u clamped %u self id %u g_ticks %u", (unsigned)k_port_cpu_id(),
-                   (unsigned)c, (unsigned)k_cpu_self()->id, (unsigned)k_sched_ticks());
-        }
-    }
+    struct task *next;
 
     /* The clock, the sleeping tasks and the quantum of the running one. */
     k_sched_tick();
 
-    self = k_port_task_current();
-    if (self == NULL) {
-        /* The boot context: there is no task to take the CPU away from. */
+    /*
+     * The context of this core is the port's own record and not the task
+     * table: the parent of a zombie may reap its slot as soon as the state is
+     * ZOMBIE, which the kernel publishes before the port has left the CPU,
+     * and the record of the moment may then be a slot that no longer names
+     * the stack under us. The port knows the context it switched to.
+     */
+    self_pt = cpu->current;
+
+    /*
+     * A task that left the scheduler but has not reached k_port_task_exit()
+     * yet is between the kernel's bookkeeping and the port's own exit. Its
+     * slot may already be gone and its stack is about to be published in the
+     * pending slot; a switch here would leave a context that is in no queue.
+     * It is a handful of instructions from leaving by itself, and it keeps
+     * the CPU for them. The test is the kernel's record of the core, not the
+     * task table: k_sched_task_terminated() clears it, and a slot that was
+     * reaped keeps no state worth reading.
+     */
+    if (self_pt != NULL && self_pt->task != NULL && k_cpu_current() != self_pt->task) {
         return;
     }
 
     /*
-     * A task published as a zombie is between the scheduler's bookkeeping
-     * and the port's own exit (k_port_task_exit), which is what releases its
-     * stack and the page tables of its program. The interrupts come back on
-     * on that way - the console line of the exit is written with them on -
-     * so a tick can land in the window. A switch here would leave a context
-     * that is in no run queue: its release would never happen and every
-     * program of the machine would leak an address space. The task is about
-     * to leave by itself, and the tick keeps it on the CPU for those few
-     * instructions. A task that has begun the exit has already put its stack
-     * and its map in the pending slots, so it may be preempted; that is the
-     * case of the last context of the machine, which waits in the idle loop
-     * for the tick that wakes the parent.
+     * A task whose quantum is not over keeps the CPU; k_sched_tick() leaves it
+     * running. The quantum of a preempted task is refilled by the tick that
+     * moves it to the end of its queue. The context of a core with no task -
+     * the idle loop of the boot or of an application processor - has none and
+     * falls through to the claim.
      */
-    if (self->state == TASK_STATE_ZOMBIE && cpu->current != NULL && !cpu->current->exiting) {
+    if (self_pt != NULL && self_pt->task != NULL && self_pt->task->state == TASK_STATE_RUNNING) {
         return;
     }
 
-    /*
-     * A task whose quantum is not over keeps the CPU; k_sched_tick() leaves
-     * it running. The quantum of a preempted task is refilled by the tick
-     * that moves it to the end of its queue.
-     */
-    if (self->state == TASK_STATE_RUNNING) {
-        return;
-    }
-
-    next_pt = port_task_of(k_sched_claim_next());
+    next = k_sched_claim_next();
+    next_pt = port_task_of(next);
 
     if (next_pt == NULL) {
-        /*
-         * Nothing is runnable: the task keeps whatever it is doing - it may
-         * have blocked itself - and the next unblock or tick looks again.
-         */
-        return;
-    }
-
-    self_pt = port_task_of(self);
-    if (self_pt == NULL) {
-        kerror("x86_64: the task '%s' has no context", self->name);
+        /* Nothing is runnable: this context waits for the next tick or for an
+         * unblock, and the idle loop of the core looks again. */
         return;
     }
 
     if (next_pt == self_pt) {
-        /* The choice is the task itself: it was and stays the one to run. */
+        /* The choice is the context that is already here: it stays. */
         release_pending();
         return;
     }
 
-    commit_switch(self_pt, next_pt);
+    commit_switch(self_pt != NULL ? self_pt : &cpu->boot, next_pt);
     /* Resumed inside the handler: the interrupts stay off until its iretq. */
     release_pending();
 }
@@ -953,12 +946,17 @@ void port_x86_64_ap_sched_init(k_u32_t cpu, k_u64_t stack_top)
  * the core itself - so the wait of wait_for_interrupt() is the halt that the
  * local APIC timer, an IPI or the next task ends.
  */
-void port_x86_64_ap_idle(void)
+void port_x86_64_idle(void)
 {
     for (;;) {
         schedule();
         wait_for_interrupt();
     }
+}
+
+void port_x86_64_ap_idle(void)
+{
+    port_x86_64_idle();
 }
 
 /*

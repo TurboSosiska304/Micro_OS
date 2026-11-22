@@ -555,45 +555,24 @@ void k_sched_unblock(struct task *t)
 /*
  * The choice of this core, under the scheduler lock.
  *
- * A core takes the head of the best queue of another core when that task has
- * a higher priority than the one waiting here: that is the migration the
- * scheduler is allowed to make (ADR 0012, "a task that is not migrated while
- * it runs"), and it is what keeps a core of the machine from idling beside a
- * ready task of a higher priority. Only a task that is ready can be taken:
- * the queue of a core also holds the task that is running there, and that one
- * is never stolen.
+ * Only the queue of this core is looked at. A task of another queue is never
+ * taken, and the reason is not a missing optimisation: this kernel keeps the
+ * task that runs in the queue of its core (it leaves it when its quantum is
+ * over, when it sleeps or when it blocks), and a task whose quantum has just
+ * expired is READY in that queue for the few instructions between the tick
+ * that moved it and the switch that leaves it. A second core that took it in
+ * that window would resume a saved stack pointer whose stack is still being
+ * used by the core it runs on - a task on two cores at once, the failure ADR
+ * 0012 forbids.
+ *
+ * A task changes its core at creation (round robin), when it is woken after
+ * the scheduler moved it, and by k_sched_migrate(). That is the whole of the
+ * load balance, and it is honest: a core that idles beside a busy one is a
+ * number the boot and /proc can show, not a race to hide.
  */
 static struct task *pick_for_core_locked(k_u32_t cpu)
 {
-    struct task *next = queue_pick_for(cpu, true);
-
-#if KERNEL_SMP
-    if (k_cpu_count() > 1u) {
-        k_u32_t other;
-
-        for (other = 0; other < k_cpu_count(); other++) {
-            struct task *candidate;
-
-            if (other == cpu) {
-                continue;
-            }
-
-            candidate = queue_pick_for(other, false);
-
-            if (candidate != NULL && (next == NULL || candidate->prio > next->prio)) {
-                next = candidate;
-            }
-        }
-
-        if (next != NULL && task_cpu(next) != cpu) {
-            if (migrate_locked(next, cpu) != 0) {
-                next = queue_pick_for(cpu, true);
-            }
-        }
-    }
-#endif
-
-    return next;
+    return queue_pick_for(cpu, true);
 }
 
 /*

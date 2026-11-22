@@ -296,13 +296,6 @@ void port_x86_64_smp_release(void)
     __atomic_store_n(&g_released, true, __ATOMIC_RELEASE);
 }
 
-/* TEMPORARY DIAGNOSTIC: removed before the change is handed over. */
-void diag_ap(k_u32_t cpu, k_u32_t gs, k_u32_t apic, k_u32_t timer)
-{
-    kinfo("DIAG ap entry: cpu %u gs id %u apic %u timer %u", (unsigned)cpu, (unsigned)gs,
-          (unsigned)apic, (unsigned)timer);
-}
-
 k_u32_t port_x86_64_smp_failures(void)
 {
     return g_failures;
@@ -413,12 +406,6 @@ void port_x86_64_ap_entry(k_u32_t cpu)
      * will never come. */
     port_x86_64_ap_timer_ready(cpu, __atomic_load_n(&g_timer_ok[cpu], __ATOMIC_ACQUIRE));
 
-    {
-        extern void diag_ap(k_u32_t cpu, k_u32_t gs, k_u32_t apic, k_u32_t timer);
-        diag_ap(cpu, k_cpu_id(), __atomic_load_n(&g_apic_ok[cpu], __ATOMIC_ACQUIRE),
-                __atomic_load_n(&g_timer_ok[cpu], __ATOMIC_ACQUIRE));
-    }
-
     port_x86_64_ap_sched_init(cpu, g_ap_stack_top[cpu]);
 
     /* The interrupts of a context travel with it, and the idle context of a
@@ -497,8 +484,7 @@ static int smp_status(void)
 
     for (cpu = 0; cpu < count; cpu++) {
         kshell_printf("smp: cpu %u apic 0x%x ticks %u current %s\n", (unsigned)cpu,
-                      (unsigned)lines[cpu].apic_id, (unsigned)lines[cpu].ticks,
-                      lines[cpu].current);
+                      (unsigned)lines[cpu].apic_id, (unsigned)lines[cpu].ticks, lines[cpu].current);
     }
 
     smp_print_unlock();
@@ -514,10 +500,6 @@ static int smp_status(void)
     }
 
     kshell_printf("smp: the command ran on cpu %u\n", (unsigned)k_cpu_id());
-    kshell_printf("DIAG raw %u clamped %u count %u g_ticks %u selfid %u selfrest %u\n",
-                  (unsigned)k_port_cpu_id(), (unsigned)k_cpu_id(), (unsigned)k_cpu_count(),
-                  (unsigned)k_sched_ticks(), (unsigned)k_cpu_self()->id,
-                  (unsigned)k_cpu_self()->ticks);
 
     smp_print_unlock();
 

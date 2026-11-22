@@ -78,6 +78,14 @@ void port_x86_64_ap_idle(void) __attribute__((noreturn));
  */
 void port_x86_64_ap_timer_ready(k_u32_t cpu, bool ready);
 
+/*
+ * The idle loop of a core: look at the run queue and wait for the interrupt
+ * that brings it work. The boot context of the core 0 (kmain after the first
+ * task was started) and the context of an application processor are both this
+ * loop, and it is what the port returns to when the last task of a core ends.
+ */
+void port_x86_64_idle(void) __attribute__((noreturn));
+
 /* The interrupt flag of RFLAGS. */
 #define PORT_X86_64_RFLAGS_IF 0x200u
 
