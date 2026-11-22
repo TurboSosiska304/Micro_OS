@@ -61,6 +61,9 @@ if(NOT ESP_PLATFORM)
     if(MICRO_OS_NET AND MICRO_OS_NET_HTTP)
         list(APPEND MICRO_OS_TEST_CASES cases/test_pkg.c)
     endif()
+    if(MICRO_OS_TLS AND MICRO_OS_NET)
+        list(APPEND MICRO_OS_TEST_CASES cases/test_tls.c)
+    endif()
     if(MICRO_OS_WIFI)
         list(APPEND MICRO_OS_TEST_CASES cases/test_wifi.c)
     endif()
@@ -146,7 +149,11 @@ if(NOT ESP_PLATFORM)
     )
 
     if(MICRO_OS_NET)
-        list(APPEND MICRO_OS_TEST_LIBS microos_net)
+        # The network comes after the port that resolves its names, and the
+        # entropy of the TLS layer is a function of the port: the archive is
+        # scanned from left to right, so the port is named again after the
+        # object that asks for net_tls_platform_entropy().
+        list(APPEND MICRO_OS_TEST_LIBS microos_net microos_port_host)
     endif()
     if(MICRO_OS_NET AND MICRO_OS_NET_HTTP)
         list(APPEND MICRO_OS_TEST_LIBS microos_pkg)

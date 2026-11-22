@@ -939,6 +939,14 @@ def check_sources(root: str, report: Report, files: list) -> None:
     not_utf8 = []
 
     for name in files:
+        # A vendored tree keeps the style and the language of its upstream:
+        # third_party/mbedtls is the Mbed TLS release as it is, with its own
+        # 79-column lines. The rules of this tree are for the sources of this
+        # tree; the license and the README of the vendored directory are the
+        # boundary, and the check of a release is a diff of the upstream.
+        if name.startswith("third_party/"):
+            continue
+
         path = os.path.join(root, name)
         if not os.path.isfile(path) or is_binary(path):
             continue
@@ -1030,7 +1038,10 @@ def check_format(root: str, report: Report, files: list, formatter: str) -> None
     """The formatting of the C sources."""
     group = "format"
 
-    sources = [f for f in files if f.endswith((".c", ".h"))]
+    sources = [
+        f for f in files
+        if f.endswith((".c", ".h")) and not f.startswith("third_party/")
+    ]
     if not sources:
         report.skip(group, "clang-format", "there are no C sources")
         return
@@ -1206,6 +1217,14 @@ def check_layers(root: str, report: Report, files: list) -> None:
     call_debt_left = set(PORT_CALL_DEBT)
 
     for name in files:
+        # A vendored tree keeps the style and the language of its upstream:
+        # third_party/mbedtls is the Mbed TLS release as it is, with its own
+        # 79-column lines. The rules of this tree are for the sources of this
+        # tree; the license and the README of the vendored directory are the
+        # boundary, and the check of a release is a diff of the upstream.
+        if name.startswith("third_party/"):
+            continue
+
         path = os.path.join(root, name)
         if not os.path.isfile(path) or is_binary(path):
             continue

@@ -494,10 +494,13 @@ on the network of its owner, and `telnet off` closes the door.
 The sockets under all of this are a duty of the port as well:
 `kernel/port/net.h` offers a connection, a server, a send that may wait or
 not, and a one-shot UDP exchange - and nothing else. There is no TLS, no
-IPv6 and no raw socket: the board is on the network of its owner. On the
-board the port speaks lwIP, on the host it speaks the sockets of the
-process, so the HTTP client, the clock of NTP and the server of telnet are
-exercised without a board.
+IPv6 and no raw socket in that contract: the board is on the network of its
+owner. TLS lives above the contract and not in it: `components/net` wraps a
+transport of bytes with mbedTLS on the machines that have the library
+(x86-64 and the host tests), and an image without it answers that `https`
+is not in it (ADR 0024 §3). On the board the port speaks lwIP, on the host
+it speaks the sockets of the process, so the HTTP client, the clock of NTP
+and the server of telnet are exercised without a board.
 
 ## 8. Programs (phase 7)
 

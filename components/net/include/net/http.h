@@ -36,6 +36,7 @@
 #define HTTP_SINK (-7)      /* the sink refused a byte of the body */
 #define HTTP_PROTOCOL (-8)  /* a body the client cannot read */
 #define HTTP_SHORT (-9)     /* the body ended before its Content-Length */
+#define HTTP_TLS (-10)      /* the HTTPS connection was refused by TLS */
 
 /*
  * The redirects a chain may have. GitHub Pages, a mirror and a release page
@@ -43,23 +44,30 @@
  */
 #define HTTP_REDIRECT_MAX 5
 
-/* The parts of "http://host:port/path". */
+/* The parts of "http://host:port/path" or "https://host:port/path". */
 struct http_url {
     char host[HTTP_HOST_MAX];
     char path[HTTP_PATH_MAX];
     int port;
+    bool tls; /* the scheme is https: the transport is wrapped (net/tls.h) */
 };
 
 /*
  * A stream of bytes to one peer. `open` returns 0 and sets the context of
  * the connection; `recv` answers the number of the bytes read, 0 when the
  * peer closed the connection, and a negative code on a real error.
+ *
+ * `open` receives the transport itself, because a transport may wrap the
+ * one below it: the TLS layer of net/tls.h takes the plain transport from
+ * `user` and secures the same `send`/`recv` pair. A plain transport has
+ * `user` empty and ignores the argument.
  */
 struct http_transport {
-    int (*open)(const char *host, int port, void **ctx);
+    int (*open)(const struct http_transport *self, const char *host, int port, void **ctx);
     int (*send)(void *ctx, const void *data, k_size_t size);
     int (*recv)(void *ctx, void *data, k_size_t size);
     void (*close)(void *ctx);
+    const void *user; /* the transport below, for a layer that wraps one */
 };
 
 struct http_response {
@@ -92,8 +100,10 @@ struct http_sink {
  * afford: one structure in, one out.
  *
  *   transport     the sockets (of the port, or a fake one in the tests)
- *   url           "http://host[:port]/path"; https is refused here and is
- *                 the work of the TLS layer (ADR 0024 §3)
+ *   url           "http://host[:port]/path" or "https://host[:port]/path";
+ *                 the https URL is carried by the TLS layer over this same
+ *                 transport (ADR 0024 §3), or is HTTP_TLS in an image built
+ *                 without it
  *   sink          the body; a NULL write counts the bytes and keeps none
  *   resume_from   a byte count: the request asks for the rest of the object
  *   max_redirects a bound on the chain; <0 is HTTP_REDIRECT_MAX

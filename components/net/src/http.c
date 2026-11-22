@@ -15,6 +15,7 @@
 
 #include "kernel/log.h"
 #include "kernel/sysinfo.h"
+#include "net/tls.h"
 
 static char ascii_lower(char c)
 {
@@ -39,17 +40,29 @@ int http_parse_url(const char *url, struct http_url *out)
     const char *p;
     const char *host;
     k_size_t len;
-    int port = 80;
+    int port;
+    bool tls;
 
     if (url == NULL || out == NULL) {
         return HTTP_INVALID;
     }
 
-    if (strncmp(url, "http://", 7) != 0) {
+    /*
+     * The two schemes of the web. The port of each is the one of the
+     * protocol: a URL without a colon is 80 for http and 443 for https,
+     * and the TLS layer is chosen by the scheme and nothing else.
+     */
+    if (strncmp(url, "http://", 7) == 0) {
+        tls = false;
+        port = 80;
+        host = url + 7;
+    } else if (strncmp(url, "https://", 8) == 0) {
+        tls = true;
+        port = 443;
+        host = url + 8;
+    } else {
         return HTTP_INVALID;
     }
-
-    host = url + 7;
 
     p = host;
     while (*p != '\0' && *p != '/' && *p != ':') {
@@ -96,8 +109,38 @@ int http_parse_url(const char *url, struct http_url *out)
     memcpy(out->path, *p != '\0' ? p : "/", len);
     out->path[len] = '\0';
     out->port = port;
+    out->tls = tls;
 
     return HTTP_OK;
+}
+
+/*
+ * The transport of an exchange: the one the caller named, or the TLS layer
+ * over it when the URL is https. NULL with the reason in net_tls_last_error()
+ * when the image has no TLS at all.
+ *
+ * `secure` belongs to the caller and lives as long as the exchange: it is
+ * the template of the TLS layer with `user` pointing at the plain transport.
+ */
+static const struct http_transport *transport_for(const struct http_transport *plain,
+                                                  const struct http_url *parts,
+                                                  struct http_transport *secure)
+{
+    const struct http_transport *tls;
+
+    if (!parts->tls) {
+        return plain;
+    }
+
+    tls = net_tls_transport();
+    if (tls == NULL) {
+        return NULL;
+    }
+
+    *secure = *tls;
+    secure->user = plain;
+
+    return secure;
 }
 
 /* The status of the first line: "HTTP/1.0 200 OK". */
@@ -165,6 +208,8 @@ int http_get(const struct http_transport *transport, const char *url, char *body
              struct http_response *out)
 {
     struct http_url parts;
+    struct http_transport secure;
+    const struct http_transport *plain = transport;
     char request[HTTP_HOST_MAX + HTTP_PATH_MAX + 64];
     char header[512];
     char *end;
@@ -190,6 +235,11 @@ int http_get(const struct http_transport *transport, const char *url, char *body
         return HTTP_INVALID;
     }
 
+    transport = transport_for(plain, &parts, &secure);
+    if (transport == NULL) {
+        return HTTP_TLS;
+    }
+
     n = snprintf(request, sizeof(request),
                  "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: MicroOS\r\nConnection: close\r\n\r\n",
                  parts.path, parts.host);
@@ -197,8 +247,8 @@ int http_get(const struct http_transport *transport, const char *url, char *body
         return HTTP_TOO_LONG;
     }
 
-    if (transport->open(parts.host, parts.port, &ctx) != 0) {
-        return HTTP_ERROR;
+    if (transport->open(transport, parts.host, parts.port, &ctx) != 0) {
+        return parts.tls ? HTTP_TLS : HTTP_ERROR;
     }
 
     if (transport->send(ctx, request, (k_size_t)n) != n) {
@@ -721,10 +771,11 @@ static int stream_body(struct http_reader *reader, struct http_stream *stream, c
 static int redirect_url(const struct http_url *parts, const char *location, char *out,
                         k_size_t size)
 {
+    const char *scheme = parts->tls ? "https" : "http";
     const char *slash;
     int n;
 
-    if (strncmp(location, "http://", 7) == 0) {
+    if (strncmp(location, "http://", 7) == 0 || strncmp(location, "https://", 8) == 0) {
         if (strlen(location) >= size) {
             return HTTP_TOO_LONG;
         }
@@ -735,7 +786,7 @@ static int redirect_url(const struct http_url *parts, const char *location, char
     }
 
     if (location[0] == '/') {
-        n = snprintf(out, size, "http://%s:%d%s", parts->host, parts->port, location);
+        n = snprintf(out, size, "%s://%s:%d%s", scheme, parts->host, parts->port, location);
     } else {
         /* A path without a leading slash replaces the last part of the
          * path: "/a/b" with "c" is "/a/c". The base of the tree is the
@@ -746,7 +797,7 @@ static int redirect_url(const struct http_url *parts, const char *location, char
             return HTTP_INVALID;
         }
 
-        n = snprintf(out, size, "http://%s:%d%.*s%s", parts->host, parts->port,
+        n = snprintf(out, size, "%s://%s:%d%.*s%s", scheme, parts->host, parts->port,
                      (int)(slash - parts->path) + 1, parts->path, location);
     }
 
@@ -768,6 +819,8 @@ int http_stream(struct http_stream *stream)
     char current[HTTP_HOST_MAX + HTTP_PATH_MAX + 16];
     char next[HTTP_HOST_MAX + HTTP_PATH_MAX + 16];
     char request[HTTP_HOST_MAX + HTTP_PATH_MAX + 96];
+    struct http_transport secure;
+    const struct http_transport *plain;
     int max_redirects;
     int rc;
 
@@ -792,6 +845,8 @@ int http_stream(struct http_stream *stream)
         max_redirects = HTTP_REDIRECT_MAX;
     }
 
+    plain = stream->transport;
+
     /* The answer always starts empty, whatever the caller left there. */
     stream->status = 0;
     stream->length = 0;
@@ -803,11 +858,23 @@ int http_stream(struct http_stream *stream)
     for (;;) {
         struct http_url parts;
         struct http_reader reader;
+        const struct http_transport *transport;
         void *ctx = NULL;
         int n;
 
         if (http_parse_url(current, &parts) != HTTP_OK) {
             return HTTP_INVALID;
+        }
+
+        /*
+         * The scheme of the hop decides the layer: a redirect from http to
+         * https is a second exchange through TLS, and one back is plain.
+         * The template is copied per hop, so its `user` names the transport
+         * of this stream and no other.
+         */
+        transport = transport_for(plain, &parts, &secure);
+        if (transport == NULL) {
+            return HTTP_TLS;
         }
 
         n = snprintf(request, sizeof(request),
@@ -837,16 +904,16 @@ int http_stream(struct http_stream *stream)
         memcpy(request + n, "\r\n", 3);
         n += 2;
 
-        if (stream->transport->open(parts.host, parts.port, &ctx) != 0) {
+        if (transport->open(transport, parts.host, parts.port, &ctx) != 0) {
+            return parts.tls ? HTTP_TLS : HTTP_ERROR;
+        }
+
+        if (transport->send(ctx, request, (k_size_t)n) != n) {
+            transport->close(ctx);
             return HTTP_ERROR;
         }
 
-        if (stream->transport->send(ctx, request, (k_size_t)n) != n) {
-            stream->transport->close(ctx);
-            return HTTP_ERROR;
-        }
-
-        reader.transport = stream->transport;
+        reader.transport = transport;
         reader.ctx = ctx;
         reader.timed_out = false;
         reader.used = 0;
@@ -858,13 +925,13 @@ int http_stream(struct http_stream *stream)
 
         rc = stream_head(&reader, head, sizeof(head));
         if (rc != HTTP_OK) {
-            stream->transport->close(ctx);
+            transport->close(ctx);
             return rc;
         }
 
         stream->status = parse_status(head);
         if (stream->status < 0) {
-            stream->transport->close(ctx);
+            transport->close(ctx);
             return HTTP_NO_ANSWER;
         }
 
@@ -873,22 +940,22 @@ int http_stream(struct http_stream *stream)
 
             if (!header_field(head, "Location:", location, sizeof(location)) ||
                 location[0] == '\0') {
-                stream->transport->close(ctx);
+                transport->close(ctx);
                 return HTTP_REDIRECT;
             }
 
             if (stream->redirects >= (k_size_t)max_redirects) {
-                stream->transport->close(ctx);
+                transport->close(ctx);
                 return HTTP_REDIRECT;
             }
 
             rc = redirect_url(&parts, location, next, sizeof(next));
             if (rc != HTTP_OK) {
-                stream->transport->close(ctx);
+                transport->close(ctx);
                 return rc;
             }
 
-            stream->transport->close(ctx);
+            transport->close(ctx);
             memcpy(current, next, strlen(next) + 1);
             stream->redirects++;
 
@@ -906,12 +973,12 @@ int http_stream(struct http_stream *stream)
                 stream->resumed = true;
             } else if (stream->status == 200) {
                 if (stream->sink.reset == NULL) {
-                    stream->transport->close(ctx);
+                    transport->close(ctx);
                     return HTTP_ERROR;
                 }
 
                 if (stream->sink.reset(stream->sink.ctx) != 0) {
-                    stream->transport->close(ctx);
+                    transport->close(ctx);
                     return HTTP_SINK;
                 }
 
@@ -921,7 +988,7 @@ int http_stream(struct http_stream *stream)
 
         rc = stream_body(&reader, stream, head, stream->status >= 200 && stream->status < 300);
 
-        stream->transport->close(ctx);
+        transport->close(ctx);
 
         return rc;
     }

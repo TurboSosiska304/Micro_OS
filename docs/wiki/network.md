@@ -17,16 +17,17 @@ the resolver of names live above it.
 | ICMP | the stack of lwIP | `ping <address>` | no |
 | HTTP client | `http get <url>`, `wget <url> <file>` | `http get <url>`, `wget <url> <file>` | tests only |
 | HTTP server | `httpd [port\|off]`, the page of the state | `httpd [port\|off]` | no |
-| NTP | `ntp [server]` | `ntp [server]` | no |
+| NTP | `ntp [server]` | `ntp [server[:port]]` | no |
 | MQTT | `mqtt <host> <port> <topic> <message>`, QoS 0 | not built | no |
 | telnet | `telnet [on\|off]`, the shell on port 23 | no | no |
-| TLS | the copy of ESP-IDF, not wired to a command | **not there** | no |
+| TLS | the copy of ESP-IDF, not wired to a command | yes, mbedTLS 3.6.2: `https://` in `wget`, `http` and `pkg` | for the tests, through the x86-64 layer |
 
 The commands of x86-64 are `netinfo` (the device, the address, the
 counters), `ping`, `netudp` (one exchange), `dns`, `http`, `httpd`, `ntp` and
 `wget`. `make x86-net-smoke` boots the machine with a card of QEMU and checks
 the stack: ARP, ICMP, UDP, a client and a server of TCP, the cache of the
-resolver, a download into a file and an install from a repository.
+resolver, a download into a file, a download over TLS and an install from a
+repository served over TLS.
 
 ## The two clients
 
@@ -85,25 +86,66 @@ and then `exec hello` of what it installed.
 `telnet` puts the shell on port 23 and is off until a person turns it on. Both
 are described in [shell.md](shell.md).
 
-## TLS, and what is not there
+## TLS
 
-The public internet is HTTPS, and this machine has no TLS. The contract is
-mbedTLS (ADR 0024 §3): the board takes the copy of ESP-IDF, and x86-64 would
-vendor it with a freestanding platform layer - the allocator of the kernel,
-entropy from `RDRAND`, the clock of NTP, and the roots of `/etc/ssl/certs.pem`
-through the VFS. None of that is in the tree: `http_parse_url` refuses an
-`https://` URL with "the URL is not one we speak", and the debt is written in
-[debts.md](../debts.md).
+x86-64 speaks HTTPS (ADR 0024 §3). The stack is mbedTLS 3.6.2, vendored in
+`third_party/mbedtls`; its configuration is a TLS client (1.2 and 1.3, X.509,
+ECDHE with ECDSA or RSA, AES-GCM/CCM, ChaCha20-Poly1305, SHA-1/256/384/512),
+and the platform under it is the kernel: `kmm` for the allocator, the
+formatter of the kernel, `RDRAND` with the timer as the fallback for entropy,
+the clock of NTP for the dates, and the roots of `/etc/ssl/certs.pem` read
+through the VFS. The board keeps the copy that ESP-IDF carries and has no
+command of TLS yet; it is a compatibility port (ADR 0018).
 
-The trust of a package does not wait for it. A `.mox` and the index are signed
-with Ed25519 over their own bytes, and the installer checks the digest and the
-signature before a byte reaches `/usr`: a hostile mirror can refuse to serve a
-package, and cannot put another program in its place (ADR 0024 §4). What TLS
-adds is privacy and the name of the server, which is the next pass.
+A URL with `https` is the same client with one more layer:
+
+```text
+microos> ntp 10.0.2.2:123
+ntp: 2026-11-22 20:12:37 UTC
+microos> wget https://mirror.example/hello-1.0.0-x86_64.mox /usr/bin/hello.new
+wget: HTTP 200, 4288 byte(s) to /usr/bin/hello.new
+```
+
+The store of roots is one file, `/etc/ssl/certs.pem`, with any number of PEM
+certificates. A machine that has no store trusts nobody, and says so. The CA
+bundle of a distribution can be written into it with `wget` over plain HTTP or
+copied from the disk image; there is no package of certificates yet.
+
+The clock is part of the trust. A certificate has dates, and a machine whose
+clock NTP has not set cannot check them: the client refuses the connection
+before it opens the socket and says which command fixes it.
+
+```text
+microos> wget https://mirror.example/x /x
+wget: https://mirror.example/x: the clock is not set (1970): the date of a
+certificate cannot be checked - run `ntp` first
+```
+
+`ntp [server[:port]]` takes the port when it is not 123 (a home server, or the
+clock of a test, because the host of QEMU user-net cannot bind 123 without a
+privilege). On x86-64 the moment is kept by the kernel over its uptime: this
+port has no driver of the CMOS clock yet.
+
+A handshake that fails is a sentence and never a success: no
+`/etc/ssl/certs.pem`, the clock of 1970, a certificate of another authority
+(`flags 0x8`), a certificate of another name (`flags 0x4`), the name of the
+server not in the SAN, or the word of the library for anything else.
+
+What it does not do: no revocation (CRL or OCSP), no client certificate, no
+session resumption between two downloads, no ALPN. Every download is a
+handshake, which on this machine costs a second or two and no more.
+
+## Trust of a package
+
+A `.mox` and the index are signed with Ed25519 over their own bytes, and the
+installer checks the digest and the signature before a byte reaches `/usr`: a
+hostile mirror can refuse to serve a package, and cannot put another program
+in its place (ADR 0024 §4). TLS adds privacy and the name of the server; it
+does not replace the signature, and the signature does not replace TLS.
 
 ## What is not there yet
 
-* no TLS on either machine (above);
+* no TLS on the board (above);
 * no DHCP and no IPv6 on x86-64: the address of the port is the one of the
   user network of QEMU, and a real link is a later change;
 * no congestion window and no retransmission timers beyond the simple ones of

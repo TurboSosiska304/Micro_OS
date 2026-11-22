@@ -370,7 +370,14 @@ static struct port_task *task_context_new(struct task *t, k_u8_t **block, k_u64_
 
 k_size_t k_port_task_stack_size(void)
 {
-    return 16 * 1024;
+    /*
+     * 32 KiB and not 16: the shell of this machine is also the client of
+     * TLS, and one handshake of mbedTLS with a certificate chain is a few
+     * kilobytes of stack deeper than a command of the filesystem. The
+     * memory is here (a machine of QEMU has tens of megabytes of heap) and
+     * a stack overflow in ring 0 is a machine that stops without a word.
+     */
+    return 32 * 1024;
 }
 
 int k_port_task_create(struct task *t, k_port_task_entry_fn entry, void *arg)

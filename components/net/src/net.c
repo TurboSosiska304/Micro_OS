@@ -25,13 +25,18 @@
 #include "net/mqtt.h"
 #include "net/net_http.h"
 #include "net/ntp.h"
+#include "net/tls.h"
 
 #if MICRO_OS_NET_HTTP
 /* --- the transport of the HTTP client --- */
 
-static int sock_open(const char *host, int port, void **ctx)
+static int sock_open(const struct http_transport *self, const char *host, int port, void **ctx)
 {
     k_socket_t *session;
+
+    /* A plain transport has no layer below it: the TLS layer is the one that
+     * uses the field (net/tls.h). */
+    (void)self;
 
     if (host == NULL || ctx == NULL || port <= 0 || port > 65535) {
         return -1;
@@ -194,13 +199,13 @@ int net_http_download(const char *url, const char *path, bool resume, struct htt
 #if MICRO_OS_NET_NTP
 /* --- the clock --- */
 
-int net_ntp_sync(const char *server, k_u64_t *unix_seconds)
+int net_ntp_sync_port(const char *server, k_u16_t port, k_u64_t *unix_seconds)
 {
     k_u8_t request[NTP_PACKET_SIZE];
     k_u8_t answer[NTP_PACKET_SIZE];
     int n;
 
-    if (server == NULL || unix_seconds == NULL) {
+    if (server == NULL || unix_seconds == NULL || port == 0) {
         return -1;
     }
 
@@ -211,7 +216,7 @@ int net_ntp_sync(const char *server, k_u64_t *unix_seconds)
      * sends the packet, waits for the answer and closes the socket, so the
      * board never holds a UDP socket for longer than the call.
      */
-    n = k_net_udp_exchange(server, NTP_PORT, request, sizeof(request), answer, sizeof(answer),
+    n = k_net_udp_exchange(server, port, request, sizeof(request), answer, sizeof(answer),
                            NET_TIMEOUT_MS);
     if (n != (int)sizeof(answer)) {
         kwarn("net: no answer from the NTP server %s (%d byte(s))", server, n);
@@ -219,6 +224,11 @@ int net_ntp_sync(const char *server, k_u64_t *unix_seconds)
     }
 
     return ntp_parse_response(answer, unix_seconds);
+}
+
+int net_ntp_sync(const char *server, k_u64_t *unix_seconds)
+{
+    return net_ntp_sync_port(server, NTP_PORT, unix_seconds);
 }
 #endif /* MICRO_OS_NET_NTP */
 
@@ -332,8 +342,13 @@ static int cmd_http(int argc, char **argv)
 
     rc = net_http_get(argv[2], body, sizeof(body), &response);
     if (rc != HTTP_OK) {
-        kshell_printf("http: %s: %s\n", argv[2],
-                      rc == HTTP_ERROR ? "the connection failed" : "the URL is not one we speak");
+        if (rc == HTTP_TLS) {
+            kshell_printf("http: %s: %s\n", argv[2], net_tls_last_error());
+        } else {
+            kshell_printf("http: %s: %s\n", argv[2],
+                          rc == HTTP_ERROR ? "the connection failed"
+                                           : "the URL is not one we speak");
+        }
         return KSHELL_ERROR;
     }
 
@@ -386,6 +401,9 @@ static int cmd_wget(int argc, char **argv)
         }
 
         switch (rc) {
+        case HTTP_TLS:
+            kshell_printf("wget: %s: %s\n", argv[1], net_tls_last_error());
+            break;
         case HTTP_TIMEOUT:
             kshell_printf("wget: %s: the transfer took too long\n", argv[1]);
             break;
@@ -438,9 +456,19 @@ static int ntp_store_time(k_u64_t unix_seconds)
     return k_clock_set_unix(unix_seconds);
 }
 
+/*
+ * `ntp [server[:port]]`. The port is the protocol's unless it is written:
+ * 123 is the port of every server of the world, and another one is a server
+ * of a person or the clock of a test (the host of QEMU user-net cannot take
+ * 123 without a privilege).
+ */
 static int cmd_ntp(int argc, char **argv)
 {
-    const char *server = argc > 1 ? argv[1] : "pool.ntp.org";
+    const char *text = argc > 1 ? argv[1] : "pool.ntp.org";
+    char server[HTTP_HOST_MAX];
+    k_u16_t port = NTP_PORT;
+    const char *colon;
+    k_size_t length;
     k_u64_t seconds;
     int year;
     int month;
@@ -449,7 +477,57 @@ static int cmd_ntp(int argc, char **argv)
     int minute;
     int second;
 
-    if (net_ntp_sync(server, &seconds) != 0) {
+    if (argc > 2) {
+        kshell_printf("usage: ntp [server[:port]]\n");
+        return KSHELL_USAGE;
+    }
+
+    colon = strrchr(text, ':');
+    if (colon != NULL) {
+        const char *digits = colon + 1;
+        k_u32_t value = 0;
+
+        if (digits[0] == '\0') {
+            kshell_printf("usage: ntp [server[:port]]\n");
+            return KSHELL_USAGE;
+        }
+
+        for (; *digits != '\0'; digits++) {
+            if (*digits < '0' || *digits > '9') {
+                kshell_printf("usage: ntp [server[:port]]\n");
+                return KSHELL_USAGE;
+            }
+
+            value = value * 10u + (k_u32_t)(*digits - '0');
+            if (value > 65535u) {
+                kshell_printf("usage: ntp [server[:port]]\n");
+                return KSHELL_USAGE;
+            }
+        }
+
+        length = (k_size_t)(colon - text);
+        if (length == 0 || length >= sizeof(server)) {
+            kshell_printf("usage: ntp [server[:port]]\n");
+            return KSHELL_USAGE;
+        }
+
+        memcpy(server, text, length);
+        server[length] = '\0';
+        port = (k_u16_t)value;
+    } else {
+        if (strlen(text) >= sizeof(server)) {
+            kshell_printf("usage: ntp [server[:port]]\n");
+            return KSHELL_USAGE;
+        }
+        memcpy(server, text, strlen(text) + 1);
+    }
+
+    if (port == 0) {
+        kshell_printf("usage: ntp [server[:port]]\n");
+        return KSHELL_USAGE;
+    }
+
+    if (net_ntp_sync_port(server, port, &seconds) != 0) {
         kshell_printf("ntp: no answer from %s\n", server);
         return KSHELL_ERROR;
     }

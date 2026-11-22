@@ -10,6 +10,36 @@ the MicroFS volume change by adding only.
 A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 (`vX.Y.Z-pre`) is a pre-release and must match `kernel_version()`.
 
+## [Unreleased]
+
+### Added
+
+- TLS on x86-64 (ADR 0024 §3): Mbed TLS 3.6.2 vendored in
+  `third_party/mbedtls` with a client-only configuration, and a freestanding
+  platform layer - `kmm` for the allocator, the formatter of the kernel,
+  `RDRAND` with the timer as the fallback for entropy, the clock of NTP for
+  the dates, and the roots of `/etc/ssl/certs.pem` read through the VFS.
+  `http_parse_url()` takes `https`, the stream wraps the plain transport, and
+  `wget`, `http` and `pkg` speak HTTPS with the chain and the name checked; a
+  clock that was never set is a refusal with a sentence, never a silent
+  success.
+- `ntp <server>[:port]` takes a port other than 123, for a home server and
+  for the clock of a test.
+- The x86-64 port registers a software clock, so `ntp` has a clock to set on
+  a machine without a driver of the CMOS chip yet.
+- `tests/cases/test_tls.c`: the policy of the clock, a store of roots of one
+  and of two certificates, a broken store, and the layer that has no
+  transport under it; `make x86-net-smoke` generates a test authority and
+  three certificates with `openssl` and checks TLS 1.3 and 1.2, the refusal
+  of a wrong name and of a wrong authority, and `pkg` over HTTPS.
+
+### Changed
+
+- `struct http_transport::open` receives the transport itself, so a layer can
+  wrap the transport below it; a plain transport ignores the argument.
+- `struct http_url` names the scheme: `tls` says the URL is https, and a
+  redirect keeps the scheme of the hop.
+
 ## [1.1.0] - 2026-11-22
 
 The release of the board's last major changes: the settings of `/etc`, the

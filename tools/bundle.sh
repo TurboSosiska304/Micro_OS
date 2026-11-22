@@ -222,6 +222,7 @@ if [ -f "$X86_BUILD/loader32.elf" ] && [ -f "$X86_BUILD/microos64.bin" ]; then
     cp -f "$X86_BUILD/loader32.elf" "$STAGE/loader32.elf"
     cp -f "$X86_BUILD/microos64.bin" "$STAGE/microos64.bin"
     cp -f "$ROOT/third_party/spleen/LICENSE" "$STAGE/LICENSE.spleen"
+    cp -f "$ROOT/third_party/mbedtls/LICENSE" "$STAGE/LICENSE.mbedtls"
     if [ -f "$X86_BUILD/microos64.sig" ] && [ -f "$X86_BUILD/signing.pub" ]; then
         cp -f "$X86_BUILD/microos64.sig" "$STAGE/microos64.sig"
         cp -f "$X86_BUILD/signing.pub" "$STAGE/microos-sign.pub"
@@ -254,9 +255,11 @@ The console is COM1 and the VGA screen. The machine has the shell, the
 interrupts, the scheduler, the disk with MicroFS, the programs of /bin and
 the network of the port.
 
-The kernel carries Spleen 8x16 (BSD-2-Clause) for the framebuffer console;
-`LICENSE.spleen` is its license and `third_party/spleen` of the sources has
-the note and the original BDF.
+The kernel carries Spleen 8x16 (BSD-2-Clause) for the framebuffer console and,
+in its network image, Mbed TLS 3.6.2 (Apache-2.0, the half of its dual grant
+this tree takes) for TLS. `LICENSE.spleen` and `LICENSE.mbedtls` are their
+licenses; `third_party/spleen` and `third_party/mbedtls` of the sources have
+the notes and the versions.
 
 The kernel carries a signature trailer (ADR 0020), and the loader verifies it
 before it copies a byte: an image with a changed byte, without a trailer or

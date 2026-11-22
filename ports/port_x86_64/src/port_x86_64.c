@@ -18,6 +18,7 @@
 #include <stdarg.h>
 #include <string.h>
 
+#include "kernel/clock.h"
 #include "kernel/log.h"
 #include "kernel/cpu.h"
 #include "kernel/port.h"
@@ -1230,6 +1231,22 @@ int memcmp(const void *left, const void *right, k_size_t size)
 
 static struct port_x86_64_info g_info;
 
+/*
+ * The clock of the machine, before a driver of a real one exists. This
+ * machine of QEMU has a CMOS clock, and the port does not read it yet; the
+ * kernel keeps the moment of the last `k_clock_set_unix()` and the uptime of
+ * that moment (kernel/clock.c), so `ntp` gives the machine a clock that
+ * keeps running, and a TLS connection has a date to check a certificate
+ * against (ADR 0024 §3). The setter is the port's promise that it keeps the
+ * moment; the kernel holds the base.
+ */
+static int software_clock_set(k_u64_t unix_seconds)
+{
+    (void)unix_seconds;
+
+    return 0;
+}
+
 void port_x86_64_init(k_u64_t multiboot_info)
 {
     const struct mb_info *info = (const struct mb_info *)(uintptr_t)multiboot_info;
@@ -1244,6 +1261,7 @@ void port_x86_64_init(k_u64_t multiboot_info)
     tls_init();
     com1_init();
     clock_measure();
+    k_clock_register(software_clock_set);
     port_x86_64_cpus_init();
     heap_init(multiboot_info);
     port_x86_64_paging_init();
