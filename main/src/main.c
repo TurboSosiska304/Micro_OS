@@ -151,6 +151,16 @@ static int fs_subsys_init(void)
         kwarn("init: the filesystem of the flash is not available (rc=%d)", rc);
     }
 
+    /*
+     * The programs of the board: the `progs` partition, read-only and
+     * mounted at /bin (ADR 0022). It is not a part of the volume of the
+     * user, so it is mounted whether MicroFS is there or not; a board whose
+     * partition was not flashed still reaches the shell and says so.
+     */
+    if (port_esp32_progs_mount() != 0) {
+        kwarn("init: the programs of /bin are not available");
+    }
+
     /* The information about the system and the devices. */
     if (procfs_register("/proc") != 0) {
         kerror("init: cannot mount the procfs");
@@ -173,6 +183,15 @@ static void shell_task(void *arg)
 
     tft_console_start();
     kshell_set_sink(tft_console_write);
+
+    /*
+     * The boot is proven: the filesystem, the progs partition, the self test,
+     * the doctor and the console of the shell are up, so the slot of the
+     * update is kept (ADR 0022). Before this line a reset returns the board
+     * to the previous image; a failure here is a line on the console and not
+     * a stopped shell.
+     */
+    (void)port_esp32_ota_confirm();
 
     kshell_run();
 }
@@ -400,12 +419,19 @@ void app_main(void)
      * application, so this is the electronic check of the board, not a
      * replacement for secure boot; with the policy off it is a warning.
      *
+     * An image of a slot of the update that does not pass is not kept: the
+     * slot is marked invalid and the board restarts into the other one
+     * (ADR 0022). With no other image to run the call returns and the board
+     * stops, which is the answer of the policy.
+     *
      * The check comes before klog_capture_start() on purpose: its sentence
      * belongs on the console even when the volume of the board is damaged
      * and the boot log can never be written.
      */
     if (port_esp32_image_check() != 0) {
-        kerror("boot: the image did not pass the boot check, the board stops");
+        kerror("boot: the image did not pass the boot check, the slot is not kept");
+        port_esp32_ota_rollback();
+        kerror("boot: the board stops");
         k_port_halt();
     }
 

@@ -44,6 +44,7 @@ if(NOT ESP_PLATFORM)
         cases/test_sched.c
         cases/test_sched_queue.c
         cases/test_sign.c
+        cases/test_progs.c
     )
 
     # The tests of a component that a build leaves out are left out with it:
@@ -80,6 +81,9 @@ if(NOT ESP_PLATFORM)
         # The verifier of ADR 0020 and its two primitives: the boot loader and
         # the tool compile the same files, and the test is the third caller.
         "${CMAKE_SOURCE_DIR}/ports/port_x86_64/loader"
+        # The directory of the `progs` partition (ADR 0022): read by the port
+        # of the board and by the test, written by tools/progs_image.py.
+        "${CMAKE_SOURCE_DIR}/components/port_esp32/include"
     )
 
     target_sources(microos_tests PRIVATE
@@ -93,6 +97,7 @@ if(NOT ESP_PLATFORM)
         "${CMAKE_SOURCE_DIR}/ports/port_x86_64/loader/sha256.c"
         "${CMAKE_SOURCE_DIR}/ports/port_x86_64/loader/ed25519.c"
         "${CMAKE_SOURCE_DIR}/ports/port_x86_64/loader/sign_image.c"
+        "${CMAKE_SOURCE_DIR}/components/port_esp32/src/progs_format.c"
     )
 
     # The FAT reader comes from the component when the host build links it

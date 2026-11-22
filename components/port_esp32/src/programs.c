@@ -1,22 +1,19 @@
 /*
- * Micro OS — the programs of the board (ADR 0018).
+ * Micro OS — the programs of the board (ADR 0018 §2, ADR 0022).
  *
- * The programs are built by this component and embedded in the firmware as
- * blobs (components/port_esp32/CMakeLists.txt): there is no medium they could
- * be read from before MicroFS is mounted, and the point of the milestone is
- * that the bytes go through a file and the VFS and not through a variable of
- * the kernel. At the boot, after the volume is mounted, they are written to
- * /bin with the mode of a program and run through execve.
+ * A program is a file of the `progs` partition: it is written there at build
+ * time by tools/progs_image.py, flashed with the firmware, and mounted at
+ * /bin by the read-only filesystem of the port (progs_vfs.c). The firmware
+ * carries no image of a program, and the boot does not write one into the
+ * volume: the bytes of a program go from the flash through the VFS and
+ * execve into the windows of the port, which is the path a program of any
+ * other machine takes.
  *
- * The file is written only when its bytes are not already there. A board
- * boots many times, the flash has a finite number of writes, and a program
- * that did not change between two boots costs nothing.
- *
- * The self test calls port_esp32_programs_boot(): it installs hello, runs it
- * twice (the second run proves that the windows of the port can be used
- * again), and asks for a hand-made image of x86-64 to prove that the check of
- * the machine happens before a byte runs. The lines the program prints begin
- * with "PROGRAM:", which is what tools/device-test.sh looks for.
+ * The self test runs /bin/hello twice (the second run proves that the
+ * windows of the port can be used again) and asks for a hand-made image of
+ * x86-64 to prove that the check of the machine happens before a byte runs.
+ * The lines of the program begin with "PROGRAM:", which is what
+ * tools/device-test.sh looks for.
  */
 #include <string.h>
 
@@ -32,18 +29,14 @@
 #define PROGRAM_DIR "/bin"
 #define PROGRAM_PATH "/bin/hello"
 #define CAT_PATH "/bin/cat"
-#define FOREIGN_PATH "/bin/foreign"
+/* The image of the other machine is a test file of the volume, hidden in the
+ * log directory: it must not look like a program of the board in /bin. */
+#define FOREIGN_DIR "/log"
+#define FOREIGN_PATH "/log/.foreign"
 
 /* A program is a file somebody may run: without the three `x` bits execve
  * answers EPERM and the image proves nothing about the machine. */
 #define PROGRAM_MODE 0755u
-
-/* The images the build made of programs/hello.c and programs/cat.c; the
- * symbols of the blobs. */
-extern const k_u8_t _binary_hello_mox_start[];
-extern const k_u8_t _binary_hello_mox_end[];
-extern const k_u8_t _binary_cat_mox_start[];
-extern const k_u8_t _binary_cat_mox_end[];
 
 /*
  * A minimal, well-formed image of the *other* machine: MOX1 version 2, an
@@ -51,6 +44,9 @@ extern const k_u8_t _binary_cat_mox_end[];
  * compares the machine before it asks the port to enter anything, so this
  * file is ENOEXEC and nothing of it runs. It is a constant of the test and
  * not a program: the four bytes would be an invalid instruction here anyway.
+ * It is written to the volume of the user, not to /bin: /bin is the read-only
+ * partition of the programs of the machine, and a test file has no place
+ * there.
  */
 static const k_u8_t g_foreign_image[] = {
     'M',  'O',  'X',  '1',  /* magic */
@@ -100,54 +96,73 @@ static bool file_is(const char *path, const k_u8_t *image, k_size_t size)
 }
 
 /*
- * Write an image to a file of /bin, and make it executable. The file is
- * created through the VFS and not through the filesystem: the adapter of
- * MicroFS is the only place that knows which number of the filesystem means
- * what, and the boot is not that place.
+ * Write the image of the foreign test to the volume, unless it is there
+ * already. The file is created through the VFS and not through the
+ * filesystem: the adapter of MicroFS is the only place that knows which
+ * number of the filesystem means what, and the boot is not that place.
  */
-static int program_install(const char *path, const k_u8_t *image, k_size_t size)
+static int foreign_install(void)
 {
     struct vfs_file file;
     k_u8_t priv[VFS_FILE_DATA_SIZE];
+    k_size_t size = sizeof(g_foreign_image);
     int rc;
 
-    if (file_is(path, image, size)) {
+    if (file_is(FOREIGN_PATH, g_foreign_image, size)) {
         /* The bytes are there; the mode can still have been lost. */
-        if (vfs_chmod(path, PROGRAM_MODE) != 0) {
-            kerror("esp32: cannot make %s executable", path);
+        if (vfs_chmod(FOREIGN_PATH, PROGRAM_MODE) != 0) {
+            kerror("esp32: cannot make %s executable", FOREIGN_PATH);
             return -1;
         }
 
-        kinfo("esp32: %s is already in the volume (%u bytes)", path, (unsigned)size);
         return 0;
     }
 
-    rc = vfs_mkdir_p(PROGRAM_DIR);
+    rc = vfs_mkdir_p(FOREIGN_DIR);
     if (rc != 0) {
-        kerror("esp32: cannot make %s (%s)", PROGRAM_DIR, vfs_strerror(rc));
+        kerror("esp32: cannot make %s", FOREIGN_DIR);
         return -1;
     }
 
-    rc = vfs_open(path, VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, priv);
+    rc = vfs_open(FOREIGN_PATH, VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, priv);
     if (rc != 0) {
-        kerror("esp32: cannot create %s (%s)", path, vfs_strerror(rc));
+        kerror("esp32: cannot create %s (%s)", FOREIGN_PATH, vfs_strerror(rc));
         return -1;
     }
 
-    rc = vfs_write(&file, image, size);
+    rc = vfs_write(&file, g_foreign_image, size);
     (void)vfs_close(&file);
 
     if (rc != (int)size) {
-        kerror("esp32: %s took %d byte(s) of %u", path, rc, (unsigned)size);
+        kerror("esp32: %s took %d byte(s) of %u", FOREIGN_PATH, rc, (unsigned)size);
         return -1;
     }
 
-    if (vfs_chmod(path, PROGRAM_MODE) != 0) {
-        kerror("esp32: cannot make %s executable", path);
+    if (vfs_chmod(FOREIGN_PATH, PROGRAM_MODE) != 0) {
+        kerror("esp32: cannot make %s executable", FOREIGN_PATH);
         return -1;
     }
 
-    kinfo("esp32: %s is written (%u bytes)", path, (unsigned)size);
+    return 0;
+}
+
+/* The two programs of /bin are files of the partition, not blobs. */
+static int programs_present(void)
+{
+    struct vfs_stat info;
+    int rc;
+
+    rc = vfs_stat(PROGRAM_PATH, &info);
+    if (rc != 0 || info.type != 1) {
+        kerror("esp32: %s is not in the progs partition (rc=%d)", PROGRAM_PATH, rc);
+        return -1;
+    }
+
+    rc = vfs_stat(CAT_PATH, &info);
+    if (rc != 0 || info.type != 1) {
+        kerror("esp32: %s is not in the progs partition (rc=%d)", CAT_PATH, rc);
+        return -1;
+    }
 
     return 0;
 }
@@ -190,7 +205,7 @@ static int program_refuse_foreign(void)
     char *argv[] = {(char *)"foreign", NULL};
     int rc;
 
-    if (program_install(FOREIGN_PATH, g_foreign_image, sizeof(g_foreign_image)) != 0) {
+    if (foreign_install() != 0) {
         return -1;
     }
 
@@ -207,20 +222,13 @@ static int program_refuse_foreign(void)
 
 int port_esp32_programs_boot(void)
 {
-    k_size_t hello_size = (k_size_t)(_binary_hello_mox_end - _binary_hello_mox_start);
-    k_size_t cat_size = (k_size_t)(_binary_cat_mox_end - _binary_cat_mox_start);
-
-    if (program_install(PROGRAM_PATH, _binary_hello_mox_start, hello_size) != 0) {
+    if (programs_present() != 0) {
         return -1;
     }
 
     /* The reader of a file is not run at the boot - it would print the whole
      * log - but it is in /bin for the shell and for a person: a path, a read
      * and a write through the door are the read side of the machine. */
-    if (program_install(CAT_PATH, _binary_cat_mox_start, cat_size) != 0) {
-        return -1;
-    }
-
     if (program_run() != 0) {
         return -1;
     }
@@ -233,8 +241,8 @@ int port_esp32_programs_boot(void)
      * what the IRAM allocations have left (the pools below the window and the
      * exec pools of the chip), and it is printed so that a person can see that
      * the window did not disappear from the heap unnoticed. */
-    kinfo("esp32: the programs of the board are up, the IRAM heap has %u byte(s)",
-          (unsigned)heap_caps_get_free_size(MALLOC_CAP_EXEC));
+    kinfo("esp32: the programs of the board are up, %s lists them, the IRAM heap has %u byte(s)",
+          PROGRAM_DIR, (unsigned)heap_caps_get_free_size(MALLOC_CAP_EXEC));
 
     return 0;
 }

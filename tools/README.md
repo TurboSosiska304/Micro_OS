@@ -53,6 +53,6 @@ refused` before the kernel prints its banner. With
 after `Micro OS: unsigned or damaged image: not guaranteed`.
 
 `make bundle` signs `micro_os.bin` and writes `micro_os.bin.sig`; `flash.sh`
-puts it at `0x20F000`, the last 4 KiB of the factory partition, where
-`app_main` reads it. The board's check is electronic and its policy is the
+puts it at `0x14F000`, the last 4 KiB of `ota_0`, where `app_main` reads it
+(an update writes the trailer at the end of `ota_1`, `0x28F000`, ADR 0022). The board's check is electronic and its policy is the
 Kconfig `MICRO_OS_REQUIRE_SIGNATURE` (ADR 0020, sections 6 and 7).

@@ -88,8 +88,16 @@ DATA_SUBTYPES = {
 }
 
 # The files of the bundle that must be ready to flash.
-BUNDLE_BINARIES = ("micro_os.bin", "bootloader.bin", "partition-table.bin")
-BUNDLE_EXTRA = ("checksums.txt", "flash.sh", "README.md")
+BUNDLE_BINARIES = ("micro_os.bin", "progs.bin", "bootloader.bin", "partition-table.bin")
+BUNDLE_EXTRA = ("checksums.txt", "flash.sh", "ota_usb.py", "README.md")
+
+# The directory of the `progs` partition (components/port_esp32/include/
+# progs_format.h, ADR 0022).
+PROGS_MAGIC = b"MOPROGS1"
+PROGS_HEADER = 24
+PROGS_ENTRY = 36
+PROGS_SLOT = 0x10000
+PROGS_DIRECTORY = 0x1000
 
 # The extensions that are never treated as a text file.
 BINARY_EXTENSIONS = {
@@ -471,15 +479,15 @@ def check_bundle(root: str, report: Report) -> dict:
 X86_ARTIFACTS = ("loader32.elf", "microos64.bin", "run.sh", "README.md")
 
 
-def factory_offset(root: str) -> int:
-    """The offset of the application, as partitions.csv says it."""
+def app_slot_offset(root: str) -> int:
+    """The offset of the first application slot, as partitions.csv says it."""
     path = os.path.join(root, "partitions.csv")
     if not os.path.isfile(path):
         return 0x10000
 
     for line in read_text(path).splitlines():
         fields = [field.strip() for field in line.split(",")]
-        if len(fields) >= 4 and fields[0] == "factory":
+        if len(fields) >= 4 and fields[0] == "ota_0":
             try:
                 return int(fields[3], 0)
             except ValueError:
@@ -508,7 +516,7 @@ def check_artifacts(root: str, report: Report) -> None:
         ok = len(data) > 0x1000 and data[0x1000] == ESP_IMAGE_MAGIC
         if ok and os.path.isfile(app):
             application = open(app, "rb").read()
-            offset = factory_offset(root)
+            offset = app_slot_offset(root)
             ok = (
                 len(data) >= offset + len(application)
                 and data[offset : offset + len(application)] == application
@@ -591,6 +599,80 @@ def check_images(root: str, report: Report) -> dict:
         )
 
     return images
+
+
+def check_progs(root: str, report: Report) -> None:
+    """The image of the programs: the directory of the progs partition."""
+    group = "progs"
+    dist = os.path.join(root, "dist")
+    path = os.path.join(dist, "progs.bin")
+
+    if not os.path.isdir(dist):
+        report.skip(group, "the programs are read", "dist/ is not there")
+        return
+
+    if not os.path.isfile(path):
+        report.add(group, "progs.bin is present", False, "the file is missing")
+        return
+
+    data = open(path, "rb").read()
+    report.add(group, "progs.bin is present", True, f"{len(data)} bytes")
+
+    expected = 0x31000
+    csv_path = os.path.join(root, "partitions.csv")
+    if os.path.isfile(csv_path):
+        for partition in parse_partitions_csv(csv_path):
+            if partition["name"] == "progs":
+                expected = partition["size"]
+                break
+
+    report.add(
+        group,
+        "progs.bin is the partition of the table",
+        len(data) == expected,
+        f"{len(data)} bytes, the partition is {expected}",
+    )
+
+    if len(data) < PROGS_DIRECTORY:
+        report.add(group, "the directory is readable", False, "the image is too short")
+        return
+
+    directory = len(data) - PROGS_DIRECTORY
+    table = data[directory:]
+    ok = table[0:8] == PROGS_MAGIC
+    report.add(group, "the directory has the magic", ok, table[0:8].decode("ascii", "replace"))
+
+    version, count, slot, _reserved = struct.unpack_from("<IIII", table, 8)
+    report.add(group, "the directory is version 1", version == 1, f"version {version}")
+
+    report.add(
+        group,
+        "the directory fits the partition",
+        count <= 3 and slot >= PROGS_SLOT and slot % PROGS_SLOT == 0,
+        f"{count} program(s), slot 0x{slot:X}",
+    )
+
+    for index in range(min(count, 3)):
+        record = PROGS_HEADER + index * PROGS_ENTRY
+        if record + PROGS_ENTRY > len(table):
+            report.add(group, f"program {index} is in the image", False, "the record is missing")
+            continue
+
+        name = table[record : record + 24].split(b"\0", 1)[0].decode("ascii", "replace")
+        offset, size, _ = struct.unpack_from("<III", table, record + 24)
+        ok = (
+            name != ""
+            and size > 0
+            and size <= slot
+            and offset % slot == 0
+            and offset + size <= directory
+        )
+        report.add(
+            group,
+            f"the record of {name or index} is usable",
+            ok,
+            f"0x{offset:X}, {size} bytes",
+        )
 
 
 def check_partitions(root: str, report: Report) -> dict:
@@ -1842,6 +1924,7 @@ def main(argv: list) -> int:
     check_bundle(root, report)
     check_artifacts(root, report)
     images = check_images(root, report)
+    check_progs(root, report)
     table = check_partitions(root, report)
     check_config(root, report, images, table)
     check_layers(root, report, files)

@@ -1,6 +1,29 @@
-# MicroOS partition table (8 MB flash, single app, maximum MicroFS)
+# MicroOS partition table (8 MB flash, two application slots, ADR 0022)
 #
 # Name,     Type, SubType, Offset,    Size,     Flags
+#
+# 0x0-0x8000 is the boot loader and its spare; the table itself is at 0x8000.
+#
+# The application slots are 0x140000 (1.25 MiB): the image is about 0x0F2A10
+# bytes and the slot leaves more than 300 KiB of growth for the compatibility
+# changes of 1.x. An application partition has to be 64 KiB aligned (the flash
+# MMU maps it in 64 KiB pages) and the two slots have to be equal. The last
+# 4 KiB of each slot are the trailer of the signature (ADR 0020), so an image
+# has 0x13F000 bytes for itself: 0x10000 (ota_0 trailer), 0x14F000.
+#
+# otadata (two 4 KiB sectors) tells the bootloader which slot to run and
+# carries the state of a slot that has not been confirmed yet.
+#
+# progs: the first 0x30000 bytes are three 64 KiB slots for the programs of
+# /bin (the programs are tiny; hello and cat use 2 of the 3 slots, the third
+# is the reserve for a 1.x program), and the last 4 KiB is the directory.
+# The partition is 64 KiB aligned and every file is at a multiple of 64 KiB,
+# which is the address esp_partition_mmap needs; the loader of 1.1 copies.
+#
+# MicroFS is everything that is left: 5.25 MiB of the 8 MB for the user.
 nvs,        data, nvs,     0x9000,    0x5000,
-factory,    app,  factory, 0x10000,   0x200000,
-mfs,        data, 0x40,    0x210000,  0x5F0000,
+otadata,    data, ota,     0xE000,    0x2000,
+ota_0,      app,  ota_0,   0x10000,   0x140000,
+ota_1,      app,  ota_1,   0x150000,  0x140000,
+progs,      data, 0x41,    0x290000,  0x31000,
+mfs,        data, 0x40,    0x2C1000,  0x53F000,

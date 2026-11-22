@@ -4,6 +4,9 @@ set(MICRO_OS_PORT_ESP32_SRCS
     "src/port_esp32.c"
     "src/port_exec.c"
     "src/programs.c"
+    "src/progs_vfs.c"
+    "src/progs_format.c"
+    "src/ota.c"
     "src/blockdev_flash.c"
     "src/port_kv_nvs.c"
     "src/port_net_lwip.c"
@@ -22,9 +25,9 @@ endif()
 # --- the signature of the application (ADR 0020) -----------------------------
 #
 # The same parser, hash and curve as the x86-64 loader: the board reads its
-# own factory partition in app_main, before the filesystem and the shell, and
-# compares the trailer at the last 4 KiB of the partition with the bytes of
-# the app. The public key is compiled into the firmware, so the image cannot
+# own application slot in app_main, before the filesystem and the shell, and
+# compares the trailer at the last 4 KiB of the slot with the bytes of the
+# app. The public key is compiled into the firmware, so the image cannot
 # bring one of its own.
 #
 # The tool that writes sign_public_key.h is built for the host: ESP-IDF has a
@@ -110,8 +113,9 @@ idf_component_register(
     # in the header of the port. `heap` is for SOC_RESERVE_MEMORY_REGION: the
     # port keeps the IRAM window of a program out of the heap (ADR 0018).
     # esp_app_format is the description of the application (its version), and
-    # it is private to the check of the image.
-    PRIV_REQUIRES wifi heap esp_app_format
+    # it is private to the check of the image. app_update is the OTA slot of
+    # the boot, the rollback and the confirmation (ADR 0022).
+    PRIV_REQUIRES wifi heap esp_app_format app_update
     # The port is the other half of the kernel contract: the kernel calls
     # k_port_* and the port calls back into the kernel (the scheduler, the
     # log). ESP-IDF links the components in dependency order and repeats
@@ -132,15 +136,16 @@ endif()
     # build time and not a fault on the board.
     target_compile_options(${COMPONENT_LIB} PRIVATE -Wextra)
 
-# --- the programs of the board (ADR 0018) -------------------------------------
+# --- the programs of the board (ADR 0018 §2, ADR 0022) ------------------------
 #
 # A program is built from the same C library as a program of x86-64
 # (components/libc/user) with the Xtensa compiler of ESP-IDF and the windowed
 # ABI of the machine, linked for the two windows of the port
-# (programs/program_esp32.ld), turned into a MOX1 image of arch 1 by
-# tools/mkprog.sh and embedded in the firmware as a blob. The kernel needs the
-# bytes before it has a filesystem to read them from; at the boot they are
-# written to /bin and run through execve.
+# (programs/program_esp32.ld) and turned into a MOX1 image of arch 1 by
+# tools/mkprog.sh. The image is *not* embedded in the firmware: the `.mox`
+# files become the `progs` partition with tools/progs_image.py, the partition
+# is flashed beside the application and mounted at /bin, and execve reads a
+# program as a file of the VFS.
 #
 # The text and the data are two windows because the instruction RAM of the
 # ESP32 is only 32-bit accessible for data: the code runs from IRAM and the
@@ -163,8 +168,8 @@ set(MICRO_OS_PROGRAM_CFLAGS
 
 # Every program of the port is built the same way: compile the file and the
 # four sources of the library for the windows, link with the script of the
-# format, turn the result into a MOX1 image of arch 1 and embed the image in
-# the firmware as a blob. The name of the file is the name in /bin.
+# format and turn the result into a MOX1 image of arch 1. The name of the
+# file is the name in /bin; the image is collected into the partition below.
 function(add_board_program name entry)
     set(elf "${CMAKE_CURRENT_BINARY_DIR}/${name}.elf")
     set(mox "${CMAKE_CURRENT_BINARY_DIR}/${name}.mox")
@@ -199,12 +204,47 @@ function(add_board_program name entry)
         VERBATIM
     )
 
-    # The symbols of the blob are _binary_<name>_mox_start and _end.
-    target_add_binary_data(${COMPONENT_LIB} "${mox}" BINARY DEPENDS "${mox}")
+    set(MICRO_OS_PROGRAM_IMAGES "${MICRO_OS_PROGRAM_IMAGES};${mox}" PARENT_SCOPE)
 endfunction()
 
 add_board_program(hello _start)
 add_board_program(cat _start)
+
+# The image of the `progs` partition: the directory of progs_format.h and the
+# programs above, at their 64 KiB slots. The tool checks the names, the sizes
+# and the alignment, so a program too big for a slot fails the build and not
+# the board. It is flashed by `idf.py flash` (the partition `progs` of
+# partitions.csv) and copied into the bundle by tools/bundle.sh.
+if(NOT CMAKE_BUILD_EARLY_EXPANSION)
+    find_program(MICRO_OS_PYTHON NAMES python3 python)
+    if(NOT MICRO_OS_PYTHON)
+        message(FATAL_ERROR "Micro OS: a Python interpreter is needed for the image of the programs")
+    endif()
+
+    set(MICRO_OS_PROGS_IMAGE "${CMAKE_CURRENT_BINARY_DIR}/progs.bin")
+    add_custom_command(
+        OUTPUT "${MICRO_OS_PROGS_IMAGE}"
+        COMMAND "${MICRO_OS_PYTHON}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/progs_image.py"
+                --output "${MICRO_OS_PROGS_IMAGE}"
+                --partition-size 0x31000 --slot-size 0x10000
+                "hello=${CMAKE_CURRENT_BINARY_DIR}/hello.mox"
+                "cat=${CMAKE_CURRENT_BINARY_DIR}/cat.mox"
+        DEPENDS ${MICRO_OS_PROGRAM_IMAGES}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/progs_image.py"
+                "${MICRO_OS_KERNEL_INC}/kernel/types.h"
+        COMMENT "building the progs partition: /bin/hello and /bin/cat"
+        VERBATIM
+    )
+
+    add_custom_target(micro_os_progs ALL DEPENDS "${MICRO_OS_PROGS_IMAGE}")
+
+    # The partition travels with the firmware: `idf.py flash` writes the
+    # application and the programs, so a board that was just flashed has a
+    # /bin. A bundle names the same file (tools/bundle.sh) and flash.sh puts
+    # it at the offset of partitions.csv.
+    esptool_py_flash_to_partition(flash "progs" "${MICRO_OS_PROGS_IMAGE}")
+endif()
 
 # The two windows of a program are not sections of the kernel: they are the
 # addresses a program is linked for and the port copies the image there. The

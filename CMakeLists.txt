@@ -49,31 +49,33 @@ if(MICRO_OS_PLATFORM STREQUAL "ESP32")
     include($ENV{IDF_PATH}/tools/cmake/project.cmake)
     project(micro_os C)
 
-    # The application and the 4 KiB of its trailer have to fit the factory
-    # partition: the flash layout is a file of the tree, and the check reads
-    # it instead of naming the 2 MB a second time.
-    set(MICRO_OS_FACTORY_SIZE 0x200000)
+    # The application and the 4 KiB of its trailer have to fit the slot of
+    # ota_0: the flash layout is a file of the tree, and the check reads it
+    # instead of naming 0x140000 a second time. The two slots are equal
+    # (ADR 0022), so the answer is the same for ota_1.
+    set(MICRO_OS_APP_SLOT_SIZE 0x140000)
     file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/partitions.csv" _partition_lines)
     foreach(_line IN LISTS _partition_lines)
-        if(_line MATCHES "^factory[ \t]*,")
+        if(_line MATCHES "^ota_0[ \t]*,")
             string(REPLACE "," ";" _fields "${_line}")
-            list(GET _fields 4 _factory_size)
-            string(STRIP "${_factory_size}" _factory_size)
-            if(_factory_size MATCHES "^0[xX][0-9a-fA-F]+$")
-                set(MICRO_OS_FACTORY_SIZE "${_factory_size}")
+            list(GET _fields 4 _app_slot_size)
+            string(STRIP "${_app_slot_size}" _app_slot_size)
+            if(_app_slot_size MATCHES "^0[xX][0-9a-fA-F]+$")
+                set(MICRO_OS_APP_SLOT_SIZE "${_app_slot_size}")
             endif()
         endif()
     endforeach()
-    math(EXPR MICRO_OS_FACTORY_BYTES "${MICRO_OS_FACTORY_SIZE}")
+    math(EXPR MICRO_OS_APP_SLOT_BYTES "${MICRO_OS_APP_SLOT_SIZE}")
 
     add_custom_target(micro_os_image_fits ALL
         COMMAND ${CMAKE_COMMAND}
                 -DIMAGE=${CMAKE_BINARY_DIR}/micro_os.bin
-                -DPARTITION_SIZE=${MICRO_OS_FACTORY_BYTES}
+                -DPARTITION_SIZE=${MICRO_OS_APP_SLOT_BYTES}
                 -DTRAILER_RESERVE=4096
+                -DMIN_FREE=65536
                 -P "${CMAKE_CURRENT_LIST_DIR}/tools/check_image_fits.cmake"
         DEPENDS gen_project_binary
-        COMMENT "checking that the image and its trailer fit the factory partition"
+        COMMENT "checking that the image and its trailer fit an application slot"
         VERBATIM
     )
 

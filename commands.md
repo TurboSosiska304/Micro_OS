@@ -74,7 +74,8 @@ python3 tools/integrity_check.py --expect-version 0.2.0
 
 The x86-64 kernel is signed and the loader checks it before it copies a byte.
 The board application is signed as well: the boot checks its trailer in the
-last 4 KiB of the factory partition. A development build generates a key in
+last 4 KiB of the application slot it is running (`ota_0` or `ota_1`,
+ADR 0022). A development build generates a key in
 the build directory (`build-x86/signing.key`, `build/signing.key`); a release
 names a key outside the tree:
 
@@ -96,10 +97,14 @@ same Kconfig adds `MICRO_OS_ANTIROLLBACK` (default `n`): a floor in the NVS;
 # a board that warns about an unsigned image, and one that refuses it
 DEVICE_POLICY=unsigned         tools/device-test.sh /dev/ttyACM0
 DEVICE_POLICY=require-unsigned tools/device-test.sh /dev/ttyACM0
+
+# the update over USB and the rollback (a good slot, back, and a bad trailer)
+DEVICE_OTA=1 tools/device-test.sh /dev/ttyACM0
+python3 dist/ota_usb.py /dev/ttyACM0
 ```
 
 `tools/microos_sign keygen|sign|verify|info` is the tool; `make bundle` signs
-`micro_os.bin` (`micro_os.bin.sig`, written at `0x20F000` by `flash.sh`) and
+`micro_os.bin` (`micro_os.bin.sig`, written at `0x14F000` by `flash.sh`) and
 the merged distribution image with the same key when `MICROOS_SIGN_KEY` is
 set, and always writes the sums. `make x86-smoke` boots a changed byte, a
 kernel without a trailer and a kernel of another key, and every one is refused

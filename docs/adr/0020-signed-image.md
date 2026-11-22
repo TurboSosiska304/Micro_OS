@@ -102,7 +102,10 @@ TweetNaCl needs only integer operations; the loader is compiled with
   `micro_os.bin.sig`, a 120-byte trailer over exactly the bytes of the app,
   and `flash.sh` writes it at the last 4 KiB of the factory partition
   (`0x20F000`). The board verifies it at the beginning of `app_main`, before
-  the filesystem and the shell (section 6).
+  the filesystem and the shell (section 6). In 1.1 the board has two
+  application slots (ADR 0022): the trailer is the last 4 KiB of the slot the
+  board is running (`0x14F000` for `ota_0`, `0x28F000` for `ota_1`), and
+  `tools/ota_usb.py` writes it with the image of an update.
 * **the merged board bundle** (`MicroOS-<version>.bin`): `tools/bundle.sh`
   appends the trailer and writes `<image>.sig` and `checksums.txt`. This is a
   signature of the *distribution*, checked by a person or a tool before
@@ -194,6 +197,14 @@ boot: it tells a person that the image is not the one that was signed, it
 refuses to go on when the build requires a signature, and it does so before
 the filesystem and the shell. It does not protect against a local attacker
 who can replace the application or its checker, and it is not secure boot.
+
+*Update (1.1.0).* The board has two application slots and an otadata that
+selects one (ADR 0022). The check reads the trailer of the running slot, and
+a refusal with the policy on marks that slot invalid and restarts the board
+into the other one (`esp_ota_mark_app_invalid_rollback_and_reboot()`) instead
+of only halting; with no other image to run it halts, as section 7 says. The
+envelope, the algorithm, the key and the sentences of the policy do not
+change.
 
 The trailer is over the bytes of `micro_os.bin` exactly, and
 `tools/bundle.sh` also leaves the combined `MicroOS-<version>.bin.sig` for a

@@ -571,7 +571,7 @@ strings of a path or a vector never reach the VFS (ADR 0007).
 
 | Resource | Available | Comment |
 |---|---|---|
-| Flash | 8 MB | `factory` 2 MB + MicroFS 5.75 MB (one application, no OTA) |
+| Flash | 8 MB | two 1.25 MiB application slots + 196 KiB of programs + MicroFS 5.25 MiB (ADR 0022) |
 | PSRAM | 2 MB | file data, buffers |
 | Internal SRAM | ~100 KB usable by code | task stacks, drivers |
 | CPU | 240 MHz, 2 cores | already taken by FreeRTOS; our kernel lives on top |

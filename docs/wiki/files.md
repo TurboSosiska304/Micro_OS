@@ -54,7 +54,7 @@ draws the levels below a path, and `stat` is the detailed view of one object.
 
 MicroFS is a consumer of blocks, not of a flash chip: the device under it is
 described by `kernel/blockdev.h` and registered by the port. On the board it is
-the `mfs` partition of the internal flash (`flash0`, 5.75 MB); in the simulator
+the `mfs` partition of the internal flash (`flash0`, 5.25 MiB); in the simulator
 a file of the host (`file0`, 512 KB by default); on x86-64 the first partition
 of the ATA disk (`ata0p1`) when one is attached, and a volume in the RAM
 (`ram0`, 512 KB) when it is not.

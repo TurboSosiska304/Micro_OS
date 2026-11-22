@@ -4,11 +4,12 @@ menu "Micro OS image"
         bool "refuse an image without a valid signature"
         default y
         help
-            The application checks the trailer of its own factory partition
+            The application checks the trailer of the slot it is running
             (MOSIGN01, SHA-256 and Ed25519) at the beginning of app_main,
             before the filesystem and the shell. On, an image without a valid
-            trailer prints the reason and stops the boot; off, the check is
-            still made and the line
+            trailer prints the reason, marks its slot invalid and returns the
+            board to the other slot (ADR 0022), or stops when there is no
+            other image to run; off, the check is still made and the line
             "unsigned or damaged image: not guaranteed" goes to the console,
             and the board continues. The check is electronic: the ROM and the
             ESP-IDF bootloader have already loaded the application, so a

@@ -198,14 +198,14 @@ of `kernel/ksys.h`, the same as on x86-64; only the crossing differs. The
 entry is `_start(void *door, long argc, char *const argv[], char *const
 envp[])` in the windowed ABI of the machine.
 
-The images travel in the firmware as blobs and are written to `/bin` of MicroFS
-at the boot, because there is no `progs` partition in the table yet; the bytes
-go through a file and the VFS before `execve` reads them back. The `progs`
-partition and the mapping of flash as instructions are the next step (ADR
-0018 §2). The board ships `/bin/hello`, `/bin/cat`, and `/bin/foreign` - a
-hand-made x86-64 image that exists only to be refused. `tools/device-test.sh`
-runs `hello` at the boot (twice, through `execve`) and from the shell, and
-checks that `/bin/foreign` answers `ENOEXEC` before a byte of it runs:
+The programs are files of the `progs` partition, mounted read-only at `/bin`
+(ADR 0022): `hello` and `cat` are two `.mox` files at 64 KiB boundaries, the
+partition is built by `tools/progs_image.py` and flashed with the image, and
+`execve` reads the bytes through the VFS. There is no image of a program in the
+firmware. An image of x86-64 is written to `/log/.foreign` at the boot only to
+be refused. `tools/device-test.sh` runs `hello` at the boot (twice, through
+`execve`) and from the shell, lists `/bin`, and checks that
+`/log/.foreign` answers `ENOEXEC` before a byte of it runs:
 
 ```text
 microos> exec /bin/hello one two

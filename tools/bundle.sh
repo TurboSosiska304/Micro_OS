@@ -43,6 +43,7 @@ BINARIES=(
     "micro_os.bin:micro_os.bin"
     "bootloader/bootloader.bin:bootloader.bin"
     "partition_table/partition-table.bin:partition-table.bin"
+    "esp-idf/port_esp32/progs.bin:progs.bin"
 )
 
 echo "==> the bundle goes to $OUT_DIR"
@@ -74,7 +75,13 @@ for name in flash.sh README.md; do
     cp -f "$STATIC/$name" "$OUT_DIR/$name"
     echo "    tools/bundle/$name -> $name"
 done
-chmod +x "$OUT_DIR/flash.sh"
+
+# The update tool is the one of the tree, not a copy in the folder of the
+# static files: it reads the bundle around itself and names no build.
+cp -f "$ROOT/tools/ota_usb.py" "$OUT_DIR/ota_usb.py"
+echo "    tools/ota_usb.py -> ota_usb.py"
+
+chmod +x "$OUT_DIR/flash.sh" "$OUT_DIR/ota_usb.py"
 
 # The version of the kernel, as the sources say it: the name of the images.
 VERSION="$(python3 - <<'PY'
@@ -98,20 +105,32 @@ MERGED="MicroOS-${VERSION}.bin"
 
 # One image for the board: the boot loader, the table of the partitions and
 # the application, at the offsets the flash expects. It covers 0x0..the end
-# of the application; the NVS and MicroFS live further and are not touched
-# by a flash of this file.
-FACTORY_OFFSET="$(awk -F',' '/^factory/ {gsub(/[ \t]/,"",$4); print $4}' partitions.csv)"
-FACTORY_OFFSET="${FACTORY_OFFSET:-0x10000}"
-FACTORY_SIZE="$(awk -F',' '/^factory/ {gsub(/[ \t]/,"",$5); print $5}' partitions.csv)"
-FACTORY_SIZE="${FACTORY_SIZE:-0x200000}"
+# of the application; the NVS, otadata, the programs and MicroFS live further
+# and are not touched by a flash of this file. The layout is the one of
+# ADR 0022: the first application slot (ota_0) carries the installed image.
+APP_OFFSET="$(awk -F',' '/^ota_0[ \t]*,/ {gsub(/[ \t]/,"",$4); print $4}' partitions.csv)"
+APP_OFFSET="${APP_OFFSET:-0x10000}"
+APP_SIZE_PARTITION="$(awk -F',' '/^ota_0[ \t]*,/ {gsub(/[ \t]/,"",$5); print $5}' partitions.csv)"
+APP_SIZE_PARTITION="${APP_SIZE_PARTITION:-0x140000}"
 
-# The application and the 4 KiB of the signature trailer share the factory
-# partition (ADR 0020). The check is here as well as in the build: a bundle
+# The application and the 4 KiB of the signature trailer share the slot
+# (ADR 0020, ADR 0022). The check is here as well as in the build: a bundle
 # made from an older build directory must not put the trailer over the app.
 APP_SIZE="$(stat -c %s "$OUT_DIR/micro_os.bin")"
-APP_LIMIT=$((FACTORY_SIZE - 0x1000))
+APP_LIMIT=$((APP_SIZE_PARTITION - 0x1000))
 if [ "$APP_SIZE" -gt "$APP_LIMIT" ]; then
     echo "the image is $APP_SIZE bytes and the partition leaves $APP_LIMIT for it and its trailer" >&2
+    exit 1
+fi
+
+# The programs of the board are their own partition (ADR 0018 §2, ADR 0022):
+# a bundle carries the image the build made, and it has to be exactly the
+# partition of the table, or the board reads a directory from the wrong place.
+PROGS_SIZE="$(awk -F',' '/^progs[ \t]*,/ {gsub(/[ \t]/,"",$5); print $5}' partitions.csv)"
+PROGS_SIZE="${PROGS_SIZE:-0x31000}"
+PROGS_BYTES="$(stat -c %s "$OUT_DIR/progs.bin")"
+if [ "$PROGS_BYTES" -ne $((PROGS_SIZE)) ]; then
+    echo "progs.bin is $PROGS_BYTES bytes and the partition is $PROGS_SIZE" >&2
     exit 1
 fi
 
@@ -120,14 +139,14 @@ python3 -m esptool --chip esp32 merge_bin -o "$OUT_DIR/$MERGED" \
     --flash_mode dio --flash_freq 40m --flash_size 8MB \
     0x1000 "$OUT_DIR/bootloader.bin" \
     0x8000 "$OUT_DIR/partition-table.bin" \
-    "$FACTORY_OFFSET" "$OUT_DIR/micro_os.bin"
+    "$APP_OFFSET" "$OUT_DIR/micro_os.bin"
 echo "    $MERGED ($(stat -c %s "$OUT_DIR/$MERGED") bytes)"
 
 # The signature of the bundle (ADR 0020). The key of a release is named by
 # MICROOS_SIGN_KEY and lives outside this tree; a development build signs with
 # the key of its own firmware (build/signing.key, the public half is compiled
 # into the image), and the x86-64 key is the last resort. The trailer of the
-# app is written beside it and flash.sh puts it at 0x20F000; a copy of the
+# app is written beside it and flash.sh puts it at 0x14F000; a copy of the
 # merged image's trailer is its .sig, so a person can verify the bytes with
 # `microos_sign verify`.
 X86_BUILD="${X86_BUILD:-$ROOT/build-x86}"
@@ -158,10 +177,10 @@ if [ -n "$SIGNER" ] && [ -n "$SIGN_KEY" ]; then
     echo "==> the signature of the application: micro_os.bin"
     "$SIGNER" pubkey --key "$SIGN_KEY" --pub "$OUT_DIR/microos-sign.pub"
 
-    # The board reads the trailer at the end of the factory partition, not
-    # after the app: the signature is written beside the image and flash.sh
-    # puts it at 0x20F000. The combined file is a step of the tool, not a file
-    # of the bundle.
+    # The board reads the trailer at the end of the running application slot,
+    # not after the app: the signature is written beside the image and
+    # flash.sh puts it at 0x14F000 of ota_0 (ADR 0020, ADR 0022). The
+    # combined file is a step of the tool, not a file of the bundle.
     "$SIGNER" sign --key "$SIGN_KEY" --in "$OUT_DIR/micro_os.bin" \
         --out "$OUT_DIR/micro_os.signed.bin" --sig "$OUT_DIR/micro_os.bin.sig"
     rm -f "$OUT_DIR/micro_os.signed.bin"
@@ -177,7 +196,7 @@ else
 fi
 
 # The sums of the binaries: they are the proof that the bundle is intact.
-SUMS=("$MERGED" micro_os.bin bootloader.bin partition-table.bin)
+SUMS=("$MERGED" micro_os.bin progs.bin bootloader.bin partition-table.bin)
 if [ -f "$OUT_DIR/micro_os.bin.sig" ]; then
     SUMS=(micro_os.bin.sig "${SUMS[@]}")
 fi

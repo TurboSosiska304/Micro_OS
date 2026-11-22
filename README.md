@@ -165,8 +165,8 @@ Micro_OS/
   of its owner, not on the open Internet. This is a decision of 1.0, not a
   missing build ([ADR 0011](docs/adr/0011-versioning-and-1.0.md)); the
   security model is in [SECURITY.md](SECURITY.md).
-* **The board has limits of its own**: no PMIC, 8 MB of flash with one
-  application slot and no OTA, a 200 mAh battery. They are in
+* **The board has limits of its own**: no PMIC, 8 MB of flash with two
+  application slots (the update is over USB), a 200 mAh battery. They are in
   [docs/ports/esp32](docs/ports/esp32/README.md).
 
 ## License
