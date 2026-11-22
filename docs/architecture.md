@@ -221,8 +221,10 @@ default (one core) and keeps working.
 
 A signal is a bit of `struct task` (`sig_pending`) and a disposition in a
 small table of the task, not a message on a queue: the sender - `kill(pid,
-sig)` - sets the bit under the critical section and wakes the task, and the
-receiver answers it in its own context. The points of delivery are the way
+sig)` - sets the bit with one atomic operation and wakes the task, and the
+receiver answers it in its own context. Every access to the bit and to the
+table is an atomic, because the critical section of a port is the interrupts
+of one core and not a lock of the machine (ADR 0012). The points of delivery are the way
 out of a system call (`ksys_call()`) and the tick of the timer when the
 interrupted code is a program of ring 3. The default action of `SIGINT`,
 `SIGTERM` and `SIGPIPE` is the end of the task with the status `128 + sig`;
