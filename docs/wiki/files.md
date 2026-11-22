@@ -44,6 +44,8 @@ microos> tree /
 | `/etc` | the configuration: a file name is the key and its content the value for a single setting, `key=value` lines for a system (`display`, `font`, `console`) |
 | `/etc/init.d` | the scripts of the init process, one command per line |
 | `/etc/fstab` | the volumes the boot mounts after the root, when the file is there |
+| `/etc/greeting.gz` | on x86-64: the gzip fixture of `/bin/zcat`, written by `tools/x86_image.py` with a fixed moment |
+| `/etc/licenses/zlib` | the license of zlib, beside the program that carries the library |
 | `/proc` | the kernel: `version`, `uptime`, `meminfo`, `tasks`, `modules`, one directory per task |
 | `/dev` | the devices: `tty0`, `null`, `input` and the ones the port adds |
 | `/log` | on the board: `start.log`, the log of the boot |

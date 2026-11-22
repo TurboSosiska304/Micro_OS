@@ -50,5 +50,6 @@ void test_pkg(void);
 void test_wifi(void);
 void test_sign(void);
 void test_progs(void);
+void test_zlib(void);
 
 #endif /* MICRO_OS_TESTS_H */

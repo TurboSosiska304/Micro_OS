@@ -60,6 +60,11 @@ FIRST_BOOT = [
     f"write /persist.txt {MESSAGE}",
     "ls /",
     "cat /persist.txt",
+    # The first port of somebody else's library: zcat inflates a .gz of the
+    # image with zlib and writes the bytes to a file of MicroFS, so the second
+    # boot reads the text that the first one inflated.
+    "exec /bin/zcat -o /persist.gz.txt /etc/greeting.gz",
+    "exec /bin/wc -c /persist.gz.txt",
 ]
 
 SECOND_BOOT = [
@@ -72,6 +77,8 @@ SECOND_BOOT = [
     "ls /dev",
     "cat /persist.txt",
     "fsck",
+    "cat /persist.gz.txt",
+    "exec /bin/wc -c /persist.gz.txt",
 ]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -217,7 +224,7 @@ def check(first: str, second: str) -> list:
     expect("every command of the first boot is answered", all(first_answers), "a command got no answer")
     expect(
         "the programs came with the image",
-        "hello" in first_answers[1] and "cat" in first_answers[1],
+        "hello" in first_answers[1] and "cat" in first_answers[1] and "zcat" in first_answers[1],
         first_answers[1],
     )
     expect(
@@ -241,6 +248,16 @@ def check(first: str, second: str) -> list:
         "the file is read back at the first boot",
         MESSAGE in first_answers[5],
         first_answers[5],
+    )
+    expect(
+        "zcat inflates a stream of the image",
+        "the program exited with 0" in first_answers[6] and "zcat:" not in first_answers[6],
+        first_answers[6],
+    )
+    expect(
+        "zcat writes every inflated byte",
+        "134 /persist.gz.txt" in first_answers[7],
+        first_answers[7],
     )
 
     # --- the second boot: the same image, the same machine
@@ -310,6 +327,19 @@ def check(first: str, second: str) -> list:
         "the volume is still consistent",
         "the volume is consistent" in second_answers[8],
         second_answers[8],
+    )
+    # The bytes zcat inflated in the first boot are a file of the volume in
+    # the second one: the text is the fixture of zlib, not a line of this run.
+    expect(
+        "the inflated file survived the reset",
+        "Micro OS: the first port of a program" in second_answers[9]
+        and "zlib 1.3.1, MicroFS and ring 3" in second_answers[9],
+        second_answers[9],
+    )
+    expect(
+        "the inflated file has every byte after the reset",
+        "134 /persist.gz.txt" in second_answers[10],
+        second_answers[10],
     )
 
     return checks

@@ -73,7 +73,7 @@ written when the project was an operating system for one board; the numbers
       its disk and asks for `/bin/hello` with `execve`; the shell runs the
       same file with `exec`
 * [x] Programs are files on a filesystem of the disk, not blobs of the
-      kernel: `make x86-disk` writes `/bin` (fifteen programs) and `/etc` with
+      kernel: `make x86-disk` writes `/bin` (seventeen programs) and `/etc` with
       `tools/mkfs_mfs.c`, and no boot installs an image
 * [x] `PATH` for the shell
 * [x] `argv` reaches the port, and the ABI of the entry is written down
@@ -291,6 +291,23 @@ written when the project was an operating system for one board; the numbers
 * [x] Programs are files on a filesystem of the disk, and a program is added
       by writing a file of the volume (`make x86-disk`), not by embedding it
       in the kernel
+* [x] The library of a program learned the three families a portable source
+      expects: an arena of its own (`malloc`/`free`, the bss of the image, not
+      `KSYS_MALLOC`), `errno` and `strerror`, and the streams of `fopen`; the
+      shims of `<string.h>`, `<stdlib.h>`, `<stdio.h>`, `<errno.h>`,
+      `<unistd.h>`, `<fcntl.h>` and `<sys/types.h>` are in
+      `components/libc/user/include`
+* [x] The first port of a program of somebody else: zlib 1.3.1 as a static
+      archive built by the compiler of the window (`cmake/userland.cmake`,
+      `third_party/zlib/port/`) and `/bin/zcat` on a `.gz` of MicroFS. The
+      recipe is [`porting-programs.md`](porting-programs.md), the library has
+      `tests/cases/test_zlib.c`, and `make x86-smoke` and
+      `make x86-disk-smoke` check the inflated bytes of a fixed fixture. Lua,
+      sbase and SQLite are the next copies of the recipe
+* [ ] The gaps of the next port: a formatter with `%f` and a precision, a
+      `malloc` larger than the bss of an image (`brk`/`mmap` of a program), a
+      `poll` for a library that waits on a pipe, and the package that ships
+      `zcat` with `/etc/licenses/zlib` beside it (`docs/debts.md`)
 
 ## The last major changes of the board (1.1.0)
 

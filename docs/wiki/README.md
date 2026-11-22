@@ -28,6 +28,7 @@ canonical Russian documents are in [`docs/ru/`](../ru/README.md).
 | understand `exec`, `MOX1` and ring 3 | [programs.md](programs.md) |
 | know which machine does what | [ports.md](ports.md) |
 | bring Micro OS to another machine | [porting.md](porting.md) |
+| port a program of somebody else (zlib, Lua, sbase) | [../porting-programs.md](../porting-programs.md) |
 | move a machine from 0.x to 1.0 | [`docs/migration.md`](../migration.md) |
 | read the syscall contract | [kernel-abi.md](kernel-abi.md) |
 | run the checks | [testing.md](testing.md) |
@@ -50,6 +51,7 @@ canonical Russian documents are in [`docs/ru/`](../ru/README.md).
 | **Programs** | [programs.md](programs.md) | `MOX1`, `/bin`, `exec`, ring 3, `fork` |
 | **Ports** | [ports.md](ports.md) | ESP32, x86-64, host, null: what runs where |
 | **Porting** | [porting.md](porting.md) | the contract, the bring-up order, the checks |
+| **Porting a program** | [../porting-programs.md](../porting-programs.md) | `third_party/`, the port layer, the archive, the tests, the license |
 | **Kernel and ABI** | [kernel-abi.md](kernel-abi.md) | the calls, the rights, `EFAULT`, contract 1.9 |
 | **Testing** | [testing.md](testing.md) | `make ci`, the smoke tests, the device test |
 | **Troubleshooting** | [troubleshooting.md](troubleshooting.md) | symptom, cause, what to do |

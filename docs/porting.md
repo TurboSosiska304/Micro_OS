@@ -8,6 +8,10 @@ chips. Nothing above the port is edited — if a port needs a change in
 `components/kernel/`, the boundary is wrong
 ([ADR 0004](adr/0004-portable-boundary.md)).
 
+Porting a **program** (a library and a command of somebody else) is a
+different recipe: [`porting-programs.md`](porting-programs.md), the port of
+zlib and `/bin/zcat`.
+
 The tree carries four ports, and they are the examples:
 
 | Port | What it is | Build |

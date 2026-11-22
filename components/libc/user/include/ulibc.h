@@ -37,6 +37,7 @@
 #ifndef MICRO_OS_LIBC_USER_ULIBC_H
 #define MICRO_OS_LIBC_USER_ULIBC_H
 
+#include <stdarg.h>
 #include <stddef.h>
 
 /* The numbers and the structures of the calls, from the kernel's own header. */
@@ -129,19 +130,75 @@ int strncmp(const char *left, const char *right, size_t count);
  * text itself, as in the library of a Unix-like system.
  */
 char *strstr(const char *text, const char *needle);
+char *strcpy(char *dest, const char *source);
+char *strncpy(char *dest, const char *source, size_t count);
+char *strcat(char *dest, const char *source);
+char *strchr(const char *text, int byte);
+char *strrchr(const char *text, int byte);
 void *memcpy(void *dest, const void *source, size_t count);
+void *memmove(void *dest, const void *source, size_t count);
 void *memset(void *dest, int byte, size_t count);
+int memcmp(const void *left, const void *right, size_t count);
+void *memchr(const void *memory, int byte, size_t count);
+
+/* --- the allocation of a program --- */
+
+/*
+ * The arena lives in the bss of the program, not in the kernel: a block of
+ * `KSYS_MALLOC` is memory of ring 0 and a program could not read it. The
+ * size is a compile-time setting (`ULIBC_HEAP_SIZE`), 256 KiB by default,
+ * because the bss of an image is capped at a megabyte by the format.
+ */
+void *malloc(size_t size);
+void *calloc(size_t count, size_t size);
+void *realloc(void *block, size_t size);
+void free(void *block);
+
+/* --- the error number --- */
+
+int *__ulibc_errno(void);
+#define errno (*__ulibc_errno())
+char *strerror(int code);
+
+/* --- the files of the VFS --- */
+
+typedef struct ulibc_file FILE;
+
+extern FILE *stdin;
+extern FILE *stdout;
+extern FILE *stderr;
+
+FILE *fopen(const char *path, const char *mode);
+int fclose(FILE *stream);
+size_t fread(void *buffer, size_t size, size_t count, FILE *stream);
+size_t fwrite(const void *buffer, size_t size, size_t count, FILE *stream);
+int fgetc(FILE *stream);
+int fputc(int byte, FILE *stream);
+char *fgets(char *buffer, int size, FILE *stream);
+int fputs(const char *text, FILE *stream);
+int feof(FILE *stream);
+int ferror(FILE *stream);
+void clearerr(FILE *stream);
+int fflush(FILE *stream);
+int fseek(FILE *stream, long offset, int whence);
+long ftell(FILE *stream);
+void rewind(FILE *stream);
 
 /* --- the console --- */
 
 /*
- * The conversions of the formatter: %d, %i, %u, %x, %X, %c, %s, %p and %%.
- * A width and the flags '-' and '0' are honoured; the length is 'l' or 'z'
- * for a long, and the answer is the number of bytes written or a negative
- * error. The text goes to the console through write(1, ...), in pieces of a
- * fixed buffer, so no allocation is involved.
+ * The conversions of the formatter: %d, %i, %u, %o, %x, %X, %c, %s, %p and
+ * %%. A width and the flags '-' and '0' are honoured; the length is 'l' or
+ * 'll' for a long or a long long, 'z' for a size_t, and the answer is the
+ * number of bytes written or a
+ * negative error. The text goes to the console through write(1, ...), in
+ * pieces of a fixed buffer, so no allocation is involved. snprintf and
+ * vsnprintf write the same text to a buffer of the caller, with the length
+ * the whole text would have had, as the C library promises.
  */
 int printf(const char *format, ...);
+int snprintf(char *buffer, size_t size, const char *format, ...);
+int vsnprintf(char *buffer, size_t size, const char *format, va_list args);
 int puts(const char *text);
 
 #endif /* MICRO_OS_LIBC_USER_ULIBC_H */

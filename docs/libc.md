@@ -17,24 +17,44 @@ A program cannot call those functions: it was not compiled into the kernel and
 their addresses are not its own. Its library is `components/libc/user` (ADR
 0016): `_start`, the door of the call, `open`, `close`, `read`, `write`,
 `lseek`, `readdir`, `stat`, `mkdir`, `unlink`, `getcwd`, `getpid`, `uptime`,
-`execve`, `exit`, `printf`, `puts` and the strings (`strlen`, `strcmp`,
-`strncmp`, `strstr`, `memcpy`, `memset`), with the numbers of `kernel/ksys.h`
-and no allocation, no `errno` and no floating point. The door is `int $0x80`
-on x86-64 and the address of a function of the port on the board (ADR 0018);
-the numbers and the arguments of the calls are the same on both machines. The
-two libraries share the header of the ABI and nothing else, and that is
-deliberate: one runs with the kernel under it, the other has nothing but the
-gate.
+`execve`, `exit`, `printf`, `puts`, `snprintf`, the strings, the allocation
+and the streams. The door is `int $0x80` on x86-64 and the address of a
+function of the port on the board (ADR 0018); the numbers and the arguments
+of the calls are the same on both machines. The two libraries share the
+header of the ABI and nothing else, and that is deliberate: one runs with the
+kernel under it, the other has nothing but the gate.
 
 The library of a program grew with its utilities (0.7): `stat` to tell a file
 from a directory (`rm` refuses a directory without `-r`), `mkdir` and
 `unlink` for the tree (`mkdir`, `rm`), `getcwd` for the directory of the task
-(`pwd`), and `strstr` for a word in a line (`grep`). The list is what the ten
-programs of `/bin` use and not a standard library: a function without a caller
-of this tree is not in it. `cat`, `wc`, `head` and `grep` read descriptor 0
-when they are given no file, which is the shape of a filter; a fresh table of
-a program has no descriptor 0 yet, so that read is `EBADF` until a redirection
-opens it ([`docs/debts.md`](debts.md)).
+(`pwd`), and `strstr` for a word in a line (`grep`). The first port of a
+program of somebody else (zlib, `/bin/zcat`) added the three families a
+portable source expects, and they are still small enough for the board
+because a program selects the files it links:
+
+| Part | Files | What it is |
+|---|---|---|
+| the allocation | `src/malloc.c` | an arena in the bss of the program (`-DULIBC_HEAP_SIZE`, 256 KiB by default, 512 KiB for `zcat`), not `KSYS_MALLOC`: the block of the kernel is memory of ring 0 and a program cannot read it |
+| the error | `src/errno.c` | `errno` as a global of the program and `strerror`; the calls keep the negative number of the ABI and the wrappers also store its magnitude, so a portable library reads `errno` after `read` |
+| the streams | `src/file.c` | `fopen`, `fclose`, `fread`, `fwrite`, `fgetc`, `fputc`, `fgets`, `fputs`, `feof`, `ferror`, `fseek`, `ftell`, `rewind` over a descriptor; the binary mode is accepted and ignored because no file of the system translates a byte |
+
+The names a portable source includes (`<string.h>`, `<stdlib.h>`, `<stdio.h>`,
+`<errno.h>`, `<unistd.h>`, `<fcntl.h>`, `<sys/types.h>`) are thin headers in
+`components/libc/user/include`, each one including `ulibc.h`. The body of the
+library is still `ulibc.h`, and a program that wants the functions of the
+system includes `ulibc.h` and not the headers of the host.
+
+The formatter is the one of a program: `%d %i %u %o %x %X %c %s %p %%`, the
+flags `-` and `0`, the width, and the length `l`/`z`. There is no precision
+and no floating point, and the programs are built with `-mgeneral-regs-only`.
+
+The list is what the programs of `/bin` and the first port use and not a
+standard library: a function without a caller of this tree is not in it.
+`cat`, `wc`, `head` and `grep` read descriptor 0 when they are given no file,
+which is the shape of a filter; a fresh table of a program has no descriptor
+0 yet, so that read is `EBADF` until a redirection opens it
+([`docs/debts.md`](debts.md)). The recipe of the next port is
+[`porting-programs.md`](porting-programs.md).
 
 ## The names
 

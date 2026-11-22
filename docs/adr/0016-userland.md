@@ -125,7 +125,9 @@ The x86-64 port has sixteen images in `/bin` of the disk it boots from. They
 are not embedded in the kernel: `make x86-disk` writes them into a MicroFS
 volume of a raw image (`tools/mkfs_mfs.c`, which links `components/mfs`), the
 boot mounts that volume at `/` and reads `/bin/hello` with `execve`. Ten of
-them are ordinary C programs of this library and not creatures of the port:
+them are ordinary C programs of this library and not creatures of the port
+(the port of zlib added a seventeenth image, `/bin/zcat`, without changing the
+format or the entry; [`docs/porting-programs.md`](../porting-programs.md)):
 
 | File | What it exercises |
 |---|---|

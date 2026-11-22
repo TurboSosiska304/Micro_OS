@@ -76,7 +76,7 @@ to `x86-64`; a name the format does not know is refused before an image is
 written. `--data-base` is for a port whose data is a window of its own (the
 board): the data no longer follows the text, so the script checks its address
 against that number instead of the contiguous rule and also checks where the
-bss will be cleared. The x86-64 port builds its sixteen images this way: the
+bss will be cleared. The x86-64 port builds its seventeen images this way: the
 object is compiled for the window, linked with `programs/program.ld`, turned
 into a `.mox` by the script (`--base 0x02000000 --arch x86-64`), and written
 into the MicroFS volume of the disk by `make x86-disk` (see below). The kernel
@@ -99,7 +99,7 @@ make x86-smoke     # the same, driven by the smoke test
 
 `tools/mkfs_mfs.c` writes the image: an MBR with one Linux partition at LBA
 2048, a MicroFS volume in it, `/bin`, `/etc` and an empty `/etc/init.d`, the
-sixteen `.mox` images of the build written to `/bin` with mode `0755`, and
+seventeen `.mox` images of the build written to `/bin` with mode `0755`, and
 the settings of the machine in `/etc/setting`. It does not repeat the layout
 of MicroFS: it is a block device over a range of the file, and
 `components/mfs` formats it and writes the objects through `mfs_create`,
@@ -126,7 +126,7 @@ never changed.
 ## `/bin` and the boot
 
 The x86-64 port mounts the MicroFS volume of its disk at `/` and finds
-`/bin` already there: the sixteen images are files the tool wrote, with the
+`/bin` already there: the seventeen images are files the tool wrote, with the
 mode of a program (`0755`), and no boot creates one:
 
 | File | What it proves |
@@ -147,11 +147,15 @@ mode of a program (`0755`), and no boot creates one:
 | `/bin/rm` | a name through `unlink`; `-r` walks a directory with `readdir` |
 | `/bin/spawn` | `execve` from a program, with an environment of its own |
 | `/bin/wc` | the lines, words and bytes of a source (`-l`, `-w`, `-c`) or of descriptor 0 |
+| `/bin/zcat` | a `.gz` of the VFS inflated by zlib 1.3.1 and written to the console or a file |
 
 The first five talk to the kernel through `programs/prog.h`, because what they
-test is the raw door, the fault, the fork, the edge and the signals. The last
-ten are ordinary C programs linked against `components/libc/user`
-([ADR 0016](../adr/0016-userland.md)). Every one of them reads descriptor 0
+test is the raw door, the fault, the fork, the edge and the signals. The rest
+are ordinary C programs linked against `components/libc/user`
+([ADR 0016](../adr/0016-userland.md)); `zcat` is also linked against zlib, the
+first library of somebody else
+([`docs/porting-programs.md`](../porting-programs.md)). Every one of them
+reads descriptor 0
 when it is given no file (or `-`); `execve` carries the table of the caller, so
 a redirect or a pipe of the shell fills it (`cat < file`, `ls /bin | wc -l`,
 [ADR 0017](../adr/0017-shell-pipelines.md)). A program at the prompt with no
@@ -160,6 +164,14 @@ redirect still has no descriptor 0 of the console.
 The boot then asks for `/bin/hello` with `ksys_execve()`: the stat, the check
 of the mode, the read through the VFS, the parse and the entry are the ones of
 the call and not a copy of them. The shell runs the same file with `exec`.
+
+The volume also carries `/etc/greeting.gz`, the fixture of `zcat`: a gzip
+stream of a fixed text, written by `tools/x86_image.py` with `mtime` from
+`SOURCE_DATE_EPOCH` and no file name in the header, so two builds of the image
+write the same bytes. `zcat -o FILE` inflates it into a file of MicroFS and
+`zcat -t` checks it; the smoke tests compare the count and the text of the
+inflated bytes. `/etc/licenses/zlib` is the zlib license beside the program
+that carries the library, and `docs/licensing.md` has the row.
 
 ## The board: Xtensa code without an MMU
 
@@ -253,6 +265,11 @@ microos> exec /bin/wc -l /etc/setting
 the program has finished
 microos> exec /bin/pwd
 /
+the program has finished
+microos> exec /bin/zcat /etc/greeting.gz
+Micro OS: the first port of a program
+zlib 1.3.1, MicroFS and ring 3
+the bytes of this file were inflated by the library of the guest
 the program has finished
 microos> exec /bin/spawn
 spawn: starting /bin/hello with its own environment
@@ -351,9 +368,17 @@ the library of the kernel, which calls `ksys_*` and has no address in ring 3:
 |---|---|
 | `include/ulibc.h` | the prototypes and the numbers of the calls, from `kernel/ksys.h` |
 | `src/start.c` | `_start`: `main(argc, argv, envp)`, then `exit`; on the board also the door, as the first argument |
-| `src/syscall.c` | `int $0x80` on x86-64 and the door of the port on the board; `open`, `close`, `read`, `write`, `lseek`, `readdir`, `stat`, `mkdir`, `unlink`, `getcwd`, `getpid`, `uptime`, `execve`, `exit` |
-| `src/stdio.c` | `printf` and `puts` over a buffer of 128 bytes and `write(1, ...)` |
-| `src/string.c` | `strlen`, `strcmp`, `strncmp`, `strstr`, `memcpy`, `memset` |
+| `src/syscall.c` | `int $0x80` on x86-64 and the door of the port on the board; `open`, `close`, `read`, `write`, `lseek`, `readdir`, `stat`, `mkdir`, `unlink`, `getcwd`, `getpid`, `uptime`, `execve`, `exit`; the magnitude of a negative result also goes to `errno` |
+| `src/stdio.c` | `printf`, `puts`, `snprintf` and `vsnprintf` over a buffer of 128 bytes and `write(1, ...)`; `%d %i %u %o %x %X %c %s %p %%` and the flags `-`/`0` |
+| `src/string.c` | `strlen`, `strcmp`, `strncmp`, `strstr`, `strcpy`, `strncpy`, `strcat`, `strchr`, `strrchr`, `memcpy`, `memmove`, `memset`, `memcmp`, `memchr` |
+| `src/errno.c` | `errno` as a global of the program and `strerror` |
+| `src/malloc.c` | the arena of the program in its bss (`ULIBC_HEAP_SIZE`), `malloc`, `calloc`, `realloc`, `free` |
+| `src/file.c` | `fopen`, `fclose`, `fread`, `fwrite`, `fgetc`, `fputc`, `fgets`, `fputs`, `feof`, `ferror`, `fseek`, `ftell`, `rewind` over a descriptor |
+
+The headers a portable source includes (`<string.h>`, `<stdlib.h>`,
+`<stdio.h>`, `<errno.h>`, `<unistd.h>`, `<fcntl.h>`, `<sys/types.h>`) are in
+`include/`, each one including `ulibc.h`; a program of the tree includes
+`ulibc.h` directly, and a ported program includes the names it knows.
 
 ```c
 #include "ulibc.h"
@@ -372,12 +397,17 @@ int main(int argc, char *const argv[], char *const envp[])
 }
 ```
 
-The functions return the result of the call, so a negative number is `-errno`:
-the library has no `errno` of its own. A program of the library is built by
+The functions return the result of the call, so a negative number is `-errno`;
+the same number is also kept in `errno`, which a portable library reads after
+the call. The allocation is an arena of the bss of the program, not
+`KSYS_MALLOC`: the block of the kernel is memory of ring 0 and a program
+cannot read it. A program of the library is built by
 `ports/port_x86_64/CMakeLists.txt` (the runtime sources are linked with the
 file of the program, the entry is `_start`), and the image is a `.mox` like
 every other. There is no dynamic linker: each image carries its copy of the
-library.
+library. The recipe of a library of somebody else is
+[`docs/porting-programs.md`](../porting-programs.md); `zcat` and zlib are the
+first.
 
 ## The address space and `fork`
 
@@ -413,9 +443,10 @@ plan to pretend otherwise.
   program. The format is ready for the second machine; the port is not.
 * **No libc of the host.** A program has the calls of the ABI, the library of
   `components/libc/user` and nothing else. The library is not a standard C
-  library: no allocation, no files of a stream, no `errno`, no floating point
-  (the programs are built with `-mgeneral-regs-only`), and the formatter has
-  no precision and no `*` width.
+  library: the allocation is a fixed arena of the program, the streams are a
+  descriptor and not a buffer, and there is no floating point (the programs
+  are built with `-mgeneral-regs-only`); the formatter has no precision and
+  no `*` width.
 * **No inherited descriptors.** A program is a task with a table of four
   descriptors of its own, and the shell does not pass its own table to it.
   `cat`, `wc`, `head` and `grep` read descriptor 0 when they are given no file
@@ -423,8 +454,10 @@ plan to pretend otherwise.
   until a redirection or an inherited table opens it. The descriptors 1 and 2
   are the console; `pipe`, `dup2` and the inheritance are a debt of the
   milestone after this one.
-* **No `mmap` and no `brk`.** A program cannot ask for a range of its own, and
-  the library has no `malloc`.
+* **No `mmap` and no `brk`.** A program cannot ask for a range of its own, so
+  the allocator is the arena of its bss and a library that allocates more
+  than `ULIBC_HEAP_SIZE` needs a larger program or the ranges the kernel does
+  not have yet.
 * **No shell `export`.** The environment of every program is the four words of
   the kernel; a program that wants its own passes one to `execve`.
 * **No protection by SMAP yet.** The edge checks the page tables of the caller
