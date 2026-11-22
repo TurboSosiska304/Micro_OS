@@ -138,7 +138,7 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 `tools/device-test.sh` builds, flashes and reads the console, and prints
 `RESULT: PASS` when the self test, the hardware doctor and the shell are up.
 The layout of the flash is in [`partitions.csv`](../../partitions.csv):
-two application slots of 1.25 MiB, 196 KiB of programs in `progs` and 5.25 MiB
+two application slots of 1.125 MiB, 132 KiB of programs in `progs` and 5.56 MiB
 of MicroFS (ADR 0022). The board's
 own README is [`docs/ports/esp32/README.md`](../ports/esp32/README.md), the
 pins and quirks are in

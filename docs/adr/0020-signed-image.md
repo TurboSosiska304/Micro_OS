@@ -104,7 +104,7 @@ TweetNaCl needs only integer operations; the loader is compiled with
   (`0x20F000`). The board verifies it at the beginning of `app_main`, before
   the filesystem and the shell (section 6). In 1.1 the board has two
   application slots (ADR 0022): the trailer is the last 4 KiB of the slot the
-  board is running (`0x14F000` for `ota_0`, `0x28F000` for `ota_1`), and
+  board is running (`0x12F000` for `ota_0`, `0x24F000` for `ota_1`), and
   `tools/ota_usb.py` writes it with the image of an update.
 * **the merged board bundle** (`MicroOS-<version>.bin`): `tools/bundle.sh`
   appends the trailer and writes `<image>.sig` and `checksums.txt`. This is a

@@ -227,7 +227,7 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
         COMMAND "${MICRO_OS_PYTHON}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/progs_image.py"
                 --output "${MICRO_OS_PROGS_IMAGE}"
-                --partition-size 0x31000 --slot-size 0x10000
+                --partition-size 0x21000 --slot-size 0x10000
                 "hello=${CMAKE_CURRENT_BINARY_DIR}/hello.mox"
                 "cat=${CMAKE_CURRENT_BINARY_DIR}/cat.mox"
         DEPENDS ${MICRO_OS_PROGRAM_IMAGES}

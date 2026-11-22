@@ -291,7 +291,7 @@ written when the project was an operating system for one board; the numbers
 > [`docs/releases/1.1.md`](releases/1.1.md).
 
 * [x] The layout of 1.1 ([ADR 0022](adr/0022-layout-of-1.1.md)): two equal
-      application slots of 1.25 MiB, `progs` of 196 KiB and 5.25 MiB of
+      application slots of 1.125 MiB, `progs` of 132 KiB and 5.56 MiB of
       MicroFS; the one-time move of a board of 1.0 and its warning in the
       release notes
 * [x] A safe update over USB (`tools/ota_usb.py`) with the rollback of a boot

@@ -19,7 +19,7 @@ parentheses is the reason.
 | | ESP32 (board) | x86-64 (QEMU) | host (simulator) | null |
 |---|---|---|---|---|
 | shell | UART and TFT | VGA, PS/2, COM1 | stdin/stdout | - |
-| MicroFS | the `mfs` partition, 5.25 MiB | the disk, or 512 KB of RAM | a file, 512 KB | - |
+| MicroFS | the `mfs` partition, 5.56 MiB | the disk, or 512 KB of RAM | a file, 512 KB | - |
 | `/proc`, `/dev` | yes | yes | yes | - |
 | `/etc` and its store | files, NVS behind them | files, no store | files, a file per key | - |
 | `execve` | Xtensa code from `progs`, no protection | ring 3, own page tables | `ENOSYS` (a harness) | `ENOSYS` |
@@ -61,8 +61,8 @@ ADR 0022), an IR receiver (the board carries the emitter only; `ir rx` waits
 for an element on G26), the enclosure modes, a second user. The alarm of the BM8563 turns the board on from
 off; a sleeping board obeys it because the firmware sets the timer of the chip
 for the moment of the match, not because the INT of the clock is a wake line.
-The flash is 8 MB: two application slots of 1.25 MiB, `progs` 196 KiB and
-MicroFS 5.25 MiB (ADR 0022). The details, the pins and the quirks are in
+The flash is 8 MB: two application slots of 1.125 MiB, `progs` 132 KiB and
+MicroFS 5.56 MiB (ADR 0022). The details, the pins and the quirks are in
 [`docs/ports/esp32/README.md`](../ports/esp32/README.md) and
 [`docs/ports/esp32/hardware.md`](../ports/esp32/hardware.md).
 

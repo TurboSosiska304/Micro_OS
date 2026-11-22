@@ -51,9 +51,9 @@ if(MICRO_OS_PLATFORM STREQUAL "ESP32")
 
     # The application and the 4 KiB of its trailer have to fit the slot of
     # ota_0: the flash layout is a file of the tree, and the check reads it
-    # instead of naming 0x140000 a second time. The two slots are equal
+    # instead of naming 0x120000 a second time. The two slots are equal
     # (ADR 0022), so the answer is the same for ota_1.
-    set(MICRO_OS_APP_SLOT_SIZE 0x140000)
+    set(MICRO_OS_APP_SLOT_SIZE 0x120000)
     file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/partitions.csv" _partition_lines)
     foreach(_line IN LISTS _partition_lines)
         if(_line MATCHES "^ota_0[ \t]*,")

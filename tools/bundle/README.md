@@ -11,8 +11,8 @@ and run the flash script.
 | `bootloader.bin` | Second stage bootloader, for the tools that want the parts | `0x1000` |
 | `partition-table.bin` | Partition table, for the tools that want the parts | `0x8000` |
 | `micro_os.bin` | The kernel itself, for the tools that want the parts | `0x10000` |
-| `micro_os.bin.sig` | The 120-byte trailer of `micro_os.bin` (magic, size, SHA-256, Ed25519) | `0x14F000` |
-| `progs.bin` | The programs of `/bin`: the `.mox` files and the directory | `0x290000` |
+| `micro_os.bin.sig` | The 120-byte trailer of `micro_os.bin` (magic, size, SHA-256, Ed25519) | `0x12F000` |
+| `progs.bin` | The programs of `/bin`: the `.mox` files and the directory | `0x250000` |
 | `MicroOS-<version>.bin.sig` | The trailer of the merged distribution image | - |
 | `microos-sign.pub` | The public key of the build, in hex, for `microos_sign verify` | - |
 | `MicroOS-x86_64-<version>.tar.gz` | The same kernel for QEMU: loader, kernel, `run.sh` and a readme | - |
@@ -21,8 +21,8 @@ The board checks `micro_os.bin` at the beginning of `app_main`, before the
 filesystem and the shell: it reads the trailer from the last 4 KiB of the
 application slot it is running, and verifies the SHA-256 and Ed25519 with the
 public key compiled into the firmware. `flash.sh` writes the trailer at
-`0x14F000` of `ota_0`; an update writes the trailer at the end of the other
-slot (`0x28F000`). With `CONFIG_MICRO_OS_REQUIRE_SIGNATURE=y` (the default) a
+`0x12F000` of `ota_0`; an update writes the trailer at the end of the other
+slot (`0x24F000`). With `CONFIG_MICRO_OS_REQUIRE_SIGNATURE=y` (the default) a
 missing or wrong trailer is not kept: the slot is marked invalid and the board
 returns to the other one, and with `=n` the console warns and the board
 continues (ADR 0020, ADR 0022). This is an electronic check of the
@@ -36,8 +36,8 @@ the settings of the board survive a flash and an update.
 
 ## The layout of the flash
 
-The whole 8 MB are used: two equal application slots of 1.25 MiB, 196 KB
-for the programs of `/bin` and **5.25 MiB of MicroFS** for the user
+The whole 8 MB are used: two equal application slots of 1.125 MiB, 132 KiB
+for the programs of `/bin` and **5.56 MiB of MicroFS** for the user
 (ADR 0022).
 
 ```
@@ -52,15 +52,15 @@ for the programs of `/bin` and **5.25 MiB of MicroFS** for the user
 0x00E000  +--------------------+
           | otadata            |  8 KB
 0x010000  +--------------------+
-          | ota_0              |  1.25 MiB
-0x14F000  |   signature trailer|  4 KB
-0x150000  +--------------------+
-          | ota_1              |  1.25 MiB
-0x28F000  |   signature trailer|  4 KB
-0x290000  +--------------------+
-          | progs              |  196 KB
-0x2C1000  +--------------------+
-          | MicroFS            |  5.25 MiB
+          | ota_0              |  1.125 MiB
+0x12F000  |   signature trailer|  4 KB
+0x130000  +--------------------+
+          | ota_1              |  1.125 MiB
+0x24F000  |   signature trailer|  4 KB
+0x250000  +--------------------+
+          | progs              |  132 KB
+0x271000  +--------------------+
+          | MicroFS            |  5.56 MiB
 0x800000  +--------------------+
 ```
 

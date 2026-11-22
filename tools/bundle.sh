@@ -111,7 +111,7 @@ MERGED="MicroOS-${VERSION}.bin"
 APP_OFFSET="$(awk -F',' '/^ota_0[ \t]*,/ {gsub(/[ \t]/,"",$4); print $4}' partitions.csv)"
 APP_OFFSET="${APP_OFFSET:-0x10000}"
 APP_SIZE_PARTITION="$(awk -F',' '/^ota_0[ \t]*,/ {gsub(/[ \t]/,"",$5); print $5}' partitions.csv)"
-APP_SIZE_PARTITION="${APP_SIZE_PARTITION:-0x140000}"
+APP_SIZE_PARTITION="${APP_SIZE_PARTITION:-0x120000}"
 
 # The application and the 4 KiB of the signature trailer share the slot
 # (ADR 0020, ADR 0022). The check is here as well as in the build: a bundle
@@ -127,7 +127,7 @@ fi
 # a bundle carries the image the build made, and it has to be exactly the
 # partition of the table, or the board reads a directory from the wrong place.
 PROGS_SIZE="$(awk -F',' '/^progs[ \t]*,/ {gsub(/[ \t]/,"",$5); print $5}' partitions.csv)"
-PROGS_SIZE="${PROGS_SIZE:-0x31000}"
+PROGS_SIZE="${PROGS_SIZE:-0x21000}"
 PROGS_BYTES="$(stat -c %s "$OUT_DIR/progs.bin")"
 if [ "$PROGS_BYTES" -ne $((PROGS_SIZE)) ]; then
     echo "progs.bin is $PROGS_BYTES bytes and the partition is $PROGS_SIZE" >&2
@@ -146,7 +146,7 @@ echo "    $MERGED ($(stat -c %s "$OUT_DIR/$MERGED") bytes)"
 # MICROOS_SIGN_KEY and lives outside this tree; a development build signs with
 # the key of its own firmware (build/signing.key, the public half is compiled
 # into the image), and the x86-64 key is the last resort. The trailer of the
-# app is written beside it and flash.sh puts it at 0x14F000; a copy of the
+# app is written beside it and flash.sh puts it at 0x12F000; a copy of the
 # merged image's trailer is its .sig, so a person can verify the bytes with
 # `microos_sign verify`.
 X86_BUILD="${X86_BUILD:-$ROOT/build-x86}"
@@ -179,7 +179,7 @@ if [ -n "$SIGNER" ] && [ -n "$SIGN_KEY" ]; then
 
     # The board reads the trailer at the end of the running application slot,
     # not after the app: the signature is written beside the image and
-    # flash.sh puts it at 0x14F000 of ota_0 (ADR 0020, ADR 0022). The
+    # flash.sh puts it at 0x12F000 of ota_0 (ADR 0020, ADR 0022). The
     # combined file is a step of the tool, not a file of the bundle.
     "$SIGNER" sign --key "$SIGN_KEY" --in "$OUT_DIR/micro_os.bin" \
         --out "$OUT_DIR/micro_os.signed.bin" --sig "$OUT_DIR/micro_os.bin.sig"

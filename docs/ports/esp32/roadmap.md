@@ -61,8 +61,8 @@ The pins, the chips and the quirks of the board are in
 * [x] MOX1 version 2: the field of the machine in the header (x86-64, Xtensa),
       `mkprog --arch`, and an image of another machine is `ENOEXEC` before it
       runs (the contract of the port is 1.8)
-* [x] A `progs` partition of 196 KiB at `0x290000`, 64 KiB aligned, with
-      three 64 KiB slots and a directory of name, offset and size in its last
+* [x] A `progs` partition of 132 KiB at `0x250000`, 64 KiB aligned, with
+      two 64 KiB slots and a directory of name, offset and size in its last
       4 KiB; the boot mounts it read-only at `/bin` and the images are no
       longer blobs of the firmware (`tools/progs_image.py`, ADR 0022). The
       loader copies the bytes into the windows; the mapping of flash as
@@ -90,8 +90,8 @@ our own, the higher half, NX and full SMP are not for it. ADR 0018.
 
 ## P5 - Updates (done over USB; the network is open)
 
-* [x] Two equal application slots of 1.25 MiB (`ota_0`, `ota_1`), otadata
-      and a 5.25 MiB MicroFS; the one-time move of a board of 1.0 and its
+* [x] Two equal application slots of 1.125 MiB (`ota_0`, `ota_1`), otadata
+      and a 5.56 MiB MicroFS; the one-time move of a board of 1.0 and its
       warning (ADR 0022)
 * [x] The update of the inactive slot over USB (`tools/ota_usb.py`), the
       state `NEW` in otadata, the confirmation at the shell

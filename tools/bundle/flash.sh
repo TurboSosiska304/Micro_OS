@@ -18,12 +18,12 @@
 #   0x008000  partition table
 #   0x009000  NVS (kept: it is not written)
 #   0x00E000  otadata, erased so the board starts in ota_0
-#   0x010000  ota_0, the application (1.25 MiB)
-#   0x14F000  the signature trailer of ota_0 (the last 4 KiB of the slot)
-#   0x150000  ota_1, the second application slot (1.25 MiB, untouched here)
-#   0x28F000  the signature trailer of ota_1
-#   0x290000  progs, the programs of /bin (0x31000)
-#   0x2C1000  MicroFS, the rest of the flash (5.25 MiB)
+#   0x010000  ota_0, the application (1.125 MiB)
+#   0x12F000  the signature trailer of ota_0 (the last 4 KiB of the slot)
+#   0x130000  ota_1, the second application slot (1.125 MiB, untouched here)
+#   0x24F000  the signature trailer of ota_1
+#   0x250000  progs, the programs of /bin (0x21000)
+#   0x271000  MicroFS, the rest of the flash (5.56 MiB)
 #
 # The application is written to ota_0 and otadata is erased: this script
 # installs a board, it does not update one. tools/ota_usb.py updates the
@@ -107,12 +107,12 @@ TABLE_ADDR=0x8000
 OTADATA_ADDR=0xE000
 OTADATA_SIZE=0x2000
 APP_ADDR=0x10000
-APP_SIZE=0x140000
-TRAILER_ADDR=0x14F000
-PROGS_ADDR=0x290000
-PROGS_SIZE=0x31000
-MFS_ADDR=0x2C1000
-MFS_SIZE=0x53F000
+APP_SIZE=0x120000
+TRAILER_ADDR=0x12F000
+PROGS_ADDR=0x250000
+PROGS_SIZE=0x21000
+MFS_ADDR=0x271000
+MFS_SIZE=0x58F000
 
 for name in bootloader.bin partition-table.bin micro_os.bin progs.bin; do
     if [ ! -f "$HERE/$name" ]; then

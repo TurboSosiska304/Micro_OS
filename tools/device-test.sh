@@ -108,7 +108,7 @@ if [ "$DEVICE_POLICY" = "signed" ]; then
     BUNDLE="$(mktemp -d "${TMPDIR:-/tmp}/microos-bundle.XXXXXX")"
     trap 'rm -rf "$BUNDLE"' EXIT
     "$ROOT/tools/bundle.sh" "$BUILD_DIR" "$BUNDLE"
-    echo "==> flashing $PORT (the parts, otadata erased, the trailer at 0x14F000)"
+    echo "==> flashing $PORT (the parts, otadata erased, the trailer at 0x12F000)"
     "$BUNDLE/flash.sh" "$PORT"
 else
     # Erase the 4 KiB where the trailer lives and otadata, so the raw image
@@ -125,7 +125,7 @@ else
         echo "==> flashing $PORT without a trailer"
         idf.py -B "$BUILD_DIR" -p "$PORT" flash
     fi
-    python3 -m esptool --chip esp32 -p "$PORT" write_flash 0x14F000 "$NO_TRAILER"
+    python3 -m esptool --chip esp32 -p "$PORT" write_flash 0x12F000 "$NO_TRAILER"
     python3 -m esptool --chip esp32 -p "$PORT" erase_region 0xE000 0x2000
 fi
 

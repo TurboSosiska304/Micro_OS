@@ -16,13 +16,14 @@
  *                               name[24], offset u32, size u32, reserved u32
  *
  * The directory is the last 4 KiB of the partition, and the files are the
- * 64 KiB slots before it: offset 0 is the first program, 0x10000 the second,
- * 0x20000 the third. The directory is at the end for two reasons: every file
+ * two 64 KiB slots before it: offset 0 is the first program and 0x10000 the
+ * second. The directory is at the end for two reasons: every file
  * is then on a 64 KiB boundary of the flash, which is what
  * `esp_partition_mmap` maps, and the first page of the partition carries a
  * program and nothing else. With the directory in the first slot, a 64 KiB
  * partition would hold no program at all and the smallest one with a program
- * would waste 60 KiB.
+ * would waste 60 KiB. A later program of 1.x is a new image of the partition,
+ * not a reserve slot.
  *
  * The loader of 1.1 copies the bytes into the windows of the port and does
  * not map them (ADR 0022 says why), but the alignment is the one a mapping
@@ -49,13 +50,13 @@
 
 /*
  * The name of a file, without its terminating zero, and the records of one
- * partition: 0x31000 bytes are three slots and the 4 KiB directory.
+ * partition: 0x21000 bytes are two 64 KiB slots and the 4 KiB directory.
  */
 #define PROGS_NAME_MAX 23u
-#define PROGS_MAX_FILES 3u
+#define PROGS_MAX_FILES 2u
 #define PROGS_ENTRY_SIZE 36u
 #define PROGS_TABLE_HEADER_SIZE 24u
-#define PROGS_PARTITION_SIZE 0x31000u
+#define PROGS_PARTITION_SIZE 0x21000u
 
 /* One record of the table, as the parser hands it out. */
 struct progs_entry {

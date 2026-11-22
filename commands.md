@@ -104,7 +104,7 @@ python3 dist/ota_usb.py /dev/ttyACM0
 ```
 
 `tools/microos_sign keygen|sign|verify|info` is the tool; `make bundle` signs
-`micro_os.bin` (`micro_os.bin.sig`, written at `0x14F000` by `flash.sh`) and
+`micro_os.bin` (`micro_os.bin.sig`, written at `0x12F000` by `flash.sh`) and
 the merged distribution image with the same key when `MICROOS_SIGN_KEY` is
 set, and always writes the sums. `make x86-smoke` boots a changed byte, a
 kernel without a trailer and a kernel of another key, and every one is refused

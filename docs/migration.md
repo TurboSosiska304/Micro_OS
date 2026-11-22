@@ -152,7 +152,7 @@ the new kernel. A release installs with `make bundle` and `dist/flash.sh`,
 which writes the parts at their offsets and leaves the NVS and MicroFS alone.
 
 `1.1.0` is the layout change (ADR 0022): the volume moves from `0x210000`
-(5.94 MiB) to `0x2C1000` (5.25 MiB), the second application slot takes the old
+(5.94 MiB) to `0x271000` (5.56 MiB), the second application slot takes the old
 region and the volume cannot be read at the new offset. **Back it up before
 the flash** (the command above), then:
 
@@ -164,7 +164,7 @@ or flash normally and run `mkfs -y` at the shell. The old bytes are still on
 the flash until the new volume is written, but the new table does not point at
 them; copy the files you need from the backup with a tool that reads the old
 MicroFS, or from the board before the move. A volume of 1.1 is never restored
-at `0x210000`: restore it at `0x2C1000` only if it was taken from the new
+at `0x210000`: restore it at `0x271000` only if it was taken from the new
 layout.
 
 Do **not** run `idf.py erase-flash` for an upgrade. It wipes NVS and MicroFS

@@ -42,10 +42,10 @@ must leave the user as much of it as the two slots and the programs allow.
 # Name,     Type, SubType, Offset,    Size
 nvs,        data, nvs,     0x9000,    0x5000
 otadata,    data, ota,     0xE000,    0x2000
-ota_0,      app,  ota_0,   0x10000,   0x140000
-ota_1,      app,  ota_1,   0x150000,  0x140000
-progs,      data, 0x41,    0x290000,  0x31000
-mfs,        data, 0x40,    0x2C1000,  0x53F000
+ota_0,      app,  ota_0,   0x10000,   0x120000
+ota_1,      app,  ota_1,   0x130000,  0x120000
+progs,      data, 0x41,    0x250000,  0x21000
+mfs,        data, 0x40,    0x271000,  0x58F000
 ```
 
 | Partition | Offset | Size | |
@@ -53,44 +53,53 @@ mfs,        data, 0x40,    0x2C1000,  0x53F000
 | reserved, boot loader, table | `0x000000` | `0x009000` | 36 KiB, the fixed part of the chip |
 | `nvs` | `0x009000` | `0x005000` | 20 KiB |
 | `otadata` | `0x00E000` | `0x002000` | 8 KiB, two sectors |
-| `ota_0` | `0x010000` | `0x140000` | 1.25 MiB, of which the last 4 KiB is the trailer |
-| `ota_1` | `0x150000` | `0x140000` | 1.25 MiB, of which the last 4 KiB is the trailer |
-| `progs` | `0x290000` | `0x031000` | 196 KiB: three 64 KiB slots and the 4 KiB directory |
-| `mfs` | `0x2C1000` | `0x53F000` | **5.25 MiB for the user** |
+| `ota_0` | `0x010000` | `0x120000` | 1.125 MiB, of which the last 4 KiB is the trailer |
+| `ota_1` | `0x130000` | `0x120000` | 1.125 MiB, of which the last 4 KiB is the trailer |
+| `progs` | `0x250000` | `0x21000` | 132 KiB: two 64 KiB slots and the 4 KiB directory |
+| `mfs` | `0x271000` | `0x58F000` | **5.56 MiB for the user** |
 | | | `0x800000` | 8 MiB, nothing left over |
 
-**The application slot is 0x140000 (1.25 MiB), not 2 MB.** The image of 1.1
+**The application slot is 0x120000 (1.125 MiB), not 2 MB.** The image of 1.1
 is 993 664 bytes, so a slot leaves
 
 ```
-0x140000 - 0x1000 (trailer) - 0x0F2980 (image) = 312 960 bytes (306 KiB, 24%)
+0x120000 - 0x1000 (trailer) - 0x0F2980 (image) = 181 888 bytes (177.6 KiB, 15.4%)
 ```
 
-for the growth of a compatibility port. That is more than the 2 MB slot of
-1.0 left (about 1 MB) and it is the size that gives the user 1.5 MB more than
-two 2 MB slots would. A smaller slot, 0x130000 (1.1875 MiB), would still fit
-with 242 KiB to spare, but 1.25 MiB is a 64 KiB multiple, a 24% reserve and
-the last layout of the board: the 64 KiB between the two choices is worth
-less than the margin of a 1.x build.
+for the growth of a compatibility port. That is the reserve ADR 0018 promises
+to need: from `1.2.0` the board receives only the changes that are cheap on
+this machine - a driver fix, memory, the console - and not a new format, a new
+partition or a compiler. A slot of 1.1875 MiB (`0x130000`) would give 64 KiB
+more of growth and take 64 KiB from the user; a slot of 1.25 MiB would give
+128 KiB more for 128 KiB of the volume. The question of this ADR is the
+opposite: the smallest slot that keeps the compatibility promise, so 1.125 MiB
+is the answer. The build refuses an image that fits but leaves less than
+64 KiB after its trailer (`tools/check_image_fits.cmake`, `MIN_FREE`): a 1.x
+build that grows into the reserve is a decision about the layout, not a
+silent squeeze.
 
 The two slots have to be **equal** (the ESP-IDF bootloader and
 `esp_ota_get_app_partition_count()` assume it) and every application
-partition is **64 KiB aligned**; 0x10000 and 0x150000 are, and the sizes are
+partition is **64 KiB aligned**; 0x10000 and 0x130000 are, and the sizes are
 multiples of 0x10000. The **trailer of the signature (4 KiB, ADR 0020) is in
 the last 4 KiB of each slot**: it belongs to the image it signs, so an update
 of one slot leaves the pair of the other untouched. The application has
-0x13F000 bytes for itself.
+0x11F000 bytes for itself.
 
-**`progs` is 0x31000 (196 KiB), not 256 KiB.** The programs are tiny (hello
-2 152 bytes, cat 1 920), but a program must start on a 64 KiB boundary of the
-flash for `esp_partition_mmap`. The **directory is the last 4 KiB** of the
-partition and the **three 64 KiB slots come first** (offsets 0, 0x10000,
-0x20000): hello and cat use two slots, and the third is the reserve for a
-1.x program. A directory in the first slot would make a 64 KiB partition hold
-no program at all and a 192 KiB one hold only two: putting it at the end buys
-one program slot for 4 KiB instead of 64 KiB. A 128 KiB partition holds one
-program (two slots, the second being the directory), so 196 KiB is the
-smallest that holds hello, cat and a reserve.
+**`progs` is 0x21000 (132 KiB).** The programs are tiny (hello 2 152 bytes,
+cat 1 920), but a program must start on a 64 KiB boundary of the flash for
+`esp_partition_mmap`. The **directory is the last 4 KiB** of the partition
+and the **two 64 KiB slots come first** (offsets 0 and 0x10000): hello and
+cat fill them. There is **no reserve slot**: a program of 1.x is a new
+`progs.bin` (a new image of the same partition, with the same two names or
+another pair), not a slot that sits empty in the flash. A third program at
+the same time would need a bigger partition, and that is a layout change the
+port is not promised after 1.1; the 64 KiB it would cost is the volume of the
+user, and the programs of the machine are two.
+
+A directory in the first slot would make a 64 KiB partition hold no program
+at all and a 192 KiB one hold only two: putting it at the end is what lets
+two programs fit in 132 KiB.
 
 **`otadata` is 8 KiB (two 4 KiB sectors)** between the NVS and the first
 slot, the place the ESP-IDF bootloader reads; it holds two sequence entries
@@ -99,26 +108,26 @@ board already had: the settings of `/etc`, the WiFi credentials and the
 version floor of ADR 0020 live there, and 20 KiB is the ESP-IDF default for a
 partition table of this size.
 
-**MicroFS is everything that is left: `0x53F000` = 5 500 928 bytes =
-5.25 MiB (5.50 MB decimal).** Against the 5.94 MiB (6 225 920 bytes) of 1.0
-the user loses **0.69 MiB**: 2.5 MiB for the second slot (two slots of 1.25
-instead of one of 2), 196 KiB for the programs, minus the 8 KiB of otadata
+**MicroFS is everything that is left: `0x58F000` = 5 828 608 bytes =
+5.56 MiB (5.83 MB decimal).** Against the 5.94 MiB (6 225 920 bytes) of 1.0
+the user loses **0.38 MiB**: 2.25 MiB for the second slot (two slots of 1.125
+instead of one of 2), 132 KiB for the programs, minus the 8 KiB of otadata
 that 1.0 left unused. The documents of 1.0 said "5.75 MB"; the table of 1.0
 is the 5.94 MiB above, and this ADR uses the bytes of the table from here on.
 
 The **data of the user (MicroFS) survives an update** of an application slot:
-an update writes only the inactive slot of 1.25 MiB and the 8 KiB of otadata.
+an update writes only the inactive slot of 1.125 MiB and the 8 KiB of otadata.
 A **flash of the new table** over a board of 1.0 is a one-time move: the
 volume of 1.0 starts at 0x210000, which is now inside `ota_1`, and its bytes
-are not a volume at 0x2C1000. The move therefore loses the volume once. The
+are not a volume at 0x271000. The move therefore loses the volume once. The
 release notes say it, `flash.sh --erase-volume` formats the new region in the
 same pass, and a boot that finds a blank volume formats it by itself
 (`mfs_vfs_mount()` already does that for a medium that was never written).
 
-The new volume is 5.25 MiB; a boot of 1.1 writes `/log/start.log` (about
+The new volume is 5.56 MiB; a boot of 1.1 writes `/log/start.log` (about
 2 KB), `/etc` (about 1 KB) and the `/log/.foreign` test file (68 bytes), and
 `progs` keeps `/bin` out of the volume entirely. The first `df` of a fresh
-board reports more than 5 MiB free: the system does not need more than a few
+board reports more than 5.3 MiB free: the system does not need more than a few
 kilobytes of MicroFS, and the rest is the user's.
 
 ### 2. The update and its rollback
@@ -129,7 +138,7 @@ the state of a slot in otadata: `NEW`, `PENDING_VERIFY`, `VALID`, `INVALID`,
 
 1. `tools/ota_usb.py` reads otadata over USB, finds the slot that is **not**
    running, writes `micro_os.bin` and `micro_os.bin.sig` into it (the trailer
-   at the last 4 KiB of that slot: `0x14F000` for `ota_0`, `0x28F000` for
+   at the last 4 KiB of that slot: `0x12F000` for `ota_0`, `0x24F000` for
    `ota_1`) and writes otadata: the other sector gets the next sequence and
    the state `NEW`. It does not touch the NVS, the bootloader, the partition
    table or MicroFS.
@@ -177,7 +186,7 @@ last 4 KiB of the partition it is running
 (`esp_ota_get_running_partition()`), not at a fixed `factory` address, so the
 same rule holds in `ota_0` and `ota_1`. `tools/bundle.sh` signs
 `micro_os.bin`, and `flash.sh` / `ota_usb.py` put the trailer at
-`0x14F000` / `0x28F000` respectively.
+`0x12F000` / `0x24F000` respectively.
 
 The check stays in `app_main`, which is electronic and not a boot-chain check
 (ADR 0020 §6). What the second slot adds is that a damaged or foreign image
@@ -194,12 +203,11 @@ the last 4 KiB  magic "MOPROGS1", version 1, count, slot, reserved
                 count records of 36 bytes: name[24], offset, size, reserved
 0x00000         the first program
 0x10000         the second program
-0x20000         the third program
 ```
 
 `tools/progs_image.py` writes the image at build time from the `.mox` files
 that the component makes, checks the name, the size and the MOX1 header
-(version 2, arch 1), and pads with 0xFF. The image is 0x31000 bytes, is
+(version 2, arch 1), and pads with 0xFF. The image is 0x21000 bytes, is
 flashed by `idf.py flash` as the partition `progs`, and is part of the bundle
 as `progs.bin`. There is no `target_add_binary_data` and no image of a
 program in the firmware.
@@ -236,21 +244,24 @@ the volume.
 * The image of the system is still the only thing that is signed and the only
   thing an update writes; the data of the user and the settings in the NVS
   are not touched by an update.
-* `/bin` is a real list of files of a partition, and adding a program is a
+* `/bin` is a real list of files of a partition, and replacing a program is a
   file in `progs.bin` and a flash, not a rebuild of the kernel and a boot that
   writes into MicroFS.
 * The layout is decided once, before the port becomes a compatibility port,
-  and it leaves 5.25 MiB of the 8 MB to the user.
+  and it leaves 5.56 MiB of the 8 MB to the user - the largest volume these
+  two slots and two programs allow.
 
 **Bad**
 
-* MicroFS shrinks from 5.94 MiB to 5.25 MiB (0.69 MiB), and a board of 1.0
+* MicroFS shrinks from 5.94 MiB to 5.56 MiB (0.38 MiB), and a board of 1.0
   loses the old volume once when the table arrives.
-* An application slot is 1.25 MiB and the image of 1.1 uses 76% of it; a 1.x
-  build that grows by more than 306 KiB does not fit, and the compatibility
+* An application slot is 1.125 MiB and the image of 1.1 uses 84% of it; a 1.x
+  build that grows by more than 177 KiB does not fit, and the compatibility
   rule of ADR 0018 is the promise that it does not have to.
-* An update writes 1.25 MiB less the trailer, and `idf.py flash` writes the
-  whole 0x31000 of `progs` even when nothing changed. The flash of the board
+* Two programs fit `progs` and no more at once: a third one replaces one of
+  the two in a new image, or the layout changes (which is not promised).
+* An update writes 1.125 MiB less the trailer, and `idf.py flash` writes the
+  whole 0x21000 of `progs` even when nothing changed. The flash of the board
   is a finite resource; the update path of a person is the one that writes
   what changed.
 * The rollback is not the anti-rollback of secure boot: a person with a flash
@@ -265,11 +276,11 @@ the volume.
 * `components/port_esp32/src/{progs_vfs.c,progs_format.c,ota.c}`,
   `tools/{progs_image.py,ota_usb.py}`, the table of §1 in `partitions.csv`
   and the bootloader option in `sdkconfig.defaults`.
-* The image of the application is 993 664 bytes of the 1 306 624 bytes a slot
-  leaves for an image and its trailer (312 960 bytes, 24%, still free); the
-  partition table is 3072 bytes; `progs.bin` is 200 704 bytes and holds
-  `/bin/hello` (2 152 bytes at offset 0) and `/bin/cat` (1 920 bytes at
-  offset 0x10000), with the third slot free.
+* The image of the application is 993 664 bytes of the 1 175 552 bytes a slot
+  leaves for an image and its trailer (181 888 bytes, 177.6 KiB, 15.4%, still
+  free); the partition table is 3072 bytes; `progs.bin` is 135 168 bytes and
+  holds `/bin/hello` (2 152 bytes at offset 0) and `/bin/cat` (1 920 bytes at
+  offset 0x10000).
 * The build refuses an image that fits but leaves less than 64 KiB after its
   trailer (`tools/check_image_fits.cmake`, `MIN_FREE`): a 1.x build that
   grows into the reserve is a decision about the layout, not a silent
@@ -291,21 +302,22 @@ the volume.
 
 ## Alternatives
 
-* **A factory partition plus one OTA slot.** 1.25 MB + 1.25 MB + programs +
+* **A factory partition plus one OTA slot.** 1.125 MB + 1.125 MB + programs +
   volume fits, but the factory slot cannot be updated and the board would
   have one image that is frozen: two equal OTA slots are what an update and a
   rollback need, and the ESP-IDF bootloader supports no factory at all.
-* **Two 2 MB slots.** Works, but takes 1.5 MB from MicroFS that the growth of
-  a compatibility port does not need.
-* **Two 1 MB slots.** 242 KiB less volume than 1.25 MiB slots, and only
-  18 KiB of growth over the image of 1.1: a fix that grows the image would
-  not fit, and the slot cannot grow after 1.1.
+* **Two 2 MB slots.** Works, but takes 1.75 MiB from MicroFS that the growth
+  of a compatibility port does not need.
+* **Two 1.1875 MiB slots.** 64 KiB more of growth and 64 KiB less volume; the
+  1.125 MiB slot already leaves 177 KiB, and the user asked for the volume.
+* **Two 1 MiB slots.** The image and its trailer leave only 50 KiB (5%) of a
+  slot: a single compatibility fix would not fit.
 * **The trailer in `progs`.** One trailer for two slots is a signature that
   does not say which image it covers, and an update of one slot would
   invalidate the other. The trailer belongs to the image.
-* **A directory in the first slot of `progs`.** 64 KiB less volume for one
-  program slot less than this layout: the directory at the end and the files
-  from offset 0 is the same alignment at 4 KiB of cost.
+* **A directory in the first slot of `progs`.** 64 KiB less volume for no
+  program slot: the directory at the end and the files from offset 0 is the
+  same alignment at 4 KiB of cost.
 * **Map `progs` as instructions.** See §4: a fixed virtual address, a
   reserved mapping and a program linked for it. The copy is deterministic and
   already tested; the mapping is a later loader with its own price.

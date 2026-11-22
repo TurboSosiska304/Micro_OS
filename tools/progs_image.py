@@ -10,17 +10,17 @@ images that the build of the port makes into the table that
                     and one record per file: name[24], offset, size, reserved
     0x00000         the first file
     0x10000         the second file
-    0x20000         the third file
 
 The directory is at the end and every file is on a 64 KiB boundary from the
 start of the partition: that is the address `esp_partition_mmap` maps, and
-the first flash page carries a program and nothing else. The image is padded
-with 0xFF, like the flash, and is deterministic: the same programs give the
-same bytes, which is what the reproducible build of the tree asks for. The
-loader of 1.1 copies the bytes into the windows of the port; the alignment is
-kept for a later loader.
+the first flash page carries a program and nothing else. The partition holds
+two programs; a third one of 1.x is a new image, not a reserve slot. The
+image is padded with 0xFF, like the flash, and is deterministic: the same
+programs give the same bytes, which is what the reproducible build of the
+tree asks for. The loader of 1.1 copies the bytes into the windows of the
+port; the alignment is kept for a later loader.
 
-    tools/progs_image.py --output progs.bin [--partition-size 0x31000]
+    tools/progs_image.py --output progs.bin [--partition-size 0x21000]
                          [--slot-size 0x10000] NAME=FILE [NAME=FILE ...]
 
 The exit status is 0 when the image is written, 2 for a wrong argument and
@@ -37,10 +37,10 @@ MAGIC = b"MOPROGS1"
 VERSION = 1
 DIRECTORY_SIZE = 0x1000
 NAME_MAX = 23
-MAX_FILES = 3
+MAX_FILES = 2
 ENTRY_SIZE = 36
 HEADER_SIZE = 24
-PARTITION_SIZE = 0x31000
+PARTITION_SIZE = 0x21000
 SLOT_SIZE = 0x10000
 
 # The header of a program (kernel/exec.h): 'M', 'O', 'X', '1', version 2 and

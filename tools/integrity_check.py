@@ -98,6 +98,7 @@ PROGS_HEADER = 24
 PROGS_ENTRY = 36
 PROGS_SLOT = 0x10000
 PROGS_DIRECTORY = 0x1000
+PROGS_MAX_FILES = 2
 
 # The extensions that are never treated as a text file.
 BINARY_EXTENSIONS = {
@@ -618,7 +619,7 @@ def check_progs(root: str, report: Report) -> None:
     data = open(path, "rb").read()
     report.add(group, "progs.bin is present", True, f"{len(data)} bytes")
 
-    expected = 0x31000
+    expected = 0x21000
     csv_path = os.path.join(root, "partitions.csv")
     if os.path.isfile(csv_path):
         for partition in parse_partitions_csv(csv_path):
@@ -648,11 +649,11 @@ def check_progs(root: str, report: Report) -> None:
     report.add(
         group,
         "the directory fits the partition",
-        count <= 3 and slot >= PROGS_SLOT and slot % PROGS_SLOT == 0,
+        count <= PROGS_MAX_FILES and slot >= PROGS_SLOT and slot % PROGS_SLOT == 0,
         f"{count} program(s), slot 0x{slot:X}",
     )
 
-    for index in range(min(count, 3)):
+    for index in range(min(count, PROGS_MAX_FILES)):
         record = PROGS_HEADER + index * PROGS_ENTRY
         if record + PROGS_ENTRY > len(table):
             report.add(group, f"program {index} is in the image", False, "the record is missing")

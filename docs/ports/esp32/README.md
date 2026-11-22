@@ -36,15 +36,15 @@ The application checks itself at the beginning of `app_main`, before MicroFS
 and the shell (ADR 0020). The slot it is running (ADR 0022: `ota_0` or
 `ota_1`, from `esp_ota_get_running_partition()`) is read in place: the ESP
 header gives the length of the image, `esp_app_desc_t` at `0x20` gives its
-version, and the last 4 KiB of the slot (`0x14F000` or `0x28F000`) hold the
+version, and the last 4 KiB of the slot (`0x12F000` or `0x24F000`) hold the
 120-byte `MOSIGN01` trailer over the bytes of `micro_os.bin`. The digest is
 SHA-256 over the flash in chunks and the signature is Ed25519 with the public
 key compiled into the firmware.
 
 `tools/bundle.sh` signs the application and the merged distribution image;
-`micro_os.bin.sig` is the trailer, `flash.sh` writes it at `0x14F000` of
+`micro_os.bin.sig` is the trailer, `flash.sh` writes it at `0x12F000` of
 `ota_0`, and `tools/ota_usb.py` writes it at the end of the slot it updates.
-`make bundle` also checks that the image and its 4 KiB reserve fit a 1.25 MiB
+`make bundle` also checks that the image and its 4 KiB reserve fit a 1.125 MiB
 slot; the ESP-IDF build checks the same before it writes the image.
 
 A signature that does not pass with the policy on is not kept: the running
@@ -114,16 +114,16 @@ the bootloader are not touched. **The update over the network is not in 1.1**
 
 ## The programs of /bin
 
-`progs` is a partition of 196 KiB (ADR 0018 §2, ADR 0022). Its last 4 KiB
-holds a directory of name, offset and size, and the three 64 KiB slots before
-it start at offset 0, 0x10000 and 0x20000: every program is on a 64 KiB
-boundary, `hello` and `cat` use two slots and the third is reserved. `tools/progs_image.py` builds the
+`progs` is a partition of 132 KiB (ADR 0018 §2, ADR 0022). Its last 4 KiB
+holds a directory of name, offset and size, and the two 64 KiB slots before
+it start at offset 0 and 0x10000: every program is on a 64 KiB boundary, and
+`hello` and `cat` fill the two slots. `tools/progs_image.py` builds the
 image from the `.mox` files of the build, `idf.py flash` writes it with the
 firmware, and the bundle carries it as `progs.bin`. The port mounts it at
 `/bin` as a read-only filesystem: `ls /bin`, `cat /bin/hello` and
 `exec /bin/hello` are ordinary VFS calls, and no image of a program is
-embedded in the firmware. A new program is a new `progs.bin`, not a rebuild of
-the kernel.
+embedded in the firmware. A new program is a new `progs.bin` (with the same
+two names or another pair), not a rebuild of the kernel.
 
 ## The hardware doctor
 
@@ -173,11 +173,11 @@ test picture.
   reboot the board, and a bigger image is `ENOMEM`. The programs are files of
   the `progs` partition, mounted read-only at `/bin` (ADR 0022); a new program
   is a new `progs.bin` and a flash, not a file to copy at the shell.
-* **8 MB of flash: two slots and 5.25 MiB of MicroFS.** `ota_0` and `ota_1`
-  are 1.25 MiB each, `progs` is 196 KiB and MicroFS is the rest
+* **8 MB of flash: two slots and 5.56 MiB of MicroFS.** `ota_0` and `ota_1`
+  are 1.125 MiB each, `progs` is 132 KiB and MicroFS is the rest
   ([partitions.csv](../../../partitions.csv), ADR 0022). A board of 1.0 loses
   its volume once when the new table is written: the volume moves from
-  `0x210000` to `0x2C1000` and its old bytes are not a volume there.
+  `0x210000` to `0x271000` and its old bytes are not a volume there.
 * **The update is over the cable.** `tools/ota_usb.py` writes the inactive
   slot and the rollback returns to the old image when the new one does not
   reach the shell. There is no update over the network in 1.1 (ADR 0022).
