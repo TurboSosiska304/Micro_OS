@@ -281,6 +281,14 @@ written when the project was an operating system for one board; the numbers
       by writing a file of the volume (`make x86-disk`), not by embedding it
       in the kernel
 
+## The road to 2.0
+
+> [`docs/releases/2.0.md`](releases/2.0.md) is the direction of the first
+> number that may break a contract of 1.0: a machine a person changes from
+> the machine itself - settings, programs, services and the system - without
+> rebuilding an image. The flags of the build stay build-time. It is a
+> direction, not a gate.
+
 ## K10 - The settings of a machine (planned, after 1.0)
 
 > The board, the x86-64 machine and the host already keep a few settings as
