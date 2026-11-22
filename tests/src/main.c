@@ -77,6 +77,7 @@ static void run_tests(void *arg)
     test_progs();
     test_zlib();
     test_lua();
+    test_zstd();
     test_userland_float();
 
     g_result = ktest_summary();

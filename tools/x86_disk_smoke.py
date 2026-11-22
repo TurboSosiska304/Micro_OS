@@ -70,6 +70,11 @@ FIRST_BOOT = [
     "exec /bin/cat /etc/hello.lua",
     "exec /bin/lua -e print(2^10)",
     "exec /bin/lua /etc/hello.lua",
+    # The third ported library: a frame of zstd, written into the volume by
+    # the first boot and unpacked in the second one, so the bytes of a
+    # compressed file are on the disk and not only in a buffer.
+    "exec /bin/zstd -19 -q -f /etc/setting -o /persist.zst",
+    "exec /bin/zstd -t /persist.zst",
 ]
 
 SECOND_BOOT = [
@@ -86,6 +91,10 @@ SECOND_BOOT = [
     "exec /bin/wc -c /persist.gz.txt",
     "ls /etc/licenses",
     "exec /bin/lua /etc/hello.lua",
+    # The frame of the first boot, after the reset: the decoder of the guest
+    # reads it out of the volume, and `-t` checks it without a byte of output.
+    "exec /bin/zstd -d -c /persist.zst",
+    "exec /bin/zstd -t /persist.zst",
 ]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -285,6 +294,16 @@ def check(first: str, second: str) -> list:
         and "the program exited with 0" in first_answers[10],
         first_answers[10],
     )
+    expect(
+        "zstd writes a frame into the volume",
+        "the program exited with 0" in first_answers[11] and "zstd:" not in first_answers[11],
+        first_answers[11],
+    )
+    expect(
+        "the frame is a file of the volume",
+        "34 bytes" in first_answers[12] and "the program exited with 0" in first_answers[12],
+        first_answers[12],
+    )
 
     # --- the second boot: the same image, the same machine
     expect(
@@ -369,7 +388,9 @@ def check(first: str, second: str) -> list:
     )
     expect(
         "the licenses of the ported programs survived the reset",
-        "lua" in second_answers[11] and "zlib" in second_answers[11],
+        "lua" in second_answers[11]
+        and "zlib" in second_answers[11]
+        and "zstd" in second_answers[11],
         second_answers[11],
     )
     expect(
@@ -377,6 +398,20 @@ def check(first: str, second: str) -> list:
         "lua: hello from /etc/hello.lua" in second_answers[12]
         and "lua: read\ta line written by lua" in second_answers[12],
         second_answers[12],
+    )
+    # The frame the first boot wrote is unpacked by the second one: the bytes
+    # of a compressed file went through the volume and the reset.
+    expect(
+        "the frame of zstd survived the reset",
+        "hello" in second_answers[13]
+        and "hostname=x86_64" in second_answers[13]
+        and "the program exited with 0" in second_answers[13],
+        second_answers[13],
+    )
+    expect(
+        "the frame of the volume still passes its check",
+        "34 bytes" in second_answers[14] and "the program exited with 0" in second_answers[14],
+        second_answers[14],
     )
 
     return checks

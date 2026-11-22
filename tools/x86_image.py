@@ -24,6 +24,7 @@ import argparse
 import gzip
 import io
 import os
+import shutil
 import subprocess
 import sys
 
@@ -48,7 +49,15 @@ PROGRAMS = [
     "nx",
     "zcat",
     "lua",
+    "zstd",
 ]
+
+# The second name of the compression command: `zstdcat` is the same image and
+# a different name in /bin, the way a Unix-like system links one program under
+# the name of its mode. The port does not patch the release for it: `zstdcli.c`
+# reads the name it was entered with and takes the mode of a known one
+# (`zstdcat` unpacks to standard output).
+SECOND_NAMES = {"zstdcat": "zstd"}
 
 # The stream of the test of zlib: a fixed text, a fixed moment and the level
 # of compression of the tool. The smoke test compares the bytes `zcat` writes
@@ -87,6 +96,23 @@ print("lua: os.time", os.time() >= 0)
 print("lua: string", ("abc"):upper(), string.rep("x", 3))
 """
 
+# The dumper of the test of zstd: the bytes of a file as hexadecimal pairs on
+# the console, so that a frame the guest wrote can travel out of the machine in
+# a transcript of text (the console of the port drops the bytes of a binary
+# stream and inserts a CR before every LF). The interpreter and its string
+# library are the ones of `/bin/lua`.
+HEX_LUA = """-- /etc/hex.lua: the bytes of a file as hexadecimal pairs, on the console.
+local path = arg[1]
+local file = assert(io.open(path, "rb"))
+local data = file:read("a")
+file:close()
+local out = {}
+for index = 1, #data do
+    out[#out + 1] = string.format("%02x", data:byte(index))
+end
+print(table.concat(out))
+"""
+
 IMAGE_MB = 8
 START_LBA = 2048
 # The moment of the records when SOURCE_DATE_EPOCH does not say another one.
@@ -99,6 +125,60 @@ DEFAULT_BUILD = os.path.join(ROOT, "build-x86")
 DEFAULT_MKFS = os.path.join(ROOT, "build-host", "tools", "microos_mkfs")
 ZLIB_LICENSE = os.path.join(ROOT, "third_party", "zlib", "LICENSE")
 LUA_LICENSE = os.path.join(ROOT, "third_party", "lua", "LICENSE")
+ZSTD_LICENSE = os.path.join(ROOT, "third_party", "zstd", "LICENSE")
+
+
+def write_fixture_zstd(build_dir: str) -> str:
+    """The stream of `/etc/setting.zst`, compressed by the zstd of the host.
+
+    The fixture is the other half of the test of the format: a frame written
+    by the zstd of the machine that builds the image has to come out of
+    `/bin/zstd` of Micro OS byte for byte, which is what "the same format"
+    means. The level is the one a person would use (19) and the checksum is
+    off, so two runs of the tool on one machine write the same bytes; the
+    version of the host `zstd` is the one variable of the fixture, and the
+    image tool prints the version it used.
+
+    Python 3.14 has `compression.zstd` and is the fallback of a machine without
+    the command: the frame of the two is the same format, which is the point.
+    """
+    path = os.path.join(build_dir, "setting.zst")
+    source = os.path.join(build_dir, "setting.txt")
+    text = (SETTING + "\n").encode("utf-8")
+
+    # The text goes through a file and not a pipe: a frame of a stream whose
+    # length is unknown names the window of its level (8 MiB at level 19),
+    # and the machine that unpacks it is a program of a megabyte. The file is
+    # the same bytes the volume carries, and the frame of it names a window of
+    # the size of the text.
+    with open(source, "wb") as file:
+        file.write(text)
+
+    zstd = shutil.which("zstd")
+    if zstd is not None:
+        result = subprocess.run(
+            [zstd, "-19", "--no-check", "-q", "-f", "-o", path, source],
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError((result.stderr or b"").decode("utf-8", "replace").strip())
+    else:
+        from compression import zstd as pyzstd
+
+        with open(path, "wb") as file:
+            file.write(pyzstd.compress(text, level=19))
+
+    # The same frame with its tail cut: the stream promises blocks that are
+    # not there, and `zstd -t` of the guest has to refuse it. A test of a
+    # decoder that only ever sees good frames proves half of the decoder.
+    with open(path, "rb") as file:
+        frame = file.read()
+    broken = os.path.join(build_dir, "broken.zst")
+    with open(broken, "wb") as file:
+        file.write(frame[: len(frame) - 3])
+
+    return path
 
 
 def write_hello_lua(build_dir: str) -> str:
@@ -107,6 +187,16 @@ def write_hello_lua(build_dir: str) -> str:
 
     with open(path, "w", encoding="utf-8", newline="\n") as file:
         file.write(HELLO_LUA)
+
+    return path
+
+
+def write_hex_lua(build_dir: str) -> str:
+    """Write the dumper of the test of zstd, the same bytes every run."""
+    path = os.path.join(build_dir, "hex.lua")
+
+    with open(path, "w", encoding="utf-8", newline="\n") as file:
+        file.write(HEX_LUA)
 
     return path
 
@@ -184,12 +274,29 @@ def build_image(
             return 2
         command += ["--program", f"/bin/{name}={path}"]
 
+    # The second names of the commands: one image, two names in /bin.
+    for second, first in SECOND_NAMES.items():
+        path = os.path.join(build_dir, f"{first}.mox")
+        if not os.path.isfile(path):
+            print(f"missing {path}: run make x86-build", file=sys.stderr)
+            return 2
+        command += ["--program", f"/bin/{second}={path}"]
+
     if not os.path.isfile(ZLIB_LICENSE):
         print(f"missing {ZLIB_LICENSE}", file=sys.stderr)
         return 2
     if not os.path.isfile(LUA_LICENSE):
         print(f"missing {LUA_LICENSE}", file=sys.stderr)
         return 2
+    if not os.path.isfile(ZSTD_LICENSE):
+        print(f"missing {ZSTD_LICENSE}", file=sys.stderr)
+        return 2
+
+    try:
+        setting_zst = write_fixture_zstd(build_dir)
+    except (OSError, RuntimeError) as error:
+        print(f"the fixture of zstd: {error}", file=sys.stderr)
+        return 1
 
     # The fixture of zcat and the license that travels with its bytes. The
     # program is part of the image, so the image carries the notice of the
@@ -204,7 +311,15 @@ def build_image(
     # the VFS and the smoke test reads the lines the program printed.
     script = write_hello_lua(build_dir)
     command += ["--file", f"/etc/hello.lua={script}"]
+    command += ["--file", f"/etc/hex.lua={write_hex_lua(build_dir)}"]
     command += ["--file", f"/etc/licenses/lua={LUA_LICENSE}"]
+
+    # The compression of zstd: a stream the host wrote (the fixture the guest
+    # unpacks), the same stream with its tail cut (the refusal of `-t`) and
+    # the license of the library the command is linked against.
+    command += ["--file", f"/etc/setting.zst={setting_zst}"]
+    command += ["--file", f"/etc/broken.zst={os.path.join(build_dir, 'broken.zst')}"]
+    command += ["--file", f"/etc/licenses/zstd={ZSTD_LICENSE}"]
 
     command += ["--text", f"/etc/setting={SETTING}"]
     command += extra or []

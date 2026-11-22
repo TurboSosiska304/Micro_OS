@@ -414,7 +414,11 @@ add_libc_program(head)
 add_libc_program(ls)
 add_libc_program(mkdir)
 add_libc_program(pwd)
-add_libc_program(rm)
+# rm asks for the mode of a name before it removes it: the POSIX `stat` of
+# the library (`src/stat.c`), which is the one a portable source expects.
+add_libc_program(rm
+    SOURCES "${LIBC_USER_DIR}/src/stat.c"
+)
 add_libc_program(spawn)
 add_libc_program(wc)
 
@@ -524,6 +528,123 @@ add_libc_program(lua
             "${LIBC_USER_DIR}/src/assert.c"
             "${LIBC_USER_DIR}/src/format_float.c"
     COMPILE_OPTIONS -DULIBC_WITH_FLOAT -include "${LUA_DIR}/port/luaconf_port.h" -Os
+)
+
+# --- zstd: a compression library and the command that speaks it -------------
+#
+# zstd 1.5.7 is the third library of somebody else, and the first whose
+# command is the program of the release itself (`programs/zstdcli.c`) rather
+# than a small file of this directory. The port is three targets:
+#
+#   microos_user_zstd      lib/common, lib/compress and lib/decompress, the
+#                          library as the frame format needs it;
+#   microos_user_zstd_cli  the four files of `programs/` the command is
+#                          (fileio, fileio_asyncio, util, timefn), with the
+#                          configuration of `port/zstd_cli_port.h`;
+#   zstd                   the release's `zstdcli.c` as the `main`, the
+#                          runtime of the library of a program, and the two
+#                          archives above.
+#
+# lib/dictBuilder is not here: the dictionary builder (`--train`) is the one
+# mode the command answers "not supported" for, and the library reads a
+# dictionary somebody else trained (`-D`). lib/deprecated is not here either:
+# the format of 1.0 is not what this machine reads or writes. The library is
+# built with `-DZSTD_NO_TRACE -DZSTD_DISABLE_ASM -DZSTD_LEGACY_SUPPORT=0` and
+# without `ZSTD_MULTITHREAD` (port/zstd_port.h), which is what keeps it inside
+# the arena of a program and off the pthread of a host.
+set(ZSTD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/zstd")
+set(ZSTD_LIB_SOURCES
+    "${ZSTD_DIR}/lib/common/debug.c"
+    "${ZSTD_DIR}/lib/common/entropy_common.c"
+    "${ZSTD_DIR}/lib/common/error_private.c"
+    "${ZSTD_DIR}/lib/common/fse_decompress.c"
+    "${ZSTD_DIR}/lib/common/pool.c"
+    "${ZSTD_DIR}/lib/common/threading.c"
+    "${ZSTD_DIR}/lib/common/xxhash.c"
+    "${ZSTD_DIR}/lib/common/zstd_common.c"
+    "${ZSTD_DIR}/lib/compress/fse_compress.c"
+    "${ZSTD_DIR}/lib/compress/hist.c"
+    "${ZSTD_DIR}/lib/compress/huf_compress.c"
+    "${ZSTD_DIR}/lib/compress/zstd_compress.c"
+    "${ZSTD_DIR}/lib/compress/zstd_compress_literals.c"
+    "${ZSTD_DIR}/lib/compress/zstd_compress_sequences.c"
+    "${ZSTD_DIR}/lib/compress/zstd_compress_superblock.c"
+    "${ZSTD_DIR}/lib/compress/zstd_double_fast.c"
+    "${ZSTD_DIR}/lib/compress/zstd_fast.c"
+    "${ZSTD_DIR}/lib/compress/zstd_lazy.c"
+    "${ZSTD_DIR}/lib/compress/zstd_ldm.c"
+    "${ZSTD_DIR}/lib/compress/zstd_opt.c"
+    "${ZSTD_DIR}/lib/compress/zstd_preSplit.c"
+    "${ZSTD_DIR}/lib/decompress/huf_decompress.c"
+    "${ZSTD_DIR}/lib/decompress/zstd_ddict.c"
+    "${ZSTD_DIR}/lib/decompress/zstd_decompress.c"
+    "${ZSTD_DIR}/lib/decompress/zstd_decompress_block.c"
+)
+set(ZSTD_CLI_SOURCES
+    "${ZSTD_DIR}/programs/fileio.c"
+    "${ZSTD_DIR}/programs/fileio_asyncio.c"
+    "${ZSTD_DIR}/programs/util.c"
+    "${ZSTD_DIR}/programs/timefn.c"
+    "${ZSTD_DIR}/port/zstd_cli_os.c"
+)
+
+# The upstream sources answer warnings of their own (a comparison of an int
+# with a size_t, a variable of a build that is not this one): the exceptions
+# stay here and not in a vendored file, the way the zlib and the Lua ports
+# keep theirs.
+microos_userland_library(microos_user_zstd
+    SOURCES ${ZSTD_LIB_SOURCES}
+    INCLUDES "${ZSTD_DIR}/lib" "${ZSTD_DIR}/port"
+    COMPILE_OPTIONS "-include" "${ZSTD_DIR}/port/zstd_port.h"
+        -Wno-sign-compare -Wno-unused-but-set-variable -Wno-implicit-fallthrough -Os
+)
+microos_userland_library(microos_user_zstd_cli
+    SOURCES ${ZSTD_CLI_SOURCES}
+    INCLUDES "${ZSTD_DIR}/lib" "${ZSTD_DIR}/programs" "${ZSTD_DIR}/port"
+    COMPILE_OPTIONS "-include" "${ZSTD_DIR}/port/zstd_cli_port.h"
+        -Wno-sign-compare -Wno-unused-parameter -Wno-unused-but-set-variable
+        -Wno-implicit-fallthrough -Wno-format-truncation -Os
+)
+set_source_files_properties(${ZSTD_LIB_SOURCES}
+    PROPERTIES OBJECT_DEPENDS "${ZSTD_DIR}/port/zstd_port.h")
+set_source_files_properties(${ZSTD_CLI_SOURCES}
+    PROPERTIES OBJECT_DEPENDS "${ZSTD_DIR}/port/zstd_cli_port.h;${ZSTD_DIR}/port/zstd_port.h")
+
+# The arena of the command is 960 KiB of the megabyte the format allows a bss
+# (K_EXEC_BSS_MAX): the pools of the CLI and a context of the library, with
+# the room `port/zstd_cli_os.h` measures. The image is `-Os`, about 400 KiB of
+# text and 40 KiB of data.
+#
+# FLOAT is for one mode of the release: `-l` prints the sizes of a frame with
+# `%6.2f` (`UTIL_makeHumanReadableSize` answers a double), and a build with
+# -mgeneral-regs-only writes those two characters instead of the number. The
+# compressor itself is integer arithmetic; the program of the port saves no
+# XMM state in the scheduler and `execve` waits for it, which is the rule of
+# every program with a point in its numbers (`docs/porting-programs.md`).
+add_libc_program(zstd
+    FLOAT
+    # The CLI first: the linker walks the list once, and the command asks the
+    # library of zstd for the symbols of a stream.
+    LIBRARIES microos_user_zstd_cli microos_user_zstd
+    MAIN "${ZSTD_DIR}/programs/zstdcli.c"
+    INCLUDES "${ZSTD_DIR}/lib" "${ZSTD_DIR}/programs" "${ZSTD_DIR}/port"
+    DEFINES ULIBC_HEAP_SIZE=983040u
+    SOURCES "${LIBC_USER_DIR}/src/malloc.c"
+            "${LIBC_USER_DIR}/src/file.c"
+            "${LIBC_USER_DIR}/src/string_ext.c"
+            "${LIBC_USER_DIR}/src/stdlib.c"
+            "${LIBC_USER_DIR}/src/stat.c"
+            "${LIBC_USER_DIR}/src/dirent.c"
+            "${LIBC_USER_DIR}/src/libgen.c"
+            "${LIBC_USER_DIR}/src/time.c"
+            "${LIBC_USER_DIR}/src/assert.c"
+            "${LIBC_USER_DIR}/src/format_float.c"
+    # The runtime of this program keeps the raw `open` of the ABI under a name
+    # of its own: the port defines the POSIX one for the release (README.md,
+    # "The shape of the calls").
+    COMPILE_OPTIONS -DULIBC_WITH_FLOAT
+        -include "${ZSTD_DIR}/port/zstd_cli_port.h"
+        -Dopen=ulibc_open_call -Wno-unused-parameter -Os
 )
 
 add_executable(microos64

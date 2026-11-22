@@ -26,6 +26,10 @@ printed a banner could not have a number of a task in the middle of it.
 
     tools/x86_smoke.py [--image PATH] [--timeout SECONDS] [--verbose]
 
+The timeout is a limit of the whole run of the command list and not of one
+command: the default of two minutes is the measure of a machine that reads the
+image of every program it runs (zstd is 437 KiB, lua 168 KiB).
+
 The run also reads the ELF of the kernel and checks that the image is linked
 in the higher half (ADR 0007): a linker script that fell back to the physical
 address boots the same and would pass every line of the transcript, so the
@@ -146,6 +150,34 @@ COMMANDS = [
     # The same stream through a pipe: zcat reads descriptor 0 and the port
     # layer waits out the EAGAIN of the producer that is still writing.
     "cat /etc/greeting.gz | /bin/zcat",
+    # The third port of somebody else's program (zstd): the frame of the
+    # fixture was written by the `zstd` of the host, and the guest unpacks it
+    # with the library of the release. The reverse - a frame the guest wrote,
+    # unpacked by the `zstd` of the host - is a boot of its own below
+    # (`zstd_compat_checks`), because its answer is a file of bytes and not a
+    # line of this transcript. Every `exec` of the command reads an image of
+    # 437 KiB through the disk driver of the port, which is the slowest step
+    # of this list (docs/debts.md): the eight lines below are the choices of
+    # one of each thing, not five variations of a round trip.
+    "exec /bin/zstd -d -c /etc/setting.zst",
+    "exec /bin/zstd -19 -q -f /etc/setting -o /tmp/setting.zst",
+    "exec /bin/zstd -d -c /tmp/setting.zst",
+    "exec /bin/wc -c /tmp/setting.zst",
+    # A frame with its tail cut is refused: the edge of the decoder.
+    "exec /bin/zstd -t /etc/broken.zst",
+    # The listing and the second name of the command (`zstdcat` is the same
+    # image under a name, and the mode follows the name).
+    "exec /bin/zstd -l /etc/setting.zst",
+    "exec /bin/zstdcat /etc/setting.zst",
+    # A stream through a pipe: the decompressor reads descriptor 0 of a stage.
+    "cat /etc/setting.zst | /bin/zstd -d -c",
+    # A directory through `<dirent.h>` and the POSIX `stat` of the library of
+    # a program: `-r` walks it and writes a frame beside every file.
+    "mkdir /tmp/z",
+    "echo alpha > /tmp/z/a",
+    "echo beta > /tmp/z/b",
+    "exec /bin/zstd -r -q -f /tmp/z",
+    "exec /bin/ls /tmp/z",
     "exec /bin/ls /etc/licenses",
     # The second port of a program of somebody else (Lua): the interpreter is
     # a file of /bin, its first script and its license are files of /etc, and
@@ -812,6 +844,132 @@ def oversize_checks(loader: str, kernel: str, timeout: float) -> list:
     return checks
 
 
+# The script of the image that writes the bytes of a file as hexadecimal.
+HEX_SCRIPT = "/etc/hex.lua"
+
+
+def host_zstd_decompress(frame: bytes) -> bytes:
+    """The frame of the guest, unpacked by the zstd of the host.
+
+    The command of the machine is the other half of the test of the format: a
+    program of Micro OS wrote the bytes, and the zstd of the machine that runs
+    the test has to read them. A host without the command falls back on the
+    module of Python 3.14, which is the same format and the same answer.
+    """
+    tool = shutil.which("zstd")
+    if tool is not None:
+        result = subprocess.run(
+            [tool, "-d", "-c"], input=frame, capture_output=True, check=False
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.decode("utf-8", "replace").strip())
+        return result.stdout
+
+    from compression import zstd
+
+    return zstd.decompress(frame)
+
+
+def zstd_compat_checks(loader: str, kernel: str, timeout: float) -> list:
+    """The frame of the guest, unpacked by the zstd of the host.
+
+    The fixture of `/etc/setting.zst` is the other direction - a frame of the
+    host that the guest reads - and it is a line of the main transcript. This
+    boot has an answer of bytes, and the console of the port is a screen: it
+    drops what is not a letter and writes a CR before every LF. The bytes
+    therefore leave the machine as the text of a Lua program that prints them
+    as hexadecimal pairs (`/etc/hex.lua`), and the test packs them back into a
+    file and asks the `zstd` of the host for the script it compressed.
+    """
+    checks = []
+
+    def expect(name: str, condition: bool, detail: str = "") -> None:
+        checks.append((name, bool(condition), detail))
+
+    image = os.path.join(BUILD, "zstd-compat.img")
+    shutil.copyfile(DEFAULT_IMAGE, image)
+    commands = [
+        "mkdir /tmp",
+        # The source is the script of the first Lua program of the machine:
+        # 424 bytes of text, so a frame with a header, a block and a footer.
+        "exec /bin/zstd -q -f -3 /etc/hello.lua -o /tmp/frame.zst",
+        f"exec /bin/lua {HEX_SCRIPT} /tmp/frame.zst",
+        "exec /bin/wc -c /tmp/frame.zst",
+        "uname",
+    ]
+
+    try:
+        output = run_machine(loader, kernel, image, timeout, commands)
+    except FileNotFoundError:
+        expect("qemu-system-x86_64 is installed", False)
+        return checks
+    finally:
+        if os.path.exists(image):
+            os.remove(image)
+
+    blocks = output.split(PROMPT)[1:]
+    expect(
+        "the machine of the compatibility test boots",
+        len(blocks) > len(commands),
+        output[-300:],
+    )
+
+    hex_text = ""
+    if len(blocks) > 2:
+        for line in blocks[2].splitlines():
+            line = line.strip()
+            if len(line) >= 16 and len(line) % 2 == 0 and re.fullmatch(r"[0-9a-f]+", line):
+                hex_text = line
+                break
+
+    expect(
+        "the guest prints the bytes of its frame",
+        len(hex_text) >= 32,
+        blocks[2][:200] if len(blocks) > 2 else "",
+    )
+
+    source = os.path.join(BUILD, "hello.lua")
+    try:
+        with open(source, "rb") as file:
+            expected = file.read()
+    except OSError as error:
+        expect("the script of the image is readable", False, str(error))
+        return checks
+
+    if hex_text:
+        frame = bytes.fromhex(hex_text)
+        expect("the frame of the guest starts with the magic of zstd", frame[:4] == b"\x28\xb5\x2f\xfd")
+        try:
+            unpacked = host_zstd_decompress(frame)
+        except (OSError, RuntimeError, ValueError) as error:
+            expect("the zstd of the host unpacks the frame of the guest", False, str(error))
+            return checks
+        expect(
+            "the zstd of the host unpacks the frame of the guest",
+            unpacked == expected,
+            f"{len(unpacked)} bytes of {len(expected)}",
+        )
+        expect(
+            "the bytes of the frame are the script of the image",
+            b"the first script of the machine" in unpacked,
+            unpacked[:120],
+        )
+    else:
+        expect("the zstd of the host unpacks the frame of the guest", False, "no hex line")
+
+    # The count of the frame and the frame agree: a hex line that lost a byte
+    # would still pass the two checks above only if the host refused it.
+    if len(blocks) > 3 and hex_text:
+        match = re.search(r"(\d+) /tmp/frame.zst", blocks[3])
+        expect(
+            "the hex line is the whole frame",
+            match is not None and int(match.group(1)) == len(hex_text) // 2,
+            f"{match.group(1) if match else '?'} byte(s) in the file",
+        )
+
+    return checks
+
+
 def check(output: str) -> list:
     """The expectations about the boot and the shell of the machine."""
     checks = []
@@ -1284,6 +1442,83 @@ def check(output: str) -> list:
     licenses = answer("exec /bin/ls /etc/licenses")
     expect("the license of zlib travels with the image", "zlib" in licenses, licenses)
 
+    # --- the third port of somebody else's program: zstd and /bin/zstd
+    # The frame of /etc/setting.zst is the work of the `zstd` of the machine
+    # that built the image (tools/x86_image.py), so the text below is the
+    # library of the guest reading a stream of another build of 1.5.7 - which
+    # is what "the same format" means.
+    zstd_read = answer("exec /bin/zstd -d -c /etc/setting.zst")
+    expect(
+        "zstd unpacks a frame the zstd of the host wrote",
+        "hello" in zstd_read
+        and "hostname=x86_64" in zstd_read
+        and "console=vga" in zstd_read
+        and "the program exited with 0" in zstd_read,
+        zstd_read,
+    )
+    zstd_write = answer("exec /bin/zstd -19 -q -f /etc/setting -o /tmp/setting.zst")
+    expect(
+        "zstd packs a file of the machine",
+        "the program exited with 0" in zstd_write and "zstd:" not in zstd_write,
+        zstd_write,
+    )
+    zstd_back = answer("exec /bin/zstd -d -c /tmp/setting.zst")
+    expect(
+        "the frame of the guest comes back whole",
+        "hello" in zstd_back and "console=vga" in zstd_back and "the program exited with 0" in zstd_back,
+        zstd_back,
+    )
+    zstd_size = answer("exec /bin/wc -c /tmp/setting.zst")
+    match = re.search(r"(\d+) /tmp/setting.zst", zstd_size)
+    expect(
+        "the frame of 34 bytes is a handful of bytes",
+        match is not None and 20 <= int(match.group(1)) <= 64,
+        zstd_size,
+    )
+    expect(
+        "zstd -19 packs the file and its frame comes back whole",
+        "the program exited with 0" in zstd_back,
+        zstd_back,
+    )
+    broken = answer("exec /bin/zstd -t /etc/broken.zst")
+    expect(
+        "zstd -t refuses a frame with a cut tail",
+        "the program exited with 1" in broken and "error" in broken.lower(),
+        broken,
+    )
+    listing = answer("exec /bin/zstd -l /etc/setting.zst")
+    expect(
+        "zstd -l prints the sizes of the frame",
+        re.search(r"\n\s+1\s+0\s+\d+\s+B\s+34\s+B", listing) is not None
+        and "the program exited with 0" in listing,
+        listing,
+    )
+    cat_named = answer("exec /bin/zstdcat /etc/setting.zst")
+    expect(
+        "the second name of the command unpacks to the console",
+        "console=vga" in cat_named and "the program exited with 0" in cat_named,
+        cat_named,
+    )
+    recursive = answer("exec /bin/zstd -r -q -f /tmp/z")
+    expect(
+        "zstd -r walks a directory of the machine",
+        "the program exited with 0" in recursive and "zstd:" not in recursive,
+        recursive,
+    )
+    recursive_listing = answer("exec /bin/ls /tmp/z")
+    expect(
+        "zstd -r wrote a frame beside every file",
+        "a.zst" in recursive_listing and "b.zst" in recursive_listing,
+        recursive_listing,
+    )
+    piped_zstd = answer("cat /etc/setting.zst | /bin/zstd -d -c")
+    expect(
+        "zstd reads a frame from a pipe",
+        "hostname=x86_64" in piped_zstd and "the program exited with 0" in piped_zstd,
+        piped_zstd,
+    )
+    expect("the license of zstd travels with the image", "zstd" in licenses, licenses)
+
     # --- the second port of somebody else's program: Lua and /bin/lua
     # The script and the license are files of the image, the interpreter is a
     # file of /bin, and every line below is the library of the guest computing
@@ -1596,7 +1831,12 @@ def main(argv: list) -> int:
         default=os.path.join(ROOT, "build-x86-open"),
         help="the build with MICRO_OS_REQUIRE_SIGNATURE=OFF",
     )
-    parser.add_argument("--timeout", type=float, default=30.0, help="the seconds the machine gets")
+    # The machine reads the image of a program through the disk driver of the
+    # port for every `exec`, and a read of a large file is the slowest thing
+    # this machine does (docs/debts.md): the command line has programs of
+    # 437 KiB (zstd) and 168 KiB (lua) in it, and a run of the list of
+    # COMMANDS needs a minute of an emulated machine that is not the fastest.
+    parser.add_argument("--timeout", type=float, default=120.0, help="the seconds the machine gets")
     parser.add_argument("--verbose", action="store_true", help="print the console of the machine")
     args = parser.parse_args(argv)
 
@@ -1630,6 +1870,7 @@ def main(argv: list) -> int:
         + signature_checks(loader, kernel)
         + open_policy_checks(args.open_build)
         + check(output)
+        + zstd_compat_checks(loader, kernel, args.timeout)
         + oversize_checks(loader, kernel, args.timeout)
     )
     failed = [item for item in checks if not item[1]]

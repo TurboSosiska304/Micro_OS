@@ -227,6 +227,10 @@ if [ -f "$X86_BUILD/loader32.elf" ] && [ -f "$X86_BUILD/microos64.bin" ]; then
     cp -f "$ROOT/third_party/zlib/LICENSE" "$STAGE/LICENSE.zlib"
     # Lua is /bin/lua of the same image, under the MIT license of its release.
     cp -f "$ROOT/third_party/lua/LICENSE" "$STAGE/LICENSE.lua"
+    # zstd is /bin/zstd and /bin/zstdcat of the same image, under the
+    # BSD-3-Clause of its release (this tree takes that half of the dual
+    # license and not the GPL-2.0 one).
+    cp -f "$ROOT/third_party/zstd/LICENSE" "$STAGE/LICENSE.zstd"
     if [ -f "$X86_BUILD/microos64.sig" ] && [ -f "$X86_BUILD/signing.pub" ]; then
         cp -f "$X86_BUILD/microos64.sig" "$STAGE/microos64.sig"
         cp -f "$X86_BUILD/signing.pub" "$STAGE/microos-sign.pub"
@@ -269,9 +273,12 @@ note, the version and the port layer.
 
 `/bin/lua` of the disk image is Lua 5.4.7 (MIT license); `LICENSE.lua` is its
 license and `third_party/lua` of the sources has the note, the version, the
-port layer and the one setting of the port (`port/luaconf_port.h`). The
-interpreter of this release does not run yet: its image is past the block the
-kernel reads in one call (`docs/debts.md`).
+port layer and the one setting of the port (`port/luaconf_port.h`).
+
+`/bin/zstd` and `/bin/zstdcat` of the disk image are zstd 1.5.7
+(BSD-3-Clause); `LICENSE.zstd` is its license and `third_party/zstd` of the
+sources has the note, the version, the port layer and the memory policy of the
+port. The command packs and unpacks the frames of every other zstd.
 
 The kernel carries a signature trailer (ADR 0020), and the loader verifies it
 before it copies a byte: an image with a changed byte, without a trailer or
@@ -286,7 +293,7 @@ kernel with a port per machine.
 DOC
 
     STAGE_FILES=(loader32.elf microos64.bin run.sh README.md LICENSE.spleen LICENSE.zlib
-        LICENSE.lua)
+        LICENSE.lua LICENSE.zstd)
     if [ -f "$STAGE/microos64.sig" ]; then
         STAGE_FILES+=(microos64.sig microos-sign.pub)
     fi

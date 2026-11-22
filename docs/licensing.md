@@ -15,6 +15,7 @@ commercially; the note here is what the tree does.
 | Spleen 8x16 | 2.3.0 | BSD-2-Clause | `third_party/spleen`, `ports/port_x86_64/src/font_spleen.c` | the x86-64 kernel image; `LICENSE.spleen` in its tar |
 | zlib | 1.3.1 | zlib | `third_party/zlib`, `ports/port_x86_64/programs/zcat.c` | `/bin/zcat` of the x86-64 MicroFS image; `/etc/licenses/zlib` in the image and `LICENSE.zlib` in the x86-64 tar |
 | Lua | 5.4.7 | MIT | `third_party/lua`, `ports/port_x86_64/programs` (the `main` is the release's `lua.c`) | `/bin/lua` of the x86-64 MicroFS image; `/etc/licenses/lua` in the image and `LICENSE.lua` in the x86-64 tar |
+| zstd | 1.5.7 | BSD-3-Clause | `third_party/zstd`, `ports/port_x86_64/CMakeLists.txt` (the `main` is the release's `zstdcli.c`) | `/bin/zstd` and `/bin/zstdcat` of the x86-64 MicroFS image; `/etc/licenses/zstd` in the image and `LICENSE.zstd` in the x86-64 tar |
 
 Spleen is a font by Frederic Cambus; the license and the note are in
 [`third_party/spleen`](../third_party/spleen/README.md). The 8x16 table is
@@ -40,6 +41,19 @@ software, so the image carries `/etc/licenses/lua` beside `/bin/lua` and
 `tools/bundle.sh` puts `LICENSE.lua` into the x86-64 archive. The text is the
 MIT of the release and not a second copy of the MIT of this tree: the two
 notice lines are different and the tree keeps both.
+
+zstd is a compression library by Meta Platforms (Yann Collet and the
+contributors of the project); the version, the files, the port layer and the
+memory policy of the port are in
+[`third_party/zstd`](../third_party/zstd/README.md). The files of the release
+are dual licensed "BSD-3-Clause or GPL-2.0"; this tree takes the
+**BSD-3-Clause** and vendors no copy of the GPL text (the `COPYING` of the
+tarball is not here). The license asks that the copyright notice and the
+permission text travel with a copy of the software, so the image carries
+`/etc/licenses/zstd` beside `/bin/zstd` and `/bin/zstdcat`, and
+`tools/bundle.sh` puts `LICENSE.zstd` into the x86-64 archive. The text is the
+BSD-3-Clause of the release and not the MIT of this tree: the two notices are
+different and the tree keeps both.
 
 ## The rule
 

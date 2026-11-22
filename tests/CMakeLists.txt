@@ -50,6 +50,7 @@ if(NOT ESP_PLATFORM)
         cases/test_progs.c
         cases/test_zlib.c
         cases/test_lua.c
+        cases/test_zstd.c
         cases/test_userland_float.c
     )
 
@@ -76,6 +77,7 @@ if(NOT ESP_PLATFORM)
     )
 
     set(MICROOS_ZLIB_DIR "${CMAKE_SOURCE_DIR}/third_party/zlib")
+    set(MICROOS_ZSTD_DIR "${CMAKE_SOURCE_DIR}/third_party/zstd")
     set(MICROOS_LUA_DIR "${CMAKE_SOURCE_DIR}/third_party/lua")
 
     target_include_directories(microos_tests PRIVATE
@@ -104,6 +106,11 @@ if(NOT ESP_PLATFORM)
         # (`third_party/lua/port/luaconf_port.h`) is for the guest, where
         # there is no shell and no temporary name.
         "${MICROOS_LUA_DIR}"
+        # The headers of zstd, and the port header of the build (the C path of
+        # the Huffman decoder, no trace, no legacy frames), which is the same
+        # for the two machines.
+        "${MICROOS_ZSTD_DIR}/lib"
+        "${MICROOS_ZSTD_DIR}/port"
     )
 
     # zlib is the first third-party library of the tree, and the host test is
@@ -185,6 +192,42 @@ if(NOT ESP_PLATFORM)
     set_source_files_properties("${MICROOS_ZLIB_DIR}/port/zlib_os.c"
         PROPERTIES COMPILE_DEFINITIONS "MY_ZCALLOC=1")
 
+    # zstd is the third library of somebody else, and its host build is the
+    # same list of sources as the guest build of `ports/port_x86_64`: the
+    # library of the frame format, with the port header that turns the
+    # assembly of the Huffman decoder, the trace and the legacy frames off.
+    set(MICROOS_ZSTD_SOURCES
+        "${MICROOS_ZSTD_DIR}/lib/common/debug.c"
+        "${MICROOS_ZSTD_DIR}/lib/common/entropy_common.c"
+        "${MICROOS_ZSTD_DIR}/lib/common/error_private.c"
+        "${MICROOS_ZSTD_DIR}/lib/common/fse_decompress.c"
+        "${MICROOS_ZSTD_DIR}/lib/common/pool.c"
+        "${MICROOS_ZSTD_DIR}/lib/common/threading.c"
+        "${MICROOS_ZSTD_DIR}/lib/common/xxhash.c"
+        "${MICROOS_ZSTD_DIR}/lib/common/zstd_common.c"
+        "${MICROOS_ZSTD_DIR}/lib/compress/fse_compress.c"
+        "${MICROOS_ZSTD_DIR}/lib/compress/hist.c"
+        "${MICROOS_ZSTD_DIR}/lib/compress/huf_compress.c"
+        "${MICROOS_ZSTD_DIR}/lib/compress/zstd_compress.c"
+        "${MICROOS_ZSTD_DIR}/lib/compress/zstd_compress_literals.c"
+        "${MICROOS_ZSTD_DIR}/lib/compress/zstd_compress_sequences.c"
+        "${MICROOS_ZSTD_DIR}/lib/compress/zstd_compress_superblock.c"
+        "${MICROOS_ZSTD_DIR}/lib/compress/zstd_double_fast.c"
+        "${MICROOS_ZSTD_DIR}/lib/compress/zstd_fast.c"
+        "${MICROOS_ZSTD_DIR}/lib/compress/zstd_lazy.c"
+        "${MICROOS_ZSTD_DIR}/lib/compress/zstd_ldm.c"
+        "${MICROOS_ZSTD_DIR}/lib/compress/zstd_opt.c"
+        "${MICROOS_ZSTD_DIR}/lib/compress/zstd_preSplit.c"
+        "${MICROOS_ZSTD_DIR}/lib/decompress/huf_decompress.c"
+        "${MICROOS_ZSTD_DIR}/lib/decompress/zstd_ddict.c"
+        "${MICROOS_ZSTD_DIR}/lib/decompress/zstd_decompress.c"
+        "${MICROOS_ZSTD_DIR}/lib/decompress/zstd_decompress_block.c"
+    )
+    set_source_files_properties(${MICROOS_ZSTD_SOURCES}
+        PROPERTIES COMPILE_OPTIONS
+        "-include;${MICROOS_ZSTD_DIR}/port/zstd_port.h;-Wno-sign-compare;-Wno-unused-but-set-variable"
+        OBJECT_DEPENDS "${MICROOS_ZSTD_DIR}/port/zstd_port.h")
+
     target_sources(microos_tests PRIVATE
         "${CMAKE_SOURCE_DIR}/components/drivers/src/input_debounce.c"        "${CMAKE_SOURCE_DIR}/components/drivers/src/battery_soc.c"
         "${CMAKE_SOURCE_DIR}/components/drivers/src/fb_draw.c"
@@ -200,6 +243,7 @@ if(NOT ESP_PLATFORM)
         ${MICROOS_ZLIB_SOURCES}
         "${MICROOS_ZLIB_DIR}/port/zlib_os.c"
         ${MICROOS_LUA_SOURCES}
+        ${MICROOS_ZSTD_SOURCES}
         "${CMAKE_CURRENT_LIST_DIR}/cases/userland_float_shim.c"
     )
 
