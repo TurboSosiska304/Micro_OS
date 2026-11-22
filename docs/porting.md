@@ -12,12 +12,16 @@ The tree carries four ports, and they are the examples:
 
 | Port | What it is | Build |
 |---|---|---|
-| `ports/port_null` | no machine; every call answers "there is none" | host |
-| `ports/port_host` | a Linux process: pthreads, files, sockets | host |
+| `ports/port_null` | no machine; every call answers "there is none" (a substrate) | host |
+| `ports/port_host` | a Linux process: pthreads, files, sockets (the substrate of the tests) | host |
 | `ports/port_x86_64` | bare metal in QEMU; loader, IDT, PIT, COM1 | `make x86-build` |
 | `components/port_esp32` | ESP-IDF, FreeRTOS, lwIP, NVS, the `mfs` partition | `make idf-build` |
 
-Read them in that order. `port_null` is the shape of the contract with no
+Two of them are **ports** that run the system on a machine (x86-64 and the
+board); `port_host` and `port_null` are **substrates**: the host is the
+substrate of the tests and the simulator, the null is the shape of the
+contract with no machine under it (ADR 0004). Read them in that order.
+`port_null` is the shape of the contract with no
 machine under it, `port_host` is the same calls over POSIX, `port_x86_64` is
 the worked example of programs, signals and an MMU, and `port_esp32` is the
 board with its quirks ([ADR 0018](adr/0018-esp32-programs.md)).

@@ -1,7 +1,10 @@
 # Ports
 
-A port is a directory that implements the contract of `kernel/port/*.h`; a
-board is a description of a machine plus the drivers of its chips. The kernel
+A port is a directory that implements the contract of `kernel/port/*.h` on a
+machine; a board is a description of a machine plus the drivers of its chips.
+Two of the four implementations are ports - the board and x86-64; the **host**
+is the substrate of the tests and the simulator, and the **null** is the shape
+of the contract with no machine under it (ADR 0004). The kernel
 in `components/kernel/` includes nothing of a platform, and `make integrity`
 fails when it tries. That is why the same sources build as a Linux process, as
 a bare-metal x86-64 machine and as the firmware of the board; the reasoning is

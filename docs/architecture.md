@@ -24,11 +24,13 @@ the description of the machine plus the drivers of its chips.
 | The port contract (kernel/port/*.h): console, time, memory, locks,   |
 | power, store, sockets, identity; and the execution substrate        |
 +---------------------------------------------------------------------+
-| Ports:                                                               |
+| Ports and substrates:                                                |
 |   port_esp32   ESP-IDF + FreeRTOS + lwIP + NVS, the partition of MFS |
-|   port_host    a Linux process (pthreads, files, sockets)           |
+|   port_host    a Linux process (pthreads, files, sockets) - the  |
+|                substrate of the tests and the simulator, not a port |
 |   port_x86_64  bare metal on QEMU: its own loader, IDT/PIT, switch  |
-|   port_null    no machine at all, linked by the checks              |
+|   port_null    no machine at all, linked by the checks - a shape |
+|                of the contract, not a port                          |
 +---------------------------------------------------------------------+
 | Boards and drivers (the ESP32 port): the StickC Plus2, the panel,   |
 | the buttons, the IMU, the RTC, the battery, the radio               |
