@@ -115,6 +115,22 @@ static k_u64_t g_kernel_pd_high[TABLE_ENTRIES] __attribute__((aligned(PAGE_SIZE)
 static k_u64_t g_kernel_image_pt[KERNEL_IMAGE_TABLES][TABLE_ENTRIES]
     __attribute__((aligned(PAGE_SIZE)));
 
+/*
+ * The first 2 MiB get a table of 4 KiB pages for one reason: the AP
+ * trampoline at 0x7000 (src/ap_trampoline.S) is code the second processor
+ * executes after it turns the paging on, and a 2 MiB page cannot be
+ * executable and hold the writable parameter block at 0x8000 at once. Page 7
+ * of the low map - 0x7000..0x7FFF - is therefore present and executable and
+ * read-only, the parameter page 8 is writable and NX like the rest of the
+ * data, and the boot's W^X audit still finds no page that is both writable
+ * and executable.
+ */
+static k_u64_t g_kernel_low_pt[TABLE_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
+
+/* The page of the AP trampoline; the page of its parameters (8) keeps the
+ * writable NX protection of the data it is. */
+#define AP_TRAMPOLINE_PAGE 7u
+
 extern char __text_start[];
 extern char __text_end[];
 extern char __rodata_start[];
@@ -474,6 +490,26 @@ void port_x86_64_paging_init(void)
             ((k_u64_t)index << 21) | PTE_PRESENT | PTE_WRITABLE | PTE_PAGE_SIZE | PTE_NX;
         g_kernel_pd_high[index] = 0;
     }
+
+    /*
+     * The first 2 MiB are split into 4 KiB pages so that the trampoline of
+     * the application processors is executable and the page the BSP writes the
+     * parameters to is not. Every other page of the chunk keeps the protection
+     * of the large page it replaced: writable, supervisor and NX.
+     */
+    for (index = 0; index < TABLE_ENTRIES; index++) {
+        k_u64_t flags = PTE_PRESENT | PTE_WRITABLE | PTE_NX;
+
+        if (index == AP_TRAMPOLINE_PAGE) {
+            /* Code the AP runs after paging is on: readable, executable and
+             * never writable, so W^X holds for the kernel's own map too. */
+            flags = PTE_PRESENT;
+        }
+
+        g_kernel_low_pt[index] = ((k_u64_t)index << PAGE_SHIFT) | flags;
+    }
+
+    g_kernel_pd_low[0] = page_phys(g_kernel_low_pt) | PTE_PRESENT | PTE_WRITABLE;
 
     kernel_image_map();
 

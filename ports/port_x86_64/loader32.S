@@ -57,6 +57,11 @@ _start:
     cli
     cld
 
+    /* The copy of the trampoline below is a string move, and a multiboot
+       loader is not required to leave ES where this code wants it. */
+    xorw %ax, %ax
+    movw %ax, %es
+
     /* Zero our .bss first: the tables and the stack live there. */
     lea __bss_start, %edi
     lea __bss_end, %ecx
@@ -138,6 +143,18 @@ _start:
     jmp .Lmods_check
 
 .Lmods_ok:
+
+    /*
+     * The trampoline of the application processors (src/ap_trampoline.S) is
+     * linked at the physical page the start-up IPI names, 0x7000, and this
+     * loader is the only code that runs before the APs do: it puts the bytes
+     * there while the addresses are still the physical ones. The kernel then
+     * fills the parameter block at 0x7F00 and sends the IPIs.
+     */
+    movl $0x7000, %edi
+    movl $ap_trampoline_blob, %esi
+    movl $(ap_trampoline_blob_end - ap_trampoline_blob), %ecx
+    rep movsb
 
     /* PML4[0] -> PDPT_LOW, PDPT_LOW[0] -> PD_LOW: the first gigabyte through
        2 MiB pages, so that every address of the boot keeps its meaning. */
@@ -262,6 +279,16 @@ mbi_ptr:
 .align 8
 overlap_text:
 .asciz "Micro OS: a module of the boot lies over the kernel image\r\n"
+
+/*
+ * The flat image of the AP trampoline, linked at 0x7000 by ap_trampoline.ld
+ * and copied to that address above. The bytes carry their own absolute
+ * addresses, so they are data here and not code the loader runs.
+ */
+.align 16
+ap_trampoline_blob:
+.incbin "ap_trampoline.bin"
+ap_trampoline_blob_end:
 
 .align 8
 gdt64:

@@ -198,8 +198,16 @@ void port_x86_64_program_fault(k_u64_t vector, k_u64_t error, k_u64_t address, k
  */
 void port_x86_64_gdt_init(void);
 
+/*
+ * Build and load the table of one core: the BSP calls this for 0 at the boot,
+ * an AP for its own number on the way up. The tables are identical except for
+ * the TSS, which carries the RSP0 and the IST stack of that core.
+ */
+void port_x86_64_gdt_init_cpu(k_u32_t cpu);
+
 /* The stack the processor takes on an interrupt from ring 3. */
 void port_x86_64_tss_set_rsp0(k_u64_t rsp0);
+k_u64_t port_x86_64_tss_rsp0(void);
 
 /*
  * Build the map of the kernel: the first gigabyte identity mapped, 2 MiB
