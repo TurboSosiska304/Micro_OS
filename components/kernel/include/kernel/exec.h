@@ -58,6 +58,29 @@
 #define K_EXEC_BSS_MAX (1024u * 1024u)
 
 /*
+ * The largest image a call of the system reads and hands to a port. It is a
+ * cap of the memory of the machine, not of the format: the image is read in
+ * pieces of KSYS_MAX_IO (64 KiB) into one block of the allocator, and the
+ * block comes from the PSRAM on the board and from the heap of the port on
+ * x86-64. Eight megabytes hold the interpreter of Lua (164 KiB), the library
+ * of SQLite and the page of a program of the future; a file past it is
+ * refused before a byte is read, with E2BIG.
+ *
+ * The window of a port is the other limit: an image that fits here but not
+ * the window of the machine is refused by the port with ENOMEM. The two
+ * numbers are independent and neither is the transfer edge of one call.
+ */
+#define K_EXEC_MAX_IMAGE (8u * 1024u * 1024u)
+
+/*
+ * The size of a file against the two limits of the format and of the call:
+ * 0 when a call may read it, KERR_INVAL when it cannot hold the header, and
+ * KERR_TOOBIG when it is past K_EXEC_MAX_IMAGE. The answers are the ones of
+ * the system calls, so a caller returns them as they are.
+ */
+int k_exec_image_check(k_size_t size);
+
+/*
  * A parsed image: the bytes stay where the caller has them (the page of the
  * file), the sizes are the ones of the header. `entry` is an offset from the
  * start of the image, header included.
