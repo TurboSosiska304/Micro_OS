@@ -82,6 +82,11 @@ jobs:
       # The host tools include microos_sign, which signs the bundle and is
       # needed by the step below. The x86-64 build has its own copy.
       - name: the tools of the host
+        # The container exports IDF_PATH; the top level CMake would take the
+        # firmware branch and look for the Xtensa compiler. The host tools are
+        # a plain CMake build and name no platform.
+        env:
+          IDF_PATH: ""
         run: make build
 
       # esptool lives in the python environment of the image, and the step
