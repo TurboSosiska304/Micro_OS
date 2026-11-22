@@ -57,6 +57,9 @@ PROGRAMS = [
     "find",
     "xargs",
     "sed",
+    # The two calculators of the third port: one engine, two names.
+    "bc",
+    "dc",
 ]
 
 # The stream of the test of zlib: a fixed text, a fixed moment and the level
@@ -102,6 +105,50 @@ print("lua: os.time", os.time() >= 0)
 print("lua: string", ("abc"):upper(), string.rep("x", 3))
 """
 
+# The script of bc: the four things a calculator of the machine has to show -
+# a number of 31 digits, a square root with the scale of the line, a base read
+# and a base written, a function of the language with a loop and an array, a
+# string, and the math library of `-l`. The smoke test reads this text in one
+# run and again after the reset of the disk. The last line is the arctangent
+# of 1 at `scale=10`: the math library truncates the constant of the release
+# at the scale of the call, as GNU bc does, so the tenth digit is 2 and not
+# the 5 of a value rounded at the last place.
+BC_SCRIPT = """/* /etc/bc.bc: the script of the machine */
+scale = 20
+2^100
+sqrt(2)
+ibase = 16
+FF
+ibase = A
+obase = 2
+10
+obase = A
+define sum(n) {
+    auto i, s
+    s = 0
+    for (i = 1; i <= n; i++) s += i
+    return (s)
+}
+sum(10)
+if (sum(10) == 55) print "the sum is right\\n"
+i = 0
+while (i < 3) i += 1
+i
+a[1] = 10
+a[2] = 32
+a[1] + a[2]
+scale = 10
+4*a(1)
+"""
+
+# The script of dc: the same engine in RPN. The lines are a sum, a division
+# at the default scale of 0, a division at a scale of 5 and a power.
+DC_SCRIPT = """2 3 + p
+10 4 / p
+5 k 1 3 / p
+2 10 ^ p
+"""
+
 IMAGE_MB = 8
 START_LBA = 2048
 # The moment of the records when SOURCE_DATE_EPOCH does not say another one.
@@ -115,6 +162,25 @@ DEFAULT_MKFS = os.path.join(ROOT, "build-host", "tools", "microos_mkfs")
 ZLIB_LICENSE = os.path.join(ROOT, "third_party", "zlib", "LICENSE")
 LUA_LICENSE = os.path.join(ROOT, "third_party", "lua", "LICENSE")
 SBASE_LICENSE = os.path.join(ROOT, "third_party", "sbase", "LICENSE")
+BC_LICENSE = os.path.join(ROOT, "third_party", "bc", "LICENSE")
+
+
+def write_text_fixture(build_dir: str, name: str, text: str) -> str:
+    """Write a script of the machine, the same bytes every run."""
+    path = os.path.join(build_dir, name)
+
+    with open(path, "w", encoding="utf-8", newline="\n") as file:
+        file.write(text)
+
+    return path
+
+
+def write_bc_script(build_dir: str) -> str:
+    return write_text_fixture(build_dir, "bc.bc", BC_SCRIPT)
+
+
+def write_dc_script(build_dir: str) -> str:
+    return write_text_fixture(build_dir, "dc.dc", DC_SCRIPT)
 
 
 def write_hello_lua(build_dir: str) -> str:
@@ -217,6 +283,9 @@ def build_image(
     if not os.path.isfile(SBASE_LICENSE):
         print(f"missing {SBASE_LICENSE}", file=sys.stderr)
         return 2
+    if not os.path.isfile(BC_LICENSE):
+        print(f"missing {BC_LICENSE}", file=sys.stderr)
+        return 2
 
     # The fixture of zcat and the license that travels with its bytes. The
     # program is part of the image, so the image carries the notice of the
@@ -236,6 +305,15 @@ def build_image(
     # The MIT notice of sbase travels with the ten commands of /bin, as the
     # notice of zlib travels with zcat.
     command += ["--file", f"/etc/licenses/sbase={SBASE_LICENSE}"]
+
+    # The two calculators: the scripts of /etc and the license of the library
+    # that both images carry. bc 7.2.0 is one engine with two names, so one
+    # notice of the release is beside the two programs.
+    bc_script = write_bc_script(build_dir)
+    dc_script = write_dc_script(build_dir)
+    command += ["--file", f"/etc/bc.bc={bc_script}"]
+    command += ["--file", f"/etc/dc.dc={dc_script}"]
+    command += ["--file", f"/etc/licenses/bc={BC_LICENSE}"]
 
     command += ["--text", f"/etc/setting={SETTING}"]
 

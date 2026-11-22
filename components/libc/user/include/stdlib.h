@@ -42,6 +42,6 @@ void *bsearch(const void *key, const void *base, size_t count, size_t size,
 
 char *getenv(const char *name);
 int atexit(void (*function)(void));
-void abort(void) __attribute__((noreturn));
+void abort(void) __attribute__((__noreturn__));
 
 #endif /* MICRO_OS_LIBC_USER_STDLIB_H */

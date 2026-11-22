@@ -332,12 +332,21 @@ written when the project was an operating system for one board; the numbers
 * [x] The third port, and the first set of commands: sbase with ten tools
       (`cat`, `grep`, `head`, `ls`, `tail`, `wc`, `sort`, `find`, `xargs`,
       `sed`) under their canonical names in `/bin`, in place of the small
-      programs they replace. It is the port
-      that grew the library of a program the families a POSIX command needs
-      (`opendir`/`readdir`, `struct stat`, `getpwuid`, `localtime`,
-      `fnmatch`, a regular expression engine, `getopt`, `getline`,
-      `fmemopen`), and the ten commands are in `make x86-smoke` and
-      `make x86-disk-smoke`
+      programs they replace. It is the port that grew the library of a
+      program the families a POSIX command needs (`opendir`/`readdir`,
+      `struct stat`, `getpwuid`, `localtime`, `fnmatch`, a regular expression
+      engine, `getopt`, `getline`, `fmemopen`), and the ten commands are in
+      `make x86-smoke` and `make x86-disk-smoke`
+* [x] The fourth port: bc 7.2.0 (BSD-2-Clause) as a static archive and the
+      two names `/bin/bc` and `/bin/dc` of the same engine, with the scripts
+      `/etc/bc.bc` and `/etc/dc.dc` and `/etc/licenses/bc` in the image. The
+      release is configured by a force-included `port/bc_port.h` (no history,
+      no NLS, 64-bit limbs) and its two POSIX calls are answered by the port
+      layer (`fstat` of a descriptor and `sigaction`). The library of a
+      program learned `strdup` and `srand`/`rand`; the host test is
+      `tests/cases/test_bc.c` and the smoke tests run the calculator and the
+      RPN one before and after a reset of the disk. The image is 115 KiB and
+      its arena is 768 KiB of the bss
 * [ ] The gaps of the next port: a `malloc` larger than the bss of an image
       (`brk`/`mmap` of a program), a `poll` for a library that waits on a
       pipe, an `fxsave` of the XMM state for two programs with a point in

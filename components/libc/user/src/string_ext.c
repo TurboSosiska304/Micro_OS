@@ -3,8 +3,10 @@
  *
  * The core of the strings is `src/string.c`; this file adds the functions a
  * command of a Unix-like system leans on and the kernel has no reason to
- * carry: the copy of a word in the arena and the compare without the case of
- * a letter. The errors of the failures are the ones of
+ * carry: the bounded copy of a word in the arena and the compare without the
+ * case of a letter. `strdup` is a file of its own (`src/strdup.c`), so a
+ * program that copies a word carries the arena and a program that does not
+ * call it does not. The errors of the failures are the ones of
  * POSIX, so a caller reads `errno` and not the sign of the answer.
  */
 #include "ulibc.h"
@@ -12,28 +14,6 @@
 #include <ctype.h>
 #include <errno.h>
 #include <stdlib.h>
-
-char *strdup(const char *text)
-{
-    size_t length;
-    char *copy;
-
-    if (text == NULL) {
-        errno = EINVAL;
-        return NULL;
-    }
-
-    length = strlen(text) + 1;
-    copy = (char *)malloc(length);
-    if (copy == NULL) {
-        errno = ENOMEM;
-        return NULL;
-    }
-
-    memcpy(copy, text, length);
-
-    return copy;
-}
 
 char *strndup(const char *text, size_t count)
 {

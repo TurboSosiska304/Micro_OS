@@ -171,6 +171,22 @@ COMMANDS = [
     "exec /bin/lua /etc/hello.lua",
     "exec /bin/lua /etc/no-such.lua",
     "exec /bin/cat /etc/hello.lua",
+    # The third port of a program of somebody else (bc 7.2.0): the calculator
+    # of arbitrary precision and its RPN sibling dc, one engine and two names
+    # of /bin. The image is 116 KiB and its arena is the bss (768 KiB); the
+    # library the two carry is the one of the release, and `-l` is its math
+    # library, generated into the image from `gen/lib.bc`.
+    "exec /bin/bc -e 2^100",
+    "exec /bin/bc -l -e scale=10 -e 4*a(1)",
+    "exec /bin/bc -e ibase=16 -e FF",
+    "exec /bin/bc -e obase=2 -e 10",
+    "exec /bin/bc -l -f /etc/bc.bc < /dev/null",
+    # The same script on descriptor 0: the shell opens the file and the
+    # calculator reads its input the way the release does, line by line.
+    "exec /bin/bc -l < /etc/bc.bc",
+    "exec /bin/dc /etc/dc.dc",
+    "exec /bin/dc -e 2 -e 3+p",
+    "exec /bin/cat /etc/bc.bc",
     "echo hi > /tmp/f",
     "cat /tmp/f",
     "cat < /tmp/f",
@@ -1204,6 +1220,8 @@ def check(output: str) -> list:
                 "find",
                 "xargs",
                 "sed",
+                "bc",
+                "dc",
             )
         ),
         bin_listing[-200:],
@@ -1622,6 +1640,81 @@ def check(output: str) -> list:
         "cannot open /etc/no-such.lua" in lua_missing and "exited with 1" in lua_missing,
         lua_missing,
     )
+
+    # --- the third port of somebody else's program: bc and dc
+    # One library and two `main`s: the name of the program in `argv[0]` picks
+    # the engine, and the scripts of /etc are files of the volume. The lines
+    # are the numbers of the release: a power of 31 digits, the arctangent of
+    # 1 at scale 10 (the math library truncates at the scale of the call, as
+    # GNU bc does), a base read and a base written, the square root of the
+    # script, a function with a loop, an array and a string.
+    bc_cat = answer("exec /bin/cat /etc/bc.bc")
+    expect(
+        "the script of bc is a file of the image",
+        "the script of the machine" in bc_cat,
+        bc_cat[:200],
+    )
+    expect(
+        "the license of bc travels with the two calculators",
+        "bc" in licenses,
+        licenses,
+    )
+
+    bc_power = answer("exec /bin/bc -e 2^100")
+    expect(
+        "bc prints a power of thirty-one digits",
+        "1267650600228229401496703205376" in bc_power
+        and "the program exited with 0" in bc_power,
+        bc_power,
+    )
+    bc_pi = answer("exec /bin/bc -l -e scale=10 -e 4*a(1)")
+    expect(
+        "bc -l computes the arctangent of 1 at scale 10",
+        "3.1415926532" in bc_pi and "the program exited with 0" in bc_pi,
+        bc_pi,
+    )
+    bc_base = answer("exec /bin/bc -e ibase=16 -e FF")
+    expect("bc reads a number in base 16", "255" in bc_base, bc_base)
+    bc_obase = answer("exec /bin/bc -e obase=2 -e 10")
+    expect("bc writes a number in base 2", "1010" in bc_obase, bc_obase)
+
+    bc_run = answer("exec /bin/bc -l -f /etc/bc.bc < /dev/null")
+    expect(
+        "the script of /etc runs in the calculator",
+        all(
+            line in bc_run
+            for line in (
+                "1267650600228229401496703205376",
+                "1.41421356237309504880",
+                "255",
+                "1010",
+                "55",
+                "the sum is right",
+                "3",
+                "42",
+                "3.1415926532",
+            )
+        )
+        and "the sum is right\r\n3\r\n42\r\n" in bc_run
+        and "the program exited with 0" in bc_run,
+        bc_run,
+    )
+    bc_stdin = answer("exec /bin/bc -l < /etc/bc.bc")
+    expect(
+        "bc reads its script from descriptor 0",
+        "the sum is right" in bc_stdin and "the program exited with 0" in bc_stdin,
+        bc_stdin,
+    )
+
+    dc_run = answer("exec /bin/dc /etc/dc.dc")
+    expect(
+        "dc is the same engine in RPN",
+        all(line in dc_run for line in ("5", "2", ".33333", "1024"))
+        and "the program exited with 0" in dc_run,
+        dc_run,
+    )
+    dc_sum = answer("exec /bin/dc -e 2 -e 3+p")
+    expect("dc adds two numbers on its stack", "5" in dc_sum, dc_sum)
 
     # A program starts another program with an environment of its own. The
     # two words are the vector of `spawn.c`, copied by the kernel at the edge

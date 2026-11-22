@@ -31,7 +31,7 @@ typedef long blkcnt_t;
 typedef long time_t;
 #endif
 
-#ifndef MICRO_OS_LIBC_USER_TIMESPEC_DEFINED
+#if !defined(MICRO_OS_LIBC_USER_TIMESPEC_DEFINED) && !defined(_STRUCT_TIMESPEC)
 #define MICRO_OS_LIBC_USER_TIMESPEC_DEFINED
 struct timespec {
     time_t tv_sec;

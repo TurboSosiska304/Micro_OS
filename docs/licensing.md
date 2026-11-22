@@ -18,6 +18,7 @@ commercially; the note here is what the tree does.
 | PCRE2 | 10.42 | BSD-3-Clause WITH PCRE2-exception | `third_party/pcre2`, `ports/port_x86_64/programs/pcre2grep.c` | `/bin/pcre2grep` of the x86-64 MicroFS image; `/etc/licenses/pcre2` in the image and `LICENSE.pcre2` in the x86-64 tar |
 | Lua | 5.4.7 | MIT | `third_party/lua`, `ports/port_x86_64/programs` (the `main` is the release's `lua.c`) | `/bin/lua` of the x86-64 MicroFS image; `/etc/licenses/lua` in the image and `LICENSE.lua` in the x86-64 tar |
 | sbase | c546c3a (tip) | MIT | `third_party/sbase`, the ten commands `cat grep head ls tail wc sort find xargs sed` | `/bin/cat`, `/bin/grep`, `/bin/head`, `/bin/ls`, `/bin/tail`, `/bin/wc`, `/bin/sort`, `/bin/find`, `/bin/xargs` and `/bin/sed` of the x86-64 MicroFS image; `/etc/licenses/sbase` in the image and `LICENSE.sbase` in the x86-64 tar |
+| bc and dc | 7.2.0 | BSD-2-Clause | `third_party/bc` (the `main` is the release's `main.c`) | `/bin/bc` and `/bin/dc` of the x86-64 MicroFS image; `/etc/licenses/bc` in the image and `LICENSE.bc` in the x86-64 tar |
 
 Spleen is a font by Frederic Cambus; the license and the note are in
 [`third_party/spleen`](../third_party/spleen/README.md). The 8x16 table is
@@ -74,6 +75,14 @@ puts `LICENSE.sbase` into the x86-64 archive, and a package that installs a
 tool (`microos-progs` of a release) copies the same file beside it. The
 notice is not merged into the MIT `LICENSE` of the tree: the two are the same
 license but not the same text.
+
+bc and dc are the calculators of Gavin D. Howard, one engine with two names;
+the version, the files, the port layer and the configuration of the port are
+in [`third_party/bc`](../third_party/bc/README.md). The 2-Clause BSD license
+keeps its copyright notice with a copy of the source, so the image carries
+`/etc/licenses/bc` beside `/bin/bc` and `/bin/dc`, and `tools/bundle.sh` puts
+`LICENSE.bc` into the x86-64 archive. The text is the BSD-2-Clause of the
+release and not the MIT of the tree; the two are not merged.
 
 ## The rule
 

@@ -65,7 +65,7 @@ pid_t getppid(void);
 pid_t wait(int *status);
 pid_t waitpid(pid_t pid, int *status, int options);
 int execvp(const char *file, char *const argv[]);
-void _exit(int code) __attribute__((noreturn));
+void _exit(int code) __attribute__((__noreturn__));
 unsigned sleep(unsigned seconds);
 
 extern char **environ;

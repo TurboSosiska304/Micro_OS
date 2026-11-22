@@ -253,6 +253,8 @@ if [ -f "$X86_SRC/loader32.elf" ] && [ -f "$X86_SRC/microos64.bin" ]; then
     # grep, ls, ...), under their MIT license; the notice travels with the
     # archive for the same reason.
     cp -f "$ROOT/third_party/sbase/LICENSE" "$STAGE/LICENSE.sbase"
+    # bc and dc are two names of the same engine and one BSD-2-Clause release.
+    cp -f "$ROOT/third_party/bc/LICENSE" "$STAGE/LICENSE.bc"
     cp -f "$ROOT/third_party/mbedtls/LICENSE" "$STAGE/LICENSE.mbedtls"
     if [ -f "$X86_SRC/microos64.sig" ] && [ -f "$X86_SRC/signing.pub" ]; then
         cp -f "$X86_SRC/microos64.sig" "$STAGE/microos64.sig"
@@ -317,6 +319,11 @@ the first boot and after the reset.
 the tools of sbase (MIT); `LICENSE.sbase` is their license and
 `third_party/sbase` of the sources has the subset and the port layer.
 
+`/bin/bc` and `/bin/dc` of the disk image are bc 7.2.0 (BSD-2-Clause), one
+engine with two names; `LICENSE.bc` is its license and `third_party/bc` of the
+sources has the note, the version, the port layer and the settings of the
+port (`port/bc_port.h`).
+
 The kernel carries a signature trailer (ADR 0020), and the loader verifies it
 before it copies a byte: an image with a changed byte, without a trailer or
 signed by another key stops with `the image is refused` and never reaches the
@@ -329,15 +336,16 @@ The same kernel is on the board and in the tests: Micro OS is one portable
 kernel with a port per machine.
 
 The machine carries three third-party components: `/bin/pcre2grep` links
-PCRE2 10.42, `/bin/lua` links the engine of Lua 5.4.7 and the `/bin/sb-*`
-tools are the programs of sbase. `LICENSE.pcre2`, `LICENSE.lua` and
-`LICENSE.sbase` beside this file are the licenses of that code, and the texts
+PCRE2 10.42, `/bin/lua` links the engine of Lua 5.4.7, the ten commands of
+sbase are the programs of the collection, and `/bin/bc` and `/bin/dc` are the
+two names of one engine. `LICENSE.pcre2`, `LICENSE.lua`, `LICENSE.sbase` and
+`LICENSE.bc` beside this file are the licenses of that code, and the texts
 are files of the disk image under `/etc/licenses/`; the MIT of Micro OS does
 not cover a byte of them.
 DOC
 
     STAGE_FILES=(loader32.elf microos64.bin run.sh README.md LICENSE.spleen LICENSE.zlib
-                 LICENSE.pcre2 LICENSE.lua LICENSE.sbase)
+                 LICENSE.pcre2 LICENSE.lua LICENSE.sbase LICENSE.bc)
     if [ -f "$STAGE/x86-all.img" ]; then
         STAGE_FILES+=(x86-all.img)
     fi

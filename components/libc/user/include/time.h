@@ -47,7 +47,7 @@ struct tm {
 #define CLOCK_REALTIME 0
 #define CLOCK_MONOTONIC 1
 
-#ifndef MICRO_OS_LIBC_USER_TIMESPEC_DEFINED
+#if !defined(MICRO_OS_LIBC_USER_TIMESPEC_DEFINED) && !defined(_STRUCT_TIMESPEC)
 #define MICRO_OS_LIBC_USER_TIMESPEC_DEFINED
 struct timespec {
     time_t tv_sec;

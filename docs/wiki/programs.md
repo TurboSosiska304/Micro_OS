@@ -153,16 +153,16 @@ the mode of a program (`0755`), and no boot creates one:
 | `/bin/wc` | sbase: the lines, words and bytes of a source (`-l`, `-w`, `-c`) or of descriptor 0 |
 | `/bin/zcat` | a `.gz` of the VFS inflated by zlib 1.3.1 and written to the console or a file |
 | `/bin/lua` | the interpreter of Lua 5.4.7: `-e` and the script `/etc/hello.lua`, read from the volume |
-| `/bin/cat`, `/bin/tail`, `/bin/sort`, `/bin/sed` | the tools of sbase (MIT) for a file and a stream: `cat`, `tail -n N`, the order of `sort` (with `-n`) and a substitution of `sed` |
-| `/bin/find`, `/bin/xargs` | the tools of sbase for a tree and a stream: a walk of `find` with `-name`, and a command over the words of a pipe |
+| `/bin/bc` | the calculator of bc 7.2.0: `-e`, `-f`, a script of the volume, `-l` and `scale`, `ibase`/`obase` |
+| `/bin/dc` | the same engine in RPN: a stack, the operators and the printing command `p` |
 
 The first six talk to the kernel through `programs/prog.h`, because what they
 test is the raw door, the fault, the fork, the edge and the signals. `echo`,
 `mkdir`, `pwd`, `rm` and `spawn` are ordinary C programs linked against
 `components/libc/user`
-([ADR 0016](../adr/0016-userland.md)); `zcat`, `pcre2grep` and `lua` are
-linked against the three libraries of somebody else (zlib, PCRE2 and Lua), and
-the ten commands of sbase are the second port of a set of programs
+([ADR 0016](../adr/0016-userland.md)); `zcat`, `pcre2grep`, `lua` and `bc`/
+`dc` are linked against the libraries of somebody else (zlib, PCRE2, Lua and
+bc), and the ten commands of sbase are the second port of a set of programs
 ([`docs/porting-programs.md`](../porting-programs.md),
 [`third_party/sbase`](../../third_party/sbase/README.md)). Every one of them
 reads descriptor 0
@@ -194,6 +194,16 @@ The shell looks a bare name in `PATH` before its own table for these ten
 command of the shell. The simulator has no port to enter an image and keeps
 the commands of the shell; the board has no `ls` of sbase in `/bin` and falls
 back to its own.
+
+The volume also carries the two scripts of the calculators: `/etc/bc.bc` is a
+bc script with a power, a square root, the two bases, a function with a loop,
+an array, a string and the math library of `-l`, and `/etc/dc.dc` is the same
+engine in RPN. `bc -l -f /etc/bc.bc < /dev/null` reads the first, `bc -l <
+/etc/bc.bc` reads it on descriptor 0, and `dc /etc/dc.dc` runs the second;
+`/etc/licenses/bc` is the BSD-2-Clause license of the release that both
+programs carry. The shell does not give a program at the prompt a descriptor
+0, so a `bc` with a file and no redirect ends with a fatal I/O error after the
+file (`docs/debts.md`); `bc -e` does not read stdin and needs no redirect.
 
 ## The board: Xtensa code without an MMU
 
