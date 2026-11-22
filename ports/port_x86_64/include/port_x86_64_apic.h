@@ -108,4 +108,10 @@ void port_x86_64_irq_spurious(k_u64_t *frame);
  * and the tests read; it is how a run proves the path is not dead code). */
 k_u32_t port_x86_64_ipi_received(void);
 
+/* The same number for the core with that kernel number, 0 when there is no
+ * such core. A command of the shell sends an IPI to the other core, waits a
+ * moment and reads this: the two numbers are the proof that the vector of
+ * the interrupt ran on the other processor and not in a comment. */
+k_u32_t port_x86_64_ipi_received_cpu(k_u32_t cpu);
+
 #endif /* MICRO_OS_PORT_X86_64_APIC_H */

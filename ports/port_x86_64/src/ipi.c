@@ -38,3 +38,9 @@ k_u32_t port_x86_64_ipi_received(void)
 {
     return 0u;
 }
+
+k_u32_t port_x86_64_ipi_received_cpu(k_u32_t cpu)
+{
+    (void)cpu;
+    return 0u;
+}
