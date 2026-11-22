@@ -32,7 +32,7 @@ static int list_one(const char *path)
     }
 
     for (;;) {
-        long got = readdir(fd, entries, sizeof(entries));
+        long got = ulibc_readdir(fd, entries, sizeof(entries));
         long count;
         long i;
 

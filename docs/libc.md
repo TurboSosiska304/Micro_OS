@@ -161,6 +161,58 @@ void microos_exit(int code);
 The flag of the waitpid is `MICROOS_WNOHANG`: the call does not wait and
 answers 0 when the child is not ready.
 
+## The library of a program: the POSIX families
+
+`components/libc/user` is the library a program is linked against (ADR 0016).
+It is not the library of the kernel above: it reaches the kernel only through
+`int $0x80` on x86-64 (or the door of the board), and it grew with the
+programs that were ported to it. The port of sbase (ten Unix tools) needed
+the families a portable POSIX source expects, and they are now part of it:
+
+| Header | The functions | The file |
+|---|---|---|
+| `<dirent.h>` | `opendir`, `readdir`, `closedir`, `rewinddir`, `fdopendir` over `KSYS_READDIR`, one batch of eight entries per directory | `src/dirent.c` |
+| `<sys/stat.h>` | `stat`, `lstat`, `fstat`, `fstatat`, `chmod`, `umask` and `struct stat` with the `S_IS*` macros over `KSYS_STATX`; `fstat` reads the size with `lseek` | `src/stat.c` |
+| `<unistd.h>` | `access`, `chdir`, `rmdir`, `readlink`, `isatty`, `pipe`, `dup2`, `fork`, `wait`, `waitpid`, `execvp`, `_exit`, `sleep`, `sysconf`, `getopt` | `src/unistd_ext.c`, `src/getopt.c` |
+| `<pwd.h>`, `<grp.h>` | one user, uid 0 and gid 0, named `root` | `src/pwd.c` |
+| `<time.h>` | `time`, `clock`, `gmtime`/`localtime`, `strftime`, `mktime`, `clock_gettime` | `src/time.c` |
+| `<regex.h>` | a POSIX basic/extended engine: literals, `.`, `*`, `+`, `?`, `{m,n}`, groups, back references, alternation, brackets and the classes | `src/regex.c` |
+| `<fnmatch.h>` | the pattern of a name with `*`, `?`, `[...]`, `FNM_PATHNAME` and `FNM_NOESCAPE` | `src/fnmatch.c` |
+| `<stdlib.h>` | the conversions with `ERANGE`, `qsort` (heap sort), `bsearch`, `getenv`, `atexit`, `abort` | `src/stdlib_ext.c` |
+| `<string.h>`, `<strings.h>`, `<ctype.h>` | `strdup`, `strndup`, `strspn`, `strcspn`, `strpbrk`, `strcasecmp`, `strcasestr` and the ASCII classes | `src/string_ext.c`, `src/ctype.c` |
+| `<stdio.h>` | `fprintf`/`vfprintf`, `sprintf`, `putchar`, `getline`/`getdelim`, `fmemopen`, `fdopen`, `fileno`, `ungetc`, `perror` | `src/format_ext.c`, `src/file.c` |
+| `<termios.h>` | the two calls of a terminal, answered `ENOTTY`: the console has no control command | `src/termios.c` |
+
+The stream of `<stdio.h>` is a descriptor and two flags, with no buffer of
+the host; `fmemopen` is a block of the caller that a command uses for a word
+of its line. The arena of `malloc` is in the bss of the program (256 KiB by
+default, `ULIBC_HEAP_SIZE` for a tool that holds a file), because a block of
+`KSYS_MALLOC` is memory of ring 0 that a program cannot read.
+
+Three shapes of the machine are visible in the library and are decisions, not
+bugs:
+
+* **There is no `chdir` in the ABI.** The shell changes the cwd of its task
+  (`cd`) and `execve` carries it into a program, but a program has no call
+  that moves it. The library keeps the directory itself (`src/path.c`) and
+  resolves every relative path against it, so `ls a b`, `find .` and the
+  `chdir` of `ls` between two directories work; a child started by `execve`
+  begins in the directory of the task, not in the one the program moved to.
+* **There is no wall clock.** `time()` is the seconds since the boot, and
+  `localtime` is UTC; the filesystem still keeps a moment of Unix in every
+  record, and a listing prints it.
+* **There is no floating point.** A program is built with
+  `-mgeneral-regs-only`; a `double` cannot cross a function of the guest, so
+  the library has no `strtod`/`%f`, and `sort -n` and `ls -h` of sbase order
+  and print their numbers as decimals in the port layer.
+
+`fork` is real on x86-64 (copy on write), and its child of the port comes
+back with the pid of the parent's answer in RAX and a stack page that the
+parent can still write; `src/unistd_ext.c` gives the child its zero (the pid
+of the task is the answer) and lets the child leave the frame of the call
+before the parent uses the stack again. `docs/debts.md` records the two
+halves of the port that would make the workaround unnecessary.
+
 ## The limits
 
 ```c
@@ -200,8 +252,9 @@ const char *microos_strerror(int code);
 * **The standard descriptors are the console.** The descriptors 1 and 2 are
   the console of the system when they are not open as a file. `dup2` and
   `pipe` are there (`microos_dup2`, `microos_pipe`), so a program sends its
-  output to a file or to another program; the shell does not parse a
-  pipeline yet.
+  output to a file or to another program, and the shell of K7 parses a
+  pipeline and a redirect (ADR 0017). A descriptor that is not open is not
+  the console: a file opened as 1 shadows it for the caller.
 * **The console is not readable through the descriptor 0.** A program that
   wants the input of the user opens `/dev/tty0`. The utilities of
   `components/libc/user` do read descriptor 0 for a line, but the shell does
@@ -213,6 +266,11 @@ const char *microos_strerror(int code);
 
 ## The tests
 
-The tests of the library live in `tests/cases/test_libc.c`. The library is
-checked against the library of the system with the real numbers of the
-corpus of the project: the same numbers, the same text, the same errors.
+The tests of the library of the kernel live in `tests/cases/test_libc.c`:
+the library is checked against the library of the system with the real
+numbers of the corpus of the project. The pure part of the library of a
+program (the classes, the strings, the pattern of a name, the options, the
+regular expressions, the one user and the decimal order of sbase) is compiled
+for the host by `tests/cases/test_userland.c`, which is a test of its own
+(`userland`); the calls behind the door are covered by `make x86-smoke` and
+`make x86-disk-smoke`.

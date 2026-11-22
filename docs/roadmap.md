@@ -302,12 +302,24 @@ written when the project was an operating system for one board; the numbers
       `third_party/zlib/port/`) and `/bin/zcat` on a `.gz` of MicroFS. The
       recipe is [`porting-programs.md`](porting-programs.md), the library has
       `tests/cases/test_zlib.c`, and `make x86-smoke` and
-      `make x86-disk-smoke` check the inflated bytes of a fixed fixture. Lua,
-      sbase and SQLite are the next copies of the recipe
+      `make x86-disk-smoke` check the inflated bytes of a fixed fixture. Lua
+      and SQLite are the next copies of the recipe
+* [x] The second port, and the first set of commands: sbase with ten tools
+      (`cat`, `grep`, `head`, `ls`, `tail`, `wc`, `sort`, `find`, `xargs`,
+      `sed`) as `/bin/sb-*`, beside the programs of the tree. It is the port
+      that grew the library of a program the families a POSIX command needs
+      (`opendir`/`readdir`, `struct stat`, `getpwuid`, `localtime`,
+      `fnmatch`, a regular expression engine, `getopt`, `getline`,
+      `fmemopen`), and the ten commands are in `make x86-smoke` and
+      `make x86-disk-smoke`
 * [ ] The gaps of the next port: a formatter with `%f` and a precision, a
       `malloc` larger than the bss of an image (`brk`/`mmap` of a program), a
       `poll` for a library that waits on a pipe, and the package that ships
-      `zcat` with `/etc/licenses/zlib` beside it (`docs/debts.md`)
+      `zcat` and the tools of sbase with their license beside them
+      (`docs/debts.md`)
+* [ ] A `chdir` and a wall clock in the ABI, and the POSIX frame of a fork
+      child: the library works around the three, and the workaround of each
+      is named in `docs/debts.md`
 
 ## The last major changes of the board (1.1.0)
 

@@ -223,6 +223,54 @@ done when `make test`, `make x86-smoke` and `make x86-disk-smoke` pass, and
   beside the program. The license is not merged with the MIT file of the
   tree.
 
+## The second port: ten tools of sbase
+
+The second port (after zlib) is a set of commands: `third_party/sbase` with
+`cat`, `grep`, `head`, `ls`, `tail`, `wc`, `sort`, `find`, `xargs` and `sed`.
+It is the case the recipe was written for - a **command**, not a library -
+and the one that made the library of a program grow the POSIX families of
+[`libc.md`](libc.md).
+
+What the port took, and what a next command can copy:
+
+* **The same recipe, a second name.** The tool is built by
+  `microos_add_userland_program()` with `MAIN` naming the upstream file and
+  the image named `sb-<tool>`. It lives **beside** `/bin/ls` and not in place
+  of it: the older `ls` prints the names on one line and its sentences on an
+  error are a contract the smoke test reads. A port that replaces a program
+  changes a contract; a port that adds one does not.
+* **The library is the program's own.** The C library a tool expects is
+  `components/libc/user` (family by family, above), and the two libraries of
+  the collection (`libutf`, `libutil`) are a static archive built with the
+  flags of the guest. The arena is `ULIBC_HEAP_SIZE`: 128 KiB for a filter,
+  512 KiB for `sort` and `find`, which hold a file.
+* **The image fits one read.** A program is read whole by the kernel in a
+  block of `KSYS_MAX_IO` (64 KiB). The tools are between 28 and 48 KiB with
+  the library (`-Os`); a port that grows past the block is `E2BIG` at the
+  boot and the build has to shrink it, not the contract.
+* **No floating point.** `-mgeneral-regs-only` is the rule of the guest, so
+  upstream `sort -n` (two `double`s) does not compile. The port layer
+  (`third_party/sbase/port/numcmp.c`) compares the two numbers as decimals;
+  `ls -h` has the same story in `port/humansize.c`. This is the third hunk of
+  a vendored source the tree has, and `README.md` of the directory names it.
+* **The descriptors are four, and 1 and 2 are the console only while they
+  are not open.** A recursive `grep` that held a directory open while it
+  opened a child would take the place of the console; the port reads the
+  names first and closes the directory before it visits them.
+* **`execve` is synchronous.** `xargs` of upstream forks and executes in the
+  child; here the call runs the program and returns when it has ended, so the
+  port runs the command in its own process and reads the next batch after it
+  (`-P` has nothing to do). A command that needs a real child process waits
+  for the POSIX `fork` of K4.
+* **The license travels.** `/etc/licenses/sbase` in the image,
+  `LICENSE.sbase` in the x86-64 bundle, a row in `licensing.md`.
+
+The tests: `tests/cases/test_userland.c` for the pure library (compiled for
+the host, a `userland` test of its own), and in `x86-smoke` and
+`x86-disk-smoke` the ten commands over the files of the image - `sb-ls -la`,
+`sb-find -name`, `sb-sort`, `sb-grep -r`, `sb-wc`, `sb-tail`, `sb-head`,
+`sb-sed`, `sb-cat` and `ls | sb-xargs`.
+
 ## The checklist of the next port
 
 1. Read the license; stop if it is copyleft.
@@ -253,9 +301,11 @@ done when `make test`, `make x86-smoke` and `make x86-disk-smoke` pass, and
 * **A dynamic linker and shared objects.** Every image is static.
 * **Floating point.** `-mgeneral-regs-only` is the rule of the port.
 * **A real `fork` of a library's child process.** The system has `fork` on
-  x86-64, but no `execve` of a path that a library resolves in `PATH` and no
-  `waitpid` in the library yet; a library that starts a helper is a later
-  step.
+  x86-64 and the library now has `fork`, `waitpid` and `execvp`, but the
+  child of the port comes back with the parent's answer in RAX and a stack
+  page the parent can still write; the library works around both and the
+  port of the frame is a debt of K4 (`docs/debts.md`). A program that starts
+  a helper is a later step; `xargs` runs its command in its own process.
 * **A package manager of its own.** `pkg` exists for the signed image
   (ADR 0024); a port of a program does not have to use it, but a package
   that ships one carries its license.

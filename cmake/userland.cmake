@@ -32,6 +32,8 @@ set(MICROOS_LIBC_USER_SOURCES
     "${MICROOS_LIBC_USER_DIR}/src/stdio.c"
     "${MICROOS_LIBC_USER_DIR}/src/string.c"
     "${MICROOS_LIBC_USER_DIR}/src/errno.c"
+    "${MICROOS_LIBC_USER_DIR}/src/atexit.c"
+    "${MICROOS_LIBC_USER_DIR}/src/path.c"
 )
 
 # The headers the runtime and the program include. A custom command does not
@@ -46,6 +48,22 @@ set(MICROOS_LIBC_USER_HEADERS
     "${MICROOS_LIBC_USER_DIR}/include/string.h"
     "${MICROOS_LIBC_USER_DIR}/include/unistd.h"
     "${MICROOS_LIBC_USER_DIR}/include/sys/types.h"
+    "${MICROOS_LIBC_USER_DIR}/include/sys/stat.h"
+    "${MICROOS_LIBC_USER_DIR}/include/sys/wait.h"
+    "${MICROOS_LIBC_USER_DIR}/include/sys/sysmacros.h"
+    "${MICROOS_LIBC_USER_DIR}/include/assert.h"
+    "${MICROOS_LIBC_USER_DIR}/include/ctype.h"
+    "${MICROOS_LIBC_USER_DIR}/include/dirent.h"
+    "${MICROOS_LIBC_USER_DIR}/include/fnmatch.h"
+    "${MICROOS_LIBC_USER_DIR}/include/getopt.h"
+    "${MICROOS_LIBC_USER_DIR}/include/grp.h"
+    "${MICROOS_LIBC_USER_DIR}/include/libgen.h"
+    "${MICROOS_LIBC_USER_DIR}/include/limits.h"
+    "${MICROOS_LIBC_USER_DIR}/include/pwd.h"
+    "${MICROOS_LIBC_USER_DIR}/include/regex.h"
+    "${MICROOS_LIBC_USER_DIR}/include/strings.h"
+    "${MICROOS_LIBC_USER_DIR}/include/termios.h"
+    "${MICROOS_LIBC_USER_DIR}/include/time.h"
 )
 
 # A static library of the guest. The sources are the ones of the third-party
@@ -78,12 +96,20 @@ endfunction()
 # A program of the port: the runtime, the file of the program, the libraries
 # it names, the script of the window and the image of the format. The entry
 # is `_start` of the runtime (ADR 0016), so `main` is a function of the
-# program and not the place the port enters.
+# program and not the place the port enters. `MAIN` names the source of the
+# program: the tree keeps it in `programs/<name>.c`, and a ported tool names
+# the file of third_party while the image keeps its own name (`/bin/sb-ls`).
 function(microos_add_userland_program name)
-    cmake_parse_arguments(PROG "" ""
+    cmake_parse_arguments(PROG "" "MAIN"
         "LIBRARIES;INCLUDES;DEFINES;SOURCES;COMPILE_OPTIONS" ${ARGN})
 
+    # A program of the tree puts its `main` in `programs/<name>.c`; a ported
+    # tool names the file it came from instead, because the name of the image
+    # and the name of the source in third_party are not the same.
     set(source "${MICROOS_PROGRAM_DIR}/${name}.c")
+    if(PROG_MAIN)
+        set(source "${PROG_MAIN}")
+    endif()
     set(image "${CMAKE_BINARY_DIR}/${name}.mox")
     set(objects)
     set(runtime_sources ${MICROOS_LIBC_USER_SOURCES} ${PROG_SOURCES})

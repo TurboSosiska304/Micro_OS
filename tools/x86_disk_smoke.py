@@ -65,6 +65,10 @@ FIRST_BOOT = [
     # boot reads the text that the first one inflated.
     "exec /bin/zcat -o /persist.gz.txt /etc/greeting.gz",
     "exec /bin/wc -c /persist.gz.txt",
+    # The tools of sbase read the same volume on the second boot: a file of
+    # the disk through the library of a program that grew with them.
+    "exec /bin/sb-ls -la /etc",
+    "exec /bin/sb-grep -r hostname /etc",
 ]
 
 SECOND_BOOT = [
@@ -79,6 +83,10 @@ SECOND_BOOT = [
     "fsck",
     "cat /persist.gz.txt",
     "exec /bin/wc -c /persist.gz.txt",
+    # The tools of sbase read the same volume on the second boot: a file of
+    # the disk through the library of a program that grew with them.
+    "exec /bin/sb-ls -la /etc",
+    "exec /bin/sb-grep -r hostname /etc",
 ]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -340,6 +348,18 @@ def check(first: str, second: str) -> list:
         "the inflated file has every byte after the reset",
         "134 /persist.gz.txt" in second_answers[10],
         second_answers[10],
+    )
+    listing = second_answers[11]
+    expect(
+        "a tool of sbase reads the volume after the reset",
+        "root" in listing and "setting" in listing and "greeting.gz" in listing,
+        listing,
+    )
+    recursive = second_answers[12]
+    expect(
+        "a recursive grep of sbase walks the volume after the reset",
+        "/etc/setting:hostname=x86_64" in recursive,
+        recursive,
     )
 
     return checks

@@ -6,10 +6,11 @@
  * for memory would make every printf a call. The buffer is small because the
  * stack of a program is 64 KiB and a line of this system is short.
  *
- * The conversions are the ones a program of the tree uses - %d, %i, %u, %x,
- * %X, %c, %s, %p and %% - with a width and the flags '-' and '0'. There is no
- * precision and no '*' width: they are the part of printf that costs the most
- * and that no program of this system asks for.
+ * The conversions are the ones a program of the tree uses - %d, %i, %u, %o,
+ * %x, %X, %c, %s, %p and %% - with a width, the flags '-' and '0' and the
+ * precision of a string (`%.8s`, which the listing of sbase asks for). There
+ * is no '*' width and no precision of a number: they are the part of printf
+ * that costs the most and that no program of this system asks for.
  */
 #include "ulibc.h"
 
@@ -143,6 +144,7 @@ static void out_format(struct output *out, const char *text, va_list args)
         int left = 0;
         int zero = 0;
         int width = 0;
+        int precision = -1;
         int is_long = 0;
         int is_long_long = 0;
         char conversion;
@@ -169,6 +171,18 @@ static void out_format(struct output *out, const char *text, va_list args)
         while (*text >= '0' && *text <= '9') {
             width = width * 10 + (*text - '0');
             text++;
+        }
+
+        /* The precision: the bytes of a string that are printed. The
+         * numbers of this formatter do not use it, and a number with one is
+         * printed as the number itself. */
+        if (*text == '.') {
+            text++;
+            precision = 0;
+            while (*text >= '0' && *text <= '9') {
+                precision = precision * 10 + (*text - '0');
+                text++;
+            }
         }
 
         if (*text == 'l') {
@@ -204,6 +218,9 @@ static void out_format(struct output *out, const char *text, va_list args)
                 word = "(null)";
             }
             length = strlen(word);
+            if (precision >= 0 && length > (size_t)precision) {
+                length = (size_t)precision;
+            }
             if (!left) {
                 for (int pad = width - (int)length; pad > 0; pad--) {
                     out_char(out, ' ');

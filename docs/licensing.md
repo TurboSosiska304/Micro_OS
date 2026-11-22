@@ -14,6 +14,7 @@ commercially; the note here is what the tree does.
 |---|---|---|---|---|
 | Spleen 8x16 | 2.3.0 | BSD-2-Clause | `third_party/spleen`, `ports/port_x86_64/src/font_spleen.c` | the x86-64 kernel image; `LICENSE.spleen` in its tar |
 | zlib | 1.3.1 | zlib | `third_party/zlib`, `ports/port_x86_64/programs/zcat.c` | `/bin/zcat` of the x86-64 MicroFS image; `/etc/licenses/zlib` in the image and `LICENSE.zlib` in the x86-64 tar |
+| sbase | c546c3a (tip) | MIT | `third_party/sbase`, ten tools of `/bin/sb-*` | `/bin/sb-cat`, `/bin/sb-grep`, `/bin/sb-head`, `/bin/sb-ls`, `/bin/sb-tail`, `/bin/sb-wc`, `/bin/sb-sort`, `/bin/sb-find`, `/bin/sb-xargs` and `/bin/sb-sed` of the x86-64 MicroFS image; `/etc/licenses/sbase` in the image and `LICENSE.sbase` in the x86-64 tar |
 
 Spleen is a font by Frederic Cambus; the license and the note are in
 [`third_party/spleen`](../third_party/spleen/README.md). The 8x16 table is
@@ -30,6 +31,16 @@ and `tools/bundle.sh` puts `LICENSE.zlib` into the x86-64 archive. A package
 that installs `zcat` (`microos-progs` of a release) copies the same file
 beside the program. The file stays zlib: it is not merged into the MIT
 `LICENSE` of the tree.
+
+sbase is a collection of Unix tools by suckless; the subset, the commit and
+the two hunks of the port are in
+[`third_party/sbase`](../third_party/sbase/README.md). Its license is the MIT
+text of the collection, which names its authors. The MicroFS image carries
+`/etc/licenses/sbase` beside the tools of `/bin/sb-*`, `tools/bundle.sh`
+puts `LICENSE.sbase` into the x86-64 archive, and a package that installs a
+tool (`microos-progs` of a release) copies the same file beside it. The
+notice is not merged into the MIT `LICENSE` of the tree: the two are the same
+license but not the same text.
 
 ## The rule
 

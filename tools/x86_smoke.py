@@ -192,6 +192,22 @@ COMMANDS = [
     "umount /",
     "ls /",
     "free",
+    # The tools of sbase (third_party/sbase): the second `ls`, the trees of
+    # `find`, the order of `sort`, the recursive `grep`, the count and the
+    # tail of the library, and a substitution of `sed`. They are built beside
+    # the programs of ADR 0016 because the sentences of the older ones are a
+    # contract; the answers below are their own numbers and words.
+    "exec /bin/sb-ls -la /etc",
+    "exec /bin/sb-find /etc -name setting",
+    "exec /bin/sb-sort /etc/setting",
+    "exec /bin/sb-grep -r hostname /etc",
+    "exec /bin/sb-grep -r -i VGA /etc",
+    "exec /bin/sb-wc -l /etc/setting",
+    "exec /bin/sb-tail -n 1 /etc/setting",
+    "exec /bin/sb-head -n 1 /etc/setting",
+    "exec /bin/sb-sed -n s/x86_64/X/p /etc/setting",
+    "exec /bin/sb-cat /etc/setting",
+    "ls /etc | /bin/sb-xargs",
 ]
 
 # The prompt of the shell. It is written in one call, so the log of another
@@ -862,6 +878,51 @@ def check(output: str) -> list:
         umount_answer,
     )
     expect("the tree is still there", "etc/" in answer("ls /"), answer("ls /"))
+
+    # --- the tools of sbase (third_party/sbase)
+    listing = answer("exec /bin/sb-ls -la /etc")
+    expect(
+        "sb-ls -la prints the mode, the owner and the group",
+        re.search(r"-rw-r--r--\s+1 root\s+root\s+34 Jan 01 00:00 setting", listing) is not None,
+        listing,
+    )
+    expect(
+        "sb-ls -la lists the directory the image has",
+        "init.d" in listing and "licenses" in listing,
+        listing,
+    )
+    found = answer("exec /bin/sb-find /etc -name setting")
+    expect("sb-find walks a tree and matches a name", "/etc/setting" in found, found)
+    ordered = answer("exec /bin/sb-sort /etc/setting")
+    expect(
+        "sb-sort orders the lines",
+        ordered.index("console=vga") < ordered.index("hello") < ordered.index("hostname=x86_64"),
+        ordered,
+    )
+    recursive = answer("exec /bin/sb-grep -r hostname /etc")
+    expect(
+        "sb-grep -r names the file of a line",
+        "/etc/setting:hostname=x86_64" in recursive,
+        recursive,
+    )
+    recursive = answer("exec /bin/sb-grep -r -i VGA /etc")
+    expect("sb-grep -r -i folds the case", "console=vga" in recursive, recursive)
+    count = answer("exec /bin/sb-wc -l /etc/setting")
+    expect("sb-wc counts the lines", "3 /etc/setting" in count, count)
+    last = answer("exec /bin/sb-tail -n 1 /etc/setting")
+    expect("sb-tail prints the last line", "console=vga" in last, last)
+    first_line = answer("exec /bin/sb-head -n 1 /etc/setting")
+    expect("sb-head prints the first line", "hello" in first_line, first_line)
+    changed = answer("exec /bin/sb-sed -n s/x86_64/X/p /etc/setting")
+    expect("sb-sed matches and substitutes a line", "hostname=X" in changed, changed)
+    text = answer("exec /bin/sb-cat /etc/setting")
+    expect("sb-cat copies a file", "hostname=x86_64" in text and "console=vga" in text, text)
+    piped = answer("ls /etc | /bin/sb-xargs")
+    expect(
+        "sb-xargs runs a command over the words of a pipe",
+        "setting" in piped and "licenses" in piped,
+        piped,
+    )
     free_answer = answer("free")
     expect(
         "free prints the memory and not the clock",
@@ -1174,6 +1235,7 @@ def check(output: str) -> list:
     )
     licenses = answer("exec /bin/ls /etc/licenses")
     expect("the license of zlib travels with the image", "zlib" in licenses, licenses)
+    expect("the license of sbase travels with the image", "sbase" in licenses, licenses)
 
     # A program starts another program with an environment of its own. The
     # two words are the vector of `spawn.c`, copied by the kernel at the edge

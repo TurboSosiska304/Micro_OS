@@ -82,15 +82,15 @@ long lseek(int fd, long offset, int whence);
  * answer is the number of bytes written or a negative error. The end of the
  * directory is an empty answer, not an error.
  */
-long readdir(int fd, struct vfs_dirent *entries, size_t count);
+long ulibc_readdir(int fd, struct vfs_dirent *entries, size_t count);
 
 /*
  * The objects of the tree: the information of a path, a directory, a name
  * removed. `stat` answers 0 and fills the structure, `mkdir` and `unlink`
  * answer 0; a negative number is the error of the call.
  */
-int stat(const char *path, struct vfs_stat *info);
-int mkdir(const char *path);
+int ulibc_stat_call(const char *path, struct vfs_stat *info);
+int mkdir(const char *path, ...);
 int unlink(const char *path);
 
 /*
@@ -135,6 +135,14 @@ char *strncpy(char *dest, const char *source, size_t count);
 char *strcat(char *dest, const char *source);
 char *strchr(const char *text, int byte);
 char *strrchr(const char *text, int byte);
+char *strdup(const char *text);
+char *strndup(const char *text, size_t count);
+size_t strspn(const char *text, const char *set);
+size_t strcspn(const char *text, const char *set);
+char *strpbrk(const char *text, const char *set);
+int strcasecmp(const char *left, const char *right);
+int strncasecmp(const char *left, const char *right, size_t count);
+char *strcasestr(const char *text, const char *needle);
 void *memcpy(void *dest, const void *source, size_t count);
 void *memmove(void *dest, const void *source, size_t count);
 void *memset(void *dest, int byte, size_t count);

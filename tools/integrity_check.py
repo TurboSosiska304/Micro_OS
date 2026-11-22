@@ -940,6 +940,11 @@ def check_sources(root: str, report: Report, files: list) -> None:
 
     for name in files:
         path = os.path.join(root, name)
+        if name.startswith("third_party/"):
+            # The vendored sources keep the style of their upstream (sbase is
+            # tabs and 80 columns, zlib is its own). Their license and their
+            # README are ours and are checked as every other file.
+            continue
         if not os.path.isfile(path) or is_binary(path):
             continue
 
@@ -1207,6 +1212,17 @@ def check_layers(root: str, report: Report, files: list) -> None:
 
     for name in files:
         path = os.path.join(root, name)
+        if name.startswith("third_party/"):
+            # The vendored sources keep the style of their upstream (sbase is
+            # tabs and 80 columns, zlib is its own). Their license and their
+            # README are ours and are checked as every other file.
+            continue
+        if name.startswith("components/libc/user/"):
+            # The library of a program is the one component that is POSIX on
+            # purpose: its <unistd.h>, <sys/stat.h> and <pwd.h> are its own
+            # headers in `include/`, and a portable source that includes them
+            # is the point of ADR 0016.
+            continue
         if not os.path.isfile(path) or is_binary(path):
             continue
 

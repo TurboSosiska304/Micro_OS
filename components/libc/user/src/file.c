@@ -7,6 +7,11 @@
  * the files of this system are small, the calls are cheap, and a buffer of
  * the host library would be a second allocator with a second policy.
  *
+ * A stream that is not a file is a block of memory: `fmemopen` gives a source
+ * the stream it asks for over a word of its own, which is how `grep` reads a
+ * pattern written on the command line, and the same object carries the one
+ * byte of `ungetc`. The memory is the caller's, never freed by `fclose`.
+ *
  * The binary mode of `fopen` is accepted and ignored: no file of the system
  * translates a byte, and a portable program asks for "rb" so that a machine
  * that does translate bytes does not change its data. The conversion of a
@@ -22,15 +27,42 @@ struct ulibc_file {
     int fd;
     int eof;
     int error;
+    unsigned char *data; /* the block of a stream of memory, or NULL */
+    size_t size;
+    size_t position;
+    int memory;
+    int pushed; /* the byte of ungetc, or -1 */
 };
 
-static struct ulibc_file g_stdin_s = {ULIBC_STDIN, 0, 0};
-static struct ulibc_file g_stdout_s = {ULIBC_STDOUT, 0, 0};
-static struct ulibc_file g_stderr_s = {ULIBC_STDERR, 0, 0};
+static struct ulibc_file g_stdin_s = {ULIBC_STDIN, 0, 0, NULL, 0, 0, 0, -1};
+static struct ulibc_file g_stdout_s = {ULIBC_STDOUT, 0, 0, NULL, 0, 0, 0, -1};
+static struct ulibc_file g_stderr_s = {ULIBC_STDERR, 0, 0, NULL, 0, 0, 0, -1};
 
 FILE *stdin = &g_stdin_s;
 FILE *stdout = &g_stdout_s;
 FILE *stderr = &g_stderr_s;
+
+/* A stream over a descriptor, for `fopen` and `fdopen`. */
+static FILE *stream_new(int fd)
+{
+    FILE *stream = (FILE *)malloc(sizeof(*stream));
+
+    if (stream == NULL) {
+        errno = ENOMEM;
+        return NULL;
+    }
+
+    stream->fd = fd;
+    stream->eof = 0;
+    stream->error = 0;
+    stream->data = NULL;
+    stream->size = 0;
+    stream->position = 0;
+    stream->memory = 0;
+    stream->pushed = -1;
+
+    return stream;
+}
 
 FILE *fopen(const char *path, const char *mode)
 {
@@ -66,27 +98,63 @@ FILE *fopen(const char *path, const char *mode)
 
     fd = open(path, flags);
     if (fd < 0) {
-        errno = -fd;
-        return NULL;
+        return NULL; /* open() set errno */
     }
 
-    stream = (FILE *)malloc(sizeof(*stream));
+    stream = stream_new(fd);
     if (stream == NULL) {
         (void)close(fd);
-        errno = ENOMEM;
         return NULL;
     }
 
-    stream->fd = fd;
-    stream->eof = 0;
-    stream->error = 0;
+    return stream;
+}
+
+FILE *fdopen(int fd, const char *mode)
+{
+    (void)mode;
+
+    if (fd < 0) {
+        errno = EBADF;
+        return NULL;
+    }
+
+    return stream_new(fd);
+}
+
+/*
+ * A stream over the block of the caller. The mode is the one of `fopen`; the
+ * block does not grow, and a write past its end is the error of a full file.
+ */
+FILE *fmemopen(void *buffer, size_t size, const char *mode)
+{
+    FILE *stream;
+
+    if (buffer == NULL || mode == NULL || mode[0] == '\0') {
+        errno = EINVAL;
+        return NULL;
+    }
+    if (mode[0] != 'r' && mode[0] != 'w' && mode[0] != 'a') {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    stream = stream_new(-1);
+    if (stream == NULL) {
+        return NULL;
+    }
+
+    stream->data = (unsigned char *)buffer;
+    stream->size = size;
+    stream->position = 0;
+    stream->memory = 1;
 
     return stream;
 }
 
 int fclose(FILE *stream)
 {
-    int rc;
+    int rc = 0;
 
     if (stream == NULL) {
         errno = EINVAL;
@@ -97,15 +165,30 @@ int fclose(FILE *stream)
         return 0; /* the console belongs to the task, not to this stream */
     }
 
-    rc = close(stream->fd);
+    if (!stream->memory) {
+        rc = close(stream->fd);
+    }
     free(stream);
 
     if (rc < 0) {
-        errno = -rc;
-        return EOF;
+        return EOF; /* close() set errno */
     }
 
     return 0;
+}
+
+int fileno(FILE *stream)
+{
+    if (stream == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (stream->memory) {
+        errno = EBADF;
+        return -1;
+    }
+
+    return stream->fd;
 }
 
 size_t fread(void *buffer, size_t size, size_t count, FILE *stream)
@@ -125,12 +208,32 @@ size_t fread(void *buffer, size_t size, size_t count, FILE *stream)
         return 0;
     }
 
+    /* The byte of ungetc is the first byte of the read. */
+    if (stream->pushed >= 0 && got < total) {
+        *bytes++ = (unsigned char)stream->pushed;
+        stream->pushed = -1;
+        got++;
+    }
+
+    if (stream->memory) {
+        size_t left = stream->size - stream->position;
+        size_t take = (total - got < left) ? total - got : left;
+
+        memcpy(bytes, stream->data + stream->position, take);
+        stream->position += take;
+        got += take;
+        if (got < total) {
+            stream->eof = 1;
+        }
+
+        return got / size;
+    }
+
     while (got < total) {
         long rc = read(stream->fd, bytes + got, total - got);
 
         if (rc < 0) {
             stream->error = 1;
-            errno = (int)-rc;
             break;
         }
         if (rc == 0) {
@@ -160,12 +263,27 @@ size_t fwrite(const void *buffer, size_t size, size_t count, FILE *stream)
         return 0;
     }
 
+    if (stream->memory) {
+        size_t left = stream->size - stream->position;
+        size_t take = (total < left) ? total : left;
+
+        if (take > 0) {
+            memcpy(stream->data + stream->position, bytes, take);
+            stream->position += take;
+        }
+        if (take < total) {
+            stream->error = 1;
+            errno = ENOSPC;
+        }
+
+        return take / size;
+    }
+
     while (put < total) {
         long rc = write(stream->fd, bytes + put, total - put);
 
         if (rc < 0) {
             stream->error = 1;
-            errno = (int)-rc;
             break;
         }
         if (rc == 0) {
@@ -181,17 +299,43 @@ size_t fwrite(const void *buffer, size_t size, size_t count, FILE *stream)
 int fgetc(FILE *stream)
 {
     unsigned char byte;
+    size_t got;
 
     if (stream == NULL) {
         errno = EINVAL;
         return EOF;
     }
 
-    if (fread(&byte, 1, 1, stream) != 1) {
+    if (stream->pushed >= 0) {
+        int value = stream->pushed;
+
+        stream->pushed = -1;
+        return value;
+    }
+
+    got = fread(&byte, 1, 1, stream);
+    if (got != 1) {
         return EOF;
     }
 
     return (int)byte;
+}
+
+int ungetc(int byte, FILE *stream)
+{
+    if (stream == NULL || byte == EOF) {
+        errno = EINVAL;
+        return EOF;
+    }
+    if (stream->pushed >= 0) {
+        errno = EAGAIN;
+        return EOF;
+    }
+
+    stream->pushed = (unsigned char)byte;
+    stream->eof = 0;
+
+    return (unsigned char)byte;
 }
 
 int fputc(int byte, FILE *stream)
@@ -291,9 +435,34 @@ int fseek(FILE *stream, long offset, int whence)
         return -1;
     }
 
+    if (stream->memory) {
+        long target;
+
+        if (whence == ULIBC_SEEK_SET) {
+            target = offset;
+        } else if (whence == ULIBC_SEEK_CUR) {
+            target = (long)stream->position + offset;
+        } else if (whence == ULIBC_SEEK_END) {
+            target = (long)stream->size + offset;
+        } else {
+            errno = EINVAL;
+            return -1;
+        }
+        if (target < 0 || (size_t)target > stream->size) {
+            errno = EINVAL;
+            stream->error = 1;
+            return -1;
+        }
+
+        stream->position = (size_t)target;
+        stream->eof = 0;
+        stream->pushed = -1;
+        return 0;
+    }
+
+    stream->pushed = -1;
     rc = lseek(stream->fd, offset, whence);
     if (rc < 0) {
-        errno = (int)-rc;
         stream->error = 1;
         return -1;
     }
@@ -311,9 +480,12 @@ long ftell(FILE *stream)
         return -1;
     }
 
+    if (stream->memory) {
+        return (long)stream->position;
+    }
+
     rc = lseek(stream->fd, 0, ULIBC_SEEK_CUR);
     if (rc < 0) {
-        errno = (int)-rc;
         stream->error = 1;
     }
 
