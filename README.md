@@ -9,12 +9,12 @@ Everything platform specific lives behind the contract of the port
 (`kernel/port/*.h`), and the same sources are built for several machines. Each
 port has a directory of its own with its notes, its plan and its quirks:
 
-| Port | What it is | Where |
+| Port or substrate | What it is | Where |
 |---|---|---|
 | ESP32 | the M5Stack StickC Plus2, on ESP-IDF and FreeRTOS | [docs/ports/esp32](docs/ports/esp32/README.md) |
 | x86-64 | bare metal in QEMU, with a loader of its own and no libc | [docs/ports/x86_64](docs/ports/x86_64/README.md) |
-| host | a Linux process: the unit tests and the simulator | [docs/ports/host](docs/ports/host/README.md) |
-| null | no machine at all: linked by the checks | [docs/ports/null](docs/ports/null/README.md) |
+| host (substrate) | a Linux process: the unit tests and the simulator | [docs/ports/host](docs/ports/host/README.md) |
+| null (substrate) | no machine at all: linked by the checks | [docs/ports/null](docs/ports/null/README.md) |
 
 The board is one port, not the project: a kernel is portable when a second
 machine runs it, and the x86-64 port is the proof that this one does.

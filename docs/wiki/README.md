@@ -16,6 +16,7 @@ canonical Russian documents are in [`docs/ru/`](../ru/README.md).
 | If you want to... | Read |
 |---|---|
 | know what the first major release is and promises | [release-1.0.md](release-1.0.md) |
+| see what 1.1 changed on the board | [release-1.1.md](release-1.1.md) |
 | see what the system is and run it in ten minutes | [getting-started.md](getting-started.md) |
 | build the host, x86-64 or ESP32 image | [build.md](build.md) |
 | type a command at the prompt | [shell.md](shell.md) |
@@ -34,6 +35,7 @@ canonical Russian documents are in [`docs/ru/`](../ru/README.md).
 | Section | Page | What it answers |
 |---|---|---|
 | **The 1.0 release** | [release-1.0.md](release-1.0.md) | what 1.0 is, promises and does not |
+| **The 1.1 release** | [release-1.1.md](release-1.1.md) | the last major changes of the board, and the first phase of many cores |
 | **Start here** | [getting-started.md](getting-started.md) | what the system is, the first commands |
 | **Build and run** | [build.md](build.md) | host, x86-64, ESP32, dependencies |
 | **Shell** | [shell.md](shell.md) | the commands, `PATH`, `stat`, `fsck`, `httpd` |

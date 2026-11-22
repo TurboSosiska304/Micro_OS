@@ -60,10 +60,10 @@ mfs,        data, 0x40,    0x271000,  0x58F000
 | | | `0x800000` | 8 MiB, nothing left over |
 
 **The application slot is 0x120000 (1.125 MiB), not 2 MB.** The image of 1.1
-is 993 664 bytes, so a slot leaves
+is 1 001 968 bytes, so a slot leaves
 
 ```
-0x120000 - 0x1000 (trailer) - 0x0F2980 (image) = 181 888 bytes (177.6 KiB, 15.4%)
+0x120000 - 0x1000 (trailer) - 0x0F49F0 (image) = 0x2A610 = 173 584 bytes (169.5 KiB, 14.7%)
 ```
 
 for the growth of a compatibility port. That is the reserve ADR 0018 promises
@@ -276,9 +276,9 @@ the volume.
 * `components/port_esp32/src/{progs_vfs.c,progs_format.c,ota.c}`,
   `tools/{progs_image.py,ota_usb.py}`, the table of §1 in `partitions.csv`
   and the bootloader option in `sdkconfig.defaults`.
-* The image of the application is 993 664 bytes of the 1 175 552 bytes a slot
-  leaves for an image and its trailer (181 888 bytes, 177.6 KiB, 15.4%, still
-  free); the partition table is 3072 bytes; `progs.bin` is 135 168 bytes and
+* The image of the application is 1 001 968 bytes of the 1 175 552 bytes a
+  slot leaves for an image and its trailer (173 584 bytes, 169.5 KiB, 14.7%,
+  still free); the partition table is 3072 bytes; `progs.bin` is 135 168 bytes and
   holds `/bin/hello` (2 152 bytes at offset 0) and `/bin/cat` (1 920 bytes at
   offset 0x10000).
 * The build refuses an image that fits but leaves less than 64 KiB after its

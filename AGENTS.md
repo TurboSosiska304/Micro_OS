@@ -20,10 +20,12 @@ Three builds from one tree:
   `make x86-smoke`), a port with its own loader and no libc under the kernel.
 * **ESP32** — the same sources as an ESP-IDF v5.3 project.
 
-Current state: phases 0–5 done, phase 6 (release) in progress; the boundary of
-the port was reworked (ADR 0004) and the kernel boots on a second machine, x86-64
-in QEMU. The platform roadmap is `docs/roadmap.md`, the kernel one is
-`docs/roadmap.md`.
+Current state: `1.0.0` is released and `1.1.0` is in preparation - the last
+major changes of the ESP32 port (the settings of `/etc`, the `progs` partition
+and the update with a rollback) and the first phase of many cores. From
+`1.2.0` the board is a compatibility port (ADR 0018). The kernel boots on a
+second machine, x86-64 in QEMU; the roadmap of the platform and of the kernel
+is `docs/roadmap.md`.
 
 ## The rule that matters most
 
