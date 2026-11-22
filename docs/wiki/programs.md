@@ -178,7 +178,10 @@ write the same bytes. `zcat -o FILE` inflates it into a file of MicroFS and
 inflated bytes. `/etc/hello.lua` is the first script of the machine, read by
 the interpreter out of the volume, and `/etc/licenses/zlib`,
 `/etc/licenses/lua` and the license of PCRE2 travel beside the programs that
-carry the libraries; `docs/licensing.md` has the rows.
+carry the libraries; `docs/licensing.md` has the rows. The ten tools of sbase
+are built **beside** the programs of the tree and not in place of them:
+`/bin/sb-ls` is the `ls` of a Unix-like system (`-l`, `-a`, `-R`, the owner
+of the file), while `/bin/ls` stays the small listing the smoke test reads.
 
 ## The board: Xtensa code without an MMU
 

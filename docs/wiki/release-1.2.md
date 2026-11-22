@@ -75,7 +75,7 @@ licenses in `/etc/licenses`:
 | `/bin/zcat` | zlib 1.3.1: a `.gz` of the volume inflated to the console or a file |
 | `/bin/sb-cat`, `sb-grep`, `sb-head`, `sb-ls`, `sb-tail`, `sb-wc` | the tools of sbase for a file, a directory and a line |
 | `/bin/sb-sort`, `sb-find`, `sb-xargs`, `sb-sed` | the tools of sbase for a tree and a stream |
-| `/bin/pcre2grep` | PCRE2: a regular expression of a library |
+| `/bin/pcre2grep` | PCRE2 10.42 (BSD-3-Clause WITH PCRE2-exception): a regular expression of a library |
 | `/bin/lua` | the interpreter of Lua 5.4.7, with the script `/etc/hello.lua` |
 
 The ten `sb-*` names are beside the programs of the tree and not in place of

@@ -75,9 +75,11 @@ The notes are in [`docs/releases/1.2.md`](docs/releases/1.2.md).
   `make x86-smoke` runs `print(2^10)` as `1024.0`, `math.pi`,
   `string.format("%.3f", 1/3)` and the script, and `make x86-disk-smoke`
   runs it out of the volume in both boots.
-- PCRE2 as the second library of a program: `/bin/pcre2grep` with its license
-  in `/etc/licenses`, built from `third_party/pcre2` with the flags of the
-  guest.
+- PCRE2 10.42 (BSD-3-Clause WITH PCRE2-exception) as another library of a
+  program: `/bin/pcre2grep` (`-i`, `-v`, `-n`, `-o` and `-g N`) over the
+  8-bit interpreter without JIT and Unicode, built from `third_party/pcre2`.
+  The engine asks for the ASCII classes of `<ctype.h>`, which the library of
+  a program gained; its license travels in `/etc/licenses/pcre2`.
 - The ten tools of sbase (MIT) beside the programs of the tree:
   `/bin/sb-cat`, `sb-grep`, `sb-head`, `sb-ls`, `sb-tail`, `sb-wc`,
   `sb-sort`, `sb-find`, `sb-xargs` and `sb-sed`. They are built beside the
