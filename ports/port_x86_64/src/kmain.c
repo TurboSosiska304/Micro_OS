@@ -36,6 +36,7 @@
 #include "config/config.h"
 #include "kshell/kshell.h"
 #include "port_x86_64_console.h"
+#include "port_x86_64_screen.h"
 #include "settings/settings.h"
 
 #if MICRO_OS_NET
@@ -380,17 +381,21 @@ void kmain(k_u64_t multiboot_info)
     filesystem_bring_up();
 
     /*
-     * The settings of /etc (ADR 0021): the systems of the tree, and the one
-     * this machine applies. `console` is the attribute of the text screen;
-     * `display` and `font` are the panel of the board, and the load names
-     * them and keeps the files. The command `config` is registered before
-     * the shell exists, so the first line a person types finds it.
+     * The settings of /etc (ADR 0021): the systems of the tree, and the ones
+     * this machine applies. `console` is the pair of the screen of the port,
+     * `font` is the gap between two of its lines; `display` is the panel of
+     * the board, and the load names it and keeps the file. The command
+     * `config` is registered before the shell exists, so the first line a
+     * person types finds it.
      */
     if (config_register() != 0) {
         kwarn("x86-64: the config command is not registered");
     }
     if (port_x86_64_console_settings_register() != SETTINGS_OK) {
         kwarn("x86-64: the console system of /etc is not registered");
+    }
+    if (port_x86_64_font_settings_register() != SETTINGS_OK) {
+        kwarn("x86-64: the font system of /etc is not registered");
     }
 
     defaults = settings_defaults(SETTINGS_DIR);

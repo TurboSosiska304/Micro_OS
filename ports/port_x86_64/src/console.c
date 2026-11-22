@@ -186,6 +186,30 @@ void port_x86_64_console_init(void)
     screen_clear();
 }
 
+/*
+ * The grid of the screen can become smaller than the position the console
+ * holds: `font.line_gap` of /etc/font takes rows away from the picture (50
+ * rows of 16 pixels are 44 of 18), and the cells above the new bottom are
+ * gone. The position is brought back inside the grid before the next byte is
+ * written, so the prompt of a shell that was at the last line is not written
+ * into a row the screen no longer has.
+ */
+static void clamp_position(void)
+{
+    if (s_row >= s_screen->rows) {
+        s_row = s_screen->rows - 1;
+    }
+    if (s_row < 0) {
+        s_row = 0;
+    }
+    if (s_column >= s_screen->columns) {
+        s_column = s_screen->columns - 1;
+    }
+    if (s_column < 0) {
+        s_column = 0;
+    }
+}
+
 void port_x86_64_console_write(const char *data, k_size_t len)
 {
     k_size_t i;
@@ -193,6 +217,8 @@ void port_x86_64_console_write(const char *data, k_size_t len)
     if (data == NULL || s_screen == NULL || s_screen->columns <= 0) {
         return;
     }
+
+    clamp_position();
 
     for (i = 0; i < len; i++) {
         char character = data[i];

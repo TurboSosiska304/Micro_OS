@@ -55,12 +55,24 @@ bool port_x86_64_vbe_mode(struct port_x86_64_screen_mode *mode);
 
 /*
  * The screen of the framebuffer: the renderer of ADR 0023 (kernel/render.h,
- * RGB565, the 5x7 font at twice its size) and the grid of cells the console
- * draws into. `base` is the virtual address of the first byte of the picture,
- * which the paging code of the port mapped. NULL when the mode is not one a
- * renderer of this port speaks.
+ * RGB565, the 8x16 font of the PC) and the grid of cells the console draws
+ * into. `base` is the virtual address of the first byte of the picture, which
+ * the paging code of the port mapped. NULL when the mode is not one a renderer
+ * of this port speaks.
  */
 const struct port_x86_64_screen *port_x86_64_fb_screen(const struct port_x86_64_screen_mode *mode,
                                                        void *base);
+
+/*
+ * The gap between two lines of the picture, in pixels: the `line_gap` of
+ * /etc/font, 0, 2 or 4 (ADR 0021). The step of a line becomes 16 plus the gap
+ * and the rows of the grid are counted again - 50, 44 or 40 rows of a picture
+ * of 800 lines - and the picture is drawn again from the cells the console
+ * holds. Does nothing when the screen is the text mode of the VGA.
+ */
+void port_x86_64_fb_set_line_gap(int gap);
+
+/* Register the `font` system of /etc (the line gap) with the machine. */
+int port_x86_64_font_settings_register(void);
 
 #endif /* MICRO_OS_PORT_X86_64_SCREEN_H */
