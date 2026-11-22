@@ -1,4 +1,4 @@
-# Micro OS — the contract of the platform port, 1.8, as it was recorded.
+# Micro OS — the contract of the platform port, 1.9, as it was recorded.
 #
 # This file is the golden record of kernel/port/*.h: the functions a machine
 # has to implement to be a port of this kernel. `make integrity` compares it
@@ -19,17 +19,27 @@
 #   * the execution substrate (kernel/port_task.h, the k_port_task_* calls) is
 #     not in this list: it is the part of a port that has no machine behind it
 #     to be checked against, and the tests of the scheduler cover it. The
-#     version of the contract is the version of the nine headers below.
+#     version of the contract is the version of the ten headers below.
 #
-# Nine headers, 45 functions: console 4, exec 8, info 4, kv 5, lock 6,
+# Ten headers, 47 functions: console 4, cpu 2, exec 8, info 4, kv 5, lock 6,
 # mem 6, net 8, power 2, time 2.
-api 1 8
+#
+# The two calls of kernel/port/cpu.h carry a weak default in the portable
+# kernel (components/kernel/src/cpu_default.c): a port that predates them is
+# one core, which is what the board is until its own work (ADR 0012). They are
+# recorded with the word `weak` so that `make integrity` asks the ports that
+# override the default for them and does not fail a port that does not.
+api 1 9
 
 # kernel/port/console.h — the bytes in and out
 k_port_write kernel/port/console.h
 k_port_console_readline kernel/port/console.h
 k_port_console_getchar kernel/port/console.h
 k_port_console_poll kernel/port/console.h
+
+# kernel/port/cpu.h — the cores of the machine (a weak default is one core)
+k_port_cpu_count kernel/port/cpu.h weak
+k_port_cpu_id kernel/port/cpu.h weak
 
 # kernel/port/exec.h — the window of the programs and the jump into one
 k_port_exec_supported kernel/port/exec.h

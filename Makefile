@@ -32,14 +32,15 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-open-build x86-run x86-run-serial x86-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak
+.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak
 
 help:
 	@echo "Micro OS — available targets:"
 	@echo "  make build      configure and build the host build"
 	@echo "  make test       build and run the unit tests (host)"
 	@echo "  make test-asan  the same tests with the address and UB sanitizers"
-	@echo "  make test-tsan  the same tests under the race detector"
+	@echo "  make test-tsan  the same tests under the race detector (two cores)"
+	@echo "  make test-smp   the host tests of the kernel of two cores (KERNEL_SMP)"
 	@echo "  make test-minimal  the host tests with the optional features off"
 	@echo "  make smoke      boot the simulator and check its answers"
 	@echo "  make coverage   the host build with gcov and the threshold of lines"
@@ -57,6 +58,7 @@ help:
 	@echo "  make idf-monitor attach the serial monitor"
 	@echo "  make idf-size   show the firmware size report"
 	@echo "  make x86-build  build the kernel for x86-64 (a multiboot image)"
+	@echo "  make x86-smp-build  the same kernel with KERNEL_SMP on (ADR 0012)"
 	@echo "  make x86-run    boot it in a QEMU window (VGA text, PS/2 keyboard)"
 	@echo "  make x86-run-serial  boot it with the serial console (-nographic)"
 	@echo "  make x86-smoke  boot it and check what it says"
@@ -69,7 +71,7 @@ help:
 	@echo "  make soak       the session of 600 seconds on x86-64 (one boot)"
 	@echo "  make soak SOAK_MINUTES=1  the same, short, to check the tool"
 	@echo "  make soak SOAK_ITERATIONS=5  five short boots, one pass each"
-	@echo "  make soak-host  the same ten minutes on the host, under TSan"
+	@echo "  make soak-host  the same ten minutes on the host, two cores, under TSan"
 	@echo "  make fuzz-long  the fuzzers with a multiplier and a seed"
 	@echo "  make disk-stress  a full volume, fsck -y and two boots (MicroFS, FAT)"
 	@echo "  make board-soak the same session on the board (needs the board)"
@@ -84,12 +86,27 @@ build:
 test: build
 	ctest --test-dir $(BUILD_DIR) --output-on-failure
 
-# The board has no debugger: the tests of the host are the place where a
-# wrong pointer or undefined behaviour has to be caught.
+# The race detector is a build of its own: it may not share the memory
+# of the address sanitizer, and the two answer different questions. The build
+# has KERNEL_SMP on (ADR 0012): the kernel keeps a run queue per core and the
+# tests run on two of them (MICRO_OS_CPUS=2, tests/CMakeLists.txt), so the
+# races of a machine of two cores are what TSan sees. The plain and the ASan
+# builds keep the flag off and with it the kernel of 1.0.
 test-tsan:
-	cmake -B build-tsan -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug -DMICRO_OS_SANITIZE_THREAD=ON
+	cmake -B build-tsan -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+		-DMICRO_OS_SANITIZE_THREAD=ON -DKERNEL_SMP=ON
 	cmake --build build-tsan
 	ctest --test-dir build-tsan --output-on-failure
+
+# The second core of the host (ADR 0012): the same tests, the same binary of
+# the kernel, KERNEL_SMP on and MICRO_OS_CPUS=2 (the test property sets it).
+# The flag is off by default, so `make test` stays the kernel of 1.0.
+SMP_DIR ?= build-smp
+
+test-smp:
+	cmake -B $(SMP_DIR) -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug -DKERNEL_SMP=ON
+	cmake --build $(SMP_DIR)
+	ctest --test-dir $(SMP_DIR) --output-on-failure
 
 test-asan:
 	cmake -B $(ASAN_DIR) -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug -DMICRO_OS_SANITIZE=ON
@@ -158,7 +175,7 @@ wiki-check:
 # joins the list when `qemu-system-x86_64` is on PATH and is skipped with a
 # message when it is not. A missing optional machine must not fail a run.
 CI_QEMU := $(shell command -v qemu-system-x86_64 2>/dev/null)
-CI_TARGETS := build test test-asan test-tsan smoke coverage
+CI_TARGETS := build test test-asan test-tsan test-smp smoke coverage
 ifneq ($(CI_QEMU),)
 CI_TARGETS += x86-smoke
 endif
@@ -173,7 +190,7 @@ sim: build
 	$(BUILD_DIR)/ports/port_host/microos_sim
 
 clean:
-	rm -rf $(BUILD_DIR) $(ASAN_DIR) $(MINIMAL_DIR) $(COVERAGE_DIR)
+	rm -rf $(BUILD_DIR) $(ASAN_DIR) $(MINIMAL_DIR) $(COVERAGE_DIR) $(SMP_DIR) build-tsan
 
 format:
 	@command -v clang-format >/dev/null 2>&1 || { echo "clang-format not found"; exit 1; }
@@ -230,6 +247,25 @@ x86-open-build:
 	cmake -B $(X86_OPEN_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
 		-DMICRO_OS_REQUIRE_SIGNATURE=OFF $(X86_SIGN_ARGS)
 	cmake --build $(X86_OPEN_BUILD) --target microos64.bin loader32.elf
+
+# The kernel of two cores on the x86-64 machine (ADR 0012). The port reads the
+# processor list of the firmware (the MADT of ACPI) and starts the processor of
+# the boot only: the APs wait for the trampoline that is not written yet, so
+# the kernel says how many cores the machine has and uses one. The build is the
+# half of the gate that can be checked today - the sources of a two-core kernel
+# compile and boot on the machine - and `make x86-smoke` boots the same image
+# with -smp 2 and reads the two numbers.
+X86_SMP_BUILD := build-x86-smp
+
+x86-smp-build:
+	cmake -B $(X86_SMP_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
+		-DKERNEL_SMP=ON $(X86_SIGN_ARGS)
+	cmake --build $(X86_SMP_BUILD) --target image
+
+x86-smp-run: x86-smp-build x86-disk
+	qemu-system-x86_64 -kernel $(X86_SMP_BUILD)/loader32.elf \
+		-initrd $(X86_SMP_BUILD)/microos64.bin -m 256 -smp 2 -nographic -no-reboot \
+		$(X86_DISK_DRIVE)
 
 # The disk of the machine: an MBR, one partition and a MicroFS volume with
 # /bin and /etc already written. The volume is made by the host tool
@@ -347,6 +383,54 @@ x86-net-run: x86-net-build
 x86-net-smoke: x86-net-build
 	X86_BUILD=$(X86_NET_BUILD) python3 tools/x86_net_smoke.py
 
+# The whole machine in one command: the kernel with the full feature set (the
+# network of K6 is the one optional block), the disk with /bin and /etc, and a
+# run.sh that boots the two with a card on the user network. `x86-all` is not
+# `make bundle` (that packs a release); it is the machine a person can start
+# without knowing which of the builds above it is made of.
+X86_ALL_BUILD := build-x86-all
+X86_ALL_IMAGE := $(X86_ALL_BUILD)/x86-all.img
+X86_ALL_RUN := $(X86_ALL_BUILD)/run.sh
+
+x86-all-build:
+	cmake -B $(X86_ALL_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
+		-DMICRO_OS_X86_NET=ON $(X86_SIGN_ARGS)
+	cmake --build $(X86_ALL_BUILD) --target image
+
+x86-all: x86-all-build build
+	python3 tools/x86_image.py --image $(X86_ALL_IMAGE) \
+		--build $(X86_ALL_BUILD) --mkfs $(X86_MKFS)
+	@printf '%s\n' \
+		'#!/bin/sh' \
+		'# Boot the complete Micro OS x86-64 machine: the kernel of `make x86-all`,' \
+		'# its disk and a virtio-net card on the user network (8080 forwarded).' \
+		'# X86_SERIAL=1 gives the serial console and no window.' \
+		'cd "$$(dirname "$$0")" || exit 1' \
+		'if [ "$${X86_SERIAL:-0}" = 1 ]; then' \
+		'    exec qemu-system-x86_64 -kernel loader32.elf -initrd microos64.bin \' \
+		'        -m 256 -nographic -no-reboot \' \
+		'        -drive file=x86-all.img,format=raw,if=ide,index=0,cache=writeback \' \
+		'        -netdev user,id=n0,hostfwd=tcp:127.0.0.1:8080-:8080 \' \
+		'        -device virtio-net-pci,netdev=n0,disable-modern=on' \
+		'fi' \
+		'exec qemu-system-x86_64 -kernel loader32.elf -initrd microos64.bin \' \
+		'    -m 256 -no-reboot -display "$${X86_DISPLAY:-gtk}" -serial null \' \
+		'    -drive file=x86-all.img,format=raw,if=ide,index=0,cache=writeback \' \
+		'    -netdev user,id=n0,hostfwd=tcp:127.0.0.1:8080-:8080 \' \
+		'    -device virtio-net-pci,netdev=n0,disable-modern=on' > $(X86_ALL_RUN)
+	@chmod +x $(X86_ALL_RUN)
+	@echo "x86-all: the machine is ready"
+	@echo "  kernel    $(X86_ALL_BUILD)/microos64.bin"
+	@echo "  loader    $(X86_ALL_BUILD)/loader32.elf"
+	@echo "  disk      $(X86_ALL_IMAGE)"
+	@echo "  run       $(X86_ALL_RUN)   (X86_SERIAL=1 for the serial console)"
+
+x86-all-run: x86-all
+	X86_DISPLAY=$(X86_DISPLAY) $(X86_ALL_RUN)
+
+x86-all-run-serial: x86-all
+	X86_SERIAL=1 $(X86_ALL_RUN)
+
 # The campaign of 1.0 (docs/wiki/testing.md). The session is one boot of the
 # x86-64 machine, ten minutes long by default, under the mixed load of
 # tools/soak.py. It is not a part of `make ci`: it takes ten minutes and it
@@ -371,19 +455,23 @@ soak: soak-image
 		$(SOAK_ARGS)
 
 # The other half of the same ten minutes: the portable kernel over the host
-# port, several tasks at once, under TSan. A warning of TSan, a deadlock, a
-# leaked block or a definite leak of valgrind fails it.
+# port, several tasks at once on two cores (ADR 0012, KERNEL_SMP and
+# MICRO_OS_CPUS=2), under TSan. A warning of TSan, a deadlock, a leaked block
+# or a definite leak of valgrind fails it. The plain half is the same two-core
+# build without the sanitizer, so valgrind sees the kernel of the gate and not
+# the one-core kernel beside it.
 HOST_SOAK_MINUTES ?= 10
 HOST_SOAK_ARGS    ?=
 
 soak-host:
-	cmake -B $(BUILD_DIR) -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug
-	cmake --build $(BUILD_DIR) --target microos_stress
-	cmake -B build-tsan -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug -DMICRO_OS_SANITIZE_THREAD=ON
+	cmake -B $(SMP_DIR) -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug -DKERNEL_SMP=ON
+	cmake --build $(SMP_DIR) --target microos_stress
+	cmake -B build-tsan -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+		-DMICRO_OS_SANITIZE_THREAD=ON -DKERNEL_SMP=ON
 	cmake --build build-tsan --target microos_stress
 	python3 tools/soak_host.py \
-		--plain $(BUILD_DIR)/tools/microos_stress \
-		--tsan build-tsan/tools/microos_stress \
+		--plain $(SMP_DIR)/tools/microos_stress \
+		--tsan build-tsan/tools/microos_stress --cpus 2 \
 		--minutes $(HOST_SOAK_MINUTES) $(HOST_SOAK_ARGS)
 
 # The fuzz of the campaign: the same suite as `make test`, in the sanitizer

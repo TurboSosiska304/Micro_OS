@@ -19,15 +19,16 @@ parentheses is the reason.
 | | ESP32 (board) | x86-64 (QEMU) | host (simulator) | null |
 |---|---|---|---|---|
 | shell | UART and TFT | VGA, PS/2, COM1 | stdin/stdout | - |
-| MicroFS | the `mfs` partition, 5.75 MB | the disk, or 512 KB of RAM | a file, 512 KB | - |
+| MicroFS | the `mfs` partition, 5.56 MiB | the disk, or 512 KB of RAM | a file, 512 KB | - |
 | `/proc`, `/dev` | yes | yes | yes | - |
 | `/etc` and its store | files, NVS behind them | files, no store | files, a file per key | - |
-| `execve` | `ENOSYS` (no executable flash) | ring 3, own page tables | `ENOSYS` (a harness) | `ENOSYS` |
+| `execve` | Xtensa code from `progs`, no protection | ring 3, own page tables | `ENOSYS` (a harness) | `ENOSYS` |
 | `fork()` | shared memory | copy on write | shared memory | shared memory |
 | disk | the internal flash | ATA PIO, `ata0` | - | - |
 | network | WiFi, lwIP, telnet, HTTP, MQTT | virtio-net, HTTP, httpd, DNS, MQTT is off | - | - |
 | panel | ST7789v2 and a copy of the console | VGA text | a renderer into a file | - |
 | MMU | - (the chip has none) | yes: ring 3, NX/W^X | - | - |
+| cores | 2 under FreeRTOS, the kernel on 1 | 2 in the MADT, the kernel on 1 | `MICRO_OS_CPUS`, 1 by default | 1 |
 | build | `make idf-build` | `make x86-build` | `make build` | by the host build |
 
 The matrix follows the ports, not a wish: the board has no MMU and its flash is
@@ -56,13 +57,13 @@ wake of the timer, of BUTTON C and of the RTC alarm, `telnet` on port 23,
 `httpd`, `mqtt`, `http` and `ntp`.
 
 What does not: memory protection (`fork()` is the placeholder of a machine
-without an MMU), running a program out of the flash, OTA, an IR receiver (the
-board carries the emitter only; `ir rx` waits for an element on G26), the
-enclosure modes, a second user. The alarm of the BM8563 turns the board on from
+without an MMU), an update over the network (the A/B update is over USB,
+ADR 0022), an IR receiver (the board carries the emitter only; `ir rx` waits
+for an element on G26), the enclosure modes, a second user. The alarm of the BM8563 turns the board on from
 off; a sleeping board obeys it because the firmware sets the timer of the chip
 for the moment of the match, not because the INT of the clock is a wake line.
-The flash is 8 MB: `factory` 2 MB and MicroFS 5.75 MB, with no OTA slot. The
-details, the pins and the quirks are in
+The flash is 8 MB: two application slots of 1.125 MiB, `progs` 132 KiB and
+MicroFS 5.56 MiB (ADR 0022). The details, the pins and the quirks are in
 [`docs/ports/esp32/README.md`](../ports/esp32/README.md) and
 [`docs/ports/esp32/hardware.md`](../ports/esp32/hardware.md).
 
@@ -81,6 +82,12 @@ make x86-run-serial     # the same machine in a terminal
 make x86-smoke          # boot and check the transcript
 ```
 
+The processors come from the MADT of ACPI, and the boot prints how many the
+firmware describes and how many it runs: `-smp 2` gives
+`2 cpu(s) reported by the firmware, 1 in use`, because the APs wait for the
+trampoline of ADR 0012 that is not written yet. `make x86-smp-build` builds
+the portable kernel with `KERNEL_SMP=ON`.
+
 What works: the VGA text console and COM1 out of one `k_port_write()`, the
 PS/2 keyboard, the PIT, the context switch, the scheduler, paging and ring 3,
 NX/W^X (the text of the kernel and of a program is read-only code, every data
@@ -93,7 +100,9 @@ server of TCP and a resolver with a cache (`make x86-net-smoke`). It is the
 machine of [`programs.md`](programs.md) and the proof that the kernel is
 portable.
 
-What does not: the key-value store (no `/etc` to persist), a second disk, DMA,
+What does not: the second processor (the list is read, the AP bring-up is the
+blocker of ADR 0012, "The pilot of 1.x"), the key-value store (no `/etc` to
+persist), a second disk, DMA,
 SMAP/SMEP (a documented decision, ADR 0007), and
 the parts of the network that wait for a real link: DHCP, IPv6 and a
 congestion window. The details are in
@@ -115,6 +124,10 @@ What works: everything portable, with the drivers stubbed and the console
 rendered into a file or nowhere. What it cannot do: run a program, and
 reproduce preemption - the critical section is a recursive `pthread` mutex, so
 a race is invisible unless the race detector looks for it (`make test-tsan`).
+The cores are a setting of the run: `MICRO_OS_CPUS=2` tells the kernel it has
+two, and a task is then in the queue of one of them (`make test-smp`,
+`make test-tsan` and `make soak-host` do it). Every task is already a pthread,
+so a "core" is a run queue and an identity of the task, not a worker thread.
 The details are in [`docs/ports/host/README.md`](../ports/host/README.md).
 
 ## null: the port that is not a machine

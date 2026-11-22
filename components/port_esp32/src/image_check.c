@@ -10,10 +10,14 @@
  * continue with a warning according to CONFIG_MICRO_OS_REQUIRE_SIGNATURE.
  *
  * The trailer is not after the payload on the flash: the application is at
- * the start of the factory partition and the trailer is in the last 4 KiB of
- * that partition. The signature covers the bytes of the app image up to the
- * length in its own ESP header, so the check hashes the flash in chunks and
- * never copies a megabyte into RAM.
+ * the start of its slot and the trailer is in the last 4 KiB of that slot.
+ * The signature covers the bytes of the app image up to the length in its own
+ * ESP header, so the check hashes the flash in chunks and never copies a
+ * megabyte into RAM.
+ *
+ * The slot is the one the bootloader is running (ADR 0022): with two
+ * application slots either can be the application of this boot, and the check
+ * has to read the bytes of the one that is running and not a fixed address.
  */
 
 #include "port_esp32.h"
@@ -22,6 +26,7 @@
 
 #include "ed25519.h"
 #include "esp_app_desc.h"
+#include "esp_ota_ops.h"
 #include "esp_partition.h"
 #include "kernel/log.h"
 #include "kernel/version.h"
@@ -31,7 +36,7 @@
 #include "sign_image.h"
 #include "sign_public_key.h"
 
-/* The last 4 KiB of the factory partition are kept for the trailer; the app
+/* The last 4 KiB of an application slot are kept for the trailer; the app
    image, its header and its own hash have to end before them. */
 #define IMAGE_TRAILER_RESERVE 0x1000u
 #define IMAGE_DESC_OFFSET 0x20u
@@ -246,13 +251,12 @@ int port_esp32_image_check(void)
     int has_version;
     static uint8_t chunk[IMAGE_CHUNK];
 
-    part =
-        esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
+    part = esp_ota_get_running_partition();
     if (part == NULL) {
-        return unverified("there is no factory partition");
+        return unverified("the running application partition is not known");
     }
     if (part->size <= IMAGE_TRAILER_RESERVE) {
-        return unverified("the factory partition is too small for its trailer");
+        return unverified("the application partition is too small for its trailer");
     }
     if (image_length(part, &image_size) != 0) {
         return unverified("the application header is not readable");
@@ -295,7 +299,7 @@ int port_esp32_image_check(void)
         return unverified("the signature does not match");
     }
 
-    kinfo("boot: image signature ok (sha-256, ed25519)");
+    kinfo("boot: image signature ok (sha-256, ed25519), %s", part->label);
 
     has_version = image_version(part, version) == 0;
     if (!has_version) {

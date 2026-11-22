@@ -237,20 +237,31 @@ written when the project was an operating system for one board; the numbers
       network components, the defaults per build, `make test-minimal` and
       the check of the map
 
-## K8 - Many cores (planned, after 1.0)
+## K8 - Many cores (in progress, after 1.0)
 
 > Not a gate of 1.0 (ADR 0012, updated): the release promises a correct
-> single-core kernel; the second core is the first project after it.
+> single-core kernel; the second core is the first project after it. The
+> first phase is in the tree (`KERNEL_SMP`, `struct k_cpu`, the host gate
+> and the x86-64 processor list); the AP bring-up is the blocker, named in
+> ADR 0012 "The pilot of 1.x".
 
-* [ ] A `struct k_cpu` per core and a run queue per core; the scheduler never
-      runs one task on two cores (ADR 0012)
+* [x] A `struct k_cpu` per core and a run queue per core; the scheduler never
+      runs one task on two cores (ADR 0012) - `kernel/cpu.h`,
+      `components/kernel/src/sched.c`, `tests/cases/test_smp.c`
 * [ ] The allocator, the VFS, the console and the block layer safe under two
-      cores; the locks that sleep and the locks that spin are named
+      cores; the locks that sleep and the locks that spin are named - the
+      sleeping locks are audited in [debts.md](debts.md) under K8; the port
+      critical section of x86-64 is still `cli` and has to become a machine
+      lock before an AP enters the kernel
 * [ ] x86-64: AP bring-up, local APIC timer, I/O APIC and the IPI of a TLB
-      and a reschedule; `make x86-smoke` with `-smp 2`
+      and a reschedule; `make x86-smoke` with `-smp 2` - the processor list
+      (MADT) and `-smp 2` are done; the boot says `2 cpu(s) reported by the
+      firmware, 1 in use`; `make x86-smp-build` builds the two-core kernel
 * [ ] ESP32: the kernel tasks on both cores of the Pico, no driver assuming
-      one core
-* [ ] `KERNEL_SMP` (ADR 0010) and the host TSan run as the gate
+      one core - not started (ADR 0018, the compatibility port)
+* [x] `KERNEL_SMP` (ADR 0010) and the host TSan run as the gate - the flag is
+      off by default; `make test-smp`, `make test-tsan` and `make soak-host`
+      run two cores under TSan, and the plugin into `make ci` is `test-smp`
 
 ## K9 - A userland (in progress)
 
@@ -281,6 +292,27 @@ written when the project was an operating system for one board; the numbers
       by writing a file of the volume (`make x86-disk`), not by embedding it
       in the kernel
 
+## The last major changes of the board (1.1.0)
+
+> The settings of `/etc`, the programs in a partition of the board mapped as
+> instructions, and the update with an A/B slot and a rollback are the last
+> major changes of the ESP32 port. From `1.2.0` the port is a compatibility
+> port (ADR 0018): it builds and passes its test, and receives only the
+> changes that are cheap on the board. The notes are
+> [`docs/releases/1.1.md`](releases/1.1.md).
+
+* [x] The layout of 1.1 ([ADR 0022](adr/0022-layout-of-1.1.md)): two equal
+      application slots of 1.125 MiB, `progs` of 132 KiB and 5.56 MiB of
+      MicroFS; the one-time move of a board of 1.0 and its warning in the
+      release notes
+* [x] A safe update over USB (`tools/ota_usb.py`) with the rollback of a boot
+      that never confirms itself, and `DEVICE_OTA=1 tools/device-test.sh` on
+      the board
+* [x] The programs are files of `progs`, mounted read-only at `/bin`, with no
+      image of a program in the firmware (`tools/progs_image.py`)
+* [ ] An update over the network into the inactive slot (ADR 0022, open
+      item; the USB path is the safe update of 1.1)
+
 ## The road to 2.0
 
 > [`docs/releases/2.0.md`](releases/2.0.md) is the direction of the first
@@ -289,24 +321,96 @@ written when the project was an operating system for one board; the numbers
 > rebuilding an image. The flags of the build stay build-time. It is a
 > direction, not a gate.
 
-## K10 - The settings of a machine (planned, after 1.0)
+## K10 - The settings of a machine (done in 1.1.0)
 
-> The board, the x86-64 machine and the host already keep a few settings as
-> files of `/etc`; the screen and the font are the next ones, in a file per
-> system (ADR 0021). The feature is not a gate of 1.0.
+> The board, the x86-64 machine and the host already kept a few settings as
+> files of `/etc`; the screen and the font were the next ones, in a file per
+> system (ADR 0021). The feature was not a gate of 1.0.
 
-* [ ] A file per system in `/etc` (`display`, `font`, `console`, `time`,
-      `net`): `key=value`, comments, a bounded parser, a key the system does
-      not know kept and reported once
-* [ ] The store keeps the text of a system file, so a format brings the
-      settings back as it brings the other files of `/etc`
-* [ ] An applier per system, called at the boot in the order of the machine:
+* [x] A file per system in `/etc` (`display`, `font`, `console`; `time` and
+      `net` have room in the table): `key=value`, comments, a bounded parser
+      in `components/settings` (12 pairs, 127 characters, keys of
+      `[a-z0-9_.-]`), a key the system does not know kept and reported once,
+      a value that does not parse replaced by the default and a warning
+* [x] The store keeps the text of a system file, so a format brings the
+      settings back as it brings the other files of `/etc`; a system file is
+      at most 127 characters because it is one value of the store
+      (`tests/cases/test_settings.c` proves the round trip)
+* [x] An applier per system, called at the boot in the order of the machine:
       the display and the font before the first frame, the console before the
-      shell
-* [ ] `config set`, `config get` and `config sync` over a system file, and a
-      setting a machine cannot honour kept and ignored with a warning
-* [ ] The screen and the font: rotation, brightness, inversion, the scale of
-      the 5x7 font and the theme; the VGA of x86-64 where it can, the panel of
-      the board everywhere
-* [ ] A table of the keys per machine in the wiki, with a test that every key
-      of the file is either applied or reported
+      shell; the board loads them in the init task, x86-64 in `kmain()`
+* [x] `config set`, `config get`, `config list` and `config sync` over a
+      system file, and a setting a machine cannot honour kept and ignored with
+      a warning (`SETTINGS_KEPT`)
+* [x] The screen and the font: rotation, brightness, inversion, the scale of
+      the 5x7 font and the theme; the VGA of x86-64 where it can (the
+      attribute of the cells), the panel of the board everywhere
+* [x] A table of the keys per machine in the wiki
+      ([settings.md](wiki/settings.md)), with a host test that every key of a
+      default file is a key of its system, so a key is applied or named
+
+The next steps that stay open are the ones of the machine and not of the
+format: a backlight with a duty cycle for `brightness`, an applier on the host
+when its screen file is a real screen, and a rewrite of a file that is atomic
+on a VFS without `rename` (see [debts.md](debts.md)).
+
+## K11 - The screen of x86-64 (1.2)
+
+> The port keeps the text mode of the firmware: 80 columns by 25 rows at
+> `0xB8000`, sixteen colours, no font and no picture. The next screen is a
+> linear framebuffer, not a GPU (ADR 0023); a 3D driver of a real card is
+> not promised, and UEFI GOP is the later door to a physical machine.
+
+* [ ] A linear framebuffer through Bochs VBE in QEMU: 1280x800, 16 bits per
+      pixel, RGB565 so `k_renderer` draws into it unchanged; the PCI device
+      is found over the configuration space the network port already reads,
+      and `paging.c` maps its window
+* [ ] The console of the screen: cells of the 5x7 font scaled twice (about
+      128 columns by 57 rows), the control characters, the cursor, the
+      scrolling and the two sequences of `clear`; the colours of
+      `/etc/console` (ADR 0021); the keyboard of IRQ1 unchanged
+* [ ] The text mode stays the fallback, improved once to 80x50 with the 8x8
+      font of the VGA; the port chooses the screen at the boot
+* [ ] `make x86-vga-smoke` reads the framebuffer with `screendump` (a
+      picture has no text memory for `pmemsave`) and checks cells and
+      colours; `make x86-run` opens it for a person
+* [ ] Later: a 2D surface for a program, and optionally virtio-gpu 2D in
+      QEMU; UEFI GOP for a real machine, which is a loader of its own
+
+The desktop is not a step of this list. A picture, a mouse and a compositor
+are the parts of one, and the compositor has to be a program of the system
+and not the kernel (see [releases/2.0.md](releases/2.0.md)); the first thing
+to build is the screen a program can draw on.
+
+## K12 - The stream and the installer (1.2, in parallel with K11)
+
+> The programs are a repository of their own (`microos-progs`); the machine
+> that installs one needs a stream, TLS and a signature (ADR 0024). The board
+> has no installer - its `progs` belongs to the firmware (ADR 0018) - so this
+> is the work of x86-64 and of the host substrate.
+
+* [ ] A streaming HTTP client: `Content-Length` and a chunked body, a
+      bounded number of redirects, a timeout, and a sink that is a
+      `struct vfs_file` or the inactive slot of an update; `wget URL FILE`
+      at the console and a `Range` resume for a file
+* [ ] mbedTLS on x86-64 with a freestanding platform layer: `kmm` for the
+      allocations, `RDRAND` for entropy (the timer as the fallback), NTP for
+      the clock and `/etc/ssl/certs.pem` through the VFS; the board keeps the
+      copy of ESP-IDF
+* [ ] The signed index and a signed `.mox`: `index.json` with the name, the
+      version, the machine, the ABI, the size and the digest; the verifier
+      reuses the Ed25519 of ADR 0020
+* [ ] `pkg update/install/remove/list/info` over `/var/pkg` and `/usr/bin`,
+      atomic through a new `vfs_rename` (MicroFS and FAT implement it; a
+      volume without it installs with a warning)
+* [ ] The interface of the console is pacman's, the build is not: `-S`, `-R`,
+      `-Q`, `-Sy`, `-Su`, `-Syu`, `-U`, `--noconfirm`, `--needed`,
+      `--download-only`, `--dry-run`, `--allow-downgrade`, `--offline`,
+      `--root`, `--repo`, `--color`, `NAME=VERSION` (ADR 0024 §6)
+* [ ] The repository `microos-progs`: CI builds a program per machine, signs
+      it and publishes the index with the artifacts; `make` in the kernel
+      tree keeps only the programs of the tests
+* [ ] Tests: the fake transport of `components/net` serves a chunked body, a
+      redirect and a dropped connection; the installer is tested on a
+      temporary volume with a bad signature, a wrong machine and a downgrade;
+      `make x86-net-smoke` fetches a file from a local server

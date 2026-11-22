@@ -26,17 +26,20 @@ machine under it, `port_host` is the same calls over POSIX, `port_x86_64` is
 the worked example of programs, signals and an MMU, and `port_esp32` is the
 board with its quirks ([ADR 0018](adr/0018-esp32-programs.md)).
 
-## The contract at version 1.8
+## The contract at version 1.9
 
 `KERNEL_PORT_API_VERSION_MAJOR/MINOR` in
 [`kernel/port/info.h`](../components/kernel/include/kernel/port/info.h) is
 the vermagic of the pair: the port declares the version it was written for,
 a `_Static_assert` compares it at build time, and the boot compares it again.
 
-The version 1.8 contract is **54 functions in ten headers**: 45 in
+The version 1.9 contract is **56 functions in eleven headers**: 47 in
 `kernel/port/*.h` and nine in `kernel/port_task.h`. `kernel/port.h` is the
-aggregate of the nine subject headers and does not include the task
-substrate; a port includes both.
+aggregate of the ten subject headers and does not include the task
+substrate; a port includes both. Two of the 47, `k_port_cpu_count` and
+`k_port_cpu_id`, have a weak default in the portable kernel
+(`components/kernel/src/cpu_default.c`): a port that does not know about the
+cores is one core, which is what the board is until its own work (ADR 0012).
 
 The list is recorded in [`tests/corpus/port_api.txt`](../tests/corpus/port_api.txt):
 `make integrity` compares the record with the headers, with the version of
@@ -50,15 +53,18 @@ new call of the contract and a port that forgot one are both a failed check.
 | `kernel/port/time.h` | 2 | milliseconds and microseconds since boot | **yes** |
 | `kernel/port/mem.h` | 6 | the heap, the PSRAM and their numbers | **yes**; PSRAM may be absent |
 | `kernel/port/lock.h` | 6 | critical sections and recursive mutexes | **yes** |
+| `kernel/port/cpu.h` | 2 | the cores of the machine and the one asking | no: the weak default is one core |
 | `kernel/port/power.h` | 2 | halt and reset | **yes** |
 | `kernel/port/info.h` | 4 | name, architecture, contract version | **yes** |
 | `kernel/port/kv.h` | 5 | the store behind `/etc` | no: "nothing is stored" |
 | `kernel/port/net.h` | 8 | TCP client and server, one UDP exchange | no: "no network" |
 | `kernel/port/exec.h` | 8 | the window of programs, the entry, the end | no: "no programs" |
 
-The execution substrate is not optional: a port that implements the nine
+The execution substrate is not optional: a port that implements the ten
 subject headers but not `kernel/port_task.h` has no context for the
-scheduler to switch to.
+scheduler to switch to. The two calls of `kernel/port/cpu.h` are the one
+group with a definition in the portable kernel, so a port that leaves them
+out is one core rather than broken.
 
 ### What "optional" means
 
@@ -166,7 +172,7 @@ tools/device-test.sh /dev/ttyACM0   # the board: build, flash, RESULT: PASS
 A successful boot says which contract it speaks:
 
 ```text
-port: host, contract 1.8
+port: host, contract 1.9
 ```
 
 A **major** mismatch panics with the two versions; a **minor** one warns (the

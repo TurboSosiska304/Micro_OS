@@ -6,6 +6,11 @@ updated from a 0.x release. The checklist behind it is
 [the gate of 1.0](../releases/1.0.md), and the decisions are ADR 0011
 (versioning and the gate) and ADR 0012 (the second core, after this release).
 
+> This page is the record of 1.0. The board changed with `1.1.0`: two
+> application slots, an update over USB with a rollback and the programs in
+> the `progs` partition (ADR 0022). The current layout and the one-time move
+> of a board of 1.0 are in [the notes of 1.1](../releases/1.1.md).
+
 ## What 1.0 is
 
 Micro OS is a small operating system of its own: a portable C11 kernel, a

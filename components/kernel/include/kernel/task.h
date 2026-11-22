@@ -72,6 +72,13 @@ struct task {
     task_state_t state;
     task_state_t wake_state; /* state to restore when a sleeping task wakes up */
     k_u8_t prio;
+    /*
+     * The core that owns the task. The scheduler writes it when the task is
+     * created, when it is woken and when the core it runs on claims it; no
+     * other code changes it, and a task is in the run queue of that core and
+     * nowhere else (ADR 0012). Zero in a one-core kernel.
+     */
+    k_u32_t cpu;
     k_u32_t wake_tick; /* tick at which a sleeping task wakes up */
     /*
      * A task that waits with a timeout is transiently sleeping. A block or

@@ -143,7 +143,7 @@ const char *k_port_arch(void)
 
 /* The contract this port was written for. */
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 8u
+#define PORT_API_MINOR 9u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_null does not speak the contract of this kernel");
@@ -156,6 +156,23 @@ unsigned k_port_api_major(void)
 unsigned k_port_api_minor(void)
 {
     return PORT_API_MINOR;
+}
+
+/* --- the cores --- */
+
+/*
+ * The port that is not a machine is one core and it never runs a call: the
+ * two answers exist so that the kernel links with this port too, and the
+ * number is the floor of every machine (kernel/port/cpu.h).
+ */
+k_u32_t k_port_cpu_count(void)
+{
+    return 1;
+}
+
+k_u32_t k_port_cpu_id(void)
+{
+    return 0;
 }
 
 /* --- the store and the sockets --- */

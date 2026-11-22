@@ -797,9 +797,23 @@ static bool signal_ends_by_default(int sig)
 
 bool task_signal_interrupts(const struct task *t)
 {
+    k_u32_t pending;
     int slot;
 
-    if (t == NULL || t->sig_pending == 0u) {
+    if (t == NULL) {
+        return false;
+    }
+
+    /*
+     * The mark and the handler are written by a sender on another core (under
+     * the critical section) and read here by the task itself on its way into
+     * a wait, without the lock: the two loads are atomic so that the reader
+     * sees a mark or a handler, and the pair the write made, never half of
+     * one (the two-core run of TSan named this pair).
+     */
+    pending = __atomic_load_n(&t->sig_pending, __ATOMIC_RELAXED);
+
+    if (pending == 0u) {
         return false;
     }
 
@@ -807,11 +821,11 @@ bool task_signal_interrupts(const struct task *t)
         int sig = signal_number(slot);
         task_signal_fn handler;
 
-        if (sig == 0 || (t->sig_pending & signal_bit(sig)) == 0u) {
+        if (sig == 0 || (pending & signal_bit(sig)) == 0u) {
             continue;
         }
 
-        handler = t->sig_handlers[slot];
+        handler = __atomic_load_n(&t->sig_handlers[slot], __ATOMIC_RELAXED);
 
         if (handler == K_SIG_IGN) {
             continue;
@@ -831,7 +845,7 @@ bool task_signal_interrupts(const struct task *t)
 
 k_u32_t task_signal_pending(const struct task *t)
 {
-    return t != NULL ? t->sig_pending : 0u;
+    return t != NULL ? __atomic_load_n(&t->sig_pending, __ATOMIC_RELAXED) : 0u;
 }
 
 int task_signal_send(k_u32_t pid, int sig)

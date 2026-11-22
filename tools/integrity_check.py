@@ -88,8 +88,17 @@ DATA_SUBTYPES = {
 }
 
 # The files of the bundle that must be ready to flash.
-BUNDLE_BINARIES = ("micro_os.bin", "bootloader.bin", "partition-table.bin")
-BUNDLE_EXTRA = ("checksums.txt", "flash.sh", "README.md")
+BUNDLE_BINARIES = ("micro_os.bin", "progs.bin", "bootloader.bin", "partition-table.bin")
+BUNDLE_EXTRA = ("checksums.txt", "flash.sh", "ota_usb.py", "README.md")
+
+# The directory of the `progs` partition (components/port_esp32/include/
+# progs_format.h, ADR 0022).
+PROGS_MAGIC = b"MOPROGS1"
+PROGS_HEADER = 24
+PROGS_ENTRY = 36
+PROGS_SLOT = 0x10000
+PROGS_DIRECTORY = 0x1000
+PROGS_MAX_FILES = 2
 
 # The extensions that are never treated as a text file.
 BINARY_EXTENSIONS = {
@@ -471,15 +480,15 @@ def check_bundle(root: str, report: Report) -> dict:
 X86_ARTIFACTS = ("loader32.elf", "microos64.bin", "run.sh", "README.md")
 
 
-def factory_offset(root: str) -> int:
-    """The offset of the application, as partitions.csv says it."""
+def app_slot_offset(root: str) -> int:
+    """The offset of the first application slot, as partitions.csv says it."""
     path = os.path.join(root, "partitions.csv")
     if not os.path.isfile(path):
         return 0x10000
 
     for line in read_text(path).splitlines():
         fields = [field.strip() for field in line.split(",")]
-        if len(fields) >= 4 and fields[0] == "factory":
+        if len(fields) >= 4 and fields[0] == "ota_0":
             try:
                 return int(fields[3], 0)
             except ValueError:
@@ -508,7 +517,7 @@ def check_artifacts(root: str, report: Report) -> None:
         ok = len(data) > 0x1000 and data[0x1000] == ESP_IMAGE_MAGIC
         if ok and os.path.isfile(app):
             application = open(app, "rb").read()
-            offset = factory_offset(root)
+            offset = app_slot_offset(root)
             ok = (
                 len(data) >= offset + len(application)
                 and data[offset : offset + len(application)] == application
@@ -591,6 +600,80 @@ def check_images(root: str, report: Report) -> dict:
         )
 
     return images
+
+
+def check_progs(root: str, report: Report) -> None:
+    """The image of the programs: the directory of the progs partition."""
+    group = "progs"
+    dist = os.path.join(root, "dist")
+    path = os.path.join(dist, "progs.bin")
+
+    if not os.path.isdir(dist):
+        report.skip(group, "the programs are read", "dist/ is not there")
+        return
+
+    if not os.path.isfile(path):
+        report.add(group, "progs.bin is present", False, "the file is missing")
+        return
+
+    data = open(path, "rb").read()
+    report.add(group, "progs.bin is present", True, f"{len(data)} bytes")
+
+    expected = 0x21000
+    csv_path = os.path.join(root, "partitions.csv")
+    if os.path.isfile(csv_path):
+        for partition in parse_partitions_csv(csv_path):
+            if partition["name"] == "progs":
+                expected = partition["size"]
+                break
+
+    report.add(
+        group,
+        "progs.bin is the partition of the table",
+        len(data) == expected,
+        f"{len(data)} bytes, the partition is {expected}",
+    )
+
+    if len(data) < PROGS_DIRECTORY:
+        report.add(group, "the directory is readable", False, "the image is too short")
+        return
+
+    directory = len(data) - PROGS_DIRECTORY
+    table = data[directory:]
+    ok = table[0:8] == PROGS_MAGIC
+    report.add(group, "the directory has the magic", ok, table[0:8].decode("ascii", "replace"))
+
+    version, count, slot, _reserved = struct.unpack_from("<IIII", table, 8)
+    report.add(group, "the directory is version 1", version == 1, f"version {version}")
+
+    report.add(
+        group,
+        "the directory fits the partition",
+        count <= PROGS_MAX_FILES and slot >= PROGS_SLOT and slot % PROGS_SLOT == 0,
+        f"{count} program(s), slot 0x{slot:X}",
+    )
+
+    for index in range(min(count, PROGS_MAX_FILES)):
+        record = PROGS_HEADER + index * PROGS_ENTRY
+        if record + PROGS_ENTRY > len(table):
+            report.add(group, f"program {index} is in the image", False, "the record is missing")
+            continue
+
+        name = table[record : record + 24].split(b"\0", 1)[0].decode("ascii", "replace")
+        offset, size, _ = struct.unpack_from("<III", table, record + 24)
+        ok = (
+            name != ""
+            and size > 0
+            and size <= slot
+            and offset % slot == 0
+            and offset + size <= directory
+        )
+        report.add(
+            group,
+            f"the record of {name or index} is usable",
+            ok,
+            f"0x{offset:X}, {size} bytes",
+        )
 
 
 def check_partitions(root: str, report: Report) -> dict:
@@ -1331,8 +1414,15 @@ def check_port_contract(root: str, report: Report) -> None:
         f"{len(names)} function(s) in {PORT_HEADER_DIR}/",
     )
 
+    # The calls with a weak default in the kernel (kernel/port/cpu.h) are not
+    # required of a port that predates them: the kernel answers one core and
+    # the port keeps working (ADR 0012). A port that has them is checked for
+    # them like any other call.
+    weak = weak_calls(root)
+    required = [name for name in names if name not in weak]
+
     for directory in PORT_IMPLEMENTATION_DIRS:
-        absent, where = port_missing(root, directory, names)
+        absent, where = port_missing(root, directory, required)
 
         if absent is None:
             report.add(group, f"{directory} exists", False, where)
@@ -1341,7 +1431,7 @@ def check_port_contract(root: str, report: Report) -> None:
         detail = (
             "missing: " + ", ".join(absent)
             if absent
-            else f"{len(names)} function(s) found in {where}"
+            else f"{len(required)} function(s) found in {where}"
         )
         report.add(group, f"{directory} implements the contract", not absent, detail)
 
@@ -1385,17 +1475,19 @@ def port_version(root: str) -> tuple:
 def read_port_recording(root: str) -> tuple:
     """The record of the contract: the version, the functions and the header of each.
 
-    Returns (version, names, errors). A version is a pair of strings, the names
-    are a dictionary from the function to the header that declares it, and the
-    errors are the lines that are neither.
+    Returns (version, names, optional, errors). A version is a pair of strings,
+    the names are a dictionary from the function to the header that declares
+    it, `optional` holds the functions a port may leave to the weak default of
+    the kernel (kernel/cpu.h), and the errors are the lines that are neither.
     """
     path = os.path.join(root, PORT_RECORDING)
     version = None
     names = {}
+    optional = set()
     errors = []
 
     if not os.path.isfile(path):
-        return None, names, [f"{PORT_RECORDING} is missing"]
+        return None, names, optional, [f"{PORT_RECORDING} is missing"]
 
     for number, line in enumerate(read_text(path).splitlines(), 1):
         line = line.split("#", 1)[0].strip()
@@ -1408,14 +1500,19 @@ def read_port_recording(root: str) -> tuple:
             if version is not None:
                 errors.append(f"line {number}: a second api line")
             version = (parts[1], parts[2])
-        elif parts[0].startswith("k_port_") and len(parts) == 2:
+        elif parts[0].startswith("k_port_") and len(parts) in (2, 3):
             if parts[0] in names:
                 errors.append(f"line {number}: {parts[0]} is recorded twice")
             names[parts[0]] = parts[1]
+            if len(parts) == 3:
+                if parts[2] != "weak":
+                    errors.append(f"line {number}: {parts[2]!r} is not a word of the record")
+                else:
+                    optional.add(parts[0])
         else:
             errors.append(f"line {number}: {line!r} is not a record")
 
-    return version, names, errors
+    return version, names, optional, errors
 
 
 def port_missing(root: str, directory: str, names: list) -> tuple:
@@ -1447,10 +1544,21 @@ def port_missing(root: str, directory: str, names: list) -> tuple:
     return missing, "the sources"
 
 
+def weak_calls(root: str) -> set:
+    """The calls of the record that a port may leave to the kernel.
+
+    The record marks them with `weak`: the portable kernel has a definition
+    (components/kernel/src/cpu_default.c) and a port that does not override it
+    is one core. The board is that port until its own work (ADR 0012).
+    """
+    _version, _names, optional, _errors = read_port_recording(root)
+    return optional
+
+
 def check_port_recording(root: str, report: Report) -> list:
     """The record of the contract is the one of the headers, and it is whole."""
     group = "port"
-    version, names, errors = read_port_recording(root)
+    version, names, optional, errors = read_port_recording(root)
 
     report.add(
         group,
@@ -1504,7 +1612,18 @@ def check_port_recording(root: str, report: Report) -> list:
         f"the record says {recorded_version}, kernel/port/info.h says {reported}",
     )
 
-    return recorded
+    # The record of the strict check: the calls a machine of its own has to
+    # implement. The weak ones are the floor of the contract and the port may
+    # leave them to the kernel.
+    if optional:
+        report.add(
+            group,
+            "the contract has a weak floor (the cores of the machine)",
+            True,
+            f"{len(optional)} call(s) may be left to the kernel: " + ", ".join(sorted(optional)),
+        )
+
+    return [name for name in recorded if name not in optional]
 
 
 def check_independent_ports(root: str, report: Report, names: list) -> None:
@@ -1842,6 +1961,7 @@ def main(argv: list) -> int:
     check_bundle(root, report)
     check_artifacts(root, report)
     images = check_images(root, report)
+    check_progs(root, report)
     table = check_partitions(root, report)
     check_config(root, report, images, table)
     check_layers(root, report, files)

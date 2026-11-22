@@ -38,7 +38,7 @@ idf_component_register(
     REQUIRES kernel font kshell devfs freertos wifi spi_flash esp_psram
              esp_driver_gpio esp_driver_i2c driver esp_driver_spi esp_driver_ledc
              esp_adc esp_driver_i2s esp_driver_rmt esp_timer esp_wifi esp_netif
-             esp_event nvs_flash
+             esp_event nvs_flash graphics settings
              esp_hw_support
 )
 

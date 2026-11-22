@@ -43,6 +43,7 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make build` | configure and build `build-host/` with Ninja |
 | `make test` | build and run the unit tests through `ctest` |
 | `make test-asan` | the same tests with the address and UB sanitizers, in `build-asan/` |
+| `make test-tsan` | the same tests under the race detector on two cores, in `build-tsan/` |
 | `make sim` | build and run the kernel simulator `build-host/ports/port_host/microos_sim` |
 | `make smoke` | boot the simulator and check the shell, the filesystem and the network (needs `make build` first) |
 | `make coverage` | the host build with `--coverage`, the tests, the simulator and the gcov report of `components/kernel` (70% of lines) |
@@ -50,7 +51,11 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make integrity` | the integrity check: bundle, image headers, partition table, git, sources, formatting |
 | `make format` | reformat the C sources with `clang-format` |
 | `make clean` | remove `build-host/`, `build-asan/`, `build-coverage/` (the device `build/` stays) |
-| `make ci` | `build`, `test`, `test-asan`, `test-tsan`, `smoke`, `coverage`, `x86-smoke` when QEMU is there, `reproducible`, `integrity` — run it before pushing |
+| `make test-smp` | the host tests with `KERNEL_SMP=ON` and two cores (`MICRO_OS_CPUS=2`) |
+| `make x86-smp-build` | the x86-64 kernel with `KERNEL_SMP=ON` (the APs are not started yet, ADR 0012) |
+| `make x86-all` | the complete machine in `build-x86-all/`: the kernel with the network, the disk with `/bin` and `/etc`, and `run.sh` |
+| `make x86-all-run` | boot that machine in a window (the serial console with `x86-all-run-serial`) |
+| `make ci` | `build`, `test`, `test-asan`, `test-tsan`, `test-smp`, `smoke`, `coverage`, `x86-smoke` when QEMU is there, `reproducible`, `integrity` — run it before pushing |
 
 The same build by hand:
 
@@ -74,7 +79,8 @@ python3 tools/integrity_check.py --expect-version 0.2.0
 
 The x86-64 kernel is signed and the loader checks it before it copies a byte.
 The board application is signed as well: the boot checks its trailer in the
-last 4 KiB of the factory partition. A development build generates a key in
+last 4 KiB of the application slot it is running (`ota_0` or `ota_1`,
+ADR 0022). A development build generates a key in
 the build directory (`build-x86/signing.key`, `build/signing.key`); a release
 names a key outside the tree:
 
@@ -96,10 +102,14 @@ same Kconfig adds `MICRO_OS_ANTIROLLBACK` (default `n`): a floor in the NVS;
 # a board that warns about an unsigned image, and one that refuses it
 DEVICE_POLICY=unsigned         tools/device-test.sh /dev/ttyACM0
 DEVICE_POLICY=require-unsigned tools/device-test.sh /dev/ttyACM0
+
+# the update over USB and the rollback (a good slot, back, and a bad trailer)
+DEVICE_OTA=1 tools/device-test.sh /dev/ttyACM0
+python3 dist/ota_usb.py /dev/ttyACM0
 ```
 
 `tools/microos_sign keygen|sign|verify|info` is the tool; `make bundle` signs
-`micro_os.bin` (`micro_os.bin.sig`, written at `0x20F000` by `flash.sh`) and
+`micro_os.bin` (`micro_os.bin.sig`, written at `0x12F000` by `flash.sh`) and
 the merged distribution image with the same key when `MICROOS_SIGN_KEY` is
 set, and always writes the sums. `make x86-smoke` boots a changed byte, a
 kernel without a trailer and a kernel of another key, and every one is refused
@@ -181,6 +191,27 @@ write /etc/setting hello
 config sync        # restore the missing files, save the files of /etc
 config             # list the store
 ```
+
+A **system of parameters** is one file of `/etc` with `key=value` lines:
+`/etc/display` (the turn, the inversion, the brightness and the theme of the
+screen), `/etc/font` (the scale of the 5x7 font and the cap of the dialogue)
+and `/etc/console` (the colours of the console). The boot applies them before
+the first frame, and the command reads and writes them at the console:
+
+```bash
+config get display.rotation       # display.rotation=0
+config set display.rotation 90    # write the file and apply it at once
+config set display rotation 90    # the same, in the Linux shape
+config list                       # the systems and their files
+config list display               # every key of one system with its value
+```
+
+A value the machine cannot honour is kept in the file and the answer says so
+(`display.invert=0 (kept: this machine does not apply display)`); a key the
+system does not know is refused with the list of the keys it has, so a typo
+does not reach the file. The keys, the defaults and the table of what each
+machine honours are in [`docs/wiki/settings.md`](docs/wiki/settings.md); the
+decision is [ADR 0021](docs/adr/0021-settings-in-etc.md).
 
 ### The mode, the owner, a program and the path
 

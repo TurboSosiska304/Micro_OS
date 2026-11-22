@@ -334,6 +334,13 @@ static void stress_main(void *arg)
                     (unsigned)task_count());
             fflush(stderr);
             next_report = now + STRESS_PROGRESS_MS;
+
+            /* The queues of every core have to stay consistent while the
+             * tasks move between them: a task in two queues, or a ready one
+             * in none, is the bug the two-core soak exists to find. */
+            if (k_sched_validate() != 0) {
+                note_error(stress, "the run queues of the scheduler are not consistent");
+            }
         }
 
         k_sched_sleep_ms(50u);
@@ -416,7 +423,8 @@ int main(int argc, char **argv)
     stress.result = 0;
     stress.seed = seed;
 
-    printf("Micro OS host stress: %u worker(s), %u second(s)\n", workers, seconds);
+    printf("Micro OS host stress: %u worker(s), %u second(s), %u core(s)\n", workers, seconds,
+           (unsigned)k_sched_cpu_count());
     fflush(stdout);
 
     k_sched_init();

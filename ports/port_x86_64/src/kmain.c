@@ -33,7 +33,10 @@
 #include "kernel/task.h"
 #include "kernel/vfs.h"
 
+#include "config/config.h"
 #include "kshell/kshell.h"
+#include "port_x86_64_console.h"
+#include "settings/settings.h"
 
 #if MICRO_OS_NET
 #include "net/net.h"
@@ -315,6 +318,7 @@ void kmain(k_u64_t multiboot_info)
 {
     struct kernel_boot_config cfg;
     int mounted;
+    int defaults;
 
     port_x86_64_init(multiboot_info);
 
@@ -327,6 +331,22 @@ void kmain(k_u64_t multiboot_info)
 
     kinfo("x86-64: the kernel is up, heap %u KB free of %u KB",
           (unsigned)(k_port_heap_free() / 1024), (unsigned)(k_port_heap_total() / 1024));
+
+    /*
+     * The processors of the machine (ADR 0012). The count on the left is what
+     * the firmware (the MADT of ACPI) says, the one on the right is what the
+     * kernel runs: the APs need the trampoline, INIT/SIPI, a local APIC timer
+     * and an I/O APIC, and this port does not have them yet. Saying both
+     * numbers is the honest line; putting a task in the queue of a core that
+     * never runs it would hang the machine instead.
+     */
+    kinfo("x86-64: %u cpu(s) reported by the firmware, %u in use (apic 0x%x)",
+          (unsigned)port_x86_64_cpu_available(), (unsigned)port_x86_64_cpu_started(),
+          (unsigned)port_x86_64_apic_base());
+
+    if (port_x86_64_cpu_available() > port_x86_64_cpu_started()) {
+        kwarn("x86-64: the AP bring-up is not written yet, the kernel runs on the core 0");
+    }
 
     /*
      * The tables are read back before a program is ever entered: the port
@@ -348,6 +368,29 @@ void kmain(k_u64_t multiboot_info)
      * has no scheduler under it to wait with.
      */
     filesystem_bring_up();
+
+    /*
+     * The settings of /etc (ADR 0021): the systems of the tree, and the one
+     * this machine applies. `console` is the attribute of the text screen;
+     * `display` and `font` are the panel of the board, and the load names
+     * them and keeps the files. The command `config` is registered before
+     * the shell exists, so the first line a person types finds it.
+     */
+    if (config_register() != 0) {
+        kwarn("x86-64: the config command is not registered");
+    }
+    if (port_x86_64_vga_settings_register() != SETTINGS_OK) {
+        kwarn("x86-64: the console system of /etc is not registered");
+    }
+
+    defaults = settings_defaults(SETTINGS_DIR);
+    if (defaults < 0) {
+        kwarn("x86-64: the default settings of /etc are not made");
+    } else if (defaults > 0) {
+        kinfo("x86-64: %d default setting file(s) of /etc made", defaults);
+    }
+
+    (void)settings_load_all();
 
     /* The commands of the network, before the shell exists: `netinfo`,
      * `ping` and `netudp` come from the port, and the client of HTTP and the

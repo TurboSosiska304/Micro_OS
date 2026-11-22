@@ -11,50 +11,57 @@ and run the flash script.
 | `bootloader.bin` | Second stage bootloader, for the tools that want the parts | `0x1000` |
 | `partition-table.bin` | Partition table, for the tools that want the parts | `0x8000` |
 | `micro_os.bin` | The kernel itself, for the tools that want the parts | `0x10000` |
-| `micro_os.bin.sig` | The 120-byte trailer of `micro_os.bin` (magic, size, SHA-256, Ed25519) | `0x20F000` |
+| `micro_os.bin.sig` | The 120-byte trailer of `micro_os.bin` (magic, size, SHA-256, Ed25519) | `0x12F000` |
+| `progs.bin` | The programs of `/bin`: the `.mox` files and the directory | `0x250000` |
 | `MicroOS-<version>.bin.sig` | The trailer of the merged distribution image | - |
 | `microos-sign.pub` | The public key of the build, in hex, for `microos_sign verify` | - |
 | `MicroOS-x86_64-<version>.tar.gz` | The same kernel for QEMU: loader, kernel, `run.sh` and a readme | - |
 
 The board checks `micro_os.bin` at the beginning of `app_main`, before the
 filesystem and the shell: it reads the trailer from the last 4 KiB of the
-factory partition and verifies the SHA-256 and Ed25519 with the public key
-compiled into the firmware. `flash.sh` writes the trailer at `0x20F000`; the
-flash layout does not change. With `CONFIG_MICRO_OS_REQUIRE_SIGNATURE=y` (the
-default) a missing or wrong trailer stops the boot, and with `=n` the console
-warns and the board continues (ADR 0020). This is an electronic check of the
+application slot it is running, and verifies the SHA-256 and Ed25519 with the
+public key compiled into the firmware. `flash.sh` writes the trailer at
+`0x12F000` of `ota_0`; an update writes the trailer at the end of the other
+slot (`0x24F000`). With `CONFIG_MICRO_OS_REQUIRE_SIGNATURE=y` (the default) a
+missing or wrong trailer is not kept: the slot is marked invalid and the board
+returns to the other one, and with `=n` the console warns and the board
+continues (ADR 0020, ADR 0022). This is an electronic check of the
 application, not secure boot: the ROM and the ESP-IDF bootloader have already
-entered the app when it runs, and no eFuse is burned. The x86-64 loader of
-the tarball verifies its kernel before it copies a byte. `checksums.txt` lists
-the sums of the files above.
+entered the app when it runs, and no eFuse is burned. The x86-64 loader of the
+tarball verifies its kernel before it copies a byte. `checksums.txt` lists the
+sums of the files above.
 
-The single image is the same bytes as the three parts at their offsets. It
-covers `0x0` to the end of the application; the NVS and MicroFS live further
-and are **not** touched by a flash of it, so the data of the volume survives
-an update.
+MicroFS and the NVS are **not** part of `flash.sh`: the data of the user and
+the settings of the board survive a flash and an update.
 
 ## The layout of the flash
 
-The whole 8 MB of the flash are used, there is no room for an OTA update:
-the kernel is the only application, and the rest of the flash belongs to the
-file system.
+The whole 8 MB are used: two equal application slots of 1.125 MiB, 132 KiB
+for the programs of `/bin` and **5.56 MiB of MicroFS** for the user
+(ADR 0022).
 
 ```
-0x00000  +--------------------+
-         | reserved           |  4 KB
-0x01000  +--------------------+
-         | bootloader         |  28 KB
-0x08000  +--------------------+
-         | partition table    |  4 KB
-0x09000  +--------------------+
-         | nvs                |  20 KB
-0x0E000  +--------------------+
-         | unused             |  8 KB
-0x10000  +--------------------+
-         | application        |  2 MB
-0x210000 +--------------------+
-         | MicroFS            |  5.94 MB
-0x800000 +--------------------+
+0x000000  +--------------------+
+          | reserved           |  4 KB
+0x001000  +--------------------+
+          | bootloader         |  28 KB
+0x008000  +--------------------+
+          | partition table    |  4 KB
+0x009000  +--------------------+
+          | nvs                |  20 KB
+0x00E000  +--------------------+
+          | otadata            |  8 KB
+0x010000  +--------------------+
+          | ota_0              |  1.125 MiB
+0x12F000  |   signature trailer|  4 KB
+0x130000  +--------------------+
+          | ota_1              |  1.125 MiB
+0x24F000  |   signature trailer|  4 KB
+0x250000  +--------------------+
+          | progs              |  132 KB
+0x271000  +--------------------+
+          | MicroFS            |  5.56 MiB
+0x800000  +--------------------+
 ```
 
 ## Flashing
@@ -65,9 +72,9 @@ chmod +x flash.sh
 ./flash.sh /dev/ttyACM0     # or give the port explicitly
 ```
 
-The script writes `MicroOS-<version>.bin` at `0x0` when the bundle has it,
-and falls back to the three parts at their offsets when it does not; in both
-cases `micro_os.bin.sig` goes to `0x20F000`. It needs `esptool`:
+The script writes the bootloader, the partition table, the kernel of `ota_0`,
+its trailer and `progs.bin` at the offsets above, and erases otadata so the
+board starts in `ota_0`. It needs `esptool`:
 
 ```bash
 pip install esptool
@@ -79,6 +86,30 @@ or the one that comes with ESP-IDF:
 . ~/esp/esp-idf/export.sh
 ./flash.sh
 ```
+
+A board of 1.0 (one application slot, MicroFS at `0x210000`) is moved to this
+layout once: the volume is at a new offset and its old bytes cannot be read
+there. The flash keeps them and the board starts without a filesystem; run
+`./flash.sh --erase-volume` (or `mkfs -y` at the shell) to format the new one.
+The release notes say it: back up the files of the volume before the move.
+
+## Updating without a cable
+
+`ota_usb.py` writes a newer bundle into the slot that is **not** running, sets
+otadata to it and resets the board, over the same USB cable and without
+touching MicroFS or the NVS:
+
+```bash
+python3 ota_usb.py /dev/ttyACM0          # the bundle of this folder
+python3 ota_usb.py --slot ota_1 /dev/ttyACM0
+```
+
+The bootloader asks the new image to confirm itself: the shell calls
+`esp_ota_mark_app_valid_cancel_rollback()` when the kernel, the filesystem, the
+self test, the doctor and the console are up. A boot that never gets there
+(a panic, a watchdog, a refused signature) is marked aborted on the next
+reset and the previous slot starts again. The tool verifies the trailer of the
+bundle before it writes anything; `--force` is for a test of the rollback.
 
 ## The other machine
 
@@ -104,10 +135,10 @@ then the shell prompt `microos>`.
 
 1. Boots the subsystems in order (scheduler, board, drivers).
 2. Runs the self test: three tasks with different priorities sleep, yield and
-   wake up.
+   wake up; `/bin/hello` runs twice from the `progs` partition.
 3. Runs the hardware doctor: display, buttons, buzzer, LED/IR, IMU, RTC,
    battery, WiFi, telnet, PSRAM and flash are checked one by one.
-4. Starts the shell.
+4. Starts the shell, and confirms the slot of an update.
 
 ## Notes
 

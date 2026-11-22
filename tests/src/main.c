@@ -33,6 +33,7 @@ static void run_tests(void *arg)
     test_task();
     test_sched();
     test_sched_queue();
+    test_smp();
     test_kmod();
     test_kmm();
     test_exec();
@@ -61,6 +62,7 @@ static void run_tests(void *arg)
     test_kshell_pipe();
     test_initd();
     test_config();
+    test_settings();
 #if MICRO_OS_NET && MICRO_OS_NET_HTTP && MICRO_OS_NET_HTTP_SERVER && MICRO_OS_NET_NTP &&           \
     MICRO_OS_NET_MQTT
     test_net();
@@ -70,6 +72,7 @@ static void run_tests(void *arg)
     test_wifi();
 #endif
     test_sign();
+    test_progs();
 
     g_result = ktest_summary();
     atomic_store_explicit(&g_done, true, memory_order_release);

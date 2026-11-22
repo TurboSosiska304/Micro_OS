@@ -15,6 +15,7 @@ void test_board(void);
 void test_task(void);
 void test_sched(void);
 void test_sched_queue(void);
+void test_smp(void);
 void test_kmod(void);
 void test_kmm(void);
 void test_exec(void);
@@ -43,8 +44,10 @@ void test_kshell(void);
 void test_kshell_pipe(void);
 void test_initd(void);
 void test_config(void);
+void test_settings(void);
 void test_net(void);
 void test_wifi(void);
 void test_sign(void);
+void test_progs(void);
 
 #endif /* MICRO_OS_TESTS_H */

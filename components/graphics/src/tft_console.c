@@ -63,6 +63,18 @@ static bool s_started;
 static int s_columns = TFT_COLUMNS_MAX;
 static int s_rows = TFT_ROWS_MAX;
 
+/* The size of a cell of the text of the view: the font at its own size, or
+ * the scale a system of /etc asked for (ADR 0021). */
+static int s_cell_width = FONT_WIDTH + 1;
+static int s_cell_height = FONT_HEIGHT + 2;
+
+/* The cap of the dialogue and its colours, set before the first frame. */
+static int s_columns_cap;
+static int s_rows_cap;
+static k_u16_t s_background;
+static k_u16_t s_foreground = 0xFFFF;
+static k_u16_t s_current_color = 0x07E0;
+
 /*
  * The lines are written by the task that prints and read by the task that
  * draws: the two of them never hold the same line at the same time. The
@@ -125,9 +137,10 @@ static void picture_flush(void)
 
 /*
  * The counts of columns and rows of the picture as it is turned right now,
- * cut to the size the line buffers have room for. Without a renderer the
- * dialogue keeps the widest shape: a screen may still appear, and the
- * lines are then already cut for the room there is.
+ * cut to the size the line buffers have room for and to the cap a system of
+ * /etc asked for. Without a renderer the dialogue keeps the widest shape: a
+ * screen may still appear, and the lines are then already cut for the room
+ * there is.
  */
 static void console_measure(int *columns, int *rows)
 {
@@ -135,13 +148,39 @@ static void console_measure(int *columns, int *rows)
     int width = TFT_PICTURE_MAX;
     int height = TFT_PICTURE_MAX;
 
+    s_cell_width = FONT_WIDTH + 1;
+    s_cell_height = FONT_HEIGHT + 2;
+
     if (render != NULL) {
         width = render->width(render->ctx);
         height = render->height(render->ctx);
+
+        /* A renderer that draws a scaled font says how big its cell is; the
+         * console counts the room in cells and not in pixels. */
+        if (render->cell_width != NULL) {
+            s_cell_width = render->cell_width(render->ctx);
+        }
+        if (render->cell_height != NULL) {
+            s_cell_height = render->cell_height(render->ctx);
+        }
     }
 
-    *columns = width / (FONT_WIDTH + 1);
-    *rows = height / (FONT_HEIGHT + 2);
+    if (s_cell_width < 1) {
+        s_cell_width = 1;
+    }
+    if (s_cell_height < 1) {
+        s_cell_height = 1;
+    }
+
+    *columns = width / s_cell_width;
+    *rows = height / s_cell_height;
+
+    if (s_columns_cap > 0 && *columns > s_columns_cap) {
+        *columns = s_columns_cap;
+    }
+    if (s_rows_cap > 0 && *rows > s_rows_cap) {
+        *rows = s_rows_cap;
+    }
 
     if (*columns > TFT_COLUMNS_MAX) {
         *columns = TFT_COLUMNS_MAX;
@@ -165,10 +204,10 @@ static void draw(void)
     int at;
     int index = 0;
 
-    picture_clear(0x0000);
+    picture_clear(s_background);
 
     for (row = 0; row < s_line_count; row++) {
-        picture_text(0, row * (FONT_HEIGHT + 2), s_lines[row], 0xFFFF);
+        picture_text(0, row * s_cell_height, s_lines[row], s_foreground);
     }
 
     /*
@@ -179,7 +218,7 @@ static void draw(void)
     at = s_line_count;
 
     while (at < s_rows && text_wrap_take(piece, sizeof(piece), s_current, s_columns, index) > 0) {
-        picture_text(0, at * (FONT_HEIGHT + 2), piece, 0x07E0);
+        picture_text(0, at * s_cell_height, piece, s_current_color);
         at++;
         index++;
     }
@@ -347,6 +386,39 @@ static void flush_task(void *arg)
     }
 }
 
+void tft_console_set_colors(k_u16_t background, k_u16_t foreground, k_u16_t current)
+{
+    console_lock();
+
+    s_background = background;
+    s_foreground = foreground;
+    s_current_color = current;
+
+    /* A console that is already drawing is brought up to date by the task
+     * of the flush; one that has not started picks the colours up with its
+     * first frame. */
+    if (s_started) {
+        s_dirty = true;
+    }
+
+    console_unlock();
+}
+
+void tft_console_set_cells(int columns, int rows)
+{
+    console_lock();
+
+    s_columns_cap = (columns > 0) ? columns : 0;
+    s_rows_cap = (rows > 0) ? rows : 0;
+
+    console_unlock();
+
+    /*
+     * Nothing else: the task of the flush measures the picture on every
+     * pass and sees the new shape by itself, the way it sees a turned panel.
+     */
+}
+
 void tft_console_start(void)
 {
     /* The console of the board starts once: a second call would make a
@@ -368,8 +440,8 @@ void tft_console_start(void)
 
     /* The panel shows the name of the system at once. */
     console_lock();
-    picture_clear(0x0000);
-    picture_text(0, 0, "MICRO OS", 0x07E0);
+    picture_clear(s_background);
+    picture_text(0, 0, "MICRO OS", s_current_color);
     picture_flush();
     console_unlock();
 

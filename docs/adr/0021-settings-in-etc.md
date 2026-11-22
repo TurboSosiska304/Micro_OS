@@ -1,6 +1,6 @@
 # ADR 0021 - The settings of a machine are files of /etc
 
-* Status: proposed (after 1.0.0)
+* Status: accepted (1.1.0); the format as built is in the section at the end
 * Date: 2026-11-22
 
 ## Context
@@ -84,6 +84,107 @@ would edit five files. A file per system is one file, one comment, and one
 `config set` that touches one place. The price is a parser of `key=value`
 lines, which is small and bounded, and a rule that says which names are
 systems.
+
+## Accepted: the format as built
+
+The decision above is kept as it was taken; this section is what the tree
+does, and the numbers a person can rely on. The parser, the registry and the
+command are `components/settings`; the appliers belong to the machines (the
+panel of the board, the VGA of x86-64) and to no common code.
+
+### The text
+
+* one `key=value` per line, `#` starts a comment, an empty line is skipped,
+  and the blanks around the key and around the value are not part of either;
+  a `\r` at the end of a line is dropped, so a file written on another machine
+  still boots;
+* a key is at most 15 characters of `[a-z0-9_.-]`; a value is at most 31
+  printable ASCII characters; a line without `=` or with a key that is not one
+  is skipped, counted, and named once in the log. A value that is empty or too
+  long is skipped the same way, and the key falls back to its default;
+* a later line for the same key wins; the file is not rewritten by a read, so
+  the earlier line stays for whoever edits it;
+* a file holds at most 12 pairs (`SETTINGS_KEYS_MAX`) and 127 characters of
+  text (`SETTINGS_TEXT_MAX`). The second number is the size of one value of the
+  store of the port (`K_KV_VALUE_MAX` 128): a file the boot accepts is a file
+  that `config sync` saves whole. A file over either limit is refused,
+  `SETTINGS_ETOOLONG` is the answer, and the defaults of the system are what
+  the machine applies;
+* the defaults of the three systems are in `g_known` of
+  `components/settings/src/settings.c`, and they are the behaviour of the
+  machine before the files existed: `rotation=0`, `invert=1`, `brightness=100`,
+  `theme=dark`; `scale=1`, `columns=0`, `rows=0` (the whole picture);
+  `console` `invert=0`, `theme=dark`.
+
+### The statuses of `settings_*`
+
+| Status | Meaning |
+|---|---|
+| `SETTINGS_OK` | the call did what it was asked, and the machine took the system |
+| `SETTINGS_KEPT` | the file is written, this machine has no applier for it |
+| `SETTINGS_EBADKEY` | the key is not `[a-z0-9_.-]` or is too long |
+| `SETTINGS_EBADVALUE` | the value is empty, not printable or too long |
+| `SETTINGS_ENOSYS` | the name is not one of the systems of the tree |
+| `SETTINGS_EKEY` | the system has no such key (a `config set` of a typo) |
+| `SETTINGS_EFILE` | the file cannot be read or written |
+| `SETTINGS_ETOOLONG` | the file, or the rewrite, is over 127 characters |
+| `SETTINGS_ENOTEXT` | the caller's buffer is too small; a value is never cut |
+| `SETTINGS_EFULL` | the registry of the appliers is full |
+
+### Writing a file, and why there is no temporary one
+
+The VFS has no `rename`. `config set` builds the whole new text in a buffer of
+128 bytes - the comments, the unknown keys and the order of the file are
+copied as they are, the line of the key is replaced in place, and a key that
+the file does not have is appended - checks the limit, and writes the file
+with one `vfs_write()` on a truncating open.
+
+That is **not atomic**: a power cut between the truncate and the end of the
+write leaves a short file. The alternatives are worse with the calls there
+are. A temporary file (`/etc/.display.new`) and a copy has two windows instead
+of one and still no rename to close them; `unlink` + create loses the old file
+before the new one exists; and a dot name would leak into the store, whose keys
+are the names of `/etc`. With one write the window is the length of one small
+file, the next boot reads the lines that are there (the parser skips the cut
+one) and `config sync` brings back the text of the store, which is the copy of
+the last sync. A checksum of a system file is the next step if a torn file ever
+matters; a value is one line of a person and not a record of a database.
+
+### Applying, per machine
+
+| Machine | `display` | `font` | `console` |
+|---|---|---|---|
+| board (ESP32) | rotation, inversion of the glass, brightness (kept + warning: the backlight is a pin), theme of the dialogue | `scale` 1 or 2 of the 5x7 font, `columns`/`rows` as a cap on the dialogue | `theme`/`invert` of the dialogue |
+| x86-64 | none: the file is kept and the load says so | none | `theme`/`invert` as the attribute of every cell of the VGA |
+| host | none: the file is kept and the load says so | none | none: the serial console has no attributes |
+
+The order is the boot of the machine:
+
+* the board calls `settings_load_all()` in the init task, after the mount and
+  after `config_restore()`/`config_persist()`, and before the task of the shell
+  starts the console of the panel - the display and the font are the state of
+  the first frame, and the console is the state of the shell;
+* x86-64 calls it in `kmain()`, after the filesystem is mounted and before the
+  init task exists, so the attribute of the screen is right before the first
+  command;
+* the simulator calls it in its init task; with no applier registered the load
+  names the three systems and keeps the files, which is the "kept with a
+  warning" of the decision.
+
+A system that a machine cannot honour is not an error anywhere: the file is
+written, `config set` answers `SETTINGS_KEPT`, and the shell prints the value
+with the sentence that says it is kept.
+
+### The store, and a format
+
+`config_persist()` already saves every file of `/etc` as one value of the
+store of the port; a system file is one value and needs no new call. The rule
+of the component - a value is one line and the line ending at its end is not
+part of it - means that a restored file loses its last `\n`. The parser reads
+the text either way and no key is lost; the tests compare the file with that
+one character taken off. `mkfs -y` leaves the store alone, so the next boot
+(or `config sync`) writes the files back, and the settings of a machine are
+what they were before the format.
 
 ## Consequences
 

@@ -19,7 +19,9 @@
 #include <string.h>
 
 #include "kernel/log.h"
+#include "kernel/cpu.h"
 #include "kernel/port.h"
+#include "kernel/port/cpu.h"
 #include "kernel/port_task.h"
 #include "kernel/sched.h"
 #include "port_x86_64_console.h"
@@ -869,44 +871,61 @@ k_size_t k_port_psram_free(void)
 /* --- the locks --- */
 
 /*
- * One core, no preemption: a critical section is the interrupts off. The
- * depth is counted, because the kernel takes a section inside another one
- * in a few places, and the flags of every level are kept: a section that
- * ends must give back the state it found, not an unconditional "on", or an
- * inner one would open the window the outer one closed.
+ * The section of one core. A critical section is the interrupts of the local
+ * core turned off; on a machine of two cores that is not a lock of the
+ * machine, so every core has its own depth and its own saved flags, and the
+ * kernel adds a spinlock of its own where the state is shared (the scheduler
+ * lock of kernel/cpu.h; the contract of kernel/port/lock.h names both). The
+ * depth is counted, because the kernel takes a section inside another one in
+ * a few places, and the flags of every level are kept: a section that ends
+ * must give back the state it found, not an unconditional "on", or an inner
+ * one would open the window the outer one closed.
  *
- * Sixteen levels is far more than the kernel nests today; the guard is
- * there so that a bug shows up as a section that stays closed instead of a
- * write outside the array.
+ * Sixteen levels is far more than the kernel nests today; the guard is there
+ * so that a bug shows up as a section that stays closed instead of a write
+ * outside the array.
  */
 #define CRITICAL_DEPTH_MAX 16u
 
-static k_u64_t g_critical_flags[CRITICAL_DEPTH_MAX];
-static k_u32_t g_critical_depth;
+static k_u64_t g_critical_flags[KERNEL_CPUS_MAX][CRITICAL_DEPTH_MAX];
+static k_u32_t g_critical_depth[KERNEL_CPUS_MAX];
 
 void k_port_enter_critical(void)
 {
-    k_u64_t flags = port_save_flags_and_cli();
+    k_u32_t cpu = k_port_cpu_id();
+    k_u64_t flags;
 
-    if (g_critical_depth < CRITICAL_DEPTH_MAX) {
-        g_critical_flags[g_critical_depth] = flags;
+    if (cpu >= KERNEL_CPUS_MAX) {
+        cpu = 0u;
     }
 
-    g_critical_depth++;
+    flags = port_save_flags_and_cli();
+
+    if (g_critical_depth[cpu] < CRITICAL_DEPTH_MAX) {
+        g_critical_flags[cpu][g_critical_depth[cpu]] = flags;
+    }
+
+    g_critical_depth[cpu]++;
 }
 
 void k_port_exit_critical(void)
 {
-    if (g_critical_depth == 0) {
+    k_u32_t cpu = k_port_cpu_id();
+
+    if (cpu >= KERNEL_CPUS_MAX) {
+        cpu = 0u;
+    }
+
+    if (g_critical_depth[cpu] == 0) {
         /* An unbalanced exit says nothing about the flags to restore: the
          * safe answer is to leave the interrupts as they are. */
         return;
     }
 
-    g_critical_depth--;
+    g_critical_depth[cpu]--;
 
-    if (g_critical_depth < CRITICAL_DEPTH_MAX) {
-        port_restore_flags(g_critical_flags[g_critical_depth]);
+    if (g_critical_depth[cpu] < CRITICAL_DEPTH_MAX) {
+        port_restore_flags(g_critical_flags[cpu][g_critical_depth[cpu]]);
     }
 }
 
@@ -1092,7 +1111,7 @@ const char *k_port_arch(void)
 }
 
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 8u
+#define PORT_API_MINOR 9u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_x86_64 does not speak the contract of this kernel");
@@ -1226,12 +1245,16 @@ void port_x86_64_init(k_u64_t multiboot_info)
     com1_init();
     port_x86_64_vga_init();
     clock_measure();
+    port_x86_64_cpus_init();
     heap_init(multiboot_info);
     port_x86_64_paging_init();
 
     g_info.cpu_hz = g_tsc_per_second;
     g_info.usable_bytes = 0;
     g_info.boot_version = info != NULL ? 1u : 0u;
+    g_info.cpu_available = port_x86_64_cpu_available();
+    g_info.cpu_started = port_x86_64_cpu_started();
+    g_info.apic_base = port_x86_64_apic_base();
 
     if (info != NULL && (info->flags & MB_FLAG_MMAP) != 0) {
         k_u64_t cursor = info->mmap_addr;

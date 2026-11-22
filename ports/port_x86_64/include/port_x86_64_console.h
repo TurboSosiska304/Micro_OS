@@ -38,6 +38,16 @@ void port_x86_64_vga_init(void);
 void port_x86_64_vga_write(const char *data, k_size_t len);
 
 /*
+ * The attribute of every cell of the text screen: the colours of `console` of
+ * /etc (ADR 0021). 0x07 is grey on black, 0x70 black on light grey.
+ */
+void port_x86_64_vga_set_attribute(k_u8_t attribute);
+k_u8_t port_x86_64_vga_attribute(void);
+
+/* Register the `console` system of /etc with the machine (ADR 0021). */
+int port_x86_64_vga_settings_register(void);
+
+/*
  * Bring the controller of the keyboard up and let its interrupt through the
  * controller: the first port on, its clock running, the line of IRQ1 armed.
  * The mask of the 8259 is the business of pic_init(), which runs after this

@@ -20,6 +20,9 @@ tree and adds `/bin` with the programs of its disk image):
 microos> tree /
 /
 |-- etc/
+|   |-- console
+|   |-- display
+|   |-- font
 |   `-- init.d/
 |-- proc/
 |   |-- version
@@ -38,7 +41,7 @@ microos> tree /
 | Path | What it is |
 |---|---|
 | `/` | MicroFS on the volume of the port |
-| `/etc` | the configuration: a file name is the key, its content the value |
+| `/etc` | the configuration: a file name is the key and its content the value for a single setting, `key=value` lines for a system (`display`, `font`, `console`) |
 | `/etc/init.d` | the scripts of the init process, one command per line |
 | `/etc/fstab` | the volumes the boot mounts after the root, when the file is there |
 | `/proc` | the kernel: `version`, `uptime`, `meminfo`, `tasks`, `modules`, one directory per task |
@@ -54,7 +57,7 @@ draws the levels below a path, and `stat` is the detailed view of one object.
 
 MicroFS is a consumer of blocks, not of a flash chip: the device under it is
 described by `kernel/blockdev.h` and registered by the port. On the board it is
-the `mfs` partition of the internal flash (`flash0`, 5.75 MB); in the simulator
+the `mfs` partition of the internal flash (`flash0`, 5.56 MiB); in the simulator
 a file of the host (`file0`, 512 KB by default); on x86-64 the first partition
 of the ATA disk (`ata0p1`) when one is attached, and a volume in the RAM
 (`ram0`, 512 KB) when it is not.
@@ -444,12 +447,29 @@ written back to the table: `mount` changes the tree, not the configuration.
 ## The settings of a machine
 
 A few settings are files of `/etc`: the name of the machine, the console, the
-table of the mounts. The next systems are the display and the font, in a file
-per system - `/etc/display` with `rotation=90`, `/etc/font` with `scale=1` -
-and a key that the machine cannot honour is kept and ignored with a warning
-([ADR 0021](../adr/0021-settings-in-etc.md)). The files stay data of the
-volume: `cat`, `write` and `config` edit them, and the store of the port
-brings them back after a format.
+table of the mounts. The systems of parameters - `/etc/display` with
+`rotation=90`, `/etc/font` with `scale=1`, `/etc/console` with `theme=dark` -
+are one file per system, with `key=value` lines and comments; the boot applies
+them before the first frame, and a key the machine cannot honour is kept and
+ignored with a warning ([ADR 0021](../adr/0021-settings-in-etc.md)).
+
+```text
+microos> cat /etc/display
+# the screen
+rotation=0
+invert=1
+brightness=100
+theme=dark
+microos> config set display.rotation 90
+display.rotation=90
+microos> config get display.rotation
+display.rotation=90
+```
+
+The files stay data of the volume: `cat`, `write` and `config` edit them, and
+the store of the port brings them back after a format. The keys, the defaults,
+the limits of a file and the table of what each machine honours are in
+[settings.md](settings.md).
 
 ## What is not there yet
 

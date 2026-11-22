@@ -38,6 +38,9 @@ static int s_offset_y = LCD_Y_OFFSET;
  */
 static int s_rotation;
 
+/* The scale of the 5x7 font: a system of /etc asks for 1 or 2 (ADR 0021). */
+static int s_font_scale = 1;
+
 /*
  * The mode the panel drives its colors in. Without a command at boot
  * this glass shows a negative: the background painted black comes out
@@ -68,7 +71,9 @@ static volatile bool s_demo;
 #include "drivers/fb_draw.h"
 #include "drivers/internal.h"
 #include "graphics/font.h"
+#include "graphics/tft_console.h"
 #include "kernel/kmod.h"
+#include "settings/settings.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "kernel/log.h"
@@ -327,6 +332,19 @@ static int render_height(void *ctx)
     return drv_display_height();
 }
 
+/* The cell of the text at the scale the font has right now. */
+static int render_cell_width(void *ctx)
+{
+    K_UNUSED(ctx);
+    return (FONT_WIDTH + 1) * drv_display_font_scale();
+}
+
+static int render_cell_height(void *ctx)
+{
+    K_UNUSED(ctx);
+    return (FONT_HEIGHT + 2) * drv_display_font_scale();
+}
+
 /* While the test picture is up it owns the glass: see s_demo. */
 static void render_clear(void *ctx, k_u16_t color)
 {
@@ -391,6 +409,8 @@ static const struct k_renderer s_renderer = {
     .name = "st7789v2",
     .width = render_width,
     .height = render_height,
+    .cell_width = render_cell_width,
+    .cell_height = render_cell_height,
     .clear = render_clear,
     .text = render_text,
     .fill_rect = render_fill_rect,
@@ -677,6 +697,132 @@ static int cmd_display(int argc, char **argv)
     return KSHELL_OK;
 }
 
+/* --- the systems of /etc (ADR 0021) --- */
+
+/*
+ * The colours of the dialogue, from a theme and the console's own inversion.
+ * The panel's inversion is a command of the glass (INVON/INVOFF) and is not
+ * a colour of the console: a light theme on an inverted panel is a dark
+ * picture, and the two settings are read apart.
+ */
+static bool apply_theme(const char *theme, bool invert)
+{
+    k_u16_t background;
+    k_u16_t foreground;
+    k_u16_t current;
+
+    if (strcmp(theme, "dark") == 0) {
+        background = 0x0000;
+        foreground = 0xFFFF;
+        current = 0x07E0;
+    } else if (strcmp(theme, "light") == 0) {
+        background = 0xFFFF;
+        foreground = 0x0000;
+        current = 0x001F;
+    } else {
+        return false;
+    }
+
+    if (invert) {
+        k_u16_t swap = background;
+
+        background = foreground;
+        foreground = swap;
+    }
+
+    tft_console_set_colors(background, foreground, current);
+
+    return true;
+}
+
+/*
+ * `/etc/display`: the turn, the inversion of the glass, the brightness and the
+ * theme of the console. The order is the boot's: this runs before the first
+ * frame, so the panel shows the picture the file asks for and not a portrait
+ * that is turned under the eyes of a person.
+ */
+static void apply_display(const char *system, const struct settings_table *table)
+{
+    int degrees = settings_number(table, "rotation", 0, 0, 270);
+    bool invert = settings_flag(table, "invert", drv_display_inverted());
+    int brightness = settings_number(table, "brightness", 100, 0, 100);
+    const char *theme = settings_value(table, "theme", "dark");
+
+    K_UNUSED(system);
+
+    if (degrees % 90 != 0) {
+        kwarn("display: rotation %d is not one of 0, 90, 180, 270; the default 0 is used", degrees);
+        degrees = 0;
+    }
+    drv_display_set_rotation(degrees / 90);
+    drv_display_set_inverted(invert);
+
+    /*
+     * The backlight of this panel is one pin: on or off, with no duty cycle
+     * to dim it. A value below the full one is kept in the file for a panel
+     * that can, and this one says once that it cannot.
+     */
+    if (brightness != 100) {
+        kwarn("display: brightness %d is kept, the backlight of this panel has no dimming",
+              brightness);
+    }
+
+    if (!apply_theme(theme, false)) {
+        kwarn("display: theme '%s' is not dark or light; the default dark is used", theme);
+        (void)apply_theme("dark", false);
+    }
+
+    kinfo("display: rotation %d, invert %d, brightness %d, theme %s", drv_display_rotation() * 90,
+          drv_display_inverted() ? 1 : 0, brightness, theme);
+}
+
+/* `/etc/font`: the scale of the 5x7 font and the cap of the dialogue. */
+static void apply_font(const char *system, const struct settings_table *table)
+{
+    int scale = settings_number(table, "scale", 1, 1, 2);
+    int columns = settings_number(table, "columns", 0, 0, 99);
+    int rows = settings_number(table, "rows", 0, 0, 99);
+
+    K_UNUSED(system);
+
+    drv_display_set_font_scale(scale);
+    tft_console_set_cells(columns, rows);
+
+    kinfo("font: scale %d, columns %d, rows %d (0 is the whole picture)", scale, columns, rows);
+}
+
+/* `/etc/console`: the colours of the dialogue, the same picture as the theme
+ * of the display; the console file wins because it is read after it. */
+static void apply_console(const char *system, const struct settings_table *table)
+{
+    const char *theme = settings_value(table, "theme", "dark");
+    bool invert = settings_flag(table, "invert", false);
+
+    K_UNUSED(system);
+
+    if (!apply_theme(theme, invert)) {
+        kwarn("console: theme '%s' is not dark or light; the default dark is used", theme);
+        (void)apply_theme("dark", invert);
+    }
+
+    kinfo("console: theme %s, invert %d", theme, invert ? 1 : 0);
+}
+
+static const struct settings_system s_display_system = {
+    .name = "display",
+    .apply = apply_display,
+};
+
+static const struct settings_system s_font_system = {
+    .name = "font",
+    .apply = apply_font,
+};
+
+static const struct settings_system s_console_system = {
+    .name = "console",
+    .apply = apply_console,
+};
+
 static const struct kmod s_display_module = {
     .name = "display",
     .desc = "ST7789v2 135x240 TFT",
@@ -694,6 +840,15 @@ int drv_display_register(void)
      * and the turn still answer, they simply have no glass to move.
      */
     kshell_register("display", "the offset, the turn and the colors of the picture", cmd_display);
+
+    /* The three systems of /etc that this machine can honour (ADR 0021).
+     * They are registered here, before the boot has a filesystem, so that
+     * the load after the mount finds them. */
+    if (settings_register(&s_display_system) != SETTINGS_OK ||
+        settings_register(&s_font_system) != SETTINGS_OK ||
+        settings_register(&s_console_system) != SETTINGS_OK) {
+        kwarn("display: the systems of /etc are not registered");
+    }
 
     return rc;
 }
@@ -724,6 +879,7 @@ int drv_display_text(int x, int y, const char *text, uint16_t color)
 {
     struct fb_view view;
     int cursor = x;
+    int scale;
 
     if (s_fb == NULL || text == NULL) {
         return -1;
@@ -732,16 +888,20 @@ int drv_display_text(int x, int y, const char *text, uint16_t color)
     display_lock();
     display_view(&view);
 
+    /* The scale is read under the lock: `font.scale` of /etc may be set by
+     * the console while this task draws. */
+    scale = s_font_scale;
+
     while (*text != '\0') {
         const uint8_t *glyph = font_glyph(*text);
         int column;
         int row;
 
-        if (cursor + FONT_WIDTH > fb_view_width(&view)) {
+        if (cursor + FONT_WIDTH * scale > fb_view_width(&view)) {
             break; /* the line is full */
         }
 
-        if (y + FONT_HEIGHT > fb_view_height(&view)) {
+        if (y + FONT_HEIGHT * scale > fb_view_height(&view)) {
             break; /* the picture is full */
         }
 
@@ -750,13 +910,15 @@ int drv_display_text(int x, int y, const char *text, uint16_t color)
 
             for (row = 0; row < FONT_HEIGHT; row++) {
                 if ((bits & (1u << row)) != 0) {
-                    /* the set bits go through the turn of the picture */
-                    fb_view_pixel(&view, cursor + column, y + row, color);
+                    /* A pixel of the glyph is a square of the scale, and the
+                     * set bits go through the turn of the picture. */
+                    fb_view_fill_rect(&view, cursor + column * scale, y + row * scale, scale, scale,
+                                      color);
                 }
             }
         }
 
-        cursor += FONT_WIDTH + 1;
+        cursor += (FONT_WIDTH + 1) * scale;
         text++;
     }
 
@@ -834,6 +996,32 @@ void drv_display_set_rotation(int rotation)
     display_lock();
     s_rotation = ((rotation % 4) + 4) % 4; /* -90 is the third quarter turn */
     display_unlock();
+}
+
+void drv_display_set_font_scale(int scale)
+{
+    display_lock();
+
+    if (scale < 1) {
+        scale = 1;
+    }
+    if (scale > 2) {
+        scale = 2;
+    }
+
+    s_font_scale = scale;
+    display_unlock();
+}
+
+int drv_display_font_scale(void)
+{
+    int scale;
+
+    display_lock();
+    scale = s_font_scale;
+    display_unlock();
+
+    return scale;
 }
 
 int drv_display_rotation(void)

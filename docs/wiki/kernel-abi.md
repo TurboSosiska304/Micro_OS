@@ -263,7 +263,7 @@ which turns a bad pointer of a program into `EFAULT`; 1.8 is
 it (`0` x86-64, `1` Xtensa, `-1` for a port that runs no programs), which is
 what turns an image of another machine into `ENOEXEC` before a byte of it runs
 (ADR 0018). Some older pages of `docs/` still name 1.4; the number the boot
-prints is the one in `info.h`, and the boot of this tree prints `contract 1.8`.
+prints is the one in `info.h`, and the boot of this tree prints `contract 1.9`.
 
 The three builds of one tree are the check of the contract in practice: a
 function that only one port implements is a function the others do not need,

@@ -195,6 +195,16 @@ command (`ESC[2J` and `ESC[H`), and the screen reads it; a sequence of any
 other kind is dropped whole instead of being printed, because a window is not
 a terminal emulator and a `[2J` in the middle of a line is not a picture.
 
+The pair is a setting of the machine (ADR 0021): `/etc/console` with
+`theme=dark|light` and `invert=0|1` is read at the boot and at every
+`config set`, and the port applies the attribute to every cell of the screen
+and logs the number it put there (`7` is grey on black, `112` black on light
+grey). `/etc/display` and `/etc/font` are the panel and the font of the board:
+this machine has neither, so the boot keeps the files and says so, and
+`config set display.rotation 90` answers that the value is kept. The files,
+the keys and the table of the machines are in
+[`docs/wiki/settings.md`](../../wiki/settings.md).
+
 The keyboard hangs on the first line of the 8259 (IRQ1, the vector `0x21`).
 The stub in `interrupts.S` saves the registers around the call of C, the
 handler reads the byte of the data port `0x60`, translates it with the
@@ -372,16 +382,46 @@ with an acknowledgement and retransmitted data is not reassembled; the fixed
 retransmission is the whole of the reliability. The driver polls, because the
 PCI line needs the I/O APIC that K8 brings.
 
+## The processors and the second core
+
+The port reads the processor list of the machine the way a PC has answered
+since ACPI: the root pointer in the extended BIOS area (or the last kilobyte
+of the BIOS), the RSDT or the XSDT under it, and the MADT with one entry per
+processor. The local APIC address comes from the same table. The boot prints
+both numbers, because they are different while the second core is not up:
+
+```
+x86-64: 2 cpu(s) reported by the firmware, 1 in use (apic 0xfee00000)
+```
+
+The count on the left is what the firmware calls enabled; on the right is
+what the kernel runs. `make x86-smoke` gives QEMU `-smp 2` and reads the
+line, so a machine that stopped describing its processors is a failure and
+not a silence.
+
+Only the processor of the boot runs the kernel. The AP bring-up of ADR 0012
+has four steps, and the port has none of them yet: a real spinlock inside
+`k_port_enter_critical()` (today it is `cli` and a depth counter, which is a
+lock of one core), one `port_task`/TSS/thread pointer per core, a trampoline
+in low memory with INIT-SIPI-SIPI, and a local APIC timer with its vector
+plus the I/O APIC for the keyboard and the disk (the PIT and the 8259 deliver
+to the boot processor). `make x86-smp-build` builds the portable kernel with
+`KERNEL_SMP=ON`; it boots on this machine and says `1 in use`, and the two-core
+side of the scheduler is tested on the host (`make test-smp`, `make
+soak-host`). The blocker and the order of the work are written down in ADR
+0012, "The pilot of 1.x" and in [debts.md](../../debts.md) under K8.
+
 ## What works
 
-* the boot: the loader, long mode, the banner, the contract check at 1.8;
+* the boot: the loader, long mode, the banner, the contract check at 1.9;
 * the signature of the kernel (ADR 0020): the loader verifies the trailer of
   SHA-256 and Ed25519 with the key compiled into it before it copies a byte,
   and a damaged, unsigned or foreign-key image stops with the reason and
   never reaches the kernel;
 * the console: the VGA text screen and COM1 from one call, the keyboard of
   the PS/2 with Shift, Caps Lock, Backspace and Ctrl+C, and the serial port
-  with the console it always had;
+  with the console it always had; the attribute of the cells is `/etc/console`
+  (`theme`, `invert`) at the boot and at `config set` (ADR 0021);
 * the clock, the interrupts (IDT with 32 exceptions, PIC, PIT), the context
   switch, the scheduler, `ps`, `uptime`, `free`, `dmesg`;
 * paging and ring 3 (ADR 0007): the kernel is a supervisor-only identity map
@@ -481,6 +521,10 @@ PCI line needs the I/O APIC that K8 brings.
 
 ## What does not work yet
 
+* the second processor: the MADT is read and the boot says how many the
+  machine has, but the APs wait for the trampoline, the spinlock, the local
+  APIC timer and the I/O APIC (ADR 0012, "The pilot of 1.x"); the kernel runs
+  on the processor of the boot;
 * the disk is one, and it is the primary ATA channel: no SATA, no virtio, no
   NVMe, no card, no second disk;
 * the driver polls and copies through the processor: no interrupt, no DMA and

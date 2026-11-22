@@ -323,8 +323,24 @@ int port_x86_64_net_register(void);
  */
 void port_x86_64_task_tick(void);
 
-/* --- the map of the machine ---------------------------------------------- */
+/*
+ * Read the processors of the machine from the tables of the firmware (ACPI:
+ * the root pointer, the RSDT/XSDT and the MADT) and remember the local APIC.
+ * The port brings up the processor of the boot only; the boot prints how many
+ * the firmware reports and how many are in use, and ADR 0012 has the rest of
+ * the plan (the trampoline, INIT/SIPI, the APIC timer and the I/O APIC).
+ * Called by port_x86_64_init() before the scheduler exists.
+ */
+void port_x86_64_cpus_init(void);
 
+/* The processors the firmware calls enabled, and the ones that run: 1 today. */
+k_u32_t port_x86_64_cpu_available(void);
+k_u32_t port_x86_64_cpu_started(void);
+
+/* The physical address of the local APIC from the MADT, 0 when there is none. */
+k_u32_t port_x86_64_apic_base(void);
+
+/* --- the map of the machine ---------------------------------------------- */
 /*
  * Where the kernel is linked and where the loader puts it (ADR 0007). The
  * image lives in the top 2 GiB of the address space, the region the small
@@ -380,11 +396,14 @@ static inline k_u64_t port_x86_64_bus_phys(const void *ptr)
 /* --- what the boot of the platform learned -------------------------------- */
 
 struct port_x86_64_info {
-    k_u64_t cpu_hz;       /* the TSC, calibrated against the PIT */
-    k_u64_t usable_bytes; /* what the memory map of the boot calls usable */
-    k_u64_t heap_total;   /* the pool behind k_port_alloc */
-    k_u32_t boot_version; /* the version of the multiboot information */
-    bool tsc_calibrated;  /* false when the PIT could not be read */
+    k_u64_t cpu_hz;        /* the TSC, calibrated against the PIT */
+    k_u64_t usable_bytes;  /* what the memory map of the boot calls usable */
+    k_u64_t heap_total;    /* the pool behind k_port_alloc */
+    k_u32_t boot_version;  /* the version of the multiboot information */
+    k_u32_t cpu_available; /* the processors the firmware (MADT) calls enabled */
+    k_u32_t cpu_started;   /* the processors the port has brought up */
+    k_u32_t apic_base;     /* the local APIC of the MADT, 0 when there is none */
+    bool tsc_calibrated;   /* false when the PIT could not be read */
 };
 
 /*

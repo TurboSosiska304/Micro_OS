@@ -32,6 +32,8 @@ set(FAT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/fs_fat32")
 set(EXT2_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/fs_ext2")
 set(PROCFS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/procfs")
 set(DEVFS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/devfs")
+set(CONFIG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/config")
+set(SETTINGS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/settings")
 
 # The second filesystem of the machine (ADR 0009). Off by default: the
 # disk of `make x86-smoke` is one MicroFS volume, and a reader that no call
@@ -51,6 +53,7 @@ option(MICRO_OS_FS_EXT2 "ext2, read-only" OFF)
 # here so that the defaults of the port are in one place.
 option(KERNEL_PSRAM "the PSRAM pool and its statistics in kmm" OFF)
 option(KERNEL_EXEC "the MOX1 parser, execve and the exec command" ON)
+option(KERNEL_SMP "the second core: a run queue per core (ADR 0012)" OFF)
 option(MICRO_OS_TELNET "the shell on TCP port 23" OFF)
 option(MICRO_OS_WIFI "the WiFi station" OFF)
 
@@ -172,6 +175,15 @@ endif()
 set(VIRTUAL_SOURCES
     "${PROCFS_DIR}/src/procfs.c"
     "${DEVFS_DIR}/src/devfs.c"
+)
+
+# The configuration of /etc and its systems (ADR 0021). This machine has no
+# store of its own: the port answers "there is no key", the files of the
+# volume are the truth, and `config set` edits them as it does on the board.
+set(SETTINGS_SOURCES
+    "${SETTINGS_DIR}/src/settings.c"
+    "${CONFIG_DIR}/src/config.c"
+    "${CONFIG_DIR}/src/config_cmd.c"
 )
 
 # The services over the sockets: the HTTP client, the page of the state and
@@ -350,6 +362,7 @@ add_executable(microos64
     ${FAT_SOURCES}
     ${EXT2_SOURCES}
     ${VIRTUAL_SOURCES}
+    ${SETTINGS_SOURCES}
     ${NET_SOURCES}
     src/boot64.S
     src/kmain.c
@@ -359,6 +372,7 @@ add_executable(microos64
     src/ps2.c
     src/gdt.c
     src/paging.c
+    src/cpu.c
     src/port_exec.c
     src/port_x86_64_task.c
     src/blockdev_ram.c
@@ -379,6 +393,8 @@ target_include_directories(microos64 PRIVATE
     "${EXT2_DIR}/include"
     "${PROCFS_DIR}/include"
     "${DEVFS_DIR}/include"
+    "${CONFIG_DIR}/include"
+    "${SETTINGS_DIR}/include"
     "${NET_DIR}/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
@@ -388,6 +404,7 @@ target_compile_definitions(microos64 PRIVATE
     KERNEL_BOARD_DESC="QEMU x86-64 machine"
     KERNEL_PSRAM=$<BOOL:${KERNEL_PSRAM}>
     KERNEL_EXEC=$<BOOL:${KERNEL_EXEC}>
+    KERNEL_SMP=$<BOOL:${KERNEL_SMP}>
     MICRO_OS_NET=$<BOOL:${MICRO_OS_X86_NET}>
     MICRO_OS_NET_HTTP=$<BOOL:${MICRO_OS_X86_NET}>
     MICRO_OS_NET_HTTP_SERVER=$<BOOL:${MICRO_OS_X86_NET}>

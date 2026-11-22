@@ -10,6 +10,68 @@ the MicroFS volume change by adding only.
 A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 (`vX.Y.Z-pre`) is a pre-release and must match `kernel_version()`.
 
+## [1.1.0] - 2026-11-22
+
+The release of the board's last major changes: the settings of `/etc`, the
+partition of the programs, an update with a rollback, and the first phase of
+many cores in the kernel. After `1.1.0` the ESP32 port is a compatibility port
+(ADR 0018); the notes are in
+[`docs/releases/1.1.md`](docs/releases/1.1.md).
+
+### Added
+
+- The systems of `/etc` (ADR 0021): `/etc/display`, `/etc/font` and
+  `/etc/console`, one file of `key=value` lines each, parsed without an
+  allocation and applied at the boot - the rotation, the inversion, the theme
+  and the scale of the font on the board, the attribute of the VGA cells on
+  x86-64. `config get`, `config set`, `config list` and `config sync` read and
+  write them, and the store keeps them through a format.
+- The layout of the flash of 1.1 (ADR 0022): two application slots of
+  1.125 MiB, `progs` of 132 KiB and MicroFS of 5.56 MiB for the user. A board
+  of 1.0 loses its volume once, at the move of the partition.
+- An update over USB with a rollback: `tools/ota_usb.py` writes the inactive
+  slot, the bootloader keeps it in `PENDING_VERIFY` until the shell confirms
+  the boot, and a boot that ends before that, or an image whose signature does
+  not match, returns the board to the previous slot.
+- The programs are files of the `progs` partition, mounted read-only at
+  `/bin`; `tools/progs_image.py` builds `progs.bin` at build time and no image
+  of a program is embedded in the firmware.
+- The first phase of many cores (ADR 0012, `KERNEL_SMP`, off by default): a
+  `struct k_cpu` per core, a run queue per core, the scheduler lock as the
+  critical section of the port, `k_sched_migrate()` and the rule that a
+  running task never moves. With the flag off the kernel, its tests and its
+  behaviour are those of 1.0.
+- The host port takes the number of cores from `MICRO_OS_CPUS` (1 by default);
+  `make test-smp`, `make test-tsan` and `make soak-host` run two of them, and
+  the two-core soak runs the thread sanitizer over a million operations.
+- The x86-64 port reads the processor list of the machine (ACPI: the root
+  pointer, the RSDT/XSDT and the MADT) and remembers the local APIC; the boot
+  prints how many processors the firmware describes and how many it runs, and
+  `make x86-smoke` boots with `-smp 2` and checks the line. `make
+  x86-smp-build` builds the two-core kernel; the APs are not started yet
+  (ADR 0012, "The pilot of 1.x").
+- The port contract is version 1.9: `kernel/port/cpu.h` with
+  `k_port_cpu_count` and `k_port_cpu_id`, and a weak default of one core for a
+  port that predates them.
+
+### Changed
+
+- The partition `factory` is replaced by `ota_0` and `ota_1`, and the trailer
+  of the signature is the last 4 KiB of the slot that runs (ADR 0020); the
+  check of the board reads the running slot, not a fixed address.
+- A board of 1.0 moves its volume once: the release notes say to back it up
+  and to flash with `--erase-volume` (or to run `mkfs -y`); the NVS survives
+  the flash and the update.
+- The device test covers `/bin` from `progs` and, with `DEVICE_OTA=1`, an
+  update to the other slot, the return and a refused trailer that rolls back.
+
+### Fixed
+
+- `task_signal_interrupts()` reads the mark and the handler of a signal with
+  an atomic load, so the reader of another core sees the pair the writer made.
+- The tick reads the current task of a core atomically, so the accounting of
+  a core no longer races with a switch under `KERNEL_SMP`.
+
 ## [1.0.0] - 2026-11-22
 
 The first major release: the contracts are frozen, two machines run the
