@@ -1868,33 +1868,64 @@ static int mfs_read_locked(struct mfs_file *file, void *buf, k_size_t size)
         size = file->size - file->offset;
     }
 
-    while (done < size) {
-        k_u32_t block;
-        k_u32_t in_block;
-        k_size_t chunk;
+    {
+        k_u32_t block = 0;
+        k_u32_t in_block = 0;
+        k_u32_t next = MFS_NEXT_NONE;
+        int located = 0;
 
-        rc = chain_block_at(file->first_block, file->offset, &block, &in_block);
-        if (rc != MFS_OK) {
-            return rc;
-        }
+        while (done < size) {
+            k_size_t chunk;
 
-        chunk = MFS_BLOCK_DATA - in_block;
-        if (chunk > size - done) {
-            chunk = size - done;
-        }
-
-        {
-            k_u8_t block_data[MFS_BLOCK_SIZE];
-
-            rc = dev_read(block, block_data);
-            if (rc != MFS_OK) {
-                return rc;
+            /*
+             * The chain is walked once and then followed from block to block:
+             * `chain_block_at` counts from the first block, and asking it for
+             * every block of a file turns a read of n blocks into n walks of
+             * the chain. A program of a megabyte (the image of SQLite) spent a
+             * minute on that. The first chunk of a call still asks for its
+             * place, because the descriptor may have been moved by `lseek`.
+             */
+            if (!located) {
+                rc = chain_block_at(file->first_block, file->offset, &block, &in_block);
+                if (rc != MFS_OK) {
+                    return rc;
+                }
+                located = 1;
+            } else {
+                block = next;
+                in_block = 0;
+                if (block == MFS_NEXT_NONE) {
+                    return MFS_EIO;
+                }
             }
-            memcpy(out + done, block_data + 4 + in_block, chunk);
-        }
 
-        done += chunk;
-        file->offset += (k_u32_t)chunk;
+            chunk = MFS_BLOCK_DATA - in_block;
+            if (chunk > size - done) {
+                chunk = size - done;
+            }
+
+            {
+                k_u8_t block_data[MFS_BLOCK_SIZE];
+
+                rc = dev_read(block, block_data);
+                if (rc != MFS_OK) {
+                    return rc;
+                }
+
+                /* The header of the block is the number of the next one. */
+                memcpy(&next, block_data, sizeof(next));
+                memcpy(out + done, block_data + 4 + in_block, chunk);
+            }
+
+            done += chunk;
+            file->offset += (k_u32_t)chunk;
+
+            /* A file whose last block is not the last data of the read is a
+             * chain shorter than the size the inode names. */
+            if (done < size && next == MFS_NEXT_NONE) {
+                return MFS_EIO;
+            }
+        }
     }
 
     return (int)done;
