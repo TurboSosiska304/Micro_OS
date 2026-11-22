@@ -1030,10 +1030,14 @@ static void tcp_input(k_u32_t source, const k_u8_t *data, k_size_t length)
             memcpy(socket->rx + socket->rx_len, data + header, copy);
             socket->rx_len += copy;
 
-            /* The bytes the window had no room for are counted as received
-             * and lost: the window was advertised, so this is a peer that
-             * ignored it, and the session is better ended than desynced. */
-            socket->rcv_nxt += (k_u32_t)payload_length;
+            /*
+             * Only the bytes this session kept are acknowledged. A peer that
+             * sends more than the window it was given - slirp with a window
+             * update in flight, say - would otherwise have its excess counted
+             * as received and lost, and a body of a length would never
+             * complete: the acknowledgement makes it send the rest again.
+             */
+            socket->rcv_nxt += (k_u32_t)copy;
         }
 
         /* A duplicate or an out-of-order segment is answered with the
@@ -1285,6 +1289,18 @@ int k_port_net_recv(k_port_socket_t *handle, void *data, k_size_t size)
             memcpy(data, socket->rx, take);
             memmove(socket->rx, socket->rx + take, socket->rx_len - take);
             socket->rx_len -= take;
+
+            /*
+             * The reader made room in the window. The peer learned the small
+             * window with the acknowledgement of the last segment it sent, so
+             * without a segment of its own it would wait for an update that
+             * never comes - a body larger than the buffer of the session (a
+             * program of a repository, say) would stop in the middle. One
+             * acknowledgement with the new window is that update.
+             */
+            if (socket->established && !socket->reset && !socket->fin_sent) {
+                (void)tcp_send_segment(socket, TCP_ACK, socket->snd_nxt, NULL, 0);
+            }
 
             return (int)take;
         }
