@@ -56,15 +56,17 @@ The pins, the chips and the quirks of the board are in
       written back, the alarm of the clock kept)
 * [ ] The enclosure and display modes
 
-## P4 - Programs (for 1.0)
+## P4 - Programs (done)
 
 * [x] MOX1 version 2: the field of the machine in the header (x86-64, Xtensa),
       `mkprog --arch`, and an image of another machine is `ENOEXEC` before it
       runs (the contract of the port is 1.8)
-* [ ] A `progs` partition of 256 KiB, mapped as instructions with
-      `esp_partition_mmap`; a `.mox` at a 64 KiB boundary. The first loader
-      does not wait for it: the images travel in the firmware and are written
-      to `/bin` of MicroFS at the boot (ADR 0018 §2)
+* [x] A `progs` partition of 132 KiB at `0x250000`, 64 KiB aligned, with
+      two 64 KiB slots and a directory of name, offset and size in its last
+      4 KiB; the boot mounts it read-only at `/bin` and the images are no
+      longer blobs of the firmware (`tools/progs_image.py`, ADR 0022). The
+      loader copies the bytes into the windows; the mapping of flash as
+      instructions is a later loader and the table keeps the address it needs
 * [x] The spike of the door: code in the flash, mapped as instructions and
       called, talks to a kernel function through a pointer; `call0` and the
       `syscall` instruction are rejected (ADR 0018)
@@ -86,10 +88,21 @@ test, and receives only the features that are cheap on this board - memory,
 the concurrency FreeRTOS gives for free, drivers, the console. A compiler of
 our own, the higher half, NX and full SMP are not for it. ADR 0018.
 
-## P5 - Updates (planned)
+## P5 - Updates (done over USB; the network is open)
 
-* [ ] OTA with two application slots and a rollback: the flash has to be
-      repartitioned first, which is a data-loss operation on the volume
+* [x] Two equal application slots of 1.125 MiB (`ota_0`, `ota_1`), otadata
+      and a 5.56 MiB MicroFS; the one-time move of a board of 1.0 and its
+      warning (ADR 0022)
+* [x] The update of the inactive slot over USB (`tools/ota_usb.py`), the
+      state `NEW` in otadata, the confirmation at the shell
+      (`esp_ota_mark_app_valid_cancel_rollback()`) and the rollback of a boot
+      that never confirms itself (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`)
+* [x] `DEVICE_OTA=1 tools/device-test.sh` on the board: a good update to
+      `ota_1`, back to `ota_0`, and a wrong trailer that is refused and rolls
+      back
+* [ ] An update over the network (HTTP) into the inactive slot, with the same
+      signature and rollback; the kernel's HTTP client is not a stream for
+      `esp_ota_write()` yet (ADR 0022, `docs/debts.md`)
 
 ## P6 - Applications (not in this tree)
 

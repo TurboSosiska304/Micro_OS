@@ -61,7 +61,18 @@ and length is enough for 1.0).
 The layout of the flash is revisited with the safe update of 1.0 (A/B slots);
 this ADR fixes the principle, not the final table.
 
-**The first loader does not wait for that partition.** Repartitioning the
+**Done in 1.1.0 (ADR 0022).** The partition is real now: `progs` is 132 KiB
+at `0x250000`, 64 KiB aligned, with two 64 KiB slots and a directory of name,
+offset and size in its last 4 KiB; `tools/progs_image.py` writes it at build
+time from the `.mox` files and the boot mounts it at `/bin` as a read-only
+filesystem. No image of a program is embedded in the firmware and the boot no
+longer writes one into MicroFS. The loader still copies the bytes into the IRAM and DRAM
+windows instead of mapping the partition: the mapping needs a fixed virtual
+address reserved by the first `esp_partition_mmap()` of the boot and a program
+linked for it, and the copy is the path this ADR measured. The 64 KiB
+alignment is kept for the mapping a later loader may take.
+
+**The first loader did not wait for that partition.** Repartitioning the
 flash destroys the volume of a board in the field, and the milestone of 1.0 is
 a program that runs, not a new layout. The image is therefore embedded in the
 firmware as a blob, written to `/bin` of MicroFS at the boot and read back
@@ -251,6 +262,9 @@ second one.
   written to MicroFS at the boot. The `progs` partition and the 64 KiB
   alignment are a constraint on the format's use, not on the format itself;
   MicroFS loses 256 KiB when the partition arrives with the A/B layout.
+  *Updated in 1.1.0:* the partition arrived with the layout of ADR 0022; the
+  programs are files of `progs` and MicroFS lost 0.38 MiB to the second
+  application slot and the programs.
 * The promise of the format ends at version 2 on this port: a later version
   is a new contract and the board may be left behind by it.
 * A bytecode VM is not chosen: it is slow on a 240 MHz core and it is a second

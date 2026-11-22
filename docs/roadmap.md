@@ -298,7 +298,20 @@ written when the project was an operating system for one board; the numbers
 > instructions, and the update with an A/B slot and a rollback are the last
 > major changes of the ESP32 port. From `1.2.0` the port is a compatibility
 > port (ADR 0018): it builds and passes its test, and receives only the
-> changes that are cheap on the board.
+> changes that are cheap on the board. The notes are
+> [`docs/releases/1.1.md`](releases/1.1.md).
+
+* [x] The layout of 1.1 ([ADR 0022](adr/0022-layout-of-1.1.md)): two equal
+      application slots of 1.125 MiB, `progs` of 132 KiB and 5.56 MiB of
+      MicroFS; the one-time move of a board of 1.0 and its warning in the
+      release notes
+* [x] A safe update over USB (`tools/ota_usb.py`) with the rollback of a boot
+      that never confirms itself, and `DEVICE_OTA=1 tools/device-test.sh` on
+      the board
+* [x] The programs are files of `progs`, mounted read-only at `/bin`, with no
+      image of a program in the firmware (`tools/progs_image.py`)
+* [ ] An update over the network into the inactive slot (ADR 0022, open
+      item; the USB path is the safe update of 1.1)
 
 ## The road to 2.0
 

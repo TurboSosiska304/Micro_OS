@@ -147,11 +147,12 @@ int selftest_run(void)
     print_task_table();
 
     /*
-     * The programs of the board (ADR 0018). The volume of the flash is
-     * mounted before the init task runs, so /bin is there and the images of
-     * the firmware can be written to it. The program prints its own lines
-     * under the "PROGRAM:" marker, which is what tools/device-test.sh looks
-     * for; a refusal here is a failure of the self test.
+     * The programs of the board (ADR 0018 §2, ADR 0022). The `progs`
+     * partition is mounted at /bin before the init task runs, so the
+     * programs are files of the VFS and nothing of them is in the firmware.
+     * The program prints its own lines under the "PROGRAM:" marker, which is
+     * what tools/device-test.sh looks for; a refusal here is a failure of the
+     * self test.
      */
     if (port_esp32_programs_boot() != 0) {
         kerror("selftest: the programs of the board did not run");

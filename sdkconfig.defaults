@@ -8,9 +8,26 @@ CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_40M=y
 
-# Custom partition table (see partitions.csv)
+# Custom partition table (see partitions.csv, ADR 0022): two application
+# slots of 0x120000 (1.125 MiB), the programs in a partition of their own and
+# MicroFS with the rest (5.56 MiB) - as much of the flash as the user can have.
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_OFFSET=0x8000
+
+# The update of the board (ADR 0022). The bootloader asks the application of
+# an OTA slot to confirm itself before it is kept: the first boot of a new
+# image is PENDING_VERIFY, a boot that ends before
+# esp_ota_mark_app_valid_cancel_rollback() (a watchdog, a panic, a halt) or a
+# boot that answers esp_ota_mark_app_invalid_rollback_and_reboot() marks the
+# slot ABORTED and the bootloader returns to the other one. It costs a few
+# bytes of the bootloader and no eFuse, and a board flashed over USB starts
+# in the same state as one updated over the air.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+# The rollback above is the one of this tree: the anti-rollback of secure
+# boot (a version floor in the eFuse) is a different, irreversible setting
+# and stays off, as ADR 0020 says.
+# CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK is not set
 
 # 2 MB quad PSRAM (external RAM of the Plus2)
 CONFIG_SPIRAM=y
@@ -67,11 +84,13 @@ CONFIG_ESP_COREDUMP_ENABLE_TO_NONE=y
 CONFIG_ESP32_USE_FIXED_STATIC_RAM_SIZE=y
 CONFIG_ESP32_FIXED_STATIC_RAM_SIZE=0x20000
 
-# The image of the board (ADR 0020): the boot checks the trailer of the
-# factory partition and refuses an image that did not pass; a development
-# build that has no trailer turns the requirement off and keeps the warning.
-# The anti-rollback is off by default: its minimum lives in the NVS and a
-# person who flashes an older image sees a warning, not a stopped board.
+# The image of the board (ADR 0020, ADR 0022): the boot checks the trailer
+# of the application slot it runs and refuses an image that did not pass - the
+# slot is marked invalid and the bootloader returns to the other one; a
+# development build that has no trailer turns the requirement off and keeps
+# the warning. The anti-rollback is off by default: its minimum lives in the
+# NVS and a person who flashes an older image sees a warning, not a stopped
+# board.
 CONFIG_MICRO_OS_REQUIRE_SIGNATURE=y
 # CONFIG_MICRO_OS_ANTIROLLBACK is not set
 

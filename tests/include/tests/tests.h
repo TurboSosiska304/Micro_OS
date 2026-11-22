@@ -48,5 +48,6 @@ void test_settings(void);
 void test_net(void);
 void test_wifi(void);
 void test_sign(void);
+void test_progs(void);
 
 #endif /* MICRO_OS_TESTS_H */

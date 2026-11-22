@@ -49,10 +49,11 @@ A program is a file of a volume, not a blob of the kernel. `make x86-disk`
 writes `/bin` and `/etc` into a MicroFS image with a host tool, the boot
 mounts the volume and `execve` reads the program; no boot installs one.
 
-On the board the images still travel in the firmware and are written to
-`/bin` of MicroFS at the boot, because there is no `progs` partition in the
-table yet. An old volume keeps the `/bin` it has until you replace the
-files.
+On the board the programs are files of the `progs` partition, mounted at
+`/bin` (ADR 0022); a volume of an older release may still hold a `/bin`, and
+the mount hides it. The layout of 1.1 is a one-time move that loses the old
+volume: back it up, then flash with `--erase-volume` or run `mkfs -y` at the
+shell.
 
 ### The syscall ABI
 
@@ -144,28 +145,31 @@ make idf-build
 make idf-flash IDF_PORT=/dev/ttyACM0
 ```
 
-`idf.py flash` writes the bootloader, the partition table and the
-application. It does **not** touch NVS or the `mfs` partition, so a 0.8
-volume stays where it is and is mounted by the new kernel. The single image
-of a release (`make bundle`, then `dist/flash.sh`) is flashed at `0x0` and
-covers only the application; the same rule holds.
+`idf.py flash` writes the bootloader, the partition table, `ota_0`, the
+initial otadata and `progs`. It does **not** touch the NVS or the `mfs`
+partition, so a volume of the same layout stays where it is and is mounted by
+the new kernel. A release installs with `make bundle` and `dist/flash.sh`,
+which writes the parts at their offsets and leaves the NVS and MicroFS alone.
+
+`1.1.0` is the layout change (ADR 0022): the volume moves from `0x210000`
+(5.94 MiB) to `0x271000` (5.56 MiB), the second application slot takes the old
+region and the volume cannot be read at the new offset. **Back it up before
+the flash** (the command above), then:
+
+```bash
+./dist/flash.sh --erase-volume /dev/ttyACM0
+```
+
+or flash normally and run `mkfs -y` at the shell. The old bytes are still on
+the flash until the new volume is written, but the new table does not point at
+them; copy the files you need from the backup with a tool that reads the old
+MicroFS, or from the board before the move. A volume of 1.1 is never restored
+at `0x210000`: restore it at `0x271000` only if it was taken from the new
+layout.
 
 Do **not** run `idf.py erase-flash` for an upgrade. It wipes NVS and MicroFS
 and turns the upgrade into a factory install. Use it only when that is what
 you want.
-
-Restoring the volume after a mistake:
-
-```bash
-python -m esptool --chip esp32 -p /dev/ttyACM0 \
-    write_flash 0x210000 mfs-backup.bin
-```
-
-If a future 1.0 moves the partition table (the safe-update work may), the old
-volume is still on the flash at the old offset but the new table does not
-point at it. Back it up **before** flashing and restore it at the offset the
-new table names; a table change is not something the volume follows by
-itself.
 
 ### x86-64 in QEMU
 

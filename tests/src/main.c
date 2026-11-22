@@ -72,6 +72,7 @@ static void run_tests(void *arg)
     test_wifi();
 #endif
     test_sign();
+    test_progs();
 
     g_result = ktest_summary();
     atomic_store_explicit(&g_done, true, memory_order_release);

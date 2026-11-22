@@ -203,7 +203,8 @@ version.
 
 * No MMU: no memory protection, `fork()` temporarily shares the parent memory
   and re-runs the parent program (see README "Known limitations").
-* Flash: 8 MB — `factory` 2 MB + MicroFS 5.75 MB, no OTA slot
+* Flash: 8 MB — two application slots of 1.125 MiB (`ota_0`/`ota_1`), `progs`
+  132 KiB, MicroFS 5.56 MiB (ADR 0022); an update is over USB with a rollback
   (`partitions.csv`, checked by `make integrity`).
 * Internal SRAM ~100 KB is scarce: big buffers go to PSRAM, kernel/drivers get
   internal RAM, 48 KB is reserved from applications.

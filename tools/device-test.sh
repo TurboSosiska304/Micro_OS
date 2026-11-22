@@ -108,12 +108,13 @@ if [ "$DEVICE_POLICY" = "signed" ]; then
     BUNDLE="$(mktemp -d "${TMPDIR:-/tmp}/microos-bundle.XXXXXX")"
     trap 'rm -rf "$BUNDLE"' EXIT
     "$ROOT/tools/bundle.sh" "$BUILD_DIR" "$BUNDLE"
-    echo "==> flashing $PORT (merged image and trailer at 0x20F000)"
+    echo "==> flashing $PORT (the parts, otadata erased, the trailer at 0x12F000)"
     "$BUNDLE/flash.sh" "$PORT"
 else
-    # Erase the 4 KiB where the trailer lives: the raw image of the unsigned
-    # policies must not inherit a valid trailer from the signed flash before
-    # it.
+    # Erase the 4 KiB where the trailer lives and otadata, so the raw image
+    # of the unsigned policies is the one the board starts: a valid trailer
+    # of an earlier signed flash must not be inherited, and an otadata that
+    # names the other slot must not hide the image just written.
     NO_TRAILER="$(mktemp "${TMPDIR:-/tmp}/microos-notrailer.XXXXXX")"
     python3 -c 'import sys; open(sys.argv[1], "wb").write(b"\xff" * 4096)' "$NO_TRAILER"
     trap 'rm -f "$NO_TRAILER"' EXIT
@@ -124,7 +125,8 @@ else
         echo "==> flashing $PORT without a trailer"
         idf.py -B "$BUILD_DIR" -p "$PORT" flash
     fi
-    python3 -m esptool --chip esp32 -p "$PORT" write_flash 0x20F000 "$NO_TRAILER"
+    python3 -m esptool --chip esp32 -p "$PORT" write_flash 0x12F000 "$NO_TRAILER"
+    python3 -m esptool --chip esp32 -p "$PORT" erase_region 0xE000 0x2000
 fi
 
 echo "==> reading the console"
@@ -162,6 +164,8 @@ for marker in \
     "PROGRAM: argc 3" \
     "PROGRAM: envp 4" \
     "PROGRAM: exit 0" \
+    "boot: running from ota_0" \
+    "boot: the image of ota_0 is valid, the rollback is cancelled" \
     "  ir         ok" \
     "  sound      ok" \
     "module(s), 0 problem(s)"; do
@@ -188,25 +192,116 @@ if [ "$console_status" -ne 0 ] || [ "$missing" -ne 0 ]; then
     exit 1
 fi
 
-# The shell is up at the end of the capture. Two lines prove the other half of
-# the door: the same file from the command line, and an image of the other
-# machine, which has to be ENOEXEC before a byte of it runs.
-echo "==> the shell: exec /bin/hello and an image of x86-64"
+# The shell is up at the end of the capture. Three lines prove the other half
+# of the door: /bin is the list of the programs of the partition, the same
+# file runs from the command line, and an image of the other machine is
+# ENOEXEC before a byte of it runs.
+echo "==> the shell: ls /bin, exec /bin/hello and an image of x86-64"
 set +e
-python3 "$ROOT/tools/console.py" "$PORT" 10 \
+python3 "$ROOT/tools/console.py" "$PORT" 12 \
+    --send "ls /bin" \
     --send "exec /bin/hello one two" \
-    --send "exec /bin/foreign" | tee -a "$LOG"
+    --send "cat /log/start.log" \
+    --send "exec /log/.foreign" | tee -a "$LOG"
 set -e
 
 for marker in \
+    "hello" \
+    "cat" \
     "PROGRAM: argv[1] one" \
     "the program has finished" \
-    "exec: /bin/foreign: exec format error"; do
+    "progs: 2 program(s) in 'progs'" \
+    "exec: /log/.foreign: exec format error"; do
     if ! grep -qF "$marker" "$LOG"; then
         echo "the console has no '$marker' after the shell commands" >&2
         missing=1
     fi
 done
+
+if [ "$missing" -ne 0 ]; then
+    echo "RESULT: FAIL" >&2
+    exit 1
+fi
+
+# The update over USB (ADR 0022): the image goes into the slot that is not
+# running, otadata selects it, the bootloader asks it to confirm itself, and
+# the shell confirms it. Three writes prove both halves and the rollback: a
+# good image into ota_1, a good image back into ota_0, and an image whose
+# trailer does not match, which the boot must refuse and give back to the
+# other slot. It writes the flash a few times, so it is asked for:
+# DEVICE_OTA=1 tools/device-test.sh /dev/ttyACM0.
+if [ "${DEVICE_OTA:-0}" = "1" ]; then
+    if [ "$DEVICE_POLICY" != "signed" ]; then
+        echo "DEVICE_OTA needs DEVICE_POLICY=signed (the bundle and its trailer)" >&2
+        exit 2
+    fi
+
+    echo "==> update over USB: ota_1"
+    set +e
+    python3 "$ROOT/tools/ota_usb.py" --port "$PORT" --dir "$BUNDLE" | tee -a "$LOG"
+    python3 "$ROOT/tools/console.py" "$PORT" 45 | tee -a "$LOG"
+    set -e
+
+    for marker in \
+        "the image goes to ota_1" \
+        "boot: running from ota_1" \
+        "image signature ok (sha-256, ed25519), ota_1" \
+        "boot: the image of ota_1 is valid, the rollback is cancelled" \
+        "MicroOS shell ready"; do
+        if ! grep -qF "$marker" "$LOG"; then
+            echo "the console has no '$marker' after the update to ota_1" >&2
+            missing=1
+        fi
+    done
+
+    echo "==> update over USB: back to ota_0"
+    set +e
+    python3 "$ROOT/tools/ota_usb.py" --port "$PORT" --dir "$BUNDLE" | tee -a "$LOG"
+    python3 "$ROOT/tools/console.py" "$PORT" 45 | tee -a "$LOG"
+    set -e
+
+    for marker in \
+        "the image goes to ota_0" \
+        "boot: running from ota_0" \
+        "boot: the image of ota_0 is valid, the rollback is cancelled"; do
+        if ! grep -qF "$marker" "$LOG"; then
+            echo "the console has no '$marker' after the update to ota_0" >&2
+            missing=1
+        fi
+    done
+
+    # A trailer that does not match its image: the app refuses it at the boot
+    # and the board returns to the slot it came from. The host tool would
+    # refuse to write it, so --force is the test of the rollback itself.
+    echo "==> update over USB: an image with a wrong trailer rolls back"
+    BAD_BUNDLE="$(mktemp -d "${TMPDIR:-/tmp}/microos-badbundle.XXXXXX")"
+    cp -f "$BUNDLE/micro_os.bin" "$BUNDLE/partition-table.bin" "$BAD_BUNDLE/"
+    if [ -f "$BUNDLE/microos-sign.pub" ]; then
+        cp -f "$BUNDLE/microos-sign.pub" "$BAD_BUNDLE/"
+    fi
+    python3 - "$BUNDLE/micro_os.bin.sig" "$BAD_BUNDLE/micro_os.bin.sig" <<'PY'
+import sys
+
+data = bytearray(open(sys.argv[1], "rb").read())
+data[-1] ^= 0xFF
+open(sys.argv[2], "wb").write(data)
+PY
+    set +e
+    python3 "$ROOT/tools/ota_usb.py" --port "$PORT" --dir "$BAD_BUNDLE" --force | tee -a "$LOG"
+    rm -rf "$BAD_BUNDLE"
+    python3 "$ROOT/tools/console.py" "$PORT" 60 | tee -a "$LOG"
+    set -e
+
+    for marker in \
+        "the image is refused" \
+        "boot: running from ota_0" \
+        "MicroOS shell ready"; do
+        if ! grep -qF "$marker" "$LOG"; then
+            echo "the console has no '$marker' after the wrong trailer" >&2
+            missing=1
+        fi
+    done
+fi
 
 if [ "$missing" -ne 0 ]; then
     echo "RESULT: FAIL" >&2
