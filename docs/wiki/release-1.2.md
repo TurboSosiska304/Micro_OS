@@ -85,7 +85,7 @@ of ADR 0016; what the shell keeps is the state and the special commands (`cd`,
 program of the disk; `ls --color` paints a directory blue and an executable
 green.
 
-`bc` and `dc` are the same 115,440-byte image entered by its name: `bc -e
+`bc` and `dc` are the same 115,424-byte image entered by its name: `bc -e
 2^100` is the whole 31-digit power, and `scale=10; 4*a(1)` under `bc -l` is
 `3.1415926532`, the answer of GNU bc. A program may now be an image of up to
 **8 MiB**, read in pieces of 64 KiB: the interpreter of Lua is the first one

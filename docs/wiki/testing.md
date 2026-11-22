@@ -27,7 +27,7 @@ and the chips on it. None of them replaces another.
 | `make soak-host` | the portable kernel on the host under TSan for 600 s, two cores | GCC, TSan, valgrind |
 | `make fuzz-long` | the fuzz of the ABI and the parsers, with a multiplier | GCC, ASan |
 | `make disk-stress` | a full volume, `fsck -y` and two boots (MicroFS, FAT) | QEMU, dosfstools, mtools |
-| `make board-soak` | the same session on the board, one boot | ESP-IDF and a board |
+| `make board-soak` | the same session on the board for 180 s, one boot (the gate of a compatibility release; `BOARD_SOAK_MINUTES=10` for a change of the flash or the boot) | ESP-IDF and a board |
 | `make integrity` | the boundary, the bundle, the partitions, the hygiene | `clang-format` |
 | `make ci` | the list a contributor runs before a push | the above, QEMU optional |
 | `tools/device-test.sh` | build, flash and boot the board | ESP-IDF and a board |
@@ -280,7 +280,7 @@ The campaign is the four tools below, on the two machines and the host substrate
 |---|---|---|---|---|
 | **host** | `make test`, `make test-asan`, `make test-tsan` | `make soak-host` (TSan, 600 s) | `make fuzz-long` | valgrind, inside `soak-host` |
 | **x86-64** | `make test` (the same sources) | `make soak` (one boot, 600 s) | `make fuzz-long` | `make disk-stress` |
-| **board** | `tools/device-test.sh` | `tools/board_soak.sh` (600 s) | — | `fsck` in the board session |
+| **board** | `tools/device-test.sh` | `make board-soak` (180 s) | — | `fsck` in the board session |
 
 `make ci` does **not** include the campaign: ten minutes of QEMU and a board
 do not belong to a push. The campaign runs on a release candidate and its
@@ -404,10 +404,17 @@ a runner that must have them.
 ### The board: `tools/board_soak.sh`
 
 ```bash
-tools/board_soak.sh                         # build, flash, 600 s
+make board-soak                             # build, flash, 180 s
+tools/board_soak.sh --minutes 10            # the long session of a release
 tools/board_soak.sh --minutes 1             # the tool itself
 tools/board_soak.sh --no-build --no-flash   # the firmware already there
 ```
+
+The gate of the board of 1.2 is three minutes: from `1.2.0` the board is the
+compatibility port of ADR 0018, the changes of the release are small, and ten
+minutes of the same cycle would not prove another thing. A change of the
+flash, the boot or the volume asks for `BOARD_SOAK_MINUTES=10` and the long
+session of the releases before 1.2.
 
 The script does what `tools/device-test.sh` does (finds ESP-IDF, builds,
 flashes) and then `tools/board_soak_session.py` resets the board once and

@@ -156,6 +156,9 @@ release. The notes are in [`docs/releases/1.2.md`](docs/releases/1.2.md).
   the headers are thin shims over `ulibc.h`, and `snprintf`/`vsnprintf` share
   the formatter with `printf`. The host test `tests/cases/test_zlib.c` covers
   the checksums, the three stream wrappers and a `gz` file.
+- `make board-soak` and the gate of a compatibility release: the session on
+  the board is three minutes (`BOARD_SOAK_MINUTES`), and the long ten-minute
+  session belongs to a release that touches the flash or the boot.
 - The x86-64 image has twenty-six programs: `pcre2grep`, its engine, `lua`,
   `bc`, `dc` and the ten commands of sbase join the eleven of the tree and
   `zcat`; `make x86-smoke` checks their lines, the five licenses and the
@@ -190,6 +193,12 @@ release. The notes are in [`docs/releases/1.2.md`](docs/releases/1.2.md).
 
 ### Fixed
 
+- `mfs`: a read of a file follows the chain from the cursor of its descriptor
+  (`chain_block`/`chain_index` in `struct mfs_file`) instead of walking from
+  the head for every block: a read of 540 KB is 28.6 s before and 0.18 s
+  after, `exec /bin/lua` (168,480 bytes) is 0.09 s instead of about a second,
+  and the `write` path is the next debt of the same kind (`docs/debts.md`).
+  The format on the disk does not change.
 - `esp32`: the two programs of the board link the `errno` of the library and
   the compiler's runtime (`-lgcc`). The merge of the zlib userland put an
   `errno` in the wrappers of the calls and the 64-bit division of the
