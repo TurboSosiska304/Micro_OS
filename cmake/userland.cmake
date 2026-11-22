@@ -98,7 +98,7 @@ endfunction()
 # is `_start` of the runtime (ADR 0016), so `main` is a function of the
 # program and not the place the port enters. `MAIN` names the source of the
 # program: the tree keeps it in `programs/<name>.c`, and a ported tool names
-# the file of third_party while the image keeps its own name (`/bin/sb-ls`).
+# the file of third_party while the image keeps its own name (`/bin/ls`).
 function(microos_add_userland_program name)
     cmake_parse_arguments(PROG "" "MAIN"
         "LIBRARIES;INCLUDES;DEFINES;SOURCES;COMPILE_OPTIONS" ${ARGN})

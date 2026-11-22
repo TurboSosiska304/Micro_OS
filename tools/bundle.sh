@@ -225,8 +225,9 @@ if [ -f "$X86_BUILD/loader32.elf" ] && [ -f "$X86_BUILD/microos64.bin" ]; then
     # zlib is linked into /bin/zcat of the disk image, and its license travels
     # with the distribution even when the image itself is built separately.
     cp -f "$ROOT/third_party/zlib/LICENSE" "$STAGE/LICENSE.zlib"
-    # The tools of sbase are in /bin/sb-* of the same image, under their MIT
-    # license; the notice travels with the archive for the same reason.
+    # The tools of sbase are the commands of /bin of the same image (cat,
+    # grep, ls, ...), under their MIT license; the notice travels with the
+    # archive for the same reason.
     cp -f "$ROOT/third_party/sbase/LICENSE" "$STAGE/LICENSE.sbase"
     if [ -f "$X86_BUILD/microos64.sig" ] && [ -f "$X86_BUILD/signing.pub" ]; then
         cp -f "$X86_BUILD/microos64.sig" "$STAGE/microos64.sig"
@@ -268,7 +269,7 @@ the note and the original BDF.
 `LICENSE.zlib` is its license and `third_party/zlib` of the sources has the
 note, the version and the port layer.
 
-`/bin/sb-cat`, `/bin/sb-grep`, `/bin/sb-ls` and the rest of `/bin/sb-*` are
+`/bin/cat`, `/bin/grep`, `/bin/ls` and the rest of the ten commands are
 the tools of sbase (MIT); `LICENSE.sbase` is their license and
 `third_party/sbase` of the sources has the subset and the port layer.
 

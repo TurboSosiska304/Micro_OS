@@ -54,6 +54,23 @@ static int Rflag = 0;
 static int rflag = 0;
 static int Uflag = 0;
 static int uflag = 0;
+/*
+ * The colour of a name, a hunk of the port: the collection has no --color.
+ * A directory is blue and an executable is green, the two colours a person
+ * asks for; `--color` is always, `--color=auto` asks the descriptor and
+ * `--color=never` is the plain listing.
+ */
+static int colorflag = 0;
+
+static const char *
+color_of(mode_t mode)
+{
+	if (S_ISDIR(mode))
+		return "\033[1;34m";
+	if (S_ISREG(mode) && (mode & (S_IXUSR | S_IXGRP | S_IXOTH)))
+		return "\033[1;32m";
+	return "";
+}
 static int first = 1;
 static char sort = 0;
 static int showdirs;
@@ -145,7 +162,11 @@ output(const struct entry *ent)
 	if (iflag)
 		printf("%lu ", (unsigned long)ent->ino);
 	if (!lflag) {
+		if (colorflag)
+			fputs(color_of(ent->mode), stdout);
 		printname(ent->name);
+		if (colorflag)
+			fputs("\033[0m", stdout);
 		puts(indicator(ent->mode));
 		return;
 	}
@@ -208,7 +229,11 @@ output(const struct entry *ent)
 	else
 		printf("%10lu ", (unsigned long)ent->size);
 	printf("%s ", buf);
+	if (colorflag)
+		fputs(color_of(ent->mode), stdout);
 	printname(ent->name);
+	if (colorflag)
+		fputs("\033[0m", stdout);
 	fputs(indicator(ent->mode), stdout);
 	if (S_ISLNK(ent->mode)) {
 		if ((len = readlink(ent->name, buf, sizeof(buf) - 1)) < 0)
@@ -268,7 +293,7 @@ lsdir(const char *path, const struct entry *dir)
 
 		ents = ereallocarray(ents, ++n, sizeof(*ents));
 		mkent(&ents[n - 1], estrdup(d->d_name), Fflag || iflag ||
-		    lflag || pflag || Rflag || sort, Lflag);
+		    lflag || pflag || Rflag || sort || colorflag, Lflag);
 	}
 
 	closedir(dp);
@@ -372,6 +397,39 @@ main(int argc, char *argv[])
 	size_t i, ds, fs;
 
 	tree = ereallocarray(NULL, PATH_MAX, sizeof(*tree));
+
+	/*
+	 * The long option of the colour, before ARGBEGIN sees the line: the
+	 * parser of the collection reads the short words only, and the two
+	 * forms are cut from the vector here.
+	 */
+	for (i = 1; i < argc; i++) {
+		int recognized = 1;
+
+		if (!strcmp(argv[i], "--color")) {
+			colorflag = 1;
+		} else if (!strncmp(argv[i], "--color=", 8)) {
+			const char *when = argv[i] + 8;
+
+			if (!strcmp(when, "always"))
+				colorflag = 1;
+			else if (!strcmp(when, "never"))
+				colorflag = 0;
+			else if (!strcmp(when, "auto"))
+				colorflag = isatty(STDOUT_FILENO);
+			else
+				usage();
+		} else {
+			recognized = 0;
+		}
+
+		if (recognized) {
+			for (int j = i; j < argc - 1; j++)
+				argv[j] = argv[j + 1];
+			argc--;
+			i--;
+		}
+	}
 
 	ARGBEGIN {
 	case '1':

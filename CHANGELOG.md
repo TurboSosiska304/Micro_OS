@@ -28,13 +28,22 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   the checksums, the three stream wrappers and a `gz` file.
 - The second port of somebody else's code, and the first set of commands:
   sbase (MIT) with `cat`, `grep`, `head`, `ls`, `tail`, `wc`, `sort`, `find`,
-  `xargs` and `sed` as `/bin/sb-*` of the x86-64 image, beside the programs
-  of the tree. The library of a program grew the families a POSIX command
+  `xargs` and `sed` under their canonical names in `/bin` of the x86-64
+  image, in place of the small `ls`, `cat`, `grep`, `wc` and `head` of ADR
+  0016; `echo`, `mkdir`, `pwd` and `rm` stay. The `readdir` of procfs and
+  devfs makes `ls /proc` and `ls /dev` work with the same call as a directory
+  of MicroFS, and the image carries the two mount points as empty
+  directories. The library of a program grew the families a POSIX command
   expects (`opendir`/`readdir`, `struct stat`, `getpwuid`, `localtime`,
   `fnmatch`, a regular expression engine, `getopt`, `getline`, `fmemopen`,
   `qsort`) and a directory of its own for the paths, because the ABI has no
-  `chdir`. The port layer and the two hunks of `sort.c`/`xargs.c` are in
-  `third_party/sbase/README.md`; the pure library is tested by
+  `chdir`. The port layer and the hunks of `sort.c`, `xargs.c`, `grep.c` and
+  `ls.c` are in `third_party/sbase/README.md`; `xargs` runs its command in
+  its own process because `execve` is synchronous, and `-P` has nothing to
+  do. The shell looks a bare name of the ten in
+  `PATH` before its own table; the simulator keeps the commands of the shell
+  and the board falls back. `ls --color` paints a directory blue and an
+  executable green. The pure library is tested by
   `tests/cases/test_userland.c`, and the ten tools are in `make x86-smoke`
   and `make x86-disk-smoke`. The MIT notice travels as
   `/etc/licenses/sbase` and `LICENSE.sbase`.

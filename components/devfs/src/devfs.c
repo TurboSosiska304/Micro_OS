@@ -147,7 +147,19 @@ static int devfs_open(void *ctx, const char *path, int flags, struct vfs_file *o
     const struct dev_file **slot;
 
     K_UNUSED(ctx);
-    K_UNUSED(flags);
+
+    /* The point of the mount is a directory and is opened for `readdir`; a
+     * device is the node below it. */
+    if ((flags & VFS_O_DIRECTORY) != 0) {
+        if (s_point[0] == '\0' || strcmp(path, s_point) != 0) {
+            return -2;
+        }
+        if (out->priv != NULL) {
+            memset(out->priv, 0, VFS_FILE_DATA_SIZE);
+        }
+
+        return 0;
+    }
 
     if (dev == NULL) {
         return -2;
@@ -219,6 +231,44 @@ static int devfs_list(void *ctx, const char *path, struct vfs_dirent *out, k_siz
     return 0;
 }
 
+/*
+ * The next entries of /dev: the position of the descriptor is the number of
+ * devices already answered, and the table is walked from its start.
+ */
+static int devfs_readdir(void *ctx, struct vfs_file *file, struct vfs_dirent *out, k_size_t max,
+                         k_size_t *count)
+{
+    k_size_t i;
+    k_size_t found = 0;
+    k_size_t seen = 0;
+    k_size_t skip = (k_size_t)file->offset;
+
+    K_UNUSED(ctx);
+
+    for (i = 0; i < device_count() && found < max; i++) {
+        const struct dev_file *dev = device_at(i);
+
+        if (dev == NULL) {
+            continue;
+        }
+        if (seen++ < skip) {
+            continue;
+        }
+
+        memset(&out[found], 0, sizeof(out[found]));
+        snprintf(out[found].name, sizeof(out[found].name), "%s", dev->name);
+        out[found].type = 3; /* a device */
+        found++;
+    }
+
+    file->offset += seen;
+    if (count != NULL) {
+        *count = found;
+    }
+
+    return 0;
+}
+
 static int devfs_stat(void *ctx, const char *path, struct vfs_stat *out)
 {
     const struct dev_file *dev;
@@ -252,6 +302,7 @@ static const struct vfs_operations g_operations = {
     .write = devfs_write,
     .close = NULL,
     .list = devfs_list,
+    .readdir = devfs_readdir,
     .stat = devfs_stat,
     .mkdir = NULL,
     .unlink = NULL,

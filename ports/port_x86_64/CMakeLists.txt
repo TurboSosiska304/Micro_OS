@@ -392,16 +392,11 @@ set_source_files_properties("${ZLIB_DIR}/port/zlib_os.c"
 set_source_files_properties(${ZLIB_SOURCES}
     PROPERTIES OBJECT_DEPENDS "${ZLIB_DIR}/port/zconf.h")
 
-add_libc_program(cat)
 add_libc_program(echo)
-add_libc_program(grep)
-add_libc_program(head)
-add_libc_program(ls)
 add_libc_program(mkdir)
 add_libc_program(pwd)
 add_libc_program(rm)
 add_libc_program(spawn)
-add_libc_program(wc)
 
 # The first program of somebody else: zcat opens a .gz of the VFS through
 # zlib's gz* layer, inflates it and writes the bytes to the console or a
@@ -430,12 +425,11 @@ add_libc_program(zcat
 # guest has no floating point registers - and the port layer is
 # `third_party/sbase/port`.
 #
-# The tools live beside the programs of the tree and not in place of them:
-# `/bin/sb-ls` is sbase's `ls`, `/bin/ls` is the one of ADR 0016. The two have
-# different sentences on an error and different flags, and the smoke test of
-# the machine reads the sentences of the older one; the task of the port is a
-# second `ls` that runs, not a replacement that changes a contract at the same
-# time.
+# The tools are the commands of the machine under their canonical names:
+# `/bin/ls` is sbase's `ls`, and the small `ls`, `cat`, `grep`, `wc` and
+# `head` of ADR 0016 are not built for this port. `echo`, `mkdir`, `pwd` and
+# `rm` stay because the collection has no replacement for them; the smoke
+# test reads the sentences of the new commands.
 set(SBASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/sbase")
 
 set(SBASE_UTF_SOURCES
@@ -526,11 +520,13 @@ set(SBASE_LIBC_SOURCES
     "${LIBC_USER_DIR}/src/assert.c"
 )
 
-# The tool of the collection, built under the name `sb-<tool>` of /bin. The
-# heap is the arena of the program, which is the bss of the image and is
-# capped at a megabyte by the format: sort and find hold a file there.
+# The tool of the collection, built under its own name in /bin: the tools of
+# sbase are the `ls`, `cat`, `grep` and the rest of the machine, and the
+# programs of the tree they replace are not built for this port. The heap is
+# the arena of the program, the bss of the image (capped at a megabyte by the
+# format); sort and find hold a file there.
 function(add_sbase_program tool heap)
-    add_libc_program(sb-${tool}
+    add_libc_program(${tool}
         MAIN "${SBASE_DIR}/${tool}.c"
         SOURCES ${SBASE_LIBC_SOURCES}
         LIBRARIES microos_user_sbase

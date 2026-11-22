@@ -47,19 +47,14 @@ PROGRAMS = [
     "spawn",
     "nx",
     "zcat",
-    # The tools of sbase (third_party/sbase), built beside the programs of
-    # ADR 0016: the sentences of an error are a contract the smoke test reads,
-    # so the port is a second name in /bin and not a replacement.
-    "sb-cat",
-    "sb-grep",
-    "sb-head",
-    "sb-ls",
-    "sb-tail",
-    "sb-wc",
-    "sb-sort",
-    "sb-find",
-    "sb-xargs",
-    "sb-sed",
+    # The tools of sbase (third_party/sbase) are the commands of the machine
+    # under their own names: cat, grep, head, ls and wc replace the small
+    # programs of ADR 0016, and tail, sort, find, xargs and sed are new.
+    "tail",
+    "sort",
+    "find",
+    "xargs",
+    "sed",
 ]
 
 # The stream of the test of zlib: a fixed text, a fixed moment and the level
@@ -156,6 +151,14 @@ def build_image(
         "/etc/init.d",
         "--dir",
         "/etc/licenses",
+        # The mount points of the virtual filesystems: the boot mounts /proc
+        # and /dev over these empty directories, and a listing of the root
+        # that reads the volume (the `ls` of sbase) then finds the two names
+        # as well as a listing of the shell that asks the VFS.
+        "--dir",
+        "/proc",
+        "--dir",
+        "/dev",
     ]
 
     for name in PROGRAMS:
@@ -180,7 +183,7 @@ def build_image(
     command += ["--file", f"/etc/greeting.gz={greeting}"]
     command += ["--file", f"/etc/licenses/zlib={ZLIB_LICENSE}"]
 
-    # The MIT notice of sbase travels with the tools of /bin/sb-*, as the
+    # The MIT notice of sbase travels with the ten commands of /bin, as the
     # notice of zlib travels with zcat.
     command += ["--file", f"/etc/licenses/sbase={SBASE_LICENSE}"]
 

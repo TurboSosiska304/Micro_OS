@@ -76,7 +76,7 @@ to `x86-64`; a name the format does not know is refused before an image is
 written. `--data-base` is for a port whose data is a window of its own (the
 board): the data no longer follows the text, so the script checks its address
 against that number instead of the contiguous rule and also checks where the
-bss will be cleared. The x86-64 port builds its seventeen images this way: the
+bss will be cleared. The x86-64 port builds its twenty-two images this way: the
 object is compiled for the window, linked with `programs/program.ld`, turned
 into a `.mox` by the script (`--base 0x02000000 --arch x86-64`), and written
 into the MicroFS volume of the disk by `make x86-disk` (see below). The kernel
@@ -99,7 +99,7 @@ make x86-smoke     # the same, driven by the smoke test
 
 `tools/mkfs_mfs.c` writes the image: an MBR with one Linux partition at LBA
 2048, a MicroFS volume in it, `/bin`, `/etc` and an empty `/etc/init.d`, the
-seventeen `.mox` images of the build written to `/bin` with mode `0755`, and
+twenty-two `.mox` images of the build written to `/bin` with mode `0755`, and
 the settings of the machine in `/etc/setting`. It does not repeat the layout
 of MicroFS: it is a block device over a range of the file, and
 `components/mfs` formats it and writes the objects through `mfs_create`,
@@ -126,7 +126,7 @@ never changed.
 ## `/bin` and the boot
 
 The x86-64 port mounts the MicroFS volume of its disk at `/` and finds
-`/bin` already there: the twenty-seven images are files the tool wrote, with
+`/bin` already there: the twenty-two images are files the tool wrote, with
 the mode of a program (`0755`), and no boot creates one:
 
 | File | What it proves |
@@ -137,25 +137,26 @@ the mode of a program (`0755`), and no boot creates one:
 | `/bin/badptr` | a pointer outside the window is `EFAULT`, not a fault of ring 0 |
 | `/bin/signals` | a handler, `SIGTERM` ending a child, a wait cut by `SIGINT`, `SIG_IGN`, and the errors of `kill` |
 | `/bin/nx` | the protection of the pages: a fetch of its data, a write to its text and a call that hands its text to the kernel, each taken down, and a parent still alive |
-| `/bin/cat` | `open`, `read`, `write` on a file or descriptor 0, through the library of a program |
+| `/bin/cat` | sbase: `open`, `read`, `write` on a file or descriptor 0 |
 | `/bin/echo` | the vector of the arguments and `write`, the shortest useful program |
-| `/bin/ls` | a directory through `open(O_DIRECTORY)` and `readdir`; no path is the working directory |
-| `/bin/grep` | the lines of a source that hold a word (`-i`, `-v`), through `strstr` |
-| `/bin/head` | the first lines of a source (`-n N`), a block at a time |
+| `/bin/ls` | sbase: a directory through `open(O_DIRECTORY)` and `readdir`, `-l`, `-a`, `-R`, `--color` |
+| `/bin/grep` | sbase: a regular expression over the lines of a file (`-i`, `-v`, `-r`) |
+| `/bin/head` | sbase: the first lines of a source (`-n N`) |
 | `/bin/mkdir` | a directory through `mkdir`, one for every word of the line |
 | `/bin/pwd` | the directory of the task through `getcwd` |
 | `/bin/rm` | a name through `unlink`; `-r` walks a directory with `readdir` |
 | `/bin/spawn` | `execve` from a program, with an environment of its own |
-| `/bin/wc` | the lines, words and bytes of a source (`-l`, `-w`, `-c`) or of descriptor 0 |
+| `/bin/wc` | sbase: the lines, words and bytes of a source (`-l`, `-w`, `-c`) or of descriptor 0 |
 | `/bin/zcat` | a `.gz` of the VFS inflated by zlib 1.3.1 and written to the console or a file |
-| `/bin/sb-cat`, `sb-grep`, `sb-head`, `sb-ls`, `sb-tail`, `sb-wc` | the tools of sbase (MIT) for a file, a directory and a line: `ls -la`, `grep -r`, `wc -l`, `head`, `tail`, `cat` |
-| `/bin/sb-sort`, `sb-find`, `sb-xargs`, `sb-sed` | the tools of sbase for a tree and a stream: the order of `sort` (with `-n`), a walk of `find` with `-name`, a command over the words of a pipe, and a substitution of `sed` |
+| `/bin/cat`, `/bin/grep`, `/bin/head`, `/bin/ls`, `/bin/tail`, `/bin/wc` | the tools of sbase (MIT) for a file, a directory and a line: `ls -la`, `grep -r`, `wc -l`, `head`, `tail`, `cat`; `ls --color` paints a directory blue and an executable green |
+| `/bin/sort`, `/bin/find`, `/bin/xargs`, `/bin/sed` | the tools of sbase for a tree and a stream: the order of `sort` (with `-n`), a walk of `find` with `-name`, a command over the words of a pipe, and a substitution of `sed` |
 
-The first five talk to the kernel through `programs/prog.h`, because what they
-test is the raw door, the fault, the fork, the edge and the signals. The rest
-are ordinary C programs linked against `components/libc/user`
+The first six talk to the kernel through `programs/prog.h`, because what they
+test is the raw door, the fault, the fork, the edge and the signals. `echo`,
+`mkdir`, `pwd`, `rm` and `spawn` are ordinary C programs linked against
+`components/libc/user`
 ([ADR 0016](../adr/0016-userland.md)); `zcat` is also linked against zlib, the
-first library of somebody else, and the ten `sb-*` tools are sbase
+first library of somebody else, and the ten commands of sbase are the second
 ([`docs/porting-programs.md`](../porting-programs.md),
 [`third_party/sbase`](../../third_party/sbase/README.md)). Every one of them
 reads descriptor 0
@@ -174,12 +175,19 @@ stream of a fixed text, written by `tools/x86_image.py` with `mtime` from
 write the same bytes. `zcat -o FILE` inflates it into a file of MicroFS and
 `zcat -t` checks it; the smoke tests compare the count and the text of the
 inflated bytes. `/etc/licenses/zlib` is the zlib license beside the program
-that carries the library, and `docs/licensing.md` has the row. The ten tools
-of sbase are built **beside** the programs of the tree and not in place of
-them: `/bin/ls` prints the names on one line and says `error 2` for a path
-that is not there, which is a sentence the smoke test reads; `/bin/sb-ls` is
-the `ls` of a Unix-like system, with `-l`, `-a`, `-R` and the owner of the
-file. A person who wants the second one types the name.
+that carries the library, and `docs/licensing.md` has the row. The ten
+commands of sbase are the commands of the machine under their canonical
+names: `/bin/ls` is the `ls` of a Unix-like system (`-l`, `-a`, `-R`,
+`--color`), `/bin/cat` is `cat` and the same for the other eight. The small
+`ls`, `cat`, `grep`, `wc` and `head` of ADR 0016 are not built for this port
+any more; `/bin/echo`, `/bin/mkdir`, `/bin/pwd` and `/bin/rm` stay because
+sbase does not have them.
+
+The shell looks a bare name in `PATH` before its own table for these ten
+([`shell.md`](shell.md)), so `ls /etc` is the program of the disk and not the
+command of the shell. The simulator has no port to enter an image and keeps
+the commands of the shell; the board has no `ls` of sbase in `/bin` and falls
+back to its own.
 
 ## The board: Xtensa code without an MMU
 

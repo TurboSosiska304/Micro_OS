@@ -32,6 +32,15 @@ bool kshell_command_is_shell_state(const char *name);
  * status of a stage. Implemented with the files of the shell. */
 int kshell_run_program(int argc, char **argv);
 
+/*
+ * Run the words as a program when one of that name is in PATH. The answer is
+ * 1 when the program was found and run (the status is written where `status`
+ * points), and 0 when the shell has to answer with its own command: no file
+ * of that name, or a machine whose port cannot enter a program. A file that
+ * exists but cannot run is answered here (1 and an error).
+ */
+int kshell_try_program(int argc, char **argv, int *status);
+
 /* Resolve a path against the working directory of the calling task. */
 bool kshell_resolve_path(const char *path, char *out, k_size_t size);
 

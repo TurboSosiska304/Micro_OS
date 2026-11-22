@@ -1,17 +1,19 @@
 # sbase — ten Unix tools of somebody else
 
 sbase is a collection of small Unix tools by suckless, released under the MIT
-license. This tree carries ten of them, built as `/bin/sb-<tool>` of the
-x86-64 port: `cat`, `grep`, `head`, `ls`, `tail`, `wc`, `sort`, `find`,
-`xargs` and `sed`. They are the first commands of the tree that were not
-written for it, after `/bin/zcat` and its zlib.
+license. This tree carries ten of them, built under their canonical names in
+`/bin` of the x86-64 port: `cat`, `grep`, `head`, `ls`, `tail`, `wc`, `sort`,
+`find`, `xargs` and `sed`. They are the commands of the machine; the small
+`ls`, `cat`, `grep`, `wc` and `head` of ADR 0016 are not built for this port
+any more. They are the first commands of the tree that were not written for
+it, after `/bin/zcat` and its zlib.
 
 * Upstream: <https://git.suckless.org/sbase>, `git clone` of the tip
 * Commit: `c546c3a` ("rm: Don't ask for confirmation to remove symlinks")
 * License: [`LICENSE`](LICENSE), MIT (the copyright of the authors is in it)
-* Used in: `/bin/sb-cat`, `/bin/sb-grep`, `/bin/sb-head`, `/bin/sb-ls`,
-  `/bin/sb-tail`, `/bin/sb-wc`, `/bin/sb-sort`, `/bin/sb-find`,
-  `/bin/sb-xargs` and `/bin/sb-sed` of the x86-64 MicroFS image
+* Used in: `/bin/cat`, `/bin/grep`, `/bin/head`, `/bin/ls`, `/bin/tail`,
+  `/bin/wc`, `/bin/sort`, `/bin/find`, `/bin/xargs` and `/bin/sed` of the
+  x86-64 MicroFS image
 * Built by: `cmake/userland.cmake` with the compiler and the flags of the
   guest (`-nostdlib`, `-ffreestanding`, no PIC, no SSE), against
   `components/libc/user` and not the libc of the host
@@ -41,6 +43,7 @@ status table names the whole collection and not this subset.
 | File | What it is |
 |---|---|
 | `port/sbase_port.h` | the one declaration of the port (`sbase_numcmp`); force-included in every tool (`-include port/sbase_port.h`) |
+| our hunk of `ls.c` | `--color[=WHEN]`: a directory blue, an executable green, the long option cut from the line before `ARGBEGIN` |
 | `port/numcmp.c` | `sort -n` without a `double`: the decimal order of two numbers |
 | `port/humansize.c` | `ls -h` without a `double`: the size in the units of the collection |
 | `.clang-format` | `DisableFormat: true`: the vendored files keep the style of the upstream, and `make integrity` does not rewrite them |
@@ -70,6 +73,13 @@ recorded here so that an update is a diff to read:
 the directory is closed before a child is visited). The reason of the close
 is the four descriptors of a program: the descriptor 1 of the console is a
 console only while it is not an open file.
+
+`ls.c` has a hunk of ours too: `--color[=always|never|auto]`, which upstream
+does not have. The name of a directory is blue and an executable green (the
+ANSI SGR pair around the name); `auto` asks `isatty(1)`, which is 0 on the
+console of this machine, so a person who wants the colour writes `--color`
+or `--color=always`. The option is cut from the vector before `ARGBEGIN`,
+because the parser of the collection reads short words only.
 
 ## The library the tools expect
 
