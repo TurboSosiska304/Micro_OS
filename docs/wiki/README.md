@@ -22,6 +22,9 @@ canonical Russian documents are in [`docs/ru/`](../ru/README.md).
 | type a command at the prompt | [shell.md](shell.md) |
 | understand the filesystems and `/etc` | [files.md](files.md) |
 | set the screen, the font and the console | [settings.md](settings.md) |
+| see what a screen is on each machine | [screen.md](screen.md) |
+| understand the network of the system | [network.md](network.md) |
+| install a program from a repository | [pkg.md](pkg.md) |
 | understand `exec`, `MOX1` and ring 3 | [programs.md](programs.md) |
 | know which machine does what | [ports.md](ports.md) |
 | bring Micro OS to another machine | [porting.md](porting.md) |
@@ -41,6 +44,9 @@ canonical Russian documents are in [`docs/ru/`](../ru/README.md).
 | **Shell** | [shell.md](shell.md) | the commands, `PATH`, `stat`, `fsck`, `httpd` |
 | **Files** | [files.md](files.md) | MicroFS, `/etc`, `mkfs`/`fsck`, disks |
 | **Settings** | [settings.md](settings.md) | the systems of `/etc`, `config get`/`set`, which machine honours what |
+| **Screen** | [screen.md](screen.md) | the TFT, the VGA, the framebuffer of 1.2, what a desktop needs |
+| **Network** | [network.md](network.md) | DNS, TCP, HTTP, NTP, the stream and TLS of 1.2 |
+| **Packages** | [pkg.md](pkg.md) | `pkg`, the flags, the repositories, the signature |
 | **Programs** | [programs.md](programs.md) | `MOX1`, `/bin`, `exec`, ring 3, `fork` |
 | **Ports** | [ports.md](ports.md) | ESP32, x86-64, host, null: what runs where |
 | **Porting** | [porting.md](porting.md) | the contract, the bring-up order, the checks |
