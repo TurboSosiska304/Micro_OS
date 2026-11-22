@@ -162,6 +162,12 @@ each thing and not five).
 * `make x86-disk-smoke` packs a file into the volume in the first boot and
   unpacks it in the second one, after the reset.
 
+A dictionary trained by the `zstd` of the host and loaded with `-D` was checked
+by hand (the guest read a frame of `/etc/hello.lua` of 31 bytes with it, and
+`zstd -t -D` agreed), and `--train` answers "training mode not available"; the
+image carries no dictionary, so no fixture of the command list covers `-D`
+(`docs/debts.md` says why the builder is not here).
+
 ## The license
 
 `LICENSE` is the BSD-3-Clause text of the release, unchanged. The image carries
