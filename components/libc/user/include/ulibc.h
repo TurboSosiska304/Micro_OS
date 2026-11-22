@@ -31,8 +31,9 @@
  *
  * The result of a call is the result of the system call: a negative number is
  * the error with its minus sign (-2 is ENOENT), exactly as kernel/errno.h
- * names it. The library does not keep an errno of its own; a program that
- * wants the POSIX shape can use the sign.
+ * names it. A wrapper that a portable source expects in the POSIX shape keeps
+ * the magnitude in `errno` as well (src/errno.c), so a library reads `errno`
+ * after a call that answered `-1`; the raw calls keep the negative answer.
  */
 #ifndef MICRO_OS_LIBC_USER_ULIBC_H
 #define MICRO_OS_LIBC_USER_ULIBC_H
@@ -104,6 +105,17 @@ int getpid(void);
 long uptime(void);
 
 /*
+ * The calls of the POSIX shape that a portable source expects: a file removed
+ * or renamed answers 0 and an error answers -1 with `errno` set, and `isatty`
+ * says whether a descriptor is the console. The system has no terminal behind
+ * descriptor 0, so `isatty` answers 0 for every descriptor; the console of the
+ * port is an output, and a program that wants to read a line asks a file.
+ */
+int isatty(int fd);
+int remove(const char *path);
+int rename(const char *from, const char *to);
+
+/*
  * Make this task a program: the path is read through the VFS, the mode and
  * the image are checked, and a new task runs the program while this one waits
  * for it (ADR 0016). The environment is a vector of "NAME=VALUE" words; NULL
@@ -141,6 +153,63 @@ void *memset(void *dest, int byte, size_t count);
 int memcmp(const void *left, const void *right, size_t count);
 void *memchr(const void *memory, int byte, size_t count);
 
+/*
+ * The comparison of the collation of the C locale: the bytes themselves, the
+ * same answer as `strcmp`. The standard puts `strcoll` in the library for a
+ * program that compares strings for a sort, and Lua compares two strings of a
+ * table that way.
+ */
+int strcoll(const char *left, const char *right);
+
+/*
+ * The lengths of a run of bytes: `strspn` counts the bytes of `text` from the
+ * start that are in `accept`, `strcspn` the bytes that are not, and
+ * `strpbrk` answers the first byte of `text` that is in `accept`.
+ */
+size_t strspn(const char *text, const char *accept);
+size_t strcspn(const char *text, const char *reject);
+char *strpbrk(const char *text, const char *accept);
+
+/* --- the environment --- */
+
+/*
+ * The words `NAME=VALUE` the program was entered with, as `_start` received
+ * them and never a copy: the vector lives in the window of the program for as
+ * long as the program runs. `getenv` scans it and answers the value after the
+ * `=`, or NULL.
+ */
+extern char **environ;
+char *getenv(const char *name);
+
+/* --- the conversions of numbers --- */
+
+/*
+ * The conversions of the C library, with its shape: the value, the end of the
+ * conversion in `*end` when it is not NULL, and `errno` set to ERANGE on an
+ * overflow. The text is the text of the C locale: a decimal numeral with a
+ * point, an optional exponent and an optional sign. `strtod` does not take
+ * the hexadecimal form of C99; no source of this tree writes one.
+ */
+double strtod(const char *text, char **end);
+long strtol(const char *text, char **end, int base);
+unsigned long strtoul(const char *text, char **end, int base);
+long long strtoll(const char *text, char **end, int base);
+unsigned long long strtoull(const char *text, char **end, int base);
+int atoi(const char *text);
+long atol(const char *text);
+double atof(const char *text);
+int abs(int value);
+long labs(long value);
+void abort(void) __attribute__((noreturn));
+
+/*
+ * The sort of an array of `count` elements of `size` bytes: the order is the
+ * one of `compare`, a merge sort that allocates its copy in the arena of the
+ * program and falls back to insertion when the arena has no room. The order
+ * of two elements the comparison calls equal is kept.
+ */
+void qsort(void *base, size_t count, size_t size, int (*compare)(const void *, const void *));
+
 /* --- the allocation of a program --- */
 
 /*
@@ -169,10 +238,14 @@ extern FILE *stdout;
 extern FILE *stderr;
 
 FILE *fopen(const char *path, const char *mode);
+FILE *freopen(const char *path, const char *mode, FILE *stream);
+FILE *tmpfile(void);
 int fclose(FILE *stream);
 size_t fread(void *buffer, size_t size, size_t count, FILE *stream);
 size_t fwrite(const void *buffer, size_t size, size_t count, FILE *stream);
 int fgetc(FILE *stream);
+int getc(FILE *stream);
+int ungetc(int byte, FILE *stream);
 int fputc(int byte, FILE *stream);
 char *fgets(char *buffer, int size, FILE *stream);
 int fputs(const char *text, FILE *stream);
@@ -183,6 +256,8 @@ int fflush(FILE *stream);
 int fseek(FILE *stream, long offset, int whence);
 long ftell(FILE *stream);
 void rewind(FILE *stream);
+int fileno(FILE *stream);
+int setvbuf(FILE *stream, char *buffer, int mode, size_t size);
 
 /* --- the console --- */
 
@@ -190,15 +265,26 @@ void rewind(FILE *stream);
  * The conversions of the formatter: %d, %i, %u, %o, %x, %X, %c, %s, %p and
  * %%. A width and the flags '-' and '0' are honoured; the length is 'l' or
  * 'll' for a long or a long long, 'z' for a size_t, and the answer is the
- * number of bytes written or a
- * negative error. The text goes to the console through write(1, ...), in
- * pieces of a fixed buffer, so no allocation is involved. snprintf and
- * vsnprintf write the same text to a buffer of the caller, with the length
- * the whole text would have had, as the C library promises.
+ * number of bytes written or a negative error. The text goes to the console
+ * through write(1, ...), in pieces of a fixed buffer, so no allocation is
+ * involved. snprintf and vsnprintf write the same text to a buffer of the
+ * caller, with the length the whole text would have had, as the C library
+ * promises.
+ *
+ * A build that sets ULIBC_WITH_FLOAT adds the conversions of a double -
+ * %f, %F, %e, %E, %g and %G - and the precision of every conversion. Those
+ * are the builds of a program that computes in floating point (Lua); a
+ * program of the tree that does not is built with -mgeneral-regs-only, where
+ * an XMM register does not exist, and prints such a conversion as the two
+ * characters it was written with.
  */
 int printf(const char *format, ...);
+int vprintf(const char *format, va_list args);
+int fprintf(FILE *stream, const char *format, ...);
+int vfprintf(FILE *stream, const char *format, va_list args);
+int sprintf(char *buffer, const char *format, ...);
 int snprintf(char *buffer, size_t size, const char *format, ...);
 int vsnprintf(char *buffer, size_t size, const char *format, va_list args);
 int puts(const char *text);
-
+int putchar(int byte);
 #endif /* MICRO_OS_LIBC_USER_ULIBC_H */

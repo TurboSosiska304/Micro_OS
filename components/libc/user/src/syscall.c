@@ -22,6 +22,8 @@
  */
 #include "ulibc.h"
 
+#include <errno.h>
+#include <signal.h>
 #include <stdint.h>
 
 #ifdef MOX_ARCH_XTENSA
@@ -150,6 +152,62 @@ int mkdir(const char *path)
 int unlink(const char *path)
 {
     return (int)answer(syscall6(KSYS_UNLINK, (long)(uintptr_t)path, 0, 0, 0, 0, 0));
+}
+
+/*
+ * The rename of a path inside one filesystem, in the shape of POSIX: 0 when
+ * it happened and -1 with `errno` when it did not. The library of Lua and a
+ * source of a Unix-like system write `if (rename(a, b) != 0)`, so the two
+ * calls that the C library promises in that shape are the ones here; the
+ * other wrappers keep the raw answer of the ABI.
+ */
+int rename(const char *from, const char *to)
+{
+    long rc = syscall6(KSYS_RENAME, (long)(uintptr_t)from, (long)(uintptr_t)to, 0, 0, 0, 0);
+
+    if (rc < 0) {
+        errno = (int)-rc;
+        return -1;
+    }
+
+    return 0;
+}
+
+sighandler_t signal(int number, sighandler_t handler)
+{
+    long rc = syscall6(KSYS_SIGNAL, number, (long)(uintptr_t)handler, 0, 0, 0, 0);
+
+    if (rc < 0) {
+        errno = (int)-rc;
+        return SIG_ERR;
+    }
+
+    return (sighandler_t)(uintptr_t)rc;
+}
+
+int raise(int number)
+{
+    long rc = syscall6(KSYS_KILL, getpid(), number, 0, 0, 0, 0);
+
+    if (rc < 0) {
+        errno = (int)-rc;
+        return -1;
+    }
+
+    return 0;
+}
+
+/*
+ * The system has no terminal of a program behind a descriptor: the console of
+ * the port is an output, and a read of the descriptor of the input of a
+ * program answers EBADF until the shell passes one (`docs/debts.md`). A
+ * library that asks whether it talks to a person is told the truth.
+ */
+int isatty(int fd)
+{
+    (void)fd;
+
+    return 0;
 }
 
 char *getcwd(char *buf, size_t size)
