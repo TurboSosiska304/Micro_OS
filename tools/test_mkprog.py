@@ -80,7 +80,7 @@ SECTIONS
 {{
     . = 0x{base + K_EXEC_HEADER_SIZE:08x};
     .text : SUBALIGN(4) {{ *(.text .text.*) }}
-    . = ALIGN(4);
+    . = ALIGN(16);
     .data : {{ *(.data .data.*) *(.rodata .rodata.*) }}
     /DISCARD/ : {{ *(.comment) *(.eh_frame) *(.note .note.*) }}
 }}
@@ -90,6 +90,17 @@ SECTIONS
 def align4(value: int) -> int:
     """Round a size up to four bytes, the way the format and the script do."""
     return (value + 3) // 4 * 4
+
+
+def align16(value: int) -> int:
+    """Round a size up to sixteen bytes.
+
+    The script pads both segments to sixteen because a constant of a program
+    with floating point and the arena of its library are objects of that
+    width, and the instruction that reads one of them faults when it is not
+    aligned (see tools/mkprog.sh and programs/program.ld).
+    """
+    return (value + 15) // 16 * 16
 
 
 def build_source(text: bytes, data: bytes) -> str:
@@ -159,8 +170,8 @@ def check_case(
     header, payload = parse_image(image)
     fields = dict(zip(HEADER_FIELDS, header))
 
-    text_aligned = align4(len(text))
-    data_aligned = align4(len(data))
+    text_aligned = align16(len(text))
+    data_aligned = align16(len(data))
 
     assert fields["magic"] == K_EXEC_MAGIC, f"{name}: magic is 0x{fields['magic']:08X}"
     assert fields["version"] == K_EXEC_VERSION, f"{name}: version is {fields['version']}"
@@ -198,7 +209,7 @@ def check_case(
         f"{name}: the padding of the text is not zero"
     )
     assert payload[text_aligned : text_aligned + len(data)] == data, (
-        f"{name}: the data is not at 32 + align4(text) = {K_EXEC_HEADER_SIZE + text_aligned}"
+        f"{name}: the data is not at 32 + align16(text) = {K_EXEC_HEADER_SIZE + text_aligned}"
     )
     assert payload[text_aligned + len(data) :] == b"\0" * (data_aligned - len(data)), (
         f"{name}: the padding of the data is not zero"
@@ -246,14 +257,14 @@ def check_base_case(work: Path, script: Path) -> None:
     fields = dict(zip(HEADER_FIELDS, header))
     assert fields["arch"] == K_EXEC_ARCH_X86_64, f"base: arch is {fields['arch']}"
     assert fields["entry"] == K_EXEC_HEADER_SIZE, f"base: entry is {fields['entry']}"
-    assert fields["text_size"] == align4(len(text)), (
+    assert fields["text_size"] == align16(len(text)), (
         f"base: text size is {fields['text_size']}"
     )
-    assert fields["data_size"] == align4(len(data)), (
+    assert fields["data_size"] == align16(len(data)), (
         f"base: data size is {fields['data_size']}"
     )
     assert payload[: len(text)] == text, "base: the text bytes moved"
-    assert payload[align4(len(text)) : align4(len(text)) + len(data)] == data, (
+    assert payload[align16(len(text)) : align16(len(text)) + len(data)] == data, (
         "base: the data is not after the padded text"
     )
 

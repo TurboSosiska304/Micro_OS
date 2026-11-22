@@ -55,21 +55,29 @@ SECTIONS
     /*
      * The initialised data and the read-only data are one segment in the
      * format, in the order mkprog.sh concatenates them: .data first.
-     * SUBALIGN(4) overrides the alignment of an input section: a merged
-     * string of GCC asks for eight bytes, and an output section that pads to
-     * eight would move the data away from where the format puts it.
+     *
+     * The input sections keep their own alignment: a constant of a program
+     * with floating point is a sixteen-byte object and the instructions that
+     * read it (andps, movaps) fault when it is not aligned. The padding the
+     * linker puts between two input sections is part of this output section,
+     * so the bytes of the file are the bytes of the address.
+     *
+     * The segment starts sixteen bytes and a page after the base: the text
+     * ends on a page (the port gives it a protection), so no gap is inserted
+     * before the data and the address of the section is the one the format
+     * names.
      */
-    . = ALIGN(4);
-    .data : SUBALIGN(4) { *(.data .data.*) *(.rodata .rodata.*) } :data
+    . = ALIGN(16);
+    .data : { *(.data .data.*) *(.rodata .rodata.*) } :data
 
     /*
      * The bss is not in the image: the port clears this many bytes right
-     * after the data. SUBALIGN(4) is what makes the address of the section
-     * here the address the port will clear, because the format has no
-     * alignment of its own.
+     * after the data. It starts sixteen bytes after the data, because that
+     * is the alignment of the widest object of a program (the arena of the
+     * library) and mkprog.sh pads the data of the file to the same boundary.
      */
-    . = ALIGN(4);
-    .bss (NOLOAD) : SUBALIGN(4) { *(.bss .bss.*) *(COMMON) } :data
+    . = ALIGN(16);
+    .bss (NOLOAD) : { *(.bss .bss.*) *(COMMON) } :data
 
     /DISCARD/ : {
         *(.comment)
