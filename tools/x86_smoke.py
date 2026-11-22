@@ -186,6 +186,8 @@ COMMANDS = [
     "exec /bin/awk BEGIN{printf\"%.3f\\n\",sqrt(2)}",
     "exec /bin/awk BEGIN{printf\"%f|%g|%.2e\\n\",1/3,1/3,1/3}",
     "exec /bin/awk BEGIN{s=sprintf(\"%.2f\",1/3);print(s)}",
+    "exec /bin/awk BEGIN{print(int(3.9),int(-3.9),3%2,2^10,2**10)}",
+    "exec /bin/awk BEGIN{s=\"hello\";print(match(s,/ll/),RSTART,RLENGTH)}",
     # The numeric string of a field: the third column of the data is 0, 1
     # and 1000, and a field compares as a number against the number 9.
     "exec /bin/awk -F: {print($3>9)} /etc/columns",
@@ -1500,6 +1502,18 @@ def check(output: str) -> list:
     )
     awk_sprintf = answer('exec /bin/awk BEGIN{s=sprintf("%.2f",1/3);print(s)}')
     expect("awk builds a string with sprintf", "0.33" in awk_sprintf, awk_sprintf)
+    awk_int = answer("exec /bin/awk BEGIN{print(int(3.9),int(-3.9),3%2,2^10,2**10)}")
+    expect(
+        "awk truncates, takes a remainder and a power",
+        re.search(r"(?m)^3 -3 1 1024 1024\r?$", awk_int) is not None,
+        awk_int,
+    )
+    awk_match = answer('exec /bin/awk BEGIN{s="hello";print(match(s,/ll/),RSTART,RLENGTH)}')
+    expect(
+        "awk reports where a pattern matched",
+        re.search(r"(?m)^3 3 2\r?$", awk_match) is not None,
+        awk_match,
+    )
     # A field is a numeric string: the numbers of the third column compare as
     # numbers (0, 0, 1 against 9), which a string compare of "1000" and "9"
     # would answer the other way for the third line.
