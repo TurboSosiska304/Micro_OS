@@ -66,6 +66,15 @@ struct port_x86_64_screen {
      * the line a person typed is read again in the new colours.
      */
     void (*colors)(bool light, bool invert);
+
+    /*
+     * Draw the whole picture again from what the screen holds. A screen that
+     * *is* the memory (the text mode) has nothing to do and leaves it NULL;
+     * the framebuffer uses it to put every byte of the picture through the
+     * display once more, which is how the first frame of the boot is made
+     * whole. See port_x86_64_console_redraw().
+     */
+    void (*redraw)(void);
 };
 
 /* The text mode of the VGA, 80x25 (src/vga.c): the fallback of ADR 0023. */
@@ -96,6 +105,17 @@ const char *port_x86_64_console_name(void);
  * terminal are dropped whole rather than printed.
  */
 void port_x86_64_console_write(const char *data, k_size_t len);
+
+/*
+ * Draw the whole picture again: the cells the console holds are redrawn into
+ * the screen, so nothing of the log is lost. The boot calls it once, after
+ * the first lines of the boot are on the screen: the switch from the text
+ * mode of the firmware to the picture of the port is a moment when a display
+ * may still hold what was drawn before it, and a second pass over every pixel
+ * - with the log already in it - is what leaves no line of the old screen
+ * underneath the new one.
+ */
+void port_x86_64_console_redraw(void);
 
 /* Register the `console` system of /etc with the machine (ADR 0021). */
 int port_x86_64_console_settings_register(void);

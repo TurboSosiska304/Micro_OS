@@ -137,13 +137,29 @@ The text fallback keeps the `pmemsave` checks, so both screens are tested.
   *not* built: it needs a font load and CRTC timings, and the text mode is the
   fallback of a machine that has no picture, not a screen to invest in
   (`docs/debts.md`, K11).
+* **The first frame**: the mode is turned on without `VBE_NOCLEARMEM`, so the
+  card clears the memory it shows as part of the switch - the cells of the
+  text mode live in the same memory (the offset `0x18000` of the card is the
+  `0xB8000` window) and none of them may survive into the picture. The console
+  empties that text window before the switch as well, and after the first
+  lines of the boot are drawn it draws the whole picture again from the grid:
+  the log is not lost (the console holds the cells) and every pixel of the
+  first frame goes through the display once more, which is what leaves no line
+  of the 80x25 screen under the new one. The pass is after `/etc` is read, so
+  it carries the colours a person chose.
 * **The tests**: `make x86-vga-smoke` boots the machine twice. With `-vga std`
   it reads the picture with `screendump` (a PPM of 1280x800), compares the
   cells of the first line with the bitmaps of the font, finds the one cell that
   is all ink (the cursor), types `fsck` through `sendkey` and sees the answer
   on the serial console and the picture grow below it, then sets
   `console.theme light` and reads the paper of the new picture as the light
-  grey. With `-vga cirrus` it runs the checks of 1.1: `pmemsave` of `0xB8000`,
-  the 720x400 picture, the cursor of the CRTC, the typed command and the
-  attribute of every cell (`0x70`). `make x86-run` opens the window with
-  `-vga std`.
+  grey. The *first* frame is checked on its own: the dump is taken as soon as
+  the banner is in the transcript (the console writes the screen before COM1),
+  and it must be 1280x800, carry only the two colours of the console and be
+  made of 2x2 blocks of pixels - the font at twice its size - so a pixel or a
+  stroke that no cell of this console drew (the grey of the VGA palette, a
+  line of the 8x16 font of the text mode, the leftover of the screen before
+  this one) fails the test. With `-vga cirrus` it runs the checks of 1.1:
+  `pmemsave` of `0xB8000`, the 720x400 picture, the cursor of the CRTC, the
+  typed command and the attribute of every cell (`0x70`). `make x86-run` opens
+  the window with `-vga std`.

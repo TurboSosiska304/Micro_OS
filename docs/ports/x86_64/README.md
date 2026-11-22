@@ -69,14 +69,18 @@ The two smoke tests check different consoles of the same machine.
 port; `tools/x86_vga_smoke.py` boots the machine twice with `-display none`:
 on the VGA of QEMU (`-vga std`, the Bochs VBE interface of ADR 0023) it reads
 the picture with the monitor (`screendump`, a PPM of 1280x800), compares the
-cells with the bitmaps of the font, sets the theme and types with `sendkey`;
-on a card without that interface (`-vga cirrus`) it reads the text memory with
-`pmemsave` and checks the 720x400 picture and the attribute of every cell. So
-the screen and IRQ1 are checked without a display server. The target is a
-target of its own and not a part of `make ci`, because the monitor of QEMU is
-a tool a build farm does not have to have. `python3 tools/x86_vga_smoke.py
---display gtk` runs the same checks against the real window instead of its
-memory.
+cells with the bitmaps of the font, sets the theme and types with `sendkey`.
+The frame the boot draws first is a check of its own: the dump is taken as soon
+as the banner is in the transcript, and the picture must hold only the colours
+of the console and be made of 2x2 blocks of pixels - the font at twice its size
+- so a line of the text mode or of the firmware's screen under the new picture
+fails it. On a card without that interface (`-vga cirrus`) the test reads the
+text memory with `pmemsave` and checks the 720x400 picture and the attribute of
+every cell. So the screen and IRQ1 are checked without a display server. The
+target is a target of its own and not a part of `make ci`, because the monitor
+of QEMU is a tool a build farm does not have to have.
+`python3 tools/x86_vga_smoke.py --display gtk` runs the same checks against the
+real window instead of its memory.
 
 The machine boots from three files: `build-x86/loader32.elf` (the loader),
 `build-x86/microos64.bin` (the kernel, a flat image) and
@@ -202,6 +206,17 @@ That address is above the identity map of the first gigabyte, so
 shared by every address space, so the `write` of a program in ring 3 draws on
 the same picture as the boot log, and the audit of W^X counts a device page as
 data.
+
+The mode is turned on without `VBE_NOCLEARMEM`: the card clears the memory it
+shows as part of the switch, and it has to - the cells of the text mode live
+in the same memory (the offset `0x18000` of the card is the `0xB8000` window),
+so a picture that kept it would have the screen of the firmware inside it. The
+console empties that window before the switch as well, and after the first
+lines of the boot it draws the whole picture again from the cells it holds:
+the log is redrawn, not lost, and every pixel of the first frame goes through
+the display once more. A display that keeps the frame it painted before the
+mode switch therefore has nothing of the 80x25 screen left under the new
+picture.
 
 `src/fb.c` registers the renderer (`bochs-vbe`) and holds the grid of the
 console: 128 columns by 57 rows of cells of 10x14 pixels, the 5x7 font of

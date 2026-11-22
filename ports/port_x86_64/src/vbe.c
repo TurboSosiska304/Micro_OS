@@ -41,9 +41,10 @@
 #define VBE_ID_FIRST 0xB0C0u
 #define VBE_ID_LAST 0xB0C5u
 
-/* The enable register: the mode on, the window of the memory in use, and the
- * memory left as it is - the console clears the picture itself, which is one
- * pass over 2 MB either way. */
+/* The enable register: the mode on and the window of the memory in use. The
+ * bit 0x80 says "leave the memory of the card as it is"; the port does not
+ * set it - see the mode set below, where the text mode's cells in the same
+ * memory are the reason. */
 #define VBE_ENABLED 0x01u
 #define VBE_LFB_ENABLED 0x40u
 #define VBE_NOCLEARMEM 0x80u
@@ -152,7 +153,17 @@ bool port_x86_64_vbe_mode(struct port_x86_64_screen_mode *mode)
      * writes the picture it draws. */
     vbe_write(VBE_REG_VIRT_WIDTH, PORT_X86_64_SCREEN_WIDTH);
     vbe_write(VBE_REG_VIRT_HEIGHT, PORT_X86_64_SCREEN_HEIGHT);
-    vbe_write(VBE_REG_ENABLE, VBE_ENABLED | VBE_LFB_ENABLED | VBE_NOCLEARMEM);
+
+    /*
+     * The mode is turned on *without* VBE_NOCLEARMEM: the memory of the card
+     * is cleared by the device as part of the switch. The bytes of the text
+     * mode live in the same memory, at its start (0xB8000 is the window of
+     * the offset 0x18000 of the card), so a picture that kept the memory
+     * would have the cells of the old screen inside it - and the console is
+     * the only thing that may put a byte there. The clear costs one pass over
+     * 2 MB in the emulator and happens once, at the boot.
+     */
+    vbe_write(VBE_REG_ENABLE, VBE_ENABLED | VBE_LFB_ENABLED);
 
     mode->width = vbe_read(VBE_REG_XRES);
     mode->height = vbe_read(VBE_REG_YRES);

@@ -355,6 +355,33 @@ static void fb_colors(bool light, bool invert)
     }
 }
 
+/*
+ * The whole picture again: the paper, every cell of the grid, the cursor.
+ * Every byte of the window is written, so a display that keeps the picture it
+ * drew last sees a complete frame instead of the part of it that changed -
+ * which is the point at the boot, when the frame before this one was the text
+ * mode of the firmware.
+ */
+static void fb_redraw(void)
+{
+    int row;
+    int column;
+
+    if (g_fb == NULL) {
+        return;
+    }
+
+    render_clear(NULL, g_paper);
+
+    for (row = 0; row < g_rows; row++) {
+        for (column = 0; column < g_columns; column++) {
+            if (g_cells[row][column] != ' ' || (row == g_cursor_row && column == g_cursor_column)) {
+                cell_paint(row, column, row == g_cursor_row && column == g_cursor_column);
+            }
+        }
+    }
+}
+
 static struct port_x86_64_screen s_screen = {
     .name = g_name,
     .columns = 0, /* the mode fills these in */
@@ -364,6 +391,7 @@ static struct port_x86_64_screen s_screen = {
     .scroll = fb_scroll,
     .cursor = fb_cursor,
     .colors = fb_colors,
+    .redraw = fb_redraw,
 };
 
 const struct port_x86_64_screen *port_x86_64_fb_screen(const struct port_x86_64_screen_mode *mode,
