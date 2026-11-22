@@ -58,6 +58,27 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   not change; `make x86-smoke` runs the interpreter and boots a disk with a
   file of 8 MiB + 1 to check the refusal, and the host test
   `tests/cases/test_exec.c` checks the boundary of the constant.
+- The third port of a program of somebody else: the One True Awk 20240728
+  (the Lucent permissive license) as `/bin/awk`, with the data `/etc/columns`,
+  the first script of the machine `/etc/hello.awk` and the license at
+  `/etc/licenses/awk`. The release is vendored unchanged in `third_party/awk`
+  (the parser is generated once by byacc and committed with its header and
+  `proctab.c`), and the port layer is `port/awk_port.h` and `port/awk_os.c`:
+  the C locale as bytes, the four functions of the C library the release
+  wants and the library does not have, and the honest refusal of `system` and
+  of a pipe (no shell, no second process). `make x86-smoke` runs the fields,
+  the formatter, `-v`, `-f`, `getline` and the refusals; `make
+  x86-disk-smoke` runs the script of `/etc` again after the reset; the host
+  test `tests/cases/test_awk.c` runs the `main` of the release through
+  thirty-two cases, including the comparison of a numeric string and the syntax error of a program.
+- The bss of a program starts at the address the program was linked for:
+  `tools/mkprog.sh` counts the gap the linker may leave between the data and
+  a bss aligned to 32 bytes as padding of the data segment. Before this the
+  loader cleared the bss a few bytes below its first object, and the
+  arguments of the program, which the port writes right after the bss, were
+  overlapped by the last static of the library - the first boot of awk read
+  its own `argv` from the state of the random generator. The test of the
+  layout (`tools/test_mkprog.py`) has the case.
 - `make x86-smoke` runs `/bin/lua`: a power of a double (`1024.0`), `math.pi`,
   `string.format("%.3f", 1/3)`, the two values that are not numbers, the
   clock, and the script `/etc/hello.lua` with a table, a file of the VFS and

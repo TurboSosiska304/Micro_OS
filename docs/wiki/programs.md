@@ -76,7 +76,7 @@ to `x86-64`; a name the format does not know is refused before an image is
 written. `--data-base` is for a port whose data is a window of its own (the
 board): the data no longer follows the text, so the script checks its address
 against that number instead of the contiguous rule and also checks where the
-bss will be cleared. The x86-64 port builds its eighteen images this way: the
+bss will be cleared. The x86-64 port builds its nineteen images this way: the
 object is compiled for the window, linked with `programs/program.ld`, turned
 into a `.mox` by the script (`--base 0x02000000 --arch x86-64`), and written
 into the MicroFS volume of the disk by `make x86-disk` (see below). The kernel
@@ -99,7 +99,7 @@ make x86-smoke     # the same, driven by the smoke test
 
 `tools/mkfs_mfs.c` writes the image: an MBR with one Linux partition at LBA
 2048, a MicroFS volume in it, `/bin`, `/etc` and an empty `/etc/init.d`, the
-eighteen `.mox` images of the build written to `/bin` with mode `0755`, and
+nineteen `.mox` images of the build written to `/bin` with mode `0755`, and
 the settings of the machine in `/etc/setting`. It does not repeat the layout
 of MicroFS: it is a block device over a range of the file, and
 `components/mfs` formats it and writes the objects through `mfs_create`,
@@ -126,7 +126,7 @@ never changed.
 ## `/bin` and the boot
 
 The x86-64 port mounts the MicroFS volume of its disk at `/` and finds
-`/bin` already there: the eighteen images are files the tool wrote, with the
+`/bin` already there: the nineteen images are files the tool wrote, with the
 mode of a program (`0755`), and no boot creates one:
 
 | File | What it proves |
@@ -149,12 +149,14 @@ mode of a program (`0755`), and no boot creates one:
 | `/bin/wc` | the lines, words and bytes of a source (`-l`, `-w`, `-c`) or of descriptor 0 |
 | `/bin/zcat` | a `.gz` of the VFS inflated by zlib 1.3.1 and written to the console or a file |
 | `/bin/lua` | the interpreter of Lua 5.4.7: `-e` and the script `/etc/hello.lua`, read from the volume |
+| `/bin/awk` | the One True Awk 20240728: `-f /etc/hello.awk`, `-F`, `-v` and the inline program of a line, over the data of `/etc/columns` |
 
 The first five talk to the kernel through `programs/prog.h`, because what they
 test is the raw door, the fault, the fork, the edge and the signals. The rest
 are ordinary C programs linked against `components/libc/user`
-([ADR 0016](../adr/0016-userland.md)); `zcat` is also linked against zlib and
-`lua` against the core of Lua 5.4.7, the two libraries of somebody else
+([ADR 0016](../adr/0016-userland.md)); `zcat` is also linked against zlib,
+`lua` against the core of Lua 5.4.7 and `awk` against the sources of the One
+True Awk, the three programs of somebody else
 ([`docs/porting-programs.md`](../porting-programs.md)). Every one of them
 reads descriptor 0
 when it is given no file (or `-`); `execve` carries the table of the caller, so
@@ -173,6 +175,11 @@ write the same bytes. `zcat -o FILE` inflates it into a file of MicroFS and
 `zcat -t` checks it; the smoke tests compare the count and the text of the
 inflated bytes. `/etc/licenses/zlib` is the zlib license beside the program
 that carries the library, and `docs/licensing.md` has the row.
+
+The other two interpreters have their fixtures the same way: `/etc/hello.lua`
+for `/bin/lua`, and `/etc/columns` and `/etc/hello.awk` for `/bin/awk` (three
+colon-separated records and the script that counts and sums them). Their
+licenses are `/etc/licenses/lua` and `/etc/licenses/awk`.
 
 ## The board: Xtensa code without an MMU
 

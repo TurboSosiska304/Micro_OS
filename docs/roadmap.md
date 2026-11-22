@@ -73,7 +73,7 @@ written when the project was an operating system for one board; the numbers
       its disk and asks for `/bin/hello` with `execve`; the shell runs the
       same file with `exec`
 * [x] Programs are files on a filesystem of the disk, not blobs of the
-      kernel: `make x86-disk` writes `/bin` (seventeen programs) and `/etc` with
+      kernel: `make x86-disk` writes `/bin` (nineteen programs) and `/etc` with
       `tools/mkfs_mfs.c`, and no boot installs an image
 * [x] `PATH` for the shell
 * [x] `argv` reaches the port, and the ABI of the entry is written down
@@ -314,6 +314,15 @@ written when the project was an operating system for one board; the numbers
       `double`. The host test is `tests/cases/test_lua.c`; the interpreter
       itself waits for K3 below, because 164 KiB is past the block
       `sys_execve` reads in one call
+* [x] The third port of a program of somebody else: the One True Awk
+      20240728 (the Lucent permissive license) as `/bin/awk`, with the data
+      `/etc/columns`, the script `/etc/hello.awk` and `/etc/licenses/awk` in
+      the image. The grammar is generated once by byacc and committed with
+      its header, the port layer answers the C locale as bytes and refuses
+      `system` and a pipe with a sentence (no shell, no second process), and
+      the interpreter is the first program of `/bin` with a parser of its
+      own. The host test is `tests/cases/test_awk.c`; the script of `/etc`
+      runs again after the reset in `make x86-disk-smoke`
 * [ ] The image of a program larger than `KSYS_MAX_IO`: `execve` reads the
       image into one block of 64 KiB and refuses a larger one (`/bin/lua`),
       and the answer of the refusal names the wrong reason. A cap that is the
@@ -323,8 +332,8 @@ written when the project was an operating system for one board; the numbers
 * [ ] The gaps of the next port: a `malloc` larger than the bss of an image
       (`brk`/`mmap` of a program), a `poll` for a library that waits on a
       pipe, an `fxsave` of the XMM state for two programs with a point in
-      their numbers, and the package that ships `zcat` and `lua` with their
-      licenses beside them (`docs/debts.md`)
+      their numbers, and the package that ships `zcat`, `lua` and `awk` with
+      their licenses beside them (`docs/debts.md`)
 
 ## The last major changes of the board (1.1.0)
 

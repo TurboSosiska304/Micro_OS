@@ -15,6 +15,7 @@ commercially; the note here is what the tree does.
 | Spleen 8x16 | 2.3.0 | BSD-2-Clause | `third_party/spleen`, `ports/port_x86_64/src/font_spleen.c` | the x86-64 kernel image; `LICENSE.spleen` in its tar |
 | zlib | 1.3.1 | zlib | `third_party/zlib`, `ports/port_x86_64/programs/zcat.c` | `/bin/zcat` of the x86-64 MicroFS image; `/etc/licenses/zlib` in the image and `LICENSE.zlib` in the x86-64 tar |
 | Lua | 5.4.7 | MIT | `third_party/lua`, `ports/port_x86_64/programs` (the `main` is the release's `lua.c`) | `/bin/lua` of the x86-64 MicroFS image; `/etc/licenses/lua` in the image and `LICENSE.lua` in the x86-64 tar |
+| awk (the One True Awk) | 20240728 | Lucent permissive | `third_party/awk`, `ports/port_x86_64/programs` (the `main` is the release's `main.c`) | `/bin/awk` of the x86-64 MicroFS image; `/etc/licenses/awk` in the image and `LICENSE.awk` in the x86-64 tar |
 
 Spleen is a font by Frederic Cambus; the license and the note are in
 [`third_party/spleen`](../third_party/spleen/README.md). The 8x16 table is
@@ -41,13 +42,23 @@ software, so the image carries `/etc/licenses/lua` beside `/bin/lua` and
 MIT of the release and not a second copy of the MIT of this tree: the two
 notice lines are different and the tree keeps both.
 
+awk is the One True Awk of Brian Kernighan and the team of Bell Labs; the
+version, the files, the generated parser, the port layer and the refusals of
+the machine are in [`third_party/awk`](../third_party/awk/README.md). Its
+license is the Lucent permissive text of 1997: a permissive license with a
+notice, and the image carries `/etc/licenses/awk` beside `/bin/awk`,
+`tools/bundle.sh` puts `LICENSE.awk` into the x86-64 archive, and a package
+that installs the interpreter copies the same file beside the program. It is
+not the BSD-3-Clause of a newer re-reading and not the MIT of this tree.
+
 ## The rule
 
 1. **The MIT tree takes permissive code only.** MIT, BSD-2-Clause,
-   BSD-3-Clause, ISC, Apache-2.0 (with its patent grant) and the zlib license
-   may live in `components/`, `ports/`, `main/`, `tools/` and
-   `third_party/`. A new one is a line in the table above, a license file in
-   its directory and a note in this page.
+   BSD-3-Clause, ISC, Apache-2.0 (with its patent grant), the zlib license
+   and the Lucent permissive text of the One True Awk may live in
+   `components/`, `ports/`, `main/`, `tools/` and `third_party/`. A new one is
+   a line in the table above, a license file in its directory and a note in
+   this page.
 2. **Copyleft does not go into the kernel image.** GPL, LGPL, AGPL and CDDL
    code is not linked into a binary of the MIT tree. A driver or a library
    under such a license lives in a repository of its own, or runs as a
