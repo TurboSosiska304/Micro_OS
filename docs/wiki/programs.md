@@ -76,7 +76,7 @@ to `x86-64`; a name the format does not know is refused before an image is
 written. `--data-base` is for a port whose data is a window of its own (the
 board): the data no longer follows the text, so the script checks its address
 against that number instead of the contiguous rule and also checks where the
-bss will be cleared. The x86-64 port builds its twenty-four images this way:
+bss will be cleared. The x86-64 port builds its twenty-six images this way:
 the
 object is compiled for the window, linked with `programs/program.ld`, turned
 into a `.mox` by the script (`--base 0x02000000 --arch x86-64`), and written
@@ -100,7 +100,7 @@ make x86-smoke     # the same, driven by the smoke test
 
 `tools/mkfs_mfs.c` writes the image: an MBR with one Linux partition at LBA
 2048, a MicroFS volume in it, `/bin`, `/etc` and an empty `/etc/init.d`, the
-twenty-four `.mox` images of the build written to `/bin` with mode `0755`, the
+twenty-six `.mox` images of the build written to `/bin` with mode `0755`, the
 licenses of zlib, PCRE2, Lua and sbase in `/etc/licenses`, the script
 `/etc/hello.lua` and the settings of the machine in `/etc/setting`. It does
 not repeat the layout
@@ -129,7 +129,7 @@ never changed.
 ## `/bin` and the boot
 
 The x86-64 port mounts the MicroFS volume of its disk at `/` and finds
-`/bin` already there: the twenty-four images are files the tool wrote, with
+`/bin` already there: the twenty-six images are files the tool wrote, with
 the mode of a program (`0755`), and no boot creates one:
 
 | File | What it proves |

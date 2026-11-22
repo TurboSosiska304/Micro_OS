@@ -81,6 +81,16 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   not change; `make x86-smoke` runs the interpreter and boots a disk with a
   file of 8 MiB + 1 to check the refusal, and the host test
   `tests/cases/test_exec.c` checks the boundary of the constant.
+- The fourth port of somebody else's code: bc 7.2.0 (BSD-2-Clause) as a
+  static archive and the two names `/bin/bc` and `/bin/dc` of the same
+  engine, with the scripts `/etc/bc.bc` and `/etc/dc.dc` and
+  `/etc/licenses/bc` in the image. The release is configured by the
+  force-included `port/bc_port.h` (no history, no NLS, 64-bit limbs) and its
+  two POSIX calls are answered by the port layer (`fstat` of a descriptor and
+  `sigaction`). The library of a program learned `strdup`, `srand` and
+  `rand`; the host test is `tests/cases/test_bc.c`, and `make x86-smoke` and
+  `make x86-disk-smoke` run the calculator and the RPN one before and after
+  the reset. `bc -l` and `4*a(1)` answer `3.1415926532` at a scale of ten.
 - `make x86-smoke` runs `/bin/lua`: a power of a double (`1024.0`), `math.pi`,
   `string.format("%.3f", 1/3)`, the two values that are not numbers, the
   clock, and the script `/etc/hello.lua` with a table, a file of the VFS and
@@ -105,9 +115,10 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   the headers are thin shims over `ulibc.h`, and `snprintf`/`vsnprintf` share
   the formatter with `printf`. The host test `tests/cases/test_zlib.c` covers
   the checksums, the three stream wrappers and a `gz` file.
-- The x86-64 image has twenty-nine programs: `pcre2grep`, its engine, `lua`
-  and the ten `sb-*` tools join the sixteen of the tree and `zcat`;
-  `make x86-smoke` checks their lines, the four licenses and the count.
+- The x86-64 image has twenty-six programs: `pcre2grep`, its engine, `lua`,
+  `bc`, `dc` and the ten commands of sbase join the eleven of the tree and
+  `zcat`; `make x86-smoke` checks their lines, the five licenses and the
+  count.
 - The third port of somebody else's code, and the first set of commands:
   sbase (MIT) with `cat`, `grep`, `head`, `ls`, `tail`, `wc`, `sort`, `find`,
   `xargs` and `sed` under their canonical names in `/bin` of the x86-64

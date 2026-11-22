@@ -160,11 +160,11 @@ a floor when the port has a store; today the rule is "a rollback is allowed"
 
 The heap is the low identity map and stops below the window of the programs,
 which are placed at 32 MiB; the image of 1.0 ends 1.9 MiB after the base and
-the port allows it up to 16 MiB. The twenty-four programs of `/bin` are built
+the port allows it up to 16 MiB. The twenty-six programs of `/bin` are built
 first:
 `build-x86/hello.mox`, `crash.mox`, `fork.mox`, `badptr.mox`, `signals.mox`,
 `nx.mox`, `echo.mox`, `mkdir.mox`, `rm.mox`, `pwd.mox`, `spawn.mox`,
-`zcat.mox`, `pcre2grep.mox`, `lua.mox` and the ten commands of sbase
+`zcat.mox`, `pcre2grep.mox`, `lua.mox`, `bc.mox`, `dc.mox` and the ten commands of sbase
 (`cat.mox`, `grep.mox`, `head.mox`, `ls.mox`, `tail.mox`, `wc.mox`,
 `sort.mox`, `find.mox`, `xargs.mox`, `sed.mox`) are the images of the window
 (`programs/program.ld` links them for the window, `tools/mkprog.sh` turns
@@ -346,7 +346,7 @@ inverted line has nothing to ask for yet (`docs/debts.md`, K11).
 The disk is the machine's, not a test's: `make x86-disk` writes
 `build-x86/programs.img`, an 8 MB raw image with an MBR, one Linux partition
 at LBA 2048 and a MicroFS volume in it. The volume already carries `/bin`
-(the twenty-four programs), `/etc/setting`, the fixture `/etc/greeting.gz`,
+(the twenty-six programs), `/etc/setting`, the fixture `/etc/greeting.gz`,
 the script `/etc/hello.lua`, and the licenses of zlib, PCRE2, Lua and sbase
 in `/etc/licenses`: the host tool `tools/mkfs_mfs.c`
 (formats and writes) links `components/mfs`, so the layout of the volume has
