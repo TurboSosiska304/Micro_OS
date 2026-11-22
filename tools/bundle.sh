@@ -227,6 +227,8 @@ if [ -f "$X86_BUILD/loader32.elf" ] && [ -f "$X86_BUILD/microos64.bin" ]; then
     cp -f "$ROOT/third_party/zlib/LICENSE" "$STAGE/LICENSE.zlib"
     # Lua is /bin/lua of the same image, under the MIT license of its release.
     cp -f "$ROOT/third_party/lua/LICENSE" "$STAGE/LICENSE.lua"
+    # bc and dc are two names of the same engine and one BSD-2-Clause release.
+    cp -f "$ROOT/third_party/bc/LICENSE" "$STAGE/LICENSE.bc"
     if [ -f "$X86_BUILD/microos64.sig" ] && [ -f "$X86_BUILD/signing.pub" ]; then
         cp -f "$X86_BUILD/microos64.sig" "$STAGE/microos64.sig"
         cp -f "$X86_BUILD/signing.pub" "$STAGE/microos-sign.pub"
@@ -273,6 +275,11 @@ port layer and the one setting of the port (`port/luaconf_port.h`). The
 interpreter of this release does not run yet: its image is past the block the
 kernel reads in one call (`docs/debts.md`).
 
+`/bin/bc` and `/bin/dc` of the disk image are bc 7.2.0 (BSD-2-Clause), one
+engine with two names; `LICENSE.bc` is its license and `third_party/bc` of the
+sources has the note, the version, the port layer and the settings of the
+port (`port/bc_port.h`).
+
 The kernel carries a signature trailer (ADR 0020), and the loader verifies it
 before it copies a byte: an image with a changed byte, without a trailer or
 signed by another key stops with `the image is refused` and never reaches the
@@ -286,7 +293,7 @@ kernel with a port per machine.
 DOC
 
     STAGE_FILES=(loader32.elf microos64.bin run.sh README.md LICENSE.spleen LICENSE.zlib
-        LICENSE.lua)
+        LICENSE.lua LICENSE.bc)
     if [ -f "$STAGE/microos64.sig" ]; then
         STAGE_FILES+=(microos64.sig microos-sign.pub)
     fi

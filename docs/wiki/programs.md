@@ -149,12 +149,15 @@ mode of a program (`0755`), and no boot creates one:
 | `/bin/wc` | the lines, words and bytes of a source (`-l`, `-w`, `-c`) or of descriptor 0 |
 | `/bin/zcat` | a `.gz` of the VFS inflated by zlib 1.3.1 and written to the console or a file |
 | `/bin/lua` | the interpreter of Lua 5.4.7: `-e` and the script `/etc/hello.lua`, read from the volume |
+| `/bin/bc` | the calculator of bc 7.2.0: `-e`, `-f`, a script of the volume, `-l` and `scale`, `ibase`/`obase` |
+| `/bin/dc` | the same engine in RPN: a stack, the operators and the printing command `p` |
 
 The first five talk to the kernel through `programs/prog.h`, because what they
 test is the raw door, the fault, the fork, the edge and the signals. The rest
 are ordinary C programs linked against `components/libc/user`
-([ADR 0016](../adr/0016-userland.md)); `zcat` is also linked against zlib and
-`lua` against the core of Lua 5.4.7, the two libraries of somebody else
+([ADR 0016](../adr/0016-userland.md)); `zcat` is also linked against zlib,
+`lua` against the core of Lua 5.4.7 and `bc`/`dc` against the whole engine of
+bc 7.2.0, the three libraries of somebody else
 ([`docs/porting-programs.md`](../porting-programs.md)). Every one of them
 reads descriptor 0
 when it is given no file (or `-`); `execve` carries the table of the caller, so
@@ -173,6 +176,16 @@ write the same bytes. `zcat -o FILE` inflates it into a file of MicroFS and
 `zcat -t` checks it; the smoke tests compare the count and the text of the
 inflated bytes. `/etc/licenses/zlib` is the zlib license beside the program
 that carries the library, and `docs/licensing.md` has the row.
+
+The volume also carries the two scripts of the calculators: `/etc/bc.bc` is a
+bc script with a power, a square root, the two bases, a function with a loop,
+an array, a string and the math library of `-l`, and `/etc/dc.dc` is the same
+engine in RPN. `bc -l -f /etc/bc.bc < /dev/null` reads the first, `bc -l <
+/etc/bc.bc` reads it on descriptor 0, and `dc /etc/dc.dc` runs the second;
+`/etc/licenses/bc` is the BSD-2-Clause license of the release that both
+programs carry. The shell does not give a program at the prompt a descriptor
+0, so a `bc` with a file and no redirect ends with a fatal I/O error after the
+file (`docs/debts.md`); `bc -e` does not read stdin and needs no redirect.
 
 ## The board: Xtensa code without an MMU
 

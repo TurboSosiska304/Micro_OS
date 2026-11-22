@@ -5,8 +5,8 @@ command of a Unix-like system that were written for a C library and a POSIX
 kernel, built with the compiler and the library of this system and run in the
 window of a program. The first one is zlib and `/bin/zcat`
 ([`third_party/zlib/README.md`](../third_party/zlib/README.md)); the next
-ones are Lua, the tools of sbase and SQLite, and the recipe is written so that
-they are copies of a shape and not new research.
+ones are Lua, bc/dc, the tools of sbase and SQLite, and the recipe is written
+so that they are copies of a shape and not new research.
 
 It is not the recipe of a **port of Micro OS** to another machine: that one is
 [`porting.md`](porting.md), and it is about the contract of `kernel/port/`.

@@ -15,6 +15,7 @@ commercially; the note here is what the tree does.
 | Spleen 8x16 | 2.3.0 | BSD-2-Clause | `third_party/spleen`, `ports/port_x86_64/src/font_spleen.c` | the x86-64 kernel image; `LICENSE.spleen` in its tar |
 | zlib | 1.3.1 | zlib | `third_party/zlib`, `ports/port_x86_64/programs/zcat.c` | `/bin/zcat` of the x86-64 MicroFS image; `/etc/licenses/zlib` in the image and `LICENSE.zlib` in the x86-64 tar |
 | Lua | 5.4.7 | MIT | `third_party/lua`, `ports/port_x86_64/programs` (the `main` is the release's `lua.c`) | `/bin/lua` of the x86-64 MicroFS image; `/etc/licenses/lua` in the image and `LICENSE.lua` in the x86-64 tar |
+| bc and dc | 7.2.0 | BSD-2-Clause | `third_party/bc` (the `main` is the release's `main.c`) | `/bin/bc` and `/bin/dc` of the x86-64 MicroFS image; `/etc/licenses/bc` in the image and `LICENSE.bc` in the x86-64 tar |
 
 Spleen is a font by Frederic Cambus; the license and the note are in
 [`third_party/spleen`](../third_party/spleen/README.md). The 8x16 table is
@@ -40,6 +41,14 @@ software, so the image carries `/etc/licenses/lua` beside `/bin/lua` and
 `tools/bundle.sh` puts `LICENSE.lua` into the x86-64 archive. The text is the
 MIT of the release and not a second copy of the MIT of this tree: the two
 notice lines are different and the tree keeps both.
+
+bc and dc are the calculators of Gavin D. Howard, one engine with two names;
+the version, the files, the port layer and the configuration of the port are
+in [`third_party/bc`](../third_party/bc/README.md). The 2-Clause BSD license
+keeps its copyright notice with a copy of the source, so the image carries
+`/etc/licenses/bc` beside `/bin/bc` and `/bin/dc`, and `tools/bundle.sh` puts
+`LICENSE.bc` into the x86-64 archive. The text is the BSD-2-Clause of the
+release and not the MIT of the tree; the two are not merged.
 
 ## The rule
 

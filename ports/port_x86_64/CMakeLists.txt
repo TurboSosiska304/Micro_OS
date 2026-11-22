@@ -526,6 +526,91 @@ add_libc_program(lua
     COMPILE_OPTIONS -DULIBC_WITH_FLOAT -include "${LUA_DIR}/port/luaconf_port.h" -Os
 )
 
+# --- bc and dc: the calculators of arbitrary precision ------------------------
+#
+# Gavin D. Howard's bc 7.2.0 (BSD-2-Clause) is one library and two programs:
+# `main.c` reads the name it was entered with and runs `bc_main` or `dc_main`,
+# so the two images carry the same engine and the smoke tests reach the two
+# names of /bin. The release has no configuration file: `Makefile.in` puts the
+# settings on the command line, and `port/bc_port.h` is force-included with
+# the same settings so that the release's sources are untouched.
+#
+# The library is built without -mgeneral-regs-only because it links the whole
+# of `src/stdlib.c` for `strtol` and `strtoul`. That file also holds `strtod`
+# and `qsort`, which a `double` in the text makes an object of SSE; the port
+# of this machine runs one program at a time and sets CR4.OSFXSR, so the
+# choice is the one Lua made (`docs/debts.md`). bc itself computes in the
+# integers of its limbs.
+set(BC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/bc")
+set(BC_SOURCES
+    "${BC_DIR}/src/args.c"
+    "${BC_DIR}/src/bc.c"
+    "${BC_DIR}/src/bc_lex.c"
+    "${BC_DIR}/src/bc_parse.c"
+    "${BC_DIR}/src/data.c"
+    "${BC_DIR}/src/dc.c"
+    "${BC_DIR}/src/dc_lex.c"
+    "${BC_DIR}/src/dc_parse.c"
+    "${BC_DIR}/src/file.c"
+    "${BC_DIR}/src/lang.c"
+    "${BC_DIR}/src/lex.c"
+    "${BC_DIR}/src/main.c"
+    "${BC_DIR}/src/num.c"
+    "${BC_DIR}/src/opt.c"
+    "${BC_DIR}/src/parse.c"
+    "${BC_DIR}/src/program.c"
+    "${BC_DIR}/src/rand.c"
+    "${BC_DIR}/src/read.c"
+    "${BC_DIR}/src/vector.c"
+    "${BC_DIR}/src/vm.c"
+    # The help and the math library (`-l`), generated from the texts of
+    # `gen/` by the release's own `gen/strgen.c`; the port note has the
+    # command and the reason they are files of the tree.
+    "${BC_DIR}/port/generated/bc_help.c"
+    "${BC_DIR}/port/generated/dc_help.c"
+    "${BC_DIR}/port/generated/lib.c"
+    "${BC_DIR}/port/generated/lib2.c"
+    # The two calls of the machine that the release takes from POSIX: a stat
+    # of a descriptor and a signal handler.
+    "${BC_DIR}/port/bc_os.c"
+)
+
+microos_userland_library(microos_user_bc FLOAT
+    SOURCES ${BC_SOURCES}
+    INCLUDES "${BC_DIR}/include" "${BC_DIR}/port"
+    # The warnings are the ones a release of upstream C answers in the build
+    # of every distribution; the exception stays here rather than in the
+    # vendored source.
+    COMPILE_OPTIONS "-include" "${BC_DIR}/port/bc_port.h"
+        -Wno-sign-compare -Wno-unused-parameter -Wno-clobbered -Os
+)
+
+set_source_files_properties(${BC_SOURCES}
+    PROPERTIES OBJECT_DEPENDS "${BC_DIR}/port/bc_port.h")
+
+# The programs: the same archive, the same `main`, and the name of the image
+# that `argv[0]` carries. The arena is the bss of the image; the math library
+# of `-l` and the bytecode of a script live in it, and 768 KiB is the room the
+# format leaves (the bss is capped at 1 MiB).
+foreach(calculator bc dc)
+    add_libc_program(${calculator}
+        FLOAT
+        LIBRARIES microos_user_bc
+        MAIN "${BC_DIR}/src/main.c"
+        INCLUDES "${BC_DIR}/include" "${BC_DIR}/port"
+        DEFINES ULIBC_HEAP_SIZE=786432u
+        SOURCES "${LIBC_USER_DIR}/src/malloc.c"
+                "${LIBC_USER_DIR}/src/stdlib.c"
+                "${LIBC_USER_DIR}/src/setjmp.c"
+                "${LIBC_USER_DIR}/src/ctype.c"
+                "${LIBC_USER_DIR}/src/time.c"
+                "${LIBC_USER_DIR}/src/strdup.c"
+                "${LIBC_USER_DIR}/src/rand.c"
+        COMPILE_OPTIONS -include "${BC_DIR}/port/bc_port.h" -Os
+    )
+endforeach()
+
+
 add_executable(microos64
     ${KERNEL_SOURCES}
     ${KSHELL_SOURCES}

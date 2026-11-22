@@ -70,6 +70,12 @@ FIRST_BOOT = [
     "exec /bin/cat /etc/hello.lua",
     "exec /bin/lua -e print(2^10)",
     "exec /bin/lua /etc/hello.lua",
+    # The third port: the calculator and its RPN sibling, out of files of the
+    # volume. The script of /etc is read twice - as a file of `-f` and on
+    # descriptor 0 - and the dc script is the same engine in RPN.
+    "exec /bin/bc -e 2^100",
+    "exec /bin/bc -l -f /etc/bc.bc < /dev/null",
+    "exec /bin/dc /etc/dc.dc",
 ]
 
 SECOND_BOOT = [
@@ -86,6 +92,11 @@ SECOND_BOOT = [
     "exec /bin/wc -c /persist.gz.txt",
     "ls /etc/licenses",
     "exec /bin/lua /etc/hello.lua",
+    # The calculator out of the same volume, after the reset: the script of
+    # /etc is still there and the engine reads it the same way.
+    "exec /bin/bc -e 2^100",
+    "exec /bin/bc -l -f /etc/bc.bc < /dev/null",
+    "exec /bin/dc /etc/dc.dc",
 ]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -234,7 +245,9 @@ def check(first: str, second: str) -> list:
         "hello" in first_answers[1]
         and "cat" in first_answers[1]
         and "zcat" in first_answers[1]
-        and "lua" in first_answers[1],
+        and "lua" in first_answers[1]
+        and "bc" in first_answers[1]
+        and "dc" in first_answers[1],
         first_answers[1],
     )
     expect(
@@ -285,6 +298,25 @@ def check(first: str, second: str) -> list:
         and "the program exited with 0" in first_answers[10],
         first_answers[10],
     )
+    expect(
+        "the calculator computes out of the volume",
+        "1267650600228229401496703205376" in first_answers[11]
+        and "the program exited with 0" in first_answers[11],
+        first_answers[11],
+    )
+    expect(
+        "the script of bc runs at the first boot",
+        "the sum is right" in first_answers[12]
+        and "3.1415926532" in first_answers[12]
+        and "the program exited with 0" in first_answers[12],
+        first_answers[12],
+    )
+    expect(
+        "the RPN calculator runs out of the volume",
+        "5" in first_answers[13] and "1024" in first_answers[13]
+        and "the program exited with 0" in first_answers[13],
+        first_answers[13],
+    )
 
     # --- the second boot: the same image, the same machine
     expect(
@@ -313,7 +345,8 @@ def check(first: str, second: str) -> list:
     expect("every command of the second boot is answered", all(second_answers), "")
     expect(
         "the programs are still on the disk",
-        "hello" in second_answers[0] and "wc" in second_answers[0],
+        "hello" in second_answers[0] and "wc" in second_answers[0]
+        and "bc" in second_answers[0] and "dc" in second_answers[0],
         second_answers[0],
     )
     expect(
@@ -369,7 +402,8 @@ def check(first: str, second: str) -> list:
     )
     expect(
         "the licenses of the ported programs survived the reset",
-        "lua" in second_answers[11] and "zlib" in second_answers[11],
+        "lua" in second_answers[11] and "zlib" in second_answers[11]
+        and "bc" in second_answers[11],
         second_answers[11],
     )
     expect(
@@ -377,6 +411,25 @@ def check(first: str, second: str) -> list:
         "lua: hello from /etc/hello.lua" in second_answers[12]
         and "lua: read\ta line written by lua" in second_answers[12],
         second_answers[12],
+    )
+    expect(
+        "the calculator computes after the reset",
+        "1267650600228229401496703205376" in second_answers[13]
+        and "the program exited with 0" in second_answers[13],
+        second_answers[13],
+    )
+    expect(
+        "the script of bc still runs after the reset",
+        "the sum is right" in second_answers[14]
+        and "3.1415926532" in second_answers[14]
+        and "the program exited with 0" in second_answers[14],
+        second_answers[14],
+    )
+    expect(
+        "the RPN calculator still runs after the reset",
+        "5" in second_answers[15] and "1024" in second_answers[15]
+        and "the program exited with 0" in second_answers[15],
+        second_answers[15],
     )
 
     return checks

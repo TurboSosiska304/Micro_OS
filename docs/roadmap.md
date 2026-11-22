@@ -314,6 +314,16 @@ written when the project was an operating system for one board; the numbers
       `double`. The host test is `tests/cases/test_lua.c`; the interpreter
       itself waits for K3 below, because 164 KiB is past the block
       `sys_execve` reads in one call
+* [x] The third port of a program of somebody else: bc 7.2.0 (BSD-2-Clause)
+      as a static archive and the two names `/bin/bc` and `/bin/dc` of the
+      same engine, with the scripts `/etc/bc.bc` and `/etc/dc.dc` and
+      `/etc/licenses/bc` in the image. The release is configured by a
+      force-included `port/bc_port.h` (no history, no NLS, 64-bit limbs) and
+      its two POSIX calls are answered by the port layer (`fstat` of a
+      descriptor and `sigaction`). The library of a program learned `strdup`
+      and `srand`/`rand`; the host test is `tests/cases/test_bc.c` and the
+      smoke tests run the calculator and the RPN one before and after a reset
+      of the disk. The image is 116 KiB and its arena is 768 KiB of the bss
 * [ ] The image of a program larger than `KSYS_MAX_IO`: `execve` reads the
       image into one block of 64 KiB and refuses a larger one (`/bin/lua`),
       and the answer of the refusal names the wrong reason. A cap that is the
