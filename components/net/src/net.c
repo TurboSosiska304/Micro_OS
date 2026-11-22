@@ -17,8 +17,10 @@
 
 #include "kernel/clock.h"
 #include "kernel/config.h"
+#include "kernel/errno.h"
 #include "kernel/log.h"
 #include "kernel/net.h"
+#include "kernel/vfs.h"
 #include "kshell/kshell.h"
 #include "net/mqtt.h"
 #include "net/net_http.h"
@@ -74,9 +76,118 @@ static const struct http_transport s_transport = {
     .close = sock_close,
 };
 
+const struct http_transport *net_http_transport(void)
+{
+    return &s_transport;
+}
+
 int net_http_get(const char *url, char *body, k_size_t size, struct http_response *out)
 {
     return http_get(&s_transport, url, body, size, out);
+}
+
+/* --- the body of a download is a file of the VFS --- */
+
+/*
+ * The sink of a file. The descriptor is opened by the caller of the
+ * download; `reset` closes it and opens the path again with a truncate, which
+ * is what the whole object after a Range needs.
+ */
+struct file_sink {
+    struct vfs_file file;
+    k_u8_t priv[VFS_FILE_DATA_SIZE];
+    const char *path;
+};
+
+static int file_sink_write(void *ctx, const void *data, k_size_t size)
+{
+    struct file_sink *sink = (struct file_sink *)ctx;
+    int rc;
+
+    rc = vfs_write(&sink->file, data, size);
+
+    if (rc < 0) {
+        return rc;
+    }
+
+    return rc;
+}
+
+static int file_sink_reset(void *ctx)
+{
+    struct file_sink *sink = (struct file_sink *)ctx;
+
+    (void)vfs_close(&sink->file);
+    sink->file.offset = 0;
+
+    if (vfs_open(sink->path, VFS_O_RDWR | VFS_O_CREAT | VFS_O_TRUNC, &sink->file, sink->priv) !=
+        0) {
+        return -1;
+    }
+
+    return 0;
+}
+
+int net_http_download_to(const struct http_transport *transport, const char *url, const char *path,
+                         bool resume, struct http_stream *out)
+{
+    struct file_sink sink;
+    struct http_stream stream;
+    k_u64_t have = 0;
+    int rc;
+
+    if (url == NULL || path == NULL) {
+        return HTTP_INVALID;
+    }
+
+    memset(&sink, 0, sizeof(sink));
+    sink.path = path;
+
+    rc = vfs_open(path, VFS_O_RDWR | VFS_O_CREAT, &sink.file, sink.priv);
+    if (rc != 0) {
+        return HTTP_ERROR;
+    }
+
+    if (resume) {
+        struct vfs_stat info;
+
+        if (vfs_stat(path, &info) == 0 && info.type == 1) {
+            have = info.size;
+        }
+
+        /* The descriptor writes where the file ends: the bytes of the run
+         * before are kept and the Range asks the server for the rest. */
+        sink.file.offset = have;
+    }
+
+    memset(&stream, 0, sizeof(stream));
+    stream.transport = (transport != NULL) ? transport : &s_transport;
+    stream.url = url;
+    stream.sink.ctx = &sink;
+    stream.sink.write = file_sink_write;
+    stream.sink.reset = file_sink_reset;
+    stream.resume_from = have;
+    stream.max_redirects = HTTP_REDIRECT_MAX;
+    stream.timeout_ms = NET_DOWNLOAD_TIMEOUT_MS;
+
+    rc = http_stream(&stream);
+
+    (void)vfs_close(&sink.file);
+
+    if (out != NULL) {
+        *out = stream;
+    }
+
+    if (rc == HTTP_OK && stream.status != 200 && stream.status != 206) {
+        return HTTP_ERROR;
+    }
+
+    return rc;
+}
+
+int net_http_download(const char *url, const char *path, bool resume, struct http_stream *out)
+{
+    return net_http_download_to(&s_transport, url, path, resume, out);
 }
 #endif /* MICRO_OS_NET_HTTP */
 
@@ -233,6 +344,87 @@ static int cmd_http(int argc, char **argv)
 
     return KSHELL_OK;
 }
+
+/*
+ * The console face of the stream (ADR 0024 §2): a URL and a file, and a
+ * second run of the same command continues a file that was cut. The bytes
+ * never pass through the memory of the shell: they go from the socket to the
+ * filesystem a piece at a time.
+ */
+static int cmd_wget(int argc, char **argv)
+{
+    struct http_stream stream;
+    struct vfs_stat info;
+    k_u64_t have = 0;
+    bool resume = false;
+    int rc;
+
+    if (argc != 3) {
+        kshell_printf("usage: wget <url> <file>\n");
+        return KSHELL_USAGE;
+    }
+
+    if (vfs_stat(argv[2], &info) == 0) {
+        if (info.type != 1) {
+            kshell_printf("wget: %s is not a file\n", argv[2]);
+            return KSHELL_ERROR;
+        }
+
+        have = info.size;
+        resume = have > 0;
+    }
+
+    rc = net_http_download(argv[1], argv[2], resume, &stream);
+    if (rc != HTTP_OK) {
+        /*
+         * A file this command made and could not fill is not a file - unless
+         * the body was cut, which is exactly the file a second run of the
+         * command continues (ADR 0024 §2).
+         */
+        if (!resume && rc != HTTP_SHORT) {
+            (void)vfs_unlink(argv[2]);
+        }
+
+        switch (rc) {
+        case HTTP_TIMEOUT:
+            kshell_printf("wget: %s: the transfer took too long\n", argv[1]);
+            break;
+        case HTTP_REDIRECT:
+            kshell_printf("wget: %s: too many redirects\n", argv[1]);
+            break;
+        case HTTP_SHORT:
+            kshell_printf("wget: %s: the answer ended before the body did\n", argv[1]);
+            break;
+        case HTTP_SINK:
+            kshell_printf("wget: %s: the file could not keep the bytes\n", argv[2]);
+            break;
+        case HTTP_PROTOCOL:
+            kshell_printf("wget: %s: a body this client cannot read\n", argv[1]);
+            break;
+        case HTTP_TOO_LONG:
+            kshell_printf("wget: %s: the address or the answer is too long\n", argv[1]);
+            break;
+        default:
+            kshell_printf("wget: %s: the server answered %d\n", argv[1], stream.status);
+            break;
+        }
+
+        return KSHELL_ERROR;
+    }
+
+    kshell_printf("wget: HTTP %d, %llu byte(s) to %s", stream.status,
+                  (unsigned long long)stream.length, argv[2]);
+
+    if (resume && stream.resumed) {
+        kshell_printf(" (resumed at %llu)", (unsigned long long)have);
+    } else if (stream.redirects > 0) {
+        kshell_printf(" (%u redirect(s))", (unsigned)stream.redirects);
+    }
+
+    kshell_printf("\n");
+
+    return KSHELL_OK;
+}
 #endif /* MICRO_OS_NET_HTTP */
 
 #if MICRO_OS_NET_NTP
@@ -336,6 +528,7 @@ int net_register(void)
      */
 #if MICRO_OS_NET_HTTP
     rc |= kshell_register("http", "the HTTP client: http get <url>", cmd_http);
+    rc |= kshell_register("wget", "download a file: wget <url> <file>", cmd_wget);
 #endif
 #if MICRO_OS_NET_NTP
     rc |= kshell_register("ntp", "set the clock from NTP: ntp [server]", cmd_ntp);

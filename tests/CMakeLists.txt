@@ -48,6 +48,7 @@ if(NOT ESP_PLATFORM)
         cases/test_smp.c
         cases/test_sign.c
         cases/test_progs.c
+        cases/test_zlib.c
     )
 
     # The tests of a component that a build leaves out are left out with it:
@@ -59,6 +60,9 @@ if(NOT ESP_PLATFORM)
        AND MICRO_OS_NET_NTP AND MICRO_OS_NET_MQTT)
         list(APPEND MICRO_OS_TEST_CASES cases/test_net.c)
     endif()
+    if(MICRO_OS_NET AND MICRO_OS_NET_HTTP)
+        list(APPEND MICRO_OS_TEST_CASES cases/test_pkg.c)
+    endif()
     if(MICRO_OS_WIFI)
         list(APPEND MICRO_OS_TEST_CASES cases/test_wifi.c)
     endif()
@@ -68,6 +72,8 @@ if(NOT ESP_PLATFORM)
         framework/ktest.c
         ${MICRO_OS_TEST_CASES}
     )
+
+    set(MICROOS_ZLIB_DIR "${CMAKE_SOURCE_DIR}/third_party/zlib")
 
     target_include_directories(microos_tests PRIVATE
         "${CMAKE_CURRENT_LIST_DIR}/include"
@@ -87,7 +93,38 @@ if(NOT ESP_PLATFORM)
         # The directory of the `progs` partition (ADR 0022): read by the port
         # of the board and by the test, written by tools/progs_image.py.
         "${CMAKE_SOURCE_DIR}/components/port_esp32/include"
+        # zlib and the headers of its port (the two allocation hooks).
+        "${MICROOS_ZLIB_DIR}"
+        "${MICROOS_ZLIB_DIR}/port"
     )
+
+    # zlib is the first third-party library of the tree, and the host test is
+    # its second build: the same sources with the headers of the host and the
+    # port layer of `third_party/zlib/port` for the two allocation hooks. The
+    # guest build (the static archive of `ports/port_x86_64`) is checked by
+    # `make x86-smoke`, which runs /bin/zcat on a .gz of MicroFS.
+    set(MICROOS_ZLIB_SOURCES
+        "${MICROOS_ZLIB_DIR}/adler32.c"
+        "${MICROOS_ZLIB_DIR}/compress.c"
+        "${MICROOS_ZLIB_DIR}/crc32.c"
+        "${MICROOS_ZLIB_DIR}/deflate.c"
+        "${MICROOS_ZLIB_DIR}/gzclose.c"
+        "${MICROOS_ZLIB_DIR}/gzlib.c"
+        "${MICROOS_ZLIB_DIR}/gzread.c"
+        "${MICROOS_ZLIB_DIR}/gzwrite.c"
+        "${MICROOS_ZLIB_DIR}/infback.c"
+        "${MICROOS_ZLIB_DIR}/inffast.c"
+        "${MICROOS_ZLIB_DIR}/inflate.c"
+        "${MICROOS_ZLIB_DIR}/inftrees.c"
+        "${MICROOS_ZLIB_DIR}/trees.c"
+        "${MICROOS_ZLIB_DIR}/uncompr.c"
+        "${MICROOS_ZLIB_DIR}/zutil.c"
+    )
+    set_source_files_properties(${MICROOS_ZLIB_SOURCES}
+        PROPERTIES COMPILE_DEFINITIONS "MY_ZCALLOC=1;HAVE_UNISTD_H=1;HAVE_STDARG_H=1"
+                   COMPILE_OPTIONS "-Wno-sign-compare")
+    set_source_files_properties("${MICROOS_ZLIB_DIR}/port/zlib_os.c"
+        PROPERTIES COMPILE_DEFINITIONS "MY_ZCALLOC=1")
 
     target_sources(microos_tests PRIVATE
         "${CMAKE_SOURCE_DIR}/components/drivers/src/input_debounce.c"        "${CMAKE_SOURCE_DIR}/components/drivers/src/battery_soc.c"
@@ -101,6 +138,8 @@ if(NOT ESP_PLATFORM)
         "${CMAKE_SOURCE_DIR}/ports/port_x86_64/loader/ed25519.c"
         "${CMAKE_SOURCE_DIR}/ports/port_x86_64/loader/sign_image.c"
         "${CMAKE_SOURCE_DIR}/components/port_esp32/src/progs_format.c"
+        ${MICROOS_ZLIB_SOURCES}
+        "${MICROOS_ZLIB_DIR}/port/zlib_os.c"
     )
 
     # The FAT reader comes from the component when the host build links it
@@ -145,6 +184,9 @@ if(NOT ESP_PLATFORM)
 
     if(MICRO_OS_NET)
         list(APPEND MICRO_OS_TEST_LIBS microos_net)
+    endif()
+    if(MICRO_OS_NET AND MICRO_OS_NET_HTTP)
+        list(APPEND MICRO_OS_TEST_LIBS microos_pkg)
     endif()
     if(MICRO_OS_WIFI)
         list(APPEND MICRO_OS_TEST_LIBS microos_wifi)

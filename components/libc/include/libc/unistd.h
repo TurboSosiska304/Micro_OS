@@ -104,6 +104,12 @@ int microos_dup2(int oldfd, int newfd);
 long microos_lseek(int fd, long offset, int whence);
 int microos_unlink(const char *path);
 int microos_mkdir(const char *path);
+/*
+ * Move an object inside one filesystem (ADR 0024 §5). The name `to` must be
+ * free: the call does not replace an object. -1 and EPERM/XDEV/NOTSUP when
+ * the volume cannot do it.
+ */
+int microos_rename(const char *from, const char *to);
 int microos_waitpid(int pid, int *status, int flags);
 int microos_fork(void);
 int microos_getpid(void);
@@ -150,6 +156,7 @@ const char *microos_strerror(int code);
 #endif /* MICROOS_LIBC_KEEP_NAMES */
 #define unlink microos_unlink
 #define mkdir microos_mkdir
+#define rename microos_rename
 #define waitpid microos_waitpid
 #define fork microos_fork
 #define getpid microos_getpid

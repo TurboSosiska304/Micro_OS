@@ -447,6 +447,44 @@ static int fat_vfs_unlink(void *ctx, const char *path)
     return rc;
 }
 
+/*
+ * The atomic step of an install (ADR 0024 §5): the bytes are already in the
+ * new name, and this call makes it the old one. The device is flushed when
+ * the entry is written, as mkdir and unlink do.
+ */
+static int fat_vfs_rename(void *ctx, const char *from, const char *to)
+{
+    struct fat_volume *vol = (struct fat_volume *)ctx;
+    const char *from_relative;
+    const char *to_relative;
+    int rc;
+
+    if (vol == NULL || !vol->mounted) {
+        return KERR_INVAL;
+    }
+
+    from_relative = fat_relative(vol, from);
+    to_relative = fat_relative(vol, to);
+
+    if (from_relative == NULL || to_relative == NULL) {
+        return KERR_NOENT;
+    }
+
+    rc = volume_lock(vol);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = fat_dir_rename(vol, from_relative, to_relative);
+    if (rc == 0) {
+        rc = fat_flush(vol);
+    }
+
+    k_mutex_unlock(&vol->lock);
+
+    return rc;
+}
+
 static int fat_vfs_statfs(void *ctx, struct vfs_statfs *out)
 {
     struct fat_volume *vol = (struct fat_volume *)ctx;
@@ -646,6 +684,7 @@ static const struct vfs_operations g_fat_operations = {
     .stat = fat_vfs_stat,
     .mkdir = fat_vfs_mkdir,
     .unlink = fat_vfs_unlink,
+    .rename = fat_vfs_rename,
     .statfs = fat_vfs_statfs,
     .strerror = fat_strerror,
     .umount = fat_vfs_umount,

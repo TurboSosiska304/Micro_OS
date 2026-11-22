@@ -40,67 +40,13 @@
 #include "kernel/port/mem.h"
 #include "kernel/port/time.h"
 #include "port_x86_64_net.h"
+#include "port_x86_64_pci.h"
 
-/* --- the configuration space of the PCI bus ------------------------------- */
-
-/*
- * Mechanism 1, the one every PC has had since the 440FX: a 32-bit address
- * written to 0xCF8 and the answer read from 0xCFC. The bus of the machine is
- * flat in QEMU, and a device under a bridge is a scan this driver does not
- * need yet.
- */
-#define PCI_CONFIG_ADDRESS 0xCF8u
-#define PCI_CONFIG_DATA 0xCFC
-
-#define PCI_VENDOR 0x00u
-#define PCI_DEVICE 0x02u
-#define PCI_COMMAND 0x04u
-#define PCI_BAR0 0x10u
-#define PCI_HEADER_TYPE 0x0Eu
-
-#define PCI_COMMAND_IO 0x0001u
-#define PCI_COMMAND_MEMORY 0x0002u
-#define PCI_COMMAND_BUS_MASTER 0x0004u
+/* --- the card on the PCI bus ---------------------------------------------- */
 
 #define PCI_VENDOR_REDHAT 0x1AF4u
 #define PCI_DEVICE_VIRTIO_NET_LEGACY 0x1000u
 #define PCI_DEVICE_VIRTIO_NET_MODERN 0x1041u
-
-static k_u32_t pci_read32(k_u8_t bus, k_u8_t slot, k_u8_t function, k_u8_t offset)
-{
-    k_u32_t address = 0x80000000u | ((k_u32_t)bus << 16) | ((k_u32_t)slot << 11) |
-                      ((k_u32_t)function << 8) | (offset & 0xFCu);
-
-    port_outl(PCI_CONFIG_ADDRESS, address);
-
-    return port_inl(PCI_CONFIG_DATA);
-}
-
-static void pci_write32(k_u8_t bus, k_u8_t slot, k_u8_t function, k_u8_t offset, k_u32_t value)
-{
-    k_u32_t address = 0x80000000u | ((k_u32_t)bus << 16) | ((k_u32_t)slot << 11) |
-                      ((k_u32_t)function << 8) | (offset & 0xFCu);
-
-    port_outl(PCI_CONFIG_ADDRESS, address);
-    port_outl(PCI_CONFIG_DATA, value);
-}
-
-static k_u16_t pci_read16(k_u8_t bus, k_u8_t slot, k_u8_t function, k_u8_t offset)
-{
-    k_u32_t value = pci_read32(bus, slot, function, offset & 0xFCu);
-
-    return (k_u16_t)((value >> ((offset & 2u) * 8u)) & 0xFFFFu);
-}
-
-static void pci_write16(k_u8_t bus, k_u8_t slot, k_u8_t function, k_u8_t offset, k_u16_t value)
-{
-    k_u32_t old = pci_read32(bus, slot, function, offset & 0xFCu);
-    k_u32_t shift = (offset & 2u) * 8u;
-    k_u32_t mask = 0xFFFFu << shift;
-
-    pci_write32(bus, slot, function, offset & 0xFCu,
-                (old & ~mask) | (((k_u32_t)value << shift) & mask));
-}
 
 /* --- the legacy interface of virtio --------------------------------------- */
 
@@ -412,57 +358,39 @@ static bool vio_rx_fill(void)
  */
 static bool vio_probe(void)
 {
-    k_u8_t bus;
-    k_u8_t slot;
-    k_u8_t function;
+    struct port_x86_64_pci_device card;
+    k_u32_t bar0;
 
-    for (bus = 0; bus < 1u; bus++) {
-        for (slot = 0; slot < 32u; slot++) {
-            for (function = 0; function < 8u; function++) {
-                k_u16_t vendor = pci_read16(bus, slot, function, PCI_VENDOR);
-                k_u16_t device;
-                k_u32_t bar0;
-                k_u16_t command;
-
-                if (vendor != PCI_VENDOR_REDHAT) {
-                    continue;
-                }
-
-                device = pci_read16(bus, slot, function, PCI_DEVICE);
-
-                if (device == PCI_DEVICE_VIRTIO_NET_MODERN) {
-                    kerror("virtio0: the machine offers only the modern virtio "
-                           "interface, which this driver does not speak");
-                    return false;
-                }
-
-                if (device != PCI_DEVICE_VIRTIO_NET_LEGACY) {
-                    continue;
-                }
-
-                bar0 = pci_read32(bus, slot, function, PCI_BAR0);
-
-                if ((bar0 & 1u) == 0u) {
-                    kerror("virtio0: the legacy BAR is not an I/O window");
-                    return false;
-                }
-
-                g_vio_base = (k_u16_t)(bar0 & ~3u);
-
-                /* The window and the bus are the two switches of the card:
-                 * without the first the registers read as nothing, without
-                 * the second the device is not allowed to use the memory of
-                 * the rings. */
-                command = pci_read16(bus, slot, function, PCI_COMMAND);
-                command |= PCI_COMMAND_IO | PCI_COMMAND_MEMORY | PCI_COMMAND_BUS_MASTER;
-                pci_write16(bus, slot, function, PCI_COMMAND, command);
-
-                return true;
-            }
-        }
+    /*
+     * A machine with a modern-only card is named instead of silently left
+     * without a network: the driver speaks the legacy window, and a card
+     * that has none would answer "no" for a reason nobody could see.
+     */
+    if (port_x86_64_pci_find(PCI_VENDOR_REDHAT, PCI_DEVICE_VIRTIO_NET_MODERN, NULL)) {
+        kerror("virtio0: the machine offers only the modern virtio "
+               "interface, which this driver does not speak");
+        return false;
     }
 
-    return false;
+    if (!port_x86_64_pci_find(PCI_VENDOR_REDHAT, PCI_DEVICE_VIRTIO_NET_LEGACY, &card)) {
+        return false;
+    }
+
+    bar0 = port_x86_64_pci_read32(&card, PCI_BAR0);
+
+    if ((bar0 & 1u) == 0u) {
+        kerror("virtio0: the legacy BAR is not an I/O window");
+        return false;
+    }
+
+    g_vio_base = (k_u16_t)(bar0 & ~3u);
+
+    /* The window and the bus are the two switches of the card: without the
+     * first the registers read as nothing, without the second the device is
+     * not allowed to use the memory of the rings. */
+    port_x86_64_pci_enable(&card, PCI_COMMAND_IO | PCI_COMMAND_MEMORY | PCI_COMMAND_BUS_MASTER);
+
+    return true;
 }
 
 static bool vio_start(void)

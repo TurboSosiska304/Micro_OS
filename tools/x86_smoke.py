@@ -131,6 +131,22 @@ COMMANDS = [
     # host tests run; here the last stage is a program of ring 3 as well,
     # and it reads the descriptor the stage built for it.
     "mkdir /tmp",
+    # The first port of a program of somebody else (zlib): the .gz is a file
+    # of the image, zcat inflates it with the library of the guest, and the
+    # bytes reach a file of MicroFS and the console. `wc -c` is the count of
+    # the fixture and `cat` the text, so a copy that lost a byte is visible.
+    "exec /bin/zcat -o /tmp/greeting.txt /etc/greeting.gz",
+    "exec /bin/wc -c /tmp/greeting.txt",
+    "exec /bin/cat /tmp/greeting.txt",
+    "exec /bin/zcat -t /etc/greeting.gz",
+    # The verbose line is the `%llu` of the formatter of the program and the
+    # count of the stream, on the error descriptor and not in the data.
+    "exec /bin/zcat -v -t /etc/greeting.gz",
+    "exec /bin/zcat /etc/no-such.gz",
+    # The same stream through a pipe: zcat reads descriptor 0 and the port
+    # layer waits out the EAGAIN of the producer that is still writing.
+    "cat /etc/greeting.gz | /bin/zcat",
+    "exec /bin/ls /etc/licenses",
     "echo hi > /tmp/f",
     "cat /tmp/f",
     "cat < /tmp/f",
@@ -830,8 +846,9 @@ def check(output: str) -> list:
     # filesystem and not a line the kernel printed about itself.
     bin_listing = answer("ls /bin")
     expect("the program is a file in /bin", "hello" in bin_listing)
-    # All fifteen are objects of the volume the boot mounted, with the mode
-    # the tool gave them; a missing one is a tool or a build that lost it.
+    # Every program of the port is an object of the volume the boot mounted,
+    # with the mode the tool gave it; a missing one is a tool or a build that
+    # lost it.
     stat_answer = answer("stat /etc/setting")
     expect(
         "stat prints the mode in octal",
@@ -852,7 +869,7 @@ def check(output: str) -> list:
         free_answer,
     )
     expect(
-        "the fifteen programs are files of the disk",
+        "the programs of the port are files of the disk",
         all(
             name in bin_listing
             for name in (
@@ -871,6 +888,7 @@ def check(output: str) -> list:
                 "rm",
                 "pwd",
                 "spawn",
+                "zcat",
             )
         ),
         bin_listing[-200:],
@@ -952,9 +970,12 @@ def check(output: str) -> list:
 
     # --- the systems of /etc (ADR 0021)
     # The boot wrote the three files of the tree on the volume; `config list`
-    # names them and says which one this machine applies. `display` and
-    # `font` are the panel and the font of the board: the key is written and
-    # kept, and the machine says it does not apply it.
+    # names them and says which one this machine applies. `display` is the
+    # panel of the board: the key is written and kept, and the machine says it
+    # does not apply it. `font` is applied by this machine for its line gap
+    # (tools/x86_vga_smoke.py reads the rows and the step of a line out of the
+    # picture); `scale`, `columns` and `rows` are the cap of the panel and are
+    # kept with a sentence.
     systems = answer("config list")
     expect(
         "config list names the systems of the tree",
@@ -975,14 +996,16 @@ def check(output: str) -> list:
         "display.rotation=0" in answer("config get display.rotation"),
         answer("config get display.rotation"),
     )
-    # The console is the system of this machine: the theme changes the
-    # attribute of every cell of the VGA, and the log line is the number the
-    # port wrote (0x70: black on light grey).
+    # The console is the system of this machine: the theme repaints the
+    # screen, and the log line names the pair and the screen it was put on.
+    # The screen of this machine is the framebuffer of ADR 0023; the text mode
+    # of a machine without the interface is checked by tools/x86_vga_smoke.py,
+    # which reads the attribute of every cell there.
     themed = answer("config set console.theme light")
     expect("config set applies the console", "console.theme=light" in themed, themed)
     expect(
-        "the theme of the console reaches the attributes of the VGA",
-        "the attribute of the screen 112" in themed,
+        "the theme of the console reaches the screen",
+        "console: theme light, invert 0, the screen the framebuffer of 1280x800" in themed,
         themed,
     )
     expect(
@@ -1105,6 +1128,53 @@ def check(output: str) -> list:
     pwd = answer("exec /bin/pwd")
     expect("pwd prints the directory of the task", re.search(r"(?m)^/\r?$", pwd) is not None)
     expect("pwd is a program of the shell", "the program exited with 0" in pwd)
+
+    # --- the first port of somebody else's program: zlib and zcat
+    # The .gz is a fixture of the image and the text below is its content.
+    # `wc -c` is the count of the bytes the library inflated, and `cat` their
+    # text: a stream that stopped one byte short would fail one of the two.
+    zcat = answer("exec /bin/zcat -o /tmp/greeting.txt /etc/greeting.gz")
+    expect("zcat is a program of the shell", "the program exited with 0" in zcat, zcat)
+    expect("zcat does not report a stream it read", "zcat:" not in zcat, zcat)
+    count = answer("exec /bin/wc -c /tmp/greeting.txt")
+    expect("zcat writes every inflated byte", "134 /tmp/greeting.txt" in count, count)
+    text = answer("exec /bin/cat /tmp/greeting.txt")
+    expect(
+        "the inflated bytes are the fixture",
+        "Micro OS: the first port of a program" in text
+        and "zlib 1.3.1, MicroFS and ring 3" in text
+        and "the bytes of this file were inflated by the library of the guest" in text,
+        text,
+    )
+    test = answer("exec /bin/zcat -t /etc/greeting.gz")
+    expect(
+        "zcat -t checks the stream and writes nothing",
+        "the program exited with 0" in test and "damaged" not in test and "Micro OS" not in test,
+        test,
+    )
+    verbose = answer("exec /bin/zcat -v -t /etc/greeting.gz")
+    expect(
+        "zcat -v prints the count of the inflated bytes",
+        "zcat: /etc/greeting.gz: 134 bytes" in verbose and "the program exited with 0" in verbose,
+        verbose,
+    )
+    missing = answer("exec /bin/zcat /etc/no-such.gz")
+    expect(
+        "zcat reports a file that is not there",
+        "zcat: /etc/no-such.gz: no such file or directory" in missing
+        and "the program exited with 1" in missing,
+        missing,
+    )
+    piped = answer("cat /etc/greeting.gz | /bin/zcat")
+    expect(
+        "zcat reads a gzip stream from a pipe",
+        "Micro OS: the first port of a program" in piped
+        and "the bytes of this file were inflated by the library of the guest" in piped,
+        piped,
+    )
+    licenses = answer("exec /bin/ls /etc/licenses")
+    expect("the license of zlib travels with the image", "zlib" in licenses, licenses)
+
     # A program starts another program with an environment of its own. The
     # two words are the vector of `spawn.c`, copied by the kernel at the edge
     # and placed in the memory of the second program: the entry prints them.

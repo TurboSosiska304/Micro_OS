@@ -105,6 +105,7 @@ _Static_assert(MFS_MODE_BITS == 9 && MFS_OWNER_BITS == 15,
 #define MFS_EISDIR (-8)
 #define MFS_ENOTEMPTY (-9)
 #define MFS_E2BIG (-10)
+#define MFS_ENOTSUP (-11)
 
 /* The flags of the open flags, they follow the POSIX ones. */
 #define MFS_O_RDONLY 0x0000
@@ -358,6 +359,19 @@ int mfs_read(struct mfs_file *file, void *buf, k_size_t size);
 int mfs_write(struct mfs_file *file, const void *buf, k_size_t size);
 int mfs_close(struct mfs_file *file);
 int mfs_unlink(const char *path);
+/*
+ * Rename an object of the volume (ADR 0024 §5). A file moves to any
+ * directory of the volume; a directory only keeps its name in its own
+ * parent, because moving the tree below it is a walk this format does not
+ * promise to finish (MFS_ENOTSUP). A name that is already there and is a
+ * file is replaced, as rename of POSIX does; a name of a directory is
+ * MFS_EISDIR, because the tree below it would be lost.
+ *
+ * The entry of the new name is written before the old one goes, so a
+ * volume that loses the power in the middle has a name too many (which the
+ * check reports) and never a name too few.
+ */
+int mfs_rename(const char *from, const char *to);
 int mfs_stat(const char *path, struct mfs_inode *out, struct mfs_dirent *dirent);
 int mfs_list(const char *path, struct mfs_dirent *out, k_size_t max);
 

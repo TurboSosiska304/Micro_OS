@@ -73,7 +73,7 @@ written when the project was an operating system for one board; the numbers
       its disk and asks for `/bin/hello` with `execve`; the shell runs the
       same file with `exec`
 * [x] Programs are files on a filesystem of the disk, not blobs of the
-      kernel: `make x86-disk` writes `/bin` (fifteen programs) and `/etc` with
+      kernel: `make x86-disk` writes `/bin` (seventeen programs) and `/etc` with
       `tools/mkfs_mfs.c`, and no boot installs an image
 * [x] `PATH` for the shell
 * [x] `argv` reaches the port, and the ABI of the entry is written down
@@ -291,6 +291,23 @@ written when the project was an operating system for one board; the numbers
 * [x] Programs are files on a filesystem of the disk, and a program is added
       by writing a file of the volume (`make x86-disk`), not by embedding it
       in the kernel
+* [x] The library of a program learned the three families a portable source
+      expects: an arena of its own (`malloc`/`free`, the bss of the image, not
+      `KSYS_MALLOC`), `errno` and `strerror`, and the streams of `fopen`; the
+      shims of `<string.h>`, `<stdlib.h>`, `<stdio.h>`, `<errno.h>`,
+      `<unistd.h>`, `<fcntl.h>` and `<sys/types.h>` are in
+      `components/libc/user/include`
+* [x] The first port of a program of somebody else: zlib 1.3.1 as a static
+      archive built by the compiler of the window (`cmake/userland.cmake`,
+      `third_party/zlib/port/`) and `/bin/zcat` on a `.gz` of MicroFS. The
+      recipe is [`porting-programs.md`](porting-programs.md), the library has
+      `tests/cases/test_zlib.c`, and `make x86-smoke` and
+      `make x86-disk-smoke` check the inflated bytes of a fixed fixture. Lua,
+      sbase and SQLite are the next copies of the recipe
+* [ ] The gaps of the next port: a formatter with `%f` and a precision, a
+      `malloc` larger than the bss of an image (`brk`/`mmap` of a program), a
+      `poll` for a library that waits on a pipe, and the package that ships
+      `zcat` with `/etc/licenses/zlib` beside it (`docs/debts.md`)
 
 ## The last major changes of the board (1.1.0)
 
@@ -343,8 +360,9 @@ written when the project was an operating system for one board; the numbers
       system file, and a setting a machine cannot honour kept and ignored with
       a warning (`SETTINGS_KEPT`)
 * [x] The screen and the font: rotation, brightness, inversion, the scale of
-      the 5x7 font and the theme; the VGA of x86-64 where it can (the
-      attribute of the cells), the panel of the board everywhere
+      the 5x7 font and the theme; the panel of the board everywhere, and on
+      x86-64 the pair of the framebuffer and the gap between its lines
+      (`font.line_gap`)
 * [x] A table of the keys per machine in the wiki
       ([settings.md](wiki/settings.md)), with a host test that every key of a
       default file is a key of its system, so a key is applied or named
@@ -361,19 +379,24 @@ on a VFS without `rename` (see [debts.md](debts.md)).
 > linear framebuffer, not a GPU (ADR 0023); a 3D driver of a real card is
 > not promised, and UEFI GOP is the later door to a physical machine.
 
-* [ ] A linear framebuffer through Bochs VBE in QEMU: 1280x800, 16 bits per
+* [x] A linear framebuffer through Bochs VBE in QEMU: 1280x800, 16 bits per
       pixel, RGB565 so `k_renderer` draws into it unchanged; the PCI device
       is found over the configuration space the network port already reads,
       and `paging.c` maps its window
-* [ ] The console of the screen: cells of the 5x7 font scaled twice (about
-      128 columns by 57 rows), the control characters, the cursor, the
-      scrolling and the two sequences of `clear`; the colours of
+* [x] The console of the screen: cells of the 8x16 font of the PC (Spleen
+      8x16, 160 columns by 50 rows; `font.line_gap` of `/etc/font` widens a
+      line to 18 or 20 pixels, 44 or 40 rows), the control characters, the
+      cursor, the scrolling and the two sequences of `clear`; the colours of
       `/etc/console` (ADR 0021); the keyboard of IRQ1 unchanged
-* [ ] The text mode stays the fallback, improved once to 80x50 with the 8x8
-      font of the VGA; the port chooses the screen at the boot
-* [ ] `make x86-vga-smoke` reads the framebuffer with `screendump` (a
+* [x] The text mode stays the fallback; the port chooses the screen at the
+      boot. The 80x50 mode with the 8x8 font of the VGA is not built - the
+      fallback is the screen of a machine without an interface, and the font
+      load and the CRTC timings are a debt of their own
+      ([debts.md](debts.md), K11)
+* [x] `make x86-vga-smoke` reads the framebuffer with `screendump` (a
       picture has no text memory for `pmemsave`) and checks cells and
-      colours; `make x86-run` opens it for a person
+      colours, and keeps the `pmemsave` checks of the text mode on a card
+      without the interface; `make x86-run` opens it for a person
 * [ ] Later: a 2D surface for a program, and optionally virtio-gpu 2D in
       QEMU; UEFI GOP for a real machine, which is a loader of its own
 
@@ -389,28 +412,36 @@ to build is the screen a program can draw on.
 > has no installer - its `progs` belongs to the firmware (ADR 0018) - so this
 > is the work of x86-64 and of the host substrate.
 
-* [ ] A streaming HTTP client: `Content-Length` and a chunked body, a
+* [x] A streaming HTTP client: `Content-Length` and a chunked body, a
       bounded number of redirects, a timeout, and a sink that is a
-      `struct vfs_file` or the inactive slot of an update; `wget URL FILE`
-      at the console and a `Range` resume for a file
+      `struct vfs_file` (a callback); `wget URL FILE` at the console and a
+      `Range` resume for a file. The inactive slot of an update is the same
+      stream and is not wired yet: the update of the board is over USB
+      (ADR 0022) and there is no `esp_ota_*` writer in the tree
+      ([debts.md](debts.md))
 * [ ] mbedTLS on x86-64 with a freestanding platform layer: `kmm` for the
       allocations, `RDRAND` for entropy (the timer as the fallback), NTP for
       the clock and `/etc/ssl/certs.pem` through the VFS; the board keeps the
-      copy of ESP-IDF
-* [ ] The signed index and a signed `.mox`: `index.json` with the name, the
+      copy of ESP-IDF. **The one open step of K12**: nothing in the tree
+      pretends to be TLS, `https://` is refused by the URL parser, and the
+      work is written down in [debts.md](debts.md)
+* [x] The signed index and a signed `.mox`: `index.json` with the name, the
       version, the machine, the ABI, the size and the digest; the verifier
       reuses the Ed25519 of ADR 0020
-* [ ] `pkg update/install/remove/list/info` over `/var/pkg` and `/usr/bin`,
+* [x] `pkg update/install/remove/list/info` over `/var/pkg` and `/usr/bin`,
       atomic through a new `vfs_rename` (MicroFS and FAT implement it; a
-      volume without it installs with a warning)
-* [ ] The interface of the console is pacman's, the build is not: `-S`, `-R`,
+      volume without it installs with a warning). A directory is renamed
+      only inside its parent yet (see debts.md)
+* [x] The interface of the console is pacman's, the build is not: `-S`, `-R`,
       `-Q`, `-Sy`, `-Su`, `-Syu`, `-U`, `--noconfirm`, `--needed`,
       `--download-only`, `--dry-run`, `--allow-downgrade`, `--offline`,
       `--root`, `--repo`, `--color`, `NAME=VERSION` (ADR 0024 §6)
 * [ ] The repository `microos-progs`: CI builds a program per machine, signs
       it and publishes the index with the artifacts; `make` in the kernel
-      tree keeps only the programs of the tests
-* [ ] Tests: the fake transport of `components/net` serves a chunked body, a
+      tree keeps only the programs of the tests. The installer and the tool
+      that signs an index are here; the repository is a tree of its own and
+      the next pass
+* [x] Tests: the fake transport of `components/net` serves a chunked body, a
       redirect and a dropped connection; the installer is tested on a
       temporary volume with a bad signature, a wrong machine and a downgrade;
-      `make x86-net-smoke` fetches a file from a local server
+      `make x86-net-smoke` fetches a file from a local server and installs it

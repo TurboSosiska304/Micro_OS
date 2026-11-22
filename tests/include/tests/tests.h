@@ -47,8 +47,10 @@ void test_initd(void);
 void test_config(void);
 void test_settings(void);
 void test_net(void);
+void test_pkg(void);
 void test_wifi(void);
 void test_sign(void);
 void test_progs(void);
+void test_zlib(void);
 
 #endif /* MICRO_OS_TESTS_H */

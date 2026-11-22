@@ -56,7 +56,8 @@
 #define KSYS_SIGRETURN 31 /* the restorer of a signal frame, for the port */
 #define KSYS_GETLIMIT 32  /* getlimit(which, value) */
 #define KSYS_SETLIMIT 33  /* setlimit(which, value) */
-#define KSYS_COUNT 34     /* the number of the system calls */
+#define KSYS_RENAME 34    /* rename(from, to) */
+#define KSYS_COUNT 35     /* the number of the system calls */
 
 /*
  * The resources of a limit. One number names one resource and the calls move
@@ -218,6 +219,8 @@ int ksys_statx(const char *path, void *buf);
 k_ssize_t ksys_lseek(int fd, k_ssize_t offset, int whence);
 int ksys_unlink(const char *path);
 int ksys_mkdir(const char *path);
+/* The same object under another name, inside one filesystem (ADR 0024 §5). */
+int ksys_rename(const char *from, const char *to);
 k_ssize_t ksys_readdir(int fd, void *buf, k_size_t count);
 k_u32_t ksys_getpid(void);
 int ksys_getcwd(char *buf, k_size_t size);

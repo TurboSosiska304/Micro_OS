@@ -460,12 +460,14 @@ bool settings_flag(const struct settings_table *table, const char *key, bool def
  * The defaults match the behaviour of the machine before the settings
  * existed: the panel in its portrait, inverted (the glass of this model shows
  * a negative without INVON), the backlight at its only level, the dark
- * console and the 5x7 font at its own size.
+ * console and the 5x7 font at its own size. `line_gap` is the gap between two
+ * lines of the picture of the x86-64 console (0, 2 or 4 pixels); the panel of
+ * the board has no gap and keeps the value.
  */
 static const struct settings_known g_known[] = {
     {"display", "# the screen\nrotation=0\ninvert=1\nbrightness=100\ntheme=dark\n",
      "rotation invert brightness theme"},
-    {"font", "# the font\nscale=1\ncolumns=0\nrows=0\n", "scale columns rows"},
+    {"font", "# the font\nscale=1\ncolumns=0\nrows=0\nline_gap=0\n", "scale columns rows line_gap"},
     {"console", "# the console\ninvert=0\ntheme=dark\n", "invert theme"},
 };
 

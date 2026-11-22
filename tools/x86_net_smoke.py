@@ -28,6 +28,10 @@ things a stack has to do:
 
     tools/x86_net_smoke.py [--timeout SECONDS] [--verbose]
 
+The alignment of a block of the console with the command that made it is
+checked by the labels of the steps; `X86_NET_DEBUG_BLOCKS=1` prints the first
+line of every block when a run is one block off and the reason is not obvious.
+
 The image is the one of `make x86-net-smoke` (build-x86-net, configured with
 MICRO_OS_X86_NET=ON so that components/net is part of it). The test is not a
 part of `make ci`: it needs the user-mode network of QEMU and a port on the
@@ -40,12 +44,16 @@ the machine or QEMU is not there to run.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import re
 import select
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -64,6 +72,19 @@ EXPECTED = [
 ]
 
 BODY = "hello from the host network"
+
+# The bodies of the stream: a file of a length, the chunks of the same idea,
+# and the body that is cut in the middle for the resume.
+FILE_BODY = bytes((i * 7 + 13) & 0xFF for i in range(1500))
+HALF_BODY = bytes((i * 3 + 1) & 0xFF for i in range(1200))
+
+# The repository of the test: the index and the program, both signed with the
+# key of the image of this build (ADR 0024 §4).
+REPO_NAME = "microos-progs"
+PROGRAM = "hello"
+PROGRAM_VERSION = "1.0.0"
+PROGRAM_FILE = f"{PROGRAM}-{PROGRAM_VERSION}-x86_64.mox"
+PROGRAM_ABI = 2  # K_EXEC_VERSION, the ABI of MOX1 the kernel reads
 
 # The page of the state of the guest is on this port of the guest and on a
 # port of the host that QEMU forwards to it.
@@ -101,15 +122,97 @@ class UdpEcho(threading.Thread):
 
 
 class HttpHandler(BaseHTTPRequestHandler):
-    """One page, with a body the test compares byte for byte."""
+    """The pages of the test and the repository of programs (ADR 0024).
+
+    The guest asks for a body of a length, a body of chunks, a redirect, a
+    body that is cut in the middle (the file of a download that drops) and
+    the index and packages of a repository. Every answer says
+    `Connection: close`, because the client of the machine opens one session
+    per request.
+    """
+
+    protocol_version = "HTTP/1.1"
+    repository = ""
 
     def do_GET(self) -> None:  # noqa: N802 (the name is the protocol)
-        body = BODY.encode("ascii")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain")
+        self.close_connection = True
+
+        if self.path == "/":
+            self.reply(200, BODY.encode("ascii"))
+            return
+
+        if self.path == "/file.bin":
+            self.reply(200, FILE_BODY)
+            return
+
+        if self.path == "/go":
+            self.send_response(302)
+            self.send_header("Location", "/file.bin")
+            self.send_header("Content-Length", "0")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            return
+
+        if self.path == "/chunked":
+            self.send_response(200)
+            self.send_header("Transfer-Encoding", "chunked")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(b"6\r\nchunk1\r\n")
+            self.wfile.write(b"6\r\nchunk2\r\n")
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+            return
+
+        if self.path == "/half.bin":
+            # The body the index promises is HALF_BODY twice; the first
+            # answer carries the first half and the session ends, which is a
+            # link that dropped. The second answer is the rest, asked for
+            # with a Range.
+            start = 0
+            header = self.headers.get("Range")
+            if header is not None and header.startswith("bytes=") and header.endswith("-"):
+                try:
+                    start = int(header[len("bytes=") : -1], 10)
+                except ValueError:
+                    start = 0
+            rest = HALF_BODY[start:]
+            if start > 0:
+                self.send_response(206)
+                self.send_header(
+                    "Content-Range", f"bytes {start}-{len(HALF_BODY) - 1}/{len(HALF_BODY)}"
+                )
+            else:
+                self.send_response(200)
+                rest = HALF_BODY[: len(HALF_BODY) // 2]
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(HALF_BODY) if start == 0 else len(rest)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(rest)
+            self.wfile.flush()
+            return
+
+        if self.path in ("/index.json", "/index.json.sig") or self.path.endswith(".mox") or \
+                self.path.endswith(".mox.sig"):
+            name = self.path.lstrip("/")
+            path = os.path.join(self.repository, name)
+
+            if os.path.isfile(path):
+                with open(path, "rb") as handle:
+                    self.reply(200, handle.read())
+                return
+
+        self.reply(404, b"not found\n")
+
+    def reply(self, status: int, body: bytes) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", "application/octet-stream")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(body)
+        self.wfile.flush()
 
     def log_message(self, *args) -> None:
         """The console of the test is the transcript of the guest."""
@@ -118,8 +221,9 @@ class HttpHandler(BaseHTTPRequestHandler):
 class HttpServer(threading.Thread):
     """A TCP server of the host: a port of the user-mode network, 10.0.2.2."""
 
-    def __init__(self) -> None:
+    def __init__(self, repository: str = "") -> None:
         super().__init__(daemon=True)
+        HttpHandler.repository = repository
         self.server = HTTPServer(("127.0.0.1", 0), HttpHandler)
         self.port = self.server.server_address[1]
         self.stop = threading.Event()
@@ -139,6 +243,72 @@ def free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.bind(("127.0.0.1", 0))
         return probe.getsockname()[1]
+
+
+def build_repository(directory: str, build: str) -> bool:
+    """Write the index of a repository and sign it with the key of the build.
+
+    The program is the `hello.mox` of this build, renamed as a repository
+    names it. The key is the private half of the image: the pkg of the
+    machine has the public half compiled in, because the release signs the
+    kernel and the index with the same key (ADR 0020, ADR 0024 §4).
+    """
+    sign = os.path.join(build, "microos_sign")
+    key = os.path.join(build, "signing.key")
+    image = os.path.join(build, "hello.mox")
+
+    for path in (sign, key, image):
+        if not os.path.isfile(path):
+            print(f"missing {path}: run make x86-net-build", file=sys.stderr)
+            return False
+
+    os.makedirs(directory, exist_ok=True)
+
+    package = os.path.join(directory, PROGRAM_FILE)
+    shutil.copyfile(image, package)
+
+    signed = subprocess.run(
+        [sign, "sign-file", "--key", key, "--in", package, "--sig", package + ".sig"],
+        check=False,
+        capture_output=True,
+    )
+    if signed.returncode != 0:
+        print(signed.stderr.decode("utf-8", errors="replace"), file=sys.stderr)
+        return False
+
+    data = open(package, "rb").read()
+    index = {
+        "repository": REPO_NAME,
+        "machine": "x86_64",
+        "abi": PROGRAM_ABI,
+        "packages": [
+            {
+                "name": PROGRAM,
+                "version": PROGRAM_VERSION,
+                "machine": "x86_64",
+                "abi": PROGRAM_ABI,
+                "size": len(data),
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "file": PROGRAM_FILE,
+                "summary": "says hello, from the repository",
+            }
+        ],
+    }
+    index_path = os.path.join(directory, "index.json")
+    with open(index_path, "w", encoding="utf-8") as handle:
+        json.dump(index, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+
+    signed = subprocess.run(
+        [sign, "sign-file", "--key", key, "--in", index_path, "--sig", index_path + ".sig"],
+        check=False,
+        capture_output=True,
+    )
+    if signed.returncode != 0:
+        print(signed.stderr.decode("utf-8", errors="replace"), file=sys.stderr)
+        return False
+
+    return True
 
 
 def host_get(port: int, path: str, tries: int = 15) -> str:
@@ -323,6 +493,72 @@ def check(output: str, answers: dict, host: dict, dns_name: str | None, commands
     expect("the body of the answer is the page", BODY in http)
     expect("the HTTP client does not report a failure", "the connection failed" not in http)
 
+    # --- the stream: a file, a redirect, chunks, a body that was cut and a
+    # resume (ADR 0024 §2)
+    wget = answers.get("wget", "")
+    expect(
+        "wget downloads a body of a length",
+        f"wget: HTTP 200, {len(FILE_BODY)} byte(s) to /file.bin" in wget,
+        wget.strip(),
+    )
+
+    redirect = answers.get("wget-redirect", "")
+    expect(
+        "wget follows a redirect and says so",
+        f"wget: HTTP 200, {len(FILE_BODY)} byte(s) to /redirect.bin (1 redirect(s))" in redirect,
+        redirect.strip(),
+    )
+
+    chunked = answers.get("wget-chunked", "")
+    expect(
+        "wget reads a chunked body",
+        "wget: HTTP 200, 12 byte(s) to /chunked.bin" in chunked,
+        chunked.strip(),
+    )
+
+    cut = answers.get("wget-cut", "")
+    expect("a body that ended early is reported", "ended before the body did" in cut, cut.strip())
+
+    resume = answers.get("wget-resume", "")
+    expect(
+        "a second wget continues the file with a Range",
+        f"wget: HTTP 206, {len(HALF_BODY) // 2} byte(s) to /part.bin (resumed at "
+        f"{len(HALF_BODY) // 2})" in resume,
+        resume.strip(),
+    )
+
+    package = answers.get("wget-package", "")
+    expect(
+        "wget downloads a file larger than the window of the session",
+        "wget: HTTP 200" in package and "/prog.mox" in package,
+        package.strip(),
+    )
+
+    # --- the repository and the installer (ADR 0024 §4 and §5)
+    repo = answers.get("pkg-repo", "")
+    expect("pkg takes the address of a repository", "repository microos-progs is" in repo,
+           repo.strip())
+
+    sync = answers.get("pkg-sync", "")
+    expect("pkg -Sy refreshes the index", "refreshing microos-progs" in sync, sync.strip())
+    expect("the index is the one of the repository", "1 package(s) in the index" in sync)
+
+    install = answers.get("pkg-install", "")
+    expect("pkg plans the install", f"install {PROGRAM} {PROGRAM_VERSION}" in install,
+           install.strip())
+    expect("the signature of the package is checked", "signature ok" in install)
+    expect("the package is installed in /usr/bin",
+           f"installed /usr/bin/{PROGRAM} ({PROGRAM_VERSION})" in install)
+    expect("a package that did not pass is not installed", "error:" not in install, install.strip())
+
+    query = answers.get("pkg-query", "")
+    expect("pkg -Q lists the installed program", f"{PROGRAM} {PROGRAM_VERSION}" in query,
+           query.strip())
+
+    run = answers.get("exec", "")
+    expect("the installed program runs from /usr/bin", "PROGRAM: hello from /bin" in run,
+           run.strip())
+
     # --- the server half: the guest serves the page of the state, and the
     # host reaches it through QEMU's forward of a port
     started = answers.get("httpd", "")
@@ -427,7 +663,12 @@ def main(argv: list) -> int:
             return 2
 
     udp = UdpEcho()
-    http = HttpServer()
+    repository = tempfile.mkdtemp(prefix="microos-repo-")
+
+    if not build_repository(repository, BUILD):
+        return 2
+
+    http = HttpServer(repository)
     udp.start()
     http.start()
 
@@ -447,6 +688,17 @@ def main(argv: list) -> int:
         ("cmd", "ping 10.0.2.2"),
         ("cmd", f"netudp 10.0.2.2 {udp.port} hello"),
         ("cmd", f"http get http://10.0.2.2:{http.port}/"),
+        ("cmd", f"wget http://10.0.2.2:{http.port}/file.bin /file.bin"),
+        ("cmd", f"wget http://10.0.2.2:{http.port}/go /redirect.bin"),
+        ("cmd", f"wget http://10.0.2.2:{http.port}/chunked /chunked.bin"),
+        ("cmd", f"wget http://10.0.2.2:{http.port}/half.bin /part.bin"),
+        ("cmd", f"wget http://10.0.2.2:{http.port}/half.bin /part.bin"),
+        ("cmd", f"pkg repo add http://10.0.2.2:{http.port}/"),
+        ("cmd", f"wget http://10.0.2.2:{http.port}/{PROGRAM_FILE} /prog.mox"),
+        ("cmd", "pkg -Sy"),
+        ("cmd", f"pkg -S {PROGRAM}"),
+        ("cmd", "pkg -Q"),
+        ("cmd", f"exec {PROGRAM}"),
         ("cmd", f"httpd {GUEST_HTTPD_PORT}"),
         ("host", fetch_page),
     ]
@@ -466,6 +718,17 @@ def main(argv: list) -> int:
         "ping",
         "udp",
         "http",
+        "wget",
+        "wget-redirect",
+        "wget-chunked",
+        "wget-cut",
+        "wget-resume",
+        "pkg-repo",
+        "wget-package",
+        "pkg-sync",
+        "pkg-install",
+        "pkg-query",
+        "exec",
         "httpd",
         None,
     ]
@@ -483,11 +746,16 @@ def main(argv: list) -> int:
     finally:
         udp.close()
         http.close()
+        shutil.rmtree(repository, ignore_errors=True)
 
     if args.verbose:
         print(output)
 
     blocks = output.split(PROMPT)[1:]
+
+    if os.environ.get("X86_NET_DEBUG_BLOCKS"):
+        for i, block in enumerate(blocks):
+            print(f"block {i}: {block.strip().splitlines()[0][:60] if block.strip() else '(empty)'}")
     answers = {}
     position = 0
 
