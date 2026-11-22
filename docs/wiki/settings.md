@@ -155,8 +155,11 @@ task, after the volume is mounted and the files are restored, and before the
 task of the shell starts the console of the panel: the display and the font
 are the state of the first frame. x86-64 loads them in `kmain()` after the
 filesystem is up, so the attribute of the screen is right before the first
-command. The simulator loads them in its init task, and a run with a screen
-file still has no applier: the console of the host is a serial port.
+command. Since `1.2.0` the console of x86-64 is the framebuffer of 1280x800
+(or the text mode of 80x25 when the card has no interface), and `/etc/console`
+and `/etc/font` are applied to whichever screen the port chose. The simulator
+loads them in its init task, and a run with a screen file still has no
+applier: the console of the host is a serial port.
 
 ## A format, and the store
 

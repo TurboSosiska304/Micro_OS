@@ -2,9 +2,9 @@
 
 A machine of Micro OS has a screen and a serial console, and the kernel
 writes the same line to both. What the screen is depends on the port: a
-135x240 TFT on the board, a framebuffer of 1280x800 on x86-64 (the text mode
-of the VGA when the machine cannot program one), and a window of QEMU or a
-real monitor in front of both.
+135x240 TFT on the board, a framebuffer of 1280x800 on x86-64 since `1.2.0`
+(the text mode of the VGA when the machine cannot program one), and a window
+of QEMU or a real monitor in front of both.
 
 ## The board: a framebuffer of 135x240
 

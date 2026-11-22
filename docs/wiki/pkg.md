@@ -5,8 +5,9 @@ its own (`microos-progs`), checks its signature and puts it in `/usr/bin`.
 It is the second half of the promise of `2.0` - a machine a person changes
 from the machine itself; the settings of `/etc` were the first.
 
-> **Status: built, over HTTP and HTTPS.** `pkg` is a command of the x86-64
-> image with the network (`-DMICRO_OS_X86_NET=ON`, `make x86-net-build`). The
+> **Status: shipped in 1.2.0, over HTTP and HTTPS.** `pkg` is a command of the
+> x86-64 image with the network (`-DMICRO_OS_X86_NET=ON`,
+> `make x86-net-build`). The
 > board has none (ADR 0018). A repository may be an `https://` URL; the
 > client of TLS and the trust of the store are described in
 > [network.md](network.md). The package is still trusted by its signature and
@@ -189,6 +190,9 @@ installed at the same version is left alone (`--force` reinstalls it).
 * **No installer on the board.** The `progs` partition of the ESP32 belongs to
   the firmware (ADR 0018); a program of the board is a new `progs.bin` and a
   flash.
+* **No install on the ISO.** The root of the CD is the read-only module of the
+  boot (ADR 0026): `/usr/bin` cannot be written, so a machine of the ISO
+  downloads and installs nothing. A disk is the machine that installs.
 
 A third-party repository is the answer to "I want more than the official
 index": `pkg repo add` takes a URL and `--repo NAME` names it, and the

@@ -237,13 +237,15 @@ written when the project was an operating system for one board; the numbers
       network components, the defaults per build, `make test-minimal` and
       the check of the map
 
-## K8 - Many cores (in progress, after 1.0)
+## K8 - Many cores (in progress, after 1.0; the second core is 1.3.0)
 
 > Not a gate of 1.0 (ADR 0012, updated): the release promises a correct
 > single-core kernel; the second core is the first project after it. The
 > first phase is in the tree (`KERNEL_SMP`, `struct k_cpu`, the host gate
 > and the x86-64 processor list); the AP bring-up is the blocker, named in
-> ADR 0012 "The pilot of 1.x".
+> ADR 0012 "The pilot of 1.x". It is **not** a part of `1.2.0`: the screen,
+> the stream and the installer were that release, and the bring-up of the
+> application processors is `1.3.0`.
 
 * [x] A `struct k_cpu` per core and a run queue per core; the scheduler never
       runs one task on two cores (ADR 0012) - `kernel/cpu.h`,
@@ -256,7 +258,8 @@ written when the project was an operating system for one board; the numbers
 * [ ] x86-64: AP bring-up, local APIC timer, I/O APIC and the IPI of a TLB
       and a reschedule; `make x86-smoke` with `-smp 2` - the processor list
       (MADT) and `-smp 2` are done; the boot says `2 cpu(s) reported by the
-      firmware, 1 in use`; `make x86-smp-build` builds the two-core kernel
+      firmware, 1 in use`; `make x86-smp-build` builds the two-core kernel.
+      This is the step of `1.3.0`.
 * [ ] ESP32: the kernel tasks on both cores of the Pico, no driver assuming
       one core - not started (ADR 0018, the compatibility port)
 * [x] `KERNEL_SMP` (ADR 0010) and the host TSan run as the gate - the flag is
@@ -302,12 +305,20 @@ written when the project was an operating system for one board; the numbers
       `third_party/zlib/port/`) and `/bin/zcat` on a `.gz` of MicroFS. The
       recipe is [`porting-programs.md`](porting-programs.md), the library has
       `tests/cases/test_zlib.c`, and `make x86-smoke` and
-      `make x86-disk-smoke` check the inflated bytes of a fixed fixture. Lua,
-      sbase and SQLite are the next copies of the recipe
-* [ ] The gaps of the next port: a formatter with `%f` and a precision, a
-      `malloc` larger than the bss of an image (`brk`/`mmap` of a program), a
-      `poll` for a library that waits on a pipe, and the package that ships
-      `zcat` with `/etc/licenses/zlib` beside it (`docs/debts.md`)
+      `make x86-disk-smoke` check the inflated bytes of a fixed fixture
+* [x] The other ports of 1.2.0: the ten tools of sbase (MIT) as `/bin/sb-*`,
+      PCRE2 as `/bin/pcre2grep`, and the interpreter of Lua 5.4.7 (MIT) as
+      `/bin/lua` with the script `/etc/hello.lua`; the image of a program is
+      up to `K_EXEC_MAX_IMAGE` (8 MiB), read in pieces of `KSYS_MAX_IO`
+      (64 KiB), and the library of a program has the `float` family for an
+      image that asks for it (`-DULIBC_WITH_FLOAT`, Lua). The port is the
+      first one past the old 64 KiB edge of `execve`; SQLite is the next
+      candidate of the recipe
+* [ ] The gaps of the next port: a `malloc` larger than the bss of an image
+      (`brk`/`mmap` of a program), a `poll` for a library that waits on a
+      pipe, a wall clock in `time()` (it is the uptime), and the package
+      that ships `zcat`, `lua` and `pcre2grep` with their licenses beside
+      them (`docs/debts.md`)
 
 ## The last major changes of the board (1.1.0)
 
@@ -372,7 +383,7 @@ format: a backlight with a duty cycle for `brightness`, an applier on the host
 when its screen file is a real screen, and a rewrite of a file that is atomic
 on a VFS without `rename` (see [debts.md](debts.md)).
 
-## K11 - The screen of x86-64 (1.2)
+## K11 - The screen of x86-64 (done in 1.2.0)
 
 > The port keeps the text mode of the firmware: 80 columns by 25 rows at
 > `0xB8000`, sixteen colours, no font and no picture. The next screen is a
@@ -412,7 +423,7 @@ are the parts of one, and the compositor has to be a program of the system
 and not the kernel (see [releases/2.0.md](releases/2.0.md)); the first thing
 to build is the screen a program can draw on.
 
-## K12 - The stream and the installer (1.2, in parallel with K11)
+## K12 - The stream and the installer (done in 1.2.0)
 
 > The programs are a repository of their own (`microos-progs`); the machine
 > that installs one needs a stream, TLS and a signature (ADR 0024). The board
@@ -459,7 +470,7 @@ to build is the screen a program can draw on.
       trusted one arrives (1.3 and 1.2), the one of another name and the one
       of another authority are refused, and the repository of `pkg` is HTTPS
 
-## K13 - A bootable image of x86-64 (prototype, 1.2)
+## K13 - A bootable image of x86-64 (prototype, done in 1.2.0)
 
 > The machine of the port boots in QEMU from `-kernel` and `-initrd`: the
 > hypervisor is the boot loader. A medium is the other half of "a machine":
@@ -480,8 +491,9 @@ to build is the screen a program can draw on.
       mounts the root image and runs `/bin/hello` from the boot and from the
       shell
 * [ ] UEFI: the EFI application, the memory map of the firmware, GOP and the
-      exit of the boot services; the framebuffer of ADR 0023 comes first,
-      because the kernel of the port draws into the text mode of the BIOS
+      exit of the boot services; the framebuffer of ADR 0023 is here, so the
+      screen a GOP hands over is the next door to a physical machine, and
+      the loader for it is not written yet
 * [ ] A hybrid image: the ISO written to a USB stick boots as a disk
       (`limine bios-install`, or a protective MBR and the GRUB record)
 * [ ] A writable root: the root of the CD is read-only, and a person's files
@@ -489,3 +501,22 @@ to build is the screen a program can draw on.
       installer of K12
 * [ ] A reproducible ISO: the volume descriptor follows
       `SOURCE_DATE_EPOCH`, the directory records still carry the clock
+
+## The release of 1.2.0
+
+> The notes are [`docs/releases/1.2.md`](releases/1.2.md); the page of the
+> wiki is [`wiki/release-1.2.md`](wiki/release-1.2.md). The board is the
+> compatibility port of ADR 0018, and the second core is `1.3.0`.
+
+* [x] K11: the framebuffer of 1280x800, the Spleen 8x16 console, the colour
+      of a cell and SGR, the text mode as the fallback (ADR 0023)
+* [x] K12: the stream and `wget`, the signed index and `pkg`, mbedTLS and
+      HTTPS (ADR 0024)
+* [x] K13: the BIOS ISO with the read-only root module (ADR 0026)
+* [x] `make x86-user`: the tar of the release is the machine that runs
+* [x] The ports of zlib, sbase, PCRE2 and Lua, and the 8 MiB ceiling of an
+      image
+* [x] The shell fixes of `1.1.2` (a directory without a table, `.` and `..`
+      as a path)
+* [ ] The gates of the release: the three sessions of 600 seconds, run after
+      the integration of the branches (the table in the notes)

@@ -49,6 +49,7 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make coverage` | the host build with `--coverage`, the tests, the simulator and the gcov report of `components/kernel` (70% of lines) |
 | `make reproducible` | build the disk image twice and compare the bytes (`SOURCE_DATE_EPOCH`) |
 | `make integrity` | the integrity check: bundle, image headers, partition table, git, sources, formatting |
+| `make wiki-check` | every link and anchor of `docs/wiki` (`tools/wiki_check.py`) |
 | `make format` | reformat the C sources with `clang-format` |
 | `make clean` | remove `build-host/`, `build-asan/`, `build-coverage/` (the device `build/` stays) |
 | `make test-smp` | the host tests with `KERNEL_SMP=ON` and two cores (`MICRO_OS_CPUS=2`) |
@@ -56,6 +57,13 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make x86-net-build` | the x86-64 kernel with the network, `wget` and `pkg` (`MICRO_OS_X86_NET=ON`) |
 | `make x86-net-run` | that machine on the user network of QEMU |
 | `make x86-net-smoke` | boot it and check the stack, a download, TLS (1.3 and 1.2, a wrong name and a wrong authority, the clock of 1970) and an install from a local repository over HTTPS |
+| `make x86-run` | the same machine in a window: the framebuffer of 1280x800 and the keyboard |
+| `make x86-run-serial` | the machine on the serial console and no window |
+| `make x86-vga-smoke` | check the framebuffer and the text mode with a screenshot, and the keyboard |
+| `make x86-disk-smoke` | two boots on one disk image: a file survives both (34 checks) |
+| `make x86-iso` | the BIOS ISO (El Torito) with the loader, the kernel and the root image (K13) |
+| `make x86-iso-run` | boot the ISO in a terminal (`-nographic`) |
+| `make x86-iso-smoke` | boot the ISO with `-cdrom` and nothing else, and check the shell and `/bin` |
 | `make x86-all` | the complete machine in `build-x86-all/`: the kernel with the network, the disk with `/bin` and `/etc`, and `run.sh` |
 | `make x86-all-run` | boot that machine in a window (the serial console with `x86-all-run-serial`) |
 | `make x86-user` | build the complete machine and its release tar, unpack the tar and start it (the artifact a person downloads) |
@@ -373,8 +381,17 @@ of mbedTLS that ESP-IDF carries and no command of TLS yet (ADR 0018).
 
 ```bash
 make ci                                        # the local list of checks
-python3 tools/integrity_check.py --expect-version 0.2.0
-git tag v0.2.0-pre && git push origin v0.2.0-pre
+python3 tools/integrity_check.py --expect-version 1.2.0
+git tag v1.2.0-pre && git push origin v1.2.0-pre
+```
+
+The gates of a release are the three sessions of 600 seconds, beside the
+checks above:
+
+```bash
+make soak              # x86-64, one boot, ten minutes by default
+make soak-host         # the host substrate, two cores, under TSan
+make board-soak        # the board (needs the board on /dev/ttyACM0)
 ```
 
 A tag `vX.Y.Z` runs the tests and the firmware build in GitHub Actions and

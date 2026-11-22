@@ -76,7 +76,7 @@ to `x86-64`; a name the format does not know is refused before an image is
 written. `--data-base` is for a port whose data is a window of its own (the
 board): the data no longer follows the text, so the script checks its address
 against that number instead of the contiguous rule and also checks where the
-bss will be cleared. The x86-64 port builds its seventeen images this way: the
+bss will be cleared. The x86-64 port builds its programs this way: the
 object is compiled for the window, linked with `programs/program.ld`, turned
 into a `.mox` by the script (`--base 0x02000000 --arch x86-64`), and written
 into the MicroFS volume of the disk by `make x86-disk` (see below). The kernel
@@ -99,7 +99,7 @@ make x86-smoke     # the same, driven by the smoke test
 
 `tools/mkfs_mfs.c` writes the image: an MBR with one Linux partition at LBA
 2048, a MicroFS volume in it, `/bin`, `/etc` and an empty `/etc/init.d`, the
-seventeen `.mox` images of the build written to `/bin` with mode `0755`, and
+`.mox` images of the build written to `/bin` with mode `0755`, and
 the settings of the machine in `/etc/setting`. It does not repeat the layout
 of MicroFS: it is a block device over a range of the file, and
 `components/mfs` formats it and writes the objects through `mfs_create`,
@@ -126,8 +126,8 @@ never changed.
 ## `/bin` and the boot
 
 The x86-64 port mounts the MicroFS volume of its disk at `/` and finds
-`/bin` already there: the seventeen images are files the tool wrote, with the
-mode of a program (`0755`), and no boot creates one:
+`/bin` already there: the images are files the tool wrote, with the mode of a
+program (`0755`), and no boot creates one:
 
 | File | What it proves |
 |---|---|
@@ -148,12 +148,17 @@ mode of a program (`0755`), and no boot creates one:
 | `/bin/spawn` | `execve` from a program, with an environment of its own |
 | `/bin/wc` | the lines, words and bytes of a source (`-l`, `-w`, `-c`) or of descriptor 0 |
 | `/bin/zcat` | a `.gz` of the VFS inflated by zlib 1.3.1 and written to the console or a file |
+| `/bin/lua` | the interpreter of Lua 5.4.7: `-e`, the script `/etc/hello.lua`, `io` and `os.time` |
+| `/bin/pcre2grep` | a regular expression of PCRE2 over a file or a stream |
+| `/bin/sb-cat`, `sb-grep`, `sb-head`, `sb-ls`, `sb-tail`, `sb-wc` | the tools of sbase (MIT) for a file, a directory and a line |
+| `/bin/sb-sort`, `sb-find`, `sb-xargs`, `sb-sed` | the tools of sbase for a tree and a stream: `sort -n`, `find -name`, a command over the words of a pipe, a substitution |
 
 The first five talk to the kernel through `programs/prog.h`, because what they
 test is the raw door, the fault, the fork, the edge and the signals. The rest
 are ordinary C programs linked against `components/libc/user`
-([ADR 0016](../adr/0016-userland.md)); `zcat` is also linked against zlib, the
-first library of somebody else
+([ADR 0016](../adr/0016-userland.md)); `zcat` is linked against zlib, `lua`
+against the interpreter of Lua, `pcre2grep` against PCRE2, and the ten `sb-*`
+tools against the tools of sbase - the ports of other people
 ([`docs/porting-programs.md`](../porting-programs.md)). Every one of them
 reads descriptor 0
 when it is given no file (or `-`); `execve` carries the table of the caller, so
@@ -170,8 +175,10 @@ stream of a fixed text, written by `tools/x86_image.py` with `mtime` from
 `SOURCE_DATE_EPOCH` and no file name in the header, so two builds of the image
 write the same bytes. `zcat -o FILE` inflates it into a file of MicroFS and
 `zcat -t` checks it; the smoke tests compare the count and the text of the
-inflated bytes. `/etc/licenses/zlib` is the zlib license beside the program
-that carries the library, and `docs/licensing.md` has the row.
+inflated bytes. `/etc/hello.lua` is the first script of the machine, read by
+the interpreter out of the volume, and `/etc/licenses/zlib`,
+`/etc/licenses/lua` and the license of PCRE2 travel beside the programs that
+carry the libraries; `docs/licensing.md` has the rows.
 
 ## The board: Xtensa code without an MMU
 
@@ -437,23 +444,27 @@ plan to pretend otherwise.
 
 * **No ELF and no dynamic linker.** The format is `MOX1`, everything is
   statically linked, and there are no shared objects.
-* **No program of the board yet.** The header knows the machine (ADR 0018)
-  and `mkprog.sh` writes it, but the loader of the ESP32 port is not written:
-  an Xtensa image on the board is still `ENOSYS`, and only x86-64 enters a
-  program. The format is ready for the second machine; the port is not.
+* **No protected program on the board.** The board runs a `.mox` of Xtensa in
+  two fixed 8 KiB windows of the address space of the kernel (ADR 0018): the
+  image runs, and a bad pointer that reaches the kernel takes the machine
+  down. Protection is the x86-64 port and a processor with an MMU.
 * **No libc of the host.** A program has the calls of the ABI, the library of
   `components/libc/user` and nothing else. The library is not a standard C
-  library: the allocation is a fixed arena of the program, the streams are a
-  descriptor and not a buffer, and there is no floating point (the programs
-  are built with `-mgeneral-regs-only`); the formatter has no precision and
-  no `*` width.
-* **No inherited descriptors.** A program is a task with a table of four
-  descriptors of its own, and the shell does not pass its own table to it.
-  `cat`, `wc`, `head` and `grep` read descriptor 0 when they are given no file
-  (or `-`), but a fresh table has no descriptor 0: the read answers `EBADF`
-  until a redirection or an inherited table opens it. The descriptors 1 and 2
-  are the console; `pipe`, `dup2` and the inheritance are a debt of the
-  milestone after this one.
+  library: the allocation is a fixed arena of the program and the streams are
+  a descriptor, not a buffer. `float` and `double` are those of an image that
+  asks for them (`ULIBC_WITH_FLOAT`, the port of Lua): it is built without
+  `-mgeneral-regs-only`, links `math.c`, `setjmp.c` and `format_float.c`, and
+  runs one at a time because the scheduler saves no XMM or x87 state.
+* **No image larger than 8 MiB.** `execve` reads the file in pieces of
+  `KSYS_MAX_IO` (64 KiB) into one block of the allocator, up to
+  `K_EXEC_MAX_IMAGE` (8 MiB); a larger file is `E2BIG` before a byte of it is
+  read, and the machine holds two copies of the image for the time of the
+  load ([debts.md](../debts.md)).
+* **No descriptor 0 at the prompt.** A program is a task with a table of four
+  descriptors of its own, and `execve` carries the table of the caller: a
+  redirection or a pipe is what fills descriptor 0, and a program started at
+  the prompt with no redirection reads `EBADF` from it. The descriptors 1 and
+  2 are the console.
 * **No `mmap` and no `brk`.** A program cannot ask for a range of its own, so
   the allocator is the arena of its bss and a library that allocates more
   than `ULIBC_HEAP_SIZE` needs a larger program or the ranges the kernel does

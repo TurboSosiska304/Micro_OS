@@ -88,7 +88,7 @@ are described in [shell.md](shell.md).
 
 ## TLS
 
-x86-64 speaks HTTPS (ADR 0024 §3). The stack is mbedTLS 3.6.2, vendored in
+Since `1.2.0` x86-64 speaks HTTPS (ADR 0024 §3). The stack is mbedTLS 3.6.2, vendored in
 `third_party/mbedtls`; its configuration is a TLS client (1.2 and 1.3, X.509,
 ECDHE with ECDSA or RSA, AES-GCM/CCM, ChaCha20-Poly1305, SHA-1/256/384/512),
 and the platform under it is the kernel: `kmm` for the allocator, the
