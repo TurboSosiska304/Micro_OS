@@ -15,6 +15,7 @@ the board live in `hardware/`.
 | understand the design | [architecture.md](architecture.md) |
 | know what is done and what is next | [roadmap.md](roadmap.md) (the kernel) and [ports/esp32/roadmap.md](ports/esp32/roadmap.md) (the board) |
 | bring the kernel to another machine | [porting.md](porting.md) |
+| add a program, or a library under it | [porting-programs.md](porting-programs.md) |
 | move a machine from 0.x to 1.0 | [migration.md](migration.md) |
 | know what a release changed | [../CHANGELOG.md](../CHANGELOG.md) |
 | report a vulnerability | [../SECURITY.md](../SECURITY.md) |
@@ -23,6 +24,7 @@ the board live in `hardware/`.
 | see the libc subset | [libc.md](libc.md) |
 | read why a decision was made | [adr/](adr/) |
 | read what a phase delivered | [phases/](phases/) |
+| know the license of a byte of a distribution | [licensing.md](licensing.md) |
 | read about a port | [ports/esp32](ports/esp32/README.md), [ports/x86_64](ports/x86_64/README.md), [ports/host](ports/host/README.md), [ports/null](ports/null/README.md) |
 | know the board: pins, chips, quirks | [ports/esp32/hardware.md](ports/esp32/hardware.md) |
 | review the portability work | [review.md](review.md) |

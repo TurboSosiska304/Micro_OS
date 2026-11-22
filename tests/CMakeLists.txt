@@ -48,6 +48,7 @@ if(NOT ESP_PLATFORM)
         cases/test_smp.c
         cases/test_sign.c
         cases/test_progs.c
+        cases/test_pcre2.c
     )
 
     # The tests of a component that a build leaves out are left out with it:
@@ -88,6 +89,45 @@ if(NOT ESP_PLATFORM)
         # of the board and by the test, written by tools/progs_image.py.
         "${CMAKE_SOURCE_DIR}/components/port_esp32/include"
     )
+
+    # PCRE2, the regular expression library of /bin/pcre2grep
+    # (third_party/pcre2): the same sources and the same config.h as the
+    # image of the program, compiled for the host so that the test and the
+    # machine run one engine. The sources are third-party C: the warning
+    # flags of this tree stay off them, as they do in the build of the
+    # program.
+    set(PCRE2_DIR "${CMAKE_SOURCE_DIR}/third_party/pcre2")
+    set(PCRE2_TEST_SOURCES
+        "${PCRE2_DIR}/src/pcre2_compile.c"
+        "${PCRE2_DIR}/src/pcre2_config.c"
+        "${PCRE2_DIR}/src/pcre2_context.c"
+        "${PCRE2_DIR}/src/pcre2_convert.c"
+        "${PCRE2_DIR}/src/pcre2_dfa_match.c"
+        "${PCRE2_DIR}/src/pcre2_error.c"
+        "${PCRE2_DIR}/src/pcre2_extuni.c"
+        "${PCRE2_DIR}/src/pcre2_find_bracket.c"
+        "${PCRE2_DIR}/src/pcre2_maketables.c"
+        "${PCRE2_DIR}/src/pcre2_match.c"
+        "${PCRE2_DIR}/src/pcre2_match_data.c"
+        "${PCRE2_DIR}/src/pcre2_newline.c"
+        "${PCRE2_DIR}/src/pcre2_ord2utf.c"
+        "${PCRE2_DIR}/src/pcre2_pattern_info.c"
+        "${PCRE2_DIR}/src/pcre2_script_run.c"
+        "${PCRE2_DIR}/src/pcre2_serialize.c"
+        "${PCRE2_DIR}/src/pcre2_string_utils.c"
+        "${PCRE2_DIR}/src/pcre2_substitute.c"
+        "${PCRE2_DIR}/src/pcre2_substring.c"
+        "${PCRE2_DIR}/src/pcre2_tables.c"
+    "${PCRE2_DIR}/src/pcre2_ucd.c"
+        "${PCRE2_DIR}/src/pcre2_valid_utf.c"
+        "${PCRE2_DIR}/src/pcre2_xclass.c"
+        "${PCRE2_DIR}/pcre2_chartables.c"
+        "${PCRE2_DIR}/pcre2_small.c"
+    )
+    target_sources(microos_tests PRIVATE ${PCRE2_TEST_SOURCES})
+    target_include_directories(microos_tests PRIVATE "${PCRE2_DIR}" "${PCRE2_DIR}/src")
+    set_source_files_properties(${PCRE2_TEST_SOURCES} PROPERTIES
+        COMPILE_OPTIONS "-w;-DHAVE_CONFIG_H;-DPCRE2_CODE_UNIT_WIDTH=8")
 
     target_sources(microos_tests PRIVATE
         "${CMAKE_SOURCE_DIR}/components/drivers/src/input_debounce.c"        "${CMAKE_SOURCE_DIR}/components/drivers/src/battery_soc.c"

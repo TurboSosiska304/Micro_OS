@@ -129,8 +129,45 @@ int strncmp(const char *left, const char *right, size_t count);
  * text itself, as in the library of a Unix-like system.
  */
 char *strstr(const char *text, const char *needle);
+char *strchr(const char *text, int letter);
+char *strrchr(const char *text, int letter);
 void *memcpy(void *dest, const void *source, size_t count);
+void *memmove(void *dest, const void *source, size_t count);
 void *memset(void *dest, int byte, size_t count);
+int memcmp(const void *left, const void *right, size_t count);
+void *memchr(const void *text, int letter, size_t count);
+
+/* --- the allocation ---
+ *
+ * A program has no range of its own (no `brk` and no `mmap`), so the heap is
+ * a part of its bss lent by the library; the size is a constant of the
+ * build. `malloc` answers NULL when the block does not fit, and `free` of
+ * NULL does nothing, as in the library of a Unix-like system.
+ */
+void *malloc(size_t size);
+void *calloc(size_t count, size_t size);
+void *realloc(void *memory, size_t size);
+void free(void *memory);
+
+/* --- the character classes ---
+ *
+ * The classes of the C locale: there is no locale on this machine, so the
+ * answer of this program is the same as the answer of the host test.
+ */
+int isalnum(int letter);
+int isalpha(int letter);
+int isblank(int letter);
+int iscntrl(int letter);
+int isdigit(int letter);
+int isgraph(int letter);
+int islower(int letter);
+int isprint(int letter);
+int ispunct(int letter);
+int isspace(int letter);
+int isupper(int letter);
+int isxdigit(int letter);
+int tolower(int letter);
+int toupper(int letter);
 
 /* --- the console --- */
 

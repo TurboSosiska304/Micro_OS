@@ -107,6 +107,13 @@ COMMANDS = [
     "exec /bin/head -n 1 /etc/setting",
     "exec /bin/grep hello /etc/setting",
     "exec /bin/grep -i HELLO /etc/setting",
+    # The regular expression engine of the tree (third_party/pcre2): a pattern
+    # with a wildcard and a folded case, then one with an anchor and a group.
+    # The quotes of the examples of the wiki are not needed: the shell has no
+    # quotes, and a word is the pattern as it is typed.
+    "exec /bin/pcre2grep -i h.LLO /etc/setting",
+    "exec /bin/pcre2grep -o -g 1 ^hostname=(x86_64)$ /etc/setting",
+    "exec /bin/ls /etc/licenses",
     # The same commands with no file: they read descriptor 0, which the shell
     # does not pass to a program yet, so the call answers EBADF (9). The line
     # is the proof that the input is descriptor 0 and not a usage sentence.
@@ -830,8 +837,9 @@ def check(output: str) -> list:
     # filesystem and not a line the kernel printed about itself.
     bin_listing = answer("ls /bin")
     expect("the program is a file in /bin", "hello" in bin_listing)
-    # All fifteen are objects of the volume the boot mounted, with the mode
-    # the tool gave them; a missing one is a tool or a build that lost it.
+    # All seventeen are objects of the volume the boot mounted, with the
+    # mode the tool gave them; a missing one is a tool or a build that lost
+    # it.
     stat_answer = answer("stat /etc/setting")
     expect(
         "stat prints the mode in octal",
@@ -852,7 +860,7 @@ def check(output: str) -> list:
         free_answer,
     )
     expect(
-        "the fifteen programs are files of the disk",
+        "the seventeen programs are files of the disk",
         all(
             name in bin_listing
             for name in (
@@ -861,6 +869,7 @@ def check(output: str) -> list:
                 "fork",
                 "badptr",
                 "signals",
+                "nx",
                 "cat",
                 "echo",
                 "ls",
@@ -871,6 +880,7 @@ def check(output: str) -> list:
                 "rm",
                 "pwd",
                 "spawn",
+                "pcre2grep",
             )
         ),
         bin_listing[-200:],
@@ -1077,6 +1087,24 @@ def check(output: str) -> list:
     expect("grep is a program of the shell", "the program has finished" in grep)
     grep = answer("exec /bin/grep -i HELLO /etc/setting")
     expect("grep -i folds the case", "hello" in grep)
+    # PCRE2 is a library and not a word search: `.` is one character, `^` and
+    # `$` are the ends of the line, and a group in parentheses is numbered.
+    # The output of -o with -g 1 is the group alone; the pattern itself is in
+    # the echo of the typed line and not in the answer.
+    pcre = answer("exec /bin/pcre2grep -i h.LLO /etc/setting")
+    expect(
+        "pcre2grep matches a line with a wildcard and folds the case",
+        any(line.strip() == "hello" for line in pcre.splitlines()),
+        pcre[-120:],
+    )
+    pcre = answer("exec /bin/pcre2grep -o -g 1 ^hostname=(x86_64)$ /etc/setting")
+    expect(
+        "pcre2grep prints the group of an anchored pattern",
+        any(line.strip() == "x86_64" for line in pcre.splitlines()),
+        pcre[-120:],
+    )
+    licenses = answer("exec /bin/ls /etc/licenses")
+    expect("the license of PCRE2 is a file of the disk", "pcre2" in licenses, licenses)
     # No file is descriptor 0. A program inherits the table of the shell
     # (ADR 0017), but the prompt does not open the console on descriptor 0
     # yet, so the read answers EBADF; a redirect or a pipe fills it.

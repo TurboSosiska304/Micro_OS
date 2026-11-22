@@ -171,4 +171,6 @@ Micro_OS/
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). The one third-party component, PCRE2, is
+BSD-3-Clause and its text is in [third_party/pcre2/LICENSE](third_party/pcre2/LICENSE);
+the terms of a distribution are in [docs/licensing.md](docs/licensing.md).

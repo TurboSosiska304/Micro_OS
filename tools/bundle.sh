@@ -81,6 +81,11 @@ done
 cp -f "$ROOT/tools/ota_usb.py" "$OUT_DIR/ota_usb.py"
 echo "    tools/ota_usb.py -> ota_usb.py"
 
+# The license of the one third-party component of the x86-64 image travels
+# with the bundle, as the file of /etc/licenses on the disk does.
+cp -f "$ROOT/third_party/pcre2/LICENSE" "$OUT_DIR/LICENSE.pcre2"
+echo "    third_party/pcre2/LICENSE -> LICENSE.pcre2"
+
 chmod +x "$OUT_DIR/flash.sh" "$OUT_DIR/ota_usb.py"
 
 # The version of the kernel, as the sources say it: the name of the images.
@@ -221,6 +226,7 @@ if [ -f "$X86_BUILD/loader32.elf" ] && [ -f "$X86_BUILD/microos64.bin" ]; then
 
     cp -f "$X86_BUILD/loader32.elf" "$STAGE/loader32.elf"
     cp -f "$X86_BUILD/microos64.bin" "$STAGE/microos64.bin"
+    cp -f "$ROOT/third_party/pcre2/LICENSE" "$STAGE/LICENSE.pcre2"
     if [ -f "$X86_BUILD/microos64.sig" ] && [ -f "$X86_BUILD/signing.pub" ]; then
         cp -f "$X86_BUILD/microos64.sig" "$STAGE/microos64.sig"
         cp -f "$X86_BUILD/signing.pub" "$STAGE/microos-sign.pub"
@@ -262,9 +268,14 @@ public key of the build; the tool in `tools/` of the sources verifies them:
 
 The same kernel is on the board and in the tests: Micro OS is one portable
 kernel with a port per machine.
+
+The machine carries one third-party component: `/bin/pcre2grep` links PCRE2
+10.42, and `LICENSE.pcre2` beside this file is the license of that code. The
+text is also a file of the disk image (`/etc/licenses/pcre2`); the MIT of
+Micro OS does not cover a byte of it.
 DOC
 
-    STAGE_FILES=(loader32.elf microos64.bin run.sh README.md)
+    STAGE_FILES=(loader32.elf microos64.bin run.sh README.md LICENSE.pcre2)
     if [ -f "$STAGE/microos64.sig" ]; then
         STAGE_FILES+=(microos64.sig microos-sign.pub)
     fi

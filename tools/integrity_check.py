@@ -927,6 +927,17 @@ def check_git(root: str, report: Report) -> None:
     )
 
 
+# The vendored trees are somebody else's code. Their formatting and their
+# line lengths are the upstream ones, and a diff against a release has to
+# stay readable: the rules of this tree apply to the files we write, and a
+# vendored component is reviewed as a whole (third_party/pcre2/README.md).
+VENDOR_PREFIXES = ("third_party/",)
+
+
+def is_vendored(name: str) -> bool:
+    return any(name.startswith(prefix) for prefix in VENDOR_PREFIXES)
+
+
 def check_sources(root: str, report: Report, files: list) -> None:
     """The hygiene of the tracked sources (the rules of .editorconfig)."""
     group = "sources"
@@ -939,6 +950,9 @@ def check_sources(root: str, report: Report, files: list) -> None:
     not_utf8 = []
 
     for name in files:
+        if is_vendored(name):
+            continue
+
         path = os.path.join(root, name)
         if not os.path.isfile(path) or is_binary(path):
             continue
@@ -1030,7 +1044,7 @@ def check_format(root: str, report: Report, files: list, formatter: str) -> None
     """The formatting of the C sources."""
     group = "format"
 
-    sources = [f for f in files if f.endswith((".c", ".h"))]
+    sources = [f for f in files if f.endswith((".c", ".h")) and not is_vendored(f)]
     if not sources:
         report.skip(group, "clang-format", "there are no C sources")
         return

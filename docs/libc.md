@@ -17,9 +17,11 @@ A program cannot call those functions: it was not compiled into the kernel and
 their addresses are not its own. Its library is `components/libc/user` (ADR
 0016): `_start`, the door of the call, `open`, `close`, `read`, `write`,
 `lseek`, `readdir`, `stat`, `mkdir`, `unlink`, `getcwd`, `getpid`, `uptime`,
-`execve`, `exit`, `printf`, `puts` and the strings (`strlen`, `strcmp`,
-`strncmp`, `strstr`, `memcpy`, `memset`), with the numbers of `kernel/ksys.h`
-and no allocation, no `errno` and no floating point. The door is `int $0x80`
+`execve`, `exit`, `printf`, `puts`, the strings (`strlen`, `strcmp`,
+`strncmp`, `strstr`, `strchr`, `strrchr`, `memcpy`, `memmove`, `memset`,
+`memcmp`, `memchr`), the allocation (`malloc`, `calloc`, `realloc`, `free`)
+and the character classes of the C locale, with the numbers of
+`kernel/ksys.h`, no `errno`, no locale and no floating point. The door is `int $0x80`
 on x86-64 and the address of a function of the port on the board (ADR 0018);
 the numbers and the arguments of the calls are the same on both machines. The
 two libraries share the header of the ABI and nothing else, and that is
@@ -29,9 +31,10 @@ gate.
 The library of a program grew with its utilities (0.7): `stat` to tell a file
 from a directory (`rm` refuses a directory without `-r`), `mkdir` and
 `unlink` for the tree (`mkdir`, `rm`), `getcwd` for the directory of the task
-(`pwd`), and `strstr` for a word in a line (`grep`). The list is what the ten
+(`pwd`), and `strstr` for a word in a line (`grep`). The list is what the
 programs of `/bin` use and not a standard library: a function without a caller
-of this tree is not in it. `cat`, `wc`, `head` and `grep` read descriptor 0
+of this tree is not in it. `pcre2grep` is the caller that brought the
+allocation and the classes (`third_party/pcre2`, `docs/porting-programs.md`). `cat`, `wc`, `head` and `grep` read descriptor 0
 when they are given no file, which is the shape of a filter; a fresh table of
 a program has no descriptor 0 yet, so that read is `EBADF` until a redirection
 opens it ([`docs/debts.md`](debts.md)).
@@ -190,6 +193,17 @@ const char *microos_strerror(int code);
 * **There is no `printf` of a floating point with the exact digits of the
   system.** The numbers agree to the precision that was asked for, but the
   rounding of the last digit can differ.
+
+## The heap of a program
+
+`components/libc/user/src/malloc.c` is not the allocator of the kernel
+(`kmm`, which has slabs, priorities and the PSRAM): it is one block of bss
+that the loader clears with the rest of the image, and a list of free blocks
+in front of it. There is no lock because a program of this system is one
+task, and `free` joins a block with its neighbours. The size is a constant of
+the build because a program has no `brk`: 256 KiB is what the programs and
+their libraries need, and the bss of an image is under the 1 MiB of the
+loader (`K_EXEC_BSS_MAX`).
 
 ## The tests
 

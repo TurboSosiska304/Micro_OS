@@ -354,6 +354,123 @@ add_libc_program(rm)
 add_libc_program(spawn)
 add_libc_program(wc)
 
+# --- pcre2grep, the program with a vendored library ------------------------
+#
+# PCRE2 (third_party/pcre2) is third-party C and is compiled for the window
+# of a program like any other source, but without the warning flags of this
+# tree: its code is not ours to change, and a warning in it is an upstream
+# matter. The compatibility headers of the vendor replace the standard
+# headers a program does not have, and the library asks the program's own
+# malloc, strings and ctype for what it needs.
+#
+# The objects are named pcre2_<file>.o so that two programs with the library
+# never collide in the build directory, and the pattern of the expression is
+# compiled at run time: there is no table of the sources in the image.
+set(PCRE2_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/pcre2")
+set(PCRE2_SOURCES
+    "${PCRE2_DIR}/src/pcre2_compile.c"
+    "${PCRE2_DIR}/src/pcre2_config.c"
+    "${PCRE2_DIR}/src/pcre2_context.c"
+    "${PCRE2_DIR}/src/pcre2_convert.c"
+    "${PCRE2_DIR}/src/pcre2_dfa_match.c"
+    "${PCRE2_DIR}/src/pcre2_extuni.c"
+    "${PCRE2_DIR}/src/pcre2_find_bracket.c"
+    "${PCRE2_DIR}/src/pcre2_maketables.c"
+    "${PCRE2_DIR}/src/pcre2_match.c"
+    "${PCRE2_DIR}/src/pcre2_match_data.c"
+    "${PCRE2_DIR}/src/pcre2_newline.c"
+    "${PCRE2_DIR}/src/pcre2_ord2utf.c"
+    "${PCRE2_DIR}/src/pcre2_pattern_info.c"
+    "${PCRE2_DIR}/src/pcre2_script_run.c"
+    "${PCRE2_DIR}/src/pcre2_serialize.c"
+    "${PCRE2_DIR}/src/pcre2_string_utils.c"
+    "${PCRE2_DIR}/src/pcre2_substitute.c"
+    "${PCRE2_DIR}/src/pcre2_substring.c"
+    "${PCRE2_DIR}/src/pcre2_tables.c"
+    "${PCRE2_DIR}/src/pcre2_ucd.c"
+    "${PCRE2_DIR}/src/pcre2_valid_utf.c"
+    "${PCRE2_DIR}/src/pcre2_xclass.c"
+    "${PCRE2_DIR}/pcre2_chartables.c"
+    "${PCRE2_DIR}/pcre2_small.c"
+)
+
+set(PCRE2_CFLAGS ${PROGRAM_CFLAGS})
+list(REMOVE_ITEM PCRE2_CFLAGS -Wall -Wextra -Werror)
+list(APPEND PCRE2_CFLAGS
+    -w -Os -ffunction-sections -fdata-sections -fmerge-constants -fno-jump-tables
+    -DHAVE_CONFIG_H -DPCRE2_CODE_UNIT_WIDTH=8
+    -I "${PCRE2_DIR}" -I "${PCRE2_DIR}/src" -I "${PCRE2_DIR}/compat"
+)
+
+# The library of the program is compiled for the size as well: a program of
+# this image is close to the 64 KiB cap, and a wrapper of `syscall.c` that no
+# call of pcre2grep uses must not travel with it. The flags are the ones of a
+# program with one section per function, so --gc-sections can drop it.
+set(PCRE2_PROGRAM_CFLAGS ${PROGRAM_CFLAGS})
+list(APPEND PCRE2_PROGRAM_CFLAGS
+    -Os -ffunction-sections -fdata-sections -fmerge-constants)
+
+function(add_pcre2_program name)
+    set(image "${CMAKE_BINARY_DIR}/${name}.mox")
+    set(objects
+        "${name}_start.o"
+        "${name}_syscall.o"
+        "${name}_string.o"
+        "${name}_malloc.o"
+        "${name}_ctype.o"
+        "${name}.o"
+    )
+    set(pcre2_objects)
+    foreach(source ${PCRE2_SOURCES})
+        get_filename_component(stem "${source}" NAME_WE)
+        list(APPEND pcre2_objects "${name}_pcre2_${stem}.o")
+    endforeach()
+
+    set(compile_pcre2)
+    foreach(source ${PCRE2_SOURCES})
+        get_filename_component(stem "${source}" NAME_WE)
+        list(APPEND compile_pcre2
+            COMMAND ${CMAKE_C_COMPILER} ${PCRE2_CFLAGS}
+                    -o "${name}_pcre2_${stem}.o" "${source}")
+    endforeach()
+
+    add_custom_command(
+        OUTPUT "${image}"
+        COMMAND ${CMAKE_C_COMPILER} ${PCRE2_PROGRAM_CFLAGS}
+                -o ${name}_start.o "${LIBC_USER_DIR}/src/start.c"
+        COMMAND ${CMAKE_C_COMPILER} ${PCRE2_PROGRAM_CFLAGS}
+                -o ${name}_syscall.o "${LIBC_USER_DIR}/src/syscall.c"
+        COMMAND ${CMAKE_C_COMPILER} ${PCRE2_PROGRAM_CFLAGS}
+                -o ${name}_string.o "${LIBC_USER_DIR}/src/string.c"
+        COMMAND ${CMAKE_C_COMPILER} ${PCRE2_PROGRAM_CFLAGS}
+                -o ${name}_malloc.o "${LIBC_USER_DIR}/src/malloc.c"
+        COMMAND ${CMAKE_C_COMPILER} ${PCRE2_PROGRAM_CFLAGS}
+                -o ${name}_ctype.o "${LIBC_USER_DIR}/src/ctype.c"
+        COMMAND ${CMAKE_C_COMPILER} ${PCRE2_CFLAGS}
+                -o ${name}.o "${PROGRAM_DIR}/${name}.c"
+        ${compile_pcre2}
+        COMMAND ${CMAKE_C_COMPILER} -nostdlib -static -no-pie -Wl,--build-id=none
+                -Wl,--gc-sections -Wl,-e,_start
+                -T "${PROGRAM_DIR}/program.ld" -o ${name}.elf ${objects} ${pcre2_objects}
+        COMMAND sh "${MKPROG}" --base ${PROGRAM_BASE} --arch x86-64
+                ${name}.elf ${name}.mox _start
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        DEPENDS "${PROGRAM_DIR}/${name}.c" "${PROGRAM_DIR}/program.ld"
+                "${KERNEL_DIR}/include/kernel/ksys.h" "${MKPROG}"
+                ${PCRE2_SOURCES} "${PCRE2_DIR}/config.h" "${PCRE2_DIR}/pcre2.h"
+                ${LIBC_USER_SOURCES} "${LIBC_USER_DIR}/include/ulibc.h"
+                "${LIBC_USER_DIR}/src/malloc.c" "${LIBC_USER_DIR}/src/ctype.c"
+                "${LIBC_USER_DIR}/src/string.c"
+        COMMENT "building the image of /bin/${name} with PCRE2"
+        VERBATIM
+    )
+
+    set(PROGRAM_IMAGES ${PROGRAM_IMAGES} "${image}" PARENT_SCOPE)
+endfunction()
+
+add_pcre2_program(pcre2grep)
+
+
 add_executable(microos64
     ${KERNEL_SOURCES}
     ${KSHELL_SOURCES}

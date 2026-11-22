@@ -50,5 +50,6 @@ void test_net(void);
 void test_wifi(void);
 void test_sign(void);
 void test_progs(void);
+void test_pcre2(void);
 
 #endif /* MICRO_OS_TESTS_H */

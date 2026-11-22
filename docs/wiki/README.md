@@ -47,7 +47,7 @@ canonical Russian documents are in [`docs/ru/`](../ru/README.md).
 | **Screen** | [screen.md](screen.md) | the TFT, the VGA, the framebuffer of 1.2, what a desktop needs |
 | **Network** | [network.md](network.md) | DNS, TCP, HTTP, NTP, the stream and TLS of 1.2 |
 | **Packages** | [pkg.md](pkg.md) | `pkg`, the flags, the repositories, the signature |
-| **Programs** | [programs.md](programs.md) | `MOX1`, `/bin`, `exec`, ring 3, `fork` |
+| **Programs** | [programs.md](programs.md) | `MOX1`, `/bin`, `exec`, ring 3, `fork`, PCRE2 |
 | **Ports** | [ports.md](ports.md) | ESP32, x86-64, host, null: what runs where |
 | **Porting** | [porting.md](porting.md) | the contract, the bring-up order, the checks |
 | **Kernel and ABI** | [kernel-abi.md](kernel-abi.md) | the calls, the rights, `EFAULT`, contract 1.9 |

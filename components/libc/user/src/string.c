@@ -66,6 +66,35 @@ char *strstr(const char *text, const char *needle)
     return NULL;
 }
 
+int memcmp(const void *left, const void *right, size_t count)
+{
+    const unsigned char *a = (const unsigned char *)left;
+    const unsigned char *b = (const unsigned char *)right;
+    size_t i;
+
+    for (i = 0; i < count; i++) {
+        if (a[i] != b[i]) {
+            return (int)a[i] - (int)b[i];
+        }
+    }
+
+    return 0;
+}
+
+void *memchr(const void *text, int letter, size_t count)
+{
+    const unsigned char *bytes = (const unsigned char *)text;
+    size_t i;
+
+    for (i = 0; i < count; i++) {
+        if (bytes[i] == (unsigned char)letter) {
+            return (void *)(bytes + i);
+        }
+    }
+
+    return NULL;
+}
+
 void *memcpy(void *dest, const void *source, size_t count)
 {
     unsigned char *to = (unsigned char *)dest;
@@ -89,4 +118,59 @@ void *memset(void *dest, int byte, size_t count)
     }
 
     return dest;
+}
+
+void *memmove(void *dest, const void *source, size_t count)
+{
+    unsigned char *to = (unsigned char *)dest;
+    const unsigned char *from = (const unsigned char *)source;
+    size_t i;
+
+    if (to == from || count == 0) {
+        return dest;
+    }
+
+    /* A copy that overlaps forward would read a byte it has already
+     * written, so that direction goes from the end. */
+    if ((size_t)to < (size_t)from) {
+        for (i = 0; i < count; i++) {
+            to[i] = from[i];
+        }
+    } else {
+        for (i = count; i > 0; i--) {
+            to[i - 1] = from[i - 1];
+        }
+    }
+
+    return dest;
+}
+
+char *strchr(const char *text, int letter)
+{
+    unsigned char wanted = (unsigned char)letter;
+
+    while (*text != '\0') {
+        if ((unsigned char)*text == wanted) {
+            return (char *)text;
+        }
+        text++;
+    }
+
+    return wanted == 0 ? (char *)text : NULL;
+}
+
+char *strrchr(const char *text, int letter)
+{
+    unsigned char wanted = (unsigned char)letter;
+    const char *found = NULL;
+
+    for (;;) {
+        if ((unsigned char)*text == wanted) {
+            found = text;
+        }
+        if (*text == '\0') {
+            return (char *)found;
+        }
+        text++;
+    }
 }

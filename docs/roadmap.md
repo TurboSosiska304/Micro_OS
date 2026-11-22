@@ -73,7 +73,7 @@ written when the project was an operating system for one board; the numbers
       its disk and asks for `/bin/hello` with `execve`; the shell runs the
       same file with `exec`
 * [x] Programs are files on a filesystem of the disk, not blobs of the
-      kernel: `make x86-disk` writes `/bin` (fifteen programs) and `/etc` with
+      kernel: `make x86-disk` writes `/bin` (seventeen programs) and `/etc` with
       `tools/mkfs_mfs.c`, and no boot installs an image
 * [x] `PATH` for the shell
 * [x] `argv` reaches the port, and the ABI of the entry is written down
@@ -286,6 +286,11 @@ written when the project was an operating system for one board; the numbers
       and Ctrl+C for every stage of a pipeline (the job of ADR 0017)
 * [x] `ls` lists the names of a directory (`-l` with the mode, owner, size and
       date; `-a` with `.` and `..`), and `tree` draws the levels below it
+* [x] A third-party library under a program: PCRE2 10.42 in
+      `third_party/pcre2`, the 8-bit interpreter without JIT and Unicode,
+      linked into `/bin/pcre2grep`; the image is 61,336 bytes of the 64 KiB cap and
+      the library's own test is `tests/cases/test_pcre2.c` (the Unicode and
+      the transfer limit are in `docs/debts.md`)
 * [ ] A shell `export` and the environment of the shell in the programs,
       instead of the four words of the kernel
 * [x] Programs are files on a filesystem of the disk, and a program is added

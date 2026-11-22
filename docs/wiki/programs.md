@@ -76,7 +76,7 @@ to `x86-64`; a name the format does not know is refused before an image is
 written. `--data-base` is for a port whose data is a window of its own (the
 board): the data no longer follows the text, so the script checks its address
 against that number instead of the contiguous rule and also checks where the
-bss will be cleared. The x86-64 port builds its sixteen images this way: the
+bss will be cleared. The x86-64 port builds its seventeen images this way: the
 object is compiled for the window, linked with `programs/program.ld`, turned
 into a `.mox` by the script (`--base 0x02000000 --arch x86-64`), and written
 into the MicroFS volume of the disk by `make x86-disk` (see below). The kernel
@@ -99,8 +99,8 @@ make x86-smoke     # the same, driven by the smoke test
 
 `tools/mkfs_mfs.c` writes the image: an MBR with one Linux partition at LBA
 2048, a MicroFS volume in it, `/bin`, `/etc` and an empty `/etc/init.d`, the
-sixteen `.mox` images of the build written to `/bin` with mode `0755`, and
-the settings of the machine in `/etc/setting`. It does not repeat the layout
+seventeen `.mox` images of the build written to `/bin` with mode `0755`, the
+license of PCRE2 in `/etc/licenses`, and the settings of the machine in `/etc/setting`. It does not repeat the layout
 of MicroFS: it is a block device over a range of the file, and
 `components/mfs` formats it and writes the objects through `mfs_create`,
 `mfs_write` and `mfs_chmod`. The host test
@@ -126,7 +126,7 @@ never changed.
 ## `/bin` and the boot
 
 The x86-64 port mounts the MicroFS volume of its disk at `/` and finds
-`/bin` already there: the sixteen images are files the tool wrote, with the
+`/bin` already there: the seventeen images are files the tool wrote, with the
 mode of a program (`0755`), and no boot creates one:
 
 | File | What it proves |
@@ -141,6 +141,7 @@ mode of a program (`0755`), and no boot creates one:
 | `/bin/echo` | the vector of the arguments and `write`, the shortest useful program |
 | `/bin/ls` | a directory through `open(O_DIRECTORY)` and `readdir`; no path is the working directory |
 | `/bin/grep` | the lines of a source that hold a word (`-i`, `-v`), through `strstr` |
+| `/bin/pcre2grep` | the lines of a source that match a regular expression (`-i`, `-v`, `-n`, `-o`, `-g N`), through the vendored PCRE2 |
 | `/bin/head` | the first lines of a source (`-n N`), a block at a time |
 | `/bin/mkdir` | a directory through `mkdir`, one for every word of the line |
 | `/bin/pwd` | the directory of the task through `getcwd` |
@@ -150,7 +151,7 @@ mode of a program (`0755`), and no boot creates one:
 
 The first five talk to the kernel through `programs/prog.h`, because what they
 test is the raw door, the fault, the fork, the edge and the signals. The last
-ten are ordinary C programs linked against `components/libc/user`
+eleven are ordinary C programs linked against `components/libc/user`
 ([ADR 0016](../adr/0016-userland.md)). Every one of them reads descriptor 0
 when it is given no file (or `-`); `execve` carries the table of the caller, so
 a redirect or a pipe of the shell fills it (`cat < file`, `ls /bin | wc -l`,
@@ -353,7 +354,9 @@ the library of the kernel, which calls `ksys_*` and has no address in ring 3:
 | `src/start.c` | `_start`: `main(argc, argv, envp)`, then `exit`; on the board also the door, as the first argument |
 | `src/syscall.c` | `int $0x80` on x86-64 and the door of the port on the board; `open`, `close`, `read`, `write`, `lseek`, `readdir`, `stat`, `mkdir`, `unlink`, `getcwd`, `getpid`, `uptime`, `execve`, `exit` |
 | `src/stdio.c` | `printf` and `puts` over a buffer of 128 bytes and `write(1, ...)` |
-| `src/string.c` | `strlen`, `strcmp`, `strncmp`, `strstr`, `memcpy`, `memset` |
+| `src/string.c` | `strlen`, `strcmp`, `strncmp`, `strstr`, `strchr`, `strrchr`, `memcpy`, `memmove`, `memset`, `memcmp`, `memchr` |
+| `src/malloc.c` | `malloc`, `calloc`, `realloc`, `free` over a heap of 256 KiB in the bss of the program |
+| `src/ctype.c` | the `is*` classes and `tolower`/`toupper` of the C locale |
 
 ```c
 #include "ulibc.h"
@@ -378,6 +381,39 @@ the library has no `errno` of its own. A program of the library is built by
 file of the program, the entry is `_start`), and the image is a `.mox` like
 every other. There is no dynamic linker: each image carries its copy of the
 library.
+
+## A regular expression engine: PCRE2
+
+`/bin/pcre2grep` is the one program of the tree with a third-party library
+under it: PCRE2 10.42, vendored in `third_party/pcre2`, compiled for the
+window of the program and linked into its image. The library is 8-bit and
+interpreted; the JIT is off, and so is Unicode, because a program image is
+at most 64 KiB (`KSYS_MAX_IO`) and the Unicode tables alone are about
+120 KiB. [third_party/pcre2/README.md](../../third_party/pcre2/README.md)
+records the release, the digest and the two optimization passes the image
+leaves out.
+
+```text
+microos> exec /bin/pcre2grep -i h.LLO /etc/setting
+hello
+the program has finished
+microos> exec /bin/pcre2grep -o -g 1 ^hostname=(x86_64)$ /etc/setting
+x86_64
+the program has finished
+```
+
+The demo is the shape of a grep: one line of the source is one subject, so
+`^` and `$` are its ends, and `-o` with `-g N` prints the capture `N` of
+every match. The shell has no quotes, so a pattern with a space or a
+character the shell reads as an operator is a debt of the grammar and not of
+the program. A UTF-8 file is a file of bytes here: a `.` is one byte, and
+`-u` is refused with a sentence instead of silently matching something else.
+
+`tests/cases/test_pcre2.c` is the gate: a match and a no-match, the groups
+of a pattern, the anchors of a line, the shape of a UTF-8 subject without
+Unicode, the errors of the compiler and the values of `config.h` read back
+from the library. It compiles the same sources with the same configuration,
+so the engine on the machine and the engine in the test are one.
 
 ## The address space and `fork`
 
@@ -413,9 +449,9 @@ plan to pretend otherwise.
   program. The format is ready for the second machine; the port is not.
 * **No libc of the host.** A program has the calls of the ABI, the library of
   `components/libc/user` and nothing else. The library is not a standard C
-  library: no allocation, no files of a stream, no `errno`, no floating point
-  (the programs are built with `-mgeneral-regs-only`), and the formatter has
-  no precision and no `*` width.
+  library: an allocation over a static heap of 256 KiB, no files of a stream,
+  no `errno`, no locale, no floating point (the programs are built with
+  `-mgeneral-regs-only`), and the formatter has no precision and no `*` width.
 * **No inherited descriptors.** A program is a task with a table of four
   descriptors of its own, and the shell does not pass its own table to it.
   `cat`, `wc`, `head` and `grep` read descriptor 0 when they are given no file
@@ -423,8 +459,9 @@ plan to pretend otherwise.
   until a redirection or an inherited table opens it. The descriptors 1 and 2
   are the console; `pipe`, `dup2` and the inheritance are a debt of the
   milestone after this one.
-* **No `mmap` and no `brk`.** A program cannot ask for a range of its own, and
-  the library has no `malloc`.
+* **No `mmap` and no `brk`.** A program cannot ask for a range of its own: the
+  heap of `malloc` is a block of its bss, and a program that outgrows it gets
+  `NULL`.
 * **No shell `export`.** The environment of every program is the four words of
   the kernel; a program that wants its own passes one to `execve`.
 * **No protection by SMAP yet.** The edge checks the page tables of the caller
