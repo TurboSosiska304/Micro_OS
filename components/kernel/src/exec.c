@@ -7,6 +7,7 @@
 #include "kernel/exec.h"
 
 #include "kernel/config.h"
+#include "kernel/errno.h"
 #include "kernel/log.h"
 #include "kernel/port.h"
 
@@ -43,6 +44,19 @@ static k_u32_t exec_read_u32(const void *data, k_size_t offset)
 
     return (k_u32_t)bytes[0] | ((k_u32_t)bytes[1] << 8) | ((k_u32_t)bytes[2] << 16) |
            ((k_u32_t)bytes[3] << 24);
+}
+
+int k_exec_image_check(k_size_t size)
+{
+    if (size < K_EXEC_HEADER_SIZE) {
+        return KERR_INVAL;
+    }
+
+    if (size > (k_size_t)K_EXEC_MAX_IMAGE) {
+        return KERR_TOOBIG;
+    }
+
+    return 0;
 }
 
 int k_exec_parse(const void *data, k_size_t size, struct k_exec_image *out)
