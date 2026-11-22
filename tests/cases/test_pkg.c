@@ -264,6 +264,24 @@ static k_size_t index_json(char *out, k_size_t size, const char *name, const cha
     return (k_size_t)n;
 }
 
+/* An index of one package of `package_size` bytes: the parser checks the
+ * shape of the document, not the bytes the digest names. */
+static k_size_t index_json_of_size(char *out, k_size_t size, k_u64_t package_size)
+{
+    static const char digest[] = "0000000000000000000000000000000000000000000000000000000000000000";
+    int n = snprintf(out, size,
+                     "{\"repository\":\"microos-progs\",\"machine\":\"x86_64\",\"abi\":%u,"
+                     "\"packages\":[{\"name\":\"huge\",\"version\":\"1.0.0\","
+                     "\"size\":%llu,\"sha256\":\"%s\",\"file\":\"huge-1.0.0-x86_64.mox\"}]}",
+                     (unsigned)PKG_ABI, (unsigned long long)package_size, digest);
+
+    if (n < 0 || (k_size_t)n >= size) {
+        return 0;
+    }
+
+    return (k_size_t)n;
+}
+
 /* The index and its signature where `pkg -Sy` would have left them. */
 static void write_index(const char *text, k_size_t size)
 {
@@ -377,6 +395,44 @@ static void test_index(void)
         KT_CHECK_INT_EQ(pkg_index_parse(unknown_field, strlen(unknown_field), &index), PKG_OK);
         KT_CHECK_INT_EQ((int)index.count, 0);
     }
+}
+
+/*
+ * The ceiling of a package is the ceiling of an image of a program, and it is
+ * one rule for the install and for the index: the largest package is taken
+ * and the next byte is not. The boundary is asked of pkg_size_check() and of
+ * pkg_index_parse(), the two callers of the rule a test can reach without a
+ * volume of eight megabytes - the install path calls the same pkg_size_check()
+ * before it asks the allocator for the block.
+ */
+static void test_size_ceiling(void)
+{
+    static char text[1024];
+    struct pkg_index index;
+    k_size_t length;
+
+    ktest_begin("pkg: a package of 8 MiB is taken, and one byte more is not");
+
+    KT_CHECK_INT_EQ(PKG_PACKAGE_MAX, (k_u64_t)8 * 1024u * 1024u);
+#ifdef K_EXEC_MAX_IMAGE
+    /* The installer and the loader of programs refuse the same file. */
+    KT_CHECK_INT_EQ(PKG_PACKAGE_MAX, K_EXEC_MAX_IMAGE);
+#endif
+
+    KT_CHECK_INT_EQ(pkg_size_check(PKG_PACKAGE_MAX - 1u), PKG_OK);
+    KT_CHECK_INT_EQ(pkg_size_check(PKG_PACKAGE_MAX), PKG_OK);
+    KT_CHECK_INT_EQ(pkg_size_check((k_u64_t)PKG_PACKAGE_MAX + 1u), PKG_ESIZE);
+    KT_CHECK_INT_EQ(pkg_size_check((k_u64_t)PKG_PACKAGE_MAX * 2u), PKG_ESIZE);
+
+    /* The index is the same rule: it refuses what the install would. */
+    length = index_json_of_size(text, sizeof(text), PKG_PACKAGE_MAX);
+    KT_CHECK(length > 0);
+    KT_CHECK_INT_EQ(pkg_index_parse(text, length, &index), PKG_OK);
+    KT_CHECK_INT_EQ(index.entries[0].size, PKG_PACKAGE_MAX);
+
+    length = index_json_of_size(text, sizeof(text), (k_u64_t)PKG_PACKAGE_MAX + 1u);
+    KT_CHECK(length > 0);
+    KT_CHECK_INT_EQ(pkg_index_parse(text, length, &index), PKG_EPARSE);
 }
 
 static void test_local_install(void)
@@ -609,6 +665,7 @@ void test_pkg(void)
     microos_ed25519_keypair(g_public, g_secret, g_seed);
 
     test_index();
+    test_size_ceiling();
     test_local_install();
     test_bad_signature();
     test_wrong_machine();

@@ -62,11 +62,23 @@
 #define PKG_KEY_SIZE 32
 
 /*
- * The largest package this installer takes. A program of MOX1 is static and
- * small; a megabyte is ten times the largest one the tree builds and keeps a
- * hostile index from asking for all of the memory of the machine.
+ * The largest package this installer takes: the ceiling of an image of a
+ * program and not a number of its own, so that the installer and the loader
+ * refuse the same file. A package is read into one block of the allocator,
+ * which is why the ceiling is the memory of the machine and not the size of
+ * one transfer, and why a hostile index cannot ask for more than eight
+ * megabytes of it.
+ *
+ * The kernel names the ceiling in kernel/exec.h. A tree whose header does
+ * not have it yet - the base of this branch - repeats the number here; the
+ * guard puts the name in its place as soon as the kernel has it, so the two
+ * cannot drift apart.
  */
-#define PKG_PACKAGE_MAX (1024u * 1024u)
+#ifdef K_EXEC_MAX_IMAGE
+#define PKG_PACKAGE_MAX K_EXEC_MAX_IMAGE
+#else
+#define PKG_PACKAGE_MAX (8u * 1024u * 1024u)
+#endif
 
 /* The answers of the calls of this component. */
 #define PKG_OK 0
@@ -115,6 +127,16 @@ struct pkg_record {
     k_u64_t size;
     bool explicit_install;
 };
+
+/*
+ * The rule of the ceiling, in the one place that keeps it: PKG_OK when a
+ * package of `size` bytes may be read and installed, PKG_ESIZE when it is
+ * past PKG_PACKAGE_MAX. The install of a file, the install of a name from
+ * the index and the parse of the index ask this and not a copy of the rule;
+ * the parse answers PKG_EPARSE of its own, because a document that names a
+ * package this machine cannot hold is not the index of a repository.
+ */
+int pkg_size_check(k_u64_t size);
 
 /*
  * Read the JSON of an index. The object is the one of the format of ADR

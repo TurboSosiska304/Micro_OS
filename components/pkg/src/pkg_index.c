@@ -350,7 +350,7 @@ static int entry_finish(struct pkg_entry *entry, const struct pkg_index *index, 
         return PKG_EPARSE;
     }
 
-    if (entry->size > PKG_PACKAGE_MAX) {
+    if (pkg_size_check(entry->size) != PKG_OK) {
         return PKG_EPARSE;
     }
 
