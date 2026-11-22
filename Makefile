@@ -549,10 +549,15 @@ x86-fat-build:
 disk-stress: x86-disk x86-fat-build build
 	python3 tools/disk_stress.py --fs $(DISK_STRESS_FS)
 
-# The board half of the session: build, flash and ten minutes with one
+# The board half of the session: build, flash and three minutes with one
 # boot. It is a target of the campaign and not of `make ci` (no runner has
 # the board).
-BOARD_SOAK_MINUTES ?= 10
+#
+# Three minutes, not ten: from 1.2 the board is the compatibility port of
+# ADR 0018 and a release gives it small changes - the volume, the flash map
+# and the boot path do not move. A release that does touch them (1.1.0 moved
+# the volume) asks for the long session on purpose: BOARD_SOAK_MINUTES=10.
+BOARD_SOAK_MINUTES ?= 3
 
 board-soak:
 	tools/board_soak.sh --minutes $(BOARD_SOAK_MINUTES)
