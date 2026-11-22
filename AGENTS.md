@@ -53,6 +53,7 @@ Corollaries:
 | `components/init/` | the init process: the scripts of `/etc/init.d`, each in a task of its own |
 | `components/config/` | the configuration of `/etc`, persisted in the NVS |
 | `components/net/` | the HTTP client and the clock of NTP |
+| `components/pkg/` | the installer of x86-64: the index, the signature, the database and `pkg` |
 | `components/mfs/` | MicroFS on flash (DATA/META/INFO sections) + VFS adapter `mfs_vfs.c` |
 | `components/procfs/`, `components/devfs/` | virtual filesystems |
 | `components/graphics/`, `components/font/` | console on the TFT, 5x7 font, framebuffer drawing |

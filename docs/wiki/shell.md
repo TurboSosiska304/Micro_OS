@@ -145,7 +145,9 @@ The services, where the port registers them:
 |---|---|---|
 | `config`, `config sync` | list the store of `/etc`, restore and save it | board, simulator |
 | `mkfs -y` | format the volume (erases everything) | board, simulator |
-| `http get <url>` | one HTTP request; prints the status and the body | board |
+| `http get <url>` | one HTTP request; prints the status and the body | board, x86-64 |
+| `wget <url> <file>` | download a URL into a file; a second run continues it | board, x86-64 |
+| `pkg <operation> [flags] [name...]` | the installer: `-Syu`, `-S NAME`, `-U FILE`, `-R NAME`, `-Q` | x86-64 |
 | `ntp [server]` | set the clock from NTP (UTC), default `pool.ntp.org` | board |
 | `httpd [port\|off]` | the page of the state over HTTP, default port 80 | board |
 | `mqtt <host> <port> <topic> <message>` | publish one message at QoS 0 | board |
@@ -161,12 +163,14 @@ The services, where the port registers them:
 | `power [sleep <seconds>\|off]` | deep sleep with the timer or button C, or power off | board |
 | `factory reset -y` | erase MicroFS and the NVS, then restart; without `-y` it only explains | board |
 
-The simulator has no network and no drivers: `http`, `ntp`, `httpd`, `mqtt`
-and `telnet` are not registered there at all, and the driver commands of the
-board are stubs that answer something sensible. The x86-64 port registers only
-the core and the files: no `config`, no `mkfs`, no `date`, no network. This is
-the port boundary doing its job, not a bug; [ports.md](ports.md) has the whole
-matrix.
+The simulator has no network and no drivers: `http`, `wget`, `pkg`, `ntp`,
+`httpd`, `mqtt` and `telnet` are not registered there at all, and the driver
+commands of the board are stubs that answer something sensible. The x86-64
+port registers the core and the files, and the services of its image: the
+network of K6 (`http`, `wget`, `httpd`, `ntp`) and the installer (`pkg`)
+arrive with `make x86-net-build`; an image without the network has none of
+them. This is the port boundary doing its job, not a bug; [ports.md](ports.md)
+has the whole matrix.
 
 ## `PATH` and `exec`
 
