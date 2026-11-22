@@ -41,7 +41,10 @@
 # leaves the data one, two or three bytes short of where the program reads
 # it - a shift that runs, prints the wrong bytes and looks like a bug in the
 # program. The trailing padding after the data is allowed by the format and
-# is ignored by the parser.
+# is ignored by the parser. The gap the linker may leave between the data and
+# the bss (a section aligned to 32 by an object of the program) is padding of
+# the data as well: the header has no field for it, and the loader clears the
+# bss right after the padded data.
 set -eu
 
 K_EXEC_HEADER_SIZE=32
