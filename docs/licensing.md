@@ -16,6 +16,7 @@ commercially; the note here is what the tree does.
 | zlib | 1.3.1 | zlib | `third_party/zlib`, `ports/port_x86_64/programs/zcat.c` | `/bin/zcat` of the x86-64 MicroFS image; `/etc/licenses/zlib` in the image and `LICENSE.zlib` in the x86-64 tar |
 | Mbed TLS | 3.6.2 | Apache-2.0 (of the dual Apache-2.0 / GPL-2.0-or-later) | `third_party/mbedtls` | the x86-64 network image, and the host tests; `LICENSE.mbedtls` in the x86-64 tar |
 | PCRE2 | 10.42 | BSD-3-Clause WITH PCRE2-exception | `third_party/pcre2`, `ports/port_x86_64/programs/pcre2grep.c` | `/bin/pcre2grep` of the x86-64 MicroFS image; `/etc/licenses/pcre2` in the image and `LICENSE.pcre2` in the x86-64 tar |
+| Lua | 5.4.7 | MIT | `third_party/lua`, `ports/port_x86_64/programs` (the `main` is the release's `lua.c`) | `/bin/lua` of the x86-64 MicroFS image; `/etc/licenses/lua` in the image and `LICENSE.lua` in the x86-64 tar |
 
 Spleen is a font by Frederic Cambus; the license and the note are in
 [`third_party/spleen`](../third_party/spleen/README.md). The 8x16 table is
@@ -54,6 +55,24 @@ only settles the form of the binary. The MicroFS image carries
 `LICENSE.pcre2` into the x86-64 archive. The text stays PCRE2's: it is not
 merged into the MIT `LICENSE` of the tree.
 
+Lua is a language by the team of PUC-Rio; the version, the files, the port
+layer and the one configuration file of the port are in
+[`third_party/lua`](../third_party/lua/README.md). Its MIT license asks for
+the copyright notice and the permission text to travel with a copy of the
+software, so the image carries `/etc/licenses/lua` beside `/bin/lua` and
+`tools/bundle.sh` puts `LICENSE.lua` into the x86-64 archive. The text is the
+MIT of the release and not a second copy of the MIT of this tree: the two
+notice lines are different and the tree keeps both.
+
+Lua is a language by the team of PUC-Rio; the version, the files, the port
+layer and the one configuration file of the port are in
+[`third_party/lua`](../third_party/lua/README.md). Its MIT license asks for
+the copyright notice and the permission text to travel with a copy of the
+software, so the image carries `/etc/licenses/lua` beside `/bin/lua` and
+`tools/bundle.sh` puts `LICENSE.lua` into the x86-64 archive. The text is the
+MIT of the release and not a second copy of the MIT of this tree: the two
+notice lines are different and the tree keeps both.
+
 ## The rule
 
 1. **The MIT tree takes permissive code only.** MIT, BSD-2-Clause,
@@ -71,7 +90,7 @@ merged into the MIT `LICENSE` of the tree.
    ported from a permissive source (FreeBSD, OpenBSD, NetBSD) keeps its
    notice and is listed here.
 4. **A binary carries the licenses of what it contains.** `tools/bundle.sh`
-   puts `LICENSE.spleen`, `LICENSE.zlib`, `LICENSE.pcre2` and
+   puts `LICENSE.spleen`, `LICENSE.zlib`, `LICENSE.pcre2`, `LICENSE.lua` and
    `LICENSE.mbedtls` into the x86-64 archive; a new
    third-party part adds its license to the same bundle. The board image
    contains the mbedTLS that ESP-IDF links into it (Apache-2.0), which is not

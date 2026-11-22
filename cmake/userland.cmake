@@ -39,13 +39,26 @@ set(MICROOS_LIBC_USER_SOURCES
 # it a rebuild after an edit of `ulibc.h` would keep the old object.
 set(MICROOS_LIBC_USER_HEADERS
     "${MICROOS_LIBC_USER_DIR}/include/ulibc.h"
+    "${MICROOS_LIBC_USER_DIR}/include/assert.h"
+    "${MICROOS_LIBC_USER_DIR}/include/ctype.h"
     "${MICROOS_LIBC_USER_DIR}/include/errno.h"
     "${MICROOS_LIBC_USER_DIR}/include/fcntl.h"
+    "${MICROOS_LIBC_USER_DIR}/include/locale.h"
+    "${MICROOS_LIBC_USER_DIR}/include/math.h"
+    "${MICROOS_LIBC_USER_DIR}/include/setjmp.h"
+    "${MICROOS_LIBC_USER_DIR}/include/signal.h"
     "${MICROOS_LIBC_USER_DIR}/include/stdio.h"
     "${MICROOS_LIBC_USER_DIR}/include/stdlib.h"
     "${MICROOS_LIBC_USER_DIR}/include/string.h"
+    "${MICROOS_LIBC_USER_DIR}/include/time.h"
     "${MICROOS_LIBC_USER_DIR}/include/unistd.h"
     "${MICROOS_LIBC_USER_DIR}/include/sys/types.h"
+    # The two headers of the library that are not a part of its interface but
+    # are included by a source of it: the state of a stream and the seam of
+    # the formatter with the number with a point. They are named for the same
+    # reason as the others: a custom command gets no depfile from CMake.
+    "${MICROOS_LIBC_USER_DIR}/src/file_private.h"
+    "${MICROOS_LIBC_USER_DIR}/src/format_float.h"
 )
 
 # A static library of the guest. The sources are the ones of the third-party
@@ -54,14 +67,20 @@ set(MICROOS_LIBC_USER_HEADERS
 # of the port names in its own link, so the host libc of the build machine is
 # never asked for a symbol.
 function(microos_userland_library name)
-    cmake_parse_arguments(LIB "" "" "SOURCES;INCLUDES;DEFINES;COMPILE_OPTIONS" ${ARGN})
+    cmake_parse_arguments(LIB "FLOAT" "" "SOURCES;INCLUDES;DEFINES;COMPILE_OPTIONS" ${ARGN})
 
     if(NOT LIB_SOURCES)
         message(FATAL_ERROR "microos_userland_library(${name}): no sources")
     endif()
 
+    if(LIB_FLOAT)
+        set(guest_flags ${MICROOS_FLOAT_CFLAGS})
+    else()
+        set(guest_flags ${MICROOS_USERLAND_CFLAGS})
+    endif()
+
     add_library(${name} STATIC ${LIB_SOURCES})
-    target_compile_options(${name} PRIVATE ${MICROOS_USERLAND_CFLAGS} ${LIB_COMPILE_OPTIONS})
+    target_compile_options(${name} PRIVATE ${guest_flags} ${LIB_COMPILE_OPTIONS})
     target_include_directories(${name} PRIVATE
         "${MICROOS_KERNEL_INCLUDE}"
         "${MICROOS_LIBC_USER_DIR}/include"
@@ -85,14 +104,22 @@ endfunction()
 # the linker of the window drops the ones no call reaches. It is the size flag
 # of a ported library whose engine is bigger than the program around it.
 function(microos_add_userland_program name)
-    cmake_parse_arguments(PROG "GC_SECTIONS" ""
+    cmake_parse_arguments(PROG "FLOAT;GC_SECTIONS" "MAIN"
         "LIBRARIES;INCLUDES;DEFINES;SOURCES;COMPILE_OPTIONS" ${ARGN})
 
-    set(source "${MICROOS_PROGRAM_DIR}/${name}.c")
+    if(PROG_MAIN)
+        set(source "${PROG_MAIN}")
+    else()
+        set(source "${MICROOS_PROGRAM_DIR}/${name}.c")
+    endif()
     set(image "${CMAKE_BINARY_DIR}/${name}.mox")
     set(objects)
     set(runtime_sources ${MICROOS_LIBC_USER_SOURCES} ${PROG_SOURCES})
-    set(compile_flags ${MICROOS_PROGRAM_CFLAGS} ${PROG_COMPILE_OPTIONS})
+    if(PROG_FLOAT)
+        set(compile_flags ${MICROOS_FLOAT_PROGRAM_CFLAGS} ${PROG_COMPILE_OPTIONS})
+    else()
+        set(compile_flags ${MICROOS_PROGRAM_CFLAGS} ${PROG_COMPILE_OPTIONS})
+    endif()
     set(link_flags)
     if(PROG_GC_SECTIONS)
         list(APPEND compile_flags -ffunction-sections -fdata-sections)

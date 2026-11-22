@@ -157,6 +157,20 @@ COMMANDS = [
     # layer waits out the EAGAIN of the producer that is still writing.
     "cat /etc/greeting.gz | /bin/zcat",
     "exec /bin/ls /etc/licenses",
+    # The second port of a program of somebody else (Lua): the interpreter is
+    # a file of /bin, its first script and its license are files of /etc, and
+    # the number of a program with a point in it is the arithmetic of the
+    # library of the guest. The image is 164 KiB and K_EXEC_MAX_IMAGE (8 MiB)
+    # lets sys_execve read it in pieces of KSYS_MAX_IO; the run of the
+    # library is the host test `tests/cases/test_lua.c`.
+    "exec /bin/lua -e print(2^10)",
+    "exec /bin/lua -e print(math.pi)",
+    'exec /bin/lua -e print(string.format("%.3f",1/3))',
+    "exec /bin/lua -e print(1/0,0/0)",
+    "exec /bin/lua -e print(os.time()>=0)",
+    "exec /bin/lua /etc/hello.lua",
+    "exec /bin/lua /etc/no-such.lua",
+    "exec /bin/cat /etc/hello.lua",
     "echo hi > /tmp/f",
     "cat /tmp/f",
     "cat < /tmp/f",
@@ -649,7 +663,7 @@ def _write_bad_image(data: bytes, tag: str = "image") -> str:
     return path
 
 
-def run_machine(loader: str, kernel: str, image: str, timeout: float) -> str:
+def run_machine(loader: str, kernel: str, image: str, timeout: float, commands: list = None) -> str:
     """Boot the machine, drive the shell and return the transcript.
 
     The output is read while the machine runs, not after it stops: the
@@ -682,6 +696,8 @@ def run_machine(loader: str, kernel: str, image: str, timeout: float) -> str:
         f"file={image},format=raw,if=ide,index=0,cache=writeback",
     ]
 
+    lines = COMMANDS if commands is None else commands
+
     process = subprocess.Popen(
         command,
         stdin=subprocess.PIPE,
@@ -711,13 +727,13 @@ def run_machine(loader: str, kernel: str, image: str, timeout: float) -> str:
 
             # One command per prompt: the shell prints the prompt before it
             # reads, so the line is written only when the shell is waiting.
-            while sent < len(COMMANDS) and text.count(PROMPT) > sent:
-                process.stdin.write((COMMANDS[sent] + "\n").encode("ascii"))
+            while sent < len(lines) and text.count(PROMPT) > sent:
+                process.stdin.write((lines[sent] + "\n").encode("ascii"))
                 process.stdin.flush()
                 sent += 1
 
             # The prompt after the last command means its answer is done.
-            if text.count(PROMPT) > len(COMMANDS):
+            if text.count(PROMPT) > len(lines):
                 break
     finally:
         process.terminate()
@@ -738,6 +754,98 @@ def run_machine(loader: str, kernel: str, image: str, timeout: float) -> str:
         process.stdin.close()
 
     return transcript.decode("utf-8", errors="replace")
+
+
+# The largest image a call of the system reads (K_EXEC_MAX_IMAGE in
+# kernel/exec.h). The disk of this machine is 8 MB, so a file past the limit
+# needs a volume of its own: the second disk of the smoke is 16 MB and carries
+# one file of the limit plus a byte.
+K_EXEC_MAX_IMAGE = 8 * 1024 * 1024
+OVERSIZE_IMAGE = os.path.join(BUILD, "oversize.img")
+OVERSIZE_FILLER = os.path.join(BUILD, "oversize.bin")
+
+
+def build_oversize_image() -> str:
+    """A 16 MB disk with one file of K_EXEC_MAX_IMAGE + 1 zero bytes.
+
+    The volume is written once and kept: it carries the programs of the build
+    too, but this boot runs only the big file and the shell, so a rebuild of
+    the kernel does not make it stale, and the 8 MiB of blocks are the slowest
+    part of the smoke test.
+    """
+    if os.path.isfile(OVERSIZE_IMAGE):
+        return OVERSIZE_IMAGE
+
+    with open(OVERSIZE_FILLER, "wb") as file:
+        chunk = b"\0" * (1024 * 1024)
+        written = 0
+        while written <= K_EXEC_MAX_IMAGE:
+            file.write(chunk)
+            written += len(chunk)
+    os.truncate(OVERSIZE_FILLER, K_EXEC_MAX_IMAGE + 1)
+
+    tool = os.path.join(ROOT, "tools", "x86_image.py")
+    result = subprocess.run(
+        [
+            sys.executable,
+            tool,
+            "--image",
+            OVERSIZE_IMAGE,
+            "--size-mb",
+            "16",
+            "--program",
+            f"/big.bin={OVERSIZE_FILLER}",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stdout + result.stderr).strip())
+    return OVERSIZE_IMAGE
+
+
+def oversize_checks(loader: str, kernel: str, timeout: float) -> list:
+    """One boot of a disk with an image past K_EXEC_MAX_IMAGE on it.
+
+    The call refuses the file before a byte is read and the answer is E2BIG,
+    which the shell prints as "argument list too long"; the descriptor of the
+    caller is not spent, and the shell answers the next command.
+    """
+    checks = []
+
+    def expect(name: str, condition: bool, detail: str = "") -> None:
+        checks.append((name, bool(condition), detail))
+
+    try:
+        image = build_oversize_image()
+    except (OSError, RuntimeError) as error:
+        expect("the disk of the oversize image is built", False, str(error))
+        return checks
+
+    expect("the disk of the oversize image is built", os.path.isfile(image), image)
+
+    output = run_machine(
+        loader,
+        kernel,
+        image,
+        timeout,
+        commands=["exec /big.bin", "uname"],
+    )
+
+    expect("the machine boots on the oversize disk", PROMPT in output, output[-300:])
+    expect(
+        "an image past K_EXEC_MAX_IMAGE is E2BIG",
+        "exec: /big.bin: argument list too long" in output,
+        output[-500:],
+    )
+    expect(
+        "the refused image spends no descriptor and the shell lives",
+        re.search(r"MicroOS \d+\.\d+\.\d+", output) is not None,
+        output[-300:],
+    )
+
+    return checks
 
 
 def check(output: str) -> list:
@@ -882,9 +990,9 @@ def check(output: str) -> list:
     # filesystem and not a line the kernel printed about itself.
     bin_listing = answer("ls /bin")
     expect("the program is a file in /bin", "hello" in bin_listing)
-    # All seventeen are objects of the volume the boot mounted, with the
-    # mode the tool gave them; a missing one is a tool or a build that lost
-    # it.
+    # Every program of the port is an object of the volume the boot mounted,
+    # with the mode the tool gave it; a missing one is a tool or a build that
+    # lost it.
     stat_answer = answer("stat /etc/setting")
     expect(
         "stat prints the mode in octal",
@@ -919,10 +1027,6 @@ def check(output: str) -> list:
         "heap:" in free_answer and "uptime:" not in free_answer,
         free_answer,
     )
-    # Every program of the port is an object of the volume the boot mounted,
-    # with the mode the tool gave it; a missing one is a tool or a build that
-    # lost it.
-
     # The clock of this port moves by the millisecond: a single 32 KB fill
     # used to divide by one microsecond and claim tens of gigabytes per
     # second. The measurement repeats the operation, and every speed is a
@@ -999,6 +1103,7 @@ def check(output: str) -> list:
                 "spawn",
                 "zcat",
                 "pcre2grep",
+                "lua",
             )
         ),
         bin_listing[-200:],
@@ -1348,6 +1453,67 @@ def check(output: str) -> list:
     licenses = answer("exec /bin/ls /etc/licenses")
     expect("the license of zlib travels with the image", "zlib" in licenses, licenses)
 
+    # --- the second port of somebody else's program: Lua and /bin/lua
+    # The script and the license are files of the image, the interpreter is a
+    # file of /bin, and every line below is the library of the guest computing
+    # in a double: a power, the constant of pi, three places of a fraction,
+    # the two values that are not numbers, the clock, and a script that reads
+    # and writes a file of the VFS.
+    lua_script = answer("exec /bin/cat /etc/hello.lua")
+    expect(
+        "the script of the first Lua program is a file of the image",
+        "the first script of the machine" in lua_script,
+        lua_script[:200],
+    )
+    expect("the license of Lua travels with the image", "lua" in licenses, licenses)
+
+    lua_power = answer("exec /bin/lua -e print(2^10)")
+    expect(
+        "lua -e prints a power of a double",
+        "1024.0" in lua_power and "the program exited with 0" in lua_power,
+        lua_power,
+    )
+    lua_pi = answer("exec /bin/lua -e print(math.pi)")
+    expect("lua prints the constant of pi", "3.1415926535898" in lua_pi, lua_pi)
+    lua_format = answer('exec /bin/lua -e print(string.format("%.3f",1/3))')
+    expect(
+        "string.format writes three places of a fraction",
+        "0.333" in lua_format and "the program exited with 0" in lua_format,
+        lua_format,
+    )
+    lua_special = answer("exec /bin/lua -e print(1/0,0/0)")
+    expect(
+        "the values that are not numbers are words",
+        "inf" in lua_special and "nan" in lua_special,
+        lua_special,
+    )
+    lua_clock = answer("exec /bin/lua -e print(os.time()>=0)")
+    expect("os.time answers a number of seconds", "true" in lua_clock, lua_clock)
+
+    lua_run = answer("exec /bin/lua /etc/hello.lua")
+    expect(
+        "the script of /etc runs in the interpreter",
+        all(
+            line in lua_run
+            for line in (
+                "lua: hello from /etc/hello.lua",
+                "lua: table\t3\talpha\tgamma",
+                "lua: pi 3.142, 2^10 1024",
+                "lua: read\ta line written by lua",
+                "lua: os.time\ttrue",
+                "lua: string\tABC\txxx",
+            )
+        )
+        and "the program exited with 0" in lua_run,
+        lua_run,
+    )
+    lua_missing = answer("exec /bin/lua /etc/no-such.lua")
+    expect(
+        "a script that is not there is the sentence of the interpreter",
+        "cannot open /etc/no-such.lua" in lua_missing and "exited with 1" in lua_missing,
+        lua_missing,
+    )
+
     # A program starts another program with an environment of its own. The
     # two words are the vector of `spawn.c`, copied by the kernel at the edge
     # and placed in the memory of the second program: the entry prints them.
@@ -1633,6 +1799,7 @@ def main(argv: list) -> int:
         + signature_checks(loader, kernel)
         + open_policy_checks(args.open_build)
         + check(output)
+        + oversize_checks(loader, kernel, args.timeout)
     )
     failed = [item for item in checks if not item[1]]
 

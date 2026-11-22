@@ -184,10 +184,18 @@ function(add_board_program name entry)
                 -o ${name}_stdio.o "${MICRO_OS_LIBC_USER_DIR}/src/stdio.c"
         COMMAND ${CMAKE_C_COMPILER} ${MICRO_OS_PROGRAM_CFLAGS}
                 -o ${name}_string.o "${MICRO_OS_LIBC_USER_DIR}/src/string.c"
+        # The wrappers of the calls keep the magnitude of a negative answer in
+        # `errno` (src/errno.c), which the port of zlib to the library added;
+        # the program of the board links the file as every program does.
+        COMMAND ${CMAKE_C_COMPILER} ${MICRO_OS_PROGRAM_CFLAGS}
+                -o ${name}_errno.o "${MICRO_OS_LIBC_USER_DIR}/src/errno.c"
         COMMAND ${CMAKE_C_COMPILER} ${MICRO_OS_PROGRAM_CFLAGS}
                 -o ${name}_errno.o "${MICRO_OS_LIBC_USER_DIR}/src/errno.c"
         COMMAND ${CMAKE_C_COMPILER} ${MICRO_OS_PROGRAM_CFLAGS}
                 -o ${name}_main.o "${MICRO_OS_PROGRAM_DIR}/${name}.c"
+        # -lgcc is the compiler's own runtime: the formatter of a program
+        # computes a 64-bit number with a division and a remainder, and the
+        # Xtensa has no 64-bit division instruction.
         COMMAND ${CMAKE_C_COMPILER} -nostdlib -static -no-pie -Wl,--build-id=none
                 -Wl,-e,${entry} -T "${MICRO_OS_PROGRAM_DIR}/program_esp32.ld"
                 -o ${name}.elf ${name}_start.o ${name}_syscall.o ${name}_stdio.o

@@ -79,13 +79,20 @@ tends to need and the tree has:
 
 | Header | What is there |
 |---|---|
-| `<string.h>` | `strlen`, `strcmp`, `strncmp`, `strstr`, `strcpy`, `strncpy`, `strcat`, `strchr`, `strrchr`, `memcpy`, `memmove`, `memset`, `memcmp`, `memchr` |
-| `<stdlib.h>` | `malloc`, `calloc`, `realloc`, `free`, `exit`, `EXIT_SUCCESS`, `EXIT_FAILURE` |
-| `<stdio.h>` | `printf`, `puts`, `snprintf`, `vsnprintf`, and the streams `fopen`, `fclose`, `fread`, `fwrite`, `fgetc`, `fputc`, `fgets`, `fputs`, `feof`, `ferror`, `clearerr`, `fflush`, `fseek`, `ftell`, `rewind`, `stdin`, `stdout`, `stderr` |
-| `<errno.h>` | the POSIX numbers and `errno`, which is a plain global of the program |
-| `<unistd.h>` | `read`, `write`, `lseek`, `close`, `unlink`, the three `STD*_FILENO` and `off_t`/`ssize_t` |
+| `<string.h>` | `strlen`, `strcmp`, `strncmp`, `strcoll`, `strstr`, `strspn`, `strcspn`, `strpbrk`, `strcpy`, `strncpy`, `strcat`, `strchr`, `strrchr`, `memcpy`, `memmove`, `memset`, `memcmp`, `memchr` |
+| `<stdlib.h>` | `malloc`, `calloc`, `realloc`, `free`, `exit`, `abort`, `getenv`/`environ`, `strtod`, `strtol`, `strtoul`, `strtoll`, `strtoull`, `atoi`, `atol`, `atof`, `abs`, `labs`, `qsort`, `EXIT_SUCCESS`, `EXIT_FAILURE` |
+| `<stdio.h>` | `printf`, `vprintf`, `fprintf`, `vfprintf`, `sprintf`, `snprintf`, `vsnprintf`, `puts`, `putchar`, and the streams `fopen`, `freopen`, `tmpfile` (a failure: no `/tmp`), `fclose`, `fread`, `fwrite`, `fgetc`, `getc`, `ungetc`, `fputc`, `fgets`, `fputs`, `feof`, `ferror`, `clearerr`, `fflush`, `fseek`, `ftell`, `rewind`, `fileno`, `setvbuf` (accepted, no buffer), `stdin`, `stdout`, `stderr` |
+| `<errno.h>` | the POSIX numbers, `EDOM`/`ERANGE`, and `errno`, which is a plain global of the program |
+| `<unistd.h>` | `read`, `write`, `lseek`, `close`, `unlink`, `isatty` (0: no terminal), the three `STD*_FILENO` and `off_t`/`ssize_t` |
 | `<fcntl.h>` | `O_RDONLY`, `O_WRONLY`, `O_RDWR`, `O_CREAT`, `O_TRUNC`, `O_APPEND`, `O_DIRECTORY` |
 | `<sys/types.h>` | `off_t`, `ssize_t`, `off64_t` |
+| `<math.h>` | `sqrt`, `pow`, `fmod`, `floor`, `ceil`, `trunc`, `round`, `fabs`, `exp`, `exp2`, `log`, `log2`, `log10`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `frexp`, `ldexp`, `modf` |
+| `<time.h>` | `time` (the uptime), `clock`, `difftime`, `gmtime`, `localtime`, `mktime`, `strftime`, `struct tm` |
+| `<setjmp.h>` | `setjmp`/`longjmp` (the registers of x86-64) |
+| `<locale.h>` | the C locale: `setlocale`, `localeconv` |
+| `<ctype.h>` | the classes of a byte and `tolower`/`toupper` |
+| `<signal.h>` | the four signals of the ABI, `signal`, `raise`, `sig_atomic_t` |
+| `<assert.h>` | `assert` |
 
 The allocation is an **arena in the bss of the program**, not
 `KSYS_MALLOC`: the block of the kernel is memory of ring 0 and the page
@@ -95,10 +102,13 @@ the bss of an image is capped at 1 MiB by the format. A library that
 allocates more needs a program with a larger arena, or a `brk`/`mmap` of the
 program, which the kernel does not have yet (`docs/debts.md`).
 
-The formatter has `%d %i %u %o %x %X %c %s %p %%`, the flags `-` and `0`
-and the length `l`/`z`. It has **no floating point** and no precision: a
-library that prints a float, or a `%.3s`, needs a formatter of its own or a
-change of `components/libc/user/src/stdio.c` (a debt).
+The formatter has `%d %i %u %o %x %X %c %s %p %%`, the flags `- + space # 0`
+and `*`, a precision, and the length `l`/`ll`/`z`/`j`/`h`. A build that
+defines `ULIBC_WITH_FLOAT` adds `%f %F %e %E %g %G`; a program of the tree
+that does not defines it is built with `-mgeneral-regs-only` and prints such
+a conversion as the two characters it was written with. `%a` is not there
+(Lua prints a hexadecimal float only if a script asks for it; `%a` is a
+debt).
 
 ### The shape of the calls
 
@@ -181,9 +191,56 @@ The guest flags are the ones of the kernel and of the existing programs:
 the kernel's), and no libc of the host: a symbol that the archive cannot
 resolve is a link error and not a silent call into glibc.
 
-`-mgeneral-regs-only` means no floating point and no SSE in the guest. A
-library that computes in `double` cannot be built this way until the port
-saves the XMM state; that is a debt, not a flag to remove.
+`-mgeneral-regs-only` is the rule of a program that computes in integers.
+A library whose numbers are doubles (Lua) is built with the `FLOAT` option of
+the two functions instead: the port's loader sets `CR4.OSFXSR`,
+`CR4.OSXMMEXCPT` and `CR0.NE`, the runtime of the program is compiled with
+`-DULIBC_WITH_FLOAT`, and `src/math.c`, `src/stdlib.c` and `src/setjmp.c` are
+linked into that image alone. The scheduler saves none of the XMM or x87
+state, and `execve` waits for the program that runs, so there is one program
+with a point in its numbers at a time (`docs/debts.md`).
+
+### Lua: the second worked example
+
+Lua 5.4.7 is the port that asks for everything the first one did not: a
+`double`, a parser that long-jumps out of an error, a clock, a file it reads
+as a script and a formatter with a precision. Its recipe is the one above with
+three additions:
+
+```cmake
+microos_userland_library(microos_user_lua FLOAT
+    SOURCES ${LUA_SOURCES}
+    INCLUDES "${LUA_DIR}" "${LUA_DIR}/port"
+    COMPILE_OPTIONS "-include" "${LUA_DIR}/port/luaconf_port.h" -Os)
+
+add_libc_program(lua
+    FLOAT                              # SSE and x87, no -mgeneral-regs-only
+    LIBRARIES microos_user_lua
+    MAIN "${LUA_DIR}/lua.c"            # the main of the release, not a copy
+    DEFINES ULIBC_HEAP_SIZE=786432u
+    SOURCES "${LIBC_USER_DIR}/src/math.c"
+            "${LIBC_USER_DIR}/src/stdlib.c"
+            "${LIBC_USER_DIR}/src/setjmp.c"
+            "${LIBC_USER_DIR}/src/time.c"
+            "${LIBC_USER_DIR}/src/locale.c"
+            "${LIBC_USER_DIR}/src/ctype.c"
+            "${LIBC_USER_DIR}/src/assert.c"
+            "${LIBC_USER_DIR}/src/format_float.c"
+    COMPILE_OPTIONS -DULIBC_WITH_FLOAT -include "${LUA_DIR}/port/luaconf_port.h" -Os)
+```
+
+`MAIN` is for a port whose program is a file of the release (the standalone
+interpreter of Lua) and not a small file of `ports/port_x86_64/programs`.
+`FLOAT` replaces the guest flags of a program with the ones without
+`-mgeneral-regs-only`, and the same option is on the library: the archive of
+a source with a `double` in it cannot be built with the integers only. The
+configuration of the release is a force-included header and not an edit of
+`luaconf.h`, so the next update of the tarball is a copy of its files and
+nothing else.
+
+The port runs: `make x86-smoke` prints `1024.0` and the lines of
+`/etc/hello.lua`, and the image of 164 KiB is under `K_EXEC_MAX_IMAGE`
+(8 MiB), which `sys_execve` reads in pieces of `KSYS_MAX_IO`.
 
 ## 4. The program and the tests
 
@@ -251,7 +308,12 @@ done when `make test`, `make x86-smoke` and `make x86-disk-smoke` pass, and
 * **The board.** 8 KiB windows, no MMU, the kernel's address space; a
   program library for the board is a different problem (ADR 0018).
 * **A dynamic linker and shared objects.** Every image is static.
-* **Floating point.** `-mgeneral-regs-only` is the rule of the port.
+* **Two programs with floating point at once.** The port saves no XMM or x87
+  state and `execve` waits, so a program with a point in its numbers runs
+  alone. A second one needs the save and the load of the state at the switch.
+* **An image larger than 8 MiB.** `sys_execve` reads it in pieces of
+  `KSYS_MAX_IO` into one block of the allocator, and `K_EXEC_MAX_IMAGE` is the
+  ceiling. A larger program needs the streaming of the image into the window.
 * **A real `fork` of a library's child process.** The system has `fork` on
   x86-64, but no `execve` of a path that a library resolves in `PATH` and no
   `waitpid` in the library yet; a library that starts a helper is a later

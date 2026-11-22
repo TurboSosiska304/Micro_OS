@@ -65,6 +65,11 @@ FIRST_BOOT = [
     # boot reads the text that the first one inflated.
     "exec /bin/zcat -o /persist.gz.txt /etc/greeting.gz",
     "exec /bin/wc -c /persist.gz.txt",
+    # The second ported program: the script and the license are files of the
+    # volume, and the interpreter computes in a double out of it.
+    "exec /bin/cat /etc/hello.lua",
+    "exec /bin/lua -e print(2^10)",
+    "exec /bin/lua /etc/hello.lua",
 ]
 
 SECOND_BOOT = [
@@ -79,6 +84,8 @@ SECOND_BOOT = [
     "fsck",
     "cat /persist.gz.txt",
     "exec /bin/wc -c /persist.gz.txt",
+    "ls /etc/licenses",
+    "exec /bin/lua /etc/hello.lua",
 ]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -224,7 +231,10 @@ def check(first: str, second: str) -> list:
     expect("every command of the first boot is answered", all(first_answers), "a command got no answer")
     expect(
         "the programs came with the image",
-        "hello" in first_answers[1] and "cat" in first_answers[1] and "zcat" in first_answers[1],
+        "hello" in first_answers[1]
+        and "cat" in first_answers[1]
+        and "zcat" in first_answers[1]
+        and "lua" in first_answers[1],
         first_answers[1],
     )
     expect(
@@ -258,6 +268,22 @@ def check(first: str, second: str) -> list:
         "zcat writes every inflated byte",
         "134 /persist.gz.txt" in first_answers[7],
         first_answers[7],
+    )
+    expect(
+        "the script of Lua is a file of the volume",
+        "the first script of the machine" in first_answers[8],
+        first_answers[8][:200],
+    )
+    expect(
+        "the interpreter computes in a double on the disk of the image",
+        "1024.0" in first_answers[9] and "the program exited with 0" in first_answers[9],
+        first_answers[9],
+    )
+    expect(
+        "the script of /etc runs out of the volume",
+        "lua: hello from /etc/hello.lua" in first_answers[10]
+        and "the program exited with 0" in first_answers[10],
+        first_answers[10],
     )
 
     # --- the second boot: the same image, the same machine
@@ -340,6 +366,17 @@ def check(first: str, second: str) -> list:
         "the inflated file has every byte after the reset",
         "134 /persist.gz.txt" in second_answers[10],
         second_answers[10],
+    )
+    expect(
+        "the licenses of the ported programs survived the reset",
+        "lua" in second_answers[11] and "zlib" in second_answers[11],
+        second_answers[11],
+    )
+    expect(
+        "the interpreter reads its script after the reset",
+        "lua: hello from /etc/hello.lua" in second_answers[12]
+        and "lua: read\ta line written by lua" in second_answers[12],
+        second_answers[12],
     )
 
     return checks

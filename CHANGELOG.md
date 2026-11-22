@@ -50,6 +50,42 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   of the vendored `config.h`.
 - `docs/licensing.md` and the license of PCRE2 in the bundle and on the disk
   (`/etc/licenses/pcre2`).
+- The second port of a program of somebody else: Lua 5.4.7 (MIT) as a static
+  archive of the guest and `/bin/lua`, with the first script of the machine
+  `/etc/hello.lua` and the license at `/etc/licenses/lua`. The release is
+  vendored unchanged in `third_party/lua`; the settings of the system are one
+  force-included header (`port/luaconf_port.h`: no shell, no `popen`, no
+  `tmpnam`, no dynamic linker, the C radix) and its `port/lua_os.c`. The
+  recipe is a new section of `docs/porting-programs.md`.
+- The library of a program learned the last pieces a language asks for: the
+  conversions `%f`/`%F`/`%e`/`%E`/`%g`/`%G` and a precision, `fprintf`/
+  `vfprintf`/`sprintf`, `strtod`/`strtoll`/`strtoull`/`qsort`/`getenv`,
+  `setjmp`/`longjmp` in the registers of x86-64, `math.h` on the x87 unit,
+  `time`/`localtime`/`mktime`/`strftime`, `locale`, `ctype`, `assert`,
+  `signal`/`raise`, and `remove`/`rename`/`fileno`/`ungetc`/`freopen`. A
+  program that computes in `double` is built without `-mgeneral-regs-only`
+  (the `FLOAT` option of `cmake/userland.cmake`), and the loader sets
+  `CR4.OSFXSR`, `CR4.OSXMMEXCPT` and `CR0.NE` for it. The host test
+  `tests/cases/test_lua.c` runs the language, its formatter, its tables, an
+  error caught by `pcall` and a script file.
+- The image of `execve` is padded to sixteen bytes now: a constant of a
+  program with floating point is a sixteen-byte object and `movaps`/`andps`
+  fault when it is not aligned. `tools/mkprog.sh` pads both segments to
+  sixteen for the contiguous window of x86-64 and keeps the four bytes of the
+  split windows of the board.
+- `execve` reads an image of up to 8 MiB (`K_EXEC_MAX_IMAGE`), in pieces of
+  `KSYS_MAX_IO` (64 KiB) into one block of the allocator, and a larger file
+  is `E2BIG` before a byte of it is read. The transfer edge of one call was
+  the ceiling of a program; `/bin/lua` (164 KiB) is the first one past it,
+  and `zcat` (58 KiB) is unchanged. The syscall ABI, the numbers and MOX1 do
+  not change; `make x86-smoke` runs the interpreter and boots a disk with a
+  file of 8 MiB + 1 to check the refusal, and the host test
+  `tests/cases/test_exec.c` checks the boundary of the constant.
+- `make x86-smoke` runs `/bin/lua`: a power of a double (`1024.0`), `math.pi`,
+  `string.format("%.3f", 1/3)`, the two values that are not numbers, the
+  clock, and the script `/etc/hello.lua` with a table, a file of the VFS and
+  the strings. `make x86-disk-smoke` runs the same interpreter out of the
+  volume in the first boot and after the reset.
 
 ### Changed
 
@@ -69,9 +105,18 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   the headers are thin shims over `ulibc.h`, and `snprintf`/`vsnprintf` share
   the formatter with `printf`. The host test `tests/cases/test_zlib.c` covers
   the checksums, the three stream wrappers and a `gz` file.
-- The x86-64 image has eighteen programs: `pcre2grep` and its engine join the
-  sixteen of the tree and `zcat`; `make x86-smoke` checks its two lines, the
-  license file and the count.
+- The x86-64 image has nineteen programs: `pcre2grep`, its engine and `lua`
+  join the sixteen of the tree and `zcat`; `make x86-smoke` checks their
+  lines, the three licenses and the count.
+
+### Fixed
+
+- `esp32`: the two programs of the board link the `errno` of the library and
+  the compiler's runtime (`-lgcc`). The merge of the zlib userland put an
+  `errno` in the wrappers of the calls and the 64-bit division of the
+  formatter in `stdio.c`; the board's link had neither, so `make idf-build`
+  stopped at `/bin/hello`. The text of a program is 4540 bytes of the 8 KiB
+  window.
 
 ## [1.1.1] - 2026-11-22
 

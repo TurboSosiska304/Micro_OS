@@ -15,7 +15,9 @@
 #include <string.h>
 
 #include "kernel/config.h"
+#include "kernel/errno.h"
 #include "kernel/exec.h"
+#include "kernel/ksys.h"
 #include "kernel/port/exec.h"
 
 #if KERNEL_EXEC
@@ -164,6 +166,28 @@ static k_size_t build_image_arch(k_u8_t *image, k_u32_t arch)
 static k_size_t build_image(k_u8_t *image)
 {
     return build_image_arch(image, K_EXEC_ARCH_X86_64);
+}
+
+/*
+ * The two limits of a call: an image has to hold the header, and it may not
+ * pass K_EXEC_MAX_IMAGE (8 MiB), which is the memory of the machine and not
+ * the transfer edge of a call - an image at the boundary is read in pieces of
+ * KSYS_MAX_IO by the loop of sys_execve.
+ */
+static void check_size_boundary(void)
+{
+    ktest_begin("exec: an image at the 8 MiB limit is read, one past it is E2BIG");
+
+    KT_CHECK_INT_EQ(K_EXEC_MAX_IMAGE, 8u * 1024u * 1024u);
+    KT_CHECK_INT_EQ(k_exec_image_check(0), KERR_INVAL);
+    KT_CHECK_INT_EQ(k_exec_image_check(K_EXEC_HEADER_SIZE - 1u), KERR_INVAL);
+    KT_CHECK_INT_EQ(k_exec_image_check(K_EXEC_HEADER_SIZE), 0);
+    KT_CHECK_INT_EQ(k_exec_image_check(K_EXEC_MAX_IMAGE - 1u), 0);
+    KT_CHECK_INT_EQ(k_exec_image_check(K_EXEC_MAX_IMAGE), 0);
+    KT_CHECK_INT_EQ(k_exec_image_check(K_EXEC_MAX_IMAGE + 1u), KERR_TOOBIG);
+    /* The transfer edge of one call is smaller than the image and is not
+     * what this check names. */
+    KT_CHECK(K_EXEC_MAX_IMAGE > KSYS_MAX_IO);
 }
 
 static void check_valid_image(void)
@@ -528,6 +552,7 @@ static void check_run_without_a_machine(void)
 
 void test_exec(void)
 {
+    check_size_boundary();
     check_valid_image();
     check_bad_header();
     check_bad_sizes();

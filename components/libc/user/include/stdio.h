@@ -16,6 +16,28 @@
 #endif
 
 /*
+ * The size of the buffer a source of the C library asks for. There is no
+ * buffer behind a stream of this system (every call reaches the kernel), but
+ * a portable source writes `char buff[BUFSIZ]` on its stack and the number
+ * has to be a sane one: 8 KiB is the block a file is read in.
+ */
+#ifndef BUFSIZ
+#define BUFSIZ 8192
+#endif
+
+/* The modes of `setvbuf`. A stream of this system has no buffer, so the three
+ * are accepted and none of them changes anything. */
+#ifndef _IOFBF
+#define _IOFBF 0
+#endif
+#ifndef _IOLBF
+#define _IOLBF 1
+#endif
+#ifndef _IONBF
+#define _IONBF 2
+#endif
+
+/*
  * zlib's zconf.h defines the three numbers when the platform does not, and
  * it may have been read before this header: a second definition of the same
  * number is a warning that this build treats as an error.

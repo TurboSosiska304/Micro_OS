@@ -89,13 +89,17 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # linked and leaves the low identity map to the pointers the boot hands over
 # (ADR 0007). It is a flag of the C code alone: the assembly is written in
 # absolute 64-bit numbers and the programs of /bin stay in the low window.
+#
+# -mgeneral-regs-only is the rule of the kernel and of a program that does not
+# ask for a double; it is set on the target of the kernel and in PROGRAM_CFLAGS
+# below and not in this directory-wide list, because a ported library with a
+# point in its numbers (Lua) is built without it on purpose.
 add_compile_options(
     -ffreestanding
     -fno-stack-protector
     -fno-pic
     -fno-pie
     -mno-red-zone
-    -mgeneral-regs-only
     # The machine is the first x86-64 and not the computer of the person who
     # builds it. A distribution may configure its compiler for a newer model
     # (the runner of GitHub does) and then a shift becomes SHLX of BMI2,
@@ -297,12 +301,19 @@ set(LIBC_USER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/libc/user")
 # assertion of its merge of sections on the .rodata of a program with many
 # strings and a pointer of a handler in its data, and one shared copy of a few
 # bytes buys nothing here.
+#
+# A program of the tree that does not compute in floating point keeps
+# -mgeneral-regs-only. A ported program that does (Lua) is built with
+# MICROOS_FLOAT_CFLAGS instead: the port sets CR4.OSFXSR and CR0.NE for the
+# XMM registers and the x87 unit, and the scheduler of this port saves
+# neither, which is safe because execve waits for the program that runs
+# (docs/debts.md). The kernel and the other programs still never touch them.
 set(USERLAND_CFLAGS
     -O2 -ffreestanding -fno-stack-protector
-    -fno-pic -fno-pie -mno-red-zone -mgeneral-regs-only -march=x86-64
+    -fno-pic -fno-pie -mno-red-zone -march=x86-64
     -fno-asynchronous-unwind-tables -fno-merge-constants -Wall -Wextra -Werror
 )
-set(PROGRAM_CFLAGS -c ${USERLAND_CFLAGS}
+set(PROGRAM_CFLAGS -c ${USERLAND_CFLAGS} -mgeneral-regs-only
     -I "${KERNEL_DIR}/include" -I "${PROGRAM_DIR}" -I "${LIBC_USER_DIR}/include"
 )
 
@@ -312,6 +323,10 @@ set(PROGRAM_CFLAGS -c ${USERLAND_CFLAGS}
 # of one call and not a copy of this file.
 set(MICROOS_USERLAND_CFLAGS "${USERLAND_CFLAGS}")
 set(MICROOS_PROGRAM_CFLAGS "${PROGRAM_CFLAGS}")
+set(MICROOS_FLOAT_CFLAGS "${USERLAND_CFLAGS}")
+set(MICROOS_FLOAT_PROGRAM_CFLAGS -c ${USERLAND_CFLAGS}
+    -I "${KERNEL_DIR}/include" -I "${PROGRAM_DIR}" -I "${LIBC_USER_DIR}/include"
+)
 set(MICROOS_KERNEL_INCLUDE "${KERNEL_DIR}/include")
 set(MICROOS_LIBC_USER_DIR "${LIBC_USER_DIR}")
 set(MICROOS_PROGRAM_DIR "${PROGRAM_DIR}")
@@ -496,6 +511,98 @@ add_libc_program(pcre2grep GC_SECTIONS
             "${LIBC_USER_DIR}/src/ctype.c"
     COMPILE_OPTIONS -Os
 )
+
+# --- Lua: the first port of a program with a point in its numbers -----------
+#
+# The library is the whole core of Lua 5.4.7 - the lexer, the parser, the code
+# generator, the virtual machine and the libraries of the release - built as a
+# static archive of the guest. The standalone interpreter of the release
+# (`lua.c`) is the program: `microos_add_userland_program` takes it through
+# MAIN because a ported program has a `main` of its own and the tree does not
+# keep a second copy of it in `programs/`.
+#
+# FLOAT is the difference from every other program: a lua_Number is a double,
+# the arithmetic of the machine is SSE and x87, and the flags of this program
+# do not carry -mgeneral-regs-only. The runtime of the library is compiled
+# with ULIBC_WITH_FLOAT for the same reason: its formatter writes the digits
+# of a double, and src/math.c, src/stdlib.c and src/setjmp.c are sources of
+# this program alone (a program of the tree never links them, so the image of
+# `cat` does not pay for a logarithm).
+set(LUA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/lua")
+set(LUA_SOURCES
+    "${LUA_DIR}/lapi.c"
+    "${LUA_DIR}/lauxlib.c"
+    "${LUA_DIR}/lbaselib.c"
+    "${LUA_DIR}/lcode.c"
+    "${LUA_DIR}/lcorolib.c"
+    "${LUA_DIR}/lctype.c"
+    "${LUA_DIR}/ldblib.c"
+    "${LUA_DIR}/ldebug.c"
+    "${LUA_DIR}/ldo.c"
+    "${LUA_DIR}/ldump.c"
+    "${LUA_DIR}/lfunc.c"
+    "${LUA_DIR}/lgc.c"
+    "${LUA_DIR}/linit.c"
+    "${LUA_DIR}/liolib.c"
+    "${LUA_DIR}/llex.c"
+    "${LUA_DIR}/lmathlib.c"
+    "${LUA_DIR}/lmem.c"
+    "${LUA_DIR}/loadlib.c"
+    "${LUA_DIR}/lobject.c"
+    "${LUA_DIR}/lopcodes.c"
+    "${LUA_DIR}/loslib.c"
+    "${LUA_DIR}/lparser.c"
+    "${LUA_DIR}/lstate.c"
+    "${LUA_DIR}/lstring.c"
+    "${LUA_DIR}/lstrlib.c"
+    "${LUA_DIR}/ltable.c"
+    "${LUA_DIR}/ltablib.c"
+    "${LUA_DIR}/ltm.c"
+    "${LUA_DIR}/lundump.c"
+    "${LUA_DIR}/lutf8lib.c"
+    "${LUA_DIR}/lvm.c"
+    "${LUA_DIR}/lzio.c"
+    "${LUA_DIR}/port/lua_os.c"
+)
+
+microos_userland_library(microos_user_lua FLOAT
+    SOURCES ${LUA_SOURCES}
+    INCLUDES "${LUA_DIR}" "${LUA_DIR}/port"
+    # The configuration of the port is force-included: it is read before
+    # luaconf.h, and the settings of the system (no shell, no tmpnam, no
+    # dynamic linker, a point for the radix) are the ones it names. The
+    # warnings are the ones upstream C answers in every build.
+    COMPILE_OPTIONS "-include" "${LUA_DIR}/port/luaconf_port.h"
+        -Wno-sign-compare -Wno-unused-parameter -Wno-missing-field-initializers
+        -Wno-implicit-fallthrough -Os
+)
+
+set_source_files_properties(${LUA_SOURCES}
+    PROPERTIES OBJECT_DEPENDS "${LUA_DIR}/port/luaconf_port.h")
+
+add_libc_program(lua
+    FLOAT
+    LIBRARIES microos_user_lua
+    MAIN "${LUA_DIR}/lua.c"
+    INCLUDES "${LUA_DIR}" "${LUA_DIR}/port"
+    # The arena is the bss of the program and the format caps the bss at a
+    # megabyte. Lua's state, its strings and the tables of a script live in
+    # it; 768 KiB leaves the state of a real script room and the image under
+    # the ceiling.
+    DEFINES ULIBC_HEAP_SIZE=786432u
+    SOURCES "${LIBC_USER_DIR}/src/malloc.c"
+            "${LIBC_USER_DIR}/src/file.c"
+            "${LIBC_USER_DIR}/src/stdlib.c"
+            "${LIBC_USER_DIR}/src/math.c"
+            "${LIBC_USER_DIR}/src/setjmp.c"
+            "${LIBC_USER_DIR}/src/time.c"
+            "${LIBC_USER_DIR}/src/locale.c"
+            "${LIBC_USER_DIR}/src/ctype.c"
+            "${LIBC_USER_DIR}/src/assert.c"
+            "${LIBC_USER_DIR}/src/format_float.c"
+    COMPILE_OPTIONS -DULIBC_WITH_FLOAT -include "${LUA_DIR}/port/luaconf_port.h" -Os
+)
+
 add_executable(microos64
     ${KERNEL_SOURCES}
     ${KSHELL_SOURCES}
@@ -597,7 +704,8 @@ endif()
 # a sign-extended 32-bit immediate. The assembly does not need it (its
 # addresses are 64-bit numbers of their own) and a program has no use for it
 # (it lives at 32 MiB), so the flag is for the C of the kernel only.
-target_compile_options(microos64 PRIVATE $<$<COMPILE_LANGUAGE:C>:-mcmodel=kernel>)
+target_compile_options(microos64 PRIVATE $<$<COMPILE_LANGUAGE:C>:-mcmodel=kernel>
+    $<$<COMPILE_LANGUAGE:C>:-mgeneral-regs-only>)
 
 set_target_properties(microos64 PROPERTIES
     LINK_FLAGS "-nostdlib -static -Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/linker64.ld -Wl,--build-id=none"

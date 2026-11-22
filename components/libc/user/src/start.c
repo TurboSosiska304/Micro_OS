@@ -29,6 +29,14 @@
 /* The program itself, in the file of the program and not in the library. */
 int main(int argc, char *const argv[], char *const envp[]);
 
+/*
+ * The words `NAME=VALUE` of the program, for `getenv` (src/stdlib.c) and for
+ * a library that asks the platform for a variable. The vector is not copied:
+ * the port left it in the window of the program, and it lives as long as the
+ * program does.
+ */
+char **environ;
+
 #ifdef MOX_ARCH_XTENSA
 /*
  * The door of the program: the address of a function of the kernel with the
@@ -42,6 +50,9 @@ void *g_mox_door;
 void _start(void *door, long argc, char *const argv[], char *const envp[])
 {
     g_mox_door = door;
+    /* The vector of the entry is read-only to the program; `environ` is the
+     * shape POSIX gives it, and nothing of the library writes a word. */
+    environ = (char **)envp;
 
     exit(main((int)argc, argv, envp));
 
@@ -51,6 +62,10 @@ void _start(void *door, long argc, char *const argv[], char *const envp[])
 #else
 void _start(long argc, char *const argv[], char *const envp[])
 {
+    /* The vector of the entry is read-only to the program; `environ` is the
+     * shape POSIX gives it, and nothing of the library writes a word. */
+    environ = (char **)envp;
+
     exit(main((int)argc, argv, envp));
 
     for (;;) {

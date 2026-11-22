@@ -1672,12 +1672,16 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t envp, k
     }
 
     /*
-     * The smallest image is its header and the largest is the one the edge
-     * passes in a single transfer; a file outside the two is not read at all,
-     * so a wrong file of the volume cannot ask for the memory of the system.
+     * A file outside the two limits of the format is not read at all, so a
+     * wrong file of the volume cannot ask for the memory of the system: the
+     * header is the smallest image, and K_EXEC_MAX_IMAGE is the largest a
+     * call reads (8 MiB, docs/debts.md). The transfer edge of one call,
+     * KSYS_MAX_IO, is not this limit: the loop below reads a larger image in
+     * pieces of it.
      */
-    if (info.size < K_EXEC_HEADER_SIZE || info.size > KSYS_MAX_IO) {
-        return KERR_INVAL;
+    rc = k_exec_image_check(info.size);
+    if (rc != 0) {
+        return (k_ssize_t)rc;
     }
 
     /*

@@ -18,15 +18,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-struct ulibc_file {
-    int fd;
-    int eof;
-    int error;
-};
+#include "file_private.h"
 
-static struct ulibc_file g_stdin_s = {ULIBC_STDIN, 0, 0};
-static struct ulibc_file g_stdout_s = {ULIBC_STDOUT, 0, 0};
-static struct ulibc_file g_stderr_s = {ULIBC_STDERR, 0, 0};
+static struct ulibc_file g_stdin_s = {ULIBC_STDIN, 0, 0, -1};
+static struct ulibc_file g_stdout_s = {ULIBC_STDOUT, 0, 0, -1};
+static struct ulibc_file g_stderr_s = {ULIBC_STDERR, 0, 0, -1};
 
 FILE *stdin = &g_stdin_s;
 FILE *stdout = &g_stdout_s;
@@ -80,6 +76,7 @@ FILE *fopen(const char *path, const char *mode)
     stream->fd = fd;
     stream->eof = 0;
     stream->error = 0;
+    stream->pushback = -1;
 
     return stream;
 }
@@ -187,11 +184,41 @@ int fgetc(FILE *stream)
         return EOF;
     }
 
+    if (stream->pushback >= 0) {
+        int byte_back = stream->pushback;
+
+        stream->pushback = -1;
+        return byte_back;
+    }
+
     if (fread(&byte, 1, 1, stream) != 1) {
         return EOF;
     }
 
     return (int)byte;
+}
+
+/*
+ * The one byte of look-ahead. A stream of this library has no buffer of its
+ * own, so the standard's promise of one character is kept in the state of
+ * the stream; a second call before a read replaces the first, and a seek
+ * forgets it.
+ */
+int ungetc(int byte, FILE *stream)
+{
+    if (stream == NULL || byte == EOF) {
+        return EOF;
+    }
+
+    stream->pushback = (unsigned char)byte;
+    stream->eof = 0;
+
+    return (unsigned char)byte;
+}
+
+int getc(FILE *stream)
+{
+    return fgetc(stream);
 }
 
 int fputc(int byte, FILE *stream)
@@ -299,6 +326,7 @@ int fseek(FILE *stream, long offset, int whence)
     }
 
     stream->eof = 0;
+    stream->pushback = -1;
     return 0;
 }
 
@@ -324,4 +352,97 @@ void rewind(FILE *stream)
 {
     (void)fseek(stream, 0, ULIBC_SEEK_SET);
     clearerr(stream);
+}
+
+/*
+ * The descriptor behind a stream, for the formatter of `fprintf` and for a
+ * program that hands one to a call of the ABI. A stream of the library is a
+ * descriptor and the two flags of its state, so the answer is the number of
+ * the open file.
+ */
+int fileno(FILE *stream)
+{
+    if (stream == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return stream->fd;
+}
+
+/*
+ * The removal of a file, in the POSIX shape: 0 or -1 with `errno`. The call
+ * of the ABI answers the negative number, and a portable source asks the
+ * library for the other convention.
+ */
+int remove(const char *path)
+{
+    int rc = unlink(path);
+
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+
+    return 0;
+}
+
+/*
+ * The same path opened again on the same stream. The release of Lua asks for
+ * it to reopen a file with a binary mode after it read the signature of a
+ * compiled chunk; no file of this system translates a byte, so the mode is
+ * read and has no other effect, and the answer is the stream itself.
+ */
+FILE *freopen(const char *path, const char *mode, FILE *stream)
+{
+    FILE *opened;
+
+    if (stream == NULL) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    opened = fopen(path, mode);
+    if (opened == NULL) {
+        return NULL;
+    }
+
+    if (stream != stdin && stream != stdout && stream != stderr) {
+        (void)close(stream->fd);
+    }
+    stream->fd = opened->fd;
+    stream->eof = 0;
+    stream->error = 0;
+    stream->pushback = -1;
+    free(opened);
+
+    return stream;
+}
+
+/*
+ * A file with no name. The system has no directory of temporary files - the
+ * volume of a machine is its own MicroFS - so the call answers the failure
+ * of the platform and the library of Lua reports it as the error of
+ * `io.tmpfile`. It is a debt of the platform, not a file that leaks.
+ */
+FILE *tmpfile(void)
+{
+    errno = ENOSYS;
+
+    return NULL;
+}
+
+/*
+ * The buffering of a stream. There is no buffer between a stream and the
+ * kernel of this system: every write is a call and every read is the bytes
+ * that are there, so the request is accepted and changes nothing.
+ */
+int setvbuf(FILE *stream, char *buffer, int mode, size_t size)
+{
+    (void)stream;
+    (void)buffer;
+    (void)mode;
+    (void)size;
+
+    return 0;
 }

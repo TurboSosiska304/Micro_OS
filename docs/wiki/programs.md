@@ -76,7 +76,7 @@ to `x86-64`; a name the format does not know is refused before an image is
 written. `--data-base` is for a port whose data is a window of its own (the
 board): the data no longer follows the text, so the script checks its address
 against that number instead of the contiguous rule and also checks where the
-bss will be cleared. The x86-64 port builds its seventeen images this way: the
+bss will be cleared. The x86-64 port builds its eighteen images this way: the
 object is compiled for the window, linked with `programs/program.ld`, turned
 into a `.mox` by the script (`--base 0x02000000 --arch x86-64`), and written
 into the MicroFS volume of the disk by `make x86-disk` (see below). The kernel
@@ -99,9 +99,9 @@ make x86-smoke     # the same, driven by the smoke test
 
 `tools/mkfs_mfs.c` writes the image: an MBR with one Linux partition at LBA
 2048, a MicroFS volume in it, `/bin`, `/etc` and an empty `/etc/init.d`, the
-eighteen `.mox` images of the build written to `/bin` with mode `0755`, the
-licenses of zlib and PCRE2 in `/etc/licenses`, and the settings of the machine
-in `/etc/setting`. It does not repeat the layout
+nineteen `.mox` images of the build written to `/bin` with mode `0755`, the
+licenses of zlib, PCRE2 and Lua in `/etc/licenses`, and the settings of the
+machine in `/etc/setting`. It does not repeat the layout
 of MicroFS: it is a block device over a range of the file, and
 `components/mfs` formats it and writes the objects through `mfs_create`,
 `mfs_write` and `mfs_chmod`. The host test
@@ -127,7 +127,7 @@ never changed.
 ## `/bin` and the boot
 
 The x86-64 port mounts the MicroFS volume of its disk at `/` and finds
-`/bin` already there: the seventeen images are files the tool wrote, with the
+`/bin` already there: the eighteen images are files the tool wrote, with the
 mode of a program (`0755`), and no boot creates one:
 
 | File | What it proves |
@@ -150,12 +150,13 @@ mode of a program (`0755`), and no boot creates one:
 | `/bin/spawn` | `execve` from a program, with an environment of its own |
 | `/bin/wc` | the lines, words and bytes of a source (`-l`, `-w`, `-c`) or of descriptor 0 |
 | `/bin/zcat` | a `.gz` of the VFS inflated by zlib 1.3.1 and written to the console or a file |
+| `/bin/lua` | the interpreter of Lua 5.4.7: `-e` and the script `/etc/hello.lua`, read from the volume |
 
 The first five talk to the kernel through `programs/prog.h`, because what they
 test is the raw door, the fault, the fork, the edge and the signals. The rest
 are ordinary C programs linked against `components/libc/user`
-([ADR 0016](../adr/0016-userland.md)); `zcat` is linked against zlib and
-`pcre2grep` against PCRE2, the two libraries of somebody else
+([ADR 0016](../adr/0016-userland.md)); `zcat`, `pcre2grep` and `lua` are
+linked against the three libraries of somebody else (zlib, PCRE2 and Lua)
 ([`docs/porting-programs.md`](../porting-programs.md)). Every one of them
 reads descriptor 0
 when it is given no file (or `-`); `execve` carries the table of the caller, so
@@ -479,10 +480,15 @@ plan to pretend otherwise.
   program. The format is ready for the second machine; the port is not.
 * **No libc of the host.** A program has the calls of the ABI, the library of
   `components/libc/user` and nothing else. The library is not a standard C
-  library: the allocation is a fixed arena of the program, the streams are a
-  descriptor and not a buffer, and there is no floating point (the programs
-  are built with `-mgeneral-regs-only`); the formatter has no precision and
-  no `*` width.
+  library: it has what the programs of `/bin` and the ports of zlib and Lua
+  use. A program with a `double` (Lua) is built without
+  `-mgeneral-regs-only`, and the port saves no XMM or x87 state, so it runs
+  one at a time; the arithmetic is `src/math.c` and not a `libm`.
+* **No image larger than 8 MiB.** `execve` reads the image in one block of
+  the allocator, in pieces of `KSYS_MAX_IO` (64 KiB); `K_EXEC_MAX_IMAGE` is
+  the ceiling and a larger file is `E2BIG` before a byte of it is read. The
+  block is a copy beside the window of the program, so the machine holds two
+  copies for the time of the load.
 * **No inherited descriptors.** A program is a task with a table of four
   descriptors of its own, and the shell does not pass its own table to it.
   `cat`, `wc`, `head` and `grep` read descriptor 0 when they are given no file

@@ -1,85 +1,92 @@
 /*
- * Micro OS — the character classes of a program, in the C locale.
+ * Micro OS — the classes of a byte, in the C locale.
  *
- * A program of this system has no libc of its own under it, so the library
- * carries the few classes its programs ask for. The answer is the one of the
- * C locale and not of a locale of a person: there is no locale on this
- * machine, and a table that changed with an environment would make a regexp
- * of a file mean one thing at the console and another in a test.
- *
- * The argument is an int because the callers are written that way (PCRE2
- * builds its tables from a loop of 0 to 255), and a value outside the byte
- * range - EOF is -1 - belongs to no class.
+ * A byte above 127 is not a letter of the C locale and not a space, so the
+ * table is written for the 128 bytes of ASCII and the functions answer "no"
+ * for the rest. The argument is taken as unsigned, at the library does: a
+ * `char` of 0xE9 passed as an int is a byte of the program and not a
+ * negative number.
  */
 #include "ulibc.h"
 
-int isalpha(int letter)
+#include <ctype.h>
+
+/*
+ * The classes above 127 are none: a byte of a file is a byte, and this system
+ * has one locale. `isascii` is the question of the high bit and not of a
+ * class.
+ */
+int isascii(int byte)
 {
-    return (letter >= 'A' && letter <= 'Z') || (letter >= 'a' && letter <= 'z');
+    return (unsigned)byte < 128u;
 }
 
-int isdigit(int letter)
+int isupper(int byte)
 {
-    return letter >= '0' && letter <= '9';
+    return byte >= 'A' && byte <= 'Z';
 }
 
-int isalnum(int letter)
+int islower(int byte)
 {
-    return isalpha(letter) || isdigit(letter);
+    return byte >= 'a' && byte <= 'z';
 }
 
-int isspace(int letter)
+int isalpha(int byte)
 {
-    return letter == ' ' || letter == '\t' || letter == '\n' || letter == '\v' || letter == '\f' ||
-           letter == '\r';
+    return isupper(byte) || islower(byte);
 }
 
-int isupper(int letter)
+int isdigit(int byte)
 {
-    return letter >= 'A' && letter <= 'Z';
+    return byte >= '0' && byte <= '9';
 }
 
-int islower(int letter)
+int isalnum(int byte)
 {
-    return letter >= 'a' && letter <= 'z';
+    return isalpha(byte) || isdigit(byte);
 }
 
-int isprint(int letter)
+int isxdigit(int byte)
 {
-    return letter >= 0x20 && letter <= 0x7e;
+    return isdigit(byte) || (byte >= 'a' && byte <= 'f') || (byte >= 'A' && byte <= 'F');
 }
 
-int isgraph(int letter)
+int isspace(int byte)
 {
-    return letter >= 0x21 && letter <= 0x7e;
+    return byte == ' ' || (byte >= '\t' && byte <= '\r');
 }
 
-int ispunct(int letter)
+int isblank(int byte)
 {
-    return isgraph(letter) && !isalnum(letter);
+    return byte == ' ' || byte == '\t';
 }
 
-int iscntrl(int letter)
+int iscntrl(int byte)
 {
-    return (letter >= 0 && letter < 0x20) || letter == 0x7f;
+    return (byte >= 0 && byte < 0x20) || byte == 0x7F;
 }
 
-int isxdigit(int letter)
+int isprint(int byte)
 {
-    return isdigit(letter) || (letter >= 'a' && letter <= 'f') || (letter >= 'A' && letter <= 'F');
+    return byte >= 0x20 && byte < 0x7F;
 }
 
-int isblank(int letter)
+int isgraph(int byte)
 {
-    return letter == ' ' || letter == '\t';
+    return byte > 0x20 && byte < 0x7F;
 }
 
-int tolower(int letter)
+int ispunct(int byte)
 {
-    return isupper(letter) ? letter - 'A' + 'a' : letter;
+    return isgraph(byte) && !isalnum(byte);
 }
 
-int toupper(int letter)
+int tolower(int byte)
 {
-    return islower(letter) ? letter - 'a' + 'A' : letter;
+    return isupper(byte) ? byte - 'A' + 'a' : byte;
+}
+
+int toupper(int byte)
+{
+    return islower(byte) ? byte - 'a' + 'A' : byte;
 }

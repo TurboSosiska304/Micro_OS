@@ -32,6 +32,8 @@
 #define ENOSPC 28
 #define ESPIPE 29
 #define EPIPE 32
+#define EDOM 33
+#define ERANGE 34
 #define ENAMETOOLONG 36
 #define ENOSYS 38
 #define ENOTEMPTY 39

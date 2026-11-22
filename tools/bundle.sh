@@ -247,6 +247,8 @@ if [ -f "$X86_SRC/loader32.elf" ] && [ -f "$X86_SRC/microos64.bin" ]; then
     # PCRE2 is linked into /bin/pcre2grep, and its license travels the same
     # way: the notice beside the program and the text in the archive.
     cp -f "$ROOT/third_party/pcre2/LICENSE" "$STAGE/LICENSE.pcre2"
+    # Lua is /bin/lua of the same image, under the MIT license of its release.
+    cp -f "$ROOT/third_party/lua/LICENSE" "$STAGE/LICENSE.lua"
     cp -f "$ROOT/third_party/mbedtls/LICENSE" "$STAGE/LICENSE.mbedtls"
     if [ -f "$X86_SRC/microos64.sig" ] && [ -f "$X86_SRC/signing.pub" ]; then
         cp -f "$X86_SRC/microos64.sig" "$STAGE/microos64.sig"
@@ -301,6 +303,12 @@ the notes and the versions.
 `LICENSE.zlib` is its license and `third_party/zlib` of the sources has the
 note, the version and the port layer.
 
+`/bin/lua` of the disk image is Lua 5.4.7 (MIT license); `LICENSE.lua` is its
+license and `third_party/lua` of the sources has the note, the version, the
+port layer and the one setting of the port (`port/luaconf_port.h`). The
+interpreter of this release does not run yet: its image is past the block the
+kernel reads in one call (`docs/debts.md`).
+
 The kernel carries a signature trailer (ADR 0020), and the loader verifies it
 before it copies a byte: an image with a changed byte, without a trailer or
 signed by another key stops with `the image is refused` and never reaches the
@@ -319,7 +327,7 @@ Micro OS does not cover a byte of it.
 DOC
 
     STAGE_FILES=(loader32.elf microos64.bin run.sh README.md LICENSE.spleen LICENSE.zlib
-                 LICENSE.pcre2)
+                 LICENSE.pcre2 LICENSE.lua)
     if [ -f "$STAGE/x86-all.img" ]; then
         STAGE_FILES+=(x86-all.img)
     fi

@@ -204,9 +204,18 @@ _start:
     cld
     rep movsb
 
-    /* PAE, LME, then paging: the order the processor requires. */
+    /* PAE, LME, then paging: the order the processor requires. The two other
+       bits are the floating point of a program: OSFXSR lets ring 3 execute
+       the SSE instructions and OSXMMEXCPT makes an SSE fault an exception of
+       the machine. The x87 unit needs no bit of CR4; CR0.NE below reports its
+       errors as an exception and not as an external interrupt line.
+
+       The kernel itself is built with -mgeneral-regs-only and touches
+       neither unit; the scheduler saves neither, so a program that uses them
+       runs one at a time (execve waits for it) - the rule of the port, see
+       docs/debts.md. */
     movl %cr4, %eax
-    orl $0x20, %eax
+    orl $0x620, %eax
     movl %eax, %cr4
 
     movl $pml4, %eax
@@ -224,7 +233,10 @@ _start:
     wrmsr
 
     movl %cr0, %eax
-    orl $0x80000001, %eax
+    /* PG | PE | NE: the paging, the protected mode and the numeric error of
+       the x87 unit as an exception (CR0.NE) rather than the external line of
+       a machine that no longer has a coprocessor. */
+    orl $0x80000021, %eax
     movl %eax, %cr0
 
     lgdt gdt32_ptr

@@ -205,3 +205,47 @@ void *memchr(const void *memory, int byte, size_t count)
 
     return NULL;
 }
+
+/*
+ * The comparison of the collation of the C locale: the bytes themselves. The
+ * standard puts `strcoll` in the library for a program that sorts strings,
+ * and `strcmp` is the answer of the one locale the system has.
+ */
+int strcoll(const char *left, const char *right)
+{
+    return strcmp(left, right);
+}
+
+size_t strspn(const char *text, const char *accept)
+{
+    size_t count = 0;
+
+    while (text[count] != '\0' && strchr(accept, text[count]) != NULL) {
+        count++;
+    }
+
+    return count;
+}
+
+size_t strcspn(const char *text, const char *reject)
+{
+    size_t count = 0;
+
+    while (text[count] != '\0' && strchr(reject, text[count]) == NULL) {
+        count++;
+    }
+
+    return count;
+}
+
+char *strpbrk(const char *text, const char *accept)
+{
+    while (*text != '\0') {
+        if (strchr(accept, *text) != NULL) {
+            return (char *)text;
+        }
+        text++;
+    }
+
+    return NULL;
+}
