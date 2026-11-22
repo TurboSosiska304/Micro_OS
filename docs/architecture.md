@@ -45,6 +45,7 @@ architecture own its part in `arch/<arch>/include/asm`:
 | Header | Subject | Examples |
 |---|---|---|
 | `kernel/port/console.h` | bytes out, characters in | `k_port_write`, `k_port_console_getchar`, `k_port_console_poll` |
+| `kernel/port/cpu.h` | the cores of the machine | `k_port_cpu_count`, `k_port_cpu_id` |
 | `kernel/port/time.h` | time since the boot | `k_port_uptime_ms`, `k_port_uptime_us` |
 | `kernel/port/mem.h` | internal heap and PSRAM | `k_port_alloc`, `k_port_heap_free` |
 | `kernel/port/lock.h` | critical sections, recursive mutexes | `k_port_enter_critical`, `k_port_mutex_lock` |
@@ -77,7 +78,7 @@ that a change has to move with the code:
 | Record | What it freezes | Checked by |
 |---|---|---|
 | [tests/corpus/abi.txt](../tests/corpus/abi.txt) | the calls (number, name, arity, result), the error codes, the flags, the limits, the header of a program image and the layout of the structures that cross the door, on a 64-bit and on a 32-bit machine | `ksys: the ABI is the recorded one` (`tests/cases/test_ksys.c`), on every `make test` |
-| [tests/corpus/port_api.txt](../tests/corpus/port_api.txt) | the 45 functions of `kernel/port/*.h` and the version of the contract | `make integrity` (`[port]`): the record against the headers, and the whole list against the ESP32 and the x86-64 port |
+| [tests/corpus/port_api.txt](../tests/corpus/port_api.txt) | the 47 functions of `kernel/port/*.h` and the version of the contract | `make integrity` (`[port]`): the record against the headers, and the whole list against the ESP32 and the x86-64 port |
 
 [tests/corpus/mox1](../tests/corpus/mox1) holds a MOX1 image of version 2,
 built for 1.0 and recorded in hex: `k_exec_parse()` reads it on every
@@ -168,6 +169,53 @@ are two options:
 Plan: start with option 1 (it works immediately), move to option 2 when real
 Linux-like semantics are needed (priorities, states, `fork`). The decision is
 recorded in [ADR 0002](adr/0002-scheduler-substrate.md).
+
+### Many cores (ADR 0012)
+
+The scheduler of 1.0 has one `current`, one ready queue and one idle loop,
+because one processor was the whole machine. The first phase of ADR 0012 is
+in the tree and the flag `KERNEL_SMP` (kernel/config.h) decides which kernel a
+build is:
+
+* **`KERNEL_SMP=0`** (the default, the kernel of 1.0): one slot of the array
+  of cores, one run queue, the same code and the same tests as before.
+* **`KERNEL_SMP=1`**: `struct k_cpu` per core (kernel/cpu.h) with the current
+  task, the ticks of the core, the nesting of its interrupt state and the
+  stack, the thread pointer and the tables the port owns. Every core has a
+  run queue per priority, `struct task` carries the core that owns it, and
+  only the scheduler writes that field: a task is created on the next core of
+  a round robin, woken on the core it already had, claimed by the core that
+  runs it, and moved by `k_sched_migrate()` - never while it runs.
+
+The lock of the queues is the critical section of the port (saved flags,
+interrupts off, a lock of the machine on a port that has a second core) with
+the kernel's own nesting count, reached through `k_cpu_lock()`. It is held
+for the bookkeeping of a queue and dropped before the tick charges a task,
+before a sleep and before a switch, so the second core is not stopped by a
+task that waits for the filesystem. The kmm, the VFS, the console and the
+block layer keep their own locks (`k_mutex`, a sleeping lock that belongs to
+a task; the kmm's owner-and-depth lock, which sleeps a millisecond between
+tries); the audit of what a second core changes for them is the debt K8 of
+[debts.md](debts.md), not a silence.
+
+The price of the shape is static memory: the run queue of a core is
+`SCHED_READY_CAPACITY` slots of a pointer for each of the sixteen priority
+levels, about 4 KiB, so a build of four cores carries about 16 KiB of `bss`
+and the one-core build carries the array it always had.
+
+Each core has its own count of ticks; the millisecond of the kernel is
+advanced by the tick of the core 0, where the clock of every port of the tree
+lives (the PIT of x86-64, the one thread of the host). A port whose timer is
+on another core says so where it starts the clock.
+
+The port answers how many cores it started (`k_port_cpu_count`) and which one
+is asking (`k_port_cpu_id`). The x86-64 port reads the processors from the
+MADT of ACPI and starts one - the AP bring-up is the blocker described in ADR
+0012; the host port takes the number from `MICRO_OS_CPUS` (one by default,
+two in `make test-smp`, `make test-tsan` and `make soak-host`), and every
+task there is a pthread, so a "core" is a queue of the kernel and an identity
+of the task. A port that predates the two calls links against their weak
+default (one core) and keeps working.
 
 ### Signals (ADR 0015)
 

@@ -26,13 +26,16 @@ static void blocker(void *arg)
     (void)__atomic_add_fetch(&g_blocked, 1, __ATOMIC_SEQ_CST);
 
     /*
-     * Stay blocked until the test unblocks us. The port level sleep is used
-     * on purpose: the kernel sleep would switch the state to SLEEPING, while
-     * a task waiting for an event keeps the BLOCKED state (in Linux such a
-     * task would sit in a wait queue).
+     * Stay blocked until the test unblocks us, and stay alive after the
+     * unblock until the test is done with the queues. The port level sleep is
+     * used on purpose: the kernel sleep would switch the state to SLEEPING,
+     * while a task waiting for an event keeps the BLOCKED state (in Linux
+     * such a task would sit in a wait queue). The loop does not look at the
+     * state: on a machine of two cores the task runs beside the test, and a
+     * task that left on its own would take its queue slot with it before the
+     * test could look at it.
      */
-    while (task_state_of(self) == TASK_STATE_BLOCKED &&
-           !__atomic_load_n(&g_release, __ATOMIC_SEQ_CST)) {
+    while (!__atomic_load_n(&g_release, __ATOMIC_SEQ_CST)) {
         k_port_task_sleep_ms(1);
     }
 }
@@ -79,15 +82,15 @@ static void test_ready_queue(void)
     KT_CHECK(next == high);
 
     /* Let the tasks finish and free their slots, they must not stay in the
-     * run queue of the following tests. */
+     * run queue of the following tests. The wait reaps the zombie: a sleep
+     * here would let a task of a two-core machine leave its slot behind. */
     (void)__atomic_store_n(&g_release, 1, __ATOMIC_SEQ_CST);
-    k_sched_sleep_ms(50);
 
     if (low != NULL) {
-        task_reap(low->pid);
+        (void)task_wait(low->pid, NULL, 2000);
     }
     if (high != NULL) {
-        task_reap(high->pid);
+        (void)task_wait(high->pid, NULL, 2000);
     }
 
     port_host_set_sink(NULL);

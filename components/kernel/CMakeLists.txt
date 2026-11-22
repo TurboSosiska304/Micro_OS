@@ -10,6 +10,8 @@ set(MICRO_OS_KERNEL_SRCS
     "src/clock.c"
     "src/boot.c"
     "src/console.c"
+    "src/cpu.c"
+    "src/cpu_default.c"
     "src/exec.c"
     "src/kfile.c"
     "src/kmm.c"

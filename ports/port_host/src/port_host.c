@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include "kernel/errno.h"
+#include "kernel/cpu.h"
 #include "kernel/port.h"
 #include "kernel/port_task.h"
 #include "kernel/sched.h"
@@ -252,13 +253,82 @@ const char *k_port_arch(void)
 #endif
 }
 
+/* --- the cores ------------------------------------------------------------ */
+
+/*
+ * The host is the place where the kernels of the project meet the races
+ * first: every task is a pthread already, so the machine is as parallel as
+ * the operating system makes it, and the number of cores the kernel is told
+ * about is a setting of the run, not a property of the hardware. The
+ * environment variable MICRO_OS_CPUS is that setting (ADR 0012): one core by
+ * default, so a plain test is the 1.0 kernel; two for `make test-smp` and the
+ * soak, where a task of the kernel is put in the queue of one core or the
+ * other by the scheduler.
+ *
+ * A core here is not a thread of the port - the port already gives every
+ * task a thread - it is a queue of the kernel and an identity a task carries
+ * (k_port_cpu_id() answers the core of the task that asks). A task cannot be
+ * on two cores at once because it is one pthread with one `cpu` field, and
+ * the scheduler is the only writer of that field.
+ */
+static k_u32_t s_cpu_count;
+static pthread_once_t s_cpu_once = PTHREAD_ONCE_INIT;
+
+static void host_cpus_init(void)
+{
+    const char *text = getenv("MICRO_OS_CPUS");
+    unsigned long count = 1;
+
+    if (text != NULL && text[0] != '\0') {
+        char *end = NULL;
+
+        count = strtoul(text, &end, 10);
+
+        if (end == text || (end != NULL && *end != '\0') || count == 0) {
+            count = 1;
+        }
+    }
+
+    if (count > KERNEL_CPUS_MAX) {
+        count = KERNEL_CPUS_MAX;
+    }
+
+    s_cpu_count = (k_u32_t)count;
+}
+
+k_u32_t k_port_cpu_count(void)
+{
+    pthread_once(&s_cpu_once, host_cpus_init);
+
+    return s_cpu_count;
+}
+
+/*
+ * The core of the calling task: the scheduler put the task in the queue of
+ * one core and the record follows the task, so the answer is the same on
+ * every thread that runs it. A thread that is not a task (the tick of the
+ * clock, the main thread of the tests) is the core 0.
+ */
+k_u32_t k_port_cpu_id(void)
+{
+    struct task *self = k_port_task_current();
+
+    /*
+     * The scheduler writes the field under its lock; the read here is the one
+     * a task makes about itself on every lock, so it is an atomic load and
+     * not a plain one (TSan named exactly this pair when the core count
+     * arrived - the kernel and the port are two threads of one process).
+     */
+    return self != NULL ? __atomic_load_n(&self->cpu, __ATOMIC_RELAXED) : 0u;
+}
+
 /*
  * The contract this port was written for: the assert turns a header that
  * grew (or changed its meaning) into a build error, the way vermagic does
  * for a module of Linux.
  */
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 8u
+#define PORT_API_MINOR 9u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_host does not speak the contract of this kernel");

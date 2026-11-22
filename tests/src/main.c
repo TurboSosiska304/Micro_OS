@@ -33,6 +33,7 @@ static void run_tests(void *arg)
     test_task();
     test_sched();
     test_sched_queue();
+    test_smp();
     test_kmod();
     test_kmm();
     test_exec();

@@ -57,6 +57,9 @@ jobs:
       - name: the same tests under the race detector
         run: make test-tsan
 
+      - name: the tests of the kernel of two cores
+        run: make test-smp
+
       - name: the smoke test of the simulator
         run: make smoke
 

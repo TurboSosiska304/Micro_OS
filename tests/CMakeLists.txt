@@ -44,6 +44,7 @@ if(NOT ESP_PLATFORM)
         cases/test_task.c
         cases/test_sched.c
         cases/test_sched_queue.c
+        cases/test_smp.c
         cases/test_sign.c
     )
 
@@ -162,6 +163,15 @@ target_compile_definitions(microos_tests PRIVATE
     # to be reported, not waited for.
     add_test(NAME unit COMMAND microos_tests)
     set_tests_properties(unit PROPERTIES TIMEOUT 120)
+
+    # The kernel of two cores (ADR 0012): the host port takes the number of
+    # cores of the run from the environment, exactly as it does for the
+    # simulator and the soak - so the build with KERNEL_SMP on runs the tests
+    # on two cores without a second binary. One core is the default of the
+    # plain build, and its tests are the tests of 1.0.
+    if(KERNEL_SMP)
+        set_tests_properties(unit PROPERTIES ENVIRONMENT "MICRO_OS_CPUS=2")
+    endif()
 
     # The layout of the image that tools/mkprog.sh writes. The test builds
     # tiny objects with the compiler of the host and needs no ESP-IDF; a

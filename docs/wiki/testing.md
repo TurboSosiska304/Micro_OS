@@ -11,18 +11,20 @@ and the chips on it. None of them replaces another.
 |---|---|---|
 | `make test` | the host build, the unit tests, the null probe | `gcc`, `cmake`, `ninja` |
 | `make test-asan` | the same tests with the sanitizers | the same |
-| `make test-tsan` | the same tests under the race detector | the same |
+| `make test-tsan` | the same tests under the race detector, on two cores | the same |
+| `make test-smp` | the tests of the kernel of two cores (`KERNEL_SMP`) | the same |
 | `make test-minimal` | the host tests with the optional features off | the same |
 | `make smoke` | the simulator boots and the shell answers | the host build |
 | `make coverage` | the lines of `components/kernel` and the threshold | `gcc`, `gcov`, Python |
 | `make reproducible` | two runs of the disk image are the same bytes | `gcc`, `cmake`, `ninja` |
 | `make x86-build` | the x86-64 kernel and loader compile | `gcc`, `cmake`, `ninja` |
+| `make x86-smp-build` | the same kernel with `KERNEL_SMP=ON` (ADR 0012) | `gcc`, `cmake`, `ninja` |
 | `make x86-smoke` | the kernel boots, runs `/bin/hello`, the shell answers | `qemu-system-x86_64` |
 | `make x86-vga-smoke` | the VGA screen and the PS/2 keyboard, no display | `qemu-system-x86_64` |
 | `make x86-disk-smoke` | a file written by one boot is read by the next | `qemu-system-x86_64` |
 | `make x86-net-smoke` | the network: ping, UDP, HTTP, `httpd` and DNS | `qemu-system-x86_64` |
 | `make soak` | one boot of x86-64 for 600 s under the mixed load | QEMU, the host build |
-| `make soak-host` | the portable kernel on the host under TSan for 600 s | GCC, TSan, valgrind |
+| `make soak-host` | the portable kernel on the host under TSan for 600 s, two cores | GCC, TSan, valgrind |
 | `make fuzz-long` | the fuzz of the ABI and the parsers, with a multiplier | GCC, ASan |
 | `make disk-stress` | a full volume, `fsck -y` and two boots (MicroFS, FAT) | QEMU, dosfstools, mtools |
 | `make board-soak` | the same session on the board, one boot | ESP-IDF and a board |
@@ -199,7 +201,7 @@ options when a release is prepared; `--verbose` names every check.
 ## `make ci`: the local half
 
 ```text
-build, test, test-asan, test-tsan, smoke, coverage, [x86-smoke], reproducible,
+build, test, test-asan, test-tsan, test-smp, smoke, coverage, [x86-smoke], reproducible,
 integrity
 ```
 

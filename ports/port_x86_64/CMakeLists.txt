@@ -53,6 +53,7 @@ option(MICRO_OS_FS_EXT2 "ext2, read-only" OFF)
 # here so that the defaults of the port are in one place.
 option(KERNEL_PSRAM "the PSRAM pool and its statistics in kmm" OFF)
 option(KERNEL_EXEC "the MOX1 parser, execve and the exec command" ON)
+option(KERNEL_SMP "the second core: a run queue per core (ADR 0012)" OFF)
 option(MICRO_OS_TELNET "the shell on TCP port 23" OFF)
 option(MICRO_OS_WIFI "the WiFi station" OFF)
 
@@ -371,6 +372,7 @@ add_executable(microos64
     src/ps2.c
     src/gdt.c
     src/paging.c
+    src/cpu.c
     src/port_exec.c
     src/port_x86_64_task.c
     src/blockdev_ram.c
@@ -402,6 +404,7 @@ target_compile_definitions(microos64 PRIVATE
     KERNEL_BOARD_DESC="QEMU x86-64 machine"
     KERNEL_PSRAM=$<BOOL:${KERNEL_PSRAM}>
     KERNEL_EXEC=$<BOOL:${KERNEL_EXEC}>
+    KERNEL_SMP=$<BOOL:${KERNEL_SMP}>
     MICRO_OS_NET=$<BOOL:${MICRO_OS_X86_NET}>
     MICRO_OS_NET_HTTP=$<BOOL:${MICRO_OS_X86_NET}>
     MICRO_OS_NET_HTTP_SERVER=$<BOOL:${MICRO_OS_X86_NET}>

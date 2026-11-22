@@ -43,6 +43,7 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make build` | configure and build `build-host/` with Ninja |
 | `make test` | build and run the unit tests through `ctest` |
 | `make test-asan` | the same tests with the address and UB sanitizers, in `build-asan/` |
+| `make test-tsan` | the same tests under the race detector on two cores, in `build-tsan/` |
 | `make sim` | build and run the kernel simulator `build-host/ports/port_host/microos_sim` |
 | `make smoke` | boot the simulator and check the shell, the filesystem and the network (needs `make build` first) |
 | `make coverage` | the host build with `--coverage`, the tests, the simulator and the gcov report of `components/kernel` (70% of lines) |
@@ -50,7 +51,9 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make integrity` | the integrity check: bundle, image headers, partition table, git, sources, formatting |
 | `make format` | reformat the C sources with `clang-format` |
 | `make clean` | remove `build-host/`, `build-asan/`, `build-coverage/` (the device `build/` stays) |
-| `make ci` | `build`, `test`, `test-asan`, `test-tsan`, `smoke`, `coverage`, `x86-smoke` when QEMU is there, `reproducible`, `integrity` — run it before pushing |
+| `make test-smp` | the host tests with `KERNEL_SMP=ON` and two cores (`MICRO_OS_CPUS=2`) |
+| `make x86-smp-build` | the x86-64 kernel with `KERNEL_SMP=ON` (the APs are not started yet, ADR 0012) |
+| `make ci` | `build`, `test`, `test-asan`, `test-tsan`, `test-smp`, `smoke`, `coverage`, `x86-smoke` when QEMU is there, `reproducible`, `integrity` — run it before pushing |
 
 The same build by hand:
 

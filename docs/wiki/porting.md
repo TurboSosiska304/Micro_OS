@@ -23,7 +23,7 @@ and the headers are the truth.
 | heap | `kernel/port/mem.h` | the internal heap, the PSRAM, alloc and free |
 | locks | `kernel/port/lock.h` | a critical section and a recursive mutex |
 | power | `kernel/port/power.h` | halt and reset |
-| identity | `kernel/port/info.h` | the name, the architecture, contract 1.8 |
+| identity | `kernel/port/info.h` | the name, the architecture, contract 1.9 |
 | store | `kernel/port/kv.h` | the keys behind `/etc`, or "nothing is stored" |
 | network | `kernel/port/net.h` | TCP client and server, one UDP exchange |
 | programs | `kernel/port/exec.h` | a window, the entry, the end, a pointer check |
@@ -65,7 +65,7 @@ python3 tools/wiki_check.py
 
 `[port]` looks for every function of the contract in every port directory: the
 built library for the host and null ports, the sources for the ESP32 and
-x86-64. A boot says `port: <name>, contract 1.8`; a major mismatch panics and
+x86-64. A boot says `port: <name>, contract 1.9`; a major mismatch panics and
 a minor one warns.
 
 ## What a port does not do

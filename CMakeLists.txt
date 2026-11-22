@@ -170,6 +170,7 @@ else()
     # the feature still pass.
     option(KERNEL_PSRAM "the PSRAM pool and its statistics in kmm" ON)
     option(KERNEL_EXEC "the MOX1 parser, execve and the exec command" ON)
+    option(KERNEL_SMP "the second core: a run queue per core (ADR 0012)" OFF)
     option(MICRO_OS_NET "the network services of the component net" ON)
     option(MICRO_OS_NET_HTTP "the HTTP client of the component net" ON)
     option(MICRO_OS_NET_HTTP_SERVER "the page of the state (httpd)" ON)
@@ -183,6 +184,7 @@ else()
     add_compile_definitions(
         KERNEL_PSRAM=$<BOOL:${KERNEL_PSRAM}>
         KERNEL_EXEC=$<BOOL:${KERNEL_EXEC}>
+        KERNEL_SMP=$<BOOL:${KERNEL_SMP}>
         MICRO_OS_NET=$<BOOL:${MICRO_OS_NET}>
         MICRO_OS_NET_HTTP=$<BOOL:${MICRO_OS_NET_HTTP}>
         MICRO_OS_NET_HTTP_SERVER=$<BOOL:${MICRO_OS_NET_HTTP_SERVER}>

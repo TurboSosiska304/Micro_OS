@@ -42,13 +42,26 @@ TSAN_SUMMARY = re.compile(r"ThreadSanitizer: reported (\d+) warning")
 VALGRIND_LOST = re.compile(r"definitely lost:\s*([\d,]+) bytes")
 
 
+def child_env(cpus: int) -> dict:
+    """The environment of a stress process: the kernel's number of cores.
+
+    The host port reads MICRO_OS_CPUS once, when the kernel is initialised
+    (ADR 0012), so the two halves of the session run the same two-core
+    scheduler; a build without KERNEL_SMP ignores the variable.
+    """
+    env = os.environ.copy()
+    env["MICRO_OS_CPUS"] = str(cpus)
+    return env
+
+
 class Run:
     """One stress process and the lines it writes."""
 
-    def __init__(self, command: list, seconds: float, hang: float) -> None:
+    def __init__(self, command: list, seconds: float, hang: float, cpus: int) -> None:
         self.command = command
         self.seconds = seconds
         self.hang = hang
+        self.cpus = cpus
         self.lines: list = []
         self.last_output = time.monotonic()
         self.lock = threading.Lock()
@@ -160,8 +173,11 @@ def run_tsan(args, seconds: float) -> dict:
         "--seed",
         str(args.seed),
     ]
-    run = Run(command, seconds, args.hang_seconds)
-    print(f"soak-host: TSan, {seconds:.0f} s, {args.threads} task(s)", flush=True)
+    run = Run(command, seconds, args.hang_seconds, args.cpus)
+    print(
+        f"soak-host: TSan, {seconds:.0f} s, {args.threads} task(s), {args.cpus} core(s)",
+        flush=True,
+    )
     started = time.monotonic()
     run.start()
     status = run.wait(seconds + args.hang_seconds + 30.0)
@@ -251,6 +267,7 @@ def run_valgrind(args) -> dict:
         text=True,
         timeout=seconds + 180.0,
         check=False,
+        env=child_env(args.cpus),
     )
     output = process.stdout + process.stderr
     lost = VALGRIND_LOST.search(output)
@@ -283,7 +300,9 @@ def report(tsan: dict, valgrind: dict, args) -> int:
         print("TSan        missing binary")
         return 2
 
-    print(f"TSan        {tsan['elapsed']:.1f} s, {args.threads} task(s)")
+    print(
+        f"TSan        {tsan['elapsed']:.1f} s, {args.threads} task(s), {args.cpus} core(s)"
+    )
     print(f"  warnings  {tsan['warnings']}")
     for location in tsan["locations"]:
         print(f"  race      {location}")
@@ -328,6 +347,12 @@ def main(argv: list) -> int:
     parser.add_argument("--seconds", type=float, default=DEFAULT_SECONDS)
     parser.add_argument("--minutes", type=float, default=None)
     parser.add_argument("--threads", type=int, default=4)
+    parser.add_argument(
+        "--cpus",
+        type=int,
+        default=2,
+        help="the cores the kernel is told about (MICRO_OS_CPUS, ADR 0012)",
+    )
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--hang-seconds", type=float, default=20.0)
     parser.add_argument("--valgrind-seconds", type=float, default=5.0)

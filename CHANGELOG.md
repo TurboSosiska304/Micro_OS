@@ -10,6 +10,33 @@ the MicroFS volume change by adding only.
 A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 (`vX.Y.Z-pre`) is a pre-release and must match `kernel_version()`.
 
+## [Unreleased]
+
+### Added
+
+- The first phase of many cores (ADR 0012, `KERNEL_SMP`, off by default): a
+  `struct k_cpu` per core, a run queue per core, the scheduler lock as the
+  critical section of the port, `k_sched_migrate()` and the rule that a
+  running task never moves. With the flag off the kernel, its tests and its
+  behaviour are those of 1.0.
+- The host port takes the number of cores from `MICRO_OS_CPUS` (1 by default);
+  `make test-smp`, `make test-tsan` and `make soak-host` run two of them, and
+  the two-core soak runs the thread sanitizer over a million operations.
+- The x86-64 port reads the processor list of the machine (ACPI: the root
+  pointer, the RSDT/XSDT and the MADT) and remembers the local APIC; the boot
+  prints how many processors the firmware describes and how many it runs, and
+  `make x86-smoke` boots with `-smp 2` and checks the line. `make
+  x86-smp-build` builds the two-core kernel; the APs are not started yet
+  (ADR 0012, "The pilot of 1.x").
+- The port contract is version 1.9: `kernel/port/cpu.h` with
+  `k_port_cpu_count` and `k_port_cpu_id`, and a weak default of one core for a
+  port that predates them.
+
+### Changed
+
+- `task_signal_interrupts()` reads the mark and the handler of a signal with
+  an atomic load, so the reader of another core sees the pair the writer made.
+
 ## [1.0.0] - 2026-11-22
 
 The first major release: the contracts are frozen, two machines run the

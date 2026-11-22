@@ -191,6 +191,11 @@ version.
   `k_mutex` (it blocks the task, it does not spin). Open file position/flags
   live in the descriptor, not in the FS.
 * The allocator is behind one lock (`kmm`), the host PSRAM pool behind a mutex.
+* The scheduler keeps a run queue and a `struct k_cpu` per core
+  (`KERNEL_SMP`, off by default) under `k_cpu_lock()`, which is the critical
+  section of the port with the kernel's own nesting. It is dropped before a
+  sleep, a switch and the charge of a tick, and only the scheduler writes
+  `struct task::cpu` - a running task never moves (ADR 0012).
 * Error-code translation happens only in `components/mfs/src/mfs_vfs.c`;
   filesystem codes and syscall codes are not identical.
 
@@ -228,3 +233,7 @@ Open items from `docs/roadmap.md`:
   OTA (the flash has to be repartitioned first).
 * Phase 9: the RTC alarm and deep sleep, the microphone, `drv_ir`, a factory
   reset, the enclosure modes.
+* K8 (many cores): the first phase is in the tree (`KERNEL_SMP`, the run
+  queues per core, the host gate of `make test-smp`/`test-tsan`/`soak-host`
+  and the ACPI processor list of x86-64); the AP bring-up of x86-64 is the
+  blocker, written down in ADR 0012, "The pilot of 1.x".

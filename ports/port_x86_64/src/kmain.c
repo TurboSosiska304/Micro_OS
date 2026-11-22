@@ -333,6 +333,22 @@ void kmain(k_u64_t multiboot_info)
           (unsigned)(k_port_heap_free() / 1024), (unsigned)(k_port_heap_total() / 1024));
 
     /*
+     * The processors of the machine (ADR 0012). The count on the left is what
+     * the firmware (the MADT of ACPI) says, the one on the right is what the
+     * kernel runs: the APs need the trampoline, INIT/SIPI, a local APIC timer
+     * and an I/O APIC, and this port does not have them yet. Saying both
+     * numbers is the honest line; putting a task in the queue of a core that
+     * never runs it would hang the machine instead.
+     */
+    kinfo("x86-64: %u cpu(s) reported by the firmware, %u in use (apic 0x%x)",
+          (unsigned)port_x86_64_cpu_available(), (unsigned)port_x86_64_cpu_started(),
+          (unsigned)port_x86_64_apic_base());
+
+    if (port_x86_64_cpu_available() > port_x86_64_cpu_started()) {
+        kwarn("x86-64: the AP bring-up is not written yet, the kernel runs on the core 0");
+    }
+
+    /*
      * The tables are read back before a program is ever entered: the port
      * promises that no page is writable and executable at once, and a map
      * that says otherwise is a bug of the port that the boot names instead of

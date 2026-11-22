@@ -55,7 +55,7 @@ ones of your tree):
 MicroOS 0.5.0-rc1 (build ...)
 board: host_sim - Micro OS host simulator
 arch: x86_64, compiler: gcc ...
-port: host, contract 1.8
+port: host, contract 1.9
 [ ok ] sched
 file0: 512 sector(s) of 1024 bytes on /tmp/microos-sim.img
 sim: the volume is /tmp/microos-sim.img (512 KB)

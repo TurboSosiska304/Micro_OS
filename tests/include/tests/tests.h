@@ -15,6 +15,7 @@ void test_board(void);
 void test_task(void);
 void test_sched(void);
 void test_sched_queue(void);
+void test_smp(void);
 void test_kmod(void);
 void test_kmm(void);
 void test_exec(void);

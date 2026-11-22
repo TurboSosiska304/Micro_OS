@@ -81,6 +81,20 @@
 #define KERNEL_EXEC 1
 #endif
 
+/*
+ * The second core (ADR 0012). Off by default: with the flag off the kernel is
+ * the one-core kernel of 1.0, the run queues live in the slot of the core 0,
+ * and every test of that kernel runs unchanged. With it on the kernel asks
+ * the port how many cores it started, keeps a run queue and a `struct k_cpu`
+ * per core, and a task is moved between the queues only by the scheduler.
+ * The port still owns the machine: a port that reports one core (x86-64 until
+ * the AP bring-up, the board in its compatibility mode) builds the same
+ * kernel and runs on one.
+ */
+#ifndef KERNEL_SMP
+#define KERNEL_SMP 0
+#endif
+
 /* Board identification (set by the build system). */
 #ifndef KERNEL_BOARD_NAME
 #define KERNEL_BOARD_NAME "unknown"

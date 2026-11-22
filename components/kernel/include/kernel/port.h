@@ -13,6 +13,7 @@
  * (include/linux beside arch/<arch>/include/asm):
  *
  *   kernel/port/console.h  the bytes in and out
+ *   kernel/port/cpu.h      the cores of the machine
  *   kernel/port/exec.h     the window of the programs and the jump into one
  *   kernel/port/time.h     the clock since the boot
  *   kernel/port/mem.h      the internal heap and the PSRAM
@@ -31,6 +32,7 @@
 #define MICRO_OS_KERNEL_PORT_H
 
 #include "kernel/port/console.h"
+#include "kernel/port/cpu.h"
 #include "kernel/port/exec.h"
 #include "kernel/port/info.h"
 #include "kernel/port/kv.h"

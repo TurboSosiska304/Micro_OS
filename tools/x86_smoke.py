@@ -183,7 +183,7 @@ EXPECTED = [
     # it (ADR 0020); the line is the proof that the check ran and passed.
     "Micro OS: image signature ok (sha-256, ed25519)",
     "board: qemu_x86_64",
-    "port: x86_64, contract 1.8",
+    "port: x86_64, contract 1.9",
     "[ ok ] sched",
     "subsystem(s) ready",
     "the kernel is up",
@@ -194,6 +194,11 @@ EXPECTED = [
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, "build-x86")
+
+# The number of processors of the machine of the smoke test (ADR 0012). It is
+# a constant of the test and not a setting: the point of the line is that the
+# firmware describes two and the kernel knows how many it has started.
+MACHINE_SMP = "2"
 DEFAULT_IMAGE = os.path.join(BUILD, "programs.img")
 RUN_IMAGE = os.path.join(BUILD, "programs-smoke.img")
 
@@ -591,6 +596,13 @@ def run_machine(loader: str, kernel: str, image: str, timeout: float) -> str:
     The output is read while the machine runs, not after it stops: the
     commands have to arrive after the shell is ready, and the answer of a
     command is the proof the next command may go out.
+
+    The machine has two processors (ADR 0012): the firmware then describes
+    both in the MADT of ACPI, and the boot line of the kernel says how many it
+    found and how many it runs. The second one is 1 until the AP bring-up is
+    written, and the smoke test reads both numbers - a detection that stopped
+    working and an AP that was started without the test knowing it are both
+    visible here.
     """
     command = [
         "qemu-system-x86_64",
@@ -600,6 +612,8 @@ def run_machine(loader: str, kernel: str, image: str, timeout: float) -> str:
         kernel,
         "-m",
         "256",
+        "-smp",
+        MACHINE_SMP,
         "-nographic",
         "-no-reboot",
         # The disk of the machine: a raw image on the primary IDE channel.
@@ -699,6 +713,24 @@ def check(output: str) -> list:
         "the boot does not install the programs",
         "is written" not in output,
         "a line of the boot wrote a file of /bin",
+    )
+
+    # --- the processors of the machine (ADR 0012)
+    expect(
+        "the firmware lists both processors of the machine",
+        re.search(r"x86-64: 2 cpu\(s\) reported by the firmware", output) is not None,
+        "the MADT of ACPI was not read, or QEMU was not given -smp 2",
+    )
+    expect(
+        "the kernel runs on the cores it has started",
+        re.search(r"reported by the firmware, [12] in use", output) is not None,
+    )
+    expect(
+        "the boot names the second core as not started",
+        "the AP bring-up is not written yet" in output
+        if "reported by the firmware, 1 in use" in output
+        else True,
+        "the kernel says it uses the second core without the AP bring-up",
     )
     expect(
         "the boot asks for the program through the call",

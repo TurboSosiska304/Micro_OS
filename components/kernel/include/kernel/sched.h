@@ -37,6 +37,13 @@ void k_sched_tick(void);
 /* Number of ticks since k_sched_init(). */
 k_u32_t k_sched_ticks(void);
 
+/* The ticks one core has taken since the boot (0 for a core that is not
+ * there). With KERNEL_SMP off only the core 0 has any. */
+k_u32_t k_sched_cpu_ticks(k_u32_t cpu);
+
+/* The cores the scheduler has (1 without KERNEL_SMP). */
+k_u32_t k_sched_cpu_count(void);
+
 /* Milliseconds since k_sched_init(). */
 k_u64_t k_sched_uptime_ms(void);
 
@@ -55,13 +62,29 @@ struct task *k_sched_pick_next(void);
 
 /* Statistics. */
 k_size_t k_sched_ready_count(void);
+k_size_t k_sched_ready_count_cpu(k_u32_t cpu);
 k_size_t k_sched_sleeping_count(void);
 k_size_t k_sched_blocked_count(void);
 
 /*
+ * Move a task to the queue of another core. Only the scheduler decides where
+ * a task belongs; this call is the one the scheduler and the tests use. A
+ * task that is running is refused (-1): it is not moved in the middle of its
+ * slice (ADR 0012). A blocked or sleeping task remembers the core it will be
+ * woken on; a ready one changes its queue. Returns 0, or -1 for a task with
+ * no record, a core that is not there, or a running task.
+ */
+int k_sched_migrate(struct task *t, k_u32_t cpu);
+
+/* The core of the run queue of a task (0 without KERNEL_SMP). */
+k_u32_t k_sched_task_cpu(const struct task *t);
+
+/*
  * Check the invariants of the run queues: a task that is ready has to be in
- * the queue of its priority level, and a task in the queue has to be ready.
- * Returns the number of broken invariants (0 when everything is fine).
+ * the queue of its priority level, and a task in a queue has to be runnable
+ * there - ready, or running in that queue, which is how the switch of this
+ * kernel keeps the task it runs - and in the queue of its own core. Returns
+ * the number of broken invariants (0 when everything is fine).
  */
 k_size_t k_sched_validate(void);
 

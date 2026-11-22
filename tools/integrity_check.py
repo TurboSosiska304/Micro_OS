@@ -1331,8 +1331,15 @@ def check_port_contract(root: str, report: Report) -> None:
         f"{len(names)} function(s) in {PORT_HEADER_DIR}/",
     )
 
+    # The calls with a weak default in the kernel (kernel/port/cpu.h) are not
+    # required of a port that predates them: the kernel answers one core and
+    # the port keeps working (ADR 0012). A port that has them is checked for
+    # them like any other call.
+    weak = weak_calls(root)
+    required = [name for name in names if name not in weak]
+
     for directory in PORT_IMPLEMENTATION_DIRS:
-        absent, where = port_missing(root, directory, names)
+        absent, where = port_missing(root, directory, required)
 
         if absent is None:
             report.add(group, f"{directory} exists", False, where)
@@ -1341,7 +1348,7 @@ def check_port_contract(root: str, report: Report) -> None:
         detail = (
             "missing: " + ", ".join(absent)
             if absent
-            else f"{len(names)} function(s) found in {where}"
+            else f"{len(required)} function(s) found in {where}"
         )
         report.add(group, f"{directory} implements the contract", not absent, detail)
 
@@ -1385,17 +1392,19 @@ def port_version(root: str) -> tuple:
 def read_port_recording(root: str) -> tuple:
     """The record of the contract: the version, the functions and the header of each.
 
-    Returns (version, names, errors). A version is a pair of strings, the names
-    are a dictionary from the function to the header that declares it, and the
-    errors are the lines that are neither.
+    Returns (version, names, optional, errors). A version is a pair of strings,
+    the names are a dictionary from the function to the header that declares
+    it, `optional` holds the functions a port may leave to the weak default of
+    the kernel (kernel/cpu.h), and the errors are the lines that are neither.
     """
     path = os.path.join(root, PORT_RECORDING)
     version = None
     names = {}
+    optional = set()
     errors = []
 
     if not os.path.isfile(path):
-        return None, names, [f"{PORT_RECORDING} is missing"]
+        return None, names, optional, [f"{PORT_RECORDING} is missing"]
 
     for number, line in enumerate(read_text(path).splitlines(), 1):
         line = line.split("#", 1)[0].strip()
@@ -1408,14 +1417,19 @@ def read_port_recording(root: str) -> tuple:
             if version is not None:
                 errors.append(f"line {number}: a second api line")
             version = (parts[1], parts[2])
-        elif parts[0].startswith("k_port_") and len(parts) == 2:
+        elif parts[0].startswith("k_port_") and len(parts) in (2, 3):
             if parts[0] in names:
                 errors.append(f"line {number}: {parts[0]} is recorded twice")
             names[parts[0]] = parts[1]
+            if len(parts) == 3:
+                if parts[2] != "weak":
+                    errors.append(f"line {number}: {parts[2]!r} is not a word of the record")
+                else:
+                    optional.add(parts[0])
         else:
             errors.append(f"line {number}: {line!r} is not a record")
 
-    return version, names, errors
+    return version, names, optional, errors
 
 
 def port_missing(root: str, directory: str, names: list) -> tuple:
@@ -1447,10 +1461,21 @@ def port_missing(root: str, directory: str, names: list) -> tuple:
     return missing, "the sources"
 
 
+def weak_calls(root: str) -> set:
+    """The calls of the record that a port may leave to the kernel.
+
+    The record marks them with `weak`: the portable kernel has a definition
+    (components/kernel/src/cpu_default.c) and a port that does not override it
+    is one core. The board is that port until its own work (ADR 0012).
+    """
+    _version, _names, optional, _errors = read_port_recording(root)
+    return optional
+
+
 def check_port_recording(root: str, report: Report) -> list:
     """The record of the contract is the one of the headers, and it is whole."""
     group = "port"
-    version, names, errors = read_port_recording(root)
+    version, names, optional, errors = read_port_recording(root)
 
     report.add(
         group,
@@ -1504,7 +1529,18 @@ def check_port_recording(root: str, report: Report) -> list:
         f"the record says {recorded_version}, kernel/port/info.h says {reported}",
     )
 
-    return recorded
+    # The record of the strict check: the calls a machine of its own has to
+    # implement. The weak ones are the floor of the contract and the port may
+    # leave them to the kernel.
+    if optional:
+        report.add(
+            group,
+            "the contract has a weak floor (the cores of the machine)",
+            True,
+            f"{len(optional)} call(s) may be left to the kernel: " + ", ".join(sorted(optional)),
+        )
+
+    return [name for name in recorded if name not in optional]
 
 
 def check_independent_ports(root: str, report: Report, names: list) -> None:

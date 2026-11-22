@@ -382,9 +382,38 @@ with an acknowledgement and retransmitted data is not reassembled; the fixed
 retransmission is the whole of the reliability. The driver polls, because the
 PCI line needs the I/O APIC that K8 brings.
 
+## The processors and the second core
+
+The port reads the processor list of the machine the way a PC has answered
+since ACPI: the root pointer in the extended BIOS area (or the last kilobyte
+of the BIOS), the RSDT or the XSDT under it, and the MADT with one entry per
+processor. The local APIC address comes from the same table. The boot prints
+both numbers, because they are different while the second core is not up:
+
+```
+x86-64: 2 cpu(s) reported by the firmware, 1 in use (apic 0xfee00000)
+```
+
+The count on the left is what the firmware calls enabled; on the right is
+what the kernel runs. `make x86-smoke` gives QEMU `-smp 2` and reads the
+line, so a machine that stopped describing its processors is a failure and
+not a silence.
+
+Only the processor of the boot runs the kernel. The AP bring-up of ADR 0012
+has four steps, and the port has none of them yet: a real spinlock inside
+`k_port_enter_critical()` (today it is `cli` and a depth counter, which is a
+lock of one core), one `port_task`/TSS/thread pointer per core, a trampoline
+in low memory with INIT-SIPI-SIPI, and a local APIC timer with its vector
+plus the I/O APIC for the keyboard and the disk (the PIT and the 8259 deliver
+to the boot processor). `make x86-smp-build` builds the portable kernel with
+`KERNEL_SMP=ON`; it boots on this machine and says `1 in use`, and the two-core
+side of the scheduler is tested on the host (`make test-smp`, `make
+soak-host`). The blocker and the order of the work are written down in ADR
+0012, "The pilot of 1.x" and in [debts.md](../../debts.md) under K8.
+
 ## What works
 
-* the boot: the loader, long mode, the banner, the contract check at 1.8;
+* the boot: the loader, long mode, the banner, the contract check at 1.9;
 * the signature of the kernel (ADR 0020): the loader verifies the trailer of
   SHA-256 and Ed25519 with the key compiled into it before it copies a byte,
   and a damaged, unsigned or foreign-key image stops with the reason and
@@ -492,6 +521,10 @@ PCI line needs the I/O APIC that K8 brings.
 
 ## What does not work yet
 
+* the second processor: the MADT is read and the boot says how many the
+  machine has, but the APs wait for the trampoline, the spinlock, the local
+  APIC timer and the I/O APIC (ADR 0012, "The pilot of 1.x"); the kernel runs
+  on the processor of the boot;
 * the disk is one, and it is the primary ATA channel: no SATA, no virtio, no
   NVMe, no card, no second disk;
 * the driver polls and copies through the processor: no interrupt, no DMA and

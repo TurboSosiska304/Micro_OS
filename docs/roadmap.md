@@ -237,20 +237,31 @@ written when the project was an operating system for one board; the numbers
       network components, the defaults per build, `make test-minimal` and
       the check of the map
 
-## K8 - Many cores (planned, after 1.0)
+## K8 - Many cores (in progress, after 1.0)
 
 > Not a gate of 1.0 (ADR 0012, updated): the release promises a correct
-> single-core kernel; the second core is the first project after it.
+> single-core kernel; the second core is the first project after it. The
+> first phase is in the tree (`KERNEL_SMP`, `struct k_cpu`, the host gate
+> and the x86-64 processor list); the AP bring-up is the blocker, named in
+> ADR 0012 "The pilot of 1.x".
 
-* [ ] A `struct k_cpu` per core and a run queue per core; the scheduler never
-      runs one task on two cores (ADR 0012)
+* [x] A `struct k_cpu` per core and a run queue per core; the scheduler never
+      runs one task on two cores (ADR 0012) - `kernel/cpu.h`,
+      `components/kernel/src/sched.c`, `tests/cases/test_smp.c`
 * [ ] The allocator, the VFS, the console and the block layer safe under two
-      cores; the locks that sleep and the locks that spin are named
+      cores; the locks that sleep and the locks that spin are named - the
+      sleeping locks are audited in [debts.md](debts.md) under K8; the port
+      critical section of x86-64 is still `cli` and has to become a machine
+      lock before an AP enters the kernel
 * [ ] x86-64: AP bring-up, local APIC timer, I/O APIC and the IPI of a TLB
-      and a reschedule; `make x86-smoke` with `-smp 2`
+      and a reschedule; `make x86-smoke` with `-smp 2` - the processor list
+      (MADT) and `-smp 2` are done; the boot says `2 cpu(s) reported by the
+      firmware, 1 in use`; `make x86-smp-build` builds the two-core kernel
 * [ ] ESP32: the kernel tasks on both cores of the Pico, no driver assuming
-      one core
-* [ ] `KERNEL_SMP` (ADR 0010) and the host TSan run as the gate
+      one core - not started (ADR 0018, the compatibility port)
+* [x] `KERNEL_SMP` (ADR 0010) and the host TSan run as the gate - the flag is
+      off by default; `make test-smp`, `make test-tsan` and `make soak-host`
+      run two cores under TSan, and the plugin into `make ci` is `test-smp`
 
 ## K9 - A userland (in progress)
 
