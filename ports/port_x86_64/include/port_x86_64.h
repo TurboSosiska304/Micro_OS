@@ -387,6 +387,17 @@ k_u32_t port_x86_64_apic_base(void);
  */
 void port_x86_64_interrupts_load(void);
 
+/*
+ * Put a handler of the port in the table of the interrupts, as a ring 0 gate
+ * that turns the interrupts off on entry (the two constants above are an
+ * implementation detail of the table). A driver of the port - the APIC of
+ * ADR 0012 is the first - registers its vectors here instead of reaching into
+ * the table of port_x86_64.c. The table is loaded already and lives in the
+ * memory of the kernel, so a registration after the lidt is seen by every
+ * core at the next interrupt.
+ */
+void port_x86_64_idt_set(k_u32_t vector, void (*handler)(void));
+
 /* --- the processors of the machine (ADR 0012) ----------------------------- */
 
 /*

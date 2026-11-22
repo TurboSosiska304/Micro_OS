@@ -504,6 +504,13 @@ void port_x86_64_irq_tick(k_u64_t *frame)
 __attribute__((weak)) void port_x86_64_task_tick(void) {}
 
 /*
+ * The IPI hook of the task substrate, called from the vector of
+ * kernel/port_x86_64_apic.h. Weak for the same reason as the tick: a build
+ * without the scheduler answers an IPI with the EOI alone.
+ */
+__attribute__((weak)) void port_x86_64_task_ipi(void) {}
+
+/*
  * The console of the failure path: an exception prints through k_port_write
  * directly, not through the log, because the log takes a lock and may be
  * the very thing that broke.
@@ -672,6 +679,15 @@ void port_x86_64_unexpected(void)
 void port_x86_64_interrupts_load(void)
 {
     __asm__ volatile("lidt %0" : : "m"(g_idt_pointer));
+}
+
+void port_x86_64_idt_set(k_u32_t vector, void (*handler)(void))
+{
+    if (vector >= IDT_VECTORS || handler == NULL) {
+        return;
+    }
+
+    idt_set(vector, handler, 0, IDT_GATE_INTERRUPT);
 }
 
 void port_x86_64_interrupts_init(void)
