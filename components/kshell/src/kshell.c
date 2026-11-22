@@ -631,8 +631,8 @@ static int cmd_free(int argc, char **argv)
 #else
     kshell_printf("heap: %u KB free of %u KB\n", (unsigned)heap_free, (unsigned)heap_total);
 #endif
-    kshell_printf("uptime: %llu ms, %u tick(s)\n", (unsigned long long)k_sched_uptime_ms(),
-                  (unsigned)k_sched_ticks());
+
+    /* The clock is `uptime`, not `free`: one command, one answer. */
 
     return KSHELL_OK;
 }
@@ -848,6 +848,16 @@ static int cmd_kill(int argc, char **argv)
     if (end == argv[at] || (end != NULL && *end != '\0') || pid == 0 || pid > 0x7FFFFFFFu) {
         kshell_printf("kill: %s: not a pid\n", argv[at]);
         return KSHELL_USAGE;
+    }
+
+    /*
+     * The init of the machine is not a program of the console. A signal
+     * that ends it leaves a task that is never reaped and a system without
+     * its first process; `reboot` is the way to leave, not `kill 1`.
+     */
+    if (pid == 1) {
+        kshell_printf("kill: 1: the init of the machine is not killed by the console\n");
+        return KSHELL_ERROR;
     }
 
     rc = microos_kill((int)pid, sig);

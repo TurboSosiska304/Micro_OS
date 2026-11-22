@@ -10,6 +10,41 @@ the MicroFS volume change by adding only.
 A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 (`vX.Y.Z-pre`) is a pre-release and must match `kernel_version()`.
 
+## [1.1.1] - 2026-11-22
+
+A patch of `1.1.0` for the data loss that the cleanroom found: a directory
+that grew past its first block made every path of the volume answer an I/O
+error, and a full directory corrupted the tree. The notes are in
+[`docs/releases/1.1.1.md`](docs/releases/1.1.1.md); the volume, the syscall
+ABI and MOX1 do not change, so a machine of 1.1.0 takes the new image as it
+is.
+
+### Fixed
+
+- `mfs`: the new block of a directory that grows is written empty with the
+  end of its chain in its header before it is linked, as the growth of a
+  file always did. A stale header there made a loop; the lookup followed it
+  and the whole volume answered `input/output error` at about the two
+  hundredth file of one directory. The regression test fills a directory
+  with three hundred files and asks the check for a sound volume; on the old
+  code it fails at 172 files.
+- `mfs`: a directory that is full answers `no space left on device`
+  (`MFS_ENOSPC`) and leaves the volume sound, instead of `E2BIG` and an I/O
+  error.
+- `kshell`: `umount /` is refused; the root of the tree stays and `mkfs -y`
+  formats the volume itself.
+- `kshell`: `kill 1` is refused; the init of the machine is not killed from
+  the console, and `reboot` is the way to leave.
+- `free` prints the memory of the machine and not the uptime; the clock has
+  its own command.
+- x86-64: the small `printf` of the kernel prints octal, so `stat` says
+  `mode: 0644` instead of the literal `0%o`.
+
+### Changed
+
+- `x86-smoke` checks the mode of `stat`, the refusal of `umount /` and that
+  `free` has no clock: 165 checks.
+
 ## [1.1.0] - 2026-11-22
 
 The release of the board's last major changes: the settings of `/etc`, the

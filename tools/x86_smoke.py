@@ -169,6 +169,13 @@ COMMANDS = [
     # shell has to answer the command after it for the machine to be alive.
     "exec /bin/crash",
     "uname",
+    # The files of the machine: the mode is octal (the x86 kernel's printf
+    # learned %o), the root of the tree cannot be unmounted, and `free` is
+    # the memory and not the clock.
+    "stat /etc/setting",
+    "umount /",
+    "ls /",
+    "free",
 ]
 
 # The prompt of the shell. It is written in one call, so the log of another
@@ -825,6 +832,25 @@ def check(output: str) -> list:
     expect("the program is a file in /bin", "hello" in bin_listing)
     # All fifteen are objects of the volume the boot mounted, with the mode
     # the tool gave them; a missing one is a tool or a build that lost it.
+    stat_answer = answer("stat /etc/setting")
+    expect(
+        "stat prints the mode in octal",
+        re.search(r"mode: 0[0-7]{3}", stat_answer) is not None,
+        stat_answer,
+    )
+    umount_answer = answer("umount /")
+    expect(
+        "the root of the tree is not unmounted",
+        "is the root of the tree" in umount_answer,
+        umount_answer,
+    )
+    expect("the tree is still there", "etc/" in answer("ls /"), answer("ls /"))
+    free_answer = answer("free")
+    expect(
+        "free prints the memory and not the clock",
+        "heap:" in free_answer and "uptime:" not in free_answer,
+        free_answer,
+    )
     expect(
         "the fifteen programs are files of the disk",
         all(

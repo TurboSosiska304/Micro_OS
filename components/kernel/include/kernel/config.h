@@ -15,7 +15,7 @@
 
 #define KERNEL_VERSION_MAJOR 1
 #define KERNEL_VERSION_MINOR 1
-#define KERNEL_VERSION_PATCH 0
+#define KERNEL_VERSION_PATCH 1
 
 /* A pre-release carries a suffix ("-rc1", "-pre") until the release drops it:
  * the tag is vX.Y.Z or vX.Y.Z-suffix, and the integrity check of a release

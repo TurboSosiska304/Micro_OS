@@ -723,10 +723,33 @@ static int dir_write_data(const struct mfs_inode *inode, const k_u8_t *data, k_s
             }
 
             if (next == MFS_NEXT_NONE) {
+                k_u8_t empty[MFS_BLOCK_SIZE];
+
                 rc = block_alloc(&new_block);
                 if (rc != MFS_OK) {
                     return rc;
                 }
+
+                /*
+                 * The block is new to the chain: its first four bytes are
+                 * the end of it, whatever the block held before (the header
+                 * of a file that was freed). A stale number there is a loop
+                 * in the chain of the directory, and a loop makes every path
+                 * of the volume unreadable - the bug the cleanroom found on
+                 * the two hundredth file of a directory.
+                 */
+                memset(empty, 0, sizeof(empty));
+                empty[0] = (k_u8_t)MFS_NEXT_NONE;
+                empty[1] = (k_u8_t)(MFS_NEXT_NONE >> 8);
+                empty[2] = (k_u8_t)(MFS_NEXT_NONE >> 16);
+                empty[3] = (k_u8_t)(MFS_NEXT_NONE >> 24);
+
+                rc = dev_write(new_block, empty);
+                if (rc != MFS_OK) {
+                    block_release(new_block);
+                    return rc;
+                }
+
                 rc = chain_set_next(block, new_block);
                 if (rc != MFS_OK) {
                     /* The block is not in any chain: the map takes it back. */
@@ -845,8 +868,14 @@ static int dir_add(struct dir_buffer *buf, const struct mfs_dirent *entry)
 {
     k_size_t need = sizeof(struct mfs_dirent_header) + entry->name_len;
 
+    /*
+     * The buffer of the directory is the room of the directory: a person
+     * who fills it has no space left for another name, and that is what the
+     * answer says. E2BIG would read as a bad argument of a call that was
+     * well formed.
+     */
     if (buf->size + need > sizeof(buf->data)) {
-        return MFS_E2BIG;
+        return MFS_ENOSPC;
     }
 
     memcpy(buf->data + buf->size, entry, sizeof(struct mfs_dirent_header));
