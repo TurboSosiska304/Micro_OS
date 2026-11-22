@@ -115,6 +115,31 @@ by another key are each refused by the loader before `board: qemu_x86_64`
 appears. The tests call the same verifier on the host
 (`tests/cases/test_sign.c`), with the vectors of RFC 8032 and FIPS 180-4.
 
+The refusal is a setting. `MICRO_OS_REQUIRE_SIGNATURE` is a CMake option, on
+by default; with it off the loader still verifies the trailer, still prints
+the reason, and then prints
+
+    Micro OS: unsigned or damaged image: not guaranteed
+
+and loads the kernel. The build of the other policy is a directory of its own:
+
+    make x86-open-build                  # build-x86-open, the option OFF
+    make x86-smoke                       # the strict and the open build
+
+`make x86-smoke` boots the signed kernel on the open loader (it is the same
+check), then an unsigned kernel and a kernel with a changed byte: each prints
+the warning and reaches `board: qemu_x86_64` and `the kernel is up`. The
+strict loader refuses the same bytes, which is what the signature checks of
+the smoke test already prove. The setting exists for a development machine
+whose image is not signed yet; it does not make a damaged image correct, and
+the sentence on the console says that.
+
+There is no anti-rollback on this machine: it has no store that survives a
+reset (the RAM volume is gone with the machine), so an older correctly signed
+kernel boots and there is no flag. The version in the trailer leaves room for
+a floor when the port has a store; today the rule is "a rollback is allowed"
+(ADR 0020, section 7).
+
 The heap is the low identity map and stops below the window of the programs,
 which are placed at 32 MiB; the image of 1.0 ends 1.9 MiB after the base and
 the port allows it up to 16 MiB. The sixteen programs of `/bin` are built

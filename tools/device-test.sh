@@ -12,6 +12,31 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${1:-}"
 CONSOLE_SECONDS="${CONSOLE_SECONDS:-30}"
+# The policy of the image under test (ADR 0020):
+#   signed           the normal build, the bundle, the trailer in the flash
+#   unsigned         CONFIG_MICRO_OS_REQUIRE_SIGNATURE=n, no trailer: warning
+#   require-unsigned the normal build, no trailer: the boot stops
+DEVICE_POLICY="${DEVICE_POLICY:-signed}"
+BUILD_DIR="${IDF_BUILD_DIR:-$ROOT/build}"
+UNSIGNED_BUILD="${DEVICE_UNSIGNED_BUILD:-$ROOT/build-unsigned}"
+
+case "$DEVICE_POLICY" in
+    signed|unsigned|require-unsigned) ;;
+    *)
+        echo "DEVICE_POLICY must be signed, unsigned or require-unsigned" >&2
+        exit 2
+        ;;
+esac
+
+# The secret of the release is the key material (hex), not a path: the tool
+# and the build want a file, so the material is written where they can read
+# it. A value that is already a path is left alone.
+if [ -n "${MICROOS_SIGN_KEY:-}" ] && [ ! -f "$MICROOS_SIGN_KEY" ]; then
+    KEY_FILE="$(mktemp "${TMPDIR:-/tmp}/microos-key.XXXXXX")"
+    chmod 600 "$KEY_FILE"
+    printf '%s\n' "$MICROOS_SIGN_KEY" > "$KEY_FILE"
+    export MICROOS_SIGN_KEY="$KEY_FILE"
+fi
 
 # ESP-IDF discovery, in order: $IDF_PATH, a checkout beside the repository
 # (../esp-idf), then the conventional ~/esp/esp-idf. IDF_EXPORT overrides.
@@ -37,8 +62,28 @@ fi
 
 cd "$ROOT"
 
-echo "==> building the firmware"
-idf.py build
+if [ "$DEVICE_POLICY" = "unsigned" ] || [ "$DEVICE_POLICY" = "require-unsigned" ]; then
+    if [ "$DEVICE_POLICY" = "unsigned" ]; then
+        # A build of its own with the requirement off. The defaults are the
+        # normal file plus the one line; the sdkconfig is generated, so a
+        # stale one is removed and the defaults win.
+        UNSIGNED_DEFAULTS="$(mktemp "${TMPDIR:-/tmp}/microos-unsigned.XXXXXX")"
+        UNSIGNED_SDKCONFIG="$UNSIGNED_BUILD/sdkconfig"
+        cat "$ROOT/sdkconfig.defaults" > "$UNSIGNED_DEFAULTS"
+        printf '\n# CONFIG_MICRO_OS_REQUIRE_SIGNATURE is not set\n' >> "$UNSIGNED_DEFAULTS"
+        rm -f "$UNSIGNED_SDKCONFIG"
+        echo "==> building the firmware without the signature requirement"
+        idf.py -B "$UNSIGNED_BUILD" \
+            -D SDKCONFIG="$UNSIGNED_SDKCONFIG" \
+            -D SDKCONFIG_DEFAULTS="$UNSIGNED_DEFAULTS" build
+    else
+        echo "==> building the firmware (the signature is required)"
+        idf.py -B "$BUILD_DIR" build
+    fi
+else
+    echo "==> building the firmware"
+    idf.py -B "$BUILD_DIR" build
+fi
 
 if [ -z "$PORT" ]; then
     PORT="$(python3 - <<'PY'
@@ -58,17 +103,53 @@ if [ -z "$PORT" ]; then
     exit 2
 fi
 
-echo "==> flashing $PORT"
-idf.py -p "$PORT" flash
+if [ "$DEVICE_POLICY" = "signed" ]; then
+    echo "==> the bundle and the signature"
+    BUNDLE="$(mktemp -d "${TMPDIR:-/tmp}/microos-bundle.XXXXXX")"
+    trap 'rm -rf "$BUNDLE"' EXIT
+    "$ROOT/tools/bundle.sh" "$BUILD_DIR" "$BUNDLE"
+    echo "==> flashing $PORT (merged image and trailer at 0x20F000)"
+    "$BUNDLE/flash.sh" "$PORT"
+else
+    # Erase the 4 KiB where the trailer lives: the raw image of the unsigned
+    # policies must not inherit a valid trailer from the signed flash before
+    # it.
+    NO_TRAILER="$(mktemp "${TMPDIR:-/tmp}/microos-notrailer.XXXXXX")"
+    python3 -c 'import sys; open(sys.argv[1], "wb").write(b"\xff" * 4096)' "$NO_TRAILER"
+    trap 'rm -f "$NO_TRAILER"' EXIT
+    if [ "$DEVICE_POLICY" = "unsigned" ]; then
+        echo "==> flashing $PORT without a trailer"
+        idf.py -B "$UNSIGNED_BUILD" -p "$PORT" flash
+    else
+        echo "==> flashing $PORT without a trailer"
+        idf.py -B "$BUILD_DIR" -p "$PORT" flash
+    fi
+    python3 -m esptool --chip esp32 -p "$PORT" write_flash 0x20F000 "$NO_TRAILER"
+fi
 
 echo "==> reading the console"
 LOG="$(mktemp "${TMPDIR:-/tmp}/microos-console.XXXXXX")"
-trap 'rm -f "$LOG"' EXIT
+trap 'rm -f "$LOG"; if [ -n "${UNSIGNED_DEFAULTS:-}" ]; then rm -f "$UNSIGNED_DEFAULTS"; fi; if [ -n "${BUNDLE:-}" ]; then rm -rf "$BUNDLE"; fi; if [ -n "${NO_TRAILER:-}" ]; then rm -f "$NO_TRAILER"; fi' EXIT
 
 set +e
 python3 "$ROOT/tools/console.py" "$PORT" "$CONSOLE_SECONDS" | tee "$LOG"
 console_status=${PIPESTATUS[0]}
 set -e
+
+# The boot that has to stop: the line of the refusal and no shell, and no
+# self test or program after it. There is no reason to run the rest of the
+# session, because this image is not supposed to boot.
+if [ "$DEVICE_POLICY" = "require-unsigned" ]; then
+    if grep -qF "the image is refused" "$LOG" &&
+       ! grep -qF "MicroOS shell ready" "$LOG" &&
+       ! grep -qF "PROGRAM: hello from /bin" "$LOG"; then
+        echo "RESULT: PASS (the unsigned image is refused before the shell)"
+        exit 0
+    fi
+    echo "the console does not show a stopped unsigned image" >&2
+    echo "RESULT: FAIL" >&2
+    exit 1
+fi
 
 # The program of the board runs at the boot (the self test), so the console
 # has to carry its lines: the PROGRAM marker and the exit status. A board that
@@ -89,6 +170,18 @@ for marker in \
         missing=1
     fi
 done
+
+# The line of the policy: the signed bundle says the signature was checked,
+# the unsigned build says what its boot costs.
+if [ "$DEVICE_POLICY" = "signed" ] && ! grep -qF "image signature ok (sha-256, ed25519)" "$LOG"; then
+    echo "the console does not show the image signature" >&2
+    missing=1
+fi
+if [ "$DEVICE_POLICY" = "unsigned" ] &&
+   ! grep -qF "unsigned or damaged image: not guaranteed" "$LOG"; then
+    echo "the console does not warn about the unsigned image" >&2
+    missing=1
+fi
 
 if [ "$console_status" -ne 0 ] || [ "$missing" -ne 0 ]; then
     echo "RESULT: FAIL" >&2

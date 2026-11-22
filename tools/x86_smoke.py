@@ -307,6 +307,152 @@ def run_refused_boot(loader: str, kernel: str, timeout: float = 10.0) -> str:
     return transcript.decode("utf-8", errors="replace")
 
 
+def run_boot_until(loader: str, kernel: str, needles: list, timeout: float = 10.0) -> str:
+    """Boot an image and return the transcript once every needle is there.
+
+    The boot of the open policy continues into the kernel after the warning;
+    the test has no disk and no commands, so it stops the machine as soon as
+    the kernel says it is up (or the time is out, and the missing line is the
+    failure).
+    """
+    command = [
+        "qemu-system-x86_64",
+        "-kernel",
+        loader,
+        "-initrd",
+        kernel,
+        "-m",
+        "256",
+        "-nographic",
+        "-no-reboot",
+    ]
+
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    assert process.stdout is not None
+    fd = process.stdout.fileno()
+    transcript = b""
+    deadline = time.monotonic() + timeout
+
+    try:
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([fd], [], [], 0.1)
+            if ready:
+                chunk = os.read(fd, 4096)
+                if not chunk:
+                    break
+                transcript += chunk
+                text = transcript.decode("utf-8", errors="replace")
+                if all(needle in text for needle in needles):
+                    break
+            if process.poll() is not None:
+                break
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        while True:
+            chunk = os.read(fd, 4096)
+            if not chunk:
+                break
+            transcript += chunk
+        process.stdout.close()
+
+    return transcript.decode("utf-8", errors="replace")
+
+
+def open_policy_checks(open_build: str) -> list:
+    """The other half of ADR 0020: a boot that warns and continues.
+
+    The build of the open policy is the same loader with
+    MICRO_OS_REQUIRE_SIGNATURE=OFF. It has to verify the image all the same,
+    print the warning and load the kernel; the strict loader of the normal
+    build refuses the same bytes in `signature_checks`.
+    """
+    checks = []
+
+    def expect(name: str, condition: bool, detail: str = "") -> None:
+        checks.append((name, bool(condition), detail))
+
+    loader = os.path.join(open_build, "loader32.elf")
+    raw = os.path.join(open_build, "microos64.raw")
+    signed = os.path.join(open_build, "microos64.bin")
+
+    for path in (loader, raw, signed):
+        if not os.path.isfile(path):
+            expect("the open-policy build is there", False, path)
+            return checks
+        expect(f"the open-policy build has {os.path.basename(path)}", True)
+
+    # The image of this build is accepted: the policy only changes what
+    # happens to an image that did not pass. The other build has another
+    # development key, so its signature would be a different case.
+    transcript = run_boot_until(
+        loader,
+        signed,
+        ["Micro OS: image signature ok", "the kernel is up"],
+    )
+    expect(
+        "the open loader accepts a signed image",
+        "Micro OS: image signature ok" in transcript and "the kernel is up" in transcript,
+        transcript[-300:],
+    )
+
+    # A kernel that never had a trailer: the warning, then the kernel.
+    transcript = run_boot_until(
+        loader,
+        raw,
+        ["Micro OS: unsigned or damaged image: not guaranteed", "the kernel is up"],
+    )
+    expect(
+        "the open loader warns about an unsigned image",
+        "Micro OS: unsigned or damaged image: not guaranteed" in transcript,
+        transcript[-300:],
+    )
+    expect(
+        "an unsigned image boots under the open policy",
+        "board: qemu_x86_64" in transcript and "the kernel is up" in transcript,
+        transcript[-300:],
+    )
+    expect(
+        "an unsigned image never looks verified",
+        "Micro OS: image signature ok" not in transcript,
+        transcript[-300:],
+    )
+
+    # A byte changed in a signed image: the checksum fails, the warning says
+    # so, and the policy still boots the bytes that are there.
+    with open(signed, "rb") as file:
+        damaged = bytearray(file.read())
+    damaged[len(damaged) // 2] ^= 0x01
+    path = _write_bad_image(bytes(damaged), "open-damaged")
+    transcript = run_boot_until(
+        loader,
+        path,
+        ["Micro OS: unsigned or damaged image: not guaranteed", "the kernel is up"],
+    )
+    expect(
+        "the open loader warns about a damaged image",
+        "Micro OS: unsigned or damaged image: not guaranteed" in transcript
+        and "the checksum does not match" in transcript,
+        transcript[-300:],
+    )
+    expect(
+        "a damaged image boots under the open policy",
+        "board: qemu_x86_64" in transcript and "the kernel is up" in transcript,
+        transcript[-300:],
+    )
+
+    return checks
+
+
 def signature_checks(loader: str, kernel: str) -> list:
     """The trailer of the kernel and the boot that refuses a damaged one.
 
@@ -417,11 +563,11 @@ def signature_checks(loader: str, kernel: str) -> list:
     return checks
 
 
-def _write_bad_image(data: bytes) -> str:
-    """A temporary kernel image for one refused boot."""
+def _write_bad_image(data: bytes, tag: str = "image") -> str:
+    """A temporary kernel image for one refused or warned boot."""
     folder = os.path.join(BUILD, "refused")
     os.makedirs(folder, exist_ok=True)
-    path = os.path.join(folder, f"image-{len(data)}.bin")
+    path = os.path.join(folder, f"{tag}-{len(data)}.bin")
     with open(path, "wb") as file:
         file.write(data)
     return path
@@ -1074,6 +1220,11 @@ def check(output: str) -> list:
 def main(argv: list) -> int:
     parser = argparse.ArgumentParser(description="the smoke test of the x86-64 port")
     parser.add_argument("--image", default=DEFAULT_IMAGE, help="the image with /bin of the disk")
+    parser.add_argument(
+        "--open-build",
+        default=os.path.join(ROOT, "build-x86-open"),
+        help="the build with MICRO_OS_REQUIRE_SIGNATURE=OFF",
+    )
     parser.add_argument("--timeout", type=float, default=30.0, help="the seconds the machine gets")
     parser.add_argument("--verbose", action="store_true", help="print the console of the machine")
     args = parser.parse_args(argv)
@@ -1103,7 +1254,12 @@ def main(argv: list) -> int:
     if args.verbose:
         print(output)
 
-    checks = linker_checks(KERNEL_ELF) + signature_checks(loader, kernel) + check(output)
+    checks = (
+        linker_checks(KERNEL_ELF)
+        + signature_checks(loader, kernel)
+        + open_policy_checks(args.open_build)
+        + check(output)
+    )
     failed = [item for item in checks if not item[1]]
 
     print("Micro OS — the smoke test of the x86-64 port")

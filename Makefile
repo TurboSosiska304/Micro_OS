@@ -32,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-run x86-run-serial x86-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak
+.PHONY: help all build test test-asan test-tsan test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-open-build x86-run x86-run-serial x86-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak
 
 help:
 	@echo "Micro OS — available targets:"
@@ -188,7 +188,8 @@ idf-check:
 	}
 
 idf-build: idf-check
-	. $(IDF_EXPORT) && idf.py -D IDF_TARGET=$(IDF_TARGET) build
+	. $(IDF_EXPORT) && MICROOS_SIGN_KEY="$(MICROOS_SIGN_KEY)" \
+		idf.py -D IDF_TARGET=$(IDF_TARGET) build
 
 idf-flash: idf-check
 	. $(IDF_EXPORT) && idf.py $(IDF_PORT_ARG) -D IDF_TARGET=$(IDF_TARGET) flash
@@ -219,6 +220,16 @@ X86_DISPLAY ?= gtk
 x86-build:
 	cmake -B $(X86_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release $(X86_SIGN_ARGS)
 	cmake --build $(X86_BUILD) --target image
+
+# The other policy of ADR 0020: the loader verifies the image, prints the
+# warning and continues when it did not pass. The smoke test boots an unsigned
+# kernel on this loader and a good one on the loader of x86-build.
+X86_OPEN_BUILD := build-x86-open
+
+x86-open-build:
+	cmake -B $(X86_OPEN_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
+		-DMICRO_OS_REQUIRE_SIGNATURE=OFF $(X86_SIGN_ARGS)
+	cmake --build $(X86_OPEN_BUILD) --target microos64.bin loader32.elf
 
 # The disk of the machine: an MBR, one partition and a MicroFS volume with
 # /bin and /etc already written. The volume is made by the host tool
@@ -269,8 +280,8 @@ x86-run-serial: x86-disk
 		-initrd $(X86_BUILD)/microos64.bin -m 256 -nographic -no-reboot \
 		$(X86_DISK_DRIVE)
 
-x86-smoke: x86-disk
-	python3 tools/x86_smoke.py --image $(X86_PROGRAMS_IMAGE)
+x86-smoke: x86-disk x86-open-build
+	python3 tools/x86_smoke.py --image $(X86_PROGRAMS_IMAGE) --open-build $(X86_OPEN_BUILD)
 
 # The window without a display: the monitor of QEMU reads the text memory of
 # the VGA and presses the keys of the keyboard, so a build farm can check the
@@ -411,7 +422,8 @@ board-soak:
 	tools/board_soak.sh --minutes $(BOARD_SOAK_MINUTES)
 
 bundle: idf-check
-	. $(IDF_EXPORT) && idf.py -D IDF_TARGET=$(IDF_TARGET) build && \
+	. $(IDF_EXPORT) && MICROOS_SIGN_KEY="$(MICROOS_SIGN_KEY)" \
+		idf.py -D IDF_TARGET=$(IDF_TARGET) build && \
 		cmake -B $(X86_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release $(X86_SIGN_ARGS) && \
 		cmake --build $(X86_BUILD) --target image && \
-		tools/bundle.sh $(IDF_BUILD) dist
+		MICROOS_SIGN_KEY="$(MICROOS_SIGN_KEY)" tools/bundle.sh $(IDF_BUILD) dist

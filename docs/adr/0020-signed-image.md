@@ -1,6 +1,6 @@
 # ADR 0020 - A signed image
 
-* Status: accepted, with the board's boot check deferred
+* Status: accepted; the board's check is an electronic check of the boot
 * Date: 2026-11-22
 * Supersedes: nothing
 * Related: ADR 0004 (the port), ADR 0007 (the x86-64 boot), ADR 0011 (the
@@ -45,8 +45,9 @@ secure element:
 * a local attacker with write access to the flash, the bootloader or the
   private key: without an MMU, a measured boot or a write-protected boot
   medium, such an attacker replaces the checker as easily as the checked;
-* rollback: an old, correctly signed image is a valid image. A counter that
-  would refuse it is a decision of a later release;
+* rollback by default: an old, correctly signed image is a valid image. The
+  board has an opt-in floor in its NVS (`MICRO_OS_ANTIROLLBACK`), and x86-64
+  has no persistent store and therefore no floor;
 * confidentiality: a signature does not hide the image;
 * a compromised build machine: the key signs whatever that machine produces.
 
@@ -97,10 +98,15 @@ TweetNaCl needs only integer operations; the loader is compiled with
 
 * **the kernel image of x86-64** (`microos64.bin`): the loader verifies it at
   the boot, before a byte of the kernel runs. This is the boot check of 1.0.
+* **the application of the board** (`micro_os.bin`): `tools/bundle.sh` writes
+  `micro_os.bin.sig`, a 120-byte trailer over exactly the bytes of the app,
+  and `flash.sh` writes it at the last 4 KiB of the factory partition
+  (`0x20F000`). The board verifies it at the beginning of `app_main`, before
+  the filesystem and the shell (section 6).
 * **the merged board bundle** (`MicroOS-<version>.bin`): `tools/bundle.sh`
   appends the trailer and writes `<image>.sig` and `checksums.txt`. This is a
   signature of the *distribution*, checked by a person or a tool before
-  flashing; the board's boot chain does not verify it (see section 6).
+  flashing; the board does not read this file, it reads the app trailer.
 * **not a `.mox` program**, not a MicroFS volume and not `/etc`. A program is
   a file inside a volume, and the volume is data of a machine, not an image
   of the system: signing every file would need a field in the record format,
@@ -110,10 +116,11 @@ TweetNaCl needs only integer operations; the loader is compiled with
 ### 4. Where the key lives
 
 The **public** key is part of the boot path: `microos_sign pubkey --header`
-writes `sign_public_key.h`, and CMake compiles it into `loader32.elf`. The
-loader carries the key, so an image cannot bring one of its own. The public
-key of the x86-64 bundle is also shipped as `microos-sign.pub` inside the
-tarball.
+writes `sign_public_key.h`, and CMake compiles it into `loader32.elf` and into
+the ESP32 firmware. Both checkers carry the key, so an image cannot bring one
+of its own. The public key is also shipped as `microos-sign.pub` inside the
+bundle of each machine; `make idf-build` and `tools/bundle.sh` use the same
+`MICROOS_SIGN_KEY`, or the development key in the build directory.
 
 The **private** key is never in this tree. A release names it with
 `MICROOS_SIGN_KEY` (a path outside the repository); the release workflow of
@@ -151,33 +158,90 @@ halves: the normal boot prints the acceptance line, and a byte changed in the
 kernel, a kernel without a trailer and a kernel signed by another key each
 stop before `board: qemu_x86_64` appears.
 
-### 6. The ESP32: what is real, and what is not
+### 6. The ESP32: the electronic check of the application
 
 The ROM verifies the second-stage bootloader; the ESP-IDF bootloader verifies
 the application image (its segments, checksum and SHA-256). Neither is a
-signature. The ways to add one:
+signature. The ways to add one are still the three below, and the third is the
+one this release takes:
 
-* **secure boot v2** — the supported path. It burns eFuses (the digest of the
-  key, the secure-boot enable bit), the board cannot be returned to a
-  development build without a signed image, and the key ceremony is a release
-  operation. It is irreversible and it is **not** enabled by this tree.
+* **secure boot v2** — the supported path of Espressif. It burns eFuses (the
+  digest of the key, the secure-boot enable bit), the board cannot be returned
+  to a development build without a signed image, and the key ceremony is a
+  release operation. It is irreversible and it is **not** enabled here. A
+  board that wants it follows [the manual of ESP-IDF] and accepts the loss of
+  the development loop.
 * **a custom bootloader component** (`bootloader_components/`, the
-  `bootloader_after_init` hook of ESP-IDF 5.3) could verify our trailer before
+  `bootloader_after_init` hook of ESP-IDF 5.3) could verify the trailer before
   `bootloader_utility_load_boot_image`. It does not burn an eFuse, but the
-  bootloader partition is 28 KB (`0x1000`–`0x8000`) and the Ed25519 verifier
-  and SHA-512 do not fit beside the IDF bootloader. It would need a new
-  partition layout, which ADR 0011 keeps out of 1.0 because it also costs the
-  volume.
-* **a check in `app_main`** would run after the bootloader has already copied
-  and entered the application. It is a self-check: it can notice a damaged
-  file, it cannot stop the damaged code from having run. It is not a boot
-  check and this tree does not call it one.
+  bootloader partition is 28 KB (`0x1000`–`0x8000`) and Ed25519 and SHA-512 do
+  not fit beside the IDF bootloader. It would need a new partition layout,
+  which ADR 0011 keeps out of 1.0 because it also costs the volume.
+* **a check in `app_main`**, which this release has. The first thing the
+  application does, before it mounts MicroFS or starts the shell, is read its
+  own factory partition: the ESP header gives the length of the image and the
+  `esp_app_desc_t` gives its version, and the trailer is the last 4 KiB of
+  the partition (`partition_end - 0x1000`, not after the payload). The check
+  hashes the app bytes in chunks with SHA-256, compares the digest and
+  verifies Ed25519 with the public key compiled into the firmware. The flash
+  layout is unchanged and no eFuse is burned.
 
-So the signature of the board bundle is a distribution check in 1.0. A
-boot-checked board image is the first item of 1.1, either with secure boot v2
-and a documented key ceremony or with the partition layout of a custom
-bootloader. `docs/releases/1.0.md` keeps the gate line open and says exactly
-this.
+The third is **not** a boot-chain check and this tree does not pretend it is:
+the ROM and the bootloader have already copied and entered the application,
+so its first instructions (the static constructors and the first lines of
+`app_main`) ran before the sentence appears. It is an electronic check of the
+boot: it tells a person that the image is not the one that was signed, it
+refuses to go on when the build requires a signature, and it does so before
+the filesystem and the shell. It does not protect against a local attacker
+who can replace the application or its checker, and it is not secure boot.
+
+The trailer is over the bytes of `micro_os.bin` exactly, and
+`tools/bundle.sh` also leaves the combined `MicroOS-<version>.bin.sig` for a
+person or a tool: that one covers the merged distribution image and is not
+what the board reads. `tools/bundle.sh` checks that the app and the 4 KiB
+reserve fit the factory partition; the ESP-IDF build checks the same number
+before it writes the image, and `flash.sh` writes the trailer at `0x20F000`.
+
+### 7. The policy: a setting, not a wall
+
+A signature that stops a board is a wall. The decision of this release is
+that the wall is a setting: the image is checked on both machines, but a
+person who knows what the check costs may boot an image that did not pass.
+
+* **x86-64** has a CMake option `MICRO_OS_REQUIRE_SIGNATURE`, **on** by
+  default. On, the loader refuses a damaged, unsigned or foreign-key image
+  before it copies a byte. Off, the loader still verifies the trailer and
+  still prints the reason; it then prints
+  `Micro OS: unsigned or damaged image: not guaranteed` and loads the kernel.
+  `make x86-open-build` builds the second policy and `make x86-smoke` boots
+  an unsigned and a damaged kernel on it, beside the refusals of the strict
+  loader.
+* **ESP32** has the Kconfig option `MICRO_OS_REQUIRE_SIGNATURE`, **y** by
+  default, with the same two answers. On, a missing or wrong trailer prints
+  `boot: the image is refused: <reason>` and the board halts before the
+  filesystem and the shell. Off, the line
+  `boot: unsigned or damaged image: not guaranteed` goes to the console and
+  the boot continues. The signal is electronic and the line says so.
+* **Anti-rollback** is a second setting, `MICRO_OS_ANTIROLLBACK`, **n** by
+  default, and it exists only on the board because only the board has a store
+  that survives a flash of the application. The version comes from
+  `esp_app_desc_t.version`; the boot keeps the newest version it has seen in
+  its own NVS namespace (`microos_boot`, the key `min_version`). With the
+  flag on, an image lower than the stored one is refused with both versions
+  on the console; with the flag off it is a warning. A newer version is
+  recorded after the signature passed. A store that cannot be read or written
+  is a warning and not a stopped board: a damaged NVS is not proof of a
+  rollback, and the signature is still the boundary. This is not the
+  anti-rollback of secure boot v2: a person who can flash the board can erase
+  the NVS. x86-64 has no persistent store, so a rollback there is allowed and
+  there is no flag; the version in the trailer leaves room for a floor when
+  the port has a store.
+* **What the setting does not make safe**: an image that did not pass is run
+  because a person chose it; the board has already entered the application
+  when its check runs; a damaged image may have executed its first
+  instructions; and a signature says nothing about a local attacker with
+  write access to the flash. The console sentence is the whole promise:
+  *not guaranteed*.
 
 ## Consequences
 
@@ -194,15 +258,18 @@ this.
 
 **Bad**
 
-* The board's boot chain still trusts a checksum, and the gate line is not
-  closed for it. The wiki and the release notes say so.
-* A key in the loader is a key that a new loader has to replace; rotation is
-  not online.
+* The board's check runs in the application, after the bootloader has entered
+  it; the ROM still trusts a checksum for the boot chain. The check is
+  electronic, and the wiki and the release notes say so.
+* The anti-rollback of the board is in the NVS: it is not the eFuse counter of
+  secure boot, and a person who can flash the board can erase it.
+* A key in the loader and in the firmware is a key that a new build has to
+  replace; rotation is not online.
 * The image of x86-64 grows by 120 bytes, and a build that signs with a fresh
   key is not byte-for-byte reproducible unless the key is fixed
   (`MICROOS_SIGN_KEY`).
-* Signing does not stop a local attacker from replacing the loader; there is
-  no measured boot on either machine.
+* Signing does not stop a local attacker from replacing the loader or the
+  firmware; there is no measured boot on either machine.
 
 ## Alternatives considered
 
@@ -221,12 +288,17 @@ this.
 
 ## Open items
 
-1. The board's boot check: secure boot v2 with a key ceremony, or a custom
-   bootloader and a partition layout that fits the verifier (1.1).
+1. The board's boot-chain check: secure boot v2 with a key ceremony, or a
+   custom bootloader and a partition layout that fits the verifier. The
+   electronic check of `app_main` is the answer of 1.0 for a board whose flash
+   layout is frozen, not the end of the question.
 2. A release secret in CI: `.github/workflows/release.yml` reads
-   `MICROOS_SIGN_KEY` from a secret, and the secret does not exist yet. Until
-   it does, the bundle is signed with the key of the local x86-64 build.
-3. A rollback counter and a version policy: an old signed image boots today.
+   `MICROOS_SIGN_KEY` from a secret. A build without it uses a development
+   key, and the bundle says so.
+3. Anti-rollback on x86-64: the trailer has a version, but the port has no
+   store that survives a reset, so there is no floor and no flag.
 4. Signatures of programs and volumes, and a policy for `execve`.
 5. A second public key and a key identifier, for a rotation without a new
    loader for every key.
+6. A store of the boot check that a person with a flash writer cannot erase:
+   it is the eFuse of secure boot v2, and it is a release operation.

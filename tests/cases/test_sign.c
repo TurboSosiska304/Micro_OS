@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "ed25519.h"
+#include "kernel/version.h"
 #include "sha256.h"
 #include "sign_image.h"
 
@@ -70,8 +71,10 @@ void test_sign(void)
     unsigned char foreign_public[MICROOS_ED25519_KEY_SIZE];
     unsigned char foreign_secret[MICROOS_ED25519_SECRET_SIZE];
     unsigned char digest_abc[MICROOS_SHA256_SIZE];
+    unsigned char digest_stream[MICROOS_SHA256_SIZE];
     unsigned char signature[MICROOS_ED25519_SIGNATURE_SIZE];
     unsigned char damaged[sizeof(image)];
+    struct microos_sha256_ctx sha_ctx;
     size_t size = 0;
     const char *why = "not set";
     unsigned i;
@@ -80,6 +83,16 @@ void test_sign(void)
 
     /* The hash of the three letters is the first vector of FIPS 180-4. */
     microos_sha256((const unsigned char *)"abc", 3, digest_abc);
+    KT_CHECK(memcmp(digest_abc, SHA256_ABC, sizeof(SHA256_ABC)) == 0);
+
+    /* The same digest one byte at a time: the board hashes its app from the
+       flash, and a streaming path that drops or duplicates a block would
+       still agree with a one-shot call made in one piece. */
+    microos_sha256_init(&sha_ctx);
+    microos_sha256_update(&sha_ctx, (const unsigned char *)"a", 1);
+    microos_sha256_update(&sha_ctx, (const unsigned char *)"b", 1);
+    microos_sha256_update(&sha_ctx, (const unsigned char *)"c", 1);
+    microos_sha256_final(&sha_ctx, digest_abc);
     KT_CHECK(memcmp(digest_abc, SHA256_ABC, sizeof(SHA256_ABC)) == 0);
 
     /* The empty message of RFC 8032, section 7.1. */
@@ -157,4 +170,32 @@ void test_sign(void)
 
     KT_CHECK(microos_sign_image_verify(image, size - MICROOS_SIGN_TRAILER_SIZE, public_key, &why) !=
              0);
+
+    /* The same digest over the payload in pieces, as the board reads it. */
+    microos_sha256_init(&sha_ctx);
+    microos_sha256_update(&sha_ctx, image, 17);
+    microos_sha256_update(&sha_ctx, image + 17, IMAGE_BYTES - 17);
+    microos_sha256_final(&sha_ctx, digest_stream);
+    microos_sha256(image, IMAGE_BYTES, digest_abc);
+    KT_CHECK(memcmp(digest_stream, digest_abc, MICROOS_SHA256_SIZE) == 0);
+    KT_CHECK(memcmp(digest_abc, image + IMAGE_BYTES + 24, MICROOS_SHA256_SIZE) == 0);
+
+    /* The policy (ADR 0020): a verified image always goes on, an image that
+       did not pass goes on only when the build does not require it. */
+    KT_CHECK_INT_EQ(microos_sign_policy_continue(1, MICROOS_SIGN_POLICY_ALLOW), 1);
+    KT_CHECK_INT_EQ(microos_sign_policy_continue(1, MICROOS_SIGN_POLICY_REQUIRE), 1);
+    KT_CHECK_INT_EQ(microos_sign_policy_continue(0, MICROOS_SIGN_POLICY_ALLOW), 1);
+    KT_CHECK_INT_EQ(microos_sign_policy_continue(0, MICROOS_SIGN_POLICY_REQUIRE), 0);
+    KT_CHECK_STR_EQ(microos_sign_policy_warning(),
+                    "Micro OS: unsigned or damaged image: not guaranteed");
+
+    /* The anti-rollback comparison of the board: a release is newer than its
+       candidate, a number of two digits is not a letter, and equal is equal. */
+    KT_CHECK(kernel_version_compare("0.9.0", "0.9.0-rc1") > 0);
+    KT_CHECK(kernel_version_compare("0.9.0-rc1", "0.9.0") < 0);
+    KT_CHECK_INT_EQ(kernel_version_compare("0.9.0-rc1", "0.9.0-rc1"), 0);
+    KT_CHECK(kernel_version_compare("0.9.0-rc2", "0.9.0-rc1") > 0);
+    KT_CHECK(kernel_version_compare("0.10.0", "0.9.9") > 0);
+    KT_CHECK(kernel_version_compare("1.0.0", "0.99.99") > 0);
+    KT_CHECK(kernel_version_compare("0.9.0", "1.0.0") < 0);
 }

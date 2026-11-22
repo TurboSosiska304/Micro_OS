@@ -110,16 +110,35 @@ compiled into the loader before it copies a byte of the kernel (ADR 0020). A
 damaged, unsigned or foreign-key image is refused and never runs. The public
 key of a build travels in `dist/`; the private key is outside this tree.
 
-The board is not boot-checked with a signature: its ROM and the ESP-IDF
-bootloader check a checksum, not a signature, and the board bundle is signed
-for the person or the tool that flashes it. The tree does not enable secure
-boot or flash encryption; that path burns eFuses and is not in 1.0. A program
-image (MOX1) and a filesystem volume are checked for their shape (magic,
-version, machine, sizes), not for a cryptographic signature. A checksum and a
-signature that the boot checks are a gate of 1.0
-([docs/releases/1.0.md](docs/releases/1.0.md) §7), met on x86-64 and open for
-the board. Physical access to the board is the boundary; flash it from a
-source you trust.
+The ESP32 checks the same trailer electronically. The ROM and the ESP-IDF
+bootloader verify the checksum of the application and enter it; at the
+beginning of `app_main`, before MicroFS and the shell, the firmware reads its
+factory partition, takes the length from the ESP header and the version from
+`esp_app_desc_t`, and verifies the trailer in the last 4 KiB of the partition
+(SHA-256 and Ed25519) with the public key compiled into the firmware. The
+flash layout is unchanged and no eFuse is burned. This is **not** secure boot:
+the first instructions of a damaged application have already run when the
+check speaks, and a local attacker who can rewrite the flash can replace the
+checker too. The release notes and ADR 0020 say so.
+
+Both checks are a setting, not a wall. `MICRO_OS_REQUIRE_SIGNATURE` (CMake on
+x86-64, Kconfig on the board) is on by default and refuses an image that did
+not pass; off, the machine still verifies, prints `unsigned or damaged image:
+not guaranteed` and continues. The board adds `MICRO_OS_ANTIROLLBACK` (off by
+default): the newest version it has seen stays in its NVS and a lower one is
+refused when the flag is on, or warned about when it is off. That floor is not
+the eFuse counter of secure boot, and a person with a flash writer can erase
+it; x86-64 has no persistent store, so a rollback there is allowed and there
+is no flag.
+
+The tree does not enable secure boot or flash encryption; that path burns
+eFuses and is not in 1.0. A program image (MOX1) and a filesystem volume are
+checked for their shape (magic, version, machine, sizes), not for a
+cryptographic signature. A checksum and a signature that the boot checks are a
+gate of 1.0 ([docs/releases/1.0.md](docs/releases/1.0.md) §7), met on x86-64
+before a byte of the kernel runs and on the board at the start of the
+application, with the limit above written beside it. Physical access to the
+board is the boundary; flash it from a source you trust.
 
 ## Out of scope
 

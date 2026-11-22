@@ -31,6 +31,16 @@ void port_esp32_wifi_init(void);
 esp_err_t port_esp32_start_tick(uint32_t period_ms);
 
 /*
+ * Check the signature and the version of the application before the kernel
+ * mounts a filesystem (ADR 0020). A verified image continues; an image that
+ * did not pass continues only when CONFIG_MICRO_OS_REQUIRE_SIGNATURE is off,
+ * and then the console carries the warning. The anti-rollback of the NVS
+ * follows the same policy (CONFIG_MICRO_OS_ANTIROLLBACK). 0 when the boot may
+ * continue, -1 when it must stop.
+ */
+int port_esp32_image_check(void);
+
+/*
  * The door of a program (ADR 0018). The program is entered with the address
  * of this function; every wrapper of components/libc/user calls it with the
  * number and the six arguments of the syscall ABI, and it answers what

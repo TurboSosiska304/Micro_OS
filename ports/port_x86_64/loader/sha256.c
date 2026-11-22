@@ -1,9 +1,10 @@
 /*
  * Micro OS — SHA-256 (FIPS 180-4), the hash of a signed image.
  *
- * A one-shot implementation, because every caller has the whole image in
- * memory: the loader has the module QEMU loaded and the tool has the file it
- * read. There is no state between calls and no table that has to be built.
+ * The state is a context, so a caller that does not have the whole image in
+ * memory (the board reads its app from the flash) hands the bytes over in
+ * chunks. The one-shot call is the same context in one update: the loader and
+ * the tool have the whole image and do not need a second implementation.
  */
 
 #include "sha256.h"
@@ -88,29 +89,78 @@ static void sha256_block(uint32_t state[8], const uint8_t block[64])
     state[7] += h;
 }
 
-void microos_sha256(const uint8_t *data, size_t len, uint8_t out[MICROOS_SHA256_SIZE])
+void microos_sha256_init(struct microos_sha256_ctx *ctx)
 {
-    uint32_t state[8] = {
+    static const uint32_t initial[8] = {
         0x6a09e667u, 0xbb67ae85u, 0x3c6ef372u, 0xa54ff53au,
         0x510e527fu, 0x9b05688cu, 0x1f83d9abu, 0x5be0cd19u,
     };
-    uint8_t tail[128];
-    size_t whole = len / 64;
-    size_t rest = len % 64;
-    uint64_t bits = (uint64_t)len * 8u;
-    size_t padded = (rest < 56) ? 64 : 128;
+    unsigned i;
+
+    for (i = 0; i < 8; i++) {
+        ctx->state[i] = initial[i];
+    }
+    ctx->total = 0;
+    ctx->used = 0;
+}
+
+void microos_sha256_update(struct microos_sha256_ctx *ctx, const uint8_t *data, size_t len)
+{
     size_t i;
 
-    for (i = 0; i < whole; i++) {
-        sha256_block(state, data + i * 64);
+    if (data == NULL) {
+        return;
     }
 
-    for (i = 0; i < rest; i++) {
-        tail[i] = data[whole * 64 + i];
+    ctx->total += (uint64_t)len;
+
+    /* A block that was left from the call before is finished first. */
+    if (ctx->used != 0) {
+        size_t want = 64u - ctx->used;
+
+        if (want > len) {
+            want = len;
+        }
+        for (i = 0; i < want; i++) {
+            ctx->block[ctx->used + i] = data[i];
+        }
+        ctx->used += want;
+        data += want;
+        len -= want;
+
+        if (ctx->used < 64) {
+            /* Every byte of this call went into the block that is still
+               open; nothing else to hash yet. */
+            return;
+        }
+        sha256_block(ctx->state, ctx->block);
+        ctx->used = 0;
     }
 
-    tail[rest] = 0x80u;
-    for (i = rest + 1; i < padded; i++) {
+    while (len >= 64) {
+        sha256_block(ctx->state, data);
+        data += 64;
+        len -= 64;
+    }
+
+    for (i = 0; i < len; i++) {
+        ctx->block[i] = data[i];
+    }
+    ctx->used = len;
+}
+
+void microos_sha256_final(struct microos_sha256_ctx *ctx, uint8_t out[MICROOS_SHA256_SIZE])
+{
+    uint8_t tail[128];
+    uint64_t bits = ctx->total * 8u;
+    size_t padded = (ctx->used < 56) ? 64 : 128;
+    size_t i;
+
+    for (i = 0; i < ctx->used; i++) {
+        tail[i] = ctx->block[i];
+    }
+    tail[ctx->used] = 0x80u;
+    for (i = ctx->used + 1; i < padded; i++) {
         tail[i] = 0;
     }
 
@@ -119,15 +169,24 @@ void microos_sha256(const uint8_t *data, size_t len, uint8_t out[MICROOS_SHA256_
         tail[padded - 8 + i] = (uint8_t)(bits >> (56u - 8u * i));
     }
 
-    sha256_block(state, tail);
+    sha256_block(ctx->state, tail);
     if (padded == 128) {
-        sha256_block(state, tail + 64);
+        sha256_block(ctx->state, tail + 64);
     }
 
     for (i = 0; i < 8; i++) {
-        out[4 * i] = (uint8_t)(state[i] >> 24);
-        out[4 * i + 1] = (uint8_t)(state[i] >> 16);
-        out[4 * i + 2] = (uint8_t)(state[i] >> 8);
-        out[4 * i + 3] = (uint8_t)state[i];
+        out[4 * i] = (uint8_t)(ctx->state[i] >> 24);
+        out[4 * i + 1] = (uint8_t)(ctx->state[i] >> 16);
+        out[4 * i + 2] = (uint8_t)(ctx->state[i] >> 8);
+        out[4 * i + 3] = (uint8_t)ctx->state[i];
     }
+}
+
+void microos_sha256(const uint8_t *data, size_t len, uint8_t out[MICROOS_SHA256_SIZE])
+{
+    struct microos_sha256_ctx ctx;
+
+    microos_sha256_init(&ctx);
+    microos_sha256_update(&ctx, data, len);
+    microos_sha256_final(&ctx, out);
 }

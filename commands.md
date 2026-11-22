@@ -73,22 +73,40 @@ python3 tools/integrity_check.py --expect-version 0.2.0
 ### Signing an image (ADR 0020)
 
 The x86-64 kernel is signed and the loader checks it before it copies a byte.
-A development build generates `build-x86/signing.key`; a release names a key
-outside the tree:
+The board application is signed as well: the boot checks its trailer in the
+last 4 KiB of the factory partition. A development build generates a key in
+the build directory (`build-x86/signing.key`, `build/signing.key`); a release
+names a key outside the tree:
 
 ```bash
 make x86-build MICROOS_SIGN_KEY=/path/outside/the/tree/release.key
 build-host/tools/microos_sign verify --pub build-x86/signing.pub build-x86/microos64.bin
 build-host/tools/microos_sign info   build-x86/microos64.bin
 make x86-smoke                         # accepts the signed image, refuses a damaged one
+make x86-open-build                    # MICRO_OS_REQUIRE_SIGNATURE=OFF
+```
+
+The refusal is a setting on both machines. `MICRO_OS_REQUIRE_SIGNATURE` is a
+CMake option (default `ON`) on x86-64 and a Kconfig option (default `y`) on
+the board. With it off, the check still runs, prints
+`unsigned or damaged image: not guaranteed` and continues. On the board the
+same Kconfig adds `MICRO_OS_ANTIROLLBACK` (default `n`): a floor in the NVS;
+
+```bash
+# a board that warns about an unsigned image, and one that refuses it
+DEVICE_POLICY=unsigned         tools/device-test.sh /dev/ttyACM0
+DEVICE_POLICY=require-unsigned tools/device-test.sh /dev/ttyACM0
 ```
 
 `tools/microos_sign keygen|sign|verify|info` is the tool; `make bundle` signs
-the merged board image with the same key when `MICROOS_SIGN_KEY` is set, and
-always writes the sums. `make x86-smoke` boots a changed byte, a kernel without
-a trailer and a kernel of another key, and every one is refused before the
-kernel starts. The board's own boot chain verifies a checksum, not a signature:
-see the note in `docs/releases/1.0.md` section 7.
+`micro_os.bin` (`micro_os.bin.sig`, written at `0x20F000` by `flash.sh`) and
+the merged distribution image with the same key when `MICROOS_SIGN_KEY` is
+set, and always writes the sums. `make x86-smoke` boots a changed byte, a
+kernel without a trailer and a kernel of another key, and every one is refused
+before the kernel starts; the open build boots an unsigned and a damaged
+kernel with the warning. The board's check runs at the beginning of
+`app_main`, not in the ROM or the ESP-IDF bootloader; ADR 0020 section 6 says
+what that does and does not protect.
 
 ## 3. Device build and flashing
 

@@ -11,15 +11,22 @@ and run the flash script.
 | `bootloader.bin` | Second stage bootloader, for the tools that want the parts | `0x1000` |
 | `partition-table.bin` | Partition table, for the tools that want the parts | `0x8000` |
 | `micro_os.bin` | The kernel itself, for the tools that want the parts | `0x10000` |
-| `MicroOS-<version>.bin.sig` | The 120-byte trailer of the image (magic, size, SHA-256, Ed25519) | - |
+| `micro_os.bin.sig` | The 120-byte trailer of `micro_os.bin` (magic, size, SHA-256, Ed25519) | `0x20F000` |
+| `MicroOS-<version>.bin.sig` | The trailer of the merged distribution image | - |
 | `microos-sign.pub` | The public key of the build, in hex, for `microos_sign verify` | - |
 | `MicroOS-x86_64-<version>.tar.gz` | The same kernel for QEMU: loader, kernel, `run.sh` and a readme | - |
 
-The signature is checked by a person or a tool before flashing, not by the
-board: the ROM and the ESP-IDF bootloader verify a checksum, not a signature
-(ADR 0020). The x86-64 loader of the tarball does verify its kernel before it
-copies a byte, and stops on a changed image. `checksums.txt` lists the sums of
-the files above.
+The board checks `micro_os.bin` at the beginning of `app_main`, before the
+filesystem and the shell: it reads the trailer from the last 4 KiB of the
+factory partition and verifies the SHA-256 and Ed25519 with the public key
+compiled into the firmware. `flash.sh` writes the trailer at `0x20F000`; the
+flash layout does not change. With `CONFIG_MICRO_OS_REQUIRE_SIGNATURE=y` (the
+default) a missing or wrong trailer stops the boot, and with `=n` the console
+warns and the board continues (ADR 0020). This is an electronic check of the
+application, not secure boot: the ROM and the ESP-IDF bootloader have already
+entered the app when it runs, and no eFuse is burned. The x86-64 loader of
+the tarball verifies its kernel before it copies a byte. `checksums.txt` lists
+the sums of the files above.
 
 The single image is the same bytes as the three parts at their offsets. It
 covers `0x0` to the end of the application; the NVS and MicroFS live further
@@ -59,8 +66,8 @@ chmod +x flash.sh
 ```
 
 The script writes `MicroOS-<version>.bin` at `0x0` when the bundle has it,
-and falls back to the three parts at their offsets when it does not. It needs
-`esptool`:
+and falls back to the three parts at their offsets when it does not; in both
+cases `micro_os.bin.sig` goes to `0x20F000`. It needs `esptool`:
 
 ```bash
 pip install esptool

@@ -62,6 +62,18 @@ option(MICRO_OS_WIFI "the WiFi station" OFF)
 # command list, and `make x86-net-smoke` builds a second image with it on.
 option(MICRO_OS_X86_NET "the http, httpd and ntp commands of components/net" OFF)
 
+# The policy of the signed image (ADR 0020): on, the loader refuses an image
+# that did not pass and no byte of it runs; off, the loader still verifies,
+# prints the warning and continues. The second setting is for a development
+# machine whose image is not signed yet; the smoke test builds both and boots
+# an unsigned kernel on the second one.
+option(MICRO_OS_REQUIRE_SIGNATURE "the boot refuses an image without a valid signature" ON)
+if(MICRO_OS_REQUIRE_SIGNATURE)
+    set(MICRO_OS_REQUIRE_SIGNATURE_VALUE 1)
+else()
+    set(MICRO_OS_REQUIRE_SIGNATURE_VALUE 0)
+endif()
+
 set(NET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/net")
 
 set(CMAKE_C_STANDARD 11)
@@ -476,6 +488,7 @@ set(LOADER_CFLAGS
     -fno-pic -fno-pie -fno-asynchronous-unwind-tables -fno-unwind-tables
     -mno-sse -mno-mmx -march=i386
     -Wall -Wextra -Werror -Wno-unused-parameter
+    -DMICRO_OS_REQUIRE_SIGNATURE=${MICRO_OS_REQUIRE_SIGNATURE_VALUE}
     -I "${SIGN_DIR}" -I "${CMAKE_BINARY_DIR}"
 )
 

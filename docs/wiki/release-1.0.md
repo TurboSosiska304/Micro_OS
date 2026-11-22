@@ -64,16 +64,44 @@ it turns the long mode on. A changed byte, a missing trailer and a signature
 of another key each print `Micro OS: the image is refused: <reason>` and halt;
 `make x86-smoke` proves all three, and the normal boot prints `Micro OS: image
 signature ok (sha-256, ed25519)`. `tools/microos_sign sign` and `verify` are
-the tools; `make bundle` signs the merged board image and leaves the `.sig`
-and `checksums.txt` beside it.
+the tools; `make bundle` signs the application of the board and leaves the
+`.sig` files and `checksums.txt` beside it.
 
-The board is the honest exception: its ROM and the ESP-IDF bootloader verify a
-checksum, not a signature. A signature in that chain means secure boot v2,
-which burns eFuses, or a custom bootloader that does not fit the 28 KB
-bootloader partition. Neither is in 1.0, so the signature of `MicroOS-<version>.bin`
-is a check for the person or the tool that flashes it, not a check the board
-makes. The gate line of section 7 of [the checklist](../releases/1.0.md) is
-open for that reason.
+The check is a setting, not a wall. On x86-64 the CMake option
+`MICRO_OS_REQUIRE_SIGNATURE` is on by default; with it off the loader still
+verifies the image, prints `Micro OS: unsigned or damaged image: not
+guaranteed` and loads it. `make x86-open-build` builds that policy and
+`make x86-smoke` boots an unsigned and a damaged kernel on it.
+
+The board has the same setting in its Kconfig (`MICRO_OS_REQUIRE_SIGNATURE`,
+on by default). At the beginning of `app_main`, before MicroFS and the shell,
+the firmware reads the factory partition: the ESP header says how long the
+image is, `esp_app_desc_t` says which version it is, and the trailer in the
+last 4 KiB of the partition carries the SHA-256 and the Ed25519 signature.
+The public key is compiled into the firmware and the flash layout does not
+change; `tools/bundle.sh` writes `micro_os.bin.sig` and `flash.sh` puts it at
+`0x20F000`. With the requirement on, a missing or wrong trailer stops the
+boot with `boot: the image is refused: <reason>`; with it off, the console
+carries `boot: unsigned or damaged image: not guaranteed` and the board
+continues. `tools/device-test.sh` proves the signed image, the warning
+(`DEVICE_POLICY=unsigned`) and the stop (`DEVICE_POLICY=require-unsigned`).
+
+**What "signed" does not mean on the board.** The ROM and the ESP-IDF
+bootloader have already copied and entered the application when the check
+runs, so the first instructions of a damaged image execute before the
+sentence; it is an electronic check of the boot, not secure boot. A signature
+in the boot chain itself means secure boot v2, which burns eFuses, or a custom
+bootloader that does not fit the 28 KB bootloader partition. Neither is in
+1.0. The check cannot stop a local attacker who can replace the firmware or
+the checker, and the signature does not hide the image.
+
+The anti-rollback is a second setting, `MICRO_OS_ANTIROLLBACK`, off by
+default. When it is on, the board keeps the newest version it has seen in the
+NVS and refuses a lower one (or prints a warning when the flag is off). It is
+not the eFuse counter of secure boot: a person who can flash the board can
+erase the NVS. x86-64 has no store that survives a reset, so a rollback there
+is allowed and there is no flag. Section 7 of [the checklist](../releases/1.0.md)
+is closed with the limits above written beside it.
 
 ## The session of 600 seconds
 
@@ -99,7 +127,9 @@ read the roadmap to learn it:
   0012);
 * **a safe update with a rollback**: a device is updated over USB with a
   backup of its volume; the update path is the first block after `1.0.0`
-  (ADR 0011, updated);
+  (ADR 0011, updated). The `MICRO_OS_ANTIROLLBACK` setting of the board
+  refuses an old image, but it is not an update path and it does not put the
+  old image back;
 * **TLS and IPv6**: 1.0 is a LAN system, without a certificate or a cloud
   account;
 * **a writable ext2 and a journal under FAT**: ext2 is read, FAT is written

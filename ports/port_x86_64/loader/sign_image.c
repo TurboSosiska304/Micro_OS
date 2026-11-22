@@ -181,3 +181,17 @@ int microos_sign_image_verify(const void *image, size_t size,
 
     return 0;
 }
+
+int microos_sign_policy_continue(int verified, int policy)
+{
+    if (verified != 0) {
+        return 1;
+    }
+
+    return policy == MICROOS_SIGN_POLICY_ALLOW ? 1 : 0;
+}
+
+const char *microos_sign_policy_warning(void)
+{
+    return "Micro OS: unsigned or damaged image: not guaranteed";
+}

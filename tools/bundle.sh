@@ -102,6 +102,18 @@ MERGED="MicroOS-${VERSION}.bin"
 # by a flash of this file.
 FACTORY_OFFSET="$(awk -F',' '/^factory/ {gsub(/[ \t]/,"",$4); print $4}' partitions.csv)"
 FACTORY_OFFSET="${FACTORY_OFFSET:-0x10000}"
+FACTORY_SIZE="$(awk -F',' '/^factory/ {gsub(/[ \t]/,"",$5); print $5}' partitions.csv)"
+FACTORY_SIZE="${FACTORY_SIZE:-0x200000}"
+
+# The application and the 4 KiB of the signature trailer share the factory
+# partition (ADR 0020). The check is here as well as in the build: a bundle
+# made from an older build directory must not put the trailer over the app.
+APP_SIZE="$(stat -c %s "$OUT_DIR/micro_os.bin")"
+APP_LIMIT=$((FACTORY_SIZE - 0x1000))
+if [ "$APP_SIZE" -gt "$APP_LIMIT" ]; then
+    echo "the image is $APP_SIZE bytes and the partition leaves $APP_LIMIT for it and its trailer" >&2
+    exit 1
+fi
 
 echo "==> the single image $MERGED"
 python3 -m esptool --chip esp32 merge_bin -o "$OUT_DIR/$MERGED" \
@@ -112,14 +124,17 @@ python3 -m esptool --chip esp32 merge_bin -o "$OUT_DIR/$MERGED" \
 echo "    $MERGED ($(stat -c %s "$OUT_DIR/$MERGED") bytes)"
 
 # The signature of the bundle (ADR 0020). The key of a release is named by
-# MICROOS_SIGN_KEY and lives outside this tree; a build that has no key of its
-# own is signed with the key of the x86-64 image, which is the dev key of the
-# build and not a secret. The trailer is appended and a copy of it is the
-# .sig file, so a person can verify the bytes with `microos_sign verify`.
+# MICROOS_SIGN_KEY and lives outside this tree; a development build signs with
+# the key of its own firmware (build/signing.key, the public half is compiled
+# into the image), and the x86-64 key is the last resort. The trailer of the
+# app is written beside it and flash.sh puts it at 0x20F000; a copy of the
+# merged image's trailer is its .sig, so a person can verify the bytes with
+# `microos_sign verify`.
 X86_BUILD="${X86_BUILD:-$ROOT/build-x86}"
 SIGNER="${MICROOS_SIGNER:-}"
 if [ -z "$SIGNER" ]; then
-    for candidate in "$ROOT/build-host/tools/microos_sign" "$X86_BUILD/microos_sign"; do
+    for candidate in "$ROOT/build-host/tools/microos_sign" "$X86_BUILD/microos_sign" \
+                     "$BUILD_DIR/microos_sign_host"; do
         if [ -x "$candidate" ]; then
             SIGNER="$candidate"
             break
@@ -127,14 +142,33 @@ if [ -z "$SIGNER" ]; then
     done
 fi
 
+# The key of the firmware is the one its public half was compiled from: the
+# release key (MICROOS_SIGN_KEY) or the development key of the ESP-IDF build.
+# The key of the x86-64 build is the last resort, for a bundle of a tree that
+# has no firmware build.
 SIGN_KEY="${MICROOS_SIGN_KEY:-}"
+if [ -z "$SIGN_KEY" ] && [ -f "$BUILD_DIR/signing.key" ]; then
+    SIGN_KEY="$BUILD_DIR/signing.key"
+fi
 if [ -z "$SIGN_KEY" ] && [ -f "$X86_BUILD/signing.key" ]; then
     SIGN_KEY="$X86_BUILD/signing.key"
 fi
 
 if [ -n "$SIGNER" ] && [ -n "$SIGN_KEY" ]; then
-    echo "==> the signature: $MERGED"
+    echo "==> the signature of the application: micro_os.bin"
     "$SIGNER" pubkey --key "$SIGN_KEY" --pub "$OUT_DIR/microos-sign.pub"
+
+    # The board reads the trailer at the end of the factory partition, not
+    # after the app: the signature is written beside the image and flash.sh
+    # puts it at 0x20F000. The combined file is a step of the tool, not a file
+    # of the bundle.
+    "$SIGNER" sign --key "$SIGN_KEY" --in "$OUT_DIR/micro_os.bin" \
+        --out "$OUT_DIR/micro_os.signed.bin" --sig "$OUT_DIR/micro_os.bin.sig"
+    rm -f "$OUT_DIR/micro_os.signed.bin"
+    "$SIGNER" verify --pub "$OUT_DIR/microos-sign.pub" \
+        --trailer "$OUT_DIR/micro_os.bin.sig" "$OUT_DIR/micro_os.bin"
+
+    echo "==> the signature of the distribution: $MERGED"
     "$SIGNER" sign --key "$SIGN_KEY" --in "$OUT_DIR/$MERGED" --out "$OUT_DIR/$MERGED" \
         --sig "$OUT_DIR/$MERGED.sig"
     "$SIGNER" verify --pub "$OUT_DIR/microos-sign.pub" "$OUT_DIR/$MERGED"
@@ -143,7 +177,11 @@ else
 fi
 
 # The sums of the binaries: they are the proof that the bundle is intact.
-(cd "$OUT_DIR" && sha256sum "$MERGED" micro_os.bin bootloader.bin partition-table.bin > checksums.txt)
+SUMS=("$MERGED" micro_os.bin bootloader.bin partition-table.bin)
+if [ -f "$OUT_DIR/micro_os.bin.sig" ]; then
+    SUMS=(micro_os.bin.sig "${SUMS[@]}")
+fi
+(cd "$OUT_DIR" && sha256sum "${SUMS[@]}" > checksums.txt)
 if [ -f "$OUT_DIR/$MERGED.sig" ]; then
     (cd "$OUT_DIR" && sha256sum "$MERGED.sig" microos-sign.pub >> checksums.txt)
 fi

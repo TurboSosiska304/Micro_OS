@@ -30,6 +30,51 @@ The ready images also go to the releases: download the bundle, connect the
 board, run `bash flash.sh` (or `chmod +x flash.sh && ./flash.sh`) - no
 sources, no ESP-IDF, no toolchain.
 
+## The signature of the image
+
+The application checks itself at the beginning of `app_main`, before MicroFS
+and the shell (ADR 0020). The factory partition is read in place: the ESP
+header gives the length of the image, `esp_app_desc_t` at `0x20` gives its
+version, and the last 4 KiB of the partition (`0x20F000` of the flash) hold
+the 120-byte `MOSIGN01` trailer over the bytes of `micro_os.bin`. The digest
+is SHA-256 over the flash in chunks and the signature is Ed25519 with the
+public key compiled into the firmware. The partition table is unchanged and
+no eFuse is burned.
+
+`tools/bundle.sh` signs the application and the merged distribution image;
+`micro_os.bin.sig` is the trailer and `flash.sh` writes it at `0x20F000`.
+`make bundle` also checks that the image and its 4 KiB reserve fit the 2 MB
+factory partition; the ESP-IDF build checks the same before it writes the
+image.
+
+The policy is a Kconfig setting:
+
+* `CONFIG_MICRO_OS_REQUIRE_SIGNATURE` (default `y`): a missing or wrong
+  trailer prints `boot: the image is refused: <reason>` and the board stops
+  before the filesystem and the shell. With `n`, the same check prints
+  `boot: unsigned or damaged image: not guaranteed` and the boot continues.
+* `CONFIG_MICRO_OS_ANTIROLLBACK` (default `n`): the newest version seen is
+  kept in the NVS namespace `microos_boot` (`min_version`). With the flag on,
+  an image older than the stored one is refused; with it off, it is a
+  warning. A newer version is recorded after the signature passed.
+
+The check is electronic, not secure boot: the ROM and the ESP-IDF bootloader
+have already entered the application, so a damaged image may have run its
+first instructions before the sentence. It cannot stop a local attacker who
+can rewrite the flash or the NVS. Secure boot v2 and flash encryption are not
+enabled by this tree.
+
+`tools/device-test.sh` runs the signed bundle by default. Two more policies
+are available for a development board:
+
+    DEVICE_POLICY=unsigned tools/device-test.sh /dev/ttyACM0
+    DEVICE_POLICY=require-unsigned tools/device-test.sh /dev/ttyACM0
+
+The first builds with the requirement off and flashes an image without a
+trailer: the console warns and the shell comes up. The second keeps the
+requirement on and flashes the same unsigned image: the boot stops before
+the shell.
+
 ## The hardware doctor
 
 The init process walks through the registered modules after the self test and

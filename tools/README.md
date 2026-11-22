@@ -39,13 +39,20 @@ those fields. `verify` reads the trailer at the end of the file;
 `--trailer FILE` verifies a payload with the detached copy of the trailer.
 
 The private key is not in this tree. `MICROOS_SIGN_KEY` names one for
-`make x86-build` and `make bundle`; without it the x86-64 build generates a
-key in `build-x86/signing.key` and the loader carries its public half. The
-public key of a build travels as `signing.pub` (and `microos-sign.pub` in
-`dist/`), and the merge of the board bundle is signed with the same key when
-one is there.
+`make x86-build`, `make idf-build` and `make bundle`; without it the build
+generates a key in its directory (`build-x86/signing.key`,
+`build/signing.key`) and the loader or the firmware carries its public half.
+The public key of a build travels as `signing.pub` (and `microos-sign.pub` in
+`dist/`).
 
-`make x86-smoke` proves the boot check from both sides: the good image prints
-`Micro OS: image signature ok (sha-256, ed25519)`, and a changed byte, a
-missing trailer and a foreign key each stop with `Micro OS: the image is
-refused` before the kernel prints its banner.
+`make x86-smoke` proves the x86-64 boot check from both sides: the good image
+prints `Micro OS: image signature ok (sha-256, ed25519)`, and a changed byte,
+a missing trailer and a foreign key each stop with `Micro OS: the image is
+refused` before the kernel prints its banner. With
+`MICRO_OS_REQUIRE_SIGNATURE=OFF` (`make x86-open-build`) the same bytes boot
+after `Micro OS: unsigned or damaged image: not guaranteed`.
+
+`make bundle` signs `micro_os.bin` and writes `micro_os.bin.sig`; `flash.sh`
+puts it at `0x20F000`, the last 4 KiB of the factory partition, where
+`app_main` reads it. The board's check is electronic and its policy is the
+Kconfig `MICRO_OS_REQUIRE_SIGNATURE` (ADR 0020, sections 6 and 7).

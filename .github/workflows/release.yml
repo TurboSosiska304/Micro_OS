@@ -59,6 +59,14 @@ jobs:
             echo "MICROOS_SIGN_KEY=$RUNNER_TEMP/release.key" >> "$GITHUB_ENV"
           fi
 
+      # The container of ESP-IDF carries the toolchain of the board and not
+      # the host tools: the firmware build compiles microos_sign_host with
+      # the host cc to turn the signing key into the public half of the
+      # image, and the x86-64 port needs cmake and ninja. Install them
+      # before either build.
+      - name: the host tools of both machines
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends cmake ninja-build build-essential
+
       # The steps of Actions run through docker exec and miss the
       # entrypoint of the image, the one that sources export.sh — the
       # shell of the step does it itself (IDF_PATH=/opt/esp/idf).
@@ -67,11 +75,6 @@ jobs:
         run: |
           . /opt/esp/idf/export.sh >/dev/null
           idf.py build
-
-      # The container of ESP-IDF carries the toolchain of the board and not
-      # the host tools of the other machine.
-      - name: the tools of the x86-64 port
-        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends cmake ninja-build build-essential
 
       - name: the kernel of the x86-64 port
         run: make x86-build

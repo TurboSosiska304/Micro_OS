@@ -57,4 +57,19 @@ int microos_sign_trailer_sign(uint8_t trailer[MICROOS_SIGN_TRAILER_SIZE],
 int microos_sign_trailer_read(const uint8_t trailer[MICROOS_SIGN_TRAILER_SIZE],
                               uint64_t *payload_size, uint8_t digest[MICROOS_SIGN_DIGEST_SIZE]);
 
+/*
+ * The policy of the boot (ADR 0020, "The policy: a setting, not a wall").
+ * A verified image always continues. An image that did not pass continues
+ * only when the build does not require a signature; the caller prints the
+ * warning, because the console of a boot loader and of the board are not the
+ * same. The same two numbers are in the two machines and in the tests.
+ */
+#define MICROOS_SIGN_POLICY_ALLOW 0
+#define MICROOS_SIGN_POLICY_REQUIRE 1
+
+int microos_sign_policy_continue(int verified, int policy);
+
+/* The sentence of a boot that continues without a verified image. */
+const char *microos_sign_policy_warning(void);
+
 #endif /* MICRO_OS_PORT_X86_64_LOADER_SIGN_IMAGE_H */

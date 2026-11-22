@@ -18,6 +18,7 @@
 #include "kernel/log.h"
 #include "kernel/vfs.h"
 #include "kernel/port.h"
+#include "kernel/port/power.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
 #include "kernel/version.h"
@@ -392,6 +393,21 @@ void app_main(void)
 
     port_esp32_console_init();
     port_esp32_init();
+
+    /*
+     * The image and its version are checked before the filesystem and the
+     * shell (ADR 0020). The ROM and the bootloader have already entered this
+     * application, so this is the electronic check of the board, not a
+     * replacement for secure boot; with the policy off it is a warning.
+     *
+     * The check comes before klog_capture_start() on purpose: its sentence
+     * belongs on the console even when the volume of the board is damaged
+     * and the boot log can never be written.
+     */
+    if (port_esp32_image_check() != 0) {
+        kerror("boot: the image did not pass the boot check, the board stops");
+        k_port_halt();
+    }
 
     /* The log of the boot is collected, it is written to a file later. */
     klog_capture_start();

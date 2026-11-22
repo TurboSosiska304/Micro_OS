@@ -22,10 +22,62 @@ if(MICRO_OS_PLATFORM STREQUAL "ESP32")
     # the firmware image is then the same bytes for the same inputs.
     include("${CMAKE_CURRENT_LIST_DIR}/cmake/reproducible.cmake")
 
+    # The version of the application, as the kernel says it. esp_app_desc_t
+    # carries it, and the anti-rollback of the board compares it with the
+    # version in the NVS (ADR 0020); it should be the same number the bundle
+    # and `uname` print.
+    file(READ "${CMAKE_CURRENT_LIST_DIR}/components/kernel/include/kernel/config.h" _version_header)
+    string(REGEX MATCH "#define KERNEL_VERSION_MAJOR ([0-9]+)" _major "${_version_header}")
+    set(_major "${CMAKE_MATCH_1}")
+    string(REGEX MATCH "#define KERNEL_VERSION_MINOR ([0-9]+)" _minor "${_version_header}")
+    set(_minor "${CMAKE_MATCH_1}")
+    string(REGEX MATCH "#define KERNEL_VERSION_PATCH ([0-9]+)" _patch "${_version_header}")
+    set(_patch "${CMAKE_MATCH_1}")
+    string(REGEX MATCH "#define KERNEL_VERSION_SUFFIX \"([^\"]*)\"" _suffix "${_version_header}")
+    set(_suffix "${CMAKE_MATCH_1}")
+    set(PROJECT_VER "${_major}.${_minor}.${_patch}${_suffix}")
+
+    # The private key of the image (ADR 0020) is a path outside this tree; a
+    # build without it uses the development key in its own directory. The
+    # release workflow puts the material of the secret in a file and exports
+    # the name of that file as MICROOS_SIGN_KEY.
+    if(DEFINED ENV{MICROOS_SIGN_KEY} AND NOT "$ENV{MICROOS_SIGN_KEY}" STREQUAL "")
+        set(MICROOS_SIGN_KEY "$ENV{MICROOS_SIGN_KEY}" CACHE FILEPATH
+            "the private key of the image (default: a key generated in the build directory)" FORCE)
+    endif()
+
     include($ENV{IDF_PATH}/tools/cmake/project.cmake)
     project(micro_os C)
 
-    message(STATUS "Micro OS: ESP32 firmware build (ESP-IDF ${IDF_VERSION})")
+    # The application and the 4 KiB of its trailer have to fit the factory
+    # partition: the flash layout is a file of the tree, and the check reads
+    # it instead of naming the 2 MB a second time.
+    set(MICRO_OS_FACTORY_SIZE 0x200000)
+    file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/partitions.csv" _partition_lines)
+    foreach(_line IN LISTS _partition_lines)
+        if(_line MATCHES "^factory[ \t]*,")
+            string(REPLACE "," ";" _fields "${_line}")
+            list(GET _fields 4 _factory_size)
+            string(STRIP "${_factory_size}" _factory_size)
+            if(_factory_size MATCHES "^0[xX][0-9a-fA-F]+$")
+                set(MICRO_OS_FACTORY_SIZE "${_factory_size}")
+            endif()
+        endif()
+    endforeach()
+    math(EXPR MICRO_OS_FACTORY_BYTES "${MICRO_OS_FACTORY_SIZE}")
+
+    add_custom_target(micro_os_image_fits ALL
+        COMMAND ${CMAKE_COMMAND}
+                -DIMAGE=${CMAKE_BINARY_DIR}/micro_os.bin
+                -DPARTITION_SIZE=${MICRO_OS_FACTORY_BYTES}
+                -DTRAILER_RESERVE=4096
+                -P "${CMAKE_CURRENT_LIST_DIR}/tools/check_image_fits.cmake"
+        DEPENDS gen_project_binary
+        COMMENT "checking that the image and its trailer fit the factory partition"
+        VERBATIM
+    )
+
+    message(STATUS "Micro OS: ESP32 firmware build (ESP-IDF ${IDF_VERSION}), version ${PROJECT_VER}")
 
 else()
 

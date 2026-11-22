@@ -19,16 +19,99 @@ if(CONFIG_MICRO_OS_WIFI)
     list(APPEND MICRO_OS_PORT_ESP32_SRCS "src/wifi_radio.c")
 endif()
 
+# --- the signature of the application (ADR 0020) -----------------------------
+#
+# The same parser, hash and curve as the x86-64 loader: the board reads its
+# own factory partition in app_main, before the filesystem and the shell, and
+# compares the trailer at the last 4 KiB of the partition with the bytes of
+# the app. The public key is compiled into the firmware, so the image cannot
+# bring one of its own.
+#
+# The tool that writes sign_public_key.h is built for the host: ESP-IDF has a
+# cross compiler for the board, and the tool is an ordinary C program with a
+# main(). The key is MICROOS_SIGN_KEY (a path outside the tree) or the
+# development key in the build directory, the same choice as the x86-64 port.
+set(MICRO_OS_SIGN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../ports/port_x86_64/loader")
+set(MICRO_OS_SIGN_SHARED
+    "${MICRO_OS_SIGN_DIR}/sha256.c"
+    "${MICRO_OS_SIGN_DIR}/ed25519.c"
+    "${MICRO_OS_SIGN_DIR}/sign_image.c"
+)
+list(APPEND MICRO_OS_PORT_ESP32_SRCS "src/image_check.c" ${MICRO_OS_SIGN_SHARED})
+
+# The first pass of the build only asks the components for their requirements
+# and cannot create rules, so the tool and its header exist in the real pass.
+if(NOT CMAKE_BUILD_EARLY_EXPANSION)
+
+find_program(MICRO_OS_HOST_CC NAMES cc gcc clang)
+if(NOT MICRO_OS_HOST_CC)
+    message(FATAL_ERROR "Micro OS: a host C compiler is needed for the signing key of the image")
+endif()
+
+# The tool and the key live in the root of the build directory, beside
+# micro_os.bin: tools/bundle.sh and tools/device-test.sh find them there by
+# the same names the x86-64 build uses.
+set(MICRO_OS_SIGN_TOOL "${CMAKE_BINARY_DIR}/microos_sign_host")
+set(MICRO_OS_SIGN_HEADER "${CMAKE_BINARY_DIR}/sign_public_key.h")
+set(MICRO_OS_SIGN_PUBLIC "${CMAKE_BINARY_DIR}/signing.pub")
+
+add_custom_command(
+    OUTPUT "${MICRO_OS_SIGN_TOOL}"
+    COMMAND "${MICRO_OS_HOST_CC}" -O2
+            -I "${MICRO_OS_SIGN_DIR}"
+            -o "${MICRO_OS_SIGN_TOOL}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/microos_sign.c"
+            ${MICRO_OS_SIGN_SHARED}
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/microos_sign.c"
+            ${MICRO_OS_SIGN_SHARED}
+    COMMENT "building the host tool of the image signature"
+    VERBATIM
+)
+
+if(MICROOS_SIGN_KEY)
+    set(MICRO_OS_SIGN_KEY_FILE "${MICROOS_SIGN_KEY}")
+    add_custom_command(
+        OUTPUT "${MICRO_OS_SIGN_HEADER}" "${MICRO_OS_SIGN_PUBLIC}"
+        COMMAND "${MICRO_OS_SIGN_TOOL}" pubkey
+                --key "${MICRO_OS_SIGN_KEY_FILE}"
+                --pub "${MICRO_OS_SIGN_PUBLIC}"
+                --header "${MICRO_OS_SIGN_HEADER}"
+        DEPENDS "${MICRO_OS_SIGN_TOOL}" "${MICRO_OS_SIGN_KEY_FILE}"
+        COMMENT "reading the public half of the signing key"
+        VERBATIM
+    )
+else()
+    set(MICRO_OS_SIGN_KEY_FILE "${CMAKE_BINARY_DIR}/signing.key")
+    add_custom_command(
+        OUTPUT "${MICRO_OS_SIGN_KEY_FILE}" "${MICRO_OS_SIGN_HEADER}" "${MICRO_OS_SIGN_PUBLIC}"
+        COMMAND sh -c "test -f '${MICRO_OS_SIGN_KEY_FILE}' || '${MICRO_OS_SIGN_TOOL}' keygen --key '${MICRO_OS_SIGN_KEY_FILE}' --pub '${MICRO_OS_SIGN_PUBLIC}' --header '${MICRO_OS_SIGN_HEADER}'"
+        COMMAND "${MICRO_OS_SIGN_TOOL}" pubkey
+                --key "${MICRO_OS_SIGN_KEY_FILE}"
+                --pub "${MICRO_OS_SIGN_PUBLIC}"
+                --header "${MICRO_OS_SIGN_HEADER}"
+        DEPENDS "${MICRO_OS_SIGN_TOOL}"
+        COMMENT "generating the key of the image of this build"
+        VERBATIM
+    )
+endif()
+
+add_custom_target(micro_os_signing DEPENDS "${MICRO_OS_SIGN_HEADER}")
+
+endif() # NOT CMAKE_BUILD_EARLY_EXPANSION
+
 idf_component_register(
     SRCS ${MICRO_OS_PORT_ESP32_SRCS}
     INCLUDE_DIRS "include"
+    PRIV_INCLUDE_DIRS "${MICRO_OS_SIGN_DIR}" "${CMAKE_BINARY_DIR}"
     REQUIRES kernel esp_timer freertos esp_driver_uart vfs esp_partition nvs_flash lwip
              esp_wifi esp_netif esp_event
     # The radio is the backend of the portable core: it fills the table of
     # `wifi` and reports its events back to it, and nothing of that appears
     # in the header of the port. `heap` is for SOC_RESERVE_MEMORY_REGION: the
     # port keeps the IRAM window of a program out of the heap (ADR 0018).
-    PRIV_REQUIRES wifi heap
+    # esp_app_format is the description of the application (its version), and
+    # it is private to the check of the image.
+    PRIV_REQUIRES wifi heap esp_app_format
     # The port is the other half of the kernel contract: the kernel calls
     # k_port_* and the port calls back into the kernel (the scheduler, the
     # log). ESP-IDF links the components in dependency order and repeats
@@ -38,6 +121,11 @@ idf_component_register(
     # The port is small; it is linked whole.
     WHOLE_ARCHIVE
 )
+
+# The header of the key is generated, so the compiler has to wait for it.
+if(NOT CMAKE_BUILD_EARLY_EXPANSION)
+    add_dependencies(${COMPONENT_LIB} micro_os_signing)
+endif()
 
     # The discipline of the host build: the sources of the project are
     # compiled with the extra warnings, so a mistake is a message at

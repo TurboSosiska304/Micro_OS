@@ -25,7 +25,9 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 
 # Kernel-ish runtime settings
 CONFIG_FREERTOS_HZ=1000
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=4096
+# The main task runs app_main, and the check of the image verifies Ed25519
+# before the kernel starts; the curve needs more than the old 4 KiB.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
 # The watchdog of the interrupts stops the board when the code keeps the
@@ -64,6 +66,14 @@ CONFIG_ESP_COREDUMP_ENABLE_TO_NONE=y
 # that neither window is reached (exec_windows.ld).
 CONFIG_ESP32_USE_FIXED_STATIC_RAM_SIZE=y
 CONFIG_ESP32_FIXED_STATIC_RAM_SIZE=0x20000
+
+# The image of the board (ADR 0020): the boot checks the trailer of the
+# factory partition and refuses an image that did not pass; a development
+# build that has no trailer turns the requirement off and keeps the warning.
+# The anti-rollback is off by default: its minimum lives in the NVS and a
+# person who flashes an older image sees a warning, not a stopped board.
+CONFIG_MICRO_OS_REQUIRE_SIGNATURE=y
+# CONFIG_MICRO_OS_ANTIROLLBACK is not set
 
 # The optional features behind the compile-time flags (ADR 0010). The board
 # keeps what it ships today: the HTTP client, the clock from NTP, the shell
