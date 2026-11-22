@@ -5,6 +5,10 @@
 * Updated: 2026-11-22 - multi-core and the safe update with a rollback are
   after `1.0.0` (ADR 0012, and the note below); the checksum and the
   signature that the boot checks stay in the gate.
+* Updated: 2026-11-23 - the owner waived the four weeks on the board: the
+  session of 600 seconds of a candidate is the evidence of the release, and
+  the two candidates stay as the process (the second may be waived by the
+  owner when the first passes with no change).
 
 
 ## Context
@@ -29,8 +33,10 @@ MMU yet.
    meaning, the MOX1 format and the MicroFS volume format change only by
    adding; a breaking change is `2.0.0`.
 3. **A release candidate is cut before a major.** `1.0.0-rc1` means every gate
-   below is met and only fixes are allowed; at least two candidates and four
-   weeks on the board are required before `1.0.0`.
+   below is met and only fixes are allowed; at least two candidates are
+   required before `1.0.0`, and the four weeks on the board were waived by
+   the owner on 2026-11-23: the session of 600 seconds of a candidate is the
+   evidence that a calendar was meant to give.
 4. **The gate is a document, not a feeling.** [docs/releases/1.0.md](../releases/1.0.md)
    is the checklist; a line is `[x]` only when the code, the test and the
    hardware run agree.

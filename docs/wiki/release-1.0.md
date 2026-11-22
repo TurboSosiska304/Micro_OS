@@ -133,6 +133,7 @@ instead of being reformatted.
 The gate is a document, not a feeling: every line of `docs/releases/1.0.md`
 is `[x]` only when the code, the test and the run on the machine agree. A
 release candidate is cut when the gate holds, only fixes are allowed after
-it, and `1.0.0` follows at least two candidates and four weeks on the board
-without a change of an ABI, a format or a default. That is what makes the
-number mean something.
+it, and `1.0.0` follows at least two candidates without a change of an ABI, a
+format or a default. The four weeks on the board that the rule first asked
+for were waived by the owner: the session of 600 seconds of a candidate is
+the evidence, and it is what makes the number mean something.
