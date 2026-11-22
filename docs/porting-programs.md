@@ -95,10 +95,13 @@ the bss of an image is capped at 1 MiB by the format. A library that
 allocates more needs a program with a larger arena, or a `brk`/`mmap` of the
 program, which the kernel does not have yet (`docs/debts.md`).
 
-The formatter has `%d %i %u %o %x %X %c %s %p %%`, the flags `-` and `0`
-and the length `l`/`z`. It has **no floating point** and no precision: a
-library that prints a float, or a `%.3s`, needs a formatter of its own or a
-change of `components/libc/user/src/stdio.c` (a debt).
+The formatter has `%d %i %u %o %x %X %c %s %p %%`, the flags
+`- + space # 0`, the width, the precision and a `*`. A build with
+`ULIBC_WITH_FLOAT` adds `%f %e %g` with the digits of
+`src/format_float.c`; the programs of the tree are built with
+`-mgeneral-regs-only` and print such a conversion as it was written, so a
+library that wants a float asks for the `FLOAT` option of the recipe (a
+debt of the XMM state, see above).
 
 ### The shape of the calls
 

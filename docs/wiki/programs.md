@@ -459,10 +459,11 @@ plan to pretend otherwise.
   program. The format is ready for the second machine; the port is not.
 * **No libc of the host.** A program has the calls of the ABI, the library of
   `components/libc/user` and nothing else. The library is not a standard C
-  library: the allocation is a fixed arena of the program, the streams are a
-  descriptor and not a buffer, and there is no floating point (the programs
-  are built with `-mgeneral-regs-only`); the formatter has no precision and
-  no `*` width.
+  library: the allocation is a fixed arena of the program and the streams are
+  a descriptor and not a buffer. A program is built with
+  `-mgeneral-regs-only` unless it asks for the `FLOAT` option (SQLite's
+  `REAL` is the one of `/bin`): then the formatter has `%f` and the
+  precision, and the port runs one such program at a time.
 * **No inherited descriptors.** A program is a task with a table of four
   descriptors of its own, and the shell does not pass its own table to it.
   `cat`, `wc`, `head` and `grep` read descriptor 0 when they are given no file

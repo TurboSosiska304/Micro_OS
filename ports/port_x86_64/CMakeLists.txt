@@ -84,8 +84,10 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # The kernel of the higher half: no red zone (an interrupt may use the stack
-# under us), no PIC, no SSE (there is no floating point state to save), and
-# the kernel memory model, which names the top 2 GiB where the image is
+# under us), no PIC, no SSE in the C of the kernel (it saves no floating
+# point state; a program that asks for it gets the units from the loader,
+# see USERLAND_CFLAGS below), and the kernel memory model, which names the
+# top 2 GiB where the image is
 # linked and leaves the low identity map to the pointers the boot hands over
 # (ADR 0007). It is a flag of the C code alone: the assembly is written in
 # absolute 64-bit numbers and the programs of /bin stay in the low window.
