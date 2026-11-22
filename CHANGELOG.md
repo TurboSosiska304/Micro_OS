@@ -10,13 +10,65 @@ the MicroFS volume change by adding only.
 A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 (`vX.Y.Z-pre`) is a pre-release and must match `kernel_version()`.
 
-## [1.0.0] - unreleased
+## [1.0.0] - 2026-11-22
 
-The gate of this number is [`docs/releases/1.0.md`](docs/releases/1.0.md), and
-a line of it is met only when the code, the test and the run on the machine
-agree. Nothing is released under 1.0.0 yet: this section is the place for the
-commits that close the gate, and it is deliberately empty until the first
-release candidate is cut.
+The first major release: the contracts are frozen, two machines run the
+system, and a session of 600 seconds under a mixed load passes on both of
+them and on the host substrate. The gate is
+[`docs/releases/1.0.md`](docs/releases/1.0.md); the page of the release is
+[`docs/wiki/release-1.0.md`](docs/wiki/release-1.0.md).
+
+### Added
+
+- The syscall ABI, MOX1 version 2 and the MicroFS volume are frozen and
+  recorded in `tests/corpus/` with tests that compare the record with the
+  running kernel; the contract of the port is version 1.8 and the same test
+  holds its list.
+- x86-64: the kernel is linked in the higher half (`0xFFFFFFFF80000000`,
+  physical `0x01000000`), with a low identity map for the screen and the
+  arena; NX and W^X cover the kernel and the programs; `fork` with copy on
+  write, ring 3, `EFAULT` at the edge of every call.
+- The board runs a `.mox` of Xtensa code without protection: a fixed 8 KiB
+  instruction window and a data window, the door of the port as the system
+  call; the sleep wakes on the RTC alarm, the factory reset writes the
+  defaults of `/etc` back, the IR emitter sends NEC and the sound detector
+  listens over the microphone.
+- Processes and userland: `pipe`, `dup2`, `kill`, `signal`, `sigreturn`,
+  `getlimit`/`setlimit`, a shell with pipelines and redirections, Ctrl+C for
+  a job, and ten programs built against `components/libc/user`.
+- Filesystems: FAT12/16/32 is read and written, `fsck fat -y` repairs a
+  damaged volume, MicroFS repairs its own (`fsck -y`), ext2 is read, and
+  `mount`/`umount` and `/etc/fstab` are part of the machine.
+- Network: the HTTP client, NTP, MQTT, telnet and the page of the state on
+  the board; IPv4/TCP, a server half, `httpd` and a DNS cache on x86-64.
+- Signed images: SHA-256 and Ed25519 over a trailer (`MOSIGN01`), the x86-64
+  loader verifies the kernel before a byte runs, the board verifies its
+  application at the boot, and a build flag decides whether an unsigned or an
+  older image is refused or accepted with a warning.
+- Quality: reproducible images, 82% of the lines of the kernel in the
+  coverage, fuzzing of the ABI and of the parsers, ASan/TSan/valgrind, and
+  the three tools of the 600-second campaign (`make soak`, `make soak-host`,
+  `make board-soak`).
+
+### Changed
+
+- Programs are files of a MicroFS volume (`make x86-disk`), not blobs of the
+  kernel; `/proc`, `/dev`, `/etc` and `/etc/fstab` are the tree of x86-64 as
+  they are the tree of the board.
+- `execve` carries the descriptors, the working directory and the job of the
+  caller; the environment is the third argument of POSIX.
+- `ls` lists names (`-l`, `-a`) and `tree` draws the levels.
+
+### Known limitations
+
+- The second core (SMP) and the safe update with a rollback are the first
+  projects after 1.0 (ADR 0012, ADR 0011 updated).
+- No TLS and no IPv6: 1.0 is a LAN system.
+- ext2 is read-only and FAT is written without a journal.
+- One user; an object has a mode and an owner, and there is no second party.
+- A program of the board has no protection: a bad pointer takes the board
+  down, and the documentation says so.
+- A pipeline has at most three stages and a task four descriptors.
 
 ## [0.8.0] - 2026-11-21
 
