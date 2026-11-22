@@ -306,19 +306,27 @@ written when the project was an operating system for one board; the numbers
       recipe is [`porting-programs.md`](porting-programs.md), the library has
       `tests/cases/test_zlib.c`, and `make x86-smoke` and
       `make x86-disk-smoke` check the inflated bytes of a fixed fixture
-* [x] The other ports of 1.2.0: the ten tools of sbase (MIT) as `/bin/sb-*`,
-      PCRE2 as `/bin/pcre2grep`, and the interpreter of Lua 5.4.7 (MIT) as
-      `/bin/lua` with the script `/etc/hello.lua`; the image of a program is
-      up to `K_EXEC_MAX_IMAGE` (8 MiB), read in pieces of `KSYS_MAX_IO`
-      (64 KiB), and the library of a program has the `float` family for an
-      image that asks for it (`-DULIBC_WITH_FLOAT`, Lua). The port is the
-      first one past the old 64 KiB edge of `execve`; SQLite is the next
-      candidate of the recipe
+* [x] The other ports of 1.2.0: the ten tools of sbase (MIT) are the
+      commands of `/bin` under their canonical names - `cat`, `grep`, `head`,
+      `ls`, `tail`, `wc`, `sort`, `find`, `xargs`, `sed` - and the shell
+      looks a bare name in `PATH` before its own table; PCRE2 as
+      `/bin/pcre2grep`; the interpreter of Lua 5.4.7 (MIT) as `/bin/lua`
+      with the script `/etc/hello.lua`; and bc/dc 7.2.0 (BSD-2-Clause) as
+      `/bin/bc` and `/bin/dc`, the same 115,440-byte image. The image of a
+      program is up to `K_EXEC_MAX_IMAGE` (8 MiB), read in pieces of
+      `KSYS_MAX_IO` (64 KiB), and the library of a program has the `float`
+      family for an image that asks for it (`-DULIBC_WITH_FLOAT`). The ports
+      are published in `microos-progs` with a signed index
+      (<https://turbososiska304.github.io/microos-progs/>)
+* [ ] The ports of 1.3.0: SQLite (its SDK, and a package above
+      `PKG_PACKAGE_MAX` of 1 MiB), zstd, `file`/libmagic and awk; their
+      branches are still in progress and none of them is a promise of 1.2.0
 * [ ] The gaps of the next port: a `malloc` larger than the bss of an image
       (`brk`/`mmap` of a program), a `poll` for a library that waits on a
-      pipe, a wall clock in `time()` (it is the uptime), and the package
-      that ships `zcat`, `lua` and `pcre2grep` with their licenses beside
-      them (`docs/debts.md`)
+      pipe, a wall clock in `time()` (it is the uptime), an `fxsave` of the
+      XMM state for two programs with a point in their numbers, and the
+      package that ships `zcat`, `lua`, `pcre2grep` and `bc` with their
+      licenses beside them (`docs/debts.md`)
 
 ## The last major changes of the board (1.1.0)
 
@@ -457,11 +465,12 @@ to build is the screen a program can draw on.
       `-Q`, `-Sy`, `-Su`, `-Syu`, `-U`, `--noconfirm`, `--needed`,
       `--download-only`, `--dry-run`, `--allow-downgrade`, `--offline`,
       `--root`, `--repo`, `--color`, `NAME=VERSION` (ADR 0024 §6)
-* [ ] The repository `microos-progs`: CI builds a program per machine, signs
-      it and publishes the index with the artifacts; `make` in the kernel
-      tree keeps only the programs of the tests. The installer and the tool
-      that signs an index are here; the repository is a tree of its own and
-      the next pass
+* [x] The repository `microos-progs`: a public tree with a signed index at
+      <https://turbososiska304.github.io/microos-progs/>, the key
+      `microos-progs.pub` and the artifacts the index names; the kernel tree
+      keeps only the programs its tests and its `bin` need. The CI of the
+      repository and the packages of the programs with their licenses are
+      the next pass ([debts.md](debts.md))
 * [x] Tests: the fake transport of `components/net` serves a chunked body, a
       redirect and a dropped connection; the installer is tested on a
       temporary volume with a bad signature, a wrong machine and a downgrade;
@@ -514,8 +523,8 @@ to build is the screen a program can draw on.
       HTTPS (ADR 0024)
 * [x] K13: the BIOS ISO with the read-only root module (ADR 0026)
 * [x] `make x86-user`: the tar of the release is the machine that runs
-* [x] The ports of zlib, sbase, PCRE2 and Lua, and the 8 MiB ceiling of an
-      image
+* [x] The ports: zlib, sbase as the canonical `/bin`, PCRE2, Lua and bc/dc,
+      the 8 MiB ceiling of an image, and the repository `microos-progs`
 * [x] The shell fixes of `1.1.2` (a directory without a table, `.` and `..`
       as a path)
 * [ ] The gates of the release: the three sessions of 600 seconds, run after

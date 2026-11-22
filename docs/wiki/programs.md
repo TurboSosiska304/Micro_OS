@@ -137,38 +137,52 @@ program (`0755`), and no boot creates one:
 | `/bin/badptr` | a pointer outside the window is `EFAULT`, not a fault of ring 0 |
 | `/bin/signals` | a handler, `SIGTERM` ending a child, a wait cut by `SIGINT`, `SIG_IGN`, and the errors of `kill` |
 | `/bin/nx` | the protection of the pages: a fetch of its data, a write to its text and a call that hands its text to the kernel, each taken down, and a parent still alive |
-| `/bin/cat` | `open`, `read`, `write` on a file or descriptor 0, through the library of a program |
+| `/bin/cat` | sbase: `open`, `read`, `write` on a file or descriptor 0 |
 | `/bin/echo` | the vector of the arguments and `write`, the shortest useful program |
-| `/bin/ls` | a directory through `open(O_DIRECTORY)` and `readdir`; no path is the working directory |
-| `/bin/grep` | the lines of a source that hold a word (`-i`, `-v`), through `strstr` |
-| `/bin/head` | the first lines of a source (`-n N`), a block at a time |
+| `/bin/ls` | sbase: a directory through `open(O_DIRECTORY)` and `readdir`, `-l`, `-a`, `-R` and `--color`; no path is the working directory |
+| `/bin/grep` | sbase: a regular expression over the lines of a file (`-i`, `-v`, `-r`) |
+| `/bin/head` | sbase: the first lines of a source (`-n N`) |
+| `/bin/tail` | sbase: the last lines of a source (`-n N`) |
+| `/bin/wc` | sbase: the lines, words and bytes of a source (`-l`, `-w`, `-c`) or of descriptor 0 |
+| `/bin/sort` | sbase: the order of the lines (with `-n`) |
+| `/bin/find` | sbase: a walk of a tree with `-name` |
+| `/bin/xargs` | sbase: a command over the words of a pipe |
+| `/bin/sed` | sbase: a substitution, line by line |
 | `/bin/mkdir` | a directory through `mkdir`, one for every word of the line |
 | `/bin/pwd` | the directory of the task through `getcwd` |
 | `/bin/rm` | a name through `unlink`; `-r` walks a directory with `readdir` |
 | `/bin/spawn` | `execve` from a program, with an environment of its own |
-| `/bin/wc` | the lines, words and bytes of a source (`-l`, `-w`, `-c`) or of descriptor 0 |
 | `/bin/zcat` | a `.gz` of the VFS inflated by zlib 1.3.1 and written to the console or a file |
 | `/bin/lua` | the interpreter of Lua 5.4.7: `-e`, the script `/etc/hello.lua`, `io` and `os.time` |
 | `/bin/pcre2grep` | a regular expression of PCRE2 over a file or a stream |
-| `/bin/sb-cat`, `sb-grep`, `sb-head`, `sb-ls`, `sb-tail`, `sb-wc` | the tools of sbase (MIT) for a file, a directory and a line |
-| `/bin/sb-sort`, `sb-find`, `sb-xargs`, `sb-sed` | the tools of sbase for a tree and a stream: `sort -n`, `find -name`, a command over the words of a pipe, a substitution |
+| `/bin/bc` | the calculator of bc 7.2.0: `-e`, `-f`, a script, `-l` and `scale`, `ibase`/`obase` |
+| `/bin/dc` | the same engine in RPN: a stack, the operators and the printing command `p` |
 
-The first five talk to the kernel through `programs/prog.h`, because what they
-test is the raw door, the fault, the fork, the edge and the signals. The rest
-are ordinary C programs linked against `components/libc/user`
-([ADR 0016](../adr/0016-userland.md)); `zcat` is linked against zlib, `lua`
-against the interpreter of Lua, `pcre2grep` against PCRE2, and the ten `sb-*`
-tools against the tools of sbase - the ports of other people
-([`docs/porting-programs.md`](../porting-programs.md)). Every one of them
+The first six talk to the kernel through `programs/prog.h`, because what they
+test is the raw door, the fault, the fork, the edge and the signals. `echo`,
+`mkdir`, `pwd`, `rm` and `spawn` are ordinary C programs linked against
+`components/libc/user` ([ADR 0016](../adr/0016-userland.md)); `zcat`, `lua`,
+`pcre2grep` and `bc`/`dc` are linked against the four libraries of somebody
+else (zlib, Lua, PCRE2 and bc), and the ten commands of sbase are the
+commands of the machine under their canonical names
+([`docs/porting-programs.md`](../porting-programs.md), `third_party/sbase`). Every one of them
 reads descriptor 0
 when it is given no file (or `-`); `execve` carries the table of the caller, so
 a redirect or a pipe of the shell fills it (`cat < file`, `ls /bin | wc -l`,
 [ADR 0017](../adr/0017-shell-pipelines.md)). A program at the prompt with no
 redirect still has no descriptor 0 of the console.
 
-The boot then asks for `/bin/hello` with `ksys_execve()`: the stat, the check
-of the mode, the read through the VFS, the parse and the entry are the ones of
-the call and not a copy of them. The shell runs the same file with `exec`.
+The shell looks a bare name in `PATH` **before** its own table for the ten
+commands: `ls /etc` at the prompt is `/bin/ls`, the same file
+`exec /bin/ls /etc` runs. The command of the shell is the fallback of a
+machine without programs (the simulator) or a file that is not there (the
+board). What the shell keeps for itself is the state and the special
+commands: `cd`, `path`, `df`, `mount`, `fsck`, `stat`, `write`, `mkdir`,
+`rm`, `tree`, `kill` and `config`. The small `ls`, `cat`, `grep`, `wc` and
+`head` of ADR 0016 are not built for this port any more, and `/bin/ls` is
+the `ls` of a Unix-like system: `-l`, `-a`, `-R`, `--color[=always|never|auto]`
+(a directory in blue and an executable in green; `auto` is off, because the
+shell has no terminal to ask).
 
 The volume also carries `/etc/greeting.gz`, the fixture of `zcat`: a gzip
 stream of a fixed text, written by `tools/x86_image.py` with `mtime` from
@@ -176,12 +190,15 @@ stream of a fixed text, written by `tools/x86_image.py` with `mtime` from
 write the same bytes. `zcat -o FILE` inflates it into a file of MicroFS and
 `zcat -t` checks it; the smoke tests compare the count and the text of the
 inflated bytes. `/etc/hello.lua` is the first script of the machine, read by
-the interpreter out of the volume, and `/etc/licenses/zlib`,
-`/etc/licenses/lua` and the license of PCRE2 travel beside the programs that
-carry the libraries; `docs/licensing.md` has the rows. The ten tools of sbase
-are built **beside** the programs of the tree and not in place of them:
-`/bin/sb-ls` is the `ls` of a Unix-like system (`-l`, `-a`, `-R`, the owner
-of the file), while `/bin/ls` stays the small listing the smoke test reads.
+the interpreter out of the volume; `/etc/bc.bc` and `/etc/dc.dc` are the
+scripts of the calculator, and `/etc/licenses/zlib`, `/etc/licenses/lua`,
+`/etc/licenses/pcre2`, `/etc/licenses/sbase` and `/etc/licenses/bc` travel
+beside the programs that carry the libraries; `docs/licensing.md` has the
+rows.
+
+The boot then asks for `/bin/hello` with `ksys_execve()`: the stat, the check
+of the mode, the read through the VFS, the parse and the entry are the ones of
+the call and not a copy of them. The shell runs the same file with `exec`.
 
 ## The board: Xtensa code without an MMU
 

@@ -14,11 +14,14 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 The release of the machine a person can see and feed: x86-64 gets a real
 screen, a stream and an installer of programs, a bootable ISO and a tar that
-is the whole machine; the programs of other people arrive (zlib, sbase,
-PCRE2 and Lua). The shell fixes of `1.1.2` are in this release, and the board
-is the compatibility port of ADR 0018: it builds, passes its device test and
-receives no TLS and no second core. Many cores are `1.3.0`, not this release.
-The notes are in [`docs/releases/1.2.md`](docs/releases/1.2.md).
+is the whole machine; the commands of other people arrive as the canonical
+`/bin` (sbase), with zlib, PCRE2, Lua and the calculators bc/dc, and the
+repository `microos-progs` publishes them with a signed index. The shell
+fixes of `1.1.2` are in this release, and the board is the compatibility
+port of ADR 0018: it builds, passes its device test and receives no TLS and
+no second core. Many cores and the ports that need more than the installer
+can carry - SQLite, zstd, `file`/libmagic and awk - are `1.3.0`, not this
+release. The notes are in [`docs/releases/1.2.md`](docs/releases/1.2.md).
 
 ### Added
 
@@ -80,13 +83,30 @@ The notes are in [`docs/releases/1.2.md`](docs/releases/1.2.md).
   8-bit interpreter without JIT and Unicode, built from `third_party/pcre2`.
   The engine asks for the ASCII classes of `<ctype.h>`, which the library of
   a program gained; its license travels in `/etc/licenses/pcre2`.
-- The ten tools of sbase (MIT) beside the programs of the tree:
-  `/bin/sb-cat`, `sb-grep`, `sb-head`, `sb-ls`, `sb-tail`, `sb-wc`,
-  `sb-sort`, `sb-find`, `sb-xargs` and `sb-sed`. They are built beside the
-  programs of ADR 0016 and keep their names, so the sentences an error prints
-  stay a contract of the smoke test.
+- The ten tools of sbase (MIT) are the commands of `/bin` under their own
+  names - `cat`, `grep`, `head`, `ls`, `tail`, `wc`, `sort`, `find`, `xargs`
+  and `sed` - in place of the small `ls`, `cat`, `grep`, `wc` and `head` of
+  ADR 0016; the state and special commands (`cd`, `path`, `df`, `mount`,
+  `fsck`, `stat`, `write`, `mkdir`, `rm`, `tree`, `kill`, `config`) stay in
+  the shell. The shell looks a bare name in `PATH` before its own table, so
+  `ls /etc` is `/bin/ls`; the simulator and the board fall back to the
+  command of the shell. `ls --color[=always|never|auto]` paints a directory
+  blue and an executable green, and the serial copy stays plain.
+- `bc` and `dc` 7.2.0 (BSD-2-Clause) as `/bin/bc` and `/bin/dc`, the same
+  115,440-byte image entered by its name: arbitrary-precision arithmetic
+  with `scale`, `ibase`/`obase` and the math library of `-l` (`2^100` is a
+  31-digit number, and `4*a(1)` at `scale=10` is `3.1415926532`, the answer
+  of GNU bc). The image carries `/etc/bc.bc`, `/etc/dc.dc` and
+  `/etc/licenses/bc`; the library of a program gained `strdup` and
+  `srand`/`rand`, and the host test is `tests/cases/test_bc.c`.
+- `microos-progs`, the public repository of the programs, with a signed
+  index at <https://turbososiska304.github.io/microos-progs/>: the index and
+  every `.mox` carry the Ed25519 signature of the project, the key is
+  `microos-progs.pub` (and `/etc/pkg/keys/microos-progs.pub`), and a machine
+  adds it with `pkg repo add` and installs from it with `pkg -S`.
 - `make x86-disk-smoke` grew to the programs of the volume: the interpreter
-  of Lua and its script run in the first boot and after the reset.
+  of Lua and its script, the calculator and the commands of sbase run in the
+  first boot and after the reset.
 
 ### Changed
 

@@ -66,16 +66,28 @@ build-x86-net/microos_sign verify-file --pub signing.pub --sig hello.mox.sig hel
 ## The key of a repository
 
 The key is `/etc/pkg/keys/<repo>.pub`, thirty-two bytes in hexadecimal (the
-same text `microos_sign pubkey` writes). When the file is not there, the key
-of the image is the key of the repository: the release signs the kernel and
-the index with the same key, and a machine that boots an image of the project
+same text `microos_sign pubkey` writes). The key of the project is
+`microos-progs.pub`, and the file of a machine is
+`/etc/pkg/keys/microos-progs.pub`. When the file is not there, the key of the
+image is the key of the repository: the release signs the kernel and the
+index with the same key, and a machine that boots an image of the project
 trusts the programs of the project without a second file to copy. A host build
 has no image and therefore no built-in key; its tests write theirs.
 
+The repository of the project is **microos-progs**, a public tree with the
+signed index at <https://turbososiska304.github.io/microos-progs/>:
+
 ```text
-microos> pkg repo add http://10.0.2.2:8000/
-:: repository microos-progs is http://10.0.2.2:8000/
+microos> pkg repo add https://turbososiska304.github.io/microos-progs/
+:: repository microos-progs is https://turbososiska304.github.io/microos-progs/
+microos> ntp 10.0.2.2:123
+microos> pkg -Sy
+microos> pkg -S hello
 ```
+
+A local mirror is the same command with its URL; the signature is what makes
+the program trusted, and the test suite serves its own repository on
+`http://10.0.2.2:8000/`, which is the example below.
 
 `pkg repo add` writes a line `<name> <url>` into `/etc/pkg.conf` (the name is
 `microos-progs`, or `--repo NAME`).

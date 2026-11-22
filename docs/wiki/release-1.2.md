@@ -67,24 +67,43 @@ The board has no TLS and no installer: it is the compatibility port of ADR
 
 ## Programs from other people
 
-The first ports of programs that are not ours are in the image, with their
-licenses in `/etc/licenses`:
+The ports of programs that are not ours are the commands of the machine, with
+their licenses in `/etc/licenses`:
 
 | Program | What it is |
 |---|---|
 | `/bin/zcat` | zlib 1.3.1: a `.gz` of the volume inflated to the console or a file |
-| `/bin/sb-cat`, `sb-grep`, `sb-head`, `sb-ls`, `sb-tail`, `sb-wc` | the tools of sbase for a file, a directory and a line |
-| `/bin/sb-sort`, `sb-find`, `sb-xargs`, `sb-sed` | the tools of sbase for a tree and a stream |
+| `/bin/cat`, `grep`, `head`, `ls`, `tail`, `wc`, `sort`, `find`, `xargs`, `sed` | sbase (MIT), the commands under their canonical names |
 | `/bin/pcre2grep` | PCRE2 10.42 (BSD-3-Clause WITH PCRE2-exception): a regular expression of a library |
 | `/bin/lua` | the interpreter of Lua 5.4.7, with the script `/etc/hello.lua` |
+| `/bin/bc`, `/bin/dc` | bc 7.2.0 (BSD-2-Clause): an arbitrary-precision calculator and its RPN |
 
-The ten `sb-*` names are beside the programs of the tree and not in place of
-them. A program may now be an image of up to **8 MiB**, read in pieces of 64
-KiB: the interpreter of Lua is the first one past the old 64 KiB edge, and a
-file past the ceiling is `E2BIG` before a byte of it is read. The recipe for
-the next port is [`docs/porting-programs.md`](../porting-programs.md), and
+The ten tools of sbase replace the small `ls`, `cat`, `grep`, `wc` and `head`
+of ADR 0016; what the shell keeps is the state and the special commands (`cd`,
+`path`, `df`, `mount`, `fsck`, `stat`, `write`, `mkdir`, `rm`, `tree`, `kill`,
+`config`). The shell looks a bare name in `PATH` first, so `ls /etc` is the
+program of the disk; `ls --color` paints a directory blue and an executable
+green.
+
+`bc` and `dc` are the same 115,440-byte image entered by its name: `bc -e
+2^100` is the whole 31-digit power, and `scale=10; 4*a(1)` under `bc -l` is
+`3.1415926532`, the answer of GNU bc. A program may now be an image of up to
+**8 MiB**, read in pieces of 64 KiB: the interpreter of Lua is the first one
+past the old 64 KiB edge, and a file past the ceiling is `E2BIG` before a byte
+of it is read. The recipe for the next port is
+[`docs/porting-programs.md`](../porting-programs.md), and
 [programs.md](programs.md) has the program of `/bin` and the library of a
 program.
+
+The programs are published in **microos-progs**, a public repository with a
+signed index at <https://turbososiska304.github.io/microos-progs/>. Its key is
+`microos-progs.pub` (`/etc/pkg/keys/microos-progs.pub`), and a machine adds it
+with `pkg repo add https://turbososiska304.github.io/microos-progs/` and
+installs from it with `pkg -S`; [pkg.md](pkg.md) has the flags.
+
+Not in this release, and the first of `1.3.0`: SQLite (its SDK, and a package
+above the 1 MiB `PKG_PACKAGE_MAX`), zstd, `file`/libmagic and awk (branches
+still in progress).
 
 ## An ISO and a tar
 
@@ -102,7 +121,9 @@ the disk of `/bin` and `/etc` and the network of QEMU. The commands are in
 ## What 1.2 does not do
 
 Many cores are **1.3.0**: the application processors of x86-64 are still not
-started (ADR 0012). There is no TLS on the board, no UEFI and no hybrid or
+started (ADR 0012), and so are SQLite, zstd, `file`/libmagic and awk (the
+first needs its SDK and a package above `PKG_PACKAGE_MAX`, the others wait
+for their merge). There is no TLS on the board, no UEFI and no hybrid or
 persistent ISO, no 80x50 text mode, no directory beyond the 4 KiB of names of
 MicroFS, no `xargs -P`, and `time()` of a program is still the uptime and not
 the wall clock. The list, with its reasons, is in
