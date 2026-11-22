@@ -678,6 +678,34 @@ static k_ssize_t sys_mkdir(ksys_arg_t path, ksys_arg_t a1, ksys_arg_t a2, ksys_a
     return vfs_mkdir((const char *)(uintptr_t)path);
 }
 
+/*
+ * The rename of the ABI (ADR 0024 §5). Two paths of one filesystem; the
+ * volume answers whether it can be atomic, and a caller of the installer
+ * reads KERR_NOTSUP as "the window is not closed".
+ */
+static k_ssize_t sys_rename(ksys_arg_t from, ksys_arg_t to, ksys_arg_t a2, ksys_arg_t a3,
+                            ksys_arg_t a4, ksys_arg_t a5)
+{
+    int rc;
+
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    rc = path_check((const char *)(uintptr_t)from);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = path_check((const char *)(uintptr_t)to);
+    if (rc != 0) {
+        return rc;
+    }
+
+    return vfs_rename((const char *)(uintptr_t)from, (const char *)(uintptr_t)to);
+}
+
 static k_ssize_t sys_readdir(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys_arg_t a3,
                              ksys_arg_t a4, ksys_arg_t a5)
 {
@@ -1864,6 +1892,7 @@ void ksys_init(void)
     ksys_register(KSYS_SIGRETURN, "sigreturn", sys_sigreturn);
     ksys_register(KSYS_GETLIMIT, "getlimit", sys_getlimit);
     ksys_register(KSYS_SETLIMIT, "setlimit", sys_setlimit);
+    ksys_register(KSYS_RENAME, "rename", sys_rename);
 }
 
 /* --- the wrappers --- */
@@ -1915,6 +1944,12 @@ int ksys_unlink(const char *path)
 int ksys_mkdir(const char *path)
 {
     return (int)ksys_call(KSYS_MKDIR, (ksys_arg_t)(uintptr_t)path, 0, 0, 0, 0, 0);
+}
+
+int ksys_rename(const char *from, const char *to)
+{
+    return (int)ksys_call(KSYS_RENAME, (ksys_arg_t)(uintptr_t)from, (ksys_arg_t)(uintptr_t)to, 0, 0,
+                          0, 0);
 }
 
 k_ssize_t ksys_readdir(int fd, void *buf, k_size_t count)
