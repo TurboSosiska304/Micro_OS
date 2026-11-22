@@ -217,6 +217,15 @@ k_u64_t port_x86_64_tss_rsp0(void);
  * program gets a copy with the user window replaced (ADR 0007, NX and W^X).
  */
 void port_x86_64_paging_init(void);
+
+/*
+ * The protection the map keeps in a register of the core: CR0.WP, which makes
+ * the kernel honour the write bit of its own tables. The boot calls it for
+ * itself inside port_x86_64_paging_init(); an application processor calls it
+ * on its way up, because the register is per core.
+ */
+void port_x86_64_paging_init_cpu(void);
+
 k_u64_t port_x86_64_kernel_cr3(void);
 
 /*

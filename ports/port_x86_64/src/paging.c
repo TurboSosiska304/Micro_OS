@@ -472,7 +472,6 @@ static void kernel_image_map(void)
 void port_x86_64_paging_init(void)
 {
     k_u32_t index;
-    k_u64_t cr0;
 
     /*
      * The identity map of the first gigabyte. The heap and the physical arena
@@ -527,13 +526,32 @@ void port_x86_64_paging_init(void)
     write_cr3(page_phys(g_kernel_pml4));
 
     /*
-     * The kernel has to honour the write bit of its own tables. A system
-     * call writes the memory of the program (the status of waitpid, the
-     * buffer of a read), and a page that a fork made read-only has to fault
-     * in ring 0 as well, or the kernel would write into the frame the child
-     * is still reading. With WP set the page fault handler sees the write
-     * and copies the page, exactly as it does for a write of the program.
+     * The kernel has to honour the write bit of its own tables; CR0 is a
+     * register of the core, so every core makes that promise for itself
+     * (port_x86_64_paging_init_cpu(), below).
      */
+    port_x86_64_paging_init_cpu();
+}
+
+/*
+ * The part of the map that is a register of one core: CR0.WP. A system call
+ * writes the memory of the program (the status of waitpid, the buffer of a
+ * read), and a page that a fork made read-only has to fault in ring 0 as
+ * well, or the kernel would write into the frame the child is still reading.
+ * With WP set the page fault handler sees the write and copies the page,
+ * exactly as it does for a write of the program.
+ *
+ * The boot calls this for itself through port_x86_64_paging_init(); an
+ * application processor calls it on its way up. A core that skipped it would
+ * run every kernel copy-to-user without the check, and a program's text page
+ * would take the write of a read() instead of going down with the fault that
+ * follows it (the third fault of programs/nx.c, measured as an answer that
+ * depended on the core).
+ */
+void port_x86_64_paging_init_cpu(void)
+{
+    k_u64_t cr0;
+
     __asm__ volatile("movq %%cr0, %0" : "=r"(cr0));
     cr0 |= (k_u64_t)1u << 16; /* CR0.WP */
     __asm__ volatile("movq %0, %%cr0" : : "r"(cr0) : "memory");

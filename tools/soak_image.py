@@ -38,7 +38,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # image of this tree. The loop below moves it to the exact block.
 FILLER_START = 6_900_000
 FILLER_STEP = 4096
-FILLER_TRIES = 6
+FILLER_TRIES = 12
 
 MARKER = ".full"
 
@@ -94,12 +94,19 @@ def build_full_image(
 
         if rc != 0:
             # The filler did not fit: the volume is smaller than the guess.
-            candidate -= FILLER_STEP
+            # The step is a fraction of the guess and not one block: a build
+            # with a larger set of programs leaves a megabyte less than the
+            # one the last constant was measured on, and a walk down by 4 KiB
+            # would spend every attempt in the same failed neighbourhood.
+            removed = max(FILLER_STEP, candidate // 32)
+            candidate -= removed
             if verbose:
                 print(
-                    f"soak-image: {candidate + FILLER_STEP} bytes did not fit, trying {candidate}",
+                    f"soak-image: {candidate + removed} bytes did not fit, trying {candidate}",
                     file=sys.stderr,
                 )
+            if candidate <= 0:
+                break
             continue
 
         free = free_blocks(build, image, timeout)

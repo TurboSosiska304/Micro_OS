@@ -500,6 +500,10 @@ SOAK_IMAGE   ?= $(SOAK_BUILD)/soak.img
 SOAK_MINUTES ?= 10
 SOAK_ITERATIONS ?=
 SOAK_ARGS    ?=
+# The image of the two-core session is its own: the programs are the current
+# build of `x86-disk` (the kernel is the SMP one, the images of the programs
+# do not depend on it) and the volume is filled for the session alone.
+SOAK_SMP_IMAGE ?= build-x86-smp/soak.img
 
 # The image of the session has no free block (tools/soak_image.py): the
 # ENOSPC of a full volume is part of the load. The tool keeps the image
@@ -520,10 +524,12 @@ soak: soak-image
 # moving, the queues consistent and no exception in any answer. The image is
 # made from this build (the programs are the same, the kernel is not), and it
 # is the full volume of `soak-image` either way.
-soak-smp: x86-smp-build build
-	@mkdir -p $(dir $(SOAK_IMAGE))
-	python3 tools/soak.py --build $(X86_SMP_BUILD) --image $(SOAK_IMAGE) \
-		--mkfs $(X86_MKFS) --minutes $(SOAK_MINUTES) --smp $(SOAK_ARGS)
+soak-smp: x86-smp-build x86-disk
+	rm -f $(SOAK_SMP_IMAGE) $(SOAK_SMP_IMAGE).full
+	python3 tools/soak_image.py --build $(X86_BUILD) --image $(SOAK_SMP_IMAGE) \
+		--mkfs $(X86_MKFS)
+	python3 tools/soak.py --build $(X86_SMP_BUILD) --image $(SOAK_SMP_IMAGE) \
+		--mkfs $(X86_MKFS) --minutes $(SOAK_MINUTES) --smp --no-image $(SOAK_ARGS)
 
 # The other half of the same ten minutes: the portable kernel over the host
 # port, several tasks at once on two cores (ADR 0012, KERNEL_SMP and
@@ -533,6 +539,10 @@ soak-smp: x86-smp-build build
 # the one-core kernel beside it.
 HOST_SOAK_MINUTES ?= 10
 HOST_SOAK_ARGS    ?=
+# The image of the two-core session is its own: the programs are the current
+# build of `x86-disk` (the kernel is the SMP one, the images of the programs
+# do not depend on it) and the volume is filled for the session alone.
+SOAK_SMP_IMAGE ?= build-x86-smp/soak.img
 
 soak-host:
 	cmake -B $(SMP_DIR) -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug -DKERNEL_SMP=ON

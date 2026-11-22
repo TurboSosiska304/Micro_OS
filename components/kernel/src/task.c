@@ -523,9 +523,18 @@ void task_exit(int code)
          */
         kfile_table_close(self);
 
-        k_sched_task_terminated(self);
-
+        /*
+         * The line of the end goes out before the state that lets the parent
+         * continue. `k_sched_task_terminated()` publishes ZOMBIE, and a parent
+         * that waits for this task may reap it and print the next prompt at
+         * once - on a machine of two cores, from another processor. The exit
+         * of a task would then appear after the prompt of the shell that
+         * started it, which is a console that shows a command finishing after
+         * the next one began. A log line is cheap next to that.
+         */
         kinfo("task: '%s' (pid %u) exited with code %d", name, (unsigned)pid, code);
+
+        k_sched_task_terminated(self);
     }
 
     k_port_task_exit(code);

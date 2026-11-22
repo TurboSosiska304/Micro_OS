@@ -365,6 +365,15 @@ void port_x86_64_ap_entry(k_u32_t cpu)
 
     port_x86_64_interrupts_load();
 
+    /*
+     * CR0.WP is a register of the core and the boot set it only on its own:
+     * without it a copy of the kernel into a read-only page of a program does
+     * not fault, the copy-on-write of the page never runs, and the program
+     * keeps its text executable after a call wrote into it (the third fault
+     * of /bin/nx, which answers differently on a core that skipped this).
+     */
+    port_x86_64_paging_init_cpu();
+
     __atomic_store_n(&g_reached[cpu], true, __ATOMIC_RELEASE);
 
     /*

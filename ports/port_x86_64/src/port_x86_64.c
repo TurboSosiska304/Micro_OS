@@ -180,24 +180,27 @@ static void com1_write(const char *data, k_size_t len)
  */
 void k_port_write(const char *data, k_size_t len)
 {
-    k_u64_t flags;
-
     if (data == NULL) {
         return;
     }
 
     /*
-     * The console is one resource and a line is written byte by byte to the
-     * UART: a tick in the middle of it would put the bytes of another task
-     * between two of these, and a transcript would read a line that was
-     * never printed. The section is the whole call, and it is short.
+     * The console is one resource of the machine and a line is written byte
+     * by byte to the UART: a tick in the middle of it would put the bytes of
+     * another task between two of these, and a transcript would read a line
+     * that was never printed. The interrupts of this core are not enough:
+     * with two cores the other one writes between two bytes of this call
+     * (the split line of `PROGRAM: write far 14` was exactly that), so the
+     * section is the whole call and it is the big kernel lock. The lock of
+     * the port is recursive per core, which is what lets the console be
+     * written from a section the caller already holds and from an exception.
      */
-    flags = port_save_flags_and_cli();
+    k_port_enter_critical();
 
     port_x86_64_console_write(data, len);
     com1_write(data, len);
 
-    port_restore_flags(flags);
+    k_port_exit_critical();
 }
 
 int k_port_console_readline(char *buf, k_size_t size)
