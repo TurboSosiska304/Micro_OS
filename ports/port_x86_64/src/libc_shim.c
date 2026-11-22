@@ -257,6 +257,7 @@ static int format(struct sink *s, const char *fmt, va_list ap)
         }
         case 'd':
         case 'u':
+        case 'o':
         case 'x':
         case 'X': {
             char number[24];
@@ -275,6 +276,8 @@ static int format(struct sink *s, const char *fmt, va_list ap)
                 sink_unsigned(&scratch, (unsigned long long)value, 10, false);
             } else if (*fmt == 'u') {
                 sink_unsigned(&scratch, va_arg(ap, unsigned int), 10, false);
+            } else if (*fmt == 'o') {
+                sink_unsigned(&scratch, va_arg(ap, unsigned int), 8, false);
             } else {
                 sink_unsigned(&scratch, va_arg(ap, unsigned int), 16, *fmt == 'X');
             }
