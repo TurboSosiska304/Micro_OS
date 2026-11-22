@@ -200,16 +200,14 @@ static void stack_build(struct port_task *pt, k_u64_t frame_rsp, k_port_task_ent
 }
 
 /*
- * Give the CPU to another context. The caller has chosen the task and holds
- * the interrupts off: a tick between the choice and this commit would be
- * free to choose the same task first, and then two contexts would claim one
- * task and one saved stack pointer.
+ * Give the CPU to another context. The caller has already chosen the task
+ * and claimed it with k_sched_claim_next(): the scheduler marked it RUNNING
+ * on this core under its lock, so no other core can take it between that
+ * choice and this jump. Nothing of the kernel bookkeeping is left to do here;
+ * the interrupts are off for the length of the switch.
  */
 static void commit_switch(struct port_task *prev, struct port_task *next)
 {
-    /* The kernel bookkeeping is finished before the point of no return. */
-    k_sched_task_running(next->task);
-
     g_current = next;
 
     /*
@@ -238,11 +236,13 @@ static void commit_switch(struct port_task *prev, struct port_task *next)
 /*
  * Choose the next task and switch to it, if the choice is a different task.
  *
- * k_sched_pick_next() looks at the run queues without taking anything out of
- * them; a running task leaves its queue when its quantum expires or when it
- * sleeps or blocks. That is why a choice equal to the running task simply
- * means "keep going", and why the scheduler of the kernel and this function
- * agree about who is in the queue at every moment.
+ * k_sched_claim_next() chooses and claims in one critical section: the task
+ * it returns is already RUNNING on this core and out of the ready set, so the
+ * choice cannot be repeated by another core in the window before the switch.
+ * A choice equal to the running task simply means "keep going"; the task may
+ * leave that queue when its quantum expires or when it sleeps or blocks,
+ * which is why the scheduler and this function agree about who is in the
+ * queue at every moment.
  */
 static void schedule(void)
 {
@@ -254,7 +254,7 @@ static void schedule(void)
     flags = port_save_flags_and_cli();
 
     prev = g_current;
-    next = k_sched_pick_next();
+    next = k_sched_claim_next();
 
     if (next == NULL) {
         /* Nothing is runnable: the caller waits for a tick or an unblock. */
@@ -263,7 +263,7 @@ static void schedule(void)
     }
 
     if (prev != NULL && next == prev->task) {
-        k_sched_task_running(next);
+        /* The claim of the task that is already running here: keep going. */
         port_restore_flags(flags);
         release_pending();
         return;
@@ -271,6 +271,8 @@ static void schedule(void)
 
     next_pt = port_task_of(next);
     if (next_pt == NULL) {
+        /* k_sched_claim_next() refuses a task without a context, so this is
+         * a record that lost its context afterwards: stay where we are. */
         port_restore_flags(flags);
         kerror("x86_64: the task '%s' has no context", next->name);
         return;
@@ -644,7 +646,7 @@ void k_port_task_exit(int code)
     }
 
     flags = port_save_flags_and_cli();
-    next = k_sched_pick_next();
+    next = k_sched_claim_next();
     next_pt = port_task_of(next);
 
     if (next_pt != NULL && next_pt != dead) {
@@ -769,12 +771,12 @@ void port_x86_64_task_tick(void)
         return;
     }
 
-    next_pt = port_task_of(k_sched_pick_next());
+    next_pt = port_task_of(k_sched_claim_next());
 
     if (next_pt == NULL) {
         /*
-         * Nothing is runnable: the task keeps whatever it is doing — it may
-         * have blocked itself — and the next unblock or tick looks again.
+         * Nothing is runnable: the task keeps whatever it is doing - it may
+         * have blocked itself - and the next unblock or tick looks again.
          */
         return;
     }
@@ -787,7 +789,6 @@ void port_x86_64_task_tick(void)
 
     if (next_pt == self_pt) {
         /* The choice is the task itself: it was and stays the one to run. */
-        k_sched_task_running(self);
         release_pending();
         return;
     }

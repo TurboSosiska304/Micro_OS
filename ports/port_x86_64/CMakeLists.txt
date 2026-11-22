@@ -464,6 +464,10 @@ add_executable(microos64
     src/gdt.c
     src/paging.c
     src/cpu.c
+    src/smp.c
+    src/lapic.c
+    src/ipi.c
+    src/ioapic.c
     src/port_exec.c
     src/port_x86_64_task.c
     src/blockdev_ram.c

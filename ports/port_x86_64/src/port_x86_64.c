@@ -669,6 +669,11 @@ void port_x86_64_unexpected(void)
     k_port_halt();
 }
 
+void port_x86_64_interrupts_load(void)
+{
+    __asm__ volatile("lidt %0" : : "m"(g_idt_pointer));
+}
+
 void port_x86_64_interrupts_init(void)
 {
     k_u32_t vector;
@@ -704,7 +709,7 @@ void port_x86_64_interrupts_init(void)
 
     g_idt_pointer.limit = (k_u16_t)(sizeof(g_idt) - 1u);
     g_idt_pointer.base = (k_u64_t)(uintptr_t)g_idt;
-    __asm__ volatile("lidt %0" : : "m"(g_idt_pointer));
+    port_x86_64_interrupts_load();
 
     /* The controller of the keyboard is armed before its line is opened: a
      * key that arrives into a controller nobody prepared is a key lost. */
@@ -1581,6 +1586,17 @@ void port_x86_64_init(k_u64_t multiboot_info)
     /* Last, because it is the point of no return: from here the timer fires
      * every millisecond and the kernel has to be able to take it. */
     port_x86_64_interrupts_init();
+
+    /*
+     * The application processors (ADR 0012). The tables of the machine and
+     * the interrupts now exist, so a core can be started and reach C; the
+     * scheduler does not exist yet, so the cores stop before it and kmain()
+     * releases them once kernel_boot() has made the array of the cores.
+     */
+    port_x86_64_smp_init();
+
+    g_info.cpu_started = port_x86_64_cpu_started();
+    g_info.apic_base = port_x86_64_apic_base();
 }
 
 const struct port_x86_64_info *port_x86_64_info(void)
