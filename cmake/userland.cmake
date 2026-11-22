@@ -53,12 +53,16 @@ set(MICROOS_LIBC_USER_HEADERS
     "${MICROOS_LIBC_USER_DIR}/include/time.h"
     "${MICROOS_LIBC_USER_DIR}/include/unistd.h"
     "${MICROOS_LIBC_USER_DIR}/include/sys/types.h"
+    "${MICROOS_LIBC_USER_DIR}/include/sys/stat.h"
+    "${MICROOS_LIBC_USER_DIR}/include/dirent.h"
+    "${MICROOS_LIBC_USER_DIR}/include/libgen.h"
     # The two headers of the library that are not a part of its interface but
     # are included by a source of it: the state of a stream and the seam of
     # the formatter with the number with a point. They are named for the same
     # reason as the others: a custom command gets no depfile from CMake.
     "${MICROOS_LIBC_USER_DIR}/src/file_private.h"
     "${MICROOS_LIBC_USER_DIR}/src/format_float.h"
+    "${MICROOS_LIBC_USER_DIR}/src/ulibc_internal.h"
 )
 
 # A static library of the guest. The sources are the ones of the third-party

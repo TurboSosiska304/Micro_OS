@@ -82,16 +82,26 @@ long lseek(int fd, long offset, int whence);
  * number of bytes, not of entries, and has to be a whole number of them; the
  * answer is the number of bytes written or a negative error. The end of the
  * directory is an empty answer, not an error.
+ *
+ * The name is not the one POSIX gives this call: a program that includes
+ * `<dirent.h>` gets `opendir` and `readdir` over the batch, and this is the
+ * call under them (src/dirent.c).
  */
-long readdir(int fd, struct vfs_dirent *entries, size_t count);
+long ulibc_readdir(int fd, struct vfs_dirent *entries, size_t count);
 
 /*
  * The objects of the tree: the information of a path, a directory, a name
- * removed. `stat` answers 0 and fills the structure, `mkdir` and `unlink`
- * answer 0; a negative number is the error of the call.
+ * removed. `ulibc_stat_call` answers 0 and fills the record of the kernel,
+ * `mkdir` and `unlink` answer 0; a negative number is the error of the call.
+ *
+ * The record is the one of `struct vfs_stat`, and a portable source asks for
+ * `<sys/stat.h>` instead: `stat` there fills the POSIX structure, and this
+ * call keeps a name of its own so that the two live in one library. The mode
+ * of the second argument of `mkdir` is the one of POSIX and is ignored: the
+ * kernel gives a new directory the mode of the design.
  */
-int stat(const char *path, struct vfs_stat *info);
-int mkdir(const char *path);
+int ulibc_stat_call(const char *path, struct vfs_stat *info);
+int mkdir(const char *path, ...);
 int unlink(const char *path);
 
 /*
@@ -170,6 +180,13 @@ size_t strspn(const char *text, const char *accept);
 size_t strcspn(const char *text, const char *reject);
 char *strpbrk(const char *text, const char *accept);
 
+/*
+ * A copy of a word in the arena of the program: the length of the text plus
+ * the terminator, `malloc`ed and copied. NULL with `errno` when there is no
+ * room, which is the shape of POSIX.
+ */
+char *strdup(const char *text);
+
 /* --- the environment --- */
 
 /*
@@ -238,6 +255,15 @@ extern FILE *stdout;
 extern FILE *stderr;
 
 FILE *fopen(const char *path, const char *mode);
+/*
+ * A stream over a descriptor the caller opened, which is the shape a program
+ * of a Unix-like system uses when it wants the flags of `open` and the calls
+ * of a stream both: the CLI of zstd opens its output with the mode of the
+ * record and hands the descriptor here. The stream owns the descriptor and
+ * `fclose` closes it; the mode is accepted and changes nothing, because no
+ * file of this system translates a byte.
+ */
+FILE *fdopen(int fd, const char *mode);
 FILE *freopen(const char *path, const char *mode, FILE *stream);
 FILE *tmpfile(void);
 int fclose(FILE *stream);
@@ -247,6 +273,7 @@ int fgetc(FILE *stream);
 int getc(FILE *stream);
 int ungetc(int byte, FILE *stream);
 int fputc(int byte, FILE *stream);
+int getchar(void);
 char *fgets(char *buffer, int size, FILE *stream);
 int fputs(const char *text, FILE *stream);
 int feof(FILE *stream);
@@ -279,6 +306,7 @@ int setvbuf(FILE *stream, char *buffer, int mode, size_t size);
  * characters it was written with.
  */
 int printf(const char *format, ...);
+int perror(const char *text);
 int vprintf(const char *format, va_list args);
 int fprintf(FILE *stream, const char *format, ...);
 int vfprintf(FILE *stream, const char *format, va_list args);

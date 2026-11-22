@@ -81,6 +81,36 @@ FILE *fopen(const char *path, const char *mode)
     return stream;
 }
 
+/*
+ * A stream over a descriptor the caller opened. The stream owns the
+ * descriptor and `fclose` takes it: this is the call a program of a
+ * Unix-like system uses when it wants the flags of `open` (a mode of the
+ * record, an append, a file that already exists) and the calls of a stream
+ * both. The mode is accepted and changes nothing, like the one of `fopen`.
+ */
+FILE *fdopen(int fd, const char *mode)
+{
+    FILE *stream;
+
+    if (fd < 0 || mode == NULL) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    stream = (FILE *)malloc(sizeof(*stream));
+    if (stream == NULL) {
+        errno = ENOMEM;
+        return NULL;
+    }
+
+    stream->fd = fd;
+    stream->eof = 0;
+    stream->error = 0;
+    stream->pushback = -1;
+
+    return stream;
+}
+
 int fclose(FILE *stream)
 {
     int rc;
@@ -445,4 +475,34 @@ int setvbuf(FILE *stream, char *buffer, int mode, size_t size)
     (void)size;
 
     return 0;
+}
+
+/*
+ * The byte of the standard input, which is the call a program of a Unix-like
+ * system makes when it asks a question of a person (`zstd` asks whether to
+ * overwrite a file, and a script of this system never sees the question).
+ */
+int getchar(void)
+{
+    return fgetc(stdin);
+}
+
+/*
+ * The error of the last call with the word of the caller in front of it, on
+ * the descriptor of the errors. A program of a Unix-like system prints a
+ * failure this way (`zstd` says `perror("zstd:util")` where a line of a file
+ * could not be read); the text goes to the stream and the answer is 0, or EOF
+ * when the write failed.
+ */
+int perror(const char *text)
+{
+    int rc;
+
+    if (text != NULL && text[0] != '\0') {
+        rc = fprintf(stderr, "%s: %s\n", text, strerror(errno));
+    } else {
+        rc = fprintf(stderr, "%s\n", strerror(errno));
+    }
+
+    return (rc < 0) ? EOF : 0;
 }

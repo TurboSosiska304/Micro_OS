@@ -33,7 +33,10 @@ int main(int argc, char *const argv[], char *const envp[])
      */
     printf("PROGRAM: arch xtensa, no protection\n");
 
-    if (stat("/bin/hello", &info) != 0) {
+    /* The record of the ABI itself (`ulibc_stat_call`): the board has no
+     * `<sys/stat.h>` of a program with a POSIX structure, and the two numbers
+     * below are the ones of the `struct vfs_stat`. */
+    if (ulibc_stat_call("/bin/hello", &info) != 0) {
         printf("PROGRAM: stat /bin/hello failed\n");
         return 1;
     }

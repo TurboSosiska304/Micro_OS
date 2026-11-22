@@ -104,10 +104,18 @@ clock_t clock(void)
     return (clock_t)uptime();
 }
 
+/*
+ * The span of two moments as a double. The build of a program that does not
+ * compute in floating point (`zstd`) links this file for `time` and `clock`
+ * and carries neither this conversion nor the SSE register it returns in; the
+ * rule is the one of `src/format_float.c`.
+ */
+#ifdef ULIBC_WITH_FLOAT
 double difftime(time_t later, time_t earlier)
 {
     return (double)(later - earlier);
 }
+#endif /* ULIBC_WITH_FLOAT */
 
 struct tm *gmtime(const time_t *seconds)
 {

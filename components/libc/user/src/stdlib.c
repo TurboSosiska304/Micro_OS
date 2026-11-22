@@ -42,7 +42,12 @@ static int digit_of(int byte)
     return -1;
 }
 
-/* The powers of ten that a double holds exactly, for the scaling below. */
+/* The powers of ten that a double holds exactly, for the scaling below. A
+ * program that does not compute in floating point (`zstd`) links this file for
+ * `strtol`, `atoi`, `qsort` and `getenv` and carries neither the table nor the
+ * conversion, which is the rule of `src/format_float.c`: the arithmetic of a
+ * double lives in the build that defines ULIBC_WITH_FLOAT. */
+#ifdef ULIBC_WITH_FLOAT
 static const double g_pow10[] = {
     1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,  1e10, 1e11,
     1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22,
@@ -198,6 +203,8 @@ double atof(const char *text)
 {
     return strtod(text, NULL);
 }
+
+#endif /* ULIBC_WITH_FLOAT */
 
 /*
  * The whole numbers. The sign is read from the text and the digits are

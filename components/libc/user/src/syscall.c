@@ -26,6 +26,8 @@
 #include <signal.h>
 #include <stdint.h>
 
+#include "ulibc_internal.h"
+
 #ifdef MOX_ARCH_XTENSA
 /* The pointer _start was entered with (src/start.c). */
 extern void *g_mox_door;
@@ -74,6 +76,23 @@ static long syscall6(long number, long a0, long a1, long a2, long a3, long a4, l
 
     return rax;
 #endif /* MOX_ARCH_XTENSA */
+}
+
+/*
+ * The door and the shape of the answer, for the files of the library that are
+ * not a line of a wrapper each: `<sys/stat.h>` and `<dirent.h>` build their
+ * structures over the calls, and `src/stat.c` and `src/dirent.c` ask for the
+ * two here. The wrappers of this file keep their static names, so a program
+ * that never includes those headers pays nothing for them.
+ */
+long __ulibc_syscall6(long number, long a0, long a1, long a2, long a3, long a4, long a5)
+{
+    return syscall6(number, a0, a1, a2, a3, a4, a5);
+}
+
+long __ulibc_result(long result)
+{
+    return answer(result);
 }
 
 /* The flags of the library to the flags of the call. The two sets are not the
@@ -133,18 +152,29 @@ long lseek(int fd, long offset, int whence)
     return answer(syscall6(KSYS_LSEEK, fd, offset, whence, 0, 0, 0));
 }
 
-long readdir(int fd, struct vfs_dirent *entries, size_t count)
+/*
+ * The batch of a directory and the record of one object, as the filesystem
+ * speaks them. A portable source asks for `<dirent.h>` and `<sys/stat.h>`
+ * instead, and those are the two files beside this one; the raw call keeps a
+ * name of its own so that the two shapes can live in one library.
+ */
+long ulibc_readdir(int fd, struct vfs_dirent *entries, size_t count)
 {
     return answer(syscall6(KSYS_READDIR, fd, (long)(uintptr_t)entries, (long)count, 0, 0, 0));
 }
 
-int stat(const char *path, struct vfs_stat *info)
+int ulibc_stat_call(const char *path, struct vfs_stat *info)
 {
     return (int)answer(
         syscall6(KSYS_STAT, (long)(uintptr_t)path, (long)(uintptr_t)info, 0, 0, 0, 0));
 }
 
-int mkdir(const char *path)
+/*
+ * The mode of a new directory is the one of the design and POSIX passes it as
+ * a second argument: the call of this system does not take it, so it is read
+ * as a variadic argument and ignored, the way `open` ignores one.
+ */
+int mkdir(const char *path, ...)
 {
     return (int)answer(syscall6(KSYS_MKDIR, (long)(uintptr_t)path, 0, 0, 0, 0, 0));
 }

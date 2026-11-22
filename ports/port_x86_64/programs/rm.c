@@ -14,6 +14,9 @@
  */
 #include "ulibc.h"
 
+#include <errno.h>
+#include <sys/stat.h>
+
 #define RM_DEPTH 8
 #define RM_PATH_MAX 128
 
@@ -35,7 +38,7 @@ static int rm_children(const char *path, int depth)
             return 1;
         }
 
-        got = readdir(fd, &entry, sizeof(entry));
+        got = ulibc_readdir(fd, &entry, sizeof(entry));
         (void)close(fd);
 
         if (got < 0) {
@@ -64,16 +67,16 @@ static int rm_children(const char *path, int depth)
 
 static int rm_path(const char *path, int recursive, int depth)
 {
-    struct vfs_stat info;
+    struct stat info;
     int rc;
 
     rc = stat(path, &info);
-    if (rc < 0) {
-        printf("rm: %s: error %d\n", path, -rc);
+    if (rc != 0) {
+        printf("rm: %s: error %d\n", path, errno);
         return 1;
     }
 
-    if (info.type == 2) {
+    if (S_ISDIR(info.st_mode)) {
         if (!recursive) {
             printf("rm: %s: is a directory, use -r\n", path);
             return 1;
