@@ -852,6 +852,107 @@ static void test_fstab(void)
     teardown();
 }
 
+/*
+ * The rename (ADR 0024 §5): the atomic step of an install. The VFS asks the
+ * filesystem of the two paths, refuses a rename between two volumes, and the
+ * volume makes the object visible under the new name and no other.
+ */
+static void test_rename(void)
+{
+    static k_u8_t first_data[VFS_FILE_DATA_SIZE];
+    static k_u8_t second_data[VFS_FILE_DATA_SIZE];
+    struct vfs_file file;
+    char text[16];
+    int rc;
+
+    ktest_begin("vfs: rename moves a name inside one filesystem");
+
+    setup();
+
+    KT_CHECK_INT_EQ(vfs_mkdir("/bin"), 0);
+    KT_CHECK_INT_EQ(vfs_mkdir("/tmp"), 0);
+
+    rc = vfs_open("/bin/prog.new", VFS_O_RDWR | VFS_O_CREAT, &file, first_data);
+    KT_CHECK_INT_EQ(rc, 0);
+    if (rc == 0) {
+        KT_CHECK_INT_EQ(vfs_write(&file, "program", 7), 7);
+        KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    }
+
+    /* The name is not there until the rename makes it. */
+    KT_CHECK_INT_EQ(vfs_stat("/bin/prog", NULL), KERR_INVAL);
+    KT_CHECK_INT_EQ(vfs_rename("/bin/prog.new", "/bin/prog"), 0);
+    KT_CHECK_INT_EQ(vfs_stat("/bin/prog.new", &(struct vfs_stat){0}), KERR_NOENT);
+
+    memset(text, 0, sizeof(text));
+    rc = vfs_open("/bin/prog", VFS_O_RDONLY, &file, first_data);
+    KT_CHECK_INT_EQ(rc, 0);
+    if (rc == 0) {
+        KT_CHECK_INT_EQ(vfs_read(&file, text, sizeof(text)), 7);
+        KT_CHECK_STR_EQ(text, "program");
+        KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    }
+
+    /* A file that is already there is replaced; a file may move to another
+     * directory of the volume. */
+    rc = vfs_open("/bin/prog", VFS_O_RDWR | VFS_O_CREAT, &file, first_data);
+    KT_CHECK_INT_EQ(rc, 0);
+    if (rc == 0) {
+        KT_CHECK_INT_EQ(vfs_write(&file, "program", 7), 7);
+        KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    }
+
+    rc = vfs_open("/tmp/other", VFS_O_RDWR | VFS_O_CREAT, &file, second_data);
+    KT_CHECK_INT_EQ(rc, 0);
+    if (rc == 0) {
+        KT_CHECK_INT_EQ(vfs_write(&file, "second", 6), 6);
+        KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    }
+
+    KT_CHECK_INT_EQ(vfs_rename("/bin/prog", "/bin/other"), 0);
+
+    memset(text, 0, sizeof(text));
+    rc = vfs_open("/bin/other", VFS_O_RDONLY, &file, first_data);
+    KT_CHECK_INT_EQ(rc, 0);
+    if (rc == 0) {
+        KT_CHECK_INT_EQ(vfs_read(&file, text, sizeof(text)), 7);
+        KT_CHECK_STR_EQ(text, "program");
+        KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    }
+
+    KT_CHECK_INT_EQ(vfs_rename("/bin/other", "/tmp/other"), 0);
+
+    memset(text, 0, sizeof(text));
+    rc = vfs_open("/tmp/other", VFS_O_RDONLY, &file, second_data);
+    KT_CHECK_INT_EQ(rc, 0);
+    if (rc == 0) {
+        KT_CHECK_INT_EQ(vfs_read(&file, text, sizeof(text)), 7);
+        KT_CHECK_STR_EQ(text, "program");
+        KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    }
+
+    /* The source has to be there, and a directory moves only in its own
+     * parent. */
+    KT_CHECK_INT_EQ(vfs_rename("/bin/nothing", "/bin/x"), KERR_NOENT);
+    KT_CHECK_INT_EQ(vfs_mkdir("/bin/dir"), 0);
+    KT_CHECK_INT_EQ(vfs_rename("/bin/dir", "/tmp/dir"), KERR_NOTSUP);
+
+    /* A rename between two filesystems is not a copy. */
+    {
+        struct vfs_operations other;
+        static struct vfs_file no_file;
+
+        memset(&other, 0, sizeof(other));
+        (void)no_file;
+
+        KT_CHECK_INT_EQ(vfs_mount("/mnt", &other, NULL), 0);
+        KT_CHECK_INT_EQ(vfs_rename("/bin/x", "/mnt/x"), KERR_XDEV);
+        KT_CHECK_INT_EQ(vfs_umount("/mnt"), 0);
+    }
+
+    teardown();
+}
+
 void test_vfs(void)
 {
     test_mount();
@@ -866,5 +967,6 @@ void test_vfs(void)
     test_type_registry();
     test_mount_by_type();
     test_mount_errors();
+    test_rename();
     test_fstab();
 }

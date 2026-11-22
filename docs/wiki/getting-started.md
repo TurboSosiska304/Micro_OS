@@ -98,7 +98,7 @@ make x86-run-serial  # the same machine on the serial console (-nographic)
 make x86-smoke       # boot it and check the transcript, without a window
 ```
 
-The machine boots from the disk image: `/bin` (sixteen programs) and `/etc`
+The machine boots from the disk image: `/bin` (seventeen programs) and `/etc`
 are objects of a MicroFS volume that `make x86-disk` writes with the host
 tool `tools/mkfs_mfs.c`, and the boot mounts the volume and runs `/bin/hello`
 through `execve`. The tree is the tree of the other ports - `/bin`, `/etc`,

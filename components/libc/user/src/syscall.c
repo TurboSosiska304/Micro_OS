@@ -29,6 +29,20 @@
 extern void *g_mox_door;
 #endif
 
+/*
+ * A call answers a negative number and the library keeps its magnitude in
+ * `errno`: a portable library calls `read` and then reads `errno` without a
+ * second call, which is the shape zlib and the sockets of a program expect.
+ */
+static long answer(long result)
+{
+    if (result < 0) {
+        errno = (int)-result;
+    }
+
+    return result;
+}
+
 static long syscall6(long number, long a0, long a1, long a2, long a3, long a4, long a5)
 {
 #ifdef MOX_ARCH_XTENSA
@@ -94,70 +108,71 @@ int open(const char *path, int flags, ...)
 {
     /* The mode of POSIX is accepted and ignored, as in the library of the
      * kernel: a new file gets the mode of the design and chmod changes it. */
-    return (int)syscall6(KSYS_OPEN, (long)(uintptr_t)path, open_flags(flags), 0, 0, 0, 0);
+    return (int)answer(syscall6(KSYS_OPEN, (long)(uintptr_t)path, open_flags(flags), 0, 0, 0, 0));
 }
 
 int close(int fd)
 {
-    return (int)syscall6(KSYS_CLOSE, fd, 0, 0, 0, 0, 0);
+    return (int)answer(syscall6(KSYS_CLOSE, fd, 0, 0, 0, 0, 0));
 }
 
 long read(int fd, void *buf, size_t count)
 {
-    return syscall6(KSYS_READ, fd, (long)(uintptr_t)buf, (long)count, 0, 0, 0);
+    return answer(syscall6(KSYS_READ, fd, (long)(uintptr_t)buf, (long)count, 0, 0, 0));
 }
 
 long write(int fd, const void *buf, size_t count)
 {
-    return syscall6(KSYS_WRITE, fd, (long)(uintptr_t)buf, (long)count, 0, 0, 0);
+    return answer(syscall6(KSYS_WRITE, fd, (long)(uintptr_t)buf, (long)count, 0, 0, 0));
 }
 
 long lseek(int fd, long offset, int whence)
 {
-    return syscall6(KSYS_LSEEK, fd, offset, whence, 0, 0, 0);
+    return answer(syscall6(KSYS_LSEEK, fd, offset, whence, 0, 0, 0));
 }
 
 long readdir(int fd, struct vfs_dirent *entries, size_t count)
 {
-    return syscall6(KSYS_READDIR, fd, (long)(uintptr_t)entries, (long)count, 0, 0, 0);
+    return answer(syscall6(KSYS_READDIR, fd, (long)(uintptr_t)entries, (long)count, 0, 0, 0));
 }
 
 int stat(const char *path, struct vfs_stat *info)
 {
-    return (int)syscall6(KSYS_STAT, (long)(uintptr_t)path, (long)(uintptr_t)info, 0, 0, 0, 0);
+    return (int)answer(
+        syscall6(KSYS_STAT, (long)(uintptr_t)path, (long)(uintptr_t)info, 0, 0, 0, 0));
 }
 
 int mkdir(const char *path)
 {
-    return (int)syscall6(KSYS_MKDIR, (long)(uintptr_t)path, 0, 0, 0, 0, 0);
+    return (int)answer(syscall6(KSYS_MKDIR, (long)(uintptr_t)path, 0, 0, 0, 0, 0));
 }
 
 int unlink(const char *path)
 {
-    return (int)syscall6(KSYS_UNLINK, (long)(uintptr_t)path, 0, 0, 0, 0, 0);
+    return (int)answer(syscall6(KSYS_UNLINK, (long)(uintptr_t)path, 0, 0, 0, 0, 0));
 }
 
 char *getcwd(char *buf, size_t size)
 {
-    long rc = syscall6(KSYS_GETCWD, (long)(uintptr_t)buf, (long)size, 0, 0, 0, 0);
+    long rc = answer(syscall6(KSYS_GETCWD, (long)(uintptr_t)buf, (long)size, 0, 0, 0, 0));
 
     return (rc < 0) ? NULL : buf;
 }
 
 int getpid(void)
 {
-    return (int)syscall6(KSYS_GETPID, 0, 0, 0, 0, 0, 0);
+    return (int)answer(syscall6(KSYS_GETPID, 0, 0, 0, 0, 0, 0));
 }
 
 long uptime(void)
 {
-    return syscall6(KSYS_UPTIME, 0, 0, 0, 0, 0, 0);
+    return answer(syscall6(KSYS_UPTIME, 0, 0, 0, 0, 0, 0));
 }
 
 int execve(const char *path, char *const argv[], char *const envp[])
 {
-    return (int)syscall6(KSYS_EXECVE, (long)(uintptr_t)path, (long)(uintptr_t)argv,
-                         (long)(uintptr_t)envp, 0, 0, 0);
+    return (int)answer(syscall6(KSYS_EXECVE, (long)(uintptr_t)path, (long)(uintptr_t)argv,
+                                (long)(uintptr_t)envp, 0, 0, 0));
 }
 
 void exit(int code)

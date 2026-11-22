@@ -213,6 +213,15 @@ int fat_dir_init(struct fat_volume *vol, k_u32_t cluster, k_u32_t parent_cluster
 int fat_dir_remove(struct fat_volume *vol, const char *path);
 
 /*
+ * The same object under another name, inside the volume. A file may move to
+ * another directory; a directory keeps its parent (KERR_NOTSUP otherwise),
+ * because its "." and ".." entries and the tree below it name the place it
+ * came from. A name that is already there is replaced when it is a file
+ * (KERR_ISDIR when it is a directory), as rename of POSIX does.
+ */
+int fat_dir_rename(struct fat_volume *vol, const char *from, const char *to);
+
+/*
  * The next entry of a directory. `pos` is the byte position in the stream
  * of the directory: the call moves it past the entry it returns, and a
  * return of 0 is the end of the directory.

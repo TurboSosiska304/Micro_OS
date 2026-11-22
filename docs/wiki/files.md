@@ -44,6 +44,8 @@ microos> tree /
 | `/etc` | the configuration: a file name is the key and its content the value for a single setting, `key=value` lines for a system (`display`, `font`, `console`) |
 | `/etc/init.d` | the scripts of the init process, one command per line |
 | `/etc/fstab` | the volumes the boot mounts after the root, when the file is there |
+| `/etc/greeting.gz` | on x86-64: the gzip fixture of `/bin/zcat`, written by `tools/x86_image.py` with a fixed moment |
+| `/etc/licenses/zlib` | the license of zlib, beside the program that carries the library |
 | `/proc` | the kernel: `version`, `uptime`, `meminfo`, `tasks`, `modules`, one directory per task |
 | `/dev` | the devices: `tty0`, `null`, `input` and the ones the port adds |
 | `/log` | on the board: `start.log`, the log of the boot |
@@ -319,8 +321,11 @@ tests always build it.
 What a FAT record cannot carry is still absent: `stat` answers `mode = 0`
 and owner 0, `chmod` and `chown` are `ENOTSUP`, and there is no time of the
 change. `unlink` removes a file or an empty directory and refuses a
-directory that holds an entry with `ENOTEMPTY`; `rename` is not a call of
-the VFS yet. The mount does not ask whether the medium can be written: a
+directory that holds an entry with `ENOTEMPTY`; `rename` is a call of the
+VFS (ADR 0024 §5) and FAT implements it: a name is a run of entries, so the
+call writes the run of the new name and marks the old one removed, and a file
+already at the destination is replaced. A directory is renamed only inside
+its own parent. The mount does not ask whether the medium can be written: a
 card with its physical write switch on mounts and is refused at the first
 write, because reading it is still useful.
 

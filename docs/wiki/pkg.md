@@ -5,24 +5,77 @@ its own (`microos-progs`), checks its signature and puts it in `/usr/bin`.
 It is the second half of the promise of `2.0` - a machine a person changes
 from the machine itself; the settings of `/etc` were the first.
 
-> **Status: planned for 1.2.** `1.1.0` has no `pkg`; a program is a file a
-> person writes or copies. The contract of the command is
-> [ADR 0024](../adr/0024-stream-and-installer.md) §6.
+> **Status: built, without TLS.** `pkg` is a command of the x86-64 image with
+> the network (`-DMICRO_OS_X86_NET=ON`, `make x86-net-build`). The board has
+> none (ADR 0018). The transport is plain HTTP: a package is trusted by its
+> signature and not by the wire, and the handshake is the open step of K12
+> ([debts.md](../debts.md)).
 
 ## The shape of a package
 
 A repository publishes an index and the files it names:
 
 ```text
-index.json          name, version, machine, abi, size, sha-256
-hello-x86_64.mox    the program
-hello-x86_64.sig    its Ed25519 signature
+index.json          the list: name, version, machine, abi, size, sha-256
+index.json.sig      the Ed25519 signature of the index (64 raw bytes)
+hello-1.0.0-x86_64.mox    the program
+hello-1.0.0-x86_64.mox.sig  its signature (64 raw bytes)
 ```
 
-The index is signed with the same key as the images of the system
-([ADR 0020](../adr/0020-signed-image.md)). A package names the machine (the
-`MOX1` header) and the ABI of the kernel it needs; a package for another
-machine, or for a newer ABI, does not install.
+The index is one object of the format of ADR 0024 §1:
+
+```json
+{
+  "repository": "microos-progs",
+  "machine": "x86_64",
+  "abi": 2,
+  "packages": [
+    {
+      "name": "hello",
+      "version": "1.0.0",
+      "machine": "x86_64",
+      "abi": 2,
+      "size": 4288,
+      "sha256": "4f1c…",
+      "file": "hello-1.0.0-x86_64.mox",
+      "summary": "says hello"
+    }
+  ]
+}
+```
+
+The ABI is the version of the header of MOX1 that the kernel reads
+(`K_EXEC_VERSION`, 2 today). A field the parser does not know is skipped, so a
+repository grows without breaking an older machine; a field that is needed and
+missing, a digest that is not 64 hexadecimal digits, or a size above a
+megabyte is `PKG_EPARSE`.
+
+The index and every program are signed with the same Ed25519 key as the images
+of the system ([ADR 0020](../adr/0020-signed-image.md)). The tool of the
+repository side is `microos_sign`:
+
+```bash
+build-x86-net/microos_sign sign-file --key signing.key --in hello.mox --sig hello.mox.sig
+build-x86-net/microos_sign sign-file --key signing.key --in index.json --sig index.json.sig
+build-x86-net/microos_sign verify-file --pub signing.pub --sig hello.mox.sig hello.mox
+```
+
+## The key of a repository
+
+The key is `/etc/pkg/keys/<repo>.pub`, thirty-two bytes in hexadecimal (the
+same text `microos_sign pubkey` writes). When the file is not there, the key
+of the image is the key of the repository: the release signs the kernel and
+the index with the same key, and a machine that boots an image of the project
+trusts the programs of the project without a second file to copy. A host build
+has no image and therefore no built-in key; its tests write theirs.
+
+```text
+microos> pkg repo add http://10.0.2.2:8000/
+:: repository microos-progs is http://10.0.2.2:8000/
+```
+
+`pkg repo add` writes a line `<name> <url>` into `/etc/pkg.conf` (the name is
+`microos-progs`, or `--repo NAME`).
 
 ## The commands
 
@@ -39,20 +92,25 @@ machine, or for a newer ABI, does not install.
 | `pkg list` | `-Q` | the installed packages; `-Qe` only the explicit ones |
 | `pkg files NAME` | `-Ql` | the files a package installed |
 | `pkg check` | `-Qk` | the digest of every installed file |
-| `pkg clean` | `-Sc` | the cache, keeping what an install needs |
+| `pkg clean` | `-Sc` | the cache |
 | `pkg repo add URL` | | a repository and its key, in `/etc/pkg.conf` |
 | `pkg log` | | what was installed, removed and when |
 
 ```text
 microos> pkg -Syu
-:: refreshing the index of microos-progs
-:: 3 package(s) in the index
-:: upgrade  hello 1.0.0 -> 1.1.0
-:: download hello-1.1.0-x86_64.mox: 8 192 bytes, done
-:: signature ok, installing /usr/bin/hello
-microos> pkg -Ss editor
-microos-progs/vi 1.2.0    a small screen editor
-microos> pkg -S vi
+:: refreshing microos-progs
+:: download http://10.0.2.2:8000/index.json.sig
+:: download http://10.0.2.2:8000/index.json
+:: 1 package(s) in the index
+:: upgrade hello 1.0.0 -> 1.1.0
+:: download http://10.0.2.2:8000/hello-1.1.0-x86_64.mox
+:: download http://10.0.2.2:8000/hello-1.1.0-x86_64.mox.sig
+:: signature ok
+:: installed /usr/bin/hello (1.1.0)
+microos> pkg -Q
+hello 1.1.0
+microos> exec hello
+PROGRAM: hello from /bin
 ```
 
 ## The flags of an install
@@ -68,18 +126,49 @@ pin. `--help` prints the table and `pkg --version` the version of the tool.
 There is **no `--nosignature`**. A package without a valid signature does not
 install, and no flag is a door around that.
 
-An install is atomic: the bytes go to `NAME.mox.new`, the digest and the
-signature are checked, the file is flushed, and a rename makes it visible
-(`vfs_rename`, a new operation of the filesystem). A volume that cannot rename
-still installs, with a warning that the window is not atomic.
+The installer never asks a question, so `--noconfirm` is accepted for the
+scripts that pass it and changes nothing. `--color auto` is the plain console
+(the escape sequences of `--color always` are for a terminal that reads them),
+and `--quiet` keeps the errors and the answer of a query and drops the `::`
+lines of the steps.
+
+`--offline` uses what the cache and the stored index have: a machine with no
+link installs a package that was fetched before, and `-Sy --offline` re-reads
+the stored index (and its signature) without a socket.
 
 ## Where it lives
 
-The database is `/var/pkg`, the programs are `/usr/bin`, the cache is
-`/var/cache/pkg`, and the repositories and their keys are `/etc/pkg.conf` and
-`/etc/pkg/keys`. The console face is a command of the shell at first (like
-`config`) and a program of `/usr/bin` when the calls it needs - `open`,
-`write`, `rename`, `unlink` - are in the table of the system calls.
+| what | where |
+|---|---|
+| the database | `/var/pkg/local/<name>`, one text file per package |
+| the index of a repository | `/var/pkg/index/<repo>.json` and `.sig` |
+| the cache | `/var/cache/pkg/<file>.mox` and `.sig` |
+| the programs | `/usr/bin/<name>` (mode 0755) |
+| the repositories | `/etc/pkg.conf`, one `<name> <url>` per line |
+| the keys | `/etc/pkg/keys/<repo>.pub` |
+| the log | `/var/pkg/log`, one line per install and remove |
+
+The database is one file per package and not one table: a table is a file that
+every install rewrites whole, and a power cut in the middle of it would lose
+the names of the programs that are still in `/usr/bin`.
+
+## An install is atomic
+
+The bytes go to `/usr/bin/<name>.new`, the size, the digest, the signature and
+the header of MOX1 are checked, the file is made executable, and a
+**rename** makes it visible (`vfs_rename`, an operation of the filesystem that
+MicroFS and FAT implement; the system call is `rename`, number 34). A rename
+replaces a file that is already there, as POSIX does, and a volume without the
+operation still installs: the program is written in place and the command says
+that the window is not atomic.
+
+A local file (`-U`) is named as a repository names it,
+`NAME-VERSION-MACHINE.mox`, with its `.sig` beside it; the installer reads the
+name, the version and the machine from the file name, and the digest from the
+bytes. The signature is checked against the key of the default repository
+(`microos-progs`), which is the key of the image unless
+`/etc/pkg/keys/microos-progs.pub` says otherwise. A file that is already
+installed at the same version is left alone (`--force` reinstalls it).
 
 ## What it does not do, and why
 
@@ -92,10 +181,12 @@ The database is `/var/pkg`, the programs are `/usr/bin`, the cache is
   machine and the ABI, and the index names them.
 * **No scripts, no shared libraries, no delta update.** A package is a file
   replaced whole.
+* **No TLS yet.** The wire is plain HTTP; the signature is the trust
+  ([debts.md](../debts.md)).
 * **No installer on the board.** The `progs` partition of the ESP32 belongs to
   the firmware (ADR 0018); a program of the board is a new `progs.bin` and a
   flash.
 
 A third-party repository is the answer to "I want more than the official
-index": `pkg repo add` takes a URL and its key, and the signature rule is the
-same. That is the freedom of the AUR without the build.
+index": `pkg repo add` takes a URL and `--repo NAME` names it, and the
+signature rule is the same. That is the freedom of the AUR without the build.

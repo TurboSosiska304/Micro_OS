@@ -42,6 +42,15 @@
 typedef int (*kshell_cmd_fn)(int argc, char **argv);
 
 /*
+ * Put a path of the command line together with the directory of the task: a
+ * path that begins with '/' is itself, anything else hangs from the current
+ * directory. False when the result does not fit, because a cut path names
+ * another file. The commands that open a file by the name a person typed use
+ * this; a path of the kernel, already absolute, does not need it.
+ */
+bool kshell_resolve_path(const char *path, char *out, k_size_t size);
+
+/*
  * What the help of a command says. It lives in the table of the commands and
  * not in the handler, so that `-h`, `help <command>` and the list of `help`
  * cannot disagree after a flag was added, renamed or dropped.

@@ -454,6 +454,7 @@ static const struct abi_value g_abi_known_values[] = {
     {"KERR_AGAIN", KERR_AGAIN},
     {"KERR_NOMEM", KERR_NOMEM},
     {"KERR_FAULT", KERR_FAULT},
+    {"KERR_XDEV", KERR_XDEV},
     {"KERR_BUSY", KERR_BUSY},
     {"KERR_NOSYS", KERR_NOSYS},
     {"KERR_NOTDIR", KERR_NOTDIR},

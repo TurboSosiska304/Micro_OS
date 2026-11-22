@@ -10,6 +10,23 @@ the MicroFS volume change by adding only.
 A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 (`vX.Y.Z-pre`) is a pre-release and must match `kernel_version()`.
 
+## [Unreleased]
+
+### Added
+
+- The first port of a program of somebody else: zlib 1.3.1 as a static
+  archive built by the compiler and the flags of the guest, and `/bin/zcat`
+  on a `.gz` of MicroFS. The recipe is `docs/porting-programs.md`; the
+  library is in `third_party/zlib` with its port layer and license, the
+  image carries `/etc/greeting.gz` and `/etc/licenses/zlib`, and
+  `make x86-smoke` and `make x86-disk-smoke` check every inflated byte.
+- The library of a program learned the three families a portable source
+  expects: an arena of its own in the bss (`malloc`, `calloc`, `realloc`,
+  `free`), `errno`/`strerror`, and the streams of `fopen`; the POSIX names of
+  the headers are thin shims over `ulibc.h`, and `snprintf`/`vsnprintf` share
+  the formatter with `printf`. The host test `tests/cases/test_zlib.c` covers
+  the checksums, the three stream wrappers and a `gz` file.
+
 ## [1.1.1] - 2026-11-22
 
 A patch of `1.1.0` for the data loss that the cleanroom found: a directory
