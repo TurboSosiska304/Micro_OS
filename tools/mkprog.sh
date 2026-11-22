@@ -203,6 +203,17 @@ align4()
     echo $(( (value + 3) / 4 * 4 ))
 }
 
+# Sixteen bytes is the alignment of the data segment of a program: a constant
+# and an arena with a `_Alignas(16)` are objects of that width, and the
+# instruction that reads one (movaps, andps) faults on a lesser one. The text
+# is a page because the port gives it a protection; the two are multiples of
+# sixteen, so the header of the format stays a multiple of four.
+align16()
+{
+    value=$1
+    echo $(( (value + 15) / 16 * 16 ))
+}
+
 section_address()
 {
     "$OBJDUMP" -h "$object" | awk -v name="$1" '$2 == name { print "0x" $4; exit }'
@@ -252,8 +263,46 @@ data_size=$(file_size "$work/segment.bin")
 bss_size=$(section_size .bss)
 bss_size=$((${bss_size:-0}))
 
-text_aligned=$(align4 "$text_size")
-data_aligned=$(align4 "$data_size")
+text_aligned=$(align16 "$text_size")
+data_aligned=$(align16 "$data_size")
+
+# The board is the exception: its two windows are not contiguous and its
+# linker script pads the data and the bss to four bytes, the alignment of the
+# pointers of the machine. A program of the board computes in integers only,
+# so no object of eight or sixteen bytes asks for more. The x86-64 window is
+# contiguous and a program with floating point has 16-byte constants that
+# `movaps` and `andps` read: there the two sizes are padded to sixteen.
+if [ -n "$data_base" ]; then
+    text_aligned=$(align4 "$text_size")
+    data_aligned=$(align4 "$data_size")
+else
+    # The linked addresses are the truth of the layout: the linker may align
+    # the start of the bss (or of the data) to a boundary wider than sixteen
+    # when an object asks for it, and the header has to name the gap the
+    # program was linked with or the port clears the bss at another address.
+    data_address=$(section_address .data)
+    bss_address=$(section_address .bss)
+
+    if [ -n "$data_address" ] && [ "$data_size" -gt 0 ]; then
+        text_gap=$((data_address - text_address))
+        if [ "$text_gap" -ge "$text_size" ]; then
+            text_aligned=$text_gap
+        fi
+    elif [ -n "$bss_address" ] && [ "$bss_size" -gt 0 ]; then
+        text_gap=$((bss_address - text_address))
+        if [ "$text_gap" -ge "$text_size" ]; then
+            text_aligned=$text_gap
+        fi
+    fi
+
+    if [ -n "$data_address" ] && [ "$data_size" -gt 0 ] && [ -n "$bss_address" ] &&
+       [ "$bss_size" -gt 0 ]; then
+        data_gap=$((bss_address - data_address))
+        if [ "$data_gap" -ge "$data_size" ]; then
+            data_aligned=$data_gap
+        fi
+    fi
+fi
 
 # The optional base is the contract of a port: nothing relocates the image, so
 # a program linked for another window would run at addresses that name
