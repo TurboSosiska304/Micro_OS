@@ -24,11 +24,13 @@ the description of the machine plus the drivers of its chips.
 | The port contract (kernel/port/*.h): console, time, memory, locks,   |
 | power, store, sockets, identity; and the execution substrate        |
 +---------------------------------------------------------------------+
-| Ports:                                                               |
+| Ports and substrates:                                                |
 |   port_esp32   ESP-IDF + FreeRTOS + lwIP + NVS, the partition of MFS |
-|   port_host    a Linux process (pthreads, files, sockets)           |
+|   port_host    a Linux process (pthreads, files, sockets) - the  |
+|                substrate of the tests and the simulator, not a port |
 |   port_x86_64  bare metal on QEMU: its own loader, IDT/PIT, switch  |
-|   port_null    no machine at all, linked by the checks              |
+|   port_null    no machine at all, linked by the checks - a shape |
+|                of the contract, not a port                          |
 +---------------------------------------------------------------------+
 | Boards and drivers (the ESP32 port): the StickC Plus2, the panel,   |
 | the buttons, the IMU, the RTC, the battery, the radio               |
@@ -43,6 +45,7 @@ architecture own its part in `arch/<arch>/include/asm`:
 | Header | Subject | Examples |
 |---|---|---|
 | `kernel/port/console.h` | bytes out, characters in | `k_port_write`, `k_port_console_getchar`, `k_port_console_poll` |
+| `kernel/port/cpu.h` | the cores of the machine | `k_port_cpu_count`, `k_port_cpu_id` |
 | `kernel/port/time.h` | time since the boot | `k_port_uptime_ms`, `k_port_uptime_us` |
 | `kernel/port/mem.h` | internal heap and PSRAM | `k_port_alloc`, `k_port_heap_free` |
 | `kernel/port/lock.h` | critical sections, recursive mutexes | `k_port_enter_critical`, `k_port_mutex_lock` |
@@ -50,7 +53,7 @@ architecture own its part in `arch/<arch>/include/asm`:
 | `kernel/port/kv.h` | the store that survives a restart | `k_port_kv_get`, `k_port_kv_next` |
 | `kernel/port/net.h` | TCP and UDP | `k_port_net_connect`, `k_port_net_listen` |
 | `kernel/port/info.h` | identity and contract version | `k_port_name`, `k_port_api_major` |
-| `kernel/port/exec.h` | running a program | `k_port_exec_supported`, `k_port_exec_base`, `k_port_exec_enter` |
+| `kernel/port/exec.h` | running a program | `k_port_exec_supported`, `k_port_exec_arch`, `k_port_exec_base`, `k_port_exec_enter` |
 
 The version of the contract (`KERNEL_PORT_API_VERSION_MAJOR/MINOR`) is the
 vermagic of the pair: the port asserts it at build time and the boot
@@ -66,6 +69,23 @@ outside the kernel includes `kernel/port.h` at all: `kernel/sysinfo.h`,
 where it does not belong.
 
 That is exactly what allows the kernel tests to run on a laptop.
+
+### The contracts are recorded in the tree
+
+Two interfaces are the promise of a release, and both have a golden record
+that a change has to move with the code:
+
+| Record | What it freezes | Checked by |
+|---|---|---|
+| [tests/corpus/abi.txt](../tests/corpus/abi.txt) | the calls (number, name, arity, result), the error codes, the flags, the limits, the header of a program image and the layout of the structures that cross the door, on a 64-bit and on a 32-bit machine | `ksys: the ABI is the recorded one` (`tests/cases/test_ksys.c`), on every `make test` |
+| [tests/corpus/port_api.txt](../tests/corpus/port_api.txt) | the 47 functions of `kernel/port/*.h` and the version of the contract | `make integrity` (`[port]`): the record against the headers, and the whole list against the ESP32 and the x86-64 port |
+
+[tests/corpus/mox1](../tests/corpus/mox1) holds a MOX1 image of version 2,
+built for 1.0 and recorded in hex: `k_exec_parse()` reads it on every
+`make test`, and the format is expected to read it for as long as it is 1.x.
+The golden files are not generated into the build directory on purpose - a
+record that a build rewrites is not a record. A change of the ABI or of the
+contract is therefore two files in one commit, and a reviewer sees it.
 
 ## 2. What is Linux-like here, and what is not
 
@@ -92,8 +112,11 @@ alive. A program is a task of the scheduler with a CR3 of its own, and `fork()`
 clones its page tables and copies a page on the first write (ADR 0007). The
 pointers of a program are checked and copied at the edge of the call: the
 port says whether a range is memory of the caller, and an address that is not
-mapped is `EFAULT` instead of a page fault of ring 0. The kernel is not in a
-higher half yet; that is the next step, with a plan in ADR 0007.
+mapped is `EFAULT` instead of a page fault of ring 0. The kernel is in the
+higher half: the image is linked at `0xFFFFFFFF80000000`, the loader maps it
+there beside the low identity map, and the C of the kernel is built with
+`-mcmodel=kernel` (ADR 0007). The heap and the devices stay in the identity
+map, which is what lets a driver hand a buffer to a card.
 
 That is a property of the current port, not the shape of the kernel: everything
 the kernel concedes to a board without an MMU sits behind one compile time flag,
@@ -147,6 +170,99 @@ Plan: start with option 1 (it works immediately), move to option 2 when real
 Linux-like semantics are needed (priorities, states, `fork`). The decision is
 recorded in [ADR 0002](adr/0002-scheduler-substrate.md).
 
+### Many cores (ADR 0012)
+
+The scheduler of 1.0 has one `current`, one ready queue and one idle loop,
+because one processor was the whole machine. The first phase of ADR 0012 is
+in the tree and the flag `KERNEL_SMP` (kernel/config.h) decides which kernel a
+build is:
+
+* **`KERNEL_SMP=0`** (the default, the kernel of 1.0): one slot of the array
+  of cores, one run queue, the same code and the same tests as before.
+* **`KERNEL_SMP=1`**: `struct k_cpu` per core (kernel/cpu.h) with the current
+  task, the ticks of the core, the nesting of its interrupt state and the
+  stack, the thread pointer and the tables the port owns. Every core has a
+  run queue per priority, `struct task` carries the core that owns it, and
+  only the scheduler writes that field: a task is created on the next core of
+  a round robin, woken on the core it already had, claimed by the core that
+  runs it, and moved by `k_sched_migrate()` - never while it runs.
+
+The lock of the queues is the critical section of the port (saved flags,
+interrupts off, a lock of the machine on a port that has a second core) with
+the kernel's own nesting count, reached through `k_cpu_lock()`. It is held
+for the bookkeeping of a queue and dropped before the tick charges a task,
+before a sleep and before a switch, so the second core is not stopped by a
+task that waits for the filesystem. The kmm, the VFS, the console and the
+block layer keep their own locks (`k_mutex`, a sleeping lock that belongs to
+a task; the kmm's owner-and-depth lock, which sleeps a millisecond between
+tries); the audit of what a second core changes for them is the debt K8 of
+[debts.md](debts.md), not a silence.
+
+The price of the shape is static memory: the run queue of a core is
+`SCHED_READY_CAPACITY` slots of a pointer for each of the sixteen priority
+levels, about 4 KiB, so a build of four cores carries about 16 KiB of `bss`
+and the one-core build carries the array it always had.
+
+Each core has its own count of ticks; the millisecond of the kernel is
+advanced by the tick of the core 0, where the clock of every port of the tree
+lives (the PIT of x86-64, the one thread of the host). A port whose timer is
+on another core says so where it starts the clock.
+
+The port answers how many cores it started (`k_port_cpu_count`) and which one
+is asking (`k_port_cpu_id`). The x86-64 port reads the processors from the
+MADT of ACPI and starts one - the AP bring-up is the blocker described in ADR
+0012; the host port takes the number from `MICRO_OS_CPUS` (one by default,
+two in `make test-smp`, `make test-tsan` and `make soak-host`), and every
+task there is a pthread, so a "core" is a queue of the kernel and an identity
+of the task. A port that predates the two calls links against their weak
+default (one core) and keeps working.
+
+### Signals (ADR 0015)
+
+A signal is a bit of `struct task` (`sig_pending`) and a disposition in a
+small table of the task, not a message on a queue: the sender - `kill(pid,
+sig)` - sets the bit under the critical section and wakes the task, and the
+receiver answers it in its own context. The points of delivery are the way
+out of a system call (`ksys_call()`) and the tick of the timer when the
+interrupted code is a program of ring 3. The default action of `SIGINT`,
+`SIGTERM` and `SIGPIPE` is the end of the task with the status `128 + sig`;
+`SIGCHLD` is ignored by default and is marked on the parent by `task_exit()`.
+An installed handler is a function of the program: on x86-64 the port builds
+a frame below the stack pointer of the program, writes the handler and the
+signal number into the saved frame, and the `iretq` of the stub enters it;
+the return address is a page of the port that calls `sigreturn`, which puts
+the interrupted frame back. The host, the board and the null port have no
+ring 3 and run the handler in place. `waitpid()` looks at a finished child
+before the marks and answers `EINTR` for a mark that has to be answered
+without reaping the child. There is no job control - no groups, no `&`, no
+`fg`, no `bg` - and the documentation says so; Ctrl+C while the shell waits
+for a program is read by the port and becomes `SIGINT` for that program.
+
+### The limits of a task (0.9)
+
+A task has three limits - the memory it holds, the processor time it spends
+and the descriptors it opens - and the calls `getlimit` (32) and `setlimit`
+(33) read and lower them. The limits are fields of `struct task`, so a fork
+inherits them and the scheduler does not have a second table to keep in step.
+They start at the ceiling of the machine (2 MiB of PSRAM, about 49 days of
+CPU, four descriptors) and only go down: with one user, uid 0, there is
+nobody to grant a raise, and the rule of no root bypass applies here too.
+
+The memory is counted by the allocator: `kmm` asks `task_memory_fits()` before
+it looks for a block, charges the user blocks to the task that allocated them
+and gives the charge back on `free`, so a task that is over its budget does
+not spend the memory of the system on the way to `ENOMEM`. The kernel and the
+system priorities have no owner and no limit. The CPU time is the time
+between the points where the task is known to be running - the edge of a
+system call and the tick of a port that can name the running task - with the
+sleep on both sides of a wait set aside; the limit marks the task with
+`SIGTERM`, the closest signal of the four to `SIGXCPU`, and the default action
+ends it with 143. The descriptors stop at the limit in `kfile_alloc()`,
+`kfile_pipe()` and `kfile_dup2()` with `EMFILE`, while a full table of the
+system is `ENOSPC`; lowering the limit never closes what is already open.
+`ulimit` of the shell prints the three numbers and lowers them, and the
+library has `microos_getlimit()`/`microos_setlimit()`.
+
 ## 5. Virtual filesystem (phase 2)
 
 The goal is "everything is a file":
@@ -174,10 +290,11 @@ the inodes and the cache of the sector of the header all describe the same
 storage - so two tasks that write files at the same time have to be kept
 apart:
 
-* every open file belongs to the one that opened it: the position and the
-  flags of the file live in the descriptor (`VFS_FILE_DATA_SIZE` bytes of
-  private data), not in a table of the filesystem. Two tasks that read
-  their own files never touch each other's position;
+* every open file is a description of the kernel, counted by the descriptors
+  that refer to it (`kernel/kfile.h`): the position and the flags of the file
+  live there, not in a table of the filesystem, and `dup2` or a fork gives a
+  second descriptor the same open file. Two tasks that read their own files
+  never touch each other's position;
 * the filesystem itself has one lock, taken by every public call of
   `mfs_*`. It is a recursive `k_mutex` of the kernel (`kernel/lock.h`),
   so a task that has to wait is put to sleep by the platform and does not
@@ -190,6 +307,16 @@ apart:
   contract of the system calls: the two sets are close but not the same
   (`-9` is "the directory is not empty" of the filesystem and a "bad file
   descriptor" of the kernel).
+
+### The pipes
+
+A pipe is a ring of 256 bytes in a table of eight entries of the kernel,
+with the counts of the reading and the writing descriptions over it
+(ADR 0014). The two ends are ordinary descriptors of the task, so the access
+check, the close, `dup2` and the copy of a fork need no special case; a write
+with no reader is `EPIPE`, because the kernel has no signals yet. A wait of a
+pipe is a poll with a bound of half a second, not a queue of waiters; the
+queue and its wakeup are the next step.
 
 ### The blocks under the filesystem
 
@@ -239,8 +366,8 @@ The VFS knows no name of a filesystem. It keeps a table of types
 call mounts the volume itself with `vfs_mount()`, so the resolution of a
 path, the search bit and the listing of the mount points are the same for
 every type. A mount function may be a wrapper of a format of the board
-(MicroFS) or a reader of a format of the world (FAT); the VFS does not care
-which.
+(MicroFS) or a reader of a format of the world (FAT, ext2); the VFS does not
+care which.
 
 The types are registered by the image, not by the kernel: a build that does
 not link the reader never has its name, and a boot that asks for an unknown
@@ -258,6 +385,15 @@ mode and no owner (the numbers are zero), `chmod` and `chown` are
 power cut can catch. A FAT volume mounted at `/mnt/fat` is one
 more entry of the mount table, and `ls /mnt` shows it even though MicroFS
 does not have the directory.
+
+The ext2 reader under `components/fs_ext2/` is the first one with inodes:
+the superblock, the group descriptors, the inode table, the direct blocks
+and the one, two and three levels of indirection, and directories whose
+names the entry itself holds. It is **read-only**, and that is why it can
+report what FAT cannot: the nine bits of `i_mode` as the mode, `i_uid` as
+the owner and `i_mtime`/`i_ctime` through `statx`. A write, a new name, a
+mode and an owner are `KERR_NOTSUP`, and a journal of ext3 is not replayed,
+so a volume with one is refused. ADR 0019 is the design.
 
 ### Disks and partitions
 
@@ -289,8 +425,9 @@ physical address contract.
   space", but without an MMU a switch means switching the stack pointer and the
   data segment base. The x86-64 port gives a program real page tables and a
   `fork()` that copies them with copy-on-write (ADR 0007); the kernel of that
-  port is still identity mapped and not in a higher half, and the plan to move
-  it is written down in the same ADR.
+  port is linked in the higher half and mapped at the top, and the low identity
+  map is kept for the heap, the arena and the devices (ADR 0007, "The higher
+  half: taken").
 
 ## 7. Drivers (phase 4)
 
@@ -307,9 +444,12 @@ struct file_operations {
 
 The drivers are written: `drv_display` (ST7789v2, the panel and the turn of
 its picture), `drv_input` (A/B/C), `drv_buzzer`, `drv_imu` (MPU6886),
-`drv_rtc` (BM8563), `drv_battery` and `drv_mic` (SPM1423, a PDM microphone
-on I2S at 16 kHz; the doctor reports its RMS and peak). The pinout and the
-quirks are documented in
+`drv_rtc` (BM8563), `drv_battery`, `drv_mic` (SPM1423, a PDM microphone on
+I2S at 16 kHz; the doctor reports its RMS and peak), the sound detector on top
+of it, `drv_ir` (NEC on the pin of the red LED, with the arbitration of the
+pad between the two) and `drv_power` (deep sleep, `HOLD` and the wake of the
+timer, of BUTTON C and of the alarm of the clock through the timer of the
+chip). The pinout and the quirks are documented in
 [docs/ports/esp32/hardware.md](ports/esp32/hardware.md).
 
 The WiFi driver is built like the kernel itself: a portable core
@@ -367,37 +507,65 @@ parses a format of its own and the port runs it. The decisions are in
 ### The format: MOX1
 
 An executable is a flat image with a 32-byte header (`kernel/exec.h`): the
-magic `MOX1`, a version, flags, the offset of the entry, the sizes of the text,
-the data and the bss, and a reserved word. The image is linked for the window
-of the port - the code at its base plus the 32 bytes of the header - and copied
-as it is, because nothing relocates it; the bss is not in the file and the port
-clears it. `tools/mkprog.sh` turns an object into the image. The parser
-(`components/kernel/src/exec.c`) checks the image against itself and nothing
-else: the magic and the version, sizes that fit the file, a text that is not
-empty, an entry in the text, sizes that are multiples of four, and a bss under
-a megabyte.
+magic `MOX1`, a version (2), flags, the offset of the entry, the sizes of the
+text, the data and the bss, and the machine the bytes are code for (`arch`: 0
+x86-64, 1 Xtensa). The image is linked for the window of the port - the code
+at its base plus the 32 bytes of the header - and copied as it is, because
+nothing relocates it; the bss is not in the file and the port clears it.
+`tools/mkprog.sh` turns an object into the image and writes the machine. The
+parser (`components/kernel/src/exec.c`) checks the image against itself and
+nothing else: the magic and the version, an arch the format knows, sizes that
+fit the file, a text that is not empty, an entry in the text, sizes that are
+multiples of four, and a bss under a megabyte. The machine of the image
+against the machine of the port is the question of `k_exec_run`, which asks
+the port (`k_port_exec_arch`) before it enters a byte.
 
 ### `execve` belongs to the port
 
-`kernel/port/exec.h` is a subject of the contract (1.4) with five calls:
+`kernel/port/exec.h` is a subject of the contract (1.8) with eight calls:
 `k_port_exec_supported()` (can this machine run a program at all),
+`k_port_exec_arch()` (which machine of the format it is, or -1),
 `k_port_exec_base()` (where the window is), `k_port_exec_enter()` (place the
-image, enter it) and the two halves of the end of a program,
-`k_port_exec_active()` and `k_port_exec_exit()`. The kernel parses the image
-and asks the port, so the answer for a machine that has no window is `ENOSYS`
-at the edge. The board says no: its flash is not executable for a file, and
-internal SRAM is ~100 KB for everything. The host says no too: jumping into
+image, enter it), the two halves of the end of a program,
+`k_port_exec_active()` and `k_port_exec_exit()`, the edge of the memory of a
+program, `k_port_exec_contains()`, and the copy of a context for `fork()`,
+`k_port_fork_copy()`. The kernel parses the image and asks the port, so the
+answer for a machine that has no window is `ENOSYS` at the edge, and an image
+of another machine is `ENOEXEC` before the port is asked to enter it. The
+board says no to a program today: its flash is not executable for a file, and
+internal SRAM is ~100 KB for everything (ADR 0018 gives it a partition and a
+loader; the port has the machine, not the loader). The host says no too: jumping into
 the bytes of a program inside the address space of the simulator would run it
 with the libc of the host under it. x86-64 says yes: it builds page tables for
 the program, maps the window at 32 MiB onto a physical arena at 64 MiB, keeps
 a 64 KiB stack at the top of the window with an unmapped guard page below it
 and enters ring 3 through an `iretq`. Its boot mounts MicroFS on a volume of
-the port's RAM, writes `/bin/hello` and `/bin/crash` there, gives them the mode
-of a program and asks for `/bin/hello` with `execve` - the stat, the mode, the
-read through the VFS, the parse and the transition are the ones of the call.
-A program ends with `exit` and the port returns to the caller with its status;
-a fault of ring 3 prints `the program faulted: vector N at 0x...` and does the
-same with status 255 (ADR 0007).
+the port's RAM, writes eleven images to `/bin` - `hello`, `crash`, `fork`,
+`badptr`, `signals`, `nx`, `cat`, `echo`, `ls`, `spawn` and `wc` - gives them the
+mode of a program
+and asks for `/bin/hello` with `execve` - the stat, the mode, the read through the VFS,
+the parse and the transition are the ones of the call. A program ends with
+`exit` and the port returns to the caller with its status; a fault of ring 3
+prints `the program faulted: vector N at 0x...` and does the same with status
+255 (ADR 0007).
+
+### The entry and the library of a program
+
+The port enters a program with `argc` in `rdi`, `argv` in `rsi` and `envp` in
+`rdx`: the arguments of a C function, on a stack aligned as after a call whose
+top word is zero (ADR 0016). `execve(path, argv, envp)` copies both vectors at
+the edge - at most eight words and 512 bytes each - and a NULL environment is
+the one of the system (`k_exec_environ()`), so every program of the machine
+starts with the same shape. The environment travels to the port in
+`struct k_exec_image.envp`; the contract stays 1.6.
+
+The library of the kernel is linked into the kernel and calls `ksys_*`, which
+a program of ring 3 cannot reach, so a program is linked against
+`components/libc/user`: `_start`, the door of `int $0x80`, `open`, `close`,
+`read`, `write`, `lseek`, `readdir`, `getpid`, `uptime`, `exit`, `printf`,
+`puts` and five functions of strings. The numbers of the calls come from
+`kernel/ksys.h`, the same header the kernel uses. The image carries its copy:
+there is no dynamic linker.
 
 ### The rights are checked at the edge
 
@@ -428,7 +596,15 @@ strings of a path or a vector never reach the VFS (ADR 0007).
   detector (`make test-tsan`).
 * The simulator `make sim` runs the very same kernel on Linux with a volume on
   a file, `/proc`, `/dev`, the configuration and the drivers of the host, so
-  the whole portable system can be debugged without flashing.
+  the whole portable system can be debugged without flashing. It links the
+  network of `components/net`, and `make smoke` fetches a page of its own
+  process over the loopback with the HTTP client the board runs.
+* `make coverage` builds the host with `--coverage`, runs the tests and the
+  simulator, and gcov counts the lines of `components/kernel`; the gate is 70%
+  of lines (the tree met about 80.7% when it was added).
+* `make reproducible` builds the disk image twice with `SOURCE_DATE_EPOCH` and
+  compares the bytes. The same moment fixes the records of MicroFS, the build
+  id and the paths of the sources; the cloud does the same for the firmware.
 * The x86-64 port is booted in QEMU by `make x86-smoke`: the same sources, a
   bare processor, a serial console, the shell - and, between the banner and
   the shell, a MOX1 program that the port enters and that writes its line.
@@ -443,7 +619,7 @@ strings of a path or a vector never reach the VFS (ADR 0007).
 
 | Resource | Available | Comment |
 |---|---|---|
-| Flash | 8 MB | `factory` 2 MB + MicroFS 5.75 MB (one application, no OTA) |
+| Flash | 8 MB | two 1.125 MiB application slots + 132 KiB of programs + MicroFS 5.56 MiB (ADR 0022) |
 | PSRAM | 2 MB | file data, buffers |
 | Internal SRAM | ~100 KB usable by code | task stacks, drivers |
 | CPU | 240 MHz, 2 cores | already taken by FreeRTOS; our kernel lives on top |

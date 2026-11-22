@@ -91,10 +91,12 @@ Who answers what:
 * `port_null` - no. No memory to place an image in, no processor to jump to.
 * `port_x86_64` - yes. The window starts at 32 MiB (`0x02000000`) and ends at
   48 MiB (`0x03000000`), the heap of the port stops below it, the kernel is
-  linked at 16 MiB and the identity map of the loader covers the first
-  gigabyte. A stack of 64 KB is cut from the top of the window, so an image
-  has to end below it. At the boot the port also mounts MicroFS on a volume of
-  its own RAM (`src/blockdev_ram.c`), so the program has a file to come from.
+  linked in the higher half (`0xFFFFFFFF80000000`) and copied to 16 MiB, and
+  the identity map of the loader covers the first gigabyte for the heap, the
+  arena and the devices. A stack of 64 KB is cut from the top of the window, so
+  an image has to end below it. At the boot the port also mounts MicroFS on a
+  volume of its own RAM (`src/blockdev_ram.c`), so the program has a file to
+  come from.
 
 The answers are the point of the list: the kernel keeps a parser that is
 tested on a machine that cannot run what it parses, and the machine that can
@@ -461,6 +463,10 @@ not tested because it is not checked at all (see "What is still missing").
   `/bin`. The smoke test of the port does drive the file through the shell:
   `chmod 0644` makes `exec` refuse with `EPERM`, `chmod 0755` gives it back,
   and `exec` runs the program and reports that it has finished.
+  **Update (1.0):** the RAM array is no longer the home of `/bin`;
+  `make x86-disk` writes the programs into the MicroFS volume of the disk and
+  the boot mounts it, so the files survive a reset
+  ([programs](../wiki/programs.md), ADR 0008).
 * **`PATH` is missing.** `exec` takes the path it is given, resolved against
   the working directory; there is no list of directories to search.
 * **`argv` does not reach the port.** `sys_execve()` takes the vector and

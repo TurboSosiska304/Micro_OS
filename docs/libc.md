@@ -7,6 +7,35 @@ program of Linux does.
 The library is portable C11 and it knows nothing about the kernel: it knows
 the contract of the calls (see [syscall-abi.md](syscall-abi.md)).
 
+## The library of the kernel and the library of a program
+
+This document is about the library **of the kernel** (`components/libc/src`):
+it is linked into the kernel and calls `ksys_*`, so the shell and the
+components use it with no crossing of a privilege boundary.
+
+A program cannot call those functions: it was not compiled into the kernel and
+their addresses are not its own. Its library is `components/libc/user` (ADR
+0016): `_start`, the door of the call, `open`, `close`, `read`, `write`,
+`lseek`, `readdir`, `stat`, `mkdir`, `unlink`, `getcwd`, `getpid`, `uptime`,
+`execve`, `exit`, `printf`, `puts` and the strings (`strlen`, `strcmp`,
+`strncmp`, `strstr`, `memcpy`, `memset`), with the numbers of `kernel/ksys.h`
+and no allocation, no `errno` and no floating point. The door is `int $0x80`
+on x86-64 and the address of a function of the port on the board (ADR 0018);
+the numbers and the arguments of the calls are the same on both machines. The
+two libraries share the header of the ABI and nothing else, and that is
+deliberate: one runs with the kernel under it, the other has nothing but the
+gate.
+
+The library of a program grew with its utilities (0.7): `stat` to tell a file
+from a directory (`rm` refuses a directory without `-r`), `mkdir` and
+`unlink` for the tree (`mkdir`, `rm`), `getcwd` for the directory of the task
+(`pwd`), and `strstr` for a word in a line (`grep`). The list is what the ten
+programs of `/bin` use and not a standard library: a function without a caller
+of this tree is not in it. `cat`, `wc`, `head` and `grep` read descriptor 0
+when they are given no file, which is the shape of a filter; a fresh table of
+a program has no descriptor 0 yet, so that read is `EBADF` until a redirection
+opens it ([`docs/debts.md`](debts.md)).
+
 ## The names
 
 The functions keep their own names in the binary (`microos_printf`,
@@ -112,10 +141,31 @@ void microos_exit(int code);
 The flag of the waitpid is `MICROOS_WNOHANG`: the call does not wait and
 answers 0 when the child is not ready.
 
+## The limits
+
+```c
+struct microos_rlimit { uint64_t memory; uint32_t cpu_ms; uint32_t fds; };
+int microos_getlimit(int which, uint64_t *value);
+int microos_setlimit(int which, uint64_t value);
+int microos_getrlimits(struct microos_rlimit *out);
+```
+
+The selectors are `MICROOS_RLIMIT_MEMORY`, `MICROOS_RLIMIT_CPU` and
+`MICROOS_RLIMIT_FDS`. A task starts at the ceiling of the system and may only
+lower a limit: a raise is -1 with `EPERM` in `microos_errno()`. The memory is
+the bytes of the user blocks the task holds, the CPU time the milliseconds it
+spent running, and the descriptors the open files it may take. When the CPU
+limit is reached the task is marked with `SIGTERM`; when a descriptor would
+pass the limit, `open`, `pipe` and `dup2` answer `EMFILE`, which
+`microos_strerror()` calls "too many open files". The shell command `ulimit`
+prints the three numbers and lowers them.
+
 ## The errors
 
 The codes are the numbers of POSIX. A call that fails returns -1 and the
-code is kept for `microos_errno()`; `microos_strerror()` gives the text.
+code is kept for `microos_errno()`; `microos_strerror()` gives the text,
+including `EMFILE` (24, "too many open files") and `ENOMEM` (12, "out of
+memory", the answer of a block over the memory limit of the task).
 
 ```c
 int microos_errno(void);
@@ -128,10 +178,15 @@ const char *microos_strerror(int code);
   `brk`: the memory of the tasks is shared, the same way as the tasks
   themselves share it after a `fork`.
 * **The standard descriptors are the console.** The descriptors 1 and 2 are
-  the console of the system when they are not open as a file. There is no
-  `dup2` yet, so a program cannot send its output to a file.
+  the console of the system when they are not open as a file. `dup2` and
+  `pipe` are there (`microos_dup2`, `microos_pipe`), so a program sends its
+  output to a file or to another program; the shell does not parse a
+  pipeline yet.
 * **The console is not readable through the descriptor 0.** A program that
-  wants the input of the user opens `/dev/tty0`.
+  wants the input of the user opens `/dev/tty0`. The utilities of
+  `components/libc/user` do read descriptor 0 for a line, but the shell does
+  not carry a file or the console into a program, so the call answers
+  `EBADF` and not a line.
 * **There is no `printf` of a floating point with the exact digits of the
   system.** The numbers agree to the precision that was asked for, but the
   rounding of the last digit can differ.

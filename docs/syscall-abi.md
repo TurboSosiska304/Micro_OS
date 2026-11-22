@@ -61,6 +61,13 @@ because the instruction `syscall` of a 64-bit machine keeps them for the
 return address and the flags, and one convention for both instructions costs
 nothing.
 
+A program that was entered with an image starts with the arguments of a C
+function in the registers (ADR 0016): the count of the arguments in `rdi`, the
+vector of the arguments in `rsi` and the vector of the environment in `rdx`.
+The stack is aligned as after a call and its top word is zero, so the entry of
+a program is `int main(int argc, char *const argv[], char *const envp[])`; a
+program that returns instead of calling `exit` faults on address zero.
+
 A program ends with `exit` (number 0): the kernel asks the port whether a
 program is in flight (`k_port_exec_active()`), and the port unwinds to the
 call that entered it with the status. `k_exec_exit()` carries the number,
@@ -101,12 +108,20 @@ chose.
 | 22 | `realloc` | `ptr, size` | the address of the memory, 0 when there is none |
 | 23 | `chmod` | `path, mode` | 0, or an error |
 | 24 | `chown` | `path, owner` | 0, or an error |
-| 25 | `execve` | `path, argv` | never returns; 0 when the program returns; or an error |
+| 25 | `execve` | `path, argv, envp` | never returns; 0 when the program returns; or an error |
 | 26 | `statx` | `path, buf` | 0, or an error |
+| 27 | `pipe` | `fds` | 0 and two descriptors, or an error |
+| 28 | `dup2` | `oldfd, newfd` | `newfd`, or an error |
+| 29 | `kill` | `pid, sig` | 0, or an error |
+| 30 | `signal` | `sig, handler` | the previous disposition, or an error |
+| 31 | `sigreturn` | - | the saved value of the interrupted call |
+| 32 | `getlimit` | `which, value` | 0 and the limit in the place of the caller, or an error |
+| 33 | `setlimit` | `which, value` | 0, or an error |
 
-The numbers 0 to 22 are frozen, and 23 to 26 were the next free ones.
-A call that is not in the table is `ENOSYS`, never a guess at what it might
-have meant.
+The numbers 0 to 22 are frozen, 23 to 26 were the next free ones; pipes took
+27 and 28 (ADR 0014), signals the three after them (ADR 0015), and the limits
+of a task 32 and 33. A call that is not in the table is `ENOSYS`, never a
+guess at what it might have meant.
 
 The flags of `open` are the same as the ones of the VFS:
 
@@ -151,7 +166,7 @@ transfer on a machine with ~100 KB of RAM. NULL with a length is `EINVAL`, a
 length above the limit is `E2BIG`.
 
 **The memory of the caller** is checked as well, through the port
-(`k_port_exec_contains`, contract 1.6). On the board, the simulator and the
+(`k_port_exec_contains`, a call of the contract since 1.7). On the board, the simulator and the
 null port a program shares the kernel's memory and every pointer is the
 kernel's own; on the x86-64 port the kernel walks the page tables of the
 program that made the call and refuses a range that is not there with
@@ -278,7 +293,7 @@ microos_statx`, with the types of `<stdint.h>`; it returns -1 and sets
 
 ## The programs
 
-`execve(path, argv)` makes the caller a program:
+`execve(path, argv, envp)` makes the caller a program:
 
 * the file is read through the VFS, not through a descriptor of the caller,
   so a failed call leaves the table of the task exactly as it was;
@@ -286,18 +301,21 @@ microos_statx`, with the types of `<stdint.h>`; it returns -1 and sets
   most `KSYS_MAX_IO` bytes, because the image is read into one block of the
   kernel before the port copies it; a file outside that range is refused
   before a byte of it is read;
-* the image must be a `MOX1` of this version, and the port is then asked
-  whether the machine can run a program at all. The board and the simulator
-  answer no, and the answer of the call is `ENOSYS`; the x86-64 port names a
-  window of memory, builds the page tables of the program, copies the image
-  into the physical arena behind the window and enters it through an `iretq`
-  into ring 3 (ADR 0007).
+* the image must be a `MOX1` of version 2 and of a machine the format knows;
+  the arch of the header is then compared with `k_port_exec_arch()`, and an
+  image of another machine is `ENOEXEC` before a byte of it is entered;
+* the port is then asked whether the machine can run a program at all. The
+  board and the simulator answer no, and the answer of the call is `ENOSYS`;
+  the x86-64 port names a window of memory, builds the page tables of the
+  program, copies the image into the physical arena behind the window and
+  enters it through an `iretq` into ring 3 (ADR 0007).
 
 The errors: `ENOENT` for a path that names nothing, `EISDIR` for a directory,
 `EPERM` for a file whose mode has no execute bit for the caller (`0400` is not
-a program), `EINVAL` for a file that is not an image of this system, `ENOMEM`
-for an image the port could not place in its window, and `ENOSYS` for a
-machine without a window of programs.
+a program), `EINVAL` for a file that is not an image of version 2 of this
+system, `ENOEXEC` (`KERR_NOEXEC`, POSIX 8) for an image of another machine,
+`ENOMEM` for an image the port could not place in its window, and `ENOSYS` for
+a machine without a window of programs.
 
 A successful call **does not return** when the program never comes back: the
 program is the caller from then on. A program that ends (by `exit`, or by a
@@ -318,6 +336,28 @@ pointers of the caller. A line of the shell is `exec /bin/hello one two`:
 three words, the name of the program first, as in Linux. The x86-64 port also
 places a zero at the top of the stack, so a program that returns instead of
 exiting faults on address zero.
+
+### The environment
+
+`envp` is the third argument of the call: a vector of "NAME=VALUE" words
+terminated by NULL, copied into a frame of its own by the same code that
+copies the arguments and bounded the same way (eight words, 512 bytes). A
+NULL vector is **the environment of the system** and not an empty one: the
+kernel fills it with `k_exec_environ()`, which today is four words -
+`PATH=/bin`, `HOME=/`, `USER=root`, `PWD=/` - because the shell has no
+`export` yet. A vector whose first word is NULL is an empty environment, and
+the program sees `envp[0] == NULL`.
+
+The environment travels to the port in `struct k_exec_image.envp`, next to the
+bytes of the image; the port contract (1.6) does not change. `execve` answers
+the same errors for a bad environment as for a bad vector of arguments, before
+the file is read: a refused call spends nothing.
+
+The library of a program (`components/libc/user`) writes the entry as
+`_start(argc, argv, envp)`, calls `main(argc, argv, envp)` and then `exit`.
+`components/libc` (the library of the kernel) keeps `microos_execve(path,
+argv)` for the callers that pass no environment; `ksys_execve_env()` is the
+wrapper of the three-argument call.
 
 ## The processes
 
@@ -343,11 +383,69 @@ five seconds passes without a finished child. A number that names no child of
 the caller is `ECHILD` too; a pid or a flag that is not of the contract is
 `EINVAL` before that.
 
+## The signals
+
+Four signals are in the ABI: `KSYS_SIGINT` (2), `KSYS_SIGPIPE` (13),
+`KSYS_SIGTERM` (15) and `KSYS_SIGCHLD` (17). The numbers are the ones of
+POSIX and the names of `kernel/ksys.h`; a number outside the four is
+`EINVAL`. The dispositions are a pointer of the caller or the two values of
+POSIX, `KSYS_SIG_DFL` (0) and `KSYS_SIG_IGN` (1); `signal()` answers the
+previous disposition as the raw value of a register, so a zero and a one
+are the two kernel dispositions and not handler addresses.
+
+`kill(pid, sig)` accepts a positive pid and one of the four signals. The
+system has no process groups: 0 and -1 are `EINVAL`, not "the group" and
+"everybody". A pid that names no live task is `ESRCH`; the number is `-3`,
+the same as `KERR_EXIST`, because `-3` already meant "file exists" in the
+frozen table (ADR 0015), and the shell prints the sentence of the signal
+rather than the text of the file error.
+
+A signal is answered in the context of the task that receives it: on the way
+out of a system call, or on the tick of the timer when the interrupted code
+is a program of ring 3. The default action of `SIGINT`, `SIGTERM` and
+`SIGPIPE` is the end of the task with the status `128 + sig`; the default of
+`SIGCHLD` is to be ignored. A handler runs before the interrupted call
+returns its answer; on x86-64 it is a function of the program in ring 3,
+entered through a frame on the stack of the program and returned from
+through `sigreturn` (29), which is a call of the port and not of a program.
+
+`waitpid()` scans a finished child before the pending signals, so the
+`SIGCHLD` of a child that has just ended does not turn the wait of its
+status into an error. A pending signal that has to be answered - the
+default end, or a handler the task installed - makes the call answer
+`EINTR` (`KERR_INTR`, -4) without reaping the child; `ECHILD` keeps its
+meaning. An ignored signal and the default `SIGCHLD` do not cut a wait.
+
+There is no job control: no `SIGSTOP`, `SIGCONT` or `SIGTSTP`, no groups and
+no `&`. Ctrl+C at the console is the one signal of the terminal: while the
+shell waits for the program it started, a Ctrl+C byte sends `SIGINT` to
+that program, and while it waits for a pipeline to every stage of the job
+and the programs they started (ADR 0017). `kill` from the prompt sends a
+signal to a pid from `ps`.
+
+The library has the same calls as `microos_kill()` and
+`microos_signal()`, with `MICROOS_SIGINT` and the other three numbers, and
+the two dispositions `MICROOS_SIG_DFL` and `MICROOS_SIG_IGN`;
+`microos_signal()` answers `MICROOS_SIG_ERR` and sets `microos_errno()`
+when the signal is not one of the system.
+
 ## The descriptors
 
 Every task has its own table of the open files, four of them. The descriptor
 is the number of the slot. A descriptor that was never opened gives
-`KERR_BADF`.
+`KERR_BADF`. The table is the ceiling of the machine; the task also has a
+limit of its own (`KSYS_RLIMIT_FDS`, below), which starts at four and may be
+lowered, so a task may refuse itself a descriptor that the table would still
+hold.
+
+The open file behind a descriptor is a **description** of the kernel, counted
+by the descriptors that refer to it (`kernel/kfile.h`). One task gets two
+descriptors of one description from `dup2`, and the parent and the child of a
+fork each get one, so the position of a file and the ends of a pipe are one
+state: closing a descriptor does not close the others, and a write through one
+descriptor continues where the other stopped. A description lives in a fixed
+table of 24 records and is given back by the last close. A task that exits
+closes its descriptors.
 
 A descriptor remembers the access it was opened with - read, write, or both.
 The kernel checks that access at the edge of the system, so every filesystem
@@ -361,6 +459,118 @@ A descriptor of a directory is opened with `KSYS_O_DIRECTORY` and read with
 `readdir`; it has no other use. It is opened for reading only, so a write
 never becomes a descriptor of a directory at all, and `read` of it answers
 `EISDIR`. `readdir` of any other descriptor answers `ENOTDIR`.
+
+## The pipes and `dup2`
+
+`pipe(fds)` (number 27) makes a pipe and gives the caller two ordinary
+descriptors: `fds[0]` reads and `fds[1]` writes. The two are the first free
+slots of the task, so a program that has closed its console gets 0 and 1.
+The pipe is a ring of 256 bytes of the kernel; the system keeps eight of
+them. The place for the answer is checked at the edge: NULL is `EINVAL`, a
+place that is not the memory of the caller is `EFAULT`.
+
+* A read of an empty pipe whose writing end is still open waits, and then
+  answers `EAGAIN` if the wait passed its bound: a timeout is not the end of
+  the file. A read of an empty pipe with no writer is 0, the end of the file.
+* A write with no reading end is `EPIPE` (`KERR_PIPE`, the number 32 of
+  POSIX). There is no `SIGPIPE` in this system yet, so the error is the whole
+  answer; the bytes written before the reader went away are the count.
+* The access of each end is the flag of its descriptor: `read` of the writing
+  end and `write` of the reading end are `EBADF`. A pipe has no position, so
+  `lseek` is `ESPIPE` (`KERR_SPIPE`, 29), and it has no entries, so `readdir`
+  is `ENOTDIR`.
+* A wait of a pipe is a poll with a bound, not a queue of waiters: 500 ms.
+  A read that found no byte in that time is `EAGAIN`; a write that placed no
+  byte is `EAGAIN` too, and one that placed some bytes answers the count it
+  placed. A queue with a wakeup is the next step.
+
+`dup2(oldfd, newfd)` (number 28) makes `newfd` a second descriptor of the
+open file of `oldfd` and answers `newfd`. A descriptor that was open at
+`newfd` is closed by the call, and `oldfd == newfd` changes nothing. A
+number outside the table of the task, or a descriptor that is not open, is
+`EBADF`. Because the two descriptors name one description, the copy of a
+write to a file continues at the position of the original, and a duplicated
+end of a pipe keeps the pipe open until the last of its descriptors is
+closed.
+
+A fork copies every descriptor of the parent with one more reference each,
+before the child can run, on the real copy-on-write fork of x86-64 and on the
+placeholder of a machine without an MMU alike.
+
+## The limits of a task
+
+A task has three limits: the memory it may hold, the processor time it may
+spend and the descriptors it may open. They belong to the task and to nobody
+else; there is no call that changes the limit of another task, and no limit of
+a user because the system has one user, uid 0.
+
+```c
+int ksys_getlimit(k_u32_t which, k_u64_t *value);
+int ksys_setlimit(k_u32_t which, k_u64_t value);
+```
+
+`which` names one resource; the value is a 64-bit word, so the three widths
+of the sources (bytes, milliseconds, a count of descriptors) travel without a
+structure. The library composes `struct microos_rlimit` from three calls for
+a caller that wants the set in one place.
+
+| Selector | Resource | Unit | Ceiling |
+|---|---|---|---|
+| `KSYS_RLIMIT_MEMORY` (1) | the user blocks the task holds | bytes | 2 MiB (the PSRAM of the board) |
+| `KSYS_RLIMIT_CPU` (2) | the time the task spent running | milliseconds | 4294967295 (about 49 days) |
+| `KSYS_RLIMIT_FDS` (3) | the descriptors the task may open | descriptors | `TASK_MAX_FDS` (4) |
+
+**The policy: the ceiling is the start and a limit only goes down.** A fresh
+task starts at the ceiling; `setlimit` accepts a value at or below the current
+limit of the resource and refuses a raise with `EPERM`. There is no second
+user to grant a raise, and a program that could raise its own limit would have
+no limit at all - the same rule as the mode check, where uid 0 gets no
+exemption (ADR 0005). A selector outside the three is `EINVAL`; a value above
+the ceiling of the machine is `EPERM` as well, because it is above the current
+limit too. A child of a fork inherits the limits of its parent; a task made by
+`task_create` starts at the ceiling.
+
+`getlimit` copies the current limit into the memory of the caller through the
+edge: NULL or a place that is not there is `EINVAL`/`EFAULT`. `setlimit` takes
+the value in a register and has no pointer to check.
+
+**The memory** is the sum of the blocks a task allocated with the priority of
+a user (`KMM_PRIORITY_USER`, which is what `malloc` of a task uses) and has
+not freed. The kernel and the system utilities are not charged: their
+allocations have no owner, because the kernel must not fail for the budget of
+an application. A block that would take the task over the limit makes `malloc`
+and `realloc` answer 0, and the library turns that into `ENOMEM`
+(`microos_malloc`). The blocks that are already held are not taken away when
+the limit is lowered: the next allocation fails and `free` returns the room.
+`realloc` asks for the new block before it gives the old one back, so a budget
+that would only hold the result can refuse the call; the caller keeps its old
+block, as POSIX promises. A block that outlives the task that allocated it is
+not charged to anybody, because the kernel keeps no list of the blocks of a
+task yet (see [debts.md](debts.md)).
+
+**The CPU time** is counted in the milliseconds the task was running, at the
+edge of every system call and at the tick of a port that can name the running
+task; a sleep and a block set the accounting point again on both sides, so a
+wait costs nothing. When the task reaches the limit it is marked with
+`SIGTERM` once - the system has four signals and no `SIGXCPU`, and a fifth is
+not in the contract. The default action of `SIGTERM` ends the task with the
+status 143; a handler may catch it and the task goes on, as a handler of
+`SIGXCPU` may. A task that never makes a system call is marked at the next
+one; on x86-64 the tick of the timer delivers the mark to a program of ring 3
+without a call.
+
+**The descriptors**: `open`, `pipe` and `dup2` stop at the limit with
+`EMFILE` (`KERR_MFILE`, 24). `dup2` refuses a `newfd` at or above the limit;
+`dup2(fd, fd)` of a descriptor that is already open is still allowed, because
+lowering a limit does not close what is open. A descriptor above a lowered
+limit stays usable and may be closed; a pipe needs two free slots below the
+limit. The table of the task is four slots and the table of the descriptions
+of the system is 24 records: a full limit is `EMFILE`, a full system is
+`ENOSPC`.
+
+A host test covers the three resources (`test_ksys.c`, `test_task.c`,
+`test_kmm.c` and `test_libc.c`), and the shell has `ulimit` to print the limits
+of the shell and to lower them.
 
 ## The wrappers
 
@@ -377,11 +587,21 @@ ksys_close(fd);
 The wrappers are thin: they only pass the arguments on.
 
 The library of the system (`components/libc`) has the same calls under the
-names of POSIX: `microos_chmod`, `microos_chown`, `microos_statx` and
-`microos_execve` (and the usual `chmod`, `chown`, `statx`, `execve` when its
-header is included). They return -1 and set `microos_errno()` when something
-goes wrong, and they refuse the two numbers of a mode and of an owner that a
-record cannot hold before the kernel is asked.
+names of POSIX: `microos_chmod`, `microos_chown`, `microos_statx`,
+`microos_execve`, `microos_pipe` and `microos_dup2` (and the usual `chmod`,
+`chown`, `statx`, `execve`, `pipe`, `dup2` when its header is included). They
+return -1 and set `microos_errno()` when something goes wrong, and they
+refuse the two numbers of a mode and of an owner that a record cannot hold
+before the kernel is asked. The wrapper of the call itself is
+`ksys_execve(path, argv)` for a caller without an environment and
+`ksys_execve_env(path, argv, envp)` for one with it.
+
+The limits have the same shape: `microos_getlimit(which, &value)` and
+`microos_setlimit(which, value)` with the selectors `MICROOS_RLIMIT_MEMORY`,
+`MICROOS_RLIMIT_CPU` and `MICROOS_RLIMIT_FDS`, and `microos_getrlimits()` for
+the three numbers at once. A raise is -1 with `EPERM` in `microos_errno()`,
+and `microos_strerror()` names `EMFILE`, `ENOMEM` and the rest of the codes
+the library can meet.
 
 ## The tests
 
@@ -389,6 +609,22 @@ The tests of the ABI do not check that "something" works, they check the
 **properties**: the same data has to give the same result no matter how the
 program breaks it into pieces.
 
+* **The golden record.** The table of this document and the numbers around it
+  are recorded in [tests/corpus/abi.txt](../tests/corpus/abi.txt), and the test
+  `ksys: the ABI is the recorded one` reads the file and compares it with the
+  running kernel: the calls (number, name, arity and result), the errors, the
+  flags, the limits of the edge, the header of a program image and the size
+  and the offsets of `vfs_stat`, `vfs_statx`, `vfs_dirent` and
+  `k_exec_image`, for a 64-bit and for a 32-bit machine. A number, a name, a
+  flag or a field that changes without the file is a failed test, and a line
+  of the file without a change of the kernel is one too; the two are one
+  commit. The arity and the result are documentation of the signature that the
+  compiler checks through the prototypes of `kernel/ksys.h`.
+* **The frozen image.** A MOX1 image of version 2, built for 1.0, is recorded
+  in [tests/corpus/mox1](../tests/corpus/mox1) and parsed on every
+  `make test` (`exec: the image of 1.0 is read as it was frozen`): the fields
+  of the header, the sum of the bytes and the rule of the port that the text
+  ends on a page. An image built for 1.0 is read by every 1.x.
 * **The round trip.** The corpus of the numbers is written through the system
   calls in pieces of 1, 3, 7, 64, 512, 1024 and 4096 bytes. Every time the
   same bytes have to come back, and their sum has to be the same.
@@ -413,6 +649,15 @@ program breaks it into pieces.
 * **The directory.** A directory is opened with `O_DIRECTORY`, its entries
   come through `readdir` one call after another, the end of it is an empty
   answer, and a descriptor of a file is `ENOTDIR` to the same call.
+* **The pipes.** The bytes of one end come back from the other, the end of
+  the writing end is the end of the file, a pipe without a reading end is
+  `EPIPE`, the wait of an empty or a full pipe passes its bound as `EAGAIN`,
+  and `lseek`/`readdir` of a pipe are `ESPIPE`/`ENOTDIR`.
+* **The sharing.** `dup2` makes a second descriptor of one open file: the
+  write through it reaches the object the number now names, the copy
+  outlives the original, and the old descriptor at the new number is closed.
+  A pipe crosses a fork: the child writes, the parent reads to the end and
+  sees the status of the child.
 * **The edge.** A path that does not end in the window is `ENAMETOOLONG`, a
   buffer above the limit is `E2BIG`, a pointer that is not memory of the
   caller is `EFAULT`, and a wait without a child is `ECHILD`. The last one is
@@ -424,6 +669,19 @@ program breaks it into pieces.
   an image of the format of the system, and every refusal before that answer -
   `ENOENT`, `EISDIR`, `EPERM`, `EINVAL` - is the answer of its own reason. A
   failed `execve` spends no descriptor of the caller.
+* **The environment.** A vector of the system is a list of `NAME=VALUE` words
+  with `PATH=/bin` first; an environment of nine words, or one whose string
+  does not end, is `E2BIG`; a NULL environment and an empty one are the answer
+  of the machine and not a refusal. The arguments and the environment are
+  bounded apart, so a long line does not shorten the environment of the same
+  call.
+* **The limits.** A fresh task starts at the ceiling of the three resources,
+  a lower value is accepted, a raise and an unknown resource are refused, and
+  the numbers come back from a child task of their own so that a limit lowered
+  by the test does not follow the next one. `open`, `pipe` and `dup2` answer
+  `EMFILE` at the descriptor limit; a block over the memory limit is 0 from
+  `malloc` and `ENOMEM` from the library, and `free` returns the room; a task
+  over its CPU limit is marked with `SIGTERM` and ends with 143.
 
 The corpus lives in [tests/corpus/vectors.txt](../tests/corpus/vectors.txt): 512
 numbers with the boundary values mixed in (0, 1, 255, 65535, 2147483647 and so

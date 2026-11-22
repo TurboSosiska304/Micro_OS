@@ -4,7 +4,17 @@
 * Date: 2026-11-21
 * Updated: 2026-11-21 — the reader became read-write: create, write,
   truncate, append, unlink, mkdir, long names that are made, `statfs`, and a
-  read-only check of the volume (`fsck` of FAT).
+  read-only check of the volume (`fsck` of FAT), and a repair of the
+  damage the medium itself explains under `-y` (lost clusters, a loop, a
+  cross-link, a size against its chain).
+* Updated: 2026-11-21 — the same `fsck -y` repairs MicroFS: the orphan
+  blocks, the entries and the names nobody can reach, the chains, the sizes,
+  the counter of a directory and the records no name reaches, with the rules
+  in `mfs/mfs.h` and the note in ADR 0013 (a damaged header, the data of a
+  half-written file and a shared directory stay for a person).
+* Updated: 2026-11-21 — ext2 arrived as the next reader: read-only, with
+  inodes, modes, owners and the moments of `statx` (ADR 0019). The paragraph
+  below about it being only a name is the history of this decision.
 
 ## Context
 
@@ -127,7 +137,9 @@ Every change reaches the medium before the call returns, and the device is
 asked to write through its own cache (`ops->sync`) when it has one. There is
 no journal and no cache of the changes: a power cut in the middle of a write
 leaves a cluster that no chain names or a directory entry that is half
-written. `fsck fat` finds both and repairs neither.
+written. `fsck fat` finds both; `fsck fat -y` gives the first back to the
+free map and cuts or removes the second where the medium still says what it
+meant, and the rules are below.
 
 **No modes, no owner.** `stat` answers `mode = 0` and `owner = 0`, the same
 way procfs and devfs answer for an object that has no such attribute. A zero
@@ -188,20 +200,72 @@ disagree is a volume another system will complain about. The count of the
 free clusters for `statfs` is a walk of the table, the price of having no
 bitmap in the format.
 
-**The check.** `fat_check()` walks the volume and reports; it does not write,
-and `fsck fat <point|device>` is its command. A volume of this reader is
-never repaired by the kernel: a person decides what to do about a broken
-chain, and a checker that writes is a formatter nobody asked for. The walk
-covers the boot sector and the BPB (the bytes on the medium have to describe
-the volume that is mounted), every copy of the table against the first, the
-chains (a loop, a cross-link, a cluster outside the volume), the entries of
-the fixed root and of every subdirectory, the checksum and the order of the
+**The check and the repair.** `fat_check()` walks the volume and reports; it
+does not write, and `fsck fat <point|device>` is its command. `fat_repair()`
+is the same walk with the safe writes in front of the check;
+`fsck fat <point|device> -y` asks for it. The walk covers the boot sector and
+the BPB (the bytes on the medium have to describe the volume that is
+mounted), every copy of the table against the first, the chains (a loop, a
+cross-link, a cluster outside the volume), the entries of the fixed root and
+of every subdirectory, the short names, the checksum and the order of the
 long-name runs, and the clusters that the table marks used while no chain
 names them. A volume that is mounted is checked under its own lock; a device
 that is not is mounted for the length of the walk and forgotten again. The
 clusters that the walk has claimed live in one static map of 65536 bits, so
 FAT12 and FAT16 fit whole and a bigger FAT32 volume is refused with a
 message instead of being walked with a map that would hide a cross-link.
+
+The repair decides nothing the medium does not say:
+
+* a cluster that is marked used and that no chain names goes back to the
+  free map, in every copy of the table;
+* a chain that loops is ended at the first time the repeated cluster was
+  named, a link that points at a free, retired or out-of-volume cluster is
+  ended before it, and the clusters of the cut tail go back to the free map
+  the same way;
+* the second of two names of one cluster is cut before the shared cluster,
+  so the name that came first keeps its data whole; when the *head* is the
+  shared cluster the later file gives its claim up and becomes empty (only
+  its name is left), and a directory in that position is not touched at all,
+  because its subtree is not the checker's to throw away;
+* a size that promises more than its chain holds is cut down to the chain,
+  and a chain that reaches past its file gives the tail back;
+* a run of long-name entries that does not follow the sequence and checksum
+  rules is removed whole and the 8.3 name stays; a run in front of an entry
+  that is removed goes with the entry;
+* an entry whose first cluster is not in the volume is removed (the marker
+  `E5`), with its long name, because nothing on the medium says where its
+  data is;
+* a file whose 8.3 name holds a character FAT does not allow is removed
+  with its long name; a directory with such a name keeps it, because its
+  subtree would go with the entry, and the report names it as left.
+
+It refuses to guess, and the report leaves the problem as it is:
+
+* a boot sector that disagrees with the mount (the writes would use a
+  geometry the medium no longer has);
+* two copies of the table that differ (the medium does not say which one is
+  the volume);
+* an empty file that names a cluster: the chain could be the one of a
+  directory the walk has not entered yet, so it is named and left;
+* a directory whose head cluster another chain holds (see above);
+* a medium that does not answer: the pass stops at the first failed write.
+
+A volume that carries one of the first two is not repaired at all, not even
+the lost clusters: the two stories have to agree before the kernel writes.
+MicroFS follows the same rule: `mfs_repair()` writes nothing when the header
+is damaged or disagrees with the mount, and it gives nothing back when the
+tree could not be walked whole.
+The same caution covers a tree the pass could not walk whole: when a
+directory head is shared or a tree is deeper than a path can name, the free
+map is not touched either, because a cluster of the subtree it refused to
+enter looks exactly like a lost one.
+
+`fat_repair()` runs the check once more after the pass with a map of its own,
+so a repaired volume is proven whole rather than assumed whole: `errors` is
+what is left, `unfixed` counts it, `fixed` counts the changes, and
+`lost_found`/`lost_freed` count the clusters the free map took back. Without
+`write` the call is exactly the check it was.
 
 ### 4. Several filesystems at one time
 
@@ -255,11 +319,12 @@ of a second volume are proven today.
   written as zero, which a reader shows as an unknown time.
 * **exFAT**, FAT64, the FAT32 extended flags and the backup boot sector:
   a volume that needs them is not one of the volumes this reader promises.
-* **repair of FAT**: `fat_check()` reports and never writes, so a cluster it
-  calls lost is still lost when it returns, and a half-written entry stays
-  half written. A volume that a power cut caught needs a repair pass with a
-  decision about the data it throws away, and that decision is not in this
-  component yet.
+* **repair beyond what the medium explains**: `fat_repair()` fixes the lost
+  clusters, the broken chains, the sizes and the names, but it does not
+  choose between two table copies that differ, does not rewrite a boot
+  sector, and does not touch a directory whose head another chain holds. A
+  volume whose damage is one of those needs a person and, for the boot
+  sector, another formatter.
 * **a second FAT volume, hotplug and eject**: one static volume, like
   MicroFS. A card that comes and goes is a driver question first.
 * **Unicode case folding and normalization**: the lookup is ASCII, the
@@ -280,20 +345,24 @@ volume that is mounted again still has the bytes. The check is proven the
 same way: a clean image of each of the three formats passes whole, and an
 image with a table copy that differs, a loop, a cross-link, a cluster
 outside the volume, a broken long name, a lost cluster or a chain too short
-for its file is named and left untouched.
+for its file is named and left untouched. The repair has its own images: one
+kind of damage each is repaired, the check then reports zero problems and
+the bytes of a read-only call are compared around it, and the damage the
+pass refuses (a table copy that differs, a medium that does not write) is
+still named and still there.
 
 The price: the component is a second user of `kernel/blockdev.h` with its own
 sector cache (the block layer still has no cache of its own); a FAT volume
 cannot express a mode, an owner or a time, so a program that asks for them
 is told "not supported" and not "here is a default"; a write has no journal
-under it, so the volume is as safe as the medium and the moment and the
-check can only report what a power cut left; and the mount of a second
-volume is still a call of the boot, not a file of `/etc`.
+under it, so the volume is as safe as the medium and the moment, and the
+repair can put back only what the medium still explains; and the mount of a
+second volume is still a call of the boot, not a file of `/etc`.
 
 Next, in an order that makes sense: the `mount` command and `/etc/fstab`
 (they need the registry and a parser of the configuration), the timestamps
-of `struct vfs_stat` and the writers that fill them, a repair of the lost
-clusters under `-y`, and ext2 as the second reader with a format the project
+of `struct vfs_stat` and the writers that fill them, a journal or a cache
+under a FAT write, and ext2 as the second reader with a format the project
 can also write.
 
 ## References

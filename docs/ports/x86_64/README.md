@@ -8,7 +8,7 @@ the machine where a program can really be loaded and run (the window of
 | | |
 |---|---|
 | port | `ports/port_x86_64` |
-| loader | `loader32.S`: a multiboot image that QEMU loads with `-kernel`; it copies the kernel to 16 MiB, builds the identity map of the first gigabyte and turns the long mode on |
+| loader | `loader32.S`: a multiboot image that QEMU loads with `-kernel`; it copies the kernel to 16 MiB, maps the same bytes at `0xFFFFFFFF80000000` (the top 2 GiB, where the image is linked), builds the identity map of the first gigabyte and turns the long mode on |
 | console | the text screen of the VGA (80x25, `0xB8000`, light grey on black) and COM1, 115200, `\r\n`, out of one `k_port_write()` |
 | input | the PS/2 keyboard on IRQ1 (scancode set 1, Shift and Caps Lock) or COM1 |
 | clock | the PIT at 1 kHz; critical sections save and restore the flags |
@@ -16,16 +16,19 @@ the machine where a program can really be loaded and run (the window of
 | store | `ata0`: a raw image on the primary IDE channel, PIO, MicroFS on its first partition, mounted at `/` (ADR 0008); `ram0`, 512 KB of the memory of the machine, when there is no disk |
 | network | `virtio0`: virtio-net-pci in its legacy I/O interface, polled; ARP, IPv4, ICMP, UDP, a client of TCP (one segment in flight, a timeout retransmission) and a listener with SYN/ACK and `accept`; the resolver of QEMU user-net with a cache of eight names and their time to live; 10.0.2.15/24 on QEMU user-net, gateway 10.0.2.2, resolver 10.0.2.3, no DHCP |
 | programs | `k_port_exec_supported()` is true; the window is 16 MiB at 32 MiB (`0x02000000`-`0x03000000`) over a physical arena at 64 MiB; a program is a file in `/bin` (the MOX1 format of `kernel/exec.h`), runs in ring 3 with page tables of its own and calls the kernel with `int $0x80` (ADR 0007) |
-| build | `make x86-build` (needs `cmake`, `ninja`, `xorriso` is not needed) |
+| protection | NX and W^X: `EFER.NXE` from the loader, the text read-only and executable, every data page - rodata, data, bss, stacks, heap, arena, screen - writable and NX; no page is both (ADR 0007, sections 9 and 10). The kernel is in the higher half: the image is linked at `0xFFFFFFFF80000000` and mapped there beside the low identity map |
+| signature | the kernel carries a 120-byte trailer (magic, size, SHA-256 and Ed25519) and the loader verifies it before it copies a byte (ADR 0020); the public key is compiled into `loader32.elf`, the private key is outside the tree (`MICROOS_SIGN_KEY`), and `tools/microos_sign` signs and verifies |
+| build | `make x86-build` (needs `cmake`, `ninja`, `xorriso` is not needed) and `make x86-disk` for the volume with `/bin` |
 | check | `make x86-smoke` (serial), `make x86-vga-smoke` (screen and keyboard), `make x86-disk-smoke` (two boots on a disk), `make x86-net-smoke` (the network) - all need `qemu-system-x86` |
 
 ## Run it
 
 ```bash
 make x86-build
+make x86-disk         # the image of the disk: /bin and /etc of MicroFS
 make x86-run          # a QEMU window: the VGA console and its keyboard
 make x86-run-serial   # the same machine in a terminal (-nographic)
-make x86-run-disk     # the window with an 8 MB disk on the IDE channel
+make x86-run-disk     # the window with a disk of its own, kept between runs
 make x86-run-disk-serial  # the same disk in a terminal
 make x86-net-run      # the same machine with a virtio-net card, in a terminal
 make x86-smoke        # boot and check the lines of the banner and the shell
@@ -72,18 +75,88 @@ to have. `python3 tools/x86_vga_smoke.py --display gtk` runs the same checks
 against the real window instead of its memory; the screenshot is then the
 picture of the window, which is how a person watches the keys arrive.
 
-The image is two files: `build-x86/loader32.elf` (the loader) and
-`build-x86/microos64.bin` (the kernel, a flat image). The heap of the kernel
-stops below the window of the programs; the kernel is linked at 16 MiB and
-the programs are placed at 32 MiB. The programs of `/bin` are made first:
-`build-x86/hello.mox`, `crash.mox`, `fork.mox` and `badptr.mox` are the images
-of `ports/port_x86_64/programs/` (`programs/program.ld` links them for the
-window, `tools/mkprog.sh` turns them into the format) and the kernel carries
-all four as blobs, because the machine has to have the bytes before it has a
-filesystem to read them from. The build passes
-`--base 0x02000000` to `mkprog.sh`, which refuses an image linked for another
-window: nothing relocates the program, so a wrong address would run and read
-its data from somewhere else.
+The machine boots from three files: `build-x86/loader32.elf` (the loader),
+`build-x86/microos64.bin` (the kernel, a flat image) and
+`build-x86/programs.img` (the disk). The kernel is linked in the higher half
+at `0xFFFFFFFF80000000`, the loader copies the bytes to 16 MiB and maps them
+there, and the C of the kernel is built with `-mcmodel=kernel` (ADR 0007).
+
+## The signature of the kernel
+
+`microos64.bin` is the flat kernel followed by the 120-byte trailer of
+ADR 0020: `MOSIGN01`, the version, the algorithm, the size of the payload,
+its SHA-256 and an Ed25519 signature over those 56 bytes. The loader carries
+the public key (`sign_public_key.h`, generated from the key of the build) and
+calls `loader_verify_image()` before it builds the page tables, copies the
+kernel or enters the long mode. A refusal prints `Micro OS: the image is
+refused: <reason>` on COM1 and on the bottom row of the screen, and halts:
+the damaged kernel never runs. A good image prints one line first:
+
+    Micro OS: image signature ok (sha-256, ed25519)
+
+The key of a build is the private file named by `MICROOS_SIGN_KEY`, or a fresh
+one in `build-x86/signing.key` when the variable is empty. The second case is
+the development loop and CI: the check is real, the key is not a secret, and
+two builds do not produce the same bytes. A release passes the key:
+
+    make x86-build MICROOS_SIGN_KEY=/path/outside/the/tree/release.key
+    make x86-smoke
+
+`tools/microos_sign` does the work by hand:
+
+    microos_sign keygen --key dev.key --pub dev.pub --header build-x86/sign_public_key.h
+    microos_sign sign   --key dev.key --in microos64.raw --out microos64.bin --sig microos64.sig
+    microos_sign verify --pub dev.pub microos64.bin
+    microos_sign info   microos64.bin
+
+`make x86-smoke` checks both answers: the normal boot accepts the image, and a
+kernel with one changed byte, a kernel without a trailer and a kernel signed
+by another key are each refused by the loader before `board: qemu_x86_64`
+appears. The tests call the same verifier on the host
+(`tests/cases/test_sign.c`), with the vectors of RFC 8032 and FIPS 180-4.
+
+The refusal is a setting. `MICRO_OS_REQUIRE_SIGNATURE` is a CMake option, on
+by default; with it off the loader still verifies the trailer, still prints
+the reason, and then prints
+
+    Micro OS: unsigned or damaged image: not guaranteed
+
+and loads the kernel. The build of the other policy is a directory of its own:
+
+    make x86-open-build                  # build-x86-open, the option OFF
+    make x86-smoke                       # the strict and the open build
+
+`make x86-smoke` boots the signed kernel on the open loader (it is the same
+check), then an unsigned kernel and a kernel with a changed byte: each prints
+the warning and reaches `board: qemu_x86_64` and `the kernel is up`. The
+strict loader refuses the same bytes, which is what the signature checks of
+the smoke test already prove. The setting exists for a development machine
+whose image is not signed yet; it does not make a damaged image correct, and
+the sentence on the console says that.
+
+There is no anti-rollback on this machine: it has no store that survives a
+reset (the RAM volume is gone with the machine), so an older correctly signed
+kernel boots and there is no flag. The version in the trailer leaves room for
+a floor when the port has a store; today the rule is "a rollback is allowed"
+(ADR 0020, section 7).
+
+The heap is the low identity map and stops below the window of the programs,
+which are placed at 32 MiB; the image of 1.0 ends 1.9 MiB after the base and
+the port allows it up to 16 MiB. The sixteen programs of `/bin` are built
+first:
+`build-x86/hello.mox`, `crash.mox`, `fork.mox`, `badptr.mox`, `signals.mox`,
+`cat.mox`, `echo.mox`, `ls.mox`, `wc.mox`, `head.mox`, `grep.mox`,
+`mkdir.mox`, `rm.mox`, `pwd.mox` and `spawn.mox` are the images of
+`ports/port_x86_64/programs/` (`programs/program.ld` links them for the
+window, `tools/mkprog.sh` turns them into the format). They are not blobs of
+the kernel: `make x86-disk` writes them into a MicroFS volume of a raw disk
+image with `tools/mkfs_mfs.c`, and the boot mounts that volume and runs
+`/bin/hello` through `execve`. The last ten are linked against
+`components/libc/user` and enter at `_start` (ADR 0016); the first five use
+the raw `programs/prog.h`. The build passes `--base 0x02000000` to
+`mkprog.sh`, which refuses an image linked for another window: nothing
+relocates the program, so a wrong address would run and read its data from
+somewhere else.
 
 The virtual and the physical address are no longer the same number for a
 program: `src/paging.c` builds its page tables with the window at 32 MiB
@@ -92,6 +165,15 @@ identity map while the program reaches them through its own. `src/gdt.c`
 builds the GDT the loader never had (user code and data, a 64-bit TSS with
 `RSP0` and the double-fault stack), and `src/interrupts.S` takes the stack of
 the TSS on a call from ring 3.
+
+The kernel has two names too. The image is linked at the top and the loader
+also leaves its bytes in the low identity map, which is why `page_phys()`
+subtracts the base for a page-table entry and `table_entry()` can walk a table
+by the physical address an entry holds. `kernel_image_map()` gives the image
+chunks one table of 4 KiB pages and names it from both PD entries, so the text
+is read-only and the data NX whichever name the processor came through; the
+space of a program inherits the high half as it is, supervisor-only, because
+the kernel runs on that CR3 during a call.
 
 ## The window: the VGA text and the keyboard
 
@@ -112,6 +194,16 @@ escape sequence the console of the kernel writes is the pair of the `clear`
 command (`ESC[2J` and `ESC[H`), and the screen reads it; a sequence of any
 other kind is dropped whole instead of being printed, because a window is not
 a terminal emulator and a `[2J` in the middle of a line is not a picture.
+
+The pair is a setting of the machine (ADR 0021): `/etc/console` with
+`theme=dark|light` and `invert=0|1` is read at the boot and at every
+`config set`, and the port applies the attribute to every cell of the screen
+and logs the number it put there (`7` is grey on black, `112` black on light
+grey). `/etc/display` and `/etc/font` are the panel and the font of the board:
+this machine has neither, so the boot keeps the files and says so, and
+`config set display.rotation 90` answers that the value is kept. The files,
+the keys and the table of the machines are in
+[`docs/wiki/settings.md`](../../wiki/settings.md).
 
 The keyboard hangs on the first line of the 8259 (IRQ1, the vector `0x21`).
 The stub in `interrupts.S` saves the registers around the call of C, the
@@ -146,18 +238,29 @@ What the window does not do:
 
 ## The disk
 
-`make x86-run-disk` attaches a raw image of 8 MB to the primary IDE channel
-(`-drive file=build-x86/disk.img,format=raw,if=ide,cache=writeback`), and the
-image the first time it needs it: 8 MB of an erased medium with the MBR of one
-partition at LBA 2048 (`tools/x86_disk_smoke.py --mkimage`). The boot finds the
-drive (`ata0`), reads the MBR, registers the partition (`ata0p1`) and mounts it
-at `/`; the first time the filesystem finds it blank and formats it, and after
-that the volume it finds is the one it left.
+The disk is the machine's, not a test's: `make x86-disk` writes
+`build-x86/programs.img`, an 8 MB raw image with an MBR, one Linux partition
+at LBA 2048 and a MicroFS volume in it. The volume already carries `/bin`
+(the sixteen programs) and `/etc/setting`: the host tool `tools/mkfs_mfs.c`
+(formats and writes) links `components/mfs`, so the layout of the volume has
+one implementation and the host test `tests/cases/test_mkfs_image.c` mounts
+what the machine boots.
 
-So this machine keeps what it writes: a file created in the shell, a program
-in `/bin`, the mode and the owner of both, survive a reset. `make
-x86-disk-smoke` is the proof and the regression test: one image, two boots,
-`write /persist.txt` in the first, `cat /persist.txt` in the second.
+`make x86-run` and `make x86-run-serial` boot on that image: the machine finds
+the drive (`ata0`), reads the MBR, registers the partition (`ata0p1`), mounts
+it at `/` and runs `/bin/hello` before the shell. A boot writes nothing to the
+volume; the programs are files the tool left there. The boot also mounts
+`/proc` (procfs) and `/dev` (devfs), so `tree /` draws the same `bin/`,
+`etc/`, `proc/`, `dev/` tree the board and the simulator have. A volume
+without `/etc` (the memory volume of a machine with no disk) gets `/etc`,
+`/etc/init.d` and `/etc/setting` from the boot; a volume that has them is
+never changed.
+
+`make x86-run-disk` copies the image once to `build-x86/disk.img` and keeps
+that copy: a person boots the machine, writes a file, boots it again and finds
+the file there. `make x86-disk-smoke` is the proof and the regression test:
+one image, two boots, `/bin` and a program from the disk in both,
+`write /persist.txt` in the first and `cat /persist.txt` in the second.
 
 The driver is `src/ata.c`: the ATA registers at 0x1F0, LBA28, PIO, polled -
 no DMA (the port has no contract for a physical address yet) and no interrupt
@@ -165,10 +268,10 @@ of the channel. A command runs with the interrupts off, so the timer and the
 keyboard of this machine cannot interleave another task's request with the
 transfer; every wait has a budget of five seconds, a failed command is
 repeated once and reported with the sector that failed. A disk that does not
-answer is reported and the machine goes on with `ram0`, so `make x86-run` and
-`make x86-smoke` work without one.
-`disk.img` is generated and not committed; `make clean` does not remove
-`build-x86`, `rm -rf build-x86` does.
+answer is reported and the machine goes on with `ram0`; that volume has no
+`/bin`, so the boot says which file it could not find and starts the shell.
+`programs.img` and `disk.img` are generated and not committed; `make clean`
+does not remove `build-x86`, `rm -rf build-x86` does.
 
 ## The network
 
@@ -279,12 +382,46 @@ with an acknowledgement and retransmitted data is not reassembled; the fixed
 retransmission is the whole of the reliability. The driver polls, because the
 PCI line needs the I/O APIC that K8 brings.
 
+## The processors and the second core
+
+The port reads the processor list of the machine the way a PC has answered
+since ACPI: the root pointer in the extended BIOS area (or the last kilobyte
+of the BIOS), the RSDT or the XSDT under it, and the MADT with one entry per
+processor. The local APIC address comes from the same table. The boot prints
+both numbers, because they are different while the second core is not up:
+
+```
+x86-64: 2 cpu(s) reported by the firmware, 1 in use (apic 0xfee00000)
+```
+
+The count on the left is what the firmware calls enabled; on the right is
+what the kernel runs. `make x86-smoke` gives QEMU `-smp 2` and reads the
+line, so a machine that stopped describing its processors is a failure and
+not a silence.
+
+Only the processor of the boot runs the kernel. The AP bring-up of ADR 0012
+has four steps, and the port has none of them yet: a real spinlock inside
+`k_port_enter_critical()` (today it is `cli` and a depth counter, which is a
+lock of one core), one `port_task`/TSS/thread pointer per core, a trampoline
+in low memory with INIT-SIPI-SIPI, and a local APIC timer with its vector
+plus the I/O APIC for the keyboard and the disk (the PIT and the 8259 deliver
+to the boot processor). `make x86-smp-build` builds the portable kernel with
+`KERNEL_SMP=ON`; it boots on this machine and says `1 in use`, and the two-core
+side of the scheduler is tested on the host (`make test-smp`, `make
+soak-host`). The blocker and the order of the work are written down in ADR
+0012, "The pilot of 1.x" and in [debts.md](../../debts.md) under K8.
+
 ## What works
 
-* the boot: the loader, long mode, the banner, the contract check at 1.6;
+* the boot: the loader, long mode, the banner, the contract check at 1.9;
+* the signature of the kernel (ADR 0020): the loader verifies the trailer of
+  SHA-256 and Ed25519 with the key compiled into it before it copies a byte,
+  and a damaged, unsigned or foreign-key image stops with the reason and
+  never reaches the kernel;
 * the console: the VGA text screen and COM1 from one call, the keyboard of
   the PS/2 with Shift, Caps Lock, Backspace and Ctrl+C, and the serial port
-  with the console it always had;
+  with the console it always had; the attribute of the cells is `/etc/console`
+  (`theme`, `invert`) at the boot and at `config set` (ADR 0021);
 * the clock, the interrupts (IDT with 32 exceptions, PIC, PIT), the context
   switch, the scheduler, `ps`, `uptime`, `free`, `dmesg`;
 * paging and ring 3 (ADR 0007): the kernel is a supervisor-only identity map
@@ -292,6 +429,25 @@ PCI line needs the I/O APIC that K8 brings.
   the null page unmapped and a guard page under the 64 KiB stack, and the
   program prints the `cpl` it reads from CS (`3`); a program is a task, `exit`
   ends it, the caller of `execve` waits for it, and `execve` answers 0;
+* NX and W^X (ADR 0007, sections 9 and 10): the loader turns `EFER.NXE` on
+  with long mode, and every entry of every table says what the page may do.
+  The text of the kernel is readable and executable and not writable; its
+  rodata is read-only and NX; its data, bss, the stacks, the page tables and
+  the heap are writable and NX, and so is the rest of the first gigabyte -
+  the VGA, the boot information and the arena of the programs. A program has
+  the same two regions of its own: the header and the code are read-only
+  code, and the data, the bss, `argv`/`envp`, the 64 KiB stack and the
+  restorer page carry the protection they need (the restorer is code, so it
+  is executable and not writable). `programs/program.ld` pads the text to a
+  page and `k_port_exec_enter()` refuses an image whose text does not end on
+  one. The port reads the tables back: `kmain` prints
+  `x86-64: the map is W^X` and a program whose window is not W^X is refused
+  before it runs. `/bin/nx` jumps into its data (fault 14 with error `0x15`,
+  the instruction-fetch bit), writes its text (fault 14 with error `0x7`) and
+  hands its text to `read` (the kernel's store into a read-only page makes a
+  private copy of it as data, so the parent's code is untouched and the child
+  dies on its next fetch), and `make x86-smoke` reads the lines and the
+  parent that survives them;
 * the filesystem: MicroFS mounted at `/`, on the first partition of the disk
   when one is attached and on a volume of 512 KB in the memory of the port
   when there is not; `ls`, `cat`, `write`, `mkdir`, `rm`, `df`, `fsck` and
@@ -311,21 +467,35 @@ PCI line needs the I/O APIC that K8 brings.
   network of QEMU, the page of the state served by the guest to a client of the
   host through `hostfwd`, and a name that is asked once and answered twice;
 * a second filesystem: `-DMICRO_OS_FS_FAT32=ON` links the FAT reader and writer
-  reader and its `vfs_mount_type()` (ADR 0009). The option is off by default,
-  so the smoke tests of the machine keep one MicroFS volume; a machine that
-  has a FAT partition mounts it with a call of the boot, because `/etc/fstab`
-  and the `mount` command do not speak the registry yet;
-* a program out of a file: the boot writes the images of `hello`, `crash` and
-  `fork` to `/bin`, gives them the mode 0755 and asks for `/bin/hello` with
-  `execve` - the stat, the check of the mode, the read through the VFS, the
-  parse of the image and the entry are the ones of the call and not a copy of
-  them. The program prints its lines on the console and calls `exit`; the
-  call reports 0 and the port prints `the program exited with 0`;
+  reader and its `vfs_mount_type()` (ADR 0009). The ext2 reader is the same
+  choice under `-DMICRO_OS_FS_EXT2=ON`: a read-only volume mounted by its
+  type, with modes, owners and `statx` (ADR 0019). The options are off by
+  default, so the smoke tests of the machine keep one MicroFS volume; a
+  machine that has a FAT or an ext2 partition mounts it with a call of the
+  boot, because `/etc/fstab` and the `mount` command do not speak the
+  registry yet;
+* a program out of a file: `make x86-disk` writes the images of `hello`,
+  `crash`, `fork`, `badptr`, `signals`, `nx`, `cat`, `echo`, `ls`, `spawn`, `wc`,
+  `head`, `grep`, `mkdir`, `rm` and `pwd` into `/bin` of the MicroFS volume
+  (every image is built with `--arch x86-64`, and `execve` answers `ENOEXEC`
+  for one of another machine before it enters a byte), gives them the mode
+  0755, and the boot asks for `/bin/hello` with `execve` -
+  the stat, the check of the mode, the read through the VFS, the parse of the
+  image and the entry are the ones of the call and not a copy of them. The
+  program is entered with `argc` in `rdi`, `argv` in `rsi` and `envp` in
+  `rdx` (ADR 0016), prints its lines on the console and calls `exit`; the
+  call reports 0 and the port prints `the program exited with 0`. The shell
+  runs the same files with `exec`: `cat`, `echo`, `ls`, `spawn` and `wc` are
+  ordinary C programs of `components/libc/user`, `signals` exercises the
+  dispositions of ADR 0015, and `make x86-smoke` reads their lines back;
+  `spawn` starts another program with an environment of its own, and the
+  programs inherit the descriptors of the stage that started them, so
+  `echo one | /bin/cat` and `ls /bin | wc -l` work (ADR 0017);
 * a fault of a program is not a fault of the machine: `/bin/crash` writes to
   address zero in ring 3, the port prints `the program faulted: vector 14 at
   0x0000000000000000`, takes the program down and the shell answers the next
   command;
-* the edge of the system call: `k_port_exec_contains()` (contract 1.6) walks
+* the edge of the system call: `k_port_exec_contains()` (a call of the contract since 1.7) walks
   the page tables of the program, `components/kernel/src/ksys.c` copies the
   paths, the vector of `execve` and the buffers of `stat`, `getcwd`, `read`,
   `write` and `readdir` through the check, and a range that is not mapped is
@@ -333,6 +503,13 @@ PCI line needs the I/O APIC that K8 brings.
   the window, the last bytes of the window with a request that crosses its
   end and the guard page; every call answers 14 and the machine writes the
   next line with a valid pointer;
+* the signals of K7: `/bin/signals` installs a handler of the program (the
+  kernel builds a frame on the stack and the restorer page calls
+  `sigreturn`), a child ends with `SIGTERM` and the status 143, a `waitpid`
+  is cut by `SIGINT` with `EINTR`, `SIG_IGN` leaves the task alive, the tick
+  of the timer delivers a handler to a program that never calls, and `kill`
+  of a pid that is not there is `ESRCH`. The shell has `kill` as well, and
+  Ctrl+C of the console reaches the program the shell waits for (ADR 0015);
 * the shell on the console, which is the window and COM1 at once, with
   `help`, `uname`, `uptime`, `ps`, `free`, `memtest` and the rest of the
   portable commands, plus the commands of the files:
@@ -344,6 +521,10 @@ PCI line needs the I/O APIC that K8 brings.
 
 ## What does not work yet
 
+* the second processor: the MADT is read and the boot says how many the
+  machine has, but the APs wait for the trampoline, the spinlock, the local
+  APIC timer and the I/O APIC (ADR 0012, "The pilot of 1.x"); the kernel runs
+  on the processor of the boot;
 * the disk is one, and it is the primary ATA channel: no SATA, no virtio, no
   NVMe, no card, no second disk;
 * the driver polls and copies through the processor: no interrupt, no DMA and
@@ -362,13 +543,19 @@ PCI line needs the I/O APIC that K8 brings.
   the call with 0, the parent with the pid, and `waitpid` sees the status.
   `/bin/fork` is the program of the smoke test and prints the 42 of the
   parent next to the 99 of the child;
-* the kernel is not in a higher half: it is the identity map of the first
-  gigabyte, so the window of the programs is a hole in the kernel's map. The
-  ladder of the change (linker, loader, `page_phys()`, boot and stacks, the
-  smoke gate) is in ADR 0007 and is not taken yet;
-* there is no SMAP: the edge checks the page tables of the program and then
-  reads the same pages in ring 0, so the hardware half of the rule waits for
-  the higher half and the flags of the processor;
+* the kernel is in the higher half: the image is linked at
+  `0xFFFFFFFF80000000`, the loader copies it to 16 MiB and maps it there, and
+  the C of the kernel is built with `-mcmodel=kernel`. The low identity map of
+  the first gigabyte stays for the heap, the arena and the devices, so the
+  window of the programs is part of a space whose kernel is out of the reach
+  of ring 3 at the top. ADR 0007, "The higher half: taken", has the addresses
+  and what the change still does not do;
+* there is no SMAP and no SMEP: the edge checks the page tables of the program
+  and then reads the same pages in ring 0. Both features are a decision of
+  ADR 0007 section 10 and not a part of 1.0: QEMU's default `qemu64` does not
+  advertise them, and SMAP needs `STAC`/`CLAC` in the portable copy edge
+  (`components/kernel/src/ksys.c`), which is a change of the ABI and not of
+  this port. NX is on;
 * the network is small on purpose: no DHCP, no IPv6, no reassembly of
   fragments, no congestion window, one segment in flight, and the driver polls
   because the PCI line needs the I/O APIC that K8 brings. The server is one
