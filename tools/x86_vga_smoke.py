@@ -123,6 +123,54 @@ class Picture:
         """The bytes of the picture that are not black: an ink that a cell has."""
         return sum(1 for byte in self.pixels if byte)
 
+    def only_colors(self, ink: tuple, paper: tuple) -> bool:
+        """Every pixel of the picture is one of the two colours of the console.
+
+        A pixel that is neither is a pixel no cell of the console drew: the
+        grey of the text mode, the palette of the firmware, the leftovers of
+        a frame that was on the glass before this one. The counts of the three
+        channels are compared as well, so a pixel that mixes the two is a
+        foreign pixel and not a colour between them.
+        """
+        red = self.pixels[0::3]
+        green = self.pixels[1::3]
+        blue = self.pixels[2::3]
+
+        if not (
+            set(red) <= {paper[0], ink[0]}
+            and set(green) <= {paper[1], ink[1]}
+            and set(blue) <= {paper[2], ink[2]}
+        ):
+            return False
+
+        return red.count(ink[0]) == green.count(ink[1]) == blue.count(ink[2])
+
+    def not_blocky(self) -> int:
+        """The lines of the picture that are not made of 2x2 blocks.
+
+        The whole picture is the 5x7 font at twice its size: every pixel of a
+        glyph, of the paper and of the cursor is part of a block of two by two
+        pixels, and the block starts on an even line and an even column. A
+        stroke of one pixel - a glyph of the 8x16 font of the text mode, a
+        scale of the host, the frame of another screen - breaks that, and the
+        count of the lines that break it is the answer.
+        """
+        stride = self.width * 3
+        broken = 0
+
+        for y in range(0, self.height - 1, 2):
+            top = self.pixels[y * stride : (y + 1) * stride]
+            bottom = self.pixels[(y + 1) * stride : (y + 2) * stride]
+
+            if top != bottom:
+                broken += 1
+                continue
+
+            if top[0::6] != top[3::6] or top[1::6] != top[4::6] or top[2::6] != top[5::6]:
+                broken += 1
+
+        return broken
+
     def lowest_ink_row(self) -> int:
         """The last line of the picture that has a pixel that is not black."""
         stride = self.width * 3
@@ -460,6 +508,57 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
         machine = Machine(loader, kernel, workdir, "std", display)
 
         try:
+            # --- the first frame: the banner is on the glass
+            #
+            # The console writes the screen before it writes COM1, so the
+            # banner in the transcript is a line that is already on the
+            # picture; the dump is taken at once, before the rest of the boot
+            # covers it. A frame of the text mode of the firmware that the
+            # display kept under the new picture would be visible here, and
+            # nothing later in the boot would explain it away.
+            banner = machine.wait_serial("board: qemu_x86_64", timeout)
+            expect("the boot reaches the banner", banner, "the banner never reached COM1")
+
+            first = machine.picture(workdir)
+            expect(
+                "the first frame is the picture of the port",
+                first is not None and (first.width, first.height) == (VBE_WIDTH, VBE_HEIGHT),
+                f"the first screendump is {first.width}x{first.height}"
+                if first is not None
+                else "screendump wrote no PPM",
+            )
+
+            if first is not None:
+                # A pixel that is neither the paper nor the ink is a pixel no
+                # cell of this console drew: the grey of the text mode
+                # (0xAAAAAA), the palette of the firmware, the leftovers of
+                # the screen before this one.
+                expect(
+                    "the first frame has only the colours of the console",
+                    first.only_colors(GREY, BLACK),
+                    "a pixel of the first frame is neither black nor the grey of the console",
+                )
+                # The whole picture is the 5x7 font at twice its size, so
+                # every pixel belongs to a 2x2 block: a line of one pixel - the
+                # 8x16 font of the text mode, a scaled frame of the host -
+                # breaks it. That is how a stale 80x25 screen under the new
+                # one is caught without knowing what it said.
+                broken = first.not_blocky()
+                expect(
+                    "the first frame is not one pixel of another screen",
+                    broken == 0,
+                    f"{broken} line pair(s) of the first frame are not made of 2x2 blocks",
+                )
+                expect(
+                    "the first line of the first frame is the banner",
+                    all(
+                        first.cell_is(0, index, GLYPHS[letter], GREY, BLACK)
+                        for index, letter in enumerate("MICROOS")
+                    ),
+                    "the cell of the first line is not the glyph of the font",
+                )
+
+            # --- the screen after the boot
             booted = machine.wait_serial(PROMPT, timeout)
             expect("the serial console is up as before", booted, "the shell never printed its prompt")
 
@@ -478,6 +577,11 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                     "the picture is the mode of ADR 0023",
                     (picture.width, picture.height) == (VBE_WIDTH, VBE_HEIGHT),
                     f"the screenshot is {picture.width}x{picture.height}",
+                )
+                expect(
+                    "the picture after the boot has no foreign pixels",
+                    picture.only_colors(GREY, BLACK) and picture.not_blocky() == 0,
+                    "a pixel of the settled picture is not a cell of the console",
                 )
                 # The first line of the screen is the banner of the kernel,
                 # "MicroOS ...". The console draws it in the 5x7 font at twice
@@ -545,6 +649,11 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                     picture is not None
                     and picture.cell_is(0, 0, GLYPHS["M"], BLACK, GREY),
                     "the cell of the banner is not the glyph in the colours of the theme",
+                )
+                expect(
+                    "the repaint left no pixel of the old pair",
+                    picture.only_colors(BLACK, GREY) and picture.not_blocky() == 0,
+                    "a pixel of the light picture is not a cell of the console",
                 )
                 if verbose:
                     print("--- the framebuffer after the theme ---")

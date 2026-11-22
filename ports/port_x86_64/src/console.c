@@ -143,7 +143,16 @@ void port_x86_64_console_init(void)
     struct port_x86_64_screen_mode mode;
 
     /*
-     * The framebuffer first: the interface of the card is programmed, its
+     * The text memory of the firmware is emptied first: those cells live at
+     * the offset 0x18000 of the card's memory, which is inside the window of
+     * the framebuffer, and nothing of the screen of another program belongs
+     * in the picture of this one. On a machine without the interface this is
+     * also the blank screen the fallback console starts from.
+     */
+    port_x86_64_screen_text.clear();
+
+    /*
+     * The framebuffer next: the interface of the card is programmed, its
      * window is mapped into the top 2 GiB (ADR 0007) and the renderer of the
      * kernel is registered over it. A machine whose interface did not answer
      * keeps the text mode the firmware left. The one failure between the two
@@ -269,6 +278,13 @@ void port_x86_64_console_write(const char *data, k_size_t len)
             put_char(character);
             break;
         }
+    }
+}
+
+void port_x86_64_console_redraw(void)
+{
+    if (s_screen != NULL && s_screen->redraw != NULL) {
+        s_screen->redraw();
     }
 }
 

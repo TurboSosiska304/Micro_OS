@@ -146,4 +146,7 @@ const struct port_x86_64_screen port_x86_64_screen_text = {
     .scroll = text_scroll,
     .cursor = text_cursor,
     .colors = text_colors,
+    /* The cells of the text mode are the picture: there is no first frame to
+     * complete, and a redraw would write nothing the screen does not have. */
+    .redraw = NULL,
 };

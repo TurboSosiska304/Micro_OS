@@ -398,6 +398,18 @@ void kmain(k_u64_t multiboot_info)
 
     (void)settings_load_all();
 
+    /*
+     * The first frame of the picture is drawn twice. The switch from the text
+     * mode of the firmware to the framebuffer is a moment when a display may
+     * still hold the screen it drew before it, and the writes of the boot
+     * cover only the lines that exist; the second pass puts every pixel of
+     * the picture - the log that is already in the cells - through the
+     * display once more, so no line of the old 80x25 screen is left under the
+     * new one. The theme of /etc has been applied just above, so the pass
+     * carries the colours a person chose.
+     */
+    port_x86_64_console_redraw();
+
     /* The commands of the network, before the shell exists: `netinfo`,
      * `ping` and `netudp` come from the port, and the client of HTTP and the
      * clock of NTP from components/net when the image has them. */
