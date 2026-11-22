@@ -10,8 +10,9 @@ updated from a 0.x release. The checklist behind it is
 
 Micro OS is a small operating system of its own: a portable C11 kernel, a
 syscall ABI of its own, MicroFS and FAT and an ext2 reader, a shell, and the
-same sources on three machines - the M5Stack StickC Plus2 (ESP32), bare metal
-x86-64 in QEMU and a Linux process. `1.0.0` is the point where the contracts
+same sources on two machines - the M5Stack StickC Plus2 (ESP32) and bare metal
+x86-64 in QEMU - with the host substrate (a Linux process) that runs the tests
+and the simulator, not a machine of its own. `1.0.0` is the point where the contracts
 stop moving:
 
 * the system calls keep their numbers and their meaning, and a program built
@@ -28,7 +29,7 @@ stop moving:
 
 * **A correct single-core kernel.** The scheduler, the allocator, the VFS, the
   console and the block layer are safe with one core running the kernel, on
-  all three machines. The second core of the board is a project of 1.x, and
+  both machines (and in the host substrate). The second core of the board is a project of 1.x, and
   this release does not pretend otherwise (ADR 0012).
 * **A program cannot reach the kernel on x86-64.** Ring 3, page tables of its
   own, NX and W^X, `copy_from_user` and `EFAULT` at the edge of every call; a

@@ -260,7 +260,7 @@ twenty-five short boots is a useful smoke test of the tools, but it is not
 the gate: a leak, a lost wakeup or a slow corruption needs the same machine
 to stay up.
 
-The campaign is the four tools below, on the three machines:
+The campaign is the four tools below, on the two machines and the host substrate:
 
 | | unit | soak | fuzz | stress |
 |---|---|---|---|---|
