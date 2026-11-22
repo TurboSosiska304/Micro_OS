@@ -159,7 +159,13 @@ The text fallback keeps the `pmemsave` checks, so both screens are tested.
   made of 2x2 blocks of pixels - the font at twice its size - so a pixel or a
   stroke that no cell of this console drew (the grey of the VGA palette, a
   line of the 8x16 font of the text mode, the leftover of the screen before
-  this one) fails the test. With `-vga cirrus` it runs the checks of 1.1:
+  this one) fails the test. Every cell of the grid is compared with the table
+  of the font the kernel was built with (read from
+  `components/font/src/font.c`): it is the paper, a glyph or the cursor, and a
+  cell that holds anything else - the second copy of the log a few pixels
+  below the first, at any offset, not only an odd one - fails as well. The
+  settled picture and the picture after `config set console.theme light` are
+  checked the same way. With `-vga cirrus` it runs the checks of 1.1:
   `pmemsave` of `0xB8000`, the 720x400 picture, the cursor of the CRTC, the
   typed command and the attribute of every cell (`0x70`). `make x86-run` opens
   the window with `-vga std`.

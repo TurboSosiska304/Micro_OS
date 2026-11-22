@@ -62,16 +62,19 @@ glyphs the test reads - the letters of "MicroOS" - fails that test, which is
 the point of a screenshot in a smoke.
 
 The test looks at the *first* frame of the boot as well, and strictly: the
-picture must be the two colours of the console and nothing else, and every
-pixel of it must belong to a 2x2 block of the same colour, because the whole
-picture is the 5x7 font at twice its size. A pixel of another colour, or a
-stroke of one pixel, is a piece of a frame that no cell of this console drew -
-the grey of the VGA palette, the 8x16 font of the text mode, the screen the
-firmware left. The port makes that impossible from its side: the card clears
-its memory when the mode is set (the cells of the text mode live in the same
-memory), the text window is emptied before the switch, and the whole picture
-is drawn a second time after the first lines of the log - the cells are kept,
-so nothing of the log is lost, and every pixel of the frame is written again.
+picture must be the two colours of the console and nothing else, every pixel
+must belong to a 2x2 block of the same colour (the whole picture is the 5x7
+font at twice its size), and every cell of the 14-pixel grid must be the
+paper, a glyph of the font or the cursor. A pixel of another colour, a stroke
+of one pixel or a cell that holds anything else is a piece of a frame that no
+cell of this console drew - the grey of the VGA palette, the 8x16 font of the
+text mode, the screen the firmware left, or a second copy of the log a few
+pixels below the first, at any offset. The port makes that impossible from its
+side: the card clears its memory when the mode is set (the cells of the text
+mode live in the same memory), the text window is emptied before the switch,
+and the whole picture is drawn a second time after the first lines of the log
+- the cells are kept, so nothing of the log is lost, and every pixel of the
+frame is written again.
 
 ### The fallback: the text mode of 80x25
 
