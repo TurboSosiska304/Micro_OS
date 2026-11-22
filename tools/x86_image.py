@@ -250,6 +250,13 @@ def main(argv: list) -> int:
         help="write a file of the host into the volume (mode 0644)",
     )
     parser.add_argument(
+        "--program",
+        action="append",
+        default=[],
+        metavar="PATH=HOST",
+        help="write a file of the host into the volume with the mode of a program (0755)",
+    )
+    parser.add_argument(
         "--text",
         action="append",
         default=[],
@@ -269,6 +276,8 @@ def main(argv: list) -> int:
     extra: list = []
     for pair in args.file:
         extra += ["--file", pair]
+    for pair in args.program:
+        extra += ["--program", pair]
     for pair in args.text:
         extra += ["--text", pair]
     for path in args.dir:
