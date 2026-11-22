@@ -36,6 +36,7 @@
 #include "kshell/kshell.h"
 #include "port_esp32.h"
 #include "selftest.h"
+#include "settings/settings.h"
 #include "telnet/telnet.h"
 
 #include <string.h>
@@ -306,6 +307,19 @@ static void init_task(void *arg)
             kwarn("init: the default files of /etc are not written (rc=%d)", defaults);
         }
 
+        /*
+         * The systems of parameters (ADR 0021): display, font, console. The
+         * same rule as the files of the factory - a file of a person is never
+         * replaced - and they are written before the save below, so the NVS
+         * keeps them like any other file of /etc.
+         */
+        defaults = settings_defaults(CONFIG_DIR);
+        if (defaults > 0) {
+            kinfo("init: %d default setting file(s) of /etc made", defaults);
+        } else if (defaults < 0) {
+            kwarn("init: the default settings of /etc are not made (rc=%d)", defaults);
+        }
+
         saved = config_persist(CONFIG_DIR);
 
         if (saved < 0) {
@@ -316,6 +330,14 @@ static void init_task(void *arg)
     } else {
         kwarn("init: the configuration has no store");
     }
+
+    /*
+     * The systems of /etc are applied in the order of the machine (ADR 0021):
+     * the display and the font before the first frame, the console before the
+     * shell. The frame itself comes later, when the task of the shell starts
+     * the console of the panel.
+     */
+    (void)settings_load_all();
 
     /*
      * The other volumes: /etc/fstab is read after the root, whose /etc

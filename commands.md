@@ -182,6 +182,27 @@ config sync        # restore the missing files, save the files of /etc
 config             # list the store
 ```
 
+A **system of parameters** is one file of `/etc` with `key=value` lines:
+`/etc/display` (the turn, the inversion, the brightness and the theme of the
+screen), `/etc/font` (the scale of the 5x7 font and the cap of the dialogue)
+and `/etc/console` (the colours of the console). The boot applies them before
+the first frame, and the command reads and writes them at the console:
+
+```bash
+config get display.rotation       # display.rotation=0
+config set display.rotation 90    # write the file and apply it at once
+config set display rotation 90    # the same, in the Linux shape
+config list                       # the systems and their files
+config list display               # every key of one system with its value
+```
+
+A value the machine cannot honour is kept in the file and the answer says so
+(`display.invert=0 (kept: this machine does not apply display)`); a key the
+system does not know is refused with the list of the keys it has, so a typo
+does not reach the file. The keys, the defaults and the table of what each
+machine honours are in [`docs/wiki/settings.md`](docs/wiki/settings.md); the
+decision is [ADR 0021](docs/adr/0021-settings-in-etc.md).
+
 ### The mode, the owner, a program and the path
 
 A file has a mode and an owner, and the shell changes them through the system

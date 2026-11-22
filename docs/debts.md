@@ -122,6 +122,16 @@ K5.
 | The null probe cannot catch a libc call: it is linked with the libc of the host, so `printf` in portable code would link. | `ports/port_null/README.md`, `tools/integrity_check.py` | open | Scan the portable sources for the names of the libc, or link the probe without the libc. |
 | The host port cannot reproduce preemption: the critical section is one recursive `pthread` mutex, so a race is invisible unless TSan looks for it. | `ports/port_host/README.md` | open | A model of preemption, or TSan as the only detector (it is in the cloud CI). |
 
+## K10 - The settings of a machine
+
+| Debt | Where | Status | What it needs |
+|---|---|---|---|
+| A system file is at most 127 characters, because it is one value of the store of the port. Four keys and their comment fit; a bigger file is refused and the defaults are used. | `components/settings/include/settings/settings.h`, `kernel/port/kv.h` | decision | A larger value of the store (a change of the contract of the port) together with a file that needs it. |
+| `config set` rewrites a file with one write on a truncating open: a power cut in the middle leaves a short file. The VFS has no `rename`, so a temporary file and a copy have two windows instead of one. | `components/settings/src/settings.c`, ADR 0021 ("Writing a file") | decision | Nothing for a file of a few lines: the next boot reads the lines that are there and `config sync` restores the text of the store. A checksum if a torn file ever matters. |
+| `display.brightness` is kept on the board and not applied: the backlight is one pin, on or off. | `components/drivers/src/drv_display.c` | open | A PWM channel on `PIN_LCD_BL` (the driver already depends on `esp_driver_ledc`), or a panel with a dimmer. |
+| The host has no applier and a run with a screen file still has none: the load names the three systems and keeps the files. | `ports/port_host/src/sim_main.c`, `components/graphics` | decision | None until the screen file of the simulator is a screen a person configures; the serial console has no attributes. |
+| The store drops the last line ending of a value, so a system file that comes back after a format loses its final `\n`. | `components/config/src/config.c` (`read_value`) | decision | Nothing: a value is one line of text, the parser reads the file with or without the line ending, and no key is lost (the test compares with it off). |
+
 ## The signature of an image
 
 | Debt | Where | Status | What it needs |

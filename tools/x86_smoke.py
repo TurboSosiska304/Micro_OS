@@ -61,6 +61,18 @@ COMMANDS = [
     # The one file of /etc is on the disk as well, and reading it is the
     # proof that the tree of the image is the tree of the machine.
     "cat /etc/setting",
+    # The systems of /etc (ADR 0021): the defaults the boot made on the
+    # volume, the key read back, and the one system this machine applies.
+    # The panel and the font are the board's, so their values are written and
+    # kept with a sentence that says so; the console is the attribute of the
+    # VGA and the boot says which one it put on the screen.
+    "config list",
+    "config get display.rotation",
+    "config set console.theme light",
+    "config get console.theme",
+    "config set display.invert 0",
+    "config get display.invert",
+    "cat /etc/display",
     "chmod 0644 /bin/hello",
     "exec /bin/hello",
     "chmod 0755 /bin/hello",
@@ -880,9 +892,70 @@ def check(output: str) -> list:
     )
     expect("ls is a program of the shell", "the program has finished" in listing)
 
-    # The shell's own `ls` is a list of names and not a tree; `tree` is the
-    # command that draws the levels below a path. `/etc` was made above, so
-    # the two answers are of a volume the boot and the shell both wrote.
+    # --- the systems of /etc (ADR 0021)
+    # The boot wrote the three files of the tree on the volume; `config list`
+    # names them and says which one this machine applies. `display` and
+    # `font` are the panel and the font of the board: the key is written and
+    # kept, and the machine says it does not apply it.
+    systems = answer("config list")
+    expect(
+        "config list names the systems of the tree",
+        all(name in systems for name in ("display", "font", "console")),
+        systems,
+    )
+    expect(
+        "config list says which system this machine applies",
+        "display" in systems
+        and "/etc/display" in systems
+        and "(not applied here)" in systems,
+        systems,
+    )
+    # The value of the last save of the defaults, read back through the same
+    # file: a key that was never set is the default of the tree.
+    expect(
+        "config get reads the default of a system",
+        "display.rotation=0" in answer("config get display.rotation"),
+        answer("config get display.rotation"),
+    )
+    # The console is the system of this machine: the theme changes the
+    # attribute of every cell of the VGA, and the log line is the number the
+    # port wrote (0x70: black on light grey).
+    themed = answer("config set console.theme light")
+    expect("config set applies the console", "console.theme=light" in themed, themed)
+    expect(
+        "the theme of the console reaches the attributes of the VGA",
+        "the attribute of the screen 112" in themed,
+        themed,
+    )
+    expect(
+        "config get reads the key that was set",
+        "console.theme=light" in answer("config get console.theme"),
+        answer("config get console.theme"),
+    )
+    # A system of the board on this machine: the file is written and the
+    # answer says the value is kept, which is what the ADR asks of a machine
+    # without the hardware.
+    kept = answer("config set display.invert 0")
+    expect(
+        "a system this machine cannot honour is kept and reported",
+        "display.invert=0" in kept and "kept" in kept,
+        kept,
+    )
+    expect(
+        "the key that was kept is read back",
+        "display.invert=0" in answer("config get display.invert"),
+        answer("config get display.invert"),
+    )
+    # The file of the system is text of the volume, whole: the comment of the
+    # defaults and the line that `config set` replaced are both there.
+    display_file = answer("cat /etc/display")
+    expect(
+        "the system file is the text of the volume",
+        "# the screen" in display_file and "invert=0" in display_file,
+        display_file,
+    )
+
+
     root_listing = answer("ls /")
     expect(
         "ls / lists the names",

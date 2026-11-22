@@ -40,6 +40,7 @@ if(NOT ESP_PLATFORM)
         cases/test_kshell_pipe.c
         cases/test_initd.c
         cases/test_config.c
+        cases/test_settings.c
         cases/test_task.c
         cases/test_sched.c
         cases/test_sched_queue.c
@@ -127,6 +128,7 @@ if(NOT ESP_PLATFORM)
         microos_kshell
         microos_init
         microos_config
+        microos_settings
         microos_mfs
         microos_procfs
         microos_devfs

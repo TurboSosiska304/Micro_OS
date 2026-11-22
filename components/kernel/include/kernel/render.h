@@ -24,6 +24,15 @@ struct k_renderer {
     int (*width)(void *ctx);
     int (*height)(void *ctx);
 
+    /*
+     * The size of one cell of the text: the console counts the room of the
+     * dialogue in cells, and a renderer that scales the font (a system of
+     * /etc, ADR 0021) answers with the cell of its scale. NULL is the 5x7 of
+     * the font with the spacing the console has always had.
+     */
+    int (*cell_width)(void *ctx);
+    int (*cell_height)(void *ctx);
+
     /* Fill the whole picture with a color. */
     void (*clear)(void *ctx, k_u16_t color);
 

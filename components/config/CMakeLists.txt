@@ -12,13 +12,13 @@ if(ESP_PLATFORM)
     idf_component_register(
         SRCS ${MICRO_OS_CONFIG_SRCS}
         INCLUDE_DIRS "include"
-        REQUIRES kernel kshell
+        REQUIRES kernel kshell settings
     )
 
     target_compile_options(${COMPONENT_LIB} PRIVATE -Wextra)
 else()
     add_library(microos_config STATIC ${MICRO_OS_CONFIG_SRCS})
     target_include_directories(microos_config PUBLIC "${CMAKE_CURRENT_LIST_DIR}/include")
-    target_link_libraries(microos_config PUBLIC microos_kernel microos_kshell)
+    target_link_libraries(microos_config PUBLIC microos_kernel microos_kshell microos_settings)
     target_compile_features(microos_config PUBLIC c_std_11)
 endif()

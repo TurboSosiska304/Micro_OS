@@ -16,7 +16,11 @@
  */
 #include "port_x86_64_console.h"
 
+#include <string.h>
+
+#include "kernel/log.h"
 #include "port_x86_64.h"
+#include "settings/settings.h"
 
 #define VGA_BASE 0xB8000u
 #define VGA_COLUMNS 80u
@@ -25,9 +29,13 @@
 
 /*
  * Light grey on black: the colours of the terminal the serial console looks
- * like, so that the window and the log are the same picture.
+ * like, so that the window and the log are the same picture. A system of /etc
+ * (`console`, ADR 0021) may ask for the other attribute, and then every cell
+ * of the screen carries it.
  */
 #define VGA_ATTR 0x07u
+
+static k_u8_t g_attribute = VGA_ATTR;
 
 /* One cell of the video memory: the character in the low byte of the word and
  * the colour in the high one, which is the order the VGA has read since the
@@ -113,7 +121,7 @@ static void scroll(void)
     }
 
     for (; i < VGA_CELLS; i++) {
-        g_vga[i] = vga_cell(' ', VGA_ATTR);
+        g_vga[i] = vga_cell(' ', g_attribute);
     }
 }
 
@@ -133,7 +141,7 @@ static void next_line(void)
 /* One character in the cell of the cursor, then the cursor moves on. */
 static void put_char(char character)
 {
-    g_vga[g_row * VGA_COLUMNS + g_col] = vga_cell(character, (k_u8_t)VGA_ATTR);
+    g_vga[g_row * VGA_COLUMNS + g_col] = vga_cell(character, g_attribute);
 
     g_col++;
     if (g_col >= VGA_COLUMNS) {
@@ -154,7 +162,7 @@ static void backspace(void)
         return;
     }
 
-    g_vga[g_row * VGA_COLUMNS + g_col] = vga_cell(' ', VGA_ATTR);
+    g_vga[g_row * VGA_COLUMNS + g_col] = vga_cell(' ', g_attribute);
 }
 
 void port_x86_64_vga_init(void)
@@ -162,7 +170,7 @@ void port_x86_64_vga_init(void)
     k_u32_t i;
 
     for (i = 0; i < VGA_CELLS; i++) {
-        g_vga[i] = vga_cell(' ', VGA_ATTR);
+        g_vga[i] = vga_cell(' ', g_attribute);
     }
 
     g_row = 0;
@@ -176,6 +184,28 @@ void port_x86_64_vga_init(void)
     port_outb(CRTC_DATA, CURSOR_LAST_LINE);
 
     cursor_update();
+}
+
+/*
+ * The attribute of the screen for every cell: the theme of `console` of /etc
+ * (ADR 0021). The characters stay where they are, so the line that was on the
+ * glass when a person typed `config set console.theme light` is read again in
+ * the new colours instead of disappearing.
+ */
+void port_x86_64_vga_set_attribute(k_u8_t attribute)
+{
+    k_u32_t i;
+
+    g_attribute = attribute;
+
+    for (i = 0; i < VGA_CELLS; i++) {
+        g_vga[i] = (k_u16_t)((g_vga[i] & 0x00FFu) | ((k_u16_t)attribute << 8));
+    }
+}
+
+k_u8_t port_x86_64_vga_attribute(void)
+{
+    return g_attribute;
 }
 
 void port_x86_64_vga_write(const char *data, k_size_t len)
@@ -273,4 +303,53 @@ void port_x86_64_vga_write(const char *data, k_size_t len)
     /* After the whole call and not after every character: the cursor is one
      * register of the controller, and a line of text is one write to it. */
     cursor_update();
+}
+
+/* --- the console system of /etc (ADR 0021) --- */
+
+/*
+ * The machine has no panel: the screen of `display` and the `font` of the
+ * dialogue are not its business, and the load of those two says so. The one
+ * system it honours is `console`, and the attribute of the VGA is the whole
+ * of it: grey on black, or black on light grey, with the inversion of the
+ * file swapping the two.
+ */
+static void apply_console(const char *system, const struct settings_table *table)
+{
+    const char *theme = settings_value(table, "theme", "dark");
+    bool invert = settings_flag(table, "invert", false);
+    bool light;
+    k_u8_t attribute;
+
+    K_UNUSED(system);
+
+    if (strcmp(theme, "dark") == 0) {
+        light = false;
+    } else if (strcmp(theme, "light") == 0) {
+        light = true;
+    } else {
+        kwarn("console: theme '%s' is not dark or light; the default dark is used", theme);
+        light = false;
+    }
+
+    attribute = light ? 0x70u : 0x07u;
+
+    if (invert) {
+        attribute = (k_u8_t)((k_u8_t)(attribute >> 4) | (k_u8_t)(attribute << 4));
+    }
+
+    port_x86_64_vga_set_attribute(attribute);
+
+    kinfo("console: theme %s, invert %d, the attribute of the screen %d", theme, invert ? 1 : 0,
+          (int)attribute);
+}
+
+static const struct settings_system s_console_system = {
+    .name = "console",
+    .apply = apply_console,
+};
+
+int port_x86_64_vga_settings_register(void)
+{
+    return settings_register(&s_console_system);
 }

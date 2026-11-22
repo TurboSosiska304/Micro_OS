@@ -297,24 +297,35 @@ written when the project was an operating system for one board; the numbers
 > rebuilding an image. The flags of the build stay build-time. It is a
 > direction, not a gate.
 
-## K10 - The settings of a machine (planned, after 1.0)
+## K10 - The settings of a machine (done in 1.1.0)
 
-> The board, the x86-64 machine and the host already keep a few settings as
-> files of `/etc`; the screen and the font are the next ones, in a file per
-> system (ADR 0021). The feature is not a gate of 1.0.
+> The board, the x86-64 machine and the host already kept a few settings as
+> files of `/etc`; the screen and the font were the next ones, in a file per
+> system (ADR 0021). The feature was not a gate of 1.0.
 
-* [ ] A file per system in `/etc` (`display`, `font`, `console`, `time`,
-      `net`): `key=value`, comments, a bounded parser, a key the system does
-      not know kept and reported once
-* [ ] The store keeps the text of a system file, so a format brings the
-      settings back as it brings the other files of `/etc`
-* [ ] An applier per system, called at the boot in the order of the machine:
+* [x] A file per system in `/etc` (`display`, `font`, `console`; `time` and
+      `net` have room in the table): `key=value`, comments, a bounded parser
+      in `components/settings` (12 pairs, 127 characters, keys of
+      `[a-z0-9_.-]`), a key the system does not know kept and reported once,
+      a value that does not parse replaced by the default and a warning
+* [x] The store keeps the text of a system file, so a format brings the
+      settings back as it brings the other files of `/etc`; a system file is
+      at most 127 characters because it is one value of the store
+      (`tests/cases/test_settings.c` proves the round trip)
+* [x] An applier per system, called at the boot in the order of the machine:
       the display and the font before the first frame, the console before the
-      shell
-* [ ] `config set`, `config get` and `config sync` over a system file, and a
-      setting a machine cannot honour kept and ignored with a warning
-* [ ] The screen and the font: rotation, brightness, inversion, the scale of
-      the 5x7 font and the theme; the VGA of x86-64 where it can, the panel of
-      the board everywhere
-* [ ] A table of the keys per machine in the wiki, with a test that every key
-      of the file is either applied or reported
+      shell; the board loads them in the init task, x86-64 in `kmain()`
+* [x] `config set`, `config get`, `config list` and `config sync` over a
+      system file, and a setting a machine cannot honour kept and ignored with
+      a warning (`SETTINGS_KEPT`)
+* [x] The screen and the font: rotation, brightness, inversion, the scale of
+      the 5x7 font and the theme; the VGA of x86-64 where it can (the
+      attribute of the cells), the panel of the board everywhere
+* [x] A table of the keys per machine in the wiki
+      ([settings.md](wiki/settings.md)), with a host test that every key of a
+      default file is a key of its system, so a key is applied or named
+
+The next steps that stay open are the ones of the machine and not of the
+format: a backlight with a duty cycle for `brightness`, an applier on the host
+when its screen file is a real screen, and a rewrite of a file that is atomic
+on a VFS without `rename` (see [debts.md](debts.md)).

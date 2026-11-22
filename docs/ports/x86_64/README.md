@@ -195,6 +195,16 @@ command (`ESC[2J` and `ESC[H`), and the screen reads it; a sequence of any
 other kind is dropped whole instead of being printed, because a window is not
 a terminal emulator and a `[2J` in the middle of a line is not a picture.
 
+The pair is a setting of the machine (ADR 0021): `/etc/console` with
+`theme=dark|light` and `invert=0|1` is read at the boot and at every
+`config set`, and the port applies the attribute to every cell of the screen
+and logs the number it put there (`7` is grey on black, `112` black on light
+grey). `/etc/display` and `/etc/font` are the panel and the font of the board:
+this machine has neither, so the boot keeps the files and says so, and
+`config set display.rotation 90` answers that the value is kept. The files,
+the keys and the table of the machines are in
+[`docs/wiki/settings.md`](../../wiki/settings.md).
+
 The keyboard hangs on the first line of the 8259 (IRQ1, the vector `0x21`).
 The stub in `interrupts.S` saves the registers around the call of C, the
 handler reads the byte of the data port `0x60`, translates it with the
@@ -381,7 +391,8 @@ PCI line needs the I/O APIC that K8 brings.
   never reaches the kernel;
 * the console: the VGA text screen and COM1 from one call, the keyboard of
   the PS/2 with Shift, Caps Lock, Backspace and Ctrl+C, and the serial port
-  with the console it always had;
+  with the console it always had; the attribute of the cells is `/etc/console`
+  (`theme`, `invert`) at the boot and at `config set` (ADR 0021);
 * the clock, the interrupts (IDT with 32 exceptions, PIC, PIT), the context
   switch, the scheduler, `ps`, `uptime`, `free`, `dmesg`;
 * paging and ring 3 (ADR 0007): the kernel is a supervisor-only identity map

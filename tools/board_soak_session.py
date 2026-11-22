@@ -212,6 +212,16 @@ class Load:
             Command("telnet off", ["telnet: off"], soft=True),
             Command("wifi status", ["wifi"], soft=True),
             Command("date", [re.compile(r"\d{4}-\d{2}-\d{2}")]),
+            # The systems of /etc (ADR 0021): the file is written and applied
+            # at once, and given back to the defaults so the next command sees
+            # the picture of the release. A board without a panel of the
+            # version that has the settings keeps its own files and warns, so
+            # the check is soft.
+            Command("config get display.rotation", ["display.rotation="], soft=True),
+            Command("config set display.rotation 90", ["display.rotation=90"], soft=True),
+            Command("config set font.scale 2", ["font.scale=2"], soft=True),
+            Command("config set display.rotation 0", ["display.rotation=0"], soft=True),
+            Command("config set font.scale 1", ["font.scale=1"], soft=True),
             Command("sleep 50", ["slept 50 ms"]),
             Command("kill 9999", ["no such process"]),
             Command("abi", ["call(s) registered"]),

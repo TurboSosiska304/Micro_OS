@@ -110,6 +110,19 @@ command of the panel: `display rotate <0|90|180|270>`, `display <x> <y>` for
 the offset of the glass, `display invert`, `display draw [seconds]` for the
 test picture.
 
+The panel and the dialogue are settings of the machine (ADR 0021):
+`/etc/display` (`rotation`, `invert`, `brightness`, `theme`) and `/etc/font`
+(`scale`, `columns`, `rows`) and `/etc/console` (`theme`, `invert`) are read
+in the init task, after `/etc` is restored and before the task of the shell
+starts the console - so the first frame of the dialogue is already the picture
+the file asks for. `font.scale=2` doubles the 5x7 font and the cells of the
+console, `columns`/`rows` cap the dialogue, and `theme` colours it.
+`brightness` is kept with a warning: the backlight of this board is one pin
+with no duty cycle, so the panel is at its full light. `config get` and
+`config set` read and write the files at the console; the keys and the
+defaults are in [`docs/wiki/settings.md`](../../wiki/settings.md), and the
+files survive `mkfs -y` through the NVS.
+
 ## Limits of this port
 
 * **No MMU.** The separation of user and kernel space is logical; there is no

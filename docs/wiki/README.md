@@ -20,6 +20,7 @@ canonical Russian documents are in [`docs/ru/`](../ru/README.md).
 | build the host, x86-64 or ESP32 image | [build.md](build.md) |
 | type a command at the prompt | [shell.md](shell.md) |
 | understand the filesystems and `/etc` | [files.md](files.md) |
+| set the screen, the font and the console | [settings.md](settings.md) |
 | understand `exec`, `MOX1` and ring 3 | [programs.md](programs.md) |
 | know which machine does what | [ports.md](ports.md) |
 | bring Micro OS to another machine | [porting.md](porting.md) |
@@ -37,6 +38,7 @@ canonical Russian documents are in [`docs/ru/`](../ru/README.md).
 | **Build and run** | [build.md](build.md) | host, x86-64, ESP32, dependencies |
 | **Shell** | [shell.md](shell.md) | the commands, `PATH`, `stat`, `fsck`, `httpd` |
 | **Files** | [files.md](files.md) | MicroFS, `/etc`, `mkfs`/`fsck`, disks |
+| **Settings** | [settings.md](settings.md) | the systems of `/etc`, `config get`/`set`, which machine honours what |
 | **Programs** | [programs.md](programs.md) | `MOX1`, `/bin`, `exec`, ring 3, `fork` |
 | **Ports** | [ports.md](ports.md) | ESP32, x86-64, host, null: what runs where |
 | **Porting** | [porting.md](porting.md) | the contract, the bring-up order, the checks |

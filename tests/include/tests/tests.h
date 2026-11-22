@@ -43,6 +43,7 @@ void test_kshell(void);
 void test_kshell_pipe(void);
 void test_initd(void);
 void test_config(void);
+void test_settings(void);
 void test_net(void);
 void test_wifi(void);
 void test_sign(void);

@@ -252,6 +252,40 @@ if [ "$missing" -ne 0 ]; then
     exit 1
 fi
 
+# The settings of the machine (ADR 0021): the systems of /etc are read at the
+# boot, `config set` writes the file and applies it at once, and `config sync`
+# puts the text in the NVS, so the reboot below brings it back. The turn and
+# the scale are asked for and then given back to the defaults: the next run of
+# this test starts from the picture of the release.
+echo "==> the settings of /etc: the screen, the font and the store"
+set +e
+python3 "$ROOT/tools/console.py" "$PORT" 16 \
+    --send "config list" \
+    --send "config get display.rotation" \
+    --send "config set display.rotation 90" \
+    --send "config set font.scale 2" \
+    --send "config get font.scale" \
+    --send "config sync" | tee -a "$LOG"
+set -e
+
+for marker in \
+    "display  /etc/display" \
+    "display.rotation=0" \
+    "display: rotation 90" \
+    "font: scale 2" \
+    "display.rotation=90" \
+    "font.scale=2"; do
+    if ! grep -qF "$marker" "$LOG"; then
+        echo "the console has no '$marker' after the settings commands" >&2
+        missing=1
+    fi
+done
+
+if [ "$missing" -ne 0 ]; then
+    echo "RESULT: FAIL" >&2
+    exit 1
+fi
+
 # A sleep and the wake by the timer of the chip: the board goes down, comes
 # back on its own, and the reason of the boot is the timer. The capture of the
 # sleep carries the reset and the whole boot of the wake, so nothing of it is
@@ -278,6 +312,31 @@ set -e
 if ! grep -qF "power: hold high, woke from timer" "$LOG"; then
     echo "the console has no 'power: hold high, woke from timer' after the sleep" >&2
     missing=1
+fi
+
+# The reboot took the RAM away and the NVS kept the text of the systems: the
+# two values that `config sync` saved before the sleep are the ones the board
+# boots with, and the log of the boot says the settings were applied.
+echo "==> the settings after the reboot, and the defaults again"
+set +e
+python3 "$ROOT/tools/console.py" "$PORT" 8 \
+    --send "config get display.rotation" \
+    --send "config get font.scale" \
+    --send "config set display.rotation 0" \
+    --send "config set font.scale 1" \
+    --send "config sync" | tee -a "$LOG"
+set -e
+
+for marker in "display.rotation=90" "font.scale=2" "display.rotation=0" "font.scale=1"; do
+    if ! grep -qF "$marker" "$LOG"; then
+        echo "the console has no '$marker' after the reboot" >&2
+        missing=1
+    fi
+done
+
+if [ "$missing" -ne 0 ]; then
+    echo "RESULT: FAIL" >&2
+    exit 1
 fi
 
 # The alarm of the clock wakes a sleeping board through the timer of the chip,

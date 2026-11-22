@@ -32,6 +32,8 @@ set(FAT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/fs_fat32")
 set(EXT2_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/fs_ext2")
 set(PROCFS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/procfs")
 set(DEVFS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/devfs")
+set(CONFIG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/config")
+set(SETTINGS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/settings")
 
 # The second filesystem of the machine (ADR 0009). Off by default: the
 # disk of `make x86-smoke` is one MicroFS volume, and a reader that no call
@@ -172,6 +174,15 @@ endif()
 set(VIRTUAL_SOURCES
     "${PROCFS_DIR}/src/procfs.c"
     "${DEVFS_DIR}/src/devfs.c"
+)
+
+# The configuration of /etc and its systems (ADR 0021). This machine has no
+# store of its own: the port answers "there is no key", the files of the
+# volume are the truth, and `config set` edits them as it does on the board.
+set(SETTINGS_SOURCES
+    "${SETTINGS_DIR}/src/settings.c"
+    "${CONFIG_DIR}/src/config.c"
+    "${CONFIG_DIR}/src/config_cmd.c"
 )
 
 # The services over the sockets: the HTTP client, the page of the state and
@@ -350,6 +361,7 @@ add_executable(microos64
     ${FAT_SOURCES}
     ${EXT2_SOURCES}
     ${VIRTUAL_SOURCES}
+    ${SETTINGS_SOURCES}
     ${NET_SOURCES}
     src/boot64.S
     src/kmain.c
@@ -379,6 +391,8 @@ target_include_directories(microos64 PRIVATE
     "${EXT2_DIR}/include"
     "${PROCFS_DIR}/include"
     "${DEVFS_DIR}/include"
+    "${CONFIG_DIR}/include"
+    "${SETTINGS_DIR}/include"
     "${NET_DIR}/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )

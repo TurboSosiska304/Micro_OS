@@ -39,6 +39,14 @@ void drv_display_set_rotation(int rotation);
 int drv_display_rotation(void);
 
 /*
+ * The scale of the 5x7 font: 1 or 2 (a system of /etc, ADR 0021). A cell of
+ * a scaled font is ((FONT_WIDTH + 1) * scale) by ((FONT_HEIGHT + 2) * scale)
+ * pixels, and the console of the shell counts its room in those cells.
+ */
+void drv_display_set_font_scale(int scale);
+int drv_display_font_scale(void);
+
+/*
  * The inversion of the panel: some glasses show the colors as they are
  * painted only in one of the two modes, and the right one is found with
  * the eyes — `display invert` in the shell flips it while the board

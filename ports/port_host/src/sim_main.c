@@ -29,6 +29,7 @@
 #include "net/net.h"
 #include "port_host.h"
 #include "procfs/procfs.h"
+#include "settings/settings.h"
 
 /* The device the volume of the simulator is registered as. */
 #define SIM_VOLUME_DEVICE "file0"
@@ -191,6 +192,7 @@ static void init_task(void *arg)
 {
     int restored;
     int saved;
+    int defaults;
     int mounted;
 
     K_UNUSED(arg);
@@ -208,6 +210,17 @@ static void init_task(void *arg)
      */
     if (config_store_get() != NULL) {
         restored = config_restore(CONFIG_DIR);
+
+        /* The systems of parameters (ADR 0021) of a volume that has none:
+         * the same defaults the board writes, so the simulator has the tree
+         * of the machine it imitates. */
+        defaults = settings_defaults(CONFIG_DIR);
+        if (defaults > 0) {
+            kinfo("sim: %d default setting file(s) of /etc made", defaults);
+        } else if (defaults < 0) {
+            kwarn("sim: the default settings of /etc are not made (rc=%d)", defaults);
+        }
+
         saved = config_persist(CONFIG_DIR);
 
         if (restored < 0) {
@@ -224,6 +237,14 @@ static void init_task(void *arg)
     } else {
         kwarn("sim: the configuration has no store");
     }
+
+    /*
+     * The systems of /etc (ADR 0021): the host has no screen of its own, so
+     * the load names the systems it cannot apply and keeps their files, which
+     * is what the ADR asks of a machine without the hardware. A run with a
+     * screen file turns the console of the display on below.
+     */
+    (void)settings_load_all();
 
     /*
      * The volumes of the table of /etc/fstab: the root is mounted, so the
