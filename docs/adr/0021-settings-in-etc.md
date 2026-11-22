@@ -114,7 +114,9 @@ panel of the board, the VGA of x86-64) and to no common code.
   `components/settings/src/settings.c`, and they are the behaviour of the
   machine before the files existed: `rotation=0`, `invert=1`, `brightness=100`,
   `theme=dark`; `scale=1`, `columns=0`, `rows=0` (the whole picture);
-  `console` `invert=0`, `theme=dark`.
+  `console` `invert=0`, `theme=dark`, `ink=theme`, `paper=theme` (the ink and
+  the paper of the plain text, a name of the palette or a number of RGB565;
+  `theme` is the pair the theme chose).
 
 ### The statuses of `settings_*`
 
@@ -155,7 +157,7 @@ matters; a value is one line of a person and not a record of a database.
 | Machine | `display` | `font` | `console` |
 |---|---|---|---|
 | board (ESP32) | rotation, inversion of the glass, brightness (kept + warning: the backlight is a pin), theme of the dialogue | `scale` 1 or 2 of the 5x7 font, `columns`/`rows` as a cap on the dialogue | `theme`/`invert` of the dialogue |
-| x86-64 | none: the file is kept and the load says so | none | `theme`/`invert` as the attribute of every cell of the VGA |
+| x86-64 | none: the file is kept and the load says so | none | `theme`/`invert` and `ink`/`paper` as the pair of the plain text of every cell of the screen |
 | host | none: the file is kept and the load says so | none | none: the serial console has no attributes |
 
 The order is the boot of the machine:

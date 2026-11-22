@@ -311,6 +311,7 @@ rm -- -notes
 |---|---|---|
 | `ls` | `-l` | the mode, the owner, the size and the date of every entry |
 | `ls` | `-a` | `.` and `..` first |
+| `ls` | `--color[=always\|never\|auto]` | a directory in blue and an executable in green; `never` and `auto` are plain (`auto` is off: no terminal to ask) |
 | `tree` | `-d` | the directories only |
 | `tree` | `-a` | accepted for hidden names; this system has none yet |
 | `cat` | `-n` | the number of the line in front of every line |

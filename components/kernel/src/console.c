@@ -14,6 +14,24 @@
  */
 static k_console_sink_fn g_sinks[K_CONSOLE_SINK_MAX];
 
+/*
+ * The colours of the console. A machine whose screen reads SGR sets this;
+ * the serial console of the board and the host process do not, and a line
+ * then carries no sequence at all. The flag is written once and read by the
+ * log, so it needs no lock of its own.
+ */
+static bool g_ansi;
+
+void k_console_set_ansi(bool enabled)
+{
+    g_ansi = enabled;
+}
+
+bool k_console_ansi(void)
+{
+    return g_ansi;
+}
+
 void k_console_set_sink(k_console_sink_fn sink)
 {
     k_port_enter_critical();

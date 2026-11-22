@@ -16,8 +16,11 @@
  * a row of cells is 16 plus the gap, and a picture of 800 lines then holds
  * 50, 44 or 40 of them. A character is a glyph blitted into the memory, a
  * scroll is a move of the whole picture up by one row of cells, and the
- * colours are two numbers of RGB565 that the `console` system of /etc chooses
- * (ADR 0021).
+ * colours come from two places that are both attributes of a cell: the pair
+ * of the `console` system of /etc (ADR 0021) for the plain text, and the
+ * sixteen of the CGA palette for the words a command colours through the SGR
+ * sequences (kernel/ansi.h). Every cell carries its own (paper << 4) | ink,
+ * so a red warning and a grey line are one grid and one scroll.
  *
  * A pixel is one store into the memory the card shows. There is no shadow
  * frame, no double buffer and no flush: the window of QEMU reads the memory
@@ -50,6 +53,45 @@
 /* The colours of the two themes, the pair the VGA calls grey on black and
  * black on light grey. 0xAD55 is the RGB565 of the light grey of the VGA. */
 #define FB_GREY 0xAD55u
+#define FB_BLACK 0x0000u
+
+/* The attribute of the plain text before /etc is read: light grey on black,
+ * the pair a VGA starts in. */
+#define FB_ATTR_BOOT PORT_X86_64_ATTR(7, 0)
+
+/*
+ * The sixteen colours of the CGA/VGA palette in RGB565. The CGA numbers the
+ * two bits of red, green and blue per channel of an RGBI signal; the values
+ * below are the same eight colours and their bright half, widened to the
+ * five-six-five the renderer of the kernel speaks. Black, blue, green, cyan,
+ * red, magenta, brown (the "amber" of a terminal), light grey, then the
+ * bright eight. The text mode has these colours by definition, so the two
+ * screens of the port paint the same red for the same attribute.
+ */
+const k_u16_t port_x86_64_palette[16] = {
+    0x0000u, /* 0  black */
+    0x0015u, /* 1  blue        (0, 0, 170) */
+    0x0540u, /* 2  green       (0, 170, 0) */
+    0x0555u, /* 3  cyan        (0, 170, 170) */
+    0xA800u, /* 4  red         (170, 0, 0) */
+    0xA815u, /* 5  magenta     (170, 0, 170) */
+    0xAD40u, /* 6  brown/amber (170, 85, 0) */
+    0xAD55u, /* 7  light grey  (170, 170, 170) */
+    0x52AAu, /* 8  dark grey   (85, 85, 85) */
+    0x52BFu, /* 9  bright blue (85, 85, 255) */
+    0x57EAu, /* 10 bright green (85, 255, 85) */
+    0x57FFu, /* 11 bright cyan (85, 255, 255) */
+    0xFAAAu, /* 12 bright red  (255, 85, 85) */
+    0xFABFu, /* 13 bright magenta (255, 85, 255) */
+    0xFFEAu, /* 14 yellow      (255, 255, 85) */
+    0xFFFFu, /* 15 white */
+};
+
+/* One cell of the grid: the letter and the attribute of its colours. */
+struct fb_cell {
+    char character;
+    k_u8_t attr;
+};
 
 static volatile k_u16_t *g_fb;
 static int g_width;
@@ -59,15 +101,78 @@ static int g_stride; /* pixels of a line, the pitch of the mode in pixels */
 static int g_columns;
 static int g_rows;
 static int g_pitch = FB_CELL_HEIGHT; /* the step of a line: the cell and the gap */
-static char g_cells[FB_ROWS_MAX][FB_COLUMNS_MAX];
+static struct fb_cell g_cells[FB_ROWS_MAX][FB_COLUMNS_MAX];
 
+/* The pair of the console: the ink and the paper of the plain text, and the
+ * attribute that names them. A cell whose attribute is this pair is painted
+ * with these two numbers, which is how a colour of 0xRRRR that is not one of
+ * the sixteen still reaches the picture. */
 static k_u16_t g_ink;
 static k_u16_t g_paper;
+static k_u8_t g_theme_attr = FB_ATTR_BOOT;
 
 static int g_cursor_row = -1;
 static int g_cursor_column = -1;
 
 static char g_name[64];
+
+/* The inverse of an attribute: the paper and the ink traded, which is the
+ * cursor and the SGR 7 of a terminal. */
+static k_u8_t attr_reverse(k_u8_t attr)
+{
+    return PORT_X86_64_ATTR(PORT_X86_64_ATTR_BG(attr), PORT_X86_64_ATTR_FG(attr));
+}
+
+/*
+ * The ink and the paper of one cell. An attribute of the pair of the console
+ * is painted with the two numbers of /etc - a custom 0xRRRR included - and
+ * its inverse is the same two numbers traded; every other attribute names two
+ * of the sixteen colours.
+ */
+static void attr_colors(k_u8_t attr, bool inverted, k_u16_t *ink, k_u16_t *paper)
+{
+    if (attr == g_theme_attr) {
+        *ink = g_ink;
+        *paper = g_paper;
+    } else if (attr == attr_reverse(g_theme_attr)) {
+        *ink = g_paper;
+        *paper = g_ink;
+    } else {
+        *ink = port_x86_64_palette[PORT_X86_64_ATTR_FG(attr)];
+        *paper = port_x86_64_palette[PORT_X86_64_ATTR_BG(attr)];
+    }
+
+    if (inverted) {
+        k_u16_t swap = *ink;
+
+        *ink = *paper;
+        *paper = swap;
+    }
+}
+
+k_u8_t port_x86_64_color_nearest(k_u16_t rgb)
+{
+    int red = (rgb >> 11) & 0x1F;
+    int green = (rgb >> 5) & 0x3F;
+    int blue = rgb & 0x1F;
+    long best = -1;
+    k_u8_t index = 0;
+    int i;
+
+    for (i = 0; i < 16; i++) {
+        int dr = red - (int)((port_x86_64_palette[i] >> 11) & 0x1F);
+        int dg = green - (int)((port_x86_64_palette[i] >> 5) & 0x3F);
+        int db = blue - (int)(port_x86_64_palette[i] & 0x1F);
+        long distance = (long)dr * dr + (long)dg * dg + (long)db * db;
+
+        if (best < 0 || distance < best) {
+            best = distance;
+            index = (k_u8_t)i;
+        }
+    }
+
+    return index;
+}
 
 /* --- the memory of the picture --------------------------------------------- */
 
@@ -238,44 +343,81 @@ static const struct k_renderer s_renderer = {
 
 /* --- the grid of cells the console draws ----------------------------------- */
 
-/* One cell as the glass shows it: the paper of the box, then the glyph, or
- * the reverse when the cursor is on it. The rows below the box are the gap of
- * the line and belong to nobody: a cell paints its own eight by sixteen. */
+/* One cell as the glass shows it: the paper of its colours, then the glyph in
+ * the ink - or the two traded when the cursor is on it. The rows below the
+ * box are the gap of the line and belong to nobody: a cell paints its own
+ * eight by sixteen. */
 static void cell_paint(int row, int column, bool inverted)
 {
     int x = column * FB_CELL_WIDTH;
     int y = row * g_pitch;
-    char character;
+    k_u16_t ink;
+    k_u16_t paper;
+    struct fb_cell *cell;
 
     if (row < 0 || row >= g_rows || column < 0 || column >= g_columns) {
         return;
     }
 
-    character = g_cells[row][column];
+    cell = &g_cells[row][column];
+    attr_colors(cell->attr, inverted, &ink, &paper);
 
-    render_fill_rect(NULL, x, y, FB_CELL_WIDTH, FB_CELL_HEIGHT, inverted ? g_ink : g_paper);
+    render_fill_rect(NULL, x, y, FB_CELL_WIDTH, FB_CELL_HEIGHT, paper);
 
-    if (character != ' ') {
-        glyph_draw(x, y, character, inverted ? g_paper : g_ink);
+    if (cell->character != ' ') {
+        glyph_draw(x, y, cell->character, ink);
     }
 }
 
-static void fb_clear(void)
+/*
+ * Does a repaint of the whole picture have to write this cell? A space in the
+ * pair of the console is the paper the picture was cleared with, so it is
+ * already right; a letter, the cursor or a colour of a command is not. The
+ * check is what keeps a repaint to the cells that carry something, which is
+ * the difference between drawing a command's line and writing a million
+ * pixels of the same paper again.
+ */
+static bool cell_needs_paint(const struct fb_cell *cell, bool cursor)
 {
-    memset(g_cells, ' ', sizeof(g_cells));
-    render_clear(NULL, g_paper);
+    if (cursor || cell->character != ' ') {
+        return true;
+    }
+
+    return cell->attr != g_theme_attr;
+}
+
+static void fb_clear(k_u8_t attr)
+{
+    int row;
+    int column;
+
+    for (row = 0; row < FB_ROWS_MAX; row++) {
+        for (column = 0; column < FB_COLUMNS_MAX; column++) {
+            g_cells[row][column].character = ' ';
+            g_cells[row][column].attr = attr;
+        }
+    }
+
+    {
+        k_u16_t ink;
+        k_u16_t paper;
+
+        attr_colors(attr, false, &ink, &paper);
+        render_clear(NULL, paper);
+    }
 
     g_cursor_row = -1;
     g_cursor_column = -1;
 }
 
-static void fb_put(int row, int column, char character)
+static void fb_put(int row, int column, char character, k_u8_t attr)
 {
     if (row < 0 || row >= g_rows || column < 0 || column >= g_columns) {
         return;
     }
 
-    g_cells[row][column] = character;
+    g_cells[row][column].character = character;
+    g_cells[row][column].attr = attr;
     cell_paint(row, column, false);
 }
 
@@ -283,23 +425,36 @@ static void fb_put(int row, int column, char character)
  * A row of cells up: the picture moves by the step of a line - the cell and
  * the gap of /etc/font - so the columns stay where they are and only the
  * lines change. The memory of the picture is one block, so the pixels are one
- * move of the rows that stay; the grid is the same move of a row of
- * characters, and the last line of the new picture is the paper.
+ * move of the rows that stay; the grid is the same move of a row of cells,
+ * with the attribute of every cell travelling with its letter, and the last
+ * line of the new picture is the paper of `attr`.
  */
-static void fb_scroll(void)
+static void fb_scroll(k_u8_t attr)
 {
     int line = g_pitch * g_stride; /* pixels of one row of cells */
     int last = (g_rows - 1) * g_pitch;
+    k_u16_t ink;
+    k_u16_t paper;
 
     memmove((void *)(uintptr_t)g_fb, (const void *)(uintptr_t)(g_fb + line),
             (k_size_t)(g_height - g_pitch) * (k_size_t)g_stride * sizeof(k_u16_t));
 
+    attr_colors(attr, false, &ink, &paper);
+
     if (last < g_height) {
-        area_fill(0, last, g_width, g_height - last, g_paper);
+        area_fill(0, last, g_width, g_height - last, paper);
     }
 
-    memmove(g_cells[0], g_cells[1], (k_size_t)(FB_ROWS_MAX - 1) * FB_COLUMNS_MAX);
-    memset(g_cells[g_rows - 1], ' ', FB_COLUMNS_MAX);
+    memmove(g_cells[0], g_cells[1], (k_size_t)(FB_ROWS_MAX - 1) * sizeof(g_cells[0]));
+
+    {
+        int column;
+
+        for (column = 0; column < FB_COLUMNS_MAX; column++) {
+            g_cells[g_rows - 1][column].character = ' ';
+            g_cells[g_rows - 1][column].attr = attr;
+        }
+    }
 
     /*
      * The cursor is the one cell the memory does not show as the grid says:
@@ -332,34 +487,41 @@ static void fb_cursor(int row, int column)
     cell_paint(row, column, true);
 }
 
-/* The theme of `console`: the pair repaints the grid and the picture. */
-static void fb_colors(bool light, bool invert)
+/* The pair of `console`: the plain text repaints in the new colours and a
+ * cell with a colour of its own - a warning, a directory - keeps it. */
+static void fb_colors(const struct port_x86_64_pair *pair)
 {
+    k_u8_t old = g_theme_attr;
+    k_u8_t next = PORT_X86_64_ATTR(pair->fg, pair->bg);
     int row;
     int column;
 
-    g_ink = light ? 0x0000u : FB_GREY;
-    g_paper = light ? FB_GREY : 0x0000u;
+    g_ink = pair->ink;
+    g_paper = pair->paper;
+    g_theme_attr = next;
 
-    if (invert) {
-        k_u16_t swap = g_ink;
+    for (row = 0; row < g_rows; row++) {
+        for (column = 0; column < g_columns; column++) {
+            struct fb_cell *cell = &g_cells[row][column];
 
-        g_ink = g_paper;
-        g_paper = swap;
+            if (cell->attr == old) {
+                cell->attr = next;
+            } else if (cell->attr == attr_reverse(old)) {
+                cell->attr = attr_reverse(next);
+            }
+        }
     }
 
     render_clear(NULL, g_paper);
 
     for (row = 0; row < g_rows; row++) {
         for (column = 0; column < g_columns; column++) {
-            if (g_cells[row][column] != ' ') {
-                cell_paint(row, column, false);
+            bool cursor = row == g_cursor_row && column == g_cursor_column;
+
+            if (cell_needs_paint(&g_cells[row][column], cursor)) {
+                cell_paint(row, column, cursor);
             }
         }
-    }
-
-    if (g_cursor_row >= 0) {
-        cell_paint(g_cursor_row, g_cursor_column, true);
     }
 }
 
@@ -383,8 +545,10 @@ static void fb_redraw(void)
 
     for (row = 0; row < g_rows; row++) {
         for (column = 0; column < g_columns; column++) {
-            if (g_cells[row][column] != ' ' || (row == g_cursor_row && column == g_cursor_column)) {
-                cell_paint(row, column, row == g_cursor_row && column == g_cursor_column);
+            bool cursor = row == g_cursor_row && column == g_cursor_column;
+
+            if (cell_needs_paint(&g_cells[row][column], cursor)) {
+                cell_paint(row, column, cursor);
             }
         }
     }
@@ -434,6 +598,7 @@ static void screen_name(unsigned bpp)
 void port_x86_64_fb_set_line_gap(int gap)
 {
     int rows;
+    int old_rows;
 
     if (g_fb == NULL) {
         return;
@@ -452,9 +617,27 @@ void port_x86_64_fb_set_line_gap(int gap)
         rows = 1;
     }
 
+    old_rows = g_rows;
     g_pitch = FB_CELL_HEIGHT + gap;
     g_rows = rows;
     s_screen.rows = rows;
+
+    /*
+     * The rows a wider gap takes away are gone: their cells are blanked so
+     * that a gap that goes back to the whole cell does not bring back a line
+     * of the log the console had already lost.
+     */
+    if (rows < old_rows) {
+        int row;
+        int column;
+
+        for (row = rows; row < old_rows; row++) {
+            for (column = 0; column < FB_COLUMNS_MAX; column++) {
+                g_cells[row][column].character = ' ';
+                g_cells[row][column].attr = g_theme_attr;
+            }
+        }
+    }
 
     screen_name(PORT_X86_64_SCREEN_BPP);
 
@@ -494,7 +677,8 @@ const struct port_x86_64_screen *port_x86_64_fb_screen(const struct port_x86_64_
      * been read. The applier of `console` repaints the screen with the pair a
      * person wrote, and the boot's own lines are then read in it. */
     g_ink = FB_GREY;
-    g_paper = 0x0000u;
+    g_paper = FB_BLACK;
+    g_theme_attr = FB_ATTR_BOOT;
 
     screen_name(mode->bpp);
 
@@ -505,7 +689,7 @@ const struct port_x86_64_screen *port_x86_64_fb_screen(const struct port_x86_64_
      * on when a command asks for it (kernel/render.h). */
     k_render_register(&s_renderer);
 
-    fb_clear();
+    fb_clear(g_theme_attr);
 
     return &s_screen;
 }

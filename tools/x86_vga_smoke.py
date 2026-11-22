@@ -86,6 +86,16 @@ COLUMNS = VBE_WIDTH // CELL_WIDTH  # 160
 GREY = (173, 170, 173)
 BLACK = (0, 0, 0)
 
+# The colours of the sixteen attributes of the palette (ports/port_x86_64/
+# src/fb.c) that the test reads: a command colours a name or a line with one
+# of them, and the value is the five-six-five number widened by the display.
+# Green is 0x0540, blue 0x0015, amber (the brown of a CGA) 0xAD40 and red
+# 0xA800.
+GREEN = (0, 170, 0)
+BLUE = (0, 0, 173)
+AMBER = (173, 170, 0)
+RED = (173, 0, 0)
+
 # The answer of the command the keyboard types: it is the checker of the
 # filesystem, and the volume it checks is the one the boot mounted.
 ANSWER = "the volume is consistent"
@@ -325,6 +335,37 @@ class Picture:
 
         return count
 
+    def find_run(
+        self, letters: str, ink: tuple, paper: tuple, pitch: int = LINE_PITCH
+    ) -> tuple | None:
+        """The first `(row, column)` of a run of cells that spells `letters`.
+
+        The cells are compared with the table of the font one by one, and
+        every one of them has to be the glyph in `ink` on `paper`: the test
+        reads the colour of a word and not only the word, which is the point
+        of a command that colours a name or a log line that colours a level.
+        """
+        rows = 0
+
+        while (rows * pitch) + CELL_HEIGHT <= self.height:
+            rows += 1
+
+        for row in range(rows):
+            # A row that has no pixel of the colour holds no word of it.
+            start = (row * pitch) * self.width * 3
+            end = ((row * pitch) + CELL_HEIGHT) * self.width * 3
+            if bytes(ink) not in self.pixels[start:end]:
+                continue
+
+            for column in range(self.width // CELL_WIDTH - len(letters) + 1):
+                if all(
+                    self.cell_is(row, column + index, GLYPHS[letter], ink, paper, pitch)
+                    for index, letter in enumerate(letters)
+                ):
+                    return (row, column)
+
+        return None
+
 
 class Machine:
     """The emulated machine, its serial port and its monitor.
@@ -430,6 +471,35 @@ class Machine:
             if needle in self.read_serial():
                 return True
             time.sleep(0.05)
+        return False
+
+    def prompts(self) -> int:
+        """How many prompts the shell has printed so far.
+
+        The transcript is one stream, so a word of a command is somewhere in
+        it from the boot on: the prompt is the mark that the shell finished a
+        line, and a count taken before a command is the one the answer of that
+        command has to pass.
+        """
+        return self.read_serial().count(PROMPT)
+
+    def run_line(self, line: str, timeout: float) -> bool:
+        """Type a line and wait for the prompt of its answer.
+
+        The count of the prompts is taken before the line goes out: the shell
+        answers a command of the files in a few milliseconds, and a count taken
+        after it would already carry the answer of this command.
+        """
+        count = self.prompts()
+        deadline = time.monotonic() + timeout
+
+        self.type_line(line)
+
+        while time.monotonic() < deadline:
+            if self.read_serial().count(PROMPT) > count:
+                return True
+            time.sleep(0.05)
+
         return False
 
     def type_line(self, line: str) -> None:
@@ -573,6 +643,39 @@ class Machine:
 
         if self.process.stdout is not None:
             self.process.stdout.close()
+
+
+def find_line(text: str, needle: str) -> tuple:
+    """The (row, column) of the last line of `text` that holds `needle`.
+
+    The last one, because a word of the boot is on the screen from the boot
+    on: the listing or the line a command just wrote is the newest of them.
+    """
+    lines = text.split("\n")
+
+    for index in range(len(lines) - 1, -1, -1):
+        column = lines[index].find(needle)
+        if column >= 0:
+            return index, column
+
+    return None, -1
+
+
+def attribute_at(machine: Machine, workdir: str, needle: str) -> int:
+    """The attribute byte of the first cell of `needle` on the text screen.
+
+    -1 when the word is not there: the cell is read out of the memory of the
+    VGA with `pmemsave`, one byte a cell and the colour in the odd one.
+    """
+    row, column = find_line(machine.screen_text(workdir), needle)
+
+    if row is None:
+        return -1
+
+    attributes = machine.attributes(workdir)
+    index = row * VGA_COLUMNS + column
+
+    return attributes[index] if index < len(attributes) else -1
 
 
 def type_fsck(machine: Machine) -> None:
@@ -822,6 +925,138 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                 if verbose:
                     print("--- the framebuffer after the theme ---")
                     print(f"{picture.width}x{picture.height}, {picture.ink_pixels()} pixel(s) of ink")
+
+            # --- the colours of a command and of the log (K11c)
+            #
+            # `ls --color` paints a directory blue and an executable green
+            # (the SGR sequences of a terminal), the log marks a warning amber
+            # and an error red, and `ink`/`paper` of /etc/console name the
+            # pair of the plain text. Every check below reads the colour of
+            # the cells out of the picture and not the text of the serial
+            # console, which has no sequences at all.
+            expect(
+                "the console goes back to the dark pair",
+                machine.run_line("config set console.theme dark", timeout)
+                and "console: theme dark, invert 0" in machine.read_serial(),
+                "the console did not apply the dark theme again",
+            )
+
+            # The volume of this boot is the one the port formats itself:
+            # /bin is made by the disk image of `make x86-smoke` and this
+            # machine has none, so the executable of the test is a file of
+            # /etc with the bit set and the listing is of that directory.
+            machine.run_line("chmod 0755 /etc/setting", timeout)
+            expect(
+                "ls --color answers",
+                machine.run_line("ls --color /etc", timeout),
+                "the shell did not answer ls",
+            )
+            picture = machine.picture(workdir)
+            expect(
+                "ls --color writes an executable in green",
+                picture is not None and picture.find_run("setting", GREEN, BLACK) is not None,
+                "no run of the word 'setting' is the green of the palette on the black paper",
+            )
+
+            expect(
+                "ls --color answers for a directory",
+                machine.run_line("ls --color /", timeout),
+                "the shell did not answer ls",
+            )
+            picture = machine.picture(workdir)
+            expect(
+                "ls --color writes a directory in blue",
+                picture is not None and picture.find_run("etc", BLUE, BLACK) is not None,
+                "no run of the word 'etc' is the blue of the palette on the black paper",
+            )
+
+            # A screen of the commands before this one is cleared, so the pair
+            # of the console is the whole picture of a listing not coloured.
+            machine.run_line("clear", timeout)
+            expect(
+                "ls --color=never answers",
+                machine.run_line("ls --color=never /etc", timeout),
+                "the shell did not answer ls",
+            )
+            picture = machine.picture(workdir)
+            expect(
+                "ls without --color writes the pair of the console",
+                picture is not None and picture.only_colors(GREY, BLACK),
+                "a pixel of the plain listing is outside the pair of the console",
+            )
+
+            # A value of /etc/console that is neither a name nor 0xRRRR is the
+            # theme and a warning, which the log writes in amber.
+            expect(
+                "a broken ink is the theme and a warning",
+                machine.run_line("config set console.ink nonsense", timeout)
+                and "console: ink 'nonsense' is not a colour name" in machine.read_serial(),
+                "the console did not warn about the value of the file",
+            )
+            picture = machine.picture(workdir)
+            expect(
+                "a warning of the log is amber",
+                picture is not None and picture.find_run("console:", AMBER, BLACK) is not None,
+                "no run of the word 'console:' is the amber of the palette",
+            )
+
+            # An error of a call: the filesystem names the device it does not
+            # have, at the level of an error, and the log reads the line in
+            # red. The mount point is made first, so that the sentence is of
+            # the device and not of a path that is not there.
+            machine.run_line("mkdir /tmp", timeout)
+            expect(
+                "a failure of a call is reported",
+                machine.run_line("mount nosuchdev /tmp mfs", timeout)
+                and "mfs: there is no block device 'nosuchdev'" in machine.read_serial(),
+                "the filesystem did not name the device it does not have",
+            )
+            picture = machine.picture(workdir)
+            expect(
+                "an error of the log is red",
+                picture is not None and picture.find_run("mfs:", RED, BLACK) is not None,
+                "no run of the word 'mfs:' is the red of the palette",
+            )
+
+            # `ink` and `paper` of /etc/console: a number of RGB565 reaches
+            # the picture as it was written, and the grid is painted again.
+            expect(
+                "the ink of the file is applied",
+                machine.run_line("config set console.ink 0xF800", timeout),
+            )
+            picture = machine.picture(workdir)
+            expect(
+                "the ink of the file is the red of 0xF800",
+                picture is not None
+                and picture.find_run("console:", (255, 0, 0), BLACK) is not None,
+                "the plain text is not the red of 0xF800",
+            )
+
+            expect(
+                "the paper of the file is applied",
+                machine.run_line("config set console.paper 0x001F", timeout),
+            )
+            picture = machine.picture(workdir)
+            expect(
+                "the paper of the file is the blue of 0x001F",
+                picture is not None
+                and picture.pixel(VBE_WIDTH - 2, VBE_HEIGHT - 2) == (0, 0, 255),
+                f"the paper is {picture.pixel(VBE_WIDTH - 2, VBE_HEIGHT - 2) if picture else None}",
+            )
+            expect(
+                "the ink of the text is still the red of the file",
+                picture is not None
+                and picture.find_run("console:", (255, 0, 0), (0, 0, 255)) is not None,
+                "the run of 'console:' is not the red ink on the blue paper",
+            )
+
+            # The keys go back to the theme for a machine that boots again.
+            machine.run_line("config set console.ink theme", timeout)
+            expect(
+                "the pair of the theme comes back",
+                machine.run_line("config set console.paper theme", timeout),
+                "the console did not go back to the pair of the theme",
+            )
         finally:
             machine.close()
 
@@ -933,6 +1168,64 @@ def run_text(loader: str, kernel: str, timeout: float, verbose: bool, display: s
             expect(
                 "the text is still there after the repaint",
                 "fsck" in machine.screen_text(workdir),
+            )
+
+            # --- the palette of the sixteen attributes on the text screen
+            #
+            # The framebuffer carries a colour of 0xRRRR as it was written
+            # (above); this screen has the sixteen attributes of the VGA and
+            # nothing else, so a command that colours a name and a log that
+            # marks a level are read here as the nibble of the pair.
+            expect(
+                "the console goes back to the dark pair",
+                machine.run_line("config set console.theme dark", timeout),
+            )
+
+            expect(
+                "ls --color answers on the text screen",
+                machine.run_line("ls --color /", timeout),
+            )
+            machine.run_line("chmod 0755 /etc/setting", timeout)
+            expect(
+                "a directory is the blue attribute of the VGA",
+                attribute_at(machine, workdir, "proc/") == 0x01,
+                f"the attribute of 'proc/' is {attribute_at(machine, workdir, 'proc/'):#04x}, "
+                "not the blue on black",
+            )
+
+            expect(
+                "ls --color answers for a directory of files",
+                machine.run_line("ls --color /etc", timeout),
+            )
+            expect(
+                "an executable is the green attribute of the VGA",
+                attribute_at(machine, workdir, "setting") == 0x02,
+                f"the attribute of 'setting' is "
+                f"{attribute_at(machine, workdir, 'setting'):#04x}, not the green on black",
+            )
+
+            expect(
+                "a broken ink is a warning",
+                machine.run_line("config set console.ink nonsense", timeout),
+            )
+            expect(
+                "a warning is the amber attribute of the VGA",
+                attribute_at(machine, workdir, "console: ink") == 0x06,
+                f"the attribute of the warning is "
+                f"{attribute_at(machine, workdir, 'console: ink'):#04x}, not the amber on black",
+            )
+
+            machine.run_line("mkdir /tmp", timeout)
+            expect(
+                "a failure of a call is reported here too",
+                machine.run_line("mount nosuchdev /tmp mfs", timeout),
+            )
+            expect(
+                "an error is the red attribute of the VGA",
+                attribute_at(machine, workdir, "mfs: there is no block device") == 0x04,
+                f"the attribute of the error is "
+                f"{attribute_at(machine, workdir, 'mfs: there is no block device'):#04x}, "
+                "not the red on black",
             )
         finally:
             machine.close()

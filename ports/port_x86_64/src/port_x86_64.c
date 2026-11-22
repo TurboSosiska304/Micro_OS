@@ -71,16 +71,115 @@ static void com1_init(void)
 }
 
 /*
+ * COM1 is a plain terminal: the SGR sequences that colour the screen mean
+ * nothing in a transcript, and a file a person saves from the serial port
+ * should read as the text it is. The bytes of an escape sequence are held
+ * until its final byte: a sequence that ends in 'm' - the colours of the log
+ * and of a command - is dropped, and every other sequence is written out as
+ * it arrived, so `clear` still sends its two. A sequence that a write splits
+ * in the middle is held across the two calls.
+ */
+#define COM1_TEXT 0u
+#define COM1_ESCAPE 1u
+#define COM1_CSI 2u
+#define COM1_ESCAPE_MAX 16
+
+static k_u8_t g_com1_state;
+static char g_com1_escape[COM1_ESCAPE_MAX];
+static k_size_t g_com1_len;
+
+/* One byte of the dialogue on the wire, with the line ending a terminal of
+ * the user wants and the kernel writes as one. */
+static void com1_byte(char c)
+{
+    if (c == '\n') {
+        while ((port_inb(COM1_LSR) & 0x20) == 0) {
+        }
+        port_outb(COM1, '\r');
+    }
+
+    while ((port_inb(COM1_LSR) & 0x20) == 0) {
+    }
+    port_outb(COM1, (k_u8_t)c);
+}
+
+static void com1_flush(void)
+{
+    k_size_t i;
+
+    for (i = 0; i < g_com1_len; i++) {
+        com1_byte(g_com1_escape[i]);
+    }
+
+    g_com1_len = 0;
+}
+
+static void com1_hold(char c)
+{
+    if (g_com1_len < sizeof(g_com1_escape)) {
+        g_com1_escape[g_com1_len++] = c;
+        return;
+    }
+
+    /* A sequence longer than a terminal's rendition: it is not one of ours,
+     * so its bytes go out as they are and the filter starts again. */
+    com1_flush();
+    g_com1_state = COM1_TEXT;
+    com1_byte(c);
+}
+
+static void com1_write(const char *data, k_size_t len)
+{
+    k_size_t i;
+
+    for (i = 0; i < len; i++) {
+        char c = data[i];
+
+        if (g_com1_state == COM1_TEXT) {
+            if (c == 0x1B) {
+                g_com1_state = COM1_ESCAPE;
+                com1_hold(c);
+            } else {
+                com1_byte(c);
+            }
+            continue;
+        }
+
+        if (g_com1_state == COM1_ESCAPE) {
+            com1_hold(c);
+            g_com1_state = (c == '[') ? COM1_CSI : COM1_TEXT;
+            if (g_com1_state == COM1_TEXT) {
+                com1_flush();
+            }
+            continue;
+        }
+
+        /* Inside a CSI sequence: its final byte ends it. */
+        com1_hold(c);
+        if (c >= '@' && c <= '~') {
+            bool sgr = (c == 'm');
+
+            g_com1_state = COM1_TEXT;
+            if (!sgr) {
+                com1_flush();
+            } else {
+                g_com1_len = 0;
+            }
+        }
+    }
+}
+
+/*
  * One call, two sinks: the window of the machine and the log of the serial
  * port. A person with the window open reads the screen and a person without
  * one reads the file, and neither of them has to know that the other exists
  * - the same bytes go to both, and the port does not have a "console" that
- * has to be chosen before the boot.
+ * has to be chosen before the boot. The colours are the exception: the screen
+ * reads them and COM1 does not get them.
  */
 void k_port_write(const char *data, k_size_t len)
 {
     k_u64_t flags;
-    k_size_t i;
 
     if (data == NULL) {
         return;
@@ -95,21 +194,7 @@ void k_port_write(const char *data, k_size_t len)
     flags = port_save_flags_and_cli();
 
     port_x86_64_console_write(data, len);
-
-    for (i = 0; i < len; i++) {
-        char c = data[i];
-
-        if (c == '\n') {
-            /* The terminal of the user wants both, the kernel writes one. */
-            while ((port_inb(COM1_LSR) & 0x20) == 0) {
-            }
-            port_outb(COM1, '\r');
-        }
-
-        while ((port_inb(COM1_LSR) & 0x20) == 0) {
-        }
-        port_outb(COM1, (k_u8_t)c);
-    }
+    com1_write(data, len);
 
     port_restore_flags(flags);
 }

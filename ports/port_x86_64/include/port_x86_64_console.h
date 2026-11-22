@@ -10,9 +10,10 @@
  *
  * The screen is a framebuffer (ADR 0023) or the text mode of the VGA when the
  * machine has no interface to program one, and the console does not know
- * which: it counts cells, keeps the cursor, scrolls and reads the two
- * sequences of `clear`, and the screen it was given puts a cell where it says.
- * src/console.c is that half; src/vga.c and src/fb.c are the two screens.
+ * which: it counts cells, keeps the cursor, scrolls, reads the two sequences
+ * of `clear` and the SGR sequences that choose the colours of the text, and
+ * the screen it was given puts a cell where it says. src/console.c is that
+ * half; src/vga.c and src/fb.c are the two screens.
  *
  * Nothing here is part of the contract of the port (kernel/port/console.h):
  * these are the numbers and the calls of one machine, and the kernel knows
@@ -24,15 +25,39 @@
 #include "kernel/types.h"
 
 /*
+ * One attribute of a cell: the paper in the high nibble and the ink in the
+ * low one, the pair a VGA calls (background << 4) | foreground, named by the
+ * sixteen colours of the CGA palette (src/fb.c, port_x86_64_palette). The
+ * console computes it from the SGR state of the dialogue (kernel/ansi.h) and
+ * the screen stores it with the character, so a scroll, a repaint and a
+ * change of the theme keep the colour of every word.
+ */
+#define PORT_X86_64_ATTR(fg, bg) ((k_u8_t)((((bg) & 0x0F) << 4) | ((fg) & 0x0F)))
+#define PORT_X86_64_ATTR_FG(attr) ((k_u8_t)((attr) & 0x0F))
+#define PORT_X86_64_ATTR_BG(attr) ((k_u8_t)(((attr) >> 4) & 0x0F))
+
+/* The pair of the console: the ink and the paper of the plain text. `ink` and
+ * `paper` are the numbers the framebuffer writes, so a person may name a
+ * colour of 0xRRRR and not only one of the sixteen; `fg` and `bg` are the
+ * nearest of the sixteen, which is the whole of what the text mode of the VGA
+ * can carry. */
+struct port_x86_64_pair {
+    k_u16_t ink;
+    k_u16_t paper;
+    k_u8_t fg;
+    k_u8_t bg;
+};
+
+/*
  * One screen of the machine as the console needs it: a grid of cells of its
- * own size, three operations that change it, the cursor and the colours of
+ * own size, the operations that change it, the cursor and the colours of
  * `console` of /etc (ADR 0021).
  *
- * The console holds the position and the state of the escape sequence; the
- * screen holds the cells. A screen that draws directly (the text mode) writes
- * the cell where it is told; the framebuffer keeps a grid of characters and
- * draws the one cell that changed, so a line of text is a line of cells and
- * not a repaint of the picture.
+ * The console holds the position, the state of the escape sequences and the
+ * attribute of the text; the screen holds the cells and their attributes. A
+ * screen that draws directly (the text mode) writes the cell where it is
+ * told; the framebuffer keeps a grid and draws the one cell that changed, so
+ * a line of text is a line of cells and not a repaint of the picture.
  */
 struct port_x86_64_screen {
     const char *name;
@@ -41,31 +66,36 @@ struct port_x86_64_screen {
     int columns;
     int rows;
 
-    /* Blank the whole screen; the console puts the cursor at 0, 0 next. */
-    void (*clear)(void);
+    /*
+     * Blank the whole screen and make every cell a space with `attr`; the
+     * console puts the cursor at 0, 0 next.
+     */
+    void (*clear)(k_u8_t attr);
 
-    /* One character in one cell. */
-    void (*put)(int row, int column, char character);
+    /* One character in one cell, in the colour of its attribute. */
+    void (*put)(int row, int column, char character, k_u8_t attr);
 
     /*
-     * The picture moves up by one row and the last row is blank: the console
-     * counts the rows and the screen knows how its memory is turned.
+     * The picture moves up by one row and the last row is blank cells of
+     * `attr`: the console counts the rows and the screen knows how its memory
+     * is turned. The attributes of the rows that stay move with them.
      */
-    void (*scroll)(void);
+    void (*scroll)(k_u8_t attr);
 
     /*
      * The cursor is at (row, column), after the move. The text screen puts
      * the position in the CRTC and the framebuffer draws the cell in the
-     * colours of the cursor.
+     * reverse of its own colours.
      */
     void (*cursor)(int row, int column);
 
     /*
-     * The pair of `console`: `light` is the theme (black on light grey) and
-     * `invert` swaps the two. The screen repaints what is already there, so
-     * the line a person typed is read again in the new colours.
+     * The pair of `console`: the ink and the paper of the plain text, which
+     * the theme of the file chose. The screen repaints what is already there,
+     * so the line a person typed is read again in the new colours; a cell
+     * that carries a colour of its own - a warning, a directory - keeps it.
      */
-    void (*colors)(bool light, bool invert);
+    void (*colors)(const struct port_x86_64_pair *pair);
 
     /*
      * Draw the whole picture again from what the screen holds. A screen that
@@ -76,6 +106,19 @@ struct port_x86_64_screen {
      */
     void (*redraw)(void);
 };
+
+/*
+ * The sixteen colours of the CGA/VGA palette in RGB565, indexed by the nibble
+ * of an attribute: black, blue, green, cyan, red, magenta, brown (amber),
+ * light grey, then the bright eight. The text mode names them and the
+ * framebuffer paints them, so the two screens of the port agree on every
+ * colour a command asks for (src/fb.c).
+ */
+extern const k_u16_t port_x86_64_palette[16];
+
+/* The index of the sixteen colours nearest to an RGB565 number: a person may
+ * name any colour of 0xRRRR and the text mode has sixteen. */
+k_u8_t port_x86_64_color_nearest(k_u16_t rgb);
 
 /* The text mode of the VGA, 80x25 (src/vga.c): the fallback of ADR 0023. */
 extern const struct port_x86_64_screen port_x86_64_screen_text;
@@ -101,8 +144,11 @@ const char *port_x86_64_console_name(void);
  * and not a command.
  *
  * The one escape sequence the kernel writes - the "clear the screen" pair of
- * the shell, ESC[2J and ESC[H - is understood; the other sequences of a
- * terminal are dropped whole rather than printed.
+ * the shell, ESC[2J and ESC[H - and the SGR sequences of the colours are
+ * understood (kernel/ansi.h); the other sequences of a terminal are dropped
+ * whole rather than printed. COM1 gets the same bytes without the SGR
+ * sequences, so the log of a machine with a coloured screen is still a plain
+ * transcript (src/port_x86_64.c).
  */
 void port_x86_64_console_write(const char *data, k_size_t len);
 

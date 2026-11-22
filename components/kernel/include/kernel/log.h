@@ -35,6 +35,22 @@ void klog(k_log_level_t level, const char *fmt, ...) __attribute__((format(__pri
 void klog(k_log_level_t level, const char *fmt, ...);
 #endif
 
+/*
+ * The tone of a line on a screen with colours: an information is plain, a
+ * warning is amber, an error is red and a success is green. The tone is not a
+ * level - it does not filter anything and the ring keeps the text without a
+ * sequence - so a success line is an information line that a person reads in
+ * green.
+ */
+typedef enum { K_LOG_TONE_PLAIN = 0, K_LOG_TONE_OK } k_log_tone_t;
+
+/* Print a message of the given tone at the level of an information. */
+#if defined(__GNUC__)
+void klog_tone(k_log_tone_t tone, const char *fmt, ...) __attribute__((format(__printf__, 2, 3)));
+#else
+void klog_tone(k_log_tone_t tone, const char *fmt, ...);
+#endif
+
 const char *klog_level_name(k_log_level_t level);
 
 /* Number of messages currently kept in the ring buffer. */
@@ -62,5 +78,6 @@ k_size_t klog_captured_size(void);
 #define kinfo(...) klog(K_LOG_LEVEL_INFO, __VA_ARGS__)
 #define kwarn(...) klog(K_LOG_LEVEL_WARN, __VA_ARGS__)
 #define kerror(...) klog(K_LOG_LEVEL_ERROR, __VA_ARGS__)
+#define kok(...) klog_tone(K_LOG_TONE_OK, __VA_ARGS__)
 
 #endif /* MICRO_OS_KERNEL_LOG_H */

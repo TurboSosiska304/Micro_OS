@@ -42,6 +42,20 @@ void k_console_remove_sink(k_console_sink_fn sink);
 void k_console_write(const char *data, k_size_t len);
 
 /*
+ * Whether the console of this machine has colours: a screen that reads the
+ * SGR sequences of a terminal. The port says so once, before the shell
+ * exists; the default is off, because a serial port and the UART of the
+ * board are plain text.
+ *
+ * The log asks this before it marks a line with the colour of its level
+ * (kernel/log.h), so a plain console is not sent the bytes at all. The port
+ * is free to keep its own copy plain as well: x86-64 strips the sequences
+ * from COM1, which is the same line for a person without a window.
+ */
+void k_console_set_ansi(bool enabled);
+bool k_console_ansi(void);
+
+/*
  * The input side of the console. The shell waits for a whole line,
  * /dev/tty0 asks whether a character is waiting and does not hold the
  * task that reads it, and the code that wants one key gets one.

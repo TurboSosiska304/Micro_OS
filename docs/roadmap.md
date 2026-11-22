@@ -388,6 +388,13 @@ on a VFS without `rename` (see [debts.md](debts.md)).
       line to 18 or 20 pixels, 44 or 40 rows), the control characters, the
       cursor, the scrolling and the two sequences of `clear`; the colours of
       `/etc/console` (ADR 0021); the keyboard of IRQ1 unchanged
+* [x] A colour per cell: the sixteen of the CGA in RGB565, `(paper << 4) |
+      ink` on every cell of the grid and the attribute byte of the text mode,
+      the SGR sequences of a terminal (`0`, `1`, `22`, `7`, `27`, `30`-`37`,
+      `39`, `40`-`47`, `49`, `90`-`97`, `100`-`107`), the levels of the log
+      (warn amber, error red, success green), `console.ink`/`console.paper`
+      of `/etc/console` (a name or `0xRRRR`) and `ls --color`; the serial
+      line stays plain
 * [x] The text mode stays the fallback; the port chooses the screen at the
       boot. The 80x50 mode with the 8x8 font of the VGA is not built - the
       fallback is the screen of a machine without an interface, and the font

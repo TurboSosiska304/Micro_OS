@@ -182,3 +182,72 @@ The text fallback keeps the `pmemsave` checks, so both screens are tested.
   `pmemsave` of `0xB8000`, the 720x400 picture, the cursor of the CRTC, the
   typed command and the attribute of every cell (`0x70`). `make x86-run` opens
   the window with `-vga std`.
+
+## What was built (K11c, 1.2): a colour per cell
+
+The first screen had one pair of colours for the whole picture. A command
+could not ask for a red word and a log could not tell a warning from a line of
+information, which is the debt `docs/debts.md` recorded against K11. This is
+what the tree does now.
+
+* **The attribute of a cell.** A cell of the grid is a letter and one byte:
+  the paper in the high nibble and the ink in the low one, the pair a VGA
+  calls `(background << 4) | foreground`. The console computes it from the
+  state of the dialogue (`kernel/ansi.h`) and the screen keeps it with the
+  letter, so a scroll, a repaint and the cursor carry it: the cursor is the
+  same two colours traded. The text mode of the VGA writes the byte into the
+  attribute byte of the cell of `0xB8000`, where it has always lived.
+* **The palette.** `ports/port_x86_64/src/fb.c` holds the sixteen colours of
+  the CGA in RGB565 (`port_x86_64_palette`): black, blue, green, cyan, red,
+  magenta, brown, light grey and the bright eight. The framebuffer paints
+  them; the text mode has them by definition, so the same red is the same red
+  on both screens. A colour of `/etc/console` that is not one of the sixteen
+  is widened to RGB565 on the picture and rounded to the nearest of the
+  sixteen on the text mode.
+* **ANSI SGR.** The parser of the console reads `ESC[...m`: `0`, `1`, `22`,
+  `7`, `27`, `30`-`37`, `39`, `40`-`47`, `49`, `90`-`97`, `100`-`107`, a list
+  of parameters and an empty one (which is the reset). A parameter it does not
+  know is skipped and the rest of the list still counts. The state - ink,
+  paper, bold, reverse - lives in `components/kernel/src/ansi.c`, which is
+  portable and tested on the host (`tests/cases/test_ansi.c`); the console
+  keeps the SGR state and the pair of `/etc/console` and asks it for the
+  attribute of every letter. The numbers of a terminal are translated to the
+  order of the palette (a terminal's yellow is the brown of a CGA), so `33`
+  is the amber a warning is read in and `31` is the red of an error.
+* **The serial line stays plain.** The same bytes go to the screen and to
+  COM1, but the port holds an escape sequence of the serial copy and drops it
+  when it ends in `m`: a transcript has no colours and the log of a machine
+  with a screen is still the text it is. `clear` still sends its two
+  sequences, which are not SGR.
+* **The levels of the log.** `klog` marks a line by its level on a screen
+  with colours: an information is plain, a warning is amber (`33`), an error
+  is red (`31`) and a success is green (`32`, the macro `kok`, used by the
+  `[ ok ]` lines of the boot). The ring of `/proc/kmsg` and the capture of the
+  boot keep the text without a sequence, and a console that does not read them
+  (the UART of the board, the host, COM1) is not sent them at all
+  (`k_console_set_ansi`). The port of x86-64 turns them on when the shell is
+  about to start, so the first frame of the boot is the two colours of
+  `/etc/console` and nothing else - which is what the smoke test of the first
+  frame reads.
+* **`ink` and `paper` of `/etc/console`.** The two keys name the pair of the
+  plain text: a name of the palette (`black`, `white`, `grey`, `green`,
+  `amber`, `red`, `blue`, `cyan`, `magenta`, `yellow`) or a number of RGB565
+  (`0xF800`). The word `theme` is the pair the theme chose, which is also the
+  default of both keys, and `theme` and `invert` are read first: a person who
+  named a colour meant it. A value that is neither is the default and a
+  warning. On the board the keys are kept and not used (the panel has its own
+  dialogue), on the host the whole system is kept; the wiki says so.
+* **`ls --color`.** The shell lists a directory in blue and a file with an
+  execute bit in green, `--color=never` and `--color=auto` are the plain
+  listing (`auto` is off: this shell has no terminal to ask about) and no flag
+  is the listing of 1.1. The colours are the SGR sequences, so a screen shows
+  them and the serial copy does not.
+* **The tests.** `make x86-vga-smoke` reads the colour of a cell out of the
+  picture: the green of an executable and the blue of a directory of
+  `ls --color`, the amber of a warning and the red of an error of the log,
+  and the red ink on a blue paper of `config set console.ink 0xF800` /
+  `console.paper 0x001F`. On the text mode the same commands are read as the
+  attribute of the cell (`0x02`, `0x01`, `0x06`, `0x04`), which is the
+  sixteen colours of the fallback. `make test` covers the SGR parser
+  (`test_ansi.c`) and the sequences of `ls --color` without a screen
+  (`test_kshell.c`).
