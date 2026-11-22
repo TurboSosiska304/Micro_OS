@@ -208,7 +208,11 @@ definition of "the ISO boots" and it is not a part of `make ci`.
   100 columns in C, and `clang-format` when it is installed.
 
 `--skip-format --skip-git` and `--expect-version <version>` are the useful
-options when a release is prepared; `--verbose` names every check.
+options when a release is prepared; `--verbose` names every check. The
+release workflow passes `--expect-tag <tag>` instead of the version: the
+numbers *and* the suffix of the kernel must be the tag's, so a
+`release_candidate` that forgot its `-rc1` fails the check instead of
+calling itself a release.
 
 ## `make ci`: the local half
 
