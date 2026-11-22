@@ -379,6 +379,7 @@ add_executable(microos64
     src/vga.c
     src/vbe.c
     src/fb.c
+    src/font_spleen.c
     src/pci.c
     src/ps2.c
     src/gdt.c

@@ -221,6 +221,7 @@ if [ -f "$X86_BUILD/loader32.elf" ] && [ -f "$X86_BUILD/microos64.bin" ]; then
 
     cp -f "$X86_BUILD/loader32.elf" "$STAGE/loader32.elf"
     cp -f "$X86_BUILD/microos64.bin" "$STAGE/microos64.bin"
+    cp -f "$ROOT/third_party/spleen/LICENSE" "$STAGE/LICENSE.spleen"
     if [ -f "$X86_BUILD/microos64.sig" ] && [ -f "$X86_BUILD/signing.pub" ]; then
         cp -f "$X86_BUILD/microos64.sig" "$STAGE/microos64.sig"
         cp -f "$X86_BUILD/signing.pub" "$STAGE/microos-sign.pub"
@@ -249,8 +250,13 @@ Run it with QEMU:
 
     ./run.sh
 
-The console is COM1. The machine has the shell, the interrupts, the
-scheduler; the filesystem and the network of this port are still ahead.
+The console is COM1 and the VGA screen. The machine has the shell, the
+interrupts, the scheduler, the disk with MicroFS, the programs of /bin and
+the network of the port.
+
+The kernel carries Spleen 8x16 (BSD-2-Clause) for the framebuffer console;
+`LICENSE.spleen` is its license and `third_party/spleen` of the sources has
+the note and the original BDF.
 
 The kernel carries a signature trailer (ADR 0020), and the loader verifies it
 before it copies a byte: an image with a changed byte, without a trailer or
