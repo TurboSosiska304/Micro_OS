@@ -10,6 +10,36 @@ the MicroFS volume change by adding only.
 A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 (`vX.Y.Z-pre`) is a pre-release and must match `kernel_version()`.
 
+## [1.1.2] - 2026-11-23
+
+A patch of `1.1.1` for the shell: the cleanroom of 1.1.1 found that `ls`
+stopped at 64 names, `tree` at 16, and that a path with `.` or `..` was not
+a path. The volume, the syscall ABI and `MOX1` do not change; the notes are
+in [`docs/releases/1.1.2.md`](docs/releases/1.1.2.md).
+
+### Fixed
+
+- `ls` and `tree` read the directory through `readdir` in pieces and print as
+  they go; the arrays of 64 and 16 names are gone. `tree -d` counts the files
+  it does not draw, and the depth beyond six is counted as `(deeper)`.
+- `shell_resolve` normalises `.`, `..`, `//` and a trailing `/`; `cd ..`,
+  `cd .`, `ls ..` and `cd /proc/..` work, and `/..` is `/`.
+- `help <command>` writes a long detail without the 192-byte line buffer, so
+  the sentence is not cut in the middle.
+- `path ""` is refused (reset with `path /bin:/usr/bin`); `umount /proc` and
+  `/dev` are refused while they are mounted; `df` of a path that is not there
+  is `no such file or directory`; `config` on a machine without a store says
+  so and `config sync` fails instead of a false `0 saved`.
+- `memtest` repeats an operation until the interval is measurable; a block
+  too fast for the timer is `too fast to measure`, not a hundred times the
+  speed of the memory.
+
+### Changed
+
+- The order of `ls` is the order of the filesystem: a sorted listing needs
+  the whole directory in memory, which is the limit this patch removes. The
+  note in [`docs/debts.md`](docs/debts.md) records the trade.
+
 ## [1.1.1] - 2026-11-22
 
 A patch of `1.1.0` for the data loss that the cleanroom found: a directory

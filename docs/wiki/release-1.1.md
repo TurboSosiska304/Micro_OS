@@ -1,6 +1,8 @@
 # The 1.1 release
 
-`1.1.1` is the patch of this release: the filesystem fixed the data loss of a
+`1.1.2` is the second patch: the shell stops at no limit of a directory, a
+path with `.`/`..` works, and the long help is not cut. `1.1.1` is the
+first patch: the filesystem fixed the data loss of a
 directory that grows, and the console refuses `umount /` and `kill 1`; the
 volume and the ABI do not change. The notes are in
 [the release](../releases/1.1.1.md).
