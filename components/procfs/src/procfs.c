@@ -60,12 +60,18 @@ static int read_version(char *buf, k_size_t size, k_u32_t pid)
 
 static int read_uptime(char *buf, k_size_t size, k_u32_t pid)
 {
+    k_u64_t ms;
+    k_u32_t ticks;
+
     K_UNUSED(pid);
 
-    k_u64_t ms = k_sched_uptime_ms();
+    ms = k_sched_uptime_ms();
+    ticks = k_sched_ticks();
 
-    return snprintf(buf, size, "up %llu s, %u ticks\n", (unsigned long long)(ms / 1000),
-                    (unsigned)k_sched_ticks());
+    /* The same words as `uptime` of the shell, without the count of the
+     * tasks: seconds, then ticks, and a plural that matches the number. */
+    return snprintf(buf, size, "up %llu s, %u %s\n", (unsigned long long)(ms / 1000),
+                    (unsigned)ticks, ticks == 1 ? "tick" : "ticks");
 }
 
 static int read_meminfo(char *buf, k_size_t size, k_u32_t pid)

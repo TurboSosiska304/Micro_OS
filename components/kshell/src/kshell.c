@@ -261,11 +261,17 @@ int kshell_help_show(const char *name)
     }
 
     if (cmd->summary != NULL) {
-        kshell_printf("%s\n", cmd->summary);
+        kshell_write(cmd->summary, strlen(cmd->summary));
+        kshell_write("\n", 1);
     }
 
+    /*
+     * The notes of a command are longer than the print buffer of the shell:
+     * written through the descriptor, they arrive whole instead of being cut
+     * in the middle of a sentence.
+     */
     if (cmd->detail != NULL) {
-        kshell_printf("%s", cmd->detail);
+        kshell_write(cmd->detail, strlen(cmd->detail));
     }
 
     return KSHELL_OK;
@@ -507,12 +513,20 @@ static int cmd_uname(int argc, char **argv)
 static int cmd_uptime(int argc, char **argv)
 {
     k_u64_t ms = k_sched_uptime_ms();
+    k_u32_t ticks = k_sched_ticks();
+    k_size_t tasks = task_count();
 
     (void)argc;
     (void)argv;
 
-    kshell_printf("up %llu s, %u tick(s), %u task(s)\n", (unsigned long long)(ms / 1000),
-                  (unsigned)k_sched_ticks(), (unsigned)task_count());
+    /*
+     * One style for the clock of the machine: seconds from the microsecond
+     * clock, then the ticks of the scheduler, then the tasks. A word is
+     * singular only when the number is one; `/proc/uptime` says the first
+     * two lines of this one.
+     */
+    kshell_printf("up %llu s, %u %s, %u %s\n", (unsigned long long)(ms / 1000), (unsigned)ticks,
+                  ticks == 1 ? "tick" : "ticks", (unsigned)tasks, tasks == 1 ? "task" : "tasks");
 
     return KSHELL_OK;
 }
@@ -895,7 +909,14 @@ static const struct builtin_command {
       .usage = "uname",
       .detail = "The name, the version, the architecture and the build of the kernel.\n"},
      cmd_uname},
-    {"uptime", {.summary = "time since the boot", .usage = "uptime"}, cmd_uptime},
+    {"uptime",
+     {.summary = "time since the boot",
+      .usage = "uptime",
+      .detail = "The seconds since the boot, the ticks of the scheduler and the number\n"
+                "of the tasks. A tick is the period of the scheduler, one millisecond\n"
+                "on this machine; the seconds are the truth when a busy kernel misses\n"
+                "a tick. /proc/uptime holds the same seconds and ticks.\n"},
+     cmd_uptime},
     {"ps", {.summary = "list the tasks", .usage = "ps"}, cmd_ps},
     {"echo", {.summary = "print the arguments", .usage = "echo [text...]"}, cmd_echo},
     {"sleep",

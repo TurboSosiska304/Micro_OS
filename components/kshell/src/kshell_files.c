@@ -48,9 +48,7 @@
     "                      afterwards, and what is left is (not repaired).\n"
 #endif
 
-#define SHELL_MAX_ENTRIES 64
 #define SHELL_TREE_DEPTH 6
-#define SHELL_TREE_ENTRIES 16
 #define SHELL_PATH_MAX 128
 
 /*
@@ -81,30 +79,97 @@ static const char *shell_cwd(void)
 }
 
 /*
- * Put a path together with the current directory. Returns false when the
- * path does not fit: a path that is cut is a different path, and a
- * command that works with the cut path works with the wrong file.
+ * Put a path together with the current directory, and normalize it: `.` is
+ * the directory itself, `..` is the parent (the root stays the root), a run
+ * of slashes is one slash and a trailing slash names the same entry. A path
+ * that does not fit is refused: a path that is cut is a different path, and
+ * a command that works with the cut path works with the wrong file.
  */
-static bool shell_resolve(const char *path, char *out, k_size_t size)
+static bool path_add(char *out, k_size_t size, k_size_t *len, const char *name, k_size_t name_len)
 {
-    const char *cwd = shell_cwd();
-    int n;
-
-    if (size == 0) {
+    if (*len + 1 + name_len + 1 > size) {
         return false;
     }
 
-    if (path == NULL) {
-        n = snprintf(out, size, "%s", cwd);
-    } else if (path[0] == '/') {
-        n = snprintf(out, size, "%s", path);
-    } else if (strcmp(cwd, "/") == 0) {
-        n = snprintf(out, size, "/%s", path);
-    } else {
-        n = snprintf(out, size, "%s/%s", cwd, path);
+    out[(*len)++] = '/';
+    memcpy(out + *len, name, name_len);
+    *len += name_len;
+    out[*len] = '\0';
+
+    return true;
+}
+
+static bool path_walk(char *out, k_size_t size, k_size_t *len, const char *text)
+{
+    const char *at = text;
+
+    while (*at != '\0') {
+        const char *start;
+        k_size_t length;
+
+        while (*at == '/') {
+            at++;
+        }
+        start = at;
+        while (*at != '\0' && *at != '/') {
+            at++;
+        }
+        length = (k_size_t)(at - start);
+
+        if (length == 0 || (length == 1 && start[0] == '.')) {
+            continue;
+        }
+
+        if (length == 2 && start[0] == '.' && start[1] == '.') {
+            while (*len > 0 && out[*len - 1] != '/') {
+                (*len)--;
+            }
+            if (*len > 0) {
+                (*len)--;
+            }
+            out[*len] = '\0';
+            continue;
+        }
+
+        if (!path_add(out, size, len, start, length)) {
+            return false;
+        }
     }
 
-    return n >= 0 && (k_size_t)n < size;
+    return true;
+}
+
+static bool shell_resolve(const char *path, char *out, k_size_t size)
+{
+    k_size_t len = 0;
+
+    if (size < 2) {
+        return false;
+    }
+
+    out[0] = '\0';
+
+    /* A relative path starts at the directory of the task; an absolute one
+     * starts at the root, and its own `..` never goes above it. */
+    if (path == NULL || path[0] != '/') {
+        if (!path_walk(out, size, &len, shell_cwd())) {
+            return false;
+        }
+    }
+
+    if (path != NULL && !path_walk(out, size, &len, path)) {
+        return false;
+    }
+
+    if (len == 0) {
+        out[0] = '/';
+        out[1] = '\0';
+        return true;
+    }
+
+    out[len] = '\0';
+
+    return true;
 }
 
 /* The same resolution for the runner of a pipeline: a redirection names its
@@ -218,23 +283,178 @@ static void path_parent(const char *path, char *out, k_size_t size)
 }
 
 /*
- * The names of a directory in the order a person expects. The filesystems
- * keep their own order, which is the order of the records on the medium and
- * not a promise to a reader.
+ * The entries of a directory, read in small pieces and printed as they
+ * come. A fixed table cannot be the answer: a directory of 300 names has to
+ * be listed whole, and the table of 64 entries the shell used to keep cut
+ * the listing at 64 without a word. MicroFS reads its names through an open
+ * descriptor (unbounded); the virtual filesystems of this system have a
+ * listing and no descriptor, so they are read one name at a time. Both
+ * paths are behind the same three calls.
  */
-static void entry_sort(struct vfs_dirent *entries, k_size_t count)
+#define SHELL_DIR_CHUNK 4
+#define SHELL_DIR_FALLBACK 64
+
+struct shell_dir {
+    struct vfs_file file;
+    k_u8_t priv[VFS_FILE_DATA_SIZE];
+    struct vfs_dirent chunk[SHELL_DIR_CHUNK];
+    k_size_t at;
+    k_size_t count;
+    k_size_t fallback_index;
+    bool stream;
+    bool done;
+    k_u8_t mount_seen;
+};
+
+/* The name of the mount at `point` when the point is a child of `parent`. */
+static bool mount_child_name(const char *parent, const char *point, char *name, k_size_t size)
 {
+    const char *tail;
+    k_size_t length;
+
+    if (parent == NULL || point == NULL) {
+        return false;
+    }
+
+    if (strcmp(parent, "/") == 0) {
+        if (point[0] != '/') {
+            return false;
+        }
+        tail = point + 1;
+    } else {
+        k_size_t plen = strlen(parent);
+
+        if (strncmp(point, parent, plen) != 0 || point[plen] != '/') {
+            return false;
+        }
+        tail = point + plen + 1;
+    }
+
+    length = strlen(tail);
+    if (length == 0 || length > VFS_NAME_MAX || length + 1 > size || strchr(tail, '/') != NULL) {
+        return false;
+    }
+
+    memcpy(name, tail, length + 1);
+
+    return true;
+}
+
+/*
+ * A mount point is an entry of the directory it hangs from even when the
+ * filesystem of that directory knows nothing about it. The name is not
+ * printed twice when the point is also a real entry of the directory.
+ */
+static void shell_dir_note_mount(struct shell_dir *dir, const char *path, const char *name)
+{
+    k_size_t count = vfs_mount_count();
     k_size_t i;
 
-    for (i = 1; i < count; i++) {
-        struct vfs_dirent entry = entries[i];
-        k_size_t j = i;
+    for (i = 0; i < count && i < 8; i++) {
+        char child[VFS_NAME_MAX + 1];
 
-        while (j > 0 && strcmp(entries[j - 1].name, entry.name) > 0) {
-            entries[j] = entries[j - 1];
-            j--;
+        if (mount_child_name(path, vfs_mount_name(i), child, sizeof(child)) &&
+            strcmp(child, name) == 0) {
+            dir->mount_seen |= (k_u8_t)(1u << i);
         }
-        entries[j] = entry;
+    }
+}
+
+static bool shell_dir_next_mount(struct shell_dir *dir, const char *path, struct vfs_dirent *entry)
+{
+    k_size_t count = vfs_mount_count();
+    k_size_t i;
+
+    for (i = 0; i < count && i < 8; i++) {
+        char child[VFS_NAME_MAX + 1];
+
+        if ((dir->mount_seen & (k_u8_t)(1u << i)) != 0) {
+            continue;
+        }
+        if (!mount_child_name(path, vfs_mount_name(i), child, sizeof(child))) {
+            continue;
+        }
+
+        dir->mount_seen |= (k_u8_t)(1u << i);
+        memset(entry, 0, sizeof(*entry));
+        memcpy(entry->name, child, strlen(child) + 1);
+        entry->type = 2;
+
+        return true;
+    }
+
+    return false;
+}
+
+/* The directory is opened as a directory; a listing without an open file
+ * (procfs, devfs) is read through vfs_list on the first call. */
+static void shell_dir_open(struct shell_dir *dir, const char *path)
+{
+    memset(dir, 0, sizeof(*dir));
+
+    if (vfs_open(path, VFS_O_RDONLY | VFS_O_DIRECTORY, &dir->file, dir->priv) == 0) {
+        dir->stream = true;
+    }
+}
+
+/* 1 and an entry, 0 at the end, or the error of the filesystem. */
+static int shell_dir_next(struct shell_dir *dir, const char *path, struct vfs_dirent *entry)
+{
+    if (!dir->done) {
+        if (dir->stream) {
+            for (;;) {
+                int rc;
+
+                if (dir->at < dir->count) {
+                    *entry = dir->chunk[dir->at++];
+                    shell_dir_note_mount(dir, path, entry->name);
+                    return 1;
+                }
+
+                dir->at = 0;
+                dir->count = 0;
+                rc = vfs_readdir(&dir->file, dir->chunk, SHELL_DIR_CHUNK, &dir->count);
+                if (rc != 0) {
+                    dir->done = true;
+                    return rc;
+                }
+                if (dir->count == 0) {
+                    dir->done = true;
+                    break;
+                }
+            }
+        } else {
+            /*
+             * The static table is only borrowed for one name: the index is
+             * the position, so a recursive walk of /proc can read its child
+             * without losing the place of the parent.
+             */
+            static struct vfs_dirent list[SHELL_DIR_FALLBACK];
+            k_size_t count = 0;
+            int rc = vfs_list(path, list, SHELL_DIR_FALLBACK, &count);
+
+            if (rc != 0) {
+                dir->done = true;
+                return rc;
+            }
+            if (dir->fallback_index >= count) {
+                dir->done = true;
+            } else {
+                *entry = list[dir->fallback_index++];
+                shell_dir_note_mount(dir, path, entry->name);
+                return 1;
+            }
+        }
+    }
+
+    return shell_dir_next_mount(dir, path, entry) ? 1 : 0;
+}
+
+static void shell_dir_close(struct shell_dir *dir)
+{
+    if (dir->stream) {
+        (void)vfs_close(&dir->file);
+        dir->stream = false;
     }
 }
 
@@ -444,11 +664,12 @@ static int ls_take_color(int argc, char **argv, char **rest, int *rest_argc)
 static int cmd_ls(int argc, char **argv)
 {
     /*
-     * The table of the entries is 3 KB: too much for the stack of a task,
-     * which is 8 KB. The shell is one task and does not run two listings
-     * at the same time.
+     * The directory is read one entry at a time through the iterator, so a
+     * listing does not need a table of its names on the stack of a task; the
+     * words of the line are the ones without the `--color` flags.
      */
-    static struct vfs_dirent entries[SHELL_MAX_ENTRIES];
+    struct shell_dir dir;
+    struct vfs_dirent entry;
     char *words[KSHELL_MAX_ARGS + 2];
     bool long_format = false;
     bool show_all = false;
@@ -461,8 +682,6 @@ static int cmd_ls(int argc, char **argv)
     struct vfs_stat info;
     char path[SHELL_PATH_MAX];
     const char *shown;
-    k_size_t count = 0;
-    k_size_t i;
     int rc;
     int colors;
     int words_count = 0;
@@ -525,39 +744,25 @@ static int cmd_ls(int argc, char **argv)
         return KSHELL_OK;
     }
 
-    rc = vfs_list(path, entries, SHELL_MAX_ENTRIES, &count);
-    if (rc != 0) {
-        kshell_printf("ls: %s: %s\n", path, vfs_strerror(rc));
-        return KSHELL_ERROR;
+    shell_dir_open(&dir, path);
+
+    if (long_format && show_all) {
+        char parent[SHELL_PATH_MAX];
+        struct vfs_statx self_info;
+        struct vfs_statx parent_info;
+
+        if (vfs_statx(path, &self_info) == 0) {
+            ls_long_stat(&self_info, ".", false, false, color);
+        }
+        path_parent(path, parent, sizeof(parent));
+        /* A parent that cannot be read is not invented: the row is
+         * missing rather than wrong. */
+        if (vfs_statx(parent, &parent_info) == 0) {
+            ls_long_stat(&parent_info, "..", false, false, color);
+        }
     }
 
-    entry_sort(entries, count);
-
-    if (long_format) {
-        if (show_all) {
-            char parent[SHELL_PATH_MAX];
-            struct vfs_statx self_info;
-            struct vfs_statx parent_info;
-
-            if (vfs_statx(path, &self_info) == 0) {
-                ls_long_stat(&self_info, ".", false, false, color);
-            }
-            path_parent(path, parent, sizeof(parent));
-            /* A parent that cannot be read is not invented: the row is
-             * missing rather than wrong. */
-            if (vfs_statx(parent, &parent_info) == 0) {
-                ls_long_stat(&parent_info, "..", false, false, color);
-            }
-        }
-
-        for (i = 0; i < count; i++) {
-            ls_long_entry(path, &entries[i], color);
-        }
-
-        return KSHELL_OK;
-    }
-
-    if (show_all) {
+    if (show_all && !long_format) {
         /*
          * `.` and `..` are not entries of a directory and no filesystem here
          * lists them: they are the two names every directory has.
@@ -565,111 +770,157 @@ static int cmd_ls(int argc, char **argv)
         kshell_printf(".\n..\n");
     }
 
-    for (i = 0; i < count; i++) {
-        bool executable = false;
+    while ((rc = shell_dir_next(&dir, path, &entry)) > 0) {
+        if (long_format) {
+            ls_long_entry(path, &entry, color);
+            continue;
+        }
 
         if (color) {
             char child[SHELL_PATH_MAX];
             struct vfs_statx child_info;
+            bool executable = false;
 
             /* The mode is one stat per name, and a listing of colours is the
              * command of a person at the console, not of a script. */
-            if (entries[i].type == 1 &&
-                ls_child_path(path, entries[i].name, child, sizeof(child)) &&
+            if (entry.type == 1 && ls_child_path(path, entry.name, child, sizeof(child)) &&
                 vfs_statx(child, &child_info) == 0) {
                 executable = ls_executable(&child_info);
             }
-        }
 
-        ls_put_name(entries[i].name, entries[i].type, executable, color);
+            ls_put_name(entry.name, entry.type, executable, true);
+        } else {
+            ls_put_name(entry.name, entry.type, false, false);
+        }
+    }
+
+    shell_dir_close(&dir);
+
+    if (rc < 0) {
+        kshell_printf("ls: %s: %s\n", path, vfs_strerror(rc));
+        return KSHELL_ERROR;
     }
 
     return KSHELL_OK;
 }
 
 /*
- * One directory of the tree. The tables of the levels are apart, because the
- * walk of a child runs before the parent is done with its own names; a level
- * has 16 names, which is the table the old listing of the children had.
+ * One directory of the tree, read through the same iterator as `ls`. The
+ * state of a level is apart, because the walk of a child runs before the
+ * parent is done with its own names; the buffer is the one entry of the
+ * parent and the one of the child, never a table of the directory.
  *
  * The sixth level is the last one drawn: a directory that has entries below
- * it says `... (deeper)` instead of running the stack of the shell out.
+ * it says `... (deeper)` instead of running the stack of the shell out. The
+ * entries of that level are still counted, so the summary is the content of
+ * the tree and not the branches that were drawn.
  */
+static bool tree_next(struct shell_dir *dir, const char *path, bool dirs_only,
+                      struct vfs_dirent *entry, k_size_t *files, int *rc)
+{
+    int status;
+
+    while ((status = shell_dir_next(dir, path, entry)) > 0) {
+        if (dirs_only && entry->type != 2) {
+            (*files)++;
+            continue;
+        }
+
+        *rc = 0;
+        return true;
+    }
+
+    *rc = status;
+
+    return false;
+}
+
 static int tree_walk(const char *path, const char *prefix, int level, bool dirs_only,
                      k_size_t *dirs, k_size_t *files)
 {
-    static struct vfs_dirent entries[SHELL_TREE_DEPTH][SHELL_TREE_ENTRIES];
-    struct vfs_dirent *list;
-    k_size_t count = 0;
-    k_size_t i;
-    int rc;
+    static struct shell_dir state[SHELL_TREE_DEPTH];
+    struct shell_dir *dir;
+    struct vfs_dirent entries[2];
+    struct vfs_dirent *current;
+    struct vfs_dirent *following;
+    bool have;
+    int rc = 0;
 
     if (level < 1 || level > SHELL_TREE_DEPTH) {
         return 0;
     }
 
-    list = entries[level - 1];
-    rc = vfs_list(path, list, SHELL_TREE_ENTRIES, &count);
-    if (rc != 0) {
-        return rc;
-    }
-
-    entry_sort(list, count);
+    dir = &state[level - 1];
+    shell_dir_open(dir, path);
 
     if (level == SHELL_TREE_DEPTH) {
         bool printable = false;
+        int status;
 
-        for (i = 0; i < count; i++) {
-            if (!dirs_only || list[i].type == 2) {
+        while ((status = shell_dir_next(dir, path, &entries[0])) > 0) {
+            if (entries[0].type == 2) {
+                (*dirs)++;
                 printable = true;
-                break;
+            } else {
+                (*files)++;
+                if (!dirs_only) {
+                    printable = true;
+                }
             }
+        }
+
+        shell_dir_close(dir);
+
+        if (status < 0) {
+            return status;
         }
         if (printable) {
             kshell_printf("%s... (deeper)\n", prefix);
         }
+
         return 0;
     }
 
-    for (i = 0; i < count; i++) {
+    current = &entries[0];
+    following = &entries[1];
+    have = tree_next(dir, path, dirs_only, current, files, &rc);
+
+    while (have) {
+        bool have_next;
+        bool last;
         char child[SHELL_PATH_MAX];
         char child_prefix[SHELL_PATH_MAX];
-        bool last = true;
-        k_size_t j;
 
-        if (dirs_only && list[i].type != 2) {
-            continue;
-        }
+        have_next = tree_next(dir, path, dirs_only, following, files, &rc);
+        last = !have_next;
 
-        for (j = i + 1; j < count; j++) {
-            if (!dirs_only || list[j].type == 2) {
-                last = false;
-                break;
-            }
-        }
+        kshell_printf("%s%s %s%s\n", prefix, last ? "`--" : "|--", current->name,
+                      current->type == 2 ? "/" : "");
 
-        kshell_printf("%s%s %s%s\n", prefix, last ? "`--" : "|--", list[i].name,
-                      list[i].type == 2 ? "/" : "");
-
-        if (list[i].type == 2) {
+        if (current->type == 2) {
             (*dirs)++;
+
+            if (ls_child_path(path, current->name, child, sizeof(child))) {
+                snprintf(child_prefix, sizeof(child_prefix), "%s%s", prefix,
+                         last ? "    " : "|   ");
+                (void)tree_walk(child, child_prefix, level + 1, dirs_only, dirs, files);
+            }
         } else {
             (*files)++;
         }
 
-        if (list[i].type != 2) {
-            continue;
-        }
+        {
+            struct vfs_dirent *swap = current;
 
-        if (!ls_child_path(path, list[i].name, child, sizeof(child))) {
-            continue;
+            current = following;
+            following = swap;
         }
-
-        snprintf(child_prefix, sizeof(child_prefix), "%s%s", prefix, last ? "    " : "|   ");
-        (void)tree_walk(child, child_prefix, level + 1, dirs_only, dirs, files);
+        have = have_next;
     }
 
-    return 0;
+    shell_dir_close(dir);
+
+    return rc;
 }
 
 static int cmd_tree(int argc, char **argv)
@@ -864,6 +1115,12 @@ static int cmd_cat(int argc, char **argv)
     return rc;
 }
 
+/* A count of bytes with the word a person reads: one byte, two bytes. */
+static const char *byte_word(k_size_t count)
+{
+    return count == 1 ? "byte" : "bytes";
+}
+
 static int cmd_write(int argc, char **argv)
 {
     char path[SHELL_PATH_MAX];
@@ -914,7 +1171,8 @@ static int cmd_write(int argc, char **argv)
     }
 
     if (cut) {
-        kshell_printf("write: the text does not fit, it is cut at %u byte(s)\n", (unsigned)len);
+        kshell_printf("write: the text does not fit, it is cut at %u %s\n", (unsigned)len,
+                      byte_word(len));
     }
 
     /* Every call is checked: a write that failed must not be reported. */
@@ -934,7 +1192,7 @@ static int cmd_write(int argc, char **argv)
         return KSHELL_ERROR;
     }
 
-    kshell_printf("%u byte(s) written to %s\n", (unsigned)(len + 1), path);
+    kshell_printf("%u %s written to %s\n", (unsigned)(len + 1), byte_word(len + 1), path);
 
     return KSHELL_OK;
 }
@@ -955,6 +1213,21 @@ static int cmd_mkdir(int argc, char **argv)
 
     rc = vfs_mkdir(path);
     if (rc != 0) {
+        /*
+         * A directory that is already there is not a file that is in the
+         * way: the sentence of POSIX "file exists" would send a person
+         * looking for a file. The name is asked what it is, and a directory
+         * says so.
+         */
+        if (rc == KERR_EXIST) {
+            struct vfs_stat info;
+
+            if (vfs_stat(path, &info) == 0 && info.type == 2) {
+                kshell_printf("mkdir: %s: is a directory\n", path);
+                return KSHELL_ERROR;
+            }
+        }
+
         kshell_printf("mkdir: %s: %s\n", path, vfs_strerror(rc));
         return KSHELL_ERROR;
     }
@@ -1106,6 +1379,7 @@ static int cmd_df(int argc, char **argv)
         {'h', &human},
     };
     struct vfs_statfs stat;
+    struct vfs_stat info;
     struct kshell_args args;
     char path[SHELL_PATH_MAX];
     int rc;
@@ -1125,6 +1399,17 @@ static int cmd_df(int argc, char **argv)
 
     if (!shell_resolve(args.argc > 0 ? args.argv[0] : NULL, path, sizeof(path))) {
         return path_too_long("df");
+    }
+
+    /*
+     * A path that is not there is not the volume of the root: the numbers
+     * of a volume belong to a path, and `df /nope` answers the error of the
+     * name before it reads any number.
+     */
+    rc = vfs_stat(path, &info);
+    if (rc != 0) {
+        kshell_printf("df: %s: %s\n", path, vfs_strerror(rc));
+        return KSHELL_ERROR;
     }
 
     rc = vfs_statfs(path, &stat);
@@ -1249,6 +1534,7 @@ static int cmd_mount(int argc, char **argv)
 static int cmd_umount(int argc, char **argv)
 {
     struct kshell_args args;
+    char point[SHELL_PATH_MAX];
     int rc;
 
     rc = kshell_options(argc, argv, NULL, 0, "umount <point>", &args);
@@ -1264,23 +1550,47 @@ static int cmd_umount(int argc, char **argv)
         return KSHELL_USAGE;
     }
 
+    if (!shell_resolve(args.argv[0], point, sizeof(point))) {
+        return path_too_long("umount");
+    }
+
     /*
      * The root of the tree stays. A task that takes it away leaves every
      * path of the machine without a filesystem, and the console cannot even
-     * read the program that would put it back; `mkfs -y` formats the volume
-     * itself and does not go through this command.
+     * read the program that would put it back. The volume is formatted by
+     * `mkfs -y` where the machine has it, and by the image of a machine
+     * that does not; this command never goes through either.
      */
-    if (strcmp(args.argv[0], "/") == 0) {
-        kshell_printf("umount: / is the root of the tree; mkfs -y formats the volume\n");
+    if (strcmp(point, "/") == 0) {
+        kshell_printf("umount: / is the root of the tree; it stays. The volume is formatted by\n"
+                      "mkfs -y, or by the image of a machine that has no mkfs.\n");
         return KSHELL_ERROR;
     }
 
-    rc = vfs_umount(args.argv[0]);
-    if (rc != 0) {
-        return mount_error_text("umount", args.argv[0], rc);
+    /*
+     * /proc and /dev are mounted by the boot and no type of the table can
+     * mount them again: an unmount would leave the machine without its
+     * information and its devices until the next reboot. A machine that does
+     * not mount one of them is left to the ordinary answer of the VFS.
+     */
+    if (strcmp(point, "/proc") == 0 || strcmp(point, "/dev") == 0) {
+        k_size_t count = vfs_mount_count();
+        k_size_t i;
+
+        for (i = 0; i < count; i++) {
+            if (strcmp(vfs_mount_name(i), point) == 0) {
+                kshell_printf("umount: %s is mounted by the kernel and stays\n", point);
+                return KSHELL_ERROR;
+            }
+        }
     }
 
-    kshell_printf("umount: %s is out of the tree\n", args.argv[0]);
+    rc = vfs_umount(point);
+    if (rc != 0) {
+        return mount_error_text("umount", point, rc);
+    }
+
+    kshell_printf("umount: %s is out of the tree\n", point);
 
     return KSHELL_OK;
 }
@@ -1318,7 +1628,9 @@ static const char *attr_error_text(int code, const char *invalid)
     case -KERR_PERM:
         return "not permitted";
     case -KERR_NOENT:
-        return "no such file";
+        /* The POSIX sentence, the same one every command of the shell says
+         * for a name that is not there. */
+        return "no such file or directory";
     case -KERR_INVAL:
         return invalid;
     default:
@@ -1665,18 +1977,19 @@ static int cmd_path(int argc, char **argv)
     }
 
     /*
-     * The splitter of the shell has no quotes yet, so the empty argument
-     * that resets the value reaches this command as two quote marks: that
-     * is the only way a person can type "nothing" at the console.
+     * An empty value is not a directory: the placeholder `""` of the
+     * splitter, which has no quotes, is refused like the empty argument an
+     * API could hand the command. The default is a value a person can type
+     * (and `path` without an argument prints it).
      */
     if (argv[1][0] == '\0' || strcmp(argv[1], "\"\"") == 0) {
-        snprintf(g_shell_path, sizeof(g_shell_path), "%s", SHELL_PATH_DEFAULT);
-        return KSHELL_OK;
+        kshell_printf("path: an empty value is not a list of directories\n");
+        return KSHELL_USAGE;
     }
 
     if (strlen(argv[1]) >= sizeof(g_shell_path)) {
-        kshell_printf("path: the value is too long (%u byte(s) at most)\n",
-                      (unsigned)(sizeof(g_shell_path) - 1));
+        kshell_printf("path: the value is too long (%u %s at most)\n",
+                      (unsigned)(sizeof(g_shell_path) - 1), byte_word(sizeof(g_shell_path) - 1));
         return KSHELL_ERROR;
     }
 
@@ -1862,14 +2175,16 @@ static const struct file_command {
                 "                  never or auto, and auto is off because the\n"
                 "                  shell has no terminal to ask\n"
                 "Without a path the current directory is listed. The names come one\n"
-                "per line, sorted; `tree` draws the levels below a path.\n"},
+                "per line, in the order of the filesystem, and the listing has no\n"
+                "fixed limit; `tree` draws the levels below a path.\n"},
      cmd_ls},
     {"tree",
      {.summary = "draw the tree of a directory",
       .usage = "tree [-ad] [path]",
       .detail = "  -a  accept the hidden names, of which this system has none yet\n"
-                "  -d  the directories only\n"
-                "The walk stops at the sixth level and says ... (deeper) there.\n"},
+                "  -d  draw the directories only; the files are counted all the same\n"
+                "The walk has no fixed table: every entry of a directory is drawn or\n"
+                "counted. It stops at the sixth level and says ... (deeper) there.\n"},
      cmd_tree},
     {"cat",
      {.summary = "print the content of a file, or of the input",
@@ -1916,7 +2231,9 @@ static const struct file_command {
      {.summary = "take a filesystem out of the tree",
       .usage = "umount <point>",
       .detail = "A point with a mount below it stays until the smaller one leaves.\n"
-                "`/` is the root and stays; mkfs -y formats the volume itself.\n"},
+                "`/` is the root and stays; the volume is formatted by mkfs -y where\n"
+                "the machine has it, or by the image of a machine that does not.\n"
+                "`/proc` and `/dev` are mounted by the kernel and stay as well.\n"},
      cmd_umount},
     {"fsck",
      {.summary = "check the volume, or repair it with -y",
@@ -1944,7 +2261,8 @@ static const struct file_command {
      {.summary = "show or set PATH",
       .usage = "path [directories]",
       .detail = "Without a word the value is printed. With one it is set, the directories\n"
-                "separated by ':'; the two characters \"\" bring /bin:/usr/bin back.\n"},
+                "separated by ':'. An empty value is not a list of directories and is\n"
+                "refused; the default is /bin:/usr/bin.\n"},
      cmd_path},
 #if KERNEL_EXEC
     {"exec",

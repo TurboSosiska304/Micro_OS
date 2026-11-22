@@ -23,6 +23,17 @@
 /* The pattern that is written into the block. */
 #define MEMTEST_PATTERN 0xA5
 
+/*
+ * The shortest interval a speed is taken over. The clock of a port is not
+ * finer than its tick (the x86-64 uptime moves by the millisecond), and an
+ * operation of a few kilobytes finishes inside one step: the difference
+ * would be zero or one step, and a division by one microsecond would claim
+ * tens of gigabytes per second. The operation is repeated until the clock
+ * has moved, and the count of the runs divides the total.
+ */
+#define MEMTEST_MIN_US 1000u
+#define MEMTEST_MAX_REPS 100000u
+
 struct memtest_result {
     k_size_t total;
     k_size_t free_bytes;
@@ -31,6 +42,10 @@ struct memtest_result {
     k_u32_t write_kbps;
     k_u32_t read_kbps;
     k_u32_t copy_kbps;
+    bool write_measured;
+    bool read_measured;
+    bool copy_measured;
+    bool copy_tested;
     bool checksum_ok;
     bool tested;
 };
@@ -106,14 +121,79 @@ static k_u32_t expected_checksum(k_size_t size)
     return sum;
 }
 
-static k_u32_t speed_kbps(k_size_t bytes, k_u64_t micros)
+static k_u32_t speed_kbps(k_u64_t bytes, k_u64_t micros)
 {
     if (micros == 0) {
-        micros = 1;
+        return 0;
     }
 
     /* bytes / microseconds = kilobytes per second */
-    return (k_u32_t)((bytes * 1000u) / (k_size_t)micros);
+    return (k_u32_t)((bytes * 1000u) / micros);
+}
+
+/*
+ * The three operations, each repeated until the clock has moved or the
+ * bound of the runs is reached. A measured interval of zero is not a speed:
+ * the caller is told that the clock could not resolve the operation.
+ */
+static k_u32_t measure_fill(uint8_t *buffer, k_size_t size, bool *measured)
+{
+    k_u64_t start = k_sysinfo_uptime_us();
+    k_u64_t elapsed = 0;
+    k_u32_t reps = 0;
+
+    do {
+        /* A different byte each time, so the calls are not folded into one. */
+        memset(buffer, (uint8_t)(MEMTEST_PATTERN + reps), size);
+        reps++;
+        elapsed = k_sysinfo_uptime_us() - start;
+    } while (elapsed < MEMTEST_MIN_US && reps < MEMTEST_MAX_REPS);
+
+    *measured = (elapsed > 0);
+
+    return *measured ? speed_kbps((k_u64_t)size * reps, elapsed) : 0;
+}
+
+static k_u32_t measure_sum(uint8_t *buffer, k_size_t size, bool *measured)
+{
+    volatile uint8_t *flip = buffer;
+    k_u64_t start = k_sysinfo_uptime_us();
+    k_u64_t elapsed = 0;
+    k_u32_t sum = 0;
+    k_u32_t reps = 0;
+
+    do {
+        sum += checksum(buffer, size);
+        /* The next read is of other bytes: the sum cannot be hoisted out of
+         * the loop and timed once. */
+        flip[0] ^= (uint8_t)reps;
+        reps++;
+        elapsed = k_sysinfo_uptime_us() - start;
+    } while (elapsed < MEMTEST_MIN_US && reps < MEMTEST_MAX_REPS);
+
+    g_sink = sum;
+    *measured = (elapsed > 0);
+
+    return *measured ? speed_kbps((k_u64_t)size * reps, elapsed) : 0;
+}
+
+static k_u32_t measure_copy(uint8_t *dst, uint8_t *src, k_size_t size, bool *measured)
+{
+    k_u64_t start = k_sysinfo_uptime_us();
+    k_u64_t elapsed = 0;
+    k_u32_t reps = 0;
+
+    do {
+        /* A source byte that changes, so the copy is not folded either. */
+        src[0] = (uint8_t)(MEMTEST_PATTERN + reps);
+        memcpy(dst, src, size);
+        reps++;
+        elapsed = k_sysinfo_uptime_us() - start;
+    } while (elapsed < MEMTEST_MIN_US && reps < MEMTEST_MAX_REPS);
+
+    *measured = (elapsed > 0);
+
+    return *measured ? speed_kbps((k_u64_t)size * reps, elapsed) : 0;
 }
 
 /*
@@ -153,9 +233,6 @@ static void memtest_region(const char *name, bool psram, k_size_t size, struct m
     uint8_t *buffer;
     uint8_t *copy = NULL;
     k_size_t block_size = 0;
-    k_u64_t t0;
-    k_u64_t t1;
-    k_u64_t t2;
     k_u32_t sum;
 
     memset(out, 0, sizeof(*out));
@@ -179,30 +256,27 @@ static void memtest_region(const char *name, bool psram, k_size_t size, struct m
     /* The second block is only needed for the copy measurement. */
     copy = (uint8_t *)kmm_alloc(block_size, memtest_priority(psram));
 
-    /* Write: fill the whole block. */
-    t0 = k_sysinfo_uptime_us();
-    memset(buffer, MEMTEST_PATTERN, block_size);
-    t1 = k_sysinfo_uptime_us();
-    out->write_kbps = speed_kbps(block_size, t1 - t0);
+    /* Write: fill the whole block, as often as the clock needs. */
+    out->write_kbps = measure_fill(buffer, block_size, &out->write_measured);
 
     /* Read: walk through the block and sum it up. */
-    t2 = k_sysinfo_uptime_us();
-    sum = checksum(buffer, block_size);
-    g_sink = sum;
-    out->read_kbps = speed_kbps(block_size, k_sysinfo_uptime_us() - t2);
+    out->read_kbps = measure_sum(buffer, block_size, &out->read_measured);
 
     /* Copy: the block into the second one. */
     if (copy != NULL) {
-        k_u64_t c0 = k_sysinfo_uptime_us();
-
-        memcpy(copy, buffer, block_size);
-        out->copy_kbps = speed_kbps(block_size, k_sysinfo_uptime_us() - c0);
+        out->copy_tested = true;
+        out->copy_kbps = measure_copy(copy, buffer, block_size, &out->copy_measured);
     }
 
-    /* The data has to survive the round trip. */
+    /* The data has to survive the round trip: one pass of the known pattern,
+     * never the varied bytes of the measurement. */
+    memset(buffer, MEMTEST_PATTERN, block_size);
+    sum = checksum(buffer, block_size);
+    g_sink = sum;
     out->checksum_ok = (sum == expected_checksum(block_size));
 
     if (copy != NULL) {
+        memcpy(copy, buffer, block_size);
         out->checksum_ok = out->checksum_ok && (checksum(copy, block_size) == sum);
         kmm_free(copy);
     }
@@ -210,8 +284,28 @@ static void memtest_region(const char *name, bool psram, k_size_t size, struct m
     kmm_free(buffer);
 }
 
+/* One speed of the report: a number, or the truth that the clock stays still. */
+static void speed_text(char *text, k_size_t size, k_u32_t kbps, bool measured, bool tested)
+{
+    if (!tested) {
+        snprintf(text, size, "n/a");
+        return;
+    }
+
+    if (!measured) {
+        snprintf(text, size, "too fast to measure");
+        return;
+    }
+
+    snprintf(text, size, "%u KB/s", (unsigned)kbps);
+}
+
 static void print_result(const char *name, const struct memtest_result *r)
 {
+    char fill[24];
+    char sum[24];
+    char copy[24];
+
     if (r->total == 0) {
         kshell_printf("%s: not available on this platform\n", name);
         return;
@@ -230,9 +324,13 @@ static void print_result(const char *name, const struct memtest_result *r)
      * block, the walk through it with the checksum and the copy of the
      * block. The checksum is limited by the additions, not by the memory.
      */
-    kshell_printf("  %u KB block: fill %u KB/s, sum %u KB/s, copy %u KB/s, data %s\n",
-                  (unsigned)(r->block_size / 1024), (unsigned)r->write_kbps, (unsigned)r->read_kbps,
-                  (unsigned)r->copy_kbps, r->checksum_ok ? "ok" : "BROKEN");
+    speed_text(fill, sizeof(fill), r->write_kbps, r->write_measured, true);
+    speed_text(sum, sizeof(sum), r->read_kbps, r->read_measured, true);
+    speed_text(copy, sizeof(copy), r->copy_kbps, r->copy_measured, r->copy_tested);
+
+    kshell_printf("  %u KB block: fill %s, sum %s, copy %s, data %s\n",
+                  (unsigned)(r->block_size / 1024), fill, sum, copy,
+                  r->checksum_ok ? "ok" : "BROKEN");
 }
 
 static int cmd_memtest(int argc, char **argv)

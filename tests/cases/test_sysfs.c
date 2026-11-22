@@ -76,6 +76,11 @@ static void test_procfs(void)
     rc = read_file("/proc/uptime", buffer, sizeof(buffer));
     KT_CHECK(rc > 0);
     KT_CHECK(strstr(buffer, "up ") != NULL);
+    /* The same words as the shell: seconds and ticks, no "(s)" and no
+     * milliseconds. */
+    KT_CHECK(strstr(buffer, "tick") != NULL);
+    KT_CHECK(strstr(buffer, "tick(s)") == NULL);
+    KT_CHECK(strstr(buffer, " ms") == NULL);
 
     rc = read_file("/proc/meminfo", buffer, sizeof(buffer));
     KT_CHECK(rc > 0);

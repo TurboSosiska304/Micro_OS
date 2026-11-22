@@ -236,6 +236,12 @@ written when the project was an operating system for one board; the numbers
       `KERNEL_PSRAM`, `KERNEL_EXEC` and the `MICRO_OS_*` switches of the
       network components, the defaults per build, `make test-minimal` and
       the check of the map
+* [x] The shell of the cleanroom (1.1.2): `ls` and `tree` stream a directory
+      without a table (300 names, not 64 or 16), `tree -d` counts every entry,
+      a path is normalized (`.`/`..`, `//`, a trailing `/`), `memtest`
+      repeats an operation and never divides by a still clock, `config` on a
+      machine without a store says so, and the words of `write`, `mkdir`,
+      `df`, `umount` and the clock are one style
 
 ## K8 - Many cores (in progress, after 1.0)
 

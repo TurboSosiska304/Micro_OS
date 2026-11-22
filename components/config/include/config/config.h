@@ -33,11 +33,14 @@
  * A place where the configuration survives a restart: the key-value store of
  * the port, a table in the tests. `next` walks the keys from the index 0 and
  * answers -2 after the last one; the other negative codes are real errors.
+ * `erase` forgets the key a probe wrote; it is NULL in a table that has no
+ * way to remove a key.
  */
 struct config_store {
     int (*load)(const char *key, char *value, k_size_t size);
     int (*save)(const char *key, const char *value);
     int (*next)(k_size_t index, char *key, k_size_t size);
+    int (*erase)(const char *key);
 };
 
 /* Install the store of the platform, or take it away with NULL. */
@@ -48,6 +51,15 @@ void config_store_use_platform(void);
 
 /* The installed store, NULL when the board has none. */
 const struct config_store *config_store_get(void);
+
+/*
+ * Whether the installed store can keep a key at all. A store that is there
+ * and empty answers its walk with -2, exactly like a port that keeps
+ * nothing, so an empty walk is followed by a write and an erase of one
+ * reserved key. The answer is false for a machine without a store (x86-64),
+ * where the files of /etc are the only settings.
+ */
+bool config_store_usable(void);
 
 /*
  * Write the keys of the store that `dir` does not have. A file that is there

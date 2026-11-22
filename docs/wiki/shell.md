@@ -22,8 +22,9 @@ because a cut line is a different command. While a program or a pipe runs,
 Ctrl+C is not a line: the shell reads it and sends `SIGINT` to the program or
 to every stage of the chain (see [kernel-abi.md](kernel-abi.md#signals)).
 
-Because there are no quotes, a command that needs an empty argument accepts
-the two characters `""` as the way to type it. `path ""` is the example.
+Because there are no quotes, an empty argument cannot be typed: the two
+characters `""` are a word of their own, and a command that wants a list
+refuses it (`path: an empty value is not a list of directories`).
 
 A name that is not registered answers `<name>: command not found`. A command
 that is given the wrong arguments answers with its own `usage:` line and does
@@ -106,7 +107,7 @@ The core of the kernel, on every machine:
 |---|---|
 | `help [command]` | the list of commands, or the full help of one |
 | `uname` | the name, the version, the architecture and the build id |
-| `uptime` | the time since the boot, the ticks and the task count |
+| `uptime` | the seconds since the boot, the scheduler ticks and the task count |
 | `ps` | the tasks: pid, priority, state, name |
 | `free` | the memory of the heap and of the PSRAM |
 | `dmesg` | the log of the boot, from the ring buffer of the kernel |
@@ -143,7 +144,7 @@ The services, where the port registers them:
 
 | Command | What it does | Where |
 |---|---|---|
-| `config`, `config sync` | list the store of `/etc`, restore and save it | board, simulator |
+| `config`, `config sync` | list the store of `/etc`, restore and save it | board, simulator; x86-64 has no store |
 | `mkfs -y` | format the volume (erases everything) | board, simulator |
 | `http get <url>` | one HTTP request; prints the status and the body | board, x86-64 |
 | `wget <url> <file>` | download a URL into a file; a second run continues it | board, x86-64 |
@@ -172,6 +173,36 @@ arrive with `make x86-net-build`; an image without the network has none of
 them. This is the port boundary doing its job, not a bug; [ports.md](ports.md)
 has the whole matrix.
 
+## The clock and the memory
+
+The time of this system has one style: seconds since the boot, then the ticks
+of the scheduler, and a word that matches the number. A tick is the period of
+the scheduler, one millisecond; the seconds come from the microsecond clock of
+the port and are the truth when a busy kernel misses a tick. `free` is the
+memory and nothing else.
+
+```text
+microos> uptime
+up 93 s, 93207 ticks, 5 tasks
+microos> cat /proc/uptime
+up 93 s, 93207 ticks
+```
+
+`memtest [kilobytes]` fills a block, sums it and copies it, for the internal
+heap and the PSRAM one after the other. A single memset of 32 KB is shorter
+than a tick of the x86-64 clock, so each operation is repeated until the clock
+has moved at least a millisecond and the speed is the total bytes over the
+total time. A clock that still cannot resolve the work says `too fast to
+measure` instead of dividing by one microsecond:
+
+```text
+microos> memtest
+memory test, block of 32 KB
+internal heap: 318 KB total, 201 KB free, 117 KB used
+  32 KB block: fill 65536 KB/s, sum 32768 KB/s, copy 65536 KB/s, data ok
+psram: not available on this platform
+```
+
 ## `PATH` and `exec`
 
 `PATH` starts at `/bin:/usr/bin` and belongs to the shell: it is not a file of
@@ -182,7 +213,13 @@ microos> path
 /bin:/usr/bin
 microos> path /bin
 microos> path ""
+path: an empty value is not a list of directories
 ```
+
+A path is normalized before the call: `.` is the directory itself, `..` is
+its parent, a run of slashes is one slash, and a trailing slash names the same
+entry. `cd ..` from `/` stays at `/`, and `ls ..` is the parent of the current
+directory; the filesystem of this system never sees a `..` in a path.
 
 A name with a slash is a path and is used as it is. A name without one is
 looked up in `PATH`, and the first regular file with an execute bit wins; a
@@ -231,10 +268,12 @@ hangs.
 
 ## `ls` and `tree`
 
-`ls` writes the names of a directory, one per line and sorted, a directory
-with a slash at its end. `-l` adds the kind and the nine bits of the mode, the
-owner, the size and the moment; `-a` puts `.` and `..` first. The path itself
-is not a line of the answer — `tree` is the command that draws the levels.
+`ls` writes the names of a directory, one per line, in the order of the
+filesystem (the names are not sorted), a directory with a slash at its end.
+The listing has no fixed table and no limit: every name is printed as it is
+read. `-l` adds the kind and the nine bits of the mode, the owner, the size and
+the moment; `-a` puts `.` and `..` first. The path itself is not a line of the
+answer — `tree` is the command that draws the levels.
 
 ```text
 microos> ls /etc
@@ -260,10 +299,11 @@ mode prints `?---------`; a record without a moment prints `-` in the date
 column. A file is its name as it was given: `ls hello` answers `hello`.
 
 `tree [-ad] [path]` draws the levels below a path with `|--` and `` `-- ``
-branches and ends with the count of what it drew. `-d` keeps the directories
-only; `-a` is accepted for the hidden names, of which this system has none
-yet. The walk stops at the sixth level with `... (deeper)`, and a directory
-that cannot be read is skipped.
+branches and ends with the count of the entries. `-d` keeps the directories in
+the drawing; the files are still counted, because the summary is the content
+of the tree and not the branches that were drawn. `-a` is accepted for the
+hidden names, of which this system has none yet. The walk stops at the sixth
+level with `... (deeper)`, and a directory that cannot be read is skipped.
 
 ```text
 microos> tree /etc
@@ -271,6 +311,10 @@ microos> tree /etc
 |-- init.d/
 |   `-- clock
 `-- setting
+1 directory, 2 files
+microos> tree -d /etc
+/etc
+`-- init.d/
 1 directory, 2 files
 ```
 
@@ -421,6 +465,15 @@ is no authentication, and `telnet off` closes the door.
 `config` lists the store of `/etc` (the key-value store of the port, NVS on the
 board), and `config sync` restores the files that are missing and saves the
 ones that are there. The file wins when the two disagree — see [files.md](files.md).
+
+A machine without a store says so instead of printing an empty list, and
+`config sync` is an error there: there is no copy to restore from or save
+into, and the files of `/etc` are the settings.
+
+```text
+microos> config
+config: this machine has no store; the files of /etc are the settings
+```
 
 ## The commands of a script
 

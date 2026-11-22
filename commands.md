@@ -239,7 +239,7 @@ read by the kernel, checked against the format `MOX1` and handed to the port.
 | `chown <uid> <path>` | the owner, a decimal uid `0..32767` |
 | `stat <path>` | the type, the mode, the owner and the size of one object |
 | `path` | the directories of `PATH` |
-| `path <dirs>` | set `PATH` with `:` between directories; `path ""` is the default |
+| `path <dirs>` | set `PATH` with `:` between directories; an empty value is refused |
 | `exec <program> [arguments...]` | run a program, by a path or found in `PATH` |
 
 ```bash
@@ -267,8 +267,13 @@ path and is used as it is; a name without one is looked up in `PATH`, where
 the first regular file with an execute bit wins. A search that found nothing
 says where it looked: `exec: hello: not found in /bin:/usr/bin`. `path` keeps
 that value in the shell and not in `/etc` - it starts at `/bin:/usr/bin`, and
-the splitter of the shell has no quotes, so the two characters `""` are how a
-person types the empty argument that brings the default back.
+the splitter of the shell has no quotes, so there is no empty argument to type:
+`path ""` is refused with `an empty value is not a list of directories`.
+
+A path is normalized before any call: `.` and `..`, a run of slashes and a
+trailing slash name the entry they mean. `cd ..` from `/` stays at `/`, `cd .`
+stays where it is, and `ls ..` lists the parent. The filesystem never sees a
+`..` in a path.
 
 A mode that is not octal (`0999`), a uid above `32767` and a missing path are
 refused with a sentence: `not an octal mode`, `a uid is 0..32767`, `no such
