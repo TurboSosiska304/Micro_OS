@@ -3,12 +3,20 @@ OUTPUT_ARCH(i386:x86-64)
 ENTRY(_start64)
 
 /*
- * The 64-bit kernel of the port. It is linked at 16 MiB: the loader of the
- * port copies it there before the switch to long mode, and the identity map
- * of the first gigabyte makes the physical and the virtual address the same,
- * which is what the small memory model expects.
+ * The 64-bit kernel of the port, in the higher half (ADR 0007). The image is
+ * linked in the top 2 GiB of the address space - the region the small model
+ * of the compiler can name with a sign-extended 32-bit immediate, which is
+ * why the build adds -mcmodel=kernel - and the loader copies the bytes to
+ * KERNEL_PHYS and maps them at KERNEL_BASE. The low identity map of the
+ * first gigabyte is still there for the VGA, the heap, the arena and the
+ * information of the boot, so a table entry can name either address; the
+ * kernel itself runs high and is reached only through the map at the top.
+ *
+ * KERNEL_BASE and KERNEL_PHYS are copied in loader32.S and in
+ * port_x86_64.h; a linker script cannot include a header.
  */
-KERNEL_BASE = 0x01000000;
+KERNEL_BASE = 0xFFFFFFFF80000000;
+KERNEL_PHYS = 0x01000000;
 
 SECTIONS
 {

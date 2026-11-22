@@ -54,7 +54,33 @@
 #define KSYS_KILL 29      /* kill(pid, sig) */
 #define KSYS_SIGNAL 30    /* signal(sig, handler) -> the old handler */
 #define KSYS_SIGRETURN 31 /* the restorer of a signal frame, for the port */
-#define KSYS_COUNT 32     /* the number of the system calls */
+#define KSYS_GETLIMIT 32  /* getlimit(which, value) */
+#define KSYS_SETLIMIT 33  /* setlimit(which, value) */
+#define KSYS_COUNT 34     /* the number of the system calls */
+
+/*
+ * The resources of a limit. One number names one resource and the calls move
+ * its value as a 64-bit word; there is no structure on the wire, because the
+ * three values have three different widths and a pointer of the caller would
+ * have to be checked and copied for nothing. The library composes
+ * `struct microos_rlimit` from three calls for the callers that want the set
+ * in one place.
+ *
+ * The limits of a task start at the maximum of the system and may only be
+ * lowered: there is one user, uid 0, and a program of that user still must
+ * not raise its own ceiling (the rule of POSIX without the privilege of root,
+ * like the mode check of ADR 0005). A value above the current limit is
+ * EPERM; a resource that is not one of the three is EINVAL.
+ */
+#define KSYS_RLIMIT_MEMORY 1u /* bytes of the user blocks of the task */
+#define KSYS_RLIMIT_CPU 2u    /* milliseconds of processor time */
+#define KSYS_RLIMIT_FDS 3u    /* open descriptors of the task */
+
+/* The ceiling of each resource: the limit of a fresh task and the most a
+ * task may ever ask of the machine. */
+#define KSYS_RLIMIT_MEMORY_MAX TASK_LIMIT_MEMORY_MAX
+#define KSYS_RLIMIT_CPU_MAX TASK_LIMIT_CPU_MAX
+#define KSYS_RLIMIT_FDS_MAX TASK_LIMIT_FDS_MAX
 
 /*
  * The signals of the ABI. The numbers are the ones of POSIX and the set is
@@ -229,5 +255,16 @@ int ksys_execve_env(const char *path, char *const argv[], char *const envp[]);
 int ksys_kill(int pid, int sig);
 /* The old handler, or K_SIG_ERR when the signal is not one of the system. */
 task_signal_fn ksys_signal(int sig, task_signal_fn handler);
+
+/*
+ * The limits of the calling task. `which` is one of KSYS_RLIMIT_*, the value
+ * is the number of bytes, of milliseconds or of descriptors. getlimit copies
+ * the current limit into the place of the caller; setlimit lowers it. A call
+ * that would lower the limit of another task is not expressible: the limits
+ * are the task's own, as `setrlimit` of POSIX with the resource of the
+ * caller.
+ */
+int ksys_getlimit(k_u32_t which, k_u64_t *value);
+int ksys_setlimit(k_u32_t which, k_u64_t value);
 
 #endif /* MICRO_OS_KERNEL_KSYS_H */

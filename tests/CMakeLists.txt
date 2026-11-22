@@ -18,6 +18,7 @@ if(NOT ESP_PLATFORM)
         cases/test_fuzz.c
         cases/test_mfs.c
         cases/test_mfs_persistence.c
+        cases/test_mfs_repair.c
         cases/test_mkfs_image.c
         cases/test_vfs.c
         cases/test_fs_fat.c
@@ -27,6 +28,8 @@ if(NOT ESP_PLATFORM)
         cases/test_battery_soc.c
         cases/test_fb_draw.c
         cases/test_rtc.c
+        cases/test_ir_nec.c
+        cases/test_sound_detect.c
         cases/test_console.c
         cases/test_telnet.c
         cases/test_text_wrap.c
@@ -40,6 +43,7 @@ if(NOT ESP_PLATFORM)
         cases/test_task.c
         cases/test_sched.c
         cases/test_sched_queue.c
+        cases/test_sign.c
     )
 
     # The tests of a component that a build leaves out are left out with it:
@@ -73,15 +77,22 @@ if(NOT ESP_PLATFORM)
         "${CMAKE_SOURCE_DIR}/components/graphics/include"
         "${CMAKE_SOURCE_DIR}/components/fs_fat32/include"
         "${CMAKE_SOURCE_DIR}/components/fs_ext2/include"
+        # The verifier of ADR 0020 and its two primitives: the boot loader and
+        # the tool compile the same files, and the test is the third caller.
+        "${CMAKE_SOURCE_DIR}/ports/port_x86_64/loader"
     )
 
     target_sources(microos_tests PRIVATE
-        "${CMAKE_SOURCE_DIR}/components/drivers/src/input_debounce.c"
-        "${CMAKE_SOURCE_DIR}/components/drivers/src/battery_soc.c"
+        "${CMAKE_SOURCE_DIR}/components/drivers/src/input_debounce.c"        "${CMAKE_SOURCE_DIR}/components/drivers/src/battery_soc.c"
         "${CMAKE_SOURCE_DIR}/components/drivers/src/fb_draw.c"
         "${CMAKE_SOURCE_DIR}/components/drivers/src/rtc_time.c"
+        "${CMAKE_SOURCE_DIR}/components/drivers/src/ir_nec.c"
+        "${CMAKE_SOURCE_DIR}/components/drivers/src/sound_detect.c"
         "${CMAKE_SOURCE_DIR}/components/telnet/src/telnet_proto.c"
         "${CMAKE_SOURCE_DIR}/components/graphics/src/text_wrap.c"
+        "${CMAKE_SOURCE_DIR}/ports/port_x86_64/loader/sha256.c"
+        "${CMAKE_SOURCE_DIR}/ports/port_x86_64/loader/ed25519.c"
+        "${CMAKE_SOURCE_DIR}/ports/port_x86_64/loader/sign_image.c"
     )
 
     # The FAT reader comes from the component when the host build links it
@@ -135,9 +146,13 @@ if(NOT ESP_PLATFORM)
 
     target_link_libraries(microos_tests PRIVATE ${MICRO_OS_TEST_LIBS})
 
-# The corpus of the tests: a fixed set of numbers with the boundary values
+# The corpus of the tests: a fixed set of numbers with the boundary values,
+# the recorded ABI of the release (tests/corpus/abi.txt) and the MOX1 image
+# that 1.0 froze (tests/corpus/mox1).
 target_compile_definitions(microos_tests PRIVATE
     KTEST_CORPUS="${CMAKE_SOURCE_DIR}/tests/corpus/vectors.txt"
+    KTEST_ABI_GOLDEN="${CMAKE_SOURCE_DIR}/tests/corpus/abi.txt"
+    KTEST_MOX_FIXTURE="${CMAKE_SOURCE_DIR}/tests/corpus/mox1/frozen-x86_64.hex"
 )
 
     # A test that hangs is a test that failed: the panic of the kernel

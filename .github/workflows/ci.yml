@@ -24,6 +24,11 @@ on:
 permissions:
   contents: read
 
+# Reproducible builds: one moment for the records and the build id, the
+# same source paths (the Makefile exports the same default).
+env:
+  SOURCE_DATE_EPOCH: "0"
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -55,11 +60,17 @@ jobs:
       - name: the smoke test of the simulator
         run: make smoke
 
+      - name: the lines of the kernel
+        run: make coverage
+
       - name: qemu for the x86-64 machine
         run: sudo apt-get install -y -qq --no-install-recommends qemu-system-x86
 
       - name: the kernel boots on x86-64
         run: make x86-smoke
+
+      - name: the same image twice
+        run: make reproducible
 
       # A machine that stops before the shell leaves the binary as the only
       # witness: the console says where, and the image says which instruction.
@@ -113,6 +124,30 @@ jobs:
         run: |
           . /opt/esp/idf/export.sh >/dev/null
           tools/bundle.sh build dist
+
+      # The same inputs, the same bytes: the second bundle of the same build
+      # has to be a copy of the first, images and archive alike. This is the
+      # half of the gate that needs ESP-IDF; `make reproducible` is the half
+      # of the laptop.
+      - name: the bundle twice
+        shell: bash
+        run: |
+          . /opt/esp/idf/export.sh >/dev/null
+          cp -a dist dist-first
+          tools/bundle.sh build dist
+          diff -r dist-first dist
+
+      # A build of its own, not a copy of the first: the same sources and
+      # SOURCE_DATE_EPOCH have to give the same application and bootloader.
+      - name: the firmware twice
+        shell: bash
+        run: |
+          . /opt/esp/idf/export.sh >/dev/null
+          idf.py -B build-repro build
+          for image in micro_os.bin bootloader/bootloader.bin \
+                       partition_table/partition-table.bin; do
+              cmp "build/$image" "build-repro/$image"
+          done
 
       - name: the integrity against the bundle
         shell: bash

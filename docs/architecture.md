@@ -24,11 +24,13 @@ the description of the machine plus the drivers of its chips.
 | The port contract (kernel/port/*.h): console, time, memory, locks,   |
 | power, store, sockets, identity; and the execution substrate        |
 +---------------------------------------------------------------------+
-| Ports:                                                               |
+| Ports and substrates:                                                |
 |   port_esp32   ESP-IDF + FreeRTOS + lwIP + NVS, the partition of MFS |
-|   port_host    a Linux process (pthreads, files, sockets)           |
+|   port_host    a Linux process (pthreads, files, sockets) - the  |
+|                substrate of the tests and the simulator, not a port |
 |   port_x86_64  bare metal on QEMU: its own loader, IDT/PIT, switch  |
-|   port_null    no machine at all, linked by the checks              |
+|   port_null    no machine at all, linked by the checks - a shape |
+|                of the contract, not a port                          |
 +---------------------------------------------------------------------+
 | Boards and drivers (the ESP32 port): the StickC Plus2, the panel,   |
 | the buttons, the IMU, the RTC, the battery, the radio               |
@@ -67,6 +69,23 @@ where it does not belong.
 
 That is exactly what allows the kernel tests to run on a laptop.
 
+### The contracts are recorded in the tree
+
+Two interfaces are the promise of a release, and both have a golden record
+that a change has to move with the code:
+
+| Record | What it freezes | Checked by |
+|---|---|---|
+| [tests/corpus/abi.txt](../tests/corpus/abi.txt) | the calls (number, name, arity, result), the error codes, the flags, the limits, the header of a program image and the layout of the structures that cross the door, on a 64-bit and on a 32-bit machine | `ksys: the ABI is the recorded one` (`tests/cases/test_ksys.c`), on every `make test` |
+| [tests/corpus/port_api.txt](../tests/corpus/port_api.txt) | the 45 functions of `kernel/port/*.h` and the version of the contract | `make integrity` (`[port]`): the record against the headers, and the whole list against the ESP32 and the x86-64 port |
+
+[tests/corpus/mox1](../tests/corpus/mox1) holds a MOX1 image of version 2,
+built for 1.0 and recorded in hex: `k_exec_parse()` reads it on every
+`make test`, and the format is expected to read it for as long as it is 1.x.
+The golden files are not generated into the build directory on purpose - a
+record that a build rewrites is not a record. A change of the ABI or of the
+contract is therefore two files in one commit, and a reviewer sees it.
+
 ## 2. What is Linux-like here, and what is not
 
 | Property | Linux | Micro OS |
@@ -92,8 +111,11 @@ alive. A program is a task of the scheduler with a CR3 of its own, and `fork()`
 clones its page tables and copies a page on the first write (ADR 0007). The
 pointers of a program are checked and copied at the edge of the call: the
 port says whether a range is memory of the caller, and an address that is not
-mapped is `EFAULT` instead of a page fault of ring 0. The kernel is not in a
-higher half yet; that is the next step, with a plan in ADR 0007.
+mapped is `EFAULT` instead of a page fault of ring 0. The kernel is in the
+higher half: the image is linked at `0xFFFFFFFF80000000`, the loader maps it
+there beside the low identity map, and the C of the kernel is built with
+`-mcmodel=kernel` (ADR 0007). The heap and the devices stay in the identity
+map, which is what lets a driver hand a buffer to a card.
 
 That is a property of the current port, not the shape of the kernel: everything
 the kernel concedes to a board without an MMU sits behind one compile time flag,
@@ -167,6 +189,31 @@ before the marks and answers `EINTR` for a mark that has to be answered
 without reaping the child. There is no job control - no groups, no `&`, no
 `fg`, no `bg` - and the documentation says so; Ctrl+C while the shell waits
 for a program is read by the port and becomes `SIGINT` for that program.
+
+### The limits of a task (0.9)
+
+A task has three limits - the memory it holds, the processor time it spends
+and the descriptors it opens - and the calls `getlimit` (32) and `setlimit`
+(33) read and lower them. The limits are fields of `struct task`, so a fork
+inherits them and the scheduler does not have a second table to keep in step.
+They start at the ceiling of the machine (2 MiB of PSRAM, about 49 days of
+CPU, four descriptors) and only go down: with one user, uid 0, there is
+nobody to grant a raise, and the rule of no root bypass applies here too.
+
+The memory is counted by the allocator: `kmm` asks `task_memory_fits()` before
+it looks for a block, charges the user blocks to the task that allocated them
+and gives the charge back on `free`, so a task that is over its budget does
+not spend the memory of the system on the way to `ENOMEM`. The kernel and the
+system priorities have no owner and no limit. The CPU time is the time
+between the points where the task is known to be running - the edge of a
+system call and the tick of a port that can name the running task - with the
+sleep on both sides of a wait set aside; the limit marks the task with
+`SIGTERM`, the closest signal of the four to `SIGXCPU`, and the default action
+ends it with 143. The descriptors stop at the limit in `kfile_alloc()`,
+`kfile_pipe()` and `kfile_dup2()` with `EMFILE`, while a full table of the
+system is `ENOSPC`; lowering the limit never closes what is already open.
+`ulimit` of the shell prints the three numbers and lowers them, and the
+library has `microos_getlimit()`/`microos_setlimit()`.
 
 ## 5. Virtual filesystem (phase 2)
 
@@ -330,8 +377,9 @@ physical address contract.
   space", but without an MMU a switch means switching the stack pointer and the
   data segment base. The x86-64 port gives a program real page tables and a
   `fork()` that copies them with copy-on-write (ADR 0007); the kernel of that
-  port is still identity mapped and not in a higher half, and the plan to move
-  it is written down in the same ADR.
+  port is linked in the higher half and mapped at the top, and the low identity
+  map is kept for the heap, the arena and the devices (ADR 0007, "The higher
+  half: taken").
 
 ## 7. Drivers (phase 4)
 
@@ -348,9 +396,12 @@ struct file_operations {
 
 The drivers are written: `drv_display` (ST7789v2, the panel and the turn of
 its picture), `drv_input` (A/B/C), `drv_buzzer`, `drv_imu` (MPU6886),
-`drv_rtc` (BM8563), `drv_battery` and `drv_mic` (SPM1423, a PDM microphone
-on I2S at 16 kHz; the doctor reports its RMS and peak). The pinout and the
-quirks are documented in
+`drv_rtc` (BM8563), `drv_battery`, `drv_mic` (SPM1423, a PDM microphone on
+I2S at 16 kHz; the doctor reports its RMS and peak), the sound detector on top
+of it, `drv_ir` (NEC on the pin of the red LED, with the arbitration of the
+pad between the two) and `drv_power` (deep sleep, `HOLD` and the wake of the
+timer, of BUTTON C and of the alarm of the clock through the timer of the
+chip). The pinout and the quirks are documented in
 [docs/ports/esp32/hardware.md](ports/esp32/hardware.md).
 
 The WiFi driver is built like the kernel itself: a portable core
@@ -497,7 +548,15 @@ strings of a path or a vector never reach the VFS (ADR 0007).
   detector (`make test-tsan`).
 * The simulator `make sim` runs the very same kernel on Linux with a volume on
   a file, `/proc`, `/dev`, the configuration and the drivers of the host, so
-  the whole portable system can be debugged without flashing.
+  the whole portable system can be debugged without flashing. It links the
+  network of `components/net`, and `make smoke` fetches a page of its own
+  process over the loopback with the HTTP client the board runs.
+* `make coverage` builds the host with `--coverage`, runs the tests and the
+  simulator, and gcov counts the lines of `components/kernel`; the gate is 70%
+  of lines (the tree met about 80.7% when it was added).
+* `make reproducible` builds the disk image twice with `SOURCE_DATE_EPOCH` and
+  compares the bytes. The same moment fixes the records of MicroFS, the build
+  id and the paths of the sources; the cloud does the same for the firmware.
 * The x86-64 port is booted in QEMU by `make x86-smoke`: the same sources, a
   bare processor, a serial console, the shell - and, between the banner and
   the shell, a MOX1 program that the port enters and that writes its line.

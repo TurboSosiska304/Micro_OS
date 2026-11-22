@@ -6,7 +6,7 @@
  *
  *   the text  at PORT_EXEC_TEXT_BASE (0x4009E000) plus the header of the
  *             format, in the instruction RAM below the top of the segment;
- *   the data  at PORT_EXEC_DATA_BASE (0x3FFCC000), the top of the static DRAM
+ *   the data  at PORT_EXEC_DATA_BASE (0x3FFCE000), the top of the static DRAM
  *             segment, which the build keeps out of the heap.
  *
  * The two windows are not contiguous, and that is the shape of the hardware:
@@ -15,7 +15,7 @@
  * as its code. The text and its literal pools go to IRAM; the data, the bss
  * and the strings of the library go to DRAM.
  *
- * tools/mkprog.sh --base 0x4009E000 --data-base 0x3FFCC000 checks both
+ * tools/mkprog.sh --base 0x4009E000 --data-base 0x3FFCE000 checks both
  * addresses against this script before an image is written. The numbers are
  * also in components/port_esp32/src/port_exec.c and in the assertion of
  * components/port_esp32/exec_windows.ld: the three have to change together.
@@ -35,7 +35,7 @@ MEMORY
     text (RX) : ORIGIN = 0x4009E020, LENGTH = 0x1FE0
 
     /* The 8 KiB window of the data, the bss and the vectors of the program. */
-    data (RW) : ORIGIN = 0x3FFCC000, LENGTH = 0x2000
+    data (RW) : ORIGIN = 0x3FFCE000, LENGTH = 0x2000
 }
 
 SECTIONS

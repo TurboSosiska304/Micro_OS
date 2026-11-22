@@ -4,9 +4,10 @@
  * QEMU loads a multiboot 1 image at one megabyte and starts it in 32-bit
  * protected mode. This file is the whole of the bootloader the port has:
  * it copies the 64-bit kernel (a multiboot module, a flat binary built for
- * 16 MiB) where it wants to be, builds the identity map of the first
- * gigabyte, turns the long mode on and jumps into the kernel with the map
- * of the memory of the boot.
+ * the top of the address space) where it wants to be, builds the map of the
+ * boot - the identity of the first gigabyte and the kernel at the top - turns
+ * the long mode on and jumps into the kernel with the map of the memory of
+ * the boot.
  *
  * There is no configuration file and no protocol to negotiate: the boot is
  * one page of assembly that the project owns, the way Linux has its own.
@@ -14,7 +15,29 @@
 .set MB_MAGIC, 0x1BADB002
 .set MB_FLAGS, 0x00000003 /* align the modules, ask for the memory map */
 .set MB_CHECKSUM, -(MB_MAGIC + MB_FLAGS)
-.set KERNEL_ADDR, 0x01000000
+
+/*
+ * The two numbers of the link: the image is linked at KERNEL_BASE (the top
+ * 2 GiB, the region the small model of the compiler can name) and these
+ * bytes are copied to KERNEL_PHYS, the 16 MiB the loader owns before there
+ * is a heap (ADR 0007). linker64.ld and port_x86_64.h carry the same pair.
+ */
+.set KERNEL_BASE, 0xFFFFFFFF80000000
+.set KERNEL_PHYS, 0x01000000
+
+/*
+ * The high map covers the image and its bss in 2 MiB pages: 16 MiB, which is
+ * the allowance of src/paging.c (KERNEL_IMAGE_TABLES) and far more than the
+ * image of the port. The kernel rebuilds the same chunks with 4 KiB pages at
+ * the boot; this map only has to carry the clear of .bss and the first C.
+ */
+.set KERNEL_MAP_2MIB, 8
+
+/* The index of PML4 entry 511 and of PDPT entry 510: the address
+ * 0xFFFFFFFF80000000 is the base of the top 2 GiB, and 0xFFFF...BC00 is the
+ * end of the second gigabyte of the 512 GiB the entry 511 names. */
+.set PML4_HIGH_OFFSET, 511 * 8
+.set PDPT_HIGH_OFFSET, 510 * 8
 
 .section .multiboot, "a", @progbits
 .align 8
@@ -26,6 +49,8 @@
 .code32
 .global _start
 .type _start, @function
+
+.extern loader_verify_image
 
 _start:
     cli
@@ -42,31 +67,85 @@ _start:
        reachable through the identity map. */
     movl %ebx, mbi_ptr
 
-    /* PML4[0] -> PDPT, PDPT[0] -> PD: the first gigabyte through 2 MiB
-       pages, so that every address of the boot keeps its meaning. */
-    movl $pdpt, %eax
+    /*
+     * The C of the signature check runs before the page tables exist, so its
+     * stack is the one in .bss and every address is still the physical one
+     * of the boot. loader_verify_image() prints the reason and returns a
+     * failure when the image did not pass; the loader then halts, and no
+     * byte of the kernel has run.
+     */
+    movl $stack_top, %esp
+
+    movl mbi_ptr, %eax
+    movl 20(%eax), %ecx /* mods_count */
+    testl %ecx, %ecx
+    jz halt
+    movl 24(%eax), %edx /* mods_addr */
+    testl %edx, %edx
+    jz halt
+    movl (%edx), %esi /* mod_start */
+    movl 4(%edx), %edi /* mod_end */
+    subl %esi, %edi
+    pushl %edi
+    pushl %esi
+    call loader_verify_image
+    addl $8, %esp
+    testl %eax, %eax
+    jnz halt
+
+    /* PML4[0] -> PDPT_LOW, PDPT_LOW[0] -> PD_LOW: the first gigabyte through
+       2 MiB pages, so that every address of the boot keeps its meaning. */
+    movl $pdpt_low, %eax
     orl $0x03, %eax
     movl %eax, pml4
-    movl $pd, %eax
+    movl $pd_low, %eax
     orl $0x03, %eax
-    movl %eax, pdpt
+    movl %eax, pdpt_low
 
     xorl %ecx, %ecx
 1:
     movl %ecx, %eax
     shll $21, %eax
     orl $0x83, %eax
-    movl %eax, pd(, %ecx, 8)
-    movl $0, pd + 4(, %ecx, 8)
+    movl %eax, pd_low(, %ecx, 8)
+    movl $0, pd_low + 4(, %ecx, 8)
     incl %ecx
     cmpl $512, %ecx
     jb 1b
 
     /*
+     * PML4[511] -> PDPT_HIGH, PDPT_HIGH[510] -> PD_HIGH: the same physical
+     * KERNEL_PHYS and up, named at KERNEL_BASE. A PDPT entry covers 1 GiB,
+     * so entry 510 of the PML4 entry 511 is exactly the top 2 GiB. The two
+     * halves get a PDPT each: the high map is supervisor-only and a program
+     * inherits it as it is, while the low one is copied per address space.
+     */
+    movl $pdpt_high, %eax
+    orl $0x03, %eax
+    movl %eax, pml4 + PML4_HIGH_OFFSET
+    movl $0, pml4 + PML4_HIGH_OFFSET + 4
+    movl $pd_high, %eax
+    orl $0x03, %eax
+    movl %eax, pdpt_high + PDPT_HIGH_OFFSET
+    movl $0, pdpt_high + PDPT_HIGH_OFFSET + 4
+
+    xorl %ecx, %ecx
+2:
+    movl %ecx, %eax
+    shll $21, %eax
+    addl $KERNEL_PHYS, %eax
+    orl $0x83, %eax
+    movl %eax, pd_high(, %ecx, 8)
+    movl $0, pd_high + 4(, %ecx, 8)
+    incl %ecx
+    cmpl $KERNEL_MAP_2MIB, %ecx
+    jb 2b
+
+    /*
      * The kernel comes as the first module of the boot: QEMU puts it in the
      * memory and describes it in the multiboot information. It is copied to
-     * its link address before the switch, while the addresses are still the
-     * physical ones of the loader.
+     * its physical address before the switch, while the addresses are still
+     * the physical ones of the loader.
      */
     movl mbi_ptr, %eax
     movl 24(%eax), %eax /* mods_addr */
@@ -75,7 +154,7 @@ _start:
     movl (%eax), %esi /* mod_start */
     movl 4(%eax), %ecx
     subl %esi, %ecx /* mod_end - mod_start */
-    movl $KERNEL_ADDR, %edi
+    movl $KERNEL_PHYS, %edi
     cld
     rep movsb
 
@@ -114,8 +193,10 @@ long_mode:
     movw %ax, %fs
     movw %ax, %gs
 
+    /* The boot information is a physical address below 1 GiB and the kernel
+       reads it through the identity map; the entry itself is at the top. */
     movl mbi_ptr(%rip), %edi
-    movabs $KERNEL_ADDR, %rax
+    movabs $KERNEL_BASE, %rax
     jmp *%rax
 
 .code32
@@ -148,9 +229,13 @@ gdt64_end:
 .align 4096
 pml4:
 .skip 4096
-pdpt:
+pdpt_low:
 .skip 4096
-pd:
+pd_low:
+.skip 4096
+pdpt_high:
+.skip 4096
+pd_high:
 .skip 4096
 
 .align 16

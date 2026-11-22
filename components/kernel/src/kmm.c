@@ -26,12 +26,14 @@
 /* The header in front of every block, so that kmm_free() knows what to do. */
 struct kmm_header {
     k_u32_t magic;
-    k_u32_t size;    /* the size that was asked for */
-    k_u32_t slab;    /* the number of the slab, KMM_NO_SLAB for a large block */
-    k_u8_t pool;     /* 0: the internal RAM, 1: the PSRAM */
-    k_i8_t priority; /* the priority the block was allocated with */
-    k_u8_t class;    /* the class of the slab, KMM_LARGE_CLASS for a large block */
-    k_u8_t flags;    /* KMM_FLAG_FREE while the slot is free */
+    k_u32_t size;      /* the size that was asked for */
+    k_u32_t slab;      /* the number of the slab, KMM_NO_SLAB for a large block */
+    k_u32_t owner_pid; /* the task the block is charged to, 0 for none */
+    k_u8_t pool;       /* 0: the internal RAM, 1: the PSRAM */
+    k_i8_t priority;   /* the priority the block was allocated with */
+    k_u8_t class;      /* the class of the slab, KMM_LARGE_CLASS for a large block */
+    k_u8_t flags;      /* KMM_FLAG_FREE while the slot is free */
+    k_u32_t reserved;  /* keep the block aligned for the caller */
 };
 
 #define KMM_MAGIC 0x4B4D4D42u /* "KMMB" */
@@ -39,6 +41,9 @@ struct kmm_header {
 #define KMM_NO_SLAB 0xFFFFFFFFu
 #define KMM_LARGE_CLASS 0xFFu
 #define KMM_FLAG_FREE 1u
+
+_Static_assert(sizeof(struct kmm_header) % KMM_ALIGN == 0,
+               "the header of a block has to keep the data aligned");
 
 /* The size of one slab and the number of the slabs of the system. */
 #define KMM_SLAB_BYTES (8 * 1024)
@@ -234,6 +239,13 @@ static void kmm_init_locked(void)
     memset(g_slabs, 0, sizeof(g_slabs));
     memset(g_class_slabs, 0, sizeof(g_class_slabs));
     g_slab_count = 0;
+
+    /*
+     * The slabs that were just given back held the blocks of tasks: the
+     * budget of a task starts from zero with the allocator, as it does at
+     * the boot.
+     */
+    task_memory_reset();
 }
 
 int kmm_current_priority(void)
@@ -378,7 +390,7 @@ static struct kmm_slab *find_slab(int class, k_u8_t pool)
 }
 
 /* A small block: a slot of a slab. */
-static void *alloc_small(k_size_t size, int priority, k_u8_t pool)
+static void *alloc_small(k_size_t size, int priority, k_u8_t pool, struct task *owner)
 {
     struct kmm_slab *slab;
     struct kmm_header *header;
@@ -400,15 +412,32 @@ static void *alloc_small(k_size_t size, int priority, k_u8_t pool)
     header->magic = KMM_MAGIC;
     header->size = (k_u32_t)size;
     header->slab = slab->index;
+    header->owner_pid = (owner != NULL) ? owner->pid : 0u;
     header->pool = pool;
     header->priority = (k_i8_t)priority;
     header->class = (k_u8_t)size_class(size);
     header->flags = 0;
+    header->reserved = 0;
 
     g_stats.slab_free_bytes -= class_size(header->class);
     account_alloc(size, priority, pool);
+    task_memory_charge(owner, size);
 
     return data;
+}
+
+/*
+ * The task whose budget pays for a block. Only the user allocations are
+ * charged: the kernel and the system utilities must not fail because an
+ * application took the memory, so their blocks have no owner and no limit.
+ */
+static struct task *kmm_owner(int priority)
+{
+    if (priority >= KMM_PRIORITY_SYSTEM) {
+        return NULL;
+    }
+
+    return task_self();
 }
 
 /* --- the allocator --- */
@@ -417,6 +446,7 @@ static void *kmm_alloc_locked(k_size_t size, int priority)
 {
     k_size_t total;
     void *block;
+    struct task *owner;
 #if KERNEL_PSRAM
     k_u8_t pool = 1; /* the PSRAM, the default for the user */
 #else
@@ -427,25 +457,36 @@ static void *kmm_alloc_locked(k_size_t size, int priority)
         return NULL;
     }
 
+    /*
+     * The budget of the task comes first: a block that would take the task
+     * over its limit is refused before the allocator looks for room, so the
+     * refusal does not spend the memory of the system. The kernel and the
+     * system priorities have no owner and no limit.
+     */
+    owner = kmm_owner(priority);
+    if (owner != NULL && !task_memory_fits(owner, size)) {
+        return NULL;
+    }
+
     if (size <= KMM_SLAB_MAX) {
         /* A small block: it comes from a slab. */
 #if KERNEL_PSRAM
         if (priority >= KMM_PRIORITY_SYSTEM) {
-            block = alloc_small(size, priority, 0);
+            block = alloc_small(size, priority, 0, owner);
             if (block != NULL) {
                 return block;
             }
 
-            return alloc_small(size, priority, 1);
+            return alloc_small(size, priority, 1, owner);
         }
 
-        block = alloc_small(size, priority, 1);
+        block = alloc_small(size, priority, 1, owner);
         if (block != NULL) {
             return block;
         }
 
         if (k_port_heap_free() > KMM_RESERVED_INTERNAL + size) {
-            return alloc_small(size, priority, 0);
+            return alloc_small(size, priority, 0, owner);
         }
 
         return NULL;
@@ -459,7 +500,7 @@ static void *kmm_alloc_locked(k_size_t size, int priority)
             return NULL;
         }
 
-        return alloc_small(size, priority, 0);
+        return alloc_small(size, priority, 0, owner);
 #endif
     }
 
@@ -528,13 +569,16 @@ found:
         header->magic = KMM_MAGIC;
         header->size = (k_u32_t)size;
         header->slab = KMM_NO_SLAB;
+        header->owner_pid = (owner != NULL) ? owner->pid : 0u;
         header->pool = pool;
         header->priority = (k_i8_t)priority;
         header->class = KMM_LARGE_CLASS;
         header->flags = 0;
+        header->reserved = 0;
     }
 
     account_alloc(size, priority, pool);
+    task_memory_charge(owner, size);
 
     return (void *)((uint8_t *)block + sizeof(struct kmm_header));
 }
@@ -542,6 +586,8 @@ found:
 static void kmm_free_locked(void *ptr)
 {
     struct kmm_header *header;
+    k_u32_t owner_pid;
+    k_u32_t size;
 
     if (ptr == NULL) {
         return;
@@ -553,6 +599,9 @@ static void kmm_free_locked(void *ptr)
         kerror("kmm: the block %p does not belong to the memory manager", ptr);
         return;
     }
+
+    owner_pid = header->owner_pid;
+    size = header->size;
 
     if (header->class != KMM_LARGE_CLASS) {
         /* A slot of a slab: it goes back to the list of the free slots. */
@@ -569,6 +618,8 @@ static void kmm_free_locked(void *ptr)
     header->flags = KMM_FLAG_FREE;
 
     account_free(header->size, header->priority, header->pool);
+
+    task_memory_uncharge(owner_pid, size);
 
     if (header->class == KMM_LARGE_CLASS) {
         k_port_free(header);

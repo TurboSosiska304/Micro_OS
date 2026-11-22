@@ -39,6 +39,19 @@ struct rtc_datetime {
     bool valid;       /* the flag is clear and every field is in range */
 };
 
+/*
+ * The alarm of the chip: a match of a minute, an hour and a day of the
+ * month. A field that is not wanted is -1 and the chip does not compare it
+ * (the AE bit of its register), so an alarm on 12:34 with no day fires every
+ * day. The struct lives here, with the arithmetic and not with the bus,
+ * because the arithmetic is what the host tests can replay.
+ */
+struct drv_rtc_alarm {
+    int hour;   /* 0..23, -1 = any hour */
+    int minute; /* 0..59, -1 = any minute */
+    int day;    /* 1..31 of the month, -1 = any day */
+};
+
 /* The two halves of BCD, as the chip speaks it. */
 uint8_t rtc_bcd_to_bin(uint8_t value);
 uint8_t rtc_bin_to_bcd(uint8_t value);
@@ -80,6 +93,19 @@ bool rtc_parse_time(const char *s, struct rtc_datetime *dt);
  * weekday is computed from the date, as everywhere else in this file.
  */
 bool rtc_from_unix(uint64_t seconds, struct rtc_datetime *dt);
+
+/*
+ * The seconds from `now` to the start of the next minute the alarm matches,
+ * looking at most `limit_days` days ahead. The chip compares a minute and
+ * nothing finer, so the answer is never 0 for a moment inside a minute: a
+ * match that has already begun belongs to its next round, and an alarm on
+ * 12:34 at 12:34:30 answers with the 12:34 of tomorrow.
+ *
+ * False when no field is set, when a field is out of range, or when nothing
+ * matches inside the window - an alarm on the 31st asked in February.
+ */
+bool rtc_alarm_seconds_ahead(const struct rtc_datetime *now, const struct drv_rtc_alarm *alarm,
+                             unsigned limit_days, uint32_t *seconds);
 
 /* The moment as one line: "2026-10-26 12:34:56". */
 void rtc_format(const struct rtc_datetime *dt, char *buf, size_t size);

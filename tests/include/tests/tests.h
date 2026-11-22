@@ -21,6 +21,7 @@ void test_exec(void);
 void test_fuzz(void);
 void test_mfs(void);
 void test_mfs_persistence(void);
+void test_mfs_repair(void);
 void test_mkfs_image(void);
 void test_vfs(void);
 void test_fs_fat(void);
@@ -30,6 +31,8 @@ void test_input_debounce(void);
 void test_battery_soc(void);
 void test_fb_draw(void);
 void test_rtc(void);
+void test_ir_nec(void);
+void test_sound_detect(void);
 void test_console_sinks(void);
 void test_telnet(void);
 void test_text_wrap(void);
@@ -42,5 +45,6 @@ void test_initd(void);
 void test_config(void);
 void test_net(void);
 void test_wifi(void);
+void test_sign(void);
 
 #endif /* MICRO_OS_TESTS_H */

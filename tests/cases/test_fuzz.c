@@ -55,6 +55,66 @@ static k_u32_t g_rng = FUZZ_SEED;
 static k_u32_t g_words[FUZZ_WORDS_MAX];
 static int g_word_count;
 
+/*
+ * The campaign of 1.0 runs the same fuzz longer than a push does. The
+ * iteration count is a multiplier of the cases below (KTEST_FUZZ_ITERATIONS,
+ * 1 by default) and the seed is an override (KTEST_FUZZ_SEED), so a long run
+ * is still one fixed sequence that another machine can repeat: the CI keeps
+ * the short numbers and the campaign picks a seed and multiplies them.
+ */
+static k_u32_t fuzz_iterations(k_u32_t base)
+{
+    const char *text = getenv("KTEST_FUZZ_ITERATIONS");
+    unsigned long multiplier;
+    char *end = NULL;
+
+    if (text == NULL || text[0] == '\0') {
+        return base;
+    }
+
+    multiplier = strtoul(text, &end, 10);
+
+    if (end == text || *end != '\0' || multiplier == 0) {
+        return base;
+    }
+
+    if (multiplier > 1000u) {
+        multiplier = 1000u;
+    }
+
+    if ((k_u64_t)base * (k_u64_t)multiplier > 0xFFFFFFFFu) {
+        return 0xFFFFFFFFu;
+    }
+
+    return base * (k_u32_t)multiplier;
+}
+
+static k_u32_t fuzz_seed(k_u32_t base)
+{
+    const char *text = getenv("KTEST_FUZZ_SEED");
+    unsigned long value;
+    char *end = NULL;
+
+    if (text == NULL || text[0] == '\0') {
+        return base;
+    }
+
+    value = strtoul(text, &end, 0);
+
+    if (end == text || *end != '\0') {
+        return base;
+    }
+
+    /* The seed of a stream is its own: two streams of the suite stay two
+     * streams for every seed a campaign picks. A zero state would freeze the
+     * xorshift, so the one value that clears a base falls back to the base. */
+    {
+        k_u32_t seed = base ^ (k_u32_t)value;
+
+        return seed == 0 ? base : seed;
+    }
+}
+
 static k_u32_t next_u32(void)
 {
     /* xorshift32: three shifts and three xor, and the sequence is fixed. */
@@ -241,7 +301,7 @@ static void check_random_buffers(void)
 
     ktest_begin("fuzz: random bytes are not an image");
 
-    for (iteration = 0; iteration < FUZZ_RANDOM_ITERATIONS; iteration++) {
+    for (iteration = 0; iteration < fuzz_iterations(FUZZ_RANDOM_ITERATIONS); iteration++) {
         struct k_exec_image out;
         struct k_exec_image untouched;
         k_size_t size = (k_size_t)(next_u32() % (FUZZ_BUFFER + 1u));
@@ -285,7 +345,7 @@ static void check_random_headers(void)
 
     ktest_begin("fuzz: a header of noise is accepted only when it holds together");
 
-    for (iteration = 0; iteration < FUZZ_HEADER_ITERATIONS; iteration++) {
+    for (iteration = 0; iteration < fuzz_iterations(FUZZ_HEADER_ITERATIONS); iteration++) {
         struct k_exec_image out;
         struct k_exec_image untouched;
         k_size_t size;
@@ -540,6 +600,7 @@ static void check_run_refusals(void)
 #define FS_FUZZ_RANDOM_VOLUMES 64u
 #define FS_FUZZ_RANDOM_RECORDS 64u
 #define FS_FUZZ_RANDOM_BLOCKS 96u
+#define FS_FUZZ_REPAIR_ITERATIONS 64u
 
 /* The bytes of data in a block: the first four hold the next block. */
 #define FS_FUZZ_BLOCK_DATA (MFS_BLOCK_SIZE - 4u)
@@ -860,7 +921,7 @@ static void fs_fuzz_random_volumes(void)
 
     ktest_begin("fuzz: a volume of noise is not a volume");
 
-    for (iteration = 0; iteration < FS_FUZZ_RANDOM_VOLUMES; iteration++) {
+    for (iteration = 0; iteration < fuzz_iterations(FS_FUZZ_RANDOM_VOLUMES); iteration++) {
         fs_restore();
 
         for (i = 0; i < FS_FUZZ_BYTES; i += 4u) {
@@ -1182,7 +1243,7 @@ static void fs_fuzz_random_records(void)
 
     ktest_begin("fuzz: a record of noise is not a record");
 
-    for (iteration = 0; iteration < FS_FUZZ_RANDOM_RECORDS; iteration++) {
+    for (iteration = 0; iteration < fuzz_iterations(FS_FUZZ_RANDOM_RECORDS); iteration++) {
         struct mfs_check_report report;
         struct mfs_inode inode;
         k_u32_t index = 2u + next_u32() % (g_fs.capacity - 1u);
@@ -1217,7 +1278,7 @@ static void fs_fuzz_random_blocks(void)
 
     ktest_begin("fuzz: a block of noise is refused or named");
 
-    for (iteration = 0; iteration < FS_FUZZ_RANDOM_BLOCKS; iteration++) {
+    for (iteration = 0; iteration < fuzz_iterations(FS_FUZZ_RANDOM_BLOCKS); iteration++) {
         struct mfs_check_report report;
         int rc;
 
@@ -1287,6 +1348,73 @@ static void fs_fuzz_random_blocks(void)
     }
 }
 
+/*
+ * The repair of a volume of noise. The pass is allowed to refuse to put the
+ * volume right - a header and a chain it cannot prove are left alone - but it
+ * is not allowed to make the volume worse, to take the mount away, or to find
+ * work for itself on the second run: a repair that does not converge is a
+ * repair that is still guessing.
+ */
+static void fs_fuzz_repair(void)
+{
+    k_u32_t iteration;
+
+    ktest_begin("fuzz: the repair of a damaged volume does not make it worse");
+
+    for (iteration = 0; iteration < fuzz_iterations(FS_FUZZ_REPAIR_ITERATIONS); iteration++) {
+        struct mfs_check_report found;
+        struct mfs_check_report after;
+        struct mfs_check_report again;
+        struct mfs_inode inode;
+        k_u32_t index = 2u + next_u32() % (g_fs.capacity - 1u);
+
+        fs_restore();
+
+        if (next_u32() % 2u == 0u) {
+            /* A record with every field wrong at once. */
+            fs_noise((k_u8_t *)&inode, sizeof(inode));
+            inode.flags |= MFS_INODE_USED;
+            inode.first_block = next_u32() % g_fs.sb.data_blocks;
+            inode.size = next_u32() % 4096u;
+            inode.entries = next_u32() % 16u;
+
+            if (!fs_write_inode(index, &inode)) {
+                KT_CHECK(false);
+                return;
+            }
+        } else {
+            /* A bit of the map of the free blocks, on or off. */
+            if (!fs_bitmap_set(next_u32() % g_fs.sb.data_blocks, (next_u32() & 1u) != 0u)) {
+                KT_CHECK(false);
+                return;
+            }
+        }
+
+        if (mfs_mount(&g_fs.dev) != MFS_OK) {
+            KT_CHECK(!mfs_is_mounted());
+            continue;
+        }
+
+        KT_CHECK_INT_EQ(mfs_check(&found), MFS_OK);
+        KT_CHECK_INT_EQ(mfs_repair(&after), MFS_OK);
+
+        /* The walk after the pass is no worse than the walk before it. */
+        KT_CHECK(after.errors <= found.errors);
+
+        KT_CHECK_INT_EQ(mfs_repair(&again), MFS_OK);
+        KT_CHECK_INT_EQ(again.fixed, 0);
+        KT_CHECK_INT_EQ(again.errors, after.errors);
+
+        /*
+         * The volume still mounts and still reads: a repair that leaves a
+         * volume no mount can open has destroyed it.
+         */
+        mfs_unmount();
+        KT_CHECK_INT_EQ(mfs_mount(&g_fs.dev), MFS_OK);
+        mfs_unmount();
+    }
+}
+
 void test_fuzz(void)
 {
     kmm_init();
@@ -1294,7 +1422,7 @@ void test_fuzz(void)
     KT_CHECK(g_word_count > 0);
 
 #if KERNEL_EXEC
-    g_rng = FUZZ_SEED;
+    g_rng = fuzz_seed(FUZZ_SEED);
 
     check_random_buffers();
     check_random_headers();
@@ -1309,7 +1437,7 @@ void test_fuzz(void)
      * fuzzed independently, so a change of one does not move the sequence
      * of the other.
      */
-    g_rng = FS_FUZZ_SEED;
+    g_rng = fuzz_seed(FS_FUZZ_SEED);
 
     ktest_begin("fuzz: the volume of the filesystem is prepared");
 
@@ -1322,6 +1450,7 @@ void test_fuzz(void)
         fs_fuzz_directory();
         fs_fuzz_random_records();
         fs_fuzz_random_blocks();
+        fs_fuzz_repair();
         fs_fuzz_teardown();
     } else {
         KT_CHECK(false);

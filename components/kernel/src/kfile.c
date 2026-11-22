@@ -57,6 +57,7 @@ int kfile_alloc(struct task *t, struct kfile **out)
 {
     struct kfile *f = NULL;
     int fd = -1;
+    int limit;
     int i;
 
     if (t == NULL || out == NULL) {
@@ -69,7 +70,13 @@ int kfile_alloc(struct task *t, struct kfile **out)
         return KERR_NOMEM;
     }
 
-    for (i = 0; i < TASK_MAX_FDS; i++) {
+    /*
+     * A descriptor above the limit of the task is not given out, even when
+     * the slot of the table is free: the limit is the rule of the task and
+     * the table is the machine. The first is EMFILE and the second ENOSPC.
+     */
+    limit = (int)task_fd_limit(t);
+    for (i = 0; i < limit; i++) {
         if (t->files[i] == NULL) {
             fd = i;
             break;
@@ -83,7 +90,12 @@ int kfile_alloc(struct task *t, struct kfile **out)
         }
     }
 
-    if (fd < 0 || f == NULL) {
+    if (fd < 0) {
+        k_mutex_unlock(&g_fd_lock);
+        return KERR_MFILE;
+    }
+
+    if (f == NULL) {
         k_mutex_unlock(&g_fd_lock);
         return KERR_NOSPC;
     }
@@ -339,7 +351,7 @@ int kfile_pipe(struct task *t, int fds[2])
         }
     }
 
-    for (i = 0; i < TASK_MAX_FDS; i++) {
+    for (i = 0; i < (int)task_fd_limit(t); i++) {
         if (t->files[i] != NULL) {
             continue;
         }
@@ -351,9 +363,14 @@ int kfile_pipe(struct task *t, int fds[2])
         }
     }
 
-    if (p == NULL || r == NULL || w == NULL || fd_r < 0 || fd_w < 0) {
+    if (p == NULL || r == NULL || w == NULL) {
         k_mutex_unlock(&g_fd_lock);
         return KERR_NOSPC;
+    }
+
+    if (fd_r < 0 || fd_w < 0) {
+        k_mutex_unlock(&g_fd_lock);
+        return KERR_MFILE;
     }
 
     memset(p, 0, sizeof(*p));
@@ -414,6 +431,17 @@ int kfile_dup2(struct task *t, int oldfd, int newfd)
     if (oldfd == newfd) {
         k_mutex_unlock(&g_fd_lock);
         return newfd;
+    }
+
+    /*
+     * A number at or above the limit of the task is not a descriptor it may
+     * create. `oldfd == newfd` is above this check: a descriptor that was
+     * open before the limit went down stays a descriptor, and POSIX lets
+     * dup2 of it onto itself succeed.
+     */
+    if ((k_u32_t)newfd >= task_fd_limit(t)) {
+        k_mutex_unlock(&g_fd_lock);
+        return KERR_MFILE;
     }
 
     old = t->files[newfd];

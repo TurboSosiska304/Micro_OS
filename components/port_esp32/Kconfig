@@ -1,0 +1,33 @@
+menu "Micro OS image"
+
+    config MICRO_OS_REQUIRE_SIGNATURE
+        bool "refuse an image without a valid signature"
+        default y
+        help
+            The application checks the trailer of its own factory partition
+            (MOSIGN01, SHA-256 and Ed25519) at the beginning of app_main,
+            before the filesystem and the shell. On, an image without a valid
+            trailer prints the reason and stops the boot; off, the check is
+            still made and the line
+            "unsigned or damaged image: not guaranteed" goes to the console,
+            and the board continues. The check is electronic: the ROM and the
+            ESP-IDF bootloader have already loaded the application, so a
+            damaged image may have run its first instructions before the
+            sentence appears. The board bundle is signed by tools/bundle.sh,
+            and the public key is compiled into the firmware.
+
+    config MICRO_OS_ANTIROLLBACK
+        bool "refuse an image older than the version stored in the NVS"
+        default n
+        help
+            The version of the image comes from esp_app_desc_t.version. The
+            boot keeps the newest version it has seen in the NVS and refuses
+            a lower one (prints the two versions and stops) when this flag is
+            on; with the flag off a rollback is a warning. The minimum is
+            updated after a signature that passed. The store is the NVS of
+            the board, not /etc: the check runs before the filesystem is
+            mounted. This is not the secure-boot anti-rollback of the eFuses
+            and it does not protect the NVS from a person who can flash the
+            board.
+
+endmenu

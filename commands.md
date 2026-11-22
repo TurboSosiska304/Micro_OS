@@ -44,11 +44,13 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make test` | build and run the unit tests through `ctest` |
 | `make test-asan` | the same tests with the address and UB sanitizers, in `build-asan/` |
 | `make sim` | build and run the kernel simulator `build-host/ports/port_host/microos_sim` |
-| `make smoke` | boot the simulator and check the shell and the subsystems (needs `make build` first) |
+| `make smoke` | boot the simulator and check the shell, the filesystem and the network (needs `make build` first) |
+| `make coverage` | the host build with `--coverage`, the tests, the simulator and the gcov report of `components/kernel` (70% of lines) |
+| `make reproducible` | build the disk image twice and compare the bytes (`SOURCE_DATE_EPOCH`) |
 | `make integrity` | the integrity check: bundle, image headers, partition table, git, sources, formatting |
 | `make format` | reformat the C sources with `clang-format` |
-| `make clean` | remove `build-host/` and `build-asan/` (the device `build/` stays) |
-| `make ci` | `build`, `test`, `test-asan`, `test-tsan`, `smoke`, `x86-smoke` when QEMU is there, `integrity` — run it before pushing |
+| `make clean` | remove `build-host/`, `build-asan/`, `build-coverage/` (the device `build/` stays) |
+| `make ci` | `build`, `test`, `test-asan`, `test-tsan`, `smoke`, `coverage`, `x86-smoke` when QEMU is there, `reproducible`, `integrity` — run it before pushing |
 
 The same build by hand:
 
@@ -67,6 +69,44 @@ python3 tools/integrity_check.py --verbose
 python3 tools/integrity_check.py --skip-format --skip-git
 python3 tools/integrity_check.py --expect-version 0.2.0
 ```
+
+### Signing an image (ADR 0020)
+
+The x86-64 kernel is signed and the loader checks it before it copies a byte.
+The board application is signed as well: the boot checks its trailer in the
+last 4 KiB of the factory partition. A development build generates a key in
+the build directory (`build-x86/signing.key`, `build/signing.key`); a release
+names a key outside the tree:
+
+```bash
+make x86-build MICROOS_SIGN_KEY=/path/outside/the/tree/release.key
+build-host/tools/microos_sign verify --pub build-x86/signing.pub build-x86/microos64.bin
+build-host/tools/microos_sign info   build-x86/microos64.bin
+make x86-smoke                         # accepts the signed image, refuses a damaged one
+make x86-open-build                    # MICRO_OS_REQUIRE_SIGNATURE=OFF
+```
+
+The refusal is a setting on both machines. `MICRO_OS_REQUIRE_SIGNATURE` is a
+CMake option (default `ON`) on x86-64 and a Kconfig option (default `y`) on
+the board. With it off, the check still runs, prints
+`unsigned or damaged image: not guaranteed` and continues. On the board the
+same Kconfig adds `MICRO_OS_ANTIROLLBACK` (default `n`): a floor in the NVS;
+
+```bash
+# a board that warns about an unsigned image, and one that refuses it
+DEVICE_POLICY=unsigned         tools/device-test.sh /dev/ttyACM0
+DEVICE_POLICY=require-unsigned tools/device-test.sh /dev/ttyACM0
+```
+
+`tools/microos_sign keygen|sign|verify|info` is the tool; `make bundle` signs
+`micro_os.bin` (`micro_os.bin.sig`, written at `0x20F000` by `flash.sh`) and
+the merged distribution image with the same key when `MICROOS_SIGN_KEY` is
+set, and always writes the sums. `make x86-smoke` boots a changed byte, a
+kernel without a trailer and a kernel of another key, and every one is refused
+before the kernel starts; the open build boots an unsigned and a damaged
+kernel with the warning. The board's check runs at the beginning of
+`app_main`, not in the ROM or the ESP-IDF bootloader; ADR 0020 section 6 says
+what that does and does not protect.
 
 ## 3. Device build and flashing
 
@@ -151,7 +191,7 @@ read by the kernel, checked against the format `MOX1` and handed to the port.
 
 | Command | What it does |
 |---|---|
-| `fsck` | check the volume: the first problem, sizes, free blocks; `fsck fat ... -y` repairs the FAT volume |
+| `fsck` | check the volume: the first problem, sizes, free blocks; `fsck -y` repairs MicroFS and `fsck fat ... -y` repairs a FAT volume |
 | `chmod <mode> <path>` | the mode in octal: `0644`, `755`, `0700` (the nine bits `rwx`) |
 | `chown <uid> <path>` | the owner, a decimal uid `0..32767` |
 | `stat <path>` | the type, the mode, the owner and the size of one object |
@@ -268,6 +308,9 @@ ntp time.google.com           # another server
 | `IDF_BUILD` | `build` | the directory of the device build |
 | `BUILD_DIR` | `build-host` | the directory of the host build |
 | `ASAN_DIR` | `build-asan` | the directory of the sanitizer build |
+| `COVERAGE_DIR` | `build-coverage` | the directory of the coverage build |
+| `COVERAGE_THRESHOLD` | `70` | the least percentage of kernel lines the report accepts |
+| `SOURCE_DATE_EPOCH` | `0` | the moment of the records and the build id of a reproducible build |
 | `CONSOLE_SECONDS` | `30` | how long `device-test.sh` reads the console |
 | `IDF_PORT` | auto | the serial port for `make idf-flash`/`idf-monitor` |
 

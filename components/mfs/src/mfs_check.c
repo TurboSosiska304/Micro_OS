@@ -1,5 +1,5 @@
 /*
- * Micro OS — the check of the volume of MicroFS.
+ * Micro OS — the check and the repair of the volume of MicroFS.
  *
  * The volume has no journal and no second copy of anything, so a power cut,
  * a brownout or a bug leaves whatever it leaves. The check answers the
@@ -7,11 +7,21 @@
  * what the header, the table of the inodes, the directories and the map of
  * the free blocks say about each other still one story?
  *
- * Nothing here writes. The blocks are only read, the state of the mounted
- * volume is never touched, and the format of the volume does not change:
- * the check is a reader of the volume and not a repair tool. A volume that
- * is reported as damaged is left exactly the way it was found, so that it
- * can be copied off the board before anything touches it.
+ * The check itself never writes. The blocks are only read, the state of the
+ * mounted volume is never touched, and the format of the volume does not
+ * change: a volume that is reported as damaged is left exactly the way it
+ * was found, so that it can be copied off the board before anything touches
+ * it.
+ *
+ * The repair pass is the second half of the file, and it is the one writer:
+ * with the permission of the person at the console it changes the volume
+ * where the medium itself proves what the change has to be - an orphan
+ * block, an entry nobody can reach, a chain that loops, a size that does not
+ * match its chain, the counter of a directory, a record no name reaches. It
+ * does not guess about the header, the data of a file or a shared directory,
+ * and the check runs again after it, so a volume that reads "0 problem(s)
+ * after the repair" is one the reader walked whole (ADR 0013 and the rules
+ * in `mfs/mfs.h`).
  */
 #include "mfs/mfs.h"
 
@@ -70,7 +80,18 @@ struct walk_frame {
     bool loaded;
     bool validated;
     bool broken;
+    bool repaired; /* the repair has met this directory before */
 };
+
+/*
+ * The frames of the walk. The tree is walked one directory at a time, so a
+ * damaged volume cannot take the stack of the task down with a deep tree;
+ * the buffer belongs to the filesystem and there is one walk at a time
+ * under its lock, so the check and the repair share the frames. The repair
+ * uses inode, offset, depth, size, loaded and broken; validated is the
+ * check's.
+ */
+static struct walk_frame s_frames[CHECK_DEPTH_MAX];
 
 /* --- the report --- */
 
@@ -151,6 +172,11 @@ static bool bit_test(const k_u8_t *map, k_u32_t index)
 static void bit_set(k_u8_t *map, k_u32_t index)
 {
     map[index / 8u] |= (k_u8_t)(1u << (index % 8u));
+}
+
+static void bit_clear(k_u8_t *map, k_u32_t index)
+{
+    map[index / 8u] &= (k_u8_t) ~(1u << (index % 8u));
 }
 
 static int read_inode(const struct mfs_private *view, struct mfs_check_report *report,
@@ -530,9 +556,11 @@ static void check_blocks(const struct mfs_private *view, struct mfs_check_report
 
 /*
  * Read the content of a directory into the scratch buffer. The blocks of
- * the chain are followed the way the filesystem does it; a chain that ends
- * before the bytes of the record do is not an error of its own here,
- * because the walk of the records has already named it.
+ * the chain are followed the way the filesystem does it; the number of
+ * bytes the chain really holds is what *out_size says, and *complete says
+ * whether that is the whole of the record: a chain that ends before the
+ * bytes of the record do is not an error of its own here, because the walk
+ * of the records has already named it.
  */
 static int dir_load(const struct mfs_private *view, const struct mfs_inode *inode,
                     k_u32_t *out_size, bool *complete)
@@ -589,9 +617,7 @@ static int dir_load(const struct mfs_private *view, const struct mfs_inode *inod
         }
     }
 
-    if (*complete) {
-        *out_size = inode->size;
-    }
+    *out_size = offset;
 
     return MFS_OK;
 }
@@ -699,10 +725,11 @@ static int validate_dir(const struct mfs_private *view, struct mfs_check_report 
  */
 static int walk_tree(const struct mfs_private *view, struct mfs_check_report *report)
 {
-    static struct walk_frame stack[CHECK_DEPTH_MAX];
+    struct walk_frame *stack = s_frames;
     k_u32_t visits = 0;
     k_size_t top = 0;
 
+    memset(stack, 0, sizeof(s_frames));
     stack[0].inode = view->sb->root_inode;
     stack[0].offset = 0;
     stack[0].depth = 1;
@@ -811,6 +838,854 @@ static int walk_tree(const struct mfs_private *view, struct mfs_check_report *re
     }
 
     return MFS_OK;
+}
+
+/* ========================================================================== */
+/* the repair pass                                                            */
+/* ========================================================================== */
+
+/*
+ * The repair reads the volume the way the check does, but where the check
+ * stops at the first problem of a chain it writes the change the medium
+ * itself proves. The rules are in mfs/mfs.h; this section is the code of
+ * them and nothing else.
+ */
+
+/*
+ * A chain whose head another object already holds is not this object's to
+ * cut: nothing is written and the caller decides. The value is not one of
+ * the errors of the filesystem, which are all negative or zero.
+ */
+#define REPAIR_BUSY 1
+
+/* The records the walk of the tree has reached: a rebuild of the orphan map. */
+static k_u8_t s_reached[MFS_REPAIR_INODES_MAX / 8u];
+
+/*
+ * The walk could not be finished - a shared directory, a subtree deeper
+ * than a path can name, a chain that still cannot be followed - so a block
+ * or a record that no name reaches may still belong to a person's data:
+ * nothing is given back in that case.
+ */
+static bool s_incomplete;
+
+static bool reach_test(k_u32_t index)
+{
+    return bit_test(s_reached, index);
+}
+
+static void reach_mark(k_u32_t index)
+{
+    bit_set(s_reached, index);
+}
+
+/* A repair that the medium refused: the pass stops and says why. */
+static void add_repair_error(struct mfs_check_report *report, const char *text)
+{
+    add_error(report, CHECK_SUBJECT_VOLUME, 0, text);
+}
+
+/*
+ * Read a record of the table without saying anything about it: the repair
+ * reads a record it has already checked the index of.
+ */
+static int read_record(const struct mfs_private *view, k_u32_t index, struct mfs_inode *out)
+{
+    k_u8_t block[MFS_BLOCK_SIZE];
+    k_u32_t offset;
+    int rc;
+
+    if (index == 0u || index > view->inode_capacity) {
+        return MFS_EINVAL;
+    }
+
+    rc = mfs_priv_block_read(view->sb->meta_start + view->bitmap_blocks +
+                                 (index * view->inode_size) / MFS_BLOCK_SIZE,
+                             block);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    offset = (index * view->inode_size) % MFS_BLOCK_SIZE;
+    mfs_priv_inode_decode(block + offset, view->inode_size, out);
+
+    return MFS_OK;
+}
+
+/* Write one record back; a record written is one repair. */
+static int write_record(const struct mfs_private *view, struct mfs_check_report *report,
+                        k_u32_t index, const struct mfs_inode *inode)
+{
+    int rc = mfs_priv_inode_write(index, inode);
+
+    if (rc != MFS_OK) {
+        add_repair_error(report, "the medium did not take a repair");
+        return rc;
+    }
+
+    report->fixed++;
+
+    return MFS_OK;
+}
+
+/* End a chain at the last block the repair keeps. */
+static int chain_cut(struct mfs_check_report *report, k_u32_t previous)
+{
+    int rc;
+
+    if (previous == MFS_NEXT_NONE) {
+        return MFS_OK; /* there is no block to end: the head was the broken one */
+    }
+
+    rc = mfs_priv_chain_set_next(previous, MFS_NEXT_NONE);
+    if (rc != MFS_OK) {
+        add_repair_error(report, "the medium did not take a repair");
+        return rc;
+    }
+
+    report->fixed++;
+
+    return MFS_OK;
+}
+
+/* Give up the claim of the blocks of a tail that no record keeps. */
+static void unclaim_chain(const struct mfs_private *view, k_u32_t first)
+{
+    k_u32_t current = first;
+    k_u32_t steps = 0;
+
+    while (current != MFS_NEXT_NONE && current < view->sb->data_blocks &&
+           steps++ < view->sb->data_blocks) {
+        k_u8_t block[MFS_BLOCK_SIZE];
+        k_u32_t next;
+        int rc;
+
+        bit_clear(s_claimed, current);
+
+        rc = mfs_priv_block_read(current, block);
+        if (rc != MFS_OK) {
+            return;
+        }
+
+        memcpy(&next, block, sizeof(next));
+        current = next;
+    }
+}
+
+/*
+ * Claim the chain of an object and make it followable: a loop, a block
+ * outside the data section and a block another object already holds cut the
+ * chain at the last good block, so the object keeps the data that is still
+ * its own. The blocks of a cut tail are left unclaimed; the pass of the map
+ * of the free blocks gives them back.
+ *
+ * REPAIR_BUSY is a head that another object holds: only the caller knows
+ * whether the name of the object can give the chain up.
+ */
+static int repair_chain(const struct mfs_private *view, struct mfs_check_report *report,
+                        struct mfs_inode *inode, k_u32_t *length)
+{
+    k_u32_t data_blocks = view->sb->data_blocks;
+    k_u32_t current = inode->first_block;
+    k_u32_t previous = MFS_NEXT_NONE;
+    k_u32_t steps = 0;
+    k_u32_t count = 0;
+
+    *length = 0;
+
+    if (current == MFS_NEXT_NONE) {
+        return MFS_OK;
+    }
+
+    while (current != MFS_NEXT_NONE) {
+        k_u8_t block[MFS_BLOCK_SIZE];
+        k_u32_t next;
+        int rc;
+
+        if (current >= data_blocks || steps++ >= data_blocks) {
+            rc = chain_cut(report, previous);
+            if (rc != MFS_OK) {
+                return rc;
+            }
+            break;
+        }
+
+        if (bit_test(s_claimed, current)) {
+            if (previous == MFS_NEXT_NONE) {
+                return REPAIR_BUSY;
+            }
+
+            rc = chain_cut(report, previous);
+            if (rc != MFS_OK) {
+                return rc;
+            }
+            break;
+        }
+
+        bit_set(s_claimed, current);
+        count++;
+
+        rc = mfs_priv_block_read(current, block);
+        if (rc != MFS_OK) {
+            add_repair_error(report, "the medium did not answer a read");
+            return rc;
+        }
+
+        memcpy(&next, block, sizeof(next));
+        previous = current;
+        current = next;
+    }
+
+    *length = count;
+
+    return MFS_OK;
+}
+
+/*
+ * The size of a file against the chain the repair left: a chain shorter than
+ * the file cuts the size down (the bytes were never on the medium), a chain
+ * longer than the file gives the tail back (no name reaches those blocks).
+ */
+static int trim_file(const struct mfs_private *view, struct mfs_check_report *report,
+                     struct mfs_inode *inode, k_u32_t length, k_u64_t needed, bool *changed)
+{
+    k_u32_t current;
+    k_u32_t keep = MFS_NEXT_NONE;
+    k_u32_t i;
+
+    if (length == 0u) {
+        if (inode->first_block != MFS_NEXT_NONE) {
+            inode->first_block = MFS_NEXT_NONE;
+            *changed = true;
+        }
+        if (inode->size != 0u) {
+            inode->size = 0;
+            *changed = true;
+        }
+        return MFS_OK;
+    }
+
+    if ((k_u64_t)length < needed) {
+        inode->size = length * MFS_BLOCK_DATA;
+        *changed = true;
+        return MFS_OK;
+    }
+
+    if ((k_u64_t)length == needed) {
+        return MFS_OK;
+    }
+
+    /*
+     * The first `needed` blocks stay with the file and the chain ends at the
+     * last of them; the rest is nobody's, and the pass of the map of the
+     * free blocks takes the bits back.
+     */
+    current = inode->first_block;
+
+    for (i = 0; i < (k_u32_t)needed; i++) {
+        k_u8_t block[MFS_BLOCK_SIZE];
+        k_u32_t next;
+        int rc;
+
+        keep = current;
+
+        rc = mfs_priv_block_read(current, block);
+        if (rc != MFS_OK) {
+            add_repair_error(report, "the medium did not answer a read");
+            return rc;
+        }
+
+        memcpy(&next, block, sizeof(next));
+        current = next;
+    }
+
+    if (keep == MFS_NEXT_NONE) {
+        inode->first_block = MFS_NEXT_NONE;
+        *changed = true;
+    } else {
+        int rc = chain_cut(report, keep);
+
+        if (rc != MFS_OK) {
+            return rc;
+        }
+    }
+
+    unclaim_chain(view, current);
+    report->fixed++;
+
+    return MFS_OK;
+}
+
+/*
+ * The chain of a directory, which always has a block of its own: an empty
+ * directory keeps the block that holds the end of its chain. A record whose
+ * block is outside the data section has lost the place of its entries, and
+ * nothing on the medium says where they were, so the directory is given an
+ * empty block and its name stays.
+ */
+static int repair_dir_chain(const struct mfs_private *view, struct mfs_check_report *report,
+                            struct mfs_inode *inode, k_u32_t *capacity, bool *changed)
+{
+    k_u32_t length = 0;
+    int rc;
+
+    rc = repair_chain(view, report, inode, &length);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    if (length == 0u) {
+        k_u32_t block;
+
+        rc = mfs_priv_block_alloc(&block);
+        if (rc != MFS_OK) {
+            add_repair_error(report, "no room for the block of a directory");
+            return rc;
+        }
+
+        rc = mfs_priv_chain_set_next(block, MFS_NEXT_NONE);
+        if (rc != MFS_OK) {
+            mfs_priv_bitmap_set(block, false);
+            add_repair_error(report, "the medium did not take a repair");
+            return rc;
+        }
+
+        bit_set(s_claimed, block);
+        inode->first_block = block;
+        inode->size = 0;
+        inode->entries = 0;
+        *changed = true;
+        report->fixed++;
+        length = 1;
+    }
+
+    *capacity = length * MFS_BLOCK_DATA;
+
+    /* A record cannot promise more bytes than its chain holds, and the
+     * system reads four blocks of a directory and no more. */
+    if (inode->size > *capacity) {
+        inode->size = *capacity;
+        *changed = true;
+    }
+
+    if (inode->size > CHECK_DIR_MAX) {
+        inode->size = CHECK_DIR_MAX;
+        *changed = true;
+    }
+
+    return MFS_OK;
+}
+
+/* Whether one of the records the repair keeps is the one of `child`. */
+static bool record_kept(const k_u8_t *buf, k_size_t kept, k_u32_t child)
+{
+    k_size_t offset = 0;
+
+    while (offset + sizeof(struct mfs_dirent_header) <= kept) {
+        if (entry_inode(buf, offset) == child) {
+            return true;
+        }
+
+        offset += sizeof(struct mfs_dirent_header) + entry_name_len(buf, offset);
+    }
+
+    return false;
+}
+
+/* Whether one of the names the repair keeps is the same as `name`. */
+static bool name_kept(const k_u8_t *buf, k_size_t kept, const k_u8_t *name, k_u16_t name_len)
+{
+    k_size_t offset = 0;
+
+    while (offset + sizeof(struct mfs_dirent_header) <= kept) {
+        k_u16_t len = entry_name_len(buf, offset);
+
+        if (len == name_len &&
+            memcmp(buf + offset + sizeof(struct mfs_dirent_header), name, name_len) == 0) {
+            return true;
+        }
+
+        offset += sizeof(struct mfs_dirent_header) + len;
+    }
+
+    return false;
+}
+
+/*
+ * Walk the entries of a directory and remove what no path can reach: a name
+ * that is not a name (a slash in it, the second of two equal names), an
+ * entry whose record is free or outside the table. An entry whose record
+ * disagrees with it about the type takes the type of the record, because the
+ * record is the object and the entry is a copy of its name. The entries that
+ * stay are packed at the front of the buffer, and the size of the directory
+ * becomes the size of that run: the bytes after it cannot be read as an
+ * entry, so they are not entries any more.
+ */
+static int repair_entries(const struct mfs_private *view, struct mfs_check_report *report,
+                          k_size_t size, k_u32_t *out_size, k_u32_t *out_entries, bool *changed)
+{
+    k_u8_t *buf = view->dir_scratch;
+    k_size_t offset = 0;
+    k_size_t kept = 0;
+    k_u32_t count = 0;
+
+    *changed = false;
+
+    while (offset + sizeof(struct mfs_dirent_header) <= size) {
+        k_u16_t name_len = entry_name_len(buf, offset);
+        k_size_t entry_len;
+        k_u32_t child;
+        bool remove = false;
+        int rc;
+
+        if (name_len == 0u || name_len > MFS_NAME_MAX ||
+            offset + sizeof(struct mfs_dirent_header) + name_len > size) {
+            break;
+        }
+
+        entry_len = sizeof(struct mfs_dirent_header) + name_len;
+        child = entry_inode(buf, offset);
+
+        if (entry_has_slash(buf, offset, name_len)) {
+            remove = true;
+        } else if (name_kept(buf, kept, buf + offset + sizeof(struct mfs_dirent_header),
+                             name_len)) {
+            remove = true;
+        } else if (child == 0u || child > view->inode_capacity) {
+            remove = true;
+        } else {
+            struct mfs_inode target;
+
+            rc = read_record(view, child, &target);
+            if (rc != MFS_OK) {
+                add_repair_error(report, "the medium did not answer a read");
+                return rc;
+            }
+
+            if ((target.flags & MFS_INODE_USED) == 0u) {
+                remove = true;
+            } else if (record_kept(buf, kept, child)) {
+                /* This format has one name per record: the second entry
+                 * that names it is the damage, not a second name. */
+                remove = true;
+            } else {
+                k_u8_t type = (k_u8_t)(target.flags & MFS_INODE_TYPE_MASK);
+
+                if (buf[offset + 6] != type) {
+                    buf[offset + 6] = type;
+                    *changed = true;
+                    report->fixed++;
+                }
+
+                reach_mark(child);
+            }
+        }
+
+        if (remove) {
+            *changed = true;
+            report->fixed++;
+        } else {
+            if (kept != offset) {
+                memmove(buf + kept, buf + offset, entry_len);
+            }
+
+            kept += entry_len;
+            count++;
+        }
+
+        offset += entry_len;
+    }
+
+    if (kept != size) {
+        *changed = true;
+        report->fixed++;
+    }
+
+    *out_size = (k_u32_t)kept;
+    *out_entries = count;
+
+    return MFS_OK;
+}
+
+/*
+ * Load one directory of the walk: its record, its chain and its entries.
+ * The repaired entries are left in the scratch buffer and *out_size says
+ * how many bytes of it are the directory.
+ *
+ * REPAIR_BUSY is a directory the repair leaves alone - its first block is
+ * another object's, or its record is not the directory the walk reached it
+ * as - and the subtree below it is unknown.
+ */
+static int repair_directory(const struct mfs_private *view, struct mfs_check_report *report,
+                            k_u32_t index, bool repaired, k_u32_t *out_size)
+{
+    struct mfs_inode inode;
+    k_u32_t capacity = 0;
+    k_u32_t loaded = 0;
+    k_u32_t size = 0;
+    k_u32_t entries = 0;
+    bool complete = true;
+    bool changed = false;
+    bool content = false;
+    int rc;
+
+    *out_size = 0;
+
+    rc = read_record(view, index, &inode);
+    if (rc != MFS_OK) {
+        add_repair_error(report, "the medium did not answer a read");
+        return rc;
+    }
+
+    reach_mark(index);
+
+    if ((inode.flags & (MFS_INODE_USED | MFS_INODE_DIR)) != (MFS_INODE_USED | MFS_INODE_DIR)) {
+        add_error(report, CHECK_SUBJECT_INODE, index, "is reached as a directory but is not one");
+        return REPAIR_BUSY;
+    }
+
+    /*
+     * The chain of a directory is claimed and put right the first time the
+     * walk enters it; the parent loads its own directory again when a child
+     * is done, and a second claim would read the blocks of the directory as
+     * the blocks of another object.
+     */
+    if (!repaired) {
+        /* The bits between the type and the mode belong to nobody (ADR 0005). */
+        if ((inode.flags & ~CHECK_FLAGS_MASK) != 0u) {
+            inode.flags &= CHECK_FLAGS_MASK;
+            changed = true;
+        }
+
+        rc = repair_dir_chain(view, report, &inode, &capacity, &changed);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+    }
+
+    rc = dir_load(view, &inode, &loaded, &complete);
+    if (rc != MFS_OK) {
+        add_repair_error(report, "the medium did not answer a read");
+        return rc;
+    }
+
+    if (!complete || loaded > view->dir_scratch_size) {
+        /* The chain still is not the one of the record: the subtree cannot
+         * be read, so its blocks are not touched. */
+        return REPAIR_BUSY;
+    }
+
+    rc = repair_entries(view, report, loaded, &size, &entries, &content);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    if (content) {
+        rc = mfs_priv_dir_write(&inode, view->dir_scratch, size);
+        if (rc != MFS_OK) {
+            add_repair_error(report, "the medium did not take a repair");
+            return rc;
+        }
+        report->fixed++;
+    }
+
+    if (inode.size != size || inode.entries != entries || changed) {
+        inode.size = size;
+        inode.entries = entries;
+        rc = write_record(view, report, index, &inode);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+    }
+
+    *out_size = size;
+
+    return MFS_OK;
+}
+
+/*
+ * Repair one file that a name reaches: the reserved bits of its record, its
+ * chain and its size. A file whose first block another object holds gives
+ * the chain up and keeps its name as an empty file, which is the rule of
+ * FAT: the data stays with the name that came first.
+ */
+static int repair_file(const struct mfs_private *view, struct mfs_check_report *report,
+                       k_u32_t index)
+{
+    struct mfs_inode inode;
+    k_u64_t needed;
+    k_u32_t length = 0;
+    bool changed = false;
+    int rc;
+
+    rc = read_record(view, index, &inode);
+    if (rc != MFS_OK) {
+        add_repair_error(report, "the medium did not answer a read");
+        return rc;
+    }
+
+    if ((inode.flags & (MFS_INODE_USED | MFS_INODE_DIR)) != MFS_INODE_USED) {
+        return MFS_OK; /* not a file any more: the walk reads it again */
+    }
+
+    if ((inode.flags & ~CHECK_FLAGS_MASK) != 0u) {
+        inode.flags &= CHECK_FLAGS_MASK;
+        changed = true;
+    }
+
+    needed = ((k_u64_t)inode.size + MFS_BLOCK_DATA - 1u) / MFS_BLOCK_DATA;
+
+    rc = repair_chain(view, report, &inode, &length);
+    if (rc == REPAIR_BUSY) {
+        inode.first_block = MFS_NEXT_NONE;
+        inode.size = 0;
+        changed = true;
+        length = 0;
+    } else if (rc != MFS_OK) {
+        return rc;
+    }
+
+    rc = trim_file(view, report, &inode, length, needed, &changed);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    if (changed) {
+        return write_record(view, report, index, &inode);
+    }
+
+    return MFS_OK;
+}
+
+/*
+ * Walk the tree from the root and repair it the way the check walks it. The
+ * frames are the ones of the check; the parent loads its directory again
+ * when a child is done, because the scratch buffer belongs to whoever is
+ * reading it at the moment.
+ */
+static int repair_tree(const struct mfs_private *view, struct mfs_check_report *report)
+{
+    struct walk_frame *stack = s_frames;
+    k_u32_t visits = 0;
+    k_size_t top = 0;
+
+    memset(stack, 0, sizeof(s_frames));
+    stack[0].inode = view->sb->root_inode;
+    stack[0].depth = 1;
+
+    for (;;) {
+        struct walk_frame *frame = &stack[top];
+
+        if (!frame->loaded) {
+            bool first = !frame->repaired;
+            int rc = repair_directory(view, report, frame->inode, !first, &frame->size);
+
+            if (rc == REPAIR_BUSY) {
+                s_incomplete = true;
+                frame->broken = true;
+            } else if (rc != MFS_OK) {
+                return rc;
+            } else {
+                /*
+                 * A directory that comes back from a child starts at the
+                 * entry that follows the child: its content is the same as
+                 * the first load left it, so the position is not reset.
+                 */
+                if (first) {
+                    frame->offset = 0;
+                }
+                frame->broken = false;
+                frame->repaired = true;
+            }
+
+            frame->loaded = true;
+        }
+
+        if (frame->broken || frame->offset + sizeof(struct mfs_dirent_header) > frame->size) {
+            if (top == 0u) {
+                break;
+            }
+            top--;
+            continue;
+        }
+
+        {
+            const k_u8_t *buf = view->dir_scratch;
+            k_size_t offset = frame->offset;
+            k_u16_t name_len = entry_name_len(buf, offset);
+            k_u32_t child = entry_inode(buf, offset);
+            k_u8_t type = buf[offset + 6];
+            int rc;
+
+            frame->offset += (k_u32_t)(sizeof(struct mfs_dirent_header) + name_len);
+
+            if ((type & MFS_INODE_DIR) == 0u) {
+                rc = repair_file(view, report, child);
+                if (rc != MFS_OK) {
+                    return rc;
+                }
+                continue;
+            }
+
+            if (frame->depth + 1u > CHECK_DEPTH_MAX) {
+                s_incomplete = true;
+                continue;
+            }
+
+            /*
+             * A tree that is entered more often than the table has records
+             * holds a loop; the walk stops and nothing of it is given back.
+             */
+            if (++visits > view->inode_capacity) {
+                s_incomplete = true;
+                frame->broken = true;
+                continue;
+            }
+
+            frame->loaded = false;
+
+            top++;
+            memset(&stack[top], 0, sizeof(stack[top]));
+            stack[top].inode = child;
+            stack[top].depth = frame->depth + 1u;
+        }
+    }
+
+    return MFS_OK;
+}
+
+/*
+ * A record of the table that no name reaches is what a create or an unlink
+ * leaves when it stops between the record and the entry: the name is not on
+ * the medium, so nothing can give it back. The record is freed and its
+ * blocks are given back by the pass of the map of the free blocks, unless
+ * another object holds them. A free record with flags in it is the wake of
+ * the same kind of interruption and goes the same way.
+ */
+static int repair_orphans(const struct mfs_private *view, struct mfs_check_report *report)
+{
+    k_u32_t per_block = MFS_BLOCK_SIZE / view->inode_size;
+    k_u32_t block_index;
+
+    for (block_index = 0; block_index < view->inode_blocks; block_index++) {
+        k_u8_t block[MFS_BLOCK_SIZE];
+        k_u32_t slot;
+
+        if (mfs_priv_block_read(view->sb->meta_start + view->bitmap_blocks + block_index, block) !=
+            MFS_OK) {
+            add_repair_error(report, "the medium did not answer a read");
+            return MFS_EIO;
+        }
+
+        for (slot = 0; slot < per_block; slot++) {
+            k_u32_t index = block_index * per_block + slot;
+            struct mfs_inode inode;
+            struct mfs_inode free_inode;
+            int rc;
+
+            if (index == 0u || index > view->inode_capacity) {
+                continue;
+            }
+
+            mfs_priv_inode_decode(block + slot * view->inode_size, view->inode_size, &inode);
+
+            if ((inode.flags & MFS_INODE_USED) != 0u) {
+                if (reach_test(index)) {
+                    continue;
+                }
+            } else if (inode.flags == 0u) {
+                continue;
+            }
+
+            memset(&free_inode, 0, sizeof(free_inode));
+            rc = write_record(view, report, index, &free_inode);
+            if (rc != MFS_OK) {
+                return rc;
+            }
+        }
+    }
+
+    return MFS_OK;
+}
+
+/*
+ * The map of the free blocks, after the walk of the records: a bit that no
+ * object holds goes free, and a block an object holds is marked, because the
+ * next writer would otherwise take it and overwrite the object.
+ */
+static void repair_bitmap(const struct mfs_private *view, struct mfs_check_report *report)
+{
+    k_u32_t data_blocks = view->sb->data_blocks;
+    k_u32_t i;
+
+    for (i = 0; i < data_blocks; i++) {
+        bool marked = bit_test(view->bitmap, i);
+        bool held = bit_test(s_claimed, i);
+
+        if (marked == held) {
+            continue;
+        }
+
+        mfs_priv_bitmap_set(i, held);
+        report->fixed++;
+    }
+}
+
+int mfs_repair_locked(const struct mfs_private *view, struct mfs_check_report *report)
+{
+    struct mfs_check_report probe;
+    int rc;
+
+    /*
+     * The header is not repaired. A header whose magic, version, layout or
+     * checksum is not the one of the design describes a volume this system
+     * does not mount, and a header that disagrees with the mounted volume
+     * means the medium changed under the mount: in both cases the sections
+     * under it are not the sections of this volume, and nothing is written.
+     */
+    memset(&probe, 0, sizeof(probe));
+    check_header(view, &probe);
+    if (probe.errors != 0) {
+        return MFS_OK;
+    }
+
+    if (view->inode_capacity >= MFS_REPAIR_INODES_MAX) {
+        add_error(report, CHECK_SUBJECT_VOLUME, 0,
+                  "the table of the records is bigger than the repair can map");
+        return MFS_OK;
+    }
+
+    memset(s_reached, 0, sizeof(s_reached));
+    memset(s_claimed, 0, sizeof(s_claimed));
+    s_incomplete = false;
+
+    rc = repair_tree(view, report);
+
+    /*
+     * The records and the blocks that no name reaches are given back only
+     * when the tree was walked whole: a shared directory or a subtree the
+     * walk refused to enter makes a block of a person's data look like an
+     * orphan, and freeing it would destroy what the person could still
+     * recover by fixing the entry by hand.
+     */
+    if (rc == MFS_OK && !s_incomplete) {
+        rc = repair_orphans(view, report);
+    }
+
+    if (rc == MFS_OK && !s_incomplete) {
+        repair_bitmap(view, report);
+    }
+
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    rc = mfs_priv_sync();
+    if (rc != MFS_OK) {
+        add_repair_error(report, "the medium did not take a repair");
+    }
+
+    return rc;
 }
 
 /* --- the entry point --- */

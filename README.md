@@ -27,6 +27,9 @@ The plan of the kernel is [docs/roadmap.md](docs/roadmap.md). The board has a
 plan of its own, with the port: [docs/ports/esp32/roadmap.md](docs/ports/esp32/roadmap.md).
 The user guide is the wiki in [docs/wiki](docs/wiki/README.md); the same pages
 build a site with `mkdocs build` and `mkdocs.yml`.
+The changes of every release are in [CHANGELOG.md](CHANGELOG.md); a machine
+from 0.x moves with [docs/migration.md](docs/migration.md), and the security
+model, with the way to report a problem, is in [SECURITY.md](SECURITY.md).
 The reports of the old numbered phases are in [docs/phases/](docs/phases/) -
 history, kept by name.
 
@@ -45,7 +48,7 @@ ports/port_null/      no machine at all: linked by the checks
 The boundary is not a promise, it is a check: `make integrity` refuses a
 platform header in the kernel, a `k_port_*` call above it, a portable
 component the host build does not compile, and a port that leaves a function
-of the contract unimplemented. The contract has a version (1.4 today), and the
+of the contract unimplemented. The contract has a version (1.8 today), and the
 boot compares it with the one the port reports ([ADR 0004](docs/adr/0004-portable-boundary.md)).
 A new machine is a new port directory - see [docs/porting.md](docs/porting.md).
 
@@ -154,8 +157,14 @@ Micro_OS/
   `/bin/hello` and `/bin/cat` too, as tasks of its kernel without an address
   space: one program at a time, 8 KiB of text and 8 KiB of data, and a bad
   pointer can reboot the machine ([ADR 0018](docs/adr/0018-esp32-programs.md)).
-  There is no shell `export`, no descriptors inherited by a program and no
-  signals yet.
+  There is no shell `export` (the environment of a program is the four words
+  of the kernel) and no job control: no groups, no `&`, no `fg`/`bg`.
+* **No TLS, and the network is the LAN.** HTTP, MQTT and telnet speak plain
+  text: there is no HTTPS, no certificate store, no IPv6 and no raw sockets.
+  `httpd` and `telnet` take no password, so the machine belongs on the network
+  of its owner, not on the open Internet. This is a decision of 1.0, not a
+  missing build ([ADR 0011](docs/adr/0011-versioning-and-1.0.md)); the
+  security model is in [SECURITY.md](SECURITY.md).
 * **The board has limits of its own**: no PMIC, 8 MB of flash with one
   application slot and no OTA, a 200 mAh battery. They are in
   [docs/ports/esp32](docs/ports/esp32/README.md).

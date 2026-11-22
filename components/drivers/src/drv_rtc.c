@@ -67,11 +67,21 @@
 /* How far a "+seconds" alarm may look ahead, in the seconds of a day. */
 #define RTC_ALARM_MAX_AHEAD (31UL * 24UL * 60UL * 60UL)
 
+/* How far the search for the next match of an alarm may walk. A month is
+ * enough for every alarm the chip can express except a day that the next 31
+ * days do not have - the 31st asked on the 1st of February. */
+#define RTC_ALARM_LOOKAHEAD_DAYS 31
+
 static bool s_present;
 static struct rtc_datetime s_now;
 
 /* The alarm flag found while the chip came up: what the last boot must say. */
 static bool s_alarm_at_boot;
+
+/* Whether the chip was still comparing an alarm at the boot: an alarm is a
+ * property of the clock and survives a restart, so the boot does not wipe
+ * it. */
+static bool s_alarm_armed_at_boot;
 
 /* The moment as one line, with the verdict of the doctor behind it. */
 static const char *rtc_line(char *buf, size_t size)
@@ -105,15 +115,22 @@ static int drv_rtc_init(void)
      */
     if (drv_i2c_read(I2C_BM8563_ADDR, BM_REG_CTRL2, &status, 1) == 0) {
         s_alarm_at_boot = (status & BM_CTRL2_AF) != 0;
+        s_alarm_armed_at_boot = (status & BM_CTRL2_AIE) != 0;
     }
 
     /*
-     * The control registers are put into their plain state: a random
-     * bit left by a dead battery can keep the oscillator stopped or an
-     * interrupt enabled, and the flags of that day stay until somebody
-     * clears them. A failure to write them is not fatal — the clock
-     * reads the time either way — so it is not counted against the
-     * module.
+     * The control registers are put into their plain state, except the one
+     * bit that says "compare the alarm": the alarm belongs to the clock and
+     * outlives the firmware (a restart, a formatted volume, a factory reset,
+     * a battery that keeps the clock), so wiping it would quietly take away
+     * the only wake source of a board that is off. The two flags are cleared
+     * - the INT line goes high again - and the oscillator keeps running.
+     */
+    control[1] = s_alarm_armed_at_boot ? BM_CTRL2_AIE : 0x00;
+
+    /*
+     * A failure to write them is not fatal — the clock reads the time either
+     * way — so it is not counted against the module.
      */
     (void)drv_i2c_write(I2C_BM8563_ADDR, BM_REG_CTRL1, control, sizeof(control));
 
@@ -151,9 +168,37 @@ static int drv_rtc_check(void)
 static const char *drv_rtc_detail(void)
 {
     static char buf[48];
+    struct drv_rtc_alarm alarm;
+    bool fired = false;
+    unsigned hour = (unsigned)(s_now.hour % 100);
+    unsigned minute = (unsigned)(s_now.minute % 100);
+    unsigned second = (unsigned)(s_now.second % 100);
+
+    /*
+     * The line carries the alarm when one is armed: it is the only wake
+     * source of a board that is off, and the report is where a person looks
+     * for it. The fields of a chip with a dead battery are not in range, so
+     * they are cut to two digits before they are printed.
+     */
+    if (drv_rtc_alarm_read(&alarm, &fired) == 0 &&
+        (alarm.hour >= 0 || alarm.minute >= 0 || alarm.day >= 0)) {
+        unsigned alarm_hour = (unsigned)(alarm.hour >= 0 ? alarm.hour % 100 : 0);
+        unsigned alarm_minute = (unsigned)(alarm.minute >= 0 ? alarm.minute % 100 : 0);
+
+        if (alarm.day >= 0) {
+            snprintf(buf, sizeof(buf), "%02u:%02u:%02u, alarm day %u %02u:%02u%s", hour, minute,
+                     second, (unsigned)(alarm.day % 100), alarm_hour, alarm_minute,
+                     fired ? " fired" : "");
+        } else {
+            snprintf(buf, sizeof(buf), "%02u:%02u:%02u, alarm %02u:%02u%s", hour, minute, second,
+                     alarm_hour, alarm_minute, fired ? " fired" : "");
+        }
+
+        return buf;
+    }
 
     /* The report of the doctor stays one line of time, as it was. */
-    snprintf(buf, sizeof(buf), "%02d:%02d:%02d%s", s_now.hour, s_now.minute, s_now.second,
+    snprintf(buf, sizeof(buf), "%02u:%02u:%02u%s", hour, minute, second,
              s_now.valid ? "" : " (no clock)");
 
     return buf;
@@ -322,6 +367,42 @@ int drv_rtc_alarm_clear(void)
 bool drv_rtc_alarm_was_fired(void)
 {
     return s_alarm_at_boot;
+}
+
+bool drv_rtc_alarm_was_armed(void)
+{
+    return s_alarm_armed_at_boot;
+}
+
+int drv_rtc_alarm_seconds_ahead(k_u32_t *seconds)
+{
+    struct drv_rtc_alarm alarm;
+    bool fired = false;
+    uint32_t ahead = 0;
+
+    if (seconds == NULL) {
+        return -1;
+    }
+
+    if (drv_rtc_alarm_read(&alarm, &fired) != 0) {
+        return -1;
+    }
+
+    if (alarm.hour < 0 && alarm.minute < 0 && alarm.day < 0) {
+        return -2;
+    }
+
+    if (rtc_read_now() != 0 || !s_now.valid) {
+        return -3;
+    }
+
+    if (!rtc_alarm_seconds_ahead(&s_now, &alarm, RTC_ALARM_LOOKAHEAD_DAYS, &ahead)) {
+        return -4;
+    }
+
+    *seconds = (k_u32_t)ahead;
+
+    return 0;
 }
 
 /*

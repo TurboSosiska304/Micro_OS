@@ -138,11 +138,18 @@ A short list, so that nothing here reads as a promise:
 
 * **No MMU on the board, no memory protection.** The user/kernel split is
   logical; `fork()` shares the memory of the parent and re-enters the program.
-* **Programs run on x86-64 only.** The board's flash is not executable for a
-  file and the simulator must not jump into an arbitrary image, so `execve`
-  answers `ENOSYS` there.
+  A `.mox` on the board runs as a task in the kernel's address space, and a
+  bad pointer reboots the machine.
+* **Programs need a machine that can enter them.** x86-64 does it with ring 3
+  and page tables; the board runs an Xtensa `.mox` without protection; the
+  simulator and the null port answer `ENOSYS`, because jumping into an
+  arbitrary image inside the test process is not a promise the host can keep.
 * **One user, uid 0.** A file has a mode and an owner, and the mode is checked,
   but there is no group and no second user.
+* **No TLS, and the network is the LAN.** HTTP, MQTT and telnet are plain
+  text; there is no HTTPS, no certificate store, no IPv6 and no raw sockets,
+  and `httpd` and `telnet` take no password. Keep the machine on the network
+  of its owner ([SECURITY.md](../../SECURITY.md)).
 * **FAT32 is read and written, ext2 is read-only.** MicroFS is the root of
   the tree; a build can also carry FAT12/16/32 ([ADR 0009](../adr/0009-filesystem-types.md))
   and mount it beside MicroFS, and it can read an ext2 volume with its

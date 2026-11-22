@@ -30,6 +30,8 @@ static long (*sys_strtol)(const char *, char **, int) = strtol;
 #include "kernel/kmm.h"
 #include "kernel/ksys.h"
 #include "kernel/log.h"
+#include "kernel/sched.h"
+#include "kernel/task.h"
 #include "kernel/vfs.h"
 #include "mfs/mfs.h"
 #include "mfs/mfs_ram_device.h"
@@ -972,6 +974,79 @@ static void test_pipe_and_dup2(void)
     teardown();
 }
 
+/*
+ * The property: the wrappers of the limits are the calls with the errno of
+ * POSIX. The test runs in a task of its own: a limit belongs to the task and
+ * the runner is one task for every test of the library.
+ */
+static int g_limit_rc[10];
+static struct microos_rlimit g_limit_set;
+static unsigned long long g_limit_fds;
+
+static void limits_worker(void *arg)
+{
+    uint64_t value = 0;
+    int fds[2];
+
+    K_UNUSED(arg);
+
+    g_limit_rc[0] = microos_getrlimits(&g_limit_set);
+    g_limit_rc[1] = microos_getlimit(MICROOS_RLIMIT_FDS, &value);
+    g_limit_fds = value;
+    g_limit_rc[2] = microos_getlimit(0, &value);
+    g_limit_rc[3] = microos_errno();
+    g_limit_rc[4] = microos_getlimit(MICROOS_RLIMIT_FDS, NULL);
+    g_limit_rc[5] = microos_errno();
+
+    /* Two descriptors, and the third open is EMFILE. */
+    g_limit_rc[6] = microos_setlimit(MICROOS_RLIMIT_FDS, 2);
+    fds[0] = microos_open("/lim0.txt", MICROOS_O_WRONLY | MICROOS_O_CREAT | MICROOS_O_TRUNC);
+    fds[1] = microos_open("/lim1.txt", MICROOS_O_WRONLY | MICROOS_O_CREAT | MICROOS_O_TRUNC);
+    g_limit_rc[7] = microos_open("/lim2.txt", MICROOS_O_WRONLY | MICROOS_O_CREAT | MICROOS_O_TRUNC);
+    g_limit_rc[8] = microos_errno();
+    if (fds[0] >= 0) {
+        microos_close(fds[0]);
+    }
+    if (fds[1] >= 0) {
+        microos_close(fds[1]);
+    }
+    /* The ceiling is not reachable from the task again. */
+    g_limit_rc[9] = microos_setlimit(MICROOS_RLIMIT_FDS, MICROOS_RLIMIT_FDS + 1);
+}
+
+static void test_limits(void)
+{
+    struct task *worker;
+
+    ktest_begin("libc: the limit wrappers keep the policy and the errno");
+
+    setup();
+
+    worker = task_create("libc-limits", limits_worker, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(worker != NULL);
+
+    if (worker != NULL) {
+        KT_CHECK_INT_EQ(task_wait(worker->pid, NULL, 2000), 0);
+
+        KT_CHECK_INT_EQ(g_limit_rc[0], 0);
+        KT_CHECK_INT_EQ((int)g_limit_set.memory, (int)KSYS_RLIMIT_MEMORY_MAX);
+        KT_CHECK_INT_EQ((int)g_limit_set.cpu_ms, (int)KSYS_RLIMIT_CPU_MAX);
+        KT_CHECK_INT_EQ((int)g_limit_set.fds, (int)KSYS_RLIMIT_FDS_MAX);
+        KT_CHECK_INT_EQ(g_limit_rc[1], 0);
+        KT_CHECK_INT_EQ((int)g_limit_fds, KSYS_RLIMIT_FDS_MAX);
+        KT_CHECK_INT_EQ(g_limit_rc[2], -1);
+        KT_CHECK_INT_EQ(g_limit_rc[3], 22); /* EINVAL */
+        KT_CHECK_INT_EQ(g_limit_rc[4], -1);
+        KT_CHECK_INT_EQ(g_limit_rc[5], 22);
+        KT_CHECK_INT_EQ(g_limit_rc[6], 0);
+        KT_CHECK_INT_EQ(g_limit_rc[7], -1);
+        KT_CHECK_INT_EQ(g_limit_rc[8], 24); /* EMFILE */
+        KT_CHECK_INT_EQ(g_limit_rc[9], -1);
+    }
+
+    teardown();
+}
+
 void test_libc(void)
 {
     test_float_matches_the_system();
@@ -988,6 +1063,7 @@ void test_libc(void)
     test_permissions();
     test_statx();
     test_pipe_and_dup2();
+    test_limits();
 #if KERNEL_EXEC
     test_execve();
 #endif

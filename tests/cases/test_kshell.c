@@ -563,7 +563,12 @@ static void test_attr(void)
     /* The check of the volume takes the words of the type it checks. */
     KT_CHECK_INT_EQ(kshell_execute("fsck fat"), KSHELL_USAGE);
     KT_CHECK_INT_EQ(kshell_execute("fsck fat -y"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(kshell_execute("fsck -y extra"), KSHELL_USAGE);
     KT_CHECK_INT_EQ(kshell_execute("help fsck"), KSHELL_OK);
+
+    /* The volume is whole, so the repair has nothing to do and says so. */
+    KT_CHECK_INT_EQ(kshell_execute("fsck -y"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("fsck --repair"), KSHELL_OK);
 
     /*
      * The help of a command is the text of the table: the usage line, the
@@ -644,9 +649,11 @@ static void test_attr(void)
 #endif
     KT_CHECK(strstr(buf, "usage: stat <path>") != NULL);
     KT_CHECK(strstr(buf, "usage: fsck") != NULL);
+    KT_CHECK(strstr(buf, "fsck [-y]") != NULL);
 #if defined(MICRO_OS_FS_FAT32) && MICRO_OS_FS_FAT32
     KT_CHECK(strstr(buf, "-y") != NULL);
 #endif
+    KT_CHECK(strstr(buf, "the volume is consistent") != NULL);
     KT_CHECK(strstr(buf, "not an octal mode") != NULL);
     KT_CHECK(strstr(buf, "a uid is 0..32767") != NULL);
     KT_CHECK(strstr(buf, "filesystem keeps") != NULL);

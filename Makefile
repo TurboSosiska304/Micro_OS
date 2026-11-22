@@ -11,6 +11,15 @@
 
 BUILD_DIR   ?= build-host
 ASAN_DIR    ?= build-asan
+COVERAGE_DIR ?= build-coverage
+# The lines of components/kernel that the host tests and the simulator have
+# to reach. The tree met about 80.7% when the gate was added; 70 keeps a margin
+# for another compiler and another gcov. docs/wiki/testing.md explains it.
+COVERAGE_THRESHOLD ?= 70
+# The moment of a reproducible build: one date instead of the clock of the
+# machine. Zero is the convention and "unknown" in a MicroFS record.
+SOURCE_DATE_EPOCH ?= 0
+export SOURCE_DATE_EPOCH
 # ESP-IDF discovery, in order: $IDF_PATH, a checkout beside the repository
 # (../esp-idf), then the conventional ~/esp/esp-idf. Override IDF_EXPORT to
 # point at another export.sh.
@@ -23,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-run x86-run-serial x86-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke
+.PHONY: help all build test test-asan test-tsan test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-open-build x86-run x86-run-serial x86-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak
 
 help:
 	@echo "Micro OS — available targets:"
@@ -33,9 +42,12 @@ help:
 	@echo "  make test-tsan  the same tests under the race detector"
 	@echo "  make test-minimal  the host tests with the optional features off"
 	@echo "  make smoke      boot the simulator and check its answers"
+	@echo "  make coverage   the host build with gcov and the threshold of lines"
+	@echo "  make reproducible  build the disk image twice and compare the bytes"
 	@echo "  make integrity  the integrity check of the repository and the bundle"
 	@echo "  make wiki-check the links of the user wiki (docs/wiki)"
-	@echo "  make ci         build, test, test-asan, test-tsan, smoke, integrity"
+	@echo "  make ci         build, test, test-asan, test-tsan, smoke, coverage,"
+	@echo "                  x86-smoke when QEMU is there, reproducible, integrity"
 	@echo "                  (x86-smoke when qemu-system-x86_64 is installed)"
 	@echo "  make sim        build and run the host simulator"
 	@echo "  make clean      remove the host build directory"
@@ -54,6 +66,13 @@ help:
 	@echo "  make x86-run-disk-serial  the same disk in a terminal (-nographic)"
 	@echo "  make x86-disk-smoke two boots on one disk image, a file survives both"
 	@echo "  make x86-net-smoke   the network: ping, UDP and HTTP on QEMU user-net"
+	@echo "  make soak       the session of 600 seconds on x86-64 (one boot)"
+	@echo "  make soak SOAK_MINUTES=1  the same, short, to check the tool"
+	@echo "  make soak SOAK_ITERATIONS=5  five short boots, one pass each"
+	@echo "  make soak-host  the same ten minutes on the host, under TSan"
+	@echo "  make fuzz-long  the fuzzers with a multiplier and a seed"
+	@echo "  make disk-stress  a full volume, fsck -y and two boots (MicroFS, FAT)"
+	@echo "  make board-soak the same session on the board (needs the board)"
 	@echo "  make bundle     collect the firmware into dist/ for distribution"
 
 all: build
@@ -98,6 +117,22 @@ test-minimal:
 smoke:
 	python3 tools/sim_smoke.py --verbose
 
+# The lines of components/kernel that the tests and the simulator reach,
+# counted by gcov. The build is a directory of its own: the counters make
+# a binary slower and its files are not the ones of a plain run. The tests
+# run under ctest and the simulator runs the same smoke test as `make
+# smoke`; the report refuses a number below the threshold (70% of lines:
+# this tree met about 80.7% when the gate was added, so the threshold keeps a
+# margin for another compiler and another gcov).
+coverage:
+	cmake -B $(COVERAGE_DIR) -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug -DMICRO_OS_COVERAGE=ON
+	cmake --build $(COVERAGE_DIR)
+	find $(COVERAGE_DIR) -name '*.gcda' -delete
+	ctest --test-dir $(COVERAGE_DIR) --output-on-failure
+	python3 tools/sim_smoke.py --binary $(COVERAGE_DIR)/ports/port_host/microos_sim
+	python3 tools/coverage_report.py --build $(COVERAGE_DIR) --threshold $(COVERAGE_THRESHOLD) \
+		--verbose
+
 # The firmware against the sources: the sums of the bundle, the headers of
 # the images, the partition table against partitions.csv, the flash size
 # against sdkconfig.defaults, the git objects and the hygiene of the sources.
@@ -123,11 +158,11 @@ wiki-check:
 # joins the list when `qemu-system-x86_64` is on PATH and is skipped with a
 # message when it is not. A missing optional machine must not fail a run.
 CI_QEMU := $(shell command -v qemu-system-x86_64 2>/dev/null)
-CI_TARGETS := build test test-asan test-tsan smoke
+CI_TARGETS := build test test-asan test-tsan smoke coverage
 ifneq ($(CI_QEMU),)
 CI_TARGETS += x86-smoke
 endif
-CI_TARGETS += integrity
+CI_TARGETS += reproducible integrity
 
 ci: $(CI_TARGETS)
 ifeq ($(CI_QEMU),)
@@ -138,7 +173,7 @@ sim: build
 	$(BUILD_DIR)/ports/port_host/microos_sim
 
 clean:
-	rm -rf $(BUILD_DIR) $(ASAN_DIR) $(MINIMAL_DIR)
+	rm -rf $(BUILD_DIR) $(ASAN_DIR) $(MINIMAL_DIR) $(COVERAGE_DIR)
 
 format:
 	@command -v clang-format >/dev/null 2>&1 || { echo "clang-format not found"; exit 1; }
@@ -153,7 +188,8 @@ idf-check:
 	}
 
 idf-build: idf-check
-	. $(IDF_EXPORT) && idf.py -D IDF_TARGET=$(IDF_TARGET) build
+	. $(IDF_EXPORT) && MICROOS_SIGN_KEY="$(MICROOS_SIGN_KEY)" \
+		idf.py -D IDF_TARGET=$(IDF_TARGET) build
 
 idf-flash: idf-check
 	. $(IDF_EXPORT) && idf.py $(IDF_PORT_ARG) -D IDF_TARGET=$(IDF_TARGET) flash
@@ -171,13 +207,29 @@ idf-size: idf-check
 # the kernel to its address and turns the long mode on.
 X86_BUILD := build-x86
 
+# The private key of the signed image (ADR 0020). It is not in this tree:
+# a release names it with the variable, and a build without one generates a
+# key of its own in the build directory.
+MICROOS_SIGN_KEY ?=
+X86_SIGN_ARGS := -DMICROOS_SIGN_KEY=$(MICROOS_SIGN_KEY)
+
 # The window of `make x86-run`: GTK when QEMU was built with it, SDL for a
 # machine without it. `make x86-run X86_DISPLAY=sdl` picks the other one.
 X86_DISPLAY ?= gtk
 
 x86-build:
-	cmake -B $(X86_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release
+	cmake -B $(X86_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release $(X86_SIGN_ARGS)
 	cmake --build $(X86_BUILD) --target image
+
+# The other policy of ADR 0020: the loader verifies the image, prints the
+# warning and continues when it did not pass. The smoke test boots an unsigned
+# kernel on this loader and a good one on the loader of x86-build.
+X86_OPEN_BUILD := build-x86-open
+
+x86-open-build:
+	cmake -B $(X86_OPEN_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
+		-DMICRO_OS_REQUIRE_SIGNATURE=OFF $(X86_SIGN_ARGS)
+	cmake --build $(X86_OPEN_BUILD) --target microos64.bin loader32.elf
 
 # The disk of the machine: an MBR, one partition and a MicroFS volume with
 # /bin and /etc already written. The volume is made by the host tool
@@ -190,6 +242,23 @@ X86_MKFS := $(BUILD_DIR)/tools/microos_mkfs
 x86-disk: x86-build build
 	python3 tools/x86_image.py --image $(X86_PROGRAMS_IMAGE) \
 		--build $(X86_BUILD) --mkfs $(X86_MKFS)
+
+# The gate of a reproducible image: the same inputs, the same bytes. The
+# moments of the MicroFS records come from SOURCE_DATE_EPOCH (the tool has
+# no clock of its own), the build id of version.c is fixed and the paths of
+# the tree are relative. The target builds the image, keeps a copy, builds
+# it again from nothing and compares the two files.
+reproducible: x86-disk
+	@tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; \
+	cp $(X86_PROGRAMS_IMAGE) "$$tmp/first.img"; \
+	rm -f $(X86_PROGRAMS_IMAGE); \
+	$(MAKE) --no-print-directory x86-disk; \
+	if cmp "$$tmp/first.img" $(X86_PROGRAMS_IMAGE); then \
+		echo "reproducible: the two images are the same file"; \
+	else \
+		echo "reproducible: the two images differ" >&2; exit 1; \
+	fi; \
+	sha256sum "$$tmp/first.img" $(X86_PROGRAMS_IMAGE)
 
 X86_DISK_DRIVE := -drive file=$(X86_PROGRAMS_IMAGE),format=raw,if=ide,index=0,cache=writeback
 
@@ -211,8 +280,8 @@ x86-run-serial: x86-disk
 		-initrd $(X86_BUILD)/microos64.bin -m 256 -nographic -no-reboot \
 		$(X86_DISK_DRIVE)
 
-x86-smoke: x86-disk
-	python3 tools/x86_smoke.py --image $(X86_PROGRAMS_IMAGE)
+x86-smoke: x86-disk x86-open-build
+	python3 tools/x86_smoke.py --image $(X86_PROGRAMS_IMAGE) --open-build $(X86_OPEN_BUILD)
 
 # The window without a display: the monitor of QEMU reads the text memory of
 # the VGA and presses the keys of the keyboard, so a build farm can check the
@@ -267,7 +336,7 @@ X86_NET_RUN_DEVICE := -netdev user,id=n0,hostfwd=tcp:127.0.0.1:8080-:8080 \
 
 x86-net-build:
 	cmake -B $(X86_NET_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
-		-DMICRO_OS_X86_NET=ON
+		-DMICRO_OS_X86_NET=ON $(X86_SIGN_ARGS)
 	cmake --build $(X86_NET_BUILD) --target image
 
 x86-net-run: x86-net-build
@@ -278,8 +347,83 @@ x86-net-run: x86-net-build
 x86-net-smoke: x86-net-build
 	X86_BUILD=$(X86_NET_BUILD) python3 tools/x86_net_smoke.py
 
+# The campaign of 1.0 (docs/wiki/testing.md). The session is one boot of the
+# x86-64 machine, ten minutes long by default, under the mixed load of
+# tools/soak.py. It is not a part of `make ci`: it takes ten minutes and it
+# is run for a release candidate, not for a push.
+SOAK_BUILD   ?= $(X86_NET_BUILD)
+SOAK_IMAGE   ?= $(SOAK_BUILD)/soak.img
+SOAK_MINUTES ?= 10
+SOAK_ITERATIONS ?=
+SOAK_ARGS    ?=
+
+# The image of the session has no free block (tools/soak_image.py): the
+# ENOSPC of a full volume is part of the load. The tool keeps the image
+# while it is newer than the kernel.
+soak-image: x86-net-build build
+	python3 tools/soak_image.py --build $(SOAK_BUILD) --image $(SOAK_IMAGE) \
+		--mkfs $(X86_MKFS) --if-needed
+
+soak: soak-image
+	python3 tools/soak.py --build $(SOAK_BUILD) --image $(SOAK_IMAGE) \
+		--mkfs $(X86_MKFS) \
+		$(if $(SOAK_ITERATIONS),--iterations $(SOAK_ITERATIONS),--minutes $(SOAK_MINUTES)) \
+		$(SOAK_ARGS)
+
+# The other half of the same ten minutes: the portable kernel over the host
+# port, several tasks at once, under TSan. A warning of TSan, a deadlock, a
+# leaked block or a definite leak of valgrind fails it.
+HOST_SOAK_MINUTES ?= 10
+HOST_SOAK_ARGS    ?=
+
+soak-host:
+	cmake -B $(BUILD_DIR) -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug
+	cmake --build $(BUILD_DIR) --target microos_stress
+	cmake -B build-tsan -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug -DMICRO_OS_SANITIZE_THREAD=ON
+	cmake --build build-tsan --target microos_stress
+	python3 tools/soak_host.py \
+		--plain $(BUILD_DIR)/tools/microos_stress \
+		--tsan build-tsan/tools/microos_stress \
+		--minutes $(HOST_SOAK_MINUTES) $(HOST_SOAK_ARGS)
+
+# The fuzz of the campaign: the same suite as `make test`, in the sanitizer
+# build, with the iterations of tests/cases/test_fuzz.c multiplied and a
+# seed of its own (KTEST_FUZZ_ITERATIONS and KTEST_FUZZ_SEED). The binary
+# covers the ABI edge, MOX1, MicroFS, FAT, ext2 and the network with the
+# same run, because the suite runs every case.
+FUZZ_ITERATIONS ?= 20
+FUZZ_SEED       ?= 0
+
+fuzz-long:
+	cmake -B $(ASAN_DIR) -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug -DMICRO_OS_SANITIZE=ON
+	cmake --build $(ASAN_DIR) --target microos_tests
+	KTEST_FUZZ_ITERATIONS=$(FUZZ_ITERATIONS) KTEST_FUZZ_SEED=$(FUZZ_SEED) \
+		./$(ASAN_DIR)/tests/microos_tests
+
+# The disk stress of the campaign: MicroFS and FAT, a volume filled to
+# ENOSPC, fsck -y and two boots of the same image. The FAT half needs
+# dosfstools and mtools; when they are absent it is reported as skipped.
+DISK_STRESS_FS ?= both
+
+x86-fat-build:
+	cmake -B build-x86-fat -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
+		-DMICRO_OS_FS_FAT32=ON
+	cmake --build build-x86-fat --target image
+
+disk-stress: x86-disk x86-fat-build build
+	python3 tools/disk_stress.py --fs $(DISK_STRESS_FS)
+
+# The board half of the session: build, flash and ten minutes with one
+# boot. It is a target of the campaign and not of `make ci` (no runner has
+# the board).
+BOARD_SOAK_MINUTES ?= 10
+
+board-soak:
+	tools/board_soak.sh --minutes $(BOARD_SOAK_MINUTES)
+
 bundle: idf-check
-	. $(IDF_EXPORT) && idf.py -D IDF_TARGET=$(IDF_TARGET) build && \
-		cmake -B $(X86_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release && \
+	. $(IDF_EXPORT) && MICROOS_SIGN_KEY="$(MICROOS_SIGN_KEY)" \
+		idf.py -D IDF_TARGET=$(IDF_TARGET) build && \
+		cmake -B $(X86_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release $(X86_SIGN_ARGS) && \
 		cmake --build $(X86_BUILD) --target image && \
-		tools/bundle.sh $(IDF_BUILD) dist
+		MICROOS_SIGN_KEY="$(MICROOS_SIGN_KEY)" tools/bundle.sh $(IDF_BUILD) dist

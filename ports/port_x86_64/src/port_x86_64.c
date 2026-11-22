@@ -77,11 +77,20 @@ static void com1_init(void)
  */
 void k_port_write(const char *data, k_size_t len)
 {
+    k_u64_t flags;
     k_size_t i;
 
     if (data == NULL) {
         return;
     }
+
+    /*
+     * The console is one resource and a line is written byte by byte to the
+     * UART: a tick in the middle of it would put the bytes of another task
+     * between two of these, and a transcript would read a line that was
+     * never printed. The section is the whole call, and it is short.
+     */
+    flags = port_save_flags_and_cli();
 
     port_x86_64_vga_write(data, len);
 
@@ -99,6 +108,8 @@ void k_port_write(const char *data, k_size_t len)
         }
         port_outb(COM1, (k_u8_t)c);
     }
+
+    port_restore_flags(flags);
 }
 
 int k_port_console_readline(char *buf, k_size_t size)
@@ -696,7 +707,14 @@ static void heap_init(k_u64_t multiboot_info)
     const struct mb_info *info = (const struct mb_info *)(uintptr_t)multiboot_info;
     k_u64_t best_base = 0;
     k_u64_t best_size = 0;
-    k_u64_t kernel_end = (k_u64_t)(uintptr_t)__kernel_end;
+    /*
+     * The map of the boot describes physical memory, and the heap is the low
+     * identity map: a block handed out by k_port_alloc() is an address the
+     * card drivers may hand to a device as it stands (src/virtio_net.c). The
+     * kernel image is linked at the top, so its end has to come back to the
+     * physical number before it can bound a region of the map.
+     */
+    k_u64_t kernel_end = port_x86_64_kernel_phys(__kernel_end);
     k_u64_t cursor;
     k_u64_t limit;
 

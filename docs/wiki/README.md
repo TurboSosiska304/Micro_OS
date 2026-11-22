@@ -15,12 +15,15 @@ canonical Russian documents are in [`docs/ru/`](../ru/README.md).
 
 | If you want to... | Read |
 |---|---|
+| know what the first major release is and promises | [release-1.0.md](release-1.0.md) |
 | see what the system is and run it in ten minutes | [getting-started.md](getting-started.md) |
 | build the host, x86-64 or ESP32 image | [build.md](build.md) |
 | type a command at the prompt | [shell.md](shell.md) |
 | understand the filesystems and `/etc` | [files.md](files.md) |
 | understand `exec`, `MOX1` and ring 3 | [programs.md](programs.md) |
 | know which machine does what | [ports.md](ports.md) |
+| bring Micro OS to another machine | [porting.md](porting.md) |
+| move a machine from 0.x to 1.0 | [`docs/migration.md`](../migration.md) |
 | read the syscall contract | [kernel-abi.md](kernel-abi.md) |
 | run the checks | [testing.md](testing.md) |
 | fix a build or a boot that failed | [troubleshooting.md](troubleshooting.md) |
@@ -29,12 +32,14 @@ canonical Russian documents are in [`docs/ru/`](../ru/README.md).
 
 | Section | Page | What it answers |
 |---|---|---|
+| **The 1.0 release** | [release-1.0.md](release-1.0.md) | what 1.0 is, promises and does not |
 | **Start here** | [getting-started.md](getting-started.md) | what the system is, the first commands |
 | **Build and run** | [build.md](build.md) | host, x86-64, ESP32, dependencies |
 | **Shell** | [shell.md](shell.md) | the commands, `PATH`, `stat`, `fsck`, `httpd` |
 | **Files** | [files.md](files.md) | MicroFS, `/etc`, `mkfs`/`fsck`, disks |
 | **Programs** | [programs.md](programs.md) | `MOX1`, `/bin`, `exec`, ring 3, `fork` |
 | **Ports** | [ports.md](ports.md) | ESP32, x86-64, host, null: what runs where |
+| **Porting** | [porting.md](porting.md) | the contract, the bring-up order, the checks |
 | **Kernel and ABI** | [kernel-abi.md](kernel-abi.md) | the calls, the rights, `EFAULT`, contract 1.8 |
 | **Testing** | [testing.md](testing.md) | `make ci`, the smoke tests, the device test |
 | **Troubleshooting** | [troubleshooting.md](troubleshooting.md) | symptom, cause, what to do |

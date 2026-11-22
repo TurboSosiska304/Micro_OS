@@ -34,14 +34,24 @@ struct mkfs_mfs_entry {
 };
 
 /*
+ * The moment the tool writes into every record. The default of the command
+ * is SOURCE_DATE_EPOCH, and 0 when it is not set: one date for every build,
+ * so that two runs over the same inputs give the same image. Zero is
+ * "unknown" in a MicroFS record, which is a truthful answer for an image
+ * that was not made by a moving clock.
+ */
+#define MKFS_MFS_SOURCE_DATE_EPOCH 0u
+
+/*
  * Write the whole image: `size_mb` megabytes, an MBR with one Linux
  * partition at `start_lba` (in 512-byte sectors), a formatted MicroFS
  * volume in that partition, and every entry of the list in it. The
  * directories of a path that the list does not name are made on the way.
+ * `epoch` is the moment of every record.
  *
  * Returns 0 on success and -1 on a failure, with the reason on stderr.
  */
 int mkfs_mfs_build_image(const char *image_path, k_u32_t size_mb, k_u32_t start_lba,
-                         const struct mkfs_mfs_entry *entries, k_size_t count);
+                         const struct mkfs_mfs_entry *entries, k_size_t count, k_u64_t epoch);
 
 #endif /* MICRO_OS_TOOLS_MKFS_MFS_H */

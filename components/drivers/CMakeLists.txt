@@ -11,14 +11,18 @@ set(MICRO_OS_DRIVERS_SRCS
     "src/drv_i2c_scan.c"
     "src/drv_imu.c"
     "src/drv_input.c"
+    "src/drv_ir.c"
     "src/drv_memory.c"
     "src/drv_mic.c"
     "src/drv_power.c"
     "src/drv_rtc.c"
+    "src/drv_sound.c"
     "src/fb_draw.c"
     "src/input_debounce.c"
+    "src/ir_nec.c"
     "src/battery_soc.c"
     "src/rtc_time.c"
+    "src/sound_detect.c"
 )
 
 # The driver of the station is the glue of the portable core (MICRO_OS_WIFI,
@@ -33,7 +37,8 @@ idf_component_register(
     INCLUDE_DIRS "include"
     REQUIRES kernel font kshell devfs freertos wifi spi_flash esp_psram
              esp_driver_gpio esp_driver_i2c driver esp_driver_spi esp_driver_ledc
-             esp_adc esp_driver_i2s esp_timer esp_wifi esp_netif esp_event nvs_flash
+             esp_adc esp_driver_i2s esp_driver_rmt esp_timer esp_wifi esp_netif
+             esp_event nvs_flash
              esp_hw_support
 )
 

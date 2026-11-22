@@ -637,6 +637,73 @@ static int cmd_free(int argc, char **argv)
     return KSHELL_OK;
 }
 
+static int cmd_ulimit(int argc, char **argv)
+{
+    struct task *self = task_self();
+    struct microos_rlimit limits;
+    char *end = NULL;
+    unsigned long value;
+    int which = 0;
+
+    if (argc == 1) {
+        if (microos_getrlimits(&limits) < 0) {
+            kshell_printf("ulimit: %s\n", microos_strerror(microos_errno()));
+            return KSHELL_ERROR;
+        }
+
+        kshell_printf("memory  %llu bytes", (unsigned long long)limits.memory);
+        if (self != NULL) {
+            kshell_printf(" (%llu used)", (unsigned long long)self->mem_used);
+        }
+        kshell_printf("\n");
+
+        kshell_printf("cpu     %u ms", (unsigned)limits.cpu_ms);
+        if (self != NULL) {
+            kshell_printf(" (%u used)", (unsigned)self->cpu_ms);
+        }
+        kshell_printf("\n");
+
+        kshell_printf("fds     %u\n", (unsigned)limits.fds);
+        return KSHELL_OK;
+    }
+
+    /* One resource at a time: -m bytes, -c milliseconds, -n descriptors. */
+    if (argc != 3 || argv[1][0] != '-' || argv[1][1] == '\0' || argv[1][2] != '\0') {
+        kshell_printf("usage: ulimit [-m bytes | -c ms | -n fds]\n");
+        return KSHELL_USAGE;
+    }
+
+    switch (argv[1][1]) {
+    case 'm':
+        which = MICROOS_RLIMIT_MEMORY;
+        break;
+    case 'c':
+        which = MICROOS_RLIMIT_CPU;
+        break;
+    case 'n':
+        which = MICROOS_RLIMIT_FDS;
+        break;
+    default:
+        kshell_printf("ulimit: -%c: there is no such resource\n", argv[1][1]);
+        return KSHELL_USAGE;
+    }
+
+    value = microos_strtoul(argv[2], &end, 10);
+    if (end == argv[2] || (end != NULL && *end != '\0') || microos_errno() == MICROOS_ERANGE) {
+        kshell_printf("ulimit: %s: not a number\n", argv[2]);
+        return KSHELL_USAGE;
+    }
+
+    if (microos_setlimit(which, (uint64_t)value) < 0) {
+        kshell_printf("ulimit: %lu: %s\n", value, microos_strerror(microos_errno()));
+        return KSHELL_ERROR;
+    }
+
+    kshell_printf("ulimit: %s is now %lu\n", argv[1], value);
+
+    return KSHELL_OK;
+}
+
 static int cmd_abi(int argc, char **argv)
 {
     k_u32_t number;
@@ -837,6 +904,15 @@ static const struct builtin_command {
      cmd_kill},
     {"dmesg", {.summary = "the kernel log", .usage = "dmesg"}, cmd_dmesg},
     {"free", {.summary = "the memory usage", .usage = "free"}, cmd_free},
+    {"ulimit",
+     {.summary = "show or lower the limits of this task",
+      .usage = "ulimit [-m bytes | -c ms | -n fds]",
+      .detail = "Without an option the memory, the CPU time and the descriptor limits\n"
+                "of the shell are printed. A limit starts at the ceiling of the system\n"
+                "and can only be lowered: a raise is refused. The memory is the bytes\n"
+                "the task may hold, the CPU time its milliseconds of running, and the\n"
+                "descriptors the open files it may take.\n"},
+     cmd_ulimit},
     {"clear", {.summary = "clear the screen", .usage = "clear"}, cmd_clear},
     {"modules",
      {.summary = "check the hardware modules",

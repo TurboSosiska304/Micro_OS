@@ -35,13 +35,25 @@ The pins, the chips and the quirks of the board are in
 * [x] `v0.4.0-rc2`: the debt pass - entry into the kernel, HTTP page, microphone, fsck
 * [ ] `v0.4.0`: the release candidate accepted (the tag is cut when it ships)
 
-## P3 - The wearable (planned)
+## P3 - The wearable (in work)
 
-* [x] The RTC alarm and deep sleep, the wake from EXT1
+* [x] Deep sleep with HOLD (G4) held, the wake from the timer and from EXT1
+      (BUTTON C), and the reason of the boot in the log
+* [x] The RTC alarm (BM8563) as a wake source: the chip has no line to G35,
+      so a sleep sets its own timer for the moment of the alarm and the flag
+      of the clock confirms it (`rtc: the alarm woke the board`); the alarm
+      survives a restart and a factory reset, because it lives in the clock
+* [x] `power sleep <seconds>`, `power sleep alarm` and `power off`; the
+      console says what the wake will be
 * [x] `drv_mic` (SPM1423, PDM RX on I2S, 16 kHz)
-* [ ] A simple sound detector on top of `drv_mic`
-* [ ] `drv_ir`: transmit and receive on G19, shared with the LED
-* [x] A factory reset (the volume and the store)
+* [x] A sound detector on top of `drv_mic`: RMS against a threshold, two
+      windows to begin an event and four to end it, `sound listen`,
+      `sound threshold`, `sound watch on|off`, a module of the doctor
+* [x] `drv_ir`: NEC on G19 with the carrier of the RMT, the arbitration of
+      the pin with the LED, `ir send`, `ir frame`; reception on G26 for an
+      external demodulating element (the board has no receiver, hardware.md)
+* [x] A factory reset (the volume and the store, the defaults of `/etc`
+      written back, the alarm of the clock kept)
 * [ ] The enclosure and display modes
 
 ## P4 - Programs (for 1.0)

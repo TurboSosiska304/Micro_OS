@@ -1,7 +1,10 @@
 # ADR 0012 - More than one core
 
-* Status: accepted
+* Status: accepted, and **the gate of 1.0 was withdrawn**
 * Date: 2026-11-21
+* Updated: 2026-11-21 - multi-core is after 1.0.0, not a gate of it (see
+  "The gate, changed")
+
 
 ## Context
 
@@ -13,11 +16,10 @@ single-core QEMU machine, but the ESP32-PICO-V3-02 has two cores, the x86-64
 machine of QEMU can have more, and the host port already runs every task in a
 `pthread`.
 
-1.0 promises a stable system, and a system that cannot use the second core of
-the board it ships on is not the system the board is. Multi-core is a gate of
-1.0, not a feature after it. What 1.0 promises is **correctness on two or more
-cores**, not linear scalability: a kernel lock around a path that is not hot is
-an honest first step.
+The first decision of this ADR made multi-core a gate of 1.0. It was
+withdrawn on the same day (see "The gate, changed"): the promise of 1.0 is a
+stable single-core system, and the second core is a project of 1.x. The shape
+below is still the plan, not a wish list.
 
 ## Decision
 
@@ -79,6 +81,29 @@ on them, and passes the host TSan run and a two-core soak without a deadlock,
 a lost wakeup or a task that runs on two cores at once. The ESP32 build runs
 its tasks on both cores and the doctor does not report a core it did not see.
 The board release notes say how many cores the image uses.
+
+## The gate, changed
+
+The project first promised correctness on two or more cores for 1.0, and this
+ADR made it a gate. On 2026-11-21 the decision was changed:
+
+* **Multi-core is after 1.0.0.** It is the largest single project left (a
+  per-CPU scheduler, the allocator, the VFS, the console and the block layer
+  under two cores, and for x86-64 an AP bring-up with APIC and ACPI), and it
+  is not a change of an ABI, a format or a default: a system that boots, runs
+  and is tested on one core is a correct 1.0, and a second core arrived later
+  does not invalidate what a 1.0 program or volume expects.
+* **What 1.0 promises** is a correct single-core kernel on both machines; the
+  two cores of the board are used by FreeRTOS but the kernel scheduler is not
+  asked to run a task on both at once.
+* The shape, the machines and the price below stay as the plan of a 1.x
+  release. `KERNEL_SMP` stays off by default and is not a gate.
+* The 1.0 checklist keeps the lines of section 9 as the plan of 1.x, marked as
+  not a gate.
+
+The reason is not that the work is small; it is that the work is large and the
+promise of the release does not need it. A gate that is moved is written down,
+not quietly dropped.
 
 ## Consequences
 

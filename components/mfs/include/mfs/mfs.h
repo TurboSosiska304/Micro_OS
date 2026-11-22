@@ -226,7 +226,9 @@ struct mfs_check_report {
     k_u32_t free_blocks;
     k_u32_t used_blocks;
     k_u32_t data_blocks;
-    k_u32_t errors; /* the number of the problems, 0 for a sound volume */
+    k_u32_t errors;  /* the number of the problems, 0 for a sound volume */
+    k_u32_t fixed;   /* the repairs that mfs_repair() applied, 0 for a check */
+    k_u32_t unfixed; /* the problems left after the repair pass */
     /* The first problem in English, an empty string for a sound volume. */
     char first[MFS_CHECK_MESSAGE_MAX];
 };
@@ -290,6 +292,57 @@ int mfs_get_info(struct mfs_info *out);
  */
 int mfs_check(struct mfs_check_report *report);
 
+/*
+ * Check the mounted volume and repair the damage that the format itself
+ * explains. The volume is walked exactly as mfs_check() walks it and the
+ * report is about the volume after the pass, not about the plan; fixed says
+ * how many changes were made.
+ *
+ * A repair is a reader of the medium first: each change has to be proven by
+ * what the medium says, and a question the medium cannot answer is left for
+ * a person and counted in unfixed. The rules:
+ *
+ *   - a data block marked used that no object holds goes back to the free
+ *     map; a block an object holds that the map calls free is taken again
+ *     (the opposite would give it to the next writer and lose the object);
+ *   - an entry of a directory that names a record outside the table or a
+ *     free record is removed, and an entry whose record disagrees with it
+ *     about the type takes the type of the record; a name that holds a slash,
+ *     the later of two equal names and the later of two entries of one
+ *     directory that name one record are removed, because none of them can
+ *     be reached through a path (this format has no second name of a file);
+ *   - a chain that loops or leaves the data section is cut at the last good
+ *     block, the second of two objects that name the same block gives it up
+ *     (the first owner in the walk of the tree keeps it, the way FAT does),
+ *     and a size that does not match its chain is put right: a chain shorter
+ *     than the file cuts the size down, a chain longer than the file gives
+ *     the tail back;
+ *   - the counter of the entries of a directory is recomputed from its
+ *     entries;
+ *   - a record that no name reaches is a create or an unlink that stopped
+ *     half way: it is freed, and so are its blocks, because nothing on the
+ *     medium can give the name back. This is the only "half-written record"
+ *     the format lets a reader detect - a record carries no checksum, so a
+ *     record half written byte by byte looks like a record;
+ *   - a header that is damaged is not touched: the volume would be a
+ *     different volume, and the mount would refuse it. The pass does not
+ *     write a byte in that case.
+ *
+ * The files of a volume have no checksum either, so a half-written *content*
+ * of a file is not detected and not repaired: the repair promises a volume
+ * that can be mounted and walked, not the data of a write a power cut
+ * interrupted.
+ *
+ * The header of the volume stores no count of the free blocks or the free
+ * records; the counters of the report are computed from the table and the
+ * map at every check, so there is no counter to put right outside the
+ * entries of a directory.
+ *
+ * Like mfs_check(), MFS_EINVAL means no mounted volume or no report, and
+ * MFS_EIO means that the device failed in a way that stopped the walk.
+ */
+int mfs_repair(struct mfs_check_report *report);
+
 /* The operations on the files and the directories. */
 int mfs_mkdir(const char *path);
 int mfs_create(const char *path);
@@ -324,5 +377,20 @@ int mfs_chown(const char *path, k_u32_t owner);
 
 /* The name of an error, for the shell. */
 const char *mfs_strerror(int error);
+
+/*
+ * The source of the moments of the records.
+ *
+ * The default is the wall clock of the kernel (ADR 0013). A tool that
+ * builds an image sets one fixed moment instead: the same sources and the
+ * same objects then give the same bytes, which is what a reproducible
+ * image means. NULL gives the clock of the kernel back. The source is
+ * asked for every stamp, so a caller that wants a moving time can keep the
+ * default and a caller that wants one date does not have to touch the
+ * records after they are written.
+ */
+typedef k_u64_t (*mfs_now_fn)(void);
+
+void mfs_set_time_source(mfs_now_fn now);
 
 #endif /* MICRO_OS_MFS_MFS_H */

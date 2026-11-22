@@ -230,6 +230,28 @@ static void test_ntp(void)
  * port is a fixed one and SO_REUSEADDR is the business of the port, so a
  * session of the run before does not stand in the way.
  */
+
+/*
+ * A listener on a port that is free: another test of the same tree (two
+ * worktrees, two runs of `make test`) may hold the fixed one, and a test
+ * that fails because of a neighbour is not a test of this code.
+ */
+static k_server_t *test_listen(int *port)
+{
+    int candidate;
+
+    for (candidate = *port; candidate < *port + 100; candidate++) {
+        k_server_t *server = k_server_listen(candidate);
+
+        if (server != NULL) {
+            *port = candidate;
+            return server;
+        }
+    }
+
+    return NULL;
+}
+
 static void test_loopback(void)
 {
     static const char question[] = "ping";
@@ -238,16 +260,17 @@ static void test_loopback(void)
     k_server_t *server;
     k_socket_t *client = NULL;
     k_socket_t *session = NULL;
+    int port = 45123;
 
     ktest_begin("net: a session of the loopback carries a line both ways");
 
-    server = k_server_listen(45123);
+    server = test_listen(&port);
     KT_CHECK(server != NULL);
     if (server == NULL) {
         return;
     }
 
-    client = k_socket_connect("127.0.0.1", 45123, 2000);
+    client = k_socket_connect("127.0.0.1", port, 2000);
     KT_CHECK(client != NULL);
 
     /* The handshake is complete once connect() returns: the listener of the
@@ -612,6 +635,7 @@ static void test_mqtt(void)
     k_server_t *server;
     char command[96];
     int rc;
+    int port = TEST_MQTT_PORT;
 
     ktest_begin("mqtt: a fake broker takes CONNECT, PUBLISH, SUBSCRIBE, PUBACK and PINGREQ");
 
@@ -625,7 +649,7 @@ static void test_mqtt(void)
     __atomic_store_n(&g_mqtt_pings, 0, __ATOMIC_RELEASE);
     __atomic_store_n(&g_mqtt_stop, 0, __ATOMIC_RELEASE);
 
-    server = k_server_listen(TEST_MQTT_PORT);
+    server = test_listen(&port);
     KT_CHECK(server != NULL);
     if (server == NULL) {
         return;
@@ -638,7 +662,7 @@ static void test_mqtt(void)
         return;
     }
 
-    rc = mqtt_connect(&client, "127.0.0.1", TEST_MQTT_PORT, "microos-test", 1);
+    rc = mqtt_connect(&client, "127.0.0.1", port, "microos-test", 1);
     KT_CHECK_INT_EQ(rc, MQTT_OK);
     if (rc != MQTT_OK) {
         mqtt_broker_stop(broker);
@@ -691,7 +715,7 @@ static void test_mqtt(void)
     /* The one-shot command, against a second session of the same broker. */
     KT_CHECK_INT_EQ(kshell_execute("mqtt"), KSHELL_USAGE);
 
-    snprintf(command, sizeof(command), "mqtt 127.0.0.1 %d cmd/topic hello", TEST_MQTT_PORT);
+    snprintf(command, sizeof(command), "mqtt 127.0.0.1 %d cmd/topic hello", port);
     KT_CHECK_INT_EQ(kshell_execute(command), KSHELL_OK);
     KT_CHECK(mqtt_wait_for(&g_mqtt_publishes, 3, 2000));
     KT_CHECK_STR_EQ(g_mqtt_topic, "cmd/topic");

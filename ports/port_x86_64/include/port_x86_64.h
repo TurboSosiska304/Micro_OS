@@ -326,6 +326,45 @@ void port_x86_64_task_tick(void);
 /* --- the map of the machine ---------------------------------------------- */
 
 /*
+ * Where the kernel is linked and where the loader puts it (ADR 0007). The
+ * image lives in the top 2 GiB of the address space, the region the small
+ * model of the C compiler can name with one sign-extended 32-bit immediate;
+ * the loader copies the bytes to KERNEL_PHYS and maps them at KERNEL_BASE,
+ * so the low identity map of the first gigabyte stays what it is for the
+ * devices, the heap and the arena of the programs.
+ *
+ * The two numbers appear again in linker64.ld and loader32.S, which cannot
+ * include a C header: the linker script names them as symbols, the loader as
+ * .set constants, and this header is the third copy for the C code.
+ */
+#define PORT_X86_64_KERNEL_BASE 0xFFFFFFFF80000000ull
+#define PORT_X86_64_KERNEL_PHYS 0x01000000ull
+
+/*
+ * The physical address behind a pointer into the image of the kernel: the
+ * page tables, the GDT, the TSS and the stacks are linked high, and a page
+ * table entry has to name the frame, not the link address. Only for the
+ * image: a pointer of the heap is a low address that is already physical.
+ */
+static inline k_u64_t port_x86_64_kernel_phys(const void *ptr)
+{
+    return (k_u64_t)(uintptr_t)ptr - PORT_X86_64_KERNEL_BASE + PORT_X86_64_KERNEL_PHYS;
+}
+
+/*
+ * The address a device sees for a buffer of the kernel. The heap is the low
+ * identity map - a block of k_port_alloc() is its own bus address - while the
+ * image is the high half; this is the one function a driver needs to tell the
+ * two apart (the rings and the buffers of src/virtio_net.c).
+ */
+static inline k_u64_t port_x86_64_bus_phys(const void *ptr)
+{
+    k_u64_t address = (k_u64_t)(uintptr_t)ptr;
+
+    return address >= PORT_X86_64_KERNEL_BASE ? port_x86_64_kernel_phys(ptr) : address;
+}
+
+/*
  * The window of the programs is the only memory of the machine that a ring 3
  * program may touch. It is mapped by the per-program page tables onto the
  * physical arena below, so the virtual address of a program and the physical

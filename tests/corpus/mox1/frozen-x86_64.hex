@@ -1,0 +1,337 @@
+# Micro OS — a MOX1 image of version 2, frozen for 1.0.
+#
+# An image is a contract the way the number of a call is: a program that was
+# built for 1.0 has to be read by every 1.x. This file is that promise in
+# bytes. The test `exec: the image of 1.0 is read as it was frozen`
+# (tests/cases/test_exec.c) parses these bytes and compares every field of the
+# header with the numbers recorded with them; the format parses them today and
+# is expected to still parse them at the end of the 1.x line. A parser that
+# stops reading this file is a change of the format, which needs an ADR and a
+# version of the header (kernel/exec.h), not a quiet new meaning.
+#
+# The machine is x86-64 (arch 0), the one of the port of QEMU: the bytes are
+# code of that processor. The program prints one line through the call of the
+# console and ends with the status 42 - a number the shell prints and no
+# kernel could invent for it. The image was checked on the machine once, by
+# hand, before it was recorded: the volume of `make x86-disk` was written
+# again by tools/mkfs_mfs with one more program, `--program
+# /bin/golden=frozen.mox`, and the machine booted from it answered
+#
+#   microos> exec /bin/golden
+#   MOX1: a frozen program of 1.0
+#   x86-64: the program exited with 42
+#   the program has finished
+#
+# `make x86-smoke` does not run the fixture: the tool of the image of the disk
+# (tools/x86_image.py) writes the fifteen programs of the build, and a
+# sixteenth of the corpus in /bin would be a change of that tool and of the
+# list of the commands of the smoke test. The parser of the host is the check
+# that runs on every `make test`; the run above is the proof that the bytes
+# are real code of that processor and not only a header that parses.
+#
+# The header of the image, as the test reads it (kernel/exec.h):
+#
+#   magic      'M' 'O' 'X' '1'   (K_EXEC_MAGIC, the word 0x31584F4D)
+#   version    2                 (K_EXEC_VERSION)
+#   flags      0
+#   entry      32                (the first byte of the text: the header)
+#   text_size  4064              (padded to the page of the port, 0x0FE0)
+#   data_size  32
+#   bss_size   0
+#   arch       0                 (K_EXEC_ARCH_X86_64)
+#
+# The bytes are the output of the toolchain of the project, not typed by hand.
+# The source, the commands and the tree the two come from are part of the
+# record: a fixture nobody can rebuild is a fixture nobody can trust.
+#
+#   /* frozen.c */
+#   #include "prog.h"
+#
+#   #define FROZEN_LINE "MOX1: a frozen program of 1.0\n"
+#
+#   int frozen_main(int argc, char *const argv[], char *const envp[])
+#   {
+#       (void)argc;
+#       (void)argv;
+#       (void)envp;
+#
+#       if (prog_puts(FROZEN_LINE) < 0) {
+#           prog_exit(1);
+#       }
+#
+#       prog_exit(42);
+#
+#       return 42;
+#   }
+#
+#   gcc -c -O2 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
+#       -mno-red-zone -mgeneral-regs-only -march=x86-64 \
+#       -fno-asynchronous-unwind-tables -fno-merge-constants \
+#       -Wall -Wextra -Werror \
+#       -I components/kernel/include -I ports/port_x86_64/programs \
+#       -o frozen.o frozen.c
+#   gcc -nostdlib -static -no-pie -Wl,--build-id=none -Wl,-e,frozen_main \
+#       -T ports/port_x86_64/programs/program.ld -o frozen.elf frozen.o
+#   sh tools/mkprog.sh --base 0x02000000 --arch x86-64 \
+#       frozen.elf frozen.mox frozen_main
+#
+# The file is hex, sixteen bytes to a line, the lines in the order of the
+# file. `#` starts a comment; an empty line is not a byte. 4128 bytes.
+4d 4f 58 31 02 00 00 00 00 00 00 00 20 00 00 00
+e0 0f 00 00 20 00 00 00 00 00 00 00 00 00 00 00
+b8 02 00 00 00 bf 01 00 00 00 45 31 d2 45 31 c0
+be 00 10 00 02 ba 1e 00 00 00 45 31 c9 cd 80 48
+85 c0 78 1c 31 c0 bf 2a 00 00 00 31 f6 31 d2 45
+31 d2 45 31 c0 45 31 c9 cd 80 b8 2a 00 00 00 c3
+31 c0 31 f6 31 d2 cd 80 eb da 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00
+00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e
+0f 1f 84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00
+00 00 66 2e 0f 1f 84 00 00 00 00 00 66 2e 0f 1f
+84 00 00 00 00 00 66 2e 0f 1f 84 00 00 00 00 00
+4d 4f 58 31 3a 20 61 20 66 72 6f 7a 65 6e 20 70
+72 6f 67 72 61 6d 20 6f 66 20 31 2e 30 0a 00 00

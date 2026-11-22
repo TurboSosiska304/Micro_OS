@@ -141,10 +141,31 @@ void microos_exit(int code);
 The flag of the waitpid is `MICROOS_WNOHANG`: the call does not wait and
 answers 0 when the child is not ready.
 
+## The limits
+
+```c
+struct microos_rlimit { uint64_t memory; uint32_t cpu_ms; uint32_t fds; };
+int microos_getlimit(int which, uint64_t *value);
+int microos_setlimit(int which, uint64_t value);
+int microos_getrlimits(struct microos_rlimit *out);
+```
+
+The selectors are `MICROOS_RLIMIT_MEMORY`, `MICROOS_RLIMIT_CPU` and
+`MICROOS_RLIMIT_FDS`. A task starts at the ceiling of the system and may only
+lower a limit: a raise is -1 with `EPERM` in `microos_errno()`. The memory is
+the bytes of the user blocks the task holds, the CPU time the milliseconds it
+spent running, and the descriptors the open files it may take. When the CPU
+limit is reached the task is marked with `SIGTERM`; when a descriptor would
+pass the limit, `open`, `pipe` and `dup2` answer `EMFILE`, which
+`microos_strerror()` calls "too many open files". The shell command `ulimit`
+prints the three numbers and lowers them.
+
 ## The errors
 
 The codes are the numbers of POSIX. A call that fails returns -1 and the
-code is kept for `microos_errno()`; `microos_strerror()` gives the text.
+code is kept for `microos_errno()`; `microos_strerror()` gives the text,
+including `EMFILE` (24, "too many open files") and `ENOMEM` (12, "out of
+memory", the answer of a block over the memory limit of the task).
 
 ```c
 int microos_errno(void);

@@ -39,6 +39,7 @@ static void run_tests(void *arg)
     test_fuzz();
     test_mfs();
     test_mfs_persistence();
+    test_mfs_repair();
     test_mkfs_image();
     test_vfs();
     test_fs_fat();
@@ -48,6 +49,8 @@ static void run_tests(void *arg)
     test_battery_soc();
     test_fb_draw();
     test_rtc();
+    test_ir_nec();
+    test_sound_detect();
     test_console_sinks();
     test_telnet();
     test_text_wrap();
@@ -66,6 +69,7 @@ static void run_tests(void *arg)
 #if MICRO_OS_WIFI
     test_wifi();
 #endif
+    test_sign();
 
     g_result = ktest_summary();
     atomic_store_explicit(&g_done, true, memory_order_release);

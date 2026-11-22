@@ -293,8 +293,20 @@ static int write_object(const struct mkfs_mfs_entry *entry)
     return 0;
 }
 
-int mkfs_mfs_build_image(const char *image_path, k_u32_t size_mb, k_u32_t start_lba,
-                         const struct mkfs_mfs_entry *entries, k_size_t count)
+/*
+ * The one moment of the image. The filesystem asks for it for every record
+ * it stamps; a static number is all a builder needs, and the tool is one
+ * process with one image.
+ */
+static k_u64_t s_epoch;
+
+static k_u64_t mkfs_fixed_time(void)
+{
+    return s_epoch;
+}
+
+static int build_image(const char *image_path, k_u32_t size_mb, k_u32_t start_lba,
+                       const struct mkfs_mfs_entry *entries, k_size_t count)
 {
     struct mkfs_device volume;
     struct k_blockdev device;
@@ -389,4 +401,24 @@ int mkfs_mfs_build_image(const char *image_path, k_u32_t size_mb, k_u32_t start_
     }
 
     return 0;
+}
+
+int mkfs_mfs_build_image(const char *image_path, k_u32_t size_mb, k_u32_t start_lba,
+                         const struct mkfs_mfs_entry *entries, k_size_t count, k_u64_t epoch)
+{
+    int rc;
+
+    /*
+     * The records of the image carry one date, not the clock of the run:
+     * the same inputs have to give the same bytes. The source is put back
+     * afterwards, because the tests and the simulator share the process.
+     */
+    s_epoch = epoch;
+    mfs_set_time_source(mkfs_fixed_time);
+
+    rc = build_image(image_path, size_mb, start_lba, entries, count);
+
+    mfs_set_time_source(NULL);
+
+    return rc;
 }

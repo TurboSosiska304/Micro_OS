@@ -44,6 +44,18 @@ typedef void (*task_entry_fn)(void *arg);
 /* The maximum number of the open files of a task. */
 #define TASK_MAX_FDS 4
 
+/*
+ * The ceiling of the resources of a task. A limit of a fresh task is its
+ * ceiling and may only be lowered (kernel/ksys.h has the ABI of the calls).
+ * The memory ceiling is the external pool of the board: one task can never
+ * own more than the PSRAM, and the internal RAM stays for the kernel.
+ * The CPU ceiling is a 32-bit number of milliseconds, which is the width the
+ * accounting of a task has; about 49 days of processor time.
+ */
+#define TASK_LIMIT_MEMORY_MAX (2u * 1024u * 1024u)
+#define TASK_LIMIT_CPU_MAX 0xFFFFFFFFu
+#define TASK_LIMIT_FDS_MAX TASK_MAX_FDS
+
 /* The length of the path that is kept with an open file. */
 #define TASK_PATH_MAX 48
 
@@ -102,6 +114,20 @@ struct task {
      * raises it from KMM_PRIORITY_USER to KMM_PRIORITY_SYSTEM.
      */
     k_i8_t mem_priority;
+    /*
+     * The limits of the task (KSYS_RLIMIT_*). The ceiling of each is in
+     * kernel/task.h; a fresh task starts there and can only lower it. The
+     * memory is counted for the user blocks the task allocated and has not
+     * freed; the CPU time is the ticks the task spent running; the
+     * descriptors are the slots of `files` the task may still take.
+     */
+    k_u64_t limit_memory;
+    k_u64_t mem_used;
+    k_u32_t limit_cpu_ms;
+    k_u32_t cpu_ms;
+    k_u64_t cpu_stamp_ms; /* the last moment the CPU time was accounted */
+    k_u8_t limit_fds;
+    bool cpu_limit_signalled; /* the SIGTERM of the CPU limit went out */
     char cwd[TASK_CWD_MAX];
     bool in_use;
 };
@@ -168,6 +194,48 @@ int task_wait_any(int *exit_code, k_u32_t timeout_ms);
 /* The priority of the memory allocations of a task (KMM_PRIORITY_*). */
 void task_set_mem_priority(struct task *t, int priority);
 int task_get_mem_priority(struct task *t);
+
+/*
+ * The limits of a task. `which` is KSYS_RLIMIT_MEMORY, KSYS_RLIMIT_CPU or
+ * KSYS_RLIMIT_FDS (kernel/ksys.h). get answers the current limit, set lowers
+ * it and refuses a raise with KERR_PERM and an unknown resource with
+ * KERR_INVAL. A NULL task is a mistake of the caller.
+ */
+int task_limit_get(struct task *t, k_u32_t which, k_u64_t *out);
+int task_limit_set(struct task *t, k_u32_t which, k_u64_t value);
+
+/* The descriptors a task may open: its limit, clamped to the table. */
+k_u32_t task_fd_limit(const struct task *t);
+
+/* A child of a fork starts with the limits of its parent. */
+void task_limits_inherit(struct task *child, const struct task *parent);
+
+/*
+ * Would a block of `size` still fit under the memory limit of the task? The
+ * memory manager asks this before it looks for a block, so a task that is
+ * over its budget does not spend the memory of the system on the way to a
+ * refusal.
+ */
+bool task_memory_fits(const struct task *t, k_size_t size);
+
+/* Charge or give back the memory of a block to the task that owns it. */
+void task_memory_charge(struct task *t, k_size_t size);
+void task_memory_uncharge(k_u32_t pid, k_size_t size);
+
+/* Forget the memory the tasks hold: the allocator was re-initialised. */
+void task_memory_reset(void);
+
+/*
+ * Account the processor time of a task since the last point it was known to
+ * be running: a tick of a port that can see the running task, or the edge of
+ * a system call. The unit of the limit is the millisecond, and the time
+ * between two points is the time the task had the processor - a sleep sets
+ * the point again on the way in and out, so a wait costs nothing. When the
+ * CPU limit is reached the task is marked with SIGTERM once; the mark is
+ * answered at the next system call or, on a machine of ring 3, by the tick
+ * itself. Returns true when the mark went out.
+ */
+bool task_cpu_tick(struct task *t);
 
 /* Working directory of a task. */
 void task_set_cwd(struct task *t, const char *dir);

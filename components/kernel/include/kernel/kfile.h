@@ -71,8 +71,9 @@ struct kfile *kfile_get(struct task *t, k_u32_t fd);
 /*
  * Take a free description and a free descriptor of the task. Returns the
  * number of the descriptor and the description through `out`, or a
- * negative error (ENOSPC when either table is full). The caller fills the
- * description; `kfile_discard` gives it back when the open fails.
+ * negative error: KERR_MFILE when the limit of the task is reached, KERR_NOSPC
+ * when the table of the descriptions of the system is full. The caller fills
+ * the description; `kfile_discard` gives it back when the open fails.
  */
 int kfile_alloc(struct task *t, struct kfile **out);
 

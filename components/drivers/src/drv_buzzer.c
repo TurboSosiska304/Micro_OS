@@ -37,6 +37,8 @@
 
 static bool s_buzzer_ready;
 static bool s_led_ready;
+/* The IR emitter owns G19: the light is dark and says no while it does. */
+static bool s_led_suspended;
 
 static int drv_buzzer_init(void)
 {
@@ -141,7 +143,12 @@ static const struct kmod s_buzzer_module = {
     .detail = drv_buzzer_detail,
 };
 
-static int drv_led_init(void)
+/*
+ * Route G19 to the LEDC channel of the light with the duty given. The pad is
+ * re-routed rather than merely re-written: the IR driver detaches the same
+ * motor of the pad when it sends a frame, and this is the way back.
+ */
+static int drv_led_route(unsigned duty)
 {
     ledc_timer_config_t timer = {
         .speed_mode = LEDC_LOW_SPEED_MODE,
@@ -161,7 +168,7 @@ static int drv_led_init(void)
         .channel = LED_CHANNEL,
         .intr_type = LEDC_INTR_DISABLE,
         .timer_sel = LED_TIMER,
-        .duty = 0,
+        .duty = duty,
         .hpoint = 0,
     };
 
@@ -169,8 +176,32 @@ static int drv_led_init(void)
         return -2;
     }
 
+    return 0;
+}
+
+static int drv_led_init(void)
+{
+    int rc = drv_led_route(0);
+
+    if (rc != 0) {
+        return rc;
+    }
+
     s_led_ready = true;
     return 0;
+}
+
+/* The duty of the light: 0 is dark, the maximum is the whole light. */
+static void led_duty(unsigned duty)
+{
+    /* While the emitter holds the pad the light says nothing: a duty written
+     * into the LEDC would wait for the pad to come back and glow then. */
+    if (s_led_suspended) {
+        return;
+    }
+
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LED_CHANNEL, duty);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LED_CHANNEL);
 }
 
 static int drv_led_check(void)
@@ -182,27 +213,25 @@ static int drv_led_check(void)
     /*
      * The pin drives the red LED and the IR emitter in opposite directions,
      * so what has to work is the duty itself: the light goes all the way up
-     * and down again, and a person can see it during the check.
+     * and down again, and a person can see it during the check. A pad that
+     * the emitter holds is left alone.
      */
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LED_CHANNEL, LED_DUTY_MAX);
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, LED_CHANNEL);
+    if (s_led_suspended) {
+        return 0;
+    }
+
+    led_duty(LED_DUTY_MAX);
     vTaskDelay(pdMS_TO_TICKS(30));
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LED_CHANNEL, 0);
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, LED_CHANNEL);
+    led_duty(0);
 
     return 0;
 }
 
-/* The duty of the light: 0 is dark, the maximum is the whole light. */
-static void led_duty(unsigned duty)
-{
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LED_CHANNEL, duty);
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, LED_CHANNEL);
-}
-
 /*
  * Drive the pin that the red LED and the IR emitter share. The light turns
- * on (and the IR emitter in the opposite direction); 0 is off.
+ * on (and the IR emitter in the opposite direction); 0 is off. A light that
+ * is asked for while the IR emitter owns the pin answers -2: the two cannot
+ * shine at once, and the caller is the one that has to decide what to do.
  */
 int drv_led_set(bool on)
 {
@@ -210,7 +239,43 @@ int drv_led_set(bool on)
         return -1;
     }
 
+    if (s_led_suspended) {
+        return -2;
+    }
+
     led_duty(on ? LED_DUTY_MAX : 0);
+    return 0;
+}
+
+/*
+ * The IR emitter takes G19: the light goes dark before the pad is re-routed,
+ * and every write of the LEDC is dropped until drv_led_resume(). The rule of
+ * the pin is the rule of the wiring - a pin with two diodes cannot light
+ * both, and the emitter is the one that speaks.
+ */
+int drv_led_suspend(void)
+{
+    if (!s_led_ready) {
+        return -1;
+    }
+
+    led_duty(0);
+    s_led_suspended = true;
+
+    return 0;
+}
+
+/* The emitter is done: the pad goes back to the light, dark. */
+int drv_led_resume(void)
+{
+    if (!s_led_ready) {
+        return -1;
+    }
+
+    s_led_suspended = true; /* a duty of the way back must not glow */
+    (void)drv_led_route(0);
+    s_led_suspended = false;
+
     return 0;
 }
 
@@ -356,7 +421,13 @@ static int cmd_led(int argc, char **argv)
     action = argv[1];
 
     if (strcmp(action, "on") == 0 || strcmp(action, "off") == 0) {
-        if (drv_led_set(strcmp(action, "on") == 0) != 0) {
+        rc = drv_led_set(strcmp(action, "on") == 0);
+
+        if (rc == -2) {
+            kshell_printf("led: the IR emitter has G19, the light waits\n");
+            return KSHELL_ERROR;
+        }
+        if (rc != 0) {
             kshell_printf("led: the led is not working\n");
             return KSHELL_ERROR;
         }

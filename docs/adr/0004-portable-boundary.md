@@ -50,6 +50,28 @@ parts it implements in `arch/<arch>/include/asm`:
 A source includes the narrow header it needs; `kernel/port.h` exists for
 the code that speaks to the port as a whole (the boot, the tests).
 
+### 1a. A port is a machine; the host and the null are substrates
+
+The contract has four implementations in the tree, and only two of them are
+ports in the sense of this ADR: **x86-64** and the **ESP32** run the system on
+a machine a person can hold. `ports/port_host` and `ports/port_null` implement
+the same contract for another reason:
+
+* the **host** runs the portable kernel as a Linux process: its tasks are
+  pthreads, its files and sockets are the POSIX ones, and it exists so the
+  tests, the simulator, ASan, TSan, valgrind and the coverage run in seconds
+  without QEMU or a board. It is the substrate of the tests, not a product
+  target; a machine that is a process is not a machine the system ships on.
+* the **null** answers "there is none" to every call: it is the shape of the
+  contract with no machine under it, linked by the checks.
+
+The directory names are historical (the host and the null were once ports of a
+board-only kernel). The tree keeps them until `1.0.0` is out; a rename to
+`ports/host` and `tests/port_null` is a cleanup after it, not a gate. What
+matters for the boundary is the rule: a **port** implements the contract on a
+machine; a **substrate** implements it so the kernel can be run and checked
+somewhere else. `docs/porting.md` and the wiki say the same.
+
 ### 2. The contract has a version, checked at boot
 
 `KERNEL_PORT_API_VERSION_MAJOR/MINOR` in `kernel/port/info.h` is the

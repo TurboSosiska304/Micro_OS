@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "kernel/errno.h"
+#include "kernel/ksys.h"
 #include "kernel/log.h"
 #include "kernel/lock.h"
 #include "kernel/sched.h"
@@ -350,6 +351,65 @@ static void test_mutex_creation_race(void)
     KT_CHECK_INT_EQ(k_mutex_destroy(&s_fresh), 0);
 }
 
+/*
+ * The limits of a fresh task are the ceiling of the system, and the get/set
+ * of the kernel answer the same policy as the calls of the ABI: lower only,
+ * EPERM for a raise, EINVAL for a resource that is not one of the three.
+ */
+static int g_task_limit_rc[8];
+static k_u64_t g_task_limit_value[3];
+
+static void limits_task(void *arg)
+{
+    struct task *self = task_self();
+
+    K_UNUSED(arg);
+
+    g_task_limit_value[0] = self->limit_memory;
+    g_task_limit_value[1] = self->limit_cpu_ms;
+    g_task_limit_value[2] = self->limit_fds;
+
+    g_task_limit_rc[0] = task_limit_get(self, KSYS_RLIMIT_CPU, &g_task_limit_value[1]);
+    g_task_limit_rc[1] = task_limit_set(self, KSYS_RLIMIT_CPU, 10);
+    g_task_limit_value[1] = self->limit_cpu_ms;
+    g_task_limit_rc[2] = task_limit_set(self, KSYS_RLIMIT_CPU, 100);
+    g_task_limit_rc[3] = task_limit_get(self, 0, &g_task_limit_value[1]);
+    g_task_limit_rc[4] = task_limit_set(self, KSYS_RLIMIT_MEMORY, 1024);
+    g_task_limit_rc[5] = task_limit_set(self, KSYS_RLIMIT_FDS, TASK_MAX_FDS - 1);
+    g_task_limit_rc[6] = task_fd_limit(self);
+    g_task_limit_rc[7] = task_limit_set(NULL, KSYS_RLIMIT_FDS, 0);
+}
+
+static void test_task_limits(void)
+{
+    struct task *worker;
+
+    ktest_begin("task: the limits start at the ceiling and only go down");
+
+    port_host_set_sink(tmpfile());
+
+    worker = task_create("limits", limits_task, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(worker != NULL);
+
+    if (worker != NULL) {
+        KT_CHECK_INT_EQ(task_wait(worker->pid, NULL, 2000), 0);
+
+        KT_CHECK_INT_EQ((int)g_task_limit_value[0], (int)TASK_LIMIT_MEMORY_MAX);
+        KT_CHECK_INT_EQ((int)g_task_limit_value[2], TASK_MAX_FDS);
+        KT_CHECK_INT_EQ(g_task_limit_rc[0], 0);
+        KT_CHECK_INT_EQ((int)g_task_limit_value[1], 10);
+        KT_CHECK_INT_EQ(g_task_limit_rc[1], 0);
+        KT_CHECK_INT_EQ(g_task_limit_rc[2], KERR_PERM);
+        KT_CHECK_INT_EQ(g_task_limit_rc[3], KERR_INVAL);
+        KT_CHECK_INT_EQ(g_task_limit_rc[4], 0);
+        KT_CHECK_INT_EQ(g_task_limit_rc[5], 0);
+        KT_CHECK_INT_EQ(g_task_limit_rc[6], TASK_MAX_FDS - 1);
+        KT_CHECK_INT_EQ(g_task_limit_rc[7], KERR_INVAL);
+    }
+
+    port_host_set_sink(NULL);
+}
+
 void test_task(void)
 {
     test_task_lifecycle();
@@ -360,4 +420,5 @@ void test_task(void)
     test_task_wait_timeout();
     test_task_job();
     test_mutex_creation_race();
+    test_task_limits();
 }

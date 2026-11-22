@@ -7,6 +7,11 @@
   read-only check of the volume (`fsck` of FAT), and a repair of the
   damage the medium itself explains under `-y` (lost clusters, a loop, a
   cross-link, a size against its chain).
+* Updated: 2026-11-21 — the same `fsck -y` repairs MicroFS: the orphan
+  blocks, the entries and the names nobody can reach, the chains, the sizes,
+  the counter of a directory and the records no name reaches, with the rules
+  in `mfs/mfs.h` and the note in ADR 0013 (a damaged header, the data of a
+  half-written file and a shared directory stay for a person).
 * Updated: 2026-11-21 — ext2 arrived as the next reader: read-only, with
   inodes, modes, owners and the moments of `statx` (ADR 0019). The paragraph
   below about it being only a name is the history of this decision.
@@ -248,6 +253,9 @@ It refuses to guess, and the report leaves the problem as it is:
 
 A volume that carries one of the first two is not repaired at all, not even
 the lost clusters: the two stories have to agree before the kernel writes.
+MicroFS follows the same rule: `mfs_repair()` writes nothing when the header
+is damaged or disagrees with the mount, and it gives nothing back when the
+tree could not be walked whole.
 The same caution covers a tree the pass could not walk whole: when a
 directory head is shared or a tree is deeper than a path can name, the free
 map is not touched either, because a cluster of the subtree it refused to

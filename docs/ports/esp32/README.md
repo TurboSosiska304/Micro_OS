@@ -30,6 +30,51 @@ The ready images also go to the releases: download the bundle, connect the
 board, run `bash flash.sh` (or `chmod +x flash.sh && ./flash.sh`) - no
 sources, no ESP-IDF, no toolchain.
 
+## The signature of the image
+
+The application checks itself at the beginning of `app_main`, before MicroFS
+and the shell (ADR 0020). The factory partition is read in place: the ESP
+header gives the length of the image, `esp_app_desc_t` at `0x20` gives its
+version, and the last 4 KiB of the partition (`0x20F000` of the flash) hold
+the 120-byte `MOSIGN01` trailer over the bytes of `micro_os.bin`. The digest
+is SHA-256 over the flash in chunks and the signature is Ed25519 with the
+public key compiled into the firmware. The partition table is unchanged and
+no eFuse is burned.
+
+`tools/bundle.sh` signs the application and the merged distribution image;
+`micro_os.bin.sig` is the trailer and `flash.sh` writes it at `0x20F000`.
+`make bundle` also checks that the image and its 4 KiB reserve fit the 2 MB
+factory partition; the ESP-IDF build checks the same before it writes the
+image.
+
+The policy is a Kconfig setting:
+
+* `CONFIG_MICRO_OS_REQUIRE_SIGNATURE` (default `y`): a missing or wrong
+  trailer prints `boot: the image is refused: <reason>` and the board stops
+  before the filesystem and the shell. With `n`, the same check prints
+  `boot: unsigned or damaged image: not guaranteed` and the boot continues.
+* `CONFIG_MICRO_OS_ANTIROLLBACK` (default `n`): the newest version seen is
+  kept in the NVS namespace `microos_boot` (`min_version`). With the flag on,
+  an image older than the stored one is refused; with it off, it is a
+  warning. A newer version is recorded after the signature passed.
+
+The check is electronic, not secure boot: the ROM and the ESP-IDF bootloader
+have already entered the application, so a damaged image may have run its
+first instructions before the sentence. It cannot stop a local attacker who
+can rewrite the flash or the NVS. Secure boot v2 and flash encryption are not
+enabled by this tree.
+
+`tools/device-test.sh` runs the signed bundle by default. Two more policies
+are available for a development board:
+
+    DEVICE_POLICY=unsigned tools/device-test.sh /dev/ttyACM0
+    DEVICE_POLICY=require-unsigned tools/device-test.sh /dev/ttyACM0
+
+The first builds with the requirement off and flashes an image without a
+trailer: the console warns and the shell comes up. The second keeps the
+requirement on and flashes the same unsigned image: the boot stops before
+the shell.
+
 ## The hardware doctor
 
 The init process walks through the registered modules after the self test and
@@ -45,10 +90,12 @@ display    ok        135x240, fb 63 KB
 input      ok        A=up B=up C=up
 buzzer     ok        passive, 2 kHz via LEDC
 led/ir     ok        G19, shared with the IR emitter
+ir         ok        NEC tx on G19, shared with the led; no rx
 battery    ok        4176 mV, 98% (raw 2088 mV)
-wifi       degraded  f4:65:0b:32:00:c0 idle
+mic        ok        16000 Hz, rms 20, peak 60
+sound      ok        quiet: rms 20, peak 60, threshold 200
+power      ok        hold on, wake power-on
 telnet     ok        port 23, no auth
-mic        ok        16000 Hz, rms 4, peak 17
 ```
 
 `ok` works, `degraded` works with a limitation, `fail` does not work, `skip`
@@ -71,7 +118,7 @@ test picture.
 * **A program runs, without protection.** An image of this machine (`arch` 1,
   Xtensa) is entered by the port (ADR 0018): the text in 8 KiB of instruction
   RAM at `0x4009E000`, the data and the bss in 8 KiB of DRAM at
-  `0x3FFCC000`, one program at a time. There is no MMU and no address space:
+  `0x3FFCE000`, one program at a time. There is no MMU and no address space:
   a program shares the memory of the kernel, a bad pointer can panic and
   reboot the board, and a bigger image is `ENOMEM`. The images are blobs of
   the firmware written to `/bin` of MicroFS at the boot until the `progs`
@@ -80,7 +127,13 @@ test picture.
 * **8 MB of flash, one application slot.** `factory` 2 MB and MicroFS 5.75 MB;
   no room for an OTA image, and no OTA ([partitions.csv](../../../partitions.csv)).
 * **No PMIC.** Power and sleep belong to the ESP32 itself: `HOLD` (G4) must be
-  high after a wake-up or the board powers off.
+  high after a wake-up or the board powers off. The alarm of the clock wakes a
+  sleeping board only because the firmware sets the timer of the chip for its
+  moment — the INT of the BM8563 is not on the wake line.
+* **The IR pin is shared with the red LED** (G19): the drivers arbitrate it,
+  and the two never shine at once.
+* **There is no IR receiver on the board.** `ir send` and `ir frame` work by
+  themselves; `ir rx` waits for a demodulating element a person wires to G26.
 * **The battery percent is a curve, not a fuel gauge.** The charge is looked
   up from the voltage of the cell; while the cable is connected the divider
   sees the charging voltage and the percent sits at the top.

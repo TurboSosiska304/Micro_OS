@@ -392,6 +392,97 @@ static void test_from_unix(void)
     KT_CHECK(!rtc_from_unix(0, NULL));
 }
 
+/*
+ * The alarm of the chip is a match of a minute, an hour and a day. The sleep
+ * of the board asks this function for the length of its timer, so the
+ * boundaries are the whole point: the same minute is tomorrow, midnight is
+ * the next day, and a day of the month skips the months it does not exist in.
+ */
+static void test_alarm_ahead(void)
+{
+    struct rtc_datetime now;
+    struct drv_rtc_alarm alarm;
+    uint32_t seconds = 0;
+
+    ktest_begin("rtc: the seconds to the next match of an alarm");
+
+    memset(&now, 0, sizeof(now));
+    now.year = 2026;
+    now.month = 11;
+    now.day = 21;
+    now.hour = 19;
+    now.minute = 48;
+    now.second = 10;
+    now.valid = true;
+
+    /* Ten seconds into the minute: the 19:50 alarm is 1:50 away, not 2:50. */
+    alarm.hour = 19;
+    alarm.minute = 50;
+    alarm.day = -1;
+    KT_CHECK(rtc_alarm_seconds_ahead(&now, &alarm, 31, &seconds));
+    KT_CHECK_INT_EQ(seconds, 110);
+
+    /* The same minute as the clock: the chip compares at second 0, so the
+     * match is the one of tomorrow. */
+    alarm.hour = 19;
+    alarm.minute = 48;
+    KT_CHECK(rtc_alarm_seconds_ahead(&now, &alarm, 31, &seconds));
+    KT_CHECK_INT_EQ(seconds, 24 * 60 * 60 - 10);
+
+    /* Midnight: the next day and the second 0 of it. */
+    alarm.hour = 0;
+    alarm.minute = 0;
+    KT_CHECK(rtc_alarm_seconds_ahead(&now, &alarm, 31, &seconds));
+    KT_CHECK_INT_EQ(seconds, 4 * 60 * 60 + 11 * 60 + 50);
+
+    /* A day of the month that is not today: the 31st of December, and the
+     * arithmetic walks six weeks of calendar to find it. */
+    alarm.day = 31;
+    alarm.hour = 7;
+    alarm.minute = 30;
+    KT_CHECK(rtc_alarm_seconds_ahead(&now, &alarm, 60, &seconds));
+    KT_CHECK_INT_EQ(seconds, 39u * 24 * 60 * 60 + 11 * 60 * 60 + 42 * 60 - 10);
+
+    /* The 31st is not in February; nothing matches inside a month. */
+    now.month = 2;
+    now.day = 1;
+    KT_CHECK(!rtc_alarm_seconds_ahead(&now, &alarm, 31, &seconds));
+
+    /* An alarm on the 29th of February is waited for a year, and a month of
+     * lookahead says no. */
+    alarm.day = 29;
+    alarm.hour = 0;
+    alarm.minute = 0;
+    KT_CHECK(!rtc_alarm_seconds_ahead(&now, &alarm, 31, &seconds));
+
+    /* An alarm without a field matches at any moment, which is not one. */
+    alarm.hour = -1;
+    alarm.minute = -1;
+    alarm.day = -1;
+    KT_CHECK(!rtc_alarm_seconds_ahead(&now, &alarm, 31, &seconds));
+
+    /* A field out of range is not an alarm either. */
+    alarm.minute = 60;
+    KT_CHECK(!rtc_alarm_seconds_ahead(&now, &alarm, 31, &seconds));
+    alarm.minute = 30;
+    alarm.hour = 24;
+    KT_CHECK(!rtc_alarm_seconds_ahead(&now, &alarm, 31, &seconds));
+
+    /* The first second of a minute is the whole minute. */
+    now.second = 0;
+    now.minute = 29;
+    now.hour = 7;
+    alarm.hour = 7;
+    alarm.minute = 30;
+    alarm.day = -1;
+    KT_CHECK(rtc_alarm_seconds_ahead(&now, &alarm, 31, &seconds));
+    KT_CHECK_INT_EQ(seconds, 60);
+
+    KT_CHECK(!rtc_alarm_seconds_ahead(NULL, &alarm, 31, &seconds));
+    KT_CHECK(!rtc_alarm_seconds_ahead(&now, NULL, 31, &seconds));
+    KT_CHECK(!rtc_alarm_seconds_ahead(&now, &alarm, 31, NULL));
+}
+
 void test_rtc(void)
 {
     test_bcd();
@@ -405,4 +496,5 @@ void test_rtc(void)
     test_format();
     test_corpus();
     test_from_unix();
+    test_alarm_ahead();
 }

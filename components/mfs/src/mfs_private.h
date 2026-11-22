@@ -81,4 +81,37 @@ k_u32_t mfs_priv_crc32(const void *data, k_size_t size);
  */
 int mfs_check_locked(const struct mfs_private *view, struct mfs_check_report *report);
 
+/* --- the repair pass --- */
+
+/*
+ * The table of records the repair can mark: one bit per record says whether
+ * a name reaches it, and this map is 4 KiB for 32768 records. The largest
+ * volume of the design (16 MiB) has 20927 records, so the map covers every
+ * volume the documentation names; a table of 32768 records or more is
+ * reported and left alone instead of being walked with a map that would hide
+ * an orphan.
+ */
+#define MFS_REPAIR_INODES_MAX 32768u
+
+/*
+ * The repair pass is the only writer of the check of the volume, and it
+ * writes through the filesystem itself: the map of the free blocks in the
+ * memory and the device have to stay one state, so the pass never patches
+ * the medium behind the back of the mount. Called by mfs_repair() with the
+ * lock taken; report->fixed counts the changes it applied.
+ */
+int mfs_repair_locked(const struct mfs_private *view, struct mfs_check_report *report);
+
+/*
+ * The pieces of the filesystem that the repair pass uses. They are the
+ * calls mfs.c already makes for a write of a user, so a repair is a write
+ * like any other and the volume is the same one the next operation sees.
+ */
+void mfs_priv_bitmap_set(k_u32_t index, bool used);
+int mfs_priv_inode_write(k_u32_t index, const struct mfs_inode *inode);
+int mfs_priv_chain_set_next(k_u32_t block, k_u32_t next);
+int mfs_priv_block_alloc(k_u32_t *block);
+int mfs_priv_dir_write(const struct mfs_inode *inode, const k_u8_t *data, k_size_t size);
+int mfs_priv_sync(void);
+
 #endif /* MICRO_OS_MFS_SRC_MFS_PRIVATE_H */

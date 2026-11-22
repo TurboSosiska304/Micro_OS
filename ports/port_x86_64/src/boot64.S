@@ -2,9 +2,14 @@
  * Micro OS — the first instruction of the 64-bit kernel.
  *
  * The loader of the port (loader32.S) has already switched the processor to
- * long mode, copied this image to its address and jumped here with the map
- * of the memory of the boot in RDI. From this point the kernel runs the way
- * it does on a board: the same C sources, the same boot sequence.
+ * long mode, copied this image to its physical address and mapped it at the
+ * top of the address space, and jumped here with the map of the memory of
+ * the boot in RDI. The entry is therefore a high address (ADR 0007): the
+ * stack below is high, the clear of .bss writes high, and the boot
+ * information stays the physical address the loader left in RDI, because
+ * the low identity map is still the one the devices and the memory map are
+ * read through. From this point the kernel runs the way it does on a board:
+ * the same C sources, the same boot sequence.
  */
 .section .text.boot, "ax", @progbits
 .global _start64
@@ -13,7 +18,7 @@
 _start64:
     cli
 
-    /* The stack is in .bss of this image. */
+    /* The stack is in .bss of this image, and the image is linked high. */
     movabs $stack_top, %rsp
     mov %rdi, %r12 /* the boot information; rep stosb will use %rdi */
 

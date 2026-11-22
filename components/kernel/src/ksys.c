@@ -1103,6 +1103,90 @@ static k_ssize_t sys_sigreturn(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys
     return restored;
 }
 
+/* --- the limits of a task --- */
+
+/* One of the three resources of a limit, or EINVAL for anything else. A raw
+ * register that holds a wide number is not a selector. */
+static int limit_which(ksys_arg_t which)
+{
+    if (which < (ksys_arg_t)KSYS_RLIMIT_MEMORY || which > (ksys_arg_t)KSYS_RLIMIT_FDS) {
+        return KERR_INVAL;
+    }
+
+    return 0;
+}
+
+/*
+ * The current limit of the caller. The answer is one 64-bit word, so it is
+ * copied into the memory of the caller through the edge; a selector the ABI
+ * does not know and a place that is not there are refused before the task is
+ * asked anything.
+ */
+static k_ssize_t sys_getlimit(ksys_arg_t which, ksys_arg_t value, ksys_arg_t a2, ksys_arg_t a3,
+                              ksys_arg_t a4, ksys_arg_t a5)
+{
+    struct task *self = task_self();
+    k_u64_t limit = 0;
+    int rc;
+
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    if (self == NULL) {
+        return KERR_PERM;
+    }
+
+    rc = limit_which(which);
+    if (rc != 0) {
+        return rc;
+    }
+
+    if (value == 0) {
+        return KERR_INVAL;
+    }
+
+    if (!k_port_exec_contains((const void *)(uintptr_t)value, sizeof(limit))) {
+        return KERR_FAULT;
+    }
+
+    rc = task_limit_get(self, (k_u32_t)which, &limit);
+    if (rc != 0) {
+        return rc;
+    }
+
+    return copy_to_user(value, &limit, sizeof(limit));
+}
+
+/*
+ * Lower a limit of the caller. The limits are the task's own: there is no
+ * call that changes the limit of another task, and no selector for a set of
+ * tasks. A raise is EPERM (task_limit_set explains the policy).
+ */
+static k_ssize_t sys_setlimit(ksys_arg_t which, ksys_arg_t value, ksys_arg_t a2, ksys_arg_t a3,
+                              ksys_arg_t a4, ksys_arg_t a5)
+{
+    struct task *self = task_self();
+    int rc;
+
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    if (self == NULL) {
+        return KERR_PERM;
+    }
+
+    rc = limit_which(which);
+    if (rc != 0) {
+        return rc;
+    }
+
+    return task_limit_set(self, (k_u32_t)which, (k_u64_t)value);
+}
+
 /*
  * Wait for a child. The number 0 or -1 means "any child". The status of
  * the child is the code it finished with. A call with no child to wait for
@@ -1257,7 +1341,7 @@ static k_ssize_t sys_malloc(ksys_arg_t size, ksys_arg_t a1, ksys_arg_t a2, ksys_
 
     block = kmm_alloc((k_size_t)size, kmm_current_priority());
     if (block == NULL) {
-        return KERR_NOSPC;
+        return 0;
     }
 
     return (k_ssize_t)(uintptr_t)block;
@@ -1302,7 +1386,7 @@ static k_ssize_t sys_realloc(ksys_arg_t ptr, ksys_arg_t size, ksys_arg_t a2, ksy
 
     block = kmm_alloc((k_size_t)size, kmm_current_priority());
     if (block == NULL) {
-        return KERR_NOSPC;
+        return 0;
     }
 
     if (old_size > 0) {
@@ -1568,8 +1652,18 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t envp, k
         return KERR_INVAL;
     }
 
-    data = kmm_alloc((k_size_t)info.size, kmm_current_priority());
+    /*
+     * The image is the largest block a call of this system asks for (up to
+     * 64 KiB), and it lives for the time of the copy, not for the life of
+     * the program. It is asked with the priority of a user buffer: on the
+     * board that is the PSRAM, so a run of programs does not fragment the
+     * internal RAM the kernel and the drivers keep, and a machine without
+     * the PSRAM has one pool and behaves as before.
+     */
+    data = kmm_alloc((k_size_t)info.size, KMM_PRIORITY_USER);
     if (data == NULL) {
+        kwarn("exec: no memory for %s (%u bytes): heap %u, psram %u", name, (unsigned)info.size,
+              (unsigned)k_port_heap_free(), (unsigned)k_port_psram_free());
         return KERR_NOMEM;
     }
 
@@ -1633,7 +1727,12 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t envp, k
         return KERR_NOEXEC;
     }
 
-    return (rc == K_EXEC_RUN_NO_MACHINE) ? KERR_NOSYS : KERR_NOMEM;
+    if (rc != K_EXEC_RUN_NO_MACHINE) {
+        kwarn("exec: the port refused the image (rc=%d)", rc);
+        return KERR_NOMEM;
+    }
+
+    return KERR_NOSYS;
 }
 #else
 /*
@@ -1682,6 +1781,14 @@ k_ssize_t ksys_call(k_u32_t number, ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2,
     if (number >= KSYS_COUNT || g_table[number].handler == NULL) {
         return KERR_NOSYS;
     }
+
+    /*
+     * The edge of a system call is a point where the task is known to be
+     * running: the processor time since the last point is charged here, so
+     * the CPU limit is accounted on every machine, including the host whose
+     * timer cannot name the task it interrupted.
+     */
+    task_cpu_tick(task_self());
 
     rc = g_table[number].handler(a0, a1, a2, a3, a4, a5);
 
@@ -1755,6 +1862,8 @@ void ksys_init(void)
     ksys_register(KSYS_KILL, "kill", sys_kill);
     ksys_register(KSYS_SIGNAL, "signal", sys_signal);
     ksys_register(KSYS_SIGRETURN, "sigreturn", sys_sigreturn);
+    ksys_register(KSYS_GETLIMIT, "getlimit", sys_getlimit);
+    ksys_register(KSYS_SETLIMIT, "setlimit", sys_setlimit);
 }
 
 /* --- the wrappers --- */
@@ -1922,4 +2031,15 @@ task_signal_fn ksys_signal(int sig, task_signal_fn handler)
     }
 
     return (task_signal_fn)(uintptr_t)rc;
+}
+
+int ksys_getlimit(k_u32_t which, k_u64_t *value)
+{
+    return (int)ksys_call(KSYS_GETLIMIT, (ksys_arg_t)which, (ksys_arg_t)(uintptr_t)value, 0, 0, 0,
+                          0);
+}
+
+int ksys_setlimit(k_u32_t which, k_u64_t value)
+{
+    return (int)ksys_call(KSYS_SETLIMIT, (ksys_arg_t)which, (ksys_arg_t)value, 0, 0, 0, 0);
 }

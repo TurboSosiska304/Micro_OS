@@ -91,10 +91,12 @@ Who answers what:
 * `port_null` - no. No memory to place an image in, no processor to jump to.
 * `port_x86_64` - yes. The window starts at 32 MiB (`0x02000000`) and ends at
   48 MiB (`0x03000000`), the heap of the port stops below it, the kernel is
-  linked at 16 MiB and the identity map of the loader covers the first
-  gigabyte. A stack of 64 KB is cut from the top of the window, so an image
-  has to end below it. At the boot the port also mounts MicroFS on a volume of
-  its own RAM (`src/blockdev_ram.c`), so the program has a file to come from.
+  linked in the higher half (`0xFFFFFFFF80000000`) and copied to 16 MiB, and
+  the identity map of the loader covers the first gigabyte for the heap, the
+  arena and the devices. A stack of 64 KB is cut from the top of the window, so
+  an image has to end below it. At the boot the port also mounts MicroFS on a
+  volume of its own RAM (`src/blockdev_ram.c`), so the program has a file to
+  come from.
 
 The answers are the point of the list: the kernel keeps a parser that is
 tested on a machine that cannot run what it parses, and the machine that can

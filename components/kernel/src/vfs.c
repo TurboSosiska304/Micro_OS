@@ -16,7 +16,6 @@ static struct mount g_mounts[VFS_MAX_MOUNTS];
 static k_size_t g_count;
 static struct vfs_fs_type g_types[VFS_MAX_TYPES];
 static k_size_t g_type_count;
-static int g_last_error;
 
 static int stat_raw(const char *path, struct vfs_stat *out);
 static int mount_point_check(const char *point);
@@ -404,17 +403,14 @@ static int stat_raw(const char *path, struct vfs_stat *out)
     int rc;
 
     if (m == NULL) {
-        g_last_error = KERR_NOENT;
         return KERR_NOENT;
     }
 
     if (out == NULL) {
-        g_last_error = KERR_INVAL;
         return KERR_INVAL;
     }
 
     if (m->ops->stat == NULL) {
-        g_last_error = KERR_NOTSUP;
         return KERR_NOTSUP;
     }
 
@@ -427,7 +423,6 @@ static int stat_raw(const char *path, struct vfs_stat *out)
     memset(out, 0, sizeof(*out));
 
     rc = m->ops->stat(m->ctx, path, out);
-    g_last_error = rc;
 
     return rc;
 }
@@ -444,12 +439,10 @@ static int statx_raw(const char *path, struct vfs_statx *out)
     int rc;
 
     if (m == NULL) {
-        g_last_error = KERR_NOENT;
         return KERR_NOENT;
     }
 
     if (out == NULL) {
-        g_last_error = KERR_INVAL;
         return KERR_INVAL;
     }
 
@@ -457,7 +450,6 @@ static int statx_raw(const char *path, struct vfs_statx *out)
 
     if (m->ops->statx != NULL) {
         rc = m->ops->statx(m->ctx, path, out);
-        g_last_error = rc;
         return rc;
     }
 
@@ -466,7 +458,6 @@ static int statx_raw(const char *path, struct vfs_statx *out)
 
         rc = m->ops->stat(m->ctx, path, &info);
         if (rc != 0) {
-            g_last_error = rc;
             return rc;
         }
 
@@ -477,11 +468,9 @@ static int statx_raw(const char *path, struct vfs_statx *out)
         out->owner = info.owner;
         out->mtime = 0;
         out->ctime = 0;
-        g_last_error = 0;
         return 0;
     }
 
-    g_last_error = KERR_NOTSUP;
     return KERR_NOTSUP;
 }
 
@@ -646,18 +635,15 @@ int vfs_open(const char *path, int flags, struct vfs_file *out, void *priv)
     int rc;
 
     if (m == NULL || out == NULL) {
-        g_last_error = KERR_NOENT;
         return KERR_NOENT;
     }
 
     if (m->ops->open == NULL) {
-        g_last_error = KERR_NOTSUP;
         return KERR_NOTSUP;
     }
 
     rc = path_search_check(path);
     if (rc != 0) {
-        g_last_error = rc;
         return rc;
     }
 
@@ -671,7 +657,6 @@ int vfs_open(const char *path, int flags, struct vfs_file *out, void *priv)
     out->flags = flags;
 
     rc = m->ops->open(m->ctx, path, flags, out);
-    g_last_error = rc;
 
     if (rc != 0) {
         out->ops = NULL;
@@ -691,17 +676,14 @@ int vfs_read(struct vfs_file *file, void *buf, k_size_t size)
 
     /* A directory is read through readdir, not as a stream of bytes. */
     if ((file->flags & VFS_O_DIRECTORY) != 0) {
-        g_last_error = KERR_ISDIR;
         return KERR_ISDIR;
     }
 
     if (file->ops->read == NULL) {
-        g_last_error = KERR_NOTSUP;
         return KERR_NOTSUP;
     }
 
     rc = file->ops->read(file->fs, file, buf, size);
-    g_last_error = rc;
 
     return rc;
 }
@@ -716,17 +698,14 @@ int vfs_write(struct vfs_file *file, const void *buf, k_size_t size)
 
     /* A directory is read through readdir and never written. */
     if ((file->flags & VFS_O_DIRECTORY) != 0) {
-        g_last_error = KERR_ISDIR;
         return KERR_ISDIR;
     }
 
     if (file->ops->write == NULL) {
-        g_last_error = KERR_NOTSUP;
         return KERR_NOTSUP;
     }
 
     rc = file->ops->write(file->fs, file, buf, size);
-    g_last_error = rc;
 
     return rc;
 }
@@ -740,12 +719,10 @@ int vfs_close(struct vfs_file *file)
     }
 
     if (file->ops->close == NULL) {
-        g_last_error = KERR_NOTSUP;
         return KERR_NOTSUP;
     }
 
     rc = file->ops->close(file->fs, file);
-    g_last_error = rc;
 
     return rc;
 }
@@ -799,7 +776,6 @@ int vfs_list(const char *path, struct vfs_dirent *out, k_size_t max, k_size_t *c
     int rc;
 
     if (out == NULL || count == NULL) {
-        g_last_error = -1;
         return -1;
     }
 
@@ -807,19 +783,16 @@ int vfs_list(const char *path, struct vfs_dirent *out, k_size_t max, k_size_t *c
 
     rc = path_search_check(path);
     if (rc != 0) {
-        g_last_error = rc;
         return rc;
     }
 
     if (m != NULL) {
         if (m->ops->list == NULL) {
-            g_last_error = KERR_NOTSUP;
             return KERR_NOTSUP;
         }
 
         rc = m->ops->list(m->ctx, path, out, max, &used);
         if (rc != 0) {
-            g_last_error = rc;
             return rc;
         }
     }
@@ -850,12 +823,10 @@ int vfs_list(const char *path, struct vfs_dirent *out, k_size_t max, k_size_t *c
     }
 
     if (m == NULL && used == 0) {
-        g_last_error = -2;
         return -2;
     }
 
     *count = used;
-    g_last_error = 0;
 
     return 0;
 }
@@ -865,7 +836,6 @@ int vfs_readdir(struct vfs_file *file, struct vfs_dirent *out, k_size_t max, k_s
     int rc;
 
     if (out == NULL || count == NULL) {
-        g_last_error = KERR_INVAL;
         return KERR_INVAL;
     }
 
@@ -878,17 +848,14 @@ int vfs_readdir(struct vfs_file *file, struct vfs_dirent *out, k_size_t max, k_s
      * directory to read.
      */
     if (file == NULL || file->ops == NULL || (file->flags & VFS_O_DIRECTORY) == 0) {
-        g_last_error = KERR_NOTDIR;
         return KERR_NOTDIR;
     }
 
     if (file->ops->readdir == NULL) {
-        g_last_error = KERR_NOTSUP;
         return KERR_NOTSUP;
     }
 
     rc = file->ops->readdir(file->fs, file, out, max, count);
-    g_last_error = rc;
 
     return rc;
 }
@@ -899,7 +866,6 @@ int vfs_stat(const char *path, struct vfs_stat *out)
 
     rc = path_search_check(path);
     if (rc != 0) {
-        g_last_error = rc;
         return rc;
     }
 
@@ -912,7 +878,6 @@ int vfs_statx(const char *path, struct vfs_statx *out)
 
     rc = path_search_check(path);
     if (rc != 0) {
-        g_last_error = rc;
         return rc;
     }
 
@@ -925,23 +890,19 @@ int vfs_mkdir(const char *path)
     int rc;
 
     if (m == NULL) {
-        g_last_error = KERR_NOENT;
         return KERR_NOENT;
     }
 
     rc = path_search_check(path);
     if (rc != 0) {
-        g_last_error = rc;
         return rc;
     }
 
     if (m->ops->mkdir == NULL) {
-        g_last_error = KERR_NOTSUP;
         return KERR_NOTSUP;
     }
 
     rc = m->ops->mkdir(m->ctx, path);
-    g_last_error = rc;
 
     return rc;
 }
@@ -954,13 +915,11 @@ int vfs_mkdir_p(const char *path)
     int rc;
 
     if (path == NULL) {
-        g_last_error = -1;
         return -1;
     }
 
     len = strlen(path);
     if (len == 0 || len >= sizeof(buffer)) {
-        g_last_error = -1;
         return -1;
     }
 
@@ -979,7 +938,6 @@ int vfs_mkdir_p(const char *path)
         buffer[i] = saved;
 
         if (rc != 0 && rc != -3) {
-            g_last_error = rc;
             return rc;
         }
     }
@@ -993,17 +951,14 @@ int vfs_statfs(const char *path, struct vfs_statfs *out)
     int rc;
 
     if (m == NULL || out == NULL) {
-        g_last_error = KERR_NOENT;
         return KERR_NOENT;
     }
 
     if (m->ops->statfs == NULL) {
-        g_last_error = KERR_NOTSUP;
         return KERR_NOTSUP;
     }
 
     rc = m->ops->statfs(m->ctx, out);
-    g_last_error = rc;
 
     return rc;
 }
@@ -1014,23 +969,19 @@ int vfs_unlink(const char *path)
     int rc;
 
     if (m == NULL) {
-        g_last_error = KERR_NOENT;
         return KERR_NOENT;
     }
 
     rc = path_search_check(path);
     if (rc != 0) {
-        g_last_error = rc;
         return rc;
     }
 
     if (m->ops->unlink == NULL) {
-        g_last_error = KERR_NOTSUP;
         return KERR_NOTSUP;
     }
 
     rc = m->ops->unlink(m->ctx, path);
-    g_last_error = rc;
 
     return rc;
 }
@@ -1041,13 +992,11 @@ int vfs_chmod(const char *path, k_u32_t mode)
     int rc;
 
     if (m == NULL) {
-        g_last_error = KERR_NOENT;
         return KERR_NOENT;
     }
 
     rc = path_search_check(path);
     if (rc != 0) {
-        g_last_error = rc;
         return rc;
     }
 
@@ -1058,12 +1007,10 @@ int vfs_chmod(const char *path, k_u32_t mode)
      * caller.
      */
     if (m->ops->chmod == NULL) {
-        g_last_error = KERR_NOTSUP;
         return KERR_NOTSUP;
     }
 
     rc = m->ops->chmod(m->ctx, path, mode);
-    g_last_error = rc;
 
     return rc;
 }
@@ -1074,23 +1021,19 @@ int vfs_chown(const char *path, k_u32_t owner)
     int rc;
 
     if (m == NULL) {
-        g_last_error = KERR_NOENT;
         return KERR_NOENT;
     }
 
     rc = path_search_check(path);
     if (rc != 0) {
-        g_last_error = rc;
         return rc;
     }
 
     if (m->ops->chown == NULL) {
-        g_last_error = KERR_NOTSUP;
         return KERR_NOTSUP;
     }
 
     rc = m->ops->chown(m->ctx, path, owner);
-    g_last_error = rc;
 
     return rc;
 }

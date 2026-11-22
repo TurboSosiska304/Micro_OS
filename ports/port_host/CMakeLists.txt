@@ -43,6 +43,7 @@ target_link_libraries(microos_sim PRIVATE
     microos_init
     microos_kshell
     microos_graphics
+    microos_net
     microos_port_host
     microos_kernel
     microos_kshell

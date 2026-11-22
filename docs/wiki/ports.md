@@ -1,7 +1,10 @@
 # Ports
 
-A port is a directory that implements the contract of `kernel/port/*.h`; a
-board is a description of a machine plus the drivers of its chips. The kernel
+A port is a directory that implements the contract of `kernel/port/*.h` on a
+machine; a board is a description of a machine plus the drivers of its chips.
+Two of the four implementations are ports - the board and x86-64; the **host**
+is the substrate of the tests and the simulator, and the **null** is the shape
+of the contract with no machine under it (ADR 0004). The kernel
 in `components/kernel/` includes nothing of a platform, and `make integrity`
 fails when it tries. That is why the same sources build as a Linux process, as
 a bare-metal x86-64 machine and as the firmware of the board; the reasoning is
@@ -47,15 +50,19 @@ tools/device-test.sh /dev/ttyACM0      # build, flash, read, RESULT: PASS
 
 What works: the boot with the self test and the hardware doctor, the console on
 the UART and on the TFT, MicroFS on the flash, `/log/start.log`, the scripts of
-`/etc/init.d`, the drivers (display, buttons, buzzer, LED, IMU, RTC, battery,
-microphone, WiFi), `telnet` on port 23, `httpd`, `mqtt`, `http` and `ntp`.
+`/etc/init.d`, the drivers (display, buttons, buzzer, LED, IR on the pin of the
+LED, IMU, RTC, battery, microphone, sound detector, WiFi), deep sleep with the
+wake of the timer, of BUTTON C and of the RTC alarm, `telnet` on port 23,
+`httpd`, `mqtt`, `http` and `ntp`.
 
 What does not: memory protection (`fork()` is the placeholder of a machine
-without an MMU), running a program out of the flash, OTA, the IR driver, the
-sound detector, the enclosure modes, a second user. The RTC alarm turns the
-board on from off; it does not wake a chip that is already asleep (the INT is
-wired to the power latch, the notes say so). The flash is 8 MB: `factory` 2 MB and
-MicroFS 5.75 MB, with no OTA slot. The details, the pins and the quirks are in
+without an MMU), running a program out of the flash, OTA, an IR receiver (the
+board carries the emitter only; `ir rx` waits for an element on G26), the
+enclosure modes, a second user. The alarm of the BM8563 turns the board on from
+off; a sleeping board obeys it because the firmware sets the timer of the chip
+for the moment of the match, not because the INT of the clock is a wake line.
+The flash is 8 MB: `factory` 2 MB and MicroFS 5.75 MB, with no OTA slot. The
+details, the pins and the quirks are in
 [`docs/ports/esp32/README.md`](../ports/esp32/README.md) and
 [`docs/ports/esp32/hardware.md`](../ports/esp32/hardware.md).
 
@@ -63,8 +70,9 @@ MicroFS 5.75 MB, with no OTA slot. The details, the pins and the quirks are in
 
 A machine with no operating system under it: no libc, no POSIX, no firmware.
 The loader is a multiboot image that QEMU takes with `-kernel`; it copies the
-kernel to 16 MiB, builds the identity map of the first gigabyte and turns long
-mode on.
+kernel to 16 MiB, maps the same bytes at `0xFFFFFFFF80000000` - the higher half
+where the image is linked - builds the identity map of the first gigabyte and
+turns long mode on.
 
 ```bash
 make x86-build
@@ -76,7 +84,8 @@ make x86-smoke          # boot and check the transcript
 What works: the VGA text console and COM1 out of one `k_port_write()`, the
 PS/2 keyboard, the PIT, the context switch, the scheduler, paging and ring 3,
 NX/W^X (the text of the kernel and of a program is read-only code, every data
-page and stack is NX, and the boot audits the tables),
+page and stack is NX, and the boot audits the tables), the kernel in the
+higher half at `0xFFFFFFFF80000000` (ADR 0007),
 `execve` with `MOX1` images, `fork()` with copy on write, MicroFS on the first
 partition of an ATA disk (or on 512 KB of RAM without one), the modes and the
 owners, and the network: a virtio-net card, ARP, ICMP, UDP, a client and a
@@ -85,7 +94,7 @@ machine of [`programs.md`](programs.md) and the proof that the kernel is
 portable.
 
 What does not: the key-value store (no `/etc` to persist), a second disk, DMA,
-the kernel in a higher half, SMAP/SMEP (a documented decision, ADR 0007), and
+SMAP/SMEP (a documented decision, ADR 0007), and
 the parts of the network that wait for a real link: DHCP, IPv6 and a
 congestion window. The details are in
 [`docs/ports/x86_64/README.md`](../ports/x86_64/README.md).
@@ -126,7 +135,8 @@ complete. The details are in
 
 * [build.md](build.md) - the commands and the dependencies of each build.
 * [testing.md](testing.md) - what each machine is checked with.
-* [programs.md](programs.md) - why only x86-64 runs a program.
-* [`docs/porting.md`](../porting.md) - bringing the kernel to another machine.
+* [programs.md](programs.md) - why only x86-64 runs a program with protection.
+* [porting.md](porting.md) - the contract, the bring-up order and the checks.
+* [`docs/porting.md`](../porting.md) - bringing the kernel to another machine, in full.
 
 [Back to the wiki index](README.md)

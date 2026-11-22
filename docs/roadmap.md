@@ -145,8 +145,14 @@ written when the project was an operating system for one board; the numbers
       shell and Ctrl+C of the foreground program (`/bin/signals` in
       `make x86-smoke`, ADR 0015). No job control: there are no groups and
       the shell says so.
-* [ ] The kernel in a higher half: the plan of the loader, the linker script
-      and `page_phys()` is written down in ADR 0007, not taken
+* [x] The kernel in a higher half: the image is linked at
+      `0xFFFFFFFF80000000` and the loader copies it to 16 MiB and maps the
+      same bytes at the top, with `-mcmodel=kernel` for the C, `page_phys()`
+      as `virtual - KERNEL_BASE + KERNEL_PHYS`, the GDT, the TSS, the IDT and
+      the stacks high, and a program's space naming the kernel's high half as
+      supervisor-only. The W^X audit walks both halves and `make x86-smoke`
+      checks the link address against the ELF (ADR 0007, "The higher half:
+      taken")
 * [ ] A port for a real ARM with an MMU: the same contract, a second `arch/`
 * [ ] `KERNEL_NOMMU` becomes 0 and the concessions become features
 
@@ -172,6 +178,18 @@ written when the project was an operating system for one board; the numbers
       cut, the second of two names of one cluster gives it up, a broken run
       of long names is removed and its 8.3 name kept, and a size that does
       not match its chain is put right; the check runs again afterwards
+* [x] Crash consistency of MicroFS: `fsck -y` (or `--repair`) repairs what the
+      format itself proves - an orphan block goes back to the free map, an
+      entry that names a free record or a name no path can reach is removed,
+      an entry whose record disagrees with it about the type takes the type
+      of the record, a chain that loops or leaves the data section is cut,
+      the second of two objects that share a block gives it up (the first
+      owner of the walk of the tree keeps it), a size that does not match its
+      chain is put right in both directions, the counter of the entries of a
+      directory is counted again, and a record that no name reaches - the
+      half-written create or unlink - is freed with its blocks; the check runs
+      again afterwards, and the header, the data of a file and a shared
+      directory stay `(not repaired)` for a person
 * [ ] A journal or a cache of the changes under a write
 * [x] ext2, the reader with inodes and a superblock a checker can walk
       (ADR 0019): the superblock, the group descriptors, the inode table,
@@ -219,7 +237,10 @@ written when the project was an operating system for one board; the numbers
       network components, the defaults per build, `make test-minimal` and
       the check of the map
 
-## K8 - Many cores (planned)
+## K8 - Many cores (planned, after 1.0)
+
+> Not a gate of 1.0 (ADR 0012, updated): the release promises a correct
+> single-core kernel; the second core is the first project after it.
 
 * [ ] A `struct k_cpu` per core and a run queue per core; the scheduler never
       runs one task on two cores (ADR 0012)
@@ -259,3 +280,33 @@ written when the project was an operating system for one board; the numbers
 * [x] Programs are files on a filesystem of the disk, and a program is added
       by writing a file of the volume (`make x86-disk`), not by embedding it
       in the kernel
+
+## The road to 2.0
+
+> [`docs/releases/2.0.md`](releases/2.0.md) is the direction of the first
+> number that may break a contract of 1.0: a machine a person changes from
+> the machine itself - settings, programs, services and the system - without
+> rebuilding an image. The flags of the build stay build-time. It is a
+> direction, not a gate.
+
+## K10 - The settings of a machine (planned, after 1.0)
+
+> The board, the x86-64 machine and the host already keep a few settings as
+> files of `/etc`; the screen and the font are the next ones, in a file per
+> system (ADR 0021). The feature is not a gate of 1.0.
+
+* [ ] A file per system in `/etc` (`display`, `font`, `console`, `time`,
+      `net`): `key=value`, comments, a bounded parser, a key the system does
+      not know kept and reported once
+* [ ] The store keeps the text of a system file, so a format brings the
+      settings back as it brings the other files of `/etc`
+* [ ] An applier per system, called at the boot in the order of the machine:
+      the display and the font before the first frame, the console before the
+      shell
+* [ ] `config set`, `config get` and `config sync` over a system file, and a
+      setting a machine cannot honour kept and ignored with a warning
+* [ ] The screen and the font: rotation, brightness, inversion, the scale of
+      the 5x7 font and the theme; the VGA of x86-64 where it can, the panel of
+      the board everywhere
+* [ ] A table of the keys per machine in the wiki, with a test that every key
+      of the file is either applied or reported

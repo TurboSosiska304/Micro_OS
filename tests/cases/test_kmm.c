@@ -497,6 +497,44 @@ static void test_two_tasks_alloc(void)
     KT_CHECK_INT_EQ(g_hammer_failed, 0);
 }
 
+/*
+ * The property: a user block is charged to the task that allocated it and
+ * the charge goes away with the block; a kernel block is not charged, because
+ * the limit of a task never decides the memory of the kernel.
+ */
+static void test_task_memory_accounting(void)
+{
+    struct task *self = task_self();
+    void *user_block;
+    void *kernel_block;
+    k_u64_t before;
+
+    ktest_begin("kmm: a user block is charged to the task");
+
+    kmm_init();
+
+    before = (self != NULL) ? self->mem_used : 0u;
+
+    user_block = kmm_alloc(100, KMM_PRIORITY_USER);
+    KT_CHECK(user_block != NULL);
+    if (self != NULL) {
+        KT_CHECK_INT_EQ((int)self->mem_used, (int)before + 100);
+    }
+
+    kernel_block = kmm_alloc(100, KMM_PRIORITY_KERNEL);
+    KT_CHECK(kernel_block != NULL);
+    if (self != NULL) {
+        KT_CHECK_INT_EQ((int)self->mem_used, (int)before + 100);
+    }
+
+    kmm_free(kernel_block);
+    kmm_free(user_block);
+
+    if (self != NULL) {
+        KT_CHECK_INT_EQ((int)self->mem_used, (int)before);
+    }
+}
+
 void test_kmm(void)
 {
     test_alloc_free();
@@ -510,4 +548,5 @@ void test_kmm(void)
     test_small_blocks_follow_the_priority();
     test_large_blocks();
     test_two_tasks_alloc();
+    test_task_memory_accounting();
 }

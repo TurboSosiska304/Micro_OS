@@ -10,22 +10,31 @@
 #include "ktest.h"
 #include "tests/tests.h"
 
+#include <ctype.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "kernel/config.h"
 #include "kernel/errno.h"
+#include "kernel/exec.h"
 #include "kernel/ksys.h"
 #include "kernel/log.h"
+#include "kernel/sched.h"
+#include "kernel/signal.h"
 #include "kernel/task.h"
+#include "kernel/vfs.h"
 #include "mfs/mfs.h"
 #include "mfs/mfs_ram_device.h"
 #include "mfs/mfs_vfs.h"
 
-/* The corpus of the tests: the path comes from the build system. */
+/* The corpus of the tests: the paths come from the build system. */
 #ifndef KTEST_CORPUS
 #define KTEST_CORPUS "tests/corpus/vectors.txt"
+#endif
+#ifndef KTEST_ABI_GOLDEN
+#define KTEST_ABI_GOLDEN "tests/corpus/abi.txt"
 #endif
 
 #define CORPUS_MAX 8192
@@ -280,17 +289,18 @@ static void test_abi_is_stable(void)
         k_u32_t number;
         const char *name;
     } golden[] = {
-        {KSYS_EXIT, "exit"},       {KSYS_READ, "read"},           {KSYS_WRITE, "write"},
-        {KSYS_OPEN, "open"},       {KSYS_CLOSE, "close"},         {KSYS_STAT, "stat"},
-        {KSYS_LSEEK, "lseek"},     {KSYS_UNLINK, "unlink"},       {KSYS_MKDIR, "mkdir"},
-        {KSYS_READDIR, "readdir"}, {KSYS_GETPID, "getpid"},       {KSYS_GETCWD, "getcwd"},
-        {KSYS_IOCTL, "ioctl"},     {KSYS_YIELD, "yield"},         {KSYS_SLEEP, "sleep"},
-        {KSYS_UPTIME, "uptime"},   {KSYS_REBOOT, "reboot"},       {KSYS_FORK, "fork"},
-        {KSYS_GETPPID, "getppid"}, {KSYS_WAITPID, "waitpid"},     {KSYS_MALLOC, "malloc"},
-        {KSYS_FREE, "free"},       {KSYS_REALLOC, "realloc"},     {KSYS_CHMOD, "chmod"},
-        {KSYS_CHOWN, "chown"},     {KSYS_EXECVE, "execve"},       {KSYS_STATX, "statx"},
-        {KSYS_PIPE, "pipe"},       {KSYS_DUP2, "dup2"},           {KSYS_KILL, "kill"},
-        {KSYS_SIGNAL, "signal"},   {KSYS_SIGRETURN, "sigreturn"},
+        {KSYS_EXIT, "exit"},         {KSYS_READ, "read"},           {KSYS_WRITE, "write"},
+        {KSYS_OPEN, "open"},         {KSYS_CLOSE, "close"},         {KSYS_STAT, "stat"},
+        {KSYS_LSEEK, "lseek"},       {KSYS_UNLINK, "unlink"},       {KSYS_MKDIR, "mkdir"},
+        {KSYS_READDIR, "readdir"},   {KSYS_GETPID, "getpid"},       {KSYS_GETCWD, "getcwd"},
+        {KSYS_IOCTL, "ioctl"},       {KSYS_YIELD, "yield"},         {KSYS_SLEEP, "sleep"},
+        {KSYS_UPTIME, "uptime"},     {KSYS_REBOOT, "reboot"},       {KSYS_FORK, "fork"},
+        {KSYS_GETPPID, "getppid"},   {KSYS_WAITPID, "waitpid"},     {KSYS_MALLOC, "malloc"},
+        {KSYS_FREE, "free"},         {KSYS_REALLOC, "realloc"},     {KSYS_CHMOD, "chmod"},
+        {KSYS_CHOWN, "chown"},       {KSYS_EXECVE, "execve"},       {KSYS_STATX, "statx"},
+        {KSYS_PIPE, "pipe"},         {KSYS_DUP2, "dup2"},           {KSYS_KILL, "kill"},
+        {KSYS_SIGNAL, "signal"},     {KSYS_SIGRETURN, "sigreturn"}, {KSYS_GETLIMIT, "getlimit"},
+        {KSYS_SETLIMIT, "setlimit"},
     };
     size_t i;
 
@@ -313,6 +323,554 @@ static void test_abi_is_stable(void)
 
     /* An unknown call has to be refused, not guessed. */
     KT_CHECK_INT_EQ(ksys_call(0xFFFF, 0, 0, 0, 0, 0, 0), KERR_NOSYS);
+
+    teardown();
+}
+
+/*
+ * The recorded ABI (tests/corpus/abi.txt).
+ *
+ * The table above says what the numbers of the calls are; the file says what
+ * the whole of the ABI is: the calls with their arity and result, the numbers
+ * of the errors, the flags, the limits and the layout of every structure that
+ * crosses the door. The two have to agree. A number that moves, a flag that is
+ * reused or a field that is added in the middle of a structure fails a check
+ * here until the file is changed with it, which is what makes a release of
+ * this system a promise to the programs that were built for it.
+ *
+ * The file is the record and the test is its reader: the tables below name
+ * every constant the file may contain, so a name the test does not know is as
+ * much of a failure as a name the file forgot. The arity and the result are
+ * documentation of a signature that the compiler checks through the
+ * prototypes of kernel/ksys.h; everything else is compared with the running
+ * kernel.
+ */
+#define ABI_NAME_MAX 32
+#define ABI_KSYS_MAX 64
+#define ABI_CONST_MAX 96
+#define ABI_LAYOUT_MAX 160
+#define ABI_LINE_MAX 160
+
+struct abi_call {
+    k_u32_t number;
+    char name[ABI_NAME_MAX];
+    int arity;
+    char result[ABI_NAME_MAX];
+};
+
+struct abi_value {
+    char name[ABI_NAME_MAX];
+    long long value;
+};
+
+struct abi_layout {
+    int width;
+    int is_offset; /* the file says "offset" and not "size" */
+    char object[ABI_NAME_MAX];
+    char field[ABI_NAME_MAX];
+    long long value;
+};
+
+static struct abi_call g_abi_calls[ABI_KSYS_MAX];
+static k_size_t g_abi_call_count;
+static struct abi_value g_abi_values[ABI_CONST_MAX];
+static k_size_t g_abi_value_count;
+static struct abi_layout g_abi_layouts[ABI_LAYOUT_MAX];
+static k_size_t g_abi_layout_count;
+static int g_abi_count_seen;
+static long long g_abi_count;
+
+/* One record of the layout of a structure, as the test knows it. */
+struct abi_field {
+    const char *name;
+    k_size_t offset;
+};
+
+struct abi_object {
+    const char *name;
+    k_size_t size;
+    const struct abi_field *fields;
+    k_size_t field_count;
+};
+
+static const struct abi_field g_vfs_stat_fields[] = {
+    {"inode", offsetof(struct vfs_stat, inode)}, {"type", offsetof(struct vfs_stat, type)},
+    {"size", offsetof(struct vfs_stat, size)},   {"mode", offsetof(struct vfs_stat, mode)},
+    {"owner", offsetof(struct vfs_stat, owner)},
+};
+
+static const struct abi_field g_vfs_statx_fields[] = {
+    {"inode", offsetof(struct vfs_statx, inode)}, {"type", offsetof(struct vfs_statx, type)},
+    {"size", offsetof(struct vfs_statx, size)},   {"mode", offsetof(struct vfs_statx, mode)},
+    {"owner", offsetof(struct vfs_statx, owner)}, {"mtime", offsetof(struct vfs_statx, mtime)},
+    {"ctime", offsetof(struct vfs_statx, ctime)},
+};
+
+static const struct abi_field g_vfs_dirent_fields[] = {
+    {"name", offsetof(struct vfs_dirent, name)},
+    {"inode", offsetof(struct vfs_dirent, inode)},
+    {"type", offsetof(struct vfs_dirent, type)},
+    {"size", offsetof(struct vfs_dirent, size)},
+};
+
+static const struct abi_field g_k_exec_image_fields[] = {
+    {"data", offsetof(struct k_exec_image, data)},
+    {"size", offsetof(struct k_exec_image, size)},
+    {"arch", offsetof(struct k_exec_image, arch)},
+    {"entry", offsetof(struct k_exec_image, entry)},
+    {"text_size", offsetof(struct k_exec_image, text_size)},
+    {"data_size", offsetof(struct k_exec_image, data_size)},
+    {"bss_size", offsetof(struct k_exec_image, bss_size)},
+    {"envp", offsetof(struct k_exec_image, envp)},
+};
+
+static const struct abi_object g_abi_objects[] = {
+    {"ksys_arg_t", sizeof(ksys_arg_t), NULL, 0},
+    {"vfs_stat", sizeof(struct vfs_stat), g_vfs_stat_fields, K_ARRAY_SIZE(g_vfs_stat_fields)},
+    {"vfs_statx", sizeof(struct vfs_statx), g_vfs_statx_fields, K_ARRAY_SIZE(g_vfs_statx_fields)},
+    {"vfs_dirent", sizeof(struct vfs_dirent), g_vfs_dirent_fields,
+     K_ARRAY_SIZE(g_vfs_dirent_fields)},
+    {"k_exec_image", sizeof(struct k_exec_image), g_k_exec_image_fields,
+     K_ARRAY_SIZE(g_k_exec_image_fields)},
+};
+
+/*
+ * The constants the record may name, with the value the running kernel has.
+ * A constant of the ABI that is added to the kernel is added here and to the
+ * file in the same change; one that is removed goes from both.
+ */
+static const struct abi_value g_abi_known_values[] = {
+    {"KERR_NONE", KERR_NONE},
+    {"KERR_PERM", KERR_PERM},
+    {"KERR_NOENT", KERR_NOENT},
+    {"KERR_SRCH", KERR_SRCH},
+    {"KERR_EXIST", KERR_EXIST},
+    {"KERR_INTR", KERR_INTR},
+    {"KERR_IO", KERR_IO},
+    {"KERR_TOOBIG", KERR_TOOBIG},
+    {"KERR_NOEXEC", KERR_NOEXEC},
+    {"KERR_BADF", KERR_BADF},
+    {"KERR_CHILD", KERR_CHILD},
+    {"KERR_AGAIN", KERR_AGAIN},
+    {"KERR_NOMEM", KERR_NOMEM},
+    {"KERR_FAULT", KERR_FAULT},
+    {"KERR_BUSY", KERR_BUSY},
+    {"KERR_NOSYS", KERR_NOSYS},
+    {"KERR_NOTDIR", KERR_NOTDIR},
+    {"KERR_ISDIR", KERR_ISDIR},
+    {"KERR_INVAL", KERR_INVAL},
+    {"KERR_NOSPC", KERR_NOSPC},
+    {"KERR_SPIPE", KERR_SPIPE},
+    {"KERR_PIPE", KERR_PIPE},
+    {"KERR_NAMETOOLONG", KERR_NAMETOOLONG},
+    {"KERR_NOTEMPTY", KERR_NOTEMPTY},
+    {"KERR_NOTSUP", KERR_NOTSUP},
+    {"KSYS_O_RDONLY", KSYS_O_RDONLY},
+    {"KSYS_O_WRONLY", KSYS_O_WRONLY},
+    {"KSYS_O_RDWR", KSYS_O_RDWR},
+    {"KSYS_O_CREAT", KSYS_O_CREAT},
+    {"KSYS_O_TRUNC", KSYS_O_TRUNC},
+    {"KSYS_O_APPEND", KSYS_O_APPEND},
+    {"KSYS_O_DIRECTORY", KSYS_O_DIRECTORY},
+    {"KSYS_O_ACCMODE", KSYS_O_ACCMODE},
+    {"KSYS_O_ALLOWED", KSYS_O_ALLOWED},
+    {"KSYS_WNOHANG", KSYS_WNOHANG},
+    {"KSYS_MODE_MASK", KSYS_MODE_MASK},
+    {"KSYS_UID", KSYS_UID},
+    {"KSYS_UID_MAX", KSYS_UID_MAX},
+    {"KSYS_SEEK_SET", KSYS_SEEK_SET},
+    {"KSYS_SEEK_CUR", KSYS_SEEK_CUR},
+    {"KSYS_SEEK_END", KSYS_SEEK_END},
+    {"KSYS_SIGINT", KSYS_SIGINT},
+    {"KSYS_SIGPIPE", KSYS_SIGPIPE},
+    {"KSYS_SIGTERM", KSYS_SIGTERM},
+    {"KSYS_SIGCHLD", KSYS_SIGCHLD},
+    {"KSYS_SIG_DFL", KSYS_SIG_DFL},
+    {"KSYS_SIG_IGN", KSYS_SIG_IGN},
+    {"KSYS_PATH_MAX", KSYS_PATH_MAX},
+    {"KSYS_MAX_IO", KSYS_MAX_IO},
+    {"K_EXEC_MAGIC", K_EXEC_MAGIC},
+    {"K_EXEC_VERSION", K_EXEC_VERSION},
+    {"K_EXEC_HEADER_SIZE", K_EXEC_HEADER_SIZE},
+    {"K_EXEC_ARCH_X86_64", K_EXEC_ARCH_X86_64},
+    {"K_EXEC_ARCH_XTENSA", K_EXEC_ARCH_XTENSA},
+    {"K_EXEC_BSS_MAX", K_EXEC_BSS_MAX},
+};
+
+/*
+ * A comparison of the golden test prints the name of the record: the number
+ * of the line of the test says which table failed, and this says which
+ * constant, which call or which field of it.
+ */
+static void abi_expect(const char *what, long long actual, long long expected)
+{
+    ktest_checks++;
+
+    if (actual != expected) {
+        ktest_fail(__FILE__, __LINE__, "%s: %lld, expected %lld", what, actual, expected);
+    }
+}
+
+static void abi_expect_str(const char *what, const char *actual, const char *expected)
+{
+    ktest_checks++;
+
+    if (actual == NULL || expected == NULL || strcmp(actual, expected) != 0) {
+        ktest_fail(__FILE__, __LINE__, "%s: \"%s\", expected \"%s\"", what,
+                   actual != NULL ? actual : "(null)", expected != NULL ? expected : "(null)");
+    }
+}
+
+/* The words of a result of a call, which the file may use. */
+static int abi_result_known(const char *word)
+{
+    static const char *const words[] = {
+        "int", "ssize", "u32", "u64", "ptr", "void", "never", "resumed",
+    };
+    k_size_t i;
+
+    for (i = 0; i < K_ARRAY_SIZE(words); i++) {
+        if (strcmp(word, words[i]) == 0) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+/*
+ * Read the record into the tables above. Every line is one of five shapes;
+ * a line of another shape is a change of the file that the test has to learn,
+ * so it is reported instead of being skipped.
+ */
+static int abi_load(void)
+{
+    FILE *file = fopen(KTEST_ABI_GOLDEN, "r");
+    char line[ABI_LINE_MAX];
+    int errors = 0;
+
+    if (file == NULL) {
+        return -1;
+    }
+
+    g_abi_call_count = 0;
+    g_abi_value_count = 0;
+    g_abi_layout_count = 0;
+    g_abi_count_seen = 0;
+    g_abi_count = -1;
+
+    while (fgets(line, sizeof(line), file) != NULL) {
+        char *comment = strchr(line, '#');
+        char first[ABI_NAME_MAX] = {0};
+
+        if (comment != NULL) {
+            *comment = '\0';
+        }
+
+        if (sscanf(line, "%31s", first) != 1) {
+            continue;
+        }
+
+        if (strcmp(first, "count") == 0) {
+            if (sscanf(line, "count %lld", &g_abi_count) != 1) {
+                errors++;
+            }
+            g_abi_count_seen++;
+        } else if (strcmp(first, "ksys") == 0) {
+            struct abi_call *call;
+
+            if (g_abi_call_count >= K_ARRAY_SIZE(g_abi_calls)) {
+                errors++;
+                continue;
+            }
+
+            call = &g_abi_calls[g_abi_call_count];
+            if (sscanf(line, "ksys %u %31s %d %31s", &call->number, call->name, &call->arity,
+                       call->result) != 4) {
+                errors++;
+                continue;
+            }
+            g_abi_call_count++;
+        } else if (strcmp(first, "const") == 0) {
+            struct abi_value *value;
+
+            if (g_abi_value_count >= K_ARRAY_SIZE(g_abi_values)) {
+                errors++;
+                continue;
+            }
+
+            value = &g_abi_values[g_abi_value_count];
+            if (sscanf(line, "const %31s %lld", value->name, &value->value) != 2) {
+                errors++;
+                continue;
+            }
+            g_abi_value_count++;
+        } else if (strcmp(first, "size") == 0 || strcmp(first, "offset") == 0) {
+            struct abi_layout *layout;
+
+            if (g_abi_layout_count >= K_ARRAY_SIZE(g_abi_layouts)) {
+                errors++;
+                continue;
+            }
+
+            layout = &g_abi_layouts[g_abi_layout_count];
+            layout->is_offset = (strcmp(first, "offset") == 0);
+            layout->field[0] = '\0';
+
+            if (layout->is_offset) {
+                if (sscanf(line, "offset %d %31s %31s %lld", &layout->width, layout->object,
+                           layout->field, &layout->value) != 4) {
+                    errors++;
+                    continue;
+                }
+            } else {
+                if (sscanf(line, "size %d %31s %lld", &layout->width, layout->object,
+                           &layout->value) != 3) {
+                    errors++;
+                    continue;
+                }
+            }
+            g_abi_layout_count++;
+        } else {
+            /* A shape the test does not read: the file and the reader have to
+             * grow together. */
+            errors++;
+        }
+    }
+
+    fclose(file);
+
+    return (errors == 0 && g_abi_call_count > 0 && g_abi_count_seen == 1) ? 0 : -1;
+}
+
+static const struct abi_value *abi_known_value(const char *name)
+{
+    k_size_t i;
+
+    for (i = 0; i < K_ARRAY_SIZE(g_abi_known_values); i++) {
+        if (strcmp(g_abi_known_values[i].name, name) == 0) {
+            return &g_abi_known_values[i];
+        }
+    }
+
+    return NULL;
+}
+
+static const struct abi_object *abi_object(const char *name)
+{
+    k_size_t i;
+
+    for (i = 0; i < K_ARRAY_SIZE(g_abi_objects); i++) {
+        if (strcmp(g_abi_objects[i].name, name) == 0) {
+            return &g_abi_objects[i];
+        }
+    }
+
+    return NULL;
+}
+
+static const struct abi_field *abi_field(const struct abi_object *object, const char *name)
+{
+    k_size_t i;
+
+    for (i = 0; i < object->field_count; i++) {
+        if (strcmp(object->fields[i].name, name) == 0) {
+            return &object->fields[i];
+        }
+    }
+
+    return NULL;
+}
+
+/* The calls of the record: number, name, arity and result, against the table
+ * of the kernel and against the table above. */
+static void abi_check_calls(void)
+{
+    k_u32_t number;
+    k_size_t i;
+
+    abi_expect("the number of the calls", g_abi_count, KSYS_COUNT);
+    abi_expect("ksys_count()", ksys_count(), KSYS_COUNT);
+
+    for (i = 0; i < g_abi_call_count; i++) {
+        const struct abi_call *call = &g_abi_calls[i];
+
+        abi_expect("the number of a recorded call", call->number, i);
+        if (call->number >= KSYS_COUNT) {
+            continue;
+        }
+
+        abi_expect_str(call->name, ksys_name(call->number), call->name);
+        abi_expect(call->name, call->arity >= 0 && call->arity <= 6, 1);
+        abi_expect(call->name, abi_result_known(call->result), 1);
+    }
+
+    /* Every number is recorded exactly once: a call the file forgot, or two
+     * records of one number, is a failure and not a gap to be filled. */
+    for (number = 0; number < KSYS_COUNT; number++) {
+        k_size_t seen = 0;
+
+        for (i = 0; i < g_abi_call_count; i++) {
+            if (g_abi_calls[i].number == number) {
+                seen++;
+            }
+        }
+
+        abi_expect(ksys_name(number), seen, 1);
+    }
+}
+
+/* The constants: every record of the file is a name the test knows, and every
+ * name the test knows is in the file. */
+static void abi_check_values(void)
+{
+    k_size_t i;
+    k_size_t j;
+
+    for (i = 0; i < g_abi_value_count; i++) {
+        const struct abi_value *value = &g_abi_values[i];
+        const struct abi_value *known = abi_known_value(value->name);
+
+        if (known == NULL) {
+            ktest_checks++;
+            ktest_fail(__FILE__, __LINE__, "%s: the name is not of the ABI of the test",
+                       value->name);
+            continue;
+        }
+
+        abi_expect(value->name, value->value, known->value);
+    }
+
+    for (i = 0; i < K_ARRAY_SIZE(g_abi_known_values); i++) {
+        k_size_t seen = 0;
+
+        for (j = 0; j < g_abi_value_count; j++) {
+            if (strcmp(g_abi_values[j].name, g_abi_known_values[i].name) == 0) {
+                seen++;
+            }
+        }
+
+        abi_expect(g_abi_known_values[i].name, seen, 1);
+    }
+}
+
+/* The layout: the record of the width of this machine is compared with the
+ * structures, and the record of the other width has to be there too - the
+ * file is the record of the board as well as of the host. */
+static void abi_check_layout(void)
+{
+    const int width = (int)sizeof(void *);
+    const int other = (width == 8) ? 4 : 8;
+    k_size_t i;
+
+    for (i = 0; i < g_abi_layout_count; i++) {
+        const struct abi_layout *layout = &g_abi_layouts[i];
+        const struct abi_object *object;
+
+        /* The record names the two machines of the ABI, and nothing else. */
+        if (layout->width != width && layout->width != other) {
+            ktest_checks++;
+            ktest_fail(__FILE__, __LINE__, "%s: the width %d is not a machine of the ABI",
+                       layout->object, layout->width);
+            continue;
+        }
+
+        object = abi_object(layout->object);
+        if (object == NULL) {
+            ktest_checks++;
+            ktest_fail(__FILE__, __LINE__, "%s: the name is not of the ABI of the test",
+                       layout->object);
+            continue;
+        }
+
+        if (layout->is_offset && abi_field(object, layout->field) == NULL) {
+            ktest_checks++;
+            ktest_fail(__FILE__, __LINE__, "%s.%s: the field is not of the structure", object->name,
+                       layout->field);
+            continue;
+        }
+
+        /* The names of the other machine are checked as well - a record of the
+         * board with a misspelt field is a record nobody can follow - but its
+         * numbers belong to the build of the board, not to this one. */
+        if (layout->width != width) {
+            continue;
+        }
+
+        if (!layout->is_offset) {
+            abi_expect(object->name, layout->value, (long long)object->size);
+            continue;
+        }
+
+        abi_expect(layout->field, layout->value,
+                   (long long)abi_field(object, layout->field)->offset);
+    }
+
+    /* Every structure and every field of it is recorded, on both machines. */
+    for (i = 0; i < K_ARRAY_SIZE(g_abi_objects); i++) {
+        const struct abi_object *object = &g_abi_objects[i];
+        k_size_t j;
+        int sized = 0;
+        int sized_other = 0;
+
+        for (j = 0; j < g_abi_layout_count; j++) {
+            const struct abi_layout *layout = &g_abi_layouts[j];
+
+            if (layout->is_offset || strcmp(layout->object, object->name) != 0) {
+                continue;
+            }
+
+            sized += (layout->width == width);
+            sized_other += (layout->width == other);
+        }
+
+        abi_expect(object->name, sized, 1);
+        abi_expect(object->name, sized_other, 1);
+
+        for (j = 0; j < object->field_count; j++) {
+            k_size_t k;
+            int seen = 0;
+
+            for (k = 0; k < g_abi_layout_count; k++) {
+                const struct abi_layout *layout = &g_abi_layouts[k];
+
+                if (!layout->is_offset || layout->width != width) {
+                    continue;
+                }
+
+                if (strcmp(layout->object, object->name) == 0 &&
+                    strcmp(layout->field, object->fields[j].name) == 0) {
+                    seen++;
+                }
+            }
+
+            abi_expect(object->fields[j].name, seen, 1);
+        }
+    }
+}
+
+/*
+ * The property: the ABI is the one that was recorded for 1.0. A change of a
+ * number, a name, a flag or a layout without a line of tests/corpus/abi.txt
+ * is a failure of this test, and a line of the file without a change of the
+ * kernel is one too.
+ */
+static void test_abi_golden(void)
+{
+    ktest_begin("ksys: the ABI is the recorded one");
+
+    setup();
+
+    if (abi_load() != 0) {
+        ktest_checks++;
+        ktest_fail(__FILE__, __LINE__, "%s: cannot be read", KTEST_ABI_GOLDEN);
+        teardown();
+        return;
+    }
+
+    abi_check_calls();
+    abi_check_values();
+    abi_check_layout();
 
     teardown();
 }
@@ -1323,9 +1881,263 @@ static void test_wait_no_child(void)
     teardown();
 }
 
+/*
+ * The property: a fresh task starts at the ceiling of every resource, a
+ * limit may be lowered, and a raise is refused. The test runs in a task of
+ * its own because a limit belongs to the task and the runner is one task for
+ * every test: a limit lowered here would follow the next test.
+ */
+static int g_limit_rc[8];
+static k_u64_t g_limit_value[4];
+
+static void limits_defaults_task(void *arg)
+{
+    struct task *self = task_self();
+
+    K_UNUSED(arg);
+
+    g_limit_rc[0] = ksys_getlimit(KSYS_RLIMIT_MEMORY, &g_limit_value[0]);
+    g_limit_rc[1] = ksys_getlimit(KSYS_RLIMIT_CPU, &g_limit_value[1]);
+    g_limit_rc[2] = ksys_getlimit(KSYS_RLIMIT_FDS, &g_limit_value[2]);
+    g_limit_value[3] = (self != NULL) ? self->mem_used : 1u;
+
+    /* A selector outside the three and a place that is not there. */
+    g_limit_rc[3] = ksys_getlimit(0, &g_limit_value[0]);
+    g_limit_rc[4] = ksys_getlimit(KSYS_RLIMIT_FDS + 1, &g_limit_value[0]);
+    g_limit_rc[5] = ksys_getlimit(KSYS_RLIMIT_FDS, NULL);
+    g_limit_rc[6] = ksys_setlimit(0, 0);
+    g_limit_rc[7] = ksys_setlimit(KSYS_RLIMIT_MEMORY, (k_u64_t)KSYS_RLIMIT_MEMORY_MAX + 1u);
+}
+
+static void test_limits_defaults(void)
+{
+    struct task *worker;
+
+    ktest_begin("ksys: a task starts at the ceiling of its resources");
+
+    setup();
+
+    worker = task_create("limits-defaults", limits_defaults_task, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(worker != NULL);
+
+    if (worker != NULL) {
+        KT_CHECK_INT_EQ(task_wait(worker->pid, NULL, 2000), 0);
+
+        KT_CHECK_INT_EQ(g_limit_rc[0], 0);
+        KT_CHECK_INT_EQ(g_limit_rc[1], 0);
+        KT_CHECK_INT_EQ(g_limit_rc[2], 0);
+        KT_CHECK_INT_EQ((int)g_limit_value[0], (int)KSYS_RLIMIT_MEMORY_MAX);
+        KT_CHECK_INT_EQ((int)g_limit_value[1], (int)KSYS_RLIMIT_CPU_MAX);
+        KT_CHECK_INT_EQ((int)g_limit_value[2], (int)KSYS_RLIMIT_FDS_MAX);
+        KT_CHECK_INT_EQ((int)g_limit_value[3], 0);
+
+        KT_CHECK_INT_EQ(g_limit_rc[3], KERR_INVAL);
+        KT_CHECK_INT_EQ(g_limit_rc[4], KERR_INVAL);
+        KT_CHECK_INT_EQ(g_limit_rc[5], KERR_INVAL);
+        KT_CHECK_INT_EQ(g_limit_rc[6], KERR_INVAL);
+        KT_CHECK_INT_EQ(g_limit_rc[7], KERR_PERM);
+    }
+
+    teardown();
+}
+
+/*
+ * The property: the descriptor limit decides how many files a task may
+ * open, and a number at or above it is EMFILE. Lowering the limit does not
+ * close what is already open, and no call can raise the limit back.
+ */
+static int g_fd_limit_rc[12];
+
+static void limits_descriptors_task(void *arg)
+{
+    int fds[2];
+
+    K_UNUSED(arg);
+
+    g_fd_limit_rc[0] = ksys_open("/l0.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    g_fd_limit_rc[1] = ksys_open("/l1.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    g_fd_limit_rc[2] = ksys_open("/l2.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+
+    /* The limit of the table is four: all three opened. */
+    g_fd_limit_rc[3] = ksys_setlimit(KSYS_RLIMIT_FDS, 2);
+    /* The descriptor above the limit stays open and usable. */
+    g_fd_limit_rc[4] = (g_fd_limit_rc[2] >= 0) ? ksys_write(g_fd_limit_rc[2], "x", 1) : -1;
+    g_fd_limit_rc[5] = (g_fd_limit_rc[2] >= 0) ? ksys_dup2(g_fd_limit_rc[2], g_fd_limit_rc[2]) : -1;
+    /* A new descriptor, a new number and a pipe all stop at the limit. */
+    g_fd_limit_rc[6] = ksys_open("/l3.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    g_fd_limit_rc[7] = (g_fd_limit_rc[0] >= 0) ? ksys_dup2(g_fd_limit_rc[0], 2) : -1;
+    g_fd_limit_rc[8] = ksys_pipe(fds);
+    /* The one free slot below the limit cannot hold a pipe. */
+    g_fd_limit_rc[9] = (g_fd_limit_rc[1] >= 0) ? ksys_close(g_fd_limit_rc[1]) : -1;
+    g_fd_limit_rc[10] = ksys_pipe(fds);
+    /* And the limit does not go back up. */
+    g_fd_limit_rc[11] = ksys_setlimit(KSYS_RLIMIT_FDS, TASK_MAX_FDS);
+
+    if (g_fd_limit_rc[0] >= 0) {
+        ksys_close(g_fd_limit_rc[0]);
+    }
+    if (g_fd_limit_rc[2] >= 0) {
+        ksys_close(g_fd_limit_rc[2]);
+    }
+}
+
+static void test_limits_descriptors(void)
+{
+    struct task *worker;
+
+    ktest_begin("ksys: the descriptor limit stops open, dup2 and pipe at EMFILE");
+
+    setup();
+
+    worker = task_create("limits-fds", limits_descriptors_task, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(worker != NULL);
+
+    if (worker != NULL) {
+        KT_CHECK_INT_EQ(task_wait(worker->pid, NULL, 2000), 0);
+
+        KT_CHECK(g_fd_limit_rc[0] >= 0);
+        KT_CHECK(g_fd_limit_rc[1] >= 0);
+        KT_CHECK(g_fd_limit_rc[2] >= 0);
+        KT_CHECK_INT_EQ(g_fd_limit_rc[3], 0);
+        KT_CHECK_INT_EQ(g_fd_limit_rc[4], 1);
+        KT_CHECK_INT_EQ(g_fd_limit_rc[5], g_fd_limit_rc[2]);
+        KT_CHECK_INT_EQ(g_fd_limit_rc[6], KERR_MFILE);
+        KT_CHECK_INT_EQ(g_fd_limit_rc[7], KERR_MFILE);
+        KT_CHECK_INT_EQ(g_fd_limit_rc[8], KERR_MFILE);
+        KT_CHECK_INT_EQ(g_fd_limit_rc[9], 0);
+        KT_CHECK_INT_EQ(g_fd_limit_rc[10], KERR_MFILE);
+        KT_CHECK_INT_EQ(g_fd_limit_rc[11], KERR_PERM);
+    }
+
+    teardown();
+}
+
+/*
+ * The property: the memory of the user blocks of a task is counted, a block
+ * over the limit is ENOMEM, and giving a block back returns the room to the
+ * task. The kernel allocations are not charged: the limit is of the task and
+ * not of the system.
+ */
+static k_ssize_t g_mem_limit_rc[6];
+static k_u64_t g_mem_used[3];
+
+static void limits_memory_task(void *arg)
+{
+    struct task *self = task_self();
+    void *block;
+
+    K_UNUSED(arg);
+
+    g_mem_limit_rc[0] = ksys_setlimit(KSYS_RLIMIT_MEMORY, 4096);
+
+    block = ksys_malloc(2048);
+    g_mem_limit_rc[1] = (block != NULL) ? 0 : KERR_NOMEM;
+    g_mem_used[0] = (self != NULL) ? self->mem_used : 1u;
+
+    /* 2048 + 4096 is over the budget: the second block is refused. */
+    g_mem_limit_rc[2] = (ksys_malloc(4096) == NULL) ? KERR_NOMEM : 0;
+
+    ksys_free(block);
+    g_mem_used[1] = (self != NULL) ? self->mem_used : 1u;
+
+    /* The room came back: the same 4096 now fits. */
+    block = ksys_malloc(4096);
+    g_mem_limit_rc[3] = (block != NULL) ? 0 : KERR_NOMEM;
+    ksys_free(block);
+    g_mem_used[2] = (self != NULL) ? self->mem_used : 1u;
+
+    /* A budget of zero refuses any block at all. */
+    g_mem_limit_rc[4] = ksys_setlimit(KSYS_RLIMIT_MEMORY, 0);
+    g_mem_limit_rc[5] = (ksys_malloc(1) == NULL) ? KERR_NOMEM : 0;
+}
+
+static void test_limits_memory(void)
+{
+    struct task *worker;
+
+    ktest_begin("ksys: the memory limit refuses a block and gives the room back");
+
+    setup();
+
+    worker = task_create("limits-memory", limits_memory_task, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(worker != NULL);
+
+    if (worker != NULL) {
+        KT_CHECK_INT_EQ(task_wait(worker->pid, NULL, 2000), 0);
+
+        KT_CHECK_INT_EQ(g_mem_limit_rc[0], 0);
+        KT_CHECK_INT_EQ(g_mem_limit_rc[1], 0);
+        KT_CHECK(g_mem_used[0] >= 2048u);
+        KT_CHECK_INT_EQ(g_mem_limit_rc[2], KERR_NOMEM);
+        KT_CHECK_INT_EQ((int)g_mem_used[1], 0);
+        KT_CHECK_INT_EQ(g_mem_limit_rc[3], 0);
+        KT_CHECK_INT_EQ((int)g_mem_used[2], 0);
+        KT_CHECK_INT_EQ(g_mem_limit_rc[4], 0);
+        KT_CHECK_INT_EQ(g_mem_limit_rc[5], KERR_NOMEM);
+    }
+
+    teardown();
+}
+
+/*
+ * The property: the CPU time of a task is counted in ticks of a millisecond,
+ * and a task that reaches its limit is marked with SIGTERM (the closest
+ * signal of the four to SIGXCPU): the default action ends it with 128 + 15.
+ */
+static int g_cpu_limit_rc;
+static volatile int g_cpu_limit_done;
+
+static void limits_cpu_task(void *arg)
+{
+    k_u64_t start = k_sched_uptime_ms();
+
+    K_UNUSED(arg);
+
+    g_cpu_limit_rc = ksys_setlimit(KSYS_RLIMIT_CPU, 20);
+
+    /*
+     * Every yield is a system call, and the way out of a call is the point
+     * where the mark is answered. The loop is bounded so that a machine on
+     * which the mark never arrives still ends the test: a task that never
+     * exits would keep the next test from running.
+     */
+    while (k_sched_uptime_ms() - start < 3000u) {
+        ksys_yield();
+    }
+
+    g_cpu_limit_done = 1;
+}
+
+static void test_limits_cpu(void)
+{
+    struct task *worker;
+    int status = 0;
+
+    ktest_begin("ksys: the CPU limit marks the task with SIGTERM");
+
+    setup();
+
+    g_cpu_limit_rc = KERR_INVAL;
+    g_cpu_limit_done = 0;
+
+    worker = task_create("limits-cpu", limits_cpu_task, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(worker != NULL);
+
+    if (worker != NULL) {
+        KT_CHECK_INT_EQ(task_wait(worker->pid, &status, 5000), 0);
+        KT_CHECK_INT_EQ(g_cpu_limit_rc, 0);
+        /* The default action of SIGTERM is the end of the task. */
+        KT_CHECK_INT_EQ(status, 128 + K_SIGTERM);
+        KT_CHECK_INT_EQ(g_cpu_limit_done, 0);
+    }
+
+    teardown();
+}
+
 void test_ksys(void)
 {
     test_abi_is_stable();
+    test_abi_golden();
     test_write_read_roundtrip();
     test_alignment_invariance();
     test_error_codes();
@@ -1346,4 +2158,8 @@ void test_ksys(void)
     test_dup2();
     test_pipe_errors();
     test_wait_no_child();
+    test_limits_defaults();
+    test_limits_descriptors();
+    test_limits_memory();
+    test_limits_cpu();
 }

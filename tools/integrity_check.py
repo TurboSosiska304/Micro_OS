@@ -94,6 +94,7 @@ BUNDLE_EXTRA = ("checksums.txt", "flash.sh", "README.md")
 # The extensions that are never treated as a text file.
 BINARY_EXTENSIONS = {
     ".bin",
+    ".sig",
     ".png",
     ".jpg",
     ".jpeg",
@@ -409,7 +410,18 @@ def check_bundle(root: str, report: Report) -> dict:
         images = {
             os.path.basename(path) for path in glob.glob(os.path.join(dist, "MicroOS-*.bin"))
         }
-        expected = set(BUNDLE_BINARIES) | images
+        tarballs = {
+            os.path.basename(path)
+            for path in glob.glob(os.path.join(dist, "MicroOS-x86_64-*.tar.gz"))
+        }
+        # The signature trailer and the public key are parts of the bundle
+        # (ADR 0020), and so is the tarball of the other machine.
+        signature = {
+            name
+            for name in os.listdir(dist)
+            if name.endswith(".sig") or name == "microos-sign.pub"
+        }
+        expected = set(BUNDLE_BINARIES) | images | tarballs | signature
 
         report.add(
             group,
@@ -1320,37 +1332,206 @@ def check_port_contract(root: str, report: Report) -> None:
     )
 
     for directory in PORT_IMPLEMENTATION_DIRS:
-        path = os.path.join(root, directory)
-        if not os.path.isdir(path):
-            report.add(group, f"{directory} exists", False, "the directory is missing")
+        absent, where = port_missing(root, directory, names)
+
+        if absent is None:
+            report.add(group, f"{directory} exists", False, where)
             continue
 
-        library = PORT_LIBRARIES.get(directory)
-        symbols = defined_symbols(os.path.join(root, library)) if library else set()
+        detail = (
+            "missing: " + ", ".join(absent)
+            if absent
+            else f"{len(names)} function(s) found in {where}"
+        )
+        report.add(group, f"{directory} implements the contract", not absent, detail)
 
-        if symbols:
-            # The built library is the truth: a comment is not a function.
-            missing = [name for name in names if name not in symbols]
-            detail = (
-                "missing: " + ", ".join(missing)
-                if missing
-                else f"{len(names)} function(s) defined in the library"
-            )
+
+# The record of the contract: the functions of kernel/port/*.h as the release
+# froze them. It is the list a port is measured against, so a function that is
+# dropped from the headers without a line here - or added without one - is a
+# failed check and not a quiet change of the interface.
+PORT_RECORDING = "tests/corpus/port_api.txt"
+
+# The two ports that are machines of their own: the board and the x86-64 port
+# of QEMU. The host and the null port are the cheap checks of the contract;
+# the gate of the release asks for the whole list from two independent
+# machines (docs/releases/1.0.md, section 1).
+PORT_INDEPENDENT_DIRS = (
+    "components/port_esp32/src",
+    "ports/port_x86_64/src",
+)
+
+
+def port_version(root: str) -> tuple:
+    """The version of the contract in kernel/port/info.h, as (major, minor)."""
+    path = os.path.join(root, PORT_HEADER_DIR, "info.h")
+    if not os.path.isfile(path):
+        return None
+
+    text = read_text(path)
+    values = []
+    for name in ("MAJOR", "MINOR"):
+        match = re.search(
+            r"#define\s+KERNEL_PORT_API_VERSION_%s\s+(\d+)" % name,
+            text,
+        )
+        if match is None:
+            return None
+        values.append(match.group(1))
+
+    return tuple(values)
+
+
+def read_port_recording(root: str) -> tuple:
+    """The record of the contract: the version, the functions and the header of each.
+
+    Returns (version, names, errors). A version is a pair of strings, the names
+    are a dictionary from the function to the header that declares it, and the
+    errors are the lines that are neither.
+    """
+    path = os.path.join(root, PORT_RECORDING)
+    version = None
+    names = {}
+    errors = []
+
+    if not os.path.isfile(path):
+        return None, names, [f"{PORT_RECORDING} is missing"]
+
+    for number, line in enumerate(read_text(path).splitlines(), 1):
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+
+        parts = line.split()
+
+        if parts[0] == "api" and len(parts) == 3:
+            if version is not None:
+                errors.append(f"line {number}: a second api line")
+            version = (parts[1], parts[2])
+        elif parts[0].startswith("k_port_") and len(parts) == 2:
+            if parts[0] in names:
+                errors.append(f"line {number}: {parts[0]} is recorded twice")
+            names[parts[0]] = parts[1]
         else:
-            # No host build of this port (the ESP32): the text of its sources.
-            text = ""
-            for entry in sorted(os.listdir(path)):
-                if entry.endswith((".c", ".S")):
-                    text += code_only(read_text(os.path.join(path, entry)))
+            errors.append(f"line {number}: {line!r} is not a record")
 
-            missing = [name for name in names if not re.search(r"\b" + name + r"\s*\(", text)]
-            detail = (
-                "missing: " + ", ".join(missing)
-                if missing
-                else f"{len(names)} function(s) in the sources"
-            )
+    return version, names, errors
 
-        report.add(group, f"{directory} implements the contract", not missing, detail)
+
+def port_missing(root: str, directory: str, names: list) -> tuple:
+    """The functions of `names` a port does not implement, and where they were looked for.
+
+    The answer is (missing, detail): the host build of a port is read through
+    the symbols of its library, a port without one through the text of its
+    sources. `missing` is None when the directory is not there at all.
+    """
+    path = os.path.join(root, directory)
+    if not os.path.isdir(path):
+        return None, "the directory is missing"
+
+    library = PORT_LIBRARIES.get(directory)
+    symbols = defined_symbols(os.path.join(root, library)) if library else set()
+
+    if symbols:
+        return [name for name in names if name not in symbols], "the library"
+
+    # No host build of this port (the ESP32, the x86-64 machine): the text of
+    # its sources. code_only drops the comments, so a name in a comment is not
+    # a function that was written.
+    text = ""
+    for entry in sorted(os.listdir(path)):
+        if entry.endswith((".c", ".S")):
+            text += code_only(read_text(os.path.join(path, entry)))
+
+    missing = [name for name in names if not re.search(r"\b" + name + r"\s*\(", text)]
+    return missing, "the sources"
+
+
+def check_port_recording(root: str, report: Report) -> list:
+    """The record of the contract is the one of the headers, and it is whole."""
+    group = "port"
+    version, names, errors = read_port_recording(root)
+
+    report.add(
+        group,
+        f"the contract is recorded ({PORT_RECORDING})",
+        not errors,
+        "; ".join(errors[:MAX_REPORTED]),
+    )
+
+    declared = contract_functions(root)
+    recorded = sorted(names)
+
+    missing = [name for name in declared if name not in names]
+    extra = [name for name in recorded if name not in declared]
+    detail = []
+    if missing:
+        detail.append("declared and not recorded: " + ", ".join(missing))
+    if extra:
+        detail.append("recorded and not declared: " + ", ".join(extra))
+
+    report.add(
+        group,
+        "the record is the list of the headers",
+        not detail,
+        "; ".join(detail) if detail else f"{len(recorded)} function(s)",
+    )
+
+    # A record names the header of its function: the file is a map of the
+    # contract, not a list of names without a place.
+    wrong = []
+    for name, header in sorted(names.items()):
+        path = os.path.join(root, "components/kernel/include", header)
+        if not os.path.isfile(path):
+            wrong.append(f"{name}: {header} is not a header")
+            continue
+        if name not in CONTRACT_DECLARATION.findall(read_text(path)):
+            wrong.append(f"{name}: not declared in {header}")
+
+    report.add(
+        group,
+        "every function is recorded with the header that declares it",
+        not wrong,
+        "; ".join(wrong[:MAX_REPORTED]) if wrong else f"{len(names)} record(s)",
+    )
+
+    reported = port_version(root)
+    recorded_version = tuple(version) if version is not None else None
+    report.add(
+        group,
+        "the recorded version is the one of the headers",
+        recorded_version is not None and recorded_version == reported,
+        f"the record says {recorded_version}, kernel/port/info.h says {reported}",
+    )
+
+    return recorded
+
+
+def check_independent_ports(root: str, report: Report, names: list) -> None:
+    """The two machines of their own implement the whole recorded contract."""
+    group = "port"
+    missing = []
+
+    if not names:
+        report.skip(group, "the two independent ports implement the contract", "no recording")
+        return
+
+    for directory in PORT_INDEPENDENT_DIRS:
+        absent, where = port_missing(root, directory, names)
+
+        if absent is None:
+            missing.append(f"{directory}: {where}")
+        elif absent:
+            shown = ", ".join(absent[:MAX_REPORTED])
+            missing.append(f"{directory} ({where}): {shown}")
+
+    report.add(
+        group,
+        "the two independent ports implement the contract (ESP32, x86-64)",
+        not missing,
+        "; ".join(missing) if missing else f"{len(names)} function(s) on both machines",
+    )
+
 
 IMAGE_BUDGET_BYTES = 1228800
 
@@ -1666,6 +1847,8 @@ def main(argv: list) -> int:
     check_layers(root, report, files)
     check_portable_build(root, report)
     check_port_contract(root, report)
+    recorded_contract = check_port_recording(root, report)
+    check_independent_ports(root, report, recorded_contract)
     check_budget(root, report)
     check_sram(root, report)
     check_features(root, report)

@@ -30,3 +30,40 @@ target_link_libraries(microos_mkfs PRIVATE
     microos_kshell
     microos_port_host
 )
+
+# The signature of an image (ADR 0020): the tool signs and verifies, and the
+# same SHA-256 and Ed25519 are compiled into the boot loader of x86-64. The
+# tool is a host program of its own: it reads a key, reads a file and writes a
+# trailer, and it has no kernel in it.
+set(SIGN_DIR "${CMAKE_SOURCE_DIR}/ports/port_x86_64/loader")
+
+add_executable(microos_sign
+    microos_sign.c
+    "${SIGN_DIR}/sha256.c"
+    "${SIGN_DIR}/ed25519.c"
+    "${SIGN_DIR}/sign_image.c"
+)
+
+target_include_directories(microos_sign PRIVATE "${SIGN_DIR}")
+
+# The load of the campaign of 1.0 on the host: several tasks, the allocator,
+# pipes, the VFS and a fork child, for the race detector and for a leak. It
+# is the whole portable kernel over the host port, the way the tests build
+# it, and no hardware.
+add_executable(microos_stress host_stress.c)
+
+target_include_directories(microos_stress PRIVATE
+    "${CMAKE_SOURCE_DIR}/components/kernel/include"
+    "${CMAKE_SOURCE_DIR}/components/mfs/include"
+    "${CMAKE_SOURCE_DIR}/ports/port_host/include"
+)
+
+target_link_libraries(microos_stress PRIVATE
+    microos_kernel
+    microos_mfs
+    microos_port_host
+    # The same second scan as the tool above: an archive is read once.
+    microos_kernel
+    microos_mfs
+    microos_port_host
+)

@@ -59,7 +59,7 @@
  */
 #define PORT_EXEC_TEXT_BASE ((k_size_t)0x4009E000u)
 #define PORT_EXEC_TEXT_SIZE (8u * 1024u)
-#define PORT_EXEC_DATA_BASE ((k_size_t)0x3FFCC000u)
+#define PORT_EXEC_DATA_BASE ((k_size_t)0x3FFCE000u)
 #define PORT_EXEC_DATA_SIZE (8u * 1024u)
 
 /*
@@ -72,7 +72,7 @@
  *
  * The data window needs no reservation here: it is inside the static DRAM
  * segment, which the heap already excludes as a whole, and the build fixes
- * the end of that segment at 0x3FFCE000 (see exec_windows.ld). A second
+ * the end of that segment at 0x3FFD0000 (see exec_windows.ld). A second
  * reservation over the static range is an overlap the heap refuses, so the
  * fixed size is what protects the data and this line protects the text.
  */
@@ -343,6 +343,7 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
             k_size_t length = (k_size_t)strlen(argv[user_argc]);
 
             if (strings + length + 1u > PORT_EXEC_ARG_BYTES_MAX) {
+                g_window_busy = false;
                 return -1;
             }
 
@@ -356,6 +357,7 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
             k_size_t length = (k_size_t)strlen(image->envp[user_envc]);
 
             if (env_strings + length + 1u > PORT_EXEC_ENV_BYTES_MAX) {
+                g_window_busy = false;
                 return -1;
             }
 
@@ -382,6 +384,7 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
     }
 
     if (!vectors_fit(arg_end) || !vectors_fit(env_end)) {
+        g_window_busy = false;
         kerror("esp32: the arguments or the environment do not fit the data window");
         return -1;
     }
@@ -461,6 +464,8 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
      */
     program = task_fork_shared(caller, PORT_EXEC_TASK_NAME, port_exec_program_task, start);
     if (program == NULL) {
+        kerror("esp32: no task for the program (%u of %u in the table)", (unsigned)task_count(),
+               (unsigned)TASK_MAX_TASKS);
         k_port_free(start);
         g_window_busy = false;
         return -1;
