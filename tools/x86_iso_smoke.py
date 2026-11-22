@@ -194,9 +194,14 @@ def check(output: str) -> list:
         "PROGRAM: hello from /bin" in replies[3] and "the program exited with 0" in replies[3],
         replies[3],
     )
+    # `ls` of the CD is the program of sbase: a directory is its name and no
+    # slash at the end, so the check reads a line and not a suffix.
     expect(
         "the tree of the machine is the tree of every port",
-        all(name in replies[4] for name in ("bin/", "etc/", "proc/", "dev/")),
+        all(
+            re.search(rf"(?m)^{name}\r?$", replies[4]) is not None
+            for name in ("bin", "etc", "proc", "dev")
+        ),
         replies[4],
     )
 

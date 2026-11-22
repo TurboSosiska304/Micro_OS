@@ -840,7 +840,18 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                 "the console did not lay the screen out at 18 pixels a line",
             )
 
-            picture = machine.picture(workdir)
+            # The line of the console is printed when the layout is decided;
+            # the repaint of a screen of fifty rows follows it, so the
+            # picture is taken again until the grid it asks for is there. A
+            # single dump after the line can catch the screen in the middle
+            # of its own repaint.
+            picture = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.only_colors(GREY, BLACK)
+                and not seen.foreign_cells(GREY, LINE_PITCH_GAP2)
+                and seen.cell_is(1, 0, GLYPHS["b"], GREY, BLACK, LINE_PITCH_GAP2),
+            )
             if picture is not None:
                 expect(
                     "the picture of the gap of 2 is 44 rows of 18 pixels",
@@ -868,7 +879,11 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                 "the console did not lay the screen out at 16 pixels a line again",
             )
 
-            picture = machine.picture(workdir)
+            picture = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.only_colors(GREY, BLACK) and not seen.foreign_cells(GREY),
+            )
             if picture is not None:
                 expect(
                     "the picture of the whole cell is 50 rows of 16 pixels",
@@ -1231,6 +1246,27 @@ def run_text(loader: str, kernel: str, timeout: float, verbose: bool, display: s
             machine.close()
 
     return checks
+
+
+def settled_picture(machine, directory: str, condition, seconds: float = 4.0):
+    """The picture once the condition holds, or the last one before the end.
+
+    A command that changes the layout of the console prints its line before
+    the screen is painted again; a dump taken right after the line can catch
+    the picture in the middle of the repaint. The polling is a property of the
+    check of a picture and not of the machine: the command itself is done.
+    """
+    deadline = time.monotonic() + seconds
+    picture = machine.picture(directory)
+    while (
+        picture is not None
+        and not condition(picture)
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.1)
+        picture = machine.picture(directory)
+
+    return picture
 
 
 def main(argv: list) -> int:

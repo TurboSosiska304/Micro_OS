@@ -338,7 +338,6 @@ int getc(FILE *stream)
     return fgetc(stream);
 }
 
-
 int fputc(int byte, FILE *stream)
 {
     unsigned char value = (unsigned char)byte;
