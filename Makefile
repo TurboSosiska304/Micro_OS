@@ -59,7 +59,7 @@ help:
 	@echo "  make idf-size   show the firmware size report"
 	@echo "  make x86-build  build the kernel for x86-64 (a multiboot image)"
 	@echo "  make x86-smp-build  the same kernel with KERNEL_SMP on (ADR 0012)"
-	@echo "  make x86-run    boot it in a QEMU window (VGA text, PS/2 keyboard)"
+	@echo "  make x86-run    boot it in a QEMU window (framebuffer 1280x800, keyboard)"
 	@echo "  make x86-run-serial  boot it with the serial console (-nographic)"
 	@echo "  make x86-smoke  boot it and check what it says"
 	@echo "  make x86-disk   the image of the disk: /bin and /etc of MicroFS"
@@ -305,7 +305,7 @@ x86-run: x86-disk
 		exit 1; }
 	qemu-system-x86_64 -kernel $(X86_BUILD)/loader32.elf \
 		-initrd $(X86_BUILD)/microos64.bin -m 256 -no-reboot \
-		-display $(X86_DISPLAY) -serial null \
+		-display $(X86_DISPLAY) -serial null -vga std \
 		$(X86_DISK_DRIVE)
 
 # The same machine with the console of the serial port and no window: the
@@ -319,9 +319,11 @@ x86-run-serial: x86-disk
 x86-smoke: x86-disk x86-open-build
 	python3 tools/x86_smoke.py --image $(X86_PROGRAMS_IMAGE) --open-build $(X86_OPEN_BUILD)
 
-# The window without a display: the monitor of QEMU reads the text memory of
-# the VGA and presses the keys of the keyboard, so a build farm can check the
-# screen and IRQ1. Not a part of `make ci`: the monitor is a tool of its own.
+# The screen without a display: the monitor of QEMU reads the framebuffer of
+# the new screen with screendump (a picture has no text memory) and the text
+# mode of the fallback with pmemsave, and presses the keys of the keyboard, so
+# a build farm can check both screens of ADR 0023 and IRQ1. Not a part of
+# `make ci`: the monitor is a tool of its own.
 x86-vga-smoke: x86-build
 	python3 tools/x86_vga_smoke.py
 
@@ -344,7 +346,7 @@ x86-run-disk: x86-build $(X86_DISK_IMAGE)
 		exit 1; }
 	qemu-system-x86_64 -kernel $(X86_BUILD)/loader32.elf \
 		-initrd $(X86_BUILD)/microos64.bin -m 256 -no-reboot \
-		-display $(X86_DISPLAY) -serial null \
+		-display $(X86_DISPLAY) -serial null -vga std \
 		-drive file=$(X86_DISK_IMAGE),format=raw,if=ide,index=0,cache=writeback
 
 x86-run-disk-serial: x86-build $(X86_DISK_IMAGE)
@@ -414,7 +416,7 @@ x86-all: x86-all-build build
 		'        -device virtio-net-pci,netdev=n0,disable-modern=on' \
 		'fi' \
 		'exec qemu-system-x86_64 -kernel loader32.elf -initrd microos64.bin \' \
-		'    -m 256 -no-reboot -display "$${X86_DISPLAY:-gtk}" -serial null \' \
+		'    -m 256 -no-reboot -display "$${X86_DISPLAY:-gtk}" -serial null -vga std \' \
 		'    -drive file=x86-all.img,format=raw,if=ide,index=0,cache=writeback \' \
 		'    -netdev user,id=n0,hostfwd=tcp:127.0.0.1:8080-:8080 \' \
 		'    -device virtio-net-pci,netdev=n0,disable-modern=on' > $(X86_ALL_RUN)

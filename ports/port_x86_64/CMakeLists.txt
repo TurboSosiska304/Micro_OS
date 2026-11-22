@@ -34,6 +34,7 @@ set(PROCFS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/procfs")
 set(DEVFS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/devfs")
 set(CONFIG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/config")
 set(SETTINGS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/settings")
+set(FONT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/font")
 
 # The second filesystem of the machine (ADR 0009). Off by default: the
 # disk of `make x86-smoke` is one MicroFS volume, and a reader that no call
@@ -185,6 +186,11 @@ set(SETTINGS_SOURCES
     "${CONFIG_DIR}/src/config.c"
     "${CONFIG_DIR}/src/config_cmd.c"
 )
+
+# The font of the console: the 5x7 page the board draws with, compiled for the
+# machine that now has a picture of its own (ADR 0023). The framebuffer draws
+# it at twice its size, so the same font is the cell of both screens.
+set(FONT_SOURCES "${FONT_DIR}/src/font.c")
 
 # The services over the sockets: the HTTP client, the page of the state and
 # the clock of NTP. They are portable and speak kernel/net.h, so the same
@@ -363,12 +369,17 @@ add_executable(microos64
     ${EXT2_SOURCES}
     ${VIRTUAL_SOURCES}
     ${SETTINGS_SOURCES}
+    ${FONT_SOURCES}
     ${NET_SOURCES}
     src/boot64.S
     src/kmain.c
     src/shell.c
     src/port_x86_64.c
+    src/console.c
     src/vga.c
+    src/vbe.c
+    src/fb.c
+    src/pci.c
     src/ps2.c
     src/gdt.c
     src/paging.c
@@ -395,6 +406,7 @@ target_include_directories(microos64 PRIVATE
     "${DEVFS_DIR}/include"
     "${CONFIG_DIR}/include"
     "${SETTINGS_DIR}/include"
+    "${FONT_DIR}/include"
     "${NET_DIR}/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )

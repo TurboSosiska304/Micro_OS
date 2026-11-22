@@ -73,10 +73,10 @@ make x86-build            # the loader, the kernel and the programs, into build-
 make x86-all              # the complete machine: network, disk and run.sh
 make x86-all-run          # boot it in a window (x86-all-run-serial: a terminal)
 make x86-disk             # build-x86/programs.img: /bin and /etc of MicroFS
-make x86-run              # a QEMU window: VGA text and the PS/2 keyboard
+make x86-run              # a QEMU window: framebuffer 1280x800 and the keyboard
 make x86-run-serial       # the same machine in a terminal (-nographic)
 make x86-smoke            # boot and check the transcript, no window
-make x86-vga-smoke        # check the screen and the keyboard without a display
+make x86-vga-smoke        # check both screens and the keyboard, without a display
 make x86-run-disk         # the window with a disk of its own, kept between runs
 make x86-run-disk-serial  # the same disk in a terminal
 make x86-disk-smoke       # two boots on one image: a file survives both
@@ -104,7 +104,9 @@ The display backend is a package of its own in some distributions: the target
 asks QEMU for its list of backends first and prints the command to run when
 the one asked for is missing. `make x86-run X86_DISPLAY=sdl` picks SDL, and
 `make x86-run-serial` is the machine for a box without a display server at
-all.
+all. The window shows the framebuffer of 1280x800 of ADR 0023 (`-vga std`);
+a machine whose card has no Bochs VBE interface keeps the text mode of 80x25,
+which is what `make x86-run` shows with `-vga cirrus`.
 
 The disk is a raw image of 8 MB, made by `make x86-disk`
 (`tools/mkfs_mfs.c`, which links `components/mfs`) and kept in

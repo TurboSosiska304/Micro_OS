@@ -133,6 +133,16 @@ K5.
 | The host has no applier and a run with a screen file still has none: the load names the three systems and keeps the files. | `ports/port_host/src/sim_main.c`, `components/graphics` | decision | None until the screen file of the simulator is a screen a person configures; the serial console has no attributes. |
 | The store drops the last line ending of a value, so a system file that comes back after a format loses its final `\n`. | `components/config/src/config.c` (`read_value`) | decision | Nothing: a value is one line of text, the parser reads the file with or without the line ending, and no key is lost (the test compares with it off). |
 
+## K11 - The screen of x86-64
+
+| Debt | Where | Status | What it needs |
+|---|---|---|---|
+| The fallback is the text mode of 1.1, 80x25. The 80x50 mode of ADR 0023 - the 8x8 font of the VGA loaded into plane 2 and the CRTC timings of the 8x8 cell - is not built: it is a font load through the sequencer and the graphics registers, on the screen of a machine that has no framebuffer, and a mistake there loses the only console of that machine. | `ports/port_x86_64/src/vga.c`, ADR 0023 section 2 | open | A load of the 8x8 font (the sequencer's map 2, the graphics controller's read map 2), the CRTC registers of the 80x50 text mode, and a smoke boot that reads the same cells out of `0xB8000` with `pmemsave`. |
+| The mode is fixed: 1280x800, 16 bits per pixel, asked for at the boot. A card that offers another list of modes, and a person who wants 1024x768 or 800x600, has no key in `/etc` for it. | `ports/port_x86_64/src/vbe.c`, `components/settings` | open | A `mode` key of a `screen` system of /etc and the list of the modes the interface answers; the cell of the console follows the picture, which the console already measures. |
+| A machine whose VBE interface answers the mode and whose window does not map is left with the VGA in a graphics mode and a text console nobody sees: the port says so on COM1 and keeps drawing cells into `0xB8000`. The two failures are not told apart before the mode is set. | `ports/port_x86_64/src/console.c`, `src/vbe.c` | open | Set the mode only after the window is mapped (the BAR is known before the mode, so the map can come first), or a way back to the text mode of the firmware. |
+| The picture is drawn pixel by pixel into the framebuffer and there is no dirty region, no shadow frame and no cache of the memory: a scroll moves 2 MB of it and every character is 140 stores. QEMU does not mind; a card behind a real bus would. | `ports/port_x86_64/src/fb.c` | decision | None for QEMU, which is the machine of this port: the framebuffer is memory and the renderer of the kernel has no flush on it. A driver of a real card needs DMA and a damage rectangle first. |
+| Only the console and the commands of the kernel draw on the picture: there is no surface a program can have, no mouse, no compositor. That is the roadmap of K11's "later" and of the releases of 2.0, not a promise of 1.2. | `kernel/render.h`, `docs/releases/2.0.md` | decision | The 2D surface and the compositor as a program of ring 3, which the port already has the parts for (page tables of a task, `fork`, `exec`, signals). |
+
 ## The signature of an image
 
 | Debt | Where | Status | What it needs |

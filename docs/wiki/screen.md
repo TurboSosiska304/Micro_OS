@@ -2,8 +2,9 @@
 
 A machine of Micro OS has a screen and a serial console, and the kernel
 writes the same line to both. What the screen is depends on the port: a
-135x240 TFT on the board, the text mode of the VGA on x86-64, and a window of
-QEMU or a real monitor in front of both.
+135x240 TFT on the board, a framebuffer of 1280x800 on x86-64 (the text mode
+of the VGA when the machine cannot program one), and a window of QEMU or a
+real monitor in front of both.
 
 ## The board: a framebuffer of 135x240
 
@@ -22,34 +23,62 @@ font: scale 2, columns 0, rows 0 (0 is the whole picture)
 [settings.md](settings.md). `brightness` is kept and reported, but the pin of
 the backlight has no duty cycle yet, so the panel does not dim.
 
-## x86-64: the text mode today
+## x86-64: the framebuffer of 1280x800
 
-The port draws into the text mode the firmware leaves behind: 80 columns by
-25 rows at `0xB8000`, two bytes a cell, sixteen colours, no font and no
-picture. It is enough for a console a person types into, and it is all the
-machine has in 1.1:
+The port programs the Bochs VBE interface of the VGA of QEMU - the device
+`1234:1111`, the I/O ports `0x1CE`/`0x1CF` - to 1280x800 and 16 bits per
+pixel in RGB565, which is the format the renderer of the kernel draws in
+(ADR 0023). The console is a grid of cells of the 5x7 font at twice its size,
+10x14 pixels: **128 columns by 57 rows**. The boot says which screen it chose:
+
+```text
+x86-64: the screen is the framebuffer of 1280x800, 16 bpp, 128x57 cells
+```
+
+The window of the card is above the identity map of the kernel, so the port
+maps it into the top 2 GiB and every address space shares it: a `write` of a
+program reaches the same picture as the boot log. A character is one glyph
+blitted into the memory, the cursor is the reverse of a cell, and the scroll
+moves the rows of the picture up by one cell. There is no double buffer and no
+flush, because the memory of the card is the glass.
+
+`console.theme` and `console.invert` repaint the grid, and the setting is
+applied when `/etc` is read, before the shell exists, and at every `config
+set`:
 
 ```text
 microos> config set console.theme light
-console: theme light, invert 0
+console: theme light, invert 0, the screen the framebuffer of 1280x800, 16 bpp, 128x57 cells
 ```
 
-`console.theme` and `console.invert` repaint every cell of the VGA. There is
-no graphics mode: no font of its own, no line, no picture, no window that is
-not the whole screen.
+Dark is grey on black, light is black on light grey, and `invert` swaps the
+two; the picture of a machine with the light theme is a light grey screen with
+black letters.
 
-## The framebuffer of 1.2 (K11)
+The picture can be taken out of the machine while it runs: the monitor of QEMU
+writes it as a PPM (`screendump`), and `make x86-vga-smoke` reads the cells of
+the first line, the colours and the cursor out of it. A change of one of the
+glyphs the test reads - the letters of "MicroOS" - fails that test, which is
+the point of a screenshot in a smoke.
 
-[ADR 0023](../adr/0023-screen-of-x86-64.md) chooses the next screen:
-a **linear framebuffer** through Bochs VBE in QEMU, 1280x800 and 16 bits per
-pixel in RGB565, which is the format the renderer of the kernel already
-speaks. The console becomes a grid of the 5x7 font scaled twice - about 128
-columns by 57 rows - with the colours of `/etc/console`, and the text mode
-stays the fallback (improved once to 80x50 with the 8x8 font of the VGA).
+### The fallback: the text mode of 80x25
 
-The smoke reads the picture with `screendump` instead of the text memory of
-the VGA, so a change of the picture is visible in a screenshot, not only in a
-log line.
+A machine whose VGA has no Bochs VBE interface - another card, or `-vga
+cirrus` - keeps the text mode the firmware left: 80 columns by 25 rows at
+`0xB8000`, two bytes a cell, the attribute of `/etc/console` (`0x07` grey on
+black, `0x70` black on light grey) and the cursor in the registers 14 and 15
+of the CRTC. The boot says so:
+
+```text
+x86-64: the screen is the text mode of the VGA, 80x25
+console: theme light, invert 0, the screen the text mode of the VGA, 80x25
+console: the attribute of the screen 112
+```
+
+The 80x50 mode with the 8x8 font of the VGA is not built: see
+[debts.md](../debts.md), K11. The console counts the cells either way, so the
+two screens differ in the grid and not in what the kernel writes to them, and
+the keyboard of IRQ1 is the same for both.
 
 ## What a desktop would need
 
@@ -65,7 +94,8 @@ terminal.
 
 A 3D driver of a real card is not promised. `virtio-gpu` 2D in QEMU is an
 option after the framebuffer; a physical machine's picture needs UEFI GOP,
-which is a loader of its own and a separate change.
+which is a loader of its own and a separate change. [ADR
+0023](../adr/0023-screen-of-x86-64.md) has the decision and what was built.
 
 ## The serial console
 
