@@ -281,6 +281,14 @@ written when the project was an operating system for one board; the numbers
       by writing a file of the volume (`make x86-disk`), not by embedding it
       in the kernel
 
+## The last major changes of the board (1.1.0)
+
+> The settings of `/etc`, the programs in a partition of the board mapped as
+> instructions, and the update with an A/B slot and a rollback are the last
+> major changes of the ESP32 port. From `1.2.0` the port is a compatibility
+> port (ADR 0018): it builds and passes its test, and receives only the
+> changes that are cheap on the board.
+
 ## The road to 2.0
 
 > [`docs/releases/2.0.md`](releases/2.0.md) is the direction of the first

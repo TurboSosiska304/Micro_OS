@@ -151,7 +151,21 @@ reader for them, and a kernel of the board that meets one says `ENOEXEC`
 rather than guessing. A compatibility port keeps the format it was frozen
 with, and a program for the board is built and tagged against that version.
 
-### 6. After 1.0 the port is a compatibility port
+### 6. After 1.1.0 the port is a compatibility port
+
+The last **major** changes of the board are the work of `1.1.0`: the settings
+of `/etc` (the display and the font first), the programs in a partition of
+their own mapped as instructions, and the update with an A/B slot and a
+rollback. They change a format, a partition or a boot path, and they are done
+once.
+
+From `1.2.0` the board receives **compatibility changes only**: it builds,
+`tools/device-test.sh` passes, and it gets what is cheap on this machine - a
+fix of a driver, the memory, the console, the parts of concurrency that
+FreeRTOS gives for free, a command that costs no format. It does not get a new
+format, a new partition, a new address space, a compiler, the higher half, NX
+or full SMP. The rule is the one of ADR 0012 and the boundary is decided per
+change, not promised.
 
 From `1.0.0` the ESP32 port:
 
