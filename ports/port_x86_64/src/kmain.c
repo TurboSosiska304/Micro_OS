@@ -25,6 +25,7 @@
 
 #include "kernel/board.h"
 #include "kernel/boot.h"
+#include "kernel/console.h"
 #include "kernel/errno.h"
 #include "kernel/ksys.h"
 #include "kernel/log.h"
@@ -309,6 +310,17 @@ static void init_task(void *arg)
     if (kshell_init() != KSHELL_OK) {
         kwarn("x86-64: not every command of the shell is registered");
     }
+
+    /*
+     * The colours of the log of the session, from the first prompt: a warning
+     * is amber, an error is red and a success is green, and the screen the
+     * machine has - the framebuffer or the sixteen attributes of the VGA -
+     * reads the SGR sequences (kernel/ansi.h). The log of the boot above is
+     * made of the plain pair of /etc, so a screenshot of the boot is the two
+     * colours a person chose and nothing else; COM1 is plain either way,
+     * because the port strips the sequences from its copy (src/port_x86_64.c).
+     */
+    k_console_set_ansi(true);
 
     if (task_create("shell", shell_task, NULL, TASK_PRIO_DEFAULT) == NULL) {
         kerror("x86-64: cannot start the shell");

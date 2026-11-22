@@ -70,6 +70,47 @@ Dark is grey on black, light is black on light grey, and `invert` swaps the
 two; the picture of a machine with the light theme is a light grey screen with
 black letters.
 
+### The colours of a cell
+
+A cell of the console carries its own pair of colours: the paper in the high
+nibble and the ink in the low one, the byte a VGA calls
+`(background << 4) | foreground`. The palette is the sixteen colours of the
+CGA in RGB565, so a word keeps its colour through a scroll, a repaint and the
+cursor (which is the same two colours traded).
+
+A command or the log asks for a colour with the SGR sequences of a terminal:
+
+| Sequence | Meaning |
+|---|---|
+| `ESC[0m` | the pair of `/etc/console` again, with no bold and no reverse |
+| `ESC[1m`, `ESC[22m` | bold on and off (it brightens a colour of a command) |
+| `ESC[7m`, `ESC[27m` | the reverse (the ink and the paper traded) and back |
+| `ESC[30m`-`ESC[37m`, `ESC[39m` | the ink, or the pair of the console |
+| `ESC[40m`-`ESC[47m`, `ESC[49m` | the paper, or the pair of the console |
+| `ESC[90m`-`ESC[97m`, `ESC[100m`-`ESC[107m` | the bright half of the two |
+
+A parameter the screen does not know is skipped and the rest of the list still
+counts, as a terminal does. The log marks its levels: an information is plain,
+a warning is amber, an error is red and a success is green - on the screen
+only, because COM1 stays a plain transcript. The boot's own lines are the pair
+of `/etc/console`; the colours begin with the shell, so the first frame of the
+machine is the two colours a person chose.
+
+`console.ink` and `console.paper` name the pair of the plain text instead of
+the theme: a name of the palette (`black`, `white`, `grey`, `green`, `amber`,
+`red`, `blue`, `cyan`, `magenta`, `yellow`) or a number of RGB565 such as
+`0xF800`. The word `theme` is the value of the theme, and it is the default:
+
+```text
+microos> config set console.ink red
+microos> config set console.paper 0x001F
+microos> config set console.ink theme
+```
+
+A value that is neither a name nor `0xRRRR` is the theme and a warning. On the
+text mode a colour that is not one of the sixteen is rounded to the nearest of
+them; the picture of the framebuffer takes the number of RGB565 as it is.
+
 The picture can be taken out of the machine while it runs: the monitor of QEMU
 writes it as a PPM (`screendump`), and `make x86-vga-smoke` reads the cells of
 the first line, the colours and the cursor out of it. A change of one of the
@@ -98,7 +139,10 @@ A machine whose VGA has no Bochs VBE interface - another card, or `-vga
 cirrus` - keeps the text mode the firmware left: 80 columns by 25 rows at
 `0xB8000`, two bytes a cell, the attribute of `/etc/console` (`0x07` grey on
 black, `0x70` black on light grey) and the cursor in the registers 14 and 15
-of the CRTC. The boot says so:
+of the CRTC. A cell that a command coloured keeps its own attribute: the
+`ls --color` of a directory is `0x01` (blue on black), an executable `0x02`
+(green on black), a warning of the log `0x06` (amber on black) and an error
+`0x04` (red on black). The boot says so:
 
 ```text
 x86-64: the screen is the text mode of the VGA, 80x25

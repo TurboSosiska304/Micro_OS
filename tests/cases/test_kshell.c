@@ -317,6 +317,95 @@ static bool range_has(const char *buf, long start, long end, const char *needle)
 }
 
 /*
+ * `ls --color` is the same listing with the SGR sequences of a terminal
+ * around a name: blue for a directory and green for a file with an execute
+ * bit. `never` and `auto` are the plain names - a shell of this system has no
+ * terminal to ask about, so `auto` is off - and `always` is the same as the
+ * flag alone.
+ */
+static void test_ls_color(void)
+{
+    struct vfs_file file;
+    static k_u8_t data[VFS_FILE_DATA_SIZE];
+    char buf[2048];
+    size_t used;
+    FILE *sink;
+    long color_start;
+    long color_end;
+    long long_start;
+    long long_end;
+    long never_start;
+    long never_end;
+    long auto_start;
+    long auto_end;
+
+    ktest_begin("kshell: ls --color writes the colours of a terminal");
+
+    ls_setup();
+    KT_CHECK_INT_EQ(vfs_mkdir("/etc"), 0);
+    KT_CHECK_INT_EQ(vfs_mkdir("/etc/init.d"), 0);
+    KT_CHECK_INT_EQ(vfs_open("/etc/hello", VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, data),
+                    0);
+    KT_CHECK_INT_EQ(vfs_write(&file, "hi", 2), 2);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    KT_CHECK_INT_EQ(vfs_chmod("/etc/hello", 0755), 0);
+
+    sink = tmpfile();
+    KT_CHECK(sink != NULL);
+    if (sink == NULL) {
+        ls_teardown();
+        return;
+    }
+
+    port_host_set_sink(sink);
+
+    color_start = ftell(sink);
+    KT_CHECK_INT_EQ(kshell_execute("ls --color /etc"), KSHELL_OK);
+    color_end = ftell(sink);
+
+    long_start = ftell(sink);
+    KT_CHECK_INT_EQ(kshell_execute("ls -l --color /etc"), KSHELL_OK);
+    long_end = ftell(sink);
+
+    never_start = ftell(sink);
+    KT_CHECK_INT_EQ(kshell_execute("ls --color=never /etc"), KSHELL_OK);
+    never_end = ftell(sink);
+
+    auto_start = ftell(sink);
+    KT_CHECK_INT_EQ(kshell_execute("ls --color=auto /etc"), KSHELL_OK);
+    auto_end = ftell(sink);
+
+    /* A value the flag does not have is refused before the listing. */
+    KT_CHECK_INT_EQ(kshell_execute("ls --color=sometimes /etc"), KSHELL_USAGE);
+
+    rewind(sink);
+    used = fread(buf, 1, sizeof(buf) - 1, sink);
+    buf[used] = '\0';
+
+    port_host_set_sink(NULL);
+
+    /* The executable is green and the directory blue, and every name ends
+     * with the reset of the rendition. */
+    KT_CHECK(range_has(buf, color_start, color_end, "\033[32mhello\033[0m\n"));
+    KT_CHECK(range_has(buf, color_start, color_end, "\033[34minit.d/\033[0m\n"));
+
+    /* The long format colours the name and not the line of the mode. */
+    KT_CHECK(range_has(buf, long_start, long_end, "\033[32mhello\033[0m\n"));
+    KT_CHECK(range_has(buf, long_start, long_end, "-rwxr-xr-x"));
+
+    /* never and auto are the names themselves. */
+    KT_CHECK(range_has(buf, never_start, never_end, "hello\n"));
+    KT_CHECK(!range_has(buf, never_start, never_end, "\033["));
+    KT_CHECK(range_has(buf, auto_start, auto_end, "hello\n"));
+    KT_CHECK(!range_has(buf, auto_start, auto_end, "\033["));
+
+    /* The refusal names the flag and prints the usage line. */
+    KT_CHECK(strstr(buf, "ls: --color=sometimes") != NULL);
+
+    ls_teardown();
+}
+
+/*
  * `ls` lists the names of a directory and `tree` draws the levels below it.
  * The same volume serves both, so the test reads the two answers of the
  * commands apart: `ls` has no branch and no path line, `tree` has both and
@@ -490,7 +579,7 @@ static void test_ls(void)
 
     /* The errors and the help of the two commands. */
     KT_CHECK(strstr(buf, "tree: /nope: no such file or directory") != NULL);
-    KT_CHECK(strstr(buf, "usage: ls [-la] [path]") != NULL);
+    KT_CHECK(strstr(buf, "usage: ls [-la] [--color[=always|never|auto]] [path]") != NULL);
     KT_CHECK(strstr(buf, "usage: tree [-ad] [path]") != NULL);
     KT_CHECK(strstr(buf, "ls: unknown option: -z") != NULL);
     KT_CHECK(strstr(buf, "tree: unknown option: -z") != NULL);
@@ -826,6 +915,7 @@ void test_kshell(void)
     test_memtest();
     test_mfetch();
     test_ls();
+    test_ls_color();
     test_attr();
     test_mount();
 }

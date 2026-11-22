@@ -238,11 +238,49 @@ static void entry_sort(struct vfs_dirent *entries, k_size_t count)
     }
 }
 
-/* A directory is written with a slash, so that the kind of a name is visible
- * without the long format. `.` and `..` are the two names that keep none. */
-static void ls_name(const char *name, k_size_t type)
+/*
+ * The colour of a name for `ls --color`: blue for a directory and green for
+ * a file with an execute bit, which are the two colours a person expects of
+ * a listing. The colours are the SGR sequences of a terminal (kernel/ansi.h),
+ * so the screen shows them and the serial copy does not carry them (the port
+ * strips them); a name of no such kind is written plain.
+ */
+#define LS_COLOR_DIR "\033[34m"
+#define LS_COLOR_EXEC "\033[32m"
+#define LS_COLOR_OFF "\033[0m"
+
+static const char *ls_color_start(k_size_t type, bool executable)
 {
-    kshell_printf("%s%s\n", name, type == 2 ? "/" : "");
+    if (type == 2) {
+        return LS_COLOR_DIR;
+    }
+    if (executable) {
+        return LS_COLOR_EXEC;
+    }
+
+    return "";
+}
+
+/* Is the execute bit of a mode of this system set? The nine bits are the
+ * POSIX ones, which the call answers. */
+static bool ls_executable(const struct vfs_statx *info)
+{
+    return info->type == 1 && (info->mode & 0111u) != 0u;
+}
+
+/* The name of one entry, in the colours of `--color` when the flag asked for
+ * them. The long format colours the name and not the line: the fields are a
+ * record and a colour of the mode would read as a statement about it. */
+static void ls_put_name(const char *name, k_size_t type, bool executable, bool color)
+{
+    const char *start = color ? ls_color_start(type, executable) : "";
+
+    if (start[0] == '\0') {
+        kshell_printf("%s%s\n", name, type == 2 ? "/" : "");
+        return;
+    }
+
+    kshell_printf("%s%s%s%s\n", start, name, type == 2 ? "/" : "", LS_COLOR_OFF);
 }
 
 /*
@@ -294,12 +332,15 @@ static void ls_date(k_u64_t when, char out[13])
  * keeps no mode: the `?` says exactly that, because nine dashes would read as
  * "nobody may touch it", which the record does not say.
  */
-static void ls_long_stat(const struct vfs_statx *info, const char *name, bool slash)
+static void ls_long_stat(const struct vfs_statx *info, const char *name, bool slash,
+                         bool executable, bool color)
 {
     char bits[10];
     char mode[11];
     char owner[12];
     char date[13];
+    const char *start = color ? ls_color_start(info->type, executable) : "";
+    const char *reset = start[0] != '\0' ? LS_COLOR_OFF : "";
 
     if (info->mode == 0) {
         snprintf(mode, sizeof(mode), "?---------");
@@ -317,13 +358,13 @@ static void ls_long_stat(const struct vfs_statx *info, const char *name, bool sl
     }
 
     ls_date(info->mtime, date);
-    kshell_printf("%s %-7s %6llu %12s %s%s\n", mode, owner, (unsigned long long)info->size, date,
-                  name, slash ? "/" : "");
+    kshell_printf("%s %-7s %6llu %12s %s%s%s%s\n", mode, owner, (unsigned long long)info->size,
+                  date, start, name, slash ? "/" : "", reset);
 }
 
 /* One entry of a directory in the long format. The stat is of the path of
  * the entry and not of its name, which would find another file. */
-static void ls_long_entry(const char *dir, const struct vfs_dirent *entry)
+static void ls_long_entry(const char *dir, const struct vfs_dirent *entry, bool color)
 {
     char child[SHELL_PATH_MAX];
     struct vfs_statx info;
@@ -336,7 +377,68 @@ static void ls_long_entry(const char *dir, const struct vfs_dirent *entry)
         return;
     }
 
-    ls_long_stat(&info, entry->name, entry->type == 2);
+    ls_long_stat(&info, entry->name, entry->type == 2, ls_executable(&info), color);
+}
+
+/*
+ * The words of the line without the `--color` options, and what the flag
+ * asked for. The helper of the options knows groups of short letters and
+ * `--help`, not a long option with a value, so the flag of the colours is
+ * taken here and the rest of the line goes to kshell_options().
+ */
+#define LS_COLOR_NEVER 0
+#define LS_COLOR_ALWAYS 1
+#define LS_COLOR_AUTO 2
+
+static int ls_take_color(int argc, char **argv, char **rest, int *rest_argc)
+{
+    int color = LS_COLOR_NEVER;
+    int written = 0;
+    int i;
+
+    for (i = 0; i < argc; i++) {
+        const char *word = argv[i];
+
+        if (i > 0 && strncmp(word, "--color", 7) == 0) {
+            const char *when = word + 7;
+
+            if (when[0] == '\0') {
+                color = LS_COLOR_ALWAYS; /* --color alone is --color=always */
+                continue;
+            }
+            if (when[0] == '=' && strcmp(when + 1, "always") == 0) {
+                color = LS_COLOR_ALWAYS;
+                continue;
+            }
+            if (when[0] == '=' && strcmp(when + 1, "never") == 0) {
+                color = LS_COLOR_NEVER;
+                continue;
+            }
+            if (when[0] == '=' && strcmp(when + 1, "auto") == 0) {
+                color = LS_COLOR_AUTO;
+                continue;
+            }
+            if (when[0] == '=') {
+                kshell_printf("ls: %s: the flag is always, never or auto\n", word);
+                return -1;
+            }
+            /* Another long option of that prefix: the caller refuses it the
+             * way it refuses every option it does not know. */
+        }
+
+        rest[written++] = argv[i];
+    }
+
+    rest[written] = NULL;
+    *rest_argc = written;
+
+    /*
+     * `auto` is off: this shell has no terminal to ask about - the console of
+     * the machine is a serial port and a screen at once, and a program that
+     * reads the words of a pipe would get the sequences as text. A person who
+     * wants colours says `--color` or `--color=always`.
+     */
+    return color == LS_COLOR_ALWAYS ? 1 : 0;
 }
 
 static int cmd_ls(int argc, char **argv)
@@ -347,8 +449,10 @@ static int cmd_ls(int argc, char **argv)
      * at the same time.
      */
     static struct vfs_dirent entries[SHELL_MAX_ENTRIES];
+    char *words[KSHELL_MAX_ARGS + 2];
     bool long_format = false;
     bool show_all = false;
+    bool color;
     struct kshell_option options[] = {
         {'l', &long_format},
         {'a', &show_all},
@@ -360,8 +464,23 @@ static int cmd_ls(int argc, char **argv)
     k_size_t count = 0;
     k_size_t i;
     int rc;
+    int colors;
+    int words_count = 0;
 
-    rc = kshell_options(argc, argv, options, K_ARRAY_SIZE(options), "ls [-la] [path]", &args);
+    if (argc > KSHELL_MAX_ARGS + 2) {
+        kshell_printf("ls: too many arguments\n");
+        return KSHELL_USAGE;
+    }
+
+    colors = ls_take_color(argc, argv, words, &words_count);
+    if (colors < 0) {
+        kshell_printf("usage: ls [-la] [--color[=always|never|auto]] [path]\n");
+        return KSHELL_USAGE;
+    }
+    color = colors == 1;
+
+    rc = kshell_options(words_count, words, options, K_ARRAY_SIZE(options),
+                        "ls [-la] [--color[=always|never|auto]] [path]", &args);
     if (rc == KSHELL_OPTIONS_HELP) {
         return kshell_help_show(argv[0]);
     }
@@ -370,7 +489,7 @@ static int cmd_ls(int argc, char **argv)
     }
 
     if (args.argc > 1) {
-        kshell_printf("usage: ls [-la] [path]\n");
+        kshell_printf("usage: ls [-la] [--color[=always|never|auto]] [path]\n");
         return KSHELL_USAGE;
     }
 
@@ -399,7 +518,7 @@ static int cmd_ls(int argc, char **argv)
                 kshell_printf("ls: %s: %s\n", path, vfs_strerror(rc));
                 return KSHELL_ERROR;
             }
-            ls_long_stat(&info_x, shown, false);
+            ls_long_stat(&info_x, shown, false, ls_executable(&info_x), color);
         } else {
             kshell_printf("%s\n", shown);
         }
@@ -421,18 +540,18 @@ static int cmd_ls(int argc, char **argv)
             struct vfs_statx parent_info;
 
             if (vfs_statx(path, &self_info) == 0) {
-                ls_long_stat(&self_info, ".", false);
+                ls_long_stat(&self_info, ".", false, false, color);
             }
             path_parent(path, parent, sizeof(parent));
             /* A parent that cannot be read is not invented: the row is
              * missing rather than wrong. */
             if (vfs_statx(parent, &parent_info) == 0) {
-                ls_long_stat(&parent_info, "..", false);
+                ls_long_stat(&parent_info, "..", false, false, color);
             }
         }
 
         for (i = 0; i < count; i++) {
-            ls_long_entry(path, &entries[i]);
+            ls_long_entry(path, &entries[i], color);
         }
 
         return KSHELL_OK;
@@ -447,7 +566,22 @@ static int cmd_ls(int argc, char **argv)
     }
 
     for (i = 0; i < count; i++) {
-        ls_name(entries[i].name, entries[i].type);
+        bool executable = false;
+
+        if (color) {
+            char child[SHELL_PATH_MAX];
+            struct vfs_statx child_info;
+
+            /* The mode is one stat per name, and a listing of colours is the
+             * command of a person at the console, not of a script. */
+            if (entries[i].type == 1 &&
+                ls_child_path(path, entries[i].name, child, sizeof(child)) &&
+                vfs_statx(child, &child_info) == 0) {
+                executable = ls_executable(&child_info);
+            }
+        }
+
+        ls_put_name(entries[i].name, entries[i].type, executable, color);
     }
 
     return KSHELL_OK;
@@ -1709,9 +1843,13 @@ static const struct file_command {
     {"cd", {.summary = "change the current directory", .usage = "cd <directory>"}, cmd_cd},
     {"ls",
      {.summary = "list the names of a directory",
-      .usage = "ls [-la] [path]",
+      .usage = "ls [-la] [--color[=always|never|auto]] [path]",
       .detail = "  -l  the mode, the owner, the size and the date of every entry\n"
                 "  -a  show . and .. first\n"
+                "  --color[=when]  colour the names: blue for a directory and\n"
+                "                  green for an executable; when is always,\n"
+                "                  never or auto, and auto is off because the\n"
+                "                  shell has no terminal to ask\n"
                 "Without a path the current directory is listed. The names come one\n"
                 "per line, sorted; `tree` draws the levels below a path.\n"},
      cmd_ls},

@@ -150,7 +150,7 @@ int kernel_boot(const struct kernel_boot_config *cfg)
             KERNEL_PANIC("cannot continue without subsystem '%s'", sorted[i]->name);
         }
 
-        klog(K_LOG_LEVEL_INFO, "[ ok ] %s", sorted[i]->name);
+        klog_tone(K_LOG_TONE_OK, "[ ok ] %s", sorted[i]->name);
         g_booted_subsys++;
     }
 

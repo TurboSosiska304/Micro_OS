@@ -10,9 +10,13 @@
  * of the dialogue and its escape sequences live in src/console.c, and this
  * file is the screen that puts a cell into the video memory.
  *
- * The attribute of every cell is the `console` system of /etc (ADR 0021):
- * light grey on black, or black on light grey, with the inversion of the file
- * swapping the two.
+ * The attribute of a cell is the one the console computed (kernel/ansi.h): the
+ * nibble of the ink and the nibble of the paper of the sixteen colours the
+ * mode has had from the beginning. The plain text carries the pair of the
+ * `console` system of /etc (ADR 0021) - light grey on black, black on light
+ * grey, with the inversion of the file - and a word a command coloured keeps
+ * its own; a change of the pair repaints the cells of the pair and leaves the
+ * others.
  */
 #include "port_x86_64_console.h"
 
@@ -26,16 +30,13 @@
 
 /*
  * Light grey on black: the colours of the terminal the serial console looks
- * like, so that the window and the log are the same picture. A system of /etc
- * (`console`, ADR 0021) may ask for the other attribute, and then every cell
- * of the screen carries it.
- *
- * The two attributes of the themes are grey on black and black on light grey.
+ * like, so that the window and the log are the same picture. The theme of
+ * /etc chooses the pair and the console hands it over as an attribute; the
+ * value here is the pair of the boot, before the files are read.
  */
-#define VGA_ATTR_DARK 0x07u
-#define VGA_ATTR_LIGHT 0x70u
+#define VGA_ATTR_BOOT 0x07u
 
-static k_u8_t g_attribute = VGA_ATTR_DARK;
+static k_u8_t g_theme_attr = VGA_ATTR_BOOT;
 
 /* One cell of the video memory: the character in the low byte of the word and
  * the colour in the high one, which is the order the VGA has read since the
@@ -64,12 +65,18 @@ static k_u16_t vga_cell(char character, k_u8_t attribute)
 
 static volatile k_u16_t *const g_vga = (volatile k_u16_t *)(uintptr_t)VGA_BASE;
 
-static void text_clear(void)
+/* The paper and the ink of an attribute traded: the cursor and the SGR 7. */
+static k_u8_t attr_reverse(k_u8_t attr)
+{
+    return PORT_X86_64_ATTR(PORT_X86_64_ATTR_BG(attr), PORT_X86_64_ATTR_FG(attr));
+}
+
+static void text_clear(k_u8_t attr)
 {
     int i;
 
     for (i = 0; i < (int)VGA_CELLS; i++) {
-        g_vga[i] = vga_cell(' ', g_attribute);
+        g_vga[i] = vga_cell(' ', attr);
     }
 
     port_outb(CRTC_INDEX, CRTC_CURSOR_START);
@@ -78,19 +85,20 @@ static void text_clear(void)
     port_outb(CRTC_DATA, CURSOR_LAST_LINE);
 }
 
-static void text_put(int row, int column, char character)
+static void text_put(int row, int column, char character, k_u8_t attr)
 {
     if (row < 0 || row >= VGA_ROWS || column < 0 || column >= VGA_COLUMNS) {
         return;
     }
 
-    g_vga[row * VGA_COLUMNS + column] = vga_cell(character, g_attribute);
+    g_vga[row * VGA_COLUMNS + column] = vga_cell(character, attr);
 }
 
-/* The screen is one memory, so a scroll is a move of its rows and a blank last
- * one. The loop stops one row short of the end on purpose: the source of the
- * last move is the last row, which the second loop fills. */
-static void text_scroll(void)
+/* The screen is one memory, so a scroll is a move of its rows - the words
+ * carry their attributes with them - and a blank last one in the colour of
+ * `attr`. The loop stops one row short of the end on purpose: the source of
+ * the last move is the last row, which the second loop fills. */
+static void text_scroll(k_u8_t attr)
 {
     int i;
 
@@ -99,7 +107,7 @@ static void text_scroll(void)
     }
 
     for (; i < (int)VGA_CELLS; i++) {
-        g_vga[i] = vga_cell(' ', g_attribute);
+        g_vga[i] = vga_cell(' ', attr);
     }
 }
 
@@ -114,27 +122,39 @@ static void text_cursor(int row, int column)
 }
 
 /*
- * The attribute of the screen for every cell: the theme of `console` of /etc
- * (ADR 0021). The characters stay where they are, so the line that was on the
- * glass when a person typed `config set console.theme light` is read again in
- * the new colours instead of disappearing.
+ * The pair of `console` of /etc (ADR 0021) for every cell of the pair: the
+ * theme and its inversion are the attribute the console computed, the
+ * characters stay where they are, and a cell that carries a colour of its own
+ * (a warning, a directory) keeps it. The line that was on the glass when a
+ * person typed `config set console.theme light` is read again in the new
+ * colours instead of disappearing.
  */
-static void text_colors(bool light, bool invert)
+static void text_colors(const struct port_x86_64_pair *pair)
 {
-    k_u8_t attribute = light ? VGA_ATTR_LIGHT : VGA_ATTR_DARK;
+    k_u8_t next = PORT_X86_64_ATTR(pair->fg, pair->bg);
+    k_u8_t old = g_theme_attr;
     int i;
 
-    if (invert) {
-        attribute = (k_u8_t)((k_u8_t)(attribute >> 4) | (k_u8_t)(attribute << 4));
-    }
-
-    g_attribute = attribute;
+    /* The line is written before the cells of the pair are repainted, so it
+     * is one of them and the pass carries it to the new colours: a letter
+     * written after the pass would be the pair of the screen already and
+     * would read as the reverse of the old one when the two are the same two
+     * colours traded (the dark and the light theme are exactly that). */
+    kinfo("console: the attribute of the screen %d", (int)next);
 
     for (i = 0; i < (int)VGA_CELLS; i++) {
-        g_vga[i] = (k_u16_t)((g_vga[i] & 0x00FFu) | ((k_u16_t)attribute << 8));
+        k_u8_t attr = (k_u8_t)(g_vga[i] >> 8);
+
+        if (attr == old) {
+            attr = next;
+        } else if (attr == attr_reverse(old)) {
+            attr = attr_reverse(next);
+        }
+
+        g_vga[i] = (k_u16_t)((g_vga[i] & 0x00FFu) | ((k_u16_t)attr << 8));
     }
 
-    kinfo("console: the attribute of the screen %d", (int)attribute);
+    g_theme_attr = next;
 }
 
 const struct port_x86_64_screen port_x86_64_screen_text = {

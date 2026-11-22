@@ -125,7 +125,7 @@ The files, on every machine:
 | Command | What it does |
 |---|---|
 | `pwd`, `cd <dir>` | the current directory |
-| `ls [-la] [path]` | the names of a directory, one per line; `-l` adds the mode, the owner, the size and the date, `-a` puts `.` and `..` first |
+| `ls [-la] [--color[=when]] [path]` | the names of a directory, one per line; `-l` adds the mode, the owner, the size and the date, `-a` puts `.` and `..` first |
 | `tree [-ad] [path]` | the levels below a path, with `` `-- `` branches; `-d` keeps the directories only |
 | `cat [-n] [file]` | the content of a file, or of the standard input; `-n` numbers the lines |
 | `write <file> <text>` | create or replace a file with one line (at most 127 bytes) |
@@ -245,6 +245,15 @@ microos> ls -l /etc
 drwxr-xr-x root        14 21 Nov 19:03 init.d/
 -rw-r--r-- root         6 21 Nov 19:03 setting
 ```
+
+`--color` writes a directory in blue and a file with an execute bit in green;
+the colours are the SGR sequences of a terminal, so a screen shows them and
+the serial copy of the console does not. `--color=always` is the flag itself,
+`--color=never` is the plain listing and `--color=auto` is the plain listing
+as well, because this shell has no terminal to ask about. Without the flag the
+names are plain, as they always were. A person reads the result on the screen
+of x86-64: `make x86-vga-smoke` checks the colour of the cell of a directory
+and of an executable out of the picture.
 
 The owner 0 is written `root`, a greater uid as a number. A record without a
 mode prints `?---------`; a record without a moment prints `-` in the date
