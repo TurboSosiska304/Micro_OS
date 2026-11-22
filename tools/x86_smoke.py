@@ -169,8 +169,9 @@ COMMANDS = [
     # image under a name, and the mode follows the name).
     "exec /bin/zstd -l /etc/setting.zst",
     "exec /bin/zstdcat /etc/setting.zst",
-    # A stream through a pipe: the decompressor reads descriptor 0 of a stage.
-    "cat /etc/setting.zst | /bin/zstd -d -c",
+    # A stream through a pipe: the decompressor reads descriptor 0 of a stage
+    # and writes descriptor 1 of it (`--stdout` is the long name of `-c`).
+    "cat /etc/setting.zst | /bin/zstd -d --stdout",
     # A directory through `<dirent.h>` and the POSIX `stat` of the library of
     # a program: `-r` walks it and writes a frame beside every file.
     "mkdir /tmp/z",
@@ -178,6 +179,11 @@ COMMANDS = [
     "echo beta > /tmp/z/b",
     "exec /bin/zstd -r -q -f /tmp/z",
     "exec /bin/ls /tmp/z",
+    # `--rm` takes the source away when the frame is written: the copy is a
+    # file of the volume and the original is not.
+    "echo gamma > /tmp/rm.txt",
+    "exec /bin/zstd --rm -q -f /tmp/rm.txt",
+    "exec /bin/ls /tmp",
     "exec /bin/ls /etc/licenses",
     # The second port of a program of somebody else (Lua): the interpreter is
     # a file of /bin, its first script and its license are files of /etc, and
@@ -1511,7 +1517,21 @@ def check(output: str) -> list:
         "a.zst" in recursive_listing and "b.zst" in recursive_listing,
         recursive_listing,
     )
-    piped_zstd = answer("cat /etc/setting.zst | /bin/zstd -d -c")
+    removed = answer("exec /bin/zstd --rm -q -f /tmp/rm.txt")
+    expect(
+        "zstd --rm writes the frame and takes the source away",
+        "the program exited with 0" in removed and "zstd:" not in removed,
+        removed,
+    )
+    # The third listing of /tmp: the two before this block are the tree that
+    # `mkdir /tmp/d` made and the one after `rm -r /tmp`.
+    listing_after_rm = answer("exec /bin/ls /tmp", 2)
+    expect(
+        "the source of --rm is gone and its frame is there",
+        "rm.txt.zst" in listing_after_rm and not re.search(r"(?m)^rm\.txt\s*$", listing_after_rm),
+        listing_after_rm,
+    )
+    piped_zstd = answer("cat /etc/setting.zst | /bin/zstd -d --stdout")
     expect(
         "zstd reads a frame from a pipe",
         "hostname=x86_64" in piped_zstd and "the program exited with 0" in piped_zstd,
