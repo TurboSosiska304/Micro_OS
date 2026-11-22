@@ -1,12 +1,12 @@
 /*
  * Micro OS — the clock of a program.
  *
- * The kernel has no call that answers the seconds of Unix: the wall clock of
- * the system (`k_clock_now_unix`) is a fact of the kernel that the ABI of
- * 1.1 does not hand to a program. `time()` is therefore the time since the
- * boot, in seconds, and `os.date` of Lua shows the moment of the epoch plus
- * that count. When the ABI learns the wall clock, this file asks it and
- * nothing of the library of a program changes.
+ * The kernel has one clock: `uptime`, the milliseconds since the boot. There
+ * is no wall clock on the x86-64 machine and the filesystem keeps a moment of
+ * Unix only when the tool that wrote the volume gave one. `time()` therefore
+ * answers the seconds of the boot and not the epoch, and the tools that print
+ * a date print the moment the record holds, as they would on a machine whose
+ * clock had not been set. `docs/debts.md` records the missing clock.
  *
  * The calendar is the C locale of UTC: no time zone, no daylight saving, and
  * the two functions `localtime` and `gmtime` answer the same structure.
@@ -16,9 +16,17 @@
 
 #include "ulibc.h"
 
+#ifndef MICRO_OS_LIBC_USER_TIME_T_DEFINED
+#define MICRO_OS_LIBC_USER_TIME_T_DEFINED
 typedef long time_t;
-typedef long clock_t;
+#endif
 
+#ifndef MICRO_OS_LIBC_USER_CLOCK_T_DEFINED
+#define MICRO_OS_LIBC_USER_CLOCK_T_DEFINED
+typedef long clock_t;
+#endif
+
+/* `clock()` counts the milliseconds of the boot, as `uptime` does. */
 #define CLOCKS_PER_SEC 1000
 
 struct tm {
@@ -33,12 +41,28 @@ struct tm {
     int tm_isdst;
 };
 
-time_t time(time_t *seconds);
+/* The one clock of the machine is the monotonic one of the boot; a caller
+ * that asks for the realtime clock gets the same moment, because there is no
+ * second clock to give. */
+#define CLOCK_REALTIME 0
+#define CLOCK_MONOTONIC 1
+
+#ifndef MICRO_OS_LIBC_USER_TIMESPEC_DEFINED
+#define MICRO_OS_LIBC_USER_TIMESPEC_DEFINED
+struct timespec {
+    time_t tv_sec;
+    long tv_nsec;
+};
+#endif
+
+int clock_gettime(int clock, struct timespec *moment);
+
+time_t time(time_t *out);
 clock_t clock(void);
 double difftime(time_t later, time_t earlier);
-struct tm *gmtime(const time_t *seconds);
-struct tm *localtime(const time_t *seconds);
-time_t mktime(struct tm *broken);
-size_t strftime(char *buffer, size_t size, const char *format, const struct tm *broken);
+struct tm *gmtime(const time_t *when);
+struct tm *localtime(const time_t *when);
+time_t mktime(struct tm *parts);
+size_t strftime(char *buffer, size_t size, const char *format, const struct tm *parts);
 
 #endif /* MICRO_OS_LIBC_USER_TIME_H */

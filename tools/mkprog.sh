@@ -350,6 +350,31 @@ elif [ -n "$base" ]; then
 
         text_aligned=$data_offset
     fi
+
+    # The bss follows the data in the format: the port clears `bss_size`
+    # bytes right after the data, because the header has no field of its own
+    # for it. The linker, however, aligns the .bss section to the widest
+    # object in it - a compiler may align a large array to 32 bytes - and a
+    # gap of a few bytes then stands between the end of the data and the
+    # first byte of the bss. The format carries that gap as padding of the
+    # data segment: without it the port clears the bss a few bytes early and
+    # the arguments of the program (copied after the image) land in it.
+    if [ "$bss_size" -gt 0 ]; then
+        bss_address=$(section_address .bss)
+        expected_bss=$((base + K_EXEC_HEADER_SIZE + text_aligned + data_aligned))
+        if [ -z "$bss_address" ] || [ "$((bss_address))" -lt "$expected_bss" ]; then
+            printf "mkprog: %s has its bss at 0x%x, before the data ends at 0x%x\n" \
+                "$object" "${bss_address:-0}" "$expected_bss" >&2
+            exit 1
+        fi
+        bss_gap=$((bss_address - expected_bss))
+        if [ "$bss_gap" -gt 64 ]; then
+            printf "mkprog: %s has its bss %d byte(s) after the data, the window cannot pad that\n" \
+                "$object" "$bss_gap" >&2
+            exit 1
+        fi
+        data_aligned=$((data_aligned + bss_gap))
+    fi
 fi
 
 entry=$((symbol_address - text_address + K_EXEC_HEADER_SIZE))

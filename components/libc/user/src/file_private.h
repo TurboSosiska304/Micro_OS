@@ -21,6 +21,13 @@ struct ulibc_file {
      * number did not want, and `fgetc` answers it before the next read. The
      * standard promises one byte and no more. */
     int pushback;
+    /* The block of a stream of memory (`fmemopen`), or NULL. The memory is
+     * the caller's, never freed by `fclose`, and the position is the index of
+     * the next byte. */
+    unsigned char *data;
+    size_t size;
+    size_t position;
+    int memory;
 };
 
 #endif /* MICRO_OS_LIBC_USER_FILE_PRIVATE_H */

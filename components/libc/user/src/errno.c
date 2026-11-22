@@ -55,6 +55,20 @@ char *strerror(int code)
         return "not a directory";
     case EISDIR:
         return "is a directory";
+    case E2BIG:
+        return "argument list too long";
+    case EACCES:
+        return "permission denied";
+    case EEXIST:
+        return "file exists";
+    case EXDEV:
+        return "cross-device link";
+    case ENOTTY:
+        return "not a terminal";
+    case ERANGE:
+        return "result too large";
+    case EDOM:
+        return "argument out of domain";
     case EINVAL:
         return "invalid argument";
     case EMFILE:

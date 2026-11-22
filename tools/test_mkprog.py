@@ -287,6 +287,100 @@ def check_base_case(work: Path, script: Path) -> None:
     assert not refused.exists(), "base: the refusal left an image behind"
 
 
+def check_bss_gap_case(work: Path, script: Path) -> None:
+    """A .bss the linker aligned past the data: the image carries the gap.
+
+    The port clears the bss right after the data, because the header has no
+    field for it. A large array of the bss is aligned by the compiler (32
+    bytes here), so the linker may leave a gap between the data and the first
+    byte of the bss; the image has to carry it as padding of the data, or the
+    port clears the bss early and the arguments of the program land in it.
+    """
+    text = bytes(0x90 for _ in range(4))
+    # Twenty bytes of data are thirty-two after the alignment of the format;
+    # with the sixteen of the text the data ends sixteen bytes into a block
+    # of thirty-two, which is where the linker asks for the gap.
+    data = bytes(0x40 for _ in range(20))
+
+    source = work / "bssgap.c"
+    obj = work / "bssgap.o"
+    linker = work / "bssgap.ld"
+    elf = work / "bssgap.elf"
+
+    # The array asks for 32 bytes of alignment, which is more than the 16 of
+    # the data; its size keeps it out of .data and in the bss.
+    source.write_text(
+        build_source(text, data) + "\n_Alignas(32) unsigned char test_bss[64];\n",
+        encoding="utf-8",
+    )
+    linker.write_text(
+        f"""\
+SECTIONS
+{{
+    . = 0x{PROGRAM_BASE + K_EXEC_HEADER_SIZE:08x};
+    .text : SUBALIGN(4) {{ *(.text .text.*) }}
+    . = ALIGN(16);
+    .data : {{ *(.data .data.*) *(.rodata .rodata.*) }}
+    . = ALIGN(16);
+    .bss (NOLOAD) : {{ *(.bss .bss.*) *(COMMON) }}
+    /DISCARD/ : {{ *(.comment) *(.eh_frame) *(.note .note.*) }}
+}}
+""",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["gcc", "-c", "-fno-pic", "-fno-pie", "-fno-stack-protector",
+         "-fno-asynchronous-unwind-tables", "-o", str(obj), str(source)],
+        check=True, capture_output=True, text=True,
+    )
+    subprocess.run(
+        ["gcc", "-nostdlib", "-static", "-no-pie", "-Wl,--build-id=none",
+         "-Wl,-e,test_entry", f"-Wl,-T,{linker}", "-o", str(elf), str(obj)],
+        check=True, capture_output=True, text=True,
+    )
+
+    image = work / "bssgap.mox"
+    subprocess.run(
+        [str(script), "--base", hex(PROGRAM_BASE), "--arch", "x86-64", str(elf), str(image),
+         "test_entry"],
+        check=True, capture_output=True, text=True,
+    )
+
+    header, payload = parse_image(image)
+    fields = dict(zip(HEADER_FIELDS, header))
+
+    # Where the linker put the bss, from the ELF itself.
+    listing = subprocess.run(
+        ["objdump", "-h", str(elf)], check=True, capture_output=True, text=True
+    ).stdout
+    bss_address = None
+    for line in listing.splitlines():
+        fields_of_line = line.split()
+        if len(fields_of_line) >= 4 and fields_of_line[1] == ".bss":
+            bss_address = int(fields_of_line[3], 16)
+            break
+    assert bss_address is not None, "bssgap: the object has no bss"
+
+    text_aligned = align16(len(text))
+    expected_data = bss_address - (PROGRAM_BASE + K_EXEC_HEADER_SIZE + text_aligned)
+    assert expected_data >= align16(len(data)), "bssgap: the bss overlaps the data"
+    assert fields["bss_size"] == 64, f"bssgap: bss size is {fields['bss_size']}"
+    assert fields["data_size"] == expected_data, (
+        f"bssgap: data size is {fields['data_size']}, the bss starts after "
+        f"{expected_data} byte(s) of data"
+    )
+    assert len(payload) == text_aligned + expected_data, (
+        f"bssgap: the image has {len(payload)} payload bytes, expected "
+        f"{text_aligned + expected_data}"
+    )
+    assert payload[text_aligned : text_aligned + len(data)] == data, (
+        "bssgap: the data is not after the padded text"
+    )
+    assert payload[text_aligned + len(data) :] == b"\0" * (expected_data - len(data)), (
+        "bssgap: the gap before the bss is not zero"
+    )
+
+
 def build_split_linker_script(text_base: int, data_base: int) -> str:
     """The rule of program_esp32.ld: the text above, the data in its own window."""
     return f"""\
@@ -456,6 +550,7 @@ def main() -> int:
 
         check_bad_arch(work, script)
         check_base_case(work, script)
+        check_bss_gap_case(work, script)
         check_data_base_case(work, script)
 
     print(

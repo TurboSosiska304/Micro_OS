@@ -42,6 +42,7 @@ static int digit_of(int byte)
     return -1;
 }
 
+#ifdef ULIBC_WITH_FLOAT
 /* The powers of ten that a double holds exactly, for the scaling below. */
 static const double g_pow10[] = {
     1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,  1e10, 1e11,
@@ -66,7 +67,15 @@ static int word_is(const char *text, const char *word)
 
     return 1;
 }
+#endif /* ULIBC_WITH_FLOAT */
 
+#ifdef ULIBC_WITH_FLOAT
+/*
+ * The text of a real number. It is compiled only into a program built with
+ * `ULIBC_WITH_FLOAT` and without `-mgeneral-regs-only`: a function that
+ * returns a `double` needs an XMM register, and a program of the tree does
+ * not carry one.
+ */
 double strtod(const char *text, char **end)
 {
     const char *cursor = text;
@@ -198,6 +207,7 @@ double atof(const char *text)
 {
     return strtod(text, NULL);
 }
+#endif /* ULIBC_WITH_FLOAT */
 
 /*
  * The whole numbers. The sign is read from the text and the digits are
@@ -473,4 +483,44 @@ void qsort(void *base, size_t count, size_t size, int (*compare)(const void *, c
 
     merge_sort((unsigned char *)base, copy, count, size, compare);
     free(copy);
+}
+
+long long atoll(const char *text)
+{
+    return strtoll(text, NULL, 10);
+}
+
+long long llabs(long long value)
+{
+    return (value < 0) ? -value : value;
+}
+
+/*
+ * The search of an element of a sorted array. The compare is the one of
+ * `qsort`, and the array is the caller's: half the range goes away at every
+ * step, so a table of a command is found in a handful of calls.
+ */
+void *bsearch(const void *key, const void *array, size_t count, size_t size,
+              int (*compare)(const void *, const void *))
+{
+    const unsigned char *base = (const unsigned char *)array;
+    size_t low = 0;
+    size_t high = count;
+
+    while (low < high) {
+        size_t middle = low + (high - low) / 2;
+        const void *element = base + middle * size;
+        int order = compare(key, element);
+
+        if (order == 0) {
+            return (void *)element;
+        }
+        if (order < 0) {
+            high = middle;
+        } else {
+            low = middle + 1;
+        }
+    }
+
+    return NULL;
 }

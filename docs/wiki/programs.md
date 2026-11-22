@@ -99,9 +99,9 @@ make x86-smoke     # the same, driven by the smoke test
 
 `tools/mkfs_mfs.c` writes the image: an MBR with one Linux partition at LBA
 2048, a MicroFS volume in it, `/bin`, `/etc` and an empty `/etc/init.d`, the
-nineteen `.mox` images of the build written to `/bin` with mode `0755`, the
-licenses of zlib, PCRE2 and Lua in `/etc/licenses`, and the settings of the
-machine in `/etc/setting`. It does not repeat the layout
+twenty-nine `.mox` images of the build written to `/bin` with mode `0755`, the
+licenses of zlib, PCRE2, Lua and sbase in `/etc/licenses`, and the settings of
+the machine in `/etc/setting`. It does not repeat the layout
 of MicroFS: it is a block device over a range of the file, and
 `components/mfs` formats it and writes the objects through `mfs_create`,
 `mfs_write` and `mfs_chmod`. The host test
@@ -127,8 +127,8 @@ never changed.
 ## `/bin` and the boot
 
 The x86-64 port mounts the MicroFS volume of its disk at `/` and finds
-`/bin` already there: the eighteen images are files the tool wrote, with the
-mode of a program (`0755`), and no boot creates one:
+`/bin` already there: the twenty-nine images are files the tool wrote, with
+the mode of a program (`0755`), and no boot creates one:
 
 | File | What it proves |
 |---|---|
@@ -151,13 +151,17 @@ mode of a program (`0755`), and no boot creates one:
 | `/bin/wc` | the lines, words and bytes of a source (`-l`, `-w`, `-c`) or of descriptor 0 |
 | `/bin/zcat` | a `.gz` of the VFS inflated by zlib 1.3.1 and written to the console or a file |
 | `/bin/lua` | the interpreter of Lua 5.4.7: `-e` and the script `/etc/hello.lua`, read from the volume |
+| `/bin/sb-cat`, `sb-grep`, `sb-head`, `sb-ls`, `sb-tail`, `sb-wc` | the tools of sbase (MIT) for a file, a directory and a line: `ls -la`, `grep -r`, `wc -l`, `head`, `tail`, `cat` |
+| `/bin/sb-sort`, `sb-find`, `sb-xargs`, `sb-sed` | the tools of sbase for a tree and a stream: the order of `sort` (with `-n`), a walk of `find` with `-name`, a command over the words of a pipe, and a substitution of `sed` |
 
 The first five talk to the kernel through `programs/prog.h`, because what they
 test is the raw door, the fault, the fork, the edge and the signals. The rest
 are ordinary C programs linked against `components/libc/user`
 ([ADR 0016](../adr/0016-userland.md)); `zcat`, `pcre2grep` and `lua` are
-linked against the three libraries of somebody else (zlib, PCRE2 and Lua)
-([`docs/porting-programs.md`](../porting-programs.md)). Every one of them
+linked against the three libraries of somebody else (zlib, PCRE2 and Lua) and
+the ten `sb-*` tools are the programs of sbase
+([`docs/porting-programs.md`](../porting-programs.md),
+[`third_party/sbase`](../../third_party/sbase/README.md)). Every one of them
 reads descriptor 0
 when it is given no file (or `-`); `execve` carries the table of the caller, so
 a redirect or a pipe of the shell fills it (`cat < file`, `ls /bin | wc -l`,
@@ -174,7 +178,12 @@ stream of a fixed text, written by `tools/x86_image.py` with `mtime` from
 write the same bytes. `zcat -o FILE` inflates it into a file of MicroFS and
 `zcat -t` checks it; the smoke tests compare the count and the text of the
 inflated bytes. `/etc/licenses/zlib` is the zlib license beside the program
-that carries the library, and `docs/licensing.md` has the row.
+that carries the library, and `docs/licensing.md` has the row. The ten tools
+of sbase are built **beside** the programs of the tree and not in place of
+them: `/bin/ls` prints the names on one line and says `error 2` for a path
+that is not there, which is a sentence the smoke test reads; `/bin/sb-ls` is
+the `ls` of a Unix-like system, with `-l`, `-a`, `-R` and the owner of the
+file. A person who wants the second one types the name.
 
 ## The board: Xtensa code without an MMU
 

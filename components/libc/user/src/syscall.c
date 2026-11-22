@@ -22,8 +22,24 @@
  */
 #include "ulibc.h"
 
+#include "ulibc_internal.h"
+
 #include <errno.h>
 #include <signal.h>
+
+/*
+ * The board has a window of 8 KiB of text and no need of the directory the
+ * library keeps: the ABI of its port carries the cwd of the task and its
+ * programs use the paths of the shell. The resolver is the library of a
+ * program of x86-64, where a program has a directory of its own.
+ */
+#ifdef MOX_ARCH_XTENSA
+#define resolve_path(path) (path)
+#define get_directory() NULL
+#else
+#define resolve_path(path) __ulibc_path(path)
+#define get_directory() __ulibc_cwd()
+#endif
 #include <stdint.h>
 
 #ifdef MOX_ARCH_XTENSA
@@ -36,7 +52,7 @@ extern void *g_mox_door;
  * `errno`: a portable library calls `read` and then reads `errno` without a
  * second call, which is the shape zlib and the sockets of a program expect.
  */
-static long answer(long result)
+long __ulibc_result(long result)
 {
     if (result < 0) {
         errno = (int)-result;
@@ -45,7 +61,7 @@ static long answer(long result)
     return result;
 }
 
-static long syscall6(long number, long a0, long a1, long a2, long a3, long a4, long a5)
+long __ulibc_syscall6(long number, long a0, long a1, long a2, long a3, long a4, long a5)
 {
 #ifdef MOX_ARCH_XTENSA
     /*
@@ -108,50 +124,98 @@ static int open_flags(int flags)
 
 int open(const char *path, int flags, ...)
 {
+    const char *resolved = resolve_path(path);
+
     /* The mode of POSIX is accepted and ignored, as in the library of the
      * kernel: a new file gets the mode of the design and chmod changes it. */
-    return (int)answer(syscall6(KSYS_OPEN, (long)(uintptr_t)path, open_flags(flags), 0, 0, 0, 0));
+    if (resolved == NULL) {
+        return -1;
+    }
+
+    {
+        long fd = __ulibc_result(
+            __ulibc_syscall6(KSYS_OPEN, (long)(uintptr_t)resolved, open_flags(flags), 0, 0, 0, 0));
+
+#ifndef MOX_ARCH_XTENSA
+        if (fd >= 0 && (flags & ULIBC_O_DIRECTORY) != 0) {
+            __ulibc_dir_remember((int)fd, resolved);
+        }
+#endif
+
+        return (int)fd;
+    }
 }
 
 int close(int fd)
 {
-    return (int)answer(syscall6(KSYS_CLOSE, fd, 0, 0, 0, 0, 0));
+    int rc = (int)__ulibc_result(__ulibc_syscall6(KSYS_CLOSE, fd, 0, 0, 0, 0, 0));
+
+#ifndef MOX_ARCH_XTENSA
+    if (rc == 0) {
+        __ulibc_dir_forget(fd);
+    }
+#endif
+
+    return rc;
 }
 
 long read(int fd, void *buf, size_t count)
 {
-    return answer(syscall6(KSYS_READ, fd, (long)(uintptr_t)buf, (long)count, 0, 0, 0));
+    return __ulibc_result(
+        __ulibc_syscall6(KSYS_READ, fd, (long)(uintptr_t)buf, (long)count, 0, 0, 0));
 }
 
 long write(int fd, const void *buf, size_t count)
 {
-    return answer(syscall6(KSYS_WRITE, fd, (long)(uintptr_t)buf, (long)count, 0, 0, 0));
+    return __ulibc_result(
+        __ulibc_syscall6(KSYS_WRITE, fd, (long)(uintptr_t)buf, (long)count, 0, 0, 0));
 }
 
 long lseek(int fd, long offset, int whence)
 {
-    return answer(syscall6(KSYS_LSEEK, fd, offset, whence, 0, 0, 0));
+    return __ulibc_result(__ulibc_syscall6(KSYS_LSEEK, fd, offset, whence, 0, 0, 0));
 }
 
-long readdir(int fd, struct vfs_dirent *entries, size_t count)
+long ulibc_readdir(int fd, struct vfs_dirent *entries, size_t count)
 {
-    return answer(syscall6(KSYS_READDIR, fd, (long)(uintptr_t)entries, (long)count, 0, 0, 0));
+    return __ulibc_result(
+        __ulibc_syscall6(KSYS_READDIR, fd, (long)(uintptr_t)entries, (long)count, 0, 0, 0));
 }
 
-int stat(const char *path, struct vfs_stat *info)
+int ulibc_stat_call(const char *path, struct vfs_stat *info)
 {
-    return (int)answer(
-        syscall6(KSYS_STAT, (long)(uintptr_t)path, (long)(uintptr_t)info, 0, 0, 0, 0));
+    const char *resolved = resolve_path(path);
+
+    if (resolved == NULL) {
+        return -1;
+    }
+
+    return (int)__ulibc_result(
+        __ulibc_syscall6(KSYS_STAT, (long)(uintptr_t)resolved, (long)(uintptr_t)info, 0, 0, 0, 0));
 }
 
-int mkdir(const char *path)
+int mkdir(const char *path, ...)
 {
-    return (int)answer(syscall6(KSYS_MKDIR, (long)(uintptr_t)path, 0, 0, 0, 0, 0));
+    const char *resolved = resolve_path(path);
+
+    if (resolved == NULL) {
+        return -1;
+    }
+
+    return (int)__ulibc_result(
+        __ulibc_syscall6(KSYS_MKDIR, (long)(uintptr_t)resolved, 0, 0, 0, 0, 0));
 }
 
 int unlink(const char *path)
 {
-    return (int)answer(syscall6(KSYS_UNLINK, (long)(uintptr_t)path, 0, 0, 0, 0, 0));
+    const char *resolved = resolve_path(path);
+
+    if (resolved == NULL) {
+        return -1;
+    }
+
+    return (int)__ulibc_result(
+        __ulibc_syscall6(KSYS_UNLINK, (long)(uintptr_t)resolved, 0, 0, 0, 0, 0));
 }
 
 /*
@@ -163,7 +227,7 @@ int unlink(const char *path)
  */
 int rename(const char *from, const char *to)
 {
-    long rc = syscall6(KSYS_RENAME, (long)(uintptr_t)from, (long)(uintptr_t)to, 0, 0, 0, 0);
+    long rc = __ulibc_syscall6(KSYS_RENAME, (long)(uintptr_t)from, (long)(uintptr_t)to, 0, 0, 0, 0);
 
     if (rc < 0) {
         errno = (int)-rc;
@@ -175,7 +239,7 @@ int rename(const char *from, const char *to)
 
 sighandler_t signal(int number, sighandler_t handler)
 {
-    long rc = syscall6(KSYS_SIGNAL, number, (long)(uintptr_t)handler, 0, 0, 0, 0);
+    long rc = __ulibc_syscall6(KSYS_SIGNAL, number, (long)(uintptr_t)handler, 0, 0, 0, 0);
 
     if (rc < 0) {
         errno = (int)-rc;
@@ -187,7 +251,7 @@ sighandler_t signal(int number, sighandler_t handler)
 
 int raise(int number)
 {
-    long rc = syscall6(KSYS_KILL, getpid(), number, 0, 0, 0, 0);
+    long rc = __ulibc_syscall6(KSYS_KILL, getpid(), number, 0, 0, 0, 0);
 
     if (rc < 0) {
         errno = (int)-rc;
@@ -210,32 +274,76 @@ int isatty(int fd)
     return 0;
 }
 
+/*
+ * The directory of the program, in the buffer of the caller. The kernel's
+ * call is read once (the first time the library needs it) and the library
+ * keeps the directory afterwards, because `chdir` moves it in the program and
+ * not in the task: the two have to answer the same path.
+ */
 char *getcwd(char *buf, size_t size)
 {
-    long rc = answer(syscall6(KSYS_GETCWD, (long)(uintptr_t)buf, (long)size, 0, 0, 0, 0));
+    if (buf == NULL) {
+        errno = EINVAL;
+        return NULL;
+    }
 
-    return (rc < 0) ? NULL : buf;
+#ifdef MOX_ARCH_XTENSA
+    /* The kernel keeps the directory of the task; there is no second copy in
+     * the window of the program. */
+    if (__ulibc_syscall6(KSYS_GETCWD, (long)(uintptr_t)buf, (long)size, 0, 0, 0, 0) < 0) {
+        return NULL;
+    }
+
+    return buf;
+#else
+    const char *cwd = get_directory();
+    size_t length = strlen(cwd) + 1;
+
+    if (size < length) {
+        errno = ERANGE;
+        return NULL;
+    }
+
+    memcpy(buf, cwd, length);
+
+    return buf;
+#endif
 }
 
 int getpid(void)
 {
-    return (int)answer(syscall6(KSYS_GETPID, 0, 0, 0, 0, 0, 0));
+    return (int)__ulibc_result(__ulibc_syscall6(KSYS_GETPID, 0, 0, 0, 0, 0, 0));
 }
 
 long uptime(void)
 {
-    return answer(syscall6(KSYS_UPTIME, 0, 0, 0, 0, 0, 0));
+    return __ulibc_result(__ulibc_syscall6(KSYS_UPTIME, 0, 0, 0, 0, 0, 0));
 }
 
 int execve(const char *path, char *const argv[], char *const envp[])
 {
-    return (int)answer(syscall6(KSYS_EXECVE, (long)(uintptr_t)path, (long)(uintptr_t)argv,
-                                (long)(uintptr_t)envp, 0, 0, 0));
+    const char *resolved = resolve_path(path);
+
+    if (resolved == NULL) {
+        return -1;
+    }
+
+    return (int)__ulibc_result(__ulibc_syscall6(KSYS_EXECVE, (long)(uintptr_t)resolved,
+                                                (long)(uintptr_t)argv, (long)(uintptr_t)envp, 0, 0,
+                                                0));
 }
+
+#ifndef MOX_ARCH_XTENSA
+/* The handlers of atexit, run by `exit` before the task goes away. */
+void __ulibc_atexit_run(void);
+#endif
 
 void exit(int code)
 {
-    (void)syscall6(KSYS_EXIT, code, 0, 0, 0, 0, 0);
+#ifndef MOX_ARCH_XTENSA
+    __ulibc_atexit_run();
+#endif
+    (void)__ulibc_syscall6(KSYS_EXIT, code, 0, 0, 0, 0, 0);
 
     /* The call does not come back. The loop is what tells the compiler that
      * the function really never returns, and it keeps the program from

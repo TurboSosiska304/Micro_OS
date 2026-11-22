@@ -70,6 +70,10 @@ FIRST_BOOT = [
     "exec /bin/cat /etc/hello.lua",
     "exec /bin/lua -e print(2^10)",
     "exec /bin/lua /etc/hello.lua",
+    # The tools of sbase read the same volume: a file of the disk through the
+    # library of a program that grew with them.
+    "exec /bin/sb-ls -la /etc",
+    "exec /bin/sb-grep -r hostname /etc",
 ]
 
 SECOND_BOOT = [
@@ -86,6 +90,10 @@ SECOND_BOOT = [
     "exec /bin/wc -c /persist.gz.txt",
     "ls /etc/licenses",
     "exec /bin/lua /etc/hello.lua",
+    # The tools of sbase read the same volume on the second boot: a file of
+    # the disk through the library of a program that grew with them.
+    "exec /bin/sb-ls -la /etc",
+    "exec /bin/sb-grep -r hostname /etc",
 ]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -377,6 +385,18 @@ def check(first: str, second: str) -> list:
         "lua: hello from /etc/hello.lua" in second_answers[12]
         and "lua: read\ta line written by lua" in second_answers[12],
         second_answers[12],
+    )
+    listing = second_answers[13]
+    expect(
+        "a tool of sbase reads the volume after the reset",
+        "root" in listing and "setting" in listing and "greeting.gz" in listing,
+        listing,
+    )
+    recursive = second_answers[14]
+    expect(
+        "a recursive grep of sbase walks the volume after the reset",
+        "/etc/setting:hostname=x86_64" in recursive,
+        recursive,
     )
 
     return checks

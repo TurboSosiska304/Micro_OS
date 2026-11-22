@@ -16,6 +16,7 @@
  */
 #include "ulibc.h"
 
+#include <errno.h>
 #include <string.h>
 #include <time.h>
 
@@ -104,10 +105,36 @@ clock_t clock(void)
     return (clock_t)uptime();
 }
 
+/*
+ * The moment of one of the two clocks of POSIX. The machine has one clock, the
+ * monotonic count of the boot, so both numbers are the same: a caller that
+ * asks for the realtime clock gets the seconds of the boot and the caller of
+ * the monotonic one the same count. It is the truth of a machine whose wall
+ * clock was never set (docs/debts.md).
+ */
+int clock_gettime(int clock, struct timespec *moment)
+{
+    long milliseconds = uptime();
+
+    (void)clock;
+
+    if (moment == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    moment->tv_sec = (time_t)(milliseconds / 1000);
+    moment->tv_nsec = (long)((milliseconds % 1000) * 1000000L);
+
+    return 0;
+}
+
+#ifdef ULIBC_WITH_FLOAT
 double difftime(time_t later, time_t earlier)
 {
     return (double)(later - earlier);
 }
+#endif /* ULIBC_WITH_FLOAT */
 
 struct tm *gmtime(const time_t *seconds)
 {

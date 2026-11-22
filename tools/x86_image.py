@@ -49,6 +49,19 @@ PROGRAMS = [
     "zcat",
     "pcre2grep",
     "lua",
+    # The tools of sbase (third_party/sbase), built beside the programs of
+    # ADR 0016: the sentences of an error are a contract the smoke test reads,
+    # so the port is a second name in /bin and not a replacement.
+    "sb-cat",
+    "sb-grep",
+    "sb-head",
+    "sb-ls",
+    "sb-tail",
+    "sb-wc",
+    "sb-sort",
+    "sb-find",
+    "sb-xargs",
+    "sb-sed",
 ]
 
 # The stream of the test of zlib: a fixed text, a fixed moment and the level
@@ -106,6 +119,7 @@ DEFAULT_BUILD = os.path.join(ROOT, "build-x86")
 DEFAULT_MKFS = os.path.join(ROOT, "build-host", "tools", "microos_mkfs")
 ZLIB_LICENSE = os.path.join(ROOT, "third_party", "zlib", "LICENSE")
 LUA_LICENSE = os.path.join(ROOT, "third_party", "lua", "LICENSE")
+SBASE_LICENSE = os.path.join(ROOT, "third_party", "sbase", "LICENSE")
 
 
 def write_hello_lua(build_dir: str) -> str:
@@ -197,6 +211,9 @@ def build_image(
     if not os.path.isfile(LUA_LICENSE):
         print(f"missing {LUA_LICENSE}", file=sys.stderr)
         return 2
+    if not os.path.isfile(SBASE_LICENSE):
+        print(f"missing {SBASE_LICENSE}", file=sys.stderr)
+        return 2
 
     # The fixture of zcat and the license that travels with its bytes. The
     # program is part of the image, so the image carries the notice of the
@@ -212,6 +229,10 @@ def build_image(
     script = write_hello_lua(build_dir)
     command += ["--file", f"/etc/hello.lua={script}"]
     command += ["--file", f"/etc/licenses/lua={LUA_LICENSE}"]
+
+    # The MIT notice of sbase travels with the tools of /bin/sb-*, as the
+    # notice of zlib travels with zcat.
+    command += ["--file", f"/etc/licenses/sbase={SBASE_LICENSE}"]
 
     command += ["--text", f"/etc/setting={SETTING}"]
 

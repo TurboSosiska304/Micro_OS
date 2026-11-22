@@ -328,6 +328,41 @@ target_compile_definitions(microos_tests PRIVATE
     KTEST_MOX_FIXTURE="${CMAKE_SOURCE_DIR}/tests/corpus/mox1/frozen-x86_64.hex"
 )
 
+    # --- the library of a program, the pure part --------------------------
+    #
+    # The functions of `components/libc/user` that have no door under them
+    # (the classes, the strings, the pattern of a name, the options, the
+    # regular expressions, the one user and the decimal order of sbase) are
+    # compiled for the host with the headers of a program. The binary is a
+    # test of its own: the include path of a program would shadow <stdio.h>
+    # and <string.h> of the other tests.
+    set(MICROOS_USERLAND_TESTS
+        cases/test_userland.c
+        src/userland_main.c
+        framework/ktest.c
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/ctype.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/string_ext.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/fnmatch.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/getopt.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/regex.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/libgen.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/pwd.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/errno.c"
+        "${CMAKE_SOURCE_DIR}/third_party/sbase/port/numcmp.c"
+    )
+
+    add_executable(microos_userland_tests ${MICROOS_USERLAND_TESTS})
+    target_include_directories(microos_userland_tests PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/framework"
+        "${CMAKE_CURRENT_LIST_DIR}/include"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/include"
+        "${CMAKE_SOURCE_DIR}/components/kernel/include"
+        "${CMAKE_SOURCE_DIR}/third_party/sbase/port"
+    )
+    target_compile_options(microos_userland_tests PRIVATE -Wall -Wextra -Werror -Wno-nonnull-compare)
+    add_test(NAME userland COMMAND microos_userland_tests)
+    set_tests_properties(userland PROPERTIES TIMEOUT 60)
+
     # A test that hangs is a test that failed: the panic of the kernel
     # stops the process of the host, and anything else is a hang that has
     # to be reported, not waited for.

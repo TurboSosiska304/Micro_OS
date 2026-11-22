@@ -20,9 +20,11 @@
  */
 #include "ulibc.h"
 
+#include <errno.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #ifdef ULIBC_WITH_FLOAT
 #include "format_float.h"
@@ -304,6 +306,18 @@ static void out_format(struct output *out, const char *text, va_list args)
                     precision = precision * 10 + (*text - '0');
                     text++;
                 }
+            }
+        }
+
+        /* The precision: the bytes of a string that are printed. The
+         * numbers of this formatter do not use it, and a number with one is
+         * printed as the number itself. */
+        if (*text == '.') {
+            text++;
+            precision = 0;
+            while (*text >= '0' && *text <= '9') {
+                precision = precision * 10 + (*text - '0');
+                text++;
             }
         }
 

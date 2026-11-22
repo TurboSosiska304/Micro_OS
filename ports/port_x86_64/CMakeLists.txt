@@ -603,7 +603,144 @@ add_libc_program(lua
     COMPILE_OPTIONS -DULIBC_WITH_FLOAT -include "${LUA_DIR}/port/luaconf_port.h" -Os
 )
 
+# --- sbase: the tools of a Unix-like system ---------------------------------
+#
+# sbase is a collection of small Unix tools by suckless, released under the
+# MIT license (third_party/sbase). The tree carries ten of them and the two
+# little libraries of the collection: `libutf` (the runes of wc, sort and sed)
+# and `libutil` (the helpers of every tool). The upstream files are edited in
+# one place - the two lines of `sort.c` that name `sbase_numcmp`, because the
+# guest has no floating point registers - and the port layer is
+# `third_party/sbase/port`.
+#
+# The tools live beside the programs of the tree and not in place of them:
+# `/bin/sb-ls` is sbase's `ls`, `/bin/ls` is the one of ADR 0016. The two have
+# different sentences on an error and different flags, and the smoke test of
+# the machine reads the sentences of the older one; the task of the port is a
+# second `ls` that runs, not a replacement that changes a contract at the same
+# time.
+set(SBASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/sbase")
+
+set(SBASE_UTF_SOURCES
+    "${SBASE_DIR}/libutf/fgetrune.c"
+    "${SBASE_DIR}/libutf/fputrune.c"
+    "${SBASE_DIR}/libutf/isalnumrune.c"
+    "${SBASE_DIR}/libutf/isalpharune.c"
+    "${SBASE_DIR}/libutf/isblankrune.c"
+    "${SBASE_DIR}/libutf/iscntrlrune.c"
+    "${SBASE_DIR}/libutf/isdigitrune.c"
+    "${SBASE_DIR}/libutf/isgraphrune.c"
+    "${SBASE_DIR}/libutf/isprintrune.c"
+    "${SBASE_DIR}/libutf/ispunctrune.c"
+    "${SBASE_DIR}/libutf/isspacerune.c"
+    "${SBASE_DIR}/libutf/istitlerune.c"
+    "${SBASE_DIR}/libutf/isxdigitrune.c"
+    "${SBASE_DIR}/libutf/lowerrune.c"
+    "${SBASE_DIR}/libutf/rune.c"
+    "${SBASE_DIR}/libutf/runetype.c"
+    "${SBASE_DIR}/libutf/upperrune.c"
+    "${SBASE_DIR}/libutf/utf.c"
+    "${SBASE_DIR}/libutf/utftorunestr.c"
+)
+
+# The helpers the ten tools reach. The files of the collection that a tool of
+# this subset does not call (cp, md5, sha*, estrtod with its `double`) are not
+# compiled: a vendored source that is not in a program costs a build and a
+# warning and buys nothing.
+set(SBASE_LIBUTIL_SOURCES
+    "${SBASE_DIR}/libutil/concat.c"
+    "${SBASE_DIR}/libutil/ealloc.c"
+    "${SBASE_DIR}/libutil/enmasse.c"
+    "${SBASE_DIR}/libutil/eprintf.c"
+    "${SBASE_DIR}/libutil/eregcomp.c"
+    "${SBASE_DIR}/libutil/fnck.c"
+    "${SBASE_DIR}/libutil/fshut.c"
+    "${SBASE_DIR}/libutil/getlines.c"
+    "${SBASE_DIR}/libutil/linecmp.c"
+    "${SBASE_DIR}/libutil/memmem.c"
+    "${SBASE_DIR}/libutil/mkdirp.c"
+    "${SBASE_DIR}/libutil/mode.c"
+    "${SBASE_DIR}/libutil/parseoffset.c"
+    "${SBASE_DIR}/libutil/putword.c"
+    "${SBASE_DIR}/libutil/reallocarray.c"
+    "${SBASE_DIR}/libutil/recurse.c"
+    "${SBASE_DIR}/libutil/strcasestr.c"
+    "${SBASE_DIR}/libutil/strlcat.c"
+    "${SBASE_DIR}/libutil/strlcpy.c"
+    "${SBASE_DIR}/libutil/strnsubst.c"
+    "${SBASE_DIR}/libutil/strsep.c"
+    "${SBASE_DIR}/libutil/strtonum.c"
+    "${SBASE_DIR}/libutil/unescape.c"
+    "${SBASE_DIR}/libutil/writeall.c"
+    "${SBASE_DIR}/port/numcmp.c"
+    "${SBASE_DIR}/port/humansize.c"
+)
+
+microos_userland_library(microos_user_sbase
+    SOURCES ${SBASE_UTF_SOURCES} ${SBASE_LIBUTIL_SOURCES}
+    INCLUDES "${SBASE_DIR}" "${SBASE_DIR}/port"
+    # Upstream code with the warnings of this tree: the comparison of an
+    # index with LEN() is the one every sbase build answers, and the
+    # exception stays here rather than in a hunk of the vendored file.
+    COMPILE_OPTIONS -Wno-sign-compare -Wno-maybe-uninitialized
+)
+
+# The library of a program that is not the runtime: the arena, the streams,
+# the directory, the information of an object, the clock, the strings of
+# POSIX, the regular expressions and the options. It is the same list for
+# every tool; the linker takes the objects the tool names.
+set(SBASE_LIBC_SOURCES
+    "${LIBC_USER_DIR}/src/malloc.c"
+    "${LIBC_USER_DIR}/src/file.c"
+    "${LIBC_USER_DIR}/src/stdio_ext.c"
+    "${LIBC_USER_DIR}/src/ctype.c"
+    "${LIBC_USER_DIR}/src/stdlib.c"
+    "${LIBC_USER_DIR}/src/string_ext.c"
+    "${LIBC_USER_DIR}/src/dirent.c"
+    "${LIBC_USER_DIR}/src/stat.c"
+    "${LIBC_USER_DIR}/src/unistd_ext.c"
+    "${LIBC_USER_DIR}/src/pwd.c"
+    "${LIBC_USER_DIR}/src/time.c"
+    "${LIBC_USER_DIR}/src/libgen.c"
+    "${LIBC_USER_DIR}/src/termios.c"
+    "${LIBC_USER_DIR}/src/regex.c"
+    "${LIBC_USER_DIR}/src/getopt.c"
+    "${LIBC_USER_DIR}/src/fnmatch.c"
+    "${LIBC_USER_DIR}/src/assert.c"
+)
+
+# The tool of the collection, built under the name `sb-<tool>` of /bin. The
+# heap is the arena of the program, which is the bss of the image and is
+# capped at a megabyte by the format: sort and find hold a file there.
+function(add_sbase_program tool heap)
+    add_libc_program(sb-${tool}
+        MAIN "${SBASE_DIR}/${tool}.c"
+        SOURCES ${SBASE_LIBC_SOURCES}
+        LIBRARIES microos_user_sbase
+        INCLUDES "${SBASE_DIR}" "${SBASE_DIR}/port"
+        DEFINES ULIBC_HEAP_SIZE=${heap}
+        COMPILE_OPTIONS -Os -include "${SBASE_DIR}/port/sbase_port.h"
+                        -Wno-unused-parameter -Wno-implicit-fallthrough
+                        -Wno-sign-compare -Wno-maybe-uninitialized
+    )
+    # The wrapper inside a function has its own scope: the image of the tool
+    # has to be handed up again or the `image` target never builds it.
+    set(MICROOS_PROGRAM_IMAGES ${MICROOS_PROGRAM_IMAGES} PARENT_SCOPE)
+endfunction()
+
+add_sbase_program(cat 131072u)
+add_sbase_program(head 131072u)
+add_sbase_program(wc 131072u)
+add_sbase_program(tail 131072u)
+add_sbase_program(ls 262144u)
+add_sbase_program(grep 262144u)
+add_sbase_program(sort 524288u)
+add_sbase_program(find 524288u)
+add_sbase_program(xargs 262144u)
+add_sbase_program(sed 524288u)
+
 add_executable(microos64
+
     ${KERNEL_SOURCES}
     ${KSHELL_SOURCES}
     ${LIBC_SOURCES}

@@ -232,6 +232,25 @@ COMMANDS = [
     "ls ..",
     "cd /",
     "memtest",
+    # The tools of sbase (third_party/sbase): the second `ls`, the trees of
+    # `find`, the order of `sort`, the recursive `grep`, the count and the
+    # tail of the library, and a substitution of `sed`. They are built beside
+    # the programs of ADR 0016 because the sentences of the older ones are a
+    # contract; the answers below are their own numbers and words.
+    "exec /bin/sb-ls -la /etc",
+    "exec /bin/sb-find /etc -name setting",
+    "exec /bin/sb-sort /etc/setting",
+    "exec /bin/sb-grep -r hostname /etc",
+    "exec /bin/sb-grep -r -i VGA /etc",
+    "exec /bin/sb-wc -l /etc/setting",
+    "exec /bin/sb-tail -n 1 /etc/setting",
+    "exec /bin/sb-head -n 1 /etc/setting",
+    "exec /bin/sb-sed -n s/x86_64/X/p /etc/setting",
+    "exec /bin/sb-cat /etc/setting",
+    # `xargs` passes its words to one `execve`, and the ABI of the call
+    # allows at most eight words in the vector (docs/syscall-abi.md); -n 4
+    # keeps the batch inside it. The limit is a debt, not a rule of sbase.
+    "ls /etc | /bin/sb-xargs -n 4",
 ]
 
 # A directory wider than the table of 64 entries the shell used to keep: the
@@ -1021,6 +1040,51 @@ def check(output: str) -> list:
         answer('path ""'),
     )
     expect("the tree is still there", "etc/" in answer("ls /"), answer("ls /"))
+
+    # --- the tools of sbase (third_party/sbase)
+    listing = answer("exec /bin/sb-ls -la /etc")
+    expect(
+        "sb-ls -la prints the mode, the owner and the group",
+        re.search(r"-rw-r--r--\s+1 root\s+root\s+34 Jan 01 00:00 setting", listing) is not None,
+        listing,
+    )
+    expect(
+        "sb-ls -la lists the directory the image has",
+        "init.d" in listing and "licenses" in listing,
+        listing,
+    )
+    found = answer("exec /bin/sb-find /etc -name setting")
+    expect("sb-find walks a tree and matches a name", "/etc/setting" in found, found)
+    ordered = answer("exec /bin/sb-sort /etc/setting")
+    expect(
+        "sb-sort orders the lines",
+        ordered.index("console=vga") < ordered.index("hello") < ordered.index("hostname=x86_64"),
+        ordered,
+    )
+    recursive = answer("exec /bin/sb-grep -r hostname /etc")
+    expect(
+        "sb-grep -r names the file of a line",
+        "/etc/setting:hostname=x86_64" in recursive,
+        recursive,
+    )
+    recursive = answer("exec /bin/sb-grep -r -i VGA /etc")
+    expect("sb-grep -r -i folds the case", "console=vga" in recursive, recursive)
+    count = answer("exec /bin/sb-wc -l /etc/setting")
+    expect("sb-wc counts the lines", "3 /etc/setting" in count, count)
+    last = answer("exec /bin/sb-tail -n 1 /etc/setting")
+    expect("sb-tail prints the last line", "console=vga" in last, last)
+    first_line = answer("exec /bin/sb-head -n 1 /etc/setting")
+    expect("sb-head prints the first line", "hello" in first_line, first_line)
+    changed = answer("exec /bin/sb-sed -n s/x86_64/X/p /etc/setting")
+    expect("sb-sed matches and substitutes a line", "hostname=X" in changed, changed)
+    text = answer("exec /bin/sb-cat /etc/setting")
+    expect("sb-cat copies a file", "hostname=x86_64" in text and "console=vga" in text, text)
+    piped = answer("ls /etc | /bin/sb-xargs -n 4")
+    expect(
+        "sb-xargs runs a command over the words of a pipe",
+        "setting" in piped and "licenses" in piped,
+        piped,
+    )
     free_answer = answer("free")
     expect(
         "free prints the memory and not the clock",
@@ -1104,6 +1168,16 @@ def check(output: str) -> list:
                 "zcat",
                 "pcre2grep",
                 "lua",
+                "sb-cat",
+                "sb-grep",
+                "sb-head",
+                "sb-ls",
+                "sb-tail",
+                "sb-wc",
+                "sb-sort",
+                "sb-find",
+                "sb-xargs",
+                "sb-sed",
             )
         ),
         bin_listing[-200:],
@@ -1452,6 +1526,7 @@ def check(output: str) -> list:
     )
     licenses = answer("exec /bin/ls /etc/licenses")
     expect("the license of zlib travels with the image", "zlib" in licenses, licenses)
+    expect("the license of sbase travels with the image", "sbase" in licenses, licenses)
 
     # --- the second port of somebody else's program: Lua and /bin/lua
     # The script and the license are files of the image, the interpreter is a

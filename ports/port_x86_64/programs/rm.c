@@ -35,7 +35,7 @@ static int rm_children(const char *path, int depth)
             return 1;
         }
 
-        got = readdir(fd, &entry, sizeof(entry));
+        got = ulibc_readdir(fd, &entry, sizeof(entry));
         (void)close(fd);
 
         if (got < 0) {
@@ -67,7 +67,7 @@ static int rm_path(const char *path, int recursive, int depth)
     struct vfs_stat info;
     int rc;
 
-    rc = stat(path, &info);
+    rc = ulibc_stat_call(path, &info);
     if (rc < 0) {
         printf("rm: %s: error %d\n", path, -rc);
         return 1;

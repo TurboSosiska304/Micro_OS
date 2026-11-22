@@ -33,7 +33,7 @@ int main(int argc, char *const argv[], char *const envp[])
      */
     printf("PROGRAM: arch xtensa, no protection\n");
 
-    if (stat("/bin/hello", &info) != 0) {
+    if (ulibc_stat_call("/bin/hello", &info) != 0) {
         printf("PROGRAM: stat /bin/hello failed\n");
         return 1;
     }

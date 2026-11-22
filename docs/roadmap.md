@@ -322,20 +322,29 @@ written when the project was an operating system for one board; the numbers
       `%f`/`%e`/`%g` with a precision, `strtod`, `qsort`, `setjmp`/`longjmp`,
       `math.h` on the x87 unit, `time`/`localtime`, `getenv`, `signal` and
       `fprintf` - and the port sets `CR4.OSFXSR` for a program with a
-      `double`. The host test is `tests/cases/test_lua.c`; the interpreter
-      itself waits for K3 below, because 164 KiB is past the block
-      `sys_execve` reads in one call
-* [ ] The image of a program larger than `KSYS_MAX_IO`: `execve` reads the
-      image into one block of 64 KiB and refuses a larger one (`/bin/lua`),
-      and the answer of the refusal names the wrong reason. A cap that is the
-      window and not the transfer edge, the block of `kmm` of the user
-      priority (the PSRAM on the board), and `E2BIG` for a machine that
-      cannot place it (`docs/debts.md`)
+      `double`. The host test is `tests/cases/test_lua.c`; `make x86-smoke`
+      runs the interpreter, and `make x86-disk-smoke` runs it out of the
+      volume in both boots
+* [x] The image of a program larger than `KSYS_MAX_IO`: `execve` reads an
+      image of up to 8 MiB (`K_EXEC_MAX_IMAGE`) in pieces of the transfer
+      edge into one block of the allocator, and a larger file is `E2BIG`
+      before a byte is read (`docs/debts.md`)
+* [x] The third port, and the first set of commands: sbase with ten tools
+      (`cat`, `grep`, `head`, `ls`, `tail`, `wc`, `sort`, `find`, `xargs`,
+      `sed`) as `/bin/sb-*`, beside the programs of the tree. It is the port
+      that grew the library of a program the families a POSIX command needs
+      (`opendir`/`readdir`, `struct stat`, `getpwuid`, `localtime`,
+      `fnmatch`, a regular expression engine, `getopt`, `getline`,
+      `fmemopen`), and the ten commands are in `make x86-smoke` and
+      `make x86-disk-smoke`
 * [ ] The gaps of the next port: a `malloc` larger than the bss of an image
       (`brk`/`mmap` of a program), a `poll` for a library that waits on a
       pipe, an `fxsave` of the XMM state for two programs with a point in
-      their numbers, and the package that ships `zcat` and `lua` with their
-      licenses beside them (`docs/debts.md`)
+      their numbers, and the package that ships `zcat`, `lua` and the tools
+      of sbase with their licenses beside them (`docs/debts.md`)
+* [ ] A `chdir` and a wall clock in the ABI, and the POSIX frame of a fork
+      child: the library works around the three, and the workaround of each
+      is named in `docs/debts.md`
 
 ## The last major changes of the board (1.1.0)
 

@@ -249,6 +249,9 @@ if [ -f "$X86_SRC/loader32.elf" ] && [ -f "$X86_SRC/microos64.bin" ]; then
     cp -f "$ROOT/third_party/pcre2/LICENSE" "$STAGE/LICENSE.pcre2"
     # Lua is /bin/lua of the same image, under the MIT license of its release.
     cp -f "$ROOT/third_party/lua/LICENSE" "$STAGE/LICENSE.lua"
+    # The tools of sbase are in /bin/sb-* of the same image, under their MIT
+    # license; the notice travels with the archive for the same reason.
+    cp -f "$ROOT/third_party/sbase/LICENSE" "$STAGE/LICENSE.sbase"
     cp -f "$ROOT/third_party/mbedtls/LICENSE" "$STAGE/LICENSE.mbedtls"
     if [ -f "$X86_SRC/microos64.sig" ] && [ -f "$X86_SRC/signing.pub" ]; then
         cp -f "$X86_SRC/microos64.sig" "$STAGE/microos64.sig"
@@ -306,8 +309,12 @@ note, the version and the port layer.
 `/bin/lua` of the disk image is Lua 5.4.7 (MIT license); `LICENSE.lua` is its
 license and `third_party/lua` of the sources has the note, the version, the
 port layer and the one setting of the port (`port/luaconf_port.h`). The
-interpreter of this release does not run yet: its image is past the block the
-kernel reads in one call (`docs/debts.md`).
+interpreter runs out of the volume: `make x86-disk-smoke` reads its script in
+the first boot and after the reset.
+
+`/bin/sb-cat`, `/bin/sb-grep`, `/bin/sb-ls` and the rest of `/bin/sb-*` are
+the tools of sbase (MIT); `LICENSE.sbase` is their license and
+`third_party/sbase` of the sources has the subset and the port layer.
 
 The kernel carries a signature trailer (ADR 0020), and the loader verifies it
 before it copies a byte: an image with a changed byte, without a trailer or
@@ -320,14 +327,16 @@ public key of the build; the tool in `tools/` of the sources verifies them:
 The same kernel is on the board and in the tests: Micro OS is one portable
 kernel with a port per machine.
 
-The machine carries one third-party component: `/bin/pcre2grep` links PCRE2
-10.42, and `LICENSE.pcre2` beside this file is the license of that code. The
-text is also a file of the disk image (`/etc/licenses/pcre2`); the MIT of
-Micro OS does not cover a byte of it.
+The machine carries three third-party components: `/bin/pcre2grep` links
+PCRE2 10.42, `/bin/lua` links the engine of Lua 5.4.7 and the `/bin/sb-*`
+tools are the programs of sbase. `LICENSE.pcre2`, `LICENSE.lua` and
+`LICENSE.sbase` beside this file are the licenses of that code, and the texts
+are files of the disk image under `/etc/licenses/`; the MIT of Micro OS does
+not cover a byte of them.
 DOC
 
     STAGE_FILES=(loader32.elf microos64.bin run.sh README.md LICENSE.spleen LICENSE.zlib
-                 LICENSE.pcre2 LICENSE.lua)
+                 LICENSE.pcre2 LICENSE.lua LICENSE.sbase)
     if [ -f "$STAGE/x86-all.img" ]; then
         STAGE_FILES+=(x86-all.img)
     fi
