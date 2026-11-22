@@ -70,6 +70,8 @@ a list of commands and checks the transcript. `make clean` removes
 
 ```bash
 make x86-build            # the loader, the kernel and the programs, into build-x86/
+make x86-all              # the complete machine: network, disk and run.sh
+make x86-all-run          # boot it in a window (x86-all-run-serial: a terminal)
 make x86-disk             # build-x86/programs.img: /bin and /etc of MicroFS
 make x86-run              # a QEMU window: VGA text and the PS/2 keyboard
 make x86-run-serial       # the same machine in a terminal (-nographic)
@@ -89,6 +91,14 @@ kernel there has no libc under it. The machine boots from three files:
 MicroFS volume of the disk by `tools/mkfs_mfs.c`; the kernel carries no copy
 of a program, and the boot mounts the volume and reads `/bin/hello` with
 `execve`.
+
+`make x86-all` is the machine a person can start without knowing which of
+the builds it is made of: `build-x86-all/` holds `loader32.elf`,
+`microos64.bin`, `x86-all.img` (the disk with `/bin` and `/etc`) and a `run.sh`
+that boots the three with a virtio-net card on the user network of QEMU (port
+8080 forwarded). `X86_SERIAL=1 ./build-x86-all/run.sh` gives the serial
+console and no window. The target is not `make bundle`; the release artifact
+is still the one of `tools/bundle.sh`.
 
 The display backend is a package of its own in some distributions: the target
 asks QEMU for its list of backends first and prints the command to run when

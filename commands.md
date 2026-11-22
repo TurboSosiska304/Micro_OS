@@ -53,6 +53,8 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make clean` | remove `build-host/`, `build-asan/`, `build-coverage/` (the device `build/` stays) |
 | `make test-smp` | the host tests with `KERNEL_SMP=ON` and two cores (`MICRO_OS_CPUS=2`) |
 | `make x86-smp-build` | the x86-64 kernel with `KERNEL_SMP=ON` (the APs are not started yet, ADR 0012) |
+| `make x86-all` | the complete machine in `build-x86-all/`: the kernel with the network, the disk with `/bin` and `/etc`, and `run.sh` |
+| `make x86-all-run` | boot that machine in a window (the serial console with `x86-all-run-serial`) |
 | `make ci` | `build`, `test`, `test-asan`, `test-tsan`, `test-smp`, `smoke`, `coverage`, `x86-smoke` when QEMU is there, `reproducible`, `integrity` — run it before pushing |
 
 The same build by hand:

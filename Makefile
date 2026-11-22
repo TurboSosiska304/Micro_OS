@@ -383,6 +383,54 @@ x86-net-run: x86-net-build
 x86-net-smoke: x86-net-build
 	X86_BUILD=$(X86_NET_BUILD) python3 tools/x86_net_smoke.py
 
+# The whole machine in one command: the kernel with the full feature set (the
+# network of K6 is the one optional block), the disk with /bin and /etc, and a
+# run.sh that boots the two with a card on the user network. `x86-all` is not
+# `make bundle` (that packs a release); it is the machine a person can start
+# without knowing which of the builds above it is made of.
+X86_ALL_BUILD := build-x86-all
+X86_ALL_IMAGE := $(X86_ALL_BUILD)/x86-all.img
+X86_ALL_RUN := $(X86_ALL_BUILD)/run.sh
+
+x86-all-build:
+	cmake -B $(X86_ALL_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
+		-DMICRO_OS_X86_NET=ON $(X86_SIGN_ARGS)
+	cmake --build $(X86_ALL_BUILD) --target image
+
+x86-all: x86-all-build build
+	python3 tools/x86_image.py --image $(X86_ALL_IMAGE) \
+		--build $(X86_ALL_BUILD) --mkfs $(X86_MKFS)
+	@printf '%s\n' \
+		'#!/bin/sh' \
+		'# Boot the complete Micro OS x86-64 machine: the kernel of `make x86-all`,' \
+		'# its disk and a virtio-net card on the user network (8080 forwarded).' \
+		'# X86_SERIAL=1 gives the serial console and no window.' \
+		'cd "$$(dirname "$$0")" || exit 1' \
+		'if [ "$${X86_SERIAL:-0}" = 1 ]; then' \
+		'    exec qemu-system-x86_64 -kernel loader32.elf -initrd microos64.bin \' \
+		'        -m 256 -nographic -no-reboot \' \
+		'        -drive file=x86-all.img,format=raw,if=ide,index=0,cache=writeback \' \
+		'        -netdev user,id=n0,hostfwd=tcp:127.0.0.1:8080-:8080 \' \
+		'        -device virtio-net-pci,netdev=n0,disable-modern=on' \
+		'fi' \
+		'exec qemu-system-x86_64 -kernel loader32.elf -initrd microos64.bin \' \
+		'    -m 256 -no-reboot -display "$${X86_DISPLAY:-gtk}" -serial null \' \
+		'    -drive file=x86-all.img,format=raw,if=ide,index=0,cache=writeback \' \
+		'    -netdev user,id=n0,hostfwd=tcp:127.0.0.1:8080-:8080 \' \
+		'    -device virtio-net-pci,netdev=n0,disable-modern=on' > $(X86_ALL_RUN)
+	@chmod +x $(X86_ALL_RUN)
+	@echo "x86-all: the machine is ready"
+	@echo "  kernel    $(X86_ALL_BUILD)/microos64.bin"
+	@echo "  loader    $(X86_ALL_BUILD)/loader32.elf"
+	@echo "  disk      $(X86_ALL_IMAGE)"
+	@echo "  run       $(X86_ALL_RUN)   (X86_SERIAL=1 for the serial console)"
+
+x86-all-run: x86-all
+	X86_DISPLAY=$(X86_DISPLAY) $(X86_ALL_RUN)
+
+x86-all-run-serial: x86-all
+	X86_SERIAL=1 $(X86_ALL_RUN)
+
 # The campaign of 1.0 (docs/wiki/testing.md). The session is one boot of the
 # x86-64 machine, ten minutes long by default, under the mixed load of
 # tools/soak.py. It is not a part of `make ci`: it takes ten minutes and it
