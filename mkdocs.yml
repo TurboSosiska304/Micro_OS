@@ -31,11 +31,16 @@ theme:
 
 nav:
   - Home: README.md
+  - The 1.1 release: release-1.1.md
   - The 1.0 release: release-1.0.md
   - Start here: getting-started.md
   - Build and run: build.md
   - Shell: shell.md
   - Files: files.md
+  - Settings: settings.md
+  - Screen: screen.md
+  - Network: network.md
+  - Packages: pkg.md
   - Programs: programs.md
   - Ports: ports.md
   - Porting: porting.md

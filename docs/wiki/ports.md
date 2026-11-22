@@ -1,7 +1,10 @@
 # Ports
 
-A port is a directory that implements the contract of `kernel/port/*.h`; a
-board is a description of a machine plus the drivers of its chips. The kernel
+A port is a directory that implements the contract of `kernel/port/*.h` on a
+machine; a board is a description of a machine plus the drivers of its chips.
+Two of the four implementations are ports - the board and x86-64; the **host**
+is the substrate of the tests and the simulator, and the **null** is the shape
+of the contract with no machine under it (ADR 0004). The kernel
 in `components/kernel/` includes nothing of a platform, and `make integrity`
 fails when it tries. That is why the same sources build as a Linux process, as
 a bare-metal x86-64 machine and as the firmware of the board; the reasoning is
@@ -16,15 +19,16 @@ parentheses is the reason.
 | | ESP32 (board) | x86-64 (QEMU) | host (simulator) | null |
 |---|---|---|---|---|
 | shell | UART and TFT | VGA, PS/2, COM1 | stdin/stdout | - |
-| MicroFS | the `mfs` partition, 5.75 MB | the disk, or 512 KB of RAM | a file, 512 KB | - |
+| MicroFS | the `mfs` partition, 5.56 MiB | the disk, or 512 KB of RAM | a file, 512 KB | - |
 | `/proc`, `/dev` | yes | yes | yes | - |
 | `/etc` and its store | files, NVS behind them | files, no store | files, a file per key | - |
-| `execve` | `ENOSYS` (no executable flash) | ring 3, own page tables | `ENOSYS` (a harness) | `ENOSYS` |
+| `execve` | Xtensa code from `progs`, no protection | ring 3, own page tables | `ENOSYS` (a harness) | `ENOSYS` |
 | `fork()` | shared memory | copy on write | shared memory | shared memory |
 | disk | the internal flash | ATA PIO, `ata0` | - | - |
 | network | WiFi, lwIP, telnet, HTTP, MQTT | virtio-net, HTTP, httpd, DNS, MQTT is off | - | - |
 | panel | ST7789v2 and a copy of the console | VGA text | a renderer into a file | - |
-| MMU | - (the chip has none) | yes, used for programs | - | - |
+| MMU | - (the chip has none) | yes: ring 3, NX/W^X | - | - |
+| cores | 2 under FreeRTOS, the kernel on 1 | 2 in the MADT, the kernel on 1 | `MICRO_OS_CPUS`, 1 by default | 1 |
 | build | `make idf-build` | `make x86-build` | `make build` | by the host build |
 
 The matrix follows the ports, not a wish: the board has no MMU and its flash is
@@ -47,15 +51,19 @@ tools/device-test.sh /dev/ttyACM0      # build, flash, read, RESULT: PASS
 
 What works: the boot with the self test and the hardware doctor, the console on
 the UART and on the TFT, MicroFS on the flash, `/log/start.log`, the scripts of
-`/etc/init.d`, the drivers (display, buttons, buzzer, LED, IMU, RTC, battery,
-microphone, WiFi), `telnet` on port 23, `httpd`, `mqtt`, `http` and `ntp`.
+`/etc/init.d`, the drivers (display, buttons, buzzer, LED, IR on the pin of the
+LED, IMU, RTC, battery, microphone, sound detector, WiFi), deep sleep with the
+wake of the timer, of BUTTON C and of the RTC alarm, `telnet` on port 23,
+`httpd`, `mqtt`, `http` and `ntp`.
 
 What does not: memory protection (`fork()` is the placeholder of a machine
-without an MMU), running a program out of the flash, OTA, the IR driver, the
-sound detector, the enclosure modes, a second user. The RTC alarm turns the
-board on from off; it does not wake a chip that is already asleep (the INT is
-wired to the power latch, the notes say so). The flash is 8 MB: `factory` 2 MB and
-MicroFS 5.75 MB, with no OTA slot. The details, the pins and the quirks are in
+without an MMU), an update over the network (the A/B update is over USB,
+ADR 0022), an IR receiver (the board carries the emitter only; `ir rx` waits
+for an element on G26), the enclosure modes, a second user. The alarm of the BM8563 turns the board on from
+off; a sleeping board obeys it because the firmware sets the timer of the chip
+for the moment of the match, not because the INT of the clock is a wake line.
+The flash is 8 MB: two application slots of 1.125 MiB, `progs` 132 KiB and
+MicroFS 5.56 MiB (ADR 0022). The details, the pins and the quirks are in
 [`docs/ports/esp32/README.md`](../ports/esp32/README.md) and
 [`docs/ports/esp32/hardware.md`](../ports/esp32/hardware.md).
 
@@ -63,8 +71,9 @@ MicroFS 5.75 MB, with no OTA slot. The details, the pins and the quirks are in
 
 A machine with no operating system under it: no libc, no POSIX, no firmware.
 The loader is a multiboot image that QEMU takes with `-kernel`; it copies the
-kernel to 16 MiB, builds the identity map of the first gigabyte and turns long
-mode on.
+kernel to 16 MiB, maps the same bytes at `0xFFFFFFFF80000000` - the higher half
+where the image is linked - builds the identity map of the first gigabyte and
+turns long mode on.
 
 ```bash
 make x86-build
@@ -73,8 +82,17 @@ make x86-run-serial     # the same machine in a terminal
 make x86-smoke          # boot and check the transcript
 ```
 
+The processors come from the MADT of ACPI, and the boot prints how many the
+firmware describes and how many it runs: `-smp 2` gives
+`2 cpu(s) reported by the firmware, 1 in use`, because the APs wait for the
+trampoline of ADR 0012 that is not written yet. `make x86-smp-build` builds
+the portable kernel with `KERNEL_SMP=ON`.
+
 What works: the VGA text console and COM1 out of one `k_port_write()`, the
 PS/2 keyboard, the PIT, the context switch, the scheduler, paging and ring 3,
+NX/W^X (the text of the kernel and of a program is read-only code, every data
+page and stack is NX, and the boot audits the tables), the kernel in the
+higher half at `0xFFFFFFFF80000000` (ADR 0007),
 `execve` with `MOX1` images, `fork()` with copy on write, MicroFS on the first
 partition of an ATA disk (or on 512 KB of RAM without one), the modes and the
 owners, and the network: a virtio-net card, ARP, ICMP, UDP, a client and a
@@ -82,9 +100,12 @@ server of TCP and a resolver with a cache (`make x86-net-smoke`). It is the
 machine of [`programs.md`](programs.md) and the proof that the kernel is
 portable.
 
-What does not: the key-value store (no `/etc` to persist), a second disk, DMA,
-the kernel in a higher half, and the parts of the network that wait for a real
-link: DHCP, IPv6 and a congestion window. The details are in
+What does not: the second processor (the list is read, the AP bring-up is the
+blocker of ADR 0012, "The pilot of 1.x"), the key-value store (no `/etc` to
+persist), a second disk, DMA,
+SMAP/SMEP (a documented decision, ADR 0007), and
+the parts of the network that wait for a real link: DHCP, IPv6 and a
+congestion window. The details are in
 [`docs/ports/x86_64/README.md`](../ports/x86_64/README.md).
 
 ## host: the tests and the simulator
@@ -103,6 +124,10 @@ What works: everything portable, with the drivers stubbed and the console
 rendered into a file or nowhere. What it cannot do: run a program, and
 reproduce preemption - the critical section is a recursive `pthread` mutex, so
 a race is invisible unless the race detector looks for it (`make test-tsan`).
+The cores are a setting of the run: `MICRO_OS_CPUS=2` tells the kernel it has
+two, and a task is then in the queue of one of them (`make test-smp`,
+`make test-tsan` and `make soak-host` do it). Every task is already a pthread,
+so a "core" is a run queue and an identity of the task, not a worker thread.
 The details are in [`docs/ports/host/README.md`](../ports/host/README.md).
 
 ## null: the port that is not a machine
@@ -123,7 +148,8 @@ complete. The details are in
 
 * [build.md](build.md) - the commands and the dependencies of each build.
 * [testing.md](testing.md) - what each machine is checked with.
-* [programs.md](programs.md) - why only x86-64 runs a program.
-* [`docs/porting.md`](../porting.md) - bringing the kernel to another machine.
+* [programs.md](programs.md) - why only x86-64 runs a program with protection.
+* [porting.md](porting.md) - the contract, the bring-up order and the checks.
+* [`docs/porting.md`](../porting.md) - bringing the kernel to another machine, in full.
 
 [Back to the wiki index](README.md)
