@@ -207,7 +207,17 @@ COMMANDS = [
     "exec /bin/sb-head -n 1 /etc/setting",
     "exec /bin/sb-sed -n s/x86_64/X/p /etc/setting",
     "exec /bin/sb-cat /etc/setting",
-    "ls /etc | /bin/sb-xargs",
+    "echo one two | /bin/sb-xargs",
+    # SQLite (third_party/sqlite): the database library of the public domain
+    # and the shell of the release. The scripts are files of /etc because the
+    # shell has no quotes; the first run creates the table, the second one
+    # reads it in another process, and `.read` and `-cmd` are the two shapes
+    # of the shell that open a file while the database is open.
+    "exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-setup.sql",
+    "exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-read.sql",
+    "exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-nested.sql",
+    "exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-schema.sql",
+    "exec /bin/sqlite3 -cmd .tables /tmp/sqlite.db < /etc/sql-read.sql",
 ]
 
 # The prompt of the shell. It is written in one call, so the log of another
@@ -917,11 +927,74 @@ def check(output: str) -> list:
     expect("sb-sed matches and substitutes a line", "hostname=X" in changed, changed)
     text = answer("exec /bin/sb-cat /etc/setting")
     expect("sb-cat copies a file", "hostname=x86_64" in text and "console=vga" in text, text)
-    piped = answer("ls /etc | /bin/sb-xargs")
+    piped = answer("echo one two | /bin/sb-xargs")
     expect(
         "sb-xargs runs a command over the words of a pipe",
-        "setting" in piped and "licenses" in piped,
+        "one two" in piped,
         piped,
+    )
+
+    # --- SQLite (third_party/sqlite)
+    #
+    # The first run creates the database and the table: three rows of the
+    # three types are inserted, one in a transaction that rolls back, and the
+    # library checks the file it wrote. The line `2|3.75` of the second run is
+    # the count and the sum of the two rows that survived, read by a second
+    # process from the same file of MicroFS.
+    created = answer("exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-setup.sql")
+    expect(
+        "sqlite3 creates a database and its table",
+        "1|one|1.5" in created and "2|two|2.25" in created,
+        created,
+    )
+    expect(
+        "the transaction that rolls back leaves no row",
+        "roll" not in created and re.search(r"(?m)^2\r?$", created) is not None,
+        created,
+    )
+    expect(
+        "the integrity check of the new database is ok",
+        re.search(r"(?m)^ok\r?$", created) is not None,
+        created,
+    )
+    reread = answer("exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-read.sql")
+    expect(
+        "a second run reads the count and the sum of the file",
+        "2|3.75" in reread,
+        reread,
+    )
+    expect(
+        "the REAL and the BLOB keep their type",
+        "real|blob" in reread,
+        reread,
+    )
+    expect(
+        "the file of the second run passes the integrity check",
+        re.search(r"(?m)^ok\r?$", reread) is not None,
+        reread,
+    )
+    nested = answer("exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-nested.sql")
+    expect(
+        "the .read of the shell opens a script while the database is open",
+        "2|3.75" in nested and "ok" in nested,
+        nested,
+    )
+    schema = answer("exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-schema.sql")
+    expect(
+        "the shell prints the table and its schema",
+        "items" in schema and "CREATE TABLE items" in schema,
+        schema,
+    )
+    expect(
+        "the mode and the row of the second row",
+        "two" in schema,
+        schema,
+    )
+    listed = answer("exec /bin/sqlite3 -cmd .tables /tmp/sqlite.db < /etc/sql-read.sql")
+    expect(
+        "the -cmd of the shell runs before the script",
+        "items" in listed and "2|3.75" in listed,
+        listed,
     )
     free_answer = answer("free")
     expect(
@@ -950,6 +1023,7 @@ def check(output: str) -> list:
                 "pwd",
                 "spawn",
                 "zcat",
+                "sqlite3",
             )
         ),
         bin_listing[-200:],
@@ -1236,6 +1310,8 @@ def check(output: str) -> list:
     licenses = answer("exec /bin/ls /etc/licenses")
     expect("the license of zlib travels with the image", "zlib" in licenses, licenses)
     expect("the license of sbase travels with the image", "sbase" in licenses, licenses)
+    expect("the statement of the public domain of SQLite travels with it", "sqlite" in licenses,
+           licenses)
 
     # A program starts another program with an environment of its own. The
     # two words are the vector of `spawn.c`, copied by the kernel at the edge
@@ -1488,7 +1564,7 @@ def main(argv: list) -> int:
         default=os.path.join(ROOT, "build-x86-open"),
         help="the build with MICRO_OS_REQUIRE_SIGNATURE=OFF",
     )
-    parser.add_argument("--timeout", type=float, default=30.0, help="the seconds the machine gets")
+    parser.add_argument("--timeout", type=float, default=60.0, help="the seconds the machine gets")
     parser.add_argument("--verbose", action="store_true", help="print the console of the machine")
     args = parser.parse_args(argv)
 

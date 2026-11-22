@@ -49,6 +49,7 @@ if(NOT ESP_PLATFORM)
         cases/test_sign.c
         cases/test_progs.c
         cases/test_zlib.c
+        cases/test_sqlite.c
     )
 
     # The tests of a component that a build leaves out are left out with it:
@@ -96,6 +97,9 @@ if(NOT ESP_PLATFORM)
         # zlib and the headers of its port (the two allocation hooks).
         "${MICROOS_ZLIB_DIR}"
         "${MICROOS_ZLIB_DIR}/port"
+        # SQLite and the headers of its port.
+        "${MICROOS_SQLITE_DIR}"
+        "${MICROOS_SQLITE_DIR}/port"
     )
 
     # zlib is the first third-party library of the tree, and the host test is
@@ -126,6 +130,23 @@ if(NOT ESP_PLATFORM)
     set_source_files_properties("${MICROOS_ZLIB_DIR}/port/zlib_os.c"
         PROPERTIES COMPILE_DEFINITIONS "MY_ZCALLOC=1")
 
+    # SQLite is the second third-party library of the tree and its host build
+    # is the same source as the archive of the guest (third_party/sqlite): the
+    # library with SQLITE_OS_OTHER=1 and the VFS of the port, whose calls here
+    # are the libc of the host (SQLITE_PORT_HOST). The test of the case is
+    # tests/cases/test_sqlite.c; the guest is /bin/sqlite3 of the smoke tests.
+    set(MICROOS_SQLITE_DIR "${CMAKE_SOURCE_DIR}/third_party/sqlite")
+    set(MICROOS_SQLITE_SOURCES
+        "${MICROOS_SQLITE_DIR}/sqlite3.c"
+        "${MICROOS_SQLITE_DIR}/port/sqlite_vfs.c"
+    )
+    set_source_files_properties(${MICROOS_SQLITE_SOURCES}
+        PROPERTIES COMPILE_DEFINITIONS
+            "SQLITE_PORT_HOST=1;SQLITE_OS_OTHER=1;SQLITE_THREADSAFE=0;SQLITE_OMIT_LOAD_EXTENSION=1;SQLITE_OMIT_WAL=1;SQLITE_OMIT_DEPRECATED=1;SQLITE_DQS=0;SQLITE_TEMP_STORE=3;SQLITE_DEFAULT_JOURNAL_SIZE_LIMIT=1048576;SQLITE_DEFAULT_CACHE_SIZE=-256;SQLITE_DEFAULT_PAGE_SIZE=4096"
+        COMPILE_OPTIONS
+            "-Wno-sign-compare;-Wno-unused-parameter;-Wno-missing-field-initializers;-Wno-implicit-fallthrough;-Wno-undef"
+    )
+
     target_sources(microos_tests PRIVATE
         "${CMAKE_SOURCE_DIR}/components/drivers/src/input_debounce.c"        "${CMAKE_SOURCE_DIR}/components/drivers/src/battery_soc.c"
         "${CMAKE_SOURCE_DIR}/components/drivers/src/fb_draw.c"
@@ -140,6 +161,7 @@ if(NOT ESP_PLATFORM)
         "${CMAKE_SOURCE_DIR}/components/port_esp32/src/progs_format.c"
         ${MICROOS_ZLIB_SOURCES}
         "${MICROOS_ZLIB_DIR}/port/zlib_os.c"
+        ${MICROOS_SQLITE_SOURCES}
     )
 
     # The FAT reader comes from the component when the host build links it

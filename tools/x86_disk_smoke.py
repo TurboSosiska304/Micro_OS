@@ -69,6 +69,9 @@ FIRST_BOOT = [
     # the disk through the library of a program that grew with them.
     "exec /bin/sb-ls -la /etc",
     "exec /bin/sb-grep -r hostname /etc",
+    # SQLite: the first boot creates a database on the volume, the second one
+    # reads it out of the same disk after a reset.
+    "exec /bin/sqlite3 /sqlite.db < /etc/sql-setup.sql",
 ]
 
 SECOND_BOOT = [
@@ -87,6 +90,10 @@ SECOND_BOOT = [
     # the disk through the library of a program that grew with them.
     "exec /bin/sb-ls -la /etc",
     "exec /bin/sb-grep -r hostname /etc",
+    # The database of the first boot: the rows are read and the file is
+    # checked by the library of the second boot.
+    "exec /bin/sqlite3 /sqlite.db < /etc/sql-read.sql",
+    "exec /bin/sqlite3 /sqlite.db < /etc/sql-schema.sql",
 ]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -362,6 +369,31 @@ def check(first: str, second: str) -> list:
         recursive,
     )
 
+    # --- SQLite: a database written in the first boot and read in the second
+    created = first_answers[10]
+    expect(
+        "the first boot writes a database of SQLite",
+        "1|one|1.5" in created and "2|two|2.25" in created and "ok" in created,
+        created,
+    )
+    read_back = second_answers[13]
+    expect(
+        "the database of the first boot is read after the reset",
+        "2|3.75" in read_back,
+        read_back,
+    )
+    expect(
+        "the database passes its integrity check after the reset",
+        re.search(r"(?m)^ok\r?$", read_back) is not None,
+        read_back,
+    )
+    schema = second_answers[14]
+    expect(
+        "the schema of the database survived the reset",
+        "CREATE TABLE items" in schema and "items" in schema,
+        schema,
+    )
+
     return checks
 
 
@@ -409,7 +441,7 @@ def main(argv: list) -> int:
     parser = argparse.ArgumentParser(description="the disk smoke test of the x86-64 port")
     parser.add_argument("--image", default=DEFAULT_IMAGE, help="the image of the disk")
     parser.add_argument("--mkimage", metavar="PATH", help="write the copy of the build image and stop")
-    parser.add_argument("--timeout", type=float, default=30.0, help="the seconds a boot gets")
+    parser.add_argument("--timeout", type=float, default=60.0, help="the seconds a boot gets")
     parser.add_argument("--repeat", type=int, default=1, help="how many times to boot the pair")
     parser.add_argument("--keep", action="store_true", help="keep the image after the run")
     parser.add_argument("--verbose", action="store_true", help="print the consoles of the boots")

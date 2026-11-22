@@ -64,6 +64,11 @@ set(MICROOS_LIBC_USER_HEADERS
     "${MICROOS_LIBC_USER_DIR}/include/strings.h"
     "${MICROOS_LIBC_USER_DIR}/include/termios.h"
     "${MICROOS_LIBC_USER_DIR}/include/time.h"
+    "${MICROOS_LIBC_USER_DIR}/include/signal.h"
+    "${MICROOS_LIBC_USER_DIR}/include/math.h"
+    "${MICROOS_LIBC_USER_DIR}/include/sys/time.h"
+    "${MICROOS_LIBC_USER_DIR}/include/sys/resource.h"
+    "${MICROOS_LIBC_USER_DIR}/include/sys/ioctl.h"
 )
 
 # A static library of the guest. The sources are the ones of the third-party
@@ -72,14 +77,24 @@ set(MICROOS_LIBC_USER_HEADERS
 # of the port names in its own link, so the host libc of the build machine is
 # never asked for a symbol.
 function(microos_userland_library name)
-    cmake_parse_arguments(LIB "" "" "SOURCES;INCLUDES;DEFINES;COMPILE_OPTIONS" ${ARGN})
+    cmake_parse_arguments(LIB "FLOAT" "" "SOURCES;INCLUDES;DEFINES;COMPILE_OPTIONS" ${ARGN})
 
     if(NOT LIB_SOURCES)
         message(FATAL_ERROR "microos_userland_library(${name}): no sources")
     endif()
 
+    # A library whose source computes in `double` is built with the flags of a
+    # program with floating point: `-mgeneral-regs-only` leaves the XMM and
+    # x87 state out of an image, and the port turns it on only for the programs
+    # that ask for it (SQLite, Lua). See ports/port_x86_64/CMakeLists.txt.
+    if(LIB_FLOAT)
+        set(guest_flags ${MICROOS_FLOAT_CFLAGS})
+    else()
+        set(guest_flags ${MICROOS_USERLAND_CFLAGS})
+    endif()
+
     add_library(${name} STATIC ${LIB_SOURCES})
-    target_compile_options(${name} PRIVATE ${MICROOS_USERLAND_CFLAGS} ${LIB_COMPILE_OPTIONS})
+    target_compile_options(${name} PRIVATE ${guest_flags} ${LIB_COMPILE_OPTIONS})
     target_include_directories(${name} PRIVATE
         "${MICROOS_KERNEL_INCLUDE}"
         "${MICROOS_LIBC_USER_DIR}/include"
@@ -100,7 +115,7 @@ endfunction()
 # program: the tree keeps it in `programs/<name>.c`, and a ported tool names
 # the file of third_party while the image keeps its own name (`/bin/sb-ls`).
 function(microos_add_userland_program name)
-    cmake_parse_arguments(PROG "" "MAIN"
+    cmake_parse_arguments(PROG "FLOAT" "MAIN"
         "LIBRARIES;INCLUDES;DEFINES;SOURCES;COMPILE_OPTIONS" ${ARGN})
 
     # A program of the tree puts its `main` in `programs/<name>.c`; a ported
@@ -113,7 +128,14 @@ function(microos_add_userland_program name)
     set(image "${CMAKE_BINARY_DIR}/${name}.mox")
     set(objects)
     set(runtime_sources ${MICROOS_LIBC_USER_SOURCES} ${PROG_SOURCES})
-    set(compile_flags ${MICROOS_PROGRAM_CFLAGS} ${PROG_COMPILE_OPTIONS})
+    # A program with `double` in it (SQLite and its REAL numbers) needs the
+    # XMM and x87 registers the port turns on for it; every other program of
+    # the tree keeps -mgeneral-regs-only.
+    if(PROG_FLOAT)
+        set(compile_flags ${MICROOS_FLOAT_PROGRAM_CFLAGS} ${PROG_COMPILE_OPTIONS})
+    else()
+        set(compile_flags ${MICROOS_PROGRAM_CFLAGS} ${PROG_COMPILE_OPTIONS})
+    endif()
     set(include_flags
         -I "${MICROOS_KERNEL_INCLUDE}"
         -I "${MICROOS_PROGRAM_DIR}"

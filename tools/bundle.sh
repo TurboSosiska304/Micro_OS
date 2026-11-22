@@ -228,6 +228,9 @@ if [ -f "$X86_BUILD/loader32.elf" ] && [ -f "$X86_BUILD/microos64.bin" ]; then
     # The tools of sbase are in /bin/sb-* of the same image, under their MIT
     # license; the notice travels with the archive for the same reason.
     cp -f "$ROOT/third_party/sbase/LICENSE" "$STAGE/LICENSE.sbase"
+    # SQLite is in the public domain and /bin/sqlite3 is a program of the
+    # same image; the statement that says so travels with the archive.
+    cp -f "$ROOT/third_party/sqlite/LICENSE" "$STAGE/LICENSE.sqlite"
     if [ -f "$X86_BUILD/microos64.sig" ] && [ -f "$X86_BUILD/signing.pub" ]; then
         cp -f "$X86_BUILD/microos64.sig" "$STAGE/microos64.sig"
         cp -f "$X86_BUILD/signing.pub" "$STAGE/microos-sign.pub"

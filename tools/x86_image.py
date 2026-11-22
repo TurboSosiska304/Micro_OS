@@ -60,6 +60,10 @@ PROGRAMS = [
     "sb-find",
     "sb-xargs",
     "sb-sed",
+    # SQLite and the shell of the release (third_party/sqlite): the database
+    # library of the public domain, its VFS on the calls of this system and
+    # the program that writes the scripts of /etc.
+    "sqlite3",
 ]
 
 # The stream of the test of zlib: a fixed text, a fixed moment and the level
@@ -90,6 +94,32 @@ DEFAULT_BUILD = os.path.join(ROOT, "build-x86")
 DEFAULT_MKFS = os.path.join(ROOT, "build-host", "tools", "microos_mkfs")
 ZLIB_LICENSE = os.path.join(ROOT, "third_party", "zlib", "LICENSE")
 SBASE_LICENSE = os.path.join(ROOT, "third_party", "sbase", "LICENSE")
+SQLITE_LICENSE = os.path.join(ROOT, "third_party", "sqlite", "LICENSE")
+
+# The scripts of the database of the smoke tests. They are files of /etc and
+# not a line of the shell: the shell of this machine has no quotes, and a
+# statement of SQL has spaces. The first one builds the table in the first
+# run of the program, the second one reads it in a second run and asks the
+# library to check the file it found.
+SQL_SETUP = (
+    "CREATE TABLE items(id INTEGER PRIMARY KEY, name TEXT, price REAL,"
+    " data BLOB);\n"
+    "INSERT INTO items(name, price, data) VALUES('one', 1.5, x'0102');\n"
+    "INSERT INTO items(name, price, data) VALUES('two', 2.25, x'03');\n"
+    "BEGIN;\n"
+    "INSERT INTO items(name, price, data) VALUES('roll', 9.0, x'ff');\n"
+    "ROLLBACK;\n"
+    "SELECT count(*) FROM items;\n"
+    "SELECT id, name, price FROM items ORDER BY id;\n"
+    "PRAGMA integrity_check;\n"
+)
+SQL_READ = (
+    "SELECT count(*), sum(price) FROM items;\n"
+    "SELECT typeof(price), typeof(data) FROM items WHERE id=1;\n"
+    "PRAGMA integrity_check;\n"
+)
+SQL_NESTED = ".read /etc/sql-read.sql\n"
+SQL_SCHEMA = ".tables\n.schema items\n.mode list\nSELECT name FROM items WHERE id=2;\n"
 
 
 def write_greeting(build_dir: str, epoch: int) -> str:
@@ -171,6 +201,9 @@ def build_image(
     if not os.path.isfile(SBASE_LICENSE):
         print(f"missing {SBASE_LICENSE}", file=sys.stderr)
         return 2
+    if not os.path.isfile(SQLITE_LICENSE):
+        print(f"missing {SQLITE_LICENSE}", file=sys.stderr)
+        return 2
 
     # The fixture of zcat and the license that travels with its bytes. The
     # program is part of the image, so the image carries the notice of the
@@ -183,6 +216,21 @@ def build_image(
     # The MIT notice of sbase travels with the tools of /bin/sb-*, as the
     # notice of zlib travels with zcat.
     command += ["--file", f"/etc/licenses/sbase={SBASE_LICENSE}"]
+
+    # SQLite is in the public domain; the statement that says so travels with
+    # the program of /bin/sqlite3, and the scripts the smoke tests run are
+    # files of /etc.
+    command += ["--file", f"/etc/licenses/sqlite={SQLITE_LICENSE}"]
+    for name, text in (
+        ("sql-setup.sql", SQL_SETUP),
+        ("sql-read.sql", SQL_READ),
+        ("sql-nested.sql", SQL_NESTED),
+        ("sql-schema.sql", SQL_SCHEMA),
+    ):
+        path = os.path.join(build_dir, name)
+        with open(path, "w", encoding="utf-8", newline="\n") as file:
+            file.write(text)
+        command += ["--file", f"/etc/{name}={path}"]
 
     command += ["--text", f"/etc/setting={SETTING}"]
     command += extra or []
