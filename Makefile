@@ -32,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak
+.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-smp-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke coverage reproducible soak soak-smp soak-image soak-host fuzz-long disk-stress board-soak
 
 help:
 	@echo "Micro OS — available targets:"
@@ -62,6 +62,7 @@ help:
 	@echo "  make x86-run    boot it in a QEMU window (framebuffer 1280x800, keyboard)"
 	@echo "  make x86-run-serial  boot it with the serial console (-nographic)"
 	@echo "  make x86-smoke  boot it and check what it says"
+	@echo "  make x86-smp-smoke  boot the kernel of two cores and check both of them"
 	@echo "  make x86-disk   the image of the disk: /bin and /etc of MicroFS"
 	@echo "  make x86-vga-smoke   check the screen and the keyboard without a display"
 	@echo "  make x86-run-disk   boot the window with an 8 MB disk on the IDE channel"
@@ -74,6 +75,7 @@ help:
 	@echo "  make soak       the session of 600 seconds on x86-64 (one boot)"
 	@echo "  make soak SOAK_MINUTES=1  the same, short, to check the tool"
 	@echo "  make soak SOAK_ITERATIONS=5  five short boots, one pass each"
+	@echo "  make soak-smp   the same session on the two-core image (-smp 2)"
 	@echo "  make soak-host  the same ten minutes on the host, two cores, under TSan"
 	@echo "  make fuzz-long  the fuzzers with a multiplier and a seed"
 	@echo "  make disk-stress  a full volume, fsck -y and two boots (MicroFS, FAT)"
@@ -322,6 +324,16 @@ x86-run-serial: x86-disk
 x86-smoke: x86-disk x86-open-build
 	python3 tools/x86_smoke.py --image $(X86_PROGRAMS_IMAGE) --open-build $(X86_OPEN_BUILD)
 
+# The gate of the two cores (ADR 0012): the kernel of `x86-smp-build` boots on
+# a machine of two processors and has to start both of them, keep a task on
+# one core, take work on the other and read the clock of the AP. The disk is
+# the same image of `x86-disk`; the tool drives the `smp` command of the shell
+# and compares the ticks of the core 1 before and after the load. It is not a
+# part of `make ci`: the two-core image is not green until the kernel lanes of
+# the branch land.
+x86-smp-smoke: x86-smp-build x86-disk
+	python3 tools/x86_smp_smoke.py --build $(X86_SMP_BUILD) --image $(X86_PROGRAMS_IMAGE)
+
 # The screen without a display: the monitor of QEMU reads the framebuffer of
 # the new screen with screendump (a picture has no text memory) and the text
 # mode of the fallback with pmemsave, and presses the keys of the keyboard, so
@@ -501,6 +513,17 @@ soak: soak-image
 		--mkfs $(X86_MKFS) \
 		$(if $(SOAK_ITERATIONS),--iterations $(SOAK_ITERATIONS),--minutes $(SOAK_MINUTES)) \
 		$(SOAK_ARGS)
+
+# The same session on the kernel of two cores: `--smp` boots the build of
+# `x86-smp-build` with -smp 2 and the load asserts the two-core invariants on
+# top of the ones of 1.0 - the report of `smp`, the ticks of both cores
+# moving, the queues consistent and no exception in any answer. The image is
+# made from this build (the programs are the same, the kernel is not), and it
+# is the full volume of `soak-image` either way.
+soak-smp: x86-smp-build build
+	@mkdir -p $(dir $(SOAK_IMAGE))
+	python3 tools/soak.py --build $(X86_SMP_BUILD) --image $(SOAK_IMAGE) \
+		--mkfs $(X86_MKFS) --minutes $(SOAK_MINUTES) --smp $(SOAK_ARGS)
 
 # The other half of the same ten minutes: the portable kernel over the host
 # port, several tasks at once on two cores (ADR 0012, KERNEL_SMP and

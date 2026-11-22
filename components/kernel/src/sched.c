@@ -808,8 +808,8 @@ k_size_t k_sched_validate(void)
 
         for (other = cpu + 1u; other < k_cpu_count(); other++) {
             if (k_cpu_by_id(other)->current == t) {
-                kerror("sched: the task '%s' runs on the cores %u and %u", t->name,
-                       (unsigned)cpu, (unsigned)other);
+                kerror("sched: the task '%s' runs on the cores %u and %u", t->name, (unsigned)cpu,
+                       (unsigned)other);
                 problems++;
             }
         }
