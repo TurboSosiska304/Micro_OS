@@ -23,6 +23,7 @@ void test_fuzz(void);
 void test_mfs(void);
 void test_mfs_persistence(void);
 void test_mfs_repair(void);
+void test_mfs_many(void);
 void test_mkfs_image(void);
 void test_vfs(void);
 void test_fs_fat(void);
