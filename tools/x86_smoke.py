@@ -218,6 +218,12 @@ COMMANDS = [
     "exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-nested.sql",
     "exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-schema.sql",
     "exec /bin/sqlite3 -cmd .tables /tmp/sqlite.db < /etc/sql-read.sql",
+    # The timer of the shell is the one line of the guest that prints a real
+    # number through the formatter of the library (`%f`, six digits).
+    "exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-timer.sql",
+    # `-batch` is the shell of the release with no prompt and no editor: the
+    # script of a redirect is the same one and the answers are the same.
+    "exec /bin/sqlite3 -batch /tmp/sqlite.db < /etc/sql-read.sql",
 ]
 
 # The prompt of the shell. It is written in one call, so the log of another
@@ -995,6 +1001,18 @@ def check(output: str) -> list:
         "the -cmd of the shell runs before the script",
         "items" in listed and "2|3.75" in listed,
         listed,
+    )
+    timed = answer("exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-timer.sql")
+    expect(
+        "the timer prints a real number through the formatter of the library",
+        re.search(r"Run Time: real \d+\.\d{6} user", timed) is not None,
+        timed,
+    )
+    batch = answer("exec /bin/sqlite3 -batch /tmp/sqlite.db < /etc/sql-read.sql")
+    expect(
+        "the shell runs a script in batch mode",
+        "2|3.75" in batch and "ok" in batch,
+        batch,
     )
     free_answer = answer("free")
     expect(

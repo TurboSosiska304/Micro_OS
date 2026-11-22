@@ -120,6 +120,9 @@ SQL_READ = (
 )
 SQL_NESTED = ".read /etc/sql-read.sql\n"
 SQL_SCHEMA = ".tables\n.schema items\n.mode list\nSELECT name FROM items WHERE id=2;\n"
+# The timer of the shell prints a real number with `%f` and a precision: the
+# one line of the guest that uses the formatter of the library for a double.
+SQL_TIMER = ".timer on\nSELECT count(*) FROM items;\n"
 
 
 def write_greeting(build_dir: str, epoch: int) -> str:
@@ -226,6 +229,7 @@ def build_image(
         ("sql-read.sql", SQL_READ),
         ("sql-nested.sql", SQL_NESTED),
         ("sql-schema.sql", SQL_SCHEMA),
+        ("sql-timer.sql", SQL_TIMER),
     ):
         path = os.path.join(build_dir, name)
         with open(path, "w", encoding="utf-8", newline="\n") as file:
