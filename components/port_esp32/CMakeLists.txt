@@ -185,11 +185,13 @@ function(add_board_program name entry)
         COMMAND ${CMAKE_C_COMPILER} ${MICRO_OS_PROGRAM_CFLAGS}
                 -o ${name}_string.o "${MICRO_OS_LIBC_USER_DIR}/src/string.c"
         COMMAND ${CMAKE_C_COMPILER} ${MICRO_OS_PROGRAM_CFLAGS}
+                -o ${name}_errno.o "${MICRO_OS_LIBC_USER_DIR}/src/errno.c"
+        COMMAND ${CMAKE_C_COMPILER} ${MICRO_OS_PROGRAM_CFLAGS}
                 -o ${name}_main.o "${MICRO_OS_PROGRAM_DIR}/${name}.c"
         COMMAND ${CMAKE_C_COMPILER} -nostdlib -static -no-pie -Wl,--build-id=none
                 -Wl,-e,${entry} -T "${MICRO_OS_PROGRAM_DIR}/program_esp32.ld"
                 -o ${name}.elf ${name}_start.o ${name}_syscall.o ${name}_stdio.o
-                ${name}_string.o ${name}_main.o
+                ${name}_string.o ${name}_errno.o ${name}_main.o -lgcc
         COMMAND ${CMAKE_COMMAND} -E env
                 "OBJCOPY=${CMAKE_OBJCOPY}" "OBJDUMP=${CMAKE_OBJDUMP}" "NM=${CMAKE_NM}"
                 sh "${MICRO_OS_MKPROG}" --base 0x4009E000 --data-base 0x3FFCE000
@@ -198,6 +200,7 @@ function(add_board_program name entry)
         DEPENDS "${MICRO_OS_PROGRAM_DIR}/${name}.c" "${MICRO_OS_PROGRAM_DIR}/program_esp32.ld"
                 "${MICRO_OS_LIBC_USER_DIR}/src/start.c" "${MICRO_OS_LIBC_USER_DIR}/src/syscall.c"
                 "${MICRO_OS_LIBC_USER_DIR}/src/stdio.c" "${MICRO_OS_LIBC_USER_DIR}/src/string.c"
+                "${MICRO_OS_LIBC_USER_DIR}/src/errno.c"
                 "${MICRO_OS_LIBC_USER_DIR}/include/ulibc.h"
                 "${MICRO_OS_KERNEL_INC}/kernel/ksys.h" "${MICRO_OS_MKPROG}"
         COMMENT "building the image of /bin/${name} for the board"
