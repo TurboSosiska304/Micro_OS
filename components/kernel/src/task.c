@@ -779,7 +779,7 @@ bool task_cpu_tick(struct task *t)
 
         if (!t->cpu_limit_signalled && t->cpu_ms >= t->limit_cpu_ms) {
             t->cpu_limit_signalled = true;
-            t->sig_pending |= signal_bit(K_SIGTERM);
+            __atomic_fetch_or(&t->sig_pending, signal_bit(K_SIGTERM), __ATOMIC_RELAXED);
             marked = true;
         }
     }
@@ -805,11 +805,11 @@ bool task_signal_interrupts(const struct task *t)
     }
 
     /*
-     * The mark and the handler are written by a sender on another core (under
-     * the critical section) and read here by the task itself on its way into
-     * a wait, without the lock: the two loads are atomic so that the reader
-     * sees a mark or a handler, and the pair the write made, never half of
-     * one (the two-core run of TSan named this pair).
+     * The mark and the handler are written by a sender on another core and
+     * read here by the task itself on its way into a wait, without the lock:
+     * every access to the pair is an atomic, so the reader sees a mark or a
+     * handler, and the pair the write made, never half of one (the two-core
+     * run of TSan named this pair).
      */
     pending = __atomic_load_n(&t->sig_pending, __ATOMIC_RELAXED);
 
@@ -870,8 +870,15 @@ int task_signal_send(k_u32_t pid, int sig)
         k_port_exit_critical();
         return KERR_SRCH;
     }
-    t->sig_pending |= signal_bit(sig);
     k_port_exit_critical();
+
+    /*
+     * The mark is one bit of a word the task itself reads without the lock
+     * (task_signal_interrupts, task_signal_check): every access to it is an
+     * atomic, because the critical section of a port is the interrupts of
+     * one core and not a lock of the machine (ADR 0012).
+     */
+    __atomic_fetch_or(&t->sig_pending, signal_bit(sig), __ATOMIC_RELAXED);
 
     /* A task that waits for an event or a timer may come back at once: the
      * check of the signals is what its wait and its next call look at. */
@@ -941,16 +948,14 @@ task_signal_fn task_signal_set(struct task *t, int sig, task_signal_fn handler)
         return K_SIG_ERR;
     }
 
-    k_port_enter_critical();
-    previous = t->sig_handlers[slot];
-    t->sig_handlers[slot] = handler;
+    previous = __atomic_load_n(&t->sig_handlers[slot], __ATOMIC_RELAXED);
+    __atomic_store_n(&t->sig_handlers[slot], handler, __ATOMIC_RELAXED);
 
     /* An ignored signal is thrown away, as POSIX asks: there is no point in
      * waking the task for a mark it will never answer. */
     if (handler == K_SIG_IGN) {
-        t->sig_pending &= ~signal_bit(sig);
+        __atomic_fetch_and(&t->sig_pending, (k_u32_t)~signal_bit(sig), __ATOMIC_RELAXED);
     }
-    k_port_exit_critical();
 
     return previous;
 }
@@ -961,10 +966,15 @@ void task_signal_inherit(struct task *child, const struct task *parent)
         return;
     }
 
-    k_port_enter_critical();
-    memcpy(child->sig_handlers, parent->sig_handlers, sizeof(child->sig_handlers));
-    child->sig_pending = 0u;
-    k_port_exit_critical();
+    k_size_t i;
+
+    for (i = 0; i < K_ARRAY_SIZE(child->sig_handlers); i++) {
+        task_signal_fn handler = __atomic_load_n(&parent->sig_handlers[i], __ATOMIC_RELAXED);
+
+        __atomic_store_n(&child->sig_handlers[i], handler, __ATOMIC_RELAXED);
+    }
+
+    __atomic_store_n(&child->sig_pending, 0u, __ATOMIC_RELAXED);
 }
 
 void task_signal_notify_parent(struct task *self)
@@ -975,14 +985,15 @@ void task_signal_notify_parent(struct task *self)
         return;
     }
 
-    /* The parent may be on another core of the host and is reading its own
-     * marks: the write is in the same critical section as the reader. */
     k_port_enter_critical();
     parent = self->parent;
-    if (parent != NULL) {
-        parent->sig_pending |= signal_bit(K_SIGCHLD);
-    }
     k_port_exit_critical();
+
+    if (parent != NULL) {
+        /* The parent may be on another core and reads its marks without the
+         * lock: the bit is added atomically. */
+        __atomic_fetch_or(&parent->sig_pending, signal_bit(K_SIGCHLD), __ATOMIC_RELAXED);
+    }
 }
 
 void task_signal_check(struct task *t, k_ssize_t result, bool from_syscall)
@@ -1002,17 +1013,18 @@ void task_signal_check(struct task *t, k_ssize_t result, bool from_syscall)
             continue;
         }
 
-        /* The mark and the handler are one pair: a task that installs a
-         * handler on another core must not be seen half way, and a clear of
-         * the mark must not race the write of a child's exit. */
-        k_port_enter_critical();
-        if ((t->sig_pending & signal_bit(sig)) == 0u) {
-            k_port_exit_critical();
+        /* Take the mark with one atomic operation: another core may add a
+         * bit at any moment, and clearing ours must not lose it. The handler
+         * is read after the mark is consumed, which is what POSIX asks of a
+         * signal delivered while the program changes its handler. */
+        k_u32_t mark = signal_bit(sig);
+        k_u32_t seen = __atomic_fetch_and(&t->sig_pending, (k_u32_t)~mark, __ATOMIC_RELAXED);
+
+        if ((seen & mark) == 0u) {
             continue;
         }
-        handler = t->sig_handlers[slot];
-        t->sig_pending &= ~signal_bit(sig);
-        k_port_exit_critical();
+
+        handler = __atomic_load_n(&t->sig_handlers[slot], __ATOMIC_RELAXED);
 
         if (handler == K_SIG_IGN) {
             continue;

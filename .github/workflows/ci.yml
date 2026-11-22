@@ -142,11 +142,19 @@ jobs:
 
       # A build of its own, not a copy of the first: the same sources and
       # SOURCE_DATE_EPOCH have to give the same application and bootloader.
+      # The development key of the first build is named for the second one:
+      # a key generated per build directory puts a different public half in
+      # the image, and the two bytes would differ for a reason that is not
+      # the source.
       - name: the firmware twice
         shell: bash
         run: |
           . /opt/esp/idf/export.sh >/dev/null
-          idf.py -B build-repro build
+          key=""
+          if [ -f build/signing.key ]; then
+              key="-DMICROOS_SIGN_KEY=$PWD/build/signing.key"
+          fi
+          idf.py -B build-repro $key build
           for image in micro_os.bin bootloader/bootloader.bin \
                        partition_table/partition-table.bin; do
               cmp "build/$image" "build-repro/$image"
