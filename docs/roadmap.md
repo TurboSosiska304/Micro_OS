@@ -458,3 +458,34 @@ to build is the screen a program can draw on.
       and serves three certificates of a test authority over TLS: the
       trusted one arrives (1.3 and 1.2), the one of another name and the one
       of another authority are refused, and the repository of `pkg` is HTTPS
+
+## K13 - A bootable image of x86-64 (prototype, 1.2)
+
+> The machine of the port boots in QEMU from `-kernel` and `-initrd`: the
+> hypervisor is the boot loader. A medium is the other half of "a machine":
+> a firmware reads it, a boot loader starts the port's loader, and the root
+> filesystem comes with the image. The decision is
+> [ADR 0026](adr/0026-bios-iso.md), the page is
+> [ports/x86_64/iso.md](ports/x86_64/iso.md).
+
+* [x] An El Torito ISO (BIOS) with the loader, the signed kernel and the
+      root image: `make x86-iso` writes `build-x86-iso/microos.iso` with
+      GRUB when `grub-mkrescue` is installed and with limine otherwise; the
+      boot loader is not vendored
+* [x] The root image as the second module of the boot: the port registers
+      its bytes as a read-only block device (`boot0`, `boot0p1`), the boot
+      mounts it at `/` and `/bin` is the tree of the CD; the heap starts
+      above the modules, and the loader refuses a module over the kernel
+* [x] `make x86-iso-smoke`: the ISO boots with `-cdrom` and nothing else,
+      mounts the root image and runs `/bin/hello` from the boot and from the
+      shell
+* [ ] UEFI: the EFI application, the memory map of the firmware, GOP and the
+      exit of the boot services; the framebuffer of ADR 0023 comes first,
+      because the kernel of the port draws into the text mode of the BIOS
+* [ ] A hybrid image: the ISO written to a USB stick boots as a disk
+      (`limine bios-install`, or a protective MBR and the GRUB record)
+* [ ] A writable root: the root of the CD is read-only, and a person's files
+      need a disk (or an overlay in the memory of the machine) and the
+      installer of K12
+* [ ] A reproducible ISO: the volume descriptor follows
+      `SOURCE_DATE_EPOCH`, the directory records still carry the clock

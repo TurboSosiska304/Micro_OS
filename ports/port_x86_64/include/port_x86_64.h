@@ -304,8 +304,29 @@ void port_x86_64_blockdev_init(void);
 void port_x86_64_disk_init(void);
 
 /*
- * The volume the filesystem of the boot is mounted on: the first partition of
- * the disk, or "ram0" when there is no disk.
+ * Own the medium of the boot: a boot loader may hand the kernel more than the
+ * image, and the second module of the x86-64 boot is a whole MicroFS disk (the
+ * root image of the ISO, ADR 0026). It is the bytes of the boot medium in the
+ * memory of the machine and nothing writes them, so the device is read-only
+ * ("boot0") and its first partition is the root when the boot came from that
+ * medium. Called by port_x86_64_init() after the RAM volume.
+ */
+void port_x86_64_module_init(void);
+
+/* The first partition of the boot module, NULL when the boot had none. */
+const char *port_x86_64_module_root(void);
+
+/*
+ * One module of the multiboot information: 0 is the kernel, 1 the root image.
+ * False when the boot had no such module and the two numbers are untouched.
+ * The range is physical and lives in the identity map of the first gigabyte.
+ */
+bool port_x86_64_boot_module(k_u32_t index, k_u64_t *start, k_u64_t *size);
+
+/*
+ * The volume the filesystem of the boot is mounted on: the root image of the
+ * boot medium when there is one, the first partition of the disk, or "ram0"
+ * when the machine has neither.
  */
 const char *port_x86_64_root_device(void);
 

@@ -51,6 +51,7 @@
 .type _start, @function
 
 .extern loader_verify_image
+.extern loader_puts
 
 _start:
     cli
@@ -92,6 +93,51 @@ _start:
     addl $8, %esp
     testl %eax, %eax
     jnz halt
+
+    /*
+     * The kernel is copied to KERNEL_PHYS below, and a module of the boot
+     * lives where the loader of the machine put it. A module that lies over
+     * those bytes is not a boot this loader can take: the copy of the kernel
+     * would destroy the root image of the ISO exactly when the kernel is
+     * about to read it. The overlap is refused here, before a byte moves.
+     * Module 0 is the kernel itself and is allowed to sit at KERNEL_PHYS,
+     * where the copy is a copy of a range onto itself.
+     */
+    movl mbi_ptr, %eax
+    movl 20(%eax), %ebx /* mods_count */
+    movl 24(%eax), %eax /* mods_addr */
+    movl (%eax), %edx /* mod_start of the kernel */
+    movl 4(%eax), %edi
+    subl %edx, %edi
+    movl $KERNEL_PHYS, %esi
+    addl %esi, %edi /* dest_end = KERNEL_PHYS + kernel bytes */
+    movl %eax, %ebp /* the entry of the loop */
+    xorl %ecx, %ecx /* the index of the entry */
+
+.Lmods_check:
+    cmpl %ebx, %ecx
+    jae .Lmods_ok
+    movl (%ebp), %eax /* mod_start */
+    movl 4(%ebp), %edx /* mod_end */
+    testl %ecx, %ecx
+    jnz .Lmods_overlap
+    cmpl %esi, %eax
+    je .Lmods_next /* the kernel is already where it is copied */
+.Lmods_overlap:
+    cmpl %esi, %edx
+    jbe .Lmods_next /* the module ends before the destination */
+    cmpl %edi, %eax
+    jae .Lmods_next /* the module starts after it */
+    pushl $overlap_text
+    call loader_puts
+    addl $4, %esp
+    jmp halt
+.Lmods_next:
+    addl $16, %ebp
+    incl %ecx
+    jmp .Lmods_check
+
+.Lmods_ok:
 
     /* PML4[0] -> PDPT_LOW, PDPT_LOW[0] -> PD_LOW: the first gigabyte through
        2 MiB pages, so that every address of the boot keeps its meaning. */
@@ -213,6 +259,10 @@ mbi_ptr:
 .long 0
 
 .section .rodata
+.align 8
+overlap_text:
+.asciz "Micro OS: a module of the boot lies over the kernel image\r\n"
+
 .align 8
 gdt64:
 .quad 0

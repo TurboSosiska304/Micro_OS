@@ -32,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak
+.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak
 
 help:
 	@echo "Micro OS — available targets:"
@@ -68,6 +68,9 @@ help:
 	@echo "  make x86-run-disk-serial  the same disk in a terminal (-nographic)"
 	@echo "  make x86-disk-smoke two boots on one disk image, a file survives both"
 	@echo "  make x86-net-smoke   the network: ping, UDP and HTTP on QEMU user-net"
+	@echo "  make x86-iso    the bootable ISO: loader, kernel and root.img (K13)"
+	@echo "  make x86-iso-run    boot that ISO in a terminal (-nographic)"
+	@echo "  make x86-iso-smoke  boot the ISO and check the shell and /bin"
 	@echo "  make soak       the session of 600 seconds on x86-64 (one boot)"
 	@echo "  make soak SOAK_MINUTES=1  the same, short, to check the tool"
 	@echo "  make soak SOAK_ITERATIONS=5  five short boots, one pass each"
@@ -452,6 +455,29 @@ x86-user: x86-all bundle
 
 x86-user-serial: X86_SERIAL=1
 x86-user-serial: x86-user
+
+# The bootable image of the port (K13, ADR 0026): an ISO with the loader, the
+# kernel and an 8 MB root image, which a BIOS machine takes out of its CD
+# drive. The three files are the ones of the builds above - nothing is built
+# twice - and tools/x86_iso.py only stages them and asks grub-mkrescue or
+# limine to write the El Torito catalogue. The root image is the disk of
+# `make x86-disk`: /bin and /etc written by the tool, mounted read-only by the
+# port because the medium of the boot is not a place to write.
+X86_ISO_BUILD := build-x86-iso
+X86_ISO_IMAGE := $(X86_ISO_BUILD)/microos.iso
+X86_ISO_BOOTLOADER ?= auto
+
+x86-iso: x86-disk build
+	python3 tools/x86_iso.py --loader $(X86_BUILD)/loader32.elf \
+		--kernel $(X86_BUILD)/microos64.bin --root $(X86_PROGRAMS_IMAGE) \
+		--out $(X86_ISO_IMAGE) --stage $(X86_ISO_BUILD)/iso \
+		--bootloader $(X86_ISO_BOOTLOADER)
+
+x86-iso-run: x86-iso
+	qemu-system-x86_64 -cdrom $(X86_ISO_IMAGE) -m 256 -nographic -no-reboot -boot d
+
+x86-iso-smoke: x86-iso
+	python3 tools/x86_iso_smoke.py --iso $(X86_ISO_IMAGE)
 
 # The campaign of 1.0 (docs/wiki/testing.md). The session is one boot of the
 # x86-64 machine, ten minutes long by default, under the mixed load of

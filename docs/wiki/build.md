@@ -82,6 +82,9 @@ make x86-vga-smoke        # check both screens and the keyboard, without a displ
 make x86-run-disk         # the window with a disk of its own, kept between runs
 make x86-run-disk-serial  # the same disk in a terminal
 make x86-disk-smoke       # two boots on one image: a file survives both
+make x86-iso              # the BIOS ISO: loader, kernel and root image
+make x86-iso-run          # boot the ISO in a terminal (-nographic)
+make x86-iso-smoke        # boot the ISO and check the shell and /bin
 ```
 
 The build is a CMake project of its own (`ports/port_x86_64`), because the
@@ -129,6 +132,16 @@ The disk is a raw image of 8 MB, made by `make x86-disk`
 not committed; `make clean` does not remove `build-x86/`, so
 `rm -rf build-x86` is the way to start over. The details are in the port's
 README, [`docs/ports/x86_64/README.md`](../ports/x86_64/README.md).
+
+`make x86-iso` is the medium, not the hypervisor: it stages
+`loader32.elf`, `microos64.bin` and `programs.img` into an ISO with an El
+Torito catalogue and asks `grub-mkrescue` (or `limine` when the machine has
+no GRUB) for the boot record. The image is `build-x86-iso/microos.iso`;
+the root image is the second module of the boot, the port mounts its first
+partition as a read-only `/`, and `make x86-iso-smoke` boots it with
+`-cdrom` and no `-kernel`. The tools the build needs and the gaps (UEFI, a
+USB stick, a writable root) are in
+[`docs/ports/x86_64/iso.md`](../ports/x86_64/iso.md).
 
 ## The ESP32 build
 

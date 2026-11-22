@@ -13,13 +13,16 @@ the machine where a program can really be loaded and run (the window of
 | input | the PS/2 keyboard on IRQ1 (scancode set 1, Shift and Caps Lock) or COM1 |
 | clock | the PIT at 1 kHz; critical sections save and restore the flags |
 | tasks | `switch.S` (callee-saved registers and the stack) and a round robin over the ready queue |
-| store | `ata0`: a raw image on the primary IDE channel, PIO, MicroFS on its first partition, mounted at `/` (ADR 0008); `ram0`, 512 KB of the memory of the machine, when there is no disk |
+| store | `ata0`: a raw image on the primary IDE channel, PIO, MicroFS on its first partition, mounted at `/` (ADR 0008); `boot0p1`: the read-only root image of the ISO, as the second module of the boot (ADR 0026); `ram0`, 512 KB of the memory of the machine, when there is neither a disk nor a boot image |
 | network | `virtio0`: virtio-net-pci in its legacy I/O interface, polled; ARP, IPv4, ICMP, UDP, a client of TCP (one segment in flight, a timeout retransmission) and a listener with SYN/ACK and `accept`; the resolver of QEMU user-net with a cache of eight names and their time to live; 10.0.2.15/24 on QEMU user-net, gateway 10.0.2.2, resolver 10.0.2.3, no DHCP |
 | programs | `k_port_exec_supported()` is true; the window is 16 MiB at 32 MiB (`0x02000000`-`0x03000000`) over a physical arena at 64 MiB; a program is a file in `/bin` (the MOX1 format of `kernel/exec.h`), runs in ring 3 with page tables of its own and calls the kernel with `int $0x80` (ADR 0007) |
 | protection | NX and W^X: `EFER.NXE` from the loader, the text read-only and executable, every data page - rodata, data, bss, stacks, heap, arena, screen - writable and NX; no page is both (ADR 0007, sections 9 and 10). The kernel is in the higher half: the image is linked at `0xFFFFFFFF80000000` and mapped there beside the low identity map |
 | signature | the kernel carries a 120-byte trailer (magic, size, SHA-256 and Ed25519) and the loader verifies it before it copies a byte (ADR 0020); the public key is compiled into `loader32.elf`, the private key is outside the tree (`MICROOS_SIGN_KEY`), and `tools/microos_sign` signs and verifies |
 | build | `make x86-build` (needs `cmake`, `ninja`, `xorriso` is not needed) and `make x86-disk` for the volume with `/bin` |
 | check | `make x86-smoke` (serial), `make x86-vga-smoke` (the framebuffer, the text mode and the keyboard), `make x86-disk-smoke` (two boots on a disk), `make x86-net-smoke` (the network) - all need `qemu-system-x86` |
+| build | `make x86-build` (needs `cmake`, `ninja`); `make x86-iso` needs `xorriso` and `grub-mkrescue` or limine, because it asks a boot loader to write the El Torito record ([iso.md](iso.md)) |
+| check | `make x86-smoke` (serial), `make x86-vga-smoke` (screen and keyboard), `make x86-disk-smoke` (two boots on a disk), `make x86-net-smoke` (the network), `make x86-iso-smoke` (the CD) - all need `qemu-system-x86` |
+| medium | `make x86-iso`: a BIOS ISO with the loader, the kernel and the root image, and a shell and `/bin` out of it ([iso.md](iso.md), ADR 0026) |
 
 ## Run it
 
@@ -35,6 +38,8 @@ make x86-smoke        # boot and check the lines of the banner and the shell
 make x86-vga-smoke    # check the picture of both screens and the keyboard, without a display
 make x86-disk-smoke   # two boots on one image: a file written in the first is read in the second
 make x86-net-smoke    # boot with QEMU user-net and check ping, UDP, HTTP, the page of the state and DNS
+make x86-iso          # the BIOS ISO: loader, kernel and root image (needs xorriso and a boot loader)
+make x86-iso-smoke    # boot the ISO with -cdrom and check the shell and /bin
 ```
 
 `make x86-run` opens the window of QEMU with `-display gtk`. The display
@@ -379,6 +384,17 @@ kernel, `x86-all.img` (the disk of MicroFS with `/bin` and `/etc`), the
 licenses and a `run.sh` with the disk and the virtio-net card. The tar is
 the artifact of a release, not a build directory: what the target starts is
 what a person downloads. `make x86-user-serial` is the same with `-nographic`.
+## The CD
+
+`make x86-iso` writes `build-x86-iso/microos.iso`: the loader, the signed
+kernel and the root image in one BIOS ISO, which a machine without `-kernel`
+boots from its CD drive. The root image is the second module of the boot and
+the port mounts its first partition at `/` (`boot0p1`, read-only); the shell,
+`/bin` and the programs come from the CD. `make x86-iso-smoke` boots the ISO
+with `-cdrom` and checks the transcript. The page of the medium, with the
+build steps, the requirements and the gaps (UEFI, a hybrid USB image, a
+writable root, a reproducible ISO), is [iso.md](iso.md); the decision is
+ADR 0026.
 
 ## The network
 
@@ -573,6 +589,11 @@ soak-host`). The blocker and the order of the work are written down in ADR
   MBR read by the portable parser, MicroFS on the first partition (`ata0p1`)
   and the volume formatted at the first boot; what is written to it survives
   a reset, which `make x86-disk-smoke` checks (ADR 0008);
+* a medium: `make x86-iso` writes a BIOS ISO with the loader, the kernel and
+  an 8 MB root image as the second module; the machine boots it with
+  `-cdrom` and no other flag, mounts the image's first partition at `/`
+  (`boot0p1`, read-only) and runs `/bin` from it, which `make x86-iso-smoke`
+  checks (ADR 0026, [iso.md](iso.md));
 * a network: a virtio-net card on the PCI bus, its MAC and link read from the
   config space, ARP, IPv4, ICMP, UDP, a client of TCP and a server of TCP under
   `kernel/port/net.h`; `netinfo`, `ping`, `netudp` and `dns` from the port,
@@ -642,6 +663,10 @@ soak-host`). The blocker and the order of the work are written down in ADR
   on the processor of the boot;
 * the disk is one, and it is the primary ATA channel: no SATA, no virtio, no
   NVMe, no card, no second disk;
+* the CD of K13 is BIOS only and its root is the image of the medium: every
+  write is `EIO`, there is no place for a file of a person, an EFI machine
+  does not start it and a USB stick written with it does not boot
+  ([iso.md](iso.md), "What does not work yet", ADR 0026);
 * the driver polls and copies through the processor: no interrupt, no DMA and
   no queue, so a large copy is slow; there is no cache of the kernel, and the
   writes reach the cache of the drive until the filesystem flushes it (at

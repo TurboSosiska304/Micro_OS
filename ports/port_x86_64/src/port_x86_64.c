@@ -765,6 +765,7 @@ extern char __kernel_end[];
 #define BLOCK_ALIGN 16u
 
 /* The fields of the multiboot 1 information this port reads. */
+#define MB_FLAG_MODS 0x00000008u
 #define MB_FLAG_MMAP 0x00000040u
 #define MB_MMAP_USABLE 1u
 
@@ -789,6 +790,64 @@ struct mb_mmap_entry {
     k_u32_t length_high;
     k_u32_t type;
 };
+
+/*
+ * The information of the boot, kept for the questions a driver asks later.
+ * It is a structure of the boot loader in the identity map, and the port
+ * copies nothing out of it: it lives as long as the machine does.
+ */
+static const struct mb_info *g_boot_info;
+
+/* The last byte of the modules of the boot, 0 when the boot had none. The
+ * loader copied the kernel out of one of them and the volume of the ISO is
+ * read from another, so the heap has to start above both. */
+static k_u64_t boot_modules_end(const struct mb_info *info)
+{
+    const k_u32_t *mods;
+    k_u64_t end = 0;
+    k_u32_t i;
+
+    if (info == NULL || (info->flags & MB_FLAG_MODS) == 0 || info->mods_addr == 0) {
+        return 0;
+    }
+
+    mods = (const k_u32_t *)(uintptr_t)info->mods_addr;
+
+    for (i = 0; i < info->mods_count; i++) {
+        if ((k_u64_t)mods[i * 4u + 1u] > end) {
+            end = mods[i * 4u + 1u];
+        }
+    }
+
+    return end;
+}
+
+bool port_x86_64_boot_module(k_u32_t index, k_u64_t *start, k_u64_t *size)
+{
+    const k_u32_t *mods;
+
+    if (g_boot_info == NULL || (g_boot_info->flags & MB_FLAG_MODS) == 0 ||
+        g_boot_info->mods_addr == 0 || index >= g_boot_info->mods_count) {
+        return false;
+    }
+
+    mods = (const k_u32_t *)(uintptr_t)g_boot_info->mods_addr;
+    mods += (k_size_t)index * 4u;
+
+    if (mods[1] <= mods[0]) {
+        return false;
+    }
+
+    if (start != NULL) {
+        *start = mods[0];
+    }
+
+    if (size != NULL) {
+        *size = (k_u64_t)mods[1] - mods[0];
+    }
+
+    return true;
+}
 
 static void heap_init(k_u64_t multiboot_info)
 {
@@ -841,6 +900,23 @@ static void heap_init(k_u64_t multiboot_info)
     }
 
     best_base = (best_base + BLOCK_ALIGN - 1) & ~(k_u64_t)(BLOCK_ALIGN - 1);
+
+    /*
+     * The modules of the boot are memory as well. A loader that hands the
+     * kernel a volume (the root image of the ISO, ADR 0026) leaves it in the
+     * usable region of the map, and a block of the allocator over those bytes
+     * would turn the filesystem of the boot into a heap that is written and
+     * read at once. The heap starts above the last byte of every module; a
+     * module below the region changes nothing.
+     */
+    {
+        k_u64_t modules_end = boot_modules_end(info);
+
+        if (modules_end > best_base && modules_end < best_base + best_size) {
+            best_size -= modules_end - best_base;
+            best_base = modules_end;
+        }
+    }
 
     /*
      * The window of the programs (k_port_exec_base, see port_exec.c) is not
@@ -1336,6 +1412,10 @@ void port_x86_64_init(k_u64_t multiboot_info)
 {
     const struct mb_info *info = (const struct mb_info *)(uintptr_t)multiboot_info;
 
+    /* The questions of the drivers about the modules of the boot are asked
+     * later; the structure itself stays where the loader left it. */
+    g_boot_info = info;
+
     /*
      * The descriptors come first: the loader's table was only the way into
      * long mode, and the TSS that gives ring 3 a stack on a call has to exist
@@ -1388,6 +1468,7 @@ void port_x86_64_init(k_u64_t multiboot_info)
     /* The volume of the port is registered before the kernel looks for one:
      * the filesystem mounts a device by name and the name has to be there. */
     port_x86_64_blockdev_init();
+    port_x86_64_module_init();
     port_x86_64_disk_init();
 
     /* The network is the last device of the boot before the interrupts: it
