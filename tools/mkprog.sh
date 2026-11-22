@@ -41,7 +41,10 @@
 # leaves the data one, two or three bytes short of where the program reads
 # it - a shift that runs, prints the wrong bytes and looks like a bug in the
 # program. The trailing padding after the data is allowed by the format and
-# is ignored by the parser.
+# is ignored by the parser. The gap the linker may leave between the data and
+# the bss (a section aligned to 32 by an object of the program) is padding of
+# the data as well: the header has no field for it, and the loader clears the
+# bss right after the padded data.
 set -eu
 
 K_EXEC_HEADER_SIZE=32
@@ -349,6 +352,38 @@ elif [ -n "$base" ]; then
         fi
 
         text_aligned=$data_offset
+    fi
+
+    # The bss follows the data at the alignment of its own section, and an
+    # object of a program can ask for more than the sixteen bytes of the
+    # format: GCC aligns an array of more than sixteen bytes to 32. The format
+    # has one data segment and no field for the gap before the bss, so the gap
+    # is part of the data segment - the file carries the zeros, the header
+    # names the padded size, and the loader clears the bss at the address the
+    # program was linked for.
+    #
+    # Without this the bss is cleared a few bytes below the objects that live
+    # in it: the last bytes of the bss are not cleared, and the arguments,
+    # which the port writes right after the bss, overlap them - the first
+    # failure of the awk port of this tree, where a static array of the
+    # library sat on top of the program's argv.
+    if [ "$bss_size" -gt 0 ]; then
+        bss_address=$(section_address .bss)
+        if [ -z "$bss_address" ]; then
+            echo "mkprog: $object has a bss but no .bss section" >&2
+            exit 1
+        fi
+
+        data_start=$((expected_text + text_aligned))
+        bss_offset=$((bss_address - data_start))
+        if [ "$bss_offset" -lt "$data_aligned" ] ||
+           [ $((bss_offset % 16)) -ne 0 ] ||
+           [ "$bss_offset" -gt "$((data_aligned + 64))" ]; then
+            printf "mkprog: %s has its bss %d byte(s) after the data, the format cannot carry that\n" \
+                "$object" "$bss_offset" >&2
+            exit 1
+        fi
+        data_aligned=$bss_offset
     fi
 fi
 
