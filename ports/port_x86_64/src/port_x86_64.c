@@ -94,7 +94,7 @@ void k_port_write(const char *data, k_size_t len)
      */
     flags = port_save_flags_and_cli();
 
-    port_x86_64_vga_write(data, len);
+    port_x86_64_console_write(data, len);
 
     for (i = 0; i < len; i++) {
         char c = data[i];
@@ -1243,11 +1243,18 @@ void port_x86_64_init(k_u64_t multiboot_info)
     port_x86_64_gdt_init();
     tls_init();
     com1_init();
-    port_x86_64_vga_init();
     clock_measure();
     port_x86_64_cpus_init();
     heap_init(multiboot_info);
     port_x86_64_paging_init();
+
+    /*
+     * The screen comes after the page tables: the framebuffer of the VGA sits
+     * above the identity map of the first gigabyte, so the windows of the
+     * card is a mapping the port makes and not an address it already has
+     * (ADR 0023). A machine without the interface keeps the text mode.
+     */
+    port_x86_64_console_init();
 
     g_info.cpu_hz = g_tsc_per_second;
     g_info.usable_bytes = 0;

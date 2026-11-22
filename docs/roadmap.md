@@ -361,19 +361,23 @@ on a VFS without `rename` (see [debts.md](debts.md)).
 > linear framebuffer, not a GPU (ADR 0023); a 3D driver of a real card is
 > not promised, and UEFI GOP is the later door to a physical machine.
 
-* [ ] A linear framebuffer through Bochs VBE in QEMU: 1280x800, 16 bits per
+* [x] A linear framebuffer through Bochs VBE in QEMU: 1280x800, 16 bits per
       pixel, RGB565 so `k_renderer` draws into it unchanged; the PCI device
       is found over the configuration space the network port already reads,
       and `paging.c` maps its window
-* [ ] The console of the screen: cells of the 5x7 font scaled twice (about
+* [x] The console of the screen: cells of the 5x7 font scaled twice (about
       128 columns by 57 rows), the control characters, the cursor, the
       scrolling and the two sequences of `clear`; the colours of
       `/etc/console` (ADR 0021); the keyboard of IRQ1 unchanged
-* [ ] The text mode stays the fallback, improved once to 80x50 with the 8x8
-      font of the VGA; the port chooses the screen at the boot
-* [ ] `make x86-vga-smoke` reads the framebuffer with `screendump` (a
+* [x] The text mode stays the fallback; the port chooses the screen at the
+      boot. The 80x50 mode with the 8x8 font of the VGA is not built - the
+      fallback is the screen of a machine without an interface, and the font
+      load and the CRTC timings are a debt of their own
+      ([debts.md](debts.md), K11)
+* [x] `make x86-vga-smoke` reads the framebuffer with `screendump` (a
       picture has no text memory for `pmemsave`) and checks cells and
-      colours; `make x86-run` opens it for a person
+      colours, and keeps the `pmemsave` checks of the text mode on a card
+      without the interface; `make x86-run` opens it for a person
 * [ ] Later: a 2D surface for a program, and optionally virtio-gpu 2D in
       QEMU; UEFI GOP for a real machine, which is a loader of its own
 

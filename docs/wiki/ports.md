@@ -26,7 +26,7 @@ parentheses is the reason.
 | `fork()` | shared memory | copy on write | shared memory | shared memory |
 | disk | the internal flash | ATA PIO, `ata0` | - | - |
 | network | WiFi, lwIP, telnet, HTTP, MQTT | virtio-net, HTTP, httpd, DNS, MQTT is off | - | - |
-| panel | ST7789v2 and a copy of the console | VGA text | a renderer into a file | - |
+| screen | ST7789v2 and a copy of the console | a framebuffer of 1280x800 (Bochs VBE), the VGA text as the fallback | a renderer into a file | - |
 | MMU | - (the chip has none) | yes: ring 3, NX/W^X | - | - |
 | cores | 2 under FreeRTOS, the kernel on 1 | 2 in the MADT, the kernel on 1 | `MICRO_OS_CPUS`, 1 by default | 1 |
 | build | `make idf-build` | `make x86-build` | `make build` | by the host build |
@@ -77,7 +77,7 @@ turns long mode on.
 
 ```bash
 make x86-build
-make x86-run            # the window: VGA text and the PS/2 keyboard
+make x86-run            # the window: a framebuffer of 1280x800 and the PS/2 keyboard
 make x86-run-serial     # the same machine in a terminal
 make x86-smoke          # boot and check the transcript
 ```
@@ -88,7 +88,10 @@ firmware describes and how many it runs: `-smp 2` gives
 trampoline of ADR 0012 that is not written yet. `make x86-smp-build` builds
 the portable kernel with `KERNEL_SMP=ON`.
 
-What works: the VGA text console and COM1 out of one `k_port_write()`, the
+What works: a framebuffer of 1280x800 in RGB565 through the Bochs VBE
+interface of the VGA (ADR 0023) - a grid of 128x57 cells of the 5x7 font at
+twice its size, the colours of `/etc/console`, and the text mode of the VGA
+when the card has no such interface - COM1 out of one `k_port_write()`, the
 PS/2 keyboard, the PIT, the context switch, the scheduler, paging and ring 3,
 NX/W^X (the text of the kernel and of a program is read-only code, every data
 page and stack is NX, and the boot audits the tables), the kernel in the

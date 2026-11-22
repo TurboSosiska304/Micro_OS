@@ -949,14 +949,16 @@ def check(output: str) -> list:
         "display.rotation=0" in answer("config get display.rotation"),
         answer("config get display.rotation"),
     )
-    # The console is the system of this machine: the theme changes the
-    # attribute of every cell of the VGA, and the log line is the number the
-    # port wrote (0x70: black on light grey).
+    # The console is the system of this machine: the theme repaints the
+    # screen, and the log line names the pair and the screen it was put on.
+    # The screen of this machine is the framebuffer of ADR 0023; the text mode
+    # of a machine without the interface is checked by tools/x86_vga_smoke.py,
+    # which reads the attribute of every cell there.
     themed = answer("config set console.theme light")
     expect("config set applies the console", "console.theme=light" in themed, themed)
     expect(
-        "the theme of the console reaches the attributes of the VGA",
-        "the attribute of the screen 112" in themed,
+        "the theme of the console reaches the screen",
+        "console: theme light, invert 0, the screen the framebuffer of 1280x800" in themed,
         themed,
     )
     expect(

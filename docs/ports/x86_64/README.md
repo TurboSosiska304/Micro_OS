@@ -9,7 +9,7 @@ the machine where a program can really be loaded and run (the window of
 |---|---|
 | port | `ports/port_x86_64` |
 | loader | `loader32.S`: a multiboot image that QEMU loads with `-kernel`; it copies the kernel to 16 MiB, maps the same bytes at `0xFFFFFFFF80000000` (the top 2 GiB, where the image is linked), builds the identity map of the first gigabyte and turns the long mode on |
-| console | the text screen of the VGA (80x25, `0xB8000`, light grey on black) and COM1, 115200, `\r\n`, out of one `k_port_write()` |
+| console | the framebuffer of the VGA of QEMU, 1280x800 at 16 bits per pixel in RGB565 (Bochs VBE, ADR 0023): a grid of 128x57 cells of the 5x7 font at twice its size, the colours of `/etc/console`; the text mode of 80x25 at `0xB8000` when the machine has no Bochs VBE interface; COM1, 115200, `\r\n`, out of one `k_port_write()` |
 | input | the PS/2 keyboard on IRQ1 (scancode set 1, Shift and Caps Lock) or COM1 |
 | clock | the PIT at 1 kHz; critical sections save and restore the flags |
 | tasks | `switch.S` (callee-saved registers and the stack) and a round robin over the ready queue |
@@ -19,20 +19,20 @@ the machine where a program can really be loaded and run (the window of
 | protection | NX and W^X: `EFER.NXE` from the loader, the text read-only and executable, every data page - rodata, data, bss, stacks, heap, arena, screen - writable and NX; no page is both (ADR 0007, sections 9 and 10). The kernel is in the higher half: the image is linked at `0xFFFFFFFF80000000` and mapped there beside the low identity map |
 | signature | the kernel carries a 120-byte trailer (magic, size, SHA-256 and Ed25519) and the loader verifies it before it copies a byte (ADR 0020); the public key is compiled into `loader32.elf`, the private key is outside the tree (`MICROOS_SIGN_KEY`), and `tools/microos_sign` signs and verifies |
 | build | `make x86-build` (needs `cmake`, `ninja`, `xorriso` is not needed) and `make x86-disk` for the volume with `/bin` |
-| check | `make x86-smoke` (serial), `make x86-vga-smoke` (screen and keyboard), `make x86-disk-smoke` (two boots on a disk), `make x86-net-smoke` (the network) - all need `qemu-system-x86` |
+| check | `make x86-smoke` (serial), `make x86-vga-smoke` (the framebuffer, the text mode and the keyboard), `make x86-disk-smoke` (two boots on a disk), `make x86-net-smoke` (the network) - all need `qemu-system-x86` |
 
 ## Run it
 
 ```bash
 make x86-build
 make x86-disk         # the image of the disk: /bin and /etc of MicroFS
-make x86-run          # a QEMU window: the VGA console and its keyboard
+make x86-run          # a QEMU window: the framebuffer of 1280x800 and its keyboard
 make x86-run-serial   # the same machine in a terminal (-nographic)
 make x86-run-disk     # the window with a disk of its own, kept between runs
 make x86-run-disk-serial  # the same disk in a terminal
 make x86-net-run      # the same machine with a virtio-net card, in a terminal
 make x86-smoke        # boot and check the lines of the banner and the shell
-make x86-vga-smoke    # check the screen and the keyboard without a display
+make x86-vga-smoke    # check the picture of both screens and the keyboard, without a display
 make x86-disk-smoke   # two boots on one image: a file written in the first is read in the second
 make x86-net-smoke    # boot with QEMU user-net and check ping, UDP, HTTP, the page of the state and DNS
 ```
@@ -66,14 +66,17 @@ still takes the keyboard and the UART as two halves of one console.
 
 The two smoke tests check different consoles of the same machine.
 `tools/x86_smoke.py` types into COM1 and reads the transcript of the serial
-port; `tools/x86_vga_smoke.py` boots with `-display none`, reads the video
-memory with the monitor of QEMU (`pmemsave`), takes a screenshot
-(`screendump`) and types with `sendkey`, so it proves the screen and IRQ1
-without a display server. It is a target of its own and not a part of
-`make ci`, because the monitor of QEMU is a tool a build farm does not have
-to have. `python3 tools/x86_vga_smoke.py --display gtk` runs the same checks
-against the real window instead of its memory; the screenshot is then the
-picture of the window, which is how a person watches the keys arrive.
+port; `tools/x86_vga_smoke.py` boots the machine twice with `-display none`:
+on the VGA of QEMU (`-vga std`, the Bochs VBE interface of ADR 0023) it reads
+the picture with the monitor (`screendump`, a PPM of 1280x800), compares the
+cells with the bitmaps of the font, sets the theme and types with `sendkey`;
+on a card without that interface (`-vga cirrus`) it reads the text memory with
+`pmemsave` and checks the 720x400 picture and the attribute of every cell. So
+the screen and IRQ1 are checked without a display server. The target is a
+target of its own and not a part of `make ci`, because the monitor of QEMU is
+a tool a build farm does not have to have. `python3 tools/x86_vga_smoke.py
+--display gtk` runs the same checks against the real window instead of its
+memory.
 
 The machine boots from three files: `build-x86/loader32.elf` (the loader),
 `build-x86/microos64.bin` (the kernel, a flat image) and
@@ -175,35 +178,81 @@ is read-only and the data NX whichever name the processor came through; the
 space of a program inherits the high half as it is, supervisor-only, because
 the kernel runs on that CR3 during a call.
 
-## The window: the VGA text and the keyboard
+## The screen: a framebuffer of 1280x800
 
-The screen of the mode the firmware leaves behind is a memory: 80 columns by
-25 rows of two bytes at `0xB8000`, the character and its colour. The port
-does not program a video mode and does not set a palette - the text mode 3 is
-the one every PC has had since 1987, and a console is text. `k_port_write()`
-writes every byte there and to COM1, so the window and the serial log are the
-same picture and the boot has no second path for a second console; the kernel
-does not know that there are two.
+The machine had one screen until 1.2: the text mode of the VGA. ADR 0023 gives
+it the screen of a machine with a picture, and the drawing code of the board
+talks to it unchanged - the console, the font and the boxes draw through
+`kernel/render.h`, and a framebuffer is one more renderer.
 
-The screen obeys the control characters of a terminal - `\n`, `\r`, `\t` and
-`\b` - scrolls a row up when the last line is full, and puts the position of
-the cursor into the registers 14 and 15 of the CRTC (`0x3D4`/`0x3D5`) after
-every write, so the cursor of the hardware is where the next character will
-land. The colour is one pair for every cell: light grey on black. The one
-escape sequence the console of the kernel writes is the pair of the `clear`
-command (`ESC[2J` and `ESC[H`), and the screen reads it; a sequence of any
-other kind is dropped whole instead of being printed, because a window is not
-a terminal emulator and a `[2J` in the middle of a line is not a picture.
+The card is the VGA of QEMU, `1234:1111`, found over the configuration space
+of the PCI bus that the network driver already read (`src/pci.c` is the one
+copy of the mechanism now). `src/vbe.c` programs the Bochs VBE registers on
+the I/O ports `0x1CE`/`0x1CF`: the identifier `0xB0C0`-`0xB0C5`, 1280x800, 16
+bits per pixel, then the enable with the linear framebuffer. The mode is read
+back before it is accepted, and the window is a memory BAR of the card whose
+size the device reports to be at least the 2,048,000 bytes of the picture
+(`port_x86_64_pci_bar_size()`, the all-ones probe) - the first BAR under QEMU,
+16 MB at `0xFD000000`.
 
-The pair is a setting of the machine (ADR 0021): `/etc/console` with
-`theme=dark|light` and `invert=0|1` is read at the boot and at every
-`config set`, and the port applies the attribute to every cell of the screen
-and logs the number it put there (`7` is grey on black, `112` black on light
-grey). `/etc/display` and `/etc/font` are the panel and the font of the board:
-this machine has neither, so the boot keeps the files and says so, and
-`config set display.rotation 90` answers that the value is kept. The files,
-the keys and the table of the machines are in
-[`docs/wiki/settings.md`](../../wiki/settings.md).
+That address is above the identity map of the first gigabyte, so
+`port_x86_64_paging_map_device()` maps the window at
+`PORT_X86_64_SCREEN_VIRT` (`0xFFFFFFFFA0000000`, half a gigabyte into the top
+2 GiB) in 2 MiB pages, writable and NX. The tables of the higher half are
+shared by every address space, so the `write` of a program in ring 3 draws on
+the same picture as the boot log, and the audit of W^X counts a device page as
+data.
+
+`src/fb.c` registers the renderer (`bochs-vbe`) and holds the grid of the
+console: 128 columns by 57 rows of cells of 10x14 pixels, the 5x7 font of
+`components/font` at twice its size. A character is a glyph blitted into the
+memory, a scroll is a move of the rows of the picture, the cursor is the
+reverse of a cell, and a flush does not exist: the memory of the card is the
+glass. `src/console.c` is the console itself - the position, the tab stops,
+the erase of the backspace, `\n`, `\r`, `\t`, `\b`, `ESC[2J`, `ESC[H` and the
+em dash of the banner - and it writes cells to whichever screen it was given:
+`src/vga.c` for the text mode, `src/fb.c` for the framebuffer.
+
+The pair of `console` of /etc (ADR 0021) is the theme and its inversion, and
+the screen repaints the cells it holds, so a line that a person typed is read
+again in the new colours:
+
+```text
+microos> config set console.theme light
+console: theme light, invert 0, the screen the framebuffer of 1280x800, 16 bpp, 128x57 cells
+```
+
+Dark is grey `0xAD55` on black, light is black on `0xAD55`. `/etc/display` and
+`/etc/font` are the panel and the font of the board: this machine has neither,
+so the boot keeps the files and says so.
+
+### The text mode stays the fallback
+
+A machine whose card has no Bochs VBE interface - `-vga cirrus`, a card with a
+VGA of its own - keeps the text mode the firmware left behind: 80 columns by
+25 rows of two bytes at `0xB8000`, the character and its attribute. The port
+programs no mode and no palette there. The screen obeys the same control
+characters and the same two sequences of `clear`, and puts the position of the
+cursor into the registers 14 and 15 of the CRTC (`0x3D4`/`0x3D5`), so the
+cursor of the hardware is where the next character lands. The attribute of
+every cell is `/etc/console` (`0x07` grey on black, `0x70` black on light
+grey), and the applier logs the number it put there (`console: the attribute
+of the screen 112`).
+
+The boot names the screen it chose, so a machine whose picture did not come up
+says why:
+
+```text
+x86-64: the screen is the framebuffer of 1280x800, 16 bpp, 128x57 cells
+x86-64: the screen is the text mode of the VGA, 80x25
+```
+
+The 80x50 mode of the fallback with the 8x8 font of the VGA of ADR 0023 is not
+built: it is a font load through the sequencer and the graphics registers on
+the only console of a machine without a picture, and it is a debt of its own
+([debts.md](../../debts.md), K11).
+
+### The keyboard
 
 The keyboard hangs on the first line of the 8259 (IRQ1, the vector `0x21`).
 The stub in `interrupts.S` saves the registers around the call of C, the
@@ -224,10 +273,8 @@ typo can be erased in the window at all. Tab is not a key of this console:
 the shell splits a command line on spaces, and a tab would arrive as part of
 a word.
 
-What the window does not do:
+What the keyboard does not do:
 
-* it is the text mode and only the text mode: no graphics, no font of its
-  own, no colour but the one pair;
 * the scancode set 1 and the US layout only: a keyboard of another layout
   sends the same numbers and gets the letters of this table;
 * the E0 sequences are dropped whole, so the arrows, Home/End, Delete, the
@@ -235,6 +282,13 @@ What the window does not do:
   line is the one the shell has, not the one a library with a history has;
 * no repeat of a key in the driver: the device repeats it, and the ring is
   the only buffer between the two.
+
+What the screen does not do: it is a console and not a desktop. There is no
+surface a program can draw on, no mouse and no compositor, and a 3D driver of
+a real card is not promised (ADR 0023, sections 4 and 5). The font has no
+lowercase - the 5x7 page of the board draws the lower case as the upper one -
+so the text of the framebuffer is capitals, which is a fact of the font and
+not of the machine.
 
 ## The disk
 
@@ -418,10 +472,14 @@ soak-host`). The blocker and the order of the work are written down in ADR
   SHA-256 and Ed25519 with the key compiled into it before it copies a byte,
   and a damaged, unsigned or foreign-key image stops with the reason and
   never reaches the kernel;
-* the console: the VGA text screen and COM1 from one call, the keyboard of
-  the PS/2 with Shift, Caps Lock, Backspace and Ctrl+C, and the serial port
-  with the console it always had; the attribute of the cells is `/etc/console`
-  (`theme`, `invert`) at the boot and at `config set` (ADR 0021);
+* the console: a framebuffer of 1280x800 in RGB565 through the Bochs VBE
+  interface of the VGA of QEMU (ADR 0023), 128 columns by 57 rows of the 5x7
+  font at twice its size, drawn through `kernel/render.h`; the text mode of
+  80x25 when the machine has no such interface; COM1 from the same call, the
+  keyboard of the PS/2 with Shift, Caps Lock, Backspace and Ctrl+C, and the
+  serial port with the console it always had; the colours of the cells are
+  `/etc/console` (`theme`, `invert`) at the boot and at `config set`
+  (ADR 0021);
 * the clock, the interrupts (IDT with 32 exceptions, PIC, PIT), the context
   switch, the scheduler, `ps`, `uptime`, `free`, `dmesg`;
 * paging and ring 3 (ADR 0007): the kernel is a supervisor-only identity map
@@ -434,7 +492,9 @@ soak-host`). The blocker and the order of the work are written down in ADR
   The text of the kernel is readable and executable and not writable; its
   rodata is read-only and NX; its data, bss, the stacks, the page tables and
   the heap are writable and NX, and so is the rest of the first gigabyte -
-  the VGA, the boot information and the arena of the programs. A program has
+  the VGA, the boot information and the arena of the programs - and the
+  window of the framebuffer, which the port maps in the top 2 GiB (ADR 0023).
+  A program has
   the same two regions of its own: the header and the code are read-only
   code, and the data, the bss, `argv`/`envp`, the 64 KiB stack and the
   restorer page carry the protection they need (the restorer is code, so it
@@ -560,7 +620,12 @@ soak-host`). The blocker and the order of the work are written down in ADR
   fragments, no congestion window, one segment in flight, and the driver polls
   because the PCI line needs the I/O APIC that K8 brings. The server is one
   session at a time per door (two doors, four sessions), which is what a page
-  of the state and a shell of telnet need.
+  of the state and a shell of telnet need;
+* the screen has one mode: 1280x800 and 16 bits per pixel, asked for at the
+  boot and not a setting, and the fallback of a card without the interface is
+  the text mode of 80x25 - the 80x50 of ADR 0023 is not built. There is no
+  surface for a program, no mouse and no compositor: the picture is a console
+  (ADR 0023, and [debts.md](../../debts.md), K11).
 
 ## Why it exists
 

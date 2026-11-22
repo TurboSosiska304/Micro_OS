@@ -332,6 +332,12 @@ void kmain(k_u64_t multiboot_info)
     kinfo("x86-64: the kernel is up, heap %u KB free of %u KB",
           (unsigned)(k_port_heap_free() / 1024), (unsigned)(k_port_heap_total() / 1024));
 
+    /* The screen the boot chose (ADR 0023): the framebuffer of the VGA and
+     * its grid of cells, or the text mode of the firmware when the machine
+     * has no interface to program one. The serial port carries the line
+     * either way, which is how a machine without a window is read. */
+    kinfo("x86-64: the screen is %s", port_x86_64_console_name());
+
     /*
      * The processors of the machine (ADR 0012). The count on the left is what
      * the firmware (the MADT of ACPI) says, the one on the right is what the
@@ -379,7 +385,7 @@ void kmain(k_u64_t multiboot_info)
     if (config_register() != 0) {
         kwarn("x86-64: the config command is not registered");
     }
-    if (port_x86_64_vga_settings_register() != SETTINGS_OK) {
+    if (port_x86_64_console_settings_register() != SETTINGS_OK) {
         kwarn("x86-64: the console system of /etc is not registered");
     }
 

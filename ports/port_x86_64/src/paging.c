@@ -324,6 +324,52 @@ static void invlpg(k_u64_t vaddr)
 }
 
 /*
+ * A window of a device in the map of the kernel: 2 MiB pages of the top 2 GiB
+ * that name the physical range of the device, writable and NX. The screen of
+ * ADR 0023 is the first user - the framebuffer of the VGA sits at 0xFD000000,
+ * above the identity map of the first gigabyte - and the window is the
+ * kernel's own: every address space shares the PDPT of the top 2 GiB, so a
+ * store of a system call reaches the picture whichever space the processor is
+ * on.
+ *
+ * Both addresses are taken to whole 2 MiB pages, and the answer is the number
+ * of pages that were mapped (zero when the range is not in the window of the
+ * table or the arguments are not aligned). The caller adds the offset of the
+ * device inside its first page to the virtual address.
+ */
+k_u32_t port_x86_64_paging_map_device(k_u64_t vaddr, k_u64_t paddr, k_size_t len)
+{
+    const k_u64_t high_end = PORT_X86_64_KERNEL_BASE + 0x40000000ull;
+    k_u64_t first = paddr & ~(k_u64_t)(LARGE_PAGE_SIZE - 1u);
+    k_u64_t last = paddr + (k_u64_t)len;
+    k_u64_t chunk;
+    k_u32_t index = (k_u32_t)((vaddr >> 21) & (TABLE_ENTRIES - 1u));
+    k_u32_t pages = 0;
+
+    if (len == 0 || (vaddr & (k_u64_t)(LARGE_PAGE_SIZE - 1u)) != 0 ||
+        vaddr < PORT_X86_64_KERNEL_BASE) {
+        return 0;
+    }
+
+    if (vaddr + (last - first) > high_end) {
+        return 0;
+    }
+
+    for (chunk = first; chunk < last; chunk += LARGE_PAGE_SIZE) {
+        if (index >= TABLE_ENTRIES) {
+            return 0;
+        }
+
+        g_kernel_pd_high[index] =
+            (chunk & PTE_ADDRESS) | PTE_PRESENT | PTE_WRITABLE | PTE_PAGE_SIZE | PTE_NX;
+        index++;
+        pages++;
+    }
+
+    return pages;
+}
+
+/*
  * The protection of one 4 KiB page of the kernel image, by the section it is
  * in. The text is readable and executable and never writable; the rodata is
  * readable, not writable and not executable; everything else - data, bss, the

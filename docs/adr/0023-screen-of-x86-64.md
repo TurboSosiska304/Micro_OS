@@ -1,6 +1,6 @@
 # ADR 0023 - The screen of x86-64: a framebuffer, not a GPU
 
-* Status: accepted
+* Status: accepted, built in K11 (1.2)
 * Date: 2026-11-22
 * Supersedes: nothing
 * Related: ADR 0004 (the port), ADR 0018 (the screen of the board), ADR 0021
@@ -91,3 +91,59 @@ The text fallback keeps the `pmemsave` checks, so both screens are tested.
   is visible in a diff of bytes, not only in a log line.
 * The port still does not promise a real card: QEMU is the machine of the
   port, and UEFI GOP is the later door to a physical one.
+
+## What was built (K11, 1.2)
+
+* **The device**: the VGA of QEMU, `1234:1111`. The configuration space is
+  `src/pci.c`, which the network driver uses as well - the lookup moved out of
+  `src/virtio_net.c` and both drivers now read the same four registers. The
+  window of the picture is a memory BAR of the card whose size the device
+  reports to be at least the picture (`port_x86_64_pci_bar_size()`). With the
+  `vga` device of QEMU it is the first BAR, the 16 MB of the memory at
+  `0xFD000000`; the search walks all six BARs by their size, so a card that
+  keeps its memory elsewhere is not mis-mapped.
+* **The mode**: `src/vbe.c` programs the Bochs VBE registers on the I/O ports
+  `0x1CE`/`0x1CF`: the identifier `0xB0C0`-`0xB0C5`, 1280x800, 16 bits per
+  pixel, the virtual width equal to the visible one, then the enable with the
+  linear frame buffer. The size, the depth and the memory are read back before
+  the mode is accepted; a card whose interface does not answer is the fallback.
+* **The window**: the framebuffer is at `0xFD000000`, above the identity map
+  of the first gigabyte, so `port_x86_64_paging_map_device()` maps it at
+  `PORT_X86_64_SCREEN_VIRT` - `0xFFFFFFFFA0000000`, half a gigabyte into the
+  top 2 GiB - in 2 MiB pages, writable and NX. The PDPT of the higher half is
+  shared by every address space, so a `write` of a program draws on the same
+  picture. The picture of 1280x800x2 is 2,048,000 bytes: one 2 MiB page.
+* **The renderer**: `src/fb.c` registers a `struct k_renderer` named
+  `bochs-vbe` with the width, the height, the cell of 10x14 (the 5x7 font of
+  `components/font` at twice its size) and the five operations. A character is
+  a glyph blitted into the memory, a scroll is a move of the rows of the
+  picture, a flush does not exist: the memory is the glass.
+* **The console**: `src/console.c` keeps the position, the tab stops, the erase
+  of the backspace, the scroll, `\n`, `\r`, `\t`, `\b`, `ESC[2J` and `ESC[H`
+  and the em dash of the banner, exactly as the text console of 1.1 did, and
+  writes cells to the screen it was given. `src/vga.c` is that screen for the
+  text mode and `src/fb.c` for the framebuffer; neither knows the parser.
+  The grid is 128 columns by 57 rows. The cursor is the reverse of a cell, and
+  the text mode keeps its cursor in the CRTC as before.
+* **The colours**: the `console` system of `/etc` (`theme`, `invert`) is
+  applied when the files are loaded, which is before the shell exists, and at
+  every `config set`: the screen repaints the cells it holds, so the line a
+  person typed is read again in the new pair. Dark is grey `0xAD55` on black,
+  light is black on `0xAD55`, and `invert` swaps the two.
+* **The fallback**: a machine whose interface does not answer (the smoke boots
+  `-vga cirrus` for it) keeps the text mode of the firmware, 80x25 at
+  `0xB8000`, and the console of 1.1 unchanged; the boot says which screen it
+  chose (`x86-64: the screen is ...`). 80x50 with the 8x8 font of the VGA is
+  *not* built: it needs a font load and CRTC timings, and the text mode is the
+  fallback of a machine that has no picture, not a screen to invest in
+  (`docs/debts.md`, K11).
+* **The tests**: `make x86-vga-smoke` boots the machine twice. With `-vga std`
+  it reads the picture with `screendump` (a PPM of 1280x800), compares the
+  cells of the first line with the bitmaps of the font, finds the one cell that
+  is all ink (the cursor), types `fsck` through `sendkey` and sees the answer
+  on the serial console and the picture grow below it, then sets
+  `console.theme light` and reads the paper of the new picture as the light
+  grey. With `-vga cirrus` it runs the checks of 1.1: `pmemsave` of `0xB8000`,
+  the 720x400 picture, the cursor of the CRTC, the typed command and the
+  attribute of every cell (`0x70`). `make x86-run` opens the window with
+  `-vga std`.

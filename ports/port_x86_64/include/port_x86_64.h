@@ -212,6 +212,16 @@ void port_x86_64_paging_init(void);
 k_u64_t port_x86_64_kernel_cr3(void);
 
 /*
+ * Map a window of a device into the top 2 GiB, at `vaddr` (2 MiB aligned),
+ * over the physical range that starts in the page of `paddr`. The pages are
+ * writable and NX, and every address space of the machine shares them. The
+ * answer is the number of 2 MiB pages mapped, zero when the range is not one
+ * the table of the higher half covers. The screen of the port is the user of
+ * the call: it maps the framebuffer of the VGA (ADR 0023).
+ */
+k_u32_t port_x86_64_paging_map_device(k_u64_t vaddr, k_u64_t paddr, k_size_t len);
+
+/*
  * The page tables of one task. A space is a PML4 and the tables under it; the
  * handle is its physical address, which is also the value that goes into CR3.
  * Create builds the kernel map with the user window; clone copies the tables
@@ -271,7 +281,6 @@ int port_x86_64_paging_handle_cow(k_u64_t cr3, k_u64_t vaddr);
 
 /* The CR3 in the register of the processor right now. */
 k_u64_t port_x86_64_current_cr3(void);
-
 /* Make `cr3` the page table of the processor. */
 void port_x86_64_paging_switch(k_u64_t cr3);
 
