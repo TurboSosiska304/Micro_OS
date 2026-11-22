@@ -32,6 +32,22 @@ typedef long long off64_t;
 #endif
 
 /*
+ * The longest name of a file, as the C library names it. The shell of SQLite
+ * builds a name on the stack with this bound; a path of this system is 128
+ * bytes, the same number the VFS takes.
+ */
+#ifndef FILENAME_MAX
+#define FILENAME_MAX 128
+#endif
+
+/* The buffering of a stream. The streams of this library have no buffer, so
+ * `setvbuf` accepts the request and does nothing; the names are here because
+ * a portable source writes them. */
+#define _IOFBF 0
+#define _IOLBF 1
+#define _IONBF 2
+
+/*
  * zlib's zconf.h defines the three numbers when the platform does not, and
  * it may have been read before this header: a second definition of the same
  * number is a warning that this build treats as an error.
@@ -47,6 +63,23 @@ typedef long long off64_t;
 #endif
 
 int sprintf(char *buffer, const char *format, ...);
+int sscanf(const char *text, const char *format, ...);
+int setvbuf(FILE *stream, char *buffer, int mode, size_t size);
+
+/*
+ * The pipe of a command. This system can start a program (`execve`) but not
+ * hand it a stream: there is no `popen` in the library, and the two calls
+ * answer `ENOSYS`. A source that compiles against them can say so to its
+ * caller (src/unsupported.c).
+ */
+FILE *popen(const char *command, const char *mode);
+int pclose(FILE *stream);
+/*
+ * The name of an object of the volume moved: the two paths are resolved
+ * against the directory of the program, and a rename replaces the file at
+ * the destination (ADR 0024). POSIX declares it here, beside the streams.
+ */
+int rename(const char *from, const char *to);
 int fprintf(FILE *stream, const char *format, ...);
 int vfprintf(FILE *stream, const char *format, va_list args);
 int vprintf(const char *format, va_list args);

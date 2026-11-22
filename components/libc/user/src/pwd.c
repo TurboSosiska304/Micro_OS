@@ -13,6 +13,7 @@
 #include <pwd.h>
 
 #include <errno.h>
+#include <unistd.h>
 
 static char g_user_name_s[] = "root";
 static char g_user_password_s[] = "";
@@ -49,6 +50,16 @@ struct passwd *getpwuid(uid_t uid)
     }
 
     return &g_user_s;
+}
+
+/*
+ * The one user of the system. The kernel stores uid 0 in every record and
+ * checks it without granting the owner of the system an exemption; a program
+ * that asks who it is gets the same answer (ADR 0005).
+ */
+uid_t getuid(void)
+{
+    return 0;
 }
 
 struct passwd *getpwnam(const char *name)

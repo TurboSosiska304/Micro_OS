@@ -29,6 +29,7 @@ unsigned long strtoul(const char *text, char **end, int base);
 long long strtoll(const char *text, char **end, int base);
 unsigned long long strtoull(const char *text, char **end, int base);
 double strtod(const char *text, char **end);
+double atof(const char *text);
 int atoi(const char *text);
 long atol(const char *text);
 long long atoll(const char *text);
@@ -41,6 +42,8 @@ void *bsearch(const void *key, const void *base, size_t count, size_t size,
               int (*compare)(const void *, const void *));
 
 char *getenv(const char *name);
+int setenv(const char *name, const char *value, int overwrite);
+int unsetenv(const char *name);
 int atexit(void (*function)(void));
 void abort(void) __attribute__((noreturn));
 

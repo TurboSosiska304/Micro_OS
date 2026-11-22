@@ -1,0 +1,120 @@
+/*
+ * Micro OS — the calls of a Unix-like system that this one does not have.
+ *
+ * The names are here because a portable source compiles against them (the
+ * shell of SQLite is one) and a link of the image has to resolve every one.
+ * Each answers `ENOSYS` and changes nothing: a symbolic link is not an object
+ * of MicroFS, the timestamps of a record are written by the filesystem and
+ * not set by a call, and the canonical name of a path needs a filesystem
+ * walk the VFS does not offer. The caller's own fallback is the honest one -
+ * SQLite's `realpath()` reports the error, its archive code refuses the
+ * clone - and the debt is a row in docs/debts.md, not a fake success.
+ */
+#include "ulibc.h"
+
+#include <errno.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <sys/time.h>
+#include <unistd.h>
+
+char *realpath(const char *path, char *buffer)
+{
+    (void)path;
+    (void)buffer;
+
+    errno = ENOSYS;
+    return NULL;
+}
+
+int symlink(const char *target, const char *path)
+{
+    (void)target;
+    (void)path;
+
+    errno = ENOSYS;
+    return -1;
+}
+
+int utimes(const char *path, const struct timeval times[2])
+{
+    (void)path;
+    (void)times;
+
+    errno = ENOSYS;
+    return -1;
+}
+
+/*
+ * The environment of a program is the vector `_start` was entered with
+ * (`stdlib_ext.c`): the shell has no `export` and a program cannot grow its
+ * own. A caller that changes a variable gets the honest answer and keeps the
+ * value it had.
+ */
+int setenv(const char *name, const char *value, int overwrite)
+{
+    (void)name;
+    (void)value;
+    (void)overwrite;
+
+    errno = ENOSYS;
+    return -1;
+}
+
+int unsetenv(const char *name)
+{
+    (void)name;
+
+    errno = ENOSYS;
+    return -1;
+}
+
+/*
+ * There is no name of a machine in the ABI: the host name of `/etc` belongs
+ * to the settings of the platform (`components/config`), not to a call of a
+ * program. The shell of SQLite falls back to its own word for the prompt.
+ */
+int gethostname(char *name, size_t size)
+{
+    (void)name;
+    (void)size;
+
+    errno = ENOSYS;
+    return -1;
+}
+
+/* The streams of this library have no buffer behind them (src/file.c), so
+ * there is nothing to set and nothing to flush; the request is accepted. */
+int setvbuf(FILE *stream, char *buffer, int mode, size_t size)
+{
+    (void)stream;
+    (void)buffer;
+    (void)mode;
+    (void)size;
+
+    return 0;
+}
+
+/*
+ * The stream of a command is a static `execve` with a pipe of two ends and a
+ * table of four descriptors; the library has no call to build one (the pipe
+ * of the shell is the kernel's and a program cannot make io_uring of it). The
+ * answer is `ENOSYS` and a NULL stream, so the shell of SQLite reports that
+ * `.output` to a command is not supported instead of hanging.
+ */
+FILE *popen(const char *command, const char *mode)
+{
+    (void)command;
+    (void)mode;
+
+    errno = ENOSYS;
+    return NULL;
+}
+
+int pclose(FILE *stream)
+{
+    (void)stream;
+
+    errno = ENOSYS;
+    return -1;
+}
