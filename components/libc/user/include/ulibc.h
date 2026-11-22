@@ -130,7 +130,7 @@ int execve(const char *path, char *const argv[], char *const envp[]);
  * waits for it; the low byte of the code is the status it sees. This call
  * does not return.
  */
-void exit(int code) __attribute__((noreturn));
+void exit(int code) __attribute__((__noreturn__));
 
 /* --- the strings --- */
 
@@ -170,6 +170,16 @@ size_t strspn(const char *text, const char *accept);
 size_t strcspn(const char *text, const char *reject);
 char *strpbrk(const char *text, const char *accept);
 
+/*
+ * A copy of a text in the arena of the program. The block belongs to the
+ * caller and `free` returns it; the answer is NULL with `errno` when the
+ * arena has no room. The function is a source of its own (`src/strdup.c`)
+ * and not a part of `src/string.c`: it asks the allocator for a block, and a
+ * program that does not call it must not carry the arena because of the
+ * library. bc names it.
+ */
+char *strdup(const char *text);
+
 /* --- the environment --- */
 
 /*
@@ -200,7 +210,7 @@ long atol(const char *text);
 double atof(const char *text);
 int abs(int value);
 long labs(long value);
-void abort(void) __attribute__((noreturn));
+void abort(void) __attribute__((__noreturn__));
 
 /*
  * The sort of an array of `count` elements of `size` bytes: the order is the
@@ -209,6 +219,18 @@ void abort(void) __attribute__((noreturn));
  * of two elements the comparison calls equal is kept.
  */
 void qsort(void *base, size_t count, size_t size, int (*compare)(const void *, const void *));
+
+/*
+ * The sequence of a pseudo-random number, with the shape of the C library:
+ * `srand` sets the seed and `rand` answers a number from 0 to `RAND_MAX`.
+ * The two functions are a source of their own (`src/rand.c`): a program that
+ * does not ask for them carries neither the state nor the algorithm. bc uses
+ * the sequence as the fallback of its generator of random digits when the
+ * machine has no `/dev/urandom` to read.
+ */
+#define RAND_MAX 32767
+void srand(unsigned int seed);
+int rand(void);
 
 /* --- the allocation of a program --- */
 

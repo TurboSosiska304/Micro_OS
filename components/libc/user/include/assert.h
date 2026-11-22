@@ -12,7 +12,7 @@
 #include "ulibc.h"
 
 void __assert_fail(const char *expression, const char *file, unsigned line, const char *function)
-    __attribute__((noreturn));
+    __attribute__((__noreturn__));
 
 #ifdef NDEBUG
 #define assert(expression) ((void)0)
