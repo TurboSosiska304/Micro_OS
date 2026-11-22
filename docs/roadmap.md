@@ -280,3 +280,25 @@ written when the project was an operating system for one board; the numbers
 * [x] Programs are files on a filesystem of the disk, and a program is added
       by writing a file of the volume (`make x86-disk`), not by embedding it
       in the kernel
+
+## K10 - The settings of a machine (planned, after 1.0)
+
+> The board, the x86-64 machine and the host already keep a few settings as
+> files of `/etc`; the screen and the font are the next ones, in a file per
+> system (ADR 0021). The feature is not a gate of 1.0.
+
+* [ ] A file per system in `/etc` (`display`, `font`, `console`, `time`,
+      `net`): `key=value`, comments, a bounded parser, a key the system does
+      not know kept and reported once
+* [ ] The store keeps the text of a system file, so a format brings the
+      settings back as it brings the other files of `/etc`
+* [ ] An applier per system, called at the boot in the order of the machine:
+      the display and the font before the first frame, the console before the
+      shell
+* [ ] `config set`, `config get` and `config sync` over a system file, and a
+      setting a machine cannot honour kept and ignored with a warning
+* [ ] The screen and the font: rotation, brightness, inversion, the scale of
+      the 5x7 font and the theme; the VGA of x86-64 where it can, the panel of
+      the board everywhere
+* [ ] A table of the keys per machine in the wiki, with a test that every key
+      of the file is either applied or reported

@@ -441,6 +441,16 @@ The file lives in MicroFS, so it is one of the files of `/etc` that the store
 of the port keeps across a format. A volume mounted at the console is not
 written back to the table: `mount` changes the tree, not the configuration.
 
+## The settings of a machine
+
+A few settings are files of `/etc`: the name of the machine, the console, the
+table of the mounts. The next systems are the display and the font, in a file
+per system - `/etc/display` with `rotation=90`, `/etc/font` with `scale=1` -
+and a key that the machine cannot honour is kept and ignored with a warning
+([ADR 0021](../adr/0021-settings-in-etc.md)). The files stay data of the
+volume: `cat`, `write` and `config` edit them, and the store of the port
+brings them back after a format.
+
 ## What is not there yet
 
 * **No write to an ext2 volume, and no journal under a FAT write.** A FAT
