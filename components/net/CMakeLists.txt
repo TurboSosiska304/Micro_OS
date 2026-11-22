@@ -18,6 +18,13 @@ if(ESP_PLATFORM)
     # and the board resolves through lwIP and links none of this.
     set(MICRO_OS_NET_SRCS "src/net.c" "src/dns.c")
 
+    # The board keeps the copy of mbedTLS that ESP-IDF carries and no command
+    # of its shell speaks TLS yet: the stub is the answer of net_tls_transport()
+    # and nothing of third_party/mbedtls is built for this target (ADR 0018).
+    if(CONFIG_MICRO_OS_NET)
+        list(APPEND MICRO_OS_NET_SRCS "src/tls_stub.c")
+    endif()
+
     if(CONFIG_MICRO_OS_NET)
         if(CONFIG_MICRO_OS_NET_HTTP)
             list(APPEND MICRO_OS_NET_SRCS "src/http.c")
@@ -61,6 +68,8 @@ if(ESP_PLATFORM)
         target_compile_definitions(${COMPONENT_LIB} ${MICRO_OS_NET_SCOPE} MICRO_OS_NET=0)
     endif()
 
+    target_compile_definitions(${COMPONENT_LIB} ${MICRO_OS_NET_SCOPE} MICRO_OS_TLS=0)
+
     foreach(feature MICRO_OS_NET_HTTP MICRO_OS_NET_HTTP_SERVER MICRO_OS_NET_NTP MICRO_OS_NET_MQTT)
         if(CONFIG_${feature})
             target_compile_definitions(${COMPONENT_LIB} ${MICRO_OS_NET_SCOPE} ${feature}=1)
@@ -96,9 +105,29 @@ else()
         list(APPEND MICRO_OS_NET_SRCS "src/mqtt.c")
     endif()
 
+    # The TLS client, or the stub that says the image has none. mbedTLS is
+    # vendored (third_party/mbedtls) and linked as an object library, so its
+    # bytes are part of the simulator and of the tests that name it.
+    if(MICRO_OS_TLS)
+        list(APPEND MICRO_OS_NET_SRCS "src/tls.c")
+    else()
+        list(APPEND MICRO_OS_NET_SRCS "src/tls_stub.c")
+    endif()
+
     add_library(microos_net STATIC ${MICRO_OS_NET_SRCS})
     target_include_directories(microos_net PUBLIC "${CMAKE_CURRENT_LIST_DIR}/include")
     target_link_libraries(microos_net PUBLIC microos_kernel microos_kshell)
     target_compile_features(microos_net PUBLIC c_std_11)
+
+    if(MICRO_OS_TLS)
+        target_link_libraries(microos_net PUBLIC microos_mbedtls)
+        # The headers of mbedTLS test optional switches with #if without
+        # defining every one of them (`MBEDTLS_SSL_DTLS_CONNECTION_ID_COMPAT`
+        # is undefined when DTLS is off, and read as a number later). The
+        # library is built with -w for the same reason; this one file of the
+        # kernel includes its headers, and -Wundef of this tree would make
+        # an upstream style a build error.
+        set_source_files_properties("src/tls.c" PROPERTIES COMPILE_OPTIONS "-Wno-undef")
+    endif()
 
 endif()

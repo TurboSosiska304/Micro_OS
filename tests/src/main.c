@@ -69,6 +69,9 @@ static void run_tests(void *arg)
     MICRO_OS_NET_MQTT
     test_net();
     test_pkg();
+#if MICRO_OS_TLS && MICRO_OS_NET
+    test_tls();
+#endif
 #endif
     test_boot();
 #if MICRO_OS_WIFI

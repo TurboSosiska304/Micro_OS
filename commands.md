@@ -55,7 +55,7 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make x86-smp-build` | the x86-64 kernel with `KERNEL_SMP=ON` (the APs are not started yet, ADR 0012) |
 | `make x86-net-build` | the x86-64 kernel with the network, `wget` and `pkg` (`MICRO_OS_X86_NET=ON`) |
 | `make x86-net-run` | that machine on the user network of QEMU |
-| `make x86-net-smoke` | boot it and check the stack, a download and an install from a local repository |
+| `make x86-net-smoke` | boot it and check the stack, a download, TLS (1.3 and 1.2, a wrong name and a wrong authority, the clock of 1970) and an install from a local repository over HTTPS |
 | `make x86-all` | the complete machine in `build-x86-all/`: the kernel with the network, the disk with `/bin` and `/etc`, and `run.sh` |
 | `make x86-all-run` | boot that machine in a window (the serial console with `x86-all-run-serial`) |
 | `make ci` | `build`, `test`, `test-asan`, `test-tsan`, `test-smp`, `smoke`, `coverage`, `x86-smoke` when QEMU is there, `reproducible`, `integrity` — run it before pushing |
@@ -339,7 +339,18 @@ rm -r /tmp/mine          # the directory and everything in it
 http get http://10.10.10.1/   # the status and the body of the answer
 ntp                           # pool.ntp.org, the time goes into the RTC (UTC)
 ntp time.google.com           # another server
+ntp 10.0.2.2:12345            # a server on another port (a home one, or a test)
+
+# from the shell of the x86-64 machine (the network image):
+wget https://10.0.2.2:8443/file.bin /file.bin   # TLS 1.2/1.3, the roots of /etc/ssl/certs.pem
+http get https://example.com/                   # the same client, into a buffer
+mkdir /etc/ssl
+wget http://10.0.2.2:8080/ca.pem /etc/ssl/certs.pem   # the store, a plain download
+ntp 10.0.2.2:12345            # a clock is part of the trust: https before it refuses
 ```
+
+The TLS client is described in `docs/wiki/network.md`; the board has the copy
+of mbedTLS that ESP-IDF carries and no command of TLS yet (ADR 0018).
 
 ## 5. Overrides
 

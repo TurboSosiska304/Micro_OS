@@ -208,7 +208,26 @@ if(MICRO_OS_X86_NET)
         "${NET_DIR}/src/http.c"
         "${NET_DIR}/src/ntp.c"
         "${NET_DIR}/src/net_http_server.c"
+        "${NET_DIR}/src/tls.c"
     )
+endif()
+
+# The TLS stack of the machine (ADR 0024 §3): mbedTLS is vendored and its
+# configuration is third_party/mbedtls/config/microos_config.h. The library
+# is an object library, so an image that links it carries its bytes; the
+# layer of the platform (the timer and RDRAND, src/tls_platform.c) and the
+# client (components/net/src/tls.c) are part of the network image.
+if(MICRO_OS_X86_NET)
+    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/mbedtls" mbedtls)
+    # The kernel is linked in the higher half: the library's static data has
+    # to be addressed the same way as the kernel's own.
+    target_compile_options(microos_mbedtls PRIVATE -mcmodel=kernel)
+    # -O2 and not the -O3 of the image: the library at -O3 with this
+    # compiler and these freestanding flags fails the Finished check of
+    # TLS 1.3 (the smoke test found it, the debug build and -O2 pass). -O2
+    # is the upstream default; the library is not the place to chase an
+    # optimizer, and a handshake that fails on one image is not a choice.
+    target_compile_options(microos_mbedtls PRIVATE -O2)
 endif()
 
 # The installer of programs (ADR 0024). It is part of the network image: a
@@ -452,6 +471,7 @@ add_executable(microos64
     src/virtio_net.c
     src/net.c
     src/libc_shim.c
+    src/tls_platform.c
     src/interrupts.S
     src/switch.S
 )
@@ -494,11 +514,18 @@ target_compile_definitions(microos64 PRIVATE
     MICRO_OS_NET_HTTP_SERVER=$<BOOL:${MICRO_OS_X86_NET}>
     MICRO_OS_NET_NTP=$<BOOL:${MICRO_OS_X86_NET}>
     MICRO_OS_NET_MQTT=0
+    MICRO_OS_TLS=$<BOOL:${MICRO_OS_X86_NET}>
     MICRO_OS_TELNET=$<BOOL:${MICRO_OS_TELNET}>
     MICRO_OS_WIFI=$<BOOL:${MICRO_OS_WIFI}>
     MICRO_OS_PKG=$<BOOL:${MICRO_OS_X86_NET}>
     MICRO_OS_PKG_BUILTIN_KEY=$<BOOL:${MICRO_OS_X86_NET}>
 )
+
+if(MICRO_OS_X86_NET)
+    # The bytes of mbedTLS are objects of the image, and its include path and
+    # MBEDTLS_CONFIG_FILE travel with the target (third_party/mbedtls).
+    target_link_libraries(microos64 PRIVATE microos_mbedtls)
+endif()
 
 if(MICRO_OS_FS_FAT32)
     target_compile_definitions(microos64 PRIVATE MICRO_OS_FS_FAT32=1)

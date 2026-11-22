@@ -14,6 +14,7 @@ commercially; the note here is what the tree does.
 |---|---|---|---|---|
 | Spleen 8x16 | 2.3.0 | BSD-2-Clause | `third_party/spleen`, `ports/port_x86_64/src/font_spleen.c` | the x86-64 kernel image; `LICENSE.spleen` in its tar |
 | zlib | 1.3.1 | zlib | `third_party/zlib`, `ports/port_x86_64/programs/zcat.c` | `/bin/zcat` of the x86-64 MicroFS image; `/etc/licenses/zlib` in the image and `LICENSE.zlib` in the x86-64 tar |
+| Mbed TLS | 3.6.2 | Apache-2.0 (of the dual Apache-2.0 / GPL-2.0-or-later) | `third_party/mbedtls` | the x86-64 network image, and the host tests; `LICENSE.mbedtls` in the x86-64 tar |
 
 Spleen is a font by Frederic Cambus; the license and the note are in
 [`third_party/spleen`](../third_party/spleen/README.md). The 8x16 table is
@@ -30,6 +31,15 @@ and `tools/bundle.sh` puts `LICENSE.zlib` into the x86-64 archive. A package
 that installs `zcat` (`microos-progs` of a release) copies the same file
 beside the program. The file stays zlib: it is not merged into the MIT
 `LICENSE` of the tree.
+Mbed TLS is the TLS stack of the x86-64 port (ADR 0024 §3), vendored from the
+3.6.2 release with only a configuration and a CMake file of this tree beside
+it; the note and the sum of the tarball are in
+[`third_party/mbedtls`](../third_party/mbedtls/README.md). The library is
+dual-licensed and Micro OS takes the **Apache-2.0** half (its patent grant is
+compatible with the MIT tree; the rule 1 below names it). The board does not
+link this copy: ESP-IDF carries its own, under the configuration of the
+firmware. `tools/bundle.sh` puts the upstream license into every x86-64
+archive as `LICENSE.mbedtls`.
 
 ## The rule
 
@@ -48,9 +58,10 @@ beside the program. The file stays zlib: it is not merged into the MIT
    ported from a permissive source (FreeBSD, OpenBSD, NetBSD) keeps its
    notice and is listed here.
 4. **A binary carries the licenses of what it contains.** `tools/bundle.sh`
-   puts `LICENSE.spleen` into the x86-64 archive; a new third-party part adds
-   its license to the same bundle. The board image contains no third-party
-   code today.
+   puts `LICENSE.spleen` and `LICENSE.mbedtls` into the x86-64 archive; a new
+   third-party part adds its license to the same bundle. The board image
+   contains the mbedTLS that ESP-IDF links into it (Apache-2.0), which is not
+   a copy of this tree.
 5. **The notice stays with the source.** A generated file names its origin
    and its SPDX identifier; a vendored file keeps its copyright lines.
 

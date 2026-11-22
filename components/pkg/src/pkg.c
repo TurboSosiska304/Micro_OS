@@ -22,6 +22,7 @@
 #include "kernel/vfs.h"
 #include "kshell/kshell.h"
 #include "net/net.h"
+#include "net/tls.h"
 #include "pkg/pkg.h"
 #include "pkg_private.h"
 #include "sha256.h"
@@ -599,7 +600,12 @@ static int download_to(const char *url, const char *path)
 
     rc = net_http_download_to(pkg_transport(), url, path, false, &stream);
     if (rc != HTTP_OK) {
-        if (rc == HTTP_ERROR && stream.status != 0) {
+        if (rc == HTTP_TLS) {
+            /* The reason of net/tls.h: the roots, the clock, the chain or
+             * the name. A mirror over https that this machine cannot trust
+             * is a sentence and not a bare "download failed". */
+            pkg_error("%s", net_tls_last_error());
+        } else if (rc == HTTP_ERROR && stream.status != 0) {
             pkg_error("the server answered %d", stream.status);
         } else {
             pkg_error("the download failed");

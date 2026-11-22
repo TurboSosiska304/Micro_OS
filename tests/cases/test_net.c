@@ -25,9 +25,11 @@ static char g_request[256];
 static char g_host[HTTP_HOST_MAX];
 static int g_port;
 
-static int fake_open(const char *host, int port, void **ctx)
+static int fake_open(const struct http_transport *self, const char *host, int port, void **ctx)
 {
     k_size_t len = strlen(host);
+
+    (void)self;
 
     if (len >= sizeof(g_host)) {
         return -1;
@@ -104,8 +106,20 @@ static void test_url(void)
     KT_CHECK_INT_EQ(http_parse_url("http://example.com:8080/a/b?x=1", &url), HTTP_OK);
     KT_CHECK_INT_EQ(url.port, 8080);
     KT_CHECK_STR_EQ(url.path, "/a/b?x=1");
+    KT_CHECK(!url.tls);
 
-    KT_CHECK_INT_EQ(http_parse_url("https://example.com/", &url), HTTP_INVALID);
+    KT_CHECK_INT_EQ(http_parse_url("https://example.com/", &url), HTTP_OK);
+    KT_CHECK_INT_EQ(url.port, 443);
+    KT_CHECK_STR_EQ(url.host, "example.com");
+    KT_CHECK_STR_EQ(url.path, "/");
+    KT_CHECK(url.tls);
+
+    KT_CHECK_INT_EQ(http_parse_url("https://example.com:8443/a", &url), HTTP_OK);
+    KT_CHECK_INT_EQ(url.port, 8443);
+    KT_CHECK(url.tls);
+
+    KT_CHECK_INT_EQ(http_parse_url("https://", &url), HTTP_INVALID);
+    KT_CHECK_INT_EQ(http_parse_url("https://example.com:0/", &url), HTTP_INVALID);
     KT_CHECK_INT_EQ(http_parse_url("ftp://example.com/", &url), HTTP_INVALID);
     KT_CHECK_INT_EQ(http_parse_url("http://", &url), HTTP_INVALID);
     KT_CHECK_INT_EQ(http_parse_url("http://example.com:0/", &url), HTTP_INVALID);
@@ -178,8 +192,9 @@ struct fake_server {
 
 static struct fake_server g_server;
 
-static int stream_open(const char *host, int port, void **ctx)
+static int stream_open(const struct http_transport *self, const char *host, int port, void **ctx)
 {
+    (void)self;
     if (g_server.opened >= g_server.count) {
         return -1;
     }
@@ -468,9 +483,15 @@ static void test_stream(void)
     stream.url = "http://example.com/";
     KT_CHECK_INT_EQ(http_stream(&stream), HTTP_INVALID);
 
+    /*
+     * https without a trust store or without the TLS layer: the answer is
+     * the same code, and the reason is in net_tls_last_error() - the image
+     * either has no mbedTLS or has no roots of /etc/ssl/certs.pem (this
+     * test volume has none).
+     */
     stream_init(&stream, &sink);
     stream.url = "https://example.com/";
-    KT_CHECK_INT_EQ(http_stream(&stream), HTTP_INVALID);
+    KT_CHECK_INT_EQ(http_stream(&stream), HTTP_TLS);
 }
 
 static void test_ntp(void)

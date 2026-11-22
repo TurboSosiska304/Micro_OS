@@ -169,9 +169,9 @@ becomes a program of `/usr/bin` when the calls it needs - `open`, `write`,
 
 ## What was built
 
-The first pass of K12 is in the tree. It is honest about its two halves: the
-stream, the index, the signature and the installer are here and are tested;
-TLS is not, and the note says why.
+The first pass of K12 is in the tree: the stream, the index, the signature
+and the installer are here and are tested, and the second pass added the TLS
+of §3 for the machine that has the room for it.
 
 ### The stream, and `wget`
 
@@ -304,18 +304,104 @@ sources are not compiled there (ADR 0018).
   its resume, `pkg repo add`, `pkg -Sy`, `pkg -S hello`, `pkg -Q` and `exec
   hello` of the program that arrived.
 
-### TLS: the honest blocker
+### TLS: mbedTLS on x86-64
 
-The handshake is not here. mbedTLS is not vendored, and nothing in this tree
-pretends to be TLS: `http_parse_url` refuses `https://` and says so. What the
-stream gives a package is already enough for the trust of §4 - a signature
-over the bytes, not a confident wire - and a mirror that lies about a body is
-caught by the digest before a byte of it reaches `/usr`; what TLS adds is
-privacy and the authentication of the server, and that is the next pass.
+The handshake of §3 is here for x86-64 and for the host substrate. The board
+keeps the copy of ESP-IDF and no command of its shell speaks TLS yet: it is a
+compatibility port (ADR 0018) and this pass changes nothing it boots.
 
-The work that remains is the one the ADR names: vendor mbedTLS, wire the
-platform layer (`kmm` for the allocator, `RDRAND` with the timer as the
-fallback, the clock of NTP, the roots of `/etc/ssl/certs.pem` read through the
-VFS), the `https` branch of `http_parse_url`, and a test that a handshake
-fails on a machine whose clock is 1970. It is recorded in
-[debts.md](../debts.md), not passed over in silence.
+**The library.** Mbed TLS **3.6.2** is vendored in `third_party/mbedtls`:
+the upstream `include/` and `library/` as they are, the upstream license
+(Apache-2.0, the half of the dual grant this tree takes), and two files of
+ours - the configuration and the CMake target. The configuration replaces
+`mbedtls_config.h` and is a TLS *client*: TLS 1.2 and 1.3, X.509, ECDHE with
+ECDSA or RSA certificates, RSA-PSS, AES-GCM/CCM, ChaCha20-Poly1305,
+SHA-1/256/384/512, PEM roots in memory; no `MBEDTLS_FS_IO`, no
+`MBEDTLS_NET_C`, no threads, no timing, no server. The file is
+`third_party/mbedtls/config/microos_config.h` and its comments are the
+reason for every group. The image of x86-64 grew by about 312 KB (from
+352 KB to 672 KB of `microos64.bin`), which the ADR accepted: this machine
+has no partition to fit.
+
+**The platform layer** (`components/net/src/tls.c`) is the half mbedTLS
+cannot write for a machine without a libc:
+
+* the allocator is `kmm_alloc()` at `KMM_PRIORITY_SYSTEM`, named as
+  `MBEDTLS_PLATFORM_CALLOC_MACRO` so that the library never holds a pointer
+  to a `calloc` that is not linked;
+* `snprintf` is the formatter of the kernel, set with
+  `mbedtls_platform_set_snprintf()`;
+* the clock is `k_clock_now_unix()`, and `gmtime_r` is a UTC conversion of
+  our own (`MBEDTLS_PLATFORM_GMTIME_R_ALT`), because the library would
+  otherwise reach for the libc of the host;
+* the entropy is `mbedtls_hardware_poll()` over
+  `net_tls_platform_entropy()`: `RDRAND` when CPUID leaf 1 says the
+  processor has it, a jitter of the TSC and the uptime otherwise
+  (`ports/port_x86_64/src/tls_platform.c`); the host uses `getrandom()`.
+  QEMU's default CPU model has no `RDRAND`, so the smoke test exercises the
+  fallback and a machine of silicon takes the instruction;
+* the roots are `/etc/ssl/certs.pem`, read through the VFS into `kmm` memory
+  and handed to `mbedtls_x509_crt_parse()` (any number of certificates).
+  `MBEDTLS_TEST_SW_INET_PTON` selects the library's own `inet_pton`, because
+  this kernel has none and a certificate may name an address in its SAN.
+
+**The clock policy.** A certificate has dates, and a machine whose clock NTP
+has not set cannot check them. `net_tls_clock_ok()` refuses a clock that was
+never set, or one before 2020-01-01, *before* the socket is opened; the
+console says "the clock is not set (1970): the date of a certificate cannot
+be checked - run `ntp` first". A silent success on a machine of 1970 is not
+one of the outcomes. The x86-64 port registers a software clock (the kernel's
+base plus its uptime) so that `ntp` has somewhere to put the moment: this
+port has no driver of the CMOS clock yet, and a real one is a later change.
+
+**The transport.** `struct http_transport::open` now receives the transport
+itself, so a layer can wrap the one below it. `net_tls_transport()` answers a
+template, the HTTP client copies it per exchange and puts the plain transport
+in `user`; `tls_open()` opens the TCP session, checks the clock, loads the
+roots, seeds the DRBG, sets the server name (`mbedtls_ssl_set_hostname()`,
+which is both the SNI and the name checked in the certificate) and runs the
+handshake with `MBEDTLS_SSL_VERIFY_REQUIRED`. A failure is `HTTP_TLS` and one
+sentence of `net_tls_last_error()`: there is no roots file, the clock is
+1970, the chain is not trusted (with the flags of the verification), the name
+is another, or the library said what went wrong. `http_parse_url()` accepts
+both schemes, with 80 and 443, and a redirect keeps the scheme of the hop it
+lands on - so `http get https://...` and `wget https://...` are the same
+client they were.
+
+**`pkg`.** The repository may be an `https://` URL: `pkg` uses
+`net_http_transport()` through the HTTP client, the client chooses the TLS
+layer from the scheme, and a refused handshake is a sentence of TLS in the
+log of an install, not "the download failed". The signature of §4 remains
+the trust: TLS does not replace the digest, and a mirror with a valid
+certificate still cannot install a package that is not signed.
+
+**What the tests say.** `tools/x86_net_smoke.py` generates a test authority
+and three certificates with `openssl` (the good one names `IP:10.0.2.2`, one
+names another machine, one is signed by a second authority), starts three
+servers of TLS and an NTP responder on the loopback of the host, and feeds
+the guest the root over plain HTTP - the same way a person would put a file
+there. The checks, all passing:
+
+* `https` before `ntp` is refused with the sentence of the clock;
+* after `ntp 10.0.2.2:<port>` the file of 1500 bytes arrives over TLS 1.3,
+  and over TLS 1.2 from a server that offers no 1.3;
+* the certificate of another name is refused with flags `0x4`, the one of
+  another authority with flags `0x8`;
+* `pkg repo add https://...`, `pkg -Sy` and `pkg -S hello` install a signed
+  program through the TLS layer, and `exec hello` runs it.
+
+`tests/cases/test_tls.c` covers what a handshake uses before it: the policy
+of the clock, a store of one and of two certificates, a broken store, and the
+transport that has no transport below it. The parsing of the URL of both
+schemes is in `tests/cases/test_net.c`.
+
+**What is not in this pass.** No revocation (no CRL and no OCSP), no client
+certificate, no session resumption across connections (every download is a
+handshake), no ALPN, and no TLS on the board: its command does not exist and
+`net_tls_transport()` is the stub of `components/net/src/tls_stub.c` in the
+firmware. The library is built at `-O2` on x86-64 and not at the `-O3` of the
+image: at `-O3` with this compiler and these freestanding flags the Finished
+check of TLS 1.3 fails in the smoke test, while the debug build and `-O2`
+pass. That is an optimizer problem of the library and not a choice of the
+protocol; it is written in `docs/debts.md` and in the CMake comment rather
+than left for a mystery.

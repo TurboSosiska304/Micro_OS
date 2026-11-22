@@ -426,12 +426,15 @@ to build is the screen a program can draw on.
       stream and is not wired yet: the update of the board is over USB
       (ADR 0022) and there is no `esp_ota_*` writer in the tree
       ([debts.md](debts.md))
-* [ ] mbedTLS on x86-64 with a freestanding platform layer: `kmm` for the
+* [x] mbedTLS 3.6.2 on x86-64 with a freestanding platform layer:
+      `third_party/mbedtls` with a client-only configuration, `kmm` for the
       allocations, `RDRAND` for entropy (the timer as the fallback), NTP for
-      the clock and `/etc/ssl/certs.pem` through the VFS; the board keeps the
-      copy of ESP-IDF. **The one open step of K12**: nothing in the tree
-      pretends to be TLS, `https://` is refused by the URL parser, and the
-      work is written down in [debts.md](debts.md)
+      the clock and `/etc/ssl/certs.pem` through the VFS; `http_parse_url`
+      takes `https`, the stream wraps the plain transport, and `wget`,
+      `http` and `pkg` speak HTTPS with the chain, the name and the dates
+      checked. A machine of 1970 is a refusal with a sentence. The board
+      keeps the copy of ESP-IDF and its shell has no command of TLS yet
+      (ADR 0024 §3, [debts.md](debts.md))
 * [x] The signed index and a signed `.mox`: `index.json` with the name, the
       version, the machine, the ABI, the size and the digest; the verifier
       reuses the Ed25519 of ADR 0020
@@ -451,4 +454,7 @@ to build is the screen a program can draw on.
 * [x] Tests: the fake transport of `components/net` serves a chunked body, a
       redirect and a dropped connection; the installer is tested on a
       temporary volume with a bad signature, a wrong machine and a downgrade;
-      `make x86-net-smoke` fetches a file from a local server and installs it
+      `make x86-net-smoke` fetches a file from a local server and installs it,
+      and serves three certificates of a test authority over TLS: the
+      trusted one arrives (1.3 and 1.2), the one of another name and the one
+      of another authority are refused, and the repository of `pkg` is HTTPS

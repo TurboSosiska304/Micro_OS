@@ -58,4 +58,12 @@ int net_http_download(const char *url, const char *path, bool resume, struct htt
 /* The time of an NTP server, in the seconds of Unix (UTC). */
 int net_ntp_sync(const char *server, k_u64_t *unix_seconds);
 
+/*
+ * The same with the port named: 123 is the port of the protocol, and a
+ * clock on another one is the case of a test (the host of QEMU user-net
+ * cannot bind 123 without a privilege) and of a home server. `server` is a
+ * name or an address, as it is for net_ntp_sync().
+ */
+int net_ntp_sync_port(const char *server, k_u16_t port, k_u64_t *unix_seconds);
+
 #endif /* MICRO_OS_NET_NET_H */

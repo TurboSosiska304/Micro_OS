@@ -5,11 +5,13 @@ its own (`microos-progs`), checks its signature and puts it in `/usr/bin`.
 It is the second half of the promise of `2.0` - a machine a person changes
 from the machine itself; the settings of `/etc` were the first.
 
-> **Status: built, without TLS.** `pkg` is a command of the x86-64 image with
-> the network (`-DMICRO_OS_X86_NET=ON`, `make x86-net-build`). The board has
-> none (ADR 0018). The transport is plain HTTP: a package is trusted by its
-> signature and not by the wire, and the handshake is the open step of K12
-> ([debts.md](../debts.md)).
+> **Status: built, over HTTP and HTTPS.** `pkg` is a command of the x86-64
+> image with the network (`-DMICRO_OS_X86_NET=ON`, `make x86-net-build`). The
+> board has none (ADR 0018). A repository may be an `https://` URL; the
+> client of TLS and the trust of the store are described in
+> [network.md](network.md). The package is still trusted by its signature and
+> not by the wire: the two are independent, and a mirror with a valid
+> certificate cannot install a program that is not signed (ADR 0024 §4).
 
 ## The shape of a package
 
@@ -181,8 +183,9 @@ installed at the same version is left alone (`--force` reinstalls it).
   machine and the ABI, and the index names them.
 * **No scripts, no shared libraries, no delta update.** A package is a file
   replaced whole.
-* **No TLS yet.** The wire is plain HTTP; the signature is the trust
-  ([debts.md](../debts.md)).
+* **No revocation of a certificate.** The store of `https` is one file,
+  `/etc/ssl/certs.pem`, and a certificate that is withdrawn stays trusted
+  until the file is replaced ([debts.md](../debts.md)).
 * **No installer on the board.** The `progs` partition of the ESP32 belongs to
   the firmware (ADR 0018); a program of the board is a new `progs.bin` and a
   flash.
