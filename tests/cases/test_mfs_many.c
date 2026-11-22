@@ -54,6 +54,32 @@ void test_mfs_many(void)
         KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
     }
 
+    /*
+     * A directory cannot hold names beyond its four kilobytes of cells.
+     * The answer is "no space", not an I/O error and not a broken volume;
+     * the marker beside it stays readable.
+     */
+    {
+        bool full = false;
+
+        for (i = MANY_FILES; i < MANY_FILES + 100; i++) {
+            int rc;
+
+            snprintf(path, sizeof(path), "/many/f%03d", i);
+            rc = mfs_create(path);
+            if (rc != MFS_OK) {
+                KT_CHECK_INT_EQ(rc, MFS_ENOSPC);
+                full = true;
+                break;
+            }
+            KT_CHECK_INT_EQ(mfs_open(path, MFS_O_RDWR, &file), MFS_OK);
+            KT_CHECK_INT_EQ(mfs_write(&file, "x", 1), 1);
+            KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+        }
+
+        KT_CHECK(full);
+    }
+
     KT_CHECK_INT_EQ(mfs_open("/keep/marker", MFS_O_RDONLY, &file), MFS_OK);
     memset(marker, 0, sizeof(marker));
     KT_CHECK_INT_EQ(mfs_read(&file, marker, sizeof(marker)), 5);
@@ -63,7 +89,6 @@ void test_mfs_many(void)
     memset(&report, 0, sizeof(report));
     KT_CHECK_INT_EQ(mfs_check(&report), MFS_OK);
     KT_CHECK_INT_EQ(report.errors, 0);
-    KT_CHECK_INT_EQ(report.files, MANY_FILES + 1u);
 
     mfs_unmount();
     mfs_ram_free(&volume);

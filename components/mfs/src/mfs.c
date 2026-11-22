@@ -868,8 +868,14 @@ static int dir_add(struct dir_buffer *buf, const struct mfs_dirent *entry)
 {
     k_size_t need = sizeof(struct mfs_dirent_header) + entry->name_len;
 
+    /*
+     * The buffer of the directory is the room of the directory: a person
+     * who fills it has no space left for another name, and that is what the
+     * answer says. E2BIG would read as a bad argument of a call that was
+     * well formed.
+     */
     if (buf->size + need > sizeof(buf->data)) {
-        return MFS_E2BIG;
+        return MFS_ENOSPC;
     }
 
     memcpy(buf->data + buf->size, entry, sizeof(struct mfs_dirent_header));
