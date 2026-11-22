@@ -106,6 +106,13 @@ def main() -> int:
 
     print("\n--- end of capture ---", flush=True)
 
+    # A capture that sends commands is a check of the shell, not of a boot:
+    # the board booted before it, and its self test is not in this buffer.
+    # The caller looks for its markers; a verdict here would be a false
+    # failure on every short capture.
+    if sends:
+        return 0
+
     if "selftest: PASS" in buffer or "problem(s)" in buffer:
         print("RESULT: PASS")
         return 0
