@@ -10,7 +10,8 @@ The sources of the register are [roadmap.md](roadmap.md) (K3-K7),
 [phase7.md](phases/phase7.md) ("What is still missing"),
 [ports/esp32/README.md](ports/esp32/README.md) and
 [ports/esp32/roadmap.md](ports/esp32/roadmap.md) (P3-P5), the other port
-READMEs, [ADR 0005](adr/0005-programs-and-protection.md),
+READMEs, [ports/x86_64/iso.md](ports/x86_64/iso.md) and
+[ADR 0026](adr/0026-bios-iso.md), [ADR 0005](adr/0005-programs-and-protection.md),
 [README.md](../README.md) ("Known limitations"), [libc.md](libc.md),
 [memory.md](memory.md) and [syscall-abi.md](syscall-abi.md).
 
@@ -177,6 +178,17 @@ K5.
 | The kmm, the VFS, the console and the block layer were not changed: they take a sleeping `k_mutex` or the owner-and-depth lock of the kmm, and the scheduler lock is never held across their waits. The audit says they are correct under two cores as sleeping locks, but there is no test that runs a filesystem of two cores with an aggressive migration. | `components/kernel/src/{kmm,vfs,kfile,console,blockdev}.c`, `components/mfs` | partial | A stress of two cores that migrates a task in the middle of a filesystem operation (`make soak-host` does the load; the migration is the scheduler's), and a review of every `k_port_enter_critical()` that protects more than a few instructions. |
 | The board is not part of this phase: its two cores run under FreeRTOS and the kernel scheduler of that port is asked to use one. | `components/port_esp32`, ADR 0018 | decision | The board's own work (ADR 0012, "The machines"), when the compatibility port is allowed to change. |
 | The two calls of `kernel/port/cpu.h` have a weak default in the portable kernel (`src/cpu_default.c`, a GNU attribute): a port that does not implement them links as one core. | `components/kernel/src/cpu_default.c`, `kernel/port/cpu.h` | open | A port that reports more than one core implements both and raises `api_minor`; the default is the floor of the contract, and the weak symbols are the one GNU extension the portable kernel admits for it. |
+
+## K13 - A bootable image of x86-64 (ADR 0026)
+
+| Debt | Where | Status | What it needs |
+|---|---|---|---|
+| The ISO is BIOS only: no EFI application, no GOP and no memory map of the firmware. An EFI machine does not start the image at all. | `tools/x86_iso.py`, ADR 0026 §1, ADR 0023 | open | `BOOTX64.EFI` on the ISO (`limine-uefi-cd.bin` or the GRUB EFI image), the loader taking the map of `GetMemoryMap`/`ExitBootServices`, and a screen the kernel can draw on - the linear framebuffer of ADR 0023, because the text mode of the VGA is a BIOS thing. |
+| The ISO written to a USB stick does not boot as a disk: the El Torito record is not a boot sector, and `limine bios-install` or a protective MBR with the GRUB record is not part of the build. | `tools/x86_iso.py` (`build_limine`) | open | A second eltorito/hybrid image (a protective MBR, `limine bios-install`, or the GRUB hybrid record) and a `make x86-iso` that writes both, with the boot of the stick checked on a machine or in QEMU as a disk. |
+| The root of the ISO is read-only: the volume is the bytes of the boot module, every write is `EIO`, the settings of `/etc` that the boot would create are not made and a person's file has no place. | `ports/port_x86_64/src/blockdev_module.c`, `src/kmain.c` | decision | None for the medium: a CD is read-only. The next step is an installer (K12) that writes a disk, or an overlay of the writes in the memory of the machine. |
+| A machine that boots the ISO with a disk attached still mounts `boot0p1` as `/`; the disk is not mounted, and `/etc/fstab` cannot name a volume the boot never finds. | `ports/port_x86_64/src/ata.c` (`port_x86_64_root_device`), `src/kmain.c` | open | A rule for the root of a boot from a medium (an `/etc/fstab` of the image or a kernel command line) and the mount of the disk beside it. |
+| The ISO is not reproducible byte for byte: the volume descriptor is stamped from `SOURCE_DATE_EPOCH`, the directory records of xorriso still carry the second of the run. | `tools/x86_iso.py`, the flags of `xorriso -as mkisofs` | open | The option of xorriso that stamps every ISO9660 record (or a pass with `-volume_date` of the native mode), and a `make reproducible` half for the ISO that compares two builds. |
+| The boot loader is a package of the system: GRUB or limine must be installed, and the GRUB half of `tools/x86_iso.py` was never booted on the machine that wrote it (no `grub-mkrescue` there). | `tools/x86_iso.py`, ADR 0026 §4 | open | A CI job with `grub-mkrescue` that builds and boots `--bootloader grub`, or a vendored boot record of the project (the boot sector this ADR refused); the limine half is the one covered by `make x86-iso-smoke` today. |
 
 ## Decisions, not debts
 

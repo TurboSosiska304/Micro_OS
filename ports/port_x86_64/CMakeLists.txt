@@ -376,6 +376,7 @@ add_executable(microos64
     src/port_exec.c
     src/port_x86_64_task.c
     src/blockdev_ram.c
+    src/blockdev_module.c
     src/ata.c
     src/virtio_net.c
     src/net.c
