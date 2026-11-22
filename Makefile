@@ -522,8 +522,9 @@ soak: soak-image
 # `x86-smp-build` with -smp 2 and the load asserts the two-core invariants on
 # top of the ones of 1.0 - the report of `smp`, the ticks of both cores
 # moving, the queues consistent and no exception in any answer. The image is
-# made from this build (the programs are the same, the kernel is not), and it
-# is the full volume of `soak-image` either way.
+# the full volume of the session, made from the current programs of
+# `x86-disk` (the images of the programs do not depend on the kernel), and
+# the boot is the two-core kernel on that image.
 soak-smp: x86-smp-build x86-disk
 	rm -f $(SOAK_SMP_IMAGE) $(SOAK_SMP_IMAGE).full
 	python3 tools/soak_image.py --build $(X86_BUILD) --image $(SOAK_SMP_IMAGE) \
@@ -539,10 +540,6 @@ soak-smp: x86-smp-build x86-disk
 # the one-core kernel beside it.
 HOST_SOAK_MINUTES ?= 10
 HOST_SOAK_ARGS    ?=
-# The image of the two-core session is its own: the programs are the current
-# build of `x86-disk` (the kernel is the SMP one, the images of the programs
-# do not depend on it) and the volume is filled for the session alone.
-SOAK_SMP_IMAGE ?= build-x86-smp/soak.img
 
 soak-host:
 	cmake -B $(SMP_DIR) -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug -DKERNEL_SMP=ON

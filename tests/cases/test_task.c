@@ -178,6 +178,98 @@ static void exiting_task(void *arg)
     task_exit(code);
 }
 
+/*
+ * The child of a task that ends belongs to init from then on. A program that
+ * was killed - Ctrl+C on a parent that had forked - used to leave a child
+ * whose parent no longer existed: nobody called waitpid() for it and its slot
+ * stayed a zombie for the life of the machine (the two-core soak found a
+ * 3000-pid-old zombie of this shape). The test forks twice: a parent that
+ * leaves without waiting, and its child, which must name the runner (pid 1)
+ * as its parent afterwards.
+ */
+static volatile k_u32_t g_grandchild_pid;
+static volatile int g_grandchild_ran;
+
+static void grandchild_task(void *arg)
+{
+    K_UNUSED(arg);
+
+    /* Long enough for the parent to have ended and for the test to look. */
+    k_sched_sleep_ms(20);
+    (void)__atomic_store_n(&g_grandchild_ran, 1, __ATOMIC_SEQ_CST);
+}
+
+static void parent_that_leaves(void *arg)
+{
+    struct task *child;
+
+    K_UNUSED(arg);
+
+    child = task_create("grandchild", grandchild_task, NULL, TASK_PRIO_DEFAULT);
+
+    if (child != NULL) {
+        (void)__atomic_store_n(&g_grandchild_pid, child->pid, __ATOMIC_SEQ_CST);
+    }
+
+    /* Returns at once, and the trampoline of the task ends it here: no wait
+     * for the child it just made. */
+}
+
+static void test_task_orphan(void)
+{
+    struct task *parent;
+    struct task *grandchild = NULL;
+    struct task *self = task_self();
+    k_u32_t pid = 0;
+    int code = -1;
+    int waited = 0;
+
+    ktest_begin("task: a child of a task that ends goes to init");
+
+    port_host_set_sink(tmpfile());
+    (void)__atomic_store_n(&g_grandchild_pid, 0, __ATOMIC_SEQ_CST);
+    (void)__atomic_store_n(&g_grandchild_ran, 0, __ATOMIC_SEQ_CST);
+
+    parent = task_create("leaver", parent_that_leaves, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(parent != NULL);
+
+    if (parent == NULL) {
+        port_host_set_sink(NULL);
+        return;
+    }
+
+    /* The parent ends without waiting for the child it made. */
+    KT_CHECK_INT_EQ(task_wait(parent->pid, NULL, 2000), 0);
+
+    pid = (k_u32_t)__atomic_load_n(&g_grandchild_pid, __ATOMIC_SEQ_CST);
+
+    while (pid == 0u && waited < 2000) {
+        k_sched_sleep_ms(1);
+        waited++;
+        pid = (k_u32_t)__atomic_load_n(&g_grandchild_pid, __ATOMIC_SEQ_CST);
+    }
+
+    KT_CHECK(pid != 0u);
+
+    if (pid != 0u) {
+        /* The slot is still there - the test is its reaper - and its parent
+         * has to be the task of the suite, which is pid 1. */
+        grandchild = task_by_pid(pid);
+        KT_CHECK(grandchild != NULL);
+
+        if (grandchild != NULL) {
+            KT_CHECK(grandchild->parent == self);
+            KT_CHECK_INT_EQ(task_wait(grandchild->pid, &code, 2000), 0);
+            KT_CHECK_INT_EQ(code, 0);
+            KT_CHECK(task_by_pid(pid) == NULL);
+        }
+    }
+
+    KT_CHECK_INT_EQ(__atomic_load_n(&g_grandchild_ran, __ATOMIC_SEQ_CST), 1);
+
+    port_host_set_sink(NULL);
+}
+
 static void test_task_wait(void)
 {
     struct task *child;
@@ -416,6 +508,7 @@ void test_task(void)
     test_task_self();
     test_task_table();
     test_task_parent();
+    test_task_orphan();
     test_task_wait();
     test_task_wait_timeout();
     test_task_job();

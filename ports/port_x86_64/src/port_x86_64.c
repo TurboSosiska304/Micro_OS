@@ -794,8 +794,18 @@ static k_size_t g_heap_free;
  */
 static k_u32_t g_heap_lock;
 
-static void heap_lock(void)
+/*
+ * The lock takes the interrupts of the core with it. A task that holds it may
+ * be preempted by the tick, and the task the scheduler switches to on the same
+ * core may ask the heap for a block of its own: with the interrupts left on it
+ * would spin for ever on a lock whose owner is the context it interrupted.
+ * The order is the one of the big kernel lock - flags saved, interrupts off,
+ * then the word - and the caller gets its flags back on the way out.
+ */
+static void heap_lock(k_u64_t *flags)
 {
+    *flags = port_save_flags_and_cli();
+
     while (__atomic_exchange_n(&g_heap_lock, 1u, __ATOMIC_ACQUIRE) != 0u) {
         while (__atomic_load_n(&g_heap_lock, __ATOMIC_RELAXED) != 0u) {
             __asm__ volatile("pause");
@@ -803,9 +813,10 @@ static void heap_lock(void)
     }
 }
 
-static void heap_unlock(void)
+static void heap_unlock(k_u64_t flags)
 {
     __atomic_store_n(&g_heap_lock, 0u, __ATOMIC_RELEASE);
+    port_restore_flags(flags);
 }
 
 extern char __kernel_end[];
@@ -1001,6 +1012,7 @@ void *k_port_alloc(k_size_t size, bool psram)
 {
     struct block *block;
     void *payload = NULL;
+    k_u64_t flags;
 
     K_UNUSED(psram); /* there is one memory on this machine */
 
@@ -1010,7 +1022,7 @@ void *k_port_alloc(k_size_t size, bool psram)
 
     size = (size + BLOCK_ALIGN - 1) & ~(k_size_t)(BLOCK_ALIGN - 1);
 
-    heap_lock();
+    heap_lock(&flags);
 
     for (block = g_first; block != NULL; block = block->next) {
         if (!block->free || block->size < size) {
@@ -1036,7 +1048,7 @@ void *k_port_alloc(k_size_t size, bool psram)
         break;
     }
 
-    heap_unlock();
+    heap_unlock(flags);
 
     return payload;
 }
@@ -1044,12 +1056,13 @@ void *k_port_alloc(k_size_t size, bool psram)
 void k_port_free(void *ptr)
 {
     struct block *block;
+    k_u64_t flags;
 
     if (ptr == NULL || g_first == NULL) {
         return;
     }
 
-    heap_lock();
+    heap_lock(&flags);
 
     block = (struct block *)((k_u8_t *)ptr - sizeof(struct block));
     block->free = true;
@@ -1064,7 +1077,7 @@ void k_port_free(void *ptr)
         }
     }
 
-    heap_unlock();
+    heap_unlock(flags);
 }
 
 k_size_t k_port_heap_total(void)

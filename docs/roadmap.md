@@ -237,31 +237,42 @@ written when the project was an operating system for one board; the numbers
       network components, the defaults per build, `make test-minimal` and
       the check of the map
 
-## K8 - Many cores (in progress, after 1.0)
+## K8 - Many cores (x86-64 and host done in 1.3, the I/O APIC open)
 
-> Not a gate of 1.0 (ADR 0012, updated): the release promises a correct
-> single-core kernel; the second core is the first project after it. The
-> first phase is in the tree (`KERNEL_SMP`, `struct k_cpu`, the host gate
-> and the x86-64 processor list); the AP bring-up is the blocker, named in
-> ADR 0012 "The pilot of 1.x".
+> Not a gate of 1.0 (ADR 0012, updated). `1.3.0` closes the pilot: the
+> machine of QEMU starts both processors, runs tasks on each of them, passes
+> `make x86-smp-smoke` (34 checks) and the 600-second `make soak-smp`
+> session. `KERNEL_SMP` stays off by default. The open rows are the I/O APIC,
+> the remote wake, the FPU state, the stack guard page and the board; they
+> are the K8 rows of [debts.md](debts.md).
 
 * [x] A `struct k_cpu` per core and a run queue per core; the scheduler never
       runs one task on two cores (ADR 0012) - `kernel/cpu.h`,
-      `components/kernel/src/sched.c`, `tests/cases/test_smp.c`
-* [ ] The allocator, the VFS, the console and the block layer safe under two
-      cores; the locks that sleep and the locks that spin are named - the
-      sleeping locks are audited in [debts.md](debts.md) under K8; the port
-      critical section of x86-64 is still `cli` and has to become a machine
-      lock before an AP enters the kernel
-* [ ] x86-64: AP bring-up, local APIC timer, I/O APIC and the IPI of a TLB
-      and a reschedule; `make x86-smoke` with `-smp 2` - the processor list
-      (MADT) and `-smp 2` are done; the boot says `2 cpu(s) reported by the
-      firmware, 1 in use`; `make x86-smp-build` builds the two-core kernel
+      `components/kernel/src/sched.c`, `tests/cases/test_smp.c`; the claim of
+      the next task (`k_sched_claim_next()`) and the refusal of a task that
+      is the current of two cores are tested
+* [x] The big kernel lock is a spinlock of the machine, and the per-core
+      state of the port (GDT/TSS/IST, RSP0, the thread pointer, the current
+      context, `CR0.WP`) is in `ports/port_x86_64/src`
+* [x] x86-64: the AP bring-up (the MADT list, the trampoline at `0x7000`,
+      INIT-SIPI-SIPI, a stack and a table per core), the local APIC timer of
+      every AP, the IPI vector; `make x86-smp-build`, `make x86-smp-run`,
+      `make x86-smp-smoke` and `make soak-smp`
+* [x] The console is one resource of the machine: `k_port_write()` holds the
+      big kernel lock for the whole call
+* [ ] x86-64: the I/O APIC (the timer and the keyboard off the 8259, the
+      MADT overrides, the LAPIC EOI), the wake IPI of the scheduler and a
+      cross-core priority preemption, the FPU/SSE state at a switch, a guard
+      page under a task stack - the K8 rows of [debts.md](debts.md)
+* [ ] The allocator, the VFS, the console and the block layer under an
+      aggressive migration: they are sleeping locks and the two-core session
+      runs the full load for ten minutes, but no test migrates a task in the
+      middle of a filesystem operation
 * [ ] ESP32: the kernel tasks on both cores of the Pico, no driver assuming
       one core - not started (ADR 0018, the compatibility port)
 * [x] `KERNEL_SMP` (ADR 0010) and the host TSan run as the gate - the flag is
       off by default; `make test-smp`, `make test-tsan` and `make soak-host`
-      run two cores under TSan, and the plugin into `make ci` is `test-smp`
+      run two cores under TSan
 
 ## K9 - A userland (in progress)
 

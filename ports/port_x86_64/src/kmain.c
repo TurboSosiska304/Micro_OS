@@ -329,8 +329,21 @@ static void init_task(void *arg)
         kerror("x86-64: cannot start the shell");
     }
 
+    /*
+     * The init of the machine is also the parent of the last resort: a child
+     * whose parent died is reparented to pid 1 by the kernel, and this loop
+     * is what reaps it. A zombie that nobody waits for keeps its slot of the
+     * table of 32, and a console that forks programs in a loop (the soak of
+     * the port) would fill the table. The interval is a tenth of a second:
+     * the wait of a finite timeout costs nothing and the slot is back before
+     * a person or a test can see it.
+     */
     for (;;) {
-        k_sched_sleep_ms(PORT_IDLE_MS);
+        while (ksys_waitpid(-1, NULL, KSYS_WNOHANG) > 0) {
+            /* One orphan reaped; the next scan starts at once. */
+        }
+
+        k_sched_sleep_ms(100u);
     }
 }
 

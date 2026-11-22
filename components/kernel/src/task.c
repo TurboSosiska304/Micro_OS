@@ -513,6 +513,30 @@ void task_exit(int code)
         pid = self->pid;
         /* The parent learns of the end before the slot can be reaped. */
         task_signal_notify_parent(self);
+
+        /*
+         * The children of a task that ends are the children of init from
+         * here on (POSIX reparents them to the init process). Without it a
+         * child of a parent that was killed - Ctrl+C on a program that had
+         * forked - keeps a parent that no longer exists, nobody calls
+         * waitpid() for it, and its slot stays a zombie for the life of the
+         * machine: the table of 32 slots is a resource, and the soak of the
+         * two-core machine found the leak as a task that was 3000 pids old.
+         */
+        {
+            struct task *init = task_by_pid(1);
+
+            if (init != NULL && init != self) {
+                k_size_t i;
+
+                for (i = 0; i < TASK_MAX_TASKS; i++) {
+                    if (g_tasks[i].in_use && g_tasks[i].parent == self) {
+                        g_tasks[i].parent = init;
+                    }
+                }
+            }
+        }
+
         k_port_exit_critical();
 
         /*

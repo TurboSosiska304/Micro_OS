@@ -153,10 +153,10 @@ static void ready_move_to_tail(struct task *t)
  * The queue of a core holds the tasks that are ready to run there and, by the
  * design of the switch of this kernel, the task that is running there as well
  * (it leaves the queue when its quantum is over, when it sleeps or when it
- * blocks). A pick for the local core may therefore return a running task -
- * "the caller continues" - but a pick for another core must never do that:
- * a task that runs on a core is not a task to be stolen (ADR 0012). The
- * `with_running` flag is that difference.
+ * blocks). A pick may therefore return a running task - "the caller
+ * continues" - which is the `with_running` flag. The claim of a core looks at
+ * the queue of that core only, so a running task is never seen by another
+ * core (ADR 0012).
  */
 static struct task *queue_pick_for(k_u32_t cpu, bool with_running)
 {
@@ -610,8 +610,8 @@ struct task *k_sched_pick_next(void)
  * a sleep, a block, a yield and an exit all change the state before they
  * reach the port, and the port calls this only after them. A task that still
  * says RUNNING stays RUNNING (and stays in the queue of its core, which is
- * how this kernel has always marked the task on the CPU); it is not stolen
- * from this core because the pick of another core only takes a ready task.
+ * how this kernel has always marked the task on the CPU); no other core can
+ * take it, because the pick of a core looks at its own queue only.
  *
  * A task without a context cannot be switched to: it stays where it is and
  * NULL is returned, so that the port keeps the current task instead of
@@ -642,9 +642,9 @@ struct task *k_sched_claim_next(void)
     self = k_cpu_self();
 
     /*
-     * The two writes below are the claim. A task of another core is already
-     * in the queue of this one (pick_for_core_locked migrated it), so the
-     * mark and the assignment of the core are the whole of the record.
+     * The two writes below are the claim. The task was in the queue of this
+     * core - the only one the pick looked at - so the mark and the assignment
+     * of the core are the whole of the record.
      */
     if (next->state != TASK_STATE_RUNNING) {
         next->state = TASK_STATE_RUNNING;

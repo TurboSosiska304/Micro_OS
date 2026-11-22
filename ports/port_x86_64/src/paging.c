@@ -35,6 +35,8 @@
 
 #include <string.h>
 
+#include "kernel/port/lock.h"
+
 #define PAGE_SIZE 4096u
 #define PAGE_SHIFT 12u
 #define TABLE_ENTRIES 512u
@@ -177,11 +179,21 @@ static k_u8_t *pool_page(k_u8_t *page)
     return g_page_pool + (physical - pool_phys);
 }
 
+/*
+ * The pool of the page tables and the frames of the arena are one state of
+ * the machine, not one per core: two cores that fault at the same moment
+ * would take the same free page, and the two spaces would share the table or
+ * the data of each other. The sections are short, they never sleep, and they
+ * use the lock of the machine (the big kernel lock of the port), which is
+ * recursive and therefore safe from a fault that interrupted a section the
+ * same core already holds.
+ */
 static void *page_pool_alloc(void)
 {
-    k_u64_t flags = port_save_flags_and_cli();
     k_u32_t word;
     void *page = NULL;
+
+    k_port_enter_critical();
 
     for (word = 0; word < PAGE_POOL_WORDS && page == NULL; word++) {
         k_u32_t bit;
@@ -198,14 +210,18 @@ static void *page_pool_alloc(void)
 
                 g_page_bitmap[word] |= mask;
                 found = g_page_pool + ((k_size_t)word * 64u + bit) * PAGE_SIZE;
-                memset(found, 0, PAGE_SIZE);
                 page = found;
                 break;
             }
         }
     }
 
-    port_restore_flags(flags);
+    k_port_exit_critical();
+
+    if (page != NULL) {
+        memset(page, 0, PAGE_SIZE);
+    }
+
     return page;
 }
 
@@ -215,7 +231,6 @@ static void page_pool_free(void *page)
     k_size_t index;
     k_u32_t word;
     k_u32_t bit;
-    k_u64_t flags;
 
     if (base < g_page_pool || base >= g_page_pool + sizeof(g_page_pool)) {
         return;
@@ -225,9 +240,9 @@ static void page_pool_free(void *page)
     word = (k_u32_t)(index / 64u);
     bit = (k_u32_t)(index % 64u);
 
-    flags = port_save_flags_and_cli();
+    k_port_enter_critical();
     g_page_bitmap[word] &= ~((k_u64_t)1u << bit);
-    port_restore_flags(flags);
+    k_port_exit_critical();
 }
 
 /* --- the frames of the physical arena ------------------------------------- */
@@ -242,16 +257,22 @@ static void frame_ref(k_u64_t address)
     }
 
     index = (k_size_t)(address - PORT_X86_64_USER_PHYS) / PAGE_SIZE;
+
+    k_port_enter_critical();
+
     if (g_frame_ref[index] != 0xFFFFu) {
         g_frame_ref[index]++;
     }
+
+    k_port_exit_critical();
 }
 
 k_u64_t port_x86_64_frame_alloc(void)
 {
-    k_u64_t flags = port_save_flags_and_cli();
     k_size_t index;
     k_u64_t address = 0;
+
+    k_port_enter_critical();
 
     for (index = 0; index < USER_FRAME_COUNT; index++) {
         if (g_frame_ref[index] == 0) {
@@ -261,7 +282,7 @@ k_u64_t port_x86_64_frame_alloc(void)
         }
     }
 
-    port_restore_flags(flags);
+    k_port_exit_critical();
 
     if (address != 0) {
         /* A new page of a program reads as zeros, not as the stack of the
@@ -275,7 +296,6 @@ k_u64_t port_x86_64_frame_alloc(void)
 void port_x86_64_frame_release(k_u64_t address)
 {
     k_size_t index;
-    k_u64_t flags;
 
     if (address < PORT_X86_64_USER_PHYS ||
         address >= PORT_X86_64_USER_PHYS + USER_FRAME_COUNT * PAGE_SIZE) {
@@ -284,11 +304,13 @@ void port_x86_64_frame_release(k_u64_t address)
 
     index = (k_size_t)(address - PORT_X86_64_USER_PHYS) / PAGE_SIZE;
 
-    flags = port_save_flags_and_cli();
+    k_port_enter_critical();
+
     if (g_frame_ref[index] != 0) {
         g_frame_ref[index]--;
     }
-    port_restore_flags(flags);
+
+    k_port_exit_critical();
 }
 
 /* --- the tables of one address space -------------------------------------- */
