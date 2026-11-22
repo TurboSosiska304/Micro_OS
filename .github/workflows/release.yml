@@ -1,9 +1,9 @@
 # Micro OS — the release of a tag.
 #
 # A tag v* runs the tests, builds the firmware in the container of
-# ESP-IDF, checks the integrity of the repository against the version of
-# the tag (the tag says 0.2.0, the kernel must say 0.2.0 — the flag is
-# --expect-version) and makes a GitHub Release with the bundle: the
+# ESP-IDF, checks the integrity of the repository against the tag (the
+# numbers and the suffix: v1.2.0-rc1 needs a kernel of 1.2.0 with "-rc1",
+# the flag is --expect-tag) and makes a GitHub Release with the bundle: the
 # binaries, their sums and the flash script. A tag with a dash
 # (v0.2.0-pre) is a pre-release.
 
@@ -101,9 +101,7 @@ jobs:
         shell: bash
         run: |
           . /opt/esp/idf/export.sh >/dev/null
-          version="${GITHUB_REF_NAME#v}"
-          version="${version%%-*}"
-          python3 tools/integrity_check.py --verbose --expect-version "$version"
+          python3 tools/integrity_check.py --verbose --expect-tag "$GITHUB_REF_NAME"
 
       - name: the bundle as an artifact
         uses: actions/upload-artifact@v4

@@ -1927,7 +1927,14 @@ def check_features(root: str, report: Report) -> None:
             )
 
 
-def check_version(root: str, report: Report, expected: str) -> None:
+def split_tag(tag: str) -> tuple:
+    """The numbers and the suffix of a tag: `v1.2.0-rc1` -> ("1.2.0", "-rc1")."""
+    text = tag[1:] if tag.startswith("v") else tag
+    base, separator, rest = text.partition("-")
+    return base, ("-" + rest) if separator else ""
+
+
+def check_version(root: str, report: Report, expected: str, suffix: str | None = None) -> None:
     """The version of the kernel against the expected one (the tag)."""
     group = "version"
     path = os.path.join(root, "components", "kernel", "include", "kernel", "config.h")
@@ -1964,6 +1971,31 @@ def check_version(root: str, report: Report, expected: str) -> None:
         "" if version == expected else f"the kernel says {version}, expected {expected}",
     )
 
+    if suffix is None:
+        return
+
+    match = re.search(r'#define\s+KERNEL_VERSION_SUFFIX\s+"([^"]*)"', text)
+    if match is None:
+        report.add(
+            group,
+            "the suffix of the kernel is known",
+            False,
+            "KERNEL_VERSION_SUFFIX is not defined",
+        )
+        return
+
+    said = match.group(1)
+    wanted = suffix or ""
+    report.add(
+        group,
+        f"the suffix of the kernel is '{wanted}'" if wanted else "the kernel is not a pre-release",
+        said == wanted,
+        ""
+        if said == wanted
+        else f"the kernel says '{said}', the tag asks '{wanted}': a release_candidate carries "
+        "-rcN until the release commit drops it",
+    )
+
 
 # --- the entry point ---------------------------------------------------------
 
@@ -1981,6 +2013,12 @@ def main(argv: list) -> int:
         "--expect-version",
         metavar="X.Y.Z",
         help="the version the kernel must have (the version of the tag)",
+    )
+    parser.add_argument(
+        "--expect-tag",
+        metavar="TAG",
+        help="the tag of the release (vX.Y.Z or vX.Y.Z-suffix): the numbers and the suffix "
+        "of the kernel must be the tag's, so a release_candidate that forgot its -rcN is red",
     )
     parser.add_argument("--json", metavar="FILE", help="write the report as JSON")
     parser.add_argument("-v", "--verbose", action="store_true", help="print the passed checks too")
@@ -2009,6 +2047,9 @@ def main(argv: list) -> int:
     check_features(root, report)
     if args.expect_version:
         check_version(root, report, args.expect_version)
+    if args.expect_tag:
+        version, suffix = split_tag(args.expect_tag)
+        check_version(root, report, version, suffix)
     if not args.skip_git:
         check_git(root, report)
     check_sources(root, report, files)
