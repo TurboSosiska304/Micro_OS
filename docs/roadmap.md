@@ -353,3 +353,31 @@ The next steps that stay open are the ones of the machine and not of the
 format: a backlight with a duty cycle for `brightness`, an applier on the host
 when its screen file is a real screen, and a rewrite of a file that is atomic
 on a VFS without `rename` (see [debts.md](debts.md)).
+
+## K11 - The screen of x86-64 (1.2)
+
+> The port keeps the text mode of the firmware: 80 columns by 25 rows at
+> `0xB8000`, sixteen colours, no font and no picture. The next screen is a
+> linear framebuffer, not a GPU (ADR 0023); a 3D driver of a real card is
+> not promised, and UEFI GOP is the later door to a physical machine.
+
+* [ ] A linear framebuffer through Bochs VBE in QEMU: 1280x800, 16 bits per
+      pixel, RGB565 so `k_renderer` draws into it unchanged; the PCI device
+      is found over the configuration space the network port already reads,
+      and `paging.c` maps its window
+* [ ] The console of the screen: cells of the 5x7 font scaled twice (about
+      128 columns by 57 rows), the control characters, the cursor, the
+      scrolling and the two sequences of `clear`; the colours of
+      `/etc/console` (ADR 0021); the keyboard of IRQ1 unchanged
+* [ ] The text mode stays the fallback, improved once to 80x50 with the 8x8
+      font of the VGA; the port chooses the screen at the boot
+* [ ] `make x86-vga-smoke` reads the framebuffer with `screendump` (a
+      picture has no text memory for `pmemsave`) and checks cells and
+      colours; `make x86-run` opens it for a person
+* [ ] Later: a 2D surface for a program, and optionally virtio-gpu 2D in
+      QEMU; UEFI GOP for a real machine, which is a loader of its own
+
+The desktop is not a step of this list. A picture, a mouse and a compositor
+are the parts of one, and the compositor has to be a program of the system
+and not the kernel (see [releases/2.0.md](releases/2.0.md)); the first thing
+to build is the screen a program can draw on.
