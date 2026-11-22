@@ -381,3 +381,32 @@ The desktop is not a step of this list. A picture, a mouse and a compositor
 are the parts of one, and the compositor has to be a program of the system
 and not the kernel (see [releases/2.0.md](releases/2.0.md)); the first thing
 to build is the screen a program can draw on.
+
+## K12 - The stream and the installer (1.2, in parallel with K11)
+
+> The programs are a repository of their own (`microos-progs`); the machine
+> that installs one needs a stream, TLS and a signature (ADR 0024). The board
+> has no installer - its `progs` belongs to the firmware (ADR 0018) - so this
+> is the work of x86-64 and of the host substrate.
+
+* [ ] A streaming HTTP client: `Content-Length` and a chunked body, a
+      bounded number of redirects, a timeout, and a sink that is a
+      `struct vfs_file` or the inactive slot of an update; `wget URL FILE`
+      at the console and a `Range` resume for a file
+* [ ] mbedTLS on x86-64 with a freestanding platform layer: `kmm` for the
+      allocations, `RDRAND` for entropy (the timer as the fallback), NTP for
+      the clock and `/etc/ssl/certs.pem` through the VFS; the board keeps the
+      copy of ESP-IDF
+* [ ] The signed index and a signed `.mox`: `index.json` with the name, the
+      version, the machine, the ABI, the size and the digest; the verifier
+      reuses the Ed25519 of ADR 0020
+* [ ] `pkg update/install/remove/list/info` over `/var/pkg` and `/usr/bin`,
+      atomic through a new `vfs_rename` (MicroFS and FAT implement it; a
+      volume without it installs with a warning)
+* [ ] The repository `microos-progs`: CI builds a program per machine, signs
+      it and publishes the index with the artifacts; `make` in the kernel
+      tree keeps only the programs of the tests
+* [ ] Tests: the fake transport of `components/net` serves a chunked body, a
+      redirect and a dropped connection; the installer is tested on a
+      temporary volume with a bad signature, a wrong machine and a downgrade;
+      `make x86-net-smoke` fetches a file from a local server
