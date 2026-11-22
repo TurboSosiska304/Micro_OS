@@ -70,6 +70,10 @@ FIRST_BOOT = [
     "exec /bin/cat /etc/hello.lua",
     "exec /bin/lua -e print(2^10)",
     "exec /bin/lua /etc/hello.lua",
+    # The third port of somebody else's program: the script of awk is a file
+    # of the volume and the interpreter reads it through the VFS.
+    "exec /bin/awk -f /etc/hello.awk /etc/columns",
+    "exec /bin/awk -F: {s+=$3}END{print(s)} /etc/columns",
 ]
 
 SECOND_BOOT = [
@@ -86,6 +90,7 @@ SECOND_BOOT = [
     "exec /bin/wc -c /persist.gz.txt",
     "ls /etc/licenses",
     "exec /bin/lua /etc/hello.lua",
+    "exec /bin/awk -f /etc/hello.awk /etc/columns",
 ]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -285,6 +290,22 @@ def check(first: str, second: str) -> list:
         and "the program exited with 0" in first_answers[10],
         first_answers[10],
     )
+    # The third interpreter of the image: the script is a file of /etc, the
+    # data is another one, and the answer is the sum the script computes.
+    awk_script = first_answers[len(FIRST_BOOT) - 2]
+    expect(
+        "the awk script of /etc runs out of the volume",
+        "awk: hello from /etc/hello.awk" in awk_script
+        and "awk: 3 records, sum 1001, root 1" in awk_script
+        and "the program exited with 0" in awk_script,
+        awk_script,
+    )
+    awk_sum = first_answers[len(FIRST_BOOT) - 1]
+    expect(
+        "awk sums the column of a file of the volume",
+        re.search(r"(?m)^1001\r?$", awk_sum) is not None,
+        awk_sum,
+    )
 
     # --- the second boot: the same image, the same machine
     expect(
@@ -369,7 +390,8 @@ def check(first: str, second: str) -> list:
     )
     expect(
         "the licenses of the ported programs survived the reset",
-        "lua" in second_answers[11] and "zlib" in second_answers[11],
+        "lua" in second_answers[11] and "zlib" in second_answers[11]
+        and "awk" in second_answers[11],
         second_answers[11],
     )
     expect(
@@ -377,6 +399,17 @@ def check(first: str, second: str) -> list:
         "lua: hello from /etc/hello.lua" in second_answers[12]
         and "lua: read\ta line written by lua" in second_answers[12],
         second_answers[12],
+    )
+    # The script of awk is a file the tool wrote into the volume, and the
+    # interpreter reads it after a reset of the machine: the mount, the
+    # record and the VFS are the ones of the first boot.
+    awk_script = second_answers[len(SECOND_BOOT) - 1]
+    expect(
+        "awk reads its script after the reset",
+        "awk: hello from /etc/hello.awk" in awk_script
+        and "awk: 3 records, sum 1001, root 1" in awk_script
+        and "the program exited with 0" in awk_script,
+        awk_script,
     )
 
     return checks

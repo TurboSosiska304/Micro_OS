@@ -161,6 +161,45 @@ COMMANDS = [
     "exec /bin/lua /etc/hello.lua",
     "exec /bin/lua /etc/no-such.lua",
     "exec /bin/cat /etc/hello.lua",
+    # The third port of a program of somebody else (awk): the interpreter is
+    # a file of /bin, its data and its script are files of /etc, and every
+    # line below is a script the shell passed as words. The shell has no
+    # quotes, so a program with a space in it is a word of its own - the
+    # scripts of the machine are files, and the inline ones are written
+    # without a space.
+    "exec /bin/awk BEGIN{printf\"%.2f\\n\",1/3}",
+    "exec /bin/awk -F: {print$1} /etc/columns",
+    "exec /bin/awk -F: {s+=$3}END{print(s)} /etc/columns",
+    "exec /bin/awk -v OFS=, -F: {print$1,$2} /etc/columns",
+    "exec /bin/awk -f /etc/hello.awk /etc/columns",
+    "exec /bin/awk {gsub(/o/,\"0\");print} /etc/setting",
+    "exec /bin/awk BEGIN{while((getline<\"/etc/setting\")>0)n++;print(n)}",
+    "exec /bin/awk BEGIN{printf\"%5.2f|%d|%s\\n\",3.14159,42,\"s\"}",
+    "exec /bin/awk BEGIN{printf\"%*.*f|%i|%e\\n\",8,2,3.14159,42,1234.5}",
+    "exec /bin/awk BEGIN{printf\"%c%c|%x|%o\\n\",65,66,255,8}",
+    "exec /bin/awk -v x=42 BEGIN{print(x+1)}",
+    "exec /bin/awk BEGIN{print(ENVIRON[\"PATH\"])}",
+    "exec /bin/awk BEGIN{n=split(\"a:b:c\",p,\":\");print(n,p[2])}",
+    "exec /bin/awk BEGIN{print(substr(\"hello\",2,3),index(\"hello\",\"ll\"),length(\"hello\"))}",
+    "exec /bin/awk BEGIN{print(toupper(\"abc\"),tolower(\"DEF\"))}",
+    "exec /bin/awk BEGIN{print(sqrt(2),exp(1),log(10),sin(0),cos(0),atan2(1,1))}",
+    "exec /bin/awk BEGIN{printf\"%.3f\\n\",sqrt(2)}",
+    "exec /bin/awk BEGIN{printf\"%f|%g|%.2e\\n\",1/3,1/3,1/3}",
+    "exec /bin/awk BEGIN{s=sprintf(\"%.2f\",1/3);print(s)}",
+    # The numeric string of a field: the third column of the data is 0, 1
+    # and 1000, and a field compares as a number against the number 9.
+    "exec /bin/awk -F: {print($3>9)} /etc/columns",
+    "exec /bin/awk BEGIN{srand(1);r=rand();print(r>=0&&r<1)}",
+    # The status of a script that ends with `exit N` comes back to the shell.
+    "exec /bin/awk BEGIN{exit(3)}",
+    # The two calls of a shell: this machine has none, and the interpreter
+    # says so on the error descriptor instead of pretending the line ran.
+    "exec /bin/awk BEGIN{print(system(\"true\"))}",
+    "exec /bin/awk BEGIN{print(\"echo\"|getline)}",
+    "exec /bin/awk -f /etc/no-such.awk",
+    # The same script with no file: the interpreter reads descriptor 0, which
+    # the shell does not open at the prompt yet, so awk reports a read error.
+    "exec /bin/awk {print}",
     "echo hi > /tmp/f",
     "cat /tmp/f",
     "cat < /tmp/f",
@@ -998,6 +1037,7 @@ def check(output: str) -> list:
                 "spawn",
                 "zcat",
                 "lua",
+                "awk",
             )
         ),
         bin_listing[-200:],
@@ -1282,7 +1322,11 @@ def check(output: str) -> list:
         piped,
     )
     licenses = answer("exec /bin/ls /etc/licenses")
-    expect("the license of zlib travels with the image", "zlib" in licenses, licenses)
+    expect(
+        "the licenses of the ports travel with the image",
+        "zlib" in licenses and "lua" in licenses and "awk" in licenses,
+        licenses,
+    )
 
     # --- the second port of somebody else's program: Lua and /bin/lua
     # The script and the license are files of the image, the interpreter is a
@@ -1343,6 +1387,169 @@ def check(output: str) -> list:
         "a script that is not there is the sentence of the interpreter",
         "cannot open /etc/no-such.lua" in lua_missing and "exited with 1" in lua_missing,
         lua_missing,
+    )
+
+    # --- the third port of somebody else's program: awk and /bin/awk
+    # The interpreter is a file of the image and its data and script are files
+    # of /etc. The formatter, the fields and the arithmetic are the ones of
+    # the library of the guest: a number with three places, a sum of a column,
+    # and the OFS of a print.
+    awk_format = answer('exec /bin/awk BEGIN{printf"%.2f\\n",1/3}')
+    expect(
+        "awk prints three places of a fraction",
+        "0.33" in awk_format and "the program exited with 0" in awk_format,
+        awk_format,
+    )
+    awk_fields = answer("exec /bin/awk -F: {print$1} /etc/columns")
+    expect(
+        "awk splits a record into fields",
+        re.search(r"(?m)^root\r?$\n^bin\r?$\n^nik\r?$", awk_fields) is not None,
+        awk_fields,
+    )
+    awk_sum = answer("exec /bin/awk -F: {s+=$3}END{print(s)} /etc/columns")
+    expect(
+        "awk sums a column of the data",
+        re.search(r"(?m)^1001\r?$", awk_sum) is not None,
+        awk_sum,
+    )
+    awk_ofs = answer("exec /bin/awk -v OFS=, -F: {print$1,$2} /etc/columns")
+    expect(
+        "awk joins two fields with OFS",
+        re.search(r"(?m)^root,0\r?$", awk_ofs) is not None,
+        awk_ofs,
+    )
+    # The script of the machine is a file of the image: `-f` reads it through
+    # the VFS, BEGIN and END run, and the recount of the file is the answer.
+    awk_script = answer("exec /bin/awk -f /etc/hello.awk /etc/columns")
+    expect(
+        "awk runs the script of /etc",
+        "awk: hello from /etc/hello.awk" in awk_script
+        and "awk: 3 records, sum 1001, root 1" in awk_script
+        and "the program exited with 0" in awk_script,
+        awk_script,
+    )
+    awk_gsub = answer('exec /bin/awk {gsub(/o/,"0");print} /etc/setting')
+    expect(
+        "awk substitutes every match of a pattern",
+        "hell0" in awk_gsub and "h0stname=x86_64" in awk_gsub and "c0ns0le=vga" in awk_gsub,
+        awk_gsub,
+    )
+    awk_getline = answer('exec /bin/awk BEGIN{while((getline<"/etc/setting")>0)n++;print(n)}')
+    expect(
+        "awk reads a file with getline",
+        re.search(r"(?m)^3\r?$", awk_getline) is not None,
+        awk_getline,
+    )
+    awk_width = answer('exec /bin/awk BEGIN{printf"%5.2f|%d|%s\\n",3.14159,42,"s"}')
+    expect(
+        "awk honours the width and the precision of a conversion",
+        " 3.14|42|s" in awk_width,
+        awk_width,
+    )
+    awk_star = answer('exec /bin/awk BEGIN{printf"%*.*f|%i|%e\\n",8,2,3.14159,42,1234.5}')
+    expect(
+        "awk takes the width and the precision from the arguments",
+        "    3.14|42|1.234500e+03" in awk_star,
+        awk_star,
+    )
+    awk_char = answer('exec /bin/awk BEGIN{printf"%c%c|%x|%o\\n",65,66,255,8}')
+    expect(
+        "awk prints a character, a hexadecimal and an octal",
+        "AB|ff|10" in awk_char,
+        awk_char,
+    )
+    awk_v = answer("exec /bin/awk -v x=42 BEGIN{print(x+1)}")
+    expect("awk sets a variable with -v", re.search(r"(?m)^43\r?$", awk_v) is not None, awk_v)
+    # The environment of the kernel reaches ENVIRON, which is the vector of
+    # the call and not a copy of the shell.
+    awk_env = answer('exec /bin/awk BEGIN{print(ENVIRON["PATH"])}')
+    expect("awk reads the environment of the machine", re.search(r"(?m)^/bin\r?$", awk_env) is not None, awk_env)
+    awk_split = answer('exec /bin/awk BEGIN{n=split("a:b:c",p,":");print(n,p[2])}')
+    expect("awk splits a string into an array", re.search(r"(?m)^3 b\r?$", awk_split) is not None, awk_split)
+    awk_strings = answer(
+        'exec /bin/awk BEGIN{print(substr("hello",2,3),index("hello","ll"),length("hello"))}'
+    )
+    expect(
+        "awk takes a substring, an index and a length",
+        re.search(r"(?m)^ell 3 5\r?$", awk_strings) is not None,
+        awk_strings,
+    )
+    awk_case = answer('exec /bin/awk BEGIN{print(toupper("abc"),tolower("DEF"))}')
+    expect(
+        "awk folds the case of a string",
+        re.search(r"(?m)^ABC def\r?$", awk_case) is not None,
+        awk_case,
+    )
+    # The arithmetic of the library of the guest: the x87 unit of the program,
+    # and the formatter with six places of %g and three of %.3f.
+    awk_math = answer(
+        "exec /bin/awk BEGIN{print(sqrt(2),exp(1),log(10),sin(0),cos(0),atan2(1,1))}"
+    )
+    expect(
+        "awk computes a root, an exponential, a logarithm and an angle",
+        "1.41421 2.71828 2.30259 0 1 0.785398" in awk_math,
+        awk_math,
+    )
+    awk_root = answer('exec /bin/awk BEGIN{printf"%.3f\\n",sqrt(2)}')
+    expect("awk prints three places of a root", "1.414" in awk_root, awk_root)
+    awk_floats = answer('exec /bin/awk BEGIN{printf"%f|%g|%.2e\\n",1/3,1/3,1/3}')
+    expect(
+        "awk prints a double as %f, %g and %e",
+        "0.333333|0.333333|3.33e-01" in awk_floats,
+        awk_floats,
+    )
+    awk_sprintf = answer('exec /bin/awk BEGIN{s=sprintf("%.2f",1/3);print(s)}')
+    expect("awk builds a string with sprintf", "0.33" in awk_sprintf, awk_sprintf)
+    # A field is a numeric string: the numbers of the third column compare as
+    # numbers (0, 0, 1 against 9), which a string compare of "1000" and "9"
+    # would answer the other way for the third line.
+    awk_numeric = answer("exec /bin/awk -F: {print($3>9)} /etc/columns")
+    expect(
+        "a field compares as a number when the other side is one",
+        re.findall(r"(?m)^([01])\r?$", awk_numeric) == ["0", "0", "1"],
+        awk_numeric,
+    )
+    awk_rand = answer("exec /bin/awk BEGIN{srand(1);r=rand();print(r>=0&&r<1)}")
+    expect(
+        "awk rand answers a number below one",
+        re.search(r"(?m)^1\r?$", awk_rand) is not None,
+        awk_rand,
+    )
+    awk_exit = answer("exec /bin/awk BEGIN{exit(3)}")
+    expect(
+        "the status of an awk script is the status of its exit",
+        "the program exited with 3" in awk_exit,
+        awk_exit,
+    )
+    # The honest refusal of the two calls of a shell: the sentence is on the
+    # error descriptor and the value of the call is -1, which is the failure
+    # POSIX gives a command that cannot run. The program itself ends with 0.
+    awk_system = answer('exec /bin/awk BEGIN{print(system("true"))}')
+    expect(
+        "awk system refuses with a sentence and -1",
+        "awk: system: this machine has no shell" in awk_system
+        and re.search(r"(?m)^-1\r?$", awk_system) is not None
+        and "the program exited with 0" in awk_system,
+        awk_system,
+    )
+    awk_pipe = answer('exec /bin/awk BEGIN{print("echo"|getline)}')
+    expect(
+        "awk cmd | getline refuses with a sentence and -1",
+        "awk: popen: this machine has no shell and no second process" in awk_pipe
+        and re.search(r"(?m)^-1\r?$", awk_pipe) is not None,
+        awk_pipe,
+    )
+    awk_missing = answer("exec /bin/awk -f /etc/no-such.awk")
+    expect(
+        "a script that is not there is the sentence of the interpreter",
+        "can't open file /etc/no-such.awk" in awk_missing and "exited with 2" in awk_missing,
+        awk_missing,
+    )
+    awk_stdin = answer("exec /bin/awk {print}")
+    expect(
+        "awk without a file reads descriptor 0 and reports the failure",
+        "i/o error occurred on /dev/stdin" in awk_stdin,
+        awk_stdin,
     )
 
     # A program starts another program with an environment of its own. The
@@ -1596,7 +1803,12 @@ def main(argv: list) -> int:
         default=os.path.join(ROOT, "build-x86-open"),
         help="the build with MICRO_OS_REQUIRE_SIGNATURE=OFF",
     )
-    parser.add_argument("--timeout", type=float, default=30.0, help="the seconds the machine gets")
+    # A command takes about a third of a second on this machine: the shell
+    # reads the console, starts a program and waits for it. The line is the
+    # time of the whole transcript, and the list of commands has grown with
+    # every ported program; 60 seconds is a hundred and fifty commands with
+    # room for a slow boot.
+    parser.add_argument("--timeout", type=float, default=60.0, help="the seconds the machine gets")
     parser.add_argument("--verbose", action="store_true", help="print the console of the machine")
     args = parser.parse_args(argv)
 

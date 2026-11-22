@@ -227,6 +227,9 @@ if [ -f "$X86_BUILD/loader32.elf" ] && [ -f "$X86_BUILD/microos64.bin" ]; then
     cp -f "$ROOT/third_party/zlib/LICENSE" "$STAGE/LICENSE.zlib"
     # Lua is /bin/lua of the same image, under the MIT license of its release.
     cp -f "$ROOT/third_party/lua/LICENSE" "$STAGE/LICENSE.lua"
+    # awk is /bin/awk of the same image, under the Lucent permissive license
+    # of the One True Awk.
+    cp -f "$ROOT/third_party/awk/LICENSE" "$STAGE/LICENSE.awk"
     if [ -f "$X86_BUILD/microos64.sig" ] && [ -f "$X86_BUILD/signing.pub" ]; then
         cp -f "$X86_BUILD/microos64.sig" "$STAGE/microos64.sig"
         cp -f "$X86_BUILD/signing.pub" "$STAGE/microos-sign.pub"
@@ -268,10 +271,14 @@ the note and the original BDF.
 note, the version and the port layer.
 
 `/bin/lua` of the disk image is Lua 5.4.7 (MIT license); `LICENSE.lua` is its
-license and `third_party/lua` of the sources has the note, the version, the
-port layer and the one setting of the port (`port/luaconf_port.h`). The
-interpreter of this release does not run yet: its image is past the block the
-kernel reads in one call (`docs/debts.md`).
+license and `third_party/lua` of the sources has the note, the version and the
+port layer (`port/luaconf_port.h`).
+
+`/bin/awk` of the disk image is the One True Awk (20240728, the Lucent
+permissive license); `LICENSE.awk` is its license and `third_party/awk` of the
+sources has the note, the version, the generated parser and the port layer
+(`port/awk_port.h`, `port/awk_os.c`). It has no shell: `system` and a pipe
+answer a sentence and the failure of the call (`docs/debts.md`).
 
 The kernel carries a signature trailer (ADR 0020), and the loader verifies it
 before it copies a byte: an image with a changed byte, without a trailer or
@@ -286,7 +293,7 @@ kernel with a port per machine.
 DOC
 
     STAGE_FILES=(loader32.elf microos64.bin run.sh README.md LICENSE.spleen LICENSE.zlib
-        LICENSE.lua)
+        LICENSE.lua LICENSE.awk)
     if [ -f "$STAGE/microos64.sig" ]; then
         STAGE_FILES+=(microos64.sig microos-sign.pub)
     fi

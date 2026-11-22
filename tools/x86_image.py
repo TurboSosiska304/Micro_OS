@@ -48,6 +48,7 @@ PROGRAMS = [
     "nx",
     "zcat",
     "lua",
+    "awk",
 ]
 
 # The stream of the test of zlib: a fixed text, a fixed moment and the level
@@ -87,6 +88,18 @@ print("lua: os.time", os.time() >= 0)
 print("lua: string", ("abc"):upper(), string.rep("x", 3))
 """
 
+# The data of the awk tests: three records of the kind a colon-separated
+# file of a Unix-like system holds, and the first script of the interpreter.
+# They are fixtures of the machine (the image tool writes the same bytes on
+# every run), so the smoke test knows the answer of a sum and of a field.
+COLUMNS = "root:0:0\nbin:1:1\nnik:1000:1000"
+
+HELLO_AWK = """# /etc/hello.awk: the first awk script of the machine
+BEGIN { FS = ":"; seen["root"] = 1; print "awk: hello from /etc/hello.awk" }
+{ count++; sum += $3; if ($1 in seen) roots++ }
+END { printf "awk: %d records, sum %d, root %d\\n", count, sum, roots }
+"""
+
 IMAGE_MB = 8
 START_LBA = 2048
 # The moment of the records when SOURCE_DATE_EPOCH does not say another one.
@@ -99,6 +112,7 @@ DEFAULT_BUILD = os.path.join(ROOT, "build-x86")
 DEFAULT_MKFS = os.path.join(ROOT, "build-host", "tools", "microos_mkfs")
 ZLIB_LICENSE = os.path.join(ROOT, "third_party", "zlib", "LICENSE")
 LUA_LICENSE = os.path.join(ROOT, "third_party", "lua", "LICENSE")
+AWK_LICENSE = os.path.join(ROOT, "third_party", "awk", "LICENSE")
 
 
 def write_hello_lua(build_dir: str) -> str:
@@ -109,6 +123,20 @@ def write_hello_lua(build_dir: str) -> str:
         file.write(HELLO_LUA)
 
     return path
+
+
+def write_awk_fixtures(build_dir: str) -> tuple:
+    """Write the data and the script of the awk tests, the same bytes every run."""
+    columns = os.path.join(build_dir, "columns")
+    script = os.path.join(build_dir, "hello.awk")
+
+    with open(columns, "w", encoding="utf-8", newline="\n") as file:
+        file.write(COLUMNS + "\n")
+
+    with open(script, "w", encoding="utf-8", newline="\n") as file:
+        file.write(HELLO_AWK)
+
+    return columns, script
 
 
 def write_greeting(build_dir: str, epoch: int) -> str:
@@ -190,6 +218,9 @@ def build_image(
     if not os.path.isfile(LUA_LICENSE):
         print(f"missing {LUA_LICENSE}", file=sys.stderr)
         return 2
+    if not os.path.isfile(AWK_LICENSE):
+        print(f"missing {AWK_LICENSE}", file=sys.stderr)
+        return 2
 
     # The fixture of zcat and the license that travels with its bytes. The
     # program is part of the image, so the image carries the notice of the
@@ -205,6 +236,14 @@ def build_image(
     script = write_hello_lua(build_dir)
     command += ["--file", f"/etc/hello.lua={script}"]
     command += ["--file", f"/etc/licenses/lua={LUA_LICENSE}"]
+
+    # The third ported program: the data, the script and the license of awk
+    # are files of the volume, and the interpreter reads them through the VFS
+    # like any other file of the machine.
+    columns, awk_script = write_awk_fixtures(build_dir)
+    command += ["--file", f"/etc/columns={columns}"]
+    command += ["--file", f"/etc/hello.awk={awk_script}"]
+    command += ["--file", f"/etc/licenses/awk={AWK_LICENSE}"]
 
     command += ["--text", f"/etc/setting={SETTING}"]
     command += extra or []
