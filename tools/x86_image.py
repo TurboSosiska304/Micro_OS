@@ -21,6 +21,8 @@ the images of a program is missing, and 1 when the tool failed.
 from __future__ import annotations
 
 import argparse
+import gzip
+import io
 import os
 import subprocess
 import sys
@@ -44,7 +46,18 @@ PROGRAMS = [
     "pwd",
     "spawn",
     "nx",
+    "zcat",
 ]
+
+# The stream of the test of zlib: a fixed text, a fixed moment and the level
+# of compression of the tool. The smoke test compares the bytes `zcat` writes
+# with this text, so the file is a fixture of the machine and not a sample
+# that changes with the build of the day.
+GREETING = (
+    b"Micro OS: the first port of a program\n"
+    b"zlib 1.3.1, MicroFS and ring 3\n"
+    b"the bytes of this file were inflated by the library of the guest\n"
+)
 
 # The one file of /etc the smoke test reads. The tool writes the text and a
 # newline; the first line is the word `cat`, `grep` and `wc` expect, the two
@@ -62,6 +75,33 @@ SOURCE_DATE_EPOCH = 0
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_BUILD = os.path.join(ROOT, "build-x86")
 DEFAULT_MKFS = os.path.join(ROOT, "build-host", "tools", "microos_mkfs")
+ZLIB_LICENSE = os.path.join(ROOT, "third_party", "zlib", "LICENSE")
+
+
+def write_greeting(build_dir: str, epoch: int) -> str:
+    """Write the .gz of the fixture, the same bytes for the same inputs.
+
+    The mtime of the gzip header is SOURCE_DATE_EPOCH, the name of the stream
+    is empty (a name would be a fact of the host path), and the level is the
+    one of the library. Two runs of the image tool then write the same file,
+    which is what `make reproducible` compares.
+    """
+    path = os.path.join(build_dir, "greeting.gz")
+    buffer = io.BytesIO()
+
+    with gzip.GzipFile(
+        filename="",
+        mode="wb",
+        fileobj=buffer,
+        mtime=epoch,
+        compresslevel=9,
+    ) as stream:
+        stream.write(GREETING)
+
+    with open(path, "wb") as file:
+        file.write(buffer.getvalue())
+
+    return path
 
 
 def build_image(
@@ -100,6 +140,8 @@ def build_image(
         "/etc",
         "--dir",
         "/etc/init.d",
+        "--dir",
+        "/etc/licenses",
     ]
 
     for name in PROGRAMS:
@@ -108,6 +150,18 @@ def build_image(
             print(f"missing {path}: run make x86-build", file=sys.stderr)
             return 2
         command += ["--program", f"/bin/{name}={path}"]
+
+    if not os.path.isfile(ZLIB_LICENSE):
+        print(f"missing {ZLIB_LICENSE}", file=sys.stderr)
+        return 2
+
+    # The fixture of zcat and the license that travels with its bytes. The
+    # program is part of the image, so the image carries the notice of the
+    # library it was linked against; a package that ships zcat copies the same
+    # text beside the program.
+    greeting = write_greeting(build_dir, epoch)
+    command += ["--file", f"/etc/greeting.gz={greeting}"]
+    command += ["--file", f"/etc/licenses/zlib={ZLIB_LICENSE}"]
 
     command += ["--text", f"/etc/setting={SETTING}"]
     command += extra or []

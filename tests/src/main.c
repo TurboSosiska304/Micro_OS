@@ -75,6 +75,7 @@ static void run_tests(void *arg)
 #endif
     test_sign();
     test_progs();
+    test_zlib();
 
     g_result = ktest_summary();
     atomic_store_explicit(&g_done, true, memory_order_release);

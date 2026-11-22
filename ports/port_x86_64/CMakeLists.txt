@@ -269,27 +269,36 @@ set(MKPROG "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/mkprog.sh")
 # program has no such address, only `int $0x80`. Every program that uses it
 # carries its own copy, which is what "statically linked" means here.
 set(LIBC_USER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/libc/user")
-set(LIBC_USER_SOURCES
-    "${LIBC_USER_DIR}/src/start.c"
-    "${LIBC_USER_DIR}/src/syscall.c"
-    "${LIBC_USER_DIR}/src/stdio.c"
-    "${LIBC_USER_DIR}/src/string.c"
-)
 
-# The flags of a program: no libc, no PIC and no SSE, the same shape as the
-# kernel's (see add_compile_options above). The include path carries the
+# The flags of a guest object: no libc, no PIC and no SSE, the same shape as
+# the kernel's (see add_compile_options above). The include path carries the
 # headers of the kernel (the numbers of the calls) and the library.
 #
 # The string literals are not merged into one section: binutils 2.47 trips an
 # assertion of its merge of sections on the .rodata of a program with many
 # strings and a pointer of a handler in its data, and one shared copy of a few
 # bytes buys nothing here.
-set(PROGRAM_CFLAGS
-    -c -O2 -ffreestanding -fno-stack-protector
+set(USERLAND_CFLAGS
+    -O2 -ffreestanding -fno-stack-protector
     -fno-pic -fno-pie -mno-red-zone -mgeneral-regs-only -march=x86-64
     -fno-asynchronous-unwind-tables -fno-merge-constants -Wall -Wextra -Werror
+)
+set(PROGRAM_CFLAGS -c ${USERLAND_CFLAGS}
     -I "${KERNEL_DIR}/include" -I "${PROGRAM_DIR}" -I "${LIBC_USER_DIR}/include"
 )
+
+# The recipe of a program and of a ported library: the runtime, the window,
+# the image of the format and a static archive of the guest. It lives in
+# cmake/userland.cmake so that the next port (Lua, sbase, SQLite) is a copy
+# of one call and not a copy of this file.
+set(MICROOS_USERLAND_CFLAGS "${USERLAND_CFLAGS}")
+set(MICROOS_PROGRAM_CFLAGS "${PROGRAM_CFLAGS}")
+set(MICROOS_KERNEL_INCLUDE "${KERNEL_DIR}/include")
+set(MICROOS_LIBC_USER_DIR "${LIBC_USER_DIR}")
+set(MICROOS_PROGRAM_DIR "${PROGRAM_DIR}")
+set(MICROOS_PROGRAM_BASE "${PROGRAM_BASE}")
+set(MICROOS_MKPROG "${MKPROG}")
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/userland.cmake")
 
 # Every program of the port is built the same way: compile the C file for the
 # window, link it with the script of the format, and turn the sections into a
@@ -297,7 +306,6 @@ set(PROGRAM_CFLAGS
 # into the MicroFS volume of the disk: the kernel has no blob of a program in
 # it any more. The name of the function is the name of the file in /bin and
 # the symbol of the entry is given here.
-set(PROGRAM_IMAGES)
 function(add_program_image name entry)
     set(image "${CMAKE_BINARY_DIR}/${name}.mox")
 
@@ -317,7 +325,7 @@ function(add_program_image name entry)
         VERBATIM
     )
 
-    set(PROGRAM_IMAGES ${PROGRAM_IMAGES} "${image}" PARENT_SCOPE)
+    set(MICROOS_PROGRAM_IMAGES ${MICROOS_PROGRAM_IMAGES} "${image}" PARENT_SCOPE)
 endfunction()
 
 add_program_image(hello hello_main)
@@ -330,44 +338,59 @@ add_program_image(nx nx_main)
 # A program that uses the library of a program: the runtime sources are
 # compiled for the window together with the file of the program, linked with
 # the same script, and the entry is `_start` of the library - main() is a
-# function of the program, not the place the port enters (ADR 0016).
+# function of the program, not the place the port enters (ADR 0016). The
+# steps are in cmake/userland.cmake; this wrapper keeps the calls of the tree
+# one word long.
 function(add_libc_program name)
-    set(image "${CMAKE_BINARY_DIR}/${name}.mox")
-    set(objects
-        "${name}_start.o"
-        "${name}_syscall.o"
-        "${name}_stdio.o"
-        "${name}_string.o"
-        "${name}.o"
-    )
-
-    add_custom_command(
-        OUTPUT "${image}"
-        COMMAND ${CMAKE_C_COMPILER} ${PROGRAM_CFLAGS}
-                -o ${name}_start.o "${LIBC_USER_DIR}/src/start.c"
-        COMMAND ${CMAKE_C_COMPILER} ${PROGRAM_CFLAGS}
-                -o ${name}_syscall.o "${LIBC_USER_DIR}/src/syscall.c"
-        COMMAND ${CMAKE_C_COMPILER} ${PROGRAM_CFLAGS}
-                -o ${name}_stdio.o "${LIBC_USER_DIR}/src/stdio.c"
-        COMMAND ${CMAKE_C_COMPILER} ${PROGRAM_CFLAGS}
-                -o ${name}_string.o "${LIBC_USER_DIR}/src/string.c"
-        COMMAND ${CMAKE_C_COMPILER} ${PROGRAM_CFLAGS}
-                -o ${name}.o "${PROGRAM_DIR}/${name}.c"
-        COMMAND ${CMAKE_C_COMPILER} -nostdlib -static -no-pie -Wl,--build-id=none
-                -Wl,-e,_start
-                -T "${PROGRAM_DIR}/program.ld" -o ${name}.elf ${objects}
-        COMMAND sh "${MKPROG}" --base ${PROGRAM_BASE} --arch x86-64
-                ${name}.elf ${name}.mox _start
-        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-        DEPENDS "${PROGRAM_DIR}/${name}.c" "${PROGRAM_DIR}/program.ld"
-                "${KERNEL_DIR}/include/kernel/ksys.h" "${MKPROG}"
-                ${LIBC_USER_SOURCES} "${LIBC_USER_DIR}/include/ulibc.h"
-        COMMENT "building the image of /bin/${name} with the library of a program"
-        VERBATIM
-    )
-
-    set(PROGRAM_IMAGES ${PROGRAM_IMAGES} "${image}" PARENT_SCOPE)
+    microos_add_userland_program(${name} ${ARGN})
+    set(MICROOS_PROGRAM_IMAGES ${MICROOS_PROGRAM_IMAGES} PARENT_SCOPE)
 endfunction()
+
+# --- zlib: the first program of somebody else -------------------------------
+#
+# The library is built by the compiler of the guest with the flags of the
+# guest and the port layer of `third_party/zlib/port` (the configuration of
+# zconf and the two allocation hooks). It is a static archive: `zcat` links
+# the objects it uses, and no symbol of the host libc enters the image.
+set(ZLIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/zlib")
+set(ZLIB_SOURCES
+    "${ZLIB_DIR}/adler32.c"
+    "${ZLIB_DIR}/compress.c"
+    "${ZLIB_DIR}/crc32.c"
+    "${ZLIB_DIR}/deflate.c"
+    "${ZLIB_DIR}/gzclose.c"
+    "${ZLIB_DIR}/gzlib.c"
+    "${ZLIB_DIR}/gzread.c"
+    "${ZLIB_DIR}/gzwrite.c"
+    "${ZLIB_DIR}/infback.c"
+    "${ZLIB_DIR}/inffast.c"
+    "${ZLIB_DIR}/inflate.c"
+    "${ZLIB_DIR}/inftrees.c"
+    "${ZLIB_DIR}/trees.c"
+    "${ZLIB_DIR}/uncompr.c"
+    "${ZLIB_DIR}/zutil.c"
+    "${ZLIB_DIR}/port/zlib_os.c"
+)
+
+microos_userland_library(microos_user_zlib
+    SOURCES ${ZLIB_SOURCES}
+    INCLUDES "${ZLIB_DIR}" "${ZLIB_DIR}/port"
+    DEFINES MY_ZCALLOC HAVE_UNISTD_H HAVE_STDARG_H
+    # The library is upstream C and is compiled with the warnings of this
+    # tree: the one it has is the one every zlib build answers, and the
+    # exception stays here rather than in the vendored source.
+    COMPILE_OPTIONS "-include" "${ZLIB_DIR}/port/zconf.h" -Wno-sign-compare -Os
+)
+
+# The two wrappers of the port are the only file of the library that calls
+# the real read and write: the force-included zconf.h renames them for every
+# other source.
+set_source_files_properties("${ZLIB_DIR}/port/zlib_os.c"
+    PROPERTIES COMPILE_DEFINITIONS ZLIB_OS_NO_RENAME=1)
+# A force-included header is not in the compiler's list of includes: without
+# this a change to the configuration of the port would not rebuild a source.
+set_source_files_properties(${ZLIB_SOURCES}
+    PROPERTIES OBJECT_DEPENDS "${ZLIB_DIR}/port/zconf.h")
 
 add_libc_program(cat)
 add_libc_program(echo)
@@ -379,6 +402,23 @@ add_libc_program(pwd)
 add_libc_program(rm)
 add_libc_program(spawn)
 add_libc_program(wc)
+
+# The first program of somebody else: zcat opens a .gz of the VFS through
+# zlib's gz* layer, inflates it and writes the bytes to the console or a
+# file. The heap of the program is 512 KiB because the state of an inflate
+# stream is a 32 KiB window and the buffers of gz are two blocks of 8 and 16
+# KiB; the arena is the bss of the image, inside the window of the port.
+add_libc_program(zcat
+    LIBRARIES microos_user_zlib
+    INCLUDES "${ZLIB_DIR}"
+    DEFINES ULIBC_HEAP_SIZE=524288u
+    SOURCES "${LIBC_USER_DIR}/src/malloc.c"
+            "${LIBC_USER_DIR}/src/file.c"
+    # The image of a program is read whole by the kernel in a block of
+    # KSYS_MAX_IO (64 KiB): the text and the data of zcat and its library have
+    # to fit that, and -Os is the size of zlib that does.
+    COMPILE_OPTIONS -Os
+)
 
 add_executable(microos64
     ${KERNEL_SOURCES}
@@ -619,6 +659,6 @@ add_custom_command(
 
 add_custom_target(image
     DEPENDS "${CMAKE_BINARY_DIR}/microos64.bin" "${CMAKE_BINARY_DIR}/loader32.elf"
-            ${PROGRAM_IMAGES}
+            ${MICROOS_PROGRAM_IMAGES}
     COMMENT "the image of the port: loader32.elf + microos64.bin + the programs of /bin"
 )

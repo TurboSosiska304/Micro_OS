@@ -222,6 +222,9 @@ if [ -f "$X86_BUILD/loader32.elf" ] && [ -f "$X86_BUILD/microos64.bin" ]; then
     cp -f "$X86_BUILD/loader32.elf" "$STAGE/loader32.elf"
     cp -f "$X86_BUILD/microos64.bin" "$STAGE/microos64.bin"
     cp -f "$ROOT/third_party/spleen/LICENSE" "$STAGE/LICENSE.spleen"
+    # zlib is linked into /bin/zcat of the disk image, and its license travels
+    # with the distribution even when the image itself is built separately.
+    cp -f "$ROOT/third_party/zlib/LICENSE" "$STAGE/LICENSE.zlib"
     if [ -f "$X86_BUILD/microos64.sig" ] && [ -f "$X86_BUILD/signing.pub" ]; then
         cp -f "$X86_BUILD/microos64.sig" "$STAGE/microos64.sig"
         cp -f "$X86_BUILD/signing.pub" "$STAGE/microos-sign.pub"
@@ -258,6 +261,10 @@ The kernel carries Spleen 8x16 (BSD-2-Clause) for the framebuffer console;
 `LICENSE.spleen` is its license and `third_party/spleen` of the sources has
 the note and the original BDF.
 
+`/bin/zcat` of the disk image is linked against zlib 1.3.1 (zlib license);
+`LICENSE.zlib` is its license and `third_party/zlib` of the sources has the
+note, the version and the port layer.
+
 The kernel carries a signature trailer (ADR 0020), and the loader verifies it
 before it copies a byte: an image with a changed byte, without a trailer or
 signed by another key stops with `the image is refused` and never reaches the
@@ -270,7 +277,7 @@ The same kernel is on the board and in the tests: Micro OS is one portable
 kernel with a port per machine.
 DOC
 
-    STAGE_FILES=(loader32.elf microos64.bin run.sh README.md)
+    STAGE_FILES=(loader32.elf microos64.bin run.sh README.md LICENSE.spleen LICENSE.zlib)
     if [ -f "$STAGE/microos64.sig" ]; then
         STAGE_FILES+=(microos64.sig microos-sign.pub)
     fi

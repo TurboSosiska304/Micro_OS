@@ -13,6 +13,7 @@ commercially; the note here is what the tree does.
 | Component | Version | License | Where | In the binaries |
 |---|---|---|---|---|
 | Spleen 8x16 | 2.3.0 | BSD-2-Clause | `third_party/spleen`, `ports/port_x86_64/src/font_spleen.c` | the x86-64 kernel image; `LICENSE.spleen` in its tar |
+| zlib | 1.3.1 | zlib | `third_party/zlib`, `ports/port_x86_64/programs/zcat.c` | `/bin/zcat` of the x86-64 MicroFS image; `/etc/licenses/zlib` in the image and `LICENSE.zlib` in the x86-64 tar |
 
 Spleen is a font by Frederic Cambus; the license and the note are in
 [`third_party/spleen`](../third_party/spleen/README.md). The 8x16 table is
@@ -20,12 +21,23 @@ generated from the upstream BDF by `tools/spleen_font.py`, and the BSD
 2-Clause license asks that its notice travel with a binary: the x86-64
 bundle carries a copy.
 
+zlib is a compression library by Jean-loup Gailly and Mark Adler; the
+version, the files and the port layer are in
+[`third_party/zlib`](../third_party/zlib/README.md). The zlib license asks
+that the origin not be misrepresented and that a notice travel with a
+binary, so the MicroFS image carries `/etc/licenses/zlib` beside `/bin/zcat`,
+and `tools/bundle.sh` puts `LICENSE.zlib` into the x86-64 archive. A package
+that installs `zcat` (`microos-progs` of a release) copies the same file
+beside the program. The file stays zlib: it is not merged into the MIT
+`LICENSE` of the tree.
+
 ## The rule
 
 1. **The MIT tree takes permissive code only.** MIT, BSD-2-Clause,
-   BSD-3-Clause, ISC and Apache-2.0 (with its patent grant) may live in
-   `components/`, `ports/`, `main/` and `tools/`. A new one is a line in the
-   table above, a license file in its directory and a note in this page.
+   BSD-3-Clause, ISC, Apache-2.0 (with its patent grant) and the zlib license
+   may live in `components/`, `ports/`, `main/`, `tools/` and
+   `third_party/`. A new one is a line in the table above, a license file in
+   its directory and a note in this page.
 2. **Copyleft does not go into the kernel image.** GPL, LGPL, AGPL and CDDL
    code is not linked into a binary of the MIT tree. A driver or a library
    under such a license lives in a repository of its own, or runs as a
