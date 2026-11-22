@@ -79,8 +79,13 @@ endfunction()
 # it names, the script of the window and the image of the format. The entry
 # is `_start` of the runtime (ADR 0016), so `main` is a function of the
 # program and not the place the port enters.
+#
+# A program whose text is near the limit of the image is built with
+# `GC_SECTIONS`: every function and every object is a section of its own, and
+# the linker of the window drops the ones no call reaches. It is the size flag
+# of a ported library whose engine is bigger than the program around it.
 function(microos_add_userland_program name)
-    cmake_parse_arguments(PROG "" ""
+    cmake_parse_arguments(PROG "GC_SECTIONS" ""
         "LIBRARIES;INCLUDES;DEFINES;SOURCES;COMPILE_OPTIONS" ${ARGN})
 
     set(source "${MICROOS_PROGRAM_DIR}/${name}.c")
@@ -88,6 +93,11 @@ function(microos_add_userland_program name)
     set(objects)
     set(runtime_sources ${MICROOS_LIBC_USER_SOURCES} ${PROG_SOURCES})
     set(compile_flags ${MICROOS_PROGRAM_CFLAGS} ${PROG_COMPILE_OPTIONS})
+    set(link_flags)
+    if(PROG_GC_SECTIONS)
+        list(APPEND compile_flags -ffunction-sections -fdata-sections)
+        list(APPEND link_flags -Wl,--gc-sections)
+    endif()
     set(include_flags
         -I "${MICROOS_KERNEL_INCLUDE}"
         -I "${MICROOS_PROGRAM_DIR}"
@@ -146,7 +156,7 @@ function(microos_add_userland_program name)
     add_custom_command(
         OUTPUT "${image}"
         COMMAND ${CMAKE_C_COMPILER} -nostdlib -static -no-pie -Wl,--build-id=none
-                -Wl,-e,_start
+                ${link_flags} -Wl,-e,_start
                 -T "${MICROOS_PROGRAM_DIR}/program.ld" -o "${name}.elf"
                 ${objects} ${archives}
         COMMAND sh "${MICROOS_MKPROG}" --base ${MICROOS_PROGRAM_BASE} --arch x86-64

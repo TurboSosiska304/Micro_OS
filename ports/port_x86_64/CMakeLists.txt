@@ -439,6 +439,63 @@ add_libc_program(zcat
     COMPILE_OPTIONS -Os
 )
 
+# --- pcre2grep, the second program of somebody else -------------------------
+#
+# PCRE2 (third_party/pcre2) is third-party C: the compiler of the guest builds
+# it for the window with the flags of the guest, and the linker takes the
+# objects the program names. The warnings of this tree are off it, because its
+# code is not ours to change and a warning in it is an upstream matter; the
+# compatibility headers of the vendor (`third_party/pcre2/compat`) answer the
+# includes of a C library that a program here does not have, and the strings,
+# the allocation and the classes of a character are the ones of
+# `components/libc/user`.
+set(PCRE2_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/pcre2")
+set(PCRE2_SOURCES
+    "${PCRE2_DIR}/src/pcre2_compile.c"
+    "${PCRE2_DIR}/src/pcre2_config.c"
+    "${PCRE2_DIR}/src/pcre2_context.c"
+    "${PCRE2_DIR}/src/pcre2_convert.c"
+    "${PCRE2_DIR}/src/pcre2_dfa_match.c"
+    "${PCRE2_DIR}/src/pcre2_error.c"
+    "${PCRE2_DIR}/src/pcre2_extuni.c"
+    "${PCRE2_DIR}/src/pcre2_find_bracket.c"
+    "${PCRE2_DIR}/src/pcre2_maketables.c"
+    "${PCRE2_DIR}/src/pcre2_match.c"
+    "${PCRE2_DIR}/src/pcre2_match_data.c"
+    "${PCRE2_DIR}/src/pcre2_newline.c"
+    "${PCRE2_DIR}/src/pcre2_ord2utf.c"
+    "${PCRE2_DIR}/src/pcre2_pattern_info.c"
+    "${PCRE2_DIR}/src/pcre2_script_run.c"
+    "${PCRE2_DIR}/src/pcre2_serialize.c"
+    "${PCRE2_DIR}/src/pcre2_string_utils.c"
+    "${PCRE2_DIR}/src/pcre2_substitute.c"
+    "${PCRE2_DIR}/src/pcre2_substring.c"
+    "${PCRE2_DIR}/src/pcre2_tables.c"
+    "${PCRE2_DIR}/src/pcre2_ucd.c"
+    "${PCRE2_DIR}/src/pcre2_valid_utf.c"
+    "${PCRE2_DIR}/src/pcre2_xclass.c"
+    "${PCRE2_DIR}/pcre2_chartables.c"
+    "${PCRE2_DIR}/pcre2_small.c"
+)
+
+microos_userland_library(microos_user_pcre2
+    SOURCES ${PCRE2_SOURCES}
+    INCLUDES "${PCRE2_DIR}" "${PCRE2_DIR}/src" "${PCRE2_DIR}/compat"
+    DEFINES HAVE_CONFIG_H PCRE2_CODE_UNIT_WIDTH=8
+    COMPILE_OPTIONS -w -Os -ffunction-sections -fdata-sections
+)
+
+# The image of pcre2grep is the largest one of the port: the engine, the
+# runtime of the library and the program. It stays under the ceiling of the
+# format (K_EXEC_MAX_IMAGE, 8 MiB) with room to spare, and -Os keeps it small
+# because every byte of the text is a byte of the disk image.
+add_libc_program(pcre2grep GC_SECTIONS
+    LIBRARIES microos_user_pcre2
+    INCLUDES "${PCRE2_DIR}"
+    SOURCES "${LIBC_USER_DIR}/src/malloc.c"
+            "${LIBC_USER_DIR}/src/ctype.c"
+    COMPILE_OPTIONS -Os
+)
 add_executable(microos64
     ${KERNEL_SOURCES}
     ${KSHELL_SOURCES}

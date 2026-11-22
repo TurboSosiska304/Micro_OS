@@ -38,6 +38,18 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   transport under it; `make x86-net-smoke` generates a test authority and
   three certificates with `openssl` and checks TLS 1.3 and 1.2, the refusal
   of a wrong name and of a wrong authority, and `pkg` over HTTPS.
+- `pcre2grep`, a program of x86-64 that matches the lines of a file against a
+  regular expression: `-i`, `-v`, `-n`, `-o` and `-g N`, with `^`/`$` as the
+  ends of the line and numbered groups. It links PCRE2 10.42, vendored in
+  `third_party/pcre2` (BSD-3-Clause WITH PCRE2-exception), the 8-bit
+  interpreter without JIT and Unicode.
+- The library of a program gained the ASCII character classes of the C
+  locale (`<ctype.h>`), which the engine of a regular expression asks for.
+- `tests/cases/test_pcre2.c`: the matches, the groups, the anchors, the
+  UTF-8 bytes of a build without Unicode, the compiler errors and the values
+  of the vendored `config.h`.
+- `docs/licensing.md` and the license of PCRE2 in the bundle and on the disk
+  (`/etc/licenses/pcre2`).
 
 ### Changed
 
@@ -57,6 +69,9 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   the headers are thin shims over `ulibc.h`, and `snprintf`/`vsnprintf` share
   the formatter with `printf`. The host test `tests/cases/test_zlib.c` covers
   the checksums, the three stream wrappers and a `gz` file.
+- The x86-64 image has eighteen programs: `pcre2grep` and its engine join the
+  sixteen of the tree and `zcat`; `make x86-smoke` checks its two lines, the
+  license file and the count.
 
 ## [1.1.1] - 2026-11-22
 

@@ -927,6 +927,18 @@ def check_git(root: str, report: Report) -> None:
     )
 
 
+# The vendored trees are somebody else's code. Their formatting and their
+# line lengths are the upstream ones - third_party/mbedtls is the Mbed TLS
+# release as it is, with its own 79-column lines - and a diff against a
+# release has to stay readable: the rules of this tree apply to the files we
+# write, and a vendored component is reviewed as a whole (its README.md).
+VENDOR_PREFIXES = ("third_party/",)
+
+
+def is_vendored(name: str) -> bool:
+    return any(name.startswith(prefix) for prefix in VENDOR_PREFIXES)
+
+
 def check_sources(root: str, report: Report, files: list) -> None:
     """The hygiene of the tracked sources (the rules of .editorconfig)."""
     group = "sources"
@@ -939,12 +951,7 @@ def check_sources(root: str, report: Report, files: list) -> None:
     not_utf8 = []
 
     for name in files:
-        # A vendored tree keeps the style and the language of its upstream:
-        # third_party/mbedtls is the Mbed TLS release as it is, with its own
-        # 79-column lines. The rules of this tree are for the sources of this
-        # tree; the license and the README of the vendored directory are the
-        # boundary, and the check of a release is a diff of the upstream.
-        if name.startswith("third_party/"):
+        if is_vendored(name):
             continue
 
         path = os.path.join(root, name)
@@ -1038,10 +1045,7 @@ def check_format(root: str, report: Report, files: list, formatter: str) -> None
     """The formatting of the C sources."""
     group = "format"
 
-    sources = [
-        f for f in files
-        if f.endswith((".c", ".h")) and not f.startswith("third_party/")
-    ]
+    sources = [f for f in files if f.endswith((".c", ".h")) and not is_vendored(f)]
     if not sources:
         report.skip(group, "clang-format", "there are no C sources")
         return

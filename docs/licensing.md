@@ -15,6 +15,7 @@ commercially; the note here is what the tree does.
 | Spleen 8x16 | 2.3.0 | BSD-2-Clause | `third_party/spleen`, `ports/port_x86_64/src/font_spleen.c` | the x86-64 kernel image; `LICENSE.spleen` in its tar |
 | zlib | 1.3.1 | zlib | `third_party/zlib`, `ports/port_x86_64/programs/zcat.c` | `/bin/zcat` of the x86-64 MicroFS image; `/etc/licenses/zlib` in the image and `LICENSE.zlib` in the x86-64 tar |
 | Mbed TLS | 3.6.2 | Apache-2.0 (of the dual Apache-2.0 / GPL-2.0-or-later) | `third_party/mbedtls` | the x86-64 network image, and the host tests; `LICENSE.mbedtls` in the x86-64 tar |
+| PCRE2 | 10.42 | BSD-3-Clause WITH PCRE2-exception | `third_party/pcre2`, `ports/port_x86_64/programs/pcre2grep.c` | `/bin/pcre2grep` of the x86-64 MicroFS image; `/etc/licenses/pcre2` in the image and `LICENSE.pcre2` in the x86-64 tar |
 
 Spleen is a font by Frederic Cambus; the license and the note are in
 [`third_party/spleen`](../third_party/spleen/README.md). The 8x16 table is
@@ -41,11 +42,23 @@ link this copy: ESP-IDF carries its own, under the configuration of the
 firmware. `tools/bundle.sh` puts the upstream license into every x86-64
 archive as `LICENSE.mbedtls`.
 
+PCRE2 is a regular expression library by Philip Hazel and the PCRE2
+contributors; the release, the archive sum, the configuration and the two
+optimization passes the image leaves out are in
+[`third_party/pcre2`](../third_party/pcre2/README.md). The license is the
+BSD-3-Clause of the release with the PCRE2 exception for a binary that uses
+the library without shipping its source: the three conditions stay (the
+notice, the list of the conditions and the disclaimer), and the exception
+only settles the form of the binary. The MicroFS image carries
+`/etc/licenses/pcre2` beside `/bin/pcre2grep`, and `tools/bundle.sh` puts
+`LICENSE.pcre2` into the x86-64 archive. The text stays PCRE2's: it is not
+merged into the MIT `LICENSE` of the tree.
+
 ## The rule
 
 1. **The MIT tree takes permissive code only.** MIT, BSD-2-Clause,
-   BSD-3-Clause, ISC, Apache-2.0 (with its patent grant) and the zlib license
-   may live in `components/`, `ports/`, `main/`, `tools/` and
+   BSD-3-Clause (with or without an exception such as PCRE2's), ISC,
+   Apache-2.0 (with its patent grant) and the zlib license may live in `components/`, `ports/`, `main/`, `tools/` and
    `third_party/`. A new one is a line in the table above, a license file in
    its directory and a note in this page.
 2. **Copyleft does not go into the kernel image.** GPL, LGPL, AGPL and CDDL
@@ -58,7 +71,8 @@ archive as `LICENSE.mbedtls`.
    ported from a permissive source (FreeBSD, OpenBSD, NetBSD) keeps its
    notice and is listed here.
 4. **A binary carries the licenses of what it contains.** `tools/bundle.sh`
-   puts `LICENSE.spleen` and `LICENSE.mbedtls` into the x86-64 archive; a new
+   puts `LICENSE.spleen`, `LICENSE.zlib`, `LICENSE.pcre2` and
+   `LICENSE.mbedtls` into the x86-64 archive; a new
    third-party part adds its license to the same bundle. The board image
    contains the mbedTLS that ESP-IDF links into it (Apache-2.0), which is not
    a copy of this tree.

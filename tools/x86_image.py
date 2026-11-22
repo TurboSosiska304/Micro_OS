@@ -47,6 +47,7 @@ PROGRAMS = [
     "spawn",
     "nx",
     "zcat",
+    "pcre2grep",
 ]
 
 # The stream of the test of zlib: a fixed text, a fixed moment and the level
@@ -58,6 +59,12 @@ GREETING = (
     b"zlib 1.3.1, MicroFS and ring 3\n"
     b"the bytes of this file were inflated by the library of the guest\n"
 )
+
+# The license of PCRE2 travels with the machine that carries its program: the
+# text of third_party/pcre2/LICENSE is a file of /etc/licenses, so a person
+# with the disk can read the terms of the one third-party component of the
+# image without the sources.
+PCRE2_LICENSE = "third_party/pcre2/LICENSE"
 
 # The one file of /etc the smoke test reads. The tool writes the text and a
 # newline; the first line is the word `cat`, `grep` and `wc` expect, the two
@@ -164,6 +171,13 @@ def build_image(
     command += ["--file", f"/etc/licenses/zlib={ZLIB_LICENSE}"]
 
     command += ["--text", f"/etc/setting={SETTING}"]
+
+    license_path = os.path.join(ROOT, PCRE2_LICENSE)
+    if not os.path.isfile(license_path):
+        print(f"missing {license_path}", file=sys.stderr)
+        return 2
+    command += ["--file", f"/etc/licenses/pcre2={license_path}"]
+
     command += extra or []
 
     os.makedirs(os.path.dirname(os.path.abspath(image)), exist_ok=True)

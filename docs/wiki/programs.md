@@ -99,8 +99,9 @@ make x86-smoke     # the same, driven by the smoke test
 
 `tools/mkfs_mfs.c` writes the image: an MBR with one Linux partition at LBA
 2048, a MicroFS volume in it, `/bin`, `/etc` and an empty `/etc/init.d`, the
-seventeen `.mox` images of the build written to `/bin` with mode `0755`, and
-the settings of the machine in `/etc/setting`. It does not repeat the layout
+eighteen `.mox` images of the build written to `/bin` with mode `0755`, the
+licenses of zlib and PCRE2 in `/etc/licenses`, and the settings of the machine
+in `/etc/setting`. It does not repeat the layout
 of MicroFS: it is a block device over a range of the file, and
 `components/mfs` formats it and writes the objects through `mfs_create`,
 `mfs_write` and `mfs_chmod`. The host test
@@ -141,6 +142,7 @@ mode of a program (`0755`), and no boot creates one:
 | `/bin/echo` | the vector of the arguments and `write`, the shortest useful program |
 | `/bin/ls` | a directory through `open(O_DIRECTORY)` and `readdir`; no path is the working directory |
 | `/bin/grep` | the lines of a source that hold a word (`-i`, `-v`), through `strstr` |
+| `/bin/pcre2grep` | the lines of a source that match a regular expression (`-i`, `-v`, `-n`, `-o`, `-g N`), through the vendored PCRE2 |
 | `/bin/head` | the first lines of a source (`-n N`), a block at a time |
 | `/bin/mkdir` | a directory through `mkdir`, one for every word of the line |
 | `/bin/pwd` | the directory of the task through `getcwd` |
@@ -152,8 +154,8 @@ mode of a program (`0755`), and no boot creates one:
 The first five talk to the kernel through `programs/prog.h`, because what they
 test is the raw door, the fault, the fork, the edge and the signals. The rest
 are ordinary C programs linked against `components/libc/user`
-([ADR 0016](../adr/0016-userland.md)); `zcat` is also linked against zlib, the
-first library of somebody else
+([ADR 0016](../adr/0016-userland.md)); `zcat` is linked against zlib and
+`pcre2grep` against PCRE2, the two libraries of somebody else
 ([`docs/porting-programs.md`](../porting-programs.md)). Every one of them
 reads descriptor 0
 when it is given no file (or `-`); `execve` carries the table of the caller, so
@@ -371,6 +373,7 @@ the library of the kernel, which calls `ksys_*` and has no address in ring 3:
 | `src/syscall.c` | `int $0x80` on x86-64 and the door of the port on the board; `open`, `close`, `read`, `write`, `lseek`, `readdir`, `stat`, `mkdir`, `unlink`, `getcwd`, `getpid`, `uptime`, `execve`, `exit`; the magnitude of a negative result also goes to `errno` |
 | `src/stdio.c` | `printf`, `puts`, `snprintf` and `vsnprintf` over a buffer of 128 bytes and `write(1, ...)`; `%d %i %u %o %x %X %c %s %p %%` and the flags `-`/`0` |
 | `src/string.c` | `strlen`, `strcmp`, `strncmp`, `strstr`, `strcpy`, `strncpy`, `strcat`, `strchr`, `strrchr`, `memcpy`, `memmove`, `memset`, `memcmp`, `memchr` |
+| `src/ctype.c` | the `is*` classes and `tolower`/`toupper` of the C locale |
 | `src/errno.c` | `errno` as a global of the program and `strerror` |
 | `src/malloc.c` | the arena of the program in its bss (`ULIBC_HEAP_SIZE`), `malloc`, `calloc`, `realloc`, `free` |
 | `src/file.c` | `fopen`, `fclose`, `fread`, `fwrite`, `fgetc`, `fputc`, `fgets`, `fputs`, `feof`, `ferror`, `fseek`, `ftell`, `rewind` over a descriptor |
@@ -408,6 +411,39 @@ every other. There is no dynamic linker: each image carries its copy of the
 library. The recipe of a library of somebody else is
 [`docs/porting-programs.md`](../porting-programs.md); `zcat` and zlib are the
 first.
+
+## A regular expression engine: PCRE2
+
+`/bin/pcre2grep` is the one program of the tree with a third-party library
+under it: PCRE2 10.42, vendored in `third_party/pcre2`, compiled for the
+window of the program and linked into its image. The library is 8-bit and
+interpreted; the JIT is off, and so is Unicode, because a program image is
+at most 64 KiB (`KSYS_MAX_IO`) and the Unicode tables alone are about
+120 KiB. [third_party/pcre2/README.md](../../third_party/pcre2/README.md)
+records the release, the digest and the two optimization passes the image
+leaves out.
+
+```text
+microos> exec /bin/pcre2grep -i h.LLO /etc/setting
+hello
+the program has finished
+microos> exec /bin/pcre2grep -o -g 1 ^hostname=(x86_64)$ /etc/setting
+x86_64
+the program has finished
+```
+
+The demo is the shape of a grep: one line of the source is one subject, so
+`^` and `$` are its ends, and `-o` with `-g N` prints the capture `N` of
+every match. The shell has no quotes, so a pattern with a space or a
+character the shell reads as an operator is a debt of the grammar and not of
+the program. A UTF-8 file is a file of bytes here: a `.` is one byte, and
+`-u` is refused with a sentence instead of silently matching something else.
+
+`tests/cases/test_pcre2.c` is the gate: a match and a no-match, the groups
+of a pattern, the anchors of a line, the shape of a UTF-8 subject without
+Unicode, the errors of the compiler and the values of `config.h` read back
+from the library. It compiles the same sources with the same configuration,
+so the engine on the machine and the engine in the test are one.
 
 ## The address space and `fork`
 

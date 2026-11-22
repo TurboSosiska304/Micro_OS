@@ -154,6 +154,29 @@ void *calloc(size_t count, size_t size);
 void *realloc(void *block, size_t size);
 void free(void *block);
 
+/* --- the character classes ---
+ *
+ * The classes of the C locale: there is no locale on this machine, so the
+ * answer of this program is the same as the answer of the host test. The
+ * argument is an int because a caller such as PCRE2 builds its table from a
+ * loop of 0 to 255, and a value outside the byte range - EOF is -1 - belongs
+ * to no class.
+ */
+int isalnum(int letter);
+int isalpha(int letter);
+int isblank(int letter);
+int iscntrl(int letter);
+int isdigit(int letter);
+int isgraph(int letter);
+int islower(int letter);
+int isprint(int letter);
+int ispunct(int letter);
+int isspace(int letter);
+int isupper(int letter);
+int isxdigit(int letter);
+int tolower(int letter);
+int toupper(int letter);
+
 /* --- the error number --- */
 
 int *__ulibc_errno(void);

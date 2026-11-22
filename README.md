@@ -171,5 +171,6 @@ Micro_OS/
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Third-party components keep their own
-licenses; the list and the rules are in [docs/licensing.md](docs/licensing.md).
+MIT — see [LICENSE](LICENSE). Third-party components (zlib, PCRE2, Mbed TLS,
+Spleen) keep their own licenses; the list and the rules are in
+[docs/licensing.md](docs/licensing.md).
