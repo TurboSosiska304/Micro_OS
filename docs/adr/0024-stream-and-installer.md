@@ -84,9 +84,9 @@ needs (`MOX1` header and the version of the kernel).
 
 ### 5. `pkg` is the installer, and it is a program of x86-64
 
-`pkg update`, `pkg install NAME`, `pkg remove NAME`, `pkg list` and
-`pkg info NAME` live in `components/pkg` (portable, host-tested with a fake
-transport and a temporary volume). The database is under `/var/pkg`, the
+`pkg sync`, `pkg install NAME`, `pkg remove NAME`, `pkg list`, `pkg info
+NAME` and `pkg upgrade` live in `components/pkg` (portable, host-tested with a
+fake transport and a temporary volume). The database is under `/var/pkg`, the
 programs under `/usr/bin`, and `/bin` stays the programs of the system.
 
 An install is atomic: the bytes go to `NAME.mox.new`, the signature is
@@ -100,7 +100,49 @@ The board has no installer: its `progs` partition belongs to the firmware
 (ADR 0018, compatibility port), and `pkg` is not built for it. A program of
 the board is still a new `progs.bin` and a flash.
 
-### 6. What is not in this decision
+### 6. The interface is pacman's; the build is not
+
+The convenience of `yay` and `paru` is two things: a package manager with
+muscle memory, and an AUR build on the machine. The first is a contract of
+the console and this ADR fixes it; the second is not possible here and is not
+wanted (a program of `MOX1` is static, the machine has no compiler, and an
+install script is code of a stranger run as root).
+
+The commands and their pacman-style short forms:
+
+| The console | Short | What it does |
+|---|---|---|
+| `pkg sync` | `-Sy` | refresh the index of every repository |
+| `pkg upgrade` | `-Su` | a newer version of every installed package |
+| `pkg sync --upgrade` | `-Syu` | both, in that order |
+| `pkg install NAME...` | `-S` | fetch, verify and install |
+| `pkg install ./x.mox` | `-U` | the same for a file on the machine |
+| `pkg remove NAME...` | `-R` | remove; `-Rn` also the files it owns |
+| `pkg search TERM` | `-Ss` | the name and the summary of a match |
+| `pkg info NAME` | `-Si` / `-Qi` | the package in a repository / installed |
+| `pkg list` | `-Q` | the installed packages; `-Qe` only the explicit ones |
+| `pkg files NAME` | `-Ql` | the files a package installed |
+| `pkg check` | `-Qk` | the digest of every installed file |
+| `pkg clean` | `-Sc` | the cache, keeping what an install needs |
+| `pkg repo add URL` | | a repository and its key, in `/etc/pkg.conf` |
+| `pkg log` | | what was installed, removed and when |
+
+The flags of an install: `--noconfirm`, `--needed` (a version already there
+is a no-op), `--download-only`, `--dry-run` (the plan, no byte written),
+`--allow-downgrade` (a warning, the default refuses an older version),
+`--ignore NAME`, `--force` (reinstall), `--offline` (the cache only),
+`--root DIR` (a volume for the tests), `--repo NAME`, `--cachedir DIR`,
+`--color auto|always|never`, `--quiet`, `--verbose`, and `NAME=VERSION` for a
+pin. `--help` prints the table, and `pkg --version` the version of the tool.
+There is no `--nosignature`: a package without a valid signature does not
+install, and no flag is a door around that.
+
+The console face is a command of the shell (the first step, like `config`) and
+becomes a program of `/usr/bin` when the calls it needs - `open`, `write`,
+`rename`, `unlink` - are in the system-call table. A terminal with a pointer
+(after ADR 0023) may grow a picker; the plain `pkg search` stays.
+
+### 7. What is not in this decision
 
 * a dependency solver: a program of `MOX1` is static, and its dependencies
   are the machine and the ABI, named in the index;

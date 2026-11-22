@@ -403,6 +403,10 @@ to build is the screen a program can draw on.
 * [ ] `pkg update/install/remove/list/info` over `/var/pkg` and `/usr/bin`,
       atomic through a new `vfs_rename` (MicroFS and FAT implement it; a
       volume without it installs with a warning)
+* [ ] The interface of the console is pacman's, the build is not: `-S`, `-R`,
+      `-Q`, `-Sy`, `-Su`, `-Syu`, `-U`, `--noconfirm`, `--needed`,
+      `--download-only`, `--dry-run`, `--allow-downgrade`, `--offline`,
+      `--root`, `--repo`, `--color`, `NAME=VERSION` (ADR 0024 §6)
 * [ ] The repository `microos-progs`: CI builds a program per machine, signs
       it and publishes the index with the artifacts; `make` in the kernel
       tree keeps only the programs of the tests
