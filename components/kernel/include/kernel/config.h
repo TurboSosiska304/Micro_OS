@@ -13,8 +13,8 @@
 #define KERNEL_NAME "MicroOS"
 #endif
 
-#define KERNEL_VERSION_MAJOR 0
-#define KERNEL_VERSION_MINOR 9
+#define KERNEL_VERSION_MAJOR 1
+#define KERNEL_VERSION_MINOR 0
 #define KERNEL_VERSION_PATCH 0
 
 /* A pre-release carries a suffix ("-rc1", "-pre") until the release drops it:
