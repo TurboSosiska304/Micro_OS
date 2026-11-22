@@ -150,14 +150,17 @@ the mode of a program (`0755`), and no boot creates one:
 | `/bin/zcat` | a `.gz` of the VFS inflated by zlib 1.3.1 and written to the console or a file |
 | `/bin/sb-cat`, `sb-grep`, `sb-head`, `sb-ls`, `sb-tail`, `sb-wc` | the tools of sbase (MIT) for a file, a directory and a line: `ls -la`, `grep -r`, `wc -l`, `head`, `tail`, `cat` |
 | `/bin/sb-sort`, `sb-find`, `sb-xargs`, `sb-sed` | the tools of sbase for a tree and a stream: the order of `sort` (with `-n`), a walk of `find` with `-name`, a command over the words of a pipe, and a substitution of `sed` |
+| `/bin/sqlite3` | the shell of SQLite 3.54.1 (public domain) over a database file of MicroFS: `.read`, `.tables`, `.schema`, `.mode`, `-cmd`, and the SQL of a script of stdin |
 
 The first five talk to the kernel through `programs/prog.h`, because what they
 test is the raw door, the fault, the fork, the edge and the signals. The rest
 are ordinary C programs linked against `components/libc/user`
 ([ADR 0016](../adr/0016-userland.md)); `zcat` is also linked against zlib, the
-first library of somebody else, and the ten `sb-*` tools are sbase
+first library of somebody else, the ten `sb-*` tools are sbase, and
+`/bin/sqlite3` is SQLite with the VFS of the port
 ([`docs/porting-programs.md`](../porting-programs.md),
-[`third_party/sbase`](../../third_party/sbase/README.md)). Every one of them
+[`third_party/sbase`](../../third_party/sbase/README.md),
+[`third_party/sqlite`](../../third_party/sqlite/README.md)). Every one of them
 reads descriptor 0
 when it is given no file (or `-`); `execve` carries the table of the caller, so
 a redirect or a pipe of the shell fills it (`cat < file`, `ls /bin | wc -l`,
@@ -173,8 +176,13 @@ stream of a fixed text, written by `tools/x86_image.py` with `mtime` from
 `SOURCE_DATE_EPOCH` and no file name in the header, so two builds of the image
 write the same bytes. `zcat -o FILE` inflates it into a file of MicroFS and
 `zcat -t` checks it; the smoke tests compare the count and the text of the
-inflated bytes. `/etc/licenses/zlib` is the zlib license beside the program
-that carries the library, and `docs/licensing.md` has the row. The ten tools
+inflated bytes. The scripts `/etc/sql-setup.sql`, `sql-read.sql`,
+`sql-nested.sql` and `sql-schema.sql` are the fixture of `/bin/sqlite3`: the
+first run of the program creates the table on the volume, the second one reads
+it from the same file, and `.read` runs a script with a database open.
+`/etc/licenses/zlib`, `/etc/licenses/sbase` and `/etc/licenses/sqlite` are the
+licenses of the three ports, and `docs/licensing.md` has the rows. The ten
+tools
 of sbase are built **beside** the programs of the tree and not in place of
 them: `/bin/ls` prints the names on one line and says `error 2` for a path
 that is not there, which is a sentence the smoke test reads; `/bin/sb-ls` is

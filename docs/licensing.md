@@ -15,6 +15,7 @@ commercially; the note here is what the tree does.
 | Spleen 8x16 | 2.3.0 | BSD-2-Clause | `third_party/spleen`, `ports/port_x86_64/src/font_spleen.c` | the x86-64 kernel image; `LICENSE.spleen` in its tar |
 | zlib | 1.3.1 | zlib | `third_party/zlib`, `ports/port_x86_64/programs/zcat.c` | `/bin/zcat` of the x86-64 MicroFS image; `/etc/licenses/zlib` in the image and `LICENSE.zlib` in the x86-64 tar |
 | sbase | c546c3a (tip) | MIT | `third_party/sbase`, ten tools of `/bin/sb-*` | `/bin/sb-cat`, `/bin/sb-grep`, `/bin/sb-head`, `/bin/sb-ls`, `/bin/sb-tail`, `/bin/sb-wc`, `/bin/sb-sort`, `/bin/sb-find`, `/bin/sb-xargs` and `/bin/sb-sed` of the x86-64 MicroFS image; `/etc/licenses/sbase` in the image and `LICENSE.sbase` in the x86-64 tar |
+| SQLite | 3.54.1 | public domain | `third_party/sqlite`, the amalgamation, `/bin/sqlite3` | `/bin/sqlite3` of the x86-64 MicroFS image; `/etc/licenses/sqlite` in the image and `LICENSE.sqlite` in the x86-64 tar |
 
 Spleen is a font by Frederic Cambus; the license and the note are in
 [`third_party/spleen`](../third_party/spleen/README.md). The 8x16 table is
@@ -41,6 +42,16 @@ puts `LICENSE.sbase` into the x86-64 archive, and a package that installs a
 tool (`microos-progs` of a release) copies the same file beside it. The
 notice is not merged into the MIT `LICENSE` of the tree: the two are the same
 license but not the same text.
+
+SQLite is the database library of the public domain, released by Hwaci; the
+version, the source and the port layer are in
+[`third_party/sqlite`](../third_party/sqlite/README.md). The statement of
+<https://www.sqlite.org/copyright.html> travels as `LICENSE` of that
+directory, the MicroFS image carries it as `/etc/licenses/sqlite` beside
+`/bin/sqlite3`, `tools/bundle.sh` puts `LICENSE.sqlite` into the x86-64
+archive, and a package that installs the program copies the same file beside
+it. It is not merged into the MIT `LICENSE` of the tree: the deliverable code
+is public domain and the tree says so with the upstream text.
 
 ## The rule
 

@@ -302,8 +302,15 @@ written when the project was an operating system for one board; the numbers
       `third_party/zlib/port/`) and `/bin/zcat` on a `.gz` of MicroFS. The
       recipe is [`porting-programs.md`](porting-programs.md), the library has
       `tests/cases/test_zlib.c`, and `make x86-smoke` and
-      `make x86-disk-smoke` check the inflated bytes of a fixed fixture. Lua
-      and SQLite are the next copies of the recipe
+      `make x86-disk-smoke` check the inflated bytes of a fixed fixture.
+* [x] The third port, a library with an operating system of its own: SQLite
+      3.54.1 with `SQLITE_OS_OTHER=1` and the VFS of the port on the calls of
+      the system, and `/bin/sqlite3` (the shell of the release) over a
+      database of MicroFS. It is the first program with a `REAL` number: the
+      recipe's `FLOAT` option leaves `-mgeneral-regs-only` out and the loader
+      turns the SSE and x87 units on. The image is about 842 KiB,
+      `tests/cases/test_sqlite.c` is the host, and the two smoke tests create,
+      read and check a database across a reset.
 * [x] The second port, and the first set of commands: sbase with ten tools
       (`cat`, `grep`, `head`, `ls`, `tail`, `wc`, `sort`, `find`, `xargs`,
       `sed`) as `/bin/sb-*`, beside the programs of the tree. It is the port
@@ -312,11 +319,11 @@ written when the project was an operating system for one board; the numbers
       `fnmatch`, a regular expression engine, `getopt`, `getline`,
       `fmemopen`), and the ten commands are in `make x86-smoke` and
       `make x86-disk-smoke`
-* [ ] The gaps of the next port: a formatter with `%f` and a precision, a
-      `malloc` larger than the bss of an image (`brk`/`mmap` of a program), a
-      `poll` for a library that waits on a pipe, and the package that ships
-      `zcat` and the tools of sbase with their license beside them
-      (`docs/debts.md`)
+* [ ] The gaps of the next port: a `malloc` larger than the bss of an image
+      (`brk`/`mmap` of a program), a `poll` for a library that waits on a
+      pipe, a save of the XMM state so that two float programs may run at
+      once, and the package that ships `zcat`, the tools of sbase and
+      `sqlite3` with their licenses beside them (`docs/debts.md`)
 * [ ] A `chdir` and a wall clock in the ABI, and the POSIX frame of a fork
       child: the library works around the three, and the workaround of each
       is named in `docs/debts.md`
