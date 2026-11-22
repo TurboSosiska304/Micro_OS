@@ -1130,6 +1130,17 @@ static int cmd_umount(int argc, char **argv)
         return KSHELL_USAGE;
     }
 
+    /*
+     * The root of the tree stays. A task that takes it away leaves every
+     * path of the machine without a filesystem, and the console cannot even
+     * read the program that would put it back; `mkfs -y` formats the volume
+     * itself and does not go through this command.
+     */
+    if (strcmp(args.argv[0], "/") == 0) {
+        kshell_printf("umount: / is the root of the tree; mkfs -y formats the volume\n");
+        return KSHELL_ERROR;
+    }
+
     rc = vfs_umount(args.argv[0]);
     if (rc != 0) {
         return mount_error_text("umount", args.argv[0], rc);
@@ -1767,7 +1778,7 @@ static const struct file_command {
      {.summary = "take a filesystem out of the tree",
       .usage = "umount <point>",
       .detail = "A point with a mount below it stays until the smaller one leaves.\n"
-                "`/` may leave while /proc and /dev stay, which is what mkfs -y does.\n"},
+                "`/` is the root and stays; mkfs -y formats the volume itself.\n"},
      cmd_umount},
     {"fsck",
      {.summary = "check the volume, or repair it with -y",
