@@ -72,6 +72,8 @@ a list of commands and checks the transcript. `make clean` removes
 make x86-build            # the loader, the kernel and the programs, into build-x86/
 make x86-all              # the complete machine: network, disk and run.sh
 make x86-all-run          # boot it in a window (x86-all-run-serial: a terminal)
+make x86-user             # unpack the release tar and start it, as a person does
+make x86-user-serial      # the same tar in a terminal
 make x86-disk             # build-x86/programs.img: /bin and /etc of MicroFS
 make x86-run              # a QEMU window: framebuffer 1280x800 and the keyboard
 make x86-run-serial       # the same machine in a terminal (-nographic)
@@ -102,8 +104,15 @@ the builds it is made of: `build-x86-all/` holds `loader32.elf`,
 `microos64.bin`, `x86-all.img` (the disk with `/bin` and `/etc`) and a `run.sh`
 that boots the three with a virtio-net card on the user network of QEMU (port
 8080 forwarded). `X86_SERIAL=1 ./build-x86-all/run.sh` gives the serial
-console and no window. The target is not `make bundle`; the release artifact
-is still the one of `tools/bundle.sh`.
+console and no window.
+
+`make x86-user` closes the loop: it builds that machine and the release
+bundle, then unpacks `dist/MicroOS-x86_64-<version>.tar.gz` into
+`build-x86-user/` and starts `run.sh` from the tar - not from the tree. The
+tar of a release carries the same `loader32.elf`, `microos64.bin`,
+`x86-all.img`, the licenses and the `run.sh`, so what a person downloads is
+what the target starts. `make x86-user-serial` gives the console of the tar
+without a window.
 
 The display backend is a package of its own in some distributions: the target
 asks QEMU for its list of backends first and prints the command to run when

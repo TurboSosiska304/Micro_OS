@@ -58,6 +58,8 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make x86-net-smoke` | boot it and check the stack, a download, TLS (1.3 and 1.2, a wrong name and a wrong authority, the clock of 1970) and an install from a local repository over HTTPS |
 | `make x86-all` | the complete machine in `build-x86-all/`: the kernel with the network, the disk with `/bin` and `/etc`, and `run.sh` |
 | `make x86-all-run` | boot that machine in a window (the serial console with `x86-all-run-serial`) |
+| `make x86-user` | build the complete machine and its release tar, unpack the tar and start it (the artifact a person downloads) |
+| `make x86-user-serial` | the same tar with the serial console and no window |
 | `make ci` | `build`, `test`, `test-asan`, `test-tsan`, `test-smp`, `smoke`, `coverage`, `x86-smoke` when QEMU is there, `reproducible`, `integrity` — run it before pushing |
 
 The same build by hand:

@@ -213,33 +213,58 @@ cat "$OUT_DIR/checksums.txt"
 # without a board is run, not flashed.
 X86_NAME="MicroOS-x86_64-${VERSION}"
 
-if [ -f "$X86_BUILD/loader32.elf" ] && [ -f "$X86_BUILD/microos64.bin" ]; then
+# The complete machine (`make x86-all`) is the artifact a person gets: the
+# kernel with the network, the disk with /bin and /etc, and a run.sh that
+# starts them together. A tree that has not built it falls back to the
+# kernel alone, with the memory volume of the port.
+X86_SRC="$X86_BUILD"
+X86_DISK=""
+if [ -f "$ROOT/build-x86-all/loader32.elf" ] && [ -f "$ROOT/build-x86-all/x86-all.img" ]; then
+    X86_SRC="$ROOT/build-x86-all"
+    X86_DISK="$ROOT/build-x86-all/x86-all.img"
+fi
+
+if [ -f "$X86_SRC/loader32.elf" ] && [ -f "$X86_SRC/microos64.bin" ]; then
     echo "==> the bundle of the x86-64 port: $X86_NAME.tar.gz"
 
     STAGE="$(mktemp -d)"
     trap 'rm -rf "$STAGE"' EXIT
 
-    cp -f "$X86_BUILD/loader32.elf" "$STAGE/loader32.elf"
-    cp -f "$X86_BUILD/microos64.bin" "$STAGE/microos64.bin"
+    cp -f "$X86_SRC/loader32.elf" "$STAGE/loader32.elf"
+    cp -f "$X86_SRC/microos64.bin" "$STAGE/microos64.bin"
+    if [ -n "$X86_DISK" ]; then
+        cp -f "$X86_DISK" "$STAGE/x86-all.img"
+    fi
     cp -f "$ROOT/third_party/spleen/LICENSE" "$STAGE/LICENSE.spleen"
     # zlib is linked into /bin/zcat of the disk image, and its license travels
     # with the distribution even when the image itself is built separately.
     cp -f "$ROOT/third_party/zlib/LICENSE" "$STAGE/LICENSE.zlib"
     cp -f "$ROOT/third_party/mbedtls/LICENSE" "$STAGE/LICENSE.mbedtls"
-    if [ -f "$X86_BUILD/microos64.sig" ] && [ -f "$X86_BUILD/signing.pub" ]; then
-        cp -f "$X86_BUILD/microos64.sig" "$STAGE/microos64.sig"
-        cp -f "$X86_BUILD/signing.pub" "$STAGE/microos-sign.pub"
+    if [ -f "$X86_SRC/microos64.sig" ] && [ -f "$X86_SRC/signing.pub" ]; then
+        cp -f "$X86_SRC/microos64.sig" "$STAGE/microos64.sig"
+        cp -f "$X86_SRC/signing.pub" "$STAGE/microos-sign.pub"
     fi
 
     cat > "$STAGE/run.sh" <<'RUN'
 #!/usr/bin/env bash
-# Micro OS on an x86-64 machine: the loader and the kernel, no board.
+# Micro OS on an x86-64 machine: the loader and the kernel, with the disk of
+# the complete machine and its network when they are in this directory.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ARGS=(-kernel "$HERE/loader32.elf" -initrd "$HERE/microos64.bin" -m 256 -no-reboot)
 
-exec qemu-system-x86_64 -kernel "$HERE/loader32.elf" -initrd "$HERE/microos64.bin" \
-    -m 256 -nographic -no-reboot
+if [ -f "$HERE/x86-all.img" ]; then
+    ARGS+=(-drive "file=$HERE/x86-all.img,format=raw,if=ide,index=0,cache=writeback"
+           -netdev user,id=n0,hostfwd=tcp:127.0.0.1:8080-:8080
+           -device virtio-net-pci,netdev=n0,disable-modern=on)
+fi
+
+if [ "${X86_SERIAL:-0}" = 1 ]; then
+    exec qemu-system-x86_64 "${ARGS[@]}" -nographic
+fi
+
+exec qemu-system-x86_64 "${ARGS[@]}" -display "${X86_DISPLAY:-gtk}" -serial null
 RUN
     chmod +x "$STAGE/run.sh"
 
@@ -281,6 +306,9 @@ kernel with a port per machine.
 DOC
 
     STAGE_FILES=(loader32.elf microos64.bin run.sh README.md LICENSE.spleen LICENSE.zlib)
+    if [ -f "$STAGE/x86-all.img" ]; then
+        STAGE_FILES+=(x86-all.img)
+    fi
     if [ -f "$STAGE/microos64.sig" ]; then
         STAGE_FILES+=(microos64.sig microos-sign.pub)
     fi

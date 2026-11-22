@@ -433,6 +433,26 @@ x86-all-run: x86-all
 x86-all-run-serial: x86-all
 	X86_SERIAL=1 $(X86_ALL_RUN)
 
+# The artifact a person downloads: the x86-64 tar of the release, unpacked
+# and started as it is. The target builds the complete machine and the bundle
+# first (both are incremental), then runs the tar and not the tree: what a
+# person gets is what this starts.
+X86_USER_DIR := build-x86-user
+X86_SERIAL ?= 0
+
+x86-user: x86-all bundle
+	@tar=$$(ls -t dist/MicroOS-x86_64-*.tar.gz 2>/dev/null | head -1); \
+	if [ -z "$$tar" ]; then \
+		echo "x86-user: dist/ has no x86-64 tar" >&2; exit 1; \
+	fi; \
+	echo "x86-user: $$tar -> $(X86_USER_DIR)"; \
+	rm -rf $(X86_USER_DIR); mkdir -p $(X86_USER_DIR); \
+	tar -xzf "$$tar" -C $(X86_USER_DIR); \
+	cd $(X86_USER_DIR) && X86_SERIAL=$(X86_SERIAL) X86_DISPLAY=$(X86_DISPLAY) ./run.sh
+
+x86-user-serial: X86_SERIAL=1
+x86-user-serial: x86-user
+
 # The campaign of 1.0 (docs/wiki/testing.md). The session is one boot of the
 # x86-64 machine, ten minutes long by default, under the mixed load of
 # tools/soak.py. It is not a part of `make ci`: it takes ten minutes and it
