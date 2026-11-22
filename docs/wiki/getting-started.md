@@ -93,12 +93,12 @@ machine that runs a program out of a file:
 ```bash
 make x86-build       # the loader, the kernel image and the programs, in build-x86/
 make x86-disk        # build-x86/programs.img: /bin and /etc of MicroFS
-make x86-run         # a QEMU window: VGA text and the PS/2 keyboard
+make x86-run         # a QEMU window: the framebuffer of 1280x800 and the keyboard
 make x86-run-serial  # the same machine on the serial console (-nographic)
 make x86-smoke       # boot it and check the transcript, without a window
 ```
 
-The machine boots from the disk image: `/bin` (twenty-two programs) and `/etc`
+The machine boots from the disk image: `/bin` (twenty-six programs) and `/etc`
 are objects of a MicroFS volume that `make x86-disk` writes with the host
 tool `tools/mkfs_mfs.c`, and the boot mounts the volume and runs `/bin/hello`
 through `execve`. The tree is the tree of the other ports - `/bin`, `/etc`,

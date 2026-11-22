@@ -10,10 +10,43 @@ the MicroFS volume change by adding only.
 A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 (`vX.Y.Z-pre`) is a pre-release and must match `kernel_version()`.
 
-## [Unreleased]
+## [1.2.0] - 2026-11-23
+
+The release of the machine a person can see and feed: x86-64 gets a real
+screen, a stream and an installer of programs, a bootable ISO and a tar that
+is the whole machine; the commands of other people arrive as the canonical
+`/bin` (sbase), with zlib, PCRE2, Lua and the calculators bc/dc, and the
+repository `microos-progs` publishes them with a signed index. The shell
+fixes of `1.1.2` are in this release, and the board is the compatibility
+port of ADR 0018: it builds, passes its device test and receives no TLS and
+no second core. Many cores and the ports that need more than the installer
+can carry - SQLite, zstd, `file`/libmagic and awk - are `1.3.0`, not this
+release. The notes are in [`docs/releases/1.2.md`](docs/releases/1.2.md).
 
 ### Added
 
+- The screen of x86-64 (ADR 0023): the Bochs VBE interface of the VGA of
+  QEMU (`1234:1111`, the ports `0x1CE`/`0x1CF`) is programmed to 1280x800,
+  16 bits per pixel in RGB565, and the window is mapped above the identity
+  map so every address space draws on the same picture. The console is a grid
+  of 8x16 cells of Spleen 8x16 2.3.0 (BSD-2-Clause, `third_party/spleen`):
+  160 columns by 50 rows, and `font.line_gap` of `/etc/font` makes the line
+  18 or 20 pixels (44 or 40 rows). A machine without the interface keeps the
+  text mode of 80x25, and `make x86-vga-smoke` reads both screens with
+  `screendump` and `pmemsave`.
+- A colour per cell (K11c): the sixteen colours of the CGA in RGB565, the
+  byte `(paper << 4) | ink` on every cell of the grid and in the attribute of
+  the text mode, the SGR sequences of a terminal (`0`, `1`, `22`, `7`, `27`,
+  `30`-`37`, `39`, `40`-`47`, `49`, `90`-`97`, `100`-`107`) in the portable
+  `kernel/ansi.c`, the levels of `klog` (warn amber, error red, success
+  green), `console.ink`/`console.paper` of `/etc/console` and `ls --color`.
+  The serial copy stays a plain transcript.
+- `make x86-iso` (ADR 0026): an El Torito ISO (BIOS) with the loader, the
+  signed kernel and the root image, written with GRUB when `grub-mkrescue`
+  is installed and with limine otherwise. The root image is the second module
+  of the boot, the port registers it as the read-only device `boot0`, and
+  `make x86-iso-smoke` boots the ISO with `-cdrom` and nothing else, mounts
+  the volume and runs `/bin/hello`.
 - `make x86-user`: the complete machine and the x86-64 tar of the release,
   unpacked and started from the tar itself, so the artifact a person
   downloads is the one that runs. `make x86-user-serial` is its console.
@@ -96,6 +129,14 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   clock, and the script `/etc/hello.lua` with a table, a file of the VFS and
   the strings. `make x86-disk-smoke` runs the same interpreter out of the
   volume in the first boot and after the reset.
+- `microos-progs`, the public repository of the programs, with a signed
+  index at <https://turbososiska304.github.io/microos-progs/>: the index and
+  every `.mox` carry the Ed25519 signature of the project, the key is
+  `microos-progs.pub` (and `/etc/pkg/keys/microos-progs.pub`), and a machine
+  adds it with `pkg repo add` and installs from it with `pkg -S`.
+- `make x86-disk-smoke` grew to the programs of the volume: the interpreter
+  of Lua and its script, the calculator and the commands of sbase run in the
+  first boot and after the reset.
 
 ### Changed
 
@@ -140,6 +181,12 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   `tests/cases/test_userland.c`, and the ten tools are in `make x86-smoke`
   and `make x86-disk-smoke`. The MIT notice travels as
   `/etc/licenses/sbase` and `LICENSE.sbase`.
+- A program with a point in its numbers is a program of its own: the port's
+  loader sets `CR4.OSFXSR`/`CR4.OSXMMEXCPT` and `CR0.NE`, the runtime of the
+  image is built without `-mgeneral-regs-only`, and `math.c`, `stdlib.c`,
+  `setjmp.c`, `time.c` and `format_float.c` are linked into it. The
+  scheduler saves no XMM or x87 state and `execve` waits for the program, so
+  one program with a `double` runs at a time.
 
 ### Fixed
 
@@ -149,6 +196,41 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   formatter in `stdio.c`; the board's link had neither, so `make idf-build`
   stopped at `/bin/hello`. The text of a program is 4540 bytes of the 8 KiB
   window.
+- The shell fixes of `1.1.2` are in this release: `ls` and `tree` stream a
+  directory, `shell_resolve` normalises `.` and `..`, `help <command>` is not
+  cut, `path ""` is refused, and the console answers with its own sentences.
+  The patch has its own section below and its notes in
+  [`docs/releases/1.1.2.md`](docs/releases/1.1.2.md).
+
+## [1.1.2] - 2026-11-23
+
+A patch of `1.1.1` for the shell: the cleanroom of 1.1.1 found that `ls`
+stopped at 64 names, `tree` at 16, and that a path with `.` or `..` was not
+a path. The volume, the syscall ABI and `MOX1` do not change; the notes are
+in [`docs/releases/1.1.2.md`](docs/releases/1.1.2.md).
+
+### Fixed
+
+- `ls` and `tree` read the directory through `readdir` in pieces and print as
+  they go; the arrays of 64 and 16 names are gone. `tree -d` counts the files
+  it does not draw, and the depth beyond six is counted as `(deeper)`.
+- `shell_resolve` normalises `.`, `..`, `//` and a trailing `/`; `cd ..`,
+  `cd .`, `ls ..` and `cd /proc/..` work, and `/..` is `/`.
+- `help <command>` writes a long detail without the 192-byte line buffer, so
+  the sentence is not cut in the middle.
+- `path ""` is refused (reset with `path /bin:/usr/bin`); `umount /proc` and
+  `/dev` are refused while they are mounted; `df` of a path that is not there
+  is `no such file or directory`; `config` on a machine without a store says
+  so and `config sync` fails instead of a false `0 saved`.
+- `memtest` repeats an operation until the interval is measurable; a block
+  too fast for the timer is `too fast to measure`, not a hundred times the
+  speed of the memory.
+
+### Changed
+
+- The order of `ls` is the order of the filesystem: a sorted listing needs
+  the whole directory in memory, which is the limit this patch removes. The
+  note in [`docs/debts.md`](docs/debts.md) records the trade.
 
 ## [1.1.1] - 2026-11-22
 

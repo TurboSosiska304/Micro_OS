@@ -21,6 +21,7 @@ the host build as `microos_null_probe`, and the link is the check.
 | `python3` | the tools, the checks, ESP-IDF | `python` | `python3` |
 | `qemu-system-x86_64` | running the x86-64 machine | `qemu-system-x86` | `qemu-system-x86` |
 | GTK backend of QEMU | the window of `make x86-run` | `qemu-ui-gtk` | `qemu-system-gui` |
+| `grub-mkrescue` (with `xorriso`, `mtools`) or `limine` | `make x86-iso` | `grub libisoburn mtools` | `grub-pc-bin xorriso mtools` |
 | `clang-format` | `make format`, the format check | `clang-format` | `clang-format` |
 | `valgrind` | the cloud run of the tests, optional | `valgrind` | `valgrind` |
 | `pyserial` | `tools/console.py`, `tools/stream_console.py` | `python3 -m pip install pyserial` | the same |
@@ -187,6 +188,7 @@ pins and quirks are in
 
 ```bash
 make integrity   # the bundle, the image headers, the partition table, git, hygiene, format
+make wiki-check  # every link and anchor of docs/wiki
 make format      # reformat the C sources with clang-format
 make ci          # build, test, test-asan, test-tsan, smoke, [x86-smoke], integrity
 ```

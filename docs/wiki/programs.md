@@ -101,9 +101,9 @@ make x86-smoke     # the same, driven by the smoke test
 `tools/mkfs_mfs.c` writes the image: an MBR with one Linux partition at LBA
 2048, a MicroFS volume in it, `/bin`, `/etc` and an empty `/etc/init.d`, the
 twenty-six `.mox` images of the build written to `/bin` with mode `0755`, the
-licenses of zlib, PCRE2, Lua and sbase in `/etc/licenses`, the script
-`/etc/hello.lua` and the settings of the machine in `/etc/setting`. It does
-not repeat the layout
+licenses of zlib, PCRE2, Lua, sbase and bc in `/etc/licenses`, the scripts
+`/etc/hello.lua`, `/etc/bc.bc` and `/etc/dc.dc`, and the settings of the
+machine in `/etc/setting`. It does not repeat the layout
 of MicroFS: it is a block device over a range of the file, and
 `components/mfs` formats it and writes the objects through `mfs_create`,
 `mfs_write` and `mfs_chmod`. The host test
@@ -142,27 +142,33 @@ the mode of a program (`0755`), and no boot creates one:
 | `/bin/nx` | the protection of the pages: a fetch of its data, a write to its text and a call that hands its text to the kernel, each taken down, and a parent still alive |
 | `/bin/cat` | sbase: `open`, `read`, `write` on a file or descriptor 0 |
 | `/bin/echo` | the vector of the arguments and `write`, the shortest useful program |
-| `/bin/ls` | sbase: a directory through `open(O_DIRECTORY)` and `readdir`, `-l`, `-a`, `-R`, `--color` |
-| `/bin/grep` | sbase: a regular expression over the lines of a file (`-i`, `-v`, `-r`) |
+| `/bin/ls` | sbase: a directory through `open(O_DIRECTORY)` and `readdir`, `-l`, `-a`, `-R` and `--color`; no path is the working directory |
 | `/bin/pcre2grep` | the lines of a source that match a regular expression (`-i`, `-v`, `-n`, `-o`, `-g N`), through the vendored PCRE2 |
+| `/bin/grep` | sbase: a regular expression over the lines of a file (`-i`, `-v`, `-r`) |
 | `/bin/head` | sbase: the first lines of a source (`-n N`) |
+| `/bin/tail` | sbase: the last lines of a source (`-n N`) |
+| `/bin/wc` | sbase: the lines, words and bytes of a source (`-l`, `-w`, `-c`) or of descriptor 0 |
+| `/bin/sort` | sbase: the order of the lines (with `-n`) |
+| `/bin/find` | sbase: a walk of a tree with `-name` |
+| `/bin/xargs` | sbase: a command over the words of a pipe |
+| `/bin/sed` | sbase: a substitution, line by line |
 | `/bin/mkdir` | a directory through `mkdir`, one for every word of the line |
 | `/bin/pwd` | the directory of the task through `getcwd` |
 | `/bin/rm` | a name through `unlink`; `-r` walks a directory with `readdir` |
 | `/bin/spawn` | `execve` from a program, with an environment of its own |
-| `/bin/wc` | sbase: the lines, words and bytes of a source (`-l`, `-w`, `-c`) or of descriptor 0 |
 | `/bin/zcat` | a `.gz` of the VFS inflated by zlib 1.3.1 and written to the console or a file |
-| `/bin/lua` | the interpreter of Lua 5.4.7: `-e` and the script `/etc/hello.lua`, read from the volume |
-| `/bin/bc` | the calculator of bc 7.2.0: `-e`, `-f`, a script of the volume, `-l` and `scale`, `ibase`/`obase` |
+| `/bin/lua` | the interpreter of Lua 5.4.7: `-e`, the script `/etc/hello.lua`, `io` and `os.time` |
+| `/bin/pcre2grep` | a regular expression of PCRE2 over a file or a stream |
+| `/bin/bc` | the calculator of bc 7.2.0: `-e`, `-f`, a script, `-l` and `scale`, `ibase`/`obase` |
 | `/bin/dc` | the same engine in RPN: a stack, the operators and the printing command `p` |
 
 The first six talk to the kernel through `programs/prog.h`, because what they
 test is the raw door, the fault, the fork, the edge and the signals. `echo`,
 `mkdir`, `pwd`, `rm` and `spawn` are ordinary C programs linked against
-`components/libc/user`
-([ADR 0016](../adr/0016-userland.md)); `zcat`, `pcre2grep`, `lua` and `bc`/
-`dc` are linked against the libraries of somebody else (zlib, PCRE2, Lua and
-bc), and the ten commands of sbase are the second port of a set of programs
+`components/libc/user` ([ADR 0016](../adr/0016-userland.md)); `zcat`, `lua`,
+`pcre2grep` and `bc`/`dc` are linked against the four libraries of somebody
+else (zlib, Lua, PCRE2 and bc), and the ten commands of sbase are the
+commands of the machine under their canonical names
 ([`docs/porting-programs.md`](../porting-programs.md),
 [`third_party/sbase`](../../third_party/sbase/README.md)). Every one of them
 reads descriptor 0
@@ -171,23 +177,36 @@ a redirect or a pipe of the shell fills it (`cat < file`, `ls /bin | wc -l`,
 [ADR 0017](../adr/0017-shell-pipelines.md)). A program at the prompt with no
 redirect still has no descriptor 0 of the console.
 
-The boot then asks for `/bin/hello` with `ksys_execve()`: the stat, the check
-of the mode, the read through the VFS, the parse and the entry are the ones of
-the call and not a copy of them. The shell runs the same file with `exec`.
+The shell looks a bare name in `PATH` **before** its own table for the ten
+commands: `ls /etc` at the prompt is `/bin/ls`, the same file
+`exec /bin/ls /etc` runs. The command of the shell is the fallback of a
+machine without programs (the simulator) or a file that is not there (the
+board). What the shell keeps for itself is the state and the special
+commands: `cd`, `path`, `df`, `mount`, `fsck`, `stat`, `write`, `mkdir`,
+`rm`, `tree`, `kill` and `config`. The small `ls`, `cat`, `grep`, `wc` and
+`head` of ADR 0016 are not built for this port any more, and `/bin/ls` is
+the `ls` of a Unix-like system: `-l`, `-a`, `-R`, `--color[=always|never|auto]`
+(a directory in blue and an executable in green; `auto` is off, because the
+shell has no terminal to ask).
 
 The volume also carries `/etc/greeting.gz`, the fixture of `zcat`: a gzip
 stream of a fixed text, written by `tools/x86_image.py` with `mtime` from
 `SOURCE_DATE_EPOCH` and no file name in the header, so two builds of the image
 write the same bytes. `zcat -o FILE` inflates it into a file of MicroFS and
 `zcat -t` checks it; the smoke tests compare the count and the text of the
-inflated bytes. `/etc/licenses/zlib` is the zlib license beside the program
-that carries the library, and `docs/licensing.md` has the row. The ten
-commands of sbase are the commands of the machine under their canonical
-names: `/bin/ls` is the `ls` of a Unix-like system (`-l`, `-a`, `-R`,
-`--color`), `/bin/cat` is `cat` and the same for the other eight. The small
-`ls`, `cat`, `grep`, `wc` and `head` of ADR 0016 are not built for this port
-any more; `/bin/echo`, `/bin/mkdir`, `/bin/pwd` and `/bin/rm` stay because
-sbase does not have them.
+inflated bytes. `/etc/hello.lua` is the first script of the machine, read by
+the interpreter out of the volume; `/etc/bc.bc` and `/etc/dc.dc` are the
+scripts of the calculator. The licenses travel beside the programs that carry
+the libraries: `/etc/licenses/zlib`, `/etc/licenses/lua`, `/etc/licenses/pcre2`,
+`/etc/licenses/sbase` and `/etc/licenses/bc`; `docs/licensing.md` has the
+rows.
+
+The ten commands of sbase are the commands of the machine under their
+canonical names: `/bin/ls` is the `ls` of a Unix-like system (`-l`, `-a`,
+`-R`, `--color`), `/bin/cat` is `cat` and the same for the other eight. The
+small `ls`, `cat`, `grep`, `wc` and `head` of ADR 0016 are not built for this
+port any more; `/bin/echo`, `/bin/mkdir`, `/bin/pwd` and `/bin/rm` stay
+because sbase does not have them.
 
 The shell looks a bare name in `PATH` before its own table for these ten
 ([`shell.md`](shell.md)), so `ls /etc` is the program of the disk and not the
@@ -195,15 +214,18 @@ command of the shell. The simulator has no port to enter an image and keeps
 the commands of the shell; the board has no `ls` of sbase in `/bin` and falls
 back to its own.
 
-The volume also carries the two scripts of the calculators: `/etc/bc.bc` is a
-bc script with a power, a square root, the two bases, a function with a loop,
-an array, a string and the math library of `-l`, and `/etc/dc.dc` is the same
-engine in RPN. `bc -l -f /etc/bc.bc < /dev/null` reads the first, `bc -l <
-/etc/bc.bc` reads it on descriptor 0, and `dc /etc/dc.dc` runs the second;
-`/etc/licenses/bc` is the BSD-2-Clause license of the release that both
-programs carry. The shell does not give a program at the prompt a descriptor
-0, so a `bc` with a file and no redirect ends with a fatal I/O error after the
-file (`docs/debts.md`); `bc -e` does not read stdin and needs no redirect.
+`/etc/bc.bc` is a bc script with a power, a square root, the two bases, a
+function with a loop, an array, a string and the math library of `-l`, and
+`/etc/dc.dc` is the same engine in RPN. `bc -l -f /etc/bc.bc < /dev/null`
+reads the first, `bc -l < /etc/bc.bc` reads it on descriptor 0, and
+`dc /etc/dc.dc` runs the second. The shell does not give a program at the
+prompt a descriptor 0, so a `bc` with a file and no redirect ends with a fatal
+I/O error after the file (`docs/debts.md`); `bc -e` does not read stdin and
+needs no redirect.
+
+The boot then asks for `/bin/hello` with `ksys_execve()`: the stat, the check
+of the mode, the read through the VFS, the parse and the entry are the ones of
+the call and not a copy of them. The shell runs the same file with `exec`.
 
 ## The board: Xtensa code without an MMU
 
@@ -503,28 +525,27 @@ plan to pretend otherwise.
 
 * **No ELF and no dynamic linker.** The format is `MOX1`, everything is
   statically linked, and there are no shared objects.
-* **No program of the board yet.** The header knows the machine (ADR 0018)
-  and `mkprog.sh` writes it, but the loader of the ESP32 port is not written:
-  an Xtensa image on the board is still `ENOSYS`, and only x86-64 enters a
-  program. The format is ready for the second machine; the port is not.
+* **No protected program on the board.** The board runs a `.mox` of Xtensa in
+  two fixed 8 KiB windows of the address space of the kernel (ADR 0018): the
+  image runs, and a bad pointer that reaches the kernel takes the machine
+  down. Protection is the x86-64 port and a processor with an MMU.
 * **No libc of the host.** A program has the calls of the ABI, the library of
   `components/libc/user` and nothing else. The library is not a standard C
-  library: it has what the programs of `/bin` and the ports of zlib and Lua
-  use. A program with a `double` (Lua) is built without
-  `-mgeneral-regs-only`, and the port saves no XMM or x87 state, so it runs
-  one at a time; the arithmetic is `src/math.c` and not a `libm`.
-* **No image larger than 8 MiB.** `execve` reads the image in one block of
-  the allocator, in pieces of `KSYS_MAX_IO` (64 KiB); `K_EXEC_MAX_IMAGE` is
-  the ceiling and a larger file is `E2BIG` before a byte of it is read. The
-  block is a copy beside the window of the program, so the machine holds two
-  copies for the time of the load.
-* **No inherited descriptors.** A program is a task with a table of four
-  descriptors of its own, and the shell does not pass its own table to it.
-  `cat`, `wc`, `head` and `grep` read descriptor 0 when they are given no file
-  (or `-`), but a fresh table has no descriptor 0: the read answers `EBADF`
-  until a redirection or an inherited table opens it. The descriptors 1 and 2
-  are the console; `pipe`, `dup2` and the inheritance are a debt of the
-  milestone after this one.
+  library: the allocation is a fixed arena of the program and the streams are
+  a descriptor, not a buffer. `float` and `double` are those of an image that
+  asks for them (`ULIBC_WITH_FLOAT`, the port of Lua): it is built without
+  `-mgeneral-regs-only`, links `math.c`, `setjmp.c` and `format_float.c`, and
+  runs one at a time because the scheduler saves no XMM or x87 state.
+* **No image larger than 8 MiB.** `execve` reads the file in pieces of
+  `KSYS_MAX_IO` (64 KiB) into one block of the allocator, up to
+  `K_EXEC_MAX_IMAGE` (8 MiB); a larger file is `E2BIG` before a byte of it is
+  read, and the machine holds two copies of the image for the time of the
+  load ([debts.md](../debts.md)).
+* **No descriptor 0 at the prompt.** A program is a task with a table of four
+  descriptors of its own, and `execve` carries the table of the caller: a
+  redirection or a pipe is what fills descriptor 0, and a program started at
+  the prompt with no redirection reads `EBADF` from it. The descriptors 1 and
+  2 are the console.
 * **No `mmap` and no `brk`.** A program cannot ask for a range of its own, so
   the allocator is the arena of its bss and a library that allocates more
   than `ULIBC_HEAP_SIZE` needs a larger program or the ranges the kernel does
