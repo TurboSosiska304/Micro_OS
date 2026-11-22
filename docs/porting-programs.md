@@ -271,6 +271,44 @@ the host, a `userland` test of its own), and in `x86-smoke` and
 `sb-find -name`, `sb-sort`, `sb-grep -r`, `sb-wc`, `sb-tail`, `sb-head`,
 `sb-sed`, `sb-cat` and `ls | sb-xargs`.
 
+## The third port: file and libmagic
+
+The third port is a command **and** a library that reads a database of its
+own: file 5.45 with libmagic (`third_party/file`, BSD-2-Clause). It is the
+first one whose data does not fit, and the first one that asked for a kernel
+change of its own (an image of up to 8 MiB, read in pieces of the transfer
+edge, `K_EXEC_MAX_IMAGE`).
+
+What it added to the recipe:
+
+* **The data is a build step.** The release's database is about 10 MiB.
+  `tools/magic_subset.py` chooses a subset of the Magdir files (the list is
+  `third_party/file/magic/subset.json`) and `microos_magic_compile` compiles
+  it with the library itself into `/etc/magic.mgc`; the text travels as
+  `/etc/magic` and is the fallback when the compiled file is gone. A command
+  whose data is somebody else's is a **selection** and a tool, not a copy of
+  the whole.
+* **No `mmap` is a configuration, not a port.** The library has a path that
+  reads the compiled database into a block (`QUICK` off); the port leaves it
+  off, and `magic_buffer()` is handed the bytes the program read. The one
+  `read` of the database became a loop of 64 KiB pieces, because the ABI of
+  this system refuses a larger count.
+* **No floating point is a hunk of the library, not a flag.** The release
+  matches magic types in `float` and `double`; a program of this port has no
+  XMM state (`-mgeneral-regs-only`) and the formatter has no `%g`. The port
+  compiles those paths out with `MICRO_OS_NO_FLOAT` and drops such rules from
+  the database; the hunks are named in the README of the directory.
+* **The arena is the budget.** The database is 359 KiB and the file buffer
+  128 KiB of a 960 KiB arena; the encoding test of the release wanted 512 KiB
+  for a 64 KiB window and the port gives it 16 KiB. A port whose library
+  allocates is a port whose numbers are chosen against `ULIBC_HEAP_SIZE`.
+* **The streams needed a block.** `grep` of sbase over the database was one
+  system call per byte and the shell gave up after ten seconds; the read side
+  of `FILE` now has a block of 512 bytes.
+
+The tests are `tests/cases/test_file.c` for the host (the compiled database
+and the text) and `/bin/file` in `x86-smoke` and `x86-disk-smoke`.
+
 ## The checklist of the next port
 
 1. Read the license; stop if it is copyleft.
@@ -299,6 +337,10 @@ the host, a `userland` test of its own), and in `x86-smoke` and
 * **The board.** 8 KiB windows, no MMU, the kernel's address space; a
   program library for the board is a different problem (ADR 0018).
 * **A dynamic linker and shared objects.** Every image is static.
+* **`mmap`, `brk` and a range that grows.** A library that maps its data
+  (`QUICK` of libmagic) takes the block path; the arena of the program is the
+  ceiling and a library with a bigger database needs a smaller selection or a
+  `brk` of the program.
 * **Floating point.** `-mgeneral-regs-only` is the rule of the port.
 * **A real `fork` of a library's child process.** The system has `fork` on
   x86-64 and the library now has `fork`, `waitpid` and `execvp`, but the

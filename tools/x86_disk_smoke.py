@@ -87,6 +87,11 @@ SECOND_BOOT = [
     # the disk through the library of a program that grew with them.
     "exec /bin/sb-ls -la /etc",
     "exec /bin/sb-grep -r hostname /etc",
+    # The type of a file on the volume the reset left: a program of /bin is a
+    # MOX1 image of the port, and the text the first boot inflated is a text.
+    # The database of libmagic is a file of /etc and it survived the reset too.
+    "exec /bin/file /bin/file",
+    "exec /bin/file -i /persist.gz.txt",
 ]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -360,6 +365,18 @@ def check(first: str, second: str) -> list:
         "a recursive grep of sbase walks the volume after the reset",
         "/etc/setting:hostname=x86_64" in recursive,
         recursive,
+    )
+    typed = second_answers[13]
+    expect(
+        "file names a program of the volume after the reset",
+        "Micro OS MOX1 executable" in typed,
+        typed,
+    )
+    inflated_type = second_answers[14]
+    expect(
+        "file reads the inflated file after the reset",
+        "text/plain" in inflated_type,
+        inflated_type,
     )
 
     return checks

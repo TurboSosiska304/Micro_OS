@@ -150,14 +150,16 @@ the mode of a program (`0755`), and no boot creates one:
 | `/bin/zcat` | a `.gz` of the VFS inflated by zlib 1.3.1 and written to the console or a file |
 | `/bin/sb-cat`, `sb-grep`, `sb-head`, `sb-ls`, `sb-tail`, `sb-wc` | the tools of sbase (MIT) for a file, a directory and a line: `ls -la`, `grep -r`, `wc -l`, `head`, `tail`, `cat` |
 | `/bin/sb-sort`, `sb-find`, `sb-xargs`, `sb-sed` | the tools of sbase for a tree and a stream: the order of `sort` (with `-n`), a walk of `find` with `-name`, a command over the words of a pipe, and a substitution of `sed` |
+| `/bin/file` | the type of a file through libmagic of file 5.45 (`-b`, `-i`, `-z` for a gzip, `-f` for a list) and the compact database `/etc/magic.mgc` |
 
 The first five talk to the kernel through `programs/prog.h`, because what they
 test is the raw door, the fault, the fork, the edge and the signals. The rest
 are ordinary C programs linked against `components/libc/user`
 ([ADR 0016](../adr/0016-userland.md)); `zcat` is also linked against zlib, the
-first library of somebody else, and the ten `sb-*` tools are sbase
+first library of somebody else, the ten `sb-*` tools are sbase
 ([`docs/porting-programs.md`](../porting-programs.md),
-[`third_party/sbase`](../../third_party/sbase/README.md)). Every one of them
+[`third_party/sbase`](../../third_party/sbase/README.md)), and `file` is file
+5.45 with libmagic ([`third_party/file`](../../third_party/file/README.md)). Every one of them
 reads descriptor 0
 when it is given no file (or `-`); `execve` carries the table of the caller, so
 a redirect or a pipe of the shell fills it (`cat < file`, `ls /bin | wc -l`,
@@ -180,6 +182,13 @@ them: `/bin/ls` prints the names on one line and says `error 2` for a path
 that is not there, which is a sentence the smoke test reads; `/bin/sb-ls` is
 the `ls` of a Unix-like system, with `-l`, `-a`, `-R` and the owner of the
 file. A person who wants the second one types the name.
+
+The volume also carries the database of `file`: `/etc/magic.mgc` (the subset
+of the Magdir files compiled by the build, 349 KiB) and `/etc/magic` (the same
+text, the fallback when the compiled file is not there). `/etc/hello.lua` is
+the fixture of the Lua rule: a script with the shebang the database names, so
+`file /etc/hello.lua` is `Lua script, ASCII text executable`, and
+`/etc/licenses/file` is the BSD-2-Clause notice beside the program.
 
 ## The board: Xtensa code without an MMU
 

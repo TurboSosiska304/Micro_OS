@@ -207,7 +207,35 @@ COMMANDS = [
     "exec /bin/sb-head -n 1 /etc/setting",
     "exec /bin/sb-sed -n s/x86_64/X/p /etc/setting",
     "exec /bin/sb-cat /etc/setting",
-    "ls /etc | /bin/sb-xargs",
+    # The words of a pipe run a command of the library. The directory of the
+    # test is one of its own and not /etc: a program inherits eight argument
+    # words (docs/debts.md), and /etc grew past them with the database of
+    # file.
+    "mkdir /tmp/xa",
+    "echo one > /tmp/xa/one",
+    "echo two > /tmp/xa/two",
+    "ls /tmp/xa | /bin/sb-xargs",
+    # The type of a file, with libmagic (third_party/file): a program of the
+    # image is a MOX1 record of our database, the fixture is a gzip, the
+    # script is Lua, a directory is a directory and a name that is not there
+    # is the sentence of the call and its status. The database is the compact
+    # subset of /etc/magic.mgc, so the recognitions below are the ones the
+    # port promised and not the ten megabytes of the release.
+    "exec /bin/file /bin/file",
+    "exec /bin/file -i /bin/file",
+    "exec /bin/file /etc/greeting.gz",
+    "exec /bin/file -z /etc/greeting.gz",
+    "exec /bin/file /etc/hello.lua",
+    "exec /bin/file -i /etc/hello.lua",
+    "exec /bin/file -b /etc/setting",
+    "exec /bin/file /etc",
+    "exec /bin/file /etc/no-such-file",
+    "echo /etc/setting > /tmp/filelist",
+    "exec /bin/file -f /tmp/filelist",
+    # The bytes of descriptor 0 through a pipe, and the flag of a link that
+    # the VFS does not have (accepted, and the file is read).
+    "cat /etc/setting | /bin/file -",
+    "exec /bin/file -L /etc/setting",
 ]
 
 # The prompt of the shell. It is written in one call, so the log of another
@@ -917,10 +945,10 @@ def check(output: str) -> list:
     expect("sb-sed matches and substitutes a line", "hostname=X" in changed, changed)
     text = answer("exec /bin/sb-cat /etc/setting")
     expect("sb-cat copies a file", "hostname=x86_64" in text and "console=vga" in text, text)
-    piped = answer("ls /etc | /bin/sb-xargs")
+    piped = answer("ls /tmp/xa | /bin/sb-xargs")
     expect(
         "sb-xargs runs a command over the words of a pipe",
-        "setting" in piped and "licenses" in piped,
+        "one" in piped and "two" in piped,
         piped,
     )
     free_answer = answer("free")
@@ -928,6 +956,68 @@ def check(output: str) -> list:
         "free prints the memory and not the clock",
         "heap:" in free_answer and "uptime:" not in free_answer,
         free_answer,
+    )
+    # --- the type of a file (third_party/file, libmagic)
+    #
+    # The first check is the record of our own format: the image of a program
+    # is MOX1 and no Magdir file of the release knows it. The others are the
+    # families of the compact database: a compressed stream, a script of a
+    # language, a directory and a name that is not there.
+    image_type = answer("exec /bin/file /bin/file")
+    expect(
+        "file names a program of the image as a MOX1 executable",
+        "Micro OS MOX1 executable" in image_type and "version 2" in image_type,
+        image_type,
+    )
+    mime = answer("exec /bin/file -i /bin/file")
+    expect(
+        "file -i prints the MIME type of a MOX1 image",
+        "application/x-microos-mox" in mime,
+        mime,
+    )
+    packed = answer("exec /bin/file /etc/greeting.gz")
+    expect("file names a gzip stream", "gzip compressed data" in packed, packed)
+    inside = answer("exec /bin/file -z /etc/greeting.gz")
+    expect(
+        "file -z looks inside the gzip",
+        "ASCII text" in inside and "gzip compressed data" in inside,
+        inside,
+    )
+    lua = answer("exec /bin/file /etc/hello.lua")
+    expect("file names a Lua script", "Lua script" in lua, lua)
+    lua_mime = answer("exec /bin/file -i /etc/hello.lua")
+    expect("file -i names the Lua MIME type", "text/x-lua" in lua_mime, lua_mime)
+    brief = answer("exec /bin/file -b /etc/setting")
+    expect(
+        "file -b prints the description and not the name",
+        "ASCII text" in brief and "/etc/setting:" not in brief,
+        brief,
+    )
+    directory = answer("exec /bin/file /etc")
+    expect("file names a directory", "directory" in directory, directory)
+    missing = answer("exec /bin/file /etc/no-such-file")
+    expect(
+        "file reports a name that is not there",
+        "cannot open" in missing and "No such file or directory" in missing,
+        missing,
+    )
+    listed = answer("exec /bin/file -f /tmp/filelist")
+    expect(
+        "file -f reads the names of a list",
+        "/etc/setting: ASCII text" in listed,
+        listed,
+    )
+    piped_bytes = answer("cat /etc/setting | /bin/file -")
+    expect(
+        "file reads the bytes of descriptor 0",
+        "-: ASCII text" in piped_bytes,
+        piped_bytes,
+    )
+    followed = answer("exec /bin/file -L /etc/setting")
+    expect(
+        "file -L accepts the flag of a link",
+        "ASCII text" in followed,
+        followed,
     )
     expect(
         "the programs of the port are files of the disk",
@@ -950,6 +1040,7 @@ def check(output: str) -> list:
                 "pwd",
                 "spawn",
                 "zcat",
+                "file",
             )
         ),
         bin_listing[-200:],
@@ -1488,7 +1579,7 @@ def main(argv: list) -> int:
         default=os.path.join(ROOT, "build-x86-open"),
         help="the build with MICRO_OS_REQUIRE_SIGNATURE=OFF",
     )
-    parser.add_argument("--timeout", type=float, default=30.0, help="the seconds the machine gets")
+    parser.add_argument("--timeout", type=float, default=120.0, help="the seconds the machine gets")
     parser.add_argument("--verbose", action="store_true", help="print the console of the machine")
     args = parser.parse_args(argv)
 

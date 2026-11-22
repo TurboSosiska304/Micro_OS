@@ -1,0 +1,117 @@
+{
+  "comment": [
+    "The subset of the magic files of file 5.45 that travels in the image.",
+    "See third_party/file/README.md: `keep` selects a top-level rule by a",
+    "regular expression on its line, `depth` is the deepest `>` of the rule",
+    "that is kept, and `desc` keeps only the rules whose description matches",
+    "one of the expressions (the condition lines without a description stay).",
+    "The order of this list is the order of the database."
+  ],
+  "files": [
+    {
+      "path": "microos.magic",
+      "keep": [".*"],
+      "depth": 2
+    },
+    {
+      "path": "Magdir/elf",
+      "keep": ["\\\\177ELF"],
+      "depth": 2,
+      "desc": ["^ELF$", "32-bit", "64-bit", "LSB", "MSB", "executable",
+               "shared object", "relocatable", "core file", "x86-64",
+               "version", "SYSV", "invalid", "no file type",
+               "processor-specific"]
+    },
+    {
+      "path": "Magdir/compress",
+      "keep": ["\\\\037\\\\213", "BZh", "BZ0", "\\\\xFD7zXZ", "=0x5d",
+               "0xFD2FB52", "0x184d22", "7z\\\\274", "\\\\037\\\\235",
+               "LZIP", "lzop", "RZIP", "snappy", "BZ3v1"],
+      "depth": 2
+    },
+    {
+      "path": "Magdir/archive",
+      "keep": ["^500\\s+quad\\s+0", "^0\\s+short\\s+070707",
+               "^0\\s+short\\s+0143561", "070701", "070702", "=!<arch>",
+               "=!<thin>", "PK\\\\003\\\\004", "PK\\\\005\\\\006", "Rar!",
+               "PK\\\\x07\\\\x08"],
+      "depth": 9,
+      "desc": ["tar archive", "POSIX tar", "GNU tar", "cpio archive",
+               "ar archive", "Zip archive", "RAR archive", "7-zip",
+               "Android package", "Java archive", "empty"]
+    },
+    {
+      "path": "Magdir/zip",
+      "keep": ["-22"],
+      "depth": 8
+    },
+    {
+      "path": "Magdir/images",
+      "keep": ["\\\\x89PNG", "GIF8", "^0\\s+string\\s+BM",
+               "^0\\s+uleshort\\s+40"],
+      "depth": 2
+    },
+    {
+      "path": "Magdir/jpeg",
+      "keep": ["0xffd8ff"],
+      "depth": 1
+    },
+    {
+      "path": "Magdir/audio",
+      "keep": ["\\.snd", "MThd", "fLaC", "MAC\\\\040", "MP\\+", "MPCK"],
+      "depth": 1
+    },
+    {
+      "path": "Magdir/vorbis",
+      "keep": ["OggS"],
+      "depth": 2
+    },
+    {
+      "path": "Magdir/riff",
+      "keep": ["RIFF"],
+      "depth": 2
+    },
+    {
+      "path": "Magdir/c-lang",
+      "keep": [".*"],
+      "depth": 4
+    },
+    {
+      "path": "Magdir/lua",
+      "keep": [".*"],
+      "depth": 4
+    },
+    {
+      "path": "Magdir/python",
+      "keep": ["#!", "^0\\s+string/t\\s+\"\"\""],
+      "depth": 4,
+      "desc": ["Python script"]
+    },
+    {
+      "path": "Magdir/sql",
+      "keep": ["SQLite", "MySQL", "PostgreSQL"],
+      "depth": 1
+    },
+    {
+      "path": "Magdir/msdos",
+      "keep": ["^0\\s+string/b\\s+MZ", "^0\\s+string/b\\s+LX",
+               "^0\\s+string/b\\s+LZ"],
+      "depth": 6,
+      "desc": ["MS-DOS executable", "PE32", "MS Windows", "New Executable",
+               "Linear Executable", "COFF", "COM executable", "Windows",
+               "DOS executable"]
+    },
+    {
+      "path": "Magdir/linux",
+      "keep": ["Linux kernel", "Linux swap", "Linux/i386", "LVM2",
+               "SE Linux policy", "Linux Software Map", "SYSLINUX"],
+      "depth": 1
+    },
+    {
+      "path": "Magdir/filesystems",
+      "keep": ["Linux$", "ext[234] filesystem", "NTFS", "Squashfs", "BTRFS",
+               "SGI XFS", "F2FS", "reiserfs", "romfs", "ISO 9660"],
+      "depth": 1
+    }
+  ]
+}

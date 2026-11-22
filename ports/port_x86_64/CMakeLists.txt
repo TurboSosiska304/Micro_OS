@@ -545,6 +545,80 @@ function(add_sbase_program tool heap)
     set(MICROOS_PROGRAM_IMAGES ${MICROOS_PROGRAM_IMAGES} PARENT_SCOPE)
 endfunction()
 
+# --- file and libmagic: the type of a file ----------------------------------
+#
+# file 5.45 with libmagic (third_party/file, BSD-2-Clause) is the second port
+# of a library that reads the bytes of a file and the first one that needs a
+# database of its own. The database does not fit: the release ships about ten
+# megabytes of magic and the RAM of the machine is what the boot leaves, so
+# the port compiles a subset of the Magdir files (tools/magic_subset.py,
+# third_party/file/magic/subset.json) into /etc/magic.mgc, and the same text
+# travels as /etc/magic for a machine whose compiled file is gone.
+#
+# The library is a static archive of the guest. It reads the database whole
+# with malloc (no QUICK: this machine has no mmap), matches with the portable
+# softmagic, and asks the port for the two calls of a process it cannot make
+# (port/file_port.c). The types `float` and `double` of the release are left
+# out with MICRO_OS_NO_FLOAT: a program of this port has no XMM state.
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/libmagic.cmake")
+
+microos_userland_library(microos_user_file
+    SOURCES ${MICROOS_FILE_SOURCES}
+    INCLUDES "${MICROOS_FILE_DIR}/src" "${MICROOS_FILE_DIR}/port"
+    DEFINES HAVE_CONFIG_H
+    COMPILE_OPTIONS -Os ${MICROOS_FILE_WARNINGS}
+)
+
+# The compiler of the database is a tool of the build and not a program of the
+# machine: it is compiled by the compiler of the host with the host libc and
+# the same configuration header, so the format of the .mgc it writes is the
+# format the library of the guest reads.
+add_executable(microos_magic_compile
+    ${MICROOS_FILE_SOURCES}
+    "${MICROOS_FILE_DIR}/port/magic_compile.c"
+)
+target_include_directories(microos_magic_compile PRIVATE
+    "${MICROOS_FILE_DIR}/src" "${MICROOS_FILE_DIR}/port"
+)
+target_compile_definitions(microos_magic_compile PRIVATE HAVE_CONFIG_H)
+target_compile_options(microos_magic_compile PRIVATE -Os ${MICROOS_FILE_WARNINGS})
+target_link_options(microos_magic_compile PRIVATE -no-pie)
+
+# The text of the database and its compiled form. `magic_compile -C magic`
+# writes magic.mgc beside the name in its own directory, which is why the
+# command runs in the build directory.
+set(MAGIC_TEXT "${CMAKE_BINARY_DIR}/magic")
+set(MAGIC_MGC "${CMAKE_BINARY_DIR}/magic.mgc")
+add_custom_command(
+    OUTPUT "${MAGIC_TEXT}"
+    COMMAND ${CMAKE_COMMAND} -E env python3
+            "${MICROOS_MAGIC_SUBSET}"
+            --config "${MICROOS_MAGIC_CONFIG}"
+            --out "${MAGIC_TEXT}"
+    DEPENDS "${MICROOS_MAGIC_SUBSET}" "${MICROOS_MAGIC_CONFIG}"
+            "${MICROOS_FILE_DIR}/magic/microos.magic"
+    COMMENT "choosing the subset of the magic database of file"
+    VERBATIM
+)
+add_custom_command(
+    OUTPUT "${MAGIC_MGC}"
+    COMMAND "$<TARGET_FILE:microos_magic_compile>" -C magic
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+    DEPENDS microos_magic_compile "${MAGIC_TEXT}"
+    COMMENT "compiling the magic database of /etc"
+    VERBATIM
+)
+
+add_libc_program(file
+    LIBRARIES microos_user_file microos_user_zlib
+    INCLUDES "${MICROOS_FILE_DIR}/src" "${MICROOS_FILE_DIR}/port" "${ZLIB_DIR}"
+    DEFINES ULIBC_HEAP_SIZE=983040u
+    SOURCES ${SBASE_LIBC_SOURCES}
+            "${LIBC_USER_DIR}/src/locale.c"
+            "${LIBC_USER_DIR}/src/asprintf.c"
+    COMPILE_OPTIONS -Os ${MICROOS_FILE_WARNINGS}
+)
+
 add_sbase_program(cat 131072u)
 add_sbase_program(head 131072u)
 add_sbase_program(wc 131072u)
@@ -796,6 +870,6 @@ add_custom_command(
 
 add_custom_target(image
     DEPENDS "${CMAKE_BINARY_DIR}/microos64.bin" "${CMAKE_BINARY_DIR}/loader32.elf"
-            ${MICROOS_PROGRAM_IMAGES}
+            "${MAGIC_MGC}" ${MICROOS_PROGRAM_IMAGES}
     COMMENT "the image of the port: loader32.elf + microos64.bin + the programs of /bin"
 )

@@ -49,6 +49,7 @@ if(NOT ESP_PLATFORM)
         cases/test_sign.c
         cases/test_progs.c
         cases/test_zlib.c
+        cases/test_file.c
     )
 
     # The tests of a component that a build leaves out are left out with it:
@@ -141,6 +142,74 @@ if(NOT ESP_PLATFORM)
         ${MICROOS_ZLIB_SOURCES}
         "${MICROOS_ZLIB_DIR}/port/zlib_os.c"
     )
+
+    # --- file and libmagic (third_party/file) -----------------------------
+    #
+    # The library is the same source as the guest archive, compiled for the
+    # host with the port layer of the directory: the test is the second build
+    # of the port and covers the values of the format, not the door of the
+    # system call.
+    include("${CMAKE_SOURCE_DIR}/cmake/libmagic.cmake")
+    set_source_files_properties(${MICROOS_FILE_SOURCES}
+        PROPERTIES COMPILE_DEFINITIONS "HAVE_CONFIG_H=1"
+                   COMPILE_OPTIONS "${MICROOS_FILE_WARNINGS}")
+
+    # The database is made by the library itself, as in the guest build: the
+    # tool compiles the text the script chose, and the two levels of the port
+    # are two files of the build (`magic` and `magic.mgc` beside it).
+    set(MICROOS_TEST_MAGIC "${CMAKE_BINARY_DIR}/magic")
+    set(MICROOS_TEST_MAGIC_MGC "${CMAKE_BINARY_DIR}/magic.mgc")
+    set(MICROOS_TEST_MAGIC_TEXT "${CMAKE_BINARY_DIR}/magic-text")
+
+    add_executable(microos_magic_compile
+        ${MICROOS_FILE_SOURCES}
+        "${MICROOS_FILE_DIR}/port/magic_compile.c"
+    )
+    target_include_directories(microos_magic_compile PRIVATE
+        "${MICROOS_FILE_DIR}/src" "${MICROOS_FILE_DIR}/port")
+    target_compile_definitions(microos_magic_compile PRIVATE HAVE_CONFIG_H=1)
+    target_compile_options(microos_magic_compile PRIVATE ${MICROOS_FILE_WARNINGS})
+
+    add_custom_command(
+        OUTPUT "${MICROOS_TEST_MAGIC}"
+        COMMAND ${CMAKE_COMMAND} -E env python3
+                "${MICROOS_MAGIC_SUBSET}"
+                --config "${MICROOS_MAGIC_CONFIG}"
+                --out "${MICROOS_TEST_MAGIC}"
+        DEPENDS "${MICROOS_MAGIC_SUBSET}" "${MICROOS_MAGIC_CONFIG}"
+                "${MICROOS_FILE_DIR}/magic/microos.magic"
+        COMMENT "choosing the subset of the magic database of file"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${MICROOS_TEST_MAGIC_MGC}"
+        COMMAND "$<TARGET_FILE:microos_magic_compile>" -C magic
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        DEPENDS microos_magic_compile "${MICROOS_TEST_MAGIC}"
+        COMMENT "compiling the magic database of the test"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${MICROOS_TEST_MAGIC_TEXT}"
+        COMMAND ${CMAKE_COMMAND} -E copy "${MICROOS_TEST_MAGIC}" "${MICROOS_TEST_MAGIC_TEXT}"
+        DEPENDS "${MICROOS_TEST_MAGIC}"
+        COMMENT "the text of the magic database, without a .mgc beside it"
+        VERBATIM
+    )
+    add_custom_target(microos_magic_database ALL
+        DEPENDS "${MICROOS_TEST_MAGIC_MGC}" "${MICROOS_TEST_MAGIC_TEXT}")
+    add_dependencies(microos_tests microos_magic_database)
+
+    # The test includes the internal header of the library (file.h), which
+    # wants the configuration of the port as the library sees it.
+    set_source_files_properties(cases/test_file.c
+        PROPERTIES COMPILE_DEFINITIONS "HAVE_CONFIG_H=1")
+    target_sources(microos_tests PRIVATE ${MICROOS_FILE_SOURCES})
+    target_include_directories(microos_tests PRIVATE
+        "${MICROOS_FILE_DIR}/src" "${MICROOS_FILE_DIR}/port")
+    target_compile_definitions(microos_tests PRIVATE
+        MICROOS_TEST_MAGIC="${MICROOS_TEST_MAGIC}"
+        MICROOS_TEST_MAGIC_TEXT="${MICROOS_TEST_MAGIC_TEXT}")
 
     # The FAT reader comes from the component when the host build links it
     # (the default, ADR 0009). A build that turns it off still compiles the
