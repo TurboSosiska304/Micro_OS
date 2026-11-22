@@ -66,6 +66,7 @@ static void run_tests(void *arg)
 #if MICRO_OS_NET && MICRO_OS_NET_HTTP && MICRO_OS_NET_HTTP_SERVER && MICRO_OS_NET_NTP &&           \
     MICRO_OS_NET_MQTT
     test_net();
+    test_pkg();
 #endif
     test_boot();
 #if MICRO_OS_WIFI

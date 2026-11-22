@@ -162,6 +162,317 @@ static void put_be32(k_u8_t *p, k_u32_t value)
     p[3] = (k_u8_t)value;
 }
 
+/* --- the fake server of the stream: one answer per connection --- */
+
+#define STREAM_ANSWERS 8
+
+struct fake_server {
+    const char *answers[STREAM_ANSWERS];
+    k_size_t count;
+    k_size_t opened;
+    k_size_t pos;
+    k_size_t chunk;
+    char request[512];
+    int closes;
+};
+
+static struct fake_server g_server;
+
+static int stream_open(const char *host, int port, void **ctx)
+{
+    if (g_server.opened >= g_server.count) {
+        return -1;
+    }
+
+    g_server.opened++;
+    g_server.pos = 0;
+
+    (void)host;
+    (void)port;
+    (void)ctx;
+
+    return 0;
+}
+
+static int stream_send(void *ctx, const void *data, k_size_t size)
+{
+    k_size_t len = size < sizeof(g_server.request) - 1u ? size : sizeof(g_server.request) - 1u;
+
+    memcpy(g_server.request, data, len);
+    g_server.request[len] = '\0';
+
+    (void)ctx;
+
+    return (int)size;
+}
+
+static int stream_recv(void *ctx, void *data, k_size_t size)
+{
+    const char *answer = g_server.answers[g_server.opened - 1u];
+    k_size_t total = strlen(answer);
+    k_size_t take = total - g_server.pos;
+
+    (void)ctx;
+
+    if (take > size) {
+        take = size;
+    }
+    if (take > g_server.chunk) {
+        take = g_server.chunk;
+    }
+    if (take == 0) {
+        return 0;
+    }
+
+    memcpy(data, answer + g_server.pos, take);
+    g_server.pos += take;
+
+    return (int)take;
+}
+
+static void stream_close(void *ctx)
+{
+    g_server.closes++;
+
+    (void)ctx;
+}
+
+static const struct http_transport g_stream_transport = {
+    .open = stream_open,
+    .send = stream_send,
+    .recv = stream_recv,
+    .close = stream_close,
+};
+
+/* The sink of the stream: a buffer, with the reset of a file that starts
+ * again. */
+struct stream_sink {
+    char text[256];
+    k_size_t used;
+    int resets;
+};
+
+static int sink_write(void *ctx, const void *data, k_size_t size)
+{
+    struct stream_sink *sink = (struct stream_sink *)ctx;
+
+    if (sink->used + size >= sizeof(sink->text)) {
+        return -1;
+    }
+
+    memcpy(sink->text + sink->used, data, size);
+    sink->used += size;
+    sink->text[sink->used] = '\0';
+
+    return (int)size;
+}
+
+static int sink_reset(void *ctx)
+{
+    struct stream_sink *sink = (struct stream_sink *)ctx;
+
+    sink->used = 0;
+    sink->text[0] = '\0';
+    sink->resets++;
+
+    return 0;
+}
+
+static void server_reset(void)
+{
+    memset(&g_server, 0, sizeof(g_server));
+    g_server.chunk = 1024;
+}
+
+static void stream_init(struct http_stream *stream, struct stream_sink *sink)
+{
+    memset(stream, 0, sizeof(*stream));
+    memset(sink, 0, sizeof(*sink));
+
+    stream->transport = &g_stream_transport;
+    stream->sink.ctx = sink;
+    stream->sink.write = sink_write;
+    stream->sink.reset = sink_reset;
+    stream->max_redirects = HTTP_REDIRECT_MAX;
+}
+
+static void test_stream(void)
+{
+    struct http_stream stream;
+    struct stream_sink sink;
+
+    ktest_begin("http: the stream reads a body of a length, of chunks and of a redirect");
+
+    /* --- Content-Length --- */
+    server_reset();
+    g_server.answers[0] =
+        "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\nhello world";
+    g_server.count = 1;
+    g_server.chunk = 3; /* the body arrives in pieces of three */
+
+    stream_init(&stream, &sink);
+    stream.url = "http://example.com/file";
+
+    KT_CHECK_INT_EQ(http_stream(&stream), HTTP_OK);
+    KT_CHECK_INT_EQ(stream.status, 200);
+    KT_CHECK_INT_EQ((long long)stream.total, 11);
+    KT_CHECK_INT_EQ((long long)stream.length, 11);
+    KT_CHECK_STR_EQ(sink.text, "hello world");
+    KT_CHECK(strstr(g_server.request, "GET /file HTTP/1.1") != NULL);
+    KT_CHECK(strstr(g_server.request, "Host: example.com") != NULL);
+    KT_CHECK_INT_EQ(g_server.closes, 1);
+
+    /* --- chunked --- */
+    server_reset();
+    g_server.answers[0] = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+                          "5\r\nhello\r\n6;ext=1\r\n world\r\n0\r\n\r\n";
+    g_server.count = 1;
+    g_server.chunk = 4;
+
+    stream_init(&stream, &sink);
+    stream.url = "http://example.com/chunked";
+
+    KT_CHECK_INT_EQ(http_stream(&stream), HTTP_OK);
+    KT_CHECK(stream.chunked);
+    KT_CHECK_INT_EQ((long long)stream.length, 11);
+    KT_CHECK_STR_EQ(sink.text, "hello world");
+
+    /* A chunk that says more than it carries is a body that ended early. */
+    server_reset();
+    g_server.answers[0] = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n10\r\nshort";
+    g_server.count = 1;
+
+    stream_init(&stream, &sink);
+    stream.url = "http://example.com/chunked";
+    KT_CHECK_INT_EQ(http_stream(&stream), HTTP_SHORT);
+
+    /* A size that is not hexadecimal is not a chunk. */
+    server_reset();
+    g_server.answers[0] = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\nhello\r\n";
+    g_server.count = 1;
+
+    stream_init(&stream, &sink);
+    stream.url = "http://example.com/chunked";
+    KT_CHECK_INT_EQ(http_stream(&stream), HTTP_PROTOCOL);
+
+    /* --- a redirect, then the page --- */
+    server_reset();
+    g_server.answers[0] = "HTTP/1.1 302 Found\r\nLocation: /next\r\nContent-Length: 0\r\n\r\n";
+    g_server.answers[1] = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nmoved";
+    g_server.count = 2;
+
+    stream_init(&stream, &sink);
+    stream.url = "http://example.com/old";
+
+    KT_CHECK_INT_EQ(http_stream(&stream), HTTP_OK);
+    KT_CHECK_INT_EQ(stream.status, 200);
+    KT_CHECK_INT_EQ((int)stream.redirects, 1);
+    KT_CHECK_STR_EQ(sink.text, "moved");
+    KT_CHECK(strstr(g_server.request, "GET /next HTTP/1.1") != NULL);
+
+    /* A redirect to another host is a whole URL. */
+    server_reset();
+    g_server.answers[0] =
+        "HTTP/1.1 301 Moved\r\nLocation: http://mirror.example.com:8080/x\r\n\r\n";
+    g_server.answers[1] = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
+    g_server.count = 2;
+
+    stream_init(&stream, &sink);
+    stream.url = "http://example.com/";
+    KT_CHECK_INT_EQ(http_stream(&stream), HTTP_OK);
+    KT_CHECK_STR_EQ(sink.text, "ok");
+    KT_CHECK(strstr(g_server.request, "Host: mirror.example.com") != NULL);
+
+    /* --- a chain that does not end --- */
+    server_reset();
+    for (int i = 0; i < STREAM_ANSWERS; i++) {
+        g_server.answers[i] = "HTTP/1.1 302 Found\r\nLocation: /again\r\n\r\n";
+    }
+    g_server.count = STREAM_ANSWERS;
+
+    stream_init(&stream, &sink);
+    stream.url = "http://example.com/loop";
+
+    KT_CHECK_INT_EQ(http_stream(&stream), HTTP_REDIRECT);
+    KT_CHECK_INT_EQ((int)stream.redirects, HTTP_REDIRECT_MAX);
+
+    /* --- a body that ends before its Content-Length --- */
+    server_reset();
+    g_server.answers[0] = "HTTP/1.1 200 OK\r\nContent-Length: 20\r\n\r\nshort";
+    g_server.count = 1;
+
+    stream_init(&stream, &sink);
+    stream.url = "http://example.com/cut";
+
+    KT_CHECK_INT_EQ(http_stream(&stream), HTTP_SHORT);
+    KT_CHECK_STR_EQ(sink.text, "short");
+
+    /* --- a refusal is not a file --- */
+    server_reset();
+    g_server.answers[0] = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nnot there";
+    g_server.count = 1;
+
+    stream_init(&stream, &sink);
+    stream.url = "http://example.com/missing";
+
+    KT_CHECK_INT_EQ(http_stream(&stream), HTTP_OK);
+    KT_CHECK_INT_EQ(stream.status, 404);
+    KT_CHECK_INT_EQ((long long)stream.length, 0);
+    KT_CHECK_STR_EQ(sink.text, "");
+
+    /* --- Range: a 206 continues the file, a 200 starts it again --- */
+    server_reset();
+    g_server.answers[0] = "HTTP/1.1 206 Partial\r\nContent-Length: 5\r\n\r\nworld";
+    g_server.count = 1;
+
+    stream_init(&stream, &sink);
+    stream.url = "http://example.com/file";
+    stream.resume_from = 6;
+    sink.used = 6;
+    memcpy(sink.text, "hello ", 6);
+    sink.text[6] = '\0';
+
+    KT_CHECK_INT_EQ(http_stream(&stream), HTTP_OK);
+    KT_CHECK(stream.resumed);
+    KT_CHECK_STR_EQ(sink.text, "hello world");
+    KT_CHECK(strstr(g_server.request, "Range: bytes=6-") != NULL);
+
+    server_reset();
+    g_server.answers[0] = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nagain";
+    g_server.count = 1;
+
+    stream_init(&stream, &sink);
+    stream.url = "http://example.com/file";
+    stream.resume_from = 6;
+
+    KT_CHECK_INT_EQ(http_stream(&stream), HTTP_OK);
+    KT_CHECK(!stream.resumed);
+    KT_CHECK_INT_EQ(sink.resets, 1);
+    KT_CHECK_STR_EQ(sink.text, "again");
+
+    /* A sink that cannot start again makes the answer an error. */
+    server_reset();
+    g_server.answers[0] = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nagain";
+    g_server.count = 1;
+
+    stream_init(&stream, &sink);
+    stream.url = "http://example.com/file";
+    stream.resume_from = 6;
+    stream.sink.reset = NULL;
+
+    KT_CHECK_INT_EQ(http_stream(&stream), HTTP_ERROR); /* the sink cannot start again */
+
+    /* --- the transport that is not there --- */
+    stream_init(&stream, &sink);
+    stream.transport = NULL;
+    stream.url = "http://example.com/";
+    KT_CHECK_INT_EQ(http_stream(&stream), HTTP_INVALID);
+
+    stream_init(&stream, &sink);
+    stream.url = "https://example.com/";
+    KT_CHECK_INT_EQ(http_stream(&stream), HTTP_INVALID);
+}
+
 static void test_ntp(void)
 {
     k_u8_t packet[NTP_PACKET_SIZE];
@@ -1022,6 +1333,7 @@ void test_net(void)
 
     test_url();
     test_get();
+    test_stream();
     test_ntp();
     test_dns();
     test_loopback();

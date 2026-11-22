@@ -1141,7 +1141,6 @@ int fat_dir_remove(struct fat_volume *vol, const char *path)
     char leaf[FAT_NAME_MAX + 1];
     k_u32_t entry_pos = 0;
     int rc;
-
     if (vol == NULL || path == NULL) {
         return KERR_INVAL;
     }
@@ -1181,4 +1180,96 @@ int fat_dir_remove(struct fat_volume *vol, const char *path)
     }
 
     return rc;
+}
+
+/*
+ * The same object under another name (ADR 0024 §5). FAT has no rename in
+ * its format: a name is a run of entries in a directory, so the call writes
+ * the run of the new name and marks the old one removed. The new name comes
+ * first, because a volume that loses the power between the two has two names
+ * of one chain - which the checker reports and a person can remove - and
+ * never an object that no name reaches.
+ *
+ * A file may move to another directory of the volume. A directory stays in
+ * its parent: its own "." and ".." entries and the tree below it name the
+ * place it came from, and rewriting them is a walk this call does not make.
+ */
+int fat_dir_rename(struct fat_volume *vol, const char *from, const char *to)
+{
+    struct fat_entry from_parent;
+    struct fat_entry to_parent;
+    struct fat_entry entry;
+    struct fat_entry existing;
+    char from_leaf[FAT_NAME_MAX + 1];
+    char to_leaf[FAT_NAME_MAX + 1];
+    k_u32_t from_pos = FAT_POS_NONE;
+    k_u32_t to_pos = FAT_POS_NONE;
+    k_u32_t created = FAT_POS_NONE;
+    int rc;
+
+    if (vol == NULL || from == NULL || to == NULL) {
+        return KERR_INVAL;
+    }
+
+    rc = fat_lookup_parent(vol, from, &from_parent, from_leaf, sizeof(from_leaf));
+    if (rc != 0) {
+        return rc;
+    }
+
+    if (!from_parent.dir) {
+        return KERR_NOTDIR;
+    }
+
+    rc = find_in_dir(vol, from_parent.cluster, from_leaf, &entry, &from_pos);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = fat_lookup_parent(vol, to, &to_parent, to_leaf, sizeof(to_leaf));
+    if (rc != 0) {
+        return rc;
+    }
+
+    if (!to_parent.dir) {
+        return KERR_NOTDIR;
+    }
+
+    if (entry.dir && from_parent.cluster != to_parent.cluster) {
+        return KERR_NOTSUP;
+    }
+
+    /*
+     * FAT compares names without their case, so "HELLO" and "hello" are one
+     * name. A name that is already there is replaced when it is a file and
+     * refused when it is a directory, like the VFS says.
+     */
+    rc = find_in_dir(vol, to_parent.cluster, to_leaf, &existing, &to_pos);
+    if (rc == 0) {
+        if (existing.dir) {
+            return KERR_ISDIR;
+        }
+
+        rc = remove_entry_run(vol, to_parent.cluster, to_pos);
+        if (rc != 0) {
+            return rc;
+        }
+    } else if (rc != KERR_NOENT) {
+        return rc;
+    }
+
+    rc = fat_dir_create(vol, to_parent.cluster, to_leaf, (k_u8_t)(entry.attr & ~FAT_ATTR_LFN),
+                        entry.cluster, entry.size, &created);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = remove_entry_run(vol, from_parent.cluster, from_pos);
+    if (rc != 0) {
+        /* The old name is still the truth: the new one was a name too many,
+         * so it goes back and the caller gets the error of the removal. */
+        (void)remove_entry_run(vol, to_parent.cluster, created);
+        return rc;
+    }
+
+    return 0;
 }

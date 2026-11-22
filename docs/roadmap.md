@@ -393,28 +393,36 @@ to build is the screen a program can draw on.
 > has no installer - its `progs` belongs to the firmware (ADR 0018) - so this
 > is the work of x86-64 and of the host substrate.
 
-* [ ] A streaming HTTP client: `Content-Length` and a chunked body, a
+* [x] A streaming HTTP client: `Content-Length` and a chunked body, a
       bounded number of redirects, a timeout, and a sink that is a
-      `struct vfs_file` or the inactive slot of an update; `wget URL FILE`
-      at the console and a `Range` resume for a file
+      `struct vfs_file` (a callback); `wget URL FILE` at the console and a
+      `Range` resume for a file. The inactive slot of an update is the same
+      stream and is not wired yet: the update of the board is over USB
+      (ADR 0022) and there is no `esp_ota_*` writer in the tree
+      ([debts.md](debts.md))
 * [ ] mbedTLS on x86-64 with a freestanding platform layer: `kmm` for the
       allocations, `RDRAND` for entropy (the timer as the fallback), NTP for
       the clock and `/etc/ssl/certs.pem` through the VFS; the board keeps the
-      copy of ESP-IDF
-* [ ] The signed index and a signed `.mox`: `index.json` with the name, the
+      copy of ESP-IDF. **The one open step of K12**: nothing in the tree
+      pretends to be TLS, `https://` is refused by the URL parser, and the
+      work is written down in [debts.md](debts.md)
+* [x] The signed index and a signed `.mox`: `index.json` with the name, the
       version, the machine, the ABI, the size and the digest; the verifier
       reuses the Ed25519 of ADR 0020
-* [ ] `pkg update/install/remove/list/info` over `/var/pkg` and `/usr/bin`,
+* [x] `pkg update/install/remove/list/info` over `/var/pkg` and `/usr/bin`,
       atomic through a new `vfs_rename` (MicroFS and FAT implement it; a
-      volume without it installs with a warning)
-* [ ] The interface of the console is pacman's, the build is not: `-S`, `-R`,
+      volume without it installs with a warning). A directory is renamed
+      only inside its parent yet (see debts.md)
+* [x] The interface of the console is pacman's, the build is not: `-S`, `-R`,
       `-Q`, `-Sy`, `-Su`, `-Syu`, `-U`, `--noconfirm`, `--needed`,
       `--download-only`, `--dry-run`, `--allow-downgrade`, `--offline`,
       `--root`, `--repo`, `--color`, `NAME=VERSION` (ADR 0024 §6)
 * [ ] The repository `microos-progs`: CI builds a program per machine, signs
       it and publishes the index with the artifacts; `make` in the kernel
-      tree keeps only the programs of the tests
-* [ ] Tests: the fake transport of `components/net` serves a chunked body, a
+      tree keeps only the programs of the tests. The installer and the tool
+      that signs an index are here; the repository is a tree of its own and
+      the next pass
+* [x] Tests: the fake transport of `components/net` serves a chunked body, a
       redirect and a dropped connection; the installer is tested on a
       temporary volume with a bad signature, a wrong machine and a downgrade;
-      `make x86-net-smoke` fetches a file from a local server
+      `make x86-net-smoke` fetches a file from a local server and installs it

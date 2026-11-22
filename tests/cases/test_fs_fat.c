@@ -2282,6 +2282,65 @@ static void test_check_command(void)
 }
 #endif
 
+static void test_rename(void)
+{
+    struct vfs_stat stat;
+    char buffer[64];
+
+    ktest_begin("fat: rename moves a name and replaces a file");
+
+    setup();
+    if (mount_image(FAT_KIND_32) != 0) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(vfs_mkdir(TEST_ROOT_POINT "/bin"), 0);
+    KT_CHECK_INT_EQ(vfs_mkdir(TEST_ROOT_POINT "/tmp"), 0);
+
+    KT_CHECK_INT_EQ(write_file(TEST_ROOT_POINT "/bin/prog.new", "program", 7, VFS_O_CREAT), (int)7);
+    KT_CHECK_INT_EQ(write_file(TEST_ROOT_POINT "/tmp/other", "second", 6, VFS_O_CREAT), 6);
+
+    /* The name of the install: the new file becomes the old one. */
+    KT_CHECK_INT_EQ(vfs_rename(TEST_ROOT_POINT "/bin/prog.new", TEST_ROOT_POINT "/bin/prog"), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/bin/prog.new", &stat), KERR_NOENT);
+
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(read_file(TEST_ROOT_POINT "/bin/prog", buffer, sizeof(buffer)), 7);
+    KT_CHECK_STR_EQ(buffer, "program");
+
+    /* Another directory of the same volume. */
+    KT_CHECK_INT_EQ(vfs_rename(TEST_ROOT_POINT "/bin/prog", TEST_ROOT_POINT "/tmp/prog"), 0);
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(read_file(TEST_ROOT_POINT "/tmp/prog", buffer, sizeof(buffer)), 7);
+    KT_CHECK_STR_EQ(buffer, "program");
+
+    /* A file already at the name is replaced, a directory is not. */
+    KT_CHECK_INT_EQ(vfs_rename(TEST_ROOT_POINT "/tmp/prog", TEST_ROOT_POINT "/tmp/other"), 0);
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(read_file(TEST_ROOT_POINT "/tmp/other", buffer, sizeof(buffer)), 7);
+    KT_CHECK_STR_EQ(buffer, "program");
+
+    KT_CHECK_INT_EQ(vfs_rename(TEST_ROOT_POINT "/tmp/other", TEST_ROOT_POINT "/tmp"), KERR_ISDIR);
+
+    /* A directory keeps its parent and a name that is not there is no name. */
+    KT_CHECK_INT_EQ(vfs_rename(TEST_ROOT_POINT "/bin", TEST_ROOT_POINT "/tmp/bin"), KERR_NOTSUP);
+    KT_CHECK_INT_EQ(vfs_rename(TEST_ROOT_POINT "/bin/nothing", TEST_ROOT_POINT "/bin/x"),
+                    KERR_NOENT);
+
+    /* The name that is gone is gone from the listing of its directory. */
+    {
+        struct vfs_dirent entries[16];
+        k_size_t count = 0;
+
+        KT_CHECK_INT_EQ(vfs_list(TEST_ROOT_POINT "/bin", entries, 16, &count), 0);
+        KT_CHECK_INT_EQ(count, 0);
+    }
+
+    teardown();
+}
+
 void test_fs_fat(void)
 {
     test_mount_and_stat();
@@ -2291,6 +2350,7 @@ void test_fs_fat(void)
     test_errors();
     test_no_mode_no_owner();
     test_write_create_read();
+    test_rename();
     test_write_rewrite_append();
     test_mkdir_and_long_names();
     test_free_space();

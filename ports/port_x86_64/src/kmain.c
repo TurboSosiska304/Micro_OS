@@ -42,6 +42,10 @@
 #include "net/net.h"
 #endif
 
+#if MICRO_OS_PKG
+#include "pkg/pkg.h"
+#endif
+
 #include "devfs/devfs.h"
 #include "mfs/mfs.h"
 #include "mfs/mfs_vfs.h"
@@ -420,6 +424,14 @@ void kmain(k_u64_t multiboot_info)
 #if MICRO_OS_NET
     if (net_register() != 0) {
         kwarn("x86-64: not every command of components/net is registered");
+    }
+#endif
+
+#if MICRO_OS_PKG
+    /* The installer of programs (ADR 0024): the tree of /usr/bin, /var and
+     * the network of the machine, which is the same socket the clients use. */
+    if (pkg_register() != 0) {
+        kwarn("x86-64: the pkg command is not registered");
     }
 #endif
 

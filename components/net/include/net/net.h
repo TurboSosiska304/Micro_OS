@@ -21,11 +21,39 @@
  */
 #define NET_TIMEOUT_MS 5000
 
-/* Register the commands `http`, `ntp`, `httpd` and `mqtt`. */
+/*
+ * The budget of a file: a program of a repository is a hundred kilobytes on
+ * a link that may be slow, and the timeout of one read is not the timeout of
+ * the whole download.
+ */
+#define NET_DOWNLOAD_TIMEOUT_MS 120000u
+
+/* Register the commands `http`, `ntp`, `httpd`, `mqtt` and `wget`. */
 int net_register(void);
 
 /* GET a URL through the sockets of the port. */
 int net_http_get(const char *url, char *body, k_size_t size, struct http_response *out);
+
+/* The transport of the port, for a caller that streams on its own. */
+const struct http_transport *net_http_transport(void);
+
+/*
+ * GET a URL into a file of the VFS, through the transport of the caller (a
+ * fake one in the tests, NULL for the sockets of the port). With `resume`
+ * and an existing file the request asks for the rest of it (a Range), and a
+ * server that answers with the whole object starts the file again. The
+ * answer of the exchange - the status above all - is left in `out`, which
+ * may be NULL when the caller wants only the result of the call.
+ *
+ * Returns HTTP_OK when the file holds the object the server promised, and
+ * the code of http_stream() otherwise. A status that is not 200 or 206 is
+ * HTTP_ERROR with the status in `out`: the body of a refusal is not a file.
+ */
+int net_http_download_to(const struct http_transport *transport, const char *url, const char *path,
+                         bool resume, struct http_stream *out);
+
+/* The same over the sockets of the port. */
+int net_http_download(const char *url, const char *path, bool resume, struct http_stream *out);
 
 /* The time of an NTP server, in the seconds of Unix (UTC). */
 int net_ntp_sync(const char *server, k_u64_t *unix_seconds);

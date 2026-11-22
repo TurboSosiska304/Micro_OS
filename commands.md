@@ -53,6 +53,9 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make clean` | remove `build-host/`, `build-asan/`, `build-coverage/` (the device `build/` stays) |
 | `make test-smp` | the host tests with `KERNEL_SMP=ON` and two cores (`MICRO_OS_CPUS=2`) |
 | `make x86-smp-build` | the x86-64 kernel with `KERNEL_SMP=ON` (the APs are not started yet, ADR 0012) |
+| `make x86-net-build` | the x86-64 kernel with the network, `wget` and `pkg` (`MICRO_OS_X86_NET=ON`) |
+| `make x86-net-run` | that machine on the user network of QEMU |
+| `make x86-net-smoke` | boot it and check the stack, a download and an install from a local repository |
 | `make x86-all` | the complete machine in `build-x86-all/`: the kernel with the network, the disk with `/bin` and `/etc`, and `run.sh` |
 | `make x86-all-run` | boot that machine in a window (the serial console with `x86-all-run-serial`) |
 | `make ci` | `build`, `test`, `test-asan`, `test-tsan`, `test-smp`, `smoke`, `coverage`, `x86-smoke` when QEMU is there, `reproducible`, `integrity` — run it before pushing |
@@ -88,9 +91,16 @@ names a key outside the tree:
 make x86-build MICROOS_SIGN_KEY=/path/outside/the/tree/release.key
 build-host/tools/microos_sign verify --pub build-x86/signing.pub build-x86/microos64.bin
 build-host/tools/microos_sign info   build-x86/microos64.bin
+build-x86-net/microos_sign sign-file   --key build-x86-net/signing.key --in hello.mox --sig hello.mox.sig
+build-x86-net/microos_sign verify-file --pub build-x86-net/signing.pub --sig hello.mox.sig hello.mox
 make x86-smoke                         # accepts the signed image, refuses a damaged one
 make x86-open-build                    # MICRO_OS_REQUIRE_SIGNATURE=OFF
 ```
+
+`sign-file` is the detached signature of a repository of programs: the index
+and a `.mox` are signed over their own bytes, and `pkg` checks the signature
+and the digest before a byte reaches `/usr/bin` ([wiki/pkg.md](docs/wiki/pkg.md),
+ADR 0024 §4).
 
 The refusal is a setting on both machines. `MICRO_OS_REQUIRE_SIGNATURE` is a
 CMake option (default `ON`) on x86-64 and a Kconfig option (default `y`) on

@@ -116,6 +116,19 @@ struct vfs_operations {
     int (*mkdir)(void *ctx, const char *path);
     int (*unlink)(void *ctx, const char *path);
     /*
+     * Rename an object of the volume (ADR 0024 §5). The atomic install is
+     * the reason it exists: the bytes of a program are written beside it,
+     * and one call makes the new file visible under the old name. A
+     * filesystem that has no such operation leaves the field empty and the
+     * caller learns KERR_NOTSUP, which is what an install says before it
+     * falls back to the window that is not atomic.
+     *
+     * The two paths belong to the same volume: the VFS refuses a rename
+     * that would leave it with KERR_XDEV, because copying the bytes between
+     * two filesystems is a different operation with a different failure.
+     */
+    int (*rename)(void *ctx, const char *from, const char *to);
+    /*
      * The mode and the owner of an object. They are two calls and not one
      * "set the attributes", because a filesystem may well be able to change
      * one and not the other, and a caller that changes one number must not
@@ -298,6 +311,23 @@ int vfs_mkdir(const char *path);
  */
 int vfs_mkdir_p(const char *path);
 int vfs_unlink(const char *path);
+
+/*
+ * Rename an object inside one filesystem: the name `from` becomes `to`. An
+ * object already called `to` is replaced when it is a file, the way rename
+ * of POSIX does it (this is the atomic step of an install, ADR 0024 §5);
+ * a directory at `to` is refused with KERR_ISDIR, because the tree below it
+ * would be lost.
+ *
+ * The two paths have to be in the same mounted filesystem; a rename between
+ * two of them is KERR_XDEV, because it is a copy with a different story of a
+ * half-done failure. A filesystem without the operation answers KERR_NOTSUP
+ * and the caller decides whether the weaker way is acceptable. A directory
+ * is renamed only within its own parent: moving it would have to move the
+ * tree below it, and no filesystem of this system does that yet.
+ */
+int vfs_rename(const char *from, const char *to);
+
 int vfs_statfs(const char *path, struct vfs_statfs *out);
 
 /* The mode and the owner of an object; a filesystem without them says so. */

@@ -2157,6 +2157,208 @@ static int mfs_unlink_locked(const char *path)
  * synced, so that the numbers survive the restart like the size of a
  * file does.
  */
+/*
+ * The same object under another name (ADR 0024 §5). A name that is already
+ * there and names a file is replaced, the way rename of POSIX does it: the
+ * installer writes the new bytes beside the old program and makes them
+ * visible with one call. A name of a directory is not replaced (MFS_EISDIR),
+ * because the tree below it would be lost.
+ *
+ * A file may move to another directory of the volume; a directory stays in
+ * its parent, because its own `..` and the tree below it would have to move
+ * with it and this format keeps no parent cluster to rewrite.
+ *
+ * The new entry is written before the old one is taken away: the worst a
+ * power cut between the two can do is a second name of one object, which the
+ * check finds, and never an object that no name reaches.
+ */
+static int mfs_rename_locked(const char *from, const char *to)
+{
+    char from_dir_path[MFS_PATH_MAX];
+    char from_name[MFS_NAME_MAX + 1];
+    char to_dir_path[MFS_PATH_MAX];
+    char to_name[MFS_NAME_MAX + 1];
+    struct mfs_inode from_parent;
+    struct mfs_inode to_parent;
+    struct mfs_inode inode;
+    struct mfs_inode replaced;
+    struct dir_buffer *dir = &g_dir_buffer;
+    struct dir_buffer *other = &g_dir_buffer2;
+    struct mfs_dirent entry;
+    k_u32_t from_parent_inode = MFS_ROOT_INODE;
+    k_u32_t to_parent_inode = MFS_ROOT_INODE;
+    bool same_dir;
+    bool replacing = false;
+    int rc;
+
+    if (!g.mounted) {
+        return MFS_EINVAL;
+    }
+
+    if (strcmp(from, to) == 0) {
+        return MFS_OK;
+    }
+
+    rc = path_parent(from, from_dir_path, sizeof(from_dir_path), from_name, sizeof(from_name));
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    rc = path_parent(to, to_dir_path, sizeof(to_dir_path), to_name, sizeof(to_name));
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    rc = path_lookup(from, &inode, &entry, NULL);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    /* The caller may replace a file and may not replace a directory: the
+     * name of a directory that somebody still has open would take the tree
+     * below it with it, and a name that is a file is what an install
+     * replaces. */
+    if (path_lookup(to, &replaced, NULL, NULL) == MFS_OK) {
+        if ((replaced.flags & MFS_INODE_DIR) != 0) {
+            return MFS_EISDIR;
+        }
+
+        replacing = true;
+    }
+
+    same_dir = strcmp(from_dir_path, to_dir_path) == 0;
+
+    if (!same_dir && (inode.flags & MFS_INODE_DIR) != 0) {
+        return MFS_ENOTSUP;
+    }
+
+    rc = path_lookup(from_dir_path, &from_parent, NULL, &from_parent_inode);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    if (same_dir) {
+        rc = dir_read(&from_parent, dir);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
+        if (replacing) {
+            rc = dir_remove(dir, to_name);
+            if (rc != MFS_OK) {
+                return rc;
+            }
+        }
+
+        rc = dir_remove(dir, from_name);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
+        entry.name_len = (k_u16_t)strlen(to_name);
+        memcpy(entry.name, to_name, entry.name_len);
+        entry.name[entry.name_len] = '\0';
+
+        rc = dir_add(dir, &entry);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
+        from_parent.size = (k_u32_t)dir->size;
+        inode_stamp(&from_parent);
+
+        rc = dir_write(&from_parent, dir);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
+        rc = inode_write(from_parent_inode, &from_parent);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+    } else {
+        rc = path_lookup(to_dir_path, &to_parent, NULL, &to_parent_inode);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
+        rc = dir_read(&to_parent, other);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
+        if (replacing) {
+            rc = dir_remove(other, to_name);
+            if (rc != MFS_OK) {
+                return rc;
+            }
+
+            to_parent.entries--;
+        }
+
+        entry.name_len = (k_u16_t)strlen(to_name);
+        memcpy(entry.name, to_name, entry.name_len);
+        entry.name[entry.name_len] = '\0';
+
+        rc = dir_add(other, &entry);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
+        to_parent.size = (k_u32_t)other->size;
+        to_parent.entries++;
+        inode_stamp(&to_parent);
+
+        rc = dir_write(&to_parent, other);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
+        rc = inode_write(to_parent_inode, &to_parent);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
+        /* The name is in its new directory: the old one may forget it. */
+        rc = dir_read(&from_parent, dir);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
+        rc = dir_remove(dir, from_name);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
+        from_parent.size = (k_u32_t)dir->size;
+        if (from_parent.entries > 0) {
+            from_parent.entries--;
+        }
+        inode_stamp(&from_parent);
+
+        rc = dir_write(&from_parent, dir);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
+        rc = inode_write(from_parent_inode, &from_parent);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+    }
+
+    /* The record of the object did not change its content, only its name:
+     * ctime moves and mtime stays. */
+    inode_stamp_record(&inode);
+
+    rc = inode_write(entry.inode, &inode);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    return mfs_sync();
+}
+
 static int mfs_set_attr_locked(const char *path, k_u32_t mask, k_u32_t value)
 {
     struct mfs_inode inode;
@@ -2605,6 +2807,17 @@ int mfs_unlink(const char *path)
     return rc;
 }
 
+int mfs_rename(const char *from, const char *to)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_rename_locked(from, to);
+    mfs_unlock();
+
+    return rc;
+}
+
 int mfs_stat(const char *path, struct mfs_inode *out, struct mfs_dirent *dirent)
 {
     int rc;
@@ -2683,6 +2896,8 @@ const char *mfs_strerror(int error)
         return "directory not empty";
     case MFS_E2BIG:
         return "file too big";
+    case MFS_ENOTSUP:
+        return "operation not supported";
     default:
         return "unknown error";
     }
