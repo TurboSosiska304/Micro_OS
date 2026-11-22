@@ -26,6 +26,48 @@ const struct config_store *config_store_get(void)
     return g_store;
 }
 
+/* A key of the store that is not a file of /etc: it only asks the store a
+ * question, and it is erased at once. */
+#define CONFIG_PROBE_KEY "cfg-probe"
+
+bool config_store_usable(void)
+{
+    char key[CONFIG_KEY_MAX];
+    char value[CONFIG_VALUE_MAX];
+    int rc;
+
+    if (g_store == NULL || g_store->next == NULL || g_store->save == NULL) {
+        return false;
+    }
+
+    rc = g_store->next(0, key, sizeof(key));
+    if (rc == 0) {
+        return true; /* a key came back: the walk is answered */
+    }
+    if (rc != -2) {
+        return false; /* a real error of the store, not an empty one */
+    }
+
+    /*
+     * An empty walk is either an empty store or a machine without one, and
+     * the contract of the port has no call that tells the two apart. A key
+     * written and erased again is the question they answer differently.
+     */
+    if (g_store->load != NULL && g_store->load(CONFIG_PROBE_KEY, value, sizeof(value)) >= 0) {
+        return true; /* a probe of an earlier run that was not erased */
+    }
+
+    if (g_store->save(CONFIG_PROBE_KEY, "1") != 0) {
+        return false;
+    }
+
+    if (g_store->erase != NULL) {
+        (void)g_store->erase(CONFIG_PROBE_KEY);
+    }
+
+    return true;
+}
+
 /*
  * The adapter of the port's key-value store. The contract of the port speaks
  * the language of the store (`-2` for a key that is not there, a length for a
@@ -57,10 +99,16 @@ static int kv_next(k_size_t index, char *key, k_size_t size)
     return k_kv_next(index, key, size);
 }
 
+static int kv_erase(const char *key)
+{
+    return k_kv_erase(key);
+}
+
 static const struct config_store s_kv_store = {
     .load = kv_load,
     .save = kv_save,
     .next = kv_next,
+    .erase = kv_erase,
 };
 
 void config_store_use_platform(void)

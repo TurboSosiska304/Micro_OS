@@ -240,9 +240,16 @@ static int cmd_config(int argc, char **argv)
         char value[CONFIG_VALUE_MAX];
         k_size_t i;
 
-        if (store == NULL || store->next == NULL) {
-            kshell_printf("config: this board has no store\n");
-            return KSHELL_ERROR;
+        /*
+         * A machine without a store (x86-64 before it has a medium that
+         * survives a reset) has no keys to print. The files of /etc are the
+         * settings there, and the command says so instead of printing
+         * nothing as if the store were empty.
+         */
+        if (!config_store_usable()) {
+            kshell_printf(
+                "config: this machine has no store; the files of /etc are the settings\n");
+            return KSHELL_OK;
         }
 
         for (i = 0; i < CONFIG_MAX_KEYS; i++) {
@@ -255,13 +262,30 @@ static int cmd_config(int argc, char **argv)
             kshell_printf("%s=%s\n", key, value);
         }
 
+        if (i == 0) {
+            kshell_printf("config: the store is empty; the files of /etc are the settings\n");
+        }
+
         return KSHELL_OK;
     }
 
     if (argc == 2 && strcmp(argv[1], "sync") == 0) {
-        int restored = config_restore(CONFIG_DIR);
+        int restored;
         int saved;
 
+        /*
+         * A sync without a store would only warn over every file of /etc and
+         * then report "0 saved" as if it had done its work. It did not: the
+         * copy that survives a restart is what the command is for, and this
+         * machine has none.
+         */
+        if (!config_store_usable()) {
+            kshell_printf(
+                "config: this machine has no store; the files of /etc are the settings\n");
+            return KSHELL_ERROR;
+        }
+
+        restored = config_restore(CONFIG_DIR);
         if (restored < 0) {
             kshell_printf("config: cannot restore (rc=%d)\n", restored);
             return KSHELL_ERROR;
@@ -301,10 +325,12 @@ int config_register(void)
                  "| config list [system]",
         .detail = "Without a word, the keys of the store and their values are printed.\n"
                   "`config sync` restores the files of /etc that the store has and saves the\n"
-                  "ones it finds. A system of parameters (`display`, `font`, `console`) is a\n"
-                  "file of /etc with `key=value` lines; `get` reads a key, `set` writes the\n"
-                  "file and applies the system at once, and `list` names the systems and the\n"
-                  "keys of one of them.\n",
+                  "ones it finds. A machine without a store (x86-64 before it has a medium\n"
+                  "that survives a reset) says so: the files of /etc are the settings there,\n"
+                  "and `sync` is an error, because there is nothing to save them into. A\n"
+                  "system of parameters (`display`, `font`, `console`) is a file of /etc with\n"
+                  "`key=value` lines; `get` reads a key, `set` writes the file and applies the\n"
+                  "system at once, and `list` names the systems and the keys of one of them.\n",
     };
 
     /*

@@ -240,6 +240,65 @@ static void test_restart(void)
     teardown();
 }
 
+/*
+ * A machine without a store answers the calls of the port with "nothing is
+ * kept": the walk is empty and the save fails. The shell has to tell that
+ * apart from an empty store, and config_store_usable() is the question.
+ */
+static int no_load(const char *key, char *value, k_size_t size)
+{
+    (void)key;
+    (void)value;
+    (void)size;
+    return -2;
+}
+
+static int no_save(const char *key, const char *value)
+{
+    (void)key;
+    (void)value;
+    return -1;
+}
+
+static int no_next(k_size_t index, char *key, k_size_t size)
+{
+    (void)index;
+    (void)key;
+    (void)size;
+    return -2;
+}
+
+static int no_erase(const char *key)
+{
+    (void)key;
+    return -2;
+}
+
+static const struct config_store g_no_store = {
+    .load = no_load,
+    .save = no_save,
+    .next = no_next,
+    .erase = no_erase,
+};
+
+static void test_no_store(void)
+{
+    ktest_begin("config: a machine without a store is not an empty one");
+
+    config_use_store(NULL);
+    KT_CHECK(!config_store_usable());
+
+    /* The calls of a port that keeps nothing: an empty walk and a refused
+     * save, the two answers an empty store gives as well. */
+    config_use_store(&g_no_store);
+    KT_CHECK(!config_store_usable());
+
+    /* The store of the host answers the same question with a yes, and the
+     * probe key it writes is erased again. */
+    config_store_use_platform();
+    KT_CHECK(config_store_usable());
+}
+
 void test_config(void)
 {
     char dir[] = KV_DIR_TEMPLATE;
@@ -256,6 +315,8 @@ void test_config(void)
     KT_CHECK_INT_EQ(setenv("MICROOS_KV_DIR", dir, 1), 0);
 
     config_store_use_platform();
+
+    test_no_store();
 
     test_restore();
     test_persist();

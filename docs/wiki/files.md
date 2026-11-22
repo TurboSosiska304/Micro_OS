@@ -94,7 +94,7 @@ system calls in one place, `components/mfs/src/mfs_vfs.c`.
 
 ```text
 microos> write /hello.txt one two three
-14 byte(s) written to /hello.txt
+14 bytes written to /hello.txt
 microos> cat /hello.txt
 one two three
 microos> mkdir /data
@@ -105,8 +105,17 @@ microos> rm /hello.txt
 ```
 
 `write` replaces the file and appends a newline; the text is one line of at
-most 127 bytes. `rm` removes a file, not a directory, and there is no `-r`.
-`df` prints the free blocks and inodes of the filesystem of the path.
+most 127 bytes. The count of the answer has the word of the number (`1 byte`,
+`2 bytes`), and a text that is cut says how many bytes of it were kept. `rm`
+removes a file, not a directory, and there is no `-r` without the flag.
+`df` prints the free blocks and inodes of the filesystem of the path, and a
+path that is not there is `df: /nope: no such file or directory` instead of the
+numbers of the root.
+
+A name that is already there is refused with the sentence of what it is:
+`mkdir /etc` over a directory says `is a directory`, and over a file
+`file exists`. A path that is not there says `no such file or directory`
+everywhere, the same words the rest of the shell uses.
 
 `stat` shows the mode, the owner and the size; `chmod` and `chown` change the
 first two. A program asks for the moments of a change with `statx` (number 26
@@ -244,6 +253,12 @@ volume. `idf.py erase-flash` destroys both. In the simulator the store is the
 directory `MICROOS_KV_DIR` (`/tmp/microos-kv` by default), and a run with a
 volume of its own should have a store of its own too.
 
+The x86-64 machine has no medium that survives a reset, so it has no store:
+`config` says `this machine has no store; the files of /etc are the settings`,
+and `config sync` is an error rather than a "0 saved" that saved nothing. The
+files are still the configuration there, and `config get`, `set` and `list`
+work on them.
+
 ## `/etc/init.d`
 
 Every file of `/etc/init.d` is a script of the init process: one shell command
@@ -305,7 +320,7 @@ walks the table), and so do the shell commands that go through the VFS:
 
 ```text
 microos> write /mnt/sd/note.txt hello
-6 byte(s) written to /mnt/sd/note.txt
+6 bytes written to /mnt/sd/note.txt
 microos> cat /mnt/sd/note.txt
 hello
 ```
@@ -417,7 +432,11 @@ a directory, so a mount over a file is `not a directory`; a point that already
 holds another filesystem is `device or resource busy`, and a point with a
 mount below it stays until the smaller one leaves. `/` is the exception: the
 mounts of `/proc` and `/dev` do not live on its volume, so `mkfs -y` may take
-the root out while they stay.
+the root out while they stay. `umount /` is refused, and so are `/proc` and
+`/dev`: the boot mounts the two and no type of the table can mount them
+again. The message is about the image, not about a formatter this machine may
+not have: the volume is formatted by `mkfs -y` where there is one, and by the
+build of the image everywhere.
 
 ## `/etc/fstab`
 

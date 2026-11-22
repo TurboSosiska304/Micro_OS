@@ -67,6 +67,8 @@ COMMANDS = [
     # kept with a sentence that says so; the console is the attribute of the
     # VGA and the boot says which one it put on the screen.
     "config list",
+    "config",
+    "config sync",
     "config get display.rotation",
     "config set console.theme light",
     "config get console.theme",
@@ -86,6 +88,7 @@ COMMANDS = [
     # its own: `ls` has no branches, `tree` has them and counts what it drew.
     "ls /",
     "tree /",
+    "tree -d /",
     # The virtual filesystems of the tree: the information about the system
     # and the devices, mounted by the boot like the board and the simulator
     # mount them. A machine of this system has the same root.
@@ -174,9 +177,35 @@ COMMANDS = [
     # the memory and not the clock.
     "stat /etc/setting",
     "umount /",
+    "umount /proc",
+    "df /nope",
+    "path \"\"",
     "ls /",
     "free",
+    # `.` and `..` are the directory and its parent, and repeated or
+    # trailing slashes are the same path: the shell normalizes before a call.
+    "cd /etc",
+    "pwd",
+    "cd .",
+    "pwd",
+    "cd //etc//",
+    "pwd",
+    "cd ..",
+    "pwd",
+    "ls ..",
+    "cd /",
+    "memtest",
 ]
+
+# A directory wider than the table of 64 entries the shell used to keep: the
+# files are written one command at a time, and the listing and the walk have
+# to name and count all of them. `rm -r` puts the volume back for the checks
+# that follow (the run works on a copy of the image, but a clean tree is
+# easier to read in a failure).
+MANY_FILES = 70
+COMMANDS += ["mkdir /many"]
+COMMANDS += [f"write /many/f{index:02d} x" for index in range(MANY_FILES)]
+COMMANDS += ["ls /many", "tree /many", "rm -r /many"]
 
 # The prompt of the shell. It is written in one call, so the log of another
 # task never splits it, and the answers can be separated by it.
@@ -844,12 +873,80 @@ def check(output: str) -> list:
         "is the root of the tree" in umount_answer,
         umount_answer,
     )
+    expect(
+        "a filesystem of the kernel is not unmounted",
+        "/proc is mounted by the kernel" in answer("umount /proc"),
+        answer("umount /proc"),
+    )
+    expect(
+        "df refuses a path that is not there",
+        "df: /nope: no such file or directory" in answer("df /nope"),
+        answer("df /nope"),
+    )
+    expect(
+        "path refuses the empty value",
+        "an empty value is not a list of directories" in answer('path ""'),
+        answer('path ""'),
+    )
     expect("the tree is still there", "etc/" in answer("ls /"), answer("ls /"))
     free_answer = answer("free")
     expect(
         "free prints the memory and not the clock",
         "heap:" in free_answer and "uptime:" not in free_answer,
         free_answer,
+    )
+    # The clock of this port moves by the millisecond: a single 32 KB fill
+    # used to divide by one microsecond and claim tens of gigabytes per
+    # second. The measurement repeats the operation, and every speed is a
+    # number a machine of this kind could give, not a division by a still
+    # clock. The bound is generous (16 GB/s) and still below the artifact of
+    # the old code (32 GB/s for one 32 KB memset in one microsecond).
+    measured = answer("memtest")
+    speeds = [int(value) for value in re.findall(r"(\d+) KB/s", measured)]
+    expect(
+        "memtest measures and keeps the data",
+        " KB block: fill " in measured and "data ok" in measured,
+        measured,
+    )
+    expect("memtest prints at least one speed", len(speeds) > 0, measured)
+    expect(
+        "memtest speeds are not divided by a still clock",
+        all(value < 16000000 for value in speeds),
+        measured,
+    )
+
+    # --- `.` and `..` in a path
+    # The shell joins the path with the current directory and normalizes it
+    # before the call: the filesystem of this system never sees a `..`.
+    expect("cd into a directory works", "/etc" in answer("pwd"), answer("pwd"))
+    expect("cd . stays in the directory", "/etc" in answer("pwd", 1), answer("pwd", 1))
+    expect(
+        "repeated and trailing slashes are one path",
+        "/etc" in answer("pwd", 2),
+        answer("pwd", 2),
+    )
+    expect("cd .. goes to the parent", re.search(r"(?m)^/\s*$", answer("pwd", 3)) is not None,
+           answer("pwd", 3))
+    expect(
+        "ls .. lists the parent",
+        all(name in answer("ls ..") for name in ("bin/", "etc/")),
+        answer("ls .."),
+    )
+
+    # --- a directory wider than the old table
+    many = answer("ls /many")
+    expect(
+        "ls lists a directory past 64 names",
+        len(re.findall(r"(?m)^f\d\d\r?$", many)) == MANY_FILES,
+        many,
+    )
+    expect("ls reaches the last name of a wide directory", "f69" in many, many)
+    wide_tree = answer("tree /many")
+    expect(
+        "tree walks a directory past 16 names and counts it whole",
+        "0 directories, 70 files" in wide_tree
+        and wide_tree.count("|-- ") + wide_tree.count("`-- ") == MANY_FILES,
+        wide_tree,
     )
     expect(
         "the fifteen programs are files of the disk",
@@ -950,6 +1047,28 @@ def check(output: str) -> list:
     )
     expect("ls is a program of the shell", "the program has finished" in listing)
 
+    # --- a machine without a store (this port has none yet)
+    # The command must not print an empty answer as if the store had no
+    # keys, and `config sync` must not report "0 saved" as success: the
+    # files of /etc are the settings of this machine.
+    no_store = answer("config")
+    expect(
+        "config says this machine has no store",
+        "no store" in no_store and "files of /etc are the settings" in no_store,
+        no_store,
+    )
+    no_sync = answer("config sync")
+    expect(
+        "config sync explains the missing store",
+        "no store" in no_sync and "files of /etc are the settings" in no_sync,
+        no_sync,
+    )
+    expect(
+        "config sync does not report a false save",
+        not re.search(r"\d+ file\(s\) restored, \d+ saved", no_sync),
+        no_sync,
+    )
+
     # --- the systems of /etc (ADR 0021)
     # The boot wrote the three files of the tree on the volume; `config list`
     # names them and says which one this machine applies. `display` and
@@ -1031,6 +1150,29 @@ def check(output: str) -> list:
     expect(
         "tree / counts the directories and the files",
         re.search(r"\d+ director(?:y|ies), \d+ files?", tree_listing) is not None,
+    )
+    # `-d` draws the directories and counts every entry: the summary of the
+    # two runs is the same, and no file of the tree is drawn by `-d`.
+    tree_d_listing = answer("tree -d /")
+    full_counts = re.search(r"(\d+) director(?:y|ies), (\d+) files?", tree_listing)
+    dirs_counts = re.search(r"(\d+) director(?:y|ies), (\d+) files?", tree_d_listing)
+    expect(
+        "tree -d draws the directories only",
+        "|-- " in tree_d_listing and "setting" not in tree_d_listing,
+        tree_d_listing,
+    )
+    expect(
+        "tree -d counts the same files as tree",
+        full_counts is not None
+        and dirs_counts is not None
+        and full_counts.groups() == dirs_counts.groups(),
+        f"{dirs_counts.groups() if dirs_counts else tree_d_listing}"
+        f" against {full_counts.groups() if full_counts else tree_listing}",
+    )
+    expect(
+        "tree -d counts the files it did not draw",
+        dirs_counts is not None and int(dirs_counts.group(2)) > 0,
+        tree_d_listing,
     )
     # --- the virtual filesystems of the tree
     # The board and the simulator mount procfs and devfs at the boot; the

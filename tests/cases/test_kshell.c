@@ -213,11 +213,57 @@ static void test_free(void)
 #endif
 }
 
+/*
+ * The clock of the shell and the clock of /proc are one style: seconds and
+ * ticks, with a word that matches the number. Milliseconds never leak into a
+ * line that a person reads.
+ */
+static void test_uptime(void)
+{
+    char buf[512];
+    size_t used;
+    FILE *sink;
+
+    ktest_begin("kshell: uptime prints seconds and ticks in one style");
+
+    sink = tmpfile();
+    KT_CHECK(sink != NULL);
+    if (sink == NULL) {
+        return;
+    }
+
+    port_host_set_sink(sink);
+    KT_CHECK_INT_EQ(kshell_execute("uptime"), KSHELL_OK);
+
+    rewind(sink);
+    used = fread(buf, 1, sizeof(buf) - 1, sink);
+    buf[used] = '\0';
+
+    port_host_set_sink(NULL);
+
+    KT_CHECK(strstr(buf, "up ") != NULL);
+    KT_CHECK(strstr(buf, " s, ") != NULL);
+    KT_CHECK(strstr(buf, "tick") != NULL);
+    KT_CHECK(strstr(buf, "task") != NULL);
+    /* The old line spelled the units "(s)", and a person read it as a typo. */
+    KT_CHECK(strstr(buf, "(s)") == NULL);
+}
+
 static void test_memtest(void)
 {
+    char buf[4096];
+    size_t used;
+    FILE *sink;
+
     ktest_begin("kshell: the memory test measures the memory");
 
-    port_host_set_sink(tmpfile());
+    sink = tmpfile();
+    KT_CHECK(sink != NULL);
+    if (sink == NULL) {
+        return;
+    }
+
+    port_host_set_sink(sink);
 
     /* The command has to run on every platform, even without a PSRAM. */
     KT_CHECK_INT_EQ(kshell_execute("memtest"), KSHELL_OK);
@@ -226,7 +272,20 @@ static void test_memtest(void)
     /* A size of zero is not a valid argument. */
     KT_CHECK(kshell_execute("memtest 0") != KSHELL_OK);
 
+    rewind(sink);
+    used = fread(buf, 1, sizeof(buf) - 1, sink);
+    buf[used] = '\0';
+
     port_host_set_sink(NULL);
+
+    /* The answer has a block, the three operations and a verdict; a speed
+     * that the clock cannot resolve says so instead of inventing a number. */
+    KT_CHECK(strstr(buf, " KB block: fill ") != NULL);
+    KT_CHECK(strstr(buf, ", sum ") != NULL);
+    KT_CHECK(strstr(buf, ", copy ") != NULL);
+    KT_CHECK(strstr(buf, "data ok") != NULL);
+    KT_CHECK(strstr(buf, "BROKEN") == NULL);
+    KT_CHECK(strstr(buf, "KB/s") != NULL || strstr(buf, "too fast to measure") != NULL);
 }
 
 /*
@@ -302,6 +361,35 @@ static void ls_teardown(void)
     mfs_ram_free(&g_ls_volume);
 }
 
+/* The number of lines in the part of `buf` that one command wrote. */
+static int range_lines(const char *buf, long start, long end)
+{
+    int lines = 0;
+    long at;
+
+    for (at = start; at < end && buf[at] != '\0'; at++) {
+        if (buf[at] == '\n') {
+            lines++;
+        }
+    }
+
+    return lines;
+}
+
+/* How often `needle` is in the part of `buf` that one command wrote. */
+static int range_count(const char *buf, long start, long end, const char *needle)
+{
+    const char *at = buf + start;
+    int count = 0;
+
+    while ((at = strstr(at, needle)) != NULL && (long)(at - buf) < end) {
+        count++;
+        at += strlen(needle);
+    }
+
+    return count;
+}
+
 /* Is `needle` in the part of `buf` that one command wrote? The sink is one
  * file for the whole test, so the offsets keep the answers apart. */
 static bool range_has(const char *buf, long start, long end, const char *needle)
@@ -342,6 +430,19 @@ static void test_ls(void)
     long tree_end;
     long tree_d_start;
     long tree_d_end;
+    long many_start;
+    long many_end;
+    long wide_start;
+    long wide_end;
+    long dotdot_start;
+    long dotdot_end;
+    long pwd1_start;
+    long pwd1_end;
+    long pwd2_start;
+    long pwd2_end;
+    long pwd3_start;
+    long pwd3_end;
+    k_size_t i;
 
     ktest_begin("kshell: ls lists a directory, tree draws it");
 
@@ -368,6 +469,30 @@ static void test_ls(void)
     KT_CHECK_INT_EQ(vfs_open("/lines", VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, data), 0);
     KT_CHECK_INT_EQ(vfs_write(&file, "one\ntwo\n", 8), 8);
     KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    /* A directory wider than the old tables of `ls` (64) and `tree` (16):
+     * the listing and the walk are streaming now, and neither one may stop
+     * at a boundary or lose the names past it. */
+    KT_CHECK_INT_EQ(vfs_mkdir("/many"), 0);
+    for (i = 0; i < 70; i++) {
+        char name[VFS_PATH_MAX];
+        char text[8];
+
+        snprintf(name, sizeof(name), "/many/f%02u", (unsigned)i);
+        snprintf(text, sizeof(text), "%u\n", (unsigned)i);
+        KT_CHECK_INT_EQ(vfs_open(name, VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, data), 0);
+        KT_CHECK_INT_EQ(vfs_write(&file, text, strlen(text)), (int)strlen(text));
+        KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    }
+
+    KT_CHECK_INT_EQ(vfs_mkdir("/wide"), 0);
+    for (i = 0; i < 20; i++) {
+        char name[VFS_PATH_MAX];
+
+        snprintf(name, sizeof(name), "/wide/w%02u", (unsigned)i);
+        KT_CHECK_INT_EQ(vfs_open(name, VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, data), 0);
+        KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    }
 
     sink = tmpfile();
     KT_CHECK(sink != NULL);
@@ -411,6 +536,37 @@ static void test_ls(void)
     KT_CHECK_INT_EQ(kshell_execute("tree -d /tree"), KSHELL_OK);
     tree_d_end = ftell(sink);
 
+    /* A directory of 70 names is listed whole, not cut at the old table. */
+    many_start = ftell(sink);
+    KT_CHECK_INT_EQ(kshell_execute("ls /many"), KSHELL_OK);
+    many_end = ftell(sink);
+
+    /* A directory of 20 files is walked whole and counted whole. */
+    wide_start = ftell(sink);
+    KT_CHECK_INT_EQ(kshell_execute("tree /wide"), KSHELL_OK);
+    wide_end = ftell(sink);
+
+    /* `.`, `..`, repeated slashes and a trailing slash are one path. */
+    KT_CHECK_INT_EQ(kshell_execute("cd /etc"), KSHELL_OK);
+    dotdot_start = ftell(sink);
+    KT_CHECK_INT_EQ(kshell_execute("ls .."), KSHELL_OK);
+    dotdot_end = ftell(sink);
+    KT_CHECK_INT_EQ(kshell_execute("cd ."), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("cd //etc//init.d///"), KSHELL_OK);
+    pwd1_start = ftell(sink);
+    KT_CHECK_INT_EQ(kshell_execute("pwd"), KSHELL_OK);
+    pwd1_end = ftell(sink);
+    KT_CHECK_INT_EQ(kshell_execute("ls /etc/../etc/./"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("cd ../.."), KSHELL_OK);
+    pwd2_start = ftell(sink);
+    KT_CHECK_INT_EQ(kshell_execute("pwd"), KSHELL_OK);
+    pwd2_end = ftell(sink);
+    KT_CHECK_INT_EQ(kshell_execute("cd .."), KSHELL_OK);
+    pwd3_start = ftell(sink);
+    KT_CHECK_INT_EQ(kshell_execute("pwd"), KSHELL_OK);
+    pwd3_end = ftell(sink);
+    KT_CHECK_INT_EQ(kshell_execute("cd /"), KSHELL_OK);
+
     /* `-a` is accepted and changes nothing: there are no hidden names. */
     KT_CHECK_INT_EQ(kshell_execute("tree -a /tree"), KSHELL_OK);
     KT_CHECK_INT_EQ(kshell_execute("tree /nope"), KSHELL_ERROR);
@@ -432,11 +588,16 @@ static void test_ls(void)
     KT_CHECK_INT_EQ(kshell_execute("cat -dash"), KSHELL_USAGE);
     KT_CHECK_INT_EQ(kshell_execute("cat -- -dash"), KSHELL_OK);
 
+    /* A directory that is already there is not a file that exists. */
+    KT_CHECK_INT_EQ(kshell_execute("mkdir /tree/a"), KSHELL_ERROR);
+    KT_CHECK_INT_EQ(kshell_execute("mkdir /etc/hello"), KSHELL_ERROR);
+
     /* The sizes of the volume for a person; here -h is the flag of df and
      * not the help, as in df of Linux. */
     KT_CHECK_INT_EQ(kshell_execute("df -h"), KSHELL_OK);
     KT_CHECK_INT_EQ(kshell_execute("df --help"), KSHELL_OK);
     KT_CHECK_INT_EQ(kshell_execute("df -z"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(kshell_execute("df /nope"), KSHELL_ERROR);
 
     /* A directory needs -r, and -r takes the whole tree down. */
     KT_CHECK_INT_EQ(kshell_execute("rm /tree"), KSHELL_ERROR);
@@ -449,9 +610,9 @@ static void test_ls(void)
 
     port_host_set_sink(NULL);
 
-    /* ls: the names, sorted, one per line; a directory keeps its slash and
-     * no branch or path line is there. */
-    KT_CHECK(strncmp(buf, "hello\n", 6) == 0);
+    /* ls: the names, one per line in the order of the filesystem; a
+     * directory keeps its slash and no branch or path line is there. */
+    KT_CHECK(range_has(buf, etc_start, etc_end, "hello\n"));
     KT_CHECK(range_has(buf, etc_start, etc_end, "init.d/\n"));
     KT_CHECK(!range_has(buf, etc_start, etc_end, "`--"));
 
@@ -482,11 +643,29 @@ static void test_ls(void)
     KT_CHECK(range_has(buf, tree_start, tree_end, "deep"));
     KT_CHECK(range_has(buf, tree_start, tree_end, "2 directories, 2 files"));
 
-    /* tree -d: the directories only, and no file is counted. */
+    /* tree -d: the directories only, and the files are still counted: the
+     * summary is the content of the tree, not the branches that were drawn. */
     KT_CHECK(range_has(buf, tree_d_start, tree_d_end, "deep/"));
     KT_CHECK(!range_has(buf, tree_d_start, tree_d_end, "z"));
     KT_CHECK(!range_has(buf, tree_d_start, tree_d_end, "f\n"));
-    KT_CHECK(range_has(buf, tree_d_start, tree_d_end, "2 directories, 0 files"));
+    KT_CHECK(range_has(buf, tree_d_start, tree_d_end, "2 directories, 2 files"));
+
+    /* The old tables cut the listing at 64 and the tree at 16. */
+    KT_CHECK_INT_EQ(range_lines(buf, many_start, many_end), 70);
+    KT_CHECK(range_has(buf, many_start, many_end, "f00\n"));
+    KT_CHECK(range_has(buf, many_start, many_end, "f69\n"));
+    KT_CHECK(range_has(buf, wide_start, wide_end, "0 directories, 20 files"));
+    KT_CHECK(range_has(buf, wide_start, wide_end, "w00"));
+    KT_CHECK(range_has(buf, wide_start, wide_end, "w19"));
+    KT_CHECK_INT_EQ(range_count(buf, wide_start, wide_end, "|-- ") +
+                        range_count(buf, wide_start, wide_end, "`-- "),
+                    20);
+
+    /* `.` and `..` are the directory and its parent, here as anywhere. */
+    KT_CHECK(range_has(buf, dotdot_start, dotdot_end, "etc/"));
+    KT_CHECK(range_has(buf, pwd1_start, pwd1_end, "/etc/init.d\n"));
+    KT_CHECK(range_has(buf, pwd2_start, pwd2_end, "/\n"));
+    KT_CHECK(range_has(buf, pwd3_start, pwd3_end, "/\n"));
 
     /* The errors and the help of the two commands. */
     KT_CHECK(strstr(buf, "tree: /nope: no such file or directory") != NULL);
@@ -507,10 +686,19 @@ static void test_ls(void)
     /* A dash is an option until `--` says otherwise. */
     KT_CHECK(strstr(buf, "cat: unknown option: -d") != NULL);
     KT_CHECK(strstr(buf, "hi\n") != NULL);
+    /* The count of the bytes has a word that matches it. */
+    KT_CHECK(strstr(buf, "3 bytes written to /-dash") != NULL);
+    KT_CHECK(strstr(buf, "byte(s)") == NULL);
+
+    /* A directory says that it is one; a file in the way says "file
+     * exists", and neither one claims a file. */
+    KT_CHECK(strstr(buf, "mkdir: /tree/a: is a directory") != NULL);
+    KT_CHECK(strstr(buf, "mkdir: /etc/hello: file exists") != NULL);
 
     /* df -h: the sizes in KB or MB, then the fields of the volume. */
     KT_CHECK(strstr(buf, "total,") != NULL);
     KT_CHECK(strstr(buf, "df: unknown option: -z") != NULL);
+    KT_CHECK(strstr(buf, "df: /nope: no such file or directory") != NULL);
 
     /* rm: the sentence about a directory, then the tree is gone. */
     KT_CHECK(strstr(buf, "is a directory, use -r") != NULL);
@@ -621,8 +809,10 @@ static void test_attr(void)
     KT_CHECK_INT_EQ(kshell_execute("path /nosuchdir"), KSHELL_OK);
 #endif
 
-    /* The empty argument brings the default back. */
-    KT_CHECK_INT_EQ(kshell_execute("path \"\""), KSHELL_OK);
+    /* An empty value is not a list of directories: it is refused, and the
+     * value that was there stays. */
+    KT_CHECK_INT_EQ(kshell_execute("path \"\""), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(kshell_execute("path /bin:/usr/bin"), KSHELL_OK);
     KT_CHECK_INT_EQ(kshell_execute("path"), KSHELL_OK);
 
     /* stat: the line of ls, then the fields a chmod is checked with. */
@@ -658,11 +848,15 @@ static void test_attr(void)
     KT_CHECK(strstr(buf, "a uid is 0..32767") != NULL);
     KT_CHECK(strstr(buf, "filesystem keeps") != NULL);
     KT_CHECK(strstr(buf, "no such file") != NULL);
+    KT_CHECK(strstr(buf, "an empty value is not a list of directories") != NULL);
 
     /* The notes of the help come from the table, once per request. */
     KT_CHECK(strstr(buf, "The mode is the nine bits in octal") != NULL);
     KT_CHECK(strstr(buf, "the type, the mode, the owner and the size") != NULL);
     KT_CHECK(strstr(buf, "help: nosuch: no such command") != NULL);
+    /* The long notes of fsck pass the 192 bytes of the print buffer: a
+     * sentence from the end is there, whole. */
+    KT_CHECK(strstr(buf, "a record no name reaches is freed") != NULL);
 
     /* The file: nine bits of 0711, the owner 7 and three bytes of text. */
     KT_CHECK(strstr(buf, "-rwx--x--x 7 3 /bin/hello") != NULL);
@@ -786,6 +980,15 @@ static void test_mount(void)
     KT_CHECK_INT_EQ(kshell_execute("umount /mnt/two"), KSHELL_OK);
     KT_CHECK_INT_EQ(vfs_mount_count(), 1);
 
+    /* The root and the filesystems of the kernel stay. */
+    KT_CHECK_INT_EQ(kshell_execute("mount fake0 /proc dev"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("mount fake0 /dev dev"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("umount /"), KSHELL_ERROR);
+    KT_CHECK_INT_EQ(kshell_execute("umount /proc"), KSHELL_ERROR);
+    KT_CHECK_INT_EQ(kshell_execute("umount /dev"), KSHELL_ERROR);
+    KT_CHECK_INT_EQ(vfs_umount("/proc"), 0);
+    KT_CHECK_INT_EQ(vfs_umount("/dev"), 0);
+
     rewind(sink);
     used = fread(buf, 1, sizeof(buf) - 1, sink);
     buf[used] = '\0';
@@ -801,6 +1004,9 @@ static void test_mount(void)
     KT_CHECK(strstr(buf, "mount: there is no filesystem type 'nosuch'") != NULL);
     KT_CHECK(strstr(buf, "umount: /mnt/dev: no such file or directory") != NULL);
     KT_CHECK(strstr(buf, "umount: /mnt/dev is out of the tree") != NULL);
+    KT_CHECK(strstr(buf, "umount: / is the root of the tree; it stays") != NULL);
+    KT_CHECK(strstr(buf, "umount: /proc is mounted by the kernel and stays") != NULL);
+    KT_CHECK(strstr(buf, "umount: /dev is mounted by the kernel and stays") != NULL);
     KT_CHECK(strstr(buf, "mount: unknown option: -z") != NULL);
 
     /* The two tables of the command: the words and the flags. */
@@ -823,6 +1029,7 @@ void test_kshell(void)
     test_registry();
     test_kill();
     test_free();
+    test_uptime();
     test_memtest();
     test_mfetch();
     test_ls();

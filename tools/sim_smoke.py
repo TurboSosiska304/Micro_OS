@@ -41,12 +41,27 @@ COMMANDS = [
     "ls /",
     "write /etc/smoke hello",
     "cat /etc/smoke",
+    "tree /etc",
+    "tree -d /etc",
     "df",
     "config sync",
     "config",
     "mkfs",
     "mkfs -y",
     "ls /",
+    "df /nope",
+    "umount /proc",
+    "path \"\"",
+    "cd /proc",
+    "pwd",
+    "cd .",
+    "pwd",
+    "cd //proc//",
+    "pwd",
+    "cd ..",
+    "pwd",
+    "ls ..",
+    "cd /",
     "modules",
     "date",
     "mfetch",
@@ -118,12 +133,17 @@ def check(output: str, commands: list) -> list:
 
     blocks = answers(output)
 
-    def answer(command: str) -> str:
-        """The answer of one command of the list, empty when it did not run."""
-        try:
-            index = commands.index(command)
-        except ValueError:
+    def answer(command: str, occurrence: int = 0) -> str:
+        """The answer of one command of the list, empty when it did not run.
+
+        A command may be typed twice to see the two sides of a rule - `pwd`
+        after `cd .` and after `cd ..` - so the occurrence decides which
+        block is the answer.
+        """
+        indexes = [index for index, line in enumerate(commands) if line == command]
+        if occurrence >= len(indexes):
             return ""
+        index = indexes[occurrence]
         return blocks[index] if index < len(blocks) else ""
 
     # --- the boot
@@ -198,8 +218,27 @@ def check(output: str, commands: list) -> list:
     expect("ls / lists the devfs", "dev/" in root)
 
     written = answer("write /etc/smoke hello")
-    expect("write creates a file", "byte(s) written to /etc/smoke" in written)
+    expect("write creates a file", "6 bytes written to /etc/smoke" in written)
     expect("cat prints what write wrote", "hello" in answer("cat /etc/smoke"))
+
+    # --- the tree: -d draws the directories and counts every entry
+    tree = answer("tree /etc")
+    tree_d = answer("tree -d /etc")
+    counts = re.search(r"(\d+) director(?:y|ies), (\d+) files?", tree)
+    counts_d = re.search(r"(\d+) director(?:y|ies), (\d+) files?", tree_d)
+    expect("tree draws the branches of /etc", "|-- " in tree or "`-- " in tree, tree)
+    expect("tree counts the entries of /etc", counts is not None, tree)
+    expect("tree -d draws no file", "clock" not in tree_d and "setting" not in tree_d, tree_d)
+    expect(
+        "tree -d counts the same files as tree",
+        counts is not None and counts_d is not None and counts.groups() == counts_d.groups(),
+        f"{tree_d} against {tree}",
+    )
+    expect(
+        "tree -d counts the files it did not draw",
+        counts_d is not None and int(counts_d.group(2)) > 0,
+        tree_d,
+    )
 
     df_text = answer("df")
     expect("df prints the volume", re.search(r"blocks: \d+ of \d+ free", df_text) is not None)
@@ -219,6 +258,40 @@ def check(output: str, commands: list) -> list:
 
     root = answer("ls /")
     expect("ls / works after a format", "proc/" in root and "dev/" in root)
+    expect(
+        "df refuses a path that is not there",
+        "df: /nope: no such file or directory" in answer("df /nope"),
+        answer("df /nope"),
+    )
+    expect(
+        "a filesystem of the kernel is not unmounted",
+        "/proc is mounted by the kernel" in answer("umount /proc"),
+        answer("umount /proc"),
+    )
+    expect(
+        "path refuses the empty value",
+        "an empty value is not a list of directories" in answer('path ""'),
+        answer('path ""'),
+    )
+
+    # --- `.` and `..` in a path: the shell normalizes before the call
+    expect("cd into a directory works", "/proc" in answer("pwd", 1), answer("pwd", 1))
+    expect("cd . stays in the directory", "/proc" in answer("pwd", 2), answer("pwd", 2))
+    expect(
+        "repeated and trailing slashes are one path",
+        "/proc" in answer("pwd", 3),
+        answer("pwd", 3),
+    )
+    expect(
+        "cd .. goes to the parent",
+        re.search(r"(?m)^/\s*$", answer("pwd", 4)) is not None,
+        answer("pwd", 4),
+    )
+    expect(
+        "ls .. lists the parent",
+        any(name in answer("ls ..") for name in ("proc/", "dev/", "etc/")),
+        answer("ls .."),
+    )
 
     # --- the stubs of the board: the drivers of the host
     modules = answer("modules")
