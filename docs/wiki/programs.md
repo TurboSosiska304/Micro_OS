@@ -149,12 +149,15 @@ mode of a program (`0755`), and no boot creates one:
 | `/bin/wc` | the lines, words and bytes of a source (`-l`, `-w`, `-c`) or of descriptor 0 |
 | `/bin/zcat` | a `.gz` of the VFS inflated by zlib 1.3.1 and written to the console or a file |
 | `/bin/lua` | the interpreter of Lua 5.4.7: `-e` and the script `/etc/hello.lua`, read from the volume |
+| `/bin/zstd` | the command of zstd 1.5.7: `-d`, `-c`, `-f`, `-q`, `-l`, `-t`, `-1`..`-19`, `--rm`, `-o`, a pipe, and the frames of every other zstd |
+| `/bin/zstdcat` | the same image under a second name: it unpacks to standard output |
 
 The first five talk to the kernel through `programs/prog.h`, because what they
 test is the raw door, the fault, the fork, the edge and the signals. The rest
 are ordinary C programs linked against `components/libc/user`
-([ADR 0016](../adr/0016-userland.md)); `zcat` is also linked against zlib and
-`lua` against the core of Lua 5.4.7, the two libraries of somebody else
+([ADR 0016](../adr/0016-userland.md)); `zcat` is also linked against zlib,
+`lua` against the core of Lua 5.4.7 and `zstd` against the library of zstd
+1.5.7, the three libraries of somebody else
 ([`docs/porting-programs.md`](../porting-programs.md)). Every one of them
 reads descriptor 0
 when it is given no file (or `-`); `execve` carries the table of the caller, so
@@ -173,6 +176,15 @@ write the same bytes. `zcat -o FILE` inflates it into a file of MicroFS and
 `zcat -t` checks it; the smoke tests compare the count and the text of the
 inflated bytes. `/etc/licenses/zlib` is the zlib license beside the program
 that carries the library, and `docs/licensing.md` has the row.
+
+`/etc/setting.zst` is the fixture of `zstd`, written by the `zstd` of the
+machine that builds the image (`tools/x86_image.py`): the guest unpacks a frame
+of the host, and `make x86-smoke` reads a frame the guest wrote back out of
+the machine (as hexadecimal, by `/etc/hex.lua`) and unpacks it with the host,
+so the two directions of the format are in the tests.
+`/etc/broken.zst` is the same frame with its tail cut, which `zstd -t` refuses.
+`/etc/licenses/zstd` is the BSD-3-Clause of the release beside the commands
+that carry the library.
 
 ## The board: Xtensa code without an MMU
 

@@ -4,9 +4,10 @@ This is the recipe of a program that is somebody else's: a library and a
 command of a Unix-like system that were written for a C library and a POSIX
 kernel, built with the compiler and the library of this system and run in the
 window of a program. The first one is zlib and `/bin/zcat`
-([`third_party/zlib/README.md`](../third_party/zlib/README.md)); the next
-ones are Lua, the tools of sbase and SQLite, and the recipe is written so that
-they are copies of a shape and not new research.
+([`third_party/zlib/README.md`](../third_party/zlib/README.md)); the next ones
+are Lua (an interpreter), zstd (a library and the command of its own release)
+and the tools of sbase and SQLite, and the recipe is written so that they are
+copies of a shape and not new research.
 
 It is not the recipe of a **port of Micro OS** to another machine: that one is
 [`porting.md`](porting.md), and it is about the contract of `kernel/port/`.
@@ -79,9 +80,12 @@ tends to need and the tree has:
 
 | Header | What is there |
 |---|---|
-| `<string.h>` | `strlen`, `strcmp`, `strncmp`, `strcoll`, `strstr`, `strspn`, `strcspn`, `strpbrk`, `strcpy`, `strncpy`, `strcat`, `strchr`, `strrchr`, `memcpy`, `memmove`, `memset`, `memcmp`, `memchr` |
+| `<string.h>` | `strlen`, `strcmp`, `strncmp`, `strcoll`, `strstr`, `strspn`, `strcspn`, `strpbrk`, `strcpy`, `strncpy`, `strcat`, `strchr`, `strrchr`, `strdup` (a file of its own: it allocates), `memcpy`, `memmove`, `memset`, `memcmp`, `memchr` |
 | `<stdlib.h>` | `malloc`, `calloc`, `realloc`, `free`, `exit`, `abort`, `getenv`/`environ`, `strtod`, `strtol`, `strtoul`, `strtoll`, `strtoull`, `atoi`, `atol`, `atof`, `abs`, `labs`, `qsort`, `EXIT_SUCCESS`, `EXIT_FAILURE` |
-| `<stdio.h>` | `printf`, `vprintf`, `fprintf`, `vfprintf`, `sprintf`, `snprintf`, `vsnprintf`, `puts`, `putchar`, and the streams `fopen`, `freopen`, `tmpfile` (a failure: no `/tmp`), `fclose`, `fread`, `fwrite`, `fgetc`, `getc`, `ungetc`, `fputc`, `fgets`, `fputs`, `feof`, `ferror`, `clearerr`, `fflush`, `fseek`, `ftell`, `rewind`, `fileno`, `setvbuf` (accepted, no buffer), `stdin`, `stdout`, `stderr` |
+| `<stdio.h>` | `printf`, `vprintf`, `fprintf`, `vfprintf`, `sprintf`, `snprintf`, `vsnprintf`, `puts`, `putchar`, `perror`, `getchar`, and the streams `fopen`, `fdopen`, `freopen`, `tmpfile` (a failure: no `/tmp`), `fclose`, `fread`, `fwrite`, `fgetc`, `getc`, `ungetc`, `fputc`, `fgets`, `fputs`, `feof`, `ferror`, `clearerr`, `fflush`, `fseek`, `ftell`, `rewind`, `fileno`, `setvbuf` (accepted, no buffer), `stdin`, `stdout`, `stderr` |
+| `<sys/stat.h>` | `struct stat` with the `S_IS*` macros, `stat`, `lstat` (the same call: no links), `fstat` (the position of the end), `chmod`, `umask`. The record of the ABI itself is `ulibc_stat_call`, which fills `struct vfs_stat` |
+| `<dirent.h>` | `DIR`, `struct dirent`, `opendir`, `readdir`, `closedir`, `rewinddir`, `dirfd` over a batch of eight entries of the call `ulibc_readdir` |
+| `<libgen.h>` | `basename`, `dirname` |
 | `<errno.h>` | the POSIX numbers, `EDOM`/`ERANGE`, and `errno`, which is a plain global of the program |
 | `<unistd.h>` | `read`, `write`, `lseek`, `close`, `unlink`, `isatty` (0: no terminal), the three `STD*_FILENO` and `off_t`/`ssize_t` |
 | `<fcntl.h>` | `O_RDONLY`, `O_WRONLY`, `O_RDWR`, `O_CREAT`, `O_TRUNC`, `O_APPEND`, `O_DIRECTORY` |
@@ -190,6 +194,12 @@ The guest flags are the ones of the kernel and of the existing programs:
 -fno-merge-constants -Wall -Wextra -Werror`. No `-mcmodel=kernel` (that one is
 the kernel's), and no libc of the host: a symbol that the archive cannot
 resolve is a link error and not a silent call into glibc.
+
+A library that does not compute in floating point links `src/stdlib.c` and
+`src/time.c` without `ULIBC_WITH_FLOAT`: the conversion of a double
+(`strtod`, `atof`) and `difftime` are in the float build alone, the way the
+formatter is, so `zstd` pays neither their code nor the SSE register they
+return in.
 
 `-mgeneral-regs-only` is the rule of a program that computes in integers.
 A library whose numbers are doubles (Lua) is built with the `FLOAT` option of

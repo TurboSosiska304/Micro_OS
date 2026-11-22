@@ -24,8 +24,9 @@ of the calls are the same on both machines. The two libraries share the
 header of the ABI and nothing else, and that is deliberate: one runs with the
 kernel under it, the other has nothing but the gate.
 
-The library of a program grew with its utilities (0.7): `stat` to tell a file
-from a directory (`rm` refuses a directory without `-r`), `mkdir` and
+The library of a program grew with its utilities (0.7): the record of a path
+to tell a file from a directory (`rm` refuses a directory without `-r`;
+the POSIX `stat` of the third port took that place), `mkdir` and
 `unlink` for the tree (`mkdir`, `rm`), `getcwd` for the directory of the task
 (`pwd`), and `strstr` for a word in a line (`grep`). The first port of a
 program of somebody else (zlib, `/bin/zcat`) added the three families a
@@ -36,14 +37,18 @@ because a program selects the files it links:
 |---|---|---|
 | the allocation | `src/malloc.c` | an arena in the bss of the program (`-DULIBC_HEAP_SIZE`, 256 KiB by default, 512 KiB for `zcat`), not `KSYS_MALLOC`: the block of the kernel is memory of ring 0 and a program cannot read it |
 | the error | `src/errno.c` | `errno` as a global of the program and `strerror`; the calls keep the negative number of the ABI and the wrappers also store its magnitude, so a portable library reads `errno` after `read` |
-| the streams | `src/file.c` | `fopen`, `freopen`, `fclose`, `fread`, `fwrite`, `fgetc`, `getc`, `ungetc`, `fputc`, `fgets`, `fputs`, `feof`, `ferror`, `fseek`, `ftell`, `rewind`, `fileno` over a descriptor; the binary mode is accepted and ignored because no file of the system translates a byte; `tmpfile` is a failure (no `/tmp`) |
-| the conversions and the sort | `src/stdlib.c` | `strtod`, `strtol`/`strtoul`/`strtoll`/`strtoull`, `atoi`/`atol`/`atof`, `abs`/`labs`, `qsort` (a merge sort in the arena, insertion when it has no room), `getenv` over `environ` |
+| the streams | `src/file.c` | `fopen`, `fdopen`, `freopen`, `fclose`, `fread`, `fwrite`, `fgetc`, `getc`, `getchar`, `ungetc`, `fputc`, `fgets`, `fputs`, `perror`, `feof`, `ferror`, `fseek`, `ftell`, `rewind`, `fileno` over a descriptor; the binary mode is accepted and ignored because no file of the system translates a byte; `tmpfile` is a failure (no `/tmp`) |
+| the conversions and the sort | `src/stdlib.c` | `strtod`, `strtol`/`strtoul`/`strtoll`/`strtoull`, `atoi`/`atol`/`atof`, `abs`/`labs`, `qsort` (a merge sort in the arena, insertion when it has no room), `getenv` over `environ`. A build without `ULIBC_WITH_FLOAT` links the file and not `strtod`/`atof`, which are in the float build alone |
+| the information about an object | `src/stat.c`, `include/sys/stat.h` | the POSIX `struct stat` with the `S_IS*` macros, `stat`/`lstat` (one call: the system has no links) over `KSYS_STATX`, `fstat` (the position of the end), `chmod`, `umask`. The record of the ABI keeps its own name, `ulibc_stat_call`, and fills `struct vfs_stat` |
+| the entries of a directory | `src/dirent.c`, `include/dirent.h` | `DIR`, `struct dirent`, `opendir`, `readdir`, `closedir`, `rewinddir`, `dirfd` over a batch of eight names of `ulibc_readdir` |
+| the halves of a path, the copy of a word | `src/libgen.c`, `src/string_ext.c` | `basename`/`dirname`, `strdup` (a file of its own: it allocates, and a program without an arena does not link it) |
 | the arithmetic | `src/math.c` | the functions of `<math.h>` for a `double`: the square root, the logarithm and the exponential of the x87 unit, the trigonometric functions of the unit with an argument reduced by `fprem`, and the rounding and the split of the exponent in integers |
 | the long jump | `src/setjmp.c` | `setjmp`/`longjmp` in the six callee-saved registers, the stack pointer and the return address of x86-64 |
 | the clock and the locale | `src/time.c`, `src/locale.c`, `src/ctype.c`, `src/assert.c` | `time` (the uptime: the ABI has no wall clock), `clock`, `gmtime`/`localtime`/`mktime`/`strftime` of the C locale, `localeconv`, the classes of a byte, `assert` |
 
 The names a portable source includes (`<string.h>`, `<stdlib.h>`, `<stdio.h>`,
-`<errno.h>`, `<unistd.h>`, `<fcntl.h>`, `<sys/types.h>`) are thin headers in
+`<errno.h>`, `<unistd.h>`, `<fcntl.h>`, `<sys/types.h>`, `<sys/stat.h>`,
+`<dirent.h>`, `<libgen.h>`) are thin headers in
 `components/libc/user/include`, each one including `ulibc.h`. The body of the
 library is still `ulibc.h`, and a program that wants the functions of the
 system includes `ulibc.h` and not the headers of the host.

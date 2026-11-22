@@ -314,6 +314,18 @@ written when the project was an operating system for one board; the numbers
       `double`. The host test is `tests/cases/test_lua.c`; the interpreter
       itself waits for K3 below, because 164 KiB is past the block
       `sys_execve` reads in one call
+* [x] The third port of a program of somebody else: zstd 1.5.7
+      (BSD-3-Clause) as a static archive of lib/common, lib/compress and
+      lib/decompress, and `/bin/zstd` as the program of the release itself
+      (`programs/zstdcli.c`), with `/bin/zstdcat` as the same image under a
+      second name, `/etc/setting.zst` and `/etc/broken.zst` as fixtures and
+      `/etc/licenses/zstd` in the image. The library of a program learned the
+      POSIX families this port needs - `<sys/stat.h>`, `<dirent.h>`,
+      `<libgen.h>`, `fdopen`, `strdup`, `perror`, `getchar` - from
+      `feature/sbase`, and the port caps the memory of the context to the
+      arena of a program (`third_party/zstd/README.md`). The frames of the
+      guest and of the host are read by one another in `make x86-smoke`; the
+      host test is `tests/cases/test_zstd.c`
 * [ ] The image of a program larger than `KSYS_MAX_IO`: `execve` reads the
       image into one block of 64 KiB and refuses a larger one (`/bin/lua`),
       and the answer of the refusal names the wrong reason. A cap that is the
