@@ -78,6 +78,7 @@ else()
 endif()
 
 set(NET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/net")
+set(PKG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/pkg")
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -201,6 +202,25 @@ if(MICRO_OS_X86_NET)
         "${NET_DIR}/src/http.c"
         "${NET_DIR}/src/ntp.c"
         "${NET_DIR}/src/net_http_server.c"
+    )
+endif()
+
+# The installer of programs (ADR 0024). It is part of the network image: a
+# package arrives over HTTP, and `pkg` is the half of the promise of 2.0 that
+# a machine changes itself. The signature of a package is the signature of
+# the image, so the two primitives of the loader (SHA-256 and Ed25519) are
+# compiled into the kernel as well, and the public key of the build is the
+# key of the repository when /etc/pkg/keys has none (ADR 0024 §4).
+set(PKG_SOURCES)
+if(MICRO_OS_X86_NET)
+    list(APPEND PKG_SOURCES
+        "${PKG_DIR}/src/pkg.c"
+        "${PKG_DIR}/src/pkg_io.c"
+        "${PKG_DIR}/src/pkg_db.c"
+        "${PKG_DIR}/src/pkg_index.c"
+        "${PKG_DIR}/src/pkg_verify.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/loader/sha256.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/loader/ed25519.c"
     )
 endif()
 
@@ -364,6 +384,7 @@ add_executable(microos64
     ${VIRTUAL_SOURCES}
     ${SETTINGS_SOURCES}
     ${NET_SOURCES}
+    ${PKG_SOURCES}
     src/boot64.S
     src/kmain.c
     src/shell.c
@@ -399,6 +420,18 @@ target_include_directories(microos64 PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 
+if(MICRO_OS_X86_NET)
+    target_include_directories(microos64 PRIVATE
+        "${PKG_DIR}/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/loader"
+        "${CMAKE_BINARY_DIR}"
+    )
+    # The public key of the build is the key of the repository when the
+    # volume has none: the header is generated with the image, and the
+    # compiler has to wait for it.
+    target_sources(microos64 PRIVATE "${CMAKE_BINARY_DIR}/sign_public_key.h")
+endif()
+
 target_compile_definitions(microos64 PRIVATE
     KERNEL_BOARD_NAME="x86_64"
     KERNEL_BOARD_DESC="QEMU x86-64 machine"
@@ -412,6 +445,8 @@ target_compile_definitions(microos64 PRIVATE
     MICRO_OS_NET_MQTT=0
     MICRO_OS_TELNET=$<BOOL:${MICRO_OS_TELNET}>
     MICRO_OS_WIFI=$<BOOL:${MICRO_OS_WIFI}>
+    MICRO_OS_PKG=$<BOOL:${MICRO_OS_X86_NET}>
+    MICRO_OS_PKG_BUILTIN_KEY=$<BOOL:${MICRO_OS_X86_NET}>
 )
 
 if(MICRO_OS_FS_FAT32)
