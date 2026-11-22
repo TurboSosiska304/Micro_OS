@@ -206,7 +206,7 @@ class Load:
             Command("mkdir /tmp/d", forbid=("mkdir:",)),
             Command("write /tmp/d/b body", ["byte(s) written"]),
             Command("rm -r /tmp/d", forbid=("rm:",)),
-            Command("exec /bin/foreign", ["exec format error"]),
+            Command("exec /log/.foreign", ["exec format error"]),
             Command("fsck", ["consistent"]),
             Command("telnet on", ["telnet: on"], soft=True),
             Command("telnet off", ["telnet: off"], soft=True),
