@@ -70,10 +70,11 @@ FIRST_BOOT = [
     "exec /bin/cat /etc/hello.lua",
     "exec /bin/lua -e print(2^10)",
     "exec /bin/lua /etc/hello.lua",
-    # The tools of sbase read the same volume: a file of the disk through the
-    # library of a program that grew with them.
-    "exec /bin/sb-ls -la /etc",
-    "exec /bin/sb-grep -r hostname /etc",
+    # The commands of sbase read the same volume: a file of the disk through
+    # the library of a program that grew with them, and the shell finds them
+    # in PATH before its own table.
+    "ls -la /etc",
+    "grep -r hostname /etc",
 ]
 
 SECOND_BOOT = [
@@ -90,10 +91,11 @@ SECOND_BOOT = [
     "exec /bin/wc -c /persist.gz.txt",
     "ls /etc/licenses",
     "exec /bin/lua /etc/hello.lua",
-    # The tools of sbase read the same volume on the second boot: a file of
-    # the disk through the library of a program that grew with them.
-    "exec /bin/sb-ls -la /etc",
-    "exec /bin/sb-grep -r hostname /etc",
+    # The commands of sbase read the same volume on the second boot: a file
+    # of the disk through the library of a program that grew with them, and
+    # the shell finds them in PATH before its own table.
+    "ls -la /etc",
+    "grep -r hostname /etc",
 ]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -258,7 +260,7 @@ def check(first: str, second: str) -> list:
     )
     expect(
         "the tree of the machine is the tree of every port",
-        all(name in first_answers[4] for name in ("bin/", "etc/", "proc/", "dev/"))
+        all(name in first_answers[4] for name in ("bin", "etc", "proc", "dev"))
         and "persist.txt" in first_answers[4],
         first_answers[4],
     )
@@ -388,13 +390,13 @@ def check(first: str, second: str) -> list:
     )
     listing = second_answers[13]
     expect(
-        "a tool of sbase reads the volume after the reset",
+        "the tool of sbase reads the volume after the reset",
         "root" in listing and "setting" in listing and "greeting.gz" in listing,
         listing,
     )
     recursive = second_answers[14]
     expect(
-        "a recursive grep of sbase walks the volume after the reset",
+        "a recursive grep walks the volume after the reset",
         "/etc/setting:hostname=x86_64" in recursive,
         recursive,
     )

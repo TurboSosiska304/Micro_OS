@@ -46,17 +46,19 @@ microos> tree /
 | `/etc/fstab` | the volumes the boot mounts after the root, when the file is there |
 | `/etc/greeting.gz` | on x86-64: the gzip fixture of `/bin/zcat`, written by `tools/x86_image.py` with a fixed moment |
 | `/etc/licenses/zlib` | the license of zlib, beside the program that carries the library |
-| `/etc/licenses/sbase` | the MIT notice of sbase, beside the `/bin/sb-*` tools it was built into |
+| `/etc/licenses/sbase` | the MIT notice of sbase, beside the ten commands it was built into |
 | `/proc` | the kernel: `version`, `uptime`, `meminfo`, `tasks`, `modules`, one directory per task |
 | `/dev` | the devices: `tty0`, `null`, `input` and the ones the port adds |
 | `/log` | on the board: `start.log`, the log of the boot |
 | `/bin` | on x86-64: the programs of the disk image (`hello`, `crash`, `fork`, ...), written by `make x86-disk` and read by `execve`; no boot installs them |
 
-The `ls` of the shell prints the names of a directory on one line, two
-spaces apart; it has no flags. `/bin/sb-ls` is the `ls` of sbase: one name
-per line, `-l` for the mode, the owner, the group, the size and the date, `-a`
-for the two names `.` and `..`, and `-R` for a tree. `tree` draws the levels
-below a path, and `stat` is the detailed view of one object.
+`/bin/ls` is the `ls` of sbase: one name per line, `-l` for the mode, the
+owner, the group, the size and the date, `-a` for the two names `.` and `..`,
+`-R` for a tree and `--color` for a directory in blue and an executable in
+green. A bare `ls` is that program on x86-64 (the shell looks in `PATH`
+first); the simulator, whose port has no programs, has the command of the
+shell that prints the names two spaces apart. `tree` draws the levels below a
+path, and `stat` is the detailed view of one object.
 
 ## MicroFS
 

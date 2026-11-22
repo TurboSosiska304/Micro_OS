@@ -17,7 +17,7 @@ commercially; the note here is what the tree does.
 | Mbed TLS | 3.6.2 | Apache-2.0 (of the dual Apache-2.0 / GPL-2.0-or-later) | `third_party/mbedtls` | the x86-64 network image, and the host tests; `LICENSE.mbedtls` in the x86-64 tar |
 | PCRE2 | 10.42 | BSD-3-Clause WITH PCRE2-exception | `third_party/pcre2`, `ports/port_x86_64/programs/pcre2grep.c` | `/bin/pcre2grep` of the x86-64 MicroFS image; `/etc/licenses/pcre2` in the image and `LICENSE.pcre2` in the x86-64 tar |
 | Lua | 5.4.7 | MIT | `third_party/lua`, `ports/port_x86_64/programs` (the `main` is the release's `lua.c`) | `/bin/lua` of the x86-64 MicroFS image; `/etc/licenses/lua` in the image and `LICENSE.lua` in the x86-64 tar |
-| sbase | c546c3a (tip) | MIT | `third_party/sbase`, ten tools of `/bin/sb-*` | `/bin/sb-cat`, `/bin/sb-grep`, `/bin/sb-head`, `/bin/sb-ls`, `/bin/sb-tail`, `/bin/sb-wc`, `/bin/sb-sort`, `/bin/sb-find`, `/bin/sb-xargs` and `/bin/sb-sed` of the x86-64 MicroFS image; `/etc/licenses/sbase` in the image and `LICENSE.sbase` in the x86-64 tar |
+| sbase | c546c3a (tip) | MIT | `third_party/sbase`, the ten commands `cat grep head ls tail wc sort find xargs sed` | `/bin/cat`, `/bin/grep`, `/bin/head`, `/bin/ls`, `/bin/tail`, `/bin/wc`, `/bin/sort`, `/bin/find`, `/bin/xargs` and `/bin/sed` of the x86-64 MicroFS image; `/etc/licenses/sbase` in the image and `LICENSE.sbase` in the x86-64 tar |
 
 Spleen is a font by Frederic Cambus; the license and the note are in
 [`third_party/spleen`](../third_party/spleen/README.md). The 8x16 table is
@@ -69,7 +69,7 @@ sbase is a collection of Unix tools by suckless; the subset, the commit and
 the two hunks of the port are in
 [`third_party/sbase`](../third_party/sbase/README.md). Its license is the MIT
 text of the collection, which names its authors. The MicroFS image carries
-`/etc/licenses/sbase` beside the tools of `/bin/sb-*`, `tools/bundle.sh`
+`/etc/licenses/sbase` beside the ten commands, `tools/bundle.sh`
 puts `LICENSE.sbase` into the x86-64 archive, and a package that installs a
 tool (`microos-progs` of a release) copies the same file beside it. The
 notice is not merged into the MIT `LICENSE` of the tree: the two are the same

@@ -288,6 +288,12 @@ have no window of programs; the x86-64 port is the machine that runs one.
 
 ### Flags and the help
 
+On x86-64 the ten commands of sbase (`ls`, `cat`, `grep`, `head`, `tail`,
+`wc`, `sort`, `find`, `sed`, `xargs`) are the programs of `/bin`, not the
+commands of the shell: a bare name is looked up in `PATH` first. Their flags
+are the ones of the collection (`ls -l`, `grep -r`, `sort -n`, ...), and the
+table below is the shell's own for the commands that remain built in.
+
 Every command answers `-h` and `--help` with its usage line, the one line of the
 list of `help` and the notes about its flags; the command does not do its work,
 and the status is 0, because the help that was asked for was given. A command
@@ -317,6 +323,7 @@ rm -- -notes
 | Command | Flag | Meaning |
 |---|---|---|
 | `ls` | `-l` | the mode, the owner, the size and the date of every entry |
+| `ls` | `--color[=always\|never\|auto]` | a directory in blue and an executable in green (the `/bin/ls` of sbase; on x86-64 a bare `ls` is that program) |
 | `ls` | `-a` | `.` and `..` first |
 | `ls` | `--color[=always\|never\|auto]` | a directory in blue and an executable in green; `never` and `auto` are plain (`auto` is off: no terminal to ask) |
 | `tree` | `-d` | the directories only |

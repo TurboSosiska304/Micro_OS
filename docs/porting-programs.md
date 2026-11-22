@@ -290,12 +290,13 @@ and the one that made the library of a program grow the POSIX families of
 
 What the port took, and what a next command can copy:
 
-* **The same recipe, a second name.** The tool is built by
+* **The same recipe, the canonical name.** The tool is built by
   `microos_add_userland_program()` with `MAIN` naming the upstream file and
-  the image named `sb-<tool>`. It lives **beside** `/bin/ls` and not in place
-  of it: the older `ls` prints the names on one line and its sentences on an
-  error are a contract the smoke test reads. A port that replaces a program
-  changes a contract; a port that adds one does not.
+  the image named after the tool: `/bin/ls` is the `ls` of sbase. The small
+  `ls`, `cat`, `grep`, `wc` and `head` of ADR 0016 are not built for the
+  x86-64 port any more; `echo`, `mkdir`, `pwd` and `rm` stay because sbase
+  does not replace them. A port that replaces a program updates the smoke
+  test in the same commit, because the sentences of an error are a contract.
 * **The library is the program's own.** The C library a tool expects is
   `components/libc/user` (family by family, above), and the two libraries of
   the collection (`libutf`, `libutil`) are a static archive built with the
@@ -324,9 +325,11 @@ What the port took, and what a next command can copy:
 
 The tests: `tests/cases/test_userland.c` for the pure library (compiled for
 the host, a `userland` test of its own), and in `x86-smoke` and
-`x86-disk-smoke` the ten commands over the files of the image - `sb-ls -la`,
-`sb-find -name`, `sb-sort`, `sb-grep -r`, `sb-wc`, `sb-tail`, `sb-head`,
-`sb-sed`, `sb-cat` and `ls | sb-xargs`.
+`x86-disk-smoke` the ten commands over the files of the image - `ls -la`,
+`find -name`, `sort`, `grep -r`, `wc`, `tail`, `head`, `sed`, `cat` and
+`ls | xargs`. The shell looks a bare name in `PATH` before its own table for
+these ten, so the checks are the command a person types and not only the
+path of the file.
 
 ## The checklist of the next port
 

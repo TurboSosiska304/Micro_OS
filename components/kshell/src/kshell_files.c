@@ -2106,6 +2106,56 @@ static int cmd_exec(int argc, char **argv)
 }
 
 /*
+ * The PATH-first half of a command that is both a program and a command of
+ * the shell: `ls` of the machine is /bin/ls when the machine has one. The
+ * answer is 1 when the file was found and run; 0 keeps the command of the
+ * shell, which is the answer of a simulator (no port to enter an image) and
+ * of a board whose /bin has no file of that name.
+ *
+ * `execve` of this system runs the program as a task of its own and returns
+ * when it has ended, so the shell waits without a `fork` of its own kernel
+ * task (the port copies the address space of a program, not of the shell).
+ * docs/debts.md has the POSIX shape.
+ */
+int kshell_try_program(int argc, char **argv, int *status)
+{
+    char path[SHELL_PATH_MAX];
+    int rc;
+
+    if (argc < 1 || argv == NULL || status == NULL) {
+        return 0;
+    }
+
+    if (shell_name_has_dir(argv[0])) {
+        if (!shell_resolve(argv[0], path, sizeof(path))) {
+            return 0;
+        }
+    } else if (!shell_find_program(argv[0], path, sizeof(path))) {
+        return 0;
+    }
+
+    rc = microos_execve(path, argv);
+    if (rc == 0) {
+        *status = KSHELL_OK;
+        return 1;
+    }
+
+    /*
+     * A machine whose port cannot enter a program answers ENOSYS (and a
+     * machine of another arch ENOEXEC before a byte runs); the command of
+     * the shell is the fallback, and the two are not a fault of the line.
+     */
+    if (microos_errno() == -KERR_NOSYS || microos_errno() == -KERR_NOTSUP) {
+        return 0;
+    }
+
+    kshell_eprintf("%s: %s\n", argv[0], exec_error_text(microos_errno()));
+    *status = KSHELL_ERROR;
+
+    return 1;
+}
+
+/*
  * A stage of a pipeline whose name is not a command of the shell: the name
  * with a slash is a path, a name without one is looked up in PATH, and the
  * program runs with the descriptors the stage built for it. The answer is
@@ -2141,7 +2191,17 @@ int kshell_run_program(int argc, char **argv)
 
     return KSHELL_ERROR;
 }
+
 #else  /* KERNEL_EXEC */
+int kshell_try_program(int argc, char **argv, int *status)
+{
+    (void)argc;
+    (void)argv;
+    (void)status;
+
+    return 0;
+}
+
 int kshell_run_program(int argc, char **argv)
 {
     if (argc > 0 && argv != NULL) {

@@ -116,7 +116,7 @@ endfunction()
 # is `_start` of the runtime (ADR 0016), so `main` is a function of the
 # program and not the place the port enters. `MAIN` names the source of the
 # program: the tree keeps it in `programs/<name>.c`, and a ported tool names
-# the file of third_party while the image keeps its own name (`/bin/sb-ls`).
+# the file of third_party while the image keeps its own name (`/bin/ls`).
 #
 # A program whose text is near the limit of the image is built with
 # `GC_SECTIONS`: every function and every object is a section of its own, and

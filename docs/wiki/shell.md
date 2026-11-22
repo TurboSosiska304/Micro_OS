@@ -47,14 +47,21 @@ microos> cat /etc/setting 2> /tmp/errors
 microos> /bin/cat /etc/setting | wc -l
 ```
 
-A stage that is a command of the shell (`ls`, `cat`, `echo`, `df`, ...) runs
-in a task of its own and writes descriptor 1, so a redirect or a pipe carries
-its output exactly as it carries a program's. A name that is not a command is
+A stage that is a command of the shell (`echo`, `df`, `tree`, ...) runs in a
+task of its own and writes descriptor 1, so a redirect or a pipe carries its
+output exactly as it carries a program's. A name that is not a command is
 looked up in `PATH` and started with `execve`; on x86-64 that program
 inherits the three descriptors of the stage, which is what makes
-`echo one | /bin/cat` and `ls /bin | wc -l` work. On the board and in the
-simulator there is no program to run, and only the commands of the shell can
-be stages.
+`echo one | /bin/cat` and `ls /bin | wc -l` work.
+
+The ten commands of sbase (`ls`, `cat`, `grep`, `head`, `tail`, `wc`, `sort`,
+`find`, `sed`, `xargs`) are programs of the x86-64 disk, and the shell looks
+their bare name in `PATH` **before** its own table: `ls /etc` at the prompt is
+`/bin/ls`, the same file `exec /bin/ls /etc` runs. The port is asked first
+(`k_port_exec_supported()`): the simulator cannot enter an image and keeps
+the command of the shell, and the board has no `ls` of sbase in its `/bin`
+and falls back the same way. A file that exists but cannot run is an error
+and not a silent fallback.
 
 What the line does **not** do:
 
@@ -206,7 +213,11 @@ psram: not available on this platform
 ## `PATH` and `exec`
 
 `PATH` starts at `/bin:/usr/bin` and belongs to the shell: it is not a file of
-`/etc`, and a program does not inherit it yet.
+`/etc`, and a program does not inherit it yet. The commands of the shell that
+change its state (`cd`, `path`) and the ones that have no program (`help`,
+`uname`, `ps`, `df`, `mount`, `config`, `stat`, `write`, `tree`, `kill`, ...)
+are always the shell's own. The ten names of sbase are the other way round:
+the file wins, and the command is the fallback.
 
 ```text
 microos> path
@@ -234,10 +245,10 @@ exec: hello: not found in /bin:/usr/bin
 On the board and in the simulator there is no program to run: a fresh volume
 has no `/bin`, and `execve` answers `ENOSYS` even for a file that is there. The
 x86-64 port has `/bin` in the MicroFS volume of its disk image
-(`make x86-disk`): `hello`, `crash`, `fork`, `badptr`, `signals`, `cat`,
-`echo`, `ls`, `wc`, `head`, `grep`, `mkdir`, `rm`, `pwd` and `spawn` are
-files with the mode 0755, and the boot and the shell run them as programs of
-ring 3. The library programs inherit the descriptors of the shell, so a
+(`make x86-disk`): `hello`, `crash`, `fork`, `badptr`, `signals`, `nx`,
+`cat`, `echo`, `grep`, `head`, `ls`, `tail`, `wc`, `sort`, `find`, `xargs`,
+`sed`, `mkdir`, `rm`, `pwd`, `spawn` and `zcat` are files with the mode 0755,
+and the boot and the shell run them as programs of ring 3. The library programs inherit the descriptors of the shell, so a
 pipeline can end in one of them. [programs.md](programs.md) explains what a
 program is.
 
@@ -268,12 +279,22 @@ hangs.
 
 ## `ls` and `tree`
 
-`ls` writes the names of a directory, one per line, in the order of the
-filesystem (the names are not sorted), a directory with a slash at its end.
-The listing has no fixed table and no limit: every name is printed as it is
-read. `-l` adds the kind and the nine bits of the mode, the owner, the size and
-the moment; `-a` puts `.` and `..` first. The path itself is not a line of the
+On x86-64 a bare `ls` is `/bin/ls` of sbase: the names of a directory, one per
+line and sorted, without a slash at the end of a directory. `-l` adds the
+kind and the nine bits of the mode, the owner, the group, the size and the
+moment; `-a` puts `.` and `..` first; `--color[=always|never|auto]` paints a
+directory blue and an executable green (`--color` is always, `auto` asks
+`isatty`, which is 0 on this console). The path itself is not a line of the
 answer — `tree` is the command that draws the levels.
+
+The shell has an `ls` of its own for the machines without a program (the
+simulator and the board): it prints the names one per line in the order of the
+filesystem, a directory with a slash at its end, and its `-l` is a line per
+entry with the mode, the owner, the size and the date. The listing has no
+fixed table and no limit: every name is printed as it is read, and `-a` puts
+`.` and `..` first. It takes `--color` too, with the same three colours and
+the same sequences. The two are different commands on purpose: one is a
+program of the disk, the other is the shell of the kernel.
 
 ```text
 microos> ls /etc

@@ -391,12 +391,50 @@ int kshell_options(int argc, char **argv, const struct kshell_option *options, k
  * table is answered here, before the handler sees the line, so `-h` and
  * `--help` mean the same in a pipeline stage as at the prompt.
  */
+/*
+ * The commands that a program of /bin replaces when the machine can run one:
+ * the shell keeps its own for a port without programs (the simulator) and
+ * for a program that is not there, but the file is what a person expects
+ * when /bin has it. The list is the ten tools of sbase; a command that
+ * changes the state of the shell (cd, path) or has no program (df, mount,
+ * config) is never one of them.
+ */
+static bool command_prefers_program(const char *name)
+{
+    static const char *const names[] = {"ls", "cat",  "grep", "head", "tail",
+                                        "wc", "sort", "find", "sed",  "xargs"};
+
+    for (k_size_t i = 0; i < K_ARRAY_SIZE(names); i++) {
+        if (strcmp(names[i], name) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 int kshell_invoke(int argc, char **argv, bool child)
 {
     struct command *cmd;
 
     if (argc == 0) {
         return KSHELL_OK;
+    }
+
+    /*
+     * PATH first, for the ten commands that are a program of the machine.
+     * A port that cannot enter an image answers ENOSYS and the command of
+     * the shell is the answer, not a refusal, so the shell asks no port
+     * question of its own (the simulator keeps its `ls` that way). The
+     * status lives in the branch and not in the frame of every command: the
+     * shell of a machine has one stack and a deep command (pkg -S) uses it.
+     */
+    if (command_prefers_program(argv[0])) {
+        int status = KSHELL_OK;
+
+        if (kshell_try_program(argc, argv, &status)) {
+            return status;
+        }
     }
 
     cmd = find_command(argv[0]);

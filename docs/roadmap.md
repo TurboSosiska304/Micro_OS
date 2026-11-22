@@ -73,7 +73,7 @@ written when the project was an operating system for one board; the numbers
       its disk and asks for `/bin/hello` with `execve`; the shell runs the
       same file with `exec`
 * [x] Programs are files on a filesystem of the disk, not blobs of the
-      kernel: `make x86-disk` writes `/bin` (seventeen programs) and `/etc` with
+      kernel: `make x86-disk` writes `/bin` (twenty-two programs) and `/etc` with
       `tools/mkfs_mfs.c`, and no boot installs an image
 * [x] `PATH` for the shell
 * [x] `argv` reaches the port, and the ABI of the entry is written down
@@ -331,7 +331,8 @@ written when the project was an operating system for one board; the numbers
       before a byte is read (`docs/debts.md`)
 * [x] The third port, and the first set of commands: sbase with ten tools
       (`cat`, `grep`, `head`, `ls`, `tail`, `wc`, `sort`, `find`, `xargs`,
-      `sed`) as `/bin/sb-*`, beside the programs of the tree. It is the port
+      `sed`) under their canonical names in `/bin`, in place of the small
+      programs they replace. It is the port
       that grew the library of a program the families a POSIX command needs
       (`opendir`/`readdir`, `struct stat`, `getpwuid`, `localtime`,
       `fnmatch`, a regular expression engine, `getopt`, `getline`,

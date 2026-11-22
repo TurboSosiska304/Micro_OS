@@ -232,25 +232,29 @@ COMMANDS = [
     "ls ..",
     "cd /",
     "memtest",
-    # The tools of sbase (third_party/sbase): the second `ls`, the trees of
-    # `find`, the order of `sort`, the recursive `grep`, the count and the
-    # tail of the library, and a substitution of `sed`. They are built beside
-    # the programs of ADR 0016 because the sentences of the older ones are a
-    # contract; the answers below are their own numbers and words.
-    "exec /bin/sb-ls -la /etc",
-    "exec /bin/sb-find /etc -name setting",
-    "exec /bin/sb-sort /etc/setting",
-    "exec /bin/sb-grep -r hostname /etc",
-    "exec /bin/sb-grep -r -i VGA /etc",
-    "exec /bin/sb-wc -l /etc/setting",
-    "exec /bin/sb-tail -n 1 /etc/setting",
-    "exec /bin/sb-head -n 1 /etc/setting",
-    "exec /bin/sb-sed -n s/x86_64/X/p /etc/setting",
-    "exec /bin/sb-cat /etc/setting",
-    # `xargs` passes its words to one `execve`, and the ABI of the call
-    # allows at most eight words in the vector (docs/syscall-abi.md); -n 4
-    # keeps the batch inside it. The limit is a debt, not a rule of sbase.
-    "ls /etc | /bin/sb-xargs -n 4",
+    # The tools of sbase (third_party/sbase) are the commands of the machine
+    # now: `ls`, `cat`, `grep`, `wc` and `head` are the files of /bin and not
+    # the small programs of ADR 0016, and `tail`, `sort`, `find`, `xargs` and
+    # `sed` are new. Both the bare name (PATH-first of the shell) and the
+    # explicit file are checked, because the two are one contract.
+    "ls -la /etc",
+    "find /etc -name setting",
+    "sort /etc/setting",
+    "grep -r hostname /etc",
+    "grep -r -i VGA /etc",
+    "wc -l /etc/setting",
+    "tail -n 1 /etc/setting",
+    "head -n 1 /etc/setting",
+    "sed -n s/x86_64/X/p /etc/setting",
+    "cat /etc/setting",
+    # `xargs` passes its words to one `execve`, and the ABI of the call allows
+    # at most eight words in the vector (docs/syscall-abi.md); -n 4 keeps the
+    # batch inside it. The limit is a debt of the ABI, not a rule of sbase.
+    "ls /etc | xargs -n 4",
+    "ls --color /etc",
+    "ls --color=never /etc",
+    "exec /bin/ls -la /etc",
+    "exec /bin/find /etc -name setting",
 ]
 
 # A directory wider than the table of 64 entries the shell used to keep: the
@@ -1039,52 +1043,78 @@ def check(output: str) -> list:
         "an empty value is not a list of directories" in answer('path ""'),
         answer('path ""'),
     )
-    expect("the tree is still there", "etc/" in answer("ls /"), answer("ls /"))
+    expect("the tree is still there", "etc" in answer("ls /"), answer("ls /"))
 
-    # --- the tools of sbase (third_party/sbase)
-    listing = answer("exec /bin/sb-ls -la /etc")
+    # --- the tools of sbase (third_party/sbase) are the commands of /bin
+    #
+    # The shell looks in PATH before its own table for these ten names, so a
+    # bare `ls` is the program of the disk (the kernel says `task: created
+    # 'program'`) and not the command of the shell. The checks below read the
+    # answer of the program and the escape of the colour.
+    listing = answer("ls -la /etc")
     expect(
-        "sb-ls -la prints the mode, the owner and the group",
+        "ls -la prints the mode, the owner and the group",
         re.search(r"-rw-r--r--\s+1 root\s+root\s+34 Jan 01 00:00 setting", listing) is not None,
         listing,
     )
     expect(
-        "sb-ls -la lists the directory the image has",
+        "ls -la lists the directory the image has",
         "init.d" in listing and "licenses" in listing,
         listing,
     )
-    found = answer("exec /bin/sb-find /etc -name setting")
-    expect("sb-find walks a tree and matches a name", "/etc/setting" in found, found)
-    ordered = answer("exec /bin/sb-sort /etc/setting")
     expect(
-        "sb-sort orders the lines",
+        "a bare command is the program of /bin, not the command of the shell",
+        "task: created 'program'" in listing,
+        listing,
+    )
+    found = answer("find /etc -name setting")
+    expect("find walks a tree and matches a name", "/etc/setting" in found, found)
+    ordered = answer("sort /etc/setting")
+    expect(
+        "sort orders the lines",
         ordered.index("console=vga") < ordered.index("hello") < ordered.index("hostname=x86_64"),
         ordered,
     )
-    recursive = answer("exec /bin/sb-grep -r hostname /etc")
+    recursive = answer("grep -r hostname /etc")
     expect(
-        "sb-grep -r names the file of a line",
+        "grep -r names the file of a line",
         "/etc/setting:hostname=x86_64" in recursive,
         recursive,
     )
-    recursive = answer("exec /bin/sb-grep -r -i VGA /etc")
-    expect("sb-grep -r -i folds the case", "console=vga" in recursive, recursive)
-    count = answer("exec /bin/sb-wc -l /etc/setting")
-    expect("sb-wc counts the lines", "3 /etc/setting" in count, count)
-    last = answer("exec /bin/sb-tail -n 1 /etc/setting")
-    expect("sb-tail prints the last line", "console=vga" in last, last)
-    first_line = answer("exec /bin/sb-head -n 1 /etc/setting")
-    expect("sb-head prints the first line", "hello" in first_line, first_line)
-    changed = answer("exec /bin/sb-sed -n s/x86_64/X/p /etc/setting")
-    expect("sb-sed matches and substitutes a line", "hostname=X" in changed, changed)
-    text = answer("exec /bin/sb-cat /etc/setting")
-    expect("sb-cat copies a file", "hostname=x86_64" in text and "console=vga" in text, text)
-    piped = answer("ls /etc | /bin/sb-xargs -n 4")
+    recursive = answer("grep -r -i VGA /etc")
+    expect("grep -r -i folds the case", "console=vga" in recursive, recursive)
+    count = answer("wc -l /etc/setting")
+    expect("wc counts the lines", "3 /etc/setting" in count, count)
+    last = answer("tail -n 1 /etc/setting")
+    expect("tail prints the last line", "console=vga" in last, last)
+    first_line = answer("head -n 1 /etc/setting")
+    expect("head prints the first line", "hello" in first_line, first_line)
+    changed = answer("sed -n s/x86_64/X/p /etc/setting")
+    expect("sed matches and substitutes a line", "hostname=X" in changed, changed)
+    text = answer("cat /etc/setting")
+    expect("cat copies a file", "hostname=x86_64" in text and "console=vga" in text, text)
+    piped = answer("ls /etc | xargs -n 4")
     expect(
-        "sb-xargs runs a command over the words of a pipe",
+        "xargs runs a command over the words of a pipe",
         "setting" in piped and "licenses" in piped,
         piped,
     )
+    # The console of the serial copy is not a terminal: the SGR sequence of
+    # the colour is consumed by the console and never reaches this text. The
+    # colour itself is checked out of the picture by `make x86-vga-smoke`;
+    # here the check is that the flag is accepted and the names are printed.
+    coloured = answer("ls --color /etc")
+    expect(
+        "ls --color prints the names of the directory",
+        all(name in coloured for name in ("init.d", "licenses", "setting")),
+        coloured,
+    )
+    plain = answer("ls --color=never /etc")
+    expect("ls --color=never writes no escape", "\x1b[" not in plain, plain)
+    explicit = answer("exec /bin/ls -la /etc")
+    expect("the file of the tool is /bin/ls", "setting" in explicit and "root" in explicit, explicit)
+    explicit = answer("exec /bin/find /etc -name setting")
+    expect("the file of the tool is /bin/find", "/etc/setting" in explicit, explicit)
     free_answer = answer("free")
     expect(
         "free prints the memory and not the clock",
@@ -1123,10 +1153,11 @@ def check(output: str) -> list:
     )
     expect("cd .. goes to the parent", re.search(r"(?m)^/\s*$", answer("pwd", 3)) is not None,
            answer("pwd", 3))
+    parent = answer("ls ..")
     expect(
         "ls .. lists the parent",
-        all(name in answer("ls ..") for name in ("bin/", "etc/")),
-        answer("ls .."),
+        all(re.search(rf"(?m)^{name}\r?$", parent) is not None for name in ("bin", "etc")),
+        parent,
     )
 
     # --- a directory wider than the old table
@@ -1168,16 +1199,11 @@ def check(output: str) -> list:
                 "zcat",
                 "pcre2grep",
                 "lua",
-                "sb-cat",
-                "sb-grep",
-                "sb-head",
-                "sb-ls",
-                "sb-tail",
-                "sb-wc",
-                "sb-sort",
-                "sb-find",
-                "sb-xargs",
-                "sb-sed",
+                "tail",
+                "sort",
+                "find",
+                "xargs",
+                "sed",
             )
         ),
         bin_listing[-200:],
@@ -1242,7 +1268,11 @@ def check(output: str) -> list:
     # status of a program that did not succeed: 1, the code of the shell
     # command, and not the 255 of a fault.
     cat = answer("exec /bin/cat /no/such/file")
-    expect("cat reports a file the formatter prints", "cat: /no/such/file: error 2" in cat)
+    expect(
+        "cat reports a file the formatter prints",
+        "/no/such/file: no such file or directory" in cat,
+        cat,
+    )
     expect("a program returns the status the library gives it", "the program exited with 1" in cat)
     # echo is the vector of the arguments and the formatter of the library.
     echo = answer("exec /bin/echo one two")
@@ -1351,7 +1381,7 @@ def check(output: str) -> list:
     root_listing = answer("ls /")
     expect(
         "ls / lists the names",
-        all(name in root_listing for name in ("bin/", "etc/", "proc/", "dev/")),
+        all(name in root_listing for name in ("bin", "etc", "proc", "dev")),
         root_listing,
     )
     expect("ls is not a tree", "`--" not in root_listing and "|--" not in root_listing)
@@ -1416,7 +1446,7 @@ def check(output: str) -> list:
     # three lines and 34 bytes. The numbers are of the file, and a program
     # that read its own arguments could not produce them.
     wc = answer("exec /bin/wc /etc/setting")
-    expect("wc counts the lines and the bytes", "3 34 /etc/setting" in wc)
+    expect("wc counts the lines, words and bytes", "3 3 34 /etc/setting" in wc)
     expect("wc counts what it read", "the program has finished" in wc)
     wc = answer("exec /bin/wc -l /etc/setting")
     expect("wc -l is a count of the newlines", "3 /etc/setting" in wc)
@@ -1456,10 +1486,14 @@ def check(output: str) -> list:
     # (ADR 0017), but the prompt does not open the console on descriptor 0
     # yet, so the read answers EBADF; a redirect or a pipe fills it.
     cat = answer("exec /bin/cat")
-    expect("cat reads descriptor 0 when no file is named", "cat: (stdin): error 9" in cat)
+    expect(
+        "cat reads descriptor 0 when no file is named",
+        "bad file descriptor" in cat,
+        cat,
+    )
     expect("cat of a closed stdin is a failure", "the program exited with 1" in cat)
     wc = answer("exec /bin/wc -l -")
-    expect("wc reads descriptor 0 for a dash", "wc: -: cannot read" in wc)
+    expect("wc reads descriptor 0 for a dash", "bad file descriptor" in wc, wc)
     # The tree: the shell makes /tmp, the program makes a directory in it.
     # Without -r a directory is refused, even an empty one; with -r the tree
     # goes away and the listing of it is ENOENT (2).
@@ -1474,7 +1508,7 @@ def check(output: str) -> list:
     expect("rm -r takes a tree down", "rm:" not in removed)
     expect("rm -r returns its status", "the program exited with 0" in removed)
     gone = answer("exec /bin/ls /tmp", 1)
-    expect("the tree is gone", "ls: /tmp: error 2" in gone)
+    expect("the tree is gone", "ls: lstat /tmp: no such file or directory" in gone, gone)
     # pwd is the directory of the task, read through the call: the shell
     # starts at /, and the block after the typed line is that one character.
     pwd = answer("exec /bin/pwd")

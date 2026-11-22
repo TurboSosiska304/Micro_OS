@@ -249,8 +249,9 @@ if [ -f "$X86_SRC/loader32.elf" ] && [ -f "$X86_SRC/microos64.bin" ]; then
     cp -f "$ROOT/third_party/pcre2/LICENSE" "$STAGE/LICENSE.pcre2"
     # Lua is /bin/lua of the same image, under the MIT license of its release.
     cp -f "$ROOT/third_party/lua/LICENSE" "$STAGE/LICENSE.lua"
-    # The tools of sbase are in /bin/sb-* of the same image, under their MIT
-    # license; the notice travels with the archive for the same reason.
+    # The tools of sbase are the commands of /bin of the same image (cat,
+    # grep, ls, ...), under their MIT license; the notice travels with the
+    # archive for the same reason.
     cp -f "$ROOT/third_party/sbase/LICENSE" "$STAGE/LICENSE.sbase"
     cp -f "$ROOT/third_party/mbedtls/LICENSE" "$STAGE/LICENSE.mbedtls"
     if [ -f "$X86_SRC/microos64.sig" ] && [ -f "$X86_SRC/signing.pub" ]; then
@@ -312,7 +313,7 @@ port layer and the one setting of the port (`port/luaconf_port.h`). The
 interpreter runs out of the volume: `make x86-disk-smoke` reads its script in
 the first boot and after the reset.
 
-`/bin/sb-cat`, `/bin/sb-grep`, `/bin/sb-ls` and the rest of `/bin/sb-*` are
+`/bin/cat`, `/bin/grep`, `/bin/ls` and the rest of the ten commands are
 the tools of sbase (MIT); `LICENSE.sbase` is their license and
 `third_party/sbase` of the sources has the subset and the port layer.
 
