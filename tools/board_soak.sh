@@ -118,8 +118,15 @@ if [ "$DO_BUILD" -eq 1 ]; then
 fi
 
 if [ "$DO_FLASH" -eq 1 ]; then
+    # The board checks the signature of its application at the boot (the
+    # requirement is on by default), so the flash is the signed bundle and
+    # not the bare image of idf.py: the trailer at the end of the app
+    # partition is what the check reads.
+    echo "==> the bundle and the signature"
+    BUNDLE="$(mktemp -d "${TMPDIR:-/tmp}/microos-board-soak.XXXXXX")"
+    "$ROOT/tools/bundle.sh" "$ROOT/build" "$BUNDLE"
     echo "==> flashing $PORT"
-    idf.py -p "$PORT" flash
+    bash "$BUNDLE/flash.sh" "$PORT"
 fi
 
 echo "==> the session on $PORT"
