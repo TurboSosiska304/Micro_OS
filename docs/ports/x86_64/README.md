@@ -155,18 +155,19 @@ a floor when the port has a store; today the rule is "a rollback is allowed"
 
 The heap is the low identity map and stops below the window of the programs,
 which are placed at 32 MiB; the image of 1.0 ends 1.9 MiB after the base and
-the port allows it up to 16 MiB. The seventeen programs of `/bin` are built
+the port allows it up to 16 MiB. The eighteen programs of `/bin` are built
 first:
 `build-x86/hello.mox`, `crash.mox`, `fork.mox`, `badptr.mox`, `signals.mox`,
-`cat.mox`, `echo.mox`, `ls.mox`, `wc.mox`, `head.mox`, `grep.mox`,
-`mkdir.mox`, `rm.mox`, `pwd.mox`, `spawn.mox` and `zcat.mox` are the images
-of `ports/port_x86_64/programs/` (`programs/program.ld` links them for the
-window, `tools/mkprog.sh` turns them into the format). They are not blobs of
-the kernel: `make x86-disk` writes them into a MicroFS volume of a raw disk
+`nx.mox`, `cat.mox`, `echo.mox`, `ls.mox`, `wc.mox`, `head.mox`, `grep.mox`,
+`mkdir.mox`, `rm.mox`, `pwd.mox`, `spawn.mox`, `zcat.mox` and `lua.mox` are the
+images of `ports/port_x86_64/programs/` (`programs/program.ld` links them for
+the window, `tools/mkprog.sh` turns them into the format). They are not blobs
+of the kernel: `make x86-disk` writes them into a MicroFS volume of a raw disk
 image with `tools/mkfs_mfs.c`, and the boot mounts that volume and runs
-`/bin/hello` through `execve`. All but the first five are linked against
+`/bin/hello` through `execve`. All but the first six are linked against
 `components/libc/user` and enter at `_start` (ADR 0016); `zcat` also links the
-static archive of zlib 1.3.1 ([`docs/porting-programs.md`](../../porting-programs.md)).
+static archive of zlib 1.3.1 and `lua` the core of Lua 5.4.7
+([`docs/porting-programs.md`](../../porting-programs.md)).
 The first five use the raw `programs/prog.h`. The build passes
 `--base 0x02000000` to `mkprog.sh`, which refuses an image linked for another
 window: nothing relocates the program, so a wrong address would run and read
@@ -338,7 +339,7 @@ inverted line has nothing to ask for yet (`docs/debts.md`, K11).
 The disk is the machine's, not a test's: `make x86-disk` writes
 `build-x86/programs.img`, an 8 MB raw image with an MBR, one Linux partition
 at LBA 2048 and a MicroFS volume in it. The volume already carries `/bin`
-(the seventeen programs), `/etc/setting`, the fixture `/etc/greeting.gz` and
+(the eighteen programs), `/etc/setting`, the fixture `/etc/greeting.gz` and
 `/etc/licenses/zlib`: the host tool `tools/mkfs_mfs.c`
 (formats and writes) links `components/mfs`, so the layout of the volume has
 one implementation and the host test `tests/cases/test_mkfs_image.c` mounts

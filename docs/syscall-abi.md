@@ -298,9 +298,11 @@ microos_statx`, with the types of `<stdint.h>`; it returns -1 and sets
 * the file is read through the VFS, not through a descriptor of the caller,
   so a failed call leaves the table of the task exactly as it was;
 * a program is at least the 32 bytes of the header of `kernel/exec.h` and at
-  most `KSYS_MAX_IO` bytes, because the image is read into one block of the
-  kernel before the port copies it; a file outside that range is refused
-  before a byte of it is read;
+  most `K_EXEC_MAX_IMAGE` (8 MiB, the memory of the machine); the image is
+  read into one block of the kernel in pieces of `KSYS_MAX_IO` (64 KiB), so
+  the transfer edge of a call is not the limit of the file. A file outside
+  that range is refused before a byte of it is read: `E2BIG` past the ceiling
+  and `EINVAL` below the header;
 * the image must be a `MOX1` of version 2 and of a machine the format knows;
   the arch of the header is then compared with `k_port_exec_arch()`, and an
   image of another machine is `ENOEXEC` before a byte of it is entered;
@@ -312,10 +314,11 @@ microos_statx`, with the types of `<stdint.h>`; it returns -1 and sets
 
 The errors: `ENOENT` for a path that names nothing, `EISDIR` for a directory,
 `EPERM` for a file whose mode has no execute bit for the caller (`0400` is not
-a program), `EINVAL` for a file that is not an image of version 2 of this
-system, `ENOEXEC` (`KERR_NOEXEC`, POSIX 8) for an image of another machine,
-`ENOMEM` for an image the port could not place in its window, and `ENOSYS` for
-a machine without a window of programs.
+a program), `E2BIG` (`KERR_TOOBIG`, POSIX 7) for an image past
+`K_EXEC_MAX_IMAGE`, `EINVAL` for a file that is not an image of version 2 of
+this system, `ENOEXEC` (`KERR_NOEXEC`, POSIX 8) for an image of another
+machine, `ENOMEM` for an image the port could not place in its window, and
+`ENOSYS` for a machine without a window of programs.
 
 A successful call **does not return** when the program never comes back: the
 program is the caller from then on. A program that ends (by `exit`, or by a

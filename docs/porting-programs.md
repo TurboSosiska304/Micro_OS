@@ -238,10 +238,9 @@ configuration of the release is a force-included header and not an edit of
 `luaconf.h`, so the next update of the tarball is a copy of its files and
 nothing else.
 
-The port is complete and its host test passes; the image does not run yet,
-because 164 KiB is past the 64 KiB `sys_execve` reads in one block. That is
-the debt of K3, and it is the first thing the next step of the kernel has to
-answer (`docs/debts.md`).
+The port runs: `make x86-smoke` prints `1024.0` and the lines of
+`/etc/hello.lua`, and the image of 164 KiB is under `K_EXEC_MAX_IMAGE`
+(8 MiB), which `sys_execve` reads in pieces of `KSYS_MAX_IO`.
 
 ## 4. The program and the tests
 
@@ -312,8 +311,9 @@ done when `make test`, `make x86-smoke` and `make x86-disk-smoke` pass, and
 * **Two programs with floating point at once.** The port saves no XMM or x87
   state and `execve` waits, so a program with a point in its numbers runs
   alone. A second one needs the save and the load of the state at the switch.
-* **An image larger than the transfer edge.** `sys_execve` reads the image in
-  one block of `KSYS_MAX_IO` (64 KiB); Lua is 164 KiB and does not run yet.
+* **An image larger than 8 MiB.** `sys_execve` reads it in pieces of
+  `KSYS_MAX_IO` into one block of the allocator, and `K_EXEC_MAX_IMAGE` is the
+  ceiling. A larger program needs the streaming of the image into the window.
 * **A real `fork` of a library's child process.** The system has `fork` on
   x86-64, but no `execve` of a path that a library resolves in `PATH` and no
   `waitpid` in the library yet; a library that starts a helper is a later

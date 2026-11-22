@@ -65,14 +65,16 @@ The arena of the program is `ULIBC_HEAP_SIZE=786432` (768 KiB of the bss of
 the image; MOX1 caps the bss at 1 MiB). The image is `-Os`: about 140 KiB of
 text and 24 KiB of data (168,080 bytes).
 
-## The image and the transfer edge
+## The image and its ceiling
 
-The image of `/bin/lua` is **past the 64 KiB** the kernel reads in one block
-(`KSYS_MAX_IO`, `sys_execve`): 164 KiB of text and data. The call refuses it
-before a byte runs, and `exec /bin/lua` answers the sentence of `EINVAL`. The
-port is complete - the host test runs the same sources - and the day the
-kernel streams or maps an image (K3 of `docs/debts.md`) the program runs with
-no change of this directory.
+The image of `/bin/lua` is the first program past the transfer edge of one
+call: `sys_execve` reads the file in pieces of `KSYS_MAX_IO` (64 KiB) into one
+block of the allocator, and `K_EXEC_MAX_IMAGE` (8 MiB) is the ceiling of the
+file. 164 KiB is well below it; a larger one is `E2BIG` before a byte is
+read. The block is asked with the priority of a user buffer - the PSRAM on the
+board, the heap of the port on x86-64 - and the image is then copied into the
+window of the program, so the load holds two copies for a moment
+(`docs/debts.md`).
 
 ## Tests
 
@@ -80,11 +82,12 @@ no change of this directory.
   the host and runs chunks through `luaL_newstate`: the numbers, the
   formatter, the tables, the strings, an error caught by `pcall` (the long
   jump), a script file and the clock;
-* guest: `tools/x86_smoke.py` and `tools/x86_disk_smoke.py` check that
-  `/bin/lua`, `/etc/hello.lua` and `/etc/licenses/lua` are files of the
-  volume, and that the kernel refuses an image past its transfer edge. The
-  checks of the run are the ones of the day `KSYS_MAX_IO` stops being the
-  ceiling.
+* guest: `make x86-smoke` runs `lua -e print(2^10)` (`1024.0`),
+  `print(math.pi)`, `string.format("%.3f", 1/3)`, the two values that are not
+  numbers, the clock, the script `/etc/hello.lua` (a table, a file written and
+  read, the strings) and a script that is not there; `make x86-disk-smoke`
+  runs the interpreter out of the volume in the first boot and in the second
+  one, after the reset.
 
 ## The license
 
