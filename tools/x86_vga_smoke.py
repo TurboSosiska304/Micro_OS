@@ -79,19 +79,6 @@ CELL_HEIGHT = 14
 GREY = (173, 170, 173)
 BLACK = (0, 0, 0)
 
-# The glyphs the test reads out of the picture, from components/font/src/
-# font.c: five columns, the lowest bit of a column is the top row. A change of
-# the font is a change of the picture, and the test says so - that is the point
-# of a screenshot in the smoke.
-GLYPHS = {
-    "M": (0x7F, 0x02, 0x0C, 0x02, 0x7F),
-    "I": (0x00, 0x41, 0x7F, 0x41, 0x00),
-    "C": (0x3E, 0x41, 0x41, 0x41, 0x22),
-    "R": (0x7F, 0x09, 0x19, 0x29, 0x46),
-    "O": (0x3E, 0x41, 0x41, 0x41, 0x3E),
-    "S": (0x46, 0x49, 0x49, 0x49, 0x31),
-}
-
 # The answer of the command the keyboard types: it is the checker of the
 # filesystem, and the volume it checks is the one the boot mounted.
 ANSWER = "the volume is consistent"
@@ -99,6 +86,39 @@ ANSWER = "the volume is consistent"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, "build-x86")
 
+# The file of the font the console draws with, and the size of a cell of it in
+# the picture: the 5x7 font of the board at twice its size.
+FONT_SOURCE = os.path.join(ROOT, "components/font/src/font.c")
+
+
+def load_font() -> dict:
+    """The 5x7 font the picture is made of, read from its table in the tree.
+
+    The test draws no glyph itself: it takes the table the kernel was built
+    with, so a change of the font - a glyph redrawn, a row moved - is a
+    failure of this test and not of a copy of the table inside it. Five
+    columns a glyph, the lowest bit of a column is the top row, the table
+    covers the codes 0x20 to 0x5F.
+    """
+    try:
+        with open(FONT_SOURCE, encoding="utf-8") as handle:
+            source = handle.read()
+    except OSError as error:
+        raise RuntimeError(f"cannot read the font {FONT_SOURCE}: {error}") from error
+
+    rows = re.findall(r"\{((?:0x[0-9A-Fa-f]{2},\s*){4}0x[0-9A-Fa-f]{2})\}", source)
+    if len(rows) != 64:
+        raise RuntimeError(f"the font {FONT_SOURCE} has {len(rows)} glyph(s), not 64")
+
+    font = {}
+    for index, row in enumerate(rows):
+        glyph = tuple(int(value, 16) for value in re.findall(r"0x([0-9A-Fa-f]{2})", row))
+        font[chr(0x20 + index)] = glyph
+
+    return font
+
+
+GLYPHS = load_font()
 
 class Picture:
     """A PPM of the screen as a grid of pixels, and the cells of the font.
@@ -170,6 +190,62 @@ class Picture:
                 broken += 1
 
         return broken
+
+    def cell_glyph(self, row: int, column: int, ink: tuple) -> tuple:
+        """The 5x7 bitmap of a cell, read out of its 2x2 blocks.
+
+        A block is one pixel of the font (not_blocky() is what promises the
+        block is one colour), so the cell is five columns of seven bits. The
+        answer is the bitmap and not a letter: comparing it with the table of
+        the font is the caller's business.
+        """
+        x0 = column * CELL_WIDTH
+        y0 = row * CELL_HEIGHT
+        want = bytes(ink)
+        bits = []
+
+        for column_index in range(5):
+            value = 0
+            x = x0 + column_index * 2
+
+            for row_index in range(7):
+                start = ((y0 + row_index * 2) * self.width + x) * 3
+
+                if self.pixels[start : start + 3] == want:
+                    value |= 1 << row_index
+
+            bits.append(value)
+
+        return tuple(bits)
+
+    def foreign_cells(self, ink: tuple) -> list:
+        """The cells of the grid that no cell of the console could have drawn.
+
+        A cell is the paper, a glyph of the font or the cursor (the ink of the
+        whole cell). A cell that is none of the three holds pixels that came
+        from somewhere else - a second copy of the text a few pixels below the
+        first, a frame of another screen, a scale of the host - and the line
+        and the column of each one are the answer.
+        """
+        table = {glyph: letter for letter, glyph in GLYPHS.items()}
+        cells = []
+
+        for row in range(self.height // CELL_HEIGHT):
+            for column in range(self.width // CELL_WIDTH):
+                bits = self.cell_glyph(row, column, ink)
+
+                if bits == (0, 0, 0, 0, 0):
+                    continue  # the paper
+
+                if bits in table:
+                    continue  # a glyph of the font
+
+                if self.cell_is_ink(row, column, ink):
+                    continue  # the cursor
+
+                cells.append((row, column))
+
+        return cells
 
     def lowest_ink_row(self) -> int:
         """The last line of the picture that has a pixel that is not black."""
@@ -549,6 +625,18 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                     broken == 0,
                     f"{broken} line pair(s) of the first frame are not made of 2x2 blocks",
                 )
+                # Every cell of the frame is the paper, a glyph of the font or
+                # the cursor. A cell that is none of the three holds pixels
+                # that came from somewhere else - the true test of "one text
+                # and not two": a second copy of the log a few pixels below the
+                # first lands on the cells of the grid and is caught here,
+                # whatever its offset.
+                foreign = first.foreign_cells(GREY)
+                expect(
+                    "every cell of the first frame is a glyph or the paper",
+                    not foreign,
+                    f"{len(foreign)} cell(s) of the first frame hold no glyph: {foreign[:5]}",
+                )
                 expect(
                     "the first line of the first frame is the banner",
                     all(
@@ -578,10 +666,14 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                     (picture.width, picture.height) == (VBE_WIDTH, VBE_HEIGHT),
                     f"the screenshot is {picture.width}x{picture.height}",
                 )
+                foreign = picture.foreign_cells(GREY)
                 expect(
-                    "the picture after the boot has no foreign pixels",
-                    picture.only_colors(GREY, BLACK) and picture.not_blocky() == 0,
-                    "a pixel of the settled picture is not a cell of the console",
+                    "the picture after the boot is one grid of the font",
+                    picture.only_colors(GREY, BLACK)
+                    and picture.not_blocky() == 0
+                    and not foreign,
+                    f"{len(foreign)} cell(s) of the settled picture hold no glyph: "
+                    f"{foreign[:5]}",
                 )
                 # The first line of the screen is the banner of the kernel,
                 # "MicroOS ...". The console draws it in the 5x7 font at twice
@@ -650,10 +742,14 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                     and picture.cell_is(0, 0, GLYPHS["M"], BLACK, GREY),
                     "the cell of the banner is not the glyph in the colours of the theme",
                 )
+                foreign = picture.foreign_cells(BLACK)
                 expect(
                     "the repaint left no pixel of the old pair",
-                    picture.only_colors(BLACK, GREY) and picture.not_blocky() == 0,
-                    "a pixel of the light picture is not a cell of the console",
+                    picture.only_colors(BLACK, GREY)
+                    and picture.not_blocky() == 0
+                    and not foreign,
+                    f"{len(foreign)} cell(s) of the light picture hold no glyph: "
+                    f"{foreign[:5]}",
                 )
                 if verbose:
                     print("--- the framebuffer after the theme ---")

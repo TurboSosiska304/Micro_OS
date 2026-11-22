@@ -74,13 +74,16 @@ The frame the boot draws first is a check of its own: the dump is taken as soon
 as the banner is in the transcript, and the picture must hold only the colours
 of the console and be made of 2x2 blocks of pixels - the font at twice its size
 - so a line of the text mode or of the firmware's screen under the new picture
-fails it. On a card without that interface (`-vga cirrus`) the test reads the
-text memory with `pmemsave` and checks the 720x400 picture and the attribute of
-every cell. So the screen and IRQ1 are checked without a display server. The
-target is a target of its own and not a part of `make ci`, because the monitor
-of QEMU is a tool a build farm does not have to have.
-`python3 tools/x86_vga_smoke.py --display gtk` runs the same checks against the
-real window instead of its memory.
+fails it. Every cell of the grid is compared with the table of the font the
+kernel was built with (`components/font/src/font.c`): the paper, a glyph or the
+cursor, and nothing else, so a second copy of the text a few pixels below the
+first is caught whatever its offset. On a card without that interface
+(`-vga cirrus`) the test reads the text memory with `pmemsave` and checks the
+720x400 picture and the attribute of every cell. So the screen and IRQ1 are
+checked without a display server. The target is a target of its own and not a
+part of `make ci`, because the monitor of QEMU is a tool a build farm does not
+have to have. `python3 tools/x86_vga_smoke.py --display gtk` runs the same
+checks against the real window instead of its memory.
 
 The machine boots from three files: `build-x86/loader32.elf` (the loader),
 `build-x86/microos64.bin` (the kernel, a flat image) and
