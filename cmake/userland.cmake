@@ -69,6 +69,10 @@ set(MICROOS_LIBC_USER_HEADERS
     "${MICROOS_LIBC_USER_DIR}/include/sys/time.h"
     "${MICROOS_LIBC_USER_DIR}/include/sys/resource.h"
     "${MICROOS_LIBC_USER_DIR}/include/sys/ioctl.h"
+    # The seam of the formatter with the number with a point is a header of
+    # the source of the library and not of its interface; a custom command
+    # gets no depfile, so a change to it has to be named here as well.
+    "${MICROOS_LIBC_USER_DIR}/src/format_float.h"
 )
 
 # A static library of the guest. The sources are the ones of the third-party
