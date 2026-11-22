@@ -43,6 +43,7 @@ static void run_tests(void *arg)
     test_mfs_persistence();
     test_mfs_repair();
     test_mfs_many();
+    test_mfs_chain();
     test_mkfs_image();
     test_vfs();
     test_fs_fat();

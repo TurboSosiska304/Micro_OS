@@ -73,6 +73,15 @@ struct mfs_vfs_file {
 };
 
 /*
+ * The private data of a descriptor of the VFS is a fixed buffer of 64 bytes
+ * and the VFS hands it to the filesystem as it is. A file of MicroFS has to
+ * fit there, cursor and all: the size of the structure is a contract with
+ * kernel/vfs.h, and the check is here where the two meet.
+ */
+_Static_assert(sizeof(struct mfs_vfs_file) <= VFS_FILE_DATA_SIZE,
+               "the file of MicroFS does not fit into a descriptor of the VFS");
+
+/*
  * The buffer of one directory, for the calls that list it. It is not on the
  * stack: the entries of a directory of MicroFS do not fit there, and the
  * filesystem is one volume anyway.

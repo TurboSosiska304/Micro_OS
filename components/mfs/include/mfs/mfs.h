@@ -190,7 +190,24 @@ struct mfs_dirent {
     char name[MFS_NAME_MAX + 1];
 };
 
-/* An open file. */
+/*
+ * An open file.
+ *
+ * The chain of a file is a list: the only way to its n-th block is the walk
+ * through the n blocks before it, and every step reads the header of a block
+ * of the device. A read that starts the walk at the head for every block
+ * costs the square of the blocks of the file, which a program of a megabyte
+ * feels as seconds of a start. The descriptor therefore keeps the block that
+ * it used last (`chain_block`) and the index of that block (`chain_index`):
+ * a read after it walks forward from there, one step per block, and only a
+ * seek back to an earlier block starts at the head again. The cursor
+ * describes the chain of the open file, not the volume, and it is dropped
+ * whenever the chain the descriptor works with changes its head. The
+ * filesystem keeps no table of the open files (see mfs_unmount()), so a
+ * chain that is changed under an open descriptor - a name removed or
+ * replaced while its file is still open - is outside the contract, as it
+ * was before the cursor existed.
+ */
 struct mfs_file {
     k_u32_t inode;
     k_u32_t first_block; /* the first block of the chain of the file */
@@ -198,6 +215,9 @@ struct mfs_file {
     k_u32_t offset;
     int flags;
     bool dirty;
+    bool chain_valid;    /* chain_block is a block of this chain */
+    k_u32_t chain_block; /* the block of the chain the cursor names */
+    k_u32_t chain_index; /* the index of that block from the head, 0 based */
 };
 
 /* The information about the filesystem. */

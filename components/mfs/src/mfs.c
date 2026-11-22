@@ -492,14 +492,35 @@ static int chain_set_next(k_u32_t block, k_u32_t next)
     return dev_write(block, buffer);
 }
 
-/* The block of the chain that holds the given offset of the data. */
-static int chain_block_at(k_u32_t first, k_u32_t data_offset, k_u32_t *block, k_u32_t *in_block)
+/*
+ * The block of the chain that holds the given offset of the data.
+ *
+ * The chain is a list of blocks: a step to the next one is a read of the
+ * header of the block, and a walk from the head is the only way to a block
+ * that the descriptor has not seen yet. A read of a file a block at a time
+ * walks the chain from the head for every block, which costs the square of
+ * the blocks of the file - the start of a program of half a megabyte spends
+ * seconds in the filesystem before the first instruction of it runs. The
+ * descriptor remembers the block it used last, so a read after it walks
+ * forward from there and a block costs one step; a seek back to an earlier
+ * block starts at the head again, which is the price of going backwards.
+ */
+static int file_block_at(struct mfs_file *file, k_u32_t data_offset, k_u32_t *block,
+                         k_u32_t *in_block)
 {
-    k_u32_t current = first;
     k_u32_t index = data_offset / MFS_BLOCK_DATA;
+    k_u32_t current;
     k_u32_t i;
 
-    for (i = 0; i < index; i++) {
+    if (file->chain_valid && index >= file->chain_index) {
+        current = file->chain_block;
+        i = file->chain_index;
+    } else {
+        current = file->first_block;
+        i = 0;
+    }
+
+    for (; i < index; i++) {
         k_u32_t next;
         int rc = chain_next(current, &next);
 
@@ -514,10 +535,29 @@ static int chain_block_at(k_u32_t first, k_u32_t data_offset, k_u32_t *block, k_
         current = next;
     }
 
+    file->chain_block = current;
+    file->chain_index = index;
+    file->chain_valid = true;
+
     *block = current;
     *in_block = data_offset % MFS_BLOCK_DATA;
 
     return MFS_OK;
+}
+
+/*
+ * Forget the cursor: the next read of the descriptor starts at the head of
+ * the chain. It is called where the chain the descriptor works with gets a
+ * new head - the open of a file, and the first block of an empty file. A
+ * block appended at the end of the chain does not need it: the blocks before
+ * the tail are the ones they were, and the walk from the cursor reaches the
+ * new block through the header it just got.
+ */
+static void file_cursor_forget(struct mfs_file *file)
+{
+    file->chain_valid = false;
+    file->chain_block = MFS_NEXT_NONE;
+    file->chain_index = 0;
 }
 
 /* The last block of a chain. */
@@ -1790,6 +1830,7 @@ static int mfs_open_locked(const char *path, int flags, struct mfs_file *out)
         }
 
         memset(out, 0, sizeof(*out));
+        file_cursor_forget(out);
         out->inode = entry.inode;
         out->first_block = inode.first_block;
         out->size = inode.size;
@@ -1829,6 +1870,7 @@ static int mfs_open_locked(const char *path, int flags, struct mfs_file *out)
     }
 
     memset(out, 0, sizeof(*out));
+    file_cursor_forget(out);
     out->inode = entry.inode;
     out->first_block = inode.first_block;
     out->size = inode.size;
@@ -1873,7 +1915,7 @@ static int mfs_read_locked(struct mfs_file *file, void *buf, k_size_t size)
         k_u32_t in_block;
         k_size_t chunk;
 
-        rc = chain_block_at(file->first_block, file->offset, &block, &in_block);
+        rc = file_block_at(file, file->offset, &block, &in_block);
         if (rc != MFS_OK) {
             return rc;
         }
@@ -1927,8 +1969,10 @@ static int file_grow(struct mfs_file *file, k_u32_t *new_block)
     }
 
     if (file->first_block == MFS_NEXT_NONE) {
-        /* The first block of the file. */
+        /* The first block of the file: the chain has a head that the
+         * cursor of an earlier chain does not name. */
         file->first_block = block;
+        file_cursor_forget(file);
         *new_block = block;
         return MFS_OK;
     }
@@ -2013,7 +2057,7 @@ static int mfs_write_locked(struct mfs_file *file, const void *buf, k_size_t siz
         k_size_t chunk;
         k_u8_t block_data[MFS_BLOCK_SIZE];
 
-        rc = chain_block_at(file->first_block, file->offset, &block, &in_block);
+        rc = file_block_at(file, file->offset, &block, &in_block);
         if (rc != MFS_OK) {
             return rc;
         }
