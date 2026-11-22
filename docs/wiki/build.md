@@ -83,7 +83,12 @@ make x86-disk-smoke       # two boots on one image: a file survives both
 ```
 
 The build is a CMake project of its own (`ports/port_x86_64`), because the
-kernel there has no libc under it. The machine boots from three files:
+kernel there has no libc under it. The console of the screen draws with the
+8x16 font of the PC - Spleen 8x16 2.3.0 (BSD-2-Clause), generated into
+`ports/port_x86_64/src/font_spleen.c` from the BDF in `third_party/spleen` by
+`tools/spleen_font.py`; it is part of the kernel image, so `tools/bundle.sh`
+puts `LICENSE.spleen` into the x86-64 archive (`docs/licensing.md`). The
+machine boots from three files:
 `build-x86/loader32.elf` (a multiboot loader that QEMU takes with `-kernel`),
 `build-x86/microos64.bin` (the flat kernel image) and
 `build-x86/programs.img` (the disk). The programs of `/bin` are built first

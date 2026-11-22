@@ -776,17 +776,28 @@ static void apply_display(const char *system, const struct settings_table *table
           drv_display_inverted() ? 1 : 0, brightness, theme);
 }
 
-/* `/etc/font`: the scale of the 5x7 font and the cap of the dialogue. */
+/* `/etc/font`: the scale of the 5x7 font, the cap of the dialogue, and the
+ * line gap of the picture of another machine. */
 static void apply_font(const char *system, const struct settings_table *table)
 {
     int scale = settings_number(table, "scale", 1, 1, 2);
     int columns = settings_number(table, "columns", 0, 0, 99);
     int rows = settings_number(table, "rows", 0, 0, 99);
+    int line_gap = settings_number(table, "line_gap", 0, 0, 4);
 
     K_UNUSED(system);
 
     drv_display_set_font_scale(scale);
     tft_console_set_cells(columns, rows);
+
+    /*
+     * The cell of this panel is the 5x7 font with the spacing of the console:
+     * it has no gap between two lines to give, so the value of the screen of
+     * a PC is kept in the file and reported once.
+     */
+    if (line_gap != 0) {
+        kwarn("font: line_gap %d is kept, the cell of this panel has no gap", line_gap);
+    }
 
     kinfo("font: scale %d, columns %d, rows %d (0 is the whole picture)", scale, columns, rows);
 }

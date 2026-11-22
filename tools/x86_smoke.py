@@ -926,9 +926,12 @@ def check(output: str) -> list:
 
     # --- the systems of /etc (ADR 0021)
     # The boot wrote the three files of the tree on the volume; `config list`
-    # names them and says which one this machine applies. `display` and
-    # `font` are the panel and the font of the board: the key is written and
-    # kept, and the machine says it does not apply it.
+    # names them and says which one this machine applies. `display` is the
+    # panel of the board: the key is written and kept, and the machine says it
+    # does not apply it. `font` is applied by this machine for its line gap
+    # (tools/x86_vga_smoke.py reads the rows and the step of a line out of the
+    # picture); `scale`, `columns` and `rows` are the cap of the panel and are
+    # kept with a sentence.
     systems = answer("config list")
     expect(
         "config list names the systems of the tree",

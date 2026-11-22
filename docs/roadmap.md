@@ -343,8 +343,9 @@ written when the project was an operating system for one board; the numbers
       system file, and a setting a machine cannot honour kept and ignored with
       a warning (`SETTINGS_KEPT`)
 * [x] The screen and the font: rotation, brightness, inversion, the scale of
-      the 5x7 font and the theme; the VGA of x86-64 where it can (the
-      attribute of the cells), the panel of the board everywhere
+      the 5x7 font and the theme; the panel of the board everywhere, and on
+      x86-64 the pair of the framebuffer and the gap between its lines
+      (`font.line_gap`)
 * [x] A table of the keys per machine in the wiki
       ([settings.md](wiki/settings.md)), with a host test that every key of a
       default file is a key of its system, so a key is applied or named
@@ -365,9 +366,10 @@ on a VFS without `rename` (see [debts.md](debts.md)).
       pixel, RGB565 so `k_renderer` draws into it unchanged; the PCI device
       is found over the configuration space the network port already reads,
       and `paging.c` maps its window
-* [x] The console of the screen: cells of the 5x7 font scaled twice (about
-      128 columns by 57 rows), the control characters, the cursor, the
-      scrolling and the two sequences of `clear`; the colours of
+* [x] The console of the screen: cells of the 8x16 font of the PC (Spleen
+      8x16, 160 columns by 50 rows; `font.line_gap` of `/etc/font` widens a
+      line to 18 or 20 pixels, 44 or 40 rows), the control characters, the
+      cursor, the scrolling and the two sequences of `clear`; the colours of
       `/etc/console` (ADR 0021); the keyboard of IRQ1 unchanged
 * [x] The text mode stays the fallback; the port chooses the screen at the
       boot. The 80x50 mode with the 8x8 font of the VGA is not built - the

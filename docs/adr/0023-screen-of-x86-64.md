@@ -56,12 +56,17 @@ rows for a machine that cannot show a picture.
 
 ### 3. The console counts cells, the port draws them
 
-The console of the framebuffer works in cells of the 5x7 font scaled twice
-(10x14 pixels), about 128 columns by 57 rows at 1280x800, and keeps the
-control characters and the two sequences of `clear` it has today. The
-colours come from `/etc/console` (ADR 0021), so `config set console.theme`
-reaches the picture as it reaches the text screen. The keyboard of IRQ1 does
-not change.
+The console of the framebuffer works in cells of a font, and the font of a PC
+is 8x16: the board's 5x7 page is built for a panel of 135x240 and folds the
+lower case into the upper one, which is not what a shell on a screen of
+1280x800 wants. The first screen took the 8x16 of Spleen 2.3.0
+(BSD-2-Clause, `third_party/spleen`), so a line of the picture is 160
+characters and the picture holds 50 rows; the gap between two lines is a key
+of `/etc/font` (`line_gap`, 0, 2 or 4 pixels: 50, 44 or 40 rows). The console
+keeps the control characters and the two sequences of `clear` it has today.
+The colours come from `/etc/console` (ADR 0021), so `config set
+console.theme` reaches the picture as it reaches the text screen. The
+keyboard of IRQ1 does not change.
 
 ### 4. The GPU: 2D maybe, 3D no
 
@@ -114,17 +119,25 @@ The text fallback keeps the `pmemsave` checks, so both screens are tested.
   shared by every address space, so a `write` of a program draws on the same
   picture. The picture of 1280x800x2 is 2,048,000 bytes: one 2 MiB page.
 * **The renderer**: `src/fb.c` registers a `struct k_renderer` named
-  `bochs-vbe` with the width, the height, the cell of 10x14 (the 5x7 font of
-  `components/font` at twice its size) and the five operations. A character is
-  a glyph blitted into the memory, a scroll is a move of the rows of the
-  picture, a flush does not exist: the memory is the glass.
+  `bochs-vbe` with the width, the height, the cell of 8x16 (the font of the
+  PC, `ports/port_x86_64/src/font_spleen.c`) and the five operations. A
+  character is a glyph blitted into the memory, a scroll is a move of the rows
+  of the picture by the step of a line, a flush does not exist: the memory is
+  the glass.
 * **The console**: `src/console.c` keeps the position, the tab stops, the erase
   of the backspace, the scroll, `\n`, `\r`, `\t`, `\b`, `ESC[2J` and `ESC[H`
   and the em dash of the banner, exactly as the text console of 1.1 did, and
   writes cells to the screen it was given. `src/vga.c` is that screen for the
   text mode and `src/fb.c` for the framebuffer; neither knows the parser.
-  The grid is 128 columns by 57 rows. The cursor is the reverse of a cell, and
-  the text mode keeps its cursor in the CRTC as before.
+  The grid is 160 columns by 50 rows of the 8x16 font, and the step of a line
+  is the cell plus the `line_gap` of `/etc/font` (16, 18 or 20 pixels: 50, 44
+  or 40 rows of the picture). The cursor is the reverse of a cell, and the
+  text mode keeps its cursor in the CRTC as before.
+* **The font and its licence**: Spleen 8x16 2.3.0 of Frederic Cambus,
+  BSD-2-Clause, generated into a table by `tools/spleen_font.py` from the BDF
+  in `third_party/spleen/`; the licence travels with the bundle
+  (`tools/bundle.sh`) and `docs/licensing.md` records the rule. The 5x7 font
+  of `components/font` stays the font of the board.
 * **The colours**: the `console` system of `/etc` (`theme`, `invert`) is
   applied when the files are loaded, which is before the shell exists, and at
   every `config set`: the screen repaints the cells it holds, so the line a
@@ -155,17 +168,17 @@ The text fallback keeps the `pmemsave` checks, so both screens are tested.
   `console.theme light` and reads the paper of the new picture as the light
   grey. The *first* frame is checked on its own: the dump is taken as soon as
   the banner is in the transcript (the console writes the screen before COM1),
-  and it must be 1280x800, carry only the two colours of the console and be
-  made of 2x2 blocks of pixels - the font at twice its size - so a pixel or a
-  stroke that no cell of this console drew (the grey of the VGA palette, a
-  line of the 8x16 font of the text mode, the leftover of the screen before
-  this one) fails the test. Every cell of the grid is compared with the table
-  of the font the kernel was built with (read from
-  `components/font/src/font.c`): it is the paper, a glyph or the cursor, and a
-  cell that holds anything else - the second copy of the log a few pixels
-  below the first, at any offset, not only an odd one - fails as well. The
-  settled picture and the picture after `config set console.theme light` are
-  checked the same way. With `-vga cirrus` it runs the checks of 1.1:
+  and it must be 1280x800 and carry only the two colours of the console - a
+  pixel that no cell drew (the grey of the VGA palette, the leftover of the
+  screen before this one) fails the test. Every cell of the 8x16 grid is
+  compared with the table of the font the kernel was built with (read from
+  `ports/port_x86_64/src/font_spleen.c`): it is the paper, a glyph or the
+  cursor, and a cell that holds anything else - the second copy of the log a
+  few pixels below the first, at any offset - fails as well. The lower case is
+  proved by the tails of `g`, `p` and `y`, the step of a line by the cell of
+  the second line at 16 pixels, and `font.line_gap 2` by the 44 rows of 18
+  pixels of a picture laid out again. The settled picture and the picture
+  after `config set console.theme light` are checked the same way. With `-vga cirrus` it runs the checks of 1.1:
   `pmemsave` of `0xB8000`, the 720x400 picture, the cursor of the CRTC, the
   typed command and the attribute of every cell (`0x70`). `make x86-run` opens
   the window with `-vga std`.

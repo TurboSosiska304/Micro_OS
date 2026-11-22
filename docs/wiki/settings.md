@@ -41,12 +41,15 @@ The three systems of the tree:
 | System | File | Keys | Defaults |
 |---|---|---|---|
 | `display` | `/etc/display` | `rotation` 0/90/180/270, `invert` 0/1, `brightness` 0–100, `theme` dark/light | 0, 1, 100, dark |
-| `font` | `/etc/font` | `scale` 1/2, `columns` 0–99, `rows` 0–99 | 1, 0, 0 |
+| `font` | `/etc/font` | `scale` 1/2, `columns` 0–99, `rows` 0–99, `line_gap` 0/2/4 | 1, 0, 0, 0 |
 | `console` | `/etc/console` | `invert` 0/1, `theme` dark/light | 0, dark |
 
 `columns=0` and `rows=0` mean the whole picture: the console cuts the dialogue
 by the room the panel has at the size of the font. A positive value is a cap,
-so a person can keep the dialogue narrow on a wide screen.
+so a person can keep the dialogue narrow on a wide screen. `line_gap` is the
+gap between two lines of the framebuffer of x86-64, in pixels: 0 is the cell of
+16 rows itself, 2 and 4 are 18 and 20 pixels a line, which is 50, 44 and 40
+rows of a picture of 800. A value the key does not have is 0 and a warning.
 
 The defaults are the behaviour of the machine before the files existed, so a
 volume that never had `/etc/display` boots exactly like a release that did not
@@ -60,16 +63,18 @@ have this feature.
 | `display.invert` | INVON/INVOFF of the glass | kept, not applied | kept, not applied |
 | `display.brightness` | kept and a warning: the backlight is one pin, with no duty cycle to dim it | kept, not applied | kept, not applied |
 | `display.theme` | the colours of the dialogue | kept, not applied | kept, not applied |
-| `font.scale` | 2 doubles the 5x7 font and the cells of the console | kept, not applied | kept, not applied |
-| `font.columns`, `font.rows` | a cap on the dialogue | kept, not applied | kept, not applied |
-| `console.theme`, `console.invert` | the colours of the dialogue | the attribute of every cell of the VGA | kept, not applied |
+| `font.scale` | 2 doubles the 5x7 font and the cells of the console | kept, not applied (the font of the PC is 8x16) | kept, not applied |
+| `font.columns`, `font.rows` | a cap on the dialogue | kept, not applied (the grid is the picture) | kept, not applied |
+| `font.line_gap` | kept and a warning: the cell of the panel has no gap | the gap between two lines of the framebuffer, 0/2/4 px | kept, not applied |
+| `console.theme`, `console.invert` | the colours of the dialogue | the pair of every cell of the screen (the framebuffer's two colours, or the attribute of the VGA text mode) | kept, not applied |
 
 `display.theme` and `console.theme` are the same picture on the board and the
 console is read after the display, so `/etc/console` wins when the two
-disagree. On x86-64 the theme is the attribute of the text screen: light grey
-on black for `dark`, black on light grey for `light`, and `invert` swaps the
-two (the number the port logs is `7` or `112`). The host has no screen of its
-own: the load names the systems it cannot apply and keeps the files.
+disagree. On x86-64 the theme is the pair of the screen: light grey on black
+for `dark`, black on light grey for `light`, and `invert` swaps the two (the
+text mode logs the attribute, `7` or `112`; the framebuffer logs the screen it
+painted). The host has no screen of its own: the load names the systems it
+cannot apply and keeps the files.
 
 ## The commands
 

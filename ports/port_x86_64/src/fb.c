@@ -9,11 +9,15 @@
  * its own, and the console of the port draws through it: this file is one
  * more `struct k_renderer` and not a second drawing library.
  *
- * The console keeps a grid of characters, one per cell of the 5x7 font at
- * twice its size - 10 by 14 pixels, 128 columns by 57 rows - and asks for the
- * one cell that changed. A character is a glyph blitted into the memory, a
- * scroll is a move of the whole picture up by one cell, and the colours are
- * two numbers of RGB565 that the `console` system of /etc chooses (ADR 0021).
+ * The console keeps a grid of characters, one per cell of the font of the PC
+ * - Spleen 8x16, see port_x86_64_font.h - so a line of 1280 pixels holds 160
+ * columns and the picture holds 50 rows. The gap between two lines is a key
+ * of the `font` system of /etc (`line_gap`, 0, 2 or 4 pixels): the height of
+ * a row of cells is 16 plus the gap, and a picture of 800 lines then holds
+ * 50, 44 or 40 of them. A character is a glyph blitted into the memory, a
+ * scroll is a move of the whole picture up by one row of cells, and the
+ * colours are two numbers of RGB565 that the `console` system of /etc chooses
+ * (ADR 0021).
  *
  * A pixel is one store into the memory the card shows. There is no shadow
  * frame, no double buffer and no flush: the window of QEMU reads the memory
@@ -25,19 +29,22 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "graphics/font.h"
 #include "kernel/log.h"
 #include "kernel/render.h"
 #include "port_x86_64_console.h"
+#include "port_x86_64_font.h"
+#include "settings/settings.h"
 
-/* The font at twice its size: the cell of ADR 0023. */
-#define FB_SCALE 2
-#define FB_CELL_WIDTH (FONT_WIDTH * FB_SCALE)   /* 10 pixels */
-#define FB_CELL_HEIGHT (FONT_HEIGHT * FB_SCALE) /* 14 pixels */
+/* The cell of ADR 0023: one glyph of the 8x16 font of the PC, and the step of
+ * a line is its height plus the gap of /etc/font. */
+#define FB_CELL_WIDTH FONT8_WIDTH   /* 8 pixels */
+#define FB_CELL_HEIGHT FONT8_HEIGHT /* 16 pixels */
+#define FB_LINE_GAP_MAX 4
 
-/* The biggest grid the port draws: the mode of ADR 0023 and some room, so a
- * mode of another shape is cut to the array instead of overrunning it. */
-#define FB_COLUMNS_MAX 160
+/* The biggest grid the port draws: the mode of ADR 0023 (160 columns of 8
+ * pixels) and some room, so a mode of another shape is cut to the array
+ * instead of overrunning it. */
+#define FB_COLUMNS_MAX 170
 #define FB_ROWS_MAX 60
 
 /* The colours of the two themes, the pair the VGA calls grey on black and
@@ -51,6 +58,7 @@ static int g_stride; /* pixels of a line, the pitch of the mode in pixels */
 
 static int g_columns;
 static int g_rows;
+static int g_pitch = FB_CELL_HEIGHT; /* the step of a line: the cell and the gap */
 static char g_cells[FB_ROWS_MAX][FB_COLUMNS_MAX];
 
 static k_u16_t g_ink;
@@ -84,29 +92,26 @@ static void area_fill(int x, int y, int w, int h, k_u16_t color)
     }
 }
 
-/* One glyph of the font at the scale of the screen: the lowest bit of a
- * column of the font is the top row of the letter, which is the order the
- * board has always used. */
+/* One glyph of the font of the PC: one byte is one row of the letter and the
+ * most significant bit is the leftmost pixel, the order a VGA font and a PSF
+ * font use. The cell is the glyph - 8 by 16 pixels - and there is no scale:
+ * the font of this screen is already the size a person reads. */
 static void glyph_draw(int x, int y, char character, k_u16_t color)
 {
-    const k_u8_t *glyph = font_glyph(character);
+    const k_u8_t *glyph = font8x16_glyph(character);
     int column;
     int row;
-    int sy;
-    int sx;
 
-    for (column = 0; column < FONT_WIDTH; column++) {
-        k_u8_t bits = glyph[column];
+    for (row = 0; row < FONT8_HEIGHT; row++) {
+        k_u8_t bits = glyph[row];
 
-        for (row = 0; row < FONT_HEIGHT; row++) {
-            if ((bits & (k_u8_t)(1u << row)) == 0u) {
-                continue;
-            }
+        if (bits == 0u) {
+            continue;
+        }
 
-            for (sy = 0; sy < FB_SCALE; sy++) {
-                for (sx = 0; sx < FB_SCALE; sx++) {
-                    pixel_put(x + column * FB_SCALE + sx, y + row * FB_SCALE + sy, color);
-                }
+        for (column = 0; column < FONT8_WIDTH; column++) {
+            if ((bits & (k_u8_t)(0x80u >> column)) != 0u) {
+                pixel_put(x + column, y + row, color);
             }
         }
     }
@@ -135,11 +140,14 @@ static int render_cell_width(void *ctx)
     return FB_CELL_WIDTH;
 }
 
+/* The step of a line, not the height of the glyph: the console and a command
+ * lay lines out with the pitch of the screen, which the `line_gap` of
+ * /etc/font widens. */
 static int render_cell_height(void *ctx)
 {
     K_UNUSED(ctx);
 
-    return FB_CELL_HEIGHT;
+    return g_pitch;
 }
 
 static void render_clear(void *ctx, k_u16_t color)
@@ -230,12 +238,13 @@ static const struct k_renderer s_renderer = {
 
 /* --- the grid of cells the console draws ----------------------------------- */
 
-/* One cell as the glass shows it: the paper, then the glyph, or the reverse
- * when the cursor is on it. */
+/* One cell as the glass shows it: the paper of the box, then the glyph, or
+ * the reverse when the cursor is on it. The rows below the box are the gap of
+ * the line and belong to nobody: a cell paints its own eight by sixteen. */
 static void cell_paint(int row, int column, bool inverted)
 {
     int x = column * FB_CELL_WIDTH;
-    int y = row * FB_CELL_HEIGHT;
+    int y = row * g_pitch;
     char character;
 
     if (row < 0 || row >= g_rows || column < 0 || column >= g_columns) {
@@ -244,17 +253,10 @@ static void cell_paint(int row, int column, bool inverted)
 
     character = g_cells[row][column];
 
-    if (inverted) {
-        render_fill_rect(NULL, x, y, FB_CELL_WIDTH, FB_CELL_HEIGHT, g_ink);
-        if (character != ' ') {
-            glyph_draw(x, y, character, g_paper);
-        }
-        return;
-    }
+    render_fill_rect(NULL, x, y, FB_CELL_WIDTH, FB_CELL_HEIGHT, inverted ? g_ink : g_paper);
 
-    render_fill_rect(NULL, x, y, FB_CELL_WIDTH, FB_CELL_HEIGHT, g_paper);
     if (character != ' ') {
-        glyph_draw(x, y, character, g_ink);
+        glyph_draw(x, y, character, inverted ? g_paper : g_ink);
     }
 }
 
@@ -278,17 +280,23 @@ static void fb_put(int row, int column, char character)
 }
 
 /*
- * A row up: the picture moves, and the characters move with it. The memory of
- * the picture is one block, so the pixels are one move of the rows that stay;
- * the grid is the same move of a row of characters.
+ * A row of cells up: the picture moves by the step of a line - the cell and
+ * the gap of /etc/font - so the columns stay where they are and only the
+ * lines change. The memory of the picture is one block, so the pixels are one
+ * move of the rows that stay; the grid is the same move of a row of
+ * characters, and the last line of the new picture is the paper.
  */
 static void fb_scroll(void)
 {
-    int line = FB_CELL_HEIGHT * g_stride; /* pixels of one cell row */
+    int line = g_pitch * g_stride; /* pixels of one row of cells */
+    int last = (g_rows - 1) * g_pitch;
 
     memmove((void *)(uintptr_t)g_fb, (const void *)(uintptr_t)(g_fb + line),
-            (k_size_t)(g_height - FB_CELL_HEIGHT) * (k_size_t)g_stride * sizeof(k_u16_t));
-    area_fill(0, g_height - FB_CELL_HEIGHT, g_width, FB_CELL_HEIGHT, g_paper);
+            (k_size_t)(g_height - g_pitch) * (k_size_t)g_stride * sizeof(k_u16_t));
+
+    if (last < g_height) {
+        area_fill(0, last, g_width, g_height - last, g_paper);
+    }
 
     memmove(g_cells[0], g_cells[1], (k_size_t)(FB_ROWS_MAX - 1) * FB_COLUMNS_MAX);
     memset(g_cells[g_rows - 1], ' ', FB_COLUMNS_MAX);
@@ -394,6 +402,65 @@ static struct port_x86_64_screen s_screen = {
     .redraw = fb_redraw,
 };
 
+/*
+ * How many rows of cells a picture of `height` lines holds at the step of
+ * `pitch`: the last one has to be whole, so the count stops at the last cell
+ * whose sixteen lines fit - 800 lines are 50 rows of 16, 44 of 18 and 40 of
+ * 20, and the two or six lines left over stay paper under the last row.
+ */
+static int rows_for(int height, int pitch)
+{
+    if (height < FONT8_HEIGHT) {
+        return 0;
+    }
+
+    return (height - FONT8_HEIGHT) / pitch + 1;
+}
+
+/* The name of the screen: the mode and the grid the console counts in. */
+static void screen_name(unsigned bpp)
+{
+    snprintf(g_name, sizeof(g_name), "the framebuffer of %ux%u, %u bpp, %dx%d cells", g_width,
+             g_height, bpp, g_columns, g_rows);
+}
+
+/*
+ * The gap between two lines, in pixels (the `line_gap` of /etc/font, ADR
+ * 0021). The step of a line becomes 16 plus the gap, the rows of the grid are
+ * counted again, and the picture is drawn from the cells the console holds -
+ * the log is not lost, it is laid out again. A screen that is the text mode
+ * of the VGA is not this file's: the caller asks first.
+ */
+void port_x86_64_fb_set_line_gap(int gap)
+{
+    int rows;
+
+    if (g_fb == NULL) {
+        return;
+    }
+
+    if (gap < 0 || gap > FB_LINE_GAP_MAX) {
+        gap = 0;
+    }
+
+    rows = rows_for(g_height, FB_CELL_HEIGHT + gap);
+
+    if (rows > FB_ROWS_MAX) {
+        rows = FB_ROWS_MAX;
+    }
+    if (rows < 1) {
+        rows = 1;
+    }
+
+    g_pitch = FB_CELL_HEIGHT + gap;
+    g_rows = rows;
+    s_screen.rows = rows;
+
+    screen_name(PORT_X86_64_SCREEN_BPP);
+
+    fb_redraw();
+}
+
 const struct port_x86_64_screen *port_x86_64_fb_screen(const struct port_x86_64_screen_mode *mode,
                                                        void *base)
 {
@@ -407,8 +474,9 @@ const struct port_x86_64_screen *port_x86_64_fb_screen(const struct port_x86_64_
     g_height = mode->height;
     g_stride = mode->pitch / 2;
 
+    g_pitch = FB_CELL_HEIGHT;
     g_columns = g_width / FB_CELL_WIDTH;
-    g_rows = g_height / FB_CELL_HEIGHT;
+    g_rows = rows_for(g_height, g_pitch);
 
     if (g_columns > FB_COLUMNS_MAX) {
         g_columns = FB_COLUMNS_MAX;
@@ -428,8 +496,7 @@ const struct port_x86_64_screen *port_x86_64_fb_screen(const struct port_x86_64_
     g_ink = FB_GREY;
     g_paper = 0x0000u;
 
-    snprintf(g_name, sizeof(g_name), "the framebuffer of %ux%u, %u bpp, %dx%d cells", g_width,
-             g_height, (unsigned)mode->bpp, g_columns, g_rows);
+    screen_name(mode->bpp);
 
     s_screen.columns = g_columns;
     s_screen.rows = g_rows;
@@ -441,4 +508,62 @@ const struct port_x86_64_screen *port_x86_64_fb_screen(const struct port_x86_64_
     fb_clear();
 
     return &s_screen;
+}
+
+/* --- the font system of /etc (ADR 0021) ----------------------------------- */
+
+/*
+ * `/etc/font` for the screen of a PC: the gap between two lines. The scale,
+ * the columns and the rows are the cap of the dialogue on the panel of the
+ * board and mean nothing here - the font of this screen is the size it is,
+ * and the grid of the picture is the whole picture - so a file that asks for
+ * them is told once that the value is kept.
+ *
+ * A value that is not 0, 2 or 4 pixels is not a gap: the default of 0 is used
+ * and the file is named, because a typo in /etc must not move a line of the
+ * shell by a number nobody chose.
+ */
+static void apply_font(const char *system, const struct settings_table *table)
+{
+    const char *value = settings_value(table, "line_gap", "0");
+    int gap;
+
+    K_UNUSED(system);
+
+    if (strcmp(value, "0") == 0) {
+        gap = 0;
+    } else if (strcmp(value, "2") == 0) {
+        gap = 2;
+    } else if (strcmp(value, "4") == 0) {
+        gap = 4;
+    } else {
+        kwarn("font: line_gap '%s' is not 0, 2 or 4; the default 0 is used", value);
+        gap = 0;
+    }
+
+    if (settings_number(table, "scale", 1, 1, 2) != 1 ||
+        settings_number(table, "columns", 0, 0, 99) != 0 ||
+        settings_number(table, "rows", 0, 0, 99) != 0) {
+        kwarn("font: scale, columns and rows are the cap of the panel; the values are kept");
+    }
+
+    if (g_fb == NULL) {
+        kwarn("font: line_gap %d is kept, the text mode of the VGA has no gap", gap);
+        return;
+    }
+
+    port_x86_64_fb_set_line_gap(gap);
+
+    kinfo("font: line_gap %d, the cell is %dx%d at %d px, %d rows of %d columns", gap, FONT8_WIDTH,
+          FONT8_HEIGHT, FONT8_HEIGHT + gap, g_rows, g_columns);
+}
+
+static const struct settings_system s_font_system = {
+    .name = "font",
+    .apply = apply_font,
+};
+
+int port_x86_64_font_settings_register(void)
+{
+    return settings_register(&s_font_system);
 }

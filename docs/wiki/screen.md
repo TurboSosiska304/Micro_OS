@@ -28,19 +28,34 @@ the backlight has no duty cycle yet, so the panel does not dim.
 The port programs the Bochs VBE interface of the VGA of QEMU - the device
 `1234:1111`, the I/O ports `0x1CE`/`0x1CF` - to 1280x800 and 16 bits per
 pixel in RGB565, which is the format the renderer of the kernel draws in
-(ADR 0023). The console is a grid of cells of the 5x7 font at twice its size,
-10x14 pixels: **128 columns by 57 rows**. The boot says which screen it chose:
+(ADR 0023). The console is a grid of cells of the 8x16 font of the PC (Spleen
+8x16 2.3.0, BSD-2-Clause, `third_party/spleen`), one glyph a cell: **160
+columns by 50 rows**. The boot says which screen it chose:
 
 ```text
-x86-64: the screen is the framebuffer of 1280x800, 16 bpp, 128x57 cells
+x86-64: the screen is the framebuffer of 1280x800, 16 bpp, 160x50 cells
 ```
 
 The window of the card is above the identity map of the kernel, so the port
 maps it into the top 2 GiB and every address space shares it: a `write` of a
 program reaches the same picture as the boot log. A character is one glyph
 blitted into the memory, the cursor is the reverse of a cell, and the scroll
-moves the rows of the picture up by one cell. There is no double buffer and no
-flush, because the memory of the card is the glass.
+moves the rows of the picture up by the step of a line. There is no double
+buffer and no flush, because the memory of the card is the glass.
+
+The step of a line is the cell plus `font.line_gap`, a key of `/etc/font`
+(ADR 0021): 0, 2 or 4 pixels give 16, 18 or 20 pixels a line - 50, 44 or 40
+rows of the picture - and the grid is laid out again from the cells the
+console holds, so the log is never lost when the key changes:
+
+```text
+microos> config set font.line_gap 2
+font: line_gap 2, the cell is 8x16 at 18 px, 44 rows of 160 columns
+font.line_gap=2
+```
+
+`scale`, `columns` and `rows` of the same file are the cap of the panel of the
+board: this machine keeps them and says once that they are not its business.
 
 `console.theme` and `console.invert` repaint the grid, and the setting is
 applied when `/etc` is read, before the shell exists, and at every `config
@@ -48,7 +63,7 @@ set`:
 
 ```text
 microos> config set console.theme light
-console: theme light, invert 0, the screen the framebuffer of 1280x800, 16 bpp, 128x57 cells
+console: theme light, invert 0, the screen the framebuffer of 1280x800, 16 bpp, 160x50 cells
 ```
 
 Dark is grey on black, light is black on light grey, and `invert` swaps the
@@ -62,19 +77,20 @@ glyphs the test reads - the letters of "MicroOS" - fails that test, which is
 the point of a screenshot in a smoke.
 
 The test looks at the *first* frame of the boot as well, and strictly: the
-picture must be the two colours of the console and nothing else, every pixel
-must belong to a 2x2 block of the same colour (the whole picture is the 5x7
-font at twice its size), and every cell of the 14-pixel grid must be the
-paper, a glyph of the font or the cursor. A pixel of another colour, a stroke
-of one pixel or a cell that holds anything else is a piece of a frame that no
-cell of this console drew - the grey of the VGA palette, the 8x16 font of the
-text mode, the screen the firmware left, or a second copy of the log a few
-pixels below the first, at any offset. The port makes that impossible from its
-side: the card clears its memory when the mode is set (the cells of the text
-mode live in the same memory), the text window is emptied before the switch,
-and the whole picture is drawn a second time after the first lines of the log
-- the cells are kept, so nothing of the log is lost, and every pixel of the
-frame is written again.
+picture must be the two colours of the console and nothing else, and every
+cell of the 8x16 grid must be the paper, a glyph of the font or the cursor -
+the table of the font is read from the tree, so a glyph redrawn is a failure
+and a pixel that no cell drew is one too (the grey of the VGA palette, the
+screen the firmware left, a second copy of the log a few pixels below the
+first, at any offset). The lower case of the font is proved by the tails of
+`g`, `p` and `y`; the step of a line by the cell of the second line, 16 pixels
+below the first; and `font.line_gap 2` in the picture (44 rows of 18 pixels)
+and in `/etc/font`. The port makes the first frame whole from its side: the
+card clears its memory when the mode is set (the cells of the text mode live
+in the same memory), the text window is emptied before the switch, and the
+whole picture is drawn a second time after the first lines of the log - the
+cells are kept, so nothing of the log is lost, and every pixel of the frame is
+written again.
 
 ### The fallback: the text mode of 80x25
 

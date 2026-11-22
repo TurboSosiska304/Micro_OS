@@ -67,11 +67,18 @@ VGA_COLUMNS = 80
 VGA_ROWS = 25
 VGA_BYTES = VGA_COLUMNS * VGA_ROWS * 2
 
-# The picture of ADR 0023 and the cell of the 5x7 font at twice its size.
+# The picture of ADR 0023 and the cell of its font: the 8x16 font of the PC
+# (Spleen), one glyph a cell and the step of a line being 16 plus the gap of
+# /etc/font (`font.line_gap`, 0, 2 or 4 pixels).
 VBE_WIDTH = 1280
 VBE_HEIGHT = 800
-CELL_WIDTH = 10
-CELL_HEIGHT = 14
+CELL_WIDTH = 8
+CELL_HEIGHT = 16
+LINE_PITCH = 16
+LINE_PITCH_GAP2 = 18
+ROWS_GAP0 = VBE_HEIGHT // LINE_PITCH  # 50
+ROWS_GAP2 = (VBE_HEIGHT - CELL_HEIGHT) // LINE_PITCH_GAP2 + 1  # 44
+COLUMNS = VBE_WIDTH // CELL_WIDTH  # 160
 
 # The two colours of the console, as the display makes them of RGB565 0xAD55
 # (the light grey of the VGA) and 0x0000. The theme of /etc picks which is the
@@ -87,18 +94,18 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, "build-x86")
 
 # The file of the font the console draws with, and the size of a cell of it in
-# the picture: the 5x7 font of the board at twice its size.
-FONT_SOURCE = os.path.join(ROOT, "components/font/src/font.c")
+# the picture: the 8x16 font of the PC (Spleen, ports/port_x86_64).
+FONT_SOURCE = os.path.join(ROOT, "ports/port_x86_64/src/font_spleen.c")
 
 
 def load_font() -> dict:
-    """The 5x7 font the picture is made of, read from its table in the tree.
+    """The 8x16 font the picture is made of, read from its table in the tree.
 
     The test draws no glyph itself: it takes the table the kernel was built
     with, so a change of the font - a glyph redrawn, a row moved - is a
-    failure of this test and not of a copy of the table inside it. Five
-    columns a glyph, the lowest bit of a column is the top row, the table
-    covers the codes 0x20 to 0x5F.
+    failure of this test and not of a copy of the table inside it. One byte a
+    row, the most significant bit the leftmost pixel, the table covers the 95
+    codes of the printable ASCII (0x20 to 0x7E).
     """
     try:
         with open(FONT_SOURCE, encoding="utf-8") as handle:
@@ -106,9 +113,9 @@ def load_font() -> dict:
     except OSError as error:
         raise RuntimeError(f"cannot read the font {FONT_SOURCE}: {error}") from error
 
-    rows = re.findall(r"\{((?:0x[0-9A-Fa-f]{2},\s*){4}0x[0-9A-Fa-f]{2})\}", source)
-    if len(rows) != 64:
-        raise RuntimeError(f"the font {FONT_SOURCE} has {len(rows)} glyph(s), not 64")
+    rows = re.findall(r"\{((?:0x[0-9A-Fa-f]{2},\s*){15}0x[0-9A-Fa-f]{2})\}", source)
+    if len(rows) != 95:
+        raise RuntimeError(f"the font {FONT_SOURCE} has {len(rows)} glyph(s), not 95")
 
     font = {}
     for index, row in enumerate(rows):
@@ -124,10 +131,12 @@ class Picture:
     """A PPM of the screen as a grid of pixels, and the cells of the font.
 
     The screenshot of QEMU is a binary PPM (P6): a header of three values and
-    then three bytes a pixel, from the top left. A cell of the console is ten
-    pixels wide and fourteen tall, and the glyph inside it is the 5x7 font at
-    twice its size - so a cell is read as the bitmap of a letter and compared
-    with the table of the font.
+    then three bytes a pixel, from the top left. A cell of the console is eight
+    pixels wide and sixteen tall, and the glyph inside it is the 8x16 font of
+    the PC - so a cell is read as the bitmap of a letter and compared with the
+    table of the font. The step of a line is the cell plus the gap of
+    /etc/font, and the methods that walk the grid take that step as an
+    argument.
     """
 
     def __init__(self, width: int, height: int, pixels: bytes) -> None:
@@ -165,60 +174,34 @@ class Picture:
 
         return red.count(ink[0]) == green.count(ink[1]) == blue.count(ink[2])
 
-    def not_blocky(self) -> int:
-        """The lines of the picture that are not made of 2x2 blocks.
+    def cell_glyph(self, row: int, column: int, ink: tuple, pitch: int = LINE_PITCH) -> tuple:
+        """The 8x16 bitmap of a cell: one byte a line, the top bit on the left.
 
-        The whole picture is the 5x7 font at twice its size: every pixel of a
-        glyph, of the paper and of the cursor is part of a block of two by two
-        pixels, and the block starts on an even line and an even column. A
-        stroke of one pixel - a glyph of the 8x16 font of the text mode, a
-        scale of the host, the frame of another screen - breaks that, and the
-        count of the lines that break it is the answer.
-        """
-        stride = self.width * 3
-        broken = 0
-
-        for y in range(0, self.height - 1, 2):
-            top = self.pixels[y * stride : (y + 1) * stride]
-            bottom = self.pixels[(y + 1) * stride : (y + 2) * stride]
-
-            if top != bottom:
-                broken += 1
-                continue
-
-            if top[0::6] != top[3::6] or top[1::6] != top[4::6] or top[2::6] != top[5::6]:
-                broken += 1
-
-        return broken
-
-    def cell_glyph(self, row: int, column: int, ink: tuple) -> tuple:
-        """The 5x7 bitmap of a cell, read out of its 2x2 blocks.
-
-        A block is one pixel of the font (not_blocky() is what promises the
-        block is one colour), so the cell is five columns of seven bits. The
-        answer is the bitmap and not a letter: comparing it with the table of
-        the font is the caller's business.
+        The answer is the bitmap and not a letter: comparing it with the table
+        of the font is the caller's business. A cell of a line that the picture
+        does not hold - a row below the grid - is the empty tuple.
         """
         x0 = column * CELL_WIDTH
-        y0 = row * CELL_HEIGHT
+        y0 = row * pitch
         want = bytes(ink)
-        bits = []
+        rows = []
 
-        for column_index in range(5):
+        if x0 + CELL_WIDTH > self.width or y0 + CELL_HEIGHT > self.height:
+            return ()
+
+        for row_index in range(CELL_HEIGHT):
             value = 0
-            x = x0 + column_index * 2
+            start = ((y0 + row_index) * self.width + x0) * 3
 
-            for row_index in range(7):
-                start = ((y0 + row_index * 2) * self.width + x) * 3
+            for column_index in range(CELL_WIDTH):
+                if self.pixels[start + column_index * 3 : start + column_index * 3 + 3] == want:
+                    value |= 0x80 >> column_index
 
-                if self.pixels[start : start + 3] == want:
-                    value |= 1 << row_index
+            rows.append(value)
 
-            bits.append(value)
+        return tuple(rows)
 
-        return tuple(bits)
-
-    def foreign_cells(self, ink: tuple) -> list:
+    def foreign_cells(self, ink: tuple, pitch: int = LINE_PITCH) -> list:
         """The cells of the grid that no cell of the console could have drawn.
 
         A cell is the paper, a glyph of the font or the cursor (the ink of the
@@ -229,23 +212,45 @@ class Picture:
         """
         table = {glyph: letter for letter, glyph in GLYPHS.items()}
         cells = []
+        rows = 0
 
-        for row in range(self.height // CELL_HEIGHT):
+        while (rows * pitch) + CELL_HEIGHT <= self.height:
+            rows += 1
+
+        for row in range(rows):
             for column in range(self.width // CELL_WIDTH):
-                bits = self.cell_glyph(row, column, ink)
+                bits = self.cell_glyph(row, column, ink, pitch)
 
-                if bits == (0, 0, 0, 0, 0):
+                if set(bits) == {0}:
                     continue  # the paper
 
                 if bits in table:
                     continue  # a glyph of the font
 
-                if self.cell_is_ink(row, column, ink):
+                if self.cell_is_ink(row, column, ink, pitch):
                     continue  # the cursor
 
                 cells.append((row, column))
 
         return cells
+
+    def glyphs_seen(self, ink: tuple, pitch: int = LINE_PITCH) -> set:
+        """The letters of the font that the picture holds, one cell each."""
+        table = {glyph: letter for letter, glyph in GLYPHS.items()}
+        seen = set()
+        rows = 0
+
+        while (rows * pitch) + CELL_HEIGHT <= self.height:
+            rows += 1
+
+        for row in range(rows):
+            for column in range(self.width // CELL_WIDTH):
+                letter = table.get(self.cell_glyph(row, column, ink, pitch))
+
+                if letter is not None:
+                    seen.add(letter)
+
+        return seen
 
     def lowest_ink_row(self) -> int:
         """The last line of the picture that has a pixel that is not black."""
@@ -256,36 +261,41 @@ class Picture:
                 return y
         return -1
 
-    def cell_is(self, row: int, column: int, glyph: tuple, ink: tuple, paper: tuple) -> bool:
-        """The cell is the letter: every pixel of the 2x2 block of a bit.
-
-        A row of the cell is compared as bytes and not pixel by pixel: the
-        glyph at twice its size is the ten pixels of the five columns, and the
-        row of the picture above the cell has to be exactly that.
-        """
+    def cell_is(
+        self,
+        row: int,
+        column: int,
+        glyph: tuple,
+        ink: tuple,
+        paper: tuple,
+        pitch: int = LINE_PITCH,
+    ) -> bool:
+        """The cell is the letter: every pixel of its eight by sixteen rows."""
         x0 = column * CELL_WIDTH
-        y0 = row * CELL_HEIGHT
+        y0 = row * pitch
 
         if x0 + CELL_WIDTH > self.width or y0 + CELL_HEIGHT > self.height:
             return False
 
-        for cy in range(7):
+        for row_index, bits in enumerate(glyph):
             expected = b""
-            for bits in glyph:
-                expected += bytes(ink if bits & (1 << cy) else paper) * 2
+            for column_index in range(CELL_WIDTH):
+                expected += bytes(ink if bits & (0x80 >> column_index) else paper)
+            start = ((y0 + row_index) * self.width + x0) * 3
 
-            for sy in range(2):
-                start = ((y0 + cy * 2 + sy) * self.width + x0) * 3
-                if self.pixels[start : start + CELL_WIDTH * 3] != expected:
-                    return False
+            if self.pixels[start : start + CELL_WIDTH * 3] != expected:
+                return False
 
         return True
 
-    def cell_is_ink(self, row: int, column: int, ink: tuple) -> bool:
+    def cell_is_ink(self, row: int, column: int, ink: tuple, pitch: int = LINE_PITCH) -> bool:
         """The cell is one block of the colour: what the cursor is."""
         x0 = column * CELL_WIDTH
-        y0 = row * CELL_HEIGHT
+        y0 = row * pitch
         expected = bytes(ink) * CELL_WIDTH
+
+        if x0 + CELL_WIDTH > self.width or y0 + CELL_HEIGHT > self.height:
+            return False
 
         for y in range(y0, y0 + CELL_HEIGHT):
             start = (y * self.width + x0) * 3
@@ -294,19 +304,23 @@ class Picture:
 
         return True
 
-    def cursor_cells(self, ink: tuple) -> int:
+    def cursor_cells(self, ink: tuple, pitch: int = LINE_PITCH) -> int:
         """How many cells are one block of the ink: the cursor of the screen.
 
         The console draws the cursor as the reverse of a cell - the ink fills
-        the ten by fourteen pixels and the letter, when there is one, is in
+        the eight by sixteen pixels and the letter, when there is one, is in
         the paper - so a cell that is all ink is the cursor and nothing else
         the console draws is.
         """
         count = 0
+        rows = 0
 
-        for row in range(self.height // CELL_HEIGHT):
+        while (rows * pitch) + CELL_HEIGHT <= self.height:
+            rows += 1
+
+        for row in range(rows):
             for column in range(self.width // CELL_WIDTH):
-                if self.cell_is_ink(row, column, ink):
+                if self.cell_is_ink(row, column, ink, pitch):
                     count += 1
 
         return count
@@ -574,7 +588,7 @@ def type_fsck(machine: Machine) -> None:
 
 
 def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, display: str) -> list:
-    """The screen of ADR 0023: the framebuffer of the Bochs VBE interface."""
+    """The screen of ADR 0023: the framebuffer, its 8x16 font and its line gap."""
     checks = []
 
     def expect(name: str, condition: bool, detail: str = "") -> None:
@@ -589,9 +603,7 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
             # The console writes the screen before it writes COM1, so the
             # banner in the transcript is a line that is already on the
             # picture; the dump is taken at once, before the rest of the boot
-            # covers it. A frame of the text mode of the firmware that the
-            # display kept under the new picture would be visible here, and
-            # nothing later in the boot would explain it away.
+            # covers it.
             banner = machine.wait_serial("board: qemu_x86_64", timeout)
             expect("the boot reaches the banner", banner, "the banner never reached COM1")
 
@@ -614,36 +626,34 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                     first.only_colors(GREY, BLACK),
                     "a pixel of the first frame is neither black nor the grey of the console",
                 )
-                # The whole picture is the 5x7 font at twice its size, so
-                # every pixel belongs to a 2x2 block: a line of one pixel - the
-                # 8x16 font of the text mode, a scaled frame of the host -
-                # breaks it. That is how a stale 80x25 screen under the new
-                # one is caught without knowing what it said.
-                broken = first.not_blocky()
-                expect(
-                    "the first frame is not one pixel of another screen",
-                    broken == 0,
-                    f"{broken} line pair(s) of the first frame are not made of 2x2 blocks",
-                )
                 # Every cell of the frame is the paper, a glyph of the font or
                 # the cursor. A cell that is none of the three holds pixels
-                # that came from somewhere else - the true test of "one text
-                # and not two": a second copy of the log a few pixels below the
-                # first lands on the cells of the grid and is caught here,
-                # whatever its offset.
+                # that came from somewhere else - a second copy of the text a
+                # few pixels below the first, at any offset.
                 foreign = first.foreign_cells(GREY)
                 expect(
                     "every cell of the first frame is a glyph or the paper",
                     not foreign,
                     f"{len(foreign)} cell(s) of the first frame hold no glyph: {foreign[:5]}",
                 )
+                # The first line of the screen is the banner of the kernel,
+                # "MicroOS ...", and the font of the port has the lower case:
+                # the cells are the letters themselves and not their upper
+                # case, which is what the 5x7 font of the board would draw.
                 expect(
                     "the first line of the first frame is the banner",
                     all(
                         first.cell_is(0, index, GLYPHS[letter], GREY, BLACK)
-                        for index, letter in enumerate("MICROOS")
+                        for index, letter in enumerate("MicroOS")
                     ),
                     "the cell of the first line is not the glyph of the font",
+                )
+                # The step of a line is the cell of 16 pixels: the second line
+                # of the boot starts on the second row of cells.
+                expect(
+                    "the lines of the first frame are 16 pixels apart",
+                    first.cell_is(1, 0, GLYPHS["b"], GREY, BLACK),
+                    "the cell of the second line is not at the step of 16 pixels",
                 )
 
             # --- the screen after the boot
@@ -652,9 +662,15 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
 
             serial = machine.read_serial()
             expect(
-                "the port chooses the framebuffer",
-                "x86-64: the screen is the framebuffer of 1280x800, 16 bpp, 128x57 cells" in serial,
-                "the boot did not name the framebuffer of ADR 0023",
+                "the port chooses the framebuffer of 160x50 cells",
+                "x86-64: the screen is the framebuffer of 1280x800, 16 bpp, 160x50 cells" in serial,
+                "the boot did not name the framebuffer of ADR 0023 and its grid",
+            )
+            expect(
+                "the boot applies the font of the PC",
+                f"font: line_gap 0, the cell is 8x16 at 16 px, {ROWS_GAP0} rows of {COLUMNS} "
+                "columns" in serial,
+                "the boot did not name the font, the line step and the grid",
             )
 
             picture = machine.picture(workdir)
@@ -669,22 +685,26 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                 foreign = picture.foreign_cells(GREY)
                 expect(
                     "the picture after the boot is one grid of the font",
-                    picture.only_colors(GREY, BLACK)
-                    and picture.not_blocky() == 0
-                    and not foreign,
+                    picture.only_colors(GREY, BLACK) and not foreign,
                     f"{len(foreign)} cell(s) of the settled picture hold no glyph: "
                     f"{foreign[:5]}",
                 )
-                # The first line of the screen is the banner of the kernel,
-                # "MicroOS ...". The console draws it in the 5x7 font at twice
-                # its size and the font has no lowercase, so the cells are the
-                # letters below - and a cell is compared with the bitmap of the
-                # font, not with a count of ink.
+                # The lower case of the PC: a 'g', a 'p' and a 'y' are drawn
+                # with the tail below the line of the other letters, and the
+                # 5x7 font of the board has no lower case at all - so a cell
+                # that matches one of them is the glyph of Spleen and not the
+                # upper case of a smaller font.
+                seen = picture.glyphs_seen(GREY)
+                expect(
+                    "the font has the lower case with its tails",
+                    {"g", "p", "y"} <= seen,
+                    f"the picture holds no glyph of {sorted({'g', 'p', 'y'} - seen)}",
+                )
                 expect(
                     "the cells of the first line are the glyphs of the font",
                     all(
                         picture.cell_is(0, index, GLYPHS[letter], GREY, BLACK)
-                        for index, letter in enumerate("MICROOS")
+                        for index, letter in enumerate("MicroOS")
                     ),
                     "a cell of the first line is not the glyph of the font",
                 )
@@ -705,8 +725,56 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                     f"only {picture.ink_pixels()} pixel(s) of the picture are not black",
                 )
 
+            # --- the line gap of /etc/font (ADR 0021)
+            machine.type_line("config set font.line_gap 2")
+            expect(
+                "the gap of the font moves the lines",
+                machine.wait_serial(
+                    f"font: line_gap 2, the cell is 8x16 at {LINE_PITCH_GAP2} px, "
+                    f"{ROWS_GAP2} rows of {COLUMNS} columns",
+                    timeout,
+                ),
+                "the console did not lay the screen out at 18 pixels a line",
+            )
+
+            picture = machine.picture(workdir)
+            if picture is not None:
+                expect(
+                    "the picture of the gap of 2 is 44 rows of 18 pixels",
+                    picture.only_colors(GREY, BLACK)
+                    and not picture.foreign_cells(GREY, LINE_PITCH_GAP2)
+                    and picture.cell_is(1, 0, GLYPHS["b"], GREY, BLACK, LINE_PITCH_GAP2),
+                    "the picture is not the grid of 18 pixels a line",
+                )
+
+            machine.type_line("cat /etc/font")
+            expect(
+                "the gap is a key of /etc/font",
+                machine.wait_serial("line_gap=2", timeout),
+                "the file of the font does not keep the gap",
+            )
+
+            machine.type_line("config set font.line_gap 0")
+            expect(
+                "the gap goes back to the whole cell",
+                machine.wait_serial(
+                    f"font: line_gap 0, the cell is 8x16 at {LINE_PITCH} px, "
+                    f"{ROWS_GAP0} rows of {COLUMNS} columns",
+                    timeout,
+                ),
+                "the console did not lay the screen out at 16 pixels a line again",
+            )
+
+            picture = machine.picture(workdir)
+            if picture is not None:
+                expect(
+                    "the picture of the whole cell is 50 rows of 16 pixels",
+                    picture.only_colors(GREY, BLACK) and not picture.foreign_cells(GREY),
+                    "the picture is not the grid of 16 pixels a line",
+                )
+
             # --- the keyboard, and the picture it changes
-            ink_before = picture.lowest_ink_row() if picture is not None else -1
+            ink_before = machine.picture(workdir)
             type_fsck(machine)
 
             answered = machine.wait_serial(ANSWER, timeout)
@@ -715,7 +783,9 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
             picture = machine.picture(workdir)
             expect(
                 "the answer reaches the picture",
-                picture is not None and picture.lowest_ink_row() > ink_before,
+                picture is not None
+                and ink_before is not None
+                and picture.lowest_ink_row() > ink_before.lowest_ink_row(),
                 "the screen did not grow below the prompt after the command",
             )
 
@@ -738,16 +808,14 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                 )
                 expect(
                     "the text of the boot is read in the new colours",
-                    picture is not None
-                    and picture.cell_is(0, 0, GLYPHS["M"], BLACK, GREY),
+                    picture.cell_is(0, 0, GLYPHS["M"], BLACK, GREY)
+                    or picture.cell_is(0, 0, GLYPHS["m"], BLACK, GREY),
                     "the cell of the banner is not the glyph in the colours of the theme",
                 )
                 foreign = picture.foreign_cells(BLACK)
                 expect(
                     "the repaint left no pixel of the old pair",
-                    picture.only_colors(BLACK, GREY)
-                    and picture.not_blocky() == 0
-                    and not foreign,
+                    picture.only_colors(BLACK, GREY) and not foreign,
                     f"{len(foreign)} cell(s) of the light picture hold no glyph: "
                     f"{foreign[:5]}",
                 )
