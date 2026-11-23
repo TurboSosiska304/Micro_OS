@@ -56,7 +56,12 @@ the one this project has been walking towards since ADR 0005.
 
 **2.0.0 is not published by the autopilot.** The autopilot writes the notes,
 cuts `v2.0.0-rc1` and each `rc` after it, runs every gate and reports; the tag
-of `2.0.0` waits for the word of the owner of the machine.
+of `2.0.0` waits for the word of the owner of the machine. **The wait is ten
+minutes**: a candidate taken for approval and answered by nothing is not a
+reason to sit still - the autopilot goes on with the debts and the side tasks
+of the same line (the rows of `docs/debts.md`, a patch for a defect found on
+hardware, the documentation of what was built), and it keeps the candidate and
+the report ready for the moment the word comes.
 
 ## The rules of the autopilot
 

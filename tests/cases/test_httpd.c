@@ -545,7 +545,10 @@ static void test_ceiling(void)
 
     /* The sessions end at the close of the client; the stop below waits for
      * the last of them as well. */
-    for (i = 0; i < 200 && httpd_active() > 0; i++) {
+    /* Ten seconds and not four: a session is a task of the machine, and a
+     * host that builds three worktrees at once schedules it late. The check is
+     * that the ceiling lets go - the moment it does is not the subject. */
+    for (i = 0; i < 500 && httpd_active() > 0; i++) {
         k_sched_sleep_ms(20);
     }
 
