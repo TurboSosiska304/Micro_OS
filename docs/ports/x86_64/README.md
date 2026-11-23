@@ -19,10 +19,11 @@ the machine where a program can really be loaded and run (the window of
 | programs | `k_port_exec_supported()` is true; the window is 16 MiB at 32 MiB (`0x02000000`-`0x03000000`) over a physical arena at 64 MiB; a program is a file in `/bin` (the MOX1 format of `kernel/exec.h`), runs in ring 3 with page tables of its own and calls the kernel with `syscall` (the vector 0x80 is the second door, ADR 0007, ADR 0035) |
 | protection | NX and W^X: `EFER.NXE` from the loader, the text read-only and executable, every data page - rodata, data, bss, stacks, heap, arena, screen - writable and NX; no page is both (ADR 0007, sections 9 and 10). The kernel is in the higher half: the image is linked at `0xFFFFFFFF80000000` and mapped there beside the low identity map |
 | signature | the kernel carries a 120-byte trailer (magic, size, SHA-256 and Ed25519) and the loader verifies it before it copies a byte (ADR 0020); the public key is compiled into `loader32.elf`, the private key is outside the tree (`MICROOS_SIGN_KEY`), and `tools/microos_sign` signs and verifies |
-| build | `make x86-build` (needs `cmake`, `ninja`, `xorriso` is not needed) and `make x86-disk` for the volume with `/bin` |
+| firmware | `loader/uefi`: a PE/COFF application that the firmware of a machine starts from a FAT volume, with the picture of GOP (a shadow in RGB565 and a conversion, `src/gop.c`), the ACPI tables of the configuration table, the memory map and `ExitBootServices`; the disk is `disk.img` of the same volume, read by the loader and mounted from the memory as `boot0p1` (ADR 0037, [uefi.md](uefi.md)) |
+| build | `make x86-build` (needs `cmake`, `ninja`, `xorriso` is not needed), `make x86-disk` for the volume with `/bin`, and `make uefi` for the volume a firmware boots (needs `clang` and `lld-link`) |
 | check | `make x86-smoke` (serial), `make x86-vga-smoke` (the framebuffer, the text mode and the keyboard), `make x86-disk-smoke` (two boots on a disk), `make x86-net-smoke` (the network) - all need `qemu-system-x86` |
 | build | `make x86-build` (needs `cmake`, `ninja`); `make x86-iso` needs `xorriso` and `grub-mkrescue` or limine, because it asks a boot loader to write the El Torito record ([iso.md](iso.md)) |
-| check | `make x86-smoke` (serial), `make x86-vga-smoke` (screen and keyboard), `make x86-disk-smoke` (two boots on a disk), `make x86-net-smoke` (the network), `make x86-iso-smoke` (the CD) - all need `qemu-system-x86` |
+| check | `make x86-smoke` (serial), `make x86-vga-smoke` (screen and keyboard), `make x86-disk-smoke` (two boots on a disk), `make x86-net-smoke` (the network), `make x86-iso-smoke` (the CD), `make uefi-smoke` (the firmware, the picture of GOP and the shell) - all need `qemu-system-x86`, and the last one OVMF |
 | medium | `make x86-iso`: a BIOS ISO with the loader, the kernel and the root image, and a shell and `/bin` out of it ([iso.md](iso.md), ADR 0026) |
 
 ## Run it
@@ -36,6 +37,9 @@ make x86-run-disk     # the window with a disk of its own, kept between runs
 make x86-run-disk-serial  # the same disk in a terminal
 make x86-net-run      # the same machine with a virtio-net card, in a terminal
 make x86-smoke        # boot and check the lines of the banner and the shell
+make uefi             # the ESP of a firmware machine: BOOTX64.EFI, the kernel, disk.img
+make uefi-run         # that volume in QEMU under OVMF (a window)
+make uefi-smoke       # boot it without a window and check the machine and the picture
 make x86-vga-smoke    # check the picture of both screens and the keyboard, without a display
 make x86-disk-smoke   # two boots on one image: a file written in the first is read in the second
 make x86-net-smoke    # boot with QEMU user-net and check ping, UDP, HTTP, the page of the state and DNS
