@@ -2397,6 +2397,7 @@ static void test_repair(void)
  * `-y` repairs it. A machine whose root is ext2 checks itself instead of
  * handing its medium to e2fsck of another machine.
  */
+#if defined(MICRO_OS_FS_EXT2) && MICRO_OS_FS_EXT2
 static void test_check_command(void)
 {
     char buf[1024];
@@ -2473,6 +2474,7 @@ static void test_check_command(void)
 
     teardown();
 }
+#endif
 
 static void test_directory_past_the_direct_blocks(void)
 {
@@ -2613,7 +2615,9 @@ void test_fs_ext2(void)
     test_unlink_of_a_big_file();
     test_check();
     test_repair();
+#if defined(MICRO_OS_FS_EXT2) && MICRO_OS_FS_EXT2
     test_check_command();
+#endif
     test_directory_past_the_direct_blocks();
     test_root_mount();
 }
