@@ -32,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format sdk idf-check idf-build idf-flash idf-monitor idf-size bundle bundle-board bundle-x86 x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-root-smoke x86-volume-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-fs-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak x86-smp-smoke soak-smp bench
+.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format sdk idf-check idf-build idf-flash idf-monitor idf-size bundle bundle-board bundle-x86 x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-root-smoke x86-volume-smoke uefi uefi-run uefi-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-fs-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak x86-smp-smoke soak-smp bench
 
 help:
 	@echo "Micro OS — available targets:"
@@ -63,6 +63,11 @@ help:
 	@echo "  make x86-run    boot it in a QEMU window (framebuffer 1280x800, keyboard)"
 	@echo "  make x86-run-serial  boot it with the serial console (-nographic)"
 	@echo "  make x86-smoke  boot it and check what it says"
+	@echo "  make uefi       the same kernel as an image a firmware starts: a FAT"
+	@echo "                  volume with BOOTX64.EFI, the kernel and disk.img"
+	@echo "  make uefi-run   boot that volume in QEMU under OVMF (a window)"
+	@echo "  make uefi-smoke boot it without a window and check the machine, the"
+	@echo "                  shell and the picture of the frame"
 	@echo "  make x86-smp-smoke  boot the kernel of two cores and check both of them"
 	@echo "  make x86-disk   the image of the disk: /bin and /etc of MicroFS"
 	@echo "  make x86-vga-smoke   check the screen and the keyboard without a display"
@@ -189,6 +194,11 @@ CI_QEMU := $(shell command -v qemu-system-x86_64 2>/dev/null)
 CI_TARGETS := build test test-asan test-tsan test-smp smoke coverage
 ifneq ($(CI_QEMU),)
 CI_TARGETS += x86-smoke x86-root-smoke
+endif
+# The boot of the firmware needs QEMU and the firmware: a machine with one and
+# not the other is a machine of the BIOS gate alone.
+ifneq ($(wildcard /usr/share/edk2/x64/OVMF_CODE.4m.fd),)
+CI_TARGETS += uefi-smoke
 endif
 CI_TARGETS += reproducible integrity
 
@@ -371,6 +381,55 @@ x86-smoke: x86-disk x86-open-build
 x86-root-smoke: x86-disk
 	python3 tools/x86_root_smoke.py --image $(X86_PROGRAMS_IMAGE) \
 		--ext2-image $(X86_PROGRAMS_EXT2_IMAGE) --timeout 180
+
+# The machine of a firmware (UEFI): the same kernel as `make x86-build` - one
+# kernel for the two ways of starting it - the loader of the firmware
+# (ports/port_x86_64/loader/uefi, a PE/COFF application) and one FAT volume
+# that carries the three files a boot needs (tools/uefi_esp.py). No bootloader
+# of the distribution is involved: the loader is the project's, it reads the
+# kernel and the disk image out of the volume with the file services of the
+# firmware and leaves the boot services before the kernel runs.
+#
+# The loader is built by clang and lld-link, because the format of an
+# application of a firmware is the PE/COFF of the 64-bit Windows machine and
+# that target is what a compiler of the host knows; the target says what is
+# missing instead of building an image that does not boot.
+UEFI_BUILD := build-uefi
+UEFI_IMAGE := $(UEFI_BUILD)/esp.img
+
+# The firmware of the machine: OVMF, the EDK2 build that QEMU runs. The first
+# pair that is installed is the one both targets use.
+UEFI_CODE := $(firstword $(wildcard /usr/share/edk2/x64/OVMF_CODE.4m.fd \
+	/usr/share/edk2/ovmf/OVMF_CODE.fd /usr/share/OVMF/OVMF_CODE.fd \
+	/usr/share/qemu/OVMF_CODE.fd /usr/share/edk2-ovmf/x64/OVMF_CODE.fd))
+UEFI_VARS := $(subst CODE,VARS,$(UEFI_CODE))
+
+uefi: x86-build x86-disk
+	cmake --build $(X86_BUILD) --target uefi
+	python3 tools/uefi_esp.py --image $(UEFI_IMAGE) --build $(X86_BUILD) \
+		--disk $(X86_PROGRAMS_IMAGE)
+
+# The machine of a person: the window of QEMU shows the picture of the
+# firmware and the keyboard of the window is the PS/2 keyboard of the port.
+# The variables of the firmware are a file of the system and a boot writes to
+# them: the run takes a copy, the way the smoke test does, and the firmware of
+# the machine stays what it was.
+uefi-run: uefi
+	@test -n "$(UEFI_CODE)" || { echo "uefi-run: no OVMF (install edk2-ovmf)" >&2; exit 2; }
+	@test -f "$(UEFI_VARS)" || { echo "uefi-run: $(UEFI_VARS) is not there" >&2; exit 2; }
+	cp "$(UEFI_VARS)" $(UEFI_BUILD)/vars.fd
+	qemu-system-x86_64 -machine q35 -m 512 -smp 2 \
+		-drive if=pflash,format=raw,readonly=on,file=$(UEFI_CODE) \
+		-drive if=pflash,format=raw,file=$(UEFI_BUILD)/vars.fd \
+		-drive file=$(UEFI_IMAGE),format=raw,if=ide,index=0 \
+		-no-reboot
+
+# The gate: the firmware starts the loader, the loader starts the kernel, the
+# kernel mounts the disk it was handed and the shell answers on the frame of
+# the firmware (tools/uefi_smoke.py reads the picture of the card as well as
+# the serial line).
+uefi-smoke: uefi
+	python3 tools/uefi_smoke.py --image $(UEFI_IMAGE) --timeout 180
 
 # The gate of the two cores (ADR 0012): the kernel of `x86-smp-build` boots on
 # a machine of two processors and has to start both of them, keep a task on
