@@ -59,11 +59,14 @@ second pair of ring 3 descriptors (0x38 data, 0x40 code) laid out the way the
 instruction wants it, and nothing else in the port moved.
 
 The vector 128 stays, with its handler of the same frame. It is what a program
-that was not built against this library calls, and it is what the restorer of a
-signal handler returns through (`port_exec.c` writes those bytes). Both doors
-build the same 160-byte frame in the same order (`PORT_FRAME_*`), run the same
-body and leave through the same tail, which picks the instruction: `sysret` for
-a program's frame, `iretq` for anything else.
+that was not built against this library calls - the programs of the port
+itself are one of them, `prog.h` is written against the vector - and it is
+what the restorer of a signal handler returns through (`port_exec.c` writes
+those bytes). Both doors build the same 160-byte frame in the same order
+(`PORT_FRAME_*`), run the same body and leave through the same tail, which
+picks the instruction: `sysret` for a program's frame, `iretq` for anything
+else. A smoke test therefore exercises both doors on every run: the library of
+a program takes one, the programs of the port the other.
 
 ### 2. Where the entry finds a stack
 
@@ -120,7 +123,11 @@ same place `iretq` restores them from the frame.
 * `execve` of a program that replaces its own image: it rewrites the frame at
   the top of the kernel stack (RIP, RSP, RFLAGS, CS, SS) and the tail returns
   through it - `sysret` for a canonical entry and the ring 3 selector, `iretq`
-  otherwise. Nothing in `port_exec.c` changed.
+  otherwise. Nothing in `port_exec.c` changed. The one visible difference is
+  the pair `sysret` fills in by itself: the new image starts with `RCX` at its
+  own entry and `R11` at 0x202 instead of the two zeros the frame carries. No
+  part of the entry ABI (ADR 0016) is in either register, and the instruction
+  destroys both on every call anyway.
 * The board and the host: the door of the port is a pointer to `ksys_call()`
   there (ADR 0018), and this is a decision of one port.
 
@@ -144,12 +151,18 @@ same place `iretq` restores them from the frame.
 * The record of a core carries two words that only the entry of a call reads;
   a port of one core still pays for them (16 bytes per core).
 * The two instructions between the entry and the stack switch run on the stack
-  of the program: the offset of the record is not a place a `mov` can be
-  interrupted *only* because `IA32_FMASK` cleared the interrupt flag, and an
-  NMI ignores that flag. The port configures no source of an NMI (no line of
-  the I/O APIC delivers one, and the kernel raises none), so the window is not
-  reachable today; a port that wants one gives the NMI an IST stack of its own
-  in the TSS, the way the double fault has one already.
+  of the program, and only `IA32_FMASK` keeps them safe: an NMI ignores that
+  flag and would push its frame on a stack the program chose. The port
+  configures no source of an NMI (no line of the I/O APIC delivers one, and
+  the kernel raises none), so the window is not reachable today; a port that
+  wants one gives the NMI an IST stack of its own in the TSS, the way the
+  double fault has one already.
 * The measurement is of a virtual machine. `soak-smp` and the smoke tests show
   that the fast path does not race and does not corrupt a frame, and no test
   measures a real processor's `syscall` against its `int`.
+* The fallback of the tail is not covered by a test: no program of the tree
+  builds a frame that `sysret` cannot return to, and the guard is the kind of
+  code only a program that deliberately writes a broken signal frame would
+  reach. The line it protects - a task taken down instead of the kernel
+  running a fault handler on a stack the program chose - is worth a test of
+  its own, with the magic of the frame in it, when a program needs one.
