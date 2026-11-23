@@ -55,6 +55,8 @@ void test_initd(void);
 void test_config(void);
 void test_settings(void);
 void test_net(void);
+void test_httpd(void);
+void test_ota(void);
 void test_pkg(void);
 #if MICRO_OS_TLS && MICRO_OS_NET
 void test_tls(void);

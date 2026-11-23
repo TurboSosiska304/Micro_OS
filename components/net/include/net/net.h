@@ -55,6 +55,17 @@ int net_http_download_to(const struct http_transport *transport, const char *url
 /* The same over the sockets of the port. */
 int net_http_download(const char *url, const char *path, bool resume, struct http_stream *out);
 
+/*
+ * The same with the digest of the bytes the sink took, as sixty-four
+ * hexadecimal characters: the proof that a file of a hundred megabytes
+ * crossed the wire unchanged without keeping it anywhere. The caller gives a
+ * sink of `HTTP_SHA256_HEX` bytes; a run that brings the object again resets
+ * the digest with the sink (the 200 after a Range).
+ */
+#define HTTP_SHA256_HEX 65
+int net_http_download_hashed(const char *url, const char *path, bool resume,
+                             struct http_stream *out, char hex[HTTP_SHA256_HEX]);
+
 /* The time of an NTP server, in the seconds of Unix (UTC). */
 int net_ntp_sync(const char *server, k_u64_t *unix_seconds);
 

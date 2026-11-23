@@ -22,15 +22,18 @@ if(ESP_PLATFORM)
     # of its shell speaks TLS yet: the stub is the answer of net_tls_transport()
     # and nothing of third_party/mbedtls is built for this target (ADR 0018).
     if(CONFIG_MICRO_OS_NET)
-        list(APPEND MICRO_OS_NET_SRCS "src/tls_stub.c")
+        list(APPEND MICRO_OS_NET_SRCS "src/tls_stub.c" "src/tls_server_stub.c")
     endif()
 
     if(CONFIG_MICRO_OS_NET)
         if(CONFIG_MICRO_OS_NET_HTTP)
-            list(APPEND MICRO_OS_NET_SRCS "src/http.c")
+            list(APPEND MICRO_OS_NET_SRCS "src/http.c" "src/ota.c")
         endif()
         if(CONFIG_MICRO_OS_NET_HTTP_SERVER)
-            list(APPEND MICRO_OS_NET_SRCS "src/net_http_server.c")
+            # The page of the state and the server of files: two shapes of
+            # one door. The board serves the first and builds the second:
+            # the same sources, its own ceiling of the sessions.
+            list(APPEND MICRO_OS_NET_SRCS "src/net_http_server.c" "src/httpd.c")
         endif()
         if(CONFIG_MICRO_OS_NET_NTP)
             list(APPEND MICRO_OS_NET_SRCS "src/ntp.c")
@@ -44,6 +47,16 @@ if(ESP_PLATFORM)
             INCLUDE_DIRS "include"
             REQUIRES kernel kshell
         )
+
+        # The signature of an image: the board's boot checks it with the
+        # primitives and the key of ports/port_x86_64/loader (ADR 0020), and
+        # the update of the network checks the same trailer with the same
+        # key. The header of the key is generated into the build directory.
+        target_include_directories(${COMPONENT_LIB} PRIVATE
+            "${CMAKE_CURRENT_LIST_DIR}/../../ports/port_x86_64/loader"
+            "${CMAKE_BINARY_DIR}"
+        )
+        target_compile_definitions(${COMPONENT_LIB} PRIVATE MICRO_OS_OTA_BUILTIN_KEY=1)
 
         target_compile_options(${COMPONENT_LIB} PRIVATE -Wextra)
         set(MICRO_OS_NET_SCOPE PUBLIC)
@@ -59,6 +72,12 @@ if(ESP_PLATFORM)
         # An interface target cannot carry a definition for its own sources.
         set(MICRO_OS_NET_SCOPE INTERFACE)
     endif()
+
+    # The ceiling of the sessions of the server of files: the board has a task
+    # table of 32 and about 100 KB of internal RAM, and a session is a task
+    # with its own stack. Four is what its memory holds with the shell and
+    # the services of the boot beside it; the host and x86-64 keep sixteen.
+    target_compile_definitions(${COMPONENT_LIB} ${MICRO_OS_NET_SCOPE} MICRO_OS_HTTPD_CONNECTIONS=4)
 
     # The numbers for the C sources of the portable code. A consumer of this
     # component (main, for the registration) sees the same values.
@@ -94,9 +113,12 @@ else()
 
     if(MICRO_OS_NET_HTTP)
         list(APPEND MICRO_OS_NET_SRCS "src/http.c")
+        # The update over the network: the download and its check are
+        # portable, and the slots are the machine's (net/ota.h).
+        list(APPEND MICRO_OS_NET_SRCS "src/ota.c" "src/ota_file.c")
     endif()
     if(MICRO_OS_NET_HTTP_SERVER)
-        list(APPEND MICRO_OS_NET_SRCS "src/net_http_server.c")
+        list(APPEND MICRO_OS_NET_SRCS "src/net_http_server.c" "src/httpd.c")
     endif()
     if(MICRO_OS_NET_NTP)
         list(APPEND MICRO_OS_NET_SRCS "src/ntp.c")
@@ -109,15 +131,23 @@ else()
     # vendored (third_party/mbedtls) and linked as an object library, so its
     # bytes are part of the simulator and of the tests that name it.
     if(MICRO_OS_TLS)
-        list(APPEND MICRO_OS_NET_SRCS "src/tls.c")
+        list(APPEND MICRO_OS_NET_SRCS "src/tls.c" "src/tls_server.c")
     else()
-        list(APPEND MICRO_OS_NET_SRCS "src/tls_stub.c")
+        list(APPEND MICRO_OS_NET_SRCS "src/tls_stub.c" "src/tls_server_stub.c")
     endif()
 
     add_library(microos_net STATIC ${MICRO_OS_NET_SRCS})
     target_include_directories(microos_net PUBLIC "${CMAKE_CURRENT_LIST_DIR}/include")
+    # The hash of a download (the --sha256 of wget) is the hash of the
+    # loader, the same code that checks a signed image: one SHA-256 for the
+    # machine, and the port links its object (ports/*/CMakeLists.txt).
+    target_include_directories(microos_net
+        PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../../ports/port_x86_64/loader")
     target_link_libraries(microos_net PUBLIC microos_kernel microos_kshell)
     target_compile_features(microos_net PUBLIC c_std_11)
+    # The host and x86-64 bring the key of an update in /etc/ota: a build
+    # whose key is a development one does not carry a second copy of it.
+    target_compile_definitions(microos_net PRIVATE MICRO_OS_OTA_BUILTIN_KEY=0)
 
     if(MICRO_OS_TLS)
         target_link_libraries(microos_net PUBLIC microos_mbedtls)
@@ -127,7 +157,8 @@ else()
         # library is built with -w for the same reason; this one file of the
         # kernel includes its headers, and -Wundef of this tree would make
         # an upstream style a build error.
-        set_source_files_properties("src/tls.c" PROPERTIES COMPILE_OPTIONS "-Wno-undef")
+        set_source_files_properties("src/tls.c" "src/tls_server.c"
+            PROPERTIES COMPILE_OPTIONS "-Wno-undef")
     endif()
 
 endif()
