@@ -190,8 +190,6 @@ function(add_board_program name entry)
         COMMAND ${CMAKE_C_COMPILER} ${MICRO_OS_PROGRAM_CFLAGS}
                 -o ${name}_errno.o "${MICRO_OS_LIBC_USER_DIR}/src/errno.c"
         COMMAND ${CMAKE_C_COMPILER} ${MICRO_OS_PROGRAM_CFLAGS}
-                -o ${name}_errno.o "${MICRO_OS_LIBC_USER_DIR}/src/errno.c"
-        COMMAND ${CMAKE_C_COMPILER} ${MICRO_OS_PROGRAM_CFLAGS}
                 -o ${name}_main.o "${MICRO_OS_PROGRAM_DIR}/${name}.c"
         # -lgcc is the compiler's own runtime: the formatter of a program
         # computes a 64-bit number with a division and a remainder, and the
