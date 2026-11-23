@@ -507,7 +507,12 @@ def main(argv: list) -> int:
     parser = argparse.ArgumentParser(description="the disk smoke test of the x86-64 port")
     parser.add_argument("--image", default=DEFAULT_IMAGE, help="the image of the disk")
     parser.add_argument("--mkimage", metavar="PATH", help="write the copy of the build image and stop")
-    parser.add_argument("--timeout", type=float, default=30.0, help="the seconds a boot gets")
+    # The boots of the volume are two lists of commands of the tree of every
+    # port: the tools of sbase, the interpreter of Lua, the command of zstd and
+    # `/bin/file` with its database, each read through the disk driver. Half a
+    # minute was the limit of the list of one port; the merged list of two of
+    # them needs more of the emulated machine.
+    parser.add_argument("--timeout", type=float, default=120.0, help="the seconds a boot gets")
     parser.add_argument("--repeat", type=int, default=1, help="how many times to boot the pair")
     parser.add_argument("--keep", action="store_true", help="keep the image after the run")
     parser.add_argument("--verbose", action="store_true", help="print the consoles of the boots")
