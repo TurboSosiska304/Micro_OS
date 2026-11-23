@@ -838,10 +838,18 @@ add_custom_command(
     VERBATIM
 )
 
+# `-z` looks inside the two compressions of the image: gzip through the zlib of
+# the program, and zstd through the decompressor of the library the command of
+# zstd is built from (`microos_user_zstd`, not the CLI: the archive holds the
+# library alone). The linker pulls the objects of the decoder and nothing of
+# the compressor, and the port header of the library names the window this
+# machine can hold (`port/zstd_port.h`, included by file.c as the sources of
+# the library are).
 add_libc_program(file
-    LIBRARIES microos_user_file microos_user_zlib
+    LIBRARIES microos_user_file microos_user_zlib microos_user_zstd
     INCLUDES "${MICROOS_FILE_DIR}/src" "${MICROOS_FILE_DIR}/port" "${ZLIB_DIR}"
-    DEFINES ULIBC_HEAP_SIZE=983040u
+             "${ZSTD_DIR}/lib" "${ZSTD_DIR}/port"
+    DEFINES ULIBC_HEAP_SIZE=983040u MICRO_OS_WITH_ZSTD
     SOURCES ${SBASE_LIBC_SOURCES}
             "${LIBC_USER_DIR}/src/locale.c"
             "${LIBC_USER_DIR}/src/asprintf.c"

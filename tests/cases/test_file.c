@@ -103,6 +103,17 @@ static const unsigned char g_zstd_s[] = {
     0x28, 0xb5, 0x2f, 0xfd, 0x00, 0x58, 0x00, 0x00,
 };
 
+/* A whole Zstandard frame of `g_text_s`, written by the zstd of the host at
+ * level 19 without a checksum: the magic, the header of a single-segment frame
+ * of sixteen bytes (the content size in it) and the block that carries the
+ * text. The frame of `/etc/setting.zst` of the image has the same shape, and
+ * `file -z` of the guest reads the text out of it; the database of this test
+ * names the container, which is the half the library has. */
+static const unsigned char g_zstd_frame_s[] = {
+    0x28, 0xb5, 0x2f, 0xfd, 0x00, 0x68, 0x81, 0x00, 0x00, 0x68, 0x65, 0x6c, 0x6c,
+    0x6f, 0x2c, 0x20, 0x4d, 0x69, 0x63, 0x72, 0x6f, 0x20, 0x4f, 0x53, 0x0a,
+};
+
 /* The signature and the IHDR of a 1x1 RGBA PNG. */
 static const unsigned char g_png_s[] = {
     0x89, 'P',  'N',  'G',  0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00,
@@ -212,6 +223,8 @@ void test_file(void)
               "application/gzip");
     check_one(cookie, "zstd", g_zstd_s, sizeof(g_zstd_s), "Zstandard compressed data",
               "application/zstd");
+    check_one(cookie, "zstd frame", g_zstd_frame_s, sizeof(g_zstd_frame_s),
+              "Zstandard compressed data", "application/zstd");
     check_one(cookie, "png", g_png_s, sizeof(g_png_s), "PNG image data", "image/png");
     check_one(cookie, "tar", g_tar_s, sizeof(g_tar_s), "POSIX tar archive", "application/x-gtar");
     check_one(cookie, "mox", g_mox_s, sizeof(g_mox_s), "Micro OS MOX1 executable",

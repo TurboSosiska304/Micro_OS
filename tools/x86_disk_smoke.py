@@ -108,6 +108,9 @@ SECOND_BOOT = [
     # The database of libmagic is a file of /etc and it survived the reset too.
     "exec /bin/file /bin/file",
     "exec /bin/file -i /persist.gz.txt",
+    # The frame the first boot wrote is a file of the volume too: `file -z`
+    # opens it with the decompressor of the image and names the text inside.
+    "exec /bin/file -z /persist.zst",
 ]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -449,6 +452,12 @@ def check(first: str, second: str) -> list:
         "file reads the inflated file after the reset",
         "text/plain" in inflated_type,
         inflated_type,
+    )
+    inside_frame = second_answers[19]
+    expect(
+        "file -z reads the zstd frame of the volume after the reset",
+        "ASCII text" in inside_frame and "Zstandard compressed data" in inside_frame,
+        inside_frame,
     )
 
     return checks

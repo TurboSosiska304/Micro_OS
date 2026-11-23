@@ -14,6 +14,14 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Added
 
+- `/bin/file -z` looks inside a zstd frame as well as a gzip: the program is
+  linked against the decompressor of `microos_user_zstd` and names the content
+  of the frame (`ASCII text` for `/etc/setting.zst`), with the 128 KiB of the
+  arena as its ceiling. `make x86-smoke` asks it for a frame of the image and
+  `make x86-disk-smoke` for the frame the first boot wrote into the volume;
+  `tests/cases/test_file.c` covers a whole frame, and the library of a program
+  is the one of the two ports of the tree (the families of sbase and the
+  floating point of Lua, one implementation of each).
 - The first port of a program of somebody else: zlib 1.3.1 as a static
   archive built by the compiler and the flags of the guest, and `/bin/zcat`
   on a `.gz` of MicroFS. The recipe is `docs/porting-programs.md`; the

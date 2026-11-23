@@ -277,6 +277,9 @@ COMMANDS = [
     "exec /bin/file -i /bin/file",
     "exec /bin/file /etc/greeting.gz",
     "exec /bin/file -z /etc/greeting.gz",
+    # The second compression of the image: the frame of the host written into
+    # /etc/setting.zst, unpacked by the libzstd the command is linked against.
+    "exec /bin/file -z /etc/setting.zst",
     "exec /bin/file /etc/hello.lua",
     "exec /bin/file -i /etc/hello.lua",
     "exec /bin/file -b /etc/setting",
@@ -1254,6 +1257,15 @@ def check(output: str) -> list:
         "file -z looks inside the gzip",
         "ASCII text" in inside and "gzip compressed data" in inside,
         inside,
+    )
+    # The same flag on a frame of zstd: the decompressor of the image reads the
+    # content of /etc/setting.zst, which is the setting of the machine and not
+    # the bytes a description of the frame would name.
+    inside_zstd = answer("exec /bin/file -z /etc/setting.zst")
+    expect(
+        "file -z looks inside a zstd frame",
+        "ASCII text" in inside_zstd and "Zstandard compressed data" in inside_zstd,
+        inside_zstd,
     )
     lua = answer("exec /bin/file /etc/hello.lua")
     expect("file names a Lua script", "Lua script" in lua, lua)

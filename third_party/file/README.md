@@ -148,7 +148,9 @@ file -                      the bytes of descriptor 0
 
 `-b` prints no name, `-i` the MIME type and the encoding, `-L` is accepted
 (the VFS has no symbolic link to follow), `-f` reads the names of a list and
-`-z` looks inside a gzip stream with the zlib of the image. A directory is
+`-z` looks inside a compressed file: a gzip stream with the zlib of the image
+and a zstd frame with the decompressor of `microos_user_zstd` (the library of
+the port of zstd; xz and bzip2 are not in the image). A directory is
 `directory` (or `inode/directory`), a name that cannot be opened is the
 sentence `file: cannot open `x' (No such file or directory)` and the status of
 the program is 1. The file is read to 128 KiB: the rules of the subset look
@@ -157,12 +159,13 @@ at the start and at a few offsets near the end, and the arena is the rest.
 ## The tests
 
 * `tests/cases/test_file.c` is the library for the host: an ELF header, a gzip
-  stream, a Zstandard frame, a PNG image, a tar archive, a MOX1 image, the
-  empty file and a text, through `magic_buffer` and `file_buffer`, with the
-  compiled database and with the text (`magic_load` and the fallback).
+  stream, the magic of a Zstandard frame and a whole frame of the same, a PNG
+  image, a tar archive, a MOX1 image, the empty file and a text, through
+  `magic_buffer` and `file_buffer`, with the compiled database and with the
+  text (`magic_load` and the fallback).
 * `make x86-smoke` runs `/bin/file` on a program of `/bin`, on
-  `/etc/greeting.gz`, on `/etc/hello.lua`, on a directory and on a name that
-  is not there, with `-i`, `-b`, `-z` and `-f`.
+  `/etc/greeting.gz` and `/etc/setting.zst`, on `/etc/hello.lua`, on a
+  directory and on a name that is not there, with `-i`, `-b`, `-z` and `-f`.
 * `make x86-disk-smoke` asks the same after a reset of the machine, on the
   volume the first boot left.
 

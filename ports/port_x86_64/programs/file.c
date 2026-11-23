@@ -23,7 +23,8 @@
  *   -b   no name before the description
  *   -i   the MIME type and the encoding of the text
  *   -L   follow a symbolic link (the VFS has none: the flag is accepted)
- *   -z   look inside a gzip file (the library of zlib of the image)
+ *   -z   look inside a compressed file: gzip (the library of zlib of the
+ *        image) and zstd (the decompressor of the image's libzstd)
  *   -f   the names are the lines of LIST, one name per line
  *
  * The status is 0 when every name was read and 1 when one of them was not:
@@ -41,14 +42,33 @@
 #include <magic.h>
 #include <zlib.h>
 
-/* The bytes of the file that the library may see, and of a gzip it opens. */
+#ifdef MICRO_OS_WITH_ZSTD
+/* The parameters of the decoder are the ones of the release that is not
+ * standard (ZSTD_d_windowLogMax), and the port of the library already names
+ * the window this machine can hold. */
+#define ZSTD_STATIC_LINKING_ONLY
+#include <zstd.h>
+
+#include "zstd_cli_os.h"
+#endif
+
+/* The bytes of the file that the library may see, and of the compressed file
+ * it opens. The two blocks are the arena of the program: the database of
+ * libmagic (359 KiB), the read file and the answer of the library share the
+ * megabyte of bss that the format gives a program. */
 #define FILE_BUFFER_MAX (128u * 1024u)
-#define FILE_GZIP_MAX (128u * 1024u)
+#define FILE_INSIDE_MAX (128u * 1024u)
 
 /* The names of the two gzip bytes, and the window of inflate for gzip. */
 #define FILE_GZIP_0 0x1f
 #define FILE_GZIP_1 0x8b
 #define FILE_GZIP_WINDOW (15 + 16)
+
+/* The four bytes of a zstd frame, little endian, as the format writes them. */
+#define FILE_ZSTD_0 0x28
+#define FILE_ZSTD_1 0xb5
+#define FILE_ZSTD_2 0x2f
+#define FILE_ZSTD_3 0xfd
 
 static magic_t g_cookie;
 static int g_brief;
@@ -120,6 +140,81 @@ static size_t gunzip(const unsigned char *source, size_t length, unsigned char *
     }
     return used;
 }
+
+#ifdef MICRO_OS_WITH_ZSTD
+/* A zstd frame begins with the magic number of the format. */
+static int is_zstd(const unsigned char *bytes, size_t length)
+{
+    return length >= 4 && bytes[0] == FILE_ZSTD_0 && bytes[1] == FILE_ZSTD_1 &&
+           bytes[2] == FILE_ZSTD_2 && bytes[3] == FILE_ZSTD_3;
+}
+
+/*
+ * Unpack a zstd frame into the block of the caller, whose size is what the
+ * frame promises (or the ceiling of the program when the frame does not name
+ * its size, which is what a frame written to a pipe does). The answer is the
+ * number of bytes or (size_t)-1; `too_big` says that the frame is larger than
+ * the block, which is a refusal of the program and not a broken frame.
+ */
+static size_t unzstd(const unsigned char *source, size_t length, unsigned char *out, size_t size,
+                     int *too_big)
+{
+    ZSTD_DCtx *context;
+    ZSTD_inBuffer input;
+    ZSTD_outBuffer output;
+    size_t rc;
+
+    context = ZSTD_createDCtx();
+    if (context == NULL) {
+        return (size_t)-1;
+    }
+    /* The window of a frame is the memory the machine has to hold: the release
+     * lets the frame name its own and a host of a few gigabytes holds eight
+     * megabytes of window. A frame larger than the port of the library names
+     * is refused when its header is read, which is the sentence "Frame
+     * requires too much memory for decoding" and not a failed allocation in
+     * the middle of a stream. */
+    (void)ZSTD_DCtx_setParameter(context, ZSTD_d_windowLogMax, ZSTD_PORT_DECODE_WINDOWLOG);
+
+    input.src = source;
+    input.size = length;
+    input.pos = 0;
+    output.dst = out;
+    output.size = size;
+    output.pos = 0;
+
+    for (;;) {
+        rc = ZSTD_decompressStream(context, &output, &input);
+        if (ZSTD_isError(rc)) {
+            (void)ZSTD_freeDCtx(context);
+            return (size_t)-1;
+        }
+        if (rc == 0) {
+            /* The end of a frame: another one may follow in the same file, as
+             * the command of the release writes them. */
+            if (input.pos >= input.size) {
+                break;
+            }
+            continue;
+        }
+        if (output.pos == output.size) {
+            *too_big = 1;
+            (void)ZSTD_freeDCtx(context);
+            return (size_t)-1;
+        }
+        if (input.pos >= input.size) {
+            /* The bytes are all in and the decoder waits for more: the frame
+             * is cut, which the library would name at the next call. */
+            (void)ZSTD_freeDCtx(context);
+            return (size_t)-1;
+        }
+    }
+
+    (void)ZSTD_freeDCtx(context);
+
+    return output.pos;
+}
+#endif /* MICRO_OS_WITH_ZSTD */
 
 /*
  * The sentence of an error code as the command of the release prints it: the
@@ -215,9 +310,9 @@ static void describe(const char *name)
     if (g_inside && used >= 2 && buffer[0] == FILE_GZIP_0 && buffer[1] == FILE_GZIP_1) {
         char text[256];
 
-        inflated = malloc(FILE_GZIP_MAX);
+        inflated = malloc(FILE_INSIDE_MAX);
         if (inflated != NULL) {
-            size_t total = gunzip(buffer, used, inflated, FILE_GZIP_MAX);
+            size_t total = gunzip(buffer, used, inflated, FILE_INSIDE_MAX);
 
             if (total != (size_t)-1) {
                 description = magic_buffer(g_cookie, inflated, total);
@@ -232,6 +327,58 @@ static void describe(const char *name)
             free(inflated);
         }
     }
+
+#ifdef MICRO_OS_WITH_ZSTD
+    if (g_inside && is_zstd(buffer, used)) {
+        char text[256];
+        unsigned long long promised = ZSTD_getFrameContentSize(buffer, used);
+        size_t block = FILE_INSIDE_MAX;
+
+        /* The frame names the size of its content unless it was written to a
+         * stream of an unknown length. A frame larger than the block of the
+         * program is refused with its number, and not cut: a description of
+         * the first 128 KiB of a file would be the type of a fragment. */
+        if (promised != ZSTD_CONTENTSIZE_UNKNOWN && promised != ZSTD_CONTENTSIZE_ERROR) {
+            if (promised > FILE_INSIDE_MAX) {
+                (void)fprintf(stderr, "file: `%s' is %llu bytes inside, more than %u\n", name,
+                              promised, (unsigned)FILE_INSIDE_MAX);
+                g_failed = 1;
+                free(buffer);
+                return;
+            }
+            block = (size_t)promised;
+        }
+        if (block == 0) {
+            block = 1; /* an empty frame: the library wants a block of a byte */
+        }
+
+        inflated = malloc(block);
+        if (inflated != NULL) {
+            int too_big = 0;
+            size_t total = unzstd(buffer, used, inflated, block, &too_big);
+
+            if (total != (size_t)-1) {
+                description = magic_buffer(g_cookie, inflated, total);
+                if (description != NULL) {
+                    (void)snprintf(text, sizeof(text), "%s (Zstandard compressed data)",
+                                   description);
+                    report(name, text);
+                    free(inflated);
+                    free(buffer);
+                    return;
+                }
+            } else if (too_big) {
+                (void)fprintf(stderr, "file: `%s' is larger than the %u bytes of the program\n",
+                              name, (unsigned)FILE_INSIDE_MAX);
+                g_failed = 1;
+                free(inflated);
+                free(buffer);
+                return;
+            }
+            free(inflated);
+        }
+    }
+#endif /* MICRO_OS_WITH_ZSTD */
 
     description = magic_buffer(g_cookie, buffer, used);
     report(name, description != NULL ? description : "data");
