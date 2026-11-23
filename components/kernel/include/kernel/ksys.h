@@ -58,7 +58,12 @@
 #define KSYS_SETLIMIT 33  /* setlimit(which, value) */
 #define KSYS_RENAME 34    /* rename(from, to) */
 #define KSYS_FTRUNCATE 35 /* ftruncate(fd, size) */
-#define KSYS_COUNT 36     /* the number of the system calls */
+#define KSYS_GETUID 36    /* getuid() */
+#define KSYS_GETEUID 37   /* geteuid() */
+#define KSYS_GETGID 38    /* getgid() */
+#define KSYS_SETUID 39    /* setuid(uid) */
+#define KSYS_SETGID 40    /* setgid(gid) */
+#define KSYS_COUNT 41     /* the number of the system calls */
 
 /*
  * The resources of a limit. One number names one resource and the calls move
@@ -69,8 +74,8 @@
  * in one place.
  *
  * The limits of a task start at the maximum of the system and may only be
- * lowered: there is one user, uid 0, and a program of that user still must
- * not raise its own ceiling (the rule of POSIX without the privilege of root,
+ * lowered: the ceiling belongs to the machine, and a program must not raise
+ * it, root included (the rule of POSIX without the privilege of the limit,
  * like the mode check of ADR 0005). A value above the current limit is
  * EPERM; a resource that is not one of the three is EINVAL.
  */
@@ -129,8 +134,11 @@
  * the two numbers (ADR 0005). A wider number is refused at the door instead
  * of being cut to fit the record.
  *
- * The system has one user and its uid is zero; the checks of the mode use
- * that number and grant it nothing extra.
+ * The root of the system has the uid zero: it passes the triads, changes
+ * the owner of an object, mounts a volume and signals any task. A task of
+ * another uid is the owner of what it owns and the "others" of everything
+ * else; there is no group in a record yet, so the gid of a task is kept and
+ * inherited but decides nothing (docs/debts.md).
  */
 #define KSYS_MODE_MASK 0777u
 #define KSYS_UID 0u
@@ -232,6 +240,19 @@ int ksys_rename(const char *from, const char *to);
 int ksys_ftruncate(int fd, k_u64_t size);
 k_ssize_t ksys_readdir(int fd, void *buf, k_size_t count);
 k_u32_t ksys_getpid(void);
+/*
+ * The credentials of the caller. geteuid answers the same number as getuid:
+ * this kernel keeps one uid and not the real/effective pair, because the
+ * image of a program has no setuid bit and nothing moves one of the two
+ * alone. setuid is root giving up root (to any uid) or a task of another uid
+ * naming itself (a no-op); any other change is KERR_PERM. setgid follows the
+ * same rule, and the gid it stores decides no permission yet.
+ */
+k_u32_t ksys_getuid(void);
+k_u32_t ksys_geteuid(void);
+k_u32_t ksys_getgid(void);
+int ksys_setuid(k_u32_t uid);
+int ksys_setgid(k_u32_t gid);
 int ksys_getcwd(char *buf, k_size_t size);
 int ksys_yield(void);
 int ksys_sleep(ksys_arg_t ms);

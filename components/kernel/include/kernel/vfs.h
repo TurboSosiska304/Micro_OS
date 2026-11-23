@@ -16,8 +16,12 @@
 #define VFS_PATH_MAX 128
 
 /*
- * The one user of the system (ADR 0005). The VFS checks the search bit of
- * the directories of a path for that uid and grants it nothing extra.
+ * The root of the system (ADR 0005). It is the uid of the boot and of the
+ * kernel itself, the only number a task may not give up once it is another
+ * user, and the only one the VFS lets through a triad it did not match. The
+ * VFS compares the three triads of the mode with the uid of the task that
+ * makes the call; a task without a record - the boot before the scheduler -
+ * is root.
  */
 #define VFS_UID 0u
 
@@ -249,6 +253,9 @@ int vfs_type_find(const char *name);
  * The point is checked before the mount function of the type runs, so a
  * point that is busy or malformed costs no volume: the caller gets the same
  * errors as vfs_mount() and the type is not called.
+ *
+ * Only root mounts a volume: a task of another uid learns KERR_PERM before
+ * a type is looked up or a medium read. The boot calls this as root.
  */
 int vfs_mount_type(const char *point, const char *type, const char *device);
 
@@ -264,6 +271,8 @@ int vfs_mount_type(const char *point, const char *type, const char *device);
  *
  * A filesystem that refuses to leave - its `umount` operation returns an
  * error, KERR_NOTSUP among them - stays mounted and its error is returned.
+ * Only root unmounts a volume; another uid learns KERR_PERM and nothing
+ * leaves the tree.
  */
 int vfs_umount(const char *point);
 
@@ -366,7 +375,15 @@ int vfs_rename(const char *from, const char *to);
 
 int vfs_statfs(const char *path, struct vfs_statfs *out);
 
-/* The mode and the owner of an object; a filesystem without them says so. */
+/*
+ * The mode and the owner of an object; a filesystem without them says so.
+ *
+ * The two calls carry the policy of the system above the filesystem: chmod
+ * is the owner of the object or root and chown is root alone. A caller that
+ * is neither learns KERR_PERM. The rule lives here and not at the edge of
+ * the system calls, because the shell and the tests reach the same objects
+ * through these functions.
+ */
 int vfs_chmod(const char *path, k_u32_t mode);
 int vfs_chown(const char *path, k_u32_t owner);
 

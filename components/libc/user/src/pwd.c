@@ -1,10 +1,12 @@
 /*
- * Micro OS — the one user and the one group of the system.
+ * Micro OS — the user and the group of the calling program.
  *
- * The kernel has uid 0 and gid 0 and no file of accounts: the records of a
- * filesystem hold a uid of fifteen bits, and every object of this machine was
- * made by the same user. A portable source still asks for a name, so a listing
- * prints `root` where a number would say nothing.
+ * The kernel keeps a uid and a gid in every task (a fork and a program keep
+ * them) and the records of a filesystem hold a uid of fifteen bits. There is
+ * still no file of accounts: a name is known only for root, and any other
+ * number is printed as the number it is. `getuid` and its siblings ask the
+ * kernel, so a program that an administrator gave another identity answers
+ * with that identity.
  *
  * The structure is the one of POSIX and the strings are static: a caller does
  * not free the answer and does not keep it across a call of this file.
@@ -14,6 +16,8 @@
 
 #include <errno.h>
 #include <unistd.h>
+
+#include "ulibc_internal.h"
 
 static char g_user_name_s[] = "root";
 static char g_user_password_s[] = "";
@@ -53,13 +57,34 @@ struct passwd *getpwuid(uid_t uid)
 }
 
 /*
- * The one user of the system. The kernel stores uid 0 in every record and
- * checks it without granting the owner of the system an exemption; a program
- * that asks who it is gets the same answer (ADR 0005).
+ * The credentials of the program, from the task that runs it. The kernel
+ * keeps one uid and not the three of POSIX, so geteuid answers what getuid
+ * answers; the two calls stay apart because a source that asks for one must
+ * not have to know that (ADR 0005).
  */
 uid_t getuid(void)
 {
-    return 0;
+    return (uid_t)__ulibc_result(__ulibc_syscall6(KSYS_GETUID, 0, 0, 0, 0, 0, 0));
+}
+
+uid_t geteuid(void)
+{
+    return (uid_t)__ulibc_result(__ulibc_syscall6(KSYS_GETEUID, 0, 0, 0, 0, 0, 0));
+}
+
+gid_t getgid(void)
+{
+    return (gid_t)__ulibc_result(__ulibc_syscall6(KSYS_GETGID, 0, 0, 0, 0, 0, 0));
+}
+
+int setuid(uid_t uid)
+{
+    return (int)__ulibc_result(__ulibc_syscall6(KSYS_SETUID, (long)uid, 0, 0, 0, 0, 0));
+}
+
+int setgid(gid_t gid)
+{
+    return (int)__ulibc_result(__ulibc_syscall6(KSYS_SETGID, (long)gid, 0, 0, 0, 0, 0));
 }
 
 struct passwd *getpwnam(const char *name)

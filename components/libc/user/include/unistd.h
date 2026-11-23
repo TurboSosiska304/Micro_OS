@@ -83,7 +83,17 @@ int dup2(int oldfd, int newfd);
 pid_t fork(void) __attribute__((returns_twice));
 pid_t getpid(void);
 pid_t getppid(void);
+/*
+ * The credentials of the program: the uid and the gid of the task, and the
+ * two calls that change them. Root may take any number; a program of another
+ * uid may only name the one it has. There is one uid, so geteuid answers what
+ * getuid answers, and the group decides no permission of a file yet.
+ */
 uid_t getuid(void);
+uid_t geteuid(void);
+gid_t getgid(void);
+int setuid(uid_t uid);
+int setgid(gid_t gid);
 int gethostname(char *name, size_t size);
 pid_t wait(int *status);
 pid_t waitpid(pid_t pid, int *status, int options);

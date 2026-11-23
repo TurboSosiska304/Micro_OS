@@ -300,7 +300,9 @@ static void test_abi_is_stable(void)
         {KSYS_CHOWN, "chown"},       {KSYS_EXECVE, "execve"},       {KSYS_STATX, "statx"},
         {KSYS_PIPE, "pipe"},         {KSYS_DUP2, "dup2"},           {KSYS_KILL, "kill"},
         {KSYS_SIGNAL, "signal"},     {KSYS_SIGRETURN, "sigreturn"}, {KSYS_GETLIMIT, "getlimit"},
-        {KSYS_SETLIMIT, "setlimit"},
+        {KSYS_SETLIMIT, "setlimit"}, {KSYS_RENAME, "rename"},       {KSYS_FTRUNCATE, "ftruncate"},
+        {KSYS_GETUID, "getuid"},     {KSYS_GETEUID, "geteuid"},     {KSYS_GETGID, "getgid"},
+        {KSYS_SETUID, "setuid"},     {KSYS_SETGID, "setgid"},
     };
     size_t i;
 
@@ -1399,9 +1401,9 @@ static void test_statx(void)
 
 /*
  * The property: the access of an open is checked against the mode of the
- * file, at the edge, before a descriptor exists. There is one user, uid 0,
- * and no bypass for it: the bits of the owner decide, and a file of the mode
- * 0200 cannot be read by anybody.
+ * file, at the edge, before a descriptor exists. The test runner is root,
+ * and root passes the read and the write triads of every object; the check
+ * of a file of another owner by a task that is not root is in `test_users`.
  */
 static void test_open_mode(void)
 {
@@ -1419,11 +1421,14 @@ static void test_open_mode(void)
         KT_CHECK_INT_EQ(ksys_close(fd), 0);
     }
 
-    /* To be read only: an open that writes is refused, and the read still
-     * works and the descriptor still refuses the write. */
+    /* Read only, and the caller is root: the write is allowed by the bypass.
+     * A descriptor opened to read still refuses the write. */
     KT_CHECK_INT_EQ(ksys_chmod("/mode.txt", 0400), 0);
-    KT_CHECK_INT_EQ(ksys_open("/mode.txt", KSYS_O_WRONLY), KERR_PERM);
-    KT_CHECK_INT_EQ(ksys_open("/mode.txt", KSYS_O_RDWR), KERR_PERM);
+    fd = ksys_open("/mode.txt", KSYS_O_WRONLY);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
 
     fd = ksys_open("/mode.txt", KSYS_O_RDONLY);
     KT_CHECK(fd >= 0);
@@ -1433,26 +1438,19 @@ static void test_open_mode(void)
         KT_CHECK_INT_EQ(ksys_close(fd), 0);
     }
 
-    /* To be written only: the open to read does not reach the descriptor.
-     * The owner is uid 0, the only user of the system, and it gets nothing
-     * extra for being the owner. */
+    /* Write only: root reads it anyway. */
     KT_CHECK_INT_EQ(ksys_chmod("/mode.txt", 0200), 0);
     KT_CHECK_INT_EQ(ksys_chown("/mode.txt", 0), 0);
-    KT_CHECK_INT_EQ(ksys_open("/mode.txt", KSYS_O_RDONLY), KERR_PERM);
-
-    fd = ksys_open("/mode.txt", KSYS_O_WRONLY);
+    fd = ksys_open("/mode.txt", KSYS_O_RDONLY);
     KT_CHECK(fd >= 0);
     if (fd >= 0) {
         KT_CHECK_INT_EQ(ksys_close(fd), 0);
     }
 
-    /* A file of another owner is answered by the triad of the others: the
-     * caller is not that owner, and there is no group of its own. */
+    /* A file of another owner is still read and written by root: the bypass
+     * covers the three triads and does not look at the owner. */
     KT_CHECK_INT_EQ(ksys_chown("/mode.txt", 7), 0);
     KT_CHECK_INT_EQ(ksys_chmod("/mode.txt", 0600), 0);
-    KT_CHECK_INT_EQ(ksys_open("/mode.txt", KSYS_O_RDONLY), KERR_PERM);
-
-    KT_CHECK_INT_EQ(ksys_chmod("/mode.txt", 0604), 0);
     fd = ksys_open("/mode.txt", KSYS_O_RDONLY);
     KT_CHECK(fd >= 0);
     if (fd >= 0) {
@@ -1515,10 +1513,12 @@ static void test_readdir_validation(void)
  * The property: a directory of the path that the caller may not search
  * through keeps its children out of reach. The check is the `x` bit of every
  * directory on the way, and the object at the end has its own check for the
- * access that is asked of it.
+ * access that is asked of it. The runner is root, which the search does not
+ * stop, so the walking caller is a task of uid 7 that owns the directory.
  */
 static void test_directory_search(void)
 {
+    struct task *self = task_self();
     struct vfs_stat info;
     char byte = 'x';
     int fd;
@@ -1538,9 +1538,15 @@ static void test_directory_search(void)
     /* A one-byte file is not a program, but the directory is asked first. */
     KT_CHECK_INT_EQ(ksys_chmod("/locked/file.txt", 0755), 0);
 
-    /* Read and write for the owner but no search: the child is out of
-     * reach for every call that has to pass the directory. */
+    /*
+     * Read and write for the owner but no search: the child is out of reach
+     * for every call that has to pass the directory. Root passes anyway, so
+     * the walk is done as the owner of the directory, uid 7.
+     */
+    KT_CHECK_INT_EQ(ksys_chown("/locked", 7), 0);
     KT_CHECK_INT_EQ(ksys_chmod("/locked", 0600), 0);
+
+    task_set_uid(self, 7);
     KT_CHECK_INT_EQ(ksys_open("/locked/file.txt", KSYS_O_RDONLY), KERR_PERM);
     KT_CHECK_INT_EQ(ksys_stat("/locked/file.txt", &info), KERR_PERM);
 #if KERNEL_EXEC
@@ -1576,6 +1582,8 @@ static void test_directory_search(void)
     KT_CHECK_INT_EQ(ksys_stat("/locked/file.txt", &info), 0);
     KT_CHECK_INT_EQ(ksys_open("/locked", KSYS_O_RDONLY | KSYS_O_DIRECTORY), KERR_PERM);
 
+    /* The test runner is root again for the teardown. */
+    task_set_uid(self, 0);
     teardown();
 }
 
