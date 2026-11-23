@@ -22,7 +22,9 @@ static const char *const s_names[K_INPUT_KEY_COUNT] = {
     "key.comma",      "key.dot",       "key.slash",     "key.capslock",   "key.shift",
     "key.ctrl",       "key.alt",       "key.f1",        "key.f2",         "key.f3",
     "key.f4",         "key.f5",        "key.f6",        "key.f7",         "key.f8",
-    "key.f9",         "key.f10",       "key.f11",       "key.f12",
+    "key.f9",         "key.f10",       "key.f11",       "key.f12",        "key.up",
+    "key.down",       "key.left",      "key.right",     "key.home",       "key.end",
+    "key.pageup",     "key.pagedown",  "key.insert",    "key.delete",
 };
 
 const char *k_input_key_name(k_u16_t code)
