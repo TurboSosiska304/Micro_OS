@@ -66,22 +66,23 @@ and runs tasks on each of them. The board is not part of this release (ADR
   stream: `/bin/file -z` looks inside a zstd frame as well as a gzip. The
   library is one implementation per name for every port: the POSIX families
   of sbase and the formatter with a point of Lua.
-- SQLite 3.54.1 (the public domain) as `/bin/sqlite3` (846 KiB, the largest
-  image of the machine) over a VFS of the port, with the scripts of `/etc` as
-  its fixtures. The library of a program took `sscanf`, `gettimeofday`,
+- SQLite 3.54.1 (the public domain) as `/bin/sqlite3` (846,080 bytes, the
+  largest image of the machine) over a VFS of the port, with the scripts of
+  `/etc` as its fixtures. The library of a program took `sscanf`, `gettimeofday`,
   `getrusage`, `usleep` and the refusals of `realpath`/`popen`/`setenv`, and
   one implementation per name stayed the rule: a call of the tree is not
   redefined by a port.
-- The seventh port, and the first interpreter with a grammar of its own: the
-  One True Awk of 2024-07-28 (the Lucent permissive license) as `/bin/awk`,
-  with the data `/etc/columns`,
-  the first script of the machine `/etc/hello.awk` and the license at
-  `/etc/licenses/awk`. The release is vendored unchanged in `third_party/awk`
-  (the parser is generated once by byacc and committed with its header and
-  `proctab.c`), and the port layer is `port/awk_port.h` and `port/awk_os.c`:
-  the C locale as bytes, the four functions of the C library the release
-  wants and the library does not have, and the honest refusal of `system` and
-  of a pipe (no shell, no second process). `make x86-smoke` runs the fields,
+- The eighth port, and the first interpreter with a grammar of its own: the
+  One True Awk of 2024-07-28 (the Lucent permissive license) as `/bin/awk`
+  (177,056 bytes), with the data `/etc/columns`, the first script of the
+  machine `/etc/hello.awk` and the license at `/etc/licenses/awk`. The
+  release is vendored unchanged in `third_party/awk` (the parser is generated
+  once by byacc and committed with its header and `proctab.c`), and the port
+  layer is `port/awk_port.h` and `port/awk_os.c`: the C locale as bytes, and
+  the calls with no other home in the tree (`system`, `random`/`srandom`, the
+  flag of `fcntl`). A command of a pipe is the `popen` of the library of a
+  program, which answers ENOSYS; `system` says on the error descriptor that
+  this machine has no shell. `make x86-smoke` runs the fields,
   the formatter, `-v`, `-f`, `getline` and the refusals; `make
   x86-disk-smoke` runs the script of `/etc` again after the reset; the host
   test `tests/cases/test_awk.c` runs the `main` of the release through

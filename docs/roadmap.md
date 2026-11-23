@@ -363,10 +363,10 @@ written when the project was an operating system for one board; the numbers
       license) as `/bin/awk`, with the data `/etc/columns`, the script
       `/etc/hello.awk` and `/etc/licenses/awk` in the image. The grammar is
       generated once by byacc and committed with its header, the port layer
-      (`third_party/awk/port/awk_port.h`, `awk_os.c`) answers the four calls
-      of the C library the release wants, and `system` and a command of a
-      pipe are an honest refusal: this machine has no shell and no second
-      process. `tests/cases/test_awk.c` runs the `main` of the release
+      (`third_party/awk/port/awk_port.h`, `awk_os.c`) answers the calls of the
+      C library the release wants and the library does not have, and
+      `system` is an honest refusal: this machine has no shell and no second
+      process, and the `popen` of a pipe is the library's `ENOSYS`. `tests/cases/test_awk.c` runs the `main` of the release
       through thirty-two cases, and the smoke tests run the interpreter in
       the image and out of the volume after a reset
 * [ ] The gaps of the next port: a `malloc` larger than the bss of an image
@@ -380,7 +380,8 @@ written when the project was an operating system for one board; the numbers
       `/bin/sqlite3` (the shell of the release) over a database of MicroFS. It
       is the first program with a `REAL`: the `FLOAT` option of the recipe
       leaves `-mgeneral-regs-only` out and the loader turns the SSE and x87
-      units on. The image is about 842 KiB, `tests/cases/test_sqlite.c` is the
+      units on. The image is 846,080 bytes (826 KiB), `tests/cases/test_sqlite.c`
+      is the
       host, and the smoke tests create, read and check a database across a
       reset of the disk
 * [ ] A `chdir` and a wall clock in the ABI, and the POSIX frame of a fork

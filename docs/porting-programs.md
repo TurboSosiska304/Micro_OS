@@ -151,8 +151,9 @@ Two more shapes are worth knowing:
   of the allocator, in pieces of `KSYS_MAX_IO` (64 KiB), before the port
   copies it to the window; the ceiling of the file is `K_EXEC_MAX_IMAGE`
   (8 MiB, the memory of the machine) and the window of the port is 16 MiB.
-  `-Os` took `zcat` from 80 KiB to 58 KiB and keeps `/bin/sqlite3` at about
-  842 KiB. A larger program needs the streaming of the image into the window,
+  `-Os` took `zcat` from 80 KiB to 58 KiB and keeps `/bin/sqlite3` at
+  846,080 bytes (826 KiB), a sixth of the ceiling. A larger program needs the
+  streaming of the image into the window,
   which is a debt.
 
 ## 3. The build
@@ -272,16 +273,19 @@ permissive one at every byte.
 
 The port layer answers two different questions:
 
-* the C library of the source: `strdup`, `strncasecmp`, `putc`, `bsearch`,
-  `random`/`srandom`, a `fcntl` that is a no-op, and the wide characters of
-  the C locale (`MB_CUR_MAX` 1, `mbtowc`/`wctomb`, `towupper`/`towlower`).
-  They live in `port/awk_os.c` and not in `components/libc/user`, because
-  only this source asks for them today; the debt row says when they move;
-* the platform: `system` and `popen` are a refusal with a sentence on the
-  error descriptor and `-1`, because the machine has no shell and no second
-  process a program can wait for. A script that reads a file with `getline <
-  "name"` and writes one with `print > "name"` works through the VFS: the
-  refusal is only the shell, and the smoke test checks both sides.
+* the C library of the source: `random`/`srandom` of POSIX, a `fcntl` that
+  is a no-op, and the wide characters of the C locale (`MB_CUR_MAX` 1,
+  `mbtowc`/`wctomb`, `towupper`/`towlower`). They live in `port/awk_os.c` and
+  not in `components/libc/user`, because only this source asks for them
+  today; the debt row says when they move. `strdup`, `strncasecmp`, `putc`,
+  `bsearch`, `popen` and `pclose` are the library of a program's files and
+  the program links them, because a name has one implementation in the tree;
+* the platform: `system` says on the error descriptor that the machine has no
+  shell and answers `-1`; `"cmd" | getline` and `print | "cmd"` reach the
+  `popen` of the library, which answers NULL with `ENOSYS`, so the call is
+  `-1` or a fatal error of the redirect. A script that reads a file with
+  `getline < "name"` and writes one with `print > "name"` works through the
+  VFS: the refusal is only the shell, and the smoke test checks both sides.
 
 `port/sys/wait.h` and `port/wctype.h` exist because the source includes
 those headers and the library of a program has neither; the path of the
