@@ -37,15 +37,18 @@
 #define EDIT_ID_QUIT 2
 #define EDIT_TAB_SPACES 4
 
-/* The colours of the editor: the black paper and the white of the console, a
- * grey frame, the cyan of a window with the keys, the dark blue of the title
- * bar and of the status line. */
-#define EDIT_PAPER 0x0000u
-#define EDIT_INK 0xFFFFu
-#define EDIT_BORDER 0x52AAu
-#define EDIT_FOCUS 0x57FFu
-#define EDIT_BAR 0x0010u
-#define EDIT_BAR_INK 0xFFFFu
+/* The colours of the editor: the roles of `ui/palette.h` and not a number of
+ * its own, so the body, the bar of the title and the line of status are the
+ * three surfaces of the desktop and the inks of the theme. `g_title_ink` is
+ * the brightest of the three and `g_status_ink` the second, which is the
+ * hierarchy of a window with one font. */
+static k_u16_t g_paper;
+static k_u16_t g_ink;
+static k_u16_t g_border;
+static k_u16_t g_focus;
+static k_u16_t g_bar;
+static k_u16_t g_title_ink;
+static k_u16_t g_status_ink;
 
 /* The text of the modal window that asks about an unsaved file. */
 static const char *const s_quit_lines[] = {
@@ -345,13 +348,13 @@ static void row_paint(int row)
     memcpy(g_shown[row], text, (size_t)g_cols + 1u);
     g_shown_cursor[row] = cursor_cell;
 
-    (void)uiprog_text(&g_screen, g_body_x, y, text, g_cols, EDIT_INK, EDIT_PAPER);
+    (void)uiprog_text(&g_screen, g_body_x, y, text, g_cols, g_ink, g_paper);
 
     /* The cursor is the cell in the two colours traded: the letter, when
      * there is one, is read in the paper of the screen. */
     if (cursor_cell >= 0) {
         (void)uiprog_text_reverse(&g_screen, g_body_x + cursor_cell * FONT8_WIDTH, y,
-                                  text + cursor_cell, 1, EDIT_INK, EDIT_PAPER);
+                                  text + cursor_cell, 1, g_ink, g_paper);
     }
 }
 
@@ -400,14 +403,14 @@ static void status_paint(void)
 
     memcpy(g_shown_status, g_status, strlen(g_status) + 1u);
 
-    (void)uiprog_fill(&g_screen, 0, g_status_y, (int)g_screen.info.width, FONT8_HEIGHT, EDIT_BAR);
+    (void)uiprog_fill(&g_screen, 0, g_status_y, (int)g_screen.info.width, FONT8_HEIGHT, g_bar);
 
     length = (int)strlen(g_status);
     if (length > g_cols) {
         length = g_cols;
     }
 
-    (void)uiprog_text(&g_screen, g_body_x, g_status_y, g_status, length, EDIT_BAR_INK, EDIT_BAR);
+    (void)uiprog_text(&g_screen, g_body_x, g_status_y, g_status, length, g_status_ink, g_bar);
 }
 
 /* The title row of the frame, alone: the frame of the whole window is filed
@@ -439,15 +442,14 @@ static void title_paint(void)
      * and the button of its panel are the same words (docs/desktop.md). */
     (void)uiprog_title(&g_screen, title);
 
-    (void)uiprog_fill(&g_screen, 0, UI_FRAME_MARGIN, (int)g_screen.info.width, FONT8_HEIGHT,
-                      EDIT_BAR);
+    (void)uiprog_fill(&g_screen, 0, UI_FRAME_MARGIN, (int)g_screen.info.width, FONT8_HEIGHT, g_bar);
 
     length = (int)strlen(title);
     if (length > g_cols) {
         length = g_cols;
     }
 
-    (void)uiprog_text(&g_screen, g_body_x, UI_FRAME_MARGIN, title, length, EDIT_BAR_INK, EDIT_BAR);
+    (void)uiprog_text(&g_screen, g_body_x, UI_FRAME_MARGIN, title, length, g_title_ink, g_bar);
 }
 
 /* The cursor is always a cell of the window: the view follows it. */
@@ -490,10 +492,10 @@ static void modal_paint(const struct ui_window *window)
     }
 
     for (line = 0; line < (int)K_ARRAY_SIZE(s_quit_lines); line++) {
-        (void)uiprog_text(
-            &g_screen, window->rect.x + UI_FRAME_PAD,
-            window->rect.y + UI_FRAME_TITLE_HEIGHT(uiprog_font()) + line * FONT8_HEIGHT,
-            s_quit_lines[line], (int)strlen(s_quit_lines[line]), EDIT_INK, EDIT_PAPER);
+        (void)uiprog_text(&g_screen, window->rect.x + UI_FRAME_PAD,
+                          window->rect.y + UI_FRAME_TITLE_HEIGHT(uiprog_font()) +
+                              line * FONT8_HEIGHT,
+                          s_quit_lines[line], (int)strlen(s_quit_lines[line]), g_ink, g_paper);
     }
 }
 
@@ -677,7 +679,7 @@ static void layout(void)
 {
     const struct ui_font *font = uiprog_font();
 
-    g_body_x = 4;
+    g_body_x = UI_FRAME_PAD;
     g_body_y = UI_FRAME_TITLE_HEIGHT(font);
     g_status_y = (int)g_screen.info.height - FONT8_HEIGHT;
     g_cols = ((int)g_screen.info.width - 2 * g_body_x) / FONT8_WIDTH;
@@ -738,12 +740,27 @@ int main(int argc, char *const argv[], char *const envp[])
     ui_keyboard_init(&g_keyboard);
     layout();
 
-    g_style.paper = EDIT_PAPER;
-    g_style.ink = EDIT_INK;
-    g_style.border = EDIT_BORDER;
-    g_style.focus_border = EDIT_FOCUS;
-    g_style.title_paper = EDIT_BAR;
-    g_style.title_ink = EDIT_BAR_INK;
+    {
+        struct ui_palette palette;
+
+        (void)uiprog_palette(&palette);
+
+        g_paper = palette.surface;
+        g_ink = palette.ink;
+        g_border = palette.border;
+        g_focus = palette.accent;
+        g_bar = palette.surface_high;
+        g_title_ink = palette.title_ink;
+        g_status_ink = palette.ink_dim;
+    }
+
+    g_style.paper = g_paper;
+    g_style.ink = g_ink;
+    g_style.border = g_border;
+    g_style.focus_border = g_focus;
+    g_style.title_paper = g_bar;
+    g_style.title_ink = g_title_ink;
+    g_style.separator = g_border;
 
     bounds.x = 0;
     bounds.y = 0;

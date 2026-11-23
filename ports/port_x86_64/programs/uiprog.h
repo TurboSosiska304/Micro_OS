@@ -33,6 +33,7 @@
 #include "kernel/types.h"
 #include "port_x86_64_font.h"
 #include "ui/draw.h"
+#include "ui/palette.h"
 #include "ui/window.h"
 #include "ui/wm_client.h"
 
@@ -91,6 +92,16 @@ int uiprog_rows(const struct uiprog *program);
 
 /* The font of the console: the glyph function of the port and its cell. */
 const struct ui_font *uiprog_font(void);
+
+/*
+ * The palette of the desktop: the roles of `ui/palette.h` filled from the
+ * `theme` of `/etc/console`, so one word of the file colours the console and
+ * the desktop of the machine alike. The answer is the name of the theme,
+ * "light" or "dark", which is what a program writes in its log; a machine
+ * without the file, or with a value this version does not know, gets the dark
+ * theme and the default of the file.
+ */
+const char *uiprog_palette(struct ui_palette *palette);
 
 /* A rectangle of one colour, and a row of text as one rectangle of the device
  * or of the window. Both cut a rectangle that is too wide for one transfer of

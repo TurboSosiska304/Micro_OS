@@ -508,6 +508,65 @@ const struct ui_font *uiprog_font(void)
     return &s_font;
 }
 
+/* Does the text of /etc/console name the light theme? The file is one
+ * `key=value` a line, so the answer is the line whose key is `theme`; the
+ * first one wins, as it does for the applier of the console. */
+static bool console_theme_is_light(const char *text)
+{
+    const char *line = text;
+
+    while (*line != '\0') {
+        const char *end = line;
+
+        while (*end != '\0' && *end != '\n') {
+            end++;
+        }
+
+        if ((size_t)(end - line) == 11u && strncmp(line, "theme=light", 11u) == 0) {
+            return true;
+        }
+
+        line = *end == '\n' ? end + 1 : end;
+    }
+
+    return false;
+}
+
+const char *uiprog_palette(struct ui_palette *palette)
+{
+    char text[128];
+    long got;
+    int descriptor;
+
+    if (palette == NULL) {
+        return "dark";
+    }
+
+    ui_palette_dark(palette);
+
+    descriptor = open("/etc/console", ULIBC_O_RDONLY);
+    if (descriptor < 0) {
+        return "dark";
+    }
+
+    got = read(descriptor, text, sizeof(text) - 1u);
+    (void)close(descriptor);
+
+    if (got <= 0) {
+        return "dark";
+    }
+
+    text[got] = '\0';
+
+    if (!console_theme_is_light(text)) {
+        return "dark";
+    }
+
+    ui_palette_light(palette);
+
+    return "light";
+}
+
 int uiprog_fill(struct uiprog *program, int x, int y, int w, int h, k_u16_t color)
 {
     return program_fill(program, x, y, w, h, color);
