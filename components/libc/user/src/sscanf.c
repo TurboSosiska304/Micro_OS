@@ -105,7 +105,10 @@ int sscanf(const char *text, const char *format, ...)
 
         if (conversion == 'c') {
             int count = (width > 0) ? width : 1;
-            char *out;
+            /* The pointer of a suppressed conversion is never taken from the
+             * arguments, and a compiler that cannot see the two uses of
+             * `suppress` reads a path where it is written. */
+            char *out = NULL;
 
             if (*in == '\0') {
                 break;
