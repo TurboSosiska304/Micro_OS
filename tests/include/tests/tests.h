@@ -24,6 +24,7 @@ void test_kmm(void);
 void test_exec(void);
 void test_fuzz(void);
 void test_mfs(void);
+void test_mfs_format(void);
 void test_mfs_persistence(void);
 void test_mfs_repair(void);
 void test_mfs_many(void);

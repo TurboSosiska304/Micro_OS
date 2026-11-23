@@ -200,6 +200,14 @@ written when the project was an operating system for one board; the numbers
       half-written create or unlink - is freed with its blocks; the check runs
       again afterwards, and the header, the data of a file and a shared
       directory stay `(not repaired)` for a person
+* [x] MicroFS 1.7 ([ADR 0038](adr/0038-a-table-of-records.md)): the `META`
+      section is the map of the free blocks and the table of the records and
+      nothing else, the table is sized by the records and grows into the data
+      section when its reserve runs out, every record of a version 3 volume
+      carries CRC32 of itself - so a write that a power cut stopped is named
+      by `fsck` and repaired - and the record holds the group of the object,
+      which `statx` answers; a volume of version 1 and 2 mounts and writes as
+      it did
 * [ ] A journal or a cache of the changes under a write
 * [x] ext2, the reader with inodes and a superblock a checker can walk
       (ADR 0019): the superblock, the group descriptors, the inode table,

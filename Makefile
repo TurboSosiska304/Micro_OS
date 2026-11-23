@@ -394,6 +394,17 @@ x86-smp-smoke: x86-smp-build x86-disk
 x86-volume-smoke: x86-build build
 	python3 tools/x86_volume_smoke.py --build $(X86_BUILD) --mkfs $(X86_MKFS)
 
+# The power cut of ADR 0038: a machine that writes a file of 16 MiB on a
+# MicroFS volume and dies in the middle of the write (the process is taken
+# away, not asked to stop - `-no-reboot` already means a reset is the end of
+# the machine), then the same image boots again and the volume is asked to
+# answer: `fsck` walks it, `fsck -y` leaves it consistent, and the file that
+# was whole before the reset comes back byte for byte. Ten checks, about five
+# seconds of the host; not a part of `make ci` because it needs the disk of
+# QEMU and the image of `make x86-build`.
+x86-mfs-smoke: x86-build build
+	python3 tools/x86_mfs_smoke.py --build $(X86_BUILD) --mkfs $(X86_MKFS)
+
 # The numbers of the machine (tools/x86_bench.py, docs/bench.md): one boot of
 # the x86-64 port, `/bin/bench` of the build in the image for the run, and a
 # table of fixed sizes - the call of the door, a fork and an exec, 4 MiB

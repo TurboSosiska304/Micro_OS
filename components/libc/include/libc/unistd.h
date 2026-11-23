@@ -22,6 +22,9 @@ struct microos_statx {
     uint64_t size;
     uint32_t mode;
     uint32_t owner;
+    /* The group of the object, zero for a volume or a filesystem without
+     * one (ADR 0038). */
+    uint32_t group;
     uint64_t mtime;
     uint64_t ctime;
 };

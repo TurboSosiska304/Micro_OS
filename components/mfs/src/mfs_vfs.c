@@ -335,6 +335,15 @@ static int vfs_statx_file(void *ctx, const char *path, struct vfs_statx *out)
     out->mode = mfs_inode_mode(&inode);
     out->owner = mfs_inode_owner(&inode);
     /*
+     * The group is a word of its own in the record of a version 3 volume
+     * (ADR 0038); a volume of version 1 or 2 has no group and the reader
+     * answers zero, the group of root. The door of the system calls that
+     * sets a group and the triad of the group in the check of the access
+     * are the work of the release that gives the groups a meaning: this is
+     * the storage and the answer of statx (docs/debts.md).
+     */
+    out->group = mfs_inode_group(&inode);
+    /*
      * The record of a version 1 volume has no room for the two moments,
      * and the reader of the filesystem answers zero: "unknown", not a
      * moment of 1970.

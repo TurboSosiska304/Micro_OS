@@ -36,6 +36,20 @@
 /* The bytes of data in a block: the first four hold the next block. */
 #define MFS_BLOCK_DATA (MFS_BLOCK_SIZE - 4)
 
+/*
+ * The records of a table that is made by mfs_format(): the number asked for
+ * and a quarter of it more, 64 records at the least. The reserve is what
+ * makes a volume usable without a growth of the table for a while, and the
+ * growth takes another MFS_TABLE_GROW_BLOCKS blocks of the data section
+ * when the reserve runs out (ADR 0038).
+ */
+#define MFS_RECORDS_RESERVE 64u
+#define MFS_RECORDS_RESERVE_DIVISOR 4u
+#define MFS_TABLE_GROW_BLOCKS 4u
+
+/* The bytes of a record of a version 3 volume that its checksum covers. */
+#define MFS_RECORD_CRC_SPAN (MFS_INODE_SIZE - sizeof(k_u32_t))
+
 /* The view of the mounted volume that the checker works with. */
 struct mfs_private {
     const struct mfs_superblock *sb;
@@ -45,8 +59,9 @@ struct mfs_private {
     k_u32_t bitmap_blocks;  /* the blocks of the bitmap in the META section */
     k_u32_t inode_blocks;   /* the blocks of the table of the inodes */
     k_u32_t inode_capacity; /* the number of the records of the table */
-    k_u32_t inode_size;     /* 16 for a version 1 volume, 32 for version 2 */
+    k_u32_t inode_size;     /* 16 for a version 1 volume, 32 for version 2, 64 for 3 */
     k_u32_t device_blocks;  /* the sectors of the device under the volume */
+    k_u32_t table_end;      /* a version 3 volume: the block after the table */
 };
 
 /*
@@ -69,19 +84,51 @@ _Static_assert(sizeof(struct mfs_inode_legacy) == MFS_INODE_SIZE_LEGACY,
  * Read a record from the table and write one back. The size of the record
  * is the one of the mounted volume, so a legacy volume is read and written
  * as the 16 bytes that it has - the bytes after a record belong to the next
- * one and must not be touched.
+ * one and must not be touched - and a version 2 volume as 32. A record of
+ * version 3 is 64 bytes and carries its own checksum, which the encoder
+ * computes and the reader verifies.
  */
 void mfs_priv_inode_decode(const k_u8_t *raw, k_u32_t inode_size, struct mfs_inode *out);
 void mfs_priv_inode_encode(const struct mfs_inode *inode, k_u32_t inode_size, k_u8_t *raw);
+
+/*
+ * Whether the record the bytes describe is the one that was written: true
+ * for a version 1 or 2 volume, which has no checksum, and the answer of the
+ * checksum for a version 3 volume (ADR 0038).
+ */
+bool mfs_priv_inode_sound(const k_u8_t *raw, k_u32_t inode_size);
+
+/*
+ * Where a record of the table lies on the medium. A version 1 and 2 volume
+ * numbers its records from the start of the table, a version 3 volume from
+ * its top: the table grows downwards and a record keeps its place.
+ */
+void mfs_priv_inode_address(const struct mfs_private *view, k_u32_t index, k_u32_t *block,
+                            k_u32_t *offset);
+
+/*
+ * The block of the medium of the n-th block of the table in the order of the
+ * walk. The block of the walk holds the records of [n * per_block,
+ * (n + 1) * per_block), so a walk of the table reads each block once.
+ */
+k_u32_t mfs_priv_table_block(const struct mfs_private *view, k_u32_t walk);
+
+/* The checksum of the header of the volume, for the check of the header. */
+k_u32_t mfs_priv_crc32(const void *data, k_size_t size);
+
+/*
+ * The checksum of a header, which depends on the version of the volume: the
+ * header of a version 1 and 2 volume has a span of MFS_HEADER_CRC_SPAN bytes,
+ * the header of a version 3 volume covers all of itself but the checksum
+ * (ADR 0038).
+ */
+k_u32_t mfs_priv_header_crc(const struct mfs_superblock *sb);
 
 /*
  * Read one block of the mounted volume. The block has to be a block of the
  * volume; MFS_EIO says that the device could not deliver it.
  */
 int mfs_priv_block_read(k_u32_t block, void *buf);
-
-/* The checksum of the header of the volume, for the check of the header. */
-k_u32_t mfs_priv_crc32(const void *data, k_size_t size);
 
 /*
  * The check itself, called by mfs_check() with the lock of the filesystem
@@ -120,4 +167,4 @@ int mfs_priv_block_alloc(k_u32_t *block);
 int mfs_priv_dir_write(const struct mfs_inode *inode, const k_u8_t *data, k_size_t size);
 int mfs_priv_sync(void);
 
-#endif /* MICRO_OS_MFS_SRC_MFS_PRIVATE_H */
+#endif

@@ -197,14 +197,15 @@ offset 8 vfs_stat size 8
 offset 8 vfs_stat mode 16
 offset 8 vfs_stat owner 20
 
-size 8 vfs_statx 40
+size 8 vfs_statx 48
 offset 8 vfs_statx inode 0
 offset 8 vfs_statx type 4
 offset 8 vfs_statx size 8
 offset 8 vfs_statx mode 16
 offset 8 vfs_statx owner 20
-offset 8 vfs_statx mtime 24
-offset 8 vfs_statx ctime 32
+offset 8 vfs_statx group 24
+offset 8 vfs_statx mtime 32
+offset 8 vfs_statx ctime 40
 
 size 8 vfs_dirent 56
 offset 8 vfs_dirent name 0
@@ -240,14 +241,15 @@ offset 4 vfs_stat size 8
 offset 4 vfs_stat mode 16
 offset 4 vfs_stat owner 20
 
-size 4 vfs_statx 40
+size 4 vfs_statx 48
 offset 4 vfs_statx inode 0
 offset 4 vfs_statx type 4
 offset 4 vfs_statx size 8
 offset 4 vfs_statx mode 16
 offset 4 vfs_statx owner 20
-offset 4 vfs_statx mtime 24
-offset 4 vfs_statx ctime 32
+offset 4 vfs_statx group 24
+offset 4 vfs_statx mtime 32
+offset 4 vfs_statx ctime 40
 
 size 4 vfs_dirent 56
 offset 4 vfs_dirent name 0
