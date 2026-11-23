@@ -574,9 +574,10 @@ on a VFS without `rename` (see [debts.md](debts.md)).
       `/dev/input0`, the window model, the canvas and the keyboard of
       `components/ui`, the arrows of the E0 prefix as keys of the machine, and
       the programs `/bin/ui`, `/bin/edit` and `/bin/fm`
-* [ ] Later: a 2D engine of the device through the contract of
-      `kernel/fb_ops.h` (virtio-gpu 2D in QEMU, the blitter of a real card);
-      UEFI GOP for a real machine, which is a loader of its own
+* [ ] Later: a 2D engine of the device through the contract of `kernel/fb_ops.h`
+      (virtio-gpu 2D in QEMU, the blitter of a real card); a mouse is there and a
+      compositor is not; the UEFI GOP of the firmware is the screen of the UEFI
+      boot (ADR 0037)
 
 The desktop of 1.7 is not a step of this list of the screen: it is a program
 of the userland. `ports/port_x86_64/src/ps2.c` reads the second port of the
@@ -656,10 +657,20 @@ contract of `kernel/fb_ops.h` - there is no such device in this release.
 * [x] `make x86-iso-smoke`: the ISO boots with `-cdrom` and nothing else,
       mounts the root image and runs `/bin/hello` from the boot and from the
       shell
-* [ ] UEFI: the EFI application, the memory map of the firmware, GOP and the
-      exit of the boot services; the framebuffer of ADR 0023 is here, so the
-      screen a GOP hands over is the next door to a physical machine, and
-      the loader for it is not written yet
+* [x] UEFI: the EFI application of the tree (`loader/uefi`, a PE/COFF image
+      built by clang and lld-link), the map of the memory of the firmware in
+      the shape the port reads, GOP as the screen of the machine (a shadow of
+      the console's RGB565 and the conversion of the cells that change,
+      `src/gop.c`), the root of the ACPI tables from the configuration table,
+      `ExitBootServices` and the page tables of the boot; `make uefi` writes
+      a FAT volume with `BOOTX64.EFI`, the kernel and `disk.img`, and
+      `make uefi-smoke` boots it under OVMF and checks the machine, the shell
+      and the picture of the card (ADR 0037,
+      [ports/x86_64/uefi.md](ports/x86_64/uefi.md))
+* [ ] The laptop of a person: a USB keyboard (xHCI and a HID keyboard), a
+      disk the kernel drives itself (AHCI, then NVMe) and a writable root,
+      the clock and the shutdown of ACPI, and the I/O APIC of a real chipset -
+      the table of `ports/x86_64/uefi.md` "What is not done" is the order
 * [ ] A hybrid image: the ISO written to a USB stick boots as a disk
       (`limine bios-install`, or a protective MBR and the GRUB record)
 * [ ] A writable root: the root of the CD is read-only, and a person's files

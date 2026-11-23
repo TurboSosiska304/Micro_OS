@@ -27,6 +27,18 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Added
 
+- The boot of a firmware machine: `ports/port_x86_64/loader/uefi`, a PE/COFF
+  application that the firmware of a laptop starts from a FAT volume, gives
+  the kernel the picture of its graphics output (a frame of 32 bits per pixel,
+  and a shadow of the console in RGB565 converted a cell at a time,
+  `src/gop.c`), the map of its memory in the shape the port reads, the root of
+  its ACPI tables and a `disk.img` read out of the same volume and mounted
+  from the memory - so the machine boots with no driver for the controller the
+  volume is on. `make uefi` writes the volume (`BOOTX64.EFI`, the kernel and
+  the disk image) and `make uefi-smoke` boots it under OVMF and checks the
+  loader, the kernel, the shell and the picture of the card (ADR 0037,
+  `docs/ports/x86_64/uefi.md`). The kernel of the BIOS path is untouched: one
+  kernel, two loaders.
 - A server of the files of the volume, `httpd serve [port] [root]`
   (ADR 0036): HTTP/1.1 with keep-alive, GET and HEAD, `Content-Length`, the
   type from the extension, `ETag` and `304`, one `Range` with `206` and
@@ -253,6 +265,23 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Fixed
 
+- The boot of a medium whose loader puts a module inside the window of the
+  programs. limine, in the EFI half of the hybrid ISO, leaves its modules right
+  after the kernel file at 23.5 MiB, so a root image of 16 MB runs from 23.5 to
+  39.5 MiB - through the 32-48 MiB the port maps onto the arena of the
+  programs. The kernel put its heap at 35.5 MiB, that is inside the window, and
+  the first program to run read the heap as a program's image: `#PF` at the
+  stack, then the storm. The heap is now placed in a piece of the memory that
+  is outside the window and the arena, and a module that a loader left inside
+  the window is copied out of it - above the arena, before the page tables of
+  the port exist - with the entry of the module table written to the new
+  address. The BIOS path had the other half of the same question: with a root
+  image of 16 MB, limine's module crosses `KERNEL_PHYS` at 16 MiB and
+  `loader32.S` refused the boot; the loader now takes the first free 2 MiB
+  block at or above 16 MiB and hands that address to the kernel in the third
+  argument of the entry, so a medium of any size boots. `make x86-iso-smoke`
+  is 14 checks on a 16 MB root image (it was red with limine on this machine),
+  and the ISO of a 16 MB root boots both ways in a hand-built hybrid image.
 - MicroFS wrote a file of 16 MiB of a 5 GiB volume at 0.11 MiB/s: the growth
   of the chain moved the cursor of the position of the descriptor, so a write
   that grew the chain to the end of the call then walked it again from the

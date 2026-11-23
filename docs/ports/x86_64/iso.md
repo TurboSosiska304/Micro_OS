@@ -92,9 +92,10 @@ UEFI, stick  the MBR -> the ESP (type 0xEF) -> BOOTX64.EFI
                     v
              loader32.elf  (multiboot 1: header, 32-bit, at 1 MiB)
                   verifies the signature of module 0, copies the kernel to
-                  16 MiB, refuses a module that lies over those bytes, builds
-                  the identity map of the first gigabyte and the kernel at the
-                  top, enters long mode
+                  the first free 2 MiB block at or above 16 MiB (the module
+                  of the medium may be in the way, and the kernel is told
+                  where the copy went), builds the identity map of the first
+                  gigabyte and the kernel at the top, enters long mode
              -> microos64.bin (module 0)
              -> root.img      (module 1)
 ```
@@ -104,12 +105,15 @@ module table from it:
 
 * `src/blockdev_module.c` registers the bytes of module 1 as `boot0`, a
   read-only block device of 4 KiB sectors;
-* `partition_scan()` reads its MBR — the root image is the image of
-  `make x86-disk` — and registers `boot0p1`;
-* `port_x86_64_root_device()` names `boot0p1` before the ATA disk and before
-  `ram0`, and `kmain` mounts it at `/`;
-* the heap of the port starts above the last byte of every module, so a block
-  of the allocator is never the bytes of the volume the boot reads.
+* `partition_scan()` reads its MBR - the root image is the image of
+  `make x86-disk` - and registers `boot0p1`;
+* `port_x86_64_root_device()` names `boot0p1` before the ATA disk and
+  before `ram0`, and `kmain` mounts it at `/`;
+* a module that a loader put inside the window of the programs (32-48 MiB) is
+  copied out of it before the page tables of the port exist, and the heap is
+  placed in the first free piece of the memory outside the window: a block of
+  the allocator is never the bytes of the volume the boot reads, and never
+  the arena a program sees through its page tables.
 
 The volume is read-only: the medium is the image of a CD or of a stick written
 from it. A write is refused by the block device and reported by the

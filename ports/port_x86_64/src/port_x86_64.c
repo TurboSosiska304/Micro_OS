@@ -1122,28 +1122,408 @@ struct mb_mmap_entry {
  */
 static const struct mb_info *g_boot_info;
 
-/* The last byte of the modules of the boot, 0 when the boot had none. The
- * loader copied the kernel out of one of them and the volume of the ISO is
- * read from another, so the heap has to start above both. */
-static k_u64_t boot_modules_end(const struct mb_info *info)
-{
-    const k_u32_t *mods;
-    k_u64_t end = 0;
-    k_u32_t i;
+/*
+ * Where the loader put the image. The BIOS loader copies the bytes to
+ * PORT_X86_64_KERNEL_PHYS and the loader of a UEFI machine asks the firmware
+ * for a block and says where it is; the page tables translate a pointer of
+ * the image with the number this variable holds
+ * (port_x86_64_kernel_phys), so it is set before the first table is built.
+ */
+k_u64_t g_port_x86_64_kernel_phys = PORT_X86_64_KERNEL_PHYS;
 
-    if (info == NULL || (info->flags & MB_FLAG_MODS) == 0 || info->mods_addr == 0) {
-        return 0;
+/* The boot of a UEFI machine, NULL on the BIOS path: the picture, the root of
+ * the ACPI tables and the address of the image (port_x86_64_boot.h). */
+static const struct port_x86_64_boot_info *g_uefi_boot;
+
+/*
+ * The memory the boot describes, and the pieces of it that are not the port's
+ * to keep anything in.
+ *
+ * A boot loader hands the kernel a map of the memory and the modules it loaded
+ * (the kernel's own bytes and the root image of a medium, ADR 0026), and the
+ * port takes two things out of it: a heap for the kernel and the bytes of a
+ * module a filesystem reads. Both have to live in the identity map of the
+ * first gigabyte (PORT_X86_64_IDENTITY_LIMIT), and neither may be in one of
+ * three places:
+ *
+ *  - the window of the programs, 32-48 MiB: every page table of the port, the
+ *    kernel's own included, maps those 16 MiB of the address space onto the
+ *    arena at 64 MiB, so a byte of the map that falls there is a byte of a
+ *    program that never ran (src/paging.c). The heap of the port has always
+ *    stopped below it, at `exec_base`; a module that a firmware loader puts
+ *    there is a module the filesystem reads out of a program's image;
+ *  - the arena itself, 64-80 MiB, where the image of the program being run is
+ *    written;
+ *  - the image of the kernel and the modules of the boot, which are somebody
+ *    else's bytes.
+ *
+ * A "hole" below is one of those ranges. The two callers - the place of the
+ * heap and the place of a module that has to move - ask for the first or the
+ * largest run of the usable memory that avoids them.
+ */
+#define MEMORY_HOLES_MAX 8u
+#define MEMORY_PAGE 4096u
+
+/* The heap of the port: never smaller than a megabyte, never larger than the
+ * 32 MiB the machine of 1.0 gave it. */
+#define HEAP_MIN_BYTES (1024u * 1024u)
+#define HEAP_MAX_BYTES (32u * 1024u * 1024u)
+
+struct memory_hole {
+    k_u64_t base;
+    k_u64_t end;
+};
+
+static struct memory_hole g_holes[MEMORY_HOLES_MAX];
+static k_u32_t g_hole_count;
+
+static void holes_reset(void)
+{
+    g_hole_count = 0;
+}
+
+static void hole_add(k_u64_t base, k_u64_t size)
+{
+    if (size == 0u || g_hole_count >= MEMORY_HOLES_MAX) {
+        return;
     }
 
-    mods = (const k_u32_t *)(uintptr_t)info->mods_addr;
+    g_holes[g_hole_count].base = base;
+    g_holes[g_hole_count].end = base + size;
+    g_hole_count++;
+}
 
-    for (i = 0; i < info->mods_count; i++) {
-        if ((k_u64_t)mods[i * 4u + 1u] > end) {
-            end = mods[i * 4u + 1u];
+/* The end of the first hole that the range [base, end) touches, or 0 when the
+ * whole range is free. */
+static k_u64_t hole_end(k_u64_t base, k_u64_t end)
+{
+    k_u32_t i;
+
+    for (i = 0; i < g_hole_count; i++) {
+        if (g_holes[i].base < end && base < g_holes[i].end) {
+            return g_holes[i].end;
         }
     }
 
-    return end;
+    return 0;
+}
+
+/* One entry of the map of the boot is memory the port may use: the format
+ * names the region as usable and it starts below 4 GiB (the port reads the
+ * 32-bit form of the entry). */
+static bool memory_usable(const struct mb_mmap_entry *entry)
+{
+    return entry->type == MB_MMAP_USABLE && entry->base_high == 0u && entry->length_low != 0u;
+}
+
+/*
+ * The largest run of [from, to) that no hole covers. The starts of the runs
+ * are `from` and the end of every hole, and the end of a run is the beginning
+ * of the next hole: with eight holes at most, a walk over those starts is the
+ * whole of the search.
+ */
+static void memory_largest_run(k_u64_t from, k_u64_t to, k_u64_t *base, k_u64_t *size)
+{
+    k_u64_t starts[MEMORY_HOLES_MAX + 1u];
+    k_u32_t count = 0;
+    k_u32_t i;
+    k_u32_t j;
+
+    *base = 0u;
+    *size = 0u;
+
+    if (to <= from) {
+        return;
+    }
+
+    starts[count++] = from;
+
+    for (i = 0; i < g_hole_count; i++) {
+        if (g_holes[i].end > from && g_holes[i].end < to) {
+            starts[count++] = g_holes[i].end;
+        }
+    }
+
+    for (i = 0; i < count; i++) {
+        k_u64_t start = starts[i];
+        k_u64_t end = to;
+
+        /* A start inside a hole is not a start: the hole's end is one, and it
+         * is in the list above. */
+        if (start >= to || hole_end(start, start + 1u) != 0u) {
+            continue;
+        }
+
+        for (j = 0; j < g_hole_count; j++) {
+            if (g_holes[j].base > start && g_holes[j].base < end) {
+                end = g_holes[j].base;
+            }
+        }
+
+        if (end > start && end - start > *size) {
+            *base = start;
+            *size = end - start;
+        }
+    }
+}
+
+/*
+ * The first block of `size` bytes at or above `from` that the map of the boot
+ * calls usable and no hole covers, inside the identity map of the kernel. Zero
+ * when the machine has no such block.
+ */
+static k_u64_t memory_first_fit(const struct mb_info *info, k_u64_t from, k_u64_t size)
+{
+    k_u64_t cursor;
+    k_u64_t limit;
+
+    if (info == NULL || (info->flags & MB_FLAG_MMAP) == 0 || info->mmap_length == 0 || size == 0u) {
+        return 0u;
+    }
+
+    cursor = info->mmap_addr;
+    limit = cursor + info->mmap_length;
+
+    while (cursor + sizeof(struct mb_mmap_entry) <= limit) {
+        const struct mb_mmap_entry *entry = (const struct mb_mmap_entry *)(uintptr_t)cursor;
+        k_u64_t base = entry->base_low;
+        k_u64_t bytes = entry->length_low;
+        k_u64_t start;
+        k_u64_t end;
+        k_u32_t attempt;
+
+        cursor += entry->size + sizeof(entry->size);
+
+        if (!memory_usable(entry)) {
+            continue;
+        }
+
+        end = base + bytes;
+
+        if (end > PORT_X86_64_IDENTITY_LIMIT) {
+            end = PORT_X86_64_IDENTITY_LIMIT;
+        }
+
+        start = base > from ? base : from;
+        start = (start + MEMORY_PAGE - 1u) & ~(k_u64_t)(MEMORY_PAGE - 1u);
+
+        for (attempt = 0; attempt <= MEMORY_HOLES_MAX && start + size <= end; attempt++) {
+            k_u64_t taken = hole_end(start, start + size);
+
+            if (taken == 0u) {
+                return start;
+            }
+
+            start = (taken + MEMORY_PAGE - 1u) & ~(k_u64_t)(MEMORY_PAGE - 1u);
+        }
+    }
+
+    return 0u;
+}
+
+/*
+ * The modules of the boot, out of the window of the programs.
+ *
+ * A boot loader of a medium that is not this tree's (limine, the EFI half of
+ * the hybrid ISO) puts a module where its own allocator of the memory wants
+ * it, and one of those places is 23.5 MiB: the 16 MB of the root image then
+ * run from 23.5 to 39.5 MiB, through the window of the programs. The loader of
+ * this port (loader32.S and loader/uefi) puts its modules below 20 MiB and
+ * never has the problem, which is why the port could ignore the question for
+ * as long as it did.
+ *
+ * The module is copied whole, before port_x86_64_paging_init() replaces the map
+ * of the loader (that map still identity-maps the memory here, so both halves
+ * of a module that straddles the window read as themselves), to the first free
+ * block above the arena, and the entry of the multiboot information is written
+ * with the new address: the filesystem, the heap and every reader of the module
+ * then see one address, it is a physical one, and it is in the identity map.
+ *
+ * Module 0 - the kernel - is not moved: the loader copied it to its own bytes
+ * (loader32.S) before this code ran, and nothing reads that copy again, so its
+ * bytes are not even a hole of the memory.
+ */
+static void modules_relocate(const struct mb_info *info)
+{
+    const k_u64_t window_base = (k_u64_t)(uintptr_t)k_port_exec_base();
+    const k_u64_t window_end = window_base + PORT_X86_64_USER_ARENA;
+    const k_u64_t arena_base = PORT_X86_64_USER_PHYS;
+    const k_u64_t arena_end = arena_base + PORT_X86_64_USER_ARENA;
+    k_u32_t *mods;
+    k_u32_t index;
+
+    if (info == NULL || (info->flags & MB_FLAG_MODS) == 0 || info->mods_addr == 0) {
+        return;
+    }
+
+    mods = (k_u32_t *)(uintptr_t)info->mods_addr;
+
+    for (index = 1; index < info->mods_count; index++) {
+        k_u32_t *entry = mods + (k_size_t)index * 4u;
+        k_u64_t start = entry[0];
+        k_u64_t end = entry[1];
+        k_u64_t size;
+        k_u64_t target;
+
+        if (end <= start) {
+            continue;
+        }
+
+        size = end - start;
+
+        if (!(start < window_end && window_base < end) &&
+            !(start < arena_end && arena_base < end)) {
+            /* The module is where the port may keep it: it is a hole for the
+             * heap and it stays there. */
+            hole_add(start, size);
+            continue;
+        }
+
+        target = memory_first_fit(info, arena_end, size);
+
+        if (target == 0u) {
+            kwarn("x86-64: the module %u lies in the window of the programs and has nowhere to go",
+                  (unsigned)index);
+            hole_add(start, size);
+            continue;
+        }
+
+        memcpy((void *)(uintptr_t)target, (const void *)(uintptr_t)start, (k_size_t)size);
+        hole_add(target, size);
+
+        entry[0] = (k_u32_t)target;
+        entry[1] = (k_u32_t)(target + size);
+
+        kinfo("x86-64: the module %u (%u KB) was in the window of the programs, moved to 0x%x",
+              (unsigned)index, (unsigned)(size / 1024u), (unsigned)target);
+    }
+}
+
+/* The holes of the memory and the modules out of them, once, before the heap
+ * and before the page tables of the port: both of them are asked here. */
+static void memory_bring_up(const struct mb_info *info)
+{
+    const k_u64_t window_base = (k_u64_t)(uintptr_t)k_port_exec_base();
+    const k_u64_t kernel_end = port_x86_64_kernel_phys(__kernel_end);
+
+    holes_reset();
+
+    /* The image of the kernel, and then the modules: a module that has to move
+     * must not be moved onto the kernel or onto another module. */
+    hole_add(g_port_x86_64_kernel_phys, kernel_end - g_port_x86_64_kernel_phys);
+    modules_relocate(info);
+
+    hole_add(window_base, PORT_X86_64_USER_ARENA);
+    hole_add(PORT_X86_64_USER_PHYS, PORT_X86_64_USER_ARENA);
+}
+
+/* The largest run of the memory of the boot inside [from, to) that no hole
+ * covers: the pieces of every usable entry of the map, and the largest of them
+ * all. */
+static void heap_take(const struct mb_info *info, k_u64_t from, k_u64_t to, k_u64_t *base,
+                      k_u64_t *size)
+{
+    k_u64_t cursor;
+    k_u64_t limit;
+
+    *base = 0u;
+    *size = 0u;
+
+    cursor = info->mmap_addr;
+    limit = cursor + info->mmap_length;
+
+    while (cursor + sizeof(struct mb_mmap_entry) <= limit) {
+        const struct mb_mmap_entry *entry = (const struct mb_mmap_entry *)(uintptr_t)cursor;
+        k_u64_t start = entry->base_low;
+        k_u64_t end = start + entry->length_low;
+        k_u64_t piece_base;
+        k_u64_t piece_size;
+
+        cursor += entry->size + sizeof(entry->size);
+
+        if (!memory_usable(entry)) {
+            continue;
+        }
+
+        if (start < from) {
+            start = from;
+        }
+
+        if (end > to) {
+            end = to;
+        }
+
+        if (end > PORT_X86_64_IDENTITY_LIMIT) {
+            end = PORT_X86_64_IDENTITY_LIMIT;
+        }
+
+        memory_largest_run(start, end, &piece_base, &piece_size);
+
+        if (piece_size > *size) {
+            *base = piece_base;
+            *size = piece_size;
+        }
+    }
+}
+
+/*
+ * The heap of the port: the biggest piece of the memory that is the kernel's,
+ * in three places in the order of their preference.
+ *
+ *  1. below the window of the programs, between the image of the kernel and
+ *     32 MiB. Every boot of this port until the hybrid ISO had its heap here
+ *     (16.6-32 MiB with the modules of the loader of the port);
+ *  2. the 16 MiB between the window and the arena, 48-64 MiB, for a boot whose
+ *     modules left nothing below the window;
+ *  3. above the arena, below the map of the kernel, which is the memory of a
+ *     machine whose every megabyte below 64 MiB is taken.
+ *
+ * The heap of a machine is a megabyte at the least and 32 MiB at the most, and
+ * a machine that has neither piece has no heap: the boot says so and the kernel
+ * runs on its own bytes.
+ */
+static void heap_init(const struct mb_info *info)
+{
+    const k_u64_t window_base = (k_u64_t)(uintptr_t)k_port_exec_base();
+    const k_u64_t window_end = window_base + PORT_X86_64_USER_ARENA;
+    const k_u64_t arena_base = PORT_X86_64_USER_PHYS;
+    const k_u64_t arena_end = arena_base + PORT_X86_64_USER_ARENA;
+    k_u64_t kernel_end = port_x86_64_kernel_phys(__kernel_end);
+    k_u64_t base = 0u;
+    k_u64_t size = 0u;
+
+    if (info == NULL || (info->flags & MB_FLAG_MMAP) == 0 || info->mmap_length == 0) {
+        return;
+    }
+
+    heap_take(info, kernel_end, window_base, &base, &size);
+
+    if (size < HEAP_MIN_BYTES) {
+        heap_take(info, window_end, arena_base, &base, &size);
+    }
+
+    if (size < HEAP_MIN_BYTES) {
+        heap_take(info, arena_end, PORT_X86_64_IDENTITY_LIMIT, &base, &size);
+    }
+
+    if (size > HEAP_MAX_BYTES) {
+        size = HEAP_MAX_BYTES;
+    }
+
+    if (size < HEAP_MIN_BYTES) {
+        kwarn("x86-64: the memory of the boot has no megabyte for the heap of the kernel");
+        return;
+    }
+
+    base = (base + BLOCK_ALIGN - 1) & ~(k_u64_t)(BLOCK_ALIGN - 1);
+
+    g_first = (struct block *)(uintptr_t)base;
+    g_first->size = size - sizeof(struct block);
+    g_first->next = NULL;
+    g_first->free = true;
+
+    g_heap_total = (k_size_t)g_first->size;
+    g_heap_free = g_heap_total;
 }
 
 bool port_x86_64_boot_module(k_u32_t index, k_u64_t *start, k_u64_t *size)
@@ -1171,106 +1551,6 @@ bool port_x86_64_boot_module(k_u32_t index, k_u64_t *start, k_u64_t *size)
     }
 
     return true;
-}
-
-static void heap_init(k_u64_t multiboot_info)
-{
-    const struct mb_info *info = (const struct mb_info *)(uintptr_t)multiboot_info;
-    k_u64_t best_base = 0;
-    k_u64_t best_size = 0;
-    /*
-     * The map of the boot describes physical memory, and the heap is the low
-     * identity map: a block handed out by k_port_alloc() is an address the
-     * card drivers may hand to a device as it stands (src/virtio_net.c). The
-     * kernel image is linked at the top, so its end has to come back to the
-     * physical number before it can bound a region of the map.
-     */
-    k_u64_t kernel_end = port_x86_64_kernel_phys(__kernel_end);
-    k_u64_t cursor;
-    k_u64_t limit;
-
-    if (info == NULL || (info->flags & MB_FLAG_MMAP) == 0 || info->mmap_length == 0) {
-        return;
-    }
-
-    cursor = info->mmap_addr;
-    limit = cursor + info->mmap_length;
-
-    while (cursor + sizeof(struct mb_mmap_entry) <= limit) {
-        const struct mb_mmap_entry *entry = (const struct mb_mmap_entry *)(uintptr_t)cursor;
-        k_u64_t base = entry->base_low | ((k_u64_t)entry->base_high << 32);
-        k_u64_t length = entry->length_low | ((k_u64_t)entry->length_high << 32);
-
-        if (entry->type == MB_MMAP_USABLE && entry->base_high == 0 && length > 0) {
-            if (base + length > kernel_end && length > best_size) {
-                best_base = base;
-                best_size = length;
-            }
-        }
-
-        cursor += entry->size + sizeof(entry->size);
-    }
-
-    if (best_size == 0) {
-        return;
-    }
-
-    /* The kernel sits inside the region: the heap starts after it, and the
-     * region is cut to a sane size (the machine may have gigabytes, the
-     * kernel needs megabytes). */
-    if (best_base < kernel_end) {
-        best_size -= kernel_end - best_base;
-        best_base = kernel_end;
-    }
-
-    best_base = (best_base + BLOCK_ALIGN - 1) & ~(k_u64_t)(BLOCK_ALIGN - 1);
-
-    /*
-     * The modules of the boot are memory as well. A loader that hands the
-     * kernel a volume (the root image of the ISO, ADR 0026) leaves it in the
-     * usable region of the map, and a block of the allocator over those bytes
-     * would turn the filesystem of the boot into a heap that is written and
-     * read at once. The heap starts above the last byte of every module; a
-     * module below the region changes nothing.
-     */
-    {
-        k_u64_t modules_end = boot_modules_end(info);
-
-        if (modules_end > best_base && modules_end < best_base + best_size) {
-            best_size -= modules_end - best_base;
-            best_base = modules_end;
-        }
-    }
-
-    /*
-     * The window of the programs (k_port_exec_base, see port_exec.c) is not
-     * the memory of the kernel. The heap stops below it, or a loaded image
-     * would land on the blocks of the allocator and neither side would see
-     * the damage until much later.
-     */
-    {
-        k_u64_t exec_base = (k_u64_t)(uintptr_t)k_port_exec_base();
-
-        if (exec_base > best_base && best_base + best_size > exec_base) {
-            best_size = exec_base - best_base;
-        }
-    }
-
-    if (best_size > 32u * 1024u * 1024u) {
-        best_size = 32u * 1024u * 1024u;
-    }
-
-    if (best_size < 1024u * 1024u) {
-        return;
-    }
-
-    g_first = (struct block *)(uintptr_t)best_base;
-    g_first->size = best_size - sizeof(struct block);
-    g_first->next = NULL;
-    g_first->free = true;
-
-    g_heap_total = (k_size_t)g_first->size;
-    g_heap_free = g_heap_total;
 }
 
 void *k_port_alloc(k_size_t size, bool psram)
@@ -1812,9 +2092,44 @@ static int software_clock_set(k_u64_t unix_seconds)
     return 0;
 }
 
-void port_x86_64_init(k_u64_t multiboot_info)
+void port_x86_64_init(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys)
 {
-    const struct mb_info *info = (const struct mb_info *)(uintptr_t)multiboot_info;
+    const struct mb_info *info;
+
+    /*
+     * Where the loader put the image, before anything translates an address
+     * of the kernel: the bytes of the image are at the top of the address
+     * space and at this number of the memory, and both are needed for a page
+     * table entry as soon as the first one is built. Zero means the loader
+     * did not say and the address of the header is the one.
+     */
+    if (kernel_phys >= 0x100000ull) {
+        g_port_x86_64_kernel_phys = kernel_phys;
+    }
+
+    /*
+     * The two boots of the port are told apart by the second number the entry
+     * was given: the loader of the BIOS path leaves it zero and hands the
+     * multiboot information, and the loader of a UEFI machine puts the magic
+     * of the structure of port_x86_64_boot.h there. The multiboot information
+     * travels inside that structure, so the heap, the modules and the map of
+     * the memory are read by the same code on both machines.
+     */
+    if (boot_magic == PORT_X86_64_BOOT_MAGIC && boot_info != 0u) {
+        g_uefi_boot = (const struct port_x86_64_boot_info *)(uintptr_t)boot_info;
+
+        if (g_uefi_boot->version != PORT_X86_64_BOOT_VERSION) {
+            /* A structure of a loader of another release: the port reads the
+             * part of it the two versions share and says so. */
+            kerror("x86-64: the boot is version %u of the hand-off, the port reads %u",
+                   (unsigned)g_uefi_boot->version, (unsigned)PORT_X86_64_BOOT_VERSION);
+        }
+
+        info = (const struct mb_info *)(uintptr_t)g_uefi_boot->mb_info;
+    } else {
+        g_uefi_boot = NULL;
+        info = (const struct mb_info *)(uintptr_t)boot_info;
+    }
 
     /* The questions of the drivers about the modules of the boot are asked
      * later; the structure itself stays where the loader left it. */
@@ -1832,7 +2147,15 @@ void port_x86_64_init(k_u64_t multiboot_info)
     clock_measure();
     k_clock_register(software_clock_set);
     port_x86_64_cpus_init();
-    heap_init(multiboot_info);
+    /*
+     * The memory of the machine, before the page tables of the port: a module
+     * that a loader of the medium put inside the window of the programs is
+     * copied out of it while the identity map of the loader still names every
+     * byte of it, and the heap of the kernel is placed after the modules and
+     * out of the window.
+     */
+    memory_bring_up(info);
+    heap_init(info);
     port_x86_64_paging_init();
 
     /*
@@ -1854,7 +2177,11 @@ void port_x86_64_init(k_u64_t multiboot_info)
 
     g_info.cpu_hz = g_tsc_per_second;
     g_info.usable_bytes = 0;
-    g_info.boot_version = info != NULL ? 1u : 0u;
+    /* 1 is the multiboot 1 information of the BIOS path, and 2 says that the
+     * numbers of the boot came from the firmware through the hand-off of a
+     * UEFI machine (the `boot_version` of the contract is what a reader of
+     * this port's log calls "the version of the boot"). */
+    g_info.boot_version = info != NULL ? (g_uefi_boot != NULL ? 2u : 1u) : 0u;
     g_info.cpu_available = port_x86_64_cpu_available();
     g_info.cpu_started = port_x86_64_cpu_started();
     g_info.apic_base = port_x86_64_apic_base();
@@ -1915,6 +2242,16 @@ void port_x86_64_init(k_u64_t multiboot_info)
 const struct port_x86_64_info *port_x86_64_info(void)
 {
     return &g_info;
+}
+
+const struct port_x86_64_boot_info *port_x86_64_boot(void)
+{
+    return g_uefi_boot;
+}
+
+const char *port_x86_64_boot_name(void)
+{
+    return g_uefi_boot != NULL ? "uefi" : "multiboot";
 }
 
 void port_x86_64_panic(const char *text)

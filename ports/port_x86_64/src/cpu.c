@@ -236,8 +236,28 @@ static const struct acpi_rsdp *rsdp_find_in(k_u64_t from, k_u64_t to)
 
 static const struct acpi_rsdp *rsdp_find(void)
 {
+    const struct port_x86_64_boot_info *boot = port_x86_64_boot();
     const struct acpi_rsdp *rsdp;
     k_u16_t ebda;
+
+    /*
+     * A machine of UEFI is told where the tables are: the root pointer of
+     * ACPI 2.0 comes from the configuration table of the firmware, and the
+     * extended BIOS area it is searched in on a machine of a BIOS is memory
+     * the firmware of UEFI does not keep it in. The pointer is the one the
+     * loader read (loader/uefi), and a machine without one falls through to
+     * the search, which is the whole of the BIOS path.
+     */
+    if (boot != NULL && boot->rsdp != 0u) {
+        rsdp = (const struct acpi_rsdp *)(uintptr_t)boot->rsdp;
+
+        if (memcmp(rsdp->signature, ACPI_RSDP_SIGNATURE, 8) == 0 &&
+            acpi_checksum(rsdp, ACPI_RSDP_MIN_LENGTH) == 0) {
+            return rsdp;
+        }
+
+        kwarn("acpi: the root pointer of the boot is not one (the checksum does not say so)");
+    }
 
     /* The extended BIOS area first: that is where a machine of this size
      * keeps the tables, and the scan of a kilobyte is the rule. */

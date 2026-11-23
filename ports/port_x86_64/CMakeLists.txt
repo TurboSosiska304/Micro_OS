@@ -1433,6 +1433,7 @@ add_executable(microos64
     src/console.c
     src/vga.c
     src/vbe.c
+    src/gop.c
     src/fb.c
     src/font_spleen.c
     src/pci.c
@@ -1709,6 +1710,78 @@ add_custom_command(
     COMMENT "signing the flat image of the kernel"
     VERBATIM
 )
+
+# --- the loader of a UEFI machine -------------------------------------------
+#
+# The firmware of a laptop reads one format: a PE/COFF application, the
+# subsystem 10 of the specification, entered with the convention of the x86-64
+# Windows ABI. The build writes it with the compiler of the host, because that
+# compiler knows the target: clang has the triple of the Windows machine and
+# lld-link lays the sections and the header out (loader/uefi). GNU ld has an
+# emulation for PE as well and writes a header a firmware does not read, which
+# is why the two tools are asked for by name and the target says what is
+# missing instead of building an image that does not boot.
+#
+# The loader links nothing: no libc, no header of a system, and the twenty
+# kilobytes of its own runtime (loader/uefi/uefi_loader.c).
+find_program(MICROOS_UEFI_CC NAMES clang)
+find_program(MICROOS_UEFI_LD NAMES lld-link)
+
+set(UEFI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/loader/uefi")
+
+set(UEFI_CFLAGS
+    -target x86_64-pc-windows-msvc
+    -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-red-zone
+    -mno-sse -mno-mmx -mno-80387
+    -Wall -Wextra -Werror
+    -I "${UEFI_DIR}" -I "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+
+set(UEFI_OBJECTS "${CMAKE_BINARY_DIR}/uefi_loader.obj" "${CMAKE_BINARY_DIR}/uefi_enter.obj")
+
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/uefi_loader.obj"
+    COMMAND ${MICROOS_UEFI_CC} ${UEFI_CFLAGS} -c "${UEFI_DIR}/uefi_loader.c"
+            -o "${CMAKE_BINARY_DIR}/uefi_loader.obj"
+    DEPENDS "${UEFI_DIR}/uefi_loader.c" "${UEFI_DIR}/efi.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/include/port_x86_64_boot.h"
+    COMMENT "compiling the loader of a UEFI machine"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/uefi_enter.obj"
+    COMMAND ${MICROOS_UEFI_CC} -target x86_64-pc-windows-msvc -mno-red-zone -c
+            "${UEFI_DIR}/uefi_enter.S" -o "${CMAKE_BINARY_DIR}/uefi_enter.obj"
+    DEPENDS "${UEFI_DIR}/uefi_enter.S"
+    COMMENT "assembling the jump of the UEFI loader"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/BOOTX64.EFI"
+    COMMAND ${MICROOS_UEFI_LD}
+            /subsystem:efi_application /entry:efi_main /nodefaultlib
+            /machine:x64 /base:0x10000000 /debug:none
+            /out:${CMAKE_BINARY_DIR}/BOOTX64.EFI ${UEFI_OBJECTS}
+    DEPENDS ${UEFI_OBJECTS}
+    COMMENT "linking BOOTX64.EFI"
+    VERBATIM
+)
+
+# The two loaders of the port: the multiboot image of the BIOS path and the
+# application of a firmware. `make uefi` builds the second and the ESP that
+# carries it; `make x86-build` the first.
+if(MICROOS_UEFI_CC AND MICROOS_UEFI_LD)
+    add_custom_target(uefi DEPENDS "${CMAKE_BINARY_DIR}/BOOTX64.EFI"
+        COMMENT "the loader of a UEFI machine")
+else()
+    add_custom_target(uefi
+        COMMAND ${CMAKE_COMMAND} -E echo
+                "uefi: clang and lld-link are needed for BOOTX64.EFI (Arch: pacman -S clang lld)"
+        COMMAND ${CMAKE_COMMAND} -E false
+        COMMENT "the loader of a UEFI machine")
+endif()
 
 add_custom_target(image
     DEPENDS "${CMAKE_BINARY_DIR}/microos64.bin" "${CMAKE_BINARY_DIR}/loader32.elf"

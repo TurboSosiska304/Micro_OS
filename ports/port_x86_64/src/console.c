@@ -186,20 +186,26 @@ void port_x86_64_console_init(void)
     port_x86_64_screen_text.clear(PORT_X86_64_ATTR(CONSOLE_BOOT_FG, CONSOLE_BOOT_BG));
 
     /*
-     * The framebuffer next: the interface of the card is programmed, its
-     * window is mapped into the top 2 GiB (ADR 0007) and the renderer of the
-     * kernel is registered over it. A machine whose interface did not answer
-     * keeps the text mode the firmware left. The one failure between the two
-     * - the mode was set and the window did not map - keeps the text screen
-     * as well, although the card is already in a graphics mode and the cells
-     * of 0xB8000 are then drawn nowhere; the log names it and COM1 still
-     * carries the dialogue (debts.md, K11).
+     * The screen of the machine, in the order of the three it can have:
+     *
+     *  - the picture a firmware of UEFI programmed and the loader handed over
+     *    (src/gop.c). The frame is 32 bits per pixel on almost every real
+     *    machine, so the console draws on a shadow in its own 565 and the
+     *    cells that change are converted into the frame (the format of the
+     *    picture is a number of the port, port_x86_64_boot.h);
+     *  - the framebuffer of the VGA of QEMU, programmed through the Bochs VBE
+     *    interface (ADR 0023, src/vbe.c);
+     *  - the text mode the firmware left, which is the screen of a machine
+     *    with neither.
+     *
+     * The three are one `struct port_x86_64_screen`: the console counts cells
+     * and does not know which one it writes on.
      */
-    s_screen = NULL;
+    s_screen = port_x86_64_gop_screen();
 
-    if (port_x86_64_vbe_mode(&mode)) {
-        k_u64_t offset = (k_u64_t)mode.phys & CONSOLE_PAGE_MASK;
-        k_u64_t window = (k_u64_t)mode.phys - offset;
+    if (s_screen == NULL && port_x86_64_vbe_mode(&mode)) {
+        k_u64_t offset = mode.phys & CONSOLE_PAGE_MASK;
+        k_u64_t window = mode.phys - offset;
 
         if (port_x86_64_paging_map_device(PORT_X86_64_SCREEN_VIRT, window,
                                           (k_size_t)mode.bytes + (k_size_t)offset) > 0) {
