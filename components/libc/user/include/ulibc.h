@@ -78,6 +78,13 @@ long read(int fd, void *buf, size_t count);
 long write(int fd, const void *buf, size_t count);
 long lseek(int fd, long offset, int whence);
 /*
+ * Cut an open file to `size` bytes, the `ftruncate` of POSIX: 0 when the
+ * file has the size and -1 with `errno` when it does not. The descriptor has
+ * to be open for writing; a filesystem that cannot cut (FAT, procfs, devfs)
+ * answers ENOTSUP. The position of the descriptor does not move.
+ */
+int ftruncate(int fd, long long size);
+/*
  * The next entries of a directory opened with ULIBC_O_DIRECTORY. `count` is a
  * number of bytes, not of entries, and has to be a whole number of them; the
  * answer is the number of bytes written or a negative error. The end of the

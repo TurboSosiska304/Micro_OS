@@ -22,9 +22,10 @@
 /*
  * The descriptions of the system. The table is fixed, like the table of
  * the tasks: an open file is a small record and a board does not want a
- * heap that fragments for it. A system of four descriptors per task and
- * twenty-four descriptions serves the shell, its commands and a chain of
- * a few pipes at once.
+ * heap that fragments for it. Twenty-four descriptions hold the sixteen
+ * files of a task that asks for its whole table, the four ends of a
+ * three-stage pipeline of the shell, and the copies a fork adds without a
+ * new record.
  */
 #define KFILE_MAX 24
 

@@ -283,7 +283,7 @@ and the descriptors it opens - and the calls `getlimit` (32) and `setlimit`
 (33) read and lower them. The limits are fields of `struct task`, so a fork
 inherits them and the scheduler does not have a second table to keep in step.
 They start at the ceiling of the machine (2 MiB of PSRAM, about 49 days of
-CPU, four descriptors) and only go down: with one user, uid 0, there is
+CPU, sixteen descriptors) and only go down: with one user, uid 0, there is
 nobody to grant a raise, and the rule of no root bypass applies here too.
 
 The memory is counted by the allocator: `kmm` asks `task_memory_fits()` before

@@ -262,6 +262,46 @@ static int ext2_vfs_write(void *ctx, struct vfs_file *file, const void *buf, k_s
     return (rc != 0) ? rc : (int)got;
 }
 
+static int ext2_vfs_truncate_file(void *ctx, struct vfs_file *file, k_u64_t size)
+{
+    struct ext2_volume *vol = (struct ext2_volume *)ctx;
+    struct ext2_inode inode;
+    int rc;
+
+    if (vol == NULL || file == NULL || !vol->mounted) {
+        return KERR_INVAL;
+    }
+
+    if ((file->flags & (VFS_O_WRONLY | VFS_O_RDWR)) == 0) {
+        return KERR_BADF;
+    }
+
+    /* A file cannot be larger than the volume that holds it. The growth of
+     * ext2 is a hole, so without this check a number nobody can write would
+     * still become the size of the inode. */
+    if (size > (k_u64_t)vol->blocks_count * (k_u64_t)vol->block_size) {
+        return KERR_NOSPC;
+    }
+
+    rc = volume_lock(vol);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = ext2_read_inode(vol, file->inode, &inode);
+    if (rc == 0) {
+        rc = ext2_truncate_inode(vol, &inode, size);
+    }
+
+    if (rc == 0) {
+        file->size = size;
+    }
+
+    k_mutex_unlock(&vol->lock);
+
+    return rc;
+}
+
 static int ext2_vfs_statfs(void *ctx, struct vfs_statfs *out)
 {
     struct ext2_volume *vol = (struct ext2_volume *)ctx;
@@ -621,6 +661,7 @@ static const struct vfs_operations g_ext2_operations = {
     .open = ext2_vfs_open,
     .read = ext2_vfs_read,
     .write = ext2_vfs_write,
+    .truncate = ext2_vfs_truncate_file,
     .close = ext2_vfs_close,
     .list = ext2_vfs_list,
     .readdir = ext2_vfs_readdir,

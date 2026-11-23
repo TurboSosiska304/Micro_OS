@@ -41,8 +41,14 @@ typedef enum {
 
 typedef void (*task_entry_fn)(void *arg);
 
-/* The maximum number of the open files of a task. */
-#define TASK_MAX_FDS 4
+/*
+ * The maximum number of the open files of a task. Sixteen slots hold the
+ * journal and the tables of a program like SQLite, the stages of a pipeline
+ * with their redirects, and the files `xargs` keeps open at once, while the
+ * memory of the board still allows the table: a slot is one pointer, so the
+ * array costs 48 bytes per task on the board and 96 on a 64-bit machine.
+ */
+#define TASK_MAX_FDS 16
 
 /*
  * The ceiling of the resources of a task. A limit of a fresh task is its

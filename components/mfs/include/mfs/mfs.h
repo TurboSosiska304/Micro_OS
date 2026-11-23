@@ -386,6 +386,14 @@ int mfs_open(const char *path, int flags, struct mfs_file *out);
 int mfs_readdir(struct mfs_file *file, struct mfs_dirent *out, k_size_t max, k_size_t *count);
 int mfs_read(struct mfs_file *file, void *buf, k_size_t size);
 int mfs_write(struct mfs_file *file, const void *buf, k_size_t size);
+/*
+ * Cut an open file to `size` bytes, the `ftruncate` of POSIX: the blocks of
+ * the tail go back to the map, a larger size is filled with zeros, and the
+ * position of the descriptor does not move. The descriptor has to be open
+ * for writing; the size is a 32-bit number of the format, so a wider one is
+ * MFS_E2BIG and a size the free blocks cannot hold is MFS_ENOSPC.
+ */
+int mfs_truncate(struct mfs_file *file, k_u64_t size);
 int mfs_close(struct mfs_file *file);
 int mfs_unlink(const char *path);
 /*

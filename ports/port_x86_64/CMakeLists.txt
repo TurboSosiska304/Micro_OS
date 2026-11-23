@@ -850,6 +850,16 @@ add_libc_program(streams
     DEFINES ULIBC_HEAP_SIZE=65536u
 )
 
+# The test of `ftruncate`: the machine cuts a file of the volume the boot
+# mounted, and the smoke test reads the shorter bytes back. It is a program
+# and not a command of the shell, because no command of the shell cuts a
+# file and the call belongs to the ABI of the programs.
+add_libc_program(truncate
+    MAIN "${PROGRAM_DIR}/truncate.c"
+    SOURCES ${SBASE_LIBC_SOURCES}
+    DEFINES ULIBC_HEAP_SIZE=65536u
+)
+
 function(add_sbase_program tool heap)
     add_libc_program(${tool}
         MAIN "${SBASE_DIR}/${tool}.c"

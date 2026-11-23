@@ -300,6 +300,7 @@ static const struct vfs_operations g_operations = {
     .open = devfs_open,
     .read = devfs_read,
     .write = devfs_write,
+    .truncate = NULL, /* a device is not a file that can be cut */
     .close = NULL,
     .list = devfs_list,
     .readdir = devfs_readdir,

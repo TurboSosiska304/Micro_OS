@@ -577,11 +577,11 @@ plan to pretend otherwise.
   `K_EXEC_MAX_IMAGE` (8 MiB); a larger file is `E2BIG` before a byte of it is
   read, and the machine holds two copies of the image for the time of the
   load ([debts.md](../debts.md)).
-* **No descriptor 0 at the prompt.** A program is a task with a table of four
-  descriptors of its own, and `execve` carries the table of the caller: a
-  redirection or a pipe is what fills descriptor 0, and a program started at
-  the prompt with no redirection reads `EBADF` from it. The descriptors 1 and
-  2 are the console.
+* **No descriptor 0 at the prompt.** A program is a task with a table of
+  sixteen descriptors of its own, and `execve` carries the table of the
+  caller: a redirection or a pipe is what fills descriptor 0, and a program
+  started at the prompt with no redirection reads `EBADF` from it. The
+  descriptors 1 and 2 are the console.
 * **No `mmap` and no `brk`.** A program cannot ask for a range of its own, so
   the allocator is the arena of its bss and a library that allocates more
   than `ULIBC_HEAP_SIZE` needs a larger program or the ranges the kernel does

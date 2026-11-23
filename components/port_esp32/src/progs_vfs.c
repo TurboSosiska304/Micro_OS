@@ -332,6 +332,7 @@ static const struct vfs_operations g_progs_operations = {
     .open = progs_open,
     .read = progs_read,
     .write = progs_write,
+    .truncate = NULL, /* the partition of the programs is read-only */
     .close = progs_close,
     .list = progs_list,
     .readdir = progs_readdir,

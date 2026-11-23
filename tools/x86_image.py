@@ -39,6 +39,7 @@ PROGRAMS = [
     "cat",
     "echo",
     "streams",
+    "truncate",
     "ls",
     "wc",
     "head",

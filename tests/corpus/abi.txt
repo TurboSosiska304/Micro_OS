@@ -32,7 +32,7 @@
 # second door of stat, ADR 0013).
 
 # The number of the calls, compared with ksys_count().
-count 35
+count 36
 
 # The table: number name arity result.
 #
@@ -82,6 +82,7 @@ ksys 31 sigreturn 0 resumed
 ksys 32 getlimit 2 int
 ksys 33 setlimit 2 int
 ksys 34 rename 2 int
+ksys 35 ftruncate 2 int
 
 # The errors (kernel/errno.h). EEXIST and ESRCH share the number -3, which is
 # why there are two names on one line of the header: the frozen table had the
