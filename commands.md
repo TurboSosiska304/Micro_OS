@@ -65,6 +65,7 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make x86-disk-smoke` | two boots on one disk image: a file survives both (57 checks) |
 | `make x86-root-smoke` | two roots of one machine: the MicroFS and the ext2 image answer the same commands, and FAT32 mounts at `/data` (47 checks) |
 | `make x86-volume-smoke` | a volume of 5 GiB of ext2 and of MicroFS: written, read back, `e2fsck -fn` and `debugfs` of the host and the `fsck` of the machine (about four minutes, not a part of `make ci`) |
+| `make x86-mfs-smoke` | a write interrupted by the power: the machine dies in the middle of 16 MiB, boots again on the same volume, and `fsck`/`fsck -y` find the volume it left (10 checks, ADR 0038) |
 | `make bench` | the numbers of the x86-64 port: `getpid`, fork and exec, a pipe, a file of 16 MiB and the console, one boot of fixed sizes; `make bench BENCH_ARGS="--json bench.json"` keeps the table (about a minute, not a part of `make ci`, `docs/bench.md`) |
 | `make x86-iso` | the BIOS ISO (El Torito) with the loader, the kernel and the root image (K13) |
 | `make x86-iso-run` | boot the ISO in a terminal (`-nographic`) |
