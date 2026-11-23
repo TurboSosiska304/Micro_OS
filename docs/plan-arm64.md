@@ -3,6 +3,11 @@
 > A port of Micro OS to ARMv8-A, and only later a phone. The order matters:
 > a driver of a phone is the last mile, not the first, and a machine that
 > cannot boot has no mile at all.
+>
+> **Status: a later release, no date.** The plan is written down so that the
+> work is not started from the wrong end (a driver of a phone before a machine
+> boots); it is not a promise of 1.7 or of any version named in
+> `docs/roadmap.md`. The release that takes it names it in its own plan.
 
 ## Why this is a port and not a rewrite
 

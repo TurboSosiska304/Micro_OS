@@ -162,6 +162,8 @@ written when the project was an operating system for one board; the numbers
       checks the link address against the ELF (ADR 0007, "The higher half:
       taken")
 * [ ] A port for a real ARM with an MMU: the same contract, a second `arch/`
+      (`docs/plan-arm64.md`; a **later release**, no date - the plan is written
+      and the work is not started)
 * [ ] `KERNEL_NOMMU` becomes 0 and the concessions become features
 
 ## K6 - The filesystem and the network (in progress)
