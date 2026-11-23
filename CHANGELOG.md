@@ -14,6 +14,13 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### The release
 
+- 1.7.0-rc1: the release of the desktop, of the disk at the speed of the
+  medium, of a filesystem that does not walk a table of a gigabyte, and of a
+  machine that starts on a laptop from a stick (`docs/releases/1.7.md`).
+
+
+### The release
+
 - 1.6.0-rc1: the release of the memory a program maps, the account of a
   task, the interrupts of many cores, the disk on the bus, the pipes at the
   speed of the memory and the machine in the network (`docs/releases/1.6.md`).

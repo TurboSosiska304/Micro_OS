@@ -1105,11 +1105,19 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                     and picture.pixel(0, VBE_HEIGHT - 2) == GREY,
                     f"the paper is {picture.pixel(VBE_WIDTH - 2, VBE_HEIGHT - 2)}",
                 )
+                # The banner is the first line of the kernel, but a line of
+                # the boot may stand above it (the address of the image, the
+                # volume of the medium): the check looks for the glyph of the
+                # banner in the first rows instead of naming one cell.
+                banner = any(
+                    picture.cell_is(row, 0, GLYPHS["M"], BLACK, GREY)
+                    or picture.cell_is(row, 0, GLYPHS["m"], BLACK, GREY)
+                    for row in range(0, 48)
+                )
                 expect(
                     "the text of the boot is read in the new colours",
-                    picture.cell_is(0, 0, GLYPHS["M"], BLACK, GREY)
-                    or picture.cell_is(0, 0, GLYPHS["m"], BLACK, GREY),
-                    "the cell of the banner is not the glyph in the colours of the theme",
+                    banner,
+                    "no row of the banner is the glyph in the colours of the theme",
                 )
                 foreign = picture.foreign_cells(BLACK)
                 expect(

@@ -336,8 +336,14 @@ static void clock_measure(void)
     port_outb(0x42, (k_u8_t)(counts & 0xFF));
     port_outb(0x42, (k_u8_t)(counts >> 8));
 
-    /* The gate of channel 2 is bit 0 of port 0x61: low clears, high starts. */
-    gate = port_inb(0x61) & (k_u8_t)~0x01;
+    /*
+     * The gate of channel 2 is bit 0 of port 0x61, and bit 1 of the same port
+     * is the speaker's own gate: a machine whose firmware left it high turns
+     * this calibration into fifty milliseconds of tone. The speaker stays off
+     * on both sides of the measurement - a machine that beeps while it only
+     * measures its clock is a machine that looks broken.
+     */
+    gate = port_inb(0x61) & (k_u8_t)~(0x01 | 0x02);
     port_outb(0x61, gate);
     port_outb(0x61, (k_u8_t)(gate | 0x01));
 
