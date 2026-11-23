@@ -142,11 +142,13 @@ worked example (`third_party/zlib/port/zconf.h`, `port/zlib_os.c`).
 
 Two more shapes are worth knowing:
 
-* **A pipe answers `EAGAIN`** while its producer is still there (ADR 0014).
-  zlib would read a negative result as the end of the file; the wrapper of
-  `read` waits the condition out. A library with a `select` loop needs the
-  descriptor of the pipe and a `sleep`/`yield`; this system has `sleep` in
-  the ABI and no `poll` yet.
+* **A pipe blocks while its producer is still there** (ADR 0035, which
+  changed the `EAGAIN` of ADR 0014): a read of an empty pipe with a writer
+  sleeps until the bytes arrive, and a write to a full one sleeps until the
+  reader makes room. A wrapper of `read` that waits `EAGAIN` out is still
+  correct and no longer needed; a library with a `select` loop needs the
+  descriptor of the pipe and a `sleep`/`yield`, because this system has
+  `sleep` in the ABI and no `poll` yet.
 * **The image has a size budget.** The kernel reads a program into one block
   of the allocator, in pieces of `KSYS_MAX_IO` (64 KiB), before the port
   copies it to the window; the ceiling of the file is `K_EXEC_MAX_IMAGE`

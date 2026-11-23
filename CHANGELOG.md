@@ -14,6 +14,25 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Added
 
+- The grain of the I/O (ADR 0035): the ring of a pipe is a setting of the
+  port - 64 KiB on x86-64 and the host, the block of one call of the system,
+  4 KiB on the board - and comes from the allocator with the pipe, so sixteen
+  pipes of 64 KiB cost a megabyte only when they are all open and the board
+  pays 4 KiB per stage; a write of `PIPE_BUF` bytes waits for the whole block
+  and lands whole, and the wait of a pipe has no bound - a reader slower than
+  its writer sleeps instead of answering `EAGAIN`, and a signal cuts the wait
+  short with `EINTR`. A stream has a real block from the arena of the program
+  and `setvbuf` works: `_IOLBF` on a terminal, `_IOFBF` on a file and a pipe
+  (4 KiB), `_IONBF` for the error descriptor, `fflush`, `fclose` and `exit`
+  over it, and `printf` reaches the block of `stdout` through a weak seam
+  when the program links the streams. `/bin/streams` checks the three modes
+  and the flush of `exit`; `/bin/iobench` and `tools/io_bench.py` are the
+  ruler of the machine. One megabyte through `cat file | wc -c` went from
+  5.9 s to 0.47 s, the same megabyte through `iobench pipe` from 0.20 to
+  29 MiB/s with the reader's calls down from 4096 to 16, and a filter of
+  sbase over a megabyte of text is 1.2-1.5 times faster (its time is the
+  regular expression, not the calls).
+
 - The accounts of the machine are files of `/etc` (ADR 0033): `/etc/passwd`
   holds `name:uid:gid:home:shell` and `/etc/shadow` the salted SHA-256 of a
   password (`$sha256$<salt>$<hex>`, `*` for an account without one, mode

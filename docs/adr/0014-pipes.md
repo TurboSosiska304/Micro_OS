@@ -1,6 +1,8 @@
 # ADR 0014 - Pipes and dup2
 
-* Status: accepted
+* Status: accepted; the size of the ring and the bound of the wait are
+  replaced by ADR 0035 (64 KiB on x86-64 and the host, 4 KiB on the board,
+  and a wait with no bound)
 * Date: 2026-11-21
 
 ## Context

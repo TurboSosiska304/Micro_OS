@@ -166,14 +166,17 @@ A directory is opened with `KSYS_O_DIRECTORY` (`0x0800`) and read with
 `EISDIR`, and `readdir` of a file is `ENOTDIR`.
 
 `pipe(fds)` (27) gives two ordinary descriptors, `fds[0]` reading and `fds[1]`
-writing; the pipe is a ring of 256 bytes in the kernel. The end of the writing
-end is the end of the file (a read gives 0), and a write with no reader is
-`EPIPE` - there is no `SIGPIPE` yet, so the error is the whole answer. A wait
-of a pipe is a poll with a bound of half a second and then `EAGAIN`; `lseek`
-of a pipe is `ESPIPE` and `readdir` is `ENOTDIR`. `dup2(oldfd, newfd)` (28)
-makes `newfd` a second descriptor of one open file, closes what was open
-there, and answers `newfd`; a number outside the table is `EBADF`.
-[ADR 0014](../adr/0014-pipes.md) has the design and the limits.
+writing; the pipe is a ring of the port, 64 KiB on x86-64 and 4 KiB on the
+board, taken from the allocator with the pipe (ADR 0035). The end of the
+writing end is the end of the file (a read gives 0), and a write with no
+reader is `EPIPE` - there is no `SIGPIPE` yet, so the error is the whole
+answer. A read of an empty pipe sleeps until the bytes arrive, a write of at
+most `PIPE_BUF` bytes lands whole, and a signal cuts a wait short with
+`EINTR`; `lseek` of a pipe is `ESPIPE` and `readdir` is `ENOTDIR`.
+`dup2(oldfd, newfd)` (28) makes `newfd` a second descriptor of one open file,
+closes what was open there, and answers `newfd`; a number outside the table
+is `EBADF`. [ADR 0014](../adr/0014-pipes.md) has the design and
+[ADR 0035](../adr/0035-the-grain-of-the-io.md) the ring and the wait of 1.6.
 
 ## Limits
 
