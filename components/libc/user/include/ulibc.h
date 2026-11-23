@@ -325,11 +325,13 @@ int setvbuf(FILE *stream, char *buffer, int mode, size_t size);
  * The conversions of the formatter: %d, %i, %u, %o, %x, %X, %c, %s, %p and
  * %%. A width and the flags '-' and '0' are honoured; the length is 'l' or
  * 'll' for a long or a long long, 'z' for a size_t, and the answer is the
- * number of bytes written or a negative error. The text goes to the console
- * through write(1, ...), in pieces of a fixed buffer, so no allocation is
- * involved. snprintf and vsnprintf write the same text to a buffer of the
- * caller, with the length the whole text would have had, as the C library
- * promises.
+ * number of bytes written or a negative error. The text of `printf` goes to
+ * the console through write(1, ...) in pieces of a fixed buffer, or through
+ * the block of `stdout` when the program links `src/file.c`: the seam
+ * between the two is weak in `src/stdio.c` and strong in `src/file.c`, so
+ * the runtime without the streams pays nothing for the buffering. snprintf
+ * and vsnprintf write the same text to a buffer of the caller, with the
+ * length the whole text would have had, as the C library promises.
  *
  * A build that sets ULIBC_WITH_FLOAT adds the conversions of a double -
  * %f, %F, %e, %E, %g and %G - and the precision of every conversion. Those

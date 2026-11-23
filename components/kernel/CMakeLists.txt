@@ -52,6 +52,14 @@ if(ESP_PLATFORM)
     # library and the syscalls ask the same questions.
     target_compile_definitions(${COMPONENT_LIB} PUBLIC KERNEL_PSRAM=1 KERNEL_EXEC=1)
 
+    # The ring of a pipe of the board (kernel/kfile.h): 4 KiB, a sixteenth of
+    # the buffer of the machine of a desk. The internal RAM of this board is
+    # about a hundred kilobytes and a driver and a task live in it, so the
+    # block of a pipe is paid per pipe (sixteen of them are 64 KiB of the
+    # worst case, and only when sixteen are open) and the allocator falls
+    # back to the PSRAM when the internal RAM is short.
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE KFILE_PIPE_SIZE=4096)
+
     # The discipline of the host build: the sources of the project are
     # compiled with the extra warnings, so a mistake is a message at
     # build time and not a fault on the board.

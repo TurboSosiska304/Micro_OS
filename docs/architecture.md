@@ -352,13 +352,19 @@ apart:
 
 ### The pipes
 
-A pipe is a ring of 256 bytes in a table of eight entries of the kernel,
-with the counts of the reading and the writing descriptions over it
-(ADR 0014). The two ends are ordinary descriptors of the task, so the access
-check, the close, `dup2` and the copy of a fork need no special case; a write
-with no reader is `EPIPE`, because the kernel has no signals yet. A wait of a
-pipe is a poll with a bound of half a second, not a queue of waiters; the
-queue and its wakeup are the next step.
+A pipe is a ring of the port - 64 KiB on x86-64 and the host, 4 KiB on the
+board - in a table of sixteen entries of the kernel, with the counts of the
+reading and the writing descriptions over it (ADR 0035, which changes the
+ring and the wait of ADR 0014). The ring is not a block in the bss of the
+kernel: it comes from `kmm_alloc` with the pipe and goes back with its last
+end, so sixteen pipes of 64 KiB cost a megabyte only when they are all open.
+The two ends are ordinary descriptors of the task, so the access check, the
+close, `dup2` and the copy of a fork need no special case; a write with no
+reader is `EPIPE`, because the kernel has no signals yet, and a write of at
+most `PIPE_BUF` bytes is one step of the ring. A wait of a pipe is a poll
+with the sleep of the task and no bound - a reader slower than its writer is
+an ordinary pipeline, and a signal cuts the wait short with `EINTR`; a queue
+of waiters and its wakeup are the next step (`docs/debts.md`).
 
 ### The blocks under the filesystem
 

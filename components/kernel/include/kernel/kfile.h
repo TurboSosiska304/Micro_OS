@@ -29,16 +29,35 @@
  */
 #define KFILE_MAX 40
 
-/* The pipes of the system, the bytes of one, and the bound of a wait. The
- * buffer is small on purpose: the internal RAM of the board is scarce, and
- * a producer that has more to say waits for the reader. Half a second is
- * long enough for a slow reader and short enough that a program whose
- * other end is gone is not stuck forever. Sixteen pipes are the deepest
- * pipeline of the shell: every stage after the first is one more boundary,
- * and the table of the descriptions above is sized for all of them. */
+/* The pipes of the system and the bytes of one. Sixteen pipes are the
+ * deepest pipeline of the shell: every stage after the first is one more
+ * boundary, and the table of the descriptions above is sized for all of them.
+ *
+ * The buffer is the grain of a pipeline: with 256 bytes a producer of a
+ * megabyte waited for the reader four thousand times, and a machine with
+ * memory has no reason to move its bytes a quarter of a kilobyte at a time.
+ * The size is a setting of the port, because the two machines are not alike:
+ * the x86-64 machine and the host have 64 KiB (the block one call of the
+ * system can carry, KSYS_MAX_IO), and the board has 4 KiB, because its
+ * internal RAM is scarce. The memory is not the bss of the kernel: a pipe
+ * takes its block from `kmm_alloc` when it is made and gives it back when
+ * the last end is closed, so sixteen pipes cost a megabyte of a machine that
+ * has one only when sixteen of them are open, and the board pays its 4 KiB
+ * per pipe and not 64 KiB when it has two stages.
+ */
+#ifndef KFILE_PIPE_SIZE
+#define KFILE_PIPE_SIZE 4096
+#endif
 #define KFILE_PIPE_MAX 16
-#define KFILE_PIPE_SIZE 256
-#define KFILE_PIPE_WAIT_MS 500u
+
+/*
+ * The write of at most this many bytes is one step of the ring: no other
+ * writer can put a byte between the first and the last of them. The number
+ * is the `PIPE_BUF` of the C library (components/libc/user/include/limits.h)
+ * and the kernel has no header of the library, so the two are kept equal by
+ * this sentence and by the test of the atomic write.
+ */
+#define KFILE_PIPE_BUF 512u
 
 /*
  * The bits a descriptor reports to `poll` (KSYS_POLLIN and the two others of
