@@ -392,6 +392,7 @@ function(add_program_image name entry)
 endfunction()
 
 add_program_image(hello hello_main)
+add_program_image(bench bench_main)
 add_program_image(crash crash_main)
 add_program_image(fork fork_main)
 add_program_image(badptr badptr_main)
