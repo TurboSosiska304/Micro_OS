@@ -218,11 +218,17 @@ are copied to it; the mount of an old volume says one line about it.
 | | 16 MiB volume | 5 GiB volume |
 |---|---|---|
 | `META` of 1.6 | 656 blocks (656 KB) | 209,674 blocks (214 MB) |
-| `META` of 1.7 | 21 blocks (21 KB): 1 map + 20 table | 660 blocks (660 KB): 640 map + 20 table |
+| `META` of 1.7 | 22 blocks (22 KB): 2 map + 20 table | 660 blocks (660 KB): 640 map + 20 table |
 | records of the table | 2,591 | 319 |
-| boot, the walk of `df` | 6 ms | 13.8 s -> 0.3 s |
-| `df /` | 6 ms | 14.8 s -> 0.07 s |
-| `fsck` | 6 ms | 0.11 s |
+| boot to the shell | 0.27 s | **13.8 s -> 0.3 s** |
+| `df /` | 0.02 s | **14.8 s -> 0.07 s** |
+| `fsck` | 0.06 s | **0.11 s** |
+
+The three numbers in bold are the gate of `make x86-volume-smoke` on the disk
+of QEMU (the old ones are the ones `docs/debts.md` recorded for 1.6). The
+walk of the table is gone: the table of a 5 GiB volume is twenty blocks, and
+what a mount, a `df` and a `fsck` cost now is the map of the free blocks
+(640 KiB of 5 GiB, one bit per block) and the chains of the files.
 
 The table of a 16 MiB volume is *smaller* than it was (a table of 2,591
 records for 66 objects became a table of 320) and the data section took the
