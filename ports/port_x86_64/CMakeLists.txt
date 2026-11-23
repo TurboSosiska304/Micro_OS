@@ -970,6 +970,19 @@ add_libc_program(mkbig
     DEFINES ULIBC_HEAP_SIZE=65536u
 )
 
+# The numbers of the machine (tools/x86_bench.py): the call of the door, a
+# fork and an exec, a pipe, a file and the console, each of a fixed size that
+# the tool passes. The program is not in the image of the release - the tool
+# puts it there for the run - because a measurement is a tool of the gate and
+# not a command of the machine. It links the same library as the tools, so the
+# clock of a program and the fork of the library are the ones the shell and
+# every program of /bin already pay.
+add_libc_program(bench
+    MAIN "${PROGRAM_DIR}/bench.c"
+    SOURCES ${SBASE_LIBC_SOURCES}
+    DEFINES ULIBC_HEAP_SIZE=65536u
+)
+
 function(add_sbase_program tool heap)
     add_libc_program(${tool}
         MAIN "${SBASE_DIR}/${tool}.c"
