@@ -13,6 +13,7 @@
 
 #include "board/board.h"
 #include "config/config.h"
+#include "config/users.h"
 #include "devfs/devfs.h"
 #include "graphics/tft_console.h"
 #include "init/initd.h"
@@ -219,6 +220,15 @@ static void init_task(void *arg)
             kinfo("sim: %d default setting file(s) of /etc made", defaults);
         } else if (defaults < 0) {
             kwarn("sim: the default settings of /etc are not made (rc=%d)", defaults);
+        }
+
+        /* The accounts of /etc (ADR 0033): the two files and the home of an
+         * account, when the volume has none. They are made without a line of
+         * their own: the ring of the log is short and the count of the files
+         * saved to the store below says that they are there. */
+        defaults = users_defaults(CONFIG_DIR);
+        if (defaults < 0) {
+            kwarn("sim: the accounts of /etc are not made (rc=%d)", defaults);
         }
 
         saved = config_persist(CONFIG_DIR);

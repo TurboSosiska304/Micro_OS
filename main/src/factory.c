@@ -27,6 +27,7 @@
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "config/users.h"
 #include "kernel/errno.h"
 #include "kernel/log.h"
 #include "kernel/vfs.h"
@@ -119,6 +120,20 @@ int factory_defaults(void)
         if (rc > 0) {
             written++;
         }
+    }
+
+    /*
+     * The accounts of the machine (ADR 0033): /etc/passwd, /etc/shadow and
+     * the home directory of every account. They are written by the component
+     * of the configuration, because the hash of the password is a digest and
+     * not a line of this table, and a board and an image of the x86-64 port
+     * then have the same two files.
+     */
+    rc = users_defaults(FACTORY_ETC_DIR);
+    if (rc > 0) {
+        written += rc;
+    } else if (rc < 0) {
+        kwarn("factory: the accounts of /etc are not written (rc=%d)", rc);
     }
 
     return written;

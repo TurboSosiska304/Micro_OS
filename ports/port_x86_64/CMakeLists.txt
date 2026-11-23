@@ -193,6 +193,8 @@ set(SETTINGS_SOURCES
     "${SETTINGS_DIR}/src/settings.c"
     "${CONFIG_DIR}/src/config.c"
     "${CONFIG_DIR}/src/config_cmd.c"
+    "${CONFIG_DIR}/src/config_users.c"
+    "${CONFIG_DIR}/src/config_login.c"
 )
 
 # The font of the console is the one of the PC (port_x86_64_font.h, Spleen
@@ -252,10 +254,14 @@ if(MICRO_OS_X86_NET)
         "${PKG_DIR}/src/pkg_db.c"
         "${PKG_DIR}/src/pkg_index.c"
         "${PKG_DIR}/src/pkg_verify.c"
-        "${CMAKE_CURRENT_SOURCE_DIR}/loader/sha256.c"
         "${CMAKE_CURRENT_SOURCE_DIR}/loader/ed25519.c"
     )
 endif()
+
+# The hash of the machine: SHA-256 of the loader, which verifies a signed image
+# and the hash of a password of /etc/shadow (components/config). It is in every
+# image of this port and not only in the one that installs packages.
+set(HASH_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/loader/sha256.c")
 
 # The memory test calls strtoul without including the header of the library;
 # on the board that resolves to the libc of ESP-IDF. Here the name has to
@@ -1341,6 +1347,7 @@ add_executable(microos64
     ${EXT2_SOURCES}
     ${VIRTUAL_SOURCES}
     ${SETTINGS_SOURCES}
+    ${HASH_SOURCES}
     ${NET_SOURCES}
     ${PKG_SOURCES}
     src/boot64.S
@@ -1388,13 +1395,15 @@ target_include_directories(microos64 PRIVATE
     "${CONFIG_DIR}/include"
     "${SETTINGS_DIR}/include"
     "${NET_DIR}/include"
+    # The hash of /etc/shadow and of a signed image (components/config,
+    # components/pkg): one SHA-256 for the machine.
+    "${CMAKE_CURRENT_SOURCE_DIR}/loader"
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 
 if(MICRO_OS_X86_NET)
     target_include_directories(microos64 PRIVATE
         "${PKG_DIR}/include"
-        "${CMAKE_CURRENT_SOURCE_DIR}/loader"
         "${CMAKE_BINARY_DIR}"
     )
     # The public key of the build is the key of the repository when the

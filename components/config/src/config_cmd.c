@@ -14,6 +14,7 @@
 
 #include <string.h>
 
+#include "config/users.h"
 #include "kshell/kshell.h"
 #include "kernel/vfs.h"
 #include "settings/settings.h"
@@ -332,6 +333,7 @@ int config_register(void)
                   "`key=value` lines; `get` reads a key, `set` writes the file and applies the\n"
                   "system at once, and `list` names the systems and the keys of one of them.\n",
     };
+    int rc;
 
     /*
      * The store belongs to the port, so the registration of the component is
@@ -340,5 +342,10 @@ int config_register(void)
      */
     config_store_use_platform();
 
-    return kshell_register_help("config", &help, cmd_config);
+    rc = kshell_register_help("config", &help, cmd_config);
+
+    /* The accounts of /etc and the three commands of the console. */
+    rc |= users_register();
+
+    return rc;
 }
