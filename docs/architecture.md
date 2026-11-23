@@ -460,18 +460,20 @@ A disk is a block device too, and a partition of it is one: the portable
 parser of `components/kernel/src/partition.c` reads the MBR or the GPT in the
 first sectors, holds every entry against the size of the disk and registers a
 child device with the name of the parent and `p` plus the number of the entry
-(`vd0p1`, `ata0p1`). A child adds the first sector of its partition to every
-request and refuses what runs past its end; the filesystem mounted on it does
-not know that a table exists.
+(`ata0p1`, `virtio0p1`). A child adds the first sector of its partition to
+every request and refuses what runs past its end; the filesystem mounted on it
+does not know that a table exists.
 
 Three rules of the layer are worth remembering: the parser never writes to
 the medium (a broken table is a refusal, not a repair); a disk without a table
 is not a volume, there is no "the whole disk is the filesystem" special case;
-and the drivers live in the ports (ATA PIO on x86-64 today, SDHCI and virtio
-planned) while the tables live in the kernel, because a table is a property of
-the medium and not of the controller. ADR 0008 is the design, including what
-the first real disk is and what waits for the queue, the interrupt and a
-physical address contract.
+and the drivers live in the ports (the ATA channel and the virtio-blk device
+of x86-64, SDHCI on the board) while the tables live in the kernel, because a
+table is a property of the medium and not of the controller. ADR 0008 is the
+design of the layer, ADR 0032 the physical address of a buffer a device reads
+and the bus-master path of the IDE channel, and ADR 0037 the second disk: the
+same image on a queue of virtio descriptors, a request as long as the queue
+allows and the interrupt of a PCI line.
 
 
 ## 6. Memory (phase 3)

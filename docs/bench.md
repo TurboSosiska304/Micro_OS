@@ -63,6 +63,32 @@ Six rows are the clock of the machine (the program measures itself) and one,
 no rate of its own. The tool prints the seconds of the host beside every row
 of the human summary so that the two clocks are never confused.
 
+## The second disk of 1.6 (ADR 0037)
+
+The disk of the x86-64 port was the drive of the IDE channel; 1.6 adds the
+virtio-blk device of the same image, and the row of a file is the same on both
+because the disk is 1 % of the time of a filesystem. Two numbers moved with
+the lane: `file_read` of a warm cache of the host, when the block layer learnt
+to ask a device that moves a run for the run (`struct k_blockdev::read_ahead`,
+128 sectors of the cache of the disk), and the same read out of a volume of
+5 GiB:
+
+| Row | IDE channel | virtio-blk | 1.5.0 |
+|---|---|---|---|
+| `file_write` (MicroFS, 16 MiB) | 5.4 MiB/s | 5.3 MiB/s | 6.63 MiB/s |
+| `file_read` (MicroFS, 16 MiB, read ahead 8 -> 128) | 144 -> 286 MiB/s | 132 -> 286 MiB/s | 126.98 MiB/s |
+| `file_write` (ext2, 16 MiB) | 15.1 MiB/s | 15.1 MiB/s | - |
+| `file_read` (ext2, 16 MiB) | 48.3 MiB/s | 42.4 MiB/s | - |
+| `file_read` (ext2, 128 MiB of a volume of 5 GiB, read ahead 8 -> 128) | 33.8 -> 40.8 MiB/s | 33.8 -> 40.8 MiB/s | - |
+
+`make bench BENCH_ARGS="--disk virtio"` is the table of the other disk and
+`make bench BENCH_ARGS="--fs ext2 --disk virtio"` the other filesystem on it;
+`make x86-volume-smoke X86_DISK_BUS=virtio` is the gate of the large volume on
+the card. The rates of the two disks differ by the noise of the host (a tenth
+and less) and the two of them are the same machine: the ceiling of a file
+written to ext2 is the sector operations of the block layer and of the
+filesystem, which is `docs/debts.md` under the grain of the disk.
+
 ## The baseline of 1.5.0
 
 The numbers below are the tree of 1.5.0 (`release_candidate` at `07cab2d`,

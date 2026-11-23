@@ -160,8 +160,8 @@ struct vblk_header {
 static k_u16_t g_vblk_base; /* the first port of the I/O BAR, zero when there is no card */
 static struct port_x86_64_pci_device g_vblk_card; /* the function of the card, for its line */
 static k_u8_t g_vblk_line = PCI_IRQ_NONE;         /* the line of the 8259 the card raises */
-static bool g_vblk_irq;     /* the line of the card is open */
-static bool g_vblk_flush;   /* the device has a cache and takes a flush */
+static bool g_vblk_irq;                           /* the line of the card is open */
+static bool g_vblk_flush;                         /* the device has a cache and takes a flush */
 static struct virtqueue g_vblk_queue;
 
 /*
@@ -181,7 +181,6 @@ static k_u16_t g_vblk_desc;                /* the descriptor the next request st
 static k_u16_t g_vblk_used;                /* the used entry the driver has reaped up to */
 
 static bool g_vblk_warned; /* the refusal of a buffer is in the log */
-
 
 static k_mutex_t g_vblk_lock = K_MUTEX_INITIALIZER;
 
@@ -317,11 +316,9 @@ static k_u16_t vblk_submit(k_u32_t type, k_u32_t lba, const k_u8_t *buf, k_size_
 
     /* The device writes the byte of status at the end of the chain, and the
      * header is the descriptor the used ring names. */
-    virtqueue_descriptor(&g_vblk_queue, cursor,
-                         vblk_phys((k_u64_t)(uintptr_t)&g_vblk_status[slot]), 1,
-                         VIRTQ_DESC_F_WRITE, 0);
-    virtqueue_descriptor(&g_vblk_queue, head,
-                         vblk_phys((k_u64_t)(uintptr_t)&g_vblk_header[slot]),
+    virtqueue_descriptor(&g_vblk_queue, cursor, vblk_phys((k_u64_t)(uintptr_t)&g_vblk_status[slot]),
+                         1, VIRTQ_DESC_F_WRITE, 0);
+    virtqueue_descriptor(&g_vblk_queue, head, vblk_phys((k_u64_t)(uintptr_t)&g_vblk_header[slot]),
                          (k_u32_t)sizeof(g_vblk_header[slot]), VIRTQ_DESC_F_NEXT,
                          (k_u16_t)(head + 1u));
 

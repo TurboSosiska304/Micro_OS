@@ -393,8 +393,8 @@ bool port_x86_64_nic_send(const void *frame, k_size_t length)
     memset(g_tx_buffer, 0, VIRTIO_NET_HDR_LEGACY);
     memcpy(g_tx_buffer + VIRTIO_NET_HDR_LEGACY, frame, length);
 
-    virtqueue_descriptor(&g_tx_queue, 0, g_tx_buffer_phys, (k_u32_t)(length + VIRTIO_NET_HDR_LEGACY), 0,
-                  0);
+    virtqueue_descriptor(&g_tx_queue, 0, g_tx_buffer_phys,
+                         (k_u32_t)(length + VIRTIO_NET_HDR_LEGACY), 0, 0);
 
     used_before = virtqueue_used_index(&g_tx_queue);
 

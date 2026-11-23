@@ -388,10 +388,10 @@ struct idt_pointer {
 #define IRQ_TIMER 0u
 #define IRQ_KEYBOARD 1u
 #define IRQ_CASCADE 2u
-#define IRQ_ATA 14u /* the primary IDE channel, on the slave */
-#define IRQ_CASCADE_LINE 2u     /* the slave reaches the master through it */
-#define IRQ_SPURIOUS_MASTER 7u  /* the vector of an acknowledge of nothing */
-#define IRQ_SPURIOUS_SLAVE 15u  /* the same, on the slave */
+#define IRQ_ATA 14u            /* the primary IDE channel, on the slave */
+#define IRQ_CASCADE_LINE 2u    /* the slave reaches the master through it */
+#define IRQ_SPURIOUS_MASTER 7u /* the vector of an acknowledge of nothing */
+#define IRQ_SPURIOUS_SLAVE 15u /* the same, on the slave */
 
 /* The lines of the port that have a handler, in the order the counters below
  * and the `smp irq` command name them (PORT_X86_64_IRQ_TIMER and
