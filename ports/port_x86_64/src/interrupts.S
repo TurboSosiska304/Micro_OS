@@ -239,6 +239,14 @@ isr_irq isr_irq0, port_x86_64_irq_tick
 isr_irq isr_irq1, port_x86_64_irq_keyboard
 
 /*
+ * The primary IDE channel, the sixth line of the slave: the end of a
+ * bus-master transfer of the disk (ADR 0032). The handler acknowledges the
+ * drive by reading its status and both chips of the 8259, and the wait of the
+ * transfer reads the answer out of the engine of the channel.
+ */
+isr_irq isr_irq_ata, port_x86_64_irq_ata
+
+/*
  * The timer of a core that the 8259 does not reach: the local APIC of an
  * application processor (ADR 0012). The body is the tick of the port, and the
  * frame is the one of the interrupted code, like the frame of the PIT.

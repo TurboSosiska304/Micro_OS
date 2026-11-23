@@ -379,6 +379,8 @@ struct idt_pointer {
 #define IRQ_BASE 0x20u /* the PIC is moved out of the way of the exceptions */
 #define IRQ_TIMER 0u
 #define IRQ_KEYBOARD 1u
+#define IRQ_CASCADE 2u
+#define IRQ_ATA 14u /* the primary IDE channel, on the slave */
 
 #define PIT_HZ 1000u
 #define PIT_CRYSTAL_HZ 1193182u
@@ -408,6 +410,7 @@ static struct idt_pointer g_idt_pointer;
 extern void (*const port_isr_exception_table[32])(void);
 extern void isr_irq0(void);
 extern void isr_irq1(void);
+extern void isr_irq_ata(void);
 extern void isr_syscall(void);
 extern void isr_unexpected(void);
 
@@ -706,6 +709,36 @@ void port_x86_64_idt_set(k_u32_t vector, void (*handler)(void))
     idt_set(vector, handler, 0, IDT_GATE_INTERRUPT);
 }
 
+/*
+ * Open a line of the 8259. The mask register is read back, one bit is
+ * cleared, and the write is done with the interrupts off: a line that is
+ * opened in the middle of the read and the write would see the other lines
+ * closed for an instant, which is a keyboard byte lost and not a crash, and
+ * still worth the two instructions.
+ *
+ * A line of the slave opens the second line of the master as well: without
+ * the cascade the slave answers nothing, whatever its own mask says.
+ */
+void port_x86_64_irq_unmask(k_u32_t line)
+{
+    k_u64_t flags;
+
+    if (line >= 16u) {
+        return;
+    }
+
+    flags = port_save_flags_and_cli();
+
+    if (line < 8u) {
+        port_outb(PIC1_DATA, (k_u8_t)(port_inb(PIC1_DATA) & ~(k_u8_t)(1u << line)));
+    } else {
+        port_outb(PIC2_DATA, (k_u8_t)(port_inb(PIC2_DATA) & ~(k_u8_t)(1u << (line - 8u))));
+        port_outb(PIC1_DATA, (k_u8_t)(port_inb(PIC1_DATA) & ~(k_u8_t)(1u << IRQ_CASCADE)));
+    }
+
+    port_restore_flags(flags);
+}
+
 void port_x86_64_interrupts_init(void)
 {
     k_u32_t vector;
@@ -729,6 +762,14 @@ void port_x86_64_interrupts_init(void)
     /* The keyboard is the second line of the master, and the handler behind
      * this stub reads the byte that raised it (src/ps2.c). */
     idt_set(IRQ_BASE + IRQ_KEYBOARD, isr_irq1, 0, IDT_GATE_INTERRUPT);
+
+    /*
+     * The disk of the machine, the sixth line of the slave. The entry is here
+     * for the machine that has the drive: a channel with nothing on it never
+     * raises the line, and the line stays masked until the driver of the disk
+     * opens it (src/ata.c, ADR 0032).
+     */
+    idt_set(IRQ_BASE + IRQ_ATA, isr_irq_ata, 0, IDT_GATE_INTERRUPT);
 
     /*
      * The door of the programs of the port. Without this one line the
@@ -1640,6 +1681,11 @@ void port_x86_64_init(k_u64_t multiboot_info)
     /* Last, because it is the point of no return: from here the timer fires
      * every millisecond and the kernel has to be able to take it. */
     port_x86_64_interrupts_init();
+
+    /* The disk asked for the line of its channel before the table existed:
+     * the driver opens it now, and the bus master of the channel becomes the
+     * one the transfers use (ADR 0032). */
+    port_x86_64_disk_irq_init();
 
     /*
      * The application processors (ADR 0012). The tables of the machine and
