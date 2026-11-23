@@ -83,6 +83,9 @@ PROGRAMS = [
     # the program that runs the scripts of /etc.
     "sqlite3",
     "awk",
+    # The first interface of the machine (ADR 0028): a program of the library
+    # that draws in /dev/fb0 and reads /dev/input0.
+    "ui",
 ]
 
 # The second name of the compression command: `zstdcat` is the same image and
