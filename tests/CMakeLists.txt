@@ -53,8 +53,10 @@ if(NOT ESP_PLATFORM)
         cases/test_zlib.c
         cases/test_pcre2.c
         cases/test_lua.c
+        cases/test_zstd.c
         cases/test_userland_float.c
         cases/test_bc.c
+        cases/test_file.c
     )
 
     # The tests of a component that a build leaves out are left out with it:
@@ -83,6 +85,7 @@ if(NOT ESP_PLATFORM)
     )
 
     set(MICROOS_ZLIB_DIR "${CMAKE_SOURCE_DIR}/third_party/zlib")
+    set(MICROOS_ZSTD_DIR "${CMAKE_SOURCE_DIR}/third_party/zstd")
     set(MICROOS_LUA_DIR "${CMAKE_SOURCE_DIR}/third_party/lua")
     set(MICROOS_BC_DIR "${CMAKE_SOURCE_DIR}/third_party/bc")
 
@@ -112,6 +115,11 @@ if(NOT ESP_PLATFORM)
         # (`third_party/lua/port/luaconf_port.h`) is for the guest, where
         # there is no shell and no temporary name.
         "${MICROOS_LUA_DIR}"
+        # The headers of zstd, and the port header of the build (the C path of
+        # the Huffman decoder, no trace, no legacy frames), which is the same
+        # for the two machines.
+        "${MICROOS_ZSTD_DIR}/lib"
+        "${MICROOS_ZSTD_DIR}/port"
     )
 
     # zlib is the first third-party library of the tree, and the host test is
@@ -292,6 +300,42 @@ if(NOT ESP_PLATFORM)
         MICROOS_BC_HOST="$<TARGET_FILE:microos_bc_host>")
     add_dependencies(microos_tests microos_bc_host)
 
+    # zstd is the third library of somebody else, and its host build is the
+    # same list of sources as the guest build of `ports/port_x86_64`: the
+    # library of the frame format, with the port header that turns the
+    # assembly of the Huffman decoder, the trace and the legacy frames off.
+    set(MICROOS_ZSTD_SOURCES
+        "${MICROOS_ZSTD_DIR}/lib/common/debug.c"
+        "${MICROOS_ZSTD_DIR}/lib/common/entropy_common.c"
+        "${MICROOS_ZSTD_DIR}/lib/common/error_private.c"
+        "${MICROOS_ZSTD_DIR}/lib/common/fse_decompress.c"
+        "${MICROOS_ZSTD_DIR}/lib/common/pool.c"
+        "${MICROOS_ZSTD_DIR}/lib/common/threading.c"
+        "${MICROOS_ZSTD_DIR}/lib/common/xxhash.c"
+        "${MICROOS_ZSTD_DIR}/lib/common/zstd_common.c"
+        "${MICROOS_ZSTD_DIR}/lib/compress/fse_compress.c"
+        "${MICROOS_ZSTD_DIR}/lib/compress/hist.c"
+        "${MICROOS_ZSTD_DIR}/lib/compress/huf_compress.c"
+        "${MICROOS_ZSTD_DIR}/lib/compress/zstd_compress.c"
+        "${MICROOS_ZSTD_DIR}/lib/compress/zstd_compress_literals.c"
+        "${MICROOS_ZSTD_DIR}/lib/compress/zstd_compress_sequences.c"
+        "${MICROOS_ZSTD_DIR}/lib/compress/zstd_compress_superblock.c"
+        "${MICROOS_ZSTD_DIR}/lib/compress/zstd_double_fast.c"
+        "${MICROOS_ZSTD_DIR}/lib/compress/zstd_fast.c"
+        "${MICROOS_ZSTD_DIR}/lib/compress/zstd_lazy.c"
+        "${MICROOS_ZSTD_DIR}/lib/compress/zstd_ldm.c"
+        "${MICROOS_ZSTD_DIR}/lib/compress/zstd_opt.c"
+        "${MICROOS_ZSTD_DIR}/lib/compress/zstd_preSplit.c"
+        "${MICROOS_ZSTD_DIR}/lib/decompress/huf_decompress.c"
+        "${MICROOS_ZSTD_DIR}/lib/decompress/zstd_ddict.c"
+        "${MICROOS_ZSTD_DIR}/lib/decompress/zstd_decompress.c"
+        "${MICROOS_ZSTD_DIR}/lib/decompress/zstd_decompress_block.c"
+    )
+    set_source_files_properties(${MICROOS_ZSTD_SOURCES}
+        PROPERTIES COMPILE_OPTIONS
+        "-include;${MICROOS_ZSTD_DIR}/port/zstd_port.h;-Wno-sign-compare;-Wno-unused-but-set-variable"
+        OBJECT_DEPENDS "${MICROOS_ZSTD_DIR}/port/zstd_port.h")
+
     target_sources(microos_tests PRIVATE
         "${CMAKE_SOURCE_DIR}/components/drivers/src/input_debounce.c"        "${CMAKE_SOURCE_DIR}/components/drivers/src/battery_soc.c"
         "${CMAKE_SOURCE_DIR}/components/drivers/src/fb_draw.c"
@@ -307,8 +351,90 @@ if(NOT ESP_PLATFORM)
         ${MICROOS_ZLIB_SOURCES}
         "${MICROOS_ZLIB_DIR}/port/zlib_os.c"
         ${MICROOS_LUA_SOURCES}
+        ${MICROOS_ZSTD_SOURCES}
         "${CMAKE_CURRENT_LIST_DIR}/cases/userland_float_shim.c"
     )
+
+    # --- file and libmagic (third_party/file) -----------------------------
+    #
+    # The library is the same source as the guest archive, compiled for the
+    # host with the port layer of the directory: the test is the second build
+    # of the port and covers the values of the format, not the door of the
+    # system call.
+    include("${CMAKE_SOURCE_DIR}/cmake/libmagic.cmake")
+    set_source_files_properties(${MICROOS_FILE_SOURCES}
+        PROPERTIES COMPILE_DEFINITIONS "HAVE_CONFIG_H=1"
+                   COMPILE_OPTIONS "${MICROOS_FILE_WARNINGS}")
+
+    # The database is made by the library itself, as in the guest build: the
+    # tool compiles the text the script chose, and the two levels of the port
+    # are two files of the build (`magic` and `magic.mgc` beside it).
+    set(MICROOS_TEST_MAGIC "${CMAKE_BINARY_DIR}/magic")
+    set(MICROOS_TEST_MAGIC_MGC "${CMAKE_BINARY_DIR}/magic.mgc")
+    set(MICROOS_TEST_MAGIC_TEXT "${CMAKE_BINARY_DIR}/magic-text")
+
+    add_executable(microos_magic_compile
+        ${MICROOS_FILE_SOURCES}
+        "${MICROOS_FILE_DIR}/port/magic_compile.c"
+    )
+    target_include_directories(microos_magic_compile PRIVATE
+        "${MICROOS_FILE_DIR}/src" "${MICROOS_FILE_DIR}/port")
+    target_compile_definitions(microos_magic_compile PRIVATE HAVE_CONFIG_H=1)
+    target_compile_options(microos_magic_compile PRIVATE ${MICROOS_FILE_WARNINGS})
+
+    add_custom_command(
+        OUTPUT "${MICROOS_TEST_MAGIC}"
+        COMMAND ${CMAKE_COMMAND} -E env python3
+                "${MICROOS_MAGIC_SUBSET}"
+                --config "${MICROOS_MAGIC_CONFIG}"
+                --out "${MICROOS_TEST_MAGIC}"
+        DEPENDS "${MICROOS_MAGIC_SUBSET}" "${MICROOS_MAGIC_CONFIG}"
+                "${MICROOS_FILE_DIR}/magic/microos.magic"
+        COMMENT "choosing the subset of the magic database of file"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${MICROOS_TEST_MAGIC_MGC}"
+        COMMAND "$<TARGET_FILE:microos_magic_compile>" -C magic
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        DEPENDS microos_magic_compile "${MICROOS_TEST_MAGIC}"
+        COMMENT "compiling the magic database of the test"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${MICROOS_TEST_MAGIC_TEXT}"
+        COMMAND ${CMAKE_COMMAND} -E copy "${MICROOS_TEST_MAGIC}" "${MICROOS_TEST_MAGIC_TEXT}"
+        DEPENDS "${MICROOS_TEST_MAGIC}"
+        COMMENT "the text of the magic database, without a .mgc beside it"
+        VERBATIM
+    )
+    add_custom_target(microos_magic_database ALL
+        DEPENDS "${MICROOS_TEST_MAGIC_MGC}" "${MICROOS_TEST_MAGIC_TEXT}")
+    add_dependencies(microos_tests microos_magic_database)
+
+    # The library of the host test is a target of its own and not a list of
+    # sources of the test binary: `file.h` reads the configuration of its port
+    # with `#include <config.h>`, and the two other ported libraries of the
+    # test (PCRE2 is one) carry a `config.h` of the same name. A target has
+    # its own include path first, so the library of `file` reads its own file.
+    add_library(microos_test_file STATIC ${MICROOS_FILE_SOURCES})
+    target_include_directories(microos_test_file PRIVATE
+        "${MICROOS_FILE_DIR}/src" "${MICROOS_FILE_DIR}/port")
+    target_compile_definitions(microos_test_file PRIVATE HAVE_CONFIG_H=1)
+    target_compile_options(microos_test_file PRIVATE ${MICROOS_FILE_WARNINGS})
+    target_link_libraries(microos_tests PRIVATE microos_test_file)
+
+    # The test includes the internal header of the library (file.h), and its
+    # `#if HAVE_...` of a name the port does not set is the shape of the
+    # release: the warning of this tree for that (-Wundef) is off here.
+    set_source_files_properties(cases/test_file.c
+        PROPERTIES COMPILE_DEFINITIONS "HAVE_CONFIG_H=1"
+                   COMPILE_OPTIONS "-Wno-undef")
+    target_include_directories(microos_tests PRIVATE
+        "${MICROOS_FILE_DIR}/src" "${MICROOS_FILE_DIR}/port")
+    target_compile_definitions(microos_tests PRIVATE
+        MICROOS_TEST_MAGIC="${MICROOS_TEST_MAGIC}"
+        MICROOS_TEST_MAGIC_TEXT="${MICROOS_TEST_MAGIC_TEXT}")
 
     # The FAT reader comes from the component when the host build links it
     # (the default, ADR 0009). A build that turns it off still compiles the

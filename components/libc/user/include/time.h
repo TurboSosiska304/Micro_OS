@@ -64,5 +64,10 @@ struct tm *gmtime(const time_t *when);
 struct tm *localtime(const time_t *when);
 time_t mktime(struct tm *parts);
 size_t strftime(char *buffer, size_t size, const char *format, const struct tm *parts);
+/* The fixed form of a moment, "Www Mmm dd hh:mm:ss yyyy\n": one string of 26
+ * bytes that the next call overwrites, as the standard says. `file` names the
+ * two for the date of a CDF record. */
+char *asctime(const struct tm *parts);
+char *ctime(const time_t *when);
 
 #endif /* MICRO_OS_LIBC_USER_TIME_H */

@@ -280,6 +280,27 @@ if [ -n "$data_base" ]; then
     data_aligned=$(align4 "$data_size")
 fi
 
+# The bss begins where the linker put it and not where the bytes of the data
+# end: the section that holds the initialised data can be followed by padding
+# (the alignment of .bss, a gap that objcopy does not write into a flat
+# section), and the kernel clears the bss at header + text + data and copies
+# the arguments after it. A data size that stops short of the bss would put
+# the bss - and the arguments of the program - inside the region the program
+# writes, which looks like a program that loses the name of its file. The
+# span of the two addresses is the number the header has to carry, and the
+# zeros of the gap are part of the data segment the file carries.
+bss_address=$(section_address .bss)
+data_real_address=$(section_address .data)
+if [ -n "$bss_address" ] && [ -n "$data_real_address" ] && [ "$bss_size" -gt 0 ]; then
+    data_span=$((bss_address - data_real_address))
+    if [ "$data_span" -lt "$data_aligned" ]; then
+        printf "mkprog: %s has its bss %d byte(s) after the data, the segment is %d\n" \
+            "$object" "$data_span" "$data_aligned" >&2
+        exit 1
+    fi
+    data_aligned=$data_span
+fi
+
 # The optional base is the contract of a port: nothing relocates the image, so
 # a program linked for another window would run at addresses that name
 # something else here. The format puts the text right after the header and the

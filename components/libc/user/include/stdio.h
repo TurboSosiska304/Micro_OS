@@ -80,6 +80,15 @@ int fileno(FILE *stream);
 FILE *fdopen(int fd, const char *mode);
 FILE *fmemopen(void *buffer, size_t size, const char *mode);
 
+/*
+ * A string of the format in a block of the arena: `asprintf` is the formatter
+ * and the allocator of `src/asprintf.c`, the answer is the length of the text
+ * or -1 with `ENOMEM`, and the caller frees the block. `file` names it for the
+ * sentence of a type it builds on the way.
+ */
+int asprintf(char **out, const char *format, ...);
+int vasprintf(char **out, const char *format, va_list args);
+
 int getc(FILE *stream);
 int ungetc(int byte, FILE *stream);
 ssize_t getline(char **line, size_t *capacity, FILE *stream);

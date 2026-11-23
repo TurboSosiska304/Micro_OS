@@ -598,6 +598,126 @@ add_libc_program(lua
     COMPILE_OPTIONS -DULIBC_WITH_FLOAT -include "${LUA_DIR}/port/luaconf_port.h" -Os
 )
 
+# --- zstd: a compression library and the command that speaks it -------------
+#
+# zstd 1.5.7 is the third library of somebody else, and the first whose
+# command is the program of the release itself (`programs/zstdcli.c`) rather
+# than a small file of this directory. The port is three targets:
+#
+#   microos_user_zstd      lib/common, lib/compress and lib/decompress, the
+#                          library as the frame format needs it;
+#   microos_user_zstd_cli  the four files of `programs/` the command is
+#                          (fileio, fileio_asyncio, util, timefn), with the
+#                          configuration of `port/zstd_cli_port.h`;
+#   zstd                   the release's `zstdcli.c` as the `main`, the
+#                          runtime of the library of a program, and the two
+#                          archives above.
+#
+# lib/dictBuilder is not here: the dictionary builder (`--train`) is the one
+# mode the command answers "not supported" for, and the library reads a
+# dictionary somebody else trained (`-D`). lib/deprecated is not here either:
+# the format of 1.0 is not what this machine reads or writes. The library is
+# built with `-DZSTD_NO_TRACE -DZSTD_DISABLE_ASM -DZSTD_LEGACY_SUPPORT=0` and
+# without `ZSTD_MULTITHREAD` (port/zstd_port.h), which is what keeps it inside
+# the arena of a program and off the pthread of a host.
+set(ZSTD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/zstd")
+set(ZSTD_LIB_SOURCES
+    "${ZSTD_DIR}/lib/common/debug.c"
+    "${ZSTD_DIR}/lib/common/entropy_common.c"
+    "${ZSTD_DIR}/lib/common/error_private.c"
+    "${ZSTD_DIR}/lib/common/fse_decompress.c"
+    "${ZSTD_DIR}/lib/common/pool.c"
+    "${ZSTD_DIR}/lib/common/threading.c"
+    "${ZSTD_DIR}/lib/common/xxhash.c"
+    "${ZSTD_DIR}/lib/common/zstd_common.c"
+    "${ZSTD_DIR}/lib/compress/fse_compress.c"
+    "${ZSTD_DIR}/lib/compress/hist.c"
+    "${ZSTD_DIR}/lib/compress/huf_compress.c"
+    "${ZSTD_DIR}/lib/compress/zstd_compress.c"
+    "${ZSTD_DIR}/lib/compress/zstd_compress_literals.c"
+    "${ZSTD_DIR}/lib/compress/zstd_compress_sequences.c"
+    "${ZSTD_DIR}/lib/compress/zstd_compress_superblock.c"
+    "${ZSTD_DIR}/lib/compress/zstd_double_fast.c"
+    "${ZSTD_DIR}/lib/compress/zstd_fast.c"
+    "${ZSTD_DIR}/lib/compress/zstd_lazy.c"
+    "${ZSTD_DIR}/lib/compress/zstd_ldm.c"
+    "${ZSTD_DIR}/lib/compress/zstd_opt.c"
+    "${ZSTD_DIR}/lib/compress/zstd_preSplit.c"
+    "${ZSTD_DIR}/lib/decompress/huf_decompress.c"
+    "${ZSTD_DIR}/lib/decompress/zstd_ddict.c"
+    "${ZSTD_DIR}/lib/decompress/zstd_decompress.c"
+    "${ZSTD_DIR}/lib/decompress/zstd_decompress_block.c"
+)
+set(ZSTD_CLI_SOURCES
+    "${ZSTD_DIR}/programs/fileio.c"
+    "${ZSTD_DIR}/programs/fileio_asyncio.c"
+    "${ZSTD_DIR}/programs/util.c"
+    "${ZSTD_DIR}/programs/timefn.c"
+    "${ZSTD_DIR}/port/zstd_cli_os.c"
+)
+
+# The upstream sources answer warnings of their own (a comparison of an int
+# with a size_t, a variable of a build that is not this one): the exceptions
+# stay here and not in a vendored file, the way the zlib and the Lua ports
+# keep theirs.
+microos_userland_library(microos_user_zstd
+    SOURCES ${ZSTD_LIB_SOURCES}
+    INCLUDES "${ZSTD_DIR}/lib" "${ZSTD_DIR}/port"
+    COMPILE_OPTIONS "-include" "${ZSTD_DIR}/port/zstd_port.h"
+        -Wno-sign-compare -Wno-unused-but-set-variable -Wno-implicit-fallthrough -Os
+)
+microos_userland_library(microos_user_zstd_cli
+    SOURCES ${ZSTD_CLI_SOURCES}
+    INCLUDES "${ZSTD_DIR}/lib" "${ZSTD_DIR}/programs" "${ZSTD_DIR}/port"
+    COMPILE_OPTIONS "-include" "${ZSTD_DIR}/port/zstd_cli_port.h"
+        -Wno-sign-compare -Wno-unused-parameter -Wno-unused-but-set-variable
+        -Wno-implicit-fallthrough -Wno-format-truncation -Os
+)
+set_source_files_properties(${ZSTD_LIB_SOURCES}
+    PROPERTIES OBJECT_DEPENDS "${ZSTD_DIR}/port/zstd_port.h")
+set_source_files_properties(${ZSTD_CLI_SOURCES}
+    PROPERTIES OBJECT_DEPENDS "${ZSTD_DIR}/port/zstd_cli_port.h;${ZSTD_DIR}/port/zstd_port.h")
+
+# The arena of the command is 960 KiB of the megabyte the format allows a bss
+# (K_EXEC_BSS_MAX): the pools of the CLI and a context of the library, with
+# the room `port/zstd_cli_os.h` measures. The image is `-Os`, about 400 KiB of
+# text and 40 KiB of data.
+#
+# FLOAT is for one mode of the release: `-l` prints the sizes of a frame with
+# `%6.2f` (`UTIL_makeHumanReadableSize` answers a double), and a build with
+# -mgeneral-regs-only writes those two characters instead of the number. The
+# compressor itself is integer arithmetic; the program of the port saves no
+# XMM state in the scheduler and `execve` waits for it, which is the rule of
+# every program with a point in its numbers (`docs/porting-programs.md`).
+add_libc_program(zstd
+    FLOAT
+    # The CLI first: the linker walks the list once, and the command asks the
+    # library of zstd for the symbols of a stream.
+    LIBRARIES microos_user_zstd_cli microos_user_zstd
+    MAIN "${ZSTD_DIR}/programs/zstdcli.c"
+    INCLUDES "${ZSTD_DIR}/lib" "${ZSTD_DIR}/programs" "${ZSTD_DIR}/port"
+    DEFINES ULIBC_HEAP_SIZE=983040u
+    SOURCES "${LIBC_USER_DIR}/src/malloc.c"
+            "${LIBC_USER_DIR}/src/file.c"
+            "${LIBC_USER_DIR}/src/stdio_ext.c"
+            "${LIBC_USER_DIR}/src/string_ext.c"
+            "${LIBC_USER_DIR}/src/strdup.c"
+            "${LIBC_USER_DIR}/src/ctype.c"
+            "${LIBC_USER_DIR}/src/stdlib.c"
+            "${LIBC_USER_DIR}/src/stat.c"
+            "${LIBC_USER_DIR}/src/dirent.c"
+            "${LIBC_USER_DIR}/src/libgen.c"
+            "${LIBC_USER_DIR}/src/time.c"
+            "${LIBC_USER_DIR}/src/assert.c"
+            "${LIBC_USER_DIR}/src/format_float.c"
+    # The runtime of this program keeps the raw `open` of the ABI under a name
+    # of its own: the port defines the POSIX one for the release (README.md,
+    # "The shape of the calls").
+    COMPILE_OPTIONS -DULIBC_WITH_FLOAT
+        -include "${ZSTD_DIR}/port/zstd_cli_port.h"
+        -Dopen=ulibc_open_call -Wno-unused-parameter -Os
+)
+
 # --- sbase: the tools of a Unix-like system ---------------------------------
 #
 # sbase is a collection of small Unix tools by suckless, released under the
@@ -745,6 +865,88 @@ add_sbase_program(sort 524288u)
 add_sbase_program(find 524288u)
 add_sbase_program(xargs 262144u)
 add_sbase_program(sed 524288u)
+
+# --- file and libmagic: the type of a file ----------------------------------
+#
+# file 5.45 with libmagic (third_party/file, BSD-2-Clause) is the second port
+# of a library that reads the bytes of a file and the first one that needs a
+# database of its own. The database does not fit: the release ships about ten
+# megabytes of magic and the RAM of the machine is what the boot leaves, so
+# the port compiles a subset of the Magdir files (tools/magic_subset.py,
+# third_party/file/magic/subset.json) into /etc/magic.mgc, and the same text
+# travels as /etc/magic for a machine whose compiled file is gone.
+#
+# The library is a static archive of the guest. It reads the database whole
+# with malloc (no QUICK: this machine has no mmap), matches with the portable
+# softmagic, and asks the port for the two calls of a process it cannot make
+# (port/file_port.c). The types `float` and `double` of the release are left
+# out with MICRO_OS_NO_FLOAT: a program of this port has no XMM state.
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/libmagic.cmake")
+
+microos_userland_library(microos_user_file
+    SOURCES ${MICROOS_FILE_SOURCES}
+    INCLUDES "${MICROOS_FILE_DIR}/src" "${MICROOS_FILE_DIR}/port"
+    DEFINES HAVE_CONFIG_H
+    COMPILE_OPTIONS -Os ${MICROOS_FILE_WARNINGS}
+)
+
+# The compiler of the database is a tool of the build and not a program of the
+# machine: it is compiled by the compiler of the host with the host libc and
+# the same configuration header, so the format of the .mgc it writes is the
+# format the library of the guest reads.
+add_executable(microos_magic_compile
+    ${MICROOS_FILE_SOURCES}
+    "${MICROOS_FILE_DIR}/port/magic_compile.c"
+)
+target_include_directories(microos_magic_compile PRIVATE
+    "${MICROOS_FILE_DIR}/src" "${MICROOS_FILE_DIR}/port"
+)
+target_compile_definitions(microos_magic_compile PRIVATE HAVE_CONFIG_H)
+target_compile_options(microos_magic_compile PRIVATE -Os ${MICROOS_FILE_WARNINGS})
+target_link_options(microos_magic_compile PRIVATE -no-pie)
+
+# The text of the database and its compiled form. `magic_compile -C magic`
+# writes magic.mgc beside the name in its own directory, which is why the
+# command runs in the build directory.
+set(MAGIC_TEXT "${CMAKE_BINARY_DIR}/magic")
+set(MAGIC_MGC "${CMAKE_BINARY_DIR}/magic.mgc")
+add_custom_command(
+    OUTPUT "${MAGIC_TEXT}"
+    COMMAND ${CMAKE_COMMAND} -E env python3
+            "${MICROOS_MAGIC_SUBSET}"
+            --config "${MICROOS_MAGIC_CONFIG}"
+            --out "${MAGIC_TEXT}"
+    DEPENDS "${MICROOS_MAGIC_SUBSET}" "${MICROOS_MAGIC_CONFIG}"
+            "${MICROOS_FILE_DIR}/magic/microos.magic"
+    COMMENT "choosing the subset of the magic database of file"
+    VERBATIM
+)
+add_custom_command(
+    OUTPUT "${MAGIC_MGC}"
+    COMMAND "$<TARGET_FILE:microos_magic_compile>" -C magic
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+    DEPENDS microos_magic_compile "${MAGIC_TEXT}"
+    COMMENT "compiling the magic database of /etc"
+    VERBATIM
+)
+
+# `-z` looks inside the two compressions of the image: gzip through the zlib of
+# the program, and zstd through the decompressor of the library the command of
+# zstd is built from (`microos_user_zstd`, not the CLI: the archive holds the
+# library alone). The linker pulls the objects of the decoder and nothing of
+# the compressor, and the port header of the library names the window this
+# machine can hold (`port/zstd_port.h`, included by file.c as the sources of
+# the library are).
+add_libc_program(file
+    LIBRARIES microos_user_file microos_user_zlib microos_user_zstd
+    INCLUDES "${MICROOS_FILE_DIR}/src" "${MICROOS_FILE_DIR}/port" "${ZLIB_DIR}"
+             "${ZSTD_DIR}/lib" "${ZSTD_DIR}/port"
+    DEFINES ULIBC_HEAP_SIZE=983040u MICRO_OS_WITH_ZSTD
+    SOURCES ${SBASE_LIBC_SOURCES}
+            "${LIBC_USER_DIR}/src/locale.c"
+            "${LIBC_USER_DIR}/src/asprintf.c"
+    COMPILE_OPTIONS -Os ${MICROOS_FILE_WARNINGS}
+)
 
 # --- bc and dc: the calculators of arbitrary precision ------------------------
 #
@@ -1111,6 +1313,6 @@ add_custom_command(
 
 add_custom_target(image
     DEPENDS "${CMAKE_BINARY_DIR}/microos64.bin" "${CMAKE_BINARY_DIR}/loader32.elf"
-            ${MICROOS_PROGRAM_IMAGES}
+            "${MAGIC_MGC}" "${MAGIC_TEXT}" ${MICROOS_PROGRAM_IMAGES}
     COMMENT "the image of the port: loader32.elf + microos64.bin + the programs of /bin"
 )

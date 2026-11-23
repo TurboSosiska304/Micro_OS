@@ -56,6 +56,16 @@ and runs tasks on each of them. The board is not part of this release (ADR
   queues before and after the load, and no exception) and `make soak-smp`
   (the 600-second session on the two-core image, with the ticks of both
   cores sampled every cycle).
+- The ports of the third and the fourth library of somebody else: zstd 1.5.7
+  (BSD-3-Clause) as the archive of the frame format and `/bin/zstd` of its own
+  command, and file 5.45 with libmagic (BSD-2-Clause) as `/bin/file` with the
+  compiled subset of the magic database in `/etc/magic.mgc`. The library of a
+  program learned the two headers of the fixed-width numbers (`stdint.h`,
+  `inttypes.h`), `asprintf`/`vasprintf`, the precision of a string in the
+  formatter, `pread`, `asctime`/`ctime`, and one more name of a compressed
+  stream: `/bin/file -z` looks inside a zstd frame as well as a gzip. The
+  library is one implementation per name for every port: the POSIX families
+  of sbase and the formatter with a point of Lua.
 
 ### Changed
 

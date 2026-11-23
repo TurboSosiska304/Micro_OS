@@ -409,3 +409,32 @@ size_t strftime(char *buffer, size_t size, const char *format, const struct tm *
 
     return out.overflow ? 0 : out.used;
 }
+
+/*
+ * The fixed form of a moment: "Www Mmm dd hh:mm:ss yyyy\n", the 26 bytes of
+ * `asctime` and the one string a caller keeps until the next call. The
+ * machine has one clock (the boot), so `ctime` is the same text for the same
+ * seconds on every run, which is what the smoke test of the port reads.
+ */
+static char g_asctime_s[26];
+
+char *asctime(const struct tm *broken)
+{
+    if (broken == NULL) {
+        return NULL;
+    }
+    if (strftime(g_asctime_s, sizeof(g_asctime_s), "%a %b %e %H:%M:%S %Y\n", broken) == 0) {
+        return NULL;
+    }
+
+    return g_asctime_s;
+}
+
+char *ctime(const time_t *when)
+{
+    if (when == NULL) {
+        return NULL;
+    }
+
+    return asctime(localtime(when));
+}

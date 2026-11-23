@@ -367,9 +367,28 @@ written when the project was an operating system for one board; the numbers
 * [ ] A `chdir` and a wall clock in the ABI, and the POSIX frame of a fork
       child: the library works around the three, and the workaround of each
       is named in `docs/debts.md`
-* [ ] The ports of 1.3.0: SQLite (its SDK, and a package above
-      `PKG_PACKAGE_MAX` of 1 MiB), zstd, `file`/libmagic and awk; their
-      branches are still in progress and none of them is a promise of 1.2.0
+* [x] The fifth port: zstd 1.5.7 (BSD-3-Clause) as a static archive of
+      lib/common, lib/compress and lib/decompress, and `/bin/zstd` as the
+      program of the release itself (`programs/zstdcli.c`), with
+      `/bin/zstdcat` as the same image under a second name and
+      `/etc/setting.zst` as a fixture; `/etc/licenses/zstd` travels in the
+      image. The port caps the memory of the context to the arena of a
+      program (`third_party/zstd/README.md`), and the frames of the guest and
+      of the host are read by one another in `make x86-smoke`; the host test
+      is `tests/cases/test_zstd.c`
+* [x] The sixth port, and the first database: file 5.45 with libmagic
+      (`third_party/file`, BSD-2-Clause) as `/bin/file`, with a compact
+      database of the Magdir rules (`tools/magic_subset.py`, the subset of
+      `third_party/file/magic/subset.json`) compiled into `/etc/magic.mgc`
+      and the text `/etc/magic` as the fallback. It is the port that asked
+      for an image past the transfer edge (`K_EXEC_MAX_IMAGE`), the first
+      whose data does not fit (`magic.mgc` is 359 KiB), and the first whose
+      `-z` names the content of a gzip and of a zstd frame;
+      `tests/cases/test_file.c`, `make x86-smoke` and `make x86-disk-smoke`
+      cover the values, the program and the volume after a reset
+* [ ] The ports of 1.3.0 still open: SQLite (its SDK, and a package above
+      `PKG_PACKAGE_MAX` of 1 MiB) and awk; their branches are in progress and
+      neither is a promise before it is merged
 
 ## The last major changes of the board (1.1.0)
 

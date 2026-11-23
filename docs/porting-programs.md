@@ -4,9 +4,10 @@ This is the recipe of a program that is somebody else's: a library and a
 command of a Unix-like system that were written for a C library and a POSIX
 kernel, built with the compiler and the library of this system and run in the
 window of a program. The first one is zlib and `/bin/zcat`
-([`third_party/zlib/README.md`](../third_party/zlib/README.md)); the next
-ones are Lua, bc/dc, the tools of sbase and SQLite, and the recipe is written
-so that they are copies of a shape and not new research.
+([`third_party/zlib/README.md`](../third_party/zlib/README.md)); the next ones
+are Lua (an interpreter), zstd (a library and the command of its own release),
+bc/dc, `file` with libmagic, the tools of sbase and SQLite, and the recipe is
+written so that they are copies of a shape and not new research.
 
 It is not the recipe of a **port of Micro OS** to another machine: that one is
 [`porting.md`](porting.md), and it is about the contract of `kernel/port/`.
@@ -79,9 +80,12 @@ tends to need and the tree has:
 
 | Header | What is there |
 |---|---|
-| `<string.h>` | `strlen`, `strcmp`, `strncmp`, `strcoll`, `strstr`, `strspn`, `strcspn`, `strpbrk`, `strcpy`, `strncpy`, `strcat`, `strchr`, `strrchr`, `memcpy`, `memmove`, `memset`, `memcmp`, `memchr` |
+| `<string.h>` | `strlen`, `strcmp`, `strncmp`, `strcoll`, `strstr`, `strspn`, `strcspn`, `strpbrk`, `strcpy`, `strncpy`, `strcat`, `strchr`, `strrchr`, `strdup` (a file of its own: it allocates), `memcpy`, `memmove`, `memset`, `memcmp`, `memchr` |
 | `<stdlib.h>` | `malloc`, `calloc`, `realloc`, `free`, `exit`, `abort`, `getenv`/`environ`, `strtod`, `strtol`, `strtoul`, `strtoll`, `strtoull`, `atoi`, `atol`, `atof`, `abs`, `labs`, `qsort`, `EXIT_SUCCESS`, `EXIT_FAILURE` |
-| `<stdio.h>` | `printf`, `vprintf`, `fprintf`, `vfprintf`, `sprintf`, `snprintf`, `vsnprintf`, `puts`, `putchar`, and the streams `fopen`, `freopen`, `tmpfile` (a failure: no `/tmp`), `fclose`, `fread`, `fwrite`, `fgetc`, `getc`, `ungetc`, `fputc`, `fgets`, `fputs`, `feof`, `ferror`, `clearerr`, `fflush`, `fseek`, `ftell`, `rewind`, `fileno`, `setvbuf` (accepted, no buffer), `stdin`, `stdout`, `stderr` |
+| `<stdio.h>` | `printf`, `vprintf`, `fprintf`, `vfprintf`, `sprintf`, `snprintf`, `vsnprintf`, `puts`, `putchar`, `perror`, `getchar`, and the streams `fopen`, `fdopen`, `freopen`, `tmpfile` (a failure: no `/tmp`), `fclose`, `fread`, `fwrite`, `fgetc`, `getc`, `ungetc`, `fputc`, `fgets`, `fputs`, `feof`, `ferror`, `clearerr`, `fflush`, `fseek`, `ftell`, `rewind`, `fileno`, `setvbuf` (accepted, no buffer), `stdin`, `stdout`, `stderr` |
+| `<sys/stat.h>` | `struct stat` with the `S_IS*` macros, `stat`, `lstat` (the same call: no links), `fstat` (the position of the end), `chmod`, `umask`. The record of the ABI itself is `ulibc_stat_call`, which fills `struct vfs_stat` |
+| `<dirent.h>` | `DIR`, `struct dirent`, `opendir`, `readdir`, `closedir`, `rewinddir`, `dirfd` over a batch of eight entries of the call `ulibc_readdir` |
+| `<libgen.h>` | `basename`, `dirname` |
 | `<errno.h>` | the POSIX numbers, `EDOM`/`ERANGE`, and `errno`, which is a plain global of the program |
 | `<unistd.h>` | `read`, `write`, `lseek`, `close`, `unlink`, `isatty` (0: no terminal), the three `STD*_FILENO` and `off_t`/`ssize_t` |
 | `<fcntl.h>` | `O_RDONLY`, `O_WRONLY`, `O_RDWR`, `O_CREAT`, `O_TRUNC`, `O_APPEND`, `O_DIRECTORY` |
@@ -190,6 +194,12 @@ The guest flags are the ones of the kernel and of the existing programs:
 -fno-merge-constants -Wall -Wextra -Werror`. No `-mcmodel=kernel` (that one is
 the kernel's), and no libc of the host: a symbol that the archive cannot
 resolve is a link error and not a silent call into glibc.
+
+A library that does not compute in floating point links `src/stdlib.c` and
+`src/time.c` without `ULIBC_WITH_FLOAT`: the conversion of a double
+(`strtod`, `atof`) and `difftime` are in the float build alone, the way the
+formatter is, so `zstd` pays neither their code nor the SSE register they
+return in.
 
 `-mgeneral-regs-only` is the rule of a program that computes in integers.
 A library whose numbers are doubles (Lua) is built with the `FLOAT` option of
@@ -331,6 +341,44 @@ the host, a `userland` test of its own), and in `x86-smoke` and
 these ten, so the checks are the command a person types and not only the
 path of the file.
 
+## The third port: file and libmagic
+
+The third port is a command **and** a library that reads a database of its
+own: file 5.45 with libmagic (`third_party/file`, BSD-2-Clause). It is the
+first one whose data does not fit, and the first one that asked for a kernel
+change of its own (an image of up to 8 MiB, read in pieces of the transfer
+edge, `K_EXEC_MAX_IMAGE`).
+
+What it added to the recipe:
+
+* **The data is a build step.** The release's database is about 10 MiB.
+  `tools/magic_subset.py` chooses a subset of the Magdir files (the list is
+  `third_party/file/magic/subset.json`) and `microos_magic_compile` compiles
+  it with the library itself into `/etc/magic.mgc`; the text travels as
+  `/etc/magic` and is the fallback when the compiled file is gone. A command
+  whose data is somebody else's is a **selection** and a tool, not a copy of
+  the whole.
+* **No `mmap` is a configuration, not a port.** The library has a path that
+  reads the compiled database into a block (`QUICK` off); the port leaves it
+  off, and `magic_buffer()` is handed the bytes the program read. The one
+  `read` of the database became a loop of 64 KiB pieces, because the ABI of
+  this system refuses a larger count.
+* **No floating point is a hunk of the library, not a flag.** The release
+  matches magic types in `float` and `double`; a program of this port has no
+  XMM state (`-mgeneral-regs-only`) and the formatter has no `%g`. The port
+  compiles those paths out with `MICRO_OS_NO_FLOAT` and drops such rules from
+  the database; the hunks are named in the README of the directory.
+* **The arena is the budget.** The database is 359 KiB and the file buffer
+  128 KiB of a 960 KiB arena; the encoding test of the release wanted 512 KiB
+  for a 64 KiB window and the port gives it 16 KiB. A port whose library
+  allocates is a port whose numbers are chosen against `ULIBC_HEAP_SIZE`.
+* **The streams needed a block.** `grep` of sbase over the database was one
+  system call per byte and the shell gave up after ten seconds; the read side
+  of `FILE` now has a block of 512 bytes.
+
+The tests are `tests/cases/test_file.c` for the host (the compiled database
+and the text) and `/bin/file` in `x86-smoke` and `x86-disk-smoke`.
+
 ## The checklist of the next port
 
 1. Read the license; stop if it is copyleft.
@@ -365,6 +413,11 @@ path of the file.
 * **An image larger than 8 MiB.** `sys_execve` reads it in pieces of
   `KSYS_MAX_IO` into one block of the allocator, and `K_EXEC_MAX_IMAGE` is the
   ceiling. A larger program needs the streaming of the image into the window.
+* **`mmap`, `brk` and a range that grows.** A library that maps its data
+  (`QUICK` of libmagic) takes the block path; the arena of the program is the
+  ceiling and a library with a bigger database needs a smaller selection or a
+  `brk` of the program.
+* **Floating point.** `-mgeneral-regs-only` is the rule of the port.
 * **A real `fork` of a library's child process.** The system has `fork` on
   x86-64 and the library now has `fork`, `waitpid` and `execvp`, but the
   child of the port comes back with the parent's answer in RAX and a stack
