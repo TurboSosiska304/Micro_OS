@@ -106,6 +106,7 @@ _Static_assert(MFS_MODE_BITS == 9 && MFS_OWNER_BITS == 15,
 #define MFS_ENOTEMPTY (-9)
 #define MFS_E2BIG (-10)
 #define MFS_ENOTSUP (-11)
+#define MFS_ENOMEM (-12)
 
 /* The flags of the open flags, they follow the POSIX ones. */
 #define MFS_O_RDONLY 0x0000

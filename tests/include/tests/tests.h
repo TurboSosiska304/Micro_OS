@@ -26,6 +26,7 @@ void test_mfs_persistence(void);
 void test_mfs_repair(void);
 void test_mfs_many(void);
 void test_mfs_chain(void);
+void test_mfs_big(void);
 void test_mkfs_image(void);
 void test_vfs(void);
 void test_fs_fat(void);
