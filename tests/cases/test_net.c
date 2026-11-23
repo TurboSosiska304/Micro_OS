@@ -6,6 +6,7 @@
 
 #include "kernel/net.h"
 #include "kernel/sched.h"
+#include "kernel/sysinfo.h"
 #include "kernel/task.h"
 #include "kshell/kshell.h"
 #include "net/dns.h"
@@ -14,6 +15,46 @@
 #include "net/net.h"
 #include "net/net_http.h"
 #include "net/ntp.h"
+
+/*
+ * A port of the loopback for this process, taken once. Two worktrees of a
+ * host run this suite at the same time and a number written in the tree
+ * belongs to whichever of them bound it first; the kernel is asked for a
+ * listener and the port it takes is the one this process uses.
+ */
+static k_u16_t test_free_port(void)
+{
+    static k_u16_t s_candidate;
+
+    if (s_candidate == 0) {
+        s_candidate = (k_u16_t)(18100u + (k_u32_t)(k_sysinfo_uptime_ms() % 5000u));
+    }
+
+    {
+        unsigned attempt;
+
+        for (attempt = 0; attempt < 500; attempt++) {
+            k_server_t *probe;
+
+            if (s_candidate < 18100u || s_candidate >= 24000u) {
+                s_candidate = 18100u;
+            }
+
+            probe = k_server_listen(s_candidate);
+
+            if (probe != NULL) {
+                k_server_close(probe);
+                return s_candidate++;
+            }
+
+            s_candidate++;
+        }
+    }
+
+    /* A machine with every number of the range taken is a machine this test
+     * cannot use; the caller reads the zero and fails with its own words. */
+    return 0;
+}
 
 /* --- the transport that replays a canned answer of a server --- */
 
@@ -583,6 +624,33 @@ static k_server_t *test_listen(int *port)
 
     return NULL;
 }
+
+/*
+ * A session to the door of the test. The port takes the connection as soon
+ * as its listener is up and the task of the server may be scheduled late on
+ * a host that builds three worktrees at once: the connect is tried a few
+ * times before it is a failure of the case.
+ */
+static k_socket_t *connect_to_door(k_u16_t port)
+{
+    unsigned attempt;
+
+    for (attempt = 0; attempt < 20; attempt++) {
+        k_socket_t *client = k_socket_connect("127.0.0.1", port, 2000);
+
+        if (client != NULL) {
+            return client;
+        }
+
+        k_sched_sleep_ms(100);
+    }
+
+    return NULL;
+}
+
+/* The ports the two doors of this case took: found once, from the kernel. */
+static k_u16_t page_port;
+static k_u16_t command_port;
 
 static void test_loopback(void)
 {
@@ -1367,11 +1435,26 @@ void test_net(void)
      */
     ktest_begin("http: the server answers the page of the state, health and the refusals");
 
-    KT_CHECK_INT_EQ(net_http_server_start(18080), 0);
+    {
+        unsigned attempt;
+        k_u16_t port = 0;
+
+        for (attempt = 0; attempt < 8; attempt++) {
+            port = test_free_port();
+
+            if (net_http_server_start(port) == 0) {
+                break;
+            }
+        }
+
+        page_port = port;
+    }
+
     KT_CHECK(net_http_server_running());
+    KT_CHECK_INT_EQ((int)net_http_server_port(), (int)page_port);
 
     for (i = 0; i < K_ARRAY_SIZE(cases); i++) {
-        k_socket_t *client = k_socket_connect("127.0.0.1", 18080, 2000);
+        k_socket_t *client = connect_to_door(page_port);
         k_size_t used = 0;
 
         KT_CHECK(client != NULL);
@@ -1438,13 +1521,29 @@ void test_net(void)
     ktest_begin("http: the command httpd starts, reports and stops the server");
 
     KT_CHECK_INT_EQ(net_register(), 0);
-    KT_CHECK_INT_EQ(kshell_execute("httpd 18082"), KSHELL_OK);
+    {
+        unsigned attempt;
+        char command[32];
+
+        for (attempt = 0; attempt < 8; attempt++) {
+            k_u16_t port = test_free_port();
+
+            snprintf(command, sizeof(command), "httpd %u", (unsigned)port);
+
+            if (kshell_execute(command) == KSHELL_OK && net_http_server_running() &&
+                net_http_server_port() == port) {
+                command_port = port;
+                break;
+            }
+        }
+    }
+
     KT_CHECK(net_http_server_running());
-    KT_CHECK_INT_EQ(net_http_server_port(), 18082);
+    KT_CHECK_INT_EQ((int)net_http_server_port(), (int)command_port);
 
     /* A second call keeps the server where it is and says so. */
     KT_CHECK_INT_EQ(kshell_execute("httpd"), KSHELL_OK);
-    KT_CHECK_INT_EQ(net_http_server_port(), 18082);
+    KT_CHECK_INT_EQ((int)net_http_server_port(), (int)command_port);
 
     KT_CHECK_INT_EQ(kshell_execute("httpd 99999"), KSHELL_USAGE);
     KT_CHECK_INT_EQ(kshell_execute("httpd off"), KSHELL_OK);
