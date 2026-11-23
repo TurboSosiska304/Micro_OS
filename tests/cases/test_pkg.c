@@ -488,10 +488,12 @@ static void test_index(void)
             static const char unknown_string[] =
                 "{\"machine\":\"x86_64\",\"abi\":2,\"homepage\":\"https://example.org/x\","
                 "\"packages\":[{\"name\":\"x\",\"version\":\"1\",\"size\":1,"
-                "\"sha256\":\"0000000000000000000000000000000000000000000000000000000000000000\","
+                "\"sha256\":\"0000000000000000000000000000000000000000"
+                "000000000000000000000000\","
                 "\"homepage\":\"https://example.org/x\"}]}";
 
-            KT_CHECK_INT_EQ(pkg_index_parse(unknown_string, strlen(unknown_string), &index), PKG_OK);
+            KT_CHECK_INT_EQ(pkg_index_parse(unknown_string, strlen(unknown_string), &index),
+                            PKG_OK);
             KT_CHECK_INT_EQ((int)index.count, 1);
             KT_CHECK_STR_EQ(index.entries[0].name, "x");
         }

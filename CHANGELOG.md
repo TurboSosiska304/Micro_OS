@@ -10,6 +10,31 @@ the MicroFS volume change by adding only.
 A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 (`vX.Y.Z-pre`) is a pre-release and must match `kernel_version()`.
 
+## [1.3.1] - 2026-11-23
+
+A patch of `1.3.0` for the three defects the first copyleft packages and the
+600-second session of the tag found. The volume, the syscall ABI (the calls
+of 1.3.0 and no other) and `MOX1` do not change.
+
+### Fixed
+
+- `execve` waited for a program with a budget of ten seconds and **returned**
+  when it was spent, leaving the task running with the console of the shell
+  and a slot nobody reaps: the session of the tag caught a table of four tasks
+  where two ran. The budget is a minute, and a program that outlives it is
+  stopped with `SIGTERM` and reaped.
+- the skip of a field the installer does not know read the opening quote of a
+  string as its closing one, so one `homepage` of an index made the whole
+  document unreadable - against the promise of `docs/wiki/pkg.md`.
+- `rename` handed its two names to the kernel untouched while `open`, `stat`
+  and `unlink` resolve them in the library: a relative name answered `EINVAL`
+  for `rename` alone, and a program that saves through a temporary name lost
+  the file.
+- the shell printed `the program has finished` into the stream of the
+  program, so with a redirection the sentence landed in the file: the port of
+  `gzip` caught it as a trailing garbage in a `.gz` it then refused. The line
+  goes to the error stream.
+
 ## [1.3.0] - 2026-11-23
 
 The release of the many cores. `KERNEL_SMP` stays off by default: with it off

@@ -263,7 +263,8 @@ int rename(const char *from, const char *to)
         return -1;
     }
 
-    rc = __ulibc_syscall6(KSYS_RENAME, (long)(uintptr_t)source, (long)(uintptr_t)target, 0, 0, 0, 0);
+    rc =
+        __ulibc_syscall6(KSYS_RENAME, (long)(uintptr_t)source, (long)(uintptr_t)target, 0, 0, 0, 0);
 
     if (rc < 0) {
         errno = (int)-rc;
