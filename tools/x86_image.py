@@ -150,7 +150,7 @@ DC_SCRIPT = """2 3 + p
 2 10 ^ p
 """
 
-IMAGE_MB = 8
+IMAGE_MB = 16
 START_LBA = 2048
 # The moment of the records when SOURCE_DATE_EPOCH does not say another one.
 # Zero is the convention of a reproducible build and "unknown" in MicroFS:
