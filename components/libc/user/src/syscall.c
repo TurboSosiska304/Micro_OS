@@ -244,7 +244,26 @@ int unlink(const char *path)
  */
 int rename(const char *from, const char *to)
 {
-    long rc = __ulibc_syscall6(KSYS_RENAME, (long)(uintptr_t)from, (long)(uintptr_t)to, 0, 0, 0, 0);
+    /* The two names go through the same resolution as `open` and `stat`: a
+     * program of this machine has a current directory of its own and the
+     * kernel has no notion of one, so a relative name is turned into an
+     * absolute one in the library. Without it `rename("a", "b")` answered
+     * EINVAL while `open("a", ...)` worked, and a program that saves through
+     * a temporary name lost the file. */
+    const char *source = __ulibc_path(from);
+    const char *target;
+    long rc;
+
+    if (source == NULL) {
+        return -1;
+    }
+
+    target = __ulibc_path(to);
+    if (target == NULL) {
+        return -1;
+    }
+
+    rc = __ulibc_syscall6(KSYS_RENAME, (long)(uintptr_t)source, (long)(uintptr_t)target, 0, 0, 0, 0);
 
     if (rc < 0) {
         errno = (int)-rc;

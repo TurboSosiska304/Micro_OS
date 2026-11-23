@@ -479,6 +479,22 @@ static void test_index(void)
         /* A field this parser does not know is skipped; the rest is read. */
         KT_CHECK_INT_EQ(pkg_index_parse(unknown_field, strlen(unknown_field), &index), PKG_OK);
         KT_CHECK_INT_EQ((int)index.count, 0);
+
+        /* A field whose value is a *string* as well: the skip used to read
+         * the opening quote as the closing one and leave the value in the
+         * stream, so one `homepage` of an index made the whole document
+         * unreadable (found by the first copyleft package). */
+        {
+            static const char unknown_string[] =
+                "{\"machine\":\"x86_64\",\"abi\":2,\"homepage\":\"https://example.org/x\","
+                "\"packages\":[{\"name\":\"x\",\"version\":\"1\",\"size\":1,"
+                "\"sha256\":\"0000000000000000000000000000000000000000000000000000000000000000\","
+                "\"homepage\":\"https://example.org/x\"}]}";
+
+            KT_CHECK_INT_EQ(pkg_index_parse(unknown_string, strlen(unknown_string), &index), PKG_OK);
+            KT_CHECK_INT_EQ((int)index.count, 1);
+            KT_CHECK_STR_EQ(index.entries[0].name, "x");
+        }
     }
 
     /*
