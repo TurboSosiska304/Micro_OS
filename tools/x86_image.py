@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import errno
 import gzip
+import hashlib
 import io
 import os
 import shutil
@@ -126,6 +127,23 @@ PCRE2_LICENSE = "third_party/pcre2/LICENSE"
 # after it are the settings a machine of this port has (the config component
 # is not linked here, so the file is data of the image).
 SETTING = "hello\nhostname=x86_64\nconsole=vga"
+
+# The accounts of the machine (ADR 0033): the five fields of a record of
+# /etc/passwd and the salted SHA-256 of /etc/shadow. The password of root is
+# `microos`, and the second account has none (`*`): only root becomes guest.
+# The hash is the one `printf 'mox1%s' microos | sha256sum` answers, and the
+# smoke test proves that the C side of the tree reads what Python wrote here.
+ACCOUNTS_SALT = "mox1"
+ACCOUNTS_ROOT_PASSWORD = "microos"
+ACCOUNTS_PASSWD = "root:0:0:/:/bin/sh\nguest:7:7:/home/guest:/bin/sh"
+
+
+def accounts_shadow() -> str:
+    """The text of /etc/shadow of the image, with the hash of the root."""
+    digest = hashlib.sha256((ACCOUNTS_SALT + ACCOUNTS_ROOT_PASSWORD).encode("ascii")).hexdigest()
+
+    return f"root:$sha256${ACCOUNTS_SALT}${digest}\nguest:*"
+
 
 # The frame of `SETTING` and a newline: zstd 1.5.7, level 19, no checksum.
 SETTING_ZST_FRAME = (
@@ -461,8 +479,8 @@ def write_greeting(build_dir: str, epoch: int) -> str:
 # "text" (text the writer puts in the file and a trailing newline).
 
 
-def tree_dir(path: str) -> tuple:
-    return ("dir", path, None, 0o755)
+def tree_dir(path: str, mode: int = 0o755) -> tuple:
+    return ("dir", path, None, mode)
 
 
 def tree_file(path: str, source: str, mode: int = 0o644) -> tuple:
@@ -473,8 +491,8 @@ def tree_program(path: str, source: str) -> tuple:
     return ("program", path, source, 0o755)
 
 
-def tree_text(path: str, text: str) -> tuple:
-    return ("text", path, text, 0o644)
+def tree_text(path: str, text: str, mode: int = 0o644) -> tuple:
+    return ("text", path, text, mode)
 
 
 def extra_entries(extra: list) -> list:
@@ -523,7 +541,7 @@ def microfs_command(entries: list, image: str, size_mb: int, mkfs: str, epoch: i
         str(epoch),
     ]
 
-    for kind, path, payload, _mode in entries:
+    for kind, path, payload, mode in entries:
         if kind == "dir":
             command += ["--dir", path]
         elif kind == "program":
@@ -532,6 +550,13 @@ def microfs_command(entries: list, image: str, size_mb: int, mkfs: str, epoch: i
             command += ["--file", f"{path}={payload}"]
         else:
             command += ["--text", f"{path}={payload}"]
+
+        # The tool writes a directory of 0755 and a file of 0644 unless it is
+        # told otherwise, and the mode comes after the object it is the mode
+        # of (`/tmp` is 0777, /etc/shadow is 0600).
+        default_mode = 0o755 if kind == "dir" else 0o644
+        if mode != default_mode:
+            command += ["--mode", f"{mode:04o}"]
 
     return command
 
@@ -986,6 +1011,19 @@ def build_image(
     entries.append(tree_file("/etc/licenses/awk", AWK_LICENSE))
 
     entries.append(tree_text("/etc/setting", SETTING))
+
+    # The accounts of the machine: the two files of ADR 0033, and the home
+    # directory of the second user, so that `su - guest` has a directory to
+    # enter. The hash of the password of root is written by this tool; the
+    # shell checks it with the SHA-256 of the tree. `/tmp` is the directory
+    # every user writes: a file that a user creates is the debt of
+    # docs/debts.md (the create path gives it to root), and the smoke test
+    # reads the owner of one of them.
+    entries.append(tree_text("/etc/passwd", ACCOUNTS_PASSWD))
+    entries.append(tree_text("/etc/shadow", accounts_shadow(), 0o600))
+    entries.append(tree_dir("/home"))
+    entries.append(tree_dir("/home/guest"))
+    entries.append(tree_dir("/tmp", 0o777))
 
     license_path = os.path.join(ROOT, PCRE2_LICENSE)
     if not os.path.isfile(license_path):
