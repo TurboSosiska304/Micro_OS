@@ -98,7 +98,7 @@ contract is therefore two files in one commit, and a reviewer sees it.
 | `/proc`, `/dev`, `/sys` | yes | `/proc` and `/dev` from phase 2, `/sys` later |
 | System calls | yes | yes, from phase 3; hardware isolation on x86-64 (ring 3), logical on the board |
 | Memory protection | MMU | **on x86-64 only**: page tables per program, a user window and ring 3 (ADR 0007); the ESP32 has no MMU and keeps the logical boundary |
-| Multi-user | yes | partial (a uid and a gid per task, inherited and checked; no login or `su`, and no group in a record) |
+| Multi-user | yes | partial (a uid and a gid per task, inherited and checked; `/etc/passwd` and `/etc/shadow`, `login`, `su` and `id` on the console; no setuid bit in an image and no group in a record, ADR 0033) |
 | Dynamic linker | yes | no (everything is statically linked) |
 
 We honestly call this **Linux-like**, not Linux. On the board there is no

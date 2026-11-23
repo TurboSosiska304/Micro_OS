@@ -189,6 +189,9 @@ The files, on every machine:
 | `path [directories]` | show or set `PATH` |
 | `exec <program> [args...]` | run a program, by a path or found in `PATH` |
 | `kill [-signal] <pid>` | send `INT`, `TERM`, `CHLD` or `PIPE` to a task; TERM by default |
+| `login [name]` | open a session as a user of `/etc/passwd`: the name and the password, three attempts, the uid, the gid and the home of the account (ADR 0033) |
+| `su [-l] [name]` | become another user: root without a password, a user with the password of the account; `-l` enters the home |
+| `id` | the uid, the gid and the account of the shell |
 
 The services, where the port registers them:
 

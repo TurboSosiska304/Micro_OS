@@ -14,6 +14,21 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Added
 
+- The accounts of the machine are files of `/etc` (ADR 0033): `/etc/passwd`
+  holds `name:uid:gid:home:shell` and `/etc/shadow` the salted SHA-256 of a
+  password (`$sha256$<salt>$<hex>`, `*` for an account without one, mode
+  `0600`), `getpwnam` and `getpwuid` read the same file as the shell, and
+  `login`, `su` and `id` are commands of the console: `login` asks the name
+  and the password three times and hands the shell to that user, `su` lets
+  root become anybody without a password and a user become another only with
+  the password of the account, `-l` enters the home, and `id` says who the
+  shell is. `task_set_creds` moves the gid and the uid of a task in one
+  critical section. There is no setuid bit in `MOX1` and no gid in the record
+  of a filesystem: the console is the door, and both are a format change with
+  an ADR of their own. `make x86-smoke` boots the machine, logs in as root
+  with a wrong and then the right password, becomes uid 7 with `su -`, refuses
+  `su root` with the wrong password, and reads the owner of a file the user
+  wrote; 340 checks.
 - A task carries a uid and a gid, and the triads of a file are read against
   them: `getuid`, `geteuid`, `getgid`, `setuid` and `setgid` take the numbers
   36 to 40, root passes every triad while anyone else gets the bits of the
