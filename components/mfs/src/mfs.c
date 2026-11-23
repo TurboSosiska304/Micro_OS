@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "kernel/clock.h"
+#include "kernel/kmm.h"
 #include "kernel/lock.h"
 #include "kernel/log.h"
 #include "kernel/panic.h"
@@ -21,7 +22,7 @@ static struct {
     k_u32_t inode_blocks;   /* the blocks of the table of the inodes */
     k_u32_t inode_capacity; /* the number of the records of the table */
     bool bitmap_dirty;      /* the map in the memory is newer than the device */
-    k_u8_t bitmap[MFS_BLOCK_SIZE * MFS_BITMAP_MAX_BLOCKS];
+    k_u8_t *bitmap;         /* the map of the free blocks, one bit per block */
 } g;
 
 /*
@@ -244,22 +245,83 @@ static k_u32_t bitmap_bytes(void)
     return (g.sb.data_blocks + 7u) / 8u;
 }
 
-static int bitmap_load(void)
+/* The blocks of the map that a volume of these many data blocks needs. */
+static k_u32_t bitmap_blocks_for(k_u32_t data_blocks)
 {
-    k_u32_t bytes = bitmap_bytes();
-    k_u32_t blocks = (bytes + MFS_BLOCK_SIZE - 1u) / MFS_BLOCK_SIZE;
-    k_u32_t i;
+    k_u32_t bytes = (data_blocks + 7u) / 8u;
 
-    if (blocks > sizeof(g.bitmap) / MFS_BLOCK_SIZE) {
-        return MFS_ENOSPC;
+    return (bytes + MFS_BLOCK_SIZE - 1u) / MFS_BLOCK_SIZE;
+}
+
+/*
+ * Give the map back. Every way out of a mount, a format or an unmount goes
+ * through here, so that a volume leaves the allocator as it found it: the
+ * map is the biggest thing the filesystem asks for, and a mount that fails
+ * half way must not keep it.
+ */
+static void bitmap_release(void)
+{
+    if (g.bitmap != NULL) {
+        kmm_free(g.bitmap);
+        g.bitmap = NULL;
+    }
+}
+
+/*
+ * Allocate the map of the free blocks for a volume. The map is one bit per
+ * data block, rounded up to whole blocks of the device, and comes from the
+ * memory of the system: the filesystem cannot answer a call without it.
+ *
+ * A volume that asks for more than MFS_BITMAP_MAX_BYTES is refused here,
+ * before a block is read, with MFS_EINVAL: the format and the mount both
+ * speak about the map in the blocks of the device, and the number is the
+ * size of the map, not of the volume.
+ */
+static int bitmap_alloc(k_u32_t blocks)
+{
+    k_u8_t *map;
+    k_size_t size;
+
+    if (blocks == 0u || blocks > MFS_BITMAP_MAX_BLOCKS) {
+        kerror("mfs: a map of %u block(s) is beyond the %u the filesystem holds", (unsigned)blocks,
+               (unsigned)MFS_BITMAP_MAX_BLOCKS);
+        return MFS_EINVAL;
     }
 
-    memset(g.bitmap, 0, sizeof(g.bitmap));
+    size = (k_size_t)blocks * MFS_BLOCK_SIZE;
+    map = (k_u8_t *)kmm_alloc(size, KMM_PRIORITY_SYSTEM);
+
+    if (map == NULL) {
+        kerror("mfs: no memory for the map of the free blocks (%u block(s))", (unsigned)blocks);
+        return MFS_ENOMEM;
+    }
+
+    memset(map, 0, size);
+
+    /* A map of an earlier volume cannot describe this one. */
+    bitmap_release();
+    g.bitmap = map;
+
+    return MFS_OK;
+}
+
+static int bitmap_load(void)
+{
+    k_u32_t blocks = bitmap_blocks_for(g.sb.data_blocks);
+    k_u32_t i;
+    int rc;
+
+    rc = bitmap_alloc(blocks);
+    if (rc != MFS_OK) {
+        return rc;
+    }
 
     for (i = 0; i < blocks; i++) {
-        int rc = dev_read(g.sb.meta_start + i, g.bitmap + i * MFS_BLOCK_SIZE);
+        rc = dev_read(g.sb.meta_start + i, g.bitmap + i * MFS_BLOCK_SIZE);
 
         if (rc != MFS_OK) {
+            /* The volume is not mounted, the map is not its state. */
+            bitmap_release();
             return rc;
         }
     }
@@ -1103,6 +1165,7 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
     k_u32_t inode_blocks;
     k_u32_t attempt;
     k_u32_t i;
+    int rc;
 
     if (dev == NULL || dev->ops == NULL || dev->ops->read == NULL || dev->ops->write == NULL) {
         return MFS_EINVAL;
@@ -1155,12 +1218,18 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
         }
 
         data_blocks = info_start - meta_blocks;
-        bitmap_blocks = (data_blocks + 8u * MFS_BLOCK_SIZE - 1u) / (8u * MFS_BLOCK_SIZE);
+        bitmap_blocks = bitmap_blocks_for(data_blocks);
         inode_blocks = (max_records * MFS_INODE_SIZE + MFS_BLOCK_SIZE - 1u) / MFS_BLOCK_SIZE;
 
-        /* The bitmap lives in the memory of the manager, it has a size. */
-        if (bitmap_blocks > (k_u32_t)(sizeof(g.bitmap) / MFS_BLOCK_SIZE)) {
-            return MFS_ENOSPC;
+        /*
+         * The map lives in the memory of the machine, not in the format:
+         * a volume that needs more than the ceiling is refused here, with
+         * the reason, before a block of it is written.
+         */
+        if (bitmap_blocks > MFS_BITMAP_MAX_BLOCKS) {
+            kerror("mfs: a volume of %u block(s) needs %u block(s) of the map, %u is the limit",
+                   (unsigned)total, (unsigned)bitmap_blocks, (unsigned)MFS_BITMAP_MAX_BLOCKS);
+            return MFS_EINVAL;
         }
 
         if (bitmap_blocks + inode_blocks <= meta_blocks) {
@@ -1175,7 +1244,7 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
     }
 
     data_blocks = info_start - meta_blocks;
-    bitmap_blocks = (data_blocks + 8u * MFS_BLOCK_SIZE - 1u) / (8u * MFS_BLOCK_SIZE);
+    bitmap_blocks = bitmap_blocks_for(data_blocks);
     inode_blocks = (max_records * MFS_INODE_SIZE + MFS_BLOCK_SIZE - 1u) / MFS_BLOCK_SIZE;
 
     if (bitmap_blocks + inode_blocks > meta_blocks) {
@@ -1198,21 +1267,27 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
     sb.crc = crc32(&sb, sizeof(sb) - sizeof(sb.crc));
 
     /* The state is needed by the helpers below. */
+    bitmap_release();
     memset(&g, 0, sizeof(g));
     g.dev = dev;
     g.sb = sb;
     g.inode_size = MFS_INODE_SIZE;
     g.bitmap_blocks = bitmap_blocks;
     g.inode_blocks = inode_blocks;
+
+    rc = bitmap_alloc(bitmap_blocks);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
     /* The record 0 is not used, the inodes start at 1. */
     g.inode_capacity = (inode_blocks * MFS_BLOCK_SIZE) / g.inode_size - 1u;
 
     /*
      * The bitmap: a bit of zero means that the block is free. The bits of
      * the blocks that do not exist are set, so that they are never given
-     * out.
+     * out. The map came back zeroed from the allocator.
      */
-    memset(g.bitmap, 0, sizeof(g.bitmap));
     if (data_blocks % 8u != 0u) {
         g.bitmap[bitmap_bytes() - 1] = (k_u8_t) ~((1u << (data_blocks % 8u)) - 1u);
     }
@@ -1312,6 +1387,8 @@ static int mfs_mount_locked(const struct k_blockdev *dev)
         return MFS_EINVAL;
     }
 
+    /* A mount of one volume gives up the map of the volume before it. */
+    bitmap_release();
     memset(&g, 0, sizeof(g));
     g.dev = dev;
 
@@ -1404,7 +1481,8 @@ static int mfs_mount_locked(const struct k_blockdev *dev)
 
     /* The rest of the META section belongs to the table of the inodes. */
     if (sb.meta_blocks <= g.bitmap_blocks) {
-        return MFS_EINVAL;
+        rc = MFS_EINVAL;
+        goto fail;
     }
 
     g.inode_blocks = sb.meta_blocks - g.bitmap_blocks;
@@ -1412,27 +1490,39 @@ static int mfs_mount_locked(const struct k_blockdev *dev)
     g.inode_capacity = (g.inode_blocks * MFS_BLOCK_SIZE) / g.inode_size - 1u;
 
     if (g.inode_capacity < MFS_ROOT_INODE) {
-        return MFS_EINVAL;
+        rc = MFS_EINVAL;
+        goto fail;
     }
 
     {
         struct mfs_inode root;
 
         if (inode_read(MFS_ROOT_INODE, &root) != MFS_OK) {
-            return MFS_EINVAL;
+            rc = MFS_EINVAL;
+            goto fail;
         }
 
         if ((root.flags & (MFS_INODE_USED | MFS_INODE_DIR)) != (MFS_INODE_USED | MFS_INODE_DIR) ||
             root.first_block >= sb.data_blocks) {
             kerror("mfs: the root of the volume is not a directory (flags 0x%x)",
                    (unsigned)root.flags);
-            return MFS_EINVAL;
+            rc = MFS_EINVAL;
+            goto fail;
         }
     }
 
     g.mounted = true;
 
     return MFS_OK;
+
+fail:
+    /*
+     * A volume that did not mount is not the volume that owns the map: the
+     * memory goes back before the call answers.
+     */
+    bitmap_release();
+
+    return rc;
 }
 
 static int mfs_sync_locked(void);
@@ -1450,6 +1540,7 @@ static void mfs_unmount_locked(void)
         (void)mfs_sync_locked();
     }
 
+    bitmap_release();
     memset(&g, 0, sizeof(g));
 }
 
@@ -1973,14 +2064,27 @@ static int file_grow(struct mfs_file *file, k_u32_t *new_block)
          * cursor of an earlier chain does not name. */
         file->first_block = block;
         file_cursor_forget(file);
+        file->chain_block = block;
+        file->chain_index = 0;
+        file->chain_valid = true;
         *new_block = block;
         return MFS_OK;
     }
 
-    rc = chain_last(file->first_block, &last);
-    if (rc != MFS_OK) {
-        block_release(block);
-        return rc;
+    /*
+     * The block that ends the chain. The write path has just appended a
+     * block when the cursor names the last one, and the count of the
+     * blocks says which index that is; otherwise the chain is walked once
+     * and the rest of the growth of this call goes from the new block.
+     */
+    if (file->chain_valid && file->chain_index + 1u == file->chain_blocks) {
+        last = file->chain_block;
+    } else {
+        rc = chain_last(file->first_block, &last);
+        if (rc != MFS_OK) {
+            block_release(block);
+            return rc;
+        }
     }
 
     rc = chain_set_next(last, block);
@@ -1988,6 +2092,11 @@ static int file_grow(struct mfs_file *file, k_u32_t *new_block)
         block_release(block);
         return rc;
     }
+
+    /* The new block ends the chain: the cursor follows it, not the old end. */
+    file->chain_block = block;
+    file->chain_index = file->chain_blocks;
+    file->chain_valid = true;
 
     *new_block = block;
     return MFS_OK;
@@ -2019,19 +2128,32 @@ static int mfs_write_locked(struct mfs_file *file, const void *buf, k_size_t siz
 
     /* The file has to have enough blocks for the whole write. */
     {
-        k_u32_t have = 0;
         k_u32_t needed = (file->offset + size + MFS_BLOCK_DATA - 1u) / MFS_BLOCK_DATA;
 
-        if (file->first_block != MFS_NEXT_NONE) {
-            rc = chain_count(file->first_block, &have);
-            if (rc != MFS_OK) {
-                return rc;
+        /*
+         * The number of the blocks of the chain is counted once for the
+         * descriptor, not once per call: a program that writes a file a
+         * kilobyte at a time would otherwise walk the whole chain before
+         * every call, which is the write side of the cost the read cursor
+         * above removed.
+         */
+        if (!file->chain_blocks_valid) {
+            k_u32_t have = 0;
+
+            if (file->first_block != MFS_NEXT_NONE) {
+                rc = chain_count(file->first_block, &have);
+                if (rc != MFS_OK) {
+                    return rc;
+                }
             }
+
+            file->chain_blocks = have;
+            file->chain_blocks_valid = true;
         }
 
-        old_blocks = have;
+        old_blocks = file->chain_blocks;
 
-        while (have < needed) {
+        while (file->chain_blocks < needed) {
             k_u32_t added;
 
             rc = file_grow(file, &added);
@@ -2043,7 +2165,7 @@ static int mfs_write_locked(struct mfs_file *file, const void *buf, k_size_t siz
                 file->dirty = true;
                 return rc;
             }
-            have++;
+            file->chain_blocks++;
         }
 
         /* The blocks of the file have been taken, the map has to know it. */
@@ -2637,6 +2759,13 @@ int mfs_format(const struct k_blockdev *dev, k_u32_t max_records)
 
     mfs_lock();
     rc = mfs_format_locked(dev, max_records);
+
+    /*
+     * A format is not a mount: the map it built to lay the volume out is
+     * given back here, so that a volume leaves the allocator as it found
+     * it, whatever the layout ended with. A mount allocates its own.
+     */
+    bitmap_release();
     mfs_unlock();
 
     return rc;
@@ -2971,6 +3100,8 @@ const char *mfs_strerror(int error)
         return "file too big";
     case MFS_ENOTSUP:
         return "operation not supported";
+    case MFS_ENOMEM:
+        return "out of memory";
     default:
         return "unknown error";
     }

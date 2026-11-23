@@ -488,12 +488,21 @@ static void test_console(void)
 static void test_memory_keeps_the_data(void)
 {
     struct kmm_stats stats;
+    struct kmm_stats baseline;
     char *block;
     int i;
 
     ktest_begin("libc: the memory of the program keeps the data");
 
     setup();
+
+    /*
+     * The volume of the test is mounted, and the filesystem keeps the map
+     * of its free blocks in the allocator while it is: the baseline is the
+     * memory of the machine as setup left it, and the program has to give
+     * back what it took on top of it.
+     */
+    kmm_get_stats(&baseline);
 
     block = (char *)microos_malloc(1000);
     KT_CHECK(block != NULL);
@@ -525,10 +534,10 @@ static void test_memory_keeps_the_data(void)
 
     microos_free(block);
 
-    /* The memory of the manager is back to zero. */
+    /* The memory of the manager is back to what the mount holds. */
     kmm_get_stats(&stats);
-    KT_CHECK_INT_EQ(stats.allocations, 0);
-    KT_CHECK_INT_EQ(stats.total_bytes, 0);
+    KT_CHECK_INT_EQ(stats.allocations, baseline.allocations);
+    KT_CHECK_INT_EQ(stats.total_bytes, baseline.total_bytes);
 
     teardown();
 }

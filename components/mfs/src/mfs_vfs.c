@@ -29,7 +29,7 @@ static const struct mfs_code_pair g_codes[] = {
     {MFS_OK, KERR_NONE},        {MFS_ENOENT, KERR_NOENT},   {MFS_EEXIST, KERR_EXIST},
     {MFS_ENOSPC, KERR_NOSPC},   {MFS_EIO, KERR_IO},         {MFS_EINVAL, KERR_INVAL},
     {MFS_ENOTDIR, KERR_NOTDIR}, {MFS_EISDIR, KERR_ISDIR},   {MFS_ENOTEMPTY, KERR_NOTEMPTY},
-    {MFS_E2BIG, KERR_TOOBIG},   {MFS_ENOTSUP, KERR_NOTSUP},
+    {MFS_E2BIG, KERR_TOOBIG},   {MFS_ENOTSUP, KERR_NOTSUP}, {MFS_ENOMEM, KERR_NOMEM},
 };
 
 /* The number of the kernel for a result of the filesystem. */

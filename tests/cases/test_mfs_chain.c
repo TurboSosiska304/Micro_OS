@@ -456,6 +456,54 @@ static void test_write_middle_after_read(void)
     teardown();
 }
 
+/*
+ * The property: a file written a block at a time walks the chain about once
+ * and not once per call. Two walks were the cost of every call: the count of
+ * the blocks of the chain and the search for its last block. The descriptor
+ * keeps the count after the first write, and the block the growth added is
+ * the one the cursor names, so the forty blocks of the test cost one step
+ * each. A write that counted and walked from the head every time would need
+ * about half of the square, which is 820 reads for the forty blocks here -
+ * far above the limit and far above the noise.
+ */
+static void test_write_is_linear(void)
+{
+    struct mfs_file file;
+    k_u32_t before;
+    k_u32_t reads;
+    k_u32_t i;
+
+    ktest_begin("mfs: a file written a block at a time walks the chain once");
+
+    KT_CHECK_INT_EQ(setup(), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+
+    fill_pattern(g_written, sizeof(g_written));
+
+    KT_CHECK_INT_EQ(mfs_create("/grown.bin"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_open("/grown.bin", MFS_O_RDWR, &file), MFS_OK);
+
+    before = g_volume.reads;
+    for (i = 0; i < CHAIN_BLOCKS; i++) {
+        KT_CHECK_INT_EQ(mfs_write(&file, g_written + i * CHAIN_DATA, CHAIN_DATA), (int)CHAIN_DATA);
+    }
+    reads = reads_of(before);
+
+    KT_CHECK(reads >= CHAIN_BLOCKS);
+    KT_CHECK(reads <= 4u * CHAIN_BLOCKS + 8u);
+
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+
+    /* The file is what was written, block for block. */
+    KT_CHECK_INT_EQ(mfs_open("/grown.bin", MFS_O_RDONLY, &file), MFS_OK);
+    read_and_check(&file, CHAIN_BYTES);
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+
+    expect_sound_volume();
+
+    teardown();
+}
+
 void test_mfs_chain(void)
 {
     test_read_is_linear();
@@ -463,4 +511,5 @@ void test_mfs_chain(void)
     test_append_after_read();
     test_truncate_drops_the_cursor();
     test_write_middle_after_read();
+    test_write_is_linear();
 }

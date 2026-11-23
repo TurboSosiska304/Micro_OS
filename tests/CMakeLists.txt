@@ -22,6 +22,7 @@ if(NOT ESP_PLATFORM)
         cases/test_mfs_repair.c
         cases/test_mfs_many.c
         cases/test_mfs_chain.c
+        cases/test_mfs_big.c
         cases/test_mkfs_image.c
         cases/test_vfs.c
         cases/test_fs_fat.c
