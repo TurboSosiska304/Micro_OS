@@ -222,7 +222,7 @@ written when the project was an operating system for one board; the numbers
       `304`, one `Range` (`206`/`416`), a listing of a directory as a chunked
       page and a line of the log per request; a `..` that leaves the root is
       `403`, a directory is never a file, and a session over the ceiling of
-      the machine is `503`. Three sessions on x86-64, four on the board,
+      the machine is `503`. Three sessions on x86-64, three on the board,
       sixteen on the host
 * [x] The serving side of TLS (`httpd tls`, port 443): the vendored mbedTLS
       with `MBEDTLS_SSL_SRV_C`, the certificate and the key of `/etc/ssl`

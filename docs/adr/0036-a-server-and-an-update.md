@@ -55,10 +55,11 @@ the bytes of a file. Nothing is written, so the server needs no policy of
 methods beyond `405`.
 
 The ceiling of the sessions is the machine's: the task table is 32 slots, the
-stack of x86-64 lends four TCP sessions (`NET_TCP_SOCKETS`), the board has
-about 100 KB of internal RAM. The build names the number (3 on x86-64, 4 on
-the board, 16 on the host) and a session over it is answered with `503` and
-closed - a client reads the refusal, which a dropped SYN is not.
+stack of x86-64 lends four TCP sessions (`NET_TCP_SOCKETS`), and a session of
+the board is a task of 8 KiB of its hundred kilobytes of internal RAM. The
+build names the number (3 on x86-64, 3 on the board, 16 on the host) and a
+session over it is answered with `503` and closed - a client reads the
+refusal, which a dropped SYN is not.
 
 ### 3. TLS on the serving side is the same library
 

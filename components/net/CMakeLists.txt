@@ -73,11 +73,12 @@ if(ESP_PLATFORM)
         set(MICRO_OS_NET_SCOPE INTERFACE)
     endif()
 
-    # The ceiling of the sessions of the server of files: the board has a task
-    # table of 32 and about 100 KB of internal RAM, and a session is a task
-    # with its own stack. Four is what its memory holds with the shell and
-    # the services of the boot beside it; the host and x86-64 keep sixteen.
-    target_compile_definitions(${COMPONENT_LIB} ${MICRO_OS_NET_SCOPE} MICRO_OS_HTTPD_CONNECTIONS=4)
+    # The ceiling of the sessions of the server of files: a session is a task
+    # of the board and its stack is 8 KiB of the internal RAM (port_esp32.c,
+    # TASK_STACK_SIZE), so three of them are 24 KiB of the hundred the board
+    # has, with the shell and the services of the boot beside them. The host
+    # and x86-64 name their own.
+    target_compile_definitions(${COMPONENT_LIB} ${MICRO_OS_NET_SCOPE} MICRO_OS_HTTPD_CONNECTIONS=3)
 
     # The numbers for the C sources of the portable code. A consumer of this
     # component (main, for the registration) sees the same values.
