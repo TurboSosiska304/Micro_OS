@@ -275,11 +275,15 @@ set_source_files_properties("${KSHELL_DIR}/src/kshell_memtest.c"
 # linked file.
 #
 # program.ld puts the text at the base of the window plus the header of the
-# format (0x02000020) and SUBALIGN(4) keeps the 64-byte alignment of the
-# object from moving it. The base is named here again and handed to mkprog.sh,
-# which refuses an image linked for another window: a program linked for the
-# wrong address would still run, and every absolute address it computes for
-# its data would name something else.
+# format (0x02000020). The address is a symbol of the script and not a number
+# the script can be trusted to reach: the ld of binutils 2.38 (the container of
+# the release) moves the text 32 bytes up, and 2.47 keeps it. tools/
+# link_program.sh therefore links, reads the address back and links again with
+# the value the linker really used; it is the only caller of the compiler's
+# linker for a program of this port. The base is named here again and handed
+# on, and mkprog.sh refuses an image linked for another window: a program
+# linked for the wrong address would still run, and every absolute address it
+# computes for its data would name something else.
 #
 # The machine of the image is named as well: --arch x86-64 is the number the
 # kernel compares with k_port_exec_arch() before it enters a byte, so that the
@@ -289,6 +293,7 @@ set_source_files_properties("${KSHELL_DIR}/src/kshell_memtest.c"
 set(PROGRAM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/programs")
 set(PROGRAM_BASE 0x02000000)
 set(MKPROG "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/mkprog.sh")
+set(LINK_PROGRAM "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/link_program.sh")
 
 # The library of a program (components/libc/user): `_start`, the door of the
 # syscall, the formatter and the strings. It is not the library of the kernel
@@ -343,6 +348,7 @@ set(MICROOS_LIBC_USER_DIR "${LIBC_USER_DIR}")
 set(MICROOS_PROGRAM_DIR "${PROGRAM_DIR}")
 set(MICROOS_PROGRAM_BASE "${PROGRAM_BASE}")
 set(MICROOS_MKPROG "${MKPROG}")
+set(MICROOS_LINK_PROGRAM "${LINK_PROGRAM}")
 include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/userland.cmake")
 
 # Every program of the port is built the same way: compile the C file for the
@@ -351,6 +357,11 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/userland.cmake")
 # into the MicroFS volume of the disk: the kernel has no blob of a program in
 # it any more. The name of the function is the name of the file in /bin and
 # the symbol of the entry is given here.
+#
+# The link and the image are two steps of one script: tools/link_program.sh
+# owns the flags of the format, the address of the text (with the retry a
+# linker of another version needs) and the call of mkprog.sh. A caller names
+# the script, the entry and the base, and appends the objects after `--`.
 function(add_program_image name entry)
     set(image "${CMAKE_BINARY_DIR}/${name}.mox")
 
@@ -358,15 +369,14 @@ function(add_program_image name entry)
         OUTPUT "${image}"
         COMMAND ${CMAKE_C_COMPILER} ${PROGRAM_CFLAGS}
                 -o ${name}.o "${PROGRAM_DIR}/${name}.c"
-        COMMAND ${CMAKE_C_COMPILER} -nostdlib -static -no-pie -Wl,--build-id=none
-                -Wl,--no-check-sections -Wl,-z,noseparate-code -Wl,-N
-                -Wl,-e,${entry}
-                -T "${PROGRAM_DIR}/program.ld" -o ${name}.elf ${name}.o
-        COMMAND sh "${MKPROG}" --base ${PROGRAM_BASE} --arch x86-64
-                ${name}.elf ${name}.mox ${entry}
+        COMMAND sh "${LINK_PROGRAM}" --cc "${CMAKE_C_COMPILER}"
+                --script "${PROGRAM_DIR}/program.ld" --entry ${entry}
+                --out ${name}.mox --base ${PROGRAM_BASE} --arch x86-64
+                --mkprog "${MKPROG}" -- ${name}.o
         WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
         DEPENDS "${PROGRAM_DIR}/${name}.c" "${PROGRAM_DIR}/prog.h"
-                "${PROGRAM_DIR}/program.ld" "${KERNEL_DIR}/include/kernel/ksys.h" "${MKPROG}"
+                "${PROGRAM_DIR}/program.ld" "${KERNEL_DIR}/include/kernel/ksys.h"
+                "${MKPROG}" "${LINK_PROGRAM}"
         COMMENT "building the image of /bin/${name}"
         VERBATIM
     )
