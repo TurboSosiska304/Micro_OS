@@ -188,6 +188,9 @@ else()
         KERNEL_PSRAM=$<BOOL:${KERNEL_PSRAM}>
         KERNEL_EXEC=$<BOOL:${KERNEL_EXEC}>
         KERNEL_SMP=$<BOOL:${KERNEL_SMP}>
+        # The ring of a pipe of this machine (kernel/kfile.h): the host has
+        # the memory for the block of one call of the system, 64 KiB.
+        KFILE_PIPE_SIZE=65536
         MICRO_OS_NET=$<BOOL:${MICRO_OS_NET}>
         MICRO_OS_NET_HTTP=$<BOOL:${MICRO_OS_NET_HTTP}>
         MICRO_OS_NET_HTTP_SERVER=$<BOOL:${MICRO_OS_NET_HTTP_SERVER}>

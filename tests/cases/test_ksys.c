@@ -19,6 +19,7 @@
 #include "kernel/config.h"
 #include "kernel/errno.h"
 #include "kernel/exec.h"
+#include "kernel/kfile.h"
 #include "kernel/ksys.h"
 #include "kernel/log.h"
 #include "kernel/sched.h"
@@ -1703,47 +1704,387 @@ static void test_pipe(void)
 }
 
 /*
- * The property: a pipe waits for the other end, and a wait that passes the
- * bound is EAGAIN and not the end of the file and not a lost byte.
+ * The grain of a pipe: the ring of the port is KFILE_PIPE_SIZE bytes and a
+ * write of that size is one call and one step of the ring, not a chain of
+ * 256-byte turns. The host builds the kernel with the 64 KiB ring of the
+ * machine; the board has 4 KiB and the number is the one of its own header.
  */
-static void test_pipe_waits(void)
-{
-    char chunk[64];
-    int fds[2];
-    int total = 0;
-    int next = 0;
-    int rc;
+static char g_pipe_block_in[KFILE_PIPE_SIZE];
+static char g_pipe_block_out[KFILE_PIPE_SIZE];
 
-    ktest_begin("ksys: a pipe waits for the other end and then says so");
+static void test_pipe_block(void)
+{
+    k_size_t i;
+    int fds[2];
+
+    ktest_begin("ksys: a pipe carries a block of its ring in one write and one read");
 
     setup();
-    memset(chunk, 'a', sizeof(chunk));
 
-    KT_CHECK_INT_EQ(ksys_pipe(fds), 0);
-
-    /* An empty pipe with the writer still open is a wait, not an end. */
-    KT_CHECK_INT_EQ(ksys_read(fds[0], chunk, sizeof(chunk)), KERR_AGAIN);
-
-    /* Fill the pipe: the write that finds no room waits and then says that
-     * nothing of it was placed. */
-    for (next = 0; next < 64; next++) {
-        rc = (int)ksys_write(fds[1], chunk, sizeof(chunk));
-        if (rc < 0) {
-            break;
-        }
-        total += rc;
+    for (i = 0; i < KFILE_PIPE_SIZE; i++) {
+        g_pipe_block_in[i] = (char)(unsigned char)(i * 7u + 3u);
     }
 
-    KT_CHECK(total > 0);
-    KT_CHECK(next < 64);
-    KT_CHECK_INT_EQ(rc, KERR_AGAIN);
+    KT_CHECK_INT_EQ(ksys_pipe(fds), 0);
+    KT_CHECK_INT_EQ(ksys_write(fds[1], g_pipe_block_in, KFILE_PIPE_SIZE),
+                    (k_ssize_t)KFILE_PIPE_SIZE);
 
-    /* The reader drains a piece, and the writer goes on. */
-    KT_CHECK(ksys_read(fds[0], chunk, sizeof(chunk)) > 0);
-    KT_CHECK_INT_EQ(ksys_write(fds[1], "x", 1), 1);
+    memset(g_pipe_block_out, 0, sizeof(g_pipe_block_out));
+    KT_CHECK_INT_EQ(ksys_read(fds[0], g_pipe_block_out, sizeof(g_pipe_block_out)),
+                    (k_ssize_t)sizeof(g_pipe_block_out));
+    KT_CHECK(memcmp(g_pipe_block_in, g_pipe_block_out, KFILE_PIPE_SIZE) == 0);
 
+    /* The ring is full after that write: the next byte waits for the reader
+     * and the bytes come back in the order they went in. */
     KT_CHECK_INT_EQ(ksys_close(fds[0]), 0);
     KT_CHECK_INT_EQ(ksys_close(fds[1]), 0);
+
+    teardown();
+}
+
+/*
+ * The reader of a pipe whose writer is late. The read has nothing to take
+ * and the writer is still there: the call waits, and the bytes arrive. An
+ * answer of EAGAIN would be a machine that gave up on a pipeline that was
+ * about to speak.
+ */
+static int g_pipe_slow_fds[2];
+static volatile int g_pipe_slow_done;
+static volatile int g_pipe_slow_result;
+static char g_pipe_slow_text[8];
+
+static void pipe_slow_program(void *arg)
+{
+    struct task *self = task_self();
+    int pid;
+
+    K_UNUSED(arg);
+
+    if (!self->is_child) {
+        g_pipe_slow_done = 0;
+        g_pipe_slow_result = 0;
+        memset(g_pipe_slow_text, 0, sizeof(g_pipe_slow_text));
+        if (ksys_pipe(g_pipe_slow_fds) != 0) {
+            g_pipe_slow_result = -100;
+            g_pipe_slow_done = 1;
+            return;
+        }
+    }
+
+    pid = ksys_fork();
+    if (pid == 0) {
+        /* The writer: it is there, and it speaks after a moment. */
+        k_sched_sleep_ms(20);
+        (void)ksys_write(g_pipe_slow_fds[1], "hello", 5);
+        ksys_close(g_pipe_slow_fds[1]);
+        task_exit(0);
+        return;
+    }
+
+    {
+        int got = (int)ksys_read(g_pipe_slow_fds[0], g_pipe_slow_text, 5);
+
+        g_pipe_slow_result = (got == 5) ? 1 : got;
+    }
+
+    ksys_close(g_pipe_slow_fds[0]);
+    ksys_close(g_pipe_slow_fds[1]);
+    if (pid > 0) {
+        (void)ksys_waitpid(pid, NULL, 0);
+    }
+
+    g_pipe_slow_done = 1;
+    task_exit(0);
+}
+
+static void test_pipe_waits(void)
+{
+    struct task *reader;
+    int waited;
+
+    ktest_begin("ksys: a read of an empty pipe waits for its writer and gets the bytes");
+
+    setup();
+
+    reader = task_create("piperead", pipe_slow_program, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(reader != NULL);
+
+    for (waited = 0; waited < 3000 && !g_pipe_slow_done; waited++) {
+        k_sched_sleep_ms(1);
+    }
+
+    KT_CHECK_INT_EQ(g_pipe_slow_done, 1);
+    KT_CHECK_INT_EQ(g_pipe_slow_result, 1);
+    KT_CHECK_STR_EQ(g_pipe_slow_text, "hello");
+
+    if (reader != NULL) {
+        KT_CHECK_INT_EQ(task_wait(reader->pid, NULL, 2000), 0);
+    }
+
+    teardown();
+}
+
+/*
+ * The writer of a pipe whose reader is slow: the ring fills, the write
+ * sleeps until the reader makes room, and it finishes the whole request.
+ * The bound of half a second that the release put on a pipe is gone: a
+ * reader slower than its writer is an ordinary pipeline and not an error.
+ */
+#define PIPE_GRAIN_TOTAL ((k_size_t)(2 * KFILE_PIPE_SIZE + 1024))
+
+static int g_pipe_grain_fds[2];
+static volatile int g_pipe_grain_done;
+static volatile int g_pipe_grain_result;
+static volatile int g_pipe_grain_early;
+
+static void pipe_grain_program(void *arg)
+{
+    struct task *self = task_self();
+    static char block[1024];
+    static char sink[1024];
+    k_size_t total = 0;
+    int status = 0;
+    int rc = 0;
+    int pid;
+
+    K_UNUSED(arg);
+
+    if (!self->is_child) {
+        g_pipe_grain_done = 0;
+        g_pipe_grain_result = 0;
+        g_pipe_grain_early = 0;
+        memset(block, 'g', sizeof(block));
+        memset(sink, 0, sizeof(sink));
+        if (ksys_pipe(g_pipe_grain_fds) != 0) {
+            g_pipe_grain_result = -100;
+            g_pipe_grain_done = 1;
+            return;
+        }
+    }
+
+    pid = ksys_fork();
+    if (pid == 0) {
+        k_size_t done = 0;
+
+        while (done < PIPE_GRAIN_TOTAL) {
+            k_size_t want = K_MIN(sizeof(block), PIPE_GRAIN_TOTAL - done);
+
+            rc = (int)ksys_write(g_pipe_grain_fds[1], block, want);
+            if (rc <= 0) {
+                break;
+            }
+            done += (k_size_t)rc;
+        }
+
+        ksys_close(g_pipe_grain_fds[1]);
+        task_exit(rc < 0 ? 1 : 0);
+        return;
+    }
+
+    /* The child fills the ring and stops there: it is alive because the
+     * pipe is full, not because it is slow. */
+    k_sched_sleep_ms(50);
+    if (pid > 0 && ksys_waitpid(pid, &status, KSYS_WNOHANG) == pid) {
+        g_pipe_grain_early = 1;
+        g_pipe_grain_result = -3;
+    }
+
+    ksys_close(g_pipe_grain_fds[1]);
+
+    for (;;) {
+        rc = (int)ksys_read(g_pipe_grain_fds[0], sink, sizeof(sink));
+        if (rc < 0) {
+            g_pipe_grain_result = rc;
+            break;
+        }
+        if (rc == 0) {
+            break;
+        }
+        total += (k_size_t)rc;
+    }
+
+    ksys_close(g_pipe_grain_fds[0]);
+
+    if (g_pipe_grain_result == 0) {
+        g_pipe_grain_result = (total == PIPE_GRAIN_TOTAL) ? 1 : -2;
+    }
+    if (pid > 0 && !g_pipe_grain_early) {
+        if (ksys_waitpid(pid, &status, 0) != pid) {
+            g_pipe_grain_result = -4;
+        } else if (status != 0) {
+            g_pipe_grain_result = -5;
+        }
+    }
+
+    g_pipe_grain_done = 1;
+    task_exit(0);
+}
+
+static void test_pipe_slow_writer(void)
+{
+    struct task *writer;
+    int waited;
+
+    ktest_begin("ksys: a write to a full pipe sleeps until the reader makes room");
+
+    setup();
+
+    writer = task_create("pipegrain", pipe_grain_program, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(writer != NULL);
+
+    for (waited = 0; waited < 5000 && !g_pipe_grain_done; waited++) {
+        k_sched_sleep_ms(1);
+    }
+
+    KT_CHECK_INT_EQ(g_pipe_grain_done, 1);
+    KT_CHECK_INT_EQ(g_pipe_grain_early, 0);
+    KT_CHECK_INT_EQ(g_pipe_grain_result, 1);
+
+    if (writer != NULL) {
+        KT_CHECK_INT_EQ(task_wait(writer->pid, NULL, 2000), 0);
+    }
+
+    teardown();
+}
+
+/*
+ * The promise of PIPE_BUF: a write of at most that many bytes lands in the
+ * ring whole. The ring is full, a writer asks for one PIPE_BUF block, and
+ * the reader makes room for half of it: the call does not take the half and
+ * leave its caller to ask again - it waits for the whole block, and the
+ * reader of the block gets one word and not two pieces of one.
+ */
+static int g_pipe_atomic_fds[2];
+static volatile int g_pipe_atomic_done;
+static volatile int g_pipe_atomic_result;
+static volatile int g_pipe_atomic_blocked;
+static char g_pipe_atomic_read[KFILE_PIPE_BUF];
+
+static void pipe_atomic_program(void *arg)
+{
+    struct task *self = task_self();
+    static char filler[KFILE_PIPE_SIZE];
+    static char block[KFILE_PIPE_BUF];
+    k_size_t left;
+    k_size_t i;
+    int status = 0;
+    int pid;
+
+    K_UNUSED(arg);
+
+    if (!self->is_child) {
+        g_pipe_atomic_done = 0;
+        g_pipe_atomic_result = 0;
+        g_pipe_atomic_blocked = 0;
+        memset(filler, 'F', sizeof(filler));
+        memset(block, 'A', sizeof(block));
+        if (ksys_pipe(g_pipe_atomic_fds) != 0) {
+            g_pipe_atomic_result = -100;
+            g_pipe_atomic_done = 1;
+            return;
+        }
+
+        /* The ring is full: not one byte of room. */
+        if (ksys_write(g_pipe_atomic_fds[1], filler, sizeof(filler)) != (k_ssize_t)sizeof(filler)) {
+            g_pipe_atomic_result = -10;
+            g_pipe_atomic_done = 1;
+            return;
+        }
+    }
+
+    pid = ksys_fork();
+    if (pid == 0) {
+        int rc;
+
+        k_sched_sleep_ms(10);
+        rc = (int)ksys_write(g_pipe_atomic_fds[1], block, sizeof(block));
+        ksys_close(g_pipe_atomic_fds[1]);
+        task_exit(rc == (int)sizeof(block) ? 0 : 1);
+        return;
+    }
+
+    k_sched_sleep_ms(30);
+
+    /* Room for half of the block, and the writer is still waiting for the
+     * whole of it. */
+    if (ksys_read(g_pipe_atomic_fds[0], g_pipe_atomic_read, KFILE_PIPE_BUF / 2u) !=
+        (k_ssize_t)(KFILE_PIPE_BUF / 2u)) {
+        g_pipe_atomic_result = -11;
+        goto out;
+    }
+
+    k_sched_sleep_ms(20);
+    if (pid > 0 && ksys_waitpid(pid, &status, KSYS_WNOHANG) == pid) {
+        g_pipe_atomic_blocked = 1;
+        g_pipe_atomic_result = -12;
+        goto out;
+    }
+
+    /* The rest of the filler: the block of the writer follows it and is the
+     * only thing left in the ring. */
+    left = KFILE_PIPE_SIZE - (k_size_t)KFILE_PIPE_BUF / 2u;
+    while (left > 0) {
+        k_size_t want = K_MIN(left, sizeof(g_pipe_atomic_read));
+
+        if (ksys_read(g_pipe_atomic_fds[0], g_pipe_atomic_read, want) != (k_ssize_t)want) {
+            g_pipe_atomic_result = -13;
+            goto out;
+        }
+        left -= want;
+    }
+
+    if (ksys_read(g_pipe_atomic_fds[0], g_pipe_atomic_read, sizeof(g_pipe_atomic_read)) !=
+        (k_ssize_t)sizeof(g_pipe_atomic_read)) {
+        g_pipe_atomic_result = -14;
+        goto out;
+    }
+
+    for (i = 0; i < KFILE_PIPE_BUF; i++) {
+        if ((unsigned char)g_pipe_atomic_read[i] != (unsigned char)'A') {
+            g_pipe_atomic_result = -15;
+            goto out;
+        }
+    }
+
+    g_pipe_atomic_result = 1;
+
+out:
+    ksys_close(g_pipe_atomic_fds[0]);
+    ksys_close(g_pipe_atomic_fds[1]);
+
+    if (pid > 0 && g_pipe_atomic_result != -12) {
+        if (ksys_waitpid(pid, &status, 0) != pid || status != 0) {
+            g_pipe_atomic_result = -16;
+        }
+    }
+
+    g_pipe_atomic_done = 1;
+    task_exit(0);
+}
+
+static void test_pipe_atomic(void)
+{
+    struct task *program;
+    int waited;
+
+    ktest_begin("ksys: a write of PIPE_BUF waits for the whole block and lands whole");
+
+    setup();
+
+    program = task_create("pipeatom", pipe_atomic_program, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(program != NULL);
+
+    for (waited = 0; waited < 5000 && !g_pipe_atomic_done; waited++) {
+        k_sched_sleep_ms(1);
+    }
+
+    KT_CHECK_INT_EQ(g_pipe_atomic_done, 1);
+    KT_CHECK_INT_EQ(g_pipe_atomic_blocked, 0);
+    KT_CHECK_INT_EQ(g_pipe_atomic_result, 1);
+
+    if (program != NULL) {
+        KT_CHECK_INT_EQ(task_wait(program->pid, NULL, 2000), 0);
+    }
 
     teardown();
 }
@@ -2415,7 +2756,10 @@ void test_ksys(void)
     test_readdir_validation();
     test_readdir_directory();
     test_pipe();
+    test_pipe_block();
     test_pipe_waits();
+    test_pipe_slow_writer();
+    test_pipe_atomic();
     test_dup2();
     test_pipe_errors();
     test_fd_table_full();
