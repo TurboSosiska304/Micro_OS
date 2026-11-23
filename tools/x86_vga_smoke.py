@@ -118,6 +118,28 @@ def rgb565(value: int) -> tuple:
     return ((red << 3) | (red >> 2), (green << 2) | (green >> 4), (blue << 3) | (blue >> 2))
 
 
+def brightness(rgb: tuple) -> int:
+    """The brightness of a colour of the screen, the way a person sees it.
+
+    The checks of the palette ask that one tone is darker than another - the
+    shadow under a window, the ink of a title against the ink of its body -
+    and a tone is a number of the three channels and not one of them.
+    """
+    red, green, blue = rgb
+    return (2126 * red + 7152 * green + 722 * blue) // 10000
+
+
+def desk_at(picture: "Picture", x: int, y: int) -> bool:
+    """The pixel is the wallpaper of its row, not a window, a panel or a shadow.
+
+    The desk at (1250, y) is the reference: no window of the default desktop,
+    and no window the test drags, reaches that column at the rows the checks
+    ask about, and the grid of the wallpaper has no line there (1250 is not
+    the offset of a line of 32).
+    """
+    return picture.pixel(x, y) == picture.pixel(1250, y)
+
+
 # The colours of the sixteen attributes of the palette (ports/port_x86_64/
 # src/fb.c) that the test reads: a command colours a name or a line with one
 # of them, and the value is the five-six-five number widened by the display.
@@ -150,46 +172,88 @@ UI_ITEM_STEP = 22
 UI_CONSOLE_X = UI_LEFT_WIDTH + 8
 UI_CONSOLE_Y = 16 + 8
 
+# The palette of the desktop (components/ui/include/ui/palette.h): a colour is
+# written with eight bits a channel, as a person writes one, and the device of
+# ADR 0023 narrows it to five-six-five. The roles are named and not numbered,
+# so a screenshot is read in the language of the sources: the surface of a
+# window, the ink of a body, the accent of the focus.
+def palette_rgb(red: int, green: int, blue: int) -> tuple:
+    """A colour of the palette, the way `UI_RGB` narrows it and the display
+    widens it: the low bits of a channel are dropped, not rounded."""
+    return rgb565(
+        ((red & 0xF8) << 8) | ((green & 0xFC) << 3) | ((blue & 0xF8) >> 3)
+    )
+
+
+WALL_TOP_RGB = palette_rgb(16, 19, 27)
+WALL_BOTTOM_RGB = palette_rgb(28, 37, 54)
+WALL_GRID_RGB = palette_rgb(20, 26, 36)
+SURFACE_RGB = palette_rgb(24, 29, 39)
+SURFACE_HIGH_RGB = palette_rgb(36, 44, 59)
+PANEL_RGB = palette_rgb(20, 25, 35)
+INK_RGB = palette_rgb(216, 223, 235)
+INK_DIM_RGB = palette_rgb(146, 160, 181)
+TITLE_INK_RGB = palette_rgb(244, 248, 255)
+ACCENT_RGB = palette_rgb(76, 141, 255)
+ACCENT_INK_RGB = palette_rgb(255, 255, 255)
+BORDER_RGB = palette_rgb(58, 70, 92)
+SELECTION_RGB = palette_rgb(46, 63, 92)
+SELECTION_INK_RGB = palette_rgb(255, 255, 255)
+CLOSE_RGB = palette_rgb(208, 80, 75)
+CLOSE_INK_RGB = palette_rgb(255, 255, 255)
+CURSOR_INK_RGB = palette_rgb(255, 255, 255)
+CURSOR_EDGE_RGB = palette_rgb(0, 0, 0)
+
+# The light theme of the same roles: the `theme=light` of /etc/console.
+WALL_TOP_LIGHT_RGB = palette_rgb(238, 242, 248)
+WALL_BOTTOM_LIGHT_RGB = palette_rgb(203, 213, 228)
+PANEL_LIGHT_RGB = palette_rgb(220, 227, 238)
+
 # The programs of ADR 0030 (/bin/edit and /bin/fm) and the frame of
-# components/ui: a margin of two pixels, the row of the 8x16 font and a pixel
-# of separator, so the body of a window starts at the pixel 21 of its own
-# rectangle; the title is drawn at the margin and the status line is the last
-# row of the picture.
+# components/ui: four pixels of air above the row of the title, six at either
+# side of it and of the body, a pixel of separator, so the body of a window
+# starts at the pixel 21 of its own rectangle.
 UI_FRAME_TITLE_HEIGHT = 21
-UI_TITLE_Y = 2
+UI_TITLE_Y = 4
+UI_FRAME_PAD = 6
 UI_STATUS_Y = VBE_HEIGHT - CELL_HEIGHT
 
-# The colours of the two programs, the numbers of their sources widened by
-# the display: the dark blue of a bar, the white of the console, the cyan of
-# the window with the keys and the grey of a row of a list that has the
-# focus. They are read out of the screenshot and not from a copy of the
-# drawing code: `rgb565()` is the rule of the device of ADR 0023.
-EDIT_PAPER_RGB = rgb565(0x0000)
-EDIT_INK_RGB = rgb565(0xFFFF)
-EDIT_BAR_RGB = rgb565(0x0010)
-EDIT_FOCUS_RGB = rgb565(0x57FF)
-FM_PAPER_RGB = rgb565(0x0000)
-FM_INK_RGB = rgb565(0xFFFF)
-FM_BAR_RGB = rgb565(0x0010)
-FM_FOCUS_RGB = rgb565(0x57FF)
-FM_SELECT_RGB = rgb565(0xAD55)
-FM_SELECT_INK_RGB = rgb565(0x0000)
+# The colours of the two programs, the roles of the palette widened by the
+# display: the surface of a window, its bar and the line of status, the three
+# inks of the hierarchy, the accent of the focus and the selection of a list.
+EDIT_PAPER_RGB = SURFACE_RGB
+EDIT_INK_RGB = INK_RGB
+EDIT_TITLE_INK_RGB = TITLE_INK_RGB
+EDIT_DIM_INK_RGB = INK_DIM_RGB
+EDIT_BAR_RGB = SURFACE_HIGH_RGB
+EDIT_FOCUS_RGB = ACCENT_RGB
+FM_PAPER_RGB = SURFACE_RGB
+FM_INK_RGB = INK_RGB
+FM_TITLE_INK_RGB = TITLE_INK_RGB
+FM_DIM_INK_RGB = INK_DIM_RGB
+FM_BAR_RGB = SURFACE_HIGH_RGB
+FM_FOCUS_RGB = ACCENT_RGB
+FM_SELECT_RGB = SELECTION_RGB
+FM_SELECT_INK_RGB = SELECTION_INK_RGB
 FM_MODAL_X = 416
-FM_MODAL_Y = 372
+FM_MODAL_Y = 371
 
 # The desktop of 1.7 (`/bin/wm`, docs/desktop.md) and the numbers of its
-# source: the two blues of the wallpaper in bands of 64 pixels, the bar of the
-# panel, the cyan of the button of the window with the keys, the yellow ring
-# of the focus, the red square that closes a window and the white pointer. The
-# rectangles are the two windows the server starts.
-WM_WALL_A_RGB = rgb565(0x0861)
-WM_WALL_B_RGB = rgb565(0x1082)
-WM_WALL_BAND = 64
-WM_PANEL_RGB = rgb565(0x0010)
-WM_PANEL_FOCUS_RGB = rgb565(0x57FF)
-WM_FOCUS_RGB = rgb565(0xFFEA)
-WM_CLOSE_RGB = rgb565(0xA800)
-WM_CURSOR_RGB = rgb565(0xFFFF)
+# source: the gradient and the grid of the wallpaper, the panel, the accent of
+# the button of the window with the keys and of the ring of the focus, the red
+# square that closes a window and the pointer of white with a black outline.
+# The rectangles are the two windows the server starts.
+WM_WALL_GRID = 32
+WM_WALL_GRID_OFFSET = 16
+WM_PANEL_RGB = PANEL_RGB
+WM_PANEL_BUTTON_RGB = SURFACE_RGB
+WM_PANEL_INK_RGB = INK_DIM_RGB
+WM_PANEL_FOCUS_RGB = ACCENT_RGB
+WM_PANEL_ACCENT_INK_RGB = ACCENT_INK_RGB
+WM_FOCUS_RGB = ACCENT_RGB
+WM_CLOSE_RGB = CLOSE_RGB
+WM_CURSOR_RGB = CURSOR_INK_RGB
+WM_CURSOR_EDGE_RGB = CURSOR_EDGE_RGB
 WM_PANEL_HEIGHT = 24
 # The two windows of the default desktop: beside each other and not over each
 # other, so the corner of one never hides the text of the other (docs/desktop.md).
@@ -199,10 +263,10 @@ WM_FM_RECT = (700, 200, 520, 380)
 # cross a title bar has, twelve pixels of it in a button of the panel.
 WM_PANEL_CLOSE = 12
 WM_TITLE_KEEP = 64
-# The text of a title inside its bar: the margin of the frame and three pixels
-# of the row (components/ui: UI_FRAME_PAD).
-UI_FRAME_PAD = 3
-WM_CURSOR_INK_RGB = rgb565(0xFFFF)
+# The shadow of a window: three pixels of a darker wallpaper at its right and
+# below, and the ring of the focus around it.
+WM_SHADOW = 3
+WM_FOCUS_RING = 2
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, "build-x86")
@@ -1500,12 +1564,13 @@ def run_editor(loader: str, kernel: str, image: str, timeout: float, verbose: bo
                 machine,
                 workdir,
                 lambda seen: seen.text_at(
-                    4, UI_TITLE_Y, "edit - /edit.txt", EDIT_INK_RGB, EDIT_BAR_RGB
+                    UI_FRAME_PAD, UI_TITLE_Y, "edit - /edit.txt", EDIT_TITLE_INK_RGB, EDIT_BAR_RGB
                 )
                 and seen.text_at(
-                    4, UI_STATUS_Y, "edit  L1 C1  0 bytes", EDIT_INK_RGB, EDIT_BAR_RGB
+                    UI_FRAME_PAD, UI_STATUS_Y, "edit  L1 C1  0 bytes", EDIT_DIM_INK_RGB,
+                    EDIT_BAR_RGB
                 )
-                and seen.pixel(4, UI_FRAME_TITLE_HEIGHT) == EDIT_INK_RGB,
+                and seen.pixel(UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT) == EDIT_INK_RGB,
             )
             expect("the window of the editor is drawn", picture is not None,
                    "screendump wrote no PPM")
@@ -1513,21 +1578,24 @@ def run_editor(loader: str, kernel: str, image: str, timeout: float, verbose: bo
             if picture is not None:
                 expect(
                     "the title says which file is open",
-                    picture.text_at(4, UI_TITLE_Y, "edit - /edit.txt", EDIT_INK_RGB, EDIT_BAR_RGB),
+                    picture.text_at(UI_FRAME_PAD, UI_TITLE_Y, "edit - /edit.txt",
+                                    EDIT_TITLE_INK_RGB, EDIT_BAR_RGB),
                     "the title bar does not hold 'edit - /edit.txt'",
                 )
                 expect(
                     "the status line names the keys",
                     picture.text_at(
-                        4, UI_STATUS_Y, "edit  L1 C1  0 bytes", EDIT_INK_RGB, EDIT_BAR_RGB
+                        UI_FRAME_PAD, UI_STATUS_Y, "edit  L1 C1  0 bytes", EDIT_DIM_INK_RGB,
+                        EDIT_BAR_RGB
                     ),
                     "the status line is not 'edit  L1 C1  0 bytes'",
                 )
                 expect(
                     "the cursor is one inverted cell of the first line",
-                    picture.pixel(4, UI_FRAME_TITLE_HEIGHT) == EDIT_INK_RGB
-                    and picture.pixel(11, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT - 1) == EDIT_INK_RGB
-                    and picture.pixel(12, UI_FRAME_TITLE_HEIGHT) == EDIT_PAPER_RGB,
+                    picture.pixel(UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT) == EDIT_INK_RGB
+                    and picture.pixel(UI_FRAME_PAD + 7,
+                                      UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT - 1) == EDIT_INK_RGB
+                    and picture.pixel(UI_FRAME_PAD + 8, UI_FRAME_TITLE_HEIGHT) == EDIT_PAPER_RGB,
                     "the first cell of the body is not the block of the cursor",
                 )
 
@@ -1538,27 +1606,30 @@ def run_editor(loader: str, kernel: str, image: str, timeout: float, verbose: bo
                 machine,
                 workdir,
                 lambda seen: seen.text_at(
-                    4, UI_FRAME_TITLE_HEIGHT, "hi", EDIT_INK_RGB, EDIT_PAPER_RGB
+                    UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT, "hi", EDIT_INK_RGB, EDIT_PAPER_RGB
                 )
-                and seen.pixel(20, UI_FRAME_TITLE_HEIGHT) == EDIT_INK_RGB
-                and seen.text_at(4, UI_STATUS_Y, "edit [modified]", EDIT_INK_RGB, EDIT_BAR_RGB),
+                and seen.pixel(UI_FRAME_PAD + 16, UI_FRAME_TITLE_HEIGHT) == EDIT_INK_RGB
+                and seen.text_at(UI_FRAME_PAD, UI_STATUS_Y, "edit [modified]", EDIT_DIM_INK_RGB,
+                                 EDIT_BAR_RGB),
             )
             expect(
                 "the letters of the keyboard are in the file",
                 typed is not None
-                and typed.text_at(4, UI_FRAME_TITLE_HEIGHT, "hi", EDIT_INK_RGB, EDIT_PAPER_RGB),
+                and typed.text_at(UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT, "hi", EDIT_INK_RGB,
+                                  EDIT_PAPER_RGB),
                 "the first line of the body is not 'hi'",
             )
             expect(
                 "the cursor moved after the letters",
-                typed is not None and typed.pixel(20, UI_FRAME_TITLE_HEIGHT) == EDIT_INK_RGB,
+                typed is not None
+                and typed.pixel(UI_FRAME_PAD + 16, UI_FRAME_TITLE_HEIGHT) == EDIT_INK_RGB,
                 "the cursor is not the cell after 'hi'",
             )
             expect(
                 "the status line says the file has changed",
                 typed is not None
                 and typed.text_at(
-                    4, UI_STATUS_Y, "edit [modified]", EDIT_INK_RGB, EDIT_BAR_RGB
+                    UI_FRAME_PAD, UI_STATUS_Y, "edit [modified]", EDIT_DIM_INK_RGB, EDIT_BAR_RGB
                 ),
                 "the status line does not say [modified]",
             )
@@ -1568,14 +1639,16 @@ def run_editor(loader: str, kernel: str, image: str, timeout: float, verbose: bo
                 machine,
                 workdir,
                 lambda seen: seen.text_at(
-                    4, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT, "ok", EDIT_INK_RGB, EDIT_PAPER_RGB
+                    UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT, "ok", EDIT_INK_RGB,
+                    EDIT_PAPER_RGB
                 ),
             )
             expect(
                 "Enter starts a second line",
                 second is not None
                 and second.text_at(
-                    4, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT, "ok", EDIT_INK_RGB, EDIT_PAPER_RGB
+                    UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT, "ok", EDIT_INK_RGB,
+                    EDIT_PAPER_RGB
                 ),
                 "the second line of the body is not 'ok'",
             )
@@ -1586,9 +1659,10 @@ def run_editor(loader: str, kernel: str, image: str, timeout: float, verbose: bo
                 machine,
                 workdir,
                 lambda seen: seen.text_at(
-                    4, UI_STATUS_Y, "saved 5 bytes", EDIT_INK_RGB, EDIT_BAR_RGB
+                    UI_FRAME_PAD, UI_STATUS_Y, "saved 5 bytes", EDIT_DIM_INK_RGB, EDIT_BAR_RGB
                 )
-                and seen.text_at(4, UI_TITLE_Y, "edit - /edit.txt", EDIT_INK_RGB, EDIT_BAR_RGB),
+                and seen.text_at(UI_FRAME_PAD, UI_TITLE_Y, "edit - /edit.txt",
+                                 EDIT_TITLE_INK_RGB, EDIT_BAR_RGB),
             )
             expect(
                 "Ctrl+S writes the file",
@@ -1598,7 +1672,8 @@ def run_editor(loader: str, kernel: str, image: str, timeout: float, verbose: bo
             expect(
                 "a saved file has no mark of a change",
                 saved is not None
-                and saved.text_at(4, UI_TITLE_Y, "edit - /edit.txt", EDIT_INK_RGB, EDIT_BAR_RGB),
+                and saved.text_at(UI_FRAME_PAD, UI_TITLE_Y, "edit - /edit.txt",
+                                  EDIT_TITLE_INK_RGB, EDIT_BAR_RGB),
                 "the title still marks the file as modified",
             )
 
@@ -1684,7 +1759,8 @@ def run_fm(loader: str, kernel: str, image: str, timeout: float, verbose: bool, 
         """The row of the list that spells `letters`, -1 when there is none."""
         for row in range((UI_STATUS_Y - UI_FRAME_TITLE_HEIGHT) // CELL_HEIGHT):
             if picture.text_at(
-                4, UI_FRAME_TITLE_HEIGHT + row * CELL_HEIGHT, letters, FM_INK_RGB, FM_PAPER_RGB
+                UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT + row * CELL_HEIGHT, letters, FM_INK_RGB,
+                FM_PAPER_RGB
             ):
                 return row
         return -1
@@ -1716,7 +1792,8 @@ def run_fm(loader: str, kernel: str, image: str, timeout: float, verbose: bool, 
             picture = settled_picture(
                 machine,
                 workdir,
-                lambda seen: seen.text_at(4, UI_TITLE_Y, "fm - /", FM_INK_RGB, FM_BAR_RGB)
+                lambda seen: seen.text_at(UI_FRAME_PAD, UI_TITLE_Y, "fm - /",
+                                          FM_TITLE_INK_RGB, FM_BAR_RGB)
                 and row_holding(seen, "etc/") >= 0
                 and row_holding(seen, "proc/") >= 0
                 and row_holding(seen, "zzz") >= 0,
@@ -1729,7 +1806,8 @@ def run_fm(loader: str, kernel: str, image: str, timeout: float, verbose: bool, 
             if picture is not None:
                 expect(
                     "the title names the directory",
-                    picture.text_at(4, UI_TITLE_Y, "fm - /", FM_INK_RGB, FM_BAR_RGB),
+                    picture.text_at(UI_FRAME_PAD, UI_TITLE_Y, "fm - /", FM_TITLE_INK_RGB,
+                                    FM_BAR_RGB),
                     "the title bar does not hold 'fm - /'",
                 )
                 expect(
@@ -1737,7 +1815,7 @@ def run_fm(loader: str, kernel: str, image: str, timeout: float, verbose: bool, 
                     row_holding(picture, "etc/") >= 0
                     and row_holding(picture, "proc/") >= 0
                     and picture.text_at(
-                        4,
+                        UI_FRAME_PAD,
                         UI_FRAME_TITLE_HEIGHT,
                         "bin/",
                         FM_SELECT_INK_RGB,
@@ -1753,15 +1831,18 @@ def run_fm(loader: str, kernel: str, image: str, timeout: float, verbose: bool, 
                 expect(
                     "the status line names the keys",
                     "Enter open"
-                    in picture.letters_at(4, UI_STATUS_Y, 100, FM_INK_RGB, FM_BAR_RGB)
+                    in picture.letters_at(UI_FRAME_PAD, UI_STATUS_Y, 100, FM_DIM_INK_RGB,
+                                          FM_BAR_RGB)
                     and "q quit"
-                    in picture.letters_at(4, UI_STATUS_Y, 100, FM_INK_RGB, FM_BAR_RGB),
+                    in picture.letters_at(UI_FRAME_PAD, UI_STATUS_Y, 100, FM_DIM_INK_RGB,
+                                          FM_BAR_RGB),
                     "the status line does not name the keys",
                 )
                 expect(
                     "the first row of the list has the focus",
-                    picture.pixel(4, UI_FRAME_TITLE_HEIGHT) == FM_SELECT_RGB
-                    and picture.pixel(4, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT) == FM_PAPER_RGB,
+                    picture.pixel(UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT) == FM_SELECT_RGB
+                    and picture.pixel(UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT)
+                    == FM_PAPER_RGB,
                     "the first row is not the grey of the focus",
                 )
                 zzz_row = row_holding(picture, "zzz")
@@ -1772,14 +1853,16 @@ def run_fm(loader: str, kernel: str, image: str, timeout: float, verbose: bool, 
             moved = settled_picture(
                 machine,
                 workdir,
-                lambda seen: seen.pixel(4, UI_FRAME_TITLE_HEIGHT) == FM_PAPER_RGB
-                and seen.pixel(4, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT) == FM_SELECT_RGB,
+                lambda seen: seen.pixel(UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT) == FM_PAPER_RGB
+                and seen.pixel(UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT)
+                == FM_SELECT_RGB,
             )
             expect(
                 "the down arrow moves the selection",
                 moved is not None
-                and moved.pixel(4, UI_FRAME_TITLE_HEIGHT) == FM_PAPER_RGB
-                and moved.pixel(4, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT) == FM_SELECT_RGB,
+                and moved.pixel(UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT) == FM_PAPER_RGB
+                and moved.pixel(UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT)
+                == FM_SELECT_RGB,
                 "the grey of the selection did not move to the second row",
             )
 
@@ -1789,7 +1872,8 @@ def run_fm(loader: str, kernel: str, image: str, timeout: float, verbose: bool, 
                 machine,
                 workdir,
                 lambda seen: zzz_row >= 0
-                and seen.pixel(4, UI_FRAME_TITLE_HEIGHT + zzz_row * CELL_HEIGHT) == FM_SELECT_RGB,
+                and seen.pixel(UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT + zzz_row * CELL_HEIGHT)
+                == FM_SELECT_RGB,
             )
             expect(
                 "End selects the last name of the list",
@@ -1805,7 +1889,7 @@ def run_fm(loader: str, kernel: str, image: str, timeout: float, verbose: bool, 
                 workdir,
                 lambda seen: seen.pixel(FM_MODAL_X, FM_MODAL_Y) == FM_FOCUS_RGB
                 and seen.text_at(
-                    FM_MODAL_X + 3,
+                    FM_MODAL_X + UI_FRAME_PAD,
                     FM_MODAL_Y + UI_FRAME_TITLE_HEIGHT,
                     "Delete zzz?",
                     FM_INK_RGB,
@@ -1821,7 +1905,7 @@ def run_fm(loader: str, kernel: str, image: str, timeout: float, verbose: bool, 
                 "the dialog asks about the file",
                 dialog is not None
                 and dialog.text_at(
-                    FM_MODAL_X + 3,
+                    FM_MODAL_X + UI_FRAME_PAD,
                     FM_MODAL_Y + UI_FRAME_TITLE_HEIGHT,
                     "Delete zzz?",
                     FM_INK_RGB,
@@ -1838,7 +1922,7 @@ def run_fm(loader: str, kernel: str, image: str, timeout: float, verbose: bool, 
                 lambda seen: seen.pixel(FM_MODAL_X, FM_MODAL_Y) != FM_FOCUS_RGB
                 and zzz_row >= 0
                 and seen.text_at(
-                    4,
+                    UI_FRAME_PAD,
                     UI_FRAME_TITLE_HEIGHT + zzz_row * CELL_HEIGHT,
                     "zzz",
                     FM_SELECT_INK_RGB,
@@ -1851,7 +1935,7 @@ def run_fm(loader: str, kernel: str, image: str, timeout: float, verbose: bool, 
                 and cancelled.pixel(FM_MODAL_X, FM_MODAL_Y) != FM_FOCUS_RGB
                 and zzz_row >= 0
                 and cancelled.text_at(
-                    4,
+                    UI_FRAME_PAD,
                     UI_FRAME_TITLE_HEIGHT + zzz_row * CELL_HEIGHT,
                     "zzz",
                     FM_SELECT_INK_RGB,
@@ -1872,7 +1956,7 @@ def run_fm(loader: str, kernel: str, image: str, timeout: float, verbose: bool, 
                 machine,
                 workdir,
                 lambda seen: seen.text_at(
-                    4, UI_STATUS_Y, "deleted /zzz", FM_INK_RGB, FM_BAR_RGB
+                    UI_FRAME_PAD, UI_STATUS_Y, "deleted /zzz", FM_DIM_INK_RGB, FM_BAR_RGB
                 )
                 and row_holding(seen, "bin/") >= 0
                 and row_holding(seen, "proc/") >= 0,
@@ -1957,18 +2041,6 @@ def stray_pixels(picture, x0: int, y0: int, x1: int, y1: int, paper: tuple) -> i
     return count
 
 
-def bar_pixels(picture, y: int, limit: int) -> int:
-    """How many pixels of a row are the paper of a bar of a title.
-
-    The bar of a window of the desktop is the dark blue of the panel
-    (`WM_PANEL_RGB`), and the row of the bar a test asks about is a row no
-    panel and no other bar is in.
-    """
-    end = limit if limit < VBE_WIDTH else VBE_WIDTH
-
-    return sum(1 for x in range(0, end) if picture.pixel(x, y) == WM_PANEL_RGB)
-
-
 def run_desktop(
     loader: str, kernel: str, image: str, timeout: float, verbose: bool, display: str
 ) -> list:
@@ -1977,15 +2049,19 @@ def run_desktop(
     The machine boots a copy of the disk and the shell starts `/bin/wm`, which
     takes the screen, starts `/bin/edit` on `/doc.txt` and `/bin/fm` on `/`
     with `fork` and `execve`, and owns the picture from then on. The test
-    reads the wallpaper, the panel and the two windows out of the screenshot,
-    drives the pointer through the PS/2 mouse of QEMU (`mouse_move`,
-    `mouse_button`) and the keys through `sendkey`, and reads the lines of the
-    server: a click raises the window it lands on, a key goes to the window
-    with the keys, a drag of a title bar moves the window, Alt+F4 closes it
-    and the focus goes back to what is left. The last window ends the
-    desktop, the grid of the shell comes back and `cat /doc.txt` reads the
-    line the editor typed - which is the proof that the buffer of a client,
-    the keys the server forwarded and the file of the program are one story.
+    reads the palette out of the screenshot - the gradient of the wallpaper,
+    the air and the separator of a frame, the shadow of a window, the accent
+    of the focus - and then the panel and the two windows; it drives the
+    pointer through the PS/2 mouse of QEMU (`mouse_move`, `mouse_button`) and
+    the keys through `sendkey`, and reads the lines of the server: a click
+    raises the window it lands on, a key goes to the window with the keys, a
+    drag of a title bar moves the window, Alt+F4 closes it and the focus goes
+    back to what is left. The last window ends the desktop, the grid of the
+    shell comes back and `cat /doc.txt` reads the line the editor typed -
+    which is the proof that the buffer of a client, the keys the server
+    forwarded and the file of the program are one story. The desktop starts a
+    second time with `theme=light` of /etc/console and the same checks of the
+    desk are read in the light palette.
     """
     checks = []
 
@@ -2022,10 +2098,10 @@ def run_desktop(
 
     def title_at(picture, rect) -> bool:
         x, y, _, _ = rect
-        return picture.text_at(x + 4, y + UI_TITLE_Y, "edit - /doc.txt", EDIT_INK_RGB,
-                               EDIT_BAR_RGB) or picture.text_at(
-                                   x + 4, y + UI_TITLE_Y, "edit - /doc.txt *", EDIT_INK_RGB,
-                                   EDIT_BAR_RGB)
+        return picture.text_at(x + UI_FRAME_PAD, y + UI_TITLE_Y, "edit - /doc.txt",
+                               EDIT_TITLE_INK_RGB, EDIT_BAR_RGB) or picture.text_at(
+                                   x + UI_FRAME_PAD, y + UI_TITLE_Y, "edit - /doc.txt *",
+                                   EDIT_TITLE_INK_RGB, EDIT_BAR_RGB)
 
     with tempfile.TemporaryDirectory(prefix="microos-x86-desktop-") as workdir:
         disk = os.path.join(workdir, "disk.img")
@@ -2064,21 +2140,22 @@ def run_desktop(
             picture = settled_picture(
                 machine,
                 workdir,
-                lambda seen: seen.pixel(4, 4) == WM_WALL_A_RGB
+                lambda seen: seen.pixel(4, 4) == WALL_TOP_RGB
                 and title_at(seen, WM_EDIT_RECT)
-                and seen.text_at(WM_FM_RECT[0] + 4, WM_FM_RECT[1] + UI_TITLE_Y, "fm - /",
-                                 FM_INK_RGB, FM_BAR_RGB),
+                and seen.text_at(WM_FM_RECT[0] + UI_FRAME_PAD, WM_FM_RECT[1] + UI_TITLE_Y,
+                                 "fm - /", FM_TITLE_INK_RGB, FM_BAR_RGB),
             )
             expect("the picture of the desktop is drawn", picture is not None,
                    "screendump wrote no PPM")
 
             if picture is not None:
                 expect(
-                    "the wallpaper is the colour of the server",
-                    picture.pixel(4, 4) == WM_WALL_A_RGB
-                    and picture.pixel(4, WM_WALL_BAND + 4) == WM_WALL_B_RGB,
-                    f"the corner of the picture is {picture.pixel(4, 4)} and "
-                    f"{picture.pixel(4, WM_WALL_BAND + 4)}, not the two blues of the wallpaper",
+                    "the wallpaper is a gradient of the theme",
+                    picture.pixel(4, 4) == WALL_TOP_RGB
+                    and picture.pixel(4, 770) == WALL_BOTTOM_RGB
+                    and picture.pixel(4, 4) != picture.pixel(4, 770),
+                    f"the desk is {picture.pixel(4, 4)} at the top and "
+                    f"{picture.pixel(4, 770)} at the bottom, not the gradient of the palette",
                 )
                 expect(
                     "the title bar of the editor is the text of the client",
@@ -2086,42 +2163,76 @@ def run_desktop(
                     "the title of the window of the editor is not 'edit - /doc.txt'",
                 )
                 expect(
+                    "the title and the body of a window are two inks",
+                    EDIT_TITLE_INK_RGB != EDIT_INK_RGB
+                    and brightness(EDIT_TITLE_INK_RGB) > brightness(EDIT_INK_RGB),
+                    "the title of a window is not brighter than the text of its body",
+                )
+                expect(
+                    "the title has air on either side of its text",
+                    all(
+                        picture.pixel(x, WM_EDIT_RECT[1] + UI_TITLE_Y + 8) == EDIT_BAR_RGB
+                        for x in range(WM_EDIT_RECT[0] + 1, WM_EDIT_RECT[0] + UI_FRAME_PAD)
+                    ),
+                    "a pixel of the title touches the border of the window",
+                )
+                expect(
+                    "the separator divides the title from the body",
+                    picture.pixel(WM_EDIT_RECT[0] + 3,
+                                  WM_EDIT_RECT[1] + UI_FRAME_TITLE_HEIGHT - 1) == BORDER_RGB,
+                    "no line of the border colour under the title of the editor",
+                )
+                expect(
                     "the editor draws its body",
                     picture.pixel(WM_EDIT_RECT[0] + 20, WM_EDIT_RECT[1] + 60) == EDIT_PAPER_RGB,
                     "the body of the editor is not its paper",
                 )
                 expect(
+                    "the body has air on either side of its text",
+                    picture.pixel(WM_EDIT_RECT[0] + 2, WM_EDIT_RECT[1] + 40) == EDIT_PAPER_RGB
+                    and picture.pixel(WM_EDIT_RECT[0] + 4,
+                                      WM_EDIT_RECT[1] + UI_FRAME_TITLE_HEIGHT + 8)
+                    == EDIT_PAPER_RGB,
+                    "a pixel of the body text touches the border of the window",
+                )
+                expect(
                     "the title bar of the file manager is the text of the client",
-                    picture.text_at(WM_FM_RECT[0] + 4, WM_FM_RECT[1] + UI_TITLE_Y, "fm - /",
-                                    FM_INK_RGB, FM_BAR_RGB),
+                    picture.text_at(WM_FM_RECT[0] + UI_FRAME_PAD, WM_FM_RECT[1] + UI_TITLE_Y,
+                                    "fm - /", FM_TITLE_INK_RGB, FM_BAR_RGB),
                     "the title of the window of the file manager is not 'fm - /'",
                 )
                 expect(
                     "the list of the file manager is in the window",
-                    picture.text_at(WM_FM_RECT[0] + 4, WM_FM_RECT[1] + UI_FRAME_TITLE_HEIGHT,
+                    picture.text_at(WM_FM_RECT[0] + UI_FRAME_PAD,
+                                    WM_FM_RECT[1] + UI_FRAME_TITLE_HEIGHT,
                                     "bin/", FM_SELECT_INK_RGB, FM_SELECT_RGB),
                     "the first row of the root is not the selected 'bin/'",
                 )
                 expect(
                     "the panel is a bar of the bottom of the picture",
                     picture.pixel(4, VBE_HEIGHT - 4) == WM_PANEL_RGB,
-                    "the bottom of the picture is not the paper of the panel",
+                    "the bottom of the picture is not the surface of the panel",
+                )
+                expect(
+                    "a line separates the panel from the desk",
+                    picture.pixel(4, VBE_HEIGHT - WM_PANEL_HEIGHT) == BORDER_RGB,
+                    "the top row of the panel is not the border of the palette",
                 )
                 expect(
                     "the panel holds a button a window",
                     picture.text_at(
                         14, VBE_HEIGHT - WM_PANEL_HEIGHT + 4, "edit - /doc.txt",
-                        EDIT_INK_RGB, WM_PANEL_RGB
+                        WM_PANEL_INK_RGB, WM_PANEL_BUTTON_RGB
                     ),
                     "the panel does not name the editor",
                 )
                 expect(
-                    "the button of the window with the keys is inverted",
+                    "the button of the window with the keys is the accent",
                     picture.text_at(
-                        150, VBE_HEIGHT - WM_PANEL_HEIGHT + 4, "fm - /",
-                        WM_PANEL_RGB, WM_PANEL_FOCUS_RGB
+                        176, VBE_HEIGHT - WM_PANEL_HEIGHT + 4, "fm - /",
+                        WM_PANEL_ACCENT_INK_RGB, WM_PANEL_FOCUS_RGB
                     ),
-                    "the button of the file manager is not the inverted one",
+                    "the button of the file manager is not the accent of the theme",
                 )
                 expect(
                     "the server draws the pointer",
@@ -2129,13 +2240,34 @@ def run_desktop(
                     "the middle of the picture is not the ink of the pointer",
                 )
                 expect(
+                    "the pointer has a black outline",
+                    picture.pixel(VBE_WIDTH // 2 - 1, VBE_HEIGHT // 2 + 2) == WM_CURSOR_EDGE_RGB
+                    and picture.pixel(VBE_WIDTH // 2, VBE_HEIGHT // 2) != WM_CURSOR_EDGE_RGB,
+                    "the pointer has no outline of the edge colour",
+                )
+                expect(
+                    "the shadow of a window is darker than the desk",
+                    picture.pixel(WM_EDIT_RECT[0] + 20,
+                                  WM_EDIT_RECT[1] + WM_EDIT_RECT[3] + 1)
+                    != picture.pixel(1250, WM_EDIT_RECT[1] + WM_EDIT_RECT[3] + 1)
+                    and brightness(picture.pixel(WM_EDIT_RECT[0] + 20,
+                                                 WM_EDIT_RECT[1] + WM_EDIT_RECT[3] + 1))
+                    < brightness(picture.pixel(1250, WM_EDIT_RECT[1] + WM_EDIT_RECT[3] + 1)),
+                    "the pixels under the editor are the wallpaper and not its shadow",
+                )
+                expect(
                     "the window of the file manager has the keys",
                     picture.pixel(WM_FM_RECT[0] - 1, WM_FM_RECT[1] - 1) == WM_FOCUS_RGB,
                     "the ring of the focus is not around the file manager",
                 )
                 expect(
+                    "the accent of the focus is not the yellow of the CGA",
+                    WM_FOCUS_RGB != rgb565(0xFFEA),
+                    "the ring of the focus is the yellow of the terminal again",
+                )
+                expect(
                     "the window under it does not",
-                    picture.pixel(WM_EDIT_RECT[0] - 2, WM_EDIT_RECT[1] - 2) == WM_WALL_A_RGB,
+                    picture.pixel(WM_EDIT_RECT[0] - 2, WM_EDIT_RECT[1] - 2) == WALL_TOP_RGB,
                     "a ring of the focus is around the editor as well",
                 )
 
@@ -2165,14 +2297,16 @@ def run_desktop(
             expect(
                 "the window without the keys keeps its title",
                 picture is not None
-                and picture.text_at(WM_FM_RECT[0] + 4, WM_FM_RECT[1] + UI_TITLE_Y, "fm - /",
-                                    FM_INK_RGB, FM_BAR_RGB),
+                and picture.text_at(WM_FM_RECT[0] + UI_FRAME_PAD,
+                                    WM_FM_RECT[1] + UI_TITLE_Y, "fm - /", FM_TITLE_INK_RGB,
+                                    FM_BAR_RGB),
                 "the title of the file manager went away with the keys",
             )
             expect(
                 "the window without the keys keeps its text",
                 picture is not None
-                and picture.text_at(WM_FM_RECT[0] + 4, WM_FM_RECT[1] + UI_FRAME_TITLE_HEIGHT,
+                and picture.text_at(WM_FM_RECT[0] + UI_FRAME_PAD,
+                                    WM_FM_RECT[1] + UI_FRAME_TITLE_HEIGHT,
                                     "bin/", FM_SELECT_INK_RGB, FM_SELECT_RGB),
                 "the list of the file manager went away with the keys",
             )
@@ -2182,8 +2316,9 @@ def run_desktop(
             click(machine)
             machine.keys(["h", "e", "l", "l", "o"])
 
-            body = (WM_EDIT_RECT[0] + 4, WM_EDIT_RECT[1] + UI_FRAME_TITLE_HEIGHT)
-            status = (WM_EDIT_RECT[0] + 4, WM_EDIT_RECT[1] + WM_EDIT_RECT[3] - CELL_HEIGHT)
+            body = (WM_EDIT_RECT[0] + UI_FRAME_PAD, WM_EDIT_RECT[1] + UI_FRAME_TITLE_HEIGHT)
+            status = (WM_EDIT_RECT[0] + UI_FRAME_PAD,
+                      WM_EDIT_RECT[1] + WM_EDIT_RECT[3] - CELL_HEIGHT)
 
             picture = settled_picture(
                 machine,
@@ -2199,7 +2334,7 @@ def run_desktop(
             expect(
                 "the status line of the editor is the modified document",
                 picture is not None
-                and picture.text_at(*status, "edit [modified]", EDIT_INK_RGB, EDIT_BAR_RGB),
+                and picture.text_at(*status, "edit [modified]", EDIT_DIM_INK_RGB, EDIT_BAR_RGB),
                 "the status line does not say that the document changed",
             )
 
@@ -2210,12 +2345,13 @@ def run_desktop(
             picture = settled_picture(
                 machine,
                 workdir,
-                lambda seen: seen.text_at(*status, "saved 5 bytes", EDIT_INK_RGB, EDIT_BAR_RGB),
+                lambda seen: seen.text_at(*status, "saved 5 bytes", EDIT_DIM_INK_RGB,
+                                          EDIT_BAR_RGB),
             )
             expect(
                 "the editor saves the document with Ctrl+S",
                 picture is not None
-                and picture.text_at(*status, "saved 5 bytes", EDIT_INK_RGB, EDIT_BAR_RGB),
+                and picture.text_at(*status, "saved 5 bytes", EDIT_DIM_INK_RGB, EDIT_BAR_RGB),
                 "the status line of the editor does not say that it saved the file",
             )
 
@@ -2238,9 +2374,9 @@ def run_desktop(
                 and not stray_pixels(
                     picture,
                     WM_EDIT_RECT[0] + 184,
-                    WM_EDIT_RECT[1] + 2,
+                    WM_EDIT_RECT[1] + UI_TITLE_Y,
                     WM_EDIT_RECT[0] + WM_EDIT_RECT[2] - 24,
-                    WM_EDIT_RECT[1] + 17,
+                    WM_EDIT_RECT[1] + UI_TITLE_Y + CELL_HEIGHT,
                     EDIT_BAR_RGB,
                 ),
                 "the bar of the title of the editor holds pixels that are not its paper",
@@ -2260,13 +2396,13 @@ def run_desktop(
                 machine,
                 workdir,
                 lambda seen: seen.text_at(modal[0] + UI_FRAME_PAD, modal[1] + UI_TITLE_Y,
-                                          "unsaved changes", EDIT_INK_RGB, EDIT_BAR_RGB),
+                                          "unsaved changes", EDIT_TITLE_INK_RGB, EDIT_BAR_RGB),
             )
             expect(
                 "Ctrl+Q asks about the unsaved file in a modal window",
                 picture is not None
                 and picture.text_at(modal[0] + UI_FRAME_PAD, modal[1] + UI_TITLE_Y,
-                                    "unsaved changes", EDIT_INK_RGB, EDIT_BAR_RGB),
+                                    "unsaved changes", EDIT_TITLE_INK_RGB, EDIT_BAR_RGB),
                 "the question about the unsaved file is not on the picture",
             )
 
@@ -2279,9 +2415,9 @@ def run_desktop(
                 lambda seen: not stray_pixels(
                     seen,
                     WM_EDIT_RECT[0] + 184,
-                    WM_EDIT_RECT[1] + 2,
+                    WM_EDIT_RECT[1] + UI_TITLE_Y,
                     WM_EDIT_RECT[0] + WM_EDIT_RECT[2] - 24,
-                    WM_EDIT_RECT[1] + 17,
+                    WM_EDIT_RECT[1] + UI_TITLE_Y + CELL_HEIGHT,
                     EDIT_BAR_RGB,
                 ),
             )
@@ -2291,9 +2427,9 @@ def run_desktop(
                 and not stray_pixels(
                     picture,
                     WM_EDIT_RECT[0] + 184,
-                    WM_EDIT_RECT[1] + 2,
+                    WM_EDIT_RECT[1] + UI_TITLE_Y,
                     WM_EDIT_RECT[0] + WM_EDIT_RECT[2] - 24,
-                    WM_EDIT_RECT[1] + 17,
+                    WM_EDIT_RECT[1] + UI_TITLE_Y + CELL_HEIGHT,
                     EDIT_BAR_RGB,
                 ),
                 "the bar of the title of the editor holds pixels that are not its paper",
@@ -2311,12 +2447,13 @@ def run_desktop(
             picture = settled_picture(
                 machine,
                 workdir,
-                lambda seen: seen.text_at(*status, "saved 6 bytes", EDIT_INK_RGB, EDIT_BAR_RGB),
+                lambda seen: seen.text_at(*status, "saved 6 bytes", EDIT_DIM_INK_RGB,
+                                          EDIT_BAR_RGB),
             )
             expect(
                 "the editor saves the document again",
                 picture is not None
-                and picture.text_at(*status, "saved 6 bytes", EDIT_INK_RGB, EDIT_BAR_RGB),
+                and picture.text_at(*status, "saved 6 bytes", EDIT_DIM_INK_RGB, EDIT_BAR_RGB),
                 "the status line of the editor does not say that it saved six bytes",
             )
 
@@ -2345,8 +2482,8 @@ def run_desktop(
             )
             expect(
                 "the place it left is the wallpaper again",
-                picture is not None and picture.pixel(WM_EDIT_RECT[0] + 4, WM_EDIT_RECT[1] + 2)
-                == WM_WALL_A_RGB,
+                picture is not None
+                and desk_at(picture, WM_EDIT_RECT[0] + 4, WM_EDIT_RECT[1] + 2),
                 "the old rectangle of the editor is still painted",
             )
 
@@ -2376,17 +2513,17 @@ def run_desktop(
             picture = settled_picture(
                 machine,
                 workdir,
-                lambda seen: seen.pixel(10, 5) == WM_PANEL_RGB
-                and seen.pixel(0, 0) == WM_CURSOR_INK_RGB,
+                lambda seen: seen.pixel(10, 5) == EDIT_BAR_RGB
+                and seen.pixel(0, 0) == WM_CURSOR_RGB,
             )
             expect(
                 "the bar of the title is at the top of the picture",
-                picture is not None and picture.pixel(10, 5) == WM_PANEL_RGB,
+                picture is not None and picture.pixel(10, 5) == EDIT_BAR_RGB,
                 "the corner of the picture holds no bar of a title",
             )
             expect(
                 "the pointer of the corner is in the picture",
-                picture is not None and picture.pixel(0, 0) == WM_CURSOR_INK_RGB,
+                picture is not None and picture.pixel(0, 0) == WM_CURSOR_RGB,
                 "the pointer of the corner is not on the picture",
             )
 
@@ -2505,7 +2642,7 @@ def run_desktop(
             )
 
             goto(machine, 900, 400)
-            overlap = (WM_FM_RECT[0] + 4, WM_FM_RECT[1] + WM_FM_RECT[3] - 10)
+            overlap = (WM_FM_RECT[0] + UI_FRAME_PAD, WM_FM_RECT[1] + WM_FM_RECT[3] - 10)
             picture = settled_picture(
                 machine, workdir, lambda seen: seen.pixel(*overlap) == EDIT_PAPER_RGB
             )
@@ -2525,11 +2662,11 @@ def run_desktop(
 
             goto(machine, 640, 700)
             picture = settled_picture(
-                machine, workdir, lambda seen: seen.pixel(*overlap) == WM_PANEL_RGB
+                machine, workdir, lambda seen: seen.pixel(*overlap) == FM_BAR_RGB
             )
             expect(
                 "the window that was raised is the one of the two that is drawn",
-                picture is not None and picture.pixel(*overlap) == WM_PANEL_RGB,
+                picture is not None and picture.pixel(*overlap) == FM_BAR_RGB,
                 f"the pixel {overlap} is not the line of status of the file manager",
             )
 
@@ -2540,12 +2677,12 @@ def run_desktop(
             picture = settled_picture(
                 machine,
                 workdir,
-                lambda seen: seen.pixel(VBE_WIDTH - 12, VBE_HEIGHT - 15) == WM_CURSOR_INK_RGB,
+                lambda seen: seen.pixel(VBE_WIDTH - 12, VBE_HEIGHT - 15) == WM_CURSOR_RGB,
             )
             expect(
                 "the pointer stays in the picture at the far corner",
                 picture is not None
-                and picture.pixel(VBE_WIDTH - 12, VBE_HEIGHT - 15) == WM_CURSOR_INK_RGB,
+                and picture.pixel(VBE_WIDTH - 12, VBE_HEIGHT - 15) == WM_CURSOR_RGB,
                 "the pointer of the far corner is not on the picture",
             )
 
@@ -2588,14 +2725,12 @@ def run_desktop(
             picture = settled_picture(
                 machine,
                 workdir,
-                lambda seen: seen.pixel(WM_EDIT_RECT[0] + 20, WM_EDIT_RECT[1] + 60)
-                in (WM_WALL_A_RGB, WM_WALL_B_RGB),
+                lambda seen: desk_at(seen, WM_EDIT_RECT[0] + 20, WM_EDIT_RECT[1] + 60),
             )
             expect(
                 "the window that is put away leaves the picture",
                 picture is not None
-                and picture.pixel(WM_EDIT_RECT[0] + 20, WM_EDIT_RECT[1] + 60)
-                in (WM_WALL_A_RGB, WM_WALL_B_RGB),
+                and desk_at(picture, WM_EDIT_RECT[0] + 20, WM_EDIT_RECT[1] + 60),
                 "the rectangle of the editor is still painted",
             )
 
@@ -2628,13 +2763,12 @@ def run_desktop(
             )
 
             empty = (WM_EDIT_RECT[0] + 20, WM_EDIT_RECT[1] + 60)
-            wallpaper = (WM_WALL_A_RGB, WM_WALL_B_RGB)
             picture = settled_picture(
-                machine, workdir, lambda seen: seen.pixel(*empty) in wallpaper
+                machine, workdir, lambda seen: desk_at(seen, *empty)
             )
             expect(
                 "the rectangle of the closed window is the wallpaper",
-                picture is not None and picture.pixel(*empty) in wallpaper,
+                picture is not None and desk_at(picture, *empty),
                 f"the pixel {empty} of the closed window is "
                 f"{picture.pixel(*empty) if picture else None}",
             )
@@ -2685,6 +2819,76 @@ def run_desktop(
                 "the console of the kernel is the picture again",
                 console is not None and console.pixel(4, 4) == BLACK,
                 "the picture after the desktop is not the console",
+            )
+
+            # --- the light theme of /etc/console ---------------------------
+            #
+            # The desktop reads the `theme` of /etc/console at its start, as
+            # the console does: one word of the file and the desk, the windows
+            # and the panel are the light palette, which is the proof that the
+            # colours are roles and not numbers written into a program.
+            expect(
+                "the console takes the light theme",
+                machine.run_line("config set console.theme light", timeout),
+                "config did not answer for the light theme",
+            )
+
+            machine.type_line("exec /bin/wm")
+            expect(
+                "the desktop of the light theme starts",
+                machine.wait_serial("wm: the palette is light", timeout),
+                "the server did not take the theme of /etc/console",
+            )
+            expect(
+                "the windows of the light desktop are up",
+                machine.wait_serial("wm: the desktop is up", timeout),
+                "the server never said that its windows were up in the light theme",
+            )
+
+            picture = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.pixel(4, 4) == WALL_TOP_LIGHT_RGB
+                and seen.pixel(WM_EDIT_RECT[0] + 20, WM_EDIT_RECT[1] + 60)
+                == palette_rgb(255, 255, 255),
+            )
+            expect(
+                "the light theme is the gradient of the desk",
+                picture is not None
+                and picture.pixel(4, 4) == WALL_TOP_LIGHT_RGB
+                and picture.pixel(4, 770) == WALL_BOTTOM_LIGHT_RGB
+                and picture.pixel(4, 4) != picture.pixel(4, 770),
+                "the desk of the light theme is not the light gradient",
+            )
+            expect(
+                "the light theme is the surface of the panel",
+                picture is not None and picture.pixel(4, VBE_HEIGHT - 4) == PANEL_LIGHT_RGB,
+                "the panel of the light theme is not its surface",
+            )
+            expect(
+                "the light theme is the sheet of a window",
+                picture is not None
+                and picture.pixel(WM_EDIT_RECT[0] + 20, WM_EDIT_RECT[1] + 60)
+                == palette_rgb(255, 255, 255),
+                "the body of the editor of the light theme is not white",
+            )
+
+            machine.keys(["alt-f4"])
+            expect(
+                "the light desktop closes a window",
+                machine.wait_serial("wm: close fm - /", timeout),
+                "the file manager of the light theme did not close",
+            )
+            machine.keys(["alt-f4"])
+            expect(
+                "the light desktop closes its last window",
+                machine.wait_serial("wm: the desktop is closed", timeout),
+                "the desktop of the light theme did not end",
+            )
+            expect(
+                "the shell has its screen back after the light theme",
+                machine.wait_serial(PROMPT, timeout),
+                "the prompt of the shell never came back after the light desktop",
             )
         finally:
             machine.close()
