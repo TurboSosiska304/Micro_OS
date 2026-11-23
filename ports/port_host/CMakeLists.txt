@@ -26,7 +26,13 @@ target_link_libraries(microos_port_host PUBLIC Threads::Threads)
 
 add_executable(microos_sim
     src/sim_main.c
+    # The hash of a password of /etc/shadow: the SHA-256 of the loader, the
+    # same code that verifies a signed image. The simulator links the whole
+    # system, so it carries the one hash of the tree as the board does.
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../ports/port_x86_64/loader/sha256.c"
 )
+target_include_directories(microos_sim PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../ports/port_x86_64/loader")
 
 # The simulator loads the whole portable system, not only the shell: the
 # volume of MicroFS, /proc, /dev, the configuration of /etc, the scripts of

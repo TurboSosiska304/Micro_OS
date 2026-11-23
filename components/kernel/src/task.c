@@ -244,6 +244,18 @@ void task_set_gid(struct task *t, k_u32_t gid)
     k_port_exit_critical();
 }
 
+void task_set_creds(struct task *t, k_u32_t uid, k_u32_t gid)
+{
+    if (t == NULL) {
+        return;
+    }
+
+    k_port_enter_critical();
+    t->gid = gid;
+    t->uid = uid;
+    k_port_exit_critical();
+}
+
 bool task_is_root(const struct task *t)
 {
     return task_get_uid(t) == 0u;

@@ -238,6 +238,16 @@ k_u32_t task_get_uid(const struct task *t);
 k_u32_t task_get_gid(const struct task *t);
 void task_set_uid(struct task *t, k_u32_t uid);
 void task_set_gid(struct task *t, k_u32_t gid);
+
+/*
+ * Move the two numbers together, in one critical section. A login moves a task
+ * from one person to another, and a scheduler that ran the task between the
+ * two writes would run it with the gid of the new user and the uid of the old
+ * one - a state no rule of this system describes. The gid is written first,
+ * which is also the order of `setgid` and `setuid` of the ABI: the caller
+ * loses the right to change the group with the uid it gives up.
+ */
+void task_set_creds(struct task *t, k_u32_t uid, k_u32_t gid);
 bool task_is_root(const struct task *t);
 
 /*

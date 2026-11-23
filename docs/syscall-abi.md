@@ -252,7 +252,11 @@ Every task has a **uid** and a **gid** (numbers 36 to 40 read and change
 them). A task takes both from the task that created it; a fork, a program and
 an `execve` keep them, so `getuid()` answers the identity the caller was
 started with and not a constant. The root of the system is uid 0 (`KSYS_UID`):
-the boot, the kernel itself and the shell before a login process.
+the boot, the kernel itself and the shell of the console, until a person types
+`login` or `su` (ADR 0033). The accounts are `/etc/passwd` (a name, a uid, a
+gid, a home and a shell) and `/etc/shadow` (a salted SHA-256 of a password),
+read by the shell and by `getpwnam`/`getpwuid` of the library - the same file
+for the two, so a program and the console cannot disagree about a name.
 
 * a task whose uid is the owner of an object reads the triad of the owner;
   every other task reads the triad of the others, because no filesystem of
@@ -278,8 +282,12 @@ alone, and `mount`/`umount` to root alone; a task of another uid learns
 the fifteen bits of a record, and a task of another uid names only the number
 it already has. There is one credential and not the three of POSIX, so
 `geteuid` answers what `getuid` answers and a task that gives up root cannot
-name zero again with `setuid` - a login process with a setuid image is the
-other half of this work (`docs/debts.md`).
+name zero again with `setuid`. The door to another identity is the console:
+`login` and `su` are commands of the shell of the kernel, they check
+`/etc/shadow` and move the two numbers of the *shell* task together
+(`task_set_creds`, the gid first), and every program the person starts
+inherits them. There is no setuid bit in the image of a program, so a program
+cannot change the identity it runs with (ADR 0033).
 
 The mode of `chmod` is refused outside the nine bits (`EINVAL`) and so is an
 owner outside the fifteen bits of a uid (`EINVAL`): a number that does not fit

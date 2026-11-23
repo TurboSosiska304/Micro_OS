@@ -41,6 +41,8 @@ static void usage(void)
            "  --file PATH=HOST        write a file of the host (mode 0644)\n"
            "  --program PATH=HOST     write a program (mode 0755)\n"
            "  --text PATH=TEXT        write TEXT and a newline (mode 0644)\n"
+           "  --mode MODE             the mode of the entry just written, in octal\n"
+           "                          (0600 for a file only its owner reads)\n"
            "  --help                  this text\n");
 }
 
@@ -261,6 +263,20 @@ int main(int argc, char **argv)
                 rc = 1;
                 goto out;
             }
+        } else if (strcmp(option, "--mode") == 0) {
+            /*
+             * The mode of the entry that was just named: the list is one
+             * object after another, and a mode belongs to the object before
+             * it. A file of a volume that only its owner reads (/etc/shadow)
+             * is written as `--text PATH=TEXT --mode 0600`.
+             */
+            if (args.count == 0) {
+                fprintf(stderr, "mkfs: --mode comes after the entry it is the mode of\n");
+                rc = 2;
+                goto out;
+            }
+
+            args.entries[args.count - 1].mode = (k_u32_t)strtoul(value, NULL, 8);
         } else {
             fprintf(stderr, "mkfs: unknown option %s\n", option);
             usage();

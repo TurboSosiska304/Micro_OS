@@ -16,6 +16,7 @@
 #include "ktest.h"
 
 #include <ctype.h>
+#include <errno.h>
 #include <getopt.h>
 #include <libgen.h>
 #include <pwd.h>
@@ -28,6 +29,10 @@
 #include "sbase_port.h"
 
 void test_userland(void);
+
+/* The text of /etc/passwd the door of this binary answers
+ * (tests/cases/userland_door_shim.c). */
+void userland_door_set_passwd(const char *text);
 
 static void test_classes(void)
 {
@@ -188,17 +193,55 @@ static void test_expressions(void)
 
 static void test_users(void)
 {
-    struct passwd *user = getpwuid(0);
+    struct passwd *user;
 
+    /*
+     * The records of /etc/passwd, read through the door of this binary: the
+     * fixture is a file of two accounts and a line that is not a record, and
+     * the reader has to skip the line, find the two and keep the name of the
+     * one it answered last.
+     */
+    userland_door_set_passwd("# the accounts of the test\n"
+                             "root:0:0:/:/bin/sh\n"
+                             "guest:7:7:/home/guest:/bin/sh\n"
+                             "not a record\n");
+
+    user = getpwuid(0);
     KT_CHECK(user != NULL);
     if (user != NULL) {
         KT_CHECK_STR_EQ(user->pw_name, "root");
         KT_CHECK_INT_EQ(user->pw_uid, 0);
+        KT_CHECK_INT_EQ(user->pw_gid, 0);
         KT_CHECK_STR_EQ(user->pw_dir, "/");
+        KT_CHECK_STR_EQ(user->pw_shell, "/bin/sh");
+        KT_CHECK_STR_EQ(user->pw_passwd, "");
     }
-    KT_CHECK(getpwuid(7) == NULL);
+
+    user = getpwuid(7);
+    KT_CHECK(user != NULL);
+    if (user != NULL) {
+        KT_CHECK_STR_EQ(user->pw_name, "guest");
+        KT_CHECK_INT_EQ(user->pw_uid, 7);
+        KT_CHECK_INT_EQ(user->pw_gid, 7);
+        KT_CHECK_STR_EQ(user->pw_dir, "/home/guest");
+    }
+
+    user = getpwnam("guest");
+    KT_CHECK(user != NULL);
+    if (user != NULL) {
+        KT_CHECK_INT_EQ(user->pw_uid, 7);
+    }
+
     KT_CHECK(getpwnam("root") != NULL);
     KT_CHECK(getpwnam("nobody") == NULL);
+    KT_CHECK(getpwuid(8) == NULL);
+
+    /* A machine without /etc/passwd has no name at all: the call answers NULL
+     * and errno says why, which is what a portable source reads. */
+    userland_door_set_passwd(NULL);
+    errno = 0;
+    KT_CHECK(getpwnam("root") == NULL);
+    KT_CHECK_INT_EQ(errno, ENOENT);
 
     /* The credentials come through the door of the call; the shim of this
      * binary answers the root of the system, as the kernel of the host does
