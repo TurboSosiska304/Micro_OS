@@ -276,6 +276,10 @@ static int bench_pipe(unsigned long long bytes)
     if (pid == 0) {
         (void)close(fds[0]);
         pipe_writer(fds[1], bytes);
+        /* The writer ends through exit() and the compiler cannot see the
+         * attribute across the call: a return that never happens, written
+         * so that the child can never fall into the loop of the parent. */
+        exit(1);
     }
 
     if (pid < 0) {
