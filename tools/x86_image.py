@@ -60,6 +60,12 @@ PROGRAMS = [
     "poll",
     "mmap",
     "big",
+    # The lane of 1.8 of the library: the directory of the task (call 48),
+    # the heap that grows with brk, and the memory limit a program charges it
+    # to. The three are programs of the library and not of the port.
+    "chdir",
+    "heap",
+    "limit",
     # The floating point state of a task (K9): three tasks compute in double
     # at once and the smoke test reads the number of each of them.
     "fpu2",

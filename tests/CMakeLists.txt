@@ -690,6 +690,28 @@ target_compile_definitions(microos_tests PRIVATE
         "${CMAKE_SOURCE_DIR}/components/libc/user/include"
         "${CMAKE_SOURCE_DIR}/components/kernel/include"
     )
+
+    # The allocator of a program: malloc.c is compiled for the host with the
+    # door of the shim behind it (its `brk` is a block of the bss), in a binary
+    # of its own - the library defines malloc, calloc, realloc and free, and
+    # linking it into the tests above would answer the allocator of the host.
+    set(MICROOS_HEAP_TESTS
+        cases/test_heap.c
+        cases/userland_door_shim.c
+        src/heap_main.c
+        framework/ktest.c
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/malloc.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/errno.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/string.c"
+    )
+
+    add_executable(microos_heap_tests ${MICROOS_HEAP_TESTS})
+    target_include_directories(microos_heap_tests PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/framework"
+        "${CMAKE_CURRENT_LIST_DIR}/include"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/include"
+        "${CMAKE_SOURCE_DIR}/components/kernel/include"
+    )
     # The library of a program is compiled for a machine with no C library
     # of its own (`-ffreestanding`), and the host build has to agree with it:
     # a compiler that knows `memset` by name rewrites a loop that clears a
@@ -711,6 +733,35 @@ target_compile_definitions(microos_tests PRIVATE
     endif()
     add_test(NAME libc_user COMMAND microos_libc_user_tests)
     set_tests_properties(libc_user PROPERTIES TIMEOUT 60)
+    target_compile_options(microos_heap_tests PRIVATE -Wall -Wextra -Werror)
+    # The guest sources of this binary are compiled the way a program of the
+    # machine compiles them: `-ffreestanding`, without the builtins. A release
+    # build with them on folded the byte loop of `memset` into a call to
+    # `memset` itself (an infinite loop in a debugger) and the body of
+    # `calloc` into a jump to `calloc`; the allocator and the strings of a
+    # program cannot be the builtins of the host compiler that names them.
+    set_source_files_properties(
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/malloc.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/string.c"
+        PROPERTIES COMPILE_OPTIONS
+        "-ffreestanding;-fno-builtin-malloc;-fno-builtin-calloc;-fno-builtin-realloc;-fno-builtin-free")
+    set_source_files_properties(
+        "${CMAKE_CURRENT_LIST_DIR}/cases/test_heap.c"
+        PROPERTIES COMPILE_OPTIONS
+        "-fno-builtin-malloc;-fno-builtin-calloc;-fno-builtin-realloc;-fno-builtin-free")
+    set_source_files_properties(
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/string.c"
+        PROPERTIES COMPILE_OPTIONS
+        "-ffreestanding;-fno-builtin-memcpy;-fno-builtin-memset;-fno-builtin-memmove;-fno-builtin-memcmp;-fno-builtin-strlen")
+    # This binary defines malloc, calloc, realloc and free - that is what it
+    # tests - and the sanitizer of the address of a build owns those names.
+    # The two cannot be one process: the runtime of the sanitizer would hand
+    # its own blocks to the `free` of the arena. The test is therefore built
+    # without the sanitizer, and the rest of the tests carry it.
+    target_compile_options(microos_heap_tests PRIVATE -fno-sanitize=all)
+    target_link_options(microos_heap_tests PRIVATE -fno-sanitize=all)
+    add_test(NAME heap COMMAND microos_heap_tests)
+    set_tests_properties(heap PROPERTIES TIMEOUT 60)
 
     # A test that hangs is a test that failed: the panic of the kernel
     # stops the process of the host, and anything else is a hang that has

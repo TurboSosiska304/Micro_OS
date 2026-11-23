@@ -75,4 +75,13 @@ void host_clock_text(char *buf, size_t size)
 void host_clock_register(void)
 {
     k_clock_register(host_clock_set_unix);
+
+    /*
+     * The boot of the simulator reads the clock of the machine it runs on,
+     * the way the board reads its chip and a laptop its CMOS: the base of the
+     * kernel is the moment of that read, and the kernel adds the uptime to it
+     * afterwards. Without this line a file the simulator wrote was stamped
+     * with the seconds since its boot, and `ls -l` printed 1970.
+     */
+    (void)k_clock_set_unix((k_u64_t)host_clock_now_unix());
 }

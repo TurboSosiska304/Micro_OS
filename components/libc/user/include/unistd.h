@@ -5,10 +5,11 @@
  * source expects, the numbers of `lseek`, and the calls the library builds
  * over the ABI: `access` over a stat, `rmdir` over `KSYS_RMDIR` (the removal
  * of a directory, which is not the unlink of a file), `execvp` over `execve`
- * and the words of `PATH`. A call of POSIX
- * that this system cannot answer - `chdir`, because the cwd belongs to the
- * shell and the ABI has no call to move it - answers -1 and `ENOSYS`; the
- * sentence is in `docs/porting-programs.md`.
+ * and the words of `PATH`. `chdir` is the call of the ABI (number 48), so a
+ * program moves the directory of its task and the program it starts begins
+ * in it; a call of POSIX that this system cannot answer - `readlink`, because
+ * a symbolic link is not an object of this filesystem - answers -1 and
+ * `ENOSYS`; the sentence is in `docs/porting-programs.md`.
  *
  * The types of a file are declared here as well as in `<sys/types.h>`, under
  * one guard, because a source may include either header first and the two are

@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "kernel/clock.h"
 #include "kernel/config.h"
 #include "kernel/console.h"
 #include "kernel/errno.h"
@@ -946,6 +947,8 @@ static k_ssize_t sys_brk(ksys_arg_t addr, ksys_arg_t a1, ksys_arg_t a2, ksys_arg
                          ksys_arg_t a4, ksys_arg_t a5)
 {
     k_mm_space_t space = k_mm_current();
+    struct task *self = task_self();
+    k_u64_t before = 0;
     k_u64_t value = 0;
     int rc;
 
@@ -959,9 +962,32 @@ static k_ssize_t sys_brk(ksys_arg_t addr, ksys_arg_t a1, ksys_arg_t a2, ksys_arg
         return KERR_NOSYS;
     }
 
+    /*
+     * The heap is memory of the task as the blocks of `malloc` are, so it is
+     * charged to the same budget (KSYS_RLIMIT_MEMORY) and a program that
+     * allocates has a ceiling the shell can lower. The growth is checked
+     * before the break moves: a refusal leaves the heap where it was.
+     */
+    rc = k_mm_brk(space, 0, &before);
+    if (rc != 0) {
+        return rc;
+    }
+
+    if (self != NULL && addr > before && !task_memory_fits(self, (k_size_t)(addr - before))) {
+        return KERR_NOMEM;
+    }
+
     rc = k_mm_brk(space, addr, &value);
     if (rc != 0) {
         return rc;
+    }
+
+    if (self != NULL) {
+        if (value > before) {
+            task_memory_charge(self, (k_size_t)(value - before));
+        } else if (before > value) {
+            task_memory_uncharge(self->pid, (k_size_t)(before - value));
+        }
     }
 
     return (k_ssize_t)value;
@@ -1393,6 +1419,126 @@ static k_ssize_t sys_getcwd(ksys_arg_t buf, ksys_arg_t size, ksys_arg_t a2, ksys
     }
 
     return (k_ssize_t)strlen(cwd);
+}
+
+/*
+ * Move the working directory of the caller (number 48). The task keeps one
+ * path, so the call is the whole of the answer: a program that moves the
+ * directory moves it for the programs it starts, and for the child of a fork,
+ * because the two are copies of the same record. A path that does not name a
+ * directory is refused before the task is touched, and a name that does not
+ * fit TASK_CWD_MAX is not cut to fit (the rule of `cd` in the shell).
+ */
+static k_ssize_t sys_chdir(ksys_arg_t path, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                           ksys_arg_t a4, ksys_arg_t a5)
+{
+    char name[KSYS_PATH_MAX + 1];
+    struct vfs_stat info;
+    struct task *self = task_self();
+    int rc;
+
+    K_UNUSED(a1);
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    if (self == NULL) {
+        return KERR_PERM;
+    }
+
+    rc = path_copy(name, path);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = vfs_stat(name, &info);
+    if (rc != 0) {
+        return rc;
+    }
+
+    if (info.type != 2) {
+        return KERR_NOTDIR;
+    }
+
+    if (!task_set_cwd(self, name)) {
+        return KERR_NAMETOOLONG;
+    }
+
+    return 0;
+}
+
+/*
+ * One of the two clocks in the shape of POSIX (number 49). CLOCK_REALTIME is
+ * the wall clock of the machine with the fraction of the second that passed
+ * since it was set, CLOCK_MONOTONIC the millisecond count of the boot, which
+ * is what `uptime` answers. A clock that is not one of the two is EINVAL, and
+ * the answer has to have a place: a caller that wants no answer does not call.
+ */
+static k_ssize_t sys_clock_gettime(ksys_arg_t clock_id, ksys_arg_t buf, ksys_arg_t a2,
+                                   ksys_arg_t a3, ksys_arg_t a4, ksys_arg_t a5)
+{
+    struct ksys_timespec moment;
+
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    if (buf == 0) {
+        return KERR_INVAL;
+    }
+
+    if (clock_id == (ksys_arg_t)KSYS_CLOCK_REALTIME) {
+        struct k_clock_moment now;
+
+        k_clock_now(&now);
+        moment.tv_sec = (k_i64_t)now.sec;
+        moment.tv_nsec = (k_i64_t)now.nsec;
+    } else if (clock_id == (ksys_arg_t)KSYS_CLOCK_MONOTONIC) {
+        k_u64_t milliseconds = k_sched_uptime_ms();
+
+        moment.tv_sec = (k_i64_t)(milliseconds / 1000u);
+        moment.tv_nsec = (k_i64_t)((milliseconds % 1000u) * 1000000u);
+    } else {
+        return KERR_INVAL;
+    }
+
+    return copy_to_user(buf, &moment, sizeof(moment));
+}
+
+/*
+ * The processor time of the caller (number 50). The scheduler already counts
+ * it for the CPU limit of the task, in milliseconds, and `task_cpu_tick()`
+ * brings the count up to the moment of the call before it is read, so a
+ * program that asks twice sees the time that passed between the two.
+ */
+static k_ssize_t sys_getrusage(ksys_arg_t buf, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                               ksys_arg_t a4, ksys_arg_t a5)
+{
+    struct ksys_rusage usage;
+    struct task *self = task_self();
+
+    K_UNUSED(a1);
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    if (self == NULL) {
+        return KERR_PERM;
+    }
+
+    if (buf == 0) {
+        return KERR_INVAL;
+    }
+
+    (void)task_cpu_tick(self);
+
+    usage.utime_ms = (k_u64_t)self->cpu_ms;
+    usage.stime_ms = 0;
+
+    return copy_to_user(buf, &usage, sizeof(usage));
 }
 
 static k_ssize_t sys_ioctl(ksys_arg_t fd, ksys_arg_t cmd, ksys_arg_t arg, ksys_arg_t a3,
@@ -2682,6 +2828,9 @@ void ksys_init(void)
     ksys_register(KSYS_MUNMAP, "munmap", sys_munmap);
     ksys_register(KSYS_MSYNC, "msync", sys_msync);
     ksys_register(KSYS_BRK, "brk", sys_brk);
+    ksys_register(KSYS_CHDIR, "chdir", sys_chdir);
+    ksys_register(KSYS_CLOCK_GETTIME, "clock_gettime", sys_clock_gettime);
+    ksys_register(KSYS_GETRUSAGE, "getrusage", sys_getrusage);
 }
 
 /* --- the wrappers --- */
@@ -2906,6 +3055,22 @@ int ksys_msync(void *addr, k_size_t len)
 k_ssize_t ksys_brk(void *addr)
 {
     return ksys_call(KSYS_BRK, (ksys_arg_t)(uintptr_t)addr, 0, 0, 0, 0, 0);
+}
+
+int ksys_chdir(const char *path)
+{
+    return (int)ksys_call(KSYS_CHDIR, (ksys_arg_t)(uintptr_t)path, 0, 0, 0, 0, 0);
+}
+
+int ksys_clock_gettime(k_u32_t clock, struct ksys_timespec *out)
+{
+    return (int)ksys_call(KSYS_CLOCK_GETTIME, (ksys_arg_t)clock, (ksys_arg_t)(uintptr_t)out, 0, 0,
+                          0, 0);
+}
+
+int ksys_getrusage(struct ksys_rusage *out)
+{
+    return (int)ksys_call(KSYS_GETRUSAGE, (ksys_arg_t)(uintptr_t)out, 0, 0, 0, 0, 0);
 }
 
 int ksys_poll(struct ksys_pollfd *fds, k_u32_t nfds, int timeout_ms)

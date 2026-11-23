@@ -1,12 +1,14 @@
 /*
  * Micro OS — the resources a program may ask about.
  *
- * The kernel counts the time of a task for its limit, but the ABI has no call
- * that hands the count to the task (the shell's `ulimit` reads the limit, not
- * the use). `getrusage` therefore answers `ENOSYS`: the timer of a command
- * still measures the wall time of the boot clock, and the CPU column stays
- * zero. The shape of the structure is here so that a portable source compiles
- * and asks (docs/debts.md).
+ * The kernel counts the processor time of every task for its CPU limit, and
+ * the call 50 (`KSYS_GETRUSAGE`) hands that count to the task: `ru_utime` is
+ * the time the program spent running and `ru_stime` is zero, because this
+ * system makes no boundary between the two on a machine of one privilege
+ * level. `RUSAGE_CHILDREN` is `ENOSYS`: the usage of a child that has ended
+ * is not kept yet (docs/debts.md). The memory, the faults and the switches of
+ * POSIX are zero, and they are fields of the structure that this kernel does
+ * not count.
  */
 #ifndef MICRO_OS_LIBC_USER_SYS_RESOURCE_H
 #define MICRO_OS_LIBC_USER_SYS_RESOURCE_H
@@ -38,5 +40,29 @@ struct rusage {
 };
 
 int getrusage(int who, struct rusage *usage);
+
+/*
+ * The limits of POSIX and the three the ABI has (kernel/ksys.h). The numbers
+ * of the selectors are the ones of a Unix-like system, so a program that
+ * knows one contract knows the other: the memory is RLIMIT_AS, the processor
+ * time RLIMIT_CPU and the descriptors RLIMIT_NOFILE.
+ *
+ * The system keeps one value of each resource and not a soft and a hard one:
+ * `rlim_cur` and `rlim_max` of the answer are the same number, and
+ * `setrlimit` lowers the one the kernel has (a raise is EPERM).
+ */
+#define RLIMIT_CPU 0
+#define RLIMIT_NOFILE 7
+#define RLIMIT_AS 9
+
+typedef unsigned long long rlim_t;
+
+struct rlimit {
+    rlim_t rlim_cur;
+    rlim_t rlim_max;
+};
+
+int getrlimit(int resource, struct rlimit *limit);
+int setrlimit(int resource, const struct rlimit *limit);
 
 #endif /* MICRO_OS_LIBC_USER_SYS_RESOURCE_H */

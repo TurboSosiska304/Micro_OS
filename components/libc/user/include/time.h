@@ -1,12 +1,13 @@
 /*
  * Micro OS — the clock of a program.
  *
- * The kernel has one clock: `uptime`, the milliseconds since the boot. There
- * is no wall clock on the x86-64 machine and the filesystem keeps a moment of
- * Unix only when the tool that wrote the volume gave one. `time()` therefore
- * answers the seconds of the boot and not the epoch, and the tools that print
- * a date print the moment the record holds, as they would on a machine whose
- * clock had not been set. `docs/debts.md` records the missing clock.
+ * The machine has two clocks and the kernel answers both through the call 49
+ * (`clock_gettime`): CLOCK_REALTIME is the date of Unix, which the port seeds
+ * at the boot from the clock the machine owns and `ntp` corrects afterwards,
+ * and CLOCK_MONOTONIC is the milliseconds since the boot, which is what
+ * `uptime` and `clock()` of a moment are. A machine whose clock was never set
+ * answers the seconds since its boot, and a caller that prints the number as
+ * a date asks `gettimeofday` or `stat` of a file for a real one.
  *
  * The calendar is the C locale of UTC: no time zone, no daylight saving, and
  * the two functions `localtime` and `gmtime` answer the same structure.
@@ -26,7 +27,8 @@ typedef long time_t;
 typedef long clock_t;
 #endif
 
-/* `clock()` counts the milliseconds of the boot, as `uptime` does. */
+/* `clock()` counts the milliseconds of the processor time of the program, as
+ * POSIX says; the moment of the boot is `clock_gettime(CLOCK_MONOTONIC)`. */
 #define CLOCKS_PER_SEC 1000
 
 struct tm {
@@ -41,9 +43,8 @@ struct tm {
     int tm_isdst;
 };
 
-/* The one clock of the machine is the monotonic one of the boot; a caller
- * that asks for the realtime clock gets the same moment, because there is no
- * second clock to give. */
+/* The two clocks of the machine: the date of the machine, which the port seeds
+ * at the boot and `ntp` corrects, and the count of the boot. */
 #define CLOCK_REALTIME 0
 #define CLOCK_MONOTONIC 1
 

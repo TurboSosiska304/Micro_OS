@@ -37,6 +37,15 @@ static int g_passwd_open;
  * NULL. Declared by the test that calls it (tests/cases/test_userland.c). */
 void userland_door_set_passwd(const char *text);
 
+/*
+ * The heap of the call 47, for the test of the allocator of a program
+ * (tests/cases/test_heap.c): a ceiling the test may lower, a count of the
+ * calls and the way back to the whole heap.
+ */
+void userland_door_brk_limit(unsigned long limit);
+void userland_door_brk_reset(void);
+unsigned long userland_door_brk_calls(void);
+
 void userland_door_set_passwd(const char *text)
 {
     g_passwd_text = text;
@@ -44,14 +53,76 @@ void userland_door_set_passwd(const char *text)
     g_passwd_open = 0;
 }
 
+/*
+ * The heap the call 47 answers with, for the test of the allocator of a
+ * program (tests/cases/test_heap.c). The door is the machine behind `brk`:
+ * a block of the bss that grows and never shrinks, a ceiling the test may
+ * lower to see the refusal of ENOMEM, and a count of the calls so that a test
+ * can prove the heap does not ask twice for the same bytes.
+ *
+ * The address of the block is the break, so the library may align it and the
+ * `brk` of the caller is a number inside the block. A request outside the
+ * block - or above the ceiling - is the ENOMEM of a machine that cannot grow
+ * the heap any further.
+ */
+#define USERLAND_BRK_SIZE (8u * 1024u * 1024u)
+
+_Alignas(16) static unsigned char g_brk_heap[USERLAND_BRK_SIZE];
+static unsigned long g_brk_used;
+static unsigned long g_brk_ceiling = USERLAND_BRK_SIZE;
+static unsigned long g_brk_calls;
+
+void userland_door_brk_limit(unsigned long limit)
+{
+    g_brk_ceiling = (limit > USERLAND_BRK_SIZE) ? USERLAND_BRK_SIZE : limit;
+}
+
+void userland_door_brk_reset(void)
+{
+    g_brk_ceiling = USERLAND_BRK_SIZE;
+}
+
+unsigned long userland_door_brk_calls(void)
+{
+    return g_brk_calls;
+}
+
+static long door_brk(unsigned long address)
+{
+    unsigned long base = (unsigned long)(uintptr_t)g_brk_heap;
+    unsigned long target;
+
+    /* A zero asks for the break and does not move it. */
+    if (address == 0) {
+        return (long)(base + g_brk_used);
+    }
+
+    if (address < base) {
+        return KERR_NOMEM;
+    }
+
+    target = address - base;
+
+    if (target > g_brk_ceiling || target > USERLAND_BRK_SIZE) {
+        return KERR_NOMEM;
+    }
+
+    g_brk_used = target;
+    g_brk_calls++;
+
+    return (long)address;
+}
+
 long __ulibc_syscall6(long number, long a0, long a1, long a2, long a3, long a4, long a5)
 {
-    (void)a0;
+    (void)a1;
     (void)a3;
     (void)a4;
     (void)a5;
 
     switch (number) {
+    case KSYS_BRK:
+        return door_brk((unsigned long)a0);
     case KSYS_OPEN:
         if (g_passwd_text == NULL) {
             return KERR_NOENT;
