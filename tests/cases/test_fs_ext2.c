@@ -1986,6 +1986,70 @@ static void test_check(void)
     teardown();
 }
 
+static void test_directory_past_the_direct_blocks(void)
+{
+    struct vfs_file file;
+    struct vfs_stat stat;
+    char image[256];
+    char dir[256];
+    char path[VFS_PATH_MAX];
+    unsigned made = 0;
+
+    ktest_begin("ext2: a directory of 1100 names grows through the table of pointers");
+
+    setup();
+
+    if (!host_tools_ready()) {
+        printf("  (skipped: mke2fs, e2fsck and debugfs of e2fsprogs are not installed)\n");
+        teardown();
+        return;
+    }
+
+    if (!host_mkfs(dir, image, sizeof(image), 4096u, 1024u, 1024u, 2048u)) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(mount_host_image(image), 0);
+    KT_CHECK_INT_EQ(vfs_mkdir(TEST_ROOT_POINT "/wide"), 0);
+
+    for (unsigned i = 0; i < 1100u; i++) {
+        (void)snprintf(path, sizeof(path), TEST_ROOT_POINT "/wide/n%04u", i);
+
+        if (vfs_open(path, VFS_O_WRONLY | VFS_O_CREAT, &file, g_file_data) != 0) {
+            break;
+        }
+
+        if (vfs_close(&file) != 0) {
+            break;
+        }
+
+        made++;
+    }
+
+    KT_CHECK_INT_EQ(made, 1100);
+
+    /* 1100 records of sixteen bytes are eighteen blocks: the last six are
+     * reached through the table of pointers. */
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/wide", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, 18u * HOST_BLOCK_SIZE);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/wide/n0000", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/wide/n1099", &stat), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/wide/n1100", &stat), KERR_NOENT);
+
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+    KT_CHECK(image_store_file(image));
+    check_e2fsck(image);
+    check_debugfs(image, "stat /wide/n1099", "Inode: ");
+
+    (void)unlink(image);
+    (void)rmdir(dir);
+
+    teardown();
+}
+
 void test_fs_ext2(void)
 {
     test_mount_and_stat();
@@ -2006,4 +2070,5 @@ void test_fs_ext2(void)
     test_large_blocks();
     test_unlink_of_a_big_file();
     test_check();
+    test_directory_past_the_direct_blocks();
 }
