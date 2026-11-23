@@ -52,6 +52,7 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make integrity` | the integrity check: bundle, image headers, partition table, git, sources, formatting |
 | `make wiki-check` | every link and anchor of `docs/wiki` (`tools/wiki_check.py`) |
 | `make format` | reformat the C sources with `clang-format` |
+| `make sdk` | the SDK of a program in `build-sdk/microos-sdk/<version>/`: headers, `libmicroos_user.a`, the crt, the linker script and the CMake toolchain, so that a program is built outside the tree (`DESTDIR` names another directory, `docs/porting-programs.md` §6) |
 | `make clean` | remove `build-host/`, `build-asan/`, `build-coverage/` (the device `build/` stays) |
 | `make test-smp` | the host tests with `KERNEL_SMP=ON` and two cores (`MICRO_OS_CPUS=2`) |
 | `make x86-smp-build` | the x86-64 kernel with `KERNEL_SMP=ON` (the APs are not started yet, ADR 0012) |

@@ -333,6 +333,114 @@ done when `make test`, `make x86-smoke` and `make x86-disk-smoke` pass, and
   beside the program. The license is not merged with the MIT file of the
   tree.
 
+## 6. The SDK: a program built outside the tree
+
+A program of this tree is built by this tree: CMake of the port, the archive
+of `components/libc/user`, `tools/link_program.sh`. A program of somebody else
+- the copyleft packages of `microos-progs` above all - is built **outside**
+it, because the tree is MIT and GPL code never enters a link line of it (ADR
+0025 §1, §6). That is what `make sdk` is for:
+
+```bash
+make sdk                       # build-sdk/microos-sdk/<version>/
+make sdk DESTDIR=/tmp/sdk      # somewhere else
+```
+
+The directory is the version of `kernel/config.h` (the version of
+`kernel_version()`), so two releases do not overwrite each other:
+
+```text
+<version>/include/                 ulibc.h, the POSIX headers, kernel/ksys.h
+                                   and the closure of the ABI (exec.h, errno.h,
+                                   types.h, vfs.h, task.h, signal.h), prog.h
+<version>/lib/libmicroos_user.a    the library of a program (35 objects)
+<version>/lib/crt0.o               `_start` of the program (src/start.c)
+<version>/lib/program.ld           the addresses of the window
+<version>/bin/mkprog.sh            the sections -> a MOX1 image
+<version>/bin/link_program.sh      the link of the window, which calls mkprog
+<version>/bin/microos_sign         the host tool of the signature (ADR 0020)
+<version>/share/microos-toolchain.cmake   the CMake toolchain of a program
+<version>/share/build-libc.sh      the recipe that built the archive
+<version>/share/src/libc/          the sources of the archive (MIT)
+<version>/share/examples/hello/    a program that builds with nothing else
+<version>/share/README.md          the same recipe, for a person with the SDK
+```
+
+Nothing of the directory is a second copy of the tree that can drift: the
+library is built during `make sdk` from the copy of the sources inside it, by
+the same flags as a guest object of the port (`tools/sdk/build_libc.sh`),
+with `-Werror`, so a warning in a header of a release stops the SDK of that
+release.
+
+A program is then a `CMakeLists.txt` with `add_executable(name file.c)` and
+two commands:
+
+```bash
+cmake -B build -S . \
+    -DCMAKE_TOOLCHAIN_FILE=<sdk>/share/microos-toolchain.cmake
+cmake --build build                  # build/name.mox
+```
+
+The toolchain sets `CMAKE_SYSTEM_NAME Generic`, takes the headers of the SDK
+instead of the ones of the host (`-nostdinc`, with the compiler's own
+directory for `stdarg.h`), compiles with the flags of a guest object
+(`-Os -ffreestanding -mno-red-zone -march=x86-64 -fno-pic -fno-pie
+-fno-stack-protector -ffunction-sections -fdata-sections`), and links the
+objects with `crt0.o`, the archive and `lib/program.ld` through
+`bin/link_program.sh` - which is the same script the port uses, with the same
+retry of the address and the same `mkprog.sh`. `main(argc, argv, envp)` is the
+program, the entry is `_start`, and there is no include path or library to
+name.
+
+Three options of the toolchain matter:
+
+| Option | Effect |
+|---|---|
+| `-DMICROOS_FLOAT=ON` | the program's own numbers are doubles: no `-mgeneral-regs-only`, and the XMM and x87 units are the ones the port turns on for ring 3 (one such program at a time, `docs/debts.md`) |
+| `-DMICROOS_GC_SECTIONS=OFF` | keep every function of the archive the program named (the default drops what no call reaches) |
+| `-DMICROOS_WARNINGS=OFF` | the sources of somebody else answer the warnings of their release |
+
+The example is `examples/hello/`, and the SDK copies it to
+`share/examples/hello/`; the image of it is 10 688 bytes - text 8 160, data
+2 496, bss 263 376 (the 256 KiB arena of the library) - and the machine runs
+it: `/bin/sdkhello one two` prints the count, the environment, the pid and the
+lines of `/etc/setting` read through the streams of the library.
+
+The limits are the ones of every image of the port and not of the SDK:
+
+| Limit | Number | Why |
+|---|---|---|
+| the image | 8 MiB (`K_EXEC_MAX_IMAGE`) | the kernel reads the file into one block of the allocator |
+| the bss | 1 MiB (`K_EXEC_BSS_MAX`) | the arena of `malloc` is a block of the bss |
+| the arena | 256 KiB (`make sdk SDK_HEAP=`) | the default of `src/malloc.c`; a bigger one is `share/build-libc.sh --heap` |
+| one read or write | 64 KiB (`KSYS_MAX_IO`) | the block of one system call |
+| the window | 16 MiB | `0x02000000`-`0x03000000`, with a 64 KiB stack at the top |
+
+A program that needs another arena, or no float path at all, rebuilds the
+archive from the sources the SDK carries and links that instead:
+
+```bash
+<sdk>/share/build-libc.sh --src <sdk>/share/src/libc --include <sdk>/include \
+    --out <sdk>/lib/libmicroos_user.a --crt0 <sdk>/lib/crt0.o --heap 786432
+```
+
+`--no-float` leaves the SSE and x87 sources out (no `%f`, no `strtod` of a
+double, no `sscanf`) for a program of integers and a smaller image.
+
+The SDK is the **library and the link**; it is not an image of a disk. The
+disk of QEMU is written by this tree, which is where the image tool lives:
+
+```bash
+python3 tools/x86_image.py --image disk.img --build build-x86 \
+    --mkfs build-host/tools/microos_mkfs --program /bin/hello=build/hello.mox
+```
+
+A package of `microos-progs` signs its file with `bin/microos_sign sign-file`
+and the key of the repository, and the machine installs it with `pkg`
+(ADR 0024, ADR 0025 §3). The SDK does not build for the board: a program of
+the ESP32 has 8 KiB windows and shares the address space of the kernel (ADR
+0018), and its images belong to the firmware build.
+
 ## The second port: ten tools of sbase
 
 The second port (after zlib) is a set of commands: `third_party/sbase` with
