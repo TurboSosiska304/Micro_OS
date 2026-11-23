@@ -56,8 +56,16 @@
 /* The panel: one line of the bottom of the picture, a button a window. */
 #define WM_PANEL_HEIGHT 24
 
-/* The square of closing, in the right of the title bar of a window. */
+/* The square of closing, in the right of the title bar of a window and at the
+ * right end of the button of the panel: the same cross in a square of paint. */
 #define WM_CLOSE_BOX 12
+#define WM_PANEL_CLOSE 12
+
+/* The pixels of a title bar that a drag keeps on the picture. The bar is the
+ * handle of the window and the only thing a person can drag it back by, so a
+ * window pulled to an edge keeps the bar on the picture and loses the rest of
+ * itself, never the handle. */
+#define WM_TITLE_KEEP 64
 
 /* The margin the ring of the focus takes around a window. */
 #define WM_FOCUS_RING 2
@@ -127,6 +135,16 @@ static struct ui_rect g_drag_rect;
 /* The window that took the press of the pointer: the release is its too,
  * whatever the pointer does in between. */
 static int g_press_app = -1;
+
+/*
+ * The press that is waiting for its release. The panel and the square of
+ * closing act when the button comes up and the pointer is still on the thing
+ * that went down: a press that slides away is a press of nothing, the rule of
+ * every button of every interface.
+ */
+static int g_panel_press = -1;   /* the window whose button of the panel is down */
+static bool g_panel_press_close; /* the press was on the cross of the button */
+static int g_close_press = -1;   /* the window whose square of closing is down */
 
 /* The alt key, for Alt+F4. */
 static bool g_alt;
@@ -280,10 +298,12 @@ static void app_pixels(const struct wm_app *app, int x, int y, int w, int h, int
 
     /* A strip is whole rows of the file - the buffer is the window's width and
      * not the width of the part of it that is visible - and the visible part
-     * of every row is moved to the front of the block before the blit. A
-     * strip that read only the visible columns would read the rows of the
-     * file as if they touched, and every line of the window after the first
-     * would be the wrong bytes. */
+     * of every row, the first one included, is moved to the front of the block
+     * before the blit. A strip that read only the visible columns would read
+     * the rows of the file as if they touched, and a strip that skipped the
+     * first row left it at the column 0 of the row instead of the column x:
+     * the old place of the pointer in the bar of a title showed the first
+     * letters of the title, a fragment a cursor wide. */
     for (row = 0; row < h; row += rows) {
         int take = h - row < rows ? h - row : rows;
         size_t bytes = (size_t)take * window_row;
@@ -305,7 +325,7 @@ static void app_pixels(const struct wm_app *app, int x, int y, int w, int h, int
             got += (size_t)part;
         }
 
-        for (line = 1; line < take; line++) {
+        for (line = 0; line < take; line++) {
             memmove((char *)g_pixels + (size_t)line * row_bytes,
                     (char *)g_pixels + (size_t)line * window_row + (size_t)x * FB_PIXEL_BYTES,
                     row_bytes);
@@ -315,8 +335,22 @@ static void app_pixels(const struct wm_app *app, int x, int y, int w, int h, int
     }
 }
 
-/* The square that closes a window: the paper of the bar, the square of the
- * red and the cross of the ink. */
+/* The square of closing: the red square and the cross of the ink that every
+ * square of closing of the desktop is made of - the one of a title bar and
+ * the one at the right end of the button of the panel. */
+static void cross_paint(int x, int y, int size)
+{
+    int step;
+
+    (void)uiprog_fill(&g_screen, x, y, size, size, WM_CLOSE_PAPER);
+
+    for (step = 2; step < size - 2; step++) {
+        (void)uiprog_fill(&g_screen, x + step, y + step, 2, 2, WM_CLOSE_INK);
+        (void)uiprog_fill(&g_screen, x + size - step - 2, y + step, 2, 2, WM_CLOSE_INK);
+    }
+}
+
+/* The square that closes a window, in the right of its title bar. */
 static struct ui_rect close_box_rect(const struct ui_window *window)
 {
     struct ui_rect rect;
@@ -332,14 +366,8 @@ static struct ui_rect close_box_rect(const struct ui_window *window)
 static void close_box_paint(const struct ui_window *window)
 {
     struct ui_rect box = close_box_rect(window);
-    int step;
 
-    (void)uiprog_fill(&g_screen, box.x, box.y, box.w, box.h, WM_CLOSE_PAPER);
-
-    for (step = 2; step < box.w - 2; step++) {
-        (void)uiprog_fill(&g_screen, box.x + step, box.y + step, 2, 2, WM_CLOSE_INK);
-        (void)uiprog_fill(&g_screen, box.x + box.w - step - 2, box.y + step, 2, 2, WM_CLOSE_INK);
-    }
+    cross_paint(box.x, box.y, box.w);
 }
 
 /* The ring of the window that has the keys: two pixels around it, drawn with
@@ -413,12 +441,28 @@ static struct ui_rect panel_button_rect(int app_index)
 
     rect.x = x;
     rect.y = panel_top() + 2;
-    rect.w = (int)strlen(g_apps[app_index].title) * FONT8_WIDTH + 12;
+    rect.w = (int)strlen(g_apps[app_index].title) * FONT8_WIDTH + 12 + WM_PANEL_CLOSE + 2;
     rect.h = WM_PANEL_HEIGHT - 4;
 
     if (rect.w > 200) {
         rect.w = 200;
     }
+
+    return rect;
+}
+
+/* The square of closing at the right end of the button of the panel: the same
+ * cross a title bar has, so a window can be closed from the panel as well as
+ * from the bar it may have dragged out of the picture. */
+static struct ui_rect panel_close_rect(int app_index)
+{
+    struct ui_rect button = panel_button_rect(app_index);
+    struct ui_rect rect;
+
+    rect.w = WM_PANEL_CLOSE;
+    rect.h = WM_PANEL_CLOSE;
+    rect.x = button.x + button.w - WM_PANEL_CLOSE - 1;
+    rect.y = button.y + (button.h - WM_PANEL_CLOSE) / 2;
 
     return rect;
 }
@@ -463,15 +507,23 @@ static void panel_paint(const struct ui_rect *area)
         (void)uiprog_fill(&g_screen, button.x, button.y, button.w, button.h,
                           focused ? WM_PANEL_FOCUS : WM_PANEL_PAPER);
 
-        cells = (button.w - 8) / FONT8_WIDTH;
+        (void)snprintf(label, sizeof(label), "%s", g_apps[index].title);
+
+        /* The label stops before the square of closing of the button. */
+        cells = (button.w - WM_PANEL_CLOSE - 8) / FONT8_WIDTH;
         if (cells > (int)sizeof(label) - 1) {
             cells = (int)sizeof(label) - 1;
         }
 
-        (void)snprintf(label, sizeof(label), "%s", g_apps[index].title);
         (void)uiprog_text(&g_screen, button.x + 6, button.y + (button.h - FONT8_HEIGHT) / 2, label,
                           cells, focused ? WM_PANEL_PAPER : WM_PANEL_INK,
                           focused ? WM_PANEL_FOCUS : WM_PANEL_PAPER);
+
+        {
+            struct ui_rect close = panel_close_rect(index);
+
+            cross_paint(close.x, close.y, close.w);
+        }
     }
 }
 
@@ -531,31 +583,26 @@ static void cursor_paint(void)
 /* The rectangles of the turn of the loop, and the pointer over them. */
 static void flush_pending(void)
 {
-    struct ui_rect cursor;
-    bool over_cursor = false;
     int index;
 
     if (g_damage_count == 0) {
         return;
     }
 
-    cursor = cursor_rect(g_pointer_x, g_pointer_y);
-
     for (index = 0; index < g_damage_count; index++) {
-        struct ui_rect part;
-
         scene_paint(&g_damage[index]);
-
-        if (ui_rect_intersect(&cursor, &g_damage[index], &part)) {
-            over_cursor = true;
-        }
     }
 
     g_damage_count = 0;
 
-    if (over_cursor) {
-        cursor_paint();
-    }
+    /*
+     * The pointer is the last thing of the picture and the thing any damage
+     * may have painted over: every turn that painted anything draws it again.
+     * The bookkeeping of "did the damage touch the pointer" was one comparison
+     * short of a lost cursor, and the pointer is the one thing a person needs
+     * to see to know where a click will land.
+     */
+    cursor_paint();
 }
 
 /* --- the focus ------------------------------------------------------------ */
@@ -710,6 +757,31 @@ static void app_restore(int index)
 
     if (ui_screen_find(&g_model, app->id) != UI_WINDOW_NONE) {
         return;
+    }
+
+    /*
+     * A window that was dragged past the bottom of the picture and put away
+     * from there comes back *inside* the picture: the model refuses a window
+     * whose rectangle is not a part of the screen (ui_screen_add), so the
+     * rectangle of the server is moved to the nearest place that fits and the
+     * client is not asked to draw anything again - its buffer is its own and
+     * the size of it did not change.
+     */
+    if (app->rect.w <= g_width) {
+        if (app->rect.x > g_width - app->rect.w) {
+            app->rect.x = g_width - app->rect.w;
+        }
+        if (app->rect.x < 0) {
+            app->rect.x = 0;
+        }
+    }
+    if (app->rect.h <= panel_top()) {
+        if (app->rect.y > panel_top() - app->rect.h) {
+            app->rect.y = panel_top() - app->rect.h;
+        }
+        if (app->rect.y < 0) {
+            app->rect.y = 0;
+        }
     }
 
     model = ui_screen_add(&g_model, app->id, app->title, &app->rect, 0);
@@ -958,20 +1030,26 @@ static void pointer_move(int dx, int dy)
     if (g_dragging && g_drag_app >= 0 && g_apps[g_drag_app].used) {
         int new_x = g_drag_rect.x + (x - g_drag_x);
         int new_y = g_drag_rect.y + (y - g_drag_y);
+        int title = UI_FRAME_TITLE_HEIGHT(uiprog_font());
 
-        /* The bar of the title stays under the pointer and off the panel:
-         * a window dragged by the head does not lose its head. */
-        if (new_y > panel_top() - 20) {
-            new_y = panel_top() - 20;
+        /*
+         * The handle of a window is its title bar, so the bar stays on the
+         * picture: the whole height of it above the panel and at least
+         * WM_TITLE_KEEP pixels of its width at either side. A window dragged
+         * to an edge loses the part of itself that is past the edge, and never
+         * the bar that can bring it back.
+         */
+        if (new_y > panel_top() - title) {
+            new_y = panel_top() - title;
         }
-        if (new_y < -2) {
-            new_y = -2;
+        if (new_y < 0) {
+            new_y = 0;
         }
-        if (new_x < -(g_drag_rect.w - 40)) {
-            new_x = -(g_drag_rect.w - 40);
+        if (new_x > g_width - WM_TITLE_KEEP) {
+            new_x = g_width - WM_TITLE_KEEP;
         }
-        if (new_x > g_width - 40) {
-            new_x = g_width - 40;
+        if (new_x < WM_TITLE_KEEP - g_drag_rect.w) {
+            new_x = WM_TITLE_KEEP - g_drag_rect.w;
         }
 
         if (new_x != g_apps[g_drag_app].rect.x || new_y != g_apps[g_drag_app].rect.y) {
@@ -992,15 +1070,24 @@ static void pointer_press(void)
     if (g_pointer_y >= panel_top()) {
         for (int index = 0; index < WM_APPS; index++) {
             struct ui_rect button;
+            struct ui_rect cross;
 
             if (!g_apps[index].used) {
                 continue;
             }
 
+            cross = panel_close_rect(index);
+            if (ui_rect_contains(&cross, g_pointer_x, g_pointer_y)) {
+                g_panel_press = index;
+                g_panel_press_close = true;
+                return;
+            }
+
             button = panel_button_rect(index);
 
             if (ui_rect_contains(&button, g_pointer_x, g_pointer_y)) {
-                app_toggle(index);
+                g_panel_press = index;
+                g_panel_press_close = false;
                 return;
             }
         }
@@ -1043,7 +1130,9 @@ static void pointer_press(void)
         window = &g_model.windows[top];
 
         if (ui_rect_contains(&box, g_pointer_x, g_pointer_y)) {
-            app_request_close(index);
+            /* The square of the bar closes the window on the release, as the
+             * button of the panel does: a press that slides away is nothing. */
+            g_close_press = index;
             return;
         }
 
@@ -1067,6 +1156,66 @@ static void pointer_press(void)
     }
 }
 
+/* The thing a press went down on, if the release came back to it. */
+static void panel_release(void)
+{
+    int index = g_panel_press;
+    bool close = g_panel_press_close;
+
+    g_panel_press = -1;
+
+    if (index < 0 || index >= WM_APPS || !g_apps[index].used) {
+        return;
+    }
+
+    if (close) {
+        struct ui_rect cross = panel_close_rect(index);
+
+        if (ui_rect_contains(&cross, g_pointer_x, g_pointer_y)) {
+            app_request_close(index);
+        }
+
+        return;
+    }
+
+    {
+        struct ui_rect button = panel_button_rect(index);
+
+        if (ui_rect_contains(&button, g_pointer_x, g_pointer_y)) {
+            app_toggle(index);
+        }
+    }
+}
+
+/* The square of the title bar: the release closes the window when it comes
+ * back to the same square of the same window. */
+static void close_box_release(void)
+{
+    int index = g_close_press;
+
+    g_close_press = -1;
+
+    if (index < 0 || index >= WM_APPS || !g_apps[index].used) {
+        return;
+    }
+
+    {
+        int model = ui_screen_find(&g_model, g_apps[index].id);
+
+        if (model == UI_WINDOW_NONE) {
+            return;
+        }
+
+        {
+            struct ui_rect box = close_box_rect(&g_model.windows[model]);
+
+            if (ui_rect_contains(&box, g_pointer_x, g_pointer_y)) {
+                app_request_close(index);
+            }
+        }
+    }
+}
+
 static void pointer_release(void)
 {
     g_button = false;
@@ -1075,6 +1224,9 @@ static void pointer_release(void)
         g_dragging = false;
         g_drag_app = -1;
     }
+
+    panel_release();
+    close_box_release();
 
     if (g_press_app >= 0) {
         struct wm_app *app = &g_apps[g_press_app];
@@ -1321,8 +1473,17 @@ static void desktop_open(void)
     static char *const edit_argv[] = {(char *)"/bin/edit", (char *)"/doc.txt", NULL};
     static char *const fm_argv[] = {(char *)"/bin/fm", (char *)"/", NULL};
 
-    app_spawn(0, "/bin/edit", edit_argv, "edit - /doc.txt", 60, 60, 640, 420);
-    app_spawn(1, "/bin/fm", fm_argv, "fm - /", 560, 300, 520, 380);
+    /*
+     * The two windows of the first desktop stand beside each other and not
+     * over each other: a window that covers the corner of another one hides
+     * the whole text of it - the list of the file manager is four columns
+     * wide - and a raise would then look like a window that went blank. The
+     * stacking is there for a person who puts one window over the other, and
+     * `make x86-vga-smoke` puts one over the other before it checks the order
+     * of the paint (docs/desktop.md).
+     */
+    app_spawn(0, "/bin/edit", edit_argv, "edit - /doc.txt", 40, 40, 640, 420);
+    app_spawn(1, "/bin/fm", fm_argv, "fm - /", 700, 200, 520, 380);
 }
 
 /* The children that are gone: a window whose program exited without saying
