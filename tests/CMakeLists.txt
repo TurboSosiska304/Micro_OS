@@ -418,8 +418,13 @@ if(NOT ESP_PLATFORM)
     # of the port and covers the values of the format, not the door of the
     # system call.
     include("${CMAKE_SOURCE_DIR}/cmake/libmagic.cmake")
+    # `_GNU_SOURCE` because libmagic uses `strcasestr`, which glibc hides
+    # behind it: without the define the host build sees an implicit
+    # declaration, a pointer compared with an int, and -Werror stops there.
+    # The guest build reads the library of the program, where the name is
+    # declared; the host build reads the library of the system.
     set_source_files_properties(${MICROOS_FILE_SOURCES}
-        PROPERTIES COMPILE_DEFINITIONS "HAVE_CONFIG_H=1"
+        PROPERTIES COMPILE_DEFINITIONS "HAVE_CONFIG_H=1;_GNU_SOURCE"
                    COMPILE_OPTIONS "${MICROOS_FILE_WARNINGS}")
 
     # The database is made by the library itself, as in the guest build: the
@@ -435,7 +440,7 @@ if(NOT ESP_PLATFORM)
     )
     target_include_directories(microos_magic_compile PRIVATE
         "${MICROOS_FILE_DIR}/src" "${MICROOS_FILE_DIR}/port")
-    target_compile_definitions(microos_magic_compile PRIVATE HAVE_CONFIG_H=1)
+    target_compile_definitions(microos_magic_compile PRIVATE HAVE_CONFIG_H=1 _GNU_SOURCE)
     target_compile_options(microos_magic_compile PRIVATE ${MICROOS_FILE_WARNINGS})
 
     add_custom_command(
