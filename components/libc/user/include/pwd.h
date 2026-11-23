@@ -1,10 +1,11 @@
 /*
  * Micro OS — one user, one group.
  *
- * The system has a single user, uid 0, and a single group, gid 0; the kernel
- * grants it nothing extra and the records of the filesystem hold a uid of
- * fifteen bits. A portable source still asks `getpwuid` for a name, so a
- * program that prints `ls -l` prints `root` instead of a number.
+ * A name is a line of /etc/passwd (`name:uid:gid:home:shell`), and the
+ * records of the filesystem hold a uid of fifteen bits. A portable source
+ * asks `getpwuid` for a name, so a program that prints `ls -l` prints `guest`
+ * instead of a number, and `login` reads the same file. There is no group
+ * file: `getgrgid` knows the group of root and nothing else (docs/debts.md).
  */
 #ifndef MICRO_OS_LIBC_USER_PWD_H
 #define MICRO_OS_LIBC_USER_PWD_H
