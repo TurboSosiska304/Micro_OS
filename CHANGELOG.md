@@ -14,6 +14,41 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Added
 
+- A task carries a uid and a gid, and the triads of a file are read against
+  them: `getuid`, `geteuid`, `getgid`, `setuid` and `setgid` take the numbers
+  36 to 40, root passes every triad while anyone else gets the bits of the
+  owner or of "others" (no filesystem of this system stores a group), `chmod`
+  is the owner's or root's, `chown`, `mount` and `umount` are root's, and
+  `kill` of a task of another uid answers `EPERM`. The credentials are
+  inherited by `task_create` and by `fork`, and `execve` keeps them.
+- `rename` reaches ext2, and `rmdir` is a call of its own (41) in the VFS and
+  in MicroFS, FAT32 and ext2: `unlink` of a directory is `KERR_ISDIR`, `rmdir`
+  of a file is `KERR_NOTDIR`, a full directory is `KERR_NOTEMPTY`, and
+  `rm -r` and `/bin/rmdir` use the call.
+- `fstat` (42) answers the mode, the owner, the size and the two moments of
+  the object behind an open descriptor, where the library used to answer 0666
+  and the size through `lseek`; `O_EXCL` is a flag of `open` and of the ABI.
+- `ext2_repair` and `fsck ext2 [-y] <point>`: the counters of the superblock
+  and of every group, both bitmaps, the link counts, the `.` and `..` entries
+  and the size of a directory against its chain, and a lost file reconnected
+  as `#<inode>` under `/lost+found`. The oracle is the host: `e2fsck -fn`
+  answered "Free blocks count wrong" with exit 4 before the repair and exit 0
+  after it.
+- The map of `mfs_check` is sized by the volume instead of a constant of 32 768
+  records, so a volume of 40 000 records repairs an orphan past the old
+  ceiling.
+- SQLite keeps its journal in a file (`journal_mode=DELETE`): `make
+  x86-fs-smoke` cuts a transaction with a reset and reads the rolled-back rows
+  on the next boot, `PRAGMA integrity_check` answering `ok`.
+- The switch of a task saves and loads the XMM and x87 state (512 bytes of
+  `struct port_task`, `fxsave64` and `fxrstor64` in `commit_switch()`), a
+  `fork` copies the live state into the child, `execve` starts the new image
+  from a clean template, and the trampoline of an application processor turns
+  `CR4.OSFXSR`/`OSXMMEXCPT` and `CR0.NE` on - without them SSE in ring 3 of
+  the second core was `#UD`. `/bin/fpu2` is the test that failed before it:
+  two children compute in `xmm0`/`xmm1` while the parent computes, and a third
+  dirties x87 and the control words before an `execve`.
+
 - A program has the POSIX process pair on x86-64: the child of `fork()` is a
   task with a copy-on-write image, `execve()` from a program replaces the
   image of the caller instead of starting a second task (the pid, the parent,
