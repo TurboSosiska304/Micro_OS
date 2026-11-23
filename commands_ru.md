@@ -78,7 +78,14 @@ python3 tools/integrity_check.py --expect-version 0.2.0
 | `make idf-flash` | заливает прошивку по USB |
 | `make idf-monitor` | подключает последовательный монитор (выход — `Ctrl+]`) |
 | `make idf-size` | отчёт о размере прошивки |
-| `make bundle` | собирает и складывает готовый пакет в `dist/` |
+| `make bundle` | собирает оба дистрибутива в `dist/`: прошивку и архив x86-64 |
+| `make bundle-board` | только прошивку в `dist/` (нужны ESP-IDF и esptool) |
+| `make bundle-x86` | только архив x86-64 в `dist/` (без ESP-IDF и без платы) |
+
+`make bundle` — это две половины по очереди: `bundle-board` собирает прошивку
+и упаковывает её, `bundle-x86` собирает полную машину x86-64 и упаковывает её
+архив. `make x86-user` использует только вторую, поэтому машина без ESP-IDF
+тоже может собрать и запустить то, что скачивает человек.
 
 Makefile передаёт `IDF_TARGET=esp32` (из `sdkconfig.defaults`). Порт `idf.py`
 определяет сам; если плат несколько, укажите явно:

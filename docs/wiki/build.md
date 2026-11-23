@@ -6,8 +6,12 @@ portability as much as a product:
 | Build | What it produces | Commands | Directory |
 |---|---|---|---|
 | host | the unit tests and the simulator, as a Linux process | `make build`, `make test`, `make sim`, `make smoke` | `build-host/`, `build-asan/`, `build-tsan/` |
-| x86-64 | a bare-metal kernel and its loader, for QEMU | `make x86-build`, `make x86-run`, `make x86-smoke` | `build-x86/` |
-| ESP32 | the firmware of the board, through ESP-IDF v5.3 | `make idf-build`, `make idf-flash`, `make bundle` | `build/` |
+| x86-64 | a bare-metal kernel and its loader, for QEMU | `make x86-build`, `make x86-run`, `make x86-smoke`, `make bundle-x86` | `build-x86/` |
+| ESP32 | the firmware of the board, through ESP-IDF v5.3 | `make idf-build`, `make idf-flash`, `make bundle-board` | `build/` |
+
+`make bundle` packs both machines into `dist/`; the two halves are separate
+targets, so the x86-64 one never needs ESP-IDF and the board one never needs
+QEMU.
 
 The null port (`ports/port_null`) has no build of its own: it is linked into
 the host build as `microos_null_probe`, and the link is the check.
@@ -110,13 +114,20 @@ that boots the three with a virtio-net card on the user network of QEMU (port
 8080 forwarded). `X86_SERIAL=1 ./build-x86-all/run.sh` gives the serial
 console and no window.
 
-`make x86-user` closes the loop: it builds that machine and the release
-bundle, then unpacks `dist/MicroOS-x86_64-<version>.tar.gz` into
+`make x86-user` closes the loop: it builds that machine and the x86-64 tar,
+then unpacks `dist/MicroOS-x86_64-<version>.tar.gz` into
 `build-x86-user/` and starts `run.sh` from the tar - not from the tree. The
 tar of a release carries the same `loader32.elf`, `microos64.bin`,
 `x86-all.img`, the licenses and the `run.sh`, so what a person downloads is
 what the target starts. `make x86-user-serial` gives the console of the tar
 without a window.
+
+`make x86-user` does not need ESP-IDF: the tar is the `--x86-only` half of
+`tools/bundle.sh`, built by `make bundle-x86`, and nothing of the firmware
+build, esptool or the board takes part in it. `make bundle` is both halves -
+`bundle-board` (the firmware, ESP-IDF) and then `bundle-x86` - so a release
+workflow has one command, and a person who only wants the x86-64 machine has
+one that works without the firmware toolchain.
 
 The display backend is a package of its own in some distributions: the target
 asks QEMU for its list of backends first and prints the command to run when
@@ -156,7 +167,9 @@ make idf-build     # idf.py -D IDF_TARGET=esp32 build
 make idf-flash     # flash over USB; make idf-flash IDF_PORT=/dev/ttyACM0
 make idf-monitor   # the serial monitor (leave with Ctrl+])
 make idf-size      # the size report of the firmware
-make bundle        # build everything and collect dist/ for distribution
+make bundle        # build both machines and collect dist/ (firmware and x86-64 tar)
+make bundle-board  # the firmware alone into dist/ (needs ESP-IDF)
+make bundle-x86    # the x86-64 tar alone into dist/ (needs no ESP-IDF)
 ```
 
 A first checkout needs the target once. With ESP-IDF exported:

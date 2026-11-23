@@ -10,8 +10,22 @@ the MicroFS volume change by adding only.
 A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 (`vX.Y.Z-pre`) is a pre-release and must match `kernel_version()`.
 
-<<<<<<< HEAD
-=======
+## [1.2.1] - 2026-11-23
+
+A patch of `1.2.0` for the build of the two machines: the x86-64 tar no longer
+needs the firmware toolchain. The volume, the syscall ABI and `MOX1` do not
+change.
+
+### Fixed
+
+- `make x86-user` built the ESP-IDF firmware before it packed the tar, so a
+  machine without ESP-IDF could not produce the artifact a person downloads.
+  The packing is split in two halves now: `tools/bundle.sh --x86-only` packs
+  the x86-64 machine without the firmware build, `esptool` or the partition
+  table, and `--board-only` packs the firmware alone. `make bundle-x86` is the
+  first half, `make bundle-board` the second, `make bundle` composes them and
+  a release workflow keeps one command.
+
 ## [1.2.0] - 2026-11-23
 
 The release of the machine a person can see and feed: x86-64 gets a real
@@ -220,7 +234,6 @@ release. The notes are in [`docs/releases/1.2.md`](docs/releases/1.2.md).
   The patch has its own section below and its notes in
   [`docs/releases/1.1.2.md`](docs/releases/1.1.2.md).
 
->>>>>>> release_candidate
 ## [1.1.2] - 2026-11-23
 
 A patch of `1.1.1` for the shell: the cleanroom of 1.1.1 found that `ls`

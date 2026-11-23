@@ -66,8 +66,9 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make x86-iso-smoke` | boot the ISO with `-cdrom` and nothing else, and check the shell and `/bin` |
 | `make x86-all` | the complete machine in `build-x86-all/`: the kernel with the network, the disk with `/bin` and `/etc`, and `run.sh` |
 | `make x86-all-run` | boot that machine in a window (the serial console with `x86-all-run-serial`) |
-| `make x86-user` | build the complete machine and its release tar, unpack the tar and start it (the artifact a person downloads) |
+| `make x86-user` | build the complete machine and its release tar, unpack the tar and start it (the artifact a person downloads; no ESP-IDF needed) |
 | `make x86-user-serial` | the same tar with the serial console and no window |
+| `make bundle-x86` | the tar of the x86-64 machine alone into `dist/`, without the firmware build |
 | `make ci` | `build`, `test`, `test-asan`, `test-tsan`, `test-smp`, `smoke`, `coverage`, `x86-smoke` when QEMU is there, `reproducible`, `integrity` — run it before pushing |
 
 The same build by hand:
@@ -146,7 +147,14 @@ what that does and does not protect.
 | `make idf-flash` | flash the firmware over USB |
 | `make idf-monitor` | attach the serial monitor (leave with `Ctrl+]`) |
 | `make idf-size` | the firmware size report |
-| `make bundle` | build and collect the flashable bundle into `dist/` |
+| `make bundle` | build and collect both distributions into `dist/`: the firmware and the x86-64 tar |
+| `make bundle-board` | the firmware alone, into `dist/` (needs ESP-IDF and esptool) |
+| `make bundle-x86` | the x86-64 tar alone, into `dist/` (no ESP-IDF, no board) |
+
+`make bundle` is the two halves one after the other: `bundle-board` builds the
+firmware and packs it, `bundle-x86` builds the complete x86-64 machine and
+packs its tar. `make x86-user` uses only the second one, so a machine without
+ESP-IDF can still produce and start the artifact a person downloads.
 
 The Makefile passes `IDF_TARGET=esp32` (from `sdkconfig.defaults`). The port is
 auto-detected by `idf.py`; give it explicitly when there are several boards:
