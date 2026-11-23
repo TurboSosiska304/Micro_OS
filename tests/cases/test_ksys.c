@@ -303,7 +303,8 @@ static void test_abi_is_stable(void)
         {KSYS_SETLIMIT, "setlimit"}, {KSYS_RENAME, "rename"},       {KSYS_FTRUNCATE, "ftruncate"},
         {KSYS_GETUID, "getuid"},     {KSYS_GETEUID, "geteuid"},     {KSYS_GETGID, "getgid"},
         {KSYS_SETUID, "setuid"},     {KSYS_SETGID, "setgid"},       {KSYS_RMDIR, "rmdir"},
-        {KSYS_FSTAT, "fstat"},
+        {KSYS_FSTAT, "fstat"},       {KSYS_POLL, "poll"},           {KSYS_MMAP, "mmap"},
+        {KSYS_MUNMAP, "munmap"},     {KSYS_MSYNC, "msync"},         {KSYS_BRK, "brk"},
     };
     size_t i;
 
@@ -425,6 +426,13 @@ static const struct abi_field g_k_exec_image_fields[] = {
     {"data_size", offsetof(struct k_exec_image, data_size)},
     {"bss_size", offsetof(struct k_exec_image, bss_size)},
     {"envp", offsetof(struct k_exec_image, envp)},
+    {"path", offsetof(struct k_exec_image, path)},
+};
+
+static const struct abi_field g_ksys_pollfd_fields[] = {
+    {"fd", offsetof(struct ksys_pollfd, fd)},
+    {"events", offsetof(struct ksys_pollfd, events)},
+    {"revents", offsetof(struct ksys_pollfd, revents)},
 };
 
 static const struct abi_object g_abi_objects[] = {
@@ -435,6 +443,8 @@ static const struct abi_object g_abi_objects[] = {
      K_ARRAY_SIZE(g_vfs_dirent_fields)},
     {"k_exec_image", sizeof(struct k_exec_image), g_k_exec_image_fields,
      K_ARRAY_SIZE(g_k_exec_image_fields)},
+    {"ksys_pollfd", sizeof(struct ksys_pollfd), g_ksys_pollfd_fields,
+     K_ARRAY_SIZE(g_ksys_pollfd_fields)},
 };
 
 /*
@@ -494,6 +504,17 @@ static const struct abi_value g_abi_known_values[] = {
     {"KSYS_SIG_IGN", KSYS_SIG_IGN},
     {"KSYS_PATH_MAX", KSYS_PATH_MAX},
     {"KSYS_MAX_IO", KSYS_MAX_IO},
+    {"KSYS_POLLIN", KSYS_POLLIN},
+    {"KSYS_POLLOUT", KSYS_POLLOUT},
+    {"KSYS_POLLERR", KSYS_POLLERR},
+    {"KSYS_POLL_MAX", KSYS_POLL_MAX},
+    {"KSYS_PROT_READ", KSYS_PROT_READ},
+    {"KSYS_PROT_WRITE", KSYS_PROT_WRITE},
+    {"KSYS_PROT_EXEC", KSYS_PROT_EXEC},
+    {"KSYS_MAP_SHARED", KSYS_MAP_SHARED},
+    {"KSYS_MAP_PRIVATE", KSYS_MAP_PRIVATE},
+    {"KSYS_MAP_ANONYMOUS", KSYS_MAP_ANONYMOUS},
+    {"KSYS_PAGE_SIZE", KSYS_PAGE_SIZE},
     {"K_EXEC_MAGIC", K_EXEC_MAGIC},
     {"K_EXEC_VERSION", K_EXEC_VERSION},
     {"K_EXEC_HEADER_SIZE", K_EXEC_HEADER_SIZE},
@@ -1748,6 +1769,253 @@ static void test_pipe_waits(void)
     teardown();
 }
 
+/* --- the memory of a program --- */
+
+/*
+ * The property: the calls of the memory of a program check their arguments
+ * before they look for a machine that has pages, and a machine without them
+ * answers ENOSYS - the same answer it gives to execve. The host and the board
+ * are such machines: a program there is a task of the kernel and shares its
+ * memory, so there is no window to hand out page by page. The pages
+ * themselves are covered on the machine that has them (`make x86-smoke`,
+ * /bin/mmap and /bin/poll).
+ */
+static void test_mmap_edges(void)
+{
+    static _Alignas(4096) char page[8];
+
+    ktest_begin("ksys: the memory of a program checks its arguments and says no without pages");
+
+    setup();
+
+    /* The arguments of a mapping: a length, a protection, one sharing mode,
+     * an aligned address and an aligned offset. */
+    KT_CHECK_INT_EQ(
+        ksys_mmap(NULL, 0, KSYS_PROT_READ, KSYS_MAP_PRIVATE | KSYS_MAP_ANONYMOUS, -1, 0),
+        KERR_INVAL);
+    KT_CHECK_INT_EQ(
+        ksys_mmap(NULL, 100, KSYS_PROT_READ, KSYS_MAP_PRIVATE | KSYS_MAP_ANONYMOUS, -1, 0),
+        KERR_INVAL);
+    KT_CHECK_INT_EQ(
+        ksys_mmap(NULL, KSYS_PAGE_SIZE, 0x40, KSYS_MAP_PRIVATE | KSYS_MAP_ANONYMOUS, -1, 0),
+        KERR_INVAL);
+    KT_CHECK_INT_EQ(
+        ksys_mmap(NULL, KSYS_PAGE_SIZE, KSYS_PROT_READ, KSYS_MAP_PRIVATE | KSYS_MAP_SHARED, -1, 0),
+        KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_mmap(NULL, KSYS_PAGE_SIZE, KSYS_PROT_READ, 0, -1, 0), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_mmap(page + 1, KSYS_PAGE_SIZE, KSYS_PROT_READ,
+                              KSYS_MAP_PRIVATE | KSYS_MAP_ANONYMOUS, -1, 0),
+                    KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_mmap(NULL, KSYS_PAGE_SIZE, KSYS_PROT_READ,
+                              KSYS_MAP_PRIVATE | KSYS_MAP_ANONYMOUS, -1, 1),
+                    KERR_INVAL);
+
+    /* A machine without pages: the call is refused after the arguments. */
+    KT_CHECK_INT_EQ(ksys_mmap(NULL, KSYS_PAGE_SIZE, KSYS_PROT_READ,
+                              KSYS_MAP_PRIVATE | KSYS_MAP_ANONYMOUS, -1, 0),
+                    KERR_NOSYS);
+    KT_CHECK_INT_EQ(ksys_munmap(page, KSYS_PAGE_SIZE), KERR_NOSYS);
+    KT_CHECK_INT_EQ(ksys_msync(page, KSYS_PAGE_SIZE), KERR_NOSYS);
+    KT_CHECK_INT_EQ(ksys_brk(page), KERR_NOSYS);
+
+    /* The release and the write-back have the same edge. */
+    KT_CHECK_INT_EQ(ksys_munmap(page + 1, KSYS_PAGE_SIZE), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_munmap(page, 0), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_munmap(page, 100), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_msync(page + 1, KSYS_PAGE_SIZE), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_msync(page, 100), KERR_INVAL);
+
+    teardown();
+}
+
+/* --- poll --- */
+
+/*
+ * The task that changes the state a `poll` waits for. It is a fork of the
+ * test task, so the numbers of the descriptors of the test are its own: a
+ * pipe is one object and two tasks that share the table of the parent share
+ * its ends.
+ */
+struct poll_helper {
+    int write_fd;   /* the end to write a byte to, or -1 */
+    int signal_pid; /* the task to signal, or 0 */
+    int signal;
+    k_u32_t delay_ms;
+};
+
+static struct poll_helper g_poll_helper;
+
+static void poll_helper_task(void *arg)
+{
+    struct poll_helper *helper = (struct poll_helper *)arg;
+
+    ksys_sleep((ksys_arg_t)helper->delay_ms);
+
+    if (helper->write_fd >= 0) {
+        (void)ksys_write(helper->write_fd, "x", 1);
+    }
+
+    if (helper->signal_pid != 0) {
+        (void)ksys_kill(helper->signal_pid, helper->signal);
+    }
+}
+
+static void poll_ignore_signal(int sig)
+{
+    K_UNUSED(sig);
+}
+
+/*
+ * The property: `poll` answers the state of the objects and waits in the
+ * scheduler. The test covers the three answers a wait can have - a state
+ * that is already true, a state that becomes true while the task waits, and
+ * a deadline that passes - and the sleep of a list of no descriptor.
+ */
+static void test_poll(void)
+{
+    struct ksys_pollfd list[3];
+    struct task *helper;
+    char byte = 0;
+    int a[2];
+    int b[2];
+    int empty[2];
+    k_u64_t start;
+    k_u64_t elapsed;
+
+    ktest_begin("ksys: poll answers the state of the objects and waits in the scheduler");
+
+    setup();
+
+    KT_CHECK_INT_EQ(ksys_pipe(a), 0);
+    KT_CHECK_INT_EQ(ksys_pipe(b), 0);
+    KT_CHECK_INT_EQ(ksys_pipe(empty), 0);
+
+    /* Two empty pipes: nothing is ready and a timeout of zero does not
+     * wait. */
+    memset(list, 0, sizeof(list));
+    list[0].fd = (k_u32_t)a[0];
+    list[0].events = KSYS_POLLIN;
+    list[1].fd = (k_u32_t)b[0];
+    list[1].events = KSYS_POLLIN;
+    KT_CHECK_INT_EQ(ksys_poll(list, 2, 0), 0);
+    KT_CHECK_INT_EQ(list[0].revents, 0);
+    KT_CHECK_INT_EQ(list[1].revents, 0);
+
+    /* A byte in the second pipe is the answer of the second entry only. */
+    KT_CHECK_INT_EQ(ksys_write(b[1], "y", 1), 1);
+    KT_CHECK_INT_EQ(ksys_poll(list, 2, 0), 1);
+    KT_CHECK_INT_EQ(list[0].revents, 0);
+    KT_CHECK_INT_EQ(list[1].revents, KSYS_POLLIN);
+    KT_CHECK_INT_EQ(ksys_read(b[0], &byte, 1), 1);
+    KT_CHECK_INT_EQ(byte, 'y');
+
+    /* A wait that nothing ends is the deadline: the call answers zero and
+     * the time it took is the time it was given. */
+    list[0].fd = (k_u32_t)empty[0];
+    list[0].events = KSYS_POLLIN;
+    start = ksys_uptime();
+    KT_CHECK_INT_EQ(ksys_poll(list, 1, 60), 0);
+    elapsed = ksys_uptime() - start;
+    KT_CHECK(elapsed >= 40);
+    KT_CHECK(elapsed < 2000);
+
+    /* A wait of no descriptor is a sleep: the scheduler keeps the processor
+     * for the other tasks and the call answers when the time is over. */
+    start = ksys_uptime();
+    KT_CHECK_INT_EQ(ksys_poll(NULL, 0, 50), 0);
+    elapsed = ksys_uptime() - start;
+    KT_CHECK(elapsed >= 30);
+    KT_CHECK(elapsed < 2000);
+
+    /*
+     * The wait that is ended by the object: a task of its own writes a byte
+     * into the pipe after a moment, and the poll of the reader answers as
+     * soon as the byte is there - not at its deadline, which is without one.
+     */
+    g_poll_helper.write_fd = a[1];
+    g_poll_helper.signal_pid = 0;
+    g_poll_helper.signal = 0;
+    g_poll_helper.delay_ms = 30;
+
+    helper = task_fork_shared(task_self(), "poll-writer", poll_helper_task, &g_poll_helper);
+    KT_CHECK(helper != NULL);
+
+    if (helper != NULL) {
+        list[0].fd = (k_u32_t)a[0];
+        list[0].events = KSYS_POLLIN;
+        start = ksys_uptime();
+        KT_CHECK_INT_EQ(ksys_poll(list, 1, -1), 1);
+        elapsed = ksys_uptime() - start;
+        KT_CHECK(list[0].revents == KSYS_POLLIN);
+        KT_CHECK(elapsed < 400);
+        KT_CHECK_INT_EQ(ksys_read(a[0], &byte, 1), 1);
+        KT_CHECK_INT_EQ(task_wait(helper->pid, NULL, 2000), 0);
+    }
+
+    /* The end of the writing end is the end of the file: a read does not
+     * wait, so the entry is ready. */
+    KT_CHECK_INT_EQ(ksys_close(a[1]), 0);
+    list[0].fd = (k_u32_t)a[0];
+    list[0].events = KSYS_POLLIN;
+    KT_CHECK_INT_EQ(ksys_poll(list, 1, 0), 1);
+    KT_CHECK_INT_EQ(list[0].revents, KSYS_POLLIN);
+
+    /* A writing end whose reader is gone is the error of the object. */
+    KT_CHECK_INT_EQ(ksys_close(empty[0]), 0);
+    list[0].fd = (k_u32_t)empty[1];
+    list[0].events = KSYS_POLLOUT;
+    KT_CHECK_INT_EQ(ksys_poll(list, 1, 0), 1);
+    KT_CHECK_INT_EQ(list[0].revents, KSYS_POLLERR);
+
+    /* A number that is not an open descriptor is the error of the entry, and
+     * a negative number is ignored. */
+    list[0].fd = 14;
+    list[0].events = KSYS_POLLIN;
+    list[1].fd = (k_u32_t)-1;
+    list[1].events = KSYS_POLLIN;
+    KT_CHECK_INT_EQ(ksys_poll(list, 2, 0), 1);
+    KT_CHECK_INT_EQ(list[0].revents, KSYS_POLLERR);
+    KT_CHECK_INT_EQ(list[1].revents, 0);
+
+    /* The edge: a list that is too long, a list that is not there, and a
+     * timeout that is not a timeout. */
+    KT_CHECK_INT_EQ(ksys_poll(list, KSYS_POLL_MAX + 1, 0), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_poll(NULL, 1, 0), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_poll(list, 1, -2), KERR_INVAL);
+
+    /*
+     * A signal cuts the wait: the call answers EINTR and the handler of the
+     * task runs. The signal is sent by a task of its own, because the task
+     * that waits is the one that has to be interrupted.
+     */
+    g_poll_helper.write_fd = -1;
+    g_poll_helper.signal_pid = (int)task_self()->pid;
+    g_poll_helper.signal = K_SIGTERM;
+    g_poll_helper.delay_ms = 30;
+
+    helper = task_fork_shared(task_self(), "poll-signal", poll_helper_task, &g_poll_helper);
+    KT_CHECK(helper != NULL);
+
+    if (helper != NULL) {
+        list[0].fd = (k_u32_t)b[0];
+        list[0].events = KSYS_POLLIN;
+        KT_CHECK(ksys_signal(K_SIGTERM, poll_ignore_signal) == K_SIG_DFL);
+        start = ksys_uptime();
+        KT_CHECK_INT_EQ(ksys_poll(list, 1, -1), KERR_INTR);
+        elapsed = ksys_uptime() - start;
+        KT_CHECK(elapsed < 400);
+        (void)ksys_signal(K_SIGTERM, K_SIG_DFL);
+        KT_CHECK_INT_EQ(task_wait(helper->pid, NULL, 2000), 0);
+    }
+
+    KT_CHECK_INT_EQ(ksys_close(a[0]), 0);
+    KT_CHECK_INT_EQ(ksys_close(b[0]), 0);
+    KT_CHECK_INT_EQ(ksys_close(b[1]), 0);
+    KT_CHECK_INT_EQ(ksys_close(empty[1]), 0);
+
+    teardown();
+}
+
 /*
  * The property: dup2 gives a second descriptor of one open file, the write
  * goes to the object the number now names, and closing the original leaves
@@ -2418,6 +2686,8 @@ void test_ksys(void)
     test_pipe_waits();
     test_dup2();
     test_pipe_errors();
+    test_poll();
+    test_mmap_edges();
     test_fd_table_full();
     test_ftruncate();
     test_fstat_and_exclusive();

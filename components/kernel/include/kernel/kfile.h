@@ -40,6 +40,17 @@
 #define KFILE_PIPE_SIZE 256
 #define KFILE_PIPE_WAIT_MS 500u
 
+/*
+ * The bits a descriptor reports to `poll` (KSYS_POLLIN and the two others of
+ * kernel/ksys.h are these numbers). The kernel names them here because the
+ * readiness of an object is a fact about the object and not about the call
+ * that asks for it: a pipe knows whether it has a byte to read, and the
+ * syscall layer only copies the answer.
+ */
+#define KFILE_POLLIN 0x0001  /* a read would not wait */
+#define KFILE_POLLOUT 0x0004 /* a write would not wait */
+#define KFILE_POLLERR 0x0008 /* the other end is gone, or the number is not open */
+
 /* One open file. It is made by `open` or `pipe` and lives until the last
  * descriptor that refers to it is closed. */
 struct kfile {
@@ -103,6 +114,24 @@ int kfile_pipe(struct task *t, int fds[2]);
  * says. The access is checked by the caller, at the edge of the calls. */
 k_ssize_t kfile_read(struct kfile *f, void *buf, k_size_t count);
 k_ssize_t kfile_write(struct kfile *f, const void *buf, k_size_t count);
+
+/*
+ * What the object behind a description would do right now, for `poll`: the
+ * KFILE_POLL* bits of the state it is in. `events` is the interest of the
+ * caller and is not a filter of the answer - a pipe that lost its writer is
+ * KFILE_POLLERR even to a caller that asked only for reading, which is what
+ * makes the error of a wait visible - but a bit the caller did not ask for
+ * and that is not an error is not reported.
+ *
+ * The call does not wait and does not change the position of the file: a
+ * regular file of this system is always ready to be read and to be written.
+ */
+k_u16_t kfile_poll(struct kfile *f, k_u16_t events);
+
+/* Does any descriptor of a pipe have a waiter to wake? The pipes share one
+ * channel (kernel/wait.h), so the wakeup of a state change is a broadcast of
+ * it and the waiters look at their own end again. */
+void kfile_wake(void);
 
 /*
  * Give a fresh task the descriptors of a fork: every open file of the

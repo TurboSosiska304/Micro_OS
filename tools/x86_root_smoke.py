@@ -67,6 +67,14 @@ ROOT_COMMANDS = [
     "ls /",
 ]
 
+# The memory a program maps on the ext2 root: the file /mm.txt is written
+# through a shared mapping and `msync`, and it stays on the volume after the
+# boot for `e2fsck` and `debugfs` of the host to read.
+MMAP_COMMANDS = [
+    "exec /bin/mmap",
+    "head -n 1 /mm.txt",
+]
+
 # The second partition of the ext2 image: the FAT32 volume of /data.
 DATA_COMMANDS = [
     "mount ata0p2 /data fat32",
@@ -273,6 +281,104 @@ def data_checks(name: str, transcript: str) -> list:
     return checks
 
 
+def extract_partition(image: str, out: str) -> None:
+    """Copy the first partition of the disk image into a file of its own.
+
+    e2fsck and debugfs of the host read a filesystem and not a disk, and the
+    volume of the machine is the first partition behind an MBR: the entry of
+    the table names the first sector and the count of them.
+    """
+    with open(image, "rb") as disk:
+        mbr = disk.read(512)
+
+        if len(mbr) < 512 or mbr[510] != 0x55 or mbr[511] != 0xAA:
+            raise OSError("the image has no partition table")
+
+        start = int.from_bytes(mbr[446 + 8 : 446 + 12], "little") * 512
+        count = int.from_bytes(mbr[446 + 12 : 446 + 16], "little") * 512
+
+        if count == 0:
+            count = os.path.getsize(image) - start
+
+        disk.seek(start)
+
+        with open(out, "wb") as part:
+            left = count
+
+            while left > 0:
+                chunk = disk.read(min(left, 1 << 20))
+
+                if not chunk:
+                    break
+
+                part.write(chunk)
+                left -= len(chunk)
+
+
+def host_tool(name: str) -> bool:
+    """Is a tool of the host there? A machine without e2fsprogs skips the two
+    checks of the volume and says so, instead of failing the run."""
+    return shutil.which(name) is not None
+
+
+def run_tool(command: list) -> tuple:
+    result = subprocess.run(command, check=False, capture_output=True, text=True)
+    return result.returncode, (result.stdout + result.stderr).strip()
+
+
+def mapped_file_checks(image: str, transcript: str) -> list:
+    """The file a shared mapping wrote, read by the tools of the world.
+
+    The bytes of the mapping are in the file on the volume: `head` of the
+    machine reads them, `e2fsck -fn` of the host finds nothing to repair, and
+    `debugfs` of the host reads the same file after the boot. It is the gate
+    of the plan of 1.6 - a shared mapping that `cat` and `e2fsck` see - on the
+    root that is ext2 and not MicroFS.
+    """
+    checks = []
+
+    def expect(title: str, condition: bool, detail: str = "") -> None:
+        checks.append((title, bool(condition), detail))
+
+    expect(
+        "ext2: the shared mapping writes the file of the root",
+        "mmap: the file says HELLO" in transcript and "HELLO" in transcript.split("head -n 1")[-1],
+        transcript[-400:],
+    )
+
+    if not host_tool("e2fsck") or not host_tool("debugfs"):
+        expect("ext2: the tools of the host are there", False, "e2fsck or debugfs is missing")
+        return checks
+
+    partition = image + ".part"
+
+    try:
+        extract_partition(image, partition)
+    except OSError as error:
+        expect("ext2: the volume of the root is a partition", False, str(error))
+        return checks
+
+    try:
+        status, text = run_tool(["e2fsck", "-fn", partition])
+        expect(
+            "ext2: e2fsck finds nothing to repair in the volume of the mapping",
+            status == 0,
+            text[-500:],
+        )
+
+        status, text = run_tool(["debugfs", "-R", "cat /mm.txt", partition])
+        expect(
+            "ext2: debugfs reads the bytes of the shared mapping",
+            text.startswith("HELLO"),
+            text[:120],
+        )
+    finally:
+        if os.path.exists(partition):
+            os.remove(partition)
+
+    return checks
+
+
 def main(argv: list) -> int:
     parser = argparse.ArgumentParser(description="the smoke test of the root of the x86-64 port")
     parser.add_argument("--image", default=DEFAULT_IMAGE, help="the MicroFS image of the disk")
@@ -298,6 +404,8 @@ def main(argv: list) -> int:
     root_copy = args.build + "/root-smoke-mfs.img"
     ext2_copy = args.build + "/root-smoke-ext2.img"
 
+    host_checks = []
+
     try:
         shutil.copyfile(args.image, root_copy)
         shutil.copyfile(args.ext2_image, ext2_copy)
@@ -305,9 +413,16 @@ def main(argv: list) -> int:
         first = run_machine(root_copy, ROOT_COMMANDS, args.timeout, args.build)
         checks, microfs_answers = root_checks("mfs", first, "mfs")
 
-        # The same commands on the second root, and the FAT32 volume of its
-        # second partition after them.
-        second = run_machine(ext2_copy, ROOT_COMMANDS + DATA_COMMANDS, args.timeout, args.build)
+        # The same commands on the second root, the FAT32 volume of its
+        # second partition after them, and the memory a program maps of it.
+        second = run_machine(
+            ext2_copy, ROOT_COMMANDS + DATA_COMMANDS + MMAP_COMMANDS, args.timeout, args.build
+        )
+
+        # The volume of the mapping is read by the tools of the host before
+        # the copy goes: e2fsck and debugfs are the two readers of a volume
+        # that this machine did not write with its own code.
+        host_checks = mapped_file_checks(ext2_copy, second)
     except (FileNotFoundError, OSError) as error:
         print(f"root: {error}", file=sys.stderr)
         return 2
@@ -319,6 +434,7 @@ def main(argv: list) -> int:
     ext2_checks, ext2_replies = root_checks("ext2", second, "ext2")
     checks += ext2_checks
     checks += data_checks("ext2", second)
+    checks += host_checks
 
     # --- the two roots are the same machine
     # The listing of /bin is the same tree: the two volumes carry the same

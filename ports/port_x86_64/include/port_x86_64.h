@@ -338,6 +338,18 @@ int port_x86_64_paging_map_user(k_u64_t cr3, k_u64_t vaddr, k_u64_t paddr, k_siz
 void *port_x86_64_paging_phys(k_u64_t cr3, k_u64_t vaddr);
 
 /*
+ * The pages of a program that the kernel makes on demand (kernel/port/mm.h):
+ * a page that is not there yet, a read-only page that becomes writable, a
+ * private copy of a page, and the page that goes. The address of the kernel
+ * that holds the bytes is the answer of the first three, NULL when the space
+ * or the frame is not there.
+ */
+void *port_x86_64_paging_map_page(k_u64_t cr3, k_u64_t vaddr, k_u32_t flags);
+bool port_x86_64_paging_page_writable(k_u64_t cr3, k_u64_t vaddr);
+bool port_x86_64_paging_page_private(k_u64_t cr3, k_u64_t vaddr);
+void port_x86_64_paging_unmap_page(k_u64_t cr3, k_u64_t vaddr);
+
+/*
  * The store of the kernel into a read-only page of a program: this space gets
  * a private copy of the page as data (writable and NX) so that the store can
  * happen, and the code of any space that shares the old frame is untouched.
@@ -617,6 +629,20 @@ static inline k_u64_t port_x86_64_bus_phys(const void *ptr)
 #define PORT_X86_64_USER_BASE 0x02000000u  /* 32 MiB */
 #define PORT_X86_64_USER_LIMIT 0x03000000u /* 48 MiB */
 #define PORT_X86_64_USER_PHYS 0x04000000u  /* 64 MiB */
+
+/*
+ * The top of the window, from the last page down: the stack of the program is
+ * 64 KiB, the page below it is not mapped (the guard of an overflow), and the
+ * page below that holds the restorer of a signal handler. Everything below
+ * the restorer belongs to the heap and to `mmap` (kernel/mm.h), and the
+ * kernel may not place a mapping above it.
+ */
+#define PORT_X86_64_USER_STACK_SIZE (64u * 1024u)
+#define PORT_X86_64_USER_STACK_OFFSET                                                              \
+    ((PORT_X86_64_USER_LIMIT - PORT_X86_64_USER_BASE) - PORT_X86_64_USER_STACK_SIZE)
+#define PORT_X86_64_USER_GUARD_OFFSET (PORT_X86_64_USER_STACK_OFFSET - 4096u)
+#define PORT_X86_64_USER_RESTORER_OFFSET (PORT_X86_64_USER_GUARD_OFFSET - 4096u)
+#define PORT_X86_64_USER_TOP (PORT_X86_64_USER_BASE + PORT_X86_64_USER_RESTORER_OFFSET)
 
 /* --- what the boot of the platform learned -------------------------------- */
 

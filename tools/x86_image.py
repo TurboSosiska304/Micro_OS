@@ -48,6 +48,11 @@ PROGRAMS = [
     "badptr",
     "signals",
     "procs",
+    # The gates of the first lane of 1.6: the wait for a descriptor, the
+    # memory a program maps, and the measurement of a program of 4 MiB.
+    "poll",
+    "mmap",
+    "big",
     # The floating point state of a task (K9): three tasks compute in double
     # at once and the smoke test reads the number of each of them.
     "fpu2",

@@ -334,7 +334,7 @@ k_u32_t k_port_cpu_id(void)
  * for a module of Linux.
  */
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 11u
+#define PORT_API_MINOR 12u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_host does not speak the contract of this kernel");
@@ -397,6 +397,81 @@ int k_port_console_poll(void)
     }
 
     return k_port_console_getchar();
+}
+
+/*
+ * The memory a program can map. The host is a process: a task of the kernel
+ * and a program of it share the address space of the process, and there is no
+ * window of addresses to hand a program page by page. `mmap` is ENOSYS here,
+ * as it is on the board, and the x86-64 port is the machine that has the
+ * pages (kernel/port/mm.h).
+ */
+bool k_port_mm_supported(void)
+{
+    return false;
+}
+
+k_u64_t k_port_mm_base(void)
+{
+    return 0;
+}
+
+k_u64_t k_port_mm_limit(void)
+{
+    return 0;
+}
+
+k_u64_t k_port_mm_top(void)
+{
+    return 0;
+}
+
+k_u64_t k_port_mm_current(void)
+{
+    return 0;
+}
+
+void *k_port_mm_page(k_u64_t space, k_u64_t vaddr, k_u32_t prot)
+{
+    K_UNUSED(space);
+    K_UNUSED(vaddr);
+    K_UNUSED(prot);
+    return NULL;
+}
+
+void *k_port_mm_writable(k_u64_t space, k_u64_t vaddr)
+{
+    K_UNUSED(space);
+    K_UNUSED(vaddr);
+    return NULL;
+}
+
+void *k_port_mm_private(k_u64_t space, k_u64_t vaddr)
+{
+    K_UNUSED(space);
+    K_UNUSED(vaddr);
+    return NULL;
+}
+
+bool k_port_mm_present(k_u64_t space, k_u64_t vaddr)
+{
+    K_UNUSED(space);
+    K_UNUSED(vaddr);
+    return false;
+}
+
+void *k_port_mm_phys(k_u64_t space, k_u64_t vaddr)
+{
+    K_UNUSED(space);
+    K_UNUSED(vaddr);
+    return NULL;
+}
+
+void k_port_mm_unmap(k_u64_t space, k_u64_t vaddr, k_size_t len)
+{
+    K_UNUSED(space);
+    K_UNUSED(vaddr);
+    K_UNUSED(len);
 }
 
 /* --- memory --- */

@@ -19,7 +19,9 @@
 #include <string.h>
 
 #include "kernel/clock.h"
+#include "kernel/console.h"
 #include "kernel/log.h"
+#include "kernel/mm.h"
 #include "kernel/cpu.h"
 #include "kernel/port.h"
 #include "kernel/port/cpu.h"
@@ -297,6 +299,11 @@ int k_port_console_poll(void)
     }
 
     if ((port_inb(COM1_LSR) & 0x01) != 0) {
+        /* The serial port has no interrupt of its own in this port: the byte
+         * is found by a poll, and finding it is the moment a task that waits
+         * for the console in `poll` can be told. */
+        k_console_input_notify();
+
         return (int)port_inb(COM1);
     }
 
@@ -713,31 +720,52 @@ static const char *exception_name(k_u64_t vector)
 int port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs)
 {
     /*
-     * The first write into a page a fork made read-only is not a failure:
-     * the page is copied for this address space and the instruction that
-     * faulted is run again by the stub. The write may come from the program
-     * or from the kernel on its behalf (the status of waitpid, the buffer of
-     * a read), so both rings take this way.
+     * A page fault of the window of the programs is one of three things: the
+     * first write into a page a fork made read-only (copy on write), a store
+     * of the kernel into the text of a program, or a page of a mapping of the
+     * program that is not there yet (kernel/mm.h). All three are answered by
+     * making the page right and running the instruction again; anything else
+     * is the fault of the program, and a fault of ring 3 is the end of the
+     * task and not of the machine.
      */
-    if (vector == 14u && (error & 0x3u) == 0x3u) {
+    if (vector == 14u) {
         k_u64_t address;
+        bool write = (error & 0x2u) != 0;
+        bool present = (error & 0x1u) != 0;
 
         __asm__ volatile("movq %%cr2, %0" : "=r"(address));
 
-        if (port_x86_64_paging_handle_cow(port_x86_64_current_cr3(), address)) {
-            return 1;
+        if (present) {
+            if (port_x86_64_paging_handle_cow(port_x86_64_current_cr3(), address)) {
+                return 1;
+            }
+
+            /*
+             * A store of the kernel into the text of a program is not a copy
+             * of a page a fork shared, but it is the same answer: this space
+             * gets a private copy of the page as data, and the instruction is
+             * run again. A store of ring 3 into a read-only page never comes
+             * here - its error code says user (bit 2) - and is the fault of
+             * the program it always was.
+             */
+            if ((error & 0x4u) == 0u &&
+                port_x86_64_paging_allow_kernel_write(port_x86_64_current_cr3(), address)) {
+                return 1;
+            }
         }
 
         /*
-         * A store of the kernel into the text of a program is not a copy of a
-         * page a fork shared, but it is the same answer: this space gets a
-         * private copy of the page as data, and the instruction is run again.
-         * A store of ring 3 into a read-only page never comes here - its
-         * error code says user (bit 2) - and is the fault of the program it
-         * always was.
+         * The page of a mapping: it is made, filled from the file or with
+         * zeros, and the instruction that faulted runs again. The fill reads
+         * the filesystem, which takes a lock and waits for the disk, so the
+         * interrupts of the machine are on for it - the stub of an exception
+         * enters with them off, and the task that holds the lock of the
+         * volume has to be able to run. The iretq of the stub puts the flags
+         * of the interrupted code back.
          */
-        if ((error & 0x4u) == 0u &&
-            port_x86_64_paging_allow_kernel_write(port_x86_64_current_cr3(), address)) {
+        __asm__ volatile("sti" : : : "memory");
+
+        if (k_mm_fault(k_mm_current(), address, write) == 0) {
             return 1;
         }
     }
@@ -1582,7 +1610,7 @@ const char *k_port_arch(void)
 }
 
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 11u
+#define PORT_API_MINOR 12u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_x86_64 does not speak the contract of this kernel");

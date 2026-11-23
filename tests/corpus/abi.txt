@@ -32,7 +32,7 @@
 # second door of stat, ADR 0013).
 
 # The number of the calls, compared with ksys_count().
-count 43
+count 48
 
 # The table: number name arity result.
 #
@@ -90,6 +90,11 @@ ksys 39 setuid 1 int
 ksys 40 setgid 1 int
 ksys 41 rmdir 1 int
 ksys 42 fstat 2 int
+ksys 43 poll 3 int
+ksys 44 mmap 6 ptr
+ksys 45 munmap 2 int
+ksys 46 msync 2 int
+ksys 47 brk 1 ssize
 
 # The errors (kernel/errno.h). EEXIST and ESRCH share the number -3, which is
 # why there are two names on one line of the header: the frozen table had the
@@ -153,6 +158,24 @@ const KSYS_SIG_IGN 1
 const KSYS_PATH_MAX 127
 const KSYS_MAX_IO 65536
 
+# The bits of a poll and the length of its list (kernel/ksys.h). The three
+# bits are the ones of Linux; the list is as long as the table of the
+# descriptors of a task, because a longer one names a descriptor twice.
+const KSYS_POLLIN 1
+const KSYS_POLLOUT 4
+const KSYS_POLLERR 8
+const KSYS_POLL_MAX 16
+
+# The protection and the flags of a mapping, and the page it is made of
+# (kernel/ksys.h). The numbers of the three bits are the ones of Linux.
+const KSYS_PROT_READ 1
+const KSYS_PROT_WRITE 2
+const KSYS_PROT_EXEC 4
+const KSYS_MAP_SHARED 1
+const KSYS_MAP_PRIVATE 2
+const KSYS_MAP_ANONYMOUS 4
+const KSYS_PAGE_SIZE 4096
+
 # The header of a program image (kernel/exec.h): the magic as the four bytes
 # of the file read as a little-endian word, the version, the size of the
 # header, the numbers of the machines and the ceiling of the zeroed part.
@@ -189,7 +212,12 @@ offset 8 vfs_dirent inode 36
 offset 8 vfs_dirent type 40
 offset 8 vfs_dirent size 48
 
-size 8 k_exec_image 64
+size 8 ksys_pollfd 8
+offset 8 ksys_pollfd fd 0
+offset 8 ksys_pollfd events 4
+offset 8 ksys_pollfd revents 6
+
+size 8 k_exec_image 72
 offset 8 k_exec_image data 0
 offset 8 k_exec_image size 8
 offset 8 k_exec_image arch 16
@@ -198,6 +226,7 @@ offset 8 k_exec_image text_size 32
 offset 8 k_exec_image data_size 40
 offset 8 k_exec_image bss_size 48
 offset 8 k_exec_image envp 56
+offset 8 k_exec_image path 64
 
 # The layout on a 32-bit machine: the board (Xtensa). Only the structures with
 # a pointer or an argument of a call in them move: a k_size_t and a ksys_arg_t
@@ -226,7 +255,12 @@ offset 4 vfs_dirent inode 36
 offset 4 vfs_dirent type 40
 offset 4 vfs_dirent size 48
 
-size 4 k_exec_image 32
+size 4 ksys_pollfd 8
+offset 4 ksys_pollfd fd 0
+offset 4 ksys_pollfd events 4
+offset 4 ksys_pollfd revents 6
+
+size 4 k_exec_image 36
 offset 4 k_exec_image data 0
 offset 4 k_exec_image size 4
 offset 4 k_exec_image arch 8
@@ -235,6 +269,7 @@ offset 4 k_exec_image text_size 16
 offset 4 k_exec_image data_size 20
 offset 4 k_exec_image bss_size 24
 offset 4 k_exec_image envp 28
+offset 4 k_exec_image path 32
 
 # There is no k_rlimit in 1.0: a task of this system has no limit of its own
 # yet, and the limits are a line of the gate of the release (docs/releases/

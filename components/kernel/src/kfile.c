@@ -15,6 +15,7 @@
 #include "kernel/errno.h"
 #include "kernel/lock.h"
 #include "kernel/sched.h"
+#include "kernel/wait.h"
 
 /* One pipe of the system. */
 struct k_pipe {
@@ -156,6 +157,7 @@ static struct k_pipe *pipe_find_free_locked(void)
 static void pipe_end_close(struct kfile *f)
 {
     struct k_pipe *p = f->pipe;
+    bool changed = false;
 
     if (p == NULL || k_mutex_lock(&g_fd_lock) != 0) {
         return;
@@ -172,12 +174,25 @@ static void pipe_end_close(struct kfile *f)
             }
         }
 
+        changed = true;
+
         if (p->readers == 0 && p->writers == 0) {
             memset(p, 0, sizeof(*p));
         }
     }
 
     k_mutex_unlock(&g_fd_lock);
+
+    /*
+     * The end of the file and the broken end are states a waiter is waiting
+     * for: a reader that waits for a byte of a pipe whose writer just closed
+     * has to see the zero of the end, and a writer whose reader went away has
+     * to see EPIPE. The wakeup is outside the lock of the table because it
+     * takes the lock of the scheduler.
+     */
+    if (changed) {
+        k_wait_wake(K_WAIT_CHANNEL_PIPES);
+    }
 }
 
 /* Take `n` bytes out of the ring into `out`; the caller holds the lock. */
@@ -211,11 +226,19 @@ static void pipe_put_locked(struct k_pipe *p, const k_u8_t *in, k_size_t n)
 static k_ssize_t pipe_read(struct kfile *f, void *buf, k_size_t count)
 {
     struct k_pipe *p = f->pipe;
-    k_u32_t waited = 0;
+    k_u64_t deadline;
 
     if (p == NULL) {
         return KERR_BADF;
     }
+
+    /*
+     * The bound of the wait is one budget of time and not one wakeup: a
+     * wakeup that finds the pipe empty again - another reader took the bytes,
+     * or the writer woke this one for a byte it did not get - goes back to
+     * sleep for what is left of the bound.
+     */
+    deadline = k_sched_uptime_ms() + KFILE_PIPE_WAIT_MS;
 
     for (;;) {
         k_size_t take;
@@ -234,6 +257,10 @@ static k_ssize_t pipe_read(struct kfile *f, void *buf, k_size_t count)
             take = K_MIN(count, (k_size_t)p->count);
             pipe_take_locked(p, (k_u8_t *)buf, take);
             k_mutex_unlock(&g_fd_lock);
+
+            /* The room this read made is what a writer waits for. */
+            k_wait_wake(K_WAIT_CHANNEL_PIPES);
+
             return (k_ssize_t)take;
         }
 
@@ -250,12 +277,26 @@ static k_ssize_t pipe_read(struct kfile *f, void *buf, k_size_t count)
 
         k_mutex_unlock(&g_fd_lock);
 
-        if (waited >= KFILE_PIPE_WAIT_MS) {
-            return KERR_AGAIN;
-        }
+        {
+            k_u64_t now = k_sched_uptime_ms();
+            int answer;
 
-        k_sched_sleep_ms(1);
-        waited++;
+            if (now >= deadline) {
+                return KERR_AGAIN;
+            }
+
+            /*
+             * The wait is the scheduler's: the task leaves the run queue and
+             * the writer wakes it when it puts a byte into the pipe. The bound
+             * is the one of the contract, so a reader whose writer is alive
+             * but silent answers EAGAIN instead of waiting forever.
+             */
+            answer = k_wait_block(K_WAIT_CHANNEL_PIPES, NULL, (k_u32_t)(deadline - now));
+
+            if (answer == K_WAIT_SIGNAL) {
+                return KERR_INTR;
+            }
+        }
     }
 }
 
@@ -264,11 +305,13 @@ static k_ssize_t pipe_write(struct kfile *f, const void *buf, k_size_t count)
     struct k_pipe *p = f->pipe;
     const k_u8_t *in = (const k_u8_t *)buf;
     k_size_t done = 0;
-    k_u32_t waited = 0;
+    k_u64_t deadline;
 
     if (p == NULL) {
         return KERR_BADF;
     }
+
+    deadline = k_sched_uptime_ms() + KFILE_PIPE_WAIT_MS;
 
     for (;;) {
         k_size_t room;
@@ -304,18 +347,103 @@ static k_ssize_t pipe_write(struct kfile *f, const void *buf, k_size_t count)
 
         k_mutex_unlock(&g_fd_lock);
 
+        if (done > 0) {
+            /* The bytes are in the ring: a reader that waits may take them. */
+            k_wait_wake(K_WAIT_CHANNEL_PIPES);
+        }
+
         if (done == count) {
             return (k_ssize_t)done;
         }
 
-        /* The pipe is full: wait for the reader to make room. */
-        if (waited >= KFILE_PIPE_WAIT_MS) {
-            return (done > 0) ? (k_ssize_t)done : KERR_AGAIN;
+        /* The pipe is full: wait for the reader to make room, inside the one
+         * budget of the wait. */
+        {
+            k_u64_t now = k_sched_uptime_ms();
+            int answer;
+
+            if (now >= deadline) {
+                return (done > 0) ? (k_ssize_t)done : KERR_AGAIN;
+            }
+
+            answer = k_wait_block(K_WAIT_CHANNEL_PIPES, NULL, (k_u32_t)(deadline - now));
+
+            if (answer == K_WAIT_SIGNAL) {
+                return (done > 0) ? (k_ssize_t)done : KERR_INTR;
+            }
+        }
+    }
+}
+
+/*
+ * The state of an object for `poll`. A regular file is always ready: this
+ * system has no file whose read would block, and a write of a file is a
+ * write of the filesystem. A pipe answers the three bits that matter: a byte
+ * to read or the end of the file, room to write, and the error of an end that
+ * is gone.
+ */
+k_u16_t kfile_poll(struct kfile *f, k_u16_t events)
+{
+    struct k_pipe *p;
+    k_u16_t revents = 0;
+
+    if (f == NULL) {
+        return KFILE_POLLERR;
+    }
+
+    if (f->kind != KFILE_PIPE) {
+        /* A file and a device of the VFS: readable and writable when the
+         * access of the descriptor allows it. A device that would block - the
+         * console - is reported by the caller of this function, which knows
+         * which device it is (kernel/ksys.c, the console of the system). */
+        if ((events & KFILE_POLLIN) != 0) {
+            revents |= KFILE_POLLIN;
         }
 
-        k_sched_sleep_ms(1);
-        waited++;
+        if ((events & KFILE_POLLOUT) != 0) {
+            revents |= KFILE_POLLOUT;
+        }
+
+        return revents;
     }
+
+    p = f->pipe;
+    if (p == NULL || k_mutex_lock(&g_fd_lock) != 0) {
+        return KFILE_POLLERR;
+    }
+
+    if (!p->used) {
+        k_mutex_unlock(&g_fd_lock);
+        return KFILE_POLLERR;
+    }
+
+    if (f->pipe_write) {
+        if (p->readers == 0) {
+            /* A write of this end is EPIPE and will never succeed. */
+            revents |= KFILE_POLLERR;
+        } else if (p->count < KFILE_PIPE_SIZE) {
+            revents |= KFILE_POLLOUT;
+        }
+    } else {
+        if (p->count > 0 || p->writers == 0) {
+            /* A byte is there, or the end of the file is: a read answers
+             * without waiting in both cases. */
+            revents |= KFILE_POLLIN;
+        }
+    }
+
+    k_mutex_unlock(&g_fd_lock);
+
+    /* Only what was asked for is reported, except the error: a caller that
+     * waits for a byte has to learn that the end is gone. */
+    revents &= (k_u16_t)(events | KFILE_POLLERR);
+
+    return revents;
+}
+
+void kfile_wake(void)
+{
+    k_wait_wake(K_WAIT_CHANNEL_PIPES);
 }
 
 /* --- the descriptors --- */

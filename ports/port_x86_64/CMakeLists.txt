@@ -467,6 +467,17 @@ add_libc_program(rm SOURCES "${LIBC_USER_DIR}/src/unistd_ext.c"
 add_libc_program(rmdir SOURCES "${LIBC_USER_DIR}/src/unistd_ext.c"
                                "${LIBC_USER_DIR}/src/stat.c")
 add_libc_program(spawn)
+# The gates of the first lane of 1.6: `poll` waits for a descriptor in the
+# scheduler, `mmap` reads a file through a mapping and writes it back, and
+# `big` measures the memory a program of 4 MiB costs. The three call the
+# POSIX wrappers of unistd_ext.c (pipe, fork, poll, mmap, brk), which the
+# small runtime does not carry.
+add_libc_program(poll SOURCES "${LIBC_USER_DIR}/src/unistd_ext.c"
+                           "${LIBC_USER_DIR}/src/stat.c"
+                           "${LIBC_USER_DIR}/src/usleep.c")
+add_libc_program(mmap SOURCES "${LIBC_USER_DIR}/src/unistd_ext.c"
+                              "${LIBC_USER_DIR}/src/stat.c")
+add_libc_program(big)
 
 # --- the interface: /bin/ui (ADR 0028) and the programs of ADR 0030 ---------
 #
@@ -1365,6 +1376,7 @@ add_executable(microos64
     src/inputdev.c
     src/gdt.c
     src/paging.c
+    src/mm.c
     src/cpu.c
     src/smp.c
     src/lapic.c

@@ -29,6 +29,7 @@
 #include "kernel/errno.h"
 #include "kernel/ksys.h"
 #include "kernel/log.h"
+#include "kernel/mm.h"
 #include "kernel/port.h"
 #include "kernel/port/exec.h"
 #include "kernel/signal.h"
@@ -49,9 +50,9 @@
  * walking into its own data, and a fault of a program is a line on the
  * console instead of a broken machine.
  */
-#define PORT_EXEC_STACK_SIZE (64u * 1024u)
-#define PORT_EXEC_STACK_OFFSET (PORT_EXEC_WINDOW - PORT_EXEC_STACK_SIZE)
-#define PORT_EXEC_GUARD_OFFSET (PORT_EXEC_STACK_OFFSET - PAGE_SIZE)
+#define PORT_EXEC_STACK_SIZE PORT_X86_64_USER_STACK_SIZE
+#define PORT_EXEC_STACK_OFFSET PORT_X86_64_USER_STACK_OFFSET
+#define PORT_EXEC_GUARD_OFFSET PORT_X86_64_USER_GUARD_OFFSET
 
 /*
  * The page of the restorer of a signal handler. It is one page below the
@@ -67,7 +68,7 @@
  * cannot build such a frame itself: only the kernel knows where the
  * interrupted instruction was and with which registers.
  */
-#define PORT_EXEC_RESTORER_OFFSET (PORT_EXEC_GUARD_OFFSET - PAGE_SIZE)
+#define PORT_EXEC_RESTORER_OFFSET PORT_X86_64_USER_RESTORER_OFFSET
 #define PORT_EXEC_RESTORER (PORT_EXEC_BASE + PORT_EXEC_RESTORER_OFFSET)
 
 static const k_u8_t g_restorer_code[] = {
@@ -583,9 +584,16 @@ static int port_exec_place(const struct k_exec_image *image, char *const argv[],
     k_size_t env_end = 0;
     k_size_t env_strings = 0;
     k_size_t env_array_off = 0;
+    k_size_t vectors_end = 0;
     k_size_t index;
 
-    if (image == NULL || image->data == NULL || image->text_size == 0) {
+    if (image == NULL || image->text_size == 0) {
+        return -1;
+    }
+
+    /* The bytes are in the memory of the caller or in the file the port
+     * maps; neither is an image. */
+    if (image->data == NULL && image->path == NULL) {
         return -1;
     }
 
@@ -610,6 +618,16 @@ static int port_exec_place(const struct k_exec_image *image, char *const argv[],
     }
 
     end = source + image->bss_size;
+
+    /*
+     * A mapped image and its vectors are page aligned: the heap of the
+     * program begins on the page after the image, and the vectors of the
+     * entry are the first thing in it.
+     */
+    if (image->data == NULL) {
+        end = align_up(end, PAGE_SIZE);
+    }
+
     if (!image_fits(image, source, end)) {
         kerror("x86_64: the image (%u bytes) does not fit the window of the programs",
                (unsigned)end);
@@ -685,8 +703,9 @@ static int port_exec_place(const struct k_exec_image *image, char *const argv[],
      * keeps under the guard page of the stack; the one that ends last
      * decides. A zero vector occupies nothing and passes.
      */
-    if (arg_end > (k_size_t)PORT_EXEC_RESTORER_OFFSET ||
-        env_end > (k_size_t)PORT_EXEC_RESTORER_OFFSET) {
+    vectors_end = (env_end > arg_end) ? env_end : arg_end;
+
+    if (vectors_end > (k_size_t)PORT_EXEC_RESTORER_OFFSET) {
         kerror("x86_64: the arguments or the environment do not fit below the stack");
         return -1;
     }
@@ -698,35 +717,12 @@ static int port_exec_place(const struct k_exec_image *image, char *const argv[],
     }
 
     /*
-     * The image is mapped page by page; the rest of the window is left out on
-     * purpose, so a program that runs past its data or below its stack meets
-     * a page that is not there instead of a page of another program.
-     *
-     * The text - the header and the code - is the one executable region of a
-     * program and it is not writable. Everything after it, the initialised
-     * data, the bss, the vector of the arguments and the environment, is
-     * writable and NX: the program may compute into it, never run it.
+     * The stack and the restorer of a handler are made now, because the
+     * kernel writes them and the program may reach them before any of its
+     * own pages. The rest of the window is left out on purpose, so a program
+     * that runs past its data or below its stack meets a page that is not
+     * there instead of a page of another program.
      */
-    if (!space_map(space, 0, text_end, PORT_X86_64_PAGE_EXEC)) {
-        goto fail;
-    }
-
-    rw_end = align_up(end, PAGE_SIZE);
-
-    if (user_argc > 0 || image->envp != NULL) {
-        k_size_t vectors_end = (env_end > arg_end) ? env_end : arg_end;
-        k_size_t vectors_page = align_up(vectors_end, PAGE_SIZE);
-
-        if (vectors_page > rw_end) {
-            rw_end = vectors_page;
-        }
-    }
-
-    if (rw_end > text_end &&
-        !space_map(space, text_end, rw_end - text_end, PORT_X86_64_PAGE_WRITE)) {
-        goto fail;
-    }
-
     if (!space_map(space, PORT_EXEC_STACK_OFFSET, PORT_EXEC_STACK_SIZE, PORT_X86_64_PAGE_WRITE)) {
         goto fail;
     }
@@ -737,26 +733,75 @@ static int port_exec_place(const struct k_exec_image *image, char *const argv[],
         goto fail;
     }
 
+    if (image->data == NULL) {
+        /*
+         * The image is a file and not a block of the kernel: the regions of
+         * the text, the data and the bss are recorded and the pages come from
+         * the file when the program touches them (kernel/mm.h). A program of
+         * 4 MiB costs the pages it runs, and no second copy of it exists.
+         */
+        if (k_mm_image(space, image) != 0) {
+            kerror("x86_64: the image %s cannot be mapped", image->path);
+            goto fail;
+        }
+
+        if (vectors_end > end) {
+            if (k_mm_brk(space, PORT_EXEC_BASE + (k_u64_t)align_up(vectors_end, PAGE_SIZE), NULL) !=
+                0) {
+                goto fail;
+            }
+
+            if (k_mm_touch(space, PORT_EXEC_BASE + (k_u64_t)end, vectors_end - (k_size_t)end,
+                           true) != 0) {
+                kerror("x86_64: the vectors of the entry cannot be written");
+                goto fail;
+            }
+        }
+    } else {
+        /*
+         * The machine has the bytes in the kernel: the image is mapped page
+         * by page. The text - the header and the code - is the one executable
+         * region of a program and it is not writable. Everything after it,
+         * the initialised data, the bss, the vector of the arguments and the
+         * environment, is writable and NX: the program may compute into it,
+         * never run it.
+         */
+        if (!space_map(space, 0, text_end, PORT_X86_64_PAGE_EXEC)) {
+            goto fail;
+        }
+
+        rw_end = align_up(end, PAGE_SIZE);
+
+        if (vectors_end > rw_end) {
+            rw_end = align_up(vectors_end, PAGE_SIZE);
+        }
+
+        if (rw_end > text_end &&
+            !space_map(space, text_end, rw_end - text_end, PORT_X86_64_PAGE_WRITE)) {
+            goto fail;
+        }
+
+        /*
+         * The bytes live in the frames of the arena; the program sees them
+         * through its page tables at the base of the window. The header is
+         * copied with the segments because the entry of the image is an offset
+         * from its start.
+         */
+        if (!space_write(space, PORT_EXEC_BASE, image->data, source)) {
+            goto fail;
+        }
+
+        if (image->bss_size != 0 &&
+            !space_zero(space, PORT_EXEC_BASE + (k_u64_t)source, image->bss_size)) {
+            goto fail;
+        }
+    }
+
     /* The tables have to keep the promise before a byte of the program runs:
      * a page that is writable and executable at once is a refusal here and
      * not a fault on the machine. */
     if (port_x86_64_paging_audit(space) != 0) {
         kerror("x86_64: the map of the program is not W^X");
-        goto fail;
-    }
-
-    /*
-     * The bytes live in the frames of the arena; the program sees them
-     * through its page tables at the base of the window. The header is copied
-     * with the segments because the entry of the image is an offset from its
-     * start.
-     */
-    if (!space_write(space, PORT_EXEC_BASE, image->data, source)) {
-        goto fail;
-    }
-
-    if (image->bss_size != 0 &&
-        !space_zero(space, PORT_EXEC_BASE + (k_u64_t)source, image->bss_size)) {
         goto fail;
     }
 

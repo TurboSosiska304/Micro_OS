@@ -74,6 +74,8 @@ set(MICROOS_LIBC_USER_HEADERS
     "${MICROOS_LIBC_USER_DIR}/include/libgen.h"
     "${MICROOS_LIBC_USER_DIR}/include/limits.h"
     "${MICROOS_LIBC_USER_DIR}/include/pwd.h"
+    "${MICROOS_LIBC_USER_DIR}/include/poll.h"
+    "${MICROOS_LIBC_USER_DIR}/include/sys/mman.h"
     "${MICROOS_LIBC_USER_DIR}/include/regex.h"
     "${MICROOS_LIBC_USER_DIR}/include/stdint.h"
     "${MICROOS_LIBC_USER_DIR}/include/strings.h"

@@ -434,6 +434,21 @@ COMMANDS = [
     # `-batch` is the shell of the release with no prompt and no editor: the
     # script of a redirect is the same one and the answers are the same.
     "exec /bin/sqlite3 -batch /tmp/sqlite.db < /etc/sql-read.sql",
+    # The first lane of 1.6. `poll` waits for a descriptor in the scheduler:
+    # two pipes, the byte a child writes while the task waits, a deadline and
+    # a sleep of no descriptor. `mmap` reads a file through a window of
+    # mappings, writes a private page that the file does not take and a shared
+    # one that it does, and moves the heap until it meets the stack. `big` is
+    # a program of 4 MiB that measures the memory it costs: the image is
+    # mapped from the file, so the heap of the kernel does not grow with it.
+    "cat /proc/meminfo",
+    "exec /bin/poll",
+    "exec /bin/mmap",
+    "head -n 1 /mm.txt",
+    "wc -c /mm.txt",
+    "exec /bin/big",
+    "cat /proc/meminfo",
+    "rm /mm.txt",
 ]
 
 # A directory wider than the table of 64 entries the shell used to keep: the
@@ -978,12 +993,15 @@ OVERSIZE_FILLER = os.path.join(BUILD, "oversize.bin")
 
 
 def build_oversize_image() -> str:
-    """A 16 MB disk with one file of K_EXEC_MAX_IMAGE + 1 zero bytes.
+    """A 32 MB disk with one file of K_EXEC_MAX_IMAGE + 1 zero bytes.
 
     The volume is written once and kept: it carries the programs of the build
     too, but this boot runs only the big file and the shell, so a rebuild of
     the kernel does not make it stale, and the 8 MiB of blocks are the slowest
-    part of the smoke test.
+    part of the smoke test. The volume is 32 MB and not 16: the image of the
+    programs carries a program of 4 MiB (/bin/big, the measurement of the
+    memory of a run), and 8 MiB of file plus 4 MiB of program do not fit a
+    volume of 16.
     """
     if os.path.isfile(OVERSIZE_IMAGE):
         return OVERSIZE_IMAGE
@@ -1004,7 +1022,7 @@ def build_oversize_image() -> str:
             "--image",
             OVERSIZE_IMAGE,
             "--size-mb",
-            "16",
+            "32",
             "--program",
             f"/big.bin={OVERSIZE_FILLER}",
         ],
@@ -2776,6 +2794,114 @@ def check(output: str) -> list:
         "the shell survives a fault of a program",
         re.search(r"MicroOS \d+\.\d+\.\d+", answer("uname", 1)) is not None,
     )
+
+    # --- the first lane of 1.6: the wait for a descriptor
+    poll = answer("exec /bin/poll")
+    expect("poll sees the state of two empty pipes", "poll: empty, ready=0" in poll, poll[-400:])
+    expect(
+        "poll finds the byte of the second pipe only",
+        "poll: one byte, ready=1" in poll and "poll: the second entry says 1" in poll,
+    )
+    expect(
+        "poll ends a wait at its deadline",
+        "poll: timeout, ready=0" in poll
+        and re.search(r"poll: timeout, ms=(1[2-9][0-9]|[2-9][0-9][0-9])", poll) is not None,
+        poll[-200:],
+    )
+    expect(
+        "a poll of no descriptor is a sleep",
+        "poll: sleep, ready=0" in poll
+        and re.search(r"poll: sleep, ms=([6-9][0-9]|[1-9][0-9][0-9])", poll) is not None,
+        poll[-200:],
+    )
+    # The wait is the scheduler's: the byte is written by a child 80 ms after
+    # the poll began, and the answer comes when it arrives and not at a
+    # deadline - the call had none.
+    wait = re.search(r"poll: wait, ms=(\d+)", poll)
+    expect(
+        "poll wakes on the byte of another task",
+        "poll: wait, ready=1" in poll and "poll: z" in poll,
+        poll[-200:],
+    )
+    expect(
+        "the wake is the child's and not a timeout",
+        wait is not None and 60 <= int(wait.group(1)) < 400,
+        wait.group(0) if wait else "no line",
+    )
+    expect(
+        "the end of a pipe is readable",
+        "poll: end of file, ready=1" in poll and "poll: end of file says 1" in poll,
+    )
+    expect(
+        "a writing end whose reader is gone is an error",
+        "poll: broken pipe says 8" in poll,
+        "POLLERR is the error of the object",
+    )
+    expect("a number that is not open is an error", "poll: bad descriptor says 8" in poll)
+    expect("the poll program ends with its status", "poll: done" in poll and "the program exited with 0" in poll)
+
+    # --- the memory a program maps
+    mapping = answer("exec /bin/mmap")
+    size = re.search(r"mmap: file bytes (\d+)", mapping)
+    through_mmap = re.search(r"mmap: sum through mmap (-?\d+)", mapping)
+    through_read = re.search(r"mmap: sum through read (-?\d+)", mapping)
+    expect("a file of the volume is mapped", size is not None and int(size.group(1)) > 0, mapping[:300])
+    expect(
+        "the bytes of the mapping are the bytes of the file",
+        through_mmap is not None
+        and through_read is not None
+        and through_mmap.group(1) == through_read.group(1),
+        f"{through_mmap.group(1) if through_mmap else '-'} against"
+        f" {through_read.group(1) if through_read else '-'}",
+    )
+    # A private page is a copy: the write is in the memory of the program and
+    # the file keeps its own byte. A shared page is the file: what is written
+    # is what the next reader of the file sees.
+    expect(
+        "a private page takes a write the file does not",
+        "mmap: the private page begins with 97" in mapping
+        and "mmap: the file still begins with 97" in mapping,
+    )
+    expect("a shared page is written back by msync", "mmap: the file says HELLO" in mapping)
+    expect("an anonymous page reads as zeros", "mmap: the anonymous page begins with 0" in mapping)
+    expect("the heap grows by four pages", "mmap: the heap grew by four pages" in mapping)
+    # The heap may not cross the stack of the program: the answer is ENOMEM
+    # (12) and not a page of the stack overwritten.
+    expect(
+        "a heap past the stack is refused with ENOMEM",
+        "mmap: the heap past the stack says 12" in mapping,
+        mapping[-300:],
+    )
+    expect("the mmap program ends with its status", "mmap: done" in mapping and "the program exited with 0" in mapping)
+
+    # The file the mapping wrote, read by another program: the first line of
+    # the file is the five bytes of the shared page.
+    written = answer("head -n 1 /mm.txt")
+    expect("another program reads the shared write", "HELLO" in written, written[-200:])
+    expect("the mapped file keeps its size", "524288 /mm.txt" in answer("wc -c /mm.txt"))
+
+    # --- the memory of a run of a program of 4 MiB
+    before = re.search(r"kernel heap: (\d+) KB free", answer("cat /proc/meminfo", 0))
+    big = answer("exec /bin/big")
+    big_line = re.search(r"big: (\d+) bytes, heap free before (\d+) KB, during (\d+) KB", big)
+    after = re.search(r"kernel heap: (\d+) KB free", answer("cat /proc/meminfo", 1))
+    expect("a program of 4 MiB runs", big_line is not None and "big: done" in big, big[:300])
+    if big_line is not None:
+        expect(
+            "the image of a program is not copied into the heap",
+            abs(int(big_line.group(3)) - int(big_line.group(2))) <= 64,
+            f"{big_line.group(2)} KB before, {big_line.group(3)} KB during",
+        )
+        expect(
+            "the memory of the program goes back with it",
+            after is not None and abs(int(after.group(1)) - int(big_line.group(3))) <= 256,
+            f"{big_line.group(3)} KB during, {after.group(1) if after else '-'} KB after",
+        )
+        expect(
+            "the heap of the kernel where it was before the program",
+            before is not None and abs(int(before.group(1)) - int(big_line.group(2))) <= 64,
+            f"{before.group(1) if before else '-'} KB before the run",
+        )
 
     return checks
 
