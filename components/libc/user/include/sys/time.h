@@ -1,11 +1,10 @@
 /*
  * Micro OS — the moment of a file and the timer of a program.
  *
- * The kernel has one clock, `uptime`, and the machine has no wall clock
- * (`docs/debts.md`): `gettimeofday` answers the moment of the boot in the
- * shape a portable source expects, because the timer of a command needs two
- * moments of one kind and not a date. The date of a file comes from the VFS
- * through `stat`, not from here.
+ * `gettimeofday` is the wall clock of the machine (the call 49, the same one
+ * `time()` asks): a timer that needs two moments of one kind gets them from
+ * it, and a command that prints a date prints the date of the machine. The
+ * moment of a file comes from the VFS through `stat`.
  */
 #ifndef MICRO_OS_LIBC_USER_SYS_TIME_H
 #define MICRO_OS_LIBC_USER_SYS_TIME_H

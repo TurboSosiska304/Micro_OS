@@ -1,12 +1,18 @@
 /*
  * Micro OS — the calendar of a program.
  *
- * The seconds come from the clock of the machine: the kernel keeps the time
- * since the boot in milliseconds and the ABI of 1.1 answers that count, not
- * the seconds of Unix. `time()` is therefore the moment of the epoch plus the
- * uptime, and the calendar is the one of UTC (the C locale has no zone): the
- * two functions `localtime` and `gmtime` answer the same structure, and the
- * cost of a real time zone is a debt of `docs/debts.md`.
+ * The seconds come from the clock of the machine, through the call 49
+ * (`KSYS_CLOCK_GETTIME`): CLOCK_REALTIME is the wall clock of Unix, which the
+ * port seeds at the boot from its own source - the BM8563 of the board, the
+ * CMOS of a laptop, the process clock of the host - and which `ntp` or
+ * `date set` corrects afterwards. CLOCK_MONOTONIC is the millisecond count of
+ * the boot, which is what `uptime` answers. A machine whose clock was never
+ * set still answers: the seconds since its boot, which is a number and not a
+ * date (docs/debts.md keeps the zone, not the clock).
+ *
+ * The calendar is the one of UTC (the C locale has no zone): the two functions
+ * `localtime` and `gmtime` answer the same structure, and the cost of a real
+ * time zone is a debt of `docs/debts.md`.
  *
  * The conversion of a day count to a date is the one of Howard Hinnant's
  * `civil_from_days`: the days are counted from 1970-01-01, the era of 400
@@ -15,6 +21,8 @@
  * type can hold.
  */
 #include "ulibc.h"
+
+#include "ulibc_internal.h"
 
 #include <errno.h>
 #include <string.h>
@@ -89,9 +97,61 @@ static struct tm *break_down(time_t seconds, struct tm *broken)
     return broken;
 }
 
+/*
+ * The moment of one of the two clocks of POSIX. The wall clock is the call 49
+ * of the kernel, with the fraction of the second it keeps; a kernel that does
+ * not answer it (an image of an older release on a machine of this one) gets
+ * the milliseconds of the boot, which is what the call answered before the
+ * wall clock existed.
+ */
+int clock_gettime(int clock, struct timespec *moment)
+{
+    struct ksys_timespec answer;
+    long rc;
+
+    if (moment == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (clock != CLOCK_REALTIME && clock != CLOCK_MONOTONIC) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    rc = __ulibc_syscall6(KSYS_CLOCK_GETTIME, (long)clock, (long)(uintptr_t)&answer, 0, 0, 0, 0);
+    if (rc < 0) {
+        long milliseconds = uptime();
+
+        if (milliseconds < 0) {
+            errno = (int)-milliseconds;
+            return -1;
+        }
+
+        moment->tv_sec = (time_t)(milliseconds / 1000);
+        moment->tv_nsec = (long)((milliseconds % 1000) * 1000000L);
+
+        return 0;
+    }
+
+    /* The wire carries two 64-bit words on both machines; a 32-bit target
+     * keeps the seconds in its own `time_t`, which reaches 2038. */
+    moment->tv_sec = (time_t)answer.tv_sec;
+    moment->tv_nsec = (long)answer.tv_nsec;
+
+    return 0;
+}
+
 time_t time(time_t *seconds)
 {
-    time_t now = (time_t)(uptime() / 1000);
+    struct timespec moment;
+    time_t now;
+
+    if (clock_gettime(CLOCK_REALTIME, &moment) != 0) {
+        return (time_t)-1;
+    }
+
+    now = moment.tv_sec;
 
     if (seconds != NULL) {
         *seconds = now;
@@ -100,33 +160,24 @@ time_t time(time_t *seconds)
     return now;
 }
 
+/*
+ * The processor time of the program, in the milliseconds of CLOCKS_PER_SEC.
+ * The kernel counts it for the CPU limit of the task and answers it with the
+ * call 50 (`getrusage`), so `clock()` is the time the program spent running
+ * and not the time that passed since the boot - which is what `time` and
+ * `CLOCK_MONOTONIC` are for.
+ */
 clock_t clock(void)
 {
-    return (clock_t)uptime();
-}
+    struct ksys_rusage usage;
+    long rc;
 
-/*
- * The moment of one of the two clocks of POSIX. The machine has one clock, the
- * monotonic count of the boot, so both numbers are the same: a caller that
- * asks for the realtime clock gets the seconds of the boot and the caller of
- * the monotonic one the same count. It is the truth of a machine whose wall
- * clock was never set (docs/debts.md).
- */
-int clock_gettime(int clock, struct timespec *moment)
-{
-    long milliseconds = uptime();
-
-    (void)clock;
-
-    if (moment == NULL) {
-        errno = EINVAL;
-        return -1;
+    rc = __ulibc_syscall6(KSYS_GETRUSAGE, (long)(uintptr_t)&usage, 0, 0, 0, 0, 0);
+    if (rc < 0) {
+        return (clock_t)-1;
     }
 
-    moment->tv_sec = (time_t)(milliseconds / 1000);
-    moment->tv_nsec = (long)((milliseconds % 1000) * 1000000L);
-
-    return 0;
+    return (clock_t)(usage.utime_ms + usage.stime_ms);
 }
 
 #ifdef ULIBC_WITH_FLOAT
@@ -412,9 +463,9 @@ size_t strftime(char *buffer, size_t size, const char *format, const struct tm *
 
 /*
  * The fixed form of a moment: "Www Mmm dd hh:mm:ss yyyy\n", the 26 bytes of
- * `asctime` and the one string a caller keeps until the next call. The
- * machine has one clock (the boot), so `ctime` is the same text for the same
- * seconds on every run, which is what the smoke test of the port reads.
+ * `asctime` and the one string a caller keeps until the next call. The moment
+ * is the one of the wall clock now, so the same second gives the same text on
+ * every machine.
  */
 static char g_asctime_s[26];
 
