@@ -28,6 +28,7 @@
 #include "port_x86_64_console.h"
 #include "port_x86_64_screen.h"
 #include "port_x86_64_task.h"
+#include "port_x86_64_apic.h"
 
 /* --- the machine --- */
 
@@ -380,6 +381,11 @@ struct idt_pointer {
 #define IRQ_TIMER 0u
 #define IRQ_KEYBOARD 1u
 
+/* The lines of the port that have a handler, in the order the counters below
+ * and the `smp irq` command name them (PORT_X86_64_IRQ_TIMER and
+ * PORT_X86_64_IRQ_KEYBOARD of port_x86_64.h). */
+#define PORT_IRQ_LINES 2u
+
 #define PIT_HZ 1000u
 #define PIT_CRYSTAL_HZ 1193182u
 
@@ -413,6 +419,19 @@ extern void isr_unexpected(void);
 
 static volatile k_u64_t g_ticks;
 
+/*
+ * The interrupts of the two lines of the port, one counter per core, because
+ * the question the two-core machine asks is where they arrive: the I/O APIC
+ * of ADR 0012 delivers a line to the core its entry names, and the 8259
+ * delivers every line to the core of the boot. The counters are the answer of
+ * the `smp irq` command and of the smoke test of the two cores.
+ */
+static k_u32_t g_irq_count[PORT_IRQ_LINES][KERNEL_CPUS_MAX];
+
+/* True when the I/O APIC delivers the two lines of the port and the 8259 is
+ * masked (see interrupts_init). */
+static bool g_ioapic_lines;
+
 static void idt_set(k_u32_t vector, void (*handler)(void), k_u8_t ist, k_u8_t type)
 {
     k_u64_t address = (k_u64_t)(uintptr_t)handler;
@@ -435,7 +454,9 @@ static void idt_set(k_u32_t vector, void (*handler)(void), k_u8_t ist, k_u8_t ty
  * The timer and the keyboard are open, the rest of the machine is not
  * unmasked until the port has a driver that could answer: the mask of the
  * master is 0xFC, two zeros at the bottom for the two lines that have a
- * handler in the table.
+ * handler in the table. This is the fallback of the port: a machine whose
+ * firmware describes an I/O APIC gets its lines through that chip instead and
+ * the 8259 is masked as a whole (pic_mask_all).
  */
 static void pic_init(void)
 {
@@ -463,6 +484,23 @@ static void pic_init(void)
     port_outb(PIC2_DATA, 0xFF); /* nothing of the slave is */
 }
 
+/* Close both chips: every line of the 8259 is masked and the chip raises
+ * nothing. The port does this when the I/O APIC takes the two lines of the
+ * machine, so that a line cannot arrive twice. */
+static void pic_mask_all(void)
+{
+    port_outb(PIC1_DATA, 0xFF);
+    port_outb(PIC2_DATA, 0xFF);
+}
+
+/* Open the two lines of the port on the 8259 again (the fallback of a machine
+ * that has no I/O APIC, and the undo of a route that did not hold). */
+static void pic_unmask_port_lines(void)
+{
+    port_outb(PIC1_DATA, 0xFC);
+    port_outb(PIC2_DATA, 0xFF);
+}
+
 /*
  * Channel 0 of the 8254 in mode 2: it counts down to zero, raises the
  * interrupt and reloads itself, so the kernel never rearms it. The crystal
@@ -487,19 +525,67 @@ static void pit_init(k_u32_t hz)
 }
 
 /*
+ * The end of an interrupt of the two lines of the port.
+ *
+ * A line the I/O APIC delivers is a message to the local APIC of the core it
+ * named, and the end of it is a store to the EOI register of that core's own
+ * APIC (every core decodes the same physical page as itself). A line of the
+ * 8259 is ended in the chip that raised it. The port says which of the two is
+ * the source of the lines, and the body of the vector does not have to know.
+ */
+void port_x86_64_irq_eoi(void)
+{
+    if (g_ioapic_lines) {
+        port_x86_64_apic_eoi();
+        return;
+    }
+
+    port_outb(PIC1_COMMAND, PIC_EOI);
+}
+
+/* True when the two lines of the port are delivered by the I/O APIC and the
+ * 8259 is masked. The `smp irq` command and the body of the keyboard ask. */
+bool port_x86_64_irq_on_ioapic(void)
+{
+    return g_ioapic_lines;
+}
+
+/* Count an interrupt of a line on the core that took it. The `smp irq`
+ * command reads the numbers; a core that is not in the array of the kernel is
+ * not counted. */
+void port_x86_64_irq_note(k_u32_t line)
+{
+    k_u32_t cpu = k_port_cpu_id();
+
+    if (line >= PORT_IRQ_LINES || cpu >= KERNEL_CPUS_MAX) {
+        return;
+    }
+
+    (void)__atomic_add_fetch(&g_irq_count[line][cpu], 1u, __ATOMIC_RELAXED);
+}
+
+k_u32_t port_x86_64_irq_count(k_u32_t line, k_u32_t cpu)
+{
+    if (line >= PORT_IRQ_LINES || cpu >= KERNEL_CPUS_MAX) {
+        return 0u;
+    }
+
+    return __atomic_load_n(&g_irq_count[line][cpu], __ATOMIC_RELAXED);
+}
+
+/*
  * The body of the timer, called by the stub in interrupts.S with the
- * interrupts off. The EOI goes to the master alone: the timer is the only
- * unmasked line and the slave is masked as a whole.
+ * interrupts off. The EOI goes out before the hook: the timer must be
+ * acknowledged even if the scheduler decides that this task never continues,
+ * and with the I/O APIC the line is in service until the local APIC of this
+ * core hears about it.
  */
 void port_x86_64_irq_tick(k_u64_t *frame)
 {
     g_ticks++;
+    port_x86_64_irq_note(PORT_X86_64_IRQ_TIMER);
 
-    /* The EOI goes out before the hook: the timer must be acknowledged even
-     * if the scheduler decides that this task never continues. The slave is
-     * masked as a whole and the timer is its only line, so the master is the
-     * only chip to tell. */
-    port_outb(PIC1_COMMAND, PIC_EOI);
+    port_x86_64_irq_eoi();
 
     /*
      * A program of ring 3 that has a signal waiting answers it when the tick
@@ -748,6 +834,36 @@ void port_x86_64_interrupts_init(void)
     port_x86_64_ps2_init();
     pic_init();
     pit_init(PIT_HZ);
+
+    /*
+     * The lines of the machine: the I/O APIC of ADR 0012 when the firmware
+     * describes one, and the 8259 of 1981 when it does not.
+     *
+     * The local APIC comes first: a line the I/O APIC routes is a message to
+     * it, and a core whose APIC is not enabled takes nothing at all. The call
+     * is the one the bring-up of the processors makes later, and it is
+     * idempotent on the core that mapped the page.
+     *
+     * The order below is what keeps a line from arriving twice: the 8259 is
+     * masked before the table of the I/O APIC is opened, and opened again if
+     * the chip did not take both lines. The two chips are told the same
+     * vectors (IRQ_BASE + the line), so the body of a vector does not change
+     * with the controller that delivered it.
+     */
+    if (port_x86_64_apic_init() && port_x86_64_ioapic_init()) {
+        pic_mask_all();
+
+        if (port_x86_64_ioapic_route(IRQ_TIMER, IRQ_BASE + IRQ_TIMER, 0u) &&
+            port_x86_64_ioapic_route(IRQ_KEYBOARD, IRQ_BASE + IRQ_KEYBOARD, 0u)) {
+            g_ioapic_lines = true;
+        } else {
+            /* A chip that took one line and not the other is a chip this
+             * port does not trust with either of them. */
+            (void)port_x86_64_ioapic_mask(IRQ_TIMER, true);
+            (void)port_x86_64_ioapic_mask(IRQ_KEYBOARD, true);
+            pic_unmask_port_lines();
+        }
+    }
 
     /* The table is in the register of the processor and the lines are
      * programmed; from here the timer keeps the time of the kernel. */
@@ -1425,7 +1541,7 @@ const char *k_port_arch(void)
 }
 
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 10u
+#define PORT_API_MINOR 11u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_x86_64 does not speak the contract of this kernel");

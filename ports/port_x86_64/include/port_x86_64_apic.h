@@ -1,17 +1,18 @@
 /*
  * Micro OS — the x86-64 port: the local and I/O APICs.
  *
- * The 8259 of the port delivers the timer and the keyboard to the processor
- * of the boot, and it does so through the external interrupt pin of that
+ * The 8259 of a PC delivers the timer and the keyboard to the processor of
+ * the boot, and it does so through the external interrupt pin of that
  * processor's local APIC. The other cores have no 8259: their interrupts are
- * the local APIC timer, the inter-processor interrupts and, once the I/O
- * APIC is programmed, the lines the chip routes to them (ADR 0012).
+ * the local APIC timer, the inter-processor interrupts and the lines the I/O
+ * APIC routes to them (ADR 0012). The port programs that chip when the
+ * firmware describes one, and keeps the 8259 when it does not.
  *
  * This header is the contract between the two halves of that work: the
  * bring-up of the processors (src/smp.c, src/cpu.c) asks for an identifier,
- * a timer and an INIT/SIPI, and the APIC code (src/lapic.c, src/ipi.c and,
- * later, src/ioapic.c) owns the registers. Nothing here sleeps: every call is
- * a store to the page of the APIC or a short wait on the TSC.
+ * a timer and an INIT/SIPI, and the APIC code (src/lapic.c, src/ipi.c and
+ * src/ioapic.c) owns the registers. Nothing here sleeps: every call is a
+ * store to the page of the APIC or a short wait on the TSC.
  *
  * The page is mapped where the kernel map has room, in the top 2 GiB, and
  * every address space shares that mapping, so a core finds its APIC whichever
@@ -30,6 +31,14 @@
  * whose firmware names another address gets it mapped here all the same.
  */
 #define PORT_X86_64_APIC_VIRT (PORT_X86_64_KERNEL_BASE + 0x30000000ull)
+
+/*
+ * The window of the I/O APIC: the chip that turns a line of the machine into
+ * a message to the local APIC of one core. It sits in the chunk beside the
+ * local APIC and is mapped the same way, by the core that programs it first
+ * (src/ioapic.c).
+ */
+#define PORT_X86_64_IOAPIC_VIRT (PORT_X86_64_APIC_VIRT + 0x200000ull)
 
 /*
  * The vectors of the APIC. They sit above the window of the 8259 (0x20..0x2F)
@@ -82,6 +91,39 @@ void port_x86_64_apic_stop_timer(void);
 void port_x86_64_apic_send_ipi(k_u32_t apic_id, k_u32_t vector);
 
 /*
+ * The I/O APIC (src/ioapic.c). The chip is programmed from the MADT of the
+ * firmware: its address, the global system interrupt of every ISA line and
+ * the polarity and trigger an override names. Init maps the window and masks
+ * every line; the caller opens the ones it has a handler for, one call each.
+ *
+ * A machine without the chip - no ACPI, or a window that answers nothing -
+ * gets false from init and keeps the 8259 of src/port_x86_64.c, which is the
+ * fallback the port had before the table existed.
+ */
+bool port_x86_64_ioapic_init(void);
+bool port_x86_64_ioapic_present(void);
+
+/* The physical address of the chip and the number of its lines, 0 when it is
+ * not up. */
+k_u32_t port_x86_64_ioapic_phys(void);
+k_u32_t port_x86_64_ioapic_entries(void);
+
+/*
+ * Route the line of an ISA interrupt to `vector` on the core `cpu` (the
+ * number of the kernel, not the identifier of the APIC) and open it, or mask
+ * it again without moving it. False when the chip is not there or the line is
+ * past its table; the caller then keeps the 8259.
+ */
+bool port_x86_64_ioapic_route(k_u32_t isa_irq, k_u32_t vector, k_u32_t cpu);
+bool port_x86_64_ioapic_mask(k_u32_t isa_irq, bool masked);
+
+/* Where a line of the port goes after routing: the GSI, the vector and the
+ * core, 0 for a line nobody routed. The `smp irq` command prints them. */
+k_u32_t port_x86_64_ioapic_line_gsi(k_u32_t isa_irq);
+k_u32_t port_x86_64_ioapic_line_vector(k_u32_t isa_irq);
+k_u32_t port_x86_64_ioapic_line_cpu(k_u32_t isa_irq);
+
+/*
  * The start of an application processor: INIT, then the start-up IPI with
  * the page of the trampoline (vector 7 names 0x7000). The caller waits
  * between the two and sends the start-up IPI twice, which is the sequence of
@@ -113,5 +155,11 @@ k_u32_t port_x86_64_ipi_received(void);
  * moment and reads this: the two numbers are the proof that the vector of
  * the interrupt ran on the other processor and not in a comment. */
 k_u32_t port_x86_64_ipi_received_cpu(k_u32_t cpu);
+
+/* The wake-ups the scheduler has sent to a core: the tasks it handed to that
+ * core's queue and the interrupt it followed (kernel/port/cpu.h). A core that
+ * starts one of them before its own tick counts it in
+ * port_x86_64_wake_before_tick(). */
+k_u32_t port_x86_64_wake_sent_cpu(k_u32_t cpu);
 
 #endif /* MICRO_OS_PORT_X86_64_APIC_H */

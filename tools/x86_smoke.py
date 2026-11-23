@@ -458,7 +458,7 @@ EXPECTED = [
     # it (ADR 0020); the line is the proof that the check ran and passed.
     "Micro OS: image signature ok (sha-256, ed25519)",
     "board: qemu_x86_64",
-    "port: x86_64, contract 1.10",
+    "port: x86_64, contract 1.11",
     "[ ok ] sched",
     "subsystem(s) ready",
     "the kernel is up",

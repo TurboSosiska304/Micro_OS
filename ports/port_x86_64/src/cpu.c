@@ -44,10 +44,17 @@
 
 /* The entries of the MADT this port reads (ACPI 6.x, table 5.19). */
 #define ACPI_ENTRY_LOCAL_APIC 0u
+#define ACPI_ENTRY_IOAPIC 1u
+#define ACPI_ENTRY_IRQ_OVERRIDE 2u
 #define ACPI_ENTRY_LOCAL_X2APIC 9u
 
 /* Bit 0 of the flags of a processor entry: it may be used. */
 #define ACPI_CPU_ENABLED 0x1u
+
+/* The ISA lines an override may rename, and the identity of a line that has
+ * none: the firmware of a PC names the timer (IRQ0) as GSI 2, because the
+ * cascade of the 8259 is the second input of the chip. */
+#define ACPI_ISA_IRQ_MAX 16u
 
 #define ACPI_RSDP_MIN_LENGTH 20u
 #define ACPI_TABLE_HEADER 36u
@@ -109,6 +116,30 @@ struct acpi_madt_local_x2apic {
     k_u32_t acpi_id;
 } __attribute__((packed));
 
+/* One I/O APIC of the machine: the chip that turns a line into a message to
+ * one core, and the first global system interrupt it owns. A machine may have
+ * several; the port keeps the first, which is the one the ISA lines reach. */
+struct acpi_madt_ioapic {
+    k_u8_t type;
+    k_u8_t length;
+    k_u8_t id;
+    k_u8_t reserved;
+    k_u32_t address; /* a physical address */
+    k_u32_t gsi_base;
+} __attribute__((packed));
+
+/* An override of the ISA line `source`: the line reaches the I/O APIC as
+ * `gsi`, with the polarity and the trigger of `flags`. Without an override a
+ * line keeps its number, and is edge triggered and active high. */
+struct acpi_madt_irq_override {
+    k_u8_t type;
+    k_u8_t length;
+    k_u8_t bus;
+    k_u8_t source;
+    k_u32_t gsi;
+    k_u16_t flags;
+} __attribute__((packed));
+
 /* The enabled processors of the MADT, in the order the firmware lists them.
  * The list is what the bring-up starts; a machine that describes more than
  * the kernel has slots for keeps only the first KERNEL_CPUS_MAX, which is the
@@ -116,8 +147,12 @@ struct acpi_madt_local_x2apic {
 #define ACPI_CPU_LIST_MAX KERNEL_CPUS_MAX
 
 static struct {
-    k_u32_t available; /* the processors the firmware calls enabled */
-    k_u32_t apic_base; /* the physical address of the local APIC */
+    k_u32_t available;   /* the processors the firmware calls enabled */
+    k_u32_t apic_base;   /* the physical address of the local APIC */
+    k_u32_t ioapic_base; /* the physical address of the first I/O APIC, 0 when none */
+    k_u32_t ioapic_gsi_base;
+    k_u16_t irq_gsi[ACPI_ISA_IRQ_MAX];   /* the GSI of an ISA line, the identity by default */
+    k_u16_t irq_flags[ACPI_ISA_IRQ_MAX]; /* the polarity and trigger of the override */
 } g_cpus;
 
 /* One record per core, at the address IA32_GS_BASE of the core points at.
@@ -294,6 +329,26 @@ static void madt_read(const struct acpi_rsdp *rsdp)
 
                     g_madt_count++;
                 }
+            } else if (entry->type == ACPI_ENTRY_IOAPIC &&
+                       entry->length >= sizeof(struct acpi_madt_ioapic)) {
+                const struct acpi_madt_ioapic *ioapic =
+                    (const struct acpi_madt_ioapic *)(uintptr_t)cursor;
+
+                /* The first one is the chip of the ISA lines; a machine of
+                 * several keeps the others for the buses nobody programs. */
+                if (g_cpus.ioapic_base == 0u && ioapic->address != 0u) {
+                    g_cpus.ioapic_base = ioapic->address;
+                    g_cpus.ioapic_gsi_base = ioapic->gsi_base;
+                }
+            } else if (entry->type == ACPI_ENTRY_IRQ_OVERRIDE &&
+                       entry->length >= sizeof(struct acpi_madt_irq_override)) {
+                const struct acpi_madt_irq_override *override =
+                    (const struct acpi_madt_irq_override *)(uintptr_t)cursor;
+
+                if (override->source < ACPI_ISA_IRQ_MAX) {
+                    g_cpus.irq_gsi[override->source] = (k_u16_t) override->gsi;
+                    g_cpus.irq_flags[override->source] = override->flags;
+                }
             }
 
             cursor += entry->length;
@@ -324,6 +379,12 @@ void port_x86_64_cpus_init(void)
     memset(g_records, 0, sizeof(g_records));
     memset(g_madt_ids, 0, sizeof(g_madt_ids));
     g_madt_count = 0;
+
+    /* A line nobody renamed keeps its own number, and a line of the ISA bus
+     * is edge triggered and active high (ACPI 6.x, 5.2.12.5). */
+    for (i = 0; i < ACPI_ISA_IRQ_MAX; i++) {
+        g_cpus.irq_gsi[i] = (k_u16_t)i;
+    }
 
     rsdp = rsdp_find();
 
@@ -447,4 +508,31 @@ k_u32_t port_x86_64_cpu_started(void)
 k_u32_t port_x86_64_apic_base(void)
 {
     return g_cpus.apic_base;
+}
+
+/* --- the I/O APIC of the firmware (the MADT, ADR 0012) --- */
+
+k_u32_t port_x86_64_ioapic_base(void)
+{
+    return g_cpus.ioapic_base;
+}
+
+k_u32_t port_x86_64_ioapic_gsi(k_u32_t isa_irq)
+{
+    if (isa_irq >= ACPI_ISA_IRQ_MAX) {
+        return isa_irq;
+    }
+
+    /* The number of the firmware is an offset from the base of the first
+     * chip, which is zero on every PC the port has met. */
+    return g_cpus.ioapic_gsi_base + g_cpus.irq_gsi[isa_irq];
+}
+
+k_u16_t port_x86_64_ioapic_irq_flags(k_u32_t isa_irq)
+{
+    if (isa_irq >= ACPI_ISA_IRQ_MAX) {
+        return 0u;
+    }
+
+    return g_cpus.irq_flags[isa_irq];
 }
