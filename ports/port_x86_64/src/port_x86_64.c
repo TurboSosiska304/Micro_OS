@@ -343,7 +343,7 @@ static void clock_measure(void)
      * on both sides of the measurement - a machine that beeps while it only
      * measures its clock is a machine that looks broken.
      */
-    gate = port_inb(0x61) & (k_u8_t)~(0x01 | 0x02);
+    gate = port_inb(0x61) & (k_u8_t) ~(0x01 | 0x02);
     port_outb(0x61, gate);
     port_outb(0x61, (k_u8_t)(gate | 0x01));
 
