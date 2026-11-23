@@ -61,20 +61,25 @@ void port_x86_64_pci_write16(const struct port_x86_64_pci_device *device, k_u8_t
     port_x86_64_pci_write32(device, offset, (old & ~mask) | (((k_u32_t)value << shift) & mask));
 }
 
-bool port_x86_64_pci_find(k_u16_t vendor, k_u16_t device_id, struct port_x86_64_pci_device *found)
+/*
+ * The walk of the bus. The function of every slot of every bus, in the order
+ * of the address, and `match` decides which one is the one asked for. An
+ * absent function answers with all ones, which is neither a vendor nor a
+ * class, and is skipped before the test.
+ */
+static bool pci_walk(bool (*match)(const struct port_x86_64_pci_device *device, const void *wanted),
+                     const void *wanted, struct port_x86_64_pci_device *found)
 {
     struct port_x86_64_pci_device device = {0, 0, 0};
 
     for (device.bus = 0; device.bus < 1u; device.bus++) {
         for (device.slot = 0; device.slot < 32u; device.slot++) {
             for (device.function = 0; device.function < 8u; device.function++) {
-                /* An absent function answers with all ones, which is neither
-                 * of the identifiers of a device. */
-                if (port_x86_64_pci_read16(&device, PCI_VENDOR) != vendor) {
+                if (port_x86_64_pci_read16(&device, PCI_VENDOR) == 0xFFFFu) {
                     continue;
                 }
 
-                if (port_x86_64_pci_read16(&device, PCI_DEVICE) != device_id) {
+                if (!match(&device, wanted)) {
                     continue;
                 }
 
@@ -88,6 +93,60 @@ bool port_x86_64_pci_find(k_u16_t vendor, k_u16_t device_id, struct port_x86_64_
     }
 
     return false;
+}
+
+/* The pair of the identifiers, as the walk of `port_x86_64_pci_find` wants
+ * it: the vendor and the device, in that order. */
+struct pci_ids {
+    k_u16_t vendor;
+    k_u16_t device;
+};
+
+static bool match_ids(const struct port_x86_64_pci_device *device, const void *wanted)
+{
+    const struct pci_ids *ids = (const struct pci_ids *)wanted;
+
+    return port_x86_64_pci_read16(device, PCI_VENDOR) == ids->vendor &&
+           port_x86_64_pci_read16(device, PCI_DEVICE) == ids->device;
+}
+
+/* The class, the sub-class and the bits of the programming interface. */
+struct pci_class {
+    k_u8_t base;
+    k_u8_t sub;
+    k_u8_t prog_if;
+};
+
+static bool match_class(const struct port_x86_64_pci_device *device, const void *wanted)
+{
+    const struct pci_class *want = (const struct pci_class *)wanted;
+    k_u16_t class = port_x86_64_pci_read16(device, PCI_CLASS);
+    k_u16_t revision = port_x86_64_pci_read16(device, PCI_REVISION);
+
+    return (k_u8_t)(class >> 8) == want->base && (k_u8_t)(class & 0xFFu) == want->sub &&
+           ((k_u8_t)(revision >> 8) & want->prog_if) == want->prog_if;
+}
+
+bool port_x86_64_pci_find(k_u16_t vendor, k_u16_t device_id, struct port_x86_64_pci_device *found)
+{
+    struct pci_ids ids;
+
+    ids.vendor = vendor;
+    ids.device = device_id;
+
+    return pci_walk(match_ids, &ids, found);
+}
+
+bool port_x86_64_pci_find_class(k_u8_t base, k_u8_t sub, k_u8_t prog_if,
+                                struct port_x86_64_pci_device *found)
+{
+    struct pci_class want;
+
+    want.base = base;
+    want.sub = sub;
+    want.prog_if = prog_if;
+
+    return pci_walk(match_class, &want, found);
 }
 
 k_u32_t port_x86_64_pci_bar_size(const struct port_x86_64_pci_device *device, k_u8_t offset)
