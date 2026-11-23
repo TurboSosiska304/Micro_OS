@@ -300,14 +300,17 @@ long long strtoll(const char *text, char **end, int base)
     int negative;
     int overflow;
     unsigned long long value = convert_whole(text, end, base, &negative, &overflow);
-    unsigned long long magnitude = negative ? (unsigned long long)0 - value : value;
 
-    if (overflow || magnitude > (unsigned long long)LLONG_MAX + (negative ? 1ull : 0ull)) {
+    /* The conversion answers the magnitude and the sign apart, so the test of
+     * the range is on the magnitude and the sign is applied after it: a -7
+     * negated here is 2^64-7, which is ERANGE for every negative number (the
+     * bug this line had until 1.7). */
+    if (overflow || value > (unsigned long long)LLONG_MAX + (negative ? 1ull : 0ull)) {
         errno = ERANGE;
         return negative ? LLONG_MIN : LLONG_MAX;
     }
 
-    return (long long)magnitude;
+    return negative ? (long long)((unsigned long long)0 - value) : (long long)value;
 }
 
 unsigned long strtoul(const char *text, char **end, int base)
@@ -329,14 +332,13 @@ long strtol(const char *text, char **end, int base)
     int negative;
     int overflow;
     unsigned long long value = convert_whole(text, end, base, &negative, &overflow);
-    unsigned long long magnitude = negative ? (unsigned long long)0 - value : value;
 
-    if (overflow || magnitude > (unsigned long long)LONG_MAX + (negative ? 1ull : 0ull)) {
+    if (overflow || value > (unsigned long long)LONG_MAX + (negative ? 1ull : 0ull)) {
         errno = ERANGE;
         return negative ? LONG_MIN : LONG_MAX;
     }
 
-    return (long)magnitude;
+    return negative ? (long)((unsigned long)0 - (unsigned long)value) : (long)value;
 }
 
 int atoi(const char *text)

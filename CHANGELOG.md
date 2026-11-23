@@ -10,6 +10,20 @@ the MicroFS volume change by adding only.
 A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 (`vX.Y.Z-pre`) is a pre-release and must match `kernel_version()`.
 
+## [1.6.1] - 2026-11-24
+
+A patch of `1.6.0` for one defect of the library, found by the lane that gave
+`setenv` and `fscanf` to it.
+
+### Fixed
+
+- `strtoll` and `strtol` negated the magnitude of the conversion **before** the
+  test of the range: `-7` became `2^64-7`, so every negative number answered
+  `LLONG_MIN` with `ERANGE`, `atoi("-7")` answered `0`, and a program that read
+  a signed number of a file or of a line of a command read a wrong one. The
+  sign is applied after the range, and the test holds the negative numbers of
+  the conversion, both ends of the range and the end pointer.
+
 ## [1.6.0] - 2026-11-23
 
 ### The release

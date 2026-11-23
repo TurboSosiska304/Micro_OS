@@ -13,6 +13,7 @@
  * their own names, to compare the results. The library of Micro OS comes
  * after and takes the usual names for itself.
  */
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,6 +44,13 @@ static long (*sys_strtol)(const char *, char **, int) = strtol;
 
 #define MAX_LINES 512
 #define LINE_MAX 64
+
+/* The ends of the range, spelled here: <limits.h> is not included, and the
+ * name LINE_MAX of the file is not the one of the C library. */
+#ifndef LLONG_MAX
+#define LLONG_MAX 9223372036854775807LL
+#define LLONG_MIN (-LLONG_MAX - 1LL)
+#endif
 
 static struct mfs_ram_device g_volume;
 static struct k_blockdev g_device;
@@ -663,6 +671,38 @@ static void test_special_values_match_the_system(void)
  * data of the project: the corpus, the text around it and the edges of
  * the range.
  */
+/*
+ * The conversion with a sign, against the numbers themselves and not against
+ * the system: strtol and strtoll negated the magnitude before the test of the
+ * range, so every negative number answered LLONG_MIN with ERANGE and
+ * atoi("-7") answered 0 (1.6.1).
+ */
+static void test_signed_numbers_are_numbers(void)
+{
+    char *end = NULL;
+
+    ktest_begin("libc: a negative number of a conversion is a number and not ERANGE");
+
+    KT_CHECK_INT_EQ((long long)atoll("-7"), -7LL);
+    KT_CHECK_INT_EQ((long long)strtol("-42", NULL, 10), -42L);
+    KT_CHECK_INT_EQ((long long)atoi("-9"), -9);
+    KT_CHECK_INT_EQ((long long)strtoll("-1234567890123", NULL, 10), -1234567890123LL);
+    KT_CHECK_INT_EQ((long long)strtoll("7", NULL, 10), 7LL);
+    KT_CHECK_INT_EQ((long long)strtoll("-0", NULL, 10), 0LL);
+    KT_CHECK_INT_EQ((long long)strtoll("-2147483648", NULL, 10), -2147483648LL);
+    KT_CHECK_INT_EQ((long long)strtoll("-9223372036854775808", NULL, 10), LLONG_MIN);
+
+    errno = 0;
+    KT_CHECK_INT_EQ((long long)strtoll("9223372036854775808", NULL, 10), LLONG_MAX);
+    KT_CHECK_INT_EQ(errno, ERANGE);
+    errno = 0;
+    KT_CHECK_INT_EQ((long long)strtoll("-9223372036854775809", NULL, 10), LLONG_MIN);
+    KT_CHECK_INT_EQ(errno, ERANGE);
+
+    KT_CHECK_INT_EQ((long long)strtoll("-1000000", &end, 16), -16777216LL);
+    KT_CHECK(end != NULL && *end == '\0');
+}
+
 static void test_numbers_match_the_system(void)
 {
     static const char *texts[] = {
@@ -1072,6 +1112,7 @@ void test_libc(void)
 {
     test_float_matches_the_system();
     test_special_values_match_the_system();
+    test_signed_numbers_are_numbers();
     test_numbers_match_the_system();
     test_integer_matches_the_system();
     test_string_matches_the_system();
