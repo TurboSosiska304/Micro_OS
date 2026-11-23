@@ -119,8 +119,13 @@ jobs:
       - name: the tools of the x86-64 port
         run: apt-get update -qq && apt-get install -y -qq --no-install-recommends cmake ninja-build build-essential
 
-      - name: the kernel of the x86-64 port
-        run: make x86-build
+      - name: the tools of the host
+        env:
+          IDF_PATH: ""
+        run: make build
+
+      - name: the complete machine of the x86-64 port
+        run: make x86-all
 
       - name: the bundle of dist/
         shell: bash

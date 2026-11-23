@@ -80,8 +80,10 @@ SECTIONS
 {{
     . = 0x{base + K_EXEC_HEADER_SIZE:08x};
     .text : SUBALIGN(4) {{ *(.text .text.*) }}
-    . = ALIGN(4);
+    . = ALIGN(16);
     .data : {{ *(.data .data.*) *(.rodata .rodata.*) }}
+    . = ALIGN(16);
+    .bss (NOLOAD) : {{ *(.bss .bss.*) *(COMMON) }}
     /DISCARD/ : {{ *(.comment) *(.eh_frame) *(.note .note.*) }}
 }}
 """
@@ -92,7 +94,18 @@ def align4(value: int) -> int:
     return (value + 3) // 4 * 4
 
 
-def build_source(text: bytes, data: bytes) -> str:
+def align16(value: int) -> int:
+    """Round a size up to sixteen bytes.
+
+    The script pads both segments to sixteen because a constant of a program
+    with floating point and the arena of its library are objects of that
+    width, and the instruction that reads one of them faults when it is not
+    aligned (see tools/mkprog.sh and programs/program.ld).
+    """
+    return (value + 15) // 16 * 16
+
+
+def build_source(text: bytes, data: bytes, data_align: int = 1) -> str:
     """A C file whose .text and .data have exactly the bytes asked for."""
     lines = [
         "__asm__(",
@@ -107,6 +120,7 @@ def build_source(text: bytes, data: bytes) -> str:
     if data:
         lines += [
             '    ".section .data\\n"',
+            f'    ".balign {data_align}\\n"',
             '    ".globl test_payload\\n"',
             '    ".type test_payload, @object\\n"',
             '    "test_payload:\\n"',
@@ -159,8 +173,8 @@ def check_case(
     header, payload = parse_image(image)
     fields = dict(zip(HEADER_FIELDS, header))
 
-    text_aligned = align4(len(text))
-    data_aligned = align4(len(data))
+    text_aligned = align16(len(text))
+    data_aligned = align16(len(data))
 
     assert fields["magic"] == K_EXEC_MAGIC, f"{name}: magic is 0x{fields['magic']:08X}"
     assert fields["version"] == K_EXEC_VERSION, f"{name}: version is {fields['version']}"
@@ -198,7 +212,7 @@ def check_case(
         f"{name}: the padding of the text is not zero"
     )
     assert payload[text_aligned : text_aligned + len(data)] == data, (
-        f"{name}: the data is not at 32 + align4(text) = {K_EXEC_HEADER_SIZE + text_aligned}"
+        f"{name}: the data is not at 32 + align16(text) = {K_EXEC_HEADER_SIZE + text_aligned}"
     )
     assert payload[text_aligned + len(data) :] == b"\0" * (data_aligned - len(data)), (
         f"{name}: the padding of the data is not zero"
@@ -246,14 +260,14 @@ def check_base_case(work: Path, script: Path) -> None:
     fields = dict(zip(HEADER_FIELDS, header))
     assert fields["arch"] == K_EXEC_ARCH_X86_64, f"base: arch is {fields['arch']}"
     assert fields["entry"] == K_EXEC_HEADER_SIZE, f"base: entry is {fields['entry']}"
-    assert fields["text_size"] == align4(len(text)), (
+    assert fields["text_size"] == align16(len(text)), (
         f"base: text size is {fields['text_size']}"
     )
-    assert fields["data_size"] == align4(len(data)), (
+    assert fields["data_size"] == align16(len(data)), (
         f"base: data size is {fields['data_size']}"
     )
     assert payload[: len(text)] == text, "base: the text bytes moved"
-    assert payload[align4(len(text)) : align4(len(text)) + len(data)] == data, (
+    assert payload[align16(len(text)) : align16(len(text)) + len(data)] == data, (
         "base: the data is not after the padded text"
     )
 
@@ -370,6 +384,102 @@ def check_data_base_case(work: Path, script: Path) -> None:
         assert not refused.exists(), f"split: the refusal of {option} left an image behind"
 
 
+def check_bss_gap_case(work: Path, script: Path) -> None:
+    """A bss aligned past the padded data: the gap is part of the data segment.
+
+    GCC aligns an array of more than sixteen bytes to 32, so the .bss of a
+    program can start at a 32-byte boundary while the data ends at a boundary
+    of 16. The header of the format has no field for that gap, and the port
+    clears the bss right after the padded data: the script has to count the
+    gap as padding of the data, or the objects of the bss sit below the
+    addresses the program was linked for and the arguments the port writes
+    after the bss overlap the last of them.
+    """
+    text = bytes(0x90 + index % 8 for index in range(5))
+    data = bytes(0x40 + 3 * index for index in range(3))
+
+    source = work / "bssgap.c"
+    obj = work / "bssgap.o"
+    linker = work / "bssgap.ld"
+    elf = work / "bssgap.elf"
+
+    # The area is 40 bytes and 32-byte aligned, and the data is 32-byte
+    # aligned too: the .bss cannot start at the 16-byte boundary the format
+    # pads the data to, and the gap is the case this check is about.
+    source.write_text(
+        build_source(text, data, data_align=32)
+        + "\nchar test_bss[40] __attribute__((aligned(32)));\n",
+        encoding="utf-8",
+    )
+    linker.write_text(build_linker_script(PROGRAM_BASE), encoding="utf-8")
+    subprocess.run(
+        ["gcc", "-c", "-fno-pic", "-fno-pie", "-fno-stack-protector",
+         "-fno-asynchronous-unwind-tables", "-o", str(obj), str(source)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["gcc", "-nostdlib", "-static", "-no-pie", "-Wl,--build-id=none",
+         "-Wl,-e,test_entry", f"-Wl,-T,{linker}", "-o", str(elf), str(obj)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    image = work / "bssgap.mox"
+    subprocess.run(
+        [str(script), "--base", hex(PROGRAM_BASE), str(elf), str(image), "test_entry"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    sections = subprocess.run(
+        ["objdump", "-h", str(elf)], check=True, capture_output=True, text=True
+    ).stdout
+    address = None
+    for line in sections.splitlines():
+        fields = line.split()
+        if len(fields) >= 4 and fields[1] == ".bss":
+            address = int(fields[3], 16)
+    assert address is not None, "bssgap: the object has no .bss section"
+
+    header, payload = parse_image(image)
+    fields = dict(zip(HEADER_FIELDS, header))
+
+    # The text may be padded past sixteen bytes when the data asks for a wider
+    # alignment; the format allows that, and what matters is that the bytes
+    # line up with the numbers of the header.
+    text_aligned = fields["text_size"]
+
+    assert text_aligned >= align16(len(text)), (
+        f"bssgap: the text is {text_aligned} bytes, shorter than {len(text)}"
+    )
+    assert fields["bss_size"] == 40, f"bssgap: bss size is {fields['bss_size']}"
+
+    # The loader clears the bss at base + header + text + data_size; that
+    # address has to be the one the linker gave the section.
+    loader_bss = PROGRAM_BASE + K_EXEC_HEADER_SIZE + text_aligned + fields["data_size"]
+    assert loader_bss == address, (
+        f"bssgap: the loader clears the bss at 0x{loader_bss:x}, with the data at "
+        f"0x{PROGRAM_BASE + K_EXEC_HEADER_SIZE + text_aligned:x} and .bss at 0x{address:x}"
+    )
+    assert fields["data_size"] > align16(len(data)), (
+        "bssgap: the data size does not carry the gap to the bss"
+    )
+    assert len(payload) == text_aligned + fields["data_size"], (
+        f"bssgap: the payload is {len(payload)} bytes, expected "
+        f"{text_aligned + fields['data_size']}"
+    )
+    assert payload[text_aligned : text_aligned + len(data)] == data, (
+        "bssgap: the data is not after the padded text"
+    )
+    assert payload[text_aligned + len(data) :] == b"\0" * (fields["data_size"] - len(data)), (
+        "bssgap: the gap between the data and the bss is not zero"
+    )
+
+
 def check_bad_arch(work: Path, script: Path) -> None:
     """A machine the format does not know is refused, and no image is left."""
     text = bytes(0x90 + index % 8 for index in range(5))
@@ -445,11 +555,13 @@ def main() -> int:
 
         check_bad_arch(work, script)
         check_base_case(work, script)
+        check_bss_gap_case(work, script)
         check_data_base_case(work, script)
 
     print(
         f"test_mkprog: OK, {len(CASES)} image(s) laid out as the header says, "
-        "both machines written, the base of the window and the data window checked"
+        "both machines written, the base of the window, the gap before the bss "
+        "and the data window checked"
     )
     return 0
 

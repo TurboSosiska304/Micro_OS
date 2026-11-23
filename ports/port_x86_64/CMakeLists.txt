@@ -78,6 +78,7 @@ else()
 endif()
 
 set(NET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/net")
+set(PKG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/pkg")
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -88,13 +89,17 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # linked and leaves the low identity map to the pointers the boot hands over
 # (ADR 0007). It is a flag of the C code alone: the assembly is written in
 # absolute 64-bit numbers and the programs of /bin stay in the low window.
+#
+# -mgeneral-regs-only is the rule of the kernel and of a program that does not
+# ask for a double; it is set on the target of the kernel and in PROGRAM_CFLAGS
+# below and not in this directory-wide list, because a ported library with a
+# point in its numbers (Lua) is built without it on purpose.
 add_compile_options(
     -ffreestanding
     -fno-stack-protector
     -fno-pic
     -fno-pie
     -mno-red-zone
-    -mgeneral-regs-only
     # The machine is the first x86-64 and not the computer of the person who
     # builds it. A distribution may configure its compiler for a newer model
     # (the runner of GitHub does) and then a shift becomes SHLX of BMI2,
@@ -186,6 +191,12 @@ set(SETTINGS_SOURCES
     "${CONFIG_DIR}/src/config_cmd.c"
 )
 
+# The font of the console is the one of the PC (port_x86_64_font.h, Spleen
+# 8x16, third_party/spleen): the 5x7 page of components/font is the panel of
+# the board, whose letters are the wrong size for a screen of 1280x800 and
+# whose lowercase is the upper case. The table of the port is src/font_spleen.c
+# and the license travels with the bundle (tools/bundle.sh).
+
 # The services over the sockets: the HTTP client, the page of the state and
 # the clock of NTP. They are portable and speak kernel/net.h, so the same
 # sources that run on the board run here over the stack of the port. The
@@ -201,6 +212,44 @@ if(MICRO_OS_X86_NET)
         "${NET_DIR}/src/http.c"
         "${NET_DIR}/src/ntp.c"
         "${NET_DIR}/src/net_http_server.c"
+        "${NET_DIR}/src/tls.c"
+    )
+endif()
+
+# The TLS stack of the machine (ADR 0024 §3): mbedTLS is vendored and its
+# configuration is third_party/mbedtls/config/microos_config.h. The library
+# is an object library, so an image that links it carries its bytes; the
+# layer of the platform (the timer and RDRAND, src/tls_platform.c) and the
+# client (components/net/src/tls.c) are part of the network image.
+if(MICRO_OS_X86_NET)
+    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/mbedtls" mbedtls)
+    # The kernel is linked in the higher half: the library's static data has
+    # to be addressed the same way as the kernel's own.
+    target_compile_options(microos_mbedtls PRIVATE -mcmodel=kernel)
+    # -O2 and not the -O3 of the image: the library at -O3 with this
+    # compiler and these freestanding flags fails the Finished check of
+    # TLS 1.3 (the smoke test found it, the debug build and -O2 pass). -O2
+    # is the upstream default; the library is not the place to chase an
+    # optimizer, and a handshake that fails on one image is not a choice.
+    target_compile_options(microos_mbedtls PRIVATE -O2)
+endif()
+
+# The installer of programs (ADR 0024). It is part of the network image: a
+# package arrives over HTTP, and `pkg` is the half of the promise of 2.0 that
+# a machine changes itself. The signature of a package is the signature of
+# the image, so the two primitives of the loader (SHA-256 and Ed25519) are
+# compiled into the kernel as well, and the public key of the build is the
+# key of the repository when /etc/pkg/keys has none (ADR 0024 §4).
+set(PKG_SOURCES)
+if(MICRO_OS_X86_NET)
+    list(APPEND PKG_SOURCES
+        "${PKG_DIR}/src/pkg.c"
+        "${PKG_DIR}/src/pkg_io.c"
+        "${PKG_DIR}/src/pkg_db.c"
+        "${PKG_DIR}/src/pkg_index.c"
+        "${PKG_DIR}/src/pkg_verify.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/loader/sha256.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/loader/ed25519.c"
     )
 endif()
 
@@ -243,27 +292,47 @@ set(MKPROG "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/mkprog.sh")
 # program has no such address, only `int $0x80`. Every program that uses it
 # carries its own copy, which is what "statically linked" means here.
 set(LIBC_USER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/libc/user")
-set(LIBC_USER_SOURCES
-    "${LIBC_USER_DIR}/src/start.c"
-    "${LIBC_USER_DIR}/src/syscall.c"
-    "${LIBC_USER_DIR}/src/stdio.c"
-    "${LIBC_USER_DIR}/src/string.c"
-)
 
-# The flags of a program: no libc, no PIC and no SSE, the same shape as the
-# kernel's (see add_compile_options above). The include path carries the
+# The flags of a guest object: no libc, no PIC and no SSE, the same shape as
+# the kernel's (see add_compile_options above). The include path carries the
 # headers of the kernel (the numbers of the calls) and the library.
 #
 # The string literals are not merged into one section: binutils 2.47 trips an
 # assertion of its merge of sections on the .rodata of a program with many
 # strings and a pointer of a handler in its data, and one shared copy of a few
 # bytes buys nothing here.
-set(PROGRAM_CFLAGS
-    -c -O2 -ffreestanding -fno-stack-protector
-    -fno-pic -fno-pie -mno-red-zone -mgeneral-regs-only -march=x86-64
+#
+# A program of the tree that does not compute in floating point keeps
+# -mgeneral-regs-only. A ported program that does (Lua) is built with
+# MICROOS_FLOAT_CFLAGS instead: the port sets CR4.OSFXSR and CR0.NE for the
+# XMM registers and the x87 unit, and the scheduler of this port saves
+# neither, which is safe because execve waits for the program that runs
+# (docs/debts.md). The kernel and the other programs still never touch them.
+set(USERLAND_CFLAGS
+    -O2 -ffreestanding -fno-stack-protector
+    -fno-pic -fno-pie -mno-red-zone -march=x86-64
     -fno-asynchronous-unwind-tables -fno-merge-constants -Wall -Wextra -Werror
+)
+set(PROGRAM_CFLAGS -c ${USERLAND_CFLAGS} -mgeneral-regs-only
     -I "${KERNEL_DIR}/include" -I "${PROGRAM_DIR}" -I "${LIBC_USER_DIR}/include"
 )
+
+# The recipe of a program and of a ported library: the runtime, the window,
+# the image of the format and a static archive of the guest. It lives in
+# cmake/userland.cmake so that the next port (Lua, sbase, SQLite) is a copy
+# of one call and not a copy of this file.
+set(MICROOS_USERLAND_CFLAGS "${USERLAND_CFLAGS}")
+set(MICROOS_PROGRAM_CFLAGS "${PROGRAM_CFLAGS}")
+set(MICROOS_FLOAT_CFLAGS "${USERLAND_CFLAGS}")
+set(MICROOS_FLOAT_PROGRAM_CFLAGS -c ${USERLAND_CFLAGS}
+    -I "${KERNEL_DIR}/include" -I "${PROGRAM_DIR}" -I "${LIBC_USER_DIR}/include"
+)
+set(MICROOS_KERNEL_INCLUDE "${KERNEL_DIR}/include")
+set(MICROOS_LIBC_USER_DIR "${LIBC_USER_DIR}")
+set(MICROOS_PROGRAM_DIR "${PROGRAM_DIR}")
+set(MICROOS_PROGRAM_BASE "${PROGRAM_BASE}")
+set(MICROOS_MKPROG "${MKPROG}")
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/userland.cmake")
 
 # Every program of the port is built the same way: compile the C file for the
 # window, link it with the script of the format, and turn the sections into a
@@ -271,7 +340,6 @@ set(PROGRAM_CFLAGS
 # into the MicroFS volume of the disk: the kernel has no blob of a program in
 # it any more. The name of the function is the name of the file in /bin and
 # the symbol of the entry is given here.
-set(PROGRAM_IMAGES)
 function(add_program_image name entry)
     set(image "${CMAKE_BINARY_DIR}/${name}.mox")
 
@@ -291,7 +359,7 @@ function(add_program_image name entry)
         VERBATIM
     )
 
-    set(PROGRAM_IMAGES ${PROGRAM_IMAGES} "${image}" PARENT_SCOPE)
+    set(MICROOS_PROGRAM_IMAGES ${MICROOS_PROGRAM_IMAGES} "${image}" PARENT_SCOPE)
 endfunction()
 
 add_program_image(hello hello_main)
@@ -304,57 +372,457 @@ add_program_image(nx nx_main)
 # A program that uses the library of a program: the runtime sources are
 # compiled for the window together with the file of the program, linked with
 # the same script, and the entry is `_start` of the library - main() is a
-# function of the program, not the place the port enters (ADR 0016).
+# function of the program, not the place the port enters (ADR 0016). The
+# steps are in cmake/userland.cmake; this wrapper keeps the calls of the tree
+# one word long.
 function(add_libc_program name)
-    set(image "${CMAKE_BINARY_DIR}/${name}.mox")
-    set(objects
-        "${name}_start.o"
-        "${name}_syscall.o"
-        "${name}_stdio.o"
-        "${name}_string.o"
-        "${name}.o"
-    )
-
-    add_custom_command(
-        OUTPUT "${image}"
-        COMMAND ${CMAKE_C_COMPILER} ${PROGRAM_CFLAGS}
-                -o ${name}_start.o "${LIBC_USER_DIR}/src/start.c"
-        COMMAND ${CMAKE_C_COMPILER} ${PROGRAM_CFLAGS}
-                -o ${name}_syscall.o "${LIBC_USER_DIR}/src/syscall.c"
-        COMMAND ${CMAKE_C_COMPILER} ${PROGRAM_CFLAGS}
-                -o ${name}_stdio.o "${LIBC_USER_DIR}/src/stdio.c"
-        COMMAND ${CMAKE_C_COMPILER} ${PROGRAM_CFLAGS}
-                -o ${name}_string.o "${LIBC_USER_DIR}/src/string.c"
-        COMMAND ${CMAKE_C_COMPILER} ${PROGRAM_CFLAGS}
-                -o ${name}.o "${PROGRAM_DIR}/${name}.c"
-        COMMAND ${CMAKE_C_COMPILER} -nostdlib -static -no-pie -Wl,--build-id=none
-                -Wl,-e,_start
-                -T "${PROGRAM_DIR}/program.ld" -o ${name}.elf ${objects}
-        COMMAND sh "${MKPROG}" --base ${PROGRAM_BASE} --arch x86-64
-                ${name}.elf ${name}.mox _start
-        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-        DEPENDS "${PROGRAM_DIR}/${name}.c" "${PROGRAM_DIR}/program.ld"
-                "${KERNEL_DIR}/include/kernel/ksys.h" "${MKPROG}"
-                ${LIBC_USER_SOURCES} "${LIBC_USER_DIR}/include/ulibc.h"
-        COMMENT "building the image of /bin/${name} with the library of a program"
-        VERBATIM
-    )
-
-    set(PROGRAM_IMAGES ${PROGRAM_IMAGES} "${image}" PARENT_SCOPE)
+    microos_add_userland_program(${name} ${ARGN})
+    set(MICROOS_PROGRAM_IMAGES ${MICROOS_PROGRAM_IMAGES} PARENT_SCOPE)
 endfunction()
 
-add_libc_program(cat)
+# --- zlib: the first program of somebody else -------------------------------
+#
+# The library is built by the compiler of the guest with the flags of the
+# guest and the port layer of `third_party/zlib/port` (the configuration of
+# zconf and the two allocation hooks). It is a static archive: `zcat` links
+# the objects it uses, and no symbol of the host libc enters the image.
+set(ZLIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/zlib")
+set(ZLIB_SOURCES
+    "${ZLIB_DIR}/adler32.c"
+    "${ZLIB_DIR}/compress.c"
+    "${ZLIB_DIR}/crc32.c"
+    "${ZLIB_DIR}/deflate.c"
+    "${ZLIB_DIR}/gzclose.c"
+    "${ZLIB_DIR}/gzlib.c"
+    "${ZLIB_DIR}/gzread.c"
+    "${ZLIB_DIR}/gzwrite.c"
+    "${ZLIB_DIR}/infback.c"
+    "${ZLIB_DIR}/inffast.c"
+    "${ZLIB_DIR}/inflate.c"
+    "${ZLIB_DIR}/inftrees.c"
+    "${ZLIB_DIR}/trees.c"
+    "${ZLIB_DIR}/uncompr.c"
+    "${ZLIB_DIR}/zutil.c"
+    "${ZLIB_DIR}/port/zlib_os.c"
+)
+
+microos_userland_library(microos_user_zlib
+    SOURCES ${ZLIB_SOURCES}
+    INCLUDES "${ZLIB_DIR}" "${ZLIB_DIR}/port"
+    DEFINES MY_ZCALLOC HAVE_UNISTD_H HAVE_STDARG_H
+    # The library is upstream C and is compiled with the warnings of this
+    # tree: the one it has is the one every zlib build answers, and the
+    # exception stays here rather than in the vendored source.
+    COMPILE_OPTIONS "-include" "${ZLIB_DIR}/port/zconf.h" -Wno-sign-compare -Os
+)
+
+# The two wrappers of the port are the only file of the library that calls
+# the real read and write: the force-included zconf.h renames them for every
+# other source.
+set_source_files_properties("${ZLIB_DIR}/port/zlib_os.c"
+    PROPERTIES COMPILE_DEFINITIONS ZLIB_OS_NO_RENAME=1)
+# A force-included header is not in the compiler's list of includes: without
+# this a change to the configuration of the port would not rebuild a source.
+set_source_files_properties(${ZLIB_SOURCES}
+    PROPERTIES OBJECT_DEPENDS "${ZLIB_DIR}/port/zconf.h")
+
 add_libc_program(echo)
-add_libc_program(grep)
-add_libc_program(head)
-add_libc_program(ls)
 add_libc_program(mkdir)
 add_libc_program(pwd)
 add_libc_program(rm)
 add_libc_program(spawn)
-add_libc_program(wc)
+
+# The first program of somebody else: zcat opens a .gz of the VFS through
+# zlib's gz* layer, inflates it and writes the bytes to the console or a
+# file. The heap of the program is 512 KiB because the state of an inflate
+# stream is a 32 KiB window and the buffers of gz are two blocks of 8 and 16
+# KiB; the arena is the bss of the image, inside the window of the port.
+add_libc_program(zcat
+    LIBRARIES microos_user_zlib
+    INCLUDES "${ZLIB_DIR}"
+    DEFINES ULIBC_HEAP_SIZE=524288u
+    SOURCES "${LIBC_USER_DIR}/src/malloc.c"
+            "${LIBC_USER_DIR}/src/file.c"
+    # The image of a program is read whole by the kernel in a block of
+    # KSYS_MAX_IO (64 KiB): the text and the data of zcat and its library have
+    # to fit that, and -Os is the size of zlib that does.
+    COMPILE_OPTIONS -Os
+)
+
+# --- pcre2grep, the second program of somebody else -------------------------
+#
+# PCRE2 (third_party/pcre2) is third-party C: the compiler of the guest builds
+# it for the window with the flags of the guest, and the linker takes the
+# objects the program names. The warnings of this tree are off it, because its
+# code is not ours to change and a warning in it is an upstream matter; the
+# compatibility headers of the vendor (`third_party/pcre2/compat`) answer the
+# includes of a C library that a program here does not have, and the strings,
+# the allocation and the classes of a character are the ones of
+# `components/libc/user`.
+set(PCRE2_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/pcre2")
+set(PCRE2_SOURCES
+    "${PCRE2_DIR}/src/pcre2_compile.c"
+    "${PCRE2_DIR}/src/pcre2_config.c"
+    "${PCRE2_DIR}/src/pcre2_context.c"
+    "${PCRE2_DIR}/src/pcre2_convert.c"
+    "${PCRE2_DIR}/src/pcre2_dfa_match.c"
+    "${PCRE2_DIR}/src/pcre2_error.c"
+    "${PCRE2_DIR}/src/pcre2_extuni.c"
+    "${PCRE2_DIR}/src/pcre2_find_bracket.c"
+    "${PCRE2_DIR}/src/pcre2_maketables.c"
+    "${PCRE2_DIR}/src/pcre2_match.c"
+    "${PCRE2_DIR}/src/pcre2_match_data.c"
+    "${PCRE2_DIR}/src/pcre2_newline.c"
+    "${PCRE2_DIR}/src/pcre2_ord2utf.c"
+    "${PCRE2_DIR}/src/pcre2_pattern_info.c"
+    "${PCRE2_DIR}/src/pcre2_script_run.c"
+    "${PCRE2_DIR}/src/pcre2_serialize.c"
+    "${PCRE2_DIR}/src/pcre2_string_utils.c"
+    "${PCRE2_DIR}/src/pcre2_substitute.c"
+    "${PCRE2_DIR}/src/pcre2_substring.c"
+    "${PCRE2_DIR}/src/pcre2_tables.c"
+    "${PCRE2_DIR}/src/pcre2_ucd.c"
+    "${PCRE2_DIR}/src/pcre2_valid_utf.c"
+    "${PCRE2_DIR}/src/pcre2_xclass.c"
+    "${PCRE2_DIR}/pcre2_chartables.c"
+    "${PCRE2_DIR}/pcre2_small.c"
+)
+
+microos_userland_library(microos_user_pcre2
+    SOURCES ${PCRE2_SOURCES}
+    INCLUDES "${PCRE2_DIR}" "${PCRE2_DIR}/src" "${PCRE2_DIR}/compat"
+    DEFINES HAVE_CONFIG_H PCRE2_CODE_UNIT_WIDTH=8
+    COMPILE_OPTIONS -w -Os -ffunction-sections -fdata-sections
+)
+
+# The image of pcre2grep is the largest one of the port: the engine, the
+# runtime of the library and the program. It stays under the ceiling of the
+# format (K_EXEC_MAX_IMAGE, 8 MiB) with room to spare, and -Os keeps it small
+# because every byte of the text is a byte of the disk image.
+add_libc_program(pcre2grep GC_SECTIONS
+    LIBRARIES microos_user_pcre2
+    INCLUDES "${PCRE2_DIR}"
+    SOURCES "${LIBC_USER_DIR}/src/malloc.c"
+            "${LIBC_USER_DIR}/src/ctype.c"
+    COMPILE_OPTIONS -Os
+)
+
+# --- Lua: the first port of a program with a point in its numbers -----------
+#
+# The library is the whole core of Lua 5.4.7 - the lexer, the parser, the code
+# generator, the virtual machine and the libraries of the release - built as a
+# static archive of the guest. The standalone interpreter of the release
+# (`lua.c`) is the program: `microos_add_userland_program` takes it through
+# MAIN because a ported program has a `main` of its own and the tree does not
+# keep a second copy of it in `programs/`.
+#
+# FLOAT is the difference from every other program: a lua_Number is a double,
+# the arithmetic of the machine is SSE and x87, and the flags of this program
+# do not carry -mgeneral-regs-only. The runtime of the library is compiled
+# with ULIBC_WITH_FLOAT for the same reason: its formatter writes the digits
+# of a double, and src/math.c, src/stdlib.c and src/setjmp.c are sources of
+# this program alone (a program of the tree never links them, so the image of
+# `cat` does not pay for a logarithm).
+set(LUA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/lua")
+set(LUA_SOURCES
+    "${LUA_DIR}/lapi.c"
+    "${LUA_DIR}/lauxlib.c"
+    "${LUA_DIR}/lbaselib.c"
+    "${LUA_DIR}/lcode.c"
+    "${LUA_DIR}/lcorolib.c"
+    "${LUA_DIR}/lctype.c"
+    "${LUA_DIR}/ldblib.c"
+    "${LUA_DIR}/ldebug.c"
+    "${LUA_DIR}/ldo.c"
+    "${LUA_DIR}/ldump.c"
+    "${LUA_DIR}/lfunc.c"
+    "${LUA_DIR}/lgc.c"
+    "${LUA_DIR}/linit.c"
+    "${LUA_DIR}/liolib.c"
+    "${LUA_DIR}/llex.c"
+    "${LUA_DIR}/lmathlib.c"
+    "${LUA_DIR}/lmem.c"
+    "${LUA_DIR}/loadlib.c"
+    "${LUA_DIR}/lobject.c"
+    "${LUA_DIR}/lopcodes.c"
+    "${LUA_DIR}/loslib.c"
+    "${LUA_DIR}/lparser.c"
+    "${LUA_DIR}/lstate.c"
+    "${LUA_DIR}/lstring.c"
+    "${LUA_DIR}/lstrlib.c"
+    "${LUA_DIR}/ltable.c"
+    "${LUA_DIR}/ltablib.c"
+    "${LUA_DIR}/ltm.c"
+    "${LUA_DIR}/lundump.c"
+    "${LUA_DIR}/lutf8lib.c"
+    "${LUA_DIR}/lvm.c"
+    "${LUA_DIR}/lzio.c"
+    "${LUA_DIR}/port/lua_os.c"
+)
+
+microos_userland_library(microos_user_lua FLOAT
+    SOURCES ${LUA_SOURCES}
+    INCLUDES "${LUA_DIR}" "${LUA_DIR}/port"
+    # The configuration of the port is force-included: it is read before
+    # luaconf.h, and the settings of the system (no shell, no tmpnam, no
+    # dynamic linker, a point for the radix) are the ones it names. The
+    # warnings are the ones upstream C answers in every build.
+    COMPILE_OPTIONS "-include" "${LUA_DIR}/port/luaconf_port.h"
+        -Wno-sign-compare -Wno-unused-parameter -Wno-missing-field-initializers
+        -Wno-implicit-fallthrough -Os
+)
+
+set_source_files_properties(${LUA_SOURCES}
+    PROPERTIES OBJECT_DEPENDS "${LUA_DIR}/port/luaconf_port.h")
+
+add_libc_program(lua
+    FLOAT
+    LIBRARIES microos_user_lua
+    MAIN "${LUA_DIR}/lua.c"
+    INCLUDES "${LUA_DIR}" "${LUA_DIR}/port"
+    # The arena is the bss of the program and the format caps the bss at a
+    # megabyte. Lua's state, its strings and the tables of a script live in
+    # it; 768 KiB leaves the state of a real script room and the image under
+    # the ceiling.
+    DEFINES ULIBC_HEAP_SIZE=786432u
+    SOURCES "${LIBC_USER_DIR}/src/malloc.c"
+            "${LIBC_USER_DIR}/src/file.c"
+            "${LIBC_USER_DIR}/src/stdlib.c"
+            "${LIBC_USER_DIR}/src/math.c"
+            "${LIBC_USER_DIR}/src/setjmp.c"
+            "${LIBC_USER_DIR}/src/time.c"
+            "${LIBC_USER_DIR}/src/locale.c"
+            "${LIBC_USER_DIR}/src/ctype.c"
+            "${LIBC_USER_DIR}/src/assert.c"
+            "${LIBC_USER_DIR}/src/format_float.c"
+    COMPILE_OPTIONS -DULIBC_WITH_FLOAT -include "${LUA_DIR}/port/luaconf_port.h" -Os
+)
+
+# --- sbase: the tools of a Unix-like system ---------------------------------
+#
+# sbase is a collection of small Unix tools by suckless, released under the
+# MIT license (third_party/sbase). The tree carries ten of them and the two
+# little libraries of the collection: `libutf` (the runes of wc, sort and sed)
+# and `libutil` (the helpers of every tool). The upstream files are edited in
+# one place - the two lines of `sort.c` that name `sbase_numcmp`, because the
+# guest has no floating point registers - and the port layer is
+# `third_party/sbase/port`.
+#
+# The tools are the commands of the machine under their canonical names:
+# `/bin/ls` is sbase's `ls`, and the small `ls`, `cat`, `grep`, `wc` and
+# `head` of ADR 0016 are not built for this port. `echo`, `mkdir`, `pwd` and
+# `rm` stay because the collection has no replacement for them; the smoke
+# test reads the sentences of the new commands.
+set(SBASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/sbase")
+
+set(SBASE_UTF_SOURCES
+    "${SBASE_DIR}/libutf/fgetrune.c"
+    "${SBASE_DIR}/libutf/fputrune.c"
+    "${SBASE_DIR}/libutf/isalnumrune.c"
+    "${SBASE_DIR}/libutf/isalpharune.c"
+    "${SBASE_DIR}/libutf/isblankrune.c"
+    "${SBASE_DIR}/libutf/iscntrlrune.c"
+    "${SBASE_DIR}/libutf/isdigitrune.c"
+    "${SBASE_DIR}/libutf/isgraphrune.c"
+    "${SBASE_DIR}/libutf/isprintrune.c"
+    "${SBASE_DIR}/libutf/ispunctrune.c"
+    "${SBASE_DIR}/libutf/isspacerune.c"
+    "${SBASE_DIR}/libutf/istitlerune.c"
+    "${SBASE_DIR}/libutf/isxdigitrune.c"
+    "${SBASE_DIR}/libutf/lowerrune.c"
+    "${SBASE_DIR}/libutf/rune.c"
+    "${SBASE_DIR}/libutf/runetype.c"
+    "${SBASE_DIR}/libutf/upperrune.c"
+    "${SBASE_DIR}/libutf/utf.c"
+    "${SBASE_DIR}/libutf/utftorunestr.c"
+)
+
+# The helpers the ten tools reach. The files of the collection that a tool of
+# this subset does not call (cp, md5, sha*, estrtod with its `double`) are not
+# compiled: a vendored source that is not in a program costs a build and a
+# warning and buys nothing.
+set(SBASE_LIBUTIL_SOURCES
+    "${SBASE_DIR}/libutil/concat.c"
+    "${SBASE_DIR}/libutil/ealloc.c"
+    "${SBASE_DIR}/libutil/enmasse.c"
+    "${SBASE_DIR}/libutil/eprintf.c"
+    "${SBASE_DIR}/libutil/eregcomp.c"
+    "${SBASE_DIR}/libutil/fnck.c"
+    "${SBASE_DIR}/libutil/fshut.c"
+    "${SBASE_DIR}/libutil/getlines.c"
+    "${SBASE_DIR}/libutil/linecmp.c"
+    "${SBASE_DIR}/libutil/memmem.c"
+    "${SBASE_DIR}/libutil/mkdirp.c"
+    "${SBASE_DIR}/libutil/mode.c"
+    "${SBASE_DIR}/libutil/parseoffset.c"
+    "${SBASE_DIR}/libutil/putword.c"
+    "${SBASE_DIR}/libutil/reallocarray.c"
+    "${SBASE_DIR}/libutil/recurse.c"
+    "${SBASE_DIR}/libutil/strcasestr.c"
+    "${SBASE_DIR}/libutil/strlcat.c"
+    "${SBASE_DIR}/libutil/strlcpy.c"
+    "${SBASE_DIR}/libutil/strnsubst.c"
+    "${SBASE_DIR}/libutil/strsep.c"
+    "${SBASE_DIR}/libutil/strtonum.c"
+    "${SBASE_DIR}/libutil/unescape.c"
+    "${SBASE_DIR}/libutil/writeall.c"
+    "${SBASE_DIR}/port/numcmp.c"
+    "${SBASE_DIR}/port/humansize.c"
+)
+
+microos_userland_library(microos_user_sbase
+    SOURCES ${SBASE_UTF_SOURCES} ${SBASE_LIBUTIL_SOURCES}
+    INCLUDES "${SBASE_DIR}" "${SBASE_DIR}/port"
+    # Upstream code with the warnings of this tree: the comparison of an
+    # index with LEN() is the one every sbase build answers, and the
+    # exception stays here rather than in a hunk of the vendored file.
+    COMPILE_OPTIONS -Wno-sign-compare -Wno-maybe-uninitialized
+)
+
+# The library of a program that is not the runtime: the arena, the streams,
+# the directory, the information of an object, the clock, the strings of
+# POSIX, the regular expressions and the options. It is the same list for
+# every tool; the linker takes the objects the tool names.
+set(SBASE_LIBC_SOURCES
+    "${LIBC_USER_DIR}/src/malloc.c"
+    "${LIBC_USER_DIR}/src/file.c"
+    "${LIBC_USER_DIR}/src/stdio_ext.c"
+    "${LIBC_USER_DIR}/src/ctype.c"
+    "${LIBC_USER_DIR}/src/stdlib.c"
+    "${LIBC_USER_DIR}/src/string_ext.c"
+    "${LIBC_USER_DIR}/src/strdup.c"
+    "${LIBC_USER_DIR}/src/dirent.c"
+    "${LIBC_USER_DIR}/src/stat.c"
+    "${LIBC_USER_DIR}/src/unistd_ext.c"
+    "${LIBC_USER_DIR}/src/pwd.c"
+    "${LIBC_USER_DIR}/src/time.c"
+    "${LIBC_USER_DIR}/src/libgen.c"
+    "${LIBC_USER_DIR}/src/termios.c"
+    "${LIBC_USER_DIR}/src/regex.c"
+    "${LIBC_USER_DIR}/src/getopt.c"
+    "${LIBC_USER_DIR}/src/fnmatch.c"
+    "${LIBC_USER_DIR}/src/assert.c"
+)
+
+# The tool of the collection, built under its own name in /bin: the tools of
+# sbase are the `ls`, `cat`, `grep` and the rest of the machine, and the
+# programs of the tree they replace are not built for this port. The heap is
+# the arena of the program, the bss of the image (capped at a megabyte by the
+# format); sort and find hold a file there.
+function(add_sbase_program tool heap)
+    add_libc_program(${tool}
+        MAIN "${SBASE_DIR}/${tool}.c"
+        SOURCES ${SBASE_LIBC_SOURCES}
+        LIBRARIES microos_user_sbase
+        INCLUDES "${SBASE_DIR}" "${SBASE_DIR}/port"
+        DEFINES ULIBC_HEAP_SIZE=${heap}
+        COMPILE_OPTIONS -Os -include "${SBASE_DIR}/port/sbase_port.h"
+                        -Wno-unused-parameter -Wno-implicit-fallthrough
+                        -Wno-sign-compare -Wno-maybe-uninitialized
+    )
+    # The wrapper inside a function has its own scope: the image of the tool
+    # has to be handed up again or the `image` target never builds it.
+    set(MICROOS_PROGRAM_IMAGES ${MICROOS_PROGRAM_IMAGES} PARENT_SCOPE)
+endfunction()
+
+add_sbase_program(cat 131072u)
+add_sbase_program(head 131072u)
+add_sbase_program(wc 131072u)
+add_sbase_program(tail 131072u)
+add_sbase_program(ls 262144u)
+add_sbase_program(grep 262144u)
+add_sbase_program(sort 524288u)
+add_sbase_program(find 524288u)
+add_sbase_program(xargs 262144u)
+add_sbase_program(sed 524288u)
+
+# --- bc and dc: the calculators of arbitrary precision ------------------------
+#
+# Gavin D. Howard's bc 7.2.0 (BSD-2-Clause) is one library and two programs:
+# `main.c` reads the name it was entered with and runs `bc_main` or `dc_main`,
+# so the two images carry the same engine and the smoke tests reach the two
+# names of /bin. The release has no configuration file: `Makefile.in` puts the
+# settings on the command line, and `port/bc_port.h` is force-included with
+# the same settings so that the release's sources are untouched.
+#
+# The library is built without -mgeneral-regs-only because it links the whole
+# of `src/stdlib.c` for `strtol` and `strtoul`. That file also holds `strtod`
+# and `qsort`, which a `double` in the text makes an object of SSE; the port
+# of this machine runs one program at a time and sets CR4.OSFXSR, so the
+# choice is the one Lua made (`docs/debts.md`). bc itself computes in the
+# integers of its limbs.
+set(BC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/bc")
+set(BC_SOURCES
+    "${BC_DIR}/src/args.c"
+    "${BC_DIR}/src/bc.c"
+    "${BC_DIR}/src/bc_lex.c"
+    "${BC_DIR}/src/bc_parse.c"
+    "${BC_DIR}/src/data.c"
+    "${BC_DIR}/src/dc.c"
+    "${BC_DIR}/src/dc_lex.c"
+    "${BC_DIR}/src/dc_parse.c"
+    "${BC_DIR}/src/file.c"
+    "${BC_DIR}/src/lang.c"
+    "${BC_DIR}/src/lex.c"
+    "${BC_DIR}/src/main.c"
+    "${BC_DIR}/src/num.c"
+    "${BC_DIR}/src/opt.c"
+    "${BC_DIR}/src/parse.c"
+    "${BC_DIR}/src/program.c"
+    "${BC_DIR}/src/rand.c"
+    "${BC_DIR}/src/read.c"
+    "${BC_DIR}/src/vector.c"
+    "${BC_DIR}/src/vm.c"
+    # The help and the math library (`-l`), generated from the texts of
+    # `gen/` by the release's own `gen/strgen.c`; the port note has the
+    # command and the reason they are files of the tree.
+    "${BC_DIR}/port/generated/bc_help.c"
+    "${BC_DIR}/port/generated/dc_help.c"
+    "${BC_DIR}/port/generated/lib.c"
+    "${BC_DIR}/port/generated/lib2.c"
+    # The two calls of the machine that the release takes from POSIX: a stat
+    # of a descriptor and a signal handler.
+    "${BC_DIR}/port/bc_os.c"
+)
+
+microos_userland_library(microos_user_bc FLOAT
+    SOURCES ${BC_SOURCES}
+    INCLUDES "${BC_DIR}/include" "${BC_DIR}/port"
+    # The warnings are the ones a release of upstream C answers in the build
+    # of every distribution; the exception stays here rather than in the
+    # vendored source.
+    COMPILE_OPTIONS "-include" "${BC_DIR}/port/bc_port.h"
+        -Wno-sign-compare -Wno-unused-parameter -Wno-clobbered -Os
+)
+
+set_source_files_properties(${BC_SOURCES}
+    PROPERTIES OBJECT_DEPENDS "${BC_DIR}/port/bc_port.h")
+
+# The programs: the same archive, the same `main`, and the name of the image
+# that `argv[0]` carries. The arena is the bss of the image; the math library
+# of `-l` and the bytecode of a script live in it, and 768 KiB is the room the
+# format leaves (the bss is capped at 1 MiB).
+foreach(calculator bc dc)
+    add_libc_program(${calculator}
+        FLOAT
+        LIBRARIES microos_user_bc
+        MAIN "${BC_DIR}/src/main.c"
+        INCLUDES "${BC_DIR}/include" "${BC_DIR}/port"
+        DEFINES ULIBC_HEAP_SIZE=786432u
+        SOURCES "${LIBC_USER_DIR}/src/malloc.c"
+                "${LIBC_USER_DIR}/src/stdlib.c"
+                "${LIBC_USER_DIR}/src/setjmp.c"
+                "${LIBC_USER_DIR}/src/ctype.c"
+                "${LIBC_USER_DIR}/src/time.c"
+                "${LIBC_USER_DIR}/src/strdup.c"
+                "${LIBC_USER_DIR}/src/rand.c"
+        COMPILE_OPTIONS -include "${BC_DIR}/port/bc_port.h" -Os
+    )
+endforeach()
+
 
 add_executable(microos64
+
     ${KERNEL_SOURCES}
     ${KSHELL_SOURCES}
     ${LIBC_SOURCES}
@@ -364,11 +832,17 @@ add_executable(microos64
     ${VIRTUAL_SOURCES}
     ${SETTINGS_SOURCES}
     ${NET_SOURCES}
+    ${PKG_SOURCES}
     src/boot64.S
     src/kmain.c
     src/shell.c
     src/port_x86_64.c
+    src/console.c
     src/vga.c
+    src/vbe.c
+    src/fb.c
+    src/font_spleen.c
+    src/pci.c
     src/ps2.c
     src/gdt.c
     src/paging.c
@@ -376,10 +850,12 @@ add_executable(microos64
     src/port_exec.c
     src/port_x86_64_task.c
     src/blockdev_ram.c
+    src/blockdev_module.c
     src/ata.c
     src/virtio_net.c
     src/net.c
     src/libc_shim.c
+    src/tls_platform.c
     src/interrupts.S
     src/switch.S
 )
@@ -399,6 +875,18 @@ target_include_directories(microos64 PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 
+if(MICRO_OS_X86_NET)
+    target_include_directories(microos64 PRIVATE
+        "${PKG_DIR}/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/loader"
+        "${CMAKE_BINARY_DIR}"
+    )
+    # The public key of the build is the key of the repository when the
+    # volume has none: the header is generated with the image, and the
+    # compiler has to wait for it.
+    target_sources(microos64 PRIVATE "${CMAKE_BINARY_DIR}/sign_public_key.h")
+endif()
+
 target_compile_definitions(microos64 PRIVATE
     KERNEL_BOARD_NAME="x86_64"
     KERNEL_BOARD_DESC="QEMU x86-64 machine"
@@ -410,9 +898,18 @@ target_compile_definitions(microos64 PRIVATE
     MICRO_OS_NET_HTTP_SERVER=$<BOOL:${MICRO_OS_X86_NET}>
     MICRO_OS_NET_NTP=$<BOOL:${MICRO_OS_X86_NET}>
     MICRO_OS_NET_MQTT=0
+    MICRO_OS_TLS=$<BOOL:${MICRO_OS_X86_NET}>
     MICRO_OS_TELNET=$<BOOL:${MICRO_OS_TELNET}>
     MICRO_OS_WIFI=$<BOOL:${MICRO_OS_WIFI}>
+    MICRO_OS_PKG=$<BOOL:${MICRO_OS_X86_NET}>
+    MICRO_OS_PKG_BUILTIN_KEY=$<BOOL:${MICRO_OS_X86_NET}>
 )
+
+if(MICRO_OS_X86_NET)
+    # The bytes of mbedTLS are objects of the image, and its include path and
+    # MBEDTLS_CONFIG_FILE travel with the target (third_party/mbedtls).
+    target_link_libraries(microos64 PRIVATE microos_mbedtls)
+endif()
 
 if(MICRO_OS_FS_FAT32)
     target_compile_definitions(microos64 PRIVATE MICRO_OS_FS_FAT32=1)
@@ -426,7 +923,8 @@ endif()
 # a sign-extended 32-bit immediate. The assembly does not need it (its
 # addresses are 64-bit numbers of their own) and a program has no use for it
 # (it lives at 32 MiB), so the flag is for the C of the kernel only.
-target_compile_options(microos64 PRIVATE $<$<COMPILE_LANGUAGE:C>:-mcmodel=kernel>)
+target_compile_options(microos64 PRIVATE $<$<COMPILE_LANGUAGE:C>:-mcmodel=kernel>
+    $<$<COMPILE_LANGUAGE:C>:-mgeneral-regs-only>)
 
 set_target_properties(microos64 PROPERTIES
     LINK_FLAGS "-nostdlib -static -Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/linker64.ld -Wl,--build-id=none"
@@ -573,6 +1071,6 @@ add_custom_command(
 
 add_custom_target(image
     DEPENDS "${CMAKE_BINARY_DIR}/microos64.bin" "${CMAKE_BINARY_DIR}/loader32.elf"
-            ${PROGRAM_IMAGES}
+            ${MICROOS_PROGRAM_IMAGES}
     COMMENT "the image of the port: loader32.elf + microos64.bin + the programs of /bin"
 )

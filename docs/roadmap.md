@@ -73,7 +73,7 @@ written when the project was an operating system for one board; the numbers
       its disk and asks for `/bin/hello` with `execve`; the shell runs the
       same file with `exec`
 * [x] Programs are files on a filesystem of the disk, not blobs of the
-      kernel: `make x86-disk` writes `/bin` (fifteen programs) and `/etc` with
+      kernel: `make x86-disk` writes `/bin` (twenty-two programs) and `/etc` with
       `tools/mkfs_mfs.c`, and no boot installs an image
 * [x] `PATH` for the shell
 * [x] `argv` reaches the port, and the ABI of the entry is written down
@@ -243,13 +243,15 @@ written when the project was an operating system for one board; the numbers
       machine without a store says so, and the words of `write`, `mkdir`,
       `df`, `umount` and the clock are one style
 
-## K8 - Many cores (in progress, after 1.0)
+## K8 - Many cores (in progress, after 1.0; the second core is 1.3.0)
 
 > Not a gate of 1.0 (ADR 0012, updated): the release promises a correct
 > single-core kernel; the second core is the first project after it. The
 > first phase is in the tree (`KERNEL_SMP`, `struct k_cpu`, the host gate
 > and the x86-64 processor list); the AP bring-up is the blocker, named in
-> ADR 0012 "The pilot of 1.x".
+> ADR 0012 "The pilot of 1.x". It is **not** a part of `1.2.0`: the screen,
+> the stream and the installer were that release, and the bring-up of the
+> application processors is `1.3.0`.
 
 * [x] A `struct k_cpu` per core and a run queue per core; the scheduler never
       runs one task on two cores (ADR 0012) - `kernel/cpu.h`,
@@ -262,7 +264,8 @@ written when the project was an operating system for one board; the numbers
 * [ ] x86-64: AP bring-up, local APIC timer, I/O APIC and the IPI of a TLB
       and a reschedule; `make x86-smoke` with `-smp 2` - the processor list
       (MADT) and `-smp 2` are done; the boot says `2 cpu(s) reported by the
-      firmware, 1 in use`; `make x86-smp-build` builds the two-core kernel
+      firmware, 1 in use`; `make x86-smp-build` builds the two-core kernel.
+      This is the step of `1.3.0`.
 * [ ] ESP32: the kernel tasks on both cores of the Pico, no driver assuming
       one core - not started (ADR 0018, the compatibility port)
 * [x] `KERNEL_SMP` (ADR 0010) and the host TSan run as the gate - the flag is
@@ -292,11 +295,72 @@ written when the project was an operating system for one board; the numbers
       and Ctrl+C for every stage of a pipeline (the job of ADR 0017)
 * [x] `ls` lists the names of a directory (`-l` with the mode, owner, size and
       date; `-a` with `.` and `..`), and `tree` draws the levels below it
+* [x] A third-party library under a program: PCRE2 10.42 in
+      `third_party/pcre2`, the 8-bit interpreter without JIT and Unicode,
+      linked into `/bin/pcre2grep`; the image is 61,336 bytes of the 64 KiB cap and
+      the library's own test is `tests/cases/test_pcre2.c` (the Unicode and
+      the transfer limit are in `docs/debts.md`)
 * [ ] A shell `export` and the environment of the shell in the programs,
       instead of the four words of the kernel
 * [x] Programs are files on a filesystem of the disk, and a program is added
       by writing a file of the volume (`make x86-disk`), not by embedding it
       in the kernel
+* [x] The library of a program learned the three families a portable source
+      expects: an arena of its own (`malloc`/`free`, the bss of the image, not
+      `KSYS_MALLOC`), `errno` and `strerror`, and the streams of `fopen`; the
+      shims of `<string.h>`, `<stdlib.h>`, `<stdio.h>`, `<errno.h>`,
+      `<unistd.h>`, `<fcntl.h>` and `<sys/types.h>` are in
+      `components/libc/user/include`
+* [x] The first port of a program of somebody else: zlib 1.3.1 as a static
+      archive built by the compiler of the window (`cmake/userland.cmake`,
+      `third_party/zlib/port/`) and `/bin/zcat` on a `.gz` of MicroFS. The
+      recipe is [`porting-programs.md`](porting-programs.md), the library has
+      `tests/cases/test_zlib.c`, and `make x86-smoke` and
+      `make x86-disk-smoke` check the inflated bytes of a fixed fixture. Lua,
+      sbase and SQLite are the next copies of the recipe
+* [x] The second port of a program of somebody else: Lua 5.4.7 (MIT) as a
+      static archive built by the compiler of the window and `/bin/lua`, with
+      the script `/etc/hello.lua` and `/etc/licenses/lua` in the image. The
+      library of a program learned the last pieces a language asks for -
+      `%f`/`%e`/`%g` with a precision, `strtod`, `qsort`, `setjmp`/`longjmp`,
+      `math.h` on the x87 unit, `time`/`localtime`, `getenv`, `signal` and
+      `fprintf` - and the port sets `CR4.OSFXSR` for a program with a
+      `double`. The host test is `tests/cases/test_lua.c`; `make x86-smoke`
+      runs the interpreter, and `make x86-disk-smoke` runs it out of the
+      volume in both boots
+* [x] The image of a program larger than `KSYS_MAX_IO`: `execve` reads an
+      image of up to 8 MiB (`K_EXEC_MAX_IMAGE`) in pieces of the transfer
+      edge into one block of the allocator, and a larger file is `E2BIG`
+      before a byte is read (`docs/debts.md`)
+* [x] The third port, and the first set of commands: sbase with ten tools
+      (`cat`, `grep`, `head`, `ls`, `tail`, `wc`, `sort`, `find`, `xargs`,
+      `sed`) under their canonical names in `/bin`, in place of the small
+      programs they replace. It is the port that grew the library of a
+      program the families a POSIX command needs (`opendir`/`readdir`,
+      `struct stat`, `getpwuid`, `localtime`, `fnmatch`, a regular expression
+      engine, `getopt`, `getline`, `fmemopen`), and the ten commands are in
+      `make x86-smoke` and `make x86-disk-smoke`
+* [x] The fourth port: bc 7.2.0 (BSD-2-Clause) as a static archive and the
+      two names `/bin/bc` and `/bin/dc` of the same engine, with the scripts
+      `/etc/bc.bc` and `/etc/dc.dc` and `/etc/licenses/bc` in the image. The
+      release is configured by a force-included `port/bc_port.h` (no history,
+      no NLS, 64-bit limbs) and its two POSIX calls are answered by the port
+      layer (`fstat` of a descriptor and `sigaction`). The library of a
+      program learned `strdup` and `srand`/`rand`; the host test is
+      `tests/cases/test_bc.c` and the smoke tests run the calculator and the
+      RPN one before and after a reset of the disk. The image is 115 KiB and
+      its arena is 768 KiB of the bss
+* [ ] The gaps of the next port: a `malloc` larger than the bss of an image
+      (`brk`/`mmap` of a program), a `poll` for a library that waits on a
+      pipe, an `fxsave` of the XMM state for two programs with a point in
+      their numbers, and the package that ships `zcat`, `lua` and the tools
+      of sbase with their licenses beside them (`docs/debts.md`)
+* [ ] A `chdir` and a wall clock in the ABI, and the POSIX frame of a fork
+      child: the library works around the three, and the workaround of each
+      is named in `docs/debts.md`
+* [ ] The ports of 1.3.0: SQLite (its SDK, and a package above
+      `PKG_PACKAGE_MAX` of 1 MiB), zstd, `file`/libmagic and awk; their
+      branches are still in progress and none of them is a promise of 1.2.0
 
 ## The last major changes of the board (1.1.0)
 
@@ -349,8 +413,9 @@ written when the project was an operating system for one board; the numbers
       system file, and a setting a machine cannot honour kept and ignored with
       a warning (`SETTINGS_KEPT`)
 * [x] The screen and the font: rotation, brightness, inversion, the scale of
-      the 5x7 font and the theme; the VGA of x86-64 where it can (the
-      attribute of the cells), the panel of the board everywhere
+      the 5x7 font and the theme; the panel of the board everywhere, and on
+      x86-64 the pair of the framebuffer and the gap between its lines
+      (`font.line_gap`)
 * [x] A table of the keys per machine in the wiki
       ([settings.md](wiki/settings.md)), with a host test that every key of a
       default file is a key of its system, so a key is applied or named
@@ -360,26 +425,38 @@ format: a backlight with a duty cycle for `brightness`, an applier on the host
 when its screen file is a real screen, and a rewrite of a file that is atomic
 on a VFS without `rename` (see [debts.md](debts.md)).
 
-## K11 - The screen of x86-64 (1.2)
+## K11 - The screen of x86-64 (done in 1.2.0)
 
 > The port keeps the text mode of the firmware: 80 columns by 25 rows at
 > `0xB8000`, sixteen colours, no font and no picture. The next screen is a
 > linear framebuffer, not a GPU (ADR 0023); a 3D driver of a real card is
 > not promised, and UEFI GOP is the later door to a physical machine.
 
-* [ ] A linear framebuffer through Bochs VBE in QEMU: 1280x800, 16 bits per
+* [x] A linear framebuffer through Bochs VBE in QEMU: 1280x800, 16 bits per
       pixel, RGB565 so `k_renderer` draws into it unchanged; the PCI device
       is found over the configuration space the network port already reads,
       and `paging.c` maps its window
-* [ ] The console of the screen: cells of the 5x7 font scaled twice (about
-      128 columns by 57 rows), the control characters, the cursor, the
-      scrolling and the two sequences of `clear`; the colours of
+* [x] The console of the screen: cells of the 8x16 font of the PC (Spleen
+      8x16, 160 columns by 50 rows; `font.line_gap` of `/etc/font` widens a
+      line to 18 or 20 pixels, 44 or 40 rows), the control characters, the
+      cursor, the scrolling and the two sequences of `clear`; the colours of
       `/etc/console` (ADR 0021); the keyboard of IRQ1 unchanged
-* [ ] The text mode stays the fallback, improved once to 80x50 with the 8x8
-      font of the VGA; the port chooses the screen at the boot
-* [ ] `make x86-vga-smoke` reads the framebuffer with `screendump` (a
+* [x] A colour per cell: the sixteen of the CGA in RGB565, `(paper << 4) |
+      ink` on every cell of the grid and the attribute byte of the text mode,
+      the SGR sequences of a terminal (`0`, `1`, `22`, `7`, `27`, `30`-`37`,
+      `39`, `40`-`47`, `49`, `90`-`97`, `100`-`107`), the levels of the log
+      (warn amber, error red, success green), `console.ink`/`console.paper`
+      of `/etc/console` (a name or `0xRRRR`) and `ls --color`; the serial
+      line stays plain
+* [x] The text mode stays the fallback; the port chooses the screen at the
+      boot. The 80x50 mode with the 8x8 font of the VGA is not built - the
+      fallback is the screen of a machine without an interface, and the font
+      load and the CRTC timings are a debt of their own
+      ([debts.md](debts.md), K11)
+* [x] `make x86-vga-smoke` reads the framebuffer with `screendump` (a
       picture has no text memory for `pmemsave`) and checks cells and
-      colours; `make x86-run` opens it for a person
+      colours, and keeps the `pmemsave` checks of the text mode on a card
+      without the interface; `make x86-run` opens it for a person
 * [ ] Later: a 2D surface for a program, and optionally virtio-gpu 2D in
       QEMU; UEFI GOP for a real machine, which is a loader of its own
 
@@ -388,35 +465,101 @@ are the parts of one, and the compositor has to be a program of the system
 and not the kernel (see [releases/2.0.md](releases/2.0.md)); the first thing
 to build is the screen a program can draw on.
 
-## K12 - The stream and the installer (1.2, in parallel with K11)
+## K12 - The stream and the installer (done in 1.2.0)
 
 > The programs are a repository of their own (`microos-progs`); the machine
 > that installs one needs a stream, TLS and a signature (ADR 0024). The board
 > has no installer - its `progs` belongs to the firmware (ADR 0018) - so this
 > is the work of x86-64 and of the host substrate.
 
-* [ ] A streaming HTTP client: `Content-Length` and a chunked body, a
+* [x] A streaming HTTP client: `Content-Length` and a chunked body, a
       bounded number of redirects, a timeout, and a sink that is a
-      `struct vfs_file` or the inactive slot of an update; `wget URL FILE`
-      at the console and a `Range` resume for a file
-* [ ] mbedTLS on x86-64 with a freestanding platform layer: `kmm` for the
+      `struct vfs_file` (a callback); `wget URL FILE` at the console and a
+      `Range` resume for a file. The inactive slot of an update is the same
+      stream and is not wired yet: the update of the board is over USB
+      (ADR 0022) and there is no `esp_ota_*` writer in the tree
+      ([debts.md](debts.md))
+* [x] mbedTLS 3.6.2 on x86-64 with a freestanding platform layer:
+      `third_party/mbedtls` with a client-only configuration, `kmm` for the
       allocations, `RDRAND` for entropy (the timer as the fallback), NTP for
-      the clock and `/etc/ssl/certs.pem` through the VFS; the board keeps the
-      copy of ESP-IDF
-* [ ] The signed index and a signed `.mox`: `index.json` with the name, the
+      the clock and `/etc/ssl/certs.pem` through the VFS; `http_parse_url`
+      takes `https`, the stream wraps the plain transport, and `wget`,
+      `http` and `pkg` speak HTTPS with the chain, the name and the dates
+      checked. A machine of 1970 is a refusal with a sentence. The board
+      keeps the copy of ESP-IDF and its shell has no command of TLS yet
+      (ADR 0024 §3, [debts.md](debts.md))
+* [x] The signed index and a signed `.mox`: `index.json` with the name, the
       version, the machine, the ABI, the size and the digest; the verifier
       reuses the Ed25519 of ADR 0020
-* [ ] `pkg update/install/remove/list/info` over `/var/pkg` and `/usr/bin`,
+* [x] `pkg update/install/remove/list/info` over `/var/pkg` and `/usr/bin`,
       atomic through a new `vfs_rename` (MicroFS and FAT implement it; a
-      volume without it installs with a warning)
-* [ ] The interface of the console is pacman's, the build is not: `-S`, `-R`,
+      volume without it installs with a warning). A directory is renamed
+      only inside its parent yet (see debts.md)
+* [x] The interface of the console is pacman's, the build is not: `-S`, `-R`,
       `-Q`, `-Sy`, `-Su`, `-Syu`, `-U`, `--noconfirm`, `--needed`,
       `--download-only`, `--dry-run`, `--allow-downgrade`, `--offline`,
       `--root`, `--repo`, `--color`, `NAME=VERSION` (ADR 0024 §6)
-* [ ] The repository `microos-progs`: CI builds a program per machine, signs
-      it and publishes the index with the artifacts; `make` in the kernel
-      tree keeps only the programs of the tests
-* [ ] Tests: the fake transport of `components/net` serves a chunked body, a
+* [x] The repository `microos-progs`: a public tree with a signed index at
+      <https://turbososiska304.github.io/microos-progs/>, the key
+      `microos-progs.pub` and the artifacts the index names; the kernel tree
+      keeps only the programs its tests and its `bin` need. The CI of the
+      repository and the packages of the programs with their licenses are
+      the next pass ([debts.md](debts.md))
+* [x] Tests: the fake transport of `components/net` serves a chunked body, a
       redirect and a dropped connection; the installer is tested on a
       temporary volume with a bad signature, a wrong machine and a downgrade;
-      `make x86-net-smoke` fetches a file from a local server
+      `make x86-net-smoke` fetches a file from a local server and installs it,
+      and serves three certificates of a test authority over TLS: the
+      trusted one arrives (1.3 and 1.2), the one of another name and the one
+      of another authority are refused, and the repository of `pkg` is HTTPS
+
+## K13 - A bootable image of x86-64 (prototype, done in 1.2.0)
+
+> The machine of the port boots in QEMU from `-kernel` and `-initrd`: the
+> hypervisor is the boot loader. A medium is the other half of "a machine":
+> a firmware reads it, a boot loader starts the port's loader, and the root
+> filesystem comes with the image. The decision is
+> [ADR 0026](adr/0026-bios-iso.md), the page is
+> [ports/x86_64/iso.md](ports/x86_64/iso.md).
+
+* [x] An El Torito ISO (BIOS) with the loader, the signed kernel and the
+      root image: `make x86-iso` writes `build-x86-iso/microos.iso` with
+      GRUB when `grub-mkrescue` is installed and with limine otherwise; the
+      boot loader is not vendored
+* [x] The root image as the second module of the boot: the port registers
+      its bytes as a read-only block device (`boot0`, `boot0p1`), the boot
+      mounts it at `/` and `/bin` is the tree of the CD; the heap starts
+      above the modules, and the loader refuses a module over the kernel
+* [x] `make x86-iso-smoke`: the ISO boots with `-cdrom` and nothing else,
+      mounts the root image and runs `/bin/hello` from the boot and from the
+      shell
+* [ ] UEFI: the EFI application, the memory map of the firmware, GOP and the
+      exit of the boot services; the framebuffer of ADR 0023 is here, so the
+      screen a GOP hands over is the next door to a physical machine, and
+      the loader for it is not written yet
+* [ ] A hybrid image: the ISO written to a USB stick boots as a disk
+      (`limine bios-install`, or a protective MBR and the GRUB record)
+* [ ] A writable root: the root of the CD is read-only, and a person's files
+      need a disk (or an overlay in the memory of the machine) and the
+      installer of K12
+* [ ] A reproducible ISO: the volume descriptor follows
+      `SOURCE_DATE_EPOCH`, the directory records still carry the clock
+
+## The release of 1.2.0
+
+> The notes are [`docs/releases/1.2.md`](releases/1.2.md); the page of the
+> wiki is [`wiki/release-1.2.md`](wiki/release-1.2.md). The board is the
+> compatibility port of ADR 0018, and the second core is `1.3.0`.
+
+* [x] K11: the framebuffer of 1280x800, the Spleen 8x16 console, the colour
+      of a cell and SGR, the text mode as the fallback (ADR 0023)
+* [x] K12: the stream and `wget`, the signed index and `pkg`, mbedTLS and
+      HTTPS (ADR 0024)
+* [x] K13: the BIOS ISO with the read-only root module (ADR 0026)
+* [x] `make x86-user`: the tar of the release is the machine that runs
+* [x] The ports: zlib, sbase as the canonical `/bin`, PCRE2, Lua and bc/dc,
+      the 8 MiB ceiling of an image, and the repository `microos-progs`
+* [x] The shell fixes of `1.1.2` (a directory without a table, `.` and `..`
+      as a path)
+* [ ] The gates of the release: the three sessions of 600 seconds, run after
+      the integration of the branches (the table in the notes)

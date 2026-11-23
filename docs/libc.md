@@ -17,24 +17,61 @@ A program cannot call those functions: it was not compiled into the kernel and
 their addresses are not its own. Its library is `components/libc/user` (ADR
 0016): `_start`, the door of the call, `open`, `close`, `read`, `write`,
 `lseek`, `readdir`, `stat`, `mkdir`, `unlink`, `getcwd`, `getpid`, `uptime`,
-`execve`, `exit`, `printf`, `puts` and the strings (`strlen`, `strcmp`,
-`strncmp`, `strstr`, `memcpy`, `memset`), with the numbers of `kernel/ksys.h`
-and no allocation, no `errno` and no floating point. The door is `int $0x80`
-on x86-64 and the address of a function of the port on the board (ADR 0018);
-the numbers and the arguments of the calls are the same on both machines. The
-two libraries share the header of the ABI and nothing else, and that is
-deliberate: one runs with the kernel under it, the other has nothing but the
-gate.
+`execve`, `exit`, `printf`, `puts`, `snprintf`, the strings, the allocation
+and the streams. The door is `int $0x80` on x86-64 and the address of a
+function of the port on the board (ADR 0018); the numbers and the arguments
+of the calls are the same on both machines. The two libraries share the
+header of the ABI and nothing else, and that is deliberate: one runs with the
+kernel under it, the other has nothing but the gate.
 
 The library of a program grew with its utilities (0.7): `stat` to tell a file
 from a directory (`rm` refuses a directory without `-r`), `mkdir` and
 `unlink` for the tree (`mkdir`, `rm`), `getcwd` for the directory of the task
-(`pwd`), and `strstr` for a word in a line (`grep`). The list is what the ten
-programs of `/bin` use and not a standard library: a function without a caller
-of this tree is not in it. `cat`, `wc`, `head` and `grep` read descriptor 0
-when they are given no file, which is the shape of a filter; a fresh table of
-a program has no descriptor 0 yet, so that read is `EBADF` until a redirection
-opens it ([`docs/debts.md`](debts.md)).
+(`pwd`), and `strstr` for a word in a line (`grep`). The first port of a
+program of somebody else (zlib, `/bin/zcat`) added the three families a
+portable source expects, and they are still small enough for the board
+because a program selects the files it links:
+
+| Part | Files | What it is |
+|---|---|---|
+| the allocation | `src/malloc.c` | an arena in the bss of the program (`-DULIBC_HEAP_SIZE`, 256 KiB by default, 512 KiB for `zcat`), not `KSYS_MALLOC`: the block of the kernel is memory of ring 0 and a program cannot read it |
+| the error | `src/errno.c` | `errno` as a global of the program and `strerror`; the calls keep the negative number of the ABI and the wrappers also store its magnitude, so a portable library reads `errno` after `read` |
+| the streams | `src/file.c` | `fopen`, `freopen`, `fclose`, `fread`, `fwrite`, `fgetc`, `getc`, `ungetc`, `fputc`, `fgets`, `fputs`, `feof`, `ferror`, `fseek`, `ftell`, `rewind`, `fileno` over a descriptor; the binary mode is accepted and ignored because no file of the system translates a byte; `tmpfile` is a failure (no `/tmp`) |
+| the conversions and the sort | `src/stdlib.c` | `strtod`, `strtol`/`strtoul`/`strtoll`/`strtoull`, `atoi`/`atol`/`atof`, `abs`/`labs`, `qsort` (a merge sort in the arena, insertion when it has no room), `getenv` over `environ` |
+| the arithmetic | `src/math.c` | the functions of `<math.h>` for a `double`: the square root, the logarithm and the exponential of the x87 unit, the trigonometric functions of the unit with an argument reduced by `fprem`, and the rounding and the split of the exponent in integers |
+| the long jump | `src/setjmp.c` | `setjmp`/`longjmp` in the six callee-saved registers, the stack pointer and the return address of x86-64 |
+| the clock and the locale | `src/time.c`, `src/locale.c`, `src/ctype.c`, `src/assert.c` | `time` (the uptime: the ABI has no wall clock), `clock`, `gmtime`/`localtime`/`mktime`/`strftime` of the C locale, `localeconv`, the classes of a byte, `assert` |
+
+The names a portable source includes (`<string.h>`, `<stdlib.h>`, `<stdio.h>`,
+`<errno.h>`, `<unistd.h>`, `<fcntl.h>`, `<sys/types.h>`) are thin headers in
+`components/libc/user/include`, each one including `ulibc.h`. The body of the
+library is still `ulibc.h`, and a program that wants the functions of the
+system includes `ulibc.h` and not the headers of the host.
+
+The formatter is the one of a program: `%d %i %u %o %x %X %c %s %p %%`, the
+flags `- + space # 0`, the width and the precision (a `*` takes either from
+the arguments), and the length `l`/`ll`/`z`/`j`/`h`. A build that defines
+`ULIBC_WITH_FLOAT` adds `%f %F %e %E %g %G`: the digits come from
+`src/format_float.c`, and the include of that source is the choice of a
+program with a `double` in it (Lua). A program of the tree that does not
+define the name is built with `-mgeneral-regs-only`, where a double has no
+register, and prints such a conversion as the characters it was written with.
+`%a` is not implemented.
+
+Floating point in the guest is the one place the port leaves its rule:
+`CR4.OSFXSR`, `CR4.OSXMMEXCPT` and `CR0.NE` are set by the loader, the
+program is built without `-mgeneral-regs-only`, and the scheduler saves
+neither the XMM registers nor the x87 state. A program with a point in its
+numbers therefore runs alone - `execve` waits for it - and a second one at the
+same time needs the save of the state (`docs/debts.md`).
+
+The list is what the programs of `/bin` and the first port use and not a
+standard library: a function without a caller of this tree is not in it.
+`cat`, `wc`, `head` and `grep` read descriptor 0 when they are given no file,
+which is the shape of a filter; a fresh table of a program has no descriptor
+0 yet, so that read is `EBADF` until a redirection opens it
+([`docs/debts.md`](debts.md)). The recipe of the next port is
+[`porting-programs.md`](porting-programs.md).
 
 ## The names
 
@@ -141,6 +178,58 @@ void microos_exit(int code);
 The flag of the waitpid is `MICROOS_WNOHANG`: the call does not wait and
 answers 0 when the child is not ready.
 
+## The library of a program: the POSIX families
+
+`components/libc/user` is the library a program is linked against (ADR 0016).
+It is not the library of the kernel above: it reaches the kernel only through
+`int $0x80` on x86-64 (or the door of the board), and it grew with the
+programs that were ported to it. The port of sbase (ten Unix tools) needed
+the families a portable POSIX source expects, and they are now part of it:
+
+| Header | The functions | The file |
+|---|---|---|
+| `<dirent.h>` | `opendir`, `readdir`, `closedir`, `rewinddir`, `fdopendir` over `KSYS_READDIR`, one batch of eight entries per directory | `src/dirent.c` |
+| `<sys/stat.h>` | `stat`, `lstat`, `fstat`, `fstatat`, `chmod`, `umask` and `struct stat` with the `S_IS*` macros over `KSYS_STATX`; `fstat` reads the size with `lseek` | `src/stat.c` |
+| `<unistd.h>` | `access`, `chdir`, `rmdir`, `readlink`, `isatty`, `pipe`, `dup2`, `fork`, `wait`, `waitpid`, `execvp`, `_exit`, `sleep`, `sysconf`, `getopt` | `src/unistd_ext.c`, `src/getopt.c` |
+| `<pwd.h>`, `<grp.h>` | one user, uid 0 and gid 0, named `root` | `src/pwd.c` |
+| `<time.h>` | `time`, `clock`, `gmtime`/`localtime`, `strftime`, `mktime`, `clock_gettime` | `src/time.c` |
+| `<regex.h>` | a POSIX basic/extended engine: literals, `.`, `*`, `+`, `?`, `{m,n}`, groups, back references, alternation, brackets and the classes | `src/regex.c` |
+| `<fnmatch.h>` | the pattern of a name with `*`, `?`, `[...]`, `FNM_PATHNAME` and `FNM_NOESCAPE` | `src/fnmatch.c` |
+| `<stdlib.h>` | the conversions with `ERANGE` (`strtod` only in a program with `ULIBC_WITH_FLOAT`), `qsort` (merge sort), `bsearch`, `atoll`/`llabs`, `getenv`, `atexit`, `abort`, `srand`/`rand` | `src/stdlib.c`, `src/rand.c` |
+| `<string.h>`, `<strings.h>`, `<ctype.h>` | `strdup`, `strndup`, `strspn`, `strcspn`, `strpbrk`, `strcasecmp`, `strcasestr` and the ASCII classes | `src/strdup.c`, `src/string_ext.c`, `src/ctype.c` |
+| `<stdio.h>` | `fprintf`/`vfprintf`, `sprintf`, `putchar`, `getline`/`getdelim`, `fmemopen`, `fdopen`, `fileno`, `ungetc`, `perror` | `src/stdio.c`, `src/stdio_ext.c`, `src/file.c` |
+| `<termios.h>` | the two calls of a terminal, answered `ENOTTY`: the console has no control command | `src/termios.c` |
+
+The stream of `<stdio.h>` is a descriptor and two flags, with no buffer of
+the host; `fmemopen` is a block of the caller that a command uses for a word
+of its line. The arena of `malloc` is in the bss of the program (256 KiB by
+default, `ULIBC_HEAP_SIZE` for a tool that holds a file), because a block of
+`KSYS_MALLOC` is memory of ring 0 that a program cannot read.
+
+Three shapes of the machine are visible in the library and are decisions, not
+bugs:
+
+* **There is no `chdir` in the ABI.** The shell changes the cwd of its task
+  (`cd`) and `execve` carries it into a program, but a program has no call
+  that moves it. The library keeps the directory itself (`src/path.c`) and
+  resolves every relative path against it, so `ls a b`, `find .` and the
+  `chdir` of `ls` between two directories work; a child started by `execve`
+  begins in the directory of the task, not in the one the program moved to.
+* **There is no wall clock.** `time()` is the seconds since the boot, and
+  `localtime` is UTC; the filesystem still keeps a moment of Unix in every
+  record, and a listing prints it.
+* **There is no floating point.** A program is built with
+  `-mgeneral-regs-only`; a `double` cannot cross a function of the guest, so
+  the library has no `strtod`/`%f`, and `sort -n` and `ls -h` of sbase order
+  and print their numbers as decimals in the port layer.
+
+`fork` is real on x86-64 (copy on write), and its child of the port comes
+back with the pid of the parent's answer in RAX and a stack page that the
+parent can still write; `src/unistd_ext.c` gives the child its zero (the pid
+of the task is the answer) and lets the child leave the frame of the call
+before the parent uses the stack again. `docs/debts.md` records the two
+halves of the port that would make the workaround unnecessary.
+
 ## The limits
 
 ```c
@@ -180,8 +269,9 @@ const char *microos_strerror(int code);
 * **The standard descriptors are the console.** The descriptors 1 and 2 are
   the console of the system when they are not open as a file. `dup2` and
   `pipe` are there (`microos_dup2`, `microos_pipe`), so a program sends its
-  output to a file or to another program; the shell does not parse a
-  pipeline yet.
+  output to a file or to another program, and the shell of K7 parses a
+  pipeline and a redirect (ADR 0017). A descriptor that is not open is not
+  the console: a file opened as 1 shadows it for the caller.
 * **The console is not readable through the descriptor 0.** A program that
   wants the input of the user opens `/dev/tty0`. The utilities of
   `components/libc/user` do read descriptor 0 for a line, but the shell does
@@ -193,6 +283,11 @@ const char *microos_strerror(int code);
 
 ## The tests
 
-The tests of the library live in `tests/cases/test_libc.c`. The library is
-checked against the library of the system with the real numbers of the
-corpus of the project: the same numbers, the same text, the same errors.
+The tests of the library of the kernel live in `tests/cases/test_libc.c`:
+the library is checked against the library of the system with the real
+numbers of the corpus of the project. The pure part of the library of a
+program (the classes, the strings, the pattern of a name, the options, the
+regular expressions, the one user and the decimal order of sbase) is compiled
+for the host by `tests/cases/test_userland.c`, which is a test of its own
+(`userland`); the calls behind the door are covered by `make x86-smoke` and
+`make x86-disk-smoke`.

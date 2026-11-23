@@ -29,6 +29,24 @@
 /* The program itself, in the file of the program and not in the library. */
 int main(int argc, char *const argv[], char *const envp[]);
 
+/*
+ * The environment of the program, kept for `getenv` of the library. `_start`
+ * is the only place that sees the third argument, and a source that asks for
+ * a name (a `PATH` of a command, the `HOME` of a listing) reads it here. The
+ * vector is not copied: the port left it in the window of the program, and it
+ * lives as long as the program does.
+ */
+char *const *__ulibc_environ;
+
+/* The name a portable program knows the vector by, for `environ`. */
+char **environ;
+
+static void start_set_environment(char *const envp[])
+{
+    __ulibc_environ = (char *const *)envp;
+    environ = (char **)envp;
+}
+
 #ifdef MOX_ARCH_XTENSA
 /*
  * The door of the program: the address of a function of the kernel with the
@@ -42,6 +60,7 @@ void *g_mox_door;
 void _start(void *door, long argc, char *const argv[], char *const envp[])
 {
     g_mox_door = door;
+    start_set_environment(envp);
 
     exit(main((int)argc, argv, envp));
 
@@ -51,6 +70,8 @@ void _start(void *door, long argc, char *const argv[], char *const envp[])
 #else
 void _start(long argc, char *const argv[], char *const envp[])
 {
+    start_set_environment(envp);
+
     exit(main((int)argc, argv, envp));
 
     for (;;) {

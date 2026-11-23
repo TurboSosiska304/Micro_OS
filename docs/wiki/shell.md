@@ -47,14 +47,21 @@ microos> cat /etc/setting 2> /tmp/errors
 microos> /bin/cat /etc/setting | wc -l
 ```
 
-A stage that is a command of the shell (`ls`, `cat`, `echo`, `df`, ...) runs
-in a task of its own and writes descriptor 1, so a redirect or a pipe carries
-its output exactly as it carries a program's. A name that is not a command is
+A stage that is a command of the shell (`echo`, `df`, `tree`, ...) runs in a
+task of its own and writes descriptor 1, so a redirect or a pipe carries its
+output exactly as it carries a program's. A name that is not a command is
 looked up in `PATH` and started with `execve`; on x86-64 that program
 inherits the three descriptors of the stage, which is what makes
-`echo one | /bin/cat` and `ls /bin | wc -l` work. On the board and in the
-simulator there is no program to run, and only the commands of the shell can
-be stages.
+`echo one | /bin/cat` and `ls /bin | wc -l` work.
+
+The ten commands of sbase (`ls`, `cat`, `grep`, `head`, `tail`, `wc`, `sort`,
+`find`, `sed`, `xargs`) are programs of the x86-64 disk, and the shell looks
+their bare name in `PATH` **before** its own table: `ls /etc` at the prompt is
+`/bin/ls`, the same file `exec /bin/ls /etc` runs. The port is asked first
+(`k_port_exec_supported()`): the simulator cannot enter an image and keeps
+the command of the shell, and the board has no `ls` of sbase in its `/bin`
+and falls back the same way. A file that exists but cannot run is an error
+and not a silent fallback.
 
 What the line does **not** do:
 
@@ -126,7 +133,7 @@ The files, on every machine:
 | Command | What it does |
 |---|---|
 | `pwd`, `cd <dir>` | the current directory |
-| `ls [-la] [path]` | the names of a directory, one per line; `-l` adds the mode, the owner, the size and the date, `-a` puts `.` and `..` first |
+| `ls [-la] [--color[=when]] [path]` | the names of a directory, one per line; `-l` adds the mode, the owner, the size and the date, `-a` puts `.` and `..` first |
 | `tree [-ad] [path]` | the levels below a path, with `` `-- `` branches; `-d` keeps the directories only |
 | `cat [-n] [file]` | the content of a file, or of the standard input; `-n` numbers the lines |
 | `write <file> <text>` | create or replace a file with one line (at most 127 bytes) |
@@ -146,7 +153,9 @@ The services, where the port registers them:
 |---|---|---|
 | `config`, `config sync` | list the store of `/etc`, restore and save it | board, simulator; x86-64 has no store |
 | `mkfs -y` | format the volume (erases everything) | board, simulator |
-| `http get <url>` | one HTTP request; prints the status and the body | board |
+| `http get <url>` | one HTTP request; prints the status and the body | board, x86-64 |
+| `wget <url> <file>` | download a URL into a file; a second run continues it | board, x86-64 |
+| `pkg <operation> [flags] [name...]` | the installer: `-Syu`, `-S NAME`, `-U FILE`, `-R NAME`, `-Q` | x86-64 |
 | `ntp [server]` | set the clock from NTP (UTC), default `pool.ntp.org` | board |
 | `httpd [port\|off]` | the page of the state over HTTP, default port 80 | board |
 | `mqtt <host> <port> <topic> <message>` | publish one message at QoS 0 | board |
@@ -162,13 +171,14 @@ The services, where the port registers them:
 | `power [sleep <seconds>\|off]` | deep sleep with the timer or button C, or power off | board |
 | `factory reset -y` | erase MicroFS and the NVS, then restart; without `-y` it only explains | board |
 
-The simulator has no network and no drivers: `http`, `ntp`, `httpd`, `mqtt`
-and `telnet` are not registered there at all, and the driver commands of the
-board are stubs that answer something sensible. The x86-64 port registers only
-the core and the files: no `mkfs`, no `date`, no network; `config` is there,
-but the machine has no store, and the files of `/etc` are the settings. This is
-the port boundary doing its job, not a bug; [ports.md](ports.md) has the whole
-matrix.
+The simulator has no network and no drivers: `http`, `wget`, `pkg`, `ntp`,
+`httpd`, `mqtt` and `telnet` are not registered there at all, and the driver
+commands of the board are stubs that answer something sensible. The x86-64
+port registers the core and the files, and the services of its image: the
+network of K6 (`http`, `wget`, `httpd`, `ntp`) and the installer (`pkg`)
+arrive with `make x86-net-build`; an image without the network has none of
+them. This is the port boundary doing its job, not a bug; [ports.md](ports.md)
+has the whole matrix.
 
 ## The clock and the memory
 
@@ -203,7 +213,11 @@ psram: not available on this platform
 ## `PATH` and `exec`
 
 `PATH` starts at `/bin:/usr/bin` and belongs to the shell: it is not a file of
-`/etc`, and a program does not inherit it yet.
+`/etc`, and a program does not inherit it yet. The commands of the shell that
+change its state (`cd`, `path`) and the ones that have no program (`help`,
+`uname`, `ps`, `df`, `mount`, `config`, `stat`, `write`, `tree`, `kill`, ...)
+are always the shell's own. The ten names of sbase are the other way round:
+the file wins, and the command is the fallback.
 
 ```text
 microos> path
@@ -231,10 +245,10 @@ exec: hello: not found in /bin:/usr/bin
 On the board and in the simulator there is no program to run: a fresh volume
 has no `/bin`, and `execve` answers `ENOSYS` even for a file that is there. The
 x86-64 port has `/bin` in the MicroFS volume of its disk image
-(`make x86-disk`): `hello`, `crash`, `fork`, `badptr`, `signals`, `cat`,
-`echo`, `ls`, `wc`, `head`, `grep`, `mkdir`, `rm`, `pwd` and `spawn` are
-files with the mode 0755, and the boot and the shell run them as programs of
-ring 3. The library programs inherit the descriptors of the shell, so a
+(`make x86-disk`): `hello`, `crash`, `fork`, `badptr`, `signals`, `nx`,
+`cat`, `echo`, `grep`, `head`, `ls`, `tail`, `wc`, `sort`, `find`, `xargs`,
+`sed`, `mkdir`, `rm`, `pwd`, `spawn` and `zcat` are files with the mode 0755,
+and the boot and the shell run them as programs of ring 3. The library programs inherit the descriptors of the shell, so a
 pipeline can end in one of them. [programs.md](programs.md) explains what a
 program is.
 
@@ -265,12 +279,22 @@ hangs.
 
 ## `ls` and `tree`
 
-`ls` writes the names of a directory, one per line, in the order of the
-filesystem (the names are not sorted), a directory with a slash at its end.
-The listing has no fixed table and no limit: every name is printed as it is
-read. `-l` adds the kind and the nine bits of the mode, the owner, the size and
-the moment; `-a` puts `.` and `..` first. The path itself is not a line of the
+On x86-64 a bare `ls` is `/bin/ls` of sbase: the names of a directory, one per
+line and sorted, without a slash at the end of a directory. `-l` adds the
+kind and the nine bits of the mode, the owner, the group, the size and the
+moment; `-a` puts `.` and `..` first; `--color[=always|never|auto]` paints a
+directory blue and an executable green (`--color` is always, `auto` asks
+`isatty`, which is 0 on this console). The path itself is not a line of the
 answer — `tree` is the command that draws the levels.
+
+The shell has an `ls` of its own for the machines without a program (the
+simulator and the board): it prints the names one per line in the order of the
+filesystem, a directory with a slash at its end, and its `-l` is a line per
+entry with the mode, the owner, the size and the date. The listing has no
+fixed table and no limit: every name is printed as it is read, and `-a` puts
+`.` and `..` first. It takes `--color` too, with the same three colours and
+the same sequences. The two are different commands on purpose: one is a
+program of the disk, the other is the shell of the kernel.
 
 ```text
 microos> ls /etc
@@ -281,6 +305,15 @@ microos> ls -l /etc
 drwxr-xr-x root        14 21 Nov 19:03 init.d/
 -rw-r--r-- root         6 21 Nov 19:03 setting
 ```
+
+`--color` writes a directory in blue and a file with an execute bit in green;
+the colours are the SGR sequences of a terminal, so a screen shows them and
+the serial copy of the console does not. `--color=always` is the flag itself,
+`--color=never` is the plain listing and `--color=auto` is the plain listing
+as well, because this shell has no terminal to ask about. Without the flag the
+names are plain, as they always were. A person reads the result on the screen
+of x86-64: `make x86-vga-smoke` checks the colour of the cell of a directory
+and of an executable out of the picture.
 
 The owner 0 is written `root`, a greater uid as a number. A record without a
 mode prints `?---------`; a record without a moment prints `-` in the date

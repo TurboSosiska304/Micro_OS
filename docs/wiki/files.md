@@ -44,14 +44,21 @@ microos> tree /
 | `/etc` | the configuration: a file name is the key and its content the value for a single setting, `key=value` lines for a system (`display`, `font`, `console`) |
 | `/etc/init.d` | the scripts of the init process, one command per line |
 | `/etc/fstab` | the volumes the boot mounts after the root, when the file is there |
+| `/etc/greeting.gz` | on x86-64: the gzip fixture of `/bin/zcat`, written by `tools/x86_image.py` with a fixed moment |
+| `/etc/licenses/zlib` | the license of zlib, beside the program that carries the library |
+| `/etc/licenses/sbase` | the MIT notice of sbase, beside the ten commands it was built into |
 | `/proc` | the kernel: `version`, `uptime`, `meminfo`, `tasks`, `modules`, one directory per task |
 | `/dev` | the devices: `tty0`, `null`, `input` and the ones the port adds |
 | `/log` | on the board: `start.log`, the log of the boot |
 | `/bin` | on x86-64: the programs of the disk image (`hello`, `crash`, `fork`, ...), written by `make x86-disk` and read by `execve`; no boot installs them |
 
-`ls` prints the names of a directory, one per line; `-l` adds the mode, the
-owner, the size and the date, and `-a` the two names `.` and `..`. `tree`
-draws the levels below a path, and `stat` is the detailed view of one object.
+`/bin/ls` is the `ls` of sbase: one name per line, `-l` for the mode, the
+owner, the group, the size and the date, `-a` for the two names `.` and `..`,
+`-R` for a tree and `--color` for a directory in blue and an executable in
+green. A bare `ls` is that program on x86-64 (the shell looks in `PATH`
+first); the simulator, whose port has no programs, has the command of the
+shell that prints the names two spaces apart. `tree` draws the levels below a
+path, and `stat` is the detailed view of one object.
 
 ## MicroFS
 
@@ -334,8 +341,11 @@ tests always build it.
 What a FAT record cannot carry is still absent: `stat` answers `mode = 0`
 and owner 0, `chmod` and `chown` are `ENOTSUP`, and there is no time of the
 change. `unlink` removes a file or an empty directory and refuses a
-directory that holds an entry with `ENOTEMPTY`; `rename` is not a call of
-the VFS yet. The mount does not ask whether the medium can be written: a
+directory that holds an entry with `ENOTEMPTY`; `rename` is a call of the
+VFS (ADR 0024 §5) and FAT implements it: a name is a run of entries, so the
+call writes the run of the new name and marks the old one removed, and a file
+already at the destination is replaced. A directory is renamed only inside
+its own parent. The mount does not ask whether the medium can be written: a
 card with its physical write switch on mounts and is refused at the first
 write, because reading it is still useful.
 

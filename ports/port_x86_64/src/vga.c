@@ -1,41 +1,42 @@
 /*
- * Micro OS — the VGA text console of the x86-64 port.
+ * Micro OS — the text console of the x86-64 port: the fallback screen.
  *
  * The screen of a PC in the mode the firmware left it in is 80 columns by 25
  * rows of cells at 0xB8000, two bytes each: the character and an attribute.
- * The kernel does not program a video mode and does not touch the palette:
+ * The port does not program a video mode here and does not touch the palette:
  * the mode 3 of the VGA is the one QEMU and every PC has had since 1987, and
- * the text is enough for a console that a person types into. What this file
- * adds to that memory is the state a screen needs and a buffer does not: the
- * position of the cursor, the scroll when the last line is full, and the
- * three control characters a terminal is expected to obey.
+ * when the machine has no Bochs VBE interface to program (ADR 0023) this text
+ * is the whole picture. It is the fallback and not a second console: the state
+ * of the dialogue and its escape sequences live in src/console.c, and this
+ * file is the screen that puts a cell into the video memory.
  *
- * The bytes come here through k_port_write(), which sends them to COM1 as
- * well: one line of the kernel is one line in the window and one line in the
- * serial log, and neither sink knows about the other.
+ * The attribute of a cell is the one the console computed (kernel/ansi.h): the
+ * nibble of the ink and the nibble of the paper of the sixteen colours the
+ * mode has had from the beginning. The plain text carries the pair of the
+ * `console` system of /etc (ADR 0021) - light grey on black, black on light
+ * grey, with the inversion of the file - and a word a command coloured keeps
+ * its own; a change of the pair repaints the cells of the pair and leaves the
+ * others.
  */
 #include "port_x86_64_console.h"
 
-#include <string.h>
-
 #include "kernel/log.h"
 #include "port_x86_64.h"
-#include "settings/settings.h"
 
 #define VGA_BASE 0xB8000u
-#define VGA_COLUMNS 80u
-#define VGA_ROWS 25u
+#define VGA_COLUMNS 80
+#define VGA_ROWS 25
 #define VGA_CELLS (VGA_COLUMNS * VGA_ROWS)
 
 /*
  * Light grey on black: the colours of the terminal the serial console looks
- * like, so that the window and the log are the same picture. A system of /etc
- * (`console`, ADR 0021) may ask for the other attribute, and then every cell
- * of the screen carries it.
+ * like, so that the window and the log are the same picture. The theme of
+ * /etc chooses the pair and the console hands it over as an attribute; the
+ * value here is the pair of the boot, before the files are read.
  */
-#define VGA_ATTR 0x07u
+#define VGA_ATTR_BOOT 0x07u
 
-static k_u8_t g_attribute = VGA_ATTR;
+static k_u8_t g_theme_attr = VGA_ATTR_BOOT;
 
 /* One cell of the video memory: the character in the low byte of the word and
  * the colour in the high one, which is the order the VGA has read since the
@@ -44,9 +45,6 @@ static k_u16_t vga_cell(char character, k_u8_t attribute)
 {
     return (k_u16_t)((k_u16_t)(k_u8_t)character | ((k_u16_t)attribute << 8));
 }
-
-/* The tab stops of the terminal: every eight columns, from the left edge. */
-#define VGA_TAB 8u
 
 /* The cursor of the hardware lives in a register of the cathode ray tube
  * controller, addressed by an index port and read or written by a data port. */
@@ -67,41 +65,55 @@ static k_u16_t vga_cell(char character, k_u8_t attribute)
 
 static volatile k_u16_t *const g_vga = (volatile k_u16_t *)(uintptr_t)VGA_BASE;
 
-static k_u32_t g_row;
-static k_u32_t g_col;
-
-/*
- * The one escape sequence the console of the kernel writes is the pair of the
- * `clear` command of the shell: ESC[2J (erase the screen) and ESC[H (home the
- * cursor). A window is not a terminal and the bytes are not for a terminal
- * emulator, so the port reads the sequences itself: the state below is the
- * whole parser - text, after ESC, inside a CSI until the final byte - and a
- * sequence of any other kind is dropped instead of being printed.
- */
-#define VGA_TEXT 0u
-#define VGA_ESCAPE 1u
-#define VGA_CSI 2u
-
-static k_u8_t g_escape = VGA_TEXT;
-
-/*
- * The text of the kernel is UTF-8 and a cell of the screen is one byte of the
- * code page the firmware installed, so a character of more than one byte has
- * to be translated or dropped. The one the kernel writes is the em dash of
- * the banner ("board: ... — ..."), and the ASCII form of it is the hyphen the
- * documentation uses; a byte above 0x7F that belongs to any other character
- * is dropped, because a byte of a UTF-8 sequence is not a letter of the code
- * page and shows as a picture nobody wrote.
- */
-#define VGA_UTF8_NONE 0u
-#define VGA_UTF8_E2 1u
-#define VGA_UTF8_E2_80 2u
-
-static k_u8_t g_utf8 = VGA_UTF8_NONE;
-
-static void cursor_update(void)
+/* The paper and the ink of an attribute traded: the cursor and the SGR 7. */
+static k_u8_t attr_reverse(k_u8_t attr)
 {
-    k_u16_t position = (k_u16_t)(g_row * VGA_COLUMNS + g_col);
+    return PORT_X86_64_ATTR(PORT_X86_64_ATTR_BG(attr), PORT_X86_64_ATTR_FG(attr));
+}
+
+static void text_clear(k_u8_t attr)
+{
+    int i;
+
+    for (i = 0; i < (int)VGA_CELLS; i++) {
+        g_vga[i] = vga_cell(' ', attr);
+    }
+
+    port_outb(CRTC_INDEX, CRTC_CURSOR_START);
+    port_outb(CRTC_DATA, CURSOR_FIRST_LINE);
+    port_outb(CRTC_INDEX, CRTC_CURSOR_END);
+    port_outb(CRTC_DATA, CURSOR_LAST_LINE);
+}
+
+static void text_put(int row, int column, char character, k_u8_t attr)
+{
+    if (row < 0 || row >= VGA_ROWS || column < 0 || column >= VGA_COLUMNS) {
+        return;
+    }
+
+    g_vga[row * VGA_COLUMNS + column] = vga_cell(character, attr);
+}
+
+/* The screen is one memory, so a scroll is a move of its rows - the words
+ * carry their attributes with them - and a blank last one in the colour of
+ * `attr`. The loop stops one row short of the end on purpose: the source of
+ * the last move is the last row, which the second loop fills. */
+static void text_scroll(k_u8_t attr)
+{
+    int i;
+
+    for (i = 0; i < (int)VGA_CELLS - VGA_COLUMNS; i++) {
+        g_vga[i] = g_vga[i + VGA_COLUMNS];
+    }
+
+    for (; i < (int)VGA_CELLS; i++) {
+        g_vga[i] = vga_cell(' ', attr);
+    }
+}
+
+static void text_cursor(int row, int column)
+{
+    k_u16_t position = (k_u16_t)(row * VGA_COLUMNS + column);
 
     port_outb(CRTC_INDEX, CRTC_CURSOR_LOW);
     port_outb(CRTC_DATA, (k_u8_t)(position & 0xFFu));
@@ -109,247 +121,52 @@ static void cursor_update(void)
     port_outb(CRTC_DATA, (k_u8_t)(position >> 8));
 }
 
-/* The screen is one memory, so a scroll is a move of its rows and a blank
- * last one. The loop stops one row short of the end on purpose: the source
- * of the last move is the last row, which the second loop fills. */
-static void scroll(void)
-{
-    k_u32_t i;
-
-    for (i = 0; i < VGA_CELLS - VGA_COLUMNS; i++) {
-        g_vga[i] = g_vga[i + VGA_COLUMNS];
-    }
-
-    for (; i < VGA_CELLS; i++) {
-        g_vga[i] = vga_cell(' ', g_attribute);
-    }
-}
-
-static void next_line(void)
-{
-    g_col = 0;
-    g_row++;
-
-    if (g_row >= VGA_ROWS) {
-        /* The lines above the last one are gone: the screen scrolls up by a
-         * row, which is what a terminal does when its bottom is reached. */
-        scroll();
-        g_row = VGA_ROWS - 1u;
-    }
-}
-
-/* One character in the cell of the cursor, then the cursor moves on. */
-static void put_char(char character)
-{
-    g_vga[g_row * VGA_COLUMNS + g_col] = vga_cell(character, g_attribute);
-
-    g_col++;
-    if (g_col >= VGA_COLUMNS) {
-        next_line();
-    }
-}
-
-static void backspace(void)
-{
-    if (g_col > 0) {
-        g_col--;
-    } else if (g_row > 0) {
-        /* The first column of a line: the character before it is the last one
-         * of the line above, which is where a terminal puts the cursor. */
-        g_row--;
-        g_col = VGA_COLUMNS - 1u;
-    } else {
-        return;
-    }
-
-    g_vga[g_row * VGA_COLUMNS + g_col] = vga_cell(' ', g_attribute);
-}
-
-void port_x86_64_vga_init(void)
-{
-    k_u32_t i;
-
-    for (i = 0; i < VGA_CELLS; i++) {
-        g_vga[i] = vga_cell(' ', g_attribute);
-    }
-
-    g_row = 0;
-    g_col = 0;
-    g_escape = VGA_TEXT;
-    g_utf8 = VGA_UTF8_NONE;
-
-    port_outb(CRTC_INDEX, CRTC_CURSOR_START);
-    port_outb(CRTC_DATA, CURSOR_FIRST_LINE);
-    port_outb(CRTC_INDEX, CRTC_CURSOR_END);
-    port_outb(CRTC_DATA, CURSOR_LAST_LINE);
-
-    cursor_update();
-}
-
 /*
- * The attribute of the screen for every cell: the theme of `console` of /etc
- * (ADR 0021). The characters stay where they are, so the line that was on the
- * glass when a person typed `config set console.theme light` is read again in
- * the new colours instead of disappearing.
+ * The pair of `console` of /etc (ADR 0021) for every cell of the pair: the
+ * theme and its inversion are the attribute the console computed, the
+ * characters stay where they are, and a cell that carries a colour of its own
+ * (a warning, a directory) keeps it. The line that was on the glass when a
+ * person typed `config set console.theme light` is read again in the new
+ * colours instead of disappearing.
  */
-void port_x86_64_vga_set_attribute(k_u8_t attribute)
+static void text_colors(const struct port_x86_64_pair *pair)
 {
-    k_u32_t i;
+    k_u8_t next = PORT_X86_64_ATTR(pair->fg, pair->bg);
+    k_u8_t old = g_theme_attr;
+    int i;
 
-    g_attribute = attribute;
+    /* The line is written before the cells of the pair are repainted, so it
+     * is one of them and the pass carries it to the new colours: a letter
+     * written after the pass would be the pair of the screen already and
+     * would read as the reverse of the old one when the two are the same two
+     * colours traded (the dark and the light theme are exactly that). */
+    kinfo("console: the attribute of the screen %d", (int)next);
 
-    for (i = 0; i < VGA_CELLS; i++) {
-        g_vga[i] = (k_u16_t)((g_vga[i] & 0x00FFu) | ((k_u16_t)attribute << 8));
+    for (i = 0; i < (int)VGA_CELLS; i++) {
+        k_u8_t attr = (k_u8_t)(g_vga[i] >> 8);
+
+        if (attr == old) {
+            attr = next;
+        } else if (attr == attr_reverse(old)) {
+            attr = attr_reverse(next);
+        }
+
+        g_vga[i] = (k_u16_t)((g_vga[i] & 0x00FFu) | ((k_u16_t)attr << 8));
     }
+
+    g_theme_attr = next;
 }
 
-k_u8_t port_x86_64_vga_attribute(void)
-{
-    return g_attribute;
-}
-
-void port_x86_64_vga_write(const char *data, k_size_t len)
-{
-    k_size_t i;
-
-    if (data == NULL) {
-        return;
-    }
-
-    for (i = 0; i < len; i++) {
-        char character = data[i];
-
-        if (g_escape == VGA_ESCAPE) {
-            /* The byte after ESC says what kind of a sequence follows; the
-             * screen only knows the control sequences of the CSI form. */
-            g_escape = (character == '[') ? VGA_CSI : VGA_TEXT;
-            continue;
-        }
-
-        if (g_escape == VGA_CSI) {
-            if (character < '@' || character > '~') {
-                continue; /* a parameter or an intermediate byte */
-            }
-
-            g_escape = VGA_TEXT;
-
-            if (character == 'J') {
-                port_x86_64_vga_init(); /* ESC[2J: the cells and the cursor */
-            } else if (character == 'H') {
-                g_row = 0;
-                g_col = 0;
-            }
-            /* Any other final byte ends the sequence and leaves no trace. */
-            continue;
-        }
-
-        if (character == 0x1B) {
-            g_escape = VGA_ESCAPE;
-            continue;
-        }
-
-        if (g_utf8 == VGA_UTF8_E2) {
-            g_utf8 = ((k_u8_t)character == 0x80u) ? VGA_UTF8_E2_80 : VGA_UTF8_NONE;
-            continue;
-        }
-
-        if (g_utf8 == VGA_UTF8_E2_80) {
-            /* E2 80 94 is the em dash; the other characters of the family
-             * (the quotes, the ellipsis) are not ones the kernel writes, and
-             * the screen has no glyph for them. */
-            if ((k_u8_t)character == 0x94u) {
-                put_char('-');
-            }
-            g_utf8 = VGA_UTF8_NONE;
-            continue;
-        }
-
-        if ((k_u8_t)character == 0xE2u) {
-            g_utf8 = VGA_UTF8_E2;
-            continue;
-        }
-
-        switch (character) {
-        case '\n':
-            next_line();
-            break;
-        case '\r':
-            g_col = 0;
-            break;
-        case '\t': {
-            /* To the next stop, not by eight: a tab at the column 3 of the
-             * line lands on the column 8 of the same line. The stops are the
-             * ones of the terminal, so the text of a file lines up the same
-             * way it does on the serial console. */
-            k_u32_t stop = (g_col / VGA_TAB + 1u) * VGA_TAB;
-
-            while (g_col < stop) {
-                put_char(' ');
-            }
-            break;
-        }
-        case '\b':
-            backspace();
-            break;
-        default:
-            if ((k_u8_t)character < 0x20u || (k_u8_t)character >= 0x7Fu) {
-                break; /* a control character or a byte the font has no letter for */
-            }
-            put_char(character);
-            break;
-        }
-    }
-
-    /* After the whole call and not after every character: the cursor is one
-     * register of the controller, and a line of text is one write to it. */
-    cursor_update();
-}
-
-/* --- the console system of /etc (ADR 0021) --- */
-
-/*
- * The machine has no panel: the screen of `display` and the `font` of the
- * dialogue are not its business, and the load of those two says so. The one
- * system it honours is `console`, and the attribute of the VGA is the whole
- * of it: grey on black, or black on light grey, with the inversion of the
- * file swapping the two.
- */
-static void apply_console(const char *system, const struct settings_table *table)
-{
-    const char *theme = settings_value(table, "theme", "dark");
-    bool invert = settings_flag(table, "invert", false);
-    bool light;
-    k_u8_t attribute;
-
-    K_UNUSED(system);
-
-    if (strcmp(theme, "dark") == 0) {
-        light = false;
-    } else if (strcmp(theme, "light") == 0) {
-        light = true;
-    } else {
-        kwarn("console: theme '%s' is not dark or light; the default dark is used", theme);
-        light = false;
-    }
-
-    attribute = light ? 0x70u : 0x07u;
-
-    if (invert) {
-        attribute = (k_u8_t)((k_u8_t)(attribute >> 4) | (k_u8_t)(attribute << 4));
-    }
-
-    port_x86_64_vga_set_attribute(attribute);
-
-    kinfo("console: theme %s, invert %d, the attribute of the screen %d", theme, invert ? 1 : 0,
-          (int)attribute);
-}
-
-static const struct settings_system s_console_system = {
-    .name = "console",
-    .apply = apply_console,
+const struct port_x86_64_screen port_x86_64_screen_text = {
+    .name = "the text mode of the VGA, 80x25",
+    .columns = VGA_COLUMNS,
+    .rows = VGA_ROWS,
+    .clear = text_clear,
+    .put = text_put,
+    .scroll = text_scroll,
+    .cursor = text_cursor,
+    .colors = text_colors,
+    /* The cells of the text mode are the picture: there is no first frame to
+     * complete, and a redraw would write nothing the screen does not have. */
+    .redraw = NULL,
 };
-
-int port_x86_64_vga_settings_register(void)
-{
-    return settings_register(&s_console_system);
-}

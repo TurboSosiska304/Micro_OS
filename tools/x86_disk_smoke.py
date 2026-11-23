@@ -60,6 +60,27 @@ FIRST_BOOT = [
     f"write /persist.txt {MESSAGE}",
     "ls /",
     "cat /persist.txt",
+    # The first port of somebody else's library: zcat inflates a .gz of the
+    # image with zlib and writes the bytes to a file of MicroFS, so the second
+    # boot reads the text that the first one inflated.
+    "exec /bin/zcat -o /persist.gz.txt /etc/greeting.gz",
+    "exec /bin/wc -c /persist.gz.txt",
+    # The second ported program: the script and the license are files of the
+    # volume, and the interpreter computes in a double out of it.
+    "exec /bin/cat /etc/hello.lua",
+    "exec /bin/lua -e print(2^10)",
+    "exec /bin/lua /etc/hello.lua",
+    # The commands of sbase read the same volume: a file of the disk through
+    # the library of a program that grew with them, and the shell finds them
+    # in PATH before its own table.
+    "ls -la /etc",
+    "grep -r hostname /etc",
+    # The third port: the calculator and its RPN sibling, out of files of the
+    # volume. The script of /etc is read twice - as a file of `-f` and on
+    # descriptor 0 - and the dc script is the same engine in RPN.
+    "exec /bin/bc -e 2^100",
+    "exec /bin/bc -l -f /etc/bc.bc < /dev/null",
+    "exec /bin/dc /etc/dc.dc",
 ]
 
 SECOND_BOOT = [
@@ -72,6 +93,20 @@ SECOND_BOOT = [
     "ls /dev",
     "cat /persist.txt",
     "fsck",
+    "cat /persist.gz.txt",
+    "exec /bin/wc -c /persist.gz.txt",
+    "ls /etc/licenses",
+    "exec /bin/lua /etc/hello.lua",
+    # The commands of sbase read the same volume on the second boot: a file
+    # of the disk through the library of a program that grew with them, and
+    # the shell finds them in PATH before its own table.
+    "ls -la /etc",
+    "grep -r hostname /etc",
+    # The calculator out of the same volume, after the reset: the script of
+    # /etc is still there and the engine reads it the same way.
+    "exec /bin/bc -e 2^100",
+    "exec /bin/bc -l -f /etc/bc.bc < /dev/null",
+    "exec /bin/dc /etc/dc.dc",
 ]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -217,7 +252,12 @@ def check(first: str, second: str) -> list:
     expect("every command of the first boot is answered", all(first_answers), "a command got no answer")
     expect(
         "the programs came with the image",
-        "hello" in first_answers[1] and "cat" in first_answers[1],
+        "hello" in first_answers[1]
+        and "cat" in first_answers[1]
+        and "zcat" in first_answers[1]
+        and "lua" in first_answers[1]
+        and "bc" in first_answers[1]
+        and "dc" in first_answers[1],
         first_answers[1],
     )
     expect(
@@ -233,7 +273,7 @@ def check(first: str, second: str) -> list:
     )
     expect(
         "the tree of the machine is the tree of every port",
-        all(name in first_answers[4] for name in ("bin/", "etc/", "proc/", "dev/"))
+        all(name in first_answers[4] for name in ("bin", "etc", "proc", "dev"))
         and "persist.txt" in first_answers[4],
         first_answers[4],
     )
@@ -241,6 +281,51 @@ def check(first: str, second: str) -> list:
         "the file is read back at the first boot",
         MESSAGE in first_answers[5],
         first_answers[5],
+    )
+    expect(
+        "zcat inflates a stream of the image",
+        "the program exited with 0" in first_answers[6] and "zcat:" not in first_answers[6],
+        first_answers[6],
+    )
+    expect(
+        "zcat writes every inflated byte",
+        "134 /persist.gz.txt" in first_answers[7],
+        first_answers[7],
+    )
+    expect(
+        "the script of Lua is a file of the volume",
+        "the first script of the machine" in first_answers[8],
+        first_answers[8][:200],
+    )
+    expect(
+        "the interpreter computes in a double on the disk of the image",
+        "1024.0" in first_answers[9] and "the program exited with 0" in first_answers[9],
+        first_answers[9],
+    )
+    expect(
+        "the script of /etc runs out of the volume",
+        "lua: hello from /etc/hello.lua" in first_answers[10]
+        and "the program exited with 0" in first_answers[10],
+        first_answers[10],
+    )
+    expect(
+        "the calculator computes out of the volume",
+        "1267650600228229401496703205376" in first_answers[13]
+        and "the program exited with 0" in first_answers[13],
+        first_answers[13],
+    )
+    expect(
+        "the script of bc runs at the first boot",
+        "the sum is right" in first_answers[14]
+        and "3.1415926532" in first_answers[14]
+        and "the program exited with 0" in first_answers[14],
+        first_answers[14],
+    )
+    expect(
+        "the RPN calculator runs out of the volume",
+        "5" in first_answers[15] and "1024" in first_answers[15]
+        and "the program exited with 0" in first_answers[15],
+        first_answers[15],
     )
 
     # --- the second boot: the same image, the same machine
@@ -270,7 +355,8 @@ def check(first: str, second: str) -> list:
     expect("every command of the second boot is answered", all(second_answers), "")
     expect(
         "the programs are still on the disk",
-        "hello" in second_answers[0] and "wc" in second_answers[0],
+        "hello" in second_answers[0] and "wc" in second_answers[0]
+        and "bc" in second_answers[0] and "dc" in second_answers[0],
         second_answers[0],
     )
     expect(
@@ -310,6 +396,62 @@ def check(first: str, second: str) -> list:
         "the volume is still consistent",
         "the volume is consistent" in second_answers[8],
         second_answers[8],
+    )
+    # The bytes zcat inflated in the first boot are a file of the volume in
+    # the second one: the text is the fixture of zlib, not a line of this run.
+    expect(
+        "the inflated file survived the reset",
+        "Micro OS: the first port of a program" in second_answers[9]
+        and "zlib 1.3.1, MicroFS and ring 3" in second_answers[9],
+        second_answers[9],
+    )
+    expect(
+        "the inflated file has every byte after the reset",
+        "134 /persist.gz.txt" in second_answers[10],
+        second_answers[10],
+    )
+    expect(
+        "the licenses of the ported programs survived the reset",
+        "lua" in second_answers[11] and "zlib" in second_answers[11]
+        and "bc" in second_answers[11],
+        second_answers[11],
+    )
+    expect(
+        "the interpreter reads its script after the reset",
+        "lua: hello from /etc/hello.lua" in second_answers[12]
+        and "lua: read\ta line written by lua" in second_answers[12],
+        second_answers[12],
+    )
+    listing = second_answers[13]
+    expect(
+        "the tool of sbase reads the volume after the reset",
+        "root" in listing and "setting" in listing and "greeting.gz" in listing,
+        listing,
+    )
+    recursive = second_answers[14]
+    expect(
+        "a recursive grep walks the volume after the reset",
+        "/etc/setting:hostname=x86_64" in recursive,
+        recursive,
+    )
+    expect(
+        "the calculator computes after the reset",
+        "1267650600228229401496703205376" in second_answers[15]
+        and "the program exited with 0" in second_answers[15],
+        second_answers[15],
+    )
+    expect(
+        "the script of bc still runs after the reset",
+        "the sum is right" in second_answers[16]
+        and "3.1415926532" in second_answers[16]
+        and "the program exited with 0" in second_answers[16],
+        second_answers[16],
+    )
+    expect(
+        "the RPN calculator still runs after the reset",
+        "5" in second_answers[17] and "1024" in second_answers[17]
+        and "the program exited with 0" in second_answers[17],
+        second_answers[17],
     )
 
     return checks

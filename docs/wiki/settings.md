@@ -41,12 +41,25 @@ The three systems of the tree:
 | System | File | Keys | Defaults |
 |---|---|---|---|
 | `display` | `/etc/display` | `rotation` 0/90/180/270, `invert` 0/1, `brightness` 0–100, `theme` dark/light | 0, 1, 100, dark |
-| `font` | `/etc/font` | `scale` 1/2, `columns` 0–99, `rows` 0–99 | 1, 0, 0 |
-| `console` | `/etc/console` | `invert` 0/1, `theme` dark/light | 0, dark |
+| `font` | `/etc/font` | `scale` 1/2, `columns` 0–99, `rows` 0–99, `line_gap` 0/2/4 | 1, 0, 0, 0 |
+| `console` | `/etc/console` | `invert` 0/1, `theme` dark/light, `ink`, `paper` | 0, dark, theme, theme |
 
 `columns=0` and `rows=0` mean the whole picture: the console cuts the dialogue
 by the room the panel has at the size of the font. A positive value is a cap,
-so a person can keep the dialogue narrow on a wide screen.
+so a person can keep the dialogue narrow on a wide screen. `line_gap` is the
+gap between two lines of the framebuffer of x86-64, in pixels: 0 is the cell of
+16 rows itself, 2 and 4 are 18 and 20 pixels a line, which is 50, 44 and 40
+rows of a picture of 800. A value the key does not have is 0 and a warning.
+
+`ink` and `paper` are the pair of the plain text of the console, and they are
+read after `theme` and `invert`, so a colour a person named wins over them.
+The value is a name of the palette of the screen - `black`, `white`, `grey`,
+`green`, `amber`, `red`, `blue`, `cyan`, `magenta`, `yellow` - or a number of
+RGB565 written `0xRRRR`, such as `0xF800` for the pure red. The word `theme`
+means the pair the theme chose and is the default of both keys. A value that
+is neither is the default and a warning; a colour that is not one of the
+sixteen of the VGA is rounded to the nearest of them on the text mode and
+painted as it was written on the framebuffer.
 
 The defaults are the behaviour of the machine before the files existed, so a
 volume that never had `/etc/display` boots exactly like a release that did not
@@ -60,16 +73,21 @@ have this feature.
 | `display.invert` | INVON/INVOFF of the glass | kept, not applied | kept, not applied |
 | `display.brightness` | kept and a warning: the backlight is one pin, with no duty cycle to dim it | kept, not applied | kept, not applied |
 | `display.theme` | the colours of the dialogue | kept, not applied | kept, not applied |
-| `font.scale` | 2 doubles the 5x7 font and the cells of the console | kept, not applied | kept, not applied |
-| `font.columns`, `font.rows` | a cap on the dialogue | kept, not applied | kept, not applied |
-| `console.theme`, `console.invert` | the colours of the dialogue | the attribute of every cell of the VGA | kept, not applied |
+| `font.scale` | 2 doubles the 5x7 font and the cells of the console | kept, not applied (the font of the PC is 8x16) | kept, not applied |
+| `font.columns`, `font.rows` | a cap on the dialogue | kept, not applied (the grid is the picture) | kept, not applied |
+| `font.line_gap` | kept and a warning: the cell of the panel has no gap | the gap between two lines of the framebuffer, 0/2/4 px | kept, not applied |
+| `console.theme`, `console.invert` | the colours of the dialogue | the pair of every cell of the plain text of the screen (the framebuffer's two colours, or the attribute of the VGA text mode); a word a command coloured keeps its own | kept, not applied |
+| `console.ink`, `console.paper` | kept and not applied: the panel has its own dialogue | the ink and the paper of the plain text of both screens, a name of the palette or a number of RGB565 | kept, not applied |
 
 `display.theme` and `console.theme` are the same picture on the board and the
 console is read after the display, so `/etc/console` wins when the two
-disagree. On x86-64 the theme is the attribute of the text screen: light grey
-on black for `dark`, black on light grey for `light`, and `invert` swaps the
-two (the number the port logs is `7` or `112`). The host has no screen of its
-own: the load names the systems it cannot apply and keeps the files.
+disagree. On x86-64 the theme is the pair of the screen: light grey on black
+for `dark`, black on light grey for `light`, and `invert` swaps the two (the
+text mode logs the attribute, `7` or `112`; the framebuffer logs the screen it
+painted). `ink` and `paper` are read after the theme, so a colour a person
+named wins over the two; the word `theme` is the default. The host has no
+screen of its own: the load names the systems it cannot apply and keeps the
+files.
 
 ## The commands
 
@@ -90,6 +108,14 @@ microos> config get console.theme
 console.theme=light
 microos> config set display.invert 0
 display.invert=0 (kept: this machine does not apply display)
+microos> config list console
+console.invert=0
+console.theme=dark
+console.ink=theme
+console.paper=theme
+microos> config set console.ink 0xF800
+console: theme dark, invert 0, the screen the framebuffer of 1280x800, 16 bpp, 160x50 cells
+console.ink=0xF800
 microos> config list display
 display.rotation=0
 display.invert=0
@@ -121,7 +147,7 @@ The applier belongs to the machine and is registered with its system:
 | Machine | Where the applier is |
 |---|---|
 | board | `components/drivers/src/drv_display.c` (`display`, `font`, `console`) |
-| x86-64 | `ports/port_x86_64/src/vga.c` (`console`) |
+| x86-64 | `ports/port_x86_64/src/console.c` (`console`), `src/fb.c` and `src/vga.c` are the two screens |
 | host | none: the load names the three systems and keeps the files |
 
 The order is the boot of the machine. The board loads the systems in the init
@@ -129,8 +155,11 @@ task, after the volume is mounted and the files are restored, and before the
 task of the shell starts the console of the panel: the display and the font
 are the state of the first frame. x86-64 loads them in `kmain()` after the
 filesystem is up, so the attribute of the screen is right before the first
-command. The simulator loads them in its init task, and a run with a screen
-file still has no applier: the console of the host is a serial port.
+command. Since `1.2.0` the console of x86-64 is the framebuffer of 1280x800
+(or the text mode of 80x25 when the card has no interface), and `/etc/console`
+and `/etc/font` are applied to whichever screen the port chose. The simulator
+loads them in its init task, and a run with a screen file still has no
+applier: the console of the host is a serial port.
 
 ## A format, and the store
 

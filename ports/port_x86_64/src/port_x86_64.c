@@ -18,6 +18,7 @@
 #include <stdarg.h>
 #include <string.h>
 
+#include "kernel/clock.h"
 #include "kernel/log.h"
 #include "kernel/cpu.h"
 #include "kernel/port.h"
@@ -71,16 +72,115 @@ static void com1_init(void)
 }
 
 /*
+ * COM1 is a plain terminal: the SGR sequences that colour the screen mean
+ * nothing in a transcript, and a file a person saves from the serial port
+ * should read as the text it is. The bytes of an escape sequence are held
+ * until its final byte: a sequence that ends in 'm' - the colours of the log
+ * and of a command - is dropped, and every other sequence is written out as
+ * it arrived, so `clear` still sends its two. A sequence that a write splits
+ * in the middle is held across the two calls.
+ */
+#define COM1_TEXT 0u
+#define COM1_ESCAPE 1u
+#define COM1_CSI 2u
+#define COM1_ESCAPE_MAX 16
+
+static k_u8_t g_com1_state;
+static char g_com1_escape[COM1_ESCAPE_MAX];
+static k_size_t g_com1_len;
+
+/* One byte of the dialogue on the wire, with the line ending a terminal of
+ * the user wants and the kernel writes as one. */
+static void com1_byte(char c)
+{
+    if (c == '\n') {
+        while ((port_inb(COM1_LSR) & 0x20) == 0) {
+        }
+        port_outb(COM1, '\r');
+    }
+
+    while ((port_inb(COM1_LSR) & 0x20) == 0) {
+    }
+    port_outb(COM1, (k_u8_t)c);
+}
+
+static void com1_flush(void)
+{
+    k_size_t i;
+
+    for (i = 0; i < g_com1_len; i++) {
+        com1_byte(g_com1_escape[i]);
+    }
+
+    g_com1_len = 0;
+}
+
+static void com1_hold(char c)
+{
+    if (g_com1_len < sizeof(g_com1_escape)) {
+        g_com1_escape[g_com1_len++] = c;
+        return;
+    }
+
+    /* A sequence longer than a terminal's rendition: it is not one of ours,
+     * so its bytes go out as they are and the filter starts again. */
+    com1_flush();
+    g_com1_state = COM1_TEXT;
+    com1_byte(c);
+}
+
+static void com1_write(const char *data, k_size_t len)
+{
+    k_size_t i;
+
+    for (i = 0; i < len; i++) {
+        char c = data[i];
+
+        if (g_com1_state == COM1_TEXT) {
+            if (c == 0x1B) {
+                g_com1_state = COM1_ESCAPE;
+                com1_hold(c);
+            } else {
+                com1_byte(c);
+            }
+            continue;
+        }
+
+        if (g_com1_state == COM1_ESCAPE) {
+            com1_hold(c);
+            g_com1_state = (c == '[') ? COM1_CSI : COM1_TEXT;
+            if (g_com1_state == COM1_TEXT) {
+                com1_flush();
+            }
+            continue;
+        }
+
+        /* Inside a CSI sequence: its final byte ends it. */
+        com1_hold(c);
+        if (c >= '@' && c <= '~') {
+            bool sgr = (c == 'm');
+
+            g_com1_state = COM1_TEXT;
+            if (!sgr) {
+                com1_flush();
+            } else {
+                g_com1_len = 0;
+            }
+        }
+    }
+}
+
+/*
  * One call, two sinks: the window of the machine and the log of the serial
  * port. A person with the window open reads the screen and a person without
  * one reads the file, and neither of them has to know that the other exists
  * - the same bytes go to both, and the port does not have a "console" that
- * has to be chosen before the boot.
+ * has to be chosen before the boot. The colours are the exception: the screen
+ * reads them and COM1 does not get them.
  */
 void k_port_write(const char *data, k_size_t len)
 {
     k_u64_t flags;
-    k_size_t i;
 
     if (data == NULL) {
         return;
@@ -94,22 +194,8 @@ void k_port_write(const char *data, k_size_t len)
      */
     flags = port_save_flags_and_cli();
 
-    port_x86_64_vga_write(data, len);
-
-    for (i = 0; i < len; i++) {
-        char c = data[i];
-
-        if (c == '\n') {
-            /* The terminal of the user wants both, the kernel writes one. */
-            while ((port_inb(COM1_LSR) & 0x20) == 0) {
-            }
-            port_outb(COM1, '\r');
-        }
-
-        while ((port_inb(COM1_LSR) & 0x20) == 0) {
-        }
-        port_outb(COM1, (k_u8_t)c);
-    }
+    port_x86_64_console_write(data, len);
+    com1_write(data, len);
 
     port_restore_flags(flags);
 }
@@ -679,6 +765,7 @@ extern char __kernel_end[];
 #define BLOCK_ALIGN 16u
 
 /* The fields of the multiboot 1 information this port reads. */
+#define MB_FLAG_MODS 0x00000008u
 #define MB_FLAG_MMAP 0x00000040u
 #define MB_MMAP_USABLE 1u
 
@@ -703,6 +790,64 @@ struct mb_mmap_entry {
     k_u32_t length_high;
     k_u32_t type;
 };
+
+/*
+ * The information of the boot, kept for the questions a driver asks later.
+ * It is a structure of the boot loader in the identity map, and the port
+ * copies nothing out of it: it lives as long as the machine does.
+ */
+static const struct mb_info *g_boot_info;
+
+/* The last byte of the modules of the boot, 0 when the boot had none. The
+ * loader copied the kernel out of one of them and the volume of the ISO is
+ * read from another, so the heap has to start above both. */
+static k_u64_t boot_modules_end(const struct mb_info *info)
+{
+    const k_u32_t *mods;
+    k_u64_t end = 0;
+    k_u32_t i;
+
+    if (info == NULL || (info->flags & MB_FLAG_MODS) == 0 || info->mods_addr == 0) {
+        return 0;
+    }
+
+    mods = (const k_u32_t *)(uintptr_t)info->mods_addr;
+
+    for (i = 0; i < info->mods_count; i++) {
+        if ((k_u64_t)mods[i * 4u + 1u] > end) {
+            end = mods[i * 4u + 1u];
+        }
+    }
+
+    return end;
+}
+
+bool port_x86_64_boot_module(k_u32_t index, k_u64_t *start, k_u64_t *size)
+{
+    const k_u32_t *mods;
+
+    if (g_boot_info == NULL || (g_boot_info->flags & MB_FLAG_MODS) == 0 ||
+        g_boot_info->mods_addr == 0 || index >= g_boot_info->mods_count) {
+        return false;
+    }
+
+    mods = (const k_u32_t *)(uintptr_t)g_boot_info->mods_addr;
+    mods += (k_size_t)index * 4u;
+
+    if (mods[1] <= mods[0]) {
+        return false;
+    }
+
+    if (start != NULL) {
+        *start = mods[0];
+    }
+
+    if (size != NULL) {
+        *size = (k_u64_t)mods[1] - mods[0];
+    }
+
+    return true;
+}
 
 static void heap_init(k_u64_t multiboot_info)
 {
@@ -755,6 +900,23 @@ static void heap_init(k_u64_t multiboot_info)
     }
 
     best_base = (best_base + BLOCK_ALIGN - 1) & ~(k_u64_t)(BLOCK_ALIGN - 1);
+
+    /*
+     * The modules of the boot are memory as well. A loader that hands the
+     * kernel a volume (the root image of the ISO, ADR 0026) leaves it in the
+     * usable region of the map, and a block of the allocator over those bytes
+     * would turn the filesystem of the boot into a heap that is written and
+     * read at once. The heap starts above the last byte of every module; a
+     * module below the region changes nothing.
+     */
+    {
+        k_u64_t modules_end = boot_modules_end(info);
+
+        if (modules_end > best_base && modules_end < best_base + best_size) {
+            best_size -= modules_end - best_base;
+            best_base = modules_end;
+        }
+    }
 
     /*
      * The window of the programs (k_port_exec_base, see port_exec.c) is not
@@ -1230,9 +1392,29 @@ int memcmp(const void *left, const void *right, k_size_t size)
 
 static struct port_x86_64_info g_info;
 
+/*
+ * The clock of the machine, before a driver of a real one exists. This
+ * machine of QEMU has a CMOS clock, and the port does not read it yet; the
+ * kernel keeps the moment of the last `k_clock_set_unix()` and the uptime of
+ * that moment (kernel/clock.c), so `ntp` gives the machine a clock that
+ * keeps running, and a TLS connection has a date to check a certificate
+ * against (ADR 0024 §3). The setter is the port's promise that it keeps the
+ * moment; the kernel holds the base.
+ */
+static int software_clock_set(k_u64_t unix_seconds)
+{
+    (void)unix_seconds;
+
+    return 0;
+}
+
 void port_x86_64_init(k_u64_t multiboot_info)
 {
     const struct mb_info *info = (const struct mb_info *)(uintptr_t)multiboot_info;
+
+    /* The questions of the drivers about the modules of the boot are asked
+     * later; the structure itself stays where the loader left it. */
+    g_boot_info = info;
 
     /*
      * The descriptors come first: the loader's table was only the way into
@@ -1243,11 +1425,19 @@ void port_x86_64_init(k_u64_t multiboot_info)
     port_x86_64_gdt_init();
     tls_init();
     com1_init();
-    port_x86_64_vga_init();
     clock_measure();
+    k_clock_register(software_clock_set);
     port_x86_64_cpus_init();
     heap_init(multiboot_info);
     port_x86_64_paging_init();
+
+    /*
+     * The screen comes after the page tables: the framebuffer of the VGA sits
+     * above the identity map of the first gigabyte, so the windows of the
+     * card is a mapping the port makes and not an address it already has
+     * (ADR 0023). A machine without the interface keeps the text mode.
+     */
+    port_x86_64_console_init();
 
     g_info.cpu_hz = g_tsc_per_second;
     g_info.usable_bytes = 0;
@@ -1278,6 +1468,7 @@ void port_x86_64_init(k_u64_t multiboot_info)
     /* The volume of the port is registered before the kernel looks for one:
      * the filesystem mounts a device by name and the name has to be there. */
     port_x86_64_blockdev_init();
+    port_x86_64_module_init();
     port_x86_64_disk_init();
 
     /* The network is the last device of the boot before the interrupts: it

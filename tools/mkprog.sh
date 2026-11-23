@@ -41,7 +41,10 @@
 # leaves the data one, two or three bytes short of where the program reads
 # it - a shift that runs, prints the wrong bytes and looks like a bug in the
 # program. The trailing padding after the data is allowed by the format and
-# is ignored by the parser.
+# is ignored by the parser. The gap the linker may leave between the data and
+# the bss (a section aligned to 32 by an object of the program) is padding of
+# the data as well: the header has no field for it, and the loader clears the
+# bss right after the padded data.
 set -eu
 
 K_EXEC_HEADER_SIZE=32
@@ -203,6 +206,17 @@ align4()
     echo $(( (value + 3) / 4 * 4 ))
 }
 
+# Sixteen bytes is the alignment of the data segment of a program: a constant
+# and an arena with a `_Alignas(16)` are objects of that width, and the
+# instruction that reads one (movaps, andps) faults on a lesser one. The text
+# is a page because the port gives it a protection; the two are multiples of
+# sixteen, so the header of the format stays a multiple of four.
+align16()
+{
+    value=$1
+    echo $(( (value + 15) / 16 * 16 ))
+}
+
 section_address()
 {
     "$OBJDUMP" -h "$object" | awk -v name="$1" '$2 == name { print "0x" $4; exit }'
@@ -252,8 +266,19 @@ data_size=$(file_size "$work/segment.bin")
 bss_size=$(section_size .bss)
 bss_size=$((${bss_size:-0}))
 
-text_aligned=$(align4 "$text_size")
-data_aligned=$(align4 "$data_size")
+text_aligned=$(align16 "$text_size")
+data_aligned=$(align16 "$data_size")
+
+# The board is the exception: its two windows are not contiguous and its
+# linker script pads the data and the bss to four bytes, the alignment of the
+# pointers of the machine. A program of the board computes in integers only,
+# so no object of eight or sixteen bytes asks for more. The x86-64 window is
+# contiguous and a program with floating point has 16-byte constants that
+# `movaps` and `andps` read: there the two sizes are padded to sixteen.
+if [ -n "$data_base" ]; then
+    text_aligned=$(align4 "$text_size")
+    data_aligned=$(align4 "$data_size")
+fi
 
 # The optional base is the contract of a port: nothing relocates the image, so
 # a program linked for another window would run at addresses that name
@@ -327,6 +352,31 @@ elif [ -n "$base" ]; then
         fi
 
         text_aligned=$data_offset
+    fi
+
+    # The bss follows the data in the format: the port clears `bss_size`
+    # bytes right after the data, because the header has no field of its own
+    # for it. The linker, however, aligns the .bss section to the widest
+    # object in it - a compiler may align a large array to 32 bytes - and a
+    # gap of a few bytes then stands between the end of the data and the
+    # first byte of the bss. The format carries that gap as padding of the
+    # data segment: without it the port clears the bss a few bytes early and
+    # the arguments of the program (copied after the image) land in it.
+    if [ "$bss_size" -gt 0 ]; then
+        bss_address=$(section_address .bss)
+        expected_bss=$((base + K_EXEC_HEADER_SIZE + text_aligned + data_aligned))
+        if [ -z "$bss_address" ] || [ "$((bss_address))" -lt "$expected_bss" ]; then
+            printf "mkprog: %s has its bss at 0x%x, before the data ends at 0x%x\n" \
+                "$object" "${bss_address:-0}" "$expected_bss" >&2
+            exit 1
+        fi
+        bss_gap=$((bss_address - expected_bss))
+        if [ "$bss_gap" -gt 64 ]; then
+            printf "mkprog: %s has its bss %d byte(s) after the data, the window cannot pad that\n" \
+                "$object" "$bss_gap" >&2
+            exit 1
+        fi
+        data_aligned=$((data_aligned + bss_gap))
     fi
 fi
 

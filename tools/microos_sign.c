@@ -40,8 +40,10 @@ static void usage(const char *program)
             "  %s pubkey --key FILE [--pub FILE] [--header FILE]\n"
             "  %s sign   --key FILE [--in FILE] [--out FILE] [--sig FILE]\n"
             "  %s verify --pub FILE [--trailer FILE] FILE\n"
-            "  %s info   FILE\n",
-            program, program, program, program, program);
+            "  %s info   FILE\n"
+            "  %s sign-file   --key FILE --in FILE --sig FILE\n"
+            "  %s verify-file --pub FILE --sig FILE FILE\n",
+            program, program, program, program, program, program, program);
 }
 
 static int read_file(const char *path, unsigned char **data, size_t *size)
@@ -533,6 +535,118 @@ static int command_verify(int argc, char **argv)
     return 0;
 }
 
+/*
+ * A detached signature, for the repository of programs (ADR 0024 §1): the
+ * index and every .mox is signed over its own bytes, the signature travels
+ * beside it as sixty-four raw bytes, and nothing of the file is rewritten.
+ */
+static int command_sign_file(int argc, char **argv)
+{
+    const char *key_path = NULL;
+    const char *in_path = NULL;
+    const char *sig_path = NULL;
+    unsigned char secret[MICROOS_ED25519_SECRET_SIZE];
+    unsigned char signature[MICROOS_ED25519_SIGNATURE_SIZE];
+    unsigned char *payload = NULL;
+    size_t size = 0;
+    int i;
+
+    for (i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "--key") == 0 && i + 1 < argc) {
+            key_path = argv[++i];
+        } else if (strcmp(argv[i], "--in") == 0 && i + 1 < argc) {
+            in_path = argv[++i];
+        } else if (strcmp(argv[i], "--sig") == 0 && i + 1 < argc) {
+            sig_path = argv[++i];
+        } else {
+            return EXIT_USAGE;
+        }
+    }
+
+    if (key_path == NULL || in_path == NULL || sig_path == NULL) {
+        return EXIT_USAGE;
+    }
+
+    if (read_hex(key_path, secret, sizeof(secret)) != 0 ||
+        read_file(in_path, &payload, &size) != 0) {
+        return 1;
+    }
+
+    if (microos_ed25519_sign(signature, payload, size, secret) != 0) {
+        fprintf(stderr, "microos_sign: the signature failed\n");
+        free(payload);
+        return 1;
+    }
+
+    free(payload);
+
+    if (write_file(sig_path, signature, sizeof(signature)) != 0) {
+        return 1;
+    }
+
+    printf("signed: %s (%zu bytes), signature %s\n", in_path, size, sig_path);
+
+    return 0;
+}
+
+static int command_verify_file(int argc, char **argv)
+{
+    const char *pub_path = NULL;
+    const char *sig_path = NULL;
+    const char *in_path = NULL;
+    unsigned char public_key[MICROOS_ED25519_KEY_SIZE];
+    unsigned char *payload = NULL;
+    unsigned char *sig = NULL;
+    size_t size = 0;
+    size_t sig_size = 0;
+    int i;
+
+    for (i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "--pub") == 0 && i + 1 < argc) {
+            pub_path = argv[++i];
+        } else if (strcmp(argv[i], "--sig") == 0 && i + 1 < argc) {
+            sig_path = argv[++i];
+        } else if (in_path == NULL) {
+            in_path = argv[i];
+        } else {
+            return EXIT_USAGE;
+        }
+    }
+
+    if (pub_path == NULL || sig_path == NULL || in_path == NULL) {
+        return EXIT_USAGE;
+    }
+
+    if (read_hex(pub_path, public_key, sizeof(public_key)) != 0 ||
+        read_file(sig_path, &sig, &sig_size) != 0 || read_file(in_path, &payload, &size) != 0) {
+        free(sig);
+        free(payload);
+        return 1;
+    }
+
+    if (sig_size != MICROOS_ED25519_SIGNATURE_SIZE) {
+        fprintf(stderr, "microos_sign: %s: the signature must be %d bytes\n", sig_path,
+                MICROOS_ED25519_SIGNATURE_SIZE);
+        free(sig);
+        free(payload);
+        return 1;
+    }
+
+    if (microos_ed25519_verify(sig, payload, size, public_key) != 0) {
+        fprintf(stderr, "refused: %s: the signature is not the one of the key\n", in_path);
+        free(sig);
+        free(payload);
+        return 1;
+    }
+
+    free(sig);
+    free(payload);
+
+    printf("ok: %s: %zu bytes\n", in_path, size);
+
+    return 0;
+}
+
 static int command_info(int argc, char **argv)
 {
     const char *image_path;
@@ -625,6 +739,22 @@ int main(int argc, char **argv)
     }
     if (strcmp(command, "info") == 0) {
         int result = command_info(argc - 2, argv + 2);
+
+        if (result == EXIT_USAGE) {
+            usage(argv[0]);
+        }
+        return result;
+    }
+    if (strcmp(command, "sign-file") == 0) {
+        int result = command_sign_file(argc - 2, argv + 2);
+
+        if (result == EXIT_USAGE) {
+            usage(argv[0]);
+        }
+        return result;
+    }
+    if (strcmp(command, "verify-file") == 0) {
+        int result = command_verify_file(argc - 2, argv + 2);
 
         if (result == EXIT_USAGE) {
             usage(argv[0]);

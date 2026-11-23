@@ -927,6 +927,18 @@ def check_git(root: str, report: Report) -> None:
     )
 
 
+# The vendored trees are somebody else's code. Their formatting and their
+# line lengths are the upstream ones - third_party/mbedtls is the Mbed TLS
+# release as it is, with its own 79-column lines - and a diff against a
+# release has to stay readable: the rules of this tree apply to the files we
+# write, and a vendored component is reviewed as a whole (its README.md).
+VENDOR_PREFIXES = ("third_party/",)
+
+
+def is_vendored(name: str) -> bool:
+    return any(name.startswith(prefix) for prefix in VENDOR_PREFIXES)
+
+
 def check_sources(root: str, report: Report, files: list) -> None:
     """The hygiene of the tracked sources (the rules of .editorconfig)."""
     group = "sources"
@@ -939,7 +951,15 @@ def check_sources(root: str, report: Report, files: list) -> None:
     not_utf8 = []
 
     for name in files:
+        if is_vendored(name):
+            continue
+
         path = os.path.join(root, name)
+        if name.startswith("third_party/"):
+            # The vendored sources keep the style of their upstream (sbase is
+            # tabs and 80 columns, zlib is its own). Their license and their
+            # README are ours and are checked as every other file.
+            continue
         if not os.path.isfile(path) or is_binary(path):
             continue
 
@@ -969,14 +989,21 @@ def check_sources(root: str, report: Report, files: list) -> None:
                     trailing.append(f"{name}:{number}")
                     break
 
+        # A vendored release keeps the bytes of its author: Lua indents with
+        # tabs and zlib writes long lines of the tables it generates. The two
+        # rules of the style are ours and stop at `third_party/`; the rules of
+        # the file itself (UTF-8, LF, a newline at the end) still apply, and
+        # `third_party/<name>/.clang-format` keeps the formatter away.
+        vendored = any(name.startswith(prefix) for prefix in VENDORED_PREFIXES)
+
         is_makefile = name == "Makefile" or name.endswith(".mk")
-        if not is_makefile:
+        if not is_makefile and not vendored:
             for number, line in enumerate(lines, 1):
                 if b"\t" in line:
                     tabs.append(f"{name}:{number}")
                     break
 
-        if name.endswith((".c", ".h")):
+        if not vendored and name.endswith((".c", ".h")):
             for number, line in enumerate(lines, 1):
                 if len(line) > 100:
                     too_long.append(f"{name}:{number} ({len(line)} characters)")
@@ -1241,7 +1268,26 @@ def check_layers(root: str, report: Report, files: list) -> None:
     call_debt_left = set(PORT_CALL_DEBT)
 
     for name in files:
+        # A vendored tree keeps the style and the language of its upstream:
+        # third_party/mbedtls is the Mbed TLS release as it is, with its own
+        # 79-column lines. The rules of this tree are for the sources of this
+        # tree; the license and the README of the vendored directory are the
+        # boundary, and the check of a release is a diff of the upstream.
+        if name.startswith("third_party/"):
+            continue
+
         path = os.path.join(root, name)
+        if name.startswith("third_party/"):
+            # The vendored sources keep the style of their upstream (sbase is
+            # tabs and 80 columns, zlib is its own). Their license and their
+            # README are ours and are checked as every other file.
+            continue
+        if name.startswith("components/libc/user/"):
+            # The library of a program is the one component that is POSIX on
+            # purpose: its <unistd.h>, <sys/stat.h> and <pwd.h> are its own
+            # headers in `include/`, and a portable source that includes them
+            # is the point of ADR 0016.
+            continue
         if not os.path.isfile(path) or is_binary(path):
             continue
 
@@ -1995,6 +2041,12 @@ def check_version(root: str, report: Report, expected: str, suffix: str | None =
         else f"the kernel says '{said}', the tag asks '{wanted}': a release_candidate carries "
         "-rcN until the release commit drops it",
     )
+
+
+# The trees that are somebody else's: their bytes are not ours to reformat,
+# and the style checks of this repository stop at their door. A file there is
+# still a file of the tree for UTF-8, LF and the newline at the end.
+VENDORED_PREFIXES = ("third_party/",)
 
 
 # --- the entry point ---------------------------------------------------------

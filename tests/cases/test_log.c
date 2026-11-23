@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "kernel/config.h"
+#include "kernel/console.h"
 #include "kernel/log.h"
 #include "port_host.h"
 
@@ -89,9 +90,63 @@ static void test_log_wrap(void)
     port_host_set_sink(NULL);
 }
 
+static void test_log_colors(void)
+{
+    char buf[512];
+    size_t used;
+    FILE *sink = tmpfile();
+
+    ktest_begin("log: the level is a colour on a console that reads it");
+
+    KT_CHECK(sink != NULL);
+    if (sink == NULL) {
+        return;
+    }
+
+    klog_init(K_LOG_LEVEL_INFO);
+    klog_clear();
+    port_host_set_sink(sink);
+
+    /*
+     * The port of the host is a plain serial line and does not turn the
+     * colours on; a test of the log does, because the mark of a level is the
+     * kernel's and the bytes are the same for a screen. The ring keeps the
+     * text without a sequence either way.
+     */
+    k_console_set_ansi(true);
+    kwarn("warm %d", 1);
+    kerror("bad %d", 2);
+    kok("good %d", 3);
+    kinfo("plain %d", 4);
+    klog(K_LOG_LEVEL_DEBUG, "quiet %d", 5);
+    k_console_set_ansi(false);
+
+    rewind(sink);
+    used = fread(buf, 1, sizeof(buf) - 1, sink);
+    buf[used] = '\0';
+    port_host_set_sink(NULL);
+
+    /* Amber for a warning, red for an error, green for a success, and the
+     * information is the line itself. A level below the filter is not there
+     * at all. */
+    KT_CHECK(strstr(buf, "\033[33mwarm 1\033[0m\n") != NULL);
+    KT_CHECK(strstr(buf, "\033[31mbad 2\033[0m\n") != NULL);
+    KT_CHECK(strstr(buf, "\033[32mgood 3\033[0m\n") != NULL);
+    KT_CHECK(strstr(buf, "\033[32mplain 4") == NULL && strstr(buf, "\033[33mplain 4") == NULL &&
+             strstr(buf, "plain 4\n") != NULL);
+    KT_CHECK(strstr(buf, "quiet 5") == NULL);
+
+    /* The ring, which is what /proc/kmsg gives a person, has no sequence. */
+    used = klog_dump(buf, sizeof(buf));
+    KT_CHECK(used > 0);
+    KT_CHECK(strstr(buf, "\033") == NULL);
+    KT_CHECK(strstr(buf, "warm 1") != NULL);
+}
+
 void test_log(void)
 {
     test_log_levels();
     test_log_ring();
     test_log_wrap();
+    test_log_colors();
 }

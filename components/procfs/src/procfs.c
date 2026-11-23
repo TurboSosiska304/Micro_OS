@@ -47,6 +47,10 @@ struct proc_file {
 struct procfs_open {
     const struct proc_file *file;
     k_u32_t pid;
+    /* The text of the directory an open of a directory names; a file of
+     * procfs has it empty. The batch of `readdir` is built from the listing
+     * of this path and the position of the descriptor. */
+    char path[PROC_NAME_MAX];
 };
 
 /* --- the files of the root --- */
@@ -302,6 +306,8 @@ static const struct proc_file *find_task_file(const char *name)
 
 /* --- the operations --- */
 
+static int procfs_stat(void *ctx, const char *path, struct vfs_stat *out);
+
 static int procfs_open(void *ctx, const char *path, int flags, struct vfs_file *out)
 {
     char dir[PROC_NAME_MAX];
@@ -312,7 +318,24 @@ static int procfs_open(void *ctx, const char *path, int flags, struct vfs_file *
     k_u32_t pid;
 
     K_UNUSED(ctx);
-    K_UNUSED(flags);
+
+    /* A directory is opened for `readdir`; the files of the root and of a
+     * task are opened for `read`. The two are one tree and two shapes of a
+     * descriptor. */
+    if ((flags & VFS_O_DIRECTORY) != 0) {
+        struct vfs_stat info;
+
+        if (procfs_stat(ctx, path, &info) != 0 || info.type != 2) {
+            return -2;
+        }
+        if (open == NULL || strlen(path) >= sizeof(open->path)) {
+            return -1;
+        }
+        memset(open, 0, sizeof(*open));
+        memcpy(open->path, path, strlen(path) + 1);
+
+        return 0;
+    }
 
     /* The task of the path is decided once, here: /proc/self becomes the
      * number of the task that opened the file. */
@@ -375,13 +398,14 @@ static int procfs_read(void *ctx, struct vfs_file *file, void *buf, k_size_t siz
     return (int)size;
 }
 
-static int procfs_list(void *ctx, const char *path, struct vfs_dirent *out, k_size_t max,
-                       k_size_t *count)
+static int procfs_list_from(void *ctx, const char *path, struct vfs_dirent *out, k_size_t max,
+                            k_size_t *count, k_size_t skip)
 {
     char dir[PROC_NAME_MAX];
     const char *rel = relative_path(path);
     k_size_t i;
     k_size_t found = 0;
+    k_size_t seen = 0;
     k_u32_t pid;
 
     K_UNUSED(ctx);
@@ -401,6 +425,9 @@ static int procfs_list(void *ctx, const char *path, struct vfs_dirent *out, k_si
     if (pid != 0) {
         /* The files of a task. */
         for (i = 0; i < s_task_file_count && found < max; i++) {
+            if (seen++ < skip) {
+                continue;
+            }
             memset(&out[found], 0, sizeof(out[found]));
             snprintf(out[found].name, sizeof(out[found].name), "%s", s_task_files[i].name);
             out[found].type = 1;
@@ -409,6 +436,9 @@ static int procfs_list(void *ctx, const char *path, struct vfs_dirent *out, k_si
     } else {
         /* The files of the root. */
         for (i = 0; i < s_root_file_count && found < max; i++) {
+            if (seen++ < skip) {
+                continue;
+            }
             memset(&out[found], 0, sizeof(out[found]));
             snprintf(out[found].name, sizeof(out[found].name), "%s", s_root_files[i].name);
             out[found].type = 1;
@@ -420,10 +450,12 @@ static int procfs_list(void *ctx, const char *path, struct vfs_dirent *out, k_si
             struct task *self = task_self();
 
             if (self != NULL && found < max) {
-                memset(&out[found], 0, sizeof(out[found]));
-                snprintf(out[found].name, sizeof(out[found].name), "self");
-                out[found].type = 2;
-                found++;
+                if (seen++ >= skip) {
+                    memset(&out[found], 0, sizeof(out[found]));
+                    snprintf(out[found].name, sizeof(out[found].name), "self");
+                    out[found].type = 2;
+                    found++;
+                }
             }
         }
 
@@ -432,6 +464,9 @@ static int procfs_list(void *ctx, const char *path, struct vfs_dirent *out, k_si
             struct task *t = task_get_by_index(i);
 
             if (t == NULL) {
+                continue;
+            }
+            if (seen++ < skip) {
                 continue;
             }
 
@@ -448,6 +483,37 @@ static int procfs_list(void *ctx, const char *path, struct vfs_dirent *out, k_si
     }
 
     return 0;
+}
+
+static int procfs_list(void *ctx, const char *path, struct vfs_dirent *out, k_size_t max,
+                       k_size_t *count)
+{
+    return procfs_list_from(ctx, path, out, max, count, 0);
+}
+
+/*
+ * The next entries of a directory of procfs that was opened for `readdir`.
+ * The position of the descriptor is the number of entries already answered;
+ * the listing is built again from the path and the batch is the part after
+ * it. /proc is small enough that building it again costs less than keeping
+ * a copy of it in the descriptor.
+ */
+static int procfs_readdir(void *ctx, struct vfs_file *file, struct vfs_dirent *out, k_size_t max,
+                          k_size_t *count)
+{
+    const struct procfs_open *open = (const struct procfs_open *)file->priv;
+    int rc;
+
+    if (open == NULL || open->path[0] == '\0') {
+        return -2;
+    }
+
+    rc = procfs_list_from(ctx, open->path, out, max, count, (k_size_t)file->offset);
+    if (rc == 0) {
+        file->offset += (count != NULL) ? *count : 0;
+    }
+
+    return rc;
 }
 
 static int procfs_stat(void *ctx, const char *path, struct vfs_stat *out)
@@ -511,6 +577,7 @@ static const struct vfs_operations g_operations = {
     .write = NULL,
     .close = NULL,
     .list = procfs_list,
+    .readdir = procfs_readdir,
     .stat = procfs_stat,
     .mkdir = NULL,
     .unlink = NULL,

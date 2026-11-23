@@ -64,20 +64,38 @@ const char *klog_level_name(k_log_level_t level)
     }
 }
 
-void klog(k_log_level_t level, const char *fmt, ...)
+/*
+ * The SGR sequence of a tone on a screen with colours, or NULL for a line
+ * that is read as it is. Amber is the yellow of the palette (6, the "brown"
+ * of a CGA), the colour of an ASCII terminal that warns; red is its red and
+ * green the green of a success.
+ */
+static const char *tone_sgr(k_log_level_t level, k_log_tone_t tone)
+{
+    if (tone == K_LOG_TONE_OK) {
+        return "32";
+    }
+
+    switch (level) {
+    case K_LOG_LEVEL_WARN:
+        return "33";
+    case K_LOG_LEVEL_ERROR:
+        return "31";
+    default:
+        return NULL;
+    }
+}
+
+static void klog_emit(k_log_level_t level, k_log_tone_t tone, const char *fmt, va_list ap)
 {
     char buf[KERNEL_LOG_LINE_MAX];
-    va_list ap;
     int written;
 
     if (level < g_level || level == K_LOG_LEVEL_OFF || level > K_LOG_LEVEL_OFF) {
         return;
     }
 
-    va_start(ap, fmt);
     written = vsnprintf(buf, sizeof(buf), fmt, ap);
-    va_end(ap);
-
     if (written < 0) {
         return;
     }
@@ -121,19 +139,56 @@ void klog(k_log_level_t level, const char *fmt, ...)
         return;
     }
 
-    /* One write: two tasks that log at the same moment used to leave half
-     * of one line and half of another on the same row. */
+    /*
+     * One write: two tasks that log at the same moment used to leave half
+     * of one line and half of another on the same row. The ring and the
+     * capture of the boot keep the text without a sequence; the colours are
+     * a mark of the screen and only a console that reads them gets them.
+     */
     {
         k_size_t len = str_len(buf);
+        const char *sgr = k_console_ansi() ? tone_sgr(level, tone) : NULL;
 
         if (len >= KERNEL_LOG_LINE_MAX - 1) {
             len = KERNEL_LOG_LINE_MAX - 2;
+            buf[len] = '\0';
         }
 
-        buf[len] = '\n';
-        buf[len + 1] = '\0';
-        k_console_write(buf, len + 1);
+        if (sgr == NULL) {
+            buf[len] = '\n';
+            buf[len + 1] = '\0';
+            k_console_write(buf, len + 1);
+        } else {
+            /* The reset comes before the end of the line, so a terminal that
+             * paints the end of a row in a colour does not paint the next
+             * one; the serial copy drops the two sequences whole. */
+            char line[KERNEL_LOG_LINE_MAX + 12];
+            int total = snprintf(line, sizeof(line), "\033[%sm%s\033[0m\n", sgr, buf);
+
+            if (total > 0) {
+                k_console_write(line, (k_size_t)total < sizeof(line) ? (k_size_t)total
+                                                                     : sizeof(line) - 1);
+            }
+        }
     }
+}
+
+void klog(k_log_level_t level, const char *fmt, ...)
+{
+    va_list ap;
+
+    va_start(ap, fmt);
+    klog_emit(level, K_LOG_TONE_PLAIN, fmt, ap);
+    va_end(ap);
+}
+
+void klog_tone(k_log_tone_t tone, const char *fmt, ...)
+{
+    va_list ap;
+
+    va_start(ap, fmt);
+    klog_emit(K_LOG_LEVEL_INFO, tone, fmt, ap);
+    va_end(ap);
 }
 
 void klog_capture_start(void)

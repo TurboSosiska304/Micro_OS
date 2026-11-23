@@ -1,6 +1,6 @@
 # ADR 0024 - The stream and the installer: programs from a repository
 
-* Status: accepted
+* Status: accepted, and built in part - see "What was built" at the end
 * Date: 2026-11-22
 * Supersedes: nothing
 * Related: ADR 0004 (the port), ADR 0011 (the versions), ADR 0018 (the
@@ -166,3 +166,242 @@ becomes a program of `/usr/bin` when the calls it needs - `open`, `write`,
   tests need.
 * The network of a machine with a real clock is a machine that can install:
   NTP is no longer a convenience of the console but a part of the trust.
+
+## What was built
+
+The first pass of K12 is in the tree: the stream, the index, the signature
+and the installer are here and are tested, and the second pass added the TLS
+of §3 for the machine that has the room for it.
+
+### The stream, and `wget`
+
+`components/net/src/http.c` has a second client beside `http_get`, which
+stays for the console:
+
+```c
+struct http_stream {
+    const struct http_transport *transport;
+    const char *url;
+    struct http_sink sink;   /* write(), and reset() for a 200 after a Range */
+    k_u64_t resume_from;     /* the Range */
+    int max_redirects;
+    k_u32_t timeout_ms;
+    ...                      /* status, length, total, redirects, chunked */
+};
+int http_stream(struct http_stream *stream);
+```
+
+It reads a body of `Content-Length`, a chunked body (with the extensions of a
+chunk size and the trailers at the end), follows at most `HTTP_REDIRECT_MAX`
+(5) redirects - an absolute URL or a path on the same host - and writes the
+bytes into the sink as they arrive, so a program of 4 KB costs a 256-byte
+buffer and not a buffer of its size. A `Range: bytes=N-` is sent when the
+caller names a `resume_from`; a `206` continues the sink, a `200` calls
+`sink.reset()` because the server ignored the range, and a sink without a
+reset makes that answer `HTTP_ERROR` instead of writing half of an old file
+in front of a whole new one. A body that ends before its length is
+`HTTP_SHORT`; a body that is not a success (a 404 of a mirror) is read and
+thrown away, and the sink stays empty.
+
+The console face is `wget URL FILE`: the destination is the sink, the file
+that is already there is the `Range`, and a download that was cut keeps the
+bytes it has - the second run of the same command continues it. The same
+`net_http_download_to()` is what `pkg` uses, with the transport of the port or
+a fake one in the tests.
+
+A bug of the TCP client of x86-64 came out of this work: the receive window
+was only advertised with a segment the stack sent, so a body larger than the
+4 KB buffer of a session stopped in the middle. The reader now sends the
+acknowledgement with the new window as it drains, and only the bytes it kept
+are acknowledged.
+
+### The index and the signature
+
+The index is JSON, and `pkg_index_parse` reads the object of §1 while skipping
+a field it does not know (so a repository grows without breaking an older
+machine):
+
+```json
+{
+  "repository": "microos-progs",
+  "machine": "x86_64",
+  "abi": 2,
+  "packages": [
+    { "name": "hello", "version": "1.0.0", "machine": "x86_64", "abi": 2,
+      "size": 4288, "sha256": "…64 hex…",
+      "file": "hello-1.0.0-x86_64.mox", "summary": "says hello" }
+  ]
+}
+```
+
+The signature of the index and of every `.mox` is Ed25519 over the bytes of
+the file, detached, in a `.sig` file of 64 raw bytes; the primitives are the
+ones of the signed image of ADR 0020 (`ports/port_x86_64/loader/sha256.c` and
+`ed25519.c`), and `tools/microos_sign.c` grew two commands for the
+repository side: `sign-file --key K --in FILE --sig FILE` and
+`verify-file --pub P --sig FILE FILE`.
+
+The key of a repository is `/etc/pkg/keys/<repo>.pub`, thirty-two bytes in
+hexadecimal. When the file is not there, the key of the image is the key of
+the repository: the release signs the kernel and the index with the same key,
+and a machine that boots an image of the project trusts the programs of the
+project without a second file to copy. The x86-64 build compiles the generated
+`sign_public_key.h` into `pkg`; a host build has no image and therefore no
+built-in key (the tests write theirs).
+
+A package is checked in this order: the size against the index, the SHA-256
+against the index, the signature against the key, and the header of MOX1
+(`k_exec_parse`) against the machine. A package of another machine, of another
+ABI, with a digest or a signature that does not match, does not reach `/usr`.
+
+### The installer, and `vfs_rename`
+
+`components/pkg` is the installer, a command of the shell (`pkg`) that does
+not exist on the board: the ESP-IDF component is an empty interface and the
+sources are not compiled there (ADR 0018).
+
+* The database is one text file per package under `/var/pkg/local`, the cache
+  is `/var/cache/pkg`, the index of a repository is `/var/pkg/index`, the
+  programs go to `/usr/bin`, the repositories are lines of `/etc/pkg.conf`
+  (`<name> <url>`) and the log is `/var/pkg/log`.
+* The commands and the flags are the table of §6: `-S`, `-U`, `-R`, `-Q`,
+  `-Qe`, `-Qi`, `-Ql`, `-Qk`, `-Sy`, `-Su`, `-Syu`, `-Ss`, `-Si`, `-Sc`,
+  `repo add`, `log`; `--noconfirm`, `--needed`, `--download-only`,
+  `--dry-run`, `--allow-downgrade`, `--force`, `--offline`, `--root`,
+  `--repo`, `--cachedir`, `--color`, `--quiet`, `--verbose`, `--ignore`,
+  `NAME=VERSION`, `--help`, `--version`. There is no `--nosignature` and
+  there is no path that installs an unverified byte.
+* An install writes `NAME.new` beside the program, verifies the bytes, makes
+  the file executable (0755, because the shell runs only what has an execute
+  bit), and calls `vfs_rename`. The VFS gained the operation (and the system
+  call `KSYS_RENAME 34`, the next free number): it refuses a rename between
+  two mounts with `KERR_XDEV`, and MicroFS and FAT implement it. A rename
+  replaces an existing *file* at the destination, as POSIX does, and refuses
+  a directory (`KERR_ISDIR`); a directory is renamed only inside its parent
+  (`KERR_NOTSUP`), because moving the tree below it is a walk no filesystem
+  of this system makes yet. A volume without the operation installs `in
+  place` with a warning that the window is not atomic.
+* The local file of `-U` is named as a repository names it,
+  `NAME-VERSION-MACHINE.mox`, with its `.sig` beside it; the name is what
+  lets the installer know what it has without an index.
+
+### Tests
+
+* `tests/cases/test_net.c`: the fake transport serves a body of a length, a
+  chunked body, a redirect (relative and absolute), a chain that does not
+  end, a body that ends early, a 404 (which must not reach the sink) and a
+  Range that is a 206 or a 200.
+* `tests/cases/test_vfs.c` and `test_fs_fat.c`: rename moves a name, replaces
+  a file, refuses a directory that moves and a rename between two mounts.
+* `tests/cases/test_pkg.c`: the index, a signed local file installed through
+  the rename, a broken signature, a package of another machine (by name and
+  by index), a downgrade without and with `--allow-downgrade`, a dry run that
+  writes nothing, `--download-only`, the cache with `--offline`, an index
+  without its signature, `-Qk` and `-R` - all on a temporary MicroFS volume
+  under `--root`.
+* `make x86-net-smoke` serves a repository signed with the key of the build:
+  `wget` of a file, of a redirect, of a chunked body, of a cut body and of
+  its resume, `pkg repo add`, `pkg -Sy`, `pkg -S hello`, `pkg -Q` and `exec
+  hello` of the program that arrived.
+
+### TLS: mbedTLS on x86-64
+
+The handshake of §3 is here for x86-64 and for the host substrate. The board
+keeps the copy of ESP-IDF and no command of its shell speaks TLS yet: it is a
+compatibility port (ADR 0018) and this pass changes nothing it boots.
+
+**The library.** Mbed TLS **3.6.2** is vendored in `third_party/mbedtls`:
+the upstream `include/` and `library/` as they are, the upstream license
+(Apache-2.0, the half of the dual grant this tree takes), and two files of
+ours - the configuration and the CMake target. The configuration replaces
+`mbedtls_config.h` and is a TLS *client*: TLS 1.2 and 1.3, X.509, ECDHE with
+ECDSA or RSA certificates, RSA-PSS, AES-GCM/CCM, ChaCha20-Poly1305,
+SHA-1/256/384/512, PEM roots in memory; no `MBEDTLS_FS_IO`, no
+`MBEDTLS_NET_C`, no threads, no timing, no server. The file is
+`third_party/mbedtls/config/microos_config.h` and its comments are the
+reason for every group. The image of x86-64 grew by about 312 KB (from
+352 KB to 672 KB of `microos64.bin`), which the ADR accepted: this machine
+has no partition to fit.
+
+**The platform layer** (`components/net/src/tls.c`) is the half mbedTLS
+cannot write for a machine without a libc:
+
+* the allocator is `kmm_alloc()` at `KMM_PRIORITY_SYSTEM`, named as
+  `MBEDTLS_PLATFORM_CALLOC_MACRO` so that the library never holds a pointer
+  to a `calloc` that is not linked;
+* `snprintf` is the formatter of the kernel, set with
+  `mbedtls_platform_set_snprintf()`;
+* the clock is `k_clock_now_unix()`, and `gmtime_r` is a UTC conversion of
+  our own (`MBEDTLS_PLATFORM_GMTIME_R_ALT`), because the library would
+  otherwise reach for the libc of the host;
+* the entropy is `mbedtls_hardware_poll()` over
+  `net_tls_platform_entropy()`: `RDRAND` when CPUID leaf 1 says the
+  processor has it, a jitter of the TSC and the uptime otherwise
+  (`ports/port_x86_64/src/tls_platform.c`); the host uses `getrandom()`.
+  QEMU's default CPU model has no `RDRAND`, so the smoke test exercises the
+  fallback and a machine of silicon takes the instruction;
+* the roots are `/etc/ssl/certs.pem`, read through the VFS into `kmm` memory
+  and handed to `mbedtls_x509_crt_parse()` (any number of certificates).
+  `MBEDTLS_TEST_SW_INET_PTON` selects the library's own `inet_pton`, because
+  this kernel has none and a certificate may name an address in its SAN.
+
+**The clock policy.** A certificate has dates, and a machine whose clock NTP
+has not set cannot check them. `net_tls_clock_ok()` refuses a clock that was
+never set, or one before 2020-01-01, *before* the socket is opened; the
+console says "the clock is not set (1970): the date of a certificate cannot
+be checked - run `ntp` first". A silent success on a machine of 1970 is not
+one of the outcomes. The x86-64 port registers a software clock (the kernel's
+base plus its uptime) so that `ntp` has somewhere to put the moment: this
+port has no driver of the CMOS clock yet, and a real one is a later change.
+
+**The transport.** `struct http_transport::open` now receives the transport
+itself, so a layer can wrap the one below it. `net_tls_transport()` answers a
+template, the HTTP client copies it per exchange and puts the plain transport
+in `user`; `tls_open()` opens the TCP session, checks the clock, loads the
+roots, seeds the DRBG, sets the server name (`mbedtls_ssl_set_hostname()`,
+which is both the SNI and the name checked in the certificate) and runs the
+handshake with `MBEDTLS_SSL_VERIFY_REQUIRED`. A failure is `HTTP_TLS` and one
+sentence of `net_tls_last_error()`: there is no roots file, the clock is
+1970, the chain is not trusted (with the flags of the verification), the name
+is another, or the library said what went wrong. `http_parse_url()` accepts
+both schemes, with 80 and 443, and a redirect keeps the scheme of the hop it
+lands on - so `http get https://...` and `wget https://...` are the same
+client they were.
+
+**`pkg`.** The repository may be an `https://` URL: `pkg` uses
+`net_http_transport()` through the HTTP client, the client chooses the TLS
+layer from the scheme, and a refused handshake is a sentence of TLS in the
+log of an install, not "the download failed". The signature of §4 remains
+the trust: TLS does not replace the digest, and a mirror with a valid
+certificate still cannot install a package that is not signed.
+
+**What the tests say.** `tools/x86_net_smoke.py` generates a test authority
+and three certificates with `openssl` (the good one names `IP:10.0.2.2`, one
+names another machine, one is signed by a second authority), starts three
+servers of TLS and an NTP responder on the loopback of the host, and feeds
+the guest the root over plain HTTP - the same way a person would put a file
+there. The checks, all passing:
+
+* `https` before `ntp` is refused with the sentence of the clock;
+* after `ntp 10.0.2.2:<port>` the file of 1500 bytes arrives over TLS 1.3,
+  and over TLS 1.2 from a server that offers no 1.3;
+* the certificate of another name is refused with flags `0x4`, the one of
+  another authority with flags `0x8`;
+* `pkg repo add https://...`, `pkg -Sy` and `pkg -S hello` install a signed
+  program through the TLS layer, and `exec hello` runs it.
+
+`tests/cases/test_tls.c` covers what a handshake uses before it: the policy
+of the clock, a store of one and of two certificates, a broken store, and the
+transport that has no transport below it. The parsing of the URL of both
+schemes is in `tests/cases/test_net.c`.
+
+**What is not in this pass.** No revocation (no CRL and no OCSP), no client
+certificate, no session resumption across connections (every download is a
+handshake), no ALPN, and no TLS on the board: its command does not exist and
+`net_tls_transport()` is the stub of `components/net/src/tls_stub.c` in the
+firmware. The library is built at `-O2` on x86-64 and not at the `-O3` of the
+image: at `-O3` with this compiler and these freestanding flags the Finished
+check of TLS 1.3 fails in the smoke test, while the debug build and `-O2`
+pass. That is an optimizer problem of the library and not a choice of the
+protocol; it is written in `docs/debts.md` and in the CMake comment rather
+than left for a mystery.

@@ -26,10 +26,10 @@ struct mfs_code_pair {
 };
 
 static const struct mfs_code_pair g_codes[] = {
-    {MFS_OK, KERR_NONE},        {MFS_ENOENT, KERR_NOENT}, {MFS_EEXIST, KERR_EXIST},
-    {MFS_ENOSPC, KERR_NOSPC},   {MFS_EIO, KERR_IO},       {MFS_EINVAL, KERR_INVAL},
-    {MFS_ENOTDIR, KERR_NOTDIR}, {MFS_EISDIR, KERR_ISDIR}, {MFS_ENOTEMPTY, KERR_NOTEMPTY},
-    {MFS_E2BIG, KERR_TOOBIG},
+    {MFS_OK, KERR_NONE},        {MFS_ENOENT, KERR_NOENT},   {MFS_EEXIST, KERR_EXIST},
+    {MFS_ENOSPC, KERR_NOSPC},   {MFS_EIO, KERR_IO},         {MFS_EINVAL, KERR_INVAL},
+    {MFS_ENOTDIR, KERR_NOTDIR}, {MFS_EISDIR, KERR_ISDIR},   {MFS_ENOTEMPTY, KERR_NOTEMPTY},
+    {MFS_E2BIG, KERR_TOOBIG},   {MFS_ENOTSUP, KERR_NOTSUP},
 };
 
 /* The number of the kernel for a result of the filesystem. */
@@ -71,6 +71,15 @@ static const char *vfs_strerror_mfs(int error)
 struct mfs_vfs_file {
     struct mfs_file file;
 };
+
+/*
+ * The private data of a descriptor of the VFS is a fixed buffer of 64 bytes
+ * and the VFS hands it to the filesystem as it is. A file of MicroFS has to
+ * fit there, cursor and all: the size of the structure is a contract with
+ * kernel/vfs.h, and the check is here where the two meet.
+ */
+_Static_assert(sizeof(struct mfs_vfs_file) <= VFS_FILE_DATA_SIZE,
+               "the file of MicroFS does not fit into a descriptor of the VFS");
 
 /*
  * The buffer of one directory, for the calls that list it. It is not on the
@@ -329,6 +338,12 @@ static int vfs_remove(void *ctx, const char *path)
     return mfs_to_kerr(mfs_unlink(path));
 }
 
+static int vfs_rename_object(void *ctx, const char *from, const char *to)
+{
+    K_UNUSED(ctx);
+    return mfs_to_kerr(mfs_rename(from, to));
+}
+
 static int vfs_set_mode(void *ctx, const char *path, k_u32_t mode)
 {
     K_UNUSED(ctx);
@@ -373,6 +388,7 @@ static const struct vfs_operations g_mfs_operations = {
     .statx = vfs_statx_file,
     .mkdir = vfs_make_dir,
     .unlink = vfs_remove,
+    .rename = vfs_rename_object,
     .chmod = vfs_set_mode,
     .chown = vfs_set_owner,
     .statfs = mfs_statfs_volume,

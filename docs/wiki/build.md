@@ -21,6 +21,7 @@ the host build as `microos_null_probe`, and the link is the check.
 | `python3` | the tools, the checks, ESP-IDF | `python` | `python3` |
 | `qemu-system-x86_64` | running the x86-64 machine | `qemu-system-x86` | `qemu-system-x86` |
 | GTK backend of QEMU | the window of `make x86-run` | `qemu-ui-gtk` | `qemu-system-gui` |
+| `grub-mkrescue` (with `xorriso`, `mtools`) or `limine` | `make x86-iso` | `grub libisoburn mtools` | `grub-pc-bin xorriso mtools` |
 | `clang-format` | `make format`, the format check | `clang-format` | `clang-format` |
 | `valgrind` | the cloud run of the tests, optional | `valgrind` | `valgrind` |
 | `pyserial` | `tools/console.py`, `tools/stream_console.py` | `python3 -m pip install pyserial` | the same |
@@ -72,18 +73,28 @@ a list of commands and checks the transcript. `make clean` removes
 make x86-build            # the loader, the kernel and the programs, into build-x86/
 make x86-all              # the complete machine: network, disk and run.sh
 make x86-all-run          # boot it in a window (x86-all-run-serial: a terminal)
+make x86-user             # unpack the release tar and start it, as a person does
+make x86-user-serial      # the same tar in a terminal
 make x86-disk             # build-x86/programs.img: /bin and /etc of MicroFS
-make x86-run              # a QEMU window: VGA text and the PS/2 keyboard
+make x86-run              # a QEMU window: framebuffer 1280x800 and the keyboard
 make x86-run-serial       # the same machine in a terminal (-nographic)
 make x86-smoke            # boot and check the transcript, no window
-make x86-vga-smoke        # check the screen and the keyboard without a display
+make x86-vga-smoke        # check both screens and the keyboard, without a display
 make x86-run-disk         # the window with a disk of its own, kept between runs
 make x86-run-disk-serial  # the same disk in a terminal
 make x86-disk-smoke       # two boots on one image: a file survives both
+make x86-iso              # the BIOS ISO: loader, kernel and root image
+make x86-iso-run          # boot the ISO in a terminal (-nographic)
+make x86-iso-smoke        # boot the ISO and check the shell and /bin
 ```
 
 The build is a CMake project of its own (`ports/port_x86_64`), because the
-kernel there has no libc under it. The machine boots from three files:
+kernel there has no libc under it. The console of the screen draws with the
+8x16 font of the PC - Spleen 8x16 2.3.0 (BSD-2-Clause), generated into
+`ports/port_x86_64/src/font_spleen.c` from the BDF in `third_party/spleen` by
+`tools/spleen_font.py`; it is part of the kernel image, so `tools/bundle.sh`
+puts `LICENSE.spleen` into the x86-64 archive (`docs/licensing.md`). The
+machine boots from three files:
 `build-x86/loader32.elf` (a multiboot loader that QEMU takes with `-kernel`),
 `build-x86/microos64.bin` (the flat kernel image) and
 `build-x86/programs.img` (the disk). The programs of `/bin` are built first
@@ -97,14 +108,23 @@ the builds it is made of: `build-x86-all/` holds `loader32.elf`,
 `microos64.bin`, `x86-all.img` (the disk with `/bin` and `/etc`) and a `run.sh`
 that boots the three with a virtio-net card on the user network of QEMU (port
 8080 forwarded). `X86_SERIAL=1 ./build-x86-all/run.sh` gives the serial
-console and no window. The target is not `make bundle`; the release artifact
-is still the one of `tools/bundle.sh`.
+console and no window.
+
+`make x86-user` closes the loop: it builds that machine and the release
+bundle, then unpacks `dist/MicroOS-x86_64-<version>.tar.gz` into
+`build-x86-user/` and starts `run.sh` from the tar - not from the tree. The
+tar of a release carries the same `loader32.elf`, `microos64.bin`,
+`x86-all.img`, the licenses and the `run.sh`, so what a person downloads is
+what the target starts. `make x86-user-serial` gives the console of the tar
+without a window.
 
 The display backend is a package of its own in some distributions: the target
 asks QEMU for its list of backends first and prints the command to run when
 the one asked for is missing. `make x86-run X86_DISPLAY=sdl` picks SDL, and
 `make x86-run-serial` is the machine for a box without a display server at
-all.
+all. The window shows the framebuffer of 1280x800 of ADR 0023 (`-vga std`);
+a machine whose card has no Bochs VBE interface keeps the text mode of 80x25,
+which is what `make x86-run` shows with `-vga cirrus`.
 
 The disk is a raw image of 8 MB, made by `make x86-disk`
 (`tools/mkfs_mfs.c`, which links `components/mfs`) and kept in
@@ -113,6 +133,16 @@ The disk is a raw image of 8 MB, made by `make x86-disk`
 not committed; `make clean` does not remove `build-x86/`, so
 `rm -rf build-x86` is the way to start over. The details are in the port's
 README, [`docs/ports/x86_64/README.md`](../ports/x86_64/README.md).
+
+`make x86-iso` is the medium, not the hypervisor: it stages
+`loader32.elf`, `microos64.bin` and `programs.img` into an ISO with an El
+Torito catalogue and asks `grub-mkrescue` (or `limine` when the machine has
+no GRUB) for the boot record. The image is `build-x86-iso/microos.iso`;
+the root image is the second module of the boot, the port mounts its first
+partition as a read-only `/`, and `make x86-iso-smoke` boots it with
+`-cdrom` and no `-kernel`. The tools the build needs and the gaps (UEFI, a
+USB stick, a writable root) are in
+[`docs/ports/x86_64/iso.md`](../ports/x86_64/iso.md).
 
 ## The ESP32 build
 
@@ -158,6 +188,7 @@ pins and quirks are in
 
 ```bash
 make integrity   # the bundle, the image headers, the partition table, git, hygiene, format
+make wiki-check  # every link and anchor of docs/wiki
 make format      # reformat the C sources with clang-format
 make ci          # build, test, test-asan, test-tsan, smoke, [x86-smoke], integrity
 ```

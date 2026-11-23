@@ -27,7 +27,7 @@ and the chips on it. None of them replaces another.
 | `make soak-host` | the portable kernel on the host under TSan for 600 s, two cores | GCC, TSan, valgrind |
 | `make fuzz-long` | the fuzz of the ABI and the parsers, with a multiplier | GCC, ASan |
 | `make disk-stress` | a full volume, `fsck -y` and two boots (MicroFS, FAT) | QEMU, dosfstools, mtools |
-| `make board-soak` | the same session on the board, one boot | ESP-IDF and a board |
+| `make board-soak` | the same session on the board for 180 s, one boot (the gate of a compatibility release; `BOARD_SOAK_MINUTES=10` for a change of the flash or the boot) | ESP-IDF and a board |
 | `make integrity` | the boundary, the bundle, the partitions, the hygiene | `clang-format` |
 | `make ci` | the list a contributor runs before a push | the above, QEMU optional |
 | `tools/device-test.sh` | build, flash and boot the board | ESP-IDF and a board |
@@ -156,27 +156,39 @@ and the kernel prints its banner on the serial port. Then the script types
 commands into COM1 and checks the answers: the boot, the filesystem, the
 program of `/bin` (the `execve` path, the arguments, the status), the fork with
 copy on write, the fault of `/bin/crash`, and the `EFAULT` of `/bin/badptr`.
-The run of this tree passes 48 checks and ends with `RESULT: PASS`.
+The run prints its number of checks, ends with `RESULT: PASS`, and the count of
+`1.2.0` is the one of the release run (pending until the integration hands
+over the tree).
 
-`make x86-vga-smoke` looks at the other console: it boots with `-display none`,
-reads the text memory at `0xB8000` through the monitor of QEMU, takes a
-screenshot and types with `sendkey`, so it proves the screen and IRQ1 without a
-display server. It is a target of its own and **not** a part of `make ci`: the
-monitor of QEMU is a tool a build farm does not have to have.
+`make x86-vga-smoke` looks at the other console: it boots with
+`-display none`, reads the framebuffer with `screendump` (a PPM of 1280x800)
+and the text mode at `0xB8000` with `pmemsave`, compares the cells with the
+table of the font, reads the colours of `/etc/console` and of `ls --color`,
+and types with `sendkey`, so it proves both screens and IRQ1 without a display
+server. It is a target of its own and **not** a part of `make ci`: the monitor
+of QEMU is a tool a build farm does not have to have.
 
 `make x86-disk-smoke` gives the machine an 8 MB image on the primary IDE
-channel, writes a file in one boot and reads it in the next. It is the test of
-the ATA driver, of the MBR parser and of MicroFS on a real medium, and it is
-also not a part of `make ci`.
+channel, writes a file in one boot and reads it in the next, and runs the
+programs of the volume (`zcat`, Lua, bc/dc and the commands of sbase) in both
+boots. It is the test of the ATA driver, of the MBR parser and of MicroFS on a
+real medium, and it is also not a part of `make ci`.
 
 `make x86-net-smoke` builds the image with `-DMICRO_OS_X86_NET=ON`, gives QEMU
 a virtio-net card on its user-mode network and a forward of a port of the host
 to the guest, and checks the whole contract of the port over the wire: the
 device and its MAC, `ping` of the gateway, a UDP exchange with an echo server
-of the host, an HTTP GET of the client of `components/net`, the page of the
-state served by the guest through `hostfwd`, and a name the resolver answers
-twice (the second from the cache). Like the other two it is not a part of
-`make ci`: it opens a port on the loopback and needs the user-mode network.
+of the host, an HTTP GET of the client of `components/net`, the stream of
+`wget`, TLS 1.3 and 1.2 with a wrong name and a wrong authority refused, the
+install of a signed package over HTTPS, the page of the state served by the
+guest through `hostfwd`, and a name the resolver answers twice (the second
+from the cache). Like the other two it is not a part of `make ci`: it opens a
+port on the loopback and needs the user-mode network.
+
+`make x86-iso-smoke` boots the BIOS ISO with `-cdrom` and nothing else - no
+`-kernel`, no `-initrd`, no disk - and checks the loader, the signature of the
+kernel, the mount of the root module and the shell with `/bin`. It is the
+definition of "the ISO boots" and it is not a part of `make ci`.
 
 ## `make integrity`: the boundary and the hygiene
 
@@ -272,7 +284,7 @@ The campaign is the four tools below, on the two machines and the host substrate
 |---|---|---|---|---|
 | **host** | `make test`, `make test-asan`, `make test-tsan` | `make soak-host` (TSan, 600 s) | `make fuzz-long` | valgrind, inside `soak-host` |
 | **x86-64** | `make test` (the same sources) | `make soak` (one boot, 600 s) | `make fuzz-long` | `make disk-stress` |
-| **board** | `tools/device-test.sh` | `tools/board_soak.sh` (600 s) | — | `fsck` in the board session |
+| **board** | `tools/device-test.sh` | `make board-soak` (180 s) | — | `fsck` in the board session |
 
 `make ci` does **not** include the campaign: ten minutes of QEMU and a board
 do not belong to a push. The campaign runs on a release candidate and its
@@ -396,10 +408,17 @@ a runner that must have them.
 ### The board: `tools/board_soak.sh`
 
 ```bash
-tools/board_soak.sh                         # build, flash, 600 s
+make board-soak                             # build, flash, 180 s
+tools/board_soak.sh --minutes 10            # the long session of a release
 tools/board_soak.sh --minutes 1             # the tool itself
 tools/board_soak.sh --no-build --no-flash   # the firmware already there
 ```
+
+The gate of the board of 1.2 is three minutes: from `1.2.0` the board is the
+compatibility port of ADR 0018, the changes of the release are small, and ten
+minutes of the same cycle would not prove another thing. A change of the
+flash, the boot or the volume asks for `BOARD_SOAK_MINUTES=10` and the long
+session of the releases before 1.2.
 
 The script does what `tools/device-test.sh` does (finds ESP-IDF, builds,
 flashes) and then `tools/board_soak_session.py` resets the board once and

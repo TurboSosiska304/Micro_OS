@@ -26,6 +26,7 @@ static void run_tests(void *arg)
     test_version();
     test_board();
     test_log();
+    test_ansi();
     test_port();
     test_blockdev();
     test_partition();
@@ -42,6 +43,7 @@ static void run_tests(void *arg)
     test_mfs_persistence();
     test_mfs_repair();
     test_mfs_many();
+    test_mfs_chain();
     test_mkfs_image();
     test_vfs();
     test_fs_fat();
@@ -67,6 +69,10 @@ static void run_tests(void *arg)
 #if MICRO_OS_NET && MICRO_OS_NET_HTTP && MICRO_OS_NET_HTTP_SERVER && MICRO_OS_NET_NTP &&           \
     MICRO_OS_NET_MQTT
     test_net();
+    test_pkg();
+#if MICRO_OS_TLS && MICRO_OS_NET
+    test_tls();
+#endif
 #endif
     test_boot();
 #if MICRO_OS_WIFI
@@ -74,6 +80,11 @@ static void run_tests(void *arg)
 #endif
     test_sign();
     test_progs();
+    test_zlib();
+    test_pcre2();
+    test_lua();
+    test_userland_float();
+    test_bc();
 
     g_result = ktest_summary();
     atomic_store_explicit(&g_done, true, memory_order_release);

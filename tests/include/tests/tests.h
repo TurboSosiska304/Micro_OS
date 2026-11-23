@@ -5,6 +5,7 @@
 #define MICRO_OS_TESTS_H
 
 void test_log(void);
+void test_ansi(void);
 void test_port(void);
 void test_blockdev(void);
 void test_partition(void);
@@ -24,6 +25,7 @@ void test_mfs(void);
 void test_mfs_persistence(void);
 void test_mfs_repair(void);
 void test_mfs_many(void);
+void test_mfs_chain(void);
 void test_mkfs_image(void);
 void test_vfs(void);
 void test_fs_fat(void);
@@ -47,8 +49,17 @@ void test_initd(void);
 void test_config(void);
 void test_settings(void);
 void test_net(void);
+void test_pkg(void);
+#if MICRO_OS_TLS && MICRO_OS_NET
+void test_tls(void);
+#endif
 void test_wifi(void);
 void test_sign(void);
 void test_progs(void);
+void test_zlib(void);
+void test_pcre2(void);
+void test_lua(void);
+void test_userland_float(void);
+void test_bc(void);
 
 #endif /* MICRO_OS_TESTS_H */

@@ -178,6 +178,7 @@ else()
     option(MICRO_OS_NET_HTTP_SERVER "the page of the state (httpd)" ON)
     option(MICRO_OS_NET_NTP "the clock from NTP" ON)
     option(MICRO_OS_NET_MQTT "the MQTT client and the mqtt command" ON)
+    option(MICRO_OS_TLS "the TLS client of the network (mbedTLS)" ON)
     option(MICRO_OS_TELNET "the shell on TCP port 23" ON)
     option(MICRO_OS_WIFI "the WiFi station" ON)
 
@@ -192,6 +193,7 @@ else()
         MICRO_OS_NET_HTTP_SERVER=$<BOOL:${MICRO_OS_NET_HTTP_SERVER}>
         MICRO_OS_NET_NTP=$<BOOL:${MICRO_OS_NET_NTP}>
         MICRO_OS_NET_MQTT=$<BOOL:${MICRO_OS_NET_MQTT}>
+        MICRO_OS_TLS=$<BOOL:${MICRO_OS_TLS}>
         MICRO_OS_TELNET=$<BOOL:${MICRO_OS_TELNET}>
         MICRO_OS_WIFI=$<BOOL:${MICRO_OS_WIFI}>
         MICRO_OS_FS_FAT32=$<BOOL:${MICRO_OS_FS_FAT32}>
@@ -206,7 +208,13 @@ else()
     add_subdirectory(components/init)
     add_subdirectory(components/settings)
     add_subdirectory(components/config)
+    # The TLS client is part of the network component: an image without the
+    # network has no client and no library to link.
+    if(MICRO_OS_TLS AND MICRO_OS_NET)
+        add_subdirectory(third_party/mbedtls)
+    endif()
     add_subdirectory(components/net)
+    add_subdirectory(components/pkg)
     add_subdirectory(components/mfs)
     if(MICRO_OS_FS_FAT32)
         add_subdirectory(components/fs_fat32)

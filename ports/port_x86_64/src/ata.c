@@ -570,10 +570,17 @@ void port_x86_64_disk_init(void)
 }
 
 /*
- * Where the filesystem of the boot lives: the first partition of the disk
- * when there is one, the volume in the memory when there is not.
+ * Where the filesystem of the boot lives: the root image the boot loader
+ * handed the kernel when it came from an ISO, the first partition of the disk
+ * when there is one, the volume in the memory when there is neither.
  */
 const char *port_x86_64_root_device(void)
 {
+    const char *boot = port_x86_64_module_root();
+
+    if (boot != NULL) {
+        return boot;
+    }
+
     return g_root != NULL ? g_root : "ram0";
 }

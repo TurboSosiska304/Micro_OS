@@ -79,6 +79,7 @@ def build_full_image(
     """Build `image` until its volume reports zero free blocks."""
     filler = image + ".filler"
     candidate = FILLER_START
+    measured = False
 
     for attempt in range(FILLER_TRIES):
         make_filler(filler, candidate)
@@ -93,13 +94,38 @@ def build_full_image(
         )
 
         if rc != 0:
-            # The filler did not fit: the volume is smaller than the guess.
-            candidate -= FILLER_STEP
-            if verbose:
-                print(
-                    f"soak-image: {candidate + FILLER_STEP} bytes did not fit, trying {candidate}",
-                    file=sys.stderr,
-                )
+            # A build that failed with a file the volume could not take is not
+            # an answer about the size: the image grew with the programs and
+            # the licenses of the release, and the guess is only a guess. The
+            # first refusal asks the machine for the free space of an image
+            # without the filler, which is the truth of this build and not a
+            # constant of the tree; a refusal after that means the filler is
+            # still a block too large, and one step goes away.
+            if rc != 1:
+                print(f"soak-image: the image builder failed ({rc})", file=sys.stderr)
+                return False
+            if not measured:
+                rc = build_image(image, build_dir=build, mkfs=mkfs, size_mb=size_mb,
+                                 verbose=verbose)
+                if rc != 0:
+                    return False
+                free = free_blocks(build, image, timeout)
+                if free is None:
+                    return False
+                candidate = max(free * 1024 - 2 * FILLER_STEP, 0)
+                measured = True
+                if verbose:
+                    print(
+                        f"soak-image: the guess did not fit, {free} block(s) are free, "
+                        f"trying {candidate}",
+                        file=sys.stderr,
+                    )
+            else:
+                candidate = max(candidate - FILLER_STEP, 0)
+                if verbose:
+                    print(f"soak-image: one block too large, trying {candidate}", file=sys.stderr)
+            if candidate == 0:
+                break
             continue
 
         free = free_blocks(build, image, timeout)
@@ -118,6 +144,7 @@ def build_full_image(
             return True
 
         candidate += free * 1024
+        measured = True
 
     print("soak-image: the filler did not reach zero free blocks", file=sys.stderr)
     return False

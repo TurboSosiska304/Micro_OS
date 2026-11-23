@@ -25,6 +25,7 @@
 
 #include "kernel/board.h"
 #include "kernel/boot.h"
+#include "kernel/console.h"
 #include "kernel/errno.h"
 #include "kernel/ksys.h"
 #include "kernel/log.h"
@@ -36,10 +37,15 @@
 #include "config/config.h"
 #include "kshell/kshell.h"
 #include "port_x86_64_console.h"
+#include "port_x86_64_screen.h"
 #include "settings/settings.h"
 
 #if MICRO_OS_NET
 #include "net/net.h"
+#endif
+
+#if MICRO_OS_PKG
+#include "pkg/pkg.h"
 #endif
 
 #include "devfs/devfs.h"
@@ -305,6 +311,17 @@ static void init_task(void *arg)
         kwarn("x86-64: not every command of the shell is registered");
     }
 
+    /*
+     * The colours of the log of the session, from the first prompt: a warning
+     * is amber, an error is red and a success is green, and the screen the
+     * machine has - the framebuffer or the sixteen attributes of the VGA -
+     * reads the SGR sequences (kernel/ansi.h). The log of the boot above is
+     * made of the plain pair of /etc, so a screenshot of the boot is the two
+     * colours a person chose and nothing else; COM1 is plain either way,
+     * because the port strips the sequences from its copy (src/port_x86_64.c).
+     */
+    k_console_set_ansi(true);
+
     if (task_create("shell", shell_task, NULL, TASK_PRIO_DEFAULT) == NULL) {
         kerror("x86-64: cannot start the shell");
     }
@@ -331,6 +348,12 @@ void kmain(k_u64_t multiboot_info)
 
     kinfo("x86-64: the kernel is up, heap %u KB free of %u KB",
           (unsigned)(k_port_heap_free() / 1024), (unsigned)(k_port_heap_total() / 1024));
+
+    /* The screen the boot chose (ADR 0023): the framebuffer of the VGA and
+     * its grid of cells, or the text mode of the firmware when the machine
+     * has no interface to program one. The serial port carries the line
+     * either way, which is how a machine without a window is read. */
+    kinfo("x86-64: the screen is %s", port_x86_64_console_name());
 
     /*
      * The processors of the machine (ADR 0012). The count on the left is what
@@ -370,17 +393,21 @@ void kmain(k_u64_t multiboot_info)
     filesystem_bring_up();
 
     /*
-     * The settings of /etc (ADR 0021): the systems of the tree, and the one
-     * this machine applies. `console` is the attribute of the text screen;
-     * `display` and `font` are the panel of the board, and the load names
-     * them and keeps the files. The command `config` is registered before
-     * the shell exists, so the first line a person types finds it.
+     * The settings of /etc (ADR 0021): the systems of the tree, and the ones
+     * this machine applies. `console` is the pair of the screen of the port,
+     * `font` is the gap between two of its lines; `display` is the panel of
+     * the board, and the load names it and keeps the file. The command
+     * `config` is registered before the shell exists, so the first line a
+     * person types finds it.
      */
     if (config_register() != 0) {
         kwarn("x86-64: the config command is not registered");
     }
-    if (port_x86_64_vga_settings_register() != SETTINGS_OK) {
+    if (port_x86_64_console_settings_register() != SETTINGS_OK) {
         kwarn("x86-64: the console system of /etc is not registered");
+    }
+    if (port_x86_64_font_settings_register() != SETTINGS_OK) {
+        kwarn("x86-64: the font system of /etc is not registered");
     }
 
     defaults = settings_defaults(SETTINGS_DIR);
@@ -392,6 +419,18 @@ void kmain(k_u64_t multiboot_info)
 
     (void)settings_load_all();
 
+    /*
+     * The first frame of the picture is drawn twice. The switch from the text
+     * mode of the firmware to the framebuffer is a moment when a display may
+     * still hold the screen it drew before it, and the writes of the boot
+     * cover only the lines that exist; the second pass puts every pixel of
+     * the picture - the log that is already in the cells - through the
+     * display once more, so no line of the old 80x25 screen is left under the
+     * new one. The theme of /etc has been applied just above, so the pass
+     * carries the colours a person chose.
+     */
+    port_x86_64_console_redraw();
+
     /* The commands of the network, before the shell exists: `netinfo`,
      * `ping` and `netudp` come from the port, and the client of HTTP and the
      * clock of NTP from components/net when the image has them. */
@@ -402,6 +441,14 @@ void kmain(k_u64_t multiboot_info)
 #if MICRO_OS_NET
     if (net_register() != 0) {
         kwarn("x86-64: not every command of components/net is registered");
+    }
+#endif
+
+#if MICRO_OS_PKG
+    /* The installer of programs (ADR 0024): the tree of /usr/bin, /var and
+     * the network of the machine, which is the same socket the clients use. */
+    if (pkg_register() != 0) {
+        kwarn("x86-64: the pkg command is not registered");
     }
 #endif
 

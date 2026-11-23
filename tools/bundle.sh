@@ -81,6 +81,11 @@ done
 cp -f "$ROOT/tools/ota_usb.py" "$OUT_DIR/ota_usb.py"
 echo "    tools/ota_usb.py -> ota_usb.py"
 
+# The license of the one third-party component of the x86-64 image travels
+# with the bundle, as the file of /etc/licenses on the disk does.
+cp -f "$ROOT/third_party/pcre2/LICENSE" "$OUT_DIR/LICENSE.pcre2"
+echo "    third_party/pcre2/LICENSE -> LICENSE.pcre2"
+
 chmod +x "$OUT_DIR/flash.sh" "$OUT_DIR/ota_usb.py"
 
 # The version of the kernel, as the sources say it: the name of the images.
@@ -213,28 +218,69 @@ cat "$OUT_DIR/checksums.txt"
 # without a board is run, not flashed.
 X86_NAME="MicroOS-x86_64-${VERSION}"
 
-if [ -f "$X86_BUILD/loader32.elf" ] && [ -f "$X86_BUILD/microos64.bin" ]; then
+# The complete machine (`make x86-all`) is the artifact a person gets: the
+# kernel with the network, the disk with /bin and /etc, and a run.sh that
+# starts them together. A tree that has not built it falls back to the
+# kernel alone, with the memory volume of the port.
+X86_SRC="$X86_BUILD"
+X86_DISK=""
+if [ -f "$ROOT/build-x86-all/loader32.elf" ] && [ -f "$ROOT/build-x86-all/x86-all.img" ]; then
+    X86_SRC="$ROOT/build-x86-all"
+    X86_DISK="$ROOT/build-x86-all/x86-all.img"
+fi
+
+if [ -f "$X86_SRC/loader32.elf" ] && [ -f "$X86_SRC/microos64.bin" ]; then
     echo "==> the bundle of the x86-64 port: $X86_NAME.tar.gz"
 
     STAGE="$(mktemp -d)"
     trap 'rm -rf "$STAGE"' EXIT
 
-    cp -f "$X86_BUILD/loader32.elf" "$STAGE/loader32.elf"
-    cp -f "$X86_BUILD/microos64.bin" "$STAGE/microos64.bin"
-    if [ -f "$X86_BUILD/microos64.sig" ] && [ -f "$X86_BUILD/signing.pub" ]; then
-        cp -f "$X86_BUILD/microos64.sig" "$STAGE/microos64.sig"
-        cp -f "$X86_BUILD/signing.pub" "$STAGE/microos-sign.pub"
+    cp -f "$X86_SRC/loader32.elf" "$STAGE/loader32.elf"
+    cp -f "$X86_SRC/microos64.bin" "$STAGE/microos64.bin"
+    if [ -n "$X86_DISK" ]; then
+        cp -f "$X86_DISK" "$STAGE/x86-all.img"
+    fi
+    cp -f "$ROOT/third_party/spleen/LICENSE" "$STAGE/LICENSE.spleen"
+    # zlib is linked into /bin/zcat of the disk image, and its license travels
+    # with the distribution even when the image itself is built separately.
+    cp -f "$ROOT/third_party/zlib/LICENSE" "$STAGE/LICENSE.zlib"
+    # PCRE2 is linked into /bin/pcre2grep, and its license travels the same
+    # way: the notice beside the program and the text in the archive.
+    cp -f "$ROOT/third_party/pcre2/LICENSE" "$STAGE/LICENSE.pcre2"
+    # Lua is /bin/lua of the same image, under the MIT license of its release.
+    cp -f "$ROOT/third_party/lua/LICENSE" "$STAGE/LICENSE.lua"
+    # The tools of sbase are the commands of /bin of the same image (cat,
+    # grep, ls, ...), under their MIT license; the notice travels with the
+    # archive for the same reason.
+    cp -f "$ROOT/third_party/sbase/LICENSE" "$STAGE/LICENSE.sbase"
+    # bc and dc are two names of the same engine and one BSD-2-Clause release.
+    cp -f "$ROOT/third_party/bc/LICENSE" "$STAGE/LICENSE.bc"
+    cp -f "$ROOT/third_party/mbedtls/LICENSE" "$STAGE/LICENSE.mbedtls"
+    if [ -f "$X86_SRC/microos64.sig" ] && [ -f "$X86_SRC/signing.pub" ]; then
+        cp -f "$X86_SRC/microos64.sig" "$STAGE/microos64.sig"
+        cp -f "$X86_SRC/signing.pub" "$STAGE/microos-sign.pub"
     fi
 
     cat > "$STAGE/run.sh" <<'RUN'
 #!/usr/bin/env bash
-# Micro OS on an x86-64 machine: the loader and the kernel, no board.
+# Micro OS on an x86-64 machine: the loader and the kernel, with the disk of
+# the complete machine and its network when they are in this directory.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ARGS=(-kernel "$HERE/loader32.elf" -initrd "$HERE/microos64.bin" -m 256 -no-reboot)
 
-exec qemu-system-x86_64 -kernel "$HERE/loader32.elf" -initrd "$HERE/microos64.bin" \
-    -m 256 -nographic -no-reboot
+if [ -f "$HERE/x86-all.img" ]; then
+    ARGS+=(-drive "file=$HERE/x86-all.img,format=raw,if=ide,index=0,cache=writeback"
+           -netdev user,id=n0,hostfwd=tcp:127.0.0.1:8080-:8080
+           -device virtio-net-pci,netdev=n0,disable-modern=on)
+fi
+
+if [ "${X86_SERIAL:-0}" = 1 ]; then
+    exec qemu-system-x86_64 "${ARGS[@]}" -nographic
+fi
+
+exec qemu-system-x86_64 "${ARGS[@]}" -display "${X86_DISPLAY:-gtk}" -serial null
 RUN
     chmod +x "$STAGE/run.sh"
 
@@ -249,8 +295,34 @@ Run it with QEMU:
 
     ./run.sh
 
-The console is COM1. The machine has the shell, the interrupts, the
-scheduler; the filesystem and the network of this port are still ahead.
+The console is COM1 and the VGA screen. The machine has the shell, the
+interrupts, the scheduler, the disk with MicroFS, the programs of /bin and
+the network of the port.
+
+The kernel carries Spleen 8x16 (BSD-2-Clause) for the framebuffer console and,
+in its network image, Mbed TLS 3.6.2 (Apache-2.0, the half of its dual grant
+this tree takes) for TLS. `LICENSE.spleen` and `LICENSE.mbedtls` are their
+licenses; `third_party/spleen` and `third_party/mbedtls` of the sources have
+the notes and the versions.
+
+`/bin/zcat` of the disk image is linked against zlib 1.3.1 (zlib license);
+`LICENSE.zlib` is its license and `third_party/zlib` of the sources has the
+note, the version and the port layer.
+
+`/bin/lua` of the disk image is Lua 5.4.7 (MIT license); `LICENSE.lua` is its
+license and `third_party/lua` of the sources has the note, the version, the
+port layer and the one setting of the port (`port/luaconf_port.h`). The
+interpreter runs out of the volume: `make x86-disk-smoke` reads its script in
+the first boot and after the reset.
+
+`/bin/cat`, `/bin/grep`, `/bin/ls` and the rest of the ten commands are
+the tools of sbase (MIT); `LICENSE.sbase` is their license and
+`third_party/sbase` of the sources has the subset and the port layer.
+
+`/bin/bc` and `/bin/dc` of the disk image are bc 7.2.0 (BSD-2-Clause), one
+engine with two names; `LICENSE.bc` is its license and `third_party/bc` of the
+sources has the note, the version, the port layer and the settings of the
+port (`port/bc_port.h`).
 
 The kernel carries a signature trailer (ADR 0020), and the loader verifies it
 before it copies a byte: an image with a changed byte, without a trailer or
@@ -262,9 +334,21 @@ public key of the build; the tool in `tools/` of the sources verifies them:
 
 The same kernel is on the board and in the tests: Micro OS is one portable
 kernel with a port per machine.
+
+The machine carries three third-party components: `/bin/pcre2grep` links
+PCRE2 10.42, `/bin/lua` links the engine of Lua 5.4.7, the ten commands of
+sbase are the programs of the collection, and `/bin/bc` and `/bin/dc` are the
+two names of one engine. `LICENSE.pcre2`, `LICENSE.lua`, `LICENSE.sbase` and
+`LICENSE.bc` beside this file are the licenses of that code, and the texts
+are files of the disk image under `/etc/licenses/`; the MIT of Micro OS does
+not cover a byte of them.
 DOC
 
-    STAGE_FILES=(loader32.elf microos64.bin run.sh README.md)
+    STAGE_FILES=(loader32.elf microos64.bin run.sh README.md LICENSE.spleen LICENSE.zlib
+                 LICENSE.pcre2 LICENSE.lua LICENSE.sbase LICENSE.bc)
+    if [ -f "$STAGE/x86-all.img" ]; then
+        STAGE_FILES+=(x86-all.img)
+    fi
     if [ -f "$STAGE/microos64.sig" ]; then
         STAGE_FILES+=(microos64.sig microos-sign.pub)
     fi

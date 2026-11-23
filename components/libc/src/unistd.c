@@ -311,6 +311,24 @@ int microos_mkdir(const char *path)
     return 0;
 }
 
+int microos_rename(const char *from, const char *to)
+{
+    int rc;
+
+    if (from == NULL || to == NULL) {
+        return fail(KERR_INVAL);
+    }
+
+    rc = ksys_rename(from, to);
+    if (rc < 0) {
+        return fail(rc);
+    }
+
+    g_errno = 0;
+
+    return 0;
+}
+
 int microos_waitpid(int pid, int *status, int flags)
 {
     int rc = ksys_waitpid(pid, status, (flags & MICROOS_WNOHANG) ? KSYS_WNOHANG : 0);

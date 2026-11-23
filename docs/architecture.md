@@ -330,6 +330,17 @@ registered at the boot. On the board the device is `flash0`, the partition
 filesystem asks for sector 17 and does not know which of them it got, which
 is what lets the persistence tests run on a laptop.
 
+The data of a file is a chain of blocks: the first four bytes of every block
+name the next one and the record names the head. A chain is a list with no
+table of the places, so the n-th block is reached by the walk through the n
+before it, one read of the device for each step. The descriptor of an open
+file therefore keeps the block it read last (`struct mfs_file` in
+`mfs/mfs.h`): a read goes on from there, a block costs one step, and only a
+seek back to an earlier block starts at the head again. Without that cursor
+a sequential read walked from the head for every block and a file of half a
+megabyte cost the square of its blocks - seconds between `exec` of a large
+program and its first line, which the port of zstd found.
+
 The store behind `/etc` is the same idea for a handful of strings:
 `kernel/port/kv.h` (get, set, erase, commit, next) is a duty of the port,
 because a board has one store. The ESP32 answers with the NVS, the host with
@@ -494,10 +505,13 @@ on the network of its owner, and `telnet off` closes the door.
 The sockets under all of this are a duty of the port as well:
 `kernel/port/net.h` offers a connection, a server, a send that may wait or
 not, and a one-shot UDP exchange - and nothing else. There is no TLS, no
-IPv6 and no raw socket: the board is on the network of its owner. On the
-board the port speaks lwIP, on the host it speaks the sockets of the
-process, so the HTTP client, the clock of NTP and the server of telnet are
-exercised without a board.
+IPv6 and no raw socket in that contract: the board is on the network of its
+owner. TLS lives above the contract and not in it: `components/net` wraps a
+transport of bytes with mbedTLS on the machines that have the library
+(x86-64 and the host tests), and an image without it answers that `https`
+is not in it (ADR 0024 §3). On the board the port speaks lwIP, on the host
+it speaks the sockets of the process, so the HTTP client, the clock of NTP
+and the server of telnet are exercised without a board.
 
 ## 8. Programs (phase 7)
 

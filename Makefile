@@ -32,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak
+.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak
 
 help:
 	@echo "Micro OS — available targets:"
@@ -59,7 +59,7 @@ help:
 	@echo "  make idf-size   show the firmware size report"
 	@echo "  make x86-build  build the kernel for x86-64 (a multiboot image)"
 	@echo "  make x86-smp-build  the same kernel with KERNEL_SMP on (ADR 0012)"
-	@echo "  make x86-run    boot it in a QEMU window (VGA text, PS/2 keyboard)"
+	@echo "  make x86-run    boot it in a QEMU window (framebuffer 1280x800, keyboard)"
 	@echo "  make x86-run-serial  boot it with the serial console (-nographic)"
 	@echo "  make x86-smoke  boot it and check what it says"
 	@echo "  make x86-disk   the image of the disk: /bin and /etc of MicroFS"
@@ -68,6 +68,9 @@ help:
 	@echo "  make x86-run-disk-serial  the same disk in a terminal (-nographic)"
 	@echo "  make x86-disk-smoke two boots on one disk image, a file survives both"
 	@echo "  make x86-net-smoke   the network: ping, UDP and HTTP on QEMU user-net"
+	@echo "  make x86-iso    the bootable ISO: loader, kernel and root.img (K13)"
+	@echo "  make x86-iso-run    boot that ISO in a terminal (-nographic)"
+	@echo "  make x86-iso-smoke  boot the ISO and check the shell and /bin"
 	@echo "  make soak       the session of 600 seconds on x86-64 (one boot)"
 	@echo "  make soak SOAK_MINUTES=1  the same, short, to check the tool"
 	@echo "  make soak SOAK_ITERATIONS=5  five short boots, one pass each"
@@ -305,7 +308,7 @@ x86-run: x86-disk
 		exit 1; }
 	qemu-system-x86_64 -kernel $(X86_BUILD)/loader32.elf \
 		-initrd $(X86_BUILD)/microos64.bin -m 256 -no-reboot \
-		-display $(X86_DISPLAY) -serial null \
+		-display $(X86_DISPLAY) -serial null -vga std \
 		$(X86_DISK_DRIVE)
 
 # The same machine with the console of the serial port and no window: the
@@ -319,9 +322,11 @@ x86-run-serial: x86-disk
 x86-smoke: x86-disk x86-open-build
 	python3 tools/x86_smoke.py --image $(X86_PROGRAMS_IMAGE) --open-build $(X86_OPEN_BUILD)
 
-# The window without a display: the monitor of QEMU reads the text memory of
-# the VGA and presses the keys of the keyboard, so a build farm can check the
-# screen and IRQ1. Not a part of `make ci`: the monitor is a tool of its own.
+# The screen without a display: the monitor of QEMU reads the framebuffer of
+# the new screen with screendump (a picture has no text memory) and the text
+# mode of the fallback with pmemsave, and presses the keys of the keyboard, so
+# a build farm can check both screens of ADR 0023 and IRQ1. Not a part of
+# `make ci`: the monitor is a tool of its own.
 x86-vga-smoke: x86-build
 	python3 tools/x86_vga_smoke.py
 
@@ -344,7 +349,7 @@ x86-run-disk: x86-build $(X86_DISK_IMAGE)
 		exit 1; }
 	qemu-system-x86_64 -kernel $(X86_BUILD)/loader32.elf \
 		-initrd $(X86_BUILD)/microos64.bin -m 256 -no-reboot \
-		-display $(X86_DISPLAY) -serial null \
+		-display $(X86_DISPLAY) -serial null -vga std \
 		-drive file=$(X86_DISK_IMAGE),format=raw,if=ide,index=0,cache=writeback
 
 x86-run-disk-serial: x86-build $(X86_DISK_IMAGE)
@@ -414,7 +419,7 @@ x86-all: x86-all-build build
 		'        -device virtio-net-pci,netdev=n0,disable-modern=on' \
 		'fi' \
 		'exec qemu-system-x86_64 -kernel loader32.elf -initrd microos64.bin \' \
-		'    -m 256 -no-reboot -display "$${X86_DISPLAY:-gtk}" -serial null \' \
+		'    -m 256 -no-reboot -display "$${X86_DISPLAY:-gtk}" -serial null -vga std \' \
 		'    -drive file=x86-all.img,format=raw,if=ide,index=0,cache=writeback \' \
 		'    -netdev user,id=n0,hostfwd=tcp:127.0.0.1:8080-:8080 \' \
 		'    -device virtio-net-pci,netdev=n0,disable-modern=on' > $(X86_ALL_RUN)
@@ -430,6 +435,49 @@ x86-all-run: x86-all
 
 x86-all-run-serial: x86-all
 	X86_SERIAL=1 $(X86_ALL_RUN)
+
+# The artifact a person downloads: the x86-64 tar of the release, unpacked
+# and started as it is. The target builds the complete machine and the bundle
+# first (both are incremental), then runs the tar and not the tree: what a
+# person gets is what this starts.
+X86_USER_DIR := build-x86-user
+X86_SERIAL ?= 0
+
+x86-user: x86-all bundle
+	@tar=$$(ls -t dist/MicroOS-x86_64-*.tar.gz 2>/dev/null | head -1); \
+	if [ -z "$$tar" ]; then \
+		echo "x86-user: dist/ has no x86-64 tar" >&2; exit 1; \
+	fi; \
+	echo "x86-user: $$tar -> $(X86_USER_DIR)"; \
+	rm -rf $(X86_USER_DIR); mkdir -p $(X86_USER_DIR); \
+	tar -xzf "$$tar" -C $(X86_USER_DIR); \
+	cd $(X86_USER_DIR) && X86_SERIAL=$(X86_SERIAL) X86_DISPLAY=$(X86_DISPLAY) ./run.sh
+
+x86-user-serial: X86_SERIAL=1
+x86-user-serial: x86-user
+
+# The bootable image of the port (K13, ADR 0026): an ISO with the loader, the
+# kernel and an 8 MB root image, which a BIOS machine takes out of its CD
+# drive. The three files are the ones of the builds above - nothing is built
+# twice - and tools/x86_iso.py only stages them and asks grub-mkrescue or
+# limine to write the El Torito catalogue. The root image is the disk of
+# `make x86-disk`: /bin and /etc written by the tool, mounted read-only by the
+# port because the medium of the boot is not a place to write.
+X86_ISO_BUILD := build-x86-iso
+X86_ISO_IMAGE := $(X86_ISO_BUILD)/microos.iso
+X86_ISO_BOOTLOADER ?= auto
+
+x86-iso: x86-disk build
+	python3 tools/x86_iso.py --loader $(X86_BUILD)/loader32.elf \
+		--kernel $(X86_BUILD)/microos64.bin --root $(X86_PROGRAMS_IMAGE) \
+		--out $(X86_ISO_IMAGE) --stage $(X86_ISO_BUILD)/iso \
+		--bootloader $(X86_ISO_BOOTLOADER)
+
+x86-iso-run: x86-iso
+	qemu-system-x86_64 -cdrom $(X86_ISO_IMAGE) -m 256 -nographic -no-reboot -boot d
+
+x86-iso-smoke: x86-iso
+	python3 tools/x86_iso_smoke.py --iso $(X86_ISO_IMAGE)
 
 # The campaign of 1.0 (docs/wiki/testing.md). The session is one boot of the
 # x86-64 machine, ten minutes long by default, under the mixed load of

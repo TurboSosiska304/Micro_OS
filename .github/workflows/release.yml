@@ -76,11 +76,9 @@ jobs:
           . /opt/esp/idf/export.sh >/dev/null
           idf.py build
 
-      - name: the kernel of the x86-64 port
-        run: make x86-build
-
       # The host tools include microos_sign, which signs the bundle and is
-      # needed by the step below. The x86-64 build has its own copy.
+      # needed by the step below, and the mkfs of the disk of the complete
+      # machine. The x86-64 build has its own copy of the signer.
       - name: the tools of the host
         # The container exports IDF_PATH; the top level CMake would take the
         # firmware branch and look for the Xtensa compiler. The host tools are
@@ -88,6 +86,18 @@ jobs:
         env:
           IDF_PATH: ""
         run: make build
+
+      # The complete machine: the kernel with the network, the disk with
+      # /bin and /etc, and the run.sh of `make x86-user`. The bundle below
+      # packages these files, so the tar of a release is a machine a person
+      # starts, not only a kernel.
+      # The container exports IDF_PATH, and the top level CMake would take
+      # the firmware branch and look for the Xtensa compiler. The complete
+      # machine is a host build and an x86-64 build; it names no platform.
+      - name: the complete machine of the x86-64 port
+        env:
+          IDF_PATH: ""
+        run: make x86-all
 
       # esptool lives in the python environment of the image, and the step
       # that builds the bundle is where it is needed (merge_bin).

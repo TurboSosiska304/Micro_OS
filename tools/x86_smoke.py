@@ -110,6 +110,13 @@ COMMANDS = [
     "exec /bin/head -n 1 /etc/setting",
     "exec /bin/grep hello /etc/setting",
     "exec /bin/grep -i HELLO /etc/setting",
+    # The regular expression engine of the tree (third_party/pcre2): a pattern
+    # with a wildcard and a folded case, then one with an anchor and a group.
+    # The quotes of the examples of the wiki are not needed: the shell has no
+    # quotes, and a word is the pattern as it is typed.
+    "exec /bin/pcre2grep -i h.LLO /etc/setting",
+    "exec /bin/pcre2grep -o -g 1 ^hostname=(x86_64)$ /etc/setting",
+    "exec /bin/ls /etc/licenses",
     # The same commands with no file: they read descriptor 0, which the shell
     # does not pass to a program yet, so the call answers EBADF (9). The line
     # is the proof that the input is descriptor 0 and not a usage sentence.
@@ -134,6 +141,52 @@ COMMANDS = [
     # host tests run; here the last stage is a program of ring 3 as well,
     # and it reads the descriptor the stage built for it.
     "mkdir /tmp",
+    # The first port of a program of somebody else (zlib): the .gz is a file
+    # of the image, zcat inflates it with the library of the guest, and the
+    # bytes reach a file of MicroFS and the console. `wc -c` is the count of
+    # the fixture and `cat` the text, so a copy that lost a byte is visible.
+    "exec /bin/zcat -o /tmp/greeting.txt /etc/greeting.gz",
+    "exec /bin/wc -c /tmp/greeting.txt",
+    "exec /bin/cat /tmp/greeting.txt",
+    "exec /bin/zcat -t /etc/greeting.gz",
+    # The verbose line is the `%llu` of the formatter of the program and the
+    # count of the stream, on the error descriptor and not in the data.
+    "exec /bin/zcat -v -t /etc/greeting.gz",
+    "exec /bin/zcat /etc/no-such.gz",
+    # The same stream through a pipe: zcat reads descriptor 0 and the port
+    # layer waits out the EAGAIN of the producer that is still writing.
+    "cat /etc/greeting.gz | /bin/zcat",
+    "exec /bin/ls /etc/licenses",
+    # The second port of a program of somebody else (Lua): the interpreter is
+    # a file of /bin, its first script and its license are files of /etc, and
+    # the number of a program with a point in it is the arithmetic of the
+    # library of the guest. The image is 164 KiB and K_EXEC_MAX_IMAGE (8 MiB)
+    # lets sys_execve read it in pieces of KSYS_MAX_IO; the run of the
+    # library is the host test `tests/cases/test_lua.c`.
+    "exec /bin/lua -e print(2^10)",
+    "exec /bin/lua -e print(math.pi)",
+    'exec /bin/lua -e print(string.format("%.3f",1/3))',
+    "exec /bin/lua -e print(1/0,0/0)",
+    "exec /bin/lua -e print(os.time()>=0)",
+    "exec /bin/lua /etc/hello.lua",
+    "exec /bin/lua /etc/no-such.lua",
+    "exec /bin/cat /etc/hello.lua",
+    # The third port of a program of somebody else (bc 7.2.0): the calculator
+    # of arbitrary precision and its RPN sibling dc, one engine and two names
+    # of /bin. The image is 116 KiB and its arena is the bss (768 KiB); the
+    # library the two carry is the one of the release, and `-l` is its math
+    # library, generated into the image from `gen/lib.bc`.
+    "exec /bin/bc -e 2^100",
+    "exec /bin/bc -l -e scale=10 -e 4*a(1)",
+    "exec /bin/bc -e ibase=16 -e FF",
+    "exec /bin/bc -e obase=2 -e 10",
+    "exec /bin/bc -l -f /etc/bc.bc < /dev/null",
+    # The same script on descriptor 0: the shell opens the file and the
+    # calculator reads its input the way the release does, line by line.
+    "exec /bin/bc -l < /etc/bc.bc",
+    "exec /bin/dc /etc/dc.dc",
+    "exec /bin/dc -e 2 -e 3+p",
+    "exec /bin/cat /etc/bc.bc",
     "echo hi > /tmp/f",
     "cat /tmp/f",
     "cat < /tmp/f",
@@ -195,6 +248,29 @@ COMMANDS = [
     "ls ..",
     "cd /",
     "memtest",
+    # The tools of sbase (third_party/sbase) are the commands of the machine
+    # now: `ls`, `cat`, `grep`, `wc` and `head` are the files of /bin and not
+    # the small programs of ADR 0016, and `tail`, `sort`, `find`, `xargs` and
+    # `sed` are new. Both the bare name (PATH-first of the shell) and the
+    # explicit file are checked, because the two are one contract.
+    "ls -la /etc",
+    "find /etc -name setting",
+    "sort /etc/setting",
+    "grep -r hostname /etc",
+    "grep -r -i VGA /etc",
+    "wc -l /etc/setting",
+    "tail -n 1 /etc/setting",
+    "head -n 1 /etc/setting",
+    "sed -n s/x86_64/X/p /etc/setting",
+    "cat /etc/setting",
+    # `xargs` passes its words to one `execve`, and the ABI of the call allows
+    # at most eight words in the vector (docs/syscall-abi.md); -n 4 keeps the
+    # batch inside it. The limit is a debt of the ABI, not a rule of sbase.
+    "ls /etc | xargs -n 4",
+    "ls --color /etc",
+    "ls --color=never /etc",
+    "exec /bin/ls -la /etc",
+    "exec /bin/find /etc -name setting",
 ]
 
 # A directory wider than the table of 64 entries the shell used to keep: the
@@ -626,7 +702,7 @@ def _write_bad_image(data: bytes, tag: str = "image") -> str:
     return path
 
 
-def run_machine(loader: str, kernel: str, image: str, timeout: float) -> str:
+def run_machine(loader: str, kernel: str, image: str, timeout: float, commands: list = None) -> str:
     """Boot the machine, drive the shell and return the transcript.
 
     The output is read while the machine runs, not after it stops: the
@@ -659,6 +735,8 @@ def run_machine(loader: str, kernel: str, image: str, timeout: float) -> str:
         f"file={image},format=raw,if=ide,index=0,cache=writeback",
     ]
 
+    lines = COMMANDS if commands is None else commands
+
     process = subprocess.Popen(
         command,
         stdin=subprocess.PIPE,
@@ -688,13 +766,13 @@ def run_machine(loader: str, kernel: str, image: str, timeout: float) -> str:
 
             # One command per prompt: the shell prints the prompt before it
             # reads, so the line is written only when the shell is waiting.
-            while sent < len(COMMANDS) and text.count(PROMPT) > sent:
-                process.stdin.write((COMMANDS[sent] + "\n").encode("ascii"))
+            while sent < len(lines) and text.count(PROMPT) > sent:
+                process.stdin.write((lines[sent] + "\n").encode("ascii"))
                 process.stdin.flush()
                 sent += 1
 
             # The prompt after the last command means its answer is done.
-            if text.count(PROMPT) > len(COMMANDS):
+            if text.count(PROMPT) > len(lines):
                 break
     finally:
         process.terminate()
@@ -715,6 +793,98 @@ def run_machine(loader: str, kernel: str, image: str, timeout: float) -> str:
         process.stdin.close()
 
     return transcript.decode("utf-8", errors="replace")
+
+
+# The largest image a call of the system reads (K_EXEC_MAX_IMAGE in
+# kernel/exec.h). The disk of this machine is 8 MB, so a file past the limit
+# needs a volume of its own: the second disk of the smoke is 16 MB and carries
+# one file of the limit plus a byte.
+K_EXEC_MAX_IMAGE = 8 * 1024 * 1024
+OVERSIZE_IMAGE = os.path.join(BUILD, "oversize.img")
+OVERSIZE_FILLER = os.path.join(BUILD, "oversize.bin")
+
+
+def build_oversize_image() -> str:
+    """A 16 MB disk with one file of K_EXEC_MAX_IMAGE + 1 zero bytes.
+
+    The volume is written once and kept: it carries the programs of the build
+    too, but this boot runs only the big file and the shell, so a rebuild of
+    the kernel does not make it stale, and the 8 MiB of blocks are the slowest
+    part of the smoke test.
+    """
+    if os.path.isfile(OVERSIZE_IMAGE):
+        return OVERSIZE_IMAGE
+
+    with open(OVERSIZE_FILLER, "wb") as file:
+        chunk = b"\0" * (1024 * 1024)
+        written = 0
+        while written <= K_EXEC_MAX_IMAGE:
+            file.write(chunk)
+            written += len(chunk)
+    os.truncate(OVERSIZE_FILLER, K_EXEC_MAX_IMAGE + 1)
+
+    tool = os.path.join(ROOT, "tools", "x86_image.py")
+    result = subprocess.run(
+        [
+            sys.executable,
+            tool,
+            "--image",
+            OVERSIZE_IMAGE,
+            "--size-mb",
+            "16",
+            "--program",
+            f"/big.bin={OVERSIZE_FILLER}",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stdout + result.stderr).strip())
+    return OVERSIZE_IMAGE
+
+
+def oversize_checks(loader: str, kernel: str, timeout: float) -> list:
+    """One boot of a disk with an image past K_EXEC_MAX_IMAGE on it.
+
+    The call refuses the file before a byte is read and the answer is E2BIG,
+    which the shell prints as "argument list too long"; the descriptor of the
+    caller is not spent, and the shell answers the next command.
+    """
+    checks = []
+
+    def expect(name: str, condition: bool, detail: str = "") -> None:
+        checks.append((name, bool(condition), detail))
+
+    try:
+        image = build_oversize_image()
+    except (OSError, RuntimeError) as error:
+        expect("the disk of the oversize image is built", False, str(error))
+        return checks
+
+    expect("the disk of the oversize image is built", os.path.isfile(image), image)
+
+    output = run_machine(
+        loader,
+        kernel,
+        image,
+        timeout,
+        commands=["exec /big.bin", "uname"],
+    )
+
+    expect("the machine boots on the oversize disk", PROMPT in output, output[-300:])
+    expect(
+        "an image past K_EXEC_MAX_IMAGE is E2BIG",
+        "exec: /big.bin: argument list too long" in output,
+        output[-500:],
+    )
+    expect(
+        "the refused image spends no descriptor and the shell lives",
+        re.search(r"MicroOS \d+\.\d+\.\d+", output) is not None,
+        output[-300:],
+    )
+
+    return checks
 
 
 def check(output: str) -> list:
@@ -859,8 +1029,9 @@ def check(output: str) -> list:
     # filesystem and not a line the kernel printed about itself.
     bin_listing = answer("ls /bin")
     expect("the program is a file in /bin", "hello" in bin_listing)
-    # All fifteen are objects of the volume the boot mounted, with the mode
-    # the tool gave them; a missing one is a tool or a build that lost it.
+    # Every program of the port is an object of the volume the boot mounted,
+    # with the mode the tool gave it; a missing one is a tool or a build that
+    # lost it.
     stat_answer = answer("stat /etc/setting")
     expect(
         "stat prints the mode in octal",
@@ -888,7 +1059,78 @@ def check(output: str) -> list:
         "an empty value is not a list of directories" in answer('path ""'),
         answer('path ""'),
     )
-    expect("the tree is still there", "etc/" in answer("ls /"), answer("ls /"))
+    expect("the tree is still there", "etc" in answer("ls /"), answer("ls /"))
+
+    # --- the tools of sbase (third_party/sbase) are the commands of /bin
+    #
+    # The shell looks in PATH before its own table for these ten names, so a
+    # bare `ls` is the program of the disk (the kernel says `task: created
+    # 'program'`) and not the command of the shell. The checks below read the
+    # answer of the program and the escape of the colour.
+    listing = answer("ls -la /etc")
+    expect(
+        "ls -la prints the mode, the owner and the group",
+        re.search(r"-rw-r--r--\s+1 root\s+root\s+34 Jan 01 00:00 setting", listing) is not None,
+        listing,
+    )
+    expect(
+        "ls -la lists the directory the image has",
+        "init.d" in listing and "licenses" in listing,
+        listing,
+    )
+    expect(
+        "a bare command is the program of /bin, not the command of the shell",
+        "task: created 'program'" in listing,
+        listing,
+    )
+    found = answer("find /etc -name setting")
+    expect("find walks a tree and matches a name", "/etc/setting" in found, found)
+    ordered = answer("sort /etc/setting")
+    expect(
+        "sort orders the lines",
+        ordered.index("console=vga") < ordered.index("hello") < ordered.index("hostname=x86_64"),
+        ordered,
+    )
+    recursive = answer("grep -r hostname /etc")
+    expect(
+        "grep -r names the file of a line",
+        "/etc/setting:hostname=x86_64" in recursive,
+        recursive,
+    )
+    recursive = answer("grep -r -i VGA /etc")
+    expect("grep -r -i folds the case", "console=vga" in recursive, recursive)
+    count = answer("wc -l /etc/setting")
+    expect("wc counts the lines", "3 /etc/setting" in count, count)
+    last = answer("tail -n 1 /etc/setting")
+    expect("tail prints the last line", "console=vga" in last, last)
+    first_line = answer("head -n 1 /etc/setting")
+    expect("head prints the first line", "hello" in first_line, first_line)
+    changed = answer("sed -n s/x86_64/X/p /etc/setting")
+    expect("sed matches and substitutes a line", "hostname=X" in changed, changed)
+    text = answer("cat /etc/setting")
+    expect("cat copies a file", "hostname=x86_64" in text and "console=vga" in text, text)
+    piped = answer("ls /etc | xargs -n 4")
+    expect(
+        "xargs runs a command over the words of a pipe",
+        "setting" in piped and "licenses" in piped,
+        piped,
+    )
+    # The console of the serial copy is not a terminal: the SGR sequence of
+    # the colour is consumed by the console and never reaches this text. The
+    # colour itself is checked out of the picture by `make x86-vga-smoke`;
+    # here the check is that the flag is accepted and the names are printed.
+    coloured = answer("ls --color /etc")
+    expect(
+        "ls --color prints the names of the directory",
+        all(name in coloured for name in ("init.d", "licenses", "setting")),
+        coloured,
+    )
+    plain = answer("ls --color=never /etc")
+    expect("ls --color=never writes no escape", "\x1b[" not in plain, plain)
+    explicit = answer("exec /bin/ls -la /etc")
+    expect("the file of the tool is /bin/ls", "setting" in explicit and "root" in explicit, explicit)
+    explicit = answer("exec /bin/find /etc -name setting")
+    expect("the file of the tool is /bin/find", "/etc/setting" in explicit, explicit)
     free_answer = answer("free")
     expect(
         "free prints the memory and not the clock",
@@ -927,10 +1169,11 @@ def check(output: str) -> list:
     )
     expect("cd .. goes to the parent", re.search(r"(?m)^/\s*$", answer("pwd", 3)) is not None,
            answer("pwd", 3))
+    parent = answer("ls ..")
     expect(
         "ls .. lists the parent",
-        all(name in answer("ls ..") for name in ("bin/", "etc/")),
-        answer("ls .."),
+        all(re.search(rf"(?m)^{name}\r?$", parent) is not None for name in ("bin", "etc")),
+        parent,
     )
 
     # --- a directory wider than the old table
@@ -949,7 +1192,7 @@ def check(output: str) -> list:
         wide_tree,
     )
     expect(
-        "the fifteen programs are files of the disk",
+        "the programs of the port are files of the disk",
         all(
             name in bin_listing
             for name in (
@@ -958,6 +1201,7 @@ def check(output: str) -> list:
                 "fork",
                 "badptr",
                 "signals",
+                "nx",
                 "cat",
                 "echo",
                 "ls",
@@ -968,6 +1212,16 @@ def check(output: str) -> list:
                 "rm",
                 "pwd",
                 "spawn",
+                "zcat",
+                "pcre2grep",
+                "lua",
+                "tail",
+                "sort",
+                "find",
+                "xargs",
+                "sed",
+                "bc",
+                "dc",
             )
         ),
         bin_listing[-200:],
@@ -1032,7 +1286,11 @@ def check(output: str) -> list:
     # status of a program that did not succeed: 1, the code of the shell
     # command, and not the 255 of a fault.
     cat = answer("exec /bin/cat /no/such/file")
-    expect("cat reports a file the formatter prints", "cat: /no/such/file: error 2" in cat)
+    expect(
+        "cat reports a file the formatter prints",
+        "/no/such/file: no such file or directory" in cat,
+        cat,
+    )
     expect("a program returns the status the library gives it", "the program exited with 1" in cat)
     # echo is the vector of the arguments and the formatter of the library.
     echo = answer("exec /bin/echo one two")
@@ -1071,9 +1329,12 @@ def check(output: str) -> list:
 
     # --- the systems of /etc (ADR 0021)
     # The boot wrote the three files of the tree on the volume; `config list`
-    # names them and says which one this machine applies. `display` and
-    # `font` are the panel and the font of the board: the key is written and
-    # kept, and the machine says it does not apply it.
+    # names them and says which one this machine applies. `display` is the
+    # panel of the board: the key is written and kept, and the machine says it
+    # does not apply it. `font` is applied by this machine for its line gap
+    # (tools/x86_vga_smoke.py reads the rows and the step of a line out of the
+    # picture); `scale`, `columns` and `rows` are the cap of the panel and are
+    # kept with a sentence.
     systems = answer("config list")
     expect(
         "config list names the systems of the tree",
@@ -1094,14 +1355,16 @@ def check(output: str) -> list:
         "display.rotation=0" in answer("config get display.rotation"),
         answer("config get display.rotation"),
     )
-    # The console is the system of this machine: the theme changes the
-    # attribute of every cell of the VGA, and the log line is the number the
-    # port wrote (0x70: black on light grey).
+    # The console is the system of this machine: the theme repaints the
+    # screen, and the log line names the pair and the screen it was put on.
+    # The screen of this machine is the framebuffer of ADR 0023; the text mode
+    # of a machine without the interface is checked by tools/x86_vga_smoke.py,
+    # which reads the attribute of every cell there.
     themed = answer("config set console.theme light")
     expect("config set applies the console", "console.theme=light" in themed, themed)
     expect(
-        "the theme of the console reaches the attributes of the VGA",
-        "the attribute of the screen 112" in themed,
+        "the theme of the console reaches the screen",
+        "console: theme light, invert 0, the screen the framebuffer of 1280x800" in themed,
         themed,
     )
     expect(
@@ -1136,7 +1399,7 @@ def check(output: str) -> list:
     root_listing = answer("ls /")
     expect(
         "ls / lists the names",
-        all(name in root_listing for name in ("bin/", "etc/", "proc/", "dev/")),
+        all(name in root_listing for name in ("bin", "etc", "proc", "dev")),
         root_listing,
     )
     expect("ls is not a tree", "`--" not in root_listing and "|--" not in root_listing)
@@ -1201,7 +1464,7 @@ def check(output: str) -> list:
     # three lines and 34 bytes. The numbers are of the file, and a program
     # that read its own arguments could not produce them.
     wc = answer("exec /bin/wc /etc/setting")
-    expect("wc counts the lines and the bytes", "3 34 /etc/setting" in wc)
+    expect("wc counts the lines, words and bytes", "3 3 34 /etc/setting" in wc)
     expect("wc counts what it read", "the program has finished" in wc)
     wc = answer("exec /bin/wc -l /etc/setting")
     expect("wc -l is a count of the newlines", "3 /etc/setting" in wc)
@@ -1219,14 +1482,36 @@ def check(output: str) -> list:
     expect("grep is a program of the shell", "the program has finished" in grep)
     grep = answer("exec /bin/grep -i HELLO /etc/setting")
     expect("grep -i folds the case", "hello" in grep)
+    # PCRE2 is a library and not a word search: `.` is one character, `^` and
+    # `$` are the ends of the line, and a group in parentheses is numbered.
+    # The output of -o with -g 1 is the group alone; the pattern itself is in
+    # the echo of the typed line and not in the answer.
+    pcre = answer("exec /bin/pcre2grep -i h.LLO /etc/setting")
+    expect(
+        "pcre2grep matches a line with a wildcard and folds the case",
+        any(line.strip() == "hello" for line in pcre.splitlines()),
+        pcre[-120:],
+    )
+    pcre = answer("exec /bin/pcre2grep -o -g 1 ^hostname=(x86_64)$ /etc/setting")
+    expect(
+        "pcre2grep prints the group of an anchored pattern",
+        any(line.strip() == "x86_64" for line in pcre.splitlines()),
+        pcre[-120:],
+    )
+    licenses = answer("exec /bin/ls /etc/licenses")
+    expect("the license of PCRE2 is a file of the disk", "pcre2" in licenses, licenses)
     # No file is descriptor 0. A program inherits the table of the shell
     # (ADR 0017), but the prompt does not open the console on descriptor 0
     # yet, so the read answers EBADF; a redirect or a pipe fills it.
     cat = answer("exec /bin/cat")
-    expect("cat reads descriptor 0 when no file is named", "cat: (stdin): error 9" in cat)
+    expect(
+        "cat reads descriptor 0 when no file is named",
+        "bad file descriptor" in cat,
+        cat,
+    )
     expect("cat of a closed stdin is a failure", "the program exited with 1" in cat)
     wc = answer("exec /bin/wc -l -")
-    expect("wc reads descriptor 0 for a dash", "wc: -: cannot read" in wc)
+    expect("wc reads descriptor 0 for a dash", "bad file descriptor" in wc, wc)
     # The tree: the shell makes /tmp, the program makes a directory in it.
     # Without -r a directory is refused, even an empty one; with -r the tree
     # goes away and the listing of it is ENOENT (2).
@@ -1241,12 +1526,196 @@ def check(output: str) -> list:
     expect("rm -r takes a tree down", "rm:" not in removed)
     expect("rm -r returns its status", "the program exited with 0" in removed)
     gone = answer("exec /bin/ls /tmp", 1)
-    expect("the tree is gone", "ls: /tmp: error 2" in gone)
+    expect("the tree is gone", "ls: lstat /tmp: no such file or directory" in gone, gone)
     # pwd is the directory of the task, read through the call: the shell
     # starts at /, and the block after the typed line is that one character.
     pwd = answer("exec /bin/pwd")
     expect("pwd prints the directory of the task", re.search(r"(?m)^/\r?$", pwd) is not None)
     expect("pwd is a program of the shell", "the program exited with 0" in pwd)
+
+    # --- the first port of somebody else's program: zlib and zcat
+    # The .gz is a fixture of the image and the text below is its content.
+    # `wc -c` is the count of the bytes the library inflated, and `cat` their
+    # text: a stream that stopped one byte short would fail one of the two.
+    zcat = answer("exec /bin/zcat -o /tmp/greeting.txt /etc/greeting.gz")
+    expect("zcat is a program of the shell", "the program exited with 0" in zcat, zcat)
+    expect("zcat does not report a stream it read", "zcat:" not in zcat, zcat)
+    count = answer("exec /bin/wc -c /tmp/greeting.txt")
+    expect("zcat writes every inflated byte", "134 /tmp/greeting.txt" in count, count)
+    text = answer("exec /bin/cat /tmp/greeting.txt")
+    expect(
+        "the inflated bytes are the fixture",
+        "Micro OS: the first port of a program" in text
+        and "zlib 1.3.1, MicroFS and ring 3" in text
+        and "the bytes of this file were inflated by the library of the guest" in text,
+        text,
+    )
+    test = answer("exec /bin/zcat -t /etc/greeting.gz")
+    expect(
+        "zcat -t checks the stream and writes nothing",
+        "the program exited with 0" in test and "damaged" not in test and "Micro OS" not in test,
+        test,
+    )
+    verbose = answer("exec /bin/zcat -v -t /etc/greeting.gz")
+    expect(
+        "zcat -v prints the count of the inflated bytes",
+        "zcat: /etc/greeting.gz: 134 bytes" in verbose and "the program exited with 0" in verbose,
+        verbose,
+    )
+    missing = answer("exec /bin/zcat /etc/no-such.gz")
+    expect(
+        "zcat reports a file that is not there",
+        "zcat: /etc/no-such.gz: no such file or directory" in missing
+        and "the program exited with 1" in missing,
+        missing,
+    )
+    piped = answer("cat /etc/greeting.gz | /bin/zcat")
+    expect(
+        "zcat reads a gzip stream from a pipe",
+        "Micro OS: the first port of a program" in piped
+        and "the bytes of this file were inflated by the library of the guest" in piped,
+        piped,
+    )
+    licenses = answer("exec /bin/ls /etc/licenses")
+    expect("the license of zlib travels with the image", "zlib" in licenses, licenses)
+    expect("the license of sbase travels with the image", "sbase" in licenses, licenses)
+
+    # --- the second port of somebody else's program: Lua and /bin/lua
+    # The script and the license are files of the image, the interpreter is a
+    # file of /bin, and every line below is the library of the guest computing
+    # in a double: a power, the constant of pi, three places of a fraction,
+    # the two values that are not numbers, the clock, and a script that reads
+    # and writes a file of the VFS.
+    lua_script = answer("exec /bin/cat /etc/hello.lua")
+    expect(
+        "the script of the first Lua program is a file of the image",
+        "the first script of the machine" in lua_script,
+        lua_script[:200],
+    )
+    expect("the license of Lua travels with the image", "lua" in licenses, licenses)
+
+    lua_power = answer("exec /bin/lua -e print(2^10)")
+    expect(
+        "lua -e prints a power of a double",
+        "1024.0" in lua_power and "the program exited with 0" in lua_power,
+        lua_power,
+    )
+    lua_pi = answer("exec /bin/lua -e print(math.pi)")
+    expect("lua prints the constant of pi", "3.1415926535898" in lua_pi, lua_pi)
+    lua_format = answer('exec /bin/lua -e print(string.format("%.3f",1/3))')
+    expect(
+        "string.format writes three places of a fraction",
+        "0.333" in lua_format and "the program exited with 0" in lua_format,
+        lua_format,
+    )
+    lua_special = answer("exec /bin/lua -e print(1/0,0/0)")
+    expect(
+        "the values that are not numbers are words",
+        "inf" in lua_special and "nan" in lua_special,
+        lua_special,
+    )
+    lua_clock = answer("exec /bin/lua -e print(os.time()>=0)")
+    expect("os.time answers a number of seconds", "true" in lua_clock, lua_clock)
+
+    lua_run = answer("exec /bin/lua /etc/hello.lua")
+    expect(
+        "the script of /etc runs in the interpreter",
+        all(
+            line in lua_run
+            for line in (
+                "lua: hello from /etc/hello.lua",
+                "lua: table\t3\talpha\tgamma",
+                "lua: pi 3.142, 2^10 1024",
+                "lua: read\ta line written by lua",
+                "lua: os.time\ttrue",
+                "lua: string\tABC\txxx",
+            )
+        )
+        and "the program exited with 0" in lua_run,
+        lua_run,
+    )
+    lua_missing = answer("exec /bin/lua /etc/no-such.lua")
+    expect(
+        "a script that is not there is the sentence of the interpreter",
+        "cannot open /etc/no-such.lua" in lua_missing and "exited with 1" in lua_missing,
+        lua_missing,
+    )
+
+    # --- the third port of somebody else's program: bc and dc
+    # One library and two `main`s: the name of the program in `argv[0]` picks
+    # the engine, and the scripts of /etc are files of the volume. The lines
+    # are the numbers of the release: a power of 31 digits, the arctangent of
+    # 1 at scale 10 (the math library truncates at the scale of the call, as
+    # GNU bc does), a base read and a base written, the square root of the
+    # script, a function with a loop, an array and a string.
+    bc_cat = answer("exec /bin/cat /etc/bc.bc")
+    expect(
+        "the script of bc is a file of the image",
+        "the script of the machine" in bc_cat,
+        bc_cat[:200],
+    )
+    expect(
+        "the license of bc travels with the two calculators",
+        "bc" in licenses,
+        licenses,
+    )
+
+    bc_power = answer("exec /bin/bc -e 2^100")
+    expect(
+        "bc prints a power of thirty-one digits",
+        "1267650600228229401496703205376" in bc_power
+        and "the program exited with 0" in bc_power,
+        bc_power,
+    )
+    bc_pi = answer("exec /bin/bc -l -e scale=10 -e 4*a(1)")
+    expect(
+        "bc -l computes the arctangent of 1 at scale 10",
+        "3.1415926532" in bc_pi and "the program exited with 0" in bc_pi,
+        bc_pi,
+    )
+    bc_base = answer("exec /bin/bc -e ibase=16 -e FF")
+    expect("bc reads a number in base 16", "255" in bc_base, bc_base)
+    bc_obase = answer("exec /bin/bc -e obase=2 -e 10")
+    expect("bc writes a number in base 2", "1010" in bc_obase, bc_obase)
+
+    bc_run = answer("exec /bin/bc -l -f /etc/bc.bc < /dev/null")
+    expect(
+        "the script of /etc runs in the calculator",
+        all(
+            line in bc_run
+            for line in (
+                "1267650600228229401496703205376",
+                "1.41421356237309504880",
+                "255",
+                "1010",
+                "55",
+                "the sum is right",
+                "3",
+                "42",
+                "3.1415926532",
+            )
+        )
+        and "the sum is right\r\n3\r\n42\r\n" in bc_run
+        and "the program exited with 0" in bc_run,
+        bc_run,
+    )
+    bc_stdin = answer("exec /bin/bc -l < /etc/bc.bc")
+    expect(
+        "bc reads its script from descriptor 0",
+        "the sum is right" in bc_stdin and "the program exited with 0" in bc_stdin,
+        bc_stdin,
+    )
+
+    dc_run = answer("exec /bin/dc /etc/dc.dc")
+    expect(
+        "dc is the same engine in RPN",
+        all(line in dc_run for line in ("5", "2", ".33333", "1024"))
+        and "the program exited with 0" in dc_run,
+        dc_run,
+    )
+    dc_sum = answer("exec /bin/dc -e 2 -e 3+p")
+    expect("dc adds two numbers on its stack", "5" in dc_sum, dc_sum)
+
     # A program starts another program with an environment of its own. The
     # two words are the vector of `spawn.c`, copied by the kernel at the edge
     # and placed in the memory of the second program: the entry prints them.
@@ -1532,6 +2001,7 @@ def main(argv: list) -> int:
         + signature_checks(loader, kernel)
         + open_policy_checks(args.open_build)
         + check(output)
+        + oversize_checks(loader, kernel, args.timeout)
     )
     failed = [item for item in checks if not item[1]]
 

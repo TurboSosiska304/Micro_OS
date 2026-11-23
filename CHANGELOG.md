@@ -10,6 +10,217 @@ the MicroFS volume change by adding only.
 A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 (`vX.Y.Z-pre`) is a pre-release and must match `kernel_version()`.
 
+<<<<<<< HEAD
+=======
+## [1.2.0] - 2026-11-23
+
+The release of the machine a person can see and feed: x86-64 gets a real
+screen, a stream and an installer of programs, a bootable ISO and a tar that
+is the whole machine; the commands of other people arrive as the canonical
+`/bin` (sbase), with zlib, PCRE2, Lua and the calculators bc/dc, and the
+repository `microos-progs` publishes them with a signed index. The shell
+fixes of `1.1.2` are in this release, and the board is the compatibility
+port of ADR 0018: it builds, passes its device test and receives no TLS and
+no second core. Many cores and the ports that need more than the installer
+can carry - SQLite, zstd, `file`/libmagic and awk - are `1.3.0`, not this
+release. The notes are in [`docs/releases/1.2.md`](docs/releases/1.2.md).
+
+### Added
+
+- The screen of x86-64 (ADR 0023): the Bochs VBE interface of the VGA of
+  QEMU (`1234:1111`, the ports `0x1CE`/`0x1CF`) is programmed to 1280x800,
+  16 bits per pixel in RGB565, and the window is mapped above the identity
+  map so every address space draws on the same picture. The console is a grid
+  of 8x16 cells of Spleen 8x16 2.3.0 (BSD-2-Clause, `third_party/spleen`):
+  160 columns by 50 rows, and `font.line_gap` of `/etc/font` makes the line
+  18 or 20 pixels (44 or 40 rows). A machine without the interface keeps the
+  text mode of 80x25, and `make x86-vga-smoke` reads both screens with
+  `screendump` and `pmemsave`.
+- A colour per cell (K11c): the sixteen colours of the CGA in RGB565, the
+  byte `(paper << 4) | ink` on every cell of the grid and in the attribute of
+  the text mode, the SGR sequences of a terminal (`0`, `1`, `22`, `7`, `27`,
+  `30`-`37`, `39`, `40`-`47`, `49`, `90`-`97`, `100`-`107`) in the portable
+  `kernel/ansi.c`, the levels of `klog` (warn amber, error red, success
+  green), `console.ink`/`console.paper` of `/etc/console` and `ls --color`.
+  The serial copy stays a plain transcript.
+- `make x86-iso` (ADR 0026): an El Torito ISO (BIOS) with the loader, the
+  signed kernel and the root image, written with GRUB when `grub-mkrescue`
+  is installed and with limine otherwise. The root image is the second module
+  of the boot, the port registers it as the read-only device `boot0`, and
+  `make x86-iso-smoke` boots the ISO with `-cdrom` and nothing else, mounts
+  the volume and runs `/bin/hello`.
+- `make x86-user`: the complete machine and the x86-64 tar of the release,
+  unpacked and started from the tar itself, so the artifact a person
+  downloads is the one that runs. `make x86-user-serial` is its console.
+  The x86-64 tar now carries `x86-all.img`, the disk of `/bin` and `/etc`,
+  and a `run.sh` with the disk and the network; the release workflow builds
+  the complete machine before the bundle.
+- TLS on x86-64 (ADR 0024 §3): Mbed TLS 3.6.2 vendored in
+  `third_party/mbedtls` with a client-only configuration, and a freestanding
+  platform layer - `kmm` for the allocator, the formatter of the kernel,
+  `RDRAND` with the timer as the fallback for entropy, the clock of NTP for
+  the dates, and the roots of `/etc/ssl/certs.pem` read through the VFS.
+  `http_parse_url()` takes `https`, the stream wraps the plain transport, and
+  `wget`, `http` and `pkg` speak HTTPS with the chain and the name checked; a
+  clock that was never set is a refusal with a sentence, never a silent
+  success.
+- `ntp <server>[:port]` takes a port other than 123, for a home server and
+  for the clock of a test.
+- The x86-64 port registers a software clock, so `ntp` has a clock to set on
+  a machine without a driver of the CMOS chip yet.
+- `tests/cases/test_tls.c`: the policy of the clock, a store of roots of one
+  and of two certificates, a broken store, and the layer that has no
+  transport under it; `make x86-net-smoke` generates a test authority and
+  three certificates with `openssl` and checks TLS 1.3 and 1.2, the refusal
+  of a wrong name and of a wrong authority, and `pkg` over HTTPS.
+- `pcre2grep`, a program of x86-64 that matches the lines of a file against a
+  regular expression: `-i`, `-v`, `-n`, `-o` and `-g N`, with `^`/`$` as the
+  ends of the line and numbered groups. It links PCRE2 10.42, vendored in
+  `third_party/pcre2` (BSD-3-Clause WITH PCRE2-exception), the 8-bit
+  interpreter without JIT and Unicode.
+- The library of a program gained the ASCII character classes of the C
+  locale (`<ctype.h>`), which the engine of a regular expression asks for.
+- `tests/cases/test_pcre2.c`: the matches, the groups, the anchors, the
+  UTF-8 bytes of a build without Unicode, the compiler errors and the values
+  of the vendored `config.h`.
+- `docs/licensing.md` and the license of PCRE2 in the bundle and on the disk
+  (`/etc/licenses/pcre2`).
+- The second port of a program of somebody else: Lua 5.4.7 (MIT) as a static
+  archive of the guest and `/bin/lua`, with the first script of the machine
+  `/etc/hello.lua` and the license at `/etc/licenses/lua`. The release is
+  vendored unchanged in `third_party/lua`; the settings of the system are one
+  force-included header (`port/luaconf_port.h`: no shell, no `popen`, no
+  `tmpnam`, no dynamic linker, the C radix) and its `port/lua_os.c`. The
+  recipe is a new section of `docs/porting-programs.md`.
+- The library of a program learned the last pieces a language asks for: the
+  conversions `%f`/`%F`/`%e`/`%E`/`%g`/`%G` and a precision, `fprintf`/
+  `vfprintf`/`sprintf`, `strtod`/`strtoll`/`strtoull`/`qsort`/`getenv`,
+  `setjmp`/`longjmp` in the registers of x86-64, `math.h` on the x87 unit,
+  `time`/`localtime`/`mktime`/`strftime`, `locale`, `ctype`, `assert`,
+  `signal`/`raise`, and `remove`/`rename`/`fileno`/`ungetc`/`freopen`. A
+  program that computes in `double` is built without `-mgeneral-regs-only`
+  (the `FLOAT` option of `cmake/userland.cmake`), and the loader sets
+  `CR4.OSFXSR`, `CR4.OSXMMEXCPT` and `CR0.NE` for it. The host test
+  `tests/cases/test_lua.c` runs the language, its formatter, its tables, an
+  error caught by `pcall` and a script file.
+- The image of `execve` is padded to sixteen bytes now: a constant of a
+  program with floating point is a sixteen-byte object and `movaps`/`andps`
+  fault when it is not aligned. `tools/mkprog.sh` pads both segments to
+  sixteen for the contiguous window of x86-64 and keeps the four bytes of the
+  split windows of the board.
+- `execve` reads an image of up to 8 MiB (`K_EXEC_MAX_IMAGE`), in pieces of
+  `KSYS_MAX_IO` (64 KiB) into one block of the allocator, and a larger file
+  is `E2BIG` before a byte of it is read. The transfer edge of one call was
+  the ceiling of a program; `/bin/lua` (164 KiB) is the first one past it,
+  and `zcat` (58 KiB) is unchanged. The syscall ABI, the numbers and MOX1 do
+  not change; `make x86-smoke` runs the interpreter and boots a disk with a
+  file of 8 MiB + 1 to check the refusal, and the host test
+  `tests/cases/test_exec.c` checks the boundary of the constant.
+- The fourth port of somebody else's code: bc 7.2.0 (BSD-2-Clause) as a
+  static archive and the two names `/bin/bc` and `/bin/dc` of the same
+  engine, with the scripts `/etc/bc.bc` and `/etc/dc.dc` and
+  `/etc/licenses/bc` in the image. The release is configured by the
+  force-included `port/bc_port.h` (no history, no NLS, 64-bit limbs) and its
+  two POSIX calls are answered by the port layer (`fstat` of a descriptor and
+  `sigaction`). The library of a program learned `strdup`, `srand` and
+  `rand`; the host test is `tests/cases/test_bc.c`, and `make x86-smoke` and
+  `make x86-disk-smoke` run the calculator and the RPN one before and after
+  the reset. `bc -l` and `4*a(1)` answer `3.1415926532` at a scale of ten.
+- `make x86-smoke` runs `/bin/lua`: a power of a double (`1024.0`), `math.pi`,
+  `string.format("%.3f", 1/3)`, the two values that are not numbers, the
+  clock, and the script `/etc/hello.lua` with a table, a file of the VFS and
+  the strings. `make x86-disk-smoke` runs the same interpreter out of the
+  volume in the first boot and after the reset.
+- `microos-progs`, the public repository of the programs, with a signed
+  index at <https://turbososiska304.github.io/microos-progs/>: the index and
+  every `.mox` carry the Ed25519 signature of the project, the key is
+  `microos-progs.pub` (and `/etc/pkg/keys/microos-progs.pub`), and a machine
+  adds it with `pkg repo add` and installs from it with `pkg -S`.
+- `make x86-disk-smoke` grew to the programs of the volume: the interpreter
+  of Lua and its script, the calculator and the commands of sbase run in the
+  first boot and after the reset.
+
+### Changed
+
+- `struct http_transport::open` receives the transport itself, so a layer can
+  wrap the transport below it; a plain transport ignores the argument.
+- `struct http_url` names the scheme: `tls` says the URL is https, and a
+  redirect keeps the scheme of the hop.
+- The first port of a program of somebody else: zlib 1.3.1 as a static
+  archive built by the compiler and the flags of the guest, and `/bin/zcat`
+  on a `.gz` of MicroFS. The recipe is `docs/porting-programs.md`; the
+  library is in `third_party/zlib` with its port layer and license, the
+  image carries `/etc/greeting.gz` and `/etc/licenses/zlib`, and
+  `make x86-smoke` and `make x86-disk-smoke` check every inflated byte.
+- The library of a program learned the three families a portable source
+  expects: an arena of its own in the bss (`malloc`, `calloc`, `realloc`,
+  `free`), `errno`/`strerror`, and the streams of `fopen`; the POSIX names of
+  the headers are thin shims over `ulibc.h`, and `snprintf`/`vsnprintf` share
+  the formatter with `printf`. The host test `tests/cases/test_zlib.c` covers
+  the checksums, the three stream wrappers and a `gz` file.
+- `make board-soak` and the gate of a compatibility release: the session on
+  the board is three minutes (`BOARD_SOAK_MINUTES`), and the long ten-minute
+  session belongs to a release that touches the flash or the boot.
+- The x86-64 image has twenty-six programs: `pcre2grep`, its engine, `lua`,
+  `bc`, `dc` and the ten commands of sbase join the eleven of the tree and
+  `zcat`; `make x86-smoke` checks their lines, the five licenses and the
+  count.
+- The third port of somebody else's code, and the first set of commands:
+  sbase (MIT) with `cat`, `grep`, `head`, `ls`, `tail`, `wc`, `sort`, `find`,
+  `xargs` and `sed` under their canonical names in `/bin` of the x86-64
+  image, in place of the small `ls`, `cat`, `grep`, `wc` and `head` of ADR
+  0016; `echo`, `mkdir`, `pwd` and `rm` stay. The `readdir` of procfs and
+  devfs makes `ls /proc` and `ls /dev` work with the same call as a directory
+  of MicroFS, and the image carries the two mount points as empty
+  directories. The library of a program grew the families a POSIX command
+  expects (`opendir`/`readdir`, `struct stat`, `getpwuid`, `localtime`,
+  `fnmatch`, a regular expression engine, `getopt`, `getline`, `fmemopen`,
+  `qsort`) and a directory of its own for the paths, because the ABI has no
+  `chdir`. The port layer and the hunks of `sort.c`, `xargs.c`, `grep.c` and
+  `ls.c` are in `third_party/sbase/README.md`; `xargs` runs its command in
+  its own process because `execve` is synchronous, and `-P` has nothing to
+  do. The shell looks a bare name of the ten in
+  `PATH` before its own table; the simulator keeps the commands of the shell
+  and the board falls back. `ls --color` paints a directory blue and an
+  executable green. The pure library is tested by
+  `tests/cases/test_userland.c`, and the ten tools are in `make x86-smoke`
+  and `make x86-disk-smoke`. The MIT notice travels as
+  `/etc/licenses/sbase` and `LICENSE.sbase`.
+- A program with a point in its numbers is a program of its own: the port's
+  loader sets `CR4.OSFXSR`/`CR4.OSXMMEXCPT` and `CR0.NE`, the runtime of the
+  image is built without `-mgeneral-regs-only`, and `math.c`, `stdlib.c`,
+  `setjmp.c`, `time.c` and `format_float.c` are linked into it. The
+  scheduler saves no XMM or x87 state and `execve` waits for the program, so
+  one program with a `double` runs at a time.
+
+### Fixed
+
+- `libc`: a stream of a program reads a block of 512 bytes from its descriptor
+  instead of one byte at a time, so the line readers of the release stop being
+  a system call per byte: `wc -c` of a 168 KB file was 11.6 s and is 0.13 s,
+  `grep` over a file of a few hundred kilobytes no longer trips the ten-second
+  patience of the shell. The block lives in the `FILE` object (no allocation),
+  `fseek` drops it and `ftell` counts what is still in it; the write side is
+  unchanged.
+- `mfs`: a read of a file follows the chain from the cursor of its descriptor
+  (`chain_block`/`chain_index` in `struct mfs_file`) instead of walking from
+  the head for every block: a read of 540 KB is 28.6 s before and 0.18 s
+  after, `exec /bin/lua` (168,480 bytes) is 0.09 s instead of about a second,
+  and the `write` path is the next debt of the same kind (`docs/debts.md`).
+  The format on the disk does not change.
+- `esp32`: the two programs of the board link the `errno` of the library and
+  the compiler's runtime (`-lgcc`). The merge of the zlib userland put an
+  `errno` in the wrappers of the calls and the 64-bit division of the
+  formatter in `stdio.c`; the board's link had neither, so `make idf-build`
+  stopped at `/bin/hello`. The text of a program is 4540 bytes of the 8 KiB
+  window.
+- The shell fixes of `1.1.2` are in this release: `ls` and `tree` stream a
+  directory, `shell_resolve` normalises `.` and `..`, `help <command>` is not
+  cut, `path ""` is refused, and the console answers with its own sentences.
+  The patch has its own section below and its notes in
+  [`docs/releases/1.1.2.md`](docs/releases/1.1.2.md).
+
+>>>>>>> release_candidate
 ## [1.1.2] - 2026-11-23
 
 A patch of `1.1.1` for the shell: the cleanroom of 1.1.1 found that `ls`

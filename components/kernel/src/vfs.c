@@ -986,6 +986,50 @@ int vfs_unlink(const char *path)
     return rc;
 }
 
+/*
+ * The same object under another name, inside one filesystem. The two paths
+ * are walked like the calls above - a directory of the way has to be
+ * searchable - and the filesystem of the first decides for the second: two
+ * mounts are two volumes, and a copy between them is not a rename.
+ */
+int vfs_rename(const char *from, const char *to)
+{
+    const struct mount *source;
+    const struct mount *target;
+    int rc;
+
+    if (from == NULL || to == NULL) {
+        return KERR_INVAL;
+    }
+
+    source = resolve(from, NULL);
+    target = resolve(to, NULL);
+
+    if (source == NULL || target == NULL) {
+        return KERR_NOENT;
+    }
+
+    if (source != target) {
+        return KERR_XDEV;
+    }
+
+    rc = path_search_check(from);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = path_search_check(to);
+    if (rc != 0) {
+        return rc;
+    }
+
+    if (source->ops->rename == NULL) {
+        return KERR_NOTSUP;
+    }
+
+    return source->ops->rename(source->ctx, from, to);
+}
+
 int vfs_chmod(const char *path, k_u32_t mode)
 {
     const struct mount *m = resolve(path, NULL);
@@ -1052,6 +1096,10 @@ const char *vfs_strerror(int error)
 
     if (error == KERR_BUSY) {
         return "device or resource busy";
+    }
+
+    if (error == KERR_XDEV) {
+        return "cross-device rename";
     }
 
     for (i = 0; i < g_count; i++) {

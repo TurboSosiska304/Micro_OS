@@ -49,12 +49,25 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make coverage` | the host build with `--coverage`, the tests, the simulator and the gcov report of `components/kernel` (70% of lines) |
 | `make reproducible` | build the disk image twice and compare the bytes (`SOURCE_DATE_EPOCH`) |
 | `make integrity` | the integrity check: bundle, image headers, partition table, git, sources, formatting |
+| `make wiki-check` | every link and anchor of `docs/wiki` (`tools/wiki_check.py`) |
 | `make format` | reformat the C sources with `clang-format` |
 | `make clean` | remove `build-host/`, `build-asan/`, `build-coverage/` (the device `build/` stays) |
 | `make test-smp` | the host tests with `KERNEL_SMP=ON` and two cores (`MICRO_OS_CPUS=2`) |
 | `make x86-smp-build` | the x86-64 kernel with `KERNEL_SMP=ON` (the APs are not started yet, ADR 0012) |
+| `make x86-net-build` | the x86-64 kernel with the network, `wget` and `pkg` (`MICRO_OS_X86_NET=ON`) |
+| `make x86-net-run` | that machine on the user network of QEMU |
+| `make x86-net-smoke` | boot it and check the stack, a download, TLS (1.3 and 1.2, a wrong name and a wrong authority, the clock of 1970) and an install from a local repository over HTTPS |
+| `make x86-run` | the same machine in a window: the framebuffer of 1280x800 and the keyboard |
+| `make x86-run-serial` | the machine on the serial console and no window |
+| `make x86-vga-smoke` | check the framebuffer and the text mode with a screenshot, and the keyboard |
+| `make x86-disk-smoke` | two boots on one disk image: a file survives both (34 checks) |
+| `make x86-iso` | the BIOS ISO (El Torito) with the loader, the kernel and the root image (K13) |
+| `make x86-iso-run` | boot the ISO in a terminal (`-nographic`) |
+| `make x86-iso-smoke` | boot the ISO with `-cdrom` and nothing else, and check the shell and `/bin` |
 | `make x86-all` | the complete machine in `build-x86-all/`: the kernel with the network, the disk with `/bin` and `/etc`, and `run.sh` |
 | `make x86-all-run` | boot that machine in a window (the serial console with `x86-all-run-serial`) |
+| `make x86-user` | build the complete machine and its release tar, unpack the tar and start it (the artifact a person downloads) |
+| `make x86-user-serial` | the same tar with the serial console and no window |
 | `make ci` | `build`, `test`, `test-asan`, `test-tsan`, `test-smp`, `smoke`, `coverage`, `x86-smoke` when QEMU is there, `reproducible`, `integrity` — run it before pushing |
 
 The same build by hand:
@@ -88,9 +101,16 @@ names a key outside the tree:
 make x86-build MICROOS_SIGN_KEY=/path/outside/the/tree/release.key
 build-host/tools/microos_sign verify --pub build-x86/signing.pub build-x86/microos64.bin
 build-host/tools/microos_sign info   build-x86/microos64.bin
+build-x86-net/microos_sign sign-file   --key build-x86-net/signing.key --in hello.mox --sig hello.mox.sig
+build-x86-net/microos_sign verify-file --pub build-x86-net/signing.pub --sig hello.mox.sig hello.mox
 make x86-smoke                         # accepts the signed image, refuses a damaged one
 make x86-open-build                    # MICRO_OS_REQUIRE_SIGNATURE=OFF
 ```
+
+`sign-file` is the detached signature of a repository of programs: the index
+and a `.mox` are signed over their own bytes, and `pkg` checks the signature
+and the digest before a byte reaches `/usr/bin` ([wiki/pkg.md](docs/wiki/pkg.md),
+ADR 0024 §4).
 
 The refusal is a setting on both machines. `MICRO_OS_REQUIRE_SIGNATURE` is a
 CMake option (default `ON`) on x86-64 and a Kconfig option (default `y`) on
@@ -276,6 +296,12 @@ have no window of programs; the x86-64 port is the machine that runs one.
 
 ### Flags and the help
 
+On x86-64 the ten commands of sbase (`ls`, `cat`, `grep`, `head`, `tail`,
+`wc`, `sort`, `find`, `sed`, `xargs`) are the programs of `/bin`, not the
+commands of the shell: a bare name is looked up in `PATH` first. Their flags
+are the ones of the collection (`ls -l`, `grep -r`, `sort -n`, ...), and the
+table below is the shell's own for the commands that remain built in.
+
 Every command answers `-h` and `--help` with its usage line, the one line of the
 list of `help` and the notes about its flags; the command does not do its work,
 and the status is 0, because the help that was asked for was given. A command
@@ -305,7 +331,9 @@ rm -- -notes
 | Command | Flag | Meaning |
 |---|---|---|
 | `ls` | `-l` | the mode, the owner, the size and the date of every entry |
+| `ls` | `--color[=always\|never\|auto]` | a directory in blue and an executable in green (the `/bin/ls` of sbase; on x86-64 a bare `ls` is that program) |
 | `ls` | `-a` | `.` and `..` first |
+| `ls` | `--color[=always\|never\|auto]` | a directory in blue and an executable in green; `never` and `auto` are plain (`auto` is off: no terminal to ask) |
 | `tree` | `-d` | the directories only |
 | `tree` | `-a` | accepted for hidden names; this system has none yet |
 | `cat` | `-n` | the number of the line in front of every line |
@@ -333,7 +361,18 @@ rm -r /tmp/mine          # the directory and everything in it
 http get http://10.10.10.1/   # the status and the body of the answer
 ntp                           # pool.ntp.org, the time goes into the RTC (UTC)
 ntp time.google.com           # another server
+ntp 10.0.2.2:12345            # a server on another port (a home one, or a test)
+
+# from the shell of the x86-64 machine (the network image):
+wget https://10.0.2.2:8443/file.bin /file.bin   # TLS 1.2/1.3, the roots of /etc/ssl/certs.pem
+http get https://example.com/                   # the same client, into a buffer
+mkdir /etc/ssl
+wget http://10.0.2.2:8080/ca.pem /etc/ssl/certs.pem   # the store, a plain download
+ntp 10.0.2.2:12345            # a clock is part of the trust: https before it refuses
 ```
+
+The TLS client is described in `docs/wiki/network.md`; the board has the copy
+of mbedTLS that ESP-IDF carries and no command of TLS yet (ADR 0018).
 
 ## 5. Overrides
 
@@ -354,8 +393,17 @@ ntp time.google.com           # another server
 
 ```bash
 make ci                                        # the local list of checks
-python3 tools/integrity_check.py --expect-version 0.2.0
-git tag v0.2.0-pre && git push origin v0.2.0-pre
+python3 tools/integrity_check.py --expect-version 1.2.0
+git tag v1.2.0-pre && git push origin v1.2.0-pre
+```
+
+The gates of a release are the three sessions of 600 seconds, beside the
+checks above:
+
+```bash
+make soak              # x86-64, one boot, ten minutes by default
+make soak-host         # the host substrate, two cores, under TSan
+make board-soak        # the board (needs the board on /dev/ttyACM0)
 ```
 
 A tag `vX.Y.Z` runs the tests and the firmware build in GitHub Actions and

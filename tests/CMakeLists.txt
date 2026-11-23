@@ -8,6 +8,7 @@ if(NOT ESP_PLATFORM)
         cases/test_version.c
         cases/test_board.c
         cases/test_log.c
+        cases/test_ansi.c
         cases/test_port.c
         cases/test_blockdev.c
         cases/test_render.c
@@ -20,6 +21,7 @@ if(NOT ESP_PLATFORM)
         cases/test_mfs_persistence.c
         cases/test_mfs_repair.c
         cases/test_mfs_many.c
+        cases/test_mfs_chain.c
         cases/test_mkfs_image.c
         cases/test_vfs.c
         cases/test_fs_fat.c
@@ -48,6 +50,11 @@ if(NOT ESP_PLATFORM)
         cases/test_smp.c
         cases/test_sign.c
         cases/test_progs.c
+        cases/test_zlib.c
+        cases/test_pcre2.c
+        cases/test_lua.c
+        cases/test_userland_float.c
+        cases/test_bc.c
     )
 
     # The tests of a component that a build leaves out are left out with it:
@@ -59,6 +66,12 @@ if(NOT ESP_PLATFORM)
        AND MICRO_OS_NET_NTP AND MICRO_OS_NET_MQTT)
         list(APPEND MICRO_OS_TEST_CASES cases/test_net.c)
     endif()
+    if(MICRO_OS_NET AND MICRO_OS_NET_HTTP)
+        list(APPEND MICRO_OS_TEST_CASES cases/test_pkg.c)
+    endif()
+    if(MICRO_OS_TLS AND MICRO_OS_NET)
+        list(APPEND MICRO_OS_TEST_CASES cases/test_tls.c)
+    endif()
     if(MICRO_OS_WIFI)
         list(APPEND MICRO_OS_TEST_CASES cases/test_wifi.c)
     endif()
@@ -68,6 +81,10 @@ if(NOT ESP_PLATFORM)
         framework/ktest.c
         ${MICRO_OS_TEST_CASES}
     )
+
+    set(MICROOS_ZLIB_DIR "${CMAKE_SOURCE_DIR}/third_party/zlib")
+    set(MICROOS_LUA_DIR "${CMAKE_SOURCE_DIR}/third_party/lua")
+    set(MICROOS_BC_DIR "${CMAKE_SOURCE_DIR}/third_party/bc")
 
     target_include_directories(microos_tests PRIVATE
         "${CMAKE_CURRENT_LIST_DIR}/include"
@@ -87,7 +104,193 @@ if(NOT ESP_PLATFORM)
         # The directory of the `progs` partition (ADR 0022): read by the port
         # of the board and by the test, written by tools/progs_image.py.
         "${CMAKE_SOURCE_DIR}/components/port_esp32/include"
+        # zlib and the headers of its port (the two allocation hooks).
+        "${MICROOS_ZLIB_DIR}"
+        "${MICROOS_ZLIB_DIR}/port"
+        # The headers of Lua. The host build keeps the default configuration
+        # of the release: the port layer of the machine
+        # (`third_party/lua/port/luaconf_port.h`) is for the guest, where
+        # there is no shell and no temporary name.
+        "${MICROOS_LUA_DIR}"
     )
+
+    # zlib is the first third-party library of the tree, and the host test is
+    # its second build: the same sources with the headers of the host and the
+    # port layer of `third_party/zlib/port` for the two allocation hooks. The
+    # guest build (the static archive of `ports/port_x86_64`) is checked by
+    # `make x86-smoke`, which runs /bin/zcat on a .gz of MicroFS.
+    # Lua is the second ported library. The whole core of the release is
+    # compiled for the host - the lexer, the parser, the code generator, the
+    # virtual machine and the standard libraries - and the test runs chunks
+    # through it. `lua.c` and `luac.c` are the two programs of the release
+    # and not a part of the library.
+    set(MICROOS_LUA_SOURCES
+        "${MICROOS_LUA_DIR}/lapi.c"
+        "${MICROOS_LUA_DIR}/lauxlib.c"
+        "${MICROOS_LUA_DIR}/lbaselib.c"
+        "${MICROOS_LUA_DIR}/lcode.c"
+        "${MICROOS_LUA_DIR}/lcorolib.c"
+        "${MICROOS_LUA_DIR}/lctype.c"
+        "${MICROOS_LUA_DIR}/ldblib.c"
+        "${MICROOS_LUA_DIR}/ldebug.c"
+        "${MICROOS_LUA_DIR}/ldo.c"
+        "${MICROOS_LUA_DIR}/ldump.c"
+        "${MICROOS_LUA_DIR}/lfunc.c"
+        "${MICROOS_LUA_DIR}/lgc.c"
+        "${MICROOS_LUA_DIR}/linit.c"
+        "${MICROOS_LUA_DIR}/liolib.c"
+        "${MICROOS_LUA_DIR}/llex.c"
+        "${MICROOS_LUA_DIR}/lmathlib.c"
+        "${MICROOS_LUA_DIR}/lmem.c"
+        "${MICROOS_LUA_DIR}/loadlib.c"
+        "${MICROOS_LUA_DIR}/lobject.c"
+        "${MICROOS_LUA_DIR}/lopcodes.c"
+        "${MICROOS_LUA_DIR}/loslib.c"
+        "${MICROOS_LUA_DIR}/lparser.c"
+        "${MICROOS_LUA_DIR}/lstate.c"
+        "${MICROOS_LUA_DIR}/lstring.c"
+        "${MICROOS_LUA_DIR}/lstrlib.c"
+        "${MICROOS_LUA_DIR}/ltable.c"
+        "${MICROOS_LUA_DIR}/ltablib.c"
+        "${MICROOS_LUA_DIR}/ltm.c"
+        "${MICROOS_LUA_DIR}/lundump.c"
+        "${MICROOS_LUA_DIR}/lutf8lib.c"
+        "${MICROOS_LUA_DIR}/lvm.c"
+        "${MICROOS_LUA_DIR}/lzio.c"
+    )
+    set_source_files_properties(${MICROOS_LUA_SOURCES}
+        PROPERTIES COMPILE_OPTIONS "-Wno-sign-compare;-Wno-unused-parameter")
+
+    # The formatter of the guest, compiled for the host into a unit of its
+    # own: the release of the test binary is linked against the C library of
+    # the host, and `FILE` is not the same type in the two libraries. The
+    # include directories are for this file only, so the rest of the binary
+    # keeps the headers of the host.
+    set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/cases/userland_float_shim.c"
+        PROPERTIES COMPILE_OPTIONS
+        "-I${CMAKE_SOURCE_DIR}/components/libc/user/include;-I${CMAKE_SOURCE_DIR}/components/kernel/include")
+
+    set(MICROOS_ZLIB_SOURCES
+        "${MICROOS_ZLIB_DIR}/adler32.c"
+        "${MICROOS_ZLIB_DIR}/compress.c"
+        "${MICROOS_ZLIB_DIR}/crc32.c"
+        "${MICROOS_ZLIB_DIR}/deflate.c"
+        "${MICROOS_ZLIB_DIR}/gzclose.c"
+        "${MICROOS_ZLIB_DIR}/gzlib.c"
+        "${MICROOS_ZLIB_DIR}/gzread.c"
+        "${MICROOS_ZLIB_DIR}/gzwrite.c"
+        "${MICROOS_ZLIB_DIR}/infback.c"
+        "${MICROOS_ZLIB_DIR}/inffast.c"
+        "${MICROOS_ZLIB_DIR}/inflate.c"
+        "${MICROOS_ZLIB_DIR}/inftrees.c"
+        "${MICROOS_ZLIB_DIR}/trees.c"
+        "${MICROOS_ZLIB_DIR}/uncompr.c"
+        "${MICROOS_ZLIB_DIR}/zutil.c"
+    )
+    set_source_files_properties(${MICROOS_ZLIB_SOURCES}
+        PROPERTIES COMPILE_DEFINITIONS "MY_ZCALLOC=1;HAVE_UNISTD_H=1;HAVE_STDARG_H=1"
+                   COMPILE_OPTIONS "-Wno-sign-compare")
+    set_source_files_properties("${MICROOS_ZLIB_DIR}/port/zlib_os.c"
+        PROPERTIES COMPILE_DEFINITIONS "MY_ZCALLOC=1")
+
+    # PCRE2, the regular expression library of /bin/pcre2grep
+    # (third_party/pcre2): the same sources and the same config.h as the
+    # image of the program, compiled for the host so that the test and the
+    # machine run one engine. The sources are third-party C: the warning
+    # flags of this tree stay off them, as they do in the build of the
+    # program.
+    set(PCRE2_DIR "${CMAKE_SOURCE_DIR}/third_party/pcre2")
+    set(PCRE2_TEST_SOURCES
+        "${PCRE2_DIR}/src/pcre2_compile.c"
+        "${PCRE2_DIR}/src/pcre2_config.c"
+        "${PCRE2_DIR}/src/pcre2_context.c"
+        "${PCRE2_DIR}/src/pcre2_convert.c"
+        "${PCRE2_DIR}/src/pcre2_dfa_match.c"
+        "${PCRE2_DIR}/src/pcre2_error.c"
+        "${PCRE2_DIR}/src/pcre2_extuni.c"
+        "${PCRE2_DIR}/src/pcre2_find_bracket.c"
+        "${PCRE2_DIR}/src/pcre2_maketables.c"
+        "${PCRE2_DIR}/src/pcre2_match.c"
+        "${PCRE2_DIR}/src/pcre2_match_data.c"
+        "${PCRE2_DIR}/src/pcre2_newline.c"
+        "${PCRE2_DIR}/src/pcre2_ord2utf.c"
+        "${PCRE2_DIR}/src/pcre2_pattern_info.c"
+        "${PCRE2_DIR}/src/pcre2_script_run.c"
+        "${PCRE2_DIR}/src/pcre2_serialize.c"
+        "${PCRE2_DIR}/src/pcre2_string_utils.c"
+        "${PCRE2_DIR}/src/pcre2_substitute.c"
+        "${PCRE2_DIR}/src/pcre2_substring.c"
+        "${PCRE2_DIR}/src/pcre2_tables.c"
+        "${PCRE2_DIR}/src/pcre2_ucd.c"
+        "${PCRE2_DIR}/src/pcre2_valid_utf.c"
+        "${PCRE2_DIR}/src/pcre2_xclass.c"
+        "${PCRE2_DIR}/pcre2_chartables.c"
+        "${PCRE2_DIR}/pcre2_small.c"
+    )
+    target_sources(microos_tests PRIVATE ${PCRE2_TEST_SOURCES})
+    target_include_directories(microos_tests PRIVATE "${PCRE2_DIR}" "${PCRE2_DIR}/src")
+    set_source_files_properties(${PCRE2_TEST_SOURCES} PROPERTIES
+        COMPILE_OPTIONS "-w;-DHAVE_CONFIG_H;-DPCRE2_CODE_UNIT_WIDTH=8")
+
+    # --- bc and dc, the calculators of the third port ---------------------
+    #
+    # The release is one library and one `main`: `argv[0]` picks the engine.
+    # The test compiles the same sources for the host and runs the command as
+    # a process of the test machine (`cases/test_bc.c`), so the vector of the
+    # arguments, the file of `-f`, descriptor 0 and the status are the ones
+    # of a program of a Unix-like system. The host sees its own `fstat` and
+    # `sigaction` (`BC_PORT_HOST`): the port layer of the machine answers
+    # those two calls only in the image.
+    set(MICROOS_BC_SOURCES
+        "${MICROOS_BC_DIR}/src/args.c"
+        "${MICROOS_BC_DIR}/src/bc.c"
+        "${MICROOS_BC_DIR}/src/bc_lex.c"
+        "${MICROOS_BC_DIR}/src/bc_parse.c"
+        "${MICROOS_BC_DIR}/src/data.c"
+        "${MICROOS_BC_DIR}/src/dc.c"
+        "${MICROOS_BC_DIR}/src/dc_lex.c"
+        "${MICROOS_BC_DIR}/src/dc_parse.c"
+        "${MICROOS_BC_DIR}/src/file.c"
+        "${MICROOS_BC_DIR}/src/lang.c"
+        "${MICROOS_BC_DIR}/src/lex.c"
+        "${MICROOS_BC_DIR}/src/main.c"
+        "${MICROOS_BC_DIR}/src/num.c"
+        "${MICROOS_BC_DIR}/src/opt.c"
+        "${MICROOS_BC_DIR}/src/parse.c"
+        "${MICROOS_BC_DIR}/src/program.c"
+        "${MICROOS_BC_DIR}/src/rand.c"
+        "${MICROOS_BC_DIR}/src/read.c"
+        "${MICROOS_BC_DIR}/src/vector.c"
+        "${MICROOS_BC_DIR}/src/vm.c"
+        "${MICROOS_BC_DIR}/port/generated/bc_help.c"
+        "${MICROOS_BC_DIR}/port/generated/dc_help.c"
+        "${MICROOS_BC_DIR}/port/generated/lib.c"
+        "${MICROOS_BC_DIR}/port/generated/lib2.c"
+    )
+
+    add_executable(microos_bc_host ${MICROOS_BC_SOURCES})
+    target_include_directories(microos_bc_host PRIVATE
+        "${MICROOS_BC_DIR}/include"
+        "${MICROOS_BC_DIR}/port"
+    )
+    target_compile_definitions(microos_bc_host PRIVATE BC_PORT_HOST=1)
+    target_compile_options(microos_bc_host PRIVATE
+        "-include" "${MICROOS_BC_DIR}/port/bc_port.h"
+        # Upstream C compiled with the warnings of this tree: the ones that
+        # the release's own build does not ask for are turned off here.
+        -Wno-sign-compare -Wno-unused-parameter -Wno-clobbered
+        -Wno-missing-prototypes -Wno-strict-prototypes
+        # The calculator is the program under test: the sanitizer of the test
+        # binary is for the kernel, and a leak of the release at its exit (the
+        # release frees its state only in a debug build) must not turn a good
+        # answer of the calculator into a failure of the test.
+        -fno-sanitize=all
+    )
+    target_link_options(microos_bc_host PRIVATE -fno-sanitize=all)
+
+    target_compile_definitions(microos_tests PRIVATE
+        MICROOS_BC_HOST="$<TARGET_FILE:microos_bc_host>")
+    add_dependencies(microos_tests microos_bc_host)
 
     target_sources(microos_tests PRIVATE
         "${CMAKE_SOURCE_DIR}/components/drivers/src/input_debounce.c"        "${CMAKE_SOURCE_DIR}/components/drivers/src/battery_soc.c"
@@ -101,6 +304,10 @@ if(NOT ESP_PLATFORM)
         "${CMAKE_SOURCE_DIR}/ports/port_x86_64/loader/ed25519.c"
         "${CMAKE_SOURCE_DIR}/ports/port_x86_64/loader/sign_image.c"
         "${CMAKE_SOURCE_DIR}/components/port_esp32/src/progs_format.c"
+        ${MICROOS_ZLIB_SOURCES}
+        "${MICROOS_ZLIB_DIR}/port/zlib_os.c"
+        ${MICROOS_LUA_SOURCES}
+        "${CMAKE_CURRENT_LIST_DIR}/cases/userland_float_shim.c"
     )
 
     # The FAT reader comes from the component when the host build links it
@@ -144,7 +351,14 @@ if(NOT ESP_PLATFORM)
     )
 
     if(MICRO_OS_NET)
-        list(APPEND MICRO_OS_TEST_LIBS microos_net)
+        # The network comes after the port that resolves its names, and the
+        # entropy of the TLS layer is a function of the port: the archive is
+        # scanned from left to right, so the port is named again after the
+        # object that asks for net_tls_platform_entropy().
+        list(APPEND MICRO_OS_TEST_LIBS microos_net microos_port_host)
+    endif()
+    if(MICRO_OS_NET AND MICRO_OS_NET_HTTP)
+        list(APPEND MICRO_OS_TEST_LIBS microos_pkg)
     endif()
     if(MICRO_OS_WIFI)
         list(APPEND MICRO_OS_TEST_LIBS microos_wifi)
@@ -153,7 +367,20 @@ if(NOT ESP_PLATFORM)
         list(APPEND MICRO_OS_TEST_LIBS microos_fs_ext2)
     endif()
 
-    target_link_libraries(microos_tests PRIVATE ${MICRO_OS_TEST_LIBS})
+    # The math of the host: the core of Lua calls the functions of the C
+    # library of the release (pow, fmod, floor, ...) and the host keeps them
+    # in libm, which the linker does not take by itself.
+    target_link_libraries(microos_tests PRIVATE ${MICRO_OS_TEST_LIBS} m)
+
+    # The race detector of this toolchain crashes on any `longjmp` after a
+    # `setjmp` ("can't find longjmp buf"), and a ten-line C program reproduces
+    # it: the library of the runner and the C library of the machine do not
+    # agree about the buffer. The error path of Lua is a long jump, so the one
+    # case that takes it is left out of the build under the detector; the
+    # other cases of the port and every case of the kernel still run.
+    if(MICRO_OS_SANITIZE_THREAD)
+        target_compile_definitions(microos_tests PRIVATE MICROOS_TSAN=1)
+    endif()
 
 # The corpus of the tests: a fixed set of numbers with the boundary values,
 # the recorded ABI of the release (tests/corpus/abi.txt) and the MOX1 image
@@ -163,6 +390,41 @@ target_compile_definitions(microos_tests PRIVATE
     KTEST_ABI_GOLDEN="${CMAKE_SOURCE_DIR}/tests/corpus/abi.txt"
     KTEST_MOX_FIXTURE="${CMAKE_SOURCE_DIR}/tests/corpus/mox1/frozen-x86_64.hex"
 )
+
+    # --- the library of a program, the pure part --------------------------
+    #
+    # The functions of `components/libc/user` that have no door under them
+    # (the classes, the strings, the pattern of a name, the options, the
+    # regular expressions, the one user and the decimal order of sbase) are
+    # compiled for the host with the headers of a program. The binary is a
+    # test of its own: the include path of a program would shadow <stdio.h>
+    # and <string.h> of the other tests.
+    set(MICROOS_USERLAND_TESTS
+        cases/test_userland.c
+        src/userland_main.c
+        framework/ktest.c
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/ctype.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/string_ext.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/fnmatch.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/getopt.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/regex.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/libgen.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/pwd.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/errno.c"
+        "${CMAKE_SOURCE_DIR}/third_party/sbase/port/numcmp.c"
+    )
+
+    add_executable(microos_userland_tests ${MICROOS_USERLAND_TESTS})
+    target_include_directories(microos_userland_tests PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/framework"
+        "${CMAKE_CURRENT_LIST_DIR}/include"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/include"
+        "${CMAKE_SOURCE_DIR}/components/kernel/include"
+        "${CMAKE_SOURCE_DIR}/third_party/sbase/port"
+    )
+    target_compile_options(microos_userland_tests PRIVATE -Wall -Wextra -Werror -Wno-nonnull-compare)
+    add_test(NAME userland COMMAND microos_userland_tests)
+    set_tests_properties(userland PROPERTIES TIMEOUT 60)
 
     # A test that hangs is a test that failed: the panic of the kernel
     # stops the process of the host, and anything else is a hang that has

@@ -5,6 +5,7 @@
 # host (as a plain static library used by the unit tests).
 
 set(MICRO_OS_KERNEL_SRCS
+    "src/ansi.c"
     "src/board.c"
     "src/blockdev.c"
     "src/clock.c"

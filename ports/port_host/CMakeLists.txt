@@ -12,9 +12,14 @@ add_library(microos_port_host STATIC
     src/stubs/host_modules.c
     src/stubs/host_render.c
     src/stubs/host_stubs.c
+    src/tls_platform.c
 )
 
 target_include_directories(microos_port_host PUBLIC "${CMAKE_CURRENT_LIST_DIR}/include")
+# The entropy of the host answers net/tls_platform.h of the network
+# component; the protocol half of TLS is in components/net.
+target_include_directories(microos_port_host PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/../../components/net/include")
 target_link_libraries(microos_port_host PUBLIC microos_kernel microos_kshell)
 find_package(Threads REQUIRED)
 target_link_libraries(microos_port_host PUBLIC Threads::Threads)
