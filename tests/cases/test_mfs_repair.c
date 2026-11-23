@@ -1066,6 +1066,70 @@ static void test_sound_volume(void)
     teardown();
 }
 
+/*
+ * The property: the repair is not limited to a table of 32768 records. A
+ * volume with 40000 of them repairs an orphan record beyond that number, so
+ * the map of the walk is the volume's and not a fixed table.
+ */
+static void test_big_table(void)
+{
+    enum { BIG_BLOCKS = 4096 };
+    struct mfs_check_report report;
+    struct mfs_superblock sb;
+    struct mfs_ram_device volume;
+    struct k_blockdev device;
+    struct mfs_info info;
+    struct mfs_inode inode;
+    struct mfs_inode after;
+    k_u8_t block[MFS_BLOCK_SIZE];
+    k_u32_t record = MFS_INODE_SIZE;
+    k_u32_t bitmap_blocks;
+    k_u32_t index = 33000u;
+    k_u32_t block_number;
+    k_u32_t offset;
+    int rc;
+
+    ktest_begin("mfs: the repair of a table of records beyond 32768");
+
+    KT_CHECK_INT_EQ(mfs_ram_init(&volume, BIG_BLOCKS), 0);
+    mfs_ram_device(&volume, &device);
+    KT_CHECK_INT_EQ(mfs_format(&device, 40000), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_mount(&device), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_get_info(&info), MFS_OK);
+    KT_CHECK(info.inodes_total > index);
+
+    memcpy(&sb, volume.data + (size_t)(BIG_BLOCKS - 1) * MFS_BLOCK_SIZE, sizeof(sb));
+    bitmap_blocks = (sb.data_blocks + 8u * MFS_BLOCK_SIZE - 1u) / (8u * MFS_BLOCK_SIZE);
+    if (sb.version == MFS_VERSION_LEGACY) {
+        record = MFS_INODE_SIZE_LEGACY;
+    }
+
+    /* A record that is used and that no name reaches, beyond the old map. */
+    memset(&inode, 0, sizeof(inode));
+    inode.flags = MFS_INODE_USED;
+    block_number = sb.meta_start + bitmap_blocks + (index * record) / MFS_BLOCK_SIZE;
+    offset = (index * record) % MFS_BLOCK_SIZE;
+    KT_CHECK_INT_EQ(device.ops->read(device.ctx, block_number, block, 1), 0);
+    memcpy(block + offset, &inode, record);
+    KT_CHECK_INT_EQ(device.ops->write(device.ctx, block_number, block, 1), 0);
+
+    rc = mfs_repair(&report);
+    KT_CHECK_INT_EQ(rc, MFS_OK);
+    KT_CHECK(report.errors == 0);
+    KT_CHECK(report.fixed > 0);
+
+    KT_CHECK_INT_EQ(device.ops->read(device.ctx, block_number, block, 1), 0);
+    memset(&after, 0, sizeof(after));
+    memcpy(&after, block + offset, record);
+    KT_CHECK_INT_EQ(after.flags, 0);
+
+    KT_CHECK_INT_EQ(mfs_check(&report), MFS_OK);
+    KT_CHECK_INT_EQ(report.errors, 0);
+
+    mfs_unmount();
+    mfs_ram_free(&volume);
+}
+
 /* --- the fixture --- */
 
 static k_u8_t read_file_byte(const char *path, k_u32_t offset)
@@ -1114,4 +1178,5 @@ void test_mfs_repair(void)
     test_mixed_damage();
     test_legacy_volume();
     test_sound_volume();
+    test_big_table();
 }
