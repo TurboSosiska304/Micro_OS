@@ -166,7 +166,8 @@ Wayland.
 pointer, and starts its clients with `fork` and `execve` - `/bin/edit` and
 `/bin/fm` - each with a buffer of pixels in a file of `/tmp`, two pipes and the
 variable `MICROOS_WM`. A click raises a window, a drag of its title bar moves
-it, `Alt+F4` and the square of the bar close it, and the keys go to the window
+it (the bar always stays on the picture), `Alt+F4`, the square of the bar and
+the square at the right end of a button of the panel close it, and the keys go to the window
 that has the focus. The protocol is `components/ui/client`, the pointer is the
 second port of the 8042 (`key.pointer.x`, `key.pointer.y` and
 `key.button.left` of `/dev/input0`), and the whole of it is

@@ -24,7 +24,7 @@ programs of the interface become its windows:
 |---|---|---|
 | the wallpaper | the whole picture | two blues, bands of 64 pixels, drawn by the server |
 | a window | the rectangle the server gave it | the pixels of the client's buffer, then the square of closing and, when it has the keys, a ring of two pixels of yellow around it |
-| the panel | the bottom 24 pixels | a button a window, the label the title of the client, the button of the window with the keys inverted |
+| the panel | the bottom 24 pixels | a button a window: the label is the title of the client, the window with the keys is inverted, and the square of closing at the right end of the button is the second way out of a window |
 | the pointer | 12x16 pixels at the point of the mouse | an arrow of white with one pixel of black under every row |
 
 The server paints *rectangles*: a frame of a client, a motion of the pointer,
@@ -35,6 +35,16 @@ read from its file: the compositor asks for the part of it that is visible.
 The wallpaper's bands are counted from the top of the picture and not from the
 top of the rectangle being painted, so a small damage rectangle and a whole
 screen are the same picture.
+
+The two windows of the default desktop stand **beside each other and not over
+each other** - `/bin/edit` at (40, 40) and `/bin/fm` at (700, 200) on the
+picture of 1280x800. A window is a rectangle of pixels and the corner of one
+covers the corner of another; the lists and the titles of the interface live in
+the left of a window, so a window whose corner is covered looks empty while its
+frame, its paper and its line of status are still there. The stacking is the
+rule of the desktop all the same - a person who puts one window over another
+gets the order of the paint, a raise and the occlusion - and the test moves the
+two windows together before it clicks.
 
 ## The buffer of a window
 
@@ -113,15 +123,24 @@ every pointer motion.
   the point in its own pixels.
 * **A drag** of the title bar (the first 21 pixels of a window: the margin, the
   row of the font and the separator of the frame of `ui/draw.h`) moves it. The
-  title stays under the pointer and off the panel, so a window dragged by the
-  head does not lose its head.
+  bar is the handle of a window, so it stays on the picture: the whole height
+  of the bar above the panel and at least 64 pixels of its width at either
+  side. A window pulled past an edge loses the part of itself that is past the
+  edge and never the handle - the sliver of the bar that is left drags it back.
 * **The square** at the right of the title bar is the close: the server sends
   `WM_MSG_CLOSE` and the client answers the way it answers its own key of
   leaving (`Ctrl+Q` for the editor, with the question about an unsaved file).
 * **Alt+F4** is the same close for the window that has the keys.
 * **The panel** puts a window away and brings it back: a window that is put
   away leaves the list of the model and keeps its buffer, its pipes and its
-  rectangle, and the button of the panel remains.
+  rectangle, and the button of the panel remains. The square at the right end
+  of a button of the panel is the close of that window, so a window whose bar
+  is out of reach still has a way out.
+* **The buttons act on the release**: the square of a title bar, the label of a
+  button of the panel and the square of that button do their work when the
+  button of the pointer comes up on the thing that went down. A press that
+  slides away is a press of nothing, which is the rule of every button of every
+  interface.
 * **A client that exits** (a close, a fault, its own key of leaving) is reaped
   with `waitpid(WNOHANG)`; its window leaves the picture, the focus goes to the
   window on top of what is left, and the file of its pixels is removed.
@@ -175,8 +194,12 @@ release). The numbers are at the end of `enum k_input_key` (79, 80, 81) and the
 keys of 1.4 keep theirs. The right and the middle button are not keys of the
 contract: a number is not spent on a button nobody asked for.
 
-The pointer is drawn by the server and not by the driver, and not by a client:
-a cursor is a picture of the interface.
+The point of the pointer is kept inside the picture - the arrow is twelve by
+fifteen pixels and the whole of it is on the glass - and the server paints it
+again after every turn of its loop that painted anything, so a rectangle of a
+window, a raise or a damage of a client cannot paint a cursor away. The pointer
+is drawn by the server and not by the driver, and not by a client: a cursor is
+a picture of the interface.
 
 ## The tests
 
@@ -187,15 +210,23 @@ a cursor is a picture of the interface.
 * `make x86-vga-smoke` boots a copy of the disk, runs `/bin/wm`, and reads the
   desktop out of the screenshot and the log of the server: the wallpaper, the
   two windows of `/bin/edit /doc.txt` and `/bin/fm /`, the panel, the pointer,
-  the ring of the focus; a click of the PS/2 mouse of QEMU raises the editor
-  and the ring follows; `sendkey` types `hello` into the window with the keys
-  and the status line of the editor says so; `Ctrl+S` saves the file and the
-  status line says it saved five bytes; a drag of the title bar moves the
-  window to 160,110; a click raises the file manager and `Alt+F4` closes it,
-  the wallpaper comes back and the focus returns to the editor; the second
-  `Alt+F4` ends the desktop, the prompt of the shell comes back, `cat
-  /doc.txt` prints the word the keys typed and the picture is the grid of the
-  kernel again.
+  the ring of the focus; a click of the PS/2 mouse of QEMU raises the editor,
+  the ring follows and **the window without the keys keeps its title and its
+  text**; `sendkey` types `hello` into the window with the keys and the status
+  line of the editor says so; `Ctrl+S` saves the file and the status line says
+  it saved five bytes; a sweep of the pointer along the bar of the title
+  leaves **no fragment** of a frame in the bar, and neither does the modal of
+  the unsaved file; a drag of the title bar moves the window to 140,90; a
+  window dragged **past the top-left corner keeps 64 pixels of its bar** and is
+  dragged back by that sliver, and one that **hangs past the bottom** is put
+  away from the panel and comes back inside the picture; the pointer is drawn
+  at both corners of the picture; a **press that slides off a button of the
+  panel does nothing**, a click of the button puts the window away and brings
+  it back, and **the square of the panel closes it** - the wallpaper comes
+  back and the focus returns to what is left; `Alt+F4` closes the file manager
+  and the last window ends the desktop, the prompt of the shell comes back,
+  `cat /doc.txt` prints the word the keys typed and the picture is the grid of
+  the kernel again.
 * `make x86-smoke` is the gate of the machine and of `/bin`: the mouse does not
   change a byte of it.
 
