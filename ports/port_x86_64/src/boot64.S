@@ -4,9 +4,11 @@
  * The loader of the port (loader32.S, or the UEFI application of
  * loader/uefi) has already switched the processor to long mode, copied this
  * image to its physical address and mapped it at the top of the address
- * space, and jumped here with two arguments: the information of the boot in
- * RDI and, in RSI, the magic of the hand-off when the boot was a UEFI machine
- * (loader/uefi) - the loader of the BIOS path leaves RSI zero. The entry is a
+ * space, and jumped here with three arguments: the information of the boot in
+ * RDI, in RSI the magic of the hand-off when the boot was a UEFI machine
+ * (loader/uefi) - the loader of the BIOS path leaves RSI zero - and in RDX
+ * where the loader copied the bytes of the image, which a boot of the medium
+ * of the ISO moves out of the way of its modules (loader32.S). The entry is a
  * high address of the image (ADR 0007): the stack below is high, the clear of
  * .bss writes high, and the boot information stays the physical address the
  * loader left in RDI, because the low identity map is still the one the
@@ -25,6 +27,7 @@ _start64:
     movabs $stack_top, %rsp
     mov %rdi, %r12 /* the boot information; rep stosb will use %rdi */
     mov %rsi, %r13 /* which of the two boots it is */
+    mov %rdx, %r14 /* where the image is, in the memory of the machine */
 
     /* The image was copied as bytes: the .bss has to be cleared here. */
     lea __bss_start(%rip), %rdi
@@ -36,6 +39,7 @@ _start64:
 
     mov %r12, %rdi
     mov %r13, %rsi
+    mov %r14, %rdx
     xor %ebp, %ebp
     call kmain
 

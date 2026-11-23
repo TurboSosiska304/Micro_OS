@@ -54,11 +54,6 @@ struct port_x86_64_boot_info {
      * image 1) and the map of the memory, in the format the port reads. */
     unsigned long long mb_info;
 
-    /* Where the loader copied the bytes of the kernel. The image is linked at
-     * PORT_X86_64_KERNEL_BASE and the loader may place it anywhere below the
-     * arena of the programs, so the port asks instead of assuming 16 MiB. */
-    unsigned long long kernel_phys;
-
     /* The picture of the firmware: EFI_GRAPHICS_OUTPUT_PROTOCOL. */
     unsigned long long fb_phys; /* FrameBufferBase */
     unsigned long long fb_size; /* FrameBufferSize, the bytes of the frame */

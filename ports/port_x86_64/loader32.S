@@ -33,6 +33,12 @@
  */
 .set KERNEL_MAP_2MIB, 8
 
+/* The steps of the search of a free destination for the copy of the kernel:
+ * the first block of 2 MiB at or above KERNEL_PHYS (16 MiB), and the last one
+ * whose image still ends below the arena of the programs at 32 MiB. */
+.set KERNEL_STEP, 0x00200000
+.set KERNEL_LAST, 0x01E00000
+
 /* The index of PML4 entry 511 and of PDPT entry 510: the address
  * 0xFFFFFFFF80000000 is the base of the top 2 GiB, and 0xFFFF...BC00 is the
  * end of the second gigabyte of the 512 GiB the entry 511 names. */
@@ -100,49 +106,53 @@ _start:
     jnz halt
 
     /*
-     * The kernel is copied to KERNEL_PHYS below, and a module of the boot
-     * lives where the loader of the machine put it. A module that lies over
-     * those bytes is not a boot this loader can take: the copy of the kernel
-     * would destroy the root image of the ISO exactly when the kernel is
-     * about to read it. The overlap is refused here, before a byte moves.
-     * Module 0 is the kernel itself and is allowed to sit at KERNEL_PHYS,
-     * where the copy is a copy of a range onto itself.
+     * Where the kernel is copied: the first block of KERNEL_STEP bytes at or
+     * above KERNEL_PHYS that no module of the boot lies over.
+     *
+     * The modules live where the loader of the machine put them, and the
+     * loaders of the world disagree: QEMU and GRUB keep them below 2 MiB, and
+     * limine puts them right after the kernel file - which, with a root image
+     * of 16 MB, runs from 1 MiB to 18 MiB and through the address this loader
+     * has always used for the copy. A module under the copy is a boot this
+     * loader cannot take (the copy would destroy the root image of the medium
+     * exactly when the kernel is about to read it), so the destination moves
+     * up until it is free; a boot whose modules leave no block below the arena
+     * of the programs is refused here, before a byte moves.
      */
     movl mbi_ptr, %eax
     movl 20(%eax), %ebx /* mods_count */
-    movl 24(%eax), %eax /* mods_addr */
-    movl (%eax), %edx /* mod_start of the kernel */
-    movl 4(%eax), %edi
-    subl %edx, %edi
-    movl $KERNEL_PHYS, %esi
-    addl %esi, %edi /* dest_end = KERNEL_PHYS + kernel bytes */
-    movl %eax, %ebp /* the entry of the loop */
-    xorl %ecx, %ecx /* the index of the entry */
+    movl 24(%eax), %ebp /* mods_addr */
+    movl (%ebp), %edx /* mod_start of the kernel */
+    movl 4(%ebp), %edi
+    subl %edx, %edi /* the bytes of the image */
 
-.Lmods_check:
+    movl $KERNEL_PHYS, %esi /* the candidate destination */
+.Ldest_next:
+    xorl %ecx, %ecx /* the index of the module */
+.Ldest_check:
     cmpl %ebx, %ecx
-    jae .Lmods_ok
-    movl (%ebp), %eax /* mod_start */
-    movl 4(%ebp), %edx /* mod_end */
-    testl %ecx, %ecx
-    jnz .Lmods_overlap
-    cmpl %esi, %eax
-    je .Lmods_next /* the kernel is already where it is copied */
-.Lmods_overlap:
-    cmpl %esi, %edx
-    jbe .Lmods_next /* the module ends before the destination */
-    cmpl %edi, %eax
-    jae .Lmods_next /* the module starts after it */
-    pushl $overlap_text
+    jae .Ldest_ok /* no module of the boot is in the way */
+    movl %ecx, %eax
+    shll $4, %eax
+    addl %ebp, %eax /* &mods[%ecx] */
+    leal (%esi, %edi), %edx /* dest_end */
+    cmpl %esi, 4(%eax)
+    jbe .Ldest_next_module /* the module ends before the destination */
+    cmpl %edx, (%eax)
+    jae .Ldest_next_module /* the module starts after it */
+    addl $KERNEL_STEP, %esi
+    cmpl $KERNEL_LAST, %esi
+    jbe .Ldest_next
+    pushl $nowhere_text
     call loader_puts
     addl $4, %esp
     jmp halt
-.Lmods_next:
-    addl $16, %ebp
+.Ldest_next_module:
     incl %ecx
-    jmp .Lmods_check
+    jmp .Ldest_check
 
-.Lmods_ok:
+.Ldest_ok:
+    movl %esi, dest_phys
 
     /*
      * The trampoline of the application processors (src/ap_trampoline.S) is
@@ -196,7 +206,7 @@ _start:
 2:
     movl %ecx, %eax
     shll $21, %eax
-    addl $KERNEL_PHYS, %eax
+    addl dest_phys, %eax
     orl $0x83, %eax
     movl %eax, pd_high(, %ecx, 8)
     movl $0, pd_high + 4(, %ecx, 8)
@@ -217,7 +227,7 @@ _start:
     movl (%eax), %esi /* mod_start */
     movl 4(%eax), %ecx
     subl %esi, %ecx /* mod_end - mod_start */
-    movl $KERNEL_PHYS, %edi
+    movl dest_phys, %edi
     cld
     rep movsb
 
@@ -274,9 +284,11 @@ long_mode:
        reads it through the identity map; the entry itself is at the top. The
        second argument of the entry is the magic of the hand-off of a UEFI
        machine (loader/uefi): this loader has none, and the port reads the
-       zero as "the multiboot information of the BIOS path". */
+       zero as "the multiboot information of the BIOS path". The third is
+       where the bytes of the kernel went, which is not always KERNEL_PHYS. */
     movl mbi_ptr(%rip), %edi
     xorl %esi, %esi
+    movl dest_phys(%rip), %edx
     movabs $KERNEL_BASE, %rax
     jmp *%rax
 
@@ -293,10 +305,15 @@ halt:
 mbi_ptr:
 .long 0
 
+/* Where the copy of the kernel is, decided above: KERNEL_PHYS on a boot whose
+ * modules are out of the way, and higher when one of them is not. */
+dest_phys:
+.long KERNEL_PHYS
+
 .section .rodata
 .align 8
-overlap_text:
-.asciz "Micro OS: a module of the boot lies over the kernel image\r\n"
+nowhere_text:
+.asciz "Micro OS: no free block below the arena of the programs for the kernel image\r\n"
 
 /*
  * The flat image of the AP trampoline, linked at 0x7000 by ap_trampoline.ld

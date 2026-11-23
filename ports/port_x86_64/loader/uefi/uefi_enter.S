@@ -25,7 +25,7 @@
 .code64
 .globl port_x86_64_enter_kernel
 
-/* void port_x86_64_enter_kernel(u64 stack, u64 boot_info, u64 magic, u64 pml4);
+/* void port_x86_64_enter_kernel(u64 stack, u64 boot_info, u64 magic, u64 kernel_phys);
  *
  * The caller is the C of this loader, and the loader is compiled for the
  * target of the firmware - the x86-64 Windows ABI, which is the convention of
@@ -39,7 +39,7 @@ port_x86_64_enter_kernel:
      * below: the registers of this code are not the caller's any more. */
     mov %rdx, %r12 /* boot_info */
     mov %r8, %r13  /* magic */
-    mov %r9, %r14  /* the PML4 of the boot */
+    mov %r9, %r14  /* where the image is */
 
     /* The stack the loader allocated before it left the boot services: the
      * one the firmware gave this program is memory of the boot. */
@@ -53,7 +53,8 @@ port_x86_64_enter_kernel:
     or $0x620, %eax
     mov %rax, %cr4
 
-    mov %r14, %cr3
+    lea uefi_boot_pml4(%rip), %rax
+    mov %rax, %cr3
 
     /* Long mode and the no-execute bit of a page (EFER.NXE): the kernel's
      * tables mark the data with bit 63, and a bit the processor has not been
@@ -86,6 +87,7 @@ port_x86_64_enter_kernel:
 
     mov %r12, %rdi
     mov %r13, %rsi
+    mov %r14, %rdx
     mov $0xFFFFFFFF80000000, %rax
     jmp *%rax
 

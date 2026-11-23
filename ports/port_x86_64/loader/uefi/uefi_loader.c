@@ -821,7 +821,6 @@ static void build_handoff(void)
     g_loader.handoff->magic = PORT_X86_64_BOOT_MAGIC;
     g_loader.handoff->version = PORT_X86_64_BOOT_VERSION;
     g_loader.handoff->mb_info = (unsigned long long)(efi_phys_addr)g_loader.mb;
-    g_loader.handoff->kernel_phys = (unsigned long long)g_loader.kernel_phys;
     g_loader.handoff->rsdp = find_rsdp();
 
     if (g_loader.gop_info != NULL) {
@@ -880,7 +879,9 @@ void port_x86_64_enter_kernel(efi_u64 stack, efi_u64 boot_info, efi_u64 magic, e
 #define PTE_PRESENT_WRITABLE 0x83ull
 #define PTE_DIRECTORY 0x03ull
 
-static efi_u64 g_pml4[512] __attribute__((aligned(4096)));
+/* The PML4 is named by the assembly of the jump, so it is not static: the
+ * tables are built here and the four registers below are the assembly's. */
+efi_u64 uefi_boot_pml4[512] __attribute__((aligned(4096)));
 static efi_u64 g_pdpt_low[512] __attribute__((aligned(4096)));
 static efi_u64 g_pd_low[IDENTITY_GIB][512] __attribute__((aligned(4096)));
 static efi_u64 g_pdpt_high[512] __attribute__((aligned(4096)));
@@ -901,8 +902,8 @@ static void build_tables(efi_u64 kernel_phys)
         }
     }
 
-    g_pml4[0] = (efi_u64)(unsigned long long)g_pdpt_low | PTE_DIRECTORY;
-    g_pml4[511] = (efi_u64)(unsigned long long)g_pdpt_high | PTE_DIRECTORY;
+    uefi_boot_pml4[0] = (efi_u64)(unsigned long long)g_pdpt_low | PTE_DIRECTORY;
+    uefi_boot_pml4[511] = (efi_u64)(unsigned long long)g_pdpt_high | PTE_DIRECTORY;
     g_pdpt_high[510] = (efi_u64)(unsigned long long)g_pd_high | PTE_DIRECTORY;
 
     for (entry = 0; entry < KERNEL_MAP_2MIB; entry++) {
@@ -1007,12 +1008,12 @@ static void leave_and_jump(void)
      */
     build_tables((efi_u64)g_loader.kernel_phys);
 
-    line_hex("uefi: the map of the boot is at 0x", (efi_u64)(unsigned long long)g_pml4);
+    line_hex("uefi: the map of the boot is at 0x", (efi_u64)(unsigned long long)uefi_boot_pml4);
     line_hex("uefi: the image is at the top of 0x", (efi_u64)g_loader.kernel_phys);
 
     port_x86_64_enter_kernel((efi_u64)g_loader.stack_phys + LOADER_STACK_BYTES,
                              (efi_u64)(unsigned long long)g_loader.handoff, PORT_X86_64_BOOT_MAGIC,
-                             (efi_u64)(unsigned long long)g_pml4);
+                             (efi_u64)g_loader.kernel_phys);
 }
 
 /* --- the boot ------------------------------------------------------------- */

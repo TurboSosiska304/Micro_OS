@@ -79,15 +79,22 @@ the write, MicroFS reports `EIO`, and the shell says so
 (`write: /x: input/output error`). A machine that needs a writable root
 mounts its disk, not this image.
 
-### 3. The loader refuses a module over the kernel
+### 3. The kernel is copied out of the way of the modules
 
-The kernel is copied to `KERNEL_PHYS` (16 MiB) while the modules live where
-the boot loader put them. A boot loader is free to place a module there; the
-copy of the kernel would then destroy the root image exactly when the kernel
-is about to read it. `loader32.S` walks the module table before it copies a
-byte and stops with a sentence when any module intersects the destination
-range. Module 0 may sit at `KERNEL_PHYS` itself: that copy is a range onto
-itself.
+The kernel has to be copied to a physical address of its own while the modules
+live where the boot loader put them, and a boot loader is free to place one of
+them over the address the loader would like. `loader32.S` walks the module
+table before it copies a byte and takes the first 2 MiB block at or above 16
+MiB that no module covers; it hands that address to the kernel in the third
+argument of the entry, and the kernel builds its map on it
+(`g_port_x86_64_kernel_phys`). A boot whose modules leave no block below the
+arena of the programs at 32 MiB is refused with a sentence instead.
+
+The first version of this decision refused the boot outright, and the medium
+of 1.1 paid for it with a root image of 12 MB: limine puts the modules right
+after the kernel file, so a 16 MB root image crosses 16 MiB and the copy had
+nowhere to go. The kernel's own report of 1.6 recorded the same collision from
+the other side (`ports/x86_64/README.md`, "the module under the kernel").
 
 ### 4. The boot loader is not vendored
 

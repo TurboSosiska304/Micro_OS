@@ -652,13 +652,14 @@ bool port_x86_64_timer_off(k_u32_t cpu);
 #define PORT_X86_64_KERNEL_PHYS 0x01000000ull
 
 /*
- * Where the loader put the bytes of this boot. The BIOS loader copies the
- * image to KERNEL_PHYS, and the loader of a UEFI machine asks the firmware
- * for a block of the memory the firmware itself chose: 16 MiB is its first
- * choice and not a promise, so the address is a variable of the port that the
- * boot sets before anything else (port_x86_64_init) and every translation of
- * this file reads. The two directions of the map are still one shift: the
- * image at the top and the identity map of the memory below it.
+ * Where the loader put the bytes of this boot. KERNEL_PHYS is the address the
+ * loader of the BIOS path has always used, and both loaders move the copy
+ * when something is in the way: the modules of the medium (loader32.S) and the
+ * memory a firmware of UEFI happened to be using (loader/uefi). The address
+ * is therefore an argument of the entry and a variable of the port, set before
+ * anything else (port_x86_64_init), and every translation of this file reads
+ * it. The two directions of the map are still one shift: the image at the top
+ * and the identity map of the memory below it.
  */
 extern k_u64_t g_port_x86_64_kernel_phys;
 
@@ -698,6 +699,18 @@ static inline k_u64_t port_x86_64_bus_phys(const void *ptr)
 #define PORT_X86_64_USER_LIMIT 0x03000000u /* 48 MiB */
 #define PORT_X86_64_USER_PHYS 0x04000000u  /* 64 MiB */
 
+/* The bytes of the arena: the window, which is the same size, is mapped onto
+ * it page for page (src/paging.c). */
+#define PORT_X86_64_USER_ARENA (PORT_X86_64_USER_LIMIT - PORT_X86_64_USER_BASE)
+
+/*
+ * The first gigabyte, which is all the memory the kernel can name: the map of
+ * the boot and the map the kernel builds for itself (src/paging.c) identity it
+ * in 2 MiB pages, and a physical address above it is an address no pointer of
+ * the kernel can hold. The heap and the modules of the boot live inside it.
+ */
+#define PORT_X86_64_IDENTITY_LIMIT 0x40000000ull
+
 /*
  * The top of the window, from the last page down: the stack of the program is
  * 64 KiB, the page below it is not mapped (the guard of an overflow), and the
@@ -726,14 +739,15 @@ struct port_x86_64_info {
 };
 
 /*
- * Bring up the machine: COM1, the clock, the heap. The two numbers come from
- * the loader: `boot_info` is the multiboot information of the BIOS path or
- * the boot structure of a UEFI machine, and `boot_magic` says which of the
- * two - PORT_X86_64_BOOT_MAGIC for the second, zero (the loader of the BIOS
- * path leaves the register zero) for the first. Every part of the init is
- * also lazy, so a call of the contract before this one still works.
+ * Bring up the machine: COM1, the clock, the heap. The three numbers come from
+ * the loader: `boot_info` is the multiboot information of the BIOS path or the
+ * boot structure of a UEFI machine, `boot_magic` says which of the two -
+ * PORT_X86_64_BOOT_MAGIC for the second, zero (the loader of the BIOS path
+ * leaves the register zero) for the first - and `kernel_phys` is where the
+ * bytes of the image are (zero: the KERNEL_PHYS of this header). Every part of
+ * the init is also lazy, so a call of the contract before this one still works.
  */
-void port_x86_64_init(k_u64_t boot_info, k_u64_t boot_magic);
+void port_x86_64_init(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys);
 
 /*
  * What the boot handed the port when it was a UEFI machine: the picture, the

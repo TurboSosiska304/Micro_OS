@@ -40,8 +40,9 @@ laptop.
    itself is often there), the search walks down from 14 MiB in steps of 2 MiB
    and stops when the image fits below 32 MiB, the base of the arena of the
    programs. The image has to be 2 MiB aligned because the page table of the
-   boot maps it with 2 MiB pages. The address is handed to the kernel
-   (`kernel_phys`), so the port no longer assumes 16 MiB.
+   boot maps it with 2 MiB pages. The address is handed to the kernel in the
+   third register of the entry, so the port no longer assumes 16 MiB - the
+   loader of the BIOS path says it in the same register for the same reason.
 5. **The map of the memory.** `GetMemoryMap` once for the size and once for
    the map; the regions of the firmware become the 24-byte entries of the
    multiboot 1 map the port already reads (`EfiConventionalMemory`,
@@ -66,15 +67,16 @@ laptop.
    jump.
 9. **The jump** (`loader/uefi/uefi_enter.S`): `CR4.PAE|OSFXSR|OSXMMEXCPT`,
    `CR3`, `EFER.LME|NXE`, `CR0.PG|PE|NE`, a GDT of three entries, and `jmp`
-   to the base of the image with `RDI` = the hand-off and `RSI` = the magic of
-   the boot (`PORT_X86_64_BOOT_MAGIC`).
+   to the base of the image with `RDI` = the hand-off, `RSI` = the magic of
+   the boot (`PORT_X86_64_BOOT_MAGIC`) and `RDX` = where the image is.
 
 The hand-off itself is `ports/port_x86_64/include/port_x86_64_boot.h`: the
-magic, the multiboot information, the place of the image, the picture (frame,
-size, width, height, pitch, bits and format of a pixel, masks), and the root
-of the ACPI tables. The loader of the BIOS path passes the same two registers
-with `RSI` zero (`loader32.S`), and `port_x86_64_init()` reads one protocol or
-the other.
+magic, the multiboot information, the picture (frame, size, width, height,
+pitch, bits and format of a pixel, masks), and the root of the ACPI tables.
+Where the image is, is not in it: both loaders pass that in the third register
+of the entry (`RDX`), the loader of the BIOS path with the multiboot
+information and `RSI` zero (`loader32.S`), and `port_x86_64_init()` reads one
+protocol or the other before it builds a page table.
 
 ## The picture, and why there is a shadow
 

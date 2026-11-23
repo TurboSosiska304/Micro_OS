@@ -366,14 +366,14 @@ static void init_task(void *arg)
     }
 }
 
-void kmain(k_u64_t boot_info, k_u64_t boot_magic)
+void kmain(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys)
 {
     struct kernel_boot_config cfg;
     const char *root_type = NULL;
     int mounted;
     int defaults;
 
-    port_x86_64_init(boot_info, boot_magic);
+    port_x86_64_init(boot_info, boot_magic, kernel_phys);
 
     memset(&cfg, 0, sizeof(cfg));
     cfg.board = g_board.name;
@@ -386,7 +386,8 @@ void kmain(k_u64_t boot_info, k_u64_t boot_magic)
      * QEMU loads with -kernel, or the machine the firmware handed over
      * (loader/uefi). The rest of the log is the same on both, which is the
      * point of the port: one kernel, two ways of starting it. */
-    kinfo("x86-64: the boot is %s", port_x86_64_boot_name());
+    kinfo("x86-64: the boot is %s, the image at 0x%x", port_x86_64_boot_name(),
+          (unsigned)g_port_x86_64_kernel_phys);
 
     /*
      * The cores that stopped before the scheduler may enter it now: the
