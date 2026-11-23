@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "kernel/blockdev.h"
 #include "kernel/config.h"
 #include "kernel/kmm.h"
 #include "kernel/kmod.h"
@@ -170,9 +171,55 @@ static int read_modules(char *buf, k_size_t size, k_u32_t pid)
     return n;
 }
 
+/*
+ * The block devices and the cache above them. A person who wonders where the
+ * writes of the last minute are, and whether a `sync` of the filesystem left
+ * anything behind, reads this: the boxes of the cache, the ones that hold a
+ * sector, and the ones the medium does not have yet. The dirty count is the
+ * number of sectors a machine that stops now would lose - the price of the
+ * write-back cache, and the reason the filesystems settle themselves when
+ * they close a file.
+ */
+static int read_blockdev(char *buf, k_size_t size, k_u32_t pid)
+{
+    k_size_t count = k_blockdev_count();
+    k_size_t i;
+    int n = 0;
+
+    K_UNUSED(pid);
+
+    n += snprintf(buf + n, size - (k_size_t)n,
+                  "device     bytes  sectors      cache  valid  dirty  mode\n");
+
+    for (i = 0; i < count && n > 0 && (k_size_t)n < size; i++) {
+        const struct k_blockdev *dev = k_blockdev_at(i);
+        struct k_blockdev_cache_stats stats;
+        const char *mode;
+
+        if (dev == NULL || k_blockdev_cache_stats(dev, &stats) != 0) {
+            continue;
+        }
+
+        if (!stats.present) {
+            mode = "none";
+        } else if (stats.write_back) {
+            mode = "write-back";
+        } else {
+            mode = "write-through";
+        }
+
+        n += snprintf(buf + n, size - (k_size_t)n, "%-10s %-6u %-12u %-6u %-6u %-6u %s\n",
+                      dev->name, (unsigned)dev->sector_size, (unsigned)dev->sectors,
+                      (unsigned)stats.capacity, (unsigned)stats.valid, (unsigned)stats.dirty, mode);
+    }
+
+    return n;
+}
+
 static const struct proc_file s_root_files[] = {
-    {"version", read_version}, {"uptime", read_uptime},   {"meminfo", read_meminfo},
-    {"tasks", read_tasks},     {"modules", read_modules}, {"kmsg", read_kmsg},
+    {"version", read_version},   {"uptime", read_uptime},   {"meminfo", read_meminfo},
+    {"tasks", read_tasks},       {"modules", read_modules}, {"kmsg", read_kmsg},
+    {"blockdev", read_blockdev},
 };
 
 static const k_size_t s_root_file_count = K_ARRAY_SIZE(s_root_files);
