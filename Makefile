@@ -483,9 +483,19 @@ X86_ISO_BUILD := build-x86-iso
 X86_ISO_IMAGE := $(X86_ISO_BUILD)/microos.iso
 X86_ISO_BOOTLOADER ?= auto
 
+# The root of the ISO is a module of the boot, and the loader refuses a
+# module that runs over the 16 MiB of KERNEL_PHYS where the kernel is copied:
+# a limine module starts low and a root image of 16 MiB reaches the mark, an
+# image of 8 MiB does not. The CD is read-only and the whole set of 65
+# objects fits in 8 MiB, so the medium carries the smaller one and the disk
+# of the machine keeps its 16.
+X86_ISO_ROOT := $(X86_ISO_BUILD)/root.img
+
 x86-iso: x86-disk build
+	python3 tools/x86_image.py --image $(X86_ISO_ROOT) --build $(X86_BUILD) \
+		--mkfs build-host/tools/microos_mkfs --size-mb 8
 	python3 tools/x86_iso.py --loader $(X86_BUILD)/loader32.elf \
-		--kernel $(X86_BUILD)/microos64.bin --root $(X86_PROGRAMS_IMAGE) \
+		--kernel $(X86_BUILD)/microos64.bin --root $(X86_ISO_ROOT) \
 		--out $(X86_ISO_IMAGE) --stage $(X86_ISO_BUILD)/iso \
 		--bootloader $(X86_ISO_BOOTLOADER)
 
