@@ -211,11 +211,10 @@ A library whose numbers are doubles (Lua) is built with the `FLOAT` option of
 the two functions instead: the port's loader sets `CR4.OSFXSR`,
 `CR4.OSXMMEXCPT` and `CR0.NE`, the runtime of the program is compiled with
 `-DULIBC_WITH_FLOAT`, and `src/math.c`, `src/stdlib.c` and `src/setjmp.c` are
-linked into that image alone. The scheduler saves none of the XMM or x87
-state, so a build of a program that computes in a double is safe only while
-it runs alone; since a program's `execve` replaces the caller and a program
-may start a child and go on, two such programs can now run at once and read
-each other's registers (`docs/debts.md`, K9).
+linked into that image alone. The scheduler saves the XMM and x87 state of a
+task at every switch (`docs/debts.md`, K9), so a program that computes in a
+double keeps its registers when another one runs beside it - a child of a
+`fork`, a program started by `execve`, or `xargs -P`.
 
 ### Lua: the second worked example
 
@@ -398,7 +397,7 @@ Three options of the toolchain matter:
 
 | Option | Effect |
 |---|---|
-| `-DMICROOS_FLOAT=ON` | the program's own numbers are doubles: no `-mgeneral-regs-only`, and the XMM and x87 units are the ones the port turns on for ring 3 (one such program at a time, `docs/debts.md`) |
+| `-DMICROOS_FLOAT=ON` | the program's own numbers are doubles: no `-mgeneral-regs-only`, and the XMM and x87 units are the ones the port turns on for ring 3 and saves at every switch (`docs/debts.md`, K9) |
 | `-DMICROOS_GC_SECTIONS=OFF` | keep every function of the archive the program named (the default drops what no call reaches) |
 | `-DMICROOS_WARNINGS=OFF` | the sources of somebody else answer the warnings of their release |
 
@@ -469,7 +468,7 @@ What the port took, and what a next command can copy:
   block of `KSYS_MAX_IO` (64 KiB). The tools are between 28 and 48 KiB with
   the library (`-Os`); a port that grows past the block is `E2BIG` at the
   boot and the build has to shrink it, not the contract.
-* **No floating point.** `-mgeneral-regs-only` is the rule of the guest, so
+* **No floating point.** `-mgeneral-regs-only` is the rule of these tools, so
   upstream `sort -n` (two `double`s) does not compile. The port layer
   (`third_party/sbase/port/numcmp.c`) compares the two numbers as decimals;
   `ls -h` has the same story in `port/humansize.c`. This is the third hunk of
@@ -606,9 +605,6 @@ of the host, `make x86-smoke` for the program and `/etc/sql-*.sql`,
 * **The board.** 8 KiB windows, no MMU, the kernel's address space; a
   program library for the board is a different problem (ADR 0018).
 * **A dynamic linker and shared objects.** Every image is static.
-* **Two programs with floating point at once.** The port saves no XMM or x87
-  state and `execve` waits, so a program with a point in its numbers runs
-  alone. A second one needs the save and the load of the state at the switch.
 * **An image larger than 8 MiB.** `sys_execve` reads it in pieces of
   `KSYS_MAX_IO` into one block of the allocator, and `K_EXEC_MAX_IMAGE` is the
   ceiling. A larger program needs the streaming of the image into the window.
@@ -616,7 +612,6 @@ of the host, `make x86-smoke` for the program and `/etc/sql-*.sql`,
   (`QUICK` of libmagic) takes the block path; the arena of the program is the
   ceiling and a library with a bigger database needs a smaller selection or a
   `brk` of the program.
-* **Floating point.** `-mgeneral-regs-only` is the rule of the port.
 * **A real `fork` of a library's child process.** It exists on x86-64: the
   child is a task with a copy-on-write image and returns 0 from the call, an
   `execve` of the child replaces that child, and `waitpid` (a pid or `-1`)

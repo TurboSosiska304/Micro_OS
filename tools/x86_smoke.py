@@ -317,6 +317,10 @@ COMMANDS = [
     # returns its status, a double fork, and an execve that replaces the child
     # itself instead of starting a second task.
     "exec /bin/procs",
+    # The state of the floating point unit at a switch (K9): a parent and two
+    # children compute in `double` at the same time, and each of them prints
+    # the numbers of the registers it kept across many quanta.
+    "exec /bin/fpu2",
     # A pipeline is not three stages any more. The line holds ten of them, and
     # the pipes are made one boundary at a time, so the descriptor table of
     # the shell holds two ends and not eighteen.
@@ -1653,6 +1657,8 @@ def check(output: str) -> list:
                 "fork",
                 "badptr",
                 "signals",
+                "procs",
+                "fpu2",
                 "nx",
                 "cat",
                 "echo",
@@ -2550,6 +2556,42 @@ def check(output: str) -> list:
         and "the program exited with 0" in procs
         and "the program has finished" in procs,
         procs,
+    )
+
+    # --- the floating point state of a task (K9)
+    #
+    # The parent and its two children keep a pair of doubles in the XMM
+    # registers across a loop of three million iterations each, and the
+    # scheduler switches between them many times in the middle of it. The
+    # arithmetic is exact (a multiplication by two and by one half), so the
+    # three lines are the values of three sets of registers: a kernel that
+    # saves the general registers and not the floating point unit lets the
+    # tasks read each other's numbers, and one of the lines is wrong.
+    fpu = answer("exec /bin/fpu2")
+    expect(
+        "the parent keeps its own registers across the switches",
+        "FPU: parent 1.000000000000 1.000000000000" in fpu,
+        fpu,
+    )
+    expect(
+        "the two children keep their own registers as well",
+        "FPU: child 3 3.000000000000 0.333333333333" in fpu
+        and "FPU: child 7 7.000000000000 0.142857142857" in fpu,
+        fpu,
+    )
+    # The third child dirties the unit and calls execve of this same image
+    # with `state`: a new image begins after fninit, so the control word is
+    # 037f and MXCSR is 1f80 whatever the old image left.
+    expect(
+        "a new image of execve starts with the clean state",
+        "FPU: state 037f 1f80" in fpu,
+        fpu,
+    )
+    expect(
+        "the children of the FPU test all finish",
+        "FPU: all children ended, 0 failure(s)" in fpu
+        and "the program exited with 0" in fpu,
+        fpu,
     )
 
     # --- a pipeline deeper than the table of three

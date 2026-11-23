@@ -132,7 +132,7 @@ never changed.
 ## `/bin` and the boot
 
 The x86-64 port mounts the MicroFS volume of its disk at `/` and finds
-`/bin` already there: the thirty-one images are files the tool wrote, with
+`/bin` already there: the thirty-five images are files the tool wrote, with
 the mode of a program (`0755`), and no boot creates one:
 
 | File | What it proves |
@@ -141,6 +141,7 @@ the mode of a program (`0755`), and no boot creates one:
 | `/bin/crash` | a fault of ring 3 is reported and the shell survives |
 | `/bin/fork` | `fork()` with copy on write: the child gets 0, the parent the pid |
 | `/bin/procs` | the POSIX pair of a program: a child computes and returns its status, a double fork, and an `execve` that replaces the child that called it |
+| `/bin/fpu2` | the floating point state of a task: three tasks compute in `double` at once and keep their own XMM and x87 registers, and an `execve` starts the new image after `fninit` |
 | `/bin/badptr` | a pointer outside the window is `EFAULT`, not a fault of ring 0 |
 | `/bin/signals` | a handler, `SIGTERM` ending a child, a wait cut by `SIGINT`, `SIG_IGN`, and the errors of `kill` |
 | `/bin/nx` | the protection of the pages: a fetch of its data, a write to its text and a call that hands its text to the kernel, each taken down, and a parent still alive |
@@ -572,9 +573,10 @@ plan to pretend otherwise.
   a descriptor, not a buffer. `float` and `double` are those of an image that
   asks for them (`ULIBC_WITH_FLOAT`, the port of Lua): it is built without
   `-mgeneral-regs-only`, links `math.c`, `setjmp.c` and `format_float.c`. The
-  scheduler saves no XMM or x87 state, so two of them may not compute at once:
-  a program started with `fork` + `execve` runs beside its parent, and `-P`
-  of xargs multiplies that (`docs/debts.md`, K9).
+  scheduler saves and loads the XMM and x87 state at every switch, so a
+  program started with `fork` + `execve` keeps its own registers beside its
+  parent, and `-P` of xargs may run several of them at once (`docs/debts.md`,
+  K9; `/bin/fpu2` is the gate of the smoke test).
 * **No image larger than 8 MiB.** `execve` reads the file in pieces of
   `KSYS_MAX_IO` (64 KiB) into one block of the allocator, up to
   `K_EXEC_MAX_IMAGE` (8 MiB); a larger file is `E2BIG` before a byte of it is

@@ -27,6 +27,7 @@
 #include "kernel/sched.h"
 #include "port_x86_64_console.h"
 #include "port_x86_64_screen.h"
+#include "port_x86_64_task.h"
 
 /* --- the machine --- */
 
@@ -1581,6 +1582,15 @@ void port_x86_64_init(k_u64_t multiboot_info)
     port_x86_64_cpus_init();
     heap_init(multiboot_info);
     port_x86_64_paging_init();
+
+    /*
+     * The clean state of the floating point unit, captured while nothing of
+     * the kernel holds a number in a register: every context that has not
+     * run starts from these bytes and the scheduler saves and loads the
+     * state of a task with them (docs/debts.md, K9). Before the APs, which
+     * copy the same image into their own boot context.
+     */
+    port_x86_64_fpu_init();
 
     /*
      * The screen comes after the page tables: the framebuffer of the VGA sits

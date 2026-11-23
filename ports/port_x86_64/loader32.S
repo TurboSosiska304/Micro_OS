@@ -223,14 +223,16 @@ _start:
 
     /* PAE, LME, then paging: the order the processor requires. The two other
        bits are the floating point of a program: OSFXSR lets ring 3 execute
-       the SSE instructions and OSXMMEXCPT makes an SSE fault an exception of
-       the machine. The x87 unit needs no bit of CR4; CR0.NE below reports its
-       errors as an exception and not as an external interrupt line.
+       the SSE instructions and FXSAVE/FXRSTOR work at all, and OSXMMEXCPT
+       makes an SSE fault an exception of the machine. The x87 unit needs no
+       bit of CR4; CR0.NE below reports its errors as an exception and not as
+       an external interrupt line.
 
        The kernel itself is built with -mgeneral-regs-only and touches
-       neither unit; the scheduler saves neither, so a program that uses them
-       runs one at a time (execve waits for it) - the rule of the port, see
-       docs/debts.md. */
+       neither unit; the scheduler saves the state of a task with FXSAVE and
+       loads it with FXRSTOR (src/port_x86_64_task.c), so two programs may
+       compute in floating point at once. The application processors get the
+       same bits in ap_trampoline.S. */
     movl %cr4, %eax
     orl $0x620, %eax
     movl %eax, %cr4

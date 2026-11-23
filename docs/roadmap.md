@@ -261,8 +261,9 @@ written when the project was an operating system for one board; the numbers
 > the pilot: the machine of QEMU starts both processors, runs tasks on each of
 > them, passes `make x86-smp-smoke` (34 checks) and the 600-second
 > `make soak-smp` session. `KERNEL_SMP` stays off by default. The open rows
-> are the I/O APIC, the remote wake, the FPU state, the stack guard page and
-> the board; they are the K8 rows of [debts.md](debts.md).
+> are the I/O APIC, the remote wake, the stack guard page and the board; they
+> are the K8 rows of [debts.md](debts.md). The floating point state of a task
+> is saved and loaded at every switch since K9 (below).
 
 * [x] A `struct k_cpu` per core and a run queue per core; the scheduler never
       runs one task on two cores (ADR 0012) - `kernel/cpu.h`,
@@ -280,8 +281,8 @@ written when the project was an operating system for one board; the numbers
       big kernel lock for the whole call
 * [ ] x86-64: the I/O APIC (the timer and the keyboard off the 8259, the
       MADT overrides, the LAPIC EOI), the wake IPI of the scheduler and a
-      cross-core priority preemption, the FPU/SSE state at a switch, a guard
-      page under a task stack - the K8 rows of [debts.md](debts.md)
+      cross-core priority preemption, a guard page under a task stack - the
+      K8 rows of [debts.md](debts.md)
 * [ ] The allocator, the VFS, the console and the block layer under an
       aggressive migration: they are sleeping locks and the two-core session
       runs the full load for ten minutes, but no test migrates a task in the
@@ -348,6 +349,14 @@ written when the project was an operating system for one board; the numbers
       `double`. The host test is `tests/cases/test_lua.c`; `make x86-smoke`
       runs the interpreter, and `make x86-disk-smoke` runs it out of the
       volume in both boots
+* [x] The floating point state of a task: the port saves and loads the XMM
+      and x87 image of a context at every switch (`fxsave64`/`fxrstor64` in
+      `ports/port_x86_64/src/port_x86_64_task.c`), a fork copies the live
+      state of the parent, an `execve` resets the unit after `fninit`, and
+      the trampoline of an AP sets the bits of CR4 and CR0 the core needs.
+      `/bin/fpu2` is the gate: three tasks with a `double` at once keep their
+      own registers, a fourth dirties the unit and `execve`s the clean one,
+      and `make x86-smoke` and `make x86-smp-smoke` read every line
 * [x] The image of a program larger than `KSYS_MAX_IO`: `execve` reads an
       image of up to 8 MiB (`K_EXEC_MAX_IMAGE`) in pieces of the transfer
       edge into one block of the allocator, and a larger file is `E2BIG`
@@ -382,9 +391,8 @@ written when the project was an operating system for one board; the numbers
       the image and out of the volume after a reset
 * [ ] The gaps of the next port: a `malloc` larger than the bss of an image
       (`brk`/`mmap` of a program), a `poll` for a library that waits on a
-      pipe, an `fxsave` of the XMM state for two programs with a point in
-      their numbers, and the package that ships `zcat`, `lua` and the tools
-      of sbase with their licenses beside them (`docs/debts.md`)
+      pipe, and the package that ships `zcat`, `lua` and the tools of sbase
+      with their licenses beside them (`docs/debts.md`)
 * [x] The seventh port, a library with an operating system of its own:
       SQLite 3.54.1 with `SQLITE_OS_OTHER=1` and the VFS of the port on the
       calls of the system (`third_party/sqlite/port/sqlite_vfs.c`), and

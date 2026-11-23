@@ -41,6 +41,21 @@
 #include "port_x86_64.h"
 
 /*
+ * The image of the floating point state (FXSAVE): the x87 unit, the sixteen
+ * XMM registers and MXCSR, 512 bytes, and the processor wants the area on a
+ * 16-byte boundary. The allocator of the port hands out payloads aligned for
+ * its own bookkeeping and not for FXSAVE, so the member carries 15 bytes of
+ * slack and fpu_area() rounds the address inside it up. The state lives with
+ * the port and not in struct task: the kernel's record is shared by every
+ * port, and the board has a hundred kilobytes of SRAM while this is 527
+ * bytes of the 32 KiB stack block that a context of the x86-64 machine
+ * already owns (about 17 KiB over the full table of thirty-two tasks, no
+ * new allocation, and nothing at all on the board).
+ */
+#define PORT_FPU_AREA 512u
+#define PORT_FPU_ALIGN 16u
+
+/*
  * One execution context. It lives at the bottom of the stack it describes:
  * a task is one allocation, and the context goes away together with its
  * stack when the task is released.
@@ -55,6 +70,12 @@ struct port_task {
     k_u64_t cr3;       /* the page tables of the task; the kernel's by default */
     bool is_user;      /* a program of ring 3 runs on this context */
     bool exiting;      /* k_port_task_exit has begun on this context */
+    /*
+     * The x87 and XMM state of the context, saved when it leaves the CPU and
+     * loaded when it comes back (see commit_switch()). The extra bytes are
+     * the alignment: fpu_area() finds the 512 bytes inside them.
+     */
+    k_u8_t fpu[PORT_FPU_AREA + PORT_FPU_ALIGN];
 };
 
 /*
@@ -161,6 +182,71 @@ static struct port_task *port_task_of(const struct task *t)
     return (struct port_task *)t->ctx;
 }
 
+/* --- the floating point state of a context --- */
+
+/*
+ * The state a processor has after fninit, captured once by the boot and
+ * copied into every context that has not run yet. The XMM registers and MXCSR
+ * are not part of fninit: MXCSR starts at 0x1F80, with every exception
+ * masked and the rounding to nearest, which is the state a C program expects
+ * and a zeroed area would not give it (an unmasked exception would take a
+ * program down at the first division by zero).
+ *
+ * The area is written by fxsave64 and read by fxrstor64, so the pointers of
+ * the x87 instruction are kept whole and not cut at 32 bits.
+ */
+static k_u8_t g_fpu_clean[PORT_FPU_AREA] __attribute__((aligned(PORT_FPU_ALIGN)));
+static bool g_fpu_ready;
+
+static k_u8_t *fpu_area(struct port_task *pt)
+{
+    uintptr_t address = (uintptr_t)pt->fpu;
+
+    return (k_u8_t *)((address + (PORT_FPU_ALIGN - 1u)) & ~(uintptr_t)(PORT_FPU_ALIGN - 1u));
+}
+
+/* Save the live unit into the image of this context. */
+static void fpu_save(struct port_task *pt)
+{
+    __asm__ volatile("fxsave64 (%0)" : : "r"(fpu_area(pt)) : "memory");
+}
+
+/* Put the image of this context into the live unit. */
+static void fpu_load(struct port_task *pt)
+{
+    __asm__ volatile("fxrstor64 (%0)" : : "r"(fpu_area(pt)) : "memory");
+}
+
+/* Give a context the state of a processor that has just executed fninit. */
+static void fpu_reset(struct port_task *pt)
+{
+    memcpy(fpu_area(pt), g_fpu_clean, PORT_FPU_AREA);
+}
+
+/*
+ * Capture the state of the clean unit. Called by the boot before the first
+ * task exists, when nothing of the kernel holds a number in a register; the
+ * APs read the same bytes and never run the instructions themselves.
+ */
+void port_x86_64_fpu_init(void)
+{
+    k_u32_t mxcsr = 0x1F80u;
+
+    if (g_fpu_ready) {
+        return;
+    }
+
+    __asm__ volatile("fninit" : : : "memory");
+    __asm__ volatile("ldmxcsr %0" : : "m"(mxcsr) : "memory");
+    __asm__ volatile("fxsave64 (%0)" : : "r"(g_fpu_clean) : "memory");
+
+    g_fpu_ready = true;
+
+    /* The context of the core 0 is the boot: it has no task and is not made
+     * by task_context_new(), but it is still a context of the switch. */
+    fpu_reset(&g_ports[0].boot);
+}
+
 /*
  * Release the stack of a task that exited. It cannot be done by the task
  * itself: the block holds the stack it is running on, and the switch that
@@ -261,6 +347,21 @@ static void commit_switch(struct port_task *prev, struct port_task *next)
     if (next->is_user) {
         port_x86_64_tss_set_rsp0(next->stack_top);
     }
+
+    /*
+     * The floating point state travels with the context, the way the general
+     * registers and CR3 do. The kernel is built with -mgeneral-regs-only and
+     * touches neither the x87 unit nor the XMM registers, so the live state
+     * here is the one of the context that gives up the CPU: it is saved into
+     * its image before the other one is loaded, and a program that computes
+     * in a double keeps its numbers across every switch. The save is done
+     * unconditionally - about a hundred cycles on a machine whose tick is a
+     * millisecond and whose quantum is ten - because a lazy state (CR0.TS and
+     * the #NM handler) would add a trap and a second path of the scheduler
+     * for a cost nobody can see (docs/debts.md, K9).
+     */
+    fpu_save(prev);
+    fpu_load(next);
 
     port_x86_64_switch(&prev->rsp, next->rsp);
 }
@@ -395,6 +496,9 @@ static struct port_task *task_context_new(struct task *t, k_u8_t **block, k_u64_
     pt->cr3 = port_x86_64_kernel_cr3();
     pt->is_user = false;
 
+    /* A context that has never run starts with the unit after fninit. */
+    fpu_reset(pt);
+
     if (task_tls_size() != 0) {
         pt->tls = (k_u8_t *)k_port_alloc(task_tls_size(), false);
 
@@ -484,6 +588,14 @@ int port_x86_64_task_fork_create(struct task *child, k_u64_t cr3, const void *fr
         return -1;
     }
 
+    /*
+     * The child of a fork inherits the floating point state of its parent
+     * (POSIX): the live unit is the parent's current state, not the image
+     * that its last switch left in the area. The child is a copy of the
+     * parent at this instruction, numbers included.
+     */
+    fpu_save(pt);
+
     frame_rsp = top - frame_size;
     memcpy((void *)(uintptr_t)frame_rsp, frame, frame_size);
     *(k_u64_t *)(uintptr_t)(frame_rsp + PORT_SYSCALL_FRAME_RAX) = 0;
@@ -543,6 +655,27 @@ void port_x86_64_task_set_space(k_u64_t cr3)
     /* The kernel is part of the new map, so the switch is safe here and the
      * iretq that follows sees the pages of the program. */
     port_x86_64_paging_switch(cr3);
+}
+
+/*
+ * A new image begins with the state of a processor that has just executed
+ * fninit: the numbers of the program that called execve do not survive the
+ * replacement, as POSIX leaves them, and the area is reset as well so that a
+ * switch before the iretq cannot bring them back. Called by port_exec.c on
+ * the task that is being replaced.
+ */
+void port_x86_64_task_fpu_reset(void)
+{
+    struct port_task *current = this_cpu()->current;
+
+    if (current == NULL) {
+        /* The boot has no context to keep the image in: load the unit. */
+        __asm__ volatile("fxrstor64 (%0)" : : "r"(g_fpu_clean) : "memory");
+        return;
+    }
+
+    fpu_reset(current);
+    fpu_load(current);
 }
 
 void k_port_task_start(struct task *t)
@@ -926,6 +1059,7 @@ void port_x86_64_ap_sched_init(k_u32_t cpu, k_u64_t stack_top)
     self->boot.stack_top = stack_top;
     self->boot.cr3 = port_x86_64_kernel_cr3();
     self->boot.is_user = false;
+    fpu_reset(&self->boot);
     self->current = NULL;
     self->pending_free = NULL;
     self->pending_space = 0;

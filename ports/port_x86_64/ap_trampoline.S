@@ -85,9 +85,13 @@ ap_pm32:
     movw %ax, %fs
     movw %ax, %gs
 
-    /* PAE is the shape of the tables the kernel keeps. */
+    /* PAE is the shape of the tables the kernel keeps. OSFXSR and
+       OSXMMEXCPT are the floating point of a program: without them the SSE
+       instructions of ring 3 are an invalid opcode and FXSAVE itself faults,
+       so the state of a task could not be saved on this core at all. The
+       processor of the boot gets the same two bits in loader32.S. */
     movl %cr4, %eax
-    orl $0x00000020, %eax /* CR4.PAE */
+    orl $0x00000620, %eax /* CR4.PAE | CR4.OSFXSR | CR4.OSXMMEXCPT */
     movl %eax, %cr4
 
     /*
@@ -105,7 +109,9 @@ ap_pm32:
     movl %eax, %cr3
 
     movl %cr0, %eax
-    orl $0x80000001, %eax /* CR0.PG | CR0.PE */
+    /* CR0.PG | CR0.PE | CR0.NE: the numeric error of the x87 unit is an
+       exception of the machine on this core too, as it is on the core 0. */
+    orl $0x80000021, %eax
     movl %eax, %cr0
 
     /* The far jump loads CS with L=1 and the processor is in long mode. */
