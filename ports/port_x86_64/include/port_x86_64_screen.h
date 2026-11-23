@@ -32,14 +32,24 @@
  */
 #define PORT_X86_64_SCREEN_VIRT (PORT_X86_64_KERNEL_BASE + 0x20000000ull)
 
+/* The 2 MiB of one page of the map: a window of a device is mapped in whole
+ * pages of that size and the offset of the frame inside its first one is
+ * added back to the virtual address (ADR 0007). */
+#define PORT_X86_64_SCREEN_PAGE 0x200000ull
+
 /* The mode as the machine answered it: where the picture is, and its shape. */
 struct port_x86_64_screen_mode {
-    k_u32_t phys;   /* the window of the framebuffer, from the BAR of the VGA */
-    k_u32_t bytes;  /* the picture as the mode left it */
-    k_u16_t width;  /* pixels of a line */
-    k_u16_t height; /* lines */
-    k_u16_t pitch;  /* bytes of a line */
-    k_u8_t bpp;     /* bits of a pixel, 16 in the mode of ADR 0023 */
+    k_u64_t phys;     /* the window of the framebuffer: a BAR of the VGA, or the
+                       * FrameBufferBase of the graphics output of a firmware */
+    k_u32_t bytes;    /* the picture as the mode left it */
+    k_u16_t width;    /* pixels of a line */
+    k_u16_t height;   /* lines */
+    k_u32_t pitch;    /* bytes of a line */
+    k_u8_t bpp;       /* bits of a pixel, 16 or 32 */
+    k_u8_t format;    /* PORT_X86_64_PIXEL_*, the format of a pixel */
+    k_u32_t mask_red; /* the masks of PORT_X86_64_PIXEL_MASK16/32 */
+    k_u32_t mask_green;
+    k_u32_t mask_blue;
 };
 
 /*
@@ -53,6 +63,32 @@ struct port_x86_64_screen_mode {
  * this call has to say so rather than expect the old mode back.
  */
 bool port_x86_64_vbe_mode(struct port_x86_64_screen_mode *mode);
+
+/*
+ * The picture a firmware of UEFI programmed, when the boot was that one: the
+ * mode the loader chose (EFI_GRAPHICS_OUTPUT_PROTOCOL, loader/uefi), its
+ * frame mapped uncached in the top 2 GiB, and - for a frame that is not
+ * already RGB565, which is the format the console of the kernel draws in -
+ * a shadow of the picture in that format and the conversion of the cells that
+ * changed into the frame of the firmware (src/gop.c). NULL when the boot was
+ * the BIOS path, when the firmware gave no picture, or when the frame could
+ * not be mapped; the caller then asks the VBE interface and falls back to the
+ * text mode, exactly as it did before a UEFI machine existed.
+ *
+ * The screen answers with the grid of cells the console counts in and its
+ * own name, which says the size, the format and the cells of the picture.
+ */
+const struct port_x86_64_screen *port_x86_64_gop_screen(void);
+
+/*
+ * The rectangle of a frame that a caller outside the console has changed:
+ * `/dev/fb0` is a picture of a program, and the port draws it through the
+ * same shadow (src/fb.c) as the console, so the bytes arrive at the glass
+ * through the conversion of a rectangle of pixels. The port's own device
+ * (src/fbdev.c) calls it after a blit; a screen that is not a firmware's
+ * frame does nothing.
+ */
+void port_x86_64_gop_present(const struct fb_rect *rect);
 
 /*
  * The screen of the framebuffer: the renderer of ADR 0023 (kernel/render.h,

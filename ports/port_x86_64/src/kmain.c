@@ -366,14 +366,14 @@ static void init_task(void *arg)
     }
 }
 
-void kmain(k_u64_t multiboot_info)
+void kmain(k_u64_t boot_info, k_u64_t boot_magic)
 {
     struct kernel_boot_config cfg;
     const char *root_type = NULL;
     int mounted;
     int defaults;
 
-    port_x86_64_init(multiboot_info);
+    port_x86_64_init(boot_info, boot_magic);
 
     memset(&cfg, 0, sizeof(cfg));
     cfg.board = g_board.name;
@@ -381,6 +381,12 @@ void kmain(k_u64_t multiboot_info)
     cfg.board_info = &g_board;
 
     kernel_boot(&cfg);
+
+    /* Which of the two boots of this port it is: the multiboot image that
+     * QEMU loads with -kernel, or the machine the firmware handed over
+     * (loader/uefi). The rest of the log is the same on both, which is the
+     * point of the port: one kernel, two ways of starting it. */
+    kinfo("x86-64: the boot is %s", port_x86_64_boot_name());
 
     /*
      * The cores that stopped before the scheduler may enter it now: the

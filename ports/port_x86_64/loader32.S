@@ -271,8 +271,12 @@ long_mode:
     movw %ax, %gs
 
     /* The boot information is a physical address below 1 GiB and the kernel
-       reads it through the identity map; the entry itself is at the top. */
+       reads it through the identity map; the entry itself is at the top. The
+       second argument of the entry is the magic of the hand-off of a UEFI
+       machine (loader/uefi): this loader has none, and the port reads the
+       zero as "the multiboot information of the BIOS path". */
     movl mbi_ptr(%rip), %edi
+    xorl %esi, %esi
     movabs $KERNEL_BASE, %rax
     jmp *%rax
 

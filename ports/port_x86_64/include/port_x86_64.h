@@ -17,6 +17,8 @@
 
 #include "kernel/types.h"
 
+#include "port_x86_64_boot.h"
+
 /* --- the I/O ports of the PC --------------------------------------------- */
 
 static inline void port_outb(k_u16_t port, k_u8_t value)
@@ -350,6 +352,15 @@ k_u64_t port_x86_64_kernel_cr3(void);
 k_u32_t port_x86_64_paging_map_device(k_u64_t vaddr, k_u64_t paddr, k_size_t len);
 
 /*
+ * The same window for a device that is not the memory of the machine: the
+ * pages are uncached (PCD and PWT). The screen of the framebuffer of a
+ * firmware (src/gop.c) is the user of this one, because the frame of a
+ * graphics card is behind a bus and a line of the cache of the processor in
+ * front of it holds a picture the card never shows.
+ */
+k_u32_t port_x86_64_paging_map_mmio(k_u64_t vaddr, k_u64_t paddr, k_size_t len);
+
+/*
  * The page tables of one task. A space is a PML4 and the tables under it; the
  * handle is its physical address, which is also the value that goes into CR3.
  * Create builds the kernel map with the user window; clone copies the tables
@@ -641,14 +652,24 @@ bool port_x86_64_timer_off(k_u32_t cpu);
 #define PORT_X86_64_KERNEL_PHYS 0x01000000ull
 
 /*
- * The physical address behind a pointer into the image of the kernel: the
+ * Where the loader put the bytes of this boot. The BIOS loader copies the
+ * image to KERNEL_PHYS, and the loader of a UEFI machine asks the firmware
+ * for a block of the memory the firmware itself chose: 16 MiB is its first
+ * choice and not a promise, so the address is a variable of the port that the
+ * boot sets before anything else (port_x86_64_init) and every translation of
+ * this file reads. The two directions of the map are still one shift: the
+ * image at the top and the identity map of the memory below it.
+ */
+extern k_u64_t g_port_x86_64_kernel_phys;
+
+/* The physical address behind a pointer into the image of the kernel: the
  * page tables, the GDT, the TSS and the stacks are linked high, and a page
  * table entry has to name the frame, not the link address. Only for the
  * image: a pointer of the heap is a low address that is already physical.
  */
 static inline k_u64_t port_x86_64_kernel_phys(const void *ptr)
 {
-    return (k_u64_t)(uintptr_t)ptr - PORT_X86_64_KERNEL_BASE + PORT_X86_64_KERNEL_PHYS;
+    return (k_u64_t)(uintptr_t)ptr - PORT_X86_64_KERNEL_BASE + g_port_x86_64_kernel_phys;
 }
 
 /*
@@ -705,11 +726,25 @@ struct port_x86_64_info {
 };
 
 /*
- * Bring up the machine: COM1, the clock, the heap. The address of the
- * multiboot information comes from the loader; every part of the init is
+ * Bring up the machine: COM1, the clock, the heap. The two numbers come from
+ * the loader: `boot_info` is the multiboot information of the BIOS path or
+ * the boot structure of a UEFI machine, and `boot_magic` says which of the
+ * two - PORT_X86_64_BOOT_MAGIC for the second, zero (the loader of the BIOS
+ * path leaves the register zero) for the first. Every part of the init is
  * also lazy, so a call of the contract before this one still works.
  */
-void port_x86_64_init(k_u64_t multiboot_info);
+void port_x86_64_init(k_u64_t boot_info, k_u64_t boot_magic);
+
+/*
+ * What the boot handed the port when it was a UEFI machine: the picture, the
+ * root of the ACPI tables, the address of the image. NULL on the BIOS path,
+ * and the callers that need one of the three - src/gop.c for the screen,
+ * src/cpu.c for the tables - ask and keep their own answer when it is NULL.
+ */
+const struct port_x86_64_boot_info *port_x86_64_boot(void);
+
+/* The name of the boot of this machine: "multiboot" or "uefi". */
+const char *port_x86_64_boot_name(void);
 
 /* The numbers above, valid after port_x86_64_init(). */
 const struct port_x86_64_info *port_x86_64_info(void);

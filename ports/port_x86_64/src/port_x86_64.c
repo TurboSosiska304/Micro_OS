@@ -1064,6 +1064,19 @@ struct mb_mmap_entry {
  */
 static const struct mb_info *g_boot_info;
 
+/*
+ * Where the loader put the image. The BIOS loader copies the bytes to
+ * PORT_X86_64_KERNEL_PHYS and the loader of a UEFI machine asks the firmware
+ * for a block and says where it is; the page tables translate a pointer of
+ * the image with the number this variable holds
+ * (port_x86_64_kernel_phys), so it is set before the first table is built.
+ */
+k_u64_t g_port_x86_64_kernel_phys = PORT_X86_64_KERNEL_PHYS;
+
+/* The boot of a UEFI machine, NULL on the BIOS path: the picture, the root of
+ * the ACPI tables and the address of the image (port_x86_64_boot.h). */
+static const struct port_x86_64_boot_info *g_uefi_boot;
+
 /* The last byte of the modules of the boot, 0 when the boot had none. The
  * loader copied the kernel out of one of them and the volume of the ISO is
  * read from another, so the heap has to start above both. */
@@ -1754,9 +1767,37 @@ static int software_clock_set(k_u64_t unix_seconds)
     return 0;
 }
 
-void port_x86_64_init(k_u64_t multiboot_info)
+void port_x86_64_init(k_u64_t boot_info, k_u64_t boot_magic)
 {
-    const struct mb_info *info = (const struct mb_info *)(uintptr_t)multiboot_info;
+    const struct mb_info *info;
+
+    /*
+     * The two boots of the port are told apart by the second number the entry
+     * was given: the loader of the BIOS path leaves it zero and hands the
+     * multiboot information, and the loader of a UEFI machine puts the magic
+     * of the structure of port_x86_64_boot.h there. The multiboot information
+     * travels inside that structure, so the heap, the modules and the map of
+     * the memory are read by the same code on both machines.
+     */
+    if (boot_magic == PORT_X86_64_BOOT_MAGIC && boot_info != 0u) {
+        g_uefi_boot = (const struct port_x86_64_boot_info *)(uintptr_t)boot_info;
+
+        if (g_uefi_boot->version != PORT_X86_64_BOOT_VERSION) {
+            /* A structure of a loader of another release: the port reads the
+             * part of it the two versions share and says so. */
+            kerror("x86-64: the boot is version %u of the hand-off, the port reads %u",
+                   (unsigned)g_uefi_boot->version, (unsigned)PORT_X86_64_BOOT_VERSION);
+        }
+
+        if (g_uefi_boot->kernel_phys >= 0x100000ull) {
+            g_port_x86_64_kernel_phys = g_uefi_boot->kernel_phys;
+        }
+
+        info = (const struct mb_info *)(uintptr_t)g_uefi_boot->mb_info;
+    } else {
+        g_uefi_boot = NULL;
+        info = (const struct mb_info *)(uintptr_t)boot_info;
+    }
 
     /* The questions of the drivers about the modules of the boot are asked
      * later; the structure itself stays where the loader left it. */
@@ -1774,7 +1815,7 @@ void port_x86_64_init(k_u64_t multiboot_info)
     clock_measure();
     k_clock_register(software_clock_set);
     port_x86_64_cpus_init();
-    heap_init(multiboot_info);
+    heap_init((k_u64_t)(uintptr_t)info);
     port_x86_64_paging_init();
 
     /*
@@ -1796,7 +1837,11 @@ void port_x86_64_init(k_u64_t multiboot_info)
 
     g_info.cpu_hz = g_tsc_per_second;
     g_info.usable_bytes = 0;
-    g_info.boot_version = info != NULL ? 1u : 0u;
+    /* 1 is the multiboot 1 information of the BIOS path, and 2 says that the
+     * numbers of the boot came from the firmware through the hand-off of a
+     * UEFI machine (the `boot_version` of the contract is what a reader of
+     * this port's log calls "the version of the boot"). */
+    g_info.boot_version = info != NULL ? (g_uefi_boot != NULL ? 2u : 1u) : 0u;
     g_info.cpu_available = port_x86_64_cpu_available();
     g_info.cpu_started = port_x86_64_cpu_started();
     g_info.apic_base = port_x86_64_apic_base();
@@ -1855,6 +1900,16 @@ void port_x86_64_init(k_u64_t multiboot_info)
 const struct port_x86_64_info *port_x86_64_info(void)
 {
     return &g_info;
+}
+
+const struct port_x86_64_boot_info *port_x86_64_boot(void)
+{
+    return g_uefi_boot;
+}
+
+const char *port_x86_64_boot_name(void)
+{
+    return g_uefi_boot != NULL ? "uefi" : "multiboot";
 }
 
 void port_x86_64_panic(const char *text)

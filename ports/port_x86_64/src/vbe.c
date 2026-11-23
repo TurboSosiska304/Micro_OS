@@ -118,6 +118,7 @@ bool port_x86_64_vbe_mode(struct port_x86_64_screen_mode *mode)
     k_u16_t id;
     k_u16_t memory_64k;
     k_u32_t bytes;
+    k_u32_t phys = 0;
 
     if (mode == NULL) {
         return false;
@@ -135,9 +136,11 @@ bool port_x86_64_vbe_mode(struct port_x86_64_screen_mode *mode)
      */
     if (!vbe_window(PORT_X86_64_SCREEN_WIDTH * (PORT_X86_64_SCREEN_BPP / 8u) *
                         PORT_X86_64_SCREEN_HEIGHT,
-                    &mode->phys)) {
+                    &phys)) {
         return false;
     }
+
+    mode->phys = phys;
 
     /*
      * The mode is written with the interface off and then turned on: the
@@ -168,6 +171,13 @@ bool port_x86_64_vbe_mode(struct port_x86_64_screen_mode *mode)
     mode->width = vbe_read(VBE_REG_XRES);
     mode->height = vbe_read(VBE_REG_YRES);
     mode->bpp = (k_u8_t)vbe_read(VBE_REG_BPP);
+    /* The interface of the card has one format of sixteen bits, and it is the
+     * one the console of the kernel draws in: 5 red, 6 green, 5 blue, with no
+     * mask of its own (PORT_X86_64_PIXEL_RGB565). */
+    mode->format = PORT_X86_64_PIXEL_RGB565;
+    mode->mask_red = 0xF800u;
+    mode->mask_green = 0x07E0u;
+    mode->mask_blue = 0x001Fu;
 
     /* A mode the interface took is the mode it reads back: a card that says
      * 640x480 after 1280x800 is not the picture this port promised. */
@@ -176,7 +186,7 @@ bool port_x86_64_vbe_mode(struct port_x86_64_screen_mode *mode)
         return false;
     }
 
-    mode->pitch = (k_u16_t)(mode->width * (mode->bpp / 8u));
+    mode->pitch = (k_u32_t)(mode->width * (mode->bpp / 8u));
     bytes = (k_u32_t)mode->pitch * mode->height;
 
     /* The memory the interface says it has: a mode that does not fit would
