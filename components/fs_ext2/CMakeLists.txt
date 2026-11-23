@@ -1,13 +1,15 @@
-# Micro OS — ext2, read-only.
+# Micro OS — ext2, read and written.
 #
-# The reader is off by default on the board and on x86-64: no image mounts
-# an ext2 volume at the boot, and a reader that no call asks for is an
-# object file of no use. The host build compiles and links it always, so
+# The filesystem is off by default on the board and on x86-64: no image
+# mounts an ext2 volume at the boot, and a reader that no call asks for is
+# an object file of no use. The host build compiles and links it always, so
 # the tests are the place where every path of it is exercised (ADR 0019).
 
 set(MICRO_OS_EXT2_SRCS
     "src/ext2_core.c"
     "src/ext2_dir.c"
+    "src/ext2_write.c"
+    "src/ext2_check.c"
     "src/ext2_vfs.c"
 )
 

@@ -19,6 +19,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include "fs_ext2/ext2.h"
 #include "kernel/blockdev.h"
@@ -718,14 +720,223 @@ static void test_errors(void)
     teardown();
 }
 
-static void test_read_only(void)
+/*
+ * --- the image of mke2fs and the tools of the world ---
+ *
+ * The write path is believed only against the tools of the format: a
+ * volume is made by mke2fs on the host, the kernel mounts it, writes it and
+ * leaves it, and e2fsck -fn reads the bytes the kernel left. The reverse -
+ * an image of mke2fs is read after the writes of a program of the world -
+ * is the same check, because e2fsck and debugfs read the same image the
+ * kernel did.
+ */
+#define HOST_IMAGE_BLOCKS 2048u
+#define HOST_BLOCK_SIZE 1024u
+#define HOST_DIR_TEMPLATE "/tmp/microos-ext2-XXXXXX"
+
+static int host_command(const char *command)
+{
+    int status = system(command);
+
+    if (status == -1) {
+        return -1;
+    }
+
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+static bool host_tool(const char *name)
+{
+    char command[128];
+
+    (void)snprintf(command, sizeof(command), "command -v %s >/dev/null 2>&1", name);
+
+    return host_command(command) == 0;
+}
+
+static int host_capture(const char *command, char *out, size_t cap)
+{
+    FILE *pipe = popen(command, "r");
+    size_t used = 0;
+    int status;
+
+    if (pipe == NULL) {
+        return -1;
+    }
+
+    if (cap > 1) {
+        used = fread(out, 1, cap - 1, pipe);
+    }
+
+    out[used] = '\0';
+
+    status = pclose(pipe);
+
+    if (status == -1) {
+        return -1;
+    }
+
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+/* Take an image of mke2fs into the memory of the test. */
+static bool image_load_file(const char *path)
+{
+    FILE *file = fopen(path, "rb");
+    long size;
+    size_t got;
+
+    if (file == NULL) {
+        return false;
+    }
+
+    if (fseek(file, 0, SEEK_END) != 0) {
+        fclose(file);
+        return false;
+    }
+
+    size = ftell(file);
+
+    if (size <= 0 || (size % (long)TEST_DEV_SECTOR) != 0) {
+        fclose(file);
+        return false;
+    }
+
+    rewind(file);
+
+    image_free();
+    g_image.data = (k_u8_t *)malloc((size_t)size);
+
+    if (g_image.data == NULL) {
+        fclose(file);
+        return false;
+    }
+
+    got = fread(g_image.data, 1, (size_t)size, file);
+    fclose(file);
+
+    if (got != (size_t)size) {
+        image_free();
+        return false;
+    }
+
+    g_ext2_device.data = g_image.data;
+    g_ext2_device.sectors = (k_u32_t)((size_t)size / TEST_DEV_SECTOR);
+    g_ext2_blockdev.sectors = g_ext2_device.sectors;
+
+    return true;
+}
+
+static bool image_store_file(const char *path)
+{
+    FILE *file = fopen(path, "wb");
+    size_t size = (size_t)g_ext2_device.sectors * TEST_DEV_SECTOR;
+    bool ok;
+
+    if (file == NULL) {
+        return false;
+    }
+
+    ok = fwrite(g_image.data, 1, size, file) == size;
+    ok = (fclose(file) == 0) && ok;
+
+    return ok;
+}
+
+static bool host_mkfs(char *dir, char *image, size_t cap, k_u32_t blocks, k_u32_t block_size,
+                      k_u32_t group_blocks, k_u32_t inodes)
+{
+    char command[512];
+
+    (void)snprintf(dir, cap, "%s", HOST_DIR_TEMPLATE);
+
+    if (mkdtemp(dir) == NULL) {
+        return false;
+    }
+
+    (void)snprintf(image, cap, "%s/fs.img", dir);
+
+    (void)snprintf(command, sizeof(command),
+                   "mke2fs -q -F -t ext2 -b %u -I 256 -g %u -N %u '%s' %u", (unsigned)block_size,
+                   (unsigned)group_blocks, (unsigned)inodes, image, (unsigned)blocks);
+
+    return host_command(command) == 0;
+}
+
+static int mount_host_image(const char *image)
+{
+    int rc;
+
+    if (!image_load_file(image)) {
+        return KERR_INVAL;
+    }
+
+    g_ext2_device.data = g_image.data;
+    g_ext2_blockdev.sectors = g_ext2_device.sectors;
+
+    rc = vfs_mkdir("/mnt");
+    if (rc != 0 && rc != KERR_EXIST) {
+        return rc;
+    }
+
+    return vfs_mount_type(TEST_ROOT_POINT, "ext2", TEST_DEVICE_NAME);
+}
+
+/* e2fsck reads what the kernel left: a clean answer or a line to show. */
+static void check_e2fsck(const char *image)
+{
+    char command[512];
+    char output[4096];
+    int rc;
+
+    (void)snprintf(command, sizeof(command), "e2fsck -fn '%s' 2>&1", image);
+    rc = host_capture(command, output, sizeof(output));
+
+    KT_CHECK_INT_EQ(rc, 0);
+
+    if (rc != 0) {
+        ktest_fail(__FILE__, __LINE__, "e2fsck on %s says: %s", image, output);
+    }
+}
+
+/* The name is in the directory of the image, as the tool of the world sees
+ * it. */
+static void check_debugfs(const char *image, const char *request, const char *needle)
+{
+    char command[512];
+    char output[8192];
+    int rc;
+
+    (void)snprintf(command, sizeof(command), "debugfs -R '%s' '%s' 2>/dev/null", request, image);
+    rc = host_capture(command, output, sizeof(output));
+
+    KT_CHECK_INT_EQ(rc, 0);
+
+    if (rc != 0) {
+        ktest_fail(__FILE__, __LINE__, "debugfs '%s' on %s says: %s", request, image, output);
+        return;
+    }
+
+    if (strstr(output, needle) == NULL) {
+        ktest_fail(__FILE__, __LINE__, "debugfs '%s' on %s has no '%s': %s", request, image, needle,
+                   output);
+    }
+}
+
+static bool host_tools_ready(void)
+{
+    return host_tool("mke2fs") && host_tool("e2fsck") && host_tool("debugfs");
+}
+
+static void test_read_is_quiet(void)
 {
     struct vfs_file file;
+    struct vfs_stat stat;
+    char buffer[64];
     k_u64_t before;
-    k_u8_t byte = 'x';
     const char *path = TEST_ROOT_POINT "/hello.txt";
 
-    ktest_begin("ext2: the volume takes no write, no name and no new mode");
+    ktest_begin("ext2: a volume that is only read is left exactly as it was");
 
     setup();
     if (mount_image() != 0) {
@@ -737,27 +948,500 @@ static void test_read_only(void)
     before = image_sum();
     g_sync_count = 0;
 
-    KT_CHECK_INT_EQ(vfs_open(path, VFS_O_RDWR, &file, g_file_data), KERR_NOTSUP);
-    KT_CHECK_INT_EQ(vfs_open(path, VFS_O_WRONLY, &file, g_file_data), KERR_NOTSUP);
-    KT_CHECK_INT_EQ(vfs_open(path, VFS_O_RDONLY | VFS_O_CREAT, &file, g_file_data), KERR_NOTSUP);
-    KT_CHECK_INT_EQ(vfs_open(path, VFS_O_RDONLY | VFS_O_TRUNC, &file, g_file_data), KERR_NOTSUP);
-    KT_CHECK_INT_EQ(vfs_open(path, VFS_O_WRONLY | VFS_O_APPEND, &file, g_file_data), KERR_NOTSUP);
-
-    /* A descriptor that was opened for reading has no write behind it. */
     KT_CHECK_INT_EQ(vfs_open(path, VFS_O_RDONLY, &file, g_file_data), 0);
-    KT_CHECK_INT_EQ(vfs_write(&file, &byte, 1), KERR_NOTSUP);
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(vfs_read(&file, buffer, sizeof(buffer)), TEST_HELLO_SIZE);
+    KT_CHECK_STR_EQ(buffer, "hello ext2\n");
     KT_CHECK_INT_EQ(vfs_close(&file), 0);
 
-    KT_CHECK_INT_EQ(vfs_mkdir(TEST_ROOT_POINT "/new"), KERR_NOTSUP);
-    KT_CHECK_INT_EQ(vfs_unlink(path), KERR_NOTSUP);
-    KT_CHECK_INT_EQ(vfs_chmod(path, 0600), KERR_NOTSUP);
-    KT_CHECK_INT_EQ(vfs_chown(path, 7), KERR_NOTSUP);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/sub", &stat), 0);
+    KT_CHECK_INT_EQ(stat.type, 2);
 
     /* Nothing reached the medium and the device was not asked to sync. */
     KT_CHECK_INT_EQ(g_sync_count, 0);
     KT_CHECK_INT_EQ(image_sum(), before);
 
-    KT_CHECK_STR_EQ(vfs_strerror(KERR_NOTSUP), "operation not supported");
+    teardown();
+}
+
+static void test_write_create_read(void)
+{
+    struct vfs_file file;
+    struct vfs_stat stat;
+    char image[256];
+    char dir[256];
+    char *pattern;
+    char *readback;
+    const k_size_t size = 20000u; /* twelve direct blocks and then the table */
+    int rc;
+
+    ktest_begin(
+        "ext2: a file is created, written through the direct blocks and the table, and read back");
+
+    setup();
+
+    if (!host_tools_ready()) {
+        printf("  (skipped: mke2fs, e2fsck and debugfs of e2fsprogs are not installed)\n");
+        teardown();
+        return;
+    }
+
+    if (!host_mkfs(dir, image, sizeof(image), HOST_IMAGE_BLOCKS, HOST_BLOCK_SIZE, 1024u, 512u)) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    pattern = (char *)malloc(size + 4u);
+    readback = (char *)malloc(size + 4u);
+    KT_CHECK(pattern != NULL && readback != NULL);
+
+    if (pattern == NULL || readback == NULL) {
+        free(pattern);
+        free(readback);
+        (void)unlink(image);
+        (void)rmdir(dir);
+        teardown();
+        return;
+    }
+
+    for (k_size_t i = 0; i < size; i++) {
+        pattern[i] = (char)('a' + (char)(i % 26u));
+    }
+    memcpy(pattern + size, "END\n", 4);
+
+    KT_CHECK_INT_EQ(mount_host_image(image), 0);
+
+    KT_CHECK_INT_EQ(
+        vfs_open(TEST_ROOT_POINT "/big.txt", VFS_O_WRONLY | VFS_O_CREAT, &file, g_file_data), 0);
+    KT_CHECK_INT_EQ(vfs_write(&file, pattern, size), (int)size);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/big.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, size);
+
+    memset(readback, 0, size + 4u);
+    KT_CHECK_INT_EQ(read_file(TEST_ROOT_POINT "/big.txt", readback, size), (int)size);
+    KT_CHECK(memcmp(readback, pattern, size) == 0);
+
+    /* The descriptor that appends writes at the end and moves the size. */
+    KT_CHECK_INT_EQ(
+        vfs_open(TEST_ROOT_POINT "/big.txt", VFS_O_WRONLY | VFS_O_APPEND, &file, g_file_data), 0);
+    KT_CHECK_INT_EQ(vfs_write(&file, pattern + size, 4), 4);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/big.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, size + 4);
+
+    /* A directory, its child, and a file of one byte. */
+    KT_CHECK_INT_EQ(vfs_mkdir(TEST_ROOT_POINT "/dir"), 0);
+    KT_CHECK_INT_EQ(vfs_mkdir(TEST_ROOT_POINT "/dir/sub"), 0);
+
+    rc = vfs_open(TEST_ROOT_POINT "/dir/sub/note.txt", VFS_O_WRONLY | VFS_O_CREAT, &file,
+                  g_file_data);
+    KT_CHECK_INT_EQ(rc, 0);
+
+    if (rc == 0) {
+        KT_CHECK_INT_EQ(vfs_write(&file, "hello\n", 6), 6);
+        KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    }
+
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/dir", &stat), 0);
+    KT_CHECK_INT_EQ(stat.type, 2);
+    KT_CHECK_INT_EQ(stat.mode, 0755);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/dir/sub/note.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, 6);
+    KT_CHECK_INT_EQ(stat.mode, 0644);
+
+    /* A rename is a call this filesystem does not have: the VFS answers
+     * with the word of an operation a volume does not offer. */
+    KT_CHECK_INT_EQ(vfs_rename(TEST_ROOT_POINT "/big.txt", TEST_ROOT_POINT "/renamed.txt"),
+                    KERR_NOTSUP);
+
+    /* A second name of the same parent is a new file, and a name that is
+     * there is not made again. */
+    KT_CHECK_INT_EQ(vfs_open(TEST_ROOT_POINT "/dir/sub/note.txt", VFS_O_WRONLY | VFS_O_CREAT, &file,
+                             g_file_data),
+                    0);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+    KT_CHECK(image_store_file(image));
+
+    check_e2fsck(image);
+    check_debugfs(image, "stat /big.txt", "Size: 20004");
+    check_debugfs(image, "stat /dir/sub/note.txt", "Size: 6");
+    check_debugfs(image, "ls -l /dir/sub", "note.txt");
+
+    /* The same image is mounted again: the bytes of the file come back from
+     * the medium, not from the memory of the writer, and the check of the
+     * machine agrees with e2fsck. */
+    KT_CHECK_INT_EQ(mount_host_image(image), 0);
+
+    {
+        struct ext2_check_report report;
+
+        KT_CHECK_INT_EQ(ext2_check(TEST_ROOT_POINT, &report), 0);
+        KT_CHECK_INT_EQ(report.errors, 0);
+        KT_CHECK_INT_EQ(report.files, 2);       /* big.txt and note.txt */
+        KT_CHECK_INT_EQ(report.directories, 4); /* root, lost+found, dir and sub */
+    }
+
+    memset(readback, 0, size + 4u);
+    KT_CHECK_INT_EQ(read_file(TEST_ROOT_POINT "/big.txt", readback, size + 4), (int)size + 4);
+    KT_CHECK(memcmp(readback, pattern, size + 4) == 0);
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+
+    free(pattern);
+    free(readback);
+    (void)unlink(image);
+    (void)rmdir(dir);
+
+    teardown();
+}
+
+static void test_many_files(void)
+{
+    static struct vfs_dirent entries[220];
+    char image[256];
+    char dir[256];
+    char path[VFS_PATH_MAX];
+    char content[32];
+    struct vfs_file file;
+    struct vfs_stat stat;
+    k_size_t count = 0;
+    int made = 0;
+
+    ktest_begin("ext2: a directory grows past its first block and stays one chain");
+
+    setup();
+
+    if (!host_tools_ready()) {
+        printf("  (skipped: mke2fs, e2fsck and debugfs of e2fsprogs are not installed)\n");
+        teardown();
+        return;
+    }
+
+    if (!host_mkfs(dir, image, sizeof(image), HOST_IMAGE_BLOCKS, HOST_BLOCK_SIZE, 1024u, 512u)) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(mount_host_image(image), 0);
+    KT_CHECK_INT_EQ(vfs_mkdir(TEST_ROOT_POINT "/many"), 0);
+
+    for (unsigned i = 0; i < 200u; i++) {
+        int used = snprintf(content, sizeof(content), "file %u\n", i);
+
+        (void)snprintf(path, sizeof(path), TEST_ROOT_POINT "/many/f%03u.txt", i);
+
+        if (vfs_open(path, VFS_O_WRONLY | VFS_O_CREAT, &file, g_file_data) != 0) {
+            break;
+        }
+
+        if (vfs_write(&file, content, (k_size_t)used) != used) {
+            (void)vfs_close(&file);
+            break;
+        }
+
+        if (vfs_close(&file) != 0) {
+            break;
+        }
+
+        made++;
+    }
+
+    KT_CHECK_INT_EQ(made, 200);
+
+    KT_CHECK_INT_EQ(vfs_list(TEST_ROOT_POINT "/many", entries, 220, &count), 0);
+    KT_CHECK_INT_EQ(count, 200);
+
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/many/f199.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, 9); /* "file 199" and a newline */
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/many", &stat), 0);
+    KT_CHECK(stat.size > HOST_BLOCK_SIZE); /* the directory grew */
+
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+    KT_CHECK(image_store_file(image));
+    check_e2fsck(image);
+    check_debugfs(image, "ls /many", "f199.txt");
+
+    /* Half of the names are gone: the records are merged and the volume is
+     * still clean. */
+    KT_CHECK_INT_EQ(mount_host_image(image), 0);
+
+    for (unsigned i = 0; i < 200u; i += 2) {
+        (void)snprintf(path, sizeof(path), TEST_ROOT_POINT "/many/f%03u.txt", i);
+        KT_CHECK_INT_EQ(vfs_unlink(path), 0);
+    }
+
+    KT_CHECK_INT_EQ(vfs_list(TEST_ROOT_POINT "/many", entries, 220, &count), 0);
+    KT_CHECK_INT_EQ(count, 100);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/many/f001.txt", &stat), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/many/f000.txt", &stat), KERR_NOENT);
+
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+    KT_CHECK(image_store_file(image));
+    check_e2fsck(image);
+
+    (void)unlink(image);
+    (void)rmdir(dir);
+
+    teardown();
+}
+
+static void test_truncate_and_unlink(void)
+{
+    struct vfs_file file;
+    struct vfs_stat stat;
+    struct vfs_statfs before;
+    struct vfs_statfs after;
+    char image[256];
+    char dir[256];
+    char buffer[64];
+    char *content;
+    const k_size_t size = 30000u; /* thirty blocks: the table is used */
+    k_size_t i;
+
+    ktest_begin("ext2: a file is cut to a smaller size and to nothing, and a name is removed");
+
+    setup();
+
+    if (!host_tools_ready()) {
+        printf("  (skipped: mke2fs, e2fsck and debugfs of e2fsprogs are not installed)\n");
+        teardown();
+        return;
+    }
+
+    if (!host_mkfs(dir, image, sizeof(image), HOST_IMAGE_BLOCKS, HOST_BLOCK_SIZE, 1024u, 512u)) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    content = (char *)malloc(size);
+    KT_CHECK(content != NULL);
+
+    if (content == NULL) {
+        (void)unlink(image);
+        (void)rmdir(dir);
+        teardown();
+        return;
+    }
+
+    for (i = 0; i < size; i++) {
+        content[i] = (char)('A' + (char)(i % 26u));
+    }
+
+    KT_CHECK_INT_EQ(mount_host_image(image), 0);
+    KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &before), 0);
+
+    KT_CHECK_INT_EQ(
+        vfs_open(TEST_ROOT_POINT "/cut.txt", VFS_O_WRONLY | VFS_O_CREAT, &file, g_file_data), 0);
+    KT_CHECK_INT_EQ(vfs_write(&file, content, size), (int)size);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &after), 0);
+    KT_CHECK(after.free_blocks < before.free_blocks);
+
+    /* Five kilobytes keep the first five blocks; the table and the rest of
+     * the blocks are given back. */
+    KT_CHECK_INT_EQ(ext2_vfs_truncate(TEST_ROOT_POINT "/cut.txt", 5000u), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/cut.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, 5000);
+
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(read_file(TEST_ROOT_POINT "/cut.txt", buffer, sizeof(buffer)), 64);
+    KT_CHECK(memcmp(buffer, content, 64) == 0);
+
+    /* Five blocks of a thousand and thirty went back to the bitmap: the
+     * twenty-five data blocks of the tail and the table of pointers. */
+    KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &after), 0);
+    KT_CHECK_INT_EQ(after.free_blocks + 5, before.free_blocks);
+
+    /* Growing again is a hole, and a hole reads as zeros. */
+    KT_CHECK_INT_EQ(ext2_vfs_truncate(TEST_ROOT_POINT "/cut.txt", 20000u), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/cut.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, 20000);
+    KT_CHECK_INT_EQ(vfs_open(TEST_ROOT_POINT "/cut.txt", VFS_O_RDONLY, &file, g_file_data), 0);
+    file.offset = 6000u;
+    memset(buffer, 0xFF, sizeof(buffer));
+    KT_CHECK_INT_EQ(vfs_read(&file, buffer, sizeof(buffer)), 64);
+    for (i = 0; i < sizeof(buffer); i++) {
+        KT_CHECK_INT_EQ(buffer[i], 0);
+    }
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    /* Cut to nothing through the open of the descriptor, the way a program
+     * makes a log empty. */
+    KT_CHECK_INT_EQ(
+        vfs_open(TEST_ROOT_POINT "/cut.txt", VFS_O_RDWR | VFS_O_TRUNC, &file, g_file_data), 0);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/cut.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, 0);
+    KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &after), 0);
+    KT_CHECK_INT_EQ(after.free_blocks, before.free_blocks);
+
+    /* A name is made, written and removed, and the volume comes back to the
+     * bytes it had before the name. */
+    KT_CHECK_INT_EQ(
+        vfs_open(TEST_ROOT_POINT "/gone.txt", VFS_O_WRONLY | VFS_O_CREAT, &file, g_file_data), 0);
+    KT_CHECK_INT_EQ(vfs_write(&file, content, 100), 100);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/gone.txt"), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/gone.txt", &stat), KERR_NOENT);
+    KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &after), 0);
+    KT_CHECK_INT_EQ(after.free_blocks, before.free_blocks);
+
+    /* An object that is gone cannot be removed twice. */
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/gone.txt"), KERR_NOENT);
+
+    /* The inode of the name that is gone is used again, and no field of
+     * the record of the old file comes with it. */
+    KT_CHECK_INT_EQ(
+        vfs_open(TEST_ROOT_POINT "/again.txt", VFS_O_WRONLY | VFS_O_CREAT, &file, g_file_data), 0);
+    KT_CHECK_INT_EQ(vfs_write(&file, content, 50), 50);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/again.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, 50);
+    KT_CHECK_INT_EQ(stat.mode, 0644);
+
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+    KT_CHECK(image_store_file(image));
+    check_e2fsck(image);
+
+    free(content);
+    (void)unlink(image);
+    (void)rmdir(dir);
+
+    teardown();
+}
+
+static void test_no_room(void)
+{
+    char image[256];
+    char dir[256];
+    char *content;
+    struct vfs_file file;
+    struct vfs_stat stat;
+    struct vfs_statfs before;
+    struct vfs_statfs after;
+    const k_size_t too_big = 274433u; /* one byte past twelve direct blocks and one table */
+    int rc;
+
+    ktest_begin("ext2: a file that would need a double table is no room, not a broken volume");
+
+    setup();
+
+    if (!host_tools_ready()) {
+        printf("  (skipped: mke2fs, e2fsck and debugfs of e2fsprogs are not installed)\n");
+        teardown();
+        return;
+    }
+
+    if (!host_mkfs(dir, image, sizeof(image), HOST_IMAGE_BLOCKS, HOST_BLOCK_SIZE, 1024u, 512u)) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    content = (char *)malloc(too_big);
+    KT_CHECK(content != NULL);
+
+    if (content == NULL) {
+        (void)unlink(image);
+        (void)rmdir(dir);
+        teardown();
+        return;
+    }
+
+    memset(content, 'z', too_big);
+
+    KT_CHECK_INT_EQ(mount_host_image(image), 0);
+    KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &before), 0);
+
+    KT_CHECK_INT_EQ(
+        vfs_open(TEST_ROOT_POINT "/huge.bin", VFS_O_WRONLY | VFS_O_CREAT, &file, g_file_data), 0);
+    rc = vfs_write(&file, content, too_big);
+    KT_CHECK_INT_EQ(rc, KERR_NOSPC);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    /* What was written before the wall is a file of its own size and the
+     * volume is still consistent. */
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/huge.bin", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, 274432);
+
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/huge.bin"), 0);
+    KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &after), 0);
+    KT_CHECK_INT_EQ(after.free_blocks, before.free_blocks);
+
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+    KT_CHECK(image_store_file(image));
+    check_e2fsck(image);
+
+    free(content);
+    (void)unlink(image);
+    (void)rmdir(dir);
+
+    teardown();
+}
+
+static void test_attributes(void)
+{
+    struct vfs_file file;
+    struct vfs_stat stat;
+    struct vfs_statx info;
+    char image[256];
+    char dir[256];
+
+    ktest_begin("ext2: the mode and the owner change on the medium, and the moment moves");
+
+    setup();
+
+    if (!host_tools_ready()) {
+        printf("  (skipped: mke2fs, e2fsck and debugfs of e2fsprogs are not installed)\n");
+        teardown();
+        return;
+    }
+
+    if (!host_mkfs(dir, image, sizeof(image), HOST_IMAGE_BLOCKS, HOST_BLOCK_SIZE, 1024u, 512u)) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(mount_host_image(image), 0);
+    KT_CHECK_INT_EQ(
+        vfs_open(TEST_ROOT_POINT "/attr.txt", VFS_O_WRONLY | VFS_O_CREAT, &file, g_file_data), 0);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/attr.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.mode, 0644);
+    KT_CHECK_INT_EQ(stat.owner, 0);
+
+    KT_CHECK_INT_EQ(vfs_chmod(TEST_ROOT_POINT "/attr.txt", 0600), 0);
+    KT_CHECK_INT_EQ(vfs_chown(TEST_ROOT_POINT "/attr.txt", 1000), 0);
+
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/attr.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.mode, 0600);
+    KT_CHECK_INT_EQ(stat.owner, 1000);
+
+    KT_CHECK_INT_EQ(vfs_statx(TEST_ROOT_POINT "/attr.txt", &info), 0);
+    KT_CHECK(info.ctime > 0);
+
+    /* A mode with bits beyond the twelve of the format is not a mode. */
+    KT_CHECK_INT_EQ(vfs_chmod(TEST_ROOT_POINT "/attr.txt", 010000), KERR_INVAL);
+    KT_CHECK_INT_EQ(vfs_chown(TEST_ROOT_POINT "/attr.txt", 0x10000u), KERR_INVAL);
+    KT_CHECK_INT_EQ(vfs_chmod(TEST_ROOT_POINT "/missing.txt", 0600), KERR_NOENT);
+
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+    KT_CHECK(image_store_file(image));
+    check_e2fsck(image);
+    check_debugfs(image, "stat /attr.txt", "Mode:  0600");
+    check_debugfs(image, "stat /attr.txt", "User:  1000");
+
+    (void)unlink(image);
+    (void)rmdir(dir);
 
     teardown();
 }
@@ -935,15 +1619,391 @@ static void test_remount(void)
     teardown();
 }
 
+static void test_many_groups(void)
+{
+    static struct vfs_dirent entries[140];
+    struct vfs_file file;
+    struct vfs_statfs before;
+    struct vfs_statfs after;
+    char image[256];
+    char dir[256];
+    char path[VFS_PATH_MAX];
+    char *block;
+    const k_size_t large = 90u * 1024u; /* ninety blocks: a group of 256 blocks is crossed */
+    k_size_t count = 0;
+
+    ktest_begin("ext2: a volume of four groups takes blocks and inodes from each of them");
+
+    setup();
+
+    if (!host_tools_ready()) {
+        printf("  (skipped: mke2fs, e2fsck and debugfs of e2fsprogs are not installed)\n");
+        teardown();
+        return;
+    }
+
+    if (!host_mkfs(dir, image, sizeof(image), 1024u, 1024u, 256u, 512u)) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    block = (char *)malloc(large);
+    KT_CHECK(block != NULL);
+
+    if (block == NULL) {
+        (void)unlink(image);
+        (void)rmdir(dir);
+        teardown();
+        return;
+    }
+
+    memset(block, 'g', large);
+
+    KT_CHECK_INT_EQ(mount_host_image(image), 0);
+    KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &before), 0);
+
+    {
+        static const char *names[] = {"a.bin", "b.bin", "c.bin"};
+
+        for (k_size_t i = 0; i < 3u; i++) {
+            (void)snprintf(path, sizeof(path), TEST_ROOT_POINT "/%s", names[i]);
+            KT_CHECK_INT_EQ(vfs_open(path, VFS_O_WRONLY | VFS_O_CREAT, &file, g_file_data), 0);
+            KT_CHECK_INT_EQ(vfs_write(&file, block, large), (int)large);
+            KT_CHECK_INT_EQ(vfs_close(&file), 0);
+        }
+    }
+
+    KT_CHECK_INT_EQ(vfs_mkdir(TEST_ROOT_POINT "/small"), 0);
+
+    for (unsigned i = 0; i < 130u; i++) {
+        (void)snprintf(path, sizeof(path), TEST_ROOT_POINT "/small/s%03u", i);
+
+        if (vfs_open(path, VFS_O_WRONLY | VFS_O_CREAT, &file, g_file_data) != 0) {
+            KT_CHECK(0);
+            break;
+        }
+
+        KT_CHECK_INT_EQ(vfs_write(&file, "x", 1), 1);
+        KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    }
+
+    KT_CHECK_INT_EQ(vfs_list(TEST_ROOT_POINT "/small", entries, 140, &count), 0);
+    KT_CHECK_INT_EQ(count, 130);
+
+    KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &after), 0);
+    KT_CHECK(after.free_blocks + 273u + 130u + 2u <= before.free_blocks);
+
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+    KT_CHECK(image_store_file(image));
+    check_e2fsck(image);
+    check_debugfs(image, "stat /c.bin", "Size: 92160");
+    check_debugfs(image, "stat /small/s129", "Size: 1");
+
+    /* Every block and every inode of the four groups goes back. */
+    KT_CHECK_INT_EQ(mount_host_image(image), 0);
+
+    {
+        static const char *names[] = {"a.bin", "b.bin", "c.bin"};
+
+        for (k_size_t i = 0; i < 3u; i++) {
+            (void)snprintf(path, sizeof(path), TEST_ROOT_POINT "/%s", names[i]);
+            KT_CHECK_INT_EQ(vfs_unlink(path), 0);
+        }
+    }
+
+    for (unsigned i = 0; i < 130u; i++) {
+        (void)snprintf(path, sizeof(path), TEST_ROOT_POINT "/small/s%03u", i);
+        KT_CHECK_INT_EQ(vfs_unlink(path), 0);
+    }
+
+    /* The names are gone; the two blocks of the empty directory that held
+     * them are still a directory, and nothing else is left. */
+    KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &after), 0);
+    KT_CHECK_INT_EQ(after.free_blocks + 2u, before.free_blocks);
+
+    /* The empty directory of the last group is still a directory. */
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/small", &(struct vfs_stat){0}), 0);
+
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+    KT_CHECK(image_store_file(image));
+    check_e2fsck(image);
+
+    free(block);
+    (void)unlink(image);
+    (void)rmdir(dir);
+
+    teardown();
+}
+
+static void test_large_blocks(void)
+{
+    struct vfs_file file;
+    struct vfs_stat stat;
+    char image[256];
+    char dir[256];
+    char path[VFS_PATH_MAX];
+    char content[5000];
+    char readback[5000];
+    k_size_t count = 0;
+    static struct vfs_dirent entries[32];
+
+    ktest_begin("ext2: a volume of blocks of 4096 bytes takes a file across two of them");
+
+    setup();
+
+    if (!host_tools_ready()) {
+        printf("  (skipped: mke2fs, e2fsck and debugfs of e2fsprogs are not installed)\n");
+        teardown();
+        return;
+    }
+
+    if (!host_mkfs(dir, image, sizeof(image), 512u, 4096u, 1024u, 256u)) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    for (k_size_t i = 0; i < sizeof(content); i++) {
+        content[i] = (char)('A' + (char)(i % 26u));
+    }
+
+    KT_CHECK_INT_EQ(mount_host_image(image), 0);
+    KT_CHECK_INT_EQ(vfs_mkdir(TEST_ROOT_POINT "/dir"), 0);
+
+    for (unsigned i = 0; i < 20u; i++) {
+        (void)snprintf(path, sizeof(path), TEST_ROOT_POINT "/dir/f%02u", i);
+        KT_CHECK_INT_EQ(vfs_open(path, VFS_O_WRONLY | VFS_O_CREAT, &file, g_file_data), 0);
+        KT_CHECK_INT_EQ(vfs_write(&file, content, sizeof(content)), (int)sizeof(content));
+        KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    }
+
+    KT_CHECK_INT_EQ(vfs_list(TEST_ROOT_POINT "/dir", entries, 32, &count), 0);
+    KT_CHECK_INT_EQ(count, 20);
+
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/dir/f19", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, sizeof(content));
+
+    memset(readback, 0, sizeof(readback));
+    KT_CHECK_INT_EQ(read_file(TEST_ROOT_POINT "/dir/f19", readback, sizeof(readback)),
+                    (int)sizeof(readback));
+    KT_CHECK(memcmp(readback, content, sizeof(content)) == 0);
+
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+    KT_CHECK(image_store_file(image));
+    check_e2fsck(image);
+    check_debugfs(image, "stat /dir/f19", "Size: 5000");
+
+    (void)unlink(image);
+    (void)rmdir(dir);
+
+    teardown();
+}
+
+static void test_unlink_of_a_big_file(void)
+{
+    struct vfs_file file;
+    struct vfs_stat stat;
+    struct vfs_statfs before;
+    struct vfs_statfs after;
+    char image[256];
+    char dir[256];
+    char blob[512];
+    char command[1024];
+    char buffer[128];
+    const k_size_t size = 400u * 1024u; /* past one table: a double table of ext2 */
+    FILE *made;
+
+    ktest_begin(
+        "ext2: a file of a double table, made by debugfs, is cut and removed by the kernel");
+
+    setup();
+
+    if (!host_tools_ready()) {
+        printf("  (skipped: mke2fs, e2fsck and debugfs of e2fsprogs are not installed)\n");
+        teardown();
+        return;
+    }
+
+    if (!host_mkfs(dir, image, sizeof(image), HOST_IMAGE_BLOCKS, HOST_BLOCK_SIZE, 1024u, 512u)) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    (void)snprintf(blob, sizeof(blob), "%s/blob.bin", dir);
+    made = fopen(blob, "wb");
+    KT_CHECK(made != NULL);
+
+    if (made == NULL) {
+        (void)unlink(image);
+        (void)rmdir(dir);
+        teardown();
+        return;
+    }
+
+    for (k_size_t i = 0; i < size; i++) {
+        (void)fputc((int)('a' + (char)(i % 26u)), made);
+    }
+    KT_CHECK_INT_EQ(fclose(made), 0);
+
+    (void)snprintf(command, sizeof(command), "debugfs -w -R 'mkdir /big' '%s' >/dev/null 2>&1",
+                   image);
+    KT_CHECK_INT_EQ(host_command(command), 0);
+    (void)snprintf(command, sizeof(command),
+                   "debugfs -w -R 'write %s /big/data' '%s' >/dev/null 2>&1", blob, image);
+    KT_CHECK_INT_EQ(host_command(command), 0);
+
+    KT_CHECK_INT_EQ(mount_host_image(image), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/big/data", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, size);
+
+    KT_CHECK_INT_EQ(vfs_open(TEST_ROOT_POINT "/big/data", VFS_O_RDONLY, &file, g_file_data), 0);
+    KT_CHECK_INT_EQ(vfs_read(&file, buffer, sizeof(buffer)), (int)sizeof(buffer));
+    KT_CHECK_INT_EQ(buffer[0], 'a');
+    file.offset = 300u * 1024u;
+    KT_CHECK_INT_EQ(vfs_read(&file, buffer, 8), 8);
+    KT_CHECK_INT_EQ(buffer[0], 'a' + (char)((300u * 1024u) % 26u));
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &before), 0);
+
+    /* A cut inside the double table keeps the head and gives the rest of
+     * the three levels back. */
+    KT_CHECK_INT_EQ(ext2_vfs_truncate(TEST_ROOT_POINT "/big/data", 100u * 1024u), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/big/data", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, 100u * 1024u);
+
+    /* The file is 400 blocks in twelve direct, one table and a double
+     * table. A cut at 100 keeps 12 direct and 88 of the table: 168 blocks
+     * of the table, the 132 blocks of the double and its two tables are
+     * given back - 302 blocks of the medium. */
+    KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &after), 0);
+    KT_CHECK_INT_EQ(after.free_blocks, before.free_blocks + 302u);
+
+    KT_CHECK_INT_EQ(vfs_open(TEST_ROOT_POINT "/big/data", VFS_O_RDONLY, &file, g_file_data), 0);
+    file.offset = 99u * 1024u;
+    KT_CHECK_INT_EQ(vfs_read(&file, buffer, 64), 64);
+    KT_CHECK_INT_EQ(buffer[0], 'a' + (char)((99u * 1024u) % 26u));
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/big/data"), 0);
+    KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &after), 0);
+    KT_CHECK_INT_EQ(after.free_blocks, before.free_blocks + 403u);
+
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+    KT_CHECK(image_store_file(image));
+    check_e2fsck(image);
+
+    (void)unlink(blob);
+    (void)unlink(image);
+    (void)rmdir(dir);
+
+    teardown();
+}
+
+static void test_check(void)
+{
+    struct ext2_check_report report;
+    struct vfs_file file;
+    struct vfs_stat stat;
+    char image[256];
+    char dir[256];
+    char command[512];
+
+    ktest_begin(
+        "ext2: the check of the machine sees a sound tree and names a superblock that lies");
+
+    setup();
+
+    if (!host_tools_ready()) {
+        printf("  (skipped: mke2fs, e2fsck and debugfs of e2fsprogs are not installed)\n");
+        teardown();
+        return;
+    }
+
+    if (!host_mkfs(dir, image, sizeof(image), HOST_IMAGE_BLOCKS, HOST_BLOCK_SIZE, 1024u, 512u)) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(mount_host_image(image), 0);
+    KT_CHECK_INT_EQ(vfs_mkdir(TEST_ROOT_POINT "/dir"), 0);
+    KT_CHECK_INT_EQ(
+        vfs_open(TEST_ROOT_POINT "/dir/a.txt", VFS_O_WRONLY | VFS_O_CREAT, &file, g_file_data), 0);
+    KT_CHECK_INT_EQ(vfs_write(&file, "0123456789", 10), 10);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    KT_CHECK_INT_EQ(ext2_check(TEST_ROOT_POINT, &report), 0);
+    KT_CHECK_INT_EQ(report.errors, 0);
+    KT_CHECK_INT_EQ(report.directories, 3); /* the root, lost+found and /dir */
+    KT_CHECK_INT_EQ(report.files, 1);
+    KT_CHECK_INT_EQ(report.groups, 2);
+    KT_CHECK_INT_EQ(report.blocks, HOST_IMAGE_BLOCKS);
+    KT_CHECK(report.free_blocks > 0);
+    KT_CHECK_STR_EQ(report.first, "");
+
+    /* A point of another filesystem is not the volume of this one. */
+    KT_CHECK_INT_EQ(ext2_check("/", &report), KERR_INVAL);
+
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+    KT_CHECK(image_store_file(image));
+
+    /* The superblock says one block more is free than the bitmaps hold. */
+    {
+        k_u8_t *p = g_image.data + 1024u + 12u;
+        k_u32_t free_blocks =
+            (k_u32_t)p[0] | ((k_u32_t)p[1] << 8) | ((k_u32_t)p[2] << 16) | ((k_u32_t)p[3] << 24);
+
+        put32(p, free_blocks + 1u);
+    }
+
+    KT_CHECK_INT_EQ(vfs_mount_type(TEST_ROOT_POINT, "ext2", TEST_DEVICE_NAME), 0);
+    KT_CHECK_INT_EQ(ext2_check(TEST_ROOT_POINT, &report), 0);
+    KT_CHECK(report.errors > 0);
+    KT_CHECK(strstr(report.first, "superblock") != NULL);
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+
+    /* The root of a directory is a chain of records; a size of zero is not
+     * a chain, and the walk says so. */
+    (void)snprintf(command, sizeof(command),
+                   "debugfs -w -R 'set_inode_field /dir size 0' '%s' >/dev/null 2>&1", image);
+    KT_CHECK_INT_EQ(host_command(command), 0);
+    KT_CHECK_INT_EQ(mount_host_image(image), 0);
+    KT_CHECK_INT_EQ(ext2_check(TEST_ROOT_POINT, &report), 0);
+    KT_CHECK(report.errors > 0);
+    KT_CHECK(strstr(report.first, "not a whole number") != NULL);
+
+    /* The check is a reader: the volume still holds the size it was given. */
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/dir", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, 0);
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+
+    (void)unlink(image);
+    (void)rmdir(dir);
+
+    teardown();
+}
+
 void test_fs_ext2(void)
 {
     test_mount_and_stat();
     test_read();
     test_dir_listing();
     test_errors();
-    test_read_only();
+    test_read_is_quiet();
     test_statfs();
     test_bad_images();
     test_shell_mount();
     test_remount();
+    test_write_create_read();
+    test_many_files();
+    test_truncate_and_unlink();
+    test_no_room();
+    test_attributes();
+    test_many_groups();
+    test_large_blocks();
+    test_unlink_of_a_big_file();
+    test_check();
 }
