@@ -101,7 +101,24 @@ PROGRAM_ABI = 2  # K_EXEC_VERSION, the ABI of MOX1 the kernel reads
 # The page of the state of the guest is on this port of the guest and on a
 # port of the host that QEMU forwards to it.
 GUEST_HTTPD_PORT = 8080
+GUEST_FILES_PORT = 8081
+GUEST_TLS_PORT = 8443
 GUEST_DNS_NAME = "example.com"
+
+# The file the server of the files of the guest serves: the bytes of the host
+# are the bytes of the volume, compared by this process after the download.
+SERVED_FILE = "/a.bin"
+GUEST_SERVED_FILE = "/doc/a.bin"
+
+# The size of the body the machine downloads in one stream: a hundred
+# megabytes, checked by the SHA-256 the client computes as it reads. The
+# volume of the guest is sixteen megabytes, so /dev/null is the sink and the
+# digest is the comparison.
+BIG_SIZE = 100 * 1024 * 1024
+# The payload of the update: the volume of the guest has about four hundred
+# kilobytes free after the image of the machine, and an install keeps two
+# slots and one staging file - three payloads of this size fit with room.
+UPDATE_PAYLOAD = 64 * 1024
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.environ.get("X86_BUILD", os.path.join(ROOT, "build-x86-net"))
@@ -162,6 +179,23 @@ class HttpHandler(BaseHTTPRequestHandler):
 
         if self.path == "/file.bin":
             self.reply(200, FILE_BODY)
+            return
+
+        if self.path == "/big.bin":
+            # A hundred megabytes that are not a buffer of a hundred
+            # megabytes: the head promises the length and the body goes out in
+            # blocks of the pattern the test hashes on both sides.
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(BIG_SIZE))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            sent = 0
+            while sent < BIG_SIZE:
+                take = min(65536, BIG_SIZE - sent)
+                self.wfile.write(big_block(sent, take))
+                sent += take
+            self.wfile.flush()
             return
 
         if self.path == "/go":
@@ -406,6 +440,22 @@ def generate_certificates(directory: str) -> bool:
     )
 
 
+def big_block(offset: int, length: int) -> bytes:
+    """A block of the body of /big.bin: the same bytes for the guest."""
+    return bytes(((offset + i) * 37 + 11) & 0xFF for i in range(length))
+
+
+def big_digest() -> str:
+    """The SHA-256 of the whole body, computed without keeping it."""
+    digest = hashlib.sha256()
+    offset = 0
+    while offset < BIG_SIZE:
+        take = min(1 << 20, BIG_SIZE - offset)
+        digest.update(big_block(offset, take))
+        offset += take
+    return digest.hexdigest()
+
+
 def free_port() -> int:
     """A port of the loopback nobody holds, for `hostfwd` to take."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
@@ -479,6 +529,86 @@ def build_repository(directory: str, build: str) -> bool:
     return True
 
 
+def build_update(directory: str, build: str) -> bool:
+    """The signed image an update of the guest installs, and a broken one.
+
+    The envelope is the one of ADR 0020: the payload, then the trailer the
+    tool appends and signs with the key of the image. The payload is not a
+    kernel - a slot of the file form is a file and the test checks the
+    envelope and the state machine - and the broken copy is the same image
+    with one byte of the payload changed.
+    """
+    sign = os.path.join(build, "microos_sign")
+    key = os.path.join(build, "signing.key")
+    public = os.path.join(build, "signing.pub")
+
+    for path in (sign, key, public):
+        if not os.path.isfile(path):
+            print(f"missing {path}: run make x86-net-build", file=sys.stderr)
+            return False
+
+    payload = os.path.join(directory, "update.payload")
+    with open(payload, "wb") as handle:
+        offset = 0
+        while offset < UPDATE_PAYLOAD:
+            take = min(65536, UPDATE_PAYLOAD - offset)
+            handle.write(big_block(offset, take))
+            offset += take
+
+    signed = subprocess.run(
+        [sign, "sign", "--key", key, "--in", payload,
+         "--out", os.path.join(directory, "update.img")],
+        check=False,
+        capture_output=True,
+    )
+    if signed.returncode != 0:
+        print(signed.stderr.decode("utf-8", errors="replace"), file=sys.stderr)
+        return False
+
+    with open(os.path.join(directory, "update.img"), "rb") as handle:
+        image = bytearray(handle.read())
+
+    image[UPDATE_PAYLOAD // 2] ^= 0x5A
+
+    with open(os.path.join(directory, "update-bad.img"), "wb") as handle:
+        handle.write(image)
+
+    return True
+
+
+def host_request(port: int, raw: bytes, timeout: float = 20.0) -> bytes:
+    """One raw request through `hostfwd`, the answer read to the close."""
+    chunks = []
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout) as client:
+            client.sendall(raw)
+            while True:
+                data = client.recv(65536)
+                if not data:
+                    break
+                chunks.append(data)
+    except OSError:
+        pass
+    return b"".join(chunks)
+
+
+def host_fetch(port: int, path: str, headers: list | None = None,
+               method: str = "GET") -> tuple:
+    """Status, headers and body of one request of the guest's server."""
+    lines = [f"{method} {path} HTTP/1.0", "Host: microos"]
+    for header in headers or []:
+        lines.append(header)
+    answer = host_request(port, ("\r\n".join(lines) + "\r\n\r\n").encode("ascii"))
+    head, _, body = answer.partition(b"\r\n\r\n")
+    first = head.split(b"\r\n", 1)[0].decode("latin-1")
+    status = int(first.split(" ")[1]) if len(first.split(" ")) > 1 else 0
+    fields = {}
+    for line in head.split(b"\r\n")[1:]:
+        name, _, value = line.decode("latin-1").partition(":")
+        fields[name.strip().lower()] = value.strip()
+    return status, fields, body
+
+
 def host_get(port: int, path: str, tries: int = 15) -> str:
     """One HTTP request through `hostfwd`, retried until the guest answers.
 
@@ -505,7 +635,8 @@ def host_get(port: int, path: str, tries: int = 15) -> str:
     return ""
 
 
-def run_machine(loader: str, kernel: str, steps: list, fwd_port: int, timeout: float) -> str:
+def run_machine(loader: str, kernel: str, steps: list, forwards: list,
+                timeout: float) -> str:
     """Boot the machine, run the steps and return the transcript.
 
     A step is ("cmd", text) - a line for the shell - or ("host", callable) -
@@ -526,9 +657,11 @@ def run_machine(loader: str, kernel: str, steps: list, fwd_port: int, timeout: f
         "-nographic",
         "-no-reboot",
         "-netdev",
-        # The port of the host that reaches the page of the state of the
-        # guest: a person or a monitor of the host, as in a real machine.
-        f"user,id=n0,hostfwd=tcp:127.0.0.1:{fwd_port}-:{GUEST_HTTPD_PORT}",
+        # The ports of the host that reach the doors of the guest: the page
+        # of the state, the server of the files of the volume and its TLS
+        # door. A person or a monitor of the host, as in a real machine.
+        "user,id=n0,"
+        + ",".join(f"hostfwd=tcp:127.0.0.1:{host}-:{guest}" for host, guest in forwards),
         # The legacy interface of virtio: the driver programs the I/O BAR and
         # the split virtqueue, and a modern-only device would leave it with no
         # registers to write.
@@ -804,6 +937,124 @@ def check(output: str, answers: dict, host: dict, dns_name: str | None, commands
     expect("the installed program runs from /usr/bin", "PROGRAM: hello from /bin" in run,
            run.strip())
 
+    # --- the server of the files of the volume (net/httpd.h)
+    serve = answers.get("httpd-serve", "")
+    expect(
+        "the server of files is on its port",
+        f"httpd: the files of /doc are on port {GUEST_FILES_PORT}" in serve,
+        serve.strip(),
+    )
+
+    expect("a file of the volume is served", host.get("served_status") == 200,
+           str(host.get("served_status")))
+    expect("the bytes of the file are the bytes of the host",
+           host.get("served") == FILE_BODY, repr(host.get("served"))[:80])
+    expect("the type of the answer comes from the extension",
+           host.get("served_type") == "application/octet-stream", host.get("served_type", ""))
+    expect("the answer has a tag", str(host.get("served_etag", "")).startswith('"'),
+           host.get("served_etag", ""))
+    expect("the length of the answer is the length of the file",
+           host.get("served_length") == str(len(FILE_BODY)), host.get("served_length", ""))
+
+    expect("a HEAD answers the head alone", host.get("head_status") == 200
+           and host.get("head_body") == b""
+           and host.get("head_length") == str(len(FILE_BODY)),
+           f"{host.get('head_status')} {host.get('head_length')} {len(host.get('head_body') or b'')}")
+
+    expect("a Range is a 206 of the bytes asked for",
+           host.get("range_status") == 206 and host.get("range_body") == FILE_BODY[10:20]
+           and host.get("range_field") == f"bytes 10-19/{len(FILE_BODY)}",
+           f"{host.get('range_status')} {host.get('range_field')}")
+
+    expect("a tag the client has is a 304 without a body",
+           host.get("not_modified") == 304 and host.get("not_modified_body") == b"",
+           str(host.get("not_modified")))
+
+    expect("a path that climbs out of the root is refused",
+           host.get("traversal") in (400, 403), str(host.get("traversal")))
+
+    expect("a directory is a listing",
+           host.get("listing_status") == 200
+           and b"a.bin" in (host.get("listing") or b"")
+           and "text/html" in str(host.get("listing_type", "")),
+           f"{host.get('listing_status')} {host.get('listing_type')}")
+
+    expect("the ceiling of the sessions answers 503 and closes",
+           b"503 Service Unavailable" in (host.get("busy_answer") or b""),
+           (host.get("busy_answer") or b"")[:60].decode("latin-1"))
+
+    log = answers.get("httpd-log", "")
+    expect("every request is a line of the log of the volume",
+           f"GET {SERVED_FILE} 200 {len(FILE_BODY)}" in log and "HEAD " in log, log.strip()[:120])
+
+    off = answers.get("httpd-serve-off", "")
+    expect("the server of files closes its door", "httpd: stopped" in off, off.strip())
+
+    # --- the stream of a hundred megabytes (wget --sha256)
+    big = answers.get("wget-big", "")
+    expect("the machine downloads a hundred megabytes",
+           f"wget: HTTP 200, {BIG_SIZE} byte(s)" in big, big.strip()[:160])
+    expect("the digest of the stream is the digest of the host",
+           f"sha256: {big_digest()}" in big, big.strip()[-80:])
+
+    # --- TLS on the serving side (net/tls_server.h)
+    if tls_state["enabled"]:
+        if host.get("tls_skipped"):
+            notes.append("curl is not installed: the TLS door of the guest is not asked")
+        else:
+            started = answers.get("httpd-tls", "")
+            expect(
+                "the TLS door of the guest is on its port",
+                f"httpd: the files of /doc are on port {GUEST_TLS_PORT} (TLS)" in started,
+                started.strip(),
+            )
+            expect("curl -k reads a file of the guest over TLS 1.3",
+                   host.get("tls_rc") == 0 and host.get("tls_body") == FILE_BODY,
+                   (host.get("tls_error") or "") + " " + str(host.get("tls_rc")))
+            expect("the listing of the guest over TLS is a 200",
+                   host.get("tls_status") == "200", str(host.get("tls_status")))
+            closed = answers.get("httpd-tls-off", "")
+            expect("the TLS door closes", "httpd: stopped" in closed, closed.strip())
+
+    # --- the update over the network (net/ota.h, ADR 0022 §7)
+    key = answers.get("ota-key", "")
+    expect("the guest takes the key of an image", "wget: HTTP 200" in key, key.strip())
+
+    fetch = answers.get("ota-fetch", "")
+    expect("a signed image is installed in the inactive slot",
+           "is in slot 1 (new); a reboot is needed" in fetch, fetch.strip())
+
+    boot = answers.get("ota-boot", "")
+    expect("the boot of the new slot waits for its confirmation",
+           "ota: slot 1 pending" in boot, boot.strip())
+
+    confirm = answers.get("ota-confirm", "")
+    expect("the confirmation keeps the slot", "ota: slot 1 is valid" in confirm,
+           confirm.strip())
+
+    bad = answers.get("ota-bad", "")
+    expect("an image that is not the one the trailer hashes is refused",
+           "the image is not the one the trailer hashes" in bad, bad.strip())
+
+    good = answers.get("ota-status-good", "")
+    expect("the refused image changed no slot", "ota: slot 1 valid" in good, good.strip())
+
+    again = answers.get("ota-fetch-2", "")
+    expect("a second image goes to the other slot",
+           "is in slot 0 (new)" in again, again.strip())
+
+    waiting = answers.get("ota-boot-2", "")
+    expect("the boot of the second image is pending",
+           "ota: slot 0 pending" in waiting, waiting.strip())
+
+    rolled = answers.get("ota-boot-3", "")
+    expect("a boot that did not confirm returns to the other slot",
+           "ota: slot 1 valid" in rolled and "rolled back" in rolled, rolled.strip())
+
+    status = answers.get("ota-status-rollback", "")
+    expect("the machine runs the slot that confirmed itself",
+           "ota: slot 1 valid" in status and "slot 0" not in status, status.strip())
+
     # --- the server half: the guest serves the page of the state, and the
     # host reaches it through QEMU's forward of a port
     started = answers.get("httpd", "")
@@ -914,6 +1165,18 @@ def main(argv: list) -> int:
     if not build_repository(repository, BUILD):
         return 2
 
+    # The image of an update and the key of the build: the guest fetches the
+    # public half into /etc/ota (net/ota.h) and installs the payload of the
+    # signed envelope into a slot that is a file of its volume.
+    if not build_update(repository, BUILD):
+        return 2
+
+    update_extras = {
+        "/update.img": open(os.path.join(repository, "update.img"), "rb").read(),
+        "/update-bad.img": open(os.path.join(repository, "update-bad.img"), "rb").read(),
+        "/signing.pub": open(os.path.join(BUILD, "signing.pub"), "rb").read(),
+    }
+
     http = HttpServer(repository)
     udp.start()
     http.start()
@@ -929,6 +1192,11 @@ def main(argv: list) -> int:
     if generate_certificates(certificates):
         HttpHandler.extras = {
             "/ca.pem": open(os.path.join(certificates, "ca.pem"), "rb").read(),
+            # The pair the guest's own server is given: the certificate of the
+            # test authority and its key, as the files of a machine that
+            # serves HTTPS (components/net/include/net/tls_server.h).
+            "/server.pem": open(os.path.join(certificates, "server.pem"), "rb").read(),
+            "/server.key": open(os.path.join(certificates, "server.key"), "rb").read(),
         }
 
         def certificate(name: str) -> tuple:
@@ -957,7 +1225,16 @@ def main(argv: list) -> int:
             "tls12_versions": tls12.versions,
         }
 
+    HttpHandler.extras = {**HttpHandler.extras, **update_extras}
+
     fwd_port = free_port()
+    files_port = free_port()
+    tls_port = free_port()
+    forwards = [
+        (fwd_port, GUEST_HTTPD_PORT),
+        (files_port, GUEST_FILES_PORT),
+        (tls_port, GUEST_TLS_PORT),
+    ]
     dns_name = resolvable_name()
     host: dict = {}
 
@@ -967,6 +1244,104 @@ def main(argv: list) -> int:
 
     def fetch_after_close() -> None:
         host["after"] = host_get(fwd_port, "/", tries=5)
+
+    def fetch_files() -> None:
+        """The requests of the host to the server of the files of the guest.
+
+        The bytes of /doc/a.bin are the bytes of the host that wget wrote
+        there a step before: the download, the head, a range, a tag the
+        client already has, a path that climbs and a listing of a directory.
+        """
+        status, fields, body = host_fetch(files_port, SERVED_FILE)
+        host["served_status"] = status
+        host["served"] = body
+        host["served_type"] = fields.get("content-type", "")
+        host["served_etag"] = fields.get("etag", "")
+        host["served_length"] = fields.get("content-length", "")
+
+        status, fields, body = host_fetch(files_port, SERVED_FILE, method="HEAD")
+        host["head_status"] = status
+        host["head_body"] = body
+        host["head_length"] = fields.get("content-length", "")
+
+        status, fields, body = host_fetch(files_port, SERVED_FILE, ["Range: bytes=10-19"])
+        host["range_status"] = status
+        host["range_body"] = body
+        host["range_field"] = fields.get("content-range", "")
+
+        status, fields, body = host_fetch(
+            files_port, SERVED_FILE, [f"If-None-Match: {host['served_etag']}"]
+        )
+        host["not_modified"] = status
+        host["not_modified_body"] = body
+
+        status, _, _ = host_fetch(files_port, "/../etc/passwd")
+        host["traversal"] = status
+
+        status, fields, body = host_fetch(files_port, "/")
+        host["listing_status"] = status
+        host["listing_type"] = fields.get("content-type", "")
+        host["listing"] = body
+
+    def fetch_tls() -> None:
+        """curl -k against the TLS door of the guest, through `hostfwd`."""
+        if shutil.which("curl") is None:
+            host["tls_skipped"] = True
+            return
+
+        # --tlsv1.3 is the proof of the version: a server that offered only
+        # 1.2 would refuse this handshake and the body would not arrive.
+        result = subprocess.run(
+            ["curl", "-k", "-s", "-S", "--max-time", "90", "--tlsv1.3", "--tls-max", "1.3",
+             "-o", "-", f"https://127.0.0.1:{tls_port}{SERVED_FILE}"],
+            check=False, capture_output=True,
+        )
+        host["tls_body"] = result.stdout
+        host["tls_rc"] = result.returncode
+        if result.returncode != 0:
+            host["tls_error"] = result.stderr.decode("utf-8", errors="replace")[:200]
+
+        # The server keeps a session alive for its idle timeout, so the
+        # second request of this process waits for the first to end.
+        time.sleep(0.5)
+
+        status = subprocess.run(
+            ["curl", "-k", "-s", "-S", "--max-time", "90", "-o", "/dev/null",
+             "-w", "%{http_code}", f"https://127.0.0.1:{tls_port}/"],
+            check=False, capture_output=True,
+        )
+        host["tls_status"] = status.stdout.decode("ascii", errors="replace").strip()
+        host["tls_listing"] = status.returncode == 0
+
+    def fetch_busy() -> None:
+        """The ceiling of the sessions: the door is full and says 503.
+
+        The stack of the port lends four sessions (four sockets), and the
+        server of the files serves three: the sockets of this process hold
+        the three and one more is answered with 503 and closed.
+        """
+        idle = []
+
+        try:
+            for _ in range(3):
+                client = socket.create_connection(("127.0.0.1", files_port), timeout=5)
+                idle.append(client)
+                time.sleep(0.15)
+
+            time.sleep(0.4)
+
+            answer = host_request(
+                files_port, b"GET /a.bin HTTP/1.0\r\nHost: microos\r\n\r\n", timeout=10
+            )
+            host["busy_answer"] = answer
+        except OSError as error:
+            host["busy_answer"] = b""
+            host["busy_error"] = str(error)
+        finally:
+            for client in idle:
+                client.close()
+
+        time.sleep(0.5)
 
     steps: list = []
     labels: list = []
@@ -1018,6 +1393,45 @@ def main(argv: list) -> int:
     command(f"pkg -S {PROGRAM}", "pkg-install")
     command("pkg -Q", "pkg-query")
     command(f"exec {PROGRAM}", "exec")
+
+    # --- the server of files of the volume (components/net/src/httpd.c)
+    command("mkdir /doc", "doc-directory")
+    command(f"wget http://10.0.2.2:{http.port}/file.bin {GUEST_SERVED_FILE}", "doc-file")
+    command("mkdir /var/log", "log-directory")
+    command(f"httpd serve {GUEST_FILES_PORT} /doc", "httpd-serve")
+    action(fetch_files)
+    action(fetch_busy)
+    command("cat /var/log/httpd.log", "httpd-log")
+
+    # The hundred megabytes of a stream, checked by the digest the client
+    # computes while it reads: the sink is /dev/null, the volume is sixteen
+    # megabytes, and the comparison is the SHA-256 of the bytes on the wire.
+    command(f"wget --sha256 http://10.0.2.2:{http.port}/big.bin /dev/null", "wget-big")
+    command("httpd off", "httpd-serve-off")
+
+    if tls_state["enabled"]:
+        # --- the serving side of TLS on the same files
+        command(f"wget http://10.0.2.2:{http.port}/server.pem /etc/ssl/server.crt",
+                "tls-server-cert")
+        command(f"wget http://10.0.2.2:{http.port}/server.key /etc/ssl/server.key",
+                "tls-server-key")
+        command(f"httpd tls {GUEST_TLS_PORT} /doc", "httpd-tls")
+        action(fetch_tls)
+        command("httpd off", "httpd-tls-off")
+
+    # --- the update over the network (net/ota.h, ADR 0022 §7)
+    command("mkdir /etc/ota", "ota-directory")
+    command(f"wget http://10.0.2.2:{http.port}/signing.pub /etc/ota/image.pub", "ota-key")
+    command(f"ota fetch http://10.0.2.2:{http.port}/update.img", "ota-fetch")
+    command("ota boot", "ota-boot")
+    command("ota confirm", "ota-confirm")
+    command(f"ota fetch http://10.0.2.2:{http.port}/update-bad.img", "ota-bad")
+    command("ota status", "ota-status-good")
+    command(f"ota fetch http://10.0.2.2:{http.port}/update.img", "ota-fetch-2")
+    command("ota boot", "ota-boot-2")
+    command("ota boot", "ota-boot-3")
+    command("ota status", "ota-status-rollback")
+
     command(f"httpd {GUEST_HTTPD_PORT}", "httpd")
     action(fetch_page)
 
@@ -1030,7 +1444,7 @@ def main(argv: list) -> int:
     command("netinfo", "netinfo-after")
 
     try:
-        output = run_machine(loader, kernel, steps, fwd_port, args.timeout)
+        output = run_machine(loader, kernel, steps, forwards, args.timeout)
     except FileNotFoundError:
         print("qemu-system-x86_64 is not installed", file=sys.stderr)
         return 2
