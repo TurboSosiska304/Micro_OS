@@ -45,7 +45,7 @@ import sys
 import tempfile
 import time
 
-from qemu_session import Machine, MachineError
+from qemu_session import DISKS, Machine, MachineError, root_name
 from x86_image import build_image
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -75,6 +75,11 @@ SPARSE_LIMIT_MB = 64
 MAP_KB = 615
 MAP_TOLERANCE_KB = 96
 
+
+# The bus of the disk of the run, set by `--disk`: the two disks of the port
+# are one image and two devices (ADR 0037), and the rate of a volume is a
+# number of that pair.
+DISK = "ide"
 
 # The lines of the report, in the order they were made.
 CHECKS: list = []
@@ -210,10 +215,10 @@ def ext2_checks(build: str, work: str, mkfs: str, mib: int, timeout: float) -> N
           f" ({seconds:.1f} s of mkfs)")
 
     try:
-        with Machine(build, image) as machine:
+        with Machine(build, image, disk=DISK) as machine:
             banner = machine.open(timeout=timeout)
             check("ext2: the machine boots on the volume of 5 GiB",
-                  "root: the root is ext2 on ata0p1" in banner, banner[-400:])
+                  f"root: the root is ext2 on {root_name(DISK)}" in banner, banner[-400:])
 
             answer, _ = timed(machine, "df /", 60.0)
             free, total = df_blocks(answer)
@@ -312,10 +317,10 @@ def mfs_checks(build: str, work: str, mkfs: str, mib: int, timeout: float) -> in
           f" ({seconds:.1f} s of mkfs)")
 
     try:
-        with Machine(build, image) as machine:
+        with Machine(build, image, disk=DISK) as machine:
             banner = machine.open(timeout=timeout)
             check("mfs: the machine boots on the volume of 5 GiB",
-                  "root: the root is mfs on ata0p1" in banner, banner[-400:])
+                  f"root: the root is mfs on {root_name(DISK)}" in banner, banner[-400:])
 
             answer, seconds = timed(machine, "df /", 120.0)
             free, total = df_blocks(answer)
@@ -368,7 +373,7 @@ def mfs_checks(build: str, work: str, mkfs: str, mib: int, timeout: float) -> in
         return heap
 
     try:
-        with Machine(build, small) as machine:
+        with Machine(build, small, disk=DISK) as machine:
             machine.open(timeout=timeout)
             answer, _ = timed(machine, "free", 60.0)
     except MachineError as error:
@@ -400,8 +405,17 @@ def main(argv: list) -> int:
     parser.add_argument("--timeout", type=float, default=1800.0,
                         help="the seconds a boot gets (default: 1800)")
     parser.add_argument("--keep", action="store_true", help="keep the images of the run")
+    parser.add_argument(
+        "--disk",
+        choices=DISKS,
+        default="ide",
+        help="the bus of the disk of the run (default: ide)",
+    )
     parser.add_argument("--verbose", action="store_true", help="print the consoles as well")
     args = parser.parse_args(argv)
+
+    global DISK
+    DISK = args.disk
 
     for path in ("loader32.elf", "microos64.bin", "mkbig.mox"):
         if not os.path.isfile(os.path.join(args.build, path)):
@@ -434,7 +448,7 @@ def main(argv: list) -> int:
     failed = [item for item in CHECKS if not item[1]]
     seconds = time.monotonic() - started
 
-    print("Micro OS — the volume smoke test of the x86-64 port")
+    print(f"Micro OS — the volume smoke test of the x86-64 port on {DISK}")
     print("=" * 72)
 
     for title, ok, detail in CHECKS:

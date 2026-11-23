@@ -174,6 +174,10 @@ void port_x86_64_irq_ata(k_u64_t *frame);
  */
 #define ATA_CACHE_SECTORS 512u
 
+/* The run a read ahead of a file asks of the drive: 128 sectors of the cache,
+ * a quarter of it, which is one command of the bus master of 128 KiB. */
+#define ATA_READ_AHEAD 128u
+
 /* The sectors of the medium that one block of the filesystem covers. */
 #define ATA_MEDIUM_SECTOR 512u
 #define ATA_SECTORS_PER_BLOCK (MFS_BLOCK_SIZE / ATA_MEDIUM_SECTOR)
@@ -882,6 +886,7 @@ static struct k_blockdev g_ata_device = {
     .sectors = 0, /* the size of the drive, read by the identify below */
     .ops = &g_ata_ops,
     .ctx = NULL,
+    .read_ahead = ATA_READ_AHEAD,
 };
 
 /*
@@ -1125,15 +1130,25 @@ void port_x86_64_disk_irq_init(void)
 
 /*
  * Where the filesystem of the boot lives: the root image the boot loader
- * handed the kernel when it came from an ISO, the first partition of the disk
+ * handed the kernel when it came from an ISO, the first partition of a disk
  * when there is one, the volume in the memory when there is neither.
+ *
+ * Of the two disks of the port the virtio one comes first: it is the device of
+ * this release (ADR 0037) and a machine that was given both is a machine whose
+ * root is the fast one. A machine with a card that carries no partition table
+ * is a machine with no root on it, and the drive of the IDE channel answers.
  */
 const char *port_x86_64_root_device(void)
 {
     const char *boot = port_x86_64_module_root();
+    const char *virtio = port_x86_64_virtio_blk_root();
 
     if (boot != NULL) {
         return boot;
+    }
+
+    if (virtio != NULL) {
+        return virtio;
     }
 
     return g_root != NULL ? g_root : "ram0";

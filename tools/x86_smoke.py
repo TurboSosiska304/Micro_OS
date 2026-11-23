@@ -51,6 +51,13 @@ import sys
 import tempfile
 import time
 
+from qemu_session import DISKS, drive_args, root_name
+
+# The bus of the disk of this run, set by `--disk`: the image is one file and
+# the two disks of the port are two devices (ADR 0037), so the lines of the
+# transcript name the device of the run and nothing else changes.
+DISK = "ide"
+
 # The commands that are typed into the shell. The answers are read by their
 # place in the list, the way the smoke test of the simulator does it. The last
 # one looks at the tree the boot left behind: a program that ran out of a file
@@ -905,13 +912,19 @@ def _write_bad_image(data: bytes, tag: str = "image") -> str:
     return path
 
 
-def machine_argv(loader: str, kernel: str, image: str) -> list:
+def machine_argv(loader: str, kernel: str, image: str, disk: str = None) -> list:
     """The command line of the machine of the smoke tests.
 
     One machine for the run of the commands, the script of the console of the
     accounts and the oversized image: a second copy of these arguments would
     be a second machine, and the checks would read the boot of another one.
+
+    The bus of the disk is the one of the run (the global `DISK`, from
+    `--disk`) unless the caller names another: the machines of a test of this
+    tool all boot the same medium.
     """
+    disk = DISK if disk is None else disk
+
     return [
         "qemu-system-x86_64",
         "-kernel",
@@ -924,15 +937,16 @@ def machine_argv(loader: str, kernel: str, image: str) -> list:
         MACHINE_SMP,
         "-nographic",
         "-no-reboot",
-        # The disk of the machine: a raw image on the primary IDE channel.
-        # The programs of /bin are files of the MicroFS volume in it; the
-        # boot writes nothing to the volume (ADR 0008).
-        "-drive",
-        f"file={image},format=raw,if=ide,index=0,cache=writeback",
+        # The disk of the machine: a raw image on the primary IDE channel of
+        # ADR 0008, or on the virtio device of ADR 0037 (`--disk virtio`).
+        # The programs of /bin are files of the volume in it; the boot writes
+        # nothing to the volume.
+        *drive_args(image, disk),
     ]
 
 
-def run_machine(loader: str, kernel: str, image: str, timeout: float, commands: list = None) -> str:
+def run_machine(loader: str, kernel: str, image: str, timeout: float, commands: list = None,
+                disk: str = None) -> str:
     """Boot the machine, drive the shell and return the transcript.
 
     The output is read while the machine runs, not after it stops: the
@@ -946,7 +960,7 @@ def run_machine(loader: str, kernel: str, image: str, timeout: float, commands: 
     working and an AP that was started without the test knowing it are both
     visible here.
     """
-    command = machine_argv(loader, kernel, image)
+    command = machine_argv(loader, kernel, image, disk)
 
     lines = COMMANDS if commands is None else commands
 
@@ -1248,12 +1262,12 @@ def check(output: str) -> list:
     # back, not only a string.
     expect(
         "the volume of the machine is the disk",
-        "x86-64: the root volume is ata0p1" in output,
+        f"x86-64: the root volume is {root_name(DISK)}" in output,
         "the machine booted without the image of the disk",
     )
     expect(
         "the boot finds the programs on the disk",
-        "x86-64: the programs come from ata0p1:/bin" in output,
+        f"x86-64: the programs come from {root_name(DISK)}:/bin" in output,
     )
     # Nothing is written to the volume at the boot: the program is a file the
     # tool left there, not a blob of the kernel that was installed first.
@@ -3335,8 +3349,17 @@ def main(argv: list) -> int:
     # of two of them needs three times that on a machine that is not the
     # fastest: the limit is the whole run and a slow host is not a failure.
     parser.add_argument("--timeout", type=float, default=600.0, help="the seconds the machine gets")
+    parser.add_argument(
+        "--disk",
+        choices=DISKS,
+        default="ide",
+        help="the bus of the disk of the run (default: ide)",
+    )
     parser.add_argument("--verbose", action="store_true", help="print the console of the machine")
     args = parser.parse_args(argv)
+
+    global DISK
+    DISK = args.disk
 
     loader = os.path.join(BUILD, "loader32.elf")
     kernel = os.path.join(BUILD, "microos64.bin")

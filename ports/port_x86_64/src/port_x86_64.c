@@ -388,8 +388,11 @@ struct idt_pointer {
 #define IRQ_TIMER 0u
 #define IRQ_KEYBOARD 1u
 #define IRQ_CASCADE 2u
-#define IRQ_MOUSE 12u /* the second port of the 8042, on the slave (1.7.0) */
-#define IRQ_ATA 14u   /* the primary IDE channel, on the slave */
+#define IRQ_MOUSE 12u          /* the second port of the 8042, on the slave (1.7.0) */
+#define IRQ_ATA 14u            /* the primary IDE channel, on the slave */
+#define IRQ_CASCADE_LINE 2u    /* the slave reaches the master through it */
+#define IRQ_SPURIOUS_MASTER 7u /* the vector of an acknowledge of nothing */
+#define IRQ_SPURIOUS_SLAVE 15u /* the same, on the slave */
 
 /* The lines of the port that have a handler, in the order the counters below
  * and the `smp irq` command name them (PORT_X86_64_IRQ_TIMER and
@@ -426,6 +429,7 @@ extern void isr_irq0(void);
 extern void isr_irq1(void);
 extern void isr_irq12(void);
 extern void isr_irq_ata(void);
+extern void isr_irq_8259_spurious(void);
 extern void isr_syscall(void);
 extern void isr_unexpected(void);
 
@@ -598,6 +602,22 @@ k_u32_t port_x86_64_irq_count(k_u32_t line, k_u32_t cpu)
  * and with the I/O APIC the line is in service until the local APIC of this
  * core hears about it.
  */
+/*
+ * The acknowledge that found nothing behind the request, on the 8259. The
+ * cascade of the slave is the one the chip puts in service itself, so both
+ * chips are told that the interrupt is over; a chip with nothing in service
+ * makes a no-op of the write. A handler for these three vectors is what keeps
+ * a level-triggered line of the PCI bus - the disk of ADR 0037 is one - from
+ * stopping the machine on a race of the chip that no device caused.
+ */
+void port_x86_64_irq_8259_spurious(k_u64_t *frame)
+{
+    K_UNUSED(frame);
+
+    port_outb(PIC2_COMMAND, PIC_EOI);
+    port_outb(PIC1_COMMAND, PIC_EOI);
+}
+
 void port_x86_64_irq_tick(k_u64_t *frame)
 {
     g_ticks++;
@@ -896,6 +916,21 @@ void port_x86_64_interrupts_init(void)
      * opens it (src/ata.c, ADR 0032).
      */
     idt_set(IRQ_BASE + IRQ_ATA, isr_irq_ata, 0, IDT_GATE_INTERRUPT);
+
+    /*
+     * The three vectors of the 8259 that no device owns: the cascade, which is
+     * the line of the slave on the master, and the two the chip answers with
+     * when an acknowledge finds nothing behind the request. A line of the PCI
+     * bus is level-triggered (the ELCR of the PIIX says which of them are), and
+     * a level that lets go of its request between the interrupt and the
+     * acknowledge is exactly that: the chip answers with the vector of its own
+     * line, and a machine without an entry for it stops on a fault that no
+     * device caused. The handler acknowledges and returns (src/interrupts.S,
+     * the story is in src/virtio_blk.c).
+     */
+    idt_set(IRQ_BASE + IRQ_CASCADE_LINE, isr_irq_8259_spurious, 0, IDT_GATE_INTERRUPT);
+    idt_set(IRQ_BASE + IRQ_SPURIOUS_MASTER, isr_irq_8259_spurious, 0, IDT_GATE_INTERRUPT);
+    idt_set(IRQ_BASE + IRQ_SPURIOUS_SLAVE, isr_irq_8259_spurious, 0, IDT_GATE_INTERRUPT);
 
     /*
      * The door of the programs of the port. Without this one line the
@@ -1848,6 +1883,7 @@ void port_x86_64_init(k_u64_t multiboot_info)
     port_x86_64_blockdev_init();
     port_x86_64_module_init();
     port_x86_64_disk_init();
+    port_x86_64_virtio_blk_init();
 
     /* The network is the last device of the boot before the interrupts: it
      * asks the PCI bus for a card, and a machine without one keeps the "no"
@@ -1858,10 +1894,11 @@ void port_x86_64_init(k_u64_t multiboot_info)
      * every millisecond and the kernel has to be able to take it. */
     port_x86_64_interrupts_init();
 
-    /* The disk asked for the line of its channel before the table existed:
-     * the driver opens it now, and the bus master of the channel becomes the
-     * one the transfers use (ADR 0032). */
+    /* The two disks asked for their lines before the table existed: the
+     * drivers open them now, and the bus master of the channel and the queue
+     * of the card become the ones the transfers use (ADR 0032, ADR 0037). */
     port_x86_64_disk_irq_init();
+    port_x86_64_virtio_blk_irq_init();
 
     /*
      * The application processors (ADR 0012). The tables of the machine and
