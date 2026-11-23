@@ -30,6 +30,8 @@
 #include "kernel/ksys.h"
 #include "kernel/log.h"
 #include "kernel/port.h"
+#include "kernel/port/cpu.h"
+#include "kernel/root.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
 #include "kernel/vfs.h"
@@ -38,6 +40,8 @@
 #include "kshell/kshell.h"
 #include "port_x86_64_console.h"
 #include "port_x86_64_screen.h"
+#include "port_x86_64_task.h"
+#include "port_x86_64_smp.h"
 #include "settings/settings.h"
 
 #if MICRO_OS_NET
@@ -49,7 +53,6 @@
 #endif
 
 #include "devfs/devfs.h"
-#include "mfs/mfs.h"
 #include "mfs/mfs_vfs.h"
 #include "procfs/procfs.h"
 #if MICRO_OS_FS_FAT32
@@ -236,11 +239,17 @@ static void etc_bring_up(void)
  * The filesystem of the machine: the disk of the port when QEMU was given one
  * and the first partition of it (ADR 0008), otherwise a volume of the memory
  * of the port mounted at the root. The device is registered by
- * port_x86_64_init() before the kernel boots, and a volume that was never
- * formatted is formatted here (mfs_vfs_mount does that; a fresh disk reads as
- * a blank medium, see blockdev_ram.c and ata.c).
+ * port_x86_64_init() before the kernel boots, and its type is the business of
+ * the kernel (ADR 0027): the port says where the root is, k_root_mount() reads
+ * the bytes of the medium and mounts the volume as what it is. A volume that
+ * was never formatted is formatted by MicroFS (mfs_vfs_mount does that; a
+ * fresh disk reads as a blank medium, see blockdev_ram.c and ata.c).
+ *
+ * Returns 0 when the root is mounted, a negative code when there is no root.
+ * A machine without one has no /bin, no /etc and no /proc, and the caller
+ * stops the boot and says why instead of showing a shell over an empty tree.
  */
-static void filesystem_bring_up(void)
+static int filesystem_bring_up(const char **type)
 {
     const char *device = port_x86_64_root_device();
     int rc;
@@ -258,16 +267,17 @@ static void filesystem_bring_up(void)
 #endif
 
     /* MicroFS is a type as well, so that /etc/fstab and the shell can name
-     * the volume of the machine like any other volume. */
+     * the volume of the machine like any other volume. The order of the two
+     * registrations is the order of ADR 0027 for a volume two types claim. */
     if (mfs_vfs_register_type() != 0) {
         kwarn("x86-64: MicroFS could not register its type");
     }
 
-    rc = mfs_vfs_mount("/", device);
+    rc = k_root_mount(device, type);
 
     if (rc != 0) {
-        kerror("x86-64: cannot mount %s at / (%s), there is no /bin", device, mfs_strerror(rc));
-        return;
+        kerror("x86-64: the machine has no root filesystem on %s, there is no /bin", device);
+        return rc;
     }
 
     /* The tree of the machine: /etc of the volume or of the memory, then the
@@ -286,7 +296,9 @@ static void filesystem_bring_up(void)
     /* The programs are files the tool left in the volume; nothing is
      * written here. A volume a person made without /bin is a machine
      * without programs, and the boot says so when it asks for one. */
-    kinfo("x86-64: the programs come from %s:/bin", device);
+    kinfo("x86-64: the programs come from %s:/bin, the volume is %s", device, *type);
+
+    return 0;
 }
 
 /*
@@ -326,14 +338,28 @@ static void init_task(void *arg)
         kerror("x86-64: cannot start the shell");
     }
 
+    /*
+     * The init of the machine is also the parent of the last resort: a child
+     * whose parent died is reparented to pid 1 by the kernel, and this loop
+     * is what reaps it. A zombie that nobody waits for keeps its slot of the
+     * table of 32, and a console that forks programs in a loop (the soak of
+     * the port) would fill the table. The interval is a tenth of a second:
+     * the wait of a finite timeout costs nothing and the slot is back before
+     * a person or a test can see it.
+     */
     for (;;) {
-        k_sched_sleep_ms(PORT_IDLE_MS);
+        while (ksys_waitpid(-1, NULL, KSYS_WNOHANG) > 0) {
+            /* One orphan reaped; the next scan starts at once. */
+        }
+
+        k_sched_sleep_ms(100u);
     }
 }
 
 void kmain(k_u64_t multiboot_info)
 {
     struct kernel_boot_config cfg;
+    const char *root_type = NULL;
     int mounted;
     int defaults;
 
@@ -345,6 +371,15 @@ void kmain(k_u64_t multiboot_info)
     cfg.board_info = &g_board;
 
     kernel_boot(&cfg);
+
+    /*
+     * The cores that stopped before the scheduler may enter it now: the
+     * array of kernel/cpu.c exists (k_sched_init ran inside kernel_boot) and
+     * its count is the number of cores that reached C. The release comes
+     * before the first task_create(), because a core that entered the
+     * scheduler has to find the queues it is going to share.
+     */
+    port_x86_64_smp_release();
 
     kinfo("x86-64: the kernel is up, heap %u KB free of %u KB",
           (unsigned)(k_port_heap_free() / 1024), (unsigned)(k_port_heap_total() / 1024));
@@ -358,18 +393,27 @@ void kmain(k_u64_t multiboot_info)
     /*
      * The processors of the machine (ADR 0012). The count on the left is what
      * the firmware (the MADT of ACPI) says, the one on the right is what the
-     * kernel runs: the APs need the trampoline, INIT/SIPI, a local APIC timer
-     * and an I/O APIC, and this port does not have them yet. Saying both
-     * numbers is the honest line; putting a task in the queue of a core that
-     * never runs it would hang the machine instead.
+     * kernel runs: a core counts here only when it reached C and was accepted
+     * by the boot. Saying both numbers is the honest line; putting a task in
+     * the queue of a core that never runs it would hang the machine instead.
      */
     kinfo("x86-64: %u cpu(s) reported by the firmware, %u in use (apic 0x%x)",
           (unsigned)port_x86_64_cpu_available(), (unsigned)port_x86_64_cpu_started(),
           (unsigned)port_x86_64_apic_base());
 
-    if (port_x86_64_cpu_available() > port_x86_64_cpu_started()) {
-        kwarn("x86-64: the AP bring-up is not written yet, the kernel runs on the core 0");
+#if KERNEL_SMP
+    if (!port_x86_64_smp_apic_ready()) {
+        kwarn("x86-64: no local APIC, the machine runs on the core 0");
+    } else if (port_x86_64_cpu_started() < port_x86_64_cpu_available()) {
+        kwarn("x86-64: %u core(s) of the firmware did not answer the start-up IPI",
+              (unsigned)(port_x86_64_cpu_available() - port_x86_64_cpu_started()));
     }
+#else
+    /* A one-core build does not start an AP whatever the firmware lists: the
+     * flag is the promise of 1.2 behaviour, and the line says so instead of
+     * blaming an APIC that the machine may well have. */
+    kinfo("x86-64: this kernel is built without KERNEL_SMP, the core 0 runs alone");
+#endif
 
     /*
      * The tables are read back before a program is ever entered: the port
@@ -385,12 +429,21 @@ void kmain(k_u64_t multiboot_info)
     }
 
     /*
-     * The filesystem, before the tasks: the volume is mounted and the images
-     * of the programs are written to /bin. The program itself runs later, in
-     * the init task: execve is a wait for a task now, and the boot context
+     * The filesystem, before the tasks: the type of the volume is read from
+     * the medium and the volume is mounted with it (ADR 0027), and the
+     * images of the programs are files of it. The program itself runs later,
+     * in the init task: execve is a wait for a task now, and the boot context
      * has no scheduler under it to wait with.
+     *
+     * A machine without a root has nothing to boot: no /bin, no /etc, no
+     * programs and no settings. The sentence is on the console and the boot
+     * stops, because a shell over an empty tree would look like a machine
+     * whose disk lost its files.
      */
-    filesystem_bring_up();
+    if (filesystem_bring_up(&root_type) != 0) {
+        kerror("x86-64: the boot stops, there is no root filesystem to run from");
+        port_x86_64_idle();
+    }
 
     /*
      * The settings of /etc (ADR 0021): the systems of the tree, and the ones
@@ -438,6 +491,15 @@ void kmain(k_u64_t multiboot_info)
         kwarn("x86-64: not every command of the network is registered");
     }
 
+#if KERNEL_SMP
+    /* The cores of the machine: the state of the scheduler of every core, a
+     * run of workers and the IPI of one core to another (ADR 0012). A
+     * one-core build has no second core to name and no command. */
+    if (port_x86_64_smp_register() != 0) {
+        kwarn("x86-64: the smp command is not registered");
+    }
+#endif
+
 #if MICRO_OS_NET
     if (net_register() != 0) {
         kwarn("x86-64: not every command of components/net is registered");
@@ -470,19 +532,20 @@ void kmain(k_u64_t multiboot_info)
 
     if (task_create("init", init_task, NULL, TASK_PRIO_DEFAULT) == NULL) {
         /*
-         * The context switch and the timer are the next milestone of the
-         * port. Saying it once and sleeping is honest, and it keeps the
-         * console of the machine alive for whoever looks at it.
+         * A machine without a task cannot switch: the boot says so and keeps
+         * the core looking at its queue, which is the idle loop of a port
+         * whose scheduler exists and has nothing to run.
          */
         kinfo("x86-64: no tasks yet");
-
-        for (;;) {
-            k_sched_sleep_ms(PORT_IDLE_MS);
-        }
+        port_x86_64_idle();
     }
 
-    /* The init process owns the rest of the boot: the shell comes from it. */
-    for (;;) {
-        k_sched_sleep_ms(PORT_IDLE_MS);
-    }
+    /*
+     * The init process owns the rest of the boot: the shell comes from it.
+     * The context of kmain is the idle context of the core 0: it looks at the
+     * queue and waits, and it is where the port returns when the last task of
+     * this core ends. It is reached again only if a task ends and gives the
+     * core back, so the return of task_create() above is the normal way here.
+     */
+    port_x86_64_idle();
 }

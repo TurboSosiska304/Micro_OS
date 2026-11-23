@@ -20,12 +20,12 @@ Three builds from one tree:
   `make x86-smoke`), a port with its own loader and no libc under the kernel.
 * **ESP32** — the same sources as an ESP-IDF v5.3 project.
 
-Current state: `1.0.0` is released and `1.1.0` is in preparation - the last
-major changes of the ESP32 port (the settings of `/etc`, the `progs` partition
-and the update with a rollback) and the first phase of many cores. From
-`1.2.0` the board is a compatibility port (ADR 0018). The kernel boots on a
-second machine, x86-64 in QEMU; the roadmap of the platform and of the kernel
-is `docs/roadmap.md`.
+Current state: `1.2.0` is released and `1.3.0` is the release of the many
+cores - `KERNEL_SMP` stays off by default and the x86-64 machine of QEMU
+starts both of its processors with it on. From `1.2.0` the board is a
+compatibility port (ADR 0018); the many cores are x86-64 and the host
+substrate. The roadmap of the platform and of the kernel is
+`docs/roadmap.md`.
 
 ## The rule that matters most
 
@@ -237,7 +237,9 @@ Open items from `docs/roadmap.md`:
   OTA (the flash has to be repartitioned first).
 * Phase 9: the RTC alarm and deep sleep, the microphone, `drv_ir`, a factory
   reset, the enclosure modes.
-* K8 (many cores): the first phase is in the tree (`KERNEL_SMP`, the run
-  queues per core, the host gate of `make test-smp`/`test-tsan`/`soak-host`
-  and the ACPI processor list of x86-64); the AP bring-up of x86-64 is the
-  blocker, written down in ADR 0012, "The pilot of 1.x".
+* K8 (many cores): the pilot is closed in `1.3.0` (`KERNEL_SMP` off by
+  default, the run queues per core, the big kernel lock, the AP bring-up of
+  x86-64, `make x86-smp-smoke` and `make soak-smp`; the host gate of
+  `make test-smp`/`test-tsan`/`soak-host`). What is still open - the I/O
+  APIC, the wake IPI of the scheduler, the FPU state, a guard page - is the
+  K8 table of `docs/debts.md`; the decision is ADR 0012.

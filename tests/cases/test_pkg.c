@@ -264,6 +264,109 @@ static k_size_t index_json(char *out, k_size_t size, const char *name, const cha
     return (k_size_t)n;
 }
 
+/*
+ * An index of several packages, one of each shape of ADR 0025: the license
+ * and the source of an entry are written only when the case names them.
+ */
+struct repo_package {
+    const char *name;
+    const char *version;
+    const char *license;
+    const char *source;
+    const char *source_sha256;
+    k_size_t size;
+    char sha256[PKG_SHA256_HEX];
+};
+
+static bool json_append(char **cursor, k_size_t *left, const char *fmt, ...)
+{
+    va_list ap;
+    int n;
+
+    va_start(ap, fmt);
+    n = vsnprintf(*cursor, *left, fmt, ap);
+    va_end(ap);
+
+    if (n < 0 || (k_size_t)n >= *left) {
+        return false;
+    }
+
+    *cursor += n;
+    *left -= (k_size_t)n;
+
+    return true;
+}
+
+static k_size_t repo_index_json(char *out, k_size_t size, const struct repo_package *packages,
+                                k_size_t count)
+{
+    char *cursor = out;
+    k_size_t left = size;
+    k_size_t i;
+
+    if (!json_append(&cursor, &left,
+                     "{\"repository\":\"microos-progs\",\"machine\":\"x86_64\",\"abi\":%u,"
+                     "\"packages\":[",
+                     (unsigned)PKG_ABI)) {
+        return 0;
+    }
+
+    for (i = 0; i < count; i++) {
+        const struct repo_package *package = &packages[i];
+
+        if (!json_append(&cursor, &left,
+                         "%s{\"name\":\"%s\",\"version\":\"%s\",\"size\":%u,\"sha256\":\"%s\","
+                         "\"file\":\"%s-%s-x86_64.mox\"",
+                         i == 0 ? "" : ",", package->name, package->version,
+                         (unsigned)package->size, package->sha256, package->name,
+                         package->version)) {
+            return 0;
+        }
+
+        if (package->license != NULL &&
+            !json_append(&cursor, &left, ",\"license\":\"%s\"", package->license)) {
+            return 0;
+        }
+
+        if (package->source != NULL &&
+            !json_append(&cursor, &left, ",\"source\":\"%s\"", package->source)) {
+            return 0;
+        }
+
+        if (package->source_sha256 != NULL &&
+            !json_append(&cursor, &left, ",\"source_sha256\":\"%s\"", package->source_sha256)) {
+            return 0;
+        }
+
+        if (!json_append(&cursor, &left, "}")) {
+            return 0;
+        }
+    }
+
+    if (!json_append(&cursor, &left, "]}")) {
+        return 0;
+    }
+
+    return (k_size_t)(cursor - out);
+}
+
+/* The digest of a buffer as the index writes it. */
+static void digest_hex(char out[PKG_SHA256_HEX], const void *data, k_size_t size)
+{
+    static const char digits[] = "0123456789abcdef";
+    k_u8_t digest[32];
+    k_size_t i;
+
+    microos_sha256(data, size, digest);
+
+    for (i = 0; i < 32; i++) {
+        out[i * 2u] = digits[digest[i] >> 4];
+        out[i * 2u + 1u] = digits[digest[i] & 0x0Fu];
+    }
+
+    out[PKG_SHA256_HEX - 1u] = '\0';
+}
+
 /* The index and its signature where `pkg -Sy` would have left them. */
 static void write_index(const char *text, k_size_t size)
 {
@@ -377,6 +480,77 @@ static void test_index(void)
         KT_CHECK_INT_EQ(pkg_index_parse(unknown_field, strlen(unknown_field), &index), PKG_OK);
         KT_CHECK_INT_EQ((int)index.count, 0);
     }
+
+    /*
+     * The three fields of ADR 0025: read when they are there, empty when
+     * they are not, and a field this parser does not know is still skipped
+     * when it sits beside them.
+     */
+    {
+        static const char licensed[] =
+            "{\"machine\":\"x86_64\",\"abi\":2,\"packages\":["
+            "{\"name\":\"diff\",\"version\":\"1.0.0\",\"size\":64,"
+            "\"sha256\":\"2222222222222222222222222222222222222222222222222222222222222222\","
+            "\"license\":\"GPL-3.0-or-later\","
+            "\"source\":\"https://example.org/diff-1.0.0.tar.xz\","
+            "\"source_sha256\":"
+            "\"3333333333333333333333333333333333333333333333333333333333333333\","
+            "\"future\":{\"a\":[1,2]}},"
+            "{\"name\":\"hello\",\"version\":\"1.0.0\",\"size\":32,"
+            "\"sha256\":\"4444444444444444444444444444444444444444444444444444444444444444\"}"
+            "]}";
+
+        KT_CHECK_INT_EQ(pkg_index_parse(licensed, strlen(licensed), &index), PKG_OK);
+        KT_CHECK_INT_EQ((int)index.count, 2);
+        KT_CHECK_STR_EQ(index.entries[0].license, "GPL-3.0-or-later");
+        KT_CHECK_STR_EQ(index.entries[0].source, "https://example.org/diff-1.0.0.tar.xz");
+        KT_CHECK_STR_EQ(index.entries[0].source_sha256,
+                        "3333333333333333333333333333333333333333333333333333333333333333");
+        KT_CHECK_STR_EQ(index.entries[1].license, "");
+        KT_CHECK_STR_EQ(index.entries[1].source, "");
+        KT_CHECK_STR_EQ(index.entries[1].source_sha256, "");
+        KT_CHECK(pkg_digest_is_hex(index.entries[0].source_sha256));
+        KT_CHECK(!pkg_digest_is_hex(index.entries[1].source_sha256));
+    }
+}
+
+static void test_size_ceiling(void)
+{
+    static const char zero_digest[] =
+        "0000000000000000000000000000000000000000000000000000000000000000";
+    static char text[1024];
+    struct pkg_index index;
+    int n;
+
+    ktest_begin("pkg: a package of 8 MiB is taken, and one byte more is not");
+
+    KT_CHECK_INT_EQ(PKG_PACKAGE_MAX, (k_u64_t)8 * 1024u * 1024u);
+#ifdef K_EXEC_MAX_IMAGE
+    /* The installer and the loader of programs refuse the same file. */
+    KT_CHECK_INT_EQ(PKG_PACKAGE_MAX, K_EXEC_MAX_IMAGE);
+#endif
+
+    KT_CHECK_INT_EQ(pkg_size_check(PKG_PACKAGE_MAX - 1u), PKG_OK);
+    KT_CHECK_INT_EQ(pkg_size_check(PKG_PACKAGE_MAX), PKG_OK);
+    KT_CHECK_INT_EQ(pkg_size_check((k_u64_t)PKG_PACKAGE_MAX + 1u), PKG_ESIZE);
+    KT_CHECK_INT_EQ(pkg_size_check((k_u64_t)PKG_PACKAGE_MAX * 2u), PKG_ESIZE);
+
+    n = snprintf(text, sizeof(text),
+                 "{\"repository\":\"microos-progs\",\"machine\":\"x86_64\",\"abi\":%u,"
+                 "\"packages\":[{\"name\":\"huge\",\"version\":\"1.0.0\",\"size\":%llu,"
+                 "\"sha256\":\"%s\",\"file\":\"huge-1.0.0-x86_64.mox\"}]}",
+                 (unsigned)PKG_ABI, (unsigned long long)PKG_PACKAGE_MAX, zero_digest);
+    KT_CHECK(n > 0 && (k_size_t)n < sizeof(text));
+    KT_CHECK_INT_EQ(pkg_index_parse(text, (k_size_t)n, &index), PKG_OK);
+    KT_CHECK_INT_EQ(index.entries[0].size, PKG_PACKAGE_MAX);
+
+    n = snprintf(text, sizeof(text),
+                 "{\"repository\":\"microos-progs\",\"machine\":\"x86_64\",\"abi\":%u,"
+                 "\"packages\":[{\"name\":\"huge\",\"version\":\"1.0.0\",\"size\":%llu,"
+                 "\"sha256\":\"%s\",\"file\":\"huge-1.0.0-x86_64.mox\"}]}",
+                 (unsigned)PKG_ABI, (unsigned long long)PKG_PACKAGE_MAX + 1u, zero_digest);
+    KT_CHECK(n > 0 && (k_size_t)n < sizeof(text));
+    KT_CHECK_INT_EQ(pkg_index_parse(text, (k_size_t)n, &index), PKG_EPARSE);
 }
 
 static void test_local_install(void)
@@ -604,14 +778,111 @@ static void test_offline_and_remove(void)
     drop_tree();
 }
 
+static void test_license_rule(void)
+{
+    static const char source_digest[] =
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    static char text[2048];
+    static char record[512];
+    static k_u8_t mit_image[512];
+    static k_u8_t gpl_image[512];
+    static k_u8_t nosource_image[512];
+    static k_u8_t bad_digest_image[512];
+    struct repo_package packages[4];
+    k_size_t length;
+
+    ktest_begin("pkg: a copyleft package without its source does not install (ADR 0025)");
+
+    KT_CHECK(make_tree());
+    write_key();
+
+    memset(packages, 0, sizeof(packages));
+
+    /* A permissive package: no source, and none is needed. */
+    packages[0].name = "hello";
+    packages[0].version = "1.0.0";
+    packages[0].license = "MIT";
+    packages[0].size = make_image(mit_image, sizeof(mit_image), "hello one");
+    KT_CHECK(packages[0].size > 0);
+    digest_hex(packages[0].sha256, mit_image, packages[0].size);
+
+    /* Copyleft with the source and the digest of the archive: installable. */
+    packages[1].name = "diff";
+    packages[1].version = "1.0.0";
+    packages[1].license = "GPL-3.0-or-later";
+    packages[1].source = "https://example.org/diff-1.0.0.tar.xz";
+    packages[1].source_sha256 = source_digest;
+    packages[1].size = make_image(gpl_image, sizeof(gpl_image), "diff one");
+    KT_CHECK(packages[1].size > 0);
+    digest_hex(packages[1].sha256, gpl_image, packages[1].size);
+
+    /* Copyleft and no source, in the lower case of an SPDX string. */
+    packages[2].name = "sed";
+    packages[2].version = "1.0.0";
+    packages[2].license = "gpl-3.0-only";
+    packages[2].size = make_image(nosource_image, sizeof(nosource_image), "sed one");
+    KT_CHECK(packages[2].size > 0);
+    digest_hex(packages[2].sha256, nosource_image, packages[2].size);
+
+    /* Copyleft with a source whose digest is not sixty-four digits. */
+    packages[3].name = "gzip";
+    packages[3].version = "1.0.0";
+    packages[3].license = "GPL-3.0-or-later";
+    packages[3].source = "https://example.org/gzip-1.0.0.tar.gz";
+    packages[3].source_sha256 = "abc123";
+    packages[3].size = make_image(bad_digest_image, sizeof(bad_digest_image), "gzip one");
+    KT_CHECK(packages[3].size > 0);
+    digest_hex(packages[3].sha256, bad_digest_image, packages[3].size);
+
+    cache_package("hello", "1.0.0", "hello one");
+    cache_package("diff", "1.0.0", "diff one");
+    cache_package("sed", "1.0.0", "sed one");
+    cache_package("gzip", "1.0.0", "gzip one");
+
+    length = repo_index_json(text, sizeof(text), packages, K_ARRAY_SIZE(packages));
+    KT_CHECK(length > 0);
+    write_index(text, length);
+
+    /* MIT: installed, and the record has no license line to show. */
+    KT_CHECK_INT_EQ(run("--root", TEST_ROOT, "--offline", "-S", "hello", NULL, NULL), KSHELL_OK);
+    KT_CHECK(file_exists(TEST_ROOT "/usr/bin/hello"));
+
+    /* GPL-3.0 with its source: installed, and the record keeps both fields. */
+    KT_CHECK_INT_EQ(run("--root", TEST_ROOT, "--offline", "-S", "diff", NULL, NULL), KSHELL_OK);
+    KT_CHECK(file_exists(TEST_ROOT "/usr/bin/diff"));
+
+    memset(record, 0, sizeof(record));
+    KT_CHECK(file_read(TEST_ROOT "/var/pkg/local/diff", record, sizeof(record) - 1u) > 0);
+    KT_CHECK(strstr(record, "license=GPL-3.0-or-later") != NULL);
+    KT_CHECK(strstr(record, "source=https://example.org/diff-1.0.0.tar.xz") != NULL);
+    KT_CHECK_INT_EQ(run("--root", TEST_ROOT, "-Qi", "diff", NULL, NULL), KSHELL_OK);
+
+    /* GPL-3.0 without a source: nothing is written, not even the record. */
+    KT_CHECK_INT_EQ(run("--root", TEST_ROOT, "--offline", "-S", "sed", NULL, NULL), KSHELL_ERROR);
+    KT_CHECK(!file_exists(TEST_ROOT "/usr/bin/sed"));
+    KT_CHECK(!file_exists(TEST_ROOT "/var/pkg/local/sed"));
+
+    /* GPL-3.0 with a digest that is not one: the same answer. */
+    KT_CHECK_INT_EQ(run("--root", TEST_ROOT, "--offline", "-S", "gzip", NULL, NULL), KSHELL_ERROR);
+    KT_CHECK(!file_exists(TEST_ROOT "/usr/bin/gzip"));
+    KT_CHECK(!file_exists(TEST_ROOT "/var/pkg/local/gzip"));
+
+    /* The query of the repository is what a person reads before the install. */
+    KT_CHECK_INT_EQ(run("--root", TEST_ROOT, "-Si", "diff", NULL, NULL), KSHELL_OK);
+
+    drop_tree();
+}
+
 void test_pkg(void)
 {
     microos_ed25519_keypair(g_public, g_secret, g_seed);
 
     test_index();
+    test_size_ceiling();
     test_local_install();
     test_bad_signature();
     test_wrong_machine();
     test_downgrade_and_dry_run();
     test_offline_and_remove();
+    test_license_rule();
 }

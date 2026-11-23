@@ -32,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle bundle-board bundle-x86 x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak
+.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle bundle-board bundle-x86 x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-root-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak x86-smp-smoke soak-smp
 
 help:
 	@echo "Micro OS — available targets:"
@@ -62,6 +62,7 @@ help:
 	@echo "  make x86-run    boot it in a QEMU window (framebuffer 1280x800, keyboard)"
 	@echo "  make x86-run-serial  boot it with the serial console (-nographic)"
 	@echo "  make x86-smoke  boot it and check what it says"
+	@echo "  make x86-smp-smoke  boot the kernel of two cores and check both of them"
 	@echo "  make x86-disk   the image of the disk: /bin and /etc of MicroFS"
 	@echo "  make x86-vga-smoke   check the screen and the keyboard without a display"
 	@echo "  make x86-run-disk   boot the window with an 8 MB disk on the IDE channel"
@@ -74,6 +75,7 @@ help:
 	@echo "  make soak       the session of 600 seconds on x86-64 (one boot)"
 	@echo "  make soak SOAK_MINUTES=1  the same, short, to check the tool"
 	@echo "  make soak SOAK_ITERATIONS=5  five short boots, one pass each"
+	@echo "  make soak-smp   the same session on the two-core image (-smp 2)"
 	@echo "  make soak-host  the same ten minutes on the host, two cores, under TSan"
 	@echo "  make fuzz-long  the fuzzers with a multiplier and a seed"
 	@echo "  make disk-stress  a full volume, fsck -y and two boots (MicroFS, FAT)"
@@ -182,13 +184,13 @@ wiki-check:
 CI_QEMU := $(shell command -v qemu-system-x86_64 2>/dev/null)
 CI_TARGETS := build test test-asan test-tsan test-smp smoke coverage
 ifneq ($(CI_QEMU),)
-CI_TARGETS += x86-smoke
+CI_TARGETS += x86-smoke x86-root-smoke
 endif
 CI_TARGETS += reproducible integrity
 
 ci: $(CI_TARGETS)
 ifeq ($(CI_QEMU),)
-	@echo "ci: qemu-system-x86_64 not found, x86-smoke is skipped"
+	@echo "ci: qemu-system-x86_64 not found, x86-smoke and x86-root-smoke are skipped"
 endif
 
 sim: build
@@ -240,7 +242,8 @@ X86_SIGN_ARGS := -DMICROOS_SIGN_KEY=$(MICROOS_SIGN_KEY)
 X86_DISPLAY ?= gtk
 
 x86-build:
-	cmake -B $(X86_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release $(X86_SIGN_ARGS)
+	cmake -B $(X86_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
+		-DMICRO_OS_FS_EXT2=ON -DMICRO_OS_FS_FAT32=ON $(X86_SIGN_ARGS)
 	cmake --build $(X86_BUILD) --target image
 
 # The other policy of ADR 0020: the loader verifies the image, prints the
@@ -277,11 +280,24 @@ x86-smp-run: x86-smp-build x86-disk
 # (tools/mkfs_mfs.c, which links components/mfs), not by a second
 # implementation of the format in a script; the images of the programs are
 # the .mox files `make x86-build` leaves in the build directory.
+#
+# The same tree is written a second time into an ext2 volume, and that image
+# carries a FAT32 volume as its second partition: the kernel reads the type of
+# the root out of the medium (ADR 0027), so the two disks boot the same shell
+# and the second one proves a root that is not MicroFS.
 X86_PROGRAMS_IMAGE := $(X86_BUILD)/programs.img
+X86_PROGRAMS_EXT2_IMAGE := $(X86_BUILD)/programs-ext2.img
 X86_MKFS := $(BUILD_DIR)/tools/microos_mkfs
+
+# The root the machine of `make x86-run` boots: the MicroFS image by default,
+# the ext2 one with `make x86-run X86_ROOT=ext2` (ADR 0027 §3).
+X86_ROOT ?= mfs
+X86_ROOT_IMAGE := $(if $(filter ext2,$(X86_ROOT)),$(X86_PROGRAMS_EXT2_IMAGE),$(X86_PROGRAMS_IMAGE))
 
 x86-disk: x86-build build
 	python3 tools/x86_image.py --image $(X86_PROGRAMS_IMAGE) \
+		--build $(X86_BUILD) --mkfs $(X86_MKFS)
+	python3 tools/x86_image.py --image $(X86_PROGRAMS_EXT2_IMAGE) --fs ext2 \
 		--build $(X86_BUILD) --mkfs $(X86_MKFS)
 
 # The gate of a reproducible image: the same inputs, the same bytes. The
@@ -292,16 +308,19 @@ x86-disk: x86-build build
 reproducible: x86-disk
 	@tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; \
 	cp $(X86_PROGRAMS_IMAGE) "$$tmp/first.img"; \
-	rm -f $(X86_PROGRAMS_IMAGE); \
+	cp $(X86_PROGRAMS_EXT2_IMAGE) "$$tmp/first-ext2.img"; \
+	rm -f $(X86_PROGRAMS_IMAGE) $(X86_PROGRAMS_EXT2_IMAGE); \
 	$(MAKE) --no-print-directory x86-disk; \
-	if cmp "$$tmp/first.img" $(X86_PROGRAMS_IMAGE); then \
-		echo "reproducible: the two images are the same file"; \
+	if cmp "$$tmp/first.img" $(X86_PROGRAMS_IMAGE) && \
+		cmp "$$tmp/first-ext2.img" $(X86_PROGRAMS_EXT2_IMAGE); then \
+		echo "reproducible: the two images are the same files"; \
 	else \
-		echo "reproducible: the two images differ" >&2; exit 1; \
+		echo "reproducible: the images differ" >&2; exit 1; \
 	fi; \
-	sha256sum "$$tmp/first.img" $(X86_PROGRAMS_IMAGE)
+	sha256sum "$$tmp/first.img" $(X86_PROGRAMS_IMAGE) \
+		"$$tmp/first-ext2.img" $(X86_PROGRAMS_EXT2_IMAGE)
 
-X86_DISK_DRIVE := -drive file=$(X86_PROGRAMS_IMAGE),format=raw,if=ide,index=0,cache=writeback
+X86_DISK_DRIVE := -drive file=$(X86_ROOT_IMAGE),format=raw,if=ide,index=0,cache=writeback
 
 x86-run: x86-disk
 	@qemu-system-x86_64 -display help 2>&1 | grep -qw "$(X86_DISPLAY)" || { \
@@ -322,7 +341,27 @@ x86-run-serial: x86-disk
 		$(X86_DISK_DRIVE)
 
 x86-smoke: x86-disk x86-open-build
-	python3 tools/x86_smoke.py --image $(X86_PROGRAMS_IMAGE) --open-build $(X86_OPEN_BUILD)
+	python3 tools/x86_smoke.py --image $(X86_PROGRAMS_IMAGE) --open-build $(X86_OPEN_BUILD) \
+		--timeout 180
+
+# The gate of ADR 0027: one machine boots two roots. The first image is the
+# MicroFS volume of `make x86-disk`, the second is the same /bin and /etc in an
+# ext2 volume, and the same commands (`ls /bin`, `cat /etc/setting`, `exec
+# /bin/hello`, `df /`) have to answer the same thing out of each; the FAT32
+# volume of the second partition is mounted at /data and written.
+x86-root-smoke: x86-disk
+	python3 tools/x86_root_smoke.py --image $(X86_PROGRAMS_IMAGE) \
+		--ext2-image $(X86_PROGRAMS_EXT2_IMAGE) --timeout 180
+
+# The gate of the two cores (ADR 0012): the kernel of `x86-smp-build` boots on
+# a machine of two processors and has to start both of them, keep a task on
+# one core, take work on the other and read the clock of the AP. The disk is
+# the same image of `x86-disk`; the tool drives the `smp` command of the shell
+# and compares the ticks of the core 1 before and after the load. It is not a
+# part of `make ci`: the two-core image is not green until the kernel lanes of
+# the branch land.
+x86-smp-smoke: x86-smp-build x86-disk
+	python3 tools/x86_smp_smoke.py --build $(X86_SMP_BUILD) --image $(X86_PROGRAMS_IMAGE)
 
 # The screen without a display: the monitor of QEMU reads the framebuffer of
 # the new screen with screendump (a picture has no text memory) and the text
@@ -397,6 +436,9 @@ x86-net-smoke: x86-net-build
 # without knowing which of the builds above it is made of.
 X86_ALL_BUILD := build-x86-all
 X86_ALL_IMAGE := $(X86_ALL_BUILD)/x86-all.img
+# The same tree in an ext2 volume, with the FAT32 volume of /data after it:
+# the second root of the release (ADR 0027 §3).
+X86_ALL_EXT2_IMAGE := $(X86_ALL_BUILD)/x86-ext2.img
 X86_ALL_RUN := $(X86_ALL_BUILD)/run.sh
 
 x86-all-build:
@@ -407,29 +449,34 @@ x86-all-build:
 x86-all: x86-all-build build
 	python3 tools/x86_image.py --image $(X86_ALL_IMAGE) \
 		--build $(X86_ALL_BUILD) --mkfs $(X86_MKFS)
+	python3 tools/x86_image.py --image $(X86_ALL_EXT2_IMAGE) --fs ext2 \
+		--build $(X86_ALL_BUILD) --mkfs $(X86_MKFS)
 	@printf '%s\n' \
 		'#!/bin/sh' \
 		'# Boot the complete Micro OS x86-64 machine: the kernel of `make x86-all`,' \
-		'# its disk and a virtio-net card on the user network (8080 forwarded).' \
-		'# X86_SERIAL=1 gives the serial console and no window.' \
+		'# its disks and a virtio-net card on the user network (8080 forwarded).' \
+		'# X86_SERIAL=1 gives the serial console and no window; X86_ROOT=ext2' \
+		'# boots the ext2 volume of the same tree instead of the MicroFS one.' \
 		'cd "$$(dirname "$$0")" || exit 1' \
+		'root="$${X86_ROOT:-mfs}"' \
+		'if [ "$$root" = ext2 ]; then image=x86-ext2.img; else image=x86-all.img; fi' \
 		'if [ "$${X86_SERIAL:-0}" = 1 ]; then' \
 		'    exec qemu-system-x86_64 -kernel loader32.elf -initrd microos64.bin \' \
 		'        -m 256 -nographic -no-reboot \' \
-		'        -drive file=x86-all.img,format=raw,if=ide,index=0,cache=writeback \' \
+		'        -drive "file=$$image,format=raw,if=ide,index=0,cache=writeback" \' \
 		'        -netdev user,id=n0,hostfwd=tcp:127.0.0.1:8080-:8080 \' \
 		'        -device virtio-net-pci,netdev=n0,disable-modern=on' \
 		'fi' \
 		'exec qemu-system-x86_64 -kernel loader32.elf -initrd microos64.bin \' \
 		'    -m 256 -no-reboot -display "$${X86_DISPLAY:-gtk}" -serial null -vga std \' \
-		'    -drive file=x86-all.img,format=raw,if=ide,index=0,cache=writeback \' \
+		'    -drive "file=$$image,format=raw,if=ide,index=0,cache=writeback" \' \
 		'    -netdev user,id=n0,hostfwd=tcp:127.0.0.1:8080-:8080 \' \
 		'    -device virtio-net-pci,netdev=n0,disable-modern=on' > $(X86_ALL_RUN)
 	@chmod +x $(X86_ALL_RUN)
 	@echo "x86-all: the machine is ready"
 	@echo "  kernel    $(X86_ALL_BUILD)/microos64.bin"
 	@echo "  loader    $(X86_ALL_BUILD)/loader32.elf"
-	@echo "  disk      $(X86_ALL_IMAGE)"
+	@echo "  disk      $(X86_ALL_IMAGE)   (X86_ROOT=ext2: $(X86_ALL_EXT2_IMAGE))"
 	@echo "  run       $(X86_ALL_RUN)   (X86_SERIAL=1 for the serial console)"
 
 x86-all-run: x86-all
@@ -470,9 +517,19 @@ X86_ISO_BUILD := build-x86-iso
 X86_ISO_IMAGE := $(X86_ISO_BUILD)/microos.iso
 X86_ISO_BOOTLOADER ?= auto
 
+# The root of the ISO is a module of the boot, and the loader refuses a
+# module that runs over the 16 MiB of KERNEL_PHYS where the kernel is copied:
+# a limine module starts low and a root image of 16 MiB reaches the mark, an
+# image of 8 MiB does not. The CD is read-only and the whole set of 65
+# objects fits in 8 MiB, so the medium carries the smaller one and the disk
+# of the machine keeps its 16.
+X86_ISO_ROOT := $(X86_ISO_BUILD)/root.img
+
 x86-iso: x86-disk build
+	python3 tools/x86_image.py --image $(X86_ISO_ROOT) --build $(X86_BUILD) \
+		--mkfs build-host/tools/microos_mkfs --size-mb 8
 	python3 tools/x86_iso.py --loader $(X86_BUILD)/loader32.elf \
-		--kernel $(X86_BUILD)/microos64.bin --root $(X86_PROGRAMS_IMAGE) \
+		--kernel $(X86_BUILD)/microos64.bin --root $(X86_ISO_ROOT) \
 		--out $(X86_ISO_IMAGE) --stage $(X86_ISO_BUILD)/iso \
 		--bootloader $(X86_ISO_BOOTLOADER)
 
@@ -491,6 +548,10 @@ SOAK_IMAGE   ?= $(SOAK_BUILD)/soak.img
 SOAK_MINUTES ?= 10
 SOAK_ITERATIONS ?=
 SOAK_ARGS    ?=
+# The image of the two-core session is its own: the programs are the current
+# build of `x86-disk` (the kernel is the SMP one, the images of the programs
+# do not depend on it) and the volume is filled for the session alone.
+SOAK_SMP_IMAGE ?= build-x86-smp/soak.img
 
 # The image of the session has no free block (tools/soak_image.py): the
 # ENOSPC of a full volume is part of the load. The tool keeps the image
@@ -504,6 +565,20 @@ soak: soak-image
 		--mkfs $(X86_MKFS) \
 		$(if $(SOAK_ITERATIONS),--iterations $(SOAK_ITERATIONS),--minutes $(SOAK_MINUTES)) \
 		$(SOAK_ARGS)
+
+# The same session on the kernel of two cores: `--smp` boots the build of
+# `x86-smp-build` with -smp 2 and the load asserts the two-core invariants on
+# top of the ones of 1.0 - the report of `smp`, the ticks of both cores
+# moving, the queues consistent and no exception in any answer. The image is
+# the full volume of the session, made from the current programs of
+# `x86-disk` (the images of the programs do not depend on the kernel), and
+# the boot is the two-core kernel on that image.
+soak-smp: x86-smp-build x86-disk
+	rm -f $(SOAK_SMP_IMAGE) $(SOAK_SMP_IMAGE).full
+	python3 tools/soak_image.py --build $(X86_BUILD) --image $(SOAK_SMP_IMAGE) \
+		--mkfs $(X86_MKFS)
+	python3 tools/soak.py --build $(X86_SMP_BUILD) --image $(SOAK_SMP_IMAGE) \
+		--mkfs $(X86_MKFS) --minutes $(SOAK_MINUTES) --smp --no-image $(SOAK_ARGS)
 
 # The other half of the same ten minutes: the portable kernel over the host
 # port, several tasks at once on two cores (ADR 0012, KERNEL_SMP and

@@ -41,8 +41,15 @@ static void copy_str(char *dst, k_size_t size, const char *src)
         dst[0] = '\0';
         return;
     }
-    strncpy(dst, src, size - 1);
-    dst[size - 1] = '\0';
+    {
+        k_size_t i = 0;
+
+        while (i + 1 < size && src[i] != '\0') {
+            dst[i] = src[i];
+            i++;
+        }
+        dst[i] = '\0';
+    }
 }
 
 int kshell_register_help(const char *name, const struct kshell_help *help, kshell_cmd_fn fn)

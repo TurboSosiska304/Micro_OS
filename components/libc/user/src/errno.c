@@ -21,6 +21,12 @@ int *__ulibc_errno(void)
  * The sentences of the codes the system has. A code this list does not know
  * is the sentence "unknown error": the table covers the ABI and does not
  * have to grow with a number the kernel does not use.
+ *
+ * `ESRCH` and `EEXIST` are one number in the ABI of this system (3, the way
+ * kernel/errno.h names it), so there is one sentence for the two: a name that
+ * exists is the answer a program meets (`mkdir`, `rename`, `file`) and a
+ * signal sent to no task is the rare one, and it says its own sentence in the
+ * shell.
  */
 char *strerror(int code)
 {
@@ -32,13 +38,17 @@ char *strerror(int code)
     case ENOENT:
         return "no such file or directory";
     case ESRCH:
-        return "no such process";
+        return "file exists";
     case EINTR:
         return "interrupted";
     case EIO:
         return "input/output error";
     case ENOEXEC:
         return "exec format error";
+    case E2BIG:
+        return "argument list too long";
+    case EACCES:
+        return "permission denied";
     case EBADF:
         return "bad file descriptor";
     case ECHILD:
@@ -55,12 +65,6 @@ char *strerror(int code)
         return "not a directory";
     case EISDIR:
         return "is a directory";
-    case E2BIG:
-        return "argument list too long";
-    case EACCES:
-        return "permission denied";
-    case EEXIST:
-        return "file exists";
     case EXDEV:
         return "cross-device link";
     case ENOTTY:

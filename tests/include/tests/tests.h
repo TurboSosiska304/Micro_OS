@@ -9,6 +9,7 @@ void test_ansi(void);
 void test_port(void);
 void test_blockdev(void);
 void test_partition(void);
+void test_root(void);
 void test_render(void);
 void test_boot(void);
 void test_version(void);
@@ -26,6 +27,7 @@ void test_mfs_persistence(void);
 void test_mfs_repair(void);
 void test_mfs_many(void);
 void test_mfs_chain(void);
+void test_mfs_big(void);
 void test_mkfs_image(void);
 void test_vfs(void);
 void test_fs_fat(void);
@@ -59,7 +61,11 @@ void test_progs(void);
 void test_zlib(void);
 void test_pcre2(void);
 void test_lua(void);
+void test_zstd(void);
+void test_awk(void);
 void test_userland_float(void);
 void test_bc(void);
+void test_file(void);
+void test_sqlite(void);
 
 #endif /* MICRO_OS_TESTS_H */

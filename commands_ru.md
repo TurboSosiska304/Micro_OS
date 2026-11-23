@@ -18,6 +18,7 @@
 | `clang-format` | `make format` и проверка формата | `sudo pacman -S --needed clang-format` |
 | `valgrind` | прогон тестов как в CI (локально не обязателен) | `sudo pacman -S --needed valgrind` |
 | `pyserial` | `tools/console.py`, `tools/stream_console.py` | `python3 -m pip install pyserial` (или окружение ESP-IDF) |
+| `e2fsprogs`, `dosfstools` | образы ext2 и FAT32 для `make x86-disk` | `sudo pacman -S --needed e2fsprogs dosfstools` |
 
 ESP-IDF v5.3 нужен только для сборки прошивки. Инструменты ищут его в таком
 порядке: `$IDF_PATH`, чекаут рядом с репозиторием (`../esp-idf`), затем

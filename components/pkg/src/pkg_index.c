@@ -317,6 +317,11 @@ static bool digest_is_hex(const char *text)
     return text[PKG_SHA256_HEX - 1u] == '\0';
 }
 
+bool pkg_digest_is_hex(const char *text)
+{
+    return (text != NULL) && digest_is_hex(text);
+}
+
 /* The fields that are defaulted by the index or derived from the others. */
 static int entry_finish(struct pkg_entry *entry, const struct pkg_index *index, bool have_abi,
                         bool have_size)
@@ -338,19 +343,31 @@ static int entry_finish(struct pkg_entry *entry, const struct pkg_index *index, 
     }
 
     if (entry->file[0] == '\0') {
-        int n = snprintf(entry->file, sizeof(entry->file), "%s-%s-%s.mox", entry->name,
-                         entry->version, entry->machine);
+        /* A buffer of its own: the destination and the three sources are
+         * members of one object, and the compiler of a release cannot tell
+         * that they do not overlap. */
+        char name[PKG_FILE_MAX];
+        int n = snprintf(name, sizeof(name), "%s-%s-%s.mox", entry->name, entry->version,
+                         entry->machine);
 
-        if (n < 0 || (k_size_t)n >= sizeof(entry->file)) {
+        if (n < 0 || (k_size_t)n >= sizeof(name)) {
             return PKG_EPARSE;
         }
+        memcpy(entry->file, name, (k_size_t)n + 1u);
     }
 
     if (!digest_is_hex(entry->sha256)) {
         return PKG_EPARSE;
     }
 
-    if (entry->size > PKG_PACKAGE_MAX) {
+    /*
+     * The digest of the source (ADR 0025) is not checked here: an entry that
+     * names a source and a digest that is not one is a fact for the rule of
+     * the install, which answers PKG_ELICENSE, and not a document this
+     * parser cannot read. A permissive package has no source to check.
+     */
+
+    if (pkg_size_check(entry->size) != PKG_OK) {
         return PKG_EPARSE;
     }
 
@@ -406,6 +423,12 @@ static int parse_entry(struct json_cursor *c, struct pkg_index *index)
             rc = json_string(c, entry->file, sizeof(entry->file));
         } else if (strcmp(key, "summary") == 0) {
             rc = json_string(c, entry->summary, sizeof(entry->summary));
+        } else if (strcmp(key, "license") == 0) {
+            rc = json_string(c, entry->license, sizeof(entry->license));
+        } else if (strcmp(key, "source") == 0) {
+            rc = json_string(c, entry->source, sizeof(entry->source));
+        } else if (strcmp(key, "source_sha256") == 0) {
+            rc = json_string(c, entry->source_sha256, sizeof(entry->source_sha256));
         } else if (strcmp(key, "sha256") == 0) {
             rc = json_string(c, entry->sha256, sizeof(entry->sha256));
         } else if (strcmp(key, "abi") == 0) {

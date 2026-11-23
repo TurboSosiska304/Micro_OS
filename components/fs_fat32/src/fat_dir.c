@@ -16,6 +16,7 @@
 
 #include <string.h>
 
+#include "kernel/clock.h"
 #include "kernel/errno.h"
 
 /* One unit of the name area of a long entry: 13 UTF-16 code units. */
@@ -23,6 +24,108 @@
 #define LFN_CHARS_1 5u
 #define LFN_CHARS_2 6u
 #define LFN_CHARS_3 2u
+
+/*
+ * The window of a date of FAT. The format starts at 1980 and ends at 2107,
+ * and the machine of this system has no wall clock of its own: the stamp is
+ * the seconds since the boot, shifted to the first moment the medium can
+ * hold. A volume written by another machine keeps its own dates, and the
+ * number comes back the way that machine wrote it.
+ */
+#define FAT_UNIX_1980 315532800ull
+#define FAT_UNIX_MAX 4354819198ull
+
+static bool is_leap_year(k_u32_t year)
+{
+    return (year % 4u == 0u && year % 100u != 0u) || year % 400u == 0u;
+}
+
+static k_u32_t month_days(k_u32_t year, k_u32_t month)
+{
+    static const k_u8_t days[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+
+    if (month == 2u && is_leap_year(year)) {
+        return 29;
+    }
+
+    return days[month - 1u];
+}
+
+/* The seconds of Unix of the date and the time of an entry; 0 when the
+ * fields are not a date, which is how an old image says it kept none. */
+static k_u64_t fat_time_decode(k_u16_t date, k_u16_t time)
+{
+    k_u32_t year = 1980u + (date >> 9);
+    k_u32_t month = (date >> 5) & 0x0Fu;
+    k_u32_t day = date & 0x1Fu;
+    k_u32_t hour = (time >> 11) & 0x1Fu;
+    k_u32_t minute = (time >> 5) & 0x3Fu;
+    k_u32_t second = (time & 0x1Fu) * 2u;
+    k_u64_t days = 0;
+    k_u32_t i;
+
+    if (date == 0 || month < 1u || month > 12u || day < 1u || day > month_days(year, month)) {
+        return 0;
+    }
+    if (hour > 23u || minute > 59u || second > 59u) {
+        return 0;
+    }
+
+    for (i = 1970u; i < year; i++) {
+        days += is_leap_year(i) ? 366u : 365u;
+    }
+    for (i = 1u; i < month; i++) {
+        days += month_days(year, i);
+    }
+
+    return (days + day - 1u) * 86400u + hour * 3600u + minute * 60u + second;
+}
+
+/* The two words of an entry for a moment of Unix, in the window of FAT. */
+static void fat_time_encode(k_u64_t when, k_u16_t *date, k_u16_t *time)
+{
+    k_u32_t days;
+    k_u32_t seconds;
+    k_u32_t year = 1970u;
+    k_u32_t month = 1u;
+    k_u32_t day;
+
+    if (when < FAT_UNIX_1980) {
+        when = FAT_UNIX_1980;
+    }
+    if (when > FAT_UNIX_MAX) {
+        when = FAT_UNIX_MAX;
+    }
+
+    days = (k_u32_t)(when / 86400u);
+    seconds = (k_u32_t)(when % 86400u);
+
+    while (year < 2108u) {
+        k_u32_t span = is_leap_year(year) ? 366u : 365u;
+
+        if (days < span) {
+            break;
+        }
+        days -= span;
+        year++;
+    }
+
+    while (month < 12u) {
+        k_u32_t span = month_days(year, month);
+
+        if (days < span) {
+            break;
+        }
+        days -= span;
+        month++;
+    }
+
+    day = days + 1u;
+
+    *date = (k_u16_t)(((year - 1980u) << 9) | (month << 5) | day);
+    *time = (k_u16_t)(((seconds / 3600u) << 11) | (((seconds / 60u) % 60u) << 5) |
+                      ((seconds % 60u) / 2u));
+}
 
 static char lower_ascii(char c)
 {
@@ -302,6 +405,7 @@ int fat_scan_next(struct fat_volume *vol, k_u32_t dir_cluster, k_u32_t *pos, str
         out->dir = (raw[11] & FAT_ATTR_DIR) != 0u;
         out->cluster = (k_u32_t)fat_le16(raw + 26) | ((k_u32_t)fat_le16(raw + 20) << 16);
         out->size = fat_le32(raw + 28);
+        out->mtime = fat_time_decode(fat_le16(raw + 24), fat_le16(raw + 22));
 
         lfn_reset(vol);
 
@@ -935,10 +1039,16 @@ static void build_lfn_entry(k_u8_t raw[32], k_u8_t sequence, bool last, k_u8_t c
 static void build_short_entry(k_u8_t raw[32], const k_u8_t name11[11], k_u8_t attr, k_u32_t cluster,
                               k_u32_t size)
 {
+    k_u16_t date;
+    k_u16_t time;
+
+    fat_time_encode(k_clock_now_unix(), &date, &time);
     memset(raw, 0, 32);
     memcpy(raw, name11, 11);
     raw[11] = attr;
     fat_put16(raw + 20, (k_u16_t)(cluster >> 16));
+    fat_put16(raw + 22, time);
+    fat_put16(raw + 24, date);
     fat_put16(raw + 26, (k_u16_t)(cluster & 0xFFFFu));
     fat_put32(raw + 28, size);
 }
@@ -1030,6 +1140,8 @@ int fat_dir_set(struct fat_volume *vol, k_u32_t dir_cluster, k_u32_t pos, k_u32_
 {
     k_u8_t raw[32];
     k_u32_t on_medium;
+    k_u16_t date;
+    k_u16_t time;
     int rc;
 
     if (vol == NULL) {
@@ -1046,7 +1158,11 @@ int fat_dir_set(struct fat_volume *vol, k_u32_t dir_cluster, k_u32_t pos, k_u32_
         return KERR_NOENT;
     }
 
+    /* The content of the entry moved, so its moment moves with it. */
+    fat_time_encode(k_clock_now_unix(), &date, &time);
     fat_put16(raw + 20, (k_u16_t)(first_cluster >> 16));
+    fat_put16(raw + 22, time);
+    fat_put16(raw + 24, date);
     fat_put16(raw + 26, (k_u16_t)(first_cluster & 0xFFFFu));
     fat_put32(raw + 28, size);
 
@@ -1252,6 +1368,16 @@ int fat_dir_rename(struct fat_volume *vol, const char *from, const char *to)
         rc = remove_entry_run(vol, to_parent.cluster, to_pos);
         if (rc != 0) {
             return rc;
+        }
+
+        /* The name of the file that was here is gone, and its data goes
+         * with it: a chain that no name reaches is a lost chain, which a
+         * checker reports and a person has to repair by hand. */
+        if (existing.cluster >= 2u) {
+            rc = fat_chain_free(vol, existing.cluster);
+            if (rc != 0) {
+                return rc;
+            }
         }
     } else if (rc != KERR_NOENT) {
         return rc;

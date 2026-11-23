@@ -50,6 +50,8 @@
 #define PKG_MACHINE_MAX 16
 #define PKG_FILE_MAX 64
 #define PKG_SUMMARY_MAX 64
+#define PKG_LICENSE_MAX 64
+#define PKG_SOURCE_MAX 128
 #define PKG_SHA256_HEX 65
 
 /* The entries of one index and the packages of one command line. */
@@ -62,11 +64,23 @@
 #define PKG_KEY_SIZE 32
 
 /*
- * The largest package this installer takes. A program of MOX1 is static and
- * small; a megabyte is ten times the largest one the tree builds and keeps a
- * hostile index from asking for all of the memory of the machine.
+ * The largest package this installer takes: the ceiling of an image of a
+ * program and not a number of its own, so that the installer and the loader
+ * refuse the same file. A package is read into one block of the allocator,
+ * which is why the ceiling is the memory of the machine and not the size of
+ * one transfer, and why a hostile index cannot ask for more than eight
+ * megabytes of it.
+ *
+ * The kernel names the ceiling in kernel/exec.h. A tree whose header does
+ * not have it yet - the base of this branch - repeats the number here; the
+ * guard puts the name in its place as soon as the kernel has it, so the two
+ * cannot drift apart.
  */
-#define PKG_PACKAGE_MAX (1024u * 1024u)
+#ifdef K_EXEC_MAX_IMAGE
+#define PKG_PACKAGE_MAX K_EXEC_MAX_IMAGE
+#else
+#define PKG_PACKAGE_MAX (8u * 1024u * 1024u)
+#endif
 
 /* The answers of the calls of this component. */
 #define PKG_OK 0
@@ -82,14 +96,26 @@
 #define PKG_EIO (-10)       /* the volume refused a call */
 #define PKG_ENOMEM (-11)    /* the buffer of the package cannot be made */
 #define PKG_EEXIST (-12)    /* the name is already there and is not replaced */
+#define PKG_ELICENSE (-13)  /* a copyleft package without the source of it */
 
-/* One package of an index. */
+/*
+ * One package of an index. `license` is the SPDX string of the package
+ * ("MIT", "GPL-3.0-or-later"), `source` the URL of its source and
+ * `source_sha256` the digest of the archive there: a copyleft package a
+ * person cannot obtain the source of does not install (ADR 0025), so the
+ * three travel with the entry. They are optional in the format - a
+ * permissive package needs none of them - and empty when the repository says
+ * nothing.
+ */
 struct pkg_entry {
     char name[PKG_NAME_MAX + 1];
     char version[PKG_VERSION_MAX + 1];
     char machine[PKG_MACHINE_MAX + 1];
     char file[PKG_FILE_MAX + 1];
     char summary[PKG_SUMMARY_MAX + 1];
+    char license[PKG_LICENSE_MAX + 1];
+    char source[PKG_SOURCE_MAX + 1];
+    char source_sha256[PKG_SHA256_HEX];
     char sha256[PKG_SHA256_HEX];
     k_u32_t abi;
     k_u64_t size;
@@ -104,12 +130,17 @@ struct pkg_index {
     struct pkg_entry entries[PKG_INDEX_MAX];
 };
 
-/* One installed package, as /var/pkg/local keeps it. */
+/* One installed package, as /var/pkg/local keeps it. The license and the
+ * source are kept as the index named them, so that a person asks the machine
+ * what it runs with `pkg -Qi`; a record written before the field existed (or
+ * by a local install, which has no index to read) leaves both empty. */
 struct pkg_record {
     char name[PKG_NAME_MAX + 1];
     char version[PKG_VERSION_MAX + 1];
     char machine[PKG_MACHINE_MAX + 1];
     char file[PKG_FILE_MAX + 1];
+    char license[PKG_LICENSE_MAX + 1];
+    char source[PKG_SOURCE_MAX + 1];
     char sha256[PKG_SHA256_HEX];
     k_u32_t abi;
     k_u64_t size;
@@ -117,12 +148,25 @@ struct pkg_record {
 };
 
 /*
+ * The rule of the ceiling, in the one place that keeps it: PKG_OK when a
+ * package of `size` bytes may be read and installed, PKG_ESIZE when it is
+ * past PKG_PACKAGE_MAX. The install of a file, the install of a name from
+ * the index and the parse of the index ask this and not a copy of the rule;
+ * the parse answers PKG_EPARSE of its own, because a document that names a
+ * package this machine cannot hold is not the index of a repository.
+ */
+int pkg_size_check(k_u64_t size);
+
+/*
  * Read the JSON of an index. The object is the one of the format of ADR
  * 0024: repository, machine, abi, and the array `packages`, each with name,
- * version, machine, abi, size, sha256, file and summary. A field this
- * parser does not know is skipped, so a repository grows a field without
- * breaking older machines; a field that is needed and missing, a wrong
- * type, or a digest that is not 64 hexadecimal digits is PKG_EPARSE.
+ * version, machine, abi, size, sha256, file and summary, and the optional
+ * license, source and source_sha256 of ADR 0025. A field this parser does
+ * not know is skipped, so a repository grows a field without breaking older
+ * machines; a field that is needed and missing, a wrong type, or a digest
+ * that is not 64 hexadecimal digits is PKG_EPARSE. The three fields of ADR
+ * 0025 are optional here - the rule of the install is the one that reads
+ * them, because a repository of permissive programs has no source to name.
  */
 int pkg_index_parse(const char *text, k_size_t size, struct pkg_index *out);
 
@@ -155,6 +199,10 @@ const k_u8_t *pkg_repository_key(const char *repo);
 
 /* The digest of a buffer, as sixty-four hexadecimal digits. */
 void pkg_sha256_hex(const void *data, k_size_t size, char hex[PKG_SHA256_HEX]);
+
+/* True when the text is sixty-four hexadecimal digits: the digest of a file
+ * of the repository, a package or the archive of its source. */
+bool pkg_digest_is_hex(const char *text);
 
 /* 0 when the signature is the one of the bytes and the key. */
 int pkg_signature_check(const k_u8_t key[PKG_KEY_SIZE], const void *data, k_size_t size,

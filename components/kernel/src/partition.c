@@ -71,6 +71,13 @@ struct partition_found {
     k_u64_t first_lba; /* the first sector of the partition */
     k_u64_t sectors;   /* its length, both in PARTITION_LBA_BYTES */
     k_u32_t number;    /* the number of the entry, for the name of the child */
+    /*
+     * The type byte of the entry (0x83 Linux, 0x0B/0x0C FAT32, ...), which
+     * the boot reads as a hint about the filesystem inside (ADR 0027). A
+     * GPT entry has no such byte - its type is a GUID - and the byte is
+     * zero there, which means "the table says nothing".
+     */
+    k_u8_t type;
 };
 
 /* The geometry of the GPT, as the header of the disk describes it. */
@@ -96,6 +103,7 @@ struct partition_slot {
     struct partition_ctx ctx;
     struct k_blockdev dev;
     char name[K_PARTITION_NAME_MAX];
+    k_u8_t type; /* the type byte of the entry, 0 for a GPT entry */
 };
 
 static struct partition_slot g_slots[K_PARTITION_MAX];
@@ -314,6 +322,27 @@ const char *partition_name(const struct k_blockdev *disk, k_size_t index)
     return NULL;
 }
 
+int partition_type_of(const struct k_blockdev *part)
+{
+    k_size_t i;
+
+    if (part == NULL) {
+        return -1;
+    }
+
+    for (i = 0; i < K_PARTITION_MAX; i++) {
+        if (!g_slots[i].used || &g_slots[i].dev != part) {
+            continue;
+        }
+
+        /* A zero is a GPT entry, whose type is a GUID this layer does not
+         * translate: the bytes of the medium answer for it, not the table. */
+        return g_slots[i].type != 0 ? (int)g_slots[i].type : -1;
+    }
+
+    return -1;
+}
+
 static struct partition_slot *slot_free(void)
 {
     k_size_t i;
@@ -433,6 +462,7 @@ static int scan_mbr(const k_u8_t *head, k_u64_t disk_lbas, struct partition_foun
         found[*count].first_lba = first;
         found[*count].sectors = sectors;
         found[*count].number = (k_u32_t)slot + 1u;
+        found[*count].type = type;
         (*count)++;
     }
 
@@ -618,6 +648,7 @@ static int gpt_collect(const struct k_blockdev *disk, const struct gpt_geometry 
             found[*count].first_lba = first;
             found[*count].sectors = last - first + 1u;
             found[*count].number = number;
+            found[*count].type = 0; /* a GUID, not the byte of an MBR entry */
             (*count)++;
             number++;
         }
@@ -701,6 +732,7 @@ static int register_children(const struct k_blockdev *disk, const struct partiti
         slot->ctx.parent = disk;
         slot->ctx.first_sector = (k_u32_t)(first / disk->sector_size);
         slot->ctx.sectors = (k_u32_t)(length / disk->sector_size);
+        slot->type = found[i].type;
 
         slot->dev.name = slot->name;
         slot->dev.sector_size = disk->sector_size;

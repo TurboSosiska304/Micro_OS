@@ -176,6 +176,23 @@ long lseek(int fd, long offset, int whence)
     return __ulibc_result(__ulibc_syscall6(KSYS_LSEEK, fd, offset, whence, 0, 0, 0));
 }
 
+int ftruncate(int fd, long long size)
+{
+    long rc;
+
+    /* A size the register of the machine cannot carry is not cut to fit. */
+    if ((long long)(long)size != size) {
+        errno = E2BIG;
+        return -1;
+    }
+
+    rc = __ulibc_result(__ulibc_syscall6(KSYS_FTRUNCATE, fd, (long)size, 0, 0, 0, 0));
+
+    /* The shape of POSIX, like rename(): a program of somebody else calls
+     * the function and tests its answer against zero. */
+    return (rc < 0) ? -1 : 0;
+}
+
 long ulibc_readdir(int fd, struct vfs_dirent *entries, size_t count)
 {
     return __ulibc_result(

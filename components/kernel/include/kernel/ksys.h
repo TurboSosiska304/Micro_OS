@@ -57,7 +57,8 @@
 #define KSYS_GETLIMIT 32  /* getlimit(which, value) */
 #define KSYS_SETLIMIT 33  /* setlimit(which, value) */
 #define KSYS_RENAME 34    /* rename(from, to) */
-#define KSYS_COUNT 35     /* the number of the system calls */
+#define KSYS_FTRUNCATE 35 /* ftruncate(fd, size) */
+#define KSYS_COUNT 36     /* the number of the system calls */
 
 /*
  * The resources of a limit. One number names one resource and the calls move
@@ -221,6 +222,14 @@ int ksys_unlink(const char *path);
 int ksys_mkdir(const char *path);
 /* The same object under another name, inside one filesystem (ADR 0024 §5). */
 int ksys_rename(const char *from, const char *to);
+/*
+ * Cut an open file to `size` bytes, the `ftruncate` of POSIX. The
+ * descriptor has to be open for writing, the size has to fit the volume,
+ * and a filesystem without the operation answers KERR_NOTSUP. The width of
+ * the size follows the machine, like every argument of a call: 64 bits on
+ * the host and x86-64, 32 on the board.
+ */
+int ksys_ftruncate(int fd, k_u64_t size);
 k_ssize_t ksys_readdir(int fd, void *buf, k_size_t count);
 k_u32_t ksys_getpid(void);
 int ksys_getcwd(char *buf, k_size_t size);

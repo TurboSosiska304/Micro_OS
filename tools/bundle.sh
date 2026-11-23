@@ -278,6 +278,12 @@ x86_bundle() {
     if [ -f "$X86_SRC/x86-all.img" ]; then
         X86_DISK="$X86_SRC/x86-all.img"
     fi
+    # The same tree in an ext2 volume (ADR 0027 §3): the second image of the
+    # release, and the one `X86_ROOT=ext2` boots.
+    X86_EXT2=""
+    if [ -f "$X86_SRC/x86-ext2.img" ]; then
+        X86_EXT2="$X86_SRC/x86-ext2.img"
+    fi
 
     if [ ! -f "$X86_SRC/loader32.elf" ] || [ ! -f "$X86_SRC/microos64.bin" ]; then
         if [ "$MODE" = x86 ]; then
@@ -301,6 +307,9 @@ x86_bundle() {
     if [ -n "$X86_DISK" ]; then
         cp -f "$X86_DISK" "$STAGE/x86-all.img"
     fi
+    if [ -n "$X86_EXT2" ]; then
+        cp -f "$X86_EXT2" "$STAGE/x86-ext2.img"
+    fi
     cp -f "$ROOT/third_party/spleen/LICENSE" "$STAGE/LICENSE.spleen"
     # zlib is linked into /bin/zcat of the disk image, and its license travels
     # with the distribution even when the image itself is built separately.
@@ -310,12 +319,25 @@ x86_bundle() {
     cp -f "$ROOT/third_party/pcre2/LICENSE" "$STAGE/LICENSE.pcre2"
     # Lua is /bin/lua of the same image, under the MIT license of its release.
     cp -f "$ROOT/third_party/lua/LICENSE" "$STAGE/LICENSE.lua"
+    # zstd is /bin/zstd and /bin/zstdcat of the same image, under the
+    # BSD-3-Clause of its release (this tree takes that half of the dual
+    # license and not the GPL-2.0 one).
+    cp -f "$ROOT/third_party/zstd/LICENSE" "$STAGE/LICENSE.zstd"
     # The tools of sbase are the commands of /bin of the same image (cat,
     # grep, ls, ...), under their MIT license; the notice travels with the
     # archive for the same reason.
     cp -f "$ROOT/third_party/sbase/LICENSE" "$STAGE/LICENSE.sbase"
     # bc and dc are two names of the same engine and one BSD-2-Clause release.
     cp -f "$ROOT/third_party/bc/LICENSE" "$STAGE/LICENSE.bc"
+    # /bin/file is linked against libmagic of file 5.45, whose BSD-2-Clause
+    # notice asks that it travel with a binary.
+    cp -f "$ROOT/third_party/file/LICENSE" "$STAGE/LICENSE.file"
+    # SQLite is in the public domain and /bin/sqlite3 is a program of the same
+    # image; the statement that says so travels with the archive.
+    cp -f "$ROOT/third_party/sqlite/LICENSE" "$STAGE/LICENSE.sqlite"
+    # awk is /bin/awk of the same image, under the Lucent permissive license
+    # of the One True Awk.
+    cp -f "$ROOT/third_party/awk/LICENSE" "$STAGE/LICENSE.awk"
     cp -f "$ROOT/third_party/mbedtls/LICENSE" "$STAGE/LICENSE.mbedtls"
     if [ -f "$X86_SRC/microos64.sig" ] && [ -f "$X86_SRC/signing.pub" ]; then
         cp -f "$X86_SRC/microos64.sig" "$STAGE/microos64.sig"
@@ -324,15 +346,29 @@ x86_bundle() {
 
     cat > "$STAGE/run.sh" <<'RUN'
 #!/usr/bin/env bash
-# Micro OS on an x86-64 machine: the loader and the kernel, with the disk of
+# Micro OS on an x86-64 machine: the loader and the kernel, with the disks of
 # the complete machine and its network when they are in this directory.
+#
+# The machine carries the same tree twice: x86-all.img is a MicroFS root (the
+# default) and x86-ext2.img is the same /bin and /etc in an ext2 volume, with
+# a FAT32 volume as its second partition. The kernel reads the type of the
+# root out of the medium (ADR 0027), so X86_ROOT names the volume to boot:
+#
+#     X86_ROOT=ext2 ./run.sh
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ARGS=(-kernel "$HERE/loader32.elf" -initrd "$HERE/microos64.bin" -m 256 -no-reboot)
 
-if [ -f "$HERE/x86-all.img" ]; then
-    ARGS+=(-drive "file=$HERE/x86-all.img,format=raw,if=ide,index=0,cache=writeback"
+ROOT="${X86_ROOT:-mfs}"
+if [ "$ROOT" = ext2 ]; then
+    IMAGE="$HERE/x86-ext2.img"
+else
+    IMAGE="$HERE/x86-all.img"
+fi
+
+if [ -f "$IMAGE" ]; then
+    ARGS+=(-drive "file=$IMAGE,format=raw,if=ide,index=0,cache=writeback"
            -netdev user,id=n0,hostfwd=tcp:127.0.0.1:8080-:8080
            -device virtio-net-pci,netdev=n0,disable-modern=on)
 fi
@@ -376,6 +412,27 @@ port layer and the one setting of the port (`port/luaconf_port.h`). The
 interpreter runs out of the volume: `make x86-disk-smoke` reads its script in
 the first boot and after the reset.
 
+`/bin/zstd` and `/bin/zstdcat` of the disk image are zstd 1.5.7
+(BSD-3-Clause); `LICENSE.zstd` is its license and `third_party/zstd` of the
+sources has the note, the version, the port layer and the memory policy of the
+port. The command packs and unpacks the frames of every other zstd.
+
+`/bin/file` is file 5.45 with libmagic (BSD-2-Clause), and the database it
+reads is a subset of the magic files of the release, compiled into
+`/etc/magic.mgc` of the disk image; `LICENSE.file` is the license and
+`third_party/file` of the sources has the subset and the port layer.
+
+`/bin/sqlite3` of the disk image is SQLite 3.54.1 (the public domain, a
+statement of the authors in `third_party/sqlite/LICENSE`); `LICENSE.sqlite` is
+that statement and `third_party/sqlite` of the sources has the notes and the
+VFS of the port.
+
+`/bin/awk` of the disk image is the One True Awk (20240728, the Lucent
+permissive license); `LICENSE.awk` is its license and `third_party/awk` of the
+sources has the note, the version, the generated parser and the port layer
+(`port/awk_port.h`, `port/awk_os.c`). It has no shell: `system` and a command
+of a pipe answer a sentence and the failure of the call (`docs/debts.md`).
+
 `/bin/cat`, `/bin/grep`, `/bin/ls` and the rest of the ten commands are
 the tools of sbase (MIT); `LICENSE.sbase` is their license and
 `third_party/sbase` of the sources has the subset and the port layer.
@@ -406,9 +463,13 @@ not cover a byte of them.
 DOC
 
     STAGE_FILES=(loader32.elf microos64.bin run.sh README.md LICENSE.spleen LICENSE.zlib
-                 LICENSE.pcre2 LICENSE.lua LICENSE.sbase LICENSE.bc)
+                 LICENSE.pcre2 LICENSE.lua LICENSE.zstd LICENSE.sbase LICENSE.bc
+                 LICENSE.file LICENSE.sqlite LICENSE.awk)
     if [ -f "$STAGE/x86-all.img" ]; then
         STAGE_FILES+=(x86-all.img)
+    fi
+    if [ -f "$STAGE/x86-ext2.img" ]; then
+        STAGE_FILES+=(x86-ext2.img)
     fi
     if [ -f "$STAGE/microos64.sig" ]; then
         STAGE_FILES+=(microos64.sig microos-sign.pub)

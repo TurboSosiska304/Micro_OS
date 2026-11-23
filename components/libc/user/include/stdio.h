@@ -53,6 +53,26 @@ typedef long long off64_t;
 #define _IONBF 2
 #endif
 
+/* The longest name of a file, as the C library names it: the shell of SQLite
+ * builds a name on the stack with this bound, and a path of this system is
+ * 128 bytes, the number the VFS takes. */
+#ifndef FILENAME_MAX
+#define FILENAME_MAX 128
+#endif
+
+/* The buffering of a stream. The streams of this library have no buffer, so
+ * `setvbuf` accepts the request and does nothing; the names are here because
+ * a portable source writes them. */
+#ifndef _IOFBF
+#define _IOFBF 0
+#endif
+#ifndef _IOLBF
+#define _IOLBF 1
+#endif
+#ifndef _IONBF
+#define _IONBF 2
+#endif
+
 /*
  * zlib's zconf.h defines the three numbers when the platform does not, and
  * it may have been read before this header: a second definition of the same
@@ -69,6 +89,23 @@ typedef long long off64_t;
 #endif
 
 int sprintf(char *buffer, const char *format, ...);
+int sscanf(const char *text, const char *format, ...);
+int setvbuf(FILE *stream, char *buffer, int mode, size_t size);
+
+/*
+ * The pipe of a command. This system can start a program (`execve`) but not
+ * hand it a stream: there is no `popen` in the library, and the two calls
+ * answer `ENOSYS`. A source that compiles against them can say so to its
+ * caller (src/unsupported.c).
+ */
+FILE *popen(const char *command, const char *mode);
+int pclose(FILE *stream);
+/*
+ * The name of an object of the volume moved: the two paths are resolved
+ * against the directory of the program, and a rename replaces the file at
+ * the destination (ADR 0024). POSIX declares it here, beside the streams.
+ */
+int rename(const char *from, const char *to);
 int fprintf(FILE *stream, const char *format, ...);
 int vfprintf(FILE *stream, const char *format, va_list args);
 int vprintf(const char *format, va_list args);
@@ -79,6 +116,15 @@ void perror(const char *text);
 int fileno(FILE *stream);
 FILE *fdopen(int fd, const char *mode);
 FILE *fmemopen(void *buffer, size_t size, const char *mode);
+
+/*
+ * A string of the format in a block of the arena: `asprintf` is the formatter
+ * and the allocator of `src/asprintf.c`, the answer is the length of the text
+ * or -1 with `ENOMEM`, and the caller frees the block. `file` names it for the
+ * sentence of a type it builds on the way.
+ */
+int asprintf(char **out, const char *format, ...);
+int vasprintf(char **out, const char *format, va_list args);
 
 int getc(FILE *stream);
 int ungetc(int byte, FILE *stream);

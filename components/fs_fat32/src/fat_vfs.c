@@ -38,6 +38,16 @@ const char *fat_relative(const struct fat_volume *vol, const char *path)
         return NULL;
     }
 
+    /*
+     * The root of the tree is the one point of one character: the VFS hands
+     * a path below it with its own slash ("/bin"), which is already the
+     * relative one (ADR 0027). A point with a name starts the walk after its
+     * separator.
+     */
+    if (len == 1u) {
+        return path[0] == '/' ? path : NULL;
+    }
+
     if (path[len] == '\0') {
         return "/";
     }
@@ -404,7 +414,18 @@ static int fat_vfs_mkdir(void *ctx, const char *path)
         goto out;
     }
 
-    rc = fat_dir_init(vol, cluster, (parent.cluster >= 2u) ? parent.cluster : 0);
+    /* The ".." of a child of the root names cluster 0, the way the format
+     * says it, even on a FAT32 volume whose root has a cluster of its own:
+     * a checker reads the root through the zero, not through its head. */
+    {
+        k_u32_t up = parent.cluster;
+
+        if (vol->type == 32 && up == vol->root_cluster) {
+            up = 0;
+        }
+
+        rc = fat_dir_init(vol, cluster, up);
+    }
     if (rc != 0) {
         goto out;
     }
@@ -668,6 +689,50 @@ static int fat_vfs_stat(void *ctx, const char *path, struct vfs_stat *out)
     return rc;
 }
 
+/*
+ * The moment of an object. FAT keeps three moments in an entry: the
+ * creation, the last access and the last write. The write time is the one a
+ * reader means by "when did this change", and the creation time is the only
+ * candidate for the change of the record; the access date is not kept
+ * because a read does not change a record in this system.
+ */
+static int fat_vfs_statx(void *ctx, const char *path, struct vfs_statx *out)
+{
+    struct fat_volume *vol = (struct fat_volume *)ctx;
+    const char *relative;
+    struct fat_entry entry;
+    int rc;
+
+    if (vol == NULL || out == NULL || !vol->mounted) {
+        return KERR_INVAL;
+    }
+
+    relative = fat_relative(vol, path);
+    if (relative == NULL) {
+        return KERR_NOENT;
+    }
+
+    rc = volume_lock(vol);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = fat_lookup(vol, relative, &entry);
+    if (rc == 0) {
+        out->inode = entry.cluster;
+        out->type = entry.dir ? 2 : 1;
+        out->size = entry.size;
+        out->mode = 0;
+        out->owner = 0;
+        out->mtime = entry.mtime;
+        out->ctime = entry.mtime;
+    }
+
+    k_mutex_unlock(&vol->lock);
+
+    return rc;
+}
+
 static int fat_vfs_umount(void *ctx)
 {
     fat_volume_unmount((struct fat_volume *)ctx);
@@ -678,10 +743,12 @@ static const struct vfs_operations g_fat_operations = {
     .open = fat_vfs_open,
     .read = fat_vfs_read,
     .write = fat_vfs_write,
+    .truncate = NULL, /* a file is cut only by the open of O_TRUNC for now */
     .close = fat_vfs_close,
     .list = fat_vfs_list,
     .readdir = fat_vfs_readdir,
     .stat = fat_vfs_stat,
+    .statx = fat_vfs_statx,
     .mkdir = fat_vfs_mkdir,
     .unlink = fat_vfs_unlink,
     .rename = fat_vfs_rename,

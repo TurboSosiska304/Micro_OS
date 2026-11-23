@@ -13,7 +13,12 @@
 
 #define EPERM 1
 #define ENOENT 2
+/* `ESRCH` and `EEXIST` share a number: the kernel raised "exists" before it
+ * had signals, and the frozen table of the two keeps the same code
+ * (kernel/errno.h, docs/debts.md). A caller that wants the sentence of one
+ * reads the number of the call that failed. */
 #define ESRCH 3
+#define EEXIST 3
 #define EINTR 4
 #define EIO 5
 #define E2BIG 7
@@ -25,7 +30,6 @@
 #define EACCES 13
 #define EFAULT 14
 #define EBUSY 16
-#define EEXIST 17
 #define EXDEV 18
 #define ENOTDIR 20
 #define EISDIR 21

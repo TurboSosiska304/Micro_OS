@@ -29,7 +29,7 @@ static const struct mfs_code_pair g_codes[] = {
     {MFS_OK, KERR_NONE},        {MFS_ENOENT, KERR_NOENT},   {MFS_EEXIST, KERR_EXIST},
     {MFS_ENOSPC, KERR_NOSPC},   {MFS_EIO, KERR_IO},         {MFS_EINVAL, KERR_INVAL},
     {MFS_ENOTDIR, KERR_NOTDIR}, {MFS_EISDIR, KERR_ISDIR},   {MFS_ENOTEMPTY, KERR_NOTEMPTY},
-    {MFS_E2BIG, KERR_TOOBIG},   {MFS_ENOTSUP, KERR_NOTSUP},
+    {MFS_E2BIG, KERR_TOOBIG},   {MFS_ENOTSUP, KERR_NOTSUP}, {MFS_ENOMEM, KERR_NOMEM},
 };
 
 /* The number of the kernel for a result of the filesystem. */
@@ -160,6 +160,25 @@ static int vfs_write_file(void *ctx, struct vfs_file *vfs_file, const void *buf,
     }
 
     return (rc < 0) ? mfs_to_kerr(rc) : rc;
+}
+
+static int vfs_truncate_file(void *ctx, struct vfs_file *vfs_file, k_u64_t size)
+{
+    struct mfs_vfs_file *file = (struct mfs_vfs_file *)vfs_file->priv;
+    int rc;
+
+    K_UNUSED(ctx);
+
+    if (file == NULL) {
+        return mfs_to_kerr(MFS_EINVAL);
+    }
+
+    rc = mfs_truncate(&file->file, size);
+    if (rc == MFS_OK) {
+        vfs_file->size = file->file.size;
+    }
+
+    return mfs_to_kerr(rc);
 }
 
 static int vfs_close_file(void *ctx, struct vfs_file *vfs_file)
@@ -381,6 +400,7 @@ static const struct vfs_operations g_mfs_operations = {
     .open = vfs_open_file,
     .read = vfs_read_file,
     .write = vfs_write_file,
+    .truncate = vfs_truncate_file,
     .close = vfs_close_file,
     .list = vfs_list_dir,
     .readdir = vfs_readdir_dir,

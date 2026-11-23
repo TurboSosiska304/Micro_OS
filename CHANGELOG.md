@@ -10,6 +10,153 @@ the MicroFS volume change by adding only.
 A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 (`vX.Y.Z-pre`) is a pre-release and must match `kernel_version()`.
 
+## [1.3.0] - 2026-11-23
+
+The release of the many cores. `KERNEL_SMP` stays off by default: with it off
+the kernel is the kernel of `1.2.0` in behaviour and in its tests, and with it
+on the machine of QEMU starts both of the processors its firmware describes
+and runs tasks on each of them. The board is not part of this release (ADR
+0018); the many cores are x86-64 and the host substrate.
+
+### Added
+
+- The x86-64 port starts the application processors (ADR 0012). The port
+  keeps the MADT list with the hardware identifier of every processor, sends
+  INIT and the start-up IPI through the local APIC to the trampoline the
+  loader carries at `0x7000`, and gives every core a 64 KiB stack, a GDT, a
+  TSS and an IST of its own. A core reports itself from C before the
+  scheduler exists, waits there, and `kmain()` releases the cores once
+  `kernel_boot()` has made the array of the kernel; a core that never
+  answers is not counted. The boot line is
+  `x86-64: 2 cpu(s) reported by the firmware, 2 in use (apic 0xfee00000)`.
+- The local APIC of every core (src/lapic.c, src/ipi.c): the page mapped in
+  the top 2 GiB, the spurious vector, the timer calibrated against the TSC
+  (QEMU measures about 62.6 MHz at divider 16, i.e. a millisecond count of
+  62 600), the EOI, the command register of INIT and the start-up IPI, and
+  the vector of an inter-processor interrupt. The I/O APIC is still a stub
+  (see `docs/debts.md`, K8).
+- The identity of a core is one load: IA32_GS_BASE points at a record whose
+  first word is the kernel number, and `k_port_cpu_id()` is `movl %gs:0`.
+  The boot is found by CPUID, the others follow the MADT; the boot has the
+  number 0.
+- `smp`, `smp workers <n>` and `smp ping` in the shell of the port, only in a
+  `KERNEL_SMP` build: the cores in use, the ticks of every core, the task of
+  every core, the queues checked, tasks placed on both cores, and an IPI that
+  arrives on the other core and is counted there.
+- The task substrate of the port is per core (`struct port_cpu`): the current
+  context, the context of the core before its first task, the pending stack
+  and address space of a dead task, and the thread pointer. An exit with
+  nothing else to run gives the core back to its boot or idle context, which
+  runs `schedule()` in a loop.
+- The host gate of the many cores: `make test-smp` (the whole suite on two
+  cores), `make test-tsan`, `make soak-host`; `tests/cases/test_smp.c` gains
+  the tests of the claim and of the state that one task on two cores is.
+- `make x86-smp-build`, `make x86-smp-run`, `make x86-smp-smoke` (34 checks:
+  both cores in use, a worker on each, the AP clock moving, the IPI, the
+  queues before and after the load, and no exception) and `make soak-smp`
+  (the 600-second session on the two-core image, with the ticks of both
+  cores sampled every cycle).
+- `pkg` knows the license of a package (ADR 0025). An entry of the index
+  carries `license` (the SPDX string), `source` and `source_sha256`; a
+  copyleft package (`GPL-`, `LGPL-`, `AGPL-`, `CDDL-`, in either case)
+  without a source and the digest of its archive is refused with the new
+  answer `PKG_ELICENSE` (-13), and the message names the license and the
+  package. `pkg info` prints `License` and `Source` for a repository package
+  (`-Si`) and for an installed one (`-Qi`), the record keeping both fields;
+  `-U` takes a local file and is not asked, because it has no index behind
+  it.
+- The ports of the third and the fourth library of somebody else: zstd 1.5.7
+  (BSD-3-Clause) as the archive of the frame format and `/bin/zstd` of its own
+  command, and file 5.45 with libmagic (BSD-2-Clause) as `/bin/file` with the
+  compiled subset of the magic database in `/etc/magic.mgc`. The library of a
+  program learned the two headers of the fixed-width numbers (`stdint.h`,
+  `inttypes.h`), `asprintf`/`vasprintf`, the precision of a string in the
+  formatter, `pread`, `asctime`/`ctime`, and one more name of a compressed
+  stream: `/bin/file -z` looks inside a zstd frame as well as a gzip. The
+  library is one implementation per name for every port: the POSIX families
+  of sbase and the formatter with a point of Lua.
+- SQLite 3.54.1 (the public domain) as `/bin/sqlite3` (846,080 bytes, the
+  largest image of the machine) over a VFS of the port, with the scripts of
+  `/etc` as its fixtures. The library of a program took `sscanf`, `gettimeofday`,
+  `getrusage`, `usleep` and the refusals of `realpath`/`popen`/`setenv`, and
+  one implementation per name stayed the rule: a call of the tree is not
+  redefined by a port.
+- The eighth port, and the first interpreter with a grammar of its own: the
+  One True Awk of 2024-07-28 (the Lucent permissive license) as `/bin/awk`
+  (177,056 bytes), with the data `/etc/columns`, the first script of the
+  machine `/etc/hello.awk` and the license at `/etc/licenses/awk`. The
+  release is vendored unchanged in `third_party/awk` (the parser is generated
+  once by byacc and committed with its header and `proctab.c`), and the port
+  layer is `port/awk_port.h` and `port/awk_os.c`: the C locale as bytes, and
+  the calls with no other home in the tree (`system`, `random`/`srandom`, the
+  flag of `fcntl`). A command of a pipe is the `popen` of the library of a
+  program, which answers ENOSYS; `system` says on the error descriptor that
+  this machine has no shell. `make x86-smoke` runs the fields,
+  the formatter, `-v`, `-f`, `getline` and the refusals; `make
+  x86-disk-smoke` runs the script of `/etc` again after the reset; the host
+  test `tests/cases/test_awk.c` runs the `main` of the release through
+  thirty-two cases, including the comparison of a numeric string and the
+  syntax error of a program.
+
+### Changed
+
+- The scheduler claims the next task under its lock: `k_sched_claim_next()`
+  marks the task RUNNING on the calling core in the same critical section
+  that chose it, so a second core cannot claim it between the choice and the
+  switch.
+- A core picks only from its own run queue. This kernel keeps the task that
+  runs in the queue of its core, and a task whose quantum has just expired is
+  READY for a few instructions before the switch; a second core that took it
+  there would resume a stack that is still in use. A task changes core at
+  creation, on wake after a migration, and through `k_sched_migrate()`.
+- `k_port_write()` holds the big kernel lock for the whole call: the console
+  is one resource of the machine, and the other core could write between two
+  bytes of a line.
+- The line of a task's end is written before the state that lets its parent
+  continue, so a two-core transcript shows a command finishing before the
+  next prompt.
+- Every core sets `CR0.WP` for itself: without it the kernel's copy into a
+  read-only page of a program did not fault on an application processor, the
+  copy-on-write never ran, and `/bin/nx` answered differently by core.
+- The kernel version is `1.3.0`.
+- A read of a large file of MicroFS follows the chain of blocks forward: the
+  descriptor asked `chain_block_at` for the block of every chunk, so a read of
+  n blocks cost n walks from the head of the chain, and an `exec` of an image
+  of 440 KiB spent about six seconds of the emulated machine on it. The block
+  that was just read names the next one, and a call walks the chain once for
+  its first chunk and then follows it.
+
+### Fixed
+
+- The bss of a program starts at the address the program was linked for:
+  `tools/mkprog.sh` counts the gap the linker may leave between the data and
+  a bss aligned to 32 bytes as padding of the data segment, and the kernel
+  clears the bss where the linker put it. The arguments of a program are
+  written after it, so a gap the header did not carry made the first boot of
+  awk read its own `argv` out of the state of the random generator. The case
+  is in `tools/test_mkprog.py`.
+
+- The 8259 was opened to the external mode on every core, and QEMU delivered
+  the timer to either of them (1889 ticks on the core 0 and 4933 on the core
+  1 of 6822): the clock of the kernel, advanced only by the core 0, ran at a
+  third of real time. LINT0 is ExtINT on the core 0 alone; the APs keep it
+  masked and take their ticks from their own APIC timer.
+- A core with nothing to run waited in the context of a dead task whose slot
+  its parent might reap; the tick then could not find the stack it was on,
+  and a preempted task could be left RUNNING while the core idled in the
+  context of a stranger. The core returns to its boot context instead.
+- The children of a task that ends are reparented to init (pid 1), and the
+  init of the x86-64 port reaps them: a program killed by Ctrl+C while it had
+  a child left a zombie whose parent no longer existed, and its slot of the
+  table of 32 stayed taken for the life of the machine (the two-core soak
+  found one 3000 pids old).
+- The heap of the port and the pool of the page tables took only the
+  interrupts of the core. A tick could preempt a task that held the heap and
+  switch to a task that allocated, and the new task spun for ever on the lock
+  of the context it interrupted; two cores could take the same page of the
+  table pool. Both are now sections of the machine, the heap with the
+  interrupts of the core saved around it.
+
 ## [1.2.1] - 2026-11-23
 
 A patch of `1.2.0` for the streams of the library, the words of the shell and
@@ -167,6 +314,14 @@ release. The notes are in [`docs/releases/1.2.md`](docs/releases/1.2.md).
 
 ### Changed
 
+- `pkg` takes a package of up to 8 MiB: `PKG_PACKAGE_MAX` is the ceiling of
+  an image of a program (`K_EXEC_MAX_IMAGE`) and not a number of its own -
+  where `kernel/exec.h` names the ceiling, the installer uses the name - and
+  the install, the parse of the index and a local file ask one
+  `pkg_size_check()`. A package between one and eight megabytes is no longer
+  refused by the installer itself, and a file one byte past the ceiling is
+  refused with the size in the sentence.
+  `tests/cases/test_pkg.c` checks both sides of the boundary.
 - `struct http_transport::open` receives the transport itself, so a layer can
   wrap the transport below it; a plain transport ignores the argument.
 - `struct http_url` names the scheme: `tls` says the URL is https, and a

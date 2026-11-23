@@ -154,6 +154,10 @@ including level ordering and error checking.
   implemented on top of a timer queue.
 * PIDs are handed out starting from the init process (as in Linux), and
   `/proc/<pid>` are virtual directories.
+* A task that ends leaves its children to init: `task_exit()` reparents every
+  live child to pid 1, and the init of the port reaps the zombies nobody waits
+  for. Without it a program killed while it had a child left a slot of the
+  table of 32 taken for the life of the machine.
 
 ### Execution substrate
 
@@ -210,12 +214,44 @@ on another core says so where it starts the clock.
 
 The port answers how many cores it started (`k_port_cpu_count`) and which one
 is asking (`k_port_cpu_id`). The x86-64 port reads the processors from the
-MADT of ACPI and starts one - the AP bring-up is the blocker described in ADR
-0012; the host port takes the number from `MICRO_OS_CPUS` (one by default,
-two in `make test-smp`, `make test-tsan` and `make soak-host`), and every
-task there is a pthread, so a "core" is a queue of the kernel and an identity
-of the task. A port that predates the two calls links against their weak
-default (one core) and keeps working.
+MADT of ACPI, starts the application processors and counts only the ones that
+answered (ADR 0012, "The pilot of 1.x, closed"): the boot line is
+`2 cpu(s) reported by the firmware, 2 in use`, and a core that did not answer
+is named and left out. The host port takes the number from `MICRO_OS_CPUS`
+(one by default, two in `make test-smp`, `make test-tsan` and
+`make soak-host`), and every task there is a pthread, so a "core" is a queue
+of the kernel and an identity of the task. A port that predates the two calls
+links against their weak default (one core) and keeps working.
+
+The claim is the one call that makes the choice of a task safe under two
+cores: `k_sched_claim_next()` chooses the task and marks it RUNNING on the
+calling core in the same critical section, so the window between the choice
+and the jump of the switch is closed. A core picks only from its own queue: a
+task that has just used up its quantum is READY in that queue for a few
+instructions before the switch, and a second core that took it would resume a
+stack that is still in use. A task changes core at creation, on wake after a
+migration, and through `k_sched_migrate()`.
+
+Every core also has a context that is not a task: `kmain()` on the core 0 and
+the idle loop of an application processor. It is what the port returns to
+when the last task of a core ends, and it runs `schedule()` in a loop, so the
+next task of that core is always claimed. The port's current context, its
+pending stack and address space, and its thread pointer are per core
+(`struct port_cpu`, ports/port_x86_64/src/port_x86_64_task.c), and a core
+names itself by the first word of a record behind `IA32_GS_BASE`.
+
+The console is one resource of the machine and `k_port_write()` holds the big
+kernel lock for the whole call. The heap of the port and the pool of the page
+tables are sections of the machine as well: the heap takes the interrupts of
+the core with the lock, because a tick that preempted its holder could switch
+to a task that allocates, and the pool of the tables is shared by every
+address space. `CR0.WP` is set on every core, because it is a register of the
+core and the kernel's copy into a read-only page of a program has to fault
+there too. The I/O APIC is not programmed yet: the 8259
+delivers the timer and the keyboard to the core 0, whose LINT0 is the only
+one in the external mode, and the APs take their ticks from their own local
+APIC timer (1 kHz, calibrated against the TSC). The open work is K8 of
+[debts.md](debts.md).
 
 ### Signals (ADR 0015)
 
@@ -247,7 +283,7 @@ and the descriptors it opens - and the calls `getlimit` (32) and `setlimit`
 (33) read and lower them. The limits are fields of `struct task`, so a fork
 inherits them and the scheduler does not have a second table to keep in step.
 They start at the ceiling of the machine (2 MiB of PSRAM, about 49 days of
-CPU, four descriptors) and only go down: with one user, uid 0, there is
+CPU, sixteen descriptors) and only go down: with one user, uid 0, there is
 nobody to grant a raise, and the rule of no root bypass applies here too.
 
 The memory is counted by the allocator: `kmm` asks `task_memory_fits()` before

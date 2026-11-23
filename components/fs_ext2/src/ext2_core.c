@@ -4,8 +4,10 @@
  *
  * The reader walks the format of ext2 and stops at its first sign of
  * trouble: a superblock that is not there, a block number outside the
- * volume, an inode outside the table. Nothing is repaired and nothing is
- * written; a damaged volume is described as it is (ADR 0019).
+ * volume, an inode outside the table. Nothing is repaired; a damaged volume
+ * is described as it is (ADR 0019). The primitives of a write - the bytes of
+ * the medium, a block, the counters of the superblock - live here too, and
+ * the shape of the changes is the business of ext2_write.c (ADR 0029).
  */
 #include "ext2_private.h"
 
@@ -13,12 +15,6 @@
 
 #include "kernel/errno.h"
 #include "kernel/log.h"
-
-/* The block of the group descriptors, the one after the superblock. */
-static k_u64_t descriptor_start(const struct ext2_volume *vol)
-{
-    return (k_u64_t)(vol->first_data_block + 1u) * vol->block_size;
-}
 
 static bool is_power_of_two(k_u32_t value)
 {
@@ -91,6 +87,110 @@ int ext2_read_bytes(struct ext2_volume *vol, k_u64_t offset, void *buf, k_size_t
     }
 
     return device_read(vol, offset, buf, size);
+}
+
+/* The bytes of the medium, written as they are. */
+static int device_write(struct ext2_volume *vol, k_u64_t offset, const void *buf, k_size_t size)
+{
+    const k_u8_t *src = (const k_u8_t *)buf;
+    k_u32_t dev_size = vol->dev->sector_size;
+    k_u64_t device_bytes;
+
+    if (dev_size == 0 || dev_size > EXT2_DEV_SECTOR_MAX || !is_power_of_two(dev_size)) {
+        return KERR_NOTSUP;
+    }
+
+    if (vol->dev->ops == NULL || vol->dev->ops->write == NULL) {
+        return KERR_NOTSUP;
+    }
+
+    device_bytes = (k_u64_t)vol->dev->sectors * dev_size;
+    if (offset > device_bytes || size > device_bytes - offset) {
+        return KERR_IO;
+    }
+
+    while (size > 0) {
+        k_u32_t sector = (k_u32_t)(offset / dev_size);
+        k_u32_t inside = (k_u32_t)(offset % dev_size);
+        k_size_t chunk = dev_size - inside;
+
+        if (sector >= vol->dev->sectors) {
+            return KERR_IO;
+        }
+
+        if (chunk > size) {
+            chunk = size;
+        }
+
+        if (inside == 0 && chunk == dev_size) {
+            if (vol->dev->ops->write(vol->dev->ctx, sector, src, 1) != 0) {
+                return KERR_IO;
+            }
+        } else {
+            /* A partial sector is read, changed and written back. */
+            if (vol->dev->ops->read(vol->dev->ctx, sector, vol->sector, 1) != 0) {
+                return KERR_IO;
+            }
+            memcpy(vol->sector + inside, src, chunk);
+            if (vol->dev->ops->write(vol->dev->ctx, sector, vol->sector, 1) != 0) {
+                return KERR_IO;
+            }
+        }
+
+        /* The cache holds what the medium held before the write. */
+        vol->cache_valid = false;
+
+        src += chunk;
+        offset += chunk;
+        size -= chunk;
+    }
+
+    return 0;
+}
+
+/* Write bytes of the volume and refuse a request that runs past its end. */
+int ext2_write_bytes(struct ext2_volume *vol, k_u64_t offset, const void *buf, k_size_t size)
+{
+    if (vol == NULL || !vol->mounted) {
+        return KERR_INVAL;
+    }
+
+    if (buf == NULL && size != 0) {
+        return KERR_INVAL;
+    }
+
+    if (offset > vol->volume_bytes || size > vol->volume_bytes - offset) {
+        return KERR_IO;
+    }
+
+    return device_write(vol, offset, buf, size);
+}
+
+/* One block of the volume, by its number. */
+int ext2_read_block(struct ext2_volume *vol, k_u32_t block, void *buf)
+{
+    if (vol == NULL || !vol->mounted || (buf == NULL)) {
+        return KERR_INVAL;
+    }
+
+    if (block >= vol->blocks_count) {
+        return KERR_IO;
+    }
+
+    return ext2_read_bytes(vol, (k_u64_t)block * vol->block_size, buf, vol->block_size);
+}
+
+int ext2_write_block(struct ext2_volume *vol, k_u32_t block, const void *buf)
+{
+    if (vol == NULL || !vol->mounted || (buf == NULL)) {
+        return KERR_INVAL;
+    }
+
+    if (block >= vol->blocks_count) {
+        return KERR_IO;
+    }
+
+    return ext2_write_bytes(vol, (k_u64_t)block * vol->block_size, buf, vol->block_size);
 }
 
 int ext2_volume_mount(struct ext2_volume *vol, const struct k_blockdev *dev)
@@ -177,10 +277,11 @@ int ext2_volume_mount(struct ext2_volume *vol, const struct k_blockdev *dev)
     vol->feature_ro_compat = ext2_le32(sb + 100);
 
     /*
-     * A journal is replayed by a writer, and this reader never writes: a
-     * volume of ext3 that was not unmounted cleanly is not one this reader
-     * can promise. An extent tree or a 64-bit block number is a different
-     * layout, and the direct pointers below would read it as nonsense.
+     * A journal is replayed by a writer of ext3, which this filesystem is
+     * not: a volume of ext3 that was not unmounted cleanly is not one this
+     * mount can promise. An extent tree or a 64-bit block number is a
+     * different layout, and the direct pointers below would read it as
+     * nonsense.
      */
     if ((vol->feature_compat & EXT2_FEATURE_COMPAT_HAS_JOURNAL) != 0u) {
         return KERR_NOTSUP;
@@ -215,11 +316,11 @@ int ext2_volume_mount(struct ext2_volume *vol, const struct k_blockdev *dev)
     /* The table of the group descriptors has to fit on the medium before a
      * group is looked at; the descriptor of the first group names the inode
      * table, which is the next thing every path needs. */
-    if (descriptor_start(vol) + (k_u64_t)groups * 32u > vol->volume_bytes) {
+    if (ext2_descriptor_start(vol) + (k_u64_t)groups * 32u > vol->volume_bytes) {
         return KERR_INVAL;
     }
 
-    rc = device_read(vol, descriptor_start(vol), group, sizeof(group));
+    rc = device_read(vol, ext2_descriptor_start(vol), group, sizeof(group));
     if (rc != 0) {
         return rc;
     }
@@ -241,15 +342,118 @@ int ext2_volume_mount(struct ext2_volume *vol, const struct k_blockdev *dev)
     return 0;
 }
 
+/*
+ * The counters of the superblock are the ones of the volume that was
+ * mounted, and the writer changes the medium only when it has a reason:
+ * a volume that was read and left alone is left exactly as it was.
+ */
+int ext2_volume_flush(struct ext2_volume *vol)
+{
+    k_u8_t sb[EXT2_SUPERBLOCK_SIZE];
+    int rc;
+
+    if (vol == NULL || !vol->mounted) {
+        return KERR_INVAL;
+    }
+
+    if (!vol->dirty) {
+        return 0;
+    }
+
+    rc = ext2_read_bytes(vol, EXT2_SUPERBLOCK_OFFSET, sb, sizeof(sb));
+    if (rc != 0) {
+        return rc;
+    }
+
+    ext2_put32(sb + 12, vol->free_blocks);
+    ext2_put32(sb + 16, vol->free_inodes);
+    ext2_put32(sb + 48, ext2_now()); /* the last moment of a write */
+
+    rc = ext2_write_bytes(vol, EXT2_SUPERBLOCK_OFFSET, sb, sizeof(sb));
+    if (rc != 0) {
+        return rc;
+    }
+
+    if (vol->dev->ops != NULL && vol->dev->ops->sync != NULL) {
+        if (vol->dev->ops->sync(vol->dev->ctx) != 0) {
+            return KERR_IO;
+        }
+    }
+
+    vol->dirty = false;
+
+    return 0;
+}
+
 void ext2_volume_unmount(struct ext2_volume *vol)
 {
     if (vol == NULL) {
         return;
     }
 
+    if (vol->mounted) {
+        (void)ext2_volume_flush(vol);
+    }
+
     vol->mounted = false;
     vol->cache_valid = false;
     k_mutex_destroy(&vol->lock);
+}
+
+/* The descriptor of one group, as the 32 bytes it is on the medium. */
+int ext2_group_read(struct ext2_volume *vol, k_u32_t index, struct ext2_group *out)
+{
+    k_u8_t raw[32];
+    int rc;
+
+    if (vol == NULL || out == NULL || !vol->mounted) {
+        return KERR_INVAL;
+    }
+
+    if (index >= vol->groups) {
+        return KERR_INVAL;
+    }
+
+    rc = ext2_read_bytes(vol, ext2_descriptor_start(vol) + (k_u64_t)index * 32u, raw, sizeof(raw));
+    if (rc != 0) {
+        return rc;
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->number = index;
+    out->block_bitmap = ext2_le32(raw + 0);
+    out->inode_bitmap = ext2_le32(raw + 4);
+    out->inode_table = ext2_le32(raw + 8);
+    out->free_blocks = ext2_le16(raw + 12);
+    out->free_inodes = ext2_le16(raw + 14);
+    out->used_dirs = ext2_le16(raw + 16);
+
+    return 0;
+}
+
+int ext2_group_write(struct ext2_volume *vol, const struct ext2_group *group)
+{
+    k_u8_t raw[32];
+
+    if (vol == NULL || group == NULL || !vol->mounted) {
+        return KERR_INVAL;
+    }
+
+    if (group->number >= vol->groups || group->block_bitmap >= vol->blocks_count ||
+        group->inode_bitmap >= vol->blocks_count || group->inode_table >= vol->blocks_count) {
+        return KERR_IO;
+    }
+
+    memset(raw, 0, sizeof(raw));
+    ext2_put32(raw + 0, group->block_bitmap);
+    ext2_put32(raw + 4, group->inode_bitmap);
+    ext2_put32(raw + 8, group->inode_table);
+    ext2_put16(raw + 12, group->free_blocks);
+    ext2_put16(raw + 14, group->free_inodes);
+    ext2_put16(raw + 16, group->used_dirs);
+
+    return ext2_write_bytes(vol, ext2_descriptor_start(vol) + (k_u64_t)group->number * 32u, raw,
+                            sizeof(raw));
 }
 
 const char *ext2_relative(const struct ext2_volume *vol, const char *path)
@@ -263,6 +467,16 @@ const char *ext2_relative(const struct ext2_volume *vol, const char *path)
     len = strlen(vol->point);
     if (strncmp(path, vol->point, len) != 0) {
         return NULL;
+    }
+
+    /*
+     * The root of the tree is the one point of one character: the VFS hands
+     * a path below it with its own slash ("/bin"), and that path is already
+     * the relative one (ADR 0027, a root of ext2). A point with a name keeps
+     * its separator and the walk below starts after it.
+     */
+    if (len == 1u) {
+        return path[0] == '/' ? path : NULL;
     }
 
     if (path[len] == '\0') {
@@ -302,7 +516,7 @@ int ext2_read_inode(struct ext2_volume *vol, k_u32_t number, struct ext2_inode *
         return KERR_IO;
     }
 
-    rc = ext2_read_bytes(vol, descriptor_start(vol) + (k_u64_t)group_index * 32u, group,
+    rc = ext2_read_bytes(vol, ext2_descriptor_start(vol) + (k_u64_t)group_index * 32u, group,
                          sizeof(group));
     if (rc != 0) {
         return rc;
@@ -331,6 +545,7 @@ int ext2_read_inode(struct ext2_volume *vol, k_u32_t number, struct ext2_inode *
     out->atime = ext2_le32(raw + 8);
     out->ctime = ext2_le32(raw + 12);
     out->mtime = ext2_le32(raw + 16);
+    out->dtime = ext2_le32(raw + 20);
     out->gid = ext2_le16(raw + 24);
     out->links = ext2_le16(raw + 26);
     out->blocks = ext2_le32(raw + 28);

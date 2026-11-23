@@ -30,6 +30,7 @@ static void run_tests(void *arg)
     test_port();
     test_blockdev();
     test_partition();
+    test_root();
     test_render();
     test_task();
     test_sched();
@@ -44,6 +45,7 @@ static void run_tests(void *arg)
     test_mfs_repair();
     test_mfs_many();
     test_mfs_chain();
+    test_mfs_big();
     test_mkfs_image();
     test_vfs();
     test_fs_fat();
@@ -83,8 +85,12 @@ static void run_tests(void *arg)
     test_zlib();
     test_pcre2();
     test_lua();
+    test_zstd();
+    test_awk();
     test_userland_float();
     test_bc();
+    test_file();
+    test_sqlite();
 
     g_result = ktest_summary();
     atomic_store_explicit(&g_done, true, memory_order_release);

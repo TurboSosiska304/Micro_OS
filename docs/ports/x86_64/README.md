@@ -11,8 +11,9 @@ the machine where a program can really be loaded and run (the window of
 | loader | `loader32.S`: a multiboot image that QEMU loads with `-kernel`; it copies the kernel to 16 MiB, maps the same bytes at `0xFFFFFFFF80000000` (the top 2 GiB, where the image is linked), builds the identity map of the first gigabyte and turns the long mode on |
 | console | the framebuffer of the VGA of QEMU, 1280x800 at 16 bits per pixel in RGB565 (Bochs VBE, ADR 0023): a grid of 160x50 cells of the 8x16 font of the PC (Spleen, `line_gap` 0/2/4 px of `/etc/font`), the colours of `/etc/console`; the text mode of 80x25 at `0xB8000` when the machine has no Bochs VBE interface; COM1, 115200, `\r\n`, out of one `k_port_write()` |
 | input | the PS/2 keyboard on IRQ1 (scancode set 1, Shift and Caps Lock) or COM1 |
-| clock | the PIT at 1 kHz; critical sections save and restore the flags |
-| tasks | `switch.S` (callee-saved registers and the stack) and a round robin over the ready queue |
+| clock | the PIT at 1 kHz on the core 0; the local APIC timer at 1 kHz on every application processor, calibrated against the TSC |
+| tasks | `switch.S` (callee-saved registers and the stack), one run queue per core under `KERNEL_SMP`, and a round robin over it |
+| processors | the MADT of ACPI, the trampoline at `0x7000`, INIT and the start-up IPI through the local APIC, one GDT/TSS/IST and one 64 KiB stack per core (ADR 0012) |
 | store | `ata0`: a raw image on the primary IDE channel, PIO, MicroFS on its first partition, mounted at `/` (ADR 0008); `boot0p1`: the read-only root image of the ISO, as the second module of the boot (ADR 0026); `ram0`, 512 KB of the memory of the machine, when there is neither a disk nor a boot image |
 | network | `virtio0`: virtio-net-pci in its legacy I/O interface, polled; ARP, IPv4, ICMP, UDP, a client of TCP (one segment in flight, a timeout retransmission) and a listener with SYN/ACK and `accept`; the resolver of QEMU user-net with a cache of eight names and their time to live; 10.0.2.15/24 on QEMU user-net, gateway 10.0.2.2, resolver 10.0.2.3, no DHCP |
 | programs | `k_port_exec_supported()` is true; the window is 16 MiB at 32 MiB (`0x02000000`-`0x03000000`) over a physical arena at 64 MiB; a program is a file in `/bin` (the MOX1 format of `kernel/exec.h`), runs in ring 3 with page tables of its own and calls the kernel with `int $0x80` (ADR 0007) |
@@ -160,11 +161,12 @@ a floor when the port has a store; today the rule is "a rollback is allowed"
 
 The heap is the low identity map and stops below the window of the programs,
 which are placed at 32 MiB; the image of 1.0 ends 1.9 MiB after the base and
-the port allows it up to 16 MiB. The twenty-six programs of `/bin` are built
+the port allows it up to 16 MiB. The thirty-one programs of `/bin` are built
 first:
 `build-x86/hello.mox`, `crash.mox`, `fork.mox`, `badptr.mox`, `signals.mox`,
-`nx.mox`, `echo.mox`, `mkdir.mox`, `rm.mox`, `pwd.mox`, `spawn.mox`,
-`zcat.mox`, `pcre2grep.mox`, `lua.mox`, `bc.mox`, `dc.mox` and the ten commands of sbase
+`nx.mox`, `echo.mox`, `streams.mox`, `mkdir.mox`, `rm.mox`, `pwd.mox`,
+`spawn.mox`, `zcat.mox`, `pcre2grep.mox`, `lua.mox`, `zstd.mox`, `bc.mox`,
+`dc.mox`, `file.mox`, `sqlite3.mox`, `awk.mox` and the ten commands of sbase
 (`cat.mox`, `grep.mox`, `head.mox`, `ls.mox`, `tail.mox`, `wc.mox`,
 `sort.mox`, `find.mox`, `xargs.mox`, `sed.mox`) are the images of the window
 (`programs/program.ld` links them for the window, `tools/mkprog.sh` turns
@@ -173,12 +175,20 @@ writes them into a MicroFS volume of a raw disk
 image with `tools/mkfs_mfs.c`, and the boot mounts that volume and runs
 `/bin/hello` through `execve`. All but the first six are linked against
 `components/libc/user` and enter at `_start` (ADR 0016); `zcat` also links the
-static archive of zlib 1.3.1 and `lua` the core of Lua 5.4.7
-([`docs/porting-programs.md`](../../porting-programs.md)).
-The first five use the raw `programs/prog.h`. The build passes
-`--base 0x02000000` to `mkprog.sh`, which refuses an image linked for another
-window: nothing relocates the program, so a wrong address would run and read
-its data from somewhere else.
+static archive of zlib 1.3.1, `lua` the core of Lua 5.4.7, `zstd` the library
+of its release, `file` libmagic and the decompressors of the two formats, and
+`/bin/sqlite3` the archive of SQLite with the VFS of the port
+([`docs/porting-programs.md`](../../porting-programs.md)). SQLite, Lua, zstd
+and `file -l` are the programs built without `-mgeneral-regs-only`: a `REAL`,
+a `lua_Number` and a human-readable size are doubles, and the loader turns the
+SSE and x87 units on for them. `zstdcat` is the same image as `zstd` under a
+second name.
+The first six use the raw `programs/prog.h`. The build passes
+`--base 0x02000000` to `tools/link_program.sh`, which links the program, checks
+that the text really landed at `0x02000020` - the ld of binutils 2.38 moves it
+32 bytes up, the 2.47 of this host does not - and hands the linked file to
+`mkprog.sh`; the image of another window is refused, and nothing relocates the
+program, so a wrong address would run and read its data from somewhere else.
 
 The virtual and the physical address are no longer the same number for a
 program: `src/paging.c` builds its page tables with the window at 32 MiB
@@ -346,9 +356,12 @@ inverted line has nothing to ask for yet (`docs/debts.md`, K11).
 The disk is the machine's, not a test's: `make x86-disk` writes
 `build-x86/programs.img`, an 8 MB raw image with an MBR, one Linux partition
 at LBA 2048 and a MicroFS volume in it. The volume already carries `/bin`
-(the twenty-six programs), `/etc/setting`, the fixture `/etc/greeting.gz`,
-the script `/etc/hello.lua`, and the licenses of zlib, PCRE2, Lua and sbase
-in `/etc/licenses`: the host tool `tools/mkfs_mfs.c`
+(the thirty-one programs), `/etc/setting`, the fixtures `/etc/greeting.gz`,
+`/etc/setting.zst` and `/etc/broken.zst`, the scripts of the interpreters and
+of the database (`/etc/hello.lua`, `/etc/hex.lua`, `/etc/bc.bc`,
+`/etc/dc.dc`, `/etc/sql-*.sql`, `/etc/columns` and `/etc/hello.awk`), the database of libmagic (`/etc/magic.mgc`
+and its text) and the licenses of zlib, PCRE2, Lua, zstd, sbase, bc, file, SQLite
+and awk in `/etc/licenses`: the host tool `tools/mkfs_mfs.c`
 (formats and writes) links `components/mfs`, so the layout of the volume has
 one implementation and the host test `tests/cases/test_mkfs_image.c` mounts
 what the machine boots.
@@ -514,31 +527,131 @@ PCI line needs the I/O APIC that K8 brings.
 The port reads the processor list of the machine the way a PC has answered
 since ACPI: the root pointer in the extended BIOS area (or the last kilobyte
 of the BIOS), the RSDT or the XSDT under it, and the MADT with one entry per
-processor. The local APIC address comes from the same table. The boot prints
-both numbers, because they are different while the second core is not up:
+processor; the local APIC address comes from the same table. The boot prints
+both numbers, and they are the truth:
 
 ```
-x86-64: 2 cpu(s) reported by the firmware, 1 in use (apic 0xfee00000)
+x86-64: 2 cpu(s) reported by the firmware, 2 in use (apic 0xfee00000)
+cpu: 2 core(s) of the machine are used by the kernel
 ```
 
-The count on the left is what the firmware calls enabled; on the right is
-what the kernel runs. `make x86-smoke` gives QEMU `-smp 2` and reads the
-line, so a machine that stopped describing its processors is a failure and
-not a silence.
+The left number is what the firmware calls enabled; the right one is what the
+kernel started and can take a task. A machine of `-smp 2` with a kernel built
+without `KERNEL_SMP` says `1 in use` and names the flag; one with the flag
+says `2 in use`, and a core the firmware lists but the port could not start
+is named and not counted.
 
-Only the processor of the boot runs the kernel. The AP bring-up of ADR 0012
-has four steps, and the port has none of them yet: a real spinlock inside
-`k_port_enter_critical()` (today it is `cli` and a depth counter, which is a
-lock of one core), one `port_task`/TSS/thread pointer per core, a trampoline
-in low memory with INIT-SIPI-SIPI, and a local APIC timer with its vector
-plus the I/O APIC for the keyboard and the disk (the PIT and the 8259 deliver
-to the boot processor). `make x86-smp-build` builds the portable kernel with
-`KERNEL_SMP=ON`; it boots on this machine and says `1 in use`, and the two-core
-side of the scheduler is tested on the host (`make test-smp`, `make
-soak-host`). The blocker and the order of the work are written down in ADR
-0012, "The pilot of 1.x" and in [debts.md](../../debts.md) under K8.
+### How a core is started
 
-## What works
+The list of the MADT is the plan. For every processor but the boot's, the
+port allocates a 64 KiB stack, writes four words at the physical page
+`0x8000` (the kernel CR3, the top of that stack, the virtual address of
+`port_x86_64_ap_entry()` and the kernel number of the core), and sends the
+sequence of the PC through the local APIC: INIT, ten milliseconds, the
+start-up IPI with vector 7, two hundred microseconds, the start-up IPI again.
+Vector 7 names the page `0x7000`, where the loader copied the trampoline of
+`ap_trampoline.S`: sixteen-bit code that opens A20, loads a temporary GDT,
+turns on PAE and long mode with the kernel's page tables and calls the C
+entry on the stack from the parameter page.
+
+The C of the core (`src/smp.c`) sets its identity first, then builds its GDT,
+TSS and IST (`src/gdt.c`), loads the table of the interrupts the boot built,
+sets `CR0.WP` for itself, and reports that it reached C. It then waits: the
+scheduler of the kernel does not exist while the port is still being brought
+up, and its array has room for the cores the boot accepted only. `kmain()`
+releases the cores after `kernel_boot()`, and each one enters its idle loop.
+A core that does not answer in 100 ms is not accepted and never enters the
+scheduler.
+
+The identity of a core is one load. Every core points `IA32_GS_BASE` at a
+record whose first word is its kernel number, and `k_port_cpu_id()` is
+`movl %gs:0`; the boot's number is 0 and the others follow the MADT. That is
+what makes the current context, the TSS `RSP0`, the thread pointer and the
+interrupt nesting of the port per core, and it is why the application
+processor writes its identity twice on the way up: a load of a segment
+register in long mode clears the base of `GS`, and the second write follows
+the GDT the core loaded.
+
+### The clock of a core
+
+The millisecond of the kernel is one number and the core 0 advances it, from
+the PIT and the 8259, as in 1.1. An application processor has no 8259: its
+clock is its own local APIC timer, calibrated against the TSC at 1 kHz (QEMU
+counts at about 62.6 MHz with divider 16, so an initial count of about
+62 600). The external mode of `LINT0` belongs to the core 0 alone; with every
+core in that mode, QEMU delivered the timer of the 8259 to either of them
+(1889 ticks on the core 0 and 4933 on the core 1 of 6822) and the clock of
+the kernel ran at a third of real time. The I/O APIC is still a stub: the
+legacy lines stay on the core 0.
+
+### What the shell shows
+
+In a `KERNEL_SMP` build the shell has `smp`, `smp workers <n>` and
+`smp ping` (they are not registered in a one-core build, which is the kernel
+of 1.1):
+
+```
+microos> smp
+smp: 2 core(s) in use of 2 reported, apic 0xfee00000
+smp: cpu 0 apic 0x0 ticks 134 current shell
+smp: cpu 1 apic 0x1 ticks 3414 current idle
+smp: queues consistent
+smp: the command ran on cpu 0
+microos> smp workers 8
+smp: worker 5 on cpu 0
+smp: worker 8 on cpu 1
+...
+smp: 8 worker(s) done
+microos> smp ping
+smp: ping cpu 1: ipi count 0 -> 1
+smp: ping ok
+```
+
+`smp workers` is the proof that a task of this machine runs on each core: the
+scheduler puts a new task on the next core of its round robin. `smp ping` is
+the proof of the IPI vector: the count is read on the core that received the
+interrupt, not on the one that sent it.
+
+### The gate
+
+```bash
+make x86-smp-build    # the kernel with KERNEL_SMP, an image of its own
+make x86-smp-run      # the two-core machine in a terminal
+make x86-smp-smoke    # boot -smp 2 and check 34 things about the two cores
+make soak-smp         # the 600-second session on the two-core image
+make x86-smoke        # the one-core kernel: 174 checks, unchanged
+```
+
+`tools/x86_smp_smoke.py` boots the image of `build-x86-smp` on the disk of
+`make x86-disk` with `-smp 2`, reads the two numbers, runs the program of the
+boot in ring 3 and drives the `smp` command: the two cores are in use, the
+queues are consistent, a worker ran on each core, the IPI arrived on the core
+it named, and the ticks of both cores moved between the two reports. A line
+that names a missing core, an exception or a stopped machine fails the run;
+so does a transcript that stops answering.
+
+The 600-second session (`tools/soak.py --smp`) runs the load of the campaign
+on the same image and samples `smp` every cycle: the ticks of the core 1 have
+to move as well as those of the core 0, the queues have to stay consistent
+and no answer may hold an exception. The short form of the tool is
+`make soak-smp SOAK_MINUTES=1`.
+
+The one-core build is the kernel of 1.1: `KERNEL_SMP` is off by default, and
+`make x86-smoke` and every other check of the port run it.
+
+### What remains
+
+The I/O APIC is a stub (`src/ioapic.c`): the PIT and the keyboard are still
+delivered by the 8259 to the core 0, and a machine whose firmware delivers
+nothing to the legacy chip has no clock on the APs. The IPI vector exists and
+is proved by `smp ping`, but the scheduler does not send it yet: an idle core
+wakes on its own timer (at worst a millisecond later) and a core does not
+preempt a lower-priority task of another queue. The FPU and SSE state is not
+saved at a switch (the kernel and the programs are built with
+`-mgeneral-regs-only`), and there is no guard page under a task stack. These
+are rows of K8 in [debts.md](../../debts.md).
+
+## What works## What works
 
 * the boot: the loader, long mode, the banner, the contract check at 1.9;
 * the signature of the kernel (ADR 0020): the loader verifies the trailer of
@@ -661,10 +774,10 @@ soak-host`). The blocker and the order of the work are written down in ADR
 
 ## What does not work yet
 
-* the second processor: the MADT is read and the boot says how many the
-  machine has, but the APs wait for the trampoline, the spinlock, the local
-  APIC timer and the I/O APIC (ADR 0012, "The pilot of 1.x"); the kernel runs
-  on the processor of the boot;
+* the I/O APIC: the 8259 still delivers the timer and the keyboard to the
+  core 0, the lines are not routed through the I/O APIC, and the FPU/SSE
+  state is not saved at a switch; the APs have their own local APIC timer and
+  the IPI vector, which `smp ping` proves (ADR 0012, K8 of debts.md);
 * the disk is one, and it is the primary ATA channel: no SATA, no virtio, no
   NVMe, no card, no second disk;
 * the CD of K13 is BIOS only and its root is the image of the medium: every

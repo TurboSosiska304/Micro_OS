@@ -437,6 +437,82 @@ static void test_truncate_frees_blocks(void)
     teardown();
 }
 
+/*
+ * The property: a file cut to a smaller size keeps its first bytes, reads
+ * zeros after a growth, and the map of the free blocks is the one of a
+ * sound volume when the check is asked.
+ */
+static void test_truncate_to_size(void)
+{
+    static char content[40u * 1024u];
+    static char check[12u * 1024u];
+    struct mfs_check_report report;
+    struct mfs_inode inode;
+    struct mfs_file file;
+    k_size_t i;
+    int rc;
+
+    ktest_begin("mfs: a file of forty kilobytes is cut to ten and grows back");
+
+    for (i = 0; i < sizeof(content); i++) {
+        content[i] = (char)(i & 0xFF);
+    }
+
+    KT_CHECK_INT_EQ(setup(), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+
+    KT_CHECK_INT_EQ(mfs_create("/cut.bin"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_open("/cut.bin", MFS_O_RDWR, &file), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_write(&file, content, sizeof(content)), (int)sizeof(content));
+
+    /* The cut is made through the open file, as ftruncate does it. */
+    KT_CHECK_INT_EQ(mfs_truncate(&file, 10u * 1024u), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+
+    KT_CHECK_INT_EQ(mfs_stat("/cut.bin", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(inode.size, 10u * 1024u);
+
+    KT_CHECK_INT_EQ(mfs_open("/cut.bin", MFS_O_RDONLY, &file), MFS_OK);
+    memset(check, 0, sizeof(check));
+    KT_CHECK_INT_EQ(mfs_read(&file, check, sizeof(check)), 10 * 1024);
+    KT_CHECK(memcmp(content, check, 10u * 1024u) == 0);
+    /* The bytes past the new size are not the file any more. */
+    KT_CHECK_INT_EQ(mfs_read(&file, check, sizeof(check)), 0);
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+
+    /* A growth reads as zeros, including the tail of the block that held
+     * the old size. */
+    KT_CHECK_INT_EQ(mfs_open("/cut.bin", MFS_O_RDWR, &file), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_truncate(&file, 12u * 1024u), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+
+    KT_CHECK_INT_EQ(mfs_open("/cut.bin", MFS_O_RDONLY, &file), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_read(&file, check, sizeof(check)), 12 * 1024);
+    KT_CHECK(memcmp(content, check, 10u * 1024u) == 0);
+    for (i = 10u * 1024u; i < 12u * 1024u; i++) {
+        KT_CHECK_INT_EQ(check[i], 0);
+    }
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+
+    memset(&report, 0, sizeof(report));
+    KT_CHECK_INT_EQ(mfs_check(&report), MFS_OK);
+    KT_CHECK_INT_EQ(report.errors, 0);
+    KT_CHECK_INT_EQ(report.first[0], '\0');
+
+    /* The format refuses a size that its record cannot hold. */
+    KT_CHECK_INT_EQ(mfs_open("/cut.bin", MFS_O_RDWR, &file), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_truncate(&file, (k_u64_t)0x100000000ull), MFS_E2BIG);
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+
+    /* A reader cannot cut the file. */
+    KT_CHECK_INT_EQ(mfs_open("/cut.bin", MFS_O_RDONLY, &file), MFS_OK);
+    rc = mfs_truncate(&file, 1u);
+    KT_CHECK_INT_EQ(rc, MFS_EINVAL);
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+
+    teardown();
+}
+
 static void test_files(void)
 {
     struct mfs_file file;
@@ -1394,6 +1470,7 @@ void test_mfs(void)
     test_header_crc();
     test_mkdir_survives_restart();
     test_truncate_frees_blocks();
+    test_truncate_to_size();
     test_two_tasks_write();
     test_append_and_access();
     test_files();

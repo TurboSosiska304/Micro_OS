@@ -1,13 +1,14 @@
 /*
- * Micro OS — the adapter between the ext2 reader and the VFS.
+ * Micro OS — the adapter between ext2 and the VFS.
  *
  * The VFS hands a filesystem the whole path of the tree and the mount point
  * is the first part of it; the adapter takes that part away, the way procfs,
  * devfs and FAT do. What is left is the path inside the volume.
  *
- * The volume is read-only: the operations that would change it are left
- * empty and the VFS answers them with KERR_NOTSUP, which is the word of a
- * call that the filesystem does not have.
+ * The operations that change the volume keep the lock of the volume for the
+ * whole call: the walk of a name and the blocks it writes are one state. A
+ * call of this filesystem never allocates the memory of the kernel, so a
+ * write of a root works on the board and on the machine of QEMU alike.
  */
 #include "ext2_private.h"
 
@@ -87,17 +88,23 @@ static int ext2_vfs_open(void *ctx, const char *path, int flags, struct vfs_file
     const char *relative;
     struct ext2_inode inode;
     k_u32_t number = 0;
+    bool writable;
     int rc;
 
     if (vol == NULL || out == NULL || !vol->mounted) {
         return KERR_INVAL;
     }
 
-    /* The volume takes no write and no new name: a descriptor for one is a
-     * call this filesystem cannot keep. */
-    if ((flags & (VFS_O_WRONLY | VFS_O_RDWR | VFS_O_CREAT | VFS_O_TRUNC | VFS_O_APPEND)) != 0) {
-        return KERR_NOTSUP;
+    if ((flags & ~(VFS_O_WRONLY | VFS_O_RDWR | VFS_O_CREAT | VFS_O_TRUNC | VFS_O_APPEND |
+                   VFS_O_DIRECTORY)) != 0) {
+        return KERR_INVAL;
     }
+
+    if ((flags & VFS_O_CREAT) != 0 && (flags & VFS_O_DIRECTORY) != 0) {
+        return KERR_INVAL; /* a directory is made by mkdir, not by open */
+    }
+
+    writable = (flags & (VFS_O_WRONLY | VFS_O_RDWR)) != 0;
 
     relative = ext2_relative(vol, path);
     if (relative == NULL) {
@@ -110,6 +117,14 @@ static int ext2_vfs_open(void *ctx, const char *path, int flags, struct vfs_file
     }
 
     rc = ext2_lookup(vol, relative, &inode, &number);
+
+    if (rc == KERR_NOENT && (flags & VFS_O_CREAT) != 0) {
+        rc = ext2_create_file(vol, relative, EXT2_MODE_FILE, &number);
+        if (rc == 0) {
+            rc = ext2_read_inode(vol, number, &inode);
+        }
+    }
+
     if (rc != 0) {
         k_mutex_unlock(&vol->lock);
         return rc;
@@ -117,6 +132,8 @@ static int ext2_vfs_open(void *ctx, const char *path, int flags, struct vfs_file
 
     if (ext2_inode_is_dir(&inode)) {
         if ((flags & VFS_O_DIRECTORY) == 0) {
+            rc = KERR_ISDIR;
+        } else if (writable || (flags & VFS_O_TRUNC) != 0) {
             rc = KERR_ISDIR;
         } else {
             out->inode = number;
@@ -127,12 +144,19 @@ static int ext2_vfs_open(void *ctx, const char *path, int flags, struct vfs_file
         rc = KERR_NOTDIR;
     } else if (!ext2_inode_is_file(&inode)) {
         /* A symbolic link, a device node or a fifo has no bytes for this
-         * reader: following a link is a contract the VFS does not have. */
+         * filesystem: following a link is a contract the VFS does not
+         * have. */
         rc = KERR_NOTSUP;
     } else {
-        out->inode = number;
-        out->size = inode.size;
-        out->offset = 0;
+        if ((flags & VFS_O_TRUNC) != 0) {
+            rc = ext2_truncate_inode(vol, &inode, 0);
+        }
+
+        if (rc == 0) {
+            out->inode = number;
+            out->size = inode.size;
+            out->offset = ((flags & VFS_O_APPEND) != 0) ? inode.size : 0;
+        }
     }
 
     k_mutex_unlock(&vol->lock);
@@ -194,6 +218,88 @@ static int ext2_vfs_close(void *ctx, struct vfs_file *file)
     (void)file;
 
     return 0;
+}
+
+static int ext2_vfs_write(void *ctx, struct vfs_file *file, const void *buf, k_size_t size)
+{
+    struct ext2_volume *vol = (struct ext2_volume *)ctx;
+    struct ext2_inode inode;
+    k_size_t got = 0;
+    k_u64_t offset;
+    int rc;
+
+    if (vol == NULL || file == NULL || !vol->mounted) {
+        return KERR_INVAL;
+    }
+
+    if (buf == NULL && size != 0) {
+        return KERR_INVAL;
+    }
+
+    if ((file->flags & (VFS_O_WRONLY | VFS_O_RDWR)) == 0) {
+        return KERR_BADF; /* a descriptor of a reader has no write behind it */
+    }
+
+    rc = volume_lock(vol);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = ext2_read_inode(vol, file->inode, &inode);
+    if (rc == 0) {
+        offset = ((file->flags & VFS_O_APPEND) != 0) ? inode.size : file->offset;
+
+        rc = ext2_file_write(vol, &inode, offset, buf, size, &got);
+
+        if (got > 0) {
+            file->offset = offset + got;
+            file->size = inode.size;
+        }
+    }
+
+    k_mutex_unlock(&vol->lock);
+
+    return (rc != 0) ? rc : (int)got;
+}
+
+static int ext2_vfs_truncate_file(void *ctx, struct vfs_file *file, k_u64_t size)
+{
+    struct ext2_volume *vol = (struct ext2_volume *)ctx;
+    struct ext2_inode inode;
+    int rc;
+
+    if (vol == NULL || file == NULL || !vol->mounted) {
+        return KERR_INVAL;
+    }
+
+    if ((file->flags & (VFS_O_WRONLY | VFS_O_RDWR)) == 0) {
+        return KERR_BADF;
+    }
+
+    /* A file cannot be larger than the volume that holds it. The growth of
+     * ext2 is a hole, so without this check a number nobody can write would
+     * still become the size of the inode. */
+    if (size > (k_u64_t)vol->blocks_count * (k_u64_t)vol->block_size) {
+        return KERR_NOSPC;
+    }
+
+    rc = volume_lock(vol);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = ext2_read_inode(vol, file->inode, &inode);
+    if (rc == 0) {
+        rc = ext2_truncate_inode(vol, &inode, size);
+    }
+
+    if (rc == 0) {
+        file->size = size;
+    }
+
+    k_mutex_unlock(&vol->lock);
+
+    return rc;
 }
 
 static int ext2_vfs_statfs(void *ctx, struct vfs_statfs *out)
@@ -417,6 +523,134 @@ static int ext2_vfs_statx(void *ctx, const char *path, struct vfs_statx *out)
     return rc;
 }
 
+static int ext2_vfs_mkdir(void *ctx, const char *path)
+{
+    struct ext2_volume *vol = (struct ext2_volume *)ctx;
+    const char *relative;
+    int rc;
+
+    if (vol == NULL || path == NULL || !vol->mounted) {
+        return KERR_INVAL;
+    }
+
+    relative = ext2_relative(vol, path);
+    if (relative == NULL) {
+        return KERR_NOENT;
+    }
+
+    rc = volume_lock(vol);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = ext2_make_dir(vol, relative, EXT2_MODE_DIR);
+
+    k_mutex_unlock(&vol->lock);
+
+    return rc;
+}
+
+static int ext2_vfs_unlink(void *ctx, const char *path)
+{
+    struct ext2_volume *vol = (struct ext2_volume *)ctx;
+    const char *relative;
+    int rc;
+
+    if (vol == NULL || path == NULL || !vol->mounted) {
+        return KERR_INVAL;
+    }
+
+    relative = ext2_relative(vol, path);
+    if (relative == NULL) {
+        return KERR_NOENT;
+    }
+
+    rc = volume_lock(vol);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = ext2_remove(vol, relative);
+
+    k_mutex_unlock(&vol->lock);
+
+    return rc;
+}
+
+static int ext2_vfs_chmod(void *ctx, const char *path, k_u32_t mode)
+{
+    struct ext2_volume *vol = (struct ext2_volume *)ctx;
+    const char *relative;
+    struct ext2_inode inode;
+    int rc;
+
+    if (vol == NULL || path == NULL || !vol->mounted) {
+        return KERR_INVAL;
+    }
+
+    if ((mode & ~EXT2_MODE_PERM) != 0u) {
+        return KERR_INVAL; /* the mode is the nine bits and the three of setid */
+    }
+
+    relative = ext2_relative(vol, path);
+    if (relative == NULL) {
+        return KERR_NOENT;
+    }
+
+    rc = volume_lock(vol);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = ext2_lookup(vol, relative, &inode, NULL);
+    if (rc == 0) {
+        inode.mode = (k_u16_t)((inode.mode & ~EXT2_MODE_PERM) | (mode & EXT2_MODE_PERM));
+        inode.ctime = ext2_now();
+        rc = ext2_inode_write(vol, &inode, true);
+    }
+
+    k_mutex_unlock(&vol->lock);
+
+    return rc;
+}
+
+static int ext2_vfs_chown(void *ctx, const char *path, k_u32_t owner)
+{
+    struct ext2_volume *vol = (struct ext2_volume *)ctx;
+    const char *relative;
+    struct ext2_inode inode;
+    int rc;
+
+    if (vol == NULL || path == NULL || !vol->mounted) {
+        return KERR_INVAL;
+    }
+
+    if (owner > 0xFFFFu) {
+        return KERR_INVAL; /* the owner of an ext2 record is 16 bits */
+    }
+
+    relative = ext2_relative(vol, path);
+    if (relative == NULL) {
+        return KERR_NOENT;
+    }
+
+    rc = volume_lock(vol);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = ext2_lookup(vol, relative, &inode, NULL);
+    if (rc == 0) {
+        inode.uid = (k_u16_t)owner;
+        inode.ctime = ext2_now();
+        rc = ext2_inode_write(vol, &inode, true);
+    }
+
+    k_mutex_unlock(&vol->lock);
+
+    return rc;
+}
+
 static int ext2_vfs_umount(void *ctx)
 {
     ext2_volume_unmount((struct ext2_volume *)ctx);
@@ -426,16 +660,18 @@ static int ext2_vfs_umount(void *ctx)
 static const struct vfs_operations g_ext2_operations = {
     .open = ext2_vfs_open,
     .read = ext2_vfs_read,
-    .write = NULL, /* the volume is read-only */
+    .write = ext2_vfs_write,
+    .truncate = ext2_vfs_truncate_file,
     .close = ext2_vfs_close,
     .list = ext2_vfs_list,
     .readdir = ext2_vfs_readdir,
     .stat = ext2_vfs_stat,
     .statx = ext2_vfs_statx,
-    .mkdir = NULL,
-    .unlink = NULL,
-    .chmod = NULL,
-    .chown = NULL,
+    .mkdir = ext2_vfs_mkdir,
+    .unlink = ext2_vfs_unlink,
+    .rename = NULL, /* a name of a file changes by a copy and a removal */
+    .chmod = ext2_vfs_chmod,
+    .chown = ext2_vfs_chown,
     .statfs = ext2_vfs_statfs,
     .strerror = ext2_strerror,
     .umount = ext2_vfs_umount,
@@ -489,6 +725,64 @@ int ext2_vfs_register_type(void)
     return vfs_register_type("ext2", ext2_vfs_mount);
 }
 
+int ext2_vfs_truncate(const char *path, k_u64_t size)
+{
+    const char *relative;
+    struct ext2_inode inode;
+    int rc;
+
+    if (path == NULL || !g_ext2.mounted) {
+        return KERR_INVAL;
+    }
+
+    relative = ext2_relative(&g_ext2, path);
+    if (relative == NULL) {
+        return KERR_NOENT;
+    }
+
+    rc = volume_lock(&g_ext2);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = ext2_lookup(&g_ext2, relative, &inode, NULL);
+    if (rc == 0) {
+        rc = ext2_truncate_inode(&g_ext2, &inode, size);
+    }
+
+    k_mutex_unlock(&g_ext2.lock);
+
+    return rc;
+}
+
+int ext2_check(const char *point, struct ext2_check_report *report)
+{
+    int rc;
+
+    if (point == NULL || report == NULL) {
+        return KERR_INVAL;
+    }
+
+    if (!g_ext2.mounted) {
+        return KERR_NOENT;
+    }
+
+    if (strcmp(g_ext2.point, point) != 0) {
+        return KERR_INVAL; /* not the volume of this filesystem */
+    }
+
+    rc = volume_lock(&g_ext2);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = ext2_check_volume(&g_ext2, report);
+
+    k_mutex_unlock(&g_ext2.lock);
+
+    return rc;
+}
+
 const char *ext2_strerror(int error)
 {
     switch (error) {
@@ -506,8 +800,10 @@ const char *ext2_strerror(int error)
         return "is a directory";
     case KERR_NAMETOOLONG:
         return "the name is longer than the window";
+    case KERR_NOSPC:
+        return "no space left on the volume";
     case KERR_NOTSUP:
-        return "operation not supported on a read-only ext2 volume";
+        return "operation not supported by the volume";
     default:
         return "unknown error";
     }

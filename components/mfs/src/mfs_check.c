@@ -27,6 +27,7 @@
 
 #include <string.h>
 
+#include "kernel/kmm.h"
 #include "mfs_private.h"
 
 /*
@@ -63,13 +64,58 @@ enum check_subject {
     CHECK_SUBJECT_BLOCK,
 };
 
+static void add_error(struct mfs_check_report *report, enum check_subject subject, k_u32_t number,
+                      const char *text);
+
 /*
- * The blocks of the data that the records of the table own. The map of the
- * free blocks has two blocks in the memory, so a volume that mounts never
- * has more data blocks than this map covers; a bit says that an object
- * holds the block.
+ * The blocks of the data that the records of the table own. The map is one
+ * bit per data block, the same shape as the map of the free blocks, and it
+ * is allocated for the volume that is walked: the mount checks the same
+ * ceiling, so a volume that mounted always fits. A volume that asks for
+ * more is reported and not walked; the map goes back to the allocator when
+ * the walk is over, so the check of a big volume costs its memory only
+ * while it runs.
  */
-static k_u8_t s_claimed[MFS_BLOCK_SIZE * MFS_BITMAP_MAX_BLOCKS];
+static k_u8_t *s_claimed;
+static k_u32_t s_claimed_bytes;
+
+/* Take the map for a volume, or say in the report why there is none. */
+static int claimed_alloc(const struct mfs_private *view, struct mfs_check_report *report)
+{
+    k_u32_t blocks = view->bitmap_blocks;
+    k_size_t size;
+    k_u8_t *map;
+
+    if (blocks == 0u || blocks > MFS_BITMAP_MAX_BLOCKS) {
+        add_error(report, CHECK_SUBJECT_VOLUME, 0,
+                  "the map of the free blocks is too big to check");
+        return MFS_EINVAL;
+    }
+
+    size = (k_size_t)blocks * MFS_BLOCK_SIZE;
+    map = (k_u8_t *)kmm_alloc(size, KMM_PRIORITY_SYSTEM);
+
+    if (map == NULL) {
+        add_error(report, CHECK_SUBJECT_VOLUME, 0, "no memory for the map of the blocks");
+        return MFS_ENOMEM;
+    }
+
+    memset(map, 0, size);
+    s_claimed = map;
+    s_claimed_bytes = (k_u32_t)size;
+
+    return MFS_OK;
+}
+
+static void claimed_free(void)
+{
+    if (s_claimed != NULL) {
+        kmm_free(s_claimed);
+        s_claimed = NULL;
+    }
+
+    s_claimed_bytes = 0;
+}
 
 /* A frame of the walk of the tree of the directories. */
 struct walk_frame {
@@ -530,7 +576,7 @@ static void check_blocks(const struct mfs_private *view, struct mfs_check_report
     k_u32_t bytes = (data_blocks + 7u) / 8u;
     k_u32_t i;
 
-    if (bytes > sizeof(s_claimed)) {
+    if (bytes > s_claimed_bytes) {
         add_error(report, CHECK_SUBJECT_VOLUME, 0,
                   "the map of the free blocks is too big to check");
         return;
@@ -1655,8 +1701,17 @@ int mfs_repair_locked(const struct mfs_private *view, struct mfs_check_report *r
         return MFS_OK;
     }
 
+    /*
+     * The map of the blocks the walk claims is taken for this volume and
+     * given back at the end: a repair of a big volume costs its memory only
+     * while it runs, the same way the check does.
+     */
+    rc = claimed_alloc(view, report);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
     memset(s_reached, 0, sizeof(s_reached));
-    memset(s_claimed, 0, sizeof(s_claimed));
     s_incomplete = false;
 
     rc = repair_tree(view, report);
@@ -1676,14 +1731,14 @@ int mfs_repair_locked(const struct mfs_private *view, struct mfs_check_report *r
         repair_bitmap(view, report);
     }
 
-    if (rc != MFS_OK) {
-        return rc;
+    if (rc == MFS_OK) {
+        rc = mfs_priv_sync();
+        if (rc != MFS_OK) {
+            add_repair_error(report, "the medium did not take a repair");
+        }
     }
 
-    rc = mfs_priv_sync();
-    if (rc != MFS_OK) {
-        add_repair_error(report, "the medium did not take a repair");
-    }
+    claimed_free();
 
     return rc;
 }
@@ -1694,19 +1749,22 @@ int mfs_check_locked(const struct mfs_private *view, struct mfs_check_report *re
 {
     int rc;
 
-    memset(s_claimed, 0, sizeof(s_claimed));
+    rc = claimed_alloc(view, report);
+    if (rc != MFS_OK) {
+        return rc;
+    }
 
     rc = check_header(view, report);
-    if (rc != MFS_OK) {
-        return rc;
+    if (rc == MFS_OK) {
+        rc = scan_inodes(view, report);
+
+        if (rc == MFS_OK) {
+            check_blocks(view, report);
+            rc = walk_tree(view, report);
+        }
     }
 
-    rc = scan_inodes(view, report);
-    if (rc != MFS_OK) {
-        return rc;
-    }
+    claimed_free();
 
-    check_blocks(view, report);
-
-    return walk_tree(view, report);
+    return rc;
 }

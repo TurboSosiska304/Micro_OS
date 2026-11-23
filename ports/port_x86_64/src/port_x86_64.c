@@ -180,24 +180,27 @@ static void com1_write(const char *data, k_size_t len)
  */
 void k_port_write(const char *data, k_size_t len)
 {
-    k_u64_t flags;
-
     if (data == NULL) {
         return;
     }
 
     /*
-     * The console is one resource and a line is written byte by byte to the
-     * UART: a tick in the middle of it would put the bytes of another task
-     * between two of these, and a transcript would read a line that was
-     * never printed. The section is the whole call, and it is short.
+     * The console is one resource of the machine and a line is written byte
+     * by byte to the UART: a tick in the middle of it would put the bytes of
+     * another task between two of these, and a transcript would read a line
+     * that was never printed. The interrupts of this core are not enough:
+     * with two cores the other one writes between two bytes of this call
+     * (the split line of `PROGRAM: write far 14` was exactly that), so the
+     * section is the whole call and it is the big kernel lock. The lock of
+     * the port is recursive per core, which is what lets the console be
+     * written from a section the caller already holds and from an exception.
      */
-    flags = port_save_flags_and_cli();
+    k_port_enter_critical();
 
     port_x86_64_console_write(data, len);
     com1_write(data, len);
 
-    port_restore_flags(flags);
+    k_port_exit_critical();
 }
 
 int k_port_console_readline(char *buf, k_size_t size)
@@ -504,6 +507,13 @@ void port_x86_64_irq_tick(k_u64_t *frame)
 __attribute__((weak)) void port_x86_64_task_tick(void) {}
 
 /*
+ * The IPI hook of the task substrate, called from the vector of
+ * kernel/port_x86_64_apic.h. Weak for the same reason as the tick: a build
+ * without the scheduler answers an IPI with the EOI alone.
+ */
+__attribute__((weak)) void port_x86_64_task_ipi(void) {}
+
+/*
  * The console of the failure path: an exception prints through k_port_write
  * directly, not through the log, because the log takes a lock and may be
  * the very thing that broke.
@@ -669,6 +679,20 @@ void port_x86_64_unexpected(void)
     k_port_halt();
 }
 
+void port_x86_64_interrupts_load(void)
+{
+    __asm__ volatile("lidt %0" : : "m"(g_idt_pointer));
+}
+
+void port_x86_64_idt_set(k_u32_t vector, void (*handler)(void))
+{
+    if (vector >= IDT_VECTORS || handler == NULL) {
+        return;
+    }
+
+    idt_set(vector, handler, 0, IDT_GATE_INTERRUPT);
+}
+
 void port_x86_64_interrupts_init(void)
 {
     k_u32_t vector;
@@ -704,7 +728,7 @@ void port_x86_64_interrupts_init(void)
 
     g_idt_pointer.limit = (k_u16_t)(sizeof(g_idt) - 1u);
     g_idt_pointer.base = (k_u64_t)(uintptr_t)g_idt;
-    __asm__ volatile("lidt %0" : : "m"(g_idt_pointer));
+    port_x86_64_interrupts_load();
 
     /* The controller of the keyboard is armed before its line is opened: a
      * key that arrives into a controller nobody prepared is a key lost. */
@@ -759,6 +783,41 @@ struct block {
 static struct block *g_first;
 static k_size_t g_heap_total;
 static k_size_t g_heap_free;
+
+/*
+ * The heap is one list and two cores may ask for a block at the same moment:
+ * the kernel task of one core and the port of another (the stack of a task is
+ * allocated here, and a page of a program is not). The lock is the heap's own
+ * and not the big kernel lock: a caller may already hold the BKL, and a
+ * dedicated word keeps the two decisions apart. The sections are a walk of the
+ * list and one split of a block - short, and with no sleep inside.
+ */
+static k_u32_t g_heap_lock;
+
+/*
+ * The lock takes the interrupts of the core with it. A task that holds it may
+ * be preempted by the tick, and the task the scheduler switches to on the same
+ * core may ask the heap for a block of its own: with the interrupts left on it
+ * would spin for ever on a lock whose owner is the context it interrupted.
+ * The order is the one of the big kernel lock - flags saved, interrupts off,
+ * then the word - and the caller gets its flags back on the way out.
+ */
+static void heap_lock(k_u64_t *flags)
+{
+    *flags = port_save_flags_and_cli();
+
+    while (__atomic_exchange_n(&g_heap_lock, 1u, __ATOMIC_ACQUIRE) != 0u) {
+        while (__atomic_load_n(&g_heap_lock, __ATOMIC_RELAXED) != 0u) {
+            __asm__ volatile("pause");
+        }
+    }
+}
+
+static void heap_unlock(k_u64_t flags)
+{
+    __atomic_store_n(&g_heap_lock, 0u, __ATOMIC_RELEASE);
+    port_restore_flags(flags);
+}
 
 extern char __kernel_end[];
 
@@ -952,6 +1011,8 @@ static void heap_init(k_u64_t multiboot_info)
 void *k_port_alloc(k_size_t size, bool psram)
 {
     struct block *block;
+    void *payload = NULL;
+    k_u64_t flags;
 
     K_UNUSED(psram); /* there is one memory on this machine */
 
@@ -960,6 +1021,8 @@ void *k_port_alloc(k_size_t size, bool psram)
     }
 
     size = (size + BLOCK_ALIGN - 1) & ~(k_size_t)(BLOCK_ALIGN - 1);
+
+    heap_lock(&flags);
 
     for (block = g_first; block != NULL; block = block->next) {
         if (!block->free || block->size < size) {
@@ -981,20 +1044,25 @@ void *k_port_alloc(k_size_t size, bool psram)
 
         block->free = false;
         g_heap_free -= block->size;
-
-        return (k_u8_t *)block + sizeof(struct block);
+        payload = (k_u8_t *)block + sizeof(struct block);
+        break;
     }
 
-    return NULL;
+    heap_unlock(flags);
+
+    return payload;
 }
 
 void k_port_free(void *ptr)
 {
     struct block *block;
+    k_u64_t flags;
 
     if (ptr == NULL || g_first == NULL) {
         return;
     }
+
+    heap_lock(&flags);
 
     block = (struct block *)((k_u8_t *)ptr - sizeof(struct block));
     block->free = true;
@@ -1008,6 +1076,8 @@ void k_port_free(void *ptr)
             break;
         }
     }
+
+    heap_unlock(flags);
 }
 
 k_size_t k_port_heap_total(void)
@@ -1033,15 +1103,29 @@ k_size_t k_port_psram_free(void)
 /* --- the locks --- */
 
 /*
- * The section of one core. A critical section is the interrupts of the local
- * core turned off; on a machine of two cores that is not a lock of the
- * machine, so every core has its own depth and its own saved flags, and the
- * kernel adds a spinlock of its own where the state is shared (the scheduler
- * lock of kernel/cpu.h; the contract of kernel/port/lock.h names both). The
- * depth is counted, because the kernel takes a section inside another one in
- * a few places, and the flags of every level are kept: a section that ends
- * must give back the state it found, not an unconditional "on", or an inner
- * one would open the window the outer one closed.
+ * The critical section of the machine: the big kernel lock of ADR 0012.
+ *
+ * The interrupts of the local core are not enough once a second core may
+ * enter the kernel: `cli` stops the core that asks, not the core that writes
+ * the same run queue. The kernel structures shared by every core - the run
+ * queues, the task table, the heap, the VFS - are therefore serialised by one
+ * global lock, and the local interrupts are turned off for the whole hold.
+ *
+ * The lock is recursive per core, because the kernel takes a section inside
+ * another one in many places (the scheduler lock, the heap, the VFS). Only the
+ * outermost entry of a core touches the machine-wide word: the nested ones
+ * count, and the outermost exit releases it. The flags of every level are
+ * kept, so a section that ends gives back the state it found and not an
+ * unconditional "on" - an inner exit must not open the window an outer entry
+ * closed.
+ *
+ * The acquisition order is the one Linux uses for a raw spinlock that also
+ * masks an interrupt: save the flags and disable the interrupts first, then
+ * spin for the word with the `pause` hint. Nothing here may sleep, switch a
+ * task, copy to a user or wait for a device: every one of those paths drops
+ * the lock first (kernel/port/lock.h, kernel/cpu.h). A holder that slept
+ * would stop every core of the machine, and the audit of the callers is in
+ * docs/debts.md (K8).
  *
  * Sixteen levels is far more than the kernel nests today; the guard is there
  * so that a bug shows up as a section that stays closed instead of a write
@@ -1049,8 +1133,42 @@ k_size_t k_port_psram_free(void)
  */
 #define CRITICAL_DEPTH_MAX 16u
 
+/*
+ * The one word of the machine. Zero is free, one is held. It is read through
+ * the atomic builtins so that the compiler does not turn the test of the spin
+ * into a load it may hoist out of the loop, and the release store is what
+ * publishes the writes of the section to the core that takes it next.
+ */
+static k_u32_t g_critical_lock;
+
 static k_u64_t g_critical_flags[KERNEL_CPUS_MAX][CRITICAL_DEPTH_MAX];
 static k_u32_t g_critical_depth[KERNEL_CPUS_MAX];
+
+static void critical_lock_acquire(void)
+{
+    /*
+     * The polite half of a test-and-set lock: an exchange on every turn would
+     * keep the cache line of the lock in the other core's cache, and the core
+     * that holds it is trying to finish a short section. The first exchange is
+     * the only one that must be atomic; after it fails the word is only read
+     * until it reads zero, and then one exchange again settles the race
+     * between two waiters.
+     */
+    for (;;) {
+        if (__atomic_exchange_n(&g_critical_lock, 1u, __ATOMIC_ACQUIRE) == 0u) {
+            return;
+        }
+
+        while (__atomic_load_n(&g_critical_lock, __ATOMIC_RELAXED) != 0u) {
+            __asm__ volatile("pause");
+        }
+    }
+}
+
+static void critical_lock_release(void)
+{
+    __atomic_store_n(&g_critical_lock, 0u, __ATOMIC_RELEASE);
+}
 
 void k_port_enter_critical(void)
 {
@@ -1063,6 +1181,16 @@ void k_port_enter_critical(void)
 
     flags = port_save_flags_and_cli();
 
+    /*
+     * The outermost section of this core takes the machine. A nested one
+     * finds its own depth above zero and does not touch the word: the lock is
+     * already held by this core, and a second acquisition would deadlock on
+     * the core that owns it.
+     */
+    if (g_critical_depth[cpu] == 0u) {
+        critical_lock_acquire();
+    }
+
     if (g_critical_depth[cpu] < CRITICAL_DEPTH_MAX) {
         g_critical_flags[cpu][g_critical_depth[cpu]] = flags;
     }
@@ -1073,6 +1201,7 @@ void k_port_enter_critical(void)
 void k_port_exit_critical(void)
 {
     k_u32_t cpu = k_port_cpu_id();
+    k_u64_t flags;
 
     if (cpu >= KERNEL_CPUS_MAX) {
         cpu = 0u;
@@ -1080,15 +1209,25 @@ void k_port_exit_critical(void)
 
     if (g_critical_depth[cpu] == 0) {
         /* An unbalanced exit says nothing about the flags to restore: the
-         * safe answer is to leave the interrupts as they are. */
+         * safe answer is to leave the interrupts as they are, and never to
+         * release a lock this core does not hold. */
         return;
     }
 
     g_critical_depth[cpu]--;
 
-    if (g_critical_depth[cpu] < CRITICAL_DEPTH_MAX) {
-        port_restore_flags(g_critical_flags[cpu][g_critical_depth[cpu]]);
+    flags = (g_critical_depth[cpu] < CRITICAL_DEPTH_MAX)
+                ? g_critical_flags[cpu][g_critical_depth[cpu]]
+                : 0u;
+
+    if (g_critical_depth[cpu] == 0u) {
+        /* Release before the flags: the next core may enter only after every
+         * write of this section has been published, and the release store is
+         * the barrier that publishes them. */
+        critical_lock_release();
     }
+
+    port_restore_flags(flags);
 }
 
 struct k_port_mutex {
@@ -1479,6 +1618,17 @@ void port_x86_64_init(k_u64_t multiboot_info)
     /* Last, because it is the point of no return: from here the timer fires
      * every millisecond and the kernel has to be able to take it. */
     port_x86_64_interrupts_init();
+
+    /*
+     * The application processors (ADR 0012). The tables of the machine and
+     * the interrupts now exist, so a core can be started and reach C; the
+     * scheduler does not exist yet, so the cores stop before it and kmain()
+     * releases them once kernel_boot() has made the array of the cores.
+     */
+    port_x86_64_smp_init();
+
+    g_info.cpu_started = port_x86_64_cpu_started();
+    g_info.apic_base = port_x86_64_apic_base();
 }
 
 const struct port_x86_64_info *port_x86_64_info(void)

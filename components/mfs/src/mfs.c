@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "kernel/clock.h"
+#include "kernel/kmm.h"
 #include "kernel/lock.h"
 #include "kernel/log.h"
 #include "kernel/panic.h"
@@ -21,7 +22,7 @@ static struct {
     k_u32_t inode_blocks;   /* the blocks of the table of the inodes */
     k_u32_t inode_capacity; /* the number of the records of the table */
     bool bitmap_dirty;      /* the map in the memory is newer than the device */
-    k_u8_t bitmap[MFS_BLOCK_SIZE * MFS_BITMAP_MAX_BLOCKS];
+    k_u8_t *bitmap;         /* the map of the free blocks, one bit per block */
 } g;
 
 /*
@@ -244,22 +245,83 @@ static k_u32_t bitmap_bytes(void)
     return (g.sb.data_blocks + 7u) / 8u;
 }
 
-static int bitmap_load(void)
+/* The blocks of the map that a volume of these many data blocks needs. */
+static k_u32_t bitmap_blocks_for(k_u32_t data_blocks)
 {
-    k_u32_t bytes = bitmap_bytes();
-    k_u32_t blocks = (bytes + MFS_BLOCK_SIZE - 1u) / MFS_BLOCK_SIZE;
-    k_u32_t i;
+    k_u32_t bytes = (data_blocks + 7u) / 8u;
 
-    if (blocks > sizeof(g.bitmap) / MFS_BLOCK_SIZE) {
-        return MFS_ENOSPC;
+    return (bytes + MFS_BLOCK_SIZE - 1u) / MFS_BLOCK_SIZE;
+}
+
+/*
+ * Give the map back. Every way out of a mount, a format or an unmount goes
+ * through here, so that a volume leaves the allocator as it found it: the
+ * map is the biggest thing the filesystem asks for, and a mount that fails
+ * half way must not keep it.
+ */
+static void bitmap_release(void)
+{
+    if (g.bitmap != NULL) {
+        kmm_free(g.bitmap);
+        g.bitmap = NULL;
+    }
+}
+
+/*
+ * Allocate the map of the free blocks for a volume. The map is one bit per
+ * data block, rounded up to whole blocks of the device, and comes from the
+ * memory of the system: the filesystem cannot answer a call without it.
+ *
+ * A volume that asks for more than MFS_BITMAP_MAX_BYTES is refused here,
+ * before a block is read, with MFS_EINVAL: the format and the mount both
+ * speak about the map in the blocks of the device, and the number is the
+ * size of the map, not of the volume.
+ */
+static int bitmap_alloc(k_u32_t blocks)
+{
+    k_u8_t *map;
+    k_size_t size;
+
+    if (blocks == 0u || blocks > MFS_BITMAP_MAX_BLOCKS) {
+        kerror("mfs: a map of %u block(s) is beyond the %u the filesystem holds", (unsigned)blocks,
+               (unsigned)MFS_BITMAP_MAX_BLOCKS);
+        return MFS_EINVAL;
     }
 
-    memset(g.bitmap, 0, sizeof(g.bitmap));
+    size = (k_size_t)blocks * MFS_BLOCK_SIZE;
+    map = (k_u8_t *)kmm_alloc(size, KMM_PRIORITY_SYSTEM);
+
+    if (map == NULL) {
+        kerror("mfs: no memory for the map of the free blocks (%u block(s))", (unsigned)blocks);
+        return MFS_ENOMEM;
+    }
+
+    memset(map, 0, size);
+
+    /* A map of an earlier volume cannot describe this one. */
+    bitmap_release();
+    g.bitmap = map;
+
+    return MFS_OK;
+}
+
+static int bitmap_load(void)
+{
+    k_u32_t blocks = bitmap_blocks_for(g.sb.data_blocks);
+    k_u32_t i;
+    int rc;
+
+    rc = bitmap_alloc(blocks);
+    if (rc != MFS_OK) {
+        return rc;
+    }
 
     for (i = 0; i < blocks; i++) {
-        int rc = dev_read(g.sb.meta_start + i, g.bitmap + i * MFS_BLOCK_SIZE);
+        rc = dev_read(g.sb.meta_start + i, g.bitmap + i * MFS_BLOCK_SIZE);
 
         if (rc != MFS_OK) {
+            /* The volume is not mounted, the map is not its state. */
+            bitmap_release();
             return rc;
         }
     }
@@ -1103,6 +1165,7 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
     k_u32_t inode_blocks;
     k_u32_t attempt;
     k_u32_t i;
+    int rc;
 
     if (dev == NULL || dev->ops == NULL || dev->ops->read == NULL || dev->ops->write == NULL) {
         return MFS_EINVAL;
@@ -1155,12 +1218,18 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
         }
 
         data_blocks = info_start - meta_blocks;
-        bitmap_blocks = (data_blocks + 8u * MFS_BLOCK_SIZE - 1u) / (8u * MFS_BLOCK_SIZE);
+        bitmap_blocks = bitmap_blocks_for(data_blocks);
         inode_blocks = (max_records * MFS_INODE_SIZE + MFS_BLOCK_SIZE - 1u) / MFS_BLOCK_SIZE;
 
-        /* The bitmap lives in the memory of the manager, it has a size. */
-        if (bitmap_blocks > (k_u32_t)(sizeof(g.bitmap) / MFS_BLOCK_SIZE)) {
-            return MFS_ENOSPC;
+        /*
+         * The map lives in the memory of the machine, not in the format:
+         * a volume that needs more than the ceiling is refused here, with
+         * the reason, before a block of it is written.
+         */
+        if (bitmap_blocks > MFS_BITMAP_MAX_BLOCKS) {
+            kerror("mfs: a volume of %u block(s) needs %u block(s) of the map, %u is the limit",
+                   (unsigned)total, (unsigned)bitmap_blocks, (unsigned)MFS_BITMAP_MAX_BLOCKS);
+            return MFS_EINVAL;
         }
 
         if (bitmap_blocks + inode_blocks <= meta_blocks) {
@@ -1175,7 +1244,7 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
     }
 
     data_blocks = info_start - meta_blocks;
-    bitmap_blocks = (data_blocks + 8u * MFS_BLOCK_SIZE - 1u) / (8u * MFS_BLOCK_SIZE);
+    bitmap_blocks = bitmap_blocks_for(data_blocks);
     inode_blocks = (max_records * MFS_INODE_SIZE + MFS_BLOCK_SIZE - 1u) / MFS_BLOCK_SIZE;
 
     if (bitmap_blocks + inode_blocks > meta_blocks) {
@@ -1198,21 +1267,27 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
     sb.crc = crc32(&sb, sizeof(sb) - sizeof(sb.crc));
 
     /* The state is needed by the helpers below. */
+    bitmap_release();
     memset(&g, 0, sizeof(g));
     g.dev = dev;
     g.sb = sb;
     g.inode_size = MFS_INODE_SIZE;
     g.bitmap_blocks = bitmap_blocks;
     g.inode_blocks = inode_blocks;
+
+    rc = bitmap_alloc(bitmap_blocks);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
     /* The record 0 is not used, the inodes start at 1. */
     g.inode_capacity = (inode_blocks * MFS_BLOCK_SIZE) / g.inode_size - 1u;
 
     /*
      * The bitmap: a bit of zero means that the block is free. The bits of
      * the blocks that do not exist are set, so that they are never given
-     * out.
+     * out. The map came back zeroed from the allocator.
      */
-    memset(g.bitmap, 0, sizeof(g.bitmap));
     if (data_blocks % 8u != 0u) {
         g.bitmap[bitmap_bytes() - 1] = (k_u8_t) ~((1u << (data_blocks % 8u)) - 1u);
     }
@@ -1312,6 +1387,8 @@ static int mfs_mount_locked(const struct k_blockdev *dev)
         return MFS_EINVAL;
     }
 
+    /* A mount of one volume gives up the map of the volume before it. */
+    bitmap_release();
     memset(&g, 0, sizeof(g));
     g.dev = dev;
 
@@ -1404,7 +1481,8 @@ static int mfs_mount_locked(const struct k_blockdev *dev)
 
     /* The rest of the META section belongs to the table of the inodes. */
     if (sb.meta_blocks <= g.bitmap_blocks) {
-        return MFS_EINVAL;
+        rc = MFS_EINVAL;
+        goto fail;
     }
 
     g.inode_blocks = sb.meta_blocks - g.bitmap_blocks;
@@ -1412,27 +1490,39 @@ static int mfs_mount_locked(const struct k_blockdev *dev)
     g.inode_capacity = (g.inode_blocks * MFS_BLOCK_SIZE) / g.inode_size - 1u;
 
     if (g.inode_capacity < MFS_ROOT_INODE) {
-        return MFS_EINVAL;
+        rc = MFS_EINVAL;
+        goto fail;
     }
 
     {
         struct mfs_inode root;
 
         if (inode_read(MFS_ROOT_INODE, &root) != MFS_OK) {
-            return MFS_EINVAL;
+            rc = MFS_EINVAL;
+            goto fail;
         }
 
         if ((root.flags & (MFS_INODE_USED | MFS_INODE_DIR)) != (MFS_INODE_USED | MFS_INODE_DIR) ||
             root.first_block >= sb.data_blocks) {
             kerror("mfs: the root of the volume is not a directory (flags 0x%x)",
                    (unsigned)root.flags);
-            return MFS_EINVAL;
+            rc = MFS_EINVAL;
+            goto fail;
         }
     }
 
     g.mounted = true;
 
     return MFS_OK;
+
+fail:
+    /*
+     * A volume that did not mount is not the volume that owns the map: the
+     * memory goes back before the call answers.
+     */
+    bitmap_release();
+
+    return rc;
 }
 
 static int mfs_sync_locked(void);
@@ -1450,6 +1540,7 @@ static void mfs_unmount_locked(void)
         (void)mfs_sync_locked();
     }
 
+    bitmap_release();
     memset(&g, 0, sizeof(g));
 }
 
@@ -1927,12 +2018,31 @@ static int mfs_read_locked(struct mfs_file *file, void *buf, k_size_t size)
 
         {
             k_u8_t block_data[MFS_BLOCK_SIZE];
+            k_u32_t next;
 
             rc = dev_read(block, block_data);
             if (rc != MFS_OK) {
                 return rc;
             }
             memcpy(out + done, block_data + 4 + in_block, chunk);
+
+            /*
+             * The header of the block names the next one, so the block that
+             * was just read is the step of the chain the next chunk needs:
+             * without it `file_block_at` asks `chain_next` for a block it has
+             * already read and a read of n blocks costs two reads per block.
+             * The cursor of the descriptor is moved to that block, and the
+             * walk of the call resumes from there.
+             */
+            memcpy(&next, block_data, sizeof(next));
+            if (done + chunk < size) {
+                if (next == MFS_NEXT_NONE) {
+                    return MFS_EIO;
+                }
+                file->chain_block = next;
+                file->chain_index = (file->offset + (k_u32_t)chunk) / MFS_BLOCK_DATA;
+                file->chain_valid = true;
+            }
         }
 
         done += chunk;
@@ -1973,14 +2083,27 @@ static int file_grow(struct mfs_file *file, k_u32_t *new_block)
          * cursor of an earlier chain does not name. */
         file->first_block = block;
         file_cursor_forget(file);
+        file->chain_block = block;
+        file->chain_index = 0;
+        file->chain_valid = true;
         *new_block = block;
         return MFS_OK;
     }
 
-    rc = chain_last(file->first_block, &last);
-    if (rc != MFS_OK) {
-        block_release(block);
-        return rc;
+    /*
+     * The block that ends the chain. The write path has just appended a
+     * block when the cursor names the last one, and the count of the
+     * blocks says which index that is; otherwise the chain is walked once
+     * and the rest of the growth of this call goes from the new block.
+     */
+    if (file->chain_valid && file->chain_index + 1u == file->chain_blocks) {
+        last = file->chain_block;
+    } else {
+        rc = chain_last(file->first_block, &last);
+        if (rc != MFS_OK) {
+            block_release(block);
+            return rc;
+        }
     }
 
     rc = chain_set_next(last, block);
@@ -1988,6 +2111,11 @@ static int file_grow(struct mfs_file *file, k_u32_t *new_block)
         block_release(block);
         return rc;
     }
+
+    /* The new block ends the chain: the cursor follows it, not the old end. */
+    file->chain_block = block;
+    file->chain_index = file->chain_blocks;
+    file->chain_valid = true;
 
     *new_block = block;
     return MFS_OK;
@@ -2019,19 +2147,32 @@ static int mfs_write_locked(struct mfs_file *file, const void *buf, k_size_t siz
 
     /* The file has to have enough blocks for the whole write. */
     {
-        k_u32_t have = 0;
         k_u32_t needed = (file->offset + size + MFS_BLOCK_DATA - 1u) / MFS_BLOCK_DATA;
 
-        if (file->first_block != MFS_NEXT_NONE) {
-            rc = chain_count(file->first_block, &have);
-            if (rc != MFS_OK) {
-                return rc;
+        /*
+         * The number of the blocks of the chain is counted once for the
+         * descriptor, not once per call: a program that writes a file a
+         * kilobyte at a time would otherwise walk the whole chain before
+         * every call, which is the write side of the cost the read cursor
+         * above removed.
+         */
+        if (!file->chain_blocks_valid) {
+            k_u32_t have = 0;
+
+            if (file->first_block != MFS_NEXT_NONE) {
+                rc = chain_count(file->first_block, &have);
+                if (rc != MFS_OK) {
+                    return rc;
+                }
             }
+
+            file->chain_blocks = have;
+            file->chain_blocks_valid = true;
         }
 
-        old_blocks = have;
+        old_blocks = file->chain_blocks;
 
-        while (have < needed) {
+        while (file->chain_blocks < needed) {
             k_u32_t added;
 
             rc = file_grow(file, &added);
@@ -2043,7 +2184,7 @@ static int mfs_write_locked(struct mfs_file *file, const void *buf, k_size_t siz
                 file->dirty = true;
                 return rc;
             }
-            have++;
+            file->chain_blocks++;
         }
 
         /* The blocks of the file have been taken, the map has to know it. */
@@ -2125,6 +2266,206 @@ static int mfs_close_locked(struct mfs_file *file)
     }
 
     /* The blocks of the file have been taken, the map has to know it. */
+    return mfs_sync();
+}
+
+/*
+ * Cut the chain of an open file after the block that holds `new_size` and
+ * give the tail back. The bytes past the new size in the last block are
+ * zeroed, because a later grow must read zeros there, exactly as a file of
+ * POSIX does.
+ */
+static int truncate_shrink(struct mfs_file *file, k_u32_t new_size, k_u32_t needed)
+{
+    k_u32_t last;
+    k_u32_t tail = MFS_NEXT_NONE;
+    k_u32_t in_block;
+    int rc;
+
+    if (needed == 0) {
+        rc = file_release_chain(file->first_block);
+        if (rc == MFS_OK) {
+            file->first_block = MFS_NEXT_NONE;
+            file_cursor_forget(file);
+        }
+
+        return rc;
+    }
+
+    /* The last block that stays, found through the cursor of the file. */
+    rc = file_block_at(file, (needed - 1u) * MFS_BLOCK_DATA, &last, &in_block);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    rc = chain_next(last, &tail);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    rc = chain_set_next(last, MFS_NEXT_NONE);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    if (tail != MFS_NEXT_NONE) {
+        rc = file_release_chain(tail);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+    }
+
+    in_block = new_size % MFS_BLOCK_DATA;
+    if (in_block != 0) {
+        k_u8_t block_data[MFS_BLOCK_SIZE];
+
+        rc = dev_read(last, block_data);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
+        memset(block_data + 4 + in_block, 0, MFS_BLOCK_DATA - in_block);
+
+        rc = dev_write(last, block_data);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+    }
+
+    if (file->chain_valid && file->chain_index >= needed) {
+        file_cursor_forget(file);
+    }
+
+    return MFS_OK;
+}
+
+/*
+ * Take the blocks a larger file needs and zero the bytes between the old
+ * size and the new one. A new block is written empty by file_grow, so only
+ * the tail of the block that held the old size needs the zero; the rest of
+ * the growth reads zeros already.
+ */
+static int truncate_grow(struct mfs_file *file, k_u32_t new_size, k_u32_t needed)
+{
+    k_u32_t old_size = file->size;
+    k_u32_t old_needed = (old_size + MFS_BLOCK_DATA - 1u) / MFS_BLOCK_DATA;
+    int rc;
+
+    if (!file->chain_blocks_valid) {
+        k_u32_t have = 0;
+
+        if (file->first_block != MFS_NEXT_NONE) {
+            rc = chain_count(file->first_block, &have);
+            if (rc != MFS_OK) {
+                return rc;
+            }
+        }
+
+        file->chain_blocks = have;
+        file->chain_blocks_valid = true;
+    }
+
+    while (file->chain_blocks < needed) {
+        k_u32_t added;
+
+        rc = file_grow(file, &added);
+        if (rc != MFS_OK) {
+            /* The file is what it was: the blocks that were already taken
+             * go back, or a refusal would leave a chain longer than the
+             * size the close is going to write. */
+            (void)truncate_shrink(file, old_size, old_needed);
+            file->chain_blocks = old_needed;
+            file->chain_blocks_valid = true;
+            return rc;
+        }
+
+        file->chain_blocks++;
+    }
+
+    if (old_size % MFS_BLOCK_DATA != 0) {
+        k_u32_t block;
+        k_u32_t in_block;
+        k_size_t gap = K_MIN((k_size_t)(MFS_BLOCK_DATA - old_size % MFS_BLOCK_DATA),
+                             (k_size_t)(new_size - old_size));
+
+        rc = file_block_at(file, old_size, &block, &in_block);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
+        {
+            k_u8_t block_data[MFS_BLOCK_SIZE];
+
+            rc = dev_read(block, block_data);
+            if (rc != MFS_OK) {
+                return rc;
+            }
+
+            memset(block_data + 4 + in_block, 0, gap);
+
+            rc = dev_write(block, block_data);
+            if (rc != MFS_OK) {
+                return rc;
+            }
+        }
+    }
+
+    return MFS_OK;
+}
+
+static int mfs_truncate_locked(struct mfs_file *file, k_u64_t size)
+{
+    struct mfs_inode inode;
+    k_u32_t new_size;
+    k_u32_t needed;
+    int rc;
+
+    if (file == NULL || (file->flags & (MFS_O_WRONLY | MFS_O_RDWR)) == 0) {
+        return MFS_EINVAL;
+    }
+
+    /* The format keeps the size of a file in 32 bits, so a wider number is
+     * refused before a byte is touched rather than cut to fit. */
+    if (size > 0xFFFFFFFFu) {
+        return MFS_E2BIG;
+    }
+
+    new_size = (k_u32_t)size;
+    if (new_size == file->size) {
+        return MFS_OK;
+    }
+
+    needed = (new_size + MFS_BLOCK_DATA - 1u) / MFS_BLOCK_DATA;
+
+    if (new_size < file->size) {
+        rc = truncate_shrink(file, new_size, needed);
+    } else {
+        rc = truncate_grow(file, new_size, needed);
+    }
+
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    rc = inode_read(file->inode, &inode);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    inode.size = new_size;
+    inode.first_block = file->first_block;
+    inode_stamp(&inode);
+
+    rc = inode_write(file->inode, &inode);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    file->size = new_size;
+    file->dirty = false;
+    file->chain_blocks = needed;
+    file->chain_blocks_valid = true;
+
     return mfs_sync();
 }
 
@@ -2637,6 +2978,13 @@ int mfs_format(const struct k_blockdev *dev, k_u32_t max_records)
 
     mfs_lock();
     rc = mfs_format_locked(dev, max_records);
+
+    /*
+     * A format is not a mount: the map it built to lay the volume out is
+     * given back here, so that a volume leaves the allocator as it found
+     * it, whatever the layout ended with. A mount allocates its own.
+     */
+    bitmap_release();
     mfs_unlock();
 
     return rc;
@@ -2858,6 +3206,17 @@ int mfs_write(struct mfs_file *file, const void *buf, k_size_t size)
     return rc;
 }
 
+int mfs_truncate(struct mfs_file *file, k_u64_t size)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_truncate_locked(file, size);
+    mfs_unlock();
+
+    return rc;
+}
+
 int mfs_close(struct mfs_file *file)
 {
     int rc;
@@ -2971,6 +3330,8 @@ const char *mfs_strerror(int error)
         return "file too big";
     case MFS_ENOTSUP:
         return "operation not supported";
+    case MFS_ENOMEM:
+        return "out of memory";
     default:
         return "unknown error";
     }

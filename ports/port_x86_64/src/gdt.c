@@ -14,8 +14,21 @@
  * program that is running, so port_exec.c writes it before every entry. IST1
  * is a stack that does not depend on any program: a double fault raised while
  * the stack of the moment is itself broken still has somewhere to land.
+ *
+ * Every core has a table and a TSS of its own. RSP0 is a register of the
+ * machine and the stack of a program belongs to the core that runs it, so two
+ * cores cannot share one TSS: the second core would overwrite the RSP0 of the
+ * first, and an interrupt of the first would land on the stack of the other
+ * task. The selectors are identical in every table, which is what lets a
+ * context keep its segment registers across a switch of the core.
+ *
+ * The IDT is not here: it is one table of the kernel, read by every core, and
+ * it lives in src/port_x86_64.c with the handlers it names.
  */
 #include "port_x86_64.h"
+
+#include "kernel/cpu.h"
+#include "kernel/port/cpu.h"
 
 /* The selectors, as they sit in the table and as the processor sees them. */
 #define GDT_KERNEL_CODE 0x08u
@@ -62,16 +75,25 @@ struct tss64 {
     k_u16_t iomap;
 } __attribute__((packed));
 
-static struct gdt_entry g_gdt[GDT_ENTRIES] __attribute__((aligned(16)));
-static struct gdt_pointer g_gdt_pointer;
-static struct tss64 g_tss __attribute__((aligned(16)));
-static k_u8_t g_double_fault_stack[DOUBLE_FAULT_STACK_SIZE] __attribute__((aligned(16)));
+static struct gdt_entry g_gdt[KERNEL_CPUS_MAX][GDT_ENTRIES] __attribute__((aligned(16)));
+static struct gdt_pointer g_gdt_pointer[KERNEL_CPUS_MAX];
+static struct tss64 g_tss[KERNEL_CPUS_MAX] __attribute__((aligned(16)));
+static k_u8_t g_double_fault_stack[KERNEL_CPUS_MAX][DOUBLE_FAULT_STACK_SIZE]
+    __attribute__((aligned(16)));
+
+/* The core of the table this core loads; the array has one slot without SMP. */
+static k_u32_t gdt_cpu(void)
+{
+    k_u32_t cpu = k_port_cpu_id();
+
+    return (cpu < KERNEL_CPUS_MAX) ? cpu : 0u;
+}
 
 /* One code or data descriptor: present, the ring in `dpl`, the flags in
  * `granularity` (G, D/B, L and AVL). */
-static void gdt_set(k_u32_t index, k_u32_t dpl, k_u8_t access, k_u8_t granularity)
+static void gdt_set(k_u32_t cpu, k_u32_t index, k_u32_t dpl, k_u8_t access, k_u8_t granularity)
 {
-    struct gdt_entry *entry = &g_gdt[index];
+    struct gdt_entry *entry = &g_gdt[cpu][index];
 
     entry->limit_low = 0xFFFFu;
     entry->base_low = 0;
@@ -82,12 +104,12 @@ static void gdt_set(k_u32_t index, k_u32_t dpl, k_u8_t access, k_u8_t granularit
 }
 
 /* A TSS descriptor is 16 bytes and the base is split across the two slots. */
-static void gdt_set_tss(k_u32_t index)
+static void gdt_set_tss(k_u32_t cpu, k_u32_t index)
 {
-    k_u64_t base = (k_u64_t)(uintptr_t)&g_tss;
-    k_u32_t limit = (k_u32_t)sizeof(g_tss) - 1u;
-    struct gdt_entry *low = &g_gdt[index];
-    struct gdt_entry *high = &g_gdt[index + 1u];
+    k_u64_t base = (k_u64_t)(uintptr_t)&g_tss[cpu];
+    k_u32_t limit = (k_u32_t)sizeof(struct tss64) - 1u;
+    struct gdt_entry *low = &g_gdt[cpu][index];
+    struct gdt_entry *high = &g_gdt[cpu][index + 1u];
 
     low->limit_low = (k_u16_t)(limit & 0xFFFFu);
     low->base_low = (k_u16_t)(base & 0xFFFFu);
@@ -111,9 +133,9 @@ static void gdt_set_tss(k_u32_t index)
  * The thread pointer lives in an MSR and does not follow the selector of FS,
  * so it is not touched here.
  */
-static void gdt_load(void)
+static void gdt_load(k_u32_t cpu)
 {
-    __asm__ volatile("lgdt %0" : : "m"(g_gdt_pointer));
+    __asm__ volatile("lgdt %0" : : "m"(g_gdt_pointer[cpu]));
 
     __asm__ volatile("movw %w[data], %%ds\n\t"
                      "movw %w[data], %%es\n\t"
@@ -133,36 +155,57 @@ static void gdt_load(void)
     __asm__ volatile("ltr %w0" : : "r"((k_u16_t)GDT_TSS));
 }
 
-void port_x86_64_gdt_init(void)
+void port_x86_64_gdt_init_cpu(k_u32_t cpu)
 {
+    struct gdt_entry *null;
+    struct tss64 *tss;
+
+    if (cpu >= KERNEL_CPUS_MAX) {
+        return;
+    }
+
+    null = &g_gdt[cpu][0];
+    tss = &g_tss[cpu];
+
     /* The null descriptor is what makes selector 0 an error. */
-    g_gdt[0].limit_low = 0;
-    g_gdt[0].base_low = 0;
-    g_gdt[0].base_mid = 0;
-    g_gdt[0].access = 0;
-    g_gdt[0].granularity = 0;
-    g_gdt[0].base_high = 0;
+    null->limit_low = 0;
+    null->base_low = 0;
+    null->base_mid = 0;
+    null->access = 0;
+    null->granularity = 0;
+    null->base_high = 0;
 
     /* A 64-bit code segment and a flat data segment, ring 0. */
-    gdt_set(1, 0, 0x9Au, 0xAFu);
-    gdt_set(2, 0, 0x92u, 0xCFu);
+    gdt_set(cpu, 1, 0, 0x9Au, 0xAFu);
+    gdt_set(cpu, 2, 0, 0x92u, 0xCFu);
     /* The same two for ring 3: what a program is allowed to run on. */
-    gdt_set(3, 3, 0xFAu, 0xAFu);
-    gdt_set(4, 3, 0xF2u, 0xCFu);
+    gdt_set(cpu, 3, 3, 0xFAu, 0xAFu);
+    gdt_set(cpu, 4, 3, 0xF2u, 0xCFu);
 
     /* No I/O bitmap: a pointer past the limit denies every port to ring 3. */
-    g_tss.iomap = (k_u16_t)sizeof(g_tss);
-    g_tss.ist[0] = (k_u64_t)(uintptr_t)(g_double_fault_stack + sizeof(g_double_fault_stack));
+    tss->iomap = (k_u16_t)sizeof(struct tss64);
+    tss->ist[0] =
+        (k_u64_t)(uintptr_t)(g_double_fault_stack[cpu] + sizeof(g_double_fault_stack[cpu]));
 
-    gdt_set_tss(5);
+    gdt_set_tss(cpu, 5);
 
-    g_gdt_pointer.limit = (k_u16_t)(sizeof(g_gdt) - 1u);
-    g_gdt_pointer.base = (k_u64_t)(uintptr_t)g_gdt;
+    g_gdt_pointer[cpu].limit = (k_u16_t)(sizeof(g_gdt[cpu]) - 1u);
+    g_gdt_pointer[cpu].base = (k_u64_t)(uintptr_t)g_gdt[cpu];
 
-    gdt_load();
+    gdt_load(cpu);
+}
+
+void port_x86_64_gdt_init(void)
+{
+    port_x86_64_gdt_init_cpu(0);
 }
 
 void port_x86_64_tss_set_rsp0(k_u64_t rsp0)
 {
-    g_tss.rsp0 = rsp0;
+    g_tss[gdt_cpu()].rsp0 = rsp0;
+}
+
+k_u64_t port_x86_64_tss_rsp0(void)
+{
+    return g_tss[gdt_cpu()].rsp0;
 }

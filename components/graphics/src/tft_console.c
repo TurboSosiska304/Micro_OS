@@ -241,14 +241,25 @@ void tft_console_redraw(void)
  */
 static void copy_line(char *dst, const char *text)
 {
+    /* A picture may be wider than the row of the buffer - the landscape of
+     * the board asks for more than `TFT_LINE_MAX` - and a column past the
+     * buffer is a write out of it. The clamp is the contract of the buffer. */
+    int columns = s_columns;
     int i;
 
-    for (i = 0; i < s_columns; i++) {
+    if (columns > TFT_LINE_MAX - 1) {
+        columns = TFT_LINE_MAX - 1;
+    }
+    if (columns < 0) {
+        columns = 0;
+    }
+
+    for (i = 0; i < columns; i++) {
         dst[i] = (text != NULL && text[i] != '\0') ? text[i] : ' ';
     }
-    dst[s_columns] = '\0';
+    dst[columns] = '\0';
 
-    for (i = s_columns + 1; i < TFT_LINE_MAX; i++) {
+    for (i = columns + 1; i < TFT_LINE_MAX; i++) {
         dst[i] = ' ';
     }
 }

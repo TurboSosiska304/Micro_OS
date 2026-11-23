@@ -39,10 +39,11 @@
 
 /*
  * The stages of one line. Every boundary is one pipe of the system and both
- * ends of it are descriptors of the shell, which has four of them
- * (TASK_MAX_FDS): two pipes fit and the third stage is the last. A deeper
- * chain is refused with a sentence that says why instead of failing on a
- * descriptor in the middle.
+ * ends of it are descriptors of the shell; the table of a task has sixteen
+ * slots (TASK_MAX_FDS) and could hold more pipe ends, so the three stages
+ * are the table of the parser and not the descriptors. A deeper chain is
+ * refused with a sentence that says why instead of failing on a descriptor
+ * in the middle.
  */
 #define KSHELL_STAGES_MAX 3
 

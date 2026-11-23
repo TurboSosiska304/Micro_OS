@@ -17,10 +17,18 @@
 
 /*
  * The map of the free blocks lives in the memory of the filesystem and is
- * written to the device in whole blocks. Two of them cover the biggest
- * volume that mounts, so the checker may size its own map the same way.
+ * written to the device in whole blocks. It is one bit per data block, so a
+ * block of the map covers 8 MiB of the volume; the mount and the format
+ * allocate the map the volume they were given needs, and the checker sizes
+ * its own copy the same way.
+ *
+ * The ceiling is the sanity of the machine, not of the format: 8 MiB of the
+ * map covers 64 GiB of data, which is where a volume of the design stops
+ * until somebody asks for more. A bigger volume is refused with a reason
+ * instead of being mounted with a map that the machine cannot give.
  */
-#define MFS_BITMAP_MAX_BLOCKS 2
+#define MFS_BITMAP_MAX_BYTES (8u * 1024u * 1024u)
+#define MFS_BITMAP_MAX_BLOCKS (MFS_BITMAP_MAX_BYTES / MFS_BLOCK_SIZE)
 
 /* The end of a chain of the data blocks. */
 #define MFS_NEXT_NONE 0xFFFFFFFFu
@@ -85,11 +93,11 @@ int mfs_check_locked(const struct mfs_private *view, struct mfs_check_report *re
 
 /*
  * The table of records the repair can mark: one bit per record says whether
- * a name reaches it, and this map is 4 KiB for 32768 records. The largest
- * volume of the design (16 MiB) has 20927 records, so the map covers every
- * volume the documentation names; a table of 32768 records or more is
- * reported and left alone instead of being walked with a map that would hide
- * an orphan.
+ * a name reaches it, and this map is 4 KiB for 32768 records. A volume may
+ * be larger than that (the mount and the check size their maps for the
+ * volume), but the repair keeps its map fixed: a table of 32768 records or
+ * more is reported and left alone instead of being walked with a map that
+ * would hide an orphan.
  */
 #define MFS_REPAIR_INODES_MAX 32768u
 

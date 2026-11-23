@@ -45,8 +45,10 @@ who wants to use the system, not a second copy of the contract.
 | 31 | `sigreturn` | return from a handler (the port's page, not a program) |
 | 32 | `getlimit` | the current memory, CPU or descriptor limit of the task |
 | 33 | `setlimit` | lower one of them |
+| 34 | `rename` | a name of an object inside one filesystem |
+| 35 | `ftruncate` | cut an open file to a size |
 
-`34` is the count, not a call. A number that is not in the table is `ENOSYS`;
+`36` is the count, not a call. A number that is not in the table is `ENOSYS`;
 a new call always takes the next free number, and an old one never moves. The
 shell prints the same table with `abi`:
 
@@ -65,7 +67,9 @@ nr    name
 31    sigreturn
 32    getlimit
 33    setlimit
-34 call(s) registered
+34    rename
+35    ftruncate
+36 call(s) registered
 ```
 
 The convention is the one of Linux: the number and six arguments, the result in
@@ -137,10 +141,11 @@ x86-64 smoke test runs `/bin/signals` through all of it.
 
 ## Descriptors
 
-Every task has a table of four descriptors, and the descriptor is the number of
-the slot. The open file behind it is a counted description of the kernel: two
-descriptors of one task (`dup2`) and the copies of the parent and the child of
-a fork name one open file, with one position and one set of flags. A
+Every task has a table of sixteen descriptors, and the descriptor is the
+number of the slot. The open file behind it is a counted description of the
+kernel: two descriptors of one task (`dup2`) and the copies of the parent and
+the child of a fork name one open file, with one position and one set of
+flags. A
 descriptor remembers the access it was opened with: reading one opened for
 writing, or writing one opened for reading, is `EBADF` before a filesystem is
 asked. The position lives in the description, so two tasks that opened their
@@ -164,7 +169,7 @@ there, and answers `newfd`; a number outside the table is `EBADF`.
 
 A task starts with the ceiling of three resources and may only lower them:
 the memory it holds (2 MiB), the processor time it spends (about 49 days) and
-the descriptors it opens (4). `setlimit` (33) takes a selector
+the descriptors it opens (16). `setlimit` (33) takes a selector
 (`KSYS_RLIMIT_MEMORY`, `_CPU`, `_FDS`) and a value; `getlimit` (32) copies the
 current limit to the caller. A raise is `EPERM`: there is one user, uid 0, and
 it gets no exemption, so a program cannot lift its own ceiling.

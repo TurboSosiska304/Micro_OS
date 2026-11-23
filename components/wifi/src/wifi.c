@@ -91,8 +91,15 @@ static void copy_str(char *dst, k_size_t size, const char *src)
         return;
     }
 
-    strncpy(dst, src, size - 1);
-    dst[size - 1] = '\0';
+    {
+        size_t i = 0;
+
+        while (i + 1 < size && src[i] != '\0') {
+            dst[i] = src[i];
+            i++;
+        }
+        dst[i] = '\0';
+    }
 }
 
 void wifi_set_radio(const struct wifi_radio *radio)

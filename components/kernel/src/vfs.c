@@ -710,6 +710,33 @@ int vfs_write(struct vfs_file *file, const void *buf, k_size_t size)
     return rc;
 }
 
+int vfs_truncate(struct vfs_file *file, k_u64_t size)
+{
+    int rc;
+
+    if (file == NULL || file->ops == NULL) {
+        return KERR_INVAL;
+    }
+
+    /* A directory is read through readdir and a pipe is a ring of bytes:
+     * neither has a size that a program may change. */
+    if ((file->flags & VFS_O_DIRECTORY) != 0) {
+        return KERR_ISDIR;
+    }
+
+    if ((file->flags & (VFS_O_WRONLY | VFS_O_RDWR)) == 0) {
+        return KERR_BADF;
+    }
+
+    if (file->ops->truncate == NULL) {
+        return KERR_NOTSUP;
+    }
+
+    rc = file->ops->truncate(file->fs, file, size);
+
+    return rc;
+}
+
 int vfs_close(struct vfs_file *file)
 {
     int rc;

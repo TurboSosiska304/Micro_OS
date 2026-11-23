@@ -2135,6 +2135,191 @@ static void test_limits_cpu(void)
     teardown();
 }
 
+/*
+ * The property: a task holds sixteen descriptors at once, the seventeenth is
+ * EMFILE, and a dup2 may name the top of the table. The limit is the table
+ * of the task and not the table of the descriptions: sixteen files of one
+ * task fit beside the ends of the pipes of the shell.
+ */
+static void test_fd_table_full(void)
+{
+    int fds[TASK_MAX_FDS];
+    int i;
+
+    ktest_begin("ksys: sixteen descriptors are open and the seventeenth is EMFILE");
+
+    setup();
+
+    for (i = 0; i < TASK_MAX_FDS; i++) {
+        fds[i] = ksys_open("/many-fds.txt", KSYS_O_RDWR | KSYS_O_CREAT);
+        KT_CHECK_INT_EQ(fds[i], i);
+    }
+
+    KT_CHECK_INT_EQ(ksys_open("/many-fds.txt", KSYS_O_RDONLY), KERR_MFILE);
+
+    /* The last number of the table is a descriptor like any other. */
+    KT_CHECK_INT_EQ(ksys_close(fds[TASK_MAX_FDS - 1]), 0);
+    fds[TASK_MAX_FDS - 1] = ksys_dup2(fds[0], TASK_MAX_FDS - 1);
+    KT_CHECK_INT_EQ(fds[TASK_MAX_FDS - 1], TASK_MAX_FDS - 1);
+    KT_CHECK_INT_EQ(ksys_write(fds[TASK_MAX_FDS - 1], "x", 1), 1);
+
+    /* The number one past the table is not one, whatever is free. */
+    KT_CHECK_INT_EQ(ksys_dup2(fds[0], TASK_MAX_FDS), KERR_BADF);
+
+    for (i = 0; i < TASK_MAX_FDS; i++) {
+        if (fds[i] >= 0) {
+            KT_CHECK_INT_EQ(ksys_close(fds[i]), 0);
+        }
+    }
+
+    teardown();
+}
+
+/*
+ * The property: ftruncate cuts an open file, the position of the descriptor
+ * does not move, a growth reads as zeros, and a reader, a pipe and a number
+ * that is not open have no cut.
+ */
+static void test_ftruncate(void)
+{
+    static char content[4096];
+    static char buffer[4096];
+    struct vfs_stat info;
+    int fds[2];
+    int file;
+    int i;
+
+    ktest_begin("ksys: ftruncate cuts and grows an open file");
+
+    setup();
+
+    for (i = 0; i < (int)sizeof(content); i++) {
+        content[i] = (char)('A' + (i % 26));
+    }
+
+    file = ksys_open("/cut.bin", KSYS_O_RDWR | KSYS_O_CREAT | KSYS_O_TRUNC);
+    KT_CHECK(file >= 0);
+    if (file < 0) {
+        teardown();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(ksys_write(file, content, sizeof(content)), (int)sizeof(content));
+
+    KT_CHECK_INT_EQ(ksys_ftruncate(file, 1000), 0);
+    KT_CHECK_INT_EQ(ksys_stat("/cut.bin", &info), 0);
+    KT_CHECK_INT_EQ(info.size, 1000);
+
+    KT_CHECK_INT_EQ(ksys_lseek(file, 0, KSYS_SEEK_SET), 0);
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(ksys_read(file, buffer, sizeof(buffer)), 1000);
+    KT_CHECK(memcmp(buffer, content, 1000) == 0);
+    KT_CHECK_INT_EQ(ksys_read(file, buffer, sizeof(buffer)), 0);
+
+    /* The growth is a hole of zeros, and the position of the descriptor is
+     * where the last read left it. */
+    KT_CHECK_INT_EQ(ksys_ftruncate(file, 2000), 0);
+    KT_CHECK_INT_EQ(ksys_lseek(file, 1000, KSYS_SEEK_SET), 1000);
+    memset(buffer, 0xFF, sizeof(buffer));
+    KT_CHECK_INT_EQ(ksys_read(file, buffer, sizeof(buffer)), 1000);
+    for (i = 0; i < 1000; i++) {
+        KT_CHECK_INT_EQ(buffer[i], 0);
+    }
+    KT_CHECK_INT_EQ(ksys_lseek(file, 0, KSYS_SEEK_CUR), 2000);
+
+    /* A size wider than the record of the filesystem is refused before a
+     * byte is cut. */
+    KT_CHECK_INT_EQ(ksys_ftruncate(file, (k_u64_t)0x100000000ull), KERR_TOOBIG);
+    KT_CHECK_INT_EQ(ksys_stat("/cut.bin", &info), 0);
+    KT_CHECK_INT_EQ(info.size, 2000);
+
+    /* A cut does not move the position, even when it is past the new size. */
+    KT_CHECK_INT_EQ(ksys_ftruncate(file, 500), 0);
+    KT_CHECK_INT_EQ(ksys_lseek(file, 0, KSYS_SEEK_CUR), 2000);
+    KT_CHECK_INT_EQ(ksys_close(file), 0);
+
+    /* A reader, a pipe and a number that names nothing. */
+    file = ksys_open("/cut.bin", KSYS_O_RDONLY);
+    KT_CHECK(file >= 0);
+    if (file >= 0) {
+        KT_CHECK_INT_EQ(ksys_ftruncate(file, 0), KERR_BADF);
+        KT_CHECK_INT_EQ(ksys_close(file), 0);
+    }
+
+    KT_CHECK_INT_EQ(ksys_pipe(fds), 0);
+    KT_CHECK_INT_EQ(ksys_ftruncate(fds[1], 0), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_close(fds[0]), 0);
+    KT_CHECK_INT_EQ(ksys_close(fds[1]), 0);
+
+    KT_CHECK_INT_EQ(ksys_ftruncate(TASK_MAX_FDS - 1, 0), KERR_BADF);
+
+    teardown();
+}
+
+/* A child of a fork sees the descriptors of the parent and can close them. */
+static volatile int g_inherited_fds;
+
+static void fd_inheriting_child(void *arg)
+{
+    struct task *self = task_self();
+    int i;
+
+    K_UNUSED(arg);
+
+    g_inherited_fds = 0;
+
+    if (self != NULL) {
+        for (i = 0; i < TASK_MAX_FDS; i++) {
+            if (self->files[i] != NULL) {
+                g_inherited_fds++;
+                ksys_close(i);
+            }
+        }
+    }
+}
+
+/*
+ * The property: a fork copies the whole table of the descriptors, all
+ * sixteen of them, and the child closes its own copy without touching the
+ * parent's. The program of an execve inherits the same table through the
+ * port; the x86-64 smoke test is where that half is read.
+ */
+static void test_fd_inherit_fork(void)
+{
+    struct task *child;
+    int fds[TASK_MAX_FDS];
+    int i;
+
+    ktest_begin("ksys: a fork inherits all sixteen descriptors");
+
+    setup();
+
+    for (i = 0; i < TASK_MAX_FDS; i++) {
+        fds[i] = ksys_open("/inherit-fds.txt", KSYS_O_RDWR | KSYS_O_CREAT);
+        KT_CHECK_INT_EQ(fds[i], i);
+    }
+
+    g_inherited_fds = -1;
+    child = task_fork_shared(task_self(), "fd-child", fd_inheriting_child, NULL);
+    KT_CHECK(child != NULL);
+
+    if (child != NULL) {
+        KT_CHECK_INT_EQ(task_wait(child->pid, NULL, 2000), 0);
+        KT_CHECK_INT_EQ(g_inherited_fds, TASK_MAX_FDS);
+    }
+
+    /* The child closed its references; the descriptors of the parent are
+     * still open and still usable. */
+    for (i = 0; i < TASK_MAX_FDS; i++) {
+        if (fds[i] >= 0) {
+            KT_CHECK_INT_EQ(ksys_write(fds[i], "x", 1), 1);
+            KT_CHECK_INT_EQ(ksys_close(fds[i]), 0);
+        }
+    }
+
+    teardown();
+}
+
 void test_ksys(void)
 {
     test_abi_is_stable();
@@ -2158,6 +2343,9 @@ void test_ksys(void)
     test_pipe_waits();
     test_dup2();
     test_pipe_errors();
+    test_fd_table_full();
+    test_ftruncate();
+    test_fd_inherit_fork();
     test_wait_no_child();
     test_limits_defaults();
     test_limits_descriptors();

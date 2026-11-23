@@ -113,7 +113,7 @@ the world and the cheap second root.
 
 ## M4 - the skeleton of a UI
 
-A decision first (ADR): the UI is a **program** of the machine, not a second
+A decision first (ADR 0028): the UI is a **program** of the machine, not a second
 kernel. It needs a framebuffer it may draw in and the keys it may read, which
 is a device (`/dev/fb0`, `/dev/input0`) or an ioctl over the console - the
 ADR names it.

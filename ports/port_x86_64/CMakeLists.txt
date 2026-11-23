@@ -35,17 +35,17 @@ set(DEVFS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/devfs")
 set(CONFIG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/config")
 set(SETTINGS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/settings")
 
-# The second filesystem of the machine (ADR 0009). Off by default: the
-# disk of `make x86-smoke` is one MicroFS volume, and a reader that no call
-# of the boot asks for is an object file of no use. A machine with a FAT
-# partition turns it on and mounts the partition with vfs_mount_type().
-option(MICRO_OS_FS_FAT32 "FAT12/16/32, read and written" OFF)
+# The second filesystem of the machine (ADR 0009). On: the boot of the root
+# reads the type of the volume out of the medium (ADR 0027), so the machine
+# that is told to run on a FAT32 volume has the reader of it in the image it
+# was started with, and the second partition of the ext2 disk is a /data a
+# person may fill from another computer.
+option(MICRO_OS_FS_FAT32 "FAT12/16/32, read and written" ON)
 
-# The ext2 reader of the machine (ADR 0019). Off by default for the same
-# reason: the disk of the smoke tests is one MicroFS volume. A machine with
-# an ext2 partition turns it on and mounts the partition with the type the
-# boot registers.
-option(MICRO_OS_FS_EXT2 "ext2, read-only" OFF)
+# The ext2 filesystem of the machine (ADR 0019). On for the same reason: the
+# release carries the same tree twice, once in MicroFS and once in ext2, and
+# one kernel boots both (ADR 0027 §3).
+option(MICRO_OS_FS_EXT2 "ext2, read and written" ON)
 
 # The optional features of the image (ADR 0010): the PSRAM pool of the
 # allocator is off, the MOX1 runtime is on (the port can enter a program), and
@@ -84,8 +84,10 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # The kernel of the higher half: no red zone (an interrupt may use the stack
-# under us), no PIC, no SSE (there is no floating point state to save), and
-# the kernel memory model, which names the top 2 GiB where the image is
+# under us), no PIC, no SSE in the C of the kernel (it saves no floating
+# point state; a program that asks for it gets the units from the loader,
+# see USERLAND_CFLAGS below), and the kernel memory model, which names the
+# top 2 GiB where the image is
 # linked and leaves the low identity map to the pointers the boot hands over
 # (ADR 0007). It is a flag of the C code alone: the assembly is written in
 # absolute 64-bit numbers and the programs of /bin stay in the low window.
@@ -169,6 +171,8 @@ if(MICRO_OS_FS_EXT2)
     set(EXT2_SOURCES
         "${EXT2_DIR}/src/ext2_core.c"
         "${EXT2_DIR}/src/ext2_dir.c"
+        "${EXT2_DIR}/src/ext2_write.c"
+        "${EXT2_DIR}/src/ext2_check.c"
         "${EXT2_DIR}/src/ext2_vfs.c"
     )
 endif()
@@ -271,11 +275,15 @@ set_source_files_properties("${KSHELL_DIR}/src/kshell_memtest.c"
 # linked file.
 #
 # program.ld puts the text at the base of the window plus the header of the
-# format (0x02000020) and SUBALIGN(4) keeps the 64-byte alignment of the
-# object from moving it. The base is named here again and handed to mkprog.sh,
-# which refuses an image linked for another window: a program linked for the
-# wrong address would still run, and every absolute address it computes for
-# its data would name something else.
+# format (0x02000020). The address is a symbol of the script and not a number
+# the script can be trusted to reach: the ld of binutils 2.38 (the container of
+# the release) moves the text 32 bytes up, and 2.47 keeps it. tools/
+# link_program.sh therefore links, reads the address back and links again with
+# the value the linker really used; it is the only caller of the compiler's
+# linker for a program of this port. The base is named here again and handed
+# on, and mkprog.sh refuses an image linked for another window: a program
+# linked for the wrong address would still run, and every absolute address it
+# computes for its data would name something else.
 #
 # The machine of the image is named as well: --arch x86-64 is the number the
 # kernel compares with k_port_exec_arch() before it enters a byte, so that the
@@ -285,6 +293,7 @@ set_source_files_properties("${KSHELL_DIR}/src/kshell_memtest.c"
 set(PROGRAM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/programs")
 set(PROGRAM_BASE 0x02000000)
 set(MKPROG "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/mkprog.sh")
+set(LINK_PROGRAM "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/link_program.sh")
 
 # The library of a program (components/libc/user): `_start`, the door of the
 # syscall, the formatter and the strings. It is not the library of the kernel
@@ -317,21 +326,29 @@ set(PROGRAM_CFLAGS -c ${USERLAND_CFLAGS} -mgeneral-regs-only
     -I "${KERNEL_DIR}/include" -I "${PROGRAM_DIR}" -I "${LIBC_USER_DIR}/include"
 )
 
+# A program with `double` in its numbers (SQLite and its REAL type here, Lua
+# on its own branch) is built without -mgeneral-regs-only: the loader turns
+# the SSE and x87 units on for ring 3 (CR4.OSFXSR, CR0.NE) and the scheduler
+# saves neither, so one such program runs at a time - execve waits for it.
+# The kernel and every other program still never touch the registers.
+set(MICROOS_FLOAT_CFLAGS ${USERLAND_CFLAGS})
+list(REMOVE_ITEM MICROOS_FLOAT_CFLAGS -mgeneral-regs-only)
+set(MICROOS_FLOAT_PROGRAM_CFLAGS -c ${MICROOS_FLOAT_CFLAGS}
+    -I "${KERNEL_DIR}/include" -I "${PROGRAM_DIR}" -I "${LIBC_USER_DIR}/include"
+)
+
 # The recipe of a program and of a ported library: the runtime, the window,
 # the image of the format and a static archive of the guest. It lives in
 # cmake/userland.cmake so that the next port (Lua, sbase, SQLite) is a copy
 # of one call and not a copy of this file.
 set(MICROOS_USERLAND_CFLAGS "${USERLAND_CFLAGS}")
 set(MICROOS_PROGRAM_CFLAGS "${PROGRAM_CFLAGS}")
-set(MICROOS_FLOAT_CFLAGS "${USERLAND_CFLAGS}")
-set(MICROOS_FLOAT_PROGRAM_CFLAGS -c ${USERLAND_CFLAGS}
-    -I "${KERNEL_DIR}/include" -I "${PROGRAM_DIR}" -I "${LIBC_USER_DIR}/include"
-)
 set(MICROOS_KERNEL_INCLUDE "${KERNEL_DIR}/include")
 set(MICROOS_LIBC_USER_DIR "${LIBC_USER_DIR}")
 set(MICROOS_PROGRAM_DIR "${PROGRAM_DIR}")
 set(MICROOS_PROGRAM_BASE "${PROGRAM_BASE}")
 set(MICROOS_MKPROG "${MKPROG}")
+set(MICROOS_LINK_PROGRAM "${LINK_PROGRAM}")
 include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/userland.cmake")
 
 # Every program of the port is built the same way: compile the C file for the
@@ -340,6 +357,11 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/userland.cmake")
 # into the MicroFS volume of the disk: the kernel has no blob of a program in
 # it any more. The name of the function is the name of the file in /bin and
 # the symbol of the entry is given here.
+#
+# The link and the image are two steps of one script: tools/link_program.sh
+# owns the flags of the format, the address of the text (with the retry a
+# linker of another version needs) and the call of mkprog.sh. A caller names
+# the script, the entry and the base, and appends the objects after `--`.
 function(add_program_image name entry)
     set(image "${CMAKE_BINARY_DIR}/${name}.mox")
 
@@ -347,14 +369,14 @@ function(add_program_image name entry)
         OUTPUT "${image}"
         COMMAND ${CMAKE_C_COMPILER} ${PROGRAM_CFLAGS}
                 -o ${name}.o "${PROGRAM_DIR}/${name}.c"
-        COMMAND ${CMAKE_C_COMPILER} -nostdlib -static -no-pie -Wl,--build-id=none
-                -Wl,-e,${entry}
-                -T "${PROGRAM_DIR}/program.ld" -o ${name}.elf ${name}.o
-        COMMAND sh "${MKPROG}" --base ${PROGRAM_BASE} --arch x86-64
-                ${name}.elf ${name}.mox ${entry}
+        COMMAND sh "${LINK_PROGRAM}" --cc "${CMAKE_C_COMPILER}"
+                --script "${PROGRAM_DIR}/program.ld" --entry ${entry}
+                --out ${name}.mox --base ${PROGRAM_BASE} --arch x86-64
+                --mkprog "${MKPROG}" -- ${name}.o
         WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
         DEPENDS "${PROGRAM_DIR}/${name}.c" "${PROGRAM_DIR}/prog.h"
-                "${PROGRAM_DIR}/program.ld" "${KERNEL_DIR}/include/kernel/ksys.h" "${MKPROG}"
+                "${PROGRAM_DIR}/program.ld" "${KERNEL_DIR}/include/kernel/ksys.h"
+                "${MKPROG}" "${LINK_PROGRAM}"
         COMMENT "building the image of /bin/${name}"
         VERBATIM
     )
@@ -598,6 +620,126 @@ add_libc_program(lua
     COMPILE_OPTIONS -DULIBC_WITH_FLOAT -include "${LUA_DIR}/port/luaconf_port.h" -Os
 )
 
+# --- zstd: a compression library and the command that speaks it -------------
+#
+# zstd 1.5.7 is the third library of somebody else, and the first whose
+# command is the program of the release itself (`programs/zstdcli.c`) rather
+# than a small file of this directory. The port is three targets:
+#
+#   microos_user_zstd      lib/common, lib/compress and lib/decompress, the
+#                          library as the frame format needs it;
+#   microos_user_zstd_cli  the four files of `programs/` the command is
+#                          (fileio, fileio_asyncio, util, timefn), with the
+#                          configuration of `port/zstd_cli_port.h`;
+#   zstd                   the release's `zstdcli.c` as the `main`, the
+#                          runtime of the library of a program, and the two
+#                          archives above.
+#
+# lib/dictBuilder is not here: the dictionary builder (`--train`) is the one
+# mode the command answers "not supported" for, and the library reads a
+# dictionary somebody else trained (`-D`). lib/deprecated is not here either:
+# the format of 1.0 is not what this machine reads or writes. The library is
+# built with `-DZSTD_NO_TRACE -DZSTD_DISABLE_ASM -DZSTD_LEGACY_SUPPORT=0` and
+# without `ZSTD_MULTITHREAD` (port/zstd_port.h), which is what keeps it inside
+# the arena of a program and off the pthread of a host.
+set(ZSTD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/zstd")
+set(ZSTD_LIB_SOURCES
+    "${ZSTD_DIR}/lib/common/debug.c"
+    "${ZSTD_DIR}/lib/common/entropy_common.c"
+    "${ZSTD_DIR}/lib/common/error_private.c"
+    "${ZSTD_DIR}/lib/common/fse_decompress.c"
+    "${ZSTD_DIR}/lib/common/pool.c"
+    "${ZSTD_DIR}/lib/common/threading.c"
+    "${ZSTD_DIR}/lib/common/xxhash.c"
+    "${ZSTD_DIR}/lib/common/zstd_common.c"
+    "${ZSTD_DIR}/lib/compress/fse_compress.c"
+    "${ZSTD_DIR}/lib/compress/hist.c"
+    "${ZSTD_DIR}/lib/compress/huf_compress.c"
+    "${ZSTD_DIR}/lib/compress/zstd_compress.c"
+    "${ZSTD_DIR}/lib/compress/zstd_compress_literals.c"
+    "${ZSTD_DIR}/lib/compress/zstd_compress_sequences.c"
+    "${ZSTD_DIR}/lib/compress/zstd_compress_superblock.c"
+    "${ZSTD_DIR}/lib/compress/zstd_double_fast.c"
+    "${ZSTD_DIR}/lib/compress/zstd_fast.c"
+    "${ZSTD_DIR}/lib/compress/zstd_lazy.c"
+    "${ZSTD_DIR}/lib/compress/zstd_ldm.c"
+    "${ZSTD_DIR}/lib/compress/zstd_opt.c"
+    "${ZSTD_DIR}/lib/compress/zstd_preSplit.c"
+    "${ZSTD_DIR}/lib/decompress/huf_decompress.c"
+    "${ZSTD_DIR}/lib/decompress/zstd_ddict.c"
+    "${ZSTD_DIR}/lib/decompress/zstd_decompress.c"
+    "${ZSTD_DIR}/lib/decompress/zstd_decompress_block.c"
+)
+set(ZSTD_CLI_SOURCES
+    "${ZSTD_DIR}/programs/fileio.c"
+    "${ZSTD_DIR}/programs/fileio_asyncio.c"
+    "${ZSTD_DIR}/programs/util.c"
+    "${ZSTD_DIR}/programs/timefn.c"
+    "${ZSTD_DIR}/port/zstd_cli_os.c"
+)
+
+# The upstream sources answer warnings of their own (a comparison of an int
+# with a size_t, a variable of a build that is not this one): the exceptions
+# stay here and not in a vendored file, the way the zlib and the Lua ports
+# keep theirs.
+microos_userland_library(microos_user_zstd
+    SOURCES ${ZSTD_LIB_SOURCES}
+    INCLUDES "${ZSTD_DIR}/lib" "${ZSTD_DIR}/port"
+    COMPILE_OPTIONS "-include" "${ZSTD_DIR}/port/zstd_port.h"
+        -Wno-sign-compare -Wno-unused-but-set-variable -Wno-implicit-fallthrough -Os
+)
+microos_userland_library(microos_user_zstd_cli
+    SOURCES ${ZSTD_CLI_SOURCES}
+    INCLUDES "${ZSTD_DIR}/lib" "${ZSTD_DIR}/programs" "${ZSTD_DIR}/port"
+    COMPILE_OPTIONS "-include" "${ZSTD_DIR}/port/zstd_cli_port.h"
+        -Wno-sign-compare -Wno-unused-parameter -Wno-unused-but-set-variable
+        -Wno-implicit-fallthrough -Wno-format-truncation -Os
+)
+set_source_files_properties(${ZSTD_LIB_SOURCES}
+    PROPERTIES OBJECT_DEPENDS "${ZSTD_DIR}/port/zstd_port.h")
+set_source_files_properties(${ZSTD_CLI_SOURCES}
+    PROPERTIES OBJECT_DEPENDS "${ZSTD_DIR}/port/zstd_cli_port.h;${ZSTD_DIR}/port/zstd_port.h")
+
+# The arena of the command is 960 KiB of the megabyte the format allows a bss
+# (K_EXEC_BSS_MAX): the pools of the CLI and a context of the library, with
+# the room `port/zstd_cli_os.h` measures. The image is `-Os`, about 400 KiB of
+# text and 40 KiB of data.
+#
+# FLOAT is for one mode of the release: `-l` prints the sizes of a frame with
+# `%6.2f` (`UTIL_makeHumanReadableSize` answers a double), and a build with
+# -mgeneral-regs-only writes those two characters instead of the number. The
+# compressor itself is integer arithmetic; the program of the port saves no
+# XMM state in the scheduler and `execve` waits for it, which is the rule of
+# every program with a point in its numbers (`docs/porting-programs.md`).
+add_libc_program(zstd
+    FLOAT
+    # The CLI first: the linker walks the list once, and the command asks the
+    # library of zstd for the symbols of a stream.
+    LIBRARIES microos_user_zstd_cli microos_user_zstd
+    MAIN "${ZSTD_DIR}/programs/zstdcli.c"
+    INCLUDES "${ZSTD_DIR}/lib" "${ZSTD_DIR}/programs" "${ZSTD_DIR}/port"
+    DEFINES ULIBC_HEAP_SIZE=983040u
+    SOURCES "${LIBC_USER_DIR}/src/malloc.c"
+            "${LIBC_USER_DIR}/src/file.c"
+            "${LIBC_USER_DIR}/src/stdio_ext.c"
+            "${LIBC_USER_DIR}/src/string_ext.c"
+            "${LIBC_USER_DIR}/src/strdup.c"
+            "${LIBC_USER_DIR}/src/ctype.c"
+            "${LIBC_USER_DIR}/src/stdlib.c"
+            "${LIBC_USER_DIR}/src/stat.c"
+            "${LIBC_USER_DIR}/src/dirent.c"
+            "${LIBC_USER_DIR}/src/libgen.c"
+            "${LIBC_USER_DIR}/src/time.c"
+            "${LIBC_USER_DIR}/src/assert.c"
+            "${LIBC_USER_DIR}/src/format_float.c"
+    # The runtime of this program keeps the raw `open` of the ABI under a name
+    # of its own: the port defines the POSIX one for the release (README.md,
+    # "The shape of the calls").
+    COMPILE_OPTIONS -DULIBC_WITH_FLOAT
+        -include "${ZSTD_DIR}/port/zstd_cli_port.h"
+        -Dopen=ulibc_open_call -Wno-unused-parameter -Os
+)
+
 # --- sbase: the tools of a Unix-like system ---------------------------------
 #
 # sbase is a collection of small Unix tools by suckless, released under the
@@ -719,6 +861,16 @@ add_libc_program(streams
     DEFINES ULIBC_HEAP_SIZE=65536u
 )
 
+# The test of `ftruncate`: the machine cuts a file of the volume the boot
+# mounted, and the smoke test reads the shorter bytes back. It is a program
+# and not a command of the shell, because no command of the shell cuts a
+# file and the call belongs to the ABI of the programs.
+add_libc_program(truncate
+    MAIN "${PROGRAM_DIR}/truncate.c"
+    SOURCES ${SBASE_LIBC_SOURCES}
+    DEFINES ULIBC_HEAP_SIZE=65536u
+)
+
 function(add_sbase_program tool heap)
     add_libc_program(${tool}
         MAIN "${SBASE_DIR}/${tool}.c"
@@ -745,6 +897,93 @@ add_sbase_program(sort 524288u)
 add_sbase_program(find 524288u)
 add_sbase_program(xargs 262144u)
 add_sbase_program(sed 524288u)
+
+# --- file and libmagic: the type of a file ----------------------------------
+#
+# file 5.45 with libmagic (third_party/file, BSD-2-Clause) is the second port
+# of a library that reads the bytes of a file and the first one that needs a
+# database of its own. The database does not fit: the release ships about ten
+# megabytes of magic and the RAM of the machine is what the boot leaves, so
+# the port compiles a subset of the Magdir files (tools/magic_subset.py,
+# third_party/file/magic/subset.json) into /etc/magic.mgc, and the same text
+# travels as /etc/magic for a machine whose compiled file is gone.
+#
+# The library is a static archive of the guest. It reads the database whole
+# with malloc (no QUICK: this machine has no mmap), matches with the portable
+# softmagic, and asks the port for the two calls of a process it cannot make
+# (port/file_port.c). The types `float` and `double` of the release are left
+# out with MICRO_OS_NO_FLOAT: a program of this port has no XMM state.
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/libmagic.cmake")
+
+microos_userland_library(microos_user_file
+    SOURCES ${MICROOS_FILE_SOURCES}
+    INCLUDES "${MICROOS_FILE_DIR}/src" "${MICROOS_FILE_DIR}/port"
+    DEFINES HAVE_CONFIG_H
+    COMPILE_OPTIONS -Os ${MICROOS_FILE_WARNINGS}
+)
+
+# The compiler of the database is a tool of the build and not a program of the
+# machine: it is compiled by the compiler of the host with the host libc and
+# the same configuration header, so the format of the .mgc it writes is the
+# format the library of the guest reads.
+add_executable(microos_magic_compile
+    ${MICROOS_FILE_SOURCES}
+    "${MICROOS_FILE_DIR}/port/magic_compile.c"
+)
+target_include_directories(microos_magic_compile PRIVATE
+    "${MICROOS_FILE_DIR}/src" "${MICROOS_FILE_DIR}/port"
+)
+# `_GNU_SOURCE` for the tool and not for the guest: the tool is compiled
+# against the libc of the host, where `asprintf`, `vasprintf` and
+# `strcasestr` are declared only under it, and a compiler of GCC 14 and later
+# makes an implicit declaration an error. The library of the guest reads the
+# library of the program, which declares them itself.
+target_compile_definitions(microos_magic_compile PRIVATE HAVE_CONFIG_H _GNU_SOURCE)
+target_compile_options(microos_magic_compile PRIVATE -Os ${MICROOS_FILE_WARNINGS})
+target_link_options(microos_magic_compile PRIVATE -no-pie)
+
+# The text of the database and its compiled form. `magic_compile -C magic`
+# writes magic.mgc beside the name in its own directory, which is why the
+# command runs in the build directory.
+set(MAGIC_TEXT "${CMAKE_BINARY_DIR}/magic")
+set(MAGIC_MGC "${CMAKE_BINARY_DIR}/magic.mgc")
+add_custom_command(
+    OUTPUT "${MAGIC_TEXT}"
+    COMMAND ${CMAKE_COMMAND} -E env python3
+            "${MICROOS_MAGIC_SUBSET}"
+            --config "${MICROOS_MAGIC_CONFIG}"
+            --out "${MAGIC_TEXT}"
+    DEPENDS "${MICROOS_MAGIC_SUBSET}" "${MICROOS_MAGIC_CONFIG}"
+            "${MICROOS_FILE_DIR}/magic/microos.magic"
+    COMMENT "choosing the subset of the magic database of file"
+    VERBATIM
+)
+add_custom_command(
+    OUTPUT "${MAGIC_MGC}"
+    COMMAND "$<TARGET_FILE:microos_magic_compile>" -C magic
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+    DEPENDS microos_magic_compile "${MAGIC_TEXT}"
+    COMMENT "compiling the magic database of /etc"
+    VERBATIM
+)
+
+# `-z` looks inside the two compressions of the image: gzip through the zlib of
+# the program, and zstd through the decompressor of the library the command of
+# zstd is built from (`microos_user_zstd`, not the CLI: the archive holds the
+# library alone). The linker pulls the objects of the decoder and nothing of
+# the compressor, and the port header of the library names the window this
+# machine can hold (`port/zstd_port.h`, included by file.c as the sources of
+# the library are).
+add_libc_program(file
+    LIBRARIES microos_user_file microos_user_zlib microos_user_zstd
+    INCLUDES "${MICROOS_FILE_DIR}/src" "${MICROOS_FILE_DIR}/port" "${ZLIB_DIR}"
+             "${ZSTD_DIR}/lib" "${ZSTD_DIR}/port"
+    DEFINES ULIBC_HEAP_SIZE=983040u MICRO_OS_WITH_ZSTD
+    SOURCES ${SBASE_LIBC_SOURCES}
+            "${LIBC_USER_DIR}/src/locale.c"
+            "${LIBC_USER_DIR}/src/asprintf.c"
+    COMPILE_OPTIONS -Os ${MICROOS_FILE_WARNINGS}
+)
 
 # --- bc and dc: the calculators of arbitrary precision ------------------------
 #
@@ -830,6 +1069,174 @@ foreach(calculator bc dc)
     )
 endforeach()
 
+# --- SQLite: the first port of a database library ---------------------------
+#
+# SQLite is in the public domain (third_party/sqlite/LICENSE) and its
+# amalgamation is the whole library in one source. The operating system is
+# this port: SQLITE_OS_OTHER=1 leaves SQLite without its `unix` layer and the
+# VFS of `port/sqlite_vfs.c` answers instead, on the calls of
+# components/libc/user. The library is a static archive of the guest, and the
+# shell of the release is /bin/sqlite3.
+#
+# FLOAT is the difference: SQLite keeps a REAL in a double, and the port
+# turns the XMM and x87 units on for a program that asks (ports/port_x86_64/
+# CMakeLists.txt). The other programs of /bin still never touch them.
+#
+# The flags are the ones of a small database on a machine of one task and no
+# memory management: no threads, no dynamic loading, no write-ahead log (it
+# needs shared memory and mmap), no deprecated interfaces and no double-quoted
+# string literals. The temporary store and the page cache live in the arena of
+# the program; the journal has a limit of one megabyte, which is the whole
+# size of a small database and bounds the space a transaction may ask.
+set(SQLITE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/sqlite")
+set(SQLITE_DEFINES
+    SQLITE_OS_OTHER=1
+    SQLITE_THREADSAFE=0
+    SQLITE_OMIT_LOAD_EXTENSION=1
+    SQLITE_OMIT_WAL=1
+    SQLITE_OMIT_DEPRECATED=1
+    SQLITE_DQS=0
+    SQLITE_TEMP_STORE=3
+    SQLITE_DEFAULT_JOURNAL_SIZE_LIMIT=1048576
+    SQLITE_DEFAULT_CACHE_SIZE=-256
+    SQLITE_DEFAULT_PAGE_SIZE=4096
+)
+
+microos_userland_library(microos_user_sqlite FLOAT
+    SOURCES "${SQLITE_DIR}/sqlite3.c" "${SQLITE_DIR}/port/sqlite_vfs.c"
+    INCLUDES "${SQLITE_DIR}" "${SQLITE_DIR}/port"
+    DEFINES ${SQLITE_DEFINES}
+    # Upstream C with the warnings of this tree. The exceptions are the ones
+    # of a code base that is compiled by every compiler of the world, and
+    # they stay here rather than in a hunk of the amalgamation.
+    COMPILE_OPTIONS -Os -Wno-sign-compare -Wno-unused-parameter
+                    -Wno-missing-field-initializers -Wno-implicit-fallthrough
+)
+
+# The library of a program that is not the runtime, and the pieces this shell
+# asks of it alone: the arena, the streams with fprintf, the directory, the
+# information of an object, the clock, the regular expressions, the formatter
+# of a double, strtod and the calls of a Unix-like system that compile even
+# when they answer ENOSYS. The linker takes the objects the program names.
+set(SQLITE_LIBC_SOURCES
+    "${LIBC_USER_DIR}/src/malloc.c"
+    "${LIBC_USER_DIR}/src/file.c"
+    "${LIBC_USER_DIR}/src/stdio_ext.c"
+    "${LIBC_USER_DIR}/src/ctype.c"
+    "${LIBC_USER_DIR}/src/string_ext.c"
+    "${LIBC_USER_DIR}/src/strdup.c"
+    "${LIBC_USER_DIR}/src/stdlib.c"
+    "${LIBC_USER_DIR}/src/dirent.c"
+    "${LIBC_USER_DIR}/src/stat.c"
+    "${LIBC_USER_DIR}/src/unistd_ext.c"
+    "${LIBC_USER_DIR}/src/pwd.c"
+    "${LIBC_USER_DIR}/src/time.c"
+    "${LIBC_USER_DIR}/src/libgen.c"
+    "${LIBC_USER_DIR}/src/termios.c"
+    "${LIBC_USER_DIR}/src/regex.c"
+    "${LIBC_USER_DIR}/src/getopt.c"
+    "${LIBC_USER_DIR}/src/fnmatch.c"
+    "${LIBC_USER_DIR}/src/assert.c"
+    "${LIBC_USER_DIR}/src/format_float.c"
+    "${LIBC_USER_DIR}/src/math.c"
+    "${LIBC_USER_DIR}/src/sscanf.c"
+    "${LIBC_USER_DIR}/src/unsupported.c"
+    "${LIBC_USER_DIR}/src/gettimeofday.c"
+    "${LIBC_USER_DIR}/src/resource.c"
+    "${LIBC_USER_DIR}/src/usleep.c"
+)
+
+# The shell of the release is the program: shell.c has readline only when the
+# header is there (this machine has none, so the line is a plain fgets over
+# the memory stream the program prepares), and `.system`/`.edit` are left out
+# with SQLITE_NOHAVE_SYSTEM - there is no shell to start from the shell of a
+# database on this machine, and execve is synchronous anyway.
+add_libc_program(sqlite3
+    FLOAT
+    MAIN "${SQLITE_DIR}/port/sqlite_shell.c"
+    SOURCES ${SQLITE_LIBC_SOURCES}
+            "${CMAKE_CURRENT_SOURCE_DIR}/programs/sqlite3.c"
+    LIBRARIES microos_user_sqlite
+    INCLUDES "${SQLITE_DIR}" "${SQLITE_DIR}/port"
+    # The arena is the bss of the program and the format caps the bss at a
+    # megabyte: SQLite's page cache is 256 KiB and the script of stdin up to
+    # 256 KiB, so 768 KiB leafs room for the shell and the SQL. The image of
+    # the library is the largest of the port (about 800 KiB) and the ceiling
+    # of the machine is 8 MiB (K_EXEC_MAX_IMAGE).
+    DEFINES ULIBC_HEAP_SIZE=786432u ${SQLITE_DEFINES} SQLITE_NOHAVE_SYSTEM=1
+    COMPILE_OPTIONS -Os -DULIBC_WITH_FLOAT
+                    -Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers
+                    -Wno-implicit-fallthrough
+)
+
+# --- awk: the POSIX tool of a Unix-like system -------------------------------
+#
+# The One True Awk is the first port that is not a library and a small main
+# of the release: it is an interpreter with its own lexer, parser (a grammar
+# of yacc, generated by byacc and vendored as `awkgram.tab.c`), regular
+# expression engine and evaluator, and it computes in a double. `main.c` of
+# the release is the program, as `lua.c` is for Lua.
+#
+# The port layer is `port/awk_port.h` (force-included: the C locale, the
+# functions of the C library this system does not have) and `port/awk_os.c`
+# (their bodies, and the refusal of a shell). Nothing of the release is
+# edited. The host test compiles the same sources with the headers of the
+# host, so the two builds of the tree are compared by the tests of the two.
+set(AWK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/awk")
+set(AWK_SOURCES
+    "${AWK_DIR}/awkgram.tab.c"
+    "${AWK_DIR}/b.c"
+    "${AWK_DIR}/lex.c"
+    "${AWK_DIR}/lib.c"
+    "${AWK_DIR}/main.c"
+    "${AWK_DIR}/parse.c"
+    "${AWK_DIR}/proctab.c"
+    "${AWK_DIR}/run.c"
+    "${AWK_DIR}/tran.c"
+    "${AWK_DIR}/port/awk_os.c"
+)
+
+microos_userland_library(microos_user_awk FLOAT
+    SOURCES ${AWK_SOURCES}
+    INCLUDES "${AWK_DIR}" "${AWK_DIR}/port"
+    # The warnings are the ones upstream C answers in every build of the
+    # release: a parameter a function of the table of the interpreter never
+    # reads, and the `unused` of `nawk_convert` that silences a warning of
+    # another compiler. They stay in the call and not in the vendored source.
+    COMPILE_OPTIONS "-include" "${AWK_DIR}/port/awk_port.h"
+        -Wno-unused-parameter -Wno-unused-but-set-variable -Os
+)
+
+set_source_files_properties(${AWK_SOURCES}
+    PROPERTIES OBJECT_DEPENDS "${AWK_DIR}/port/awk_port.h")
+
+add_libc_program(awk
+    FLOAT
+    LIBRARIES microos_user_awk
+    MAIN "${AWK_DIR}/main.c"
+    INCLUDES "${AWK_DIR}" "${AWK_DIR}/port"
+    # The arena is the bss of the image and the format caps the bss at a
+    # megabyte. awk's symbol table, its fields and its strings live in it;
+    # 512 KiB holds a script of the machine with room to spare, and the
+    # image stays at 171 KiB.
+    DEFINES ULIBC_HEAP_SIZE=524288u
+    SOURCES "${LIBC_USER_DIR}/src/malloc.c"
+            "${LIBC_USER_DIR}/src/file.c"
+            "${LIBC_USER_DIR}/src/stdio_ext.c"
+            "${LIBC_USER_DIR}/src/stdlib.c"
+            "${LIBC_USER_DIR}/src/string_ext.c"
+            "${LIBC_USER_DIR}/src/strdup.c"
+            "${LIBC_USER_DIR}/src/math.c"
+            "${LIBC_USER_DIR}/src/setjmp.c"
+            "${LIBC_USER_DIR}/src/time.c"
+            "${LIBC_USER_DIR}/src/locale.c"
+            "${LIBC_USER_DIR}/src/ctype.c"
+            "${LIBC_USER_DIR}/src/assert.c"
+            "${LIBC_USER_DIR}/src/format_float.c"
+            "${LIBC_USER_DIR}/src/unsupported.c"
+    COMPILE_OPTIONS -DULIBC_WITH_FLOAT -include "${AWK_DIR}/port/awk_port.h"
+        -Wno-unused-parameter -Wno-unused-but-set-variable -Os
+)
 
 add_executable(microos64
 
@@ -857,6 +1264,10 @@ add_executable(microos64
     src/gdt.c
     src/paging.c
     src/cpu.c
+    src/smp.c
+    src/lapic.c
+    src/ipi.c
+    src/ioapic.c
     src/port_exec.c
     src/port_x86_64_task.c
     src/blockdev_ram.c
@@ -1037,10 +1448,36 @@ endforeach()
 # The loader is 32-bit and has no libc in it: the assembler, the compiler and
 # the linker of the host do the whole job. The object of the C is 32-bit as
 # well, so ld sees one machine.
+# The trampoline of the application processors (ADR 0012): a flat binary
+# linked at 0x7000, the page the start-up IPI names. The loader embeds it with
+# .incbin and copies it there before the kernel runs, so the AP that wakes in
+# real mode has a way into long mode and into C.
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/ap_trampoline.o"
+    COMMAND as --32 -o "${CMAKE_BINARY_DIR}/ap_trampoline.o"
+            "${CMAKE_CURRENT_SOURCE_DIR}/ap_trampoline.S"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/ap_trampoline.S"
+    COMMENT "assembling the AP trampoline"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/ap_trampoline.bin"
+    COMMAND ld -m elf_i386 -T "${CMAKE_CURRENT_SOURCE_DIR}/ap_trampoline.ld"
+            -o "${CMAKE_BINARY_DIR}/ap_trampoline.elf" "${CMAKE_BINARY_DIR}/ap_trampoline.o"
+    COMMAND objcopy -O binary "${CMAKE_BINARY_DIR}/ap_trampoline.elf"
+            "${CMAKE_BINARY_DIR}/ap_trampoline.bin"
+    DEPENDS "${CMAKE_BINARY_DIR}/ap_trampoline.o"
+            "${CMAKE_CURRENT_SOURCE_DIR}/ap_trampoline.ld"
+    COMMENT "linking the AP trampoline at 0x7000"
+    VERBATIM
+)
+
 add_custom_command(
     OUTPUT "${CMAKE_BINARY_DIR}/loader32.o"
     COMMAND as --32 -o "${CMAKE_BINARY_DIR}/loader32.o" "${CMAKE_CURRENT_SOURCE_DIR}/loader32.S"
-    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/loader32.S"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/loader32.S" "${CMAKE_BINARY_DIR}/ap_trampoline.bin"
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
     COMMENT "assembling the loader"
     VERBATIM
 )
@@ -1081,6 +1518,6 @@ add_custom_command(
 
 add_custom_target(image
     DEPENDS "${CMAKE_BINARY_DIR}/microos64.bin" "${CMAKE_BINARY_DIR}/loader32.elf"
-            ${MICROOS_PROGRAM_IMAGES}
+            "${MAGIC_MGC}" "${MAGIC_TEXT}" ${MICROOS_PROGRAM_IMAGES}
     COMMENT "the image of the port: loader32.elf + microos64.bin + the programs of /bin"
 )

@@ -73,7 +73,7 @@ written when the project was an operating system for one board; the numbers
       its disk and asks for `/bin/hello` with `execve`; the shell runs the
       same file with `exec`
 * [x] Programs are files on a filesystem of the disk, not blobs of the
-      kernel: `make x86-disk` writes `/bin` (twenty-two programs) and `/etc` with
+      kernel: `make x86-disk` writes `/bin` (thirty-one programs) and `/etc` with
       `tools/mkfs_mfs.c`, and no boot installs an image
 * [x] `PATH` for the shell
 * [x] `argv` reaches the port, and the ABI of the entry is written down
@@ -195,8 +195,11 @@ written when the project was an operating system for one board; the numbers
       (ADR 0019): the superblock, the group descriptors, the inode table,
       the direct blocks and the single, double and triple indirection, the
       directories with names up to 255 bytes, and `stat`/`statx` with the
-      mode, the uid and the moments of the inode; read-only, so a write, a
-      new name, a mode or an owner is `KERR_NOTSUP`
+      mode, the uid and the moments of the inode; and the write side of 1.4
+      (ADR 0029): the bitmaps of a group, `create`, `write` through the
+      direct blocks and one table, `truncate`, `unlink`, `mkdir`, `chmod`,
+      `chown`, and `ext2_check` for the counters and the chain of the
+      directories
 * [x] `/etc/fstab` and the `mount` command over the type registry: the boot
       mounts the table after the root, `mount <device> <point> <type>` and
       `umount <point>` work at the console, and a line that does not mount is
@@ -243,34 +246,43 @@ written when the project was an operating system for one board; the numbers
       machine without a store says so, and the words of `write`, `mkdir`,
       `df`, `umount` and the clock are one style
 
-## K8 - Many cores (in progress, after 1.0; the second core is 1.3.0)
+## K8 - Many cores (x86-64 and host done in 1.3, the I/O APIC open)
 
-> Not a gate of 1.0 (ADR 0012, updated): the release promises a correct
-> single-core kernel; the second core is the first project after it. The
-> first phase is in the tree (`KERNEL_SMP`, `struct k_cpu`, the host gate
-> and the x86-64 processor list); the AP bring-up is the blocker, named in
-> ADR 0012 "The pilot of 1.x". It is **not** a part of `1.2.0`: the screen,
-> the stream and the installer were that release, and the bring-up of the
-> application processors is `1.3.0`.
+> Not a gate of 1.0 (ADR 0012, updated), and not a part of `1.2.0` either:
+> the screen, the stream and the installer were that release. `1.3.0` closes
+> the pilot: the machine of QEMU starts both processors, runs tasks on each of
+> them, passes `make x86-smp-smoke` (34 checks) and the 600-second
+> `make soak-smp` session. `KERNEL_SMP` stays off by default. The open rows
+> are the I/O APIC, the remote wake, the FPU state, the stack guard page and
+> the board; they are the K8 rows of [debts.md](debts.md).
 
 * [x] A `struct k_cpu` per core and a run queue per core; the scheduler never
       runs one task on two cores (ADR 0012) - `kernel/cpu.h`,
-      `components/kernel/src/sched.c`, `tests/cases/test_smp.c`
-* [ ] The allocator, the VFS, the console and the block layer safe under two
-      cores; the locks that sleep and the locks that spin are named - the
-      sleeping locks are audited in [debts.md](debts.md) under K8; the port
-      critical section of x86-64 is still `cli` and has to become a machine
-      lock before an AP enters the kernel
-* [ ] x86-64: AP bring-up, local APIC timer, I/O APIC and the IPI of a TLB
-      and a reschedule; `make x86-smoke` with `-smp 2` - the processor list
-      (MADT) and `-smp 2` are done; the boot says `2 cpu(s) reported by the
-      firmware, 1 in use`; `make x86-smp-build` builds the two-core kernel.
-      This is the step of `1.3.0`.
+      `components/kernel/src/sched.c`, `tests/cases/test_smp.c`; the claim of
+      the next task (`k_sched_claim_next()`) and the refusal of a task that
+      is the current of two cores are tested
+* [x] The big kernel lock is a spinlock of the machine, and the per-core
+      state of the port (GDT/TSS/IST, RSP0, the thread pointer, the current
+      context, `CR0.WP`) is in `ports/port_x86_64/src`
+* [x] x86-64: the AP bring-up (the MADT list, the trampoline at `0x7000`,
+      INIT-SIPI-SIPI, a stack and a table per core), the local APIC timer of
+      every AP, the IPI vector; `make x86-smp-build`, `make x86-smp-run`,
+      `make x86-smp-smoke` and `make soak-smp`
+* [x] The console is one resource of the machine: `k_port_write()` holds the
+      big kernel lock for the whole call
+* [ ] x86-64: the I/O APIC (the timer and the keyboard off the 8259, the
+      MADT overrides, the LAPIC EOI), the wake IPI of the scheduler and a
+      cross-core priority preemption, the FPU/SSE state at a switch, a guard
+      page under a task stack - the K8 rows of [debts.md](debts.md)
+* [ ] The allocator, the VFS, the console and the block layer under an
+      aggressive migration: they are sleeping locks and the two-core session
+      runs the full load for ten minutes, but no test migrates a task in the
+      middle of a filesystem operation
 * [ ] ESP32: the kernel tasks on both cores of the Pico, no driver assuming
       one core - not started (ADR 0018, the compatibility port)
 * [x] `KERNEL_SMP` (ADR 0010) and the host TSan run as the gate - the flag is
       off by default; `make test-smp`, `make test-tsan` and `make soak-host`
-      run two cores under TSan, and the plugin into `make ci` is `test-smp`
+      run two cores under TSan
 
 ## K9 - A userland (in progress)
 
@@ -350,17 +362,57 @@ written when the project was an operating system for one board; the numbers
       `tests/cases/test_bc.c` and the smoke tests run the calculator and the
       RPN one before and after a reset of the disk. The image is 115 KiB and
       its arena is 768 KiB of the bss
+* [x] The eighth port: the One True Awk of 2024-07-28 (the Lucent permissive
+      license) as `/bin/awk`, with the data `/etc/columns`, the script
+      `/etc/hello.awk` and `/etc/licenses/awk` in the image. The grammar is
+      generated once by byacc and committed with its header, the port layer
+      (`third_party/awk/port/awk_port.h`, `awk_os.c`) answers the calls of the
+      C library the release wants and the library does not have, and
+      `system` is an honest refusal: this machine has no shell and no second
+      process, and the `popen` of a pipe is the library's `ENOSYS`. `tests/cases/test_awk.c` runs the `main` of the release
+      through thirty-two cases, and the smoke tests run the interpreter in
+      the image and out of the volume after a reset
 * [ ] The gaps of the next port: a `malloc` larger than the bss of an image
       (`brk`/`mmap` of a program), a `poll` for a library that waits on a
       pipe, an `fxsave` of the XMM state for two programs with a point in
       their numbers, and the package that ships `zcat`, `lua` and the tools
       of sbase with their licenses beside them (`docs/debts.md`)
+* [x] The seventh port, a library with an operating system of its own:
+      SQLite 3.54.1 with `SQLITE_OS_OTHER=1` and the VFS of the port on the
+      calls of the system (`third_party/sqlite/port/sqlite_vfs.c`), and
+      `/bin/sqlite3` (the shell of the release) over a database of MicroFS. It
+      is the first program with a `REAL`: the `FLOAT` option of the recipe
+      leaves `-mgeneral-regs-only` out and the loader turns the SSE and x87
+      units on. The image is 846,080 bytes (826 KiB), `tests/cases/test_sqlite.c`
+      is the
+      host, and the smoke tests create, read and check a database across a
+      reset of the disk
 * [ ] A `chdir` and a wall clock in the ABI, and the POSIX frame of a fork
       child: the library works around the three, and the workaround of each
       is named in `docs/debts.md`
-* [ ] The ports of 1.3.0: SQLite (its SDK, and a package above
-      `PKG_PACKAGE_MAX` of 1 MiB), zstd, `file`/libmagic and awk; their
-      branches are still in progress and none of them is a promise of 1.2.0
+* [x] The fifth port: zstd 1.5.7 (BSD-3-Clause) as a static archive of
+      lib/common, lib/compress and lib/decompress, and `/bin/zstd` as the
+      program of the release itself (`programs/zstdcli.c`), with
+      `/bin/zstdcat` as the same image under a second name and
+      `/etc/setting.zst` as a fixture; `/etc/licenses/zstd` travels in the
+      image. The port caps the memory of the context to the arena of a
+      program (`third_party/zstd/README.md`), and the frames of the guest and
+      of the host are read by one another in `make x86-smoke`; the host test
+      is `tests/cases/test_zstd.c`
+* [x] The sixth port, and the first database: file 5.45 with libmagic
+      (`third_party/file`, BSD-2-Clause) as `/bin/file`, with a compact
+      database of the Magdir rules (`tools/magic_subset.py`, the subset of
+      `third_party/file/magic/subset.json`) compiled into `/etc/magic.mgc`
+      and the text `/etc/magic` as the fallback. It is the port that asked
+      for an image past the transfer edge (`K_EXEC_MAX_IMAGE`), the first
+      whose data does not fit (`magic.mgc` is 359 KiB), and the first whose
+      `-z` names the content of a gzip and of a zstd frame;
+      `tests/cases/test_file.c`, `make x86-smoke` and `make x86-disk-smoke`
+      cover the values, the program and the volume after a reset
+* [ ] The port of 1.3.0 still open: awk (the One True Awk and its C library),
+      whose branch is in progress and is not a promise before it is merged.
+      SQLite landed in this release; a package of it needs `PKG_PACKAGE_MAX`
+      above 1 MiB (`docs/debts.md`)
 
 ## The last major changes of the board (1.1.0)
 

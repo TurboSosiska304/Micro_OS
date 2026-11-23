@@ -14,6 +14,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdarg.h>
+#include <unistd.h>
+#include <sys/wait.h>
 
 #include "fs_fat32/fat.h"
 #include "kernel/blockdev.h"
@@ -192,13 +195,22 @@ static void image_boot_sector(struct fat_image *img)
         put32(b + 44, img->root_cluster);
         put16(b + 48, 1);
         put16(b + 50, 6);
+
+        b[64] = 0x80;
+        b[66] = 0x29;
+        put32(b + 67, 0x12345678u);
+        memcpy(b + 71, "MICROOS    ", 11);
+        memcpy(b + 82, label, 8);
+    } else {
+        /* The extended boot record of FAT12/16 sits at 36, not at 64: the
+         * label a checker reads there has to be the one of the root. */
+        b[36] = 0x80;
+        b[38] = 0x29;
+        put32(b + 39, 0x12345678u);
+        memcpy(b + 43, "MICROOS    ", 11);
+        memcpy(b + 54, label, 8);
     }
 
-    b[64] = 0x80;
-    b[66] = 0x29;
-    put32(b + 67, 0x12345678u);
-    memcpy(b + 71, "MICROOS    ", 11);
-    memcpy(b + 82, label, 8);
     b[510] = 0x55;
     b[511] = 0xAA;
 }
@@ -462,7 +474,8 @@ static void image_content(struct fat_image *img)
     }
 
     image_dir_add(img, sub, &sub_index, ".", NULL, 0x10, sub, 0);
-    image_dir_add(img, sub, &sub_index, "..", NULL, 0x10, root, 0);
+    /* A child of the root names cluster 0 in "..", even on FAT32. */
+    image_dir_add(img, sub, &sub_index, "..", NULL, 0x10, 0, 0);
     image_dir_add(img, sub, &sub_index, "INNER.TXT", NULL, 0x20, inner, 6);
 
     if (img->type == 32) {
@@ -471,6 +484,47 @@ static void image_content(struct fat_image *img)
         image_dir_add(img, nested, &nested_index, "..", NULL, 0x10, sub, 0);
         image_dir_add(img, nested, &nested_index, "DEEP.TXT", NULL, 0x20, deep, 5);
     }
+
+    /* The label of the boot sector has to be the entry of the root too, or
+     * a checker removes the one in the boot sector. The entry sits after
+     * the files, so the slots the tests name keep their numbers. */
+    image_dir_add(img, root, &index, "MICROOS", NULL, 0x08, 0, 0);
+}
+
+static void image_fsinfo(struct fat_image *img)
+{
+    k_u8_t *fs;
+    k_u32_t cluster;
+    k_u32_t free_count = 0;
+    k_u32_t next_free = 2;
+
+    if (img->type != 32) {
+        return;
+    }
+
+    for (cluster = 2u; cluster < img->cluster_count + 2u; cluster++) {
+        if (image_get_fat(img, 0, cluster) == 0) {
+            if (free_count == 0) {
+                next_free = cluster;
+            }
+            free_count++;
+        }
+    }
+
+    /* The summary of the free clusters, the way mkfs.fat writes it: the
+     * driver keeps it true after this, and fsck.fat reads it. */
+    fs = img->data + img->bytes_per_sector;
+    memset(fs, 0, 512);
+    put32(fs, 0x41615252u);
+    put32(fs + 484, 0x61417272u);
+    put32(fs + 488, free_count);
+    put32(fs + 492, next_free);
+    put32(fs + 508, 0xAA550000u);
+
+    /* A FAT32 volume names a backup boot sector; fsck.fat compares it with
+     * the boot sector and reads the summary beside it. */
+    memcpy(img->data + 6u * img->bytes_per_sector, img->data, img->bytes_per_sector);
+    memcpy(img->data + 7u * img->bytes_per_sector, fs, 512);
 }
 
 static void build_image(enum fat_kind kind)
@@ -490,6 +544,7 @@ static void build_image(enum fat_kind kind)
     image_set_fat(&g_image, 1, fat_eoc(&g_image));
 
     image_content(&g_image);
+    image_fsinfo(&g_image);
 
     g_fat_device.data = g_image.data;
     g_fat_device.sectors = g_image.total_sectors * g_image.bytes_per_sector / TEST_DEV_SECTOR;
@@ -917,6 +972,171 @@ static int write_file(const char *path, const void *data, k_size_t size, int fla
     vfs_close(&file);
 
     return rc;
+}
+
+/* ------------------------------------------------------------------------
+ * The oracle of the rest of the world
+ *
+ * A volume of FAT is a promise to another machine, and the promise is not
+ * kept by the reader agreeing with the writer that wrote the image. The
+ * host tools of mtools and dosfsck are the other side of the promise: they
+ * read what this filesystem wrote, and this filesystem reads and changes
+ * what they wrote. The tests below hand the image to them through the host
+ * shell of the machine that runs the tests.
+ * --------------------------------------------------------------------- */
+
+/* Run a command of the host; the answer is the code the program ended with. */
+static int run_shell(const char *format, ...)
+{
+    char command[1024];
+    va_list args;
+    int status;
+
+    va_start(args, format);
+    vsnprintf(command, sizeof(command), format, args);
+    va_end(args);
+
+    status = system(command);
+    if (status == -1) {
+        return -1;
+    }
+
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+static int tool_present(const char *tool)
+{
+    return run_shell("command -v %s >/dev/null 2>&1", tool) == 0;
+}
+
+/* A file of the host to hold the image and the answers of the tools. */
+static int temp_path(char *path, k_size_t cap)
+{
+    const char *dir = getenv("TMPDIR");
+    int fd;
+
+    if (dir == NULL || dir[0] == '\0') {
+        dir = "/tmp";
+    }
+
+    if (snprintf(path, cap, "%s/microos-fat-XXXXXX", dir) >= (int)cap) {
+        return -1;
+    }
+
+    fd = mkstemp(path);
+    if (fd < 0) {
+        return -1;
+    }
+
+    close(fd);
+    return 0;
+}
+
+static int image_save(const char *path)
+{
+    size_t bytes = (size_t)g_image.total_sectors * g_image.bytes_per_sector;
+    FILE *file = fopen(path, "wb");
+    size_t wrote;
+
+    if (file == NULL) {
+        return -1;
+    }
+
+    wrote = fwrite(g_image.data, 1, bytes, file);
+    fclose(file);
+
+    return (wrote == bytes) ? 0 : -1;
+}
+
+/* Read an image that a host tool made and describe its geometry, so that
+ * the reader of this system can mount it. */
+static int image_load(const char *path)
+{
+    FILE *file;
+    long length;
+    k_u8_t *data;
+    k_u32_t total16;
+    k_u32_t total32;
+    k_u32_t fat16;
+    k_u32_t fat32;
+    k_u32_t root_dir_sectors;
+
+    file = fopen(path, "rb");
+    if (file == NULL) {
+        return -1;
+    }
+
+    if (fseek(file, 0, SEEK_END) != 0 || (length = ftell(file)) < 512 ||
+        fseek(file, 0, SEEK_SET) != 0) {
+        fclose(file);
+        return -1;
+    }
+
+    data = (k_u8_t *)malloc((size_t)length);
+    if (data == NULL) {
+        fclose(file);
+        return -1;
+    }
+
+    if (fread(data, 1, (size_t)length, file) != (size_t)length) {
+        free(data);
+        fclose(file);
+        return -1;
+    }
+    fclose(file);
+
+    image_free(&g_image);
+
+    total16 = get16(data + 19);
+    total32 = get32(data + 32);
+    fat16 = get16(data + 22);
+    fat32 = get32(data + 36);
+
+    g_image.data = data;
+    g_image.bytes_per_sector = get16(data + 11);
+    g_image.sectors_per_cluster = data[13];
+    g_image.reserved_sectors = get16(data + 14);
+    g_image.num_fats = data[16];
+    g_image.root_entries = get16(data + 17);
+    g_image.total_sectors = (total16 != 0) ? total16 : total32;
+    g_image.fat_sectors = (fat16 != 0) ? fat16 : fat32;
+    g_image.cluster_bytes = g_image.sectors_per_cluster * g_image.bytes_per_sector;
+    root_dir_sectors =
+        (g_image.root_entries * 32u + g_image.bytes_per_sector - 1u) / g_image.bytes_per_sector;
+    g_image.root_dir_start = g_image.reserved_sectors + g_image.num_fats * g_image.fat_sectors;
+    g_image.first_data_sector = g_image.root_dir_start + root_dir_sectors;
+    g_image.cluster_count =
+        (g_image.total_sectors - g_image.first_data_sector) / g_image.sectors_per_cluster;
+
+    if (fat16 == 0) {
+        g_image.type = 32;
+        g_image.root_cluster = get32(data + 44);
+    } else {
+        g_image.type = (g_image.cluster_count < 4085u) ? 12 : 16;
+        g_image.root_cluster = 0;
+    }
+
+    g_fat_device.data = g_image.data;
+    g_fat_device.sectors = (k_u32_t)((size_t)length / TEST_DEV_SECTOR);
+    g_fat_blockdev.sectors = g_fat_device.sectors;
+
+    return 0;
+}
+
+static int host_file_read(const char *path, char *buf, k_size_t cap)
+{
+    FILE *file = fopen(path, "rb");
+    size_t got;
+
+    if (file == NULL) {
+        return -1;
+    }
+
+    got = fread(buf, 1, cap - 1u, file);
+    buf[got] = '\0';
+    fclose(file);
+
+    return (int)got;
 }
 
 static void test_write_create_read(void)
@@ -2341,6 +2561,456 @@ static void test_rename(void)
     teardown();
 }
 
+static void test_truncate_zero(void)
+{
+    struct vfs_file file;
+    struct vfs_stat stat;
+    struct vfs_statfs before;
+    struct vfs_statfs after;
+    char buffer[16];
+
+    ktest_begin("fat: a file is truncated to zero and its chain comes back");
+
+    setup();
+    if (mount_image(FAT_KIND_32) != 0) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &before), 0);
+    KT_CHECK_INT_EQ(write_file(TEST_ROOT_POINT "/cut.txt", g_io_buffer, 700, VFS_O_CREAT), 700);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/cut.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, 700);
+
+    /* O_TRUNC is the truncate of this ABI: the chain goes before a byte is
+     * written, and a descriptor closed without a write leaves the file at
+     * zero rather than at the size it had. */
+    KT_CHECK_INT_EQ(
+        vfs_open(TEST_ROOT_POINT "/cut.txt", VFS_O_RDWR | VFS_O_TRUNC, &file, g_file_data), 0);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/cut.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, 0);
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(read_file(TEST_ROOT_POINT "/cut.txt", buffer, sizeof(buffer)), 0);
+    KT_CHECK_STR_EQ(buffer, "");
+
+    KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &after), 0);
+    KT_CHECK_INT_EQ(after.free_blocks, before.free_blocks);
+
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/cut.txt"), 0);
+
+    teardown();
+}
+
+static void test_mtime(void)
+{
+    struct vfs_statx info;
+    k_u64_t stamp;
+
+    ktest_begin("fat: an entry keeps the moment of its last change");
+
+    setup();
+    if (mount_image(FAT_KIND_32) != 0) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    /* An entry of the image was written by a builder that kept no date. */
+    KT_CHECK_INT_EQ(vfs_statx(TEST_ROOT_POINT "/HELLO.TXT", &info), 0);
+    KT_CHECK_INT_EQ(info.mtime, 0);
+
+    /* A file this machine writes carries the moment of the machine: the
+     * seconds since the boot, moved into the window FAT can hold. */
+    KT_CHECK_INT_EQ(write_file(TEST_ROOT_POINT "/stamp.txt", "x", 1, VFS_O_CREAT), 1);
+    KT_CHECK_INT_EQ(vfs_statx(TEST_ROOT_POINT "/stamp.txt", &info), 0);
+    KT_CHECK(info.mtime >= 315532800ull);
+    KT_CHECK_INT_EQ(info.ctime, info.mtime);
+    stamp = info.mtime;
+
+    /* The moment is on the medium: a mount of the same bytes gives it back. */
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+    KT_CHECK_INT_EQ(vfs_mount_type(TEST_ROOT_POINT, "fat32", "fat0"), 0);
+    KT_CHECK_INT_EQ(vfs_statx(TEST_ROOT_POINT "/stamp.txt", &info), 0);
+    KT_CHECK_INT_EQ(info.mtime, stamp);
+
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/stamp.txt"), 0);
+
+    teardown();
+}
+
+static void test_oracle_forward(void)
+{
+    char image[256];
+    char out[320];
+    char in[320];
+    char buffer[2048];
+    struct vfs_file file;
+    struct vfs_stat stat;
+    int i;
+    int rc;
+
+    ktest_begin("fat: the volume we write passes fsck.fat and mtools read it");
+
+    setup();
+    if (mount_image(FAT_KIND_32) != 0) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(
+        write_file(TEST_ROOT_POINT "/written.txt", "hello from micro os\n", 20, VFS_O_CREAT), 20);
+    KT_CHECK_INT_EQ(vfs_mkdir(TEST_ROOT_POINT "/oracle dir"), 0);
+    KT_CHECK_INT_EQ(
+        write_file(TEST_ROOT_POINT "/oracle dir/nested.txt", "nested\n", 7, VFS_O_CREAT), 7);
+    KT_CHECK_INT_EQ(vfs_rename(TEST_ROOT_POINT "/written.txt", TEST_ROOT_POINT "/renamed.txt"), 0);
+
+    /* The install that renames over a file: the old name's chain has to go
+     * back to the map, or fsck.fat finds a chain no name reaches. */
+    KT_CHECK_INT_EQ(write_file(TEST_ROOT_POINT "/target.txt", "old target\n", 11, VFS_O_CREAT), 11);
+    KT_CHECK_INT_EQ(
+        write_file(TEST_ROOT_POINT "/replacement.txt", "replacement\n", 12, VFS_O_CREAT), 12);
+    KT_CHECK_INT_EQ(vfs_rename(TEST_ROOT_POINT "/replacement.txt", TEST_ROOT_POINT "/target.txt"),
+                    0);
+
+    /* A directory grows past its first cluster; the long names inside it
+     * make the runs span the new clusters, and "." and ".." stay the two
+     * entries a checker expects at the head. */
+    KT_CHECK_INT_EQ(vfs_mkdir(TEST_ROOT_POINT "/grow"), 0);
+    for (i = 0; i < 24; i++) {
+        char path[128];
+
+        snprintf(path, sizeof(path), TEST_ROOT_POINT "/grow/a fairly long name %02d.txt", i);
+        KT_CHECK_INT_EQ(write_file(path, "dir\n", 4, VFS_O_CREAT), 4);
+    }
+
+    /* An empty directory goes, and its cluster comes back to the map. */
+    KT_CHECK_INT_EQ(vfs_mkdir(TEST_ROOT_POINT "/doomed"), 0);
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/doomed"), 0);
+
+    KT_CHECK_INT_EQ(write_file(TEST_ROOT_POINT "/gone.txt", "123456", 6, VFS_O_CREAT), 6);
+    KT_CHECK_INT_EQ(
+        vfs_open(TEST_ROOT_POINT "/gone.txt", VFS_O_RDWR | VFS_O_TRUNC, &file, g_file_data), 0);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/gone.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, 0);
+
+    /* A write that runs out of space leaves the file as it was, and the
+     * clusters of the attempt are not lost: the checker below proves it. */
+    {
+        struct vfs_statfs before_full;
+        struct vfs_statfs after_full;
+        int fill_rc;
+
+        KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &before_full), 0);
+        KT_CHECK_INT_EQ(
+            vfs_open(TEST_ROOT_POINT "/fill.bin", VFS_O_RDWR | VFS_O_CREAT, &file, g_file_data), 0);
+        memset(g_io_buffer, 0x5A, sizeof(g_io_buffer));
+        for (;;) {
+            fill_rc = vfs_write(&file, g_io_buffer, sizeof(g_io_buffer));
+            if (fill_rc < 0) {
+                break;
+            }
+        }
+        KT_CHECK_INT_EQ(fill_rc, KERR_NOSPC);
+        KT_CHECK_INT_EQ(vfs_close(&file), 0);
+        KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/fill.bin"), 0);
+        KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &after_full), 0);
+        KT_CHECK_INT_EQ(after_full.free_blocks, before_full.free_blocks);
+    }
+
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/HELLO.TXT"), 0);
+
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+
+    if (temp_path(image, sizeof(image)) != 0) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    if (!tool_present("fsck.fat") || !tool_present("mdir") || !tool_present("mcopy")) {
+        printf("    SKIP: fsck.fat, mdir and mcopy of mtools are not installed\n");
+        unlink(image);
+        teardown();
+        return;
+    }
+
+    snprintf(out, sizeof(out), "%s.out", image);
+    snprintf(in, sizeof(in), "%s.in", image);
+
+    KT_CHECK_INT_EQ(image_save(image), 0);
+
+    rc = run_shell("fsck.fat -n '%s' >'%s' 2>&1", image, out);
+    if (rc != 0) {
+        host_file_read(out, buffer, sizeof(buffer));
+        printf("    fsck.fat: %s\n", buffer);
+    }
+    KT_CHECK_INT_EQ(rc, 0);
+
+    rc = run_shell("mdir -i '%s' :: >'%s' 2>&1", image, out);
+    KT_CHECK_INT_EQ(rc, 0);
+    if (rc == 0) {
+        host_file_read(out, buffer, sizeof(buffer));
+        KT_CHECK(strstr(buffer, "renamed.txt") != NULL);
+        KT_CHECK(strstr(buffer, "target.txt") != NULL);
+        KT_CHECK(strstr(buffer, "replacement.txt") == NULL);
+        KT_CHECK(strstr(buffer, "oracle dir") != NULL);
+        KT_CHECK(strstr(buffer, "HELLO.TXT") == NULL);
+    }
+
+    rc = run_shell("mcopy -i '%s' ::/renamed.txt '%s' >/dev/null 2>&1", image, in);
+    KT_CHECK_INT_EQ(rc, 0);
+    if (rc == 0) {
+        memset(buffer, 0, sizeof(buffer));
+        KT_CHECK_INT_EQ(host_file_read(in, buffer, sizeof(buffer)), 20);
+        KT_CHECK_STR_EQ(buffer, "hello from micro os\n");
+    }
+
+    rc = run_shell("mcopy -i '%s' ::/target.txt '%s' >/dev/null 2>&1", image, in);
+    KT_CHECK_INT_EQ(rc, 0);
+    if (rc == 0) {
+        memset(buffer, 0, sizeof(buffer));
+        KT_CHECK_INT_EQ(host_file_read(in, buffer, sizeof(buffer)), 12);
+        KT_CHECK_STR_EQ(buffer, "replacement\n");
+    }
+
+    rc = run_shell("mcopy -i '%s' '::/grow/a fairly long name 23.txt' '%s' >/dev/null 2>&1", image,
+                   in);
+    KT_CHECK_INT_EQ(rc, 0);
+    if (rc == 0) {
+        memset(buffer, 0, sizeof(buffer));
+        KT_CHECK_INT_EQ(host_file_read(in, buffer, sizeof(buffer)), 4);
+        KT_CHECK_STR_EQ(buffer, "dir\n");
+    }
+
+    rc = run_shell("mcopy -i '%s' '::/oracle dir/nested.txt' '%s' >/dev/null 2>&1", image, in);
+    KT_CHECK_INT_EQ(rc, 0);
+    if (rc == 0) {
+        memset(buffer, 0, sizeof(buffer));
+        KT_CHECK_INT_EQ(host_file_read(in, buffer, sizeof(buffer)), 7);
+        KT_CHECK_STR_EQ(buffer, "nested\n");
+    }
+
+    /* A file truncated to zero is an empty file to the rest of the world. */
+    rc = run_shell("mcopy -i '%s' ::/gone.txt '%s' >/dev/null 2>&1", image, in);
+    KT_CHECK_INT_EQ(rc, 0);
+    if (rc == 0) {
+        KT_CHECK_INT_EQ(host_file_read(in, buffer, sizeof(buffer)), 0);
+    }
+
+    unlink(in);
+    unlink(out);
+    unlink(image);
+    teardown();
+}
+
+static void test_oracle_reverse(void)
+{
+    char image[256];
+    char out[320];
+    char in[320];
+    char buffer[2048];
+    int rc;
+
+    ktest_begin("fat: an image of mkfs.fat is mounted, changed and still clean");
+
+    setup();
+
+    if (temp_path(image, sizeof(image)) != 0) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    if (!tool_present("fsck.fat") || !tool_present("mkfs.fat") || !tool_present("mcopy")) {
+        printf("    SKIP: fsck.fat, mkfs.fat and mcopy of mtools are not installed\n");
+        unlink(image);
+        teardown();
+        return;
+    }
+
+    snprintf(out, sizeof(out), "%s.out", image);
+    snprintf(in, sizeof(in), "%s.in", image);
+
+    /* A volume of the world: 36 MiB is enough clusters for mkfs.fat to
+     * accept FAT32 without the warning of a volume that is too small. */
+    KT_CHECK_INT_EQ(run_shell("dd if=/dev/zero of='%s' bs=1024 count=36864 status=none", image), 0);
+
+    rc = run_shell("mkfs.fat -F 32 -s 1 -n MICROOS '%s' >'%s' 2>&1", image, out);
+    if (rc != 0) {
+        host_file_read(out, buffer, sizeof(buffer));
+        printf("    mkfs.fat: %s\n", buffer);
+    }
+    KT_CHECK_INT_EQ(rc, 0);
+
+    KT_CHECK_INT_EQ(run_shell("printf 'from the host\\n' > '%s'", in), 0);
+    KT_CHECK_INT_EQ(run_shell("mcopy -i '%s' '%s' ::/FROMHOST.TXT", image, in), 0);
+
+    if (image_load(image) != 0) {
+        KT_CHECK(0);
+        unlink(in);
+        unlink(out);
+        unlink(image);
+        teardown();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(mount_built(), 0);
+
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(read_file(TEST_ROOT_POINT "/FROMHOST.TXT", buffer, sizeof(buffer)), 14);
+    KT_CHECK_STR_EQ(buffer, "from the host\n");
+
+    KT_CHECK_INT_EQ(
+        write_file(TEST_ROOT_POINT "/TOHOST.TXT", "written by micro os\n", 20, VFS_O_CREAT), 20);
+    KT_CHECK_INT_EQ(vfs_mkdir(TEST_ROOT_POINT "/hostdir"), 0);
+    KT_CHECK_INT_EQ(
+        write_file(TEST_ROOT_POINT "/hostdir/INNER.TXT", "inner from us\n", 14, VFS_O_CREAT), 14);
+    KT_CHECK_INT_EQ(vfs_rename(TEST_ROOT_POINT "/TOHOST.TXT", TEST_ROOT_POINT "/FINAL.TXT"), 0);
+
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+    KT_CHECK_INT_EQ(image_save(image), 0);
+
+    rc = run_shell("fsck.fat -n '%s' >'%s' 2>&1", image, out);
+    if (rc != 0) {
+        host_file_read(out, buffer, sizeof(buffer));
+        printf("    fsck.fat: %s\n", buffer);
+    }
+    KT_CHECK_INT_EQ(rc, 0);
+
+    rc = run_shell("mcopy -i '%s' ::/FINAL.TXT '%s' >/dev/null 2>&1", image, in);
+    KT_CHECK_INT_EQ(rc, 0);
+    if (rc == 0) {
+        memset(buffer, 0, sizeof(buffer));
+        KT_CHECK_INT_EQ(host_file_read(in, buffer, sizeof(buffer)), 20);
+        KT_CHECK_STR_EQ(buffer, "written by micro os\n");
+    }
+
+    rc = run_shell("mcopy -i '%s' '::/hostdir/INNER.TXT' '%s' >/dev/null 2>&1", image, in);
+    KT_CHECK_INT_EQ(rc, 0);
+    if (rc == 0) {
+        memset(buffer, 0, sizeof(buffer));
+        KT_CHECK_INT_EQ(host_file_read(in, buffer, sizeof(buffer)), 14);
+        KT_CHECK_STR_EQ(buffer, "inner from us\n");
+    }
+
+    unlink(in);
+    unlink(out);
+    unlink(image);
+    teardown();
+}
+
+static void test_oracle_fixed_root(enum fat_kind kind, const char *title)
+{
+    char image[256];
+    char out[320];
+    char in[320];
+    char buffer[2048];
+    int rc;
+
+    ktest_begin(title);
+
+    setup();
+    if (mount_image(kind) != 0) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(write_file(TEST_ROOT_POINT "/WORK.TXT", "fixed root\n", 11, VFS_O_CREAT), 11);
+    KT_CHECK_INT_EQ(vfs_mkdir(TEST_ROOT_POINT "/DIR1"), 0);
+    KT_CHECK_INT_EQ(write_file(TEST_ROOT_POINT "/DIR1/IN.TXT", "inner\n", 6, VFS_O_CREAT), 6);
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/WORK.TXT"), 0);
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+
+    if (temp_path(image, sizeof(image)) != 0) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    if (!tool_present("fsck.fat") || !tool_present("mcopy")) {
+        printf("    SKIP: fsck.fat and mcopy of mtools are not installed\n");
+        unlink(image);
+        teardown();
+        return;
+    }
+
+    snprintf(out, sizeof(out), "%s.out", image);
+    snprintf(in, sizeof(in), "%s.in", image);
+
+    KT_CHECK_INT_EQ(image_save(image), 0);
+
+    rc = run_shell("fsck.fat -n '%s' >'%s' 2>&1", image, out);
+    if (rc != 0) {
+        host_file_read(out, buffer, sizeof(buffer));
+        printf("    fsck.fat: %s\n", buffer);
+    }
+    KT_CHECK_INT_EQ(rc, 0);
+
+    rc = run_shell("mcopy -i '%s' '::/DIR1/IN.TXT' '%s' >/dev/null 2>&1", image, in);
+    KT_CHECK_INT_EQ(rc, 0);
+    if (rc == 0) {
+        memset(buffer, 0, sizeof(buffer));
+        KT_CHECK_INT_EQ(host_file_read(in, buffer, sizeof(buffer)), 6);
+        KT_CHECK_STR_EQ(buffer, "inner\n");
+    }
+
+    unlink(in);
+    unlink(out);
+    unlink(image);
+    teardown();
+}
+
+/*
+ * The volume as the root of the machine (ADR 0027): the mount is at "/" and
+ * the path the VFS hands the adapter is the whole path of the tree. The
+ * volume of the root is the same FAT32 image, read from its root.
+ */
+static void test_root_mount(void)
+{
+    struct vfs_stat stat;
+    char buffer[32];
+
+    ktest_begin("fat: the volume is the root of the machine");
+
+    setup();
+    if (mount_image(FAT_KIND_32) != 0) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    (void)vfs_umount(TEST_ROOT_POINT);
+    (void)vfs_umount("/");
+    mfs_unmount();
+
+    KT_CHECK_INT_EQ(vfs_mount_type("/", "fat32", "fat0"), 0);
+    KT_CHECK_STR_EQ(vfs_mount_name(0), "/");
+    KT_CHECK_INT_EQ(vfs_stat("/", &stat), 0);
+    KT_CHECK_INT_EQ(stat.type, 2);
+
+    KT_CHECK_INT_EQ(vfs_stat("/HELLO.TXT", &stat), 0);
+    KT_CHECK_INT_EQ(stat.type, 1);
+    KT_CHECK_INT_EQ(stat.size, 10);
+
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(read_file("/HELLO.TXT", buffer, sizeof(buffer)), 10);
+    KT_CHECK_STR_EQ(buffer, "hello fat\n");
+
+    KT_CHECK_INT_EQ(vfs_umount("/"), 0);
+
+    /* The tree of the test comes back for the cases after this one. */
+    mfs_mount(&g_mfs_device);
+    mfs_vfs_register("/");
+
+    teardown();
+}
+
 void test_fs_fat(void)
 {
     test_mount_and_stat();
@@ -2350,6 +3020,12 @@ void test_fs_fat(void)
     test_errors();
     test_no_mode_no_owner();
     test_write_create_read();
+    test_truncate_zero();
+    test_mtime();
+    test_oracle_forward();
+    test_oracle_reverse();
+    test_oracle_fixed_root(FAT_KIND_12, "fat: a FAT12 volume we write passes fsck.fat");
+    test_oracle_fixed_root(FAT_KIND_16, "fat: a FAT16 volume we write passes fsck.fat");
     test_rename();
     test_write_rewrite_append();
     test_mkdir_and_long_names();
@@ -2384,4 +3060,5 @@ void test_fs_fat(void)
 #if defined(MICRO_OS_FS_FAT32) && MICRO_OS_FS_FAT32
     test_check_command();
 #endif
+    test_root_mount();
 }
