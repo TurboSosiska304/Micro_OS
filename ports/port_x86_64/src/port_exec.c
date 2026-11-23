@@ -94,8 +94,29 @@ static const k_u8_t g_restorer_code[] = {
 #define PORT_EXEC_ENVP_MAX 8u
 #define PORT_EXEC_ENV_BYTES_MAX 512u
 
-/* How long the caller of execve waits for the program it started. */
-#define PORT_EXEC_WAIT_MS 10000u
+/*
+ * How long the caller of execve waits for the program it started.
+ *
+ * The wait is bounded because the machine has no job control: a program that
+ * hangs in the kernel holds the shell of the console, and nothing else can
+ * take the line back. Ten seconds was the first guess, and it is a guess of
+ * a machine whose files were kilobytes: a program of this port writes a file
+ * of a large volume at about a megabyte a second, so a file of 128 MiB of a
+ * 5 GiB disk (the gate of ADR 0029) needed a hundred times the budget. The
+ * caller that gives up in the middle of a write does not stop the program
+ * either: the shell reads the next line while the old program still writes,
+ * and two writers of one file are a volume the check has to repair.
+ *
+ * Ten minutes is long enough for the slowest thing a person waits for on
+ * this machine and short enough that a program stuck in a cycle of its own
+ * gives the console back. Ctrl+C of the console, which this loop already
+ * reads, stays the way out of a program that is merely slow.
+ */
+#define PORT_EXEC_WAIT_MS 600000u
+
+/* The moment a program that ran past the wait above is given to answer the
+ * signal that tells it to stop. */
+#define PORT_EXEC_STOP_MS 1000u
 
 /*
  * The frame of a signal on the stack of the program: the registers and the
@@ -878,6 +899,15 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
 
             waited += step_ms;
             if (waited >= PORT_EXEC_WAIT_MS) {
+                /*
+                 * The program is older than the wait. It is told to stop
+                 * the way Ctrl+C tells it and given the second the step
+                 * takes: the caller that gives up must not leave a program
+                 * writing the volume behind it, or the next line of the
+                 * shell is a second writer of the same files.
+                 */
+                (void)task_signal_send(program->pid, K_SIGINT);
+                rc = task_wait(program->pid, &status, PORT_EXEC_STOP_MS);
                 break;
             }
         }
