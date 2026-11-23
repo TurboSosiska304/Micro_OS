@@ -153,10 +153,10 @@ static void ready_move_to_tail(struct task *t)
  * The queue of a core holds the tasks that are ready to run there and, by the
  * design of the switch of this kernel, the task that is running there as well
  * (it leaves the queue when its quantum is over, when it sleeps or when it
- * blocks). A pick for the local core may therefore return a running task -
- * "the caller continues" - but a pick for another core must never do that:
- * a task that runs on a core is not a task to be stolen (ADR 0012). The
- * `with_running` flag is that difference.
+ * blocks). A pick may therefore return a running task - "the caller
+ * continues" - which is the `with_running` flag. The claim of a core looks at
+ * the queue of that core only, so a running task is never seen by another
+ * core (ADR 0012).
  */
 static struct task *queue_pick_for(k_u32_t cpu, bool with_running)
 {
@@ -552,49 +552,107 @@ void k_sched_unblock(struct task *t)
     sched_unlock();
 }
 
+/*
+ * The choice of this core, under the scheduler lock.
+ *
+ * Only the queue of this core is looked at. A task of another queue is never
+ * taken, and the reason is not a missing optimisation: this kernel keeps the
+ * task that runs in the queue of its core (it leaves it when its quantum is
+ * over, when it sleeps or when it blocks), and a task whose quantum has just
+ * expired is READY in that queue for the few instructions between the tick
+ * that moved it and the switch that leaves it. A second core that took it in
+ * that window would resume a saved stack pointer whose stack is still being
+ * used by the core it runs on - a task on two cores at once, the failure ADR
+ * 0012 forbids.
+ *
+ * A task changes its core at creation (round robin), when it is woken after
+ * the scheduler moved it, and by k_sched_migrate(). That is the whole of the
+ * load balance, and it is honest: a core that idles beside a busy one is a
+ * number the boot and /proc can show, not a race to hide.
+ */
+static struct task *pick_for_core_locked(k_u32_t cpu)
+{
+    return queue_pick_for(cpu, true);
+}
+
+/*
+ * Look at the queues and answer the task this core would run next, without
+ * taking it. The port of x86-64 uses k_sched_claim_next() instead: a choice
+ * that is only a look is a choice another core can repeat, and one task would
+ * then be running on two cores. This call is the peek that the tests and the
+ * diagnostics use.
+ */
 struct task *k_sched_pick_next(void)
 {
+    struct task *next;
+
+    sched_lock();
+    next = pick_for_core_locked(k_cpu_id());
+    sched_unlock();
+
+    return next;
+}
+
+/* --- the claim: the choice and the running state in one lock --- */
+
+/*
+ * The claim of the task this core runs next (the critical section the port
+ * of x86-64 switches from).
+ *
+ * The scheduler lock is what makes the choice and the mark one step: the
+ * task leaves the ready set of its queue and becomes RUNNING on this core
+ * under the same lock that chose it, so a second core cannot find it ready
+ * in the window between the choice and the jump of the switch. Without this
+ * call two cores could pick one task and resume one saved stack pointer -
+ * the failure ADR 0012 calls a task that runs on two cores at once.
+ *
+ * The caller has already taken the task it leaves out of the running state:
+ * a sleep, a block, a yield and an exit all change the state before they
+ * reach the port, and the port calls this only after them. A task that still
+ * says RUNNING stays RUNNING (and stays in the queue of its core, which is
+ * how this kernel has always marked the task on the CPU); no other core can
+ * take it, because the pick of a core looks at its own queue only.
+ *
+ * A task without a context cannot be switched to: it stays where it is and
+ * NULL is returned, so that the port keeps the current task instead of
+ * jumping into a zero. Returns the task that now runs on this core, or NULL
+ * when nothing is runnable here.
+ */
+struct task *k_sched_claim_next(void)
+{
+    struct k_cpu *self;
+    struct task *next;
     k_u32_t cpu = k_cpu_id();
-    struct task *next = NULL;
 
     sched_lock();
 
-    next = queue_pick_for(cpu, true);
+    next = pick_for_core_locked(cpu);
 
-#if KERNEL_SMP
-    /*
-     * A core takes the head of the best queue of another core when that task
-     * has a higher priority than the one waiting here: that is the migration
-     * the scheduler is allowed to make (ADR 0012, "a task that is not
-     * migrated while it runs"), and it is what keeps a core of the machine
-     * from idling beside a ready task of a higher priority. Only a task that
-     * is ready can be taken: the queue of a core also holds the task that is
-     * running there, and that one is never stolen.
-     */
-    if (k_cpu_count() > 1u) {
-        k_u32_t other;
-
-        for (other = 0; other < k_cpu_count(); other++) {
-            struct task *candidate;
-
-            if (other == cpu) {
-                continue;
-            }
-
-            candidate = queue_pick_for(other, false);
-
-            if (candidate != NULL && (next == NULL || candidate->prio > next->prio)) {
-                next = candidate;
-            }
-        }
-
-        if (next != NULL && task_cpu(next) != cpu) {
-            if (migrate_locked(next, cpu) != 0) {
-                next = queue_pick_for(cpu, true);
-            }
-        }
+    if (next == NULL) {
+        sched_unlock();
+        return NULL;
     }
-#endif
+
+    if (next->ctx == NULL) {
+        sched_unlock();
+        kerror("sched: the task '%s' has no context to run on", next->name);
+        return NULL;
+    }
+
+    self = k_cpu_self();
+
+    /*
+     * The two writes below are the claim. The task was in the queue of this
+     * core - the only one the pick looked at - so the mark and the assignment
+     * of the core are the whole of the record.
+     */
+    if (next->state != TASK_STATE_RUNNING) {
+        next->state = TASK_STATE_RUNNING;
+        next->runtime_ticks++;
+    }
+
+    self->current = next;
+    __atomic_store_n(&next->cpu, cpu, __ATOMIC_RELAXED);
 
     sched_unlock();
 
@@ -705,6 +763,33 @@ k_size_t k_sched_validate(void)
                            (unsigned)cpu, prio, t->name, (unsigned)task_cpu(t));
                     problems++;
                 }
+            }
+        }
+    }
+
+    /*
+     * The running task of a core is the task that core last claimed, and the
+     * claim of a task writes the record of the core, the state and the core
+     * of the task together. Two cores that name one task as theirs is the
+     * failure of a claim made without the lock - two cores would resume one
+     * saved stack pointer - and it is the one property here that holds for
+     * every port: the host gives a task a pthread and a logical core, so its
+     * `current` is a label where the state of the task may already be the
+     * next one, but a task is still the current of at most one core.
+     */
+    for (cpu = 0; cpu < k_cpu_count(); cpu++) {
+        struct task *t = k_cpu_by_id(cpu)->current;
+        k_u32_t other;
+
+        if (t == NULL) {
+            continue;
+        }
+
+        for (other = cpu + 1u; other < k_cpu_count(); other++) {
+            if (k_cpu_by_id(other)->current == t) {
+                kerror("sched: the task '%s' runs on the cores %u and %u", t->name, (unsigned)cpu,
+                       (unsigned)other);
+                problems++;
             }
         }
     }

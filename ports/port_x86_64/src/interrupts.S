@@ -239,6 +239,26 @@ isr_irq isr_irq0, port_x86_64_irq_tick
 isr_irq isr_irq1, port_x86_64_irq_keyboard
 
 /*
+ * The timer of a core that the 8259 does not reach: the local APIC of an
+ * application processor (ADR 0012). The body is the tick of the port, and the
+ * frame is the one of the interrupted code, like the frame of the PIT.
+ */
+isr_irq isr_lapic_timer, port_x86_64_irq_lapic_timer
+
+/*
+ * An inter-processor interrupt: another core asks this one to look at its run
+ * queue. The body acknowledges the APIC and calls the hook of the scheduler.
+ */
+isr_irq isr_ipi, port_x86_64_irq_ipi
+
+/*
+ * The spurious vector: the APIC withdrew an interrupt before delivering it.
+ * The body returns without an EOI, because there is no interrupt in service to
+ * end, and the stub gives the interrupted code its registers back.
+ */
+isr_irq isr_spurious, port_x86_64_irq_spurious
+
+/*
  * The call of a system call: `int $0x80` from the program.
  *
  * The program is ring 3 code with page tables of its own (ADR 0007), so the

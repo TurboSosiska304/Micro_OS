@@ -3,6 +3,7 @@
 
 #include <string.h>
 
+#include "kernel/cpu.h"
 #include "kernel/log.h"
 #include "kernel/port_task.h"
 #include "kernel/sched.h"
@@ -66,6 +67,16 @@ static void test_ready_queue(void)
 
     KT_CHECK_INT_EQ(g_blocked, 2);
     KT_CHECK_INT_EQ(k_sched_blocked_count(), 2);
+
+    /*
+     * A task is picked only by the core that owns its queue (ADR 0012): the
+     * two of them were handed to the next cores in the round robin, so they
+     * are moved to the core of the suite before the queue is read. A blocked
+     * task remembers the core it will be woken on, and the calls are no-ops
+     * on a build of one core.
+     */
+    KT_CHECK_INT_EQ(k_sched_migrate(low, k_cpu_id()), 0);
+    KT_CHECK_INT_EQ(k_sched_migrate(high, k_cpu_id()), 0);
     /* Only the test runner itself is left in the run queue. */
     KT_CHECK_INT_EQ(k_sched_ready_count(), 1);
 

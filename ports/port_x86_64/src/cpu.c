@@ -5,15 +5,24 @@
  * port (that is a feature of multiboot 2), so the machine is asked the way a
  * PC has answered since ACPI: the root pointer in the extended BIOS area or
  * in the last kilobyte of the BIOS, the RSDT or the XSDT under it, and the
- * MADT with one entry per processor. The port reads the list, counts the
- * processors the firmware says are enabled, and remembers the address of the
- * local APIC.
+ * MADT with one entry per processor. The port reads the list, keeps the
+ * hardware identifier of every processor the firmware calls enabled, and
+ * remembers the address of the local APIC.
  *
- * What it does not do yet is start them, and this file says so instead of
- * pretending: k_port_cpu_count() is the number of cores the kernel may use,
- * which is one until the trampoline of ADR 0012 exists, and the boot prints
- * the number the firmware reports beside it. The kernel never puts a task in
- * the queue of a core that never runs.
+ * Two numbers come out of that and they are not the same one. `available` is
+ * what the firmware describes; it is the left number of the boot line and the
+ * one the bring-up of src/smp.c walks. The kernel number of a core - the one
+ * the scheduler, /proc and the `smp` command use - is this port's own: the
+ * processor of the boot is 0 and the others follow in the order of the MADT,
+ * because a core that is not started must not leave a hole in the array of
+ * kernel/cpu.c whose count is the number of cores that really run.
+ *
+ * Which core is asking is a read of one word, not a chain of tables: every
+ * core points IA32_GS_BASE at its record and k_port_cpu_id() is a `movl
+ * %gs:0`. The register is loaded by port_x86_64_cpu_set_self() - the boot for
+ * the core 0, an application processor as its first action in C - and a build
+ * without KERNEL_SMP never touches it: there is one core and the answer is a
+ * constant. FS is the thread pointer of the library and is not involved.
  */
 #include "port_x86_64.h"
 
@@ -22,6 +31,7 @@
 #include "kernel/cpu.h"
 #include "kernel/log.h"
 #include "kernel/port/cpu.h"
+#include "port_x86_64_smp.h"
 
 #define ACPI_RSDP_SIGNATURE "RSD PTR "
 #define ACPI_MADT_SIGNATURE "APIC"
@@ -99,11 +109,38 @@ struct acpi_madt_local_x2apic {
     k_u32_t acpi_id;
 } __attribute__((packed));
 
+/* The enabled processors of the MADT, in the order the firmware lists them.
+ * The list is what the bring-up starts; a machine that describes more than
+ * the kernel has slots for keeps only the first KERNEL_CPUS_MAX, which is the
+ * same bound k_cpu_init() applies to the count. */
+#define ACPI_CPU_LIST_MAX KERNEL_CPUS_MAX
+
 static struct {
     k_u32_t available; /* the processors the firmware calls enabled */
-    k_u32_t started;   /* the processors this port has brought up */
     k_u32_t apic_base; /* the physical address of the local APIC */
 } g_cpus;
+
+/* One record per core, at the address IA32_GS_BASE of the core points at.
+ * The kernel number is the first word on purpose: k_port_cpu_id() is a load
+ * of offset zero and nothing else. */
+struct port_cpu_record {
+    k_u32_t id;
+    k_u32_t apic_id;
+};
+
+static struct port_cpu_record g_records[KERNEL_CPUS_MAX];
+
+/* The identifiers the walk of the MADT collected, and how many of them there
+ * are (the count may be larger than the array: a machine of more processors
+ * than the kernel has room for still says how many the firmware enabled). */
+static k_u32_t g_madt_ids[ACPI_CPU_LIST_MAX];
+static k_u32_t g_madt_count;
+
+#if KERNEL_SMP
+/* True once a core has pointed GS at its record. Before that - the first C of
+ * the boot, and a build without SMP - the answer of k_port_cpu_id() is 0. */
+static bool g_gs_ready;
+#endif
 
 static k_u8_t acpi_checksum(const void *table, k_u32_t length)
 {
@@ -236,6 +273,12 @@ static void madt_read(const struct acpi_rsdp *rsdp)
 
                 if ((cpu->flags & ACPI_CPU_ENABLED) != 0u) {
                     g_cpus.available++;
+
+                    if (g_madt_count < ACPI_CPU_LIST_MAX) {
+                        g_madt_ids[g_madt_count] = cpu->apic_id;
+                    }
+
+                    g_madt_count++;
                 }
             } else if (entry->type == ACPI_ENTRY_LOCAL_X2APIC &&
                        entry->length >= sizeof(struct acpi_madt_local_x2apic)) {
@@ -244,6 +287,12 @@ static void madt_read(const struct acpi_rsdp *rsdp)
 
                 if ((cpu->flags & ACPI_CPU_ENABLED) != 0u) {
                     g_cpus.available++;
+
+                    if (g_madt_count < ACPI_CPU_LIST_MAX) {
+                        g_madt_ids[g_madt_count] = cpu->apic_id;
+                    }
+
+                    g_madt_count++;
                 }
             }
 
@@ -252,12 +301,29 @@ static void madt_read(const struct acpi_rsdp *rsdp)
     }
 }
 
+/* The initial identifier of the processor that runs this code (CPUID leaf 1,
+ * EBX[31:24]). It is the number the MADT names for it, which is how the boot
+ * is told from the processors it starts. */
+static k_u32_t cpuid_apic_id(void)
+{
+    k_u32_t ebx;
+
+    __asm__ volatile("cpuid" : "=b"(ebx) : "a"(1u) : "ecx", "edx");
+
+    return ebx >> 24;
+}
+
 void port_x86_64_cpus_init(void)
 {
     const struct acpi_rsdp *rsdp;
+    k_u32_t bsp;
+    k_u32_t next;
+    k_u32_t i;
 
     memset(&g_cpus, 0, sizeof(g_cpus));
-    g_cpus.started = 1;
+    memset(g_records, 0, sizeof(g_records));
+    memset(g_madt_ids, 0, sizeof(g_madt_ids));
+    g_madt_count = 0;
 
     rsdp = rsdp_find();
 
@@ -273,27 +339,100 @@ void port_x86_64_cpus_init(void)
     if (g_cpus.available == 0u) {
         g_cpus.available = 1;
     }
+
+    /*
+     * Core 0 is the processor that runs this code, whatever its place in the
+     * MADT; the others follow in the order of the table, and the entry of the
+     * boot is skipped because it is already the core 0.
+     */
+    bsp = cpuid_apic_id();
+    g_records[0].id = 0;
+    g_records[0].apic_id = bsp;
+
+    next = 1;
+    for (i = 0; i < g_madt_count && i < ACPI_CPU_LIST_MAX && next < KERNEL_CPUS_MAX; i++) {
+        if (g_madt_ids[i] == bsp) {
+            continue;
+        }
+
+        g_records[next].id = next;
+        g_records[next].apic_id = g_madt_ids[i];
+        next++;
+    }
+
+#if KERNEL_SMP
+    /* The boot is the first core the kernel may ask which one it is. */
+    port_x86_64_cpu_set_self(0);
+#endif
+}
+
+/* --- the identity of a core --- */
+
+void port_x86_64_cpu_set_self(k_u32_t cpu)
+{
+#if KERNEL_SMP
+    if (cpu >= KERNEL_CPUS_MAX) {
+        /* A core the kernel has no slot for must not open a read of the
+         * array: it keeps the identity of the boot and is not counted. */
+        return;
+    }
+
+    port_wrmsr(0xC0000101u, (k_u64_t)(uintptr_t)&g_records[cpu]);
+
+    /* The flag is written after the register: a core that reads it sees the
+     * base it was given, never the zero of the reset. */
+    g_gs_ready = true;
+#else
+    K_UNUSED(cpu);
+#endif
+}
+
+k_u32_t port_x86_64_cpu_apic_id(k_u32_t cpu)
+{
+    if (cpu >= KERNEL_CPUS_MAX) {
+        return 0u;
+    }
+
+    return g_records[cpu].apic_id;
 }
 
 /* --- the contract of kernel/port/cpu.h --- */
 
+/*
+ * The cores the kernel may use: the ones that reached C and were accepted by
+ * the boot, not the ones the firmware lists. A machine whose second processor
+ * did not answer the start-up IPI answers one here, and the boot names the
+ * difference (ADR 0012).
+ */
 k_u32_t k_port_cpu_count(void)
 {
-    return g_cpus.started;
+    return port_x86_64_smp_checked_in();
 }
 
 k_u32_t k_port_cpu_id(void)
 {
+#if KERNEL_SMP
+    k_u32_t id;
+
     /*
-     * Only the processor of the boot runs the kernel: the APs are the work of
-     * the trampoline and the local APIC timer that ADR 0012 describes and
-     * this port does not have yet. A second core that runs must answer its
-     * own number here, from the local APIC id of the moment.
+     * Before the boot has pointed GS at its record there is one core and no
+     * table to read: the answer is the constant. A read of %gs:0 with a zero
+     * base would be a load from address zero.
      */
+    if (!g_gs_ready) {
+        return 0u;
+    }
+
+    __asm__ volatile("movl %%gs:0, %0" : "=r"(id));
+
+    return id;
+#else
+    /* One core: the flag is the promise, and there is no GS machinery. */
     return 0u;
+#endif
 }
 
-/* --- what the boot and the tests read --- */
+/* --- what the boot and the shell read --- */
 
 k_u32_t port_x86_64_cpu_available(void)
 {
@@ -302,7 +441,7 @@ k_u32_t port_x86_64_cpu_available(void)
 
 k_u32_t port_x86_64_cpu_started(void)
 {
-    return g_cpus.started;
+    return port_x86_64_smp_checked_in();
 }
 
 k_u32_t port_x86_64_apic_base(void)

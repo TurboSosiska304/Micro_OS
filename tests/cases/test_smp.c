@@ -331,12 +331,117 @@ static void test_smp_wakeup(void)
     port_host_set_sink(NULL);
 }
 
+/*
+ * The claim of a task for this core (ADR 0012): k_sched_claim_next() is the
+ * choice and the mark in one critical section, which is what the switch of
+ * x86-64 enters from. Called by the task of the suite, the pick finds the
+ * task itself - it is the current of its core and it is in the queue of that
+ * core, which is how this kernel keeps the running task - and the claim has
+ * to leave it RUNNING on the core that asked. No worker of the tests above is
+ * alive here, so the queue of the core holds the runner and nothing else that
+ * could be taken instead.
+ */
+static void test_smp_claim(void)
+{
+    struct task *self = task_self();
+    struct task *claimed;
+
+    ktest_begin("smp: a claim marks the task it takes as the running one of this core");
+
+    KT_CHECK(self != NULL);
+
+    claimed = k_sched_claim_next();
+    KT_CHECK(claimed != NULL);
+
+    if (claimed != NULL) {
+        /* The state and the core of the record are the two fields the switch
+         * of a port reads: the task has to be RUNNING and it has to be the
+         * task of this core. */
+        KT_CHECK_INT_EQ(task_state_of(claimed), TASK_STATE_RUNNING);
+        KT_CHECK_INT_EQ(k_sched_task_cpu(claimed), k_cpu_id());
+
+        if (claimed != self) {
+            /* Another task was taken for this core while the runner was
+             * running: the runner is the task of the core, so one more claim
+             * has to take it back and leave the record where the suite found
+             * it. */
+            claimed = k_sched_claim_next();
+            KT_CHECK(claimed == self);
+        }
+    }
+
+    KT_CHECK_INT_EQ(k_sched_validate(), 0);
+}
+
+/*
+ * The invariant of the current task (ADR 0012): a task is the current of at
+ * most one core, and the state that breaks it - one task named by two cores -
+ * is what k_sched_validate() has to refuse and name. The doubles claim of
+ * ADR 0012 is a claim made without the scheduler lock, so the two writes
+ * below are the failure itself, applied for the one call that has to see it.
+ *
+ * The suite is sequential and no worker of the tests above is alive at this
+ * point, so the two fields are the test's alone for the moment of the call;
+ * the scheduler lock is not taken around it because k_sched_validate() takes
+ * it itself and it is not recursive.
+ */
+static void test_smp_double_claim(void)
+{
+    struct k_cpu *core0 = k_cpu_by_id(0);
+    struct k_cpu *core1 = k_cpu_by_id(1);
+    struct task *saved0;
+    struct task *saved1;
+    FILE *sink;
+    char text[512];
+    size_t used;
+
+    ktest_begin("smp: the state of one task on two cores is refused and named");
+
+    sink = tmpfile();
+    KT_CHECK(sink != NULL);
+    if (sink == NULL || core0 == NULL || core1 == NULL) {
+        return;
+    }
+
+    port_host_set_sink(sink);
+
+    saved0 = core0->current;
+    saved1 = core1->current;
+
+    if (saved0 == NULL) {
+        /* The task of the suite is the current of its core; a NULL here would
+         * mean the suite runs outside a task, where there is no claim to
+         * double. Say so instead of passing quietly. */
+        printf("smp: core 0 has no current task, the double claim is not tested\n");
+        KT_CHECK(core0->current == NULL);
+    } else {
+        core1->current = saved0;
+
+        KT_CHECK(k_sched_validate() >= 1);
+
+        rewind(sink);
+        used = fread(text, 1, sizeof(text) - 1, sink);
+        text[used] = '\0';
+        KT_CHECK(strstr(text, "runs on the cores 0 and 1") != NULL);
+        KT_CHECK(strstr(text, saved0->name) != NULL);
+
+        core0->current = saved0;
+        core1->current = saved1;
+
+        KT_CHECK_INT_EQ(k_sched_validate(), 0);
+    }
+
+    port_host_set_sink(NULL);
+}
+
 void test_smp(void)
 {
     test_smp_cores();
     test_smp_spread();
     test_smp_migration();
     test_smp_wakeup();
+    test_smp_claim();
+    test_smp_double_claim();
 }
 
 #else

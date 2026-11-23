@@ -57,8 +57,21 @@ void k_sched_sleep_ms(k_u32_t ms);
 void k_sched_block(struct task *t);
 void k_sched_unblock(struct task *t);
 
-/* The highest priority task that is ready to run (NULL if there is none). */
+/* Look at the queues: the task this core would run next, not taken. This is
+ * the peek of the tests and the diagnostics; a port that switches must use
+ * k_sched_claim_next(), because a choice another core can repeat is two cores
+ * on one saved stack pointer. */
 struct task *k_sched_pick_next(void);
+
+/*
+ * Choose the task this core runs next and mark it as running here, under the
+ * scheduler lock. The task leaves the ready set of its queue and becomes
+ * RUNNING on the calling core in one critical section, so no other core can
+ * claim it between the choice and the switch. Returns the task that now runs
+ * here, or NULL when nothing is runnable (or the chosen task has no port
+ * context).
+ */
+struct task *k_sched_claim_next(void);
 
 /* Statistics. */
 k_size_t k_sched_ready_count(void);

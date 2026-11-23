@@ -35,6 +35,8 @@
 
 #include <string.h>
 
+#include "kernel/port/lock.h"
+
 #define PAGE_SIZE 4096u
 #define PAGE_SHIFT 12u
 #define TABLE_ENTRIES 512u
@@ -115,6 +117,22 @@ static k_u64_t g_kernel_pd_high[TABLE_ENTRIES] __attribute__((aligned(PAGE_SIZE)
 static k_u64_t g_kernel_image_pt[KERNEL_IMAGE_TABLES][TABLE_ENTRIES]
     __attribute__((aligned(PAGE_SIZE)));
 
+/*
+ * The first 2 MiB get a table of 4 KiB pages for one reason: the AP
+ * trampoline at 0x7000 (src/ap_trampoline.S) is code the second processor
+ * executes after it turns the paging on, and a 2 MiB page cannot be
+ * executable and hold the writable parameter block at 0x8000 at once. Page 7
+ * of the low map - 0x7000..0x7FFF - is therefore present and executable and
+ * read-only, the parameter page 8 is writable and NX like the rest of the
+ * data, and the boot's W^X audit still finds no page that is both writable
+ * and executable.
+ */
+static k_u64_t g_kernel_low_pt[TABLE_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
+
+/* The page of the AP trampoline; the page of its parameters (8) keeps the
+ * writable NX protection of the data it is. */
+#define AP_TRAMPOLINE_PAGE 7u
+
 extern char __text_start[];
 extern char __text_end[];
 extern char __rodata_start[];
@@ -161,11 +179,21 @@ static k_u8_t *pool_page(k_u8_t *page)
     return g_page_pool + (physical - pool_phys);
 }
 
+/*
+ * The pool of the page tables and the frames of the arena are one state of
+ * the machine, not one per core: two cores that fault at the same moment
+ * would take the same free page, and the two spaces would share the table or
+ * the data of each other. The sections are short, they never sleep, and they
+ * use the lock of the machine (the big kernel lock of the port), which is
+ * recursive and therefore safe from a fault that interrupted a section the
+ * same core already holds.
+ */
 static void *page_pool_alloc(void)
 {
-    k_u64_t flags = port_save_flags_and_cli();
     k_u32_t word;
     void *page = NULL;
+
+    k_port_enter_critical();
 
     for (word = 0; word < PAGE_POOL_WORDS && page == NULL; word++) {
         k_u32_t bit;
@@ -182,14 +210,18 @@ static void *page_pool_alloc(void)
 
                 g_page_bitmap[word] |= mask;
                 found = g_page_pool + ((k_size_t)word * 64u + bit) * PAGE_SIZE;
-                memset(found, 0, PAGE_SIZE);
                 page = found;
                 break;
             }
         }
     }
 
-    port_restore_flags(flags);
+    k_port_exit_critical();
+
+    if (page != NULL) {
+        memset(page, 0, PAGE_SIZE);
+    }
+
     return page;
 }
 
@@ -199,7 +231,6 @@ static void page_pool_free(void *page)
     k_size_t index;
     k_u32_t word;
     k_u32_t bit;
-    k_u64_t flags;
 
     if (base < g_page_pool || base >= g_page_pool + sizeof(g_page_pool)) {
         return;
@@ -209,9 +240,9 @@ static void page_pool_free(void *page)
     word = (k_u32_t)(index / 64u);
     bit = (k_u32_t)(index % 64u);
 
-    flags = port_save_flags_and_cli();
+    k_port_enter_critical();
     g_page_bitmap[word] &= ~((k_u64_t)1u << bit);
-    port_restore_flags(flags);
+    k_port_exit_critical();
 }
 
 /* --- the frames of the physical arena ------------------------------------- */
@@ -226,16 +257,22 @@ static void frame_ref(k_u64_t address)
     }
 
     index = (k_size_t)(address - PORT_X86_64_USER_PHYS) / PAGE_SIZE;
+
+    k_port_enter_critical();
+
     if (g_frame_ref[index] != 0xFFFFu) {
         g_frame_ref[index]++;
     }
+
+    k_port_exit_critical();
 }
 
 k_u64_t port_x86_64_frame_alloc(void)
 {
-    k_u64_t flags = port_save_flags_and_cli();
     k_size_t index;
     k_u64_t address = 0;
+
+    k_port_enter_critical();
 
     for (index = 0; index < USER_FRAME_COUNT; index++) {
         if (g_frame_ref[index] == 0) {
@@ -245,7 +282,7 @@ k_u64_t port_x86_64_frame_alloc(void)
         }
     }
 
-    port_restore_flags(flags);
+    k_port_exit_critical();
 
     if (address != 0) {
         /* A new page of a program reads as zeros, not as the stack of the
@@ -259,7 +296,6 @@ k_u64_t port_x86_64_frame_alloc(void)
 void port_x86_64_frame_release(k_u64_t address)
 {
     k_size_t index;
-    k_u64_t flags;
 
     if (address < PORT_X86_64_USER_PHYS ||
         address >= PORT_X86_64_USER_PHYS + USER_FRAME_COUNT * PAGE_SIZE) {
@@ -268,11 +304,13 @@ void port_x86_64_frame_release(k_u64_t address)
 
     index = (k_size_t)(address - PORT_X86_64_USER_PHYS) / PAGE_SIZE;
 
-    flags = port_save_flags_and_cli();
+    k_port_enter_critical();
+
     if (g_frame_ref[index] != 0) {
         g_frame_ref[index]--;
     }
-    port_restore_flags(flags);
+
+    k_port_exit_critical();
 }
 
 /* --- the tables of one address space -------------------------------------- */
@@ -456,7 +494,6 @@ static void kernel_image_map(void)
 void port_x86_64_paging_init(void)
 {
     k_u32_t index;
-    k_u64_t cr0;
 
     /*
      * The identity map of the first gigabyte. The heap and the physical arena
@@ -475,6 +512,26 @@ void port_x86_64_paging_init(void)
         g_kernel_pd_high[index] = 0;
     }
 
+    /*
+     * The first 2 MiB are split into 4 KiB pages so that the trampoline of
+     * the application processors is executable and the page the BSP writes the
+     * parameters to is not. Every other page of the chunk keeps the protection
+     * of the large page it replaced: writable, supervisor and NX.
+     */
+    for (index = 0; index < TABLE_ENTRIES; index++) {
+        k_u64_t flags = PTE_PRESENT | PTE_WRITABLE | PTE_NX;
+
+        if (index == AP_TRAMPOLINE_PAGE) {
+            /* Code the AP runs after paging is on: readable, executable and
+             * never writable, so W^X holds for the kernel's own map too. */
+            flags = PTE_PRESENT;
+        }
+
+        g_kernel_low_pt[index] = ((k_u64_t)index << PAGE_SHIFT) | flags;
+    }
+
+    g_kernel_pd_low[0] = page_phys(g_kernel_low_pt) | PTE_PRESENT | PTE_WRITABLE;
+
     kernel_image_map();
 
     g_kernel_pdpt_low[0] = page_phys(g_kernel_pd_low) | PTE_PRESENT | PTE_WRITABLE;
@@ -491,13 +548,32 @@ void port_x86_64_paging_init(void)
     write_cr3(page_phys(g_kernel_pml4));
 
     /*
-     * The kernel has to honour the write bit of its own tables. A system
-     * call writes the memory of the program (the status of waitpid, the
-     * buffer of a read), and a page that a fork made read-only has to fault
-     * in ring 0 as well, or the kernel would write into the frame the child
-     * is still reading. With WP set the page fault handler sees the write
-     * and copies the page, exactly as it does for a write of the program.
+     * The kernel has to honour the write bit of its own tables; CR0 is a
+     * register of the core, so every core makes that promise for itself
+     * (port_x86_64_paging_init_cpu(), below).
      */
+    port_x86_64_paging_init_cpu();
+}
+
+/*
+ * The part of the map that is a register of one core: CR0.WP. A system call
+ * writes the memory of the program (the status of waitpid, the buffer of a
+ * read), and a page that a fork made read-only has to fault in ring 0 as
+ * well, or the kernel would write into the frame the child is still reading.
+ * With WP set the page fault handler sees the write and copies the page,
+ * exactly as it does for a write of the program.
+ *
+ * The boot calls this for itself through port_x86_64_paging_init(); an
+ * application processor calls it on its way up. A core that skipped it would
+ * run every kernel copy-to-user without the check, and a program's text page
+ * would take the write of a read() instead of going down with the fault that
+ * follows it (the third fault of programs/nx.c, measured as an answer that
+ * depended on the core).
+ */
+void port_x86_64_paging_init_cpu(void)
+{
+    k_u64_t cr0;
+
     __asm__ volatile("movq %%cr0, %0" : "=r"(cr0));
     cr0 |= (k_u64_t)1u << 16; /* CR0.WP */
     __asm__ volatile("movq %0, %%cr0" : : "r"(cr0) : "memory");
