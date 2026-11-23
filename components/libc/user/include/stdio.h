@@ -1,14 +1,16 @@
 /*
  * Micro OS — the streams and the formatter of a program.
  *
- * A stream is a descriptor and a little state, not a buffer of the host: the
- * library of a program has no read-ahead and no lock, and every call reaches
- * the kernel through the door. `printf` and `puts` are the console (descriptor
- * 1); `fopen` and the `f*` functions are the files of the VFS.
+ * A stream is a descriptor and a little state; between the caller and the
+ * descriptor there is a block of the arena of the program, and `setvbuf`
+ * decides its size and its mode. The block is what makes a line reader one
+ * call of the kernel per block and not one per byte. `printf` and `puts` are
+ * the console (descriptor 1); `fopen` and the `f*` functions are the files
+ * of the VFS.
  *
  * The formatter is the one of `printf`: a conversion this header does not
  * name is not in it, and the sentence a program prints is the sentence of the
- * system. `fprintf` and `vfprintf` format into a block of the arena and write
+ * system. `fprintf` and `vfprintf` format into a block of the stream and give
  * it to the stream, so a line of any length leaves in one piece.
  */
 #ifndef MICRO_OS_LIBC_USER_STDIO_H
@@ -27,22 +29,21 @@ typedef long long off64_t;
 #define EOF (-1)
 #endif
 
+/*
+ * The size of the buffer a source of the C library asks for on its stack.
+ * The block of a stream is a setting of its own (`setvbuf`, 4 KiB by
+ * default); this number is the one a portable source writes into `char
+ * buff[BUFSIZ]`, and a stack of a program is 64 KiB, so it stays small.
+ */
 #ifndef BUFSIZ
 #define BUFSIZ 512
 #endif
 
 /*
- * The size of the buffer a source of the C library asks for. There is no
- * buffer behind a stream of this system (every call reaches the kernel), but
- * a portable source writes `char buff[BUFSIZ]` on its stack and the number
- * has to be a sane one: 8 KiB is the block a file is read in.
+ * The modes of `setvbuf`: the block is given to the kernel when it is full
+ * (`_IOFBF`), when a newline is in it (`_IOLBF`), or never - every call of
+ * the library reaches the descriptor (`_IONBF`).
  */
-#ifndef BUFSIZ
-#define BUFSIZ 8192
-#endif
-
-/* The modes of `setvbuf`. A stream of this system has no buffer, so the three
- * are accepted and none of them changes anything. */
 #ifndef _IOFBF
 #define _IOFBF 0
 #endif

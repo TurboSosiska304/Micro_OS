@@ -29,6 +29,13 @@
 /* The program itself, in the file of the program and not in the library. */
 int main(int argc, char *const argv[], char *const envp[]);
 
+/* The streams of the library (`src/file.c`), when the program carries them:
+ * a `main` that returns with a line in the block of a stream still says it,
+ * because the end of the program flushes what `exit` would flush. The weak
+ * definition in `src/stdio.c` is the empty answer of a program without a
+ * stream, and a program of the board carries none. */
+void __ulibc_stream_flush_all(void);
+
 /*
  * The environment of the program, kept for `getenv` of the library. `_start`
  * is the only place that sees the third argument, and a source that asks for
@@ -59,10 +66,14 @@ void *g_mox_door;
 
 void _start(void *door, long argc, char *const argv[], char *const envp[])
 {
+    int code;
+
     g_mox_door = door;
     start_set_environment(envp);
 
-    exit(main((int)argc, argv, envp));
+    code = main((int)argc, argv, envp);
+    __ulibc_stream_flush_all();
+    exit(code);
 
     for (;;) {
     }
@@ -70,9 +81,13 @@ void _start(void *door, long argc, char *const argv[], char *const envp[])
 #else
 void _start(long argc, char *const argv[], char *const envp[])
 {
+    int code;
+
     start_set_environment(envp);
 
-    exit(main((int)argc, argv, envp));
+    code = main((int)argc, argv, envp);
+    __ulibc_stream_flush_all();
+    exit(code);
 
     for (;;) {
     }
