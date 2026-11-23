@@ -408,7 +408,14 @@ void kmain(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys)
      * see. A device that did not answer is the set 1 of every machine of the
      * port, and the line says that too.
      */
-    if (port_x86_64_ps2_device_set() == 0u) {
+    if (port_x86_64_ps2_set_ordered()) {
+        /*
+         * The device was told to speak the set 1 and it answered: the wire is
+         * the set 1 whatever the controller claims, which is the one case a
+         * laptop has needed.
+         */
+        kinfo("ps2: the keyboard was told to speak set 1, and it does");
+    } else if (port_x86_64_ps2_device_set() == 0u) {
         kinfo("ps2: the keyboard did not say which scancode set it speaks, set %u is assumed",
               (unsigned)port_x86_64_ps2_set());
     } else if (port_x86_64_ps2_device_set() == port_x86_64_ps2_set()) {

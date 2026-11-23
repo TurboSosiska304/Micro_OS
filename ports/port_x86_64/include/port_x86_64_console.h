@@ -189,6 +189,10 @@ void port_x86_64_ps2_init(void);
 k_u8_t port_x86_64_ps2_set(void);
 k_u8_t port_x86_64_ps2_device_set(void);
 
+/* True when the port ordered the device into the set 1 and the device
+ * answered: the wire is the set 1 by construction, not by a guess. */
+bool port_x86_64_ps2_set_ordered(void);
+
 /* The body of IRQ1: one byte of the keyboard, then the EOI. Called from
  * interrupts.S with the interrupts off. */
 void port_x86_64_irq_keyboard(k_u64_t *frame);

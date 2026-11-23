@@ -169,11 +169,18 @@ static bool g_caps;
  */
 static struct k_input_decoder g_decoder = {.set = K_INPUT_SCANCODE_SET1};
 static k_u8_t g_set = K_INPUT_SCANCODE_SET1;
+/* True when the port told the device to speak the set 1 and it answered. */
+static bool g_set_ordered;
 static k_u8_t g_device_set;
 
 k_u8_t port_x86_64_ps2_set(void)
 {
     return g_set;
+}
+
+bool port_x86_64_ps2_set_ordered(void)
+{
+    return g_set_ordered;
 }
 
 k_u8_t port_x86_64_ps2_device_set(void)
@@ -474,6 +481,31 @@ static void key_handle(k_u8_t byte)
     struct k_input_code code;
     k_u16_t key;
     char character;
+
+    /*
+     * The claim of a controller about the set of its bytes is not always true:
+     * a firmware of a laptop keeps the bit of the translation set and delivers
+     * the set 2 of the device all the same, and a keyboard read in the wrong
+     * set is a line of control characters and no letter on the screen. The two
+     * streams cannot be confused for long: a release of a key is the make code
+     * with the bit 7 set in the set 1, and the prefix 0xF0 in the set 2, and a
+     * byte of the other set is impossible in each. The first such byte turns
+     * the decoder over, once, with a line in the log.
+     */
+    if (g_decoder.set == K_INPUT_SCANCODE_SET1 && (byte == 0xF0u || byte == 0xF1u)) {
+        g_set = K_INPUT_SCANCODE_SET2;
+        k_input_decoder_init(&g_decoder, g_set);
+        kinfo("ps2: the bytes are the set 2 after all, the decoder follows them");
+        return;
+    }
+
+    if (g_decoder.set == K_INPUT_SCANCODE_SET2 && (byte & 0x80u) != 0u && byte != 0xF0u &&
+        byte != 0xE0u && byte != 0xE1u && byte != 0xFAu && byte != 0xFEu) {
+        g_set = K_INPUT_SCANCODE_SET1;
+        k_input_decoder_init(&g_decoder, g_set);
+        kinfo("ps2: the bytes are the set 1 after all, the decoder follows them");
+        return;
+    }
 
     if (!k_input_decoder_feed(&g_decoder, byte, &code)) {
         return; /* a prefix, a byte of the Pause, or an address of no key */
@@ -844,6 +876,24 @@ static void ps2_detect(void)
 
     g_device_set = device;
     g_set = (config & PS2_CONFIG_TRANSLATE) != 0u ? K_INPUT_SCANCODE_SET1 : stream;
+
+    /*
+     * With the translation off the wire carries the set of the device, and a
+     * keyboard of the set 2 is asked to move to the set 1: one set is simpler
+     * than two, and the order is a fact where a claim of a controller is not.
+     * With the translation on the order cannot be given - the controller
+     * expects the set 2 of the device and would translate a set 1 into
+     * nonsense - so the wire stays what the controller makes of it, and the
+     * decoder corrects itself on the first key that cannot be of its set (see
+     * key_handle).
+     */
+    if ((config & PS2_CONFIG_TRANSLATE) == 0u && device == K_INPUT_SCANCODE_SET2) {
+        if (ps2_kbd_command(PS2_KBD_CMD, 0x01u)) {
+            g_device_set = K_INPUT_SCANCODE_SET1;
+            g_set = K_INPUT_SCANCODE_SET1;
+            g_set_ordered = true;
+        }
+    }
 }
 
 void port_x86_64_ps2_init(void)
