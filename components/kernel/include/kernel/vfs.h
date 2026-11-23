@@ -38,6 +38,14 @@
  * one small byte and every one of them fits there.
  */
 #define VFS_O_DIRECTORY 0x0800
+/*
+ * The exclusive create: with VFS_O_CREAT the open fails with KERR_EXIST when
+ * the name is already there instead of opening the object. A caller that
+ * writes a file beside the old one and installs it with a rename asks for
+ * this, because a name of somebody else must not be overwritten by a
+ * half-written copy.
+ */
+#define VFS_O_EXCL 0x1000
 
 /* One entry of a directory. */
 struct vfs_dirent {
@@ -140,6 +148,15 @@ struct vfs_operations {
     int (*statx)(void *ctx, const char *path, struct vfs_statx *out);
     int (*mkdir)(void *ctx, const char *path);
     int (*unlink)(void *ctx, const char *path);
+    /*
+     * Remove an empty directory. It is a call of its own and not the unlink
+     * of a directory, because POSIX separates the two: unlink of a directory
+     * answers KERR_ISDIR and rmdir of a file answers KERR_NOTDIR, so a
+     * program that meant one cannot silently do the other. A directory that
+     * still holds an entry is KERR_NOTEMPTY. A filesystem that has no
+     * directories leaves the field empty.
+     */
+    int (*rmdir)(void *ctx, const char *path);
     /*
      * Rename an object of the volume (ADR 0024 §5). The atomic install is
      * the reason it exists: the bytes of a program are written beside it,
@@ -356,6 +373,16 @@ int vfs_mkdir(const char *path);
  */
 int vfs_mkdir_p(const char *path);
 int vfs_unlink(const char *path);
+
+/*
+ * Remove an empty directory. The object has to be a directory (KERR_NOTDIR
+ * for a file) and it has to be empty (KERR_NOTEMPTY). The parent is walked
+ * like the parent of unlink, so a directory that the caller cannot search is
+ * not removed. A filesystem that cannot remove a directory answers
+ * KERR_NOTSUP; the virtual filesystems leave the name of the operation empty
+ * for that reason.
+ */
+int vfs_rmdir(const char *path);
 
 /*
  * Rename an object inside one filesystem: the name `from` becomes `to`. An

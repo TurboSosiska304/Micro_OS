@@ -32,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format sdk idf-check idf-build idf-flash idf-monitor idf-size bundle bundle-board bundle-x86 x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-root-smoke x86-volume-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak x86-smp-smoke soak-smp
+.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format sdk idf-check idf-build idf-flash idf-monitor idf-size bundle bundle-board bundle-x86 x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-root-smoke x86-volume-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-fs-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak x86-smp-smoke soak-smp
 
 help:
 	@echo "Micro OS — available targets:"
@@ -69,6 +69,7 @@ help:
 	@echo "  make x86-run-disk   boot the window with an 8 MB disk on the IDE channel"
 	@echo "  make x86-run-disk-serial  the same disk in a terminal (-nographic)"
 	@echo "  make x86-disk-smoke two boots on one disk image, a file survives both"
+	@echo "  make x86-fs-smoke  rename, rmdir, fsck ext2 and the SQLite journal"
 	@echo "  make x86-net-smoke   the network: ping, UDP and HTTP on QEMU user-net"
 	@echo "  make x86-iso    the bootable ISO: loader, kernel and root.img (K13)"
 	@echo "  make x86-iso-run    boot that ISO in a terminal (-nographic)"
@@ -428,6 +429,13 @@ x86-run-disk-serial: x86-build $(X86_DISK_IMAGE)
 
 x86-disk-smoke: x86-disk
 	python3 tools/x86_disk_smoke.py --image $(X86_BUILD)/disk-smoke.img
+
+# The filesystem of 1.4: rename and rmdir through the programs of /bin,
+# `fsck ext2 -y` on a broken image (and e2fsck of the host after it), and the
+# journal of SQLite rolled back after a reset of the machine.
+x86-fs-smoke: x86-disk
+	python3 tools/x86_fs_smoke.py --image $(X86_PROGRAMS_IMAGE) \
+		--ext2-image $(X86_PROGRAMS_EXT2_IMAGE)
 
 # The network of the port (K6): a build of its own, with the HTTP client, the
 # page of the state and the clock of NTP of components/net

@@ -1060,10 +1060,11 @@ static void test_write_create_read(void)
     KT_CHECK_INT_EQ(stat.size, 6);
     KT_CHECK_INT_EQ(stat.mode, 0644);
 
-    /* A rename is a call this filesystem does not have: the VFS answers
-     * with the word of an operation a volume does not offer. */
-    KT_CHECK_INT_EQ(vfs_rename(TEST_ROOT_POINT "/big.txt", TEST_ROOT_POINT "/renamed.txt"),
-                    KERR_NOTSUP);
+    /* A rename moves the name and not the bytes (ADR 0024 §5). */
+    KT_CHECK_INT_EQ(vfs_rename(TEST_ROOT_POINT "/big.txt", TEST_ROOT_POINT "/renamed.txt"), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/big.txt", &stat), KERR_NOENT);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/renamed.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, size + 4);
 
     /* A second name of the same parent is a new file, and a name that is
      * there is not made again. */
@@ -1076,7 +1077,7 @@ static void test_write_create_read(void)
     KT_CHECK(image_store_file(image));
 
     check_e2fsck(image);
-    check_debugfs(image, "stat /big.txt", "Size: 20004");
+    check_debugfs(image, "stat /renamed.txt", "Size: 20004");
     check_debugfs(image, "stat /dir/sub/note.txt", "Size: 6");
     check_debugfs(image, "ls -l /dir/sub", "note.txt");
 
@@ -1090,12 +1091,12 @@ static void test_write_create_read(void)
 
         KT_CHECK_INT_EQ(ext2_check(TEST_ROOT_POINT, &report), 0);
         KT_CHECK_INT_EQ(report.errors, 0);
-        KT_CHECK_INT_EQ(report.files, 2);       /* big.txt and note.txt */
+        KT_CHECK_INT_EQ(report.files, 2);       /* renamed.txt and note.txt */
         KT_CHECK_INT_EQ(report.directories, 4); /* root, lost+found, dir and sub */
     }
 
     memset(readback, 0, size + 4u);
-    KT_CHECK_INT_EQ(read_file(TEST_ROOT_POINT "/big.txt", readback, size + 4), (int)size + 4);
+    KT_CHECK_INT_EQ(read_file(TEST_ROOT_POINT "/renamed.txt", readback, size + 4), (int)size + 4);
     KT_CHECK(memcmp(readback, pattern, size + 4) == 0);
     KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
 
@@ -1115,6 +1116,105 @@ static void test_write_create_read(void)
  * and after the cut, so the tables the kernel made and the tables it gave
  * back are the tables of the format.
  */
+/*
+ * The property: a name moves with one call, a directory moves inside its
+ * parent and not across another, a name at the destination that is a file is
+ * replaced, and the two removals of POSIX are two calls. e2fsck reads the
+ * image after the calls: the tree and the counters are the ones it expects.
+ */
+static void test_rename_and_rmdir(void)
+{
+    struct vfs_file file;
+    struct vfs_stat stat;
+    char image[256];
+    char dir[256];
+    char buffer[32];
+
+    ktest_begin("ext2: rename and rmdir move and remove the names of the volume");
+
+    setup();
+
+    if (!host_tools_ready()) {
+        printf("  (skipped: mke2fs, e2fsck and debugfs of e2fsprogs are not installed)\n");
+        teardown();
+        return;
+    }
+
+    if (!host_mkfs(dir, image, sizeof(image), HOST_IMAGE_BLOCKS, HOST_BLOCK_SIZE, 1024u, 512u)) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(mount_host_image(image), 0);
+
+    KT_CHECK_INT_EQ(vfs_mkdir(TEST_ROOT_POINT "/a"), 0);
+    KT_CHECK_INT_EQ(vfs_mkdir(TEST_ROOT_POINT "/b"), 0);
+    KT_CHECK_INT_EQ(vfs_mkdir(TEST_ROOT_POINT "/a/sub"), 0);
+    KT_CHECK_INT_EQ(
+        vfs_open(TEST_ROOT_POINT "/a/f.txt", VFS_O_WRONLY | VFS_O_CREAT, &file, g_file_data), 0);
+    KT_CHECK_INT_EQ(vfs_write(&file, "ext2", 4), 4);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    /* A file moves to another directory, and its bytes go with the name. */
+    KT_CHECK_INT_EQ(vfs_rename(TEST_ROOT_POINT "/a/f.txt", TEST_ROOT_POINT "/b/g.txt"), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/a/f.txt", &stat), KERR_NOENT);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/b/g.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, 4);
+    KT_CHECK_INT_EQ(vfs_open(TEST_ROOT_POINT "/b/g.txt", VFS_O_RDONLY, &file, g_file_data), 0);
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(vfs_read(&file, buffer, sizeof(buffer)), 4);
+    KT_CHECK_STR_EQ(buffer, "ext2");
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    /* A directory moves inside its parent and not to another one. */
+    KT_CHECK_INT_EQ(vfs_rename(TEST_ROOT_POINT "/a/sub", TEST_ROOT_POINT "/a/sub2"), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/a/sub2", &stat), 0);
+    KT_CHECK_INT_EQ(stat.type, 2);
+    KT_CHECK_INT_EQ(vfs_rename(TEST_ROOT_POINT "/a/sub2", TEST_ROOT_POINT "/b/sub2"), KERR_NOTSUP);
+
+    /* A file at the destination is replaced; a directory is refused. */
+    KT_CHECK_INT_EQ(
+        vfs_open(TEST_ROOT_POINT "/b/old.txt", VFS_O_WRONLY | VFS_O_CREAT, &file, g_file_data), 0);
+    KT_CHECK_INT_EQ(vfs_write(&file, "old", 3), 3);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    KT_CHECK_INT_EQ(vfs_rename(TEST_ROOT_POINT "/b/g.txt", TEST_ROOT_POINT "/b/old.txt"), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/b/g.txt", &stat), KERR_NOENT);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/b/old.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, 4);
+    KT_CHECK_INT_EQ(vfs_rename(TEST_ROOT_POINT "/b/old.txt", TEST_ROOT_POINT "/a"), KERR_ISDIR);
+
+    /* The two removals of POSIX: unlink is not the call of a directory, and
+     * rmdir is not the call of a file. */
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/a"), KERR_ISDIR);
+    KT_CHECK_INT_EQ(vfs_rmdir(TEST_ROOT_POINT "/b/old.txt"), KERR_NOTDIR);
+    KT_CHECK_INT_EQ(vfs_rmdir(TEST_ROOT_POINT "/a"), KERR_NOTEMPTY);
+    KT_CHECK_INT_EQ(vfs_mkdir(TEST_ROOT_POINT "/a/empty"), 0);
+    KT_CHECK_INT_EQ(vfs_rmdir(TEST_ROOT_POINT "/a/empty"), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/a/empty", &stat), KERR_NOENT);
+    KT_CHECK_INT_EQ(vfs_rmdir(TEST_ROOT_POINT "/b/sub2"), KERR_NOENT);
+
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+    KT_CHECK(image_store_file(image));
+
+    check_e2fsck(image);
+    check_debugfs(image, "stat /b/old.txt", "Size: 4");
+    check_debugfs(image, "ls /a", "sub2");
+
+    /* The names are on the medium and not only in the memory of the writer. */
+    KT_CHECK_INT_EQ(mount_host_image(image), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/b/old.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, 4);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/a/sub2", &stat), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/a/empty", &stat), KERR_NOENT);
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+
+    (void)unlink(image);
+    (void)rmdir(dir);
+
+    teardown();
+}
+
 static void test_indirect_write(void)
 {
     struct vfs_file file;
@@ -2194,6 +2294,188 @@ static void test_check(void)
     teardown();
 }
 
+/*
+ * The property: the repair of the machine puts right what the medium itself
+ * proves - the counters, the bitmaps, the link counts and a record that no
+ * name reaches - and e2fsck of the host accepts the result. The orphan is the
+ * one debugfs leaves when it takes a name away and keeps the record, which is
+ * the shape a power cut leaves too.
+ */
+static void test_repair(void)
+{
+    struct ext2_check_report report;
+    struct vfs_file file;
+    struct vfs_stat stat;
+    char image[256];
+    char dir[256];
+    char hostfile[320];
+    char command[768];
+    FILE *host;
+
+    ktest_begin("ext2: the repair puts the counters, the bitmaps and an orphan right");
+
+    setup();
+
+    if (!host_tools_ready()) {
+        printf("  (skipped: mke2fs, e2fsck and debugfs of e2fsprogs are not installed)\n");
+        teardown();
+        return;
+    }
+
+    if (!host_mkfs(dir, image, sizeof(image), HOST_IMAGE_BLOCKS, HOST_BLOCK_SIZE, 1024u, 512u)) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(mount_host_image(image), 0);
+    KT_CHECK_INT_EQ(vfs_mkdir(TEST_ROOT_POINT "/dir"), 0);
+    KT_CHECK_INT_EQ(
+        vfs_open(TEST_ROOT_POINT "/keep.txt", VFS_O_WRONLY | VFS_O_CREAT, &file, g_file_data), 0);
+    KT_CHECK_INT_EQ(vfs_write(&file, "keep", 4), 4);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+    KT_CHECK(image_store_file(image));
+
+    /* The damage: a name is taken away and its record stays, the bit of the
+     * superblock is cleared from the block bitmap, the free counters lie and
+     * the link count of a file names more names than there are. */
+    (void)snprintf(hostfile, sizeof(hostfile), "%s/orphan.txt", dir);
+    host = fopen(hostfile, "wb");
+    KT_CHECK(host != NULL);
+    if (host != NULL) {
+        KT_CHECK(fwrite("orphan\n", 1, 7, host) == 7);
+        (void)fclose(host);
+    }
+
+    (void)snprintf(command, sizeof(command),
+                   "debugfs -w -R 'write %s /orphan' '%s' >/dev/null 2>&1; "
+                   "debugfs -w -R 'unlink /orphan' '%s' >/dev/null 2>&1; "
+                   "debugfs -w -R 'freeb 1' '%s' >/dev/null 2>&1; "
+                   "debugfs -w -R 'ssv free_blocks_count 7' '%s' >/dev/null 2>&1; "
+                   "debugfs -w -R 'sif /keep.txt links_count 5' '%s' >/dev/null 2>&1",
+                   hostfile, image, image, image, image, image);
+    KT_CHECK_INT_EQ(host_command(command), 0);
+
+    KT_CHECK_INT_EQ(mount_host_image(image), 0);
+    KT_CHECK_INT_EQ(ext2_check(TEST_ROOT_POINT, &report), 0);
+    KT_CHECK(report.errors > 0);
+    KT_CHECK(report.first[0] != '\0');
+
+    KT_CHECK_INT_EQ(ext2_repair(TEST_ROOT_POINT, &report), 0);
+    KT_CHECK_INT_EQ(report.errors, 0);
+    KT_CHECK(report.fixed > 0);
+    KT_CHECK_STR_EQ(report.first, "");
+
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/keep.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, 4);
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+    KT_CHECK(image_store_file(image));
+
+    check_e2fsck(image);
+    check_debugfs(image, "stat /keep.txt", "Links: 1");
+    check_debugfs(image, "stat /keep.txt", "Size: 4");
+    check_debugfs(image, "ls /lost+found", "#");
+
+    /* The bytes of the file and the name of the orphan are on the medium. */
+    KT_CHECK_INT_EQ(mount_host_image(image), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/keep.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, 4);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/dir", &stat), 0);
+    KT_CHECK_INT_EQ(stat.type, 2);
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+
+    (void)unlink(hostfile);
+    (void)unlink(image);
+    (void)rmdir(dir);
+
+    teardown();
+}
+
+/*
+ * The command of the shell: `fsck ext2 <point>` reads the mounted volume and
+ * `-y` repairs it. A machine whose root is ext2 checks itself instead of
+ * handing its medium to e2fsck of another machine.
+ */
+#if defined(MICRO_OS_FS_EXT2) && MICRO_OS_FS_EXT2
+static void test_check_command(void)
+{
+    char buf[1024];
+    char image[256];
+    char dir[256];
+    char command[512];
+    size_t used;
+    FILE *sink;
+
+    ktest_begin("ext2: fsck ext2 checks and repairs the mounted volume");
+
+    setup();
+
+    if (!host_tools_ready()) {
+        printf("  (skipped: mke2fs, e2fsck and debugfs of e2fsprogs are not installed)\n");
+        teardown();
+        return;
+    }
+
+    if (!host_mkfs(dir, image, sizeof(image), HOST_IMAGE_BLOCKS, HOST_BLOCK_SIZE, 1024u, 512u)) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(mount_host_image(image), 0);
+    KT_CHECK_INT_EQ(kshell_init(), KSHELL_OK);
+
+    sink = tmpfile();
+    KT_CHECK(sink != NULL);
+    if (sink == NULL) {
+        teardown();
+        return;
+    }
+
+    port_host_set_sink(sink);
+    KT_CHECK_INT_EQ(kshell_execute("fsck ext2 " TEST_ROOT_POINT), KSHELL_OK);
+
+    rewind(sink);
+    used = fread(buf, 1, sizeof(buf) - 1, sink);
+    buf[used] = '\0';
+    KT_CHECK(strstr(buf, "ext2") != NULL);
+    KT_CHECK(strstr(buf, "the volume is consistent") != NULL);
+
+    /* A point of another filesystem is not the volume of this reader, and
+     * the words that do not name one volume are the usage line. */
+    KT_CHECK_INT_EQ(kshell_execute("fsck ext2 /"), KSHELL_ERROR);
+    KT_CHECK_INT_EQ(kshell_execute("fsck ext2"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(kshell_execute("fsck ext2 a b"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(kshell_execute("fsck -y ext2"), KSHELL_USAGE);
+
+    /* A counter of the superblock that lies is a problem the command names,
+     * and -y puts it right and proves the volume again. */
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+    KT_CHECK(image_store_file(image));
+    (void)snprintf(command, sizeof(command),
+                   "debugfs -w -R 'ssv free_blocks_count 7' '%s' >/dev/null 2>&1", image);
+    KT_CHECK_INT_EQ(host_command(command), 0);
+    KT_CHECK_INT_EQ(mount_host_image(image), 0);
+
+    KT_CHECK_INT_EQ(kshell_execute("fsck ext2 " TEST_ROOT_POINT), KSHELL_ERROR);
+    KT_CHECK_INT_EQ(kshell_execute("fsck -y ext2 " TEST_ROOT_POINT), KSHELL_OK);
+
+    rewind(sink);
+    used = fread(buf, 1, sizeof(buf) - 1, sink);
+    buf[used] = '\0';
+    KT_CHECK(strstr(buf, "repair(s) applied") != NULL);
+    KT_CHECK(strstr(buf, "0 problem(s) after the repair") != NULL);
+    KT_CHECK(strstr(buf, "the volume is consistent") != NULL);
+
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+    (void)unlink(image);
+    (void)rmdir(dir);
+
+    teardown();
+}
+#endif
+
 static void test_directory_past_the_direct_blocks(void)
 {
     struct vfs_file file;
@@ -2321,6 +2603,7 @@ void test_fs_ext2(void)
     test_shell_mount();
     test_remount();
     test_write_create_read();
+    test_rename_and_rmdir();
     test_indirect_write();
     test_counters_settle();
     test_many_files();
@@ -2331,6 +2614,10 @@ void test_fs_ext2(void)
     test_large_blocks();
     test_unlink_of_a_big_file();
     test_check();
+    test_repair();
+#if defined(MICRO_OS_FS_EXT2) && MICRO_OS_FS_EXT2
+    test_check_command();
+#endif
     test_directory_past_the_direct_blocks();
     test_root_mount();
 }

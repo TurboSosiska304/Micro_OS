@@ -357,6 +357,12 @@ static int vfs_remove(void *ctx, const char *path)
     return mfs_to_kerr(mfs_unlink(path));
 }
 
+static int vfs_remove_dir(void *ctx, const char *path)
+{
+    K_UNUSED(ctx);
+    return mfs_to_kerr(mfs_rmdir(path));
+}
+
 static int vfs_rename_object(void *ctx, const char *from, const char *to)
 {
     K_UNUSED(ctx);
@@ -408,6 +414,7 @@ static const struct vfs_operations g_mfs_operations = {
     .statx = vfs_statx_file,
     .mkdir = vfs_make_dir,
     .unlink = vfs_remove,
+    .rmdir = vfs_remove_dir,
     .rename = vfs_rename_object,
     .chmod = vfs_set_mode,
     .chown = vfs_set_owner,

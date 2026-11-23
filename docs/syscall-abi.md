@@ -124,11 +124,14 @@ chose.
 | 38 | `getgid` | - | the gid of the task |
 | 39 | `setuid` | `uid` | 0, or an error |
 | 40 | `setgid` | `gid` | 0, or an error |
+| 41 | `rmdir` | `path` | 0, or an error |
+| 42 | `fstat` | `fd, buf` | 0, or an error |
 
 The numbers 0 to 22 are frozen, 23 to 26 were the next free ones; pipes took
 27 and 28 (ADR 0014), signals the three after them (ADR 0015), the limits of
 a task 32 and 33, the atomic rename 34 (ADR 0024 §5), the cut of an open
-file 35 and the credentials of a task 36 to 40 (the second half of 1.4). A
+file 35 and the credentials of a task 36 to 40 (the second half of 1.4), and
+`rmdir` and `fstat` 41 and 42 (the filesystem of 1.5). A
 call that is not in the table is `ENOSYS`, never a guess at what it might
 have meant.
 
@@ -165,6 +168,7 @@ The flags of `open` are the same as the ones of the VFS:
 | `KSYS_O_TRUNC` | cut the file to zero |
 | `KSYS_O_APPEND` | write at the end |
 | `KSYS_O_DIRECTORY` | open a directory, for `readdir` |
+| `KSYS_O_EXCL` | with `KSYS_O_CREAT`, refuse a name that is already there |
 
 `KSYS_O_DIRECTORY` (`0x0800`) goes with `KSYS_O_RDONLY` and with no other
 flag: a directory of this system is read, never written. The number is not the

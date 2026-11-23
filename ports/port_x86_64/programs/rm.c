@@ -14,6 +14,8 @@
  */
 #include "ulibc.h"
 
+#include <unistd.h>
+
 #define RM_DEPTH 8
 #define RM_PATH_MAX 128
 
@@ -89,9 +91,11 @@ static int rm_path(const char *path, int recursive, int depth)
         }
     }
 
-    rc = unlink(path);
+    /* A file goes with unlink, a directory with rmdir: the two calls of
+     * POSIX, and the filesystem says KERR_ISDIR when the wrong one is used. */
+    rc = (info.type == 2) ? rmdir(path) : unlink(path);
     if (rc < 0) {
-        printf("rm: %s: error %d\n", path, -rc);
+        printf("rm: %s: error %d\n", path, rc);
         return 1;
     }
 

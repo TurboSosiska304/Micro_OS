@@ -123,9 +123,10 @@ with `O_CREAT`, `O_TRUNC` and `O_APPEND`, `write`, `close`, `unlink` and
 `mkdir`; `read`, `list`, `readdir` and `stat` are the reader it always was.
 `chmod` and `chown` are `KERR_NOTSUP`, and `write` on a descriptor that was
 opened for reading is `KERR_BADF`: the operation exists, this descriptor was
-not opened for it. `unlink` removes a file or an empty directory; a directory
-that still holds an entry is `KERR_NOTEMPTY` (the VFS has no `rmdir` of its
-own yet). `rename` is not in the operations of the VFS and is absent here.
+not opened for it. `unlink` removes a file, `rmdir` removes an empty
+directory, and a directory that still holds an entry is `KERR_NOTEMPTY`.
+`rename` moves a file to any directory of the volume and a directory inside
+its own parent (ADR 0024 §5).
 
 A write either fits whole or does not touch the file. The clusters of the new
 length are taken from the free map before the first byte goes down, and a

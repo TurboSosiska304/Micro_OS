@@ -408,6 +408,13 @@ int mfs_truncate(struct mfs_file *file, k_u64_t size);
 int mfs_close(struct mfs_file *file);
 int mfs_unlink(const char *path);
 /*
+ * Remove an empty directory. A file is MFS_ENOTDIR and a directory that
+ * still holds an entry is MFS_ENOTEMPTY; unlink of a directory is
+ * MFS_EISDIR, because the two names of POSIX are two different calls and a
+ * program that meant one must not silently do the other.
+ */
+int mfs_rmdir(const char *path);
+/*
  * Rename an object of the volume (ADR 0024 §5). A file moves to any
  * directory of the volume; a directory only keeps its name in its own
  * parent, because moving the tree below it is a walk this format does not

@@ -8,10 +8,11 @@
  * time: `lstat` is the same call as `stat`, the access time is the moment of
  * the last change (a read does not change a record), and the device is zero.
  *
- * `fstat` has no call of its own in the ABI: the descriptor knows its position
- * and not its name. The function asks the position of the file for its size
- * and names a stream a regular file; a descriptor that cannot seek is a pipe,
- * which is the fact `tail -f` checks before it sleeps on it.
+ * `fstat` asks the kernel about the name the descriptor was opened with: the
+ * descriptor keeps that text, and the answer is the same statx of the object
+ * - the mode, the owner, the size and the two moments. A descriptor of a pipe
+ * has no name, and the call answers ESPIPE; the library describes it as a
+ * stream, which is the fact `tail -f` checks before it sleeps on it.
  */
 #include <errno.h>
 #include <sys/stat.h>
@@ -83,43 +84,37 @@ int lstat(const char *path, struct stat *out)
 
 int fstat(int fd, struct stat *out)
 {
-    long size;
+    struct vfs_statx info;
+    long rc;
 
     if (out == NULL || fd < 0) {
         errno = EINVAL;
         return -1;
     }
 
-    memset(out, 0, sizeof(*out));
-    out->st_nlink = 1;
-    out->st_blksize = 512;
-
-    /* The size is the position of the end; a pipe has none and answers
-     * ESPIPE. */
-    size = __ulibc_syscall6(KSYS_LSEEK, fd, 0, KSYS_SEEK_END, 0, 0, 0);
-    if (size < 0) {
-        if (-size == ESPIPE) {
-            out->st_mode = S_IFIFO;
-            return 0;
-        }
-        errno = (int)-size;
-        return -1;
+    /*
+     * The descriptor keeps the name it was opened with, and the kernel answers
+     * the statx of that name: the mode, the owner and the two moments are the
+     * ones of the object and not a guess of 0666. A pipe has no name and
+     * answers ESPIPE; it is described from the one fact the library knows
+     * about it, that it is a stream with no size.
+     */
+    rc = __ulibc_syscall6(KSYS_FSTAT, fd, (long)(unsigned long)&info, 0, 0, 0, 0);
+    if (rc == 0) {
+        stat_fill(out, &info);
+        return 0;
     }
 
-    out->st_mode = S_IFREG | 0666;
-    out->st_size = (off_t)size;
-    out->st_blocks = (blkcnt_t)((size + 511) / 512);
-
-    {
-        long rc = __ulibc_syscall6(KSYS_LSEEK, fd, 0, KSYS_SEEK_SET, 0, 0, 0);
-
-        if (rc < 0) {
-            errno = (int)-rc;
-            return -1;
-        }
+    if (-rc == ESPIPE) {
+        memset(out, 0, sizeof(*out));
+        out->st_nlink = 1;
+        out->st_blksize = 512;
+        out->st_mode = S_IFIFO;
+        return 0;
     }
 
-    return 0;
+    errno = (int)-rc;
+    return -1;
 }
 
 /*

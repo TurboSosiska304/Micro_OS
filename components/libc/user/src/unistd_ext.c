@@ -135,9 +135,13 @@ int chdir(const char *path)
 
 int rmdir(const char *path)
 {
-    /* The unlink of the kernel refuses a directory that is not empty, which
-     * is the rule of rmdir as well. */
-    return posix(unlink(path));
+    const char *resolved = __ulibc_path(path);
+
+    if (resolved == NULL) {
+        return -1;
+    }
+
+    return posix((int)__ulibc_syscall6(KSYS_RMDIR, (long)(unsigned long)resolved, 0, 0, 0, 0, 0));
 }
 
 ssize_t readlink(const char *path, char *buffer, size_t size)

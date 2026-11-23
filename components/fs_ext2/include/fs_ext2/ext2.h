@@ -69,6 +69,7 @@ struct ext2_check_report {
     k_u32_t files;
     k_u32_t directories;
     k_u32_t errors;
+    k_u32_t fixed; /* the changes a repair applied; zero for a check */
     char first[EXT2_CHECK_MESSAGE_MAX];
 };
 
@@ -89,6 +90,28 @@ struct ext2_check_report {
  * format, which every image of these tests is given to.
  */
 int ext2_check(const char *point, struct ext2_check_report *report);
+
+/*
+ * Check the mounted volume and repair what the medium itself proves: the
+ * counters of the groups and of the superblock are recomputed from the
+ * bitmaps, the two bitmaps are rebuilt from the records that the tree
+ * reaches, the link count of every inode becomes the number of the names
+ * that reach it, the dot entries and the size of a directory are put right,
+ * and a record that no name reaches is reconnected as `#<inode>` under
+ * /lost+found when it is a file (a directory or another object is given
+ * back, because the tree below it is not a name any more).
+ *
+ * The call is the writer of the check, like the repair of MicroFS: with the
+ * lock of the volume, through the writer of the filesystem, and the volume
+ * is checked again after the pass. `report->fixed` is what it changed and
+ * `report->errors` is what is still wrong; a report of zero errors after a
+ * repair is a volume e2fsck of the host accepts.
+ *
+ * The memory of the pass grows with the volume: one bit per block, one bit
+ * per inode and the two of the walk. A volume whose map does not fit the
+ * memory is reported and left alone; KERR_NOMEM is that answer.
+ */
+int ext2_repair(const char *point, struct ext2_check_report *report);
 
 /* The text of an error of this filesystem, for the shell and the tests. */
 const char *ext2_strerror(int error);
