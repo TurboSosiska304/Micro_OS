@@ -255,6 +255,13 @@ written when the project was an operating system for one board; the numbers
       eight names in a cache, and the x86-64 stack asks it for every name, so
       `http`, `httpd` and `mqtt` get the cache behind `k_socket_connect`; the
       board still resolves through lwIP, which has one of its own
+* [ ] The WiFi of a laptop: the reconnaissance and the steps of the Intel
+      8265 of a ThinkPad X1 Carbon 6th Gen are [plan-wifi.md](plan-wifi.md)
+      and the decision is [ADR 0039](adr/0039-wifi-on-a-laptop.md). The path
+      is a port of OpenBSD's `iwm(4)` and `net80211` (BSD, not the GPL
+      `iwlwifi`) with the firmware as a file beside the driver; it is **not a
+      lane of 1.7 or 1.8**, because the wire (the I219-V of the machine) and
+      then USB come first, and it is most of a year of one person after them
 
 ## K7 - Quality (done)
 
