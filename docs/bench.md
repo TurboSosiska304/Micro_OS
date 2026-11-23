@@ -120,6 +120,38 @@ The rest of the human summary of that run:
   shell_pipe                 0.17 MiB/s              - 23437 ms  cat /bench.bin | wc -c (wall clock)
 ```
 
+## The volume of ext2 (ADR 0037)
+
+The table above is the volume of MicroFS, which is the default of the tool.
+`--fs ext2` writes the same tree into a volume of ext2 and the same file of
+16 MiB goes through it; the rows that move are `file_write` and `file_read`,
+and the lane of ADR 0037 moved them (the tree of 1.6.0 before the lane, the
+same machine, three runs each):
+
+| Row | Before ADR 0037 | After | Guest time before | After |
+|---|---|---|---|---|
+| `file_write` | 15.05 MiB/s | **246.15 MiB/s** | 1 063 ms | 65 ms |
+| `file_read` | 50.95 MiB/s | **200.00 MiB/s** | 314 ms | 80 ms |
+
+The write is a run of 64 KiB of the medium for every 64 KiB of the file: the
+descriptor and the bitmap of the group are a slot of the volume that settles
+at the end of the run, and the blocks of the run are allocated, named and
+written once. The read is a run of the blocks that the file holds one after
+another, found by one read of the leaf table of pointers, and a hold of holes
+is one `memset`. The other rows of the table do not move: the pipe, the
+console and the call of the door do not touch the disk. The spread of the
+runs is 225-262 MiB/s written and 195-200 MiB/s read, on the machine of the
+baseline and with the load of the host of the day; the number in the table is
+the middle of the three.
+
+The file of 128 MiB of `make x86-volume-smoke` (a volume of 5 GiB) is written
+at 132-147 MiB/s and read at 80-88 MiB/s by `/bin/mkbig verify`, whose
+comparison of every byte is part of its clock; the same file read by `bench
+fileread` is 185 MiB/s. The reader of a stream is the run of eight sectors of
+`K_BLOCKDEV_READ_AHEAD` in the block layer (`kernel/blockdev.h`), so a file is
+a command of the disk every 8 KiB; that is a decision of ADR 0032 and the
+next step of the reader, not of this lane.
+
 ## Reading a number
 
 Two shapes of the kernel decide most of the table, and both of them are the
