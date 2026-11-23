@@ -185,9 +185,11 @@ add_libc_program(<command>
 `microos_userland_library` builds a static archive with `MICROOS_USERLAND_CFLAGS`
 and `microos_add_userland_program` compiles the runtime of
 `components/libc/user`, the file of the program and the archives for the
-window, links them with `-nostdlib -static -no-pie` and `programs/program.ld`
-at `0x02000000 + 32`, and runs `tools/mkprog.sh --base 0x02000000 --arch
-x86-64`. The resulting `.mox` is a file of `/bin` in the image; the program
+window, and hands them to `tools/link_program.sh`, which links them with
+`-nostdlib -static -no-pie` and `programs/program.ld` at `0x02000000 + 32`,
+reads the address of the text back and links again if the linker moved it,
+and then runs `tools/mkprog.sh --base 0x02000000 --arch x86-64`. The resulting
+`.mox` is a file of `/bin` in the image; the program
 is added to `tools/x86_image.py` (the `PROGRAMS` list) and to the checks of
 the smoke tests.
 
