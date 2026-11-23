@@ -1640,6 +1640,12 @@ int fat_check_volume(struct fat_volume *vol, struct fat_check_report *report, bo
     count_clusters(&s_check, vol);
 
     if (write) {
+        /* A repair writes the table behind the back of the allocator, so
+         * the summary of the free clusters is brought back in step with
+         * the table it just changed before the caller reads the report. */
+        if (report->fixed > 0 && vol->type == 32) {
+            (void)fat_fsinfo_recount(vol);
+        }
         report->unfixed = report->errors;
     }
 
