@@ -126,11 +126,20 @@ int k_exec_parse(const void *data, k_size_t size, struct k_exec_image *out);
 #define K_EXEC_RUN_REFUSED (-1)    /* the machine refused the image */
 #define K_EXEC_RUN_NO_MACHINE (-2) /* the machine cannot run a program at all */
 #define K_EXEC_RUN_OTHER_ARCH (-3) /* the image is code for another machine */
+/*
+ * The image replaced the caller: the port rewrote the frame of the system
+ * call and the return of the call goes to the entry of the new program, not
+ * back to the code that asked. The kernel keeps the task (pid, parent,
+ * descriptors) and does not report a status, because there is nobody to
+ * report it to yet: the status belongs to the parent of the program, and the
+ * end of the program is the end of that same task for `waitpid`.
+ */
+#define K_EXEC_RUN_REPLACED (-4)
 
 /*
  * Hand a parsed image to the port that runs it. A port that enters a program
  * that never comes back does not return at all, so there are three failures
- * and one success: K_EXEC_RUN_REFUSED when the machine refused the image (it
+ * and two successes: K_EXEC_RUN_REFUSED when the machine refused the image (it
  * does not fit the window of the port, or the port could not copy it),
  * K_EXEC_RUN_NO_MACHINE when the machine cannot run a program at all - the
  * kernel turns that into ENOSYS - K_EXEC_RUN_OTHER_ARCH when the image names
@@ -139,7 +148,11 @@ int k_exec_parse(const void *data, k_size_t size, struct k_exec_image *out);
  * returned. That number is the status the program ended with, the low byte of
  * what it left in the register of the result, and it is not an error: a
  * program that finishes has to be noticed on a machine whose execve has no
- * process to exit into.
+ * process to exit into. K_EXEC_RUN_REPLACED is the other success: the caller
+ * was a program, and the port has already made the new image the memory and
+ * the entry of that same task. The call of the system does not return to the
+ * old program, so the kernel answers it with 0 and lets the frame of the
+ * return do the transfer.
  *
  * The machine of the image is `image->arch`, and the machine of the port is
  * k_port_exec_arch(): a port that names itself (0 or 1) runs only the images

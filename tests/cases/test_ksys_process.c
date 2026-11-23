@@ -298,6 +298,67 @@ static void test_fork_posix(void)
 }
 
 /*
+ * The program of a wait for any child: the parent forks and calls
+ * waitpid(-1), the way `wait()` of the library does. The child of the
+ * placeholder re-enters the program from its start and takes the branch of
+ * the mark.
+ */
+static void any_child_program(void *arg)
+{
+    struct task *self = task_self();
+    int pid;
+
+    K_UNUSED(arg);
+
+    if (self != NULL && self->is_child) {
+        g_child_done = 1;
+        task_exit(9);
+        return;
+    }
+
+    pid = ksys_fork();
+    g_fork_result = pid;
+
+    if (pid > 0) {
+        /* -1 is "any child", the shape the library's wait() has. */
+        g_wait_result = ksys_waitpid(-1, (int *)&g_wait_status, 0);
+    }
+
+    g_result = 1;
+}
+
+/*
+ * The property: waitpid(-1) waits for a child of the caller and answers its
+ * number, not ECHILD. The pid arrives in an unsigned register, where -1 is
+ * larger than every pid; a scan that compared it as a number instead of as
+ * "any child" would find no task and the wait would fail.
+ */
+static void test_wait_any(void)
+{
+    struct task *parent;
+    int waited;
+
+    ktest_begin("ksys: waitpid(-1) waits for any child and answers its number");
+
+    setup();
+
+    parent = task_create("anychild", any_child_program, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(parent != NULL);
+
+    for (waited = 0; waited < 3000 && g_result < 0; waited++) {
+        k_sched_sleep_ms(1);
+    }
+
+    KT_CHECK_INT_EQ(g_result, 1);
+    KT_CHECK(g_fork_result > 0);
+    KT_CHECK_INT_EQ(g_wait_result, g_fork_result);
+    KT_CHECK_INT_EQ(g_wait_status, 9);
+    KT_CHECK_INT_EQ(g_child_done, 1);
+
+    teardown();
+}
+
+/*
  * The program of a pipe across a fork. The parent makes the pipe and forks;
  * the child of a machine without an MMU re-enters this program from the
  * start, sees its mark and takes the way of the child. Both hold the two
@@ -870,6 +931,7 @@ void test_ksys_process(void)
     test_fork_wait();
     test_fork_numbers();
     test_fork_posix();
+    test_wait_any();
     test_fork_pipe();
     test_wait_errors();
     test_wait_validation();

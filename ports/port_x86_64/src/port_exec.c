@@ -152,6 +152,14 @@ struct port_signal_frame {
  * stub of an interrupt push them in different orders.
  */
 #define PORT_FRAME_RBP 0u
+#define PORT_FRAME_RCX 1u
+#define PORT_FRAME_R11 2u
+#define PORT_FRAME_R9 3u
+#define PORT_FRAME_R8 4u
+#define PORT_FRAME_R10 5u
+#define PORT_FRAME_RDX 6u
+#define PORT_FRAME_RSI 7u
+#define PORT_FRAME_RDI 8u
 #define PORT_FRAME_RAX 9u
 #define PORT_FRAME_RBX 10u
 #define PORT_FRAME_R12 11u
@@ -544,11 +552,19 @@ int k_port_fork_copy(struct task *child)
     return (int)child->pid;
 }
 
-int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
+/*
+ * Place an image in an address space of its own: the pages of the text and
+ * the data, the stack, the restorer of a handler and the two vectors of the
+ * entry, at the addresses the program will see. The answer is 0 with `start`
+ * filled, or -1 after the space this call made has been given back.
+ *
+ * Both shapes of execve start here: the program that replaces the caller of
+ * the call (port_exec_replace) and the program the kernel starts for a caller
+ * without an address space (the shell), which is a task of its own.
+ */
+static int port_exec_place(const struct k_exec_image *image, char *const argv[],
+                           struct port_exec_start *start)
 {
-    struct task *caller;
-    struct task *program;
-    struct port_exec_start *start;
     k_u64_t space;
     k_u64_t user_rsp;
     k_u64_t user_argc = 0;
@@ -568,16 +584,6 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
     k_size_t env_strings = 0;
     k_size_t env_array_off = 0;
     k_size_t index;
-    int status = 0;
-    int rc;
-
-    caller = task_self();
-    if (caller == NULL) {
-        /* The caller has to be a task: execve waits for the program to end,
-         * and a wait is a sleep, which the boot context cannot do. */
-        kerror("x86_64: execve outside of a task");
-        return -1;
-    }
 
     if (image == NULL || image->data == NULL || image->text_size == 0) {
         return -1;
@@ -836,12 +842,6 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
         }
     }
 
-    start = (struct port_exec_start *)k_port_alloc(sizeof(*start), false);
-    if (start == NULL) {
-        kerror("x86_64: no memory for the start of a program");
-        goto fail;
-    }
-
     start->space = space;
     start->entry = PORT_EXEC_BASE + (k_u64_t)image->entry;
     start->argc = user_argc;
@@ -849,16 +849,130 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
     start->envp = user_envp;
     start->user_rsp = user_rsp;
 
+    return 0;
+
+fail:
+    port_x86_64_paging_space_destroy(space);
+    return -1;
+}
+
+/*
+ * The POSIX shape of execve for a program of ring 3: the image replaces the
+ * memory of the caller and the call does not return to the old program. The
+ * caller is the program itself - the same task, its pid, its parent, its
+ * descriptors and its directory - and only the address space is new.
+ *
+ * The return is the one the program would have made anyway: the stub of
+ * `int $0x80` below this call pops the frame it pushed and leaves through
+ * `iretq`. Rewriting that frame is the whole of the transfer: RIP becomes the
+ * entry, RSP the new stack, RDI, RSI and RDX the three arguments of the C
+ * entry (ADR 0016), and the other registers zero, so the new program starts
+ * with no state of the old one anywhere. The frame is at the top of the
+ * kernel stack, above every C frame of this call, which the iretq abandons.
+ *
+ * CR3 is switched before the return, so the iretq and the first instruction
+ * of the program see the new tables. The kernel is mapped in every space
+ * (paging.c), so the few instructions that return through the stub are as
+ * valid under the new CR3 as under the old one. The old space is given back
+ * afterwards: its frames are released by the reference count, and a page a
+ * child of the caller shares is still the child's.
+ */
+static int port_exec_replace(const struct port_exec_start *start)
+{
+    k_u64_t top = port_x86_64_task_stack_top();
+    k_u64_t previous = port_x86_64_task_space();
+    k_u64_t *frame;
+
+    if (previous == 0 || top < PORT_X86_64_SYSCALL_FRAME_SIZE) {
+        port_x86_64_paging_space_destroy(start->space);
+        return K_EXEC_RUN_REFUSED;
+    }
+
+    frame = (k_u64_t *)(uintptr_t)(top - PORT_X86_64_SYSCALL_FRAME_SIZE);
+
     /*
-     * The program inherits the descriptors of its caller, as POSIX leaves
+     * The handlers of the old image are code that is about to be gone: POSIX
+     * resets a caught signal to its default action across an exec and keeps
+     * an ignored one ignored. The pending marks stay, as POSIX leaves them.
+     */
+    task_signal_reset_on_exec(task_self());
+
+    /*
+     * Every word of the frame is a register the stub restores: the entry of
+     * the program reads its three arguments from RDI, RSI and RDX, and the
+     * rest are zero so that no value of the replaced program survives. RAX
+     * is zero too - the answer of a successful execve, which the new program
+     * never reads, but a person looking at a register dump does.
+     */
+    memset(frame, 0, PORT_X86_64_SYSCALL_FRAME_SIZE);
+
+    frame[PORT_FRAME_RDI] = start->argc;
+    frame[PORT_FRAME_RSI] = start->argv;
+    frame[PORT_FRAME_RDX] = start->envp;
+    frame[PORT_FRAME_RIP] = start->entry;
+    frame[PORT_FRAME_CS] = 0x1b;      /* the ring 3 code selector of gdt.c */
+    frame[PORT_FRAME_RFLAGS] = 0x202; /* interrupts on, the required bit 1 */
+    frame[PORT_FRAME_RSP] = start->user_rsp;
+    frame[PORT_FRAME_SS] = 0x23; /* the ring 3 data selector of gdt.c */
+
+    port_x86_64_task_set_space(start->space);
+    port_x86_64_paging_space_destroy(previous);
+
+    return K_EXEC_RUN_REPLACED;
+}
+
+int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
+{
+    struct task *caller;
+    struct task *program;
+    struct port_exec_start *start;
+    struct port_exec_start placed;
+    int status = 0;
+    int rc;
+
+    caller = task_self();
+    if (caller == NULL) {
+        /* The caller has to be a task: execve waits for the program to end,
+         * and a wait is a sleep, which the boot context cannot do. */
+        kerror("x86_64: execve outside of a task");
+        return -1;
+    }
+
+    rc = port_exec_place(image, argv, &placed);
+    if (rc != 0) {
+        return -1;
+    }
+
+    /*
+     * A caller with an address space is a program, and its execve replaces
+     * the image it runs: POSIX, and the answer of the call is not a return
+     * to the old code at all. A caller without one is a task of the kernel -
+     * the shell - and a program it starts is a task of its own that the
+     * caller waits for; there is nothing to replace on a task with no
+     * memory of a program.
+     */
+    if (port_x86_64_task_space() != 0) {
+        return port_exec_replace(&placed);
+    }
+
+    /* The program inherits the descriptors of its caller, as POSIX leaves
      * them across an exec: the table is copied before the task can run, so a
      * shell that made a pipe and a redirect finds them in the program at 0,
-     * 1 and 2. The same copy carries the working directory and the job.
-     */
+     * 1 and 2. The same copy carries the working directory and the job. */
+    start = (struct port_exec_start *)k_port_alloc(sizeof(*start), false);
+    if (start == NULL) {
+        kerror("x86_64: no memory for the start of a program");
+        port_x86_64_paging_space_destroy(placed.space);
+        return -1;
+    }
+
+    *start = placed;
+
     program = task_fork_shared(caller, PORT_EXEC_TASK_NAME, port_exec_program_task, start);
     if (program == NULL) {
         k_port_free(start);
-        goto fail;
+        port_x86_64_paging_space_destroy(placed.space);
+        return -1;
     }
 
     /*
@@ -943,10 +1057,6 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
     kinfo("x86-64: the program exited with %d", status & 0xFF);
 
     return 0;
-
-fail:
-    port_x86_64_paging_space_destroy(space);
-    return -1;
 }
 
 /* --- signals --- */

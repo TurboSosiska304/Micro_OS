@@ -1031,6 +1031,31 @@ void task_signal_inherit(struct task *child, const struct task *parent)
     __atomic_store_n(&child->sig_pending, 0u, __ATOMIC_RELAXED);
 }
 
+/*
+ * The dispositions of a task across an execve. The handler of a signal is an
+ * address of the image that called the call, and the image is gone once
+ * execve replaces it: POSIX resets a caught signal to its default action and
+ * leaves an ignored one ignored, which is what this does. The marks that are
+ * pending stay: a signal that arrived before the exec is answered by the new
+ * program, as POSIX leaves it.
+ */
+void task_signal_reset_on_exec(struct task *t)
+{
+    k_size_t i;
+
+    if (t == NULL) {
+        return;
+    }
+
+    for (i = 0; i < K_ARRAY_SIZE(t->sig_handlers); i++) {
+        task_signal_fn handler = __atomic_load_n(&t->sig_handlers[i], __ATOMIC_RELAXED);
+
+        if (handler != K_SIG_IGN) {
+            __atomic_store_n(&t->sig_handlers[i], K_SIG_DFL, __ATOMIC_RELAXED);
+        }
+    }
+}
+
 void task_signal_notify_parent(struct task *self)
 {
     struct task *parent;

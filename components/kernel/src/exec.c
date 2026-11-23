@@ -266,6 +266,17 @@ int k_exec_run(const struct k_exec_image *image, char *const argv[])
     g_exec_exit_code = 0;
     rc = k_port_exec_enter(image, argv);
 
+    /*
+     * The image replaced the caller of the call: the port has made it the
+     * memory and the entry of the same task, and the return of the system
+     * call is the entry of the new program. The answer travels as it is, so
+     * that kernel/ksys.c can end the call with 0 and let the frame do the
+     * rest; a status and the refusal below are for the other shape.
+     */
+    if (rc == K_EXEC_RUN_REPLACED) {
+        return K_EXEC_RUN_REPLACED;
+    }
+
     return (rc == 0) ? g_exec_exit_code : K_EXEC_RUN_REFUSED;
 }
 
