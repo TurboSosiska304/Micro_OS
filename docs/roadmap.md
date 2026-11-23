@@ -509,13 +509,18 @@ on a VFS without `rename` (see [debts.md](debts.md)).
       picture has no text memory for `pmemsave`) and checks cells and
       colours, and keeps the `pmemsave` checks of the text mode on a card
       without the interface; `make x86-run` opens it for a person
-* [ ] Later: a 2D surface for a program, and optionally virtio-gpu 2D in
-      QEMU; UEFI GOP for a real machine, which is a loader of its own
+* [x] A picture a program draws on (ADR 0028, ADR 0030): `/dev/fb0` and
+      `/dev/input0`, the window model, the canvas and the keyboard of
+      `components/ui`, the arrows of the E0 prefix as keys of the machine, and
+      the programs `/bin/ui`, `/bin/edit` and `/bin/fm`
+* [ ] Later: a 2D surface for a program is there and a mouse is not; a
+      compositor, optionally virtio-gpu 2D in QEMU; UEFI GOP for a real
+      machine, which is a loader of its own
 
-The desktop is not a step of this list. A picture, a mouse and a compositor
-are the parts of one, and the compositor has to be a program of the system
-and not the kernel (see [releases/2.0.md](releases/2.0.md)); the first thing
-to build is the screen a program can draw on.
+A desktop is not a step of this list. A picture a program draws on arrived in
+1.4.0, the programs of the screen in 1.5.0 and a mouse is the next device
+(see [releases/2.0.md](releases/2.0.md)); the compositor stays a program of
+the system and not the kernel.
 
 ## K12 - The stream and the installer (done in 1.2.0)
 

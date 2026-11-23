@@ -14,6 +14,30 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Added
 
+- The interface has programs (ADR 0030): `/bin/edit` is a text editor on the
+  screen - a file, the arrows, the characters of the keyboard, `Ctrl+S` to
+  save and `Ctrl+Q` to leave, a title bar, a status line and a modal window
+  that asks about an unsaved file - and `/bin/fm` is a file manager: the
+  directory through `readdir`, the selection, Enter to open a directory or
+  hand a file to `/bin/edit`, `d`/Delete to `unlink` after a modal question
+  and `q` to return. Both write only the rows they changed. `make
+  x86-vga-smoke` boots a copy of the disk, types two lines into the editor
+  with `sendkey`, saves, reboots and reads the file back with `cat`, and
+  lists, moves and deletes in the file manager; 129 checks.
+- The window model, the canvas and the keyboard are `components/ui`, portable
+  and tested on the host (`tests/cases/test_ui_windows.c`): a window is a
+  rectangle in the order of the paint with a focus and a modal flag, the
+  canvas fills, outlines and lays out a line of cells of a font the caller
+  gives, and the keyboard maps the names of `/dev/input0` to the characters
+  of the US layout. `/bin/ui` uses the model for its two windows.
+- The arrows, Home, End, PageUp, PageDown, Insert and Delete are keys of the
+  machine: the E0 prefix of the scancode set 1 is translated by the portable
+  table `kernel/input_set1.h` instead of being dropped, the ten numbers are
+  appended to `enum k_input_key` (69-78) and never move, `key.up` and
+  `key.delete` are events of `/dev/input0`, the right Ctrl is a modifier of
+  the same form, and the Enter and the slash of the keypad still type their
+  character for the shell. `tests/cases/test_ui.c` holds the numbers and the
+  table.
 - A volume of 5 GiB is an ordinary volume: `make x86-volume-smoke` writes the
   images of ext2 and of MicroFS of the plan, boots each as the root of the
   machine, writes a file of 128 MiB (16 MiB of MicroFS) and reads it back, and

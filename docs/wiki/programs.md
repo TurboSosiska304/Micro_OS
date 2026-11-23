@@ -132,7 +132,7 @@ never changed.
 ## `/bin` and the boot
 
 The x86-64 port mounts the MicroFS volume of its disk at `/` and finds
-`/bin` already there: the thirty-one images are files the tool wrote, with
+`/bin` already there: the thirty-five images are files the tool wrote, with
 the mode of a program (`0755`), and no boot creates one:
 
 | File | What it proves |
@@ -169,6 +169,9 @@ the mode of a program (`0755`), and no boot creates one:
 | `/bin/file` | the type of a file through libmagic of file 5.45 (`-b`, `-i`, `-z` for a gzip and a zstd frame, `-f` for a list) and the compact database `/etc/magic.mgc` |
 | `/bin/sqlite3` | the shell of SQLite 3.54.1 (public domain) over a database file of MicroFS: `.read`, `.tables`, `.schema`, `.mode`, `.timer`, `-cmd` and `-batch` |
 | `/bin/awk` | the One True Awk of 2024-07-28: the fields, `-F`, `-v`, `-f`, `printf` with a width and a precision, `getline`, the arrays, the functions of `math.h`, and a refusal of `system` and of a pipe (no shell) |
+| `/bin/ui` | the skeleton of ADR 0028: `/dev/fb0` and `/dev/input0`, a panel, a list of windows and the log; Tab moves the focus and `q` gives the screen back |
+| `/bin/edit` | a text editor (ADR 0030): a file, the arrows and the characters of `/dev/input0`, `Ctrl+S`, `Ctrl+Q`, a title bar and a status line; a modal window asks about an unsaved file |
+| `/bin/fm` | a file manager (ADR 0030): the directory through `readdir`, Enter to open a directory or `/bin/edit`, `d`/Delete with a modal question and `unlink`, `q` |
 
 
 The first six talk to the kernel through `programs/prog.h`, because what they

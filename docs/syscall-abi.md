@@ -135,7 +135,7 @@ numbers of a system call: a new command takes the next free one.
 | Command | Where | Meaning |
 |---|---|---|
 | `FBIO_TAKE` 0x4D01 | `/dev/fb0` | the console stops drawing; the picture is the program's |
-| `FBIO_GIVE` 0x4D02 | `/dev/fb0` | the console repaints its grid and draws again |
+| `FBIO_GIVE` 0x4D02 | `/dev/fb0` | the console repaints its grid and draws again; a give while another program holds the device changes nothing, so a program that starts a program keeps the picture |
 
 A panic always takes the screen back, whatever a program holds (ADR 0028). A
 command that is not one of the table, or a descriptor whose object has no
