@@ -53,6 +53,17 @@ bool port_x86_64_task_is_user(void);
  */
 void port_x86_64_task_trampoline(k_port_task_entry_fn entry, void *arg, k_u64_t flags);
 
+/*
+ * The floating point state of the tasks (docs/debts.md, K9). The boot
+ * captures the state of a unit after fninit once, before the first task; the
+ * switch saves and loads the 512-byte image of every context, a fork copies
+ * the live state of the parent into the child, and an exec resets the live
+ * state of the task it replaces. The board has neither the units nor the
+ * switch, so nothing of this is part of the kernel's contract.
+ */
+void port_x86_64_fpu_init(void);
+void port_x86_64_task_fpu_reset(void);
+
 /* --- the context of a core that is not the processor of the boot --- */
 
 /*

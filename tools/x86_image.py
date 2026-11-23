@@ -47,6 +47,9 @@ PROGRAMS = [
     "badptr",
     "signals",
     "procs",
+    # The floating point state of a task (K9): three tasks compute in double
+    # at once and the smoke test reads the number of each of them.
+    "fpu2",
     "cat",
     "echo",
     "streams",

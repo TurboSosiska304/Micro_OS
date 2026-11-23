@@ -1,10 +1,10 @@
 /*
  * Micro OS — the one declaration the port of sbase adds to the upstream files.
  *
- * `sort -n` compares two numbers as reals, and the port of a program of this
- * system is built without the registers of the floating point unit: the kernel
- * saves no XMM state and the flags of the guest say `-mgeneral-regs-only`, so
- * a `double` in a function of the guest does not compile. The comparator below
+ * `sort -n` compares two numbers as reals, and the tools of sbase are built
+ * with `-mgeneral-regs-only`: the port does save the state of the units at a
+ * switch, but the guest flags of these tools leave the XMM registers out, so a
+ * `double` in a function of the guest does not compile. The comparator below
  * reads the two numbers as decimals and orders them without a real number; it
  * is exact for the sizes a line of a file holds and never rounds.
  *

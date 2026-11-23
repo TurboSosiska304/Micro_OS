@@ -915,6 +915,15 @@ static int port_exec_replace(const struct port_exec_start *start)
     frame[PORT_FRAME_RSP] = start->user_rsp;
     frame[PORT_FRAME_SS] = 0x23; /* the ring 3 data selector of gdt.c */
 
+    /*
+     * The new image starts with the floating point unit after fninit: the
+     * numbers of the program that called execve are not part of the image it
+     * asked for, as POSIX leaves them. The reset is on the live unit and on
+     * the saved image of the task, so a switch before the iretq cannot bring
+     * the old registers back (docs/debts.md, K9).
+     */
+    port_x86_64_task_fpu_reset();
+
     port_x86_64_task_set_space(start->space);
     port_x86_64_paging_space_destroy(previous);
 
