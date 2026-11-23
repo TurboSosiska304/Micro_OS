@@ -8,6 +8,7 @@ void test_log(void);
 void test_ansi(void);
 void test_port(void);
 void test_blockdev(void);
+void test_blockdev_cache(void);
 void test_partition(void);
 void test_root(void);
 void test_render(void);
