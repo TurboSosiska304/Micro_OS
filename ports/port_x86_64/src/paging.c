@@ -35,6 +35,7 @@
 
 #include <string.h>
 
+#include "kernel/mm.h"
 #include "kernel/port/lock.h"
 
 #define PAGE_SIZE 4096u
@@ -781,12 +782,27 @@ k_u64_t port_x86_64_paging_space_clone(k_u64_t parent_cr3)
         }
     }
 
+    /*
+     * The memory of the child is the memory of the parent: the records of the
+     * mappings go with the new tables, and the pages the child has not
+     * touched are still pages of the files behind them.
+     */
+    (void)k_mm_fork(parent_cr3, child_cr3);
+
     return child_cr3;
 }
 
 void port_x86_64_paging_space_destroy(k_u64_t cr3)
 {
     k_u64_t *pml4;
+
+    /*
+     * The mappings of the space are records of the kernel (kernel/mm.h) and
+     * they go with the tables: the files of a mapping are closed here, before
+     * the frames the records name are given back.
+     */
+    k_mm_release(cr3);
+
     k_u64_t *pdpt;
     k_u64_t *pd;
     k_u64_t *low_pt;
@@ -937,6 +953,141 @@ int port_x86_64_paging_allow_kernel_write(k_u64_t cr3, k_u64_t vaddr)
     port_x86_64_frame_release(old_frame);
 
     return 1;
+}
+
+/*
+ * A page of a program that is not there yet: a frame of the arena, mapped at
+ * the address with the protection of the kernel, and the address of the
+ * kernel that holds the bytes - the identity map names every frame of the
+ * arena, so the kernel writes the page it just made for the program.
+ */
+void *port_x86_64_paging_map_page(k_u64_t cr3, k_u64_t vaddr, k_u32_t flags)
+{
+    k_u64_t frame = port_x86_64_frame_alloc();
+    void *page;
+
+    if (frame == 0) {
+        return NULL;
+    }
+
+    if (port_x86_64_paging_map_user(cr3, vaddr & ~(k_u64_t)(PAGE_SIZE - 1u), frame, PAGE_SIZE,
+                                    flags) != 0) {
+        port_x86_64_frame_release(frame);
+        return NULL;
+    }
+
+    page = port_x86_64_paging_phys(cr3, vaddr);
+
+    if (page == NULL) {
+        port_x86_64_frame_release(frame);
+        return NULL;
+    }
+
+    return page;
+}
+
+/* The page is there and the program wrote it: the write bit of the entry
+ * comes back and the entry of the TLB of this core goes. */
+bool port_x86_64_paging_page_writable(k_u64_t cr3, k_u64_t vaddr)
+{
+    k_u64_t pd_index = (vaddr >> 21) & (TABLE_ENTRIES - 1u);
+    k_u64_t pt_index = (vaddr >> PAGE_SHIFT) & (TABLE_ENTRIES - 1u);
+    k_u64_t *pt;
+    k_u64_t entry;
+
+    if (vaddr < PORT_X86_64_USER_BASE || vaddr >= PORT_X86_64_USER_LIMIT) {
+        return false;
+    }
+
+    pt = space_pt(cr3, pd_index);
+    if (pt == NULL) {
+        return false;
+    }
+
+    entry = pt[pt_index];
+    if ((entry & (PTE_PRESENT | PTE_USER)) != (PTE_PRESENT | PTE_USER)) {
+        return false;
+    }
+
+    if ((entry & PTE_WRITABLE) == 0) {
+        pt[pt_index] = entry | PTE_WRITABLE;
+        invlpg(vaddr & ~(k_u64_t)(PAGE_SIZE - 1u));
+    }
+
+    return true;
+}
+
+/* A private copy of a page that is there: a frame of this space with the
+ * bytes of the old one, writable, and the old frame released. A private
+ * mapping of a file never needs it (the frame of a fault is already private),
+ * but the copy of a page a fork shared does, and so does a page of a program
+ * that the kernel is about to write. */
+bool port_x86_64_paging_page_private(k_u64_t cr3, k_u64_t vaddr)
+{
+    k_u64_t pd_index = (vaddr >> 21) & (TABLE_ENTRIES - 1u);
+    k_u64_t pt_index = (vaddr >> PAGE_SHIFT) & (TABLE_ENTRIES - 1u);
+    k_u64_t *pt;
+    k_u64_t entry;
+    k_u64_t old_frame;
+    k_u64_t new_frame;
+
+    if (vaddr < PORT_X86_64_USER_BASE || vaddr >= PORT_X86_64_USER_LIMIT) {
+        return false;
+    }
+
+    pt = space_pt(cr3, pd_index);
+    if (pt == NULL) {
+        return false;
+    }
+
+    entry = pt[pt_index];
+    if ((entry & (PTE_PRESENT | PTE_USER)) != (PTE_PRESENT | PTE_USER)) {
+        return false;
+    }
+
+    old_frame = entry & PTE_ADDRESS;
+    new_frame = port_x86_64_frame_alloc();
+
+    if (new_frame == 0) {
+        return false;
+    }
+
+    memcpy((void *)(uintptr_t)new_frame, (const void *)(uintptr_t)old_frame, PAGE_SIZE);
+
+    pt[pt_index] = new_frame | (entry & PTE_NX) | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
+    invlpg(vaddr & ~(k_u64_t)(PAGE_SIZE - 1u));
+
+    port_x86_64_frame_release(old_frame);
+
+    return true;
+}
+
+/* Unmap one page and give its frame back. */
+void port_x86_64_paging_unmap_page(k_u64_t cr3, k_u64_t vaddr)
+{
+    k_u64_t pd_index = (vaddr >> 21) & (TABLE_ENTRIES - 1u);
+    k_u64_t pt_index = (vaddr >> PAGE_SHIFT) & (TABLE_ENTRIES - 1u);
+    k_u64_t *pt;
+    k_u64_t entry;
+
+    if (vaddr < PORT_X86_64_USER_BASE || vaddr >= PORT_X86_64_USER_LIMIT) {
+        return;
+    }
+
+    pt = space_pt(cr3, pd_index);
+    if (pt == NULL) {
+        return;
+    }
+
+    entry = pt[pt_index];
+    if ((entry & PTE_PRESENT) == 0) {
+        return;
+    }
+
+    pt[pt_index] = 0;
+    invlpg(vaddr & ~(k_u64_t)(PAGE_SIZE - 1u));
+
+    port_x86_64_frame_release(entry & PTE_ADDRESS);
 }
 
 void *port_x86_64_paging_phys(k_u64_t cr3, k_u64_t vaddr)

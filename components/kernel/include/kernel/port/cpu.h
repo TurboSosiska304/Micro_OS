@@ -29,4 +29,21 @@ k_u32_t k_port_cpu_count(void);
 /* The core that is asking. Any number below k_port_cpu_count(). */
 k_u32_t k_port_cpu_id(void);
 
+/*
+ * Tell a core that its run queue has a task it did not have a moment ago.
+ *
+ * The scheduler calls this after it has put a task in the queue of a core
+ * other than the one that runs the caller, and it calls it with the scheduler
+ * lock dropped: the core that takes the interrupt looks at the same queue
+ * under the same lock. A port with a wake-up interrupt of its own (the IPI of
+ * x86-64) sends it, and the task starts at once instead of waiting for that
+ * core's next tick; a port without one does nothing, and the next tick of the
+ * core is what starts the task, which is the behaviour of every port that
+ * predates the call.
+ *
+ * The call is a hint and not a promise: a core that is already running a task
+ * of a higher priority may keep it, and the queue is the truth either way.
+ */
+void k_port_cpu_wake(k_u32_t cpu);
+
 #endif /* MICRO_OS_KERNEL_PORT_CPU_H */

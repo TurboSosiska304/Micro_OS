@@ -202,6 +202,64 @@ static int path_too_long(const char *command)
     return KSHELL_ERROR;
 }
 
+/*
+ * The longest name a volume of this system keeps is 32 bytes (MicroFS; ext2
+ * and FAT hold 255, and the shell's own path is 128). A volume that cannot
+ * hold a name does not have one word for it - MicroFS answers "invalid
+ * argument" and, for a directory entry, "file too big" - so the boundary is
+ * named here: a call that refused a path with a component longer than the
+ * table of MicroFS on a long name is `file name too long`, the sentence every
+ * other system uses. A volume that takes the name never reaches this answer.
+ */
+#define KSHELL_COMPONENT_MAX 32
+
+static bool shell_name_too_long(const char *path)
+{
+    const char *cursor = path;
+
+    while (*cursor != '\0') {
+        k_size_t len = 0;
+
+        while (cursor[len] != '\0' && cursor[len] != '/') {
+            len++;
+        }
+
+        if (len > KSHELL_COMPONENT_MAX) {
+            return true;
+        }
+
+        cursor += len;
+        while (*cursor == '/') {
+            cursor++;
+        }
+    }
+
+    return false;
+}
+
+/* The sentence of a call that failed on a path: the code of the volume, or
+ * the limit of the name when the path names a component that no volume of
+ * this system holds. */
+static const char *path_error_text(const char *path, int code)
+{
+    /*
+     * Two shapes of one number meet here: the VFS answers a negative code
+     * and the library of a program keeps the magnitude in errno (the shape of
+     * POSIX), so a caller passes whichever it has.
+     */
+    int kernel = (code < 0) ? code : -code;
+
+    if ((kernel == KERR_INVAL || kernel == KERR_TOOBIG) && shell_name_too_long(path)) {
+        return "file name too long";
+    }
+
+    if (code < 0) {
+        return vfs_strerror(code);
+    }
+
+    return microos_strerror(code);
+}
+
 static int cmd_pwd(int argc, char **argv)
 {
     (void)argc;
@@ -241,7 +299,15 @@ static int cmd_cd(int argc, char **argv)
         return KSHELL_ERROR;
     }
 
-    task_set_cwd(self, path);
+    /*
+     * A cwd that does not fit is refused and not cut: a name cut in the
+     * middle is another directory, and a shell that walks it removes the
+     * files of somebody else (the cleanroom of 1.6).
+     */
+    if (!task_set_cwd(self, path)) {
+        kshell_printf("cd: %s: the name is too long\n", path);
+        return KSHELL_ERROR;
+    }
 
     return KSHELL_OK;
 }
@@ -733,7 +799,7 @@ static int cmd_ls(int argc, char **argv)
 
     rc = vfs_stat(path, &info);
     if (rc != 0) {
-        kshell_printf("ls: %s: %s\n", path, vfs_strerror(rc));
+        kshell_printf("ls: %s: %s\n", path, path_error_text(path, rc));
         return KSHELL_ERROR;
     }
 
@@ -812,7 +878,7 @@ static int cmd_ls(int argc, char **argv)
     shell_dir_close(&dir);
 
     if (rc < 0) {
-        kshell_printf("ls: %s: %s\n", path, vfs_strerror(rc));
+        kshell_printf("ls: %s: %s\n", path, path_error_text(path, rc));
         return KSHELL_ERROR;
     }
 
@@ -972,7 +1038,7 @@ static int cmd_tree(int argc, char **argv)
 
     rc = vfs_stat(path, &info);
     if (rc != 0) {
-        kshell_printf("tree: %s: %s\n", path, vfs_strerror(rc));
+        kshell_printf("tree: %s: %s\n", path, path_error_text(path, rc));
         return KSHELL_ERROR;
     }
 
@@ -981,7 +1047,7 @@ static int cmd_tree(int argc, char **argv)
     if (info.type == 2) {
         rc = tree_walk(path, "", 1, dirs_only, &dirs, &files);
         if (rc != 0) {
-            kshell_printf("tree: %s: %s\n", path, vfs_strerror(rc));
+            kshell_printf("tree: %s: %s\n", path, path_error_text(path, rc));
             return KSHELL_ERROR;
         }
     } else {
@@ -1116,7 +1182,7 @@ static int cmd_cat(int argc, char **argv)
      */
     fd = microos_open(path, MICROOS_O_RDONLY);
     if (fd < 0) {
-        kshell_eprintf("cat: %s: %s\n", path, microos_strerror(microos_errno()));
+        kshell_eprintf("cat: %s: %s\n", path, path_error_text(path, microos_errno()));
         return KSHELL_ERROR;
     }
 
@@ -1181,7 +1247,7 @@ static int cmd_write(int argc, char **argv)
     /* The file is written through the library, that is, through the calls. */
     fd = microos_open(path, MICROOS_O_WRONLY | MICROOS_O_CREAT | MICROOS_O_TRUNC);
     if (fd < 0) {
-        kshell_printf("write: %s: %s\n", path, microos_strerror(microos_errno()));
+        kshell_printf("write: %s: %s\n", path, path_error_text(path, microos_errno()));
         return KSHELL_ERROR;
     }
 
@@ -1215,39 +1281,52 @@ static int cmd_write(int argc, char **argv)
 static int cmd_mkdir(int argc, char **argv)
 {
     char path[SHELL_PATH_MAX];
-    int rc;
+    int status = KSHELL_OK;
+    int i;
 
     if (argc < 2) {
-        kshell_printf("usage: mkdir <directory>\n");
+        kshell_printf("usage: mkdir <directory>...\n");
         return KSHELL_USAGE;
     }
 
-    if (!shell_resolve(argv[1], path, sizeof(path))) {
-        return path_too_long("mkdir");
-    }
+    /*
+     * As in Linux, every word is a directory: `mkdir a b` makes two, and a
+     * word that cannot be made does not stop the others. A word without an
+     * argument used to be dropped in silence, which is a command that did
+     * something other than what the line said.
+     */
+    for (i = 1; i < argc; i++) {
+        int rc;
 
-    rc = vfs_mkdir(path);
-    if (rc != 0) {
-        /*
-         * A directory that is already there is not a file that is in the
-         * way: the sentence of POSIX "file exists" would send a person
-         * looking for a file. The name is asked what it is, and a directory
-         * says so.
-         */
-        if (rc == KERR_EXIST) {
-            struct vfs_stat info;
-
-            if (vfs_stat(path, &info) == 0 && info.type == 2) {
-                kshell_printf("mkdir: %s: is a directory\n", path);
-                return KSHELL_ERROR;
-            }
+        if (!shell_resolve(argv[i], path, sizeof(path))) {
+            status = path_too_long("mkdir");
+            continue;
         }
 
-        kshell_printf("mkdir: %s: %s\n", path, vfs_strerror(rc));
-        return KSHELL_ERROR;
+        rc = vfs_mkdir(path);
+        if (rc != 0) {
+            /*
+             * A directory that is already there is not a file that is in the
+             * way: the sentence of POSIX "file exists" would send a person
+             * looking for a file. The name is asked what it is, and a
+             * directory says so.
+             */
+            if (rc == KERR_EXIST) {
+                struct vfs_stat info;
+
+                if (vfs_stat(path, &info) == 0 && info.type == 2) {
+                    kshell_printf("mkdir: %s: is a directory\n", path);
+                    status = KSHELL_ERROR;
+                    continue;
+                }
+            }
+
+            kshell_printf("mkdir: %s: %s\n", path, path_error_text(path, rc));
+            status = KSHELL_ERROR;
+        }
     }
 
-    return KSHELL_OK;
+    return status;
 }
 
 /*
@@ -1277,7 +1356,7 @@ static int rm_children(const char *path, int depth)
         int rc = vfs_list(path, entries, SHELL_RM_ENTRIES, &count);
 
         if (rc != 0) {
-            kshell_printf("rm: %s: %s\n", path, vfs_strerror(rc));
+            kshell_printf("rm: %s: %s\n", path, path_error_text(path, rc));
             return KSHELL_ERROR;
         }
 
@@ -1312,7 +1391,7 @@ static int rm_path(const char *path, bool recursive, int depth)
 
     rc = vfs_stat(path, &info);
     if (rc != 0) {
-        kshell_printf("rm: %s: %s\n", path, vfs_strerror(rc));
+        kshell_printf("rm: %s: %s\n", path, path_error_text(path, rc));
         return KSHELL_ERROR;
     }
 
@@ -1337,7 +1416,7 @@ static int rm_path(const char *path, bool recursive, int depth)
      * caller chose the wrong one. */
     rc = (info.type == 2) ? vfs_rmdir(path) : vfs_unlink(path);
     if (rc != 0) {
-        kshell_printf("rm: %s: %s\n", path, vfs_strerror(rc));
+        kshell_printf("rm: %s: %s\n", path, path_error_text(path, rc));
         return KSHELL_ERROR;
     }
 
@@ -1390,6 +1469,22 @@ static void df_human(k_u64_t bytes, char *out, k_size_t size)
     }
 }
 
+/*
+ * The line of the inodes of a volume. A volume without them (FAT32 keeps a
+ * table of clusters and no table of inodes) says so instead of printing a
+ * zero it never read.
+ */
+static void df_inodes(const struct vfs_statfs *stat)
+{
+    if (stat->total_inodes == 0) {
+        kshell_printf("inodes: not kept by this volume\n");
+        return;
+    }
+
+    kshell_printf("inodes: %u of %u free\n", (unsigned)stat->free_inodes,
+                  (unsigned)stat->total_inodes);
+}
+
 static int cmd_df(int argc, char **argv)
 {
     bool human = false;
@@ -1426,13 +1521,13 @@ static int cmd_df(int argc, char **argv)
      */
     rc = vfs_stat(path, &info);
     if (rc != 0) {
-        kshell_printf("df: %s: %s\n", path, vfs_strerror(rc));
+        kshell_printf("df: %s: %s\n", path, path_error_text(path, rc));
         return KSHELL_ERROR;
     }
 
     rc = vfs_statfs(path, &stat);
     if (rc != 0) {
-        kshell_printf("df: %s: %s\n", path, vfs_strerror(rc));
+        kshell_printf("df: %s: %s\n", path, path_error_text(path, rc));
         return KSHELL_ERROR;
     }
 
@@ -1446,16 +1541,26 @@ static int cmd_df(int argc, char **argv)
         df_human(stat.free_blocks * (k_u64_t)stat.block_size, free_bytes, sizeof(free_bytes));
 
         kshell_printf("%s: %s total, %s free\n", path, total, free_bytes);
-        kshell_printf("inodes: %u of %u free\n", (unsigned)stat.free_inodes,
-                      (unsigned)stat.total_inodes);
+        df_inodes(&stat);
 
         return KSHELL_OK;
     }
 
-    kshell_printf("blocks: %u of %u free (%u KB each)\n", (unsigned)stat.free_blocks,
-                  (unsigned)stat.total_blocks, (unsigned)(stat.block_size / 1024));
-    kshell_printf("inodes: %u of %u free\n", (unsigned)stat.free_inodes,
-                  (unsigned)stat.total_inodes);
+    /*
+     * The unit of the block is the unit of the volume: MicroFS counts its
+     * kilobytes and FAT32 its 512-byte sectors, and a block that is smaller
+     * than a kilobyte is a byte and not "0 KB". The count and the size
+     * together are the bytes; neither is rounded here.
+     */
+    if (stat.block_size >= 1024 && stat.block_size % 1024 == 0) {
+        kshell_printf("blocks: %u of %u free (%u KB each)\n", (unsigned)stat.free_blocks,
+                      (unsigned)stat.total_blocks, (unsigned)(stat.block_size / 1024));
+    } else {
+        kshell_printf("blocks: %u of %u free (%u bytes each)\n", (unsigned)stat.free_blocks,
+                      (unsigned)stat.total_blocks, (unsigned)stat.block_size);
+    }
+
+    df_inodes(&stat);
 
     return KSHELL_OK;
 }
@@ -1780,7 +1885,7 @@ static int cmd_stat(int argc, char **argv)
 
     rc = vfs_stat(path, &info);
     if (rc != 0) {
-        kshell_printf("stat: %s: %s\n", path, vfs_strerror(rc));
+        kshell_printf("stat: %s: %s\n", path, path_error_text(path, rc));
         return KSHELL_ERROR;
     }
 
@@ -2291,6 +2396,13 @@ bool kshell_help_find_program(const char *name, char *out, k_size_t size)
     return shell_find_program(name, out, size);
 }
 
+bool kshell_help_has_program(const char *name)
+{
+    char path[SHELL_PATH_MAX];
+
+    return kshell_help_find_program(name, path, sizeof(path));
+}
+
 static int cmd_exec(int argc, char **argv)
 {
     char path[SHELL_PATH_MAX];
@@ -2440,6 +2552,13 @@ int kshell_try_program(int argc, char **argv, int *status)
     return 0;
 }
 
+bool kshell_help_has_program(const char *name)
+{
+    (void)name;
+
+    return false;
+}
+
 int kshell_run_program(int argc, char **argv)
 {
     if (argc > 0 && argv != NULL) {
@@ -2505,7 +2624,10 @@ static const struct file_command {
       .usage = "cat [-n] [file]",
       .detail = "  -n  number the lines, as cat of Linux does\n"
                 "Without a file the standard input is copied, which is what makes\n"
-                "`cat < file` and `ls | cat` work.\n"},
+                "`cat < file` and `ls | cat` work. On a machine whose /bin has the\n"
+                "`cat` of sbase (x86-64) that file runs at the prompt and takes its\n"
+                "own flags: `cat -u`, not `-n`; this command answers where /bin has\n"
+                "no cat (the board and the simulator).\n"},
      cmd_cat},
     {"write",
      {.summary = "write a file",
@@ -2516,8 +2638,10 @@ static const struct file_command {
      cmd_write},
     {"mkdir",
      {.summary = "create a directory",
-      .usage = "mkdir <directory>",
-      .detail = "The parent has to exist: there is no -p here yet.\n"},
+      .usage = "mkdir <directory>...",
+      .detail = "Every word is a directory, as in Linux, and a word that cannot be made\n"
+                "does not stop the others. The parent has to exist: there is no -p\n"
+                "here yet.\n"},
      cmd_mkdir},
     {"rm",
      {.summary = "remove a file or a directory",

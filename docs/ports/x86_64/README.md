@@ -16,7 +16,7 @@ the machine where a program can really be loaded and run (the window of
 | processors | the MADT of ACPI, the trampoline at `0x7000`, INIT and the start-up IPI through the local APIC, one GDT/TSS/IST and one 64 KiB stack per core (ADR 0012) |
 | store | `ata0`: a raw image on the primary IDE channel, PIO, MicroFS on its first partition, mounted at `/` (ADR 0008); `boot0p1`: the read-only root image of the ISO, as the second module of the boot (ADR 0026); `ram0`, 512 KB of the memory of the machine, when there is neither a disk nor a boot image |
 | network | `virtio0`: virtio-net-pci in its legacy I/O interface, polled; ARP, IPv4, ICMP, UDP, a client of TCP (one segment in flight, a timeout retransmission) and a listener with SYN/ACK and `accept`; the resolver of QEMU user-net with a cache of eight names and their time to live; 10.0.2.15/24 on QEMU user-net, gateway 10.0.2.2, resolver 10.0.2.3, no DHCP |
-| programs | `k_port_exec_supported()` is true; the window is 16 MiB at 32 MiB (`0x02000000`-`0x03000000`) over a physical arena at 64 MiB; a program is a file in `/bin` (the MOX1 format of `kernel/exec.h`), runs in ring 3 with page tables of its own and calls the kernel with `int $0x80` (ADR 0007) |
+| programs | `k_port_exec_supported()` is true; the window is 16 MiB at 32 MiB (`0x02000000`-`0x03000000`) over a physical arena at 64 MiB; a program is a file in `/bin` (the MOX1 format of `kernel/exec.h`), runs in ring 3 with page tables of its own and calls the kernel with `syscall` (the vector 0x80 is the second door, ADR 0007, ADR 0035) |
 | protection | NX and W^X: `EFER.NXE` from the loader, the text read-only and executable, every data page - rodata, data, bss, stacks, heap, arena, screen - writable and NX; no page is both (ADR 0007, sections 9 and 10). The kernel is in the higher half: the image is linked at `0xFFFFFFFF80000000` and mapped there beside the low identity map |
 | signature | the kernel carries a 120-byte trailer (magic, size, SHA-256 and Ed25519) and the loader verifies it before it copies a byte (ADR 0020); the public key is compiled into `loader32.elf`, the private key is outside the tree (`MICROOS_SIGN_KEY`), and `tools/microos_sign` signs and verifies |
 | build | `make x86-build` (needs `cmake`, `ninja`, `xorriso` is not needed) and `make x86-disk` for the volume with `/bin` |
@@ -388,14 +388,35 @@ the file there. `make x86-disk-smoke` is the proof and the regression test:
 one image, two boots, `/bin` and a program from the disk in both,
 `write /persist.txt` in the first and `cat /persist.txt` in the second.
 
-The driver is `src/ata.c`: the ATA registers at 0x1F0, LBA28, PIO, polled -
-no DMA (the port has no contract for a physical address yet) and no interrupt
-of the channel. A command runs with the interrupts off, so the timer and the
-keyboard of this machine cannot interleave another task's request with the
-transfer; every wait has a budget of five seconds, a failed command is
-repeated once and reported with the sector that failed. A disk that does not
-answer is reported and the machine goes on with `ram0`; that volume has no
-`/bin`, so the boot says which file it could not find and starts the shell.
+The driver is `src/ata.c`: the ATA registers at 0x1F0, LBA28, and two ways of
+moving the bytes (ADR 0032). The bus master of the channel - the PCI IDE
+function of class 01/01, its bus-master bit and the BAR of its five registers
+- takes a table of physical addresses (the PRDT) and moves up to 64 KiB in
+one command, four kilobytes to an entry so that no entry crosses a page; the
+end of the transfer is the interrupt of IRQ 14, and the task that waits for it
+halts the core with the interrupts on, so the line of the disk wakes it at
+once. A machine without the function, a drive whose identify data says it
+cannot, and a buffer whose pages the port cannot translate all fall back to
+PIO - the path of 1.5.0, a word at a time through the port, polled, with the
+interrupts off. Every wait has a budget of five seconds, a failed command is
+repeated once by the PIO path and reported with the sector that failed. A disk
+that does not answer is reported and the machine goes on with `ram0`; that
+volume has no `/bin`, so the boot says which file it could not find and starts
+the shell.
+
+Above the driver, `kernel/blockdev.c` keeps a write-back cache of half a
+megabyte (`k_blockdev_register_cached_sized`), which is what turns the writes
+of a filesystem that speaks one sector at a time into the runs a bus master
+moves; `/proc/blockdev` says how many sectors of it the medium does not have
+yet, and the `sync` of a filesystem - the close of a file, a directory, an
+unmount - empties it before the drive is told to empty its own. The boot says
+which path it took:
+
+```
+ata0: bus-master DMA on 0xc040, IRQ 14
+ata0: PIO, no bus master
+```
+
 `programs.img` and `disk.img` are generated and not committed; `make clean`
 does not remove `build-x86`, `rm -rf build-x86` does.
 
@@ -587,14 +608,22 @@ counts at about 62.6 MHz with divider 16, so an initial count of about
 62 600). The external mode of `LINT0` belongs to the core 0 alone; with every
 core in that mode, QEMU delivered the timer of the 8259 to either of them
 (1889 ticks on the core 0 and 4933 on the core 1 of 6822) and the clock of
-the kernel ran at a third of real time. The I/O APIC is still a stub: the
-legacy lines stay on the core 0.
+the kernel ran at a third of real time.
+
+Since 1.6 the two lines of the port are entries of the I/O APIC of the
+firmware (ADR 0034): `src/ioapic.c` reads the address of the chip and the ISA
+overrides of the MADT, programs one redirection entry per line (the vector,
+the destination core, the polarity, the trigger and the mask), masks the 8259
+as a whole and sends the EOI of a line to the local APIC of the core that took
+it. A machine whose firmware describes no chip keeps the 8259 exactly as
+1.5.0 had it, and a chip whose window answers nothing is not trusted with
+either line.
 
 ### What the shell shows
 
-In a `KERNEL_SMP` build the shell has `smp`, `smp workers <n>` and
-`smp ping` (they are not registered in a one-core build, which is the kernel
-of 1.1):
+In a `KERNEL_SMP` build the shell has `smp`, `smp workers <n>`, `smp ping`,
+`smp irq [keyboard <cpu>]` and `smp wake` (they are not registered in a
+one-core build, which is the kernel of 1.1):
 
 ```
 microos> smp
@@ -603,6 +632,12 @@ smp: cpu 0 apic 0x0 ticks 134 current shell
 smp: cpu 1 apic 0x1 ticks 3414 current idle
 smp: queues consistent
 smp: the command ran on cpu 0
+smp: wake before the tick: cpu 0 0 cpu 1 2 (started by the ipi of the other core)
+smp: started at the tick: cpu 0 1 cpu 1 0 (started by the timer of the core)
+smp: the kernel handed 3 task(s) to another core
+smp: the last hand-over went to cpu 1 at tick 812, the core started it at tick 812
+smp: cpu 0 was woken 1 time(s), 1 ipi(s) taken, clock running
+smp: cpu 1 was woken 2 time(s), 2 ipi(s) taken, clock running
 microos> smp workers 8
 smp: worker 5 on cpu 0
 smp: worker 8 on cpu 1
@@ -611,28 +646,47 @@ smp: 8 worker(s) done
 microos> smp ping
 smp: ping cpu 1: ipi count 0 -> 1
 smp: ping ok
+microos> smp irq
+smp: the I/O APIC at 0xfec00000, 24 line(s), the 8259 is masked
+smp: line timer: isa irq 0 -> gsi 2, vector 0x20, cpu 0
+smp: line keyboard: isa irq 1 -> gsi 1, vector 0x21, cpu 0
+smp: irq 0x20 (timer): cpu 0 2299 cpu 1 0
+smp: irq 0x21 (keyboard): cpu 0 0 cpu 1 0
+microos> smp wake
+smp: wake: 4 task(s) of 4 started, 2 of them on cpu 1
+smp: wake: the kernel handed 2 -> 4 task(s) to another core
+smp: wake: cpu 1 started 1 -> 3 task(s) before its tick
+smp: wake: the ticks of cpu 1 went 135 -> 135 with its clock stopped
+smp: wake ok: the tasks of cpu 1 started by the ipi, before its tick
 ```
 
 `smp workers` is the proof that a task of this machine runs on each core: the
 scheduler puts a new task on the next core of its round robin. `smp ping` is
 the proof of the IPI vector: the count is read on the core that received the
-interrupt, not on the one that sent it.
+interrupt, not on the one that sent it. `smp irq` prints the table of the I/O
+APIC and the count of the two lines per core; `smp irq keyboard 1` moves the
+keyboard to the second core. `smp wake` stops the clock of the other core, so
+that the only way a task can begin there is the interrupt of this one, and
+starts it again before it returns (ADR 0034).
 
 ### The gate
 
 ```bash
 make x86-smp-build    # the kernel with KERNEL_SMP, an image of its own
 make x86-smp-run      # the two-core machine in a terminal
-make x86-smp-smoke    # boot -smp 2 and check 34 things about the two cores
+make x86-smp-smoke    # boot -smp 2 and check 52 things about the two cores
 make soak-smp         # the 600-second session on the two-core image
-make x86-smoke        # the one-core kernel: 174 checks, unchanged
+make x86-smoke        # the one-core kernel: 323 checks, unchanged
 ```
 
 `tools/x86_smp_smoke.py` boots the image of `build-x86-smp` on the disk of
 `make x86-disk` with `-smp 2`, reads the two numbers, runs the program of the
 boot in ring 3 and drives the `smp` command: the two cores are in use, the
 queues are consistent, a worker ran on each core, the IPI arrived on the core
-it named, and the ticks of both cores moved between the two reports. A line
+it named, the ticks of both cores moved between the two reports, the table of
+the I/O APIC names a core for the timer and one for the keyboard, the tasks of
+`smp wake` start on the core whose clock is stopped, and the keys the monitor
+of QEMU presses arrive on the core the keyboard line was sent to. A line
 that names a missing core, an exception or a stopped machine fails the run;
 so does a transcript that stops answering.
 
@@ -647,17 +701,14 @@ The one-core build is the kernel of 1.1: `KERNEL_SMP` is off by default, and
 
 ### What remains
 
-The I/O APIC is a stub (`src/ioapic.c`): the PIT and the keyboard are still
-delivered by the 8259 to the core 0, and a machine whose firmware delivers
-nothing to the legacy chip has no clock on the APs. The IPI vector exists and
-is proved by `smp ping`, but the scheduler does not send it yet: an idle core
-wakes on its own timer (at worst a millisecond later) and a core does not
-preempt a lower-priority task of another queue. The FPU and SSE state is not
-saved at a switch (the kernel and the programs are built with
-`-mgeneral-regs-only`), and there is no guard page under a task stack. These
-are rows of K8 in [debts.md](../../debts.md).
+The guard page under the stack of a task is still open: an overflow writes
+into the heap and the port does not see it. A machine with several I/O APICs
+keeps the first, and a level-triggered line whose device needs its entry
+masked while it is served is not programmed - the two lines of the port are
+edge triggered, and the disk and the network are polled. These are rows of K8
+in [debts.md](../../debts.md).
 
-## What works## What works
+## What works
 
 * the boot: the loader, long mode, the banner, the contract check at 1.9;
 * the signature of the kernel (ADR 0020): the loader verifies the trailer of
@@ -780,10 +831,10 @@ are rows of K8 in [debts.md](../../debts.md).
 
 ## What does not work yet
 
-* the I/O APIC: the 8259 still delivers the timer and the keyboard to the
-  core 0, the lines are not routed through the I/O APIC, and the FPU/SSE
-  state is not saved at a switch; the APs have their own local APIC timer and
-  the IPI vector, which `smp ping` proves (ADR 0012, K8 of debts.md);
+* the guard page under the stack of a task: an overflow writes into the heap
+  and the port does not see it; a machine with several I/O APICs keeps the
+  first, and a level-triggered line whose device needs its entry masked while
+  it is served is not programmed (ADR 0034, K8 of debts.md);
 * the disk is one, and it is the primary ATA channel: no SATA, no virtio, no
   NVMe, no card, no second disk;
 * the CD of K13 is BIOS only and its root is the image of the medium: every

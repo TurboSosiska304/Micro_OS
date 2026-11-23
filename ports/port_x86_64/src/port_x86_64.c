@@ -19,7 +19,9 @@
 #include <string.h>
 
 #include "kernel/clock.h"
+#include "kernel/console.h"
 #include "kernel/log.h"
+#include "kernel/mm.h"
 #include "kernel/cpu.h"
 #include "kernel/port.h"
 #include "kernel/port/cpu.h"
@@ -28,6 +30,7 @@
 #include "port_x86_64_console.h"
 #include "port_x86_64_screen.h"
 #include "port_x86_64_task.h"
+#include "port_x86_64_apic.h"
 
 /* --- the machine --- */
 
@@ -296,6 +299,11 @@ int k_port_console_poll(void)
     }
 
     if ((port_inb(COM1_LSR) & 0x01) != 0) {
+        /* The serial port has no interrupt of its own in this port: the byte
+         * is found by a poll, and finding it is the moment a task that waits
+         * for the console in `poll` can be told. */
+        k_console_input_notify();
+
         return (int)port_inb(COM1);
     }
 
@@ -379,6 +387,13 @@ struct idt_pointer {
 #define IRQ_BASE 0x20u /* the PIC is moved out of the way of the exceptions */
 #define IRQ_TIMER 0u
 #define IRQ_KEYBOARD 1u
+#define IRQ_CASCADE 2u
+#define IRQ_ATA 14u /* the primary IDE channel, on the slave */
+
+/* The lines of the port that have a handler, in the order the counters below
+ * and the `smp irq` command name them (PORT_X86_64_IRQ_TIMER and
+ * PORT_X86_64_IRQ_KEYBOARD of port_x86_64.h). */
+#define PORT_IRQ_LINES 2u
 
 #define PIT_HZ 1000u
 #define PIT_CRYSTAL_HZ 1193182u
@@ -408,10 +423,24 @@ static struct idt_pointer g_idt_pointer;
 extern void (*const port_isr_exception_table[32])(void);
 extern void isr_irq0(void);
 extern void isr_irq1(void);
+extern void isr_irq_ata(void);
 extern void isr_syscall(void);
 extern void isr_unexpected(void);
 
 static volatile k_u64_t g_ticks;
+
+/*
+ * The interrupts of the two lines of the port, one counter per core, because
+ * the question the two-core machine asks is where they arrive: the I/O APIC
+ * of ADR 0012 delivers a line to the core its entry names, and the 8259
+ * delivers every line to the core of the boot. The counters are the answer of
+ * the `smp irq` command and of the smoke test of the two cores.
+ */
+static k_u32_t g_irq_count[PORT_IRQ_LINES][KERNEL_CPUS_MAX];
+
+/* True when the I/O APIC delivers the two lines of the port and the 8259 is
+ * masked (see interrupts_init). */
+static bool g_ioapic_lines;
 
 static void idt_set(k_u32_t vector, void (*handler)(void), k_u8_t ist, k_u8_t type)
 {
@@ -435,7 +464,9 @@ static void idt_set(k_u32_t vector, void (*handler)(void), k_u8_t ist, k_u8_t ty
  * The timer and the keyboard are open, the rest of the machine is not
  * unmasked until the port has a driver that could answer: the mask of the
  * master is 0xFC, two zeros at the bottom for the two lines that have a
- * handler in the table.
+ * handler in the table. This is the fallback of the port: a machine whose
+ * firmware describes an I/O APIC gets its lines through that chip instead and
+ * the 8259 is masked as a whole (pic_mask_all).
  */
 static void pic_init(void)
 {
@@ -463,6 +494,23 @@ static void pic_init(void)
     port_outb(PIC2_DATA, 0xFF); /* nothing of the slave is */
 }
 
+/* Close both chips: every line of the 8259 is masked and the chip raises
+ * nothing. The port does this when the I/O APIC takes the two lines of the
+ * machine, so that a line cannot arrive twice. */
+static void pic_mask_all(void)
+{
+    port_outb(PIC1_DATA, 0xFF);
+    port_outb(PIC2_DATA, 0xFF);
+}
+
+/* Open the two lines of the port on the 8259 again (the fallback of a machine
+ * that has no I/O APIC, and the undo of a route that did not hold). */
+static void pic_unmask_port_lines(void)
+{
+    port_outb(PIC1_DATA, 0xFC);
+    port_outb(PIC2_DATA, 0xFF);
+}
+
 /*
  * Channel 0 of the 8254 in mode 2: it counts down to zero, raises the
  * interrupt and reloads itself, so the kernel never rearms it. The crystal
@@ -487,19 +535,67 @@ static void pit_init(k_u32_t hz)
 }
 
 /*
+ * The end of an interrupt of the two lines of the port.
+ *
+ * A line the I/O APIC delivers is a message to the local APIC of the core it
+ * named, and the end of it is a store to the EOI register of that core's own
+ * APIC (every core decodes the same physical page as itself). A line of the
+ * 8259 is ended in the chip that raised it. The port says which of the two is
+ * the source of the lines, and the body of the vector does not have to know.
+ */
+void port_x86_64_irq_eoi(void)
+{
+    if (g_ioapic_lines) {
+        port_x86_64_apic_eoi();
+        return;
+    }
+
+    port_outb(PIC1_COMMAND, PIC_EOI);
+}
+
+/* True when the two lines of the port are delivered by the I/O APIC and the
+ * 8259 is masked. The `smp irq` command and the body of the keyboard ask. */
+bool port_x86_64_irq_on_ioapic(void)
+{
+    return g_ioapic_lines;
+}
+
+/* Count an interrupt of a line on the core that took it. The `smp irq`
+ * command reads the numbers; a core that is not in the array of the kernel is
+ * not counted. */
+void port_x86_64_irq_note(k_u32_t line)
+{
+    k_u32_t cpu = k_port_cpu_id();
+
+    if (line >= PORT_IRQ_LINES || cpu >= KERNEL_CPUS_MAX) {
+        return;
+    }
+
+    (void)__atomic_add_fetch(&g_irq_count[line][cpu], 1u, __ATOMIC_RELAXED);
+}
+
+k_u32_t port_x86_64_irq_count(k_u32_t line, k_u32_t cpu)
+{
+    if (line >= PORT_IRQ_LINES || cpu >= KERNEL_CPUS_MAX) {
+        return 0u;
+    }
+
+    return __atomic_load_n(&g_irq_count[line][cpu], __ATOMIC_RELAXED);
+}
+
+/*
  * The body of the timer, called by the stub in interrupts.S with the
- * interrupts off. The EOI goes to the master alone: the timer is the only
- * unmasked line and the slave is masked as a whole.
+ * interrupts off. The EOI goes out before the hook: the timer must be
+ * acknowledged even if the scheduler decides that this task never continues,
+ * and with the I/O APIC the line is in service until the local APIC of this
+ * core hears about it.
  */
 void port_x86_64_irq_tick(k_u64_t *frame)
 {
     g_ticks++;
+    port_x86_64_irq_note(PORT_X86_64_IRQ_TIMER);
 
-    /* The EOI goes out before the hook: the timer must be acknowledged even
-     * if the scheduler decides that this task never continues. The slave is
-     * masked as a whole and the timer is its only line, so the master is the
-     * only chip to tell. */
-    port_outb(PIC1_COMMAND, PIC_EOI);
+    port_x86_64_irq_eoi();
 
     /*
      * A program of ring 3 that has a signal waiting answers it when the tick
@@ -624,31 +720,52 @@ static const char *exception_name(k_u64_t vector)
 int port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs)
 {
     /*
-     * The first write into a page a fork made read-only is not a failure:
-     * the page is copied for this address space and the instruction that
-     * faulted is run again by the stub. The write may come from the program
-     * or from the kernel on its behalf (the status of waitpid, the buffer of
-     * a read), so both rings take this way.
+     * A page fault of the window of the programs is one of three things: the
+     * first write into a page a fork made read-only (copy on write), a store
+     * of the kernel into the text of a program, or a page of a mapping of the
+     * program that is not there yet (kernel/mm.h). All three are answered by
+     * making the page right and running the instruction again; anything else
+     * is the fault of the program, and a fault of ring 3 is the end of the
+     * task and not of the machine.
      */
-    if (vector == 14u && (error & 0x3u) == 0x3u) {
+    if (vector == 14u) {
         k_u64_t address;
+        bool write = (error & 0x2u) != 0;
+        bool present = (error & 0x1u) != 0;
 
         __asm__ volatile("movq %%cr2, %0" : "=r"(address));
 
-        if (port_x86_64_paging_handle_cow(port_x86_64_current_cr3(), address)) {
-            return 1;
+        if (present) {
+            if (port_x86_64_paging_handle_cow(port_x86_64_current_cr3(), address)) {
+                return 1;
+            }
+
+            /*
+             * A store of the kernel into the text of a program is not a copy
+             * of a page a fork shared, but it is the same answer: this space
+             * gets a private copy of the page as data, and the instruction is
+             * run again. A store of ring 3 into a read-only page never comes
+             * here - its error code says user (bit 2) - and is the fault of
+             * the program it always was.
+             */
+            if ((error & 0x4u) == 0u &&
+                port_x86_64_paging_allow_kernel_write(port_x86_64_current_cr3(), address)) {
+                return 1;
+            }
         }
 
         /*
-         * A store of the kernel into the text of a program is not a copy of a
-         * page a fork shared, but it is the same answer: this space gets a
-         * private copy of the page as data, and the instruction is run again.
-         * A store of ring 3 into a read-only page never comes here - its
-         * error code says user (bit 2) - and is the fault of the program it
-         * always was.
+         * The page of a mapping: it is made, filled from the file or with
+         * zeros, and the instruction that faulted runs again. The fill reads
+         * the filesystem, which takes a lock and waits for the disk, so the
+         * interrupts of the machine are on for it - the stub of an exception
+         * enters with them off, and the task that holds the lock of the
+         * volume has to be able to run. The iretq of the stub puts the flags
+         * of the interrupted code back.
          */
-        if ((error & 0x4u) == 0u &&
-            port_x86_64_paging_allow_kernel_write(port_x86_64_current_cr3(), address)) {
+        __asm__ volatile("sti" : : : "memory");
+
+        if (k_mm_fault(k_mm_current(), address, write) == 0) {
             return 1;
         }
     }
@@ -706,6 +823,36 @@ void port_x86_64_idt_set(k_u32_t vector, void (*handler)(void))
     idt_set(vector, handler, 0, IDT_GATE_INTERRUPT);
 }
 
+/*
+ * Open a line of the 8259. The mask register is read back, one bit is
+ * cleared, and the write is done with the interrupts off: a line that is
+ * opened in the middle of the read and the write would see the other lines
+ * closed for an instant, which is a keyboard byte lost and not a crash, and
+ * still worth the two instructions.
+ *
+ * A line of the slave opens the second line of the master as well: without
+ * the cascade the slave answers nothing, whatever its own mask says.
+ */
+void port_x86_64_irq_unmask(k_u32_t line)
+{
+    k_u64_t flags;
+
+    if (line >= 16u) {
+        return;
+    }
+
+    flags = port_save_flags_and_cli();
+
+    if (line < 8u) {
+        port_outb(PIC1_DATA, (k_u8_t)(port_inb(PIC1_DATA) & ~(k_u8_t)(1u << line)));
+    } else {
+        port_outb(PIC2_DATA, (k_u8_t)(port_inb(PIC2_DATA) & ~(k_u8_t)(1u << (line - 8u))));
+        port_outb(PIC1_DATA, (k_u8_t)(port_inb(PIC1_DATA) & ~(k_u8_t)(1u << IRQ_CASCADE)));
+    }
+
+    port_restore_flags(flags);
+}
+
 void port_x86_64_interrupts_init(void)
 {
     k_u32_t vector;
@@ -731,6 +878,14 @@ void port_x86_64_interrupts_init(void)
     idt_set(IRQ_BASE + IRQ_KEYBOARD, isr_irq1, 0, IDT_GATE_INTERRUPT);
 
     /*
+     * The disk of the machine, the sixth line of the slave. The entry is here
+     * for the machine that has the drive: a channel with nothing on it never
+     * raises the line, and the line stays masked until the driver of the disk
+     * opens it (src/ata.c, ADR 0032).
+     */
+    idt_set(IRQ_BASE + IRQ_ATA, isr_irq_ata, 0, IDT_GATE_INTERRUPT);
+
+    /*
      * The door of the programs of the port. Without this one line the
      * `int $0x80` of a program would land on isr_unexpected and stop the
      * machine: the vector is a part of what the port offers, not of the
@@ -749,9 +904,48 @@ void port_x86_64_interrupts_init(void)
     pic_init();
     pit_init(PIT_HZ);
 
+    /*
+     * The lines of the machine: the I/O APIC of ADR 0012 when the firmware
+     * describes one, and the 8259 of 1981 when it does not.
+     *
+     * The local APIC comes first: a line the I/O APIC routes is a message to
+     * it, and a core whose APIC is not enabled takes nothing at all. The call
+     * is the one the bring-up of the processors makes later, and it is
+     * idempotent on the core that mapped the page.
+     *
+     * The order below is what keeps a line from arriving twice: the 8259 is
+     * masked before the table of the I/O APIC is opened, and opened again if
+     * the chip did not take both lines. The two chips are told the same
+     * vectors (IRQ_BASE + the line), so the body of a vector does not change
+     * with the controller that delivered it.
+     */
+    if (port_x86_64_apic_init() && port_x86_64_ioapic_init()) {
+        pic_mask_all();
+
+        if (port_x86_64_ioapic_route(IRQ_TIMER, IRQ_BASE + IRQ_TIMER, 0u) &&
+            port_x86_64_ioapic_route(IRQ_KEYBOARD, IRQ_BASE + IRQ_KEYBOARD, 0u)) {
+            g_ioapic_lines = true;
+        } else {
+            /* A chip that took one line and not the other is a chip this
+             * port does not trust with either of them. */
+            (void)port_x86_64_ioapic_mask(IRQ_TIMER, true);
+            (void)port_x86_64_ioapic_mask(IRQ_KEYBOARD, true);
+            pic_unmask_port_lines();
+        }
+    }
+
     /* The table is in the register of the processor and the lines are
      * programmed; from here the timer keeps the time of the kernel. */
     port_sti();
+
+    /*
+     * The fast door of a system call, last: the table above is the door a
+     * program reaches with `int $0x80`, and this call opens the one the
+     * instruction `syscall` takes (src/syscall.c). Both build the same frame
+     * of 160 bytes, so a port that had one and now has two returns from
+     * either the same way.
+     */
+    port_x86_64_syscall_init_cpu();
 }
 
 /* --- the time --- */
@@ -1425,7 +1619,7 @@ const char *k_port_arch(void)
 }
 
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 10u
+#define PORT_API_MINOR 12u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_x86_64 does not speak the contract of this kernel");
@@ -1640,6 +1834,11 @@ void port_x86_64_init(k_u64_t multiboot_info)
     /* Last, because it is the point of no return: from here the timer fires
      * every millisecond and the kernel has to be able to take it. */
     port_x86_64_interrupts_init();
+
+    /* The disk asked for the line of its channel before the table existed:
+     * the driver opens it now, and the bus master of the channel becomes the
+     * one the transfers use (ADR 0032). */
+    port_x86_64_disk_irq_init();
 
     /*
      * The application processors (ADR 0012). The tables of the machine and

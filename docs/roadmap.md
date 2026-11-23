@@ -216,6 +216,25 @@ written when the project was an operating system for one board; the numbers
       MicroFS has `mtime` and `ctime` in version 2, an old volume keeps its
       16 bytes, and `statx` (26) reports the moments (ADR 0013)
 * [x] A page of the state over HTTP: `httpd` on the sockets, `/` and `/health`
+* [x] A server of files (1.6, [ADR 0036](adr/0036-a-server-and-an-update.md)):
+      `httpd serve [port] [root]` answers GET and HEAD over HTTP/1.1 with
+      keep-alive, `Content-Length`, the type of the extension, `ETag` and
+      `304`, one `Range` (`206`/`416`), a listing of a directory as a chunked
+      page and a line of the log per request; a `..` that leaves the root is
+      `403`, a directory is never a file, and a session over the ceiling of
+      the machine is `503`. Three sessions on x86-64, three on the board,
+      sixteen on the host
+* [x] The serving side of TLS (`httpd tls`, port 443): the vendored mbedTLS
+      with `MBEDTLS_SSL_SRV_C`, the certificate and the key of `/etc/ssl`
+      read through the VFS, and `curl -k` against the guest in
+      `make x86-net-smoke`; the board has no TLS on either side (the flash of
+      its slot, [debts.md](debts.md))
+* [x] An update over the network (1.6, ADR 0022 §7): `ota fetch URL`
+      downloads a signed image, checks the trailer and the Ed25519 signature
+      **before** a byte of the inactive slot is written, selects the slot and
+      asks for a reboot; a slot that never confirms itself is rolled back, in
+      the file form of x86-64 and in otadata on the board. `ota status`,
+      `ota boot` and `ota confirm` are the state machine at the console
 * [x] MQTT over the sockets: a 3.1.1 client at QoS 0 and 1, with a fake broker in the tests
 * [x] The network on the x86-64 machine: a virtio-net driver (the legacy I/O
       interface, polled, ADR 0008 for the shape of a device of the port) and a
@@ -254,16 +273,17 @@ written when the project was an operating system for one board; the numbers
       machine without a store says so, and the words of `write`, `mkdir`,
       `df`, `umount` and the clock are one style
 
-## K8 - Many cores (x86-64 and host done in 1.3, the I/O APIC open)
+## K8 - Many cores (x86-64 and host done in 1.3, the guard page open)
 
 > Not a gate of 1.0 (ADR 0012, updated), and not a part of `1.2.0` either:
 > the screen, the stream and the installer were that release. `1.3.0` closes
 > the pilot: the machine of QEMU starts both processors, runs tasks on each of
 > them, passes `make x86-smp-smoke` (34 checks) and the 600-second
-> `make soak-smp` session. `KERNEL_SMP` stays off by default. The open rows
-> are the I/O APIC, the remote wake, the stack guard page and the board; they
-> are the K8 rows of [debts.md](debts.md). The floating point state of a task
-> is saved and loaded at every switch since K9 (below).
+> `make soak-smp` session. `KERNEL_SMP` stays off by default. 1.6 took the
+> I/O APIC and the wake IPI (ADR 0034); the open rows are the stack guard page
+> and the board, and they are the K8 rows of [debts.md](debts.md). The
+> floating point state of a task is saved and loaded at every switch since K9
+> (below).
 
 * [x] A `struct k_cpu` per core and a run queue per core; the scheduler never
       runs one task on two cores (ADR 0012) - `kernel/cpu.h`,
@@ -279,10 +299,12 @@ written when the project was an operating system for one board; the numbers
       `make x86-smp-smoke` and `make soak-smp`
 * [x] The console is one resource of the machine: `k_port_write()` holds the
       big kernel lock for the whole call
-* [ ] x86-64: the I/O APIC (the timer and the keyboard off the 8259, the
-      MADT overrides, the LAPIC EOI), the wake IPI of the scheduler and a
-      cross-core priority preemption, a guard page under a task stack - the
-      K8 rows of [debts.md](debts.md)
+* [x] x86-64: the I/O APIC (the timer and the keyboard off the 8259, the
+      MADT overrides, the LAPIC EOI) and the wake IPI of the scheduler, with
+      the claim that preempts by priority - ADR 0034, `make x86-smp-smoke`
+      (52 checks)
+* [ ] A guard page under a task stack - the K8 row of
+      [debts.md](debts.md)
 * [ ] The allocator, the VFS, the console and the block layer under an
       aggressive migration: they are sleeping locks and the two-core session
       runs the full load for ten minutes, but no test migrates a task in the
@@ -450,8 +472,12 @@ written when the project was an operating system for one board; the numbers
       the board
 * [x] The programs are files of `progs`, mounted read-only at `/bin`, with no
       image of a program in the firmware (`tools/progs_image.py`)
-* [ ] An update over the network into the inactive slot (ADR 0022, open
-      item; the USB path is the safe update of 1.1)
+* [x] An update over the network into the inactive slot (ADR 0022 §7,
+      ADR 0036): the signed image of an HTTPS server is checked before it
+      reaches the slot, the slot is selected and the boot that does not
+      confirm itself is rolled back. The board's flash path is built and
+      waits for a session with the board; the USB path of 1.1 stays the safe
+      update of a board in the field ([debts.md](debts.md))
 
 ## The road to 2.0
 

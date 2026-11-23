@@ -34,9 +34,55 @@
 
 #define FORMAT_BUFFER 128
 
+/*
+ * The seam of the formatter with the streams and the console.
+ *
+ * A program of a machine links the runtime sources always and the streams
+ * (`src/file.c`) only when it uses a `FILE`: these three definitions are the
+ * weak half of the seam, and the strong half lives in `src/file.c`. A
+ * program without the streams writes the bytes of the formatter straight to
+ * the descriptor, which is what every program of the board does; a program
+ * with them writes into the block of `stdout` and gains the buffering.
+ */
+__attribute__((weak)) size_t __ulibc_stream_write(FILE *stream, const void *data, size_t size)
+{
+    const unsigned char *bytes = (const unsigned char *)data;
+    size_t done = 0;
+
+    if (stream == NULL || data == NULL || size == 0) {
+        return 0;
+    }
+
+    while (done < size) {
+        long wrote = write(stream->fd, bytes + done, size - done);
+
+        if (wrote < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            break;
+        }
+        if (wrote == 0) {
+            break;
+        }
+        done += (size_t)wrote;
+    }
+
+    return done;
+}
+
+__attribute__((weak)) int __ulibc_stream_write_stdout(const void *data, size_t size)
+{
+    return (write(ULIBC_STDOUT, data, size) == (long)size) ? 0 : -1;
+}
+
+__attribute__((weak)) void __ulibc_stream_flush_all(void) {}
+
 struct output {
     int fd;
     int to_buffer;
+    int to_stdout;
+    FILE *stream;
     char *dest;
     size_t cap;
     int failed;
@@ -47,11 +93,23 @@ struct output {
 
 static void out_flush(struct output *out)
 {
-    if (out->to_buffer) {
-        return; /* a buffer of the caller has no descriptor behind it */
+    if (out->to_buffer || out->used == 0) {
+        return;
     }
 
-    if (out->used > 0) {
+    if (out->to_stdout) {
+        if (__ulibc_stream_write_stdout(out->buffer, out->used) != 0) {
+            out->failed = 1;
+        } else {
+            out->total += (long)out->used;
+        }
+    } else if (out->stream != NULL) {
+        if (__ulibc_stream_write(out->stream, out->buffer, out->used) != out->used) {
+            out->failed = 1;
+        } else {
+            out->total += (long)out->used;
+        }
+    } else {
         long wrote = write(out->fd, out->buffer, out->used);
 
         if (wrote < 0) {
@@ -59,8 +117,9 @@ static void out_flush(struct output *out)
         } else {
             out->total += wrote;
         }
-        out->used = 0;
     }
+
+    out->used = 0;
 }
 
 static void out_char(struct output *out, char byte)
@@ -487,6 +546,8 @@ int vsnprintf(char *buffer, size_t size, const char *format, va_list args)
 
     out.fd = -1;
     out.to_buffer = 1;
+    out.to_stdout = 0;
+    out.stream = NULL;
     out.dest = buffer;
     out.cap = size;
     out.failed = 0;
@@ -530,12 +591,34 @@ int sprintf(char *buffer, const char *format, ...)
     return length;
 }
 
-static int out_to_descriptor(int fd, const char *format, va_list args)
+static int out_to_stdout(const char *format, va_list args)
 {
     struct output out;
 
-    out.fd = fd;
+    out.fd = ULIBC_STDOUT;
     out.to_buffer = 0;
+    out.to_stdout = 1;
+    out.stream = NULL;
+    out.dest = NULL;
+    out.cap = 0;
+    out.failed = 0;
+    out.used = 0;
+    out.total = 0;
+
+    out_format(&out, format, args);
+    out_flush(&out);
+
+    return out.failed ? -1 : (int)out.total;
+}
+
+static int out_to_stream(FILE *stream, const char *format, va_list args)
+{
+    struct output out;
+
+    out.fd = -1;
+    out.to_buffer = 0;
+    out.to_stdout = 0;
+    out.stream = stream;
     out.dest = NULL;
     out.cap = 0;
     out.failed = 0;
@@ -554,7 +637,7 @@ int vfprintf(FILE *stream, const char *format, va_list args)
         return -1;
     }
 
-    return out_to_descriptor(stream->fd, format, args);
+    return out_to_stream(stream, format, args);
 }
 
 int fprintf(FILE *stream, const char *format, ...)
@@ -575,7 +658,7 @@ int printf(const char *format, ...)
     int length;
 
     va_start(args, format);
-    length = out_to_descriptor(ULIBC_STDOUT, format, args);
+    length = out_to_stdout(format, args);
     va_end(args);
 
     return length;
@@ -583,25 +666,33 @@ int printf(const char *format, ...)
 
 int vprintf(const char *format, va_list args)
 {
-    return out_to_descriptor(ULIBC_STDOUT, format, args);
+    return out_to_stdout(format, args);
 }
 
 int putchar(int byte)
 {
     char single = (char)byte;
 
-    return (write(ULIBC_STDOUT, &single, 1) == 1) ? (int)(unsigned char)single : -1;
+    if (__ulibc_stream_write_stdout(&single, 1) != 0) {
+        return -1;
+    }
+
+    return (int)(unsigned char)single;
 }
 
 int puts(const char *text)
 {
-    long wrote = write(ULIBC_STDOUT, text, strlen(text));
-
-    if (wrote < 0) {
-        return (int)wrote;
+    if (text == NULL) {
+        return -1;
     }
 
-    wrote = write(ULIBC_STDOUT, "\n", 1);
+    if (__ulibc_stream_write_stdout(text, strlen(text)) != 0) {
+        return -1;
+    }
 
-    return (wrote < 0) ? (int)wrote : 0;
+    if (__ulibc_stream_write_stdout("\n", 1) != 0) {
+        return -1;
+    }
+
+    return 0;
 }

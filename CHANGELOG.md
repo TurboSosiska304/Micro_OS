@@ -10,6 +10,321 @@ the MicroFS volume change by adding only.
 A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 (`vX.Y.Z-pre`) is a pre-release and must match `kernel_version()`.
 
+## [1.6.0] - 2026-11-23
+
+### The release
+
+- 1.6.0-rc1: the release of the memory a program maps, the account of a
+  task, the interrupts of many cores, the disk on the bus, the pipes at the
+  speed of the memory and the machine in the network (`docs/releases/1.6.md`).
+- 1.6.0-rc2: the 600-second session of the tag refused to build its image -
+  the programs of the release no longer fit the 8 MiB of that volume
+  (`mkfs: /bin/sqlite3 took -4 byte(s) of 848800`). The volume of the session
+  is 24 MiB and the filler of free space steps down by 256 KiB, because a
+  single file near the free count of the volume is refused by the chain and
+  the table and not by the count.
+
+
+### Added
+
+- A server of the files of the volume, `httpd serve [port] [root]`
+  (ADR 0036): HTTP/1.1 with keep-alive, GET and HEAD, `Content-Length`, the
+  type from the extension, `ETag` and `304`, one `Range` with `206` and
+  `416`, a listing of a directory as a chunked page of links, a `301` for a
+  directory named without its slash, a line of `/var/log/httpd.log` per
+  request, an idle timeout, a ceiling of the sessions that answers `503`, and
+  a path that is decoded and walked under the root, where a `..` that would
+  climb out is `403`.
+- The serving side of TLS, `httpd tls [port] [root]` on 443: the vendored
+  mbedTLS with `MBEDTLS_SSL_SRV_C`, the certificate and the key of
+  `/etc/ssl/server.crt` and `server.key` through the VFS, and `curl -k`
+  against the x86-64 guest in `make x86-net-smoke`. The board has no TLS on
+  either side and says so.
+- An update over the network, `ota fetch <url>` (ADR 0022 §7, ADR 0036): the
+  signed image is downloaded into a staging file, the trailer and the
+  Ed25519 signature are checked **before** the inactive slot is written, the
+  slot is selected and the reboot is the caller's; a slot that never
+  confirms itself is rolled back - in the file form of x86-64 and in otadata
+  on the board. `ota status`, `ota boot` and `ota confirm` are the state at
+  the console, and `wget --sha256` reports the digest of what it read.
+- The system call of the x86-64 port takes the fast door of the processor
+  (ADR 0035): the library of a program calls with `syscall` and returns with
+  `sysret`, the port programs `IA32_EFER.SCE`, `IA32_STAR`, `IA32_LSTAR` and
+  `IA32_FMASK` on every core, and the entry finds the kernel stack of the
+  program in the per-core record under `IA32_GS_BASE` - the same number
+  `port_x86_64_tss_set_rsp0()` writes into `RSP0` of the TSS. The frame is the
+  same 160 bytes in the same order as the vector 0x80 leaves, so the signal
+  frame, the child of a `fork()` and the replacement frame of an `execve` did
+  not move; `sysret` is guarded (a canonical address and a ring 3 selector, or
+  the frame goes back through `iretq`), because the frame of a `sigreturn`
+  comes from memory the program can write. The vector 0x80 stays as the second
+  door: it is what a program of another compiler calls and what the restorer
+  of a signal handler returns through, and it now leaves through the same fast
+  tail. A `getpid()` of a program costs 0.55 µs instead of 0.92 µs on the QEMU
+  of the tests - 1.8 million calls a second instead of 1.1 - and a `grep`,
+  `sed` or `wc` of a file of 1 MiB moves by less than the noise, because the
+  door is not what those commands spend their time in.
+- The grain of the I/O (ADR 0035): the ring of a pipe is a setting of the
+  port - 64 KiB on x86-64 and the host, the block of one call of the system,
+  4 KiB on the board - and comes from the allocator with the pipe, so sixteen
+  pipes of 64 KiB cost a megabyte only when they are all open and the board
+  pays 4 KiB per stage; a write of `PIPE_BUF` bytes waits for the whole block
+  and lands whole, and the wait of a pipe has no bound - a reader slower than
+  its writer sleeps instead of answering `EAGAIN`, and a signal cuts the wait
+  short with `EINTR`. A stream has a real block from the arena of the program
+  and `setvbuf` works: `_IOLBF` on a terminal, `_IOFBF` on a file and a pipe
+  (4 KiB), `_IONBF` for the error descriptor, `fflush`, `fclose` and `exit`
+  over it, and `printf` reaches the block of `stdout` through a weak seam
+  when the program links the streams. `/bin/streams` checks the three modes
+  and the flush of `exit`; `/bin/iobench` and `tools/io_bench.py` are the
+  ruler of the machine. One megabyte through `cat file | wc -c` went from
+  5.9 s to 0.47 s, the same megabyte through `iobench pipe` from 0.20 to
+  29 MiB/s with the reader's calls down from 4096 to 16, and a filter of
+  sbase over a megabyte of text is 1.2-1.5 times faster (its time is the
+  regular expression, not the calls).
+- The accounts of the machine are files of `/etc` (ADR 0033): `/etc/passwd`
+  holds `name:uid:gid:home:shell` and `/etc/shadow` the salted SHA-256 of a
+  password (`$sha256$<salt>$<hex>`, `*` for an account without one, mode
+  `0600`), `getpwnam` and `getpwuid` read the same file as the shell, and
+  `login`, `su` and `id` are commands of the console: `login` asks the name
+  and the password three times and hands the shell to that user, `su` lets
+  root become anybody without a password and a user become another only with
+  the password of the account, `-l` enters the home, and `id` says who the
+  shell is. `task_set_creds` moves the gid and the uid of a task in one
+  critical section. There is no setuid bit in `MOX1` and no gid in the record
+  of a filesystem: the console is the door, and both are a format change with
+  an ADR of their own. `make x86-smoke` boots the machine, logs in as root
+  with a wrong and then the right password, becomes uid 7 with `su -`, refuses
+  `su root` with the wrong password, and reads the owner of a file the user
+  wrote; 340 checks.
+- The disk of the x86-64 port speaks bus-master DMA (ADR 0032): the PCI IDE
+  function is found by its class, the bus-master bit is set in its command
+  register, a PRDT of 4 KiB pieces (no entry crosses a page) moves up to
+  64 KiB in one command, and the transfer ends with IRQ 14 instead of a poll
+  of the status register. A machine without the function, a drive whose
+  identify data says it cannot and a buffer whose pages the port cannot
+  translate all keep the PIO path, which is unchanged.
+- ADR 0032 states the contract of a physical address: which addresses may
+  reach a device, who translates them (`port_x86_64_bus_phys` for the heap
+  and the image, `port_x86_64_paging_phys` for a page of a program), what
+  keeps the memory alive while the transfer runs, and why x86-64 needs no
+  cache maintenance around a DMA.
+- `/proc/blockdev` lists the block devices with the state of the cache above
+  each of them: the bytes of a sector, the sectors of the device, the boxes,
+  the boxes that hold a sector, the dirty sectors the medium does not have
+  yet, and whether the cache writes back.
+- `k_blockdev_register_cached_sized()` and `k_blockdev_cache_stats()`: a
+  device asks for a cache of its own size (the disk of the x86-64 port asks
+  for 512 sectors, half a megabyte, because a bus master moves a run at a
+  time) and a reader can ask what it holds.
+- A task carries a uid and a gid, and the triads of a file are read against
+  them: `getuid`, `geteuid`, `getgid`, `setuid` and `setgid` take the numbers
+  36 to 40, root passes every triad while anyone else gets the bits of the
+  owner or of "others" (no filesystem of this system stores a group), `chmod`
+  is the owner's or root's, `chown`, `mount` and `umount` are root's, and
+  `kill` of a task of another uid answers `EPERM`. The credentials are
+  inherited by `task_create` and by `fork`, and `execve` keeps them.
+- `rename` reaches ext2, and `rmdir` is a call of its own (41) in the VFS and
+  in MicroFS, FAT32 and ext2: `unlink` of a directory is `KERR_ISDIR`, `rmdir`
+  of a file is `KERR_NOTDIR`, a full directory is `KERR_NOTEMPTY`, and
+  `rm -r` and `/bin/rmdir` use the call.
+- `fstat` (42) answers the mode, the owner, the size and the two moments of
+  the object behind an open descriptor, where the library used to answer 0666
+  and the size through `lseek`; `O_EXCL` is a flag of `open` and of the ABI.
+- `ext2_repair` and `fsck ext2 [-y] <point>`: the counters of the superblock
+  and of every group, both bitmaps, the link counts, the `.` and `..` entries
+  and the size of a directory against its chain, and a lost file reconnected
+  as `#<inode>` under `/lost+found`. The oracle is the host: `e2fsck -fn`
+  answered "Free blocks count wrong" with exit 4 before the repair and exit 0
+  after it.
+- The map of `mfs_check` is sized by the volume instead of a constant of 32 768
+  records, so a volume of 40 000 records repairs an orphan past the old
+  ceiling.
+- SQLite keeps its journal in a file (`journal_mode=DELETE`): `make
+  x86-fs-smoke` cuts a transaction with a reset and reads the rolled-back rows
+  on the next boot, `PRAGMA integrity_check` answering `ok`.
+- The switch of a task saves and loads the XMM and x87 state (512 bytes of
+  `struct port_task`, `fxsave64` and `fxrstor64` in `commit_switch()`), a
+  `fork` copies the live state into the child, `execve` starts the new image
+  from a clean template, and the trampoline of an application processor turns
+  `CR4.OSFXSR`/`OSXMMEXCPT` and `CR0.NE` on - without them SSE in ring 3 of
+  the second core was `#UD`. `/bin/fpu2` is the test that failed before it:
+  two children compute in `xmm0`/`xmm1` while the parent computes, and a third
+  dirties x87 and the control words before an `execve`.
+
+- A program has the POSIX process pair on x86-64: the child of `fork()` is a
+  task with a copy-on-write image, `execve()` from a program replaces the
+  image of the caller instead of starting a second task (the pid, the parent,
+  the descriptors and the directory stay), and `waitpid()` reaps the child and
+  answers its status, with `-1` meaning "any child". `/bin/procs` proves the
+  four shapes in `make x86-smoke`: a child that computes 55 and returns it, a
+  double fork with two statuses, and a child whose `execvp` becomes another
+  program. `make x86-smoke` is 319 checks. The shell stays the synchronous
+  caller it was, because a kernel task has no address space to replace.
+- A pipeline of the shell is no longer three stages: the parser holds sixteen
+  (the most a line of 32 words can carry), the pipes are made one boundary at
+  a time as the stages are forked - the shell keeps one reading end between
+  two forks and closes the boundary behind it - and the system has sixteen
+  pipes and forty open-file descriptions. A line of ten stages and Ctrl+C for
+  the whole job are in `make x86-smoke`.
+- `xargs -P` works: the command of sbase forks a child per batch, the child's
+  `execve` replaces it, and the parent reaps with `waitpid(-1)` without
+  blocking below the ceiling of `-P`. `make x86-smoke` runs six commands with
+  `-P 4` and checks that each word was handed to one child.
+- The interface has programs (ADR 0030): `/bin/edit` is a text editor on the
+  screen - a file, the arrows, the characters of the keyboard, `Ctrl+S` to
+  save and `Ctrl+Q` to leave, a title bar, a status line and a modal window
+  that asks about an unsaved file - and `/bin/fm` is a file manager: the
+  directory through `readdir`, the selection, Enter to open a directory or
+  hand a file to `/bin/edit`, `d`/Delete to `unlink` after a modal question
+  and `q` to return. Both write only the rows they changed. `make
+  x86-vga-smoke` boots a copy of the disk, types two lines into the editor
+  with `sendkey`, saves, reboots and reads the file back with `cat`, and
+  lists, moves and deletes in the file manager; 129 checks.
+- The window model, the canvas and the keyboard are `components/ui`, portable
+  and tested on the host (`tests/cases/test_ui_windows.c`): a window is a
+  rectangle in the order of the paint with a focus and a modal flag, the
+  canvas fills, outlines and lays out a line of cells of a font the caller
+  gives, and the keyboard maps the names of `/dev/input0` to the characters
+  of the US layout. `/bin/ui` uses the model for its two windows.
+- The arrows, Home, End, PageUp, PageDown, Insert and Delete are keys of the
+  machine: the E0 prefix of the scancode set 1 is translated by the portable
+  table `kernel/input_set1.h` instead of being dropped, the ten numbers are
+  appended to `enum k_input_key` (69-78) and never move, `key.up` and
+  `key.delete` are events of `/dev/input0`, the right Ctrl is a modifier of
+  the same form, and the Enter and the slash of the keypad still type their
+  character for the shell. `tests/cases/test_ui.c` holds the numbers and the
+  table.
+- A volume of 5 GiB is an ordinary volume: `make x86-volume-smoke` writes the
+  images of ext2 and of MicroFS of the plan, boots each as the root of the
+  machine, writes a file of 128 MiB (16 MiB of MicroFS) and reads it back, and
+  then reads the image of the session with the tools of the world - `e2fsck
+  -fn` finds nothing to repair and `debugfs` sees the file, while the `fsck`
+  of the machine says the MicroFS volume is consistent. The image of ext2 is
+  sparse on the host (6 MB of a disk of 5 GiB), the file goes in at about
+  1.2 MiB/s and comes back at 4 MiB/s, and the map of the free blocks of the
+  MicroFS volume is 615 KiB of the heap. The target is not a part of `make ci`
+  (about four minutes) and `docs/wiki/files.md` has the numbers.
+- ext2 writes the double and the triple table of pointers: a file grows as far
+  as the format allows it (2 GiB of blocks of 1 KiB), so a file of 128 MiB of
+  a 5 GiB volume is one `write` after another and not the answer of a full
+  volume. [[`components/fs_ext2/src/ext2_write.c`]]
+- The superblock of an ext2 volume settles its counters of the free blocks and
+  the free inodes when an operation that allocates or frees is done (a close,
+  a create, a `mkdir`, an `unlink`, a cut): the root of the machine is never
+  unmounted, and `e2fsck -fn` of the host now finds a sound image after a
+  session instead of a superblock that lies about the volume.
+- `make sdk` writes the SDK of a program into `build-sdk/microos-sdk/<version>/`
+  (or `DESTDIR`): the headers of the library and of the ABI, the archive
+  `lib/libmicroos_user.a` built from those sources (35 objects, arena of
+  256 KiB, `-Os -ffreestanding -mno-red-zone -march=x86-64`), `crt0.o`,
+  `program.ld`, `mkprog.sh`, `link_program.sh`, `microos_sign`,
+  `share/microos-toolchain.cmake`, `share/build-libc.sh` with the sources,
+  and `share/examples/hello`. A program is built outside this tree with two
+  commands - `cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=<sdk>/share/...` and
+  `cmake --build build` - and no include path or library of its own
+  (`docs/porting-programs.md` §6, ADR 0025 §6). The example is 10 688 bytes
+  and runs from `/bin` on the machine of QEMU.
+- The timer of the PIT and the keyboard of the x86-64 machine are lines of the
+  I/O APIC and no longer of the 8259: the port reads the table of the firmware
+  (the address of the chip and the ISA overrides of the MADT), programs one
+  redirection entry per line - the vector, the destination core, the polarity,
+  the trigger and the mask - masks the legacy chip as a whole and sends the EOI
+  to the local APIC of the core that took the line. A machine whose firmware
+  describes no chip keeps the 8259, and `smp irq` prints the table;
+  `smp irq keyboard <cpu>` moves a line to another core, which is how
+  `make x86-smp-smoke` sees the keyboard arrive where it was sent (ADR 0034).
+- A task that the scheduler puts in the queue of another core wakes that core
+  with an inter-processor interrupt instead of waiting for its next tick: the
+  port contract gains `k_port_cpu_wake()` (weak in `src/cpu_default.c`, so a
+  port with one core keeps the tick), the scheduler calls it after it drops
+  its lock, and the x86-64 port sends the vector `0x51`, whose body claims and
+  switches. The port counts the tasks that began before the tick of the core
+  and the ones that began at it, and `smp wake` stops the clock of the other
+  core to show that an interrupt - and nothing else - starts a task there
+  (ADR 0034). `make x86-smp-smoke` is 52 checks.
+- The image of `make x86-disk` carries the two files an `https://` repository
+  needs on a fresh machine: the bundle of roots of the Mozilla program in
+  `/etc/ssl/certs.pem` (`tools/ca/README.md`) and the key of the repository of
+  the project in `/etc/pkg/keys/microos-progs.pub` (`tools/pkg/README.md`).
+  The documented `pkg repo add` + `pkg -Sy` + `pkg -S hello` installs a
+  package out of the box, and `make x86-net-smoke` checks it on the image of
+  the release: 59 checks.
+
+### Fixed
+
+- MicroFS wrote a file of 16 MiB of a 5 GiB volume at 0.11 MiB/s: the growth
+  of the chain moved the cursor of the position of the descriptor, so a write
+  that grew the chain to the end of the call then walked it again from the
+  head for the block it was about to write - the square of the size of the
+  file. The append has a cursor of its own and the same file goes in at
+  1.9 MiB/s.
+- The walk of the table of the records of MicroFS read the block of the table
+  once per record (32 times the bytes of the table): `df`, `fsck` and the
+  line of the mount walked the 214 MB of the table of a 5 GiB volume 32 times.
+  One block of a cache in the filesystem makes the walk cost the table.
+- The wait of `execve` for the program it started was ten seconds, which a
+  file of 128 MiB of a large volume outran: the caller returned to the shell
+  while the program still wrote, and the next line of the shell was a second
+  writer of the same file - a volume that needed `e2fsck`. The wait is ten
+  minutes, and a program that outlasts it is told to stop with SIGINT and
+  given a second to answer before the caller gives up.
+
+- `waitpid(-1)` and `wait()` could not wait for any child: the pid arrives in
+  an unsigned register, where -1 is larger than every pid, and the scan of the
+  children compared it as a number - the wait answered `ECHILD` and `xargs`
+  could not reap the children it had forked. The scan compares the signed
+  value, and a host test waits for `-1`.
+- The parent's first write after a `fork()` went into the frame the child was
+  about to return into: the clone made both page tables read-only but flushed
+  the TLB with an address 32 MiB above the page (the base of the window was
+  counted twice), so the stale writable entry stayed. The clone flushes the
+  address it changed, and a libc program's child returns 0 without the
+  library's `getpid()` workaround and its yield.
+
+- A pipeline lost the output of its last stages: the shell keeps no
+  descriptor of its own, so `pipe()` handed out the low numbers and a read
+  end of a boundary could land on descriptor 1 - the standard output of the
+  stage, which then answered `bad file descriptor` (`15 stages` of
+  `cat | ... | wc -l` printed no count). `stage_setup()` moves the two ends
+  above 2 and closes the three before the copies, so a stage owns exactly 0
+  and 1 whatever the numbers of the pipes were.
+- The documented maximum of a chain did not run: sixteen stages of programs
+  need 34 tasks of a table of 32 (a stage is two tasks, the stage and the
+  program) and the last ones were never started, silently. The shell counts
+  the task slots before it makes the first pipe and refuses a chain that does
+  not fit with the numbers; fifteen stages of programs fit on x86-64 and
+  sixteen of the commands of the shell, and `docs/wiki/shell.md` says why.
+- `pkg` could not download anything over `https` on an image out of the box:
+  `/etc/ssl/certs.pem` was not there, a certificate signed with
+  ecdsa-with-SHA384 was `signature algorithm (oid) is unsupported` because
+  SHA-384 is a module of its own in mbedTLS 3.6 (ISRG Root X2 and the P-384
+  chain of Let's Encrypt were unreadable), and one certificate the image does
+  not implement made the library refuse the whole bundle. SHA-384 is enabled,
+  a bundle is loaded whole with the certificates that cannot be parsed skipped
+  and counted once in the log, the head of an answer is read up to 1024 bytes
+  (GitHub Pages answers 702, and the old 640 said "the address or the answer
+  is too long"), and `pkg` names the key file when a signature does not match.
+- `kill -TERM <pid of the shell>` left the machine without a console until a
+  reset: the console is the only shell and the port has no `getty`
+  (ADR 0033). The signal to the task that runs the command is refused with a
+  sentence, as the one to `init` already was.
+- A name longer than a volume keeps was `file too big` or `invalid argument`:
+  `mkdir`, `write`, `rm`, `stat`, `ls`, `tree` and `df` of the shell say
+  `file name too long`, the limit of MicroFS (32 bytes) named as the limit it
+  is.
+- The `mkdir` of the shell took one directory and dropped the other words of
+  the line in silence; every word is a directory now, as in Linux and in the
+  program of `/bin`.
+- `df` printed `(0 KB each)` for the 512-byte blocks of a FAT32 volume and
+  `inodes: 0 of 0 free` for a volume that keeps no inodes. The unit of the
+  block is named (`512 bytes each`, or `1 KB each`), and a volume without
+  inodes says `not kept by this volume`.
+- `login` with no name said `the name does not fit` and then `no such
+  account`; it says `a name is needed`, and nothing else.
+- The help of `cat` promised `-n` without saying that on x86-64 the `/bin/cat`
+  of sbase runs at the prompt and takes `-u`.
+
 ## [1.5.0] - 2026-11-23
 
 ### Added

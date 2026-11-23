@@ -493,6 +493,40 @@ int kshell_invoke(int argc, char **argv, bool child)
 }
 
 /*
+ * Whether the stage of a pipeline runs a file of the machine, which is the
+ * question of the arithmetic of the task table: such a stage is two tasks
+ * (the stage, which waits, and the program) and a stage that is a command of
+ * the shell is one. The answer is the decision kshell_invoke() takes for a
+ * stage: the table of the commands first, with PATH in front of it for the
+ * ten names of sbase, and any other name is a program.
+ */
+bool kshell_stage_is_program(const char *name)
+{
+    if (name == NULL || name[0] == '\0') {
+        return false;
+    }
+
+    /*
+     * `exec` is a command of the shell and a program in one line: the stage
+     * runs the command, the command starts the file, and the file is a second
+     * task. The arithmetic has to see the two.
+     */
+    if (strcmp(name, "exec") == 0) {
+        return true;
+    }
+
+    if (find_command(name) == NULL) {
+        return true;
+    }
+
+    if (!command_prefers_program(name)) {
+        return false;
+    }
+
+    return kshell_help_has_program(name);
+}
+
+/*
  * The two commands that change the task that runs them: `cd` moves the
  * working directory of the caller and `path` changes the value of the shell.
  * A stage of a pipe is a task of its own, so either would work on a copy
@@ -944,6 +978,24 @@ static int cmd_kill(int argc, char **argv)
     if (pid == 1) {
         kshell_printf("kill: 1: the init of the machine is not killed by the console\n");
         return KSHELL_ERROR;
+    }
+
+    /*
+     * The console itself. This command runs in the task that reads the
+     * keyboard, and the port has no getty to start another one (ADR 0033):
+     * a signal that ends the shell leaves a machine that answers nothing
+     * until it is reset. The refusal is a sentence, because the pid of the
+     * shell is in `ps` and a person may take it for a program.
+     */
+    {
+        struct task *self = task_self();
+
+        if (self != NULL && pid == self->pid) {
+            kshell_printf("kill: %lu: this is the console itself; `reboot` is how the machine "
+                          "leaves\n",
+                          pid);
+            return KSHELL_ERROR;
+        }
     }
 
     rc = microos_kill((int)pid, sig);

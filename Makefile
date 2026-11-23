@@ -32,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format sdk idf-check idf-build idf-flash idf-monitor idf-size bundle bundle-board bundle-x86 x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-root-smoke x86-volume-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-fs-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak x86-smp-smoke soak-smp
+.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format sdk idf-check idf-build idf-flash idf-monitor idf-size bundle bundle-board bundle-x86 x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-root-smoke x86-volume-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-fs-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak x86-smp-smoke soak-smp bench
 
 help:
 	@echo "Micro OS — available targets:"
@@ -74,6 +74,8 @@ help:
 	@echo "  make x86-iso    the bootable ISO: loader, kernel and root.img (K13)"
 	@echo "  make x86-iso-run    boot that ISO in a terminal (-nographic)"
 	@echo "  make x86-iso-smoke  boot the ISO and check the shell and /bin"
+	@echo "  make bench      the numbers of the machine: syscalls, fork, pipe,"
+	@echo "                  file and console, one boot of fixed sizes"
 	@echo "  make soak       the session of 600 seconds on x86-64 (one boot)"
 	@echo "  make soak SOAK_MINUTES=1  the same, short, to check the tool"
 	@echo "  make soak SOAK_ITERATIONS=5  five short boots, one pass each"
@@ -392,6 +394,21 @@ x86-smp-smoke: x86-smp-build x86-disk
 x86-volume-smoke: x86-build build
 	python3 tools/x86_volume_smoke.py --build $(X86_BUILD) --mkfs $(X86_MKFS)
 
+# The numbers of the machine (tools/x86_bench.py, docs/bench.md): one boot of
+# the x86-64 port, `/bin/bench` of the build in the image for the run, and a
+# table of fixed sizes - the call of the door, a fork and an exec, 4 MiB
+# through a pipe, a file of 16 MiB written and read, and the console. The
+# value of a row is what two releases are compared by; the sizes are the
+# constants of the tool and do not change with the release.
+#
+# Not a part of `make ci`: the pipe of 1.6 holds 256 bytes, so the pipe test
+# is sixteen thousand handoffs and the run is about a minute of emulation.
+# `make bench BENCH_ARGS="--json bench.json"` keeps the table in a file.
+BENCH_ARGS ?=
+
+bench: x86-build build
+	python3 tools/x86_bench.py --build $(X86_BUILD) --mkfs $(X86_MKFS) $(BENCH_ARGS)
+
 # The screen without a display: the monitor of QEMU reads the framebuffer of
 # the new screen with screendump (a picture has no text memory) and the text
 # mode of the fallback with pmemsave, and presses the keys of the keyboard, so
@@ -563,7 +580,7 @@ X86_ISO_ROOT := $(X86_ISO_BUILD)/root.img
 
 x86-iso: x86-disk build
 	python3 tools/x86_image.py --image $(X86_ISO_ROOT) --build $(X86_BUILD) \
-		--mkfs build-host/tools/microos_mkfs --size-mb 8
+		--mkfs build-host/tools/microos_mkfs --size-mb 24
 	python3 tools/x86_iso.py --loader $(X86_BUILD)/loader32.elf \
 		--kernel $(X86_BUILD)/microos64.bin --root $(X86_ISO_ROOT) \
 		--out $(X86_ISO_IMAGE) --stage $(X86_ISO_BUILD)/iso \

@@ -19,7 +19,9 @@ carries and links none of this (ADR 0018, the compatibility port).
 * `library/` — the sources of the library, as they are upstream;
 * `LICENSE` — the upstream license file, which carries both grants;
 * `config/microos_config.h` — **ours**: the single configuration of the
-  build, a TLS client with no file system, sockets, threads or timing;
+  build, the clients of the machine and the server of files of
+  `components/net/src/tls_server.c`, with no file system, sockets, threads
+  or timing;
 * `CMakeLists.txt` — **ours**: the object library `microos_mbedtls`.
 
 Nothing under `include/` or `library/` was edited. An update is a new
@@ -36,11 +38,12 @@ image, not a development tree.
 `MBEDTLS_CONFIG_FILE="microos_config.h"` (the definition is PUBLIC on the
 CMake target, so the sources of `components/net` see the same switches). It
 enables TLS 1.2 and 1.3, X.509, ECDHE with ECDSA or RSA certificates,
-RSA-PSS, AES-GCM/CCM, ChaCha20-Poly1305 and SHA-1/256/384/512. It disables
-the file system (`MBEDTLS_FS_IO`), the socket layer (`MBEDTLS_NET_C`), the
-threads (`MBEDTLS_THREADING_C`), the timing module (`MBEDTLS_TIMING_C`) and
-the server side (`MBEDTLS_SSL_SRV_C`). The comments in that file are the
-reason for each group.
+RSA-PSS, AES-GCM/CCM, ChaCha20-Poly1305 and SHA-1/256/384/512, and the
+serving side (`MBEDTLS_SSL_SRV_C`) - the server of files of `httpd tls`,
+ADR 0036. It disables the file system (`MBEDTLS_FS_IO`), the socket layer
+(`MBEDTLS_NET_C`), the threads (`MBEDTLS_THREADING_C`) and the timing module
+(`MBEDTLS_TIMING_C`). The comments in that file are the reason for each
+group.
 
 ## The platform layer
 

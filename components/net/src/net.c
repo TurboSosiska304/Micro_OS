@@ -22,10 +22,14 @@
 #include "kernel/net.h"
 #include "kernel/vfs.h"
 #include "kshell/kshell.h"
+#include "net/httpd.h"
 #include "net/mqtt.h"
 #include "net/net_http.h"
 #include "net/ntp.h"
+#include "net/ota.h"
 #include "net/tls.h"
+#include "net/tls_server.h"
+#include "sha256.h"
 
 #if MICRO_OS_NET_HTTP
 /* --- the transport of the HTTP client --- */
@@ -194,6 +198,104 @@ int net_http_download(const char *url, const char *path, bool resume, struct htt
 {
     return net_http_download_to(&s_transport, url, path, resume, out);
 }
+
+/* --- the digest of a download --- */
+
+struct hashed_sink {
+    struct file_sink file;
+    struct microos_sha256_ctx hash;
+};
+
+static int hashed_sink_write(void *ctx, const void *data, k_size_t size)
+{
+    struct hashed_sink *sink = (struct hashed_sink *)ctx;
+    int rc = vfs_write(&sink->file.file, data, size);
+
+    if (rc < 0) {
+        return rc;
+    }
+
+    microos_sha256_update(&sink->hash, (const uint8_t *)data, (size_t)rc);
+
+    return rc;
+}
+
+static int hashed_sink_reset(void *ctx)
+{
+    struct hashed_sink *sink = (struct hashed_sink *)ctx;
+
+    microos_sha256_init(&sink->hash);
+
+    return file_sink_reset(&sink->file);
+}
+
+int net_http_download_hashed(const char *url, const char *path, bool resume,
+                             struct http_stream *out, char hex[HTTP_SHA256_HEX])
+{
+    static const char digits[] = "0123456789abcdef";
+    struct hashed_sink sink;
+    struct http_stream stream;
+    k_u64_t have = 0;
+    k_u8_t digest[MICROOS_SHA256_SIZE];
+    k_size_t i;
+    int rc;
+
+    if (url == NULL || path == NULL || hex == NULL) {
+        return HTTP_INVALID;
+    }
+
+    memset(&sink, 0, sizeof(sink));
+    sink.file.path = path;
+    microos_sha256_init(&sink.hash);
+
+    rc = vfs_open(path, VFS_O_RDWR | VFS_O_CREAT, &sink.file.file, sink.file.priv);
+    if (rc != 0) {
+        return HTTP_ERROR;
+    }
+
+    if (resume) {
+        struct vfs_stat info;
+
+        if (vfs_stat(path, &info) == 0 && info.type == 1) {
+            have = info.size;
+        }
+
+        sink.file.file.offset = have;
+    }
+
+    memset(&stream, 0, sizeof(stream));
+    stream.transport = &s_transport;
+    stream.url = url;
+    stream.sink.ctx = &sink;
+    stream.sink.write = hashed_sink_write;
+    stream.sink.reset = hashed_sink_reset;
+    stream.resume_from = have;
+    stream.max_redirects = HTTP_REDIRECT_MAX;
+    stream.timeout_ms = NET_DOWNLOAD_TIMEOUT_MS;
+
+    rc = http_stream(&stream);
+
+    (void)vfs_close(&sink.file.file);
+
+    microos_sha256_final(&sink.hash, digest);
+
+    for (i = 0; i < MICROOS_SHA256_SIZE; i++) {
+        hex[i * 2u] = digits[digest[i] >> 4];
+        hex[i * 2u + 1u] = digits[digest[i] & 0x0Fu];
+    }
+
+    hex[HTTP_SHA256_HEX - 1u] = '\0';
+
+    if (out != NULL) {
+        *out = stream;
+    }
+
+    if (rc == HTTP_OK && stream.status != 200 && stream.status != 206) {
+        return HTTP_ERROR;
+    }
+
+    return rc;
+}
 #endif /* MICRO_OS_NET_HTTP */
 
 #if MICRO_OS_NET_NTP
@@ -269,32 +371,110 @@ static bool parse_port(const char *text, k_u16_t *out)
 #endif /* MICRO_OS_NET_HTTP_SERVER || MICRO_OS_NET_MQTT */
 
 #if MICRO_OS_NET_HTTP_SERVER
-/* --- the page of the state --- */
+/* --- the servers of HTTP --- */
+
+/* The start of the server of files: `serve` is the door of the volume and
+ * `tls` the same door with the certificate of /etc/ssl. The two share the
+ * arguments: an optional port and an optional root. */
+static int httpd_start_files(int argc, char **argv, bool tls)
+{
+    struct httpd_config config;
+    k_u16_t port = tls ? 443u : HTTPD_PORT;
+    const char *root = argc > 2 ? argv[2] : HTTPD_ROOT_DEFAULT;
+    int rc;
+
+    if (argc > 3) {
+        kshell_printf("usage: httpd %s [port] [root]\n", tls ? "tls" : "serve");
+        return KSHELL_USAGE;
+    }
+
+    if (argc > 1 && !parse_port(argv[1], &port)) {
+        kshell_printf("usage: httpd %s [port] [root]\n", tls ? "tls" : "serve");
+        return KSHELL_USAGE;
+    }
+
+    if (httpd_running()) {
+        kshell_printf("httpd: already on port %u\n", (unsigned)httpd_port());
+        return KSHELL_OK;
+    }
+
+    memset(&config, 0, sizeof(config));
+    config.root = root;
+    config.log = HTTPD_LOG_PATH;
+    config.port = port;
+    config.connections = HTTPD_CONNECTIONS;
+    config.idle_timeout_ms = HTTPD_IDLE_TIMEOUT_MS;
+    config.tls = tls;
+
+    rc = httpd_start(&config);
+
+    if (rc == HTTPD_EROOT) {
+        kshell_printf("httpd: %s is not a directory\n", root);
+        return KSHELL_ERROR;
+    }
+
+    if (rc != HTTPD_OK) {
+        kshell_printf("httpd: the port %u is not ours\n", (unsigned)port);
+        return KSHELL_ERROR;
+    }
+
+    kshell_printf("httpd: the files of %s are on port %u%s\n", httpd_root(), (unsigned)httpd_port(),
+                  tls && net_tls_server_supported() ? " (TLS)" : "");
+
+    if (tls && !net_tls_server_supported()) {
+        kshell_printf("httpd: this image has no serving side of TLS\n");
+    }
+
+    return KSHELL_OK;
+}
+
+/* `httpd off` closes both doors and says what it found: a script of init may
+ * stop a server that the boot did not start. */
+static int httpd_stop_all(void)
+{
+    bool was_on = net_http_server_running() || httpd_running();
+
+    if (net_http_server_running()) {
+        net_http_server_stop();
+    }
+
+    if (httpd_running()) {
+        httpd_stop();
+    }
+
+    kshell_printf("httpd: %s\n", was_on ? "stopped" : "it is not on");
+
+    return KSHELL_OK;
+}
 
 /*
- * The command does not start the server by itself at the boot: a machine of
+ * The command does not start a server by itself at the boot: a machine of
  * this size opens a port when its owner says so, from a script of init or
- * from the shell. The policy is the platform's; the door is here.
+ * from the shell. The policy is the platform's; the doors are here.
+ *
+ * `httpd [port]` is the page of the state (net/net_http.h), `httpd serve
+ * [port] [root]` is the server of the files of the volume (net/httpd.h) and
+ * `httpd tls [port] [root]` is the same with the certificate of the machine.
  */
 static int cmd_httpd(int argc, char **argv)
 {
     k_u16_t port = NET_HTTP_PORT;
 
-    if (argc > 2) {
-        kshell_printf("usage: httpd [port|off]\n");
-        return KSHELL_USAGE;
+    if (argc >= 2 && strcmp(argv[1], "off") == 0) {
+        return httpd_stop_all();
     }
 
-    if (argc == 2 && strcmp(argv[1], "off") == 0) {
-        if (!net_http_server_running()) {
-            kshell_printf("httpd: it is not on\n");
-            return KSHELL_OK;
-        }
+    if (argc >= 2 && strcmp(argv[1], "serve") == 0) {
+        return httpd_start_files(argc - 1, argv + 1, false);
+    }
 
-        net_http_server_stop();
-        kshell_printf("httpd: stopped\n");
+    if (argc >= 2 && strcmp(argv[1], "tls") == 0) {
+        return httpd_start_files(argc - 1, argv + 1, true);
+    }
 
-        return KSHELL_OK;
+    if (argc > 2) {
+        kshell_printf("usage: httpd [port|off] | httpd serve [port] [root]\n");
+        return KSHELL_USAGE;
     }
 
     /*
@@ -302,16 +482,22 @@ static int cmd_httpd(int argc, char **argv)
      * a usage whatever the door is doing.
      */
     if (argc == 2 && !parse_port(argv[1], &port)) {
-        kshell_printf("usage: httpd [port|off]\n");
+        kshell_printf("usage: httpd [port|off] | httpd serve [port] [root]\n");
         return KSHELL_USAGE;
     }
 
-    /*
-     * One server is one port: a second `httpd` says where the page is and
-     * leaves the server alone. Moving it is `httpd off` and then `httpd`.
-     */
     if (net_http_server_running()) {
+        /* One server is one port: a second `httpd` says where the page is and
+         * leaves the server alone. Moving it is `httpd off` and then
+         * `httpd`. */
         kshell_printf("httpd: already on port %u\n", (unsigned)net_http_server_port());
+        return KSHELL_OK;
+    }
+
+    if (argc == 1 && httpd_running()) {
+        kshell_printf("httpd: %u request(s), %u refused, %u session(s) on port %u\n",
+                      (unsigned)httpd_requests(), (unsigned)httpd_refused(),
+                      (unsigned)httpd_active(), (unsigned)httpd_port());
         return KSHELL_OK;
     }
 
@@ -344,10 +530,13 @@ static int cmd_http(int argc, char **argv)
     if (rc != HTTP_OK) {
         if (rc == HTTP_TLS) {
             kshell_printf("http: %s: %s\n", argv[2], net_tls_last_error());
+        } else if (rc == HTTP_ERROR) {
+            kshell_printf("http: %s: the connection failed\n", argv[2]);
+        } else if (rc == HTTP_TOO_LONG) {
+            kshell_printf("http: %s: the head of the answer is longer than %u bytes\n", argv[2],
+                          (unsigned)HTTP_HEAD_MAX);
         } else {
-            kshell_printf("http: %s: %s\n", argv[2],
-                          rc == HTTP_ERROR ? "the connection failed"
-                                           : "the URL is not one we speak");
+            kshell_printf("http: %s: the URL is not one we speak\n", argv[2]);
         }
         return KSHELL_ERROR;
     }
@@ -372,15 +561,29 @@ static int cmd_wget(int argc, char **argv)
     struct vfs_stat info;
     k_u64_t have = 0;
     bool resume = false;
+    bool hashed = false;
+    char digest[HTTP_SHA256_HEX];
     int rc;
 
-    if (argc != 3) {
-        kshell_printf("usage: wget <url> <file>\n");
+    if (argc != 3 && argc != 4) {
+        kshell_printf("usage: wget [--sha256] <url> <file>\n");
         return KSHELL_USAGE;
     }
 
+    if (argc == 4) {
+        if (strcmp(argv[1], "--sha256") != 0) {
+            kshell_printf("usage: wget [--sha256] <url> <file>\n");
+            return KSHELL_USAGE;
+        }
+
+        argv++;
+        hashed = true;
+    }
+
     if (vfs_stat(argv[2], &info) == 0) {
-        if (info.type != 1) {
+        /* A device - /dev/null for a stream of a hundred megabytes that is
+         * not kept - is a sink as good as a file. A directory is not. */
+        if (info.type == 2) {
             kshell_printf("wget: %s is not a file\n", argv[2]);
             return KSHELL_ERROR;
         }
@@ -389,7 +592,12 @@ static int cmd_wget(int argc, char **argv)
         resume = have > 0;
     }
 
-    rc = net_http_download(argv[1], argv[2], resume, &stream);
+    if (hashed) {
+        rc = net_http_download_hashed(argv[1], argv[2], resume, &stream, digest);
+    } else {
+        rc = net_http_download(argv[1], argv[2], resume, &stream);
+    }
+
     if (rc != HTTP_OK) {
         /*
          * A file this command made and could not fill is not a file - unless
@@ -420,7 +628,8 @@ static int cmd_wget(int argc, char **argv)
             kshell_printf("wget: %s: a body this client cannot read\n", argv[1]);
             break;
         case HTTP_TOO_LONG:
-            kshell_printf("wget: %s: the address or the answer is too long\n", argv[1]);
+            kshell_printf("wget: %s: the head of the answer is longer than %u bytes\n", argv[1],
+                          (unsigned)HTTP_HEAD_MAX);
             break;
         default:
             kshell_printf("wget: %s: the server answered %d\n", argv[1], stream.status);
@@ -441,7 +650,149 @@ static int cmd_wget(int argc, char **argv)
 
     kshell_printf("\n");
 
+    if (hashed) {
+        kshell_printf("sha256: %s\n", digest);
+    }
+
     return KSHELL_OK;
+}
+
+/* --- the update over the network --- */
+
+/* The key of an image on a machine that carries no key of its own: a file of
+ * /etc/ota, thirty-two bytes in hexadecimal, written by a person or by the
+ * bundle of a release. The board has the key of its boot compiled in. */
+#define OTA_KEY_PATH "/etc/ota/image.pub"
+
+static void ota_print_state(const struct ota_state *state)
+{
+    kshell_printf("ota: slot %d %s", state->active, ota_state_name(state->slot_state));
+
+    if (state->sequence > 0) {
+        kshell_printf(", %u install(s)", (unsigned)state->sequence);
+    }
+
+    if (state->rolled_back) {
+        kshell_printf(", rolled back");
+    }
+
+    kshell_printf("\n");
+}
+
+static int cmd_ota(int argc, char **argv)
+{
+    struct ota_state state;
+    struct ota_config config;
+    int rc;
+
+    if (argc < 2) {
+        kshell_printf("usage: ota [status|boot|confirm|fetch <url>|key <file>]\n");
+        return KSHELL_USAGE;
+    }
+
+    if (strcmp(argv[1], "status") == 0) {
+        rc = ota_status(&state);
+
+        if (rc != OTA_OK) {
+            kshell_printf("ota: %s\n", ota_strerror(rc));
+            return KSHELL_ERROR;
+        }
+
+        ota_print_state(&state);
+        return KSHELL_OK;
+    }
+
+    if (strcmp(argv[1], "boot") == 0) {
+        rc = ota_boot(&state);
+
+        if (rc != OTA_OK) {
+            kshell_printf("ota: %s\n", ota_strerror(rc));
+            return KSHELL_ERROR;
+        }
+
+        ota_print_state(&state);
+        return KSHELL_OK;
+    }
+
+    if (strcmp(argv[1], "confirm") == 0) {
+        rc = ota_confirm();
+
+        if (rc != OTA_OK) {
+            kshell_printf("ota: %s\n", ota_strerror(rc));
+            return KSHELL_ERROR;
+        }
+
+        if (ota_status(&state) == OTA_OK) {
+            kshell_printf("ota: slot %d is valid\n", state.active);
+        } else {
+            kshell_printf("ota: confirmed\n");
+        }
+
+        return KSHELL_OK;
+    }
+
+    if (strcmp(argv[1], "fetch") == 0) {
+        if (argc != 3) {
+            kshell_printf("usage: ota fetch <url>\n");
+            return KSHELL_USAGE;
+        }
+
+        memset(&config, 0, sizeof(config));
+        config.url = argv[2];
+        /* The board trusts the key of its boot; a machine whose key is a
+         * development one reads /etc/ota. */
+#if !MICRO_OS_OTA_BUILTIN_KEY
+        config.key_path = OTA_KEY_PATH;
+#endif
+        config.state = OTA_STATE_DEFAULT;
+
+        rc = ota_install(&config, &state);
+
+        if (rc != OTA_INSTALLED) {
+            kshell_printf("ota: %s\n", ota_strerror(rc));
+            return KSHELL_ERROR;
+        }
+
+        kshell_printf("ota: the image of %s is in slot %d (%s); a reboot is needed\n", argv[2],
+                      state.active, ota_state_name(state.slot_state));
+
+        return KSHELL_OK;
+    }
+
+    if (strcmp(argv[1], "key") == 0) {
+        char text[OTA_KEY_HEX + 4];
+        k_u8_t priv[VFS_FILE_DATA_SIZE];
+        struct vfs_file file;
+        int n;
+
+        if (argc != 3) {
+            kshell_printf("usage: ota key <file>\n");
+            return KSHELL_USAGE;
+        }
+
+        if (vfs_open(argv[2], VFS_O_RDONLY, &file, priv) != 0) {
+            kshell_printf("ota: %s is not a file\n", argv[2]);
+            return KSHELL_ERROR;
+        }
+
+        n = vfs_read(&file, text, sizeof(text) - 1);
+        (void)vfs_close(&file);
+
+        if (n < (int)OTA_KEY_HEX - 1) {
+            kshell_printf("ota: %s is not a key of thirty-two bytes in hexadecimal\n", argv[2]);
+            return KSHELL_ERROR;
+        }
+
+        text[n] = '\0';
+        kshell_printf("ota: the key of %s is %c%c...%c%c\n", argv[2], text[0], text[1],
+                      text[OTA_KEY_HEX - 4], text[OTA_KEY_HEX - 3]);
+
+        return KSHELL_OK;
+    }
+
+    kshell_printf("usage: ota [status|boot|confirm|fetch <url>|key <file>]\n");
+
+    return KSHELL_USAGE;
 }
 #endif /* MICRO_OS_NET_HTTP */
 
@@ -606,13 +957,15 @@ int net_register(void)
      */
 #if MICRO_OS_NET_HTTP
     rc |= kshell_register("http", "the HTTP client: http get <url>", cmd_http);
-    rc |= kshell_register("wget", "download a file: wget <url> <file>", cmd_wget);
+    rc |= kshell_register("wget", "download a file: wget [--sha256] <url> <file>", cmd_wget);
+    rc |= kshell_register("ota", "an update: ota [status|boot|confirm|fetch <url>]", cmd_ota);
 #endif
 #if MICRO_OS_NET_NTP
     rc |= kshell_register("ntp", "set the clock from NTP: ntp [server]", cmd_ntp);
 #endif
 #if MICRO_OS_NET_HTTP_SERVER
-    rc |= kshell_register("httpd", "the page of the state: httpd [port|off]", cmd_httpd);
+    rc |= kshell_register("httpd", "the servers: httpd [port|off], httpd serve [port] [root]",
+                          cmd_httpd);
 #endif
 #if MICRO_OS_NET_MQTT
     rc |= kshell_register("mqtt", "publish over MQTT: mqtt <host> <port> <topic> <message>",

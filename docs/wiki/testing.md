@@ -23,6 +23,7 @@ and the chips on it. None of them replaces another.
 | `make x86-vga-smoke` | the VGA screen and the PS/2 keyboard, no display | `qemu-system-x86_64` |
 | `make x86-disk-smoke` | a file written by one boot is read by the next | `qemu-system-x86_64` |
 | `make x86-net-smoke` | the network: ping, UDP, HTTP, `httpd` and DNS | `qemu-system-x86_64` |
+| `make bench` | the numbers of the machine: the call of the door, fork and exec, a pipe, a file of 16 MiB, the console and a shell pipeline ([../bench.md](../bench.md)) | `qemu-system-x86_64`, the two builds |
 | `make soak` | one boot of x86-64 for 600 s under the mixed load | QEMU, the host build |
 | `make soak-host` | the portable kernel on the host under TSan for 600 s, two cores | GCC, TSan, valgrind |
 | `make fuzz-long` | the fuzz of the ABI and the parsers, with a multiplier | GCC, ASan |

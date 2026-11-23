@@ -213,7 +213,7 @@ const char *k_port_arch(void)
  * wrong meaning, the way vermagic does for a module of Linux.
  */
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 8u
+#define PORT_API_MINOR 12u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_esp32 does not speak the contract of this kernel");
@@ -321,6 +321,79 @@ void k_port_free(void *ptr)
 k_u64_t k_port_uptime_us(void)
 {
     return (k_u64_t)esp_timer_get_time();
+}
+
+/*
+ * The memory a program can map. The board has no page tables for a program:
+ * a program is a task of the kernel and shares its memory, so every call of
+ * kernel/port/mm.h answers "no" and `mmap` is ENOSYS there.
+ */
+bool k_port_mm_supported(void)
+{
+    return false;
+}
+
+k_u64_t k_port_mm_base(void)
+{
+    return 0;
+}
+
+k_u64_t k_port_mm_limit(void)
+{
+    return 0;
+}
+
+k_u64_t k_port_mm_top(void)
+{
+    return 0;
+}
+
+k_u64_t k_port_mm_current(void)
+{
+    return 0;
+}
+
+void *k_port_mm_page(k_u64_t space, k_u64_t vaddr, k_u32_t prot)
+{
+    K_UNUSED(space);
+    K_UNUSED(vaddr);
+    K_UNUSED(prot);
+    return NULL;
+}
+
+void *k_port_mm_writable(k_u64_t space, k_u64_t vaddr)
+{
+    K_UNUSED(space);
+    K_UNUSED(vaddr);
+    return NULL;
+}
+
+void *k_port_mm_private(k_u64_t space, k_u64_t vaddr)
+{
+    K_UNUSED(space);
+    K_UNUSED(vaddr);
+    return NULL;
+}
+
+bool k_port_mm_present(k_u64_t space, k_u64_t vaddr)
+{
+    K_UNUSED(space);
+    K_UNUSED(vaddr);
+    return false;
+}
+
+void *k_port_mm_phys(k_u64_t space, k_u64_t vaddr)
+{
+    K_UNUSED(space);
+    K_UNUSED(vaddr);
+    return NULL;
+}
+
+void k_port_mm_unmap(k_u64_t space, k_u64_t vaddr, k_size_t len)
+{
+    K_UNUSED(space);
+    K_UNUSED(vaddr);
+    K_UNUSED(len);
 }
 
 /* --- tasks (FreeRTOS) --- */

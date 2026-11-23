@@ -26,6 +26,7 @@
  */
 #include "port_x86_64.h"
 
+#include <stddef.h>
 #include <string.h>
 
 #include "kernel/cpu.h"
@@ -44,10 +45,17 @@
 
 /* The entries of the MADT this port reads (ACPI 6.x, table 5.19). */
 #define ACPI_ENTRY_LOCAL_APIC 0u
+#define ACPI_ENTRY_IOAPIC 1u
+#define ACPI_ENTRY_IRQ_OVERRIDE 2u
 #define ACPI_ENTRY_LOCAL_X2APIC 9u
 
 /* Bit 0 of the flags of a processor entry: it may be used. */
 #define ACPI_CPU_ENABLED 0x1u
+
+/* The ISA lines an override may rename, and the identity of a line that has
+ * none: the firmware of a PC names the timer (IRQ0) as GSI 2, because the
+ * cascade of the 8259 is the second input of the chip. */
+#define ACPI_ISA_IRQ_MAX 16u
 
 #define ACPI_RSDP_MIN_LENGTH 20u
 #define ACPI_TABLE_HEADER 36u
@@ -109,6 +117,30 @@ struct acpi_madt_local_x2apic {
     k_u32_t acpi_id;
 } __attribute__((packed));
 
+/* One I/O APIC of the machine: the chip that turns a line into a message to
+ * one core, and the first global system interrupt it owns. A machine may have
+ * several; the port keeps the first, which is the one the ISA lines reach. */
+struct acpi_madt_ioapic {
+    k_u8_t type;
+    k_u8_t length;
+    k_u8_t id;
+    k_u8_t reserved;
+    k_u32_t address; /* a physical address */
+    k_u32_t gsi_base;
+} __attribute__((packed));
+
+/* An override of the ISA line `source`: the line reaches the I/O APIC as
+ * `gsi`, with the polarity and the trigger of `flags`. Without an override a
+ * line keeps its number, and is edge triggered and active high. */
+struct acpi_madt_irq_override {
+    k_u8_t type;
+    k_u8_t length;
+    k_u8_t bus;
+    k_u8_t source;
+    k_u32_t gsi;
+    k_u16_t flags;
+} __attribute__((packed));
+
 /* The enabled processors of the MADT, in the order the firmware lists them.
  * The list is what the bring-up starts; a machine that describes more than
  * the kernel has slots for keeps only the first KERNEL_CPUS_MAX, which is the
@@ -116,17 +148,37 @@ struct acpi_madt_local_x2apic {
 #define ACPI_CPU_LIST_MAX KERNEL_CPUS_MAX
 
 static struct {
-    k_u32_t available; /* the processors the firmware calls enabled */
-    k_u32_t apic_base; /* the physical address of the local APIC */
+    k_u32_t available;   /* the processors the firmware calls enabled */
+    k_u32_t apic_base;   /* the physical address of the local APIC */
+    k_u32_t ioapic_base; /* the physical address of the first I/O APIC, 0 when none */
+    k_u32_t ioapic_gsi_base;
+    k_u16_t irq_gsi[ACPI_ISA_IRQ_MAX];   /* the GSI of an ISA line, the identity by default */
+    k_u16_t irq_flags[ACPI_ISA_IRQ_MAX]; /* the polarity and trigger of the override */
 } g_cpus;
 
 /* One record per core, at the address IA32_GS_BASE of the core points at.
  * The kernel number is the first word on purpose: k_port_cpu_id() is a load
- * of offset zero and nothing else. */
+ * of offset zero and nothing else. The two words below it are the state the
+ * fast door of a system call reads before C exists - the stack of the program
+ * and the one the call keeps its own stack in (port_x86_64_smp.h names the
+ * offsets, src/interrupts.S reads them). */
 struct port_cpu_record {
     k_u32_t id;
     k_u32_t apic_id;
+    k_u64_t kernel_rsp;
+    k_u64_t user_rsp;
 };
+
+/* The offsets of the header are the offsets of the assembly: a word that
+ * moved would make the entry of a call take the stack of nothing. */
+_Static_assert(PORT_X86_64_CPU_ID == offsetof(struct port_cpu_record, id),
+               "the kernel number is the first word of the record");
+_Static_assert(PORT_X86_64_CPU_APIC_ID == offsetof(struct port_cpu_record, apic_id),
+               "the hardware id follows the kernel number");
+_Static_assert(PORT_X86_64_CPU_KERNEL_RSP == offsetof(struct port_cpu_record, kernel_rsp),
+               "the stack of the call is at the offset the entry reads");
+_Static_assert(PORT_X86_64_CPU_USER_RSP == offsetof(struct port_cpu_record, user_rsp),
+               "the stack of the program is at the offset the entry reads");
 
 static struct port_cpu_record g_records[KERNEL_CPUS_MAX];
 
@@ -294,6 +346,26 @@ static void madt_read(const struct acpi_rsdp *rsdp)
 
                     g_madt_count++;
                 }
+            } else if (entry->type == ACPI_ENTRY_IOAPIC &&
+                       entry->length >= sizeof(struct acpi_madt_ioapic)) {
+                const struct acpi_madt_ioapic *ioapic =
+                    (const struct acpi_madt_ioapic *)(uintptr_t)cursor;
+
+                /* The first one is the chip of the ISA lines; a machine of
+                 * several keeps the others for the buses nobody programs. */
+                if (g_cpus.ioapic_base == 0u && ioapic->address != 0u) {
+                    g_cpus.ioapic_base = ioapic->address;
+                    g_cpus.ioapic_gsi_base = ioapic->gsi_base;
+                }
+            } else if (entry->type == ACPI_ENTRY_IRQ_OVERRIDE &&
+                       entry->length >= sizeof(struct acpi_madt_irq_override)) {
+                const struct acpi_madt_irq_override *override =
+                    (const struct acpi_madt_irq_override *)(uintptr_t)cursor;
+
+                if (override->source < ACPI_ISA_IRQ_MAX) {
+                    g_cpus.irq_gsi[override->source] = (k_u16_t) override->gsi;
+                    g_cpus.irq_flags[override->source] = override->flags;
+                }
             }
 
             cursor += entry->length;
@@ -324,6 +396,12 @@ void port_x86_64_cpus_init(void)
     memset(g_records, 0, sizeof(g_records));
     memset(g_madt_ids, 0, sizeof(g_madt_ids));
     g_madt_count = 0;
+
+    /* A line nobody renamed keeps its own number, and a line of the ISA bus
+     * is edge triggered and active high (ACPI 6.x, 5.2.12.5). */
+    for (i = 0; i < ACPI_ISA_IRQ_MAX; i++) {
+        g_cpus.irq_gsi[i] = (k_u16_t)i;
+    }
 
     rsdp = rsdp_find();
 
@@ -360,30 +438,39 @@ void port_x86_64_cpus_init(void)
         next++;
     }
 
-#if KERNEL_SMP
-    /* The boot is the first core the kernel may ask which one it is. */
+    /*
+     * The boot is the first core the kernel may ask which one it is, and the
+     * one that has to have its record under GS before a program can make its
+     * first call.
+     */
     port_x86_64_cpu_set_self(0);
-#endif
 }
 
 /* --- the identity of a core --- */
 
 void port_x86_64_cpu_set_self(k_u32_t cpu)
 {
-#if KERNEL_SMP
     if (cpu >= KERNEL_CPUS_MAX) {
         /* A core the kernel has no slot for must not open a read of the
          * array: it keeps the identity of the boot and is not counted. */
         return;
     }
 
+    /*
+     * The record is the identity of the core and the two words the entry of
+     * a system call reads before there is a C frame: the stack to take and
+     * the slot that keeps the stack of the program. A build of one core has
+     * one record and loads it like the others - the fast door of src/
+     * interrupts.S reads %gs at its first instruction, and a zero base there
+     * would be a load from address zero. k_port_cpu_id() keeps answering the
+     * constant zero without SMP, which is the same number by another way.
+     */
     port_wrmsr(0xC0000101u, (k_u64_t)(uintptr_t)&g_records[cpu]);
 
+#if KERNEL_SMP
     /* The flag is written after the register: a core that reads it sees the
      * base it was given, never the zero of the reset. */
     g_gs_ready = true;
-#else
-    K_UNUSED(cpu);
 #endif
 }
 
@@ -432,6 +519,19 @@ k_u32_t k_port_cpu_id(void)
 #endif
 }
 
+/*
+ * The stack of the program that is running, kept in the record of the core
+ * for the entry of `syscall`. The caller is the one that wrote the same number
+ * into RSP0 of the TSS, so the two cannot disagree: every entry into ring 3
+ * goes through it (src/gdt.c).
+ */
+void port_x86_64_cpu_set_kernel_rsp(k_u64_t rsp)
+{
+    k_u32_t cpu = k_port_cpu_id();
+
+    g_records[cpu < KERNEL_CPUS_MAX ? cpu : 0u].kernel_rsp = rsp;
+}
+
 /* --- what the boot and the shell read --- */
 
 k_u32_t port_x86_64_cpu_available(void)
@@ -447,4 +547,31 @@ k_u32_t port_x86_64_cpu_started(void)
 k_u32_t port_x86_64_apic_base(void)
 {
     return g_cpus.apic_base;
+}
+
+/* --- the I/O APIC of the firmware (the MADT, ADR 0012) --- */
+
+k_u32_t port_x86_64_ioapic_base(void)
+{
+    return g_cpus.ioapic_base;
+}
+
+k_u32_t port_x86_64_ioapic_gsi(k_u32_t isa_irq)
+{
+    if (isa_irq >= ACPI_ISA_IRQ_MAX) {
+        return isa_irq;
+    }
+
+    /* The number of the firmware is an offset from the base of the first
+     * chip, which is zero on every PC the port has met. */
+    return g_cpus.ioapic_gsi_base + g_cpus.irq_gsi[isa_irq];
+}
+
+k_u16_t port_x86_64_ioapic_irq_flags(k_u32_t isa_irq)
+{
+    if (isa_irq >= ACPI_ISA_IRQ_MAX) {
+        return 0u;
+    }
+
+    return g_cpus.irq_flags[isa_irq];
 }

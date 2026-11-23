@@ -107,9 +107,20 @@ wget: HTTP 200, 4288 byte(s) to /usr/bin/hello.new
 ```
 
 The store of roots is one file, `/etc/ssl/certs.pem`, with any number of PEM
-certificates. A machine that has no store trusts nobody, and says so. The CA
-bundle of a distribution can be written into it with `wget` over plain HTTP or
-copied from the disk image; there is no package of certificates yet.
+certificates. The image of `make x86-disk` carries the bundle of the Mozilla
+root program (`tools/ca/README.md`), so a fresh machine speaks HTTPS without a
+step first; a person replaces the file with `wget`, and it is one file of the
+filesystem and no reflash. A machine that has no store trusts nobody, and says
+so.
+
+A bundle is a store of every kind of authority, and this client implements RSA
+and the NIST curves P-256 and P-384 (ECDHE with RSA or ECDSA, ecdsa-with-SHA256
+and -SHA384). A certificate whose key or signature is something else - the
+P-521 root `e-szigno TLS Root CA 2023` of the Mozilla bundle, or an Ed25519
+authority - is **skipped**, once per boot, with one line in the log, and the
+rest of the file is the store; a file with no usable certificate at all is
+still "not a PEM store" and nothing is trusted. A chain that ends in a skipped
+root is refused by name, as any untrusted chain is.
 
 The clock is part of the trust. A certificate has dates, and a machine whose
 clock NTP has not set cannot check them: the client refuses the connection
@@ -129,7 +140,10 @@ port has no driver of the CMOS clock yet.
 A handshake that fails is a sentence and never a success: no
 `/etc/ssl/certs.pem`, the clock of 1970, a certificate of another authority
 (`flags 0x8`), a certificate of another name (`flags 0x4`), the name of the
-server not in the SAN, or the word of the library for anything else.
+server not in the SAN, or the word of the library for anything else. The head
+of an answer is read up to 1024 bytes, which is the 702 of the pages of
+GitHub - the repository of `pkg` - with room for a CDN; a longer one is
+`the head of the answer is longer than 1024 bytes` and not a lost download.
 
 What it does not do: no revocation (CRL or OCSP), no client certificate, no
 session resumption between two downloads, no ALPN. Every download is a

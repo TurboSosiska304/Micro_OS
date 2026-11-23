@@ -103,6 +103,14 @@ struct k_exec_image {
     k_size_t data_size;
     k_size_t bss_size;
     const char *const *envp;
+    /*
+     * The file the image is in, or NULL when `data` holds the bytes. A port
+     * with page tables maps the file and takes the pages on the fault of the
+     * program (kernel/mm.h): the image is never read into a buffer of the
+     * kernel, and a program of 4 MiB costs the pages it runs and not a second
+     * copy of itself. A port without one reads `data` as it always did.
+     */
+    const char *path;
 };
 
 /*
@@ -117,6 +125,17 @@ struct k_exec_image {
  * the image fits where the port puts a program is the business of k_exec_run.
  */
 int k_exec_parse(const void *data, k_size_t size, struct k_exec_image *out);
+
+/*
+ * The same parse of an image whose bytes were not read into a buffer: the
+ * caller holds the first K_EXEC_HEADER_SIZE bytes of the file and gives the
+ * size of the whole file, which is what the segments are checked against. The
+ * parser reads the header and nothing else, so the answer is the one of
+ * k_exec_parse; the `data` of the result is NULL and `path` is left to the
+ * caller, which is how a port with page tables maps the file instead of
+ * copying it (kernel/mm.h).
+ */
+int k_exec_parse_header(const void *header, k_size_t size, struct k_exec_image *out);
 
 /*
  * The answers of k_exec_run() that are not the status of a program. They are

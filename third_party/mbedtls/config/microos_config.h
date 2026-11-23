@@ -4,13 +4,16 @@
  * The library is built from the upstream sources of
  * `third_party/mbedtls` and this file replaces `mbedtls_config.h`: it is the
  * one file of the configuration, and every switch that is not written here
- * is off. The shape is a TLS *client* of a machine without a libc:
+ * is off. The shape is a TLS client and a TLS server of a machine without a
+ * libc (`MBEDTLS_SSL_CLI_C` and `MBEDTLS_SSL_SRV_C`, the server of files of
+ * net/tls_server.h):
  *
  *   - TLS 1.2 and TLS 1.3, X.509, ECDHE with ECDSA or RSA certificates,
  *     RSA-PSS signatures (TLS 1.3 has no other kind of RSA signature);
  *   - AES-GCM, AES-CCM, ChaCha20-Poly1305, SHA-1/256/384/512;
- *   - PEM roots, parsed into memory; no file system, no sockets, no
- *     threads, no timing, no server, no certificate writing;
+ *   - PEM roots and a PEM certificate with its key, parsed into memory; no
+ *     file system, no sockets, no threads, no timing, no certificate
+ *     writing;
  *   - the platform layer of Micro OS: `kmm` behind `mbedtls_calloc`, the
  *     clock of the kernel behind `mbedtls_time`, a UTC conversion of our
  *     own, and entropy from the port (`mbedtls_hardware_poll` lives in
@@ -104,6 +107,14 @@ void net_tls_free(void *block);
 #define MBEDTLS_SHA1_C
 #define MBEDTLS_SHA256_C
 #define MBEDTLS_SHA512_C
+/*
+ * SHA-384 is a module of its own since 3.6, and it is the hash of the
+ * signatures of the P-384 authorities: Let's Encrypt signs the intermediates
+ * of its ECDSA chain, and ISRG Root X2 signs itself, with ecdsa-with-SHA384.
+ * Without it those certificates were `signature algorithm (oid) is
+ * unsupported`, and a store that held one was refused whole.
+ */
+#define MBEDTLS_SHA384_C
 #define MBEDTLS_MD_C
 #define MBEDTLS_CIPHER_C
 
@@ -159,6 +170,13 @@ void net_tls_free(void *block);
 
 #define MBEDTLS_SSL_TLS_C
 #define MBEDTLS_SSL_CLI_C
+/*
+ * The serving side (`MBEDTLS_SSL_SRV_C`) is the server of files of the
+ * machine (components/net/src/tls_server.c). It is the same stack and the
+ * same X.509 as the client; a machine that serves one page needs no second
+ * library, and the board does not build this directory at all.
+ */
+#define MBEDTLS_SSL_SRV_C
 #define MBEDTLS_SSL_PROTO_TLS1_2
 #define MBEDTLS_SSL_PROTO_TLS1_3
 #define MBEDTLS_SSL_KEEP_PEER_CERTIFICATE

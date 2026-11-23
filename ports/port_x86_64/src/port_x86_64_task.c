@@ -39,6 +39,8 @@
 #include "kernel/sched.h"
 #include "kernel/task.h"
 #include "port_x86_64.h"
+#include "port_x86_64_apic.h"
+#include "port_x86_64_smp.h"
 
 /*
  * The image of the floating point state (FXSAVE): the x87 unit, the sixteen
@@ -164,6 +166,31 @@ static struct port_cpu g_ports[KERNEL_CPUS_MAX];
  * A core with a timer - the core 0 with the PIT, an AP with its APIC - halts.
  */
 static bool g_timer_missing[KERNEL_CPUS_MAX];
+
+/*
+ * The tasks that began to run on a core through the interrupt of another core
+ * - the wake of the scheduler, kernel/port/cpu.h - and the ones that began
+ * through the core's own timer, with the tick of the core at the last wake.
+ *
+ * The two counters are the answer to the question the debt of the many cores
+ * asks (docs/debts.md, K8): a task that a core starts in the body of the IPI
+ * started before that core's timer could have offered it, and the number says
+ * how often. A core that wakes its own tasks at its tick is the machine
+ * before the call existed, and its counter says that too.
+ */
+static k_u32_t g_wake_before_tick[KERNEL_CPUS_MAX];
+static k_u32_t g_wake_tick[KERNEL_CPUS_MAX];
+static k_u32_t g_tick_start[KERNEL_CPUS_MAX];
+
+/*
+ * A request of another core, carried by the same vector as the wake: the
+ * command `smp wake` of the shell stops the clock of a core to prove that an
+ * interrupt of another core is what starts a task there, and starts it again
+ * before it returns. The request is a word the core takes and clears, so a
+ * command that asks twice does not leave a second stop behind.
+ */
+static k_u32_t g_request[KERNEL_CPUS_MAX];
+static bool g_timer_off[KERNEL_CPUS_MAX];
 
 /* The slots of the core that is asking. k_cpu_id() is a load of %gs:0. */
 static struct port_cpu *this_cpu(void)
@@ -989,6 +1016,17 @@ void port_x86_64_task_tick(void)
         return;
     }
 
+    {
+        /* The switch below is the timer of this core offering a task: the
+         * other way a task starts is the body of the IPI, which counts
+         * itself. */
+        k_u32_t id = k_cpu_id();
+
+        if (id < KERNEL_CPUS_MAX) {
+            (void)__atomic_add_fetch(&g_tick_start[id], 1u, __ATOMIC_RELAXED);
+        }
+    }
+
     commit_switch(self_pt != NULL ? self_pt : &cpu->boot, next_pt);
     /* Resumed inside the handler: the interrupts stay off until its iretq. */
     release_pending();
@@ -1013,6 +1051,44 @@ void port_x86_64_task_ipi(void)
     struct port_cpu *self = this_cpu();
     struct port_task *next_pt;
     struct task *next;
+    k_u32_t id = k_cpu_id();
+    k_u32_t request = 0u;
+
+    /*
+     * A request of the other core first: the clock of this core is the one
+     * thing the experiment of `smp wake` changes, and it changes before the
+     * claim below so that a stopped clock is already stopped when the task of
+     * the experiment is claimed.
+     */
+    if (id < KERNEL_CPUS_MAX) {
+        request = __atomic_exchange_n(&g_request[id], 0u, __ATOMIC_ACQ_REL);
+    }
+
+    if ((request & PORT_X86_64_REQUEST_TIMER_OFF) != 0u && id < KERNEL_CPUS_MAX) {
+        port_x86_64_apic_stop_timer();
+        __atomic_store_n(&g_timer_off[id], true, __ATOMIC_RELEASE);
+    }
+
+    if ((request & PORT_X86_64_REQUEST_TIMER_ON) != 0u && id < KERNEL_CPUS_MAX) {
+        bool started = port_x86_64_apic_start_timer(1000u);
+
+        __atomic_store_n(&g_timer_off[id], !started, __ATOMIC_RELEASE);
+    }
+
+    /*
+     * The window the tick refuses and this body has to refuse too: a task that
+     * has left the scheduler - k_sched_task_terminated() cleared the record of
+     * the core - but has not reached k_port_task_exit() yet. Its stack and its
+     * address space are published to the next context of the core a handful of
+     * instructions later, and a switch here would abandon the context that was
+     * about to publish them: nothing would ever release the block, and a
+     * machine of many cores would lose 32 KiB of the heap per task that the
+     * interrupt caught in that window (the leak the 600-second session found).
+     */
+    if (self->current != NULL && self->current->task != NULL &&
+        k_cpu_current() != self->current->task) {
+        return;
+    }
 
     next = k_sched_claim_next();
 
@@ -1031,9 +1107,84 @@ void port_x86_64_task_ipi(void)
         return;
     }
 
+    if (id < KERNEL_CPUS_MAX) {
+        /* The task starts in the body of the interrupt of the other core, and
+         * that is before this core's next timer tick: the number is the wake
+         * before the tick of the debt of the many cores, and the tick beside
+         * it is the moment of the core when it happened. */
+        (void)__atomic_add_fetch(&g_wake_before_tick[id], 1u, __ATOMIC_RELAXED);
+        g_wake_tick[id] = k_sched_cpu_ticks(id);
+    }
+
     commit_switch(self->current != NULL ? self->current : &self->boot, next_pt);
     /* Resumed inside the handler: the interrupts stay off until its iretq. */
     release_pending();
+}
+
+/* --- what the `smp` command reads about the wake of a core --- */
+
+k_u32_t port_x86_64_wake_before_tick(k_u32_t cpu)
+{
+    if (cpu >= KERNEL_CPUS_MAX) {
+        return 0u;
+    }
+
+    return __atomic_load_n(&g_wake_before_tick[cpu], __ATOMIC_RELAXED);
+}
+
+k_u32_t port_x86_64_wake_tick(k_u32_t cpu)
+{
+    if (cpu >= KERNEL_CPUS_MAX) {
+        return 0u;
+    }
+
+    return __atomic_load_n(&g_wake_tick[cpu], __ATOMIC_RELAXED);
+}
+
+k_u32_t port_x86_64_tick_start(k_u32_t cpu)
+{
+    if (cpu >= KERNEL_CPUS_MAX) {
+        return 0u;
+    }
+
+    return __atomic_load_n(&g_tick_start[cpu], __ATOMIC_RELAXED);
+}
+
+/*
+ * Ask a core to stop or to start the clock of its own local APIC. The request
+ * rides on the vector of the wake: the command of the shell that wants to
+ * prove that an interrupt starts a task there stops the clock first, because
+ * a core with a timer would pick the task at its next tick and the two paths
+ * would be indistinguishable. A core that is not there takes nothing, and the
+ * answer of port_x86_64_timer_off() is the flag the core itself wrote.
+ */
+void port_x86_64_timer_off_request(k_u32_t cpu)
+{
+    if (cpu >= KERNEL_CPUS_MAX || cpu == k_port_cpu_id()) {
+        return;
+    }
+
+    (void)__atomic_fetch_or(&g_request[cpu], PORT_X86_64_REQUEST_TIMER_OFF, __ATOMIC_ACQ_REL);
+    port_x86_64_apic_send_ipi(port_x86_64_cpu_apic_id(cpu), PORT_X86_64_VECTOR_APIC_IPI);
+}
+
+void port_x86_64_timer_on_request(k_u32_t cpu)
+{
+    if (cpu >= KERNEL_CPUS_MAX || cpu == k_port_cpu_id()) {
+        return;
+    }
+
+    (void)__atomic_fetch_or(&g_request[cpu], PORT_X86_64_REQUEST_TIMER_ON, __ATOMIC_ACQ_REL);
+    port_x86_64_apic_send_ipi(port_x86_64_cpu_apic_id(cpu), PORT_X86_64_VECTOR_APIC_IPI);
+}
+
+bool port_x86_64_timer_off(k_u32_t cpu)
+{
+    if (cpu >= KERNEL_CPUS_MAX) {
+        return false;
+    }
+
+    return __atomic_load_n(&g_timer_off[cpu], __ATOMIC_ACQUIRE);
 }
 
 /* --- the context of an application processor --- */

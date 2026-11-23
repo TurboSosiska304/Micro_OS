@@ -1,8 +1,10 @@
 /*
  * Micro OS — the PS/2 keyboard of the x86-64 port.
  *
- * The keyboard of the PC hangs on the first line of the 8259 and speaks the
- * scancode set 1: the 8042 of the machine translates the set 2 of the device
+ * The keyboard of the PC hangs on the first line of the interrupt controller -
+ * the 8259 of the legacy chip, or the I/O APIC that routes the line to any
+ * core (ADR 0012) - and speaks the scancode set 1: the 8042 of the machine
+ * translates the set 2 of the device
  * into the bytes a keyboard of the 1980s made, and those are the bytes the
  * monitor of QEMU sends too. The handler runs with the interrupts off and
  * does the least it can: read one byte of the data port, translate it, put
@@ -25,6 +27,7 @@
  */
 #include "port_x86_64_console.h"
 
+#include "kernel/console.h"
 #include "kernel/input.h"
 #include "kernel/input_set1.h"
 #include "kernel/port/lock.h"
@@ -48,9 +51,6 @@
  * of a limit for the one time the boot waits for it, and a machine where it
  * runs out is a machine without a keyboard, not a reason to hang. */
 #define PS2_TIMEOUT 100000u
-
-#define PIC1_COMMAND 0x20u
-#define PIC_EOI 0x20u
 
 /*
  * The ring of the characters. Sixty-four entries and a power of two: the
@@ -148,6 +148,9 @@ static void key_push(k_u8_t character)
 
     g_keys[g_key_head] = character;
     g_key_head = next;
+
+    /* A task that waits for the console in `poll` has its answer now. */
+    k_console_input_notify();
 }
 
 /* One event into the ring of the interface. A full ring loses the newest
@@ -375,7 +378,15 @@ void port_x86_64_irq_keyboard(k_u64_t *frame)
         key_handle(port_inb(PS2_DATA));
     }
 
-    port_outb(PIC1_COMMAND, PIC_EOI);
+    /*
+     * The line may have arrived through the I/O APIC of another core or
+     * through the 8259 of the core of the boot: the port knows which chip
+     * raised it and answers that one (ADR 0012). The count is per core,
+     * because a run that moves the line has to see it arrive where it was
+     * sent.
+     */
+    port_x86_64_irq_note(PORT_X86_64_IRQ_KEYBOARD);
+    port_x86_64_irq_eoi();
 }
 
 static bool ps2_wait_input_empty(void)

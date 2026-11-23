@@ -163,6 +163,15 @@ static void test_parse_and_run(void)
      * one boundary - the shape the line of the smoke test uses. */
     KT_CHECK_INT_EQ(kshell_execute("cat /in | cat | cat | cat | cat | cat | cat | cat | cat | cat"),
                     KSHELL_OK);
+    /* Sixteen stages, the documented maximum of a line, and every stage a
+     * command of the shell: such a stage is one task, and the sixteen fit the
+     * table of the machine. A stage that runs a program of the machine costs
+     * two tasks, and the arithmetic of that chain is the one a client of the
+     * task table has to do (docs/wiki/shell.md, x86-smoke). */
+    KT_CHECK_INT_EQ(
+        kshell_execute("cat /in | cat | cat | cat | cat | cat | cat | cat | cat | cat | "
+                       "cat | cat | cat | cat | cat | cat"),
+        KSHELL_OK);
     /* A producer of the shell and a consumer of the shell. */
     KT_CHECK_INT_EQ(kshell_execute("ls / | cat"), KSHELL_OK);
 

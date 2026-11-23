@@ -13,17 +13,21 @@
 #include <string.h>
 
 #include "kernel/errno.h"
+#include "kernel/kmm.h"
 #include "kernel/lock.h"
 #include "kernel/sched.h"
+#include "kernel/signal.h"
+#include "kernel/wait.h"
 
-/* One pipe of the system. */
+/* One pipe of the system: a ring of KFILE_PIPE_SIZE bytes from the
+ * allocator, made with the pipe and given back with its last end. */
 struct k_pipe {
     bool used;
     k_u16_t readers; /* the descriptions that hold the reading end */
     k_u16_t writers; /* the descriptions that hold the writing end */
-    k_u16_t head;    /* the next byte to read, a ring */
-    k_u16_t count;   /* the bytes in the buffer */
-    k_u8_t buf[KFILE_PIPE_SIZE];
+    k_u32_t head;    /* the next byte to read, a ring */
+    k_u32_t count;   /* the bytes in the buffer */
+    k_u8_t *buf;     /* KFILE_PIPE_SIZE bytes, or NULL in an unused slot */
 };
 
 static struct kfile g_files[KFILE_MAX];
@@ -34,14 +38,33 @@ static k_mutex_t g_fd_lock = K_MUTEX_INITIALIZER;
 
 void kfile_init(void)
 {
+    k_u8_t *blocks[KFILE_PIPE_MAX];
+    int i;
+
     if (k_mutex_lock(&g_fd_lock) != 0) {
         return;
+    }
+
+    /* A pipe that was still open when the tables are reset keeps its block
+     * of memory nowhere: the boot and the tests call this between two
+     * worlds, and a leaked 64 KiB per call would be a slow hole. The
+     * blocks are collected here and given back after the table is clear,
+     * because the allocator takes a lock of its own. */
+    for (i = 0; i < KFILE_PIPE_MAX; i++) {
+        blocks[i] = g_pipes[i].buf;
+        g_pipes[i].buf = NULL;
     }
 
     memset(g_files, 0, sizeof(g_files));
     memset(g_pipes, 0, sizeof(g_pipes));
 
     k_mutex_unlock(&g_fd_lock);
+
+    for (i = 0; i < KFILE_PIPE_MAX; i++) {
+        if (blocks[i] != NULL) {
+            kmm_free(blocks[i]);
+        }
+    }
 }
 
 struct kfile *kfile_get(struct task *t, k_u32_t fd)
@@ -156,6 +179,8 @@ static struct k_pipe *pipe_find_free_locked(void)
 static void pipe_end_close(struct kfile *f)
 {
     struct k_pipe *p = f->pipe;
+    k_u8_t *block = NULL;
+    bool changed = false;
 
     if (p == NULL || k_mutex_lock(&g_fd_lock) != 0) {
         return;
@@ -172,12 +197,34 @@ static void pipe_end_close(struct kfile *f)
             }
         }
 
+        changed = true;
+
         if (p->readers == 0 && p->writers == 0) {
+            block = p->buf;
             memset(p, 0, sizeof(*p));
         }
     }
 
     k_mutex_unlock(&g_fd_lock);
+
+    /*
+     * The block goes back to the allocator outside the lock: the allocator
+     * has a lock of its own, and holding the table of the descriptors while
+     * asking for it would nest two locks of the kernel for no reason.
+     */
+    if (changed) {
+        /*
+         * The end of the file and the broken end are states a waiter waits
+         * for: a reader whose writer closed sees the zero of the end, and a
+         * writer whose reader went away sees EPIPE. The wake is after the
+         * lock of the table because it takes the lock of the scheduler.
+         */
+        k_wait_wake(K_WAIT_CHANNEL_PIPES);
+    }
+
+    if (block != NULL) {
+        kmm_free(block);
+    }
 }
 
 /* Take `n` bytes out of the ring into `out`; the caller holds the lock. */
@@ -190,14 +237,14 @@ static void pipe_take_locked(struct k_pipe *p, k_u8_t *out, k_size_t n)
         memcpy(out + first, p->buf, n - first);
     }
 
-    p->head = (k_u16_t)((p->head + n) % KFILE_PIPE_SIZE);
-    p->count = (k_u16_t)(p->count - n);
+    p->head = (k_u32_t)((p->head + n) % KFILE_PIPE_SIZE);
+    p->count = (k_u32_t)(p->count - n);
 }
 
 /* Put `n` bytes into the ring; the caller holds the lock and has the room. */
 static void pipe_put_locked(struct k_pipe *p, const k_u8_t *in, k_size_t n)
 {
-    k_u16_t tail = (k_u16_t)((p->head + p->count) % KFILE_PIPE_SIZE);
+    k_u32_t tail = (k_u32_t)((p->head + p->count) % KFILE_PIPE_SIZE);
     k_size_t first = K_MIN(n, (k_size_t)(KFILE_PIPE_SIZE - tail));
 
     memcpy(p->buf + tail, in, first);
@@ -205,13 +252,13 @@ static void pipe_put_locked(struct k_pipe *p, const k_u8_t *in, k_size_t n)
         memcpy(p->buf, in + first, n - first);
     }
 
-    p->count = (k_u16_t)(p->count + n);
+    p->count = (k_u32_t)(p->count + n);
 }
 
 static k_ssize_t pipe_read(struct kfile *f, void *buf, k_size_t count)
 {
+    int answer;
     struct k_pipe *p = f->pipe;
-    k_u32_t waited = 0;
 
     if (p == NULL) {
         return KERR_BADF;
@@ -234,14 +281,20 @@ static k_ssize_t pipe_read(struct kfile *f, void *buf, k_size_t count)
             take = K_MIN(count, (k_size_t)p->count);
             pipe_take_locked(p, (k_u8_t *)buf, take);
             k_mutex_unlock(&g_fd_lock);
+
+            /* The room is the writer's: it waits for exactly this. */
+            k_wait_wake(K_WAIT_CHANNEL_PIPES);
+
             return (k_ssize_t)take;
         }
 
         /*
          * An empty pipe with no writer is the end of the file, the zero of
          * POSIX. A pipe whose writer is still there is not: the reader
-         * waits for the bytes, and a wait that lasts too long is EAGAIN,
-         * which is not an end and must not be read as one.
+         * waits for the bytes. The wait has no bound of its own, because a
+         * reader slower than its writer is an ordinary pipeline and not an
+         * error; a signal cuts it short, and the answer is EINTR so that a
+         * caller can try again, exactly as `waitpid` does.
          */
         if (p->writers == 0) {
             k_mutex_unlock(&g_fd_lock);
@@ -250,21 +303,24 @@ static k_ssize_t pipe_read(struct kfile *f, void *buf, k_size_t count)
 
         k_mutex_unlock(&g_fd_lock);
 
-        if (waited >= KFILE_PIPE_WAIT_MS) {
-            return KERR_AGAIN;
+        /*
+         * The wait is the scheduler's and not a sleep of a millisecond: the
+         * writer wakes a reader of this channel when it puts bytes in, and a
+         * signal cuts the wait with EINTR.
+         */
+        answer = k_wait_block(K_WAIT_CHANNEL_PIPES, NULL, K_WAIT_INFINITE);
+        if (answer == K_WAIT_SIGNAL) {
+            return KERR_INTR;
         }
-
-        k_sched_sleep_ms(1);
-        waited++;
     }
 }
 
 static k_ssize_t pipe_write(struct kfile *f, const void *buf, k_size_t count)
 {
+    int answer;
     struct k_pipe *p = f->pipe;
     const k_u8_t *in = (const k_u8_t *)buf;
     k_size_t done = 0;
-    k_u32_t waited = 0;
 
     if (p == NULL) {
         return KERR_BADF;
@@ -296,6 +352,33 @@ static k_ssize_t pipe_write(struct kfile *f, const void *buf, k_size_t count)
         }
 
         room = (k_size_t)(KFILE_PIPE_SIZE - p->count);
+
+        /*
+         * A write of at most PIPE_BUF is one step of the ring: it waits
+         * until the whole of it fits and then lands with the lock held, so
+         * no second writer can put a byte inside it. That is the promise
+         * of `PIPE_BUF`, and it is why the small write of a line is not
+         * broken by another stage of a pipeline.
+         */
+        if (done == 0 && count <= KFILE_PIPE_BUF) {
+            if (room < count) {
+                k_mutex_unlock(&g_fd_lock);
+
+                answer = k_wait_block(K_WAIT_CHANNEL_PIPES, NULL, K_WAIT_INFINITE);
+                if (answer == K_WAIT_SIGNAL) {
+                    return KERR_INTR;
+                }
+                continue;
+            }
+
+            pipe_put_locked(p, in, count);
+            k_mutex_unlock(&g_fd_lock);
+
+            k_wait_wake(K_WAIT_CHANNEL_PIPES);
+
+            return (k_ssize_t)count;
+        }
+
         put = K_MIN(count - done, room);
         if (put > 0) {
             pipe_put_locked(p, in + done, put);
@@ -304,18 +387,86 @@ static k_ssize_t pipe_write(struct kfile *f, const void *buf, k_size_t count)
 
         k_mutex_unlock(&g_fd_lock);
 
+        if (put > 0) {
+            k_wait_wake(K_WAIT_CHANNEL_PIPES);
+        }
+
         if (done == count) {
             return (k_ssize_t)done;
         }
 
         /* The pipe is full: wait for the reader to make room. */
-        if (waited >= KFILE_PIPE_WAIT_MS) {
-            return (done > 0) ? (k_ssize_t)done : KERR_AGAIN;
+        answer = k_wait_block(K_WAIT_CHANNEL_PIPES, NULL, K_WAIT_INFINITE);
+        if (answer == K_WAIT_SIGNAL) {
+            return (done > 0) ? (k_ssize_t)done : KERR_INTR;
+        }
+    }
+}
+
+/*
+ * The state of an object for `poll`. A regular file is always ready: this
+ * system has no file whose read would block, and a write of a file is a
+ * write of the filesystem. A pipe answers the three bits that matter: a byte
+ * to read or the end of the file, room to write, and the error of an end that
+ * is gone.
+ */
+k_u16_t kfile_poll(struct kfile *f, k_u16_t events)
+{
+    struct k_pipe *p;
+    k_u16_t revents = 0;
+
+    if (f == NULL) {
+        return KFILE_POLLERR;
+    }
+
+    if (f->kind != KFILE_PIPE) {
+        /* A file and a device of the VFS: readable and writable when the
+         * access of the descriptor allows it. A device that would block - the
+         * console - is reported by the caller of this function, which knows
+         * which device it is (kernel/ksys.c, the console of the system). */
+        if ((events & KFILE_POLLIN) != 0) {
+            revents |= KFILE_POLLIN;
         }
 
-        k_sched_sleep_ms(1);
-        waited++;
+        if ((events & KFILE_POLLOUT) != 0) {
+            revents |= KFILE_POLLOUT;
+        }
+
+        return revents;
     }
+
+    p = f->pipe;
+    if (p == NULL || k_mutex_lock(&g_fd_lock) != 0) {
+        return KFILE_POLLERR;
+    }
+
+    if (!p->used) {
+        k_mutex_unlock(&g_fd_lock);
+        return KFILE_POLLERR;
+    }
+
+    if (f->pipe_write) {
+        if (p->readers == 0) {
+            /* A write of this end is EPIPE and will never succeed. */
+            revents |= KFILE_POLLERR;
+        } else if (p->count < KFILE_PIPE_SIZE) {
+            revents |= KFILE_POLLOUT;
+        }
+    } else {
+        if (p->count > 0 || p->writers == 0) {
+            /* A byte is there, or the end of the file is: a read answers
+             * without waiting in both cases. */
+            revents |= KFILE_POLLIN;
+        }
+    }
+
+    k_mutex_unlock(&g_fd_lock);
+
+    /* Only what was asked for is reported, except the error: a caller that
+     * waits for a byte has to learn that the end is gone. */
+    revents &= (k_u16_t)(events | KFILE_POLLERR);
+
+    return revents;
 }
 
 /* --- the descriptors --- */
@@ -325,6 +476,7 @@ int kfile_pipe(struct task *t, int fds[2])
     struct k_pipe *p;
     struct kfile *r = NULL;
     struct kfile *w = NULL;
+    k_u8_t *block;
     int fd_r = -1;
     int fd_w = -1;
     int i;
@@ -333,7 +485,21 @@ int kfile_pipe(struct task *t, int fds[2])
         return KERR_PERM;
     }
 
+    /*
+     * The ring of the pipe comes from the allocator and not from the bss of
+     * the kernel: sixteen pipes of 64 KiB are a megabyte of a machine that
+     * has one, and the kernel does not carry a megabyte for the case in
+     * which sixteen of them are open. A machine with no memory for the
+     * block says ENOMEM here, which is the error of `pipe()` and not a
+     * pipe of a size the caller did not ask for.
+     */
+    block = (k_u8_t *)kmm_alloc(KFILE_PIPE_SIZE, KMM_PRIORITY_KERNEL);
+    if (block == NULL) {
+        return KERR_NOMEM;
+    }
+
     if (k_mutex_lock(&g_fd_lock) != 0) {
+        kmm_free(block);
         return KERR_NOMEM;
     }
 
@@ -365,11 +531,13 @@ int kfile_pipe(struct task *t, int fds[2])
 
     if (p == NULL || r == NULL || w == NULL) {
         k_mutex_unlock(&g_fd_lock);
+        kmm_free(block);
         return KERR_NOSPC;
     }
 
     if (fd_r < 0 || fd_w < 0) {
         k_mutex_unlock(&g_fd_lock);
+        kmm_free(block);
         return KERR_MFILE;
     }
 
@@ -377,6 +545,7 @@ int kfile_pipe(struct task *t, int fds[2])
     p->used = true;
     p->readers = 1;
     p->writers = 1;
+    p->buf = block;
 
     memset(r, 0, sizeof(*r));
     r->used = true;

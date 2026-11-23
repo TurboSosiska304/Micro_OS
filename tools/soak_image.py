@@ -37,8 +37,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # A starting guess of the filler: a little under the free space of an 8 MB
 # image of this tree. The loop below moves it to the exact block.
 FILLER_START = 6_900_000
-FILLER_STEP = 4096
-FILLER_TRIES = 6
+FILLER_STEP = 262_144
+FILLER_TRIES = 12
 
 MARKER = ".full"
 
@@ -112,7 +112,11 @@ def build_full_image(
                 free = free_blocks(build, image, timeout)
                 if free is None:
                     return False
-                candidate = max(free * 1024 - 2 * FILLER_STEP, 0)
+                # A single file of a size near the free space of the volume is
+                # not what the volume takes: the chain of its blocks and the
+                # records of the table cost what the free count does not name,
+                # and a 4 KiB step down spent a build of the image for a block.
+                candidate = max(free * 1024 - 8 * FILLER_STEP, 0)
                 measured = True
                 if verbose:
                     print(
@@ -170,7 +174,7 @@ def main(argv: list) -> int:
         "--mkfs", default=os.path.join(ROOT, "build-host", "tools", "microos_mkfs")
     )
     parser.add_argument("--image", default=os.path.join(ROOT, "build-x86", "soak.img"))
-    parser.add_argument("--size-mb", type=int, default=8)
+    parser.add_argument("--size-mb", type=int, default=24)
     parser.add_argument("--timeout", type=float, default=40.0)
     parser.add_argument(
         "--if-needed",

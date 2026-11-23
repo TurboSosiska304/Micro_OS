@@ -16,6 +16,8 @@
 
 #include "kernel/cpu.h"
 #include "kernel/port/cpu.h"
+#include "port_x86_64.h"
+#include "port_x86_64_smp.h"
 
 /* The command register is one 64-bit value in two 32-bit halves: the
  * destination in the high one and the command in the low one (Intel SDM
@@ -52,6 +54,11 @@ extern volatile k_u32_t *port_x86_64_apic_page(void);
  * path would be a proof of nothing.
  */
 static k_u32_t g_ipi[KERNEL_CPUS_MAX];
+
+/* The wake-ups the scheduler asked for, one counter per destination core. The
+ * number of the core that took one is the counter above; the pair is the
+ * proof of the path of a wake and not of a ping (ADR 0012). */
+static k_u32_t g_wake[KERNEL_CPUS_MAX];
 
 static k_u32_t lapic_read(k_u32_t reg)
 {
@@ -186,4 +193,41 @@ k_u32_t port_x86_64_ipi_received_cpu(k_u32_t cpu)
     }
 
     return __atomic_load_n(&g_ipi[cpu], __ATOMIC_RELAXED);
+}
+
+/*
+ * The wake of the scheduler: a task has just been put in the queue of `cpu`
+ * and the core is told to look at it now instead of at its next tick
+ * (kernel/port/cpu.h). The vector is the one of `smp ping`, and the body on
+ * the other side is port_x86_64_task_ipi(), which claims and switches.
+ *
+ * The caller has already dropped the scheduler lock: the core that takes the
+ * interrupt claims from the same queue under the same lock, and a command
+ * sent with the lock held would leave it spinning for the length of that
+ * section. A core that is not there - the port started one processor - is not
+ * a destination, and the machine of one core has nothing to send.
+ */
+void k_port_cpu_wake(k_u32_t cpu)
+{
+    k_u32_t self = k_port_cpu_id();
+
+    if (cpu == self || cpu >= port_x86_64_smp_checked_in()) {
+        return;
+    }
+
+    if (!port_x86_64_apic_present()) {
+        return;
+    }
+
+    (void)__atomic_add_fetch(&g_wake[cpu < KERNEL_CPUS_MAX ? cpu : 0u], 1u, __ATOMIC_RELAXED);
+    port_x86_64_apic_send_ipi(port_x86_64_cpu_apic_id(cpu), PORT_X86_64_VECTOR_APIC_IPI);
+}
+
+k_u32_t port_x86_64_wake_sent_cpu(k_u32_t cpu)
+{
+    if (cpu >= KERNEL_CPUS_MAX) {
+        return 0u;
+    }
+
+    return __atomic_load_n(&g_wake[cpu], __ATOMIC_RELAXED);
 }

@@ -41,6 +41,26 @@ static const char s_test_ca[] = "-----BEGIN CERTIFICATE-----\n"
                                 "z0EM3waogjWPb8IRG0GknFxKJMbhtjwmbZg5+b5S+DO7bJg8hDIuoQ==\n"
                                 "-----END CERTIFICATE-----\n";
 
+/*
+ * A certificate of an authority with a P-521 key: the curves of this client
+ * are P-256 and P-384, so mbedTLS cannot parse it. A store of a distribution
+ * holds such a certificate (the Mozilla bundle has one, e-Szigno TLS Root CA
+ * 2023), and one of them must not take the other hundred with it.
+ */
+static const char s_p521_ca[] = "-----BEGIN CERTIFICATE-----\n"
+                                "MIIB+DCCAVugAwIBAgIUYOLEsZ9Z9iwFkjXQfA6rxLHhNQ0wCgYIKoZIzj0EAwQw\n"
+                                "HzEdMBsGA1UEAwwUTWljcm9PUyBQNTIxIFRlc3QgQ0EwHhcNMjYxMTIzMTU1ODE5\n"
+                                "WhcNMzYxMTIwMTU1ODE5WjAfMR0wGwYDVQQDDBRNaWNyb09TIFA1MjEgVGVzdCBD\n"
+                                "QTCBmzAQBgcqhkjOPQIBBgUrgQQAIwOBhgAEAZIohgTaQov13K4kR+JGeGj9U1iD\n"
+                                "wttSwlnwBKsYVD82IcU2qaW0pAkB70w6l3sRHBNEHLfFkDgpNyPcTatSy/wyAITt\n"
+                                "Q0Y1V8kOFKN5JpyIUUPGDnJXXCsKWay8EdWNyXdDOhuUTPz55cYht5AZoLZ283Dk\n"
+                                "BuVacvhJ+n1wim+i155tozIwMDAdBgNVHQ4EFgQU6z3Ne2DSSnB+JDL9edaaQjM+\n"
+                                "9f0wDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDBAOBigAwgYYCQUaxDMN+tP97\n"
+                                "vqyZNUVqqJFAokU/42VLgXjXBSav9RVbUqDbXGJA56q1spCJ1U40hyDz5o2fwOSN\n"
+                                "4FAcq78iKI28AkFKrUzgvpolOM1n7sVBHNJCwUozfpElpzyntLFXLyb3vk0FEJgx\n"
+                                "GbAQCJn3yj3FsFq0O+KpOM48l6a0mrVvJbFHtA==\n"
+                                "-----END CERTIFICATE-----\n";
+
 static void test_clock_policy(void)
 {
     ktest_begin("tls: a machine of 1970 refuses the dates of a certificate");
@@ -89,6 +109,26 @@ static void test_roots(void)
     KT_CHECK_INT_EQ(net_tls_ca_count(s_test_ca, length / 2, NULL), TLS_ERR_ROOTS);
 }
 
+static void test_roots_skip(void)
+{
+    char store[sizeof(s_test_ca) + sizeof(s_p521_ca)];
+    k_size_t rsa = strlen(s_test_ca);
+    k_size_t p521 = strlen(s_p521_ca);
+    k_size_t certificates = 0;
+
+    ktest_begin("tls: a certificate the image cannot parse is skipped, not the store");
+
+    /* The certificate on its own is not a store this client can use. */
+    KT_CHECK_INT_EQ(net_tls_ca_count(s_p521_ca, p521, NULL), TLS_ERR_ROOTS);
+
+    /* The bundle of a release: the RSA root is the store, and the P-521 one
+     * is skipped and counted (the line goes to the log, not to the answer). */
+    memcpy(store, s_test_ca, rsa);
+    memcpy(store + rsa, s_p521_ca, p521);
+    KT_CHECK_INT_EQ(net_tls_ca_count(store, rsa + p521, &certificates), TLS_OK);
+    KT_CHECK_INT_EQ(certificates, 1);
+}
+
 static void test_transport(void)
 {
     const struct http_transport *tls = net_tls_transport();
@@ -123,5 +163,6 @@ void test_tls(void)
 {
     test_clock_policy();
     test_roots();
+    test_roots_skip();
     test_transport();
 }

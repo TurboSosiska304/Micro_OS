@@ -90,6 +90,15 @@ What the line does **not** do:
   are forked - the shell keeps the reading end between two forks and closes
   the boundary behind it - so its table holds two pipe ends and not
   eighteen; the system has sixteen pipes and forty open-file descriptions;
+* but the task table is the real bound of a chain of programs. A stage that
+  runs a program is two tasks of the kernel - the stage, which waits, and the
+  program, which `execve` starts in a task of its own - and a stage that is a
+  command of the shell is one; `init` and the shell are two more of the 32
+  slots. On x86-64, where every stage of sbase is a program, **fifteen** stages
+  fit (2·15 + 2 = 32) and sixteen do not (2·16 + 2 = 34); sixteen stages of
+  commands of the shell fit. The shell counts the slots before it makes the
+  first pipe and refuses a chain that does not fit with the numbers in the
+  sentence, so no part of a line is started and then lost;
 * no background job, no `jobs`, no `fg` or `bg`;
 * a command that changes the task of the shell (`cd`, `path`) cannot be a
   stage or carry a redirection: it is refused with a sentence instead of
@@ -178,17 +187,20 @@ The files, on every machine:
 | `pwd`, `cd <dir>` | the current directory |
 | `ls [-la] [--color[=when]] [path]` | the names of a directory, one per line; `-l` adds the mode, the owner, the size and the date, `-a` puts `.` and `..` first |
 | `tree [-ad] [path]` | the levels below a path, with `` `-- `` branches; `-d` keeps the directories only |
-| `cat [-n] [file]` | the content of a file, or of the standard input; `-n` numbers the lines |
+| `cat [-n] [file]` | the content of a file, or of the standard input; `-n` numbers the lines (the command of the shell; on x86-64 the `cat` of `/bin` runs at the prompt and takes `-u`) |
 | `write <file> <text>` | create or replace a file with one line (at most 127 bytes) |
-| `mkdir <dir>`, `rm [-r] <file>` | a directory, a file; a directory needs `-r` |
-| `df [-h] [path]` | the free blocks and inodes; `-h` in KB/MB |
+| `mkdir <dir>...`, `rm [-r] <file>` | every word is a directory; a file; a directory needs `-r` |
+| `df [-h] [path]` | the free blocks and inodes; `-h` in KB/MB. The block is the unit of the volume and says so (`1 KB each`, `512 bytes each`), and a volume that keeps no inodes (FAT32) says `not kept by this volume` |
 | `mount` | the mounted filesystems |
-| `fsck [fat <point\|device> [-y]]` | check a volume: MicroFS, or the FAT volume at a point or on a device; `-y` repairs the FAT volume |
+| `fsck [-y] [fat <point\|device>] [ext2 <point>]` | check a volume: MicroFS, the FAT volume at a point or on a device, or the ext2 volume at a point; `-y` repairs it |
 | `stat <path>` | the type, the mode, the owner and the size |
 | `chmod <mode> <path>`, `chown <uid> <path>` | the mode (octal) and the owner (0..32767) |
 | `path [directories]` | show or set `PATH` |
 | `exec <program> [args...]` | run a program, by a path or found in `PATH` |
-| `kill [-signal] <pid>` | send `INT`, `TERM`, `CHLD` or `PIPE` to a task; TERM by default |
+| `kill [-signal] <pid>` | send `INT`, `TERM`, `CHLD` or `PIPE` to a task; TERM by default. `init` and the console itself are refused with a sentence: there is no `getty`, so a signal to the shell would leave the machine without one |
+| `login [name]` | open a session as a user of `/etc/passwd`: the name and the password, three attempts, the uid, the gid and the home of the account (ADR 0033) |
+| `su [-l] [name]` | become another user: root without a password, a user with the password of the account; `-l` enters the home |
+| `id` | the uid, the gid and the account of the shell |
 
 The services, where the port registers them:
 
@@ -466,6 +478,18 @@ fsck: the volume is consistent
 The lost clusters go back to the free map, a loop or a cluster outside the
 volume is cut, the second of two names of one cluster gives it up, a broken
 long name is removed and a size that does not match its chain is put right.
+
+An ext2 volume is checked the same way, by its point, and `-y` puts the
+counters, the two bitmaps, the link counts and the chain of the directories
+right and reconnects a record no name reaches under `/lost+found`
+([ADR 0029](../adr/0029-ext2-write.md); `make x86-fs-smoke` compares the
+repair with the `e2fsck` of the host):
+
+```text
+microos> fsck ext2 /
+fsck: ext2, 12 file(s), 4 directory(ies), 12184 of 12288 block(s) free
+fsck: the volume is consistent
+```
 The boot sector, two copies of the table that differ and a directory whose
 head another chain holds are left and printed as `(not repaired)`; the wiki
 of the files has the rules ([`files.md`](files.md#mkfs-and-fsck)).

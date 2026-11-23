@@ -193,6 +193,8 @@ set(SETTINGS_SOURCES
     "${SETTINGS_DIR}/src/settings.c"
     "${CONFIG_DIR}/src/config.c"
     "${CONFIG_DIR}/src/config_cmd.c"
+    "${CONFIG_DIR}/src/config_users.c"
+    "${CONFIG_DIR}/src/config_login.c"
 )
 
 # The font of the console is the one of the PC (port_x86_64_font.h, Spleen
@@ -216,7 +218,13 @@ if(MICRO_OS_X86_NET)
         "${NET_DIR}/src/http.c"
         "${NET_DIR}/src/ntp.c"
         "${NET_DIR}/src/net_http_server.c"
+        "${NET_DIR}/src/httpd.c"
         "${NET_DIR}/src/tls.c"
+        "${NET_DIR}/src/tls_server.c"
+        # The update over the network: the download and its check are
+        # portable, and the slots of this machine are files (/var/ota).
+        "${NET_DIR}/src/ota.c"
+        "${NET_DIR}/src/ota_file.c"
     )
 endif()
 
@@ -252,10 +260,14 @@ if(MICRO_OS_X86_NET)
         "${PKG_DIR}/src/pkg_db.c"
         "${PKG_DIR}/src/pkg_index.c"
         "${PKG_DIR}/src/pkg_verify.c"
-        "${CMAKE_CURRENT_SOURCE_DIR}/loader/sha256.c"
         "${CMAKE_CURRENT_SOURCE_DIR}/loader/ed25519.c"
     )
 endif()
+
+# The hash of the machine: SHA-256 of the loader, which verifies a signed image
+# and the hash of a password of /etc/shadow (components/config). It is in every
+# image of this port and not only in the one that installs packages.
+set(HASH_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/loader/sha256.c")
 
 # The memory test calls strtoul without including the header of the library;
 # on the board that resolves to the libc of ESP-IDF. Here the name has to
@@ -386,6 +398,7 @@ function(add_program_image name entry)
 endfunction()
 
 add_program_image(hello hello_main)
+add_program_image(door bench_main)
 add_program_image(crash crash_main)
 add_program_image(fork fork_main)
 add_program_image(badptr badptr_main)
@@ -461,6 +474,17 @@ add_libc_program(rm SOURCES "${LIBC_USER_DIR}/src/unistd_ext.c"
 add_libc_program(rmdir SOURCES "${LIBC_USER_DIR}/src/unistd_ext.c"
                                "${LIBC_USER_DIR}/src/stat.c")
 add_libc_program(spawn)
+# The gates of the first lane of 1.6: `poll` waits for a descriptor in the
+# scheduler, `mmap` reads a file through a mapping and writes it back, and
+# `big` measures the memory a program of 4 MiB costs. The three call the
+# POSIX wrappers of unistd_ext.c (pipe, fork, poll, mmap, brk), which the
+# small runtime does not carry.
+add_libc_program(poll SOURCES "${LIBC_USER_DIR}/src/unistd_ext.c"
+                           "${LIBC_USER_DIR}/src/stat.c"
+                           "${LIBC_USER_DIR}/src/usleep.c")
+add_libc_program(mmap SOURCES "${LIBC_USER_DIR}/src/unistd_ext.c"
+                              "${LIBC_USER_DIR}/src/stat.c")
+add_libc_program(big)
 
 # --- the interface: /bin/ui (ADR 0028) and the programs of ADR 0030 ---------
 #
@@ -964,6 +988,32 @@ add_libc_program(mkbig
     DEFINES ULIBC_HEAP_SIZE=65536u
 )
 
+# The numbers of the machine (tools/x86_bench.py): the call of the door, a
+# fork and an exec, a pipe, a file and the console, each of a fixed size that
+# the tool passes. The program is not in the image of the release - the tool
+# puts it there for the run - because a measurement is a tool of the gate and
+# not a command of the machine. It links the same library as the tools, so the
+# clock of a program and the fork of the library are the ones the shell and
+# every program of /bin already pay.
+add_libc_program(bench
+    MAIN "${PROGRAM_DIR}/bench.c"
+    SOURCES ${SBASE_LIBC_SOURCES}
+    DEFINES ULIBC_HEAP_SIZE=65536u
+)
+
+# The ruler of the grain of the I/O (tools/io_bench.py): a file through a
+# pipe of the kernel, a stream read a byte at a time and a stream written a
+# line at a time. It is a program of a test and not of a person, like
+# `mkbig`: the image of the machine does not carry it.
+add_libc_program(iobench
+    MAIN "${PROGRAM_DIR}/iobench.c"
+    SOURCES ${SBASE_LIBC_SOURCES}
+    DEFINES ULIBC_HEAP_SIZE=65536u
+)
+
+# The two doors of a system call (ADR 0035) are the program `door`, built by
+# the rule of the port above and not by the library: a measurement of `int`
+# and `syscall` cannot be built on one of the two doors alone.
 function(add_sbase_program tool heap)
     add_libc_program(${tool}
         MAIN "${SBASE_DIR}/${tool}.c"
@@ -1341,6 +1391,7 @@ add_executable(microos64
     ${EXT2_SOURCES}
     ${VIRTUAL_SOURCES}
     ${SETTINGS_SOURCES}
+    ${HASH_SOURCES}
     ${NET_SOURCES}
     ${PKG_SOURCES}
     src/boot64.S
@@ -1357,7 +1408,9 @@ add_executable(microos64
     src/fbdev.c
     src/inputdev.c
     src/gdt.c
+    src/syscall.c
     src/paging.c
+    src/mm.c
     src/cpu.c
     src/smp.c
     src/lapic.c
@@ -1388,13 +1441,15 @@ target_include_directories(microos64 PRIVATE
     "${CONFIG_DIR}/include"
     "${SETTINGS_DIR}/include"
     "${NET_DIR}/include"
+    # The hash of /etc/shadow and of a signed image (components/config,
+    # components/pkg): one SHA-256 for the machine.
+    "${CMAKE_CURRENT_SOURCE_DIR}/loader"
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 
 if(MICRO_OS_X86_NET)
     target_include_directories(microos64 PRIVATE
         "${PKG_DIR}/include"
-        "${CMAKE_CURRENT_SOURCE_DIR}/loader"
         "${CMAKE_BINARY_DIR}"
     )
     # The public key of the build is the key of the repository when the
@@ -1409,6 +1464,9 @@ target_compile_definitions(microos64 PRIVATE
     KERNEL_PSRAM=$<BOOL:${KERNEL_PSRAM}>
     KERNEL_EXEC=$<BOOL:${KERNEL_EXEC}>
     KERNEL_SMP=$<BOOL:${KERNEL_SMP}>
+    # The ring of a pipe (kernel/kfile.h): 64 KiB, the block of one call of
+    # the system, and the memory comes from kmm_alloc() with the pipe.
+    KFILE_PIPE_SIZE=65536
     MICRO_OS_NET=$<BOOL:${MICRO_OS_X86_NET}>
     MICRO_OS_NET_HTTP=$<BOOL:${MICRO_OS_X86_NET}>
     MICRO_OS_NET_HTTP_SERVER=$<BOOL:${MICRO_OS_X86_NET}>
@@ -1419,6 +1477,13 @@ target_compile_definitions(microos64 PRIVATE
     MICRO_OS_WIFI=$<BOOL:${MICRO_OS_WIFI}>
     MICRO_OS_PKG=$<BOOL:${MICRO_OS_X86_NET}>
     MICRO_OS_PKG_BUILTIN_KEY=$<BOOL:${MICRO_OS_X86_NET}>
+    # The update of the network takes its key from /etc/ota: the key of this
+    # build is a development one and is not the key of the machine.
+    MICRO_OS_OTA_BUILTIN_KEY=0
+    # The stack of the port lends four TCP sessions (ports/port_x86_64/src/
+    # net.c, NET_TCP_SOCKETS): the server of files leaves one of them for
+    # the session that is being closed and serves the other three.
+    MICRO_OS_HTTPD_CONNECTIONS=3
 )
 
 if(MICRO_OS_X86_NET)

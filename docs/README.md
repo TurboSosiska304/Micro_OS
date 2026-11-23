@@ -22,6 +22,7 @@ the board live in `hardware/`.
 | see the system call contract | [syscall-abi.md](syscall-abi.md) |
 | see the memory model | [memory.md](memory.md) |
 | see the libc subset | [libc.md](libc.md) |
+| know how fast the machine is, and compare two releases | [bench.md](bench.md) |
 | read why a decision was made | [adr/](adr/) |
 | read what a phase delivered | [phases/](phases/) |
 | know the license of a byte of a distribution | [licensing.md](licensing.md) |

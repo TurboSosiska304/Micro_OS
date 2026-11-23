@@ -18,8 +18,9 @@ their addresses are not its own. Its library is `components/libc/user` (ADR
 0016): `_start`, the door of the call, `open`, `close`, `read`, `write`,
 `lseek`, `readdir`, `stat`, `mkdir`, `unlink`, `getcwd`, `getpid`, `uptime`,
 `execve`, `exit`, `printf`, `puts`, `snprintf`, the strings, the allocation
-and the streams. The door is `int $0x80` on x86-64 and the address of a
-function of the port on the board (ADR 0018); the numbers and the arguments
+and the streams. The door is `syscall` on x86-64 (with the vector 0x80 as
+the second door of the same convention) and the address of a function of the
+port on the board (ADR 0018); the numbers and the arguments
 of the calls are the same on both machines. The two libraries share the
 header of the ABI and nothing else, and that is deliberate: one runs with the
 kernel under it, the other has nothing but the gate.
@@ -41,7 +42,7 @@ formatter of a double nor the database of libmagic.
 |---|---|---|
 | the allocation | `src/malloc.c` | an arena in the bss of the program (`-DULIBC_HEAP_SIZE`, 256 KiB by default, 512 KiB for `zcat` and 960 KiB for `file` and `zstd`), not `KSYS_MALLOC`: the block of the kernel is memory of ring 0 and a program cannot read it; `calloc` and `realloc` are the same arena |
 | the error | `src/errno.c` | `errno` as a global of the program and `strerror`; the calls keep the negative number of the ABI and the wrappers also store its magnitude, so a portable library reads `errno` after `read` |
-| the streams | `src/file.c` | `fopen`, `fdopen`, `fmemopen`, `freopen`, `fclose`, `fread`, `fwrite`, `fgetc`, `getc`, `getchar`, `ungetc`, `fputc`, `fgets`, `fputs`, `perror`, `feof`, `ferror`, `fseek`, `ftell`, `rewind`, `fileno`, `fprintf` over a descriptor; a block of 512 bytes in the object holds the read-ahead, so a reader of a few hundred kilobytes is not one call per byte; the binary mode is accepted and ignored because no file of the system translates a byte; `tmpfile` is a failure (no `/tmp`) |
+| the streams | `src/file.c` | `fopen`, `fdopen`, `fmemopen`, `freopen`, `fclose`, `fread`, `fwrite`, `fgetc`, `getc`, `getchar`, `ungetc`, `fputc`, `fgets`, `fputs`, `fflush`, `setvbuf`, `perror`, `feof`, `ferror`, `fseek`, `ftell`, `rewind`, `fileno`, `fprintf` over a descriptor; one block of the arena of the program (4 KiB by default) holds the read-ahead and the bytes written and not given to the kernel, the mode is line-buffered on a terminal, block-buffered on a file and a pipe and unbuffered on the error descriptor, and `fflush`/`fclose`/`exit` give the block to the kernel (ADR 0035); the binary mode is accepted and ignored because no file of the system translates a byte; `tmpfile` is a failure (no `/tmp`) |
 | the formatter | `src/stdio.c`, `src/format_float.c` | `printf`, `puts`, `putchar`, `snprintf`/`vsnprintf`/`sprintf`, and `fprintf`/`vfprintf` over the streams; the conversions are the ones of the table below, and a build that defines `ULIBC_WITH_FLOAT` adds the digits of a double from `src/format_float.c` |
 | the reader of a line | `src/format_ext.c` | `getline`/`getdelim`: the buffer of the caller grows with the line, which is what a command of a Unix-like system is written on |
 | the conversions and the sort | `src/stdlib.c` | `strtod`, `strtol`/`strtoul`/`strtoll`/`strtoull`, `atoi`/`atol`/`atof`, `abs`/`labs`, `qsort` (a merge sort in the arena, insertion when it has no room), `getenv` over `environ`. A build without `ULIBC_WITH_FLOAT` links the file and not `strtod`/`atof`, which are in the float build alone |
@@ -206,7 +207,7 @@ answers 0 when the child is not ready.
 
 `components/libc/user` is the library a program is linked against (ADR 0016).
 It is not the library of the kernel above: it reaches the kernel only through
-`int $0x80` on x86-64 (or the door of the board), and it grew with the
+`syscall` on x86-64 (or the door of the board), and it grew with the
 programs that were ported to it. The port of sbase (ten Unix tools) needed
 the families a portable POSIX source expects, and they are now part of it:
 
@@ -229,11 +230,15 @@ the families a portable POSIX source expects, and they are now part of it:
 | `<termios.h>` | the two calls of a terminal, answered `ENOTTY`: the console has no control command | `src/termios.c` |
 | `<stdio.h>` (the names) | `rename` (POSIX puts it here, in `src/syscall.c`), and `usleep` in `<unistd.h>` | `src/syscall.c`, `src/usleep.c` |
 
-The stream of `<stdio.h>` is a descriptor and two flags, with no buffer of
-the host; `fmemopen` is a block of the caller that a command uses for a word
-of its line. The arena of `malloc` is in the bss of the program (256 KiB by
-default, `ULIBC_HEAP_SIZE` for a tool that holds a file), because a block of
-`KSYS_MALLOC` is memory of ring 0 that a program cannot read.
+The stream of `<stdio.h>` is a descriptor, three flags and one block; the
+block is the read-ahead and the write buffer of the stream, it comes from the
+arena of the program and not from the object, and its mode is `_IOLBF` on a
+terminal, `_IOFBF` on a file and a pipe and `_IONBF` on the error descriptor,
+with `setvbuf` to change it (ADR 0035). `fmemopen` is a block of the caller
+that a command uses for a word of its line. The arena of `malloc` is in the
+bss of the program (256 KiB by default, `ULIBC_HEAP_SIZE` for a tool that
+holds a file), because a block of `KSYS_MALLOC` is memory of ring 0 that a
+program cannot read.
 
 Three shapes of the machine are visible in the library and are decisions, not
 bugs:

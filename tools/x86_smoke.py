@@ -58,6 +58,10 @@ import time
 COMMANDS = [
     "help",
     "kill 9999",
+    # The console itself is the only shell (ADR 0033): a signal to the task
+    # that runs the command leaves a machine that answers nothing until it is
+    # reset, so the refusal is a sentence (pid 3 is the shell of the boot).
+    "kill -TERM 3",
     "uname",
     "uptime",
     "ulimit",
@@ -325,6 +329,18 @@ COMMANDS = [
     # the pipes are made one boundary at a time, so the descriptor table of
     # the shell holds two ends and not eighteen.
     "cat /etc/setting | cat | cat | cat | cat | cat | cat | cat | cat | wc -l",
+    # The documented maximum of a chain (docs/wiki/shell.md): a stage that
+    # runs a program is two tasks of the kernel - the stage and the program -
+    # and the table of the machine has 32 slots, so fifteen stages of programs
+    # fit and sixteen do not. Sixteen stages of commands of the shell fit,
+    # because a stage of the shell is one task. The chain that does not fit is
+    # refused before a pipe is made, with the numbers, so no part of it is
+    # started and lost.
+    "cat /etc/setting | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | "
+    "cat | wc -l",
+    "echo | echo | echo | echo | echo | echo | echo | echo | echo | echo | echo | echo | echo | "
+    "echo | echo | echo sixteen",
+    "cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat",
     # `xargs -P` starts its commands as children of its own and runs four of
     # them at once: each line is a child that was told to run /bin/echo, and a
     # child of a fork cannot be one without the POSIX execve.
@@ -434,6 +450,30 @@ COMMANDS = [
     # `-batch` is the shell of the release with no prompt and no editor: the
     # script of a redirect is the same one and the answers are the same.
     "exec /bin/sqlite3 -batch /tmp/sqlite.db < /etc/sql-read.sql",
+    # The first lane of 1.6. `poll` waits for a descriptor in the scheduler:
+    # two pipes, the byte a child writes while the task waits, a deadline and
+    # a sleep of no descriptor. `mmap` reads a file through a window of
+    # mappings, writes a private page that the file does not take and a shared
+    # one that it does, and moves the heap until it meets the stack. `big` is
+    # a program of 4 MiB that measures the memory it costs: the image is
+    # mapped from the file, so the heap of the kernel does not grow with it.
+    "cat /proc/meminfo",
+    "exec /bin/poll",
+    "exec /bin/mmap",
+    "head -n 1 /mm.txt",
+    "wc -c /mm.txt",
+    "exec /bin/big",
+    "cat /proc/meminfo",
+    "rm /mm.txt",
+    # The sentences of the files. `mkdir` takes every word of the line, a name
+    # that no volume of this system holds is `file name too long` (MicroFS
+    # keeps 32 bytes) and not the code of the volume, and `df` names the unit
+    # of its blocks - a kilobyte here and not "0 KB" somewhere.
+    "mkdir /tmp/m1 /tmp/m2",
+    "stat /tmp/m2",
+    "mkdir /aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "write /tmp/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa x",
+    "df /",
 ]
 
 # A directory wider than the table of 64 entries the shell used to keep: the
@@ -458,7 +498,7 @@ EXPECTED = [
     # it (ADR 0020); the line is the proof that the check ran and passed.
     "Micro OS: image signature ok (sha-256, ed25519)",
     "board: qemu_x86_64",
-    "port: x86_64, contract 1.10",
+    "port: x86_64, contract 1.12",
     "[ ok ] sched",
     "subsystem(s) ready",
     "the kernel is up",
@@ -865,21 +905,14 @@ def _write_bad_image(data: bytes, tag: str = "image") -> str:
     return path
 
 
-def run_machine(loader: str, kernel: str, image: str, timeout: float, commands: list = None) -> str:
-    """Boot the machine, drive the shell and return the transcript.
+def machine_argv(loader: str, kernel: str, image: str) -> list:
+    """The command line of the machine of the smoke tests.
 
-    The output is read while the machine runs, not after it stops: the
-    commands have to arrive after the shell is ready, and the answer of a
-    command is the proof the next command may go out.
-
-    The machine has two processors (ADR 0012): the firmware then describes
-    both in the MADT of ACPI, and the boot line of the kernel says how many it
-    found and how many it runs. The second one is 1 until the AP bring-up is
-    written, and the smoke test reads both numbers - a detection that stopped
-    working and an AP that was started without the test knowing it are both
-    visible here.
+    One machine for the run of the commands, the script of the console of the
+    accounts and the oversized image: a second copy of these arguments would
+    be a second machine, and the checks would read the boot of another one.
     """
-    command = [
+    return [
         "qemu-system-x86_64",
         "-kernel",
         loader,
@@ -897,6 +930,23 @@ def run_machine(loader: str, kernel: str, image: str, timeout: float, commands: 
         "-drive",
         f"file={image},format=raw,if=ide,index=0,cache=writeback",
     ]
+
+
+def run_machine(loader: str, kernel: str, image: str, timeout: float, commands: list = None) -> str:
+    """Boot the machine, drive the shell and return the transcript.
+
+    The output is read while the machine runs, not after it stops: the
+    commands have to arrive after the shell is ready, and the answer of a
+    command is the proof the next command may go out.
+
+    The machine has two processors (ADR 0012): the firmware then describes
+    both in the MADT of ACPI, and the boot line of the kernel says how many it
+    found and how many it runs. The second one is 1 until the AP bring-up is
+    written, and the smoke test reads both numbers - a detection that stopped
+    working and an AP that was started without the test knowing it are both
+    visible here.
+    """
+    command = machine_argv(loader, kernel, image)
 
     lines = COMMANDS if commands is None else commands
 
@@ -968,12 +1018,15 @@ OVERSIZE_FILLER = os.path.join(BUILD, "oversize.bin")
 
 
 def build_oversize_image() -> str:
-    """A 16 MB disk with one file of K_EXEC_MAX_IMAGE + 1 zero bytes.
+    """A 32 MB disk with one file of K_EXEC_MAX_IMAGE + 1 zero bytes.
 
     The volume is written once and kept: it carries the programs of the build
     too, but this boot runs only the big file and the shell, so a rebuild of
     the kernel does not make it stale, and the 8 MiB of blocks are the slowest
-    part of the smoke test.
+    part of the smoke test. The volume is 32 MB and not 16: the image of the
+    programs carries a program of 4 MiB (/bin/big, the measurement of the
+    memory of a run), and 8 MiB of file plus 4 MiB of program do not fit a
+    volume of 16.
     """
     if os.path.isfile(OVERSIZE_IMAGE):
         return OVERSIZE_IMAGE
@@ -994,7 +1047,7 @@ def build_oversize_image() -> str:
             "--image",
             OVERSIZE_IMAGE,
             "--size-mb",
-            "16",
+            "32",
             "--program",
             f"/big.bin={OVERSIZE_FILLER}",
         ],
@@ -1316,6 +1369,15 @@ def check(output: str) -> list:
         "kill of a pid that is not there is reported",
         "kill: 9999: no such process" in answer("kill 9999"),
     )
+    # The console is the only shell: the signal to it is refused, and the
+    # machine is still there for the next line of the list (which it proves by
+    # answering it).
+    console = answer("kill -TERM 3")
+    expect(
+        "kill of the console itself is refused with a sentence",
+        "this is the console itself" in console and "exited with code" not in console,
+        console.strip(),
+    )
     # The version is whatever the build says: the shape is checked, so a
     # release does not break the smoke test.
     expect(
@@ -1371,6 +1433,42 @@ def check(output: str) -> list:
     )
     expect("the tree is still there", "etc" in answer("ls /"), answer("ls /"))
 
+    # --- the sentences of the files and the numbers of the volume
+    # `mkdir` takes one directory per word, as the program of /bin does: a
+    # second word used to be dropped in silence.
+    expect(
+        "mkdir makes a directory for every word of the line",
+        "type: directory" in answer("stat /tmp/m2"),
+        answer("stat /tmp/m2"),
+    )
+    # A name longer than MicroFS keeps (32 bytes) is the limit named as a
+    # limit, and not the code the volume uses for it.
+    long_mkdir = answer("mkdir /aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    expect(
+        "a name longer than the volume holds is `file name too long`",
+        "file name too long" in long_mkdir and "error" not in long_mkdir,
+        long_mkdir.strip(),
+    )
+    long_write = answer("write /tmp/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa x")
+    expect(
+        "a file name too long is `file name too long` for write",
+        "file name too long" in long_write,
+        long_write.strip(),
+    )
+    # The block of the volume is its own unit: a kilobyte on MicroFS, and the
+    # line says which one (a FAT32 volume says "512 bytes each").
+    root_df = answer("df /")
+    expect(
+        "df names the unit of its blocks",
+        re.search(r"\(1 KB each\)", root_df) is not None and "0 KB each" not in root_df,
+        root_df.strip(),
+    )
+    expect(
+        "df counts the inodes of a volume that keeps them",
+        re.search(r"inodes: \d+ of \d+ free", root_df) is not None,
+        root_df.strip(),
+    )
+
     # --- the tools of sbase (third_party/sbase) are the commands of /bin
     #
     # The shell looks in PATH before its own table for these ten names, so a
@@ -1396,9 +1494,14 @@ def check(output: str) -> list:
     found = answer("find /etc -name setting")
     expect("find walks a tree and matches a name", "/etc/setting" in found, found)
     ordered = answer("sort /etc/setting")
+    # The lines of the answer after the echo of the command. A missing block is
+    # an empty answer and not an exception: a check that dies with a ValueError
+    # tells the reader nothing about the machine (it happened once under load).
+    order = [line.strip() for line in ordered.splitlines()[1:] if line.strip()]
+    order = [line for line in order if not line.startswith(("task:", "x86-64:"))]
     expect(
         "sort orders the lines",
-        ordered.index("console=vga") < ordered.index("hello") < ordered.index("hostname=x86_64"),
+        order == ["console=vga", "hello", "hostname=x86_64"],
         ordered,
     )
     recursive = answer("grep -r hostname /etc")
@@ -2609,6 +2712,46 @@ def check(output: str) -> list:
         deep,
     )
 
+    # The maximum of the documentation: fifteen stages of programs, sixteen of
+    # the commands of the shell, and a chain of sixteen programs refused with
+    # the arithmetic of the task table before anything is started.
+    longest = answer(
+        "cat /etc/setting | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | "
+        "cat | wc -l"
+    )
+    expect(
+        "a pipeline of fifteen stages of programs carries the bytes to its end",
+        re.search(r"(?m)^3\r?$", longest) is not None,
+        longest,
+    )
+    expect(
+        "the last stage of fifteen writes its answer (the output is descriptor 1)",
+        "bad file descriptor" not in longest and "cannot start stage" not in longest,
+        longest,
+    )
+    sixteen = answer(
+        "echo | echo | echo | echo | echo | echo | echo | echo | echo | echo | echo | echo | echo | "
+        "echo | echo | echo sixteen"
+    )
+    expect(
+        "a pipeline of sixteen stages of the shell runs",
+        "sixteen" in sixteen and "too many" not in sixteen.replace("too many words", ""),
+        sixteen,
+    )
+    refused = answer(
+        "cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat"
+    )
+    expect(
+        "a chain of sixteen programs is refused with the arithmetic of the task table",
+        "16 stages need 32 task slots and 30 of 32 are free" in refused,
+        refused.strip(),
+    )
+    expect(
+        "the chain that was refused started no stage",
+        "task: created 'pipe" not in refused,
+        refused.strip(),
+    )
+
     # --- xargs -P: the children of a program
     parallel = answer("echo one two three four five six | xargs -P 4 -n 1 echo done")
     expect(
@@ -2635,6 +2778,13 @@ def check(output: str) -> list:
         "the system call of the handler returns its answer",
         "PROGRAM: self SIGINT returned 0, handler runs 1" in signals,
     )
+    # The same signal through the fast door of `syscall`: a handler entered
+    # on the way out of a call is the proof that the frame of the second door
+    # is the frame the signal code rewrites (ADR 0035).
+    expect(
+        "a handler runs on the way out of the fast door as well",
+        "PROGRAM: self SIGINT through syscall returned 0, handler runs 1" in signals,
+    )
     # SIG_IGN is a disposition of the kernel: the task is still there after
     # the signal, and its kill() answered 0.
     expect(
@@ -2647,7 +2797,8 @@ def check(output: str) -> list:
         re.search(r"PROGRAM: term child waited \d+, status 143", signals) is not None,
     )
     # The wait was cut by SIGINT, the handler ran, and the child was not
-    # taken by the wait: EINTR is 4.
+    # taken by the wait: EINTR is 4. The wait is a call of the fast door, so
+    # the signal arrives while the task sleeps inside it (ADR 0035).
     expect(
         "SIGINT cuts a wait with EINTR and runs the handler",
         "PROGRAM: wait returned 4, handler runs 1" in signals,
@@ -2767,6 +2918,399 @@ def check(output: str) -> list:
         re.search(r"MicroOS \d+\.\d+\.\d+", answer("uname", 1)) is not None,
     )
 
+    # --- the first lane of 1.6: the wait for a descriptor
+    poll = answer("exec /bin/poll")
+    expect("poll sees the state of two empty pipes", "poll: empty, ready=0" in poll, poll[-400:])
+    expect(
+        "poll finds the byte of the second pipe only",
+        "poll: one byte, ready=1" in poll and "poll: the second entry says 1" in poll,
+    )
+    expect(
+        "poll ends a wait at its deadline",
+        "poll: timeout, ready=0" in poll
+        and re.search(r"poll: timeout, ms=(1[2-9][0-9]|[2-9][0-9][0-9])", poll) is not None,
+        poll[-200:],
+    )
+    expect(
+        "a poll of no descriptor is a sleep",
+        "poll: sleep, ready=0" in poll
+        and re.search(r"poll: sleep, ms=([6-9][0-9]|[1-9][0-9][0-9])", poll) is not None,
+        poll[-200:],
+    )
+    # The wait is the scheduler's: the byte is written by a child 80 ms after
+    # the poll began, and the answer comes when it arrives and not at a
+    # deadline - the call had none.
+    wait = re.search(r"poll: wait, ms=(\d+)", poll)
+    expect(
+        "poll wakes on the byte of another task",
+        "poll: wait, ready=1" in poll and "poll: z" in poll,
+        poll[-200:],
+    )
+    expect(
+        "the wake is the child's and not a timeout",
+        wait is not None and 60 <= int(wait.group(1)) < 400,
+        wait.group(0) if wait else "no line",
+    )
+    expect(
+        "the end of a pipe is readable",
+        "poll: end of file, ready=1" in poll and "poll: end of file says 1" in poll,
+    )
+    expect(
+        "a writing end whose reader is gone is an error",
+        "poll: broken pipe says 8" in poll,
+        "POLLERR is the error of the object",
+    )
+    expect("a number that is not open is an error", "poll: bad descriptor says 8" in poll)
+    expect("the poll program ends with its status", "poll: done" in poll and "the program exited with 0" in poll)
+
+    # --- the memory a program maps
+    mapping = answer("exec /bin/mmap")
+    size = re.search(r"mmap: file bytes (\d+)", mapping)
+    through_mmap = re.search(r"mmap: sum through mmap (-?\d+)", mapping)
+    through_read = re.search(r"mmap: sum through read (-?\d+)", mapping)
+    expect("a file of the volume is mapped", size is not None and int(size.group(1)) > 0, mapping[:300])
+    expect(
+        "the bytes of the mapping are the bytes of the file",
+        through_mmap is not None
+        and through_read is not None
+        and through_mmap.group(1) == through_read.group(1),
+        f"{through_mmap.group(1) if through_mmap else '-'} against"
+        f" {through_read.group(1) if through_read else '-'}",
+    )
+    # A private page is a copy: the write is in the memory of the program and
+    # the file keeps its own byte. A shared page is the file: what is written
+    # is what the next reader of the file sees.
+    expect(
+        "a private page takes a write the file does not",
+        "mmap: the private page begins with 97" in mapping
+        and "mmap: the file still begins with 97" in mapping,
+    )
+    expect("a shared page is written back by msync", "mmap: the file says HELLO" in mapping)
+    expect("an anonymous page reads as zeros", "mmap: the anonymous page begins with 0" in mapping)
+    expect("the heap grows by four pages", "mmap: the heap grew by four pages" in mapping)
+    # The heap may not cross the stack of the program: the answer is ENOMEM
+    # (12) and not a page of the stack overwritten.
+    expect(
+        "a heap past the stack is refused with ENOMEM",
+        "mmap: the heap past the stack says 12" in mapping,
+        mapping[-300:],
+    )
+    expect("the mmap program ends with its status", "mmap: done" in mapping and "the program exited with 0" in mapping)
+
+    # The file the mapping wrote, read by another program: the first line of
+    # the file is the five bytes of the shared page.
+    written = answer("head -n 1 /mm.txt")
+    expect("another program reads the shared write", "HELLO" in written, written[-200:])
+    expect("the mapped file keeps its size", "524288 /mm.txt" in answer("wc -c /mm.txt"))
+
+    # --- the memory of a run of a program of 4 MiB
+    before = re.search(r"kernel heap: (\d+) KB free", answer("cat /proc/meminfo", 0))
+    big = answer("exec /bin/big")
+    big_line = re.search(r"big: (\d+) bytes, heap free before (\d+) KB, during (\d+) KB", big)
+    after = re.search(r"kernel heap: (\d+) KB free", answer("cat /proc/meminfo", 1))
+    expect("a program of 4 MiB runs", big_line is not None and "big: done" in big, big[:300])
+    if big_line is not None:
+        expect(
+            "the image of a program is not copied into the heap",
+            abs(int(big_line.group(3)) - int(big_line.group(2))) <= 64,
+            f"{big_line.group(2)} KB before, {big_line.group(3)} KB during",
+        )
+        expect(
+            "the memory of the program goes back with it",
+            after is not None and abs(int(after.group(1)) - int(big_line.group(3))) <= 256,
+            f"{big_line.group(3)} KB during, {after.group(1) if after else '-'} KB after",
+        )
+        expect(
+            "the heap of the kernel where it was before the program",
+            before is not None and abs(int(before.group(1)) - int(big_line.group(2))) <= 64,
+            f"{before.group(1) if before else '-'} KB before the run",
+        )
+
+    return checks
+
+
+# --- the accounts and the console (ADR 0033) -----------------------------
+#
+# The login of this machine is not a program of /bin that starts a shell: the
+# console is the shell of the kernel and it starts as root, so `login` asks
+# for the name and the password and hands the running shell to that user. A
+# run of the shell by the list of commands cannot answer a prompt that is not
+# the prompt of the shell, so this part of the smoke test boots the machine a
+# second time and answers the console with a script: each step waits for its
+# text and types its line, and a password is never echoed.
+USERS_IMAGE = os.path.join(BUILD, "users-smoke.img")
+
+# The script of the console: (the text to wait for, the line to type).
+USERS_SCRIPT = [
+    (PROMPT, "cat /etc/passwd"),
+    (PROMPT, "cat /etc/shadow"),
+    (PROMPT, "ls -l /etc/shadow"),
+    (PROMPT, "id"),
+    # The right password after a wrong one: the first answer fails and the
+    # second opens the session, which is the three attempts of `login`.
+    (PROMPT, "login root"),
+    ("password: ", "wrong"),
+    ("login: authentication failure", ""),
+    ("password: ", "microos"),
+    (PROMPT, "id"),
+    # `su - guest` without a password, from root, and the directory of the
+    # account.
+    (PROMPT, "su - guest"),
+    (PROMPT, "pwd"),
+    (PROMPT, "id"),
+    # A user does not become root without the password of root.
+    (PROMPT, "su - root"),
+    ("password: ", "wrong"),
+    (PROMPT, "id"),
+    # The file a user makes: the owner is root, which is the debt of
+    # docs/debts.md and not the rule this release ships.
+    (PROMPT, "echo seven > /tmp/seven.txt"),
+    (PROMPT, "stat /tmp/seven.txt"),
+    (PROMPT, "id"),
+    # The password of root does open the way back.
+    (PROMPT, "su root"),
+    ("password: ", "microos"),
+    (PROMPT, "id"),
+    # An account without a password: three failures and the door closes.
+    (PROMPT, "login guest"),
+    ("password: ", "guest"),
+    ("password: ", "guest"),
+    ("password: ", "guest"),
+    (PROMPT, "id"),
+    # A login with no name: the empty answer is a name that is needed, and not
+    # a name that does not fit, and nothing else follows it.
+    (PROMPT, "login"),
+    ("login: ", "<enter>"),
+    ("login: a name is needed", ""),
+    (PROMPT, "id"),
+    (PROMPT, ""),
+]
+
+# The answers of the script, one per line typed at the prompt of the shell. A
+# step that is not the prompt of the shell (a password) is answered by the
+# prompt that follows it, so the blocks are still one per command.
+USERS_COMMANDS = [line for wait, line in USERS_SCRIPT if wait == PROMPT and line != ""]
+
+
+def run_console(loader: str, kernel: str, image: str, timeout: float, steps: list) -> str:
+    """Boot the machine and answer the console with the steps of a script.
+
+    `steps` is a list of (text to wait for, line to type): the line goes out
+    when its text appears, and the search for the next text starts after the
+    one that was found, so a prompt that comes twice is answered twice. A step
+    with an empty line only waits (the sentence of a refusal), and the word
+    `<enter>` types the empty line a prompt waits for.
+    """
+    process = subprocess.Popen(
+        machine_argv(loader, kernel, image),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    assert process.stdout is not None
+    assert process.stdin is not None
+
+    fd = process.stdout.fileno()
+    transcript = b""
+    cursor = 0
+    step = 0
+    deadline = time.monotonic() + timeout
+
+    try:
+        while time.monotonic() < deadline and step < len(steps):
+            ready, _, _ = select.select([fd], [], [], 0.1)
+            if not ready:
+                continue
+
+            chunk = os.read(fd, 4096)
+            if not chunk:
+                break  # the machine went away on its own
+
+            transcript += chunk
+            text = transcript.decode("utf-8", errors="replace")
+
+            while step < len(steps):
+                index = text.find(steps[step][0], cursor)
+                if index < 0:
+                    break
+                cursor = index + len(steps[step][0])
+                if steps[step][1] == "<enter>":
+                    # The empty line a prompt waits for: `login` with no name,
+                    # a question answered by Enter.
+                    process.stdin.write(b"\n")
+                    process.stdin.flush()
+                elif steps[step][1] != "":
+                    process.stdin.write((steps[step][1] + "\n").encode("ascii"))
+                    process.stdin.flush()
+                step += 1
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+        while True:
+            chunk = os.read(fd, 4096)
+            if not chunk:
+                break
+            transcript += chunk
+
+        process.stdout.close()
+        process.stdin.close()
+
+    return transcript.decode("utf-8", errors="replace")
+
+
+def users_checks(loader: str, kernel: str, image: str, timeout: float) -> list:
+    """The accounts of /etc, `login`, `su` and the file a user makes."""
+    checks = []
+
+    def expect(name: str, condition: bool, detail: str = "") -> None:
+        checks.append((name, bool(condition), detail))
+
+    # The script changes the volume (a file in /tmp), so the run gets a copy
+    # of the image the build made, as the run of the commands does.
+    shutil.copyfile(image, USERS_IMAGE)
+
+    try:
+        output = run_console(loader, kernel, USERS_IMAGE, timeout, USERS_SCRIPT)
+    finally:
+        if os.path.exists(USERS_IMAGE):
+            os.remove(USERS_IMAGE)
+
+    blocks = output.split(PROMPT)[1:]
+
+    def answer(command: str, occurrence: int = 0) -> str:
+        indexes = [index for index, line in enumerate(USERS_COMMANDS) if line == command]
+        if occurrence >= len(indexes):
+            return ""
+        index = indexes[occurrence]
+        return blocks[index] if index < len(blocks) else ""
+
+    expect(
+        "the console answers the whole script",
+        len(blocks) > len(USERS_COMMANDS),
+        f"{len(blocks)} block(s) for {len(USERS_COMMANDS)} command(s)",
+    )
+
+    # The two files of the accounts are files of the disk, and the hash is the
+    # salted SHA-256 the tree computes.
+    passwd = answer("cat /etc/passwd")
+    expect(
+        "the accounts are the file of /etc/passwd",
+        "root:0:0:/:/bin/sh" in passwd and "guest:7:7:/home/guest:/bin/sh" in passwd,
+        passwd,
+    )
+    shadow = answer("cat /etc/shadow")
+    expect(
+        "the hash of /etc/shadow is a salted SHA-256",
+        "root:$sha256$mox1$da6e6da86105cbac14d7689b4fa29e184c12ef42347314cba33be87095daef2c"
+        in shadow,
+        shadow,
+    )
+    expect("an account without a password is locked", "guest:*" in shadow, shadow)
+    expect(
+        "only the owner reads /etc/shadow",
+        "-rw-------" in answer("ls -l /etc/shadow") and "root" in answer("ls -l /etc/shadow"),
+        answer("ls -l /etc/shadow"),
+    )
+    expect(
+        "the shell starts as root",
+        "uid=0(root) gid=0" in answer("id", 0),
+        answer("id", 0),
+    )
+
+    # `login`: a wrong password and then the right one, and the task stays
+    # root because root was the name.
+    login = answer("login root")
+    expect(
+        "login refuses a wrong password and takes the right one",
+        "login: authentication failure" in login and "login: root, uid 0, gid 0" in login,
+        login,
+    )
+    expect(
+        "a login of root leaves the shell root",
+        "uid=0(root)" in answer("id", 1),
+        answer("id", 1),
+    )
+
+    # `su - guest` from root: no password, the credentials of the account and
+    # its home directory.
+    expect(
+        "su - enters the home of the account",
+        answer("pwd").strip().endswith("/home/guest"),
+        answer("pwd"),
+    )
+    expect(
+        "su gives the shell the uid and the gid of the account",
+        "uid=7(guest) gid=7 home=/home/guest" in answer("id", 2),
+        answer("id", 2),
+    )
+
+    # A user does not become root without the password of root: the wrong one
+    # is refused and the shell is still guest.
+    expect(
+        "su refuses the wrong password of root",
+        "su: authentication failure" in answer("su - root"),
+        answer("su - root"),
+    )
+    expect(
+        "a refused su leaves the shell as the user",
+        "uid=7(guest)" in answer("id", 3),
+        answer("id", 3),
+    )
+
+    # The file a user makes is owned by root: the create path of the VFS
+    # carries no owner yet (docs/debts.md).
+    stat = answer("stat /tmp/seven.txt")
+    expect(
+        "a file of a user is still owned by root (the debt)",
+        "owner: 0" in stat and "size: 6" in stat,
+        stat,
+    )
+    expect(
+        "the user is still the user after writing the file",
+        "uid=7(guest)" in answer("id", 4),
+        answer("id", 4),
+    )
+
+    # The password of root is the way back up.
+    expect(
+        "su root with the right password makes the shell root",
+        "uid=0(root)" in answer("id", 5),
+        answer("id", 5),
+    )
+
+    # An account with no password: three failures and nothing changes.
+    login = answer("login guest")
+    expect(
+        "a locked account fails three times",
+        login.count("login: authentication failure") == 3,
+        login,
+    )
+    expect(
+        "a refused login leaves the shell as it was",
+        "uid=0(root)" in answer("id", 6),
+        answer("id", 6),
+    )
+
+    # A login with no name: one sentence, which asks for a name.
+    empty = answer("login")
+    expect(
+        "login with no name asks for a name and says nothing else",
+        "login: a name is needed" in empty
+        and "does not fit" not in empty
+        and "no such account" not in empty,
+        empty.strip(),
+    )
+    expect(
+        "a login with no name changes nothing",
+        "uid=0(root)" in answer("id", 7),
+        answer("id", 7),
+    )
+
     return checks
 
 
@@ -2826,6 +3370,7 @@ def main(argv: list) -> int:
         + check(output)
         + zstd_compat_checks(loader, kernel, args.timeout)
         + oversize_checks(loader, kernel, args.timeout)
+        + users_checks(loader, kernel, args.image, args.timeout)
     )
     failed = [item for item in checks if not item[1]]
 

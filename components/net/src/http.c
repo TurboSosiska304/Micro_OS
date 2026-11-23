@@ -331,10 +331,6 @@ int http_get(const struct http_transport *transport, const char *url, char *body
 
 /* --- the stream: a body that goes where it is told --- */
 
-/* The head of an answer is a few hundred bytes; a longer one is a server
- * that is not answering a request of this client. */
-#define HTTP_HEAD_MAX 640
-
 /* One read of the socket. The body is handed over in pieces of this size, so
  * the buffer is the price of the stream and a program costs no more. */
 #define HTTP_READ_MAX 256

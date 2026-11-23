@@ -43,6 +43,8 @@ microos> tree /
 |---|---|
 | `/` | MicroFS on the volume of the port |
 | `/etc` | the configuration: a file name is the key and its content the value for a single setting, `key=value` lines for a system (`display`, `font`, `console`) |
+| `/etc/passwd` | the accounts: `name:uid:gid:home:shell`, one line per person (ADR 0033) |
+| `/etc/shadow` | the hash of a password: `name:$sha256$<salt>$<hex>`, `*` for an account without one; mode `0600` |
 | `/etc/init.d` | the scripts of the init process, one command per line |
 | `/etc/fstab` | the volumes the boot mounts after the root, when the file is there |
 | `/etc/greeting.gz` | on x86-64: the gzip fixture of `/bin/zcat`, written by `tools/x86_image.py` with a fixed moment |
@@ -118,12 +120,27 @@ most 127 bytes. The count of the answer has the word of the number (`1 byte`,
 removes a file, not a directory, and there is no `-r` without the flag.
 `df` prints the free blocks and inodes of the filesystem of the path, and a
 path that is not there is `df: /nope: no such file or directory` instead of the
-numbers of the root.
+numbers of the root. The block is the unit of the volume and the line names it:
+MicroFS counts kilobytes (`1 KB each`), FAT32 its 512-byte sectors
+(`512 bytes each`), and a size below a kilobyte is written as bytes and not as
+`0 KB`. A volume that keeps no table of inodes says
+`inodes: not kept by this volume` instead of a zero nobody read:
+
+```text
+microos> mount ata0p2 /data fat32
+microos> df /data
+blocks: 16098 of 16100 free (512 bytes each)
+inodes: not kept by this volume
+```
 
 A name that is already there is refused with the sentence of what it is:
 `mkdir /etc` over a directory says `is a directory`, and over a file
 `file exists`. A path that is not there says `no such file or directory`
-everywhere, the same words the rest of the shell uses.
+everywhere, the same words the rest of the shell uses. A name longer than the
+volume holds is `file name too long`: MicroFS keeps 32 bytes of a name (ext2
+and FAT keep 255), and the volume answers that limit with a code of its own
+(`invalid argument`, or `file too big` for an entry of a directory), which the
+shell names as the limit it is.
 
 `stat` shows the mode, the owner and the size; `chmod` and `chown` change the
 first two. A program asks for the moments of a change with `statx` (number 26

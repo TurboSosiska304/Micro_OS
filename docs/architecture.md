@@ -98,7 +98,7 @@ contract is therefore two files in one commit, and a reviewer sees it.
 | `/proc`, `/dev`, `/sys` | yes | `/proc` and `/dev` from phase 2, `/sys` later |
 | System calls | yes | yes, from phase 3; hardware isolation on x86-64 (ring 3), logical on the board |
 | Memory protection | MMU | **on x86-64 only**: page tables per program, a user window and ring 3 (ADR 0007); the ESP32 has no MMU and keeps the logical boundary |
-| Multi-user | yes | partial (a uid and a gid per task, inherited and checked; no login or `su`, and no group in a record) |
+| Multi-user | yes | partial (a uid and a gid per task, inherited and checked; `/etc/passwd` and `/etc/shadow`, `login`, `su` and `id` on the console; no setuid bit in an image and no group in a record, ADR 0033) |
 | Dynamic linker | yes | no (everything is statically linked) |
 
 We honestly call this **Linux-like**, not Linux. On the board there is no
@@ -247,11 +247,15 @@ the core with the lock, because a tick that preempted its holder could switch
 to a task that allocates, and the pool of the tables is shared by every
 address space. `CR0.WP` is set on every core, because it is a register of the
 core and the kernel's copy into a read-only page of a program has to fault
-there too. The I/O APIC is not programmed yet: the 8259
-delivers the timer and the keyboard to the core 0, whose LINT0 is the only
-one in the external mode, and the APs take their ticks from their own local
-APIC timer (1 kHz, calibrated against the TSC). The open work is K8 of
-[debts.md](debts.md).
+there too. The timer and the keyboard are entries of the I/O APIC of the
+firmware (ADR 0034): one redirection entry per line, the destination core in
+the entry, the 8259 masked as a whole, and the EOI of a line goes to the local
+APIC of the core that took it. A machine whose firmware describes no chip
+keeps the 8259, which delivers everything to the core 0, whose LINT0 is the
+only one in the external mode. The APs take their ticks from their own local
+APIC timer (1 kHz, calibrated against the TSC), and a task put in the queue of
+another core wakes that core with an inter-processor interrupt instead of
+waiting for its tick. The open work is K8 of [debts.md](debts.md).
 
 ### Signals (ADR 0015)
 
@@ -348,13 +352,19 @@ apart:
 
 ### The pipes
 
-A pipe is a ring of 256 bytes in a table of eight entries of the kernel,
-with the counts of the reading and the writing descriptions over it
-(ADR 0014). The two ends are ordinary descriptors of the task, so the access
-check, the close, `dup2` and the copy of a fork need no special case; a write
-with no reader is `EPIPE`, because the kernel has no signals yet. A wait of a
-pipe is a poll with a bound of half a second, not a queue of waiters; the
-queue and its wakeup are the next step.
+A pipe is a ring of the port - 64 KiB on x86-64 and the host, 4 KiB on the
+board - in a table of sixteen entries of the kernel, with the counts of the
+reading and the writing descriptions over it (ADR 0035, which changes the
+ring and the wait of ADR 0014). The ring is not a block in the bss of the
+kernel: it comes from `kmm_alloc` with the pipe and goes back with its last
+end, so sixteen pipes of 64 KiB cost a megabyte only when they are all open.
+The two ends are ordinary descriptors of the task, so the access check, the
+close, `dup2` and the copy of a fork need no special case; a write with no
+reader is `EPIPE`, because the kernel has no signals yet, and a write of at
+most `PIPE_BUF` bytes is one step of the ring. A wait of a pipe is a poll
+with the sleep of the task and no bound - a reader slower than its writer is
+an ordinary pipeline, and a signal cuts the wait short with `EINTR`; a queue
+of waiters and its wakeup are the next step (`docs/debts.md`).
 
 ### The blocks under the filesystem
 
@@ -616,7 +626,7 @@ starts with the same shape. The environment travels to the port in
 
 The library of the kernel is linked into the kernel and calls `ksys_*`, which
 a program of ring 3 cannot reach, so a program is linked against
-`components/libc/user`: `_start`, the door of `int $0x80`, `open`, `close`,
+`components/libc/user`: `_start`, the door of `syscall`, `open`, `close`,
 `read`, `write`, `lseek`, `readdir`, `getpid`, `uptime`, `exit`, `printf`,
 `puts` and five functions of strings. The numbers of the calls come from
 `kernel/ksys.h`, the same header the kernel uses. The image carries its copy:
@@ -639,8 +649,10 @@ the three wrappers with the codes of POSIX in `errno`, and the shell has
 `chmod`, `chown` and `exec` over the same calls. The directories of a path are
 checked for their `x` bit, and `fork()` with an address space of its own
 still waits for the copy of the page tables and copy on write (ADR 0005,
-ADR 0007). A program calls the kernel with
-`int $0x80` on the x86-64 port: the register ABI is in
+ADR 0007). A program calls the kernel with `syscall` on the x86-64 port; the
+vector 0x80 is the second door of the same convention, the one a program of
+another compiler and the restorer of a signal handler use, and the return of
+either instruction is the frame of the same 160 bytes. The register ABI is in
 [ADR 0006](adr/0006-program-entry.md), the program runs in ring 3 with page
 tables of its own, and the processor switches to a kernel stack of the program
 through the TSS on the way in. The pointers of the caller are checked at the

@@ -34,32 +34,53 @@ A negative result is an error, the numbers are the negative error codes of
 On the board and on the simulator a program is a function of the kernel and
 calls it directly. The x86-64 machine runs a program that the kernel did not
 compile, so the call has to be an instruction of the processor. The port of
-that machine offers one door (ADR 0006):
+that machine offers two doors to the same convention (ADR 0006):
 
 | What | Where |
 |---|---|
-| the instruction | `int $0x80` |
+| the instruction | `syscall` (the fast door), `int $0x80` (the gate) |
 | the number of the call | `rax` |
 | the six arguments | `rdi`, `rsi`, `rdx`, `r10`, `r8`, `r9` |
 | the result | `rax` (negative is an error) |
 
-The vector 128 of the table of the interrupts is a gate of the port, not of
-the kernel: the port that can take a call puts its stub there and the port
-that cannot leaves the entry empty. The gate opens for ring 3, because the
-x86-64 port runs a program as a user with page tables of its own (ADR 0007).
-The processor takes the `RSP0` of the TSS on the way in, so the handler runs
-on a kernel stack of the program and not on the stack of the program, which
-ring 3 could have pointed anywhere. The handler saves every register the
-caller may lose across a C call, puts the kernel's thread pointer back,
-turns the interrupts on (they are off for the first instructions, and on
-again for the call itself, which is what lets `sleep` and `yield` really
-wait), calls `ksys_call()` and returns with `iretq`, setting the thread
-pointer to zero first because the kernel's TLS block is not mapped in ring 3.
+The library of the tree takes the fast door: the instruction `syscall` jumps
+to the address the port keeps in `IA32_LSTAR`, with the flags of `IA32_FMASK`
+cleared (the interrupt flag first of all), the return address of the program
+in `rcx` and its flags in `r11`. The instruction changes no stack, so the
+entry takes the kernel stack of the program from the record of the core that
+`IA32_GS_BASE` names - the same number the port writes into `RSP0` of the TSS,
+so both doors land on the same stack. The entry pushes the five words of the
+crossing and the fifteen registers the caller may lose across a C call, which
+is the frame of 160 bytes the gate leaves too, puts the kernel's thread
+pointer back, turns the interrupts on (they are off for the first
+instructions, and on again for the call itself, which is what lets `sleep` and
+`yield` really wait) and calls `ksys_call()`.
+
+The return is `sysret`, which takes the address from `rcx` and the flags from
+`r11`, and it is guarded: an address that is not canonical, or a frame whose
+selector is not a program's, takes the `iretq` of the gate instead, because
+the frame a `sigreturn` restores comes from memory the program can write and
+an address the instruction cannot return to faults in ring 0 after the stack
+of the program is in `rsp`.
+
+The gate of the vector 128 of the table of the interrupts stays, and it is
+not a leftover: it is what a program that was not built against this library
+uses, and it is the door the restorer of a signal handler returns through. The
+gate opens for ring 3, because the x86-64 port runs a program as a user with
+page tables of its own (ADR 0007); the processor takes the `RSP0` of the TSS
+on the way in, so the handler runs on a kernel stack of the program and not on
+the stack of the program, which ring 3 could have pointed anywhere. It builds
+the same frame, runs the same body and returns through the same tail, which
+picks `sysret` for a program's frame and `iretq` for anything else, setting
+the thread pointer to zero first because the kernel's TLS block is not mapped
+in ring 3.
 
 The registers are the ones of Linux: `rcx` and `r11` are not arguments
 because the instruction `syscall` of a 64-bit machine keeps them for the
 return address and the flags, and one convention for both instructions costs
-nothing.
+nothing. They are clobbered by a call, as they are on Linux: the frame of the
+call keeps them, so a signal that arrives inside one shows the address and the
+flags it interrupted, and no program of the system reads them back.
 
 A program that was entered with an image starts with the arguments of a C
 function in the registers (ADR 0016): the count of the arguments in `rdi`, the
@@ -126,12 +147,18 @@ chose.
 | 40 | `setgid` | `gid` | 0, or an error |
 | 41 | `rmdir` | `path` | 0, or an error |
 | 42 | `fstat` | `fd, buf` | 0, or an error |
+| 43 | `poll` | `fds, nfds, timeout` | the count of the ready entries, 0 on a timeout, or an error |
+| 44 | `mmap` | `addr, len, prot, flags, fd, offset` | the address of the range, or an error |
+| 45 | `munmap` | `addr, len` | 0, or an error |
+| 46 | `msync` | `addr, len` | 0, or an error |
+| 47 | `brk` | `addr` | the new end of the heap, or an error |
 
 The numbers 0 to 22 are frozen, 23 to 26 were the next free ones; pipes took
 27 and 28 (ADR 0014), signals the three after them (ADR 0015), the limits of
 a task 32 and 33, the atomic rename 34 (ADR 0024 §5), the cut of an open
-file 35 and the credentials of a task 36 to 40 (the second half of 1.4), and
-`rmdir` and `fstat` 41 and 42 (the filesystem of 1.5). A
+file 35 and the credentials of a task 36 to 40 (the second half of 1.4),
+`rmdir` and `fstat` 41 and 42 (the filesystem of 1.5), the wait for a
+descriptor 43 and the memory a program maps 44 to 47 (the first lane of 1.6). A
 call that is not in the table is `ENOSYS`, never a guess at what it might
 have meant.
 
@@ -252,7 +279,11 @@ Every task has a **uid** and a **gid** (numbers 36 to 40 read and change
 them). A task takes both from the task that created it; a fork, a program and
 an `execve` keep them, so `getuid()` answers the identity the caller was
 started with and not a constant. The root of the system is uid 0 (`KSYS_UID`):
-the boot, the kernel itself and the shell before a login process.
+the boot, the kernel itself and the shell of the console, until a person types
+`login` or `su` (ADR 0033). The accounts are `/etc/passwd` (a name, a uid, a
+gid, a home and a shell) and `/etc/shadow` (a salted SHA-256 of a password),
+read by the shell and by `getpwnam`/`getpwuid` of the library - the same file
+for the two, so a program and the console cannot disagree about a name.
 
 * a task whose uid is the owner of an object reads the triad of the owner;
   every other task reads the triad of the others, because no filesystem of
@@ -278,8 +309,12 @@ alone, and `mount`/`umount` to root alone; a task of another uid learns
 the fifteen bits of a record, and a task of another uid names only the number
 it already has. There is one credential and not the three of POSIX, so
 `geteuid` answers what `getuid` answers and a task that gives up root cannot
-name zero again with `setuid` - a login process with a setuid image is the
-other half of this work (`docs/debts.md`).
+name zero again with `setuid`. The door to another identity is the console:
+`login` and `su` are commands of the shell of the kernel, they check
+`/etc/shadow` and move the two numbers of the *shell* task together
+(`task_set_creds`, the gid first), and every program the person starts
+inherits them. There is no setuid bit in the image of a program, so a program
+cannot change the identity it runs with (ADR 0033).
 
 The mode of `chmod` is refused outside the nine bits (`EINVAL`) and so is an
 owner outside the fifteen bits of a uid (`EINVAL`): a number that does not fit
@@ -347,11 +382,15 @@ microos_statx`, with the types of `<stdint.h>`; it returns -1 and sets
 * the file is read through the VFS, not through a descriptor of the caller,
   so a failed call leaves the table of the task exactly as it was;
 * a program is at least the 32 bytes of the header of `kernel/exec.h` and at
-  most `K_EXEC_MAX_IMAGE` (8 MiB, the memory of the machine); the image is
-  read into one block of the kernel in pieces of `KSYS_MAX_IO` (64 KiB), so
-  the transfer edge of a call is not the limit of the file. A file outside
-  that range is refused before a byte of it is read: `E2BIG` past the ceiling
-  and `EINVAL` below the header;
+  most `K_EXEC_MAX_IMAGE` (8 MiB, the memory of the machine). The file is
+  opened and its size is checked before a byte is read: `E2BIG` past the
+  ceiling and `EINVAL` below the header. On a machine with page tables only
+  the header is read; the text, the data and the bss become three regions of
+  the address space and the pages come from the file when the program touches
+  them (`kernel/mm.h`), so a program of 4 MiB costs its own pages and not a
+  copy of itself in the memory of the kernel. A machine without page tables
+  reads the whole file into one block in pieces of `KSYS_MAX_IO` (64 KiB), so
+  the transfer edge of a call is not the limit of the file;
 * the image must be a `MOX1` of version 2 and of a machine the format knows;
   the arch of the header is then compared with `k_port_exec_arch()`, and an
   image of another machine is `ENOEXEC` before a byte of it is entered;
@@ -500,6 +539,111 @@ the two dispositions `MICROOS_SIG_DFL` and `MICROOS_SIG_IGN`;
 `microos_signal()` answers `MICROOS_SIG_ERR` and sets `microos_errno()`
 when the signal is not one of the system.
 
+## The memory of a program
+
+Four calls give a program the memory it asks for: `mmap`, `munmap`, `msync`
+and `brk`. None of them reads a file: a mapping is a record of the address
+space (`kernel/mm.h`) and the page behind an address is made, filled and
+mapped the moment the program touches it. A program that maps a file of
+64 MiB and reads one page of it costs one page, and a program that starts
+from a file of 4 MiB costs the pages it runs.
+
+```c
+void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset);
+int   munmap(void *addr, size_t len);
+int   msync(void *addr, size_t len);
+```
+
+The protection is `KSYS_PROT_READ` (0x1), `KSYS_PROT_WRITE` (0x2) and
+`KSYS_PROT_EXEC` (0x4), and the flags are `KSYS_MAP_SHARED` (0x1),
+`KSYS_MAP_PRIVATE` (0x2) and `KSYS_MAP_ANONYMOUS` (0x4). One of the two
+sharing flags is always set, and a mapping is either of a file or of no file.
+`addr` is a hint: NULL asks for any free range, and an address that is taken
+is ignored rather than refused, because the system has no `MAP_FIXED`.
+`len` and `offset` are whole numbers of `KSYS_PAGE_SIZE` (4096) and the offset
+is into the file behind `fd`.
+
+The answers and the errors:
+
+* `mmap` answers the address of the range, `EINVAL` for a length or an offset
+  that is not a page, a `prot` or a flag outside the set, neither or both of
+  the sharing flags, and an address that is not aligned; `EBADF` for a
+  descriptor that is not open; `ESPIPE` for a pipe (it has no bytes to map);
+  `ENOMEM` for a range that does not fit the window of the program; `ENOSYS`
+  on a machine without page tables.
+* `munmap` answers 0 and gives the pages back; the shared pages of the range
+  go to their file first. A range that cuts a mapping in two is `EINVAL`
+  rather than a silent half; a range that holds no mapping is 0 and does
+  nothing, as POSIX has it.
+* `msync` writes the pages of the shared mappings of a range that were
+  written back to their file. A private mapping has nothing to write.
+* `brk(addr)` moves the end of the heap and answers the new end; `brk(NULL)`
+  answers the current one. The heap begins after the image of the program and
+  may not cross a mapping or the top of the window, where the restorer, the
+  guard page and the stack are: the refusal is `ENOMEM` and the break stays
+  where it was. A heap that shrinks gives the pages above the new end back.
+
+The two sharing modes are the two answers of a write. A write into a
+`KSYS_MAP_PRIVATE` page is a copy of that page for this program alone, and the
+file keeps its bytes. A write into a `KSYS_MAP_SHARED` page is a write of the
+file: the page is marked dirty and `msync`, `munmap` or the end of the program
+writes it back through the VFS, so the next reader of the file - `cat`, the
+shell, `e2fsck` on the volume of an ext2 root - sees the bytes the program
+wrote. A page that was only read is never written back.
+
+The page of an image is the same machinery: `execve` maps the text (readable
+and executable), the data (readable and writable) and the bss (zeros) as
+private regions of the file, so a write of the data of a program copies that
+page and the file on the volume is never changed by a running program.
+
+## The wait for a descriptor
+
+
+`poll(fds, nfds, timeout)` (number 43) waits for one of the descriptors of the
+list to be ready. An entry is eight bytes on both machines and the library
+uses the structure of the ABI as it is:
+
+```c
+struct ksys_pollfd {
+    k_u32_t fd;      /* a negative number is ignored */
+    k_u16_t events;  /* KSYS_POLLIN, KSYS_POLLOUT */
+    k_u16_t revents; /* what is true, written by the call */
+};
+```
+
+The bits are the ones of Linux: `KSYS_POLLIN` (0x0001) for a read that would
+not wait, `KSYS_POLLOUT` (0x0004) for a write that would not wait, and
+`KSYS_POLLERR` (0x0008) for an object that is gone - the writing end of a
+pipe whose reader closed, a descriptor the caller may not use in the direction
+it asked, and a number that is not open. An entry the caller did not ask about
+stays zero; the error is reported whether it was asked for or not, because a
+wait that would never end is not an answer.
+
+The answers:
+
+* the count of the entries whose `revents` is not zero, the list written back
+  to the memory of the caller;
+* 0 when the timeout passed, and for a list of no descriptor - `poll(NULL, 0,
+  ms)` is the sleep of the system, so a program of the console can wait
+  without a descriptor;
+* `EINTR` when a signal the task has to answer cut the wait;
+* `EINVAL` for a list longer than `KSYS_POLL_MAX` (16, the table of the
+  descriptors of a task), a NULL list with a count, or a timeout that is not
+  -1 and not a number of milliseconds an int holds;
+* `EFAULT` for a list that is not the memory of the caller.
+
+A timeout of -1 waits without a deadline. The wait is the scheduler's and not
+a loop of the task: the task is taken out of the run queue and the object
+wakes it - the writing end of a pipe after a byte, the reading end after the
+room it made, the close of either end, the console when a key arrives. A
+machine whose tasks are threads of another scheduler (the host, the board)
+cannot cut a sleep from outside the thread, so its wait looks at the state
+every 10 ms; the x86-64 port answers within the tick of the timer.
+
+The system has no socket in the ABI, so a descriptor of `poll` is a file, a
+pipe or a device of the VFS. A regular file is always ready to be read and to
+be written, and `/dev/tty0` is readable when a character is waiting.
+
 ## The descriptors
 
 Every task has its own table of the open files, sixteen of them. The
@@ -560,24 +704,34 @@ shape of POSIX (0 or -1 with `errno`).
 `pipe(fds)` (number 27) makes a pipe and gives the caller two ordinary
 descriptors: `fds[0]` reads and `fds[1]` writes. The two are the first free
 slots of the task, so a program that has closed its console gets 0 and 1.
-The pipe is a ring of 256 bytes of the kernel; the system keeps eight of
-them. The place for the answer is checked at the edge: NULL is `EINVAL`, a
-place that is not the memory of the caller is `EFAULT`.
+The pipe is a ring of the port (64 KiB on x86-64 and the host, 4 KiB on the
+board, ADR 0035) taken from the allocator with the pipe and given back with
+its last end; the system keeps sixteen of them. The place for the answer is
+checked at the edge: NULL is `EINVAL`, a place that is not the memory of the
+caller is `EFAULT`.
 
-* A read of an empty pipe whose writing end is still open waits, and then
-  answers `EAGAIN` if the wait passed its bound: a timeout is not the end of
-  the file. A read of an empty pipe with no writer is 0, the end of the file.
+* A read of an empty pipe whose writing end is still open sleeps until the
+  bytes arrive: a reader slower than its writer is an ordinary pipeline and
+  not an error. A signal that has to be answered cuts the wait short and the
+  answer is `EINTR`. A read of an empty pipe with no writer is 0, the end of
+  the file.
 * A write with no reading end is `EPIPE` (`KERR_PIPE`, the number 32 of
   POSIX). There is no `SIGPIPE` in this system yet, so the error is the whole
   answer; the bytes written before the reader went away are the count.
+* A write of at most `PIPE_BUF` (512) bytes waits for the whole of its room
+  and lands as one step of the ring, so two writers of a pipeline cannot put
+  a byte inside one block of each other. A larger write is placed as the
+  reader makes room.
 * The access of each end is the flag of its descriptor: `read` of the writing
   end and `write` of the reading end are `EBADF`. A pipe has no position, so
   `lseek` is `ESPIPE` (`KERR_SPIPE`, 29), and it has no entries, so `readdir`
   is `ENOTDIR`.
-* A wait of a pipe is a poll with a bound, not a queue of waiters: 500 ms.
-  A read that found no byte in that time is `EAGAIN`; a write that placed no
-  byte is `EAGAIN` too, and one that placed some bytes answers the count it
-  placed. A queue with a wakeup is the next step.
+* A wait of a pipe is the scheduler's (`kernel/wait.h`) and has no bound: a
+  reader slower than its writer is an ordinary pipeline and not an error. The
+  task leaves the run queue, and the other end wakes it when it puts a byte in,
+  takes one out or closes; a signal cuts the wait with `EINTR`. The ring is
+  `KFILE_PIPE_SIZE` bytes - 64 KiB on x86-64 and the host, 4 KiB on the board -
+  taken from the allocator when the pipe is made.
 
 `dup2(oldfd, newfd)` (number 28) makes `newfd` a second descriptor of the
 open file of `oldfd` and answers `newfd`. A descriptor that was open at
@@ -753,8 +907,25 @@ program breaks it into pieces.
   answer, and a descriptor of a file is `ENOTDIR` to the same call.
 * **The pipes.** The bytes of one end come back from the other, the end of
   the writing end is the end of the file, a pipe without a reading end is
-  `EPIPE`, the wait of an empty or a full pipe passes its bound as `EAGAIN`,
-  and `lseek`/`readdir` of a pipe are `ESPIPE`/`ENOTDIR`.
+  `EPIPE`, a write of `PIPE_BUF` waits for the whole block and lands whole,
+  a reader slower than its writer waits instead of failing, and
+  `lseek`/`readdir` of a pipe are `ESPIPE`/`ENOTDIR`.
+* **The memory.** A file of the volume read through a window of mappings has
+  the bytes of the file: the sum through `mmap` is the sum through `read`, a
+  window slides over a file larger than the window of the machine, a private
+  page takes a write the file does not, a shared page is the file after
+  `msync` and another program reads the bytes, an anonymous page reads as
+  zeros, the heap grows by pages and a heap past the stack is `ENOMEM`
+  (`ports/port_x86_64/programs/mmap.c`, `make x86-smoke`).
+* **The image is not a copy.** A program of 4 MiB runs with the heap of the
+  kernel unchanged while it runs and after it: the image is mapped from the
+  file and no block of the kernel holds it (`/bin/big`, `make x86-smoke`).
+* **The wait.** `poll` answers the state of two pipes at once, the byte that
+  arrives while the task waits (a task of its own writes it), the deadline
+  that passes, a list of no descriptor as a sleep, the end of the writing end
+  as a readable entry, a writing end whose reader is gone as the error, and a
+  signal as `EINTR`. The wait costs no processor time: the task is out of the
+  run queue (`tests/cases/test_ksys.c`, `test_poll`).
 * **The sharing.** `dup2` makes a second descriptor of one open file: the
   write through it reaches the object the number now names, the copy
   outlives the original, and the old descriptor at the new number is closed.

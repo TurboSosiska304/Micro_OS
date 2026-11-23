@@ -18,6 +18,12 @@
 
 #define ATEXIT_MAX_HANDLERS 8
 
+/* The streams of the library, when it carries them (`src/file.c`): the
+ * bytes a program wrote and did not flush leave with the program. The
+ * definition is weak in `src/stdio.c`, so a program of the runtime without
+ * the streams pays nothing for it. */
+void __ulibc_stream_flush_all(void);
+
 static void (*g_atexit_s[ATEXIT_MAX_HANDLERS])(void);
 static int g_atexit_count_s;
 
@@ -38,4 +44,11 @@ void __ulibc_atexit_run(void)
     while (g_atexit_count_s > 0) {
         g_atexit_s[--g_atexit_count_s]();
     }
+
+    /*
+     * A handler may have written a last line: the streams go after the
+     * handlers and not before them, so the order of what the program said
+     * is the order of the file.
+     */
+    __ulibc_stream_flush_all();
 }
