@@ -115,3 +115,43 @@ goes into the release notes.
 Each is one package with its sources and its patches. The order is the order
 of the difficulty, and `make` is the last because it is the first program that
 wants a machine around it.
+
+## 8. The other direction: a permissive driver, and a blob that is neither
+
+Two things are mistaken for a copyleft program, and neither takes this
+recipe.
+
+**A driver ported from a permissive source** is code of the tree. FreeBSD,
+OpenBSD and NetBSD publish most of their drivers under BSD-2, BSD-3 or ISC,
+and rule 1 of [licensing.md](licensing.md) takes them the way it takes zlib:
+the file keeps its notice, the copyright lines stay, a row is added to the
+table of the components and the port keeps its style around it. It is not a
+package of `microos-progs` and it has no `license` field in an index: it is
+compiled into the image of the machine, and the tree is answerable for it.
+
+The worked case is the WiFi of a laptop ([ADR 0039](adr/0039-wifi-on-a-laptop.md)).
+OpenBSD's `iwm(4)` is dual BSD-2-Clause/GPL-2.0 and `net80211` is BSD-2/3, so
+the driver and the 802.11 stack are components under rule 1, taken - by a
+written choice, like mbedTLS - under the permissive half. The Linux `iwlwifi`
+is the same device under GPL-2.0-only, and rule 3 keeps it out: not forked,
+not vendored, not read as code.
+
+**A firmware** is neither source nor a program. It is data of a device, it
+runs on the device's processor and not on ours, and its licence is the
+vendor's: Intel's `LICENCE.iwlwifi_firmware` permits redistribution in binary
+form without modification, asks that the copyright and the disclaimer travel
+with it, and forbids reverse engineering. Such a file is
+
+* not in the tree - it is not code and not a permissively licensed part;
+* not a package of `microos-progs` - a package there is a `MOX1` image of a
+  program, and the installer would have nothing to run;
+* a file of the distribution: `/lib/firmware/<name>` on the volume, a
+  checksum in the release notes, and `LICENSE.<name>` beside the bundle the
+  way `tools/bundle.sh` carries the licence of Spleen or mbedTLS;
+* loaded, never linked: the driver reads it through the VFS and hands it to
+  the device, and no line of a build names it.
+
+The rule of thumb is one sentence: **a link line decides the source, a file
+that is loaded is a question of distribution, and a program is a package.**
+When a part of another system arrives, the first question is which of the
+three it is, and the answer is written down before the code is.
