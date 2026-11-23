@@ -268,10 +268,14 @@ twice as large in bytes - which the sizing makes irrelevant.
 * A record of version 3 is twice the bytes of a record of version 2, so a
   table of the same record count costs twice the blocks - and `mkfs` asks
   for the same 256 records, so a small volume has fewer data blocks.
-* `struct vfs_statx` grew by a word: the ABI of `KSYS_STATX` changed from 40
-  to 48 bytes and a program of an older tree has to be rebuilt. The tree has
-  one build, so nothing in it breaks, but the promise "a structure of the
-  ABI does not grow" was broken once and this is the record of it.
+* The group first landed as a 32-bit word and grew `struct vfs_statx` from
+  40 to 48 bytes. The gate of the frozen image refused it (`exec: the image of
+  1.0 is read as it was frozen`): the promise is that an image of 1.0 still
+  runs, and a structure that grows writes 8 bytes past the buffer of a caller
+  of an older tree. The group is a 16-bit field in the hole of the alignment
+  of `type` now - every offset of the structure is the one it was and it is
+  40 bytes. Recorded because the first attempt is the mistake a next reader
+  would make.
 * A record of an object written twice has one copy, and a reset in the middle
   of the second write loses the record of the object and not only the write.
   A journal is the answer and is not in this release (`docs/debts.md`).

@@ -350,19 +350,20 @@ struct vfs_statx {
     k_u64_t size;
     k_u32_t mode;
     k_u32_t owner;
-    k_u32_t group; /* the gid of the object, zero without one (ADR 0038) */
     k_u64_t mtime; /* the last change of the content */
     k_u64_t ctime; /* the last change of the record, the mode or the owner */
 };
 ```
 
-**The structure grew by a word in 1.7** (ADR 0038: the group of a record).
-The call copies the structure whole, so the kernel and the library of a
-program move together; a program of an older tree has to be rebuilt, and the
-ABI of the call is 48 bytes on both machines (`tests/corpus/abi.txt`). The
-group is zero for every filesystem that has no group of its own - all of
-them but a MicroFS volume of version 3 - and zero is the group of root, which
-is what a volume without a group has always meant.
+**The group of a record arrived in 1.7** (ADR 0038) in the room that the
+alignment of `type` left free: `group` is a 16-bit field at the offset 6, and
+the structure keeps the 40 bytes it has had since the call was frozen. A
+program of an older tree reads the fields it knows and this one reads the
+group as well, so the epoch is not broken and an image of 1.0 still runs (the
+test of the frozen image holds it). The group is zero for every filesystem
+that has no group of its own - all of them but a MicroFS volume of version 3
+- and zero is the group of root, which is what a volume without a group has
+always meant.
 
 The moments are the seconds of Unix in 64 bits, so the year 2038 is not a
 wall of the contract. They come from the clock of the kernel
