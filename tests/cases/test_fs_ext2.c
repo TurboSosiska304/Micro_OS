@@ -892,9 +892,17 @@ static void check_e2fsck(const char *image)
     (void)snprintf(command, sizeof(command), "e2fsck -fn '%s' 2>&1", image);
     rc = host_capture(command, output, sizeof(output));
 
+    /*
+     * The exit status of e2fsck is not the whole answer: a summary count of
+     * the superblock that disagrees with the bitmaps is reported with "Fix?
+     * no" and the status stays 0, because the tool would repair it without
+     * touching a block. An image of this machine is clean when the tool has
+     * nothing to ask about, so the words are checked as well.
+     */
     KT_CHECK_INT_EQ(rc, 0);
+    KT_CHECK(strstr(output, "Fix? no") == NULL);
 
-    if (rc != 0) {
+    if (rc != 0 || strstr(output, "Fix? no") != NULL) {
         ktest_fail(__FILE__, __LINE__, "e2fsck on %s says: %s", image, output);
     }
 }
@@ -1093,6 +1101,190 @@ static void test_write_create_read(void)
 
     free(pattern);
     free(readback);
+    (void)unlink(image);
+    (void)rmdir(dir);
+
+    teardown();
+}
+
+/*
+ * The write past the first table. The volume is 2 MiB and the file is
+ * sparse: the bytes at 300 KiB hang from a double table and the bytes at
+ * 64 MiB from a triple one, and a hole costs only the tables it needs and
+ * the block that was written. e2fsck of the host reads the image before
+ * and after the cut, so the tables the kernel made and the tables it gave
+ * back are the tables of the format.
+ */
+static void test_indirect_write(void)
+{
+    struct vfs_file file;
+    struct vfs_stat stat;
+    struct vfs_statfs before;
+    struct vfs_statfs after;
+    char image[256];
+    char dir[256];
+    char pattern[64];
+    char readback[64];
+    const k_u64_t double_at = 300u * 1024u;            /* past the twelve direct blocks */
+    const k_u64_t triple_at = (k_u64_t)66000u * 1024u; /* past the double table */
+    int rc;
+
+    ktest_begin("ext2: a sparse file grows through the double and the triple table");
+
+    setup();
+
+    if (!host_tools_ready()) {
+        printf("  (skipped: mke2fs, e2fsck and debugfs of e2fsprogs are not installed)\n");
+        teardown();
+        return;
+    }
+
+    if (!host_mkfs(dir, image, sizeof(image), HOST_IMAGE_BLOCKS, HOST_BLOCK_SIZE, 1024u, 512u)) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    for (k_size_t i = 0; i < sizeof(pattern); i++) {
+        pattern[i] = (char)('a' + (char)(i % 26u));
+    }
+
+    KT_CHECK_INT_EQ(mount_host_image(image), 0);
+    KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &before), 0);
+
+    KT_CHECK_INT_EQ(
+        vfs_open(TEST_ROOT_POINT "/sparse.bin", VFS_O_WRONLY | VFS_O_CREAT, &file, g_file_data), 0);
+
+    /* The first write past the twelve direct blocks: the table of the
+     * single indirection and one of the double are made on the way. */
+    file.offset = double_at;
+    KT_CHECK_INT_EQ(vfs_write(&file, pattern, sizeof(pattern)), (int)sizeof(pattern));
+
+    /* The second write is 64 MiB along: three tables, the triple top, its
+     * middle and the table of the data block. */
+    file.offset = triple_at;
+    KT_CHECK_INT_EQ(vfs_write(&file, pattern, sizeof(pattern)), (int)sizeof(pattern));
+
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/sparse.bin", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, triple_at + sizeof(pattern));
+
+    /* The bytes of both writes come back, and the hole in front of them is
+     * a hole: a block the file never named reads as zeros. */
+    KT_CHECK_INT_EQ(vfs_open(TEST_ROOT_POINT "/sparse.bin", VFS_O_RDONLY, &file, g_file_data), 0);
+
+    memset(readback, 0, sizeof(readback));
+    file.offset = double_at;
+    KT_CHECK_INT_EQ(vfs_read(&file, readback, sizeof(readback)), (int)sizeof(readback));
+    KT_CHECK(memcmp(readback, pattern, sizeof(pattern)) == 0);
+
+    memset(readback, 0, sizeof(readback));
+    file.offset = triple_at;
+    KT_CHECK_INT_EQ(vfs_read(&file, readback, sizeof(readback)), (int)sizeof(readback));
+    KT_CHECK(memcmp(readback, pattern, sizeof(pattern)) == 0);
+
+    memset(readback, 1, sizeof(readback));
+    file.offset = 8u * 1024u;
+    KT_CHECK_INT_EQ(vfs_read(&file, readback, 16), 16);
+
+    for (k_size_t i = 0; i < 16u; i++) {
+        KT_CHECK_INT_EQ(readback[i], 0);
+    }
+
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    /* The check of the machine walks the two tables from the inode. */
+    {
+        struct ext2_check_report report;
+
+        KT_CHECK_INT_EQ(ext2_check(TEST_ROOT_POINT, &report), 0);
+        KT_CHECK_INT_EQ(report.errors, 0);
+        KT_CHECK_INT_EQ(report.files, 1);
+    }
+
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+    KT_CHECK(image_store_file(image));
+    check_e2fsck(image);
+    check_debugfs(image, "stat /sparse.bin", "Size: 67584064");
+
+    /* The cut gives the tables of both levels back: seven blocks of the
+     * medium (four of the triple write, three of the double one). */
+    KT_CHECK_INT_EQ(mount_host_image(image), 0);
+    KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &after), 0);
+    KT_CHECK_INT_EQ(after.free_blocks, before.free_blocks - 7u);
+
+    rc = ext2_vfs_truncate(TEST_ROOT_POINT "/sparse.bin", 0);
+    KT_CHECK_INT_EQ(rc, 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/sparse.bin", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, 0);
+    KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &after), 0);
+    KT_CHECK_INT_EQ(after.free_blocks, before.free_blocks);
+
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+    KT_CHECK(image_store_file(image));
+    check_e2fsck(image);
+    check_debugfs(image, "stat /sparse.bin", "Size: 0");
+
+    (void)unlink(image);
+    (void)rmdir(dir);
+
+    teardown();
+}
+
+/*
+ * The counters of the superblock after a close, without an unmount: the root
+ * of the machine is never unmounted, and e2fsck of the world reads the
+ * numbers of the medium. A file written and closed has to leave an image the
+ * tool of the world calls sound.
+ */
+static void test_counters_settle(void)
+{
+    struct vfs_file file;
+    struct vfs_stat stat;
+    char image[256];
+    char dir[256];
+    char content[4096];
+
+    ktest_begin("ext2: a close settles the counters of the superblock of the image");
+
+    setup();
+
+    if (!host_tools_ready()) {
+        printf("  (skipped: mke2fs, e2fsck and debugfs of e2fsprogs are not installed)\\n");
+        teardown();
+        return;
+    }
+
+    if (!host_mkfs(dir, image, sizeof(image), HOST_IMAGE_BLOCKS, HOST_BLOCK_SIZE, 1024u, 512u)) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    memset(content, 's', sizeof(content));
+
+    KT_CHECK_INT_EQ(mount_host_image(image), 0);
+    KT_CHECK_INT_EQ(
+        vfs_open(TEST_ROOT_POINT "/settle.txt", VFS_O_WRONLY | VFS_O_CREAT, &file, g_file_data), 0);
+    KT_CHECK_INT_EQ(vfs_write(&file, content, sizeof(content)), (int)sizeof(content));
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/settle.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, sizeof(content));
+
+    /* The image goes to the host while the volume is still mounted: the
+     * superblock of the medium already says what the volume holds. */
+    KT_CHECK(image_store_file(image));
+    check_e2fsck(image);
+    check_debugfs(image, "stat /settle.txt", "Size: 4096");
+
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/settle.txt"), 0);
+    KT_CHECK(image_store_file(image));
+    check_e2fsck(image);
+
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+
     (void)unlink(image);
     (void)rmdir(dir);
 
@@ -1340,10 +1532,10 @@ static void test_no_room(void)
     struct vfs_stat stat;
     struct vfs_statfs before;
     struct vfs_statfs after;
-    const k_size_t too_big = 274433u; /* one byte past twelve direct blocks and one table */
+    const k_size_t too_big = 3u * 1024u * 1024u; /* more than the 2 MiB of the volume */
     int rc;
 
-    ktest_begin("ext2: a file that would need a double table is no room, not a broken volume");
+    ktest_begin("ext2: a file bigger than the volume is no room, not a broken volume");
 
     setup();
 
@@ -1380,10 +1572,12 @@ static void test_no_room(void)
     KT_CHECK_INT_EQ(rc, KERR_NOSPC);
     KT_CHECK_INT_EQ(vfs_close(&file), 0);
 
-    /* What was written before the wall is a file of its own size and the
-     * volume is still consistent. */
+    /* What was written before the wall is a file of whole blocks, not a
+     * record of a size the medium never held, and the volume is still
+     * consistent. */
     KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/huge.bin", &stat), 0);
-    KT_CHECK_INT_EQ(stat.size, 274432);
+    KT_CHECK(stat.size > 0u && stat.size < (k_u64_t)too_big);
+    KT_CHECK_INT_EQ(stat.size % TEST_BLOCK_SIZE, 0);
 
     KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/huge.bin"), 0);
     KT_CHECK_INT_EQ(vfs_statfs(TEST_ROOT_POINT, &after), 0);
@@ -2127,6 +2321,8 @@ void test_fs_ext2(void)
     test_shell_mount();
     test_remount();
     test_write_create_read();
+    test_indirect_write();
+    test_counters_settle();
     test_many_files();
     test_truncate_and_unlink();
     test_no_room();
