@@ -38,6 +38,16 @@ const char *fat_relative(const struct fat_volume *vol, const char *path)
         return NULL;
     }
 
+    /*
+     * The root of the tree is the one point of one character: the VFS hands
+     * a path below it with its own slash ("/bin"), which is already the
+     * relative one (ADR 0027). A point with a name starts the walk after its
+     * separator.
+     */
+    if (len == 1u) {
+        return path[0] == '/' ? path : NULL;
+    }
+
     if (path[len] == '\0') {
         return "/";
     }
