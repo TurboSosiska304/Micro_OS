@@ -134,7 +134,10 @@ which is the commit of the growth (ADR 0038).
 The growth is what makes the table belong to the volume's tree and not to the
 volume's size: a volume of 5 GiB starts with 320 records and takes the 321st
 file through one growth, and a volume whose data section is full answers "no
-space" the way it always did.
+space" the way it always did. The growth moves the blocks of the files at the
+top of the data section into free space, so it waits for the files to close:
+a create that needs records while a descriptor of the volume is open answers
+"no space", and the one after the close grows the table (ADR 0038 §5).
 
 ## 5. Data stored in INFO
 

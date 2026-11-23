@@ -552,6 +552,85 @@ static void test_table_grows(void)
 }
 
 /*
+ * The property of the descriptor: a growth of the table moves blocks of the
+ * chains, and a chain that is open is only half on the medium - the first
+ * block of a file that was written but not closed is named by the descriptor
+ * and by no record. The growth therefore waits for the descriptors to close:
+ * the create that needs more records than the table holds answers "no space"
+ * while a file is open, and the file that is open stays whole (ADR 0038).
+ */
+static void test_open_across_growth(void)
+{
+    struct mfs_info before;
+    struct mfs_info after;
+    struct mfs_file open;
+    struct mfs_file file;
+    struct mfs_check_report report;
+    char path[32];
+    char text[64];
+    k_u32_t i;
+    int rc;
+
+    ktest_begin("mfs format: the table waits for the files that are open");
+
+    KT_CHECK_INT_EQ(volume_setup(8), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_get_info(&before), MFS_OK);
+
+    KT_CHECK_INT_EQ(mfs_create("/open"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_open("/open", MFS_O_RDWR, &open), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_write(&open, "first", 5), 5);
+
+    /* The table runs out of records with the file still open: the create
+     * that needs the records after the last one is refused, and nothing of
+     * the volume is touched. Two records are the root and the open file. */
+    for (i = 0; i + 2u < before.inodes_total; i++) {
+        snprintf(path, sizeof(path), "/n%03u", (unsigned)i);
+        KT_CHECK_INT_EQ(mfs_create(path), MFS_OK);
+    }
+
+    snprintf(path, sizeof(path), "/n%03u", (unsigned)i);
+    KT_CHECK_INT_EQ(mfs_create(path), MFS_ENOSPC);
+
+    /* The descriptor writes the rest of its file after that. */
+    KT_CHECK_INT_EQ(mfs_write(&open, "second", 6), 6);
+    KT_CHECK_INT_EQ(mfs_close(&open), MFS_OK);
+
+    /* The record of the file is on the medium and it is whole. */
+    KT_CHECK_INT_EQ(mfs_open("/open", MFS_O_RDONLY, &file), MFS_OK);
+    memset(text, 0, sizeof(text));
+    KT_CHECK_INT_EQ(mfs_read(&file, text, 11), 11);
+    KT_CHECK_STR_EQ(text, "firstsecond");
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+
+    memset(&report, 0, sizeof(report));
+    KT_CHECK_INT_EQ(mfs_check(&report), MFS_OK);
+    KT_CHECK_INT_EQ(report.errors, 0);
+
+    /* With no file open the table grows, and the volume of the grown table
+     * is the same one after a restart. */
+    rc = mfs_create(path);
+    KT_CHECK_INT_EQ(rc, MFS_OK);
+
+    KT_CHECK_INT_EQ(mfs_get_info(&after), MFS_OK);
+    KT_CHECK(after.inodes_total > before.inodes_total);
+
+    mfs_unmount();
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_open("/open", MFS_O_RDONLY, &file), MFS_OK);
+    memset(text, 0, sizeof(text));
+    KT_CHECK_INT_EQ(mfs_read(&file, text, 11), 11);
+    KT_CHECK_STR_EQ(text, "firstsecond");
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+
+    memset(&report, 0, sizeof(report));
+    KT_CHECK_INT_EQ(mfs_check(&report), MFS_OK);
+    KT_CHECK_INT_EQ(report.errors, 0);
+
+    volume_teardown();
+}
+
+/*
  * The property of the checksum: a write that a power cut stopped in the
  * middle of the record is not half an object. The record says it is used and
  * does not checksum, so the check names it, the repair gives it back, and
@@ -749,6 +828,7 @@ void test_mfs_format(void)
     test_version_legacy_volume();
     test_record_checksum();
     test_table_grows();
+    test_open_across_growth();
     test_torn_record();
     test_torn_header();
     test_group();

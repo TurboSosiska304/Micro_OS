@@ -158,6 +158,19 @@ section, under the lock of the filesystem:
 Only a version 3 volume grows. The table of a version 1 and 2 volume is the
 whole of `META` and the volume keeps the size it was formatted with.
 
+The growth waits for the files to close, and the reason is the only half of
+the volume that is not on the medium: the chain of an open file. A file that
+was written to and not closed has its first block named by the descriptor and
+by no record, so the walk of the growth would take it for a block that nobody
+owns and give it to the table. The filesystem therefore keeps a count of the
+descriptors it handed out (`mfs_open`/`mfs_close`) and a table that is full
+while one is open answers `MFS_ENOSPC` to the create that needed the records;
+the create after the close grows the table and succeeds. As a second line, a
+descriptor records the number of the growth it was made in and takes the head
+of its chain from the record again when the number changed, so a growth under
+an open descriptor - if one ever becomes possible - is a walk from the head
+and not a write to a block that moved.
+
 ### 6. The check: a record that does not checksum is not a record
 
 `mfs_check()` and `mfs_repair()` read a used record whose checksum fails as
@@ -269,3 +282,8 @@ twice as large in bytes - which the sizing makes irrelevant.
   section is not free: it is one walk of the table and a copy of a few
   blocks, under the lock, on the operation that happened to be the one that
   needed the 321st record. Nothing a person will notice, and not free.
+* A volume whose table is full and whose data section is full answers "no
+  space" a little earlier than it used to: while a file is open, the growth
+  is refused, so a create that needs the next record is `MFS_ENOSPC` until
+  the file is closed. Rare (the table holds 319 records) and the price of a
+  chain that is half in a descriptor.

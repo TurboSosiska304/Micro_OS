@@ -23,6 +23,8 @@ static struct {
     k_u32_t inode_blocks;      /* the blocks of the table of the inodes */
     k_u32_t inode_capacity;    /* the number of the records of the table */
     k_u32_t table_end;         /* a version 3 volume: the block after the table */
+    k_u32_t generation;        /* the number of the growths of the table */
+    k_u32_t open_files;        /* the descriptors the filesystem handed out */
     bool bitmap_dirty;         /* the map in the memory is newer than the device */
     k_u8_t *bitmap;            /* the map of the free blocks, one bit per block */
     k_u32_t inode_cache_block; /* the block of the table that is cached */
@@ -881,6 +883,39 @@ static void file_cursor_forget(struct mfs_file *file)
     file->grow_index = 0;
 }
 
+/*
+ * Bring a descriptor of an open file up to the volume after a growth of the
+ * table of the records (ADR 0038). The growth moves the blocks of the chains
+ * and patches the pointers of the chains, so the record of the object is the
+ * truth about the head of the chain and the cursors of the descriptor are
+ * not: the descriptor takes the head of its record again and walks from it.
+ * The number of the blocks of the chain does not change, and neither does
+ * the size the descriptor holds - a write that grew the chain past the
+ * record has that number in the descriptor, not on the medium yet.
+ *
+ * A descriptor of a volume that did not grow pays one comparison.
+ */
+static int file_refresh(struct mfs_file *file)
+{
+    struct mfs_inode inode;
+    int rc;
+
+    if (file->generation == g.generation) {
+        return MFS_OK;
+    }
+
+    rc = inode_read(file->inode, &inode);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    file->first_block = inode.first_block;
+    file_cursor_forget(file);
+    file->generation = g.generation;
+
+    return MFS_OK;
+}
+
 /* The last block of a chain. */
 static int chain_last(k_u32_t first, k_u32_t *last)
 {
@@ -1067,6 +1102,20 @@ static int table_grow(k_u32_t add_blocks)
         return MFS_ENOSPC;
     }
 
+    /*
+     * The blocks of the chains are moved by the growth, and the chain of an
+     * open file is only half on the medium: the first block of a file that
+     * was written but not closed is named by the descriptor and by no
+     * record, so the growth would take it for a block nobody owns. A
+     * descriptor that is open keeps the table where it is, and the create
+     * that needed the records answers "no space" until it is closed.
+     */
+    if (g.open_files != 0u) {
+        kerror("mfs: the table of the records cannot grow while %u file(s) are open",
+               (unsigned)g.open_files);
+        return MFS_ENOSPC;
+    }
+
     if (add_blocks == 0u) {
         add_blocks = MFS_TABLE_GROW_BLOCKS;
     }
@@ -1247,6 +1296,9 @@ static int table_grow(k_u32_t add_blocks)
     g.inode_blocks = sb.inode_blocks;
     /* The record 0 is not used, the inodes start at 1. */
     g.inode_capacity = sb.inode_records - 1u;
+    /* The blocks of the chains moved: the descriptors of the open files
+     * take their record again before they touch the medium. */
+    g.generation++;
 
     kinfo("mfs: the table of the records grew to %u record(s), %u block(s) moved",
           (unsigned)g.inode_capacity, (unsigned)moves);
@@ -2543,6 +2595,7 @@ static int mfs_open_locked(const char *path, int flags, struct mfs_file *out)
         out->size = inode.size;
         out->offset = 0;
         out->flags = flags;
+        out->generation = g.generation;
 
         return MFS_OK;
     }
@@ -2599,6 +2652,11 @@ static int mfs_read_locked(struct mfs_file *file, void *buf, k_size_t size)
 
     if (file == NULL || buf == NULL) {
         return MFS_EINVAL;
+    }
+
+    rc = file_refresh(file);
+    if (rc != MFS_OK) {
+        return rc;
     }
 
     /*
@@ -2757,6 +2815,11 @@ static int mfs_write_locked(struct mfs_file *file, const void *buf, k_size_t siz
         return MFS_EINVAL;
     }
 
+    rc = file_refresh(file);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
     if ((file->flags & (MFS_O_WRONLY | MFS_O_RDWR)) == 0) {
         return MFS_EINVAL;
     }
@@ -2873,6 +2936,11 @@ static int mfs_close_locked(struct mfs_file *file)
 
     if (file == NULL) {
         return MFS_EINVAL;
+    }
+
+    rc = file_refresh(file);
+    if (rc != MFS_OK) {
+        return rc;
     }
 
     if (file->dirty) {
@@ -3047,6 +3115,11 @@ static int mfs_truncate_locked(struct mfs_file *file, k_u64_t size)
 
     if (file == NULL || (file->flags & (MFS_O_WRONLY | MFS_O_RDWR)) == 0) {
         return MFS_EINVAL;
+    }
+
+    rc = file_refresh(file);
+    if (rc != MFS_OK) {
+        return rc;
     }
 
     /* The format keeps the size of a file in 32 bits, so a wider number is
@@ -3857,6 +3930,11 @@ int mfs_open(const char *path, int flags, struct mfs_file *out)
 
     mfs_lock();
     rc = mfs_open_locked(path, flags, out);
+
+    if (rc == MFS_OK) {
+        g.open_files++;
+    }
+
     mfs_unlock();
 
     return rc;
@@ -3901,6 +3979,11 @@ int mfs_close(struct mfs_file *file)
 
     mfs_lock();
     rc = mfs_close_locked(file);
+
+    if (rc == MFS_OK && g.open_files > 0u) {
+        g.open_files--;
+    }
+
     mfs_unlock();
 
     return rc;

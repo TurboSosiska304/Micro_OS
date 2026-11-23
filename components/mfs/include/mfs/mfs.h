@@ -321,6 +321,15 @@ struct mfs_file {
     bool grow_valid;    /* grow_block is the tail of this chain */
     k_u32_t grow_block; /* the block the last append left at the tail */
     k_u32_t grow_index; /* the index of that block from the head, 0 based */
+    /*
+     * The number of the growth of the table of the records (ADR 0038) the
+     * descriptor was made in. A growth moves blocks of the chains into the
+     * free space below the data section, so the block a cursor names may be
+     * a block that is not the chain's any more: a descriptor of a volume
+     * that grew reads its record again and walks from its head, and the
+     * chain itself is whole on the medium all along.
+     */
+    k_u32_t generation;
 };
 
 /* The information about the filesystem. */
