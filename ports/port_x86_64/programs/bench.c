@@ -14,6 +14,8 @@
  *     bench fileread <path> <MiB>     the same file read back
  *     bench fill <path> <MiB>         the file of the pipe test, untimed
  *     bench console <lines>       lines written to the console of the shell
+ *     bench latsyscall <samples>  the p50 and p99 of one call of getpid()
+ *     bench latpipe <samples>     the same of one byte through a pipe
  *
  * Every result is one line of the machine-readable table
  *
@@ -37,6 +39,13 @@
  * The rates are computed in whole numbers: a program of this port has no
  * floating point (no XMM state is saved at a switch, ADR 0010), so a rate is
  * hundredths of a unit and the table prints the point itself.
+ *
+ * The two latency rows are the exception to the rates: the clock of the
+ * machine has a millisecond, so one call of a microsecond is timed by the
+ * time stamp counter of the processor around the call itself and the samples
+ * are counted into a histogram. The counter is calibrated against the
+ * millisecond clock at the start of the measurement; its two reads are a
+ * floor of every sample and the floor is measured and printed beside it.
  */
 #include "ulibc.h"
 
@@ -117,6 +126,157 @@ static unsigned long long mib_per_second(unsigned long long bytes, unsigned long
 
     return bytes * 100000ull / (ms * MIB_BYTES);
 }
+
+/* --- the latency of one operation ---------------------------------------- */
+
+/*
+ * The counter of the processor. The clock of the machine ticks a millisecond,
+ * which is a thousand calls of the door, so a latency is measured by the two
+ * reads of the time stamp counter around the call. LFENCE keeps the reads
+ * from moving across the instruction that is measured (the kernel keeps its
+ * own copy of this in port_x86_64.h, which a program does not include).
+ */
+static unsigned long long tsc_now(void)
+{
+    unsigned int low;
+    unsigned int high;
+
+    __asm__ volatile("lfence\n\trdtsc" : "=a"(low), "=d"(high) : : "memory");
+
+    return ((unsigned long long)high << 32) | low;
+}
+
+/* The ticks of the counter in one microsecond: the counter is calibrated
+ * against the one clock of the machine, over a window long enough that the
+ * millisecond it ticks in does not matter. */
+#define CALIBRATION_MS 100u
+
+static unsigned long g_tsc_per_us;
+
+static int tsc_calibrate(void)
+{
+    struct timespec start;
+    struct timespec now;
+    unsigned long long first;
+    unsigned long long last;
+    unsigned long long us;
+
+    (void)clock_gettime(CLOCK_MONOTONIC, &start);
+    first = tsc_now();
+
+    do {
+        (void)clock_gettime(CLOCK_MONOTONIC, &now);
+    } while (elapsed_ms(&start, &now) < CALIBRATION_MS);
+
+    last = tsc_now();
+    us = elapsed_ms(&start, &now) * 1000ull;
+
+    if (us == 0) {
+        return 0;
+    }
+
+    g_tsc_per_us = (unsigned long)((last - first) / us);
+
+    return g_tsc_per_us != 0;
+}
+
+static unsigned long long tsc_to_ns(unsigned long long ticks)
+{
+    return ticks * 1000ull / (unsigned long long)g_tsc_per_us;
+}
+
+/*
+ * The histogram of one measurement: the count of the samples that fell into
+ * each bucket of `bucket_ns`, and one bucket more than the range for the
+ * samples beyond it. The percentiles are read from the counts and not from an
+ * array of the samples, so a measurement of any length costs the same memory;
+ * the middle of a bucket is the value it reports, which is the resolution of
+ * the row.
+ */
+struct latency {
+    unsigned int *buckets;
+    unsigned long count;
+    unsigned long bucket_ns;
+    unsigned long samples;
+};
+
+static void latency_reset(struct latency *lat, unsigned int *buckets, unsigned long count,
+                          unsigned long bucket_ns)
+{
+    unsigned long i;
+
+    lat->buckets = buckets;
+    lat->count = count;
+    lat->bucket_ns = bucket_ns;
+    lat->samples = 0;
+
+    /* The bucket of the samples beyond the range is part of the array. */
+    for (i = 0; i <= count; i++) {
+        buckets[i] = 0;
+    }
+}
+
+static void latency_add(struct latency *lat, unsigned long long ns)
+{
+    unsigned long index = (unsigned long)(ns / lat->bucket_ns);
+
+    if (index >= lat->count) {
+        index = lat->count;
+    }
+
+    lat->buckets[index]++;
+    lat->samples++;
+}
+
+/* The nearest rank: the value of the sample at the ceil(p % of the count)th
+ * place, which is the definition a tail is read by (and not an average of two
+ * neighbours, which would smooth the tail this row exists for). */
+static unsigned long long latency_percentile(const struct latency *lat, unsigned percent)
+{
+    unsigned long long rank = (lat->samples * (unsigned long long)percent + 99ull) / 100ull;
+    unsigned long long seen = 0;
+    unsigned long i;
+
+    for (i = 0; i < lat->count; i++) {
+        seen += lat->buckets[i];
+
+        if (seen >= rank) {
+            return (unsigned long long)i * lat->bucket_ns + lat->bucket_ns / 2;
+        }
+    }
+
+    /* Every sample that reached this point is beyond the range: the row is
+     * the top of the histogram and the note says how many there were. */
+    return (unsigned long long)lat->count * lat->bucket_ns;
+}
+
+/* A count of samples that did not fit the range of the histogram, and the
+ * top of that range: a row that is a floor of the truth says so. */
+static void latency_beyond(const char *name, const struct latency *lat)
+{
+    unsigned long long beyond = lat->buckets[lat->count];
+
+    if (beyond != 0) {
+        printf("bench note: %s_beyond %llu samples beyond %llu ns\n", name, beyond,
+               (unsigned long long)lat->count * lat->bucket_ns);
+    }
+}
+
+static void report_ns(const char *name, unsigned long long ns)
+{
+    report(name, ns * 100ull, "ns");
+}
+
+/*
+ * The buckets of the two measurements. The call of the door is under a
+ * microsecond and the pipe is the tick of the scheduler, so they need ranges
+ * three orders of magnitude apart; both are 4096 buckets of a count each
+ * (16 KiB of the data of the program per measurement).
+ */
+#define LAT_SYSCALL_BUCKET_NS 16u
+#define LAT_SYSCALL_BUCKETS 4096u
+#define LAT_PIPE_BUCKET_NS 1024u
+#define LAT_PIPE_BUCKETS 4096u
 
 static int bench_syscall(unsigned long calls)
 {
@@ -516,6 +676,265 @@ static int bench_console(unsigned long lines)
     return 0;
 }
 
+/* --- the latency of a call and of a byte --------------------------------- */
+
+static int bench_lat_syscall(unsigned long samples)
+{
+    static unsigned int buckets[LAT_SYSCALL_BUCKETS + 1u];
+    /* 512 buckets of the range and the one beyond it. */
+    static unsigned int overhead_buckets[512u + 1u];
+    struct latency lat;
+    struct latency overhead;
+    struct timespec start;
+    struct timespec stop;
+    unsigned long long ms;
+    unsigned long i;
+
+    if (!tsc_calibrate()) {
+        printf("bench error: the counter of the processor did not advance\n");
+        return 1;
+    }
+
+    /* The floor of every sample: the same pair of reads around no operation
+     * at all, in the same loop. A reader subtracts it from the row. */
+    latency_reset(&overhead, overhead_buckets, 512u, 8u);
+
+    for (i = 0; i < samples; i++) {
+        unsigned long long first = tsc_now();
+
+        latency_add(&overhead, tsc_to_ns(tsc_now() - first));
+    }
+
+    latency_reset(&lat, buckets, LAT_SYSCALL_BUCKETS, LAT_SYSCALL_BUCKET_NS);
+
+    (void)clock_gettime(CLOCK_MONOTONIC, &start);
+
+    for (i = 0; i < samples; i++) {
+        unsigned long long first = tsc_now();
+        long pid = getpid();
+
+        latency_add(&lat, tsc_to_ns(tsc_now() - first));
+
+        if (pid <= 0) {
+            printf("bench error: getpid answered %ld\n", pid);
+            return 1;
+        }
+    }
+
+    (void)clock_gettime(CLOCK_MONOTONIC, &stop);
+    ms = elapsed_ms(&start, &stop);
+
+    note("lat_syscall", "samples", samples, ms);
+    printf("bench note: lat_syscall_floor %llu ns for the pair of reads of the counter\n",
+           latency_percentile(&overhead, 50));
+    latency_beyond("lat_syscall", &lat);
+
+    report_ns("lat_syscall_p50", latency_percentile(&lat, 50));
+    report_ns("lat_syscall_p99", latency_percentile(&lat, 99));
+
+    return 0;
+}
+
+/* A message of the pipe test: the moment of the writer just before the write
+ * and the moment of the reader just after the read. The two are the counter
+ * of the one processor of the run, so their difference is the age of the byte
+ * and no second clock is involved. */
+struct pipe_stamp {
+    unsigned long long written;
+    unsigned long long received;
+};
+
+/* The pipe is a stream of the kernel: a read or a write may come back short
+ * and may answer EAGAIN when the ring of 256 bytes is full (ADR 0014), so a
+ * message of sixteen bytes is handed over by a loop that retries. */
+static int pipe_write_all(int fd, const void *buffer, size_t size)
+{
+    const unsigned char *bytes = (const unsigned char *)buffer;
+    size_t put = 0;
+
+    while (put < size) {
+        long wrote = write(fd, bytes + put, size - put);
+
+        if (wrote < 0) {
+            if (errno == EAGAIN) {
+                continue;
+            }
+
+            return -1;
+        }
+
+        if (wrote == 0) {
+            return -1;
+        }
+
+        put += (size_t)wrote;
+    }
+
+    return 0;
+}
+
+static int pipe_read_all(int fd, void *buffer, size_t size)
+{
+    unsigned char *bytes = (unsigned char *)buffer;
+    size_t got = 0;
+
+    while (got < size) {
+        long read_bytes = read(fd, bytes + got, size - got);
+
+        if (read_bytes < 0) {
+            if (errno == EAGAIN) {
+                continue;
+            }
+
+            return -1;
+        }
+
+        if (read_bytes == 0) {
+            return -1;
+        }
+
+        got += (size_t)read_bytes;
+    }
+
+    return 0;
+}
+
+/* The reader of the pipe test: it stamps the moment the byte is in its hands
+ * and sends the stamp back, which is the only thing the writer waits for
+ * between two bytes. It ends the task through exit() and never returns. */
+static void lat_pipe_reader(int data_fd, int ack_fd, unsigned long samples)
+{
+    unsigned long i;
+
+    for (i = 0; i < samples; i++) {
+        struct pipe_stamp stamp;
+
+        if (pipe_read_all(data_fd, &stamp, sizeof(stamp)) != 0) {
+            exit(1);
+        }
+
+        stamp.received = tsc_now();
+
+        if (pipe_write_all(ack_fd, &stamp, sizeof(stamp)) != 0) {
+            exit(1);
+        }
+    }
+
+    exit(0);
+}
+
+/*
+ * The delay of one byte through a pipe: the writer stamps the counter before
+ * the write, the reader stamps it after the read and sends the stamp back,
+ * and the difference is the time the byte spent in the pipe (the wake of the
+ * reader included). One message is in flight at a time and the ack is what
+ * keeps it so: the writer waits for the answer before it stamps the next
+ * byte, and no sample waits behind another.
+ */
+static int bench_lat_pipe(unsigned long samples)
+{
+    static unsigned int buckets[LAT_PIPE_BUCKETS + 1u];
+    struct latency lat;
+    struct timespec start;
+    struct timespec stop;
+    unsigned long long ms;
+    int data[2];
+    int ack[2];
+    unsigned long i;
+    int status;
+    long pid;
+
+    if (pipe(data) != 0 || pipe(ack) != 0) {
+        printf("bench error: pipe: %s\n", strerror(errno));
+        return 1;
+    }
+
+    if (!tsc_calibrate()) {
+        printf("bench error: the counter of the processor did not advance\n");
+        return 1;
+    }
+
+    latency_reset(&lat, buckets, LAT_PIPE_BUCKETS, LAT_PIPE_BUCKET_NS);
+
+    (void)clock_gettime(CLOCK_MONOTONIC, &start);
+
+    pid = fork();
+
+    if (pid == 0) {
+        (void)close(data[1]);
+        (void)close(ack[0]);
+        lat_pipe_reader(data[0], ack[1], samples);
+        exit(1);
+    }
+
+    if (pid < 0) {
+        printf("bench error: fork: %s\n", strerror(errno));
+        (void)close(data[0]);
+        (void)close(data[1]);
+        (void)close(ack[0]);
+        (void)close(ack[1]);
+        return 1;
+    }
+
+    (void)close(data[0]);
+    (void)close(ack[1]);
+
+    for (i = 0; i < samples; i++) {
+        struct pipe_stamp sent;
+        struct pipe_stamp back;
+        unsigned long long age;
+
+        sent.written = tsc_now();
+        sent.received = 0;
+
+        if (pipe_write_all(data[1], &sent, sizeof(sent)) != 0) {
+            printf("bench error: write of the pipe: %s\n", strerror(errno));
+            (void)close(data[1]);
+            (void)close(ack[0]);
+            return 1;
+        }
+
+        if (pipe_read_all(ack[0], &back, sizeof(back)) != 0) {
+            printf("bench error: read of the pipe: %s\n", strerror(errno));
+            (void)close(data[1]);
+            (void)close(ack[0]);
+            return 1;
+        }
+
+        age = (back.received > sent.written) ? back.received - sent.written : 0ull;
+        latency_add(&lat, tsc_to_ns(age));
+    }
+
+    (void)close(data[1]);
+    (void)close(ack[0]);
+
+    if (waitpid((pid_t)pid, &status, 0) != (pid_t)pid) {
+        printf("bench error: waitpid: %s\n", strerror(errno));
+        return 1;
+    }
+
+    (void)clock_gettime(CLOCK_MONOTONIC, &stop);
+    ms = elapsed_ms(&start, &stop);
+
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        printf("bench error: the reader ended with %d\n", status);
+        return 1;
+    }
+
+    if (lat.samples != samples) {
+        printf("bench error: the pipe carried %lu of %lu bytes\n", lat.samples, samples);
+        return 1;
+    }
+
+    note("lat_pipe", "samples", samples, ms);
+    latency_beyond("lat_pipe", &lat);
+
+    report_ns("lat_pipe_p50", latency_percentile(&lat, 50));
+    report_ns("lat_pipe_p99", latency_percentile(&lat, 99));
+
+    return 0;
+}
+
 static unsigned long parse_count(const char *text, int *ok)
 {
     char *end = NULL;
@@ -538,7 +957,8 @@ static int usage(void)
 {
     static const char text[] =
         "usage: bench syscall <calls> | fork <runs> | pipe <bytes> |\n"
-        "             filewrite|fileread|fill <path> <MiB> | console <lines>\n";
+        "             filewrite|fileread|fill <path> <MiB> | console <lines> |\n"
+        "             latsyscall <samples> | latpipe <samples>\n";
 
     (void)write(ULIBC_STDERR, text, sizeof(text) - 1);
 
@@ -612,6 +1032,14 @@ int main(int argc, char *const argv[], char *const envp[])
 
     if (strcmp(argv[1], "console") == 0) {
         return bench_console(value);
+    }
+
+    if (strcmp(argv[1], "latsyscall") == 0) {
+        return bench_lat_syscall(value);
+    }
+
+    if (strcmp(argv[1], "latpipe") == 0) {
+        return bench_lat_pipe(value);
     }
 
     printf("bench error: %s: not a mode\n", argv[1]);
