@@ -118,6 +118,23 @@ machine. Unpack it and run `./run.sh`: it starts QEMU with the loader and the
 kernel, no board and no operating system under it. The console is COM1, and
 the machine has a volume in its memory with a program in `/bin`.
 
+The tar carries the same tree twice: `x86-all.img` is a MicroFS root (the
+default of `./run.sh`) and `x86-ext2.img` is the same `/bin` and `/etc` in an
+ext2 volume, with a FAT32 volume as its second partition. The kernel reads the
+type of the root out of the medium, so the choice is a word of the command:
+
+```bash
+X86_ROOT=ext2 ./run.sh          # the ext2 root; X86_SERIAL=1 for the console
+```
+
+Under the ext2 root the FAT32 volume of the second partition is an ordinary
+mount point:
+
+```text
+microos> mount ata0p2 /data fat32
+microos> ls /data
+```
+
 ## The console
 
 After the flash the kernel writes its boot log to the UART at 115200 baud.

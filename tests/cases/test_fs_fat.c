@@ -2966,6 +2966,51 @@ static void test_oracle_fixed_root(enum fat_kind kind, const char *title)
     teardown();
 }
 
+/*
+ * The volume as the root of the machine (ADR 0027): the mount is at "/" and
+ * the path the VFS hands the adapter is the whole path of the tree. The
+ * volume of the root is the same FAT32 image, read from its root.
+ */
+static void test_root_mount(void)
+{
+    struct vfs_stat stat;
+    char buffer[32];
+
+    ktest_begin("fat: the volume is the root of the machine");
+
+    setup();
+    if (mount_image(FAT_KIND_32) != 0) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    (void)vfs_umount(TEST_ROOT_POINT);
+    (void)vfs_umount("/");
+    mfs_unmount();
+
+    KT_CHECK_INT_EQ(vfs_mount_type("/", "fat32", "fat0"), 0);
+    KT_CHECK_STR_EQ(vfs_mount_name(0), "/");
+    KT_CHECK_INT_EQ(vfs_stat("/", &stat), 0);
+    KT_CHECK_INT_EQ(stat.type, 2);
+
+    KT_CHECK_INT_EQ(vfs_stat("/HELLO.TXT", &stat), 0);
+    KT_CHECK_INT_EQ(stat.type, 1);
+    KT_CHECK_INT_EQ(stat.size, 10);
+
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(read_file("/HELLO.TXT", buffer, sizeof(buffer)), 10);
+    KT_CHECK_STR_EQ(buffer, "hello fat\n");
+
+    KT_CHECK_INT_EQ(vfs_umount("/"), 0);
+
+    /* The tree of the test comes back for the cases after this one. */
+    mfs_mount(&g_mfs_device);
+    mfs_vfs_register("/");
+
+    teardown();
+}
+
 void test_fs_fat(void)
 {
     test_mount_and_stat();
@@ -3015,4 +3060,5 @@ void test_fs_fat(void)
 #if defined(MICRO_OS_FS_FAT32) && MICRO_OS_FS_FAT32
     test_check_command();
 #endif
+    test_root_mount();
 }

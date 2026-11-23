@@ -31,6 +31,7 @@
 #include "kernel/log.h"
 #include "kernel/port.h"
 #include "kernel/port/cpu.h"
+#include "kernel/root.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
 #include "kernel/vfs.h"
@@ -52,7 +53,6 @@
 #endif
 
 #include "devfs/devfs.h"
-#include "mfs/mfs.h"
 #include "mfs/mfs_vfs.h"
 #include "procfs/procfs.h"
 #if MICRO_OS_FS_FAT32
@@ -239,11 +239,17 @@ static void etc_bring_up(void)
  * The filesystem of the machine: the disk of the port when QEMU was given one
  * and the first partition of it (ADR 0008), otherwise a volume of the memory
  * of the port mounted at the root. The device is registered by
- * port_x86_64_init() before the kernel boots, and a volume that was never
- * formatted is formatted here (mfs_vfs_mount does that; a fresh disk reads as
- * a blank medium, see blockdev_ram.c and ata.c).
+ * port_x86_64_init() before the kernel boots, and its type is the business of
+ * the kernel (ADR 0027): the port says where the root is, k_root_mount() reads
+ * the bytes of the medium and mounts the volume as what it is. A volume that
+ * was never formatted is formatted by MicroFS (mfs_vfs_mount does that; a
+ * fresh disk reads as a blank medium, see blockdev_ram.c and ata.c).
+ *
+ * Returns 0 when the root is mounted, a negative code when there is no root.
+ * A machine without one has no /bin, no /etc and no /proc, and the caller
+ * stops the boot and says why instead of showing a shell over an empty tree.
  */
-static void filesystem_bring_up(void)
+static int filesystem_bring_up(const char **type)
 {
     const char *device = port_x86_64_root_device();
     int rc;
@@ -261,16 +267,17 @@ static void filesystem_bring_up(void)
 #endif
 
     /* MicroFS is a type as well, so that /etc/fstab and the shell can name
-     * the volume of the machine like any other volume. */
+     * the volume of the machine like any other volume. The order of the two
+     * registrations is the order of ADR 0027 for a volume two types claim. */
     if (mfs_vfs_register_type() != 0) {
         kwarn("x86-64: MicroFS could not register its type");
     }
 
-    rc = mfs_vfs_mount("/", device);
+    rc = k_root_mount(device, type);
 
     if (rc != 0) {
-        kerror("x86-64: cannot mount %s at / (%s), there is no /bin", device, mfs_strerror(rc));
-        return;
+        kerror("x86-64: the machine has no root filesystem on %s, there is no /bin", device);
+        return rc;
     }
 
     /* The tree of the machine: /etc of the volume or of the memory, then the
@@ -289,7 +296,9 @@ static void filesystem_bring_up(void)
     /* The programs are files the tool left in the volume; nothing is
      * written here. A volume a person made without /bin is a machine
      * without programs, and the boot says so when it asks for one. */
-    kinfo("x86-64: the programs come from %s:/bin", device);
+    kinfo("x86-64: the programs come from %s:/bin, the volume is %s", device, *type);
+
+    return 0;
 }
 
 /*
@@ -350,6 +359,7 @@ static void init_task(void *arg)
 void kmain(k_u64_t multiboot_info)
 {
     struct kernel_boot_config cfg;
+    const char *root_type = NULL;
     int mounted;
     int defaults;
 
@@ -419,12 +429,21 @@ void kmain(k_u64_t multiboot_info)
     }
 
     /*
-     * The filesystem, before the tasks: the volume is mounted and the images
-     * of the programs are written to /bin. The program itself runs later, in
-     * the init task: execve is a wait for a task now, and the boot context
+     * The filesystem, before the tasks: the type of the volume is read from
+     * the medium and the volume is mounted with it (ADR 0027), and the
+     * images of the programs are files of it. The program itself runs later,
+     * in the init task: execve is a wait for a task now, and the boot context
      * has no scheduler under it to wait with.
+     *
+     * A machine without a root has nothing to boot: no /bin, no /etc, no
+     * programs and no settings. The sentence is on the console and the boot
+     * stops, because a shell over an empty tree would look like a machine
+     * whose disk lost its files.
      */
-    filesystem_bring_up();
+    if (filesystem_bring_up(&root_type) != 0) {
+        kerror("x86-64: the boot stops, there is no root filesystem to run from");
+        port_x86_64_idle();
+    }
 
     /*
      * The settings of /etc (ADR 0021): the systems of the tree, and the ones

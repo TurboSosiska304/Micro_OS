@@ -67,7 +67,10 @@ jobs:
         run: make coverage
 
       - name: qemu for the x86-64 machine
-        run: sudo apt-get install -y -qq --no-install-recommends qemu-system-x86
+        # The disk of the machine is written twice: a MicroFS volume by the
+        # host tool of the tree and an ext2 volume by mke2fs, and the ext2
+        # image carries a FAT32 volume as its second partition (ADR 0027).
+        run: sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 e2fsprogs dosfstools
 
       - name: the kernel boots on x86-64
         run: make x86-smoke
@@ -117,7 +120,7 @@ jobs:
       # The container of ESP-IDF carries the toolchain of the board and not
       # the host tools of the other machine.
       - name: the tools of the x86-64 port
-        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends cmake ninja-build build-essential
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends cmake ninja-build build-essential e2fsprogs dosfstools
 
       - name: the tools of the host
         env:

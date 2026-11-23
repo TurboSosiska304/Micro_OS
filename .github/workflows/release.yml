@@ -65,7 +65,7 @@ jobs:
       # image, and the x86-64 port needs cmake and ninja. Install them
       # before either build.
       - name: the host tools of both machines
-        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends cmake ninja-build build-essential
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends cmake ninja-build build-essential e2fsprogs dosfstools
 
       # The steps of Actions run through docker exec and miss the
       # entrypoint of the image, the one that sources export.sh — the

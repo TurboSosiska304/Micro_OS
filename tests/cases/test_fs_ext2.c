@@ -2064,6 +2064,57 @@ static void test_directory_past_the_direct_blocks(void)
     teardown();
 }
 
+/*
+ * The volume as the root of the machine (ADR 0027). The point is "/", the one
+ * point of a single character, and the path the VFS hands the adapter below
+ * it is the whole path of the tree ("/hello.txt"): the mount is the same
+ * volume and the walk of a name starts at its root.
+ */
+static void test_root_mount(void)
+{
+    struct vfs_stat stat;
+    char buffer[64];
+
+    ktest_begin("ext2: the volume is the root of the machine");
+
+    setup();
+    if (mount_image() != 0) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    (void)vfs_umount(TEST_ROOT_POINT);
+    (void)vfs_umount("/");
+    mfs_unmount();
+
+    KT_CHECK_INT_EQ(vfs_mount_type("/", "ext2", TEST_DEVICE_NAME), 0);
+    KT_CHECK_STR_EQ(vfs_mount_name(0), "/");
+    KT_CHECK_INT_EQ(vfs_stat("/", &stat), 0);
+    KT_CHECK_INT_EQ(stat.type, 2);
+
+    KT_CHECK_INT_EQ(vfs_stat("/hello.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.type, 1);
+
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(read_file("/hello.txt", buffer, sizeof(buffer)), TEST_HELLO_SIZE);
+    KT_CHECK_STR_EQ(buffer, "hello ext2\n");
+
+    /* A directory of the volume is a directory of the root. */
+    KT_CHECK_INT_EQ(vfs_stat("/sub/inner.txt", &stat), 0);
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(read_file("/sub/inner.txt", buffer, sizeof(buffer)), 6);
+    KT_CHECK_STR_EQ(buffer, "inner\n");
+
+    KT_CHECK_INT_EQ(vfs_umount("/"), 0);
+
+    /* The tree of the test comes back for the cases after this one. */
+    mfs_mount(&g_mfs_device);
+    mfs_vfs_register("/");
+
+    teardown();
+}
+
 void test_fs_ext2(void)
 {
     test_mount_and_stat();
@@ -2085,4 +2136,5 @@ void test_fs_ext2(void)
     test_unlink_of_a_big_file();
     test_check();
     test_directory_past_the_direct_blocks();
+    test_root_mount();
 }

@@ -32,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle bundle-board bundle-x86 x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak x86-smp-smoke soak-smp
+.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle bundle-board bundle-x86 x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-root-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak x86-smp-smoke soak-smp
 
 help:
 	@echo "Micro OS — available targets:"
@@ -184,13 +184,13 @@ wiki-check:
 CI_QEMU := $(shell command -v qemu-system-x86_64 2>/dev/null)
 CI_TARGETS := build test test-asan test-tsan test-smp smoke coverage
 ifneq ($(CI_QEMU),)
-CI_TARGETS += x86-smoke
+CI_TARGETS += x86-smoke x86-root-smoke
 endif
 CI_TARGETS += reproducible integrity
 
 ci: $(CI_TARGETS)
 ifeq ($(CI_QEMU),)
-	@echo "ci: qemu-system-x86_64 not found, x86-smoke is skipped"
+	@echo "ci: qemu-system-x86_64 not found, x86-smoke and x86-root-smoke are skipped"
 endif
 
 sim: build
@@ -279,11 +279,24 @@ x86-smp-run: x86-smp-build x86-disk
 # (tools/mkfs_mfs.c, which links components/mfs), not by a second
 # implementation of the format in a script; the images of the programs are
 # the .mox files `make x86-build` leaves in the build directory.
+#
+# The same tree is written a second time into an ext2 volume, and that image
+# carries a FAT32 volume as its second partition: the kernel reads the type of
+# the root out of the medium (ADR 0027), so the two disks boot the same shell
+# and the second one proves a root that is not MicroFS.
 X86_PROGRAMS_IMAGE := $(X86_BUILD)/programs.img
+X86_PROGRAMS_EXT2_IMAGE := $(X86_BUILD)/programs-ext2.img
 X86_MKFS := $(BUILD_DIR)/tools/microos_mkfs
+
+# The root the machine of `make x86-run` boots: the MicroFS image by default,
+# the ext2 one with `make x86-run X86_ROOT=ext2` (ADR 0027 §3).
+X86_ROOT ?= mfs
+X86_ROOT_IMAGE := $(if $(filter ext2,$(X86_ROOT)),$(X86_PROGRAMS_EXT2_IMAGE),$(X86_PROGRAMS_IMAGE))
 
 x86-disk: x86-build build
 	python3 tools/x86_image.py --image $(X86_PROGRAMS_IMAGE) \
+		--build $(X86_BUILD) --mkfs $(X86_MKFS)
+	python3 tools/x86_image.py --image $(X86_PROGRAMS_EXT2_IMAGE) --fs ext2 \
 		--build $(X86_BUILD) --mkfs $(X86_MKFS)
 
 # The gate of a reproducible image: the same inputs, the same bytes. The
@@ -294,16 +307,19 @@ x86-disk: x86-build build
 reproducible: x86-disk
 	@tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; \
 	cp $(X86_PROGRAMS_IMAGE) "$$tmp/first.img"; \
-	rm -f $(X86_PROGRAMS_IMAGE); \
+	cp $(X86_PROGRAMS_EXT2_IMAGE) "$$tmp/first-ext2.img"; \
+	rm -f $(X86_PROGRAMS_IMAGE) $(X86_PROGRAMS_EXT2_IMAGE); \
 	$(MAKE) --no-print-directory x86-disk; \
-	if cmp "$$tmp/first.img" $(X86_PROGRAMS_IMAGE); then \
-		echo "reproducible: the two images are the same file"; \
+	if cmp "$$tmp/first.img" $(X86_PROGRAMS_IMAGE) && \
+		cmp "$$tmp/first-ext2.img" $(X86_PROGRAMS_EXT2_IMAGE); then \
+		echo "reproducible: the two images are the same files"; \
 	else \
-		echo "reproducible: the two images differ" >&2; exit 1; \
+		echo "reproducible: the images differ" >&2; exit 1; \
 	fi; \
-	sha256sum "$$tmp/first.img" $(X86_PROGRAMS_IMAGE)
+	sha256sum "$$tmp/first.img" $(X86_PROGRAMS_IMAGE) \
+		"$$tmp/first-ext2.img" $(X86_PROGRAMS_EXT2_IMAGE)
 
-X86_DISK_DRIVE := -drive file=$(X86_PROGRAMS_IMAGE),format=raw,if=ide,index=0,cache=writeback
+X86_DISK_DRIVE := -drive file=$(X86_ROOT_IMAGE),format=raw,if=ide,index=0,cache=writeback
 
 x86-run: x86-disk
 	@qemu-system-x86_64 -display help 2>&1 | grep -qw "$(X86_DISPLAY)" || { \
@@ -326,6 +342,15 @@ x86-run-serial: x86-disk
 x86-smoke: x86-disk x86-open-build
 	python3 tools/x86_smoke.py --image $(X86_PROGRAMS_IMAGE) --open-build $(X86_OPEN_BUILD) \
 		--timeout 180
+
+# The gate of ADR 0027: one machine boots two roots. The first image is the
+# MicroFS volume of `make x86-disk`, the second is the same /bin and /etc in an
+# ext2 volume, and the same commands (`ls /bin`, `cat /etc/setting`, `exec
+# /bin/hello`, `df /`) have to answer the same thing out of each; the FAT32
+# volume of the second partition is mounted at /data and written.
+x86-root-smoke: x86-disk
+	python3 tools/x86_root_smoke.py --image $(X86_PROGRAMS_IMAGE) \
+		--ext2-image $(X86_PROGRAMS_EXT2_IMAGE) --timeout 180
 
 # The gate of the two cores (ADR 0012): the kernel of `x86-smp-build` boots on
 # a machine of two processors and has to start both of them, keep a task on
@@ -410,6 +435,9 @@ x86-net-smoke: x86-net-build
 # without knowing which of the builds above it is made of.
 X86_ALL_BUILD := build-x86-all
 X86_ALL_IMAGE := $(X86_ALL_BUILD)/x86-all.img
+# The same tree in an ext2 volume, with the FAT32 volume of /data after it:
+# the second root of the release (ADR 0027 §3).
+X86_ALL_EXT2_IMAGE := $(X86_ALL_BUILD)/x86-ext2.img
 X86_ALL_RUN := $(X86_ALL_BUILD)/run.sh
 
 x86-all-build:
@@ -420,29 +448,34 @@ x86-all-build:
 x86-all: x86-all-build build
 	python3 tools/x86_image.py --image $(X86_ALL_IMAGE) \
 		--build $(X86_ALL_BUILD) --mkfs $(X86_MKFS)
+	python3 tools/x86_image.py --image $(X86_ALL_EXT2_IMAGE) --fs ext2 \
+		--build $(X86_ALL_BUILD) --mkfs $(X86_MKFS)
 	@printf '%s\n' \
 		'#!/bin/sh' \
 		'# Boot the complete Micro OS x86-64 machine: the kernel of `make x86-all`,' \
-		'# its disk and a virtio-net card on the user network (8080 forwarded).' \
-		'# X86_SERIAL=1 gives the serial console and no window.' \
+		'# its disks and a virtio-net card on the user network (8080 forwarded).' \
+		'# X86_SERIAL=1 gives the serial console and no window; X86_ROOT=ext2' \
+		'# boots the ext2 volume of the same tree instead of the MicroFS one.' \
 		'cd "$$(dirname "$$0")" || exit 1' \
+		'root="$${X86_ROOT:-mfs}"' \
+		'if [ "$$root" = ext2 ]; then image=x86-ext2.img; else image=x86-all.img; fi' \
 		'if [ "$${X86_SERIAL:-0}" = 1 ]; then' \
 		'    exec qemu-system-x86_64 -kernel loader32.elf -initrd microos64.bin \' \
 		'        -m 256 -nographic -no-reboot \' \
-		'        -drive file=x86-all.img,format=raw,if=ide,index=0,cache=writeback \' \
+		'        -drive "file=$$image,format=raw,if=ide,index=0,cache=writeback" \' \
 		'        -netdev user,id=n0,hostfwd=tcp:127.0.0.1:8080-:8080 \' \
 		'        -device virtio-net-pci,netdev=n0,disable-modern=on' \
 		'fi' \
 		'exec qemu-system-x86_64 -kernel loader32.elf -initrd microos64.bin \' \
 		'    -m 256 -no-reboot -display "$${X86_DISPLAY:-gtk}" -serial null -vga std \' \
-		'    -drive file=x86-all.img,format=raw,if=ide,index=0,cache=writeback \' \
+		'    -drive "file=$$image,format=raw,if=ide,index=0,cache=writeback" \' \
 		'    -netdev user,id=n0,hostfwd=tcp:127.0.0.1:8080-:8080 \' \
 		'    -device virtio-net-pci,netdev=n0,disable-modern=on' > $(X86_ALL_RUN)
 	@chmod +x $(X86_ALL_RUN)
 	@echo "x86-all: the machine is ready"
 	@echo "  kernel    $(X86_ALL_BUILD)/microos64.bin"
 	@echo "  loader    $(X86_ALL_BUILD)/loader32.elf"
-	@echo "  disk      $(X86_ALL_IMAGE)"
+	@echo "  disk      $(X86_ALL_IMAGE)   (X86_ROOT=ext2: $(X86_ALL_EXT2_IMAGE))"
 	@echo "  run       $(X86_ALL_RUN)   (X86_SERIAL=1 for the serial console)"
 
 x86-all-run: x86-all

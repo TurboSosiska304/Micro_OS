@@ -56,6 +56,18 @@ int partition_scan(const struct k_blockdev *disk);
 const char *partition_name(const struct k_blockdev *disk, k_size_t index);
 
 /*
+ * The type byte of the table entry a partition came from - the byte of the
+ * MBR that says what a person meant the volume to be (0x83 Linux, 0x0B/0x0C
+ * FAT32), which the boot of the root reads as a hint (ADR 0027).
+ *
+ * Returns -1 when the device is not a partition of this kernel (the disk
+ * itself, a volume of the memory) and when the table has no such byte at all
+ * (a GPT entry). A hint that is not there costs nothing: the magic of the
+ * superblock is the answer either way.
+ */
+int partition_type_of(const struct k_blockdev *part);
+
+/*
  * Forget the children of `disk`: the devices leave the table of the kernel
  * and their slots are free for another scan. The caller guarantees that no
  * filesystem is mounted on them and that no task has a file of them open.
