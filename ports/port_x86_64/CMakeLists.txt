@@ -486,6 +486,16 @@ add_libc_program(mmap SOURCES "${LIBC_USER_DIR}/src/unistd_ext.c"
                               "${LIBC_USER_DIR}/src/stat.c")
 add_libc_program(big)
 
+# The lane of 1.8: the directory of the task is the kernel's (call 48), so a
+# program moves it and its child starts there; the heap of a program grows
+# with `brk`, so a window of 800 by 600 pixels does not need a constant of the
+# build; and the memory limit of the task is what the new heap is charged to.
+add_libc_program(chdir SOURCES "${LIBC_USER_DIR}/src/unistd_ext.c"
+                              "${LIBC_USER_DIR}/src/stat.c")
+add_libc_program(heap SOURCES "${LIBC_USER_DIR}/src/malloc.c")
+add_libc_program(limit SOURCES "${LIBC_USER_DIR}/src/malloc.c"
+                               "${LIBC_USER_DIR}/src/resource.c")
+
 # --- the interface: /bin/ui (ADR 0028) and the programs of ADR 0030 ---------
 #
 # The first program of the skeleton: two devices of the devfs, a panel, a list

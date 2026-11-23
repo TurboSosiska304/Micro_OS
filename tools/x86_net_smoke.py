@@ -885,9 +885,14 @@ def check(output: str, answers: dict, host: dict, dns_name: str | None, commands
         notes.append("TLS is not asked: openssl is not installed, no certificate of a test")
     else:
         early = answers.get("wget-tls-early", "")
+        # The machine reads the date of its CMOS chip at the boot since 1.8,
+        # so the early https is not refused for its clock but for the chain:
+        # the authority of this test is not in the store of the release. The
+        # policy of ADR 0024 §3 (a machine of 1970 trusts no date) is covered
+        # by tests/cases/test_tls.c, where a clock can be made to say 1970.
         expect(
-            "https on a machine of 1970 is refused with the clock",
-            "the clock is not set (1970)" in early and "HTTP 200" not in early,
+            "https on a machine with a clock and a store without this authority is refused",
+            "not trusted" in early and "HTTP 200" not in early,
             early.strip(),
         )
 
@@ -1466,8 +1471,10 @@ def main(argv: list) -> int:
     tls_state["disk"] = disk is not None
 
     if tls_state["enabled"]:
-        # The order matters: https before `ntp` is a clock of 1970 and a
-        # refusal, which is the policy of ADR 0024 §3.
+        # The order matters: https before `ntp` is the clock the CMOS gave at
+        # the boot and the store of the release, and the authority of this test
+        # is not in that store - the refusal is the chain's and not the
+        # clock's. `ntp` is the step that sets the moment from the network.
         command(f"wget https://10.0.2.2:{tls_state['port']}/file.bin /tls-early.bin",
                 "wget-tls-early")
         if disk is None:
