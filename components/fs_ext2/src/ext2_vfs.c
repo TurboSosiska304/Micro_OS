@@ -619,6 +619,71 @@ static int ext2_vfs_unlink(void *ctx, const char *path)
     return rc;
 }
 
+static int ext2_vfs_rmdir(void *ctx, const char *path)
+{
+    struct ext2_volume *vol = (struct ext2_volume *)ctx;
+    const char *relative;
+    int rc;
+
+    if (vol == NULL || path == NULL || !vol->mounted) {
+        return KERR_INVAL;
+    }
+
+    relative = ext2_relative(vol, path);
+    if (relative == NULL) {
+        return KERR_NOENT;
+    }
+
+    rc = volume_lock(vol);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = ext2_remove_dir(vol, relative);
+
+    if (rc == 0) {
+        rc = ext2_settle(vol);
+    }
+
+    k_mutex_unlock(&vol->lock);
+
+    return rc;
+}
+
+static int ext2_vfs_rename(void *ctx, const char *from, const char *to)
+{
+    struct ext2_volume *vol = (struct ext2_volume *)ctx;
+    const char *from_relative;
+    const char *to_relative;
+    int rc;
+
+    if (vol == NULL || from == NULL || to == NULL || !vol->mounted) {
+        return KERR_INVAL;
+    }
+
+    from_relative = ext2_relative(vol, from);
+    to_relative = ext2_relative(vol, to);
+
+    if (from_relative == NULL || to_relative == NULL) {
+        return KERR_NOENT;
+    }
+
+    rc = volume_lock(vol);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = ext2_rename(vol, from_relative, to_relative);
+
+    if (rc == 0) {
+        rc = ext2_settle(vol);
+    }
+
+    k_mutex_unlock(&vol->lock);
+
+    return rc;
+}
+
 static int ext2_vfs_chmod(void *ctx, const char *path, k_u32_t mode)
 {
     struct ext2_volume *vol = (struct ext2_volume *)ctx;
@@ -711,7 +776,8 @@ static const struct vfs_operations g_ext2_operations = {
     .statx = ext2_vfs_statx,
     .mkdir = ext2_vfs_mkdir,
     .unlink = ext2_vfs_unlink,
-    .rename = NULL, /* a name of a file changes by a copy and a removal */
+    .rmdir = ext2_vfs_rmdir,
+    .rename = ext2_vfs_rename,
     .chmod = ext2_vfs_chmod,
     .chown = ext2_vfs_chown,
     .statfs = ext2_vfs_statfs,
@@ -819,6 +885,43 @@ int ext2_check(const char *point, struct ext2_check_report *report)
     }
 
     rc = ext2_check_volume(&g_ext2, report);
+
+    k_mutex_unlock(&g_ext2.lock);
+
+    return rc;
+}
+
+int ext2_repair(const char *point, struct ext2_check_report *report)
+{
+    struct ext2_check_report pass;
+    int rc;
+
+    if (point == NULL || report == NULL) {
+        return KERR_INVAL;
+    }
+
+    if (!g_ext2.mounted) {
+        return KERR_NOENT;
+    }
+
+    if (strcmp(g_ext2.point, point) != 0) {
+        return KERR_INVAL; /* not the volume of this filesystem */
+    }
+
+    rc = volume_lock(&g_ext2);
+    if (rc != 0) {
+        return rc;
+    }
+
+    memset(&pass, 0, sizeof(pass));
+    rc = ext2_repair_volume(&g_ext2, &pass);
+
+    if (rc == 0) {
+        rc = ext2_check_volume(&g_ext2, report);
+        if (rc == 0) {
+            report->fixed = pass.fixed;
+        }
+    }
 
     k_mutex_unlock(&g_ext2.lock);
 

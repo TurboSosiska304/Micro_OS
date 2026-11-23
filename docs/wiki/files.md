@@ -408,12 +408,13 @@ The volume is **read and written**, and it is a root of the machine
 block in the bitmap of its group, a new name inserts a record in the
 directory, and a file grows through the twelve direct blocks and the three
 tables of pointers of the format - a file of 128 MiB of a 5 GiB volume lives
-in the double and the triple table. `truncate`, `unlink`, `mkdir`, `chmod`
-and `chown` are there; `rename` and `rmdir` are not (the VFS has neither),
-there is no journal (an ext3 or ext4 volume is refused with `ENOTSUP`) and a
-link is reported but not followed. A damaged volume is described as it is: a
-superblock or a geometry that cannot be walked is `EINVAL`, a block or an
-inode outside the volume is `EIO`.
+in the double and the triple table. `truncate`, `unlink`, `mkdir`, `rmdir`,
+`rename`, `chmod` and `chown` are there; `fsck ext2 [-y] <point>` checks the
+mounted volume and repairs the counters, the bitmaps, the link counts and a
+lost file, there is no journal (an ext3 or ext4 volume is refused with
+`ENOTSUP`) and a link is reported but not followed. A damaged volume is
+described as it is: a superblock or a geometry that cannot be walked is
+`EINVAL`, a block or an inode outside the volume is `EIO`.
 
 An image this machine wrote passes `e2fsck -fn` of the host and reads back
 in `debugfs`, because every operation that allocates or frees settles the
@@ -552,15 +553,14 @@ the limits of a file and the table of what each machine honours are in
 
 ## What is not there yet
 
-* **No journal under a write, and no `fsck ext2` of the machine.** A write
-  of MicroFS, of FAT or of ext2 is not logged: `fsck -y` repairs the damage
-  the medium explains (lost clusters, a loop, a cross-link, a size against
-  its chain), and leaves what it cannot prove for a person. `fsck fat -y`
-  does not touch the boot sector, two copies of the table that differ or a
-  directory whose head is shared. The kernel can check an ext2 volume
-  (`ext2_check`) and the shell's `fsck` speaks of MicroFS and FAT only, so
-  the check of an ext2 root is `e2fsck` of the host; `rename` and `rmdir`
-  are not in the VFS.
+* **No journal under a write.** A write of MicroFS, of FAT or of ext2 is not
+  logged: `fsck -y` repairs the damage the medium explains (lost clusters, a
+  loop, a cross-link, a size against its chain), and leaves what it cannot
+  prove for a person. `fsck fat -y` does not touch the boot sector, two
+  copies of the table that differ or a directory whose head is shared. The
+  shell's `fsck` speaks of MicroFS, FAT and ext2 (`fsck ext2 [-y] <point>`),
+  so a machine whose root is ext2 checks and repairs itself; `rename` and
+  `rmdir` are in the VFS and in every filesystem of the tree.
 * **No access time**, so `statx` has two moments of three; a read does not
   rewrite a record.
 * **The options of `/etc/fstab` are not acted on**: only `defaults` is

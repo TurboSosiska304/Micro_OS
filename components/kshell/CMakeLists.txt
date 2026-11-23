@@ -21,10 +21,10 @@ if(ESP_PLATFORM)
     idf_component_register(
         SRCS ${MICRO_OS_KSHELL_SRCS}
         INCLUDE_DIRS "include"
-        REQUIRES kernel libc mfs fs_fat32
+        REQUIRES kernel libc mfs fs_fat32 fs_ext2
     )
 
-    if(CONFIG_MICRO_OS_FS_FAT32)
+    if(CONFIG_MICRO_OS_FS_FAT32 OR CONFIG_MICRO_OS_FS_EXT2)
         set(MICRO_OS_FS_SCOPE PUBLIC)
     else()
         # An interface target cannot carry a definition for its own sources.
@@ -35,6 +35,14 @@ if(ESP_PLATFORM)
         target_compile_definitions(${COMPONENT_LIB} ${MICRO_OS_FS_SCOPE} MICRO_OS_FS_FAT32=1)
     else()
         target_compile_definitions(${COMPONENT_LIB} ${MICRO_OS_FS_SCOPE} MICRO_OS_FS_FAT32=0)
+    endif()
+
+    # The check of an ext2 volume is a command as well, and the shell asks the
+    # filesystem for it only when the image links the reader.
+    if(CONFIG_MICRO_OS_FS_EXT2)
+        target_compile_definitions(${COMPONENT_LIB} ${MICRO_OS_FS_SCOPE} MICRO_OS_FS_EXT2=1)
+    else()
+        target_compile_definitions(${COMPONENT_LIB} ${MICRO_OS_FS_SCOPE} MICRO_OS_FS_EXT2=0)
     endif()
 
     # The discipline of the host build: the sources of the project are
@@ -59,5 +67,14 @@ else()
         target_link_libraries(microos_kshell PUBLIC microos_fs_fat32)
     else()
         target_compile_definitions(microos_kshell PUBLIC MICRO_OS_FS_FAT32=0)
+    endif()
+
+    if(MICRO_OS_FS_EXT2)
+        target_compile_definitions(microos_kshell PUBLIC MICRO_OS_FS_EXT2=1)
+        target_include_directories(
+            microos_kshell PUBLIC "${CMAKE_CURRENT_LIST_DIR}/../fs_ext2/include")
+        target_link_libraries(microos_kshell PUBLIC microos_fs_ext2)
+    else()
+        target_compile_definitions(microos_kshell PUBLIC MICRO_OS_FS_EXT2=0)
     endif()
 endif()

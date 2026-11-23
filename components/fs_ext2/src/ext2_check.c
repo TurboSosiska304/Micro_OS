@@ -27,6 +27,7 @@
 #include <string.h>
 
 #include "kernel/errno.h"
+#include "kernel/kmm.h"
 
 /* The deepest tree the check walks and the most directories it remembers.
  * A root deeper or wider than this is reported as too large for the check
@@ -445,4 +446,862 @@ int ext2_check_volume(struct ext2_volume *vol, struct ext2_check_report *report)
     check_directory(&state, EXT2_ROOT_INODE, EXT2_ROOT_INODE, 0u);
 
     return 0;
+}
+
+/* --- the repair pass --- */
+
+/* The depth the walk of the repair enters, and the first record that is not
+ * one of the reserved inodes of the format (1..10). */
+#define EXT2_REPAIR_DEPTH 64u
+#define EXT2_REPAIR_RESERVED 11u
+#define EXT2_FEATURE_COMPAT_SPARSE_SUPER 0x0001u
+
+static bool repair_bit_test(const k_u8_t *map, k_u32_t index)
+{
+    return (map[index / 8u] & (k_u8_t)(1u << (index % 8u))) != 0u;
+}
+
+static void repair_bit_set(k_u8_t *map, k_u32_t index)
+{
+    map[index / 8u] |= (k_u8_t)(1u << (index % 8u));
+}
+
+static void repair_bit_clear(k_u8_t *map, k_u32_t index)
+{
+    map[index / 8u] &= (k_u8_t) ~(1u << (index % 8u));
+}
+
+struct repair_state {
+    struct ext2_volume *vol;
+    struct ext2_check_report *report;
+    struct ext2_group *groups;
+    k_u8_t *used_blocks;
+    k_u8_t *used_inodes;
+    k_u8_t *reached;
+    k_u16_t *refs;
+    k_u16_t *group_dirs;
+    k_u32_t visits;
+    bool incomplete;
+};
+
+static k_u32_t repair_group_first(const struct ext2_volume *vol, k_u32_t group)
+{
+    return vol->first_data_block + group * vol->blocks_per_group;
+}
+
+static k_u32_t repair_group_blocks(const struct ext2_volume *vol, k_u32_t group)
+{
+    k_u32_t first = repair_group_first(vol, group);
+
+    if (first >= vol->blocks_count) {
+        return 0;
+    }
+
+    if (vol->blocks_per_group > vol->blocks_count - first) {
+        return vol->blocks_count - first;
+    }
+
+    return vol->blocks_per_group;
+}
+
+static k_u32_t repair_group_inodes(const struct ext2_volume *vol, k_u32_t group)
+{
+    k_u32_t first = group * vol->inodes_per_group;
+
+    if (first >= vol->inodes_count) {
+        return 0;
+    }
+
+    if (vol->inodes_per_group > vol->inodes_count - first) {
+        return vol->inodes_count - first;
+    }
+
+    return vol->inodes_per_group;
+}
+
+static bool repair_has_super(const struct ext2_volume *vol, k_u32_t group)
+{
+    static const k_u32_t primes[] = {3u, 5u, 7u};
+    k_size_t i;
+
+    if (group == 0u) {
+        return true;
+    }
+
+    if ((vol->feature_compat & EXT2_FEATURE_COMPAT_SPARSE_SUPER) == 0u) {
+        return true;
+    }
+
+    for (i = 0; i < K_ARRAY_SIZE(primes); i++) {
+        k_u32_t rest = group;
+
+        while (rest % primes[i] == 0u) {
+            rest /= primes[i];
+        }
+
+        if (rest == 1u) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static k_u32_t repair_descriptor_blocks(const struct ext2_volume *vol)
+{
+    return (vol->groups * 32u + vol->block_size - 1u) / vol->block_size;
+}
+
+static void repair_mark_block(struct repair_state *state, k_u32_t block)
+{
+    if (block < state->vol->blocks_count) {
+        repair_bit_set(state->used_blocks, block);
+    }
+}
+
+static void repair_ref_bump(struct repair_state *state, k_u32_t number)
+{
+    if (number <= state->vol->inodes_count && state->refs[number] < 0xFFFFu) {
+        state->refs[number]++;
+    }
+}
+
+/*
+ * Mark the blocks of one table of pointers: the table itself, its entries and
+ * the tables below them. `count` is the number of blocks the inode owns, for
+ * the i_blocks field the format keeps in sectors.
+ */
+static int repair_mark_table(struct repair_state *state, k_u32_t table, unsigned level,
+                             k_u32_t *count)
+{
+    struct ext2_volume *vol = state->vol;
+    k_u8_t entries[EXT2_BLOCK_MAX];
+    k_u32_t pointers = vol->block_size / 4u;
+    k_u32_t i;
+    int rc;
+
+    if (table == 0u) {
+        return 0;
+    }
+
+    if (table >= vol->blocks_count) {
+        return KERR_IO;
+    }
+
+    repair_mark_block(state, table);
+    (*count)++;
+
+    rc = ext2_read_block(vol, table, entries);
+    if (rc != 0) {
+        return rc;
+    }
+
+    for (i = 0; i < pointers; i++) {
+        k_u32_t child = ext2_le32(entries + i * 4u);
+
+        if (child == 0u) {
+            continue;
+        }
+
+        if (level == 1u) {
+            if (child >= vol->blocks_count) {
+                return KERR_IO;
+            }
+
+            repair_mark_block(state, child);
+            (*count)++;
+        } else {
+            rc = repair_mark_table(state, child, level - 1u, count);
+            if (rc != 0) {
+                return rc;
+            }
+        }
+    }
+
+    return 0;
+}
+
+static int repair_mark_inode(struct repair_state *state, const struct ext2_inode *inode,
+                             k_u32_t *count)
+{
+    k_u32_t i;
+    int rc;
+
+    *count = 0;
+
+    for (i = 0; i < EXT2_DIRECT_BLOCKS; i++) {
+        if (inode->block[i] == 0u) {
+            continue;
+        }
+
+        if (inode->block[i] >= state->vol->blocks_count) {
+            return KERR_IO;
+        }
+
+        repair_mark_block(state, inode->block[i]);
+        (*count)++;
+    }
+
+    rc = repair_mark_table(state, inode->block[12], 1u, count);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = repair_mark_table(state, inode->block[13], 2u, count);
+    if (rc != 0) {
+        return rc;
+    }
+
+    return repair_mark_table(state, inode->block[14], 3u, count);
+}
+
+/* The blocks of a directory, from its first logical block to the hole that
+ * ends the chain. A directory never has a hole inside its chain. */
+static k_u32_t repair_chain_length(struct repair_state *state, const struct ext2_inode *inode)
+{
+    k_u32_t count = 0;
+    k_u64_t logical;
+    k_u64_t limit = state->vol->blocks_count;
+
+    if (limit > 65536u) {
+        limit = 65536u;
+    }
+
+    for (logical = 0; logical < limit; logical++) {
+        k_u32_t block = 0;
+
+        if (ext2_inode_get_block(state->vol, (struct ext2_inode *)inode, logical, &block, false) !=
+                0 ||
+            block == 0u) {
+            break;
+        }
+
+        count++;
+    }
+
+    return count;
+}
+
+/* A directory is a whole number of blocks; a size that is not one, or that
+ * names more blocks than its chain holds, is put right. */
+static int repair_directory_size(struct repair_state *state, struct ext2_inode *inode)
+{
+    k_u32_t count = repair_chain_length(state, inode);
+    k_u64_t expected;
+
+    if (count == 0u) {
+        return KERR_IO;
+    }
+
+    expected = (k_u64_t)count * state->vol->block_size;
+
+    if (inode->size == expected) {
+        return 0;
+    }
+
+    inode->size = expected;
+    inode->mtime = ext2_now();
+    inode->ctime = inode->mtime;
+    state->report->fixed++;
+
+    return ext2_inode_write(state->vol, inode, true);
+}
+
+/* The two entries every directory begins with. They are written only when
+ * one of their words differs, so a sound volume keeps its bytes. */
+static int repair_dots(struct repair_state *state, struct ext2_inode *inode, k_u32_t number,
+                       k_u32_t parent)
+{
+    struct ext2_volume *vol = state->vol;
+    k_u8_t block[EXT2_BLOCK_MAX];
+    k_u8_t before[EXT2_BLOCK_MAX];
+    k_u32_t raw = 0;
+    k_u16_t rec_len;
+    k_u32_t second;
+    bool file_type = (vol->feature_incompat & EXT2_FEATURE_INCOMPAT_FILETYPE) != 0u;
+    int rc;
+
+    rc = ext2_inode_get_block(vol, inode, 0, &raw, false);
+    if (rc != 0 || raw == 0u) {
+        return KERR_IO;
+    }
+
+    rc = ext2_read_block(vol, raw, block);
+    if (rc != 0) {
+        return rc;
+    }
+
+    memcpy(before, block, vol->block_size);
+
+    rec_len = ext2_le16(block + 4);
+    if (rec_len < 12u || (rec_len & 3u) != 0u || rec_len > vol->block_size) {
+        rec_len = 12u;
+        ext2_put16(block + 4, rec_len);
+    }
+
+    ext2_put32(block + 0, number);
+    if (file_type) {
+        block[6] = 1u;
+        block[7] = 2u;
+    } else {
+        ext2_put16(block + 6, 1u);
+    }
+    block[8] = '.';
+
+    second = rec_len;
+    if (second + 8u > vol->block_size) {
+        return KERR_IO;
+    }
+
+    rec_len = ext2_le16(block + second + 4);
+    if (rec_len < 12u || (rec_len & 3u) != 0u || second + rec_len > vol->block_size) {
+        rec_len = (k_u16_t)(vol->block_size - second);
+        ext2_put16(block + second + 4, rec_len);
+    }
+
+    ext2_put32(block + second + 0, parent);
+    if (file_type) {
+        block[second + 6] = 2u;
+        block[second + 7] = 2u;
+    } else {
+        ext2_put16(block + second + 6, 2u);
+    }
+    block[second + 8] = '.';
+    block[second + 9] = '.';
+
+    if (memcmp(before, block, vol->block_size) == 0) {
+        return 0;
+    }
+
+    state->report->fixed++;
+
+    return ext2_write_block(vol, raw, block);
+}
+
+static int repair_walk(struct repair_state *state, k_u32_t number, k_u32_t parent, unsigned depth)
+{
+    struct ext2_volume *vol = state->vol;
+    struct ext2_inode inode;
+    k_u64_t position = 0;
+    struct ext2_dirent entry;
+    int rc;
+
+    if (depth > EXT2_REPAIR_DEPTH || ++state->visits > vol->inodes_count) {
+        state->incomplete = true;
+        add_error(state->report, "directory ", number, "is deeper than the repair walks");
+        return 0;
+    }
+
+    if (repair_bit_test(state->reached, number)) {
+        state->incomplete = true;
+        add_error(state->report, "directory ", number, "is reached twice");
+        return 0;
+    }
+    repair_bit_set(state->reached, number);
+
+    rc = ext2_read_inode(vol, number, &inode);
+    if (rc != 0 || !ext2_inode_is_dir(&inode)) {
+        add_error(state->report, "inode ", number, "is named as a directory and is not one");
+        state->incomplete = true;
+        return 0;
+    }
+
+    rc = repair_directory_size(state, &inode);
+    if (rc != 0) {
+        add_error(state->report, "directory ", number, "has no chain that can be read");
+        state->incomplete = true;
+        return 0;
+    }
+
+    rc = repair_dots(state, &inode, number, parent);
+    if (rc != 0) {
+        add_error(state->report, "directory ", number, "has no dot entries to put right");
+        state->incomplete = true;
+        return 0;
+    }
+
+    while ((rc = ext2_dir_next(vol, &inode, &position, &entry)) == 1) {
+        struct ext2_inode child;
+
+        if (entry.inode == 0u || entry.inode > vol->inodes_count) {
+            add_error(state->report, "directory ", number, "names an inode outside the table");
+            state->incomplete = true;
+            continue;
+        }
+
+        repair_ref_bump(state, entry.inode);
+
+        if (strcmp(entry.name, ".") == 0 || strcmp(entry.name, "..") == 0) {
+            continue;
+        }
+
+        rc = ext2_read_inode(vol, entry.inode, &child);
+        if (rc != 0) {
+            add_error(state->report, "inode ", entry.inode, "cannot be read");
+            state->incomplete = true;
+            continue;
+        }
+
+        if ((child.mode & EXT2_S_IFMT) == 0u) {
+            add_error(state->report, "inode ", entry.inode, "is named and has no type");
+            state->incomplete = true;
+            continue;
+        }
+
+        /*
+         * A name may point at an inode whose bit is clear after a power cut.
+         * The record is still an object the medium holds, so the repair
+         * marks it used again instead of throwing the name away.
+         */
+        if (!repair_bit_test(state->used_inodes, entry.inode)) {
+            repair_bit_set(state->used_inodes, entry.inode);
+            state->report->fixed++;
+        }
+
+        if (ext2_inode_is_dir(&child)) {
+            rc = repair_walk(state, entry.inode, number, depth + 1u);
+            if (rc != 0) {
+                return rc;
+            }
+        } else {
+            /* A file is reached by its name too: the map is the one of all
+             * records a name reaches, not only the directories the walk
+             * entered. */
+            repair_bit_set(state->reached, entry.inode);
+        }
+    }
+
+    if (rc < 0) {
+        add_error(state->report, "directory ", number, "has records the repair cannot walk");
+        state->incomplete = true;
+    }
+
+    return 0;
+}
+
+static void repair_lost_name(char out[16], k_u32_t number)
+{
+    char digits[12];
+    int count = 0;
+    int at = 0;
+
+    do {
+        digits[count++] = (char)('0' + (char)(number % 10u));
+        number /= 10u;
+    } while (number != 0u);
+
+    out[at++] = '#';
+    while (count > 0) {
+        out[at++] = digits[--count];
+    }
+    out[at] = '\0';
+}
+
+static k_u32_t repair_lost_found(struct repair_state *state)
+{
+    struct ext2_inode root;
+    struct ext2_inode found;
+    k_u32_t number = 0;
+
+    if (ext2_read_inode(state->vol, EXT2_ROOT_INODE, &root) != 0) {
+        return 0;
+    }
+
+    if (ext2_dir_find(state->vol, &root, "lost+found", &number) != 0) {
+        return 0;
+    }
+
+    if (ext2_read_inode(state->vol, number, &found) != 0 || !ext2_inode_is_dir(&found) ||
+        !repair_bit_test(state->used_inodes, number) || !repair_bit_test(state->reached, number)) {
+        return 0;
+    }
+
+    return number;
+}
+
+/*
+ * A record that no name reaches is what a create or an unlink leaves when the
+ * power stops between the two writes. A file is reconnected under /lost+found
+ * as `#<inode>`, which is what e2fsck does: the bytes of the person survive,
+ * and the name that was lost is the name no medium can give back. A directory
+ * (or a special record) is given back instead: the tree below it would need a
+ * second ".." and a walk of its own, and a record that is not a file has no
+ * bytes a name would save.
+ */
+static void repair_orphans(struct repair_state *state, k_u32_t lost_found)
+{
+    struct ext2_volume *vol = state->vol;
+    struct ext2_inode directory;
+    bool have_directory = false;
+    k_u32_t number;
+
+    if (lost_found != 0u && ext2_read_inode(vol, lost_found, &directory) == 0) {
+        have_directory = true;
+    }
+
+    for (number = EXT2_REPAIR_RESERVED; number <= vol->inodes_count; number++) {
+        struct ext2_inode inode;
+        int rc;
+
+        if (!repair_bit_test(state->used_inodes, number) ||
+            repair_bit_test(state->reached, number)) {
+            continue;
+        }
+
+        if (ext2_read_inode(vol, number, &inode) != 0) {
+            continue;
+        }
+
+        if (ext2_inode_is_file(&inode) && have_directory) {
+            char name[16];
+
+            repair_lost_name(name, number);
+            rc = ext2_dir_insert(vol, &directory, name, number, 1);
+            if (rc == 0) {
+                directory.mtime = ext2_now();
+                directory.ctime = directory.mtime;
+
+                if (ext2_inode_write(vol, &directory, true) == 0) {
+                    state->refs[number] = 1u;
+                    repair_bit_set(state->reached, number);
+                    state->report->fixed++;
+                    continue;
+                }
+            }
+        }
+
+        {
+            struct ext2_inode empty;
+
+            memset(&empty, 0, sizeof(empty));
+            empty.number = number;
+
+            if (ext2_inode_write(vol, &empty, false) == 0) {
+                repair_bit_clear(state->used_inodes, number);
+                state->report->fixed++;
+            }
+        }
+    }
+}
+
+/*
+ * The counters and the link counts of the records that the walk reaches, and
+ * the map of the blocks every one of them owns. The map is built here and not
+ * while the tree is walked, because a record that no name reaches must give
+ * its blocks back rather than keep them as "used" in the map.
+ */
+static int repair_records(struct repair_state *state)
+{
+    struct ext2_volume *vol = state->vol;
+    k_u32_t number;
+
+    for (number = 2u; number <= vol->inodes_count; number++) {
+        struct ext2_inode inode;
+        k_u32_t count = 0;
+        k_u32_t sectors;
+        bool changed = false;
+        int rc;
+
+        if (!repair_bit_test(state->used_inodes, number)) {
+            continue;
+        }
+
+        rc = ext2_read_inode(vol, number, &inode);
+        if (rc != 0) {
+            add_error(state->report, "inode ", number, "cannot be read");
+            state->incomplete = true;
+            continue;
+        }
+
+        if (number >= EXT2_ROOT_INODE && repair_bit_test(state->reached, number)) {
+            k_u16_t links = state->refs[number];
+
+            if (links == 0u) {
+                links = 1u;
+            }
+
+            if (inode.links != links) {
+                inode.links = links;
+                inode.ctime = ext2_now();
+                changed = true;
+            }
+        }
+
+        if (ext2_inode_is_dir(&inode) && number >= EXT2_ROOT_INODE &&
+            repair_bit_test(state->reached, number)) {
+            k_u32_t group = (number - 1u) / vol->inodes_per_group;
+
+            if (group < vol->groups && state->group_dirs[group] < 0xFFFFu) {
+                state->group_dirs[group]++;
+            }
+        }
+
+        if (!ext2_inode_is_dir(&inode) && !ext2_inode_is_file(&inode)) {
+            continue;
+        }
+
+        rc = repair_mark_inode(state, &inode, &count);
+        if (rc != 0) {
+            add_error(state->report, "inode ", number, "names a block outside the volume");
+            state->incomplete = true;
+            continue;
+        }
+
+        sectors = count * (vol->block_size / 512u);
+        if (inode.blocks != sectors) {
+            inode.blocks = sectors;
+            changed = true;
+        }
+
+        if (changed) {
+            rc = ext2_inode_write(vol, &inode, true);
+            if (rc != 0) {
+                add_error(state->report, "inode ", number, "did not reach the medium");
+                state->incomplete = true;
+                continue;
+            }
+
+            state->report->fixed++;
+        }
+    }
+
+    return 0;
+}
+
+/* The blocks the volume itself holds: the superblock and the descriptors of
+ * every group that has a copy of them, the two bitmaps and the table of the
+ * inodes. A block bitmap without them would hand the medium's own metadata to
+ * the next file. */
+static void repair_metadata(struct repair_state *state)
+{
+    struct ext2_volume *vol = state->vol;
+    k_u32_t descriptor_blocks = repair_descriptor_blocks(vol);
+    k_u32_t inode_table_blocks =
+        (vol->inodes_per_group * vol->inode_size + vol->block_size - 1u) / vol->block_size;
+    k_u32_t group;
+
+    for (group = 0; group < vol->groups; group++) {
+        const struct ext2_group *descriptor = &state->groups[group];
+        k_u32_t first = repair_group_first(vol, group);
+        k_u32_t i;
+
+        if (repair_has_super(vol, group)) {
+            for (i = 0; i <= descriptor_blocks; i++) {
+                repair_mark_block(state, first + i);
+            }
+        }
+
+        repair_mark_block(state, descriptor->block_bitmap);
+        repair_mark_block(state, descriptor->inode_bitmap);
+
+        for (i = 0; i < inode_table_blocks; i++) {
+            repair_mark_block(state, descriptor->inode_table + i);
+        }
+    }
+}
+
+/* Rebuild the two bitmaps from the maps and the counters from the bits. The
+ * padding of the last group is left as the medium had it: those bits name no
+ * block or inode of the volume, and e2fsck tells them apart from a bit that
+ * is wrong. */
+static int repair_bitmaps(struct repair_state *state)
+{
+    struct ext2_volume *vol = state->vol;
+    k_u32_t total_blocks = 0;
+    k_u32_t total_inodes = 0;
+    k_u32_t group;
+
+    for (group = 0; group < vol->groups; group++) {
+        struct ext2_group *descriptor = &state->groups[group];
+        k_u32_t blocks = repair_group_blocks(vol, group);
+        k_u32_t inodes = repair_group_inodes(vol, group);
+        k_u32_t first_block = repair_group_first(vol, group);
+        k_u32_t first_inode = group * vol->inodes_per_group;
+        k_u32_t free_blocks = 0;
+        k_u32_t free_inodes = 0;
+        k_u32_t i;
+        int rc;
+
+        rc = ext2_read_block(vol, descriptor->block_bitmap, vol->block_buf);
+        if (rc != 0) {
+            return rc;
+        }
+
+        for (i = 0; i < blocks; i++) {
+            k_u32_t block = first_block + i;
+
+            if (repair_bit_test(state->used_blocks, block)) {
+                vol->block_buf[i / 8u] |= (k_u8_t)(1u << (i % 8u));
+            } else {
+                vol->block_buf[i / 8u] &= (k_u8_t) ~(1u << (i % 8u));
+                free_blocks++;
+            }
+        }
+
+        rc = ext2_write_block(vol, descriptor->block_bitmap, vol->block_buf);
+        if (rc != 0) {
+            return rc;
+        }
+
+        rc = ext2_read_block(vol, descriptor->inode_bitmap, vol->block_buf);
+        if (rc != 0) {
+            return rc;
+        }
+
+        for (i = 0; i < inodes; i++) {
+            k_u32_t number = first_inode + i + 1u;
+
+            if (repair_bit_test(state->used_inodes, number)) {
+                vol->block_buf[i / 8u] |= (k_u8_t)(1u << (i % 8u));
+            } else {
+                vol->block_buf[i / 8u] &= (k_u8_t) ~(1u << (i % 8u));
+                free_inodes++;
+            }
+        }
+
+        rc = ext2_write_block(vol, descriptor->inode_bitmap, vol->block_buf);
+        if (rc != 0) {
+            return rc;
+        }
+
+        if (descriptor->free_blocks != free_blocks || descriptor->free_inodes != free_inodes ||
+            descriptor->used_dirs != state->group_dirs[group]) {
+            descriptor->free_blocks = (k_u16_t)free_blocks;
+            descriptor->free_inodes = (k_u16_t)free_inodes;
+            descriptor->used_dirs = state->group_dirs[group];
+
+            rc = ext2_group_write(vol, descriptor);
+            if (rc != 0) {
+                return rc;
+            }
+
+            state->report->fixed++;
+        }
+
+        total_blocks += free_blocks;
+        total_inodes += free_inodes;
+    }
+
+    if (vol->free_blocks != total_blocks || vol->free_inodes != total_inodes) {
+        vol->free_blocks = total_blocks;
+        vol->free_inodes = total_inodes;
+        vol->dirty = true;
+        state->report->fixed++;
+    }
+
+    return 0;
+}
+
+int ext2_repair_volume(struct ext2_volume *vol, struct ext2_check_report *report)
+{
+    struct repair_state state;
+    k_u32_t block_bytes;
+    k_u32_t inode_bytes;
+    k_u32_t group;
+    k_u32_t lost_found;
+    int rc;
+
+    if (vol == NULL || report == NULL || !vol->mounted) {
+        return KERR_INVAL;
+    }
+
+    memset(&state, 0, sizeof(state));
+    state.vol = vol;
+    state.report = report;
+    report->groups = vol->groups;
+    report->blocks = vol->blocks_count;
+    report->inodes = vol->inodes_count;
+
+    block_bytes = (vol->blocks_count + 7u) / 8u;
+    inode_bytes = (vol->inodes_count + 7u) / 8u;
+
+    state.groups = (struct ext2_group *)kmm_alloc((k_size_t)vol->groups * sizeof(struct ext2_group),
+                                                  KMM_PRIORITY_SYSTEM);
+    state.used_blocks = (k_u8_t *)kmm_alloc(block_bytes, KMM_PRIORITY_SYSTEM);
+    state.used_inodes = (k_u8_t *)kmm_alloc(inode_bytes, KMM_PRIORITY_SYSTEM);
+    state.reached = (k_u8_t *)kmm_alloc(inode_bytes, KMM_PRIORITY_SYSTEM);
+    state.refs = (k_u16_t *)kmm_alloc(((k_size_t)vol->inodes_count + 1u) * sizeof(k_u16_t),
+                                      KMM_PRIORITY_SYSTEM);
+    state.group_dirs =
+        (k_u16_t *)kmm_alloc((k_size_t)vol->groups * sizeof(k_u16_t), KMM_PRIORITY_SYSTEM);
+
+    if (state.groups == NULL || state.used_blocks == NULL || state.used_inodes == NULL ||
+        state.reached == NULL || state.refs == NULL || state.group_dirs == NULL) {
+        rc = KERR_NOMEM;
+        goto out;
+    }
+
+    memset(state.used_blocks, 0, block_bytes);
+    memset(state.used_inodes, 0, inode_bytes);
+    memset(state.reached, 0, inode_bytes);
+    memset(state.refs, 0, ((k_size_t)vol->inodes_count + 1u) * sizeof(k_u16_t));
+    memset(state.group_dirs, 0, (k_size_t)vol->groups * sizeof(k_u16_t));
+
+    /* The groups as the medium holds them; the counters are written from the
+     * bits at the end of the pass, and the walk needs the two bitmaps and the
+     * table of every group. */
+    for (group = 0; group < vol->groups; group++) {
+        k_u32_t inodes = repair_group_inodes(vol, group);
+        k_u32_t i;
+
+        rc = ext2_group_read(vol, group, &state.groups[group]);
+        if (rc != 0) {
+            add_error(report, "group ", group, "cannot be read");
+            rc = 0;
+            goto out;
+        }
+
+        rc = ext2_read_block(vol, state.groups[group].inode_bitmap, vol->block_buf);
+        if (rc != 0) {
+            add_error(report, "group ", group, "has no inode bitmap");
+            rc = 0;
+            goto out;
+        }
+
+        for (i = 0; i < inodes; i++) {
+            k_u32_t number = group * vol->inodes_per_group + i + 1u;
+
+            if ((vol->block_buf[i / 8u] & (k_u8_t)(1u << (i % 8u))) != 0u) {
+                repair_bit_set(state.used_inodes, number);
+            }
+        }
+    }
+
+    rc = repair_walk(&state, EXT2_ROOT_INODE, EXT2_ROOT_INODE, 0u);
+    if (rc != 0) {
+        goto out;
+    }
+
+    lost_found = state.incomplete ? 0u : repair_lost_found(&state);
+    if (!state.incomplete) {
+        repair_orphans(&state, lost_found);
+    }
+
+    rc = repair_records(&state);
+    if (rc != 0) {
+        goto out;
+    }
+
+    repair_metadata(&state);
+
+    rc = repair_bitmaps(&state);
+    if (rc != 0) {
+        add_error(report, "volume", 0, "the bitmaps did not reach the medium");
+        goto out;
+    }
+
+    rc = ext2_volume_flush(vol);
+    if (rc != 0) {
+        add_error(report, "volume", 0, "the superblock did not reach the medium");
+    }
+
+out:
+    kmm_free(state.groups);
+    kmm_free(state.used_blocks);
+    kmm_free(state.used_inodes);
+    kmm_free(state.reached);
+    kmm_free(state.refs);
+    kmm_free(state.group_dirs);
+
+    return rc;
 }

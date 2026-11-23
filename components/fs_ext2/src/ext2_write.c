@@ -1231,6 +1231,42 @@ int ext2_make_dir(struct ext2_volume *vol, const char *path, k_u32_t mode)
     return 0;
 }
 
+/*
+ * One name of an inode has gone: the link count drops, the blocks go back to
+ * the map when it was the last name, and the record is freed. The call is the
+ * tail of both the removal and the replacement of a rename, and it is one
+ * place because a second copy would be a second order of the writes.
+ */
+static int drop_inode(struct ext2_volume *vol, struct ext2_inode *inode)
+{
+    int rc;
+
+    rc = ext2_truncate_inode(vol, inode, 0);
+    if (rc != 0) {
+        return rc;
+    }
+
+    if (inode->links > 0u) {
+        inode->links--;
+    }
+
+    if (inode->links == 0u) {
+        inode->dtime = ext2_now();
+        inode->blocks = 0;
+    }
+
+    rc = ext2_inode_write(vol, inode, true);
+    if (rc != 0) {
+        return rc;
+    }
+
+    if (inode->links == 0u) {
+        return ext2_free_inode(vol, inode->number);
+    }
+
+    return 0;
+}
+
 int ext2_remove(struct ext2_volume *vol, const char *path)
 {
     struct ext2_inode parent;
@@ -1282,28 +1318,260 @@ int ext2_remove(struct ext2_volume *vol, const char *path)
         return rc;
     }
 
-    rc = ext2_truncate_inode(vol, &inode, 0);
+    return drop_inode(vol, &inode);
+}
+
+/*
+ * Remove an empty directory. The name goes first, then the links and the
+ * blocks: a power cut between them leaves a record that no name reaches,
+ * which the repair pass finds and frees, and never a name that points at the
+ * blocks the map has already taken. The parent loses one link of its own -
+ * the ".." of the removed directory is one - and the group loses one
+ * directory in its count.
+ */
+int ext2_remove_dir(struct ext2_volume *vol, const char *path)
+{
+    struct ext2_inode parent;
+    struct ext2_inode inode;
+    char name[EXT2_NAME_MAX + 1];
+    k_u32_t number;
+    k_u64_t position = 0;
+    struct ext2_dirent entry;
+    int rc;
+
+    if (vol == NULL || path == NULL || !vol->mounted) {
+        return KERR_INVAL;
+    }
+
+    rc = lookup_parent(vol, path, &parent, name);
     if (rc != 0) {
         return rc;
     }
 
-    if (inode.links > 0u) {
-        inode.links--;
+    rc = ext2_dir_find(vol, &parent, name, &number);
+    if (rc != 0) {
+        return rc;
     }
 
-    if (inode.links == 0u) {
-        inode.dtime = ext2_now();
-        inode.blocks = 0;
+    rc = ext2_read_inode(vol, number, &inode);
+    if (rc != 0) {
+        return rc;
     }
+
+    if (!ext2_inode_is_dir(&inode)) {
+        return KERR_NOTDIR;
+    }
+
+    while ((rc = ext2_dir_next(vol, &inode, &position, &entry)) == 1) {
+        if (strcmp(entry.name, ".") != 0 && strcmp(entry.name, "..") != 0) {
+            return KERR_NOTEMPTY;
+        }
+    }
+
+    if (rc < 0) {
+        return rc;
+    }
+
+    rc = ext2_dir_remove(vol, &parent, name);
+    if (rc != 0) {
+        return rc;
+    }
+
+    if (parent.links > 0u) {
+        parent.links--;
+    }
+    parent.mtime = ext2_now();
+    parent.ctime = parent.mtime;
+
+    rc = ext2_inode_write(vol, &parent, true);
+    if (rc != 0) {
+        return rc;
+    }
+
+    /* The truncate of a file refuses a directory on purpose; the blocks of a
+     * directory are given back by the same walk of the direct and indirect
+     * tables, and the size of the empty record becomes zero. */
+    {
+        k_u32_t freed = 0;
+
+        rc = free_range(vol, &inode, 0, &freed);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+
+    inode.size = 0;
+    inode.links = 0;
+    inode.dtime = ext2_now();
+    inode.blocks = 0;
 
     rc = ext2_inode_write(vol, &inode, true);
     if (rc != 0) {
         return rc;
     }
 
-    if (inode.links == 0u) {
-        return ext2_free_inode(vol, number);
+    rc = group_add_dir(vol, number, -1);
+    if (rc != 0) {
+        return rc;
     }
 
-    return 0;
+    return ext2_free_inode(vol, number);
+}
+
+/*
+ * The same object under another name (ADR 0024 §5). A file moves to any
+ * directory of the volume; a directory keeps its parent, because its ".."
+ * entry and the tree below it name the place it came from. A name that is
+ * already there and is a file is replaced; a directory at the destination is
+ * refused with KERR_ISDIR, because the tree below it would be lost.
+ *
+ * The new name is written before the old one goes, the order MicroFS and FAT
+ * keep: a volume that loses the power between the two has a name too many,
+ * which a checker reports, and never an object that no name reaches.
+ */
+int ext2_rename(struct ext2_volume *vol, const char *from, const char *to)
+{
+    char from_dir_path[VFS_PATH_MAX];
+    char from_name[EXT2_NAME_MAX + 1];
+    char to_dir_path[VFS_PATH_MAX];
+    char to_name[EXT2_NAME_MAX + 1];
+    struct ext2_inode from_parent;
+    struct ext2_inode to_parent;
+    struct ext2_inode inode;
+    struct ext2_inode replaced;
+    k_u32_t number = 0;
+    k_u32_t replaced_number = 0;
+    bool same_parent;
+    bool replacing = false;
+    int rc;
+
+    if (vol == NULL || from == NULL || to == NULL || !vol->mounted) {
+        return KERR_INVAL;
+    }
+
+    if (strcmp(from, to) == 0) {
+        return 0;
+    }
+
+    rc =
+        ext2_split_parent(from, from_dir_path, sizeof(from_dir_path), from_name, sizeof(from_name));
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = ext2_split_parent(to, to_dir_path, sizeof(to_dir_path), to_name, sizeof(to_name));
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = lookup_parent(vol, from, &from_parent, from_name);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = ext2_dir_find(vol, &from_parent, from_name, &number);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = ext2_read_inode(vol, number, &inode);
+    if (rc != 0) {
+        return rc;
+    }
+
+    same_parent = strcmp(from_dir_path, to_dir_path) == 0;
+
+    if (!same_parent && ext2_inode_is_dir(&inode)) {
+        return KERR_NOTSUP;
+    }
+
+    rc = lookup_parent(vol, to, &to_parent, to_name);
+    if (rc != 0) {
+        return rc;
+    }
+
+    if (ext2_dir_find(vol, &to_parent, to_name, &replaced_number) == 0) {
+        rc = ext2_read_inode(vol, replaced_number, &replaced);
+        if (rc != 0) {
+            return rc;
+        }
+
+        if (ext2_inode_is_dir(&replaced)) {
+            return KERR_ISDIR;
+        }
+
+        replacing = true;
+    }
+
+    if (same_parent) {
+        if (replacing) {
+            rc = ext2_dir_remove(vol, &from_parent, to_name);
+            if (rc != 0) {
+                return rc;
+            }
+        }
+
+        rc = ext2_dir_insert(vol, &from_parent, to_name, number, ext2_inode_is_dir(&inode) ? 2 : 1);
+        if (rc != 0) {
+            return rc;
+        }
+
+        rc = ext2_dir_remove(vol, &from_parent, from_name);
+        if (rc != 0) {
+            return rc;
+        }
+
+        from_parent.mtime = ext2_now();
+        from_parent.ctime = from_parent.mtime;
+
+        rc = ext2_inode_write(vol, &from_parent, true);
+        if (rc != 0) {
+            return rc;
+        }
+    } else {
+        if (replacing) {
+            rc = ext2_dir_remove(vol, &to_parent, to_name);
+            if (rc != 0) {
+                return rc;
+            }
+        }
+
+        rc = ext2_dir_insert(vol, &to_parent, to_name, number, 1);
+        if (rc != 0) {
+            return rc;
+        }
+
+        to_parent.mtime = ext2_now();
+        to_parent.ctime = to_parent.mtime;
+
+        rc = ext2_inode_write(vol, &to_parent, true);
+        if (rc != 0) {
+            return rc;
+        }
+
+        rc = ext2_dir_remove(vol, &from_parent, from_name);
+        if (rc != 0) {
+            return rc;
+        }
+
+        from_parent.mtime = ext2_now();
+        from_parent.ctime = from_parent.mtime;
+
+        rc = ext2_inode_write(vol, &from_parent, true);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+
+    if (replacing) {
+        rc = drop_inode(vol, &replaced);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+
+    /* The name moved and the content did not: ctime moves, mtime stays. */
+    inode.ctime = ext2_now();
+
+    return ext2_inode_write(vol, &inode, true);
 }
