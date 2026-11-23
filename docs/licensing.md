@@ -95,7 +95,8 @@ release and not the MIT of the tree; the two are not merged.
    code is not linked into a binary of the MIT tree. A driver or a library
    under such a license lives in a repository of its own, or runs as a
    program of the system (a user-space driver), with a documented interface;
-   the user chooses to install it. This is the boundary ADR 0025 records.
+   the user chooses to install it. This is the boundary
+   [ADR 0025](adr/0025-copyleft-outside-the-tree.md) records.
 3. **No code from the Linux kernel.** Its `font_8x16.c`, its drivers and its
    headers are GPL-2.0-only; they are not copied into this tree. A driver
    ported from a permissive source (FreeBSD, OpenBSD, NetBSD) keeps its
@@ -115,4 +116,5 @@ The Linux kernel module ABI is not a stable ABI: a `.ko` is built for one
 kernel and one configuration, and a GPU driver leans on DRM, DMA and power
 management that this kernel does not have. The tree therefore does not load
 `.ko`, and a future driver of that kind is a separate, optional component
-(ADR 0025), not a file of `components/`.
+([ADR 0025](adr/0025-copyleft-outside-the-tree.md)), not a file of
+`components/`.
