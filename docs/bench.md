@@ -67,27 +67,40 @@ of the human summary so that the two clocks are never confused.
 
 The disk of the x86-64 port was the drive of the IDE channel; 1.6 adds the
 virtio-blk device of the same image, and the row of a file is the same on both
-because the disk is 1 % of the time of a filesystem. Two numbers moved with
-the lane: `file_read` of a warm cache of the host, when the block layer learnt
-to ask a device that moves a run for the run (`struct k_blockdev::read_ahead`,
-128 sectors of the cache of the disk), and the same read out of a volume of
-5 GiB:
+because the disk is 1 % of the time of a filesystem. One row moved, and it
+moved for both of them: the block layer learnt to ask a device that moves a
+run for the run (`struct k_blockdev::read_ahead`, 128 sectors of the cache of
+each disk), and the read of a file that is in the cache of the host went from
+134 to 262 MiB/s.
 
-| Row | IDE channel | virtio-blk | 1.5.0 |
+| Row | 1.6.0 (IDE) | IDE, after | virtio-blk |
 |---|---|---|---|
-| `file_write` (MicroFS, 16 MiB) | 5.4 MiB/s | 5.3 MiB/s | 6.63 MiB/s |
-| `file_read` (MicroFS, 16 MiB, read ahead 8 -> 128) | 144 -> 286 MiB/s | 132 -> 286 MiB/s | 126.98 MiB/s |
-| `file_write` (ext2, 16 MiB) | 15.1 MiB/s | 15.1 MiB/s | - |
-| `file_read` (ext2, 16 MiB) | 48.3 MiB/s | 42.4 MiB/s | - |
-| `file_read` (ext2, 128 MiB of a volume of 5 GiB, read ahead 8 -> 128) | 33.8 -> 40.8 MiB/s | 33.8 -> 40.8 MiB/s | - |
+| `file_write` (MicroFS, 16 MiB) | 5.21 MiB/s | 5.39 MiB/s | 5.37 MiB/s |
+| `file_read` (MicroFS, 16 MiB) | 134.45 MiB/s | **262.29 MiB/s** | **246.15 MiB/s** |
+| `file_write` (ext2, 16 MiB) | 15.29 MiB/s | 14.91 MiB/s | 15.16 MiB/s |
+| `file_read` (ext2, 16 MiB) | 51.11 MiB/s | 62.50 MiB/s | 59.47 MiB/s |
+
+The volume of 5 GiB (`make x86-volume-smoke`), the same two disks:
+
+| What | 1.6.0 (IDE) | IDE, after | virtio-blk |
+|---|---|---|---|
+| ext2, write 128 MiB | 13.96 MiB/s | 13.34-13.91 MiB/s | 13.91 MiB/s |
+| ext2, read 128 MiB | 35.17 MiB/s | 36.90-40.18 MiB/s | 40.92 MiB/s |
+| MicroFS, write 16 MiB | 6.43 MiB/s | 6.31-6.47 MiB/s | 6.42-6.49 MiB/s |
+| MicroFS, read 16 MiB | 74.07 MiB/s | 89.89-105.26 MiB/s | 101.27-105.96 MiB/s |
+
+The two disks of one row differ by the noise of the host and the run-to-run
+spread of the row (a tenth, and a quarter for `file_read` of the cache of the
+host); the two columns of "after" are one tree with two devices. The ceiling of
+a file written to ext2 is the sector operations of the block layer and of the
+filesystem - about five per kilobyte written and nine per kilobyte read - and
+no device of this machine changes that number: it is `docs/debts.md` under the
+grain of the disk, with the plan of the 4 KiB sector.
 
 `make bench BENCH_ARGS="--disk virtio"` is the table of the other disk and
 `make bench BENCH_ARGS="--fs ext2 --disk virtio"` the other filesystem on it;
 `make x86-volume-smoke X86_DISK_BUS=virtio` is the gate of the large volume on
-the card. The rates of the two disks differ by the noise of the host (a tenth
-and less) and the two of them are the same machine: the ceiling of a file
-written to ext2 is the sector operations of the block layer and of the
-filesystem, which is `docs/debts.md` under the grain of the disk.
+the card.
 
 ## The baseline of 1.5.0
 
