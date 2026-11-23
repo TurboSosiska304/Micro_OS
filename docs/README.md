@@ -15,7 +15,7 @@ the board live in `hardware/`.
 | understand the design | [architecture.md](architecture.md) |
 | know what is done and what is next | [roadmap.md](roadmap.md) (the kernel) and [ports/esp32/roadmap.md](ports/esp32/roadmap.md) (the board) |
 | bring the kernel to another machine | [porting.md](porting.md) |
-| port a program (zlib, PCRE2, Lua, sbase) to the userland | [porting-programs.md](porting-programs.md) |
+| port a program (zlib, PCRE2, Lua, sbase) to the userland, or build one with the SDK | [porting-programs.md](porting-programs.md) |
 | move a machine from 0.x to 1.0 | [migration.md](migration.md) |
 | know what a release changed | [../CHANGELOG.md](../CHANGELOG.md) |
 | report a vulnerability | [../SECURITY.md](../SECURITY.md) |

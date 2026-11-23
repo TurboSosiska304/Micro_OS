@@ -10,6 +10,22 @@ the MicroFS volume change by adding only.
 A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 (`vX.Y.Z-pre`) is a pre-release and must match `kernel_version()`.
 
+## [Unreleased]
+
+### Added
+
+- `make sdk` writes the SDK of a program into `build-sdk/microos-sdk/<version>/`
+  (or `DESTDIR`): the headers of the library and of the ABI, the archive
+  `lib/libmicroos_user.a` built from those sources (35 objects, arena of
+  256 KiB, `-Os -ffreestanding -mno-red-zone -march=x86-64`), `crt0.o`,
+  `program.ld`, `mkprog.sh`, `link_program.sh`, `microos_sign`,
+  `share/microos-toolchain.cmake`, `share/build-libc.sh` with the sources,
+  and `share/examples/hello`. A program is built outside this tree with two
+  commands - `cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=<sdk>/share/...` and
+  `cmake --build build` - and no include path or library of its own
+  (`docs/porting-programs.md` §6, ADR 0025 §6). The example is 10 688 bytes
+  and runs from `/bin` on the machine of QEMU.
+
 ## [1.3.0] - 2026-11-23
 
 The release of the many cores. `KERNEL_SMP` stays off by default: with it off
