@@ -17,6 +17,7 @@ set(MICRO_OS_KERNEL_SRCS
     "src/fb.c"
     "src/fb_ops.c"
     "src/input.c"
+    "src/input_scancode.c"
     "src/input_set1.c"
     "src/kfile.c"
     "src/kmm.c"

@@ -272,6 +272,20 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Fixed
 
+- The keyboard of a laptop whose firmware leaves the translation of the 8042
+  off: it speaks the scancode set 2, and the port read every byte of it as the
+  set 1 - the prompt arrived, the keys did not type their letters, and a line
+  of rubbish filled the buffer until "line too long, it was not executed". The
+  boot now asks the keyboard which set it speaks (`0xF0 0x00`) and the
+  controller whether it translates (bit 6 of its configuration), the line
+  `ps2: the keyboard speaks set N` says what the machine answered, and the
+  translation of the set 2 and of the set 3 is a table of the kernel
+  (`kernel/input_scancode.c`) with the decoder of the make, the break, the
+  prefix of the extended block and the sequence of the Pause - the same keys of
+  the machine out of every set, which the host test of `tests/cases/test_ps2.c`
+  holds key by key in the three. The keyboard of QEMU (a device of the set 2
+  behind a controller that translates) and of every PC whose firmware predates
+  the question is the set 1, exactly as it was.
 - The boot of a medium whose loader puts a module inside the window of the
   programs. limine, in the EFI half of the hybrid ISO, leaves its modules right
   after the kernel file at 23.5 MiB, so a root image of 16 MB runs from 23.5 to

@@ -462,6 +462,24 @@ class Picture:
 
         return True
 
+    def row_of(self, text: str, ink: tuple, paper: tuple, pitch: int = LINE_PITCH) -> int | None:
+        """The row of the grid whose first cells spell `text`, or None.
+
+        A console whose log is longer than the glass scrolls, so the first line
+        of the boot is not always the first row of the picture: a check that
+        reads the banner asks where it is instead of assuming the row 0. A
+        machine of a longer boot scrolls one line earlier than a machine of a
+        shorter one, and neither is a failure of the screen.
+        """
+        for row in range(self.height // pitch):
+            if all(
+                self.cell_is(row, index, GLYPHS[letter], ink, paper, pitch)
+                for index, letter in enumerate(text)
+            ):
+                return row
+
+        return None
+
     def cell_is_ink(self, row: int, column: int, ink: tuple, pitch: int = LINE_PITCH) -> bool:
         """The cell is one block of the colour: what the cursor is."""
         x0 = column * CELL_WIDTH
@@ -1105,19 +1123,17 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                     and picture.pixel(0, VBE_HEIGHT - 2) == GREY,
                     f"the paper is {picture.pixel(VBE_WIDTH - 2, VBE_HEIGHT - 2)}",
                 )
-                # The banner is the first line of the kernel, but a line of
-                # the boot may stand above it (the address of the image, the
-                # volume of the medium): the check looks for the glyph of the
-                # banner in the first rows instead of naming one cell.
-                banner = any(
-                    picture.cell_is(row, 0, GLYPHS["M"], BLACK, GREY)
-                    or picture.cell_is(row, 0, GLYPHS["m"], BLACK, GREY)
-                    for row in range(0, 48)
-                )
+                # The banner is the first line of the boot, and the boot of a
+                # machine whose log is longer than the glass scrolls: the check
+                # asks where the banner is instead of assuming the row 0, and a
+                # line more in the log of a kernel is not a failure of the
+                # screen.
                 expect(
                     "the text of the boot is read in the new colours",
-                    banner,
-                    "no row of the banner is the glyph in the colours of the theme",
+                    picture.cell_is(0, 0, GLYPHS["M"], BLACK, GREY)
+                    or picture.cell_is(0, 0, GLYPHS["m"], BLACK, GREY)
+                    or picture.row_of("MicroOS", BLACK, GREY) is not None,
+                    "no row of the picture holds the banner in the colours of the theme",
                 )
                 foreign = picture.foreign_cells(BLACK)
                 expect(
