@@ -123,6 +123,15 @@ static const struct k_blockdev s_writeback = {
     .ctx = NULL,
 };
 
+/* The one that asks for a cache of four boxes instead of the default. */
+static const struct k_blockdev s_sized = {
+    .name = "sized0",
+    .sector_size = CACHE_SECTOR_SIZE,
+    .sectors = CACHE_SECTORS,
+    .ops = &s_ops,
+    .ctx = NULL,
+};
+
 void test_blockdev_cache(void)
 {
     const struct k_blockdev *view;
@@ -329,4 +338,87 @@ void test_blockdev_cache(void)
     KT_CHECK_INT_EQ(k_blockdev_unregister(view), 0);
     KT_CHECK_INT_EQ(s_writes, 3);
     KT_CHECK(k_blockdev_find("wb0") == NULL);
+
+    /* --- a cache of the size the device asks for -------------------------- */
+
+    KT_CHECK_INT_EQ(k_blockdev_register_cached_sized(&s_sized, true, 0), -1);
+
+    KT_CHECK_INT_EQ(k_blockdev_register_cached_sized(&s_sized, true, 4), 0);
+
+    view = k_blockdev_find("sized0");
+    KT_CHECK(view != NULL && view != &s_sized);
+
+    if (view == NULL || view->ops == NULL) {
+        return;
+    }
+
+    s_reads = s_writes = 0;
+
+    /* Four boxes hold four sectors. The sectors are out of order on purpose:
+     * a run of them would be a read ahead, and this is the size of the cache
+     * and not the cleverness of the stream. */
+    for (i = 0; i < 4; i++) {
+        KT_CHECK_INT_EQ(view->ops->read(view->ctx, 30 + (k_u32_t)i * 2, buffer, 1), 0);
+    }
+
+    KT_CHECK_INT_EQ(s_reads, 4);
+
+    for (i = 0; i < 4; i++) {
+        KT_CHECK_INT_EQ(view->ops->read(view->ctx, 30 + (k_u32_t)i * 2, buffer, 1), 0);
+        KT_CHECK_INT_EQ(memcmp(buffer, s_data[30 + i * 2], CACHE_SECTOR_SIZE), 0);
+    }
+
+    KT_CHECK_INT_EQ(s_reads, 4); /* the four of them are in the cache */
+
+    KT_CHECK_INT_EQ(view->ops->read(view->ctx, 38, buffer, 1), 0);
+    KT_CHECK_INT_EQ(view->ops->read(view->ctx, 30, buffer, 1), 0);
+    KT_CHECK_INT_EQ(s_reads, 6); /* the first box was the oldest */
+
+    /* --- what the cache reports to /proc ---------------------------------- */
+
+    {
+        struct k_blockdev_cache_stats stats;
+
+        KT_CHECK_INT_EQ(k_blockdev_cache_stats(view, &stats), 0);
+        KT_CHECK(stats.present);
+        KT_CHECK(stats.live);
+        KT_CHECK(stats.write_back);
+        KT_CHECK_INT_EQ(stats.capacity, 4);
+        KT_CHECK_INT_EQ(stats.valid, 4);
+        KT_CHECK_INT_EQ(stats.dirty, 0);
+        KT_CHECK_INT_EQ(stats.sectors, CACHE_SECTORS);
+        KT_CHECK_INT_EQ(stats.sector_size, CACHE_SECTOR_SIZE);
+
+        /* A write stays in a box and the report says so. */
+        KT_CHECK_INT_EQ(view->ops->write(view->ctx, 10, expect, 1), 0);
+        KT_CHECK_INT_EQ(k_blockdev_cache_stats(view, &stats), 0);
+        KT_CHECK_INT_EQ(stats.valid, 4);
+        KT_CHECK_INT_EQ(stats.dirty, 1);
+
+        /* The sync empties the dirty boxes and keeps the copy. */
+        KT_CHECK_INT_EQ(view->ops->sync(view->ctx), 0);
+        KT_CHECK_INT_EQ(k_blockdev_cache_stats(view, &stats), 0);
+        KT_CHECK_INT_EQ(stats.dirty, 0);
+        KT_CHECK_INT_EQ(stats.valid, 4);
+
+        /* The device the platform registered answers the same report. */
+        KT_CHECK_INT_EQ(k_blockdev_cache_stats(&s_sized, &stats), 0);
+        KT_CHECK_INT_EQ(stats.capacity, 4);
+    }
+
+    /* A device without a cache is in the table and has no boxes. */
+    KT_CHECK_INT_EQ(k_blockdev_register(&s_plain), 0);
+    {
+        struct k_blockdev_cache_stats stats;
+
+        KT_CHECK_INT_EQ(k_blockdev_cache_stats(&s_plain, &stats), 0);
+        KT_CHECK(!stats.present);
+        KT_CHECK_INT_EQ(stats.dirty, 0);
+        KT_CHECK_INT_EQ(stats.sectors, CACHE_SECTORS);
+        KT_CHECK_INT_EQ(k_blockdev_cache_stats(&s_plain, NULL), -1);
+    }
+    KT_CHECK_INT_EQ(k_blockdev_unregister(&s_plain), 0);
+
+    KT_CHECK_INT_EQ(k_blockdev_unregister(view), 0);
+    KT_CHECK(k_blockdev_find("sized0") == NULL);
 }

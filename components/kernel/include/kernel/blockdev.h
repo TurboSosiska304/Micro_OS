@@ -54,8 +54,18 @@ struct k_blockdev_ops {
  * the group descriptors and the bitmaps of ext2, the inode table of MicroFS,
  * the first cluster of a FAT - and, with the writes held back, the run of
  * sectors that a filesystem writes again for every block it allocates.
+ *
+ * It is the default of k_blockdev_register_cached() and not a ceiling: a
+ * device whose medium moves a run at a time asks for a cache that holds the
+ * run (k_blockdev_register_cached_sized), which is what the disk of the
+ * x86-64 port does with half a megabyte of it.
  */
 #define K_BLOCKDEV_CACHE_SECTORS 16
+
+/* The largest cache a device may ask for: a million sectors of the smallest
+ * unit would be half a gigabyte of RAM for the cache of one device, and a
+ * port that asks for one is a port with a bug. */
+#define K_BLOCKDEV_CACHE_MAX 65536
 
 /*
  * The sectors one command of the medium brings when a read continues a run:
@@ -106,6 +116,37 @@ int k_blockdev_register(const struct k_blockdev *dev);
  * the name, the size, the operations - is the same.
  */
 int k_blockdev_register_cached(const struct k_blockdev *dev, bool write_back);
+
+/*
+ * The same, with a cache of the size the device asks for: `sectors` boxes of
+ * the sector of the device, at most K_BLOCKDEV_CACHE_MAX. A medium that moves
+ * a run of 64 KiB in one command wants a cache that holds a run; a flash chip
+ * of a board with a hundred kilobytes of RAM wants the sixteen of the
+ * default. Zero is refused: a device with a cache of no boxes is a device
+ * without a cache and is registered by k_blockdev_register().
+ */
+int k_blockdev_register_cached_sized(const struct k_blockdev *dev, bool write_back,
+                                     k_size_t sectors);
+
+/*
+ * The state of the cache of a device, for a person who reads /proc. `dev` is
+ * the device as the table hands it out or the structure the platform
+ * registered; both answer the same. A device without a cache answers with
+ * `present` false and the rest zero, and a device that is not in the table is
+ * -1.
+ */
+struct k_blockdev_cache_stats {
+    bool present;     /* the device has a cache at all */
+    bool live;        /* the memory of the cache is allocated */
+    bool write_back;  /* a write waits for the room or for a sync */
+    k_u32_t capacity; /* the boxes of the cache */
+    k_u32_t valid;    /* the boxes that hold a sector */
+    k_u32_t dirty;    /* the boxes the medium does not have yet */
+    k_u32_t sectors;  /* the sectors of the device */
+    k_u32_t sector_size;
+};
+
+int k_blockdev_cache_stats(const struct k_blockdev *dev, struct k_blockdev_cache_stats *out);
 
 /*
  * Take a device out of the table. The caller guarantees that nobody is using
