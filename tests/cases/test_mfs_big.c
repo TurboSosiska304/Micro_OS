@@ -246,15 +246,21 @@ void test_mfs_big(void)
     KT_CHECK_INT_EQ(info.block_size, MFS_BLOCK_SIZE);
     KT_CHECK(info.data_blocks > 60000u);
     KT_CHECK_INT_EQ(info.data_free, info.data_blocks - 1u);
-    KT_CHECK(info.inodes_total > 1000u);
+    /*
+     * The table of the records is sized by the records and not by the
+     * volume (ADR 0038): the format asked for 256 of them and keeps a
+     * reserve of 64, so a volume of 64 MiB and a volume of 5 GiB walk the
+     * same table of twenty blocks.
+     */
+    KT_CHECK_INT_EQ(info.inodes_total, 256u + 64u - 1u);
+    KT_CHECK(info.meta_blocks < 32u);
 
     /*
-     * The count of the used records is a walk of the whole table, and the
-     * walk costs the table: 32 records of a version 2 volume share a block,
-     * so the reads of the walk are the blocks of the table and not the
+     * The count of the used records is a walk of the table, and the walk
+     * costs the table: 16 records of a version 3 volume share a block, so
+     * the reads of the walk are the blocks of the table and not the
      * records. Without the cache of the table the walk read the same block
-     * once per record, which is 32 times the bytes of the table - 6.8 GiB
-     * of the medium for the 214 MiB table of a 5 GiB volume.
+     * once per record, which is 16 times the bytes of the table.
      */
     {
         k_u32_t first = medium.reads;

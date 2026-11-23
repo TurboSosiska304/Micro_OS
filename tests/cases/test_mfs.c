@@ -37,27 +37,37 @@ static void teardown(void)
     mfs_ram_free(&g_volume);
 }
 
+static k_u32_t test_crc32(const void *data, k_size_t size);
+
 /*
  * The address of a record of the table of the inodes in the volume of the
- * test. The layout is computed the way the format computes it, so the
- * test can put an old record into a volume of today.
+ * test. The layout is computed the way the format computes it, so the test
+ * can put a record of an older version into a volume of today: a version 3
+ * volume numbers its records from the top of the table, which is anchored
+ * at the map next to INFO (ADR 0038).
  */
 static k_u8_t *inode_record(k_u32_t index)
 {
     struct mfs_superblock sb;
-    k_u32_t bitmap_blocks;
+    k_u32_t per_block = MFS_BLOCK_SIZE / MFS_INODE_SIZE;
+    k_u32_t slots = index + 1u;
+    k_u32_t block;
+    k_u32_t slot;
 
     memcpy(&sb, g_volume.data + (size_t)(TEST_BLOCKS - 1) * MFS_BLOCK_SIZE, sizeof(sb));
-    bitmap_blocks = (sb.data_blocks + 8u * MFS_BLOCK_SIZE - 1u) / (8u * MFS_BLOCK_SIZE);
 
-    return g_volume.data + (size_t)(sb.meta_start + bitmap_blocks) * MFS_BLOCK_SIZE +
-           (size_t)index * MFS_INODE_SIZE;
+    block = (sb.info_start - sb.bitmap_blocks) - (slots + per_block - 1u) / per_block;
+    slot = (per_block - slots % per_block) % per_block;
+
+    return g_volume.data + (size_t)block * MFS_BLOCK_SIZE + (size_t)slot * MFS_INODE_SIZE;
 }
 
 /*
  * Put a record into the table the way a writer of the device would: the
  * test goes through the block device and not through the array in the
  * memory, so the record reaches the volume the way it does on the board.
+ * The record of a version 3 volume carries its checksum, and a record
+ * without one is what the check of the volume calls a torn write.
  */
 static int store_inode_record(k_u32_t index, const struct mfs_inode *inode)
 {
@@ -65,12 +75,18 @@ static int store_inode_record(k_u32_t index, const struct mfs_inode *inode)
     k_u8_t block[MFS_BLOCK_SIZE];
     size_t offset = (size_t)(where - g_volume.data);
     k_u32_t sector = (k_u32_t)(offset / MFS_BLOCK_SIZE);
+    size_t at = offset % MFS_BLOCK_SIZE;
+    k_u32_t crc;
 
     if (g_device.ops->read(g_device.ctx, sector, block, 1) != 0) {
         return -1;
     }
 
-    memcpy(block + offset % MFS_BLOCK_SIZE, inode, sizeof(*inode));
+    memset(block + at, 0, MFS_INODE_SIZE);
+    memcpy(block + at, inode, sizeof(*inode));
+
+    crc = test_crc32(block + at, MFS_INODE_SIZE - sizeof(k_u32_t));
+    memcpy(block + at + MFS_INODE_SIZE - sizeof(k_u32_t), &crc, sizeof(crc));
 
     return g_device.ops->write(g_device.ctx, sector, block, 1);
 }
@@ -111,50 +127,66 @@ static k_u32_t test_crc32(const void *data, k_size_t size)
 
 /*
  * Turn the volume of the test into the version 1 that came before the
- * times: the same DATA, the same directories, the same records in the 16
- * bytes they had. The records are read into the memory first, because the
- * smaller record moves over the bytes of the larger one.
+ * times: the same data, the same directories, and the records in the 16
+ * bytes they had, in the place a version 1 volume keeps them.
+ *
+ * The two layouts differ: a version 3 volume keeps the map at the top of
+ * META and numbers the records from there downwards, a version 1 volume
+ * keeps the map at the start of META and the table after it. The records are
+ * read into the memory first, because the smaller table moves over the bytes
+ * of the larger one, and the map is copied to its old place with them.
  */
 static void volume_to_legacy(void)
 {
     struct mfs_superblock sb;
     struct mfs_inode records[256];
     bool used[256];
-    k_u8_t *table;
+    k_u8_t map[MFS_BLOCK_SIZE];
     k_u32_t bitmap_blocks;
-    k_u32_t inode_blocks;
     k_u32_t capacity;
     k_u32_t i;
 
     memcpy(&sb, g_volume.data + (size_t)(TEST_BLOCKS - 1) * MFS_BLOCK_SIZE, sizeof(sb));
     bitmap_blocks = (sb.data_blocks + 8u * MFS_BLOCK_SIZE - 1u) / (8u * MFS_BLOCK_SIZE);
-    inode_blocks = sb.meta_blocks - bitmap_blocks;
-    capacity = (inode_blocks * MFS_BLOCK_SIZE) / MFS_INODE_SIZE - 1u;
+    capacity = sb.inode_records - 1u;
     if (capacity >= K_ARRAY_SIZE(records)) {
         capacity = K_ARRAY_SIZE(records) - 1u;
     }
-
-    table = g_volume.data + (size_t)(sb.meta_start + bitmap_blocks) * MFS_BLOCK_SIZE;
 
     memset(records, 0, sizeof(records));
     memset(used, 0, sizeof(used));
 
     for (i = 1; i <= capacity; i++) {
-        memcpy(&records[i], table + (size_t)i * MFS_INODE_SIZE, sizeof(records[i]));
+        memcpy(&records[i], inode_record(i), sizeof(records[i]));
         used[i] = (records[i].flags & MFS_INODE_USED) != 0u;
     }
 
-    memset(table, 0, (size_t)inode_blocks * MFS_BLOCK_SIZE);
+    /* The map of the free blocks moves from the top of META to its start. */
+    memcpy(map, g_volume.data + (size_t)(sb.info_start - bitmap_blocks) * MFS_BLOCK_SIZE,
+           MFS_BLOCK_SIZE);
 
-    for (i = 1; i <= capacity; i++) {
-        if (used[i]) {
-            memcpy(table + (size_t)i * MFS_INODE_SIZE_LEGACY, &records[i], MFS_INODE_SIZE_LEGACY);
+    memset(g_volume.data + (size_t)sb.meta_start * MFS_BLOCK_SIZE, 0,
+           (size_t)sb.meta_blocks * MFS_BLOCK_SIZE);
+    memcpy(g_volume.data + (size_t)sb.meta_start * MFS_BLOCK_SIZE, map, MFS_BLOCK_SIZE);
+
+    {
+        k_u8_t *table = g_volume.data + (size_t)(sb.meta_start + bitmap_blocks) * MFS_BLOCK_SIZE;
+
+        for (i = 1; i <= capacity; i++) {
+            if (used[i]) {
+                memcpy(table + (size_t)i * MFS_INODE_SIZE_LEGACY, &records[i],
+                       MFS_INODE_SIZE_LEGACY);
+            }
         }
     }
 
     sb.version = MFS_VERSION_LEGACY;
-    sb.features &= (k_u32_t)~MFS_FEATURE_TIME;
-    sb.crc = test_crc32(&sb, sizeof(sb) - sizeof(sb.crc));
+    sb.features &= (k_u32_t) ~(MFS_FEATURE_TIME | MFS_FEATURE_RECORD_CRC);
+    sb.bitmap_blocks = 0;
+    sb.inode_blocks = 0;
+    sb.inode_size = 0;
+    sb.inode_records = 0;
+    sb.crc = test_crc32(&sb, MFS_HEADER_CRC_SPAN);
 
     memcpy(g_volume.data + (size_t)(TEST_BLOCKS - 1) * MFS_BLOCK_SIZE, &sb, sizeof(sb));
 }
@@ -951,8 +983,19 @@ static void test_volume_without_modes(void)
 
     KT_CHECK_INT_EQ(setup(), MFS_OK);
 
-    /* The root of a volume of 0.3.x: the type bits only, no mode, no owner. */
-    memcpy(inode_record(MFS_ROOT_INODE), &old_dir_flags, sizeof(old_dir_flags));
+    /*
+     * The root of a volume of 0.3.x: the type bits only, no mode, no owner.
+     * The record goes back through the device with the checksum of the
+     * format of today, so that what is old about it is the flags and not a
+     * record that a power cut tore (ADR 0038).
+     */
+    {
+        struct mfs_inode root;
+
+        memcpy(&root, inode_record(MFS_ROOT_INODE), sizeof(root));
+        root.flags = old_dir_flags;
+        KT_CHECK_INT_EQ(store_inode_record(MFS_ROOT_INODE, &root), 0);
+    }
 
     KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
     KT_CHECK(mfs_is_mounted());
@@ -984,7 +1027,13 @@ static void test_volume_without_modes(void)
     /* The file is made old the same way: a record of a volume of 0.3.x. */
     memset(&entry, 0, sizeof(entry));
     KT_CHECK_INT_EQ(mfs_stat("/etc/hosts", NULL, &entry), MFS_OK);
-    memcpy(inode_record(entry.inode), &old_file_flags, sizeof(old_file_flags));
+    {
+        struct mfs_inode old;
+
+        memcpy(&old, inode_record(entry.inode), sizeof(old));
+        old.flags = old_file_flags;
+        KT_CHECK_INT_EQ(store_inode_record(entry.inode, &old), 0);
+    }
 
     KT_CHECK_INT_EQ(mfs_stat("/etc/hosts", &inode, NULL), MFS_OK);
     KT_CHECK_INT_EQ(inode.flags & MFS_INODE_DIR, 0);

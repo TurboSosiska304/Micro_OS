@@ -87,6 +87,14 @@ struct vfs_statx {
     k_u64_t size;
     k_u32_t mode;
     k_u32_t owner;
+    /*
+     * The group of the object (ADR 0038). A filesystem that has no group -
+     * every one of this release but MicroFS, whose version 3 records carry
+     * it - leaves it zero, which is the group of root. The triad of the
+     * group in the check of the access is not read from this number yet
+     * (docs/debts.md).
+     */
+    k_u32_t group;
     k_u64_t mtime; /* the last change of the content */
     k_u64_t ctime; /* the last change of the record, the mode or the owner */
 };

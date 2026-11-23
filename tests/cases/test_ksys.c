@@ -407,8 +407,8 @@ static const struct abi_field g_vfs_stat_fields[] = {
 static const struct abi_field g_vfs_statx_fields[] = {
     {"inode", offsetof(struct vfs_statx, inode)}, {"type", offsetof(struct vfs_statx, type)},
     {"size", offsetof(struct vfs_statx, size)},   {"mode", offsetof(struct vfs_statx, mode)},
-    {"owner", offsetof(struct vfs_statx, owner)}, {"mtime", offsetof(struct vfs_statx, mtime)},
-    {"ctime", offsetof(struct vfs_statx, ctime)},
+    {"owner", offsetof(struct vfs_statx, owner)}, {"group", offsetof(struct vfs_statx, group)},
+    {"mtime", offsetof(struct vfs_statx, mtime)}, {"ctime", offsetof(struct vfs_statx, ctime)},
 };
 
 static const struct abi_field g_vfs_dirent_fields[] = {

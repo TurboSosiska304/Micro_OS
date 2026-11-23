@@ -42,6 +42,7 @@ static void run_tests(void *arg)
     test_exec();
     test_fuzz();
     test_mfs();
+    test_mfs_format();
     test_mfs_persistence();
     test_mfs_repair();
     test_mfs_many();

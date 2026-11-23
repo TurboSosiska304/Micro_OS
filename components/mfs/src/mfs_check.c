@@ -225,10 +225,33 @@ static void bit_clear(k_u8_t *map, k_u32_t index)
     map[index / 8u] &= (k_u8_t) ~(1u << (index % 8u));
 }
 
+/*
+ * Decode a record of a block of the table that was already read, and say
+ * whether it may be trusted.
+ *
+ * A used record of a version 3 volume has to be the one that was written. A
+ * record that does not match its checksum is one that a power cut left half
+ * written: nothing it says can be trusted, so it is read as a free record and
+ * the repair of the volume gives it back (ADR 0038).
+ */
+static void record_decode(const struct mfs_private *view, struct mfs_check_report *report,
+                          k_u32_t index, const k_u8_t *block, k_u32_t offset, struct mfs_inode *out)
+{
+    mfs_priv_inode_decode(block + offset, view->inode_size, out);
+
+    if ((out->flags & MFS_INODE_USED) != 0u &&
+        !mfs_priv_inode_sound(block + offset, view->inode_size)) {
+        add_error(report, CHECK_SUBJECT_INODE, index,
+                  "the checksum of the record does not match: the write it was is not whole");
+        memset(out, 0, sizeof(*out));
+    }
+}
+
 static int read_inode(const struct mfs_private *view, struct mfs_check_report *report,
                       k_u32_t index, struct mfs_inode *out)
 {
     k_u8_t block[MFS_BLOCK_SIZE];
+    k_u32_t where;
     k_u32_t offset;
     int rc;
 
@@ -238,19 +261,15 @@ static int read_inode(const struct mfs_private *view, struct mfs_check_report *r
         return MFS_OK;
     }
 
-    rc = mfs_priv_block_read(view->sb->meta_start + view->bitmap_blocks +
-                                 (index * view->inode_size) / MFS_BLOCK_SIZE,
-                             block);
+    mfs_priv_inode_address(view, index, &where, &offset);
+
+    rc = mfs_priv_block_read(where, block);
     if (rc != MFS_OK) {
-        add_error(report, CHECK_SUBJECT_BLOCK,
-                  view->sb->meta_start + view->bitmap_blocks +
-                      (index * view->inode_size) / MFS_BLOCK_SIZE,
-                  "cannot be read");
+        add_error(report, CHECK_SUBJECT_BLOCK, where, "cannot be read");
         return rc;
     }
 
-    offset = (index * view->inode_size) % MFS_BLOCK_SIZE;
-    mfs_priv_inode_decode(block + offset, view->inode_size, out);
+    record_decode(view, report, index, block, offset, out);
 
     return MFS_OK;
 }
@@ -310,7 +329,8 @@ static int check_header(const struct mfs_private *view, struct mfs_check_report 
         sound = false;
     }
 
-    if (sb.version != MFS_VERSION && sb.version != MFS_VERSION_LEGACY) {
+    if (sb.version != MFS_VERSION && sb.version != MFS_VERSION_TIME &&
+        sb.version != MFS_VERSION_LEGACY) {
         add_error(report, CHECK_SUBJECT_HEADER, 0, "the version is not one of the system");
         sound = false;
     }
@@ -318,15 +338,23 @@ static int check_header(const struct mfs_private *view, struct mfs_check_report 
     /*
      * The version and the time feature go together: a record has the room
      * for the two moments or it has not, and a header that says otherwise
-     * is a header a reader cannot trust (ADR 0013).
+     * is a header a reader cannot trust (ADR 0013). A version 3 volume
+     * promises the group and the checksum of a record as well (ADR 0038).
      */
-    if (sb.version == MFS_VERSION && (sb.features & MFS_FEATURE_TIME) == 0u) {
-        add_error(report, CHECK_SUBJECT_HEADER, 0, "version 2 has no time feature");
+    if (sb.version >= MFS_VERSION_TIME && (sb.features & MFS_FEATURE_TIME) == 0u) {
+        add_error(report, CHECK_SUBJECT_HEADER, 0, "the version has no time feature");
         sound = false;
     }
     if (sb.version == MFS_VERSION_LEGACY && (sb.features & MFS_FEATURE_TIME) != 0u) {
         add_error(report, CHECK_SUBJECT_HEADER, 0, "a legacy volume claims the time feature");
         sound = false;
+    }
+    if (sb.version >= MFS_VERSION) {
+        if ((sb.features & MFS_FEATURE_RECORD_CRC) == 0u || sb.inode_size != MFS_INODE_SIZE) {
+            add_error(report, CHECK_SUBJECT_HEADER, 0,
+                      "the version has no checksum of a record or no room for one");
+            sound = false;
+        }
     }
 
     if (sb.block_size != MFS_BLOCK_SIZE) {
@@ -339,8 +367,7 @@ static int check_header(const struct mfs_private *view, struct mfs_check_report 
         sound = false;
     }
 
-    if ((sb.features & MFS_FEATURE_CRC) != 0u &&
-        sb.crc != mfs_priv_crc32(&sb, sizeof(sb) - sizeof(sb.crc))) {
+    if ((sb.features & MFS_FEATURE_CRC) != 0u && sb.crc != mfs_priv_header_crc(&sb)) {
         add_error(report, CHECK_SUBJECT_HEADER, 0, "the checksum does not match");
         sound = false;
     }
@@ -372,13 +399,27 @@ static int check_header(const struct mfs_private *view, struct mfs_check_report 
         sound = false;
     }
 
-    /* The map of the free blocks has to fit into META, before the table. */
+    /* The map of the free blocks has to fit into META: at its start in a
+     * version 1 and 2 volume, at its top in a version 3 one. */
     bitmap_bytes = (sb.data_blocks + 7u) / 8u;
     bitmap_blocks = (bitmap_bytes + MFS_BLOCK_SIZE - 1u) / MFS_BLOCK_SIZE;
 
     if (bitmap_blocks == 0u || bitmap_blocks != view->bitmap_blocks ||
         bitmap_blocks >= sb.meta_blocks) {
         add_error(report, CHECK_SUBJECT_HEADER, 0, "the map of the free blocks does not fit META");
+        sound = false;
+    }
+
+    /*
+     * A version 3 volume says where its map and its table are; the two have
+     * to fill META and the table has to hold the records the header counts
+     * (ADR 0038).
+     */
+    if (sb.version >= MFS_VERSION &&
+        (sb.bitmap_blocks != bitmap_blocks || sb.inode_blocks == 0u ||
+         sb.bitmap_blocks + sb.inode_blocks != sb.meta_blocks ||
+         sb.inode_records != sb.inode_blocks * (MFS_BLOCK_SIZE / sb.inode_size))) {
+        add_error(report, CHECK_SUBJECT_HEADER, 0, "the map and the table do not fill META");
         sound = false;
     }
 
@@ -533,34 +574,41 @@ static int check_inode(const struct mfs_private *view, struct mfs_check_report *
 static int scan_inodes(const struct mfs_private *view, struct mfs_check_report *report)
 {
     k_u32_t per_block = MFS_BLOCK_SIZE / view->inode_size;
-    k_u32_t block_index;
+    k_u32_t walk;
 
-    for (block_index = 0; block_index < view->inode_blocks; block_index++) {
+    /*
+     * The table is walked one block of the medium at a time, whatever the
+     * order the version numbers its records in: the check of a large table
+     * costs the table and not the record count (ADR 0029, ADR 0038).
+     */
+    for (walk = 0; walk < view->inode_blocks; walk++) {
         k_u8_t block[MFS_BLOCK_SIZE];
         k_u32_t slot;
         int rc;
 
-        rc = mfs_priv_block_read(view->sb->meta_start + view->bitmap_blocks + block_index, block);
+        rc = mfs_priv_block_read(mfs_priv_table_block(view, walk), block);
         if (rc != MFS_OK) {
-            add_error(report, CHECK_SUBJECT_BLOCK,
-                      view->sb->meta_start + view->bitmap_blocks + block_index, "cannot be read");
+            add_error(report, CHECK_SUBJECT_BLOCK, mfs_priv_table_block(view, walk),
+                      "cannot be read");
             return rc;
         }
 
         for (slot = 0; slot < per_block; slot++) {
-            k_u32_t index = block_index * per_block + slot;
+            k_u32_t index = walk * per_block + slot;
             struct mfs_inode inode;
+            k_u32_t where;
+            k_u32_t offset;
 
             /* The record 0 is not used; the table may have a tail of them. */
             if (index == 0u || index > view->inode_capacity) {
                 continue;
             }
 
-            mfs_priv_inode_decode(block + slot * view->inode_size, view->inode_size, &inode);
+            mfs_priv_inode_address(view, index, &where, &offset);
+            record_decode(view, report, index, block, offset, &inode);
 
-            rc = check_inode(view, report, index, &inode);
-            if (rc != MFS_OK) {
-                return rc;
+            if (check_inode(view, report, index, &inode) != MFS_OK) {
+                return MFS_EIO;
             }
         }
     }
@@ -968,11 +1016,14 @@ static void add_repair_error(struct mfs_check_report *report, const char *text)
 
 /*
  * Read a record of the table without saying anything about it: the repair
- * reads a record it has already checked the index of.
+ * reads a record it has already checked the index of. A record that does not
+ * checksum is read as a free one, the rule of read_inode(), so that the
+ * entry that names it goes and its blocks come back (ADR 0038).
  */
 static int read_record(const struct mfs_private *view, k_u32_t index, struct mfs_inode *out)
 {
     k_u8_t block[MFS_BLOCK_SIZE];
+    k_u32_t where;
     k_u32_t offset;
     int rc;
 
@@ -980,15 +1031,19 @@ static int read_record(const struct mfs_private *view, k_u32_t index, struct mfs
         return MFS_EINVAL;
     }
 
-    rc = mfs_priv_block_read(view->sb->meta_start + view->bitmap_blocks +
-                                 (index * view->inode_size) / MFS_BLOCK_SIZE,
-                             block);
+    mfs_priv_inode_address(view, index, &where, &offset);
+
+    rc = mfs_priv_block_read(where, block);
     if (rc != MFS_OK) {
         return rc;
     }
 
-    offset = (index * view->inode_size) % MFS_BLOCK_SIZE;
     mfs_priv_inode_decode(block + offset, view->inode_size, out);
+
+    if ((out->flags & MFS_INODE_USED) != 0u &&
+        !mfs_priv_inode_sound(block + offset, view->inode_size)) {
+        memset(out, 0, sizeof(*out));
+    }
 
     return MFS_OK;
 }
@@ -1646,32 +1701,34 @@ static int repair_tree(const struct mfs_private *view, struct mfs_check_report *
 static int repair_orphans(const struct mfs_private *view, struct mfs_check_report *report)
 {
     k_u32_t per_block = MFS_BLOCK_SIZE / view->inode_size;
-    k_u32_t block_index;
+    k_u32_t walk;
 
-    for (block_index = 0; block_index < view->inode_blocks; block_index++) {
+    for (walk = 0; walk < view->inode_blocks; walk++) {
         k_u8_t block[MFS_BLOCK_SIZE];
         k_u32_t slot;
 
-        if (mfs_priv_block_read(view->sb->meta_start + view->bitmap_blocks + block_index, block) !=
-            MFS_OK) {
+        if (mfs_priv_block_read(mfs_priv_table_block(view, walk), block) != MFS_OK) {
             add_repair_error(report, "the medium did not answer a read");
             return MFS_EIO;
         }
 
         for (slot = 0; slot < per_block; slot++) {
-            k_u32_t index = block_index * per_block + slot;
+            k_u32_t index = walk * per_block + slot;
             struct mfs_inode inode;
             struct mfs_inode free_inode;
+            k_u32_t where;
+            k_u32_t offset;
             int rc;
 
             if (index == 0u || index > view->inode_capacity) {
                 continue;
             }
 
-            mfs_priv_inode_decode(block + slot * view->inode_size, view->inode_size, &inode);
+            mfs_priv_inode_address(view, index, &where, &offset);
+            mfs_priv_inode_decode(block + offset, view->inode_size, &inode);
 
             if ((inode.flags & MFS_INODE_USED) != 0u) {
-                if (reach_test(index)) {
+                if (reach_test(index) && mfs_priv_inode_sound(block + offset, view->inode_size)) {
                     continue;
                 }
             } else if (inode.flags == 0u) {

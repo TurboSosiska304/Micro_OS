@@ -635,14 +635,38 @@ static k_u32_t fs_bitmap_blocks(const struct mfs_superblock *sb)
     return (sb->data_blocks + 8u * MFS_BLOCK_SIZE - 1u) / (8u * MFS_BLOCK_SIZE);
 }
 
+/* Where the map of the free blocks starts (ADR 0038). */
+static k_u32_t fs_bitmap_start(const struct mfs_superblock *sb)
+{
+    return (sb->version >= MFS_VERSION) ? sb->info_start - sb->bitmap_blocks : sb->meta_start;
+}
+
+/*
+ * Where a record of the table lies. A version 3 volume numbers its records
+ * from the top of the table, which is anchored at the map next to INFO; the
+ * versions before it number them from the start of the table after the map.
+ */
 static k_u32_t fs_inode_block(k_u32_t index)
 {
+    if (g_fs.sb.version >= MFS_VERSION) {
+        k_u32_t per_block = MFS_BLOCK_SIZE / MFS_INODE_SIZE;
+        k_u32_t slots = index + 1u;
+
+        return (g_fs.sb.info_start - g_fs.sb.bitmap_blocks) - (slots + per_block - 1u) / per_block;
+    }
+
     return g_fs.sb.meta_start + fs_bitmap_blocks(&g_fs.sb) +
            (index * MFS_INODE_SIZE) / MFS_BLOCK_SIZE;
 }
 
 static k_u32_t fs_inode_offset(k_u32_t index)
 {
+    if (g_fs.sb.version >= MFS_VERSION) {
+        k_u32_t per_block = MFS_BLOCK_SIZE / MFS_INODE_SIZE;
+
+        return ((per_block - (index + 1u) % per_block) % per_block) * MFS_INODE_SIZE;
+    }
+
     return (index * MFS_INODE_SIZE) % MFS_BLOCK_SIZE;
 }
 
@@ -659,15 +683,29 @@ static bool fs_read_inode(k_u32_t index, struct mfs_inode *inode)
     return true;
 }
 
+/*
+ * Write a record the way a writer of the format does: the fields of the
+ * structure and, in a version 3 volume, the checksum of the 64-byte record.
+ * A record without its checksum is what the check of the volume calls a
+ * write that a power cut did not finish (ADR 0038).
+ */
 static bool fs_write_inode(k_u32_t index, const struct mfs_inode *inode)
 {
     k_u8_t block[MFS_BLOCK_SIZE];
+    k_u32_t at = fs_inode_offset(index);
 
     if (!fs_read_block(fs_inode_block(index), block)) {
         return false;
     }
 
-    memcpy(block + fs_inode_offset(index), inode, sizeof(*inode));
+    memset(block + at, 0, MFS_INODE_SIZE);
+    memcpy(block + at, inode, sizeof(*inode));
+
+    if (g_fs.sb.version == MFS_VERSION) {
+        struct mfs_inode_record *record = (struct mfs_inode_record *)(block + at);
+
+        record->crc = mfs_record_crc(record);
+    }
 
     return fs_write_block(fs_inode_block(index), block);
 }
@@ -676,7 +714,7 @@ static bool fs_write_inode(k_u32_t index, const struct mfs_inode *inode)
 static bool fs_bitmap_set(k_u32_t index, bool used)
 {
     k_u32_t per_block = 8u * MFS_BLOCK_SIZE;
-    k_u32_t number = g_fs.sb.meta_start + index / per_block;
+    k_u32_t number = fs_bitmap_start(&g_fs.sb) + index / per_block;
     k_u32_t byte = (index / 8u) % MFS_BLOCK_SIZE;
     k_u8_t bit = (k_u8_t)(1u << (index % 8u));
     k_u8_t block[MFS_BLOCK_SIZE];
@@ -697,7 +735,7 @@ static bool fs_bitmap_set(k_u32_t index, bool used)
 /* The map of the sound volume, where a free block can be found. */
 static bool fs_bitmap_used(k_u32_t index)
 {
-    k_size_t offset = (k_size_t)g_fs.sb.meta_start * MFS_BLOCK_SIZE + index / 8u;
+    k_size_t offset = (k_size_t)fs_bitmap_start(&g_fs.sb) * MFS_BLOCK_SIZE + index / 8u;
 
     return (g_fs.pristine[offset] & (1u << (index % 8u))) != 0u;
 }
@@ -798,8 +836,7 @@ static bool fs_fuzz_setup(void)
     }
     memcpy(&g_fs.sb, block, sizeof(g_fs.sb));
 
-    g_fs.capacity =
-        (g_fs.sb.meta_blocks - fs_bitmap_blocks(&g_fs.sb)) * MFS_BLOCK_SIZE / MFS_INODE_SIZE - 1u;
+    g_fs.capacity = g_fs.sb.inode_records - 1u;
 
     return true;
 
