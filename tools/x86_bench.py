@@ -46,6 +46,7 @@ Two shapes of the kernel are worth reading before a number means anything:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime
 import json
 import os
@@ -82,6 +83,13 @@ PARAMETERS = {
 # the release with the room of the two files.
 IMAGE_MB = 64
 
+# The wall clock of a line is the clock of the guest plus the console, the echo
+# of the command and the prompt. A host with another build on it starves the
+# emulator and adds much more than that, and a rate of a starved run is not a
+# number of the release: the tool warns and a person throws the run away.
+STARVATION_FACTOR = 2
+STARVATION_MS = 2000
+
 PIPE_FILE = "/bench.bin"
 FILE_FILE = "/bench.big"
 
@@ -108,6 +116,29 @@ TABLE_LINE = re.compile(r"^bench: (?P<name>[a-z_]+) (?P<value>[0-9]+\.[0-9]+) (?
 NOTE_LINE = re.compile(
     r"^bench note: (?P<name>[a-z_]+) (?P<count>[0-9]+) \w+ in (?P<ms>[0-9]+) ms$"
 )
+
+
+@contextlib.contextmanager
+def stdout_to_stderr():
+    """Send the writes of a child to the error stream for the length of a block.
+
+    `tools/x86_image.py` runs the host tool of MicroFS, and the tool prints
+    one line of its own to the standard output. That line is a note for a
+    person and not a row of the table: with `--json -` the standard output is
+    the document a caller parses, and a line of mkfs in it is a broken JSON.
+    The descriptor itself is moved, not `sys.stdout`, because a child process
+    writes to the descriptor the tool inherited.
+    """
+    sys.stdout.flush()
+    saved = os.dup(1)
+
+    try:
+        os.dup2(2, 1)
+        yield
+    finally:
+        sys.stdout.flush()
+        os.dup2(saved, 1)
+        os.close(saved)
 
 
 def commit() -> str:
@@ -158,6 +189,16 @@ def run_step(machine: Machine, command: str, timeout: float) -> tuple:
     return answer, wall_ms
 
 
+def starved(results: list) -> list:
+    """The rows whose line took far longer on the host than in the machine."""
+    return [
+        result["name"] for result in results
+        if result["guest_ms"] is not None
+        and result["wall_ms"] is not None
+        and result["wall_ms"] > result["guest_ms"] * STARVATION_FACTOR + STARVATION_MS
+    ]
+
+
 def human_summary(results: list, boot_seconds: float, seconds: float, fs: str, out) -> None:
     print("Micro OS — the numbers of the x86-64 port", file=out)
     print("=" * 78, file=out)
@@ -174,6 +215,12 @@ def human_summary(results: list, boot_seconds: float, seconds: float, fs: str, o
               f" {guest:>10} {host:>8}  {result['what']}", file=out)
 
     print("=" * 78, file=out)
+
+    slow = starved(results)
+
+    if slow:
+        print(f"  the host was busy: {', '.join(slow)} took far longer on the host"
+              " than in the machine, and the run is not a number of the release", file=out)
 
 
 def main(argv: list) -> int:
@@ -219,8 +266,11 @@ def main(argv: list) -> int:
 
     started = time.monotonic()
 
-    if build_image(image, args.build, args.mkfs, IMAGE_MB, fs=args.fs, data_mb=0,
-                   extra=["--program", program]) != 0:
+    with (stdout_to_stderr() if args.json == "-" else contextlib.nullcontext()):
+        written = build_image(image, args.build, args.mkfs, IMAGE_MB, fs=args.fs, data_mb=0,
+                              extra=["--program", program])
+
+    if written != 0:
         print("the image of the run could not be written", file=sys.stderr)
         return 1
 
@@ -344,6 +394,7 @@ def main(argv: list) -> int:
             "boot_seconds": round(boot_seconds, 3),
             "run_seconds": round(seconds_all, 3),
             "parameters": PARAMETERS,
+            "starved": starved(results),
             "results": results,
         }
         text = json.dumps(document, indent=2, ensure_ascii=False) + "\n"

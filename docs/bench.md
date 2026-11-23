@@ -194,6 +194,13 @@ release gate run each side three times and compare the middle of the three;
 a lane that claims a rate says which of the two clocks the number is, and how
 many runs it took.
 
+The host is shared with everything else on it. A build or a second QEMU beside
+the run starves the emulator, and the guest clock and the host clock then part
+company: the pipe of a run under load that took 21 s in the machine took
+127 s on the host, and `syscall_getpid` fell by half. The tool compares the
+two clocks and prints `the host was busy: ...` under the table (the JSON has
+`"starved": [...]`); **that run is thrown away** and not compared.
+
 ## What the table does not cover
 
 * **Latency.** Every row is a rate of many operations; the worst call, the
