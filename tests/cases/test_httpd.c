@@ -23,10 +23,17 @@
 #include "mfs/mfs_vfs.h"
 #include "net/httpd.h"
 
-#define TEST_PORT 18096
 #define TEST_BLOCKS 2048
 #define TEST_ROOT "/www"
 #define TEST_DATA_SIZE 65536
+
+/*
+ * The sessions this case asks for. The table of the tasks of the kernel has
+ * 32 slots and the suite before this case leaves its own tasks in it, so six
+ * sessions are what the test surely holds; the ceiling is a number of the
+ * configuration and the case proves the rule with it.
+ */
+#define TEST_CONNECTIONS 6
 
 static struct mfs_ram_device g_volume;
 static struct k_blockdev g_device;
@@ -34,6 +41,52 @@ static struct k_blockdev g_device;
 static const char g_page[] = "<html><body>hello from the volume</body></html>\n";
 static k_u8_t g_data[TEST_DATA_SIZE];
 static char g_big[TEST_DATA_SIZE + 4096];
+
+/*
+ * A port of the loopback for this process, taken once. Two worktrees of a
+ * host run this suite at the same time, and a number written in the tree
+ * belongs to whichever of them bound it first - the other one then fails a
+ * check that has nothing to do with the code under test. The port is asked
+ * of the kernel with a listener of its own: a probe that binds is a port
+ * that is free at this moment, and the caller starts the server with the
+ * number that follows it when the start itself loses the race.
+ */
+static k_u16_t test_free_port(void)
+{
+    static k_u16_t s_candidate;
+
+    if (s_candidate == 0) {
+        /* The moment of this process is the seed: two copies of the suite
+         * start at different times, and a collision that the seed cannot
+         * avoid is caught by the probe below and by the start of the server. */
+        s_candidate = (k_u16_t)(18100u + (k_u32_t)(k_sysinfo_uptime_ms() % 5000u));
+    }
+
+    {
+        unsigned attempt;
+
+        for (attempt = 0; attempt < 500; attempt++) {
+            k_server_t *probe;
+
+            if (s_candidate < 18100u || s_candidate >= 24000u) {
+                s_candidate = 18100u;
+            }
+
+            probe = k_server_listen(s_candidate);
+
+            if (probe != NULL) {
+                k_server_close(probe);
+                return s_candidate++;
+            }
+
+            s_candidate++;
+        }
+    }
+
+    /* A machine with every number of the range taken is a machine this test
+     * cannot use; the caller reads the zero and fails with its own words. */
+    return 0;
+}
 
 /* --- the tree of the test --- */
 
@@ -95,12 +148,16 @@ static void drop_tree(void)
 
 /* --- the client of the test --- */
 
+/* The port the server took for this run: the case finds it once and every
+ * client of the test asks it. */
+static k_u16_t s_server_port;
+
 static k_socket_t *client_open(void)
 {
     int attempt;
 
     for (attempt = 0; attempt < 20; attempt++) {
-        k_socket_t *client = k_socket_connect("127.0.0.1", TEST_PORT, 1000);
+        k_socket_t *client = k_socket_connect("127.0.0.1", s_server_port, 1000);
 
         if (client != NULL) {
             return client;
@@ -162,7 +219,10 @@ static bool answer_complete(const char *buffer, k_size_t used, k_size_t *head_le
  */
 static k_size_t client_read(k_socket_t *client, char *buffer, k_size_t size, bool until_close)
 {
-    k_u64_t deadline = k_sysinfo_uptime_ms() + 4000u;
+    /* Ten seconds and not four: the answer is the server's task, and a host
+     * that builds three worktrees at once schedules it late. The bound is
+     * still a bound - a door that never answers fails this case. */
+    k_u64_t deadline = k_sysinfo_uptime_ms() + 10000u;
     k_size_t used = 0;
     k_size_t head_len = 0;
 
@@ -488,112 +548,263 @@ static void test_idle_timeout(void)
     k_socket_close(client);
 }
 
+/*
+ * The number of sessions of the door, as the test keeps it: the count is the
+ * server's and the wait is the test's, so a door that took the client but has
+ * not counted it yet is a wait and not an answer to the next check.
+ */
+static bool wait_for_sessions(k_u32_t want, k_u32_t stable_ms, k_u32_t timeout_ms, const char *what)
+{
+    k_u64_t deadline = k_sysinfo_uptime_ms() + (k_u64_t)timeout_ms;
+    k_u64_t stable_since = 0;
+    bool steady = false;
+
+    for (;;) {
+        if (httpd_active() == want) {
+            if (!steady) {
+                steady = true;
+                stable_since = k_sysinfo_uptime_ms();
+            } else if (k_sysinfo_uptime_ms() - stable_since >= (k_u64_t)stable_ms) {
+                return true;
+            }
+        } else {
+            steady = false;
+        }
+
+        if (k_sysinfo_uptime_ms() >= deadline) {
+            ktest_fail(__FILE__, __LINE__, "%s: %u session(s) after %u ms, wanted %u", what,
+                       (unsigned)httpd_active(), (unsigned)timeout_ms, (unsigned)want);
+            return false;
+        }
+
+        k_sched_sleep_ms(10);
+    }
+}
+
+/*
+ * A client that closes is a session that ends. The door of this phase keeps
+ * an idle session for thirty seconds, so a session that waited for its
+ * timeout instead of the close would still be counted here: the wait of the
+ * check is five seconds and the difference is the point of the case.
+ */
+static void test_close_is_noticed(void)
+{
+    static const char ask[] = "GET /index.html HTTP/1.1\r\nHost: t\r\n\r\n";
+    char answer[1024];
+    k_socket_t *client;
+
+    ktest_begin("httpd: a session ends at the close of the client");
+
+    client = client_open();
+    KT_CHECK(client != NULL);
+
+    if (client == NULL) {
+        return;
+    }
+
+    KT_CHECK_INT_EQ(k_socket_send(client, ask, sizeof(ask) - 1, true), (int)(sizeof(ask) - 1));
+    KT_CHECK(client_read(client, answer, sizeof(answer), false) > 0);
+    KT_CHECK(wait_for_sessions(1, 0, 5000u, "the session of the client"));
+
+    k_socket_close(client);
+
+    KT_CHECK(wait_for_sessions(0, 100u, 5000u, "the session after the close"));
+}
+
+/*
+ * A client that closes in the instant between its connect and the session of
+ * the door is the case where a count added after the task exists is lost:
+ * the task may run and give its count back before the accept loop counts it.
+ * The door counts first and serves after, and twenty of these leave nothing
+ * behind.
+ */
+static void test_ghost_clients(void)
+{
+    unsigned i;
+
+    ktest_begin("httpd: clients that close at once leave no session behind");
+
+    for (i = 0; i < 20; i++) {
+        k_socket_t *ghost = client_open();
+
+        if (ghost != NULL) {
+            k_socket_close(ghost);
+        }
+    }
+
+    KT_CHECK(wait_for_sessions(0, 300u, 10000u, "the ghosts of the door"));
+}
+
+/*
+ * The ceiling of the sessions. Every session of the door is one client that
+ * has asked something and stays for the next request, and the door of this
+ * phase keeps it for thirty seconds - so the count is the count of the
+ * clients, not of the seconds of a loaded host. A client over it is refused
+ * with 503, and the count comes back to zero after the clients close: a
+ * session that is still there ten seconds later is a leak and the check says
+ * so with the numbers of the door.
+ */
 static void test_ceiling(void)
 {
-    static k_socket_t *idle[HTTPD_CONNECTIONS];
+    static k_socket_t *idle[TEST_CONNECTIONS];
+    static const char ask[] = "GET /index.html HTTP/1.1\r\nHost: t\r\n\r\n";
     char answer[1024];
-    k_u32_t i;
     k_u32_t opened = 0;
+    k_u32_t i;
+    bool full = true;
 
     ktest_begin("httpd: the ceiling of the sessions refuses and says so");
 
-    for (i = 0; i < HTTPD_CONNECTIONS; i++) {
+    for (i = 0; i < TEST_CONNECTIONS; i++) {
+        k_size_t used;
+
         idle[i] = client_open();
 
         if (idle[i] == NULL) {
+            full = false;
             break;
         }
 
         opened++;
 
-        /* The session has to be taken by the server before the next one
-         * arrives, so the counter of the accepted sessions is real: the
-         * accept loop of a busy machine is not the speed of this test. */
-        for (k_u32_t wait = 0; wait < 100 && httpd_active() < opened; wait++) {
-            k_sched_sleep_ms(20);
+        /* A request, so the session is one of the door and not a client the
+         * accept has not taken yet: the answer is read and the connection
+         * stays for the next request, which is what keep-alive is. */
+        KT_CHECK_INT_EQ(k_socket_send(idle[i], ask, sizeof(ask) - 1, true), (int)(sizeof(ask) - 1));
+
+        used = client_read(idle[i], answer, sizeof(answer), false);
+        KT_CHECK(used > 0);
+
+        if (used == 0 || !wait_for_sessions(opened, 0, 5000u, "a session of the door")) {
+            full = false;
+            break;
         }
     }
 
-    KT_CHECK_INT_EQ((int)opened, (int)HTTPD_CONNECTIONS);
-    KT_CHECK_INT_EQ((int)httpd_active(), (int)HTTPD_CONNECTIONS);
+    KT_CHECK(full);
 
-    {
+    if (full) {
         k_socket_t *extra = client_open();
 
         KT_CHECK(extra != NULL);
+
         if (extra != NULL) {
-            KT_CHECK_INT_EQ(
-                k_socket_send(extra, "GET /index.html HTTP/1.1\r\nHost: t\r\n\r\n", 36, true), 36);
+            k_size_t used;
 
-            {
-                k_size_t used = client_read(extra, answer, sizeof(answer), false);
+            KT_CHECK_INT_EQ(k_socket_send(extra, ask, sizeof(ask) - 1, true),
+                            (int)(sizeof(ask) - 1));
 
-                KT_CHECK(used > 0);
-                KT_CHECK(strstr(answer, "503 Service Unavailable") != NULL);
+            used = client_read(extra, answer, sizeof(answer), false);
+
+            /* The session over the ceiling is refused: the answer is read or
+             * the case says what the door did instead, with its numbers,
+             * rather than failing on a race of a moment. */
+            if (used == 0 || strstr(answer, "503 Service Unavailable") == NULL) {
+                ktest_fail(__FILE__, __LINE__,
+                           "the session over the ceiling was not refused: %u byte(s), "
+                           "%u active, %u request(s), %u refused",
+                           (unsigned)used, (unsigned)httpd_active(), (unsigned)httpd_requests(),
+                           (unsigned)httpd_refused());
             }
 
+            KT_CHECK(strstr(answer, "503 Service Unavailable") != NULL);
             k_socket_close(extra);
         }
+
+        KT_CHECK(httpd_refused() >= 1u);
     }
 
-    KT_CHECK(httpd_refused() >= 1u);
     KT_CHECK(httpd_requests() > 0u);
 
     for (i = 0; i < opened; i++) {
         k_socket_close(idle[i]);
     }
 
-    /* The sessions end at the close of the client; the stop below waits for
-     * the last of them as well. */
-    /* Ten seconds and not four: a session is a task of the machine, and a
-     * host that builds three worktrees at once schedules it late. The check is
-     * that the ceiling lets go - the moment it does is not the subject. */
-    for (i = 0; i < 500 && httpd_active() > 0; i++) {
-        k_sched_sleep_ms(20);
+    /* The sessions end at the close of the client; the count has to come
+     * back to zero and stay there, which is what the steady window says. */
+    KT_CHECK(wait_for_sessions(0, 500u, 10000u, "the sessions after the close"));
+}
+
+/* The server of a phase of the case: a port of the machine and the timeout
+ * the phase needs. A port that loses the race to another copy of the suite
+ * costs the next number and not the case. */
+static bool start_server(k_u32_t idle_ms)
+{
+    unsigned attempt;
+
+    for (attempt = 0; attempt < 8; attempt++) {
+        struct httpd_config config;
+
+        memset(&config, 0, sizeof(config));
+        config.root = TEST_ROOT;
+        config.log = "";
+        config.connections = TEST_CONNECTIONS;
+        config.idle_timeout_ms = idle_ms;
+        config.port = test_free_port();
+
+        if (httpd_start(&config) == HTTPD_OK) {
+            s_server_port = (k_u16_t)httpd_port();
+            return true;
+        }
     }
 
-    KT_CHECK_INT_EQ((int)httpd_active(), 0);
+    return false;
 }
 
 void test_httpd(void)
 {
-    struct httpd_config config;
-
     if (!make_tree()) {
         KT_CHECK(false);
         return;
     }
 
-    memset(&config, 0, sizeof(config));
-    config.root = TEST_ROOT;
-    config.log = "";
-    config.port = TEST_PORT;
-    config.connections = HTTPD_CONNECTIONS;
-    config.idle_timeout_ms = 2000;
-
     ktest_begin("httpd: the server starts on a port of the test");
 
-    KT_CHECK_INT_EQ(httpd_start(&config), HTTPD_OK);
+    KT_CHECK(start_server(2000));
     KT_CHECK(httpd_running());
-    KT_CHECK_INT_EQ((int)httpd_port(), TEST_PORT);
+    KT_CHECK(httpd_port() != 0);
     KT_CHECK(httpd_root() != NULL && strcmp(httpd_root(), TEST_ROOT) == 0);
 
     test_static();
     test_refusals();
     test_keepalive();
     test_idle_timeout();
-    test_ceiling();
 
     ktest_begin("httpd: the door closes");
     httpd_stop();
     KT_CHECK(!httpd_running());
     KT_CHECK_INT_EQ((int)httpd_port(), 0);
 
+    /* The ceiling wants sessions that are still there when the last client
+     * arrives: the door of this phase keeps an idle session for thirty
+     * seconds, and the sessions of the idle test above are the ones of its
+     * two seconds. The two phases do not share a timeout because they do not
+     * ask the same question. */
+    ktest_begin("httpd: the door serves the ceiling with a long idle timeout");
+    KT_CHECK(start_server(30000));
+    KT_CHECK(httpd_running());
+
+    test_close_is_noticed();
+    test_ghost_clients();
+    test_ceiling();
+
+    ktest_begin("httpd: the door closes after the ceiling");
+    httpd_stop();
+    KT_CHECK(!httpd_running());
+
     /* A root that is not a directory of the volume is a refusal with a
      * sentence, not a server that serves nothing. */
     ktest_begin("httpd: a root that is not there is refused");
-    config.root = TEST_ROOT "/missing";
-    KT_CHECK_INT_EQ(httpd_start(&config), HTTPD_EROOT);
+    {
+        struct httpd_config config;
+
+        memset(&config, 0, sizeof(config));
+        config.root = TEST_ROOT "/missing";
+        config.log = "";
+        config.port = test_free_port();
+
+        KT_CHECK_INT_EQ(httpd_start(&config), HTTPD_EROOT);
+    }
     KT_CHECK(!httpd_running());
 
     drop_tree();
