@@ -238,7 +238,7 @@ size_t fread(void *buffer, size_t size, size_t count, FILE *stream)
 
     /* The byte of ungetc is the first byte of the read. */
     if (stream->pushback >= 0 && got < total) {
-        *bytes++ = (unsigned char)stream->pushback;
+        bytes[got] = (unsigned char)stream->pushback;
         stream->pushback = -1;
         got++;
     }
@@ -527,7 +527,32 @@ int fseek(FILE *stream, long offset, int whence)
         return 0;
     }
 
+    /*
+     * A relative seek counts from the position of the stream, and the
+     * descriptor is ahead of it by the bytes the block holds and the reader
+     * has not taken (and by the byte of `ungetc`, which the stream still owes
+     * the reader). Asking the descriptor for SEEK_CUR would land past the
+     * unread tail: a `fseek(f, 1, SEEK_CUR)` after a short read moved the
+     * position by a whole block.
+     */
+    if (whence == ULIBC_SEEK_CUR) {
+        long here = lseek(stream->fd, 0, SEEK_CUR);
+
+        if (here < 0) {
+            stream->error = 1;
+            return -1;
+        }
+
+        here -= (long)(stream->chunk_len - stream->chunk_at);
+        if (stream->pushback >= 0) {
+            here -= 1;
+        }
+        offset += here;
+        whence = ULIBC_SEEK_SET;
+    }
+
     stream->pushback = -1;
+
     stream->chunk_at = 0;
     stream->chunk_len = 0;
     rc = lseek(stream->fd, offset, whence);
@@ -561,8 +586,14 @@ long ftell(FILE *stream)
     }
 
     /* The bytes of the block are ahead of the descriptor: the position of the
-     * stream is the one of the descriptor less what is still in the block. */
-    return rc - (long)(stream->chunk_len - stream->chunk_at);
+     * stream is the one of the descriptor less what is still in the block,
+     * and less the byte of `ungetc`, which the reader will see again. */
+    rc -= (long)(stream->chunk_len - stream->chunk_at);
+    if (stream->pushback >= 0) {
+        rc -= 1;
+    }
+
+    return rc;
 }
 
 void rewind(FILE *stream)

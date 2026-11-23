@@ -709,6 +709,16 @@ set(SBASE_LIBC_SOURCES
 # programs of the tree they replace are not built for this port. The heap is
 # the arena of the program, the bss of the image (capped at a megabyte by the
 # format); sort and find hold a file there.
+# The test of the streams of the library: `ungetc`, `fread` and a relative
+# seek need a kernel under them and no shell command exercises the three
+# together, so the machine carries a program that does. It is built with the
+# same library as the tools (the streams, the arena, the formatter).
+add_libc_program(streams
+    MAIN "${PROGRAM_DIR}/streams.c"
+    SOURCES ${SBASE_LIBC_SOURCES}
+    DEFINES ULIBC_HEAP_SIZE=65536u
+)
+
 function(add_sbase_program tool heap)
     add_libc_program(${tool}
         MAIN "${SBASE_DIR}/${tool}.c"

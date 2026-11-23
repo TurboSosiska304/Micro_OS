@@ -81,6 +81,8 @@ COMMANDS = [
     "chown 0 /bin/hello",
     "exec /bin/hello",
     "exec /bin/hello one two",
+    # The test of the streams: ungetc, fread and a relative seek.
+    "exec /bin/streams",
     # The programs of the library (ADR 0016): a file through open/read/
     # write and the formatter, a line of arguments, and a directory through
     # readdir. The file they read is /etc/setting of the image.
@@ -1245,6 +1247,14 @@ def check(output: str) -> list:
     expect(
         "the shell runs the program through execve",
         "the program has finished" in answer("exec /bin/hello", 1),
+    )
+    # The streams of the library: a byte given back with `ungetc` is the first
+    # byte of the next `fread`, and a relative seek counts from the stream and
+    # not from the descriptor (the block of read-ahead sits between them).
+    # Both were wrong in 1.2.0; the program says so in one line.
+    expect(
+        "a stream reads a byte given back and seeks from the stream",
+        "streams: ok" in answer("exec /bin/streams"),
     )
     expect(
         "the program of the shell writes to the console",
