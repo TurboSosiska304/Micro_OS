@@ -553,10 +553,82 @@ static void say_error(int code)
     case PKG_EEXIST:
         pkg_error("the name is already there");
         break;
+    case PKG_ELICENSE:
+        pkg_error("the package is copyleft and names no usable source");
+        break;
     default:
         pkg_error("the volume refused the call");
         break;
     }
+}
+
+/*
+ * The license rule of ADR 0025: copyleft lives in the repository of the
+ * programs and not in the kernel image, and a person who installs one gets
+ * the source with it. The license is an SPDX string, so the family is the
+ * prefix of it; a string this machine does not know is not copyleft as far
+ * as it can tell, and the signature of the index is what says the repository
+ * meant it.
+ */
+static char ascii_lower(char c)
+{
+    return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+}
+
+static bool starts_with_ignore_case(const char *text, const char *prefix)
+{
+    while (*prefix != '\0') {
+        if (ascii_lower(*text) != *prefix) {
+            return false;
+        }
+
+        text++;
+        prefix++;
+    }
+
+    return true;
+}
+
+static bool copyleft_license(const char *license)
+{
+    static const char *const families[] = {"gpl-", "lgpl-", "agpl-", "cddl-"};
+    k_size_t i;
+
+    for (i = 0; i < K_ARRAY_SIZE(families); i++) {
+        if (starts_with_ignore_case(license, families[i])) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/*
+ * A copyleft package installs only when the index names where its source is
+ * and the digest of the archive there: the source is the other half of the
+ * promise of the license, and a machine that cannot say where it came from
+ * would be distributing a binary alone. A permissive package needs neither
+ * (MIT, BSD, Apache-2.0 and the rest), and a local file (-U) is not asked,
+ * because it has no index to read the answer from.
+ */
+static int license_check(const struct pkg_entry *entry)
+{
+    if (!copyleft_license(entry->license)) {
+        return PKG_OK;
+    }
+
+    if (entry->source[0] == '\0') {
+        pkg_error("%s is %s and names no source", entry->name, entry->license);
+        return PKG_ELICENSE;
+    }
+
+    if (!pkg_digest_is_hex(entry->source_sha256)) {
+        pkg_error("%s is %s and the digest of its source is not 64 hex digits", entry->name,
+                  entry->license);
+        return PKG_ELICENSE;
+    }
+
+    return PKG_OK;
 }
 
 static int plan_for(const struct pkg_options *options, const struct pkg_entry *entry,
@@ -707,6 +779,8 @@ static int write_record(const struct pkg_plan *plan)
     memcpy(record.version, plan->entry.version, sizeof(record.version));
     memcpy(record.machine, plan->entry.machine, sizeof(record.machine));
     memcpy(record.file, plan->entry.file, sizeof(record.file));
+    memcpy(record.license, plan->entry.license, sizeof(record.license));
+    memcpy(record.source, plan->entry.source, sizeof(record.source));
     memcpy(record.sha256, plan->entry.sha256, sizeof(record.sha256));
     record.abi = plan->entry.abi;
     record.size = plan->entry.size;
@@ -917,6 +991,11 @@ static int install_entry(struct pkg_options *options, const char *repo,
     struct pkg_plan plan;
     char source[PKG_PATH_MAX];
     int rc;
+
+    rc = license_check(entry);
+    if (rc != PKG_OK) {
+        return rc;
+    }
 
     if (strcmp(entry->machine, PKG_MACHINE) != 0) {
         pkg_error("%s is for %s, this machine is %s", entry->name, entry->machine, PKG_MACHINE);
@@ -1330,6 +1409,20 @@ static void print_record_info(const struct pkg_record *record)
     pkg_plain("ABI            : %u", (unsigned)record->abi);
     pkg_plain("Size           : %llu", (unsigned long long)record->size);
     pkg_plain("SHA-256        : %s", record->sha256);
+
+    /*
+     * The license and the source are there when the index of the install
+     * named them: a record of a local file (-U) has no index behind it, and
+     * one written before 1.4 has no line for either.
+     */
+    if (record->license[0] != '\0') {
+        pkg_plain("License        : %s", record->license);
+    }
+
+    if (record->source[0] != '\0') {
+        pkg_plain("Source         : %s", record->source);
+    }
+
     pkg_plain("Explicit       : %s", record->explicit_install ? "yes" : "no");
     pkg_plain("File           : %s/%s", PKG_BINDIR, record->name);
 }
@@ -1497,6 +1590,17 @@ static int command_info(struct pkg_options *options)
         pkg_plain("Size           : %llu", (unsigned long long)entry->size);
         pkg_plain("SHA-256        : %s", entry->sha256);
         pkg_plain("Summary        : %s", entry->summary);
+
+        /* The two fields of ADR 0025, when the repository names them: the
+         * person sees what the license asks of the machine before the
+         * install, which is the point of the rule. */
+        if (entry->license[0] != '\0') {
+            pkg_plain("License        : %s", entry->license);
+        }
+
+        if (entry->source[0] != '\0') {
+            pkg_plain("Source         : %s", entry->source);
+        }
     }
 
     return KSHELL_OK;

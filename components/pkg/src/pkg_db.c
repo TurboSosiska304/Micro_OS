@@ -53,6 +53,10 @@ static void record_field(struct pkg_record *record, const char *key, const char 
         snprintf(record->file, sizeof(record->file), "%s", value);
     } else if (strcmp(key, "sha256") == 0) {
         snprintf(record->sha256, sizeof(record->sha256), "%s", value);
+    } else if (strcmp(key, "license") == 0) {
+        snprintf(record->license, sizeof(record->license), "%s", value);
+    } else if (strcmp(key, "source") == 0) {
+        snprintf(record->source, sizeof(record->source), "%s", value);
     } else if (strcmp(key, "abi") == 0) {
         record->abi = (k_u32_t)record_number(value);
     } else if (strcmp(key, "size") == 0) {
@@ -133,6 +137,31 @@ int pkg_db_write(const struct pkg_record *record)
 
     if (n < 0 || (k_size_t)n >= sizeof(text)) {
         return PKG_EIO;
+    }
+
+    /*
+     * The license and the source are added only when the record has them: a
+     * record of a local file stays the one it was, and an older machine
+     * skips the two lines it does not know.
+     */
+    if (record->license[0] != '\0') {
+        int extra = snprintf(text + n, sizeof(text) - (k_size_t)n, "license=%s\n", record->license);
+
+        if (extra < 0 || (k_size_t)extra >= sizeof(text) - (k_size_t)n) {
+            return PKG_EIO;
+        }
+
+        n += extra;
+    }
+
+    if (record->source[0] != '\0') {
+        int extra = snprintf(text + n, sizeof(text) - (k_size_t)n, "source=%s\n", record->source);
+
+        if (extra < 0 || (k_size_t)extra >= sizeof(text) - (k_size_t)n) {
+            return PKG_EIO;
+        }
+
+        n += extra;
     }
 
     return pkg_write(path, text, (k_size_t)n);
