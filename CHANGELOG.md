@@ -12,6 +12,13 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ## [Unreleased]
 
+### The release
+
+- 1.6.0-rc1: the release of the memory a program maps, the account of a
+  task, the interrupts of many cores, the disk on the bus, the pipes at the
+  speed of the memory and the machine in the network (`docs/releases/1.6.md`).
+
+
 ### Added
 
 - A server of the files of the volume, `httpd serve [port] [root]`
