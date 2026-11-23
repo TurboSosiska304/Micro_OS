@@ -90,6 +90,7 @@ if(NOT ESP_PLATFORM)
     set(MICROOS_ZLIB_DIR "${CMAKE_SOURCE_DIR}/third_party/zlib")
     set(MICROOS_ZSTD_DIR "${CMAKE_SOURCE_DIR}/third_party/zstd")
     set(MICROOS_LUA_DIR "${CMAKE_SOURCE_DIR}/third_party/lua")
+    set(MICROOS_SQLITE_DIR "${CMAKE_SOURCE_DIR}/third_party/sqlite")
     set(MICROOS_BC_DIR "${CMAKE_SOURCE_DIR}/third_party/bc")
 
     target_include_directories(microos_tests PRIVATE
@@ -377,7 +378,6 @@ if(NOT ESP_PLATFORM)
     # library with SQLITE_OS_OTHER=1 and the VFS of the port, whose calls here
     # are the libc of the host (SQLITE_PORT_HOST). The test of the case is
     # tests/cases/test_sqlite.c; the guest is /bin/sqlite3 of the smoke tests.
-    set(MICROOS_SQLITE_DIR "${CMAKE_SOURCE_DIR}/third_party/sqlite")
     set(MICROOS_SQLITE_SOURCES
         "${MICROOS_SQLITE_DIR}/sqlite3.c"
         "${MICROOS_SQLITE_DIR}/port/sqlite_vfs.c"
