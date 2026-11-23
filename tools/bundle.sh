@@ -162,6 +162,15 @@ board_bundle() {
         echo "    build-x86-iso/microos.iso -> MicroOS-${VERSION}.iso"
     fi
 
+    # The stick of a UEFI machine (`make uefi-stick`): a table of partitions
+    # and one ESP, which a machine of UEFI only starts from a stick written
+    # with dd. The ISO above is the door of a BIOS and of a CD; this is the
+    # door of a laptop of these years, and a release carries both.
+    if [ -f "$ROOT/build-uefi/stick.img" ]; then
+        cp -f "$ROOT/build-uefi/stick.img" "$OUT_DIR/MicroOS-${VERSION}-uefi.img"
+        echo "    build-uefi/stick.img -> MicroOS-${VERSION}-uefi.img"
+    fi
+
     chmod +x "$OUT_DIR/flash.sh" "$OUT_DIR/ota_usb.py"
 
     # One image for the board: the boot loader, the table of the partitions and

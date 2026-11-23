@@ -32,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format sdk idf-check idf-build idf-flash idf-monitor idf-size bundle bundle-board bundle-x86 x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-root-smoke x86-volume-smoke uefi uefi-run uefi-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-fs-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak x86-smp-smoke soak-smp bench
+.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format sdk idf-check idf-build idf-flash idf-monitor idf-size bundle bundle-board bundle-x86 x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-root-smoke x86-volume-smoke uefi uefi-run uefi-smoke uefi-stick x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-fs-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak x86-smp-smoke soak-smp bench
 
 help:
 	@echo "Micro OS — available targets:"
@@ -64,6 +64,7 @@ help:
 	@echo "  make x86-run-serial  boot it with the serial console (-nographic)"
 	@echo "  make x86-smoke  boot it and check what it says"
 	@echo "  make uefi       the same kernel as an image a firmware starts: a FAT"
+	@echo "  make uefi-stick the same wrapped in a table of partitions: a stick of a UEFI machine"
 	@echo "                  volume with BOOTX64.EFI, the kernel and disk.img"
 	@echo "  make uefi-run   boot that volume in QEMU under OVMF (a window)"
 	@echo "  make uefi-smoke boot it without a window and check the machine, the"
@@ -422,6 +423,21 @@ uefi: x86-build x86-disk
 	cmake --build $(X86_BUILD) --target uefi
 	python3 tools/uefi_esp.py --image $(UEFI_IMAGE) --build $(X86_BUILD) \
 		--disk $(X86_PROGRAMS_IMAGE)
+
+# The stick of a firmware machine: the ESP above, wrapped in the table of the
+# partitions a firmware reads before it looks for a file. A stick written with
+# `dd` from this image boots on a machine of UEFI only - no BIOS, no CD, no
+# optical drive - which is what a laptop of these years is. The size is the
+# table and the volume; the rest of a stick stays as it was.
+UEFI_STICK := $(UEFI_BUILD)/stick.img
+UEFI_STICK_MB := 64
+
+uefi-stick: uefi
+	rm -f $(UEFI_STICK)
+	truncate -s $(UEFI_STICK_MB)M $(UEFI_STICK)
+	printf 'label: gpt\n,48M,uefi\n' | sfdisk -q $(UEFI_STICK)
+	dd if=$(UEFI_IMAGE) of=$(UEFI_STICK) bs=512 seek=2048 conv=notrunc status=none
+	@echo "$(UEFI_STICK): write it with dd to a stick and start it from the menu of the firmware"
 
 # The machine of a person: the window of QEMU shows the picture of the
 # firmware and the keyboard of the window is the PS/2 keyboard of the port.

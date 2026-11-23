@@ -108,8 +108,11 @@ jobs:
       - name: the bootable medium of the x86-64 machine
         shell: bash
         run: |
-          (apt-get update -qq && apt-get install -y -qq xorriso limine ovmf) >/dev/null 2>&1 || true
+          # clang and lld-link build the loader of a firmware: the PE/COFF
+          # header of GNU ld is one the firmware does not read.
+          (apt-get update -qq && apt-get install -y -qq xorriso limine ovmf clang lld) >/dev/null 2>&1 || true
           make x86-iso || echo "the image is not in this bundle: xorriso or limine is missing"
+          make uefi-stick || echo "the stick is not in this bundle: clang or lld-link is missing"
 
       # The checks of the image are not part of the release gate - the package
       # of the firmware is not promised to the container - but a release log
