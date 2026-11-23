@@ -922,7 +922,12 @@ add_executable(microos_magic_compile
 target_include_directories(microos_magic_compile PRIVATE
     "${MICROOS_FILE_DIR}/src" "${MICROOS_FILE_DIR}/port"
 )
-target_compile_definitions(microos_magic_compile PRIVATE HAVE_CONFIG_H)
+# `_GNU_SOURCE` for the tool and not for the guest: the tool is compiled
+# against the libc of the host, where `asprintf`, `vasprintf` and
+# `strcasestr` are declared only under it, and a compiler of GCC 14 and later
+# makes an implicit declaration an error. The library of the guest reads the
+# library of the program, which declares them itself.
+target_compile_definitions(microos_magic_compile PRIVATE HAVE_CONFIG_H _GNU_SOURCE)
 target_compile_options(microos_magic_compile PRIVATE -Os ${MICROOS_FILE_WARNINGS})
 target_link_options(microos_magic_compile PRIVATE -no-pie)
 
