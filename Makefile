@@ -32,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle bundle-board bundle-x86 x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-root-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak x86-smp-smoke soak-smp
+.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format sdk idf-check idf-build idf-flash idf-monitor idf-size bundle bundle-board bundle-x86 x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-root-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak x86-smp-smoke soak-smp
 
 help:
 	@echo "Micro OS — available targets:"
@@ -53,6 +53,7 @@ help:
 	@echo "  make sim        build and run the host simulator"
 	@echo "  make clean      remove the host build directory"
 	@echo "  make format     reformat sources with clang-format"
+	@echo "  make sdk        the SDK of a program into build-sdk/microos-sdk/<version>/"
 	@echo "  make idf-build  build the ESP32 firmware"
 	@echo "  make idf-flash  flash the ESP32 firmware over USB"
 	@echo "  make idf-monitor attach the serial monitor"
@@ -197,13 +198,28 @@ sim: build
 	$(BUILD_DIR)/ports/port_host/microos_sim
 
 clean:
-	rm -rf $(BUILD_DIR) $(ASAN_DIR) $(MINIMAL_DIR) $(COVERAGE_DIR) $(SMP_DIR) build-tsan
+	rm -rf $(BUILD_DIR) $(ASAN_DIR) $(MINIMAL_DIR) $(COVERAGE_DIR) $(SMP_DIR) \
+		build-tsan build-sdk
 
 format:
 	@command -v clang-format >/dev/null 2>&1 || { echo "clang-format not found"; exit 1; }
 	find components ports main tests -type f \( -name '*.c' -o -name '*.h' \) \
 		-exec clang-format -i {} +
 	@echo "sources formatted"
+
+# The SDK: the headers of a program, the library of a program, the crt and the
+# link of the format, so that a program is built outside this tree - a
+# repository of its own, a `BUILD` file of a package, a machine with no
+# checkout (docs/porting-programs.md, ADR 0025 §6). The result is
+# $(DESTDIR)/microos-sdk/<version>/, and the version is the one of
+# components/kernel/include/kernel/config.h. The default is a build directory
+# and not `dist/`: the SDK is an artifact of a build, and `dist/` is the
+# bundle of a release, which `make integrity` reads as one.
+DESTDIR ?= build-sdk
+SDK_HEAP ?= 262144
+
+sdk:
+	sh tools/sdk/make_sdk.sh --destdir "$(DESTDIR)" --heap "$(SDK_HEAP)"
 
 idf-check:
 	@test -n "$(IDF_EXPORT)" || { \

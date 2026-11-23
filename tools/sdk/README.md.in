@@ -1,0 +1,184 @@
+# The Micro OS SDK @VERSION@
+
+The headers, the library and the link of a program of Micro OS, so that a
+program is built **outside the tree of the kernel**: a repository of its own,
+a `BUILD` file of a package, a copy on a machine that has no checkout of
+Micro OS. This is the SDK of the x86-64 port (the machine of QEMU); the board
+is not a target of it (ADR 0018).
+
+The version of the SDK is the version of the kernel it was cut from
+(@VERSION@). A program built with it is an image of the `MOX1` format and runs
+on a machine of the same release; the format and the numbers of the system
+calls change by adding only (ADR 0011).
+
+## What is in it
+
+```text
+VERSION                        the kernel version of the SDK
+include/                       the headers of a program
+  ulibc.h                      the library: every call of it, one page
+  stdio.h stdlib.h string.h ...  the POSIX names, each one including ulibc.h
+  kernel/ksys.h                the numbers and the structures of the calls
+  kernel/exec.h                the header of the MOX1 format
+  kernel/errno.h               the errors of the calls
+  kernel/types.h vfs.h task.h signal.h   the closure of ksys.h
+  prog.h                       the raw door, for a program with no library
+lib/libmicroos_user.a          the library of a program, statically linked
+lib/crt0.o                     its entry: `_start` of src/start.c
+lib/program.ld                 the addresses of the window of the port
+bin/mkprog.sh                  the sections of an ELF -> a MOX1 image
+bin/link_program.sh            the link of the window, which calls mkprog.sh
+bin/microos_sign               the host tool of the signature (ADR 0020)
+share/microos-toolchain.cmake  the CMake toolchain of a program
+share/build-libc.sh            the recipe that built lib/libmicroos_user.a
+share/src/libc/                the sources of that library (MIT, this tree)
+share/examples/hello/          a program that builds with this SDK alone
+share/README.md                this file
+```
+
+There is no `libc.so`, no `ld.so` and no compiler in the SDK: a program is
+linked once, statically, at the address of the window of the port, and the
+library it names is copied into its image. The C compiler is the one of the
+build machine (gcc or clang of x86-64 Linux), used as a freestanding compiler.
+
+## Build a program
+
+With CMake, which is what the toolchain file is for:
+
+```sh
+cmake -B build -S share/examples/hello \
+    -DCMAKE_TOOLCHAIN_FILE=$PWD/share/microos-toolchain.cmake
+cmake --build build
+file build/hello.mox
+```
+
+The image is `build/hello.mox`. It does not need the tree, the kernel's build
+or anything of this machine except the SDK and a compiler.
+
+The toolchain sets the system name to `Generic`, takes the headers of the SDK
+instead of the ones of the host (`-nostdinc`), compiles with `-Os
+-ffreestanding -mno-red-zone -march=x86-64 -fno-pic -fno-pie`, and links the
+objects with `lib/crt0.o` and `lib/libmicroos_user.a` through
+`bin/link_program.sh` and `lib/program.ld`. `add_executable` is the whole
+recipe; there is no `target_link_libraries` to write.
+
+Two options of the toolchain matter:
+
+* `-DMICROOS_FLOAT=ON` is for a program whose own numbers are doubles. The
+  port turns the XMM and x87 units on for ring 3 and its scheduler saves
+  neither, so one such program runs at a time and `execve` waits for it. A
+  program without it is compiled with `-mgeneral-regs-only`, and a `double` in
+  its text is a compile error instead of a silent wrong answer.
+* `-DMICROOS_GC_SECTIONS=OFF` keeps every function of the archive a program
+  names; the default drops what no call reaches.
+
+Without CMake, the three steps are the ones the toolchain runs:
+
+```sh
+cc -Os -ffreestanding -nostdinc -isystem $SDK/include \
+   -isystem "$(cc -print-file-name=include)" -march=x86-64 -mno-red-zone \
+   -fno-pic -fno-pie -fno-stack-protector -ffunction-sections -fdata-sections \
+   -c hello.c -o hello.o
+sh $SDK/bin/link_program.sh --cc cc --script $SDK/lib/program.ld \
+   --entry _start --out hello.mox --base 0x02000000 --arch x86-64 \
+   --mkprog $SDK/bin/mkprog.sh -- -Wl,--gc-sections \
+   $SDK/lib/crt0.o hello.o $SDK/lib/libmicroos_user.a
+```
+
+### The program itself
+
+```c
+#include <stdio.h>
+
+int main(int argc, char *const argv[], char *const envp[])
+{
+    printf("hello, %d argument(s)\n", argc);
+    return 0;
+}
+```
+
+`main` is a function of the program: the entry is `_start` of `lib/crt0.o`,
+which calls it and then `exit()` with its result (ADR 0016). A `return` from
+`_start` would land on nothing. The arguments and the environment are the
+vectors the kernel built for the image, as in a Unix-like system.
+
+### The limits of an image
+
+| Limit | Number | Why |
+|---|---|---|
+| the image | 8 MiB (`K_EXEC_MAX_IMAGE`) | the kernel reads the file into one block of the allocator |
+| the bss | 1 MiB (`K_EXEC_BSS_MAX`) | the arena of the library lives in the bss |
+| the arena of `malloc` | @HEAP@ bytes | the library was built with `--heap`; see below |
+| the window | 16 MiB | from `0x02000000` to `0x03000000`, with a 64 KiB stack at the top |
+| one read or write | 64 KiB (`KSYS_MAX_IO`) | the size of one block of the system call |
+
+A program that needs a bigger arena than the one of this SDK rebuilds the
+archive with another number and links that instead:
+
+```sh
+share/build-libc.sh --src share/src/libc --include include \
+    --out lib/libmicroos_user.a --crt0 lib/crt0.o --heap 786432
+```
+
+`--no-float` builds the smaller archive of a program that computes in
+integers (`-mgeneral-regs-only`, no `%f`, no `strtod` of a double, no
+`sscanf`). The library is built by the same compiler and cannot be shared
+between two programs: each image carries its copy, which is what "statically
+linked" means on a machine with no dynamic linker.
+
+### What the machine does not have
+
+* **`mmap`, `brk`, `sbrk`**: the memory of a program is its image, its 64 KiB
+  stack and the arena of the library, all decided at link time. There is no
+  call to ask the kernel for another page, and `malloc` is a block of the bss
+  and not a window of the kernel. A program with a working set bigger than
+  the arena does not have a slow path; it has a limit, and the table above
+  names it.
+* **`execve()` as in Linux**: the call enters the program as a task and
+  returns when the program has ended, with its status; the caller waits
+  inside the call. A program therefore runs alone while it runs, and a shell
+  that starts a program in the background is not a shape of this ABI yet.
+* **`fork()` of a kernel task**: `fork()` of a *program* is real on this port
+  (the page tables are copied with copy-on-write pages, and the child returns
+  0); a task of the kernel has no address space to copy, so a program cannot
+  be forked from the shell. The library's `fork()` also works around a debt
+  of the port: the page of the stack that holds the return of the call is
+  shared until the child runs, so the parent yields once before it uses its
+  stack again.
+* **`system()`, `popen()`**: there is no `/bin/sh` under a program and no pipe
+  from a program; `popen()` answers `ENOSYS`.
+* **a terminal**: `isatty()` answers 0, there is no `termios` state beyond the
+  one of the console, and the console turns a newline into CR LF by itself.
+* **symbolic links**: `symlink()` and `link()` answer `ENOSYS` (the VFS has no
+  links); the mode bits and the owner of a file are the ones of the
+  filesystem.
+
+The library reports the errors of a system call the way the ABI does: the
+negative number of `kernel/errno.h` is also kept in `errno`, so a portable
+source reads `-1` and `errno` as it expects.
+
+## The signature, and installing the program
+
+A machine of `1.3` and later installs a program with `pkg`, and `pkg` verifies
+the signature of the file (ADR 0024). The SDK carries the tool of the
+signature:
+
+```sh
+bin/microos_sign keygen --key my.key --pub my.pub
+bin/microos_sign sign-file --key my.key --in hello.mox --sig hello.mox.sig
+```
+
+A `.mox` with no signature is a file a person may put on a disk they wrote
+themselves; an install from a repository is a signed file and an index, and a
+copyleft package also carries its license and its source (ADR 0025).
+
+The image of a disk of the machine is written by the tree
+(`tools/x86_image.py --program /bin/hello=hello.mox`); the SDK does not write
+one.
+
+## License
+
+The files of this SDK are the sources of Micro OS and are MIT (the `LICENSE`
+of the tree). The library and the headers are copied from the tree at the
+version above; a program built with them is the program of its own author and
+carries the license of that author.
