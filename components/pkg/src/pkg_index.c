@@ -255,6 +255,12 @@ static int json_skip(struct json_cursor *c, int depth)
     }
 
     if (*c->p == '"') {
+        /* The opening quote is not the closing one: the walk starts after
+         * it, or the first character it looks at is the quote that opened
+         * the string and every value is skipped as empty - which is how a
+         * `homepage` of an index made the whole document unreadable. */
+        c->p++;
+
         /* A string longer than the window is still a string to skip: the
          * cursor walks it, the bytes are not kept. */
         for (;;) {

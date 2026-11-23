@@ -14,6 +14,7 @@
  */
 #include "ulibc.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -72,6 +73,16 @@ int main(void)
 
     if (fclose(file) != 0) {
         printf("streams: fclose failed\n");
+        return 1;
+    }
+
+    /* A relative name is resolved by the library, so a file that is not
+     * there answers ENOENT: before 1.4 a relative `rename` answered EINVAL,
+     * because the kernel has no current directory and the library did not
+     * resolve the name. */
+    errno = 0;
+    if (rename("no-such-a", "no-such-b") != -1 || errno != ENOENT) {
+        printf("streams: a relative rename answered %d\n", errno);
         return 1;
     }
 
