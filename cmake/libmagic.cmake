@@ -62,6 +62,15 @@ set(MICROOS_FILE_WARNINGS
     -Wno-missing-field-initializers
     -Wno-char-subscripts
     -Wno-undef
+    # The release copies a length it has checked at run time into a call the
+    # optimiser cannot see the check of: at -O2 GCC 14 and later read a
+    # `memcpy` of SIZE_MAX out of `cdf.c` and stop on -Werror. The bound is
+    # a fact of the code, not of the port.
+    -Wno-stringop-overflow
+    -Wno-stringop-truncation
+    -Wno-array-bounds
+    -Wno-restrict
+    -Wno-format-truncation
 )
 
 set(MICROOS_MAGIC_CONFIG "${MICROOS_FILE_DIR}/magic/subset.json")

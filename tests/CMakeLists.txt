@@ -93,6 +93,20 @@ if(NOT ESP_PLATFORM)
     set(MICROOS_SQLITE_DIR "${CMAKE_SOURCE_DIR}/third_party/sqlite")
     set(MICROOS_BC_DIR "${CMAKE_SOURCE_DIR}/third_party/bc")
 
+    # The tests are a host program of the release build, not a part of the
+    # shipment: a `snprintf` of a temporary path that the optimiser cannot
+    # bound is a test whose assertion sees the truncation, and the four
+    # diagnostics of GCC at -O2 that read every such path as a defect would
+    # stop the build of the bundle over a file that names a temporary. The
+    # product keeps all of them.
+    target_compile_options(microos_tests PRIVATE
+        -Wno-format-truncation
+        -Wno-stringop-truncation
+        -Wno-stringop-overflow
+        -Wno-array-bounds
+        -Wno-restrict
+    )
+
     target_include_directories(microos_tests PRIVATE
         "${CMAKE_CURRENT_LIST_DIR}/include"
         "${CMAKE_CURRENT_LIST_DIR}/framework"

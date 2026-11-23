@@ -1,5 +1,6 @@
 #include "kernel/kmod.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "kernel/log.h"
@@ -9,6 +10,28 @@ static struct kmod g_modules[KMOD_MAX];
 static k_size_t g_count;
 static int g_problems;
 
+/*
+ * A copy of a name that a compiler cannot read as a truncation: the loop
+ * stops one byte before the end and the last write is the zero. The kernel
+ * has no string header of its own, and `strncpy` followed by a zero - the
+ * idiom every libc offers - is still a truncation to GCC at -O2.
+ */
+static void copy_bounded(char *dst, k_size_t size, const char *src)
+{
+    k_size_t i = 0;
+
+    if (size == 0) {
+        return;
+    }
+    if (src != NULL) {
+        while (i + 1 < size && src[i] != '\0') {
+            dst[i] = src[i];
+            i++;
+        }
+    }
+    dst[i] = '\0';
+}
+
 static void kmod_set_info(struct kmod *mod, const char *text)
 {
     if (text == NULL) {
@@ -16,8 +39,7 @@ static void kmod_set_info(struct kmod *mod, const char *text)
         return;
     }
 
-    strncpy(mod->info, text, KMOD_INFO_MAX - 1);
-    mod->info[KMOD_INFO_MAX - 1] = '\0';
+    copy_bounded(mod->info, KMOD_INFO_MAX, text);
 }
 
 int kmod_register(const struct kmod *mod)

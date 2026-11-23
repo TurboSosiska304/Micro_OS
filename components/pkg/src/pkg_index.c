@@ -343,12 +343,17 @@ static int entry_finish(struct pkg_entry *entry, const struct pkg_index *index, 
     }
 
     if (entry->file[0] == '\0') {
-        int n = snprintf(entry->file, sizeof(entry->file), "%s-%s-%s.mox", entry->name,
-                         entry->version, entry->machine);
+        /* A buffer of its own: the destination and the three sources are
+         * members of one object, and the compiler of a release cannot tell
+         * that they do not overlap. */
+        char name[PKG_FILE_MAX];
+        int n = snprintf(name, sizeof(name), "%s-%s-%s.mox", entry->name, entry->version,
+                         entry->machine);
 
-        if (n < 0 || (k_size_t)n >= sizeof(entry->file)) {
+        if (n < 0 || (k_size_t)n >= sizeof(name)) {
             return PKG_EPARSE;
         }
+        memcpy(entry->file, name, (k_size_t)n + 1u);
     }
 
     if (!digest_is_hex(entry->sha256)) {

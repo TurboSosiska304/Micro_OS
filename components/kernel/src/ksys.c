@@ -365,6 +365,28 @@ static k_ssize_t sys_write(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys
     return KERR_BADF;
 }
 
+/*
+ * A copy of a name that a compiler cannot read as a truncation: the loop
+ * stops one byte before the end and the last write is the zero. The kernel
+ * has no string header of its own, and `strncpy` followed by a zero - the
+ * idiom every libc offers - is still a truncation to GCC at -O2.
+ */
+static void copy_bounded(char *dst, k_size_t size, const char *src)
+{
+    k_size_t i = 0;
+
+    if (size == 0) {
+        return;
+    }
+    if (src != NULL) {
+        while (i + 1 < size && src[i] != '\0') {
+            dst[i] = src[i];
+            i++;
+        }
+    }
+    dst[i] = '\0';
+}
+
 static k_ssize_t sys_open(ksys_arg_t path, ksys_arg_t flags, ksys_arg_t a2, ksys_arg_t a3,
                           ksys_arg_t a4, ksys_arg_t a5)
 {
@@ -419,7 +441,7 @@ static k_ssize_t sys_open(ksys_arg_t path, ksys_arg_t flags, ksys_arg_t a2, ksys
     }
 
     file->flags = (int)flags;
-    strncpy(file->path, name, sizeof(file->path) - 1);
+    copy_bounded(file->path, sizeof(file->path), name);
 
     return (k_ssize_t)fd;
 }

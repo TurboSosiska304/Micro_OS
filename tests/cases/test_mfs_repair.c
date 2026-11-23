@@ -579,7 +579,7 @@ static void test_size_against_chain(void)
     struct mfs_dirent entry;
     k_u32_t index;
     k_u32_t block;
-    k_u32_t tail;
+    k_u32_t tail = 0;
 
     ktest_begin("mfs repair: a size that does not match its chain is put right");
 

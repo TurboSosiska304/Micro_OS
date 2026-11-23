@@ -1,5 +1,6 @@
 #include "kernel/task.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "kernel/kfile.h"
@@ -28,6 +29,28 @@ const char *task_state_name(task_state_t state)
     return g_state_names[state];
 }
 
+/*
+ * A copy of a name that a compiler cannot read as a truncation: the loop
+ * stops one byte before the end and the last write is the zero. The kernel
+ * has no string header of its own, and `strncpy` followed by a zero - the
+ * idiom every libc offers - is still a truncation to GCC at -O2.
+ */
+static void copy_bounded(char *dst, k_size_t size, const char *src)
+{
+    k_size_t i = 0;
+
+    if (size == 0) {
+        return;
+    }
+    if (src != NULL) {
+        while (i + 1 < size && src[i] != '\0') {
+            dst[i] = src[i];
+            i++;
+        }
+    }
+    dst[i] = '\0';
+}
+
 void task_set_name(struct task *t, const char *name)
 {
     if (t == NULL) {
@@ -37,8 +60,7 @@ void task_set_name(struct task *t, const char *name)
         t->name[0] = '\0';
         return;
     }
-    strncpy(t->name, name, TASK_NAME_MAX - 1);
-    t->name[TASK_NAME_MAX - 1] = '\0';
+    copy_bounded(t->name, TASK_NAME_MAX, name);
 }
 
 void task_set_mem_priority(struct task *t, int priority)
@@ -266,8 +288,7 @@ void task_set_cwd(struct task *t, const char *dir)
         return;
     }
 
-    strncpy(t->cwd, dir, TASK_CWD_MAX - 1);
-    t->cwd[TASK_CWD_MAX - 1] = '\0';
+    copy_bounded(t->cwd, TASK_CWD_MAX, dir);
 }
 
 const char *task_get_cwd(struct task *t)

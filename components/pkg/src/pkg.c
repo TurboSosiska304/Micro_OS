@@ -423,12 +423,59 @@ static int repository_url(const char *repo, char *out, k_size_t size)
     return PKG_ENOENT;
 }
 
+/* One URL, appended by hand: a `snprintf` of a base and a file the compiler
+ * cannot bound would be a truncation warning and, worse, a truncated address
+ * that a download would follow. A string that does not fit is empty, and the
+ * caller answers there is no such address. */
+static void address_append(char *out, k_size_t size, k_size_t *used, const char *text)
+{
+    while (*text != '\0' && *used + 1u < size) {
+        out[(*used)++] = *text++;
+    }
+}
+
+/* A directory and a name, joined the same way: a name that does not fit is
+ * empty rather than half of a path. */
+static void path_join(char *out, k_size_t size, const char *dir, const char *name)
+{
+    k_size_t used = 0;
+
+    if (size == 0) {
+        return;
+    }
+
+    address_append(out, size, &used, dir);
+    if (used > 0 && out[used - 1] != '/') {
+        address_append(out, size, &used, "/");
+    }
+    address_append(out, size, &used, name);
+    out[used] = '\0';
+
+    if (used + 1u >= size) {
+        out[0] = '\0';
+    }
+}
+
 static void repository_address(char *out, k_size_t size, const char *base, const char *file)
 {
     k_size_t len = strlen(base);
+    k_size_t used = 0;
     bool slash = len > 0 && base[len - 1] == '/';
 
-    snprintf(out, size, "%s%s%s", base, slash ? "" : "/", file);
+    if (size == 0) {
+        return;
+    }
+
+    address_append(out, size, &used, base);
+    if (!slash) {
+        address_append(out, size, &used, "/");
+    }
+    address_append(out, size, &used, file);
+    out[used] = '\0';
+
+    if (used + 1u >= size) {
+        out[0] = '\0';
+    }
 }
 
 static const char *default_cache(void)
@@ -1705,7 +1752,7 @@ static int command_clean(struct pkg_options *options)
             continue;
         }
 
-        snprintf(path, sizeof(path), "%s/%s", cachedir, entries[i].name);
+        path_join(path, sizeof(path), cachedir, entries[i].name);
 
         if (options->dry_run) {
             pkg_say("remove %s", path);
