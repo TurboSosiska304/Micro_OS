@@ -28,8 +28,10 @@
 # kernel (components/kernel/src/cpu_default.c): a port that predates them is
 # one core, which is what the board is until its own work (ADR 0012). They are
 # recorded with the word `weak` so that `make integrity` asks the ports that
-# override the default for them and does not fail a port that does not.
-api 1 10
+# override the default for them and does not fail a port that does not. The
+# wake of a core (ADR 0034) is the third of them: a port without a wake-up
+# interrupt of its own leaves the task to the next tick of the core.
+api 1 11
 
 # kernel/port/console.h — the bytes in and out
 k_port_write kernel/port/console.h
@@ -41,6 +43,7 @@ k_port_console_poll kernel/port/console.h
 # kernel/port/cpu.h — the cores of the machine (a weak default is one core)
 k_port_cpu_count kernel/port/cpu.h weak
 k_port_cpu_id kernel/port/cpu.h weak
+k_port_cpu_wake kernel/port/cpu.h weak
 
 # kernel/port/exec.h — the window of the programs and the jump into one
 k_port_exec_supported kernel/port/exec.h

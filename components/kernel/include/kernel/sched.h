@@ -93,6 +93,17 @@ int k_sched_migrate(struct task *t, k_u32_t cpu);
 k_u32_t k_sched_task_cpu(const struct task *t);
 
 /*
+ * The tasks the scheduler has handed to another core since the boot - each
+ * one was followed by the wake call of the port, k_port_cpu_wake() - and the
+ * last of them: the core that got it and the ticks of that core at the moment
+ * of the hand-over. A port with a wake-up interrupt prints the pair beside its
+ * own count of the tasks the interrupt started, and a task that starts at the
+ * same tick started before that core's timer could have offered it.
+ */
+k_u32_t k_sched_remote_wakes(void);
+void k_sched_last_remote_wake(k_u32_t *cpu, k_u32_t *tick);
+
+/*
  * Check the invariants of the run queues: a task that is ready has to be in
  * the queue of its priority level, and a task in a queue has to be runnable
  * there - ready, or running in that queue, which is how the switch of this
