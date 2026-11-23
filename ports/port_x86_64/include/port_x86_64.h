@@ -45,6 +45,45 @@ static inline k_u16_t port_inw(k_u16_t port)
     return value;
 }
 
+/*
+ * A run of words through the same port, the way the BIOS moved a sector of a
+ * disk: one instruction, the count in RCX and the buffer in RDI or RSI. The
+ * two loops of `inw`/`outw` of a driver do the same job one word at a time,
+ * and on a machine that emulates an I/O port in software every one of those
+ * words is a trap of the emulator - 256 of them per sector of a disk. The
+ * repeated instruction enters the emulator once for the whole run.
+ *
+ * The buffer is the bytes of the caller and not a run of words: a word of
+ * the port is little endian and so is the memory, so what the drive sends
+ * lands in the buffer in the order the filesystem expects, with no swap. The
+ * two instructions do not ask for an aligned buffer either.
+ */
+static inline void port_insw(k_u16_t port, void *buf, k_size_t words)
+{
+    __asm__ volatile("rep insw" : "+D"(buf), "+c"(words) : "d"(port) : "memory");
+}
+
+static inline void port_outsw(k_u16_t port, const void *buf, k_size_t words)
+{
+    __asm__ volatile("rep outsw" : "+S"(buf), "+c"(words) : "d"(port) : "memory");
+}
+
+/*
+ * The same run, four bytes at a time. The data register of a disk is 16 bits
+ * wide, and a 32-bit access to it is two of those words in one turn of the
+ * bus - the 32-bit PIO of every PC made after 1994. The order is the one of
+ * the memory: the low word first.
+ */
+static inline void port_insl(k_u16_t port, void *buf, k_size_t words)
+{
+    __asm__ volatile("rep insl" : "+D"(buf), "+c"(words) : "d"(port) : "memory");
+}
+
+static inline void port_outsl(k_u16_t port, const void *buf, k_size_t words)
+{
+    __asm__ volatile("rep outsl" : "+S"(buf), "+c"(words) : "d"(port) : "memory");
+}
+
 static inline void port_outl(k_u16_t port, k_u32_t value)
 {
     __asm__ volatile("outl %0, %1" : : "a"(value), "Nd"(port));
