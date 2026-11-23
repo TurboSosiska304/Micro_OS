@@ -15,6 +15,16 @@
 void k_port_write(const char *data, k_size_t len);
 
 /*
+ * The screen of the last resort: the panic handler calls this before it
+ * writes a byte. A port whose screen may have been taken by a program gives
+ * it back and repaints the console the kernel kept; a port whose console has
+ * no such owner has nothing to do. It is a separate call and not a rule of
+ * k_port_write(), because an ordinary log line must not steal the screen a
+ * program is drawing in.
+ */
+void k_port_console_panic(void);
+
+/*
  * Read one line from the console. Returns the number of characters read
  * (without the newline) or -1 on end of input.
  */

@@ -22,6 +22,8 @@ void k_port_write(const char *data, k_size_t len)
     K_UNUSED(len);
 }
 
+void k_port_console_panic(void) {}
+
 int k_port_console_readline(char *buf, k_size_t size)
 {
     K_UNUSED(buf);
@@ -143,7 +145,7 @@ const char *k_port_arch(void)
 
 /* The contract this port was written for. */
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 9u
+#define PORT_API_MINOR 10u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_null does not speak the contract of this kernel");

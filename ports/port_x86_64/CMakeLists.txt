@@ -1261,6 +1261,8 @@ add_executable(microos64
     src/font_spleen.c
     src/pci.c
     src/ps2.c
+    src/fbdev.c
+    src/inputdev.c
     src/gdt.c
     src/paging.c
     src/cpu.c

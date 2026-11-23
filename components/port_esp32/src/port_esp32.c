@@ -104,6 +104,13 @@ void k_port_write(const char *data, k_size_t len)
     (void)written;
 }
 
+/*
+ * The panel of the board is the console and no program owns it (ADR 0028
+ * leaves the board out of the interface of 1.4), so a panic has no screen to
+ * take back. The call is here because the contract has it on every machine.
+ */
+void k_port_console_panic(void) {}
+
 k_u64_t k_port_uptime_ms(void)
 {
     return (k_u64_t)(esp_timer_get_time() / 1000);

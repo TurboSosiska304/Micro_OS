@@ -183,6 +183,12 @@ void k_port_write(const char *data, k_size_t len)
 }
 
 /*
+ * The console of the host process is a stream of bytes and has no program
+ * that can own it: a panic and an ordinary line write into the same sink.
+ */
+void k_port_console_panic(void) {}
+
+/*
  * The clock of the port counts from the start of the process, not from the
  * start of the machine: the uptime of the kernel is the time since its own
  * boot, and a simulator that reports the uptime of the laptop is lying -
@@ -328,7 +334,7 @@ k_u32_t k_port_cpu_id(void)
  * for a module of Linux.
  */
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 9u
+#define PORT_API_MINOR 10u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_host does not speak the contract of this kernel");

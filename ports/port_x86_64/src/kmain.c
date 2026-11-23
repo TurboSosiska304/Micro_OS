@@ -39,6 +39,7 @@
 #include "config/config.h"
 #include "kshell/kshell.h"
 #include "port_x86_64_console.h"
+#include "port_x86_64_input.h"
 #include "port_x86_64_screen.h"
 #include "port_x86_64_task.h"
 #include "port_x86_64_smp.h"
@@ -292,6 +293,15 @@ static int filesystem_bring_up(const char **type)
     if (devfs_register("/dev") != 0) {
         kwarn("x86-64: cannot mount the devfs at /dev");
     }
+
+    /*
+     * The two devices of the interface (ADR 0028): the framebuffer a program
+     * draws its picture in and the keyboard it reads as events. A machine
+     * whose screen is the text mode of the VGA has no /dev/fb0; the input of
+     * the keyboard is there because the controller is.
+     */
+    (void)port_x86_64_fbdev_register();
+    port_x86_64_input_register();
 
     /* The programs are files the tool left in the volume; nothing is
      * written here. A volume a person made without /bin is a machine
