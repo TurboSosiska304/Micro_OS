@@ -2,10 +2,11 @@
  * Micro OS — the flags of open for a ported program.
  *
  * The numbers are the POSIX ones and the library maps them to the ABI of the
- * kernel (`KSYS_O_*`). A flag this system does not have (O_EXCL, O_CLOEXEC)
- * is not defined on purpose: a source that checks for it with #ifdef then
- * takes the path of a machine without it, and no call receives a bit the
- * kernel would refuse.
+ * kernel (`KSYS_O_*`). A flag this system does not have (O_CLOEXEC) is not
+ * defined on purpose: a source that checks for it with #ifdef then takes the
+ * path of a machine without it, and no call receives a bit the kernel would
+ * refuse. `O_EXCL` with `O_CREAT` is a call the kernel answers: a name that
+ * is already there is `EEXIST` and not an open.
  */
 #ifndef MICRO_OS_LIBC_USER_FCNTL_H
 #define MICRO_OS_LIBC_USER_FCNTL_H
@@ -17,6 +18,7 @@
 #define O_RDWR ULIBC_O_RDWR
 #define O_ACCMODE 3
 #define O_CREAT ULIBC_O_CREAT
+#define O_EXCL ULIBC_O_EXCL
 #define O_TRUNC ULIBC_O_TRUNC
 #define O_APPEND ULIBC_O_APPEND
 #define O_DIRECTORY ULIBC_O_DIRECTORY

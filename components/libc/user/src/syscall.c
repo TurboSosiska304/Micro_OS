@@ -122,6 +122,9 @@ static int open_flags(int flags)
     if (flags & ULIBC_O_CREAT) {
         out |= KSYS_O_CREAT;
     }
+    if (flags & ULIBC_O_EXCL) {
+        out |= KSYS_O_EXCL;
+    }
     if (flags & ULIBC_O_TRUNC) {
         out |= KSYS_O_TRUNC;
     }
