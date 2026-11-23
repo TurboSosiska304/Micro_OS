@@ -53,8 +53,12 @@
  * into the whole picture. */
 #define WM_DAMAGE_MAX 8
 
-/* The panel: one line of the bottom of the picture, a button a window. */
+/* The panel: one line of the bottom of the picture, a button a window. The
+ * buttons have six pixels of air at either side of a label, three pixels above
+ * and below, and sixteen pixels of the panel between two of them. */
 #define WM_PANEL_HEIGHT 24
+#define WM_PANEL_PAD 6
+#define WM_PANEL_GAP 16
 
 /* The square of closing, in the right of the title bar of a window and at the
  * right end of the button of the panel: the same cross in a square of paint. */
@@ -67,29 +71,26 @@
  * itself, never the handle. */
 #define WM_TITLE_KEEP 64
 
-/* The margin the ring of the focus takes around a window. */
+/* The margin the ring of the focus takes around a window, and the drop shadow
+ * it casts to its right and below: three pixels of a colour between the
+ * wallpaper and black, which is the depth a window of a desk has. The damage
+ * of a window asks for both, so a ring and a shadow never leave a fragment. */
 #define WM_FOCUS_RING 2
+#define WM_SHADOW 3
+#define WM_WINDOW_SLACK (WM_FOCUS_RING + WM_SHADOW)
 
 /* The first number of a window of the model: the ids of the programs (the
  * document and the dialog of the editor) are small numbers of their own. */
 #define WM_ID_BASE 100
 
-/* The colours of the desktop: two blues of the wallpaper, the bar of the
- * panel, the cyan of the focus, the red of the square of closing. */
-#define WM_WALL_A 0x0861u
-#define WM_WALL_B 0x1082u
-#define WM_WALL_BAND 64
-#define WM_PANEL_PAPER 0x0010u
-#define WM_PANEL_INK 0xFFFFu
-#define WM_PANEL_FOCUS 0x57FFu
-#define WM_FOCUS_INK 0xFFEAu /* the yellow of the window that has the keys */
-#define WM_CLOSE_PAPER 0xA800u
-#define WM_CLOSE_INK 0xFFFFu
-#define WM_CURSOR_INK 0xFFFFu
-#define WM_CURSOR_EDGE 0x0000u
+/* The pointer is ink and not a colour of a theme: white with a black outline
+ * is seen on a dark desk and on a light one, which is the whole of what a
+ * pointer has to do. The palette of `ui/palette.h` colours the desk. */
+#define WM_CURSOR_INK UI_RGB(255, 255, 255)
+#define WM_CURSOR_EDGE UI_RGB(0, 0, 0)
 
 /* The arrow of the pointer: the width of its rows. A row is a line of ink
- * with one pixel of the edge under it, which is the whole of the picture of
+ * with the outline of the edge around it, which is the whole of the picture of
  * a pointer of this size. */
 static const k_u8_t s_arrow[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 7, 4, 3, 2};
 #define WM_ARROW_ROWS ((int)K_ARRAY_SIZE(s_arrow))
@@ -114,6 +115,7 @@ struct wm_app {
 
 static struct uiprog g_screen;
 static struct ui_screen g_model;
+static struct ui_palette g_palette;
 
 static struct wm_app g_apps[WM_APPS];
 
@@ -258,7 +260,123 @@ static int panel_top(void)
 
 static k_u16_t wallpaper_color(int y)
 {
-    return ((y / WM_WALL_BAND) % 2) == 0 ? WM_WALL_A : WM_WALL_B;
+    /* The row of the whole picture, not of the rectangle being painted: a
+     * damage of fifteen pixels is the colour of the desk at those fifteen. */
+    return ui_palette_gradient(&g_palette, y, g_height);
+}
+
+/*
+ * The wallpaper of a rectangle: the gradient of the theme, a run of rows of
+ * one colour at a time (five-six-five has thirty-two steps of red over the
+ * picture, so a run is about twenty-five rows and not one), then the grid of
+ * one pixel every `UI_PALETTE_GRID`. The grid is drawn after the gradient and
+ * inside the same rectangle, so a damage of a window does not repaint the
+ * whole desk to keep the lines where they are.
+ */
+static void wallpaper_paint(const struct ui_rect *rect)
+{
+    int bottom = rect->y + rect->h;
+    int y = rect->y;
+    int line;
+
+    while (y < bottom) {
+        k_u16_t color = wallpaper_color(y);
+        int end = y + 1;
+
+        while (end < bottom && wallpaper_color(end) == color) {
+            end++;
+        }
+
+        (void)uiprog_fill(&g_screen, rect->x, y, rect->w, end - y, color);
+        y = end;
+    }
+
+    for (line = UI_PALETTE_GRID_OFFSET; line < g_height; line += UI_PALETTE_GRID) {
+        if (line >= rect->y && line < bottom) {
+            (void)uiprog_fill(&g_screen, rect->x, line, rect->w, 1, g_palette.grid);
+        }
+    }
+
+    for (line = UI_PALETTE_GRID_OFFSET; line < g_width; line += UI_PALETTE_GRID) {
+        if (line >= rect->x && line < rect->x + rect->w) {
+            (void)uiprog_fill(&g_screen, line, rect->y, 1, rect->h, g_palette.grid);
+        }
+    }
+}
+
+/* One band of the shadow: the rows of the band, a run of rows of one colour at
+ * a time, clipped to the damaged area and to the desk. The panel is painted
+ * after every window, so the shadow never covers it. */
+static void shadow_band(const struct ui_rect *band, const struct ui_rect *area)
+{
+    struct ui_rect part;
+    struct ui_rect desk;
+    int bottom;
+    int y;
+
+    desk.x = 0;
+    desk.y = 0;
+    desk.w = g_width;
+    desk.h = panel_top();
+
+    if (!ui_rect_intersect(band, area, &part) || !ui_rect_intersect(&part, &desk, &part)) {
+        return;
+    }
+
+    bottom = part.y + part.h;
+    y = part.y;
+
+    while (y < bottom) {
+        k_u16_t color = ui_palette_shadow(&g_palette, y, g_height);
+        int end = y + 1;
+
+        while (end < bottom && ui_palette_shadow(&g_palette, end, g_height) == color) {
+            end++;
+        }
+
+        (void)uiprog_fill(&g_screen, part.x, y, part.w, end - y, color);
+        y = end;
+    }
+}
+
+/*
+ * The shadow of a window: a bar of three pixels at its right and below, which
+ * is the rectangle of the window moved by the same three pixels, so the light
+ * comes from the top left as it does on every desk. The colour is the shadow
+ * of the palette over the wallpaper - a colour darker than the desk and than
+ * a window, so the bar reads as depth whichever of the two it falls on.
+ */
+static void shadow_paint(const struct ui_window *window, const struct ui_rect *area)
+{
+    struct ui_rect right;
+    struct ui_rect below;
+
+    right.x = window->rect.x + window->rect.w;
+    right.y = window->rect.y + WM_SHADOW;
+    right.w = WM_SHADOW;
+    right.h = window->rect.h;
+
+    below.x = window->rect.x + WM_SHADOW;
+    below.y = window->rect.y + window->rect.h;
+    below.w = window->rect.w;
+    below.h = WM_SHADOW;
+
+    shadow_band(&right, area);
+    shadow_band(&below, area);
+}
+
+/* The rectangle of the picture a window occupies with the ring of its focus
+ * and its shadow: what a damage has to repaint when the window changes. */
+static struct ui_rect window_slack(const struct ui_rect *rect)
+{
+    struct ui_rect out;
+
+    out.x = rect->x - WM_WINDOW_SLACK;
+    out.y = rect->y - WM_WINDOW_SLACK;
+    out.w = rect->w + 2 * WM_WINDOW_SLACK;
+    out.h = rect->h + 2 * WM_WINDOW_SLACK;
+
+    return out;
 }
 
 static const struct wm_app *app_of_id(int id)
@@ -342,23 +460,25 @@ static void cross_paint(int x, int y, int size)
 {
     int step;
 
-    (void)uiprog_fill(&g_screen, x, y, size, size, WM_CLOSE_PAPER);
+    (void)uiprog_fill(&g_screen, x, y, size, size, g_palette.close);
 
     for (step = 2; step < size - 2; step++) {
-        (void)uiprog_fill(&g_screen, x + step, y + step, 2, 2, WM_CLOSE_INK);
-        (void)uiprog_fill(&g_screen, x + size - step - 2, y + step, 2, 2, WM_CLOSE_INK);
+        (void)uiprog_fill(&g_screen, x + step, y + step, 2, 2, g_palette.close_ink);
+        (void)uiprog_fill(&g_screen, x + size - step - 2, y + step, 2, 2, g_palette.close_ink);
     }
 }
 
-/* The square that closes a window, in the right of its title bar. */
+/* The square that closes a window, in the right of its title bar: the height
+ * of the box in the middle of the bar, so it stays on the bar whatever the
+ * margin of the frame is. */
 static struct ui_rect close_box_rect(const struct ui_window *window)
 {
     struct ui_rect rect;
 
     rect.w = WM_CLOSE_BOX;
     rect.h = WM_CLOSE_BOX;
-    rect.x = window->rect.x + window->rect.w - WM_CLOSE_BOX - 4;
-    rect.y = window->rect.y + 4;
+    rect.x = window->rect.x + window->rect.w - WM_CLOSE_BOX - UI_FRAME_MARGIN;
+    rect.y = window->rect.y + (UI_FRAME_TITLE_HEIGHT(uiprog_font()) - WM_CLOSE_BOX) / 2;
 
     return rect;
 }
@@ -370,8 +490,9 @@ static void close_box_paint(const struct ui_window *window)
     cross_paint(box.x, box.y, box.w);
 }
 
-/* The ring of the window that has the keys: two pixels around it, drawn with
- * the window and over what is under it, which is the order of the paint. */
+/* The ring of the window that has the keys: two pixels around it, in the
+ * accent of the theme and not a colour of the CGA, drawn with the window and
+ * over what is under it, which is the order of the paint. */
 static void focus_ring_paint(const struct ui_window *window)
 {
     int x = window->rect.x - WM_FOCUS_RING;
@@ -379,13 +500,15 @@ static void focus_ring_paint(const struct ui_window *window)
     int w = window->rect.w + 2 * WM_FOCUS_RING;
     int h = window->rect.h + 2 * WM_FOCUS_RING;
 
-    (void)uiprog_fill(&g_screen, x, y, w, WM_FOCUS_RING, WM_FOCUS_INK);
-    (void)uiprog_fill(&g_screen, x, y + h - WM_FOCUS_RING, w, WM_FOCUS_RING, WM_FOCUS_INK);
-    (void)uiprog_fill(&g_screen, x, y, WM_FOCUS_RING, h, WM_FOCUS_INK);
-    (void)uiprog_fill(&g_screen, x + w - WM_FOCUS_RING, y, WM_FOCUS_RING, h, WM_FOCUS_INK);
+    (void)uiprog_fill(&g_screen, x, y, w, WM_FOCUS_RING, g_palette.accent);
+    (void)uiprog_fill(&g_screen, x, y + h - WM_FOCUS_RING, w, WM_FOCUS_RING, g_palette.accent);
+    (void)uiprog_fill(&g_screen, x, y, WM_FOCUS_RING, h, g_palette.accent);
+    (void)uiprog_fill(&g_screen, x + w - WM_FOCUS_RING, y, WM_FOCUS_RING, h, g_palette.accent);
 }
 
-/* One window of the model, the part of it that `area` covers. */
+/* One window of the model, the part of it that `area` covers: the shadow under
+ * it first, the pixels of its client, the square that closes it and, when it
+ * has the keys, the ring. */
 static void window_paint(int index, const struct ui_rect *area)
 {
     const struct ui_window *window = &g_model.windows[index];
@@ -393,9 +516,19 @@ static void window_paint(int index, const struct ui_rect *area)
     struct ui_rect part;
     struct ui_rect box;
     struct ui_rect ring;
+    struct ui_rect shadow;
 
     if (app == NULL) {
         return;
+    }
+
+    shadow.x = window->rect.x + WM_SHADOW;
+    shadow.y = window->rect.y + WM_SHADOW;
+    shadow.w = window->rect.w + WM_SHADOW;
+    shadow.h = window->rect.h + WM_SHADOW;
+
+    if (ui_rect_intersect(&shadow, area, &part)) {
+        shadow_paint(window, area);
     }
 
     if (ui_rect_intersect(&window->rect, area, &part)) {
@@ -422,9 +555,25 @@ static void window_paint(int index, const struct ui_rect *area)
 
 /* --- the panel ------------------------------------------------------------ */
 
+/* The width of the button of a window in the panel: the label, six pixels of
+ * air at either side and the square of closing at the right end. It is capped,
+ * so a long title is cut and never eats the panel of the other windows. */
+static int panel_button_width(int app_index)
+{
+    int width =
+        (int)strlen(g_apps[app_index].title) * FONT8_WIDTH + 2 * WM_PANEL_PAD + WM_PANEL_CLOSE + 2;
+
+    if (width > 200) {
+        width = 200;
+    }
+
+    return width;
+}
+
 /* The button of a window in the panel: the title with a margin, a button a
- * window from the left. The width is a function of the title, so the paint
- * and the hit test of the panel are one arithmetic. */
+ * window from the left and the gap of the panel between two of them. The
+ * width is a function of the title, so the paint and the hit test of the panel
+ * are one arithmetic. */
 static struct ui_rect panel_button_rect(int app_index)
 {
     struct ui_rect rect;
@@ -436,17 +585,13 @@ static struct ui_rect panel_button_rect(int app_index)
             continue;
         }
 
-        x += (int)strlen(g_apps[index].title) * FONT8_WIDTH + 16;
+        x += panel_button_width(index) + WM_PANEL_GAP;
     }
 
     rect.x = x;
-    rect.y = panel_top() + 2;
-    rect.w = (int)strlen(g_apps[app_index].title) * FONT8_WIDTH + 12 + WM_PANEL_CLOSE + 2;
-    rect.h = WM_PANEL_HEIGHT - 4;
-
-    if (rect.w > 200) {
-        rect.w = 200;
-    }
+    rect.y = panel_top() + 3;
+    rect.w = panel_button_width(app_index);
+    rect.h = WM_PANEL_HEIGHT - 6;
 
     return rect;
 }
@@ -482,7 +627,12 @@ static void panel_paint(const struct ui_rect *area)
         return;
     }
 
-    (void)uiprog_fill(&g_screen, panel.x, panel.y, panel.w, panel.h, WM_PANEL_PAPER);
+    (void)uiprog_fill(&g_screen, panel.x, panel.y, panel.w, panel.h, g_palette.panel);
+
+    /* The panel is separated from the desk by one pixel of the border, so a
+     * window that goes under it is a window that ends and not a window that
+     * fades. */
+    (void)uiprog_fill(&g_screen, panel.x, panel.y, panel.w, 1, g_palette.border);
 
     for (index = 0; index < WM_APPS; index++) {
         struct ui_rect button;
@@ -505,19 +655,20 @@ static void panel_paint(const struct ui_rect *area)
         focused = ui_screen_find(&g_model, g_apps[index].id) == g_model.focus;
 
         (void)uiprog_fill(&g_screen, button.x, button.y, button.w, button.h,
-                          focused ? WM_PANEL_FOCUS : WM_PANEL_PAPER);
+                          focused ? g_palette.accent : g_palette.surface);
 
         (void)snprintf(label, sizeof(label), "%s", g_apps[index].title);
 
         /* The label stops before the square of closing of the button. */
-        cells = (button.w - WM_PANEL_CLOSE - 8) / FONT8_WIDTH;
+        cells = (button.w - WM_PANEL_CLOSE - 2 * WM_PANEL_PAD) / FONT8_WIDTH;
         if (cells > (int)sizeof(label) - 1) {
             cells = (int)sizeof(label) - 1;
         }
 
-        (void)uiprog_text(&g_screen, button.x + 6, button.y + (button.h - FONT8_HEIGHT) / 2, label,
-                          cells, focused ? WM_PANEL_PAPER : WM_PANEL_INK,
-                          focused ? WM_PANEL_FOCUS : WM_PANEL_PAPER);
+        (void)uiprog_text(&g_screen, button.x + WM_PANEL_PAD,
+                          button.y + (button.h - FONT8_HEIGHT) / 2, label, cells,
+                          focused ? g_palette.accent_ink : g_palette.ink_dim,
+                          focused ? g_palette.accent : g_palette.surface);
 
         {
             struct ui_rect close = panel_close_rect(index);
@@ -534,20 +685,7 @@ static void panel_paint(const struct ui_rect *area)
  * is drawn after, over whatever the rectangle holds. */
 static void scene_paint(const struct ui_rect *rect)
 {
-    int bottom = rect->y + rect->h;
-
-    int band;
-
-    /* The bands are counted from the top of the picture and not from the top
-     * of the rectangle: a damage rectangle is fifteen pixels of a window and
-     * not a multiple of the band, and a wallpaper that moved with it would
-     * paint two stripes of the same colour where one is. */
-    for (band = rect->y / 16 * 16; band < bottom; band += 16) {
-        int top = band < rect->y ? rect->y : band;
-        int end = band + 16 < bottom ? band + 16 : bottom;
-
-        (void)uiprog_fill(&g_screen, rect->x, top, rect->w, end - top, wallpaper_color(band));
-    }
+    wallpaper_paint(rect);
 
     for (unsigned index = 0; index < g_model.count; index++) {
         window_paint((int)index, rect);
@@ -556,28 +694,44 @@ static void scene_paint(const struct ui_rect *rect)
     panel_paint(rect);
 }
 
+/* The rectangle the pointer occupies, the outline included: one pixel of the
+ * edge around the shape, so a damage puts the whole pointer away. */
 static struct ui_rect cursor_rect(int x, int y)
 {
     struct ui_rect rect;
 
-    rect.x = x;
-    rect.y = y;
-    rect.w = WM_ARROW_WIDTH;
-    rect.h = WM_ARROW_ROWS;
+    rect.x = x - 1;
+    rect.y = y - 1;
+    rect.w = WM_ARROW_WIDTH + 2;
+    rect.h = WM_ARROW_ROWS + 2;
 
     return rect;
 }
 
+/*
+ * The pointer: a white arrow with a black outline of one pixel, so it is seen
+ * on the dark desk and on a white window alike. The outline is drawn first and
+ * one pixel wider than the row of the ink, and it is the whole of the shape -
+ * a pointer is a picture of the interface and not a colour of the theme
+ * (docs/desktop.md).
+ */
 static void cursor_paint(void)
 {
     int row;
 
+    (void)uiprog_fill(&g_screen, g_pointer_x - 1, g_pointer_y - 1, WM_ARROW_WIDTH + 2, 1,
+                      WM_CURSOR_EDGE);
+
     for (row = 0; row < WM_ARROW_ROWS; row++) {
         int width = s_arrow[row];
 
-        (void)uiprog_fill(&g_screen, g_pointer_x, g_pointer_y + row, width + 1, 1, WM_CURSOR_EDGE);
+        (void)uiprog_fill(&g_screen, g_pointer_x - 1, g_pointer_y + row, width + 2, 1,
+                          WM_CURSOR_EDGE);
         (void)uiprog_fill(&g_screen, g_pointer_x, g_pointer_y + row, width, 1, WM_CURSOR_INK);
     }
+
+    (void)uiprog_fill(&g_screen, g_pointer_x - 1, g_pointer_y + WM_ARROW_ROWS, WM_ARROW_WIDTH + 2,
+                      1, WM_CURSOR_EDGE);
 }
 
 /* The rectangles of the turn of the loop, and the pointer over them. */
@@ -636,27 +790,20 @@ static void focus_sync(void)
         (void)write(g_apps[index].events, &message, sizeof(message));
     }
 
-    /* The ring of the focus goes from one window to another: both repaint. */
+    /* The ring of the focus goes from one window to another: both repaint,
+     * with the shadow of the one that loses it and of the one that gains. */
     index = ui_screen_find(&g_model, g_focus_id);
     if (index != UI_WINDOW_NONE) {
-        struct ui_rect ring = g_model.windows[index].rect;
+        struct ui_rect area = window_slack(&g_model.windows[index].rect);
 
-        ring.x -= WM_FOCUS_RING;
-        ring.y -= WM_FOCUS_RING;
-        ring.w += 2 * WM_FOCUS_RING;
-        ring.h += 2 * WM_FOCUS_RING;
-        damage_add(ring.x, ring.y, ring.w, ring.h);
+        damage_add(area.x, area.y, area.w, area.h);
     }
 
     index = ui_screen_find(&g_model, id);
     if (index != UI_WINDOW_NONE) {
-        struct ui_rect ring = g_model.windows[index].rect;
+        struct ui_rect area = window_slack(&g_model.windows[index].rect);
 
-        ring.x -= WM_FOCUS_RING;
-        ring.y -= WM_FOCUS_RING;
-        ring.w += 2 * WM_FOCUS_RING;
-        ring.h += 2 * WM_FOCUS_RING;
-        damage_add(ring.x, ring.y, ring.w, ring.h);
+        damage_add(area.x, area.y, area.w, area.h);
     }
 
     g_focus_id = id;
@@ -666,8 +813,9 @@ static void focus_sync(void)
 
 static void app_damage_window(const struct wm_app *app)
 {
-    damage_add(app->rect.x - WM_FOCUS_RING, app->rect.y - WM_FOCUS_RING,
-               app->rect.w + 2 * WM_FOCUS_RING, app->rect.h + 2 * WM_FOCUS_RING);
+    struct ui_rect area = window_slack(&app->rect);
+
+    damage_add(area.x, area.y, area.w, area.h);
 }
 
 static void app_raise(int index)
@@ -702,12 +850,7 @@ static void app_raise(int index)
     /* The order changed: the raised window and every window it covered are
      * painted again, which is the union of the rectangles of them all. */
     for (other = 0; other < (int)g_model.count; other++) {
-        struct ui_rect rect = g_model.windows[other].rect;
-
-        rect.x -= WM_FOCUS_RING;
-        rect.y -= WM_FOCUS_RING;
-        rect.w += 2 * WM_FOCUS_RING;
-        rect.h += 2 * WM_FOCUS_RING;
+        struct ui_rect rect = window_slack(&g_model.windows[other].rect);
 
         if (first) {
             all = rect;
@@ -820,8 +963,8 @@ static void app_move(int index, int x, int y)
     g_model.windows[model].rect.x = x;
     g_model.windows[model].rect.y = y;
 
-    damage_add(old.x - WM_FOCUS_RING, old.y - WM_FOCUS_RING, old.w + 2 * WM_FOCUS_RING,
-               old.h + 2 * WM_FOCUS_RING);
+    damage_add(old.x - WM_WINDOW_SLACK, old.y - WM_WINDOW_SLACK, old.w + 2 * WM_WINDOW_SLACK,
+               old.h + 2 * WM_WINDOW_SLACK);
     app_damage_window(app);
 
     {
@@ -1531,6 +1674,10 @@ int main(int argc, char *const argv[], char *const envp[])
     }
 
     say("wm: the screen is mine\n");
+
+    /* The theme of the desktop is the theme of the console: one word of
+     * /etc/console colours both, so a machine has one mood and not two. */
+    say_title("wm: the palette is ", uiprog_palette(&g_palette));
 
     g_width = (int)g_screen.info.width;
     g_height = (int)g_screen.info.height;

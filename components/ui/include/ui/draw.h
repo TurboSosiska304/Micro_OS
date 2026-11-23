@@ -57,7 +57,9 @@ struct ui_target {
 
 /* The colours of the frame of a window: the paper of the body, the ink of a
  * title, the border of a window that does not have the keys and the border of
- * the one that does. */
+ * the one that does. `separator` is the line under the title, one pixel in a
+ * tone of the border, which is what divides the bar from the body without a
+ * second rectangle. */
 struct ui_style {
     k_u16_t paper;
     k_u16_t ink;
@@ -65,13 +67,17 @@ struct ui_style {
     k_u16_t focus_border;
     k_u16_t title_paper;
     k_u16_t title_ink;
+    k_u16_t separator;
 };
 
-/* The place of the title inside the frame: two pixels of margin, the row of
- * the font, a pixel of separator, and the body starts below. */
-#define UI_FRAME_MARGIN 2
-#define UI_FRAME_PAD 3
-#define UI_FRAME_TITLE_HEIGHT(font) (2 * UI_FRAME_MARGIN + (font)->height + 1)
+/* The place of the title inside the frame: four pixels of air above the row of
+ * the font, six pixels at either side of it, a pixel of separator under it,
+ * and the body starts below. The air is the difference between a bar a person
+ * reads and a bar a terminal draws: a glyph that touches the border is a
+ * character of a text screen, not the title of a window. */
+#define UI_FRAME_MARGIN 4
+#define UI_FRAME_PAD 6
+#define UI_FRAME_TITLE_HEIGHT(font) (UI_FRAME_MARGIN + (font)->height + 1)
 
 /* --- the canvas ---------------------------------------------------------- */
 

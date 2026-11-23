@@ -34,6 +34,15 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Added
 
+- The palette of the desktop (`components/ui/include/ui/palette.h`): the
+  server of `/bin/wm` and the programs of the interface paint the roles of a
+  theme - a slate desk with an azure accent, or the light theme of
+  `theme=light` of `/etc/console` - and not the sixteen colours of the CGA.
+  Eight bits a channel narrowed to the five-six-five of the screen once; a
+  gradient and a grid for the wallpaper, a drop shadow and a ring of the
+  accent for a window, a separator and two inks of hierarchy in its frame, air
+  around the text, and a pointer of white with a black outline. The console of
+  the kernel keeps its sixteen attributes.
 - The boot of a firmware machine: `ports/port_x86_64/loader/uefi`, a PE/COFF
   application that the firmware of a laptop starts from a FAT volume, gives
   the kernel the picture of its graphics output (a frame of 32 bits per pixel,

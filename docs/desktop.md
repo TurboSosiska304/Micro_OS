@@ -20,21 +20,50 @@ programs of the interface become its windows:
 
 ## The picture of the desktop
 
+The picture is made of the **roles of a palette** and not of the sixteen
+colours of the CGA (`components/ui/include/ui/palette.h`). A role is a colour
+written the way a person writes one - eight bits a channel - and narrowed to
+the five-six-five of the screen once, when the palette is read. The console of
+the kernel keeps its sixteen attributes, because a terminal has sixteen by
+definition; the desktop is not a terminal, and a black body under a cyan bar
+with a yellow ring said "DOS" to the cleanroom of 1.7.
+
+There are two themes, `ui_palette_dark` and `ui_palette_light`, and the
+`theme` of `/etc/console` picks the one the desktop starts with. The file is
+the same one the console reads, so one word of `/etc` colours the shell and
+the desktop of a machine alike; the programs of the interface read it
+themselves through `uiprog_palette`, and a machine without the file gets the
+dark theme.
+
 | Part | Where | What |
 |---|---|---|
-| the wallpaper | the whole picture | two blues, bands of 64 pixels, drawn by the server |
-| a window | the rectangle the server gave it | the pixels of the client's buffer, then the square of closing and, when it has the keys, a ring of two pixels of yellow around it |
-| the panel | the bottom 24 pixels | a button a window: the label is the title of the client, the window with the keys is inverted, and the square of closing at the right end of the button is the second way out of a window |
-| the pointer | 12x16 pixels at the point of the mouse | an arrow of white with one pixel of black under every row |
+| the wallpaper | the whole picture | a vertical gradient of the theme from `background_top` to `background_bottom`, and a grid of one pixel every 32, both counted from the top of the picture |
+| a window | the rectangle the server gave it | the pixels of the client's buffer, a drop shadow of three pixels at its right and below, the square of closing and, when it has the keys, a ring of two pixels of `accent` |
+| the title bar | the first 21 pixels of a window, drawn by the client | four pixels of air, the row of the font at six pixels from either side, the title in `title_ink`, a pixel of `border` as the separator, and the body below |
+| the panel | the bottom 24 pixels | one pixel of `border` at its top, then a button a window: six pixels of air at either side of a label, sixteen pixels of the panel between two buttons, `surface` for a window that has no keys and `accent` for the one that does |
+| the pointer | 12x15 pixels at the point of the mouse | a white arrow with one pixel of black around it |
+
+The **hierarchy of the text** is three inks of one font: `title_ink` for the
+bar of a window, `ink` for the body, `ink_dim` for the line of status and for
+the label of a button that does not have the keys. The font of this port is
+Spleen 8x16 and the tree carries no second size of it, so the weight is not a
+second table of glyphs: a title is brighter than a body, the bar is a surface
+of its own, and a line of the border divides it from the body - colour, tone
+and air, not a bold face.
 
 The server paints *rectangles*: a frame of a client, a motion of the pointer,
 a raise and a drag are rectangles of a list of damage, and the loop paints the
 rects of the list and nothing else. A window that another one covers is never
 read from its file: the compositor asks for the part of it that is visible.
+The shadow is a colour of the wallpaper at the row it falls on - the palette's
+shadow blended over the gradient - so the bar of depth is the same on the dark
+desk and on the light one, and it is drawn under the window and never under
+the panel.
 
-The wallpaper's bands are counted from the top of the picture and not from the
-top of the rectangle being painted, so a small damage rectangle and a whole
-screen are the same picture.
+The wallpaper's gradient is counted from the top of the picture and not from
+the top of the rectangle being painted, so a small damage rectangle and a whole
+screen are the same picture; the grid lines are at `UI_PALETTE_GRID_OFFSET`
+plus a multiple of the step, and not on the edges of the picture.
 
 The two windows of the default desktop stand **beside each other and not over
 each other** - `/bin/edit` at (40, 40) and `/bin/fm` at (700, 200) on the
@@ -121,8 +150,8 @@ every pointer motion.
 * **A click** on a window raises it and gives it the keys; a click on the body
   of a window that already has them goes to the client as a button event with
   the point in its own pixels.
-* **A drag** of the title bar (the first 21 pixels of a window: the margin, the
-  row of the font and the separator of the frame of `ui/draw.h`) moves it. The
+* **A drag** of the title bar (the first 21 pixels of a window: four pixels of
+  air, the row of the font and the separator of `ui/draw.h`) moves it. The
   bar is the handle of a window, so it stays on the picture: the whole height
   of the bar above the panel and at least 64 pixels of its width at either
   side. A window pulled past an edge loses the part of itself that is past the
@@ -206,11 +235,15 @@ a picture of the interface.
 * `make test` holds the messages and the client on the host
   (`tests/cases/test_ui_wm.c`): the builders, the hello, the clipping of a
   fill and a blit, the damage, the order of `sync` and the damage message, the
-  keys, the focus, the close.
+  keys, the focus, the close. `tests/cases/test_ui_palette.c` holds the palette
+  without a screen: eight bits a channel to five-six-five, the two themes, the
+  gradient, the blend of the shadow.
 * `make x86-vga-smoke` boots a copy of the disk, runs `/bin/wm`, and reads the
-  desktop out of the screenshot and the log of the server: the wallpaper, the
-  two windows of `/bin/edit /doc.txt` and `/bin/fm /`, the panel, the pointer,
-  the ring of the focus; a click of the PS/2 mouse of QEMU raises the editor,
+  desktop out of the screenshot and the log of the server: the gradient of the
+  wallpaper, the air of a title and of a body, the separator, the two inks of
+  the hierarchy, the shadow under a window, the panel with the accent of the
+  window that has the keys, the outline of the pointer and the ring of the
+  focus; a click of the PS/2 mouse of QEMU raises the editor,
   the ring follows and **the window without the keys keeps its title and its
   text**; `sendkey` types `hello` into the window with the keys and the status
   line of the editor says so; `Ctrl+S` saves the file and the status line says
@@ -232,8 +265,9 @@ a picture of the interface.
 
 ## What is not here
 
-* No clipboard, no resize of a window, no theme and no configuration of the
-  desktop: the server is a program of the tree and not a system of settings.
+* No clipboard, no resize of a window and no page of settings of the desktop:
+  the server is a program of the tree and not a system of settings. The theme
+  is the `theme` of `/etc/console` and not a key of the desktop's own.
 * A window has one rectangle for its life: a program that wants another one is
   a program that starts again (the editor and the file manager ask for their
   size at the start).

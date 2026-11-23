@@ -274,11 +274,14 @@ int ui_draw_frame(const struct ui_target *target, const struct ui_window *window
         return rc;
     }
 
+    /* The separator under the title: one pixel in its own tone of the border,
+     * so the bar reads as a bar and the frame keeps the accent of the focus
+     * for itself. */
     line.x = window->rect.x + 1;
-    line.y = window->rect.y + UI_FRAME_MARGIN + font->height + 1;
+    line.y = window->rect.y + UI_FRAME_MARGIN + font->height;
     line.w = window->rect.w - 2;
     line.h = 1;
-    rc = target->fill(target->context, &line, focused ? style->focus_border : style->border);
+    rc = target->fill(target->context, &line, style->separator);
 
     return rc;
 }
