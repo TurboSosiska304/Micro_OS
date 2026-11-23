@@ -19,6 +19,10 @@
 .section .text, "ax", @progbits
 .code64
 
+/* The offsets of the record of a core that the fast door reads: the numbers
+ * are the ones the C uses (the header says what each of them is). */
+#include "port_x86_64_asm.h"
+
 /*
  * One stub per exception. The processor pushes RIP, CS and RFLAGS, and the
  * error code last, so it ends up on top of the frame; a vector without one
@@ -267,33 +271,15 @@ isr_irq isr_ipi, port_x86_64_irq_ipi
 isr_irq isr_spurious, port_x86_64_irq_spurious
 
 /*
- * The call of a system call: `int $0x80` from the program.
- *
- * The program is ring 3 code with page tables of its own (ADR 0007), so the
- * processor takes the stack named by RSP0 of the TSS: the handler runs on a
- * kernel stack that belongs to the program and not on the stack of the
- * program, which ring 3 could have pointed anywhere.
- *
- * The registers of the convention are the ones of the kernel call and of
- * Linux: the number in RAX, six arguments in RDI, RSI, RDX, R10, R8 and R9,
- * the result in RAX. Everything the caller may lose across a C call is saved
- * here - the nine registers below plus RBP, and the five callee-saved ones
- * that the C call would keep but that a fork child has to find in the frame
- * it is copied into - because the C side is free to clobber them and the
- * program is not compiled against this handler.
- *
- * The interrupts are turned on once the state is on the stack, and not
- * before: the whole point of the gate is that a call may sleep or yield, and
- * the scheduler of the port decides by the interrupt flag. The iretq that
- * ends the stub restores the flags of the program, so the flag is on for the
- * length of the call and off again in the code that made it.
+ * The fifteen registers of the frame, in the order that is the contract of
+ * the file port_exec.c reads a frame by (PORT_FRAME_RBP .. PORT_FRAME_R15):
+ * the last one pushed is the first word of the frame. The frame of a call is
+ * 160 bytes of these and the five words of the crossing above them.
  */
-.global isr_syscall
-.type isr_syscall, @function
-isr_syscall:
-    pushq %r15 /* the callee-saved registers of the program: a fork copies */
-    pushq %r14 /* the frame, and the child returns into the call of the      */
-    pushq %r13 /* parent through it, so they have to be in the frame          */
+.macro ksys_save_registers
+    pushq %r15
+    pushq %r14
+    pushq %r13
     pushq %r12
     pushq %rbx
     pushq %rax /* the number of the call, then its result */
@@ -306,32 +292,36 @@ isr_syscall:
     pushq %r11
     pushq %rcx
     pushq %rbp
-
     movq %rsp, %rbp /* the saved frame, for the way back and for its fields */
+.endm
 
-    /*
-     * The program runs with the thread pointer of ring 3 (zero); the call of
-     * the kernel is about to use its own. The ABI wants the stack aligned
-     * before a call, so the register is set with the frame already safe.
-     */
+/*
+ * The body of a call, the same for both doors: the frame is at RBP and the
+ * kernel is entered with the thread pointer of ring 3, the interrupts off and
+ * the stack of the program.
+ *
+ * The program runs with the thread pointer of ring 3 (zero); the call of the
+ * kernel is about to use its own. The ABI wants the stack aligned before a
+ * call, so the register is set with the frame already safe.
+ *
+ * The interrupts are turned on once the state is on the stack, and not
+ * before: the whole point of the crossing is that a call may sleep or yield,
+ * and the scheduler of the port decides by the interrupt flag.
+ *
+ * The frame, as the pushes above left it: 0 is RBP, then RCX, R11, R9, R8,
+ * R10, RDX, RSI, RDI and RAX at 72, then the callee-saved RBX, R12, R13, R14
+ * and R15, and the five words of the crossing. The C call needs the stack 16
+ * bytes aligned and one slot for the seventh argument: ksys_call() takes the
+ * number and the six of the convention, and a machine of this ABI passes the
+ * last one on the stack.
+ */
+.macro ksys_call_body
     andq $-16, %rsp
     call port_x86_64_tls_kernel
     movq %rbp, %rsp
 
-    sti             /* a call may sleep, yield or wait for the console */
+    sti /* a call may sleep, yield or wait for the console */
 
-    /*
-     * The frame, as the pushes above left it: 0 is RBP, then RCX, R11, R9,
-     * R8, R10, RDX, RSI, RDI and RAX at 72, then the callee-saved RBX, R12,
-     * R13, R14 and R15, and the five words of the crossing - RIP, CS, RFLAGS,
-     * RSP, SS - after them. The order of the pushes is the order of the pops
-     * read backwards (see the tail of the stub).
-     *
-     * The C call needs the stack 16 bytes aligned and one slot for the
-     * seventh argument: ksys_call() takes the number and the six of the
-     * convention, and a machine of this ABI passes the last one on the
-     * stack.
-     */
     andq $-16, %rsp
     subq $16, %rsp
     movq 24(%rbp), %rax /* the saved R9: the sixth argument */
@@ -344,7 +334,7 @@ isr_syscall:
     movq 32(%rbp), %r9
     call ksys_call
     movq %rbp, %rsp
-    movq %rax, 72(%rbp) /* the result, where the iretq finds it */
+    movq %rax, 72(%rbp) /* the result, where the way back finds it */
 
     /*
      * The way back is ring 3, where the kernel's TLS block is not mapped.
@@ -355,7 +345,158 @@ isr_syscall:
     andq $-16, %rsp
     call port_x86_64_tls_user
     movq %rbp, %rsp
+.endm
 
+/*
+ * The call of a system call through the gate of the table of the interrupts:
+ * `int $0x80` from a program that was built for it, and the restorer of a
+ * signal handler (port_exec.c), which is the one caller the port writes.
+ *
+ * The program is ring 3 code with page tables of its own (ADR 0007), so the
+ * processor takes the stack named by RSP0 of the TSS: the handler runs on a
+ * kernel stack that belongs to the program and not on the stack of the
+ * program, which ring 3 could have pointed anywhere. The five words of the
+ * crossing are already on the stack when the stub starts; the fifteen
+ * registers are pushed here, and the whole of the frame is the one the fast
+ * door below builds by hand.
+ *
+ * The registers of the convention are the ones of the kernel call and of
+ * Linux: the number in RAX, six arguments in RDI, RSI, RDX, R10, R8 and R9,
+ * the result in RAX. Everything the caller may lose across a C call is saved
+ * here - the nine registers below plus RBP, and the five callee-saved ones -
+ * because the C side is free to clobber them and the program is not compiled
+ * against this handler.
+ */
+.global isr_syscall
+.type isr_syscall, @function
+isr_syscall:
+    ksys_save_registers
+    jmp ksys_enter
+.size isr_syscall, . - isr_syscall
+
+/*
+ * The call of a system call through the fast door: the instruction `syscall`,
+ * which the IA32_LSTAR register of the core points at (src/syscall.c).
+ *
+ * The instruction is a jump and nothing else: it does not push a frame, it
+ * does not change the stack and it does not read a descriptor. It leaves the
+ * return address of the program in RCX, its flags in R11 and the stack where
+ * the program had it, and it has already cleared the flags of IA32_FMASK - the
+ * interrupt flag above all, so that nothing arrives before the frame exists.
+ *
+ * The two things it does not do are done here, in four instructions. The stack
+ * of the program goes into the record of the core (one word, because the
+ * frame needs it and a register is either an argument or the number of the
+ * call). The stack of the kernel comes out of the same record: it is the
+ * number gdt.c writes into RSP0 of the TSS, so both doors land on the same
+ * stack, at the same address, and a frame built here is a frame the rest of
+ * the port cannot tell from one the gate built.
+ *
+ * The five words of the crossing are pushed by hand in the order the
+ * processor would have pushed them. RCX and R11 are their own slots as well:
+ * the instruction keeps them, so the frame has no other value for the two, and
+ * a signal frame saved out of it shows the address of the call and the flags
+ * of the program - which is what a dump of the gate shows too.
+ */
+.global isr_syscall_fast
+.type isr_syscall_fast, @function
+isr_syscall_fast:
+    movq %rsp, %gs:PORT_X86_64_CPU_USER_RSP
+    movq %gs:PORT_X86_64_CPU_KERNEL_RSP, %rsp
+
+    pushq $PORT_X86_64_USER_SS            /* SS: the ring 3 data selector */
+    pushq %gs:PORT_X86_64_CPU_USER_RSP    /* RSP: the stack of the program */
+    pushq %r11                            /* RFLAGS: the flags of the program */
+    pushq $PORT_X86_64_USER_CS            /* CS: the ring 3 code selector */
+    pushq %rcx                            /* RIP: the instruction after the call */
+    pushq %r15
+    pushq %r14
+    pushq %r13
+    pushq %r12
+    pushq %rbx
+    pushq %rax
+    pushq %rdi
+    pushq %rsi
+    pushq %rdx
+    pushq %r10
+    pushq %r8
+    pushq %r9
+    pushq %rcx /* the slot of RCX: the instruction keeps the address */
+    pushq %r11 /* the slot of R11: the instruction keeps the flags */
+    pushq %rbp
+    movq %rsp, %rbp
+.size isr_syscall_fast, . - isr_syscall_fast
+
+/* Both frames are built; the call itself is the same. */
+ksys_enter:
+    ksys_call_body
+
+/*
+ * The way back decides between the two instructions of the return.
+ *
+ * SYSRET is the fast one: it takes the flags from R11 and the address from
+ * RCX and turns ring 3 on, and it does not read the frame, so the four
+ * instructions below are the whole of the return. It is also the one that
+ * cannot be handed a broken address: an address that is not canonical faults
+ * in ring 0 *after* the stack of the program is in RSP, which would leave the
+ * handler of the fault on a stack the program chose. The frame of a sigreturn
+ * comes from the memory of the program, so the check is not paranoia.
+ *
+ * Hence the check on the two words that matter. An address that is not
+ * canonical, or a frame that is not a program's (CS is not the ring 3
+ * selector), takes the iretq of the gate instead: the instruction reads the
+ * whole frame including the selector, it faults with the stack of the kernel
+ * still in the register, and the fault handler takes the task down the way it
+ * does today.
+ *
+ * The interrupts are off from here to the instruction of the return: the
+ * stack of the program is loaded into RSP before the one instruction that
+ * uses it, and an interrupt taken in that window would push a frame of the
+ * kernel on a stack the program chose.
+ */
+ksys_return:
+    movq %rbp, %rsp
+    movq 120(%rbp), %rax /* the RIP slot of the frame */
+    movq %rax, %rdx
+    shlq $16, %rdx /* the sign of the address into the top sixteen bits: */
+    sarq $16, %rdx /* a value that survives it is canonical, and only then */
+    cmpq %rax, %rdx
+    jne ksys_return_iret
+    cmpq $PORT_X86_64_USER_CS, 128(%rbp) /* the CS slot: a program, or the gate */
+    jne ksys_return_iret
+
+    cli
+    popq %rbp
+    popq %rcx
+    popq %r11
+    popq %r9
+    popq %r8
+    popq %r10
+    popq %rdx
+    popq %rsi
+    popq %rdi
+    popq %rax
+    popq %rbx
+    popq %r12
+    popq %r13
+    popq %r14
+    popq %r15
+
+    /* The frame now begins at RIP: 0 is the address, 16 the flags and 24 the
+     * stack of the program. SYSRET takes the first two from registers. */
+    movq (%rsp), %rcx
+    movq 16(%rsp), %r11
+    movq 24(%rsp), %rsp
+    sysretq
+
+/*
+ * The slow way back: iretq, which reads the whole frame the processor built
+ * (or the port did) and restores the segment registers and the stack of the
+ * program from it. It is the return of `int $0x80` and the fallback of the
+ * fast door.
+ */
+ksys_return_iret:
+    movq %rbp, %rsp
     popq %rbp
     popq %rcx
     popq %r11
@@ -372,7 +513,6 @@ isr_syscall:
     popq %r14
     popq %r15
     iretq
-.size isr_syscall, . - isr_syscall
 
 /*
  * A vector nobody claimed. It cannot say which one it was, because it has

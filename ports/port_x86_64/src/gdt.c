@@ -5,7 +5,8 @@
  * before there is any C to build it. It has only the two selectors the boot
  * uses, and a table written for a jump cannot grow a TSS: the kernel builds
  * the real one here, in its own memory, with the four selectors of ring 0 and
- * ring 3 and the 64-bit task state segment the processor reads when an
+ * ring 3, the second pair of ring 3 the SYSRET of the fast door derives its
+ * numbers from, and the 64-bit task state segment the processor reads when an
  * interrupt of a program crosses the privilege boundary.
  *
  * The TSS is not a task of this kernel (the scheduler keeps its own state):
@@ -29,6 +30,7 @@
 
 #include "kernel/cpu.h"
 #include "kernel/port/cpu.h"
+#include "port_x86_64_smp.h"
 
 /* The selectors, as they sit in the table and as the processor sees them. */
 #define GDT_KERNEL_CODE 0x08u
@@ -37,10 +39,21 @@
 #define GDT_USER_DATA 0x20u
 #define GDT_TSS 0x28u
 
+/*
+ * The pair SYSRET derives its selectors from. The instruction is told one
+ * number - STAR[63:48] - and takes CS from it plus 16 and SS from it plus 8;
+ * the two ring 3 descriptors of the iretq frames above are in the other order,
+ * so the table carries a second pair, laid out the way the instruction wants
+ * it. SYSCALL is the mirror image: its CS is STAR[31:16] and its SS the
+ * descriptor above, which is the kernel's own pair.
+ */
+#define GDT_SYSRET_DATA (PORT_X86_64_SYSRET_STAR + 0x08u)
+#define GDT_SYSRET_CODE (PORT_X86_64_SYSRET_STAR + 0x10u)
+
 /* The two slots of a system descriptor in long mode. */
 #define GDT_TSS_SLOTS 2u
 
-#define GDT_ENTRIES (5u + GDT_TSS_SLOTS)
+#define GDT_ENTRIES (5u + GDT_TSS_SLOTS + 2u)
 
 /* A 16 KiB stack for the double fault and nothing else. */
 #define DOUBLE_FAULT_STACK_SIZE (16u * 1024u)
@@ -181,6 +194,9 @@ void port_x86_64_gdt_init_cpu(k_u32_t cpu)
     /* The same two for ring 3: what a program is allowed to run on. */
     gdt_set(cpu, 3, 3, 0xFAu, 0xAFu);
     gdt_set(cpu, 4, 3, 0xF2u, 0xCFu);
+    /* And the pair the return of the fast door needs, in its order. */
+    gdt_set(cpu, GDT_SYSRET_DATA / 8u, 3, 0xF2u, 0xCFu);
+    gdt_set(cpu, GDT_SYSRET_CODE / 8u, 3, 0xFAu, 0xAFu);
 
     /* No I/O bitmap: a pointer past the limit denies every port to ring 3. */
     tss->iomap = (k_u16_t)sizeof(struct tss64);
@@ -203,6 +219,14 @@ void port_x86_64_gdt_init(void)
 void port_x86_64_tss_set_rsp0(k_u64_t rsp0)
 {
     g_tss[gdt_cpu()].rsp0 = rsp0;
+
+    /*
+     * The record of the core carries the same number, because the entry of
+     * `syscall` has no descriptor to read on its way in: the instruction
+     * changes no stack, so the stub has to find one before it can push the
+     * frame, and it finds it here (src/interrupts.S). One write, one place.
+     */
+    port_x86_64_cpu_set_kernel_rsp(rsp0);
 }
 
 k_u64_t port_x86_64_tss_rsp0(void)

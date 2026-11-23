@@ -138,6 +138,18 @@ static inline void port_wrmsr(k_u32_t msr, k_u64_t value)
     __asm__ volatile("wrmsr" : : "c"(msr), "a"(low), "d"(high));
 }
 
+/* The other half of it: the register of the machine that carries the state of
+ * the crossing of a system call (src/syscall.c). */
+static inline k_u64_t port_rdmsr(k_u32_t msr)
+{
+    k_u32_t low;
+    k_u32_t high;
+
+    __asm__ volatile("rdmsr" : "=a"(low), "=d"(high) : "c"(msr));
+
+    return ((k_u64_t)high << 32) | low;
+}
+
 static inline void port_cli(void)
 {
     __asm__ volatile("cli" : : : "memory");
@@ -215,6 +227,41 @@ k_u32_t port_x86_64_irq_count(k_u32_t line, k_u32_t cpu);
  * because neither has anywhere to return to in a kernel this small.
  */
 void port_x86_64_unexpected(void);
+
+/*
+ * The fast door of a program: the stub the IA32_LSTAR register names, which
+ * the instruction `syscall` jumps to (src/interrupts.S). The vector 0x80 of
+ * the IDT stays, because a program that is not the library of the tree and
+ * the return of a signal handler still use it, and because a machine of two
+ * doors costs nothing.
+ */
+extern void isr_syscall_fast(void);
+
+/*
+ * The selectors of the fast door. SYSCALL takes the code selector from
+ * STAR[31:16], and the data selector is the descriptor eight bytes above it,
+ * so the pair is the kernel's own 0x08 and 0x10.
+ *
+ * SYSRET is told one number and derives both of its selectors from it: CS is
+ * STAR[63:48] + 16 and SS is STAR[63:48] + 8. The ring 3 selectors of the
+ * iretq frames (0x18 code, 0x20 data) are in the wrong order for that, and
+ * swapping them would rewrite every frame of a signal, a fork and an exec; so
+ * the GDT carries a second pair, laid out the way the instruction wants it,
+ * and STAR[63:48] is the number below (src/gdt.c).
+ */
+#define PORT_X86_64_SYSCALL_CS 0x08u
+#define PORT_X86_64_SYSRET_STAR 0x30u
+
+/*
+ * Open the fast door on this core: IA32_EFER.SCE, IA32_STAR (the selectors),
+ * IA32_LSTAR (the entry) and IA32_FMASK (the flags the processor clears on the
+ * way in). Every one of them is a register of the core, so the boot calls this
+ * once for itself and an application processor calls it on its way up. It is
+ * called at the end of port_x86_64_interrupts_init(), after the table the
+ * `int $0x80` door needs, so that a port without one of the two doors is a
+ * port that never set one of the two entries.
+ */
+void port_x86_64_syscall_init_cpu(void);
 
 /*
  * The body of the timer interrupt, called by interrupts.S. `frame` is the

@@ -1364,6 +1364,7 @@ add_executable(microos64
     src/fbdev.c
     src/inputdev.c
     src/gdt.c
+    src/syscall.c
     src/paging.c
     src/cpu.c
     src/smp.c

@@ -909,6 +909,15 @@ void port_x86_64_interrupts_init(void)
     /* The table is in the register of the processor and the lines are
      * programmed; from here the timer keeps the time of the kernel. */
     port_sti();
+
+    /*
+     * The fast door of a system call, last: the table above is the door a
+     * program reaches with `int $0x80`, and this call opens the one the
+     * instruction `syscall` takes (src/syscall.c). Both build the same frame
+     * of 160 bytes, so a port that had one and now has two returns from
+     * either the same way.
+     */
+    port_x86_64_syscall_init_cpu();
 }
 
 /* --- the time --- */
