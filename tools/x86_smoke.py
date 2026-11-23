@@ -1655,6 +1655,7 @@ def check(output: str) -> list:
                 "bc",
                 "dc",
                 "zstd",
+                "zstdcat",
                 "file",
                 "sqlite3",
                 "awk",
