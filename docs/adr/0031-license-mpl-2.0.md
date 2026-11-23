@@ -406,3 +406,44 @@ contributor's code lands, which closes the cheap window of §2.7.
   it creates no CLA. It registers no trademark either.
 * It does not reopen ADR 0025: GPL code stays out of every binary this tree
   builds, whatever the license of the tree becomes.
+
+## 6. What a change of the license would not buy (23 November 2026)
+
+A question came back with a driver of a laptop as the reason: "we meet painful
+limits, so after 2.0 the tree becomes MPL-2.0 and the limits go away". The
+answer of the record is no: the limits are not the ones a license of *our*
+files can lift, and this section says where each of them really lives.
+
+* **A GPL driver stays impossible.** MPL-2.0 and GPL-2.0 are compatible in one
+  direction only: MPL code may travel inside a GPL work (§3.3 and the secondary
+  licenses), and GPL code may not be relicensed as MPL. A GPL driver linked
+  into an MPL kernel is the same linking question as one linked into an MIT
+  kernel, with the same answer: the whole becomes GPL. The license of the tree
+  is not a lever here.
+* **The technical wall is not the license either.** `iwlwifi` is a driver for
+  `mac80211`: the state machine of 802.11 lives in a GPL subsystem of its own,
+  and "a Linux-compatible API" means porting `netdev`, `skb`, `cfg80211`,
+  `nl80211`, `mac80211`, RCU and the workqueues before the driver has one
+  caller. The `iwlwifi` of a laptop is a project of the size of this system.
+* **The firmware is proprietary at any license of ours.** The `.ucode` of a
+  card ships with its own license, as a file outside the sources, in every
+  distribution of every system that loads it.
+* **What the BSD world gives for free.** `iwm(4)` of OpenBSD and FreeBSD
+  speaks the same 8260/8265 and is BSD-2-Clause, and the `net80211` under it is
+  BSD-2-Clause: a permissive path that this tree may take **today**, with no
+  change of license. It is the answer to the pain, and it is already inside
+  the rule of ADR 0025.
+
+What a change of the license would buy is the thing §4 already measured: a
+file-level copyleft over our own files, an express patent grant, and a work
+that a GPL project may embed. Those are reasons to consider MPL-2.0 at 2.0;
+they are not the reasons of a driver.
+
+**The shape a GPL driver can have, if it is ever wanted:** a second build, not
+a second license. The MIT tree stays the machine by default; `make gpl` would
+build an image whose driver set is GPL, that image and its sources are
+published under GPL-2.0 as a package of their own, and a person chooses which
+one to install. That is how a permissive system lives beside copyleft code
+without either lying about its license; it is a decision of its own, with an
+ADR of its own, and this one does not take it.
+
