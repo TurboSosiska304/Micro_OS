@@ -106,6 +106,45 @@ GUEST_DNS_NAME = "example.com"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.environ.get("X86_BUILD", os.path.join(ROOT, "build-x86-net"))
 
+# The store of roots that `tools/x86_image.py` writes into the image of the
+# release (tools/ca/README.md). The disk of this test is the same image, so
+# the store the guest starts with is the store of the release; the root of the
+# test authority is served on top of it, because a bundle of a machine is one
+# file and a distribution bundle plus one line is how a person adds a mirror.
+IMAGE_CA_BUNDLE = os.path.join(ROOT, "tools", "ca", "mozilla.pem")
+
+
+def build_disk_image(destination: str) -> bool:
+    """Write the disk of the release with the programs of this build.
+
+    The image of /bin and /etc is the one `make x86-disk` writes, made here
+    with the build of the network (`build-x86-net`), so the test boots the
+    machine of a person and not only the volume of the memory. The tool of the
+    volume is the host build (`build-host/tools/microos_mkfs`); a tree without
+    it keeps the machine of ram0 and says so.
+    """
+    mkfs = os.path.join(ROOT, "build-host", "tools", "microos_mkfs")
+
+    if not os.path.isfile(mkfs):
+        return False
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            os.path.join(ROOT, "tools", "x86_image.py"),
+            "--image",
+            destination,
+            "--build",
+            BUILD,
+            "--mkfs",
+            mkfs,
+        ],
+        check=False,
+        capture_output=True,
+    )
+
+    return result.returncode == 0 and os.path.isfile(destination)
+
 
 class UdpEcho(threading.Thread):
     """A UDP echo server on the loopback, which is 10.0.2.2 for the guest."""
@@ -505,7 +544,8 @@ def host_get(port: int, path: str, tries: int = 15) -> str:
     return ""
 
 
-def run_machine(loader: str, kernel: str, steps: list, fwd_port: int, timeout: float) -> str:
+def run_machine(loader: str, kernel: str, steps: list, fwd_port: int, timeout: float,
+                image: str | None = None) -> str:
     """Boot the machine, run the steps and return the transcript.
 
     A step is ("cmd", text) - a line for the shell - or ("host", callable) -
@@ -514,6 +554,12 @@ def run_machine(loader: str, kernel: str, steps: list, fwd_port: int, timeout: f
     runs, and a step goes out only when the prompt of the one before is on the
     console: the FIFO of the serial port is small and a line typed too early
     is a line the shell of the port reads as two.
+
+    `image` is the disk of the machine: with one, the boot mounts the volume
+    of `tools/x86_image.py` - /bin and /etc, the store of roots among them -
+    and the test asks the questions a person with the released image asks.
+    Without one the machine has the volume of its memory (ram0), which is the
+    machine of a boot with no disk.
     """
     command = [
         "qemu-system-x86_64",
@@ -525,6 +571,12 @@ def run_machine(loader: str, kernel: str, steps: list, fwd_port: int, timeout: f
         "256",
         "-nographic",
         "-no-reboot",
+    ]
+    if image is not None:
+        # A raw volume on the primary channel of the IDE controller, the
+        # cache of the host as in tools/x86_disk_smoke.py.
+        command += ["-drive", f"file={image},format=raw,if=ide,index=0,cache=writeback"]
+    command += [
         "-netdev",
         # The port of the host that reaches the page of the state of the
         # guest: a person or a monitor of the host, as in a real machine.
@@ -770,6 +822,30 @@ def check(output: str, answers: dict, host: dict, dns_name: str | None, commands
             other.strip(),
         )
 
+        if tls_state.get("disk"):
+            store = answers.get("image-store", "")
+            expect(
+                "the store of roots is on a fresh image of the release",
+                "type: file" in store and "size:" in store and "no such file" not in store,
+                store.strip(),
+            )
+            fresh = answers.get("pkg-fresh-https", "")
+            expect(
+                "pkg on a fresh image loads the store of the image and refuses another authority",
+                "not trusted (flags 0x8)" in fresh
+                and "there is no /etc/ssl/certs.pem" not in fresh
+                and "is not a PEM store" not in fresh,
+                fresh.strip(),
+            )
+
+    key = answers.get("wget-key", "")
+    if key:
+        expect(
+            "the key of a repository is the file the documentation names",
+            f"byte(s) to /etc/pkg/keys/{REPO_NAME}.pub" in key,
+            key.strip(),
+        )
+
     package = answers.get("wget-package", "")
     expect(
         "wget downloads a file larger than the window of the session",
@@ -927,9 +1003,28 @@ def main(argv: list) -> int:
     ntp = None
 
     if generate_certificates(certificates):
-        HttpHandler.extras = {
-            "/ca.pem": open(os.path.join(certificates, "ca.pem"), "rb").read(),
-        }
+        # The store the guest downloads is the one of the image plus the root
+        # of the test authority: a bundle of a distribution is one file, and a
+        # person adds a mirror by appending its root (or by replacing the file
+        # with a store that holds both). This is also the check that a store
+        # of a hundred certificates, ECDSA roots among them, is a store this
+        # client loads.
+        with open(os.path.join(certificates, "ca.pem"), "rb") as handle:
+            test_root = handle.read()
+        bundle = b""
+        if os.path.isfile(IMAGE_CA_BUNDLE):
+            with open(IMAGE_CA_BUNDLE, "rb") as handle:
+                bundle = handle.read()
+        HttpHandler.extras = {"/ca.pem": bundle + test_root}
+
+    # The key of the repository of this test: it signs the index and the
+    # program of the local server, and it is written where the documentation
+    # says a repository names its key - /etc/pkg/keys/<repo>.pub - because the
+    # image of the release carries the key of the project there.
+    test_key = os.path.join(BUILD, "signing.pub")
+    if os.path.isfile(test_key):
+        with open(test_key, "rb") as handle:
+            HttpHandler.extras = dict(HttpHandler.extras, **{"/test.pub": handle.read()})
 
         def certificate(name: str) -> tuple:
             return (
@@ -989,14 +1084,39 @@ def main(argv: list) -> int:
     command(f"wget http://10.0.2.2:{http.port}/half.bin /part.bin", "wget-cut")
     command(f"wget http://10.0.2.2:{http.port}/half.bin /part.bin", "wget-resume")
 
+    disk = os.path.join(tempfile.mkdtemp(prefix="microos-disk-"), "programs.img")
+    if not build_disk_image(disk):
+        disk = None
+    tls_state["disk"] = disk is not None
+
     if tls_state["enabled"]:
         # The order matters: https before `ntp` is a clock of 1970 and a
         # refusal, which is the policy of ADR 0024 §3.
         command(f"wget https://10.0.2.2:{tls_state['port']}/file.bin /tls-early.bin",
                 "wget-tls-early")
-        command("mkdir /etc/ssl", "tls-directory")
-        command(f"wget http://10.0.2.2:{http.port}/ca.pem {TLS_ROOTS_PATH}", "wget-ca")
+        if disk is None:
+            command("mkdir /etc/ssl", "tls-directory")
+        else:
+            # The store of the release on a fresh image: without it the
+            # documented install of a package over https cannot start, and
+            # the machine of `make x86-disk` had none.
+            command(f"stat {TLS_ROOTS_PATH}", "image-store")
         command(f"ntp 10.0.2.2:{tls_state['ntp_port']}", "ntp")
+
+    scheme = "https" if tls_state["enabled"] else "http"
+    repository_port = tls_state["port"] if tls_state["enabled"] else http.port
+    command(f"pkg repo add {scheme}://10.0.2.2:{repository_port}/", "pkg-repo")
+
+    if tls_state["enabled"] and disk is not None:
+        # The machine has its roots and its clock, and the authority of this
+        # test is not one of them: the chain is refused by name and not with
+        # "there is no /etc/ssl/certs.pem". That refusal is the proof that the
+        # store of the image is read, and the install that follows proves the
+        # whole path.
+        command("pkg -Sy", "pkg-fresh-https")
+
+    if tls_state["enabled"]:
+        command(f"wget http://10.0.2.2:{http.port}/ca.pem {TLS_ROOTS_PATH}", "wget-ca")
         command(f"wget https://10.0.2.2:{tls_state['port']}/file.bin /tls.bin", "wget-tls")
         command(f"wget https://10.0.2.2:{tls_state['port']}/go /tls-redirect.bin",
                 "wget-tls-redirect")
@@ -1010,9 +1130,13 @@ def main(argv: list) -> int:
             "wget-other-authority",
         )
 
-    scheme = "https" if tls_state["enabled"] else "http"
-    repository_port = tls_state["port"] if tls_state["enabled"] else http.port
-    command(f"pkg repo add {scheme}://10.0.2.2:{repository_port}/", "pkg-repo")
+    if "/test.pub" in HttpHandler.extras:
+        if disk is None:
+            command("mkdir /etc/pkg", "pkg-directory")
+            command("mkdir /etc/pkg/keys", "pkg-keys-directory")
+        command(f"wget http://10.0.2.2:{http.port}/test.pub /etc/pkg/keys/{REPO_NAME}.pub",
+                "wget-key")
+
     command(f"wget http://10.0.2.2:{http.port}/{PROGRAM_FILE} /prog.mox", "wget-package")
     command("pkg -Sy", "pkg-sync")
     command(f"pkg -S {PROGRAM}", "pkg-install")
@@ -1030,7 +1154,7 @@ def main(argv: list) -> int:
     command("netinfo", "netinfo-after")
 
     try:
-        output = run_machine(loader, kernel, steps, fwd_port, args.timeout)
+        output = run_machine(loader, kernel, steps, fwd_port, args.timeout, image=disk)
     except FileNotFoundError:
         print("qemu-system-x86_64 is not installed", file=sys.stderr)
         return 2
@@ -1064,6 +1188,9 @@ def main(argv: list) -> int:
 
     checks, notes = check(output, answers, host, dns_name,
                           commands=sum(1 for k, _ in steps if k == "cmd"), tls_state=tls_state)
+    if disk is None:
+        notes.append("the store of the release is not asked: build-host/tools/microos_mkfs is "
+                     "missing (run `make build`)")
     failed = [item for item in checks if not item[1]]
 
     print("Micro OS — the network smoke test of the x86-64 port")

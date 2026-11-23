@@ -577,7 +577,17 @@ static void say_error(int code)
         pkg_error("the index has more packages than this machine keeps");
         break;
     case PKG_ESIGN:
-        pkg_error("the signature is not the one of the repository");
+        /*
+         * Two keys can be the reason and they are indistinguishable here: the
+         * repository signs with another key than the one this machine trusts
+         * (its `/etc/pkg/keys/<repo>.pub`, or the key of the image when the
+         * file is not there), or the bytes are not the bytes that were
+         * signed. The sentence names the file, because a machine built with a
+         * key of its own meets the first case every day.
+         */
+        pkg_error("the signature is not the one of the repository: this machine trusts "
+                  "/etc/pkg/keys/%s.pub, or the key of its image",
+                  PKG_DEFAULT_REPO);
         break;
     case PKG_EMACHINE:
         pkg_error("the package is for another machine");

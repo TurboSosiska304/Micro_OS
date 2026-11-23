@@ -277,6 +277,19 @@ def data_checks(name: str, transcript: str) -> list:
         re.search(r"blocks: \d+ of \d+ free", free) is not None,
         free,
     )
+    # The block of FAT32 is the sector of 512 bytes, and the line names it: a
+    # "0 KB each" would read as a volume of no bytes. FAT keeps no inodes, and
+    # the line says so instead of a zero nobody read.
+    expect(
+        f"{name}: df /data names the unit of the blocks of the volume",
+        "(512 bytes each)" in free and "0 KB each" not in free,
+        free,
+    )
+    expect(
+        f"{name}: df /data does not invent a table of inodes",
+        "not kept by this volume" in free and "0 of 0" not in free,
+        free,
+    )
 
     return checks
 

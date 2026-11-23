@@ -1036,6 +1036,32 @@ def build_image(
         return 2
     entries.append(tree_file("/etc/licenses/pcre2", license_path))
 
+    # The roots of the machine (ADR 0024 §3): one file of PEM certificates in
+    # /etc, so that a fresh image can speak https - `pkg -Sy` of a repository
+    # over TLS is the documented install path, and a machine with no store
+    # trusts nobody and says so. `tools/ca/README.md` names the source and the
+    # way to update the bundle; a person replaces the file with `wget`.
+    ca_bundle = os.path.join(ROOT, "tools", "ca", "mozilla.pem")
+    if not os.path.isfile(ca_bundle):
+        print(f"missing {ca_bundle}", file=sys.stderr)
+        return 2
+    entries.append(tree_dir("/etc/ssl"))
+    entries.append(tree_file("/etc/ssl/certs.pem", ca_bundle))
+
+    # The key of the repository of the project (docs/wiki/pkg.md): the file
+    # the documentation names for `<repo>.pub`. Without it the key of the
+    # image answers, and the key of an image built from this tree is the one
+    # generated in its build directory - so `pkg -S hello` of the public
+    # repository failed on every image a person builds. `tools/pkg/README.md`
+    # names the source.
+    repo_key = os.path.join(ROOT, "tools", "pkg", "microos-progs.pub")
+    if not os.path.isfile(repo_key):
+        print(f"missing {repo_key}", file=sys.stderr)
+        return 2
+    entries.append(tree_dir("/etc/pkg"))
+    entries.append(tree_dir("/etc/pkg/keys"))
+    entries.append(tree_file("/etc/pkg/keys/microos-progs.pub", repo_key))
+
     entries += extra_entries(extra or [])
 
     if fs == "ext2":
