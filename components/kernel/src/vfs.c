@@ -647,6 +647,22 @@ int vfs_open(const char *path, int flags, struct vfs_file *out, void *priv)
         return rc;
     }
 
+    /*
+     * The exclusive create is decided here, before the filesystem sees the
+     * flags: the answer is about the name of the tree and not about the
+     * shape of one format. A name that is there is KERR_EXIST and the
+     * filesystem is not asked to open it - a second task that raced this
+     * one may still have made it, but the open it makes is then a plain
+     * create of a name that its own check saw free.
+     */
+    if ((flags & VFS_O_EXCL) != 0 && (flags & VFS_O_CREAT) != 0) {
+        struct vfs_stat existing;
+
+        if (stat_raw(path, &existing) == 0) {
+            return KERR_EXIST;
+        }
+    }
+
     /* The descriptor of the caller is not initialised: the offset and the
      * size have to start from zero. The private data belongs to the caller:
      * the kernel keeps them with the open file of the task. */
@@ -1039,6 +1055,27 @@ int vfs_unlink(const char *path)
  * searchable - and the filesystem of the first decides for the second: two
  * mounts are two volumes, and a copy between them is not a rename.
  */
+int vfs_rmdir(const char *path)
+{
+    const struct mount *m = resolve(path, NULL);
+    int rc;
+
+    if (m == NULL) {
+        return KERR_NOENT;
+    }
+
+    rc = path_search_check(path);
+    if (rc != 0) {
+        return rc;
+    }
+
+    if (m->ops->rmdir == NULL) {
+        return KERR_NOTSUP;
+    }
+
+    return m->ops->rmdir(m->ctx, path);
+}
+
 int vfs_rename(const char *from, const char *to)
 {
     const struct mount *source;

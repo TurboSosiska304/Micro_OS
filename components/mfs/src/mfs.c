@@ -2523,7 +2523,15 @@ static int mfs_truncate_locked(struct mfs_file *file, k_u64_t size)
     return mfs_sync();
 }
 
-static int mfs_unlink_locked(const char *path)
+/*
+ * The removal of one name. `directory` says which of the two calls of POSIX
+ * the name is: unlink of a directory is MFS_EISDIR, rmdir of a file is
+ * MFS_ENOTDIR, and only rmdir looks inside for the entries that would make
+ * the directory non-empty. The two calls share the rest of the work, because
+ * the order of the writes is the same and a second copy of it would be a
+ * second place for the order to drift.
+ */
+static int mfs_remove_locked(const char *path, bool directory)
 {
     char dir_path[MFS_PATH_MAX];
     char name[MFS_NAME_MAX + 1];
@@ -2567,6 +2575,10 @@ static int mfs_unlink_locked(const char *path)
     if ((inode.flags & MFS_INODE_DIR) != 0) {
         struct dir_buffer *content = &g_dir_buffer2;
 
+        if (!directory) {
+            return MFS_EISDIR;
+        }
+
         rc = dir_read(&inode, content);
         if (rc != MFS_OK) {
             return rc;
@@ -2574,6 +2586,8 @@ static int mfs_unlink_locked(const char *path)
         if (content->size > 0) {
             return MFS_ENOTEMPTY;
         }
+    } else if (directory) {
+        return MFS_ENOTDIR;
     }
 
     /* The record of the object is not needed any more. */
@@ -3287,7 +3301,18 @@ int mfs_unlink(const char *path)
     int rc;
 
     mfs_lock();
-    rc = mfs_unlink_locked(path);
+    rc = mfs_remove_locked(path, false);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_rmdir(const char *path)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_remove_locked(path, true);
     mfs_unlock();
 
     return rc;

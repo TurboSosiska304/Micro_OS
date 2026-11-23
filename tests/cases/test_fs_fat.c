@@ -1292,11 +1292,13 @@ static void test_mkdir_and_long_names(void)
     }
     KT_CHECK(saw_dir);
 
-    /* A directory that holds a file is not removable. */
-    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/A Long Directory Name"), KERR_NOTEMPTY);
+    /* A directory that holds a file is not removable; unlink of a directory
+     * is the wrong call of POSIX. */
+    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/A Long Directory Name"), KERR_ISDIR);
+    KT_CHECK_INT_EQ(vfs_rmdir(TEST_ROOT_POINT "/A Long Directory Name"), KERR_NOTEMPTY);
     KT_CHECK_INT_EQ(
         vfs_unlink(TEST_ROOT_POINT "/A Long Directory Name/a long file name inside.txt"), 0);
-    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/A Long Directory Name"), 0);
+    KT_CHECK_INT_EQ(vfs_rmdir(TEST_ROOT_POINT "/A Long Directory Name"), 0);
     KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/A Long Directory Name", &stat), KERR_NOENT);
 
     /* Two names that cut to the same 8.3 name: the second gets a "~N". */
@@ -1475,7 +1477,7 @@ static void test_fixed_root_write(enum fat_kind kind, const char *title)
     KT_CHECK_STR_EQ(buffer, "inner");
 
     KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/DIR1/IN.TXT"), 0);
-    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/DIR1"), 0);
+    KT_CHECK_INT_EQ(vfs_rmdir(TEST_ROOT_POINT "/DIR1"), 0);
     KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/WORK.TXT"), 0);
     KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/WORK.TXT", &stat), KERR_NOENT);
 
@@ -2689,7 +2691,7 @@ static void test_oracle_forward(void)
 
     /* An empty directory goes, and its cluster comes back to the map. */
     KT_CHECK_INT_EQ(vfs_mkdir(TEST_ROOT_POINT "/doomed"), 0);
-    KT_CHECK_INT_EQ(vfs_unlink(TEST_ROOT_POINT "/doomed"), 0);
+    KT_CHECK_INT_EQ(vfs_rmdir(TEST_ROOT_POINT "/doomed"), 0);
 
     KT_CHECK_INT_EQ(write_file(TEST_ROOT_POINT "/gone.txt", "123456", 6, VFS_O_CREAT), 6);
     KT_CHECK_INT_EQ(

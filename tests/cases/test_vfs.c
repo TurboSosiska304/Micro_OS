@@ -106,7 +106,7 @@ static void test_directories(void)
         KT_CHECK_INT_EQ(entries[0].type, 2);
     }
 
-    KT_CHECK_INT_EQ(vfs_unlink("/etc"), 0);
+    KT_CHECK_INT_EQ(vfs_rmdir("/etc"), 0);
     KT_CHECK_INT_EQ(vfs_list("/", entries, 16, &count), 0);
     KT_CHECK_INT_EQ(count, 0);
 
@@ -118,7 +118,9 @@ static void test_directories(void)
      */
     KT_CHECK_INT_EQ(vfs_mkdir("/full"), 0);
     KT_CHECK_INT_EQ(mfs_create("/full/file.txt"), MFS_OK);
-    KT_CHECK_INT_EQ(vfs_unlink("/full"), KERR_NOTEMPTY);
+    KT_CHECK_INT_EQ(vfs_unlink("/full"), KERR_ISDIR);
+    KT_CHECK_INT_EQ(vfs_rmdir("/full"), KERR_NOTEMPTY);
+    KT_CHECK_INT_EQ(vfs_rmdir("/nothing-here"), KERR_NOENT);
     KT_CHECK_INT_EQ(vfs_unlink("/nothing-here"), KERR_NOENT);
 
     teardown();
@@ -347,6 +349,7 @@ static void test_directory_search(void)
      * object of it, so a directory without the search bit keeps them out. */
     KT_CHECK_INT_EQ(vfs_mkdir("/locked/newdir"), KERR_PERM);
     KT_CHECK_INT_EQ(vfs_unlink("/locked/inside.txt"), KERR_PERM);
+    KT_CHECK_INT_EQ(vfs_rmdir("/locked/newdir"), KERR_PERM);
     KT_CHECK_INT_EQ(vfs_chmod("/locked/inside.txt", 0644), KERR_PERM);
     KT_CHECK_INT_EQ(vfs_chown("/locked/inside.txt", 7), KERR_PERM);
 
@@ -360,7 +363,7 @@ static void test_directory_search(void)
     KT_CHECK_INT_EQ(vfs_close(&file), 0);
     KT_CHECK_INT_EQ(vfs_stat("/locked/inside.txt", &stat), 0);
     KT_CHECK_INT_EQ(vfs_mkdir("/locked/newdir"), 0);
-    KT_CHECK_INT_EQ(vfs_unlink("/locked/newdir"), 0);
+    KT_CHECK_INT_EQ(vfs_rmdir("/locked/newdir"), 0);
     KT_CHECK_INT_EQ(vfs_chmod("/locked/inside.txt", 0644), 0);
     KT_CHECK_INT_EQ(vfs_chown("/locked/inside.txt", 7), 0);
     KT_CHECK_INT_EQ(vfs_stat("/locked/inside.txt", &stat), 0);
@@ -377,7 +380,7 @@ static void test_directory_search(void)
 
     /* The root is passed through by every path and works as before. */
     KT_CHECK_INT_EQ(vfs_mkdir("/top"), 0);
-    KT_CHECK_INT_EQ(vfs_unlink("/top"), 0);
+    KT_CHECK_INT_EQ(vfs_rmdir("/top"), 0);
 
     /*
      * A filesystem that keeps no modes is walked the way it always was: a

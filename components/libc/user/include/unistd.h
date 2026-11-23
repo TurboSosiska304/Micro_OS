@@ -3,8 +3,9 @@
  *
  * The prototypes are the ones of `ulibc.h`; the file adds the names a portable
  * source expects, the numbers of `lseek`, and the calls the library builds
- * over the ABI: `access` over a stat, `rmdir` over the unlink of an empty
- * directory, `execvp` over `execve` and the words of `PATH`. A call of POSIX
+ * over the ABI: `access` over a stat, `rmdir` over `KSYS_RMDIR` (the removal
+ * of a directory, which is not the unlink of a file), `execvp` over `execve`
+ * and the words of `PATH`. A call of POSIX
  * that this system cannot answer - `chdir`, because the cwd belongs to the
  * shell and the ABI has no call to move it - answers -1 and `ENOSYS`; the
  * sentence is in `docs/porting-programs.md`.

@@ -450,8 +450,15 @@ set_source_files_properties(${ZLIB_SOURCES}
 
 add_libc_program(echo)
 add_libc_program(mkdir)
+add_libc_program(mv)
 add_libc_program(pwd)
-add_libc_program(rm)
+# The two removals call the POSIX wrappers of unistd_ext.c, which the small
+# runtime of a program does not carry: the object is linked into these two
+# images alone.
+add_libc_program(rm SOURCES "${LIBC_USER_DIR}/src/unistd_ext.c"
+                            "${LIBC_USER_DIR}/src/stat.c")
+add_libc_program(rmdir SOURCES "${LIBC_USER_DIR}/src/unistd_ext.c"
+                               "${LIBC_USER_DIR}/src/stat.c")
 add_libc_program(spawn)
 
 # --- the interface: /bin/ui (ADR 0028) --------------------------------------

@@ -1250,7 +1250,7 @@ static int remove_entry_run(struct fat_volume *vol, k_u32_t dir_cluster, k_u32_t
     return 0;
 }
 
-int fat_dir_remove(struct fat_volume *vol, const char *path)
+static int fat_dir_remove_kind(struct fat_volume *vol, const char *path, bool directory)
 {
     struct fat_entry parent;
     struct fat_entry entry;
@@ -1274,6 +1274,10 @@ int fat_dir_remove(struct fat_volume *vol, const char *path)
     if (entry.dir) {
         bool empty;
 
+        if (!directory) {
+            return KERR_ISDIR;
+        }
+
         rc = dir_is_empty(vol, entry.cluster, &empty);
         if (rc != 0) {
             return rc;
@@ -1281,6 +1285,8 @@ int fat_dir_remove(struct fat_volume *vol, const char *path)
         if (!empty) {
             return KERR_NOTEMPTY;
         }
+    } else if (directory) {
+        return KERR_NOTDIR;
     }
 
     /* The entry goes first and the chain after it: a failure between the two
@@ -1296,6 +1302,16 @@ int fat_dir_remove(struct fat_volume *vol, const char *path)
     }
 
     return rc;
+}
+
+int fat_dir_remove(struct fat_volume *vol, const char *path)
+{
+    return fat_dir_remove_kind(vol, path, false);
+}
+
+int fat_dir_rmdir(struct fat_volume *vol, const char *path)
+{
+    return fat_dir_remove_kind(vol, path, true);
 }
 
 /*

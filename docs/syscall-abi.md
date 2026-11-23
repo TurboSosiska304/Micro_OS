@@ -119,12 +119,33 @@ chose.
 | 33 | `setlimit` | `which, value` | 0, or an error |
 | 34 | `rename` | `from, to` | 0, or an error |
 | 35 | `ftruncate` | `fd, size` | 0, or an error |
+| 36 | `rmdir` | `path` | 0, or an error |
+| 37 | `fstat` | `fd, buf` | 0, or an error |
 
 The numbers 0 to 22 are frozen, 23 to 26 were the next free ones; pipes took
 27 and 28 (ADR 0014), signals the three after them (ADR 0015), the limits of
 a task 32 and 33, the atomic rename 34 (ADR 0024 §5) and the cut of an open
-file 35. A call that is not in the table is `ENOSYS`, never a guess at what
-it might have meant.
+file 35. The two calls of 1.5 follow: `rmdir` is the removal of an empty
+directory, which is a different call from `unlink` in POSIX and in every
+filesystem of this system, and `fstat` is the information about the object
+behind an open descriptor. A call that is not in the table is `ENOSYS`, never
+a guess at what it might have meant.
+
+## The information about an open object
+
+`fstat(fd, buf)` (number 37) writes a `struct vfs_statx` for the object behind
+an open descriptor: the same fields `statx` gives for its name, the mode, the
+owner, the size and the two moments. A descriptor of this system keeps the
+name it was opened with, so an object that a rename moved since the open
+answers for the name it had; the size is the one the descriptor holds, which
+is the length a write that has not been closed yet already gave the file. A
+pipe has no name and answers `ESPIPE`; the library describes it from that
+answer (`S_IFIFO`), which is the fact `tail -f` reads.
+
+`rmdir(path)` (number 36) removes an empty directory. It is not `unlink` of a
+directory: `unlink` of a directory is `EISDIR`, `rmdir` of a file is
+`ENOTDIR`, and a directory that still holds a name is `ENOTEMPTY`. The two
+calls share the walk of the parent and the check of its search bit.
 
 ## The control commands of `ioctl`
 
@@ -159,6 +180,7 @@ The flags of `open` are the same as the ones of the VFS:
 | `KSYS_O_TRUNC` | cut the file to zero |
 | `KSYS_O_APPEND` | write at the end |
 | `KSYS_O_DIRECTORY` | open a directory, for `readdir` |
+| `KSYS_O_EXCL` | with `KSYS_O_CREAT`, refuse a name that is already there |
 
 `KSYS_O_DIRECTORY` (`0x0800`) goes with `KSYS_O_RDONLY` and with no other
 flag: a directory of this system is read, never written. The number is not the

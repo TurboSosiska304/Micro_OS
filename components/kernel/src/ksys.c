@@ -611,6 +611,62 @@ static k_ssize_t sys_statx(ksys_arg_t path, ksys_arg_t buf, ksys_arg_t a2, ksys_
     return 0;
 }
 
+/*
+ * The information about an open object. A descriptor of this system keeps the
+ * name it was opened with, so the call is the statx of that name: the object
+ * that a rename moved since the open answers for the name it had, which is
+ * the one fact the descriptor still knows. A pipe has no name and no statx;
+ * the library answers a pipe from its own knowledge of it (ESPIPE on a seek)
+ * and never reaches this call.
+ */
+static k_ssize_t sys_fstat(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t a2, ksys_arg_t a3,
+                           ksys_arg_t a4, ksys_arg_t a5)
+{
+    struct kfile *file = fd_get(fd);
+    struct vfs_statx stat;
+    int rc;
+
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    if (file == NULL) {
+        return KERR_BADF;
+    }
+
+    if (file->kind == KFILE_PIPE) {
+        return KERR_SPIPE;
+    }
+
+    if (buf == 0) {
+        return KERR_INVAL;
+    }
+
+    if (!k_port_exec_contains((const void *)(uintptr_t)buf, sizeof(stat))) {
+        return KERR_FAULT;
+    }
+
+    rc = vfs_statx(file->path, &stat);
+    if (rc != 0) {
+        return rc;
+    }
+
+    /*
+     * The size of an open file is the one the descriptor holds: MicroFS
+     * writes the record when the descriptor is closed or synced, so the
+     * medium can still say the length of the open. The mode, the owner and
+     * the moments are the ones of the record and do not wait for a close.
+     */
+    if (stat.type == 1) {
+        stat.size = file->file.size;
+    }
+
+    memcpy((void *)(uintptr_t)buf, &stat, sizeof(stat));
+
+    return 0;
+}
+
 static k_ssize_t sys_lseek(ksys_arg_t fd, ksys_arg_t offset, ksys_arg_t whence, ksys_arg_t a3,
                            ksys_arg_t a4, ksys_arg_t a5)
 {
@@ -708,6 +764,25 @@ static k_ssize_t sys_unlink(ksys_arg_t path, ksys_arg_t a1, ksys_arg_t a2, ksys_
     }
 
     return vfs_unlink((const char *)(uintptr_t)path);
+}
+
+static k_ssize_t sys_rmdir(ksys_arg_t path, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                           ksys_arg_t a4, ksys_arg_t a5)
+{
+    int rc;
+
+    K_UNUSED(a1);
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    rc = path_check((const char *)(uintptr_t)path);
+    if (rc != 0) {
+        return rc;
+    }
+
+    return vfs_rmdir((const char *)(uintptr_t)path);
 }
 
 static k_ssize_t sys_mkdir(ksys_arg_t path, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
@@ -1956,6 +2031,8 @@ void ksys_init(void)
     ksys_register(KSYS_SETLIMIT, "setlimit", sys_setlimit);
     ksys_register(KSYS_RENAME, "rename", sys_rename);
     ksys_register(KSYS_FTRUNCATE, "ftruncate", sys_ftruncate);
+    ksys_register(KSYS_RMDIR, "rmdir", sys_rmdir);
+    ksys_register(KSYS_FSTAT, "fstat", sys_fstat);
 }
 
 /* --- the wrappers --- */
@@ -2007,6 +2084,16 @@ int ksys_unlink(const char *path)
 int ksys_mkdir(const char *path)
 {
     return (int)ksys_call(KSYS_MKDIR, (ksys_arg_t)(uintptr_t)path, 0, 0, 0, 0, 0);
+}
+
+int ksys_rmdir(const char *path)
+{
+    return (int)ksys_call(KSYS_RMDIR, (ksys_arg_t)(uintptr_t)path, 0, 0, 0, 0, 0);
+}
+
+int ksys_fstat(int fd, void *buf)
+{
+    return (int)ksys_call(KSYS_FSTAT, (ksys_arg_t)fd, (ksys_arg_t)(uintptr_t)buf, 0, 0, 0, 0);
 }
 
 int ksys_rename(const char *from, const char *to)

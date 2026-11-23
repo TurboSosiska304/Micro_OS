@@ -58,7 +58,9 @@
 #define KSYS_SETLIMIT 33  /* setlimit(which, value) */
 #define KSYS_RENAME 34    /* rename(from, to) */
 #define KSYS_FTRUNCATE 35 /* ftruncate(fd, size) */
-#define KSYS_COUNT 36     /* the number of the system calls */
+#define KSYS_RMDIR 36     /* rmdir(path) */
+#define KSYS_FSTAT 37     /* fstat(fd, buf) */
+#define KSYS_COUNT 38     /* the number of the system calls */
 
 /*
  * The resources of a limit. One number names one resource and the calls move
@@ -110,6 +112,9 @@
  * written through a descriptor of this system.
  */
 #define KSYS_O_DIRECTORY 0x0800
+/* With O_CREAT the open fails with EEXIST instead of opening a name that is
+ * already there (the exclusive create of POSIX). */
+#define KSYS_O_EXCL 0x1000
 
 /* The bits of the access: read, write, or both. */
 #define KSYS_O_ACCMODE 0x0003
@@ -117,7 +122,7 @@
 /* Every bit an open may carry: a flag outside this set is not of the
  * contract, and the call is refused instead of being guessed at. */
 #define KSYS_O_ALLOWED                                                                             \
-    (KSYS_O_ACCMODE | KSYS_O_CREAT | KSYS_O_TRUNC | KSYS_O_APPEND | KSYS_O_DIRECTORY)
+    (KSYS_O_ACCMODE | KSYS_O_CREAT | KSYS_O_TRUNC | KSYS_O_APPEND | KSYS_O_DIRECTORY | KSYS_O_EXCL)
 
 /* The flags of the waitpid. */
 #define KSYS_WNOHANG 1 /* do not wait, answer 0 when the child is not ready */
@@ -217,9 +222,18 @@ int ksys_stat(const char *path, void *buf);
  * caller that wants the two times (ADR 0013).
  */
 int ksys_statx(const char *path, void *buf);
+/*
+ * The information about the object behind an open descriptor. The call is
+ * the `statx` of the name the descriptor was opened with: this system has no
+ * separate table of the names of open files, so an object that was renamed
+ * after its open answers for its old name.
+ */
+int ksys_fstat(int fd, void *buf);
 k_ssize_t ksys_lseek(int fd, k_ssize_t offset, int whence);
 int ksys_unlink(const char *path);
 int ksys_mkdir(const char *path);
+/* Remove an empty directory (POSIX rmdir). */
+int ksys_rmdir(const char *path);
 /* The same object under another name, inside one filesystem (ADR 0024 §5). */
 int ksys_rename(const char *from, const char *to);
 /*

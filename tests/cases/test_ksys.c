@@ -203,7 +203,7 @@ static void test_write_read_roundtrip(void)
 
         KT_CHECK_INT_EQ(ksys_close(fd), 0);
         KT_CHECK_INT_EQ(ksys_unlink("/t/data.txt"), 0);
-        KT_CHECK_INT_EQ(ksys_unlink("/t"), 0);
+        KT_CHECK_INT_EQ(ksys_rmdir("/t"), 0);
     }
 
     teardown();
@@ -300,7 +300,8 @@ static void test_abi_is_stable(void)
         {KSYS_CHOWN, "chown"},       {KSYS_EXECVE, "execve"},       {KSYS_STATX, "statx"},
         {KSYS_PIPE, "pipe"},         {KSYS_DUP2, "dup2"},           {KSYS_KILL, "kill"},
         {KSYS_SIGNAL, "signal"},     {KSYS_SIGRETURN, "sigreturn"}, {KSYS_GETLIMIT, "getlimit"},
-        {KSYS_SETLIMIT, "setlimit"},
+        {KSYS_SETLIMIT, "setlimit"}, {KSYS_RENAME, "rename"},       {KSYS_FTRUNCATE, "ftruncate"},
+        {KSYS_RMDIR, "rmdir"},       {KSYS_FSTAT, "fstat"},
     };
     size_t i;
 
@@ -473,6 +474,7 @@ static const struct abi_value g_abi_known_values[] = {
     {"KSYS_O_TRUNC", KSYS_O_TRUNC},
     {"KSYS_O_APPEND", KSYS_O_APPEND},
     {"KSYS_O_DIRECTORY", KSYS_O_DIRECTORY},
+    {"KSYS_O_EXCL", KSYS_O_EXCL},
     {"KSYS_O_ACCMODE", KSYS_O_ACCMODE},
     {"KSYS_O_ALLOWED", KSYS_O_ALLOWED},
     {"KSYS_WNOHANG", KSYS_WNOHANG},
@@ -2279,6 +2281,71 @@ static void fd_inheriting_child(void *arg)
 }
 
 /*
+ * The property: fstat answers the object of an open descriptor with the same
+ * numbers statx gives for its name, and an exclusive create refuses a name
+ * that is already there without touching it.
+ */
+static void test_fstat_and_exclusive(void)
+{
+    struct vfs_statx info;
+    int fd;
+
+    ktest_begin("ksys: fstat describes an open object and O_EXCL refuses a name");
+
+    setup();
+
+    fd = ksys_open("/fstat.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC | KSYS_O_EXCL);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_write(fd, "fstat", 5), 5);
+        KT_CHECK_INT_EQ(ksys_fstat(fd, &info), 0);
+        KT_CHECK_INT_EQ(info.type, 1);
+        KT_CHECK_INT_EQ(info.size, 5);
+        KT_CHECK_INT_EQ(info.mode, 0644);
+        KT_CHECK_INT_EQ(info.owner, 0);
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    /* The name is there: the same exclusive create is an error and leaves
+     * the bytes of the object alone, and a plain open finds them. */
+    KT_CHECK_INT_EQ(
+        ksys_open("/fstat.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC | KSYS_O_EXCL),
+        KERR_EXIST);
+    fd = ksys_open("/fstat.txt", KSYS_O_RDONLY);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_fstat(fd, &info), 0);
+        KT_CHECK_INT_EQ(info.size, 5);
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    /* A directory is described as a directory; a pipe has no name and no
+     * fstat (the library describes it from ESPIPE). */
+    KT_CHECK_INT_EQ(ksys_mkdir("/fstat-dir"), 0);
+    fd = ksys_open("/fstat-dir", KSYS_O_RDONLY | KSYS_O_DIRECTORY);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_fstat(fd, &info), 0);
+        KT_CHECK_INT_EQ(info.type, 2);
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+    KT_CHECK_INT_EQ(ksys_rmdir("/fstat-dir"), 0);
+
+    {
+        int fds[2];
+
+        KT_CHECK_INT_EQ(ksys_pipe(fds), 0);
+        KT_CHECK_INT_EQ(ksys_fstat(fds[0], &info), KERR_SPIPE);
+        KT_CHECK_INT_EQ(ksys_close(fds[0]), 0);
+        KT_CHECK_INT_EQ(ksys_close(fds[1]), 0);
+    }
+
+    KT_CHECK_INT_EQ(ksys_unlink("/fstat.txt"), 0);
+
+    teardown();
+}
+
+/*
  * The property: a fork copies the whole table of the descriptors, all
  * sixteen of them, and the child closes its own copy without touching the
  * parent's. The program of an execve inherits the same table through the
@@ -2345,6 +2412,7 @@ void test_ksys(void)
     test_pipe_errors();
     test_fd_table_full();
     test_ftruncate();
+    test_fstat_and_exclusive();
     test_fd_inherit_fork();
     test_wait_no_child();
     test_limits_defaults();
