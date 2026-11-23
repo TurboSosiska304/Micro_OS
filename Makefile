@@ -579,8 +579,14 @@ X86_ISO_BOOTLOADER ?= auto
 X86_ISO_ROOT := $(X86_ISO_BUILD)/root.img
 
 x86-iso: x86-disk build
+	# The root image must end below KERNEL_PHYS (16 MiB): a module that lies
+	# over the copy of the kernel is refused by the loader, because the copy
+	# would destroy the volume exactly when the kernel is about to read it.
+	# The boot loader of the machine places a module right after the kernel
+	# module, and twelve megabytes leave the room for the programs of the
+	# release and the store of roots with three megabytes to spare.
 	python3 tools/x86_image.py --image $(X86_ISO_ROOT) --build $(X86_BUILD) \
-		--mkfs build-host/tools/microos_mkfs --size-mb 24
+		--mkfs build-host/tools/microos_mkfs --size-mb 12
 	python3 tools/x86_iso.py --loader $(X86_BUILD)/loader32.elf \
 		--kernel $(X86_BUILD)/microos64.bin --root $(X86_ISO_ROOT) \
 		--out $(X86_ISO_IMAGE) --stage $(X86_ISO_BUILD)/iso \

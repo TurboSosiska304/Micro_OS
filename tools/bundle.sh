@@ -152,6 +152,16 @@ board_bundle() {
     cp -f "$ROOT/third_party/pcre2/LICENSE" "$OUT_DIR/LICENSE.pcre2"
     echo "    third_party/pcre2/LICENSE -> LICENSE.pcre2"
 
+    # The bootable CD of the x86-64 machine (`make x86-iso`), when the build
+    # has one: it is the door of a person without a QEMU and the first image
+    # of the release that a machine of his own can start. A build that did not
+    # make it (no xorriso, no limine) is a bundle without the CD and not a
+    # failed bundle - the tools say which package is missing.
+    if [ -f "$ROOT/build-x86-iso/microos.iso" ]; then
+        cp -f "$ROOT/build-x86-iso/microos.iso" "$OUT_DIR/MicroOS-${VERSION}.iso"
+        echo "    build-x86-iso/microos.iso -> MicroOS-${VERSION}.iso"
+    fi
+
     chmod +x "$OUT_DIR/flash.sh" "$OUT_DIR/ota_usb.py"
 
     # One image for the board: the boot loader, the table of the partitions and

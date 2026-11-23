@@ -99,6 +99,16 @@ jobs:
           IDF_PATH: ""
         run: make x86-all
 
+      # The bootable CD of the x86-64 machine: xorriso writes the image and
+      # limine is the boot loader of its catalogue. Both are a package of the
+      # distribution; a container that cannot install them makes a bundle
+      # without the CD, and the step says so instead of failing the release.
+      - name: the bootable CD of the x86-64 machine
+        shell: bash
+        run: |
+          (apt-get update -qq && apt-get install -y -qq xorriso limine) >/dev/null 2>&1 || true
+          make x86-iso || echo "the CD is not in this bundle: xorriso or limine is missing"
+
       # esptool lives in the python environment of the image, and the step
       # that builds the bundle is where it is needed (merge_bin).
       - name: the bundle of dist/
