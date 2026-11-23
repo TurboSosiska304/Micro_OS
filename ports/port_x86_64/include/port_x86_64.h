@@ -385,6 +385,15 @@ void port_x86_64_blockdev_init(void);
 void port_x86_64_disk_init(void);
 
 /*
+ * Open the line of the disk (IRQ 14) once the table of the interrupts and the
+ * 8259 exist: port_x86_64_disk_init() probes the bus master and keeps its
+ * registers, and this call is what turns the bus master from "the machine has
+ * one" into "the driver uses one" (ADR 0032). Called by port_x86_64_init()
+ * after port_x86_64_interrupts_init().
+ */
+void port_x86_64_disk_irq_init(void);
+
+/*
  * Own the medium of the boot: a boot loader may hand the kernel more than the
  * image, and the second module of the x86-64 boot is a whole MicroFS disk (the
  * root image of the ISO, ADR 0026). It is the bytes of the boot medium in the
@@ -482,6 +491,15 @@ void port_x86_64_interrupts_load(void);
  * core at the next interrupt.
  */
 void port_x86_64_idt_set(k_u32_t vector, void (*handler)(void));
+
+/*
+ * Open one line of the 8259: the driver of a device that raises an interrupt
+ * calls this after it has put its handler in the table, and the line of the
+ * slave takes the cascade of the master with it. The line of a device that is
+ * not there is not opened by anybody, and a line that stays masked is a
+ * device the driver polls - the disk of 1.5.0 was exactly that.
+ */
+void port_x86_64_irq_unmask(k_u32_t line);
 
 /* --- the processors of the machine (ADR 0012) ----------------------------- */
 

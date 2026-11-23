@@ -56,22 +56,42 @@ static k_mutex_t g_blockdev_lock = K_MUTEX_INITIALIZER;
  * The cache of one device. The boxes are permanent, because the view of a
  * device points at one of them and the table moves its entries when a
  * device leaves; a box is reused by the next device that asks for a cache.
+ *
+ * The number of the boxes is the one the device asked for and not a
+ * constant: a flash chip of the board wants sixteen of them, a disk behind a
+ * bus master wants the run its commands move (kernel/blockdev.h). The
+ * bookkeeping is allocated with the memory of the copy and not carried in
+ * the structure, so a device that asks for sixteen pays for sixteen.
+ *
+ * A cache of sixteen boxes can be searched by walking it: sixteen steps are
+ * nothing next to a command of a flash chip. A cache of half a megabyte
+ * cannot - five hundred steps for every sector a filesystem touches is more
+ * work than the sector - so the boxes are found through a table of open
+ * addressing, and the box that leaves is the one the hand of the cache points
+ * at. Neither the search nor the choice walks the boxes.
  */
+struct k_blockdev_cache_box {
+    k_u32_t sector;
+    k_u8_t valid;
+    k_u8_t dirty;
+};
+
 struct k_blockdev_cache {
     bool used;
-    bool live;       /* the memory of the cache is allocated */
-    bool nocache;    /* the memory was asked for and refused */
-    bool write_back; /* a write waits for the room or for a sync */
+    bool live;         /* the memory of the cache is allocated */
+    bool nocache;      /* the memory was asked for and refused */
+    bool write_back;   /* a write waits for the room or for a sync */
+    k_size_t capacity; /* the boxes, rounded up to a power of two */
     const struct k_blockdev *owner;
     struct k_blockdev view;
     struct k_blockdev_ops ops;
-    k_u8_t *memory;  /* K_BLOCKDEV_CACHE_SECTORS sectors of the copy */
+    k_u8_t *memory;  /* `capacity` sectors of the copy */
     k_u8_t *staging; /* the same, for a run that leaves the cache in one command */
-    k_u32_t sector[K_BLOCKDEV_CACHE_SECTORS];
-    k_u32_t age[K_BLOCKDEV_CACHE_SECTORS];
-    k_u8_t valid[K_BLOCKDEV_CACHE_SECTORS];
-    k_u8_t dirty[K_BLOCKDEV_CACHE_SECTORS];
-    k_u32_t clock;
+    struct k_blockdev_cache_box *boxes;
+    k_u32_t *index; /* `slots` entries: the box plus one, zero is empty */
+    k_u32_t slots;  /* four times the boxes, a power of two */
+    k_u32_t shift;  /* 32 minus the bits of `slots`: the hash of a sector */
+    k_u32_t hand;   /* the hand of the cache: the next box to leave */
 
     /* The two sectors a stream of reads is expected to ask for next: the one
      * that continues a run of the medium, and the one that continues the
@@ -104,44 +124,190 @@ static k_u8_t *cache_box(const struct k_blockdev_cache *cache, k_size_t box)
     return cache->memory + box * cache->owner->sector_size;
 }
 
+/*
+ * The index over the boxes: open addressing with linear probing, four slots
+ * for every box.
+ *
+ * The slot is not the low bits of the sector. A file is a run of sectors and
+ * its blocks are a megabyte apart twice as often as anything else, so the low
+ * bits of the number put the run of a file, the bitmap of its group and the
+ * table of its inodes in one cluster of probes - and a cluster that holds a
+ * run of five hundred sectors is a walk of five hundred for every sector
+ * touched, which is the cost this index exists to remove. The golden ratio
+ * spreads a run over the whole table instead: two neighbours land far apart
+ * and two sectors a megabyte apart land wherever they land.
+ *
+ * The table is four times the boxes, so it is never more than a quarter full
+ * and a probe is one or two steps.
+ */
+static k_u32_t cache_slot(const struct k_blockdev_cache *cache, k_u32_t sector)
+{
+    return (k_u32_t)((sector * 2654435761u) >> cache->shift);
+}
+
 static int cache_lookup(const struct k_blockdev_cache *cache, k_u32_t sector)
 {
-    k_size_t i;
+    k_u32_t slot = cache_slot(cache, sector);
 
-    for (i = 0; i < K_BLOCKDEV_CACHE_SECTORS; i++) {
-        if (cache->valid[i] && cache->sector[i] == sector) {
-            return (int)i;
+    while (cache->index[slot] != 0u) {
+        k_u32_t box = cache->index[slot] - 1u;
+
+        if (cache->boxes[box].sector == sector) {
+            return (int)box;
         }
+
+        slot = (slot + 1u) & (cache->slots - 1u);
     }
 
     return -1;
 }
 
-/* The box of the next sector: the empty one, or the oldest. */
-static int cache_victim(const struct k_blockdev_cache *cache)
+static void cache_index_add(struct k_blockdev_cache *cache, k_size_t box)
 {
-    int oldest = 0;
-    k_size_t i;
+    k_u32_t slot = cache_slot(cache, cache->boxes[box].sector);
 
-    for (i = 0; i < K_BLOCKDEV_CACHE_SECTORS; i++) {
-        if (!cache->valid[i]) {
-            return (int)i;
-        }
-
-        if (cache->age[i] < cache->age[oldest]) {
-            oldest = (int)i;
-        }
+    while (cache->index[slot] != 0u) {
+        slot = (slot + 1u) & (cache->slots - 1u);
     }
 
-    return oldest;
+    cache->index[slot] = (k_u32_t)box + 1u;
+}
+
+/*
+ * Take a box out of the index. A hole in the middle of a cluster of probing
+ * would hide every entry behind it, so the entries of the cluster are shifted
+ * back into the hole one at a time - each one only when its own home slot is
+ * not inside the interval it would jump over, which is what keeps every entry
+ * reachable from its home.
+ */
+static void cache_index_remove(struct k_blockdev_cache *cache, k_size_t box)
+{
+    k_u32_t mask = cache->slots - 1u;
+    k_u32_t hole = cache_slot(cache, cache->boxes[box].sector);
+    k_u32_t probe = hole;
+
+    while (cache->index[hole] != 0u && cache->index[hole] - 1u != box) {
+        hole = (hole + 1u) & mask;
+    }
+
+    if (cache->index[hole] == 0u) {
+        return; /* a box that was never indexed */
+    }
+
+    /* The slot of the box is the hole, and it is empty from this moment: an
+     * entry that is not cleared stays in the table for ever, pointing at a
+     * box that belongs to another sector by then, and the probes of the
+     * cluster behind it walk a table that is all stale entries. */
+    cache->index[hole] = 0u;
+
+    for (;;) {
+        k_u32_t home;
+
+        probe = (probe + 1u) & mask;
+
+        if (cache->index[probe] == 0u) {
+            break;
+        }
+
+        home = cache_slot(cache, cache->boxes[cache->index[probe] - 1u].sector);
+
+        /* The entry may take the hole when its home is not between the hole
+         * and itself: an entry that jumped over its own home could never be
+         * found again. */
+        if ((hole <= probe) ? (home <= hole || home > probe) : (home <= hole && home > probe)) {
+            cache->index[hole] = cache->index[probe];
+            cache->index[probe] = 0u;
+            hole = probe;
+        }
+    }
+}
+
+/*
+ * The box that leaves, and the hand of the cache moves on.
+ *
+ * The box is the one the hand stood on longest, which is the oldest arrival
+ * and not the least recently used one. Looking for the least recently used
+ * box is a walk of the whole cache, and a cache that gives a second chance
+ * to the boxes touched since its last turn walks the whole cache as well when
+ * every box was touched - which is exactly the state of a file being written,
+ * one box after another. A walk of five hundred per sector is the cost the
+ * index was built to remove, so the order is the order of the arrivals: a run
+ * of a file then leaves the cache in the order it went in, which is the order
+ * the medium wants, and the metadata of a volume - touched again within a
+ * turn of half a megabyte - is read again for what a command of a disk costs.
+ */
+static int cache_victim(struct k_blockdev_cache *cache)
+{
+    k_u32_t box = cache->hand;
+
+    cache->hand = (box + 1u) & (k_u32_t)(cache->capacity - 1u);
+
+    return (int)box;
 }
 
 static void cache_invalidate(struct k_blockdev_cache *cache)
 {
-    memset(cache->valid, 0, sizeof(cache->valid));
-    memset(cache->dirty, 0, sizeof(cache->dirty));
+    k_size_t i;
+
+    for (i = 0; i < cache->capacity; i++) {
+        cache->boxes[i].valid = false;
+        cache->boxes[i].dirty = false;
+    }
+
+    if (cache->index != NULL) {
+        memset(cache->index, 0, cache->slots * sizeof(cache->index[0]));
+    }
+
+    cache->hand = 0;
 }
 
+static int cache_flush_run(struct k_blockdev_cache *cache, int box);
+
+/* The box that a sector is about to fill, with the room for it made when the
+ * cache is full: the box is put in the index here, and its sector is the
+ * sector of the caller from this moment. */
+static int cache_place(struct k_blockdev_cache *cache, k_u32_t sector, int *box)
+{
+    int found = cache_lookup(cache, sector);
+    int victim;
+
+    if (found >= 0) {
+        *box = found;
+        return 0;
+    }
+
+    victim = cache_victim(cache);
+
+    if (cache->boxes[victim].valid) {
+        if (cache->boxes[victim].dirty) {
+            if (cache_flush_run(cache, victim) != 0) {
+                return -1;
+            }
+        }
+
+        cache_index_remove(cache, (k_size_t)victim);
+        cache->boxes[victim].valid = false;
+        cache->boxes[victim].dirty = false;
+    }
+
+    cache->boxes[victim].sector = sector;
+    cache->boxes[victim].valid = true;
+    cache->boxes[victim].dirty = false;
+
+    cache_index_add(cache, (k_size_t)victim);
+
+    *box = victim;
+
+    return 0;
+}
+
+/*
+ * Give the medium the run of sectors from `first` to `last`: one command of
+ * the device when the machine has a buffer to gather them in, and one sector
+ * at a time when it has not. The run leaves the staging buffer when there is
+ * one, so the sectors are copied out of their boxes in the order of the
+ * medium and the device is handed one buffer.
+ */
 static int cache_store(struct k_blockdev_cache *cache, k_u32_t first, k_u32_t last)
 {
     const struct k_blockdev *dev = cache->owner;
@@ -180,7 +346,7 @@ static int cache_store(struct k_blockdev_cache *cache, k_u32_t first, k_u32_t la
         int box = cache_lookup(cache, first + (k_u32_t)i);
 
         if (box >= 0) {
-            cache->dirty[box] = false;
+            cache->boxes[box].dirty = false;
         }
     }
 
@@ -199,18 +365,18 @@ static int cache_store(struct k_blockdev_cache *cache, k_u32_t first, k_u32_t la
  */
 static int cache_flush_run(struct k_blockdev_cache *cache, int box)
 {
-    k_u32_t first = cache->sector[box];
+    k_u32_t first = cache->boxes[box].sector;
     k_u32_t last = first;
     k_size_t i;
 
     for (;;) {
         int next = cache_lookup(cache, last + 1u);
 
-        if (next < 0 || !cache->dirty[next]) {
+        if (next < 0 || !cache->boxes[next].dirty) {
             break;
         }
 
-        last = cache->sector[next];
+        last = cache->boxes[next].sector;
     }
 
     for (;;) {
@@ -222,18 +388,19 @@ static int cache_flush_run(struct k_blockdev_cache *cache, int box)
 
         prev = cache_lookup(cache, first - 1u);
 
-        if (prev < 0 || !cache->dirty[prev]) {
+        if (prev < 0 || !cache->boxes[prev].dirty) {
             break;
         }
 
-        first = cache->sector[prev];
+        first = cache->boxes[prev].sector;
     }
 
     if (cache_store(cache, first, last) != 0) {
-        for (i = 0; i < K_BLOCKDEV_CACHE_SECTORS; i++) {
-            if (cache->valid[i] && cache->sector[i] >= first && cache->sector[i] <= last) {
-                cache->valid[i] = false;
-                cache->dirty[i] = false;
+        for (i = 0; i < cache->capacity; i++) {
+            if (cache->boxes[i].valid && cache->boxes[i].sector >= first &&
+                cache->boxes[i].sector <= last) {
+                cache->boxes[i].valid = false;
+                cache->boxes[i].dirty = false;
             }
         }
 
@@ -247,8 +414,8 @@ static int cache_flush_all(struct k_blockdev_cache *cache)
 {
     k_size_t i;
 
-    for (i = 0; i < K_BLOCKDEV_CACHE_SECTORS; i++) {
-        if (cache->valid[i] && cache->dirty[i]) {
+    for (i = 0; i < cache->capacity; i++) {
+        if (cache->boxes[i].valid && cache->boxes[i].dirty) {
             if (cache_flush_run(cache, (int)i) != 0) {
                 return -1;
             }
@@ -286,11 +453,11 @@ static bool cache_ready(struct k_blockdev_cache *cache)
         return false;
     }
 
-    if (cache->owner == NULL || cache->owner->sector_size == 0) {
+    if (cache->owner == NULL || cache->owner->sector_size == 0 || cache->capacity == 0) {
         return false;
     }
 
-    bytes = (k_size_t)K_BLOCKDEV_CACHE_SECTORS * cache->owner->sector_size;
+    bytes = cache->capacity * cache->owner->sector_size;
 
     cache->memory = kmm_alloc(bytes, KMM_PRIORITY_USER);
 
@@ -306,37 +473,39 @@ static bool cache_ready(struct k_blockdev_cache *cache)
      * run one at a time. */
     cache->staging = kmm_alloc(bytes, KMM_PRIORITY_USER);
 
+    /* The bookkeeping of the boxes and of the index is small and it is not
+     * optional: without it there is no cache to speak of, and the memory of
+     * the copy goes back to the manager. */
+    cache->boxes = kmm_alloc(cache->capacity * sizeof(*cache->boxes), KMM_PRIORITY_KERNEL);
+    cache->index = kmm_alloc(cache->slots * sizeof(cache->index[0]), KMM_PRIORITY_KERNEL);
+
+    if (cache->boxes == NULL || cache->index == NULL) {
+        if (cache->boxes != NULL) {
+            kmm_free(cache->boxes);
+            cache->boxes = NULL;
+        }
+
+        if (cache->index != NULL) {
+            kmm_free(cache->index);
+            cache->index = NULL;
+        }
+
+        kmm_free(cache->memory);
+        cache->memory = NULL;
+
+        if (cache->staging != NULL) {
+            kmm_free(cache->staging);
+            cache->staging = NULL;
+        }
+
+        cache->nocache = true;
+        return false;
+    }
+
     cache_invalidate(cache);
     cache->live = true;
 
     return true;
-}
-
-/* The box of a sector that is about to be filled, with the room for it made
- * when the cache is full. */
-static int cache_place(struct k_blockdev_cache *cache, k_u32_t sector, int *box)
-{
-    int found = cache_lookup(cache, sector);
-    int victim;
-
-    if (found >= 0) {
-        *box = found;
-        return 0;
-    }
-
-    victim = cache_victim(cache);
-
-    if (cache->valid[victim] && cache->dirty[victim]) {
-        if (cache_flush_run(cache, victim) != 0) {
-            return -1;
-        }
-    }
-
-    cache->valid[victim] = false;
-    cache->dirty[victim] = false;
-    *box = victim;
-
-    return 0;
 }
 
 /*
@@ -354,17 +523,19 @@ static int cache_fill_run(struct k_blockdev_cache *cache, k_u32_t first, k_size_
 {
     k_size_t i;
 
-    if (count >= K_BLOCKDEV_CACHE_SECTORS) {
+    if (count >= cache->capacity) {
         /* A run of the size of the cache is the whole cache: the boxes are
          * taken in order, because the box of the first sector would be the
-         * oldest of the run and the last sector would evict it. */
-        for (i = 0; i < K_BLOCKDEV_CACHE_SECTORS; i++) {
+         * one the hand reaches first and the last sector would evict it. */
+        cache_invalidate(cache);
+
+        for (i = 0; i < cache->capacity; i++) {
             memcpy(cache_box(cache, i), cache->staging + i * cache->owner->sector_size,
                    cache->owner->sector_size);
-            cache->valid[i] = true;
-            cache->dirty[i] = false;
-            cache->sector[i] = first + (k_u32_t)i;
-            cache->age[i] = ++cache->clock;
+            cache->boxes[i].valid = true;
+            cache->boxes[i].dirty = false;
+            cache->boxes[i].sector = first + (k_u32_t)i;
+            cache_index_add(cache, i);
         }
 
         return 0;
@@ -382,10 +553,8 @@ static int cache_fill_run(struct k_blockdev_cache *cache, k_u32_t first, k_size_
 
         memcpy(cache_box(cache, (k_size_t)box), cache->staging + i * cache->owner->sector_size,
                cache->owner->sector_size);
-        cache->valid[box] = true;
-        cache->dirty[box] = false;
-        cache->sector[box] = want;
-        cache->age[box] = ++cache->clock;
+        cache->boxes[box].valid = true;
+        cache->boxes[box].dirty = false;
     }
 
     return 0;
@@ -406,7 +575,7 @@ static int cache_read(void *ctx, k_u32_t sector, void *buf, k_size_t count)
 
     /* A run longer than the cache is a stream and not a working set: the
      * copy would evict itself before it is looked at again. */
-    if (count > K_BLOCKDEV_CACHE_SECTORS / 4) {
+    if (count > cache->capacity / 4) {
         return dev->ops->read(dev->ctx, sector, buf, count);
     }
 
@@ -469,15 +638,14 @@ static int cache_read(void *ctx, k_u32_t sector, void *buf, k_size_t count)
                 }
 
                 if (dev->ops->read(dev->ctx, want, cache_box(cache, (k_size_t)box), 1) != 0) {
-                    cache->valid[box] = false;
-                    cache->dirty[box] = false;
+                    cache_index_remove(cache, (k_size_t)box);
+                    cache->boxes[box].valid = false;
+                    cache->boxes[box].dirty = false;
                     k_mutex_unlock(&g_blockdev_lock);
                     return -1;
                 }
 
-                cache->valid[box] = true;
-                cache->dirty[box] = false;
-                cache->sector[box] = want;
+                cache->boxes[box].dirty = false;
 
                 /* A read out of the order of the stream does not end it: the
                  * metadata of the volume sits between two of its sectors.
@@ -487,7 +655,6 @@ static int cache_read(void *ctx, k_u32_t sector, void *buf, k_size_t count)
             }
         }
 
-        cache->age[box] = ++cache->clock;
         memcpy(dst + i * dev->sector_size, cache_box(cache, (k_size_t)box), dev->sector_size);
     }
 
@@ -537,8 +704,9 @@ static int cache_write(void *ctx, k_u32_t sector, const void *buf, k_size_t coun
                 memcpy(cache_box(cache, (k_size_t)box), src + i * dev->sector_size,
                        dev->sector_size);
             } else {
-                cache->valid[box] = false;
-                cache->dirty[box] = false;
+                cache_index_remove(cache, (k_size_t)box);
+                cache->boxes[box].valid = false;
+                cache->boxes[box].dirty = false;
             }
         }
 
@@ -549,7 +717,7 @@ static int cache_write(void *ctx, k_u32_t sector, const void *buf, k_size_t coun
 
     /* Write-back. A run longer than the cache is written to the medium as it
      * is: the cache is a window of the working set, not a buffer of a file. */
-    if (count > K_BLOCKDEV_CACHE_SECTORS / 2) {
+    if (count > cache->capacity / 2) {
         (void)cache_flush_all(cache);
         cache_invalidate(cache);
         rc = dev->ops->write(dev->ctx, sector, buf, count);
@@ -570,10 +738,7 @@ static int cache_write(void *ctx, k_u32_t sector, const void *buf, k_size_t coun
         }
 
         memcpy(cache_box(cache, (k_size_t)box), src + i * dev->sector_size, dev->sector_size);
-        cache->valid[box] = true;
-        cache->dirty[box] = true;
-        cache->sector[box] = want;
-        cache->age[box] = ++cache->clock;
+        cache->boxes[box].dirty = true;
     }
 
     k_mutex_unlock(&g_blockdev_lock);
@@ -629,14 +794,44 @@ static int cache_sync(void *ctx)
 
 /* --- the table ------------------------------------------------------------ */
 
-static struct k_blockdev_cache *cache_alloc(void)
+/*
+ * The boxes of a device, rounded up to a power of two: the index is a mask of
+ * the low bits of the sector and the clock is a mask of the low bits of the
+ * hand, and both are a subtraction and not a division. A device that asks for
+ * a hundred boxes gets a hundred and twenty-eight, which is the same cache
+ * with a little more room.
+ */
+static k_size_t round_up_power_of_two(k_size_t value)
+{
+    k_size_t power = 1;
+
+    while (power < value && power < K_BLOCKDEV_CACHE_MAX) {
+        power <<= 1;
+    }
+
+    return power;
+}
+
+static struct k_blockdev_cache *cache_alloc(k_size_t capacity)
 {
     k_size_t i;
 
+    capacity = round_up_power_of_two(capacity);
+
     for (i = 0; i < K_BLOCKDEV_MAX; i++) {
         if (!g_caches[i].used) {
+            k_u32_t bits = 0;
+            k_u32_t slots = (k_u32_t)(capacity * 4u);
+
+            while ((1u << bits) < slots) {
+                bits++;
+            }
+
             memset(&g_caches[i], 0, sizeof(g_caches[i]));
             g_caches[i].used = true;
+            g_caches[i].capacity = capacity;
+            g_caches[i].slots = slots;
+            g_caches[i].shift = 32u - bits;
             return &g_caches[i];
         }
     }
@@ -657,7 +852,8 @@ static struct k_blockdev_entry *entry_of(const struct k_blockdev *dev)
     return NULL;
 }
 
-static int blockdev_add(const struct k_blockdev *dev, bool cached, bool write_back)
+static int blockdev_add(const struct k_blockdev *dev, bool cached, bool write_back,
+                        k_size_t capacity)
 {
     struct k_blockdev_entry *entry;
     struct k_blockdev_cache *cache;
@@ -683,8 +879,12 @@ static int blockdev_add(const struct k_blockdev *dev, bool cached, bool write_ba
     entry->dev = dev;
     entry->owner = dev;
 
+    if (cached && capacity > K_BLOCKDEV_CACHE_MAX) {
+        capacity = K_BLOCKDEV_CACHE_MAX;
+    }
+
     if (cached) {
-        cache = cache_alloc();
+        cache = cache_alloc(capacity);
 
         if (cache != NULL) {
             cache->owner = dev;
@@ -712,12 +912,22 @@ static int blockdev_add(const struct k_blockdev *dev, bool cached, bool write_ba
 
 int k_blockdev_register(const struct k_blockdev *dev)
 {
-    return blockdev_add(dev, false, false);
+    return blockdev_add(dev, false, false, 0);
 }
 
 int k_blockdev_register_cached(const struct k_blockdev *dev, bool write_back)
 {
-    return blockdev_add(dev, true, write_back);
+    return blockdev_add(dev, true, write_back, K_BLOCKDEV_CACHE_SECTORS);
+}
+
+int k_blockdev_register_cached_sized(const struct k_blockdev *dev, bool write_back,
+                                     k_size_t sectors)
+{
+    if (sectors == 0) {
+        return -1;
+    }
+
+    return blockdev_add(dev, true, write_back, sectors);
 }
 
 int k_blockdev_unregister(const struct k_blockdev *dev)
@@ -725,7 +935,9 @@ int k_blockdev_unregister(const struct k_blockdev *dev)
     struct k_blockdev_cache *cache = NULL;
     void *memory = NULL;
     void *staging = NULL;
-    k_size_t index;
+    void *boxes = NULL;
+    void *index = NULL;
+    k_size_t slot;
     int rc = -1;
 
     if (dev == NULL) {
@@ -735,13 +947,13 @@ int k_blockdev_unregister(const struct k_blockdev *dev)
     k_port_enter_critical();
 
     if (entry_of(dev) != NULL) {
-        index = (k_size_t)(entry_of(dev) - g_entries);
-        cache = g_entries[index].cache;
+        slot = (k_size_t)(entry_of(dev) - g_entries);
+        cache = g_entries[slot].cache;
 
         /* The table keeps its order: the devices after this one move down a
          * place, so "the n-th device" still means what it meant. */
-        for (; index + 1 < g_count; index++) {
-            g_entries[index] = g_entries[index + 1];
+        for (; slot + 1 < g_count; slot++) {
+            g_entries[slot] = g_entries[slot + 1];
         }
 
         memset(&g_entries[--g_count], 0, sizeof(g_entries[0]));
@@ -774,6 +986,8 @@ int k_blockdev_unregister(const struct k_blockdev *dev)
 
         memory = cache->memory;
         staging = cache->staging;
+        boxes = cache->boxes;
+        index = cache->index;
         memset(cache, 0, sizeof(*cache));
         k_mutex_unlock(&g_blockdev_lock);
     }
@@ -785,6 +999,76 @@ int k_blockdev_unregister(const struct k_blockdev *dev)
     if (staging != NULL) {
         kmm_free(staging);
     }
+
+    if (boxes != NULL) {
+        kmm_free(boxes);
+    }
+
+    if (index != NULL) {
+        kmm_free(index);
+    }
+
+    return 0;
+}
+
+/*
+ * What the cache of a device holds at this moment. The caller names the
+ * device it knows - the view the table handed out, or the structure the
+ * platform registered - and the answer is the same for both: the entry keeps
+ * the pair, and a device without a cache says `present` false and no more.
+ *
+ * The read is not under the mutex of the cache: it is a report for a person
+ * reading /proc and not a decision of the filesystem, and a count that is one
+ * sector off is the honest price of not stopping the disk to ask.
+ */
+int k_blockdev_cache_stats(const struct k_blockdev *dev, struct k_blockdev_cache_stats *out)
+{
+    const struct k_blockdev_entry *entry;
+    const struct k_blockdev_cache *cache;
+    k_size_t i;
+
+    if (dev == NULL || out == NULL) {
+        return -1;
+    }
+
+    memset(out, 0, sizeof(*out));
+
+    k_port_enter_critical();
+
+    entry = entry_of(dev);
+
+    if (entry == NULL) {
+        k_port_exit_critical();
+        return -1;
+    }
+
+    out->sectors = entry->owner->sectors;
+    out->sector_size = entry->owner->sector_size;
+
+    cache = entry->cache;
+
+    if (cache != NULL) {
+        out->present = true;
+        out->live = cache->live;
+        out->write_back = cache->write_back;
+        out->capacity = (k_u32_t)cache->capacity;
+
+        if (cache->live && cache->boxes != NULL) {
+            for (i = 0; i < cache->capacity; i++) {
+                if (!cache->boxes[i].valid) {
+                    continue;
+                }
+
+                out->valid++;
+
+                if (cache->boxes[i].dirty) {
+                    out->dirty++;
+                }
+            }
+        }
+    }
+
+    k_port_exit_critical();
 
     return 0;
 }
