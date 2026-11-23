@@ -16,6 +16,7 @@ and the **device** build (ESP32 firmware through ESP-IDF v5.3).
 | `clang-format` | `make format` and the format check | `sudo pacman -S --needed clang-format` |
 | `valgrind` | the CI run of the tests (optional locally) | `sudo pacman -S --needed valgrind` |
 | `pyserial` | `tools/console.py`, `tools/stream_console.py` | `python3 -m pip install pyserial` (or use the ESP-IDF env) |
+| `e2fsprogs`, `dosfstools` | the ext2 and FAT32 images of `make x86-disk` | `sudo pacman -S --needed e2fsprogs dosfstools` |
 
 ESP-IDF v5.3 is needed only for the device build. The tools look for it in this
 order: `$IDF_PATH`, a checkout beside the repository (`../esp-idf`), then
@@ -60,7 +61,8 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make x86-run` | the same machine in a window: the framebuffer of 1280x800 and the keyboard |
 | `make x86-run-serial` | the machine on the serial console and no window |
 | `make x86-vga-smoke` | check the framebuffer and the text mode with a screenshot, and the keyboard |
-| `make x86-disk-smoke` | two boots on one disk image: a file survives both (34 checks) |
+| `make x86-disk-smoke` | two boots on one disk image: a file survives both (57 checks) |
+| `make x86-root-smoke` | two roots of one machine: the MicroFS and the ext2 image answer the same commands, and FAT32 mounts at `/data` (47 checks) |
 | `make x86-iso` | the BIOS ISO (El Torito) with the loader, the kernel and the root image (K13) |
 | `make x86-iso-run` | boot the ISO in a terminal (`-nographic`) |
 | `make x86-iso-smoke` | boot the ISO with `-cdrom` and nothing else, and check the shell and `/bin` |
@@ -69,7 +71,7 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make x86-user` | build the complete machine and its release tar, unpack the tar and start it (the artifact a person downloads; no ESP-IDF needed) |
 | `make x86-user-serial` | the same tar with the serial console and no window |
 | `make bundle-x86` | the tar of the x86-64 machine alone into `dist/`, without the firmware build |
-| `make ci` | `build`, `test`, `test-asan`, `test-tsan`, `test-smp`, `smoke`, `coverage`, `x86-smoke` when QEMU is there, `reproducible`, `integrity` — run it before pushing |
+| `make ci` | `build`, `test`, `test-asan`, `test-tsan`, `test-smp`, `smoke`, `coverage`, `x86-smoke` and `x86-root-smoke` when QEMU is there, `reproducible`, `integrity` — run it before pushing |
 
 The same build by hand:
 

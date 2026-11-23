@@ -278,6 +278,12 @@ x86_bundle() {
     if [ -f "$X86_SRC/x86-all.img" ]; then
         X86_DISK="$X86_SRC/x86-all.img"
     fi
+    # The same tree in an ext2 volume (ADR 0027 §3): the second image of the
+    # release, and the one `X86_ROOT=ext2` boots.
+    X86_EXT2=""
+    if [ -f "$X86_SRC/x86-ext2.img" ]; then
+        X86_EXT2="$X86_SRC/x86-ext2.img"
+    fi
 
     if [ ! -f "$X86_SRC/loader32.elf" ] || [ ! -f "$X86_SRC/microos64.bin" ]; then
         if [ "$MODE" = x86 ]; then
@@ -300,6 +306,9 @@ x86_bundle() {
     cp -f "$X86_SRC/microos64.bin" "$STAGE/microos64.bin"
     if [ -n "$X86_DISK" ]; then
         cp -f "$X86_DISK" "$STAGE/x86-all.img"
+    fi
+    if [ -n "$X86_EXT2" ]; then
+        cp -f "$X86_EXT2" "$STAGE/x86-ext2.img"
     fi
     cp -f "$ROOT/third_party/spleen/LICENSE" "$STAGE/LICENSE.spleen"
     # zlib is linked into /bin/zcat of the disk image, and its license travels
@@ -337,15 +346,29 @@ x86_bundle() {
 
     cat > "$STAGE/run.sh" <<'RUN'
 #!/usr/bin/env bash
-# Micro OS on an x86-64 machine: the loader and the kernel, with the disk of
+# Micro OS on an x86-64 machine: the loader and the kernel, with the disks of
 # the complete machine and its network when they are in this directory.
+#
+# The machine carries the same tree twice: x86-all.img is a MicroFS root (the
+# default) and x86-ext2.img is the same /bin and /etc in an ext2 volume, with
+# a FAT32 volume as its second partition. The kernel reads the type of the
+# root out of the medium (ADR 0027), so X86_ROOT names the volume to boot:
+#
+#     X86_ROOT=ext2 ./run.sh
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ARGS=(-kernel "$HERE/loader32.elf" -initrd "$HERE/microos64.bin" -m 256 -no-reboot)
 
-if [ -f "$HERE/x86-all.img" ]; then
-    ARGS+=(-drive "file=$HERE/x86-all.img,format=raw,if=ide,index=0,cache=writeback"
+ROOT="${X86_ROOT:-mfs}"
+if [ "$ROOT" = ext2 ]; then
+    IMAGE="$HERE/x86-ext2.img"
+else
+    IMAGE="$HERE/x86-all.img"
+fi
+
+if [ -f "$IMAGE" ]; then
+    ARGS+=(-drive "file=$IMAGE,format=raw,if=ide,index=0,cache=writeback"
            -netdev user,id=n0,hostfwd=tcp:127.0.0.1:8080-:8080
            -device virtio-net-pci,netdev=n0,disable-modern=on)
 fi
@@ -444,6 +467,9 @@ DOC
                  LICENSE.file LICENSE.sqlite LICENSE.awk)
     if [ -f "$STAGE/x86-all.img" ]; then
         STAGE_FILES+=(x86-all.img)
+    fi
+    if [ -f "$STAGE/x86-ext2.img" ]; then
+        STAGE_FILES+=(x86-ext2.img)
     fi
     if [ -f "$STAGE/microos64.sig" ]; then
         STAGE_FILES+=(microos64.sig microos-sign.pub)
