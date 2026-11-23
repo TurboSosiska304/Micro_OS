@@ -215,7 +215,7 @@ the families a portable POSIX source expects, and they are now part of it:
 | `<dirent.h>` | `opendir`, `readdir`, `closedir`, `rewinddir`, `fdopendir` over `KSYS_READDIR`, one batch of eight entries per directory | `src/dirent.c` |
 | `<sys/stat.h>` | `stat`, `lstat`, `fstat`, `fstatat`, `chmod`, `umask` and `struct stat` with the `S_IS*` macros over `KSYS_STATX`; `fstat` reads the size with `lseek` | `src/stat.c` |
 | `<unistd.h>` | `access`, `chdir`, `rmdir`, `readlink`, `isatty`, `pipe`, `dup2`, `fork`, `wait`, `waitpid`, `execvp`, `_exit`, `sleep`, `sysconf`, `getopt` | `src/unistd_ext.c`, `src/getopt.c` |
-| `<pwd.h>`, `<grp.h>` | one user, uid 0 and gid 0, named `root` | `src/pwd.c` |
+| `<pwd.h>`, `<grp.h>` | the credentials of the task (`getuid`, `geteuid`, `getgid`, `setuid`, `setgid`); only uid and gid 0 have a name, `root` | `src/pwd.c` |
 | `<time.h>` | `time`, `clock`, `gmtime`/`localtime`, `strftime`, `mktime`, `clock_gettime` | `src/time.c` |
 | `<regex.h>` | a POSIX basic/extended engine: literals, `.`, `*`, `+`, `?`, `{m,n}`, groups, back references, alternation, brackets and the classes | `src/regex.c` |
 | `<fnmatch.h>` | the pattern of a name with `*`, `?`, `[...]`, `FNM_PATHNAME` and `FNM_NOESCAPE` | `src/fnmatch.c` |
@@ -320,7 +320,8 @@ The tests of the library of the kernel live in `tests/cases/test_libc.c`:
 the library is checked against the library of the system with the real
 numbers of the corpus of the project. The pure part of the library of a
 program (the classes, the strings, the pattern of a name, the options, the
-regular expressions, the one user and the decimal order of sbase) is compiled
-for the host by `tests/cases/test_userland.c`, which is a test of its own
-(`userland`); the calls behind the door are covered by `make x86-smoke` and
-`make x86-disk-smoke`.
+regular expressions, the credentials and the decimal order of sbase) is
+compiled for the host by `tests/cases/test_userland.c`, which is a test of its
+own (`userland`); the door the credentials of that build call is the shim of
+`tests/cases/userland_door_shim.c`, and the real calls behind the door are
+covered by `make x86-smoke` and `make x86-disk-smoke`.

@@ -130,9 +130,9 @@ first two. A program asks for the moments of a change with `statx` (number 26
 of the ABI) and `microos_statx()` in the library; a volume of version 1 has
 none, so the two times come back as zero and not as 1970. The rules are in
 [kernel-abi.md](kernel-abi.md) and in
-[`docs/syscall-abi.md`](../syscall-abi.md): one user (uid 0), no root bypass,
-and a zero mode means "this record predates the modes", so `chmod 000` is
-refused.
+[`docs/syscall-abi.md`](../syscall-abi.md): the uid of the task decides the
+triad, root passes the read and the write, no record stores a group, and a
+zero mode means "this record predates the modes", so `chmod 000` is refused.
 
 ## `mkfs` and `fsck`
 
