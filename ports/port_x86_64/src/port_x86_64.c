@@ -2078,25 +2078,293 @@ int memcmp(const void *left, const void *right, k_size_t size)
     return 0;
 }
 
-/* --- the init of the port --- */
+/* --- the clock of the firmware: the CMOS chip of the machine ---------------
+ *
+ * Every machine of this port has the battery-backed chip the firmware reads
+ * its setup from, and the same chip keeps the date: the seconds, the minutes,
+ * the hours, the day, the month and the year in BCD behind one index port and
+ * one data port. The kernel keeps its own wall clock (kernel/clock.h) and the
+ * chip is what seeds it at the boot, so a laptop that has been off since last
+ * night knows the date when the shell comes up and not the seconds since its
+ * own start.
+ *
+ * The registers are read twice and compared: the chip updates them every
+ * second from its own oscillator, and a read that straddles the update is a
+ * moment that never existed (23:59:59 of the 31st and 00:00:01 of the 1st).
+ * The NMI of the machine is masked while the index port is written, which is
+ * the convention of the chip and keeps a byte of the machine's memory from
+ * being read instead.
+ */
+#define CMOS_INDEX 0x70u
+#define CMOS_DATA 0x71u
 
-static struct port_x86_64_info g_info;
+#define CMOS_SECOND 0x00u
+#define CMOS_MINUTE 0x02u
+#define CMOS_HOUR 0x04u
+#define CMOS_DAY 0x07u
+#define CMOS_MONTH 0x08u
+#define CMOS_YEAR 0x09u
+#define CMOS_CENTURY 0x32u
+#define CMOS_STATUS_A 0x0Au
+#define CMOS_STATUS_B 0x0Bu
+
+#define CMOS_BINARY 0x04u /* the registers are binary instead of BCD */
+#define CMOS_24_HOUR 0x02u
+#define CMOS_PM 0x80u     /* the hours register in the 12-hour mode */
+#define CMOS_SET 0x80u    /* the updates are stopped, so the registers are ours */
+#define CMOS_UPDATE 0x80u /* the bit of the status register: an update is coming */
+
+static k_u8_t cmos_read(k_u8_t reg)
+{
+    port_outb(CMOS_INDEX, (k_u8_t)(reg | 0x80u));
+    return port_inb(CMOS_DATA);
+}
+
+static void cmos_write(k_u8_t reg, k_u8_t value)
+{
+    port_outb(CMOS_INDEX, (k_u8_t)(reg | 0x80u));
+    port_outb(CMOS_DATA, value);
+}
+
+/* Wait for the chip to be between two updates; false when it never is. */
+static bool cmos_idle(void)
+{
+    int attempt;
+
+    for (attempt = 0; attempt < 1000000; attempt++) {
+        if ((cmos_read(CMOS_STATUS_A) & CMOS_UPDATE) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static int cmos_to_binary(k_u8_t value, bool binary)
+{
+    return binary ? (int)value : ((int)(value >> 4) * 10 + (int)(value & 0x0Fu));
+}
+
+static k_u8_t cmos_to_register(int value, bool binary)
+{
+    if (binary) {
+        return (k_u8_t)value;
+    }
+
+    return (k_u8_t)(((value / 10) << 4) | (value % 10));
+}
+
+/* The day count of a date from 1970-01-01, both ways (Hinnant's calendar). */
+static k_i64_t cmos_days_from_civil(int year, int month, int day)
+{
+    k_i64_t y = (k_i64_t)year - ((month <= 2) ? 1 : 0);
+    k_i64_t era = (y >= 0 ? y : y - 399) / 400;
+    k_u32_t yoe = (k_u32_t)(y - era * 400);
+    k_u32_t doy = (k_u32_t)((153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1);
+    k_u32_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+
+    return era * 146097 + (k_i64_t)doe - 719468;
+}
+
+static void cmos_civil_from_days(k_i64_t days, int *year, int *month, int *day)
+{
+    k_i64_t z = days + 719468;
+    k_i64_t era = (z >= 0 ? z : z - 146096) / 146097;
+    k_u32_t doe = (k_u32_t)(z - era * 146097);
+    k_u32_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    k_u32_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    k_u32_t mp = (5 * doy + 2) / 153;
+    int m = (int)mp + (mp < 10 ? 3 : -9);
+
+    *day = (int)(doy - (153 * mp + 2) / 5 + 1);
+    *month = m;
+    *year = (int)((k_i64_t)yoe + era * 400) + ((m <= 2) ? 1 : 0);
+}
 
 /*
- * The clock of the machine, before a driver of a real one exists. This
- * machine of QEMU has a CMOS clock, and the port does not read it yet; the
- * kernel keeps the moment of the last `k_clock_set_unix()` and the uptime of
- * that moment (kernel/clock.c), so `ntp` gives the machine a clock that
- * keeps running, and a TLS connection has a date to check a certificate
- * against (ADR 0024 §3). The setter is the port's promise that it keeps the
- * moment; the kernel holds the base.
+ * The moment the chip holds, in the seconds of Unix (UTC). False when the
+ * chip does not answer or holds a moment that is not a date: a dead battery
+ * leaves fields like 58 for an hour, and a number that is not a date is worse
+ * than no clock at all.
  */
-static int software_clock_set(k_u64_t unix_seconds)
+static bool cmos_read_unix(k_u64_t *out)
 {
-    (void)unix_seconds;
+    k_u8_t second = 0;
+    k_u8_t minute = 0;
+    k_u8_t hour = 0;
+    k_u8_t day = 0;
+    k_u8_t month = 0;
+    k_u8_t year = 0;
+    k_u8_t century = 0x20u;
+    k_u8_t status = 0;
+    bool binary;
+    bool stable = false;
+    int attempt;
+    int s;
+    int m;
+    int h;
+    int y;
+    int days;
+
+    for (attempt = 0; attempt < 8 && !stable; attempt++) {
+        if (!cmos_idle()) {
+            return false;
+        }
+
+        second = cmos_read(CMOS_SECOND);
+        minute = cmos_read(CMOS_MINUTE);
+        hour = cmos_read(CMOS_HOUR);
+        day = cmos_read(CMOS_DAY);
+        month = cmos_read(CMOS_MONTH);
+        year = cmos_read(CMOS_YEAR);
+        century = cmos_read(CMOS_CENTURY);
+        status = cmos_read(CMOS_STATUS_B);
+
+        /* The moment is one moment only when the seconds did not move under
+         * the read. The month is the register of the bit of the century, and
+         * a chip whose month is 0 is not one of this machine. */
+        stable = (second == cmos_read(CMOS_SECOND)) && ((month & 0x1Fu) != 0);
+    }
+
+    if (!stable) {
+        return false;
+    }
+
+    binary = (status & CMOS_BINARY) != 0;
+
+    s = cmos_to_binary(second, binary);
+    m = cmos_to_binary(minute, binary);
+    h = cmos_to_binary((k_u8_t)(hour & 0x7Fu), binary);
+    days = cmos_to_binary(day, binary);
+    month = (k_u8_t)cmos_to_binary((k_u8_t)(month & 0x1Fu), binary);
+    year = (k_u8_t)cmos_to_binary(year, binary);
+
+    if ((status & CMOS_24_HOUR) == 0) {
+        /* The 12-hour mode: the high bit is the afternoon, and 12:xx is the
+         * hour zero of it. */
+        if (h == 12) {
+            h = 0;
+        }
+        if ((hour & CMOS_PM) != 0) {
+            h += 12;
+        }
+    }
+
+    y = cmos_to_binary(year, binary);
+
+    {
+        int century_value = cmos_to_binary(century, binary);
+
+        /*
+         * The century is an addition of ACPI; a chip of an older machine
+         * keeps something else in that register. A value that is not 19 or 20
+         * is not a century, and the year decides: 70 to 99 belongs to the
+         * last one and 00 to 69 to this one.
+         */
+        if (century_value != 19 && century_value != 20) {
+            century_value = (y >= 70) ? 19 : 20;
+        }
+
+        y += century_value * 100;
+    }
+
+    if (y >= 1900 && y <= 2099 && month >= 1 && month <= 12 && days >= 1 && days <= 31 && h >= 0 &&
+        h <= 23 && m >= 0 && m <= 59 && s >= 0 && s <= 59) {
+        *out = (k_u64_t)(cmos_days_from_civil(y, month, days) * 86400 + h * 3600 + m * 60 + s);
+
+        return true;
+    }
+
+    return false;
+}
+
+/*
+ * The setter the kernel keeps for the clock (kernel/clock.h): a moment that
+ * came from NTP goes back into the chip, so the next boot of the machine
+ * starts from it. The write is the plain one of the chip - the update is
+ * stopped for the seven registers, the mode is BCD and 24 hours - and a chip
+ * that refuses the write is not a refusal of the call: the kernel keeps the
+ * moment in its own base and the next boot falls back to the chip it has.
+ */
+static int cmos_clock_set(k_u64_t unix_seconds)
+{
+    int year;
+    int month;
+    int day;
+    int hour;
+    int minute;
+    int second;
+    int days;
+    k_u64_t held = 0;
+    k_u8_t status;
+
+    if (unix_seconds > 4102444799u) { /* past 2099-12-31, the chip's calendar */
+        return -1;
+    }
+
+    days = (int)((k_i64_t)(unix_seconds / 86400u));
+    second = (int)(unix_seconds % 60u);
+    minute = (int)((unix_seconds / 60u) % 60u);
+    hour = (int)((unix_seconds / 3600u) % 24u);
+
+    cmos_civil_from_days(days, &year, &month, &day);
+
+    if (year < 2000) {
+        return -1;
+    }
+
+    /* The moment is already in the chip: the boot read it and set it. */
+    if (cmos_read_unix(&held) && held == unix_seconds) {
+        return 0;
+    }
+
+    if (!cmos_idle()) {
+        return 0;
+    }
+
+    status = cmos_read(CMOS_STATUS_B);
+    cmos_write(CMOS_STATUS_B, (k_u8_t)((status | CMOS_24_HOUR | CMOS_SET) & ~CMOS_BINARY));
+    cmos_write(CMOS_SECOND, cmos_to_register(second, false));
+    cmos_write(CMOS_MINUTE, cmos_to_register(minute, false));
+    cmos_write(CMOS_HOUR, cmos_to_register(hour, false));
+    cmos_write(CMOS_DAY, cmos_to_register(day, false));
+    cmos_write(CMOS_MONTH, cmos_to_register(month, false));
+    cmos_write(CMOS_YEAR, cmos_to_register(year % 100, false));
+
+    /*
+     * The century register is written only when it already holds a century:
+     * a chip of a machine older than ACPI keeps a byte of the firmware there,
+     * and a year of two digits is still the year of this machine.
+     */
+    {
+        k_u8_t century = cmos_read(CMOS_CENTURY);
+
+        if (century == 0x19u || century == 0x20u) {
+            cmos_write(CMOS_CENTURY, cmos_to_register(year / 100, false));
+        }
+    }
+
+    cmos_write(CMOS_STATUS_B, status);
 
     return 0;
 }
+
+/* The clock of the machine, read once at the boot and kept by the kernel. */
+static void cmos_clock_seed(void)
+{
+    k_u64_t now = 0;
+
+    if (!cmos_read_unix(&now)) {
+        kwarn("x86-64: the CMOS chip holds no date, the clock starts at the boot");
+        return;
+    }
+
+    (void)k_clock_set_unix(now);
+}
+
+/* --- the init of the port --- */
+
+static struct port_x86_64_info g_info;
 
 void port_x86_64_init(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys)
 {
@@ -2151,7 +2419,8 @@ void port_x86_64_init(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys
     tls_init();
     com1_init();
     clock_measure();
-    k_clock_register(software_clock_set);
+    k_clock_register(cmos_clock_set);
+    cmos_clock_seed();
     port_x86_64_cpus_init();
     /*
      * The memory of the machine, before the page tables of the port: a module

@@ -75,6 +75,9 @@
 static bool s_present;
 static struct rtc_datetime s_now;
 
+/* The running time of the chip into s_now; the boot seeds the clock with it. */
+static int rtc_read_now(void);
+
 /* The alarm flag found while the chip came up: what the last boot must say. */
 static bool s_alarm_at_boot;
 
@@ -135,6 +138,23 @@ static int drv_rtc_init(void)
     (void)drv_i2c_write(I2C_BM8563_ADDR, BM_REG_CTRL1, control, sizeof(control));
 
     s_present = true;
+
+    /*
+     * The chip is the clock of the machine before the network is: the boot
+     * seeds the kernel with the moment the battery has kept, and `ntp` or
+     * `date set` write a better one back through rtc_clock_set. Without this
+     * the board answered `date` from the chip and `time()` with the seconds
+     * since its own start - two answers to one question (docs/libc.md). A
+     * chip that holds no date (a dead battery) seeds nothing.
+     */
+    if (rtc_read_now() == 0 && s_now.valid) {
+        uint64_t seconds = 0;
+
+        if (rtc_to_unix(&s_now, &seconds)) {
+            (void)k_clock_set_unix(seconds);
+        }
+    }
+
     return 0;
 }
 
@@ -697,8 +717,28 @@ static int cmd_date(int argc, char **argv)
             return KSHELL_ERROR;
         }
 
-        if (drv_rtc_set_time(&dt) != 0) {
-            kshell_printf("date set: the clock did not take the time\n");
+        /*
+         * The moment goes through the kernel's clock and not around it: the
+         * chip and the base the kernel adds the uptime to have to agree, and
+         * a write of the registers alone left `time()` on the old moment
+         * until the next boot. The driver's setter writes the chip.
+         */
+        {
+            uint64_t seconds = 0;
+
+            if (!rtc_to_unix(&dt, &seconds)) {
+                kshell_printf("date set: no such day: %s %s\n", argv[2], argv[3]);
+                return KSHELL_ERROR;
+            }
+
+            if (k_clock_set_unix(seconds) != 0) {
+                kshell_printf("date set: the clock did not take the time\n");
+                return KSHELL_ERROR;
+            }
+        }
+
+        if (rtc_read_now() != 0) {
+            kshell_printf("date set: the clock does not answer\n");
             return KSHELL_ERROR;
         }
 
