@@ -32,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format sdk idf-check idf-build idf-flash idf-monitor idf-size bundle bundle-board bundle-x86 x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-root-smoke x86-volume-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-fs-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak x86-smp-smoke soak-smp bench
+.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format sdk idf-check idf-build idf-flash idf-monitor idf-size bundle bundle-board bundle-x86 x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-root-smoke x86-volume-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-fs-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak x86-smp-smoke soak-smp bench
 
 help:
 	@echo "Micro OS — available targets:"
@@ -71,9 +71,11 @@ help:
 	@echo "  make x86-disk-smoke two boots on one disk image, a file survives both"
 	@echo "  make x86-fs-smoke  rename, rmdir, fsck ext2 and the SQLite journal"
 	@echo "  make x86-net-smoke   the network: ping, UDP and HTTP on QEMU user-net"
-	@echo "  make x86-iso    the bootable ISO: loader, kernel and root.img (K13)"
-	@echo "  make x86-iso-run    boot that ISO in a terminal (-nographic)"
-	@echo "  make x86-iso-smoke  boot the ISO and check the shell and /bin"
+	@echo "  make x86-iso    the bootable medium: CD and stick, BIOS and UEFI (K13)"
+	@echo "  make x86-iso-run    boot that image in a terminal (-nographic)"
+	@echo "  make x86-iso-smoke  boot the image from a CD on a BIOS and check the shell"
+	@echo "  make x86-iso-uefi-smoke  the same image on OVMF, from a CD and a stick"
+	@echo "  make x86-iso-usb-smoke   the same image on a stick, from a BIOS"
 	@echo "  make bench      the numbers of the machine: syscalls, fork, pipe,"
 	@echo "                  file and console, one boot of fixed sizes"
 	@echo "  make soak       the session of 600 seconds on x86-64 (one boot)"
@@ -559,13 +561,16 @@ x86-user: x86-all bundle-x86
 x86-user-serial: X86_SERIAL=1
 x86-user-serial: x86-user
 
-# The bootable image of the port (K13, ADR 0026): an ISO with the loader, the
-# kernel and an 8 MB root image, which a BIOS machine takes out of its CD
-# drive. The three files are the ones of the builds above - nothing is built
-# twice - and tools/x86_iso.py only stages them and asks grub-mkrescue or
-# limine to write the El Torito catalogue. The root image is the disk of
-# `make x86-disk`: /bin and /etc written by the tool, mounted read-only by the
-# port because the medium of the boot is not a place to write.
+# The bootable medium of the port (K13, ADR 0026): one image with the loader,
+# the kernel and a 12 MB root image, which boots in four machines - a BIOS and
+# a firmware of UEFI, each from a CD drive and from a USB stick written with
+# `dd`. The three files are the ones of the builds above - nothing is built
+# twice - and tools/x86_iso.py stages them and writes the image: the El Torito
+# record of the BIOS, the one of the EFI, a GPT whose ESP is the FAT image of
+# the EFI record, and the boot sector of a stick (`limine bios-install`). The
+# root image is the disk of `make x86-disk`: /bin and /etc written by the
+# tool, mounted read-only by the port because a CD and a stick written from
+# the image are not places to write.
 X86_ISO_BUILD := build-x86-iso
 X86_ISO_IMAGE := $(X86_ISO_BUILD)/microos.iso
 X86_ISO_BOOTLOADER ?= auto
@@ -597,6 +602,19 @@ x86-iso-run: x86-iso
 
 x86-iso-smoke: x86-iso
 	python3 tools/x86_iso_smoke.py --iso $(X86_ISO_IMAGE)
+
+# The other three boots of the same image: the firmware of a UEFI (OVMF) from
+# a DVD drive and from a USB stick, and a BIOS from a stick. The stick is the
+# proof that the image is a medium a person can carry: the firmware is not
+# told which device it has, it finds the ESP of the GPT (UEFI) or the boot
+# sector of the MBR (BIOS) by itself. OVMF is a package of the distribution
+# (/usr/share/edk2/x64), and a machine without it skips the two boots of the
+# firmware with a message, the way `make ci` treats a missing QEMU.
+x86-iso-uefi-smoke: x86-iso
+	python3 tools/x86_iso_uefi_smoke.py --iso $(X86_ISO_IMAGE) --firmware uefi --media both
+
+x86-iso-usb-smoke: x86-iso
+	python3 tools/x86_iso_uefi_smoke.py --iso $(X86_ISO_IMAGE) --firmware bios --media usb
 
 # The campaign of 1.0 (docs/wiki/testing.md). The session is one boot of the
 # x86-64 machine, ten minutes long by default, under the mixed load of
