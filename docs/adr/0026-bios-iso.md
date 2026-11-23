@@ -1,6 +1,7 @@
 # ADR 0026 - A bootable image of x86-64: the ISO of K13
 
-* Status: accepted (prototype)
+* Status: accepted (prototype); amended 23 November 2026 - the firmware and
+  the USB stick (sections 1a and 5a)
 * Date: 2026-11-22
 * Supersedes: nothing
 * Related: ADR 0007 (the higher half), ADR 0008 (the disk and the
@@ -129,3 +130,48 @@ test is the definition of "the ISO boots".
 * The image is not yet reproducible byte for byte, the EFI half is not
   written, and an ISO written to a USB stick does not boot as a disk. All
   three are debts of the register (`docs/debts.md`, K13).
+
+## Amendment, 23 November 2026: the firmware and the stick
+
+Sections 1 and 5 said "BIOS only" and "the catalogue of a CD". The image of
+1.7 is one file of four boots, and the two paragraphs that follow replace
+them; the rest of the decision stands.
+
+### 1a. The image has two records and a disk of its own
+
+`tools/x86_iso.py` writes both records of El Torito: the BIOS one
+(`limine-bios-cd.bin`) and the EFI one (`limine-uefi-cd.bin`, a FAT image with
+`EFI/BOOT/BOOTX64.EFI` in it). The EFI image is at once the second record and
+the EFI system partition of the medium (`-efi-boot-part --efi-boot-image
+--protective-msdos-label` writes it as a partition of a GPT), so a firmware
+finds the FAT partition on a medium it was not told about. `limine
+bios-install` then folds the GPT into the MBR, which is the form the firmware
+of a stick reads first; the ESP keeps its extent and its type `0xEF`. The last step is `limine bios-install`: it writes the
+first stage of the BIOS into the boot sector and the second into the 32 KiB of
+the system area, which is the one part of an ISO9660 image that nothing else
+uses, and keeps the partition table it found. An image written that way boots
+from a CD drive and from a USB stick, in a BIOS and in a firmware, and `dd` of
+it to a stick is the whole installation.
+
+The tree carries `EFI/BOOT/BOOTX64.EFI` as well, a copy of the application,
+for the tools that write a stick by copying the tree of the ISO rather than by
+copying its bytes; the BIOS half of the image is not in that tree, so a copy
+boots the firmware and not the BIOS.
+
+### 5a. Three more smokes, one per boot
+
+`make x86-iso-smoke` stays the boot of a BIOS and a CD drive. Two targets of
+`tools/x86_iso_uefi_smoke.py` are the rest: `make x86-iso-uefi-smoke` starts
+the image twice on OVMF — the image behind an ATAPI drive, and the image
+behind a USB controller, which is a stick and is not announced to the
+firmware — and `make x86-iso-usb-smoke` starts it from a stick on SeaBIOS.
+Each checks the way in (the device the firmware chose), the signature of the
+kernel, the mount of `boot0p1`, the program of `/bin`, the shell, `uname`,
+`ls /bin` and `cat /etc/setting`.
+
+The two boots of the firmware reach the kernel and the root image, and stop
+before the shell: the heap of the port starts at 35.5 MiB when the boot loader
+of a firmware places the modules there, and the page tables of a program do
+not map it. It is a debt of the port, not of the medium — the K13 entry of
+`docs/debts.md` and `docs/ports/x86_64/iso.md` say which lines.
+
