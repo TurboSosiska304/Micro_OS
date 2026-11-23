@@ -10,6 +10,9 @@
 * Updated: 2026-11-23 - the AP bring-up is done on x86-64: two cores run, the
   smoke of the port passes 34 of 34 and the two-core session soaks for 600
   seconds. The remaining work is named at the end of the section
+* Updated: 2026-11-23 - the I/O APIC and the wake IPI are done (ADR 0034): the
+  timer and the keyboard are lines of the table, the scheduler wakes a core
+  with the interrupt, and the smoke of the two cores passes 52 checks
 
 
 ## Context
@@ -178,16 +181,31 @@ is the gate of 1.3.
   parent may reap at any moment; the idle context claims the next task.
   `CR0.WP` is set on every core, because it is a register of the core and the
   kernel's copy into a read-only page of a program has to fault there too.
-* **What is still open.** The I/O APIC is a stub: the 8259 still delivers the
-  timer and the keyboard to the core 0, and the lines are not routed through
-  the I/O APIC, so a machine whose firmware delivers nothing to the legacy
-  chip has no clock on the APs (the host and QEMU do). The IPI vector exists
-  and `smp ping` proves it, but the scheduler does not send it yet: an idle
-  core wakes on its own timer, at worst a millisecond later, and a core does
-  not preempt a lower-priority task of another queue. The FPU and SSE state
-  is not saved at a switch (the kernel and the programs are built
-  `-mgeneral-regs-only`), and there is no guard page under a task stack. The
-  board stays out of this release, as ADR 0018 says.
+* **The I/O APIC carries the two lines, and the 8259 is the fallback.** Since
+  1.6 the port programs the redirection table of the chip the MADT names
+  (`src/ioapic.c`): the timer of the PIT on the vector `0x20` and the keyboard
+  on `0x21`, one entry per line, the destination core in the entry, and the
+  8259 masked as a whole. A machine whose firmware describes no chip keeps the
+  legacy path exactly as 1.5.0 had it, and the EOI follows the controller that
+  delivered the line. The table is also how a line of the machine reaches a
+  core other than the boot: `smp irq keyboard 1` moves the keyboard and the
+  smoke test sees the interrupts arrive on the core it was sent to (ADR 0034).
+* **The scheduler wakes a core with the interrupt.** A task that is put in the
+  queue of another core is followed by `k_port_cpu_wake()`
+  (`kernel/port/cpu.h`) once the scheduler lock is dropped, and the x86-64 port
+  sends the IPI vector `0x51`: the other core claims and switches at once
+  instead of at its next tick. The claim chooses by priority from the top of
+  the queue, so a task of a higher priority preempts the one that runs there.
+  The port counts the tasks that began in the body of the IPI and the ones that
+  began at the tick of the core, and `smp` prints the pair; `smp wake` stops the
+  clock of the other core to show that an interrupt, and nothing else, starts a
+  task there (ADR 0034).
+* **What is still open.** There is no guard page under the stack of a task: an
+  overflow writes into the heap and the port does not see it. A machine with
+  several I/O APICs keeps the first, a level-triggered line whose device needs
+  its entry masked while it is served is not programmed, and the disk and the
+  network are still polled. The board stays out of this release, as ADR 0018
+  says.
 
 ## Consequences
 

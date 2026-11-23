@@ -122,6 +122,24 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   `cmake --build build` - and no include path or library of its own
   (`docs/porting-programs.md` §6, ADR 0025 §6). The example is 10 688 bytes
   and runs from `/bin` on the machine of QEMU.
+- The timer of the PIT and the keyboard of the x86-64 machine are lines of the
+  I/O APIC and no longer of the 8259: the port reads the table of the firmware
+  (the address of the chip and the ISA overrides of the MADT), programs one
+  redirection entry per line - the vector, the destination core, the polarity,
+  the trigger and the mask - masks the legacy chip as a whole and sends the EOI
+  to the local APIC of the core that took the line. A machine whose firmware
+  describes no chip keeps the 8259, and `smp irq` prints the table;
+  `smp irq keyboard <cpu>` moves a line to another core, which is how
+  `make x86-smp-smoke` sees the keyboard arrive where it was sent (ADR 0034).
+- A task that the scheduler puts in the queue of another core wakes that core
+  with an inter-processor interrupt instead of waiting for its next tick: the
+  port contract gains `k_port_cpu_wake()` (weak in `src/cpu_default.c`, so a
+  port with one core keeps the tick), the scheduler calls it after it drops
+  its lock, and the x86-64 port sends the vector `0x51`, whose body claims and
+  switches. The port counts the tasks that began before the tick of the core
+  and the ones that began at it, and `smp wake` stops the clock of the other
+  core to show that an interrupt - and nothing else - starts a task there
+  (ADR 0034). `make x86-smp-smoke` is 52 checks.
 
 ### Fixed
 

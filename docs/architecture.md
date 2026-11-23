@@ -247,11 +247,15 @@ the core with the lock, because a tick that preempted its holder could switch
 to a task that allocates, and the pool of the tables is shared by every
 address space. `CR0.WP` is set on every core, because it is a register of the
 core and the kernel's copy into a read-only page of a program has to fault
-there too. The I/O APIC is not programmed yet: the 8259
-delivers the timer and the keyboard to the core 0, whose LINT0 is the only
-one in the external mode, and the APs take their ticks from their own local
-APIC timer (1 kHz, calibrated against the TSC). The open work is K8 of
-[debts.md](debts.md).
+there too. The timer and the keyboard are entries of the I/O APIC of the
+firmware (ADR 0034): one redirection entry per line, the destination core in
+the entry, the 8259 masked as a whole, and the EOI of a line goes to the local
+APIC of the core that took it. A machine whose firmware describes no chip
+keeps the 8259, which delivers everything to the core 0, whose LINT0 is the
+only one in the external mode. The APs take their ticks from their own local
+APIC timer (1 kHz, calibrated against the TSC), and a task put in the queue of
+another core wakes that core with an inter-processor interrupt instead of
+waiting for its tick. The open work is K8 of [debts.md](debts.md).
 
 ### Signals (ADR 0015)
 
