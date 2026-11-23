@@ -37,6 +37,23 @@ static bool g_initialised;
 /* The next core of a task that has just been created, round robin. */
 static k_u32_t g_next_cpu;
 
+/*
+ * The cores the scheduler has handed a task to and not told yet, one bit each,
+ * and the count of the hand-overs since the boot.
+ *
+ * The mark is set under the scheduler lock, where the task is put in the queue
+ * of the other core, and the interrupt goes out after the lock is dropped: the
+ * core that takes it claims from the same queue under the same lock, and an
+ * interrupt sent with the lock held would leave it spinning for the length of
+ * this section. The pair of numbers - how many tasks went to another core, and
+ * which core last got one - is what a port with a wake-up interrupt shows in
+ * its report of the machine (docs/debts.md, K8).
+ */
+static k_u32_t g_wake_mask;
+static k_u32_t g_remote_wakes;
+static k_u32_t g_last_wake_cpu;
+static k_u32_t g_last_wake_tick;
+
 /* A full queue reported from the section, printed by the tick outside it. */
 static k_u32_t g_queue_full;
 static k_u8_t g_queue_full_prio;
@@ -58,6 +75,61 @@ static void sched_lock(void)
 static void sched_unlock(void)
 {
     k_cpu_unlock();
+}
+
+/* --- the wake of another core --- */
+
+/*
+ * A task has just been put in the queue of `cpu`, and the caller holds the
+ * lock. The core is told after the lock is dropped (sched_wake_flush), and
+ * only when it is another core: a task of this core needs no interrupt, the
+ * caller either keeps the CPU or is inside the tick that will look at the
+ * queue anyway.
+ *
+ * The tick of the core at the moment of the hand-over is kept with the
+ * number, because that is what makes the report of the port a measurement and
+ * not a claim: a task that starts on the core at that same tick started before
+ * the core's timer could have offered it (docs/debts.md, K8).
+ */
+static void wake_note_locked(k_u32_t cpu)
+{
+    struct k_cpu *record;
+
+    if (cpu >= k_cpu_count() || cpu == k_cpu_id()) {
+        return;
+    }
+
+    if (cpu < KERNEL_CPUS_MAX) {
+        g_wake_mask |= 1u << cpu;
+    }
+
+    record = k_cpu_by_id(cpu);
+
+    g_remote_wakes++;
+    g_last_wake_cpu = cpu;
+    g_last_wake_tick = (record != NULL) ? record->ticks : 0u;
+}
+
+/*
+ * Send the interrupts the hand-overs asked for. The mask is taken under the
+ * lock and cleared there, so two cores that wake two others in the same
+ * moment each send their own and neither loses the other's.
+ */
+static void sched_wake_flush(void)
+{
+    k_u32_t mask;
+    k_u32_t cpu;
+
+    sched_lock();
+    mask = g_wake_mask;
+    g_wake_mask = 0u;
+    sched_unlock();
+
+    for (cpu = 0; cpu < KERNEL_CPUS_MAX; cpu++) {
+        if ((mask & (1u << cpu)) != 0u) {
+            k_port_cpu_wake(cpu);
+        }
+    }
 }
 
 /*
@@ -224,6 +296,7 @@ static int migrate_locked(struct task *t, k_u32_t cpu)
 
     if (t->state == TASK_STATE_READY) {
         ready_enqueue(t);
+        wake_note_locked(cpu);
     }
 
     return 0;
@@ -284,6 +357,9 @@ void k_sched_tick(void)
             t->state = t->wake_state;
             if (t->state == TASK_STATE_READY || t->state == TASK_STATE_RUNNING) {
                 ready_enqueue(t);
+                /* The task may belong to another core: that core is told after
+                 * the lock is dropped, below. */
+                wake_note_locked(task_cpu(t));
             }
             continue;
         }
@@ -348,6 +424,10 @@ void k_sched_tick(void)
     }
 
     sched_unlock();
+
+    /* A sleeping task of another core came back above: that core starts it
+     * now instead of at its own next tick. */
+    sched_wake_flush();
 }
 
 void k_sched_set_quantum(k_u32_t ticks)
@@ -547,9 +627,12 @@ void k_sched_unblock(struct task *t)
         t->state = TASK_STATE_READY;
         t->cpu_stamp_ms = k_sched_uptime_ms();
         ready_enqueue(t);
+        wake_note_locked(task_cpu(t));
     }
 
     sched_unlock();
+
+    sched_wake_flush();
 }
 
 /*
@@ -821,7 +904,10 @@ void k_sched_task_ready(struct task *t)
 
     t->state = TASK_STATE_READY;
     ready_enqueue(t);
+    wake_note_locked(task_cpu(t));
     sched_unlock();
+
+    sched_wake_flush();
 }
 
 void k_sched_task_running(struct task *t)
@@ -888,7 +974,41 @@ int k_sched_migrate(struct task *t, k_u32_t cpu)
     rc = migrate_locked(t, cpu);
     sched_unlock();
 
+    sched_wake_flush();
+
     return rc;
+}
+
+/*
+ * The tasks the scheduler has handed to a core other than the one that ran the
+ * caller, and the last of them: the core and its tick at the moment of the
+ * hand-over. The port of x86-64 prints the pair beside the count of the tasks
+ * it started with an interrupt (ADR 0012, docs/debts.md K8).
+ */
+k_u32_t k_sched_remote_wakes(void)
+{
+    k_u32_t count;
+
+    sched_lock();
+    count = g_remote_wakes;
+    sched_unlock();
+
+    return count;
+}
+
+void k_sched_last_remote_wake(k_u32_t *cpu, k_u32_t *tick)
+{
+    sched_lock();
+
+    if (cpu != NULL) {
+        *cpu = g_last_wake_cpu;
+    }
+
+    if (tick != NULL) {
+        *tick = g_last_wake_tick;
+    }
+
+    sched_unlock();
 }
 
 k_u32_t k_sched_task_cpu(const struct task *t)

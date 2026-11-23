@@ -447,6 +447,8 @@ static void smp_print_unlock(void)
  * mutex and a lock held across a sleep is a deadlock waiting for the second
  * core.
  */
+static void smp_report_wake(void);
+
 static int smp_status(void)
 {
     struct line {
@@ -512,7 +514,69 @@ static int smp_status(void)
 
     smp_print_unlock();
 
+    smp_report_wake();
+
     return KSHELL_OK;
+}
+
+/*
+ * The wake of a core (ADR 0012, docs/debts.md K8): the tasks this core started
+ * in the body of the interrupt of another one - that is, before its own timer
+ * could have offered them - and the ones it started at its tick. The numbers
+ * are the ones the smoke test of the two cores reads.
+ */
+static void smp_report_wake(void)
+{
+    k_u32_t count = k_cpu_count();
+    k_u32_t wake = k_sched_remote_wakes();
+    k_u32_t cpu;
+
+    if (count > KERNEL_CPUS_MAX) {
+        count = KERNEL_CPUS_MAX;
+    }
+
+    smp_print_lock();
+
+    kshell_printf("smp: wake before the tick:");
+    for (cpu = 0; cpu < count; cpu++) {
+        kshell_printf(" cpu %u %u", (unsigned)cpu, (unsigned)port_x86_64_wake_before_tick(cpu));
+    }
+    kshell_printf(" (started by the ipi of the other core)\n");
+
+    kshell_printf("smp: started at the tick:");
+    for (cpu = 0; cpu < count; cpu++) {
+        kshell_printf(" cpu %u %u", (unsigned)cpu, (unsigned)port_x86_64_tick_start(cpu));
+    }
+    kshell_printf(" (started by the timer of the core)\n");
+
+    kshell_printf("smp: the kernel handed %u task(s) to another core\n", (unsigned)wake);
+
+    {
+        /* The measurement of the last hand-over: the tick of the core when the
+         * task was put in its queue, and the tick of the core when it began to
+         * run it. The same tick means the task started before the timer of that
+         * core could have offered it, which is what the wake is for. */
+        k_u32_t last_cpu = 0u;
+        k_u32_t last_tick = 0u;
+
+        k_sched_last_remote_wake(&last_cpu, &last_tick);
+
+        if (last_cpu < count) {
+            kshell_printf("smp: the last hand-over went to cpu %u at tick %u, the core started it "
+                          "at tick %u\n",
+                          (unsigned)last_cpu, (unsigned)last_tick,
+                          (unsigned)port_x86_64_wake_tick(last_cpu));
+        }
+    }
+
+    for (cpu = 0; cpu < count; cpu++) {
+        kshell_printf("smp: cpu %u was woken %u time(s), %u ipi(s) taken, clock %s\n",
+                      (unsigned)cpu, (unsigned)port_x86_64_wake_sent_cpu(cpu),
+                      (unsigned)port_x86_64_ipi_received_cpu(cpu),
+                      port_x86_64_timer_off(cpu) ? "stopped" : "running");
+    }
+
+    smp_print_unlock();
 }
 
 /* One worker: it says which core ran it and ends, so that the line is the
@@ -648,6 +712,311 @@ static int smp_ping(void)
     return after > before ? KSHELL_OK : KSHELL_ERROR;
 }
 
+/* --- the lines of the machine (ADR 0012) --- */
+
+/*
+ * `smp irq`: where the two lines of the port are delivered. The I/O APIC of
+ * the firmware has an entry per line and names a core in it; the 8259 has one
+ * output and it reaches the core of the boot. The counters say which core
+ * took the interrupt, so a run that moves a line can see it arrive where it
+ * was sent - a keyboard of a machine of two cores is the test of the table.
+ */
+static int smp_irq_report(void)
+{
+    k_u32_t count = k_cpu_count();
+    k_u32_t cpu;
+    k_u32_t line;
+
+    if (count > KERNEL_CPUS_MAX) {
+        count = KERNEL_CPUS_MAX;
+    }
+
+    smp_print_lock();
+
+    if (port_x86_64_irq_on_ioapic()) {
+        kshell_printf("smp: the I/O APIC at 0x%x, %u line(s), the 8259 is masked\n",
+                      (unsigned)port_x86_64_ioapic_phys(), (unsigned)port_x86_64_ioapic_entries());
+
+        for (line = 0; line < 2u; line++) {
+            kshell_printf("smp: line %s: isa irq %u -> gsi %u, vector 0x%x, cpu %u\n",
+                          line == PORT_X86_64_IRQ_TIMER ? "timer" : "keyboard", (unsigned)line,
+                          (unsigned)port_x86_64_ioapic_line_gsi(line),
+                          (unsigned)port_x86_64_ioapic_line_vector(line),
+                          (unsigned)port_x86_64_ioapic_line_cpu(line));
+        }
+    } else {
+        kshell_printf("smp: no I/O APIC, the 8259 delivers both lines to the cpu 0\n");
+    }
+
+    for (line = 0; line < 2u; line++) {
+        kshell_printf("smp: irq 0x%x (%s):", 0x20u + (unsigned)line,
+                      line == PORT_X86_64_IRQ_TIMER ? "timer" : "keyboard");
+
+        for (cpu = 0; cpu < count; cpu++) {
+            kshell_printf(" cpu %u %u", (unsigned)cpu, (unsigned)port_x86_64_irq_count(line, cpu));
+        }
+
+        kshell_printf("\n");
+    }
+
+    smp_print_unlock();
+
+    return KSHELL_OK;
+}
+
+/*
+ * `smp irq keyboard <cpu>`: point the keyboard line at another core of the
+ * I/O APIC. The line keeps its vector and its polarity; only the destination
+ * of the entry changes, and the next key is taken by the core that is named.
+ * A machine whose keyboard is on the 8259 has no such table, and the command
+ * says so instead of pretending to move it.
+ */
+static int smp_irq_keyboard(const char *text)
+{
+    k_u32_t cpu;
+    k_u32_t vector;
+
+    if (!port_x86_64_irq_on_ioapic()) {
+        smp_print_lock();
+        kshell_printf("smp: the keyboard is on the 8259, there is no I/O APIC to move it\n");
+        smp_print_unlock();
+        return KSHELL_ERROR;
+    }
+
+    if (!smp_parse_count(text, &cpu) || cpu >= k_cpu_count()) {
+        smp_print_lock();
+        kshell_printf("smp: the keyboard needs a core of 0 to %u\n",
+                      (unsigned)(k_cpu_count() - 1u));
+        smp_print_unlock();
+        return KSHELL_USAGE;
+    }
+
+    vector = port_x86_64_ioapic_line_vector(PORT_X86_64_IRQ_KEYBOARD);
+
+    if (!port_x86_64_ioapic_route(PORT_X86_64_IRQ_KEYBOARD, vector, cpu)) {
+        smp_print_lock();
+        kshell_printf("smp: the I/O APIC did not take the line of the keyboard\n");
+        smp_print_unlock();
+        return KSHELL_ERROR;
+    }
+
+    smp_print_lock();
+    kshell_printf("smp: the keyboard line is now on cpu %u (gsi %u, vector 0x%x)\n", (unsigned)cpu,
+                  (unsigned)port_x86_64_ioapic_line_gsi(PORT_X86_64_IRQ_KEYBOARD),
+                  (unsigned)vector);
+    smp_print_unlock();
+
+    return KSHELL_OK;
+}
+
+static int smp_irq(int argc, char **argv)
+{
+    if (argc == 0) {
+        return smp_irq_report();
+    }
+
+    if (argc >= 2 && strcmp(argv[0], "keyboard") == 0) {
+        return smp_irq_keyboard(argv[1]);
+    }
+
+    smp_print_lock();
+    kshell_printf("smp: usage: smp irq [keyboard <cpu>]\n");
+    smp_print_unlock();
+
+    return KSHELL_USAGE;
+}
+
+/* --- the wake of a core (ADR 0012, docs/debts.md K8) --- */
+
+/*
+ * The experiment of the wake, and the reason it is an experiment and not a
+ * claim: the clock of the other core is stopped for its length.
+ *
+ * A core with a timer of its own would pick a task from its queue at its next
+ * tick whether anybody told it or not, and a run could not tell the two paths
+ * apart. With the timer stopped, the only way a task begins on that core is
+ * the interrupt of this one, and the counters of the port say how many did.
+ * The clock is started again before the command returns, whatever the tasks
+ * did: a core left without a clock is a machine that stops taking work.
+ */
+#define SMP_WAKE_TASKS 4u
+#define SMP_WAKE_SLEEP_MS 120u
+#define SMP_WAKE_WAIT_MS 20u
+#define SMP_WAKE_TIMEOUT_MS 5000u
+#define SMP_WAKE_STOP_TIMEOUT_MS 200u
+
+struct smp_wake_state {
+    k_u32_t cpu;   /* the core that ran the task after its sleep */
+    k_u32_t ticks; /* the ticks of that core at that moment */
+    bool done;
+};
+
+/* One task of the experiment: it waits on the core it was given and comes
+ * back to say which core and which tick of it ran it. */
+static void smp_wake_worker(void *arg)
+{
+    struct smp_wake_state *state = arg;
+
+    k_sched_sleep_ms(SMP_WAKE_SLEEP_MS);
+
+    state->cpu = k_cpu_id();
+    state->ticks = k_sched_cpu_ticks(k_cpu_id());
+    state->done = true;
+}
+
+static int smp_wake(void)
+{
+    struct smp_wake_state states[SMP_WAKE_TASKS];
+    struct task *made[SMP_WAKE_TASKS];
+    k_u32_t self = k_cpu_id();
+    k_u32_t target;
+    k_u32_t before_wake;
+    k_u32_t before_ipi;
+    k_u32_t after_wake;
+    k_u32_t after_ipi;
+    k_u32_t before_ticks;
+    k_u32_t after_ticks;
+    k_u32_t on_target = 0;
+    k_u32_t created = 0;
+    k_u32_t finished = 0;
+    k_u32_t i;
+
+    if (k_cpu_count() < 2u) {
+        smp_print_lock();
+        kshell_printf("smp: wake needs a second core, and the kernel runs on one\n");
+        smp_print_unlock();
+        return KSHELL_ERROR;
+    }
+
+    target = (self + 1u) % k_cpu_count();
+
+    /*
+     * The clock of the core 0 is the clock of the kernel: the millisecond of
+     * the machine is the tick of that core, and the deadline of a task is a
+     * number of that clock. Stopping it would stop the deadline of the very
+     * tasks of the experiment, so the command only ever stops another core
+     * and says so when it cannot.
+     */
+    if (target == 0u) {
+        smp_print_lock();
+        kshell_printf("smp: wake: the clock of the core 0 is the clock of the kernel, "
+                      "run the command on the core 0\n");
+        smp_print_unlock();
+        return KSHELL_ERROR;
+    }
+
+    memset(states, 0, sizeof(states));
+
+    /* The clock of the other core goes off, and the command waits until the
+     * core says it did: a task created before that would be picked by the
+     * timer it is meant to be independent of. */
+    port_x86_64_timer_off_request(target);
+
+    for (i = 0; i < SMP_WAKE_STOP_TIMEOUT_MS; i++) {
+        if (port_x86_64_timer_off(target)) {
+            break;
+        }
+
+        k_sched_sleep_ms(1u);
+    }
+
+    if (!port_x86_64_timer_off(target)) {
+        smp_print_lock();
+        kshell_printf("smp: the core %u did not stop its clock, the wake is not tested\n",
+                      (unsigned)target);
+        smp_print_unlock();
+        port_x86_64_timer_on_request(target);
+        return KSHELL_ERROR;
+    }
+
+    before_ticks = k_sched_cpu_ticks(target);
+    before_wake = k_sched_remote_wakes();
+    before_ipi = port_x86_64_wake_before_tick(target);
+
+    for (i = 0; i < SMP_WAKE_TASKS; i++) {
+        struct task *t = task_create("smpwake", smp_wake_worker, &states[i], TASK_PRIO_DEFAULT);
+
+        if (t == NULL) {
+            break;
+        }
+
+        made[created] = t;
+
+        if (k_sched_task_cpu(t) == target) {
+            on_target++;
+        }
+
+        created++;
+    }
+
+    /* The tasks of the experiment are on the machine now; the ones on the
+     * other core are waiting for their sleep. */
+    k_sched_sleep_ms(SMP_WAKE_WAIT_MS);
+
+    after_wake = k_sched_remote_wakes();
+    after_ipi = port_x86_64_wake_before_tick(target);
+
+    for (i = 0; i < created; i++) {
+        int code = 0;
+
+        if (task_wait(made[i]->pid, &code, SMP_WAKE_TIMEOUT_MS) == 0) {
+            finished++;
+        }
+    }
+
+    after_ticks = k_sched_cpu_ticks(target);
+
+    /* The clock of the core comes back before anything else is said: the
+     * machine is not left with a core that only an interrupt can wake. */
+    port_x86_64_timer_on_request(target);
+
+    for (i = 0; i < SMP_WAKE_STOP_TIMEOUT_MS; i++) {
+        if (!port_x86_64_timer_off(target)) {
+            break;
+        }
+
+        k_sched_sleep_ms(1u);
+    }
+
+    smp_print_lock();
+
+    kshell_printf("smp: wake: %u task(s) of %u started, %u of them on cpu %u\n", (unsigned)created,
+                  (unsigned)SMP_WAKE_TASKS, (unsigned)on_target, (unsigned)target);
+    kshell_printf("smp: wake: the kernel handed %u -> %u task(s) to another core\n",
+                  (unsigned)before_wake, (unsigned)after_wake);
+    kshell_printf("smp: wake: cpu %u started %u -> %u task(s) before its tick\n", (unsigned)target,
+                  (unsigned)before_ipi, (unsigned)after_ipi);
+    kshell_printf("smp: wake: the ticks of cpu %u went %u -> %u with its clock stopped\n",
+                  (unsigned)target, (unsigned)before_ticks, (unsigned)after_ticks);
+
+    for (i = 0; i < created; i++) {
+        kshell_printf("smp: wake: the task %u ran on cpu %u at tick %u\n", (unsigned)(i + 1u),
+                      (unsigned)states[i].cpu, (unsigned)states[i].ticks);
+    }
+
+    if (finished == created) {
+        kshell_printf("smp: wake: %u task(s) done\n", (unsigned)created);
+    } else {
+        kshell_printf("smp: wake: %u task(s) did not finish of %u\n",
+                      (unsigned)(created - finished), (unsigned)created);
+    }
+
+    kshell_printf("smp: wake: the clock of cpu %u is %s\n", (unsigned)target,
+                  port_x86_64_timer_off(target) ? "still stopped" : "running again");
+
+    if (after_ipi > before_ipi && after_ticks == before_ticks) {
+        kshell_printf("smp: wake ok: the tasks of cpu %u started by the ipi, before its tick\n",
+                      (unsigned)target);
+    } else {
+        kshell_printf("smp: wake failed: cpu %u did not start a task by the ipi\n",
+                      (unsigned)target);
+    }
+
+    smp_print_unlock();
+
+    return (finished == created && after_ipi > before_ipi) ? KSHELL_OK : KSHELL_ERROR;
+}
+
 static int cmd_smp(int argc, char **argv)
 {
     if (argc < 2) {
@@ -662,8 +1031,16 @@ static int cmd_smp(int argc, char **argv)
         return smp_ping();
     }
 
+    if (strcmp(argv[1], "irq") == 0) {
+        return smp_irq(argc - 2, argv + 2);
+    }
+
+    if (strcmp(argv[1], "wake") == 0) {
+        return smp_wake();
+    }
+
     smp_print_lock();
-    kshell_printf("smp: usage: smp [workers <n>|ping]\n");
+    kshell_printf("smp: usage: smp [workers <n>|ping|irq [keyboard <cpu>]|wake]\n");
     smp_print_unlock();
 
     return KSHELL_USAGE;
@@ -677,7 +1054,8 @@ int port_x86_64_smp_register(void)
      * core, so that two cores never create it at once. */
     g_print_lock = k_port_mutex_create();
 
-    rc = kshell_register("smp", "the cores of the machine: smp [workers <n>|ping]", cmd_smp);
+    rc = kshell_register("smp", "the cores of the machine: smp [workers <n>|ping|irq|wake]",
+                         cmd_smp);
 
     return rc;
 }

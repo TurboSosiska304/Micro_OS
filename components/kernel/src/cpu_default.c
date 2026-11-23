@@ -19,3 +19,14 @@ __attribute__((weak)) k_u32_t k_port_cpu_id(void)
 {
     return 0;
 }
+
+/*
+ * A port with one core has nobody to wake, and a port with more of them that
+ * does not implement the call is a port whose cores look at their queues on
+ * their own ticks: the task waits for the next millisecond, which is what the
+ * kernel did before the call existed (ADR 0012).
+ */
+__attribute__((weak)) void k_port_cpu_wake(k_u32_t cpu)
+{
+    K_UNUSED(cpu);
+}

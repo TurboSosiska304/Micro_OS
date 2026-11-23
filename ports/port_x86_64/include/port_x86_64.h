@@ -184,6 +184,31 @@ void port_x86_64_interrupts_init(void);
 k_u64_t port_x86_64_ticks(void);
 
 /*
+ * The two lines of the port that have a handler, in the order the counters
+ * below and the `smp irq` command of the shell name them. Every other line of
+ * the machine is masked: the port has no driver that could answer one.
+ */
+#define PORT_X86_64_IRQ_TIMER 0u
+#define PORT_X86_64_IRQ_KEYBOARD 1u
+
+/*
+ * The end of an interrupt of one of those lines: the EOI of the local APIC of
+ * the core when the I/O APIC delivered it (ADR 0012), the EOI of the 8259
+ * when the legacy chip did. The body of a vector calls this and does not have
+ * to know which chip raised the line.
+ */
+void port_x86_64_irq_eoi(void);
+
+/* True when the I/O APIC delivers the two lines and the 8259 is masked. */
+bool port_x86_64_irq_on_ioapic(void);
+
+/* Count an interrupt of a line on the core that took it, and read the count of
+ * one core. A line the I/O APIC routes to a core arrives on that core, and the
+ * pair of numbers is how a run proves where it arrived. */
+void port_x86_64_irq_note(k_u32_t line);
+k_u32_t port_x86_64_irq_count(k_u32_t line, k_u32_t cpu);
+
+/*
  * The C side of the stubs of interrupts.S. An exception says which vector
  * fired, the error code the processor pushed (0 when the vector has none)
  * and the RIP of the moment; both functions print and stop the machine,
@@ -427,6 +452,18 @@ k_u32_t port_x86_64_cpu_started(void);
 k_u32_t port_x86_64_apic_base(void);
 
 /*
+ * The I/O APIC the MADT describes (ADR 0012): its physical address, 0 when
+ * the firmware named none, and the line of the ISA bus an interrupt reaches
+ * the chip on - the override of the table, or the number of the line itself
+ * when the firmware renamed nothing. A PC renames IRQ0 to the GSI 2, because
+ * that is the input the cascade of the 8259 would use. `flags` is the
+ * polarity and the trigger of the override (ACPI 6.x, 5.2.12.5).
+ */
+k_u32_t port_x86_64_ioapic_base(void);
+k_u32_t port_x86_64_ioapic_gsi(k_u32_t isa_irq);
+k_u16_t port_x86_64_ioapic_irq_flags(k_u32_t isa_irq);
+
+/*
  * Load the table of the interrupts the boot built into this core. The table
  * is one for the machine and does not change after the boot; an application
  * processor calls this on its way up, because the register that names it is
@@ -482,6 +519,33 @@ bool port_x86_64_smp_apic_ready(void);
  * at the next millisecond, so this is the short path and not the only one.
  */
 void port_x86_64_task_ipi(void);
+
+/*
+ * What the core did with the tasks it was given (ADR 0012, docs/debts.md K8):
+ * how many tasks it started in the body of the wake interrupt - that is,
+ * before its own timer could have offered them - and how many it started at
+ * its tick, with the tick of the core at the last wake. The `smp` command of
+ * the shell prints the three numbers, and the smoke test of the two cores
+ * reads them as the proof that a wake does not wait for a millisecond.
+ */
+k_u32_t port_x86_64_wake_before_tick(k_u32_t cpu);
+k_u32_t port_x86_64_wake_tick(k_u32_t cpu);
+k_u32_t port_x86_64_tick_start(k_u32_t cpu);
+
+/*
+ * The clock of a core, stopped and started by the command of the shell that
+ * proves the wake: a request rides on the vector of the interrupt of another
+ * core and the core applies it in the body. With the clock stopped, a task
+ * can only begin there through the interrupt - which is exactly what the
+ * experiment has to show - and port_x86_64_timer_off() is the flag the core
+ * wrote when it did it. `smp wake` starts the clock again before it returns.
+ */
+#define PORT_X86_64_REQUEST_TIMER_OFF 0x1u
+#define PORT_X86_64_REQUEST_TIMER_ON 0x2u
+
+void port_x86_64_timer_off_request(k_u32_t cpu);
+void port_x86_64_timer_on_request(k_u32_t cpu);
+bool port_x86_64_timer_off(k_u32_t cpu);
 
 /* --- the map of the machine ---------------------------------------------- */
 /*

@@ -254,16 +254,17 @@ written when the project was an operating system for one board; the numbers
       machine without a store says so, and the words of `write`, `mkdir`,
       `df`, `umount` and the clock are one style
 
-## K8 - Many cores (x86-64 and host done in 1.3, the I/O APIC open)
+## K8 - Many cores (x86-64 and host done in 1.3, the guard page open)
 
 > Not a gate of 1.0 (ADR 0012, updated), and not a part of `1.2.0` either:
 > the screen, the stream and the installer were that release. `1.3.0` closes
 > the pilot: the machine of QEMU starts both processors, runs tasks on each of
 > them, passes `make x86-smp-smoke` (34 checks) and the 600-second
-> `make soak-smp` session. `KERNEL_SMP` stays off by default. The open rows
-> are the I/O APIC, the remote wake, the stack guard page and the board; they
-> are the K8 rows of [debts.md](debts.md). The floating point state of a task
-> is saved and loaded at every switch since K9 (below).
+> `make soak-smp` session. `KERNEL_SMP` stays off by default. 1.6 took the
+> I/O APIC and the wake IPI (ADR 0034); the open rows are the stack guard page
+> and the board, and they are the K8 rows of [debts.md](debts.md). The
+> floating point state of a task is saved and loaded at every switch since K9
+> (below).
 
 * [x] A `struct k_cpu` per core and a run queue per core; the scheduler never
       runs one task on two cores (ADR 0012) - `kernel/cpu.h`,
@@ -279,10 +280,12 @@ written when the project was an operating system for one board; the numbers
       `make x86-smp-smoke` and `make soak-smp`
 * [x] The console is one resource of the machine: `k_port_write()` holds the
       big kernel lock for the whole call
-* [ ] x86-64: the I/O APIC (the timer and the keyboard off the 8259, the
-      MADT overrides, the LAPIC EOI), the wake IPI of the scheduler and a
-      cross-core priority preemption, a guard page under a task stack - the
-      K8 rows of [debts.md](debts.md)
+* [x] x86-64: the I/O APIC (the timer and the keyboard off the 8259, the
+      MADT overrides, the LAPIC EOI) and the wake IPI of the scheduler, with
+      the claim that preempts by priority - ADR 0034, `make x86-smp-smoke`
+      (52 checks)
+* [ ] A guard page under a task stack - the K8 row of
+      [debts.md](debts.md)
 * [ ] The allocator, the VFS, the console and the block layer under an
       aggressive migration: they are sleeping locks and the two-core session
       runs the full load for ten minutes, but no test migrates a task in the

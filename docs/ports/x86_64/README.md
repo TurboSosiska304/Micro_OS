@@ -587,14 +587,22 @@ counts at about 62.6 MHz with divider 16, so an initial count of about
 62 600). The external mode of `LINT0` belongs to the core 0 alone; with every
 core in that mode, QEMU delivered the timer of the 8259 to either of them
 (1889 ticks on the core 0 and 4933 on the core 1 of 6822) and the clock of
-the kernel ran at a third of real time. The I/O APIC is still a stub: the
-legacy lines stay on the core 0.
+the kernel ran at a third of real time.
+
+Since 1.6 the two lines of the port are entries of the I/O APIC of the
+firmware (ADR 0034): `src/ioapic.c` reads the address of the chip and the ISA
+overrides of the MADT, programs one redirection entry per line (the vector,
+the destination core, the polarity, the trigger and the mask), masks the 8259
+as a whole and sends the EOI of a line to the local APIC of the core that took
+it. A machine whose firmware describes no chip keeps the 8259 exactly as
+1.5.0 had it, and a chip whose window answers nothing is not trusted with
+either line.
 
 ### What the shell shows
 
-In a `KERNEL_SMP` build the shell has `smp`, `smp workers <n>` and
-`smp ping` (they are not registered in a one-core build, which is the kernel
-of 1.1):
+In a `KERNEL_SMP` build the shell has `smp`, `smp workers <n>`, `smp ping`,
+`smp irq [keyboard <cpu>]` and `smp wake` (they are not registered in a
+one-core build, which is the kernel of 1.1):
 
 ```
 microos> smp
@@ -603,6 +611,12 @@ smp: cpu 0 apic 0x0 ticks 134 current shell
 smp: cpu 1 apic 0x1 ticks 3414 current idle
 smp: queues consistent
 smp: the command ran on cpu 0
+smp: wake before the tick: cpu 0 0 cpu 1 2 (started by the ipi of the other core)
+smp: started at the tick: cpu 0 1 cpu 1 0 (started by the timer of the core)
+smp: the kernel handed 3 task(s) to another core
+smp: the last hand-over went to cpu 1 at tick 812, the core started it at tick 812
+smp: cpu 0 was woken 1 time(s), 1 ipi(s) taken, clock running
+smp: cpu 1 was woken 2 time(s), 2 ipi(s) taken, clock running
 microos> smp workers 8
 smp: worker 5 on cpu 0
 smp: worker 8 on cpu 1
@@ -611,28 +625,47 @@ smp: 8 worker(s) done
 microos> smp ping
 smp: ping cpu 1: ipi count 0 -> 1
 smp: ping ok
+microos> smp irq
+smp: the I/O APIC at 0xfec00000, 24 line(s), the 8259 is masked
+smp: line timer: isa irq 0 -> gsi 2, vector 0x20, cpu 0
+smp: line keyboard: isa irq 1 -> gsi 1, vector 0x21, cpu 0
+smp: irq 0x20 (timer): cpu 0 2299 cpu 1 0
+smp: irq 0x21 (keyboard): cpu 0 0 cpu 1 0
+microos> smp wake
+smp: wake: 4 task(s) of 4 started, 2 of them on cpu 1
+smp: wake: the kernel handed 2 -> 4 task(s) to another core
+smp: wake: cpu 1 started 1 -> 3 task(s) before its tick
+smp: wake: the ticks of cpu 1 went 135 -> 135 with its clock stopped
+smp: wake ok: the tasks of cpu 1 started by the ipi, before its tick
 ```
 
 `smp workers` is the proof that a task of this machine runs on each core: the
 scheduler puts a new task on the next core of its round robin. `smp ping` is
 the proof of the IPI vector: the count is read on the core that received the
-interrupt, not on the one that sent it.
+interrupt, not on the one that sent it. `smp irq` prints the table of the I/O
+APIC and the count of the two lines per core; `smp irq keyboard 1` moves the
+keyboard to the second core. `smp wake` stops the clock of the other core, so
+that the only way a task can begin there is the interrupt of this one, and
+starts it again before it returns (ADR 0034).
 
 ### The gate
 
 ```bash
 make x86-smp-build    # the kernel with KERNEL_SMP, an image of its own
 make x86-smp-run      # the two-core machine in a terminal
-make x86-smp-smoke    # boot -smp 2 and check 34 things about the two cores
+make x86-smp-smoke    # boot -smp 2 and check 52 things about the two cores
 make soak-smp         # the 600-second session on the two-core image
-make x86-smoke        # the one-core kernel: 174 checks, unchanged
+make x86-smoke        # the one-core kernel: 323 checks, unchanged
 ```
 
 `tools/x86_smp_smoke.py` boots the image of `build-x86-smp` on the disk of
 `make x86-disk` with `-smp 2`, reads the two numbers, runs the program of the
 boot in ring 3 and drives the `smp` command: the two cores are in use, the
 queues are consistent, a worker ran on each core, the IPI arrived on the core
-it named, and the ticks of both cores moved between the two reports. A line
+it named, the ticks of both cores moved between the two reports, the table of
+the I/O APIC names a core for the timer and one for the keyboard, the tasks of
+`smp wake` start on the core whose clock is stopped, and the keys the monitor
+of QEMU presses arrive on the core the keyboard line was sent to. A line
 that names a missing core, an exception or a stopped machine fails the run;
 so does a transcript that stops answering.
 
@@ -647,15 +680,12 @@ The one-core build is the kernel of 1.1: `KERNEL_SMP` is off by default, and
 
 ### What remains
 
-The I/O APIC is a stub (`src/ioapic.c`): the PIT and the keyboard are still
-delivered by the 8259 to the core 0, and a machine whose firmware delivers
-nothing to the legacy chip has no clock on the APs. The IPI vector exists and
-is proved by `smp ping`, but the scheduler does not send it yet: an idle core
-wakes on its own timer (at worst a millisecond later) and a core does not
-preempt a lower-priority task of another queue. The FPU and SSE state is not
-saved at a switch (the kernel and the programs are built with
-`-mgeneral-regs-only`), and there is no guard page under a task stack. These
-are rows of K8 in [debts.md](../../debts.md).
+The guard page under the stack of a task is still open: an overflow writes
+into the heap and the port does not see it. A machine with several I/O APICs
+keeps the first, and a level-triggered line whose device needs its entry
+masked while it is served is not programmed - the two lines of the port are
+edge triggered, and the disk and the network are polled. These are rows of K8
+in [debts.md](../../debts.md).
 
 ## What works## What works
 
@@ -780,10 +810,10 @@ are rows of K8 in [debts.md](../../debts.md).
 
 ## What does not work yet
 
-* the I/O APIC: the 8259 still delivers the timer and the keyboard to the
-  core 0, the lines are not routed through the I/O APIC, and the FPU/SSE
-  state is not saved at a switch; the APs have their own local APIC timer and
-  the IPI vector, which `smp ping` proves (ADR 0012, K8 of debts.md);
+* the guard page under the stack of a task: an overflow writes into the heap
+  and the port does not see it; a machine with several I/O APICs keeps the
+  first, and a level-triggered line whose device needs its entry masked while
+  it is served is not programmed (ADR 0034, K8 of debts.md);
 * the disk is one, and it is the primary ATA channel: no SATA, no virtio, no
   NVMe, no card, no second disk;
 * the CD of K13 is BIOS only and its root is the image of the medium: every
