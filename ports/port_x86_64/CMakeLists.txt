@@ -35,17 +35,17 @@ set(DEVFS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/devfs")
 set(CONFIG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/config")
 set(SETTINGS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/settings")
 
-# The second filesystem of the machine (ADR 0009). Off by default: the
-# disk of `make x86-smoke` is one MicroFS volume, and a reader that no call
-# of the boot asks for is an object file of no use. A machine with a FAT
-# partition turns it on and mounts the partition with vfs_mount_type().
-option(MICRO_OS_FS_FAT32 "FAT12/16/32, read and written" OFF)
+# The second filesystem of the machine (ADR 0009). On: the boot of the root
+# reads the type of the volume out of the medium (ADR 0027), so the machine
+# that is told to run on a FAT32 volume has the reader of it in the image it
+# was started with, and the second partition of the ext2 disk is a /data a
+# person may fill from another computer.
+option(MICRO_OS_FS_FAT32 "FAT12/16/32, read and written" ON)
 
-# The ext2 filesystem of the machine (ADR 0019). Off by default for the same
-# reason: the disk of the smoke tests is one MicroFS volume. A machine with
-# an ext2 partition turns it on and mounts the partition with the type the
-# boot registers.
-option(MICRO_OS_FS_EXT2 "ext2, read and written" OFF)
+# The ext2 filesystem of the machine (ADR 0019). On for the same reason: the
+# release carries the same tree twice, once in MicroFS and once in ext2, and
+# one kernel boots both (ADR 0027 §3).
+option(MICRO_OS_FS_EXT2 "ext2, read and written" ON)
 
 # The optional features of the image (ADR 0010): the PSRAM pool of the
 # allocator is off, the MOX1 runtime is on (the port can enter a program), and
