@@ -114,6 +114,11 @@ PCRE2_LICENSE = "third_party/pcre2/LICENSE"
 # is not linked here, so the file is data of the image).
 SETTING = "hello\nhostname=x86_64\nconsole=vga"
 
+# The frame of `SETTING` and a newline: zstd 1.5.7, level 19, no checksum.
+SETTING_ZST_FRAME = (
+    "28b52ffd202211010068656c6c6f0a686f73746e616d653d7838365f36340a636f6e736f6c653d7667610a"
+)
+
 # The first script of the machine: a table, a number with a point in it, a
 # file of the volume written and read back, and the clock. The text is a
 # fixture like the greeting of zlib: the smoke test knows every line of it and
@@ -289,20 +294,13 @@ def write_fixture_zstd(build_dir: str) -> str:
     with open(source, "wb") as file:
         file.write(text)
 
-    zstd = shutil.which("zstd")
-    if zstd is not None:
-        result = subprocess.run(
-            [zstd, "-19", "--no-check", "-q", "-f", "-o", path, source],
-            capture_output=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            raise RuntimeError((result.stderr or b"").decode("utf-8", "replace").strip())
-    else:
-        from compression import zstd as pyzstd
-
-        with open(path, "wb") as file:
-            file.write(pyzstd.compress(text, level=19))
+    # The frame is a fixture, so it is bytes and not a call: `zstd` is a tool
+    # of a development machine and the Python of the image of the release is
+    # 3.10, which has no `compression.zstd`. The bytes below are the frame of
+    # this exact text, made once by zstd 1.5.7 at level 19 without a checksum;
+    # `zstd -t` of the machine reads it and gives the same text back.
+    with open(path, "wb") as file:
+        file.write(bytes.fromhex(SETTING_ZST_FRAME))
 
     # The same frame with its tail cut: the stream promises blocks that are
     # not there, and `zstd -t` of the guest has to refuse it. A test of a
