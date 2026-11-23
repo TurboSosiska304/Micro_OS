@@ -104,6 +104,14 @@ void net_tls_free(void *block);
 #define MBEDTLS_SHA1_C
 #define MBEDTLS_SHA256_C
 #define MBEDTLS_SHA512_C
+/*
+ * SHA-384 is a module of its own since 3.6, and it is the hash of the
+ * signatures of the P-384 authorities: Let's Encrypt signs the intermediates
+ * of its ECDSA chain, and ISRG Root X2 signs itself, with ecdsa-with-SHA384.
+ * Without it those certificates were `signature algorithm (oid) is
+ * unsupported`, and a store that held one was refused whole.
+ */
+#define MBEDTLS_SHA384_C
 #define MBEDTLS_MD_C
 #define MBEDTLS_CIPHER_C
 

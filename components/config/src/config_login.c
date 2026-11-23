@@ -113,6 +113,13 @@ static bool console_line(const char *prompt, char *buf, k_size_t size, bool secr
     }
 }
 
+/*
+ * An answer of this file that is not one of the codes of config/users.h: the
+ * person gave no name, the sentence is already on the console, and the caller
+ * must not add another one.
+ */
+#define LOGIN_ECANCEL (-100)
+
 /* A name from the command line or from the console; false when there is
  * none. */
 static bool ask_name(char *name, k_size_t size)
@@ -123,7 +130,14 @@ static bool ask_name(char *name, k_size_t size)
         return false;
     }
 
-    if (line[0] == '\0' || strlen(line) + 1 > size) {
+    if (line[0] == '\0') {
+        /* A name of no letters is not a name that does not fit: the person
+         * pressed Enter and the shell says what it wanted. */
+        kshell_printf("login: a name is needed\n");
+        return false;
+    }
+
+    if (strlen(line) + 1 > size) {
         kshell_printf("login: the name does not fit\n");
         return false;
     }
@@ -152,7 +166,7 @@ static int ask_credentials(const char *given, struct user_account *account)
         }
         memcpy(name, given, strlen(given) + 1);
     } else if (!ask_name(name, sizeof(name))) {
-        return USERS_ENOENT;
+        return LOGIN_ECANCEL;
     }
 
     for (attempt = 0; attempt < LOGIN_ATTEMPTS; attempt++) {
@@ -196,7 +210,10 @@ static int cmd_login(int argc, char **argv)
 
     rc = ask_credentials((argc == 2) ? argv[1] : NULL, &account);
     if (rc != USERS_OK) {
-        say_error("login", rc);
+        /* No name at all: the sentence of the prompt is the answer. */
+        if (rc != LOGIN_ECANCEL) {
+            say_error("login", rc);
+        }
         return KSHELL_ERROR;
     }
 

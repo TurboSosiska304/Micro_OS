@@ -67,6 +67,15 @@
 
 #define KSHELL_PIPE_PATH_MAX 128
 
+/*
+ * The two numbers a boundary that landed on 0, 1 or 2 is moved to: the top of
+ * the table of the descriptors of a task (TASK_MAX_FDS is sixteen). The shell
+ * holds a handful of open files and a pipe takes the lowest free numbers, so
+ * the two highest slots are free in the child.
+ */
+#define KSHELL_STAGE_IN_MOVE (TASK_MAX_FDS - 1)
+#define KSHELL_STAGE_OUT_MOVE (TASK_MAX_FDS - 2)
+
 /* One redirection of a stage: the word after the operator and its shape. */
 struct pipe_redirection {
     const char *path;
@@ -415,12 +424,46 @@ static bool stage_apply_redirection(struct pipe_stage *stage,
  * keeps the reader of the pipe from ever seeing the end of the file, and a
  * read end of a writer keeps a broken pipe from being reported.
  *
+ * The shell keeps no descriptors of its own - the console of the kernel is 1
+ * and 2 when they are not open as files - so `pipe()` hands out the low
+ * numbers and an end of a boundary can sit on 0, 1 or 2. A read end that
+ * lands on 1 would be the standard output of the stage and every write of it
+ * would be a `bad file descriptor`; the ends are therefore moved above 2 and
+ * the three low numbers are closed before the copies are made. The copies
+ * then own exactly 0 and 1, 2 is the console again unless the line said
+ * otherwise, and a chain of any length starts its stages the same way.
+ *
  * The output and the error are set before the input, so a file that cannot
  * be opened is reported where the line asked for the errors.
  */
 static bool stage_setup(struct pipe_stage *stage, int in_fd, int out_fd)
 {
     int fd;
+
+    /* The two ends, above the three numbers the copies need. 14 and 15 are
+     * the two highest slots of TASK_MAX_FDS: the shell holds a handful of
+     * descriptors and never a pipe end there. */
+    if (in_fd >= 0 && in_fd <= 2) {
+        if (microos_dup2(in_fd, KSHELL_STAGE_IN_MOVE) != KSHELL_STAGE_IN_MOVE) {
+            return false;
+        }
+        microos_close(in_fd);
+        in_fd = KSHELL_STAGE_IN_MOVE;
+    }
+
+    if (out_fd >= 0 && out_fd <= 2) {
+        if (microos_dup2(out_fd, KSHELL_STAGE_OUT_MOVE) != KSHELL_STAGE_OUT_MOVE) {
+            return false;
+        }
+        microos_close(out_fd);
+        out_fd = KSHELL_STAGE_OUT_MOVE;
+    }
+
+    /* Whatever the shell had at 0, 1 and 2 belongs to the shell: the stage
+     * starts without them, and the copies below are the only owners. */
+    for (fd = 0; fd <= 2; fd++) {
+        microos_close(fd);
+    }
 
     if (in_fd >= 0 && microos_dup2(in_fd, 0) != 0) {
         return false;
@@ -517,9 +560,33 @@ static int pipeline_run(struct pipeline *p)
     int started = 0;
     int index;
     int in_fd = -1;
+    int cost = 0;
+    k_size_t free_tasks;
 
     if (self == NULL) {
         kshell_eprintf("the shell: a pipeline needs a task\n");
+        return KSHELL_ERROR;
+    }
+
+    /*
+     * The task table is the real bound of a chain, so the chain is counted
+     * before the first pipe is made: a stage that runs a program is two
+     * tasks (the stage waits, the program runs) and a stage that is a command
+     * of the shell is one. A chain that does not fit is refused whole, with
+     * the arithmetic in the sentence - a chain that starts and then loses
+     * its last stages is a line whose answer nobody can trust.
+     */
+    for (index = 0; index < p->count; index++) {
+        cost += kshell_stage_is_program(p->stages[index].argv[0]) ? 2 : 1;
+    }
+
+    free_tasks = (k_size_t)TASK_MAX_TASKS - task_count();
+
+    if ((k_size_t)cost > free_tasks) {
+        kshell_eprintf("the shell: %d stages need %d task slots and %u of %u are free\n", p->count,
+                       cost, (unsigned)free_tasks, (unsigned)TASK_MAX_TASKS);
+        kshell_eprintf("the shell: a stage that runs a program is two tasks (the stage and the "
+                       "program); shorten the chain\n");
         return KSHELL_ERROR;
     }
 

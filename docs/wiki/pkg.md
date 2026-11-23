@@ -103,12 +103,32 @@ The repository of the project is **microos-progs**, a public tree with the
 signed index at <https://turbososiska304.github.io/microos-progs/>:
 
 ```text
+microos> ntp pool.ntp.org
+ntp: 2026-11-23 15:48:35 UTC
 microos> pkg repo add https://turbososiska304.github.io/microos-progs/
 :: repository microos-progs is https://turbososiska304.github.io/microos-progs/
-microos> ntp 10.0.2.2:123
 microos> pkg -Sy
+:: refreshing microos-progs
+:: 6 package(s) in the index
 microos> pkg -S hello
+:: install hello 1.0.0
+:: signature ok
+:: installed /usr/bin/hello (1.0.0)
 ```
+
+The clock comes first: a certificate has dates and a machine of 1970 refuses
+the connection and says `run ntp first` (the store of roots and the clock are
+the two halves of the trust, [network.md](network.md)). The image of
+`make x86-disk` carries both files an `https://` repository needs: the bundle
+of roots in `/etc/ssl/certs.pem` and the key of this repository in
+`/etc/pkg/keys/microos-progs.pub`.
+
+The key of the image answers only for a repository that has no file of its own
+(a boot of `build-x86-net` and a test say so), and the key of an image built
+from the tree is a key generated in the build directory: that is why the key of
+the public repository is a file of the image of the release, and why a
+repository of one's own names its key in `/etc/pkg/keys/<name>.pub`. A
+signature that does not match says which file the machine trusts.
 
 A local mirror is the same command with its URL; the signature is what makes
 the program trusted, and the test suite serves its own repository on

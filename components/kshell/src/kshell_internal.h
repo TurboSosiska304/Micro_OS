@@ -62,6 +62,18 @@ void kshell_help_list_programs(void);
  */
 bool kshell_help_find_program(const char *name, char *out, k_size_t size);
 
+/* Whether a program of that name is in PATH - the same question as above
+ * without the path, for the arithmetic of the task table of a pipeline. */
+bool kshell_help_has_program(const char *name);
+
+/*
+ * The same question for a stage of a line: true when the stage runs a file of
+ * the machine rather than a command of the shell. A stage like that is two
+ * tasks of the kernel, because execve() starts the program in a task of its
+ * own and the stage waits for it.
+ */
+bool kshell_stage_is_program(const char *name);
+
 /* Write bytes to the console of the caller (descriptor 1), waiting out a
  * pipe that is full. The big reports use this; kshell_printf() is the same
  * with a format. */

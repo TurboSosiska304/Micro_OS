@@ -76,9 +76,12 @@ bool net_tls_clock_ok(k_u64_t unix_seconds, bool clock_set);
 
 /*
  * Parse a buffer of PEM certificates the way the roots of the machine are
- * parsed: zero certificates is not a store, and a broken certificate is an
- * error and not a skipped part. `certificates` may be NULL. It exists for
- * the tests of this file; the client reads the file itself.
+ * parsed: zero certificates is not a store, a buffer that is not PEM is an
+ * error, and a certificate whose signature algorithm this image does not
+ * implement is skipped while the rest of the store is kept (the count is
+ * logged; a bundle of a distribution holds such a certificate). `certificates`
+ * may be NULL. It exists for the tests of this file; the client reads the
+ * file itself.
  */
 int net_tls_ca_count(const void *pem, k_size_t size, k_size_t *certificates);
 

@@ -52,6 +52,10 @@
 /* The sentence of the last failed connection, for the console. */
 static char s_error[256];
 
+/* The store was read once and the certificates it could not hold were named
+ * once: the line of the log is not repeated by every connection. */
+static bool s_roots_reported;
+
 /* The personalisation of the DRBG: the library mixes it into the seed. */
 static const char s_personalization[] = "microos-tls";
 
@@ -236,6 +240,15 @@ static int tls_platform_init(void)
  * that ends the buffer, because that is what mbedtls_x509_crt_parse() wants
  * for PEM: a file of the VFS has no zero in it, so its reader adds one and
  * says so here.
+ *
+ * The answer of the library is the number of certificates it could not parse
+ * when it parsed the others (a positive count) and a negative code when the
+ * buffer is not a store at all. A bundle of a distribution holds certificates
+ * of every kind of key and signature, and a certificate of an algorithm this
+ * image does not implement (a P-521 authority, for one: the curves here are
+ * P-256 and P-384) is not a reason to trust nobody: the rest of the store is
+ * loaded and the count is logged. A store with no certificate in it is still
+ * an error, and the caller says so.
  */
 static int tls_roots_parse(mbedtls_x509_crt *chain, const void *pem, k_size_t length)
 {
@@ -307,12 +320,26 @@ static int tls_roots_load(mbedtls_x509_crt *chain)
     rc = tls_roots_parse(chain, buffer, got + 1);
     kmm_free(buffer);
 
-    if (rc != 0) {
+    if (rc < 0) {
         char reason[96];
 
         mbedtls_strerror(rc, reason, sizeof(reason));
         snprintf(s_error, sizeof(s_error), "%s is not a PEM store: %s", TLS_ROOTS_PATH, reason);
         return TLS_ERR_ROOTS;
+    }
+
+    if (rc > 0 && !s_roots_reported) {
+        /*
+         * A certificate of the bundle whose key or signature this image does
+         * not implement - a P-521 authority, for one: the curves of this
+         * client are P-256 and P-384. The store is the rest of the file, and
+         * the line is written once per boot: every connection reads the
+         * store, and a warning per download is noise.
+         */
+        s_roots_reported = true;
+        kwarn("tls: %d certificate(s) of %s use a key or a signature this image does not have and "
+              "are skipped",
+              rc, TLS_ROOTS_PATH);
     }
 
     if (chain->next == NULL && chain->raw.len == 0) {
@@ -350,7 +377,10 @@ int net_tls_ca_count(const void *pem, k_size_t size, k_size_t *certificates)
     rc = tls_roots_parse(&chain, copy, size + 1);
     kmm_free(copy);
 
-    if (rc != 0) {
+    /* A positive answer is the number of certificates the library skipped and
+     * not a failure: the rest of the store is in the chain (see
+     * tls_roots_parse). */
+    if (rc < 0) {
         mbedtls_x509_crt_free(&chain);
         return TLS_ERR_ROOTS;
     }
