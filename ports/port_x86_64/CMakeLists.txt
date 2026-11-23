@@ -877,6 +877,16 @@ add_libc_program(streams
     DEFINES ULIBC_HEAP_SIZE=65536u
 )
 
+# The processes of a program: a child with its own status, a double fork and
+# an execve that replaces the child itself. It is the gate of the POSIX pair
+# of the library (fork, waitpid, execvp) on the port with an MMU, the way
+# programs/fork.c is the gate of copy on write.
+add_libc_program(procs
+    MAIN "${PROGRAM_DIR}/procs.c"
+    SOURCES ${SBASE_LIBC_SOURCES}
+    DEFINES ULIBC_HEAP_SIZE=65536u
+)
+
 # The test of `ftruncate`: the machine cuts a file of the volume the boot
 # mounted, and the smoke test reads the shorter bytes back. It is a program
 # and not a command of the shell, because no command of the shell cuts a

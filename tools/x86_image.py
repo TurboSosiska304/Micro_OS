@@ -46,6 +46,7 @@ PROGRAMS = [
     "fork",
     "badptr",
     "signals",
+    "procs",
     "cat",
     "echo",
     "streams",
