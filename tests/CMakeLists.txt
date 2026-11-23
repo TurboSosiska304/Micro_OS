@@ -645,6 +645,71 @@ target_compile_definitions(microos_tests PRIVATE
     add_test(NAME userland COMMAND microos_userland_tests)
     set_tests_properties(userland PROPERTIES TIMEOUT 60)
 
+    # --- the POSIX edge of the library of a program ------------------------
+    #
+    # The environment, the canonical name of a path, the reverse of strftime,
+    # the long options, the reader of a format and the names of a pattern. The
+    # functions of a path and of a directory ask the door of the system calls,
+    # and `libc_user_door_shim.c` answers it from a tree of the fixture; the
+    # stream of the scanner is a text the test primes. The binary is a test of
+    # its own for the same reason `userland` is: the include path is the one
+    # of a program. The arena of the program is not linked: `malloc` of the
+    # host answers, so the reader of a format and the walk of a pattern are
+    # tested with the allocator of the process, and the arena has its own
+    # test in `make test`.
+    set(MICROOS_LIBC_USER_TESTS
+        cases/test_libc_user.c
+        cases/libc_user_door_shim.c
+        src/libc_user_main.c
+        framework/ktest.c
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/ctype.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/string.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/string_ext.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/strdup.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/fnmatch.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/getopt.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/env.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/realpath.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/strptime.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/glob.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/sscanf.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/stdlib.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/path.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/stat.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/dirent.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/time.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/errno.c"
+    )
+
+    add_executable(microos_libc_user_tests ${MICROOS_LIBC_USER_TESTS})
+    target_include_directories(microos_libc_user_tests PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/framework"
+        "${CMAKE_CURRENT_LIST_DIR}/include"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/include"
+        "${CMAKE_SOURCE_DIR}/components/kernel/include"
+    )
+    # The library of a program is compiled for a machine with no C library
+    # of its own (`-ffreestanding`), and the host build has to agree with it:
+    # a compiler that knows `memset` by name rewrites a loop that clears a
+    # block into a call of the function being defined, which at `-O3` is a
+    # jump to itself. `-fno-builtin` is the part of the freestanding build
+    # that matters here; the names of the reader of a format are among the
+    # builtins it turns off, which is what the test of a NULL wants.
+    target_compile_options(microos_libc_user_tests PRIVATE
+        -Wall -Wextra -Werror -Wno-nonnull-compare -Wno-missing-prototypes
+        -fno-builtin)
+    # The reader of a format takes `%f` in a build with the numbers of a
+    # point; the host has the units of the machine and needs no flag for them.
+    target_compile_definitions(microos_libc_user_tests PRIVATE ULIBC_WITH_FLOAT=1)
+    if(MICRO_OS_SANITIZE_THREAD)
+        # A fork under the race detector of this toolchain is a process with
+        # the threads of the runtime copied into it; the case of the child is
+        # left out, as the long jump of Lua is above.
+        target_compile_definitions(microos_libc_user_tests PRIVATE MICROOS_TSAN=1)
+    endif()
+    add_test(NAME libc_user COMMAND microos_libc_user_tests)
+    set_tests_properties(libc_user PROPERTIES TIMEOUT 60)
+
     # A test that hangs is a test that failed: the panic of the kernel
     # stops the process of the host, and anything else is a hang that has
     # to be reported, not waited for.
