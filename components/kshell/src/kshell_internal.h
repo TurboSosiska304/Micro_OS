@@ -44,6 +44,24 @@ int kshell_try_program(int argc, char **argv, int *status);
 /* Resolve a path against the working directory of the calling task. */
 bool kshell_resolve_path(const char *path, char *out, k_size_t size);
 
+/* The size of a path a caller of the two functions below keeps. */
+#define KSHELL_PATH_MAX 128
+
+/*
+ * The programs of PATH, for `help`: the executable files of the directories
+ * of PATH, a bounded number of names and `...` when there are more. A build
+ * without the exec path has no program to run, so it lists nothing.
+ */
+void kshell_help_list_programs(void);
+
+/*
+ * The file of PATH that `name` runs, when the machine has a program of that
+ * name: the full path is written where `out` points and the answer is true.
+ * A name with a slash is not looked up; a file without an execute bit does
+ * not answer, as in the runner.
+ */
+bool kshell_help_find_program(const char *name, char *out, k_size_t size);
+
 /* Write bytes to the console of the caller (descriptor 1), waiting out a
  * pipe that is full. The big reports use this; kshell_printf() is the same
  * with a format. */

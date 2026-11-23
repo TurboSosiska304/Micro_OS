@@ -232,21 +232,40 @@ static struct command *find_command(const char *name)
 int kshell_help_show(const char *name)
 {
     struct command *cmd;
+    char path[KSHELL_PATH_MAX];
+    bool program;
 
     if (name == NULL) {
         return KSHELL_USAGE;
     }
 
     cmd = find_command(name);
+    program = kshell_help_find_program(name, path, sizeof(path));
 
-    if (cmd == NULL) {
+    if (cmd == NULL && !program) {
         /*
-         * A name that is not in the table is not a command that was used
-         * wrong: it is a name the shell does not know, and `help` says so
-         * with the name the person typed.
+         * A name that is not in the table and not a file of PATH is not a
+         * command that was used wrong: it is a name the shell does not know,
+         * and `help` says so with the name the person typed.
          */
         kshell_printf("help: %s: no such command. Type 'help' for the list.\n", name);
         return KSHELL_ERROR;
+    }
+
+    /*
+     * A name can be both: `ls` is /bin/ls on the machine that has the program
+     * and the command of the shell on the one that has not. The answer names
+     * the two, because a person has to know which of them runs at the prompt
+     * and where the other one comes from.
+     */
+    if (program) {
+        if (cmd == NULL) {
+            kshell_printf("%s is a program at %s (type %s --help)\n", name, path, name);
+            return KSHELL_OK;
+        }
+
+        kshell_printf("%s is a program: %s\n", name, path);
+        kshell_printf("the builtin:\n");
     }
 
     if (cmd->usage != NULL) {
@@ -533,6 +552,14 @@ static int cmd_help(int argc, char **argv)
         kshell_printf("%-9s %s\n", g_commands[i].name,
                       g_commands[i].summary != NULL ? g_commands[i].summary : "");
     }
+
+    /*
+     * The programs of PATH are not commands of this table, and a list that
+     * stopped at the table is the list of a shell that claims the machine
+     * has no `awk`, `pkg` or `wget`. The names come from the directories
+     * themselves, not from a table somebody has to keep in step.
+     */
+    kshell_help_list_programs();
 
     return KSHELL_OK;
 }
@@ -940,7 +967,9 @@ static const struct builtin_command {
       .usage = "help [command]",
       .detail = "With a command the usage and the notes of that command are printed;\n"
                 "`<command> -h` prints the same. Without one every command is listed\n"
-                "with one line.\n"},
+                "with one line, and the programs found in PATH are named below them.\n"
+                "A name can be both a command and a file of PATH; the answer names\n"
+                "the two, because the file runs at the prompt when it can.\n"},
      cmd_help},
     {"uname",
      {.summary = "kernel name and version",

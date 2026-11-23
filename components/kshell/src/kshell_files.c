@@ -49,7 +49,7 @@
 #endif
 
 #define SHELL_TREE_DEPTH 6
-#define SHELL_PATH_MAX 128
+#define SHELL_PATH_MAX KSHELL_PATH_MAX
 
 /*
  * The value of PATH. It belongs to the shell and not to the filesystem or
@@ -2057,6 +2057,122 @@ static bool shell_find_program(const char *name, char *out, k_size_t size)
     return false;
 }
 
+/*
+ * `help` names the programs of PATH: every regular file with an execute bit,
+ * read one directory at a time through the same iterator as `ls`, so the
+ * listing costs no table of names and no malloc. The count is bounded because
+ * the answer of `help` is the screen of a small board; `...` says that the
+ * list goes on. A directory of PATH that is not there is not an error: the
+ * default names /usr/bin on a machine that has none.
+ */
+#define KSHELL_HELP_PROGRAMS_MAX 24
+
+/* The widest line of names that `help` draws before it wraps. */
+#define KSHELL_HELP_PROGRAMS_WIDTH 74
+
+void kshell_help_list_programs(void)
+{
+    const char *cursor = g_shell_path;
+    struct shell_dir dir;
+    struct vfs_dirent entry;
+    bool heading = false;
+    bool line_open = false;
+    bool cut = false;
+    int column = 0;
+    int shown = 0;
+
+    for (;;) {
+        const char *colon = strchr(cursor, ':');
+        k_size_t len = (colon != NULL) ? (k_size_t)(colon - cursor) : strlen(cursor);
+        char dir_name[SHELL_PATH_MAX];
+        char path[SHELL_PATH_MAX];
+
+        /* An empty entry is the current directory, as in the runner. */
+        if (len == 0) {
+            dir_name[0] = '.';
+            dir_name[1] = '\0';
+        } else if (len < sizeof(dir_name)) {
+            memcpy(dir_name, cursor, len);
+            dir_name[len] = '\0';
+        } else {
+            dir_name[0] = '\0';
+        }
+
+        if (dir_name[0] != '\0' && shell_resolve(dir_name, path, sizeof(path))) {
+            shell_dir_open(&dir, path);
+
+            while (shell_dir_next(&dir, path, &entry) > 0) {
+                char child[SHELL_PATH_MAX];
+                struct vfs_stat info;
+                k_size_t width;
+
+                if (entry.type != 1 || !ls_child_path(path, entry.name, child, sizeof(child))) {
+                    continue;
+                }
+
+                /* The listing of `help` names what the runner would run: a
+                 * regular file and an execute bit, not every file of /bin. */
+                if (vfs_stat(child, &info) != 0 || info.type != 1 || (info.mode & 0111u) == 0) {
+                    continue;
+                }
+
+                if (!heading) {
+                    kshell_printf("programs in PATH:\n");
+                    heading = true;
+                }
+
+                if (shown >= KSHELL_HELP_PROGRAMS_MAX) {
+                    kshell_printf("%s...", line_open ? " " : "  ");
+                    line_open = true;
+                    cut = true;
+                    break;
+                }
+
+                width = strlen(entry.name);
+
+                if (column > 0 && column + 1 + (int)width > KSHELL_HELP_PROGRAMS_WIDTH) {
+                    kshell_printf("\n");
+                    column = 0;
+                }
+
+                if (column == 0) {
+                    kshell_printf("  ");
+                    column = 2;
+                } else {
+                    kshell_printf(" ");
+                    column++;
+                }
+
+                kshell_printf("%s", entry.name);
+                column += (int)width;
+                line_open = true;
+                shown++;
+            }
+
+            shell_dir_close(&dir);
+        }
+
+        if (cut || colon == NULL) {
+            break;
+        }
+        cursor = colon + 1;
+    }
+
+    if (line_open) {
+        kshell_printf("\n");
+    }
+}
+
+/* The file of PATH that `name` runs; the same search the runner makes. */
+bool kshell_help_find_program(const char *name, char *out, k_size_t size)
+{
+    if (name == NULL || name[0] == '\0' || strchr(name, '/') != NULL) {
+        return false;
+    }
+
+    return shell_find_program(name, out, size);
+}
+
 static int cmd_exec(int argc, char **argv)
 {
     char path[SHELL_PATH_MAX];
@@ -2192,7 +2308,7 @@ int kshell_run_program(int argc, char **argv)
     return KSHELL_ERROR;
 }
 
-#else /* KERNEL_EXEC */
+#else  /* KERNEL_EXEC */
 int kshell_try_program(int argc, char **argv, int *status)
 {
     (void)argc;
@@ -2211,6 +2327,21 @@ int kshell_run_program(int argc, char **argv)
     return KSHELL_ERROR;
 }
 
+/*
+ * A build without the exec path has no program to run, so `help` has nothing
+ * to name and no file answers for a name: a list of files that no port can
+ * enter would be a promise the machine cannot keep.
+ */
+void kshell_help_list_programs(void) {}
+
+bool kshell_help_find_program(const char *name, char *out, k_size_t size)
+{
+    (void)name;
+    (void)out;
+    (void)size;
+
+    return false;
+}
 #endif /* KERNEL_EXEC */
 
 /*

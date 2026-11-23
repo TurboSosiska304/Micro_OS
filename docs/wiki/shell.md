@@ -103,12 +103,35 @@ microos> help
 command   what it does
 mkfs      format the volume: mkfs -y
 ...
+programs in PATH:
+  hello crash fork badptr signals cat echo ls ...
 microos> help exec
-exec: run a program: exec <program> [args...]
+usage: exec <program> [arguments...]
+run a program
 ```
 
-`help` with an argument prints the same text as `<command> --help`: the usage
-line, the summary and the notes. `help --help` explains `help` itself.
+`help` with no argument is the list of the commands of the shell, and below it
+the programs found in `PATH`: the executable files of the directories,
+read from the directories themselves and not from a table, at most 24 names
+and `...` when there are more. A program is not a command of the shell and was
+missing from this list before 1.2.1.
+
+`help NAME` answers with the command of the shell, the program, or both. A
+name that is only a program says where it is:
+
+```text
+microos> help hello
+hello is a program at /bin/hello (type hello --help)
+microos> help ls
+ls is a program: /bin/ls
+the builtin:
+usage: ls [-la] [--color[=always|never|auto]] [path]
+...
+```
+
+The first line names the file that runs at the prompt; the block below it is
+the command of the shell, which answers on a machine whose `/bin` has no `ls`.
+`help --help` explains `help` itself.
 
 ## Options and `-h` / `--help`
 

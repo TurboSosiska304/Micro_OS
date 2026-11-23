@@ -208,6 +208,10 @@ COMMANDS = [
     'echo "a  b"',
     "echo 'a | b'",
     'echo "x > y"',
+    # `help` is the list of what the machine has: the programs of PATH and
+    # the two sides of a name that is a command and a file (`ls`).
+    "help hello",
+    "help ls",
     # A line that cannot run is a sentence, and the shell answers the next
     # command: a `cd` has no meaning in a stage, and a file that is not
     # there is the failure of that stage only.
@@ -1014,6 +1018,27 @@ def check(output: str) -> list:
     )
 
     expect("help lists the commands", "list the available commands" in answer("help"))
+    # The list of the shell is not the list of the machine: the programs of
+    # /bin are named below the commands, because `awk` or `pkg` is a file and
+    # nobody registered it.
+    expect(
+        "help names the programs of PATH",
+        "programs in PATH:" in answer("help") and "hello" in answer("help"),
+        repr(answer("help")[-200:]),
+    )
+    expect(
+        "help names a program of the disk",
+        "hello is a program at /bin/hello (type hello --help)" in answer("help hello"),
+        repr(answer("help hello")),
+    )
+    help_ls = answer("help ls")
+    expect(
+        "help names the two sides of a name",
+        "ls is a program: /bin/ls" in help_ls
+        and "the builtin:" in help_ls
+        and "usage: ls" in help_ls,
+        repr(help_ls),
+    )
     # The shell command of the signal: a pid no task has is a sentence, and
     # the shell of the machine is alive after it.
     expect(

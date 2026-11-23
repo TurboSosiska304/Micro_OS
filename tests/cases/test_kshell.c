@@ -1080,6 +1080,124 @@ static void test_attr(void)
     ls_teardown();
 }
 
+/*
+ * `help` is the list of what the machine can run: the commands of the shell
+ * and the programs of PATH, which the shell never registered and used to hide
+ * from the person. A name that is both is answered with both parts, and the
+ * listing stops at a screenful with `...` rather than running the console out
+ * of lines.
+ */
+static void test_help_programs(void)
+{
+#if !KERNEL_EXEC
+    /*
+     * A build without the exec path has no program to run, and `help` says
+     * so by not listing one: a file of PATH that no port can enter would be
+     * a promise the machine cannot keep. The name is no command either.
+     */
+    ktest_begin("kshell: help names no program without the exec path");
+    KT_CHECK_INT_EQ(kshell_execute("help hello"), KSHELL_ERROR);
+#else
+    struct vfs_file file;
+    static k_u8_t data[VFS_FILE_DATA_SIZE];
+    char buf[8192];
+    size_t used;
+    FILE *sink;
+    long list_start;
+    long list_end;
+    long both_start;
+    long both_end;
+    long one_start;
+    long one_end;
+    k_size_t i;
+
+    ktest_begin("kshell: help names the programs of PATH");
+
+    ls_setup();
+    KT_CHECK_INT_EQ(vfs_mkdir("/bin"), 0);
+
+    /* The two shapes: a name that is a command as well (`ls`), a name that
+     * is a program only (`hello`), and a file that no port would run. */
+    KT_CHECK_INT_EQ(vfs_open("/bin/ls", VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, data), 0);
+    KT_CHECK_INT_EQ(vfs_write(&file, "x", 1), 1);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    KT_CHECK_INT_EQ(vfs_chmod("/bin/ls", 0755), 0);
+    KT_CHECK_INT_EQ(vfs_open("/bin/hello", VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, data),
+                    0);
+    KT_CHECK_INT_EQ(vfs_write(&file, "x", 1), 1);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    KT_CHECK_INT_EQ(vfs_chmod("/bin/hello", 0755), 0);
+    KT_CHECK_INT_EQ(vfs_open("/bin/notes", VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, data),
+                    0);
+    KT_CHECK_INT_EQ(vfs_write(&file, "x", 1), 1);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    /* More programs than the listing prints: the names past the limit are
+     * the `...` of the answer. */
+    for (i = 0; i < 26; i++) {
+        char path[VFS_PATH_MAX];
+
+        snprintf(path, sizeof(path), "/bin/p%02u", (unsigned)i);
+        KT_CHECK_INT_EQ(vfs_open(path, VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, data), 0);
+        KT_CHECK_INT_EQ(vfs_write(&file, "x", 1), 1);
+        KT_CHECK_INT_EQ(vfs_close(&file), 0);
+        KT_CHECK_INT_EQ(vfs_chmod(path, 0755), 0);
+    }
+
+    sink = tmpfile();
+    KT_CHECK(sink != NULL);
+    if (sink == NULL) {
+        ls_teardown();
+        return;
+    }
+
+    port_host_set_sink(sink);
+    KT_CHECK_INT_EQ(kshell_execute("path /bin"), KSHELL_OK);
+
+    list_start = ftell(sink);
+    KT_CHECK_INT_EQ(kshell_execute("help"), KSHELL_OK);
+    list_end = ftell(sink);
+
+    both_start = ftell(sink);
+    KT_CHECK_INT_EQ(kshell_execute("help ls"), KSHELL_OK);
+    both_end = ftell(sink);
+
+    one_start = ftell(sink);
+    KT_CHECK_INT_EQ(kshell_execute("help hello"), KSHELL_OK);
+    one_end = ftell(sink);
+
+    KT_CHECK_INT_EQ(kshell_execute("help nosuch"), KSHELL_ERROR);
+
+    rewind(sink);
+    used = fread(buf, 1, sizeof(buf) - 1, sink);
+    buf[used] = '\0';
+
+    port_host_set_sink(NULL);
+
+    /* The list of the commands ends with the programs of PATH. */
+    KT_CHECK(range_has(buf, list_start, list_end, "programs in PATH:"));
+    KT_CHECK(range_has(buf, list_start, list_end, " ls"));
+    KT_CHECK(range_has(buf, list_start, list_end, " hello"));
+    KT_CHECK(!range_has(buf, list_start, list_end, "notes"));
+    KT_CHECK(range_has(buf, list_start, list_end, "..."));
+
+    /* A name of both parts names the file and then the command of the shell. */
+    KT_CHECK(range_has(buf, both_start, both_end, "ls is a program: /bin/ls"));
+    KT_CHECK(range_has(buf, both_start, both_end, "the builtin:"));
+    KT_CHECK(range_has(buf, both_start, both_end, "usage: ls "));
+
+    /* A program with no command of its own is one line and nothing else. */
+    KT_CHECK(
+        range_has(buf, one_start, one_end, "hello is a program at /bin/hello (type hello --help)"));
+    KT_CHECK(!range_has(buf, one_start, one_end, "usage: hello"));
+
+    KT_CHECK(strstr(buf, "help: nosuch: no such command") != NULL);
+
+    KT_CHECK_INT_EQ(kshell_execute("path /bin:/usr/bin"), KSHELL_OK);
+    ls_teardown();
+#endif
+}
+
 /* The type that the mount commands of this test speak: devfs has objects to
  * read and no volume, so two mounts of it cost nothing. */
 static int kshell_devfs_mount(const char *point, const char *device)
@@ -1238,5 +1356,6 @@ void test_kshell(void)
     test_ls();
     test_ls_color();
     test_attr();
+    test_help_programs();
     test_mount();
 }
