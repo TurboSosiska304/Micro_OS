@@ -11,8 +11,9 @@
  * is also written, because a root needs a `/tmp`, a `/var` and a log
  * (ADR 0027): a file is created, written, cut and removed, a directory is
  * made, and the mode and the owner of an object change. The writer speaks
- * the direct blocks and one table of pointers; a file that would grow past
- * it is `KERR_NOSPC` rather than a layout nobody writes.
+ * the direct blocks and the three tables of pointers of the format, so a
+ * file grows as far as the volume allows it, and it writes a file in runs of
+ * 64 KiB (ADR 0037).
  */
 #ifndef MICRO_OS_FS_EXT2_EXT2_H
 #define MICRO_OS_FS_EXT2_EXT2_H

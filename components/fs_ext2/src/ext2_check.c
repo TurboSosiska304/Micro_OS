@@ -293,7 +293,7 @@ static void check_directory(struct check_state *state, k_u32_t number, k_u32_t p
         k_u32_t index = 0;
         bool used = false;
 
-        rc = ext2_inode_get_block(vol, &inode, logical, &block, false);
+        rc = ext2_inode_get_block(vol, &inode, logical, &block, false, NULL);
         if (rc != 0) {
             add_error(state->report, "directory ", number, "names a block outside the volume");
             return;
@@ -407,6 +407,18 @@ int ext2_check_volume(struct ext2_volume *vol, struct ext2_check_report *report)
 
     if (vol == NULL || report == NULL || !vol->mounted) {
         return KERR_INVAL;
+    }
+
+    /*
+     * The check reads the medium and not the memory of the writer: the
+     * bitmap and the descriptor of the group of the last change are written
+     * here first, and the slot of the writer is emptied so that the walk of
+     * the groups reads what the volume holds. A volume that was only read
+     * has nothing to write.
+     */
+    rc = ext2_write_state_drop(vol);
+    if (rc != 0) {
+        return rc;
     }
 
     memset(report, 0, sizeof(*report));
@@ -670,8 +682,8 @@ static k_u32_t repair_chain_length(struct repair_state *state, const struct ext2
     for (logical = 0; logical < limit; logical++) {
         k_u32_t block = 0;
 
-        if (ext2_inode_get_block(state->vol, (struct ext2_inode *)inode, logical, &block, false) !=
-                0 ||
+        if (ext2_inode_get_block(state->vol, (struct ext2_inode *)inode, logical, &block, false,
+                                 NULL) != 0 ||
             block == 0u) {
             break;
         }
@@ -721,7 +733,7 @@ static int repair_dots(struct repair_state *state, struct ext2_inode *inode, k_u
     bool file_type = (vol->feature_incompat & EXT2_FEATURE_INCOMPAT_FILETYPE) != 0u;
     int rc;
 
-    rc = ext2_inode_get_block(vol, inode, 0, &raw, false);
+    rc = ext2_inode_get_block(vol, inode, 0, &raw, false, NULL);
     if (rc != 0 || raw == 0u) {
         return KERR_IO;
     }
@@ -1203,6 +1215,14 @@ int ext2_repair_volume(struct ext2_volume *vol, struct ext2_check_report *report
 
     if (vol == NULL || report == NULL || !vol->mounted) {
         return KERR_INVAL;
+    }
+
+    /* The pass rebuilds every bitmap of the volume itself, and a bitmap the
+     * slot of the writer holds above that write would put the old bits back:
+     * the slot settles and is emptied first (ADR 0037). */
+    rc = ext2_write_state_drop(vol);
+    if (rc != 0) {
+        return rc;
     }
 
     memset(&state, 0, sizeof(state));

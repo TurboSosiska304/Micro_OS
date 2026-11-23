@@ -224,7 +224,7 @@ int ext2_dir_insert(struct ext2_volume *vol, struct ext2_inode *dir, const char 
         k_u32_t offset = 0;
         int rc;
 
-        rc = ext2_inode_get_block(vol, dir, logical, &block, false);
+        rc = ext2_inode_get_block(vol, dir, logical, &block, false, NULL);
         if (rc != 0) {
             return rc;
         }
@@ -287,15 +287,29 @@ int ext2_dir_insert(struct ext2_volume *vol, struct ext2_inode *dir, const char 
     logical = blocks;
     {
         k_u32_t block = 0;
+        bool fresh = false;
         int rc;
 
-        rc = ext2_inode_get_block(vol, dir, logical, &block, true);
+        rc = ext2_inode_get_block(vol, dir, logical, &block, true, &fresh);
         if (rc != 0) {
             return rc;
         }
 
         if (block == 0u) {
             return KERR_IO;
+        }
+
+        /* The bytes of a block this call allocated are nobody's: the record
+         * of the name covers the whole block and the rest of it is zeros,
+         * which a reader of the directory never sees. */
+        if (fresh) {
+            memset(vol->block_buf, 0, vol->block_size);
+
+            /* The bit of the block reaches the medium before the block. */
+            rc = ext2_write_flush(vol);
+            if (rc != 0) {
+                return rc;
+            }
         }
 
         entry_write(vol->block_buf, inode, name, type, has_file_type(vol),
@@ -337,7 +351,7 @@ int ext2_dir_remove(struct ext2_volume *vol, struct ext2_inode *dir, const char 
         bool has_previous = false;
         int rc;
 
-        rc = ext2_inode_get_block(vol, dir, logical, &block, false);
+        rc = ext2_inode_get_block(vol, dir, logical, &block, false, NULL);
         if (rc != 0) {
             return rc;
         }

@@ -3,12 +3,19 @@
  * object, the records of a directory and the bytes of a file.
  *
  * The format is the one of ADR 0019 and it is not extended here: the
- * allocation walks the block and the inode bitmap of a group and keeps the
- * counters of the group and of the superblock true; an inode names its
+ * allocation takes a run of the free bits of a group from a cursor and keeps
+ * the counters of the group and of the superblock true; an inode names its
  * blocks through the twelve direct pointers and the three tables of
  * pointers of the format, so a file of a large volume grows as far as the
  * format allows it (2 GiB of blocks of 1 KiB, 4 TiB of blocks of 8 KiB)
  * and not to the ceiling of one table.
+ *
+ * The group the writer is working in is one slot of the volume: its
+ * descriptor and one of its bitmaps stay in the memory and reach the medium
+ * when the volume settles, when the writer moves to another group and at the
+ * end of a run of the medium (ADR 0037). A file is written in runs of the
+ * blocks that the bitmap gives one after another, so a write of 64 KiB is a
+ * handful of commands of the disk and not sixty-four.
  *
  * The order of every change is the order e2fsck reads: a block is marked in
  * the bitmap before an inode names it, an inode is marked before a
@@ -162,46 +169,198 @@ int ext2_inode_write(struct ext2_volume *vol, const struct ext2_inode *inode, bo
     return ext2_write_block(vol, block, vol->block_buf);
 }
 
-/* Take a block from the bitmap of a group. */
-static int group_alloc_block(struct ext2_volume *vol, struct ext2_group *group, k_u32_t *block)
+/* --- the state of the group the writer is working in ---------------------- */
+
+/*
+ * The bitmap of the group of the slot, loaded there, and the one of the two
+ * bitmaps the writer asked for. The bitmap of a group is a block of the
+ * volume: a writer that reads it, sets a bit and writes it again for every
+ * block of a file pays two commands of the medium for a kilobyte of data.
+ * The slot keeps it until another group or the other bitmap is needed, and
+ * `ext2_write_flush` is where it reaches the medium.
+ */
+static int bitmap_load(struct ext2_volume *vol, k_u32_t group, k_u8_t kind)
 {
-    k_u32_t first = group_first_block(vol, group->number);
-    k_u32_t bits = vol->blocks_per_group;
-    k_u32_t i;
+    struct ext2_group loaded;
+    k_u32_t block;
     int rc;
 
+    rc = ext2_group_read(vol, group, &loaded);
+    if (rc != 0) {
+        return rc;
+    }
+
+    if (vol->bitmap_kind == kind) {
+        return 0;
+    }
+
+    rc = ext2_write_flush(vol);
+    if (rc != 0) {
+        return rc;
+    }
+
+    block = (kind == EXT2_BITMAP_INODE) ? loaded.inode_bitmap : loaded.block_bitmap;
+
+    rc = ext2_read_block(vol, block, vol->bitmap);
+    if (rc != 0) {
+        vol->bitmap_kind = EXT2_BITMAP_NONE;
+        return rc;
+    }
+
+    vol->bitmap_kind = kind;
+    vol->bitmap_dirty = false;
+
+    return 0;
+}
+
+/* The first free bit of a bitmap at or after `from`, wrapping to the first
+ * bit, over the `bits` that name a block or an inode of the volume. A byte
+ * that is all ones is skipped as a byte and not as eight bits, which is what
+ * makes the walk of a full group of 8192 bits cheap. `bits` is the answer of
+ * "no free bit". */
+static k_u32_t bitmap_scan(const k_u8_t *map, k_u32_t bits, k_u32_t from)
+{
+    k_u32_t start = (from < bits) ? from : 0u;
+    k_u32_t pass;
+
+    for (pass = 0; pass < 2u; pass++) {
+        k_u32_t i = (pass == 0u) ? start : 0u;
+        k_u32_t limit = (pass == 0u) ? bits : start;
+
+        while (i < limit) {
+            k_u8_t byte = map[i >> 3];
+            k_u32_t end;
+            k_u32_t j;
+
+            if (byte == 0xFFu) {
+                i = (i | 7u) + 1u;
+                continue;
+            }
+
+            end = (i | 7u) + 1u;
+            if (end > limit) {
+                end = limit;
+            }
+
+            for (j = i; j < end; j++) {
+                if ((byte & (k_u8_t)(1u << (j & 7u))) == 0u) {
+                    return j;
+                }
+            }
+
+            i = end;
+        }
+    }
+
+    return bits;
+}
+
+static bool bitmap_used(const k_u8_t *map, k_u32_t bit)
+{
+    return (map[bit >> 3] & (k_u8_t)(1u << (bit & 7u))) != 0u;
+}
+
+static void bitmap_set(k_u8_t *map, k_u32_t bit, bool used)
+{
+    if (used) {
+        map[bit >> 3] |= (k_u8_t)(1u << (bit & 7u));
+    } else {
+        map[bit >> 3] &= (k_u8_t) ~(1u << (bit & 7u));
+    }
+}
+
+/* The most blocks one allocation asks for: a run the medium moves in one
+ * command, and never more than the blocks of a table of pointers. */
+static k_u32_t run_blocks(const struct ext2_volume *vol)
+{
+    k_u32_t blocks = EXT2_IO_BYTES_MAX / vol->block_size;
+
+    return (blocks == 0u) ? 1u : blocks;
+}
+
+/* The blocks of a group that the volume has, from its first one. */
+static k_u32_t group_bits(const struct ext2_volume *vol, k_u32_t first)
+{
+    k_u32_t bits = vol->blocks_per_group;
+
     if (first >= vol->blocks_count) {
-        return KERR_NOSPC;
+        return 0;
     }
 
     if (bits > vol->blocks_count - first) {
         bits = vol->blocks_count - first;
     }
 
-    rc = ext2_read_block(vol, group->block_bitmap, vol->block_buf);
+    return bits;
+}
+
+/*
+ * Take a run of the blocks of a group: the `want` bits from the cursor on
+ * that are free and follow one another, at most to the end of the group. The
+ * scan starts where the last allocation stopped, so the blocks of a file are
+ * the blocks of the group in order and not the first hole of the volume for
+ * every block; a group that has no room answers KERR_NOSPC and the caller
+ * looks at the next one.
+ */
+static int group_alloc_run(struct ext2_volume *vol, struct ext2_group *group, k_u32_t want,
+                           k_u32_t *first, k_u32_t *count)
+{
+    k_u32_t base = group_first_block(vol, group->number);
+    k_u32_t bits = group_bits(vol, base);
+    k_u32_t from = 0;
+    k_u32_t bit;
+    k_u32_t n;
+    k_u32_t i;
+    int rc;
+
+    *first = 0;
+    *count = 0;
+
+    if (bits == 0u) {
+        return KERR_NOSPC;
+    }
+
+    if (run_blocks(vol) < want) {
+        want = run_blocks(vol);
+    }
+
+    rc = bitmap_load(vol, group->number, EXT2_BITMAP_BLOCK);
     if (rc != 0) {
         return rc;
     }
 
-    for (i = 0; i < bits; i++) {
-        if ((vol->block_buf[i / 8u] & (k_u8_t)(1u << (i % 8u))) == 0u) {
-            break;
-        }
+    if (vol->alloc_hint == group->number && vol->alloc_cursor < bits) {
+        from = vol->alloc_cursor;
     }
 
-    if (i == bits) {
-        return KERR_NOSPC; /* the counter of the group agrees with nothing */
+    bit = bitmap_scan(vol->bitmap, bits, from);
+
+    if (bit == bits) {
+        return KERR_NOSPC;
     }
 
-    vol->block_buf[i / 8u] |= (k_u8_t)(1u << (i % 8u));
-
-    rc = ext2_write_block(vol, group->block_bitmap, vol->block_buf);
-    if (rc != 0) {
-        return rc;
+    /* The run is as long as the free bits that follow the first one. */
+    n = 1;
+    while (n < want && bit + n < bits && !bitmap_used(vol->bitmap, bit + n)) {
+        n++;
     }
 
-    if (group->free_blocks > 0u) {
-        group->free_blocks--;
+    for (i = 0; i < n; i++) {
+        bitmap_set(vol->bitmap, bit + i, true);
+    }
+
+    vol->bitmap_dirty = true;
+    vol->alloc_hint = group->number;
+    vol->alloc_cursor = bit + n;
+
+    if (vol->alloc_cursor >= bits) {
+        vol->alloc_cursor = 0;
+    }
+
+    if (group->free_blocks >= n) {
+        group->free_blocks = (k_u16_t)(group->free_blocks - n);
+    } else {
+        group->free_blocks = 0;
     }
 
     rc = ext2_group_write(vol, group);
@@ -209,22 +368,37 @@ static int group_alloc_block(struct ext2_volume *vol, struct ext2_group *group, 
         return rc;
     }
 
-    *block = first + i;
-
-    if (vol->free_blocks > 0u) {
-        vol->free_blocks--;
+    if (vol->free_blocks >= n) {
+        vol->free_blocks -= n;
+    } else {
+        vol->free_blocks = 0;
     }
+
+    vol->dirty = true;
+    *first = base + bit;
+    *count = n;
 
     return 0;
 }
 
-int ext2_alloc_block(struct ext2_volume *vol, k_u32_t *block)
+int ext2_alloc_blocks(struct ext2_volume *vol, k_u32_t want, k_u32_t *block, k_u32_t *count)
 {
     k_u32_t start;
     k_u32_t tried;
 
-    if (vol == NULL || block == NULL || !vol->mounted) {
+    if (vol == NULL || block == NULL || count == NULL || !vol->mounted) {
         return KERR_INVAL;
+    }
+
+    *block = 0;
+    *count = 0;
+
+    if (want == 0u) {
+        return 0;
+    }
+
+    if (vol->groups == 0u) {
+        return KERR_NOSPC;
     }
 
     start = vol->alloc_hint % vol->groups;
@@ -243,7 +417,7 @@ int ext2_alloc_block(struct ext2_volume *vol, k_u32_t *block)
             continue;
         }
 
-        rc = group_alloc_block(vol, &group, block);
+        rc = group_alloc_run(vol, &group, want, block, count);
         if (rc == KERR_NOSPC) {
             continue;
         }
@@ -251,29 +425,31 @@ int ext2_alloc_block(struct ext2_volume *vol, k_u32_t *block)
             return rc;
         }
 
-        /* The bytes of the object that used the block before are not the
-         * bytes of the object that takes it now. */
-        memset(vol->block_buf, 0, vol->block_size);
-        rc = ext2_write_block(vol, *block, vol->block_buf);
-        if (rc != 0) {
-            return rc;
-        }
-
-        vol->alloc_hint = index;
-        vol->dirty = true;
-
         return 0;
     }
 
     return KERR_NOSPC;
 }
 
+int ext2_alloc_block(struct ext2_volume *vol, k_u32_t *block)
+{
+    k_u32_t count = 0;
+    int rc = ext2_alloc_blocks(vol, 1, block, &count);
+
+    if (rc == 0 && count != 1u) {
+        return KERR_IO;
+    }
+
+    return rc;
+}
+
 int ext2_free_block(struct ext2_volume *vol, k_u32_t block)
 {
     struct ext2_group group;
     k_u32_t index;
-    k_u32_t bit;
     k_u32_t first;
+    k_u32_t bit;
+    k_u32_t bits;
     int rc;
 
     if (vol == NULL || !vol->mounted) {
@@ -291,23 +467,29 @@ int ext2_free_block(struct ext2_volume *vol, k_u32_t block)
     }
 
     first = group_first_block(vol, index);
+    bits = group_bits(vol, first);
     bit = block - first;
 
-    rc = ext2_read_block(vol, group.block_bitmap, vol->block_buf);
+    if (bit >= bits) {
+        return KERR_IO;
+    }
+
+    rc = bitmap_load(vol, index, EXT2_BITMAP_BLOCK);
     if (rc != 0) {
         return rc;
     }
 
-    if ((vol->block_buf[bit / 8u] & (k_u8_t)(1u << (bit % 8u))) == 0u) {
+    if (!bitmap_used(vol->bitmap, bit)) {
         return KERR_IO; /* the block was already free */
     }
 
-    vol->block_buf[bit / 8u] &= (k_u8_t) ~(1u << (bit % 8u));
+    bitmap_set(vol->bitmap, bit, false);
+    vol->bitmap_dirty = true;
 
-    rc = ext2_write_block(vol, group.block_bitmap, vol->block_buf);
-    if (rc != 0) {
-        return rc;
-    }
+    /* The room of a removal is the room of the next object: the cursor of
+     * the allocation goes back to the block that was just given. */
+    vol->alloc_hint = index;
+    vol->alloc_cursor = bit;
 
     group.free_blocks++;
     rc = ext2_group_write(vol, &group);
@@ -326,8 +508,11 @@ static int group_alloc_inode(struct ext2_volume *vol, struct ext2_group *group, 
 {
     k_u32_t first = group->number * vol->inodes_per_group;
     k_u32_t bits = vol->inodes_per_group;
-    k_u32_t i;
+    k_u32_t from = 0;
+    k_u32_t bit;
     int rc;
+
+    *number = 0;
 
     if (first >= vol->inodes_count) {
         return KERR_NOSPC;
@@ -337,26 +522,29 @@ static int group_alloc_inode(struct ext2_volume *vol, struct ext2_group *group, 
         bits = vol->inodes_count - first;
     }
 
-    rc = ext2_read_block(vol, group->inode_bitmap, vol->block_buf);
+    rc = bitmap_load(vol, group->number, EXT2_BITMAP_INODE);
     if (rc != 0) {
         return rc;
     }
 
-    for (i = 0; i < bits; i++) {
-        if ((vol->block_buf[i / 8u] & (k_u8_t)(1u << (i % 8u))) == 0u) {
-            break;
-        }
+    if (vol->inode_hint == group->number && vol->inode_cursor < bits) {
+        from = vol->inode_cursor;
     }
 
-    if (i == bits) {
+    bit = bitmap_scan(vol->bitmap, bits, from);
+
+    if (bit == bits) {
         return KERR_NOSPC;
     }
 
-    vol->block_buf[i / 8u] |= (k_u8_t)(1u << (i % 8u));
+    bitmap_set(vol->bitmap, bit, true);
+    vol->bitmap_dirty = true;
 
-    rc = ext2_write_block(vol, group->inode_bitmap, vol->block_buf);
-    if (rc != 0) {
-        return rc;
+    vol->inode_hint = group->number;
+    vol->inode_cursor = bit + 1u;
+
+    if (vol->inode_cursor >= bits) {
+        vol->inode_cursor = 0;
     }
 
     if (group->free_inodes > 0u) {
@@ -368,11 +556,13 @@ static int group_alloc_inode(struct ext2_volume *vol, struct ext2_group *group, 
         return rc;
     }
 
-    *number = first + i + 1u;
+    *number = first + bit + 1u;
 
     if (vol->free_inodes > 0u) {
         vol->free_inodes--;
     }
+
+    vol->dirty = true;
 
     return 0;
 }
@@ -384,6 +574,10 @@ int ext2_alloc_inode(struct ext2_volume *vol, k_u32_t *number)
 
     if (vol == NULL || number == NULL || !vol->mounted) {
         return KERR_INVAL;
+    }
+
+    if (vol->groups == 0u) {
+        return KERR_NOSPC;
     }
 
     start = vol->inode_hint % vol->groups;
@@ -410,7 +604,6 @@ int ext2_alloc_inode(struct ext2_volume *vol, k_u32_t *number)
             return rc;
         }
 
-        vol->inode_hint = index;
         vol->dirty = true;
 
         return 0;
@@ -440,21 +633,20 @@ int ext2_free_inode(struct ext2_volume *vol, k_u32_t number)
         return rc;
     }
 
-    rc = ext2_read_block(vol, group.inode_bitmap, vol->block_buf);
+    rc = bitmap_load(vol, group_index, EXT2_BITMAP_INODE);
     if (rc != 0) {
         return rc;
     }
 
-    if ((vol->block_buf[index / 8u] & (k_u8_t)(1u << (index % 8u))) == 0u) {
+    if (!bitmap_used(vol->bitmap, index)) {
         return KERR_IO;
     }
 
-    vol->block_buf[index / 8u] &= (k_u8_t) ~(1u << (index % 8u));
+    bitmap_set(vol->bitmap, index, false);
+    vol->bitmap_dirty = true;
 
-    rc = ext2_write_block(vol, group.inode_bitmap, vol->block_buf);
-    if (rc != 0) {
-        return rc;
-    }
+    vol->inode_hint = group_index;
+    vol->inode_cursor = index;
 
     group.free_inodes++;
     rc = ext2_group_write(vol, &group);
@@ -469,34 +661,38 @@ int ext2_free_inode(struct ext2_volume *vol, k_u32_t number)
 }
 
 /*
- * One entry of a table of pointers, read or made. `slot` is the pointer in
- * the inode or in the table above, and `level` is how many tables are still
- * under the entry: one is the table of the single indirection, whose entries
- * name data blocks, two and three are the tables of the double and the
- * triple indirection, whose entries name the table below. `index` is the
- * position in the whole subtree of that table, so the entry of this level is
+ * The table that names the entries of `level` for the logical block `index`,
+ * and the entry of `index` in it. `slot` is the pointer in the inode or in
+ * the table above, and `level` is how many tables are still under the entry:
+ * one is the table of the single indirection, whose entries name data
+ * blocks, two and three are the tables of the double and the triple
+ * indirection, whose entries name the table below. `index` is the position in
+ * the whole subtree of that table, so the entry of this level is
  * `index / stride` and the part below it `index % stride`.
  *
- * A table of zero is a hole and a block of zero below it is a hole too: a
- * read of the suffix of a file that was never written answers zeros. With
- * `create` the tables and the block on the way are made, which is what a
- * write past the direct blocks needs; the entry of the parent is written
- * back, because a table the parent does not name is a table the volume
- * cannot reach.
+ * A table of zero is a hole: a read of the suffix of a file that was never
+ * written answers zeros. With `create` the tables on the way are made and
+ * zeroed - every entry of a table names a block, and a table whose other
+ * entries are the bytes of an object that is gone is a volume e2fsck calls
+ * broken - and the entry of the parent is written back, because a table the
+ * parent does not name is a table the volume cannot reach.
+ *
+ * `table` comes back zero when a table on the way is not there and `create`
+ * is not set; `entry` is the index of the entry of `index` in the leaf table.
  */
-static int table_entry(struct ext2_volume *vol, struct ext2_inode *inode, k_u32_t *slot,
-                       unsigned level, k_u64_t index, bool create, k_u32_t *out)
+static int table_walk(struct ext2_volume *vol, struct ext2_inode *inode, k_u32_t *slot,
+                      unsigned level, k_u64_t index, bool create, k_u32_t *table, k_u64_t *entry)
 {
     k_u32_t pointers = vol->block_size / 4u;
     k_u64_t stride = 1;
     k_u64_t offset;
     k_u8_t raw[4];
-    k_u32_t table = *slot;
-    k_u32_t entry;
+    k_u32_t child = *slot;
     unsigned i;
     int rc;
 
-    *out = 0;
+    *table = 0;
+    *entry = 0;
 
     for (i = 1; i < level; i++) {
         stride *= pointers;
@@ -506,79 +702,138 @@ static int table_entry(struct ext2_volume *vol, struct ext2_inode *inode, k_u32_
         return KERR_IO;
     }
 
-    if (table == 0u) {
+    if (child == 0u) {
         if (!create) {
             return 0;
         }
 
-        rc = ext2_alloc_block(vol, &table);
+        rc = ext2_alloc_block(vol, &child);
+        if (rc != 0) {
+            return rc;
+        }
+
+        /* The bytes of the entries of a new table are zero: an entry of a
+         * table of pointers names a block of the volume, and the blocks a
+         * file does not reach are the holes it reads as zeros. */
+        memset(vol->block_buf, 0, vol->block_size);
+        rc = ext2_write_block(vol, child, vol->block_buf);
         if (rc != 0) {
             return rc;
         }
 
         inode->blocks += block_sectors(vol);
-        *slot = table;
+        *slot = child;
     }
 
-    if (table >= vol->blocks_count) {
+    if (child >= vol->blocks_count) {
         return KERR_IO;
     }
 
-    offset = (k_u64_t)table * vol->block_size + (index / stride) * 4u;
+    if (level == 1u) {
+        *table = child;
+        *entry = index;
+        return 0;
+    }
+
+    offset = (k_u64_t)child * vol->block_size + (index / stride) * 4u;
 
     rc = ext2_read_bytes(vol, offset, raw, sizeof(raw));
     if (rc != 0) {
         return rc;
     }
 
-    entry = ext2_le32(raw);
+    {
+        k_u32_t below = ext2_le32(raw);
 
-    if (entry >= vol->blocks_count) {
-        return KERR_IO;
-    }
-
-    if (level == 1u) {
-        if (entry == 0u) {
-            if (!create) {
-                return 0;
-            }
-
-            rc = ext2_alloc_block(vol, &entry);
-            if (rc != 0) {
-                return rc;
-            }
-
-            inode->blocks += block_sectors(vol);
-            ext2_put32(raw, entry);
-
-            rc = ext2_write_bytes(vol, offset, raw, sizeof(raw));
-            if (rc != 0) {
-                return rc;
-            }
+        if (below >= vol->blocks_count) {
+            return KERR_IO;
         }
 
-        *out = entry;
-        return 0;
+        rc = table_walk(vol, inode, &below, level - 1u, index % stride, create, table, entry);
+        if (rc != 0) {
+            return rc;
+        }
+
+        /* The table below was there, or this call made none: the parent
+         * keeps the entry it had. */
+        if (below == ext2_le32(raw)) {
+            return 0;
+        }
+
+        ext2_put32(raw, below);
+
+        return ext2_write_bytes(vol, offset, raw, sizeof(raw));
+    }
+}
+
+/*
+ * One entry of a table of pointers, read or made: the block that holds the
+ * logical block `index` of the table of `level`, allocated when `create` is
+ * set and the entry is a hole. `fresh` is true for the block this call gave.
+ */
+static int table_entry(struct ext2_volume *vol, struct ext2_inode *inode, k_u32_t *slot,
+                       unsigned level, k_u64_t index, bool create, k_u32_t *out, bool *fresh)
+{
+    k_u32_t table = 0;
+    k_u64_t entry = 0;
+    k_u64_t offset;
+    k_u8_t raw[4];
+    k_u32_t value;
+    int rc;
+
+    *out = 0;
+    if (fresh != NULL) {
+        *fresh = false;
     }
 
-    rc = table_entry(vol, inode, &entry, level - 1u, index % stride, create, out);
+    rc = table_walk(vol, inode, slot, level, index, create, &table, &entry);
+    if (rc != 0 || table == 0u) {
+        return rc;
+    }
+
+    offset = (k_u64_t)table * vol->block_size + entry * 4u;
+
+    rc = ext2_read_bytes(vol, offset, raw, sizeof(raw));
     if (rc != 0) {
         return rc;
     }
 
-    /* The table below was there, or this call made none: the parent keeps
-     * the entry it had. */
-    if (entry == ext2_le32(raw)) {
-        return 0;
+    value = ext2_le32(raw);
+
+    if (value >= vol->blocks_count) {
+        return KERR_IO;
     }
 
-    ext2_put32(raw, entry);
+    if (value == 0u) {
+        if (!create) {
+            return 0;
+        }
 
-    return ext2_write_bytes(vol, offset, raw, sizeof(raw));
+        rc = ext2_alloc_block(vol, &value);
+        if (rc != 0) {
+            return rc;
+        }
+
+        inode->blocks += block_sectors(vol);
+        ext2_put32(raw, value);
+
+        rc = ext2_write_bytes(vol, offset, raw, sizeof(raw));
+        if (rc != 0) {
+            return rc;
+        }
+
+        if (fresh != NULL) {
+            *fresh = true;
+        }
+    }
+
+    *out = value;
+
+    return 0;
 }
 
 int ext2_inode_get_block(struct ext2_volume *vol, struct ext2_inode *inode, k_u64_t logical,
-                         k_u32_t *block, bool create)
+                         k_u32_t *block, bool create, bool *fresh)
 {
     k_u64_t pointers;
     k_u64_t double_start;
@@ -593,6 +848,10 @@ int ext2_inode_get_block(struct ext2_volume *vol, struct ext2_inode *inode, k_u6
     triple_start = double_start + pointers * pointers;
     *block = 0;
 
+    if (fresh != NULL) {
+        *fresh = false;
+    }
+
     if (logical < EXT2_DIRECT_BLOCKS) {
         k_u32_t value = inode->block[logical];
         int rc;
@@ -605,6 +864,10 @@ int ext2_inode_get_block(struct ext2_volume *vol, struct ext2_inode *inode, k_u6
 
             inode->block[logical] = value;
             inode->blocks += block_sectors(vol);
+
+            if (fresh != NULL) {
+                *fresh = true;
+            }
         }
 
         if (value == 0u) {
@@ -621,15 +884,159 @@ int ext2_inode_get_block(struct ext2_volume *vol, struct ext2_inode *inode, k_u6
 
     if (logical < double_start) {
         return table_entry(vol, inode, &inode->block[12], 1u, logical - EXT2_DIRECT_BLOCKS, create,
-                           block);
+                           block, fresh);
     }
 
     if (logical < triple_start) {
-        return table_entry(vol, inode, &inode->block[13], 2u, logical - double_start, create,
-                           block);
+        return table_entry(vol, inode, &inode->block[13], 2u, logical - double_start, create, block,
+                           fresh);
     }
 
-    return table_entry(vol, inode, &inode->block[14], 3u, logical - triple_start, create, block);
+    return table_entry(vol, inode, &inode->block[14], 3u, logical - triple_start, create, block,
+                       fresh);
+}
+
+/*
+ * Name a run of blocks of a file: the entries of `count` logical blocks from
+ * `logical` on become the blocks of the volume that follow `first`. The
+ * entries of a run live in one table of pointers, so the table is read once,
+ * changed and written once, and a file of the direct blocks names its run in
+ * the inode itself.
+ */
+static int inode_store_run(struct ext2_volume *vol, struct ext2_inode *inode, k_u64_t logical,
+                           k_u32_t first, k_u32_t count)
+{
+    k_u64_t pointers = vol->block_size / 4u;
+    k_u64_t double_start = EXT2_DIRECT_BLOCKS + pointers;
+    k_u64_t triple_start = double_start + pointers * pointers;
+    k_u32_t table = 0;
+    k_u64_t entry = 0;
+    k_u32_t i;
+    int rc;
+
+    if (logical < EXT2_DIRECT_BLOCKS) {
+        for (i = 0; i < count; i++) {
+            inode->block[logical + i] = first + i;
+        }
+    } else {
+        k_u64_t index;
+        unsigned level;
+        k_u64_t offset;
+
+        if (logical < double_start) {
+            index = logical - EXT2_DIRECT_BLOCKS;
+            level = 1u;
+            rc = table_walk(vol, inode, &inode->block[12], level, index, true, &table, &entry);
+        } else if (logical < triple_start) {
+            index = logical - double_start;
+            level = 2u;
+            rc = table_walk(vol, inode, &inode->block[13], level, index, true, &table, &entry);
+        } else {
+            index = logical - triple_start;
+            level = 3u;
+            rc = table_walk(vol, inode, &inode->block[14], level, index, true, &table, &entry);
+        }
+
+        if (rc != 0) {
+            return rc;
+        }
+
+        /* The entries of the run are one part of the table: read it, name
+         * the blocks, write it back. The table of a run that was just made
+         * is zeros, and the read is a read of the cache. */
+        offset = (k_u64_t)(entry + count) * 4u;
+
+        if (table == 0u || offset > vol->block_size) {
+            return KERR_IO;
+        }
+
+        rc = ext2_read_block(vol, table, vol->block_buf);
+        if (rc != 0) {
+            return rc;
+        }
+
+        for (i = 0; i < count; i++) {
+            ext2_put32(vol->block_buf + (k_u32_t)(entry + i) * 4u, first + i);
+        }
+
+        rc = ext2_write_block(vol, table, vol->block_buf);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+
+    inode->blocks += (k_u64_t)count * block_sectors(vol);
+
+    return 0;
+}
+
+/*
+ * The whole blocks of a write that begins at `logical`, as one run of the
+ * medium: the blocks of the run are allocated together when they are the
+ * holes of the end of the file, and the blocks the file already holds are
+ * taken together when they follow one another in the volume. `first` is the
+ * block of the first one, `count` the blocks of the run, and `fresh` is true
+ * when the run was just allocated and holds no bytes of anybody.
+ *
+ * A run stops at the table that names its blocks, at an entry the file
+ * already has, and at the room the bitmap can give: a write that finds a
+ * block in the middle of the run falls back to a block at a time, which is
+ * what a file written out of order costs.
+ */
+static int file_run(struct ext2_volume *vol, struct ext2_inode *inode, k_u64_t logical,
+                    k_u32_t want, k_u32_t *first, k_u32_t *count, bool *fresh)
+{
+    k_u32_t base = 0;
+    k_u32_t n = 0;
+    k_u32_t i;
+    int rc;
+
+    *first = 0;
+    *count = 0;
+    *fresh = false;
+
+    rc = ext2_block_run(vol, inode, logical, want, &base, &n);
+    if (rc != 0) {
+        return rc;
+    }
+
+    if (n == 0u) {
+        return KERR_IO;
+    }
+
+    if (base != 0u) {
+        *first = base;
+        *count = n;
+        return 0;
+    }
+
+    {
+        k_u32_t block = 0;
+        k_u32_t got = 0;
+
+        rc = ext2_alloc_blocks(vol, n, &block, &got);
+        if (rc != 0) {
+            return rc;
+        }
+
+        if (got == 0u) {
+            return KERR_NOSPC;
+        }
+
+        rc = inode_store_run(vol, inode, logical, block, got);
+        if (rc != 0) {
+            for (i = 0; i < got; i++) {
+                (void)ext2_free_block(vol, block + i);
+            }
+            return rc;
+        }
+
+        *first = block;
+        *count = got;
+        *fresh = true;
+    }
+
+    return 0;
 }
 
 int ext2_file_write(struct ext2_volume *vol, struct ext2_inode *inode, k_u64_t offset,
@@ -661,38 +1068,100 @@ int ext2_file_write(struct ext2_volume *vol, struct ext2_inode *inode, k_u64_t o
         k_u64_t position = offset + done;
         k_u64_t logical = position / vol->block_size;
         k_u32_t inside = (k_u32_t)(position % vol->block_size);
-        k_size_t chunk = vol->block_size - inside;
         k_u32_t block = 0;
+        bool fresh = false;
 
-        if (chunk > size - done) {
-            chunk = size - done;
-        }
+        if (inside == 0u && size - done >= vol->block_size) {
+            /* A run of whole blocks: the blocks of the file and the bytes
+             * of the call leave together, which is one command of the
+             * medium for the 64 KiB a bus master moves at once instead of
+             * one for the kilobyte of every block (ADR 0037). */
+            k_u32_t want = (k_u32_t)((size - done) / vol->block_size);
+            k_u32_t first = 0;
+            k_u32_t count = 0;
 
-        rc = ext2_inode_get_block(vol, inode, logical, &block, true);
-        if (rc != 0) {
-            break;
-        }
-
-        if (block == 0u) {
-            rc = KERR_IO;
-            break;
-        }
-
-        if (inside == 0u && chunk == vol->block_size) {
-            rc = ext2_write_block(vol, block, src + done);
-        } else {
-            rc = ext2_read_block(vol, block, vol->block_buf);
-            if (rc == 0) {
-                memcpy(vol->block_buf + inside, src + done, chunk);
-                rc = ext2_write_block(vol, block, vol->block_buf);
+            rc = file_run(vol, inode, logical, want, &first, &count, &fresh);
+            if (rc != 0) {
+                break;
             }
+
+            if (fresh) {
+                /* The bit of a block that names it reaches the medium before
+                 * the bytes of the block do: a machine that stops between
+                 * the two leaves blocks that the map calls free, never a
+                 * block that a file names and the map calls free. */
+                rc = ext2_write_flush(vol);
+            }
+
+            if (rc == 0) {
+                rc = ext2_write_bytes(vol, (k_u64_t)first * vol->block_size, src + done,
+                                      (k_size_t)count * vol->block_size);
+            }
+
+            if (rc != 0) {
+                break;
+            }
+
+            done += (k_size_t)count * vol->block_size;
+            continue;
         }
 
-        if (rc != 0) {
-            break;
-        }
+        /* The part of a call that is not a whole block: the tail of a block
+         * and the stub of a file of a few bytes. */
+        {
+            k_size_t chunk = vol->block_size - inside;
 
-        done += chunk;
+            if (chunk > size - done) {
+                chunk = size - done;
+            }
+
+            rc = ext2_inode_get_block(vol, inode, logical, &block, true, &fresh);
+            if (rc != 0) {
+                break;
+            }
+
+            if (block == 0u) {
+                rc = KERR_IO;
+                break;
+            }
+
+            if (inside == 0u && chunk == vol->block_size) {
+                if (fresh) {
+                    rc = ext2_write_flush(vol);
+                }
+
+                if (rc == 0) {
+                    rc = ext2_write_bytes(vol, (k_u64_t)block * vol->block_size, src + done, chunk);
+                }
+            } else {
+                if (fresh) {
+                    /* A block this call allocated holds nobody's bytes: the
+                     * part of it that the call does not write is zeros, and
+                     * a hole of the file reads as zeros because it is a hole
+                     * and not because of what an object that is gone left
+                     * behind. */
+                    memset(vol->block_buf, 0, vol->block_size);
+                    rc = 0;
+                } else {
+                    rc = ext2_read_block(vol, block, vol->block_buf);
+                }
+
+                if (rc == 0) {
+                    memcpy(vol->block_buf + inside, src + done, chunk);
+                    rc = ext2_write_flush(vol);
+                }
+
+                if (rc == 0) {
+                    rc = ext2_write_block(vol, block, vol->block_buf);
+                }
+            }
+
+            if (rc != 0) {
+                break;
+            }
+
+            done += chunk;
+        }
     }
 
     if (done > 0) {
@@ -908,7 +1377,7 @@ int ext2_truncate_inode(struct ext2_volume *vol, struct ext2_inode *inode, k_u64
     if (size > 0u && (size % vol->block_size) != 0u) {
         k_u32_t block = 0;
 
-        rc = ext2_inode_get_block(vol, inode, size / vol->block_size, &block, false);
+        rc = ext2_inode_get_block(vol, inode, size / vol->block_size, &block, false, NULL);
         if (rc != 0) {
             return rc;
         }
@@ -1180,6 +1649,14 @@ int ext2_make_dir(struct ext2_volume *vol, const char *path, k_u32_t mode)
     vol->block_buf[19] = 2u;
     vol->block_buf[20] = '.';
     vol->block_buf[21] = '.';
+
+    /* The bit of the block reaches the medium before the block does. */
+    rc = ext2_write_flush(vol);
+    if (rc != 0) {
+        (void)ext2_free_block(vol, block);
+        (void)ext2_free_inode(vol, allocated);
+        return rc;
+    }
 
     rc = ext2_write_block(vol, block, vol->block_buf);
     if (rc != 0) {
