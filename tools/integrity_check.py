@@ -1272,6 +1272,27 @@ def code_only(text: str) -> str:
     return text.replace("\\\n", " ")
 
 
+def own_header(root: str, component: str, header: str) -> bool:
+    """Is the header one of the component's own?
+
+    A portable component keeps its headers in `include/` (the library of a
+    program keeps them in `user/include/`), and a source includes them by the
+    name the world uses: `<sys/stat.h>` of `components/libc/user` is the
+    POSIX header of this tree and not a header of the platform. A name the
+    component does not provide is still a platform include, which is what the
+    rule below is about.
+    """
+    base = os.path.join(root, "components", component)
+
+    for directory, _dirs, _files in os.walk(base):
+        if os.path.basename(directory) == "include" and os.path.isfile(
+            os.path.join(directory, header)
+        ):
+            return True
+
+    return False
+
+
 def check_layers(root: str, report: Report, files: list) -> None:
     """The portable layers do not include the platform (ADR 0004)."""
     group = "layers"
@@ -1323,6 +1344,8 @@ def check_layers(root: str, report: Report, files: list) -> None:
 
                 # The header of the component itself is not a platform header.
                 if header.startswith(component + "/"):
+                    continue
+                if own_header(root, component, header):
                     continue
 
                 for pattern in PLATFORM_INCLUDE:

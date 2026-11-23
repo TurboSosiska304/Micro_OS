@@ -1,0 +1,17 @@
+# Micro OS — the magic of a program of this system (the MOX1 format).
+#
+# This is our record and not one of Magdir: a file of /bin is a MOX1 image
+# (ADR 0016), and the header of the format is four bytes no upstream database
+# knows. It is the first rule of the database, so that a program of the system
+# is named by the system and not mistaken for data.
+#
+# The fields are the header of components/kernel/include/kernel/exec.h:
+# magic at 0, version at 4, the flags at 8, and the machine at 28.
+0	string		MOX1		Micro OS MOX1 executable
+!:mime	application/x-microos-mox
+!:ext	mox
+>4	lelong		1		\b, version 1
+>4	lelong		2		\b, version 2
+>8	lelong		0		\b, no flags
+>28	lelong		0		\b, x86-64
+>28	lelong		1		\b, Xtensa

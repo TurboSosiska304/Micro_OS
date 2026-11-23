@@ -73,7 +73,7 @@ written when the project was an operating system for one board; the numbers
       its disk and asks for `/bin/hello` with `execve`; the shell runs the
       same file with `exec`
 * [x] Programs are files on a filesystem of the disk, not blobs of the
-      kernel: `make x86-disk` writes `/bin` (twenty-two programs) and `/etc` with
+      kernel: `make x86-disk` writes `/bin` (thirty-one programs) and `/etc` with
       `tools/mkfs_mfs.c`, and no boot installs an image
 * [x] `PATH` for the shell
 * [x] `argv` reaches the port, and the ABI of the entry is written down
@@ -362,17 +362,57 @@ written when the project was an operating system for one board; the numbers
       `tests/cases/test_bc.c` and the smoke tests run the calculator and the
       RPN one before and after a reset of the disk. The image is 115 KiB and
       its arena is 768 KiB of the bss
+* [x] The eighth port: the One True Awk of 2024-07-28 (the Lucent permissive
+      license) as `/bin/awk`, with the data `/etc/columns`, the script
+      `/etc/hello.awk` and `/etc/licenses/awk` in the image. The grammar is
+      generated once by byacc and committed with its header, the port layer
+      (`third_party/awk/port/awk_port.h`, `awk_os.c`) answers the calls of the
+      C library the release wants and the library does not have, and
+      `system` is an honest refusal: this machine has no shell and no second
+      process, and the `popen` of a pipe is the library's `ENOSYS`. `tests/cases/test_awk.c` runs the `main` of the release
+      through thirty-two cases, and the smoke tests run the interpreter in
+      the image and out of the volume after a reset
 * [ ] The gaps of the next port: a `malloc` larger than the bss of an image
       (`brk`/`mmap` of a program), a `poll` for a library that waits on a
       pipe, an `fxsave` of the XMM state for two programs with a point in
       their numbers, and the package that ships `zcat`, `lua` and the tools
       of sbase with their licenses beside them (`docs/debts.md`)
+* [x] The seventh port, a library with an operating system of its own:
+      SQLite 3.54.1 with `SQLITE_OS_OTHER=1` and the VFS of the port on the
+      calls of the system (`third_party/sqlite/port/sqlite_vfs.c`), and
+      `/bin/sqlite3` (the shell of the release) over a database of MicroFS. It
+      is the first program with a `REAL`: the `FLOAT` option of the recipe
+      leaves `-mgeneral-regs-only` out and the loader turns the SSE and x87
+      units on. The image is 846,080 bytes (826 KiB), `tests/cases/test_sqlite.c`
+      is the
+      host, and the smoke tests create, read and check a database across a
+      reset of the disk
 * [ ] A `chdir` and a wall clock in the ABI, and the POSIX frame of a fork
       child: the library works around the three, and the workaround of each
       is named in `docs/debts.md`
-* [ ] The ports of 1.3.0: SQLite (its SDK, and a package above
-      `PKG_PACKAGE_MAX` of 1 MiB), zstd, `file`/libmagic and awk; their
-      branches are still in progress and none of them is a promise of 1.2.0
+* [x] The fifth port: zstd 1.5.7 (BSD-3-Clause) as a static archive of
+      lib/common, lib/compress and lib/decompress, and `/bin/zstd` as the
+      program of the release itself (`programs/zstdcli.c`), with
+      `/bin/zstdcat` as the same image under a second name and
+      `/etc/setting.zst` as a fixture; `/etc/licenses/zstd` travels in the
+      image. The port caps the memory of the context to the arena of a
+      program (`third_party/zstd/README.md`), and the frames of the guest and
+      of the host are read by one another in `make x86-smoke`; the host test
+      is `tests/cases/test_zstd.c`
+* [x] The sixth port, and the first database: file 5.45 with libmagic
+      (`third_party/file`, BSD-2-Clause) as `/bin/file`, with a compact
+      database of the Magdir rules (`tools/magic_subset.py`, the subset of
+      `third_party/file/magic/subset.json`) compiled into `/etc/magic.mgc`
+      and the text `/etc/magic` as the fallback. It is the port that asked
+      for an image past the transfer edge (`K_EXEC_MAX_IMAGE`), the first
+      whose data does not fit (`magic.mgc` is 359 KiB), and the first whose
+      `-z` names the content of a gzip and of a zstd frame;
+      `tests/cases/test_file.c`, `make x86-smoke` and `make x86-disk-smoke`
+      cover the values, the program and the volume after a reset
+* [ ] The port of 1.3.0 still open: awk (the One True Awk and its C library),
+      whose branch is in progress and is not a promise before it is merged.
+      SQLite landed in this release; a package of it needs `PKG_PACKAGE_MAX`
+      above 1 MiB (`docs/debts.md`)
 
 ## The last major changes of the board (1.1.0)
 

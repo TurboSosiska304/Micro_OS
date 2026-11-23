@@ -26,6 +26,10 @@ printed a banner could not have a number of a task in the middle of it.
 
     tools/x86_smoke.py [--image PATH] [--timeout SECONDS] [--verbose]
 
+The timeout is a limit of the whole run of the command list and not of one
+command: the default of two minutes is the measure of a machine that reads the
+image of every program it runs (zstd is 437 KiB, lua 168 KiB).
+
 The run also reads the ELF of the kernel and checks that the image is linked
 in the higher half (ADR 0007): a linker script that fell back to the physical
 address boots the same and would pass every line of the transcript, so the
@@ -158,6 +162,40 @@ COMMANDS = [
     # The same stream through a pipe: zcat reads descriptor 0 and the port
     # layer waits out the EAGAIN of the producer that is still writing.
     "cat /etc/greeting.gz | /bin/zcat",
+    # The third port of somebody else's program (zstd): the frame of the
+    # fixture was written by the `zstd` of the host, and the guest unpacks it
+    # with the library of the release. The reverse - a frame the guest wrote,
+    # unpacked by the `zstd` of the host - is a boot of its own below
+    # (`zstd_compat_checks`), because its answer is a file of bytes and not a
+    # line of this transcript. Every `exec` of the command reads an image of
+    # 437 KiB through the disk driver of the port, which is the slowest step
+    # of this list (docs/debts.md): the eight lines below are the choices of
+    # one of each thing, not five variations of a round trip.
+    "exec /bin/zstd -d -c /etc/setting.zst",
+    "exec /bin/zstd -19 -q -f /etc/setting -o /tmp/setting.zst",
+    "exec /bin/zstd -d -c /tmp/setting.zst",
+    "exec /bin/wc -c /tmp/setting.zst",
+    # A frame with its tail cut is refused: the edge of the decoder.
+    "exec /bin/zstd -t /etc/broken.zst",
+    # The listing and the second name of the command (`zstdcat` is the same
+    # image under a name, and the mode follows the name).
+    "exec /bin/zstd -l /etc/setting.zst",
+    "exec /bin/zstdcat /etc/setting.zst",
+    # A stream through a pipe: the decompressor reads descriptor 0 of a stage
+    # and writes descriptor 1 of it (`--stdout` is the long name of `-c`).
+    "cat /etc/setting.zst | /bin/zstd -d --stdout",
+    # A directory through `<dirent.h>` and the POSIX `stat` of the library of
+    # a program: `-r` walks it and writes a frame beside every file.
+    "mkdir /tmp/z",
+    "echo alpha > /tmp/z/a",
+    "echo beta > /tmp/z/b",
+    "exec /bin/zstd -r -q -f /tmp/z",
+    "exec /bin/ls /tmp/z",
+    # `--rm` takes the source away when the frame is written: the copy is a
+    # file of the volume and the original is not.
+    "echo gamma > /tmp/rm.txt",
+    "exec /bin/zstd --rm -q -f /tmp/rm.txt",
+    "exec /bin/ls /tmp",
     "exec /bin/ls /etc/licenses",
     # The second port of a program of somebody else (Lua): the interpreter is
     # a file of /bin, its first script and its license are files of /etc, and
@@ -192,6 +230,47 @@ COMMANDS = [
     "exec /bin/dc /etc/dc.dc",
     "exec /bin/dc -e 2 -e 3+p",
     "exec /bin/cat /etc/bc.bc",
+    # The third port of a program of somebody else (awk): the interpreter is
+    # a file of /bin, its data and its script are files of /etc, and every
+    # line below is a script the shell passed as words. The shell has no
+    # quotes, so a program with a space in it is a word of its own - the
+    # scripts of the machine are files, and the inline ones are written
+    # without a space.
+    "exec /bin/awk \"BEGIN{printf\\\"%.2f\\n\\\",1/3}\"",
+    "exec /bin/awk -F: {print$1} /etc/columns",
+    "exec /bin/awk -F: {s+=$3}END{print(s)} /etc/columns",
+    "exec /bin/awk -v OFS=, -F: {print$1,$2} /etc/columns",
+    "exec /bin/awk -f /etc/hello.awk /etc/columns",
+    "exec /bin/awk \"{gsub(/o/,\\\"0\\\");print}\" /etc/setting",
+    "exec /bin/awk \"BEGIN{while((getline<\\\"/etc/setting\\\")>0)n++;print(n)}\"",
+    "exec /bin/awk \"BEGIN{printf\\\"%5.2f|%d|%s\\n\\\",3.14159,42,\\\"s\\\"}\"",
+    "exec /bin/awk \"BEGIN{printf\\\"%*.*f|%i|%e\\n\\\",8,2,3.14159,42,1234.5}\"",
+    "exec /bin/awk \"BEGIN{printf\\\"%c%c|%x|%o\\n\\\",65,66,255,8}\"",
+    "exec /bin/awk -v x=42 BEGIN{print(x+1)}",
+    "exec /bin/awk \"BEGIN{print(ENVIRON[\\\"PATH\\\"])}\"",
+    "exec /bin/awk \"BEGIN{n=split(\\\"a:b:c\\\",p,\\\":\\\");print(n,p[2])}\"",
+    "exec /bin/awk \"BEGIN{print(substr(\\\"hello\\\",2,3),index(\\\"hello\\\",\\\"ll\\\"),length(\\\"hello\\\"))}\"",
+    "exec /bin/awk \"BEGIN{print(toupper(\\\"abc\\\"),tolower(\\\"DEF\\\"))}\"",
+    "exec /bin/awk BEGIN{print(sqrt(2),exp(1),log(10),sin(0),cos(0),atan2(1,1))}",
+    "exec /bin/awk \"BEGIN{printf\\\"%.3f\\n\\\",sqrt(2)}\"",
+    "exec /bin/awk \"BEGIN{printf\\\"%f|%g|%.2e\\n\\\",1/3,1/3,1/3}\"",
+    "exec /bin/awk \"BEGIN{s=sprintf(\\\"%.2f\\\",1/3);print(s)}\"",
+    "exec /bin/awk BEGIN{print(int(3.9),int(-3.9),3%2,2^10,2**10)}",
+    "exec /bin/awk \"BEGIN{s=\\\"hello\\\";print(match(s,/ll/),RSTART,RLENGTH)}\"",
+    # The numeric string of a field: the third column of the data is 0, 1
+    # and 1000, and a field compares as a number against the number 9.
+    "exec /bin/awk -F: {print($3>9)} /etc/columns",
+    "exec /bin/awk BEGIN{srand(1);r=rand();print(r>=0&&r<1)}",
+    # The status of a script that ends with `exit N` comes back to the shell.
+    "exec /bin/awk BEGIN{exit(3)}",
+    # The two calls of a shell: this machine has none, and the interpreter
+    # says so on the error descriptor instead of pretending the line ran.
+    "exec /bin/awk \"BEGIN{print(system(\\\"true\\\"))}\"",
+    "exec /bin/awk \"BEGIN{print(\\\"echo\\\"|getline)}\"",
+    "exec /bin/awk -f /etc/no-such.awk",
+    # The same script with no file: the interpreter reads descriptor 0, which
+    # the shell does not open at the prompt yet, so awk reports a read error.
+    "exec /bin/awk {print}",
     "echo hi > /tmp/f",
     "cat /tmp/f",
     "cat < /tmp/f",
@@ -291,6 +370,46 @@ COMMANDS = [
     "ls --color=never /etc",
     "exec /bin/ls -la /etc",
     "exec /bin/find /etc -name setting",
+    # The type of a file, with libmagic (third_party/file): a program of the
+    # image is a MOX1 record of our database, the fixture is a gzip, the
+    # script is Lua, a directory is a directory and a name that is not there
+    # is the sentence of the call and its status. The database is the compact
+    # subset of /etc/magic.mgc, so the recognitions below are the ones the
+    # port promised and not the ten megabytes of the release.
+    "exec /bin/file /bin/file",
+    "exec /bin/file -i /bin/file",
+    "exec /bin/file /etc/greeting.gz",
+    "exec /bin/file -z /etc/greeting.gz",
+    # The second compression of the image: the frame of the host written into
+    # /etc/setting.zst, unpacked by the libzstd the command is linked against.
+    "exec /bin/file -z /etc/setting.zst",
+    "exec /bin/file /etc/hello.lua",
+    "exec /bin/file -i /etc/hello.lua",
+    "exec /bin/file -b /etc/setting",
+    "exec /bin/file /etc",
+    "exec /bin/file /etc/no-such-file",
+    "echo /etc/setting > /tmp/filelist",
+    "exec /bin/file -f /tmp/filelist",
+    # The bytes of descriptor 0 through a pipe, and the flag of a link that
+    # the VFS does not have (accepted, and the file is read).
+    "cat /etc/setting | /bin/file -",
+    "exec /bin/file -L /etc/setting",
+    # SQLite (third_party/sqlite): the database library of the public domain
+    # and the shell of the release. The scripts are files of /etc because the
+    # shell has no quotes; the first run creates the table, the second one
+    # reads it in another program, and `.read` and `-cmd` are the two shapes
+    # of the shell that open a file while the database is open.
+    "exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-setup.sql",
+    "exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-read.sql",
+    "exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-nested.sql",
+    "exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-schema.sql",
+    "exec /bin/sqlite3 -cmd .tables /tmp/sqlite.db < /etc/sql-read.sql",
+    # The timer of the shell is the one line of the guest that prints a real
+    # number through the formatter of the library (`%f`, six digits).
+    "exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-timer.sql",
+    # `-batch` is the shell of the release with no prompt and no editor: the
+    # script of a redirect is the same one and the answers are the same.
+    "exec /bin/sqlite3 -batch /tmp/sqlite.db < /etc/sql-read.sql",
 ]
 
 # A directory wider than the table of 64 entries the shell used to keep: the
@@ -907,6 +1026,132 @@ def oversize_checks(loader: str, kernel: str, timeout: float) -> list:
     return checks
 
 
+# The script of the image that writes the bytes of a file as hexadecimal.
+HEX_SCRIPT = "/etc/hex.lua"
+
+
+def host_zstd_decompress(frame: bytes) -> bytes:
+    """The frame of the guest, unpacked by the zstd of the host.
+
+    The command of the machine is the other half of the test of the format: a
+    program of Micro OS wrote the bytes, and the zstd of the machine that runs
+    the test has to read them. A host without the command falls back on the
+    module of Python 3.14, which is the same format and the same answer.
+    """
+    tool = shutil.which("zstd")
+    if tool is not None:
+        result = subprocess.run(
+            [tool, "-d", "-c"], input=frame, capture_output=True, check=False
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.decode("utf-8", "replace").strip())
+        return result.stdout
+
+    from compression import zstd
+
+    return zstd.decompress(frame)
+
+
+def zstd_compat_checks(loader: str, kernel: str, timeout: float) -> list:
+    """The frame of the guest, unpacked by the zstd of the host.
+
+    The fixture of `/etc/setting.zst` is the other direction - a frame of the
+    host that the guest reads - and it is a line of the main transcript. This
+    boot has an answer of bytes, and the console of the port is a screen: it
+    drops what is not a letter and writes a CR before every LF. The bytes
+    therefore leave the machine as the text of a Lua program that prints them
+    as hexadecimal pairs (`/etc/hex.lua`), and the test packs them back into a
+    file and asks the `zstd` of the host for the script it compressed.
+    """
+    checks = []
+
+    def expect(name: str, condition: bool, detail: str = "") -> None:
+        checks.append((name, bool(condition), detail))
+
+    image = os.path.join(BUILD, "zstd-compat.img")
+    shutil.copyfile(DEFAULT_IMAGE, image)
+    commands = [
+        "mkdir /tmp",
+        # The source is the script of the first Lua program of the machine:
+        # 424 bytes of text, so a frame with a header, a block and a footer.
+        "exec /bin/zstd -q -f -3 /etc/hello.lua -o /tmp/frame.zst",
+        f"exec /bin/lua {HEX_SCRIPT} /tmp/frame.zst",
+        "exec /bin/wc -c /tmp/frame.zst",
+        "uname",
+    ]
+
+    try:
+        output = run_machine(loader, kernel, image, timeout, commands)
+    except FileNotFoundError:
+        expect("qemu-system-x86_64 is installed", False)
+        return checks
+    finally:
+        if os.path.exists(image):
+            os.remove(image)
+
+    blocks = output.split(PROMPT)[1:]
+    expect(
+        "the machine of the compatibility test boots",
+        len(blocks) > len(commands),
+        output[-300:],
+    )
+
+    hex_text = ""
+    if len(blocks) > 2:
+        for line in blocks[2].splitlines():
+            line = line.strip()
+            if len(line) >= 16 and len(line) % 2 == 0 and re.fullmatch(r"[0-9a-f]+", line):
+                hex_text = line
+                break
+
+    expect(
+        "the guest prints the bytes of its frame",
+        len(hex_text) >= 32,
+        blocks[2][:200] if len(blocks) > 2 else "",
+    )
+
+    source = os.path.join(BUILD, "hello.lua")
+    try:
+        with open(source, "rb") as file:
+            expected = file.read()
+    except OSError as error:
+        expect("the script of the image is readable", False, str(error))
+        return checks
+
+    if hex_text:
+        frame = bytes.fromhex(hex_text)
+        expect("the frame of the guest starts with the magic of zstd", frame[:4] == b"\x28\xb5\x2f\xfd")
+        try:
+            unpacked = host_zstd_decompress(frame)
+        except (OSError, RuntimeError, ValueError) as error:
+            expect("the zstd of the host unpacks the frame of the guest", False, str(error))
+            return checks
+        expect(
+            "the zstd of the host unpacks the frame of the guest",
+            unpacked == expected,
+            f"{len(unpacked)} bytes of {len(expected)}",
+        )
+        expect(
+            "the bytes of the frame are the script of the image",
+            b"the first script of the machine" in unpacked,
+            unpacked[:120],
+        )
+    else:
+        expect("the zstd of the host unpacks the frame of the guest", False, "no hex line")
+
+    # The count of the frame and the frame agree: a hex line that lost a byte
+    # would still pass the two checks above only if the host refused it.
+    if len(blocks) > 3 and hex_text:
+        match = re.search(r"(\d+) /tmp/frame.zst", blocks[3])
+        expect(
+            "the hex line is the whole frame",
+            match is not None and int(match.group(1)) == len(hex_text) // 2,
+            f"{match.group(1) if match else '?'} byte(s) in the file",
+        )
+
+    return checks
+
+
 def check(output: str) -> list:
     """The expectations about the boot and the shell of the machine."""
     checks = []
@@ -1172,6 +1417,80 @@ def check(output: str) -> list:
     expect("the file of the tool is /bin/ls", "setting" in explicit and "root" in explicit, explicit)
     explicit = answer("exec /bin/find /etc -name setting")
     expect("the file of the tool is /bin/find", "/etc/setting" in explicit, explicit)
+    # --- SQLite (third_party/sqlite)
+    #
+    # The first run creates the database and the table: three rows of the
+    # three types are inserted, one in a transaction that rolls back, and the
+    # library checks the file it wrote. The line `2|3.75` of the second run is
+    # the count and the sum of the two rows that survived, read by a second
+    # process from the same file of MicroFS.
+    created = answer("exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-setup.sql")
+    expect(
+        "sqlite3 creates a database and its table",
+        "1|one|1.5" in created and "2|two|2.25" in created,
+        created,
+    )
+    expect(
+        "the transaction that rolls back leaves no row",
+        "roll" not in created and re.search(r"(?m)^2\r?$", created) is not None,
+        created,
+    )
+    expect(
+        "the integrity check of the new database is ok",
+        re.search(r"(?m)^ok\r?$", created) is not None,
+        created,
+    )
+    reread = answer("exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-read.sql")
+    expect(
+        "a second run reads the count and the sum of the file",
+        "2|3.75" in reread,
+        reread,
+    )
+    expect(
+        "the REAL and the BLOB keep their type",
+        "real|blob" in reread,
+        reread,
+    )
+    expect(
+        "the file of the second run passes the integrity check",
+        re.search(r"(?m)^ok\r?$", reread) is not None,
+        reread,
+    )
+    nested = answer("exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-nested.sql")
+    expect(
+        "the .read of the shell opens a script while the database is open",
+        "2|3.75" in nested and "ok" in nested,
+        nested,
+    )
+    schema = answer("exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-schema.sql")
+    expect(
+        "the shell prints the table and its schema",
+        "items" in schema and "CREATE TABLE items" in schema,
+        schema,
+    )
+    expect(
+        "the mode and the row of the second row",
+        "two" in schema,
+        schema,
+    )
+    listed = answer("exec /bin/sqlite3 -cmd .tables /tmp/sqlite.db < /etc/sql-read.sql")
+    expect(
+        "the -cmd of the shell runs before the script",
+        "items" in listed and "2|3.75" in listed,
+        listed,
+    )
+    timed = answer("exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-timer.sql")
+    expect(
+        "the timer prints a real number through the formatter of the library",
+        re.search(r"Run Time: real \d+\.\d{6} user", timed) is not None,
+        timed,
+    )
+    batch = answer("exec /bin/sqlite3 -batch /tmp/sqlite.db < /etc/sql-read.sql")
+    expect(
+        "the shell runs a script in batch mode",
+        "2|3.75" in batch and "ok" in batch,
+        batch,
+    )
     free_answer = answer("free")
     expect(
         "free prints the memory and not the clock",
@@ -1232,6 +1551,78 @@ def check(output: str) -> list:
         and wide_tree.count("|-- ") + wide_tree.count("`-- ") == MANY_FILES,
         wide_tree,
     )
+
+    # --- the type of a file (third_party/file, libmagic)
+    #
+    # The first check is the record of our own format: the image of a program
+    # is MOX1 and no Magdir file of the release knows it. The others are the
+    # families of the compact database: a compressed stream, a script of a
+    # language, a directory and a name that is not there.
+    image_type = answer("exec /bin/file /bin/file")
+    expect(
+        "file names a program of the image as a MOX1 executable",
+        "Micro OS MOX1 executable" in image_type and "version 2" in image_type,
+        image_type,
+    )
+    mime = answer("exec /bin/file -i /bin/file")
+    expect(
+        "file -i prints the MIME type of a MOX1 image",
+        "application/x-microos-mox" in mime,
+        mime,
+    )
+    packed = answer("exec /bin/file /etc/greeting.gz")
+    expect("file names a gzip stream", "gzip compressed data" in packed, packed)
+    inside = answer("exec /bin/file -z /etc/greeting.gz")
+    expect(
+        "file -z looks inside the gzip",
+        "ASCII text" in inside and "gzip compressed data" in inside,
+        inside,
+    )
+    # The same flag on a frame of zstd: the decompressor of the image reads the
+    # content of /etc/setting.zst, which is the setting of the machine and not
+    # the bytes a description of the frame would name.
+    inside_zstd = answer("exec /bin/file -z /etc/setting.zst")
+    expect(
+        "file -z looks inside a zstd frame",
+        "ASCII text" in inside_zstd and "Zstandard compressed data" in inside_zstd,
+        inside_zstd,
+    )
+    lua = answer("exec /bin/file /etc/hello.lua")
+    expect("file names a Lua script", "Lua script" in lua, lua)
+    lua_mime = answer("exec /bin/file -i /etc/hello.lua")
+    expect("file -i names the Lua MIME type", "text/x-lua" in lua_mime, lua_mime)
+    brief = answer("exec /bin/file -b /etc/setting")
+    expect(
+        "file -b prints the description and not the name",
+        "ASCII text" in brief and "/etc/setting:" not in brief,
+        brief,
+    )
+    directory = answer("exec /bin/file /etc")
+    expect("file names a directory", "directory" in directory, directory)
+    missing = answer("exec /bin/file /etc/no-such-file")
+    expect(
+        "file reports a name that is not there",
+        "cannot open" in missing and "No such file or directory" in missing,
+        missing,
+    )
+    listed = answer("exec /bin/file -f /tmp/filelist")
+    expect(
+        "file -f reads the names of a list",
+        "/etc/setting: ASCII text" in listed,
+        listed,
+    )
+    piped_bytes = answer("cat /etc/setting | /bin/file -")
+    expect(
+        "file reads the bytes of descriptor 0",
+        "-: ASCII text" in piped_bytes,
+        piped_bytes,
+    )
+    followed = answer("exec /bin/file -L /etc/setting")
+    expect(
+        "file -L accepts the flag of a link",
+        "ASCII text" in followed,
+        followed,
+    )
     expect(
         "the programs of the port are files of the disk",
         all(
@@ -1263,6 +1654,11 @@ def check(output: str) -> list:
                 "sed",
                 "bc",
                 "dc",
+                "zstd",
+                "zstdcat",
+                "file",
+                "sqlite3",
+                "awk",
             )
         ),
         bin_listing[-200:],
@@ -1626,8 +2022,11 @@ def check(output: str) -> list:
         piped,
     )
     licenses = answer("exec /bin/ls /etc/licenses")
-    expect("the license of zlib travels with the image", "zlib" in licenses, licenses)
-    expect("the license of sbase travels with the image", "sbase" in licenses, licenses)
+    expect(
+        "the licenses of the ports travel with the image",
+        all(name in licenses for name in ("zlib", "lua", "zstd", "file", "sqlite", "awk")),
+        licenses,
+    )
 
     # --- the second port of somebody else's program: Lua and /bin/lua
     # The script and the license are files of the image, the interpreter is a
@@ -1764,6 +2163,181 @@ def check(output: str) -> list:
     )
     dc_sum = answer("exec /bin/dc -e 2 -e 3+p")
     expect("dc adds two numbers on its stack", "5" in dc_sum, dc_sum)
+
+    # --- the third port of somebody else's program: awk and /bin/awk
+    # The interpreter is a file of the image and its data and script are files
+    # of /etc. The formatter, the fields and the arithmetic are the ones of
+    # the library of the guest: a number with three places, a sum of a column,
+    # and the OFS of a print.
+    awk_format = answer('exec /bin/awk "BEGIN{printf\\"%.2f\\n\\",1/3}"')
+    expect(
+        "awk prints three places of a fraction",
+        "0.33" in awk_format and "the program exited with 0" in awk_format,
+        awk_format,
+    )
+    awk_fields = answer("exec /bin/awk -F: {print$1} /etc/columns")
+    expect(
+        "awk splits a record into fields",
+        re.search(r"(?m)^root\r?$\n^bin\r?$\n^nik\r?$", awk_fields) is not None,
+        awk_fields,
+    )
+    awk_sum = answer("exec /bin/awk -F: {s+=$3}END{print(s)} /etc/columns")
+    expect(
+        "awk sums a column of the data",
+        re.search(r"(?m)^1001\r?$", awk_sum) is not None,
+        awk_sum,
+    )
+    awk_ofs = answer("exec /bin/awk -v OFS=, -F: {print$1,$2} /etc/columns")
+    expect(
+        "awk joins two fields with OFS",
+        re.search(r"(?m)^root,0\r?$", awk_ofs) is not None,
+        awk_ofs,
+    )
+    # The script of the machine is a file of the image: `-f` reads it through
+    # the VFS, BEGIN and END run, and the recount of the file is the answer.
+    awk_script = answer("exec /bin/awk -f /etc/hello.awk /etc/columns")
+    expect(
+        "awk runs the script of /etc",
+        "awk: hello from /etc/hello.awk" in awk_script
+        and "awk: 3 records, sum 1001, root 1" in awk_script
+        and "the program exited with 0" in awk_script,
+        awk_script,
+    )
+    awk_gsub = answer('exec /bin/awk "{gsub(/o/,\\"0\\");print}" /etc/setting')
+    expect(
+        "awk substitutes every match of a pattern",
+        "hell0" in awk_gsub and "h0stname=x86_64" in awk_gsub and "c0ns0le=vga" in awk_gsub,
+        awk_gsub,
+    )
+    awk_getline = answer('exec /bin/awk "BEGIN{while((getline<\\"/etc/setting\\")>0)n++;print(n)}"')
+    expect(
+        "awk reads a file with getline",
+        re.search(r"(?m)^3\r?$", awk_getline) is not None,
+        awk_getline,
+    )
+    awk_width = answer('exec /bin/awk "BEGIN{printf\\"%5.2f|%d|%s\\n\\",3.14159,42,\\"s\\"}"')
+    expect(
+        "awk honours the width and the precision of a conversion",
+        " 3.14|42|s" in awk_width,
+        awk_width,
+    )
+    awk_star = answer('exec /bin/awk "BEGIN{printf\\"%*.*f|%i|%e\\n\\",8,2,3.14159,42,1234.5}"')
+    expect(
+        "awk takes the width and the precision from the arguments",
+        "    3.14|42|1.234500e+03" in awk_star,
+        awk_star,
+    )
+    awk_char = answer('exec /bin/awk "BEGIN{printf\\"%c%c|%x|%o\\n\\",65,66,255,8}"')
+    expect(
+        "awk prints a character, a hexadecimal and an octal",
+        "AB|ff|10" in awk_char,
+        awk_char,
+    )
+    awk_v = answer("exec /bin/awk -v x=42 BEGIN{print(x+1)}")
+    expect("awk sets a variable with -v", re.search(r"(?m)^43\r?$", awk_v) is not None, awk_v)
+    # The environment of the kernel reaches ENVIRON, which is the vector of
+    # the call and not a copy of the shell.
+    awk_env = answer('exec /bin/awk "BEGIN{print(ENVIRON[\\"PATH\\"])}"')
+    expect("awk reads the environment of the machine", re.search(r"(?m)^/bin\r?$", awk_env) is not None, awk_env)
+    awk_split = answer('exec /bin/awk "BEGIN{n=split(\\"a:b:c\\",p,\\":\\");print(n,p[2])}"')
+    expect("awk splits a string into an array", re.search(r"(?m)^3 b\r?$", awk_split) is not None, awk_split)
+    awk_strings = answer(
+        'exec /bin/awk "BEGIN{print(substr(\\"hello\\",2,3),index(\\"hello\\",\\"ll\\"),length(\\"hello\\"))}"'
+    )
+    expect(
+        "awk takes a substring, an index and a length",
+        re.search(r"(?m)^ell 3 5\r?$", awk_strings) is not None,
+        awk_strings,
+    )
+    awk_case = answer('exec /bin/awk "BEGIN{print(toupper(\\"abc\\"),tolower(\\"DEF\\"))}"')
+    expect(
+        "awk folds the case of a string",
+        re.search(r"(?m)^ABC def\r?$", awk_case) is not None,
+        awk_case,
+    )
+    # The arithmetic of the library of the guest: the x87 unit of the program,
+    # and the formatter with six places of %g and three of %.3f.
+    awk_math = answer(
+        "exec /bin/awk BEGIN{print(sqrt(2),exp(1),log(10),sin(0),cos(0),atan2(1,1))}"
+    )
+    expect(
+        "awk computes a root, an exponential, a logarithm and an angle",
+        "1.41421 2.71828 2.30259 0 1 0.785398" in awk_math,
+        awk_math,
+    )
+    awk_root = answer('exec /bin/awk "BEGIN{printf\\"%.3f\\n\\",sqrt(2)}"')
+    expect("awk prints three places of a root", "1.414" in awk_root, awk_root)
+    awk_floats = answer('exec /bin/awk "BEGIN{printf\\"%f|%g|%.2e\\n\\",1/3,1/3,1/3}"')
+    expect(
+        "awk prints a double as %f, %g and %e",
+        "0.333333|0.333333|3.33e-01" in awk_floats,
+        awk_floats,
+    )
+    awk_sprintf = answer('exec /bin/awk "BEGIN{s=sprintf(\\"%.2f\\",1/3);print(s)}"')
+    expect("awk builds a string with sprintf", "0.33" in awk_sprintf, awk_sprintf)
+    awk_int = answer("exec /bin/awk BEGIN{print(int(3.9),int(-3.9),3%2,2^10,2**10)}")
+    expect(
+        "awk truncates, takes a remainder and a power",
+        re.search(r"(?m)^3 -3 1 1024 1024\r?$", awk_int) is not None,
+        awk_int,
+    )
+    awk_match = answer('exec /bin/awk "BEGIN{s=\\"hello\\";print(match(s,/ll/),RSTART,RLENGTH)}"')
+    expect(
+        "awk reports where a pattern matched",
+        re.search(r"(?m)^3 3 2\r?$", awk_match) is not None,
+        awk_match,
+    )
+    # A field is a numeric string: the numbers of the third column compare as
+    # numbers (0, 0, 1 against 9), which a string compare of "1000" and "9"
+    # would answer the other way for the third line.
+    awk_numeric = answer("exec /bin/awk -F: {print($3>9)} /etc/columns")
+    expect(
+        "a field compares as a number when the other side is one",
+        re.findall(r"(?m)^([01])\r?$", awk_numeric) == ["0", "0", "1"],
+        awk_numeric,
+    )
+    awk_rand = answer("exec /bin/awk BEGIN{srand(1);r=rand();print(r>=0&&r<1)}")
+    expect(
+        "awk rand answers a number below one",
+        re.search(r"(?m)^1\r?$", awk_rand) is not None,
+        awk_rand,
+    )
+    awk_exit = answer("exec /bin/awk BEGIN{exit(3)}")
+    expect(
+        "the status of an awk script is the status of its exit",
+        "the program exited with 3" in awk_exit,
+        awk_exit,
+    )
+    # The honest refusal of the two calls of a shell: the sentence is on the
+    # error descriptor and the value of the call is -1, which is the failure
+    # POSIX gives a command that cannot run. The program itself ends with 0.
+    awk_system = answer('exec /bin/awk "BEGIN{print(system(\\"true\\"))}"')
+    expect(
+        "awk system refuses with a sentence and -1",
+        "awk: system: this machine has no shell" in awk_system
+        and re.search(r"(?m)^-1\r?$", awk_system) is not None
+        and "the program exited with 0" in awk_system,
+        awk_system,
+    )
+    awk_pipe = answer('exec /bin/awk "BEGIN{print(\\"echo\\"|getline)}"')
+    expect(
+        "awk cmd | getline answers the failure of a machine without a shell",
+        re.search(r"(?m)^-1\r?$", awk_pipe) is not None
+        and "the program exited with 0" in awk_pipe,
+        awk_pipe,
+    )
+    awk_missing = answer("exec /bin/awk -f /etc/no-such.awk")
+    expect(
+        "a script that is not there is the sentence of the interpreter",
+        "can't open file /etc/no-such.awk" in awk_missing and "exited with 2" in awk_missing,
+        awk_missing,
+    )
+    awk_stdin = answer("exec /bin/awk {print}")
+    expect(
+        "awk without a file reads descriptor 0 and reports the failure",
+        "i/o error occurred on /dev/stdin" in awk_stdin,
+        awk_stdin,
+    )
 
     # A program starts another program with an environment of its own. The
     # two words are the vector of `spawn.c`, copied by the kernel at the edge
@@ -2050,12 +2624,19 @@ def main(argv: list) -> int:
         default=os.path.join(ROOT, "build-x86-open"),
         help="the build with MICRO_OS_REQUIRE_SIGNATURE=OFF",
     )
-    parser.add_argument(
-        "--timeout",
-        type=float,
-        default=120.0,
-        help="the seconds the machine gets for the whole session",
-    )
+    # The machine reads the image of a program through the disk driver of the
+    # port for every `exec`, and a read of a large file is the slowest thing
+    # this machine does (docs/debts.md): the command line has programs of
+    # 437 KiB (zstd) and 168 KiB (lua) in it, and a run of the list of
+    # COMMANDS needs a minute of an emulated machine that is not the fastest.
+    # The list of the commands of the image is the one of the tree of every
+    # port: the tools of sbase, the interpreter of Lua, the command of zstd and
+    # `/bin/file` with its database, each an image of a few hundred kilobytes
+    # that the machine reads through the disk driver for every `exec`. Two
+    # minutes was the limit of one port of somebody else, and the merged list
+    # of two of them needs three times that on a machine that is not the
+    # fastest: the limit is the whole run and a slow host is not a failure.
+    parser.add_argument("--timeout", type=float, default=600.0, help="the seconds the machine gets")
     parser.add_argument("--verbose", action="store_true", help="print the console of the machine")
     args = parser.parse_args(argv)
 
@@ -2089,6 +2670,7 @@ def main(argv: list) -> int:
         + signature_checks(loader, kernel)
         + open_policy_checks(args.open_build)
         + check(output)
+        + zstd_compat_checks(loader, kernel, args.timeout)
         + oversize_checks(loader, kernel, args.timeout)
     )
     failed = [item for item in checks if not item[1]]

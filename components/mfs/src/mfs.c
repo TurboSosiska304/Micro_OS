@@ -2018,12 +2018,31 @@ static int mfs_read_locked(struct mfs_file *file, void *buf, k_size_t size)
 
         {
             k_u8_t block_data[MFS_BLOCK_SIZE];
+            k_u32_t next;
 
             rc = dev_read(block, block_data);
             if (rc != MFS_OK) {
                 return rc;
             }
             memcpy(out + done, block_data + 4 + in_block, chunk);
+
+            /*
+             * The header of the block names the next one, so the block that
+             * was just read is the step of the chain the next chunk needs:
+             * without it `file_block_at` asks `chain_next` for a block it has
+             * already read and a read of n blocks costs two reads per block.
+             * The cursor of the descriptor is moved to that block, and the
+             * walk of the call resumes from there.
+             */
+            memcpy(&next, block_data, sizeof(next));
+            if (done + chunk < size) {
+                if (next == MFS_NEXT_NONE) {
+                    return MFS_EIO;
+                }
+                file->chain_block = next;
+                file->chain_index = (file->offset + (k_u32_t)chunk) / MFS_BLOCK_DATA;
+                file->chain_valid = true;
+            }
         }
 
         done += chunk;

@@ -65,6 +65,38 @@ and runs tasks on each of them. The board is not part of this release (ADR
   (`-Si`) and for an installed one (`-Qi`), the record keeping both fields;
   `-U` takes a local file and is not asked, because it has no index behind
   it.
+- The ports of the third and the fourth library of somebody else: zstd 1.5.7
+  (BSD-3-Clause) as the archive of the frame format and `/bin/zstd` of its own
+  command, and file 5.45 with libmagic (BSD-2-Clause) as `/bin/file` with the
+  compiled subset of the magic database in `/etc/magic.mgc`. The library of a
+  program learned the two headers of the fixed-width numbers (`stdint.h`,
+  `inttypes.h`), `asprintf`/`vasprintf`, the precision of a string in the
+  formatter, `pread`, `asctime`/`ctime`, and one more name of a compressed
+  stream: `/bin/file -z` looks inside a zstd frame as well as a gzip. The
+  library is one implementation per name for every port: the POSIX families
+  of sbase and the formatter with a point of Lua.
+- SQLite 3.54.1 (the public domain) as `/bin/sqlite3` (846,080 bytes, the
+  largest image of the machine) over a VFS of the port, with the scripts of
+  `/etc` as its fixtures. The library of a program took `sscanf`, `gettimeofday`,
+  `getrusage`, `usleep` and the refusals of `realpath`/`popen`/`setenv`, and
+  one implementation per name stayed the rule: a call of the tree is not
+  redefined by a port.
+- The eighth port, and the first interpreter with a grammar of its own: the
+  One True Awk of 2024-07-28 (the Lucent permissive license) as `/bin/awk`
+  (177,056 bytes), with the data `/etc/columns`, the first script of the
+  machine `/etc/hello.awk` and the license at `/etc/licenses/awk`. The
+  release is vendored unchanged in `third_party/awk` (the parser is generated
+  once by byacc and committed with its header and `proctab.c`), and the port
+  layer is `port/awk_port.h` and `port/awk_os.c`: the C locale as bytes, and
+  the calls with no other home in the tree (`system`, `random`/`srandom`, the
+  flag of `fcntl`). A command of a pipe is the `popen` of the library of a
+  program, which answers ENOSYS; `system` says on the error descriptor that
+  this machine has no shell. `make x86-smoke` runs the fields,
+  the formatter, `-v`, `-f`, `getline` and the refusals; `make
+  x86-disk-smoke` runs the script of `/etc` again after the reset; the host
+  test `tests/cases/test_awk.c` runs the `main` of the release through
+  thirty-two cases, including the comparison of a numeric string and the
+  syntax error of a program.
 
 ### Changed
 
@@ -87,8 +119,22 @@ and runs tasks on each of them. The board is not part of this release (ADR
   read-only page of a program did not fault on an application processor, the
   copy-on-write never ran, and `/bin/nx` answered differently by core.
 - The kernel version is `1.3.0`.
+- A read of a large file of MicroFS follows the chain of blocks forward: the
+  descriptor asked `chain_block_at` for the block of every chunk, so a read of
+  n blocks cost n walks from the head of the chain, and an `exec` of an image
+  of 440 KiB spent about six seconds of the emulated machine on it. The block
+  that was just read names the next one, and a call walks the chain once for
+  its first chunk and then follows it.
 
 ### Fixed
+
+- The bss of a program starts at the address the program was linked for:
+  `tools/mkprog.sh` counts the gap the linker may leave between the data and
+  a bss aligned to 32 bytes as padding of the data segment, and the kernel
+  clears the bss where the linker put it. The arguments of a program are
+  written after it, so a gap the header did not carry made the first boot of
+  awk read its own `argv` out of the state of the random generator. The case
+  is in `tools/test_mkprog.py`.
 
 - The 8259 was opened to the external mode on every core, and QEMU delivered
   the timer to either of them (1889 ticks on the core 0 and 4933 on the core

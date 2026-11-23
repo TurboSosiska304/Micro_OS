@@ -1,0 +1,5 @@
+# SQLite is vendored byte for byte, and the port layer beside it keeps the
+# style of the amalgamation (two spaces, its own braces). make format and make
+# integrity leave the directory alone; the files of the program, the VFS and
+# the library are reviewed against the amalgamation and not reformatted.
+DisableFormat: true

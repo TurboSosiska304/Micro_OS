@@ -18,6 +18,10 @@
 
 #include "ulibc.h"
 
+/* The types of a POSIX header: `uid_t` and `gid_t` of the one user, and the
+ * `off_t`/`ssize_t` the rest of this header uses. */
+#include <sys/types.h>
+
 #ifndef MICRO_OS_LIBC_USER_TYPES_DEFINED
 #define MICRO_OS_LIBC_USER_TYPES_DEFINED
 typedef long ssize_t;
@@ -51,7 +55,24 @@ int close(int fd);
 ssize_t read(int fd, void *buffer, size_t count);
 ssize_t write(int fd, const void *buffer, size_t count);
 off_t lseek(int fd, off_t offset, int whence);
+/*
+ * The read at an offset of a file, for a library that reads the tail of it
+ * without moving the descriptor (libmagic reads the end of a core file). The
+ * port answers it with `src/pread.c` of `third_party/file`, because the VFS
+ * has no call of its own yet.
+ */
+ssize_t pread(int fd, void *buffer, size_t count, off_t offset);
 int unlink(const char *path);
+
+/*
+ * The two calls of a tree this system does not have: a symbolic link is not
+ * an object of MicroFS and the canonical name of a path needs a walk of the
+ * filesystem. They answer `ENOSYS` (src/unsupported.c), so a portable source
+ * links and its own fallback runs (`docs/debts.md`).
+ */
+char *realpath(const char *path, char *buffer);
+int symlink(const char *target, const char *path);
+
 int rmdir(const char *path);
 int access(const char *path, int mode);
 int chdir(const char *path);
@@ -62,11 +83,14 @@ int dup2(int oldfd, int newfd);
 pid_t fork(void) __attribute__((returns_twice));
 pid_t getpid(void);
 pid_t getppid(void);
+uid_t getuid(void);
+int gethostname(char *name, size_t size);
 pid_t wait(int *status);
 pid_t waitpid(pid_t pid, int *status, int options);
 int execvp(const char *file, char *const argv[]);
 void _exit(int code) __attribute__((__noreturn__));
 unsigned sleep(unsigned seconds);
+int usleep(unsigned microseconds);
 
 extern char **environ;
 extern char *optarg;
