@@ -388,14 +388,35 @@ the file there. `make x86-disk-smoke` is the proof and the regression test:
 one image, two boots, `/bin` and a program from the disk in both,
 `write /persist.txt` in the first and `cat /persist.txt` in the second.
 
-The driver is `src/ata.c`: the ATA registers at 0x1F0, LBA28, PIO, polled -
-no DMA (the port has no contract for a physical address yet) and no interrupt
-of the channel. A command runs with the interrupts off, so the timer and the
-keyboard of this machine cannot interleave another task's request with the
-transfer; every wait has a budget of five seconds, a failed command is
-repeated once and reported with the sector that failed. A disk that does not
-answer is reported and the machine goes on with `ram0`; that volume has no
-`/bin`, so the boot says which file it could not find and starts the shell.
+The driver is `src/ata.c`: the ATA registers at 0x1F0, LBA28, and two ways of
+moving the bytes (ADR 0032). The bus master of the channel - the PCI IDE
+function of class 01/01, its bus-master bit and the BAR of its five registers
+- takes a table of physical addresses (the PRDT) and moves up to 64 KiB in
+one command, four kilobytes to an entry so that no entry crosses a page; the
+end of the transfer is the interrupt of IRQ 14, and the task that waits for it
+halts the core with the interrupts on, so the line of the disk wakes it at
+once. A machine without the function, a drive whose identify data says it
+cannot, and a buffer whose pages the port cannot translate all fall back to
+PIO - the path of 1.5.0, a word at a time through the port, polled, with the
+interrupts off. Every wait has a budget of five seconds, a failed command is
+repeated once by the PIO path and reported with the sector that failed. A disk
+that does not answer is reported and the machine goes on with `ram0`; that
+volume has no `/bin`, so the boot says which file it could not find and starts
+the shell.
+
+Above the driver, `kernel/blockdev.c` keeps a write-back cache of half a
+megabyte (`k_blockdev_register_cached_sized`), which is what turns the writes
+of a filesystem that speaks one sector at a time into the runs a bus master
+moves; `/proc/blockdev` says how many sectors of it the medium does not have
+yet, and the `sync` of a filesystem - the close of a file, a directory, an
+unmount - empties it before the drive is told to empty its own. The boot says
+which path it took:
+
+```
+ata0: bus-master DMA on 0xc040, IRQ 14
+ata0: PIO, no bus master
+```
+
 `programs.img` and `disk.img` are generated and not committed; `make clean`
 does not remove `build-x86`, `rm -rf build-x86` does.
 

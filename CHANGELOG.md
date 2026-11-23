@@ -14,6 +14,26 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Added
 
+- The disk of the x86-64 port speaks bus-master DMA (ADR 0032): the PCI IDE
+  function is found by its class, the bus-master bit is set in its command
+  register, a PRDT of 4 KiB pieces (no entry crosses a page) moves up to
+  64 KiB in one command, and the transfer ends with IRQ 14 instead of a poll
+  of the status register. A machine without the function, a drive whose
+  identify data says it cannot and a buffer whose pages the port cannot
+  translate all keep the PIO path, which is unchanged.
+- ADR 0032 states the contract of a physical address: which addresses may
+  reach a device, who translates them (`port_x86_64_bus_phys` for the heap
+  and the image, `port_x86_64_paging_phys` for a page of a program), what
+  keeps the memory alive while the transfer runs, and why x86-64 needs no
+  cache maintenance around a DMA.
+- `/proc/blockdev` lists the block devices with the state of the cache above
+  each of them: the bytes of a sector, the sectors of the device, the boxes,
+  the boxes that hold a sector, the dirty sectors the medium does not have
+  yet, and whether the cache writes back.
+- `k_blockdev_register_cached_sized()` and `k_blockdev_cache_stats()`: a
+  device asks for a cache of its own size (the disk of the x86-64 port asks
+  for 512 sectors, half a megabyte, because a bus master moves a run at a
+  time) and a reader can ask what it holds.
 - A task carries a uid and a gid, and the triads of a file are read against
   them: `getuid`, `geteuid`, `getgid`, `setuid` and `setgid` take the numbers
   36 to 40, root passes every triad while anyone else gets the bits of the
@@ -244,6 +264,16 @@ and runs tasks on each of them. The board is not part of this release (ADR
 
 ### Changed
 
+- The cache of the block layer finds a sector through an index of open
+  addressing and evicts with the second chance of a clock, instead of walking
+  its boxes twice for every sector: the walk was nothing for the sixteen
+  boxes of a flash chip and became the work itself for the five hundred of a
+  disk. The write-back cache above `ata0` is half a megabyte and a run of it
+  leaves as the commands of the bus master.
+- The ATA driver opens IRQ 14 after the port has built the table of the
+  interrupts and programmed the 8259: a driver that asked for its vector
+  earlier got a table entry the boot overwrote and a mask the boot closed
+  again, and the disk waited for the timer tick instead of the line.
 - The scheduler claims the next task under its lock: `k_sched_claim_next()`
   marks the task RUNNING on the calling core in the same critical section
   that chose it, so a second core cannot claim it between the choice and the
