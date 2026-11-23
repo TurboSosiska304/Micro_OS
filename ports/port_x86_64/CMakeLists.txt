@@ -970,6 +970,16 @@ add_libc_program(mkbig
     DEFINES ULIBC_HEAP_SIZE=65536u
 )
 
+# The ruler of the grain of the I/O (tools/io_bench.py): a file through a
+# pipe of the kernel, a stream read a byte at a time and a stream written a
+# line at a time. It is a program of a test and not of a person, like
+# `mkbig`: the image of the machine does not carry it.
+add_libc_program(iobench
+    MAIN "${PROGRAM_DIR}/iobench.c"
+    SOURCES ${SBASE_LIBC_SOURCES}
+    DEFINES ULIBC_HEAP_SIZE=65536u
+)
+
 function(add_sbase_program tool heap)
     add_libc_program(${tool}
         MAIN "${SBASE_DIR}/${tool}.c"
