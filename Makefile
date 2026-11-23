@@ -242,7 +242,8 @@ X86_SIGN_ARGS := -DMICROOS_SIGN_KEY=$(MICROOS_SIGN_KEY)
 X86_DISPLAY ?= gtk
 
 x86-build:
-	cmake -B $(X86_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release $(X86_SIGN_ARGS)
+	cmake -B $(X86_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
+		-DMICRO_OS_FS_EXT2=ON -DMICRO_OS_FS_FAT32=ON $(X86_SIGN_ARGS)
 	cmake --build $(X86_BUILD) --target image
 
 # The other policy of ADR 0020: the loader verifies the image, prints the
