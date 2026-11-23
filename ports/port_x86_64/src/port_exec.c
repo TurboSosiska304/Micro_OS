@@ -95,7 +95,16 @@ static const k_u8_t g_restorer_code[] = {
 #define PORT_EXEC_ENV_BYTES_MAX 512u
 
 /* How long the caller of execve waits for the program it started. */
-#define PORT_EXEC_WAIT_MS 10000u
+/*
+ * How long execve waits for the program before it gives up. The wait is the
+ * life of the call and not a timeout of the machine: a program of this
+ * system reads a file, writes a screen and computes, and a minute is five
+ * times the slowest one of the release on a loaded machine. A program that
+ * is still there at the end is stopped and reaped - a call that returned
+ * cannot leave a task behind with a console of its own - so the number is
+ * the point of the stop and not a leak.
+ */
+#define PORT_EXEC_WAIT_MS 60000u
 
 /*
  * The frame of a signal on the stack of the program: the registers and the
@@ -881,6 +890,27 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
                 break;
             }
         }
+    }
+
+    if (rc == -2) {
+        /*
+         * The budget of the call is spent. The task is a task of the
+         * scheduler: it does not end because the caller stopped waiting, and
+         * returning here would leave it running with the console of the
+         * shell and a slot that nobody reaps - which is what the session of
+         * the release caught as two tasks named `program` in a table of
+         * four. It is stopped, given a moment to become a zombie and reaped.
+         */
+        int tries;
+
+        (void)task_signal_send(program->pid, K_SIGKILL);
+        for (tries = 0; tries < 400; tries++) {
+            if (task_wait(program->pid, &status, 5) != -2) {
+                break;
+            }
+        }
+        kerror("x86_64: the program ran past %u ms and was stopped", PORT_EXEC_WAIT_MS);
+        return -1;
     }
 
     if (rc != 0) {
