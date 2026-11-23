@@ -11,6 +11,7 @@ if(NOT ESP_PLATFORM)
         cases/test_ansi.c
         cases/test_port.c
         cases/test_blockdev.c
+        cases/test_root.c
         cases/test_render.c
         cases/test_boot.c
         cases/test_kmod.c

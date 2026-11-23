@@ -316,6 +316,13 @@ void test_partition(void)
         KT_CHECK_INT_EQ((int)child->sectors, 2048);
     }
 
+    /* The type of the entry travels with the child: the boot of the root
+     * reads it as a hint about the filesystem inside (ADR 0027). */
+    KT_CHECK_INT_EQ(partition_type_of(k_blockdev_find("pmbr0p1")), 0x83);
+    KT_CHECK_INT_EQ(partition_type_of(k_blockdev_find("pmbr0p2")), 0x0C);
+    KT_CHECK_INT_EQ(partition_type_of(&s_part_device), -1);
+    KT_CHECK_INT_EQ(partition_type_of(NULL), -1);
+
     /* The child reads the sector of the disk where the partition starts. */
     s_part_disk[2048u * PART_LBA_BYTES + 7u] = 0x42u;
     child = k_blockdev_find("pmbr0p1");

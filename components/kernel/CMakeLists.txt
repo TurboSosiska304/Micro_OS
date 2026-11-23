@@ -26,6 +26,7 @@ set(MICRO_OS_KERNEL_SRCS
     "src/partition.c"
     "src/power.c"
     "src/render.c"
+    "src/root.c"
     "src/sched.c"
     "src/sysinfo.c"
     "src/task.c"
