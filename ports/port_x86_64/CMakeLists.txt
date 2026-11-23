@@ -857,6 +857,10 @@ add_executable(microos64
     src/gdt.c
     src/paging.c
     src/cpu.c
+    src/smp.c
+    src/lapic.c
+    src/ipi.c
+    src/ioapic.c
     src/port_exec.c
     src/port_x86_64_task.c
     src/blockdev_ram.c
@@ -1037,10 +1041,36 @@ endforeach()
 # The loader is 32-bit and has no libc in it: the assembler, the compiler and
 # the linker of the host do the whole job. The object of the C is 32-bit as
 # well, so ld sees one machine.
+# The trampoline of the application processors (ADR 0012): a flat binary
+# linked at 0x7000, the page the start-up IPI names. The loader embeds it with
+# .incbin and copies it there before the kernel runs, so the AP that wakes in
+# real mode has a way into long mode and into C.
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/ap_trampoline.o"
+    COMMAND as --32 -o "${CMAKE_BINARY_DIR}/ap_trampoline.o"
+            "${CMAKE_CURRENT_SOURCE_DIR}/ap_trampoline.S"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/ap_trampoline.S"
+    COMMENT "assembling the AP trampoline"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/ap_trampoline.bin"
+    COMMAND ld -m elf_i386 -T "${CMAKE_CURRENT_SOURCE_DIR}/ap_trampoline.ld"
+            -o "${CMAKE_BINARY_DIR}/ap_trampoline.elf" "${CMAKE_BINARY_DIR}/ap_trampoline.o"
+    COMMAND objcopy -O binary "${CMAKE_BINARY_DIR}/ap_trampoline.elf"
+            "${CMAKE_BINARY_DIR}/ap_trampoline.bin"
+    DEPENDS "${CMAKE_BINARY_DIR}/ap_trampoline.o"
+            "${CMAKE_CURRENT_SOURCE_DIR}/ap_trampoline.ld"
+    COMMENT "linking the AP trampoline at 0x7000"
+    VERBATIM
+)
+
 add_custom_command(
     OUTPUT "${CMAKE_BINARY_DIR}/loader32.o"
     COMMAND as --32 -o "${CMAKE_BINARY_DIR}/loader32.o" "${CMAKE_CURRENT_SOURCE_DIR}/loader32.S"
-    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/loader32.S"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/loader32.S" "${CMAKE_BINARY_DIR}/ap_trampoline.bin"
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
     COMMENT "assembling the loader"
     VERBATIM
 )

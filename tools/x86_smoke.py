@@ -952,11 +952,11 @@ def check(output: str) -> list:
         re.search(r"reported by the firmware, [12] in use", output) is not None,
     )
     expect(
-        "the boot names the second core as not started",
-        "the AP bring-up is not written yet" in output
+        "a kernel without KERNEL_SMP says the core 0 runs alone",
+        "x86-64: this kernel is built without KERNEL_SMP, the core 0 runs alone" in output
         if "reported by the firmware, 1 in use" in output
         else True,
-        "the kernel says it uses the second core without the AP bring-up",
+        "the kernel uses one core and does not say why",
     )
     expect(
         "the boot asks for the program through the call",

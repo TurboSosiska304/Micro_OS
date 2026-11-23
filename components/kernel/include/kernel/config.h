@@ -14,13 +14,13 @@
 #endif
 
 #define KERNEL_VERSION_MAJOR 1
-#define KERNEL_VERSION_MINOR 2
-#define KERNEL_VERSION_PATCH 1
+#define KERNEL_VERSION_MINOR 3
+#define KERNEL_VERSION_PATCH 0
 
 /* A pre-release carries a suffix ("-rc1", "-pre") until the release drops it:
  * the tag is vX.Y.Z or vX.Y.Z-suffix, and the integrity check of a release
  * compares the three numbers with the tag. */
-#define KERNEL_VERSION_SUFFIX ""
+#define KERNEL_VERSION_SUFFIX "-rc1"
 
 /* Size of the in-kernel log ring buffer (number of retained messages). */
 #ifndef KERNEL_LOG_LINES

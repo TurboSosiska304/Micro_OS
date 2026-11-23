@@ -8,7 +8,7 @@ descriptor or of memory is a failure of that one machine. This tool is that
 machine.
 
     tools/soak.py [--build DIR] [--image PATH] [--minutes N | --seconds N]
-                  [--iterations N] [--seed S] [--keep-logs] [--verbose]
+                  [--iterations N] [--seed S] [--smp] [--keep-logs] [--verbose]
 
 The default is 600 seconds in one boot. `--minutes` shortens the session for
 a smoke test of the tool itself; `--iterations` is the other mode, the one
@@ -34,6 +34,14 @@ What the load does, in a cycle that repeats until the clock says stop:
     page reached through `hostfwd`, and the resolver when this host has one.
     NTP is skipped unless this process can bind UDP 123 (it needs a
     privilege a campaign on a laptop does not have), and the report says so.
+
+`--smp` is the same session on the kernel of two cores (ADR 0012): the
+machine is booted with `-smp 2`, the load has the `smp` command of the shell
+in every cycle, and the session fails if the boot does not start both cores,
+if a core did not answer, if an answer holds an exception, if `smp` stops
+finding the queues consistent, or if the ticks of either core did not move
+between the first sample and the last. The load itself is the one above: a
+two-core kernel has to run the same commands, not a smaller suite.
 
 A session that fails leaves its transcript next to the image; `--keep-logs`
 keeps the transcript of a passing session as well.
@@ -80,6 +88,15 @@ FATAL = [
     "*** ERROR",
 ]
 
+# The words of a two-core boot that did not come up whole: a core that never
+# answered the start-up IPI, or an exception of a core the port could not
+# handle. A session without `--smp` does not look for them, because the kernel
+# of one core has other sentences for the same idea.
+FATAL_SMP = [
+    "did not answer",
+    "exception",
+]
+
 # The lines of the boot that have to be in the banner. A session that starts
 # the load on a machine without its filesystem or its shell would exercise
 # nothing.
@@ -90,6 +107,21 @@ BOOT_EXPECT = [
     "x86-64: the root volume is ata0p1",
     "MicroOS shell ready",
 ]
+
+# The same, for the boot of two cores: the firmware describes both and the
+# kernel runs both. A build of KERNEL_SMP that boots one core is the state the
+# branch exists to end.
+BOOT_EXPECT_SMP = [
+    re.compile(r"x86-64: 2 cpu\(s\) reported by the firmware, 2 in use"),
+    re.compile(r"cpu: 2 core\(s\) of the machine are used by the kernel"),
+]
+
+# The report of the `smp` command: the cores, their APIC ids and their ticks.
+# The port prints the APIC id in hexadecimal (`apic 0x1`); the pattern takes
+# the decimal form of the contract (`apic 1`) as well.
+SMP_CPU = re.compile(r"smp: cpu (\d+) apic (?:0x)?[0-9a-fA-F]+ ticks (\d+) current (\S+)")
+SMP_IN_USE = re.compile(r"smp: 2 core\(s\) in use of 2 reported, apic 0x[0-9a-fA-F]+")
+SMP_QUEUES = "smp: queues consistent"
 
 PS_ROW = re.compile(r"^\s*(\d+)\s+\d+\s+\w+\s+(\S+)\s*$", re.MULTILINE)
 FD_ROW = re.compile(r"^fds\s+(\d+)\s*$", re.MULTILINE)
@@ -262,21 +294,29 @@ class Load:
     """
 
     def __init__(self, rng: random.Random, *, net: bool, page: str, fwd: int,
-                 ntp: bool, dns: bool) -> None:
+                 ntp: bool, dns: bool, smp: bool = False) -> None:
         self.rng = rng
         self.net = net
         self.page = page
         self.fwd = fwd
         self.ntp = ntp
         self.dns = dns
+        self.smp = smp
         self.cycle = 0
         self.httpd_ready = False
 
     # --- the once-per-boot part ---------------------------------------
 
     def prelude(self) -> list:
-        """The commands of the boot: the full volume first, then the network."""
-        out = [Command("df", ["blocks:", "free"])]
+        """The commands of the boot: the cores, the full volume, the network."""
+        out = []
+
+        # The baseline of the clock of the two cores (ADR 0012): the ticks of
+        # the first sample are compared with the last one of the session.
+        if self.smp:
+            out.append(Command("smp", [SMP_IN_USE, SMP_QUEUES]))
+
+        out.append(Command("df", ["blocks:", "free"]))
 
         # /tmp is a directory of the image (tools/soak_image.py): a volume
         # with no free block cannot make one, and the load needs it before
@@ -394,6 +434,12 @@ class Load:
                     ["PROGRAM: argc 3, argv[0] /bin/hello", "the program exited with 0"]),
         ]
 
+        # The report of the two cores every cycle: the queues are checked
+        # while the load runs, and the ticks of every core are sampled for
+        # the verdict at the end of the session.
+        if self.smp:
+            out.append(Command("smp", [SMP_QUEUES]))
+
         if n % 2 == 0:
             out += [
                 Command("exec /bin/badptr",
@@ -452,11 +498,18 @@ class Session:
         self.boot_seconds = 0.0
         self.baseline = {}
         self.final = {}
+        self.smp_samples = []
 
     # --- the checks of one answer --------------------------------------
 
     def fatal(self, text: str) -> str | None:
         for marker in FATAL:
+            if marker in text:
+                return marker
+        return None
+
+    def fatal_smp(self, text: str) -> str | None:
+        for marker in FATAL_SMP:
             if marker in text:
                 return marker
         return None
@@ -491,6 +544,19 @@ class Session:
         if marker is not None:
             raise SessionFailure(f"'{marker}' in the answer of {command.text!r}")
 
+        if self.args.smp:
+            marker = self.fatal_smp(block)
+            if marker is not None:
+                raise SessionFailure(f"'{marker}' in the answer of {command.text!r}")
+
+            if command.text == "smp":
+                ticks = {
+                    int(match.group(1)): int(match.group(2))
+                    for match in SMP_CPU.finditer(block)
+                }
+                if ticks:
+                    self.smp_samples.append(ticks)
+
         for expectation in command.expect:
             if not matches(block, expectation):
                 message = f"no {expectation!r} in the answer"
@@ -523,7 +589,12 @@ class Session:
         if marker is not None:
             raise SessionFailure(f"'{marker}' in the boot")
 
-        for expectation in BOOT_EXPECT:
+        if self.args.smp:
+            marker = self.fatal_smp(banner)
+            if marker is not None:
+                raise SessionFailure(f"'{marker}' in the boot")
+
+        for expectation in BOOT_EXPECT + (BOOT_EXPECT_SMP if self.args.smp else []):
             if not matches(banner, expectation):
                 self.fail("<boot>", f"no {expectation!r} in the banner", banner)
 
@@ -641,6 +712,35 @@ class Session:
                 f"({baseline.get('task_names')} -> {final.get('task_names')})",
             )
 
+        # The two cores of ADR 0012: the ticks of each of them have to move
+        # between the first sample of the session and the last one. A core
+        # whose clock stands still is a core the kernel never gave a tick -
+        # the AP timer is not running, and the tasks on it would only be
+        # labels of the queue.
+        smp_report = None
+
+        if self.args.smp:
+            first = self.smp_samples[0] if self.smp_samples else {}
+            last = self.smp_samples[-1] if self.smp_samples else {}
+            smp_report = {"first": first, "last": last, "samples": len(self.smp_samples)}
+
+            if len(self.smp_samples) < 2:
+                self.fail(
+                    "<smp>",
+                    f"the command 'smp' answered {len(self.smp_samples)} time(s), "
+                    "two samples are needed",
+                )
+
+            for cpu in (0, 1):
+                if cpu not in first or cpu not in last:
+                    self.fail("<smp>", f"the report of 'smp' has no line of the core {cpu}")
+                elif last[cpu] <= first[cpu]:
+                    self.fail(
+                        "<smp>",
+                        f"the ticks of the core {cpu} did not move: "
+                        f"{first[cpu]} -> {last[cpu]}",
+                    )
+
         return {
             "label": self.label,
             "seconds": round(self.ended - self.started, 1),
@@ -651,6 +751,7 @@ class Session:
             "warnings": self.warnings,
             "baseline": baseline,
             "final": final,
+            "smp": smp_report,
         }
 
 
@@ -688,6 +789,14 @@ def report(results: list, args) -> int:
             "  volume        free blocks "
             f"{baseline.get('free_blocks', '?')} -> {final.get('free_blocks', '?')}"
         )
+        if result.get("smp") is not None:
+            first, last = result["smp"]["first"], result["smp"]["last"]
+            print(
+                "  smp cores     cpu 0 ticks "
+                f"{first.get(0, '?')} -> {last.get(0, '?')}, "
+                f"cpu 1 ticks {first.get(1, '?')} -> {last.get(1, '?')} "
+                f"({result['smp']['samples']} sample(s))"
+            )
         print(f"  errors        {len(result['errors'])}")
         print(f"  warnings      {len(result['warnings'])}")
 
@@ -747,6 +856,7 @@ def make_load(args, seed: int, services: dict) -> Load:
         fwd=services["fwd"],
         ntp=services["ntp"],
         dns=services["dns"],
+        smp=args.smp,
     )
 
 
@@ -803,6 +913,11 @@ def main(argv: list) -> int:
     parser.add_argument("--no-image", action="store_true",
                         help="use the image as it is (it may not start full)")
     parser.add_argument("--no-net", action="store_true", help="no network even if the build has it")
+    parser.add_argument(
+        "--smp",
+        action="store_true",
+        help="the two-core machine: -smp 2 and the invariants of ADR 0012",
+    )
     parser.add_argument("--verbose", action="store_true")
 
     args = parser.parse_args(argv)
@@ -870,6 +985,7 @@ def main(argv: list) -> int:
                 image,
                 net=args.net,
                 hostfwd=services["fwd"],
+                extra_args=["-smp", "2"] if args.smp else None,
             )
 
             try:
@@ -932,6 +1048,7 @@ def main(argv: list) -> int:
             f", dns {'on' if services['dns'] else 'skip (this host cannot resolve a name)'}"
         )
     print(line)
+    print("soak: machine " + ("-smp 2, two cores (ADR 0012)" if args.smp else "one core"))
 
     return status
 

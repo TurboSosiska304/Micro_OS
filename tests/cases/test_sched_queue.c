@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "kernel/cpu.h"
 #include "kernel/log.h"
 #include "kernel/port_task.h"
 #include "kernel/sched.h"
@@ -80,6 +81,19 @@ void test_sched_queue(void)
     }
 
     KT_CHECK_INT_EQ(g_blocked, MANY_TASKS);
+
+    /*
+     * Every task of the test is moved to the queue of the core of the suite
+     * before it is woken: a core picks only from its own queue (ADR 0012), so
+     * a worker of the round robin that stayed on the other core would never
+     * be found by the picks below. The tasks are blocked, which is the state
+     * a migration accepts, and the calls are no-ops on a build of one core.
+     */
+    for (i = 0; i < MANY_TASKS; i++) {
+        if (g_tasks[i] != NULL) {
+            KT_CHECK_INT_EQ(k_sched_migrate(g_tasks[i], k_cpu_id()), 0);
+        }
+    }
 
     /* All the tasks are blocked, so only the test runner is in the queue. */
     KT_CHECK_INT_EQ(k_sched_ready_count(), 1);

@@ -198,8 +198,16 @@ void port_x86_64_program_fault(k_u64_t vector, k_u64_t error, k_u64_t address, k
  */
 void port_x86_64_gdt_init(void);
 
+/*
+ * Build and load the table of one core: the BSP calls this for 0 at the boot,
+ * an AP for its own number on the way up. The tables are identical except for
+ * the TSS, which carries the RSP0 and the IST stack of that core.
+ */
+void port_x86_64_gdt_init_cpu(k_u32_t cpu);
+
 /* The stack the processor takes on an interrupt from ring 3. */
 void port_x86_64_tss_set_rsp0(k_u64_t rsp0);
+k_u64_t port_x86_64_tss_rsp0(void);
 
 /*
  * Build the map of the kernel: the first gigabyte identity mapped, 2 MiB
@@ -209,6 +217,15 @@ void port_x86_64_tss_set_rsp0(k_u64_t rsp0);
  * program gets a copy with the user window replaced (ADR 0007, NX and W^X).
  */
 void port_x86_64_paging_init(void);
+
+/*
+ * The protection the map keeps in a register of the core: CR0.WP, which makes
+ * the kernel honour the write bit of its own tables. The boot calls it for
+ * itself inside port_x86_64_paging_init(); an application processor calls it
+ * on its way up, because the register is per core.
+ */
+void port_x86_64_paging_init_cpu(void);
+
 k_u64_t port_x86_64_kernel_cr3(void);
 
 /*
@@ -369,6 +386,63 @@ k_u32_t port_x86_64_cpu_started(void);
 
 /* The physical address of the local APIC from the MADT, 0 when there is none. */
 k_u32_t port_x86_64_apic_base(void);
+
+/*
+ * Load the table of the interrupts the boot built into this core. The table
+ * is one for the machine and does not change after the boot; an application
+ * processor calls this on its way up, because the register that names it is
+ * per core. Does not touch the 8259 or the PIT: that programming belongs to
+ * the processor of the boot.
+ */
+void port_x86_64_interrupts_load(void);
+
+/*
+ * Put a handler of the port in the table of the interrupts, as a ring 0 gate
+ * that turns the interrupts off on entry (the two constants above are an
+ * implementation detail of the table). A driver of the port - the APIC of
+ * ADR 0012 is the first - registers its vectors here instead of reaching into
+ * the table of port_x86_64.c. The table is loaded already and lives in the
+ * memory of the kernel, so a registration after the lidt is seen by every
+ * core at the next interrupt.
+ */
+void port_x86_64_idt_set(k_u32_t vector, void (*handler)(void));
+
+/* --- the processors of the machine (ADR 0012) ----------------------------- */
+
+/*
+ * Bring up the application processors the firmware reports: map the APIC,
+ * give every core a stack and a table, write the parameters of the
+ * trampoline, send INIT and the start-up IPI, and wait for each core to
+ * answer from C. Called at the end of port_x86_64_init(), after the page
+ * tables and the table of the interrupts exist. A kernel built without
+ * KERNEL_SMP does nothing here and reports one core.
+ *
+ * The answering core stops before the scheduler and waits for
+ * port_x86_64_smp_release(): the scheduler of the kernel does not exist yet
+ * when the port is brought up, and a core that entered it would find an
+ * array of one. kmain() releases them once kernel_boot() has run.
+ */
+void port_x86_64_smp_init(void);
+void port_x86_64_smp_release(void);
+
+/* The cores that answered the start-up IPI and reached C. This is the number
+ * k_port_cpu_count() promises the scheduler, and the number the boot prints
+ * as "in use": a core the firmware lists but this port did not start is not
+ * counted. */
+k_u32_t port_x86_64_smp_checked_in(void);
+
+/* True when the APIC of the port is mapped and enabled (the bring-up needs
+ * it; the number above says how many cores it actually produced). */
+bool port_x86_64_smp_apic_ready(void);
+
+/*
+ * The other core asked this one to look at its run queue. Called from the
+ * body of the IPI vector with the interrupts off; it takes the scheduler
+ * lock, claims the next task of this core and switches to it when the core
+ * has one to run or is idle. A tick of the local APIC timer may do the same
+ * at the next millisecond, so this is the short path and not the only one.
+ */
+void port_x86_64_task_ipi(void);
 
 /* --- the map of the machine ---------------------------------------------- */
 /*
