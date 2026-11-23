@@ -22,19 +22,21 @@
 /*
  * The descriptions of the system. The table is fixed, like the table of
  * the tasks: an open file is a small record and a board does not want a
- * heap that fragments for it. Twenty-four descriptions hold the sixteen
- * files of a task that asks for its whole table, the four ends of a
- * three-stage pipeline of the shell, and the copies a fork adds without a
- * new record.
+ * heap that fragments for it. Forty descriptions hold the sixteen files of a
+ * task that asks for its whole table, the sixteen ends of a pipeline of the
+ * shell - the deepest line its parser can hold, one boundary at a time - and
+ * the copies a fork adds without a new record.
  */
-#define KFILE_MAX 24
+#define KFILE_MAX 40
 
 /* The pipes of the system, the bytes of one, and the bound of a wait. The
  * buffer is small on purpose: the internal RAM of the board is scarce, and
  * a producer that has more to say waits for the reader. Half a second is
  * long enough for a slow reader and short enough that a program whose
- * other end is gone is not stuck forever. */
-#define KFILE_PIPE_MAX 8
+ * other end is gone is not stuck forever. Sixteen pipes are the deepest
+ * pipeline of the shell: every stage after the first is one more boundary,
+ * and the table of the descriptions above is sized for all of them. */
+#define KFILE_PIPE_MAX 16
 #define KFILE_PIPE_SIZE 256
 #define KFILE_PIPE_WAIT_MS 500u
 
