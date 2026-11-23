@@ -248,6 +248,23 @@ void test_mfs_big(void)
     KT_CHECK_INT_EQ(info.data_free, info.data_blocks - 1u);
     KT_CHECK(info.inodes_total > 1000u);
 
+    /*
+     * The count of the used records is a walk of the whole table, and the
+     * walk costs the table: 32 records of a version 2 volume share a block,
+     * so the reads of the walk are the blocks of the table and not the
+     * records. Without the cache of the table the walk read the same block
+     * once per record, which is 32 times the bytes of the table - 6.8 GiB
+     * of the medium for the 214 MiB table of a 5 GiB volume.
+     */
+    {
+        k_u32_t first = medium.reads;
+        k_u32_t blocks;
+
+        KT_CHECK_INT_EQ(mfs_get_info(&info), MFS_OK);
+        blocks = medium.reads - first;
+        KT_CHECK(blocks <= info.inodes_total / 8u + 2u);
+    }
+
     /* A file of 64 blocks, written and read back through the device. */
     for (i = 0; i < BIG_DATA_SIZE; i++) {
         g_written[i] = pattern_at(i);
