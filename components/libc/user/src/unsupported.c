@@ -5,9 +5,8 @@
  * shell of SQLite is one) and a link of the image has to resolve every one.
  * Each answers `ENOSYS` and changes nothing: a symbolic link is not an object
  * of MicroFS, the timestamps of a record are written by the filesystem and
- * not set by a call, and the canonical name of a path needs a filesystem
- * walk the VFS does not offer. The caller's own fallback is the honest one -
- * SQLite's `realpath()` reports the error, its archive code refuses the
+ * not set by a call, and the stream of a command has no pipe to build. The
+ * caller's own fallback is the honest one - SQLite's archive code refuses the
  * clone - and the debt is a row in docs/debts.md, not a fake success.
  */
 #include "ulibc.h"
@@ -17,15 +16,6 @@
 #include <stdio.h>
 #include <sys/time.h>
 #include <unistd.h>
-
-char *realpath(const char *path, char *buffer)
-{
-    (void)path;
-    (void)buffer;
-
-    errno = ENOSYS;
-    return NULL;
-}
 
 int symlink(const char *target, const char *path)
 {
@@ -40,30 +30,6 @@ int utimes(const char *path, const struct timeval times[2])
 {
     (void)path;
     (void)times;
-
-    errno = ENOSYS;
-    return -1;
-}
-
-/*
- * The environment of a program is the vector `_start` was entered with
- * (`stdlib_ext.c`): the shell has no `export` and a program cannot grow its
- * own. A caller that changes a variable gets the honest answer and keeps the
- * value it had.
- */
-int setenv(const char *name, const char *value, int overwrite)
-{
-    (void)name;
-    (void)value;
-    (void)overwrite;
-
-    errno = ENOSYS;
-    return -1;
-}
-
-int unsetenv(const char *name)
-{
-    (void)name;
 
     errno = ENOSYS;
     return -1;

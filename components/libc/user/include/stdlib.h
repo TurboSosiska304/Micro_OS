@@ -42,8 +42,15 @@ void *bsearch(const void *key, const void *base, size_t count, size_t size,
               int (*compare)(const void *, const void *));
 
 char *getenv(const char *name);
+/*
+ * The environment a program may grow: `setenv` adds or replaces a name,
+ * `unsetenv` removes every word of it, and `putenv` takes a word of the
+ * caller ("NAME=VALUE") as it is and never copies or frees it. A name is not
+ * empty and has no '=', and a call that is given one answers `EINVAL`.
+ */
 int setenv(const char *name, const char *value, int overwrite);
 int unsetenv(const char *name);
+int putenv(char *word);
 int atexit(void (*function)(void));
 void abort(void) __attribute__((__noreturn__));
 

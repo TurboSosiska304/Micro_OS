@@ -66,10 +66,12 @@ ssize_t pread(int fd, void *buffer, size_t count, off_t offset);
 int unlink(const char *path);
 
 /*
- * The two calls of a tree this system does not have: a symbolic link is not
- * an object of MicroFS and the canonical name of a path needs a walk of the
- * filesystem. They answer `ENOSYS` (src/unsupported.c), so a portable source
- * links and its own fallback runs (`docs/debts.md`).
+ * The canonical name of a path, and the call of a tree this system does not
+ * have. `realpath` folds the `.`, the `..` and the doubled slash and asks the
+ * filesystem that the object exists, with the buffer of the caller or one of
+ * the arena (`src/realpath.c`); a symbolic link is not an object of MicroFS,
+ * so `symlink` answers `ENOSYS` (`src/unsupported.c`) and a portable source
+ * takes its own fallback (`docs/debts.md`).
  */
 char *realpath(const char *path, char *buffer);
 int symlink(const char *target, const char *path);

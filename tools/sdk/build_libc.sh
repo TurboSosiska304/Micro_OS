@@ -47,10 +47,11 @@
 # `setjmp` of a double are there: the library is one archive for every
 # program, and a program that does not print a double never reaches the code.
 # --no-float builds the smaller library of a program that computes in
-# integers: -mgeneral-regs-only, no ULIBC_WITH_FLOAT, and the three sources
-# that need the unit (src/math.c, src/format_float.c and src/sscanf.c, whose
-# strtod is a double) are left out. A program linked with it has no `%f` and
-# no `sscanf`, which is the library of the tools of the tree (sbase).
+# integers: -mgeneral-regs-only, no ULIBC_WITH_FLOAT, and the two sources that
+# need the unit (src/math.c and src/format_float.c) are left out. src/sscanf.c
+# stays: its `%f` is behind ULIBC_WITH_FLOAT, so an integer build reads every
+# other conversion and answers EOF for a stream of a double. That is the
+# library of the tools of the tree (sbase).
 #
 # --werror is for the tree: the sources of this repository compile without a
 # warning, and the SDK build of a release says so. A person rebuilding the
@@ -58,7 +59,7 @@
 set -eu
 
 K_DEFAULT_HEAP=262144
-K_NO_FLOAT_SKIP="format_float math sscanf"
+K_NO_FLOAT_SKIP="format_float math"
 
 usage()
 {

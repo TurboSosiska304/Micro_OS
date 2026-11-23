@@ -121,8 +121,9 @@ share/build-libc.sh --src share/src/libc --include include \
 ```
 
 `--no-float` builds the smaller archive of a program that computes in
-integers (`-mgeneral-regs-only`, no `%f`, no `strtod` of a double, no
-`sscanf`). The library is built by the same compiler and cannot be shared
+integers (`-mgeneral-regs-only`, no `%f`, no `strtod` of a double; `sscanf`
+still reads the other conversions). The library is built by the same compiler
+and cannot be shared
 between two programs: each image carries its copy, which is what "statically
 linked" means on a machine with no dynamic linker.
 

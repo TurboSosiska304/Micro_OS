@@ -91,6 +91,18 @@ typedef long long off64_t;
 
 int sprintf(char *buffer, const char *format, ...);
 int sscanf(const char *text, const char *format, ...);
+int vsscanf(const char *text, const char *format, va_list args);
+/*
+ * The reader of a format over a stream: the same conversions as `sscanf`,
+ * the end of the file answered as `EOF` when it comes before any conversion,
+ * and the answer of the number of the conversions that stored a value. The
+ * streams of a program carry the block of `src/file.c`, so a caller of these
+ * names links that file.
+ */
+int scanf(const char *format, ...);
+int vscanf(const char *format, va_list args);
+int fscanf(FILE *stream, const char *format, ...);
+int vfscanf(FILE *stream, const char *format, va_list args);
 int setvbuf(FILE *stream, char *buffer, int mode, size_t size);
 
 /*

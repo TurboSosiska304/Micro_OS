@@ -1319,6 +1319,15 @@ set(SQLITE_LIBC_SOURCES
     "${LIBC_USER_DIR}/src/math.c"
     "${LIBC_USER_DIR}/src/sscanf.c"
     "${LIBC_USER_DIR}/src/unsupported.c"
+    # The environment the shell grows (setenv/unsetenv), the canonical name
+    # of a path (its `.archive` and realpath()), the reverse of strftime and
+    # the names of a pattern: the files of the POSIX edge of the library that
+    # the shell of the release may reach. The linker takes the objects the
+    # program names, and these four are small.
+    "${LIBC_USER_DIR}/src/env.c"
+    "${LIBC_USER_DIR}/src/realpath.c"
+    "${LIBC_USER_DIR}/src/strptime.c"
+    "${LIBC_USER_DIR}/src/glob.c"
     "${LIBC_USER_DIR}/src/gettimeofday.c"
     "${LIBC_USER_DIR}/src/resource.c"
     "${LIBC_USER_DIR}/src/usleep.c"

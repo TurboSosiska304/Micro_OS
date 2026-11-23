@@ -215,15 +215,18 @@ the families a portable POSIX source expects, and they are now part of it:
 |---|---|---|
 | `<dirent.h>` | `opendir`, `readdir`, `closedir`, `rewinddir`, `fdopendir` over `KSYS_READDIR`, one batch of eight entries per directory | `src/dirent.c` |
 | `<sys/stat.h>` | `stat`, `lstat`, `fstat`, `fstatat`, `chmod`, `umask` and `struct stat` with the `S_IS*` macros over `KSYS_STATX`; `fstat` asks `KSYS_FSTAT` for the mode, the owner and the moments of the open object | `src/stat.c` |
-| `<unistd.h>` | `access`, `chdir`, `rmdir`, `readlink`, `isatty`, `pipe`, `dup2`, `fork`, `wait`, `waitpid`, `execvp`, `_exit`, `sleep`, `sysconf`, `getopt`; `rmdir` is `KSYS_RMDIR`, not `unlink` of a directory | `src/unistd_ext.c`, `src/getopt.c` |
+| `<unistd.h>` | `access`, `chdir`, `rmdir`, `readlink`, `isatty`, `pipe`, `dup2`, `fork`, `wait`, `waitpid`, `execvp`, `_exit`, `sleep`, `sysconf`, `getopt`, and `realpath` (the canonical name of a path that exists) | `src/unistd_ext.c`, `src/getopt.c`, `src/realpath.c` |
 | `<pwd.h>`, `<grp.h>` | the credentials of the task (`getuid`, `geteuid`, `getgid`, `setuid`, `setgid`); only uid and gid 0 have a name, `root` | `src/pwd.c` |
-| `<time.h>` | `time`, `clock`, `gmtime`/`localtime`, `strftime`, `mktime`, `clock_gettime` | `src/time.c` |
+| `<time.h>` | `time`, `clock`, `gmtime`/`localtime`, `strftime`, `mktime`, `clock_gettime`, and `strptime` (the reverse of `strftime` over the same names and numbers) | `src/time.c`, `src/strptime.c` |
 | `<regex.h>` | a POSIX basic/extended engine: literals, `.`, `*`, `+`, `?`, `{m,n}`, groups, back references, alternation, brackets and the classes | `src/regex.c` |
 | `<fnmatch.h>` | the pattern of a name with `*`, `?`, `[...]`, `FNM_PATHNAME` and `FNM_NOESCAPE` | `src/fnmatch.c` |
+| `<glob.h>` | `glob`/`globfree`: the names of a path with the wildcards of `fnmatch`, one component at a time over `opendir`/`readdir` and `stat`; `GLOB_NOSORT`, `GLOB_NOCHECK`, `GLOB_MARK`, `GLOB_DOOFFS`, `GLOB_ERR` and `GLOB_APPEND` | `src/glob.c` |
+| `<getopt.h>` | `getopt_long`/`getopt_long_only` beside `getopt`: `--name`, `--name=value`, a prefix no other name has, `struct option` with `no_argument`/`required_argument`/`optional_argument`, the `flag` and `val` of a table, `longindex` | `src/getopt.c` |
 | `<stdlib.h>` | the conversions with `ERANGE` (`strtod` only in a program with `ULIBC_WITH_FLOAT`), `qsort` (merge sort), `bsearch`, `atoll`/`llabs`, `getenv`, `atexit`, `abort`, `srand`/`rand` | `src/stdlib.c`, `src/rand.c` |
+| `<stdlib.h>` (the environment) | `getenv` over `environ`, `setenv`, `unsetenv` and `putenv`: the vector of `_start` is adopted into the arena on the first change, a name is replaced or dropped, and the words of `setenv` belong to the library while the word of `putenv` belongs to the caller | `src/env.c`, `src/stdlib.c` |
 | `<string.h>`, `<strings.h>`, `<ctype.h>` | `strdup`, `strndup`, `strspn`, `strcspn`, `strpbrk`, `strcasecmp`, `strcasestr` and the ASCII classes | `src/strdup.c`, `src/string_ext.c`, `src/ctype.c` |
-| `<stdio.h>` | `fprintf`/`vfprintf`, `sprintf`, `putchar`, `getline`/`getdelim`, `fmemopen`, `fdopen`, `fileno`, `ungetc`, `perror`, `sscanf`, and `popen`/`pclose` (answered `ENOSYS`) | `src/stdio.c`, `src/stdio_ext.c`, `src/file.c`, `src/sscanf.c`, `src/unsupported.c` |
-| `<stdlib.h>` (the real numbers) | `strtod`, `atof` (the decimal form of the C locale, the value of the machine's rounding), and `setenv`/`unsetenv` (answered `ENOSYS`: the environment is the vector of `_start`) | `src/stdlib.c`, `src/unsupported.c` |
+| `<stdio.h>` | `fprintf`/`vfprintf`, `sprintf`, `putchar`, `getline`/`getdelim`, `fmemopen`, `fdopen`, `fileno`, `ungetc`, `perror`, `sscanf`, `vsscanf`, `scanf`, `vscanf`, `fscanf` and `vfscanf` (one reader over a string or a stream, `%f` in a build with `ULIBC_WITH_FLOAT`, `%n`, the width, the `*` and `EOF` at the end of a file), and `popen`/`pclose` (answered `ENOSYS`) | `src/stdio.c`, `src/stdio_ext.c`, `src/file.c`, `src/sscanf.c`, `src/unsupported.c` |
+| `<stdlib.h>` (the real numbers) | `strtod`, `atof` (the decimal form of the C locale, the value of the machine's rounding) | `src/stdlib.c` |
 | `<math.h>` | `fabs`, `floor`, `ceil`, `trunc`, `round`, `fmod`, `modf`, `frexp`, `ldexp`, `sqrt`, `pow`, `exp`, `log`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, over the x87 unit (a program built with `FLOAT`) | `src/math.c` |
 | `<signal.h>` | `signal`, `raise`, `SIGINT`, `SIGPIPE`, `SIGTERM`, `SIGCHLD`, `SIG_DFL`, `SIG_IGN` | `src/syscall.c` |
 | `<sys/time.h>`, `<sys/resource.h>` | `gettimeofday` (the uptime), `utimes` (`ENOSYS`), `getrusage` (`ENOSYS`), `usleep` (a sleep of the task) | `src/gettimeofday.c`, `src/resource.c`, `src/usleep.c`, `src/unsupported.c` |
@@ -337,3 +340,11 @@ compiled for the host by `tests/cases/test_userland.c`, which is a test of its
 own (`userland`); the door the credentials of that build call is the shim of
 `tests/cases/userland_door_shim.c`, and the real calls behind the door are
 covered by `make x86-smoke` and `make x86-disk-smoke`.
+
+The POSIX edge of the library has a second binary of the host, `libc_user`
+(`tests/cases/test_libc_user.c`): the environment, `realpath`, `strptime`,
+`getopt_long`, the reader of a format and `glob`. It links the files of the
+library and asks the door for a tree of names in read-only memory, which
+`tests/cases/libc_user_door_shim.c` answers, so a path, a directory and a
+stream are exercised on the host with the code the machine runs; the crossing
+of the real door stays the business of the two smokes of the port.

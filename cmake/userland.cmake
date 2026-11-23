@@ -69,6 +69,7 @@ set(MICROOS_LIBC_USER_HEADERS
     "${MICROOS_LIBC_USER_DIR}/include/dirent.h"
     "${MICROOS_LIBC_USER_DIR}/include/fnmatch.h"
     "${MICROOS_LIBC_USER_DIR}/include/getopt.h"
+    "${MICROOS_LIBC_USER_DIR}/include/glob.h"
     "${MICROOS_LIBC_USER_DIR}/include/grp.h"
     "${MICROOS_LIBC_USER_DIR}/include/inttypes.h"
     "${MICROOS_LIBC_USER_DIR}/include/libgen.h"
