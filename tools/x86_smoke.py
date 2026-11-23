@@ -58,6 +58,10 @@ import time
 COMMANDS = [
     "help",
     "kill 9999",
+    # The console itself is the only shell (ADR 0033): a signal to the task
+    # that runs the command leaves a machine that answers nothing until it is
+    # reset, so the refusal is a sentence (pid 3 is the shell of the boot).
+    "kill -TERM 3",
     "uname",
     "uptime",
     "ulimit",
@@ -325,6 +329,18 @@ COMMANDS = [
     # the pipes are made one boundary at a time, so the descriptor table of
     # the shell holds two ends and not eighteen.
     "cat /etc/setting | cat | cat | cat | cat | cat | cat | cat | cat | wc -l",
+    # The documented maximum of a chain (docs/wiki/shell.md): a stage that
+    # runs a program is two tasks of the kernel - the stage and the program -
+    # and the table of the machine has 32 slots, so fifteen stages of programs
+    # fit and sixteen do not. Sixteen stages of commands of the shell fit,
+    # because a stage of the shell is one task. The chain that does not fit is
+    # refused before a pipe is made, with the numbers, so no part of it is
+    # started and lost.
+    "cat /etc/setting | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | "
+    "cat | wc -l",
+    "echo | echo | echo | echo | echo | echo | echo | echo | echo | echo | echo | echo | echo | "
+    "echo | echo | echo sixteen",
+    "cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat",
     # `xargs -P` starts its commands as children of its own and runs four of
     # them at once: each line is a child that was told to run /bin/echo, and a
     # child of a fork cannot be one without the POSIX execve.
@@ -449,6 +465,15 @@ COMMANDS = [
     "exec /bin/big",
     "cat /proc/meminfo",
     "rm /mm.txt",
+    # The sentences of the files. `mkdir` takes every word of the line, a name
+    # that no volume of this system holds is `file name too long` (MicroFS
+    # keeps 32 bytes) and not the code of the volume, and `df` names the unit
+    # of its blocks - a kilobyte here and not "0 KB" somewhere.
+    "mkdir /tmp/m1 /tmp/m2",
+    "stat /tmp/m2",
+    "mkdir /aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "write /tmp/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa x",
+    "df /",
 ]
 
 # A directory wider than the table of 64 entries the shell used to keep: the
@@ -1344,6 +1369,15 @@ def check(output: str) -> list:
         "kill of a pid that is not there is reported",
         "kill: 9999: no such process" in answer("kill 9999"),
     )
+    # The console is the only shell: the signal to it is refused, and the
+    # machine is still there for the next line of the list (which it proves by
+    # answering it).
+    console = answer("kill -TERM 3")
+    expect(
+        "kill of the console itself is refused with a sentence",
+        "this is the console itself" in console and "exited with code" not in console,
+        console.strip(),
+    )
     # The version is whatever the build says: the shape is checked, so a
     # release does not break the smoke test.
     expect(
@@ -1398,6 +1432,42 @@ def check(output: str) -> list:
         answer('path ""'),
     )
     expect("the tree is still there", "etc" in answer("ls /"), answer("ls /"))
+
+    # --- the sentences of the files and the numbers of the volume
+    # `mkdir` takes one directory per word, as the program of /bin does: a
+    # second word used to be dropped in silence.
+    expect(
+        "mkdir makes a directory for every word of the line",
+        "type: directory" in answer("stat /tmp/m2"),
+        answer("stat /tmp/m2"),
+    )
+    # A name longer than MicroFS keeps (32 bytes) is the limit named as a
+    # limit, and not the code the volume uses for it.
+    long_mkdir = answer("mkdir /aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    expect(
+        "a name longer than the volume holds is `file name too long`",
+        "file name too long" in long_mkdir and "error" not in long_mkdir,
+        long_mkdir.strip(),
+    )
+    long_write = answer("write /tmp/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa x")
+    expect(
+        "a file name too long is `file name too long` for write",
+        "file name too long" in long_write,
+        long_write.strip(),
+    )
+    # The block of the volume is its own unit: a kilobyte on MicroFS, and the
+    # line says which one (a FAT32 volume says "512 bytes each").
+    root_df = answer("df /")
+    expect(
+        "df names the unit of its blocks",
+        re.search(r"\(1 KB each\)", root_df) is not None and "0 KB each" not in root_df,
+        root_df.strip(),
+    )
+    expect(
+        "df counts the inodes of a volume that keeps them",
+        re.search(r"inodes: \d+ of \d+ free", root_df) is not None,
+        root_df.strip(),
+    )
 
     # --- the tools of sbase (third_party/sbase) are the commands of /bin
     #
@@ -2637,6 +2707,46 @@ def check(output: str) -> list:
         deep,
     )
 
+    # The maximum of the documentation: fifteen stages of programs, sixteen of
+    # the commands of the shell, and a chain of sixteen programs refused with
+    # the arithmetic of the task table before anything is started.
+    longest = answer(
+        "cat /etc/setting | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | "
+        "cat | wc -l"
+    )
+    expect(
+        "a pipeline of fifteen stages of programs carries the bytes to its end",
+        re.search(r"(?m)^3\r?$", longest) is not None,
+        longest,
+    )
+    expect(
+        "the last stage of fifteen writes its answer (the output is descriptor 1)",
+        "bad file descriptor" not in longest and "cannot start stage" not in longest,
+        longest,
+    )
+    sixteen = answer(
+        "echo | echo | echo | echo | echo | echo | echo | echo | echo | echo | echo | echo | echo | "
+        "echo | echo | echo sixteen"
+    )
+    expect(
+        "a pipeline of sixteen stages of the shell runs",
+        "sixteen" in sixteen and "too many" not in sixteen.replace("too many words", ""),
+        sixteen,
+    )
+    refused = answer(
+        "cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat"
+    )
+    expect(
+        "a chain of sixteen programs is refused with the arithmetic of the task table",
+        "16 stages need 32 task slots and 30 of 32 are free" in refused,
+        refused.strip(),
+    )
+    expect(
+        "the chain that was refused started no stage",
+        "task: created 'pipe" not in refused,
+        refused.strip(),
+    )
+
     # --- xargs -P: the children of a program
     parallel = answer("echo one two three four five six | xargs -P 4 -n 1 echo done")
     expect(
@@ -2962,8 +3072,12 @@ USERS_SCRIPT = [
     ("password: ", "guest"),
     ("password: ", "guest"),
     (PROMPT, "id"),
-    # The prompt after the last command: its answer is complete when it is
-    # there, and the script has nothing to type for it.
+    # A login with no name: the empty answer is a name that is needed, and not
+    # a name that does not fit, and nothing else follows it.
+    (PROMPT, "login"),
+    ("login: ", "<enter>"),
+    ("login: a name is needed", ""),
+    (PROMPT, "id"),
     (PROMPT, ""),
 ]
 
@@ -2979,7 +3093,8 @@ def run_console(loader: str, kernel: str, image: str, timeout: float, steps: lis
     `steps` is a list of (text to wait for, line to type): the line goes out
     when its text appears, and the search for the next text starts after the
     one that was found, so a prompt that comes twice is answered twice. A step
-    with an empty line only waits (the sentence of a refusal).
+    with an empty line only waits (the sentence of a refusal), and the word
+    `<enter>` types the empty line a prompt waits for.
     """
     process = subprocess.Popen(
         machine_argv(loader, kernel, image),
@@ -3014,7 +3129,12 @@ def run_console(loader: str, kernel: str, image: str, timeout: float, steps: lis
                 if index < 0:
                     break
                 cursor = index + len(steps[step][0])
-                if steps[step][1] != "":
+                if steps[step][1] == "<enter>":
+                    # The empty line a prompt waits for: `login` with no name,
+                    # a question answered by Enter.
+                    process.stdin.write(b"\n")
+                    process.stdin.flush()
+                elif steps[step][1] != "":
                     process.stdin.write((steps[step][1] + "\n").encode("ascii"))
                     process.stdin.flush()
                 step += 1
@@ -3169,6 +3289,21 @@ def users_checks(loader: str, kernel: str, image: str, timeout: float) -> list:
         "a refused login leaves the shell as it was",
         "uid=0(root)" in answer("id", 6),
         answer("id", 6),
+    )
+
+    # A login with no name: one sentence, which asks for a name.
+    empty = answer("login")
+    expect(
+        "login with no name asks for a name and says nothing else",
+        "login: a name is needed" in empty
+        and "does not fit" not in empty
+        and "no such account" not in empty,
+        empty.strip(),
+    )
+    expect(
+        "a login with no name changes nothing",
+        "uid=0(root)" in answer("id", 7),
+        answer("id", 7),
     )
 
     return checks
