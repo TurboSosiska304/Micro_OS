@@ -195,8 +195,11 @@ written when the project was an operating system for one board; the numbers
       (ADR 0019): the superblock, the group descriptors, the inode table,
       the direct blocks and the single, double and triple indirection, the
       directories with names up to 255 bytes, and `stat`/`statx` with the
-      mode, the uid and the moments of the inode; read-only, so a write, a
-      new name, a mode or an owner is `KERR_NOTSUP`
+      mode, the uid and the moments of the inode; and the write side of 1.4
+      (ADR 0029): the bitmaps of a group, `create`, `write` through the
+      direct blocks and one table, `truncate`, `unlink`, `mkdir`, `chmod`,
+      `chown`, and `ext2_check` for the counters and the chain of the
+      directories
 * [x] `/etc/fstab` and the `mount` command over the type registry: the boot
       mounts the table after the root, `mount <device> <point> <type>` and
       `umount <point>` work at the console, and a line that does not mount is

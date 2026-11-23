@@ -41,11 +41,11 @@ set(SETTINGS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/settings")
 # partition turns it on and mounts the partition with vfs_mount_type().
 option(MICRO_OS_FS_FAT32 "FAT12/16/32, read and written" OFF)
 
-# The ext2 reader of the machine (ADR 0019). Off by default for the same
+# The ext2 filesystem of the machine (ADR 0019). Off by default for the same
 # reason: the disk of the smoke tests is one MicroFS volume. A machine with
 # an ext2 partition turns it on and mounts the partition with the type the
 # boot registers.
-option(MICRO_OS_FS_EXT2 "ext2, read-only" OFF)
+option(MICRO_OS_FS_EXT2 "ext2, read and written" OFF)
 
 # The optional features of the image (ADR 0010): the PSRAM pool of the
 # allocator is off, the MOX1 runtime is on (the port can enter a program), and
@@ -169,6 +169,8 @@ if(MICRO_OS_FS_EXT2)
     set(EXT2_SOURCES
         "${EXT2_DIR}/src/ext2_core.c"
         "${EXT2_DIR}/src/ext2_dir.c"
+        "${EXT2_DIR}/src/ext2_write.c"
+        "${EXT2_DIR}/src/ext2_check.c"
         "${EXT2_DIR}/src/ext2_vfs.c"
     )
 endif()

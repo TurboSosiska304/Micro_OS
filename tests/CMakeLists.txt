@@ -324,14 +324,16 @@ if(NOT ESP_PLATFORM)
         )
     endif()
 
-    # The ext2 reader is a reader and never a writer: the host build links it
-    # by default, and a build that turns the option off (make test-minimal)
-    # still compiles the sources into the test binary, so the reader is
-    # covered whatever an image links (ADR 0019).
+    # The ext2 filesystem is linked by the host build by default, and a
+    # build that turns the option off (make test-minimal) still compiles the
+    # sources into the test binary, so every path of it is covered whatever
+    # an image links (ADR 0019).
     if(NOT MICRO_OS_FS_EXT2)
         target_sources(microos_tests PRIVATE
             "${CMAKE_SOURCE_DIR}/components/fs_ext2/src/ext2_core.c"
             "${CMAKE_SOURCE_DIR}/components/fs_ext2/src/ext2_dir.c"
+            "${CMAKE_SOURCE_DIR}/components/fs_ext2/src/ext2_write.c"
+            "${CMAKE_SOURCE_DIR}/components/fs_ext2/src/ext2_check.c"
             "${CMAKE_SOURCE_DIR}/components/fs_ext2/src/ext2_vfs.c"
         )
     endif()
