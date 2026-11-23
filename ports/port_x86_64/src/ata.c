@@ -174,6 +174,10 @@ void port_x86_64_irq_ata(k_u64_t *frame);
  */
 #define ATA_CACHE_SECTORS 512u
 
+/* The run a read ahead of a file asks of the drive: 128 sectors of the cache,
+ * a quarter of it, which is one command of the bus master of 128 KiB. */
+#define ATA_READ_AHEAD 128u
+
 /* The sectors of the medium that one block of the filesystem covers. */
 #define ATA_MEDIUM_SECTOR 512u
 #define ATA_SECTORS_PER_BLOCK (MFS_BLOCK_SIZE / ATA_MEDIUM_SECTOR)
@@ -879,9 +883,10 @@ static const struct k_blockdev_ops g_ata_ops = {
 static struct k_blockdev g_ata_device = {
     .name = "ata0",
     .sector_size = MFS_BLOCK_SIZE,
-    .sectors = 0, /* the size of the drive, read by the identify below */
+    .sectors = 0,   /* the size of the drive, read by the identify below */
     .ops = &g_ata_ops,
     .ctx = NULL,
+    .read_ahead = ATA_READ_AHEAD,
 };
 
 /*

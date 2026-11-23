@@ -98,6 +98,10 @@ _Static_assert(MFS_BLOCK_SIZE % VBLK_MEDIUM_SECTOR == 0,
  */
 #define VBLK_CACHE_SECTORS 512u
 
+/* The run a read ahead of a file asks of the device: 128 sectors of the cache,
+ * a command of the queue of 128 KiB, which is a hundred descriptors of it. */
+#define VBLK_READ_AHEAD 128u
+
 /*
  * The number of requests the driver keeps in flight at once. The queue of the
  * device is 128 or 256 entries, and a request is a header, the descriptors of
@@ -659,6 +663,7 @@ static struct k_blockdev g_vblk_device = {
     .sectors = 0, /* the size of the medium, read by the configuration below */
     .ops = &g_vblk_ops,
     .ctx = NULL,
+    .read_ahead = VBLK_READ_AHEAD,
 };
 
 /* --- the boot ------------------------------------------------------------- */

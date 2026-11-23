@@ -75,6 +75,16 @@ struct k_blockdev_ops {
  * between two sectors of a file. Sixteen - the whole cache - was measured
  * and is worse: the run evicts the metadata that the next block of the file
  * needs, and the read of the volume doubles.
+ *
+ * The number is the default of a device that says nothing, and it was
+ * measured on a cache of sixteen boxes. A medium whose cache is a run of half
+ * a megabyte and whose command moves a run - the two disks of the x86-64 port,
+ * which set struct k_blockdev::read_ahead - wants a run of the cache and not
+ * eight sectors: the read of a file of 128 MiB of the volume of 5 GiB went
+ * from 33.8 to 40.8 MiB/s when the disks asked for 128, and the read of a file
+ * of 16 MiB out of the cache of the host from 134 to 286 MiB/s. A run bigger
+ * than the cache of the device is not a run: the read ahead is clamped to the
+ * boxes of the cache.
  */
 #define K_BLOCKDEV_READ_AHEAD 8
 
@@ -84,6 +94,16 @@ struct k_blockdev {
     k_u32_t sectors;
     const struct k_blockdev_ops *ops;
     void *ctx; /* the private data of the device, handed to every call */
+
+    /*
+     * The sectors a read ahead of a file asks of the medium (K_BLOCKDEV_READ_AHEAD
+     * when the device says nothing). A device whose command moves a run - a
+     * disk behind a bus master, a card - names a run of its own here, and the
+     * block layer clamps it to the boxes of the cache of the device. It is a
+     * hint and not a promise: the read ahead happens when a read continues the
+     * stream of the last one.
+     */
+    k_u32_t read_ahead;
 };
 
 /*

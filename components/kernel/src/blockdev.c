@@ -607,8 +607,18 @@ static int cache_read(void *ctx, k_u32_t sector, void *buf, k_size_t count)
 
             if ((cache->have_stream && want == cache->stream_next) ||
                 (cache->have_jump && want == cache->jump_next)) {
-                if (want + K_BLOCKDEV_READ_AHEAD <= dev->sectors) {
-                    ahead = K_BLOCKDEV_READ_AHEAD;
+                k_u32_t run = dev->read_ahead != 0u ? dev->read_ahead
+                                                    : (k_u32_t)K_BLOCKDEV_READ_AHEAD;
+
+                /* The staging buffer of the cache is the largest run it can
+                 * read: a device that asks for more than the boxes it gave
+                 * the cache is asking for a buffer that is not there. */
+                if (run > cache->capacity) {
+                    run = (k_u32_t)cache->capacity;
+                }
+
+                if (want + run <= dev->sectors) {
+                    ahead = run;
                 }
             }
 
