@@ -392,7 +392,7 @@ function(add_program_image name entry)
 endfunction()
 
 add_program_image(hello hello_main)
-add_program_image(bench bench_main)
+add_program_image(door bench_main)
 add_program_image(crash crash_main)
 add_program_image(fork fork_main)
 add_program_image(badptr badptr_main)
@@ -995,13 +995,9 @@ add_libc_program(bench
     DEFINES ULIBC_HEAP_SIZE=65536u
 )
 
-# The two doors of a system call (ADR 0035): `int $0x80` and `syscall`, in one
-# program, so the two are measured by the same compiler on the same machine.
-add_libc_program(door
-    MAIN "${PROGRAM_DIR}/door.c"
-    SOURCES ${SBASE_LIBC_SOURCES}
-    DEFINES ULIBC_HEAP_SIZE=65536u
-)
+# The two doors of a system call (ADR 0035) are the program `door`, built by
+# the rule of the port above and not by the library: a measurement of `int`
+# and `syscall` cannot be built on one of the two doors alone.
 
 function(add_sbase_program tool heap)
     add_libc_program(${tool}
