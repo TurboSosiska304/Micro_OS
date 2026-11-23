@@ -54,6 +54,8 @@ static void run_tests(void *arg)
     test_sysfs();
     test_ui();
     test_ui_windows();
+    test_ui_wm();
+    test_fb_ops();
     test_input_debounce();
     test_battery_soc();
     test_fb_draw();
