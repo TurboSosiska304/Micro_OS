@@ -241,7 +241,15 @@ static int cmd_cd(int argc, char **argv)
         return KSHELL_ERROR;
     }
 
-    task_set_cwd(self, path);
+    /*
+     * A cwd that does not fit is refused and not cut: a name cut in the
+     * middle is another directory, and a shell that walks it removes the
+     * files of somebody else (the cleanroom of 1.6).
+     */
+    if (!task_set_cwd(self, path)) {
+        kshell_printf("cd: %s: the name is too long\n", path);
+        return KSHELL_ERROR;
+    }
 
     return KSHELL_OK;
 }

@@ -396,6 +396,7 @@ static const struct mount *resolve(const char *path, const char **relative)
 
 /* The bits of one triad of a mode: read, write, execute. */
 #define VFS_MODE_EXEC 01u
+#define VFS_MODE_WRITE 02u
 #define VFS_MODE_TRIAD 07u
 
 /*
@@ -430,6 +431,68 @@ static k_u32_t caller_bits(const struct vfs_stat *info)
     }
 
     return (info->owner == uid) ? ((info->mode >> 6) & 7u) : (info->mode & 7u);
+}
+
+/*
+ * The write bit of the directory an entry lives in.
+ *
+ * Creating, removing and renaming an entry is an act on the directory and
+ * not on the entry: POSIX asks for the write bit of the parent, and a
+ * system that skipped it let a task of uid 7 delete /etc/passwd and write
+ * its own /etc/shadow - the account bypass the cleanroom of 1.6 found.
+ * A filesystem that keeps no modes answers a zeroed one, and a zero is not
+ * "nobody may touch it": that is the rule of this file for the virtual
+ * filesystems, and this check keeps it.
+ */
+static int dir_write_check(const char *path)
+{
+    char parent[VFS_PATH_MAX];
+    struct vfs_stat info;
+    const char *slash;
+    k_size_t len;
+    int rc;
+
+    if (caller_uid() == VFS_UID || path == NULL) {
+        return 0;
+    }
+
+    /* The parent of "/a/b" is "/a", of "/a" is "/", of "a" is ".". */
+    slash = NULL;
+    for (len = 0; path[len] != '\0' && len < sizeof(parent); len++) {
+        if (path[len] == '/') {
+            slash = &path[len];
+        }
+    }
+
+    if (slash == NULL) {
+        (void)copy_str(parent, sizeof(parent), ".");
+    } else if (slash == path) {
+        (void)copy_str(parent, sizeof(parent), "/");
+    } else {
+        k_size_t n = (k_size_t)(slash - path);
+
+        if (n >= sizeof(parent)) {
+            return KERR_NAMETOOLONG;
+        }
+        memcpy(parent, path, n);
+        parent[n] = '\0';
+    }
+
+    /*
+     * A name the VFS cannot resolve on its own - a relative one, which the
+     * caller of the library has already walked - is not a refusal here: the
+     * door that follows answers the real error of the name.
+     */
+    rc = stat_raw(parent, &info);
+    if (rc != 0) {
+        return 0;
+    }
+
+    if (info.mode != 0u && (caller_bits(&info) & VFS_MODE_WRITE) == 0u) {
+        return KERR_PERM;
+    }
+
+    return 0;
 }
 
 /*
@@ -701,6 +764,24 @@ int vfs_open(const char *path, int flags, struct vfs_file *out, void *priv)
 
         if (stat_raw(path, &existing) == 0) {
             return KERR_EXIST;
+        }
+    }
+
+    /*
+     * A name that the open is about to make is an entry of a directory, and
+     * the entry is the directory's: without the write bit of it, a task of
+     * uid 7 made its own file in /etc and then its own /etc/shadow. A file
+     * that is already there is not a create: its own bits decide, and they
+     * are checked below by the filesystem.
+     */
+    if ((flags & VFS_O_CREAT) != 0) {
+        struct vfs_stat existing;
+
+        if (stat_raw(path, &existing) != 0) {
+            rc = dir_write_check(path);
+            if (rc != 0) {
+                return rc;
+            }
         }
     }
 
@@ -1002,6 +1083,11 @@ int vfs_mkdir(const char *path)
         return rc;
     }
 
+    rc = dir_write_check(path);
+    if (rc != 0) {
+        return rc;
+    }
+
     if (m->ops->mkdir == NULL) {
         return KERR_NOTSUP;
     }
@@ -1081,6 +1167,11 @@ int vfs_unlink(const char *path)
         return rc;
     }
 
+    rc = dir_write_check(path);
+    if (rc != 0) {
+        return rc;
+    }
+
     if (m->ops->unlink == NULL) {
         return KERR_NOTSUP;
     }
@@ -1106,6 +1197,11 @@ int vfs_rmdir(const char *path)
     }
 
     rc = path_search_check(path);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = dir_write_check(path);
     if (rc != 0) {
         return rc;
     }
@@ -1139,6 +1235,16 @@ int vfs_rename(const char *from, const char *to)
     }
 
     rc = path_search_check(from);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = dir_write_check(from);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = dir_write_check(to);
     if (rc != 0) {
         return rc;
     }

@@ -292,6 +292,93 @@ static void test_uid_permissions(void)
 }
 
 /* The file a test of a missing object asks for is not there. */
+static void test_directory_bits(void)
+{
+    struct task *self = task_self();
+    char byte = 'x';
+    int fd;
+
+    ktest_begin("users: a directory of another uid is not a place to write");
+
+    setup();
+
+    /* Root makes a directory of its own with a file in it. */
+    KT_CHECK_INT_EQ(ksys_mkdir("/private"), 0);
+    fd = ksys_open("/private/secret", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_write(fd, &byte, 1), 1);
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+    KT_CHECK_INT_EQ(ksys_chmod("/private", 0755), 0);
+
+    /*
+     * The bit of an entry is not the permission to change the directory it
+     * lives in: a task of uid 7 cannot remove the file, cannot make another
+     * one beside it, and cannot take the file away under another name. The
+     * cleanroom of 1.6 deleted /etc/passwd this way.
+     */
+    task_set_uid(self, 7);
+
+    KT_CHECK_INT_EQ(ksys_unlink("/private/secret"), KERR_PERM);
+    fd = ksys_open("/private/other", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    KT_CHECK_INT_EQ(fd, KERR_PERM);
+    if (fd >= 0) {
+        (void)ksys_close(fd);
+    }
+    KT_CHECK_INT_EQ(ksys_mkdir("/private/sub"), KERR_PERM);
+    KT_CHECK_INT_EQ(ksys_rename("/private/secret", "/private/moved"), KERR_PERM);
+    KT_CHECK_INT_EQ(ksys_rmdir("/private"), KERR_PERM);
+
+    /* The file is still there, with the byte root wrote. */
+    task_set_uid(self, 0);
+    fd = ksys_open("/private/secret", KSYS_O_RDONLY);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        char got = 0;
+
+        KT_CHECK_INT_EQ(ksys_read(fd, &got, 1), 1);
+        KT_CHECK(got == 'x');
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    /* A directory that gives the write bit to the others is theirs. */
+    KT_CHECK_INT_EQ(ksys_chmod("/private", 0777), 0);
+    task_set_uid(self, 7);
+    fd = ksys_open("/private/other", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+    KT_CHECK_INT_EQ(ksys_unlink("/private/other"), 0);
+
+    task_set_uid(self, 0);
+
+    teardown();
+}
+
+static void test_cwd_fit(void)
+{
+    struct task *self = task_self();
+
+    ktest_begin("users: a directory that does not fit is refused, not cut");
+
+    /*
+     * A cwd cut at 31 characters is another directory, and a shell that
+     * walks it removes the files of somebody else: the second defect of the
+     * cleanroom of 1.6. The shell keeps the directory it had.
+     */
+    KT_CHECK(task_set_cwd(self, "/short"));
+    KT_CHECK_STR_EQ(task_get_cwd(self), "/short");
+
+    KT_CHECK(!task_set_cwd(
+        self, "/a/very/long/directory/name/that/does/not/fit/in/the/cwd/of/a/task/at/all/"
+              "and/more/segments/beyond/the/length/of/the/field/that/keeps/it"));
+    KT_CHECK_STR_EQ(task_get_cwd(self), "/short");
+
+    KT_CHECK(task_set_cwd(self, "/"));
+}
+
 static void test_privileged_acts(void)
 {
     struct task *self = task_self();
@@ -665,6 +752,8 @@ void test_users(void)
 {
     test_creds_inherit();
     test_uid_permissions();
+    test_directory_bits();
+    test_cwd_fit();
     test_privileged_acts();
     test_accounts_records();
     test_accounts_file();

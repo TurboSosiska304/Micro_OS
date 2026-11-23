@@ -16,7 +16,7 @@
 #define TASK_PRIO_MAX 15
 #define TASK_PRIO_DEFAULT 5
 #define TASK_MAX_TASKS 32
-#define TASK_CWD_MAX 32
+#define TASK_CWD_MAX 128
 
 /* The dispositions a task keeps: the signals of kernel/signal.h and room for
  * the next few. The table is small on purpose, the memory of the board is. */
@@ -300,7 +300,9 @@ void task_memory_reset(void);
 bool task_cpu_tick(struct task *t);
 
 /* Working directory of a task. */
-void task_set_cwd(struct task *t, const char *dir);
+/* False when the directory does not fit: a cwd cut in the middle names a
+ * directory that is not the one the caller asked for. */
+bool task_set_cwd(struct task *t, const char *dir);
 const char *task_get_cwd(struct task *t);
 
 /*

@@ -615,7 +615,7 @@ int users_apply(const struct user_account *account, bool home)
         struct vfs_stat info;
 
         if (vfs_stat(account->home, &info) == 0 && info.type == 2) {
-            task_set_cwd(self, account->home);
+            (void)task_set_cwd(self, account->home); /* a home that does not fit keeps the cwd */
         } else {
             kwarn("users: the home %s of %s is not a directory", account->home, account->name);
         }

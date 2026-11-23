@@ -363,18 +363,30 @@ void task_memory_uncharge(k_u32_t pid, k_size_t size)
     k_port_exit_critical();
 }
 
-void task_set_cwd(struct task *t, const char *dir)
+bool task_set_cwd(struct task *t, const char *dir)
 {
     if (t == NULL) {
-        return;
+        return false;
     }
 
     if (dir == NULL) {
         t->cwd[0] = '\0';
-        return;
+        return true;
     }
 
-    copy_bounded(t->cwd, TASK_CWD_MAX, dir);
+    /*
+     * A directory that does not fit is refused and not cut: a cwd of 31
+     * characters of a name of 40 is a directory of somebody else, and the
+     * shell that walks it removes the wrong file (the cleanroom of 1.6).
+     * The caller keeps the directory it had.
+     */
+    if (strlen(dir) >= TASK_CWD_MAX) {
+        return false;
+    }
+
+    copy_bounded(t->cwd, sizeof(t->cwd), dir);
+
+    return true;
 }
 
 const char *task_get_cwd(struct task *t)
