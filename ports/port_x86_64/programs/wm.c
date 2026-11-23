@@ -1385,12 +1385,17 @@ int main(int argc, char *const argv[], char *const envp[])
 
     while (g_running) {
         struct pollfd entries[WM_APPS];
+        int indices[WM_APPS];
         int count = 0;
         int ready;
         struct input_event event;
 
         /* The requests of the windows: one wait for all of them, so a silent
-         * desktop costs one call and not one a window. */
+         * desktop costs one call and not one a window. The index of a window
+         * travels with the entry of the poll: the handler of one window may
+         * close another (a client that leaves while the loop is in the list),
+         * and a slot counted again over `used` would then be the entry of the
+         * wrong window. */
         for (int index = 0; index < WM_APPS; index++) {
             if (!g_apps[index].used) {
                 continue;
@@ -1399,24 +1404,17 @@ int main(int argc, char *const argv[], char *const envp[])
             entries[count].fd = g_apps[index].requests;
             entries[count].events = KSYS_POLLIN;
             entries[count].revents = 0;
+            indices[count] = index;
             count++;
         }
 
         ready = poll(entries, (nfds_t)count, 8);
 
         if (ready > 0) {
-            int slot = 0;
-
-            for (int index = 0; index < WM_APPS; index++) {
-                if (!g_apps[index].used) {
-                    continue;
-                }
-
+            for (int slot = 0; slot < count; slot++) {
                 if (entries[slot].revents != 0) {
-                    app_requests(index);
+                    app_requests(indices[slot]);
                 }
-
-                slot++;
             }
         }
 
