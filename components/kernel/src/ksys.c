@@ -207,6 +207,7 @@ static k_u32_t caller_bits(const struct vfs_stat *info)
  * root covers the read and the write, not the mark of a program, exactly as
  * POSIX says it.
  */
+#if KERNEL_EXEC
 static bool exec_bits_allow(const struct vfs_stat *info)
 {
     if (caller_uid() == KSYS_UID) {
@@ -215,6 +216,7 @@ static bool exec_bits_allow(const struct vfs_stat *info)
 
     return (caller_bits(info) & KSYS_MODE_EXEC) != 0u;
 }
+#endif /* KERNEL_EXEC */
 
 /*
  * The access of an open against the mode of an object. A filesystem that
