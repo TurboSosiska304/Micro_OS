@@ -256,12 +256,19 @@ bugs:
   and the loader turns the SSE and x87 units on for ring 3; the scheduler
   saves neither, so one such program runs at a time (`docs/debts.md`).
 
-`fork` is real on x86-64 (copy on write), and its child of the port comes
-back with the pid of the parent's answer in RAX and a stack page that the
-parent can still write; `src/unistd_ext.c` gives the child its zero (the pid
-of the task is the answer) and lets the child leave the frame of the call
-before the parent uses the stack again. `docs/debts.md` records the two
-halves of the port that would make the workaround unnecessary.
+`fork` is real on x86-64 (copy on write): the child returns from the call with
+0, the parent with the pid, `execve` of a program replaces the image of the
+caller and `waitpid` reaps the child and hands back its status. `fork()` of
+the library is the call itself - the port zeroes the answer of the child and
+flushes the TLB of the pages it makes read-only, so no workaround is needed.
+
+The status of `waitpid` is the code the program exited with (0 to 255), and a
+task taken down by a signal ends with `128 + the signal`. That is not the
+16-bit word of POSIX where the code and the signal sit in two fields, so
+`<sys/wait.h>` reads it in those two ranges: 0 to 127 is `WIFEXITED` with
+`WEXITSTATUS` the code, and 128 to 255 is `WIFSIGNALED` with `WTERMSIG` the
+signal. A program that calls `exit(200)` is therefore reported as the signal
+72; a code above 127 is the price of a status of one byte.
 
 ## The limits
 

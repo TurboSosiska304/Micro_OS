@@ -100,7 +100,10 @@ written when the project was an operating system for one board; the numbers
 * [x] The shell pipelines and redirections: `cmd | cmd`, `>`/`>>`/`<`/`2>`,
       a task per stage over `task_fork_shared()`, a program that inherits
       the three descriptors of its stage, and Ctrl+C for every stage of the
-      job (ADR 0017; `test_kshell_pipe.c`, `make x86-smoke`)
+      job (ADR 0017; `test_kshell_pipe.c`, `make x86-smoke`). The stages are
+      no longer three: the parser holds sixteen, the pipes are made one
+      boundary at a time as the stages are forked, and `make x86-smoke`
+      checks a line of ten stages.
 
 ## K5 - A processor with an MMU (in progress)
 
@@ -115,7 +118,11 @@ written when the project was an operating system for one board; the numbers
       ring 3 is printed as `the program faulted: vector N at 0x...`, the
       program is taken down and the shell stays alive
 * [x] `exit` of a program ends the task it runs in, and the caller of
-      `execve` waits for it; `execve` answers 0 (contract 1.5)
+      `execve` waits for it; `execve` answers 0 (contract 1.5). Since M1 of
+      the 1.5 plan a program's `execve` replaces the image of the caller
+      instead (POSIX), the child of a `fork` is a real process with its own
+      status, and `waitpid(-1)` waits for any child; the caller without an
+      address space (the shell) keeps the task-and-wait shape.
 * [x] An errno per task: the TLS block is copied per task and `IA32_FS_BASE`
       follows the task and the privilege boundary
 * [x] Page tables per *task* and copy on write: a program is a task with its

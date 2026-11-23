@@ -108,7 +108,7 @@ chose.
 | 22 | `realloc` | `ptr, size` | the address of the memory, 0 when there is none |
 | 23 | `chmod` | `path, mode` | 0, or an error |
 | 24 | `chown` | `path, owner` | 0, or an error |
-| 25 | `execve` | `path, argv, envp` | never returns; 0 when the program returns; or an error |
+| 25 | `execve` | `path, argv, envp` | the caller becomes the program and never returns; 0 when a program started for a kernel task returns; or an error |
 | 26 | `statx` | `path, buf` | 0, or an error |
 | 27 | `pipe` | `fds` | 0 and two descriptors, or an error |
 | 28 | `dup2` | `oldfd, newfd` | `newfd`, or an error |
@@ -345,13 +345,19 @@ this system, `ENOEXEC` (`KERR_NOEXEC`, POSIX 8) for an image of another
 machine, `ENOMEM` for an image the port could not place in its window, and
 `ENOSYS` for a machine without a window of programs.
 
-A successful call **does not return** when the program never comes back: the
-program is the caller from then on. A program that ends (by `exit`, or by a
-fault that the port recovers) ends the call with 0 - the state of a machine
-with no process to exit into, where the kernel has to notice that the program
-has finished - and the status it ended with (the low byte of the status, 0 to
-255) is the answer of the run, not of the call (see "The entry into the
-kernel").
+A successful call **does not return** when a program of ring 3 makes it: the
+image replaces the memory of the caller and the entry of the program is the
+return of the call (the port rewrites the frame of the system call and the
+`iretq` of the stub goes to the new entry). The task keeps its pid, its
+parent, its descriptors and its directory - POSIX - so the status the program
+ends with is the answer of the `waitpid` of its parent, not of this call.
+
+A caller with no address space is a task of the kernel - the shell - and there
+is nothing to replace: the port starts the program as a task of its own and
+the call returns when the program has ended, with 0 and not the status of the
+program (the status belongs to `waitpid` of that task, which is the child of
+the caller). This is the compatibility shape of a machine whose shell is not a
+program; the board keeps it for every caller.
 
 The vector of the arguments is the memory of the program. It is copied word
 by word through `copy_from_user()`; on a machine with paging a word or a byte
@@ -401,15 +407,26 @@ copies share the frames read-only, and the first write of either side faults
 and gets a page of its own. The child returns from the same call with 0 and
 the parent with the pid, as POSIX promises, and `waitpid()` sees the child
 the usual way. The port does the copy (`k_port_fork_copy()`); the kernel
-still decides the pid, the parent and the wait.
+still decides the pid, the parent and the wait. The clone flushes the TLB
+entry of every page it makes read-only, and the parent's first write after the
+fork is the write that copies it, not a write into the frame the child is
+about to use.
+
+`execve()` from a program is the other half of the pair: the image replaces
+the caller, not a task beside it, and the descriptors stay open (POSIX). A
+child of a `fork` that calls `execvp()` keeps its pid and becomes the new
+program in place, and the parent reaps it with `waitpid()` and gets the status
+of that program.
 
 `waitpid()` waits for a child, the status is the code the child finished
-with. The number 0 or -1 means "any child". A call with no child to wait for
-is `ECHILD` (`KERR_CHILD`, the number 10 of POSIX), whether it was ready to
-wait or not, and the same answer ends the waiting once the internal limit of
-five seconds passes without a finished child. A number that names no child of
-the caller is `ECHILD` too; a pid or a flag that is not of the contract is
-`EINVAL` before that.
+with. The number 0 or -1 means "any child": the pid travels in an unsigned
+register, where -1 is larger than every pid, so the scan compares the signed
+value and a parent that asks for any child finds the one it has. A call with
+no child to wait for is `ECHILD` (`KERR_CHILD`, the number 10 of POSIX),
+whether it was ready to wait or not, and the same answer ends the waiting once
+the internal limit of five seconds passes without a finished child. A number
+that names no child of the caller is `ECHILD` too; a pid or a flag that is not
+of the contract is `EINVAL` before that.
 
 ## The signals
 

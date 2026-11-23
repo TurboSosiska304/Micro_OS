@@ -140,6 +140,7 @@ the mode of a program (`0755`), and no boot creates one:
 | `/bin/hello` | the door: `write`, arguments, environment, pid, clock, `sleep`, `exit`; it prints `cpl 3` |
 | `/bin/crash` | a fault of ring 3 is reported and the shell survives |
 | `/bin/fork` | `fork()` with copy on write: the child gets 0, the parent the pid |
+| `/bin/procs` | the POSIX pair of a program: a child computes and returns its status, a double fork, and an `execve` that replaces the child that called it |
 | `/bin/badptr` | a pointer outside the window is `EFAULT`, not a fault of ring 0 |
 | `/bin/signals` | a handler, `SIGTERM` ending a child, a wait cut by `SIGINT`, `SIG_IGN`, and the errors of `kill` |
 | `/bin/nx` | the protection of the pages: a fetch of its data, a write to its text and a call that hands its text to the kernel, each taken down, and a parent still alive |
@@ -153,12 +154,12 @@ the mode of a program (`0755`), and no boot creates one:
 | `/bin/wc` | sbase: the lines, words and bytes of a source (`-l`, `-w`, `-c`) or of descriptor 0 |
 | `/bin/sort` | sbase: the order of the lines (with `-n`) |
 | `/bin/find` | sbase: a walk of a tree with `-name` |
-| `/bin/xargs` | sbase: a command over the words of a pipe |
+| `/bin/xargs` | sbase: a command over the words of a pipe; every command is a child of its own and `-P N` keeps N of them running |
 | `/bin/sed` | sbase: a substitution, line by line |
 | `/bin/mkdir` | a directory through `mkdir`, one for every word of the line |
 | `/bin/pwd` | the directory of the task through `getcwd` |
 | `/bin/rm` | a name through `unlink`; `-r` walks a directory with `readdir` |
-| `/bin/spawn` | `execve` from a program, with an environment of its own |
+| `/bin/spawn` | `execve` from a program, with an environment of its own; the image replaces the caller |
 | `/bin/zcat` | a `.gz` of the VFS inflated by zlib 1.3.1 and written to the console or a file |
 | `/bin/lua` | the interpreter of Lua 5.4.7: `-e`, the script `/etc/hello.lua`, `io` and `os.time` |
 | `/bin/pcre2grep` | a regular expression of PCRE2 over a file or a stream |
@@ -570,8 +571,10 @@ plan to pretend otherwise.
   library: the allocation is a fixed arena of the program and the streams are
   a descriptor, not a buffer. `float` and `double` are those of an image that
   asks for them (`ULIBC_WITH_FLOAT`, the port of Lua): it is built without
-  `-mgeneral-regs-only`, links `math.c`, `setjmp.c` and `format_float.c`, and
-  runs one at a time because the scheduler saves no XMM or x87 state.
+  `-mgeneral-regs-only`, links `math.c`, `setjmp.c` and `format_float.c`. The
+  scheduler saves no XMM or x87 state, so two of them may not compute at once:
+  a program started with `fork` + `execve` runs beside its parent, and `-P`
+  of xargs multiplies that (`docs/debts.md`, K9).
 * **No image larger than 8 MiB.** `execve` reads the file in pieces of
   `KSYS_MAX_IO` (64 KiB) into one block of the allocator, up to
   `K_EXEC_MAX_IMAGE` (8 MiB); a larger file is `E2BIG` before a byte of it is

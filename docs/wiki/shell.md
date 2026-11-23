@@ -85,9 +85,11 @@ What the line does **not** do:
 * no globs or variables: `*` is a word and not a pattern, `$x` is the two
   characters;
 * no attached forms: `a|b` and `>file` are arguments; write `a | b`, `> file`;
-* at most three stages: the table of the parser keeps three. The descriptor
-  table of a task has sixteen slots since 1.3, so a boundary is a pipe of
-  two descriptors and the limits are no longer the reason for the number;
+* at most sixteen stages: the parser keeps sixteen and a line of 32 words
+  cannot hold more. The pipes are made one boundary at a time as the stages
+  are forked - the shell keeps the reading end between two forks and closes
+  the boundary behind it - so its table holds two pipe ends and not
+  eighteen; the system has sixteen pipes and forty open-file descriptions;
 * no background job, no `jobs`, no `fg` or `bg`;
 * a command that changes the task of the shell (`cd`, `path`) cannot be a
   stage or carry a redirection: it is refused with a sentence instead of
@@ -95,7 +97,8 @@ What the line does **not** do:
 
 The status of a line is the status of its last stage. A program that is the
 last stage answers 0 when it ran and 1 when it could not start; its own code
-is not handed back by `execve` yet.
+is the status its parent reads with `waitpid`, and a stage is a task of its
+own that waits for the program it started.
 
 ## `help`
 
