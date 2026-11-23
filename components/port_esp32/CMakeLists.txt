@@ -180,6 +180,11 @@ function(add_board_program name entry)
                 -o ${name}_start.o "${MICRO_OS_LIBC_USER_DIR}/src/start.c"
         COMMAND ${CMAKE_C_COMPILER} ${MICRO_OS_PROGRAM_CFLAGS}
                 -o ${name}_syscall.o "${MICRO_OS_LIBC_USER_DIR}/src/syscall.c"
+        # `rename` of the library resolves its two names, and the resolution
+        # lives in path.c: the board links it with the sources of a program
+        # (1.3.1).
+        COMMAND ${CMAKE_C_COMPILER} ${MICRO_OS_PROGRAM_CFLAGS}
+                -o ${name}_path.o "${MICRO_OS_LIBC_USER_DIR}/src/path.c"
         COMMAND ${CMAKE_C_COMPILER} ${MICRO_OS_PROGRAM_CFLAGS}
                 -o ${name}_stdio.o "${MICRO_OS_LIBC_USER_DIR}/src/stdio.c"
         COMMAND ${CMAKE_C_COMPILER} ${MICRO_OS_PROGRAM_CFLAGS}
@@ -196,8 +201,8 @@ function(add_board_program name entry)
         # Xtensa has no 64-bit division instruction.
         COMMAND ${CMAKE_C_COMPILER} -nostdlib -static -no-pie -Wl,--build-id=none
                 -Wl,-e,${entry} -T "${MICRO_OS_PROGRAM_DIR}/program_esp32.ld"
-                -o ${name}.elf ${name}_start.o ${name}_syscall.o ${name}_stdio.o
-                ${name}_string.o ${name}_errno.o ${name}_main.o -lgcc
+                -o ${name}.elf ${name}_start.o ${name}_syscall.o ${name}_path.o
+                ${name}_stdio.o ${name}_string.o ${name}_errno.o ${name}_main.o -lgcc
         COMMAND ${CMAKE_COMMAND} -E env
                 "OBJCOPY=${CMAKE_OBJCOPY}" "OBJDUMP=${CMAKE_OBJDUMP}" "NM=${CMAKE_NM}"
                 sh "${MICRO_OS_MKPROG}" --base 0x4009E000 --data-base 0x3FFCE000
@@ -205,6 +210,7 @@ function(add_board_program name entry)
         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
         DEPENDS "${MICRO_OS_PROGRAM_DIR}/${name}.c" "${MICRO_OS_PROGRAM_DIR}/program_esp32.ld"
                 "${MICRO_OS_LIBC_USER_DIR}/src/start.c" "${MICRO_OS_LIBC_USER_DIR}/src/syscall.c"
+                "${MICRO_OS_LIBC_USER_DIR}/src/path.c"
                 "${MICRO_OS_LIBC_USER_DIR}/src/errno.c"
                 "${MICRO_OS_LIBC_USER_DIR}/src/stdio.c" "${MICRO_OS_LIBC_USER_DIR}/src/string.c"
                 "${MICRO_OS_LIBC_USER_DIR}/src/errno.c"
