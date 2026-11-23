@@ -1494,9 +1494,14 @@ def check(output: str) -> list:
     found = answer("find /etc -name setting")
     expect("find walks a tree and matches a name", "/etc/setting" in found, found)
     ordered = answer("sort /etc/setting")
+    # The lines of the answer after the echo of the command. A missing block is
+    # an empty answer and not an exception: a check that dies with a ValueError
+    # tells the reader nothing about the machine (it happened once under load).
+    order = [line.strip() for line in ordered.splitlines()[1:] if line.strip()]
+    order = [line for line in order if not line.startswith(("task:", "x86-64:"))]
     expect(
         "sort orders the lines",
-        ordered.index("console=vga") < ordered.index("hello") < ordered.index("hostname=x86_64"),
+        order == ["console=vga", "hello", "hostname=x86_64"],
         ordered,
     )
     recursive = answer("grep -r hostname /etc")
