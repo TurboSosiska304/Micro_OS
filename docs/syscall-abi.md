@@ -726,17 +726,12 @@ caller is `EFAULT`.
   end and `write` of the reading end are `EBADF`. A pipe has no position, so
   `lseek` is `ESPIPE` (`KERR_SPIPE`, 29), and it has no entries, so `readdir`
   is `ENOTDIR`.
-<<<<<<< HEAD
-* A wait of a pipe has a bound of 500 ms. A read that found no byte in that
-  time is `EAGAIN`; a write that placed no byte is `EAGAIN` too, and one
-  that placed some bytes answers the count it placed. The wait itself is the
-  scheduler's (`kernel/wait.h`): the task leaves the run queue and the other
-  end wakes it when it puts a byte in or takes one out, so a task of the
-  console that waits for a pipe costs no processor time.
-=======
-* A wait of a pipe is a poll - the task sleeps a millisecond and looks again
-  - and not a queue of waiters; the queue with a wakeup is the next step.
->>>>>>> feature/iogrind
+* A wait of a pipe is the scheduler's (`kernel/wait.h`) and has no bound: a
+  reader slower than its writer is an ordinary pipeline and not an error. The
+  task leaves the run queue, and the other end wakes it when it puts a byte in,
+  takes one out or closes; a signal cuts the wait with `EINTR`. The ring is
+  `KFILE_PIPE_SIZE` bytes - 64 KiB on x86-64 and the host, 4 KiB on the board -
+  taken from the allocator when the pipe is made.
 
 `dup2(oldfd, newfd)` (number 28) makes `newfd` a second descriptor of the
 open file of `oldfd` and answers `newfd`. A descriptor that was open at
@@ -912,9 +907,9 @@ program breaks it into pieces.
   answer, and a descriptor of a file is `ENOTDIR` to the same call.
 * **The pipes.** The bytes of one end come back from the other, the end of
   the writing end is the end of the file, a pipe without a reading end is
-<<<<<<< HEAD
-  `EPIPE`, the wait of an empty or a full pipe passes its bound as `EAGAIN`,
-  and `lseek`/`readdir` of a pipe are `ESPIPE`/`ENOTDIR`.
+  `EPIPE`, a write of `PIPE_BUF` waits for the whole block and lands whole,
+  a reader slower than its writer waits instead of failing, and
+  `lseek`/`readdir` of a pipe are `ESPIPE`/`ENOTDIR`.
 * **The memory.** A file of the volume read through a window of mappings has
   the bytes of the file: the sum through `mmap` is the sum through `read`, a
   window slides over a file larger than the window of the machine, a private
@@ -931,11 +926,6 @@ program breaks it into pieces.
   as a readable entry, a writing end whose reader is gone as the error, and a
   signal as `EINTR`. The wait costs no processor time: the task is out of the
   run queue (`tests/cases/test_ksys.c`, `test_poll`).
-=======
-  `EPIPE`, a write of `PIPE_BUF` waits for the whole block and lands whole,
-  a reader slower than its writer waits instead of failing, and
-  `lseek`/`readdir` of a pipe are `ESPIPE`/`ENOTDIR`.
->>>>>>> feature/iogrind
 * **The sharing.** `dup2` makes a second descriptor of one open file: the
   write through it reaches the object the number now names, the copy
   outlives the original, and the old descriptor at the new number is closed.
