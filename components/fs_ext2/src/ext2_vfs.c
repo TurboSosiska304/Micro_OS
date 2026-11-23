@@ -82,6 +82,20 @@ static bool is_dot_entry(const char *name)
     return strcmp(name, ".") == 0 || strcmp(name, "..") == 0;
 }
 
+/*
+ * The counters of the free blocks and of the free inodes of the superblock
+ * are what e2fsck of the world compares with the bitmaps of the groups. The
+ * volume of this machine is never unmounted - it is the root - so nothing
+ * would write them out, and a sound image of a session would come to a
+ * person as an image whose superblock lies. Every operation that allocates
+ * or frees settles the volume when it is done: a close (the moment a file
+ * says its bytes are there), a create, a directory, a removal and a cut.
+ */
+static int ext2_settle(struct ext2_volume *vol)
+{
+    return ext2_volume_flush(vol);
+}
+
 static int ext2_vfs_open(void *ctx, const char *path, int flags, struct vfs_file *out)
 {
     struct ext2_volume *vol = (struct ext2_volume *)ctx;
@@ -122,6 +136,10 @@ static int ext2_vfs_open(void *ctx, const char *path, int flags, struct vfs_file
         rc = ext2_create_file(vol, relative, EXT2_MODE_FILE, &number);
         if (rc == 0) {
             rc = ext2_read_inode(vol, number, &inode);
+        }
+
+        if (rc == 0) {
+            rc = ext2_settle(vol);
         }
     }
 
@@ -214,10 +232,25 @@ static int ext2_vfs_read(void *ctx, struct vfs_file *file, void *buf, k_size_t s
 
 static int ext2_vfs_close(void *ctx, struct vfs_file *file)
 {
-    (void)ctx;
+    struct ext2_volume *vol = (struct ext2_volume *)ctx;
+    int rc;
+
     (void)file;
 
-    return 0;
+    if (vol == NULL || !vol->mounted) {
+        return KERR_INVAL;
+    }
+
+    rc = volume_lock(vol);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = ext2_settle(vol);
+
+    k_mutex_unlock(&vol->lock);
+
+    return rc;
 }
 
 static int ext2_vfs_write(void *ctx, struct vfs_file *file, const void *buf, k_size_t size)
@@ -295,6 +328,7 @@ static int ext2_vfs_truncate_file(void *ctx, struct vfs_file *file, k_u64_t size
 
     if (rc == 0) {
         file->size = size;
+        rc = ext2_settle(vol);
     }
 
     k_mutex_unlock(&vol->lock);
@@ -545,6 +579,10 @@ static int ext2_vfs_mkdir(void *ctx, const char *path)
 
     rc = ext2_make_dir(vol, relative, EXT2_MODE_DIR);
 
+    if (rc == 0) {
+        rc = ext2_settle(vol);
+    }
+
     k_mutex_unlock(&vol->lock);
 
     return rc;
@@ -571,6 +609,10 @@ static int ext2_vfs_unlink(void *ctx, const char *path)
     }
 
     rc = ext2_remove(vol, relative);
+
+    if (rc == 0) {
+        rc = ext2_settle(vol);
+    }
 
     k_mutex_unlock(&vol->lock);
 
