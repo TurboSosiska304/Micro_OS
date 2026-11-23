@@ -5,6 +5,8 @@
 #include <string.h>
 
 #include "devfs/devfs.h"
+#include "kernel/errno.h"
+#include "kernel/log.h"
 #include "kernel/task.h"
 #include "kernel/vfs.h"
 #include "mfs/mfs.h"
@@ -93,6 +95,19 @@ static void test_procfs(void)
     rc = read_file("/proc/tasks", buffer, sizeof(buffer));
     KT_CHECK(rc > 0);
     KT_CHECK(strstr(buffer, "name") != NULL);
+
+    /* The ring of the log is a file too, and the line the test just wrote is
+     * in it: that is what `dmesg` of the machine reads. The buffer is the one
+     * of procfs (2048 bytes), because the read is cut to the size of the
+     * caller and the newest lines are the tail of the file. */
+    kinfo("procfs: the line of the ring of the log");
+    {
+        char log_buffer[2048];
+
+        rc = read_file("/proc/kmsg", log_buffer, sizeof(log_buffer));
+        KT_CHECK(rc > 0);
+        KT_CHECK(strstr(log_buffer, "procfs: the line of the ring of the log") != NULL);
+    }
 
     /* The file that does not exist. */
     KT_CHECK(read_file("/proc/nosuchfile", buffer, sizeof(buffer)) < 0);
@@ -190,6 +205,41 @@ static int fake_write(const char *buf, k_size_t size)
     return (int)size;
 }
 
+/* The control command, the open and the close of the device: the devfs is
+ * the layer that carries them, and a driver sees one call for each. */
+static int g_fake_open_count;
+static int g_fake_close_count;
+static int g_fake_ioctl_count;
+static k_u32_t g_fake_request;
+static k_u64_t g_fake_argument;
+
+static int fake_ioctl(k_u32_t request, k_u64_t arg)
+{
+    g_fake_ioctl_count++;
+    g_fake_request = request;
+    g_fake_argument = arg;
+
+    return request == 0x1234u ? 0 : KERR_INVAL;
+}
+
+static void fake_open(void)
+{
+    g_fake_open_count++;
+}
+
+static void fake_close(void)
+{
+    g_fake_close_count++;
+}
+
+static const struct devfs_operations g_fake_operations = {
+    .read = fake_read,
+    .write = fake_write,
+    .ioctl = fake_ioctl,
+    .open = fake_open,
+    .close = fake_close,
+};
+
 static void test_devfs_add(void)
 {
     struct vfs_dirent entries[8];
@@ -210,20 +260,36 @@ static void test_devfs_add(void)
     KT_CHECK(devfs_add("useless", NULL, NULL) < 0);
 
     /* The device is added, and the name is taken after that. */
-    KT_CHECK_INT_EQ(devfs_add("fake0", fake_read, fake_write), 0);
+    KT_CHECK_INT_EQ(devfs_add_device("fake0", &g_fake_operations), 0);
     KT_CHECK(devfs_add("fake0", fake_read, fake_write) < 0);
+
+    g_fake_open_count = 0;
+    g_fake_close_count = 0;
+    g_fake_ioctl_count = 0;
 
     /* It opens, it reads and it writes like any other device. */
     rc = vfs_open("/dev/fake0", VFS_O_RDWR, &file, data);
     KT_CHECK_INT_EQ(rc, 0);
     if (rc == 0) {
+        KT_CHECK_INT_EQ(g_fake_open_count, 1);
+
         rc = vfs_read(&file, buf, sizeof(buf));
         KT_CHECK_INT_EQ(rc, 4);
         if (rc == 4) {
             KT_CHECK(memcmp(buf, "beep", 4) == 0);
         }
         KT_CHECK_INT_EQ(vfs_write(&file, "x", 1), 1);
+
+        /* The command reaches the driver with its argument, and a request it
+         * does not know is EINVAL (ADR 0028). */
+        KT_CHECK_INT_EQ(vfs_ioctl(&file, 0x1234u, 0x99u), 0);
+        KT_CHECK_INT_EQ(g_fake_ioctl_count, 1);
+        KT_CHECK_INT_EQ(g_fake_request, 0x1234u);
+        KT_CHECK_INT_EQ(g_fake_argument, 0x99u);
+        KT_CHECK_INT_EQ(vfs_ioctl(&file, 0x9999u, 0u), KERR_INVAL);
+
         vfs_close(&file);
+        KT_CHECK_INT_EQ(g_fake_close_count, 1);
     }
 
     /* It stands in the listing of /dev beside tty0 and null. */

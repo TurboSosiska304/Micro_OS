@@ -96,6 +96,15 @@ struct vfs_operations {
     int (*read)(void *ctx, struct vfs_file *file, void *buf, k_size_t size);
     int (*write)(void *ctx, struct vfs_file *file, const void *buf, k_size_t size);
     /*
+     * A control command of an open file (ADR 0028). The request and its
+     * argument are the numbers of the ABI; a filesystem that has no command
+     * of its own leaves the field empty and the caller learns KERR_INVAL. A
+     * device that offers `/dev/fb0` or `/dev/input0` is the caller of this
+     * operation and not the VFS: the meaning of a command belongs to the
+     * device.
+     */
+    int (*ioctl)(void *ctx, struct vfs_file *file, k_u32_t request, k_u64_t arg);
+    /*
      * Cut an open file to `size` bytes, the operation of `ftruncate`: a
      * shorter file gives its tail back, a longer one reads zeros there, and
      * the position of the descriptor is not moved. The call works on the
@@ -293,6 +302,13 @@ int vfs_mount_fstab(const char *path);
 int vfs_open(const char *path, int flags, struct vfs_file *out, void *priv);
 int vfs_read(struct vfs_file *file, void *buf, k_size_t size);
 int vfs_write(struct vfs_file *file, const void *buf, k_size_t size);
+/*
+ * A control command of an open file: the request and the argument are the
+ * numbers the ABI names, and the filesystem that owns the file says what they
+ * mean. A filesystem without a command answers KERR_INVAL, which is what the
+ * call answered before the commands existed.
+ */
+int vfs_ioctl(struct vfs_file *file, k_u32_t request, k_u64_t arg);
 /*
  * Cut an open file to `size` bytes (the `ftruncate` of POSIX). The
  * descriptor has to be open for writing, a directory is not a file that can
