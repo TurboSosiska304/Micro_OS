@@ -210,6 +210,7 @@ function(microos_add_userland_program name)
     add_custom_command(
         OUTPUT "${image}"
         COMMAND ${CMAKE_C_COMPILER} -nostdlib -static -no-pie -Wl,--build-id=none
+                -Wl,--no-check-sections
                 ${link_flags} -Wl,-e,_start
                 -T "${MICROOS_PROGRAM_DIR}/program.ld" -o "${name}.elf"
                 ${objects} ${archives}

@@ -359,6 +359,7 @@ function(add_program_image name entry)
         COMMAND ${CMAKE_C_COMPILER} ${PROGRAM_CFLAGS}
                 -o ${name}.o "${PROGRAM_DIR}/${name}.c"
         COMMAND ${CMAKE_C_COMPILER} -nostdlib -static -no-pie -Wl,--build-id=none
+                -Wl,--no-check-sections
                 -Wl,-e,${entry}
                 -T "${PROGRAM_DIR}/program.ld" -o ${name}.elf ${name}.o
         COMMAND sh "${MKPROG}" --base ${PROGRAM_BASE} --arch x86-64
