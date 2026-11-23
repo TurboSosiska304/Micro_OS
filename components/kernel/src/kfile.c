@@ -226,11 +226,19 @@ static void pipe_put_locked(struct k_pipe *p, const k_u8_t *in, k_size_t n)
 static k_ssize_t pipe_read(struct kfile *f, void *buf, k_size_t count)
 {
     struct k_pipe *p = f->pipe;
-    k_u32_t waited = 0;
+    k_u64_t deadline;
 
     if (p == NULL) {
         return KERR_BADF;
     }
+
+    /*
+     * The bound of the wait is one budget of time and not one wakeup: a
+     * wakeup that finds the pipe empty again - another reader took the bytes,
+     * or the writer woke this one for a byte it did not get - goes back to
+     * sleep for what is left of the bound.
+     */
+    deadline = k_sched_uptime_ms() + KFILE_PIPE_WAIT_MS;
 
     for (;;) {
         k_size_t take;
@@ -269,22 +277,26 @@ static k_ssize_t pipe_read(struct kfile *f, void *buf, k_size_t count)
 
         k_mutex_unlock(&g_fd_lock);
 
-        if (waited >= KFILE_PIPE_WAIT_MS) {
-            return KERR_AGAIN;
-        }
+        {
+            k_u64_t now = k_sched_uptime_ms();
+            int answer;
 
-        /*
-         * The wait is the scheduler's: the task leaves the run queue and the
-         * writer wakes it when it puts a byte into the pipe. The bound is the
-         * one of the contract, so a reader whose writer is alive but silent
-         * answers EAGAIN instead of waiting forever.
-         */
-        if (k_wait_block(K_WAIT_CHANNEL_PIPES, NULL, KFILE_PIPE_WAIT_MS - waited) ==
-            K_WAIT_SIGNAL) {
-            return KERR_INTR;
-        }
+            if (now >= deadline) {
+                return KERR_AGAIN;
+            }
 
-        waited = KFILE_PIPE_WAIT_MS;
+            /*
+             * The wait is the scheduler's: the task leaves the run queue and
+             * the writer wakes it when it puts a byte into the pipe. The bound
+             * is the one of the contract, so a reader whose writer is alive
+             * but silent answers EAGAIN instead of waiting forever.
+             */
+            answer = k_wait_block(K_WAIT_CHANNEL_PIPES, NULL, (k_u32_t)(deadline - now));
+
+            if (answer == K_WAIT_SIGNAL) {
+                return KERR_INTR;
+            }
+        }
     }
 }
 
@@ -293,11 +305,13 @@ static k_ssize_t pipe_write(struct kfile *f, const void *buf, k_size_t count)
     struct k_pipe *p = f->pipe;
     const k_u8_t *in = (const k_u8_t *)buf;
     k_size_t done = 0;
-    k_u32_t waited = 0;
+    k_u64_t deadline;
 
     if (p == NULL) {
         return KERR_BADF;
     }
+
+    deadline = k_sched_uptime_ms() + KFILE_PIPE_WAIT_MS;
 
     for (;;) {
         k_size_t room;
@@ -342,17 +356,22 @@ static k_ssize_t pipe_write(struct kfile *f, const void *buf, k_size_t count)
             return (k_ssize_t)done;
         }
 
-        /* The pipe is full: wait for the reader to make room. */
-        if (waited >= KFILE_PIPE_WAIT_MS) {
-            return (done > 0) ? (k_ssize_t)done : KERR_AGAIN;
-        }
+        /* The pipe is full: wait for the reader to make room, inside the one
+         * budget of the wait. */
+        {
+            k_u64_t now = k_sched_uptime_ms();
+            int answer;
 
-        if (k_wait_block(K_WAIT_CHANNEL_PIPES, NULL, KFILE_PIPE_WAIT_MS - waited) ==
-            K_WAIT_SIGNAL) {
-            return (done > 0) ? (k_ssize_t)done : KERR_INTR;
-        }
+            if (now >= deadline) {
+                return (done > 0) ? (k_ssize_t)done : KERR_AGAIN;
+            }
 
-        waited = KFILE_PIPE_WAIT_MS;
+            answer = k_wait_block(K_WAIT_CHANNEL_PIPES, NULL, (k_u32_t)(deadline - now));
+
+            if (answer == K_WAIT_SIGNAL) {
+                return (done > 0) ? (k_ssize_t)done : KERR_INTR;
+            }
+        }
     }
 }
 

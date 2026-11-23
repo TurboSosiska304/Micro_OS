@@ -23,6 +23,7 @@ set(MICRO_OS_KERNEL_SRCS
     "src/ksys.c"
     "src/kv.c"
     "src/lock.c"
+    "src/mm.c"
     "src/log.c"
     "src/net.c"
     "src/panic.c"

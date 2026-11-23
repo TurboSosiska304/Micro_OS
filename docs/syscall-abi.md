@@ -127,13 +127,17 @@ chose.
 | 41 | `rmdir` | `path` | 0, or an error |
 | 42 | `fstat` | `fd, buf` | 0, or an error |
 | 43 | `poll` | `fds, nfds, timeout` | the count of the ready entries, 0 on a timeout, or an error |
+| 44 | `mmap` | `addr, len, prot, flags, fd, offset` | the address of the range, or an error |
+| 45 | `munmap` | `addr, len` | 0, or an error |
+| 46 | `msync` | `addr, len` | 0, or an error |
+| 47 | `brk` | `addr` | the new end of the heap, or an error |
 
 The numbers 0 to 22 are frozen, 23 to 26 were the next free ones; pipes took
 27 and 28 (ADR 0014), signals the three after them (ADR 0015), the limits of
 a task 32 and 33, the atomic rename 34 (ADR 0024 §5), the cut of an open
 file 35 and the credentials of a task 36 to 40 (the second half of 1.4),
-`rmdir` and `fstat` 41 and 42 (the filesystem of 1.5), and the wait for a
-descriptor 43 (the first lane of 1.6). A
+`rmdir` and `fstat` 41 and 42 (the filesystem of 1.5), the wait for a
+descriptor 43 and the memory a program maps 44 to 47 (the first lane of 1.6). A
 call that is not in the table is `ENOSYS`, never a guess at what it might
 have meant.
 
@@ -349,11 +353,15 @@ microos_statx`, with the types of `<stdint.h>`; it returns -1 and sets
 * the file is read through the VFS, not through a descriptor of the caller,
   so a failed call leaves the table of the task exactly as it was;
 * a program is at least the 32 bytes of the header of `kernel/exec.h` and at
-  most `K_EXEC_MAX_IMAGE` (8 MiB, the memory of the machine); the image is
-  read into one block of the kernel in pieces of `KSYS_MAX_IO` (64 KiB), so
-  the transfer edge of a call is not the limit of the file. A file outside
-  that range is refused before a byte of it is read: `E2BIG` past the ceiling
-  and `EINVAL` below the header;
+  most `K_EXEC_MAX_IMAGE` (8 MiB, the memory of the machine). The file is
+  opened and its size is checked before a byte is read: `E2BIG` past the
+  ceiling and `EINVAL` below the header. On a machine with page tables only
+  the header is read; the text, the data and the bss become three regions of
+  the address space and the pages come from the file when the program touches
+  them (`kernel/mm.h`), so a program of 4 MiB costs its own pages and not a
+  copy of itself in the memory of the kernel. A machine without page tables
+  reads the whole file into one block in pieces of `KSYS_MAX_IO` (64 KiB), so
+  the transfer edge of a call is not the limit of the file;
 * the image must be a `MOX1` of version 2 and of a machine the format knows;
   the arch of the header is then compared with `k_port_exec_arch()`, and an
   image of another machine is `ENOEXEC` before a byte of it is entered;
@@ -502,7 +510,65 @@ the two dispositions `MICROOS_SIG_DFL` and `MICROOS_SIG_IGN`;
 `microos_signal()` answers `MICROOS_SIG_ERR` and sets `microos_errno()`
 when the signal is not one of the system.
 
+## The memory of a program
+
+Four calls give a program the memory it asks for: `mmap`, `munmap`, `msync`
+and `brk`. None of them reads a file: a mapping is a record of the address
+space (`kernel/mm.h`) and the page behind an address is made, filled and
+mapped the moment the program touches it. A program that maps a file of
+64 MiB and reads one page of it costs one page, and a program that starts
+from a file of 4 MiB costs the pages it runs.
+
+```c
+void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset);
+int   munmap(void *addr, size_t len);
+int   msync(void *addr, size_t len);
+```
+
+The protection is `KSYS_PROT_READ` (0x1), `KSYS_PROT_WRITE` (0x2) and
+`KSYS_PROT_EXEC` (0x4), and the flags are `KSYS_MAP_SHARED` (0x1),
+`KSYS_MAP_PRIVATE` (0x2) and `KSYS_MAP_ANONYMOUS` (0x4). One of the two
+sharing flags is always set, and a mapping is either of a file or of no file.
+`addr` is a hint: NULL asks for any free range, and an address that is taken
+is ignored rather than refused, because the system has no `MAP_FIXED`.
+`len` and `offset` are whole numbers of `KSYS_PAGE_SIZE` (4096) and the offset
+is into the file behind `fd`.
+
+The answers and the errors:
+
+* `mmap` answers the address of the range, `EINVAL` for a length or an offset
+  that is not a page, a `prot` or a flag outside the set, neither or both of
+  the sharing flags, and an address that is not aligned; `EBADF` for a
+  descriptor that is not open; `ESPIPE` for a pipe (it has no bytes to map);
+  `ENOMEM` for a range that does not fit the window of the program; `ENOSYS`
+  on a machine without page tables.
+* `munmap` answers 0 and gives the pages back; the shared pages of the range
+  go to their file first. A range that cuts a mapping in two is `EINVAL`
+  rather than a silent half; a range that holds no mapping is 0 and does
+  nothing, as POSIX has it.
+* `msync` writes the pages of the shared mappings of a range that were
+  written back to their file. A private mapping has nothing to write.
+* `brk(addr)` moves the end of the heap and answers the new end; `brk(NULL)`
+  answers the current one. The heap begins after the image of the program and
+  may not cross a mapping or the top of the window, where the restorer, the
+  guard page and the stack are: the refusal is `ENOMEM` and the break stays
+  where it was. A heap that shrinks gives the pages above the new end back.
+
+The two sharing modes are the two answers of a write. A write into a
+`KSYS_MAP_PRIVATE` page is a copy of that page for this program alone, and the
+file keeps its bytes. A write into a `KSYS_MAP_SHARED` page is a write of the
+file: the page is marked dirty and `msync`, `munmap` or the end of the program
+writes it back through the VFS, so the next reader of the file - `cat`, the
+shell, `e2fsck` on the volume of an ext2 root - sees the bytes the program
+wrote. A page that was only read is never written back.
+
+The page of an image is the same machinery: `execve` maps the text (readable
+and executable), the data (readable and writable) and the bss (zeros) as
+private regions of the file, so a write of the data of a program copies that
+page and the file on the volume is never changed by a running program.
+
 ## The wait for a descriptor
+
 
 `poll(fds, nfds, timeout)` (number 43) waits for one of the descriptors of the
 list to be ready. An entry is eight bytes on both machines and the library
@@ -806,6 +872,16 @@ program breaks it into pieces.
   the writing end is the end of the file, a pipe without a reading end is
   `EPIPE`, the wait of an empty or a full pipe passes its bound as `EAGAIN`,
   and `lseek`/`readdir` of a pipe are `ESPIPE`/`ENOTDIR`.
+* **The memory.** A file of the volume read through a window of mappings has
+  the bytes of the file: the sum through `mmap` is the sum through `read`, a
+  window slides over a file larger than the window of the machine, a private
+  page takes a write the file does not, a shared page is the file after
+  `msync` and another program reads the bytes, an anonymous page reads as
+  zeros, the heap grows by pages and a heap past the stack is `ENOMEM`
+  (`ports/port_x86_64/programs/mmap.c`, `make x86-smoke`).
+* **The image is not a copy.** A program of 4 MiB runs with the heap of the
+  kernel unchanged while it runs and after it: the image is mapped from the
+  file and no block of the kernel holds it (`/bin/big`, `make x86-smoke`).
 * **The wait.** `poll` answers the state of two pipes at once, the byte that
   arrives while the task waits (a task of its own writes it), the deadline
   that passes, a list of no descriptor as a sleep, the end of the writing end

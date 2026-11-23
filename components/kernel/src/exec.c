@@ -147,6 +147,7 @@ int k_exec_parse(const void *data, k_size_t size, struct k_exec_image *out)
 
     out->data = data;
     out->size = size;
+    out->path = NULL;
     out->arch = arch;
     out->entry = (k_size_t)entry;
     out->text_size = (k_size_t)text_size;
@@ -156,6 +157,14 @@ int k_exec_parse(const void *data, k_size_t size, struct k_exec_image *out)
     out->envp = NULL;
 
     return 0;
+}
+
+int k_exec_parse_header(const void *header, k_size_t size, struct k_exec_image *out)
+{
+    /* The parser of an image reads the first K_EXEC_HEADER_SIZE bytes and
+     * nothing else: the rest of the file is only compared with the sizes of
+     * the segments. */
+    return k_exec_parse(header, size, out);
 }
 
 /*
@@ -190,7 +199,13 @@ int k_exec_run(const struct k_exec_image *image, char *const argv[])
     int port_arch;
     int rc;
 
-    if (image == NULL || image->data == NULL || image->text_size == 0) {
+    if (image == NULL || image->text_size == 0) {
+        return K_EXEC_RUN_REFUSED;
+    }
+
+    /* The bytes are either in the memory of the caller or in a file the port
+     * maps; neither is a machine without a program. */
+    if (image->data == NULL && image->path == NULL) {
         return K_EXEC_RUN_REFUSED;
     }
 

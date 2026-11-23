@@ -66,7 +66,11 @@
 #define KSYS_RMDIR 41     /* rmdir(path) */
 #define KSYS_FSTAT 42     /* fstat(fd, buf) */
 #define KSYS_POLL 43      /* poll(fds, nfds, timeout) */
-#define KSYS_COUNT 44     /* the number of the system calls */
+#define KSYS_MMAP 44      /* mmap(addr, len, prot, flags, fd, offset) */
+#define KSYS_MUNMAP 45    /* munmap(addr, len) */
+#define KSYS_MSYNC 46     /* msync(addr, len) */
+#define KSYS_BRK 47       /* brk(addr) */
+#define KSYS_COUNT 48     /* the number of the system calls */
 
 /*
  * The resources of a limit. One number names one resource and the calls move
@@ -186,6 +190,39 @@ struct ksys_pollfd {
  * sixteen slots, so a list longer than that names a descriptor twice at
  * best. */
 #define KSYS_POLL_MAX 16
+
+/*
+ * The memory a program maps (numbers 44 to 47).
+ *
+ * `mmap(addr, len, prot, flags, fd, offset)` names a range of the memory of
+ * the program. `addr` is a hint (0 for "anywhere"), `len` is a whole number of
+ * pages, `offset` is a page-aligned offset into the file behind `fd`, and the
+ * answer is the address the range got. A range that is not backed by a file
+ * is `KSYS_MAP_ANONYMOUS` and reads as zeros.
+ *
+ * The pages are made when the program touches them: a mapping of a file of
+ * 64 MiB costs one page of memory, not 64 MiB, and the bytes of the page come
+ * from the filesystem on the fault. A write of a `KSYS_MAP_PRIVATE` page is a
+ * copy of that page; a write of a `KSYS_MAP_SHARED` one changes the file, and
+ * `msync` writes the pages that were changed back to it.
+ *
+ * `munmap(addr, len)` gives the range back and `msync(addr, len)` writes the
+ * shared pages of it to their file. `brk(addr)` moves the end of the heap and
+ * answers the new end; a heap that would cross a mapping or the stack of the
+ * program is `ENOMEM` and the break stays where it was. A machine without an
+ * address space of a program answers `ENOSYS` to all four, as it does to
+ * `execve`.
+ */
+#define KSYS_PROT_READ 0x01u
+#define KSYS_PROT_WRITE 0x02u
+#define KSYS_PROT_EXEC 0x04u
+
+#define KSYS_MAP_SHARED 0x01u
+#define KSYS_MAP_PRIVATE 0x02u
+#define KSYS_MAP_ANONYMOUS 0x04u
+
+/* The page of the mappings: a length and an offset are multiples of it. */
+#define KSYS_PAGE_SIZE 4096u
 
 /*
  * The longest path a call accepts, the terminator not counted: a path has
@@ -341,6 +378,15 @@ int ksys_dup2(int oldfd, int newfd);
 int ksys_poll(struct ksys_pollfd *fds, k_u32_t nfds, int timeout_ms);
 /* The same call with an environment of the caller. */
 int ksys_execve_env(const char *path, char *const argv[], char *const envp[]);
+
+/* The memory of a program: a mapping, its release, the write-back of a shared
+ * one and the heap. The addresses are the memory of the program, not of the
+ * kernel: a mapping of a file is the file the descriptor names. */
+k_ssize_t ksys_mmap(void *addr, k_size_t len, k_u32_t prot, k_u32_t flags, int fd, k_u64_t offset);
+int ksys_munmap(void *addr, k_size_t len);
+int ksys_msync(void *addr, k_size_t len);
+/* The new break, or a negative error (ENOMEM when the heap may not grow). */
+k_ssize_t ksys_brk(void *addr);
 int ksys_kill(int pid, int sig);
 /* The old handler, or K_SIG_ERR when the signal is not one of the system. */
 task_signal_fn ksys_signal(int sig, task_signal_fn handler);

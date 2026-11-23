@@ -41,6 +41,80 @@ int k_port_console_poll(void)
     return -1;
 }
 
+/*
+ * The memory a program can map. This machine has no page tables of its own
+ * for a program - the board shares the memory of the kernel and the simulator
+ * is a process - so every call of kernel/port/mm.h answers "no" and `mmap`
+ * is ENOSYS, the same answer this port gives to `execve`.
+ */
+bool k_port_mm_supported(void)
+{
+    return false;
+}
+
+k_u64_t k_port_mm_base(void)
+{
+    return 0;
+}
+
+k_u64_t k_port_mm_limit(void)
+{
+    return 0;
+}
+
+k_u64_t k_port_mm_top(void)
+{
+    return 0;
+}
+
+k_u64_t k_port_mm_current(void)
+{
+    return 0;
+}
+
+void *k_port_mm_page(k_u64_t space, k_u64_t vaddr, k_u32_t prot)
+{
+    K_UNUSED(space);
+    K_UNUSED(vaddr);
+    K_UNUSED(prot);
+    return NULL;
+}
+
+void *k_port_mm_writable(k_u64_t space, k_u64_t vaddr)
+{
+    K_UNUSED(space);
+    K_UNUSED(vaddr);
+    return NULL;
+}
+
+void *k_port_mm_private(k_u64_t space, k_u64_t vaddr)
+{
+    K_UNUSED(space);
+    K_UNUSED(vaddr);
+    return NULL;
+}
+
+bool k_port_mm_present(k_u64_t space, k_u64_t vaddr)
+{
+    K_UNUSED(space);
+    K_UNUSED(vaddr);
+    return false;
+}
+
+void *k_port_mm_phys(k_u64_t space, k_u64_t vaddr)
+{
+    K_UNUSED(space);
+    K_UNUSED(vaddr);
+    return NULL;
+}
+
+void k_port_mm_unmap(k_u64_t space, k_u64_t vaddr, k_size_t len)
+{
+    K_UNUSED(space);
+    K_UNUSED(vaddr);
+    K_UNUSED(len);
+}
+
 /* --- time --- */
 
 k_u64_t k_port_uptime_ms(void)

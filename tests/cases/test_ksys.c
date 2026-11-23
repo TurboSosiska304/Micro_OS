@@ -303,7 +303,8 @@ static void test_abi_is_stable(void)
         {KSYS_SETLIMIT, "setlimit"}, {KSYS_RENAME, "rename"},       {KSYS_FTRUNCATE, "ftruncate"},
         {KSYS_GETUID, "getuid"},     {KSYS_GETEUID, "geteuid"},     {KSYS_GETGID, "getgid"},
         {KSYS_SETUID, "setuid"},     {KSYS_SETGID, "setgid"},       {KSYS_RMDIR, "rmdir"},
-        {KSYS_FSTAT, "fstat"},       {KSYS_POLL, "poll"},
+        {KSYS_FSTAT, "fstat"},       {KSYS_POLL, "poll"},           {KSYS_MMAP, "mmap"},
+        {KSYS_MUNMAP, "munmap"},     {KSYS_MSYNC, "msync"},         {KSYS_BRK, "brk"},
     };
     size_t i;
 
@@ -425,6 +426,7 @@ static const struct abi_field g_k_exec_image_fields[] = {
     {"data_size", offsetof(struct k_exec_image, data_size)},
     {"bss_size", offsetof(struct k_exec_image, bss_size)},
     {"envp", offsetof(struct k_exec_image, envp)},
+    {"path", offsetof(struct k_exec_image, path)},
 };
 
 static const struct abi_field g_ksys_pollfd_fields[] = {
@@ -506,6 +508,13 @@ static const struct abi_value g_abi_known_values[] = {
     {"KSYS_POLLOUT", KSYS_POLLOUT},
     {"KSYS_POLLERR", KSYS_POLLERR},
     {"KSYS_POLL_MAX", KSYS_POLL_MAX},
+    {"KSYS_PROT_READ", KSYS_PROT_READ},
+    {"KSYS_PROT_WRITE", KSYS_PROT_WRITE},
+    {"KSYS_PROT_EXEC", KSYS_PROT_EXEC},
+    {"KSYS_MAP_SHARED", KSYS_MAP_SHARED},
+    {"KSYS_MAP_PRIVATE", KSYS_MAP_PRIVATE},
+    {"KSYS_MAP_ANONYMOUS", KSYS_MAP_ANONYMOUS},
+    {"KSYS_PAGE_SIZE", KSYS_PAGE_SIZE},
     {"K_EXEC_MAGIC", K_EXEC_MAGIC},
     {"K_EXEC_VERSION", K_EXEC_VERSION},
     {"K_EXEC_HEADER_SIZE", K_EXEC_HEADER_SIZE},
@@ -1760,6 +1769,65 @@ static void test_pipe_waits(void)
     teardown();
 }
 
+/* --- the memory of a program --- */
+
+/*
+ * The property: the calls of the memory of a program check their arguments
+ * before they look for a machine that has pages, and a machine without them
+ * answers ENOSYS - the same answer it gives to execve. The host and the board
+ * are such machines: a program there is a task of the kernel and shares its
+ * memory, so there is no window to hand out page by page. The pages
+ * themselves are covered on the machine that has them (`make x86-smoke`,
+ * /bin/mmap and /bin/poll).
+ */
+static void test_mmap_edges(void)
+{
+    static _Alignas(4096) char page[8];
+
+    ktest_begin("ksys: the memory of a program checks its arguments and says no without pages");
+
+    setup();
+
+    /* The arguments of a mapping: a length, a protection, one sharing mode,
+     * an aligned address and an aligned offset. */
+    KT_CHECK_INT_EQ(
+        ksys_mmap(NULL, 0, KSYS_PROT_READ, KSYS_MAP_PRIVATE | KSYS_MAP_ANONYMOUS, -1, 0),
+        KERR_INVAL);
+    KT_CHECK_INT_EQ(
+        ksys_mmap(NULL, 100, KSYS_PROT_READ, KSYS_MAP_PRIVATE | KSYS_MAP_ANONYMOUS, -1, 0),
+        KERR_INVAL);
+    KT_CHECK_INT_EQ(
+        ksys_mmap(NULL, KSYS_PAGE_SIZE, 0x40, KSYS_MAP_PRIVATE | KSYS_MAP_ANONYMOUS, -1, 0),
+        KERR_INVAL);
+    KT_CHECK_INT_EQ(
+        ksys_mmap(NULL, KSYS_PAGE_SIZE, KSYS_PROT_READ, KSYS_MAP_PRIVATE | KSYS_MAP_SHARED, -1, 0),
+        KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_mmap(NULL, KSYS_PAGE_SIZE, KSYS_PROT_READ, 0, -1, 0), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_mmap(page + 1, KSYS_PAGE_SIZE, KSYS_PROT_READ,
+                              KSYS_MAP_PRIVATE | KSYS_MAP_ANONYMOUS, -1, 0),
+                    KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_mmap(NULL, KSYS_PAGE_SIZE, KSYS_PROT_READ,
+                              KSYS_MAP_PRIVATE | KSYS_MAP_ANONYMOUS, -1, 1),
+                    KERR_INVAL);
+
+    /* A machine without pages: the call is refused after the arguments. */
+    KT_CHECK_INT_EQ(ksys_mmap(NULL, KSYS_PAGE_SIZE, KSYS_PROT_READ,
+                              KSYS_MAP_PRIVATE | KSYS_MAP_ANONYMOUS, -1, 0),
+                    KERR_NOSYS);
+    KT_CHECK_INT_EQ(ksys_munmap(page, KSYS_PAGE_SIZE), KERR_NOSYS);
+    KT_CHECK_INT_EQ(ksys_msync(page, KSYS_PAGE_SIZE), KERR_NOSYS);
+    KT_CHECK_INT_EQ(ksys_brk(page), KERR_NOSYS);
+
+    /* The release and the write-back have the same edge. */
+    KT_CHECK_INT_EQ(ksys_munmap(page + 1, KSYS_PAGE_SIZE), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_munmap(page, 0), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_munmap(page, 100), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_msync(page + 1, KSYS_PAGE_SIZE), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_msync(page, 100), KERR_INVAL);
+
+    teardown();
+}
+
 /* --- poll --- */
 
 /*
@@ -2619,6 +2687,7 @@ void test_ksys(void)
     test_dup2();
     test_pipe_errors();
     test_poll();
+    test_mmap_edges();
     test_fd_table_full();
     test_ftruncate();
     test_fstat_and_exclusive();

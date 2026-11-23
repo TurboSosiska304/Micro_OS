@@ -80,6 +80,11 @@ int chdir(const char *path);
 int isatty(int fd);
 ssize_t readlink(const char *path, char *buffer, size_t size);
 int pipe(int fds[2]);
+
+/* The heap of the program: brk moves the end and answers 0, sbrk moves it by
+ * a number of bytes and answers the address the room began at. */
+int brk(void *addr);
+void *sbrk(long increment);
 int dup2(int oldfd, int newfd);
 pid_t fork(void) __attribute__((returns_twice));
 pid_t getpid(void);

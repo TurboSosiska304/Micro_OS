@@ -17,6 +17,7 @@
  *   kernel/port/exec.h     the window of the programs and the jump into one
  *   kernel/port/time.h     the clock since the boot
  *   kernel/port/mem.h      the internal heap and the PSRAM
+ *   kernel/port/mm.h       the pages a program can map
  *   kernel/port/lock.h     critical sections and recursive mutexes
  *   kernel/port/power.h    halt and reset
  *   kernel/port/kv.h       the store that survives a restart
@@ -38,6 +39,7 @@
 #include "kernel/port/kv.h"
 #include "kernel/port/lock.h"
 #include "kernel/port/mem.h"
+#include "kernel/port/mm.h"
 #include "kernel/port/net.h"
 #include "kernel/port/power.h"
 #include "kernel/port/time.h"
