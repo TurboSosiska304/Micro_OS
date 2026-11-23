@@ -19,7 +19,8 @@ from the machine itself; the settings of `/etc` were the first.
 A repository publishes an index and the files it names:
 
 ```text
-index.json          the list: name, version, machine, abi, size, sha-256
+index.json          the list: name, version, machine, abi, size, sha-256,
+                    license, source, source_sha256
 index.json.sig      the Ed25519 signature of the index (64 raw bytes)
 hello-1.0.0-x86_64.mox    the program
 hello-1.0.0-x86_64.mox.sig  its signature (64 raw bytes)
@@ -41,7 +42,18 @@ The index is one object of the format of ADR 0024 §1:
       "size": 4288,
       "sha256": "4f1c…",
       "file": "hello-1.0.0-x86_64.mox",
-      "summary": "says hello"
+      "summary": "says hello",
+      "license": "MIT"
+    },
+    {
+      "name": "diff",
+      "version": "3.10",
+      "size": 65536,
+      "sha256": "9a02…",
+      "summary": "compare two files",
+      "license": "GPL-3.0-or-later",
+      "source": "https://example.org/diff-3.10.tar.xz",
+      "source_sha256": "b7e1…"
     }
   ]
 }
@@ -52,6 +64,11 @@ The ABI is the version of the header of MOX1 that the kernel reads
 repository grows without breaking an older machine; a field that is needed and
 missing, a digest that is not 64 hexadecimal digits, or a size above a
 megabyte is `PKG_EPARSE`.
+
+`license` is the SPDX string of the package, `source` the URL of the archive
+of its source and `source_sha256` the digest of that archive. All three are
+optional in the format - a permissive package names at most its license - and
+the rule below is what reads them (ADR 0025).
 
 The index and every program are signed with the same Ed25519 key as the images
 of the system ([ADR 0020](../adr/0020-signed-image.md)). The tool of the
@@ -151,6 +168,46 @@ lines of the steps.
 link installs a package that was fetched before, and `-Sy --offline` re-reads
 the stored index (and its signature) without a socket.
 
+## The license of a package
+
+The tree is MIT and copyleft is not linked into it (ADR 0025,
+[licensing.md](../licensing.md)). A GPL, LGPL, AGPL or CDDL program is a
+package of the repository of programs, and it installs only when the index
+says where its source is: the source is the other half of the promise of the
+license, and a machine that cannot name it would install a binary alone.
+
+A package whose `license` begins with `GPL-`, `LGPL-`, `AGPL-` or `CDDL-`
+(letters in either case) installs only with a `source` and a `source_sha256`
+of sixty-four hexadecimal digits. A copyleft package without the two is
+`PKG_ELICENSE`, the answer -13:
+
+```text
+microos> pkg -S sed
+error: sed is GPL-3.0-only and names no source
+microos> pkg -S gzip
+error: gzip is GPL-3.0-or-later and the digest of its source is not 64 hex digits
+```
+
+A permissive package - MIT, BSD-2-Clause, BSD-3-Clause, ISC, Apache-2.0, zlib
+- needs neither field, and an entry that names no license is not copyleft as
+far as this machine can tell: the signature of the index is what says the
+repository meant it.
+
+`pkg info` prints the two fields when the index has them, so a person reads
+what the license asks of the machine before the install:
+
+```text
+microos> pkg -Si diff
+...
+License        : GPL-3.0-or-later
+Source         : https://example.org/diff-3.10.tar.xz
+```
+
+`-Qi` prints the same two lines from the record of an installed package
+(`/var/pkg/local/<name>` keeps `license=` and `source=` when the index named
+them). A file installed with `-U` has no index behind it: the rule is not
+asked of it, and its record has neither line.
+
 ## Where it lives
 
 | what | where |
@@ -183,7 +240,10 @@ name, the version and the machine from the file name, and the digest from the
 bytes. The signature is checked against the key of the default repository
 (`microos-progs`), which is the key of the image unless
 `/etc/pkg/keys/microos-progs.pub` says otherwise. A file that is already
-installed at the same version is left alone (`--force` reinstalls it).
+installed at the same version is left alone (`--force` reinstalls it). The
+license rule of ADR 0025 is not applied here: a file on the machine has no
+index to read the license and the source from, and the signature is what
+makes it trusted.
 
 ## What it does not do, and why
 
@@ -194,6 +254,12 @@ installed at the same version is left alone (`--force` reinstalls it).
   code of a stranger run as root.
 * **No dependency solver.** A program is static; its dependencies are the
   machine and the ABI, and the index names them.
+* **It does not fetch or check the source of a copyleft package.** The rule
+  of ADR 0025 is a promise of the index: `pkg` refuses a copyleft package
+  that names no source or a digest that is not one, and trusts the entry it
+  verified the signature of. Downloading the archive and comparing its
+  digest is the job of the CI of the repository, which builds the package
+  from that source ([debts.md](../debts.md)).
 * **No scripts, no shared libraries, no delta update.** A package is a file
   replaced whole.
 * **No revocation of a certificate.** The store of `https` is one file,

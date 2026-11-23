@@ -317,6 +317,11 @@ static bool digest_is_hex(const char *text)
     return text[PKG_SHA256_HEX - 1u] == '\0';
 }
 
+bool pkg_digest_is_hex(const char *text)
+{
+    return (text != NULL) && digest_is_hex(text);
+}
+
 /* The fields that are defaulted by the index or derived from the others. */
 static int entry_finish(struct pkg_entry *entry, const struct pkg_index *index, bool have_abi,
                         bool have_size)
@@ -349,6 +354,13 @@ static int entry_finish(struct pkg_entry *entry, const struct pkg_index *index, 
     if (!digest_is_hex(entry->sha256)) {
         return PKG_EPARSE;
     }
+
+    /*
+     * The digest of the source (ADR 0025) is not checked here: an entry that
+     * names a source and a digest that is not one is a fact for the rule of
+     * the install, which answers PKG_ELICENSE, and not a document this
+     * parser cannot read. A permissive package has no source to check.
+     */
 
     if (entry->size > PKG_PACKAGE_MAX) {
         return PKG_EPARSE;
@@ -406,6 +418,12 @@ static int parse_entry(struct json_cursor *c, struct pkg_index *index)
             rc = json_string(c, entry->file, sizeof(entry->file));
         } else if (strcmp(key, "summary") == 0) {
             rc = json_string(c, entry->summary, sizeof(entry->summary));
+        } else if (strcmp(key, "license") == 0) {
+            rc = json_string(c, entry->license, sizeof(entry->license));
+        } else if (strcmp(key, "source") == 0) {
+            rc = json_string(c, entry->source, sizeof(entry->source));
+        } else if (strcmp(key, "source_sha256") == 0) {
+            rc = json_string(c, entry->source_sha256, sizeof(entry->source_sha256));
         } else if (strcmp(key, "sha256") == 0) {
             rc = json_string(c, entry->sha256, sizeof(entry->sha256));
         } else if (strcmp(key, "abi") == 0) {

@@ -56,6 +56,15 @@ and runs tasks on each of them. The board is not part of this release (ADR
   queues before and after the load, and no exception) and `make soak-smp`
   (the 600-second session on the two-core image, with the ticks of both
   cores sampled every cycle).
+- `pkg` knows the license of a package (ADR 0025). An entry of the index
+  carries `license` (the SPDX string), `source` and `source_sha256`; a
+  copyleft package (`GPL-`, `LGPL-`, `AGPL-`, `CDDL-`, in either case)
+  without a source and the digest of its archive is refused with the new
+  answer `PKG_ELICENSE` (-13), and the message names the license and the
+  package. `pkg info` prints `License` and `Source` for a repository package
+  (`-Si`) and for an installed one (`-Qi`), the record keeping both fields;
+  `-U` takes a local file and is not asked, because it has no index behind
+  it.
 
 ### Changed
 
