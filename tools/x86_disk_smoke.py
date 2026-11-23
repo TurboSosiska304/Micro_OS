@@ -89,6 +89,10 @@ FIRST_BOOT = [
     # SQLite: this boot creates the database on the volume, and the next one
     # reads it out of the same disk after a reset.
     "exec /bin/sqlite3 /sqlite.db < /etc/sql-setup.sql",
+    # The interpreter of awk: its script and its data are files of the volume
+    # and the program reads them through the VFS.
+    "exec /bin/awk -f /etc/hello.awk /etc/columns",
+    "exec /bin/awk -F: {s+=$3}END{print(s)} /etc/columns",
 ]
 
 SECOND_BOOT = [
@@ -129,6 +133,7 @@ SECOND_BOOT = [
     # checked by the library of the second boot.
     "exec /bin/sqlite3 /sqlite.db < /etc/sql-read.sql",
     "exec /bin/sqlite3 /sqlite.db < /etc/sql-schema.sql",
+    "exec /bin/awk -f /etc/hello.awk /etc/columns",
 ]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -365,6 +370,22 @@ def check(first: str, second: str) -> list:
         first_answers[18],
     )
 
+    # --- awk: the script and the sum out of the volume
+    awk_script = first_answers[len(FIRST_BOOT) - 2]
+    expect(
+        "the awk script of /etc runs out of the volume",
+        "awk: hello from /etc/hello.awk" in awk_script
+        and "awk: 3 records, sum 1001, root 1" in awk_script
+        and "the program exited with 0" in awk_script,
+        awk_script,
+    )
+    awk_sum = first_answers[len(FIRST_BOOT) - 1]
+    expect(
+        "awk sums the column of a file of the volume",
+        re.search(r"(?m)^1001\r?$", awk_sum) is not None,
+        awk_sum,
+    )
+
     # --- the second boot: the same image, the same machine
     expect(
         "the second boot reaches the shell",
@@ -449,9 +470,8 @@ def check(first: str, second: str) -> list:
     )
     expect(
         "the licenses of the ported programs survived the reset",
-        "lua" in second_answers[11] and "zlib" in second_answers[11]
-        and "bc" in second_answers[11] and "zstd" in second_answers[11]
-        and "file" in second_answers[11],
+        all(name in second_answers[11]
+            for name in ("lua", "zlib", "bc", "zstd", "file", "sqlite", "awk")),
         second_answers[11],
     )
     expect(
@@ -544,6 +564,16 @@ def check(first: str, second: str) -> list:
         "the schema of the database survived the reset",
         "CREATE TABLE items" in schema and "items" in schema,
         schema,
+    )
+
+    # --- awk: the script of the volume after the reset
+    awk_script = second_answers[len(SECOND_BOOT) - 1]
+    expect(
+        "awk reads its script after the reset",
+        "awk: hello from /etc/hello.awk" in awk_script
+        and "awk: 3 records, sum 1001, root 1" in awk_script
+        and "the program exited with 0" in awk_script,
+        awk_script,
     )
 
     return checks

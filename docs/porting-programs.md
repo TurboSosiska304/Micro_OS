@@ -254,6 +254,41 @@ The port runs: `make x86-smoke` prints `1024.0` and the lines of
 `/etc/hello.lua`, and the image of 164 KiB is under `K_EXEC_MAX_IMAGE`
 (8 MiB), which `sys_execve` reads in pieces of `KSYS_MAX_IO`.
 
+### awk: a grammar that the build must not generate
+
+The One True Awk is the third worked example and the first port that is an
+interpreter with a grammar of its own: `awkgram.y` is yacc source, and the
+build machine of this tree has no `yacc` and no `bison` (the requirements are
+cmake, ninja, gcc and python3). The parser is therefore **generated once and
+committed**: `awkgram.tab.c`, `awkgram.tab.h` and the `proctab.c` of
+`maketab.c`, with the version of the generator and the two commands in
+`third_party/awk/README.md`.
+
+The generator is byacc and not GNU bison on purpose. The skeleton bison
+writes into its output is GPL-3 with the special exception for the larger
+work; the tree takes permissive code only and does not rely on an exception
+to read a rule. byacc's output carries no license, and the program is a
+permissive one at every byte.
+
+The port layer answers two different questions:
+
+* the C library of the source: `strdup`, `strncasecmp`, `putc`, `bsearch`,
+  `random`/`srandom`, a `fcntl` that is a no-op, and the wide characters of
+  the C locale (`MB_CUR_MAX` 1, `mbtowc`/`wctomb`, `towupper`/`towlower`).
+  They live in `port/awk_os.c` and not in `components/libc/user`, because
+  only this source asks for them today; the debt row says when they move;
+* the platform: `system` and `popen` are a refusal with a sentence on the
+  error descriptor and `-1`, because the machine has no shell and no second
+  process a program can wait for. A script that reads a file with `getline <
+  "name"` and writes one with `print > "name"` works through the VFS: the
+  refusal is only the shell, and the smoke test checks both sides.
+
+`port/sys/wait.h` and `port/wctype.h` exist because the source includes
+those headers and the library of a program has neither; the path of the
+header is the port layer's, and the host build of the test takes the headers
+of the host, so the two builds of the same sources are the two machines.
+
+
 ## 4. The program and the tests
 
 The program is a small C file in `ports/port_x86_64/programs/` with

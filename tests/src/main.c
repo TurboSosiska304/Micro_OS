@@ -84,6 +84,7 @@ static void run_tests(void *arg)
     test_pcre2();
     test_lua();
     test_zstd();
+    test_awk();
     test_userland_float();
     test_bc();
     test_file();

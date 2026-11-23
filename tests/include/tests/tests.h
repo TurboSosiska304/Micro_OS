@@ -60,6 +60,7 @@ void test_zlib(void);
 void test_pcre2(void);
 void test_lua(void);
 void test_zstd(void);
+void test_awk(void);
 void test_userland_float(void);
 void test_bc(void);
 void test_file(void);

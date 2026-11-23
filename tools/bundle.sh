@@ -326,6 +326,9 @@ x86_bundle() {
     # SQLite is in the public domain and /bin/sqlite3 is a program of the same
     # image; the statement that says so travels with the archive.
     cp -f "$ROOT/third_party/sqlite/LICENSE" "$STAGE/LICENSE.sqlite"
+    # awk is /bin/awk of the same image, under the Lucent permissive license
+    # of the One True Awk.
+    cp -f "$ROOT/third_party/awk/LICENSE" "$STAGE/LICENSE.awk"
     cp -f "$ROOT/third_party/mbedtls/LICENSE" "$STAGE/LICENSE.mbedtls"
     if [ -f "$X86_SRC/microos64.sig" ] && [ -f "$X86_SRC/signing.pub" ]; then
         cp -f "$X86_SRC/microos64.sig" "$STAGE/microos64.sig"
@@ -401,6 +404,12 @@ statement of the authors in `third_party/sqlite/LICENSE`); `LICENSE.sqlite` is
 that statement and `third_party/sqlite` of the sources has the notes and the
 VFS of the port.
 
+`/bin/awk` of the disk image is the One True Awk (20240728, the Lucent
+permissive license); `LICENSE.awk` is its license and `third_party/awk` of the
+sources has the note, the version, the generated parser and the port layer
+(`port/awk_port.h`, `port/awk_os.c`). It has no shell: `system` and a command
+of a pipe answer a sentence and the failure of the call (`docs/debts.md`).
+
 `/bin/cat`, `/bin/grep`, `/bin/ls` and the rest of the ten commands are
 the tools of sbase (MIT); `LICENSE.sbase` is their license and
 `third_party/sbase` of the sources has the subset and the port layer.
@@ -432,7 +441,7 @@ DOC
 
     STAGE_FILES=(loader32.elf microos64.bin run.sh README.md LICENSE.spleen LICENSE.zlib
                  LICENSE.pcre2 LICENSE.lua LICENSE.zstd LICENSE.sbase LICENSE.bc
-                 LICENSE.file LICENSE.sqlite)
+                 LICENSE.file LICENSE.sqlite LICENSE.awk)
     if [ -f "$STAGE/x86-all.img" ]; then
         STAGE_FILES+=(x86-all.img)
     fi

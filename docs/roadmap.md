@@ -73,7 +73,7 @@ written when the project was an operating system for one board; the numbers
       its disk and asks for `/bin/hello` with `execve`; the shell runs the
       same file with `exec`
 * [x] Programs are files on a filesystem of the disk, not blobs of the
-      kernel: `make x86-disk` writes `/bin` (twenty-two programs) and `/etc` with
+      kernel: `make x86-disk` writes `/bin` (thirty programs) and `/etc` with
       `tools/mkfs_mfs.c`, and no boot installs an image
 * [x] `PATH` for the shell
 * [x] `argv` reaches the port, and the ABI of the entry is written down
@@ -359,6 +359,16 @@ written when the project was an operating system for one board; the numbers
       `tests/cases/test_bc.c` and the smoke tests run the calculator and the
       RPN one before and after a reset of the disk. The image is 115 KiB and
       its arena is 768 KiB of the bss
+* [x] The eighth port: the One True Awk of 2024-07-28 (the Lucent permissive
+      license) as `/bin/awk`, with the data `/etc/columns`, the script
+      `/etc/hello.awk` and `/etc/licenses/awk` in the image. The grammar is
+      generated once by byacc and committed with its header, the port layer
+      (`third_party/awk/port/awk_port.h`, `awk_os.c`) answers the four calls
+      of the C library the release wants, and `system` and a command of a
+      pipe are an honest refusal: this machine has no shell and no second
+      process. `tests/cases/test_awk.c` runs the `main` of the release
+      through thirty-two cases, and the smoke tests run the interpreter in
+      the image and out of the volume after a reset
 * [ ] The gaps of the next port: a `malloc` larger than the bss of an image
       (`brk`/`mmap` of a program), a `poll` for a library that waits on a
       pipe, an `fxsave` of the XMM state for two programs with a point in

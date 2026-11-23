@@ -66,6 +66,27 @@ and runs tasks on each of them. The board is not part of this release (ADR
   stream: `/bin/file -z` looks inside a zstd frame as well as a gzip. The
   library is one implementation per name for every port: the POSIX families
   of sbase and the formatter with a point of Lua.
+- SQLite 3.54.1 (the public domain) as `/bin/sqlite3` (846 KiB, the largest
+  image of the machine) over a VFS of the port, with the scripts of `/etc` as
+  its fixtures. The library of a program took `sscanf`, `gettimeofday`,
+  `getrusage`, `usleep` and the refusals of `realpath`/`popen`/`setenv`, and
+  one implementation per name stayed the rule: a call of the tree is not
+  redefined by a port.
+- The seventh port, and the first interpreter with a grammar of its own: the
+  One True Awk of 2024-07-28 (the Lucent permissive license) as `/bin/awk`,
+  with the data `/etc/columns`,
+  the first script of the machine `/etc/hello.awk` and the license at
+  `/etc/licenses/awk`. The release is vendored unchanged in `third_party/awk`
+  (the parser is generated once by byacc and committed with its header and
+  `proctab.c`), and the port layer is `port/awk_port.h` and `port/awk_os.c`:
+  the C locale as bytes, the four functions of the C library the release
+  wants and the library does not have, and the honest refusal of `system` and
+  of a pipe (no shell, no second process). `make x86-smoke` runs the fields,
+  the formatter, `-v`, `-f`, `getline` and the refusals; `make
+  x86-disk-smoke` runs the script of `/etc` again after the reset; the host
+  test `tests/cases/test_awk.c` runs the `main` of the release through
+  thirty-two cases, including the comparison of a numeric string and the
+  syntax error of a program.
 
 ### Changed
 
@@ -96,6 +117,14 @@ and runs tasks on each of them. The board is not part of this release (ADR
   its first chunk and then follows it.
 
 ### Fixed
+
+- The bss of a program starts at the address the program was linked for:
+  `tools/mkprog.sh` counts the gap the linker may leave between the data and
+  a bss aligned to 32 bytes as padding of the data segment, and the kernel
+  clears the bss where the linker put it. The arguments of a program are
+  written after it, so a gap the header did not carry made the first boot of
+  awk read its own `argv` out of the state of the random generator. The case
+  is in `tools/test_mkprog.py`.
 
 - The 8259 was opened to the external mode on every core, and QEMU delivered
   the timer to either of them (1889 ticks on the core 0 and 4933 on the core
