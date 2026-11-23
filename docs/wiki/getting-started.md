@@ -144,8 +144,10 @@ A short list, so that nothing here reads as a promise:
   and page tables; the board runs an Xtensa `.mox` without protection; the
   simulator and the null port answer `ENOSYS`, because jumping into an
   arbitrary image inside the test process is not a promise the host can keep.
-* **One user, uid 0.** A file has a mode and an owner, and the mode is checked,
-  but there is no group and no second user.
+* **A uid and a gid, but no login.** A file has a mode and an owner, the mode
+  is checked against the uid of the task and root passes it, and a task
+  inherits its credentials from the one that started it. Nothing starts a
+  program as another user yet, and no filesystem stores a group.
 * **No TLS, and the network is the LAN.** HTTP, MQTT and telnet are plain
   text; there is no HTTPS, no certificate store, no IPv6 and no raw sockets,
   and `httpd` and `telnet` take no password. Keep the machine on the network

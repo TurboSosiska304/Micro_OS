@@ -45,6 +45,7 @@ void test_telnet(void);
 void test_text_wrap(void);
 void test_ksys(void);
 void test_ksys_process(void);
+void test_users(void);
 void test_libc(void);
 void test_kshell(void);
 void test_kshell_pipe(void);

@@ -192,6 +192,80 @@ k_u32_t task_fd_limit(const struct task *t)
     return (limit < TASK_MAX_FDS) ? limit : TASK_MAX_FDS;
 }
 
+k_u32_t task_get_uid(const struct task *t)
+{
+    k_u32_t uid;
+
+    if (t == NULL) {
+        return 0u;
+    }
+
+    k_port_enter_critical();
+    uid = t->uid;
+    k_port_exit_critical();
+
+    return uid;
+}
+
+k_u32_t task_get_gid(const struct task *t)
+{
+    k_u32_t gid;
+
+    if (t == NULL) {
+        return 0u;
+    }
+
+    k_port_enter_critical();
+    gid = t->gid;
+    k_port_exit_critical();
+
+    return gid;
+}
+
+void task_set_uid(struct task *t, k_u32_t uid)
+{
+    if (t == NULL) {
+        return;
+    }
+
+    k_port_enter_critical();
+    t->uid = uid;
+    k_port_exit_critical();
+}
+
+void task_set_gid(struct task *t, k_u32_t gid)
+{
+    if (t == NULL) {
+        return;
+    }
+
+    k_port_enter_critical();
+    t->gid = gid;
+    k_port_exit_critical();
+}
+
+bool task_is_root(const struct task *t)
+{
+    return task_get_uid(t) == 0u;
+}
+
+void task_creds_inherit(struct task *child, const struct task *parent)
+{
+    k_u32_t uid;
+    k_u32_t gid;
+
+    if (child == NULL || parent == NULL) {
+        return;
+    }
+
+    k_port_enter_critical();
+    uid = parent->uid;
+    gid = parent->gid;
+    child->uid = uid;
+    child->gid = gid;
+    k_port_exit_critical();
+}
+
 void task_limits_inherit(struct task *child, const struct task *parent)
 {
     if (child == NULL || parent == NULL) {
@@ -368,6 +442,13 @@ static struct task *task_alloc_slot(const char *name, task_entry_fn entry, void 
     }
 
     if (t != NULL) {
+        /*
+         * The credentials come from the task that makes the new one: a
+         * child of any kind runs as its parent does. The kernel itself, which
+         * creates the first tasks of the boot, has no record and is root.
+         */
+        struct task *creator = task_self();
+
         memset(t, 0, sizeof(*t));
         t->in_use = true;
         t->pid = g_next_pid++;
@@ -376,7 +457,9 @@ static struct task *task_alloc_slot(const char *name, task_entry_fn entry, void 
         t->entry = entry;
         t->arg = arg;
         t->stack_size = k_port_task_stack_size();
-        t->parent = task_self();
+        t->parent = creator;
+        t->uid = (creator != NULL) ? creator->uid : 0u;
+        t->gid = (creator != NULL) ? creator->gid : 0u;
         t->mem_priority = KMM_PRIORITY_USER;
         t->limit_memory = TASK_LIMIT_MEMORY_MAX;
         t->limit_cpu_ms = TASK_LIMIT_CPU_MAX;
@@ -430,6 +513,7 @@ static struct task *task_spawn(const char *name, task_entry_fn entry, void *arg,
         t->parent = inherit;
         t->job = inherit->job;
         task_set_cwd(t, task_get_cwd(inherit));
+        task_creds_inherit(t, inherit);
         task_limits_inherit(t, inherit);
         kfile_table_copy(t, inherit);
     }
@@ -493,6 +577,7 @@ int task_fork(struct task *parent, const char *name, struct task **child)
     c->parent = parent;
     c->job = parent->job;
     task_set_cwd(c, task_get_cwd(parent));
+    task_creds_inherit(c, parent);
     task_limits_inherit(c, parent);
     kfile_table_copy(c, parent);
     task_signal_inherit(c, parent);

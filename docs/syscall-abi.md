@@ -119,12 +119,18 @@ chose.
 | 33 | `setlimit` | `which, value` | 0, or an error |
 | 34 | `rename` | `from, to` | 0, or an error |
 | 35 | `ftruncate` | `fd, size` | 0, or an error |
+| 36 | `getuid` | - | the uid of the task |
+| 37 | `geteuid` | - | the uid of the task (one credential) |
+| 38 | `getgid` | - | the gid of the task |
+| 39 | `setuid` | `uid` | 0, or an error |
+| 40 | `setgid` | `gid` | 0, or an error |
 
 The numbers 0 to 22 are frozen, 23 to 26 were the next free ones; pipes took
 27 and 28 (ADR 0014), signals the three after them (ADR 0015), the limits of
-a task 32 and 33, the atomic rename 34 (ADR 0024 §5) and the cut of an open
-file 35. A call that is not in the table is `ENOSYS`, never a guess at what
-it might have meant.
+a task 32 and 33, the atomic rename 34 (ADR 0024 §5), the cut of an open
+file 35 and the credentials of a task 36 to 40 (the second half of 1.4). A
+call that is not in the table is `ENOSYS`, never a guess at what it might
+have meant.
 
 ## The control commands of `ioctl`
 
@@ -238,17 +244,21 @@ and a new directory `0755`. `stat` reports both, in the `struct vfs_stat` it
 copies to the caller, and `chmod` (number 23) and `chown` (number 24) change
 them one at a time.
 
-The system has **one user**, uid 0 (`KSYS_UID`), and the caller of a system
-call is always that user:
+Every task has a **uid** and a **gid** (numbers 36 to 40 read and change
+them). A task takes both from the task that created it; a fork, a program and
+an `execve` keep them, so `getuid()` answers the identity the caller was
+started with and not a constant. The root of the system is uid 0 (`KSYS_UID`):
+the boot, the kernel itself and the shell before a login process.
 
-* the object is compared with that uid: an object owned by uid 0 is answered
-  by the triad of the owner, and an object owned by any other number by the
-  triad of the others, because the caller is not its owner and there is no
-  group in this system;
-* **there is no bypass for uid 0.** The exemption of root is the one part of
-  the POSIX rule that is left out: a file of the mode `0200` cannot be read by
-  the only user of the system either. The owner is a number that is written
-  and checked, not a privilege (ADR 0005).
+* a task whose uid is the owner of an object reads the triad of the owner;
+  every other task reads the triad of the others, because no filesystem of
+  this system stores a group - the gid is kept and inherited, and the triad of
+  the group is never the answer (`docs/debts.md`);
+* **root passes the read and the write triads.** It is the exemption of POSIX:
+  a file of the mode `0200` is read by root, and one of `0400` is written by
+  it. The exception is the execute bit, which `execve` checks itself: root
+  runs a file that has an `x` bit for somebody, not a file with no `x` bit at
+  all. A zeroed mode still means "this filesystem keeps no modes".
 
 `open` compares the access in its flags with the mode of the object before a
 descriptor exists, so every filesystem under the VFS answers a forbidden open
@@ -257,6 +267,15 @@ the same way - `EPERM`. A file that is not there is not checked: with
 `O_CREAT` the open itself answers `ENOENT`. A zeroed mode is not "nobody may
 touch it": it means "this filesystem keeps no modes" - `procfs` and `devfs` -
 and those objects keep the access they always had.
+
+`chmod` belongs to the owner of the object and to root, `chown` to root
+alone, and `mount`/`umount` to root alone; a task of another uid learns
+`EPERM`. `setuid` and `setgid` follow the same shape: root names any uid of
+the fifteen bits of a record, and a task of another uid names only the number
+it already has. There is one credential and not the three of POSIX, so
+`geteuid` answers what `getuid` answers and a task that gives up root cannot
+name zero again with `setuid` - a login process with a setuid image is the
+other half of this work (`docs/debts.md`).
 
 The mode of `chmod` is refused outside the nine bits (`EINVAL`) and so is an
 owner outside the fifteen bits of a uid (`EINVAL`): a number that does not fit
@@ -270,10 +289,11 @@ the end is looked at. The VFS walks the components of the path, calls `stat`
 on each directory on the way and refuses the walk with `EPERM` when the caller
 may not search through it: a directory of the mode `0600` keeps its children
 out of reach for `open`, `stat`, `execve` and every other call that resolves a
-path, and one of `0700` lets them through. The directory that is named at the
-end is not searched through - `stat` of a `0600` directory itself still works,
-and opening it as a directory needs the read bit, not the search bit. A
-zeroed mode is still "this filesystem keeps no modes", so the roots of
+path, and one of `0700` lets them through. Root passes the search of every
+directory, like the read and the write triads. The directory that is named at
+the end is not searched through - `stat` of a `0600` directory itself still
+works, and opening it as a directory needs the read bit, not the search bit.
+A zeroed mode is still "this filesystem keeps no modes", so the roots of
 `procfs` and `devfs` are walked the way they always were.
 
 ## The moments of a file
@@ -426,7 +446,9 @@ system has no process groups: 0 and -1 are `EINVAL`, not "the group" and
 "everybody". A pid that names no live task is `ESRCH`; the number is `-3`,
 the same as `KERR_EXIST`, because `-3` already meant "file exists" in the
 frozen table (ADR 0015), and the shell prints the sentence of the signal
-rather than the text of the file error.
+rather than the text of the file error. A task of another uid is not a target
+of a task that is not root: the call answers `EPERM`, and root may end any
+task.
 
 A signal is answered in the context of the task that receives it: on the way
 out of a system call, or on the tick of the timer when the interrupted code
@@ -553,8 +575,8 @@ placeholder of a machine without an MMU alike.
 
 A task has three limits: the memory it may hold, the processor time it may
 spend and the descriptors it may open. They belong to the task and to nobody
-else; there is no call that changes the limit of another task, and no limit of
-a user because the system has one user, uid 0.
+else; there is no call that changes the limit of another task, and the three
+numbers are the task's own, not a budget of a user.
 
 ```c
 int ksys_getlimit(k_u32_t which, k_u64_t *value);
@@ -574,10 +596,9 @@ a caller that wants the set in one place.
 
 **The policy: the ceiling is the start and a limit only goes down.** A fresh
 task starts at the ceiling; `setlimit` accepts a value at or below the current
-limit of the resource and refuses a raise with `EPERM`. There is no second
-user to grant a raise, and a program that could raise its own limit would have
-no limit at all - the same rule as the mode check, where uid 0 gets no
-exemption (ADR 0005). A selector outside the three is `EINVAL`; a value above
+limit of the resource and refuses a raise with `EPERM`. The ceiling belongs to
+the machine and even root does not lift it: a program that could raise its own
+limit would have no limit at all. A selector outside the three is `EINVAL`; a value above
 the ceiling of the machine is `EPERM` as well, because it is above the current
 limit too. A child of a fork inherits the limits of its parent; a task made by
 `task_create` starts at the ceiling.
@@ -646,7 +667,11 @@ return -1 and set `microos_errno()` when something goes wrong, and they
 refuse the two numbers of a mode and of an owner that a record cannot hold
 before the kernel is asked. The wrapper of the call itself is
 `ksys_execve(path, argv)` for a caller without an environment and
-`ksys_execve_env(path, argv, envp)` for one with it.
+`ksys_execve_env(path, argv, envp)` for one with it. The credentials have the
+wrappers `ksys_getuid`, `ksys_geteuid`, `ksys_getgid`, `ksys_setuid` and
+`ksys_setgid`, and the library of a program answers `getuid`, `geteuid`,
+`getgid`, `setuid` and `setgid` through the same door
+(`components/libc/user/src/pwd.c`).
 
 The limits have the same shape: `microos_getlimit(which, &value)` and
 `microos_setlimit(which, value)` with the selectors `MICROOS_RLIMIT_MEMORY`,
@@ -690,10 +715,14 @@ program breaks it into pieces.
 * **The agreement.** The file that the system calls write is the file that the
   filesystem sees.
 * **The mode.** A `chmod` is seen by the next `stat`, the triad of the owner
-  decides for uid 0 and the triad of the others for any other owner, there is
-  no bypass for the only user of the system, and a mode that the record cannot
-  hold is refused instead of stored. A directory whose mode has no search bit
-  keeps its children out of reach, and one with the bit lets them through.
+  decides for a task whose uid is the owner and the triad of the others for
+  every other task, root passes the read and the write, and a mode that the
+  record cannot hold is refused instead of stored. A directory whose mode has
+  no search bit keeps its children out of reach, and one with the bit lets
+  them through. A task of another uid is a real actor of the test: the
+  runner moves itself with `task_set_uid` and back. `chown`, `mount` and
+  `umount` answer `EPERM` to it, and so does a signal to a task of another
+  uid.
 * **The moments.** A create, a write and a truncate move `mtime` and `ctime`;
   a `chmod` moves `ctime` and leaves `mtime`; a remount keeps both; a volume
   of version 1 answers zero, which is "unknown" and not 1970. `statx` reports

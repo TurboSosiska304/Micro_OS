@@ -98,7 +98,7 @@ contract is therefore two files in one commit, and a reviewer sees it.
 | `/proc`, `/dev`, `/sys` | yes | `/proc` and `/dev` from phase 2, `/sys` later |
 | System calls | yes | yes, from phase 3; hardware isolation on x86-64 (ring 3), logical on the board |
 | Memory protection | MMU | **on x86-64 only**: page tables per program, a user window and ring 3 (ADR 0007); the ESP32 has no MMU and keeps the logical boundary |
-| Multi-user | yes | no (a single user: the device itself) |
+| Multi-user | yes | partial (a uid and a gid per task, inherited and checked; no login or `su`, and no group in a record) |
 | Dynamic linker | yes | no (everything is statically linked) |
 
 We honestly call this **Linux-like**, not Linux. On the board there is no
@@ -283,8 +283,8 @@ and the descriptors it opens - and the calls `getlimit` (32) and `setlimit`
 (33) read and lower them. The limits are fields of `struct task`, so a fork
 inherits them and the scheduler does not have a second table to keep in step.
 They start at the ceiling of the machine (2 MiB of PSRAM, about 49 days of
-CPU, sixteen descriptors) and only go down: with one user, uid 0, there is
-nobody to grant a raise, and the rule of no root bypass applies here too.
+CPU, sixteen descriptors) and only go down: the ceiling belongs to the
+machine, and neither a task nor root lifts it.
 
 The memory is counted by the allocator: `kmm` asks `task_memory_fits()` before
 it looks for a block, charges the user blocks to the task that allocated them
@@ -624,15 +624,19 @@ there is no dynamic linker.
 `chmod` and `chown` are numbers 23 and 24 of the syscall table and `execve` is
 25. A mode is nine bits (`rwx` for the user, the group and the others) and an
 owner is a fifteen-bit uid; both live in the spare bits of the MicroFS record
-(see [memory.md](memory.md)). There is one user (uid 0), and it gets no
-exemption of root: `open` compares the access it was asked for with the triad
-that decides for the caller, and `execve` needs the `x` bit; `stat` only
-reports. The width of the two numbers is checked at the door, the library
-(`components/libc`) has the three wrappers with the codes of POSIX in
-`errno`, and the shell has `chmod`, `chown` and `exec` over the same calls.
-The directories of a path are not checked for their `x` bit yet, and
-`fork()` with an address space of its own still waits for the copy of the page
-tables and copy on write (ADR 0005, ADR 0007). A program calls the kernel with
+(see [memory.md](memory.md)). Every task has a uid and a gid (calls 36 to 40)
+and takes them from the task that made it. `open` compares the access it was
+asked for with the triad that decides for the caller and `execve` needs the
+`x` bit; root passes the read and the write, and no filesystem stores a group,
+so the triad of the others is the one a task that is not the owner reads.
+`chmod` is the owner or root, `chown`, `mount` and `umount` are root, and a
+signal to a task of another uid is `EPERM`; `stat` only reports. The width of
+the two numbers is checked at the door, the library (`components/libc`) has
+the three wrappers with the codes of POSIX in `errno`, and the shell has
+`chmod`, `chown` and `exec` over the same calls. The directories of a path are
+checked for their `x` bit, and `fork()` with an address space of its own
+still waits for the copy of the page tables and copy on write (ADR 0005,
+ADR 0007). A program calls the kernel with
 `int $0x80` on the x86-64 port: the register ABI is in
 [ADR 0006](adr/0006-program-entry.md), the program runs in ring 3 with page
 tables of its own, and the processor switches to a kernel stack of the program

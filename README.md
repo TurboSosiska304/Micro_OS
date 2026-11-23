@@ -145,10 +145,13 @@ Micro_OS/
   shares the memory of the parent and re-enters its program; the answer (pid
   in the parent, 0 in the child) is the POSIX one. On x86-64 the pages are
   copied on write ([ADR 0005](docs/adr/0005-programs-and-protection.md)).
-* **One user, with a real mode and owner.** A file has a mode and an owner in
-  its inode, and the mode is checked at the edge of the system; there is a
-  single user (uid 0) on the board today, so the bits of the group and of the
-  others are stored but not exercised.
+* **A user, a mode and an owner.** A file has a mode and an owner in its
+  inode, the mode is checked at the edge of the system against the uid of the
+  task, and a task inherits its uid and gid from the one that started it
+  (`getuid`, `setuid` and their siblings are calls of the ABI). Root passes
+  the triads of read and write. The boot and the shell still run as root,
+  there is no login file or `su`, and no filesystem stores a group: the gid is
+  kept but the group triad is never the one that decides.
 * **Programs are young.** The format (MOX1), `execve`, `chmod`/`chown`, the
   window of the x86-64 port and a library of a program exist: `/bin` has
   `hello`, `cat`, `echo`, `ls`, `spawn` and the programs of the tests, all of

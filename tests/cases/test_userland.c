@@ -199,6 +199,15 @@ static void test_users(void)
     KT_CHECK(getpwuid(7) == NULL);
     KT_CHECK(getpwnam("root") != NULL);
     KT_CHECK(getpwnam("nobody") == NULL);
+
+    /* The credentials come through the door of the call; the shim of this
+     * binary answers the root of the system, as the kernel of the host does
+     * before a test of the kernel moves its task. */
+    KT_CHECK_INT_EQ(getuid(), 0);
+    KT_CHECK_INT_EQ(geteuid(), 0);
+    KT_CHECK_INT_EQ(getgid(), 0);
+    KT_CHECK_INT_EQ(setuid(0), 0);
+    KT_CHECK_INT_EQ(setgid(0), 0);
 }
 
 static void test_number_order(void)

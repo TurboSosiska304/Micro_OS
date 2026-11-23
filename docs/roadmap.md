@@ -86,8 +86,9 @@ written when the project was an operating system for one board; the numbers
 
 * [x] Mode bits and an owner in the file, set by `chmod`/`chown`
 * [x] The arguments of a system call checked at the edge
-* [x] The permissions enforced at the edge, for the one user of the system, at
-      `open` and `execve`
+* [x] The permissions enforced at the edge against the uid of the task, at
+      `open` and `execve`; the credentials of a task (calls 36 to 40) and
+      root that passes the triads of read and write
 * [x] The `x` bit of the directories of a path is walked and checked
 * [x] A real `fork()`: an address space per task, copy on write - the
       milestone of the x86-64 paging. The page tables per task, the copy of

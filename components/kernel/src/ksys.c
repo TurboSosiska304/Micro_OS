@@ -174,16 +174,46 @@ static int open_flags_check(ksys_arg_t flags)
 #define KSYS_MODE_EXEC 01u
 
 /*
- * The bits of a mode that decide for the caller. There is one user, uid
- * zero, and no group of its own: an object of that owner is answered by the
- * triad of the owner and an object of another owner by the triad of the
- * others - the caller is not that owner. There is no bypass for uid zero, so
- * a file of the mode 0200 cannot be read by the only user of the system
- * either: the rule of POSIX with the exception of root taken away (ADR 0005).
+ * The uid of the task at the edge of the system call. A call before the
+ * scheduler has a record names the kernel itself, whose uid is root.
+ */
+static k_u32_t caller_uid(void)
+{
+    struct task *self = task_self();
+
+    return (self != NULL) ? task_get_uid(self) : KSYS_UID;
+}
+
+/*
+ * The bits of a mode that decide for the caller. Root passes every triad; a
+ * task whose uid is the owner of the object reads the triad of the owner and
+ * every other task reads the triad of the others, because no filesystem of
+ * this system stores a group (docs/debts.md).
  */
 static k_u32_t caller_bits(const struct vfs_stat *info)
 {
-    return (info->owner == KSYS_UID) ? ((info->mode >> 6) & 7u) : (info->mode & 7u);
+    k_u32_t uid = caller_uid();
+
+    if (uid == KSYS_UID) {
+        return 7u;
+    }
+
+    return (info->owner == uid) ? ((info->mode >> 6) & 7u) : (info->mode & 7u);
+}
+
+/*
+ * May the caller execute an object? The triad decides for a task of another
+ * uid, and root runs a file that has an x bit for somebody: the bypass of
+ * root covers the read and the write, not the mark of a program, exactly as
+ * POSIX says it.
+ */
+static bool exec_bits_allow(const struct vfs_stat *info)
+{
+    if (caller_uid() == KSYS_UID) {
+        return (info->mode & 0111u) != 0u;
+    }
+
+    return (caller_bits(info) & KSYS_MODE_EXEC) != 0u;
 }
 
 /*
@@ -1082,14 +1112,130 @@ static k_ssize_t sys_getppid(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_a
     return (k_ssize_t)self->parent->pid;
 }
 
+/* --- the credentials of the caller --- */
+
+static k_ssize_t sys_getuid(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                            ksys_arg_t a4, ksys_arg_t a5)
+{
+    K_UNUSED(a0);
+    K_UNUSED(a1);
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    return (k_ssize_t)caller_uid();
+}
+
+/*
+ * The effective uid. There is one uid in this kernel: a program cannot change
+ * its identity without changing the identity its children inherit, because
+ * the image of a program has no setuid bit and the kernel has no saved uid
+ * to return to (docs/debts.md). The call exists because a portable source
+ * asks for it, and it answers the number getuid answers.
+ */
+static k_ssize_t sys_geteuid(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                             ksys_arg_t a4, ksys_arg_t a5)
+{
+    return sys_getuid(a0, a1, a2, a3, a4, a5);
+}
+
+static k_ssize_t sys_getgid(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                            ksys_arg_t a4, ksys_arg_t a5)
+{
+    struct task *self = task_self();
+
+    K_UNUSED(a0);
+    K_UNUSED(a1);
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    return (self != NULL) ? (k_ssize_t)task_get_gid(self) : 0;
+}
+
+/*
+ * Change the uid of the caller. Root may become any uid of the fifteen bits
+ * a record of a filesystem holds; a task of another uid may only name the
+ * number it already has, which is a no-op. A task that gives up root cannot
+ * take it back with this call, which is the price of one credential and the
+ * one way back is a reboot (or a login process, the other half of this work).
+ */
+static k_ssize_t sys_setuid(ksys_arg_t uid, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                            ksys_arg_t a4, ksys_arg_t a5)
+{
+    struct task *self = task_self();
+    k_u32_t target = (k_u32_t)uid;
+
+    K_UNUSED(a1);
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    if (self == NULL) {
+        return KERR_PERM;
+    }
+
+    if ((uid & ~(ksys_arg_t)KSYS_UID_MAX) != 0) {
+        return KERR_INVAL;
+    }
+
+    if (!task_is_root(self) && target != task_get_uid(self)) {
+        return KERR_PERM;
+    }
+
+    task_set_uid(self, target);
+
+    return 0;
+}
+
+/* The same rule for the group; the gid decides no permission yet. */
+static k_ssize_t sys_setgid(ksys_arg_t gid, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                            ksys_arg_t a4, ksys_arg_t a5)
+{
+    struct task *self = task_self();
+    k_u32_t target = (k_u32_t)gid;
+
+    K_UNUSED(a1);
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    if (self == NULL) {
+        return KERR_PERM;
+    }
+
+    if ((gid & ~(ksys_arg_t)KSYS_UID_MAX) != 0) {
+        return KERR_INVAL;
+    }
+
+    if (!task_is_root(self) && target != task_get_gid(self)) {
+        return KERR_PERM;
+    }
+
+    task_set_gid(self, target);
+
+    return 0;
+}
+
 /*
  * A signal to one task. The system has no process groups, so only a positive
  * pid is a target: the two meanings of POSIX for 0 and -1 ("the group" and
  * "everybody") are not guessed at. A pid with no live task is ESRCH.
+ *
+ * A task of another uid is not a target of a task that is not root: a
+ * program cannot end the shell that started it or a neighbour it does not
+ * own. Root signals anybody, and a task always signals itself.
  */
 static k_ssize_t sys_kill(ksys_arg_t pid, ksys_arg_t sig, ksys_arg_t a2, ksys_arg_t a3,
                           ksys_arg_t a4, ksys_arg_t a5)
 {
+    struct task *self = task_self();
+    struct task *target;
+
     K_UNUSED(a2);
     K_UNUSED(a3);
     K_UNUSED(a4);
@@ -1103,6 +1249,12 @@ static k_ssize_t sys_kill(ksys_arg_t pid, ksys_arg_t sig, ksys_arg_t a2, ksys_ar
 
     if ((ksys_arg_t)(int)sig != sig) {
         return KERR_INVAL;
+    }
+
+    target = task_by_pid((k_u32_t)(int)pid);
+    if (target != NULL && self != NULL && !task_is_root(self) &&
+        task_get_uid(target) != task_get_uid(self)) {
+        return KERR_PERM;
     }
 
     return task_signal_send((k_u32_t)(int)pid, (int)sig);
@@ -1725,7 +1877,7 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t envp, k
         return KERR_PERM;
     }
 
-    if (info.mode != 0u && (caller_bits(&info) & KSYS_MODE_EXEC) == 0u) {
+    if (info.mode != 0u && !exec_bits_allow(&info)) {
         return KERR_PERM;
     }
 
@@ -1956,6 +2108,11 @@ void ksys_init(void)
     ksys_register(KSYS_SETLIMIT, "setlimit", sys_setlimit);
     ksys_register(KSYS_RENAME, "rename", sys_rename);
     ksys_register(KSYS_FTRUNCATE, "ftruncate", sys_ftruncate);
+    ksys_register(KSYS_GETUID, "getuid", sys_getuid);
+    ksys_register(KSYS_GETEUID, "geteuid", sys_geteuid);
+    ksys_register(KSYS_GETGID, "getgid", sys_getgid);
+    ksys_register(KSYS_SETUID, "setuid", sys_setuid);
+    ksys_register(KSYS_SETGID, "setgid", sys_setgid);
 }
 
 /* --- the wrappers --- */
@@ -2036,6 +2193,31 @@ k_ssize_t ksys_readdir(int fd, void *buf, k_size_t count)
 k_u32_t ksys_getpid(void)
 {
     return (k_u32_t)ksys_call(KSYS_GETPID, 0, 0, 0, 0, 0, 0);
+}
+
+k_u32_t ksys_getuid(void)
+{
+    return (k_u32_t)ksys_call(KSYS_GETUID, 0, 0, 0, 0, 0, 0);
+}
+
+k_u32_t ksys_geteuid(void)
+{
+    return (k_u32_t)ksys_call(KSYS_GETEUID, 0, 0, 0, 0, 0, 0);
+}
+
+k_u32_t ksys_getgid(void)
+{
+    return (k_u32_t)ksys_call(KSYS_GETGID, 0, 0, 0, 0, 0, 0);
+}
+
+int ksys_setuid(k_u32_t uid)
+{
+    return (int)ksys_call(KSYS_SETUID, (ksys_arg_t)uid, 0, 0, 0, 0, 0);
+}
+
+int ksys_setgid(k_u32_t gid)
+{
+    return (int)ksys_call(KSYS_SETGID, (ksys_arg_t)gid, 0, 0, 0, 0, 0);
 }
 
 int ksys_getcwd(char *buf, k_size_t size)

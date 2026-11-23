@@ -226,7 +226,9 @@ The rules that go with the layout:
   `chmod 000` cannot be expressed: it is refused instead of being stored and
   read back as `0644`.
 * **New objects are born with the mode of the design**: `0644` for a file and
-  `0755` for a directory, owner 0, which is the one user of the system.
+  `0755` for a directory, owner 0. The create path carries no uid of the
+  caller, so a task of another uid makes a file of root until `chown` moves it
+  (`docs/debts.md`).
 * **The numbers cross the VFS as they are.** `struct vfs_stat` carries `mode`
   and `owner`, and `vfs_chmod()`/`vfs_chown()` are operations a filesystem may
   have or not; a virtual filesystem without them answers "not permitted"
