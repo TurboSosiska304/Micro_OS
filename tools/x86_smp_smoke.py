@@ -39,6 +39,21 @@ them, and the session runs for at least `--seconds` seconds (15 by default)
 so that the second `smp` reads a clock that has moved. The exit status is 0
 when every check passed, 1 when one did not (the console of the machine is
 printed then), and 2 when a file or QEMU is missing.
+
+The last half of the session is the interrupt controller and the wake of a
+core (ADR 0012, docs/debts.md K8):
+
+  * `smp irq` prints the I/O APIC of the firmware, the entry of the timer and
+    the one of the keyboard, and the count of the two lines per core - the
+    timer of the PIT arrives on the core 0 and nowhere else;
+  * `smp wake` stops the clock of the other core and puts four tasks on the
+    machine: the ones of that core can only begin through the interrupt of
+    this one, and the command prints the count of the tasks that did. The
+    clock is started again before it returns;
+  * `smp irq keyboard 1` moves the line of the keyboard to the second core,
+    the monitor of QEMU presses the Shift key three times, and the next
+    `smp irq` shows the interrupts on the core the line was sent to.
+
 """
 
 from __future__ import annotations
@@ -48,8 +63,10 @@ import os
 import re
 import select
 import shutil
+import socket
 import subprocess
 import sys
+import tempfile
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -74,7 +91,24 @@ COMMANDS = [
     # another. The state has to travel with the task on either core.
     "exec /bin/fpu2",
     "smp",
+    # The interrupt controller of the machine and the wake of a core (K8).
+    "smp irq",
+    "smp wake",
+    "smp irq keyboard 1",
+    # The keys are pressed after this answer (see HOOKS): the line has to be
+    # on the other core when the keyboard interrupts.
+    "smp irq",
+    "smp",
 ]
+
+# What is done after the answer of a command of the list, before the next one
+# is typed: the keyboard of the machine is a device of QEMU and not a line of
+# the serial console, so it is pressed through the monitor of the emulator.
+# The Shift key is the one that raises the line and types nothing: the shell
+# reads the keyboard of the PS/2 as its console, and a letter would land in
+# the line it is about to read.
+KEY_AFTER = 7
+KEYS = ["shift", "shift", "shift"]
 
 # What the boot has to say before the shell exists: the loader verified the
 # image, the port came up, the scheduler is there and the map is W^X. The
@@ -122,6 +156,69 @@ def strip_ansi(text: str) -> str:
     return ANSI.sub("", text)
 
 
+class Monitor:
+    """The human monitor of QEMU: the keyboard of the machine.
+
+    The serial console of the machine carries the shell; the keyboard of the
+    PS/2 is a device of the emulator, and `sendkey` is how a test presses it.
+    The monitor is a unix socket that takes one command at a time and answers
+    with its own prompt, so nothing is parsed out of the console of QEMU.
+    """
+
+    def __init__(self, path: str, timeout: float = 10.0) -> None:
+        self.path = path
+        self.sock = None
+        deadline = time.monotonic() + timeout
+
+        while time.monotonic() < deadline:
+            if os.path.exists(path):
+                sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                try:
+                    sock.connect(path)
+                except OSError:
+                    sock.close()
+                else:
+                    sock.settimeout(0.2)
+                    self.sock = sock
+                    break
+
+            time.sleep(0.05)
+
+        if self.sock is None:
+            raise RuntimeError(f"no monitor at {path}: QEMU did not start")
+
+        # The banner and the first prompt of the monitor are not an answer.
+        self.read(0.3)
+
+    def read(self, window: float = 0.3) -> str:
+        assert self.sock is not None
+        text = ""
+        self.sock.settimeout(max(window, 0.01))
+
+        while True:
+            try:
+                chunk = self.sock.recv(4096)
+            except (socket.timeout, BlockingIOError):
+                break
+
+            if not chunk:
+                break
+
+            text += chunk.decode("utf-8", errors="replace")
+
+        return text
+
+    def command(self, text: str, window: float = 0.5) -> str:
+        assert self.sock is not None
+        self.sock.sendall((text + "\n").encode("ascii"))
+        return self.read(window)
+
+    def close(self) -> None:
+        if self.sock is not None:
+            self.sock.close()
+            self.sock = None
+
+
 def run_machine(loader: str, kernel: str, image: str, timeout: float, seconds: float,
                 hang: float = 20.0) -> str:
     """Boot the two-core machine, drive the shell and return the transcript.
@@ -136,7 +233,13 @@ def run_machine(loader: str, kernel: str, image: str, timeout: float, seconds: f
     After the last answer the machine is left at its prompt until the session
     is `seconds` old: the second `smp` has to read a clock that has moved,
     which is a fact about time and not only about the number of commands.
+
+    The keyboard is pressed through the monitor of QEMU (see Monitor), and the
+    socket lives beside the copy of the disk image and goes away with it.
     """
+    workdir = tempfile.mkdtemp(prefix="microos-smp-smoke-")
+    monitor_path = os.path.join(workdir, "monitor.sock")
+
     command = [
         "qemu-system-x86_64",
         "-kernel",
@@ -149,7 +252,15 @@ def run_machine(loader: str, kernel: str, image: str, timeout: float, seconds: f
         # both in the MADT of ACPI and the port has a second core to start.
         "-smp",
         "2",
-        "-nographic",
+        # No window and the console of the serial port, as `-nographic` gives,
+        # and the monitor on a socket of its own: the keyboard of the machine
+        # is pressed through it and the shell is read from the serial port.
+        "-display",
+        "none",
+        "-serial",
+        "stdio",
+        "-monitor",
+        f"unix:{monitor_path},server=on,wait=off",
         "-no-reboot",
         # The disk of the machine: the programs of /bin are files of the
         # MicroFS volume in it, as in the smoke of one core (ADR 0008).
@@ -166,10 +277,12 @@ def run_machine(loader: str, kernel: str, image: str, timeout: float, seconds: f
     assert process.stdout is not None
     assert process.stdin is not None
 
+    monitor = None
     fd = process.stdout.fileno()
     transcript = b""
     text = ""
     sent = 0
+    keys_pressed = False
     started = time.monotonic()
     last_output = started
     deadline = started + timeout
@@ -203,6 +316,18 @@ def run_machine(loader: str, kernel: str, image: str, timeout: float, seconds: f
             # One command per prompt: the shell prints the prompt before it
             # reads, so the line is written only when the shell is waiting.
             while sent < len(COMMANDS) and text.count(PROMPT) > sent:
+                if sent - 1 == KEY_AFTER and not keys_pressed:
+                    # The answer of the command before this one is in, and it
+                    # moved the line of the keyboard: press the keys now.
+                    keys_pressed = True
+
+                    if monitor is None:
+                        monitor = Monitor(monitor_path)
+
+                    for key in KEYS:
+                        monitor.command(f"sendkey {key}", 0.2)
+                        time.sleep(0.2)
+
                 process.stdin.write((COMMANDS[sent] + "\n").encode("ascii"))
                 process.stdin.flush()
                 sent += 1
@@ -226,6 +351,11 @@ def run_machine(loader: str, kernel: str, image: str, timeout: float, seconds: f
 
         process.stdout.close()
         process.stdin.close()
+
+        if monitor is not None:
+            monitor.close()
+
+        shutil.rmtree(workdir, ignore_errors=True)
 
     return strip_ansi(transcript.decode("utf-8", errors="replace"))
 
@@ -257,6 +387,14 @@ def check(output: str) -> list:
         re.search(r"cpu: 2 core\(s\) of the machine are used by the kernel", output) is not None,
         "k_sched_init() was given a core count of one",
     )
+    # --- the interrupt controller of the machine (ADR 0012, K8)
+    #
+    # The I/O APIC of the firmware takes the two lines of the port off the
+    # 8259, one entry each: the timer of the PIT arrives on the core 0 through
+    # the global system interrupt the MADT names for IRQ0, and the keyboard on
+    # the one of IRQ1. The report of the table is `smp irq`, read below; the
+    # boot says nothing of it, because a line of the boot is a line of the
+    # screen the other smokes count.
     # A core that did not answer the start-up IPI is the failure the AP
     # bring-up exists to avoid: the boot may not say it and must not be quiet
     # about a core it left behind either. The sentence of the branch before
@@ -381,7 +519,7 @@ def check(output: str) -> list:
     )
 
     # --- the clock of the second core after the load
-    last = answer(4)
+    last = answer(9)
     expect("the second report checks the queues", "smp: queues consistent" in last, last)
     last_ticks = {
         int(match.group(1)): int(match.group(2))
@@ -398,6 +536,120 @@ def check(output: str) -> list:
             cpu in first_ticks and cpu in last_ticks and last_ticks[cpu] > first_ticks[cpu],
             f"the core {cpu}: {first_ticks.get(cpu)} -> {last_ticks.get(cpu)}",
         )
+
+    # --- the lines of the machine (ADR 0012, K8)
+    #
+    # `smp irq` before the move: the table of the I/O APIC names a core for
+    # every line, and the count of the two lines per core says where they
+    # arrived. The timer of the PIT is the line of the core 0, and it is the
+    # only one: a line delivered twice would be a 8259 that was not masked.
+    lines = answer(5)
+    expect(
+        "the report names the I/O APIC and the masked 8259",
+        re.search(
+            r"smp: the I/O APIC at 0x[0-9a-f]+, \d+ line\(s\), the 8259 is masked", lines
+        )
+        is not None,
+        lines,
+    )
+    expect(
+        "the entry of the timer names the vector and the core",
+        re.search(r"smp: line timer: isa irq 0 -> gsi \d+, vector 0x20, cpu 0", lines) is not None,
+        lines,
+    )
+    expect(
+        "the entry of the keyboard names the vector and the core",
+        re.search(r"smp: line keyboard: isa irq 1 -> gsi \d+, vector 0x21, cpu 0", lines)
+        is not None,
+        lines,
+    )
+    timer_lines = re.search(r"smp: irq 0x20 \(timer\): cpu 0 (\d+) cpu 1 (\d+)", lines)
+    expect(
+        "the timer arrives on the core 0 and nowhere else",
+        timer_lines is not None and int(timer_lines.group(1)) > 0 and int(timer_lines.group(2)) == 0,
+        lines,
+    )
+
+    # --- the wake of a core (K8)
+    #
+    # The command stops the clock of the other core, so the only way a task
+    # can begin there is the interrupt of this one; the counters of the port
+    # say how many did, and the clock is started again before it returns.
+    wake = answer(6)
+    expect(
+        "the experiment puts its tasks on both cores",
+        re.search(
+            r"smp: wake: 4 task\(s\) of 4 started, [1-4] of them on cpu 1", wake
+        )
+        is not None,
+        wake,
+    )
+    wake_pair = re.search(r"smp: wake: the kernel handed (\d+) -> (\d+) task\(s\) to another core", wake)
+    expect(
+        "the kernel hands the tasks of the experiment to the other core",
+        wake_pair is not None and int(wake_pair.group(2)) > int(wake_pair.group(1)),
+        wake,
+    )
+    ipi_pair = re.search(r"smp: wake: cpu 1 started (\d+) -> (\d+) task\(s\) before its tick", wake)
+    expect(
+        "the other core starts them before its tick",
+        ipi_pair is not None and int(ipi_pair.group(2)) > int(ipi_pair.group(1)),
+        wake,
+    )
+    tick_pair = re.search(
+        r"smp: wake: the ticks of cpu 1 went (\d+) -> (\d+) with its clock stopped", wake
+    )
+    expect(
+        "the clock of the other core did not move during the experiment",
+        tick_pair is not None and tick_pair.group(1) == tick_pair.group(2),
+        wake,
+    )
+    expect(
+        "the experiment says the tasks woke before the tick",
+        "smp: wake ok: the tasks of cpu 1 started by the ipi, before its tick" in wake,
+        wake,
+    )
+    expect(
+        "every task of the experiment finished",
+        re.search(r"smp: wake: 4 task\(s\) done", wake) is not None,
+        wake,
+    )
+    expect(
+        "the clock of the other core runs again",
+        "smp: wake: the clock of cpu 1 is running again" in wake,
+        wake,
+    )
+
+    # --- the keyboard of the machine on the core it was sent to
+    #
+    # The line is moved to the core 1, the monitor presses Shift three times
+    # (the key that raises the line and types nothing) and the count of the
+    # interrupt of the keyboard moves on that core and not on the core 0.
+    move = answer(7)
+    expect(
+        "the keyboard line moves to the second core",
+        re.search(r"smp: the keyboard line is now on cpu 1 \(gsi \d+, vector 0x21\)", move)
+        is not None,
+        move,
+    )
+    after_keys = answer(8)
+    expect(
+        "the report has the line of the keyboard on the second core",
+        re.search(r"smp: line keyboard: isa irq 1 -> gsi \d+, vector 0x21, cpu 1", after_keys)
+        is not None,
+        after_keys,
+    )
+    keys = re.search(r"smp: irq 0x21 \(keyboard\): cpu 0 (\d+) cpu 1 (\d+)", after_keys)
+    expect(
+        "the keyboard arrives on the core the line was sent to",
+        keys is not None and int(keys.group(1)) == 0 and int(keys.group(2)) >= 3,
+        after_keys,
+    )
+    expect(
+        "the timer stays on the core 0 after the move",
+        re.search(r"smp: irq 0x20 \(timer\): cpu 0 [1-9]\d* cpu 1 0", after_keys) is not None,
+        after_keys,
+    )
 
     return checks
 
