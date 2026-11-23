@@ -128,7 +128,21 @@ stops on a race of a chip.
 The IDE channel does not need any of this: its line is edge-triggered, which
 is why `src/ata.c` has been fine since ADR 0032.
 
-### 5. The boot: two disks, one root
+### 5. The run of a read: the device says how big it is
+
+A device that moves a run per command was read eight sectors at a time, a
+number that ADR 0032 measured on a cache of sixteen boxes and on the platter of
+the board. Both disks of this port have a cache of 512 boxes and a command of
+128 KiB, and the read ahead of a file is the run the block layer asks of the
+medium: it is now a field of `struct k_blockdev` (0 is the eight of before, and
+the board keeps it), clamped by the boxes of the cache - the staging buffer of
+the cache is the largest run it may read, and a device that asks for more is
+asking for a buffer that is not there. The disks of the port ask for 128
+sectors: the read of a file of 16 MiB out of the cache of the host goes from
+134 to 262 MiB/s, and the read of a file of 128 MiB of the volume of 5 GiB from
+33.8 to 40.8 MiB/s. The write is untouched by it: its rate is the filesystem's.
+
+### 6. The boot: two disks, one root
 
 `port_x86_64_virtio_blk_init()` runs after the disk of the IDE channel and
 registers `virtio0` with the cache of the block layer (512 sectors, write-back,
@@ -187,9 +201,10 @@ its own; `docs/debts.md` carries the plan and the first number.
 * Every smoke test of the port runs on either bus with one argument, and the
   gate of the release is the same gate twice: `x86-smoke` 378 checks,
   `x86-disk-smoke` 57, `x86-root-smoke` 52 and `x86-volume-smoke` 20 on both.
-* The device is 99 % of the wall clock of a file: the numbers of the volume of
-  5 GiB are the same on both disks, and the lane did not move the rate of a
-  filesystem. What it did move is the cost of a *run* - the request of the
+* The device is a hundredth of the wall clock of a file: the numbers of the
+  volume of 5 GiB are the same on both disks, and the lane did not move the
+  rate of a filesystem - the read ahead of §5 is what moved, and it moved for
+  both. What it did move is the cost of a *run* - the request of the
   block layer that the IDE channel cut into eight commands and a copy is one
   descriptor chain here - and it removed a ceiling: the queue is the limit of
   a request and not 64 KiB.
@@ -208,14 +223,15 @@ QEMU 11.1.3, the disk of the host behind the page cache:
 
 | What | IDE channel | virtio-blk | Where the time goes |
 |---|---|---|---|
-| `file_write`, MicroFS, 16 MiB in 64 KiB blocks | 6.62 MiB/s | 6.56 MiB/s | MicroFS, and not the disk |
-| `file_read`, the same file | 134 MiB/s | 131 MiB/s | the read ahead and the block layer |
-| `file_write`, ext2, 16 MiB | 15.3 MiB/s | 14.6 MiB/s | ext2 and the block layer |
-| `file_read`, ext2, the same file | 51 MiB/s | 50 MiB/s | the same |
+| `file_write`, MicroFS, 16 MiB in 64 KiB blocks | 5.39 MiB/s | 5.37 MiB/s | MicroFS, and not the disk |
+| `file_read`, the same file | 262 MiB/s | 246 MiB/s | the read ahead and the block layer |
+| `file_write`, ext2, 16 MiB | 14.9 MiB/s | 15.2 MiB/s | ext2 and the block layer |
+| `file_read`, ext2, the same file | 62.5 MiB/s | 59.5 MiB/s | the same |
+| ext2, a file of 128 MiB of the volume of 5 GiB | 13.8 MiB/s, 39.7 read | 13.9 MiB/s, 40.9 read | the sector operations, both ways |
 
 The writes of the disk itself, read out of the statistics of QEMU around a
 write of 16 MiB: 447 commands of 38 KiB and 14 ms of medium on the IDE
-channel. The device is not the machine's problem; it has not been since
+channel, which is 1.3 % of the 1068 ms the call took. The device is not the machine's problem; it has not been since
 ADR 0032. The rate of a file written to ext2 is what a filesystem that asks a
 device for five sectors of a kilobyte per kilobyte - and copies each of them
 twice in the block layer - costs on a processor that is emulated, and virtio
