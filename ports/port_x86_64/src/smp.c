@@ -365,6 +365,11 @@ void port_x86_64_ap_entry(k_u32_t cpu)
 
     port_x86_64_interrupts_load();
 
+    /* The fast door of a system call is a register of the core (src/syscall.c).
+     * A core that opens it late takes the calls of its programs the slow way,
+     * through the vector 0x80, which is still in the table of every core. */
+    port_x86_64_syscall_init_cpu();
+
     /*
      * CR0.WP is a register of the core and the boot set it only on its own:
      * without it a copy of the kernel into a read-only page of a program does

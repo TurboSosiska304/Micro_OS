@@ -26,6 +26,7 @@
  */
 #include "port_x86_64.h"
 
+#include <stddef.h>
 #include <string.h>
 
 #include "kernel/cpu.h"
@@ -157,11 +158,27 @@ static struct {
 
 /* One record per core, at the address IA32_GS_BASE of the core points at.
  * The kernel number is the first word on purpose: k_port_cpu_id() is a load
- * of offset zero and nothing else. */
+ * of offset zero and nothing else. The two words below it are the state the
+ * fast door of a system call reads before C exists - the stack of the program
+ * and the one the call keeps its own stack in (port_x86_64_smp.h names the
+ * offsets, src/interrupts.S reads them). */
 struct port_cpu_record {
     k_u32_t id;
     k_u32_t apic_id;
+    k_u64_t kernel_rsp;
+    k_u64_t user_rsp;
 };
+
+/* The offsets of the header are the offsets of the assembly: a word that
+ * moved would make the entry of a call take the stack of nothing. */
+_Static_assert(PORT_X86_64_CPU_ID == offsetof(struct port_cpu_record, id),
+               "the kernel number is the first word of the record");
+_Static_assert(PORT_X86_64_CPU_APIC_ID == offsetof(struct port_cpu_record, apic_id),
+               "the hardware id follows the kernel number");
+_Static_assert(PORT_X86_64_CPU_KERNEL_RSP == offsetof(struct port_cpu_record, kernel_rsp),
+               "the stack of the call is at the offset the entry reads");
+_Static_assert(PORT_X86_64_CPU_USER_RSP == offsetof(struct port_cpu_record, user_rsp),
+               "the stack of the program is at the offset the entry reads");
 
 static struct port_cpu_record g_records[KERNEL_CPUS_MAX];
 
@@ -421,30 +438,39 @@ void port_x86_64_cpus_init(void)
         next++;
     }
 
-#if KERNEL_SMP
-    /* The boot is the first core the kernel may ask which one it is. */
+    /*
+     * The boot is the first core the kernel may ask which one it is, and the
+     * one that has to have its record under GS before a program can make its
+     * first call.
+     */
     port_x86_64_cpu_set_self(0);
-#endif
 }
 
 /* --- the identity of a core --- */
 
 void port_x86_64_cpu_set_self(k_u32_t cpu)
 {
-#if KERNEL_SMP
     if (cpu >= KERNEL_CPUS_MAX) {
         /* A core the kernel has no slot for must not open a read of the
          * array: it keeps the identity of the boot and is not counted. */
         return;
     }
 
+    /*
+     * The record is the identity of the core and the two words the entry of
+     * a system call reads before there is a C frame: the stack to take and
+     * the slot that keeps the stack of the program. A build of one core has
+     * one record and loads it like the others - the fast door of src/
+     * interrupts.S reads %gs at its first instruction, and a zero base there
+     * would be a load from address zero. k_port_cpu_id() keeps answering the
+     * constant zero without SMP, which is the same number by another way.
+     */
     port_wrmsr(0xC0000101u, (k_u64_t)(uintptr_t)&g_records[cpu]);
 
+#if KERNEL_SMP
     /* The flag is written after the register: a core that reads it sees the
      * base it was given, never the zero of the reset. */
     g_gs_ready = true;
-#else
-    K_UNUSED(cpu);
 #endif
 }
 
@@ -491,6 +517,19 @@ k_u32_t k_port_cpu_id(void)
     /* One core: the flag is the promise, and there is no GS machinery. */
     return 0u;
 #endif
+}
+
+/*
+ * The stack of the program that is running, kept in the record of the core
+ * for the entry of `syscall`. The caller is the one that wrote the same number
+ * into RSP0 of the TSS, so the two cannot disagree: every entry into ring 3
+ * goes through it (src/gdt.c).
+ */
+void port_x86_64_cpu_set_kernel_rsp(k_u64_t rsp)
+{
+    k_u32_t cpu = k_port_cpu_id();
+
+    g_records[cpu < KERNEL_CPUS_MAX ? cpu : 0u].kernel_rsp = rsp;
 }
 
 /* --- what the boot and the shell read --- */

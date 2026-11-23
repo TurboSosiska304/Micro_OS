@@ -620,7 +620,7 @@ starts with the same shape. The environment travels to the port in
 
 The library of the kernel is linked into the kernel and calls `ksys_*`, which
 a program of ring 3 cannot reach, so a program is linked against
-`components/libc/user`: `_start`, the door of `int $0x80`, `open`, `close`,
+`components/libc/user`: `_start`, the door of `syscall`, `open`, `close`,
 `read`, `write`, `lseek`, `readdir`, `getpid`, `uptime`, `exit`, `printf`,
 `puts` and five functions of strings. The numbers of the calls come from
 `kernel/ksys.h`, the same header the kernel uses. The image carries its copy:
@@ -643,8 +643,10 @@ the three wrappers with the codes of POSIX in `errno`, and the shell has
 `chmod`, `chown` and `exec` over the same calls. The directories of a path are
 checked for their `x` bit, and `fork()` with an address space of its own
 still waits for the copy of the page tables and copy on write (ADR 0005,
-ADR 0007). A program calls the kernel with
-`int $0x80` on the x86-64 port: the register ABI is in
+ADR 0007). A program calls the kernel with `syscall` on the x86-64 port; the
+vector 0x80 is the second door of the same convention, the one a program of
+another compiler and the restorer of a signal handler use, and the return of
+either instruction is the frame of the same 160 bytes. The register ABI is in
 [ADR 0006](adr/0006-program-entry.md), the program runs in ring 3 with page
 tables of its own, and the processor switches to a kernel stack of the program
 through the TSS on the way in. The pointers of the caller are checked at the

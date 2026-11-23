@@ -18,8 +18,9 @@ their addresses are not its own. Its library is `components/libc/user` (ADR
 0016): `_start`, the door of the call, `open`, `close`, `read`, `write`,
 `lseek`, `readdir`, `stat`, `mkdir`, `unlink`, `getcwd`, `getpid`, `uptime`,
 `execve`, `exit`, `printf`, `puts`, `snprintf`, the strings, the allocation
-and the streams. The door is `int $0x80` on x86-64 and the address of a
-function of the port on the board (ADR 0018); the numbers and the arguments
+and the streams. The door is `syscall` on x86-64 (with the vector 0x80 as
+the second door of the same convention) and the address of a function of the
+port on the board (ADR 0018); the numbers and the arguments
 of the calls are the same on both machines. The two libraries share the
 header of the ABI and nothing else, and that is deliberate: one runs with the
 kernel under it, the other has nothing but the gate.
@@ -206,7 +207,7 @@ answers 0 when the child is not ready.
 
 `components/libc/user` is the library a program is linked against (ADR 0016).
 It is not the library of the kernel above: it reaches the kernel only through
-`int $0x80` on x86-64 (or the door of the board), and it grew with the
+`syscall` on x86-64 (or the door of the board), and it grew with the
 programs that were ported to it. The port of sbase (ten Unix tools) needed
 the families a portable POSIX source expects, and they are now part of it:
 

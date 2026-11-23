@@ -392,6 +392,7 @@ function(add_program_image name entry)
 endfunction()
 
 add_program_image(hello hello_main)
+add_program_image(bench bench_main)
 add_program_image(crash crash_main)
 add_program_image(fork fork_main)
 add_program_image(badptr badptr_main)
@@ -994,6 +995,14 @@ add_libc_program(bench
     DEFINES ULIBC_HEAP_SIZE=65536u
 )
 
+# The two doors of a system call (ADR 0035): `int $0x80` and `syscall`, in one
+# program, so the two are measured by the same compiler on the same machine.
+add_libc_program(door
+    MAIN "${PROGRAM_DIR}/door.c"
+    SOURCES ${SBASE_LIBC_SOURCES}
+    DEFINES ULIBC_HEAP_SIZE=65536u
+)
+
 function(add_sbase_program tool heap)
     add_libc_program(${tool}
         MAIN "${SBASE_DIR}/${tool}.c"
@@ -1388,6 +1397,7 @@ add_executable(microos64
     src/fbdev.c
     src/inputdev.c
     src/gdt.c
+    src/syscall.c
     src/paging.c
     src/mm.c
     src/cpu.c

@@ -17,8 +17,38 @@
  * program and the restorer page of the port returns through sigreturn, so
  * the program needs no library and no assembly of its own. Every line below
  * is written by the program; the smoke test reads them in order.
+ *
+ * The program makes its calls through the vector 0x80 (`prog.h`), and twice
+ * through the fast door of `syscall` with the helper below: the two doors of
+ * the port build one frame, and the signal that is answered on the way out of
+ * a call has to be answered the same way from either. The rest of the tree
+ * takes the fast door (the library of a program), so a machine that runs this
+ * program and, say, `/bin/ls` exercises both.
  */
 #include "prog.h"
+
+/*
+ * One call through the instruction `syscall`, which the port points at its
+ * fast entry with IA32_LSTAR: RCX and R11 belong to the instruction and are
+ * clobbered by it, exactly as the library of a program declares them.
+ */
+static long fast_call(long number, long a0, long a1, long a2, long a3, long a4, long a5)
+{
+    register long rax __asm__("rax") = number;
+    register long rdi __asm__("rdi") = a0;
+    register long rsi __asm__("rsi") = a1;
+    register long rdx __asm__("rdx") = a2;
+    register long r10 __asm__("r10") = a3;
+    register long r8 __asm__("r8") = a4;
+    register long r9 __asm__("r9") = a5;
+
+    __asm__ volatile("syscall"
+                     : "+r"(rax)
+                     : "r"(rdi), "r"(rsi), "r"(rdx), "r"(r10), "r"(r8), "r"(r9)
+                     : "rcx", "r11", "cc", "memory");
+
+    return rax;
+}
 
 static volatile int g_int_runs;
 static volatile int g_last_int;
@@ -64,6 +94,26 @@ int signals_main(int argc, char *const argv[])
 
     if (r < 0 || g_int_runs != 1 || g_last_int != KSYS_SIGINT) {
         prog_puts("PROGRAM: the handler did not run\n");
+        prog_exit(1);
+        return 1;
+    }
+
+    /*
+     * 1b. The same signal through the fast door: the frame of a call is one
+     * frame whether the program came in with `int $0x80` or with `syscall`,
+     * and a handler the kernel enters on the way out of the second is the
+     * proof that the fast return writes the fields the handler frame needs.
+     */
+    g_int_runs = 0;
+    r = fast_call(KSYS_KILL, (long)prog_getpid(), KSYS_SIGINT, 0, 0, 0, 0);
+    prog_puts("PROGRAM: self SIGINT through syscall returned ");
+    prog_put_dec((unsigned long)(r < 0 ? -r : r));
+    prog_puts(", handler runs ");
+    prog_put_dec((unsigned long)g_int_runs);
+    prog_puts("\n");
+
+    if (r < 0 || g_int_runs != 1 || g_last_int != KSYS_SIGINT) {
+        prog_puts("PROGRAM: the handler of the fast door did not run\n");
         prog_exit(1);
         return 1;
     }
@@ -155,7 +205,7 @@ int signals_main(int argc, char *const argv[])
     }
 
     status = -1;
-    r = prog_waitpid(pid, &status, 0);
+    r = fast_call(KSYS_WAITPID, pid, (long)&status, 0, 0, 0, 0);
     prog_puts("PROGRAM: wait returned ");
     prog_put_dec((unsigned long)(r < 0 ? -r : r));
     prog_puts(", handler runs ");

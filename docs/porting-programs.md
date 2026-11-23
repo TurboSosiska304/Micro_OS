@@ -16,7 +16,7 @@ It is not the recipe of a **port of Micro OS** to another machine: that one is
 
 A program of Micro OS is a static `MOX1` image linked for the window of the
 machine, entered at `_start`, which reaches the kernel only through
-`int $0x80` on x86-64 (ADR 0006, ADR 0016). There is no dynamic linker and no
+`syscall` on x86-64 (ADR 0006, ADR 0016). There is no dynamic linker and no
 `libc.so`: the third-party library is a **static archive** built by the same
 compiler with the same flags as the program, and the linker takes the objects
 the program names. A port is therefore three things:

@@ -3,11 +3,17 @@
  *
  * On x86-64 the kernel has no function a program can call: the program was
  * not compiled into it, and the address of ksys_call() means nothing in ring
- * 3. The one door is the vector 128 of the table of the interrupts, and a
- * call is the number in RAX with the six arguments in RDI, RSI, RDX, R10, R8
- * and R9 (ADR 0006). RCX and R11 are not arguments because the instruction
- * `syscall` of a 64-bit machine keeps them for itself; the one convention
- * serves both.
+ * 3. The door is the instruction `syscall`, which the port opens with the
+ * address of its entry in IA32_LSTAR (ports/port_x86_64/src/syscall.c); a call
+ * is the number in RAX with the six arguments in RDI, RSI, RDX, R10, R8 and R9
+ * (ADR 0006). RCX and R11 are not arguments because the instruction keeps them
+ * for the return address and the flags, and the port reads them back into the
+ * frame of the call.
+ *
+ * The port keeps its vector 128 as well: a program of another compiler, the
+ * restorer of a signal handler, and a return of `sigreturn` still take
+ * `int $0x80`, and the frame of either instruction is the same 160 bytes. The
+ * library of this tree takes the fast one.
  *
  * On the board (ADR 0018) there is no instruction of a system call a program
  * may execute: the vector of ESP-IDF takes `syscall` before the port sees it.
@@ -83,7 +89,14 @@ long __ulibc_syscall6(long number, long a0, long a1, long a2, long a3, long a4, 
     register long r8 __asm__("r8") = a4;
     register long r9 __asm__("r9") = a5;
 
-    __asm__ volatile("int $0x80"
+    /*
+     * The instruction of the fast door. It keeps the return address in RCX
+     * and the flags in R11 - the port picks both out of the frame of the
+     * call - so the two are clobbered here and named as such, which is what
+     * keeps the compiler from holding a value of the program in either of
+     * them across the call.
+     */
+    __asm__ volatile("syscall"
                      : "+r"(rax)
                      : "r"(rdi), "r"(rsi), "r"(rdx), "r"(r10), "r"(r8), "r"(r9)
                      : "rcx", "r11", "cc", "memory");

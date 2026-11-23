@@ -25,6 +25,21 @@
 k_u32_t port_x86_64_cpu_apic_id(k_u32_t cpu);
 
 /*
+ * The words of the record of a core, at the offsets src/interrupts.S reads.
+ * They live in a header of preprocessor definitions only, because the file of
+ * assembly cannot include a header of the kernel's types (see
+ * port_x86_64_asm.h, which says what the four are and who writes them).
+ */
+#include "port_x86_64_asm.h"
+
+/*
+ * The stack of the program that is running, for the entry of `syscall`. Called
+ * by port_x86_64_tss_set_rsp0() with the value the TSS was just given, so that
+ * the record cannot fall behind the descriptor of the processor.
+ */
+void port_x86_64_cpu_set_kernel_rsp(k_u64_t rsp);
+
+/*
  * Make `cpu` the identity of the caller. The processor of the boot calls this
  * from port_x86_64_cpus_init(); an application processor calls it as its
  * first action in C, before any kernel call, because a call may ask which
