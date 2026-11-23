@@ -18,6 +18,13 @@
  * has none). A program of the machine is started from the stage with
  * execve(), and k_port_exec_enter() copies the table of the stage into it.
  *
+ * The pipes are made one boundary at a time, as the stages are forked: the
+ * shell keeps one reading end between two forks and closes the boundary
+ * behind it, so a chain is limited by the line and the task table and not by
+ * the sixteen descriptors of a task. A stage that is already running does not
+ * inherit the pipes of the boundaries after it, because the shell makes them
+ * after the fork.
+ *
  * Ctrl+C belongs to the whole chain. The stages and the programs they start
  * share one job (struct task, ADR 0017), the shell is the only reader of the
  * console while it waits, and one key signals every task of the job. A stage
@@ -38,14 +45,16 @@
 #include "libc/unistd.h"
 
 /*
- * The stages of one line. Every boundary is one pipe of the system and both
- * ends of it are descriptors of the shell; the table of a task has sixteen
- * slots (TASK_MAX_FDS) and could hold more pipe ends, so the three stages
- * are the table of the parser and not the descriptors. A deeper chain is
- * refused with a sentence that says why instead of failing on a descriptor
- * in the middle.
+ * The stages of one line. The line is at most 127 characters and 32 words,
+ * and a stage is a command and the `|` before it, so sixteen stages are the
+ * most a line of this shell can hold. The number is the table of the parser
+ * and no longer a table of descriptors: the pipes are made one at a time as
+ * the stages are started, and the shell keeps the two ends of one boundary
+ * between two forks instead of all of them at once. A chain of sixteen
+ * stages is twelve descriptors fewer than a machine whose shell held every
+ * pipe end would need.
  */
-#define KSHELL_STAGES_MAX 3
+#define KSHELL_STAGES_MAX 16
 
 /* A line of 127 characters and words of one letter cannot hold more. */
 #define KSHELL_WORDS_MAX 32
@@ -71,21 +80,23 @@ struct pipe_stage {
     struct pipe_redirection in;
     struct pipe_redirection out;
     struct pipe_redirection err;
-    int in_fd;  /* the reading end of the pipe before the stage, -1 */
-    int out_fd; /* the writing end of the pipe after the stage, -1 */
 };
 
 struct pipeline {
     struct pipe_stage stages[KSHELL_STAGES_MAX];
     int count;
-    int pipes[KSHELL_STAGES_MAX - 1][2];
-    int pipe_count;
 };
 
-/* What a stage task needs: the line and its place in it. */
+/*
+ * What a stage task needs: the stage of the line and the two ends of the
+ * pipes it was started with. The numbers are copied and not looked up: the
+ * stage runs while the shell makes the pipe of the next boundary, and the
+ * table of the pipeline is the shell's.
+ */
 struct stage_start {
-    struct pipeline *pipeline;
-    int index;
+    struct pipe_stage *stage;
+    int in_fd;
+    int out_fd;
 };
 
 /* --- the words and the grammar --- */
@@ -274,11 +285,6 @@ static bool pipeline_parse(struct pipeline *p, char **words, const bool *literal
 
     memset(p, 0, sizeof(*p));
 
-    for (index = 0; index < KSHELL_STAGES_MAX; index++) {
-        p->stages[index].in_fd = -1;
-        p->stages[index].out_fd = -1;
-    }
-
     index = 0;
 
     while (at < word_count) {
@@ -403,47 +409,32 @@ static bool stage_apply_redirection(struct pipe_stage *stage,
 
 /*
  * Put the ends of the pipes on 0 and 1 and the files where the line said.
- * The ends the stage does not use are closed in its own table: a write end
- * that nobody closed keeps the reader of the pipe from ever seeing the end
- * of the file, and a read end of a writer keeps a broken pipe from being
- * reported.
+ * The task of the stage was forked with the two ends of its own boundary and
+ * nothing else - the shell closes each end before it makes the next pipe - so
+ * every descriptor above 2 is closed here. A write end that nobody closed
+ * keeps the reader of the pipe from ever seeing the end of the file, and a
+ * read end of a writer keeps a broken pipe from being reported.
  *
  * The output and the error are set before the input, so a file that cannot
  * be opened is reported where the line asked for the errors.
  */
-static bool stage_setup(struct pipeline *p, struct pipe_stage *stage)
+static bool stage_setup(struct pipe_stage *stage, int in_fd, int out_fd)
 {
-    int index;
     int fd;
 
-    if (stage->in_fd >= 0 && microos_dup2(stage->in_fd, 0) != 0) {
+    if (in_fd >= 0 && microos_dup2(in_fd, 0) != 0) {
         return false;
     }
 
-    if (stage->out_fd >= 0 && microos_dup2(stage->out_fd, 1) != 1) {
+    if (out_fd >= 0 && microos_dup2(out_fd, 1) != 1) {
         return false;
     }
 
-    /*
-     * The ends that are still open after the two copies: the ones at 0 and 1
-     * are the copies themselves and stay. Every other end may be closed,
-     * including the number the duplicate came from.
-     */
-    for (index = 0; index < p->pipe_count; index++) {
-        int end;
-
-        for (end = 0; end < 2; end++) {
-            int pipe_fd = p->pipes[index][end];
-
-            if (pipe_fd == 0 && stage->in_fd >= 0) {
-                continue;
-            }
-            if (pipe_fd == 1 && stage->out_fd >= 0) {
-                continue;
-            }
-
-            microos_close(pipe_fd);
-        }
+    /* The two ends are at 0 and 1 now; the copies are the stage's own
+     * descriptors and the numbers they came from are not. The inherited
+     * table above 2 belongs to the shell and is not part of the stage. */
+    for (fd = 3; fd < TASK_MAX_FDS; fd++) {
+        microos_close(fd);
     }
 
     if (stage->err.set && !stage_apply_redirection(stage, &stage->err, 2)) {
@@ -454,12 +445,6 @@ static bool stage_setup(struct pipeline *p, struct pipe_stage *stage)
     }
     if (stage->in.set && !stage_apply_redirection(stage, &stage->in, 0)) {
         return false;
-    }
-
-    /* An inherited descriptor above the three of the interface is not part
-     * of the stage: the program that runs here sees the three and nothing. */
-    for (fd = 3; fd < TASK_MAX_FDS; fd++) {
-        microos_close(fd);
     }
 
     return true;
@@ -475,10 +460,9 @@ static bool stage_setup(struct pipeline *p, struct pipe_stage *stage)
 static void stage_task(void *arg)
 {
     struct stage_start *start = (struct stage_start *)arg;
-    struct pipe_stage *stage = &start->pipeline->stages[start->index];
     int status;
 
-    if (!stage_setup(start->pipeline, stage)) {
+    if (!stage_setup(start->stage, start->in_fd, start->out_fd)) {
         task_exit(1);
 
         /* Not reached: task_exit() ends the task. */
@@ -486,7 +470,7 @@ static void stage_task(void *arg)
         }
     }
 
-    status = kshell_invoke(stage->argc, stage->argv, true);
+    status = kshell_invoke(start->stage->argc, start->stage->argv, true);
 
     task_exit(status);
 
@@ -496,18 +480,6 @@ static void stage_task(void *arg)
 }
 
 /* --- the pipeline --- */
-
-static void pipeline_close_pipes(struct pipeline *p)
-{
-    int index;
-    int end;
-
-    for (index = 0; index < p->pipe_count; index++) {
-        for (end = 0; end < 2; end++) {
-            microos_close(p->pipes[index][end]);
-        }
-    }
-}
 
 /* Wait for one stage and read the console meanwhile. The answer is the
  * status of the stage; a signal of the job ends every stage of the chain. */
@@ -544,30 +516,11 @@ static int pipeline_run(struct pipeline *p)
     int status = 0;
     int started = 0;
     int index;
+    int in_fd = -1;
 
     if (self == NULL) {
         kshell_eprintf("the shell: a pipeline needs a task\n");
         return KSHELL_ERROR;
-    }
-
-    for (index = 0; index + 1 < p->count; index++) {
-        int fds[2];
-
-        if (microos_pipe(fds) != 0) {
-            kshell_eprintf("the shell: cannot make a pipe: %s\n",
-                           microos_strerror(microos_errno()));
-            pipeline_close_pipes(p);
-            return KSHELL_ERROR;
-        }
-
-        p->pipes[index][0] = fds[0];
-        p->pipes[index][1] = fds[1];
-        p->pipe_count++;
-    }
-
-    for (index = 0; index < p->count; index++) {
-        p->stages[index].in_fd = (index > 0) ? p->pipes[index - 1][0] : -1;
-        p->stages[index].out_fd = (index + 1 < p->count) ? p->pipes[index][1] : -1;
     }
 
     /*
@@ -580,28 +533,72 @@ static int pipeline_run(struct pipeline *p)
     previous_job = task_get_job(self);
     task_set_job(self, job);
 
+    /*
+     * One boundary at a time. A pipe is made, the stage before it is forked
+     * with its output end, and the shell keeps the reading end for the stage
+     * after it; the ends of the boundary before it are closed here, and the
+     * task table of the shell never holds more than the two ends of one
+     * boundary. The stages that were forked already do not inherit the pipes
+     * of the boundaries behind them, because those were made after the fork.
+     */
     for (index = 0; index < p->count; index++) {
         char name[TASK_NAME_MAX];
         struct task *task;
+        int out_fd = -1;
+        int next_in = -1;
+
+        if (index + 1 < p->count) {
+            int fds[2];
+
+            if (microos_pipe(fds) != 0) {
+                kshell_eprintf("the shell: cannot make a pipe: %s\n",
+                               microos_strerror(microos_errno()));
+                break;
+            }
+
+            out_fd = fds[1];
+            next_in = fds[0];
+        }
 
         snprintf(name, sizeof(name), "pipe%d", index + 1);
-        starts[index].pipeline = p;
-        starts[index].index = index;
+        starts[index].stage = &p->stages[index];
+        starts[index].in_fd = in_fd;
+        starts[index].out_fd = out_fd;
 
         task = task_fork_shared(self, name, stage_task, &starts[index]);
         if (task == NULL) {
+            if (in_fd >= 0) {
+                microos_close(in_fd);
+            }
+            if (out_fd >= 0) {
+                microos_close(out_fd);
+            }
+            if (next_in >= 0) {
+                microos_close(next_in);
+            }
+            in_fd = -1;
             break;
         }
 
         pids[index] = task->pid;
         started++;
+
+        if (in_fd >= 0) {
+            microos_close(in_fd);
+        }
+        if (out_fd >= 0) {
+            microos_close(out_fd);
+        }
+        in_fd = next_in;
     }
 
     task_set_job(self, previous_job);
 
     /* The parent keeps no end of a pipe: the reader reaches the end of the
      * file when the writer of the last stage is gone, and not before. */
-    pipeline_close_pipes(p);
+    if (in_fd >= 0) {
+        microos_close(in_fd);
+    }
 
     if (started < p->count) {
         kshell_eprintf("the shell: cannot start stage %d\n", started + 1);

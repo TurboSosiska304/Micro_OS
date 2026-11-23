@@ -158,6 +158,11 @@ static void test_parse_and_run(void)
     KT_CHECK_INT_EQ(kshell_execute("cat /in | cat"), KSHELL_OK);
     /* Three stages: two pipes of the system and three tasks. */
     KT_CHECK_INT_EQ(kshell_execute("cat /in | cat | cat"), KSHELL_OK);
+    /* Ten stages: the pipes are made one boundary at a time as the stages
+     * are forked, so the shell's table never holds more than the two ends of
+     * one boundary - the shape the line of the smoke test uses. */
+    KT_CHECK_INT_EQ(kshell_execute("cat /in | cat | cat | cat | cat | cat | cat | cat | cat | cat"),
+                    KSHELL_OK);
     /* A producer of the shell and a consumer of the shell. */
     KT_CHECK_INT_EQ(kshell_execute("ls / | cat"), KSHELL_OK);
 

@@ -212,8 +212,10 @@ the two functions instead: the port's loader sets `CR4.OSFXSR`,
 `CR4.OSXMMEXCPT` and `CR0.NE`, the runtime of the program is compiled with
 `-DULIBC_WITH_FLOAT`, and `src/math.c`, `src/stdlib.c` and `src/setjmp.c` are
 linked into that image alone. The scheduler saves none of the XMM or x87
-state, and `execve` waits for the program that runs, so there is one program
-with a point in its numbers at a time (`docs/debts.md`).
+state, so a build of a program that computes in a double is safe only while
+it runs alone; since a program's `execve` replaces the caller and a program
+may start a child and go on, two such programs can now run at once and read
+each other's registers (`docs/debts.md`, K9).
 
 ### Lua: the second worked example
 
@@ -615,12 +617,12 @@ of the host, `make x86-smoke` for the program and `/etc/sql-*.sql`,
   ceiling and a library with a bigger database needs a smaller selection or a
   `brk` of the program.
 * **Floating point.** `-mgeneral-regs-only` is the rule of the port.
-* **A real `fork` of a library's child process.** The system has `fork` on
-  x86-64 and the library now has `fork`, `waitpid` and `execvp`, but the
-  child of the port comes back with the parent's answer in RAX and a stack
-  page the parent can still write; the library works around both and the
-  port of the frame is a debt of K4 (`docs/debts.md`). A program that starts
-  a helper is a later step; `xargs` runs its command in its own process.
+* **A real `fork` of a library's child process.** It exists on x86-64: the
+  child is a task with a copy-on-write image and returns 0 from the call, an
+  `execve` of the child replaces that child, and `waitpid` (a pid or `-1`)
+  reaps it and answers the status. `xargs -P` starts its commands that way.
+  The board keeps the placeholder of a machine without an MMU, so a port that
+  forks many children is a port of x86-64.
 * **A package manager of its own.** `pkg` exists for the signed image
   (ADR 0024); a port of a program does not have to use it, but a package
   that ships one carries its license.

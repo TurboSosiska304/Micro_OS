@@ -597,8 +597,11 @@ the port's RAM, writes eleven images to `/bin` - `hello`, `crash`, `fork`,
 mode of a program
 and asks for `/bin/hello` with `execve` - the stat, the mode, the read through the VFS,
 the parse and the transition are the ones of the call. A program ends with
-`exit` and the port returns to the caller with its status; a fault of ring 3
-prints `the program faulted: vector N at 0x...` and does the same with status
+`exit` and the task it ran in becomes a zombie for its parent: the caller of
+`execve` without an address space (the shell, the boot) waits for it and gets
+0, and a program that replaced itself is reaped by the `waitpid` of its own
+parent, which gets the status the program ended with. A fault of ring 3
+prints `the program faulted: vector N at 0x...` and ends the task with status
 255 (ADR 0007).
 
 ### The entry and the library of a program

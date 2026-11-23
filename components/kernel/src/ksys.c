@@ -1496,7 +1496,13 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
                 continue;
             }
 
-            if (pid > 0 && (int)t->pid != (int)pid) {
+            /*
+             * The pid arrives in the unsigned register of the call, where
+             * -1 is larger than every pid: the comparison is on the signed
+             * value, or "any child" (0 and -1) would name a task that cannot
+             * exist and a wait for one's own children would answer ECHILD.
+             */
+            if ((int)pid > 0 && (int)t->pid != (int)pid) {
                 continue;
             }
 
@@ -1960,7 +1966,18 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t envp, k
      * K_EXEC_RUN_OTHER_ARCH is an image of another machine and is ENOEXEC
      * before a byte of it runs, and REFUSED is the image the port could not
      * place in its window or could not copy.
+     *
+     * K_EXEC_RUN_REPLACED is the POSIX shape: the caller was a program of
+     * ring 3 and the port has already made the new image its memory and the
+     * frame of this call the entry of the program. There is no status to
+     * return - the program is the caller from now on, and its status will be
+     * the answer of the waitpid of its parent - so the call answers 0 and the
+     * iretq of the stub does the rest.
      */
+    if (rc == K_EXEC_RUN_REPLACED) {
+        return 0;
+    }
+
     if (rc >= 0) {
         return 0;
     }

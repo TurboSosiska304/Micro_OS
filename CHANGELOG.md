@@ -14,6 +14,40 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Added
 
+- A program has the POSIX process pair on x86-64: the child of `fork()` is a
+  task with a copy-on-write image, `execve()` from a program replaces the
+  image of the caller instead of starting a second task (the pid, the parent,
+  the descriptors and the directory stay), and `waitpid()` reaps the child and
+  answers its status, with `-1` meaning "any child". `/bin/procs` proves the
+  four shapes in `make x86-smoke`: a child that computes 55 and returns it, a
+  double fork with two statuses, and a child whose `execvp` becomes another
+  program. `make x86-smoke` is 319 checks. The shell stays the synchronous
+  caller it was, because a kernel task has no address space to replace.
+- A pipeline of the shell is no longer three stages: the parser holds sixteen
+  (the most a line of 32 words can carry), the pipes are made one boundary at
+  a time as the stages are forked - the shell keeps one reading end between
+  two forks and closes the boundary behind it - and the system has sixteen
+  pipes and forty open-file descriptions. A line of ten stages and Ctrl+C for
+  the whole job are in `make x86-smoke`.
+- `xargs -P` works: the command of sbase forks a child per batch, the child's
+  `execve` replaces it, and the parent reaps with `waitpid(-1)` without
+  blocking below the ceiling of `-P`. `make x86-smoke` runs six commands with
+  `-P 4` and checks that each word was handed to one child.
+
+### Fixed
+
+- `waitpid(-1)` and `wait()` could not wait for any child: the pid arrives in
+  an unsigned register, where -1 is larger than every pid, and the scan of the
+  children compared it as a number - the wait answered `ECHILD` and `xargs`
+  could not reap the children it had forked. The scan compares the signed
+  value, and a host test waits for `-1`.
+- The parent's first write after a `fork()` went into the frame the child was
+  about to return into: the clone made both page tables read-only but flushed
+  the TLB with an address 32 MiB above the page (the base of the window was
+  counted twice), so the stale writable entry stayed. The clone flushes the
+  address it changed, and a libc program's child returns 0 without the
+  library's `getpid()` workaround and its yield.
+
 - A volume of 5 GiB is an ordinary volume: `make x86-volume-smoke` writes the
   images of ext2 and of MicroFS of the plan, boots each as the root of the
   machine, writes a file of 128 MiB (16 MiB of MicroFS) and reads it back, and

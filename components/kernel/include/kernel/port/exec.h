@@ -53,7 +53,10 @@ void *k_port_exec_base(void);
  * always has one. A port called directly may see NULL (no environment) and a
  * vector whose first word is NULL (an empty one) - two different things at
  * the entry, as in POSIX. Returns -1 when the image cannot be placed or the
- * machine cannot jump.
+ * machine cannot jump; K_EXEC_RUN_REPLACED when the caller was a program of
+ * ring 3 and the image took its place - the port has switched the address
+ * space and rewritten the frame of the call, so the return of the call is the
+ * entry of the new program and the old code never runs again.
  */
 int k_port_exec_enter(const struct k_exec_image *image, char *const argv[]);
 

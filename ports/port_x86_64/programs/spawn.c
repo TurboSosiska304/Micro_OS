@@ -4,14 +4,15 @@
  *
  * It is the proof of the third argument of `execve` from the user side: the
  * vectors below are memory of this program, the kernel copies them at the
- * edge, and `/bin/hello` - a second task, entered with the environment the
- * kernel copied - prints the two words back. The program is not a shell
+ * edge, and `/bin/hello` - the same task, with the image and the environment
+ * the kernel copied - prints the two words back. The program is not a shell
  * builtin and not a call of the kernel: it is a file of `/bin` that asks for
  * another file of `/bin`, which is what a userland of this size is for.
  *
- * The call waits for the program it started (the machine has no process to
- * exit into), so the status of this task is the status of the program only
- * when it finished well.
+ * The call does not come back: the image of this file is replaced by the
+ * image of hello (POSIX), so `hello` is the program that runs from the call
+ * on and this file's `main` never returns. The status of that task is the
+ * status of hello, and the shell that started spawn waits for it.
  */
 #include "ulibc.h"
 

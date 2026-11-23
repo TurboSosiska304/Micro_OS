@@ -80,6 +80,14 @@ k_u32_t task_signal_pending(const struct task *t);
 void task_signal_inherit(struct task *child, const struct task *parent);
 
 /*
+ * The dispositions of a task across an execve (POSIX): a signal that the old
+ * program caught goes back to its default action - the handler was code of
+ * the image that is gone - and a signal the program ignored stays ignored.
+ * The marks that are pending stay for the new program.
+ */
+void task_signal_reset_on_exec(struct task *t);
+
+/*
  * The mark a finished child leaves on its parent. Called by task_exit; a
  * parent that is gone leaves the mark nowhere.
  */
