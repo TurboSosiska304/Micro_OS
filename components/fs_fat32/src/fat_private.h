@@ -66,6 +66,7 @@ struct fat_entry {
     char name[FAT_NAME_MAX + 1];
     k_u32_t cluster;
     k_u32_t size;
+    k_u64_t mtime; /* the write time of the entry, 0 when the medium has none */
     k_u8_t attr;
     bool dir;
 };
@@ -104,6 +105,17 @@ struct fat_volume {
     k_u32_t root_cluster; /* 0 for the fixed root of FAT12/16 */
     k_u32_t cluster_bytes;
     k_u64_t total_bytes;
+
+    /* The FSInfo sector of FAT32 and the backup beside the backup boot
+     * sector (0 when the volume names none). The free count belongs to the
+     * medium: a volume of the world keeps it there and a checker reads it,
+     * so every allocation and every freed chain writes it back. On FAT12/16
+     * there is no FSInfo and the count is walked when it is asked for. */
+    k_u32_t fsinfo_sector;
+    k_u32_t fsinfo_backup;
+    bool free_known;
+    k_u32_t free_clusters;
+    k_u32_t next_free;
 
     /* The sector of the device that the cache holds, and the long name that
      * the scanner of a directory is building. Both belong to the volume and
@@ -188,6 +200,14 @@ int fat_chain_extend(struct fat_volume *vol, k_u32_t *first, k_u32_t need);
 
 /* Zero one cluster, for a directory that is about to be used. */
 int fat_zero_cluster(struct fat_volume *vol, k_u32_t cluster);
+
+/*
+ * Walk the table and make the free count of the volume agree with it,
+ * then write the FSInfo sector (of FAT32) that carries it. A repair frees
+ * clusters behind the back of fat_chain_free, so it calls this before it
+ * returns; the count a checker reads has to be the one the medium holds.
+ */
+int fat_fsinfo_recount(struct fat_volume *vol);
 
 /*
  * Create an entry, with its run of long-name entries before it when the name

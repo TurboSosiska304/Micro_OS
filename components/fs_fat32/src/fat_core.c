@@ -23,6 +23,20 @@
 #define FAT12_MAX_CLUSTERS 4085u
 #define FAT16_MAX_CLUSTERS 65525u
 
+/* The FSInfo sector of a FAT32 volume: the two signatures, the signature
+ * that ends the 512 bytes, and the two numbers the world reads there. */
+#define FAT_FSINFO_BYTES 512u
+#define FAT_FSINFO_LEAD 0x41615252u
+#define FAT_FSINFO_STRUCT 0x61417272u
+#define FAT_FSINFO_TRAIL 0xAA550000u
+#define FAT_FSINFO_FREE_OFFSET 488u
+#define FAT_FSINFO_NEXT_OFFSET 492u
+#define FAT_FSINFO_UNKNOWN 0xFFFFFFFFu
+
+static int count_free(struct fat_volume *vol, k_u32_t *count, k_u32_t *first_free);
+static int fsinfo_write(struct fat_volume *vol);
+static void fsinfo_init(struct fat_volume *vol, const k_u8_t *boot);
+
 static bool is_power_of_two(k_u32_t value)
 {
     return value != 0 && (value & (value - 1u)) == 0;
@@ -251,6 +265,12 @@ int fat_volume_mount(struct fat_volume *vol, const struct k_blockdev *dev)
     if (vol->total_bytes > device_bytes) {
         return KERR_INVAL;
     }
+
+    /* The summary of the free clusters lives on the medium of a FAT32
+     * volume. A volume that was made by this machine has one; an image
+     * whose summary is missing or stale is still readable, and the table
+     * answers for it when the summary cannot. */
+    fsinfo_init(vol, boot);
 
     vol->mounted = true;
     kinfo("fat: FAT%u mounted, %u clusters of %u bytes", (unsigned)vol->type,
@@ -533,6 +553,170 @@ int fat_flush(struct fat_volume *vol)
     return (vol->dev->ops->sync(vol->dev->ctx) == 0) ? 0 : KERR_IO;
 }
 
+/* The clusters the table calls free, and the first one of them. */
+static int count_free(struct fat_volume *vol, k_u32_t *count, k_u32_t *first_free)
+{
+    k_u32_t cluster;
+    k_u32_t free_count = 0;
+    k_u32_t first = 0;
+    int rc;
+
+    for (cluster = 2u; cluster < vol->cluster_count + 2u; cluster++) {
+        k_u32_t value;
+
+        rc = fat_entry_get(vol, cluster, &value);
+        if (rc != 0) {
+            return rc;
+        }
+
+        if (value == 0) {
+            if (first == 0) {
+                first = cluster;
+            }
+            free_count++;
+        }
+    }
+
+    *count = free_count;
+    if (first_free != NULL) {
+        *first_free = first;
+    }
+
+    return 0;
+}
+
+/* Write the summary of the free clusters, and of the next one to try, to
+ * the FSInfo sector and to the copy beside the backup boot sector. */
+static int fsinfo_write(struct fat_volume *vol)
+{
+    k_u8_t raw[FAT_FSINFO_BYTES];
+    k_u64_t offset;
+    k_u32_t free_count;
+    k_u32_t next;
+    int rc;
+
+    if (vol == NULL || vol->type != 32 || vol->fsinfo_sector == 0) {
+        return 0;
+    }
+
+    offset = (k_u64_t)vol->fsinfo_sector * vol->bytes_per_sector;
+    if (fat_read_volume(vol, offset, raw, sizeof(raw)) != 0) {
+        memset(raw, 0, sizeof(raw));
+    }
+
+    free_count = vol->free_known ? vol->free_clusters : FAT_FSINFO_UNKNOWN;
+    next = (vol->next_free >= 2u && vol->next_free < vol->cluster_count + 2u) ? vol->next_free
+                                                                              : FAT_FSINFO_UNKNOWN;
+
+    fat_put32(raw, FAT_FSINFO_LEAD);
+    fat_put32(raw + 484u, FAT_FSINFO_STRUCT);
+    fat_put32(raw + FAT_FSINFO_FREE_OFFSET, free_count);
+    fat_put32(raw + FAT_FSINFO_NEXT_OFFSET, next);
+    fat_put32(raw + 508u, FAT_FSINFO_TRAIL);
+
+    rc = fat_write_volume(vol, offset, raw, sizeof(raw));
+    if (rc != 0) {
+        return rc;
+    }
+
+    /* The backup of the sector lives beside the backup boot sector. A
+     * volume that names none keeps its summary in one place. */
+    if (vol->fsinfo_backup != 0) {
+        rc = fat_write_volume(vol, (k_u64_t)vol->fsinfo_backup * vol->bytes_per_sector, raw,
+                              sizeof(raw));
+    }
+
+    return rc;
+}
+
+/* Read the summary of a FAT32 volume, or count the table when the summary
+ * is absent or was never filled in. The mount only reads. */
+static void fsinfo_init(struct fat_volume *vol, const k_u8_t *boot)
+{
+    k_u8_t raw[FAT_FSINFO_BYTES];
+    k_u32_t sector;
+    k_u32_t backup;
+    k_u32_t count;
+    k_u32_t first = 0;
+
+    vol->fsinfo_sector = 0;
+    vol->fsinfo_backup = 0;
+    vol->free_known = false;
+    vol->free_clusters = 0;
+    vol->next_free = 2;
+
+    if (vol->type != 32) {
+        return;
+    }
+
+    sector = fat_le16(boot + 48);
+    backup = fat_le16(boot + 50);
+
+    if (sector >= 1u && sector < vol->reserved_sectors &&
+        (k_u64_t)(sector + 1u) * vol->bytes_per_sector <= vol->total_bytes) {
+        vol->fsinfo_sector = sector;
+    }
+
+    if (backup >= 1u && backup + 1u < vol->reserved_sectors &&
+        (k_u64_t)(backup + 2u) * vol->bytes_per_sector <= vol->total_bytes) {
+        vol->fsinfo_backup = backup + 1u;
+    }
+
+    if (vol->fsinfo_sector != 0 &&
+        fat_read_volume(vol, (k_u64_t)vol->fsinfo_sector * vol->bytes_per_sector, raw,
+                        sizeof(raw)) == 0 &&
+        fat_le32(raw) == FAT_FSINFO_LEAD && fat_le32(raw + 484u) == FAT_FSINFO_STRUCT &&
+        fat_le32(raw + 508u) == FAT_FSINFO_TRAIL) {
+        k_u32_t stored_free = fat_le32(raw + FAT_FSINFO_FREE_OFFSET);
+        k_u32_t stored_next = fat_le32(raw + FAT_FSINFO_NEXT_OFFSET);
+
+        if (stored_free <= vol->cluster_count) {
+            vol->free_clusters = stored_free;
+            vol->free_known = true;
+        }
+
+        if (stored_next >= 2u && stored_next < vol->cluster_count + 2u) {
+            vol->next_free = stored_next;
+        }
+    }
+
+    /* A summary that says "unknown", or one that is not there at all, is a
+     * reason to ask the table: the number a checker reads has to be true. */
+    if (!vol->free_known) {
+        if (count_free(vol, &count, &first) == 0) {
+            vol->free_clusters = count;
+            vol->free_known = true;
+            if (first != 0) {
+                vol->next_free = first;
+            }
+        }
+    }
+}
+
+int fat_fsinfo_recount(struct fat_volume *vol)
+{
+    k_u32_t count;
+    k_u32_t first = 0;
+    int rc;
+
+    if (vol == NULL) {
+        return KERR_INVAL;
+    }
+
+    rc = count_free(vol, &count, &first);
+    if (rc != 0) {
+        return rc;
+    }
+
+    vol->free_clusters = count;
+    vol->free_known = true;
+    if (first != 0) {
+        vol->next_free = first;
+    }
+
+    return fsinfo_write(vol);
+}
+
 /* The value that ends a chain on this volume. */
 static k_u32_t end_of_chain(const struct fat_volume *vol)
 {
@@ -673,40 +857,104 @@ int fat_entry_set(struct fat_volume *vol, k_u32_t cluster, k_u32_t value)
     return 0;
 }
 
-int fat_alloc_cluster(struct fat_volume *vol, k_u32_t *cluster)
+/* One cluster of the table: 0 when it was free and is now the end of a
+ * chain, 1 when it was taken, a negative KERR_* when the medium failed. */
+static int alloc_at(struct fat_volume *vol, k_u32_t candidate, k_u32_t *cluster)
+{
+    k_u32_t value;
+    int rc;
+
+    rc = fat_entry_get(vol, candidate, &value);
+    if (rc != 0) {
+        return rc;
+    }
+
+    if (value != 0) {
+        return 1;
+    }
+
+    rc = fat_entry_set(vol, candidate, end_of_chain(vol));
+    if (rc != 0) {
+        return rc;
+    }
+
+    *cluster = candidate;
+    return 0;
+}
+
+static int alloc_scan(struct fat_volume *vol, k_u32_t from, k_u32_t to, k_u32_t *cluster)
 {
     k_u32_t candidate;
+
+    for (candidate = from; candidate <= to; candidate++) {
+        int rc = alloc_at(vol, candidate, cluster);
+
+        if (rc <= 0) {
+            return rc;
+        }
+    }
+
+    return 1;
+}
+
+/* Take one cluster out of the map and keep the summary in step in memory,
+ * without writing the summary: a chain that grows by many clusters writes
+ * it once at the end, not once per cluster. */
+static int alloc_one(struct fat_volume *vol, k_u32_t *cluster)
+{
+    k_u32_t last;
+    k_u32_t start = 2u;
+    int rc;
+
+    last = vol->cluster_count + 1u;
+
+    /* The FSInfo of a FAT32 volume says where the last allocation stopped;
+     * the scan starts there and wraps once, so a volume that is written at
+     * the end is not walked from the first cluster every time. */
+    if (vol->type == 32 && vol->next_free >= 2u && vol->next_free <= last) {
+        start = vol->next_free;
+    }
+
+    rc = alloc_scan(vol, start, last, cluster);
+    if (rc == 1) {
+        rc = alloc_scan(vol, 2u, start - 1u, cluster);
+    }
+    if (rc != 0) {
+        return (rc == 1) ? KERR_NOSPC : rc;
+    }
+
+    if (vol->type == 32) {
+        if (vol->free_known && vol->free_clusters > 0) {
+            vol->free_clusters--;
+        }
+        vol->next_free = (*cluster < last) ? *cluster + 1u : 2u;
+    }
+
+    return 0;
+}
+
+int fat_alloc_cluster(struct fat_volume *vol, k_u32_t *cluster)
+{
     int rc;
 
     if (vol == NULL || cluster == NULL) {
         return KERR_INVAL;
     }
 
-    for (candidate = 2u; candidate < vol->cluster_count + 2u; candidate++) {
-        k_u32_t value;
-
-        rc = fat_entry_get(vol, candidate, &value);
-        if (rc != 0) {
-            return rc;
-        }
-
-        if (value == 0) {
-            rc = fat_entry_set(vol, candidate, end_of_chain(vol));
-            if (rc != 0) {
-                return rc;
-            }
-            *cluster = candidate;
-            return 0;
-        }
+    rc = alloc_one(vol, cluster);
+    if (rc != 0) {
+        return rc;
     }
 
-    return KERR_NOSPC;
+    return (vol->type == 32) ? fsinfo_write(vol) : 0;
 }
 
 int fat_chain_free(struct fat_volume *vol, k_u32_t first)
 {
     k_u32_t cluster = first;
     k_u32_t steps = 0;
+    k_u32_t freed = 0;
+    int rc = 0;
 
     if (vol == NULL) {
         return KERR_INVAL;
@@ -714,32 +962,62 @@ int fat_chain_free(struct fat_volume *vol, k_u32_t first)
 
     while (cluster >= 2u && cluster < vol->cluster_count + 2u) {
         k_u32_t next;
-        int rc;
 
         /* A chain that is longer than the volume is a loop: stop before a
          * broken table turns a removal into an endless walk. */
         if (++steps > vol->cluster_count) {
-            return KERR_IO;
+            rc = KERR_IO;
+            break;
         }
 
         rc = fat_entry_get(vol, cluster, &next);
         if (rc != 0) {
-            return rc;
+            break;
+        }
+
+        if (next == 0) {
+            /* The cluster is free already: there is no chain to give back. */
+            rc = 0;
+            break;
         }
 
         rc = fat_entry_set(vol, cluster, 0);
         if (rc != 0) {
-            return rc;
+            break;
         }
 
-        if (next == 0 || next >= vol->cluster_count + 2u) {
-            return 0;
+        freed++;
+
+        if (next >= vol->cluster_count + 2u) {
+            break;
         }
 
         cluster = next;
     }
 
-    return 0;
+    /* The summary of the free clusters follows every chain that went back
+     * to the map, including the one a failed write rolled back. */
+    if (vol->type == 32 && freed != 0) {
+        if (vol->free_known) {
+            vol->free_clusters += freed;
+            if (vol->free_clusters > vol->cluster_count) {
+                vol->free_clusters = vol->cluster_count;
+            }
+        }
+        if (first >= 2u && first < vol->cluster_count + 2u) {
+            vol->next_free = first;
+        }
+
+        {
+            int write_rc = fsinfo_write(vol);
+
+            if (rc == 0) {
+                rc = write_rc;
+            }
+        }
+    }
+
+    return rc;
 }
 
 int fat_chain_count(struct fat_volume *vol, k_u32_t first, k_u32_t *count)
@@ -783,25 +1061,24 @@ int fat_chain_count(struct fat_volume *vol, k_u32_t first, k_u32_t *count)
 
 int fat_clusters_free(struct fat_volume *vol, k_u32_t *count)
 {
-    k_u32_t cluster;
-    k_u32_t free_count = 0;
+    k_u32_t free_count;
     int rc;
 
     if (vol == NULL || count == NULL) {
         return KERR_INVAL;
     }
 
-    for (cluster = 2u; cluster < vol->cluster_count + 2u; cluster++) {
-        k_u32_t value;
+    /* The summary of a FAT32 volume is kept by every allocation and every
+     * removal, and the mount counted the table when the summary was not
+     * there. The old formats have no such sector and are walked. */
+    if (vol->type == 32 && vol->free_known) {
+        *count = vol->free_clusters;
+        return 0;
+    }
 
-        rc = fat_entry_get(vol, cluster, &value);
-        if (rc != 0) {
-            return rc;
-        }
-
-        if (value == 0) {
-            free_count++;
-        }
+    rc = count_free(vol, &free_count, NULL);
+    if (rc != 0) {
+        return rc;
     }
 
     *count = free_count;
@@ -881,14 +1158,14 @@ int fat_chain_extend(struct fat_volume *vol, k_u32_t *first, k_u32_t need)
     while (count < need) {
         k_u32_t fresh;
 
-        rc = fat_alloc_cluster(vol, &fresh);
+        rc = alloc_one(vol, &fresh);
         if (rc != 0) {
             break;
         }
 
         rc = fat_zero_cluster(vol, fresh);
         if (rc != 0) {
-            (void)fat_entry_set(vol, fresh, 0);
+            (void)fat_chain_free(vol, fresh);
             break;
         }
 
@@ -897,7 +1174,7 @@ int fat_chain_extend(struct fat_volume *vol, k_u32_t *first, k_u32_t need)
         } else {
             rc = fat_entry_set(vol, previous, fresh);
             if (rc != 0) {
-                (void)fat_entry_set(vol, fresh, 0);
+                (void)fat_chain_free(vol, fresh);
                 break;
             }
         }
@@ -911,10 +1188,22 @@ int fat_chain_extend(struct fat_volume *vol, k_u32_t *first, k_u32_t need)
     }
 
     if (count >= need) {
-        return 0;
+        /* The summary of the free clusters moves once for the whole chain,
+         * not once for every cluster of it. A medium that refuses it is a
+         * medium that did not take the extension either: the file keeps
+         * the clusters it had. */
+        if (vol->type != 32) {
+            return 0;
+        }
+
+        rc = fsinfo_write(vol);
+        if (rc == 0) {
+            return 0;
+        }
     }
 
-    /* The volume is full: the file keeps the clusters it had. */
+    /* The volume is full, or the medium refused the summary: the file
+     * keeps the clusters it had. */
     if (segment != 0) {
         (void)fat_chain_free(vol, segment);
         if (old_last == 0) {
