@@ -147,11 +147,13 @@ Two more shapes are worth knowing:
   `read` waits the condition out. A library with a `select` loop needs the
   descriptor of the pipe and a `sleep`/`yield`; this system has `sleep` in
   the ABI and no `poll` yet.
-* **The image has a size budget.** The kernel reads a program whole into one
-  block of `KSYS_MAX_IO` (64 KiB) before the port copies it to the window. The
-  text and data of the program and its libraries have to fit that; `-Os`
-  took `zcat` from 80 KiB to 58 KiB. A larger program needs the streaming or
-  mapping of the image, which is a debt.
+* **The image has a size budget.** The kernel reads a program into one block
+  of the allocator, in pieces of `KSYS_MAX_IO` (64 KiB), before the port
+  copies it to the window; the ceiling of the file is `K_EXEC_MAX_IMAGE`
+  (8 MiB, the memory of the machine) and the window of the port is 16 MiB.
+  `-Os` took `zcat` from 80 KiB to 58 KiB and keeps `/bin/sqlite3` at about
+  842 KiB. A larger program needs the streaming of the image into the window,
+  which is a debt.
 
 ## 3. The build
 
@@ -379,6 +381,52 @@ What it added to the recipe:
 The tests are `tests/cases/test_file.c` for the host (the compiled database
 and the text) and `/bin/file` in `x86-smoke` and `x86-disk-smoke`.
 
+## The third port: SQLite
+
+The third port is a library with an operating system of its own: SQLite
+3.54.1 ([`third_party/sqlite`](../third_party/sqlite/README.md)) as a static
+archive and `/bin/sqlite3` of the x86-64 image. It is the first case where the
+source asks for a **file system** and not the calls of a program, and the
+answer is the VFS of the port: `SQLITE_OS_OTHER=1` leaves SQLite without its
+`unix` layer, and `port/sqlite_vfs.c` is the whole `sqlite3_vfs` and
+`sqlite3_io_methods` on `open`, `read`, `write`, `lseek`, `unlink`, `stat`,
+`getcwd` and `uptime`.
+
+What the next port can copy:
+
+* **A VFS, not a wrapper of `open`.** SQLite wants the twelve methods of the
+  interface and answers with its own codes; the port is one file with two
+  builds (the guest and the host test, `SQLITE_PORT_HOST`), and the only
+  differences are the names of the calls. The host test is what proves the
+  journal and the truncation, because the guest's table of descriptors is
+  smaller.
+* **No mmap and no shared memory.** `SQLITE_OMIT_WAL` is the flag; the
+  rollback journal is the only one. The source compiles without a line of the
+  mapping of a file.
+* **`double` is the `FLOAT` option of the recipe.** SQLite's `REAL` is a
+  `double`, so the program and its archive leave `-mgeneral-regs-only` out,
+  the loader turns the two units on, and the library of the program gains
+  `format_float.c`, `strtod.c` and `math.c`. The rest of `/bin` still never
+  touches the registers.
+* **The table of descriptors is the design.** Four of them: the console on 1
+  and 2 (opened as `/dev/tty0` and `dup2`'d there, because the table is
+  inherited from the stage of the shell and the numbers may be taken), the
+  database on 0 (the script of stdin is read into the arena first and `stdin`
+  becomes `fmemopen`), and 3 for a `.read`. The journal of a transaction is
+  in memory because there is no fifth descriptor; the VFS still implements a
+  journal file and the host test uses it (`docs/debts.md`).
+* **The shell is the release and the port is a shim.** `shell.c` is compiled
+  whole with its `main` renamed (`port/sqlite_shell.c`), and the program of
+  the image is `programs/sqlite3.c`: the console, the input and the one
+  `-cmd` of the port. The upstream file is not edited.
+* **The license is a statement, not a text.** SQLite is public domain; the
+  statement of the upstream travels as `LICENSE`, `/etc/licenses/sqlite` and
+  `LICENSE.sqlite` in the bundle.
+
+The tests: `tests/cases/test_sqlite.c` for the library and the VFS on a file
+of the host, `make x86-smoke` for the program and `/etc/sql-*.sql`,
+`make x86-disk-smoke` for a database written in one boot and read in the next.
+
 ## The checklist of the next port
 
 1. Read the license; stop if it is copyleft.
@@ -392,7 +440,7 @@ and the text) and `/bin/file` in `x86-smoke` and `x86-disk-smoke`.
    source asks for.
 6. Add `microos_userland_library` and `add_libc_program` to
    `ports/port_x86_64/CMakeLists.txt`; build with `-Os`; check the image is
-   under `KSYS_MAX_IO`.
+   under `K_EXEC_MAX_IMAGE` (8 MiB) and the bss under the megabyte of MOX1.
 7. Add the program to `tools/x86_image.py`, with a fixture and its license.
 8. Write the host test; add the smoke commands and the checks; run
    `make test`, `make x86-smoke`, `make x86-disk-smoke`, `make test-asan`,

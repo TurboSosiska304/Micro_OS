@@ -323,6 +323,9 @@ x86_bundle() {
     # /bin/file is linked against libmagic of file 5.45, whose BSD-2-Clause
     # notice asks that it travel with a binary.
     cp -f "$ROOT/third_party/file/LICENSE" "$STAGE/LICENSE.file"
+    # SQLite is in the public domain and /bin/sqlite3 is a program of the same
+    # image; the statement that says so travels with the archive.
+    cp -f "$ROOT/third_party/sqlite/LICENSE" "$STAGE/LICENSE.sqlite"
     cp -f "$ROOT/third_party/mbedtls/LICENSE" "$STAGE/LICENSE.mbedtls"
     if [ -f "$X86_SRC/microos64.sig" ] && [ -f "$X86_SRC/signing.pub" ]; then
         cp -f "$X86_SRC/microos64.sig" "$STAGE/microos64.sig"
@@ -393,6 +396,11 @@ reads is a subset of the magic files of the release, compiled into
 `/etc/magic.mgc` of the disk image; `LICENSE.file` is the license and
 `third_party/file` of the sources has the subset and the port layer.
 
+`/bin/sqlite3` of the disk image is SQLite 3.54.1 (the public domain, a
+statement of the authors in `third_party/sqlite/LICENSE`); `LICENSE.sqlite` is
+that statement and `third_party/sqlite` of the sources has the notes and the
+VFS of the port.
+
 `/bin/cat`, `/bin/grep`, `/bin/ls` and the rest of the ten commands are
 the tools of sbase (MIT); `LICENSE.sbase` is their license and
 `third_party/sbase` of the sources has the subset and the port layer.
@@ -424,7 +432,7 @@ DOC
 
     STAGE_FILES=(loader32.elf microos64.bin run.sh README.md LICENSE.spleen LICENSE.zlib
                  LICENSE.pcre2 LICENSE.lua LICENSE.zstd LICENSE.sbase LICENSE.bc
-                 LICENSE.file)
+                 LICENSE.file LICENSE.sqlite)
     if [ -f "$STAGE/x86-all.img" ]; then
         STAGE_FILES+=(x86-all.img)
     fi

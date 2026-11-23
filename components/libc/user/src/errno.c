@@ -45,6 +45,10 @@ char *strerror(int code)
         return "input/output error";
     case ENOEXEC:
         return "exec format error";
+    case E2BIG:
+        return "argument list too long";
+    case EACCES:
+        return "permission denied";
     case EBADF:
         return "bad file descriptor";
     case ECHILD:
@@ -61,10 +65,6 @@ char *strerror(int code)
         return "not a directory";
     case EISDIR:
         return "is a directory";
-    case E2BIG:
-        return "argument list too long";
-    case EACCES:
-        return "permission denied";
     case EXDEV:
         return "cross-device link";
     case ENOTTY:

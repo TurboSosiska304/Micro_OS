@@ -353,6 +353,22 @@ COMMANDS = [
     # the VFS does not have (accepted, and the file is read).
     "cat /etc/setting | /bin/file -",
     "exec /bin/file -L /etc/setting",
+    # SQLite (third_party/sqlite): the database library of the public domain
+    # and the shell of the release. The scripts are files of /etc because the
+    # shell has no quotes; the first run creates the table, the second one
+    # reads it in another program, and `.read` and `-cmd` are the two shapes
+    # of the shell that open a file while the database is open.
+    "exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-setup.sql",
+    "exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-read.sql",
+    "exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-nested.sql",
+    "exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-schema.sql",
+    "exec /bin/sqlite3 -cmd .tables /tmp/sqlite.db < /etc/sql-read.sql",
+    # The timer of the shell is the one line of the guest that prints a real
+    # number through the formatter of the library (`%f`, six digits).
+    "exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-timer.sql",
+    # `-batch` is the shell of the release with no prompt and no editor: the
+    # script of a redirect is the same one and the answers are the same.
+    "exec /bin/sqlite3 -batch /tmp/sqlite.db < /etc/sql-read.sql",
 ]
 
 # A directory wider than the table of 64 entries the shell used to keep: the
@@ -1360,6 +1376,80 @@ def check(output: str) -> list:
     expect("the file of the tool is /bin/ls", "setting" in explicit and "root" in explicit, explicit)
     explicit = answer("exec /bin/find /etc -name setting")
     expect("the file of the tool is /bin/find", "/etc/setting" in explicit, explicit)
+    # --- SQLite (third_party/sqlite)
+    #
+    # The first run creates the database and the table: three rows of the
+    # three types are inserted, one in a transaction that rolls back, and the
+    # library checks the file it wrote. The line `2|3.75` of the second run is
+    # the count and the sum of the two rows that survived, read by a second
+    # process from the same file of MicroFS.
+    created = answer("exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-setup.sql")
+    expect(
+        "sqlite3 creates a database and its table",
+        "1|one|1.5" in created and "2|two|2.25" in created,
+        created,
+    )
+    expect(
+        "the transaction that rolls back leaves no row",
+        "roll" not in created and re.search(r"(?m)^2\r?$", created) is not None,
+        created,
+    )
+    expect(
+        "the integrity check of the new database is ok",
+        re.search(r"(?m)^ok\r?$", created) is not None,
+        created,
+    )
+    reread = answer("exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-read.sql")
+    expect(
+        "a second run reads the count and the sum of the file",
+        "2|3.75" in reread,
+        reread,
+    )
+    expect(
+        "the REAL and the BLOB keep their type",
+        "real|blob" in reread,
+        reread,
+    )
+    expect(
+        "the file of the second run passes the integrity check",
+        re.search(r"(?m)^ok\r?$", reread) is not None,
+        reread,
+    )
+    nested = answer("exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-nested.sql")
+    expect(
+        "the .read of the shell opens a script while the database is open",
+        "2|3.75" in nested and "ok" in nested,
+        nested,
+    )
+    schema = answer("exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-schema.sql")
+    expect(
+        "the shell prints the table and its schema",
+        "items" in schema and "CREATE TABLE items" in schema,
+        schema,
+    )
+    expect(
+        "the mode and the row of the second row",
+        "two" in schema,
+        schema,
+    )
+    listed = answer("exec /bin/sqlite3 -cmd .tables /tmp/sqlite.db < /etc/sql-read.sql")
+    expect(
+        "the -cmd of the shell runs before the script",
+        "items" in listed and "2|3.75" in listed,
+        listed,
+    )
+    timed = answer("exec /bin/sqlite3 /tmp/sqlite.db < /etc/sql-timer.sql")
+    expect(
+        "the timer prints a real number through the formatter of the library",
+        re.search(r"Run Time: real \d+\.\d{6} user", timed) is not None,
+        timed,
+    )
+    batch = answer("exec /bin/sqlite3 -batch /tmp/sqlite.db < /etc/sql-read.sql")
+    expect(
+        "the shell runs a script in batch mode",
+        "2|3.75" in batch and "ok" in batch,
+        batch,
+    )
     free_answer = answer("free")
     expect(
         "free prints the memory and not the clock",
@@ -1525,6 +1615,7 @@ def check(output: str) -> list:
                 "dc",
                 "zstd",
                 "file",
+                "sqlite3",
             )
         ),
         bin_listing[-200:],
@@ -1890,6 +1981,8 @@ def check(output: str) -> list:
     licenses = answer("exec /bin/ls /etc/licenses")
     expect("the license of zlib travels with the image", "zlib" in licenses, licenses)
     expect("the license of sbase travels with the image", "sbase" in licenses, licenses)
+    expect("the statement of the public domain of SQLite travels with it", "sqlite" in licenses,
+           licenses)
 
     # --- the third port of somebody else's program: zstd and /bin/zstd
     # The frame of /etc/setting.zst is the work of the `zstd` of the machine

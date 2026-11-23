@@ -84,8 +84,10 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # The kernel of the higher half: no red zone (an interrupt may use the stack
-# under us), no PIC, no SSE (there is no floating point state to save), and
-# the kernel memory model, which names the top 2 GiB where the image is
+# under us), no PIC, no SSE in the C of the kernel (it saves no floating
+# point state; a program that asks for it gets the units from the loader,
+# see USERLAND_CFLAGS below), and the kernel memory model, which names the
+# top 2 GiB where the image is
 # linked and leaves the low identity map to the pointers the boot hands over
 # (ADR 0007). It is a flag of the C code alone: the assembly is written in
 # absolute 64-bit numbers and the programs of /bin stay in the low window.
@@ -317,16 +319,23 @@ set(PROGRAM_CFLAGS -c ${USERLAND_CFLAGS} -mgeneral-regs-only
     -I "${KERNEL_DIR}/include" -I "${PROGRAM_DIR}" -I "${LIBC_USER_DIR}/include"
 )
 
+# A program with `double` in its numbers (SQLite and its REAL type here, Lua
+# on its own branch) is built without -mgeneral-regs-only: the loader turns
+# the SSE and x87 units on for ring 3 (CR4.OSFXSR, CR0.NE) and the scheduler
+# saves neither, so one such program runs at a time - execve waits for it.
+# The kernel and every other program still never touch the registers.
+set(MICROOS_FLOAT_CFLAGS ${USERLAND_CFLAGS})
+list(REMOVE_ITEM MICROOS_FLOAT_CFLAGS -mgeneral-regs-only)
+set(MICROOS_FLOAT_PROGRAM_CFLAGS -c ${MICROOS_FLOAT_CFLAGS}
+    -I "${KERNEL_DIR}/include" -I "${PROGRAM_DIR}" -I "${LIBC_USER_DIR}/include"
+)
+
 # The recipe of a program and of a ported library: the runtime, the window,
 # the image of the format and a static archive of the guest. It lives in
 # cmake/userland.cmake so that the next port (Lua, sbase, SQLite) is a copy
 # of one call and not a copy of this file.
 set(MICROOS_USERLAND_CFLAGS "${USERLAND_CFLAGS}")
 set(MICROOS_PROGRAM_CFLAGS "${PROGRAM_CFLAGS}")
-set(MICROOS_FLOAT_CFLAGS "${USERLAND_CFLAGS}")
-set(MICROOS_FLOAT_PROGRAM_CFLAGS -c ${USERLAND_CFLAGS}
-    -I "${KERNEL_DIR}/include" -I "${PROGRAM_DIR}" -I "${LIBC_USER_DIR}/include"
-)
 set(MICROOS_KERNEL_INCLUDE "${KERNEL_DIR}/include")
 set(MICROOS_LIBC_USER_DIR "${LIBC_USER_DIR}")
 set(MICROOS_PROGRAM_DIR "${PROGRAM_DIR}")
@@ -1032,6 +1041,105 @@ foreach(calculator bc dc)
     )
 endforeach()
 
+# --- SQLite: the first port of a database library ---------------------------
+#
+# SQLite is in the public domain (third_party/sqlite/LICENSE) and its
+# amalgamation is the whole library in one source. The operating system is
+# this port: SQLITE_OS_OTHER=1 leaves SQLite without its `unix` layer and the
+# VFS of `port/sqlite_vfs.c` answers instead, on the calls of
+# components/libc/user. The library is a static archive of the guest, and the
+# shell of the release is /bin/sqlite3.
+#
+# FLOAT is the difference: SQLite keeps a REAL in a double, and the port
+# turns the XMM and x87 units on for a program that asks (ports/port_x86_64/
+# CMakeLists.txt). The other programs of /bin still never touch them.
+#
+# The flags are the ones of a small database on a machine of one task and no
+# memory management: no threads, no dynamic loading, no write-ahead log (it
+# needs shared memory and mmap), no deprecated interfaces and no double-quoted
+# string literals. The temporary store and the page cache live in the arena of
+# the program; the journal has a limit of one megabyte, which is the whole
+# size of a small database and bounds the space a transaction may ask.
+set(SQLITE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/sqlite")
+set(SQLITE_DEFINES
+    SQLITE_OS_OTHER=1
+    SQLITE_THREADSAFE=0
+    SQLITE_OMIT_LOAD_EXTENSION=1
+    SQLITE_OMIT_WAL=1
+    SQLITE_OMIT_DEPRECATED=1
+    SQLITE_DQS=0
+    SQLITE_TEMP_STORE=3
+    SQLITE_DEFAULT_JOURNAL_SIZE_LIMIT=1048576
+    SQLITE_DEFAULT_CACHE_SIZE=-256
+    SQLITE_DEFAULT_PAGE_SIZE=4096
+)
+
+microos_userland_library(microos_user_sqlite FLOAT
+    SOURCES "${SQLITE_DIR}/sqlite3.c" "${SQLITE_DIR}/port/sqlite_vfs.c"
+    INCLUDES "${SQLITE_DIR}" "${SQLITE_DIR}/port"
+    DEFINES ${SQLITE_DEFINES}
+    # Upstream C with the warnings of this tree. The exceptions are the ones
+    # of a code base that is compiled by every compiler of the world, and
+    # they stay here rather than in a hunk of the amalgamation.
+    COMPILE_OPTIONS -Os -Wno-sign-compare -Wno-unused-parameter
+                    -Wno-missing-field-initializers -Wno-implicit-fallthrough
+)
+
+# The library of a program that is not the runtime, and the pieces this shell
+# asks of it alone: the arena, the streams with fprintf, the directory, the
+# information of an object, the clock, the regular expressions, the formatter
+# of a double, strtod and the calls of a Unix-like system that compile even
+# when they answer ENOSYS. The linker takes the objects the program names.
+set(SQLITE_LIBC_SOURCES
+    "${LIBC_USER_DIR}/src/malloc.c"
+    "${LIBC_USER_DIR}/src/file.c"
+    "${LIBC_USER_DIR}/src/stdio_ext.c"
+    "${LIBC_USER_DIR}/src/ctype.c"
+    "${LIBC_USER_DIR}/src/string_ext.c"
+    "${LIBC_USER_DIR}/src/strdup.c"
+    "${LIBC_USER_DIR}/src/stdlib.c"
+    "${LIBC_USER_DIR}/src/dirent.c"
+    "${LIBC_USER_DIR}/src/stat.c"
+    "${LIBC_USER_DIR}/src/unistd_ext.c"
+    "${LIBC_USER_DIR}/src/pwd.c"
+    "${LIBC_USER_DIR}/src/time.c"
+    "${LIBC_USER_DIR}/src/libgen.c"
+    "${LIBC_USER_DIR}/src/termios.c"
+    "${LIBC_USER_DIR}/src/regex.c"
+    "${LIBC_USER_DIR}/src/getopt.c"
+    "${LIBC_USER_DIR}/src/fnmatch.c"
+    "${LIBC_USER_DIR}/src/assert.c"
+    "${LIBC_USER_DIR}/src/format_float.c"
+    "${LIBC_USER_DIR}/src/math.c"
+    "${LIBC_USER_DIR}/src/sscanf.c"
+    "${LIBC_USER_DIR}/src/unsupported.c"
+    "${LIBC_USER_DIR}/src/gettimeofday.c"
+    "${LIBC_USER_DIR}/src/resource.c"
+    "${LIBC_USER_DIR}/src/usleep.c"
+)
+
+# The shell of the release is the program: shell.c has readline only when the
+# header is there (this machine has none, so the line is a plain fgets over
+# the memory stream the program prepares), and `.system`/`.edit` are left out
+# with SQLITE_NOHAVE_SYSTEM - there is no shell to start from the shell of a
+# database on this machine, and execve is synchronous anyway.
+add_libc_program(sqlite3
+    FLOAT
+    MAIN "${SQLITE_DIR}/port/sqlite_shell.c"
+    SOURCES ${SQLITE_LIBC_SOURCES}
+            "${CMAKE_CURRENT_SOURCE_DIR}/programs/sqlite3.c"
+    LIBRARIES microos_user_sqlite
+    INCLUDES "${SQLITE_DIR}" "${SQLITE_DIR}/port"
+    # The arena is the bss of the program and the format caps the bss at a
+    # megabyte: SQLite's page cache is 256 KiB and the script of stdin up to
+    # 256 KiB, so 768 KiB leafs room for the shell and the SQL. The image of
+    # the library is the largest of the port (about 800 KiB) and the ceiling
+    # of the machine is 8 MiB (K_EXEC_MAX_IMAGE).
+    DEFINES ULIBC_HEAP_SIZE=786432u ${SQLITE_DEFINES} SQLITE_NOHAVE_SYSTEM=1
+    COMPILE_OPTIONS -Os -DULIBC_WITH_FLOAT
+                    -Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers
+                    -Wno-implicit-fallthrough
+)
 
 add_executable(microos64
 

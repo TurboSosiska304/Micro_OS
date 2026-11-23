@@ -76,7 +76,7 @@ to `x86-64`; a name the format does not know is refused before an image is
 written. `--data-base` is for a port whose data is a window of its own (the
 board): the data no longer follows the text, so the script checks its address
 against that number instead of the contiguous rule and also checks where the
-bss will be cleared. The x86-64 port builds its twenty-nine images this way:
+bss will be cleared. The x86-64 port builds its thirty images this way:
 the
 object is compiled for the window, linked with `programs/program.ld`, turned
 into a `.mox` by the script (`--base 0x02000000 --arch x86-64`), and written
@@ -100,12 +100,13 @@ make x86-smoke     # the same, driven by the smoke test
 
 `tools/mkfs_mfs.c` writes the image: an MBR with one Linux partition at LBA
 2048, a MicroFS volume in it, `/bin`, `/etc` and an empty `/etc/init.d`, the
-twenty-nine `.mox` images of the build written to `/bin` with mode `0755`, the
-licenses of zlib, PCRE2, Lua, zstd, sbase, bc and file in `/etc/licenses`, the
-scripts `/etc/hello.lua`, `/etc/bc.bc` and `/etc/dc.dc`, the fixtures of the
-two compressions (`/etc/greeting.gz`, `/etc/setting.zst`, `/etc/broken.zst`),
-the database of libmagic (`/etc/magic.mgc` and its text), and the settings of
-the machine in `/etc/setting`. It does not repeat the layout
+thirty `.mox` images of the build written to `/bin` with mode `0755`, the
+licenses of zlib, PCRE2, Lua, zstd, sbase, bc, file and SQLite in
+`/etc/licenses`, the scripts `/etc/hello.lua`, `/etc/hex.lua`, `/etc/bc.bc`,
+`/etc/dc.dc` and the fixtures of the database (`/etc/sql-*.sql`), the fixtures
+of the two compressions (`/etc/greeting.gz`, `/etc/setting.zst`,
+`/etc/broken.zst`), the database of libmagic (`/etc/magic.mgc` and its text),
+and the settings of the machine in `/etc/setting`. It does not repeat the layout
 of MicroFS: it is a block device over a range of the file, and
 `components/mfs` formats it and writes the objects through `mfs_create`,
 `mfs_write` and `mfs_chmod`. The host test
@@ -131,7 +132,7 @@ never changed.
 ## `/bin` and the boot
 
 The x86-64 port mounts the MicroFS volume of its disk at `/` and finds
-`/bin` already there: the twenty-nine images are files the tool wrote, with
+`/bin` already there: the thirty images are files the tool wrote, with
 the mode of a program (`0755`), and no boot creates one:
 
 | File | What it proves |
@@ -166,19 +167,22 @@ the mode of a program (`0755`), and no boot creates one:
 | `/bin/zstd` | the command of zstd 1.5.7: `-d`, `-c`, `-f`, `-q`, `-l`, `-t`, `-1`..`-19`, `--rm`, `-o`, a pipe, and the frames of every other zstd |
 | `/bin/zstdcat` | the same image under a second name: it unpacks to standard output |
 | `/bin/file` | the type of a file through libmagic of file 5.45 (`-b`, `-i`, `-z` for a gzip and a zstd frame, `-f` for a list) and the compact database `/etc/magic.mgc` |
+| `/bin/sqlite3` | the shell of SQLite 3.54.1 (public domain) over a database file of MicroFS: `.read`, `.tables`, `.schema`, `.mode`, `.timer`, `-cmd` and `-batch` |
+
 
 The first six talk to the kernel through `programs/prog.h`, because what they
 test is the raw door, the fault, the fork, the edge and the signals. `echo`,
 `mkdir`, `pwd`, `rm` and `spawn` are ordinary C programs linked against
 `components/libc/user` ([ADR 0016](../adr/0016-userland.md)); `zcat`, `lua`,
-`pcre2grep`, `zstd` and `bc`/`dc` are linked against the five libraries of
-somebody else (zlib, Lua, PCRE2, zstd and bc), `file` is linked against
-libmagic of file 5.45, and the ten commands of sbase are the commands of the
-machine under their canonical names
+`pcre2grep`, `zstd`, `bc`/`dc` and `sqlite3` are linked against the six
+libraries of somebody else (zlib, Lua, PCRE2, zstd, bc and SQLite), `file` is
+linked against libmagic of file 5.45, and the ten commands of sbase are the
+commands of the machine under their canonical names
 ([`docs/porting-programs.md`](../porting-programs.md),
 [`third_party/sbase`](../../third_party/sbase/README.md),
 [`third_party/zstd`](../../third_party/zstd/README.md),
-[`third_party/file`](../../third_party/file/README.md)). Every one of them
+[`third_party/file`](../../third_party/file/README.md),
+[`third_party/sqlite`](../../third_party/sqlite/README.md)). Every one of them
 reads descriptor 0
 when it is given no file (or `-`); `execve` carries the table of the caller, so
 a redirect or a pipe of the shell fills it (`cat < file`, `ls /bin | wc -l`,

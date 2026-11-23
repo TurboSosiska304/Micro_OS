@@ -63,5 +63,6 @@ void test_zstd(void);
 void test_userland_float(void);
 void test_bc(void);
 void test_file(void);
+void test_sqlite(void);
 
 #endif /* MICRO_OS_TESTS_H */

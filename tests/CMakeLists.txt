@@ -57,6 +57,7 @@ if(NOT ESP_PLATFORM)
         cases/test_userland_float.c
         cases/test_bc.c
         cases/test_file.c
+        cases/test_sqlite.c
     )
 
     # The tests of a component that a build leaves out are left out with it:
@@ -120,6 +121,9 @@ if(NOT ESP_PLATFORM)
         # for the two machines.
         "${MICROOS_ZSTD_DIR}/lib"
         "${MICROOS_ZSTD_DIR}/port"
+        # SQLite and the headers of its port.
+        "${MICROOS_SQLITE_DIR}"
+        "${MICROOS_SQLITE_DIR}/port"
     )
 
     # zlib is the first third-party library of the tree, and the host test is
@@ -336,8 +340,27 @@ if(NOT ESP_PLATFORM)
         "-include;${MICROOS_ZSTD_DIR}/port/zstd_port.h;-Wno-sign-compare;-Wno-unused-but-set-variable"
         OBJECT_DEPENDS "${MICROOS_ZSTD_DIR}/port/zstd_port.h")
 
+
+    # SQLite is the second third-party library of the tree and its host build
+    # is the same source as the archive of the guest (third_party/sqlite): the
+    # library with SQLITE_OS_OTHER=1 and the VFS of the port, whose calls here
+    # are the libc of the host (SQLITE_PORT_HOST). The test of the case is
+    # tests/cases/test_sqlite.c; the guest is /bin/sqlite3 of the smoke tests.
+    set(MICROOS_SQLITE_DIR "${CMAKE_SOURCE_DIR}/third_party/sqlite")
+    set(MICROOS_SQLITE_SOURCES
+        "${MICROOS_SQLITE_DIR}/sqlite3.c"
+        "${MICROOS_SQLITE_DIR}/port/sqlite_vfs.c"
+    )
+    set_source_files_properties(${MICROOS_SQLITE_SOURCES}
+        PROPERTIES COMPILE_DEFINITIONS
+            "SQLITE_PORT_HOST=1;SQLITE_OS_OTHER=1;SQLITE_THREADSAFE=0;SQLITE_OMIT_LOAD_EXTENSION=1;SQLITE_OMIT_WAL=1;SQLITE_OMIT_DEPRECATED=1;SQLITE_DQS=0;SQLITE_TEMP_STORE=3;SQLITE_DEFAULT_JOURNAL_SIZE_LIMIT=1048576;SQLITE_DEFAULT_CACHE_SIZE=-256;SQLITE_DEFAULT_PAGE_SIZE=4096"
+        COMPILE_OPTIONS
+            "-Wno-sign-compare;-Wno-unused-parameter;-Wno-missing-field-initializers;-Wno-implicit-fallthrough;-Wno-undef"
+    )
+
     target_sources(microos_tests PRIVATE
-        "${CMAKE_SOURCE_DIR}/components/drivers/src/input_debounce.c"        "${CMAKE_SOURCE_DIR}/components/drivers/src/battery_soc.c"
+        "${CMAKE_SOURCE_DIR}/components/drivers/src/input_debounce.c"
+        "${CMAKE_SOURCE_DIR}/components/drivers/src/battery_soc.c"
         "${CMAKE_SOURCE_DIR}/components/drivers/src/fb_draw.c"
         "${CMAKE_SOURCE_DIR}/components/drivers/src/rtc_time.c"
         "${CMAKE_SOURCE_DIR}/components/drivers/src/ir_nec.c"
@@ -353,6 +376,7 @@ if(NOT ESP_PLATFORM)
         ${MICROOS_LUA_SOURCES}
         ${MICROOS_ZSTD_SOURCES}
         "${CMAKE_CURRENT_LIST_DIR}/cases/userland_float_shim.c"
+        ${MICROOS_SQLITE_SOURCES}
     )
 
     # --- file and libmagic (third_party/file) -----------------------------

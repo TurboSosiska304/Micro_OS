@@ -86,6 +86,9 @@ FIRST_BOOT = [
     # of a compressed file go through the disk and not only through a buffer.
     "exec /bin/zstd -19 -q -f /etc/setting -o /persist.zst",
     "exec /bin/zstd -t /persist.zst",
+    # SQLite: this boot creates the database on the volume, and the next one
+    # reads it out of the same disk after a reset.
+    "exec /bin/sqlite3 /sqlite.db < /etc/sql-setup.sql",
 ]
 
 SECOND_BOOT = [
@@ -122,6 +125,10 @@ SECOND_BOOT = [
     "exec /bin/file /bin/file",
     "exec /bin/file -i /persist.gz.txt",
     "exec /bin/file -z /persist.zst",
+    # The database of the first boot: the rows are read and the file is
+    # checked by the library of the second boot.
+    "exec /bin/sqlite3 /sqlite.db < /etc/sql-read.sql",
+    "exec /bin/sqlite3 /sqlite.db < /etc/sql-schema.sql",
 ]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -352,6 +359,11 @@ def check(first: str, second: str) -> list:
         "34 bytes" in first_answers[17] and "the program exited with 0" in first_answers[17],
         first_answers[17],
     )
+    expect(
+        "the database is written into the volume",
+        "1|one|1.5" in first_answers[18] and "the program exited with 0" in first_answers[18],
+        first_answers[18],
+    )
 
     # --- the second boot: the same image, the same machine
     expect(
@@ -509,6 +521,31 @@ def check(first: str, second: str) -> list:
         second_answers[22],
     )
 
+    # --- SQLite: a database written in the first boot and read in the second
+    created = first_answers[18]
+    expect(
+        "the first boot writes a database of SQLite",
+        "1|one|1.5" in created and "2|two|2.25" in created and "ok" in created,
+        created,
+    )
+    read_back = second_answers[23]
+    expect(
+        "the database of the first boot is read after the reset",
+        "2|3.75" in read_back and "the program exited with 0" in read_back,
+        read_back,
+    )
+    expect(
+        "the database passes its integrity check after the reset",
+        re.search(r"(?m)^ok\r?$", read_back) is not None,
+        read_back,
+    )
+    schema = second_answers[24]
+    expect(
+        "the schema of the database survived the reset",
+        "CREATE TABLE items" in schema and "items" in schema,
+        schema,
+    )
+
     return checks
 
 
@@ -556,7 +593,7 @@ def main(argv: list) -> int:
     parser = argparse.ArgumentParser(description="the disk smoke test of the x86-64 port")
     parser.add_argument("--image", default=DEFAULT_IMAGE, help="the image of the disk")
     parser.add_argument("--mkimage", metavar="PATH", help="write the copy of the build image and stop")
-    parser.add_argument("--timeout", type=float, default=30.0, help="the seconds a boot gets")
+    parser.add_argument("--timeout", type=float, default=60.0, help="the seconds a boot gets")
     parser.add_argument("--repeat", type=int, default=1, help="how many times to boot the pair")
     parser.add_argument("--keep", action="store_true", help="keep the image after the run")
     parser.add_argument("--verbose", action="store_true", help="print the consoles of the boots")

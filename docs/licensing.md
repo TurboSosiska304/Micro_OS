@@ -21,6 +21,7 @@ commercially; the note here is what the tree does.
 | sbase | c546c3a (tip) | MIT | `third_party/sbase`, the ten commands `cat grep head ls tail wc sort find xargs sed` | `/bin/cat`, `/bin/grep`, `/bin/head`, `/bin/ls`, `/bin/tail`, `/bin/wc`, `/bin/sort`, `/bin/find`, `/bin/xargs` and `/bin/sed` of the x86-64 MicroFS image; `/etc/licenses/sbase` in the image and `LICENSE.sbase` in the x86-64 tar |
 | bc and dc | 7.2.0 | BSD-2-Clause | `third_party/bc` (the `main` is the release's `main.c`) | `/bin/bc` and `/bin/dc` of the x86-64 MicroFS image; `/etc/licenses/bc` in the image and `LICENSE.bc` in the x86-64 tar |
 | file (libmagic) | 5.45 | BSD-2-Clause | `third_party/file`, `/bin/file` and the database `/etc/magic.mgc` of `/etc` | `/bin/file` of the x86-64 MicroFS image; `/etc/licenses/file` in the image and `LICENSE.file` in the x86-64 tar |
+| SQLite | 3.54.1 | public domain | `third_party/sqlite`, the amalgamation, `/bin/sqlite3` | `/bin/sqlite3` of the x86-64 MicroFS image; `/etc/licenses/sqlite` in the image and `LICENSE.sqlite` in the x86-64 tar |
 
 Spleen is a font by Frederic Cambus; the license and the note are in
 [`third_party/spleen`](../third_party/spleen/README.md). The 8x16 table is
@@ -108,6 +109,15 @@ x86-64 archive, and a package that installs `file` copies the same file beside
 the program. The magic database of the image is a *subset* of the rules of the
 release and not the whole of it; the notice of the release covers it the same
 way.
+SQLite is the database library of the public domain, released by Hwaci; the
+version, the source and the port layer are in
+[`third_party/sqlite`](../third_party/sqlite/README.md). The statement of
+<https://www.sqlite.org/copyright.html> travels as `LICENSE` of that
+directory, the MicroFS image carries it as `/etc/licenses/sqlite` beside
+`/bin/sqlite3`, `tools/bundle.sh` puts `LICENSE.sqlite` into the x86-64
+archive, and a package that installs the program copies the same file beside
+it. It is not merged into the MIT `LICENSE` of the tree: the deliverable code
+is public domain and the tree says so with the upstream text.
 
 ## The rule
 

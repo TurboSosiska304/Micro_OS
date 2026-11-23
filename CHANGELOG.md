@@ -88,6 +88,12 @@ and runs tasks on each of them. The board is not part of this release (ADR
   read-only page of a program did not fault on an application processor, the
   copy-on-write never ran, and `/bin/nx` answered differently by core.
 - The kernel version is `1.3.0`.
+- A read of a large file of MicroFS follows the chain of blocks forward: the
+  descriptor asked `chain_block_at` for the block of every chunk, so a read of
+  n blocks cost n walks from the head of the chain, and an `exec` of an image
+  of 440 KiB spent about six seconds of the emulated machine on it. The block
+  that was just read names the next one, and a call walks the chain once for
+  its first chunk and then follows it.
 
 ### Fixed
 

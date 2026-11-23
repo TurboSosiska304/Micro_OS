@@ -87,6 +87,7 @@ static void run_tests(void *arg)
     test_userland_float();
     test_bc();
     test_file();
+    test_sqlite();
 
     g_result = ktest_summary();
     atomic_store_explicit(&g_done, true, memory_order_release);

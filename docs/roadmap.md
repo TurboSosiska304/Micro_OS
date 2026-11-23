@@ -364,6 +364,15 @@ written when the project was an operating system for one board; the numbers
       pipe, an `fxsave` of the XMM state for two programs with a point in
       their numbers, and the package that ships `zcat`, `lua` and the tools
       of sbase with their licenses beside them (`docs/debts.md`)
+* [x] The seventh port, a library with an operating system of its own:
+      SQLite 3.54.1 with `SQLITE_OS_OTHER=1` and the VFS of the port on the
+      calls of the system (`third_party/sqlite/port/sqlite_vfs.c`), and
+      `/bin/sqlite3` (the shell of the release) over a database of MicroFS. It
+      is the first program with a `REAL`: the `FLOAT` option of the recipe
+      leaves `-mgeneral-regs-only` out and the loader turns the SSE and x87
+      units on. The image is about 842 KiB, `tests/cases/test_sqlite.c` is the
+      host, and the smoke tests create, read and check a database across a
+      reset of the disk
 * [ ] A `chdir` and a wall clock in the ABI, and the POSIX frame of a fork
       child: the library works around the three, and the workaround of each
       is named in `docs/debts.md`
@@ -386,9 +395,10 @@ written when the project was an operating system for one board; the numbers
       `-z` names the content of a gzip and of a zstd frame;
       `tests/cases/test_file.c`, `make x86-smoke` and `make x86-disk-smoke`
       cover the values, the program and the volume after a reset
-* [ ] The ports of 1.3.0 still open: SQLite (its SDK, and a package above
-      `PKG_PACKAGE_MAX` of 1 MiB) and awk; their branches are in progress and
-      neither is a promise before it is merged
+* [ ] The port of 1.3.0 still open: awk (the One True Awk and its C library),
+      whose branch is in progress and is not a promise before it is merged.
+      SQLite landed in this release; a package of it needs `PKG_PACKAGE_MAX`
+      above 1 MiB (`docs/debts.md`)
 
 ## The last major changes of the board (1.1.0)
 

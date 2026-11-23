@@ -161,11 +161,12 @@ a floor when the port has a store; today the rule is "a rollback is allowed"
 
 The heap is the low identity map and stops below the window of the programs,
 which are placed at 32 MiB; the image of 1.0 ends 1.9 MiB after the base and
-the port allows it up to 16 MiB. The twenty-six programs of `/bin` are built
+the port allows it up to 16 MiB. The thirty programs of `/bin` are built
 first:
 `build-x86/hello.mox`, `crash.mox`, `fork.mox`, `badptr.mox`, `signals.mox`,
-`nx.mox`, `echo.mox`, `mkdir.mox`, `rm.mox`, `pwd.mox`, `spawn.mox`,
-`zcat.mox`, `pcre2grep.mox`, `lua.mox`, `bc.mox`, `dc.mox` and the ten commands of sbase
+`nx.mox`, `echo.mox`, `streams.mox`, `mkdir.mox`, `rm.mox`, `pwd.mox`,
+`spawn.mox`, `zcat.mox`, `pcre2grep.mox`, `lua.mox`, `zstd.mox`, `bc.mox`,
+`dc.mox`, `file.mox`, `sqlite3.mox` and the ten commands of sbase
 (`cat.mox`, `grep.mox`, `head.mox`, `ls.mox`, `tail.mox`, `wc.mox`,
 `sort.mox`, `find.mox`, `xargs.mox`, `sed.mox`) are the images of the window
 (`programs/program.ld` links them for the window, `tools/mkprog.sh` turns
@@ -174,9 +175,15 @@ writes them into a MicroFS volume of a raw disk
 image with `tools/mkfs_mfs.c`, and the boot mounts that volume and runs
 `/bin/hello` through `execve`. All but the first six are linked against
 `components/libc/user` and enter at `_start` (ADR 0016); `zcat` also links the
-static archive of zlib 1.3.1 and `lua` the core of Lua 5.4.7
-([`docs/porting-programs.md`](../../porting-programs.md)).
-The first five use the raw `programs/prog.h`. The build passes
+static archive of zlib 1.3.1, `lua` the core of Lua 5.4.7, `zstd` the library
+of its release, `file` libmagic and the decompressors of the two formats, and
+`/bin/sqlite3` the archive of SQLite with the VFS of the port
+([`docs/porting-programs.md`](../../porting-programs.md)). SQLite, Lua, zstd
+and `file -l` are the programs built without `-mgeneral-regs-only`: a `REAL`,
+a `lua_Number` and a human-readable size are doubles, and the loader turns the
+SSE and x87 units on for them. `zstdcat` is the same image as `zstd` under a
+second name.
+The first six use the raw `programs/prog.h`. The build passes
 `--base 0x02000000` to `mkprog.sh`, which refuses an image linked for another
 window: nothing relocates the program, so a wrong address would run and read
 its data from somewhere else.
@@ -347,9 +354,12 @@ inverted line has nothing to ask for yet (`docs/debts.md`, K11).
 The disk is the machine's, not a test's: `make x86-disk` writes
 `build-x86/programs.img`, an 8 MB raw image with an MBR, one Linux partition
 at LBA 2048 and a MicroFS volume in it. The volume already carries `/bin`
-(the twenty-six programs), `/etc/setting`, the fixture `/etc/greeting.gz`,
-the script `/etc/hello.lua`, and the licenses of zlib, PCRE2, Lua and sbase
-in `/etc/licenses`: the host tool `tools/mkfs_mfs.c`
+(the thirty programs), `/etc/setting`, the fixtures `/etc/greeting.gz`,
+`/etc/setting.zst` and `/etc/broken.zst`, the scripts of the interpreters and
+of the database (`/etc/hello.lua`, `/etc/hex.lua`, `/etc/bc.bc`,
+`/etc/dc.dc`, `/etc/sql-*.sql`), the database of libmagic (`/etc/magic.mgc`
+and its text) and the licenses of zlib, PCRE2, Lua, zstd, sbase, bc, file and
+SQLite in `/etc/licenses`: the host tool `tools/mkfs_mfs.c`
 (formats and writes) links `components/mfs`, so the layout of the volume has
 one implementation and the host test `tests/cases/test_mkfs_image.c` mounts
 what the machine boots.

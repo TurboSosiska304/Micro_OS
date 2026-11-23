@@ -221,8 +221,13 @@ the families a portable POSIX source expects, and they are now part of it:
 | `<fnmatch.h>` | the pattern of a name with `*`, `?`, `[...]`, `FNM_PATHNAME` and `FNM_NOESCAPE` | `src/fnmatch.c` |
 | `<stdlib.h>` | the conversions with `ERANGE` (`strtod` only in a program with `ULIBC_WITH_FLOAT`), `qsort` (merge sort), `bsearch`, `atoll`/`llabs`, `getenv`, `atexit`, `abort`, `srand`/`rand` | `src/stdlib.c`, `src/rand.c` |
 | `<string.h>`, `<strings.h>`, `<ctype.h>` | `strdup`, `strndup`, `strspn`, `strcspn`, `strpbrk`, `strcasecmp`, `strcasestr` and the ASCII classes | `src/strdup.c`, `src/string_ext.c`, `src/ctype.c` |
-| `<stdio.h>` | `fprintf`/`vfprintf`, `sprintf`, `putchar`, `getline`/`getdelim`, `fmemopen`, `fdopen`, `fileno`, `ungetc`, `perror` | `src/stdio.c`, `src/stdio_ext.c`, `src/file.c` |
+| `<stdio.h>` | `fprintf`/`vfprintf`, `sprintf`, `putchar`, `getline`/`getdelim`, `fmemopen`, `fdopen`, `fileno`, `ungetc`, `perror`, `sscanf`, and `popen`/`pclose` (answered `ENOSYS`) | `src/stdio.c`, `src/stdio_ext.c`, `src/file.c`, `src/sscanf.c`, `src/unsupported.c` |
+| `<stdlib.h>` (the real numbers) | `strtod`, `atof` (the decimal form of the C locale, the value of the machine's rounding), and `setenv`/`unsetenv` (answered `ENOSYS`: the environment is the vector of `_start`) | `src/stdlib.c`, `src/unsupported.c` |
+| `<math.h>` | `fabs`, `floor`, `ceil`, `trunc`, `round`, `fmod`, `modf`, `frexp`, `ldexp`, `sqrt`, `pow`, `exp`, `log`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, over the x87 unit (a program built with `FLOAT`) | `src/math.c` |
+| `<signal.h>` | `signal`, `raise`, `SIGINT`, `SIGPIPE`, `SIGTERM`, `SIGCHLD`, `SIG_DFL`, `SIG_IGN` | `src/syscall.c` |
+| `<sys/time.h>`, `<sys/resource.h>` | `gettimeofday` (the uptime), `utimes` (`ENOSYS`), `getrusage` (`ENOSYS`), `usleep` (a sleep of the task) | `src/gettimeofday.c`, `src/resource.c`, `src/usleep.c`, `src/unsupported.c` |
 | `<termios.h>` | the two calls of a terminal, answered `ENOTTY`: the console has no control command | `src/termios.c` |
+| `<stdio.h>` (the names) | `rename` (POSIX puts it here, in `src/syscall.c`), and `usleep` in `<unistd.h>` | `src/syscall.c`, `src/usleep.c` |
 
 The stream of `<stdio.h>` is a descriptor and two flags, with no buffer of
 the host; `fmemopen` is a block of the caller that a command uses for a word
@@ -242,10 +247,14 @@ bugs:
 * **There is no wall clock.** `time()` is the seconds since the boot, and
   `localtime` is UTC; the filesystem still keeps a moment of Unix in every
   record, and a listing prints it.
-* **There is no floating point.** A program is built with
+* **There is no floating point by default.** A program is built with
   `-mgeneral-regs-only`; a `double` cannot cross a function of the guest, so
-  the library has no `strtod`/`%f`, and `sort -n` and `ls -h` of sbase order
-  and print their numbers as decimals in the port layer.
+  a program that does not ask for the `FLOAT` option has no `strtod`/`%f`, and
+  `sort -n` and `ls -h` of sbase order and print their numbers as decimals in
+  the port layer. The programs that do ask (SQLite and Lua) are built with
+  `ULIBC_WITH_FLOAT`, `src/format_float.c`, `src/strtod.c` and `src/math.c`,
+  and the loader turns the SSE and x87 units on for ring 3; the scheduler
+  saves neither, so one such program runs at a time (`docs/debts.md`).
 
 `fork` is real on x86-64 (copy on write), and its child of the port comes
 back with the pid of the parent's answer in RAX and a stack page that the
