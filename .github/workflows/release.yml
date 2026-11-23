@@ -99,15 +99,27 @@ jobs:
           IDF_PATH: ""
         run: make x86-all
 
-      # The bootable CD of the x86-64 machine: xorriso writes the image and
-      # limine is the boot loader of its catalogue. Both are a package of the
-      # distribution; a container that cannot install them makes a bundle
-      # without the CD, and the step says so instead of failing the release.
-      - name: the bootable CD of the x86-64 machine
+      # The bootable medium of the x86-64 machine: xorriso writes the image,
+      # limine is the boot loader of its two records and of the boot sector of
+      # the stick, and OVMF is the firmware of the two boots of a UEFI. All
+      # three are a package of the distribution; a container that cannot
+      # install them makes a bundle without the image, and the step says so
+      # instead of failing the release.
+      - name: the bootable medium of the x86-64 machine
         shell: bash
         run: |
-          (apt-get update -qq && apt-get install -y -qq xorriso limine) >/dev/null 2>&1 || true
-          make x86-iso || echo "the CD is not in this bundle: xorriso or limine is missing"
+          (apt-get update -qq && apt-get install -y -qq xorriso limine ovmf) >/dev/null 2>&1 || true
+          make x86-iso || echo "the image is not in this bundle: xorriso or limine is missing"
+
+      # The checks of the image are not part of the release gate - the package
+      # of the firmware is not promised to the container - but a release log
+      # that says which of the boots were performed is worth the two minutes.
+      - name: the boots of the medium, when the tools are there
+        shell: bash
+        run: |
+          make x86-iso-smoke || echo "the BIOS boot of the CD was not checked"
+          make x86-iso-uefi-smoke || echo "the boots of the UEFI were not checked"
+          make x86-iso-usb-smoke || echo "the BIOS boot of the stick was not checked"
 
       # esptool lives in the python environment of the image, and the step
       # that builds the bundle is where it is needed (merge_bin).

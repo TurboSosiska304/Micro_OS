@@ -22,8 +22,8 @@ the machine where a program can really be loaded and run (the window of
 | build | `make x86-build` (needs `cmake`, `ninja`, `xorriso` is not needed) and `make x86-disk` for the volume with `/bin` |
 | check | `make x86-smoke` (serial), `make x86-vga-smoke` (the framebuffer, the text mode and the keyboard), `make x86-disk-smoke` (two boots on a disk), `make x86-net-smoke` (the network) - all need `qemu-system-x86` |
 | build | `make x86-build` (needs `cmake`, `ninja`); `make x86-iso` needs `xorriso` and `grub-mkrescue` or limine, because it asks a boot loader to write the El Torito record ([iso.md](iso.md)) |
-| check | `make x86-smoke` (serial), `make x86-vga-smoke` (screen and keyboard), `make x86-disk-smoke` (two boots on a disk), `make x86-net-smoke` (the network), `make x86-iso-smoke` (the CD) - all need `qemu-system-x86` |
-| medium | `make x86-iso`: a BIOS ISO with the loader, the kernel and the root image, and a shell and `/bin` out of it ([iso.md](iso.md), ADR 0026) |
+| check | `make x86-smoke` (serial), `make x86-vga-smoke` (screen and keyboard), `make x86-disk-smoke` (two boots on a disk), `make x86-net-smoke` (the network), `make x86-iso-smoke` (a BIOS and a CD), the two of `x86-iso-uefi-smoke` and `x86-iso-usb-smoke` (a firmware and a stick) - all need `qemu-system-x86`, the last three OVMF |
+| medium | `make x86-iso`: one image with the loader, the kernel and the root image, which boots in a BIOS and in a firmware of UEFI, from a CD and from a USB stick written with `dd` ([iso.md](iso.md), [boot.md](boot.md), ADR 0026) |
 
 ## Run it
 
@@ -39,8 +39,10 @@ make x86-smoke        # boot and check the lines of the banner and the shell
 make x86-vga-smoke    # check the picture of both screens and the keyboard, without a display
 make x86-disk-smoke   # two boots on one image: a file written in the first is read in the second
 make x86-net-smoke    # boot with QEMU user-net and check ping, UDP, HTTP, the page of the state and DNS
-make x86-iso          # the BIOS ISO: loader, kernel and root image (needs xorriso and a boot loader)
-make x86-iso-smoke    # boot the ISO with -cdrom and check the shell and /bin
+make x86-iso          # one image, four boots: loader, kernel and root image (xorriso + a boot loader)
+make x86-iso-smoke    # boot the image from a CD on a BIOS and check the shell
+make x86-iso-uefi-smoke  # the same image on OVMF, from a CD and a USB stick
+make x86-iso-usb-smoke   # the same image from a USB stick on a BIOS
 ```
 
 `make x86-run` opens the window of QEMU with `-display gtk`. The display
@@ -428,16 +430,18 @@ kernel, `x86-all.img` (the disk of MicroFS with `/bin` and `/etc`), the
 licenses and a `run.sh` with the disk and the virtio-net card. The tar is
 the artifact of a release, not a build directory: what the target starts is
 what a person downloads. `make x86-user-serial` is the same with `-nographic`.
-## The CD
+## The medium
 
 `make x86-iso` writes `build-x86-iso/microos.iso`: the loader, the signed
-kernel and the root image in one BIOS ISO, which a machine without `-kernel`
-boots from its CD drive. The root image is the second module of the boot and
-the port mounts its first partition at `/` (`boot0p1`, read-only); the shell,
-`/bin` and the programs come from the CD. `make x86-iso-smoke` boots the ISO
-with `-cdrom` and checks the transcript. The page of the medium, with the
-build steps, the requirements and the gaps (UEFI, a hybrid USB image, a
-writable root, a reproducible ISO), is [iso.md](iso.md); the decision is
+kernel and the root image in one image, which a machine without `-kernel`
+boots from a CD drive or from a USB stick written with `dd`, in a BIOS and in
+a firmware of UEFI. The root image is the second module of the boot and the
+port mounts its first partition at `/` (`boot0p1`, read-only); the shell,
+`/bin` and the programs come from the medium. `make x86-iso-smoke` boots the
+image from a CD on a BIOS and checks the transcript; `make x86-iso-uefi-smoke`
+does the same with OVMF, from a CD and from a stick, and `make x86-iso-usb-smoke`
+from a stick on a BIOS. The page of the medium is [iso.md](iso.md), the one of
+the person who carries the stick [boot.md](boot.md), and the decision
 ADR 0026.
 
 ## The network
@@ -763,11 +767,12 @@ in [debts.md](../../debts.md).
   MBR read by the portable parser, MicroFS on the first partition (`ata0p1`)
   and the volume formatted at the first boot; what is written to it survives
   a reset, which `make x86-disk-smoke` checks (ADR 0008);
-* a medium: `make x86-iso` writes a BIOS ISO with the loader, the kernel and
-  an 8 MB root image as the second module; the machine boots it with
-  `-cdrom` and no other flag, mounts the image's first partition at `/`
-  (`boot0p1`, read-only) and runs `/bin` from it, which `make x86-iso-smoke`
-  checks (ADR 0026, [iso.md](iso.md));
+* a medium: `make x86-iso` writes one image with the loader, the kernel and a
+  12 MB root image as the second module; a BIOS boots it from a CD drive or a
+  USB stick, a firmware of UEFI from either, with no `-kernel` and no other
+  flag, mounts the image's first partition at `/` (`boot0p1`, read-only) and
+  runs `/bin` from it, which `make x86-iso-smoke`, `make x86-iso-uefi-smoke`
+  and `make x86-iso-usb-smoke` check (ADR 0026, [iso.md](iso.md));
 * a network: a virtio-net card on the PCI bus, its MAC and link read from the
   config space, ARP, IPv4, ICMP, UDP, a client of TCP and a server of TCP under
   `kernel/port/net.h`; `netinfo`, `ping`, `netudp` and `dns` from the port,
