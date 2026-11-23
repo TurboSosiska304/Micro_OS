@@ -17,12 +17,15 @@ static struct {
     bool mounted;
     const struct k_blockdev *dev;
     struct mfs_superblock sb;
-    k_u32_t inode_size;     /* 16 for a version 1 volume, 32 for version 2 */
-    k_u32_t bitmap_blocks;  /* the blocks of the bitmap of the free blocks */
-    k_u32_t inode_blocks;   /* the blocks of the table of the inodes */
-    k_u32_t inode_capacity; /* the number of the records of the table */
-    bool bitmap_dirty;      /* the map in the memory is newer than the device */
-    k_u8_t *bitmap;         /* the map of the free blocks, one bit per block */
+    k_u32_t inode_size;        /* 16 for a version 1 volume, 32 for version 2 */
+    k_u32_t bitmap_blocks;     /* the blocks of the bitmap of the free blocks */
+    k_u32_t inode_blocks;      /* the blocks of the table of the inodes */
+    k_u32_t inode_capacity;    /* the number of the records of the table */
+    bool bitmap_dirty;         /* the map in the memory is newer than the device */
+    k_u8_t *bitmap;            /* the map of the free blocks, one bit per block */
+    k_u32_t inode_cache_block; /* the block of the table that is cached */
+    bool inode_cache_valid;    /* the cache holds the block of the medium */
+    k_u8_t inode_cache[MFS_BLOCK_SIZE];
 } g;
 
 /*
@@ -411,9 +414,38 @@ static k_u32_t inode_table_offset(k_u32_t index)
     return (index * g.inode_size) % MFS_BLOCK_SIZE;
 }
 
+/*
+ * The block of the table of the records, in the memory of the filesystem.
+ *
+ * A block holds 32 records of a version 2 volume, so a walk of the table -
+ * the count of the used records, the search for a free one, the walk of the
+ * check - used to read the same block once per record: the table of a 5 GiB
+ * volume is 214 MiB and the walk cost 6.8 GiB of the medium. One block of
+ * the cache makes the walk cost the table itself, which is what the format
+ * says the table is.
+ */
+static int inode_table_load(k_u32_t block)
+{
+    int rc;
+
+    if (g.inode_cache_valid && g.inode_cache_block == block) {
+        return MFS_OK;
+    }
+
+    rc = dev_read(block, g.inode_cache);
+    if (rc != MFS_OK) {
+        g.inode_cache_valid = false;
+        return rc;
+    }
+
+    g.inode_cache_block = block;
+    g.inode_cache_valid = true;
+
+    return MFS_OK;
+}
+
 static int inode_read(k_u32_t index, struct mfs_inode *out)
 {
-    k_u8_t block[MFS_BLOCK_SIZE];
     k_u32_t offset;
     int rc;
 
@@ -421,21 +453,21 @@ static int inode_read(k_u32_t index, struct mfs_inode *out)
         return MFS_EINVAL;
     }
 
-    rc = dev_read(inode_table_block(index), block);
+    rc = inode_table_load(inode_table_block(index));
     if (rc != MFS_OK) {
         return rc;
     }
 
     offset = inode_table_offset(index);
-    mfs_priv_inode_decode(block + offset, g.inode_size, out);
+    mfs_priv_inode_decode(g.inode_cache + offset, g.inode_size, out);
 
     return MFS_OK;
 }
 
 static int inode_write(k_u32_t index, const struct mfs_inode *inode)
 {
-    k_u8_t block[MFS_BLOCK_SIZE];
     k_u8_t raw[MFS_INODE_SIZE];
+    k_u32_t block;
     k_u32_t offset;
     int rc;
 
@@ -443,16 +475,25 @@ static int inode_write(k_u32_t index, const struct mfs_inode *inode)
         return MFS_EINVAL;
     }
 
-    rc = dev_read(inode_table_block(index), block);
+    block = inode_table_block(index);
+
+    rc = inode_table_load(block);
     if (rc != MFS_OK) {
         return rc;
     }
 
     offset = inode_table_offset(index);
     mfs_priv_inode_encode(inode, g.inode_size, raw);
-    memcpy(block + offset, raw, g.inode_size);
+    memcpy(g.inode_cache + offset, raw, g.inode_size);
 
-    return dev_write(inode_table_block(index), block);
+    rc = dev_write(block, g.inode_cache);
+    if (rc != MFS_OK) {
+        /* The block of the medium is not the one of the cache any more. */
+        g.inode_cache_valid = false;
+        return rc;
+    }
+
+    return MFS_OK;
 }
 
 /* Find a free record of the table of the inodes. */
@@ -531,6 +572,7 @@ static k_u32_t inode_flags(k_u32_t type, k_u32_t mode, k_u32_t owner)
 static int chain_next(k_u32_t block, k_u32_t *next)
 {
     k_u8_t buffer[MFS_BLOCK_SIZE];
+
     int rc = dev_read(block, buffer);
 
     if (rc != MFS_OK) {
@@ -620,6 +662,9 @@ static void file_cursor_forget(struct mfs_file *file)
     file->chain_valid = false;
     file->chain_block = MFS_NEXT_NONE;
     file->chain_index = 0;
+    file->grow_valid = false;
+    file->grow_block = MFS_NEXT_NONE;
+    file->grow_index = 0;
 }
 
 /* The last block of a chain. */
@@ -2086,18 +2131,27 @@ static int file_grow(struct mfs_file *file, k_u32_t *new_block)
         file->chain_block = block;
         file->chain_index = 0;
         file->chain_valid = true;
+        file->grow_block = block;
+        file->grow_index = 0;
+        file->grow_valid = true;
         *new_block = block;
         return MFS_OK;
     }
 
     /*
-     * The block that ends the chain. The write path has just appended a
-     * block when the cursor names the last one, and the count of the
-     * blocks says which index that is; otherwise the chain is walked once
-     * and the rest of the growth of this call goes from the new block.
+     * The block that ends the chain. The append cursor names it when the
+     * last growth left it there, and the count of the blocks says which
+     * index that is; otherwise the chain is walked once and the rest of
+     * the growth of this call goes from the new block.
+     *
+     * The position cursor of the descriptor is not the one asked: a write
+     * grows the chain to the end of the call before it writes the first
+     * byte, so the position is *behind* the tail, and a growth that moved
+     * it made every call walk the chain from the head - the write of a
+     * megabyte cost the square of the blocks of the file.
      */
-    if (file->chain_valid && file->chain_index + 1u == file->chain_blocks) {
-        last = file->chain_block;
+    if (file->grow_valid && file->grow_index + 1u == file->chain_blocks) {
+        last = file->grow_block;
     } else {
         rc = chain_last(file->first_block, &last);
         if (rc != MFS_OK) {
@@ -2112,10 +2166,10 @@ static int file_grow(struct mfs_file *file, k_u32_t *new_block)
         return rc;
     }
 
-    /* The new block ends the chain: the cursor follows it, not the old end. */
-    file->chain_block = block;
-    file->chain_index = file->chain_blocks;
-    file->chain_valid = true;
+    /* The new block ends the chain: the append cursor follows it. */
+    file->grow_block = block;
+    file->grow_index = file->chain_blocks;
+    file->grow_valid = true;
 
     *new_block = block;
     return MFS_OK;

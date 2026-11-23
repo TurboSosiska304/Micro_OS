@@ -29,6 +29,7 @@ the images of a program is missing, and 1 when the tool failed.
 from __future__ import annotations
 
 import argparse
+import errno
 import gzip
 import io
 import os
@@ -569,16 +570,82 @@ def write_mbr(file, entries: list) -> None:
     file.write(sector)
 
 
+def copy_chunks(disk, file, offset: int, size: int) -> None:
+    """Copy the source a megabyte at a time, leaving the zero blocks as holes.
+
+    The bytes are read with `os.pread`, which does not move the position of
+    the file object: a read through the buffer of Python after an `os.lseek`
+    of the descriptor hands out the bytes of an earlier position, which is a
+    copy that looks right and is not.
+    """
+    fd = file.fileno()
+    position = 0
+
+    while position < size:
+        chunk = os.pread(fd, min(size - position, 1 << 20), position)
+        if not chunk:
+            break
+
+        disk.seek(offset + position)
+
+        if chunk.count(0) == len(chunk):
+            disk.seek(len(chunk), 1)
+        else:
+            disk.write(chunk)
+
+        position += len(chunk)
+
+
+def copy_extents(disk, file, offset: int, size: int) -> bool:
+    """Copy only the extents of the source that hold bytes.
+
+    A volume of ext2 is mostly a hole: `mke2fs` writes the bitmaps and the
+    tables of the groups and leaves the rest of the file unsized by the
+    medium. Copying the extents and not the file is what makes a 5 GiB image
+    cost the megabytes of the filesystem and not the 5 GiB of the volume, and
+    the bytes of the image are the same either way. False means the host
+    cannot tell data from holes (`SEEK_DATA` of this file), and the caller
+    falls back to the megabyte loop.
+    """
+    fd = file.fileno()
+    position = 0
+
+    while position < size:
+        try:
+            start = os.lseek(fd, position, os.SEEK_DATA)
+        except OSError as error:
+            # ENXIO: the rest of the file is a hole, which is the end of the
+            # data. Anything else is a filesystem without SEEK_DATA.
+            return error.errno == errno.ENXIO
+
+        end = os.lseek(fd, start, os.SEEK_HOLE)
+
+        while start < end:
+            chunk = os.pread(fd, min(end - start, 1 << 20), start)
+            if not chunk:
+                return True
+
+            disk.seek(offset + start)
+
+            if chunk.count(0) == len(chunk):
+                disk.seek(len(chunk), 1)
+            else:
+                disk.write(chunk)
+
+            start += len(chunk)
+
+        position = end
+
+    return True
+
+
 def copy_into(disk, source: str, offset: int) -> None:
     """Copy a volume of the staging directory into the disk at `offset`."""
     with open(source, "rb") as file:
-        disk.seek(offset)
+        size = os.fstat(file.fileno()).st_size
 
-        while True:
-            chunk = file.read(1 << 20)
-            if not chunk:
-                break
-            disk.write(chunk)
+        if not copy_extents(disk, file, offset, size):
+            copy_chunks(disk, file, offset, size)
 
 
 def stage_tree(entries: list, root: str) -> None:

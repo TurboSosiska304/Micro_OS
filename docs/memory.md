@@ -88,21 +88,27 @@ The rules of the current format:
   256 records (`MFS_MOUNT_RECORDS`);
 * `DATA` takes all the remaining space.
 
-The bitmap is one or two blocks even on the largest volume listed and the
-table is four, so the growth decides only on a small volume; on a large one
-the 4% is generous. For a volume formatted by the mount:
+The bitmap is one bit per block of `DATA` and the mount allocates it for the
+volume it finds (615 KiB for 5 GiB, 2 KiB for 16 MiB), so it is the
+`META` of a large volume that is the 4% and not the real table; the growth
+decides only on a small volume, where 4% may not hold the table. For a
+volume formatted by the mount:
 
-| Volume size | Total blocks | DATA | META | INFO |
-|---|---|---|---|---|
-| 64 KiB | 64 | 51 | 9 | 4 |
-| 256 KiB | 256 | 241 | 11 | 4 |
-| 1 MiB | 1024 | 979 | 41 | 4 |
-| 6 MiB | 6144 | 5894 | 246 | 4 |
-| 16 MiB | 16384 | 15724 | 656 | 4 |
+| Volume size | Total blocks | DATA | META | INFO | Bitmap |
+|---|---|---|---|---|---|
+| 64 KiB | 64 | 51 | 9 | 4 | 1 block |
+| 256 KiB | 256 | 241 | 11 | 4 | 1 block |
+| 1 MiB | 1024 | 979 | 41 | 4 | 1 block |
+| 6 MiB | 6144 | 5894 | 246 | 4 | 1 block |
+| 16 MiB | 16384 | 15724 | 656 | 4 | 2 blocks |
+| 5 GiB | 5,241,856 | 5,032,178 | 209,674 | 4 | 615 blocks |
 
 `DATA` and `META` scale automatically, but a percentage split has a catch: on
 a small drive 4% may not hold the table, and on a large one it is more space
-than the table needs.
+than the table needs - 209,674 blocks of 5 GiB against the 66 records the
+image of the release uses, and the mount, `df` and `fsck` walk the whole
+table to count the used records (13.8 s of the disk of QEMU at 5 GiB, see
+`docs/debts.md`).
 
 ## 4. Sizing META by record count
 
@@ -233,9 +239,12 @@ The state of the automatic layout:
 - [x] Determine the `META` size at format time: 4% is the first guess, grown
       when the bitmap and the table do not fit.
 - [ ] Compute the `FILE TABLE` capacity from the available space: the mount
-      asks for 256 records, whatever the volume.
-- [x] Account for the free-block bitmap in the calculation (one or two blocks
-      of the section).
+      asks for 256 records, whatever the volume. The first guess of 4% is
+      kept, so a volume of 5 GiB has a table of 209,674 blocks (214 MB) for
+      66 records, and the walk of the count at the mount, in `df` and in
+      `fsck` is 13.8 s of the disk of QEMU.
+- [x] Account for the free-block bitmap in the calculation (the map is the
+      memory of the volume: 615 KiB of 5 GiB, 2 KiB of 16 MiB).
 - [x] Store the actual `DATA`, `META` and `INFO` boundaries in the header.
 - [x] Validate the layout when mounting: the sections have to fill the
       volume, `INFO` has to end at its end, and the root has to be a

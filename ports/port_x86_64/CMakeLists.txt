@@ -887,6 +887,17 @@ add_libc_program(truncate
     DEFINES ULIBC_HEAP_SIZE=65536u
 )
 
+# The file of the large volume (tools/x86_volume_smoke.py): megabytes
+# written and read back, through the double and the triple table of ext2 and
+# a chain of thousands of blocks of MicroFS. The buffer is the bss of the
+# image and not the heap, so the program costs nothing of the arena of the
+# tools and a file of 128 MiB is one chunk of 64 KiB after another.
+add_libc_program(mkbig
+    MAIN "${PROGRAM_DIR}/mkbig.c"
+    SOURCES ${SBASE_LIBC_SOURCES}
+    DEFINES ULIBC_HEAP_SIZE=65536u
+)
+
 function(add_sbase_program tool heap)
     add_libc_program(${tool}
         MAIN "${SBASE_DIR}/${tool}.c"

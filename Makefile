@@ -32,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format sdk idf-check idf-build idf-flash idf-monitor idf-size bundle bundle-board bundle-x86 x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-root-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak x86-smp-smoke soak-smp
+.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format sdk idf-check idf-build idf-flash idf-monitor idf-size bundle bundle-board bundle-x86 x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-root-smoke x86-volume-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak x86-smp-smoke soak-smp
 
 help:
 	@echo "Micro OS — available targets:"
@@ -378,6 +378,18 @@ x86-root-smoke: x86-disk
 # the branch land.
 x86-smp-smoke: x86-smp-build x86-disk
 	python3 tools/x86_smp_smoke.py --build $(X86_SMP_BUILD) --image $(X86_PROGRAMS_IMAGE)
+
+# The gate of ADR 0029: a volume of 5 GiB is an ordinary volume. The tool
+# writes the two images of the plan itself - ext2 and MicroFS, both of 5 GiB -
+# with `/bin/mkbig` of the build, boots each as the root of the machine, writes
+# a file (128 MiB of ext2, 16 MiB of MicroFS) and reads it back, and then the
+# tools of the world read the image of the session: e2fsck -fn finds nothing
+# to repair, debugfs sees the file, and the fsck of the machine says the
+# MicroFS volume is consistent. Not a part of `make ci`: a file of 128 MiB
+# through the disk of QEMU is about two minutes of emulation and the images
+# are gigabytes of the host.
+x86-volume-smoke: x86-build build
+	python3 tools/x86_volume_smoke.py --build $(X86_BUILD) --mkfs $(X86_MKFS)
 
 # The screen without a display: the monitor of QEMU reads the framebuffer of
 # the new screen with screendump (a picture has no text memory) and the text
