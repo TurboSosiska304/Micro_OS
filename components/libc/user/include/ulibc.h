@@ -251,9 +251,10 @@ int rand(void);
 
 /*
  * The arena lives in the bss of the program, not in the kernel: a block of
- * `KSYS_MALLOC` is memory of ring 0 and a program could not read it. The
- * size is a compile-time setting (`ULIBC_HEAP_SIZE`), 256 KiB by default,
- * because the bss of an image is capped at a megabyte by the format.
+ * `KSYS_MALLOC` is memory of ring 0 and a program could not read it. The arena
+ * is the first block of the heap; a request the arena cannot hold is grown with
+ * `brk`, so `ULIBC_HEAP_SIZE` (256 KiB by default) is the size of the fast
+ * small-block arena and not a ceiling of the program.
  */
 void *malloc(size_t size);
 void *calloc(size_t count, size_t size);
