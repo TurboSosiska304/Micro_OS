@@ -33,6 +33,34 @@ import time
 PROMPT = "microos> "
 PROMPT_BYTES = PROMPT.encode("ascii")
 
+# The two buses a disk of the port can be on: the legacy IDE channel of
+# ADR 0008 and the virtio-blk device of ADR 0037. The image is one file and
+# the bus is the machine, so a smoke test of the same image on the second bus
+# is the same bytes of the medium and another device under them.
+DISKS = ("ide", "virtio")
+
+
+def drive_args(image: str, disk: str = "ide") -> list:
+    """The `-drive` arguments of a disk image on one of the two buses."""
+    if disk == "virtio":
+        return ["-drive", f"file={image},format=raw,if=virtio,cache=writeback"]
+
+    return ["-drive", f"file={image},format=raw,if=ide,index=0,cache=writeback"]
+
+
+def disk_name(disk: str = "ide") -> str:
+    """The name the port gives the device of that bus ("ata0", "virtio0").
+
+    The boot names the first partition of it by that name plus "p1", and the
+    checks of a smoke test are about the words the port prints.
+    """
+    return "virtio0" if disk == "virtio" else "ata0"
+
+
+def root_name(disk: str = "ide") -> str:
+    """The first partition of the disk, which is the root of the boot."""
+    return disk_name(disk) + "p1"
+
 
 class MachineError(RuntimeError):
     """The machine is not there any more."""
@@ -57,10 +85,12 @@ class Machine:
         net: bool = False,
         hostfwd: int | None = None,
         memory: str = "256",
+        disk: str = "ide",
         extra_args: list | None = None,
     ) -> None:
         self.build = build
         self.image = image
+        self.disk = disk
         self.net = net
         self.hostfwd = hostfwd
         self.memory = memory
@@ -87,9 +117,9 @@ class Machine:
             # A reset is the end of the machine, not a new boot: the session
             # of 1.0 is one boot, and a reboot is a failure of it.
             "-no-reboot",
-            "-drive",
-            f"file={self.image},format=raw,if=ide,index=0,cache=writeback",
         ]
+
+        command += drive_args(self.image, self.disk)
 
         if self.net:
             forward = ""

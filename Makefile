@@ -66,9 +66,10 @@ help:
 	@echo "  make x86-smp-smoke  boot the kernel of two cores and check both of them"
 	@echo "  make x86-disk   the image of the disk: /bin and /etc of MicroFS"
 	@echo "  make x86-vga-smoke   check the screen and the keyboard without a display"
-	@echo "  make x86-run-disk   boot the window with an 8 MB disk on the IDE channel"
+	@echo "  make x86-run-disk   boot the window with an 8 MB disk of the machine"
 	@echo "  make x86-run-disk-serial  the same disk in a terminal (-nographic)"
 	@echo "  make x86-disk-smoke two boots on one disk image, a file survives both"
+	@echo "                  (X86_DISK_BUS=virtio puts the disk on the virtio device)"
 	@echo "  make x86-fs-smoke  rename, rmdir, fsck ext2 and the SQLite journal"
 	@echo "  make x86-net-smoke   the network: ping, UDP and HTTP on QEMU user-net"
 	@echo "  make x86-iso    the bootable ISO: loader, kernel and root.img (K13)"
@@ -339,7 +340,18 @@ reproducible: x86-disk
 	sha256sum "$$tmp/first.img" $(X86_PROGRAMS_IMAGE) \
 		"$$tmp/first-ext2.img" $(X86_PROGRAMS_EXT2_IMAGE)
 
+# The bus of the disk of the machine: the primary IDE channel of ADR 0008
+# (the default, and the disk of every release before 1.6) or the virtio-blk
+# device of ADR 0037. The image is one file and the bus is the machine, so
+# `make x86-smoke X86_DISK_BUS=virtio` boots the same bytes of the medium on
+# the other device and the checks of the run are the checks of the port.
+X86_DISK_BUS ?= ide
+
+ifeq ($(X86_DISK_BUS),virtio)
+X86_DISK_DRIVE := -drive file=$(X86_ROOT_IMAGE),format=raw,if=virtio,cache=writeback
+else
 X86_DISK_DRIVE := -drive file=$(X86_ROOT_IMAGE),format=raw,if=ide,index=0,cache=writeback
+endif
 
 x86-run: x86-disk
 	@qemu-system-x86_64 -display help 2>&1 | grep -qw "$(X86_DISPLAY)" || { \
@@ -361,7 +373,7 @@ x86-run-serial: x86-disk
 
 x86-smoke: x86-disk x86-open-build
 	python3 tools/x86_smoke.py --image $(X86_PROGRAMS_IMAGE) --open-build $(X86_OPEN_BUILD) \
-		--timeout 180
+		--disk $(X86_DISK_BUS) --timeout 180
 
 # The gate of ADR 0027: one machine boots two roots. The first image is the
 # MicroFS volume of `make x86-disk`, the second is the same /bin and /etc in an
@@ -370,7 +382,7 @@ x86-smoke: x86-disk x86-open-build
 # volume of the second partition is mounted at /data and written.
 x86-root-smoke: x86-disk
 	python3 tools/x86_root_smoke.py --image $(X86_PROGRAMS_IMAGE) \
-		--ext2-image $(X86_PROGRAMS_EXT2_IMAGE) --timeout 180
+		--ext2-image $(X86_PROGRAMS_EXT2_IMAGE) --disk $(X86_DISK_BUS) --timeout 180
 
 # The gate of the two cores (ADR 0012): the kernel of `x86-smp-build` boots on
 # a machine of two processors and has to start both of them, keep a task on
@@ -392,7 +404,8 @@ x86-smp-smoke: x86-smp-build x86-disk
 # through the disk of QEMU is about two minutes of emulation and the images
 # are gigabytes of the host.
 x86-volume-smoke: x86-build build
-	python3 tools/x86_volume_smoke.py --build $(X86_BUILD) --mkfs $(X86_MKFS)
+	python3 tools/x86_volume_smoke.py --build $(X86_BUILD) --mkfs $(X86_MKFS) \
+		--disk $(X86_DISK_BUS)
 
 # The numbers of the machine (tools/x86_bench.py, docs/bench.md): one boot of
 # the x86-64 port, `/bin/bench` of the build in the image for the run, and a
@@ -429,6 +442,11 @@ X86_DISK_IMAGE := $(X86_BUILD)/disk.img
 $(X86_DISK_IMAGE): | x86-disk
 	cp $(X86_PROGRAMS_IMAGE) $(X86_DISK_IMAGE)
 
+X86_DISK_IMAGE_DRIVE := -drive file=$(X86_DISK_IMAGE),format=raw,if=ide,index=0,cache=writeback
+ifeq ($(X86_DISK_BUS),virtio)
+X86_DISK_IMAGE_DRIVE := -drive file=$(X86_DISK_IMAGE),format=raw,if=virtio,cache=writeback
+endif
+
 x86-run-disk: x86-build $(X86_DISK_IMAGE)
 	@qemu-system-x86_64 -display help 2>&1 | grep -qw "$(X86_DISPLAY)" || { \
 		echo "QEMU has no '$(X86_DISPLAY)' display: install qemu-ui-gtk" >&2; \
@@ -437,15 +455,15 @@ x86-run-disk: x86-build $(X86_DISK_IMAGE)
 	qemu-system-x86_64 -kernel $(X86_BUILD)/loader32.elf \
 		-initrd $(X86_BUILD)/microos64.bin -m 256 -no-reboot \
 		-display $(X86_DISPLAY) -serial null -vga std \
-		-drive file=$(X86_DISK_IMAGE),format=raw,if=ide,index=0,cache=writeback
+		$(X86_DISK_IMAGE_DRIVE)
 
 x86-run-disk-serial: x86-build $(X86_DISK_IMAGE)
 	qemu-system-x86_64 -kernel $(X86_BUILD)/loader32.elf \
 		-initrd $(X86_BUILD)/microos64.bin -m 256 -nographic -no-reboot \
-		-drive file=$(X86_DISK_IMAGE),format=raw,if=ide,index=0,cache=writeback
+		$(X86_DISK_IMAGE_DRIVE)
 
 x86-disk-smoke: x86-disk
-	python3 tools/x86_disk_smoke.py --image $(X86_BUILD)/disk-smoke.img
+	python3 tools/x86_disk_smoke.py --image $(X86_BUILD)/disk-smoke.img --disk $(X86_DISK_BUS)
 
 # The filesystem of 1.4: rename and rmdir through the programs of /bin,
 # `fsck ext2 -y` on a broken image (and e2fsck of the host after it), and the

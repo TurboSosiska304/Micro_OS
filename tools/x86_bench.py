@@ -57,7 +57,7 @@ import sys
 import tempfile
 import time
 
-from qemu_session import Machine, MachineError
+from qemu_session import DISKS, Machine, MachineError
 from x86_image import build_image
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -227,6 +227,8 @@ def main(argv: list) -> int:
     parser = argparse.ArgumentParser(description="the numbers of the x86-64 port")
     parser.add_argument("--build", default=DEFAULT_BUILD, help="the directory of the kernel")
     parser.add_argument("--mkfs", default=DEFAULT_MKFS, help="the host tool of MicroFS")
+    parser.add_argument("--disk", choices=DISKS, default="ide",
+                        help="the bus of the disk of the run (default: ide)")
     parser.add_argument("--fs", choices=("mfs", "ext2"), default="mfs",
                         help="the filesystem of the root (default: mfs)")
     parser.add_argument("--dir", default=None, help="where the image of the run is written")
@@ -293,7 +295,7 @@ def main(argv: list) -> int:
     ]
 
     try:
-        with Machine(args.build, image) as machine:
+        with Machine(args.build, image, disk=args.disk) as machine:
             machine.open(timeout=args.timeout)
             boot_seconds = machine.boot_seconds
 

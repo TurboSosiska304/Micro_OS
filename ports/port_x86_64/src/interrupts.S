@@ -251,6 +251,21 @@ isr_irq isr_irq1, port_x86_64_irq_keyboard
 isr_irq isr_irq_ata, port_x86_64_irq_ata
 
 /*
+ * The virtio disk of the port (ADR 0037), on the line the configuration space
+ * of its card names. The handler reads the interrupt status of the device,
+ * which is what takes the line down, and acknowledges the 8259.
+ */
+isr_irq isr_irq_virtio_blk, port_x86_64_irq_virtio_blk
+
+/*
+ * The three vectors of the 8259 that no device owns - the cascade and the two
+ * spurious ones: the acknowledge of a request that has nothing behind it, the
+ * price of a level-triggered line of the PCI bus. The handler acknowledges and
+ * returns (src/port_x86_64.c has the whole story).
+ */
+isr_irq isr_irq_8259_spurious, port_x86_64_irq_8259_spurious
+
+/*
  * The timer of a core that the 8259 does not reach: the local APIC of an
  * application processor (ADR 0012). The body is the tick of the port, and the
  * frame is the one of the interrupted code, like the frame of the PIT.

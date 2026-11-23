@@ -1125,15 +1125,25 @@ void port_x86_64_disk_irq_init(void)
 
 /*
  * Where the filesystem of the boot lives: the root image the boot loader
- * handed the kernel when it came from an ISO, the first partition of the disk
+ * handed the kernel when it came from an ISO, the first partition of a disk
  * when there is one, the volume in the memory when there is neither.
+ *
+ * Of the two disks of the port the virtio one comes first: it is the device of
+ * this release (ADR 0037) and a machine that was given both is a machine whose
+ * root is the fast one. A machine with a card that carries no partition table
+ * is a machine with no root on it, and the drive of the IDE channel answers.
  */
 const char *port_x86_64_root_device(void)
 {
     const char *boot = port_x86_64_module_root();
+    const char *virtio = port_x86_64_virtio_blk_root();
 
     if (boot != NULL) {
         return boot;
+    }
+
+    if (virtio != NULL) {
+        return virtio;
     }
 
     return g_root != NULL ? g_root : "ram0";

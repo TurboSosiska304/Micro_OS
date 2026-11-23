@@ -453,6 +453,27 @@ void port_x86_64_disk_init(void);
 void port_x86_64_disk_irq_init(void);
 
 /*
+ * Own the second disk of the port: the virtio-blk device of the PCI bus
+ * (src/virtio_blk.c, ADR 0037), its queue and its partitions. The device is
+ * optional - a machine without the function keeps the drive of the IDE
+ * channel and nothing else - and the root of the boot is the first partition
+ * of it when there is one. Called by port_x86_64_init() after the ATA disk.
+ */
+void port_x86_64_virtio_blk_init(void);
+
+/* The first partition of the virtio disk, NULL when the machine has no such
+ * disk. The boot prefers it to the IDE drive when both are there. */
+const char *port_x86_64_virtio_blk_root(void);
+
+/*
+ * Open the line of the virtio disk: the number is the one the configuration
+ * space of the card names, and the entry of the table is the shared stub of
+ * the port (src/interrupts.S). Called by port_x86_64_init() after the table
+ * of the interrupts exists, beside port_x86_64_disk_irq_init().
+ */
+void port_x86_64_virtio_blk_irq_init(void);
+
+/*
  * Own the medium of the boot: a boot loader may hand the kernel more than the
  * image, and the second module of the x86-64 boot is a whole MicroFS disk (the
  * root image of the ISO, ADR 0026). It is the bytes of the boot medium in the
