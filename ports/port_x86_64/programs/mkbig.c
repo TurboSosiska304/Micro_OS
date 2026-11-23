@@ -15,10 +15,17 @@
  *
  *     mkbig write <path> <MiB>    write the file, print the bytes and the rate
  *     mkbig verify <path> <MiB>   read it back, compare, print the rate
+ *     mkbig fill <path> <MiB>     the pattern of the two, and no file at all
  *
  * The rate is the time of the call and not of the console: the numbers of
  * `md5sum` of a big file are the cost of the medium, and the tests print the
  * two so that a slow volume is a number and not a feeling.
+ *
+ * `fill` is the measurement of the machine and not of the volume: it fills the
+ * chunks and writes nothing, so the bytes a second of the pattern is the
+ * ceiling a file of that size could ever reach, and the difference between it
+ * and `write` is the filesystem and the disk (the plan of 1.6 keeps the number
+ * of the volume smoke honest with it).
  */
 #include "ulibc.h"
 
@@ -139,6 +146,35 @@ static int write_file(const char *path, unsigned long mib)
     return 0;
 }
 
+/* TEMP: the cost of the pattern itself, with no file under it. */
+static int fill_only(unsigned long mib)
+{
+    unsigned long long bytes = (unsigned long long)mib * MIB_BYTES;
+    unsigned long long done = 0;
+    unsigned long chunk = 0;
+    struct timespec start;
+    struct timespec stop;
+
+    (void)clock_gettime(CLOCK_MONOTONIC, &start);
+
+    while (done < bytes) {
+        size_t want = CHUNK_BYTES;
+
+        if ((unsigned long long)want > bytes - done) {
+            want = (size_t)(bytes - done);
+        }
+
+        chunk_fill(g_chunk, want, chunk);
+        done += (unsigned long long)want;
+        chunk++;
+    }
+
+    (void)clock_gettime(CLOCK_MONOTONIC, &stop);
+    rate("filled", bytes, elapsed_ms(&start, &stop));
+
+    return 0;
+}
+
 static int verify_file(const char *path, unsigned long mib)
 {
     unsigned long long bytes = (unsigned long long)mib * MIB_BYTES;
@@ -236,7 +272,7 @@ int main(int argc, char *const argv[], char *const envp[])
     (void)envp;
 
     if (argc != 4) {
-        static const char usage[] = "usage: mkbig write|verify <path> <MiB>\n";
+        static const char usage[] = "usage: mkbig write|verify|fill <path> <MiB>\n";
 
         (void)write(ULIBC_STDERR, usage, sizeof(usage) - 1);
         return ULIBC_EXIT_FAILURE;
@@ -253,11 +289,15 @@ int main(int argc, char *const argv[], char *const envp[])
         return write_file(argv[2], mib);
     }
 
+    if (strcmp(argv[1], "fill") == 0) {
+        return fill_only(mib);
+    }
+
     if (strcmp(argv[1], "verify") == 0) {
         return verify_file(argv[2], mib);
     }
 
-    printf("mkbig: %s: not a mode (write or verify)\n", argv[1]);
+    printf("mkbig: %s: not a mode (write, verify or fill)\n", argv[1]);
 
     return ULIBC_EXIT_FAILURE;
 }
