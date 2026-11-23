@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "kernel/clock.h"
 #include "kernel/config.h"
 #include "kernel/errno.h"
 #include "kernel/exec.h"
@@ -926,6 +927,202 @@ static void test_signal_chld(void)
     teardown();
 }
 
+/*
+ * The directory of a task across a fork (number 48).
+ *
+ * The call moves the record of the task and not a copy in the library, so the
+ * child of a fork - the child is a copy of the record - starts where the
+ * parent moved to, and the `chdir` of the child moves only the child. The
+ * programme below is the one of the fork tests: on a machine without an
+ * address space per task the child re-enters it from the start and knows
+ * itself by the flag of its task.
+ */
+static volatile int g_cwd_child_saw_parent;
+static volatile int g_cwd_child_moved;
+static volatile int g_cwd_parent_kept;
+static volatile int g_cwd_fork;
+
+static void chdir_program(void *arg)
+{
+    struct task *self = task_self();
+    char path[TASK_CWD_MAX];
+
+    K_UNUSED(arg);
+
+    if (self != NULL && self->is_child) {
+        if (ksys_getcwd(path, sizeof(path)) >= 0 && strcmp(path, "/d1") == 0) {
+            g_cwd_child_saw_parent = 1;
+        }
+
+        /* The child moves its own record: the parent's directory is its own
+         * and has to stay where the parent left it. */
+        if (ksys_chdir("/d2") == 0) {
+            g_cwd_child_moved = 1;
+        }
+
+        task_exit(0);
+        return;
+    }
+
+    g_cwd_fork = -1;
+
+    /* The task starts in the root; the directory the child has to inherit is
+     * the one this task moves to. */
+    if (ksys_chdir("/d1") == 0) {
+        g_cwd_fork = ksys_fork();
+    }
+
+    if (g_cwd_fork > 0) {
+        (void)ksys_waitpid(g_cwd_fork, NULL, 0);
+    }
+
+    if (ksys_getcwd(path, sizeof(path)) >= 0 && strcmp(path, "/d1") == 0) {
+        g_cwd_parent_kept = 1;
+    }
+
+    /* The volume of the test goes away; a directory that named it would name
+     * nothing for the tests after this one. */
+    (void)ksys_chdir("/");
+
+    g_result = 1;
+}
+
+static void test_chdir_fork(void)
+{
+    struct task *parent;
+    char path[TASK_CWD_MAX];
+    int fd;
+    int waited;
+
+    ktest_begin("ksys: chdir moves the task and a child of a fork starts in the directory");
+
+    setup();
+
+    KT_CHECK_INT_EQ(ksys_mkdir("/d1"), 0);
+    KT_CHECK_INT_EQ(ksys_mkdir("/d2"), 0);
+    fd = ksys_open("/file", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    /* A name that names nothing, a file and a path that does not begin at
+     * the root are refused, and the directory the task had is kept. */
+    KT_CHECK_INT_EQ(ksys_chdir("/d1"), 0);
+    KT_CHECK_INT_EQ(ksys_chdir("/no/such/dir"), KERR_NOENT);
+    KT_CHECK_INT_EQ(ksys_chdir("/file"), KERR_NOTDIR);
+    KT_CHECK_INT_EQ(ksys_chdir("relative"), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_chdir(NULL), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_getcwd(path, sizeof(path)), (int)strlen("/d1"));
+    KT_CHECK_STR_EQ(path, "/d1");
+
+    /* A buffer that cannot hold the path is an error and not a cut name. */
+    KT_CHECK_INT_EQ(ksys_getcwd(path, 2), KERR_TOOBIG);
+
+    g_cwd_child_saw_parent = 0;
+    g_cwd_child_moved = 0;
+    g_cwd_parent_kept = 0;
+    g_cwd_fork = -1;
+    g_result = -1;
+
+    parent = task_create("parent", chdir_program, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(parent != NULL);
+
+    for (waited = 0; waited < 3000 && g_result < 0; waited++) {
+        k_sched_sleep_ms(1);
+    }
+
+    KT_CHECK_INT_EQ(g_result, 1);
+    KT_CHECK(g_cwd_fork > 0);
+    KT_CHECK_INT_EQ(g_cwd_child_saw_parent, 1);
+    KT_CHECK_INT_EQ(g_cwd_child_moved, 1);
+    KT_CHECK_INT_EQ(g_cwd_parent_kept, 1);
+
+    /* The directory of the test's own task named the volume that is about to
+     * go away; put it back where every other test expects it. */
+    KT_CHECK_INT_EQ(ksys_chdir("/"), 0);
+
+    teardown();
+}
+
+/*
+ * The two clocks and the processor time (numbers 49 and 50).
+ *
+ * The machine of the tests has no clock of its own, so the wall clock is
+ * seeded here through the driver the kernel keeps: the answer of the call has
+ * to be that moment plus the time that passed since. The monotonic clock is
+ * the count of the boot, and the processor time of a task that spun is not
+ * zero - it is the number the CPU limit is made of.
+ */
+static k_u64_t g_clock_set_seconds;
+
+static int test_clock_set(k_u64_t unix_seconds)
+{
+    g_clock_set_seconds = unix_seconds;
+
+    return 0;
+}
+
+static void test_clock_and_usage(void)
+{
+    static const k_u64_t base = 0x60000000u; /* 2020-01-01, a moment of a clock */
+    struct ksys_timespec realtime;
+    struct ksys_timespec monotonic;
+    struct ksys_rusage usage;
+    struct task *self = task_self();
+    k_u64_t uptime;
+    k_u64_t spent;
+
+    ktest_begin("ksys: the wall clock, the monotonic one and the processor time");
+
+    KT_CHECK_INT_EQ(ksys_clock_gettime(KSYS_CLOCK_REALTIME, &realtime), 0);
+    KT_CHECK_INT_EQ(ksys_clock_gettime(KSYS_CLOCK_MONOTONIC, &monotonic), 0);
+    KT_CHECK(realtime.tv_nsec >= 0 && realtime.tv_nsec < 1000000000);
+    KT_CHECK(monotonic.tv_nsec >= 0 && monotonic.tv_nsec < 1000000000);
+
+    /* The monotonic clock is the uptime of the call 15, to the second. */
+    uptime = ksys_uptime();
+    KT_CHECK(monotonic.tv_sec >= (k_i64_t)(uptime / 1000u) - 1);
+    KT_CHECK(monotonic.tv_sec <= (k_i64_t)(uptime / 1000u) + 1);
+
+    /* A selector that is not one of the two, and a place that is not there,
+     * are refused before anything is read. */
+    KT_CHECK_INT_EQ(ksys_clock_gettime(7, &monotonic), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_clock_gettime(KSYS_CLOCK_REALTIME, NULL), KERR_INVAL);
+
+    /* The wall clock follows the driver: a set moment is the moment the call
+     * answers, and the fraction of a second is the time since the set. */
+    k_clock_register(test_clock_set);
+    KT_CHECK_INT_EQ(k_clock_set_unix(base), 0);
+    KT_CHECK_INT_EQ(g_clock_set_seconds, base);
+    KT_CHECK_INT_EQ(ksys_clock_gettime(KSYS_CLOCK_REALTIME, &realtime), 0);
+    KT_CHECK(realtime.tv_sec >= (k_i64_t)base);
+    KT_CHECK(realtime.tv_sec <= (k_i64_t)base + 2);
+    k_clock_register(NULL);
+
+    /* The processor time of the caller. A task that slept spent none of it, a
+     * task that spun spent the time it spun. */
+    KT_CHECK_INT_EQ(ksys_getrusage(&usage), 0);
+    KT_CHECK_INT_EQ(usage.stime_ms, 0);
+    KT_CHECK(self != NULL);
+    if (self != NULL) {
+        KT_CHECK(usage.utime_ms <= (k_u64_t)self->cpu_ms + 10u);
+    }
+    KT_CHECK_INT_EQ(ksys_getrusage(NULL), KERR_INVAL);
+
+    spent = usage.utime_ms;
+    {
+        k_u64_t start = ksys_uptime();
+
+        while (ksys_uptime() - start < 30u) {
+            /* the task is running, so the tick of the scheduler charges it */
+        }
+    }
+
+    KT_CHECK_INT_EQ(ksys_getrusage(&usage), 0);
+    KT_CHECK(usage.utime_ms >= spent + 5u);
+}
+
 void test_ksys_process(void)
 {
     test_fork_wait();
@@ -941,6 +1138,8 @@ void test_ksys_process(void)
     test_signal_term();
     test_signal_wait_eintr();
     test_signal_chld();
+    test_chdir_fork();
+    test_clock_and_usage();
 #if KERNEL_EXEC
     test_execve();
 #endif

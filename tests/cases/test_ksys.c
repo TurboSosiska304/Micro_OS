@@ -290,22 +290,32 @@ static void test_abi_is_stable(void)
         k_u32_t number;
         const char *name;
     } golden[] = {
-        {KSYS_EXIT, "exit"},         {KSYS_READ, "read"},           {KSYS_WRITE, "write"},
-        {KSYS_OPEN, "open"},         {KSYS_CLOSE, "close"},         {KSYS_STAT, "stat"},
-        {KSYS_LSEEK, "lseek"},       {KSYS_UNLINK, "unlink"},       {KSYS_MKDIR, "mkdir"},
-        {KSYS_READDIR, "readdir"},   {KSYS_GETPID, "getpid"},       {KSYS_GETCWD, "getcwd"},
-        {KSYS_IOCTL, "ioctl"},       {KSYS_YIELD, "yield"},         {KSYS_SLEEP, "sleep"},
-        {KSYS_UPTIME, "uptime"},     {KSYS_REBOOT, "reboot"},       {KSYS_FORK, "fork"},
-        {KSYS_GETPPID, "getppid"},   {KSYS_WAITPID, "waitpid"},     {KSYS_MALLOC, "malloc"},
-        {KSYS_FREE, "free"},         {KSYS_REALLOC, "realloc"},     {KSYS_CHMOD, "chmod"},
-        {KSYS_CHOWN, "chown"},       {KSYS_EXECVE, "execve"},       {KSYS_STATX, "statx"},
-        {KSYS_PIPE, "pipe"},         {KSYS_DUP2, "dup2"},           {KSYS_KILL, "kill"},
-        {KSYS_SIGNAL, "signal"},     {KSYS_SIGRETURN, "sigreturn"}, {KSYS_GETLIMIT, "getlimit"},
-        {KSYS_SETLIMIT, "setlimit"}, {KSYS_RENAME, "rename"},       {KSYS_FTRUNCATE, "ftruncate"},
-        {KSYS_GETUID, "getuid"},     {KSYS_GETEUID, "geteuid"},     {KSYS_GETGID, "getgid"},
-        {KSYS_SETUID, "setuid"},     {KSYS_SETGID, "setgid"},       {KSYS_RMDIR, "rmdir"},
-        {KSYS_FSTAT, "fstat"},       {KSYS_POLL, "poll"},           {KSYS_MMAP, "mmap"},
-        {KSYS_MUNMAP, "munmap"},     {KSYS_MSYNC, "msync"},         {KSYS_BRK, "brk"},
+        {KSYS_EXIT, "exit"},           {KSYS_READ, "read"},
+        {KSYS_WRITE, "write"},         {KSYS_OPEN, "open"},
+        {KSYS_CLOSE, "close"},         {KSYS_STAT, "stat"},
+        {KSYS_LSEEK, "lseek"},         {KSYS_UNLINK, "unlink"},
+        {KSYS_MKDIR, "mkdir"},         {KSYS_READDIR, "readdir"},
+        {KSYS_GETPID, "getpid"},       {KSYS_GETCWD, "getcwd"},
+        {KSYS_IOCTL, "ioctl"},         {KSYS_YIELD, "yield"},
+        {KSYS_SLEEP, "sleep"},         {KSYS_UPTIME, "uptime"},
+        {KSYS_REBOOT, "reboot"},       {KSYS_FORK, "fork"},
+        {KSYS_GETPPID, "getppid"},     {KSYS_WAITPID, "waitpid"},
+        {KSYS_MALLOC, "malloc"},       {KSYS_FREE, "free"},
+        {KSYS_REALLOC, "realloc"},     {KSYS_CHMOD, "chmod"},
+        {KSYS_CHOWN, "chown"},         {KSYS_EXECVE, "execve"},
+        {KSYS_STATX, "statx"},         {KSYS_PIPE, "pipe"},
+        {KSYS_DUP2, "dup2"},           {KSYS_KILL, "kill"},
+        {KSYS_SIGNAL, "signal"},       {KSYS_SIGRETURN, "sigreturn"},
+        {KSYS_GETLIMIT, "getlimit"},   {KSYS_SETLIMIT, "setlimit"},
+        {KSYS_RENAME, "rename"},       {KSYS_FTRUNCATE, "ftruncate"},
+        {KSYS_GETUID, "getuid"},       {KSYS_GETEUID, "geteuid"},
+        {KSYS_GETGID, "getgid"},       {KSYS_SETUID, "setuid"},
+        {KSYS_SETGID, "setgid"},       {KSYS_RMDIR, "rmdir"},
+        {KSYS_FSTAT, "fstat"},         {KSYS_POLL, "poll"},
+        {KSYS_MMAP, "mmap"},           {KSYS_MUNMAP, "munmap"},
+        {KSYS_MSYNC, "msync"},         {KSYS_BRK, "brk"},
+        {KSYS_CHDIR, "chdir"},         {KSYS_CLOCK_GETTIME, "clock_gettime"},
+        {KSYS_GETRUSAGE, "getrusage"},
     };
     size_t i;
 
@@ -436,6 +446,16 @@ static const struct abi_field g_ksys_pollfd_fields[] = {
     {"revents", offsetof(struct ksys_pollfd, revents)},
 };
 
+static const struct abi_field g_ksys_timespec_fields[] = {
+    {"tv_sec", offsetof(struct ksys_timespec, tv_sec)},
+    {"tv_nsec", offsetof(struct ksys_timespec, tv_nsec)},
+};
+
+static const struct abi_field g_ksys_rusage_fields[] = {
+    {"utime_ms", offsetof(struct ksys_rusage, utime_ms)},
+    {"stime_ms", offsetof(struct ksys_rusage, stime_ms)},
+};
+
 static const struct abi_object g_abi_objects[] = {
     {"ksys_arg_t", sizeof(ksys_arg_t), NULL, 0},
     {"vfs_stat", sizeof(struct vfs_stat), g_vfs_stat_fields, K_ARRAY_SIZE(g_vfs_stat_fields)},
@@ -446,6 +466,10 @@ static const struct abi_object g_abi_objects[] = {
      K_ARRAY_SIZE(g_k_exec_image_fields)},
     {"ksys_pollfd", sizeof(struct ksys_pollfd), g_ksys_pollfd_fields,
      K_ARRAY_SIZE(g_ksys_pollfd_fields)},
+    {"ksys_timespec", sizeof(struct ksys_timespec), g_ksys_timespec_fields,
+     K_ARRAY_SIZE(g_ksys_timespec_fields)},
+    {"ksys_rusage", sizeof(struct ksys_rusage), g_ksys_rusage_fields,
+     K_ARRAY_SIZE(g_ksys_rusage_fields)},
 };
 
 /*
@@ -516,6 +540,8 @@ static const struct abi_value g_abi_known_values[] = {
     {"KSYS_MAP_PRIVATE", KSYS_MAP_PRIVATE},
     {"KSYS_MAP_ANONYMOUS", KSYS_MAP_ANONYMOUS},
     {"KSYS_PAGE_SIZE", KSYS_PAGE_SIZE},
+    {"KSYS_CLOCK_REALTIME", KSYS_CLOCK_REALTIME},
+    {"KSYS_CLOCK_MONOTONIC", KSYS_CLOCK_MONOTONIC},
     {"K_EXEC_MAGIC", K_EXEC_MAGIC},
     {"K_EXEC_VERSION", K_EXEC_VERSION},
     {"K_EXEC_HEADER_SIZE", K_EXEC_HEADER_SIZE},
