@@ -708,7 +708,7 @@ masked while it is served is not programmed - the two lines of the port are
 edge triggered, and the disk and the network are polled. These are rows of K8
 in [debts.md](../../debts.md).
 
-## What works## What works
+## What works
 
 * the boot: the loader, long mode, the banner, the contract check at 1.9;
 * the signature of the kernel (ADR 0020): the loader verifies the trailer of

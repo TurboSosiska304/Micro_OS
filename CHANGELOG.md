@@ -210,6 +210,13 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   and the ones that began at it, and `smp wake` stops the clock of the other
   core to show that an interrupt - and nothing else - starts a task there
   (ADR 0034). `make x86-smp-smoke` is 52 checks.
+- The image of `make x86-disk` carries the two files an `https://` repository
+  needs on a fresh machine: the bundle of roots of the Mozilla program in
+  `/etc/ssl/certs.pem` (`tools/ca/README.md`) and the key of the repository of
+  the project in `/etc/pkg/keys/microos-progs.pub` (`tools/pkg/README.md`).
+  The documented `pkg repo add` + `pkg -Sy` + `pkg -S hello` installs a
+  package out of the box, and `make x86-net-smoke` checks it on the image of
+  the release: 59 checks.
 
 ### Fixed
 
@@ -241,6 +248,49 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   counted twice), so the stale writable entry stayed. The clone flushes the
   address it changed, and a libc program's child returns 0 without the
   library's `getpid()` workaround and its yield.
+
+- A pipeline lost the output of its last stages: the shell keeps no
+  descriptor of its own, so `pipe()` handed out the low numbers and a read
+  end of a boundary could land on descriptor 1 - the standard output of the
+  stage, which then answered `bad file descriptor` (`15 stages` of
+  `cat | ... | wc -l` printed no count). `stage_setup()` moves the two ends
+  above 2 and closes the three before the copies, so a stage owns exactly 0
+  and 1 whatever the numbers of the pipes were.
+- The documented maximum of a chain did not run: sixteen stages of programs
+  need 34 tasks of a table of 32 (a stage is two tasks, the stage and the
+  program) and the last ones were never started, silently. The shell counts
+  the task slots before it makes the first pipe and refuses a chain that does
+  not fit with the numbers; fifteen stages of programs fit on x86-64 and
+  sixteen of the commands of the shell, and `docs/wiki/shell.md` says why.
+- `pkg` could not download anything over `https` on an image out of the box:
+  `/etc/ssl/certs.pem` was not there, a certificate signed with
+  ecdsa-with-SHA384 was `signature algorithm (oid) is unsupported` because
+  SHA-384 is a module of its own in mbedTLS 3.6 (ISRG Root X2 and the P-384
+  chain of Let's Encrypt were unreadable), and one certificate the image does
+  not implement made the library refuse the whole bundle. SHA-384 is enabled,
+  a bundle is loaded whole with the certificates that cannot be parsed skipped
+  and counted once in the log, the head of an answer is read up to 1024 bytes
+  (GitHub Pages answers 702, and the old 640 said "the address or the answer
+  is too long"), and `pkg` names the key file when a signature does not match.
+- `kill -TERM <pid of the shell>` left the machine without a console until a
+  reset: the console is the only shell and the port has no `getty`
+  (ADR 0033). The signal to the task that runs the command is refused with a
+  sentence, as the one to `init` already was.
+- A name longer than a volume keeps was `file too big` or `invalid argument`:
+  `mkdir`, `write`, `rm`, `stat`, `ls`, `tree` and `df` of the shell say
+  `file name too long`, the limit of MicroFS (32 bytes) named as the limit it
+  is.
+- The `mkdir` of the shell took one directory and dropped the other words of
+  the line in silence; every word is a directory now, as in Linux and in the
+  program of `/bin`.
+- `df` printed `(0 KB each)` for the 512-byte blocks of a FAT32 volume and
+  `inodes: 0 of 0 free` for a volume that keeps no inodes. The unit of the
+  block is named (`512 bytes each`, or `1 KB each`), and a volume without
+  inodes says `not kept by this volume`.
+- `login` with no name said `the name does not fit` and then `no such
+  account`; it says `a name is needed`, and nothing else.
+- The help of `cat` promised `-n` without saying that on x86-64 the `/bin/cat`
+  of sbase runs at the prompt and takes `-u`.
 
 ## [1.3.0] - 2026-11-23
 
