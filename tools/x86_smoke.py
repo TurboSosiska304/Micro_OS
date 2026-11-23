@@ -81,6 +81,8 @@ COMMANDS = [
     "chown 0 /bin/hello",
     "exec /bin/hello",
     "exec /bin/hello one two",
+    # The test of the streams: ungetc, fread and a relative seek.
+    "exec /bin/streams",
     # The programs of the library (ADR 0016): a file through open/read/
     # write and the formatter, a line of arguments, and a directory through
     # readdir. The file they read is /etc/setting of the image.
@@ -112,8 +114,8 @@ COMMANDS = [
     "exec /bin/grep -i HELLO /etc/setting",
     # The regular expression engine of the tree (third_party/pcre2): a pattern
     # with a wildcard and a folded case, then one with an anchor and a group.
-    # The quotes of the examples of the wiki are not needed: the shell has no
-    # quotes, and a word is the pattern as it is typed.
+    # The pattern is one word whether or not it is quoted: the lexer of the
+    # shell hands the text to the program as it was typed.
     "exec /bin/pcre2grep -i h.LLO /etc/setting",
     "exec /bin/pcre2grep -o -g 1 ^hostname=(x86_64)$ /etc/setting",
     "exec /bin/ls /etc/licenses",
@@ -165,7 +167,10 @@ COMMANDS = [
     # library is the host test `tests/cases/test_lua.c`.
     "exec /bin/lua -e print(2^10)",
     "exec /bin/lua -e print(math.pi)",
-    'exec /bin/lua -e print(string.format("%.3f",1/3))',
+    # The quotes of the shell are part of the line now (1.2.1): the Lua
+    # expression is one word in single quotes, so the double quotes of the
+    # format reach the interpreter as characters of the program.
+    "exec /bin/lua -e 'print(string.format(\"%.3f\",1/3))'",
     "exec /bin/lua -e print(1/0,0/0)",
     "exec /bin/lua -e print(os.time()>=0)",
     "exec /bin/lua /etc/hello.lua",
@@ -194,6 +199,21 @@ COMMANDS = [
     "echo one | /bin/cat",
     "cat /etc/setting | wc -l",
     "ls /bin | wc -l",
+    # The words of a line may be quoted (1.2.1): a word holds a space, an
+    # operator inside the quotes is a character of the word, and a program
+    # receives the text as it was typed instead of a word cut at the space.
+    "echo 'a b' > /tmp/q",
+    "cat /tmp/q",
+    "grep 'a b' /tmp/q",
+    "sed 's/a b/c d/' /tmp/q",
+    "echo 'a  b'",
+    'echo "a  b"',
+    "echo 'a | b'",
+    'echo "x > y"',
+    # `help` is the list of what the machine has: the programs of PATH and
+    # the two sides of a name that is a command and a file (`ls`).
+    "help hello",
+    "help ls",
     # A line that cannot run is a sentence, and the shell answers the next
     # command: a `cd` has no meaning in a stage, and a file that is not
     # there is the failure of that stage only.
@@ -1000,6 +1020,27 @@ def check(output: str) -> list:
     )
 
     expect("help lists the commands", "list the available commands" in answer("help"))
+    # The list of the shell is not the list of the machine: the programs of
+    # /bin are named below the commands, because `awk` or `pkg` is a file and
+    # nobody registered it.
+    expect(
+        "help names the programs of PATH",
+        "programs in PATH:" in answer("help") and "hello" in answer("help"),
+        repr(answer("help")[-200:]),
+    )
+    expect(
+        "help names a program of the disk",
+        "hello is a program at /bin/hello (type hello --help)" in answer("help hello"),
+        repr(answer("help hello")),
+    )
+    help_ls = answer("help ls")
+    expect(
+        "help names the two sides of a name",
+        "ls is a program: /bin/ls" in help_ls
+        and "the builtin:" in help_ls
+        and "usage: ls" in help_ls,
+        repr(help_ls),
+    )
     # The shell command of the signal: a pid no task has is a sentence, and
     # the shell of the machine is alive after it.
     expect(
@@ -1245,6 +1286,14 @@ def check(output: str) -> list:
     expect(
         "the shell runs the program through execve",
         "the program has finished" in answer("exec /bin/hello", 1),
+    )
+    # The streams of the library: a byte given back with `ungetc` is the first
+    # byte of the next `fread`, and a relative seek counts from the stream and
+    # not from the descriptor (the block of read-ahead sits between them).
+    # Both were wrong in 1.2.0; the program says so in one line.
+    expect(
+        "a stream reads a byte given back and seeks from the stream",
+        "streams: ok" in answer("exec /bin/streams"),
     )
     expect(
         "the program of the shell writes to the console",
@@ -1602,7 +1651,7 @@ def check(output: str) -> list:
     )
     lua_pi = answer("exec /bin/lua -e print(math.pi)")
     expect("lua prints the constant of pi", "3.1415926535898" in lua_pi, lua_pi)
-    lua_format = answer('exec /bin/lua -e print(string.format("%.3f",1/3))')
+    lua_format = answer("exec /bin/lua -e 'print(string.format(\"%.3f\",1/3))'")
     expect(
         "string.format writes three places of a fraction",
         "0.333" in lua_format and "the program exited with 0" in lua_format,
@@ -1757,6 +1806,40 @@ def check(output: str) -> list:
     expect(
         "cd in a pipeline is refused with a sentence",
         "cannot run in a pipeline" in answer("cd / | cat"),
+    )
+    # --- the quotes of the lexer (1.2.1)
+    # A word of the line is read before the operators are: the file the quoted
+    # `echo` wrote holds the text as one word, and the pattern of `grep` and
+    # the script of `sed` reach the program with their spaces whole.
+    expect(
+        "a quoted word keeps its space through a redirect",
+        re.search(r"(?m)^a b\r?$", answer("cat /tmp/q")) is not None,
+        repr(answer("cat /tmp/q")),
+    )
+    expect(
+        "the pattern of grep is one word",
+        re.search(r"(?m)^a b\r?$", answer("grep 'a b' /tmp/q")) is not None,
+        repr(answer("grep 'a b' /tmp/q")),
+    )
+    expect(
+        "the script of sed is one word",
+        re.search(r"(?m)^c d\r?$", answer("sed 's/a b/c d/' /tmp/q")) is not None,
+        repr(answer("sed 's/a b/c d/' /tmp/q")),
+    )
+    expect(
+        "echo keeps the two spaces of a quoted run",
+        "a  b\r\n" in answer("echo 'a  b'") and "a  b\r\n" in answer('echo "a  b"'),
+        repr(answer('echo "a  b"')),
+    )
+    expect(
+        "a pipe inside the quotes is a character",
+        re.search(r"(?m)^a \| b\r?$", answer("echo 'a | b'")) is not None,
+        repr(answer("echo 'a | b'")),
+    )
+    expect(
+        "a redirect inside the quotes is a character",
+        re.search(r"(?m)^x > y\r?$", answer('echo "x > y"')) is not None,
+        repr(answer('echo "x > y"')),
     )
     expect(
         "a file that is not there is the failure of one stage",

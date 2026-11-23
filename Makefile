@@ -32,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak
+.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format idf-check idf-build idf-flash idf-monitor idf-size bundle bundle-board bundle-x86 x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak
 
 help:
 	@echo "Micro OS — available targets:"
@@ -78,7 +78,9 @@ help:
 	@echo "  make fuzz-long  the fuzzers with a multiplier and a seed"
 	@echo "  make disk-stress  a full volume, fsck -y and two boots (MicroFS, FAT)"
 	@echo "  make board-soak the same session on the board (needs the board)"
-	@echo "  make bundle     collect the firmware into dist/ for distribution"
+	@echo "  make bundle     collect the firmware and the x86-64 machine into dist/"
+	@echo "  make bundle-board  the firmware alone into dist/ (needs ESP-IDF)"
+	@echo "  make bundle-x86 the tar of the x86-64 machine alone (no ESP-IDF)"
 
 all: build
 
@@ -437,13 +439,14 @@ x86-all-run-serial: x86-all
 	X86_SERIAL=1 $(X86_ALL_RUN)
 
 # The artifact a person downloads: the x86-64 tar of the release, unpacked
-# and started as it is. The target builds the complete machine and the bundle
+# and started as it is. The target builds the complete machine and its tar
 # first (both are incremental), then runs the tar and not the tree: what a
-# person gets is what this starts.
+# person gets is what this starts. The tar is the x86-64 half of the bundle
+# alone, so this target needs no ESP-IDF and no board.
 X86_USER_DIR := build-x86-user
 X86_SERIAL ?= 0
 
-x86-user: x86-all bundle
+x86-user: x86-all bundle-x86
 	@tar=$$(ls -t dist/MicroOS-x86_64-*.tar.gz 2>/dev/null | head -1); \
 	if [ -z "$$tar" ]; then \
 		echo "x86-user: dist/ has no x86-64 tar" >&2; exit 1; \
@@ -562,9 +565,20 @@ BOARD_SOAK_MINUTES ?= 3
 board-soak:
 	tools/board_soak.sh --minutes $(BOARD_SOAK_MINUTES)
 
-bundle: idf-check
+bundle: bundle-board bundle-x86
+# The two halves write the same dist/checksums.txt one after the other, so a
+# `make -j` bundle must not run them at the same time.
+.NOTPARALLEL: bundle
+
+# The board: the firmware, esptool and the partition table. It is flashed,
+# not run, and the ESP-IDF build is the one thing it cannot do without.
+bundle-board: idf-check
 	. $(IDF_EXPORT) && MICROOS_SIGN_KEY="$(MICROOS_SIGN_KEY)" \
 		idf.py -D IDF_TARGET=$(IDF_TARGET) build && \
-		cmake -B $(X86_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release $(X86_SIGN_ARGS) && \
-		cmake --build $(X86_BUILD) --target image && \
-		MICROOS_SIGN_KEY="$(MICROOS_SIGN_KEY)" tools/bundle.sh $(IDF_BUILD) dist
+		MICROOS_SIGN_KEY="$(MICROOS_SIGN_KEY)" tools/bundle.sh --board-only $(IDF_BUILD) dist
+
+# The other machine: the complete machine and its tar. It is run, not
+# flashed, so nothing of the board is needed here - not ESP-IDF, not esptool,
+# not the build/ of the firmware.
+bundle-x86: x86-all
+	tools/bundle.sh --x86-only $(X86_ALL_BUILD) dist

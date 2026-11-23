@@ -10,8 +10,33 @@ the MicroFS volume change by adding only.
 A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 (`vX.Y.Z-pre`) is a pre-release and must match `kernel_version()`.
 
-<<<<<<< HEAD
-=======
+## [1.2.1] - 2026-11-23
+
+A patch of `1.2.0` for the streams of the library, the words of the shell and
+the build of the two machines. The volume, the syscall ABI and `MOX1` do not
+change.
+
+### Fixed
+
+- `fread` after `ungetc` advanced the pointer it was given and then wrote the
+  rest of the block past it: a byte of the caller's buffer was overwritten and
+  the data shifted by one. Two programs of `/bin/streams` - the new test -
+  prove it on the machine, because a stream needs a kernel under it.
+- `fseek(SEEK_CUR)` counted from the descriptor and the block of read-ahead of
+  `1.2.0` puts the descriptor ahead of the stream: a relative seek after a
+  short read moved by a whole block. `ftell` now counts the byte of `ungetc`
+  as well.
+- `make x86-user` built the ESP-IDF firmware before it packed the tar, so a
+  machine without ESP-IDF could not produce the artifact a person downloads.
+  The packing is split in two halves now: `tools/bundle.sh --x86-only` packs
+  the x86-64 machine without the firmware build, `esptool` or the partition
+  table, and `--board-only` packs the firmware alone. `make bundle-x86` is the
+  first half, `make bundle-board` the second, `make bundle` composes them and
+  a release workflow keeps one command.
+- The `CHANGELOG` of `1.2.0` shipped with the markers of the merge that wrote
+  it, and `integrity` had no rule that would notice. It has one now: a line
+  that starts with the marker of an unfinished merge fails the check.
+
 ## [1.2.0] - 2026-11-23
 
 The release of the machine a person can see and feed: x86-64 gets a real
@@ -220,7 +245,6 @@ release. The notes are in [`docs/releases/1.2.md`](docs/releases/1.2.md).
   The patch has its own section below and its notes in
   [`docs/releases/1.1.2.md`](docs/releases/1.1.2.md).
 
->>>>>>> release_candidate
 ## [1.1.2] - 2026-11-23
 
 A patch of `1.1.1` for the shell: the cleanroom of 1.1.1 found that `ls`

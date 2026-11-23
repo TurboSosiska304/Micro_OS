@@ -949,6 +949,7 @@ def check_sources(root: str, report: Report, files: list) -> None:
     tabs = []
     too_long = []
     not_utf8 = []
+    conflicts = []
 
     for name in files:
         if is_vendored(name):
@@ -982,6 +983,14 @@ def check_sources(root: str, report: Report, files: list) -> None:
             no_newline.append(name)
 
         lines = data.split(b"\n")
+
+        # A conflict of a merge that was committed with its markers still in
+        # the file is not a style question: the text of the file says two
+        # things at once, and 1.2.0 shipped a CHANGELOG that did.
+        for number, line in enumerate(lines, 1):
+            if line.startswith(b"<<<<<<< ") or line.startswith(b">>>>>>> "):
+                conflicts.append(f"{name}:{number}")
+                break
 
         if not name.endswith(".md"):
             for number, line in enumerate(lines, 1):
@@ -1020,6 +1029,12 @@ def check_sources(root: str, report: Report, files: list) -> None:
         "the sources are UTF-8",
         not not_utf8,
         detail(not_utf8),
+    )
+    report.add(
+        group,
+        "the sources carry no marker of an unfinished merge",
+        not conflicts,
+        detail(conflicts),
     )
     report.add(
         group,

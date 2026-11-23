@@ -37,6 +37,7 @@ PROGRAMS = [
     "signals",
     "cat",
     "echo",
+    "streams",
     "ls",
     "wc",
     "head",
