@@ -91,20 +91,22 @@ tends to need and the tree has:
 | `<fcntl.h>` | `O_RDONLY`, `O_WRONLY`, `O_RDWR`, `O_CREAT`, `O_TRUNC`, `O_APPEND`, `O_DIRECTORY` |
 | `<sys/types.h>` | `off_t`, `ssize_t`, `off64_t` |
 | `<math.h>` | `sqrt`, `pow`, `fmod`, `floor`, `ceil`, `trunc`, `round`, `fabs`, `exp`, `exp2`, `log`, `log2`, `log10`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `frexp`, `ldexp`, `modf` |
-| `<time.h>` | `time` (the uptime), `clock`, `difftime`, `gmtime`, `localtime`, `mktime`, `strftime`, `struct tm` |
+| `<time.h>` | `time` (the wall clock of the call 49), `clock` (the processor time of the call 50), `difftime`, `gmtime`, `localtime`, `mktime`, `strftime`, `struct tm` |
 | `<setjmp.h>` | `setjmp`/`longjmp` (the registers of x86-64) |
 | `<locale.h>` | the C locale: `setlocale`, `localeconv` |
 | `<ctype.h>` | the classes of a byte and `tolower`/`toupper` |
 | `<signal.h>` | the four signals of the ABI, `signal`, `raise`, `sig_atomic_t` |
 | `<assert.h>` | `assert` |
 
-The allocation is an **arena in the bss of the program**, not
-`KSYS_MALLOC`: the block of the kernel is memory of ring 0 and the page
-tables of a program do not map it with the user bit. The size is
-`-DULIBC_HEAP_SIZE=<bytes>` (256 KiB by default, 512 KiB for `zcat`), and
-the bss of an image is capped at 1 MiB by the format. A library that
-allocates more needs a program with a larger arena, or a `brk`/`mmap` of the
-program, which the kernel does not have yet (`docs/debts.md`).
+The allocation is a **heap whose first block is an arena in the bss of the
+program**, not `KSYS_MALLOC`: the block of the kernel is memory of ring 0 and
+the page tables of a program do not map it with the user bit. The first block
+is `-DULIBC_HEAP_SIZE=<bytes>` (256 KiB by default), and a request the arena
+cannot hold grows the heap with `brk` (call 47), so a program that allocates
+two megabytes does not need a constant of its build. The growth is charged to
+the memory limit of the task; on a machine without an address space (the
+board) `brk` answers `ENOSYS` and the heap stays the arena, which is the size
+the bss of the format allows (1 MiB).
 
 The formatter has `%d %i %u %o %x %X %c %s %p %%`, the flags `- + space # 0`
 and `*`, a precision, and the length `l`/`ll`/`z`/`j`/`h`. A build that
