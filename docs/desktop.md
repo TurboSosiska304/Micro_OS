@@ -1,0 +1,219 @@
+# The desktop of Micro OS
+
+The machine of x86-64 has a picture, a keyboard and a pointer, and no window
+system: since 1.5 a program of the interface (`/bin/ui`, `/bin/edit`,
+`/bin/fm`) took the whole screen with `FBIO_TAKE` and painted it itself
+(ADR 0028, ADR 0030). 1.7 adds the one program that owns the screen, and the
+programs of the interface become its windows:
+
+* `/bin/wm` — the server: the wallpaper, the panel, the pointer, the list of
+  the windows, the compositor and the focus.
+* a **client** — a program the server started with `fork` and `execve`: a
+  buffer of pixels of its own window, a pipe for the events the server sends
+  down and a pipe for the requests it sends up.
+* `components/ui/client` — the portable half of the contract: the messages of
+  `ui/wm_protocol.h` and the client of `ui/wm_client.h`, with a test on the
+  host (`tests/cases/test_ui_wm.c`). The port's half is
+  `ports/port_x86_64/programs/uiprog.c`, which binds the client to three
+  descriptors and a mapping, exactly as `uiprog.c` bound a program to
+  `/dev/fb0` before.
+
+## The picture of the desktop
+
+| Part | Where | What |
+|---|---|---|
+| the wallpaper | the whole picture | two blues, bands of 64 pixels, drawn by the server |
+| a window | the rectangle the server gave it | the pixels of the client's buffer, then the square of closing and, when it has the keys, a ring of two pixels of yellow around it |
+| the panel | the bottom 24 pixels | a button a window, the label the title of the client, the button of the window with the keys inverted |
+| the pointer | 12x16 pixels at the point of the mouse | an arrow of white with one pixel of black under every row |
+
+The server paints *rectangles*: a frame of a client, a motion of the pointer,
+a raise and a drag are rectangles of a list of damage, and the loop paints the
+rects of the list and nothing else. A window that another one covers is never
+read from its file: the compositor asks for the part of it that is visible.
+
+The wallpaper's bands are counted from the top of the picture and not from the
+top of the rectangle being painted, so a small damage rectangle and a whole
+screen are the same picture.
+
+## The buffer of a window
+
+The pixels of a window are a file of `/tmp` (`/tmp/wm<index>.buf`), made by the
+server before the fork, cut to a whole number of pages, and given to the client
+as the descriptor 5 of the protocol:
+
+* the **client** maps it with `mmap(..., PROT_READ | PROT_WRITE, MAP_SHARED)`
+  and calls `msync` on it before every damage message;
+* the **server** keeps the file open and reads the rectangle it needs with
+  `lseek` and `read`, in strips of `KSYS_MAX_IO`.
+
+A shared page is *not* shared between two address spaces in this kernel:
+`k_mm_fault` gives every mapping its own frame, fills it from the file, and
+`msync` writes the present frames back (`kernel/src/mm.c`). Two mappings of one
+file are therefore two copies, and the file is the meeting point of the two
+programs. The client's write reaches the server because of `msync` and not
+without it - `k_mm_msync` writes every page of the range that is present, and
+the `dirty` bitmap of the region is only the record of the first store of a
+page, because a page that is writable takes its later stores without a fault
+(this is why the first window of 1.7 showed its frame and never its text).
+The server does not map the file at all: a mapping of its own would cache the
+bytes at the moment it faulted, and the only way to make it see a new frame
+would be to throw the mapping away and make it again for every message.
+
+`MAP_PRIVATE` is not the mode of a window: a private page is a copy of the file
+and nothing comes back out of it.
+
+## The protocol
+
+One message is one `struct wm_message` (`ui/wm_protocol.h`), 60 bytes, native
+layout of the machine - the same rule as `struct input_event` and
+`struct fb_rect`: both sides are programs of one machine and one compiler, so a
+second encoding would be a second thing to test for nothing. A pipe of the
+system hands a reader the bytes it has, so the client reads a message only
+after `poll` said that the descriptor is readable, and the server reads one
+message a turn.
+
+The descriptors are fixed by the contract, because a program cannot choose the
+numbers of its own table after an `execve`:
+
+| Number | Direction | What |
+|---|---|---|
+| 3 | server → client | the events of the window |
+| 4 | client → server | the requests of the window |
+| 5 | the file | the pixels of the window (`mmap`) |
+
+The variable `MICROOS_WM=1` in the environment says that a program was started
+as a window; without it a program is a program of the whole screen.
+
+| Type | Direction | Fields |
+|---|---|---|
+| `WM_MSG_HELLO` | down, first | `x, y, w, h` of the window and its title — the rectangle the client lays its picture out in |
+| `WM_MSG_DAMAGE` | up | `x, y, w, h` of the buffer that changed |
+| `WM_MSG_TITLE` | up | `text`: the title of the bar and of the button of the panel |
+| `WM_MSG_CLOSE` | up and down | the client is leaving; or the server asks it to leave |
+| `WM_MSG_FOCUS` | down | `x` = 1 gained the keys, 0 lost them |
+| `WM_MSG_KEY` | down | `code` = a key of `kernel/input.h`, `x` = 1 pressed, 0 released |
+| `WM_MSG_MOTION` | down | `x, y` of the pointer in pixels of the window |
+| `WM_MSG_BUTTON` | down | `x` = 1 pressed, 0 released, `y, w` = the point of the window |
+
+A type a generation does not know is ignored; a number of a type is never
+reused.
+
+The keys of the focused window are the keys of the machine and nothing else:
+Shift, Ctrl and Alt arrive as the keys they are, with the press and the
+release, so the layout of `ui/keyboard.h` is the whole of what a client needs
+to turn them into characters. The server keeps three keys for itself: the left
+button of the pointer, Alt+F4 (the close of the window with the keys) and
+every pointer motion.
+
+## What the server does
+
+* **A click** on a window raises it and gives it the keys; a click on the body
+  of a window that already has them goes to the client as a button event with
+  the point in its own pixels.
+* **A drag** of the title bar (the first 21 pixels of a window: the margin, the
+  row of the font and the separator of the frame of `ui/draw.h`) moves it. The
+  title stays under the pointer and off the panel, so a window dragged by the
+  head does not lose its head.
+* **The square** at the right of the title bar is the close: the server sends
+  `WM_MSG_CLOSE` and the client answers the way it answers its own key of
+  leaving (`Ctrl+Q` for the editor, with the question about an unsaved file).
+* **Alt+F4** is the same close for the window that has the keys.
+* **The panel** puts a window away and brings it back: a window that is put
+  away leaves the list of the model and keeps its buffer, its pipes and its
+  rectangle, and the button of the panel remains.
+* **A client that exits** (a close, a fault, its own key of leaving) is reaped
+  with `waitpid(WNOHANG)`; its window leaves the picture, the focus goes to the
+  window on top of what is left, and the file of its pixels is removed.
+* **The last window ends the desktop**: the server gives the screen back
+  (`FBIO_GIVE`), the kernel repaints the grid of the console and the shell that
+  started it waits with its prompt.
+
+The server of 1.7 is the whole of the interface: it takes the screen with
+`FBIO_TAKE` and never gives it while a window is open. A panic takes the
+screen back whatever a program holds (ADR 0028 §2), so a desktop cannot hide a
+kernel failure.
+
+## The programs of the interface
+
+`/bin/edit` and `/bin/fm` did not change their logic when the window arrived:
+they call the same `uiprog_*` functions, draw the same frame of `ui/draw.h` and
+read the same keys. `uiprog_open` asks the environment first: with
+`MICROOS_WM` the program is a window (the rectangle of its buffer is its
+picture, the events come from the pipe, and a flush sends the damage once a
+turn of its loop); without it the program takes the screen as it did in 1.5.
+
+Two things are new in the programs and both are small: a client sends its
+title to the server when it changes (`uiprog_title`), and it answers the close
+of the server (`uiprog_close_requested`). `/bin/fm` starts `/bin/edit` with
+`execve` as before, and the environment travels with the call, so the editor
+is a window with the same rectangle as the file manager - a window that becomes
+another program is the same window of the desktop.
+
+`/bin/ui` stays the skeleton of ADR 0028: it is a program of the whole screen
+and the desktop does not need it.
+
+## The pointer
+
+The mouse of the machine is the second device of the 8042:
+
+* the controller's second port is opened (`0xA8`), its clock and its line
+  (IRQ12) are set in the byte of the configuration, and the device is told to
+  start from its defaults (`0xF6`) and to report (`0xF4`);
+* a packet is three bytes: the buttons, the sign and the overflow of the two
+  axes, and the two differences;
+* the handler reads them with the keyboard's, because the buffer of the
+  controller is one: the status byte says whose byte it is (bit 5);
+* a packet whose first byte has not the bit 3 set is not a packet, and the two
+  counters of the overflow are the motions the mouse could not express: the
+  axis is dropped and the log says so once.
+
+The events are the ones of `/dev/input0`, beside the keys and not in a device
+of their own: `key.pointer.x` and `key.pointer.y` (the value is a signed
+difference of pixels of the picture) and `key.button.left` (a press and a
+release). The numbers are at the end of `enum k_input_key` (79, 80, 81) and the
+keys of 1.4 keep theirs. The right and the middle button are not keys of the
+contract: a number is not spent on a button nobody asked for.
+
+The pointer is drawn by the server and not by the driver, and not by a client:
+a cursor is a picture of the interface.
+
+## The tests
+
+* `make test` holds the messages and the client on the host
+  (`tests/cases/test_ui_wm.c`): the builders, the hello, the clipping of a
+  fill and a blit, the damage, the order of `sync` and the damage message, the
+  keys, the focus, the close.
+* `make x86-vga-smoke` boots a copy of the disk, runs `/bin/wm`, and reads the
+  desktop out of the screenshot and the log of the server: the wallpaper, the
+  two windows of `/bin/edit /doc.txt` and `/bin/fm /`, the panel, the pointer,
+  the ring of the focus; a click of the PS/2 mouse of QEMU raises the editor
+  and the ring follows; `sendkey` types `hello` into the window with the keys
+  and the status line of the editor says so; `Ctrl+S` saves the file and the
+  status line says it saved five bytes; a drag of the title bar moves the
+  window to 160,110; a click raises the file manager and `Alt+F4` closes it,
+  the wallpaper comes back and the focus returns to the editor; the second
+  `Alt+F4` ends the desktop, the prompt of the shell comes back, `cat
+  /doc.txt` prints the word the keys typed and the picture is the grid of the
+  kernel again.
+* `make x86-smoke` is the gate of the machine and of `/bin`: the mouse does not
+  change a byte of it.
+
+## What is not here
+
+* No clipboard, no resize of a window, no theme and no configuration of the
+  desktop: the server is a program of the tree and not a system of settings.
+* A window has one rectangle for its life: a program that wants another one is
+  a program that starts again (the editor and the file manager ask for their
+  size at the start).
+* The compositor reads a covered window only where it is visible, but it reads
+  the whole visible rectangle on every damage: a client that says "my buffer
+  changed in one row" gets one row read, a client that says "all of it" gets
+  all of it.
+* One desktop, one picture, one pointer. There is no second screen and no
+  session.
+* The pointer has one button. The right and the middle button, the wheel and
+  the two axes of a touchpad are later numbers of the contract.
+* `/bin/wm` is not a service of the boot: a person starts it with `exec
+  /bin/wm` and the shell waits for it. A session of `/etc/init.d` is the next
+  step.

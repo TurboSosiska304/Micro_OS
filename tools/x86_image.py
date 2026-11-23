@@ -102,6 +102,9 @@ PROGRAMS = [
     "ui",
     "edit",
     "fm",
+    # The server of the desktop (1.7): the windows of the programs above as
+    # clients of one program that owns the screen (docs/desktop.md).
+    "wm",
 ]
 
 # The second name of the compression command: `zstdcat` is the same image and

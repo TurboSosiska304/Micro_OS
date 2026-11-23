@@ -559,14 +559,19 @@ on a VFS without `rename` (see [debts.md](debts.md)).
       `/dev/input0`, the window model, the canvas and the keyboard of
       `components/ui`, the arrows of the E0 prefix as keys of the machine, and
       the programs `/bin/ui`, `/bin/edit` and `/bin/fm`
-* [ ] Later: a 2D surface for a program is there and a mouse is not; a
-      compositor, optionally virtio-gpu 2D in QEMU; UEFI GOP for a real
-      machine, which is a loader of its own
+* [ ] Later: a 2D engine of the device through the contract of
+      `kernel/fb_ops.h` (virtio-gpu 2D in QEMU, the blitter of a real card);
+      UEFI GOP for a real machine, which is a loader of its own
 
-A desktop is not a step of this list. A picture a program draws on arrived in
-1.4.0, the programs of the screen in 1.5.0 and a mouse is the next device
-(see [releases/2.0.md](releases/2.0.md)); the compositor stays a program of
-the system and not the kernel.
+The desktop of 1.7 is not a step of this list of the screen: it is a program
+of the userland. `ports/port_x86_64/src/ps2.c` reads the second port of the
+8042 and `/dev/input0` carries `key.pointer.x`, `key.pointer.y` and
+`key.button.left` beside the keys; `/bin/wm` owns the picture, composites the
+buffer of every window, draws the panel and the pointer, and the editor and
+the file manager of 1.5 are its clients through `components/ui/client`
+([desktop.md](desktop.md)). The compositor stays a program of the system and
+not the kernel, and the device may fill and copy a rectangle itself through the
+contract of `kernel/fb_ops.h` - there is no such device in this release.
 
 ## K12 - The stream and the installer (done in 1.2.0)
 

@@ -174,6 +174,7 @@ the mode of a program (`0755`), and no boot creates one:
 | `/bin/ui` | the skeleton of ADR 0028: `/dev/fb0` and `/dev/input0`, a panel, a list of windows and the log; Tab moves the focus and `q` gives the screen back |
 | `/bin/edit` | a text editor (ADR 0030): a file, the arrows and the characters of `/dev/input0`, `Ctrl+S`, `Ctrl+Q`, a title bar and a status line; a modal window asks about an unsaved file |
 | `/bin/fm` | a file manager (ADR 0030): the directory through `readdir`, Enter to open a directory or `/bin/edit`, `d`/Delete with a modal question and `unlink`, `q` |
+| `/bin/wm` | the desktop of 1.7: the wallpaper, the panel, the pointer and the compositor; it starts `/bin/edit` and `/bin/fm` as its windows, a click raises a window, a drag of the title bar moves it, `Alt+F4` closes it ([desktop.md](../desktop.md)) |
 
 
 The first six talk to the kernel through `programs/prog.h`, because what they

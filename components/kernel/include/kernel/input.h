@@ -119,6 +119,19 @@ enum k_input_key {
     K_INPUT_KEY_PAGEDOWN,
     K_INPUT_KEY_INSERT,
     K_INPUT_KEY_DELETE,
+    /*
+     * The pointer of the machine (1.7.0). The mouse of the PC is not a key:
+     * it moves by a difference and presses a button, so the two motions are
+     * events whose `value` is a signed number of pixels (the width of a
+     * `k_s16_t`, two's complement) and the button is an event of the same
+     * shape as a key. The device is still `/dev/input0` and the event is
+     * still one `struct input_event`: a second device would have made a
+     * program read two files for one person. These numbers are appended to
+     * the end of the list, as the block above was.
+     */
+    K_INPUT_KEY_POINTER_X,
+    K_INPUT_KEY_POINTER_Y,
+    K_INPUT_KEY_BUTTON_LEFT,
     K_INPUT_KEY_COUNT
 };
 

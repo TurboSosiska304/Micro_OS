@@ -83,6 +83,26 @@ window model lives in the program (`components/ui/` in time, a library of the
 userland like any other), not in the kernel: a kernel that knows what a window
 is cannot be ported to a machine that wants a different one.
 
+## The device may accelerate a rectangle (1.7)
+
+A write of `/dev/fb0` is a `memcpy` into the memory the display reads, and a
+card that can fill a rectangle or copy one in its own engine is a card that
+should do that work itself. `kernel/fb_ops.h` is the contract of that: three
+operations a device may offer - a fill, a blit and a flush - and the software
+path that answers the ones it has not. `components/kernel/src/fb_ops.c` holds
+the slot and the software operations, and the write of `/dev/fb0`
+(`ports/port_x86_64/src/fbdev.c`) and the fills of the console go through
+`k_fb_fill` and `k_fb_blit`; with no device in the slot the bytes on the screen
+are the ones of 1.6, which `make x86-vga-smoke` checks pixel by pixel.
+
+This release has the contract and no driver: the VGA of QEMU has no 2D engine,
+the board has no framebuffer at all, and a device of the future - virtio-gpu
+2D, or the blitter of a real card - is one `k_fb_ops_register` at the boot. The
+rectangle of the contract is signed, because a caller inside the kernel
+composes a rectangle that may begin outside the picture and the software path
+cuts it; the device of `/dev/fb0` is given a rectangle the ABI already checked,
+so the clip is a rule of a caller and not a second check of the syscall.
+
 ## Consequences
 
 **Good.** The interface changes with a file of `/bin`, not with the firmware.

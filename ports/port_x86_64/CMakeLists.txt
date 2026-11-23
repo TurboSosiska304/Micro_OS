@@ -500,7 +500,9 @@ add_libc_program(big)
 # programs that use it whole. `programs/uiprog.c` is the port's half - the
 # writes of /dev/fb0 cut into transfers - so the library stays portable.
 set(UI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui")
-set(UI_INCLUDES "${UI_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}/include")
+set(UI_INCLUDES "${UI_DIR}/include" "${UI_DIR}/client/include"
+                "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
 
 add_libc_program(ui
     MAIN "${PROGRAM_DIR}/ui.c"
@@ -515,9 +517,35 @@ add_libc_program(edit
     SOURCES "${PROGRAM_DIR}/uiprog.c"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/font_spleen.c"
             "${LIBC_USER_DIR}/src/usleep.c"
+            "${LIBC_USER_DIR}/src/unistd_ext.c"
+            "${LIBC_USER_DIR}/src/stat.c"
             "${UI_DIR}/src/window.c"
             "${UI_DIR}/src/draw.c"
             "${UI_DIR}/src/keyboard.c"
+            "${UI_DIR}/client/src/wm_protocol.c"
+            "${UI_DIR}/client/src/wm_client.c"
+    INCLUDES ${UI_INCLUDES}
+)
+
+# --- /bin/wm, the server of the desktop (1.7, docs/desktop.md) --------------
+#
+# The program that owns the screen: it paints the wallpaper, the panel and the
+# pointer, starts its clients with fork and execve, and copies the buffer of
+# every window into the picture. The protocol and the client of it are
+# `components/ui/client` - portable and tested on the host - and this program
+# is the server of that contract plus the picture of the machine.
+add_libc_program(wm
+    MAIN "${PROGRAM_DIR}/wm.c"
+    SOURCES "${PROGRAM_DIR}/uiprog.c"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/font_spleen.c"
+            "${LIBC_USER_DIR}/src/usleep.c"
+            "${LIBC_USER_DIR}/src/unistd_ext.c"
+            "${LIBC_USER_DIR}/src/stat.c"
+            "${UI_DIR}/src/window.c"
+            "${UI_DIR}/src/draw.c"
+            "${UI_DIR}/src/keyboard.c"
+            "${UI_DIR}/client/src/wm_protocol.c"
+            "${UI_DIR}/client/src/wm_client.c"
     INCLUDES ${UI_INCLUDES}
 )
 
@@ -526,11 +554,15 @@ add_libc_program(fm
     SOURCES "${PROGRAM_DIR}/uiprog.c"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/font_spleen.c"
             "${LIBC_USER_DIR}/src/usleep.c"
+            "${LIBC_USER_DIR}/src/unistd_ext.c"
+            "${LIBC_USER_DIR}/src/stat.c"
             "${LIBC_USER_DIR}/src/dirent.c"
             "${LIBC_USER_DIR}/src/malloc.c"
             "${UI_DIR}/src/window.c"
             "${UI_DIR}/src/draw.c"
             "${UI_DIR}/src/keyboard.c"
+            "${UI_DIR}/client/src/wm_protocol.c"
+            "${UI_DIR}/client/src/wm_client.c"
     INCLUDES ${UI_INCLUDES}
 )
 

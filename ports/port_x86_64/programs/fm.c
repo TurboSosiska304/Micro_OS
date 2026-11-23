@@ -301,6 +301,10 @@ static void title_paint(void)
     memcpy(g_shown_title, title, strlen(title) + 1u);
     (void)snprintf(window->title, sizeof(window->title), "%s", title);
 
+    /* The title of the window of the desktop as well: the bar of the server
+     * and the button of its panel are the same words (docs/desktop.md). */
+    (void)uiprog_title(&g_screen, title);
+
     (void)uiprog_fill(&g_screen, 0, UI_FRAME_MARGIN, (int)g_screen.info.width, FONT8_HEIGHT,
                       FM_BAR);
 
@@ -466,7 +470,9 @@ static void file_open(void)
     argv[1] = path;
     argv[2] = NULL;
 
-    rc = execve("/bin/edit", argv, NULL);
+    /* The environment travels: a window of the desktop hands the next program
+     * the descriptor of the protocol it was started with (docs/desktop.md). */
+    rc = execve("/bin/edit", argv, environ);
     if (rc < 0) {
         (void)snprintf(g_message, sizeof(g_message), "cannot run /bin/edit: error %d", -rc);
     } else {
@@ -690,6 +696,17 @@ int main(int argc, char *const argv[], char *const envp[])
 
             key_handle(event.code);
         }
+
+        /* The server of the desktop asked the window to leave (Alt+F4 or the
+         * square of the bar): it leaves as `q` would make it. */
+        if (uiprog_close_requested(&g_screen)) {
+            g_running = false;
+        }
+
+        /* One frame of a client: the damage of the keys since the last turn
+         * and nothing else. A program of the whole screen has nothing to
+         * flush - the device was written as it drew. */
+        (void)uiprog_flush(&g_screen);
 
         (void)usleep(30000u);
     }

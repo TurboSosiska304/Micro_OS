@@ -388,7 +388,8 @@ struct idt_pointer {
 #define IRQ_TIMER 0u
 #define IRQ_KEYBOARD 1u
 #define IRQ_CASCADE 2u
-#define IRQ_ATA 14u /* the primary IDE channel, on the slave */
+#define IRQ_MOUSE 12u /* the second port of the 8042, on the slave (1.7.0) */
+#define IRQ_ATA 14u   /* the primary IDE channel, on the slave */
 
 /* The lines of the port that have a handler, in the order the counters below
  * and the `smp irq` command name them (PORT_X86_64_IRQ_TIMER and
@@ -423,6 +424,7 @@ static struct idt_pointer g_idt_pointer;
 extern void (*const port_isr_exception_table[32])(void);
 extern void isr_irq0(void);
 extern void isr_irq1(void);
+extern void isr_irq12(void);
 extern void isr_irq_ata(void);
 extern void isr_syscall(void);
 extern void isr_unexpected(void);
@@ -490,8 +492,14 @@ static void pic_init(void)
     port_outb(PIC2_DATA, 0x01);
     port_io_wait();
 
-    port_outb(PIC1_DATA, 0xFC); /* bits 0 and 1 clear: the timer, the keyboard */
-    port_outb(PIC2_DATA, 0xFF); /* nothing of the slave is */
+    /*
+     * The timer, the keyboard and the pointer are open; nothing else is. The
+     * mouse hangs on the fourth line of the slave, so the cascade of the
+     * second chip is open as well (1.7.0): the two bits of the slave that are
+     * clear are the cascade and the pointer.
+     */
+    port_outb(PIC1_DATA, 0xF8); /* bits 0, 1 and 2 clear: timer, keyboard, cascade */
+    port_outb(PIC2_DATA, 0xEF); /* bit 4 clear: the mouse of IRQ12 */
 }
 
 /* Close both chips: every line of the 8259 is masked and the chip raises
@@ -507,8 +515,8 @@ static void pic_mask_all(void)
  * that has no I/O APIC, and the undo of a route that did not hold). */
 static void pic_unmask_port_lines(void)
 {
-    port_outb(PIC1_DATA, 0xFC);
-    port_outb(PIC2_DATA, 0xFF);
+    port_outb(PIC1_DATA, 0xF8);
+    port_outb(PIC2_DATA, 0xEF);
 }
 
 /*
@@ -877,6 +885,10 @@ void port_x86_64_interrupts_init(void)
      * this stub reads the byte that raised it (src/ps2.c). */
     idt_set(IRQ_BASE + IRQ_KEYBOARD, isr_irq1, 0, IDT_GATE_INTERRUPT);
 
+    /* The pointer is the twelfth line: the second device of the same
+     * controller (1.7.0), and the same body with the status byte deciding. */
+    idt_set(IRQ_BASE + IRQ_MOUSE, isr_irq12, 0, IDT_GATE_INTERRUPT);
+
     /*
      * The disk of the machine, the sixth line of the slave. The entry is here
      * for the machine that has the drive: a channel with nothing on it never
@@ -925,6 +937,17 @@ void port_x86_64_interrupts_init(void)
         if (port_x86_64_ioapic_route(IRQ_TIMER, IRQ_BASE + IRQ_TIMER, 0u) &&
             port_x86_64_ioapic_route(IRQ_KEYBOARD, IRQ_BASE + IRQ_KEYBOARD, 0u)) {
             g_ioapic_lines = true;
+
+            /*
+             * The pointer is a line of its own and a machine without a mouse
+             * has nothing on it. A chip that does not take this entry is a
+             * desktop without a pointer, not a machine without an interface:
+             * the line stays shut and the two lines of ADR 0012 are where
+             * they were.
+             */
+            if (!port_x86_64_ioapic_route(IRQ_MOUSE, IRQ_BASE + IRQ_MOUSE, 0u)) {
+                kwarn("input: the I/O APIC did not take the line of the pointer");
+            }
         } else {
             /* A chip that took one line and not the other is a chip this
              * port does not trust with either of them. */

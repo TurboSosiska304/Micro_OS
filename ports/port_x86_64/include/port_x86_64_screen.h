@@ -16,6 +16,7 @@
 #define MICRO_OS_PORT_X86_64_SCREEN_H
 
 #include "kernel/fb.h"
+#include "kernel/fb_ops.h"
 #include "kernel/types.h"
 #include "port_x86_64.h"
 
@@ -83,7 +84,13 @@ int port_x86_64_font_settings_register(void);
  * has no framebuffer, which is the text mode of the fallback.
  */
 bool port_x86_64_fb_info(struct fb_info *out);
-int port_x86_64_fb_blit(const struct fb_rect *rect, const k_u16_t *pixels);
+/*
+ * The memory of the picture as the contract of an operation of a device
+ * (kernel/fb_ops.h): the software path of `/dev/fb0` and of the console is
+ * one `k_fb_blit` or `k_fb_fill` over this surface. False when the machine
+ * has no framebuffer.
+ */
+bool port_x86_64_fb_surface(struct k_fb_surface *out);
 void port_x86_64_fb_console_take(void);
 void port_x86_64_fb_console_give(void);
 void port_x86_64_fb_console_force(void);
