@@ -302,8 +302,8 @@ static void test_abi_is_stable(void)
         {KSYS_SIGNAL, "signal"},     {KSYS_SIGRETURN, "sigreturn"}, {KSYS_GETLIMIT, "getlimit"},
         {KSYS_SETLIMIT, "setlimit"}, {KSYS_RENAME, "rename"},       {KSYS_FTRUNCATE, "ftruncate"},
         {KSYS_GETUID, "getuid"},     {KSYS_GETEUID, "geteuid"},     {KSYS_GETGID, "getgid"},
-        {KSYS_SETUID, "setuid"},     {KSYS_SETGID, "setgid"},
-        {KSYS_RMDIR, "rmdir"},       {KSYS_FSTAT, "fstat"},
+        {KSYS_SETUID, "setuid"},     {KSYS_SETGID, "setgid"},       {KSYS_RMDIR, "rmdir"},
+        {KSYS_FSTAT, "fstat"},
     };
     size_t i;
 
