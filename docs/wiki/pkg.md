@@ -62,8 +62,16 @@ The index is one object of the format of ADR 0024 §1:
 The ABI is the version of the header of MOX1 that the kernel reads
 (`K_EXEC_VERSION`, 2 today). A field the parser does not know is skipped, so a
 repository grows without breaking an older machine; a field that is needed and
-missing, a digest that is not 64 hexadecimal digits, or a size above a
-megabyte is `PKG_EPARSE`.
+missing, a digest that is not 64 hexadecimal digits, or a size above
+`PKG_PACKAGE_MAX` is `PKG_EPARSE`.
+
+`PKG_PACKAGE_MAX` is eight megabytes, the ceiling of an image of a program:
+where `kernel/exec.h` names it (`K_EXEC_MAX_IMAGE`), the installer takes the
+number from the header itself, so the two cannot drift apart. The number is the
+memory of the machine and not the size of one transfer. A package is read into
+**one block** of the allocator of that size before a byte of it is checked,
+which is why the ceiling is also the answer to a hostile index: a document that
+names a larger package asks for nothing.
 
 `license` is the SPDX string of the package, `source` the URL of the archive
 of its source and `source_sha256` the digest of that archive. All three are
@@ -229,7 +237,10 @@ the names of the programs that are still in `/usr/bin`.
 The bytes go to `/usr/bin/<name>.new`, the size, the digest, the signature and
 the header of MOX1 are checked, the file is made executable, and a
 **rename** makes it visible (`vfs_rename`, an operation of the filesystem that
-MicroFS and FAT implement; the system call is `rename`, number 34). A rename
+MicroFS and FAT implement; the system call is `rename`, number 34). The package
+travels in one block of `kmm` of its size (up to `PKG_PACKAGE_MAX`, 8 MiB) and
+the block is freed once the file is in `/usr/bin`; a file past the ceiling is
+refused before the block is asked for. A rename
 replaces a file that is already there, as POSIX does, and a volume without the
 operation still installs: the program is written in place and the command says
 that the window is not atomic.

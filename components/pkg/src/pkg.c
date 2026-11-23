@@ -808,8 +808,9 @@ static int verify_and_install(struct pkg_options *options, const struct pkg_plan
         return PKG_EFETCH;
     }
 
-    if (file_size > PKG_PACKAGE_MAX) {
-        pkg_error("%s is larger than a package of this machine", source);
+    if (pkg_size_check(file_size) != PKG_OK) {
+        pkg_error("%s is larger than a package of this machine (%u MiB)", source,
+                  (unsigned)(PKG_PACKAGE_MAX >> 20));
         return PKG_ESIZE;
     }
 
@@ -1201,7 +1202,9 @@ static int local_entry(const char *path, struct pkg_entry *entry, char *signatur
             return rc;
         }
 
-        if (entry->size > PKG_PACKAGE_MAX) {
+        if (pkg_size_check(entry->size) != PKG_OK) {
+            pkg_error("%s is larger than a package of this machine (%u MiB)", leaf,
+                      (unsigned)(PKG_PACKAGE_MAX >> 20));
             return PKG_ESIZE;
         }
 

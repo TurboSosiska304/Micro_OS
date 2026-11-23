@@ -355,6 +355,7 @@ static int entry_finish(struct pkg_entry *entry, const struct pkg_index *index, 
         return PKG_EPARSE;
     }
 
+<<<<<<< HEAD
     /*
      * The digest of the source (ADR 0025) is not checked here: an entry that
      * names a source and a digest that is not one is a fact for the rule of
@@ -363,6 +364,9 @@ static int entry_finish(struct pkg_entry *entry, const struct pkg_index *index, 
      */
 
     if (entry->size > PKG_PACKAGE_MAX) {
+=======
+    if (pkg_size_check(entry->size) != PKG_OK) {
+>>>>>>> fix/pkg-cap
         return PKG_EPARSE;
     }
 

@@ -166,6 +166,11 @@ int pkg_signature_load(const char *path, k_u8_t signature[PKG_SIGNATURE_SIZE])
     return (got == PKG_SIGNATURE_SIZE) ? PKG_OK : PKG_ESIGN;
 }
 
+int pkg_size_check(k_u64_t size)
+{
+    return (size <= (k_u64_t)PKG_PACKAGE_MAX) ? PKG_OK : PKG_ESIZE;
+}
+
 int pkg_package_check(const struct pkg_entry *entry, const k_u8_t signature[PKG_SIGNATURE_SIZE],
                       const k_u8_t key[PKG_KEY_SIZE], const void *data, k_size_t size)
 {

@@ -314,6 +314,14 @@ release. The notes are in [`docs/releases/1.2.md`](docs/releases/1.2.md).
 
 ### Changed
 
+- `pkg` takes a package of up to 8 MiB: `PKG_PACKAGE_MAX` is the ceiling of
+  an image of a program (`K_EXEC_MAX_IMAGE`) and not a number of its own -
+  where `kernel/exec.h` names the ceiling, the installer uses the name - and
+  the install, the parse of the index and a local file ask one
+  `pkg_size_check()`. A package between one and eight megabytes is no longer
+  refused by the installer itself, and a file one byte past the ceiling is
+  refused with the size in the sentence.
+  `tests/cases/test_pkg.c` checks both sides of the boundary.
 - `struct http_transport::open` receives the transport itself, so a layer can
   wrap the transport below it; a plain transport ignores the argument.
 - `struct http_url` names the scheme: `tls` says the URL is https, and a
