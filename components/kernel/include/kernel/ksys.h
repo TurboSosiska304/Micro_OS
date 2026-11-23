@@ -65,7 +65,8 @@
 #define KSYS_SETGID 40    /* setgid(gid) */
 #define KSYS_RMDIR 41     /* rmdir(path) */
 #define KSYS_FSTAT 42     /* fstat(fd, buf) */
-#define KSYS_COUNT 43     /* the number of the system calls */
+#define KSYS_POLL 43      /* poll(fds, nfds, timeout) */
+#define KSYS_COUNT 44     /* the number of the system calls */
 
 /*
  * The resources of a limit. One number names one resource and the calls move
@@ -153,6 +154,38 @@
 #define KSYS_SEEK_SET 0
 #define KSYS_SEEK_CUR 1
 #define KSYS_SEEK_END 2
+
+/*
+ * `poll` (number 43): one entry per descriptor the caller watches, the
+ * events it is interested in and the events that are true now.
+ *
+ * The layout is eight bytes on both machines of the system: the descriptor is
+ * 32 bits, the two masks are 16 each, and no field has a pointer in it. The
+ * numbers of the bits are the ones of Linux, so a program that knows one
+ * contract knows the other, and the set is the three bits this system can
+ * answer: a read would not wait, a write would not wait, and the object is in
+ * an error state (the reading end of a pipe is gone, or the number is not an
+ * open descriptor).
+ *
+ * A zero count is a sleep: the call waits for the timeout and answers 0. A
+ * timeout of -1 waits until an object of the list changes its state. The wait
+ * is the scheduler's - the task leaves the run queue - so a program of the
+ * console that waits for a pipe costs no processor time.
+ */
+struct ksys_pollfd {
+    k_u32_t fd;      /* the descriptor, or a negative number to be ignored */
+    k_u16_t events;  /* what the caller asks about */
+    k_u16_t revents; /* what is true, written by the call */
+};
+
+#define KSYS_POLLIN 0x0001  /* a read would not wait */
+#define KSYS_POLLOUT 0x0004 /* a write would not wait */
+#define KSYS_POLLERR 0x0008 /* the object is gone or the number is not open */
+
+/* The entries one call may watch: the table of the descriptors of a task is
+ * sixteen slots, so a list longer than that names a descriptor twice at
+ * best. */
+#define KSYS_POLL_MAX 16
 
 /*
  * The longest path a call accepts, the terminator not counted: a path has
@@ -297,6 +330,15 @@ int ksys_execve(const char *path, char *const argv[]);
 int ksys_pipe(int fds[2]);
 /* A second descriptor of an open file, POSIX style. */
 int ksys_dup2(int oldfd, int newfd);
+
+/*
+ * Wait for one of the descriptors of `fds` to be ready: the count of the
+ * entries whose revents is not zero, 0 when the timeout passed, or an error.
+ * `nfds` of zero is a sleep of `timeout_ms` milliseconds, and -1 as the
+ * timeout waits without a deadline. A signal that the caller has to answer
+ * cuts the wait with EINTR.
+ */
+int ksys_poll(struct ksys_pollfd *fds, k_u32_t nfds, int timeout_ms);
 /* The same call with an environment of the caller. */
 int ksys_execve_env(const char *path, char *const argv[], char *const envp[]);
 int ksys_kill(int pid, int sig);

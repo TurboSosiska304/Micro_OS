@@ -16,6 +16,7 @@
 #include "kernel/sched.h"
 #include "kernel/task.h"
 #include "kernel/vfs.h"
+#include "kernel/wait.h"
 
 /*
  * The table of the system calls. The index is the number of the call, so
@@ -558,6 +559,204 @@ static k_ssize_t sys_dup2(ksys_arg_t oldfd, ksys_arg_t newfd, ksys_arg_t a2, ksy
     }
 
     return kfile_dup2(self, (int)oldfd, (int)newfd);
+}
+
+/*
+ * The readiness of one descriptor for `poll`. The answer is the bits of
+ * revents, and the rules are the ones of the object: a pipe knows whether a
+ * byte is there, a regular file of this system never makes a read wait, and
+ * the console of the system has a key only when the port says so.
+ *
+ * A number that is not an open descriptor is POLLERR and not EBADF: the list
+ * of a poll is one answer, and the error of one entry is a bit of that entry
+ * (the contract of the three bits is in kernel/ksys.h).
+ */
+static k_u16_t poll_entry(ksys_arg_t fd, k_u16_t events)
+{
+    struct kfile *file;
+    k_u16_t revents = 0;
+
+    /* A negative descriptor is ignored, as POSIX has it. */
+    if ((k_i32_t)fd < 0) {
+        return 0;
+    }
+
+    file = fd_get(fd);
+
+    if (file == NULL) {
+        /* The descriptors 1 and 2 are the console of the system when they
+         * are not open as a file (the same rule as write), and it is always
+         * ready to take a byte. */
+        if (fd == 1 || fd == 2) {
+            return (k_u16_t)(events & (KSYS_POLLIN | KSYS_POLLOUT));
+        }
+
+        return KSYS_POLLERR;
+    }
+
+    /*
+     * The access of the descriptor is the first answer: a file that was
+     * opened to be written to cannot be read, and a poll that asks whether
+     * such a read would wait asks about an operation the descriptor refuses.
+     */
+    if (((events & KSYS_POLLIN) != 0 && (file->flags & KSYS_O_ACCMODE) == KSYS_O_WRONLY) ||
+        ((events & KSYS_POLLOUT) != 0 && (file->flags & KSYS_O_ACCMODE) == KSYS_O_RDONLY)) {
+        return KSYS_POLLERR;
+    }
+
+    /*
+     * The console is a device of the VFS whose read waits for a line: it is
+     * ready when a character is waiting, and the port is the only one that
+     * knows. The path of the open file is the name it was opened with, which
+     * is the whole of the identity a device of this system has.
+     */
+    if (strcmp(file->path, "/dev/tty0") == 0) {
+        if ((events & KSYS_POLLIN) != 0 && k_console_poll() >= 0) {
+            revents |= KSYS_POLLIN;
+        }
+
+        if ((events & KSYS_POLLOUT) != 0) {
+            revents |= KSYS_POLLOUT;
+        }
+
+        return revents;
+    }
+
+    return kfile_poll(file, events);
+}
+
+static k_ssize_t sys_poll(ksys_arg_t fds, ksys_arg_t nfds, ksys_arg_t timeout, ksys_arg_t a3,
+                          ksys_arg_t a4, ksys_arg_t a5)
+{
+    struct ksys_pollfd list[KSYS_POLL_MAX];
+    k_u32_t count;
+    k_u32_t i;
+    k_u32_t wait_ms;
+    bool infinite;
+    k_u64_t deadline = 0;
+    k_size_t size;
+    int rc;
+
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    if (nfds > (ksys_arg_t)KSYS_POLL_MAX) {
+        return KERR_INVAL;
+    }
+
+    /*
+     * The timeout is an int: -1 is "without a deadline", a number that does
+     * not fit an int is not a timeout, and a negative number that is not -1
+     * is not one either. The width of the register is checked before the
+     * cast, so a wide value cannot become a valid timeout by being cut.
+     */
+    if (timeout == (ksys_arg_t)-1) {
+        infinite = true;
+        wait_ms = K_WAIT_INFINITE;
+    } else if (timeout > (ksys_arg_t)0x7FFFFFFFu) {
+        return KERR_INVAL;
+    } else {
+        infinite = false;
+        wait_ms = (k_u32_t)timeout;
+    }
+
+    size = (k_size_t)nfds * sizeof(list[0]);
+
+    if (nfds > 0) {
+        if (fds == 0) {
+            return KERR_INVAL;
+        }
+
+        rc = copy_from_user(list, fds, size);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+
+    if (!infinite) {
+        deadline = k_sched_uptime_ms() + (k_u64_t)wait_ms;
+    }
+
+    for (;;) {
+        k_u16_t events;
+        bool piped = false;
+        bool console = false;
+
+        count = 0;
+
+        for (i = 0; i < (k_u32_t)nfds; i++) {
+            struct kfile *file = ((k_i32_t)list[i].fd < 0) ? NULL : fd_get(list[i].fd);
+
+            events = (k_u16_t)(list[i].events & (KSYS_POLLIN | KSYS_POLLOUT));
+            list[i].revents = poll_entry(list[i].fd, events);
+
+            if (list[i].revents != 0) {
+                count++;
+            }
+
+            if (file != NULL) {
+                if (file->kind == KFILE_PIPE) {
+                    piped = true;
+                } else if (strcmp(file->path, "/dev/tty0") == 0) {
+                    console = true;
+                }
+            }
+        }
+
+        if (count > 0) {
+            break;
+        }
+
+        if (!infinite) {
+            k_u64_t now = k_sched_uptime_ms();
+
+            if (now >= deadline) {
+                break;
+            }
+
+            wait_ms = (k_u32_t)(deadline - now);
+        }
+
+        /*
+         * The wait is the scheduler's: the task leaves the run queue and a
+         * pipe or the console wakes it when the state it watches changes.
+         * Nothing is polled in a loop, and the timeout is the deadline of the
+         * scheduler's sleep.
+         */
+        rc = k_wait_block(piped ? K_WAIT_CHANNEL_PIPES : NULL,
+                          console ? K_WAIT_CHANNEL_CONSOLE : NULL, wait_ms);
+
+        if (rc == K_WAIT_SIGNAL) {
+            return KERR_INTR;
+        }
+
+        if (rc == K_WAIT_TIMEOUT) {
+            /* The deadline passed, or nothing of the list can wake a task:
+             * the state is read once more and then the call answers. */
+            count = 0;
+
+            for (i = 0; i < (k_u32_t)nfds; i++) {
+                events = (k_u16_t)(list[i].events & (KSYS_POLLIN | KSYS_POLLOUT));
+                list[i].revents = poll_entry(list[i].fd, events);
+
+                if (list[i].revents != 0) {
+                    count++;
+                }
+            }
+
+            break;
+        }
+    }
+
+    if (nfds > 0) {
+        rc = copy_to_user(fds, list, size);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+
+    return (k_ssize_t)count;
 }
 
 static k_ssize_t sys_stat(ksys_arg_t path, ksys_arg_t buf, ksys_arg_t a2, ksys_arg_t a3,
@@ -2207,6 +2406,7 @@ void ksys_init(void)
     ksys_register(KSYS_SETGID, "setgid", sys_setgid);
     ksys_register(KSYS_RMDIR, "rmdir", sys_rmdir);
     ksys_register(KSYS_FSTAT, "fstat", sys_fstat);
+    ksys_register(KSYS_POLL, "poll", sys_poll);
 }
 
 /* --- the wrappers --- */
@@ -2410,6 +2610,12 @@ int ksys_pipe(int fds[2])
 int ksys_dup2(int oldfd, int newfd)
 {
     return (int)ksys_call(KSYS_DUP2, (ksys_arg_t)oldfd, (ksys_arg_t)newfd, 0, 0, 0, 0);
+}
+
+int ksys_poll(struct ksys_pollfd *fds, k_u32_t nfds, int timeout_ms)
+{
+    return (int)ksys_call(KSYS_POLL, (ksys_arg_t)(uintptr_t)fds, (ksys_arg_t)nfds,
+                          (ksys_arg_t)(k_u64_t)(k_i64_t)timeout_ms, 0, 0, 0);
 }
 
 int ksys_kill(int pid, int sig)

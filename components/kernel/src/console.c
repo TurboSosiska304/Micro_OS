@@ -4,6 +4,7 @@
 #include "kernel/console.h"
 
 #include "kernel/port.h"
+#include "kernel/wait.h"
 
 /*
  * The sinks that get a copy of everything that is printed. The slot 0
@@ -125,4 +126,9 @@ int k_console_getchar(void)
 int k_console_poll(void)
 {
     return k_port_console_poll();
+}
+
+void k_console_input_notify(void)
+{
+    k_wait_wake(K_WAIT_CHANNEL_CONSOLE);
 }

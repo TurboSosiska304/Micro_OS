@@ -64,4 +64,12 @@ int k_console_readline(char *buf, k_size_t size);
 int k_console_getchar(void);
 int k_console_poll(void);
 
+/*
+ * A character has arrived on the input of the console: the tasks that wait
+ * for it in `poll` are woken. The port calls this where it puts the byte into
+ * its ring - the interrupt of the keyboard, the poll of the serial port - and
+ * a console whose input nobody watches costs one lock of the scheduler.
+ */
+void k_console_input_notify(void);
+
 #endif /* MICRO_OS_KERNEL_CONSOLE_H */

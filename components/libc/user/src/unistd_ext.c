@@ -9,6 +9,7 @@
  */
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -164,6 +165,19 @@ int pipe(int fds[2])
 int dup2(int oldfd, int newfd)
 {
     return posix((int)__ulibc_syscall6(KSYS_DUP2, oldfd, newfd, 0, 0, 0, 0));
+}
+
+/*
+ * `poll` is the call itself: the entries of the list are the eight bytes of
+ * the ABI (kernel/ksys.h), so a program hands the kernel the array it built
+ * and reads the answers back from the same memory. A negative number is the
+ * timeout without a deadline, and the kernel answers the count of the ready
+ * entries.
+ */
+int poll(struct pollfd *fds, nfds_t nfds, int timeout_ms)
+{
+    return posix((int)__ulibc_syscall6(KSYS_POLL, (long)(unsigned long)fds, (long)nfds,
+                                       (long)timeout_ms, 0, 0, 0));
 }
 
 pid_t fork(void)

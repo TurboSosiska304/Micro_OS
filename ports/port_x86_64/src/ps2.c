@@ -25,6 +25,7 @@
  */
 #include "port_x86_64_console.h"
 
+#include "kernel/console.h"
 #include "kernel/input.h"
 #include "kernel/input_set1.h"
 #include "kernel/port/lock.h"
@@ -148,6 +149,9 @@ static void key_push(k_u8_t character)
 
     g_keys[g_key_head] = character;
     g_key_head = next;
+
+    /* A task that waits for the console in `poll` has its answer now. */
+    k_console_input_notify();
 }
 
 /* One event into the ring of the interface. A full ring loses the newest

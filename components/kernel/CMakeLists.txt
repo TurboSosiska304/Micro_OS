@@ -35,6 +35,7 @@ set(MICRO_OS_KERNEL_SRCS
     "src/task.c"
     "src/vfs.c"
     "src/version.c"
+    "src/wait.c"
 )
 
 if(ESP_PLATFORM)

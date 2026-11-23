@@ -32,7 +32,7 @@
 # second door of stat, ADR 0013).
 
 # The number of the calls, compared with ksys_count().
-count 43
+count 44
 
 # The table: number name arity result.
 #
@@ -90,6 +90,7 @@ ksys 39 setuid 1 int
 ksys 40 setgid 1 int
 ksys 41 rmdir 1 int
 ksys 42 fstat 2 int
+ksys 43 poll 3 int
 
 # The errors (kernel/errno.h). EEXIST and ESRCH share the number -3, which is
 # why there are two names on one line of the header: the frozen table had the
@@ -153,6 +154,14 @@ const KSYS_SIG_IGN 1
 const KSYS_PATH_MAX 127
 const KSYS_MAX_IO 65536
 
+# The bits of a poll and the length of its list (kernel/ksys.h). The three
+# bits are the ones of Linux; the list is as long as the table of the
+# descriptors of a task, because a longer one names a descriptor twice.
+const KSYS_POLLIN 1
+const KSYS_POLLOUT 4
+const KSYS_POLLERR 8
+const KSYS_POLL_MAX 16
+
 # The header of a program image (kernel/exec.h): the magic as the four bytes
 # of the file read as a little-endian word, the version, the size of the
 # header, the numbers of the machines and the ceiling of the zeroed part.
@@ -188,6 +197,11 @@ offset 8 vfs_dirent name 0
 offset 8 vfs_dirent inode 36
 offset 8 vfs_dirent type 40
 offset 8 vfs_dirent size 48
+
+size 8 ksys_pollfd 8
+offset 8 ksys_pollfd fd 0
+offset 8 ksys_pollfd events 4
+offset 8 ksys_pollfd revents 6
 
 size 8 k_exec_image 64
 offset 8 k_exec_image data 0
@@ -225,6 +239,11 @@ offset 4 vfs_dirent name 0
 offset 4 vfs_dirent inode 36
 offset 4 vfs_dirent type 40
 offset 4 vfs_dirent size 48
+
+size 4 ksys_pollfd 8
+offset 4 ksys_pollfd fd 0
+offset 4 ksys_pollfd events 4
+offset 4 ksys_pollfd revents 6
 
 size 4 k_exec_image 32
 offset 4 k_exec_image data 0

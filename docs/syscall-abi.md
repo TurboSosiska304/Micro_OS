@@ -126,12 +126,14 @@ chose.
 | 40 | `setgid` | `gid` | 0, or an error |
 | 41 | `rmdir` | `path` | 0, or an error |
 | 42 | `fstat` | `fd, buf` | 0, or an error |
+| 43 | `poll` | `fds, nfds, timeout` | the count of the ready entries, 0 on a timeout, or an error |
 
 The numbers 0 to 22 are frozen, 23 to 26 were the next free ones; pipes took
 27 and 28 (ADR 0014), signals the three after them (ADR 0015), the limits of
 a task 32 and 33, the atomic rename 34 (ADR 0024 §5), the cut of an open
-file 35 and the credentials of a task 36 to 40 (the second half of 1.4), and
-`rmdir` and `fstat` 41 and 42 (the filesystem of 1.5). A
+file 35 and the credentials of a task 36 to 40 (the second half of 1.4),
+`rmdir` and `fstat` 41 and 42 (the filesystem of 1.5), and the wait for a
+descriptor 43 (the first lane of 1.6). A
 call that is not in the table is `ENOSYS`, never a guess at what it might
 have meant.
 
@@ -500,6 +502,53 @@ the two dispositions `MICROOS_SIG_DFL` and `MICROOS_SIG_IGN`;
 `microos_signal()` answers `MICROOS_SIG_ERR` and sets `microos_errno()`
 when the signal is not one of the system.
 
+## The wait for a descriptor
+
+`poll(fds, nfds, timeout)` (number 43) waits for one of the descriptors of the
+list to be ready. An entry is eight bytes on both machines and the library
+uses the structure of the ABI as it is:
+
+```c
+struct ksys_pollfd {
+    k_u32_t fd;      /* a negative number is ignored */
+    k_u16_t events;  /* KSYS_POLLIN, KSYS_POLLOUT */
+    k_u16_t revents; /* what is true, written by the call */
+};
+```
+
+The bits are the ones of Linux: `KSYS_POLLIN` (0x0001) for a read that would
+not wait, `KSYS_POLLOUT` (0x0004) for a write that would not wait, and
+`KSYS_POLLERR` (0x0008) for an object that is gone - the writing end of a
+pipe whose reader closed, a descriptor the caller may not use in the direction
+it asked, and a number that is not open. An entry the caller did not ask about
+stays zero; the error is reported whether it was asked for or not, because a
+wait that would never end is not an answer.
+
+The answers:
+
+* the count of the entries whose `revents` is not zero, the list written back
+  to the memory of the caller;
+* 0 when the timeout passed, and for a list of no descriptor - `poll(NULL, 0,
+  ms)` is the sleep of the system, so a program of the console can wait
+  without a descriptor;
+* `EINTR` when a signal the task has to answer cut the wait;
+* `EINVAL` for a list longer than `KSYS_POLL_MAX` (16, the table of the
+  descriptors of a task), a NULL list with a count, or a timeout that is not
+  -1 and not a number of milliseconds an int holds;
+* `EFAULT` for a list that is not the memory of the caller.
+
+A timeout of -1 waits without a deadline. The wait is the scheduler's and not
+a loop of the task: the task is taken out of the run queue and the object
+wakes it - the writing end of a pipe after a byte, the reading end after the
+room it made, the close of either end, the console when a key arrives. A
+machine whose tasks are threads of another scheduler (the host, the board)
+cannot cut a sleep from outside the thread, so its wait looks at the state
+every 10 ms; the x86-64 port answers within the tick of the timer.
+
+The system has no socket in the ABI, so a descriptor of `poll` is a file, a
+pipe or a device of the VFS. A regular file is always ready to be read and to
+be written, and `/dev/tty0` is readable when a character is waiting.
+
 ## The descriptors
 
 Every task has its own table of the open files, sixteen of them. The
@@ -574,10 +623,12 @@ place that is not the memory of the caller is `EFAULT`.
   end and `write` of the reading end are `EBADF`. A pipe has no position, so
   `lseek` is `ESPIPE` (`KERR_SPIPE`, 29), and it has no entries, so `readdir`
   is `ENOTDIR`.
-* A wait of a pipe is a poll with a bound, not a queue of waiters: 500 ms.
-  A read that found no byte in that time is `EAGAIN`; a write that placed no
-  byte is `EAGAIN` too, and one that placed some bytes answers the count it
-  placed. A queue with a wakeup is the next step.
+* A wait of a pipe has a bound of 500 ms. A read that found no byte in that
+  time is `EAGAIN`; a write that placed no byte is `EAGAIN` too, and one
+  that placed some bytes answers the count it placed. The wait itself is the
+  scheduler's (`kernel/wait.h`): the task leaves the run queue and the other
+  end wakes it when it puts a byte in or takes one out, so a task of the
+  console that waits for a pipe costs no processor time.
 
 `dup2(oldfd, newfd)` (number 28) makes `newfd` a second descriptor of the
 open file of `oldfd` and answers `newfd`. A descriptor that was open at
@@ -755,6 +806,12 @@ program breaks it into pieces.
   the writing end is the end of the file, a pipe without a reading end is
   `EPIPE`, the wait of an empty or a full pipe passes its bound as `EAGAIN`,
   and `lseek`/`readdir` of a pipe are `ESPIPE`/`ENOTDIR`.
+* **The wait.** `poll` answers the state of two pipes at once, the byte that
+  arrives while the task waits (a task of its own writes it), the deadline
+  that passes, a list of no descriptor as a sleep, the end of the writing end
+  as a readable entry, a writing end whose reader is gone as the error, and a
+  signal as `EINTR`. The wait costs no processor time: the task is out of the
+  run queue (`tests/cases/test_ksys.c`, `test_poll`).
 * **The sharing.** `dup2` makes a second descriptor of one open file: the
   write through it reaches the object the number now names, the copy
   outlives the original, and the old descriptor at the new number is closed.

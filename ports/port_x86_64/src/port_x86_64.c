@@ -19,6 +19,7 @@
 #include <string.h>
 
 #include "kernel/clock.h"
+#include "kernel/console.h"
 #include "kernel/log.h"
 #include "kernel/cpu.h"
 #include "kernel/port.h"
@@ -296,6 +297,11 @@ int k_port_console_poll(void)
     }
 
     if ((port_inb(COM1_LSR) & 0x01) != 0) {
+        /* The serial port has no interrupt of its own in this port: the byte
+         * is found by a poll, and finding it is the moment a task that waits
+         * for the console in `poll` can be told. */
+        k_console_input_notify();
+
         return (int)port_inb(COM1);
     }
 
