@@ -629,6 +629,13 @@ static int vblk_sync(void *ctx)
     }
 
     for (attempt = 0; attempt < VBLK_ATTEMPTS; attempt++) {
+        /* The flush is a request of the queue like any other and the slots of
+         * the requests are the ones the device has not answered yet: a queue
+         * with a request of another call in it is emptied first. */
+        if (g_vblk_inflight != 0u) {
+            (void)vblk_complete(live);
+        }
+
         if (vblk_submit(VIRTIO_BLK_T_FLUSH, 0, NULL, 0, 0, &described) != 0 &&
             vblk_complete(live) == 0) {
             rc = 0;
