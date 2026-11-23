@@ -6,7 +6,7 @@
 # component of the kernel: the kernel knows the screen as a device (ADR 0028)
 # and nothing above the device.
 
-set(MICRO_OS_UI_SRCS "src/window.c" "src/draw.c" "src/keyboard.c"
+set(MICRO_OS_UI_SRCS "src/window.c" "src/draw.c" "src/keyboard.c" "src/palette.c"
     "client/src/wm_protocol.c" "client/src/wm_client.c")
 
 if(ESP_PLATFORM)
