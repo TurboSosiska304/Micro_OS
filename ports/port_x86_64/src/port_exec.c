@@ -903,7 +903,7 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
          */
         int tries;
 
-        (void)task_signal_send(program->pid, K_SIGKILL);
+        (void)task_signal_send(program->pid, K_SIGTERM);
         for (tries = 0; tries < 400; tries++) {
             if (task_wait(program->pid, &status, 5) != -2) {
                 break;
