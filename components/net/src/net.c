@@ -344,10 +344,13 @@ static int cmd_http(int argc, char **argv)
     if (rc != HTTP_OK) {
         if (rc == HTTP_TLS) {
             kshell_printf("http: %s: %s\n", argv[2], net_tls_last_error());
+        } else if (rc == HTTP_ERROR) {
+            kshell_printf("http: %s: the connection failed\n", argv[2]);
+        } else if (rc == HTTP_TOO_LONG) {
+            kshell_printf("http: %s: the head of the answer is longer than %u bytes\n", argv[2],
+                          (unsigned)HTTP_HEAD_MAX);
         } else {
-            kshell_printf("http: %s: %s\n", argv[2],
-                          rc == HTTP_ERROR ? "the connection failed"
-                                           : "the URL is not one we speak");
+            kshell_printf("http: %s: the URL is not one we speak\n", argv[2]);
         }
         return KSHELL_ERROR;
     }
@@ -420,7 +423,8 @@ static int cmd_wget(int argc, char **argv)
             kshell_printf("wget: %s: a body this client cannot read\n", argv[1]);
             break;
         case HTTP_TOO_LONG:
-            kshell_printf("wget: %s: the address or the answer is too long\n", argv[1]);
+            kshell_printf("wget: %s: the head of the answer is longer than %u bytes\n", argv[1],
+                          (unsigned)HTTP_HEAD_MAX);
             break;
         default:
             kshell_printf("wget: %s: the server answered %d\n", argv[1], stream.status);

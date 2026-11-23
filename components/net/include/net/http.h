@@ -26,6 +26,16 @@
 #define HTTP_HOST_MAX 64
 #define HTTP_PATH_MAX 128
 
+/*
+ * The bytes of the head of an answer this client reads before the body. A
+ * head of a real server is a few hundred bytes, and the one of GitHub Pages -
+ * the repository of `pkg` - is 702: the two hundred of the first release did
+ * not hold it, and a download of an index failed with a sentence about the
+ * length of the address. The buffer is the ceiling of a head this client
+ * reads, and the answer names the number when a server writes more.
+ */
+#define HTTP_HEAD_MAX 1024u
+
 #define HTTP_OK 0
 #define HTTP_ERROR (-1)     /* the transport failed */
 #define HTTP_INVALID (-2)   /* the URL is not one we speak */
