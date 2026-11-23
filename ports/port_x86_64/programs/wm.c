@@ -268,20 +268,28 @@ static const struct wm_app *app_of_id(int id)
 static void app_pixels(const struct wm_app *app, int x, int y, int w, int h, int screen_x,
                        int screen_y)
 {
+    size_t window_row = (size_t)app->rect.w * FB_PIXEL_BYTES;
     size_t row_bytes = (size_t)w * FB_PIXEL_BYTES;
-    int rows = (int)(sizeof(g_pixels) / row_bytes);
+    size_t block = (size_t)sizeof(g_pixels);
+    int rows = (int)(block / window_row);
     int row;
 
-    if (rows < 1) {
+    if (rows < 1 || w > (int)app->rect.w || x < 0 || y < 0 || w <= 0 || h <= 0) {
         return;
     }
 
+    /* A strip is whole rows of the file - the buffer is the window's width and
+     * not the width of the part of it that is visible - and the visible part
+     * of every row is moved to the front of the block before the blit. A
+     * strip that read only the visible columns would read the rows of the
+     * file as if they touched, and every line of the window after the first
+     * would be the wrong bytes. */
     for (row = 0; row < h; row += rows) {
         int take = h - row < rows ? h - row : rows;
-        size_t bytes = (size_t)take * row_bytes;
-        long offset =
-            (long)((size_t)(y + row) * (size_t)app->rect.w + (size_t)x) * (long)FB_PIXEL_BYTES;
+        size_t bytes = (size_t)take * window_row;
+        long offset = (long)((size_t)(y + row) * (size_t)app->rect.w) * (long)FB_PIXEL_BYTES;
         size_t got = 0;
+        int line;
 
         if (lseek(app->buffer, offset, ULIBC_SEEK_SET) != offset) {
             return;
@@ -295,6 +303,12 @@ static void app_pixels(const struct wm_app *app, int x, int y, int w, int h, int
             }
 
             got += (size_t)part;
+        }
+
+        for (line = 1; line < take; line++) {
+            memmove((char *)g_pixels + (size_t)line * row_bytes,
+                    (char *)g_pixels + (size_t)line * window_row + (size_t)x * FB_PIXEL_BYTES,
+                    row_bytes);
         }
 
         (void)uiprog_blit(&g_screen, screen_x, screen_y + row, w, take, g_pixels);
@@ -469,6 +483,7 @@ static void panel_paint(const struct ui_rect *area)
 static void scene_paint(const struct ui_rect *rect)
 {
     int bottom = rect->y + rect->h;
+
     int band;
 
     /* The bands are counted from the top of the picture and not from the top
