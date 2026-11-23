@@ -888,8 +888,6 @@ static k_ssize_t sys_ioctl(ksys_arg_t fd, ksys_arg_t cmd, ksys_arg_t arg, ksys_a
 {
     struct kfile *file = fd_get(fd);
 
-    K_UNUSED(cmd);
-    K_UNUSED(arg);
     K_UNUSED(a3);
     K_UNUSED(a4);
     K_UNUSED(a5);
@@ -898,8 +896,17 @@ static k_ssize_t sys_ioctl(ksys_arg_t fd, ksys_arg_t cmd, ksys_arg_t arg, ksys_a
         return KERR_BADF;
     }
 
-    /* The files of the kernel have no control commands yet. */
-    return KERR_INVAL;
+    /*
+     * The command goes to the filesystem of the open file, which is where its
+     * meaning lives: a device of /dev answers the commands of its driver and
+     * a file of a volume has none (ADR 0028). A request outside the width of
+     * the field is not a command of this ABI.
+     */
+    if (cmd > 0xFFFFFFFFu) {
+        return KERR_INVAL;
+    }
+
+    return (k_ssize_t)vfs_ioctl(&file->file, (k_u32_t)cmd, (k_u64_t)arg);
 }
 
 static k_ssize_t sys_yield(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,

@@ -52,6 +52,7 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make integrity` | the integrity check: bundle, image headers, partition table, git, sources, formatting |
 | `make wiki-check` | every link and anchor of `docs/wiki` (`tools/wiki_check.py`) |
 | `make format` | reformat the C sources with `clang-format` |
+| `make sdk` | the SDK of a program in `build-sdk/microos-sdk/<version>/`: headers, `libmicroos_user.a`, the crt, the linker script and the CMake toolchain, so that a program is built outside the tree (`DESTDIR` names another directory, `docs/porting-programs.md` §6) |
 | `make clean` | remove `build-host/`, `build-asan/`, `build-coverage/` (the device `build/` stays) |
 | `make test-smp` | the host tests with `KERNEL_SMP=ON` and two cores (`MICRO_OS_CPUS=2`) |
 | `make x86-smp-build` | the x86-64 kernel with `KERNEL_SMP=ON` (the APs are not started yet, ADR 0012) |
@@ -63,6 +64,7 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make x86-vga-smoke` | check the framebuffer and the text mode with a screenshot, and the keyboard |
 | `make x86-disk-smoke` | two boots on one disk image: a file survives both (57 checks) |
 | `make x86-root-smoke` | two roots of one machine: the MicroFS and the ext2 image answer the same commands, and FAT32 mounts at `/data` (47 checks) |
+| `make x86-volume-smoke` | a volume of 5 GiB of ext2 and of MicroFS: written, read back, `e2fsck -fn` and `debugfs` of the host and the `fsck` of the machine (about four minutes, not a part of `make ci`) |
 | `make x86-iso` | the BIOS ISO (El Torito) with the loader, the kernel and the root image (K13) |
 | `make x86-iso-run` | boot the ISO in a terminal (`-nographic`) |
 | `make x86-iso-smoke` | boot the ISO with `-cdrom` and nothing else, and check the shell and `/bin` |

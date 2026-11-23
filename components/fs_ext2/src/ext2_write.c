@@ -5,10 +5,10 @@
  * The format is the one of ADR 0019 and it is not extended here: the
  * allocation walks the block and the inode bitmap of a group and keeps the
  * counters of the group and of the superblock true; an inode names its
- * blocks through the twelve direct pointers and one table of pointers,
- * which is what a root of this machine needs. A file that would have to
- * grow past that table answers KERR_NOSPC, the number of "no room", rather
- * than inventing a second layout.
+ * blocks through the twelve direct pointers and the three tables of
+ * pointers of the format, so a file of a large volume grows as far as the
+ * format allows it (2 GiB of blocks of 1 KiB, 4 TiB of blocks of 8 KiB)
+ * and not to the ceiling of one table.
  *
  * The order of every change is the order e2fsck reads: a block is marked in
  * the bitmap before an inode names it, an inode is marked before a
@@ -468,16 +468,129 @@ int ext2_free_inode(struct ext2_volume *vol, k_u32_t number)
     return 0;
 }
 
+/*
+ * One entry of a table of pointers, read or made. `slot` is the pointer in
+ * the inode or in the table above, and `level` is how many tables are still
+ * under the entry: one is the table of the single indirection, whose entries
+ * name data blocks, two and three are the tables of the double and the
+ * triple indirection, whose entries name the table below. `index` is the
+ * position in the whole subtree of that table, so the entry of this level is
+ * `index / stride` and the part below it `index % stride`.
+ *
+ * A table of zero is a hole and a block of zero below it is a hole too: a
+ * read of the suffix of a file that was never written answers zeros. With
+ * `create` the tables and the block on the way are made, which is what a
+ * write past the direct blocks needs; the entry of the parent is written
+ * back, because a table the parent does not name is a table the volume
+ * cannot reach.
+ */
+static int table_entry(struct ext2_volume *vol, struct ext2_inode *inode, k_u32_t *slot,
+                       unsigned level, k_u64_t index, bool create, k_u32_t *out)
+{
+    k_u32_t pointers = vol->block_size / 4u;
+    k_u64_t stride = 1;
+    k_u64_t offset;
+    k_u8_t raw[4];
+    k_u32_t table = *slot;
+    k_u32_t entry;
+    unsigned i;
+    int rc;
+
+    *out = 0;
+
+    for (i = 1; i < level; i++) {
+        stride *= pointers;
+    }
+
+    if (level == 0u || level > 3u || index >= stride * pointers) {
+        return KERR_IO;
+    }
+
+    if (table == 0u) {
+        if (!create) {
+            return 0;
+        }
+
+        rc = ext2_alloc_block(vol, &table);
+        if (rc != 0) {
+            return rc;
+        }
+
+        inode->blocks += block_sectors(vol);
+        *slot = table;
+    }
+
+    if (table >= vol->blocks_count) {
+        return KERR_IO;
+    }
+
+    offset = (k_u64_t)table * vol->block_size + (index / stride) * 4u;
+
+    rc = ext2_read_bytes(vol, offset, raw, sizeof(raw));
+    if (rc != 0) {
+        return rc;
+    }
+
+    entry = ext2_le32(raw);
+
+    if (entry >= vol->blocks_count) {
+        return KERR_IO;
+    }
+
+    if (level == 1u) {
+        if (entry == 0u) {
+            if (!create) {
+                return 0;
+            }
+
+            rc = ext2_alloc_block(vol, &entry);
+            if (rc != 0) {
+                return rc;
+            }
+
+            inode->blocks += block_sectors(vol);
+            ext2_put32(raw, entry);
+
+            rc = ext2_write_bytes(vol, offset, raw, sizeof(raw));
+            if (rc != 0) {
+                return rc;
+            }
+        }
+
+        *out = entry;
+        return 0;
+    }
+
+    rc = table_entry(vol, inode, &entry, level - 1u, index % stride, create, out);
+    if (rc != 0) {
+        return rc;
+    }
+
+    /* The table below was there, or this call made none: the parent keeps
+     * the entry it had. */
+    if (entry == ext2_le32(raw)) {
+        return 0;
+    }
+
+    ext2_put32(raw, entry);
+
+    return ext2_write_bytes(vol, offset, raw, sizeof(raw));
+}
+
 int ext2_inode_get_block(struct ext2_volume *vol, struct ext2_inode *inode, k_u64_t logical,
                          k_u32_t *block, bool create)
 {
-    k_u32_t pointers;
+    k_u64_t pointers;
+    k_u64_t double_start;
+    k_u64_t triple_start;
 
     if (vol == NULL || inode == NULL || block == NULL || !vol->mounted) {
         return KERR_INVAL;
     }
 
     pointers = vol->block_size / 4u;
+    double_start = EXT2_DIRECT_BLOCKS + pointers;
+    triple_start = double_start + pointers * pointers;
     *block = 0;
 
     if (logical < EXT2_DIRECT_BLOCKS) {
@@ -506,71 +619,17 @@ int ext2_inode_get_block(struct ext2_volume *vol, struct ext2_inode *inode, k_u6
         return 0;
     }
 
-    if (logical < EXT2_DIRECT_BLOCKS + pointers) {
-        k_u32_t table = inode->block[12];
-        k_u32_t entry;
-        k_u8_t raw[4];
-        k_u64_t offset;
-        int rc;
-
-        if (table == 0u) {
-            if (!create) {
-                return 0;
-            }
-
-            rc = ext2_alloc_block(vol, &table);
-            if (rc != 0) {
-                return rc;
-            }
-
-            inode->block[12] = table;
-            inode->blocks += block_sectors(vol);
-        }
-
-        if (table >= vol->blocks_count) {
-            return KERR_IO;
-        }
-
-        offset = (k_u64_t)table * vol->block_size + (k_u64_t)(logical - EXT2_DIRECT_BLOCKS) * 4u;
-
-        rc = ext2_read_bytes(vol, offset, raw, sizeof(raw));
-        if (rc != 0) {
-            return rc;
-        }
-
-        entry = ext2_le32(raw);
-
-        if (entry == 0u && create) {
-            rc = ext2_alloc_block(vol, &entry);
-            if (rc != 0) {
-                return rc;
-            }
-
-            ext2_put32(raw, entry);
-            rc = ext2_write_bytes(vol, offset, raw, sizeof(raw));
-            if (rc != 0) {
-                return rc;
-            }
-
-            inode->blocks += block_sectors(vol);
-        }
-
-        if (entry == 0u) {
-            return 0;
-        }
-
-        if (entry >= vol->blocks_count) {
-            return KERR_IO;
-        }
-
-        *block = entry;
-        return 0;
+    if (logical < double_start) {
+        return table_entry(vol, inode, &inode->block[12], 1u, logical - EXT2_DIRECT_BLOCKS, create,
+                           block);
     }
 
-    /* A double or a triple table is ext2 that this writer does not make:
-     * the plan leaves it to a later step, and a file that needs it gets
-     * the answer of a volume that is full. */
-    return KERR_NOSPC;
+    if (logical < triple_start) {
+        return table_entry(vol, inode, &inode->block[13], 2u, logical - double_start, create,
+                           block);
+    }
+
+    return table_entry(vol, inode, &inode->block[14], 3u, logical - triple_start, create, block);
 }
 
 int ext2_file_write(struct ext2_volume *vol, struct ext2_inode *inode, k_u64_t offset,

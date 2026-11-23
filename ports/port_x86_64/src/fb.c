@@ -32,6 +32,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "kernel/errno.h"
+#include "kernel/fb.h"
 #include "kernel/log.h"
 #include "kernel/render.h"
 #include "port_x86_64_console.h"
@@ -113,6 +115,14 @@ static k_u8_t g_theme_attr = FB_ATTR_BOOT;
 
 static int g_cursor_row = -1;
 static int g_cursor_column = -1;
+
+/*
+ * The console has been taken by a program (ADR 0028): the kernel keeps its
+ * grid and its cursor, but it writes no pixel until the screen comes back.
+ * The program's picture is then the whole glass; FBIO_GIVE repaints the grid
+ * the kernel kept and no line of the log is lost.
+ */
+static bool g_console_taken;
 
 static char g_name[64];
 
@@ -403,7 +413,9 @@ static void fb_clear(k_u8_t attr)
         k_u16_t paper;
 
         attr_colors(attr, false, &ink, &paper);
-        render_clear(NULL, paper);
+        if (!g_console_taken) {
+            render_clear(NULL, paper);
+        }
     }
 
     g_cursor_row = -1;
@@ -418,7 +430,12 @@ static void fb_put(int row, int column, char character, k_u8_t attr)
 
     g_cells[row][column].character = character;
     g_cells[row][column].attr = attr;
-    cell_paint(row, column, false);
+
+    /* The grid follows the console even while a program owns the glass: the
+     * line is not lost, it is painted when the screen comes back. */
+    if (!g_console_taken) {
+        cell_paint(row, column, false);
+    }
 }
 
 /*
@@ -436,13 +453,15 @@ static void fb_scroll(k_u8_t attr)
     k_u16_t ink;
     k_u16_t paper;
 
-    memmove((void *)(uintptr_t)g_fb, (const void *)(uintptr_t)(g_fb + line),
-            (k_size_t)(g_height - g_pitch) * (k_size_t)g_stride * sizeof(k_u16_t));
+    if (!g_console_taken) {
+        memmove((void *)(uintptr_t)g_fb, (const void *)(uintptr_t)(g_fb + line),
+                (k_size_t)(g_height - g_pitch) * (k_size_t)g_stride * sizeof(k_u16_t));
 
-    attr_colors(attr, false, &ink, &paper);
+        attr_colors(attr, false, &ink, &paper);
 
-    if (last < g_height) {
-        area_fill(0, last, g_width, g_height - last, paper);
+        if (last < g_height) {
+            area_fill(0, last, g_width, g_height - last, paper);
+        }
     }
 
     memmove(g_cells[0], g_cells[1], (k_size_t)(FB_ROWS_MAX - 1) * sizeof(g_cells[0]));
@@ -463,7 +482,9 @@ static void fb_scroll(k_u8_t attr)
      * scroll; the old one is this file's to put right.
      */
     if (g_cursor_row > 0) {
-        cell_paint(g_cursor_row - 1, g_cursor_column, false);
+        if (!g_console_taken) {
+            cell_paint(g_cursor_row - 1, g_cursor_column, false);
+        }
     }
 
     g_cursor_row = -1;
@@ -477,14 +498,16 @@ static void fb_cursor(int row, int column)
     }
 
     /* The cell the cursor leaves reads as the character it holds again. */
-    if (g_cursor_row >= 0) {
+    if (g_cursor_row >= 0 && !g_console_taken) {
         cell_paint(g_cursor_row, g_cursor_column, false);
     }
 
     g_cursor_row = row;
     g_cursor_column = column;
 
-    cell_paint(row, column, true);
+    if (!g_console_taken) {
+        cell_paint(row, column, true);
+    }
 }
 
 /* The pair of `console`: the plain text repaints in the new colours and a
@@ -512,6 +535,10 @@ static void fb_colors(const struct port_x86_64_pair *pair)
         }
     }
 
+    if (g_console_taken) {
+        return;
+    }
+
     render_clear(NULL, g_paper);
 
     for (row = 0; row < g_rows; row++) {
@@ -537,7 +564,9 @@ static void fb_redraw(void)
     int row;
     int column;
 
-    if (g_fb == NULL) {
+    /* While a program owns the glass the kernel has no business painting it:
+     * the grid is kept and FBIO_GIVE draws it. */
+    if (g_fb == NULL || g_console_taken) {
         return;
     }
 
@@ -692,6 +721,99 @@ const struct port_x86_64_screen *port_x86_64_fb_screen(const struct port_x86_64_
     fb_clear(g_theme_attr);
 
     return &s_screen;
+}
+
+/* --- the device of ADR 0028 ------------------------------------------------- */
+
+/*
+ * The shape of the picture for `/dev/fb0`: false when the machine has no
+ * framebuffer (the text mode of the VGA is the console of this port, not a
+ * picture a program may draw in).
+ */
+bool port_x86_64_fb_info(struct fb_info *out)
+{
+    if (out == NULL || g_fb == NULL) {
+        return false;
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->width = (k_u16_t)g_width;
+    out->height = (k_u16_t)g_height;
+    out->pitch = (k_u16_t)g_stride;
+    out->columns = (k_u16_t)g_columns;
+    out->rows = (k_u16_t)g_rows;
+    out->bpp = (k_u8_t)PORT_X86_64_SCREEN_BPP;
+    out->format = FB_FORMAT_RGB565;
+    out->font_width = FB_CELL_WIDTH;
+    out->font_height = FB_CELL_HEIGHT;
+
+    memcpy(out->palette, port_x86_64_palette, sizeof(out->palette));
+
+    return true;
+}
+
+/*
+ * One rectangle of a program's picture into the memory of the card. The
+ * caller has checked the bounds (kernel/fb.c, fb_rect_parse); the check here
+ * is the second door for a direct caller and costs one comparison a call.
+ */
+int port_x86_64_fb_blit(const struct fb_rect *rect, const k_u16_t *pixels)
+{
+    int row;
+
+    if (rect == NULL || pixels == NULL || g_fb == NULL) {
+        return KERR_INVAL;
+    }
+
+    if (rect->w == 0u || rect->h == 0u || (k_u32_t)rect->x + (k_u32_t)rect->w > (k_u32_t)g_width ||
+        (k_u32_t)rect->y + (k_u32_t)rect->h > (k_u32_t)g_height) {
+        return KERR_INVAL;
+    }
+
+    for (row = 0; row < (int)rect->h; row++) {
+        k_u16_t *destination =
+            (k_u16_t *)(uintptr_t)(g_fb + (k_size_t)(rect->y + row) * (k_size_t)g_stride +
+                                   (k_size_t)rect->x);
+
+        memcpy(destination, pixels + (k_size_t)row * (k_size_t)rect->w,
+               (k_size_t)rect->w * sizeof(k_u16_t));
+    }
+
+    return 0;
+}
+
+/*
+ * The screen changes hands. Taking it stops the console painting and keeps
+ * its grid; giving it back paints the grid again, so the line the shell
+ * printed while the program held the picture is there. Neither call saves or
+ * restores a pixel of the program: the interface repaints what it needs.
+ */
+void port_x86_64_fb_console_take(void)
+{
+    if (g_fb != NULL) {
+        g_console_taken = true;
+    }
+}
+
+void port_x86_64_fb_console_give(void)
+{
+    if (!g_console_taken) {
+        return;
+    }
+
+    g_console_taken = false;
+    fb_redraw();
+}
+
+/*
+ * The panic: the screen comes back whatever a program holds and the grid is
+ * painted, because a machine that dies with an interface over the message is
+ * a machine that says nothing (ADR 0028 §2).
+ */
+void port_x86_64_fb_console_force(void)
+{
+    g_console_taken = false;
+    fb_redraw();
 }
 
 /* --- the font system of /etc (ADR 0021) ----------------------------------- */

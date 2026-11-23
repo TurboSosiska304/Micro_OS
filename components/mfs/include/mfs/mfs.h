@@ -227,6 +227,17 @@ struct mfs_file {
      */
     k_u32_t chain_blocks;
     bool chain_blocks_valid;
+    /*
+     * The tail of the chain, as the append phase of a write left it. It is
+     * not the cursor above: a write grows the chain to the end of the call
+     * and then writes the bytes from the position of the descriptor, which
+     * is in front of the tail. One cursor cannot be both, and a write that
+     * made the position cursor follow the growth walked the chain from the
+     * head for every call - the square of the size of the file, again.
+     */
+    bool grow_valid;    /* grow_block is the tail of this chain */
+    k_u32_t grow_block; /* the block the last append left at the tail */
+    k_u32_t grow_index; /* the index of that block from the head, 0 based */
 };
 
 /* The information about the filesystem. */

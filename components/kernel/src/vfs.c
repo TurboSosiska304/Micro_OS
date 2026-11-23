@@ -710,6 +710,26 @@ int vfs_write(struct vfs_file *file, const void *buf, k_size_t size)
     return rc;
 }
 
+/*
+ * The control command of an open file (ADR 0028). The operation is the
+ * filesystem's, because the meaning of a request belongs to the object behind
+ * the descriptor: `/dev/fb0` takes a screen and a plain file of MicroFS has no
+ * command at all. A filesystem that leaves the operation empty answers
+ * KERR_INVAL, the number the call answered when it had no commands.
+ */
+int vfs_ioctl(struct vfs_file *file, k_u32_t request, k_u64_t arg)
+{
+    if (file == NULL || file->ops == NULL) {
+        return KERR_INVAL;
+    }
+
+    if (file->ops->ioctl == NULL) {
+        return KERR_INVAL;
+    }
+
+    return file->ops->ioctl(file->fs, file, request, arg);
+}
+
 int vfs_truncate(struct vfs_file *file, k_u64_t size)
 {
     int rc;

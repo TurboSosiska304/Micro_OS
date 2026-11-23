@@ -10,6 +10,60 @@ the MicroFS volume change by adding only.
 A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 (`vX.Y.Z-pre`) is a pre-release and must match `kernel_version()`.
 
+## [1.4.0] - 2026-11-23
+
+### Added
+
+- A volume of 5 GiB is an ordinary volume: `make x86-volume-smoke` writes the
+  images of ext2 and of MicroFS of the plan, boots each as the root of the
+  machine, writes a file of 128 MiB (16 MiB of MicroFS) and reads it back, and
+  then reads the image of the session with the tools of the world - `e2fsck
+  -fn` finds nothing to repair and `debugfs` sees the file, while the `fsck`
+  of the machine says the MicroFS volume is consistent. The image of ext2 is
+  sparse on the host (6 MB of a disk of 5 GiB), the file goes in at about
+  1.2 MiB/s and comes back at 4 MiB/s, and the map of the free blocks of the
+  MicroFS volume is 615 KiB of the heap. The target is not a part of `make ci`
+  (about four minutes) and `docs/wiki/files.md` has the numbers.
+- ext2 writes the double and the triple table of pointers: a file grows as far
+  as the format allows it (2 GiB of blocks of 1 KiB), so a file of 128 MiB of
+  a 5 GiB volume is one `write` after another and not the answer of a full
+  volume. [[`components/fs_ext2/src/ext2_write.c`]]
+- The superblock of an ext2 volume settles its counters of the free blocks and
+  the free inodes when an operation that allocates or frees is done (a close,
+  a create, a `mkdir`, an `unlink`, a cut): the root of the machine is never
+  unmounted, and `e2fsck -fn` of the host now finds a sound image after a
+  session instead of a superblock that lies about the volume.
+- `make sdk` writes the SDK of a program into `build-sdk/microos-sdk/<version>/`
+  (or `DESTDIR`): the headers of the library and of the ABI, the archive
+  `lib/libmicroos_user.a` built from those sources (35 objects, arena of
+  256 KiB, `-Os -ffreestanding -mno-red-zone -march=x86-64`), `crt0.o`,
+  `program.ld`, `mkprog.sh`, `link_program.sh`, `microos_sign`,
+  `share/microos-toolchain.cmake`, `share/build-libc.sh` with the sources,
+  and `share/examples/hello`. A program is built outside this tree with two
+  commands - `cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=<sdk>/share/...` and
+  `cmake --build build` - and no include path or library of its own
+  (`docs/porting-programs.md` §6, ADR 0025 §6). The example is 10 688 bytes
+  and runs from `/bin` on the machine of QEMU.
+
+### Fixed
+
+- MicroFS wrote a file of 16 MiB of a 5 GiB volume at 0.11 MiB/s: the growth
+  of the chain moved the cursor of the position of the descriptor, so a write
+  that grew the chain to the end of the call then walked it again from the
+  head for the block it was about to write - the square of the size of the
+  file. The append has a cursor of its own and the same file goes in at
+  1.9 MiB/s.
+- The walk of the table of the records of MicroFS read the block of the table
+  once per record (32 times the bytes of the table): `df`, `fsck` and the
+  line of the mount walked the 214 MB of the table of a 5 GiB volume 32 times.
+  One block of a cache in the filesystem makes the walk cost the table.
+- The wait of `execve` for the program it started was ten seconds, which a
+  file of 128 MiB of a large volume outran: the caller returned to the shell
+  while the program still wrote, and the next line of the shell was a second
+  writer of the same file - a volume that needed `e2fsck`. The wait is ten
+  minutes, and a program that outlasts it is told to stop with SIGINT and
+  given a second to answer before the caller gives up.
+
 ## [1.3.1] - 2026-11-23
 
 A patch of `1.3.0` for the three defects the first copyleft packages and the

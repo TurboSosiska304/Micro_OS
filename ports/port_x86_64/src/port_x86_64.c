@@ -26,6 +26,7 @@
 #include "kernel/port_task.h"
 #include "kernel/sched.h"
 #include "port_x86_64_console.h"
+#include "port_x86_64_screen.h"
 
 /* --- the machine --- */
 
@@ -201,6 +202,17 @@ void k_port_write(const char *data, k_size_t len)
     com1_write(data, len);
 
     k_port_exit_critical();
+}
+
+/*
+ * The panic of a machine with a picture: a program may hold the framebuffer
+ * (ADR 0028), and the message of the last resort has to be seen. The console
+ * grid comes back and the panic writes into it; COM1 carries the same bytes
+ * in either case.
+ */
+void k_port_console_panic(void)
+{
+    port_x86_64_fb_console_force();
 }
 
 int k_port_console_readline(char *buf, k_size_t size)
@@ -1412,7 +1424,7 @@ const char *k_port_arch(void)
 }
 
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 9u
+#define PORT_API_MINOR 10u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_x86_64 does not speak the contract of this kernel");

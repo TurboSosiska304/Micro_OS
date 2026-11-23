@@ -454,6 +454,22 @@ add_libc_program(pwd)
 add_libc_program(rm)
 add_libc_program(spawn)
 
+# --- the interface: /bin/ui (ADR 0028) --------------------------------------
+#
+# The first program of the skeleton: two devices of the devfs, a panel, a list
+# of windows and a window of the log. The font comes from the console of the
+# port and not from a second table, so the letters of the interface are the
+# letters of the shell and the picture of a screenshot is read with one table.
+# The program allocates nothing: its two buffers are part of the bss of the
+# image (the window of a transfer of the system and one line of pixels), and
+# the arena of the library is not linked into it.
+add_libc_program(ui
+    MAIN "${PROGRAM_DIR}/ui.c"
+    SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/font_spleen.c"
+            "${LIBC_USER_DIR}/src/usleep.c"
+    INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+
 # The first program of somebody else: zcat opens a .gz of the VFS through
 # zlib's gz* layer, inflates it and writes the bytes to the console or a
 # file. The heap of the program is 512 KiB because the state of an inflate
@@ -871,6 +887,17 @@ add_libc_program(truncate
     DEFINES ULIBC_HEAP_SIZE=65536u
 )
 
+# The file of the large volume (tools/x86_volume_smoke.py): megabytes
+# written and read back, through the double and the triple table of ext2 and
+# a chain of thousands of blocks of MicroFS. The buffer is the bss of the
+# image and not the heap, so the program costs nothing of the arena of the
+# tools and a file of 128 MiB is one chunk of 64 KiB after another.
+add_libc_program(mkbig
+    MAIN "${PROGRAM_DIR}/mkbig.c"
+    SOURCES ${SBASE_LIBC_SOURCES}
+    DEFINES ULIBC_HEAP_SIZE=65536u
+)
+
 function(add_sbase_program tool heap)
     add_libc_program(${tool}
         MAIN "${SBASE_DIR}/${tool}.c"
@@ -1261,6 +1288,8 @@ add_executable(microos64
     src/font_spleen.c
     src/pci.c
     src/ps2.c
+    src/fbdev.c
+    src/inputdev.c
     src/gdt.c
     src/paging.c
     src/cpu.c
