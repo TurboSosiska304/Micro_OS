@@ -229,8 +229,12 @@ int fat_dir_set(struct fat_volume *vol, k_u32_t dir_cluster, k_u32_t pos, k_u32_
 /* Write the "." and ".." entries of a fresh directory. */
 int fat_dir_init(struct fat_volume *vol, k_u32_t cluster, k_u32_t parent_cluster);
 
-/* Remove a file, or an empty directory, and give its chain back. */
+/* Remove a file and give its chain back; a directory is KERR_ISDIR. */
 int fat_dir_remove(struct fat_volume *vol, const char *path);
+
+/* Remove an empty directory and give its chain back; a file is
+ * KERR_NOTDIR. */
+int fat_dir_rmdir(struct fat_volume *vol, const char *path);
 
 /*
  * The same object under another name, inside the volume. A file may move to

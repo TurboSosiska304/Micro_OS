@@ -119,20 +119,7 @@ _Static_assert(MFS_BLOCK_SIZE % ATA_MEDIUM_SECTOR == 0,
  */
 #define ATA_ATTEMPTS 2u
 
-/* --- the bus, one word at a time --- */
-
-static inline void ata_outw(k_u16_t port, k_u16_t value)
-{
-    __asm__ volatile("outw %0, %1" : : "a"(value), "Nd"(port));
-}
-
-static inline k_u16_t ata_inw(k_u16_t port)
-{
-    k_u16_t value;
-
-    __asm__ volatile("inw %1, %0" : "=a"(value) : "Nd"(port));
-    return value;
-}
+/* --- the bus, one word of the protocol at a time --- */
 
 /*
  * After the drive is selected the registers of the channel need 400 ns to
@@ -201,29 +188,27 @@ static bool ata_wait(k_u8_t mask)
     }
 }
 
-/* The words of one sector, as the bytes of the caller: the port is 16 bits
- * and the memory of the machine is little endian, so low byte first. */
+/*
+ * The words of one sector, as the bytes of the caller. The port is 16 bits
+ * and the memory of the machine is little endian, so the words of the drive
+ * are the words of the buffer - the run of `insl`/`outsl` needs no swap and
+ * no byte at a time loop. The transfer is 32 bits wide (the 32-bit PIO of
+ * the PC after 1994, and of the machine of this port): the two words of the
+ * data register travel in one turn of the bus, and the low word of the
+ * memory goes first, which is the order the port takes them.
+ *
+ * The drive asks for a transfer sector by sector (DRQ is raised for all of
+ * them, the count of the sector is the unit of the FIFO), so the run is one
+ * sector long and the caller waits between the runs.
+ */
 static void ata_read_words(k_u8_t *buf)
 {
-    k_size_t i;
-
-    for (i = 0; i < ATA_MEDIUM_SECTOR; i += 2u) {
-        k_u16_t word = ata_inw(ATA_IO + ATA_DATA);
-
-        buf[i] = (k_u8_t)(word & 0xFFu);
-        buf[i + 1u] = (k_u8_t)(word >> 8);
-    }
+    port_insl(ATA_IO + ATA_DATA, buf, ATA_MEDIUM_SECTOR / 4u);
 }
 
 static void ata_write_words(const k_u8_t *buf)
 {
-    k_size_t i;
-
-    for (i = 0; i < ATA_MEDIUM_SECTOR; i += 2u) {
-        k_u16_t word = (k_u16_t)((k_u16_t)buf[i] | ((k_u16_t)buf[i + 1u] << 8));
-
-        ata_outw(ATA_IO + ATA_DATA, word);
-    }
+    port_outsl(ATA_IO + ATA_DATA, buf, ATA_MEDIUM_SECTOR / 4u);
 }
 
 /*
@@ -467,7 +452,6 @@ static bool ata_identify(k_u32_t *medium_sectors)
     k_u16_t identity[256];
     k_u32_t capacity;
     k_u8_t status;
-    k_size_t i;
 
     port_outb(ATA_IO + ATA_DRIVE, ATA_DRIVE_MASTER);
     ata_delay();
@@ -495,9 +479,9 @@ static bool ata_identify(k_u32_t *medium_sectors)
         return false;
     }
 
-    for (i = 0; i < K_ARRAY_SIZE(identity); i++) {
-        identity[i] = ata_inw(ATA_IO + ATA_DATA);
-    }
+    /* The identity is 256 words of the port, and the buffer holds them in
+     * the order the drive sends them: one run, as the sector of a disk. */
+    port_insw(ATA_IO + ATA_DATA, identity, K_ARRAY_SIZE(identity));
 
     capacity = (k_u32_t)identity[60] | ((k_u32_t)identity[61] << 16);
 
@@ -521,6 +505,7 @@ static bool ata_identify(k_u32_t *medium_sectors)
  */
 void port_x86_64_disk_init(void)
 {
+    const struct k_blockdev *disk;
     const char *first;
     int partitions;
 
@@ -539,14 +524,36 @@ void port_x86_64_disk_init(void)
     g_sectors = g_medium_sectors / ATA_SECTORS_PER_BLOCK;
     g_ata_device.sectors = g_sectors;
 
-    if (k_blockdev_register(&g_ata_device) != 0) {
+    /*
+     * The platter is the slowest thing the machine has, and a filesystem
+     * touches the metadata of a volume again for every block it allocates:
+     * the block layer keeps the last sectors of the disk between the
+     * filesystem and the port, and holds the writes back until a sync or
+     * until the cache needs the room - a run of sectors then leaves it as
+     * one command of the drive. The filesystems of this machine sync when
+     * they close a file and when they unmount, so what a call returned
+     * survives the machine.
+     */
+    if (k_blockdev_register_cached(&g_ata_device, true) != 0) {
         kerror("ata0: cannot register the disk");
         return;
     }
 
     kinfo("ata0: %u MB on the primary channel", (unsigned)(g_medium_sectors / 2048u));
 
-    partitions = partition_scan(&g_ata_device);
+    /*
+     * The scan reads through the device the table hands out, not through the
+     * structure of the platform: that is the view with the cache, and the
+     * partitions keep the parent they were found on - so a read of a
+     * partition reaches the cache of the disk below it.
+     */
+    disk = k_blockdev_find(g_ata_device.name);
+
+    if (disk == NULL) {
+        disk = &g_ata_device;
+    }
+
+    partitions = partition_scan(disk);
 
     if (partitions == KERR_NOENT) {
         kinfo("ata0: no partition table, the disk is not used");
@@ -559,7 +566,7 @@ void port_x86_64_disk_init(void)
     }
 
     /* The first partition is the root of the machine. */
-    first = partition_name(&g_ata_device, 0);
+    first = partition_name(disk, 0);
 
     if (first == NULL) {
         return;

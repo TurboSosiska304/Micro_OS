@@ -4,6 +4,7 @@
 
 #include "kernel/errno.h"
 #include "kernel/log.h"
+#include "kernel/task.h"
 
 struct mount {
     char point[VFS_PATH_MAX];
@@ -19,6 +20,7 @@ static k_size_t g_type_count;
 
 static int stat_raw(const char *path, struct vfs_stat *out);
 static int mount_point_check(const char *point);
+static k_u32_t caller_uid(void);
 
 /*
  * Whether a point is the path of a mount: an absolute path, without a
@@ -129,6 +131,11 @@ int vfs_umount(const char *point)
 {
     k_size_t i;
     k_size_t j;
+
+    /* Mounting and unmounting are acts of the administrator of the machine. */
+    if (caller_uid() != VFS_UID) {
+        return KERR_PERM;
+    }
 
     if (!point_is_clean(point)) {
         return KERR_INVAL;
@@ -273,6 +280,16 @@ int vfs_mount_type(const char *point, const char *type, const char *device)
     int index;
     int rc;
 
+    /*
+     * The table of the volumes is the machine, not one user's view of it:
+     * only root changes it, and the answer names the privilege before the
+     * type of the argument. vfs_mount() itself stays open: it is what the
+     * mount function of a type calls once this door has let it through.
+     */
+    if (caller_uid() != VFS_UID) {
+        return KERR_PERM;
+    }
+
     if (!point_is_clean(point) || type == NULL) {
         return KERR_INVAL;
     }
@@ -379,16 +396,40 @@ static const struct mount *resolve(const char *path, const char **relative)
 
 /* The bits of one triad of a mode: read, write, execute. */
 #define VFS_MODE_EXEC 01u
+#define VFS_MODE_TRIAD 07u
 
 /*
- * The bits of a mode that decide for the caller, which is the one user of
- * the system (VFS_UID). There is no bypass for that uid: an object of another
- * owner is answered by the triad of the others, because the caller is not its
- * owner and the system has no group of its own (ADR 0005).
+ * The uid the call is made for. A task without a record is the boot of the
+ * kernel before the scheduler runs, which is root; the credentials of a task
+ * are its own and change only through setuid, which root starts.
+ */
+static k_u32_t caller_uid(void)
+{
+    struct task *self = task_self();
+
+    return (self != NULL) ? task_get_uid(self) : VFS_UID;
+}
+
+/*
+ * The bits of a mode that decide for the caller. Root passes every triad;
+ * a task whose uid is the owner of the object reads the triad of the owner;
+ * every other task reads the triad of the others, because no filesystem of
+ * this system stores a group and the group triad is therefore never the
+ * answer (docs/debts.md).
+ *
+ * The bypass of root is the rule of POSIX with the one exception of the
+ * execute bit, which the caller of execve checks itself: root runs a file
+ * that has an x bit for somebody, not a file with no x bit at all.
  */
 static k_u32_t caller_bits(const struct vfs_stat *info)
 {
-    return (info->owner == VFS_UID) ? ((info->mode >> 6) & 7u) : (info->mode & 7u);
+    k_u32_t uid = caller_uid();
+
+    if (uid == VFS_UID) {
+        return VFS_MODE_TRIAD;
+    }
+
+    return (info->owner == uid) ? ((info->mode >> 6) & 7u) : (info->mode & 7u);
 }
 
 /*
@@ -645,6 +686,22 @@ int vfs_open(const char *path, int flags, struct vfs_file *out, void *priv)
     rc = path_search_check(path);
     if (rc != 0) {
         return rc;
+    }
+
+    /*
+     * The exclusive create is decided here, before the filesystem sees the
+     * flags: the answer is about the name of the tree and not about the
+     * shape of one format. A name that is there is KERR_EXIST and the
+     * filesystem is not asked to open it - a second task that raced this
+     * one may still have made it, but the open it makes is then a plain
+     * create of a name that its own check saw free.
+     */
+    if ((flags & VFS_O_EXCL) != 0 && (flags & VFS_O_CREAT) != 0) {
+        struct vfs_stat existing;
+
+        if (stat_raw(path, &existing) == 0) {
+            return KERR_EXIST;
+        }
     }
 
     /* The descriptor of the caller is not initialised: the offset and the
@@ -1039,6 +1096,27 @@ int vfs_unlink(const char *path)
  * searchable - and the filesystem of the first decides for the second: two
  * mounts are two volumes, and a copy between them is not a rename.
  */
+int vfs_rmdir(const char *path)
+{
+    const struct mount *m = resolve(path, NULL);
+    int rc;
+
+    if (m == NULL) {
+        return KERR_NOENT;
+    }
+
+    rc = path_search_check(path);
+    if (rc != 0) {
+        return rc;
+    }
+
+    if (m->ops->rmdir == NULL) {
+        return KERR_NOTSUP;
+    }
+
+    return m->ops->rmdir(m->ctx, path);
+}
+
 int vfs_rename(const char *from, const char *to)
 {
     const struct mount *source;
@@ -1080,6 +1158,7 @@ int vfs_rename(const char *from, const char *to)
 int vfs_chmod(const char *path, k_u32_t mode)
 {
     const struct mount *m = resolve(path, NULL);
+    struct vfs_stat info;
     int rc;
 
     if (m == NULL) {
@@ -1095,10 +1174,25 @@ int vfs_chmod(const char *path, k_u32_t mode)
      * A filesystem without modes answers KERR_NOTSUP, the same as every
      * operation it does not have: the call is not forbidden, the object has
      * no such attribute. A number stored nowhere would be a lie to the
-     * caller.
+     * caller. The question is asked before the owner of the object, because
+     * it is about the filesystem and not about the caller.
      */
     if (m->ops->chmod == NULL) {
         return KERR_NOTSUP;
+    }
+
+    /*
+     * The mode belongs to the owner of the object and to root. A task of
+     * another uid cannot reach the object at all, and one that can reach it
+     * still cannot change what its bits say.
+     */
+    rc = stat_raw(path, &info);
+    if (rc != 0) {
+        return rc;
+    }
+
+    if (caller_uid() != VFS_UID && info.owner != caller_uid()) {
+        return KERR_PERM;
     }
 
     rc = m->ops->chmod(m->ctx, path, mode);
@@ -1118,6 +1212,11 @@ int vfs_chown(const char *path, k_u32_t owner)
     rc = path_search_check(path);
     if (rc != 0) {
         return rc;
+    }
+
+    /* Giving an object away is the act of root and of nobody else. */
+    if (caller_uid() != VFS_UID) {
+        return KERR_PERM;
     }
 
     if (m->ops->chown == NULL) {

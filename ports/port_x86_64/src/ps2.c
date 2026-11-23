@@ -11,11 +11,12 @@
  *
  * The map below is the US layout, which is the one the scancodes of the
  * machine carry: letters, digits, the punctuation of a command line and the
- * three keys a line needs (Enter, Backspace and Ctrl+C). What is missing is
- * missing on purpose, and the documentation of the port says so: the E0
- * sequences (the arrows, the keypad of the second form, the right Ctrl) are
- * dropped whole, the function keys type nothing, and there is no repeat of
- * a held key of its own because the device repeats it.
+ * keys a line needs (Enter, Backspace and Ctrl+C). The E0 sequences arrived
+ * with the interface of 1.4.0: the arrows, Home, End, Insert and Delete have
+ * a name and an event now (`kernel/input_set1.h`), the right Ctrl is the
+ * modifier of the same form and the Enter and the slash of the keypad still
+ * type their character for the shell. The function keys type nothing and
+ * there is no repeat of a held key of its own because the device repeats it.
  *
  * Since ADR 0028 every key of the set has a name as well and the handler
  * pushes an event beside the character (`/dev/input0`): the Tab, the function
@@ -25,6 +26,7 @@
 #include "port_x86_64_console.h"
 
 #include "kernel/input.h"
+#include "kernel/input_set1.h"
 #include "kernel/port/lock.h"
 #include "kernel/port/time.h"
 #include "port_x86_64.h"
@@ -84,8 +86,15 @@ static bool g_shift_right;
 static bool g_ctrl;
 static bool g_caps;
 
-/* An E0 (or E1) sequence is two or more bytes, and none of the keys behind
- * it is the console's: the flag drops the byte that follows it. */
+/* The byte behind 0xE0 belongs to the second form of the set: the arrows,
+ * Home, End, Insert, Delete, the keypad Enter, the right Ctrl. The prefix is
+ * one byte of state, and the key it carries goes down and up like any other
+ * (the break code is 0xE0 followed by the address with the top bit set). */
+static bool g_extended;
+
+/* 0xE1 (the Pause of a PC) is a sequence of six bytes and none of them is a
+ * key of this console: the byte after it is dropped, as the whole sequence
+ * was before the arrows arrived. */
 static bool g_skip_next;
 
 /*
@@ -249,155 +258,6 @@ static char key_translate(k_u8_t scancode)
     return plain;
 }
 
-/* The name of the key a scancode of the set 1 means, or K_INPUT_KEY_NONE when
- * it is not a key of the contract. The table is the one of the characters
- * above in another shape: a key that types nothing (a modifier, a function
- * key) has no character, and a key that types something still has a name. */
-static k_u16_t key_code(k_u8_t scancode)
-{
-    switch (scancode) {
-    case 0x1Eu:
-        return K_INPUT_KEY_A;
-    case 0x30u:
-        return K_INPUT_KEY_B;
-    case 0x2Eu:
-        return K_INPUT_KEY_C;
-    case 0x20u:
-        return K_INPUT_KEY_D;
-    case 0x12u:
-        return K_INPUT_KEY_E;
-    case 0x21u:
-        return K_INPUT_KEY_F;
-    case 0x22u:
-        return K_INPUT_KEY_G;
-    case 0x23u:
-        return K_INPUT_KEY_H;
-    case 0x17u:
-        return K_INPUT_KEY_I;
-    case 0x24u:
-        return K_INPUT_KEY_J;
-    case 0x25u:
-        return K_INPUT_KEY_K;
-    case 0x26u:
-        return K_INPUT_KEY_L;
-    case 0x32u:
-        return K_INPUT_KEY_M;
-    case 0x31u:
-        return K_INPUT_KEY_N;
-    case 0x18u:
-        return K_INPUT_KEY_O;
-    case 0x19u:
-        return K_INPUT_KEY_P;
-    case 0x10u:
-        return K_INPUT_KEY_Q;
-    case 0x13u:
-        return K_INPUT_KEY_R;
-    case 0x1Fu:
-        return K_INPUT_KEY_S;
-    case 0x14u:
-        return K_INPUT_KEY_T;
-    case 0x16u:
-        return K_INPUT_KEY_U;
-    case 0x2Fu:
-        return K_INPUT_KEY_V;
-    case 0x11u:
-        return K_INPUT_KEY_W;
-    case 0x2Du:
-        return K_INPUT_KEY_X;
-    case 0x15u:
-        return K_INPUT_KEY_Y;
-    case 0x2Cu:
-        return K_INPUT_KEY_Z;
-    case 0x0Bu:
-        return K_INPUT_KEY_0;
-    case 0x02u:
-        return K_INPUT_KEY_1;
-    case 0x03u:
-        return K_INPUT_KEY_2;
-    case 0x04u:
-        return K_INPUT_KEY_3;
-    case 0x05u:
-        return K_INPUT_KEY_4;
-    case 0x06u:
-        return K_INPUT_KEY_5;
-    case 0x07u:
-        return K_INPUT_KEY_6;
-    case 0x08u:
-        return K_INPUT_KEY_7;
-    case 0x09u:
-        return K_INPUT_KEY_8;
-    case 0x0Au:
-        return K_INPUT_KEY_9;
-    case 0x1Cu:
-        return K_INPUT_KEY_ENTER;
-    case 0x01u:
-        return K_INPUT_KEY_ESC;
-    case 0x0Fu:
-        return K_INPUT_KEY_TAB;
-    case 0x0Eu:
-        return K_INPUT_KEY_BACKSPACE;
-    case 0x39u:
-        return K_INPUT_KEY_SPACE;
-    case 0x0Cu:
-        return K_INPUT_KEY_MINUS;
-    case 0x0Du:
-        return K_INPUT_KEY_EQUAL;
-    case 0x1Au:
-        return K_INPUT_KEY_LEFTBRACE;
-    case 0x1Bu:
-        return K_INPUT_KEY_RIGHTBRACE;
-    case 0x2Bu:
-        return K_INPUT_KEY_BACKSLASH;
-    case 0x27u:
-        return K_INPUT_KEY_SEMICOLON;
-    case 0x28u:
-        return K_INPUT_KEY_APOSTROPHE;
-    case 0x29u:
-        return K_INPUT_KEY_GRAVE;
-    case 0x33u:
-        return K_INPUT_KEY_COMMA;
-    case 0x34u:
-        return K_INPUT_KEY_DOT;
-    case 0x35u:
-        return K_INPUT_KEY_SLASH;
-    case 0x3Au:
-        return K_INPUT_KEY_CAPSLOCK;
-    case 0x2Au: /* left shift */
-    case 0x36u: /* right shift */
-        return K_INPUT_KEY_SHIFT;
-    case 0x1Du:
-        return K_INPUT_KEY_CTRL;
-    case 0x38u:
-        return K_INPUT_KEY_ALT;
-    case 0x3Bu:
-        return K_INPUT_KEY_F1;
-    case 0x3Cu:
-        return K_INPUT_KEY_F2;
-    case 0x3Du:
-        return K_INPUT_KEY_F3;
-    case 0x3Eu:
-        return K_INPUT_KEY_F4;
-    case 0x3Fu:
-        return K_INPUT_KEY_F5;
-    case 0x40u:
-        return K_INPUT_KEY_F6;
-    case 0x41u:
-        return K_INPUT_KEY_F7;
-    case 0x42u:
-        return K_INPUT_KEY_F8;
-    case 0x43u:
-        return K_INPUT_KEY_F9;
-    case 0x44u:
-        return K_INPUT_KEY_F10;
-    case 0x57u:
-        return K_INPUT_KEY_F11;
-    case 0x58u:
-        return K_INPUT_KEY_F12;
-    default:
-        return K_INPUT_KEY_NONE;
-    }
-}
-
 /*
  * One byte of the device. The break codes are the make codes with the bit 7
  * set, so a key that goes up is the same number: the modifiers are tracked
@@ -406,15 +266,27 @@ static k_u16_t key_code(k_u8_t scancode)
  * Every byte is also an event of `/dev/input0` (ADR 0028), both edges
  * included: an interface that draws a key being held needs the release, which
  * the character stream of the console has no way to say.
+ *
+ * The E0 prefix is a key of the second form and not a byte to drop (1.4.0):
+ * the arrows, Home, End, Insert and Delete have no address of the first 128,
+ * and a program of a text already asks for them. The right Ctrl is the
+ * modifier of the same form, and the Enter and the slash of the keypad still
+ * type their character for the shell.
  */
 static void key_handle(k_u8_t code)
 {
     bool released;
+    bool extended;
     k_u8_t scancode;
     k_u16_t key;
     char character;
 
-    if (code == 0xE0u || code == 0xE1u) {
+    if (code == 0xE0u) {
+        g_extended = true;
+        return;
+    }
+
+    if (code == 0xE1u) {
         g_skip_next = true;
         return;
     }
@@ -424,12 +296,35 @@ static void key_handle(k_u8_t code)
         return;
     }
 
+    extended = g_extended;
+    g_extended = false;
     released = (code & 0x80u) != 0;
     scancode = code & 0x7Fu;
-    key = key_code(scancode);
+    key = k_input_set1_key(scancode, extended);
 
     if (key != K_INPUT_KEY_NONE) {
         event_push(key, released ? INPUT_VALUE_RELEASE : INPUT_VALUE_PRESS);
+    }
+
+    if (extended) {
+        /* The right Ctrl is a modifier of the second form; the right Alt and
+         * the rest of the block are events and no characters of the console. */
+        if (scancode == 0x1Du) {
+            g_ctrl = !released;
+            return;
+        }
+
+        if (released || g_capture) {
+            return;
+        }
+
+        /* The Enter and the slash of the keypad are the keys the shell types. */
+        if (scancode == 0x1Cu) {
+            key_push('\r');
+        } else if (scancode == 0x35u) {
+            key_push('/');
+        }
+        return;
     }
 
     switch (scancode) {

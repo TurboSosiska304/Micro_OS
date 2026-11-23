@@ -313,6 +313,22 @@ COMMANDS = [
     # The same again, after the page tables and the frames of the first run
     # have been released: a leak of a space would show here as a refusal.
     "exec /bin/fork",
+    # The POSIX pair of a program (M1 of plan-1.5): a child that computes and
+    # returns its status, a double fork, and an execve that replaces the child
+    # itself instead of starting a second task.
+    "exec /bin/procs",
+    # The state of the floating point unit at a switch (K9): a parent and two
+    # children compute in `double` at the same time, and each of them prints
+    # the numbers of the registers it kept across many quanta.
+    "exec /bin/fpu2",
+    # A pipeline is not three stages any more. The line holds ten of them, and
+    # the pipes are made one boundary at a time, so the descriptor table of
+    # the shell holds two ends and not eighteen.
+    "cat /etc/setting | cat | cat | cat | cat | cat | cat | cat | cat | wc -l",
+    # `xargs -P` starts its commands as children of its own and runs four of
+    # them at once: each line is a child that was told to run /bin/echo, and a
+    # child of a fork cannot be one without the POSIX execve.
+    "echo one two three four five six | xargs -P 4 -n 1 echo done",
     # The signals of K7: a handler of the program, a child ended by SIGTERM,
     # a wait cut short by SIGINT and the errors of kill.
     "exec /bin/signals",
@@ -1641,6 +1657,8 @@ def check(output: str) -> list:
                 "fork",
                 "badptr",
                 "signals",
+                "procs",
+                "fpu2",
                 "nx",
                 "cat",
                 "echo",
@@ -1649,7 +1667,9 @@ def check(output: str) -> list:
                 "head",
                 "grep",
                 "mkdir",
+                "mv",
                 "rm",
+                "rmdir",
                 "pwd",
                 "spawn",
                 "zcat",
@@ -2376,7 +2396,10 @@ def check(output: str) -> list:
         "PROGRAM: envp 2, PATH=/custom" in spawn,
     )
     expect("the started program gets its arguments", "PROGRAM: argc 2, argv[0] hello" in spawn)
-    expect("the outer program waits for the inner one", "the program has finished" in spawn)
+    expect(
+        "the shell sees the program that replaced spawn finish",
+        "the program has finished" in spawn,
+    )
 
     # --- the pipes and the redirects of K7 (ADR 0017)
     # `echo hi > /tmp/f` is a builtin that writes descriptor 1, which the
@@ -2494,6 +2517,109 @@ def check(output: str) -> list:
         "PROGRAM: parent sees value 42" in fork
         and "PROGRAM: waited, status 7" in fork
         and "the program exited with 0" in fork,
+    )
+
+    # --- the processes of a program: the POSIX pair of M1
+    #
+    # A program now has the POSIX fork/execve/waitpid: the child of a fork is a
+    # task with a copy of the memory, execve of a program replaces the image
+    # of the caller, and waitpid reaps the child and hands back its status.
+    procs = answer("exec /bin/procs")
+    expect(
+        "a child of a program computes and returns its status",
+        "PROGRAM: child computed 55" in procs
+        and "PROGRAM: first child status 55" in procs,
+        procs,
+    )
+    expect(
+        "the parent of a program gets the pid of its child",
+        re.search(r"PROGRAM: the parent got the pid [1-9][0-9]*", procs) is not None,
+        procs,
+    )
+    expect(
+        "a double fork hands two statuses up",
+        "PROGRAM: middle waited, status 3" in procs
+        and "PROGRAM: double fork status 4" in procs,
+        procs,
+    )
+    # The child called execvp("/bin/echo"): if the call had started another
+    # task and returned, the child would have printed its line after the call
+    # and ended with 9, and the status would not be 0.
+    expect(
+        "an execve of a program replaces the child that called it",
+        "PROGRAM: the exec child" in procs
+        and "PROGRAM: execve returned" not in procs
+        and "PROGRAM: exec child status 0" in procs,
+        procs,
+    )
+    expect(
+        "the program of the processes ends with 0",
+        procs.count("PROGRAM: procs ends") == 1
+        and "the program exited with 0" in procs
+        and "the program has finished" in procs,
+        procs,
+    )
+
+    # --- the floating point state of a task (K9)
+    #
+    # The parent and its two children keep a pair of doubles in the XMM
+    # registers across a loop of three million iterations each, and the
+    # scheduler switches between them many times in the middle of it. The
+    # arithmetic is exact (a multiplication by two and by one half), so the
+    # three lines are the values of three sets of registers: a kernel that
+    # saves the general registers and not the floating point unit lets the
+    # tasks read each other's numbers, and one of the lines is wrong.
+    fpu = answer("exec /bin/fpu2")
+    expect(
+        "the parent keeps its own registers across the switches",
+        "FPU: parent 1.000000000000 1.000000000000" in fpu,
+        fpu,
+    )
+    expect(
+        "the two children keep their own registers as well",
+        "FPU: child 3 3.000000000000 0.333333333333" in fpu
+        and "FPU: child 7 7.000000000000 0.142857142857" in fpu,
+        fpu,
+    )
+    # The third child dirties the unit and calls execve of this same image
+    # with `state`: a new image begins after fninit, so the control word is
+    # 037f and MXCSR is 1f80 whatever the old image left.
+    expect(
+        "a new image of execve starts with the clean state",
+        "FPU: state 037f 1f80" in fpu,
+        fpu,
+    )
+    expect(
+        "the children of the FPU test all finish",
+        "FPU: all children ended, 0 failure(s)" in fpu
+        and "the program exited with 0" in fpu,
+        fpu,
+    )
+
+    # --- a pipeline deeper than the table of three
+    deep = answer("cat /etc/setting | cat | cat | cat | cat | cat | cat | cat | cat | wc -l")
+    expect(
+        "a pipeline of ten stages carries the bytes to its end",
+        re.search(r"(?m)^3\r?$", deep) is not None,
+        deep,
+    )
+    expect(
+        "every stage of a pipeline of ten is gone before the prompt",
+        "cannot start stage" not in deep and "too many stages" not in deep,
+        deep,
+    )
+
+    # --- xargs -P: the children of a program
+    parallel = answer("echo one two three four five six | xargs -P 4 -n 1 echo done")
+    expect(
+        "xargs -P runs every command as a child",
+        all(f"done {word}" in parallel for word in ("one", "two", "three", "four", "five", "six")),
+        parallel,
+    )
+    expect(
+        "xargs -P does not duplicate the commands of its copies",
+        parallel.count("done ") == 6 and "execvp" not in parallel,
+        parallel,
     )
 
     # --- signals: a handler, SIG_DFL, SIG_IGN and a wait cut short

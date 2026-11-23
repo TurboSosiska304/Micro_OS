@@ -47,8 +47,13 @@ who wants to use the system, not a second copy of the contract.
 | 33 | `setlimit` | lower one of them |
 | 34 | `rename` | a name of an object inside one filesystem |
 | 35 | `ftruncate` | cut an open file to a size |
+| 36 | `getuid` | the uid of the task |
+| 37 | `geteuid` | the uid of the task (one credential) |
+| 38 | `getgid` | the gid of the task |
+| 39 | `setuid` | change the uid: root names any, another task itself |
+| 40 | `setgid` | change the gid by the same rule |
 
-`36` is the count, not a call. A number that is not in the table is `ENOSYS`;
+`41` is the count, not a call. A number that is not in the table is `ENOSYS`;
 a new call always takes the next free number, and an old one never moves. The
 shell prints the same table with `abi`:
 
@@ -69,7 +74,12 @@ nr    name
 33    setlimit
 34    rename
 35    ftruncate
-36 call(s) registered
+36    getuid
+37    geteuid
+38    getgid
+39    setuid
+40    setgid
+41 call(s) registered
 ```
 
 The convention is the one of Linux: the number and six arguments, the result in
@@ -171,8 +181,8 @@ A task starts with the ceiling of three resources and may only lower them:
 the memory it holds (2 MiB), the processor time it spends (about 49 days) and
 the descriptors it opens (16). `setlimit` (33) takes a selector
 (`KSYS_RLIMIT_MEMORY`, `_CPU`, `_FDS`) and a value; `getlimit` (32) copies the
-current limit to the caller. A raise is `EPERM`: there is one user, uid 0, and
-it gets no exemption, so a program cannot lift its own ceiling.
+current limit to the caller. A raise is `EPERM`: the ceiling belongs to the
+machine, and even root cannot lift a limit.
 
 The memory is the sum of the user blocks of the task - the kernel and the
 system utilities are not charged - and a block over it is 0 from `malloc`
@@ -193,13 +203,18 @@ Every object has nine bits of `rwx` and a uid of fifteen bits, stored in the
 spare bits of its MicroFS record ([`docs/memory.md`](../memory.md#6-the-record-of-an-inode)).
 A new file is `0644`, a new directory `0755`, and the owner is 0.
 
-The system has **one user**, uid 0, and it gets **no exemption of root**: a file
-of mode `0200` cannot be read by the only user of the system either. An object
-owned by uid 0 is judged by the triad of the owner, one owned by any other
-number by the triad of the others, because there is no group here. `open`
-compares its access with the mode before a descriptor exists, so every
-filesystem answers a forbidden open the same way (`EPERM`); `execve` needs the
-`x` bit; `stat` reports and checks nothing, as in POSIX.
+Every task has a **uid** and a **gid**, inherited from the task that made it
+(`getuid` 36, `geteuid` 37, `getgid` 38, `setuid` 39, `setgid` 40). Root is
+uid 0 and it passes the triads of read and write: a file of mode `0200` is
+read by root, and one of `0400` is written by it. An object owned by the uid
+of the task is judged by the triad of the owner, one owned by any other
+number by the triad of the others, because no filesystem stores a group. The
+execute bit is the exception: `execve` needs an `x` bit for somebody, root
+included. `open` compares its access with the mode before a descriptor
+exists, so every filesystem answers a forbidden open the same way (`EPERM`);
+`stat` reports and checks nothing, as in POSIX. `chmod` is the owner or root,
+`chown`, `mount` and `umount` are root, and a signal to a task of another uid
+is `EPERM`.
 
 A mode outside the nine bits and an owner outside the fifteen are `EINVAL`, not
 a number cut to fit. `chmod 000` is not expressible: a zero in the record means

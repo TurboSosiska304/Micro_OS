@@ -7,6 +7,7 @@
 #include "fs_fat32/fat.h"
 #include "kernel/blockdev.h"
 #include "kernel/errno.h"
+#include "kernel/task.h"
 #include "kernel/vfs.h"
 #include "mfs/mfs.h"
 #include "mfs/mfs_ram_device.h"
@@ -106,7 +107,7 @@ static void test_directories(void)
         KT_CHECK_INT_EQ(entries[0].type, 2);
     }
 
-    KT_CHECK_INT_EQ(vfs_unlink("/etc"), 0);
+    KT_CHECK_INT_EQ(vfs_rmdir("/etc"), 0);
     KT_CHECK_INT_EQ(vfs_list("/", entries, 16, &count), 0);
     KT_CHECK_INT_EQ(count, 0);
 
@@ -118,7 +119,9 @@ static void test_directories(void)
      */
     KT_CHECK_INT_EQ(vfs_mkdir("/full"), 0);
     KT_CHECK_INT_EQ(mfs_create("/full/file.txt"), MFS_OK);
-    KT_CHECK_INT_EQ(vfs_unlink("/full"), KERR_NOTEMPTY);
+    KT_CHECK_INT_EQ(vfs_unlink("/full"), KERR_ISDIR);
+    KT_CHECK_INT_EQ(vfs_rmdir("/full"), KERR_NOTEMPTY);
+    KT_CHECK_INT_EQ(vfs_rmdir("/nothing-here"), KERR_NOENT);
     KT_CHECK_INT_EQ(vfs_unlink("/nothing-here"), KERR_NOENT);
 
     teardown();
@@ -338,8 +341,16 @@ static void test_directory_search(void)
     KT_CHECK_INT_EQ(vfs_open("/locked/inside.txt", VFS_O_RDWR | VFS_O_CREAT, &file, file_data), 0);
     KT_CHECK_INT_EQ(vfs_close(&file), 0);
 
-    /* Read and write for the owner but no search: the child is hidden. */
+    /*
+     * Read and write for the owner but no search: the child is hidden. Root
+     * passes the search, so the directory is given to uid 7 and the runner
+     * walks it as that user.
+     */
+    KT_CHECK_INT_EQ(vfs_chown("/locked", 7), 0);
+    KT_CHECK_INT_EQ(vfs_chown("/locked/inside.txt", 7), 0);
     KT_CHECK_INT_EQ(vfs_chmod("/locked", 0600), 0);
+    task_set_uid(task_self(), 7);
+
     KT_CHECK_INT_EQ(vfs_open("/locked/inside.txt", VFS_O_RDONLY, &file, file_data), KERR_PERM);
     KT_CHECK_INT_EQ(vfs_stat("/locked/inside.txt", &stat), KERR_PERM);
 
@@ -347,6 +358,7 @@ static void test_directory_search(void)
      * object of it, so a directory without the search bit keeps them out. */
     KT_CHECK_INT_EQ(vfs_mkdir("/locked/newdir"), KERR_PERM);
     KT_CHECK_INT_EQ(vfs_unlink("/locked/inside.txt"), KERR_PERM);
+    KT_CHECK_INT_EQ(vfs_rmdir("/locked/newdir"), KERR_PERM);
     KT_CHECK_INT_EQ(vfs_chmod("/locked/inside.txt", 0644), KERR_PERM);
     KT_CHECK_INT_EQ(vfs_chown("/locked/inside.txt", 7), KERR_PERM);
 
@@ -354,14 +366,19 @@ static void test_directory_search(void)
     KT_CHECK_INT_EQ(vfs_stat("/locked", &stat), 0);
 
     /* Search for the owner: the child is reachable again, and the parent of
-     * a new object is reached as well. */
+     * a new object is reached as well. The owner changes the mode of what it
+     * owns; giving the object away stays the act of root. */
     KT_CHECK_INT_EQ(vfs_chmod("/locked", 0700), 0);
     KT_CHECK_INT_EQ(vfs_open("/locked/inside.txt", VFS_O_RDONLY, &file, file_data), 0);
     KT_CHECK_INT_EQ(vfs_close(&file), 0);
     KT_CHECK_INT_EQ(vfs_stat("/locked/inside.txt", &stat), 0);
     KT_CHECK_INT_EQ(vfs_mkdir("/locked/newdir"), 0);
-    KT_CHECK_INT_EQ(vfs_unlink("/locked/newdir"), 0);
+    KT_CHECK_INT_EQ(vfs_rmdir("/locked/newdir"), 0);
     KT_CHECK_INT_EQ(vfs_chmod("/locked/inside.txt", 0644), 0);
+    KT_CHECK_INT_EQ(vfs_chown("/locked/inside.txt", 7), KERR_PERM);
+
+    /* Root gives it away, and the record is the one that was written. */
+    task_set_uid(task_self(), 0);
     KT_CHECK_INT_EQ(vfs_chown("/locked/inside.txt", 7), 0);
     KT_CHECK_INT_EQ(vfs_stat("/locked/inside.txt", &stat), 0);
     KT_CHECK_INT_EQ(stat.mode, 0644);
@@ -377,7 +394,7 @@ static void test_directory_search(void)
 
     /* The root is passed through by every path and works as before. */
     KT_CHECK_INT_EQ(vfs_mkdir("/top"), 0);
-    KT_CHECK_INT_EQ(vfs_unlink("/top"), 0);
+    KT_CHECK_INT_EQ(vfs_rmdir("/top"), 0);
 
     /*
      * A filesystem that keeps no modes is walked the way it always was: a

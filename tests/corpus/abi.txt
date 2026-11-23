@@ -32,7 +32,7 @@
 # second door of stat, ADR 0013).
 
 # The number of the calls, compared with ksys_count().
-count 36
+count 43
 
 # The table: number name arity result.
 #
@@ -83,6 +83,13 @@ ksys 32 getlimit 2 int
 ksys 33 setlimit 2 int
 ksys 34 rename 2 int
 ksys 35 ftruncate 2 int
+ksys 36 getuid 0 u32
+ksys 37 geteuid 0 u32
+ksys 38 getgid 0 u32
+ksys 39 setuid 1 int
+ksys 40 setgid 1 int
+ksys 41 rmdir 1 int
+ksys 42 fstat 2 int
 
 # The errors (kernel/errno.h). EEXIST and ESRCH share the number -3, which is
 # why there are two names on one line of the header: the frozen table had the
@@ -123,8 +130,9 @@ const KSYS_O_CREAT 256
 const KSYS_O_TRUNC 512
 const KSYS_O_APPEND 1024
 const KSYS_O_DIRECTORY 2048
+const KSYS_O_EXCL 4096
 const KSYS_O_ACCMODE 3
-const KSYS_O_ALLOWED 3843
+const KSYS_O_ALLOWED 7939
 const KSYS_WNOHANG 1
 const KSYS_MODE_MASK 511
 const KSYS_UID 0

@@ -29,6 +29,7 @@ static void run_tests(void *arg)
     test_ansi();
     test_port();
     test_blockdev();
+    test_blockdev_cache();
     test_partition();
     test_root();
     test_render();
@@ -52,6 +53,7 @@ static void run_tests(void *arg)
     test_fs_ext2();
     test_sysfs();
     test_ui();
+    test_ui_windows();
     test_input_debounce();
     test_battery_soc();
     test_fb_draw();
@@ -63,6 +65,7 @@ static void run_tests(void *arg)
     test_text_wrap();
     test_ksys();
     test_ksys_process();
+    test_users();
     test_libc();
     test_kshell();
     test_kshell_pipe();

@@ -92,14 +92,12 @@ int mfs_check_locked(const struct mfs_private *view, struct mfs_check_report *re
 /* --- the repair pass --- */
 
 /*
- * The table of records the repair can mark: one bit per record says whether
- * a name reaches it, and this map is 4 KiB for 32768 records. A volume may
- * be larger than that (the mount and the check size their maps for the
- * volume), but the repair keeps its map fixed: a table of 32768 records or
- * more is reported and left alone instead of being walked with a map that
- * would hide an orphan.
+ * The table of records the repair marks: one bit per record says whether a
+ * name reaches it. The map is sized by the volume when the pass runs and
+ * given back when it ends, the same way the map of the blocks is: a volume
+ * larger than 32768 records is repaired like any other, and the memory of a
+ * big table is the price of the pass and not of the mount.
  */
-#define MFS_REPAIR_INODES_MAX 32768u
 
 /*
  * The repair pass is the only writer of the check of the volume, and it

@@ -135,9 +135,13 @@ int chdir(const char *path)
 
 int rmdir(const char *path)
 {
-    /* The unlink of the kernel refuses a directory that is not empty, which
-     * is the rule of rmdir as well. */
-    return posix(unlink(path));
+    const char *resolved = __ulibc_path(path);
+
+    if (resolved == NULL) {
+        return -1;
+    }
+
+    return posix((int)__ulibc_syscall6(KSYS_RMDIR, (long)(unsigned long)resolved, 0, 0, 0, 0, 0));
 }
 
 ssize_t readlink(const char *path, char *buffer, size_t size)
@@ -164,31 +168,15 @@ int dup2(int oldfd, int newfd)
 
 pid_t fork(void)
 {
-    int pid = posix((int)__ulibc_syscall6(KSYS_FORK, 0, 0, 0, 0, 0, 0));
-
-    if (pid > 0) {
-        /*
-         * The child of the port returns from the call with the pid of the
-         * parent's answer in RAX (the zero of POSIX is written to another
-         * slot of the frame). The child is the task whose own pid is that
-         * answer, so the library asks for it and gives the child its zero.
-         */
-        if (getpid() == pid) {
-            return 0;
-        }
-
-        /*
-         * The parent lets the child run before it uses the stack again. The
-         * port copies the pages of a program on write, but the page of the
-         * stack of the call is still shared when the call returns, and the
-         * parent's next frame would overwrite the return of the child. One
-         * yield is enough for the child to leave the frame of the call;
-         * `docs/debts.md` records the copy that has to make it unnecessary.
-         */
-        (void)__ulibc_syscall6(KSYS_YIELD, 0, 0, 0, 0, 0, 0);
-    }
-
-    return (pid_t)pid;
+    /*
+     * The POSIX shape is the call itself: the port copies the context of the
+     * caller, the child returns from this same instruction with zero in RAX
+     * and the parent with the pid. The pages of the program are copy-on-write
+     * after the fork, so the page under the stack of this call is the child's
+     * as soon as either side writes it - the parent does not need a yield to
+     * keep out of the return of the child.
+     */
+    return (pid_t)posix((int)__ulibc_syscall6(KSYS_FORK, 0, 0, 0, 0, 0, 0));
 }
 
 pid_t getppid(void)

@@ -283,10 +283,12 @@ int ext2_dir_remove(struct ext2_volume *vol, struct ext2_inode *dir, const char 
 int ext2_split_parent(const char *path, char *parent, k_size_t parent_size, char *name,
                       k_size_t name_size);
 
-/* The three changes a name of the volume takes. */
+/* The changes a name of the volume takes. */
 int ext2_create_file(struct ext2_volume *vol, const char *path, k_u32_t mode, k_u32_t *number);
 int ext2_make_dir(struct ext2_volume *vol, const char *path, k_u32_t mode);
 int ext2_remove(struct ext2_volume *vol, const char *path);
+int ext2_remove_dir(struct ext2_volume *vol, const char *path);
+int ext2_rename(struct ext2_volume *vol, const char *from, const char *to);
 
 /* The moment of the medium: the seconds of Unix, and never zero, because a
  * zero of a deleted inode is the mark of a record that was never used. */
@@ -294,6 +296,12 @@ k_u32_t ext2_now(void);
 
 /* The minimum check of a mounted volume, behind ext2_check(). */
 int ext2_check_volume(struct ext2_volume *vol, struct ext2_check_report *report);
+
+/* The repair pass of a mounted volume, behind ext2_repair(). It writes the
+ * counters, the two bitmaps, the link counts and the chain of every
+ * directory; a record that no name reaches is reconnected under
+ * /lost+found when it is a file and given back when it is not. */
+int ext2_repair_volume(struct ext2_volume *vol, struct ext2_check_report *report);
 
 /* The VFS type of an inode: 1 a file, 2 a directory, 3 something else. */
 k_u8_t ext2_inode_vfs_type(const struct ext2_inode *inode);

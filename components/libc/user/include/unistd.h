@@ -3,8 +3,9 @@
  *
  * The prototypes are the ones of `ulibc.h`; the file adds the names a portable
  * source expects, the numbers of `lseek`, and the calls the library builds
- * over the ABI: `access` over a stat, `rmdir` over the unlink of an empty
- * directory, `execvp` over `execve` and the words of `PATH`. A call of POSIX
+ * over the ABI: `access` over a stat, `rmdir` over `KSYS_RMDIR` (the removal
+ * of a directory, which is not the unlink of a file), `execvp` over `execve`
+ * and the words of `PATH`. A call of POSIX
  * that this system cannot answer - `chdir`, because the cwd belongs to the
  * shell and the ABI has no call to move it - answers -1 and `ENOSYS`; the
  * sentence is in `docs/porting-programs.md`.
@@ -83,7 +84,17 @@ int dup2(int oldfd, int newfd);
 pid_t fork(void) __attribute__((returns_twice));
 pid_t getpid(void);
 pid_t getppid(void);
+/*
+ * The credentials of the program: the uid and the gid of the task, and the
+ * two calls that change them. Root may take any number; a program of another
+ * uid may only name the one it has. There is one uid, so geteuid answers what
+ * getuid answers, and the group decides no permission of a file yet.
+ */
 uid_t getuid(void);
+uid_t geteuid(void);
+gid_t getgid(void);
+int setuid(uid_t uid);
+int setgid(gid_t gid);
 int gethostname(char *name, size_t size);
 pid_t wait(int *status);
 pid_t waitpid(pid_t pid, int *status, int options);

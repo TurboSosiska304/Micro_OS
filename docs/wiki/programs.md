@@ -132,7 +132,7 @@ never changed.
 ## `/bin` and the boot
 
 The x86-64 port mounts the MicroFS volume of its disk at `/` and finds
-`/bin` already there: the thirty-one images are files the tool wrote, with
+`/bin` already there: the thirty-five images are files the tool wrote, with
 the mode of a program (`0755`), and no boot creates one:
 
 | File | What it proves |
@@ -140,6 +140,8 @@ the mode of a program (`0755`), and no boot creates one:
 | `/bin/hello` | the door: `write`, arguments, environment, pid, clock, `sleep`, `exit`; it prints `cpl 3` |
 | `/bin/crash` | a fault of ring 3 is reported and the shell survives |
 | `/bin/fork` | `fork()` with copy on write: the child gets 0, the parent the pid |
+| `/bin/procs` | the POSIX pair of a program: a child computes and returns its status, a double fork, and an `execve` that replaces the child that called it |
+| `/bin/fpu2` | the floating point state of a task: three tasks compute in `double` at once and keep their own XMM and x87 registers, and an `execve` starts the new image after `fninit` |
 | `/bin/badptr` | a pointer outside the window is `EFAULT`, not a fault of ring 0 |
 | `/bin/signals` | a handler, `SIGTERM` ending a child, a wait cut by `SIGINT`, `SIG_IGN`, and the errors of `kill` |
 | `/bin/nx` | the protection of the pages: a fetch of its data, a write to its text and a call that hands its text to the kernel, each taken down, and a parent still alive |
@@ -153,12 +155,12 @@ the mode of a program (`0755`), and no boot creates one:
 | `/bin/wc` | sbase: the lines, words and bytes of a source (`-l`, `-w`, `-c`) or of descriptor 0 |
 | `/bin/sort` | sbase: the order of the lines (with `-n`) |
 | `/bin/find` | sbase: a walk of a tree with `-name` |
-| `/bin/xargs` | sbase: a command over the words of a pipe |
+| `/bin/xargs` | sbase: a command over the words of a pipe; every command is a child of its own and `-P N` keeps N of them running |
 | `/bin/sed` | sbase: a substitution, line by line |
 | `/bin/mkdir` | a directory through `mkdir`, one for every word of the line |
 | `/bin/pwd` | the directory of the task through `getcwd` |
 | `/bin/rm` | a name through `unlink`; `-r` walks a directory with `readdir` |
-| `/bin/spawn` | `execve` from a program, with an environment of its own |
+| `/bin/spawn` | `execve` from a program, with an environment of its own; the image replaces the caller |
 | `/bin/zcat` | a `.gz` of the VFS inflated by zlib 1.3.1 and written to the console or a file |
 | `/bin/lua` | the interpreter of Lua 5.4.7: `-e`, the script `/etc/hello.lua`, `io` and `os.time` |
 | `/bin/pcre2grep` | a regular expression of PCRE2 over a file or a stream |
@@ -169,6 +171,9 @@ the mode of a program (`0755`), and no boot creates one:
 | `/bin/file` | the type of a file through libmagic of file 5.45 (`-b`, `-i`, `-z` for a gzip and a zstd frame, `-f` for a list) and the compact database `/etc/magic.mgc` |
 | `/bin/sqlite3` | the shell of SQLite 3.54.1 (public domain) over a database file of MicroFS: `.read`, `.tables`, `.schema`, `.mode`, `.timer`, `-cmd` and `-batch` |
 | `/bin/awk` | the One True Awk of 2024-07-28: the fields, `-F`, `-v`, `-f`, `printf` with a width and a precision, `getline`, the arrays, the functions of `math.h`, and a refusal of `system` and of a pipe (no shell) |
+| `/bin/ui` | the skeleton of ADR 0028: `/dev/fb0` and `/dev/input0`, a panel, a list of windows and the log; Tab moves the focus and `q` gives the screen back |
+| `/bin/edit` | a text editor (ADR 0030): a file, the arrows and the characters of `/dev/input0`, `Ctrl+S`, `Ctrl+Q`, a title bar and a status line; a modal window asks about an unsaved file |
+| `/bin/fm` | a file manager (ADR 0030): the directory through `readdir`, Enter to open a directory or `/bin/edit`, `d`/Delete with a modal question and `unlink`, `q` |
 
 
 The first six talk to the kernel through `programs/prog.h`, because what they
@@ -570,8 +575,11 @@ plan to pretend otherwise.
   library: the allocation is a fixed arena of the program and the streams are
   a descriptor, not a buffer. `float` and `double` are those of an image that
   asks for them (`ULIBC_WITH_FLOAT`, the port of Lua): it is built without
-  `-mgeneral-regs-only`, links `math.c`, `setjmp.c` and `format_float.c`, and
-  runs one at a time because the scheduler saves no XMM or x87 state.
+  `-mgeneral-regs-only`, links `math.c`, `setjmp.c` and `format_float.c`. The
+  scheduler saves and loads the XMM and x87 state at every switch, so a
+  program started with `fork` + `execve` keeps its own registers beside its
+  parent, and `-P` of xargs may run several of them at once (`docs/debts.md`,
+  K9; `/bin/fpu2` is the gate of the smoke test).
 * **No image larger than 8 MiB.** `execve` reads the file in pieces of
   `KSYS_MAX_IO` (64 KiB) into one block of the allocator, up to
   `K_EXEC_MAX_IMAGE` (8 MiB); a larger file is `E2BIG` before a byte of it is

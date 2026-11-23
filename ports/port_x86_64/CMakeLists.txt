@@ -84,10 +84,10 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # The kernel of the higher half: no red zone (an interrupt may use the stack
-# under us), no PIC, no SSE in the C of the kernel (it saves no floating
-# point state; a program that asks for it gets the units from the loader,
-# see USERLAND_CFLAGS below), and the kernel memory model, which names the
-# top 2 GiB where the image is
+# under us), no PIC, no SSE in the C of the kernel (the state of the units is
+# saved by the switch of the port; a program that asks for them gets them
+# from the loader, see USERLAND_CFLAGS below), and the kernel memory model,
+# which names the top 2 GiB where the image is
 # linked and leaves the low identity map to the pointers the boot hands over
 # (ADR 0007). It is a flag of the C code alone: the assembly is written in
 # absolute 64-bit numbers and the programs of /bin stay in the low window.
@@ -314,9 +314,9 @@ set(LIBC_USER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/libc/user")
 # A program of the tree that does not compute in floating point keeps
 # -mgeneral-regs-only. A ported program that does (Lua) is built with
 # MICROOS_FLOAT_CFLAGS instead: the port sets CR4.OSFXSR and CR0.NE for the
-# XMM registers and the x87 unit, and the scheduler of this port saves
-# neither, which is safe because execve waits for the program that runs
-# (docs/debts.md). The kernel and the other programs still never touch them.
+# XMM registers and the x87 unit, and the scheduler saves the state of a task
+# at every switch (docs/debts.md, K9), so two such programs may compute at
+# once. The kernel itself never touches them.
 set(USERLAND_CFLAGS
     -O2 -ffreestanding -fno-stack-protector
     -fno-pic -fno-pie -mno-red-zone -march=x86-64
@@ -329,8 +329,9 @@ set(PROGRAM_CFLAGS -c ${USERLAND_CFLAGS} -mgeneral-regs-only
 # A program with `double` in its numbers (SQLite and its REAL type here, Lua
 # on its own branch) is built without -mgeneral-regs-only: the loader turns
 # the SSE and x87 units on for ring 3 (CR4.OSFXSR, CR0.NE) and the scheduler
-# saves neither, so one such program runs at a time - execve waits for it.
-# The kernel and every other program still never touch the registers.
+# saves and loads the state of the units at every switch (docs/debts.md, K9),
+# so a program that computes at once with another keeps its own registers.
+# The kernel and every program without a double still never touch them.
 set(MICROOS_FLOAT_CFLAGS ${USERLAND_CFLAGS})
 list(REMOVE_ITEM MICROOS_FLOAT_CFLAGS -mgeneral-regs-only)
 set(MICROOS_FLOAT_PROGRAM_CFLAGS -c ${MICROOS_FLOAT_CFLAGS}
@@ -450,24 +451,63 @@ set_source_files_properties(${ZLIB_SOURCES}
 
 add_libc_program(echo)
 add_libc_program(mkdir)
+add_libc_program(mv)
 add_libc_program(pwd)
-add_libc_program(rm)
+# The two removals call the POSIX wrappers of unistd_ext.c, which the small
+# runtime of a program does not carry: the object is linked into these two
+# images alone.
+add_libc_program(rm SOURCES "${LIBC_USER_DIR}/src/unistd_ext.c"
+                            "${LIBC_USER_DIR}/src/stat.c")
+add_libc_program(rmdir SOURCES "${LIBC_USER_DIR}/src/unistd_ext.c"
+                               "${LIBC_USER_DIR}/src/stat.c")
 add_libc_program(spawn)
 
-# --- the interface: /bin/ui (ADR 0028) --------------------------------------
+# --- the interface: /bin/ui (ADR 0028) and the programs of ADR 0030 ---------
 #
 # The first program of the skeleton: two devices of the devfs, a panel, a list
 # of windows and a window of the log. The font comes from the console of the
 # port and not from a second table, so the letters of the interface are the
 # letters of the shell and the picture of a screenshot is read with one table.
-# The program allocates nothing: its two buffers are part of the bss of the
-# image (the window of a transfer of the system and one line of pixels), and
-# the arena of the library is not linked into it.
+# The program allocates nothing: its buffers are part of the bss of the image.
+#
+# The window model and the keyboard are `components/ui`, a library of the
+# userland with a test of its own on the host: the skeleton keeps the model of
+# its two windows, and the editor and the file manager of ADR 0030 are the
+# programs that use it whole. `programs/uiprog.c` is the port's half - the
+# writes of /dev/fb0 cut into transfers - so the library stays portable.
+set(UI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui")
+set(UI_INCLUDES "${UI_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
 add_libc_program(ui
     MAIN "${PROGRAM_DIR}/ui.c"
     SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/font_spleen.c"
             "${LIBC_USER_DIR}/src/usleep.c"
-    INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/include"
+            "${UI_DIR}/src/window.c"
+    INCLUDES ${UI_INCLUDES}
+)
+
+add_libc_program(edit
+    MAIN "${PROGRAM_DIR}/edit.c"
+    SOURCES "${PROGRAM_DIR}/uiprog.c"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/font_spleen.c"
+            "${LIBC_USER_DIR}/src/usleep.c"
+            "${UI_DIR}/src/window.c"
+            "${UI_DIR}/src/draw.c"
+            "${UI_DIR}/src/keyboard.c"
+    INCLUDES ${UI_INCLUDES}
+)
+
+add_libc_program(fm
+    MAIN "${PROGRAM_DIR}/fm.c"
+    SOURCES "${PROGRAM_DIR}/uiprog.c"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/font_spleen.c"
+            "${LIBC_USER_DIR}/src/usleep.c"
+            "${LIBC_USER_DIR}/src/dirent.c"
+            "${LIBC_USER_DIR}/src/malloc.c"
+            "${UI_DIR}/src/window.c"
+            "${UI_DIR}/src/draw.c"
+            "${UI_DIR}/src/keyboard.c"
+    INCLUDES ${UI_INCLUDES}
 )
 
 # The first program of somebody else: zcat opens a .gz of the VFS through
@@ -877,6 +917,32 @@ add_libc_program(streams
     DEFINES ULIBC_HEAP_SIZE=65536u
 )
 
+# The processes of a program: a child with its own status, a double fork and
+# an execve that replaces the child itself. It is the gate of the POSIX pair
+# of the library (fork, waitpid, execvp) on the port with an MMU, the way
+# programs/fork.c is the gate of copy on write.
+add_libc_program(procs
+    MAIN "${PROGRAM_DIR}/procs.c"
+    SOURCES ${SBASE_LIBC_SOURCES}
+    DEFINES ULIBC_HEAP_SIZE=65536u
+)
+
+# The state of the floating point unit at a switch of a task (docs/debts.md,
+# K9): three tasks compute in `double` at once and each of them prints the
+# numbers of its own registers. FLOAT is the difference from `procs`: the
+# loop has to live in the XMM registers for the test to say anything, and the
+# library's formatter writes its twelve digits. The program needs the
+# formatter of a double, the fork and waitpid of the library and the stat
+# that unistd_ext pulls, and nothing of the arena.
+add_libc_program(fpu2
+    FLOAT
+    SOURCES "${LIBC_USER_DIR}/src/format_float.c"
+            "${LIBC_USER_DIR}/src/unistd_ext.c"
+            "${LIBC_USER_DIR}/src/stat.c"
+    DEFINES ULIBC_HEAP_SIZE=65536u
+    COMPILE_OPTIONS -DULIBC_WITH_FLOAT
+)
+
 # The test of `ftruncate`: the machine cuts a file of the volume the boot
 # mounted, and the smoke test reads the shorter bytes back. It is a program
 # and not a command of the shell, because no command of the shell cuts a
@@ -1024,9 +1090,9 @@ add_libc_program(file
 # The library is built without -mgeneral-regs-only because it links the whole
 # of `src/stdlib.c` for `strtol` and `strtoul`. That file also holds `strtod`
 # and `qsort`, which a `double` in the text makes an object of SSE; the port
-# of this machine runs one program at a time and sets CR4.OSFXSR, so the
-# choice is the one Lua made (`docs/debts.md`). bc itself computes in the
-# integers of its limbs.
+# sets CR4.OSFXSR and saves the state of the units at every switch
+# (`docs/debts.md`, K9), so the choice is the one Lua made and bc may compute
+# while another program does. bc itself computes in the integers of its limbs.
 set(BC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/bc")
 set(BC_SOURCES
     "${BC_DIR}/src/args.c"

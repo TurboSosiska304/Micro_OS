@@ -10,7 +10,7 @@ the machine where a program can really be loaded and run (the window of
 | port | `ports/port_x86_64` |
 | loader | `loader32.S`: a multiboot image that QEMU loads with `-kernel`; it copies the kernel to 16 MiB, maps the same bytes at `0xFFFFFFFF80000000` (the top 2 GiB, where the image is linked), builds the identity map of the first gigabyte and turns the long mode on |
 | console | the framebuffer of the VGA of QEMU, 1280x800 at 16 bits per pixel in RGB565 (Bochs VBE, ADR 0023): a grid of 160x50 cells of the 8x16 font of the PC (Spleen, `line_gap` 0/2/4 px of `/etc/font`), the colours of `/etc/console`; the text mode of 80x25 at `0xB8000` when the machine has no Bochs VBE interface; COM1, 115200, `\r\n`, out of one `k_port_write()` |
-| input | the PS/2 keyboard on IRQ1 (scancode set 1, Shift and Caps Lock) or COM1 |
+| input | the PS/2 keyboard on IRQ1 (scancode set 1, Shift, Ctrl and Caps Lock, and the E0 keys - the arrows, Home, End, PageUp, PageDown, Insert and Delete - as events of `/dev/input0`) or COM1 |
 | clock | the PIT at 1 kHz on the core 0; the local APIC timer at 1 kHz on every application processor, calibrated against the TSC |
 | tasks | `switch.S` (callee-saved registers and the stack), one run queue per core under `KERNEL_SMP`, and a round robin over it |
 | processors | the MADT of ACPI, the trampoline at `0x7000`, INIT and the start-up IPI through the local APIC, one GDT/TSS/IST and one 64 KiB stack per core (ADR 0012) |
@@ -338,15 +338,21 @@ What the keyboard does not do:
 
 * the scancode set 1 and the US layout only: a keyboard of another layout
   sends the same numbers and gets the letters of this table;
-* the E0 sequences are dropped whole, so the arrows, Home/End, Delete, the
-  second form of the keypad and the right Ctrl do nothing. The editing of a
-  line is the one the shell has, not the one a library with a history has;
+* the E0 sequences carry the keys of the second form and not the characters
+  of a line: the arrows, Home, End, PageUp, PageDown, Insert and Delete are
+  events of `/dev/input0` (`key.up`, `key.delete`, ...) and the right Ctrl is
+  the modifier of the same form, while the number pad of the same block types
+  nothing of the console - the map of `kernel/input_set1.h` is the table.
+  The `E1` sequence (Pause) is still dropped whole;
 * no repeat of a key in the driver: the device repeats it, and the ring is
   the only buffer between the two.
 
-What the screen does not do: it is a console and not a desktop. There is no
-surface a program can draw on, no mouse and no compositor, and a 3D driver of
-a real card is not promised (ADR 0023, sections 4 and 5). The picture has one
+What the screen does not do: the console is a terminal and not a desktop.
+There is a framebuffer a program can draw in (`/dev/fb0`, ADR 0028) and the
+programs of the interface are files of `/bin` (`ui`, `edit`, `fm`; ADR 0030),
+but the machine has no window server, no mouse and no compositor, and a 3D
+driver of a real card is not promised (ADR 0023, sections 4 and 5). The
+picture has one
 pair of colours for every cell - `console.theme` swaps the pair of the whole
 screen - and no attribute per cell: a command that wants a red word or an
 inverted line has nothing to ask for yet (`docs/debts.md`, K11).

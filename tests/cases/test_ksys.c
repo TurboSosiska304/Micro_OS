@@ -203,7 +203,7 @@ static void test_write_read_roundtrip(void)
 
         KT_CHECK_INT_EQ(ksys_close(fd), 0);
         KT_CHECK_INT_EQ(ksys_unlink("/t/data.txt"), 0);
-        KT_CHECK_INT_EQ(ksys_unlink("/t"), 0);
+        KT_CHECK_INT_EQ(ksys_rmdir("/t"), 0);
     }
 
     teardown();
@@ -300,7 +300,10 @@ static void test_abi_is_stable(void)
         {KSYS_CHOWN, "chown"},       {KSYS_EXECVE, "execve"},       {KSYS_STATX, "statx"},
         {KSYS_PIPE, "pipe"},         {KSYS_DUP2, "dup2"},           {KSYS_KILL, "kill"},
         {KSYS_SIGNAL, "signal"},     {KSYS_SIGRETURN, "sigreturn"}, {KSYS_GETLIMIT, "getlimit"},
-        {KSYS_SETLIMIT, "setlimit"},
+        {KSYS_SETLIMIT, "setlimit"}, {KSYS_RENAME, "rename"},       {KSYS_FTRUNCATE, "ftruncate"},
+        {KSYS_GETUID, "getuid"},     {KSYS_GETEUID, "geteuid"},     {KSYS_GETGID, "getgid"},
+        {KSYS_SETUID, "setuid"},     {KSYS_SETGID, "setgid"},       {KSYS_RMDIR, "rmdir"},
+        {KSYS_FSTAT, "fstat"},
     };
     size_t i;
 
@@ -473,6 +476,7 @@ static const struct abi_value g_abi_known_values[] = {
     {"KSYS_O_TRUNC", KSYS_O_TRUNC},
     {"KSYS_O_APPEND", KSYS_O_APPEND},
     {"KSYS_O_DIRECTORY", KSYS_O_DIRECTORY},
+    {"KSYS_O_EXCL", KSYS_O_EXCL},
     {"KSYS_O_ACCMODE", KSYS_O_ACCMODE},
     {"KSYS_O_ALLOWED", KSYS_O_ALLOWED},
     {"KSYS_WNOHANG", KSYS_WNOHANG},
@@ -1399,9 +1403,9 @@ static void test_statx(void)
 
 /*
  * The property: the access of an open is checked against the mode of the
- * file, at the edge, before a descriptor exists. There is one user, uid 0,
- * and no bypass for it: the bits of the owner decide, and a file of the mode
- * 0200 cannot be read by anybody.
+ * file, at the edge, before a descriptor exists. The test runner is root,
+ * and root passes the read and the write triads of every object; the check
+ * of a file of another owner by a task that is not root is in `test_users`.
  */
 static void test_open_mode(void)
 {
@@ -1419,11 +1423,14 @@ static void test_open_mode(void)
         KT_CHECK_INT_EQ(ksys_close(fd), 0);
     }
 
-    /* To be read only: an open that writes is refused, and the read still
-     * works and the descriptor still refuses the write. */
+    /* Read only, and the caller is root: the write is allowed by the bypass.
+     * A descriptor opened to read still refuses the write. */
     KT_CHECK_INT_EQ(ksys_chmod("/mode.txt", 0400), 0);
-    KT_CHECK_INT_EQ(ksys_open("/mode.txt", KSYS_O_WRONLY), KERR_PERM);
-    KT_CHECK_INT_EQ(ksys_open("/mode.txt", KSYS_O_RDWR), KERR_PERM);
+    fd = ksys_open("/mode.txt", KSYS_O_WRONLY);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
 
     fd = ksys_open("/mode.txt", KSYS_O_RDONLY);
     KT_CHECK(fd >= 0);
@@ -1433,26 +1440,19 @@ static void test_open_mode(void)
         KT_CHECK_INT_EQ(ksys_close(fd), 0);
     }
 
-    /* To be written only: the open to read does not reach the descriptor.
-     * The owner is uid 0, the only user of the system, and it gets nothing
-     * extra for being the owner. */
+    /* Write only: root reads it anyway. */
     KT_CHECK_INT_EQ(ksys_chmod("/mode.txt", 0200), 0);
     KT_CHECK_INT_EQ(ksys_chown("/mode.txt", 0), 0);
-    KT_CHECK_INT_EQ(ksys_open("/mode.txt", KSYS_O_RDONLY), KERR_PERM);
-
-    fd = ksys_open("/mode.txt", KSYS_O_WRONLY);
+    fd = ksys_open("/mode.txt", KSYS_O_RDONLY);
     KT_CHECK(fd >= 0);
     if (fd >= 0) {
         KT_CHECK_INT_EQ(ksys_close(fd), 0);
     }
 
-    /* A file of another owner is answered by the triad of the others: the
-     * caller is not that owner, and there is no group of its own. */
+    /* A file of another owner is still read and written by root: the bypass
+     * covers the three triads and does not look at the owner. */
     KT_CHECK_INT_EQ(ksys_chown("/mode.txt", 7), 0);
     KT_CHECK_INT_EQ(ksys_chmod("/mode.txt", 0600), 0);
-    KT_CHECK_INT_EQ(ksys_open("/mode.txt", KSYS_O_RDONLY), KERR_PERM);
-
-    KT_CHECK_INT_EQ(ksys_chmod("/mode.txt", 0604), 0);
     fd = ksys_open("/mode.txt", KSYS_O_RDONLY);
     KT_CHECK(fd >= 0);
     if (fd >= 0) {
@@ -1515,10 +1515,12 @@ static void test_readdir_validation(void)
  * The property: a directory of the path that the caller may not search
  * through keeps its children out of reach. The check is the `x` bit of every
  * directory on the way, and the object at the end has its own check for the
- * access that is asked of it.
+ * access that is asked of it. The runner is root, which the search does not
+ * stop, so the walking caller is a task of uid 7 that owns the directory.
  */
 static void test_directory_search(void)
 {
+    struct task *self = task_self();
     struct vfs_stat info;
     char byte = 'x';
     int fd;
@@ -1538,9 +1540,15 @@ static void test_directory_search(void)
     /* A one-byte file is not a program, but the directory is asked first. */
     KT_CHECK_INT_EQ(ksys_chmod("/locked/file.txt", 0755), 0);
 
-    /* Read and write for the owner but no search: the child is out of
-     * reach for every call that has to pass the directory. */
+    /*
+     * Read and write for the owner but no search: the child is out of reach
+     * for every call that has to pass the directory. Root passes anyway, so
+     * the walk is done as the owner of the directory, uid 7.
+     */
+    KT_CHECK_INT_EQ(ksys_chown("/locked", 7), 0);
     KT_CHECK_INT_EQ(ksys_chmod("/locked", 0600), 0);
+
+    task_set_uid(self, 7);
     KT_CHECK_INT_EQ(ksys_open("/locked/file.txt", KSYS_O_RDONLY), KERR_PERM);
     KT_CHECK_INT_EQ(ksys_stat("/locked/file.txt", &info), KERR_PERM);
 #if KERNEL_EXEC
@@ -1576,6 +1584,8 @@ static void test_directory_search(void)
     KT_CHECK_INT_EQ(ksys_stat("/locked/file.txt", &info), 0);
     KT_CHECK_INT_EQ(ksys_open("/locked", KSYS_O_RDONLY | KSYS_O_DIRECTORY), KERR_PERM);
 
+    /* The test runner is root again for the teardown. */
+    task_set_uid(self, 0);
     teardown();
 }
 
@@ -2279,6 +2289,71 @@ static void fd_inheriting_child(void *arg)
 }
 
 /*
+ * The property: fstat answers the object of an open descriptor with the same
+ * numbers statx gives for its name, and an exclusive create refuses a name
+ * that is already there without touching it.
+ */
+static void test_fstat_and_exclusive(void)
+{
+    struct vfs_statx info;
+    int fd;
+
+    ktest_begin("ksys: fstat describes an open object and O_EXCL refuses a name");
+
+    setup();
+
+    fd = ksys_open("/fstat.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC | KSYS_O_EXCL);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_write(fd, "fstat", 5), 5);
+        KT_CHECK_INT_EQ(ksys_fstat(fd, &info), 0);
+        KT_CHECK_INT_EQ(info.type, 1);
+        KT_CHECK_INT_EQ(info.size, 5);
+        KT_CHECK_INT_EQ(info.mode, 0644);
+        KT_CHECK_INT_EQ(info.owner, 0);
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    /* The name is there: the same exclusive create is an error and leaves
+     * the bytes of the object alone, and a plain open finds them. */
+    KT_CHECK_INT_EQ(
+        ksys_open("/fstat.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC | KSYS_O_EXCL),
+        KERR_EXIST);
+    fd = ksys_open("/fstat.txt", KSYS_O_RDONLY);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_fstat(fd, &info), 0);
+        KT_CHECK_INT_EQ(info.size, 5);
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    /* A directory is described as a directory; a pipe has no name and no
+     * fstat (the library describes it from ESPIPE). */
+    KT_CHECK_INT_EQ(ksys_mkdir("/fstat-dir"), 0);
+    fd = ksys_open("/fstat-dir", KSYS_O_RDONLY | KSYS_O_DIRECTORY);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_fstat(fd, &info), 0);
+        KT_CHECK_INT_EQ(info.type, 2);
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+    KT_CHECK_INT_EQ(ksys_rmdir("/fstat-dir"), 0);
+
+    {
+        int fds[2];
+
+        KT_CHECK_INT_EQ(ksys_pipe(fds), 0);
+        KT_CHECK_INT_EQ(ksys_fstat(fds[0], &info), KERR_SPIPE);
+        KT_CHECK_INT_EQ(ksys_close(fds[0]), 0);
+        KT_CHECK_INT_EQ(ksys_close(fds[1]), 0);
+    }
+
+    KT_CHECK_INT_EQ(ksys_unlink("/fstat.txt"), 0);
+
+    teardown();
+}
+
+/*
  * The property: a fork copies the whole table of the descriptors, all
  * sixteen of them, and the child closes its own copy without touching the
  * parent's. The program of an execve inherits the same table through the
@@ -2345,6 +2420,7 @@ void test_ksys(void)
     test_pipe_errors();
     test_fd_table_full();
     test_ftruncate();
+    test_fstat_and_exclusive();
     test_fd_inherit_fork();
     test_wait_no_child();
     test_limits_defaults();

@@ -127,7 +127,8 @@ change for the writer.
   file past one table of pointers (a later step; the read side and the free
   side already speak all three).
 * It does not add `rename`, `rmdir`, a symbolic link or a device node to the
-  VFS contract or to the filesystem.
+  VFS contract or to the filesystem. (1.5 adds `rename` and `rmdir` to both,
+  and `ext2_repair` behind `fsck ext2 -y`; the rest of this list stands.)
 * It does not replay a journal, and it does not repair a volume: `-y` is a
   later `fsck ext2`, and `e2fsck` of the host stays the tool of the format.
 * It does not make the board boot from ext2: `main/src/main.c` still

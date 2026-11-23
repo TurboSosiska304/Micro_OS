@@ -86,8 +86,9 @@ written when the project was an operating system for one board; the numbers
 
 * [x] Mode bits and an owner in the file, set by `chmod`/`chown`
 * [x] The arguments of a system call checked at the edge
-* [x] The permissions enforced at the edge, for the one user of the system, at
-      `open` and `execve`
+* [x] The permissions enforced at the edge against the uid of the task, at
+      `open` and `execve`; the credentials of a task (calls 36 to 40) and
+      root that passes the triads of read and write
 * [x] The `x` bit of the directories of a path is walked and checked
 * [x] A real `fork()`: an address space per task, copy on write - the
       milestone of the x86-64 paging. The page tables per task, the copy of
@@ -100,7 +101,10 @@ written when the project was an operating system for one board; the numbers
 * [x] The shell pipelines and redirections: `cmd | cmd`, `>`/`>>`/`<`/`2>`,
       a task per stage over `task_fork_shared()`, a program that inherits
       the three descriptors of its stage, and Ctrl+C for every stage of the
-      job (ADR 0017; `test_kshell_pipe.c`, `make x86-smoke`)
+      job (ADR 0017; `test_kshell_pipe.c`, `make x86-smoke`). The stages are
+      no longer three: the parser holds sixteen, the pipes are made one
+      boundary at a time as the stages are forked, and `make x86-smoke`
+      checks a line of ten stages.
 
 ## K5 - A processor with an MMU (in progress)
 
@@ -115,7 +119,11 @@ written when the project was an operating system for one board; the numbers
       ring 3 is printed as `the program faulted: vector N at 0x...`, the
       program is taken down and the shell stays alive
 * [x] `exit` of a program ends the task it runs in, and the caller of
-      `execve` waits for it; `execve` answers 0 (contract 1.5)
+      `execve` waits for it; `execve` answers 0 (contract 1.5). Since M1 of
+      the 1.5 plan a program's `execve` replaces the image of the caller
+      instead (POSIX), the child of a `fork` is a real process with its own
+      status, and `waitpid(-1)` waits for any child; the caller without an
+      address space (the shell) keeps the task-and-wait shape.
 * [x] An errno per task: the TLS block is copied per task and `IA32_FS_BASE`
       follows the task and the privilege boundary
 * [x] Page tables per *task* and copy on write: a program is a task with its
@@ -253,8 +261,9 @@ written when the project was an operating system for one board; the numbers
 > the pilot: the machine of QEMU starts both processors, runs tasks on each of
 > them, passes `make x86-smp-smoke` (34 checks) and the 600-second
 > `make soak-smp` session. `KERNEL_SMP` stays off by default. The open rows
-> are the I/O APIC, the remote wake, the FPU state, the stack guard page and
-> the board; they are the K8 rows of [debts.md](debts.md).
+> are the I/O APIC, the remote wake, the stack guard page and the board; they
+> are the K8 rows of [debts.md](debts.md). The floating point state of a task
+> is saved and loaded at every switch since K9 (below).
 
 * [x] A `struct k_cpu` per core and a run queue per core; the scheduler never
       runs one task on two cores (ADR 0012) - `kernel/cpu.h`,
@@ -272,8 +281,8 @@ written when the project was an operating system for one board; the numbers
       big kernel lock for the whole call
 * [ ] x86-64: the I/O APIC (the timer and the keyboard off the 8259, the
       MADT overrides, the LAPIC EOI), the wake IPI of the scheduler and a
-      cross-core priority preemption, the FPU/SSE state at a switch, a guard
-      page under a task stack - the K8 rows of [debts.md](debts.md)
+      cross-core priority preemption, a guard page under a task stack - the
+      K8 rows of [debts.md](debts.md)
 * [ ] The allocator, the VFS, the console and the block layer under an
       aggressive migration: they are sleeping locks and the two-core session
       runs the full load for ten minutes, but no test migrates a task in the
@@ -340,6 +349,14 @@ written when the project was an operating system for one board; the numbers
       `double`. The host test is `tests/cases/test_lua.c`; `make x86-smoke`
       runs the interpreter, and `make x86-disk-smoke` runs it out of the
       volume in both boots
+* [x] The floating point state of a task: the port saves and loads the XMM
+      and x87 image of a context at every switch (`fxsave64`/`fxrstor64` in
+      `ports/port_x86_64/src/port_x86_64_task.c`), a fork copies the live
+      state of the parent, an `execve` resets the unit after `fninit`, and
+      the trampoline of an AP sets the bits of CR4 and CR0 the core needs.
+      `/bin/fpu2` is the gate: three tasks with a `double` at once keep their
+      own registers, a fourth dirties the unit and `execve`s the clean one,
+      and `make x86-smoke` and `make x86-smp-smoke` read every line
 * [x] The image of a program larger than `KSYS_MAX_IO`: `execve` reads an
       image of up to 8 MiB (`K_EXEC_MAX_IMAGE`) in pieces of the transfer
       edge into one block of the allocator, and a larger file is `E2BIG`
@@ -374,9 +391,8 @@ written when the project was an operating system for one board; the numbers
       the image and out of the volume after a reset
 * [ ] The gaps of the next port: a `malloc` larger than the bss of an image
       (`brk`/`mmap` of a program), a `poll` for a library that waits on a
-      pipe, an `fxsave` of the XMM state for two programs with a point in
-      their numbers, and the package that ships `zcat`, `lua` and the tools
-      of sbase with their licenses beside them (`docs/debts.md`)
+      pipe, and the package that ships `zcat`, `lua` and the tools of sbase
+      with their licenses beside them (`docs/debts.md`)
 * [x] The seventh port, a library with an operating system of its own:
       SQLite 3.54.1 with `SQLITE_OS_OTHER=1` and the VFS of the port on the
       calls of the system (`third_party/sqlite/port/sqlite_vfs.c`), and
@@ -387,9 +403,11 @@ written when the project was an operating system for one board; the numbers
       is the
       host, and the smoke tests create, read and check a database across a
       reset of the disk
-* [ ] A `chdir` and a wall clock in the ABI, and the POSIX frame of a fork
-      child: the library works around the three, and the workaround of each
-      is named in `docs/debts.md`
+* [ ] A `chdir` and a wall clock in the ABI: the library works around the two,
+      and the workaround of each is named in `docs/debts.md`
+* [x] The POSIX frame of a fork child: the child of `fork()` comes back from
+      the call with 0 in RAX and a stack page of its own, `execve` from a
+      program replaces the image of the caller, and `waitpid` reaps it (1.5)
 * [x] The fifth port: zstd 1.5.7 (BSD-3-Clause) as a static archive of
       lib/common, lib/compress and lib/decompress, and `/bin/zstd` as the
       program of the release itself (`programs/zstdcli.c`), with
@@ -509,13 +527,18 @@ on a VFS without `rename` (see [debts.md](debts.md)).
       picture has no text memory for `pmemsave`) and checks cells and
       colours, and keeps the `pmemsave` checks of the text mode on a card
       without the interface; `make x86-run` opens it for a person
-* [ ] Later: a 2D surface for a program, and optionally virtio-gpu 2D in
-      QEMU; UEFI GOP for a real machine, which is a loader of its own
+* [x] A picture a program draws on (ADR 0028, ADR 0030): `/dev/fb0` and
+      `/dev/input0`, the window model, the canvas and the keyboard of
+      `components/ui`, the arrows of the E0 prefix as keys of the machine, and
+      the programs `/bin/ui`, `/bin/edit` and `/bin/fm`
+* [ ] Later: a 2D surface for a program is there and a mouse is not; a
+      compositor, optionally virtio-gpu 2D in QEMU; UEFI GOP for a real
+      machine, which is a loader of its own
 
-The desktop is not a step of this list. A picture, a mouse and a compositor
-are the parts of one, and the compositor has to be a program of the system
-and not the kernel (see [releases/2.0.md](releases/2.0.md)); the first thing
-to build is the screen a program can draw on.
+A desktop is not a step of this list. A picture a program draws on arrived in
+1.4.0, the programs of the screen in 1.5.0 and a mouse is the next device
+(see [releases/2.0.md](releases/2.0.md)); the compositor stays a program of
+the system and not the kernel.
 
 ## K12 - The stream and the installer (done in 1.2.0)
 

@@ -20,7 +20,7 @@
 
 #if defined(MICRO_OS_FS_FAT32) && MICRO_OS_FS_FAT32
 #include "fs_fat32/fat.h"
-#define FSCK_USAGE "fsck [-y] [fat <point|device>]"
+#define FSCK_USAGE "fsck [-y] [fat <point|device>] [ext2 <point>]"
 #define FSCK_DETAIL                                                                                \
     "Without -y the volume is only read: the report names the first problem and\n"                 \
     "nothing is repaired. With -y the damage the medium itself explains is put\n"                  \
@@ -33,7 +33,18 @@
     "                      block gives it up, a size that does not match its chain\n"              \
     "                      is put right, and a record no name reaches is freed\n"                  \
     "  fat <point|device>  check the FAT volume at the point, or on the device;\n"                 \
-    "                      -y repairs it the same way\n"
+    "                      -y repairs it the same way\n"                                           \
+    "  ext2 <point>        check the ext2 volume at the point; -y repairs its\n"                   \
+    "                      counters, bitmaps, link counts and orphan records\n"
+#elif defined(MICRO_OS_FS_EXT2) && MICRO_OS_FS_EXT2
+#define FSCK_USAGE "fsck [-y] [ext2 <point>]"
+#define FSCK_DETAIL                                                                                \
+    "Without -y the volume is only read: the report names the first problem and\n"                 \
+    "nothing is repaired. With -y the counters, the bitmaps, the link counts and\n"                \
+    "the chain of the directories are rebuilt from the records, and a record who\n"                \
+    "no name reaches is reconnected under /lost+found or given back.\n"                            \
+    "  -y, --repair        repair the volume; it is checked again afterwards\n"                    \
+    "  ext2 <point>        the ext2 volume mounted at the point\n"
 #else
 #define FSCK_USAGE "fsck [-y]"
 #define FSCK_DETAIL                                                                                \
@@ -46,6 +57,10 @@
     "                      does not match its chain is put right, and a record\n"                  \
     "                      no name reaches is freed. The volume is checked again\n"                \
     "                      afterwards, and what is left is (not repaired).\n"
+#endif
+
+#if defined(MICRO_OS_FS_EXT2) && MICRO_OS_FS_EXT2
+#include "fs_ext2/ext2.h"
 #endif
 
 #define SHELL_TREE_DEPTH 6
@@ -1317,7 +1332,10 @@ static int rm_path(const char *path, bool recursive, int depth)
         }
     }
 
-    rc = vfs_unlink(path);
+    /* The two names of POSIX: a file goes with unlink and a directory with
+     * rmdir, and a filesystem answers KERR_ISDIR or KERR_NOTDIR when the
+     * caller chose the wrong one. */
+    rc = (info.type == 2) ? vfs_rmdir(path) : vfs_unlink(path);
     if (rc != 0) {
         kshell_printf("rm: %s: %s\n", path, vfs_strerror(rc));
         return KSHELL_ERROR;
@@ -1889,6 +1907,85 @@ static bool fsck_fat_words(int argc, char **argv, const char **what, bool *write
 }
 #endif
 
+#if defined(MICRO_OS_FS_EXT2) && MICRO_OS_FS_EXT2
+/*
+ * The check of an ext2 volume and its repair. The volume is the one mounted
+ * at the point and not a device: this filesystem holds one volume, and a
+ * machine whose root is ext2 asks the machine itself instead of handing its
+ * medium to e2fsck of a host.
+ */
+static int fsck_ext2(const char *point, bool write)
+{
+    struct ext2_check_report report;
+    int rc;
+
+    rc = write ? ext2_repair(point, &report) : ext2_check(point, &report);
+    if (rc == KERR_NOENT) {
+        kshell_printf("fsck: no volume is mounted at %s\n", point);
+        return KSHELL_ERROR;
+    }
+
+    if (rc == KERR_INVAL) {
+        kshell_printf("fsck: %s: not the ext2 volume of this machine\n", point);
+        return KSHELL_ERROR;
+    }
+
+    if (rc != 0) {
+        kshell_printf("fsck: %s: %s\n", point, ext2_strerror(rc));
+        return KSHELL_ERROR;
+    }
+
+    kshell_printf("fsck: ext2, %u file(s), %u directory(ies), %u of %u block(s) free\n",
+                  (unsigned)report.files, (unsigned)report.directories,
+                  (unsigned)report.free_blocks, (unsigned)report.blocks);
+
+    if (write && report.fixed != 0) {
+        kshell_printf("fsck: %u repair(s) applied\n", (unsigned)report.fixed);
+    }
+
+    if (report.errors != 0) {
+        kshell_printf("fsck: %u problem(s), the first: %s%s\n", (unsigned)report.errors,
+                      report.first, write ? " (not repaired)" : "");
+        if (!write) {
+            kshell_printf("fsck: -y repairs the counters, the bitmaps and the chains\n");
+        }
+        return KSHELL_ERROR;
+    }
+
+    if (write && report.fixed != 0) {
+        kshell_printf("fsck: 0 problem(s) after the repair\n");
+    }
+
+    kshell_printf("fsck: the volume is consistent\n");
+
+    return KSHELL_OK;
+}
+
+/* The words after `fsck ext2`: one point and the flag of the repair in any
+ * place. The first index is 2 for `fsck ext2 <point>` and 3 for
+ * `fsck -y ext2 <point>`. */
+static bool fsck_ext2_words(int argc, char **argv, int first, const char **what, bool *write)
+{
+    int i;
+
+    *what = NULL;
+    *write = false;
+
+    for (i = first; i < argc; i++) {
+        if (strcmp(argv[i], "-y") == 0 || strcmp(argv[i], "--repair") == 0) {
+            *write = true;
+        } else if (*what == NULL) {
+            *what = argv[i];
+        } else {
+            *what = NULL;
+            return false;
+        }
+    }
+
+    return *what != NULL;
+}
+#endif
+
 /*
  * The check of MicroFS, and its repair when `write` is set. The report of a
  * repair is about the volume after the pass: the counters are the volume as
@@ -1955,6 +2052,27 @@ static int cmd_fsck(int argc, char **argv)
 
         if (fsck_fat_words(argc, argv, &what, &write)) {
             return fsck_fat(what, write);
+        }
+    }
+#endif
+
+#if defined(MICRO_OS_FS_EXT2) && MICRO_OS_FS_EXT2
+    if (argc >= 3 && strcmp(argv[1], "ext2") == 0) {
+        const char *what;
+        bool write;
+
+        if (fsck_ext2_words(argc, argv, 2, &what, &write)) {
+            return fsck_ext2(what, write);
+        }
+    }
+
+    if (argc >= 4 && strcmp(argv[1], "-y") == 0 && strcmp(argv[2], "ext2") == 0) {
+        const char *what;
+        bool write;
+
+        if (fsck_ext2_words(argc, argv, 3, &what, &write)) {
+            write = true;
+            return fsck_ext2(what, write);
         }
     }
 #endif

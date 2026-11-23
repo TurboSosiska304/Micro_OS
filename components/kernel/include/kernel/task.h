@@ -74,6 +74,21 @@ struct kfile;
 
 struct task {
     k_u32_t pid;
+    /*
+     * The credentials of the task (ADR 0005, the second half of 1.4): the
+     * user it runs as and the group it belongs to. The uid decides the
+     * triads of the mode of every object the task touches; uid zero is the
+     * root of the system and is the only one that bypasses them. The gid is
+     * kept and inherited but no object of the filesystems holds one yet, so
+     * the group triad is never the one the VFS reads (docs/debts.md).
+     *
+     * A fresh task takes both numbers from the task that creates it, and a
+     * fork and a program keep them. There is one credential and not the
+     * three of POSIX: setuid moves the real and the effective uid together,
+     * because the image of a program has no setuid bit to move one alone.
+     */
+    k_u32_t uid;
+    k_u32_t gid;
     char name[TASK_NAME_MAX];
     task_state_t state;
     task_state_t wake_state; /* state to restore when a sleeping task wakes up */
@@ -207,6 +222,30 @@ int task_wait_any(int *exit_code, k_u32_t timeout_ms);
 /* The priority of the memory allocations of a task (KMM_PRIORITY_*). */
 void task_set_mem_priority(struct task *t, int priority);
 int task_get_mem_priority(struct task *t);
+
+/*
+ * The credentials of a task. The uid is the one the permission checks of the
+ * VFS compare with the owner of an object; uid zero is the root and the only
+ * value that is allowed to bypass a triad, to change the owner of an object,
+ * to mount a volume and to signal a task of another user. The gid is kept
+ * with the task and inherited, and it decides nothing yet: no filesystem of
+ * this system stores a group (docs/debts.md).
+ *
+ * A NULL task names the kernel itself, which runs as root: the helpers are
+ * called by the boot before a task exists and answer zero there.
+ */
+k_u32_t task_get_uid(const struct task *t);
+k_u32_t task_get_gid(const struct task *t);
+void task_set_uid(struct task *t, k_u32_t uid);
+void task_set_gid(struct task *t, k_u32_t gid);
+bool task_is_root(const struct task *t);
+
+/*
+ * A child takes the credentials of its parent. task_create() already copies
+ * them from the task that calls it; the explicit call is what the two forks
+ * use and what a port of a program inherits through task_fork_shared().
+ */
+void task_creds_inherit(struct task *child, const struct task *parent);
 
 /*
  * The limits of a task. `which` is KSYS_RLIMIT_MEMORY, KSYS_RLIMIT_CPU or

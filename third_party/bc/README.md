@@ -111,8 +111,9 @@ The program links `src/malloc.c`, `src/stdlib.c`, `src/setjmp.c`,
 `stdlib.c` is the whole file (it also holds `strtod` and `qsort`), and a
 `double` in it is why the image is built with the `FLOAT` option of the two
 functions of `cmake/userland.cmake` and without `-mgeneral-regs-only`; the
-port of this machine saves the XMM state for no task and runs one program at
-a time (`docs/debts.md`). The arithmetic of bc itself is in its integer limbs.
+port of this machine saves the XMM and x87 state at every switch of a task
+(`docs/debts.md`, K9), so bc may compute while another program does. The
+arithmetic of bc itself is in its integer limbs.
 
 ## The image
 

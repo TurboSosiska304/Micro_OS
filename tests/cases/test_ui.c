@@ -16,6 +16,7 @@
 #include "kernel/errno.h"
 #include "kernel/fb.h"
 #include "kernel/input.h"
+#include "kernel/input_set1.h"
 
 #define FB_TEST_WIDTH 1280u
 #define FB_TEST_HEIGHT 800u
@@ -131,6 +132,28 @@ static void test_input_names(void)
     KT_CHECK_STR_EQ(k_input_key_name(K_INPUT_KEY_F12), "key.f12");
     KT_CHECK_STR_EQ(k_input_key_name(K_INPUT_KEY_NONE), "key.none");
 
+    /* The keys of a moving cursor arrived in 1.4.0 and their numbers are
+     * after the frozen block: a key added to the list never moves another. */
+    KT_CHECK_STR_EQ(k_input_key_name(K_INPUT_KEY_UP), "key.up");
+    KT_CHECK_STR_EQ(k_input_key_name(K_INPUT_KEY_DOWN), "key.down");
+    KT_CHECK_STR_EQ(k_input_key_name(K_INPUT_KEY_LEFT), "key.left");
+    KT_CHECK_STR_EQ(k_input_key_name(K_INPUT_KEY_RIGHT), "key.right");
+    KT_CHECK_STR_EQ(k_input_key_name(K_INPUT_KEY_HOME), "key.home");
+    KT_CHECK_STR_EQ(k_input_key_name(K_INPUT_KEY_END), "key.end");
+    KT_CHECK_STR_EQ(k_input_key_name(K_INPUT_KEY_PAGEUP), "key.pageup");
+    KT_CHECK_STR_EQ(k_input_key_name(K_INPUT_KEY_PAGEDOWN), "key.pagedown");
+    KT_CHECK_STR_EQ(k_input_key_name(K_INPUT_KEY_INSERT), "key.insert");
+    KT_CHECK_STR_EQ(k_input_key_name(K_INPUT_KEY_DELETE), "key.delete");
+
+    KT_CHECK_INT_EQ(K_INPUT_KEY_A, 1);
+    KT_CHECK_INT_EQ(K_INPUT_KEY_Z, 26);
+    KT_CHECK_INT_EQ(K_INPUT_KEY_0, 27);
+    KT_CHECK_INT_EQ(K_INPUT_KEY_ENTER, 37);
+    KT_CHECK_INT_EQ(K_INPUT_KEY_F12, 68);
+    KT_CHECK_INT_EQ(K_INPUT_KEY_UP, 69);
+    KT_CHECK_INT_EQ(K_INPUT_KEY_DELETE, 78);
+    KT_CHECK_INT_EQ(K_INPUT_KEY_COUNT, 79);
+
     /* A number that is not a key of the contract reads as the empty name and
      * not as a key of somebody else. */
     KT_CHECK_STR_EQ(k_input_key_name(K_INPUT_KEY_COUNT), "key.none");
@@ -143,8 +166,56 @@ static void test_input_names(void)
     KT_CHECK_INT_EQ((int)offsetof(struct input_event, value), 6);
 }
 
+static void test_input_set1(void)
+{
+    ktest_begin("input: the scancodes of the set 1 are the keys of the machine");
+
+    /* The letters and the digits of the first block. */
+    KT_CHECK_INT_EQ(k_input_set1_key(0x1E, false), K_INPUT_KEY_A);
+    KT_CHECK_INT_EQ(k_input_set1_key(0x2C, false), K_INPUT_KEY_Z);
+    KT_CHECK_INT_EQ(k_input_set1_key(0x02, false), K_INPUT_KEY_1);
+    KT_CHECK_INT_EQ(k_input_set1_key(0x0B, false), K_INPUT_KEY_0);
+    KT_CHECK_INT_EQ(k_input_set1_key(0x1C, false), K_INPUT_KEY_ENTER);
+    KT_CHECK_INT_EQ(k_input_set1_key(0x0F, false), K_INPUT_KEY_TAB);
+    KT_CHECK_INT_EQ(k_input_set1_key(0x1D, false), K_INPUT_KEY_CTRL);
+    KT_CHECK_INT_EQ(k_input_set1_key(0x2A, false), K_INPUT_KEY_SHIFT);
+    KT_CHECK_INT_EQ(k_input_set1_key(0x3B, false), K_INPUT_KEY_F1);
+    KT_CHECK_INT_EQ(k_input_set1_key(0x58, false), K_INPUT_KEY_F12);
+
+    /* The arrows and the navigation of the second form: the same address
+     * without the E0 prefix is the keypad, which this console does not map
+     * to a key of the contract - and that is the whole point of the flag. */
+    KT_CHECK_INT_EQ(k_input_set1_key(0x48, true), K_INPUT_KEY_UP);
+    KT_CHECK_INT_EQ(k_input_set1_key(0x50, true), K_INPUT_KEY_DOWN);
+    KT_CHECK_INT_EQ(k_input_set1_key(0x4B, true), K_INPUT_KEY_LEFT);
+    KT_CHECK_INT_EQ(k_input_set1_key(0x4D, true), K_INPUT_KEY_RIGHT);
+    KT_CHECK_INT_EQ(k_input_set1_key(0x47, true), K_INPUT_KEY_HOME);
+    KT_CHECK_INT_EQ(k_input_set1_key(0x4F, true), K_INPUT_KEY_END);
+    KT_CHECK_INT_EQ(k_input_set1_key(0x49, true), K_INPUT_KEY_PAGEUP);
+    KT_CHECK_INT_EQ(k_input_set1_key(0x51, true), K_INPUT_KEY_PAGEDOWN);
+    KT_CHECK_INT_EQ(k_input_set1_key(0x52, true), K_INPUT_KEY_INSERT);
+    KT_CHECK_INT_EQ(k_input_set1_key(0x53, true), K_INPUT_KEY_DELETE);
+    KT_CHECK_INT_EQ(k_input_set1_key(0x48, false), K_INPUT_KEY_NONE);
+    KT_CHECK_INT_EQ(k_input_set1_key(0x47, false), K_INPUT_KEY_NONE);
+    KT_CHECK_INT_EQ(k_input_set1_key(0x1E, true), K_INPUT_KEY_NONE);
+
+    /* The pad and the right-hand modifiers of the second form. */
+    KT_CHECK_INT_EQ(k_input_set1_key(0x1C, true), K_INPUT_KEY_ENTER);
+    KT_CHECK_INT_EQ(k_input_set1_key(0x35, true), K_INPUT_KEY_SLASH);
+    KT_CHECK_INT_EQ(k_input_set1_key(0x1D, true), K_INPUT_KEY_CTRL);
+    KT_CHECK_INT_EQ(k_input_set1_key(0x38, true), K_INPUT_KEY_ALT);
+
+    /* An address that is no key at all answers the empty key, in both
+     * blocks. */
+    KT_CHECK_INT_EQ(k_input_set1_key(0x00, false), K_INPUT_KEY_NONE);
+    KT_CHECK_INT_EQ(k_input_set1_key(0x7F, false), K_INPUT_KEY_NONE);
+    KT_CHECK_INT_EQ(k_input_set1_key(0x00, true), K_INPUT_KEY_NONE);
+    KT_CHECK_INT_EQ(k_input_set1_key(0x7F, true), K_INPUT_KEY_NONE);
+}
+
 void test_ui(void)
 {
     test_fb_rect();
     test_input_names();
+    test_input_set1();
 }

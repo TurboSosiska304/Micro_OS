@@ -69,6 +69,10 @@ COMMANDS = [
     "smp",
     "smp workers 8",
     "smp ping",
+    # The floating point state of a task (K9): three tasks compute in double
+    # at once, and with two cores at least one of them shares a core with
+    # another. The state has to travel with the task on either core.
+    "exec /bin/fpu2",
     "smp",
 ]
 
@@ -349,8 +353,35 @@ def check(output: str) -> list:
     )
     expect("the ping answers its own core", "smp: ping ok" in ping, ping)
 
+    # --- the floating point state of a task (K9)
+    #
+    # The parent and the two children keep a pair of doubles in the XMM
+    # registers across a loop that the scheduler preempts many times. The
+    # arithmetic is exact, so the three lines are the registers of three
+    # tasks; with two cores the tasks are spread over both, and a core whose
+    # CR4 does not enable the units (the AP trampoline) would fault here
+    # instead of printing.
+    fpu = answer(3)
+    expect(
+        "a task keeps its floating point registers across the switches",
+        "FPU: parent 1.000000000000 1.000000000000" in fpu
+        and "FPU: child 3 3.000000000000 0.333333333333" in fpu
+        and "FPU: child 7 7.000000000000 0.142857142857" in fpu,
+        fpu,
+    )
+    expect(
+        "a new image of execve starts with the clean state",
+        "FPU: state 037f 1f80" in fpu,
+        fpu,
+    )
+    expect(
+        "the tasks of the FPU test all finish on the two cores",
+        "FPU: all children ended, 0 failure(s)" in fpu and "the program exited with 0" in fpu,
+        fpu,
+    )
+
     # --- the clock of the second core after the load
-    last = answer(3)
+    last = answer(4)
     expect("the second report checks the queues", "smp: queues consistent" in last, last)
     last_ticks = {
         int(match.group(1)): int(match.group(2))

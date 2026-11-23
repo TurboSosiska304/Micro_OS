@@ -46,7 +46,7 @@ formatter of a double nor the database of libmagic.
 | the reader of a line | `src/format_ext.c` | `getline`/`getdelim`: the buffer of the caller grows with the line, which is what a command of a Unix-like system is written on |
 | the conversions and the sort | `src/stdlib.c` | `strtod`, `strtol`/`strtoul`/`strtoll`/`strtoull`, `atoi`/`atol`/`atof`, `abs`/`labs`, `qsort` (a merge sort in the arena, insertion when it has no room), `getenv` over `environ`. A build without `ULIBC_WITH_FLOAT` links the file and not `strtod`/`atof`, which are in the float build alone |
 | the numbers and the order of sbase | `src/stdlib_ext.c` | the same conversions with the `ERANGE` of an overflow, `atoll`/`llabs`, the heap sort of `qsort` and the halving walk of `bsearch`, and `getenv`; a command of sbase links this file and a program of another port the one above, so no program carries two answers to one name |
-| the information about an object | `src/stat.c`, `include/sys/stat.h` | the POSIX `struct stat` with the `S_IS*` macros, `stat`/`lstat` (one call: the system has no links) over `KSYS_STATX`, `fstatat`, `fstat` (the position of the end), `chmod`, `umask`. The record of the ABI keeps its own name, `ulibc_stat_call`, and fills `struct vfs_stat` |
+| the information about an object | `src/stat.c`, `include/sys/stat.h` | the POSIX `struct stat` with the `S_IS*` macros, `stat`/`lstat` (one call: the system has no links) over `KSYS_STATX`, `fstatat`, `fstat` over `KSYS_FSTAT` (the mode, the owner, the size and the two moments of the open object), `chmod`, `umask`. The record of the ABI keeps its own name, `ulibc_stat_call`, and fills `struct vfs_stat` |
 | the entries of a directory | `src/dirent.c`, `include/dirent.h` | `DIR`, `struct dirent`, `opendir`, `fdopendir`, `readdir`, `closedir`, `rewinddir`, `dirfd` over a batch of eight names of `ulibc_readdir` |
 | the path and the directory | `src/path.c`, `src/syscall.c` | the resolver of a relative path against the directory of the program (the ABI has no call that moves it), `.`/`..` folded, and the table of the directories an open named (`fdopendir`) |
 | the halves of a path, the copy of a word | `src/libgen.c`, `src/string_ext.c` | `basename`/`dirname`, `strdup`/`strndup` (they allocate, and a program without an arena does not link them), `strspn`/`strcspn`/`strpbrk` (in `src/string.c`, which every program links), the compare without the case of a letter |
@@ -213,9 +213,9 @@ the families a portable POSIX source expects, and they are now part of it:
 | Header | The functions | The file |
 |---|---|---|
 | `<dirent.h>` | `opendir`, `readdir`, `closedir`, `rewinddir`, `fdopendir` over `KSYS_READDIR`, one batch of eight entries per directory | `src/dirent.c` |
-| `<sys/stat.h>` | `stat`, `lstat`, `fstat`, `fstatat`, `chmod`, `umask` and `struct stat` with the `S_IS*` macros over `KSYS_STATX`; `fstat` reads the size with `lseek` | `src/stat.c` |
-| `<unistd.h>` | `access`, `chdir`, `rmdir`, `readlink`, `isatty`, `pipe`, `dup2`, `fork`, `wait`, `waitpid`, `execvp`, `_exit`, `sleep`, `sysconf`, `getopt` | `src/unistd_ext.c`, `src/getopt.c` |
-| `<pwd.h>`, `<grp.h>` | one user, uid 0 and gid 0, named `root` | `src/pwd.c` |
+| `<sys/stat.h>` | `stat`, `lstat`, `fstat`, `fstatat`, `chmod`, `umask` and `struct stat` with the `S_IS*` macros over `KSYS_STATX`; `fstat` asks `KSYS_FSTAT` for the mode, the owner and the moments of the open object | `src/stat.c` |
+| `<unistd.h>` | `access`, `chdir`, `rmdir`, `readlink`, `isatty`, `pipe`, `dup2`, `fork`, `wait`, `waitpid`, `execvp`, `_exit`, `sleep`, `sysconf`, `getopt`; `rmdir` is `KSYS_RMDIR`, not `unlink` of a directory | `src/unistd_ext.c`, `src/getopt.c` |
+| `<pwd.h>`, `<grp.h>` | the credentials of the task (`getuid`, `geteuid`, `getgid`, `setuid`, `setgid`); only uid and gid 0 have a name, `root` | `src/pwd.c` |
 | `<time.h>` | `time`, `clock`, `gmtime`/`localtime`, `strftime`, `mktime`, `clock_gettime` | `src/time.c` |
 | `<regex.h>` | a POSIX basic/extended engine: literals, `.`, `*`, `+`, `?`, `{m,n}`, groups, back references, alternation, brackets and the classes | `src/regex.c` |
 | `<fnmatch.h>` | the pattern of a name with `*`, `?`, `[...]`, `FNM_PATHNAME` and `FNM_NOESCAPE` | `src/fnmatch.c` |
@@ -256,12 +256,19 @@ bugs:
   and the loader turns the SSE and x87 units on for ring 3; the scheduler
   saves neither, so one such program runs at a time (`docs/debts.md`).
 
-`fork` is real on x86-64 (copy on write), and its child of the port comes
-back with the pid of the parent's answer in RAX and a stack page that the
-parent can still write; `src/unistd_ext.c` gives the child its zero (the pid
-of the task is the answer) and lets the child leave the frame of the call
-before the parent uses the stack again. `docs/debts.md` records the two
-halves of the port that would make the workaround unnecessary.
+`fork` is real on x86-64 (copy on write): the child returns from the call with
+0, the parent with the pid, `execve` of a program replaces the image of the
+caller and `waitpid` reaps the child and hands back its status. `fork()` of
+the library is the call itself - the port zeroes the answer of the child and
+flushes the TLB of the pages it makes read-only, so no workaround is needed.
+
+The status of `waitpid` is the code the program exited with (0 to 255), and a
+task taken down by a signal ends with `128 + the signal`. That is not the
+16-bit word of POSIX where the code and the signal sit in two fields, so
+`<sys/wait.h>` reads it in those two ranges: 0 to 127 is `WIFEXITED` with
+`WEXITSTATUS` the code, and 128 to 255 is `WIFSIGNALED` with `WTERMSIG` the
+signal. A program that calls `exit(200)` is therefore reported as the signal
+72; a code above 127 is the price of a status of one byte.
 
 ## The limits
 
@@ -320,7 +327,8 @@ The tests of the library of the kernel live in `tests/cases/test_libc.c`:
 the library is checked against the library of the system with the real
 numbers of the corpus of the project. The pure part of the library of a
 program (the classes, the strings, the pattern of a name, the options, the
-regular expressions, the one user and the decimal order of sbase) is compiled
-for the host by `tests/cases/test_userland.c`, which is a test of its own
-(`userland`); the calls behind the door are covered by `make x86-smoke` and
-`make x86-disk-smoke`.
+regular expressions, the credentials and the decimal order of sbase) is
+compiled for the host by `tests/cases/test_userland.c`, which is a test of its
+own (`userland`); the door the credentials of that build call is the shim of
+`tests/cases/userland_door_shim.c`, and the real calls behind the door are
+covered by `make x86-smoke` and `make x86-disk-smoke`.

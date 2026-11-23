@@ -46,6 +46,10 @@ PROGRAMS = [
     "fork",
     "badptr",
     "signals",
+    "procs",
+    # The floating point state of a task (K9): three tasks compute in double
+    # at once and the smoke test reads the number of each of them.
+    "fpu2",
     "cat",
     "echo",
     "streams",
@@ -55,7 +59,9 @@ PROGRAMS = [
     "head",
     "grep",
     "mkdir",
+    "mv",
     "rm",
+    "rmdir",
     "pwd",
     "spawn",
     "nx",
@@ -85,8 +91,11 @@ PROGRAMS = [
     "sqlite3",
     "awk",
     # The first interface of the machine (ADR 0028): a program of the library
-    # that draws in /dev/fb0 and reads /dev/input0.
+    # that draws in /dev/fb0 and reads /dev/input0. The editor and the file
+    # manager of ADR 0030 are the programs above it.
     "ui",
+    "edit",
+    "fm",
 ]
 
 # The second name of the compression command: `zstdcat` is the same image and
@@ -370,6 +379,24 @@ SQL_SETUP = (
 SQL_READ = (
     "SELECT count(*), sum(price) FROM items;\n"
     "SELECT typeof(price), typeof(data) FROM items WHERE id=1;\n"
+    "PRAGMA integrity_check;\n"
+)
+# The transaction a reset interrupts: the journal of the file is old pages of
+# the table, and the line after it keeps the process alive long enough for the
+# driver of the smoke test to take the machine down. The next boot rolls the
+# journal back and reads the rows of the setup again.
+SQL_TXN = (
+    "BEGIN;\n"
+    "UPDATE items SET price = 99.0 WHERE id = 1;\n"
+    "INSERT INTO items(name, price, data) VALUES('extra', 42.0, x'ee');\n"
+    "SELECT 'MIDTRANSACTION';\n"
+    "WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x + 1 FROM c WHERE x < 20000000)"
+    " SELECT sum(x) FROM c;\n"
+)
+SQL_AFTER = (
+    "SELECT count(*) FROM items;\n"
+    "SELECT price FROM items WHERE id = 1;\n"
+    "SELECT count(*) FROM items WHERE name = 'extra';\n"
     "PRAGMA integrity_check;\n"
 )
 SQL_NESTED = ".read /etc/sql-read.sql\n"
@@ -942,6 +969,8 @@ def build_image(
         ("sql-nested.sql", SQL_NESTED),
         ("sql-schema.sql", SQL_SCHEMA),
         ("sql-timer.sql", SQL_TIMER),
+        ("sql-txn.sql", SQL_TXN),
+        ("sql-after.sql", SQL_AFTER),
     ):
         path = os.path.join(build_dir, name)
         with open(path, "w", encoding="utf-8", newline="\n") as file:

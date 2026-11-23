@@ -14,9 +14,10 @@
  * the second machine is `make x86-smoke` and `make x86-disk-smoke`, which run
  * /bin/sqlite3 over the same bytes of MicroFS.
  *
- * The guest program keeps the journal in memory because a task of that
- * machine has four descriptors (docs/debts.md); the host has no such limit,
- * so the rollback journal of a file is exercised here.
+ * The guest program asks for the journal of a file as well: a task of that
+ * machine has sixteen descriptors, and the smoke test
+ * (tools/x86_fs_smoke.py) interrupts a transaction with a reset and reads
+ * the rows that the journal of the next boot rolled back.
  */
 #include "ktest.h"
 #include "tests/tests.h"

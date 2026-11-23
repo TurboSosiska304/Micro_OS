@@ -1163,6 +1163,7 @@ PORTABLE_DIRS = (
     "components/net/",
     "components/procfs/",
     "components/telnet/",
+    "components/ui/",
     "components/wifi/",
 )
 

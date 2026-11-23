@@ -8,8 +8,10 @@
  * what it needs across the call of port_x86_64_switch(), so there is nothing
  * else to keep.
  *
- * There is no floating point and no SSE in this kernel: the build is
- * -mgeneral-regs-only, and the port never touches the FPU state.
+ * There is no floating point and no SSE in the C of this kernel: the build is
+ * -mgeneral-regs-only. The state of the units of a task - the x87 registers,
+ * the XMM registers and MXCSR - is saved and loaded by port_x86_64_task.c
+ * around this switch with FXSAVE/FXRSTOR, in the image the context carries.
  *
  * The red zone is not available either (-mno-red-zone): an interrupt may
  * overwrite the bytes under RSP at any moment, so everything of value is

@@ -690,12 +690,83 @@ static void test_unlink(void)
     KT_CHECK_INT_EQ(mfs_get_info(&info), MFS_OK);
     KT_CHECK_INT_EQ(info.inodes_used, 1);
 
-    /* The directory has to be empty before it can be removed. */
+    /* The two calls of POSIX: unlink of a directory is refused, and rmdir of
+     * a directory that still holds an entry is not empty. */
     KT_CHECK_INT_EQ(mfs_mkdir("/dir"), MFS_OK);
     KT_CHECK_INT_EQ(mfs_create("/dir/file"), MFS_OK);
-    KT_CHECK_INT_EQ(mfs_unlink("/dir"), MFS_ENOTEMPTY);
+    KT_CHECK_INT_EQ(mfs_unlink("/dir"), MFS_EISDIR);
+    KT_CHECK_INT_EQ(mfs_rmdir("/dir"), MFS_ENOTEMPTY);
     KT_CHECK_INT_EQ(mfs_unlink("/dir/file"), MFS_OK);
-    KT_CHECK_INT_EQ(mfs_unlink("/dir"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_rmdir("/dir"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_rmdir("/dir"), MFS_ENOENT);
+    KT_CHECK_INT_EQ(mfs_create("/plain"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_rmdir("/plain"), MFS_ENOTDIR);
+    KT_CHECK_INT_EQ(mfs_unlink("/plain"), MFS_OK);
+
+    teardown();
+}
+
+/*
+ * The property: one call moves a name and not the bytes, a file moves to
+ * another directory of the volume, a directory stays in its parent, and the
+ * two calls of POSIX remove exactly one kind of object each.
+ */
+static void test_rename(void)
+{
+    struct mfs_file file;
+    struct mfs_inode inode;
+    char buffer[32];
+
+    ktest_begin("mfs: a name moves and a directory is removed by rmdir");
+
+    KT_CHECK_INT_EQ(setup(), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+
+    KT_CHECK_INT_EQ(mfs_create("/one.txt"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_open("/one.txt", MFS_O_RDWR, &file), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_write(&file, "hello", 5), 5);
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+
+    KT_CHECK_INT_EQ(mfs_rename("/one.txt", "/two.txt"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/one.txt", &inode, NULL), MFS_ENOENT);
+    KT_CHECK_INT_EQ(mfs_stat("/two.txt", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(inode.size, 5);
+    KT_CHECK_INT_EQ(mfs_open("/two.txt", MFS_O_RDONLY, &file), MFS_OK);
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(mfs_read(&file, buffer, sizeof(buffer)), 5);
+    KT_CHECK_STR_EQ(buffer, "hello");
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+
+    /* A file moves between directories; a directory only inside its own
+     * parent, and a name at the destination that is a file is replaced. */
+    KT_CHECK_INT_EQ(mfs_mkdir("/dir"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_mkdir("/other"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_rename("/two.txt", "/dir/two.txt"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/two.txt", &inode, NULL), MFS_ENOENT);
+    KT_CHECK_INT_EQ(mfs_stat("/dir/two.txt", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_rename("/dir", "/other/dir"), MFS_ENOTSUP);
+    KT_CHECK_INT_EQ(mfs_rename("/dir", "/other"), MFS_EISDIR);
+
+    KT_CHECK_INT_EQ(mfs_create("/dir/other.txt"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_rename("/dir/two.txt", "/dir/other.txt"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/dir/two.txt", &inode, NULL), MFS_ENOENT);
+    KT_CHECK_INT_EQ(mfs_stat("/dir/other.txt", &inode, NULL), MFS_OK);
+
+    /* The two removals of POSIX do not stand in for each other. */
+    KT_CHECK_INT_EQ(mfs_unlink("/dir"), MFS_EISDIR);
+    KT_CHECK_INT_EQ(mfs_rmdir("/dir"), MFS_ENOTEMPTY);
+    KT_CHECK_INT_EQ(mfs_unlink("/dir/other.txt"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_rmdir("/dir/other.txt"), MFS_ENOENT);
+    KT_CHECK_INT_EQ(mfs_rmdir("/dir"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_create("/plain"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_rmdir("/plain"), MFS_ENOTDIR);
+    KT_CHECK_INT_EQ(mfs_unlink("/plain"), MFS_OK);
+
+    /* What the calls wrote is on the medium and not only in memory. */
+    mfs_unmount();
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/other", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/dir", &inode, NULL), MFS_ENOENT);
 
     teardown();
 }
@@ -1477,6 +1548,7 @@ void test_mfs(void)
     test_big_file();
     test_directories();
     test_unlink();
+    test_rename();
     test_default_modes();
     test_chmod();
     test_chmod_chown_bounds();

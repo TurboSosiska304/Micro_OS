@@ -16,17 +16,15 @@
  *    read whole into the arena, the descriptor 0 is closed, and `stdin` is a
  *    stream over the memory (`fmemopen`); a `.read` of the shell then has a
  *    descriptor of its own (0) for as long as it runs;
- *  - **the journal**. With one descriptor beside the database and the
- *    console, the journal of a transaction cannot be a second file; the
- *    program asks SQLite for a journal in memory (`journal_mode=MEMORY`)
- *    before the first command. The VFS of the port implements the file
- *    journal as well (DELETE, PERSIST, TRUNCATE) and the host test exercises
- *    it; the reason of the difference is the four descriptors of a task, and
- *    it is a row in docs/debts.md.
+ *  - **the journal**. A task of this machine has sixteen descriptors, so the
+ *    rollback journal of SQLite is a file of the volume like the database:
+ *    the program asks for `journal_mode=DELETE`, the mode whose journal
+ *    disappears when the transaction commits, and a power cut with a hot
+ *    journal on the volume is rolled back by the next open. The VFS of the
+ *    port implements DELETE, PERSIST and TRUNCATE.
  *
- * The four descriptors of the program, then: 0 the database (or a `.read`
- * when one is open), 1 and 2 the console, 3 free for the next file SQLite
- * opens.
+ * The descriptors of the program, then: 0 the database (or a `.read` when
+ * one is open), 1 and 2 the console, and the rest for SQLite's files.
  */
 #include <errno.h>
 #include <stdio.h>
@@ -140,7 +138,7 @@ static void reserve_console(void)
 /* The arguments of the shell with the one command of the port in front. */
 static char **with_journal_command(int argc, char **argv)
 {
-    static char journal[] = "PRAGMA journal_mode=MEMORY";
+    static char journal[] = "PRAGMA journal_mode=DELETE";
     char **out = (char **)malloc(((size_t)argc + 3u) * sizeof(char *));
     int index;
 

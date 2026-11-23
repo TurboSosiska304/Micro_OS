@@ -16,8 +16,12 @@
 #define VFS_PATH_MAX 128
 
 /*
- * The one user of the system (ADR 0005). The VFS checks the search bit of
- * the directories of a path for that uid and grants it nothing extra.
+ * The root of the system (ADR 0005). It is the uid of the boot and of the
+ * kernel itself, the only number a task may not give up once it is another
+ * user, and the only one the VFS lets through a triad it did not match. The
+ * VFS compares the three triads of the mode with the uid of the task that
+ * makes the call; a task without a record - the boot before the scheduler -
+ * is root.
  */
 #define VFS_UID 0u
 
@@ -34,6 +38,14 @@
  * one small byte and every one of them fits there.
  */
 #define VFS_O_DIRECTORY 0x0800
+/*
+ * The exclusive create: with VFS_O_CREAT the open fails with KERR_EXIST when
+ * the name is already there instead of opening the object. A caller that
+ * writes a file beside the old one and installs it with a rename asks for
+ * this, because a name of somebody else must not be overwritten by a
+ * half-written copy.
+ */
+#define VFS_O_EXCL 0x1000
 
 /* One entry of a directory. */
 struct vfs_dirent {
@@ -136,6 +148,15 @@ struct vfs_operations {
     int (*statx)(void *ctx, const char *path, struct vfs_statx *out);
     int (*mkdir)(void *ctx, const char *path);
     int (*unlink)(void *ctx, const char *path);
+    /*
+     * Remove an empty directory. It is a call of its own and not the unlink
+     * of a directory, because POSIX separates the two: unlink of a directory
+     * answers KERR_ISDIR and rmdir of a file answers KERR_NOTDIR, so a
+     * program that meant one cannot silently do the other. A directory that
+     * still holds an entry is KERR_NOTEMPTY. A filesystem that has no
+     * directories leaves the field empty.
+     */
+    int (*rmdir)(void *ctx, const char *path);
     /*
      * Rename an object of the volume (ADR 0024 §5). The atomic install is
      * the reason it exists: the bytes of a program are written beside it,
@@ -249,6 +270,9 @@ int vfs_type_find(const char *name);
  * The point is checked before the mount function of the type runs, so a
  * point that is busy or malformed costs no volume: the caller gets the same
  * errors as vfs_mount() and the type is not called.
+ *
+ * Only root mounts a volume: a task of another uid learns KERR_PERM before
+ * a type is looked up or a medium read. The boot calls this as root.
  */
 int vfs_mount_type(const char *point, const char *type, const char *device);
 
@@ -264,6 +288,8 @@ int vfs_mount_type(const char *point, const char *type, const char *device);
  *
  * A filesystem that refuses to leave - its `umount` operation returns an
  * error, KERR_NOTSUP among them - stays mounted and its error is returned.
+ * Only root unmounts a volume; another uid learns KERR_PERM and nothing
+ * leaves the tree.
  */
 int vfs_umount(const char *point);
 
@@ -349,6 +375,16 @@ int vfs_mkdir_p(const char *path);
 int vfs_unlink(const char *path);
 
 /*
+ * Remove an empty directory. The object has to be a directory (KERR_NOTDIR
+ * for a file) and it has to be empty (KERR_NOTEMPTY). The parent is walked
+ * like the parent of unlink, so a directory that the caller cannot search is
+ * not removed. A filesystem that cannot remove a directory answers
+ * KERR_NOTSUP; the virtual filesystems leave the name of the operation empty
+ * for that reason.
+ */
+int vfs_rmdir(const char *path);
+
+/*
  * Rename an object inside one filesystem: the name `from` becomes `to`. An
  * object already called `to` is replaced when it is a file, the way rename
  * of POSIX does it (this is the atomic step of an install, ADR 0024 §5);
@@ -366,7 +402,15 @@ int vfs_rename(const char *from, const char *to);
 
 int vfs_statfs(const char *path, struct vfs_statfs *out);
 
-/* The mode and the owner of an object; a filesystem without them says so. */
+/*
+ * The mode and the owner of an object; a filesystem without them says so.
+ *
+ * The two calls carry the policy of the system above the filesystem: chmod
+ * is the owner of the object or root and chown is root alone. A caller that
+ * is neither learns KERR_PERM. The rule lives here and not at the edge of
+ * the system calls, because the shell and the tests reach the same objects
+ * through these functions.
+ */
 int vfs_chmod(const char *path, k_u32_t mode);
 int vfs_chown(const char *path, k_u32_t owner);
 

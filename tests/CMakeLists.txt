@@ -11,6 +11,7 @@ if(NOT ESP_PLATFORM)
         cases/test_ansi.c
         cases/test_port.c
         cases/test_blockdev.c
+        cases/test_blockdev_cache.c
         cases/test_root.c
         cases/test_render.c
         cases/test_boot.c
@@ -30,6 +31,7 @@ if(NOT ESP_PLATFORM)
         cases/test_fs_ext2.c
         cases/test_sysfs.c
         cases/test_ui.c
+        cases/test_ui_windows.c
         cases/test_input_debounce.c
         cases/test_battery_soc.c
         cases/test_fb_draw.c
@@ -41,6 +43,7 @@ if(NOT ESP_PLATFORM)
         cases/test_text_wrap.c
         cases/test_ksys.c
         cases/test_ksys_process.c
+        cases/test_users.c
         cases/test_libc.c
         cases/test_kshell.c
         cases/test_kshell_pipe.c
@@ -552,6 +555,7 @@ if(NOT ESP_PLATFORM)
         microos_procfs
         microos_devfs
         microos_libc
+        microos_ui
         microos_port_host
     )
 
@@ -606,6 +610,7 @@ target_compile_definitions(microos_tests PRIVATE
     # and <string.h> of the other tests.
     set(MICROOS_USERLAND_TESTS
         cases/test_userland.c
+        cases/userland_door_shim.c
         src/userland_main.c
         framework/ktest.c
         "${CMAKE_SOURCE_DIR}/components/libc/user/src/ctype.c"

@@ -236,15 +236,16 @@ The volume of 0.3.x is not rewritten: see "The mistakes that cost time".
 
 ### The mode of the object
 
-The check happens at the edge, with the credential of the caller, and the
-kernel has one user (uid 0, `KSYS_UID`):
+The check happens at the edge, with the credential of the caller, and every
+task has a uid and a gid (`KSYS_UID` is the root, 0):
 
 * the bits that decide for the caller are the triad of the owner when the
-  object belongs to uid 0 and the triad of the others otherwise - there is no
-  group and no third party;
-* there is no bypass for the owner of the system: the exemption of root is
-  the one part of the POSIX rule that is left out, so a file of mode `0200`
-  cannot be read by anybody, the only user included (ADR 0005);
+  object belongs to the uid of the task and the triad of the others
+  otherwise - no filesystem stores a group, so the triad of the group is
+  never the one that decides;
+* root passes the triads of read and write, and `execve` still needs an `x`
+  bit for somebody: the exemption of POSIX, with the mark of a program kept
+  (ADR 0005);
 * `open` compares the wish in its flags with the bits of the object
   (`open_path_mode_check()` describes the object with `vfs_stat()` and
   `open_mode_check()` compares the access), and a file that is not there is
@@ -258,7 +259,14 @@ kernel has one user (uid 0, `KSYS_UID`):
 * `chmod` and `chown` are numbers 23 and 24, checked against `KSYS_MODE_MASK`
   and `KSYS_UID_MAX` at the door and stored by the record. A zero mode passes
   the door and is refused by the filesystem, because zero already means "the
-  record predates the modes".
+  record predates the modes". `chmod` is the owner of the object or root,
+  `chown` is root alone;
+* the credentials of a task came with the second half of the phase: `getuid`
+  (36), `geteuid` (37), `getgid` (38), `setuid` (39) and `setgid` (40). A
+  task takes the two numbers from the task that makes it, a fork and a
+  program keep them, and a program of another uid reads the triad of the
+  owner or of the others. The group is stored in the task and in no record,
+  and `setuid` of root is one way in this ABI.
 
 The mode of a file is a number of the record and not of the mount: two
 objects of the same directory may answer differently to the same caller, and

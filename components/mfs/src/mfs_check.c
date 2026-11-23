@@ -904,8 +904,11 @@ static int walk_tree(const struct mfs_private *view, struct mfs_check_report *re
  */
 #define REPAIR_BUSY 1
 
-/* The records the walk of the tree has reached: a rebuild of the orphan map. */
-static k_u8_t s_reached[MFS_REPAIR_INODES_MAX / 8u];
+/* The records the walk of the tree has reached: a rebuild of the orphan
+ * map. The map is taken for the volume of the pass and given back at its
+ * end, so the repair of a table of any size costs its memory only while it
+ * runs. */
+static k_u8_t *s_reached;
 
 /*
  * The walk could not be finished - a shared directory, a subtree deeper
@@ -915,14 +918,46 @@ static k_u8_t s_reached[MFS_REPAIR_INODES_MAX / 8u];
  */
 static bool s_incomplete;
 
+static int reached_alloc(const struct mfs_private *view, struct mfs_check_report *report)
+{
+    k_u32_t bytes = (view->inode_capacity + 7u) / 8u;
+    k_u8_t *map;
+
+    if (bytes == 0u) {
+        add_error(report, CHECK_SUBJECT_VOLUME, 0, "the table of the records has no map to repair");
+        return MFS_EINVAL;
+    }
+
+    map = (k_u8_t *)kmm_alloc((k_size_t)bytes, KMM_PRIORITY_SYSTEM);
+    if (map == NULL) {
+        add_error(report, CHECK_SUBJECT_VOLUME, 0, "no memory for the map of the records");
+        return MFS_ENOMEM;
+    }
+
+    memset(map, 0, bytes);
+    s_reached = map;
+
+    return MFS_OK;
+}
+
+static void reached_free(void)
+{
+    if (s_reached != NULL) {
+        kmm_free(s_reached);
+        s_reached = NULL;
+    }
+}
+
 static bool reach_test(k_u32_t index)
 {
-    return bit_test(s_reached, index);
+    return (s_reached != NULL) ? bit_test(s_reached, index) : false;
 }
 
 static void reach_mark(k_u32_t index)
 {
-    bit_set(s_reached, index);
+    if (s_reached != NULL) {
+        bit_set(s_reached, index);
+    }
 }
 
 /* A repair that the medium refused: the pass stops and says why. */
@@ -1695,23 +1730,23 @@ int mfs_repair_locked(const struct mfs_private *view, struct mfs_check_report *r
         return MFS_OK;
     }
 
-    if (view->inode_capacity >= MFS_REPAIR_INODES_MAX) {
-        add_error(report, CHECK_SUBJECT_VOLUME, 0,
-                  "the table of the records is bigger than the repair can map");
-        return MFS_OK;
-    }
-
     /*
-     * The map of the blocks the walk claims is taken for this volume and
-     * given back at the end: a repair of a big volume costs its memory only
-     * while it runs, the same way the check does.
+     * The map of the blocks the walk claims and the map of the records it
+     * reaches are taken for this volume and given back at the end: a repair
+     * of a big volume costs its memory only while it runs, the same way the
+     * check does.
      */
     rc = claimed_alloc(view, report);
     if (rc != MFS_OK) {
         return rc;
     }
 
-    memset(s_reached, 0, sizeof(s_reached));
+    rc = reached_alloc(view, report);
+    if (rc != MFS_OK) {
+        claimed_free();
+        return rc;
+    }
+
     s_incomplete = false;
 
     rc = repair_tree(view, report);
@@ -1738,6 +1773,7 @@ int mfs_repair_locked(const struct mfs_private *view, struct mfs_check_report *r
         }
     }
 
+    reached_free();
     claimed_free();
 
     return rc;

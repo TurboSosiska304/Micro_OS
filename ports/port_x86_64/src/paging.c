@@ -740,8 +740,17 @@ k_u64_t port_x86_64_paging_space_clone(k_u64_t parent_cr3)
                 continue;
             }
 
-            address = (k_u64_t)PORT_X86_64_USER_BASE + ((k_u64_t)(USER_PD_FIRST + pd_index) << 21) +
-                      ((k_u64_t)pt_index << PAGE_SHIFT);
+            /*
+             * The index of the PD entry already carries the base of the
+             * window (USER_PD_FIRST is the base in units of 2 MiB), so the
+             * address is the two indices and not the base again: an invlpg
+             * of a virtual address 32 MiB above the page leaves the stale
+             * entry in the TLB, and the first write of the parent after the
+             * fork then goes to the frame it now shares with the child - the
+             * copy of the stack the child needs, overwritten by its parent.
+             */
+            address =
+                ((k_u64_t)(USER_PD_FIRST + pd_index) << 21) | ((k_u64_t)pt_index << PAGE_SHIFT);
 
             /* The frame is shared by the two spaces, even when it is the text:
              * the last space to leave it is the one that releases it. */

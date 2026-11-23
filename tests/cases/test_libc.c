@@ -779,10 +779,22 @@ static void test_permissions(void)
     KT_CHECK_INT_EQ(info.mode, 0600);
     KT_CHECK_INT_EQ(info.owner, 9);
 
-    /* The mode is real: a file of 0400 cannot be opened to be written to. */
+    /*
+     * The mode is real: a file of 0400 is opened to be written to by root,
+     * which passes the triads, and refused to a task of another uid, which
+     * reads the triad of the others.
+     */
     KT_CHECK_INT_EQ(microos_chmod("/lib-mode.txt", 0400), 0);
+    fd = microos_open("/lib-mode.txt", MICROOS_O_WRONLY);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK(microos_close(fd) == 0);
+    }
+
+    task_set_uid(task_self(), 7);
     KT_CHECK_INT_EQ(microos_open("/lib-mode.txt", MICROOS_O_WRONLY), -1);
     KT_CHECK_INT_EQ(microos_errno(), 1); /* EPERM */
+    task_set_uid(task_self(), 0);
 
     /* The numbers a record of the filesystem cannot hold are refused here. */
     KT_CHECK_INT_EQ(microos_chmod("/lib-mode.txt", 01000), -1);
