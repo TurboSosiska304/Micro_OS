@@ -2212,7 +2212,11 @@ static int cmd_exec(int argc, char **argv)
     rc = microos_execve(path, args);
     if (rc == 0) {
         /* A program that returned: the machine has no process to exit into. */
-        kshell_printf("the program has finished\n");
+        /* A line of the shell goes to the console and not to the output of
+         * the program: with `exec gzip -c f > g` the stream of the program is
+         * still the one the shell is writing to, and the sentence ended up in
+         * the archive (found by the port of gzip). */
+        kshell_eprintf("the program has finished\n");
         return KSHELL_OK;
     }
 
