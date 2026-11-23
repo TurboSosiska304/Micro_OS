@@ -82,15 +82,22 @@ bench: console 1010.10 lines/s
 bench: shell_pipe 0.17 MiB/s
 ```
 
-| Row | Value | Unit | Guest time | Host time |
-|---|---|---|---|---|
-| `syscall_getpid` | 1 282 051.28 | calls/s | 78 ms | 106 ms |
-| `fork_exec` | 322.58 | runs/s | 62 ms | 97 ms |
-| `pipe` | 0.20 | MiB/s | 19 712 ms | 19 741 ms |
-| `file_write` | 6.63 | MiB/s | 2 412 ms | 2 466 ms |
-| `file_read` | 126.98 | MiB/s | 126 ms | 158 ms |
-| `console` | 1 010.10 | lines/s | 198 ms | 235 ms |
-| `shell_pipe` | 0.17 | MiB/s | — | 23 437 ms |
+| Row | Value | Unit | Spread of four runs | Guest time | Host time |
+|---|---|---|---|---|---|
+| `syscall_getpid` | 1 282 051.28 | calls/s | 1.19–1.28 M | 78 ms | 106 ms |
+| `fork_exec` | 322.58 | runs/s | 317–328 | 62 ms | 97 ms |
+| `pipe` | 0.20 | MiB/s | 0.20 | 19 712 ms | 19 741 ms |
+| `file_write` | 6.63 | MiB/s | 6.3–6.7 | 2 412 ms | 2 466 ms |
+| `file_read` | 126.98 | MiB/s | 101–133 | 126 ms | 158 ms |
+| `console` | 1 010.10 | lines/s | 990–1 026 | 198 ms | 235 ms |
+| `shell_pipe` | 0.17 | MiB/s | 0.17 | — | 23 437 ms |
+
+The spread is four runs of the same tree, one of them a build from an empty
+`build-x86/`: `pipe` and `shell_pipe` did not move at all, `fork_exec` and
+`console` moved by a few percent, and `file_read` moved by a quarter, which
+follows the load of the host and not the tree. **A difference of a tenth is
+not a signal**; a lane that claims a rate runs the tool three times and
+compares the middle of the three.
 
 The machine of the measurement: QEMU 11.1.3 of the host, TCG (no `-accel`),
 256 MB, one processor, the default `pc` machine, the disk on the legacy IDE
@@ -138,13 +145,20 @@ The other rows have the answers of the code they lean on:
   parent: 3.1 ms per run of the emulated machine.
 * `file_write` is the filesystem and not the disk: the volume is MicroFS, a
   file grows block by block with the map and the record of each block, and
-  the rate (6.6 MiB/s) is the allocation. `file_read` is 20 times faster
-  because a read is a chain of blocks and a copy, and because the image of
-  the machine is a file of the host: QEMU reads it through the page cache of
-  the host and the port keeps half a megabyte of write-back cache. The read
-  of 16 MiB was written 2.4 s earlier, so the page cache of the host is warm
-  for the whole file. The same warm cache is under every release, which is
-  what makes the row comparable; it is not the rate of a disk.
+  the rate (6.6 MiB/s) is the allocation. The row is a write of 16 MiB to a
+  volume that holds a file of 4 MiB and has about 55 MiB free; a second file
+  of 16 MiB on the same volume writes at 3.7 MiB/s, because the allocation
+  scans the map from its first bit on every block (the debt in `debts.md`).
+  The position of the write in the run is part of the number, which is why
+  the order of the lines is fixed.
+* `file_read` is 20 times faster than the write because a read is a chain of
+  blocks and a copy, and because the image of the machine is a file of the
+  host: QEMU reads it through the page cache of the host. A second read of
+  the same file and a read after another file of 16 MiB evicted the port's
+  cache gave 121–124 MiB/s, so the row is the read path and not a cache of
+  the port (which holds half a megabyte). The warm page cache of the host is
+  under every release, which is what makes the row comparable; it is not the
+  rate of a disk of a machine.
 * `console` is one `write` of 43 bytes per line to the serial console: the
   door and the emulated UART, and not the buffered `printf` of the library
   and not the shell's `echo` (which adds a program start per line).
@@ -174,10 +188,9 @@ for name in old:
 EOF
 ```
 
-One run is one sample and the noise of the emulator is a few percent: the
-three runs of the baseline above moved `syscall_getpid` by 2.5%, `fork_exec`
-by 2% and `file_read` by 5%. A difference of that size is not a signal. For a
-release gate, run each side three times and compare the middle of the three;
+One run is one sample and the noise of the emulator is the spread in the
+table above: `pipe` and `shell_pipe` are steady, `file_read` is not. For a
+release gate run each side three times and compare the middle of the three;
 a lane that claims a rate says which of the two clocks the number is, and how
 many runs it took.
 
