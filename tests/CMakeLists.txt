@@ -29,6 +29,7 @@ if(NOT ESP_PLATFORM)
         cases/test_fs_fat.c
         cases/test_fs_ext2.c
         cases/test_sysfs.c
+        cases/test_ui.c
         cases/test_input_debounce.c
         cases/test_battery_soc.c
         cases/test_fb_draw.c
