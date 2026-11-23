@@ -14,6 +14,26 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Added
 
+- A server of the files of the volume, `httpd serve [port] [root]`
+  (ADR 0036): HTTP/1.1 with keep-alive, GET and HEAD, `Content-Length`, the
+  type from the extension, `ETag` and `304`, one `Range` with `206` and
+  `416`, a listing of a directory as a chunked page of links, a `301` for a
+  directory named without its slash, a line of `/var/log/httpd.log` per
+  request, an idle timeout, a ceiling of the sessions that answers `503`, and
+  a path that is decoded and walked under the root, where a `..` that would
+  climb out is `403`.
+- The serving side of TLS, `httpd tls [port] [root]` on 443: the vendored
+  mbedTLS with `MBEDTLS_SSL_SRV_C`, the certificate and the key of
+  `/etc/ssl/server.crt` and `server.key` through the VFS, and `curl -k`
+  against the x86-64 guest in `make x86-net-smoke`. The board has no TLS on
+  either side and says so.
+- An update over the network, `ota fetch <url>` (ADR 0022 §7, ADR 0036): the
+  signed image is downloaded into a staging file, the trailer and the
+  Ed25519 signature are checked **before** the inactive slot is written, the
+  slot is selected and the reboot is the caller's; a slot that never
+  confirms itself is rolled back - in the file form of x86-64 and in otadata
+  on the board. `ota status`, `ota boot` and `ota confirm` are the state at
+  the console, and `wget --sha256` reports the digest of what it read.
 - The system call of the x86-64 port takes the fast door of the processor
   (ADR 0035): the library of a program calls with `syscall` and returns with
   `sysret`, the port programs `IA32_EFER.SCE`, `IA32_STAR`, `IA32_LSTAR` and

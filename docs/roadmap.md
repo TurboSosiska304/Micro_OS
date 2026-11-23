@@ -216,6 +216,25 @@ written when the project was an operating system for one board; the numbers
       MicroFS has `mtime` and `ctime` in version 2, an old volume keeps its
       16 bytes, and `statx` (26) reports the moments (ADR 0013)
 * [x] A page of the state over HTTP: `httpd` on the sockets, `/` and `/health`
+* [x] A server of files (1.6, [ADR 0036](adr/0036-a-server-and-an-update.md)):
+      `httpd serve [port] [root]` answers GET and HEAD over HTTP/1.1 with
+      keep-alive, `Content-Length`, the type of the extension, `ETag` and
+      `304`, one `Range` (`206`/`416`), a listing of a directory as a chunked
+      page and a line of the log per request; a `..` that leaves the root is
+      `403`, a directory is never a file, and a session over the ceiling of
+      the machine is `503`. Three sessions on x86-64, four on the board,
+      sixteen on the host
+* [x] The serving side of TLS (`httpd tls`, port 443): the vendored mbedTLS
+      with `MBEDTLS_SSL_SRV_C`, the certificate and the key of `/etc/ssl`
+      read through the VFS, and `curl -k` against the guest in
+      `make x86-net-smoke`; the board has no TLS on either side (the flash of
+      its slot, [debts.md](debts.md))
+* [x] An update over the network (1.6, ADR 0022 §7): `ota fetch URL`
+      downloads a signed image, checks the trailer and the Ed25519 signature
+      **before** a byte of the inactive slot is written, selects the slot and
+      asks for a reboot; a slot that never confirms itself is rolled back, in
+      the file form of x86-64 and in otadata on the board. `ota status`,
+      `ota boot` and `ota confirm` are the state machine at the console
 * [x] MQTT over the sockets: a 3.1.1 client at QoS 0 and 1, with a fake broker in the tests
 * [x] The network on the x86-64 machine: a virtio-net driver (the legacy I/O
       interface, polled, ADR 0008 for the shape of a device of the port) and a
@@ -453,8 +472,12 @@ written when the project was an operating system for one board; the numbers
       the board
 * [x] The programs are files of `progs`, mounted read-only at `/bin`, with no
       image of a program in the firmware (`tools/progs_image.py`)
-* [ ] An update over the network into the inactive slot (ADR 0022, open
-      item; the USB path is the safe update of 1.1)
+* [x] An update over the network into the inactive slot (ADR 0022 §7,
+      ADR 0036): the signed image of an HTTPS server is checked before it
+      reaches the slot, the slot is selected and the boot that does not
+      confirm itself is rolled back. The board's flash path is built and
+      waits for a session with the board; the USB path of 1.1 stays the safe
+      update of a board in the field ([debts.md](debts.md))
 
 ## The road to 2.0
 
