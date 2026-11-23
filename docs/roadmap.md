@@ -73,7 +73,7 @@ written when the project was an operating system for one board; the numbers
       its disk and asks for `/bin/hello` with `execve`; the shell runs the
       same file with `exec`
 * [x] Programs are files on a filesystem of the disk, not blobs of the
-      kernel: `make x86-disk` writes `/bin` (thirty programs) and `/etc` with
+      kernel: `make x86-disk` writes `/bin` (thirty-one programs) and `/etc` with
       `tools/mkfs_mfs.c`, and no boot installs an image
 * [x] `PATH` for the shell
 * [x] `argv` reaches the port, and the ABI of the entry is written down
