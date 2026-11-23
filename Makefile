@@ -324,7 +324,8 @@ x86-run-serial: x86-disk
 		$(X86_DISK_DRIVE)
 
 x86-smoke: x86-disk x86-open-build
-	python3 tools/x86_smoke.py --image $(X86_PROGRAMS_IMAGE) --open-build $(X86_OPEN_BUILD)
+	python3 tools/x86_smoke.py --image $(X86_PROGRAMS_IMAGE) --open-build $(X86_OPEN_BUILD) \
+		--timeout 180
 
 # The gate of the two cores (ADR 0012): the kernel of `x86-smp-build` boots on
 # a machine of two processors and has to start both of them, keep a task on

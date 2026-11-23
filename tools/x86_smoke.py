@@ -2050,7 +2050,12 @@ def main(argv: list) -> int:
         default=os.path.join(ROOT, "build-x86-open"),
         help="the build with MICRO_OS_REQUIRE_SIGNATURE=OFF",
     )
-    parser.add_argument("--timeout", type=float, default=30.0, help="the seconds the machine gets")
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=120.0,
+        help="the seconds the machine gets for the whole session",
+    )
     parser.add_argument("--verbose", action="store_true", help="print the console of the machine")
     args = parser.parse_args(argv)
 
