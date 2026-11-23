@@ -227,19 +227,27 @@ spawn(void)
 
 dospawn:
 	/*
-	 * Micro OS: `execve` of this ABI runs the program as a task of its own
-	 * and returns when the program has ended. There is no child to fork and
-	 * no status to wait for: the command runs here, in the process of xargs,
-	 * and the loop reads the next batch after it. The jobs are one at a
-	 * time, and `-P` has nothing to do. `docs/porting-programs.md` names the
-	 * port and the K4 debt of a real fork.
+	 * The command is a process of its own, as in POSIX: the child is a copy
+	 * of xargs and the execve of the command replaces that copy, so the
+	 * loop of xargs goes on in the parent while the command runs. `-P` is
+	 * the number of children that may run at once; the wait below reaps the
+	 * ones that have finished without blocking until the ceiling is reached,
+	 * and blocks for one when it is.
 	 */
-	if (execvp(*cmd, cmd) < 0) {
+	switch (fork()) {
+	case -1:
+		eprintf("fork:");
+		break;
+	case 0:
+		execvp(*cmd, cmd);
 		savederrno = errno;
 		weprintf("execvp %s:", *cmd);
 		_exit(126 + (savederrno == ENOENT));
+	default:
+		curprocs++;
+		waitchld(0);
+		break;
 	}
-	(void)curprocs;
 }
 
 static void
