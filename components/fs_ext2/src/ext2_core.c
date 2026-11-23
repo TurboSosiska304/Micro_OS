@@ -4,8 +4,10 @@
  *
  * The reader walks the format of ext2 and stops at its first sign of
  * trouble: a superblock that is not there, a block number outside the
- * volume, an inode outside the table. Nothing is repaired and nothing is
- * written; a damaged volume is described as it is (ADR 0019).
+ * volume, an inode outside the table. Nothing is repaired; a damaged volume
+ * is described as it is (ADR 0019). The primitives of a write - the bytes of
+ * the medium, a block, the counters of the superblock - live here too, and
+ * the shape of the changes is the business of ext2_write.c (ADR 0029).
  */
 #include "ext2_private.h"
 
@@ -275,10 +277,11 @@ int ext2_volume_mount(struct ext2_volume *vol, const struct k_blockdev *dev)
     vol->feature_ro_compat = ext2_le32(sb + 100);
 
     /*
-     * A journal is replayed by a writer, and this reader never writes: a
-     * volume of ext3 that was not unmounted cleanly is not one this reader
-     * can promise. An extent tree or a 64-bit block number is a different
-     * layout, and the direct pointers below would read it as nonsense.
+     * A journal is replayed by a writer of ext3, which this filesystem is
+     * not: a volume of ext3 that was not unmounted cleanly is not one this
+     * mount can promise. An extent tree or a 64-bit block number is a
+     * different layout, and the direct pointers below would read it as
+     * nonsense.
      */
     if ((vol->feature_compat & EXT2_FEATURE_COMPAT_HAS_JOURNAL) != 0u) {
         return KERR_NOTSUP;
