@@ -85,8 +85,16 @@ static int fbdev_ioctl(k_u32_t request, k_u64_t arg)
         kinfo("fb: the console is taken by a program, the picture is its own");
         return 0;
     case FBIO_GIVE:
-        port_x86_64_fb_console_give();
-        kinfo("fb: the console is given back and the grid repainted");
+        /*
+         * The screen is one resource and a program may have started another
+         * one: the give of a program that is not the last holder of the
+         * device changes nothing, so the picture of a file manager survives
+         * the editor it started.
+         */
+        if (g_open_count <= 1) {
+            port_x86_64_fb_console_give();
+            kinfo("fb: the console is given back and the grid repainted");
+        }
         return 0;
     default:
         return KERR_INVAL;

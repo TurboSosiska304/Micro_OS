@@ -85,8 +85,11 @@ PROGRAMS = [
     "sqlite3",
     "awk",
     # The first interface of the machine (ADR 0028): a program of the library
-    # that draws in /dev/fb0 and reads /dev/input0.
+    # that draws in /dev/fb0 and reads /dev/input0. The editor and the file
+    # manager of ADR 0030 are the programs above it.
     "ui",
+    "edit",
+    "fm",
 ]
 
 # The second name of the compression command: `zstdcat` is the same image and

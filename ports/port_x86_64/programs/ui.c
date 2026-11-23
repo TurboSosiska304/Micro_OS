@@ -26,6 +26,7 @@
 #include "kernel/input.h"
 #include "port_x86_64_font.h"
 #include "prog.h"
+#include "ui/window.h"
 
 /* The layout of the first skeleton, in pixels of the picture of ADR 0023. */
 #define UI_PANEL_HEIGHT 16
@@ -88,7 +89,13 @@ static k_u16_t g_line[UI_TEXT_MAX];
 static char g_panel_text[UI_LINE_MAX + 1];
 static char g_log[UI_BUFFER_MAX];
 
-static int g_focus; /* 0: status, 1: console */
+/* The two windows of the skeleton in the model of `components/ui`: the order
+ * of the paint is the order of the list, and the focus is the model's and not
+ * a second number of this file. The keys move it with ui_screen_focus_next()
+ * and the list paints from ui_screen_input(). */
+static struct ui_screen g_model;
+#define UI_ID_STATUS 1
+#define UI_ID_CONSOLE 2
 
 static int frame_write(const void *buffer, size_t length)
 {
@@ -362,8 +369,10 @@ static void item_paint(int index, const char *name, bool focused)
 
 static void list_update(void)
 {
-    item_paint(0, "status", g_focus == 0);
-    item_paint(1, "console", g_focus == 1);
+    int focus = ui_screen_input(&g_model);
+
+    item_paint(0, "status", focus == ui_screen_find(&g_model, UI_ID_STATUS));
+    item_paint(1, "console", focus == ui_screen_find(&g_model, UI_ID_CONSOLE));
 }
 
 /* The last lines of the ring of the log, one line a row of the window. */
@@ -505,6 +514,45 @@ int main(int argc, char *const argv[], char *const envp[])
         return ULIBC_EXIT_FAILURE;
     }
 
+    /* The two windows of the skeleton, in the model of the library: the
+     * panel is the status window and the area of the log is the console one,
+     * in the order the list paints them (the console on top). */
+    {
+        struct ui_rect bounds;
+        struct ui_rect status_rect;
+        struct ui_rect console_rect;
+
+        bounds.x = 0;
+        bounds.y = 0;
+        bounds.w = (int)g_info.width;
+        bounds.h = (int)g_info.height;
+
+        status_rect.x = 0;
+        status_rect.y = 0;
+        status_rect.w = (int)g_info.width;
+        status_rect.h = UI_PANEL_HEIGHT;
+
+        console_rect.x = UI_CONSOLE_X;
+        console_rect.y = UI_CONSOLE_Y;
+        console_rect.w = (int)g_info.width - UI_CONSOLE_X - 1;
+        console_rect.h = (int)g_info.height - UI_CONSOLE_Y - 1;
+
+        ui_screen_init(&g_model, &bounds);
+        if (ui_screen_add(&g_model, UI_ID_STATUS, "status", &status_rect, 0) == UI_WINDOW_NONE ||
+            ui_screen_add(&g_model, UI_ID_CONSOLE, "console", &console_rect, 0) == UI_WINDOW_NONE) {
+            static const char message[] = "ui: the picture is too small for the windows\n";
+
+            (void)write(ULIBC_STDERR, message, sizeof(message) - 1);
+            (void)close(g_input);
+            (void)close(g_fb);
+            return ULIBC_EXIT_FAILURE;
+        }
+
+        /* The skeleton starts on the panel, which the second add made the
+         * window under the focus: the focus moves back without raising. */
+        (void)ui_screen_focus(&g_model, ui_screen_find(&g_model, UI_ID_STATUS));
+    }
+
     frame_first((long)(uptime() / 1000));
 
     for (;;) {
@@ -527,7 +575,7 @@ int main(int argc, char *const argv[], char *const envp[])
             }
 
             if (event.code == K_INPUT_KEY_TAB) {
-                g_focus = (g_focus + 1) % 2;
+                (void)ui_screen_focus_next(&g_model, 1);
                 list_update();
             } else if (event.code == K_INPUT_KEY_Q) {
                 goto done;
