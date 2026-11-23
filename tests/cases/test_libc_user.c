@@ -725,6 +725,40 @@ static void test_glob(void)
     globfree(&found);
 }
 
+/* --- the numbers with a sign --------------------------------------------- */
+
+static void test_signed_numbers(void)
+{
+    char *end = NULL;
+    long long wide;
+
+    ktest_begin("libc: a negative number of a conversion is a number and not ERANGE");
+
+    /* The conversion answers the magnitude and the sign apart, and this is the
+     * bug the library had until 1.7: a magnitude negated before the test of
+     * the range is 2^64-7 for -7, which is ERANGE for every negative number. */
+    KT_CHECK_INT_EQ((long long)atoll("-7"), -7LL);
+    KT_CHECK_INT_EQ((long long)strtol("-42", NULL, 10), -42L);
+    KT_CHECK_INT_EQ((long long)atoi("-9"), -9);
+    KT_CHECK_INT_EQ((long long)strtoll("-1234567890123", NULL, 10), -1234567890123LL);
+    KT_CHECK_INT_EQ((long long)strtoll("7", NULL, 10), 7LL);
+    KT_CHECK_INT_EQ((long long)strtoll("-0", NULL, 10), 0LL);
+    KT_CHECK_INT_EQ((long long)strtoll("-2147483648", NULL, 10), -2147483648LL);
+    KT_CHECK_INT_EQ((long long)strtoll("-9223372036854775808", NULL, 10), LLONG_MIN);
+
+    /* A magnitude past the range is still an error, and the sign survives. */
+    errno = 0;
+    KT_CHECK_INT_EQ((long long)strtoll("9223372036854775808", NULL, 10), LLONG_MAX);
+    KT_CHECK_INT_EQ(errno, ERANGE);
+    errno = 0;
+    KT_CHECK_INT_EQ((long long)strtoll("-9223372036854775809", NULL, 10), LLONG_MIN);
+    KT_CHECK_INT_EQ(errno, ERANGE);
+
+    wide = strtoll("-1000000", &end, 16);
+    KT_CHECK_INT_EQ((long long)wide, -16777216LL);
+    KT_CHECK(end != NULL && *end == '\0');
+}
+
 void test_libc_user(void)
 {
     ktest_begin("libc_user");
@@ -732,6 +766,7 @@ void test_libc_user(void)
     test_environment();
     test_realpath();
     test_strptime();
+    test_signed_numbers();
     test_long_options();
     test_scanf();
     test_glob();
