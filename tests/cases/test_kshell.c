@@ -97,6 +97,119 @@ static void test_execute(void)
     KT_CHECK(strstr(buf, "usage: help [command]") != NULL);
 }
 
+/*
+ * The lexer of the line: a word may hold spaces, a quote may be escaped, and
+ * an operator inside the quotes is a character of the argument. An empty
+ * argument is a word of its own, and a quote that is not closed is a refusal
+ * of the whole line - never a guess at where it ends.
+ */
+static void test_quotes(void)
+{
+    char buf[1024];
+    size_t used;
+    FILE *sink;
+
+    ktest_begin("kshell: the words of a line may be quoted");
+
+    sink = tmpfile();
+    KT_CHECK(sink != NULL);
+    if (sink == NULL) {
+        return;
+    }
+
+    port_host_set_sink(sink);
+    KT_CHECK_INT_EQ(kshell_register("testcmd", "a command for the unit tests", test_command), 0);
+    g_result = 0;
+
+    /* Double quotes group the spaces and keep the word one argument. */
+    g_argc = 0;
+    KT_CHECK_INT_EQ(kshell_execute("testcmd a \"b c\" d"), 0);
+    KT_CHECK_INT_EQ(g_argc, 4);
+    KT_CHECK_STR_EQ(g_args[1], "a");
+    KT_CHECK_STR_EQ(g_args[2], "b c");
+    KT_CHECK_STR_EQ(g_args[3], "d");
+
+    /* Single quotes are literal: nothing inside them is special. */
+    g_argc = 0;
+    KT_CHECK_INT_EQ(kshell_execute("testcmd 'a b'"), 0);
+    KT_CHECK_INT_EQ(g_argc, 2);
+    KT_CHECK_STR_EQ(g_args[1], "a b");
+
+    /* Inside double quotes a backslash escapes the quote and itself only. */
+    g_argc = 0;
+    KT_CHECK_INT_EQ(kshell_execute("testcmd \"a\\\"b\""), 0);
+    KT_CHECK_INT_EQ(g_argc, 2);
+    KT_CHECK_STR_EQ(g_args[1], "a\"b");
+
+    g_argc = 0;
+    KT_CHECK_INT_EQ(kshell_execute("testcmd \"a\\\\b\""), 0);
+    KT_CHECK_INT_EQ(g_argc, 2);
+    KT_CHECK_STR_EQ(g_args[1], "a\\b");
+
+    /* The other backslash of a double quote is a character, as in POSIX. */
+    g_argc = 0;
+    KT_CHECK_INT_EQ(kshell_execute("testcmd \"a\\nb\""), 0);
+    KT_CHECK_INT_EQ(g_argc, 2);
+    KT_CHECK_STR_EQ(g_args[1], "a\\nb");
+
+    /* Outside the quotes a backslash takes the character after it. */
+    g_argc = 0;
+    KT_CHECK_INT_EQ(kshell_execute("testcmd a\\ b"), 0);
+    KT_CHECK_INT_EQ(g_argc, 2);
+    KT_CHECK_STR_EQ(g_args[1], "a b");
+
+    /* Two quotes with nothing between them are an empty argument, which is
+     * not the same as no argument at all. */
+    g_argc = 0;
+    KT_CHECK_INT_EQ(kshell_execute("testcmd \"\""), 0);
+    KT_CHECK_INT_EQ(g_argc, 2);
+    KT_CHECK_STR_EQ(g_args[1], "");
+
+    g_argc = 0;
+    KT_CHECK_INT_EQ(kshell_execute("testcmd ''"), 0);
+    KT_CHECK_INT_EQ(g_argc, 2);
+    KT_CHECK_STR_EQ(g_args[1], "");
+
+    /* The operators are ordinary characters inside the quotes. */
+    g_argc = 0;
+    KT_CHECK_INT_EQ(kshell_execute("testcmd \"|\""), 0);
+    KT_CHECK_INT_EQ(g_argc, 2);
+    KT_CHECK_STR_EQ(g_args[1], "|");
+
+    g_argc = 0;
+    KT_CHECK_INT_EQ(kshell_execute("testcmd 'a | b > c ; d'"), 0);
+    KT_CHECK_INT_EQ(g_argc, 2);
+    KT_CHECK_STR_EQ(g_args[1], "a | b > c ; d");
+
+    g_argc = 0;
+    KT_CHECK_INT_EQ(kshell_execute("testcmd \\|"), 0);
+    KT_CHECK_INT_EQ(g_argc, 2);
+    KT_CHECK_STR_EQ(g_args[1], "|");
+
+    /* A quote that is not closed refuses the whole line and runs nothing. */
+    g_argc = -1;
+    KT_CHECK_INT_EQ(kshell_execute("testcmd 'abc"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(g_argc, -1);
+    KT_CHECK_INT_EQ(kshell_execute("testcmd \"abc"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(g_argc, -1);
+    KT_CHECK_INT_EQ(kshell_execute("testcmd abc\\"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(g_argc, -1);
+
+    /* The empty argument reaches a command of the shell: `echo ""` is a
+     * line of its own, and a quoted run of spaces keeps both of them. */
+    KT_CHECK_INT_EQ(kshell_execute("echo \"\""), 0);
+    KT_CHECK_INT_EQ(kshell_execute("echo \"a  b\""), 0);
+
+    rewind(sink);
+    used = fread(buf, 1, sizeof(buf) - 1, sink);
+    buf[used] = '\0';
+
+    port_host_set_sink(NULL);
+
+    KT_CHECK(strstr(buf, "unterminated quote") != NULL);
+    KT_CHECK(strstr(buf, "\n\na  b\n") != NULL);
+}
+
 static void test_unknown(void)
 {
     ktest_begin("kshell: an unknown command is reported");
@@ -1114,6 +1227,7 @@ void test_kshell(void)
     KT_CHECK_INT_EQ(kshell_init(), KSHELL_OK);
 
     test_execute();
+    test_quotes();
     test_unknown();
     test_registry();
     test_kill();

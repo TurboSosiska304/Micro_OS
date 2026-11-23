@@ -14,17 +14,28 @@ list is not the same on every machine.
 
 ## The line
 
-The line is split on spaces and tabs; there are no quotes, no escapes and no
-globs. A line is at most 127 characters and at most 8 words per stage.
-Backspace erases, Ctrl+C throws the line away, and a line that did not fit is
-**not** executed (the shell says `line too long, it was not executed`),
-because a cut line is a different command. While a program or a pipe runs,
-Ctrl+C is not a line: the shell reads it and sends `SIGINT` to the program or
-to every stage of the chain (see [kernel-abi.md](kernel-abi.md#signals)).
+The line is split on spaces and tabs, and a word may be quoted or escaped:
 
-Because there are no quotes, an empty argument cannot be typed: the two
-characters `""` are a word of their own, and a command that wants a list
-refuses it (`path: an empty value is not a list of directories`).
+* `'...'` is a literal: every character inside it is itself, even a space,
+  a `|`, a `>` or a backslash;
+* `"..."` groups the spaces and the operators, and inside it a backslash
+  escapes `"` and `\` only: `"a\"b"` is `a"b`, and `"a\nb"` is the four
+  characters;
+* outside the quotes a backslash takes the character after it, so `a\ b` is
+  one word and `\|` is a bar. A backslash at the end of the line is refused:
+  there is no continuation of a line.
+
+An empty word is a word: `echo ""` prints an empty line, and a command that
+sees `argv[i] == ""` sees an empty argument (`path ""` still refuses it). A
+quote that is not closed refuses the whole line with `unterminated quote`;
+the shell never guesses where the word was meant to end.
+
+A line is at most 127 characters and at most 8 words per stage. Backspace
+erases, Ctrl+C throws the line away, and a line that did not fit is **not**
+executed (the shell says `line too long, it was not executed`), because a cut
+line is a different command. While a program or a pipe runs, Ctrl+C is not a
+line: the shell reads it and sends `SIGINT` to the program or to every stage
+of the chain (see [kernel-abi.md](kernel-abi.md#signals)).
 
 A name that is not registered answers `<name>: command not found`. A command
 that is given the wrong arguments answers with its own `usage:` line and does
@@ -34,8 +45,9 @@ nothing.
 
 `|` joins two or more stages, and `>`, `>>`, `<`, `2>` and `2>>` send a
 descriptor of a stage to a file. The operators are words of their own, with a
-space around them, because the splitter has no quotes; they may stand before
-or after the arguments of a stage:
+space around them, and they are read after the quotes are taken off the line:
+a `|` or a `>` inside quotes is an ordinary character of the argument. They
+may stand before or after the arguments of a stage:
 
 ```text
 microos> ls /etc | cat
@@ -45,6 +57,9 @@ microos> cat /etc/setting >> /tmp/f
 microos> cat < /etc/setting
 microos> cat /etc/setting 2> /tmp/errors
 microos> /bin/cat /etc/setting | wc -l
+microos> echo 'a | b' > /tmp/q
+microos> grep 'a b' /tmp/q
+microos> sed 's/a b/c d/' /tmp/q
 ```
 
 A stage that is a command of the shell (`echo`, `df`, `tree`, ...) runs in a
@@ -67,7 +82,8 @@ What the line does **not** do:
 
 * no `&&`, `||`, `;` or `&`: they are refused by name, not run as arguments;
 * no `2>&1`, no `>&`, no file-descriptor juggling beyond `0`, `1` and `2`;
-* no quotes, escapes, globs or variables: `*` is a word and not a pattern;
+* no globs or variables: `*` is a word and not a pattern, `$x` is the two
+  characters;
 * no attached forms: `a|b` and `>file` are arguments; write `a | b`, `> file`;
 * at most three stages, because a boundary is a pipe and the shell task has
   four descriptors;

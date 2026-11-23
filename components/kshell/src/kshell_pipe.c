@@ -4,8 +4,9 @@
  * A line is a chain of stages separated by `|`, and every stage may send its
  * input or its output to a file: `a > f`, `a >> f`, `a < f` and `a 2> f`.
  * The grammar is a line of words (the operators are words of their own, with
- * spaces around them) because the splitter of this shell has no quotes and
- * no escapes, and pretending otherwise would read a file name as a program.
+ * spaces around them). A word is read before the operators are looked for:
+ * the quotes and the backslash of the lexer below turn `grep 'a b'` into one
+ * argument, and an operator inside quotes is a character of that argument.
  *
  * The pipeline itself is the kernel ABI of ADR 0014 in use: a pipe per
  * boundary, a task per stage, dup2 of the ends onto 0, 1 and 2 in the child,
@@ -48,6 +49,12 @@
 /* A line of 127 characters and words of one letter cannot hold more. */
 #define KSHELL_WORDS_MAX 32
 
+/* The line has more words than the table of the parser keeps. */
+#define WORDS_TOO_MANY (-1)
+
+/* An open quote or a backslash with nothing behind it. */
+#define WORDS_UNTERMINATED (-2)
+
 #define KSHELL_PIPE_PATH_MAX 128
 
 /* One redirection of a stage: the word after the operator and its shape. */
@@ -82,31 +89,118 @@ struct stage_start {
 
 /* --- the words and the grammar --- */
 
-/* Cut the line into words, in place. The answer is the count, or -1 when the
- * line has more words than the table of the parser keeps. */
-static int split_words(char *line, char **words, int max)
+/*
+ * Cut the line into words, in place, and remember which of them came out of
+ * quotes or an escape: such a word is an argument even when its text is an
+ * operator, so `echo '|'` prints a bar and does not start a pipeline.
+ *
+ * The answer is the count, WORDS_TOO_MANY when the table of the parser is
+ * full, or WORDS_UNTERMINATED with `error` naming the open quote. The word
+ * itself is written at the read cursor or behind it, so a word shrinks over
+ * the text that is already read and nothing is copied twice; a terminator is
+ * written only after the delimiter is stepped over, because at the last word
+ * the two cursors are the same byte.
+ */
+static int split_words(char *line, char **words, bool *literal, int max, const char **error)
 {
     int count = 0;
-    char *cursor = line;
+    char *read = line;
+    char *write = line;
 
-    while (*cursor != '\0') {
-        while (*cursor == ' ' || *cursor == '\t') {
-            *cursor++ = '\0';
+    for (;;) {
+        bool quoted = false;
+
+        while (*read == ' ' || *read == '\t') {
+            read++;
         }
 
-        if (*cursor == '\0') {
+        if (*read == '\0') {
             break;
         }
 
         if (count >= max) {
-            return -1;
+            return WORDS_TOO_MANY;
         }
 
-        words[count++] = cursor;
+        words[count] = write;
 
-        while (*cursor != '\0' && *cursor != ' ' && *cursor != '\t') {
-            cursor++;
+        while (*read != '\0' && *read != ' ' && *read != '\t') {
+            /*
+             * Single quotes are the literal of POSIX: nothing inside them is
+             * special, not even a backslash.
+             */
+            if (*read == '\'') {
+                quoted = true;
+                read++;
+
+                while (*read != '\0' && *read != '\'') {
+                    *write++ = *read++;
+                }
+
+                if (*read != '\'') {
+                    *error = "unterminated quote";
+                    return WORDS_UNTERMINATED;
+                }
+
+                read++;
+                continue;
+            }
+
+            /*
+             * Double quotes group the spaces and keep a backslash for `"` and
+             * `\` alone, as the shell of POSIX does: `"\n"` is the two
+             * characters, and `"\""` is the quote itself.
+             */
+            if (*read == '"') {
+                quoted = true;
+                read++;
+
+                while (*read != '\0' && *read != '"') {
+                    if (*read == '\\' && (read[1] == '"' || read[1] == '\\')) {
+                        read++;
+                    }
+
+                    *write++ = *read++;
+                }
+
+                if (*read != '"') {
+                    *error = "unterminated quote";
+                    return WORDS_UNTERMINATED;
+                }
+
+                read++;
+                continue;
+            }
+
+            /*
+             * Outside the quotes a backslash takes the character after it as
+             * it is: a space, an operator or a quote becomes part of the
+             * word, and a word with one is an argument of its own.
+             */
+            if (*read == '\\') {
+                if (read[1] == '\0') {
+                    *error = "a backslash at the end of the line escapes nothing";
+                    return WORDS_UNTERMINATED;
+                }
+
+                quoted = true;
+                read++;
+                *write++ = *read++;
+                continue;
+            }
+
+            *write++ = *read++;
         }
+
+        /* The whitespace of the separator is read before the word is ended;
+         * the two cursors may be on the same byte and a terminator written
+         * there would hide the rest of the line from the reader. */
+        while (*read == ' ' || *read == '\t') {
+            read++;
+        }
+
+        *write++ = '\0';
+        literal[count++] = quoted;
     }
 
     return count;
@@ -167,11 +261,15 @@ static struct pipe_redirection *stage_redirection(struct pipe_stage *stage, int 
     return &stage->out;
 }
 
-/* The words of the line to the stages; false after printing the reason. */
-static bool pipeline_parse(struct pipeline *p, char **words, int word_count)
+/* The words of the line to the stages; false after printing the reason. A
+ * word that came out of quotes is never an operator: it is an argument or a
+ * file name, whatever its text says. */
+static bool pipeline_parse(struct pipeline *p, char **words, const bool *literal, int word_count)
 {
     int index = 0;
     int at = 0;
+    char *word;
+    bool quoted;
 
     memset(p, 0, sizeof(*p));
 
@@ -183,17 +281,19 @@ static bool pipeline_parse(struct pipeline *p, char **words, int word_count)
     index = 0;
 
     while (at < word_count) {
-        char *word = words[at];
         struct pipe_stage *stage = &p->stages[index];
         int fd;
         bool append;
 
-        if (unsupported_word(word)) {
+        word = words[at];
+        quoted = literal[at];
+
+        if (!quoted && unsupported_word(word)) {
             kshell_eprintf("the shell: '%s' is not supported\n", word);
             return false;
         }
 
-        if (strcmp(word, "|") == 0) {
+        if (!quoted && strcmp(word, "|") == 0) {
             if (stage->argc == 0) {
                 kshell_eprintf("the shell: a pipe needs a command on both sides\n");
                 return false;
@@ -209,7 +309,7 @@ static bool pipeline_parse(struct pipeline *p, char **words, int word_count)
             continue;
         }
 
-        if (redirection_word(word, &fd, &append)) {
+        if (!quoted && redirection_word(word, &fd, &append)) {
             struct pipe_redirection *redirection = stage_redirection(stage, fd);
 
             if (at + 1 >= word_count) {
@@ -224,8 +324,8 @@ static bool pipeline_parse(struct pipeline *p, char **words, int word_count)
 
             at++;
 
-            if (redirection_word(words[at], &fd, &append) || strcmp(words[at], "|") == 0 ||
-                unsupported_word(words[at])) {
+            if ((!literal[at] && redirection_word(words[at], &fd, &append)) ||
+                (!literal[at] && (strcmp(words[at], "|") == 0 || unsupported_word(words[at])))) {
                 kshell_eprintf("the shell: %s needs a file name\n", word);
                 return false;
             }
@@ -526,13 +626,22 @@ static int pipeline_run(struct pipeline *p)
 int kshell_line_run(char *line)
 {
     char *words[KSHELL_WORDS_MAX];
+    bool literal[KSHELL_WORDS_MAX];
     struct pipeline pipeline;
+    const char *error = NULL;
     int word_count;
     int index;
 
-    word_count = split_words(line, words, KSHELL_WORDS_MAX);
-    if (word_count < 0) {
+    word_count = split_words(line, words, literal, KSHELL_WORDS_MAX, &error);
+    if (word_count == WORDS_TOO_MANY) {
         kshell_eprintf("the shell: too many words in the line\n");
+        return KSHELL_USAGE;
+    }
+
+    if (word_count == WORDS_UNTERMINATED) {
+        /* The line is refused whole: a guess at where the quote ends would
+         * run a command the person did not type. */
+        kshell_eprintf("the shell: %s\n", error);
         return KSHELL_USAGE;
     }
 
@@ -540,7 +649,7 @@ int kshell_line_run(char *line)
         return KSHELL_OK;
     }
 
-    if (!pipeline_parse(&pipeline, words, word_count)) {
+    if (!pipeline_parse(&pipeline, words, literal, word_count)) {
         return KSHELL_USAGE;
     }
 

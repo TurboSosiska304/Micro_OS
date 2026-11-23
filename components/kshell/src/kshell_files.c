@@ -1977,12 +1977,12 @@ static int cmd_path(int argc, char **argv)
     }
 
     /*
-     * An empty value is not a directory: the placeholder `""` of the
-     * splitter, which has no quotes, is refused like the empty argument an
-     * API could hand the command. The default is a value a person can type
-     * (and `path` without an argument prints it).
+     * An empty value is not a directory: a word of no characters (`path ""`)
+     * is refused like the empty argument an API could hand the command. The
+     * default is a value a person can type (and `path` without an argument
+     * prints it).
      */
-    if (argv[1][0] == '\0' || strcmp(argv[1], "\"\"") == 0) {
+    if (argv[1][0] == '\0') {
         kshell_printf("path: an empty value is not a list of directories\n");
         return KSHELL_USAGE;
     }
@@ -2192,7 +2192,7 @@ int kshell_run_program(int argc, char **argv)
     return KSHELL_ERROR;
 }
 
-#else  /* KERNEL_EXEC */
+#else /* KERNEL_EXEC */
 int kshell_try_program(int argc, char **argv, int *status)
 {
     (void)argc;
@@ -2210,6 +2210,7 @@ int kshell_run_program(int argc, char **argv)
 
     return KSHELL_ERROR;
 }
+
 #endif /* KERNEL_EXEC */
 
 /*
@@ -2256,8 +2257,9 @@ static const struct file_command {
     {"write",
      {.summary = "write a file",
       .usage = "write <file> <text...>",
-      .detail = "The text is the rest of the line, joined by single spaces: the splitter\n"
-                "of the shell has no quotes yet. The file is created or replaced.\n"},
+      .detail = "The words are joined by single spaces to make the text, and a word\n"
+                "that holds spaces is written as one with the quotes of the shell:\n"
+                "write /etc/note \"two words\". The file is created or replaced.\n"},
      cmd_write},
     {"mkdir",
      {.summary = "create a directory",

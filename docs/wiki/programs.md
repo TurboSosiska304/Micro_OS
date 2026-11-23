@@ -486,10 +486,11 @@ the program has finished
 
 The demo is the shape of a grep: one line of the source is one subject, so
 `^` and `$` are its ends, and `-o` with `-g N` prints the capture `N` of
-every match. The shell has no quotes, so a pattern with a space or a
-character the shell reads as an operator is a debt of the grammar and not of
-the program. A UTF-8 file is a file of bytes here: a `.` is one byte, and
-`-u` is refused with a sentence instead of silently matching something else.
+every match. A pattern with a space is one quoted word since 1.2.1
+(`pcre2grep 'a b' file`); a character the shell reads as an operator is a
+debt of the grammar and not of the program. A UTF-8 file is a file of bytes
+here: a `.` is one byte, and `-u` is refused with a sentence instead of
+silently matching something else.
 
 `tests/cases/test_pcre2.c` is the gate: a match and a no-match, the groups
 of a pattern, the anchors of a line, the shape of a UTF-8 subject without
