@@ -14,6 +14,23 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Added
 
+- The system call of the x86-64 port takes the fast door of the processor
+  (ADR 0035): the library of a program calls with `syscall` and returns with
+  `sysret`, the port programs `IA32_EFER.SCE`, `IA32_STAR`, `IA32_LSTAR` and
+  `IA32_FMASK` on every core, and the entry finds the kernel stack of the
+  program in the per-core record under `IA32_GS_BASE` - the same number
+  `port_x86_64_tss_set_rsp0()` writes into `RSP0` of the TSS. The frame is the
+  same 160 bytes in the same order as the vector 0x80 leaves, so the signal
+  frame, the child of a `fork()` and the replacement frame of an `execve` did
+  not move; `sysret` is guarded (a canonical address and a ring 3 selector, or
+  the frame goes back through `iretq`), because the frame of a `sigreturn`
+  comes from memory the program can write. The vector 0x80 stays as the second
+  door: it is what a program of another compiler calls and what the restorer
+  of a signal handler returns through, and it now leaves through the same fast
+  tail. A `getpid()` of a program costs 0.55 µs instead of 0.92 µs on the QEMU
+  of the tests - 1.8 million calls a second instead of 1.1 - and a `grep`,
+  `sed` or `wc` of a file of 1 MiB moves by less than the noise, because the
+  door is not what those commands spend their time in.
 - The accounts of the machine are files of `/etc` (ADR 0033): `/etc/passwd`
   holds `name:uid:gid:home:shell` and `/etc/shadow` the salted SHA-256 of a
   password (`$sha256$<salt>$<hex>`, `*` for an account without one, mode

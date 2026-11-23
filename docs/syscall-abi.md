@@ -34,32 +34,53 @@ A negative result is an error, the numbers are the negative error codes of
 On the board and on the simulator a program is a function of the kernel and
 calls it directly. The x86-64 machine runs a program that the kernel did not
 compile, so the call has to be an instruction of the processor. The port of
-that machine offers one door (ADR 0006):
+that machine offers two doors to the same convention (ADR 0006):
 
 | What | Where |
 |---|---|
-| the instruction | `int $0x80` |
+| the instruction | `syscall` (the fast door), `int $0x80` (the gate) |
 | the number of the call | `rax` |
 | the six arguments | `rdi`, `rsi`, `rdx`, `r10`, `r8`, `r9` |
 | the result | `rax` (negative is an error) |
 
-The vector 128 of the table of the interrupts is a gate of the port, not of
-the kernel: the port that can take a call puts its stub there and the port
-that cannot leaves the entry empty. The gate opens for ring 3, because the
-x86-64 port runs a program as a user with page tables of its own (ADR 0007).
-The processor takes the `RSP0` of the TSS on the way in, so the handler runs
-on a kernel stack of the program and not on the stack of the program, which
-ring 3 could have pointed anywhere. The handler saves every register the
-caller may lose across a C call, puts the kernel's thread pointer back,
-turns the interrupts on (they are off for the first instructions, and on
-again for the call itself, which is what lets `sleep` and `yield` really
-wait), calls `ksys_call()` and returns with `iretq`, setting the thread
-pointer to zero first because the kernel's TLS block is not mapped in ring 3.
+The library of the tree takes the fast door: the instruction `syscall` jumps
+to the address the port keeps in `IA32_LSTAR`, with the flags of `IA32_FMASK`
+cleared (the interrupt flag first of all), the return address of the program
+in `rcx` and its flags in `r11`. The instruction changes no stack, so the
+entry takes the kernel stack of the program from the record of the core that
+`IA32_GS_BASE` names - the same number the port writes into `RSP0` of the TSS,
+so both doors land on the same stack. The entry pushes the five words of the
+crossing and the fifteen registers the caller may lose across a C call, which
+is the frame of 160 bytes the gate leaves too, puts the kernel's thread
+pointer back, turns the interrupts on (they are off for the first
+instructions, and on again for the call itself, which is what lets `sleep` and
+`yield` really wait) and calls `ksys_call()`.
+
+The return is `sysret`, which takes the address from `rcx` and the flags from
+`r11`, and it is guarded: an address that is not canonical, or a frame whose
+selector is not a program's, takes the `iretq` of the gate instead, because
+the frame a `sigreturn` restores comes from memory the program can write and
+an address the instruction cannot return to faults in ring 0 after the stack
+of the program is in `rsp`.
+
+The gate of the vector 128 of the table of the interrupts stays, and it is
+not a leftover: it is what a program that was not built against this library
+uses, and it is the door the restorer of a signal handler returns through. The
+gate opens for ring 3, because the x86-64 port runs a program as a user with
+page tables of its own (ADR 0007); the processor takes the `RSP0` of the TSS
+on the way in, so the handler runs on a kernel stack of the program and not on
+the stack of the program, which ring 3 could have pointed anywhere. It builds
+the same frame, runs the same body and returns through the same tail, which
+picks `sysret` for a program's frame and `iretq` for anything else, setting
+the thread pointer to zero first because the kernel's TLS block is not mapped
+in ring 3.
 
 The registers are the ones of Linux: `rcx` and `r11` are not arguments
 because the instruction `syscall` of a 64-bit machine keeps them for the
 return address and the flags, and one convention for both instructions costs
-nothing.
+nothing. They are clobbered by a call, as they are on Linux: the frame of the
+call keeps them, so a signal that arrives inside one shows the address and the
+flags it interrupted, and no program of the system reads them back.
 
 A program that was entered with an image starts with the arguments of a C
 function in the registers (ADR 0016): the count of the arguments in `rdi`, the
