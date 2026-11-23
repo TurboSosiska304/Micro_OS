@@ -403,9 +403,11 @@ written when the project was an operating system for one board; the numbers
       is the
       host, and the smoke tests create, read and check a database across a
       reset of the disk
-* [ ] A `chdir` and a wall clock in the ABI, and the POSIX frame of a fork
-      child: the library works around the three, and the workaround of each
-      is named in `docs/debts.md`
+* [ ] A `chdir` and a wall clock in the ABI: the library works around the two,
+      and the workaround of each is named in `docs/debts.md`
+* [x] The POSIX frame of a fork child: the child of `fork()` comes back from
+      the call with 0 in RAX and a stack page of its own, `execve` from a
+      program replaces the image of the caller, and `waitpid` reaps it (1.5)
 * [x] The fifth port: zstd 1.5.7 (BSD-3-Clause) as a static archive of
       lib/common, lib/compress and lib/decompress, and `/bin/zstd` as the
       program of the release itself (`programs/zstdcli.c`), with
