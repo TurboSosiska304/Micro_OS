@@ -246,6 +246,19 @@ def ext2_checks(build: str, work: str, mkfs: str, mib: int, timeout: float) -> N
             read_rate = read
             read_seconds = seconds
 
+            # The same file through the memory a program maps (the first lane
+            # of 1.6): /bin/mmap slides a window of 256 KiB over it, so a file
+            # of 128 MiB is read with the pages of a window and not with a
+            # buffer of 128 MiB. The two sums of the program - the bytes
+            # through the mapping and the bytes through read - are one number.
+            answer, seconds = timed(machine, "exec /bin/mmap /big.bin", 1800.0)
+            sums = re.findall(r"mmap: sum through (?:mmap|read) (-?\d+)", answer)
+            check(
+                f"ext2: the file of {mib} MiB is read through mmap",
+                "mmap: done" in answer and len(sums) == 2 and sums[0] == sums[1],
+                answer[-600:],
+            )
+
             # The machine's own fsck speaks of MicroFS and FAT and no command
             # reaches ext2_check() of the kernel yet: the check of the ext2
             # root of this machine is e2fsck of the host below. The gap is in
