@@ -91,7 +91,12 @@ jobs:
       # /bin and /etc, and the run.sh of `make x86-user`. The bundle below
       # packages these files, so the tar of a release is a machine a person
       # starts, not only a kernel.
+      # The container exports IDF_PATH, and the top level CMake would take
+      # the firmware branch and look for the Xtensa compiler. The complete
+      # machine is a host build and an x86-64 build; it names no platform.
       - name: the complete machine of the x86-64 port
+        env:
+          IDF_PATH: ""
         run: make x86-all
 
       # esptool lives in the python environment of the image, and the step
