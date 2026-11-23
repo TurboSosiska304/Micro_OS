@@ -2645,6 +2645,13 @@ def check(output: str) -> list:
         "the system call of the handler returns its answer",
         "PROGRAM: self SIGINT returned 0, handler runs 1" in signals,
     )
+    # The same signal through the fast door of `syscall`: a handler entered
+    # on the way out of a call is the proof that the frame of the second door
+    # is the frame the signal code rewrites (ADR 0035).
+    expect(
+        "a handler runs on the way out of the fast door as well",
+        "PROGRAM: self SIGINT through syscall returned 0, handler runs 1" in signals,
+    )
     # SIG_IGN is a disposition of the kernel: the task is still there after
     # the signal, and its kill() answered 0.
     expect(
@@ -2657,7 +2664,8 @@ def check(output: str) -> list:
         re.search(r"PROGRAM: term child waited \d+, status 143", signals) is not None,
     )
     # The wait was cut by SIGINT, the handler ran, and the child was not
-    # taken by the wait: EINTR is 4.
+    # taken by the wait: EINTR is 4. The wait is a call of the fast door, so
+    # the signal arrives while the task sleeps inside it (ADR 0035).
     expect(
         "SIGINT cuts a wait with EINTR and runs the handler",
         "PROGRAM: wait returned 4, handler runs 1" in signals,
