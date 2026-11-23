@@ -43,6 +43,31 @@ struct k_blockdev_ops {
     int (*sync)(void *ctx);
 };
 
+/*
+ * The number of sectors the block layer keeps between the filesystem and a
+ * device that asked for the cache. The cache is read through: a read looks
+ * in the copy before it asks the medium. A write goes to the medium at once
+ * or stays in the copy until the next sync, which is the choice of the
+ * device (k_blockdev_register_cached).
+ *
+ * Sixteen sectors is the working set of a mount and of a directory walk:
+ * the group descriptors and the bitmaps of ext2, the inode table of MicroFS,
+ * the first cluster of a FAT - and, with the writes held back, the run of
+ * sectors that a filesystem writes again for every block it allocates.
+ */
+#define K_BLOCKDEV_CACHE_SECTORS 16
+
+/*
+ * The sectors one command of the medium brings when a read continues a run:
+ * the read ahead of a file. Eight sectors are two blocks of the ext2 of the
+ * volume of this machine (4 KiB each) and eight blocks of MicroFS, and they
+ * leave room in the cache for the metadata of the volume, which is read
+ * between two sectors of a file. Sixteen - the whole cache - was measured
+ * and is worse: the run evicts the metadata that the next block of the file
+ * needs, and the read of the volume doubles.
+ */
+#define K_BLOCKDEV_READ_AHEAD 8
+
 struct k_blockdev {
     const char *name; /* "flash0", "sd0", ... */
     k_u32_t sector_size;
@@ -55,8 +80,32 @@ struct k_blockdev {
  * Register a device. The structure and its context have to live as long as
  * the system: the platform owns them, the kernel keeps the pointer.
  * Returns 0, -1 when the table is full or the device is not usable.
+ *
+ * A device that is registered this way is asked for every sector its
+ * filesystem wants, and the block layer keeps nothing.
  */
 int k_blockdev_register(const struct k_blockdev *dev);
+
+/*
+ * Register a device with a cache of the last sectors the filesystem touched
+ * (K_BLOCKDEV_CACHE_SECTORS), and the read ahead of a file (K_BLOCKDEV_READ_AHEAD).
+ *
+ * The platform asks for it when a sector of the medium is expensive - a
+ * platter, a card, a flash chip behind a driver with a transaction of its
+ * own - and leaves it off when the device is the memory of the machine,
+ * which has a cache of its own and better.
+ *
+ * `write_back` is what the cache does with a write: with it, the sector
+ * stays in the cache until the cache needs the room or the filesystem asks
+ * for a sync, and a run of sectors leaves it as one command of the medium;
+ * without it, every sector reaches the medium at once (write-through).
+ *
+ * A cached device is registered twice in a sense: the structure the platform
+ * owns is not the pointer the table hands out, because the table needs a
+ * place to attach the cache to. Everything the callers of the table see -
+ * the name, the size, the operations - is the same.
+ */
+int k_blockdev_register_cached(const struct k_blockdev *dev, bool write_back);
 
 /*
  * Take a device out of the table. The caller guarantees that nobody is using
