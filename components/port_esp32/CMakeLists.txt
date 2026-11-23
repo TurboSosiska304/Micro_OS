@@ -189,6 +189,12 @@ function(add_board_program name entry)
         # the program of the board links the file as every program does.
         COMMAND ${CMAKE_C_COMPILER} ${MICRO_OS_PROGRAM_CFLAGS}
                 -o ${name}_errno.o "${MICRO_OS_LIBC_USER_DIR}/src/errno.c"
+        # The directory of a program and the resolution of its paths
+        # (src/path.c): every call of syscall.c asks `__ulibc_path()` for the
+        # absolute name of a relative one, so the file is part of the library
+        # of a board program and not only of the x86-64 one.
+        COMMAND ${CMAKE_C_COMPILER} ${MICRO_OS_PROGRAM_CFLAGS}
+                -o ${name}_path.o "${MICRO_OS_LIBC_USER_DIR}/src/path.c"
         COMMAND ${CMAKE_C_COMPILER} ${MICRO_OS_PROGRAM_CFLAGS}
                 -o ${name}_main.o "${MICRO_OS_PROGRAM_DIR}/${name}.c"
         # -lgcc is the compiler's own runtime: the formatter of a program
@@ -197,7 +203,7 @@ function(add_board_program name entry)
         COMMAND ${CMAKE_C_COMPILER} -nostdlib -static -no-pie -Wl,--build-id=none
                 -Wl,-e,${entry} -T "${MICRO_OS_PROGRAM_DIR}/program_esp32.ld"
                 -o ${name}.elf ${name}_start.o ${name}_syscall.o ${name}_stdio.o
-                ${name}_string.o ${name}_errno.o ${name}_main.o -lgcc
+                ${name}_string.o ${name}_errno.o ${name}_path.o ${name}_main.o -lgcc
         COMMAND ${CMAKE_COMMAND} -E env
                 "OBJCOPY=${CMAKE_OBJCOPY}" "OBJDUMP=${CMAKE_OBJDUMP}" "NM=${CMAKE_NM}"
                 sh "${MICRO_OS_MKPROG}" --base 0x4009E000 --data-base 0x3FFCE000
@@ -208,6 +214,7 @@ function(add_board_program name entry)
                 "${MICRO_OS_LIBC_USER_DIR}/src/errno.c"
                 "${MICRO_OS_LIBC_USER_DIR}/src/stdio.c" "${MICRO_OS_LIBC_USER_DIR}/src/string.c"
                 "${MICRO_OS_LIBC_USER_DIR}/src/errno.c"
+                "${MICRO_OS_LIBC_USER_DIR}/src/path.c"
                 "${MICRO_OS_LIBC_USER_DIR}/include/ulibc.h"
                 "${MICRO_OS_KERNEL_INC}/kernel/ksys.h" "${MICRO_OS_MKPROG}"
         COMMENT "building the image of /bin/${name} for the board"
