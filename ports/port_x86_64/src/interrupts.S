@@ -243,6 +243,12 @@ isr_irq isr_irq0, port_x86_64_irq_tick
 isr_irq isr_irq1, port_x86_64_irq_keyboard
 
 /*
+ * The pointer: the same controller, the second device (1.7.0). The body reads
+ * the status byte and gives the byte to the mouse; the line is IRQ12.
+ */
+isr_irq isr_irq12, port_x86_64_irq_mouse
+
+/*
  * The primary IDE channel, the sixth line of the slave: the end of a
  * bus-master transfer of the disk (ADR 0032). The handler acknowledges the
  * drive by reading its status and both chips of the 8259, and the wait of the

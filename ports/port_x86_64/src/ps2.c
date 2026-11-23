@@ -30,6 +30,7 @@
 #include "kernel/console.h"
 #include "kernel/input.h"
 #include "kernel/input_set1.h"
+#include "kernel/log.h"
 #include "kernel/port/lock.h"
 #include "kernel/port/time.h"
 #include "port_x86_64.h"
@@ -46,6 +47,23 @@
 #define PS2_CMD_ENABLE_FIRST 0xAEu
 #define PS2_CONFIG_IRQ1 0x01u   /* the first port raises IRQ1 */
 #define PS2_CONFIG_CLOCK1 0x10u /* set: the clock of the first port is off */
+
+/*
+ * The pointer of the machine (1.7.0). The mouse of the PC is the second
+ * device of the same 8042: the controller takes a byte of it with the command
+ * 0xD4, the data of the two devices arrive in one port, and the status byte
+ * says which of them the byte belongs to (bit 5). Its line is IRQ12, which is
+ * the fourth line of the slave of the 8259 - the cascade of the second chip
+ * and the line itself are the two bits the port opens for it.
+ */
+#define PS2_STATUS_AUX 0x20u     /* set: the byte waits for the second port */
+#define PS2_CMD_ENABLE_AUX 0xA8u /* the second port on */
+#define PS2_CMD_WRITE_AUX 0xD4u  /* the next byte of 0x60 is the mouse's */
+#define PS2_CONFIG_IRQ12 0x02u   /* the second port raises IRQ12 */
+#define PS2_CONFIG_CLOCK2 0x20u  /* set: the clock of the second port is off */
+#define PS2_MOUSE_DEFAULTS 0xF6u /* the mouse starts from its defaults */
+#define PS2_MOUSE_ENABLE 0xF4u   /* and reports its movements */
+#define PS2_ACK 0xFAu            /* the answer of every command of a device */
 
 /* A command of the controller answers in microseconds; a counter is enough
  * of a limit for the one time the boot waits for it, and a machine where it
@@ -74,6 +92,42 @@ static volatile k_u32_t g_key_tail; /* written and read by the tasks */
 static volatile struct input_event g_events[PS2_EVENT_RING];
 static volatile k_u32_t g_event_head; /* written by IRQ1 */
 static volatile k_u32_t g_event_tail; /* written and read by the tasks */
+
+/*
+ * The events of the pointer are a ring of their own (1.7.0). The keyboard may
+ * be moved to another core with `smp irq keyboard` while the mouse stays on
+ * the core of the boot, so the two handlers must not write one ring: a ring
+ * with one writer per core is the rule the keyboard already follows, and the
+ * reader merges the two in the order of the two devices.
+ */
+static volatile struct input_event g_pointer[PS2_EVENT_RING];
+static volatile k_u32_t g_pointer_head; /* written by IRQ12 */
+static volatile k_u32_t g_pointer_tail; /* written and read by the tasks */
+
+/*
+ * The packet of the mouse is three bytes and the first one carries the sign
+ * and the overflow of both axes. A packet whose first byte does not have bit
+ * 3 set is not a packet - the device sends 0x00 or 0xFE when it has to
+ * resynchronise - and the decoder drops it instead of reading three bytes of
+ * a broken stream as a jump of the pointer.
+ */
+static k_u8_t g_packet[3];
+static k_u32_t g_packet_bytes;
+
+/* A movement the hardware could not express as a byte: the axis is dropped
+ * and counted, because a pointer that jumps by a made-up number is worse than
+ * one that stops (a person moves the hand again). */
+static k_u32_t g_overflow_x;
+static k_u32_t g_overflow_y;
+static bool g_overflow_shown;
+
+/* The state of the buttons as the last packet said it, so that the edge and
+ * not the level is the event. */
+static bool g_button_left;
+
+/* The pointer is there when the controller answered the commands of its own
+ * (a machine without a mouse has nothing on the second port). */
+static bool g_pointer_present;
 
 /* While a program holds the keyboard, the keys are events and not characters:
  * a `q` of an interface must not become a line of the shell that waits for
@@ -170,18 +224,124 @@ static void event_push(k_u16_t code, k_u16_t value)
     g_event_head = next;
 }
 
+/* One event into the ring of the pointer, the same rule of a full ring. */
+static void pointer_push(k_u16_t code, k_u16_t value)
+{
+    k_u32_t next = (g_pointer_head + 1u) % PS2_EVENT_RING;
+
+    if (next == g_pointer_tail) {
+        return;
+    }
+
+    g_pointer[g_pointer_head].ms = (k_u32_t)k_port_uptime_ms();
+    g_pointer[g_pointer_head].code = code;
+    g_pointer[g_pointer_head].value = value;
+    g_pointer_head = next;
+}
+
+/*
+ * One byte of the mouse. Three bytes are a packet: the buttons, the sign and
+ * the overflow of the two axes, then the two differences. The motion is
+ * pushed as two events whose value is the signed difference in pixels of the
+ * picture, the y axis turned over because the mouse counts up and the screen
+ * counts down; the button is pushed on the edge, as the release of a key is.
+ */
+static void mouse_byte(k_u8_t byte)
+{
+    k_u8_t flags;
+    int dx;
+    int dy;
+
+    if (g_packet_bytes == 0u) {
+        /* Bit 3 of the first byte is always one: a byte without it is the
+         * device telling us that the stream was cut, not the start of a
+         * packet. */
+        if ((byte & 0x08u) == 0u) {
+            return;
+        }
+    }
+
+    g_packet[g_packet_bytes] = byte;
+    g_packet_bytes++;
+
+    if (g_packet_bytes < 3u) {
+        return;
+    }
+
+    g_packet_bytes = 0;
+    flags = g_packet[0];
+
+    if ((flags & 0x40u) != 0u) {
+        g_overflow_x++;
+    } else {
+        dx = (int)g_packet[1] - ((flags & 0x10u) != 0u ? 256 : 0);
+        pointer_push(K_INPUT_KEY_POINTER_X, (k_u16_t)(k_i16_t)dx);
+    }
+
+    if ((flags & 0x80u) != 0u) {
+        g_overflow_y++;
+    } else {
+        dy = (int)g_packet[2] - ((flags & 0x20u) != 0u ? 256 : 0);
+        pointer_push(K_INPUT_KEY_POINTER_Y, (k_u16_t)(k_i16_t)-dy);
+    }
+
+    {
+        /* The right and the middle buttons are not keys of the contract yet
+         * (docs/desktop.md): the left one is the one the desktop uses and a
+         * number of a key is not spent on a button nobody asked for. The edge
+         * is what is pushed, and the release of the last button of a packet
+         * is an edge like its press. */
+        bool left = (flags & 0x01u) != 0u;
+
+        if (left != g_button_left) {
+            g_button_left = left;
+            pointer_push(K_INPUT_KEY_BUTTON_LEFT, left ? INPUT_VALUE_PRESS : INPUT_VALUE_RELEASE);
+        }
+    }
+
+    if ((g_overflow_x != 0u || g_overflow_y != 0u) && !g_overflow_shown) {
+        g_overflow_shown = true;
+        kwarn("input: the mouse overflowed its packet (%u x, %u y), the axis is dropped",
+              (unsigned)g_overflow_x, (unsigned)g_overflow_y);
+    }
+}
+
+k_u32_t port_x86_64_input_overflow(bool vertical)
+{
+    return vertical ? g_overflow_y : g_overflow_x;
+}
+
+bool port_x86_64_input_pointer(void)
+{
+    return g_pointer_present;
+}
+
 bool port_x86_64_input_event(struct input_event *out)
 {
     k_u32_t tail = g_event_tail;
 
-    if (out == NULL || tail == g_event_head) {
+    if (out == NULL) {
         return false;
     }
 
-    out->ms = g_events[tail].ms;
-    out->code = g_events[tail].code;
-    out->value = g_events[tail].value;
-    g_event_tail = (tail + 1u) % PS2_EVENT_RING;
+    if (tail != g_event_head) {
+        out->ms = g_events[tail].ms;
+        out->code = g_events[tail].code;
+        out->value = g_events[tail].value;
+        g_event_tail = (tail + 1u) % PS2_EVENT_RING;
+        return true;
+    }
+
+    tail = g_pointer_tail;
+
+    if (tail == g_pointer_head) {
+        return false;
+    }
+
+    out->ms = g_pointer[tail].ms;
+    out->code = g_pointer[tail].code;
+    out->value = g_pointer[tail].value;
+    g_pointer_tail = (tail + 1u) % PS2_EVENT_RING;
 
     return true;
 }
@@ -199,6 +359,7 @@ void port_x86_64_input_capture(bool on)
     g_capture = on;
     g_key_tail = g_key_head;
     g_event_tail = g_event_head;
+    g_pointer_tail = g_pointer_head;
     k_port_exit_critical();
 }
 
@@ -365,18 +526,40 @@ static void key_handle(k_u8_t code)
     }
 }
 
+/*
+ * The bytes the controller holds, taken until the buffer is empty. Its buffer
+ * is one for the two devices of the machine (1.7.0): the status byte says
+ * whether the byte is a key or a motion, so one body serves both interrupt
+ * lines and a byte of the other device that arrived at the same moment is
+ * not lost.
+ */
+static void ps2_take_bytes(void)
+{
+    int guard;
+
+    for (guard = 0; guard < 16; guard++) {
+        k_u8_t status = port_inb(PS2_STATUS);
+        k_u8_t byte;
+
+        if ((status & PS2_STATUS_OUTPUT) == 0) {
+            return;
+        }
+
+        byte = port_inb(PS2_DATA);
+
+        if ((status & PS2_STATUS_AUX) != 0) {
+            mouse_byte(byte);
+        } else {
+            key_handle(byte);
+        }
+    }
+}
+
 void port_x86_64_irq_keyboard(k_u64_t *frame)
 {
     K_UNUSED(frame);
 
-    k_u8_t status = port_inb(PS2_STATUS);
-
-    /* The line is level triggered and the byte that raised it is the one to
-     * take: a spurious interrupt has nothing in the buffer and is answered
-     * with the EOI alone. */
-    if ((status & PS2_STATUS_OUTPUT) != 0) {
-        key_handle(port_inb(PS2_DATA));
-    }
+    ps2_take_bytes();
 
     /*
      * The line may have arrived through the I/O APIC of another core or
@@ -385,6 +568,27 @@ void port_x86_64_irq_keyboard(k_u64_t *frame)
      * because a run that moves the line has to see it arrive where it was
      * sent.
      */
+    port_x86_64_irq_note(PORT_X86_64_IRQ_KEYBOARD);
+    port_x86_64_irq_eoi();
+}
+
+/*
+ * The pointer: the twelfth line of the machine and the second device of the
+ * 8042 (1.7.0). The byte is read by the same body as the keyboard's, because
+ * the buffer of the controller is one and the status byte is what says whose
+ * byte it is: a keyboard byte that arrived while the mouse raised its line is
+ * a key and not a motion.
+ *
+ * The line has no counter of its own in `smp irq`: the report of that command
+ * is the two lines of ADR 0012, and the mouse is a device of the interface
+ * and not a line the scheduler moves. It is counted with the keyboard, which
+ * is the number a person reads to see that the controller is alive.
+ */
+void port_x86_64_irq_mouse(k_u64_t *frame)
+{
+    K_UNUSED(frame);
+
+    ps2_take_bytes();
     port_x86_64_irq_note(PORT_X86_64_IRQ_KEYBOARD);
     port_x86_64_irq_eoi();
 }
@@ -447,6 +651,9 @@ static bool ps2_write_config(k_u8_t config)
     return true;
 }
 
+/* The mouse of the second port, armed at the end of the controller's init. */
+static void ps2_mouse_init(void);
+
 void port_x86_64_ps2_init(void)
 {
     k_u8_t config;
@@ -473,8 +680,84 @@ void port_x86_64_ps2_init(void)
 
     /* The interrupt of the first port on and its clock running: the clock is
      * what stops the device when a byte is not read and the controller wants
-     * to keep a second one waiting. */
-    config |= PS2_CONFIG_IRQ1;
-    config &= (k_u8_t)~PS2_CONFIG_CLOCK1;
+     * to keep a second one waiting. The second port is opened the same way
+     * (1.7.0): its clock runs, its line is IRQ12, and the mouse itself is
+     * told to start from its defaults and report what it measures. */
+    config |= PS2_CONFIG_IRQ1 | PS2_CONFIG_IRQ12;
+    config &= (k_u8_t) ~(PS2_CONFIG_CLOCK1 | PS2_CONFIG_CLOCK2);
     (void)ps2_write_config(config);
+
+    ps2_mouse_init();
+}
+
+/* --- the mouse of the machine (1.7.0) --------------------------------------- */
+
+/* A byte of the second port: the answer of the controller or of the mouse to
+ * a command. The answer of a command is 0xFA and a device that is not there
+ * answers nothing, which is what the timeout is for. */
+static bool ps2_read_ack(void)
+{
+    if (!ps2_wait_output_full()) {
+        return false;
+    }
+
+    return port_inb(PS2_DATA) == PS2_ACK;
+}
+
+static bool ps2_mouse_command(k_u8_t command)
+{
+    if (!ps2_wait_input_empty()) {
+        return false;
+    }
+
+    port_outb(PS2_STATUS, PS2_CMD_WRITE_AUX);
+
+    if (!ps2_wait_input_empty()) {
+        return false;
+    }
+
+    port_outb(PS2_DATA, command);
+
+    return ps2_read_ack();
+}
+
+/*
+ * The second port of the 8042: on, with its line and its clock, and the mouse
+ * told to report. The call runs before the interrupts are on (the boot arms
+ * the two devices before it opens any line), so the bytes read here are the
+ * answers of the commands and nothing of the user.
+ *
+ * A machine without a mouse is a machine whose second port answers nothing:
+ * the keyboard keeps working and the desktop of 1.7 has no pointer, which the
+ * server of the desktop asks before it draws one.
+ */
+static void ps2_mouse_init(void)
+{
+    if (!ps2_wait_input_empty()) {
+        return;
+    }
+
+    port_outb(PS2_STATUS, PS2_CMD_ENABLE_AUX);
+
+    /* The defaults first and the reporting second: a mouse that kept the
+     * scale of somebody else's program would move by a number the desktop
+     * did not choose. */
+    g_pointer_present = ps2_mouse_command(PS2_MOUSE_DEFAULTS);
+
+    if (g_pointer_present) {
+        g_pointer_present = ps2_mouse_command(PS2_MOUSE_ENABLE);
+    }
+
+    /* A byte the mouse left between the two answers (a self test of a device
+     * that was reset) is not a packet: the buffer is emptied with the
+     * interrupts still off, so that the first motion is the first packet. */
+    while ((port_inb(PS2_STATUS) & PS2_STATUS_OUTPUT) != 0) {
+        (void)port_inb(PS2_DATA);
+    }
+
+    g_packet_bytes = 0;
+
+    if (!g_pointer_present) {
+        kwarn("input: the second port of the controller did not answer, the machine has no mouse");
+    }
 }

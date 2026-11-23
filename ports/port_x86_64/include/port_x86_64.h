@@ -204,6 +204,14 @@ k_u64_t port_x86_64_ticks(void);
 #define PORT_X86_64_IRQ_KEYBOARD 1u
 
 /*
+ * The line of the pointer (1.7.0): the fourth line of the slave of the 8259,
+ * which is the twelfth of the machine. It has a handler and a route of its
+ * own; it has no counter in `smp irq`, because the report of that command is
+ * the two lines of ADR 0012 and the mouse is a device of the interface.
+ */
+#define PORT_X86_64_IRQ_MOUSE 12u
+
+/*
  * The end of an interrupt of one of those lines: the EOI of the local APIC of
  * the core when the I/O APIC delivered it (ADR 0012), the EOI of the 8259
  * when the legacy chip did. The body of a vector calls this and does not have
