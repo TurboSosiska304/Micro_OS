@@ -36,8 +36,27 @@ CDC device); a laptop with a stick; `x86-smoke` and every smoke of 1.7 green.
 * **a writable root**: the volume of the release is a partition of the internal
   disk, the settings of `/etc` survive a reboot, and `pkg` installs for good.
 
+**The rule that comes before the code** (an ADR of the lane): a disk this
+system did not format is **read-only**, and a partition the table of the
+medium does not name is not touched at all.
+
+* a controller registers its disks **read-only**; a write is a decision of a
+  mount (`mount -w`), not a consequence of a mount;
+* a volume is writable only when its superblock carries the identifier of this
+  system **and** the volume is named in `/etc/volumes` of the medium - the
+  list `mkfs` writes and nothing else does;
+* the driver refuses a write below the first sector of a partition: the table
+  of the partitions is never written, and neither is the boot area;
+* a superblock that is not ours (btrfs, ext4, NTFS, XFS) is refused at the
+  mount, and no path opens it for writing;
+* the first boot of a machine with a new controller lists what it found and
+  writes nothing.
+
 Gates: `make x86-disk-smoke` on both controllers; a reset that keeps a file; the
-first laptop whose `/etc` and `/bin` are not the image of a stick.
+first laptop whose `/etc` and `/bin` are not the image of a stick; and a test
+with a **foreign superblock** - the mount is refused, a write fails, and the
+**SHA-256 of the whole image is the same before and after**, which is the only
+proof that not one byte was touched.
 
 ## M3 - the libc of a program that nobody rewrote
 
