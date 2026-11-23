@@ -75,6 +75,10 @@ FIRST_BOOT = [
     # compressed file are on the disk and not only in a buffer.
     "exec /bin/zstd -19 -q -f /etc/setting -o /persist.zst",
     "exec /bin/zstd -t /persist.zst",
+    # The tools of sbase read the same volume: a file of the disk through the
+    # library of a program that grew with them.
+    "exec /bin/sb-ls -la /etc",
+    "exec /bin/sb-grep -r hostname /etc",
 ]
 
 SECOND_BOOT = [
@@ -95,6 +99,15 @@ SECOND_BOOT = [
     # reads it out of the volume, and `-t` checks it without a byte of output.
     "exec /bin/zstd -d -c /persist.zst",
     "exec /bin/zstd -t /persist.zst",
+    # The tools of sbase read the same volume on the second boot: a file of
+    # the disk through the library of a program that grew with them.
+    "exec /bin/sb-ls -la /etc",
+    "exec /bin/sb-grep -r hostname /etc",
+    # The type of a file on the volume the reset left: a program of /bin is a
+    # MOX1 image of the port, and the text the first boot inflated is a text.
+    # The database of libmagic is a file of /etc and it survived the reset too.
+    "exec /bin/file /bin/file",
+    "exec /bin/file -i /persist.gz.txt",
 ]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -412,6 +425,30 @@ def check(first: str, second: str) -> list:
         "the frame of the volume still passes its check",
         "34 bytes" in second_answers[14] and "the program exited with 0" in second_answers[14],
         second_answers[14],
+    )
+    listing = second_answers[15]
+    expect(
+        "a tool of sbase reads the volume after the reset",
+        "root" in listing and "setting" in listing and "greeting.gz" in listing,
+        listing,
+    )
+    recursive = second_answers[16]
+    expect(
+        "a recursive grep of sbase walks the volume after the reset",
+        "/etc/setting:hostname=x86_64" in recursive,
+        recursive,
+    )
+    typed = second_answers[17]
+    expect(
+        "file names a program of the volume after the reset",
+        "Micro OS MOX1 executable" in typed,
+        typed,
+    )
+    inflated_type = second_answers[18]
+    expect(
+        "file reads the inflated file after the reset",
+        "text/plain" in inflated_type,
+        inflated_type,
     )
 
     return checks

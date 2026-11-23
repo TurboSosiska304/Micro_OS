@@ -50,6 +50,22 @@ PROGRAMS = [
     "zcat",
     "lua",
     "zstd",
+    # The tools of sbase (third_party/sbase), built beside the programs of
+    # ADR 0016: the sentences of an error are a contract the smoke test reads,
+    # so the port is a second name in /bin and not a replacement.
+    "sb-cat",
+    "sb-grep",
+    "sb-head",
+    "sb-ls",
+    "sb-tail",
+    "sb-wc",
+    "sb-sort",
+    "sb-find",
+    "sb-xargs",
+    "sb-sed",
+    # The type of a file, with libmagic (third_party/file). The database is a
+    # file of /etc as well: the compiled subset and its text fallback.
+    "file",
 ]
 
 # The second name of the compression command: `zstdcat` is the same image and
@@ -79,7 +95,8 @@ SETTING = "hello\nhostname=x86_64\nconsole=vga"
 # file of the volume written and read back, and the clock. The text is a
 # fixture like the greeting of zlib: the smoke test knows every line of it and
 # the two runs of a reproducible build write the same bytes.
-HELLO_LUA = """-- /etc/hello.lua: the first script of the machine
+HELLO_LUA = """#!/usr/bin/lua
+-- /etc/hello.lua: the first script of the machine
 local kinds = { "alpha", "beta", "gamma" }
 print("lua: hello from /etc/hello.lua")
 print("lua: table", #kinds, kinds[1], kinds[3])
@@ -201,6 +218,16 @@ def write_hex_lua(build_dir: str) -> str:
     return path
 
 
+SBASE_LICENSE = os.path.join(ROOT, "third_party", "sbase", "LICENSE")
+FILE_LICENSE = os.path.join(ROOT, "third_party", "file", "LICENSE")
+
+# The database of libmagic, chosen and compiled by the build: the compact
+# .mgc and the same text, the second level of the port when the compiled file
+# is not there.
+MAGIC_TEXT = "magic"
+MAGIC_MGC = "magic.mgc"
+
+
 def write_greeting(build_dir: str, epoch: int) -> str:
     """Write the .gz of the fixture, the same bytes for the same inputs.
 
@@ -298,6 +325,21 @@ def build_image(
         print(f"the fixture of zstd: {error}", file=sys.stderr)
         return 1
 
+    if not os.path.isfile(SBASE_LICENSE):
+        print(f"missing {SBASE_LICENSE}", file=sys.stderr)
+        return 2
+    if not os.path.isfile(FILE_LICENSE):
+        print(f"missing {FILE_LICENSE}", file=sys.stderr)
+        return 2
+
+    # The database of /bin/file. Both levels are files of the image: the
+    # compiled subset the build made and the text it was compiled from.
+    for name in (MAGIC_TEXT, MAGIC_MGC):
+        path = os.path.join(build_dir, name)
+        if not os.path.isfile(path):
+            print(f"missing {path}: run make x86-build", file=sys.stderr)
+            return 2
+
     # The fixture of zcat and the license that travels with its bytes. The
     # program is part of the image, so the image carries the notice of the
     # library it was linked against; a package that ships zcat copies the same
@@ -320,6 +362,18 @@ def build_image(
     command += ["--file", f"/etc/setting.zst={setting_zst}"]
     command += ["--file", f"/etc/broken.zst={os.path.join(build_dir, 'broken.zst')}"]
     command += ["--file", f"/etc/licenses/zstd={ZSTD_LICENSE}"]
+
+    # The MIT notice of sbase travels with the tools of /bin/sb-*, as the
+    # notice of zlib travels with zcat.
+    command += ["--file", f"/etc/licenses/sbase={SBASE_LICENSE}"]
+
+    # libmagic and /bin/file: the notice and the two levels of the database.
+    # The fixture of the Lua rule is `/etc/hello.lua` itself: the script of
+    # the first program starts with the shebang the Magdir file of the
+    # language names, and one file serves the two readers.
+    command += ["--file", f"/etc/licenses/file={FILE_LICENSE}"]
+    command += ["--file", f"/etc/magic={os.path.join(build_dir, MAGIC_TEXT)}"]
+    command += ["--file", f"/etc/magic.mgc={os.path.join(build_dir, MAGIC_MGC)}"]
 
     command += ["--text", f"/etc/setting={SETTING}"]
     command += extra or []

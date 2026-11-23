@@ -32,6 +32,8 @@ set(MICROOS_LIBC_USER_SOURCES
     "${MICROOS_LIBC_USER_DIR}/src/stdio.c"
     "${MICROOS_LIBC_USER_DIR}/src/string.c"
     "${MICROOS_LIBC_USER_DIR}/src/errno.c"
+    "${MICROOS_LIBC_USER_DIR}/src/atexit.c"
+    "${MICROOS_LIBC_USER_DIR}/src/path.c"
 )
 
 # The headers the runtime and the program include. A custom command does not
@@ -41,26 +43,38 @@ set(MICROOS_LIBC_USER_HEADERS
     "${MICROOS_LIBC_USER_DIR}/include/ulibc.h"
     "${MICROOS_LIBC_USER_DIR}/include/assert.h"
     "${MICROOS_LIBC_USER_DIR}/include/ctype.h"
+    "${MICROOS_LIBC_USER_DIR}/include/dirent.h"
     "${MICROOS_LIBC_USER_DIR}/include/errno.h"
     "${MICROOS_LIBC_USER_DIR}/include/fcntl.h"
+    "${MICROOS_LIBC_USER_DIR}/include/fnmatch.h"
+    "${MICROOS_LIBC_USER_DIR}/include/getopt.h"
+    "${MICROOS_LIBC_USER_DIR}/include/grp.h"
+    "${MICROOS_LIBC_USER_DIR}/include/inttypes.h"
+    "${MICROOS_LIBC_USER_DIR}/include/libgen.h"
+    "${MICROOS_LIBC_USER_DIR}/include/limits.h"
     "${MICROOS_LIBC_USER_DIR}/include/locale.h"
     "${MICROOS_LIBC_USER_DIR}/include/math.h"
+    "${MICROOS_LIBC_USER_DIR}/include/pwd.h"
+    "${MICROOS_LIBC_USER_DIR}/include/regex.h"
     "${MICROOS_LIBC_USER_DIR}/include/setjmp.h"
     "${MICROOS_LIBC_USER_DIR}/include/signal.h"
+    "${MICROOS_LIBC_USER_DIR}/include/stdint.h"
     "${MICROOS_LIBC_USER_DIR}/include/stdio.h"
     "${MICROOS_LIBC_USER_DIR}/include/stdlib.h"
     "${MICROOS_LIBC_USER_DIR}/include/string.h"
+    "${MICROOS_LIBC_USER_DIR}/include/strings.h"
+    "${MICROOS_LIBC_USER_DIR}/include/termios.h"
     "${MICROOS_LIBC_USER_DIR}/include/time.h"
     "${MICROOS_LIBC_USER_DIR}/include/unistd.h"
-    "${MICROOS_LIBC_USER_DIR}/include/sys/types.h"
+    "${MICROOS_LIBC_USER_DIR}/include/sys/param.h"
     "${MICROOS_LIBC_USER_DIR}/include/sys/stat.h"
-    "${MICROOS_LIBC_USER_DIR}/include/dirent.h"
-    "${MICROOS_LIBC_USER_DIR}/include/libgen.h"
+    "${MICROOS_LIBC_USER_DIR}/include/sys/sysmacros.h"
+    "${MICROOS_LIBC_USER_DIR}/include/sys/types.h"
+    "${MICROOS_LIBC_USER_DIR}/include/sys/wait.h"
     # The two headers of the library that are not a part of its interface but
-    # are included by a source of it: the state of a stream and the seam of
-    # the formatter with the number with a point. They are named for the same
-    # reason as the others: a custom command gets no depfile from CMake.
-    "${MICROOS_LIBC_USER_DIR}/src/file_private.h"
+    # are included by a source of it: the seam of the formatter with the number
+    # with a point and the seam between the files of the library. They are named
+    # for the same reason as the others: a custom command gets no depfile.
     "${MICROOS_LIBC_USER_DIR}/src/format_float.h"
     "${MICROOS_LIBC_USER_DIR}/src/ulibc_internal.h"
 )
@@ -101,11 +115,16 @@ endfunction()
 # A program of the port: the runtime, the file of the program, the libraries
 # it names, the script of the window and the image of the format. The entry
 # is `_start` of the runtime (ADR 0016), so `main` is a function of the
-# program and not the place the port enters.
+# program and not the place the port enters. `MAIN` names the source of the
+# program: the tree keeps it in `programs/<name>.c`, and a ported tool names
+# the file of third_party while the image keeps its own name (`/bin/sb-ls`).
 function(microos_add_userland_program name)
     cmake_parse_arguments(PROG "FLOAT" "MAIN" "LIBRARIES;INCLUDES;DEFINES;SOURCES;COMPILE_OPTIONS"
         ${ARGN})
 
+    # A program of the tree puts its `main` in `programs/<name>.c`; a ported
+    # tool names the file it came from instead, because the name of the image
+    # and the name of the source in third_party are not the same.
     if(PROG_MAIN)
         set(source "${PROG_MAIN}")
     else()

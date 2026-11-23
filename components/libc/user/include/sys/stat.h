@@ -1,19 +1,12 @@
 /*
  * Micro OS — the information about an object, for a portable source.
  *
- * The kernel has two calls about an object: `stat` with the type, the size,
- * the mode and the owner, and `statx` with the two moments as well. A program
- * that includes `<sys/stat.h>` gets the POSIX structure both of them fill,
- * and the macros `S_IS*` that read it. There are no links and no devices in
- * the VFS of this system, so `lstat` is `stat`, and a special file is
- * whatever a filesystem of `/dev` answers.
- *
- * The structure and the macros are the ones of `feature/sbase` of this tree,
- * which is the port of the POSIX tools: one shape serves the two ports.
- *
- * The `stat` of this header is the POSIX one and not the record of the ABI:
- * a program that wants the record itself calls `ulibc_stat_call` of
- * `ulibc.h`, which names the `struct vfs_stat` of the kernel.
+ * The kernel has two calls: `stat` with the type, the size, the mode and the
+ * owner, and `statx` with the two moments as well. A program that includes
+ * `<sys/stat.h>` gets the POSIX structure those calls fill, and the macros
+ * `S_IS*` read it. There are no links and no devices in the VFS of this
+ * system, so `lstat` is `stat` and a special file is whatever the filesystem
+ * of /dev answers.
  */
 #ifndef MICRO_OS_LIBC_USER_SYS_STAT_H
 #define MICRO_OS_LIBC_USER_SYS_STAT_H
@@ -59,7 +52,6 @@ struct stat {
     struct timespec st_ctim;
 };
 
-/* A source of a Unix-like system reads the three moments by these names. */
 #define st_atime st_atim.tv_sec
 #define st_mtime st_mtim.tv_sec
 #define st_ctime st_ctim.tv_sec
@@ -102,7 +94,9 @@ struct stat {
 int stat(const char *path, struct stat *info);
 int lstat(const char *path, struct stat *info);
 int fstat(int fd, struct stat *info);
+int fstatat(int directory, const char *path, struct stat *info, int flags);
 int chmod(const char *path, mode_t mode);
 mode_t umask(mode_t mask);
+int mkdir(const char *path, ...);
 
 #endif /* MICRO_OS_LIBC_USER_SYS_STAT_H */

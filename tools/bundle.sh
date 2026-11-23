@@ -231,6 +231,12 @@ if [ -f "$X86_BUILD/loader32.elf" ] && [ -f "$X86_BUILD/microos64.bin" ]; then
     # BSD-3-Clause of its release (this tree takes that half of the dual
     # license and not the GPL-2.0 one).
     cp -f "$ROOT/third_party/zstd/LICENSE" "$STAGE/LICENSE.zstd"
+    # The tools of sbase are in /bin/sb-* of the same image, under their MIT
+    # license; the notice travels with the archive for the same reason.
+    cp -f "$ROOT/third_party/sbase/LICENSE" "$STAGE/LICENSE.sbase"
+    # /bin/file is linked against libmagic of file 5.45, whose BSD-2-Clause
+    # notice asks that it travel with a binary.
+    cp -f "$ROOT/third_party/file/LICENSE" "$STAGE/LICENSE.file"
     if [ -f "$X86_BUILD/microos64.sig" ] && [ -f "$X86_BUILD/signing.pub" ]; then
         cp -f "$X86_BUILD/microos64.sig" "$STAGE/microos64.sig"
         cp -f "$X86_BUILD/signing.pub" "$STAGE/microos-sign.pub"
@@ -280,6 +286,15 @@ port layer and the one setting of the port (`port/luaconf_port.h`).
 sources has the note, the version, the port layer and the memory policy of the
 port. The command packs and unpacks the frames of every other zstd.
 
+`/bin/sb-cat`, `/bin/sb-grep`, `/bin/sb-ls` and the rest of `/bin/sb-*` are
+the tools of sbase (MIT); `LICENSE.sbase` is their license and
+`third_party/sbase` of the sources has the subset and the port layer.
+
+`/bin/file` is file 5.45 with libmagic (BSD-2-Clause), and the database it
+reads is a subset of the magic files of the release, compiled into
+`/etc/magic.mgc` of the disk image; `LICENSE.file` is the license and
+`third_party/file` of the sources has the subset and the port layer.
+
 The kernel carries a signature trailer (ADR 0020), and the loader verifies it
 before it copies a byte: an image with a changed byte, without a trailer or
 signed by another key stops with `the image is refused` and never reaches the
@@ -293,7 +308,7 @@ kernel with a port per machine.
 DOC
 
     STAGE_FILES=(loader32.elf microos64.bin run.sh README.md LICENSE.spleen LICENSE.zlib
-        LICENSE.lua LICENSE.zstd)
+        LICENSE.lua LICENSE.zstd LICENSE.sbase LICENSE.file)
     if [ -f "$STAGE/microos64.sig" ]; then
         STAGE_FILES+=(microos64.sig microos-sign.pub)
     fi

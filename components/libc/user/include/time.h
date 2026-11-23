@@ -1,25 +1,27 @@
 /*
  * Micro OS — the clock of a program.
  *
- * The kernel has no call that answers the seconds of Unix: the wall clock of
- * the system (`k_clock_now_unix`) is a fact of the kernel that the ABI of
- * 1.1 does not hand to a program. `time()` is therefore the time since the
- * boot, in seconds, and `os.date` of Lua shows the moment of the epoch plus
- * that count. When the ABI learns the wall clock, this file asks it and
- * nothing of the library of a program changes.
- *
- * The calendar is the C locale of UTC: no time zone, no daylight saving, and
- * the two functions `localtime` and `gmtime` answer the same structure.
+ * The kernel has one clock: `uptime`, the milliseconds since the boot. There
+ * is no wall clock on the x86-64 machine and the filesystem keeps a moment of
+ * Unix only when the tool that wrote the volume gave one. `time()` therefore
+ * answers the seconds of the boot and not the epoch, and the tools that print
+ * a date print the moment the record holds, as they would on a machine whose
+ * clock had not been set. `docs/debts.md` records the missing clock.
  */
 #ifndef MICRO_OS_LIBC_USER_TIME_H
 #define MICRO_OS_LIBC_USER_TIME_H
 
-#include "ulibc.h"
+#include <stddef.h>
 
+#ifndef MICRO_OS_LIBC_USER_TIME_T_DEFINED
+#define MICRO_OS_LIBC_USER_TIME_T_DEFINED
 typedef long time_t;
-typedef long clock_t;
+#endif
 
-#define CLOCKS_PER_SEC 1000
+#ifndef MICRO_OS_LIBC_USER_CLOCK_T_DEFINED
+#define MICRO_OS_LIBC_USER_CLOCK_T_DEFINED
+typedef long clock_t;
+#endif
 
 struct tm {
     int tm_sec;
@@ -33,12 +35,29 @@ struct tm {
     int tm_isdst;
 };
 
-time_t time(time_t *seconds);
+#define CLOCKS_PER_SEC 1000000L
+
+/* The one clock of the machine is the monotonic one of the boot; a caller
+ * that asks for the realtime clock gets the same moment, because there is no
+ * second clock to give. */
+#define CLOCK_REALTIME 0
+#define CLOCK_MONOTONIC 1
+
+struct timespec;
+
+int clock_gettime(int clock, struct timespec *moment);
+
+time_t time(time_t *out);
 clock_t clock(void);
+/* The span of two moments. A program that computes in a double (`os.time` of
+ * Lua) is built without -mgeneral-regs-only; `src/time.c` defines the call in
+ * the build that sets ULIBC_WITH_FLOAT, which is the same one. */
 double difftime(time_t later, time_t earlier);
-struct tm *gmtime(const time_t *seconds);
-struct tm *localtime(const time_t *seconds);
-time_t mktime(struct tm *broken);
-size_t strftime(char *buffer, size_t size, const char *format, const struct tm *broken);
+struct tm *gmtime(const time_t *when);
+struct tm *localtime(const time_t *when);
+time_t mktime(struct tm *parts);
+size_t strftime(char *buffer, size_t size, const char *format, const struct tm *parts);
+char *asctime(const struct tm *parts);
+char *ctime(const time_t *when);
 
 #endif /* MICRO_OS_LIBC_USER_TIME_H */

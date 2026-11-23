@@ -20,5 +20,14 @@
 #define O_TRUNC ULIBC_O_TRUNC
 #define O_APPEND ULIBC_O_APPEND
 #define O_DIRECTORY ULIBC_O_DIRECTORY
+/* The descriptor is not inherited across execve in this system (a program is
+ * a task of its own), and an open of a directory relative to another is done
+ * by the library and not by the ABI: the two names are accepted and folded
+ * away. */
+#define O_CLOEXEC 0
+#define AT_FDCWD (-100)
+#define AT_SYMLINK_NOFOLLOW 0x100
+
+int openat(int directory, const char *path, int flags, ...);
 
 #endif /* MICRO_OS_LIBC_USER_FCNTL_H */

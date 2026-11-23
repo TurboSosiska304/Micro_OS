@@ -3,10 +3,11 @@
  *
  * The kernel call `readdir` fills a batch of `struct vfs_dirent`; a program
  * that includes `<dirent.h>` sees the POSIX `DIR` and `struct dirent` over it.
- * The library keeps one batch per open directory and hands the entries out one
- * at a time, so a source walks a directory with the loop it has everywhere. A
- * name of this system is short (VFS_NAME_MAX) and the entry of POSIX is filled
- * with it; a position (`telldir`) is not a call of the ABI and is not here.
+ * The library keeps one batch per open directory and hands the entries out
+ * one at a time, so a source walks a directory with the loop it has everywhere.
+ * A name of this system is short (VFS_NAME_MAX), and the entry of POSIX is
+ * filled with it; a position of the directory (`telldir`) is not a call of the
+ * ABI and is not here.
  */
 #ifndef MICRO_OS_LIBC_USER_DIRENT_H
 #define MICRO_OS_LIBC_USER_DIRENT_H
@@ -32,6 +33,7 @@ struct dirent {
 #define DT_SOCK 12
 
 DIR *opendir(const char *path);
+DIR *fdopendir(int fd);
 struct dirent *readdir(DIR *dir);
 int closedir(DIR *dir);
 void rewinddir(DIR *dir);

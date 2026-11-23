@@ -2,24 +2,18 @@
  * Micro OS — the information about an object in the POSIX structure.
  *
  * The kernel call `statx` answers the inode, the type, the size, the mode, the
- * owner and the two moments, and `struct stat` of `<sys/stat.h>` is the same
+ * owner and the two moments; `struct stat` of `<sys/stat.h>` is the same
  * information with the fields and the macros a portable source reads. The
  * filesystem of this system keeps no links, no device numbers and no access
  * time: `lstat` is the same call as `stat`, the access time is the moment of
  * the last change (a read does not change a record), and the device is zero.
  *
- * The file follows `feature/sbase` of this tree, which wrote the same layer
- * for the POSIX tools, and drops what this base has no call for: the resolver
- * of a relative path, `statx` and `fstatat`. A path reaches the call as the
- * caller wrote it, which is what the rest of the library does.
- *
  * `fstat` has no call of its own in the ABI: the descriptor knows its position
- * and not its name. The function asks the position of the end for the size and
- * names a descriptor that cannot seek a pipe, which is the fact a source
- * checks before it sleeps on one.
+ * and not its name. The function asks the position of the file for its size
+ * and names a stream a regular file; a descriptor that cannot seek is a pipe,
+ * which is the fact `tail -f` checks before it sleeps on it.
  */
 #include <errno.h>
-#include <string.h>
 #include <sys/stat.h>
 
 #include "ulibc_internal.h"
@@ -54,18 +48,26 @@ static void stat_fill(struct stat *out, const struct vfs_statx *info)
 int stat(const char *path, struct stat *out)
 {
     struct vfs_statx info;
-    long rc;
+    const char *resolved;
 
     if (out == NULL) {
         errno = EINVAL;
         return -1;
     }
 
-    rc = __ulibc_syscall6(KSYS_STATX, (long)(unsigned long)path, (long)(unsigned long)&info, 0, 0,
-                          0, 0);
-    if (rc < 0) {
-        errno = (int)-rc;
+    resolved = __ulibc_path(path);
+    if (resolved == NULL) {
         return -1;
+    }
+
+    {
+        long rc = __ulibc_syscall6(KSYS_STATX, (long)(unsigned long)resolved,
+                                   (long)(unsigned long)&info, 0, 0, 0, 0);
+
+        if (rc < 0) {
+            errno = (int)-rc;
+            return -1;
+        }
     }
 
     stat_fill(out, &info);
@@ -138,6 +140,12 @@ mode_t umask(mode_t mask)
 
 int chmod(const char *path, mode_t mode)
 {
-    return (int)__ulibc_result(
-        __ulibc_syscall6(KSYS_CHMOD, (long)(unsigned long)path, (long)(mode & 07777u), 0, 0, 0, 0));
+    const char *resolved = __ulibc_path(path);
+
+    if (resolved == NULL) {
+        return -1;
+    }
+
+    return (int)__ulibc_result(__ulibc_syscall6(KSYS_CHMOD, (long)(unsigned long)resolved,
+                                                (long)(mode & 07777u), 0, 0, 0, 0));
 }

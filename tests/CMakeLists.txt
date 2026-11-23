@@ -52,6 +52,7 @@ if(NOT ESP_PLATFORM)
         cases/test_lua.c
         cases/test_zstd.c
         cases/test_userland_float.c
+        cases/test_file.c
     )
 
     # The tests of a component that a build leaves out are left out with it:
@@ -247,6 +248,74 @@ if(NOT ESP_PLATFORM)
         "${CMAKE_CURRENT_LIST_DIR}/cases/userland_float_shim.c"
     )
 
+    # --- file and libmagic (third_party/file) -----------------------------
+    #
+    # The library is the same source as the guest archive, compiled for the
+    # host with the port layer of the directory: the test is the second build
+    # of the port and covers the values of the format, not the door of the
+    # system call.
+    include("${CMAKE_SOURCE_DIR}/cmake/libmagic.cmake")
+    set_source_files_properties(${MICROOS_FILE_SOURCES}
+        PROPERTIES COMPILE_DEFINITIONS "HAVE_CONFIG_H=1"
+                   COMPILE_OPTIONS "${MICROOS_FILE_WARNINGS}")
+
+    # The database is made by the library itself, as in the guest build: the
+    # tool compiles the text the script chose, and the two levels of the port
+    # are two files of the build (`magic` and `magic.mgc` beside it).
+    set(MICROOS_TEST_MAGIC "${CMAKE_BINARY_DIR}/magic")
+    set(MICROOS_TEST_MAGIC_MGC "${CMAKE_BINARY_DIR}/magic.mgc")
+    set(MICROOS_TEST_MAGIC_TEXT "${CMAKE_BINARY_DIR}/magic-text")
+
+    add_executable(microos_magic_compile
+        ${MICROOS_FILE_SOURCES}
+        "${MICROOS_FILE_DIR}/port/magic_compile.c"
+    )
+    target_include_directories(microos_magic_compile PRIVATE
+        "${MICROOS_FILE_DIR}/src" "${MICROOS_FILE_DIR}/port")
+    target_compile_definitions(microos_magic_compile PRIVATE HAVE_CONFIG_H=1)
+    target_compile_options(microos_magic_compile PRIVATE ${MICROOS_FILE_WARNINGS})
+
+    add_custom_command(
+        OUTPUT "${MICROOS_TEST_MAGIC}"
+        COMMAND ${CMAKE_COMMAND} -E env python3
+                "${MICROOS_MAGIC_SUBSET}"
+                --config "${MICROOS_MAGIC_CONFIG}"
+                --out "${MICROOS_TEST_MAGIC}"
+        DEPENDS "${MICROOS_MAGIC_SUBSET}" "${MICROOS_MAGIC_CONFIG}"
+                "${MICROOS_FILE_DIR}/magic/microos.magic"
+        COMMENT "choosing the subset of the magic database of file"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${MICROOS_TEST_MAGIC_MGC}"
+        COMMAND "$<TARGET_FILE:microos_magic_compile>" -C magic
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        DEPENDS microos_magic_compile "${MICROOS_TEST_MAGIC}"
+        COMMENT "compiling the magic database of the test"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${MICROOS_TEST_MAGIC_TEXT}"
+        COMMAND ${CMAKE_COMMAND} -E copy "${MICROOS_TEST_MAGIC}" "${MICROOS_TEST_MAGIC_TEXT}"
+        DEPENDS "${MICROOS_TEST_MAGIC}"
+        COMMENT "the text of the magic database, without a .mgc beside it"
+        VERBATIM
+    )
+    add_custom_target(microos_magic_database ALL
+        DEPENDS "${MICROOS_TEST_MAGIC_MGC}" "${MICROOS_TEST_MAGIC_TEXT}")
+    add_dependencies(microos_tests microos_magic_database)
+
+    # The test includes the internal header of the library (file.h), which
+    # wants the configuration of the port as the library sees it.
+    set_source_files_properties(cases/test_file.c
+        PROPERTIES COMPILE_DEFINITIONS "HAVE_CONFIG_H=1")
+    target_sources(microos_tests PRIVATE ${MICROOS_FILE_SOURCES})
+    target_include_directories(microos_tests PRIVATE
+        "${MICROOS_FILE_DIR}/src" "${MICROOS_FILE_DIR}/port")
+    target_compile_definitions(microos_tests PRIVATE
+        MICROOS_TEST_MAGIC="${MICROOS_TEST_MAGIC}"
+        MICROOS_TEST_MAGIC_TEXT="${MICROOS_TEST_MAGIC_TEXT}")
+
     # The FAT reader comes from the component when the host build links it
     # (the default, ADR 0009). A build that turns it off still compiles the
     # sources into the test binary: the tests are the place where the reader
@@ -323,6 +392,41 @@ target_compile_definitions(microos_tests PRIVATE
     KTEST_ABI_GOLDEN="${CMAKE_SOURCE_DIR}/tests/corpus/abi.txt"
     KTEST_MOX_FIXTURE="${CMAKE_SOURCE_DIR}/tests/corpus/mox1/frozen-x86_64.hex"
 )
+
+    # --- the library of a program, the pure part --------------------------
+    #
+    # The functions of `components/libc/user` that have no door under them
+    # (the classes, the strings, the pattern of a name, the options, the
+    # regular expressions, the one user and the decimal order of sbase) are
+    # compiled for the host with the headers of a program. The binary is a
+    # test of its own: the include path of a program would shadow <stdio.h>
+    # and <string.h> of the other tests.
+    set(MICROOS_USERLAND_TESTS
+        cases/test_userland.c
+        src/userland_main.c
+        framework/ktest.c
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/ctype.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/string_ext.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/fnmatch.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/getopt.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/regex.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/libgen.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/pwd.c"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/errno.c"
+        "${CMAKE_SOURCE_DIR}/third_party/sbase/port/numcmp.c"
+    )
+
+    add_executable(microos_userland_tests ${MICROOS_USERLAND_TESTS})
+    target_include_directories(microos_userland_tests PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/framework"
+        "${CMAKE_CURRENT_LIST_DIR}/include"
+        "${CMAKE_SOURCE_DIR}/components/libc/user/include"
+        "${CMAKE_SOURCE_DIR}/components/kernel/include"
+        "${CMAKE_SOURCE_DIR}/third_party/sbase/port"
+    )
+    target_compile_options(microos_userland_tests PRIVATE -Wall -Wextra -Werror -Wno-nonnull-compare)
+    add_test(NAME userland COMMAND microos_userland_tests)
+    set_tests_properties(userland PROPERTIES TIMEOUT 60)
 
     # A test that hangs is a test that failed: the panic of the kernel
     # stops the process of the host, and anything else is a hang that has

@@ -244,6 +244,50 @@ COMMANDS = [
     "umount /",
     "ls /",
     "free",
+    # The tools of sbase (third_party/sbase): the second `ls`, the trees of
+    # `find`, the order of `sort`, the recursive `grep`, the count and the
+    # tail of the library, and a substitution of `sed`. They are built beside
+    # the programs of ADR 0016 because the sentences of the older ones are a
+    # contract; the answers below are their own numbers and words.
+    "exec /bin/sb-ls -la /etc",
+    "exec /bin/sb-find /etc -name setting",
+    "exec /bin/sb-sort /etc/setting",
+    "exec /bin/sb-grep -r hostname /etc",
+    "exec /bin/sb-grep -r -i VGA /etc",
+    "exec /bin/sb-wc -l /etc/setting",
+    "exec /bin/sb-tail -n 1 /etc/setting",
+    "exec /bin/sb-head -n 1 /etc/setting",
+    "exec /bin/sb-sed -n s/x86_64/X/p /etc/setting",
+    "exec /bin/sb-cat /etc/setting",
+    # The words of a pipe run a command of the library. The directory of the
+    # test is one of its own and not /etc: a program inherits eight argument
+    # words (docs/debts.md), and /etc grew past them with the database of
+    # file.
+    "mkdir /tmp/xa",
+    "echo one > /tmp/xa/one",
+    "echo two > /tmp/xa/two",
+    "ls /tmp/xa | /bin/sb-xargs",
+    # The type of a file, with libmagic (third_party/file): a program of the
+    # image is a MOX1 record of our database, the fixture is a gzip, the
+    # script is Lua, a directory is a directory and a name that is not there
+    # is the sentence of the call and its status. The database is the compact
+    # subset of /etc/magic.mgc, so the recognitions below are the ones the
+    # port promised and not the ten megabytes of the release.
+    "exec /bin/file /bin/file",
+    "exec /bin/file -i /bin/file",
+    "exec /bin/file /etc/greeting.gz",
+    "exec /bin/file -z /etc/greeting.gz",
+    "exec /bin/file /etc/hello.lua",
+    "exec /bin/file -i /etc/hello.lua",
+    "exec /bin/file -b /etc/setting",
+    "exec /bin/file /etc",
+    "exec /bin/file /etc/no-such-file",
+    "echo /etc/setting > /tmp/filelist",
+    "exec /bin/file -f /tmp/filelist",
+    # The bytes of descriptor 0 through a pipe, and the flag of a link that
+    # the VFS does not have (accepted, and the file is read).
+    "cat /etc/setting | /bin/file -",
+    "exec /bin/file -L /etc/setting",
 ]
 
 # The prompt of the shell. It is written in one call, so the log of another
@@ -1134,11 +1178,118 @@ def check(output: str) -> list:
         umount_answer,
     )
     expect("the tree is still there", "etc/" in answer("ls /"), answer("ls /"))
+
+    # --- the tools of sbase (third_party/sbase)
+    listing = answer("exec /bin/sb-ls -la /etc")
+    expect(
+        "sb-ls -la prints the mode, the owner and the group",
+        re.search(r"-rw-r--r--\s+1 root\s+root\s+34 Jan 01 00:00 setting", listing) is not None,
+        listing,
+    )
+    expect(
+        "sb-ls -la lists the directory the image has",
+        "init.d" in listing and "licenses" in listing,
+        listing,
+    )
+    found = answer("exec /bin/sb-find /etc -name setting")
+    expect("sb-find walks a tree and matches a name", "/etc/setting" in found, found)
+    ordered = answer("exec /bin/sb-sort /etc/setting")
+    expect(
+        "sb-sort orders the lines",
+        ordered.index("console=vga") < ordered.index("hello") < ordered.index("hostname=x86_64"),
+        ordered,
+    )
+    recursive = answer("exec /bin/sb-grep -r hostname /etc")
+    expect(
+        "sb-grep -r names the file of a line",
+        "/etc/setting:hostname=x86_64" in recursive,
+        recursive,
+    )
+    recursive = answer("exec /bin/sb-grep -r -i VGA /etc")
+    expect("sb-grep -r -i folds the case", "console=vga" in recursive, recursive)
+    count = answer("exec /bin/sb-wc -l /etc/setting")
+    expect("sb-wc counts the lines", "3 /etc/setting" in count, count)
+    last = answer("exec /bin/sb-tail -n 1 /etc/setting")
+    expect("sb-tail prints the last line", "console=vga" in last, last)
+    first_line = answer("exec /bin/sb-head -n 1 /etc/setting")
+    expect("sb-head prints the first line", "hello" in first_line, first_line)
+    changed = answer("exec /bin/sb-sed -n s/x86_64/X/p /etc/setting")
+    expect("sb-sed matches and substitutes a line", "hostname=X" in changed, changed)
+    text = answer("exec /bin/sb-cat /etc/setting")
+    expect("sb-cat copies a file", "hostname=x86_64" in text and "console=vga" in text, text)
+    piped = answer("ls /tmp/xa | /bin/sb-xargs")
+    expect(
+        "sb-xargs runs a command over the words of a pipe",
+        "one" in piped and "two" in piped,
+        piped,
+    )
     free_answer = answer("free")
     expect(
         "free prints the memory and not the clock",
         "heap:" in free_answer and "uptime:" not in free_answer,
         free_answer,
+    )
+    # --- the type of a file (third_party/file, libmagic)
+    #
+    # The first check is the record of our own format: the image of a program
+    # is MOX1 and no Magdir file of the release knows it. The others are the
+    # families of the compact database: a compressed stream, a script of a
+    # language, a directory and a name that is not there.
+    image_type = answer("exec /bin/file /bin/file")
+    expect(
+        "file names a program of the image as a MOX1 executable",
+        "Micro OS MOX1 executable" in image_type and "version 2" in image_type,
+        image_type,
+    )
+    mime = answer("exec /bin/file -i /bin/file")
+    expect(
+        "file -i prints the MIME type of a MOX1 image",
+        "application/x-microos-mox" in mime,
+        mime,
+    )
+    packed = answer("exec /bin/file /etc/greeting.gz")
+    expect("file names a gzip stream", "gzip compressed data" in packed, packed)
+    inside = answer("exec /bin/file -z /etc/greeting.gz")
+    expect(
+        "file -z looks inside the gzip",
+        "ASCII text" in inside and "gzip compressed data" in inside,
+        inside,
+    )
+    lua = answer("exec /bin/file /etc/hello.lua")
+    expect("file names a Lua script", "Lua script" in lua, lua)
+    lua_mime = answer("exec /bin/file -i /etc/hello.lua")
+    expect("file -i names the Lua MIME type", "text/x-lua" in lua_mime, lua_mime)
+    brief = answer("exec /bin/file -b /etc/setting")
+    expect(
+        "file -b prints the description and not the name",
+        "ASCII text" in brief and "/etc/setting:" not in brief,
+        brief,
+    )
+    directory = answer("exec /bin/file /etc")
+    expect("file names a directory", "directory" in directory, directory)
+    missing = answer("exec /bin/file /etc/no-such-file")
+    expect(
+        "file reports a name that is not there",
+        "cannot open" in missing and "No such file or directory" in missing,
+        missing,
+    )
+    listed = answer("exec /bin/file -f /tmp/filelist")
+    expect(
+        "file -f reads the names of a list",
+        "/etc/setting: ASCII text" in listed,
+        listed,
+    )
+    piped_bytes = answer("cat /etc/setting | /bin/file -")
+    expect(
+        "file reads the bytes of descriptor 0",
+        "-: ASCII text" in piped_bytes,
+        piped_bytes,
+    )
+    followed = answer("exec /bin/file -L /etc/setting")
+    expect(
+        "file -L accepts the flag of a link",
+        "ASCII text" in followed,
+        followed,
     )
     expect(
         "the programs of the port are files of the disk",
@@ -1162,6 +1313,8 @@ def check(output: str) -> list:
                 "spawn",
                 "zcat",
                 "lua",
+                "zstd",
+                "file",
             )
         ),
         bin_listing[-200:],
@@ -1447,6 +1600,7 @@ def check(output: str) -> list:
     )
     licenses = answer("exec /bin/ls /etc/licenses")
     expect("the license of zlib travels with the image", "zlib" in licenses, licenses)
+    expect("the license of sbase travels with the image", "sbase" in licenses, licenses)
 
     # --- the third port of somebody else's program: zstd and /bin/zstd
     # The frame of /etc/setting.zst is the work of the `zstd` of the machine
@@ -1856,7 +2010,14 @@ def main(argv: list) -> int:
     # this machine does (docs/debts.md): the command line has programs of
     # 437 KiB (zstd) and 168 KiB (lua) in it, and a run of the list of
     # COMMANDS needs a minute of an emulated machine that is not the fastest.
-    parser.add_argument("--timeout", type=float, default=120.0, help="the seconds the machine gets")
+    # The list of the commands of the image is the one of the tree of every
+    # port: the tools of sbase, the interpreter of Lua, the command of zstd and
+    # `/bin/file` with its database, each an image of a few hundred kilobytes
+    # that the machine reads through the disk driver for every `exec`. Two
+    # minutes was the limit of one port of somebody else, and the merged list
+    # of two of them needs three times that on a machine that is not the
+    # fastest: the limit is the whole run and a slow host is not a failure.
+    parser.add_argument("--timeout", type=float, default=600.0, help="the seconds the machine gets")
     parser.add_argument("--verbose", action="store_true", help="print the console of the machine")
     args = parser.parse_args(argv)
 

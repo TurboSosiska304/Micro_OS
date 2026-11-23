@@ -1,18 +1,17 @@
 /*
- * Micro OS — the classes of a byte.
+ * Micro OS — the character classes of a program.
  *
- * The classes are the ones of the C locale and the argument is a byte of the
- * program, not a wide character. The functions are the usual ones because a
- * portable source calls them; `lctype.c` of Lua does not, it carries a table
- * of its own for the lexer.
+ * The classes are the ones of the C locale: a byte is a letter, a digit, a
+ * space or neither, and no locale of the machine changes that. A program of
+ * this system reads the ASCII of the console and of a file, and a table of
+ * 256 bits would only promise a set the kernel does not have.
  */
 #ifndef MICRO_OS_LIBC_USER_CTYPE_H
 #define MICRO_OS_LIBC_USER_CTYPE_H
 
-#include "ulibc.h"
-
 int isalnum(int byte);
 int isalpha(int byte);
+int isascii(int byte);
 int isblank(int byte);
 int iscntrl(int byte);
 int isdigit(int byte);

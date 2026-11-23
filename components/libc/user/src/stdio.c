@@ -28,8 +28,6 @@
 #include "format_float.h"
 #endif
 
-#include "file_private.h"
-
 #define FORMAT_BUFFER 128
 
 struct output {
@@ -516,7 +514,12 @@ int sprintf(char *buffer, const char *format, ...)
     return length;
 }
 
-static int out_to_descriptor(int fd, const char *format, va_list args)
+/*
+ * The format of a stream on a descriptor. The streams live in `src/file.c`,
+ * which keeps `FILE` private: `fprintf` and `vfprintf` are there, and this is
+ * the number of the open file and the formatter, together.
+ */
+int __ulibc_format_fd(int fd, const char *format, va_list args)
 {
     struct output out;
 
@@ -534,34 +537,13 @@ static int out_to_descriptor(int fd, const char *format, va_list args)
     return out.failed ? -1 : (int)out.total;
 }
 
-int vfprintf(FILE *stream, const char *format, va_list args)
-{
-    if (stream == NULL) {
-        return -1;
-    }
-
-    return out_to_descriptor(stream->fd, format, args);
-}
-
-int fprintf(FILE *stream, const char *format, ...)
-{
-    va_list args;
-    int length;
-
-    va_start(args, format);
-    length = vfprintf(stream, format, args);
-    va_end(args);
-
-    return length;
-}
-
 int printf(const char *format, ...)
 {
     va_list args;
     int length;
 
     va_start(args, format);
-    length = out_to_descriptor(ULIBC_STDOUT, format, args);
+    length = __ulibc_format_fd(ULIBC_STDOUT, format, args);
     va_end(args);
 
     return length;
@@ -569,7 +551,7 @@ int printf(const char *format, ...)
 
 int vprintf(const char *format, va_list args)
 {
-    return out_to_descriptor(ULIBC_STDOUT, format, args);
+    return __ulibc_format_fd(ULIBC_STDOUT, format, args);
 }
 
 int putchar(int byte)

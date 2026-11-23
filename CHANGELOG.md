@@ -72,6 +72,18 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   formatter in `stdio.c`; the board's link had neither, so `make idf-build`
   stopped at `/bin/hello`. The text of a program is 4540 bytes of the 8 KiB
   window.
+- The second port of somebody else's code, and the first set of commands:
+  sbase (MIT) with `cat`, `grep`, `head`, `ls`, `tail`, `wc`, `sort`, `find`,
+  `xargs` and `sed` as `/bin/sb-*` of the x86-64 image, beside the programs
+  of the tree. The library of a program grew the families a POSIX command
+  expects (`opendir`/`readdir`, `struct stat`, `getpwuid`, `localtime`,
+  `fnmatch`, a regular expression engine, `getopt`, `getline`, `fmemopen`,
+  `qsort`) and a directory of its own for the paths, because the ABI has no
+  `chdir`. The port layer and the two hunks of `sort.c`/`xargs.c` are in
+  `third_party/sbase/README.md`; the pure library is tested by
+  `tests/cases/test_userland.c`, and the ten tools are in `make x86-smoke`
+  and `make x86-disk-smoke`. The MIT notice travels as
+  `/etc/licenses/sbase` and `LICENSE.sbase`.
 
 ## [1.1.1] - 2026-11-22
 

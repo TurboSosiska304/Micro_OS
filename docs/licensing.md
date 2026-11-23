@@ -16,6 +16,8 @@ commercially; the note here is what the tree does.
 | zlib | 1.3.1 | zlib | `third_party/zlib`, `ports/port_x86_64/programs/zcat.c` | `/bin/zcat` of the x86-64 MicroFS image; `/etc/licenses/zlib` in the image and `LICENSE.zlib` in the x86-64 tar |
 | Lua | 5.4.7 | MIT | `third_party/lua`, `ports/port_x86_64/programs` (the `main` is the release's `lua.c`) | `/bin/lua` of the x86-64 MicroFS image; `/etc/licenses/lua` in the image and `LICENSE.lua` in the x86-64 tar |
 | zstd | 1.5.7 | BSD-3-Clause | `third_party/zstd`, `ports/port_x86_64/CMakeLists.txt` (the `main` is the release's `zstdcli.c`) | `/bin/zstd` and `/bin/zstdcat` of the x86-64 MicroFS image; `/etc/licenses/zstd` in the image and `LICENSE.zstd` in the x86-64 tar |
+| sbase | c546c3a (tip) | MIT | `third_party/sbase`, ten tools of `/bin/sb-*` | `/bin/sb-cat`, `/bin/sb-grep`, `/bin/sb-head`, `/bin/sb-ls`, `/bin/sb-tail`, `/bin/sb-wc`, `/bin/sb-sort`, `/bin/sb-find`, `/bin/sb-xargs` and `/bin/sb-sed` of the x86-64 MicroFS image; `/etc/licenses/sbase` in the image and `LICENSE.sbase` in the x86-64 tar |
+| file (libmagic) | 5.45 | BSD-2-Clause | `third_party/file`, `/bin/file` and the database `/etc/magic.mgc` of `/etc` | `/bin/file` of the x86-64 MicroFS image; `/etc/licenses/file` in the image and `LICENSE.file` in the x86-64 tar |
 
 Spleen is a font by Frederic Cambus; the license and the note are in
 [`third_party/spleen`](../third_party/spleen/README.md). The 8x16 table is
@@ -54,6 +56,27 @@ permission text travel with a copy of the software, so the image carries
 `tools/bundle.sh` puts `LICENSE.zstd` into the x86-64 archive. The text is the
 BSD-3-Clause of the release and not the MIT of this tree: the two notices are
 different and the tree keeps both.
+sbase is a collection of Unix tools by suckless; the subset, the commit and
+the two hunks of the port are in
+[`third_party/sbase`](../third_party/sbase/README.md). Its license is the MIT
+text of the collection, which names its authors. The MicroFS image carries
+`/etc/licenses/sbase` beside the tools of `/bin/sb-*`, `tools/bundle.sh`
+puts `LICENSE.sbase` into the x86-64 archive, and a package that installs a
+tool (`microos-progs` of a release) copies the same file beside it. The
+notice is not merged into the MIT `LICENSE` of the tree: the two are the same
+license but not the same text.
+
+file is the command of a Unix-like system that names the type of a file, and
+libmagic is its library (Ian Darwin, Christos Zoulas and the contributors of
+the release). The subset of the magic files, the port layer and the seven
+hunks of the port are in [`third_party/file`](../third_party/file/README.md).
+The BSD-2-Clause license asks that the copyright notice and the conditions
+travel with a binary: the MicroFS image carries `/etc/licenses/file` beside
+`/bin/file` and its database, `tools/bundle.sh` puts `LICENSE.file` into the
+x86-64 archive, and a package that installs `file` copies the same file beside
+the program. The magic database of the image is a *subset* of the rules of the
+release and not the whole of it; the notice of the release covers it the same
+way.
 
 ## The rule
 

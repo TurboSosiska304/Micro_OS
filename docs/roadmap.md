@@ -337,6 +337,34 @@ written when the project was an operating system for one board; the numbers
       pipe, an `fxsave` of the XMM state for two programs with a point in
       their numbers, and the package that ships `zcat` and `lua` with their
       licenses beside them (`docs/debts.md`)
+      `make x86-disk-smoke` check the inflated bytes of a fixed fixture. Lua
+      and SQLite are the next copies of the recipe
+* [x] The second port, and the first set of commands: sbase with ten tools
+      (`cat`, `grep`, `head`, `ls`, `tail`, `wc`, `sort`, `find`, `xargs`,
+      `sed`) as `/bin/sb-*`, beside the programs of the tree. It is the port
+      that grew the library of a program the families a POSIX command needs
+      (`opendir`/`readdir`, `struct stat`, `getpwuid`, `localtime`,
+      `fnmatch`, a regular expression engine, `getopt`, `getline`,
+      `fmemopen`), and the ten commands are in `make x86-smoke` and
+      `make x86-disk-smoke`
+* [x] The third port, and the first database: file 5.45 with libmagic
+      (`third_party/file`, BSD-2-Clause) as `/bin/file`, with a compact
+      database of the Magdir rules (`tools/magic_subset.py`, the subset of
+      `third_party/file/magic/subset.json`) compiled into `/etc/magic.mgc`
+      and the text `/etc/magic` as the fallback. It is the port that asked
+      for an image larger than the transfer edge (`K_EXEC_MAX_IMAGE`) and
+      the first one whose data does not fit; the read side of `FILE` has a
+      block because of it, and `tests/cases/test_file.c`, `make x86-smoke`
+      and `make x86-disk-smoke` cover the values, the program and the volume
+      after a reset
+* [ ] The gaps of the next port: a formatter with `%f` and a precision, a
+      `malloc` larger than the bss of an image (`brk`/`mmap` of a program), a
+      `poll` for a library that waits on a pipe, and the package that ships
+      `zcat` and the tools of sbase with their license beside them
+      (`docs/debts.md`)
+* [ ] A `chdir` and a wall clock in the ABI, and the POSIX frame of a fork
+      child: the library works around the three, and the workaround of each
+      is named in `docs/debts.md`
 
 ## The last major changes of the board (1.1.0)
 

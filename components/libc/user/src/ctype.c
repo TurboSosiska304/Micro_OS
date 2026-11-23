@@ -1,15 +1,22 @@
 /*
- * Micro OS — the classes of a byte, in the C locale.
+ * Micro OS — the ASCII classes of a program.
  *
- * A byte above 127 is not a letter of the C locale and not a space, so the
- * table is written for the 128 bytes of ASCII and the functions answer "no"
- * for the rest. The argument is taken as unsigned, at the library does: a
- * `char` of 0xE9 passed as an int is a byte of the program and not a
- * negative number.
+ * A table would be a kilobyte of rodata per program for a test of six
+ * comparisons; the functions are the table, written out. The classes are the
+ * ones of the C locale and nothing else: this system has no locale, and a
+ * byte of the console is a letter only when ASCII says so.
  */
-#include "ulibc.h"
-
 #include <ctype.h>
+
+int isascii(int byte)
+{
+    return (unsigned)byte < 128u;
+}
+
+int isdigit(int byte)
+{
+    return byte >= '0' && byte <= '9';
+}
 
 int isupper(int byte)
 {
@@ -26,24 +33,15 @@ int isalpha(int byte)
     return isupper(byte) || islower(byte);
 }
 
-int isdigit(int byte)
-{
-    return byte >= '0' && byte <= '9';
-}
-
 int isalnum(int byte)
 {
     return isalpha(byte) || isdigit(byte);
 }
 
-int isxdigit(int byte)
-{
-    return isdigit(byte) || (byte >= 'a' && byte <= 'f') || (byte >= 'A' && byte <= 'F');
-}
-
 int isspace(int byte)
 {
-    return byte == ' ' || (byte >= '\t' && byte <= '\r');
+    return byte == ' ' || byte == '\t' || byte == '\n' || byte == '\r' || byte == '\v' ||
+           byte == '\f';
 }
 
 int isblank(int byte)
@@ -53,17 +51,17 @@ int isblank(int byte)
 
 int iscntrl(int byte)
 {
-    return (byte >= 0 && byte < 0x20) || byte == 0x7F;
+    return ((unsigned)byte < 32u) || byte == 127;
 }
 
 int isprint(int byte)
 {
-    return byte >= 0x20 && byte < 0x7F;
+    return byte >= 32 && byte < 127;
 }
 
 int isgraph(int byte)
 {
-    return byte > 0x20 && byte < 0x7F;
+    return byte > 32 && byte < 127;
 }
 
 int ispunct(int byte)
@@ -71,12 +69,17 @@ int ispunct(int byte)
     return isgraph(byte) && !isalnum(byte);
 }
 
+int isxdigit(int byte)
+{
+    return isdigit(byte) || (byte >= 'a' && byte <= 'f') || (byte >= 'A' && byte <= 'F');
+}
+
 int tolower(int byte)
 {
-    return isupper(byte) ? byte - 'A' + 'a' : byte;
+    return isupper(byte) ? byte + ('a' - 'A') : byte;
 }
 
 int toupper(int byte)
 {
-    return islower(byte) ? byte - 'a' + 'A' : byte;
+    return islower(byte) ? byte - ('a' - 'A') : byte;
 }

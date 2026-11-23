@@ -1,19 +1,19 @@
 /*
- * Micro OS — the failed assertion of a program.
+ * Micro OS — the failure of an assertion.
  *
- * The sentence goes to the console of the errors as a line of the program,
- * then the program ends with the status `SIGABRT` of a Unix-like system. The
- * image has no debugger and no names of its functions in a table, so the line
- * is the expression, the file and the number of the line and nothing more.
+ * A program of this system has no signal of the kernel to raise for an abort
+ * and no shell above it to print the frame; the sentence names the expression
+ * and the file, and the task ends with 255, which is the status the port gives
+ * a program that faulted. The function is here and not in `<assert.h>` because
+ * a header that defines a function in every file that includes it is a
+ * function per file, and the assertion of a library is the same one.
  */
-#include "ulibc.h"
-
+#include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 
-void __assert_fail(const char *expression, const char *file, unsigned line, const char *function)
+void __ulibc_assert_fail(const char *expression, const char *file, unsigned line)
 {
-    (void)function;
-
-    fprintf(stderr, "assert: %s: %u: %s\n", file, line, expression);
-    exit(134);
+    (void)fprintf(stderr, "assertion failed: %s, file %s, line %u\n", expression, file, line);
+    abort();
 }

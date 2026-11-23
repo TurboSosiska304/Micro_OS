@@ -16,7 +16,9 @@
  */
 #include "ulibc.h"
 
+#include <errno.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 
 /* The days from 1970-01-01 to 2000-03-01, the start of an era of 400 years. */
@@ -389,4 +391,56 @@ size_t strftime(char *buffer, size_t size, const char *format, const struct tm *
     buffer[(out.used < size) ? out.used : size - 1] = '\0';
 
     return out.overflow ? 0 : out.used;
+}
+
+/*
+ * The monotonic clock of the machine in the shape POSIX gives it. There is one
+ * clock - the milliseconds since the boot - so both identifiers of
+ * `<time.h>` answer it; `find -cnewer` is the caller of the tree that needs
+ * the nanoseconds and gets them from the same count.
+ */
+int clock_gettime(int clock, struct timespec *moment)
+{
+    long milliseconds = uptime();
+
+    (void)clock;
+
+    if (moment == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    moment->tv_sec = (time_t)(milliseconds / 1000);
+    moment->tv_nsec = (long)((milliseconds % 1000) * 1000000L);
+
+    return 0;
+}
+
+/*
+ * The fixed form of a moment: "Www Mmm dd hh:mm:ss yyyy\n", the 26 bytes of
+ * `asctime` and the one string a caller keeps until the next call. The
+ * machine has one clock (the boot), so `ctime` is the same text for the same
+ * seconds on every run, which is what the smoke test of the port reads.
+ */
+static char g_asctime_s[26];
+
+char *asctime(const struct tm *broken)
+{
+    if (broken == NULL) {
+        return NULL;
+    }
+    if (strftime(g_asctime_s, sizeof(g_asctime_s), "%a %b %e %H:%M:%S %Y\n", broken) == 0) {
+        return NULL;
+    }
+
+    return g_asctime_s;
+}
+
+char *ctime(const time_t *when)
+{
+    if (when == NULL) {
+        return NULL;
+    }
+
+    return asctime(localtime(when));
 }
