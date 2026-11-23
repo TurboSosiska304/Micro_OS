@@ -16,6 +16,7 @@ built into `build-host/tools/`.
 | `x86_image.py` | write the disk image with `/bin` and `/etc` (calls `microos_mkfs`) |
 | `mkfs_mfs.c` | the host tool that formats and fills a MicroFS volume (`microos_mkfs`) |
 | `mkprog.sh` | turn the ELF of a program into a MOX1 image |
+| `link_program.sh` | link a program at the window of its port, check where the text landed and make the image |
 | `bundle.sh` | collect `dist/`: the board images, the x86-64 tarball, the signature and the sums |
 | `microos_sign.c` | sign, verify and inspect the trailer of an image (ADR 0020) |
 | `integrity_check.py` | the repository checks: format, git, hygiene, bundle, version |

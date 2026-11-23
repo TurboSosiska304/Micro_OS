@@ -184,9 +184,11 @@ a `lua_Number` and a human-readable size are doubles, and the loader turns the
 SSE and x87 units on for them. `zstdcat` is the same image as `zstd` under a
 second name.
 The first six use the raw `programs/prog.h`. The build passes
-`--base 0x02000000` to `mkprog.sh`, which refuses an image linked for another
-window: nothing relocates the program, so a wrong address would run and read
-its data from somewhere else.
+`--base 0x02000000` to `tools/link_program.sh`, which links the program, checks
+that the text really landed at `0x02000020` - the ld of binutils 2.38 moves it
+32 bytes up, the 2.47 of this host does not - and hands the linked file to
+`mkprog.sh`; the image of another window is refused, and nothing relocates the
+program, so a wrong address would run and read its data from somewhere else.
 
 The virtual and the physical address are no longer the same number for a
 program: `src/paging.c` builds its page tables with the window at 32 MiB

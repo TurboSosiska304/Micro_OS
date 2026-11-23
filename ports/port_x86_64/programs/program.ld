@@ -38,8 +38,26 @@ PHDRS
 
 SECTIONS
 {
-    /* k_port_exec_base() + the header of the format. */
-    . = 0x02000020;
+    /*
+     * k_port_exec_base() + the header of the format, as a symbol and not as
+     * a literal: tools/link_program.sh overrides it with --defsym, links the
+     * program, reads where the text has landed and links once more with the
+     * value that puts it where the format needs it (see below). The number
+     * here is the default of a plain `ld -T program.ld`, and the port names
+     * the same base in its CMakeLists.txt.
+     *
+     * The address is written twice, in the cursor and in the header of the
+     * section, because binutils 2.38 (the ld of the release container) does
+     * not honor SUBALIGN for the start of an output section: it moves the
+     * cursor up to the alignment of the input section, and the .text of a
+     * compiler that aligns functions to 64 bytes (gcc does) then lands at
+     * 0x2000040 instead of 0x2000020 - 32 bytes past the header, which
+     * mkprog.sh refuses. An address on the section itself is exact in every
+     * linker of the 2.x line; the wrapper measures the result and corrects a
+     * constant move of another linker as well.
+     */
+    PROVIDE(__image_text = 0x02000020);
+    . = __image_text;
 
     /*
      * The text ends on a page of its own, and the data begins on the next
@@ -50,7 +68,7 @@ SECTIONS
      * so mkprog.sh copies it and the header says where the data starts; the
      * port refuses an image whose text does not end on a page.
      */
-    .text : SUBALIGN(4) { *(.text .text.*) . = ALIGN(4096); } :text
+    .text __image_text : SUBALIGN(4) { *(.text .text.*) . = ALIGN(4096); } :text
 
     /*
      * The initialised data and the read-only data are one segment in the

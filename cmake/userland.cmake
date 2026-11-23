@@ -3,9 +3,12 @@
 # A program of the x86-64 port is not a CMake executable of the host: it is
 # linked with -nostdlib for the window of the machine, against the library of
 # `components/libc/user`, and turned into a MOX1 image by `tools/mkprog.sh`.
-# The same recipe serves a program of the tree and a program that was ported
-# from somebody else (zlib today, Lua and the next one tomorrow), so the
-# steps live here and not in the file of one program.
+# The link and the image are one call of `tools/link_program.sh`: the flags of
+# the format live there, and so does the check that the text has really landed
+# at the base of the window plus the header (a linker of another version may
+# move it). The same recipe serves a program of the tree and a program that
+# was ported from somebody else (zlib today, Lua and the next one tomorrow),
+# so the steps live here and not in the file of one program.
 #
 # The caller names the flags and the paths, because they are the contract of
 # its machine, and this module names only the steps:
@@ -17,6 +20,7 @@
 #   MICROOS_PROGRAM_DIR       the directory of the program.ld and prog.h
 #   MICROOS_PROGRAM_BASE      the base of the window of the port
 #   MICROOS_MKPROG            tools/mkprog.sh
+#   MICROOS_LINK_PROGRAM      tools/link_program.sh
 #
 # A ported library is a static archive of the objects of the guest, built by
 # the same compiler with the same flags. It is linked into the program and
@@ -209,15 +213,13 @@ function(microos_add_userland_program name)
 
     add_custom_command(
         OUTPUT "${image}"
-        COMMAND ${CMAKE_C_COMPILER} -nostdlib -static -no-pie -Wl,--build-id=none
-                -Wl,--no-check-sections -Wl,-z,noseparate-code -Wl,-N
-                ${link_flags} -Wl,-e,_start
-                -T "${MICROOS_PROGRAM_DIR}/program.ld" -o "${name}.elf"
-                ${objects} ${archives}
-        COMMAND sh "${MICROOS_MKPROG}" --base ${MICROOS_PROGRAM_BASE} --arch x86-64
-                "${name}.elf" "${image}" _start
+        COMMAND sh "${MICROOS_LINK_PROGRAM}" --cc "${CMAKE_C_COMPILER}"
+                --script "${MICROOS_PROGRAM_DIR}/program.ld" --entry _start
+                --out "${name}.mox" --base ${MICROOS_PROGRAM_BASE} --arch x86-64
+                --mkprog "${MICROOS_MKPROG}"
+                -- ${link_flags} ${objects} ${archives}
         WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-        DEPENDS ${objects} ${dependencies} ${archives}
+        DEPENDS ${objects} ${dependencies} ${archives} "${MICROOS_LINK_PROGRAM}"
         COMMENT "linking the image of /bin/${name}"
         VERBATIM
     )
