@@ -1245,8 +1245,22 @@ static void test_truncate_and_unlink(void)
     KT_CHECK(after.free_blocks < before.free_blocks);
 
     /* Five kilobytes keep the first five blocks; the table and the rest of
-     * the blocks are given back. */
-    KT_CHECK_INT_EQ(ext2_vfs_truncate(TEST_ROOT_POINT "/cut.txt", 5000u), 0);
+     * the blocks are given back. The cut is made through the descriptor,
+     * the operation that ftruncate asks the VFS for. */
+    KT_CHECK_INT_EQ(vfs_open(TEST_ROOT_POINT "/cut.txt", VFS_O_RDWR, &file, g_file_data), 0);
+    KT_CHECK_INT_EQ(vfs_truncate(&file, 5000u), 0);
+    KT_CHECK_INT_EQ(file.size, 5000);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    /* A reader has no cut, and a size beyond the volume is refused. */
+    KT_CHECK_INT_EQ(vfs_open(TEST_ROOT_POINT "/cut.txt", VFS_O_RDONLY, &file, g_file_data), 0);
+    KT_CHECK_INT_EQ(vfs_truncate(&file, 100u), KERR_BADF);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    KT_CHECK_INT_EQ(vfs_open(TEST_ROOT_POINT "/cut.txt", VFS_O_RDWR, &file, g_file_data), 0);
+    KT_CHECK_INT_EQ(vfs_truncate(&file, (k_u64_t)1u << 40), KERR_NOSPC);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
     KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/cut.txt", &stat), 0);
     KT_CHECK_INT_EQ(stat.size, 5000);
 

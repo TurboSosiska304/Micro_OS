@@ -2250,6 +2250,206 @@ static int mfs_close_locked(struct mfs_file *file)
     return mfs_sync();
 }
 
+/*
+ * Cut the chain of an open file after the block that holds `new_size` and
+ * give the tail back. The bytes past the new size in the last block are
+ * zeroed, because a later grow must read zeros there, exactly as a file of
+ * POSIX does.
+ */
+static int truncate_shrink(struct mfs_file *file, k_u32_t new_size, k_u32_t needed)
+{
+    k_u32_t last;
+    k_u32_t tail = MFS_NEXT_NONE;
+    k_u32_t in_block;
+    int rc;
+
+    if (needed == 0) {
+        rc = file_release_chain(file->first_block);
+        if (rc == MFS_OK) {
+            file->first_block = MFS_NEXT_NONE;
+            file_cursor_forget(file);
+        }
+
+        return rc;
+    }
+
+    /* The last block that stays, found through the cursor of the file. */
+    rc = file_block_at(file, (needed - 1u) * MFS_BLOCK_DATA, &last, &in_block);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    rc = chain_next(last, &tail);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    rc = chain_set_next(last, MFS_NEXT_NONE);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    if (tail != MFS_NEXT_NONE) {
+        rc = file_release_chain(tail);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+    }
+
+    in_block = new_size % MFS_BLOCK_DATA;
+    if (in_block != 0) {
+        k_u8_t block_data[MFS_BLOCK_SIZE];
+
+        rc = dev_read(last, block_data);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
+        memset(block_data + 4 + in_block, 0, MFS_BLOCK_DATA - in_block);
+
+        rc = dev_write(last, block_data);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+    }
+
+    if (file->chain_valid && file->chain_index >= needed) {
+        file_cursor_forget(file);
+    }
+
+    return MFS_OK;
+}
+
+/*
+ * Take the blocks a larger file needs and zero the bytes between the old
+ * size and the new one. A new block is written empty by file_grow, so only
+ * the tail of the block that held the old size needs the zero; the rest of
+ * the growth reads zeros already.
+ */
+static int truncate_grow(struct mfs_file *file, k_u32_t new_size, k_u32_t needed)
+{
+    k_u32_t old_size = file->size;
+    k_u32_t old_needed = (old_size + MFS_BLOCK_DATA - 1u) / MFS_BLOCK_DATA;
+    int rc;
+
+    if (!file->chain_blocks_valid) {
+        k_u32_t have = 0;
+
+        if (file->first_block != MFS_NEXT_NONE) {
+            rc = chain_count(file->first_block, &have);
+            if (rc != MFS_OK) {
+                return rc;
+            }
+        }
+
+        file->chain_blocks = have;
+        file->chain_blocks_valid = true;
+    }
+
+    while (file->chain_blocks < needed) {
+        k_u32_t added;
+
+        rc = file_grow(file, &added);
+        if (rc != MFS_OK) {
+            /* The file is what it was: the blocks that were already taken
+             * go back, or a refusal would leave a chain longer than the
+             * size the close is going to write. */
+            (void)truncate_shrink(file, old_size, old_needed);
+            file->chain_blocks = old_needed;
+            file->chain_blocks_valid = true;
+            return rc;
+        }
+
+        file->chain_blocks++;
+    }
+
+    if (old_size % MFS_BLOCK_DATA != 0) {
+        k_u32_t block;
+        k_u32_t in_block;
+        k_size_t gap = K_MIN((k_size_t)(MFS_BLOCK_DATA - old_size % MFS_BLOCK_DATA),
+                             (k_size_t)(new_size - old_size));
+
+        rc = file_block_at(file, old_size, &block, &in_block);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
+        {
+            k_u8_t block_data[MFS_BLOCK_SIZE];
+
+            rc = dev_read(block, block_data);
+            if (rc != MFS_OK) {
+                return rc;
+            }
+
+            memset(block_data + 4 + in_block, 0, gap);
+
+            rc = dev_write(block, block_data);
+            if (rc != MFS_OK) {
+                return rc;
+            }
+        }
+    }
+
+    return MFS_OK;
+}
+
+static int mfs_truncate_locked(struct mfs_file *file, k_u64_t size)
+{
+    struct mfs_inode inode;
+    k_u32_t new_size;
+    k_u32_t needed;
+    int rc;
+
+    if (file == NULL || (file->flags & (MFS_O_WRONLY | MFS_O_RDWR)) == 0) {
+        return MFS_EINVAL;
+    }
+
+    /* The format keeps the size of a file in 32 bits, so a wider number is
+     * refused before a byte is touched rather than cut to fit. */
+    if (size > 0xFFFFFFFFu) {
+        return MFS_E2BIG;
+    }
+
+    new_size = (k_u32_t)size;
+    if (new_size == file->size) {
+        return MFS_OK;
+    }
+
+    needed = (new_size + MFS_BLOCK_DATA - 1u) / MFS_BLOCK_DATA;
+
+    if (new_size < file->size) {
+        rc = truncate_shrink(file, new_size, needed);
+    } else {
+        rc = truncate_grow(file, new_size, needed);
+    }
+
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    rc = inode_read(file->inode, &inode);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    inode.size = new_size;
+    inode.first_block = file->first_block;
+    inode_stamp(&inode);
+
+    rc = inode_write(file->inode, &inode);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    file->size = new_size;
+    file->dirty = false;
+    file->chain_blocks = needed;
+    file->chain_blocks_valid = true;
+
+    return mfs_sync();
+}
+
 static int mfs_unlink_locked(const char *path)
 {
     char dir_path[MFS_PATH_MAX];
@@ -2982,6 +3182,17 @@ int mfs_write(struct mfs_file *file, const void *buf, k_size_t size)
 
     mfs_lock();
     rc = mfs_write_locked(file, buf, size);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_truncate(struct mfs_file *file, k_u64_t size)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_truncate_locked(file, size);
     mfs_unlock();
 
     return rc;

@@ -117,11 +117,14 @@ chose.
 | 31 | `sigreturn` | - | the saved value of the interrupted call |
 | 32 | `getlimit` | `which, value` | 0 and the limit in the place of the caller, or an error |
 | 33 | `setlimit` | `which, value` | 0, or an error |
+| 34 | `rename` | `from, to` | 0, or an error |
+| 35 | `ftruncate` | `fd, size` | 0, or an error |
 
 The numbers 0 to 22 are frozen, 23 to 26 were the next free ones; pipes took
-27 and 28 (ADR 0014), signals the three after them (ADR 0015), and the limits
-of a task 32 and 33. A call that is not in the table is `ENOSYS`, never a
-guess at what it might have meant.
+27 and 28 (ADR 0014), signals the three after them (ADR 0015), the limits of
+a task 32 and 33, the atomic rename 34 (ADR 0024 §5) and the cut of an open
+file 35. A call that is not in the table is `ENOSYS`, never a guess at what
+it might have meant.
 
 The flags of `open` are the same as the ones of the VFS:
 
@@ -434,12 +437,14 @@ when the signal is not one of the system.
 
 ## The descriptors
 
-Every task has its own table of the open files, four of them. The descriptor
-is the number of the slot. A descriptor that was never opened gives
-`KERR_BADF`. The table is the ceiling of the machine; the task also has a
-limit of its own (`KSYS_RLIMIT_FDS`, below), which starts at four and may be
-lowered, so a task may refuse itself a descriptor that the table would still
-hold.
+Every task has its own table of the open files, sixteen of them. The
+descriptor is the number of the slot. A descriptor that was never opened
+gives `KERR_BADF`. The table is the ceiling of the machine; the task also has
+a limit of its own (`KSYS_RLIMIT_FDS`, below), which starts at sixteen and may
+be lowered, so a task may refuse itself a descriptor that the table would
+still hold. Sixteen slots hold the database file and the journal of SQLite,
+the stages of a pipeline with their redirects, and the files `xargs` reads at
+once.
 
 The open file behind a descriptor is a **description** of the kernel, counted
 by the descriptors that refer to it (`kernel/kfile.h`). One task gets two
@@ -462,6 +467,28 @@ A descriptor of a directory is opened with `KSYS_O_DIRECTORY` and read with
 `readdir`; it has no other use. It is opened for reading only, so a write
 never becomes a descriptor of a directory at all, and `read` of it answers
 `EISDIR`. `readdir` of any other descriptor answers `ENOTDIR`.
+
+## The cut of a file
+
+`ftruncate(fd, size)` (number 35) cuts the open file behind the descriptor to
+`size` bytes. A shorter file gives the blocks of its tail back to the map of
+the free blocks, and the bytes past the new size of the last block are zeroed;
+a longer file is filled with zeros to the new size. The position of the
+descriptor does not move, as POSIX has it, even when it is past the new size.
+
+The descriptor has to be open for writing: a descriptor of a reader is
+`EBADF`, and so is a number that is not open. A pipe is `EINVAL` - it is a
+ring of bytes and not a file with a size - and a descriptor of a directory is
+`EISDIR` before the filesystem is asked. The size is a 64-bit register on the
+host and on x86-64 and a 32-bit one on the board; a number wider than the
+record of the filesystem is `E2BIG`, and a growth the volume cannot hold is
+`ENOSPC`.
+
+MicroFS and ext2 implement the operation. FAT32 answers `KERR_NOTSUP` for
+now, and so do procfs and devfs: the call is honest about what the volume can
+do instead of pretending that a cut happened. The library of a program has
+`int ftruncate(int fd, long long size)` in `components/libc/user`, in the
+shape of POSIX (0 or -1 with `errno`).
 
 ## The pipes and `dup2`
 
@@ -521,7 +548,7 @@ a caller that wants the set in one place.
 |---|---|---|---|
 | `KSYS_RLIMIT_MEMORY` (1) | the user blocks the task holds | bytes | 2 MiB (the PSRAM of the board) |
 | `KSYS_RLIMIT_CPU` (2) | the time the task spent running | milliseconds | 4294967295 (about 49 days) |
-| `KSYS_RLIMIT_FDS` (3) | the descriptors the task may open | descriptors | `TASK_MAX_FDS` (4) |
+| `KSYS_RLIMIT_FDS` (3) | the descriptors the task may open | descriptors | `TASK_MAX_FDS` (16) |
 
 **The policy: the ceiling is the start and a limit only goes down.** A fresh
 task starts at the ceiling; `setlimit` accepts a value at or below the current
@@ -567,9 +594,9 @@ without a call.
 `dup2(fd, fd)` of a descriptor that is already open is still allowed, because
 lowering a limit does not close what is open. A descriptor above a lowered
 limit stays usable and may be closed; a pipe needs two free slots below the
-limit. The table of the task is four slots and the table of the descriptions
-of the system is 24 records: a full limit is `EMFILE`, a full system is
-`ENOSPC`.
+limit. The table of the task is sixteen slots and the table of the
+descriptions of the system is 24 records: a full limit is `EMFILE`, a full
+system is `ENOSPC`.
 
 A host test covers the three resources (`test_ksys.c`, `test_task.c`,
 `test_kmm.c` and `test_libc.c`), and the shell has `ulimit` to print the limits

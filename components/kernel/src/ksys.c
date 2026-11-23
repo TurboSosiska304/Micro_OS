@@ -640,6 +640,35 @@ static k_ssize_t sys_lseek(ksys_arg_t fd, ksys_arg_t offset, ksys_arg_t whence, 
     return position;
 }
 
+static k_ssize_t sys_ftruncate(ksys_arg_t fd, ksys_arg_t size, ksys_arg_t a2, ksys_arg_t a3,
+                               ksys_arg_t a4, ksys_arg_t a5)
+{
+    struct kfile *file = fd_get(fd);
+
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    if (file == NULL) {
+        return KERR_BADF;
+    }
+
+    /* A pipe is a ring of bytes and not a file with a size: the call has
+     * nothing to cut, and POSIX answers EINVAL here. */
+    if (file->kind == KFILE_PIPE) {
+        return KERR_INVAL;
+    }
+
+    /* The edge checks the access, as it does for read and write: the
+     * descriptor of a reader stays a descriptor, but it has no cut. */
+    if ((file->flags & KSYS_O_ACCMODE) == KSYS_O_RDONLY) {
+        return KERR_BADF;
+    }
+
+    return vfs_truncate(&file->file, (k_u64_t)size);
+}
+
 static k_ssize_t sys_unlink(ksys_arg_t path, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
                             ksys_arg_t a4, ksys_arg_t a5)
 {
@@ -1897,6 +1926,7 @@ void ksys_init(void)
     ksys_register(KSYS_GETLIMIT, "getlimit", sys_getlimit);
     ksys_register(KSYS_SETLIMIT, "setlimit", sys_setlimit);
     ksys_register(KSYS_RENAME, "rename", sys_rename);
+    ksys_register(KSYS_FTRUNCATE, "ftruncate", sys_ftruncate);
 }
 
 /* --- the wrappers --- */
@@ -1954,6 +1984,18 @@ int ksys_rename(const char *from, const char *to)
 {
     return (int)ksys_call(KSYS_RENAME, (ksys_arg_t)(uintptr_t)from, (ksys_arg_t)(uintptr_t)to, 0, 0,
                           0, 0);
+}
+
+int ksys_ftruncate(int fd, k_u64_t size)
+{
+    /* The arguments of a call are the width of a register: on the board a
+     * size above 32 bits would arrive as its low half and cut the file to a
+     * number nobody asked for. */
+    if ((k_u64_t)(ksys_arg_t)size != size) {
+        return KERR_TOOBIG;
+    }
+
+    return (int)ksys_call(KSYS_FTRUNCATE, (ksys_arg_t)fd, (ksys_arg_t)size, 0, 0, 0, 0);
 }
 
 k_ssize_t ksys_readdir(int fd, void *buf, k_size_t count)

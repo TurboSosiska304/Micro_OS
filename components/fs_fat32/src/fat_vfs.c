@@ -678,6 +678,7 @@ static const struct vfs_operations g_fat_operations = {
     .open = fat_vfs_open,
     .read = fat_vfs_read,
     .write = fat_vfs_write,
+    .truncate = NULL, /* a file is cut only by the open of O_TRUNC for now */
     .close = fat_vfs_close,
     .list = fat_vfs_list,
     .readdir = fat_vfs_readdir,

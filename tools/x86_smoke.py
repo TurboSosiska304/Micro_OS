@@ -128,6 +128,14 @@ COMMANDS = [
     # rm without -r, the tree taken down with the flag, and a listing of a
     # directory that is no longer there.
     "mkdir /tmp",
+    # The cut of a file through ftruncate: a file of ten bytes becomes four,
+    # the bytes that are left are the first four, and a name that is not
+    # there is the error of the call. The file lives until `rm -r /tmp`.
+    "write /tmp/trunc 0123456789",
+    "exec /bin/truncate 4 /tmp/trunc",
+    "exec /bin/cat /tmp/trunc",
+    "exec /bin/wc -c /tmp/trunc",
+    "exec /bin/truncate 1 /no/such/file",
     "exec /bin/mkdir /tmp/d",
     "exec /bin/ls /tmp",
     "exec /bin/rm /tmp/d",
@@ -1294,6 +1302,26 @@ def check(output: str) -> list:
     expect(
         "a stream reads a byte given back and seeks from the stream",
         "streams: ok" in answer("exec /bin/streams"),
+    )
+    # ftruncate (35): the program cuts a file of the volume, the bytes that
+    # are left are the first ones, and the size the kernel reports is the
+    # one of the call.
+    cut = answer("exec /bin/truncate 4 /tmp/trunc")
+    expect("ftruncate cuts a file to the size of the call", "truncate: /tmp/trunc is 4 bytes" in cut)
+    left = answer("exec /bin/cat /tmp/trunc")
+    expect(
+        "the bytes left are the first of the file",
+        "0123" in left and "0123456789" not in left,
+        left,
+    )
+    expect(
+        "the size after the cut is the one of the file",
+        "4 /tmp/trunc" in answer("exec /bin/wc -c /tmp/trunc"),
+    )
+    expect(
+        "ftruncate of a name that is not there is the error of the open",
+        "truncate: /no/such/file: no such file or directory"
+        in answer("exec /bin/truncate 1 /no/such/file"),
     )
     expect(
         "the program of the shell writes to the console",

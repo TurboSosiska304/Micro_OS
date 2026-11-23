@@ -95,6 +95,18 @@ struct vfs_operations {
     int (*open)(void *ctx, const char *path, int flags, struct vfs_file *out);
     int (*read)(void *ctx, struct vfs_file *file, void *buf, k_size_t size);
     int (*write)(void *ctx, struct vfs_file *file, const void *buf, k_size_t size);
+    /*
+     * Cut an open file to `size` bytes, the operation of `ftruncate`: a
+     * shorter file gives its tail back, a longer one reads zeros there, and
+     * the position of the descriptor is not moved. The call works on the
+     * open file and not on a path because the descriptor already names the
+     * object, and a name may have been removed or replaced since the open.
+     *
+     * A filesystem that cannot cut a file leaves the field empty and the
+     * caller learns KERR_NOTSUP, which is what FAT and the virtual
+     * filesystems answer; MicroFS and ext2 cut a file to any size.
+     */
+    int (*truncate)(void *ctx, struct vfs_file *file, k_u64_t size);
     int (*close)(void *ctx, struct vfs_file *file);
     int (*list)(void *ctx, const char *path, struct vfs_dirent *out, k_size_t max, k_size_t *count);
     /*
@@ -281,6 +293,14 @@ int vfs_mount_fstab(const char *path);
 int vfs_open(const char *path, int flags, struct vfs_file *out, void *priv);
 int vfs_read(struct vfs_file *file, void *buf, k_size_t size);
 int vfs_write(struct vfs_file *file, const void *buf, k_size_t size);
+/*
+ * Cut an open file to `size` bytes (the `ftruncate` of POSIX). The
+ * descriptor has to be open for writing, a directory is not a file that can
+ * be cut, and a filesystem without the operation answers KERR_NOTSUP. A
+ * size that the volume cannot hold is KERR_NOSPC; a size wider than the
+ * format of the filesystem is its own refusal.
+ */
+int vfs_truncate(struct vfs_file *file, k_u64_t size);
 int vfs_close(struct vfs_file *file);
 int vfs_list(const char *path, struct vfs_dirent *out, k_size_t max, k_size_t *count);
 /*

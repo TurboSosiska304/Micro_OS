@@ -575,6 +575,7 @@ static const struct vfs_operations g_operations = {
     .open = procfs_open,
     .read = procfs_read,
     .write = NULL,
+    .truncate = NULL, /* a file of procfs has no size a program may cut */
     .close = NULL,
     .list = procfs_list,
     .readdir = procfs_readdir,
