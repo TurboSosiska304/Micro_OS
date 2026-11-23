@@ -218,7 +218,13 @@ if(MICRO_OS_X86_NET)
         "${NET_DIR}/src/http.c"
         "${NET_DIR}/src/ntp.c"
         "${NET_DIR}/src/net_http_server.c"
+        "${NET_DIR}/src/httpd.c"
         "${NET_DIR}/src/tls.c"
+        "${NET_DIR}/src/tls_server.c"
+        # The update over the network: the download and its check are
+        # portable, and the slots of this machine are files (/var/ota).
+        "${NET_DIR}/src/ota.c"
+        "${NET_DIR}/src/ota_file.c"
     )
 endif()
 
@@ -1471,6 +1477,13 @@ target_compile_definitions(microos64 PRIVATE
     MICRO_OS_WIFI=$<BOOL:${MICRO_OS_WIFI}>
     MICRO_OS_PKG=$<BOOL:${MICRO_OS_X86_NET}>
     MICRO_OS_PKG_BUILTIN_KEY=$<BOOL:${MICRO_OS_X86_NET}>
+    # The update of the network takes its key from /etc/ota: the key of this
+    # build is a development one and is not the key of the machine.
+    MICRO_OS_OTA_BUILTIN_KEY=0
+    # The stack of the port lends four TCP sessions (ports/port_x86_64/src/
+    # net.c, NET_TCP_SOCKETS): the server of files leaves one of them for
+    # the session that is being closed and serves the other three.
+    MICRO_OS_HTTPD_CONNECTIONS=3
 )
 
 if(MICRO_OS_X86_NET)

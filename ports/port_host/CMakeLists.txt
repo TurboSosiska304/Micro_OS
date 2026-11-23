@@ -26,10 +26,12 @@ target_link_libraries(microos_port_host PUBLIC Threads::Threads)
 
 add_executable(microos_sim
     src/sim_main.c
-    # The hash of a password of /etc/shadow: the SHA-256 of the loader, the
-    # same code that verifies a signed image. The simulator links the whole
-    # system, so it carries the one hash of the tree as the board does.
+    # The hash of a password of /etc/shadow and of a signed image: the same
+    # SHA-256 and Ed25519 as the loader. The simulator links the whole
+    # system, so it carries the primitives of the tree as the board does -
+    # the update of components/net checks the trailer of an image with them.
     "${CMAKE_CURRENT_SOURCE_DIR}/../../ports/port_x86_64/loader/sha256.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../ports/port_x86_64/loader/ed25519.c"
 )
 target_include_directories(microos_sim PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../../ports/port_x86_64/loader")

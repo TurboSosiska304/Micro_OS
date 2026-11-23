@@ -75,6 +75,8 @@ static void run_tests(void *arg)
 #if MICRO_OS_NET && MICRO_OS_NET_HTTP && MICRO_OS_NET_HTTP_SERVER && MICRO_OS_NET_NTP &&           \
     MICRO_OS_NET_MQTT
     test_net();
+    test_httpd();
+    test_ota();
     test_pkg();
 #if MICRO_OS_TLS && MICRO_OS_NET
     test_tls();
