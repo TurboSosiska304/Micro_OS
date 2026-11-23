@@ -469,6 +469,16 @@ const char *ext2_relative(const struct ext2_volume *vol, const char *path)
         return NULL;
     }
 
+    /*
+     * The root of the tree is the one point of one character: the VFS hands
+     * a path below it with its own slash ("/bin"), and that path is already
+     * the relative one (ADR 0027, a root of ext2). A point with a name keeps
+     * its separator and the walk below starts after it.
+     */
+    if (len == 1u) {
+        return path[0] == '/' ? path : NULL;
+    }
+
     if (path[len] == '\0') {
         return "/";
     }
