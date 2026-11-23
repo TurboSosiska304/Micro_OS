@@ -580,7 +580,7 @@ X86_ISO_ROOT := $(X86_ISO_BUILD)/root.img
 
 x86-iso: x86-disk build
 	python3 tools/x86_image.py --image $(X86_ISO_ROOT) --build $(X86_BUILD) \
-		--mkfs build-host/tools/microos_mkfs --size-mb 8
+		--mkfs build-host/tools/microos_mkfs --size-mb 24
 	python3 tools/x86_iso.py --loader $(X86_BUILD)/loader32.elf \
 		--kernel $(X86_BUILD)/microos64.bin --root $(X86_ISO_ROOT) \
 		--out $(X86_ISO_IMAGE) --stage $(X86_ISO_BUILD)/iso \

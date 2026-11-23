@@ -17,6 +17,12 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 - 1.6.0-rc1: the release of the memory a program maps, the account of a
   task, the interrupts of many cores, the disk on the bus, the pipes at the
   speed of the memory and the machine in the network (`docs/releases/1.6.md`).
+- 1.6.0-rc2: the 600-second session of the tag refused to build its image -
+  the programs of the release no longer fit the 8 MiB of that volume
+  (`mkfs: /bin/sqlite3 took -4 byte(s) of 848800`). The volume of the session
+  is 24 MiB and the filler of free space steps down by 256 KiB, because a
+  single file near the free count of the volume is refused by the chain and
+  the table and not by the count.
 
 
 ### Added
