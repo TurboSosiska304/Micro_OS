@@ -33,6 +33,7 @@ if(NOT ESP_PLATFORM)
         cases/test_ui.c
         cases/test_ui_windows.c
         cases/test_input_debounce.c
+        cases/test_ps2.c
         cases/test_battery_soc.c
         cases/test_fb_draw.c
         cases/test_rtc.c

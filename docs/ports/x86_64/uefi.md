@@ -209,12 +209,15 @@ keeps its own memory below 4 GiB.
 This lane ends at "the machine boots a kernel it read out of a USB stick".
 What a laptop of a person still needs, in the order it is worth doing:
 
-1. **A keyboard.** The port reads PS/2 (IRQ1). A laptop of this age has a
-   USB keyboard and a touchpad, and no PS/2 controller at all: the shell would
-   come up and nothing could be typed. The next driver is xHCI (USB 3) and a
-   HID boot-protocol keyboard - `Caps`, the arrows and the editing keys are
-   already events of the console, so the driver is one device and not a
-   rewrite of the interface.
+1. **A keyboard.** A laptop's built-in keyboard arrives through its embedded
+   controller as PS/2 on IRQ1, and that is the path that works: the keyboard
+   of the ThinkPad X1 of 1.8 speaks the scancode set 2 (its firmware leaves
+   the translation of the 8042 off), and the port asks which set it speaks at
+   the boot and translates all three (`kernel/input_scancode.c`,
+   `docs/ports/x86_64/README.md` "input"). What is still missing is the
+   **external** keyboard of a machine without the controller: xHCI (USB 3) and
+   a HID boot-protocol keyboard, which is one more device of `/dev/input0` and
+   not a rewrite of the interface.
 2. **A disk.** The root is a file of the ESP, read-only, and rewritten to the
    memory at every boot: no file survives a reset. AHCI (SATA) first, because
    the firmware of a laptop keeps the disk there, and NVMe after it; the

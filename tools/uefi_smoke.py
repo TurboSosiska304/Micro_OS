@@ -447,6 +447,18 @@ def main(argv: list) -> int:
         expect("the disk of the machine is the module of the boot",
                "root: the root is mfs on boot0p1" in banner)
 
+        # The keyboard: the port asks the device which scancode set it speaks
+        # and the controller whether it translates (src/ps2.c). The keyboard of
+        # QEMU is a device of the set 2 behind a controller that translates,
+        # and reading that answer as "the bytes are the set 2" would give a
+        # machine whose every key is another one - so the line and the commands
+        # below are one check of the two.
+        expect("the keyboard is asked which scancode set it speaks",
+               re.search(r"ps2: the keyboard speaks set [123]", banner) is not None)
+        expect("the bytes of the keyboard are the set 1",
+               re.search(r"ps2: the keyboard speaks set 1|ps2: .*translates it into set 1", banner)
+               is not None)
+
         expect("the program of /bin runs", "PROGRAM: hello from /bin" in banner)
         expect("the shell is up", "MicroOS shell ready" in banner)
 
@@ -465,6 +477,12 @@ def main(argv: list) -> int:
             if args.verbose:
                 print(answers[command])
 
+        # The echo of the line editor of the port: the command a person types is
+        # in the transcript before its answer, because the shell writes every
+        # key it takes (src/shell.c). A machine whose line is not echoed is a
+        # machine a person types blind at, which is what the laptop of the set 2
+        # looked like before the scancodes were read right.
+        expect("the shell echoes what is typed", answers["uname"].lstrip().startswith("uname"))
         expect("uname answers the machine", "MicroOS" in answers["uname"] and "x86_64" in answers["uname"])
         expect("ls /bin reads the tree of the disk", "hello" in answers["ls /bin"] and "ls" in answers["ls /bin"])
         expect("cat /etc/setting reads a file of the disk", "hostname=x86_64" in answers["cat /etc/setting"])

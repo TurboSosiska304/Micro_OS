@@ -55,6 +55,7 @@ static void run_tests(void *arg)
     test_ui();
     test_ui_windows();
     test_input_debounce();
+    test_ps2();
     test_battery_soc();
     test_fb_draw();
     test_rtc();

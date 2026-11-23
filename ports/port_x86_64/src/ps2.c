@@ -3,22 +3,39 @@
  *
  * The keyboard of the PC hangs on the first line of the interrupt controller -
  * the 8259 of the legacy chip, or the I/O APIC that routes the line to any
- * core (ADR 0012) - and speaks the scancode set 1: the 8042 of the machine
- * translates the set 2 of the device
- * into the bytes a keyboard of the 1980s made, and those are the bytes the
- * monitor of QEMU sends too. The handler runs with the interrupts off and
- * does the least it can: read one byte of the data port, translate it, put
- * the character in a ring, acknowledge the chip. A task takes the characters
- * out through k_port_console_poll() and k_port_console_getchar().
+ * core (ADR 0012) - and speaks one of the three scancode sets of the machine
+ * (kernel/input_scancode.h). The controller of the motherboard, the 8042,
+ * translates the set 2 of the device into the bytes a keyboard of the 1980s
+ * made, and a machine whose firmware leaves that translation on shows the set
+ * 1 whatever the keyboard is - the keyboard of QEMU, whose 8042 translates,
+ * and the one of every PC of the last thirty years.
  *
- * The map below is the US layout, which is the one the scancodes of the
- * machine carry: letters, digits, the punctuation of a command line and the
- * keys a line needs (Enter, Backspace and Ctrl+C). The E0 sequences arrived
- * with the interface of 1.4.0: the arrows, Home, End, Insert and Delete have
- * a name and an event now (`kernel/input_set1.h`), the right Ctrl is the
- * modifier of the same form and the Enter and the slash of the keypad still
- * type their character for the shell. The function keys type nothing and
- * there is no repeat of a held key of its own because the device repeats it.
+ * The laptop of 1.8 shows the other half: its firmware turns the translation
+ * off, its keyboard speaks the set 2, and every byte of it read as the set 1
+ * is another key (or no key at all) - the machine boots, the prompt arrives,
+ * and the line fills with keys nobody sees. So the boot asks the keyboard
+ * which set it speaks (`0xF0 0x00`, the command of the specification) and the
+ * controller whether it translates (bit 6 of its configuration byte), and the
+ * line `ps2: the keyboard speaks set N` of the boot is the answer of the
+ * machine a person is looking at.
+ *
+ * The handler runs with the interrupts off and does the least it can: read one
+ * byte of the data port, hand it to the decoder of the kernel
+ * (kernel/input_scancode.c), put the character in a ring, acknowledge the
+ * chip. A task takes the characters out through k_port_console_poll() and
+ * k_port_console_getchar().
+ *
+ * The map below is the US layout, and it is written in the addresses of the
+ * set 1: the decoder of the kernel gives every key of every set as its address
+ * of the set 1, so a keyboard of the set 2 types the same `w` as one of the
+ * set 1. The layout is the letters, the digits, the punctuation of a command
+ * line and the keys a line needs (Enter, Backspace and Ctrl+C). The E0
+ * sequences arrived with the interface of 1.4.0: the arrows, Home, End,
+ * Insert and Delete have a name and an event now (`kernel/input_set1.h`), the
+ * right Ctrl is the modifier of the same form and the Enter and the slash of
+ * the keypad still type their character for the shell. The function keys type
+ * nothing and there is no repeat of a held key of its own because the device
+ * repeats it.
  *
  * Since ADR 0028 every key of the set has a name as well and the handler
  * pushes an event beside the character (`/dev/input0`): the Tab, the function
@@ -29,6 +46,7 @@
 
 #include "kernel/console.h"
 #include "kernel/input.h"
+#include "kernel/input_scancode.h"
 #include "kernel/input_set1.h"
 #include "kernel/port/lock.h"
 #include "kernel/port/time.h"
@@ -40,6 +58,7 @@
 #define PS2_STATUS 0x64u
 #define PS2_STATUS_OUTPUT 0x01u /* a byte waits in the data port */
 #define PS2_STATUS_INPUT 0x02u  /* the controller is still taking a command */
+#define PS2_STATUS_AUX 0x20u    /* the byte that waits is the mouse's */
 
 #define PS2_CMD_READ_CONFIG 0x20u
 #define PS2_CMD_WRITE_CONFIG 0x60u
@@ -86,16 +105,27 @@ static bool g_shift_right;
 static bool g_ctrl;
 static bool g_caps;
 
-/* The byte behind 0xE0 belongs to the second form of the set: the arrows,
- * Home, End, Insert, Delete, the keypad Enter, the right Ctrl. The prefix is
- * one byte of state, and the key it carries goes down and up like any other
- * (the break code is 0xE0 followed by the address with the top bit set). */
-static bool g_extended;
+/*
+ * The set of the keyboard: the set of the bytes the handler reads (one of
+ * K_INPUT_SCANCODE_SET*) and the set the device said it is in, which is the
+ * number the line of the boot prints. The decoder is the state of the stream -
+ * the prefixes of an extended key, of a break and of the Pause - and it gives
+ * every key as an address of the set 1, which is the language of the map
+ * below and of the table of the events.
+ */
+static struct k_input_decoder g_decoder = {.set = K_INPUT_SCANCODE_SET1};
+static k_u8_t g_set = K_INPUT_SCANCODE_SET1;
+static k_u8_t g_device_set;
 
-/* 0xE1 (the Pause of a PC) is a sequence of six bytes and none of them is a
- * key of this console: the byte after it is dropped, as the whole sequence
- * was before the arrows arrived. */
-static bool g_skip_next;
+k_u8_t port_x86_64_ps2_set(void)
+{
+    return g_set;
+}
+
+k_u8_t port_x86_64_ps2_device_set(void)
+{
+    return g_device_set;
+}
 
 /*
  * The characters of the set 1 by scancode, unshifted, one row of sixteen
@@ -262,86 +292,71 @@ static char key_translate(k_u8_t scancode)
 }
 
 /*
- * One byte of the device. The break codes are the make codes with the bit 7
- * set, so a key that goes up is the same number: the modifiers are tracked
- * on both edges, and every other key only acts when it goes down.
+ * One byte of the device: the decoder of the kernel turns the stream of the set
+ * of this keyboard into the address of a key of the set 1 and its edge, and
+ * this file does the rest - the ring of the characters, the ring of the events
+ * and the state of the modifiers and of Caps Lock.
  *
- * Every byte is also an event of `/dev/input0` (ADR 0028), both edges
+ * Every key is also an event of `/dev/input0` (ADR 0028), both edges
  * included: an interface that draws a key being held needs the release, which
  * the character stream of the console has no way to say.
  *
- * The E0 prefix is a key of the second form and not a byte to drop (1.4.0):
- * the arrows, Home, End, Insert and Delete have no address of the first 128,
- * and a program of a text already asks for them. The right Ctrl is the
- * modifier of the same form, and the Enter and the slash of the keypad still
- * type their character for the shell.
+ * The prefix 0xE0 is the second form of the key and not a byte to drop
+ * (1.4.0): the arrows, Home, End, Insert and Delete have no address of the
+ * first 128, and a program of a text already asks for them. The right Ctrl is
+ * the modifier of that form, and the Enter and the slash of the keypad still
+ * type their character for the shell. In the set 3 the same keys have an
+ * address of one byte, and the decoder gives them the same second form.
  */
-static void key_handle(k_u8_t code)
+static void key_handle(k_u8_t byte)
 {
-    bool released;
-    bool extended;
-    k_u8_t scancode;
+    struct k_input_code code;
     k_u16_t key;
     char character;
 
-    if (code == 0xE0u) {
-        g_extended = true;
-        return;
+    if (!k_input_decoder_feed(&g_decoder, byte, &code)) {
+        return; /* a prefix, a byte of the Pause, or an address of no key */
     }
 
-    if (code == 0xE1u) {
-        g_skip_next = true;
-        return;
-    }
-
-    if (g_skip_next) {
-        g_skip_next = false;
-        return;
-    }
-
-    extended = g_extended;
-    g_extended = false;
-    released = (code & 0x80u) != 0;
-    scancode = code & 0x7Fu;
-    key = k_input_set1_key(scancode, extended);
+    key = k_input_set1_key(code.code, code.extended);
 
     if (key != K_INPUT_KEY_NONE) {
-        event_push(key, released ? INPUT_VALUE_RELEASE : INPUT_VALUE_PRESS);
+        event_push(key, code.released ? INPUT_VALUE_RELEASE : INPUT_VALUE_PRESS);
     }
 
-    if (extended) {
+    if (code.extended) {
         /* The right Ctrl is a modifier of the second form; the right Alt and
          * the rest of the block are events and no characters of the console. */
-        if (scancode == 0x1Du) {
-            g_ctrl = !released;
+        if (code.code == 0x1Du) {
+            g_ctrl = !code.released;
             return;
         }
 
-        if (released || g_capture) {
+        if (code.released || g_capture) {
             return;
         }
 
         /* The Enter and the slash of the keypad are the keys the shell types. */
-        if (scancode == 0x1Cu) {
+        if (code.code == 0x1Cu) {
             key_push('\r');
-        } else if (scancode == 0x35u) {
+        } else if (code.code == 0x35u) {
             key_push('/');
         }
         return;
     }
 
-    switch (scancode) {
+    switch (code.code) {
     case 0x2Au: /* left shift */
-        g_shift_left = !released;
+        g_shift_left = !code.released;
         return;
     case 0x36u: /* right shift */
-        g_shift_right = !released;
+        g_shift_right = !code.released;
         return;
     case 0x1Du: /* left Ctrl */
-        g_ctrl = !released;
+        g_ctrl = !code.released;
         return;
     case 0x3Au: /* Caps Lock: a make toggles it, the break does nothing */
-        if (!released) {
+        if (!code.released) {
             g_caps = !g_caps;
         }
         return;
@@ -349,7 +364,7 @@ static void key_handle(k_u8_t code)
         break;
     }
 
-    if (released) {
+    if (code.released) {
         return; /* the break of a key that was already typed */
     }
 
@@ -359,7 +374,7 @@ static void key_handle(k_u8_t code)
         return;
     }
 
-    character = key_translate(scancode);
+    character = key_translate(code.code);
     if (character != 0) {
         key_push((k_u8_t)character);
     }
@@ -447,6 +462,183 @@ static bool ps2_write_config(k_u8_t config)
     return true;
 }
 
+/* --- which set the keyboard speaks ---------------------------------------- */
+
+/*
+ * The command of the *keyboard*, and not of the controller: 0xF0 followed by
+ * an argument, and the argument 0 asks which set the device is in. The answer
+ * is 0x01, 0x02 or 0x03 - or, when the controller translates the bytes of the
+ * keyboard, the translation of that byte (0x43, 0x41 or 0x3F), because the
+ * translation is a fact of the controller and not of the device.
+ */
+#define PS2_KBD_CMD 0xF0u
+#define PS2_KBD_ACK 0xFAu
+#define PS2_KBD_RESEND 0xFEu
+
+/* Bit 6 of the configuration byte of the controller: the controller translates
+ * the set 2 of the keyboard into the set 1. */
+#define PS2_CONFIG_TRANSLATE 0x40u
+
+/* The attempts of one exchange of a command: a device may answer a resend (a
+ * byte of the sequence arrived garbled) and the exchange starts again. */
+#define PS2_KBD_ATTEMPTS 3u
+
+/* The waits of the exchange with the device are short: a keyboard answers in
+ * microseconds, and a machine whose controller holds no keyboard is a machine
+ * whose boot is not going to lose a second to the question. */
+#define PS2_KBD_TIMEOUT 20000u
+
+/* One byte of the *keyboard*, waited for by the boot. The line of the keyboard
+ * is still masked when this runs, so the answer waits in the buffer of the
+ * controller for the caller that asks; -1 when nothing comes.
+ *
+ * A byte of the mouse is not an answer of the keyboard and is dropped: the
+ * status port says which of the two devices put it there, and a hand on the
+ * touchpad during the boot must not turn into a set of scancodes. It is the
+ * one byte of the second port this file ever reads, and the device is left as
+ * it was. */
+static int ps2_read_byte(void)
+{
+    k_u32_t guard;
+
+    for (guard = 0; guard < PS2_KBD_TIMEOUT; guard++) {
+        k_u8_t status = port_inb(PS2_STATUS);
+
+        if ((status & PS2_STATUS_OUTPUT) == 0u) {
+            continue;
+        }
+
+        if ((status & PS2_STATUS_AUX) != 0u) {
+            (void)port_inb(PS2_DATA);
+            continue;
+        }
+
+        return (int)port_inb(PS2_DATA);
+    }
+
+    return -1;
+}
+
+/* One byte to the device. */
+static bool ps2_write_byte(k_u8_t byte)
+{
+    if (!ps2_wait_input_empty()) {
+        return false;
+    }
+
+    port_outb(PS2_DATA, byte);
+
+    return true;
+}
+
+/* A command of the keyboard, its argument, and the ACK of each: the answer of
+ * the device, or -1 when it gives none this port understands. */
+static int ps2_kbd_command(k_u8_t command, k_u8_t argument)
+{
+    k_u32_t attempt;
+
+    for (attempt = 0; attempt < PS2_KBD_ATTEMPTS; attempt++) {
+        int ack;
+
+        if (!ps2_write_byte(command) || (ack = ps2_read_byte()) != (int)PS2_KBD_ACK) {
+            /* A resend, or nothing at all: the buffer is emptied and the
+             * command is said again. */
+            while (ps2_wait_output_full()) {
+                (void)port_inb(PS2_DATA);
+            }
+            continue;
+        }
+
+        if (!ps2_write_byte(argument) || (ack = ps2_read_byte()) != (int)PS2_KBD_ACK) {
+            while (ps2_wait_output_full()) {
+                (void)port_inb(PS2_DATA);
+            }
+            continue;
+        }
+
+        return ps2_read_byte();
+    }
+
+    return -1;
+}
+
+/* The two sets behind one answer of the command: the set of the device and the
+ * set of the bytes the handler reads. The translation of the controller makes
+ * the second one the set 1 whatever the first one is. False when the answer is
+ * not one this port knows. */
+static bool ps2_sets_of(int answer, k_u8_t *device, k_u8_t *stream)
+{
+    switch (answer) {
+    case 0x01: /* the device is in the set 1 */
+    case 0x43: /* and the controller translates that answer, which changes nothing */
+        *device = K_INPUT_SCANCODE_SET1;
+        *stream = K_INPUT_SCANCODE_SET1;
+        return true;
+    case 0x02: /* the device is in the set 2, and the controller does not translate */
+        *device = K_INPUT_SCANCODE_SET2;
+        *stream = K_INPUT_SCANCODE_SET2;
+        return true;
+    case 0x03:
+        *device = K_INPUT_SCANCODE_SET3;
+        *stream = K_INPUT_SCANCODE_SET3;
+        return true;
+    case 0x41: /* a device of the set 2 whose bytes the controller translates */
+        *device = K_INPUT_SCANCODE_SET2;
+        *stream = K_INPUT_SCANCODE_SET1;
+        return true;
+    case 0x3F: /* the same, for the set 3 */
+        *device = K_INPUT_SCANCODE_SET3;
+        *stream = K_INPUT_SCANCODE_SET1;
+        return true;
+    default:
+        return false;
+    }
+}
+
+/*
+ * Which set the keyboard of this machine speaks.
+ *
+ * Two things decide it and they are different: the set of the device and the
+ * set of the bytes the handler reads. The bit of the translation of the
+ * controller is the truth about the bytes and it is read first, because a
+ * machine whose firmware left it on shows the set 1 whatever the keyboard is.
+ * The question to the device comes after it: it is harmless, it is what the
+ * line of the boot prints, and a device that does not answer leaves the answer
+ * to the controller - the set 1 of a controller that translates, and the set 2
+ * of one that does not, because a controller with that bit is a machine of the
+ * AT and the keyboard of the AT is the set 2. (An XT has no configuration byte
+ * to read at all: the boot of such a machine stops before this line.)
+ */
+static void ps2_detect(void)
+{
+    k_u8_t config;
+    k_u8_t device = 0;
+    k_u8_t stream = K_INPUT_SCANCODE_SET1;
+    int answer;
+
+    g_set = K_INPUT_SCANCODE_SET1;
+    g_device_set = 0;
+
+    if (!ps2_read_config(&config)) {
+        return;
+    }
+
+    answer = ps2_kbd_command(PS2_KBD_CMD, 0x00u);
+
+    if (!ps2_sets_of(answer, &device, &stream)) {
+        /* A device that did not say (a firmware that does not pass the
+         * command, a keyboard that is not one of the three sets): the
+         * controller is the one fact left, and a controller that does not
+         * translate is a controller whose keyboard speaks the set 2. */
+        g_set =
+            (config & PS2_CONFIG_TRANSLATE) != 0u ? K_INPUT_SCANCODE_SET1 : K_INPUT_SCANCODE_SET2;
+        return;
+    }
+
+    g_device_set = device;
+    g_set = (config & PS2_CONFIG_TRANSLATE) != 0u ? K_INPUT_SCANCODE_SET1 : stream;
+}
+
 void port_x86_64_ps2_init(void)
 {
     k_u8_t config;
@@ -467,6 +659,29 @@ void port_x86_64_ps2_init(void)
         port_outb(PS2_STATUS, PS2_CMD_ENABLE_FIRST);
     }
 
+    /*
+     * The clock of the first port on before anything is asked of the device:
+     * the controller stops a keyboard whose bytes nobody reads, and the answer
+     * of the question below has to wait in the buffer for this port and not
+     * for an interrupt. The line of IRQ1 stays as the firmware left it until
+     * the question is answered.
+     */
+    if (ps2_read_config(&config) && (config & PS2_CONFIG_CLOCK1) != 0u) {
+        (void)ps2_write_config((k_u8_t)(config & (k_u8_t)~PS2_CONFIG_CLOCK1));
+    }
+
+    ps2_detect();
+
+    /* The buffer again, after the question: its answer, or the last byte of a
+     * sequence the keyboard was in the middle of, is not a key of the person
+     * at the machine. */
+    for (guard = 0; guard < PS2_TIMEOUT; guard++) {
+        if ((port_inb(PS2_STATUS) & PS2_STATUS_OUTPUT) == 0) {
+            break;
+        }
+        (void)port_inb(PS2_DATA);
+    }
+
     if (!ps2_read_config(&config)) {
         return;
     }
@@ -477,4 +692,7 @@ void port_x86_64_ps2_init(void)
     config |= PS2_CONFIG_IRQ1;
     config &= (k_u8_t)~PS2_CONFIG_CLOCK1;
     (void)ps2_write_config(config);
+
+    /* The stream of the device is what the decoder reads from now on. */
+    k_input_decoder_init(&g_decoder, g_set);
 }
