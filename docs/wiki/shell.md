@@ -85,8 +85,9 @@ What the line does **not** do:
 * no globs or variables: `*` is a word and not a pattern, `$x` is the two
   characters;
 * no attached forms: `a|b` and `>file` are arguments; write `a | b`, `> file`;
-* at most three stages, because a boundary is a pipe and the shell task has
-  four descriptors;
+* at most three stages: the table of the parser keeps three. The descriptor
+  table of a task has sixteen slots since 1.3, so a boundary is a pipe of
+  two descriptors and the limits are no longer the reason for the number;
 * no background job, no `jobs`, no `fg` or `bg`;
 * a command that changes the task of the shell (`cd`, `path`) cannot be a
   stage or carry a redirection: it is refused with a sentence instead of
