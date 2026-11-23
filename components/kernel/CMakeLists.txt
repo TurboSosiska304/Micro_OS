@@ -14,6 +14,8 @@ set(MICRO_OS_KERNEL_SRCS
     "src/cpu.c"
     "src/cpu_default.c"
     "src/exec.c"
+    "src/fb.c"
+    "src/input.c"
     "src/kfile.c"
     "src/kmm.c"
     "src/kmod.c"

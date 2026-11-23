@@ -15,6 +15,7 @@
 #ifndef MICRO_OS_PORT_X86_64_SCREEN_H
 #define MICRO_OS_PORT_X86_64_SCREEN_H
 
+#include "kernel/fb.h"
 #include "kernel/types.h"
 #include "port_x86_64.h"
 
@@ -74,5 +75,23 @@ void port_x86_64_fb_set_line_gap(int gap);
 
 /* Register the `font` system of /etc (the line gap) with the machine. */
 int port_x86_64_font_settings_register(void);
+
+/*
+ * The framebuffer as the device `/dev/fb0` (ADR 0028): the description of the
+ * picture, one rectangle of pixels, and the two commands that take the
+ * console's screen and give it back. False from the first when the machine
+ * has no framebuffer, which is the text mode of the fallback.
+ */
+bool port_x86_64_fb_info(struct fb_info *out);
+int port_x86_64_fb_blit(const struct fb_rect *rect, const k_u16_t *pixels);
+void port_x86_64_fb_console_take(void);
+void port_x86_64_fb_console_give(void);
+void port_x86_64_fb_console_force(void);
+
+/*
+ * Put the device `/dev/fb0` in the devfs. Called once at the boot, after the
+ * devfs is mounted; a machine without a framebuffer registers nothing.
+ */
+int port_x86_64_fbdev_register(void);
 
 #endif /* MICRO_OS_PORT_X86_64_SCREEN_H */

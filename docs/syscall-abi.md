@@ -126,6 +126,28 @@ a task 32 and 33, the atomic rename 34 (ADR 0024 §5) and the cut of an open
 file 35. A call that is not in the table is `ENOSYS`, never a guess at what
 it might have meant.
 
+## The control commands of `ioctl`
+
+The call has three arguments (`fd, cmd, arg`) and the commands are the
+contract of the object behind the descriptor. The numbers are frozen like the
+numbers of a system call: a new command takes the next free one.
+
+| Command | Where | Meaning |
+|---|---|---|
+| `FBIO_TAKE` 0x4D01 | `/dev/fb0` | the console stops drawing; the picture is the program's |
+| `FBIO_GIVE` 0x4D02 | `/dev/fb0` | the console repaints its grid and draws again |
+
+A panic always takes the screen back, whatever a program holds (ADR 0028). A
+command that is not one of the table, or a descriptor whose object has no
+control command, answers `EINVAL`.
+
+The two devices of the interface are `read` and `write` documents of their
+own: `/dev/fb0` reads a `struct fb_info` and writes a `struct fb_rect` followed
+by `w * h` pixels of RGB565, and `/dev/input0` reads a `struct input_event`
+with `EAGAIN` when the user is silent. The structures are in
+`kernel/fb.h` and `kernel/input.h`, which a program includes as it includes
+`kernel/ksys.h`.
+
 The flags of `open` are the same as the ones of the VFS:
 
 | Flag | Meaning |

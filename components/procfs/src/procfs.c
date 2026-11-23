@@ -10,6 +10,7 @@
  *   /proc/meminfo     the memory of the system
  *   /proc/tasks       the list of the tasks
  *   /proc/modules     the state of the modules
+ *   /proc/kmsg        the ring of the log of the kernel, the newest last
  *   /proc/self/       the task that reads the file
  *   /proc/<pid>/      the task with this number
  */
@@ -132,6 +133,19 @@ static int read_tasks(char *buf, k_size_t size, k_u32_t pid)
     return n;
 }
 
+/*
+ * The ring of the log of the kernel, which is what `dmesg` reads: the newest
+ * messages are the last lines of the file, and the buffer of the caller is
+ * filled with as much of the ring as fits (kernel/log.c decides where the
+ * cut is). The interface of 1.4 reads it to show the log in its window.
+ */
+static int read_kmsg(char *buf, k_size_t size, k_u32_t pid)
+{
+    K_UNUSED(pid);
+
+    return (int)klog_dump(buf, size);
+}
+
 static int read_modules(char *buf, k_size_t size, k_u32_t pid)
 {
     K_UNUSED(pid);
@@ -158,7 +172,7 @@ static int read_modules(char *buf, k_size_t size, k_u32_t pid)
 
 static const struct proc_file s_root_files[] = {
     {"version", read_version}, {"uptime", read_uptime},   {"meminfo", read_meminfo},
-    {"tasks", read_tasks},     {"modules", read_modules},
+    {"tasks", read_tasks},     {"modules", read_modules}, {"kmsg", read_kmsg},
 };
 
 static const k_size_t s_root_file_count = K_ARRAY_SIZE(s_root_files);

@@ -11,8 +11,8 @@ machine in a window can type at all.
 
 There is no display here, and none is needed: QEMU with -display none still
 has its video device, and its monitor reads the picture (screendump) and
-presses keys (sendkey). The test boots the machine twice and checks the two
-screens of ADR 0023:
+presses keys (sendkey). The test boots the machine three times and checks the
+two screens of ADR 0023 and the first interface of ADR 0028:
 
   1. the framebuffer (-vga std, the default): the boot says the screen is the
      framebuffer of 1280x800 by 128x57 cells, the screenshot is a PPM of
@@ -29,11 +29,17 @@ screens of ADR 0023:
      boot says it kept the text mode, the screen is read out of the memory at
      0xB8000 with pmemsave as it always was, the picture of the device is
      720x400, the cursor of the CRTC is where the prompt ends, and the same
-     typed command and theme reach the text cells and their attribute.
+     typed command and theme reach the text cells and their attribute;
+  3. the interface of ADR 0028: the machine boots the disk of `make
+     x86-disk`, `exec /bin/ui` takes the screen (`FBIO_TAKE`), the screenshot
+     of the panel and of the window of the log is not the console any more,
+     Tab moves the focus of the list and `q` gives the screen back
+     (`FBIO_GIVE`), after which the picture is the grid of the shell again.
 
     tools/x86_vga_smoke.py [--timeout SECONDS] [--display none|gtk] [--verbose]
+                           [--image PATH]
 
-The exit status is 0 when both screens held and 1 otherwise; 2 when the image
+The exit status is 0 when the screens held and 1 otherwise; 2 when the image
 or QEMU is missing. The test needs no X and no window, so a machine of a build
 farm can run it; it is kept out of `make ci` because the monitor of QEMU is a
 tool of its own and the serial smoke test already guards the boot.
@@ -99,6 +105,24 @@ RED = (173, 0, 0)
 # The answer of the command the keyboard types: it is the checker of the
 # filesystem, and the volume it checks is the one the boot mounted.
 ANSWER = "the volume is consistent"
+
+# The interface of ADR 0028 (`/bin/ui`): the layout and the colours of the
+# program in ports/port_x86_64/programs/ui.c. The test reads a rectangle of
+# the screenshot and not a copy of the drawing code: the panel is the dark
+# blue of the status line (RGB565 0x0010), the focused row of the list is the
+# light grey of the VGA and the window of the log is black with a dark grey
+# border.
+UI_PANEL_RGB = (0, 0, 132)
+UI_PANEL_HEIGHT = 16
+UI_LEFT_RGB = BLACK
+UI_TEXT_RGB = (255, 255, 255)
+UI_LEFT_WIDTH = 176
+UI_ITEM_X = 4
+UI_ITEM_WIDTH = 168
+UI_ITEM_Y0 = 24
+UI_ITEM_STEP = 22
+UI_CONSOLE_X = UI_LEFT_WIDTH + 8
+UI_CONSOLE_Y = 16 + 8
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, "build-x86")
@@ -375,7 +399,8 @@ class Machine:
     parsed out of the console of QEMU itself.
     """
 
-    def __init__(self, loader: str, kernel: str, workdir: str, vga: str, display: str = "none") -> None:
+    def __init__(self, loader: str, kernel: str, workdir: str, vga: str, display: str = "none",
+                 image: str | None = None) -> None:
         self.serial_path = os.path.join(workdir, "serial.sock")
         self.monitor_path = os.path.join(workdir, "monitor.sock")
         self.transcript = b""
@@ -406,6 +431,15 @@ class Machine:
             "-monitor",
             f"unix:{self.monitor_path},server=on,wait=off",
         ]
+
+        # The machine of the interface boots the disk of `make x86-disk`: the
+        # two devices are of the kernel, but /bin/ui is a file of the volume
+        # like every other program of /bin.
+        if image is not None:
+            command += [
+                "-drive",
+                f"file={image},format=raw,if=ide,index=0,cache=writeback",
+            ]
 
         self.process = subprocess.Popen(
             command,
@@ -1078,6 +1112,212 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
     return checks
 
 
+def run_ui(loader: str, kernel: str, image: str, timeout: float, verbose: bool, display: str) -> list:
+    """The first interface of ADR 0028: /bin/ui on the screen and its keys.
+
+    The machine boots the disk of `make x86-disk`, the shell starts the
+    program through `exec`, and the test reads the three things the skeleton
+    promises: the program takes the screen from the kernel (the ioctl), the
+    panel and the window are not the console (the screenshot has the colours
+    of the program), Tab moves the focus and `q` returns the machine to the
+    shell, which repaints its own grid.
+    """
+    checks = []
+
+    def expect(name: str, condition: bool, detail: str = "") -> None:
+        checks.append((f"ui: {name}", bool(condition), detail))
+
+    with tempfile.TemporaryDirectory(prefix="microos-x86-ui-") as workdir:
+        machine = Machine(loader, kernel, workdir, "std", display, image)
+
+        try:
+            booted = machine.wait_serial(PROMPT, timeout)
+            expect("the shell of the disk is up", booted, "the shell never printed its prompt")
+
+            before = machine.picture(workdir)
+            expect(
+                "the machine has a console before the interface",
+                before is not None and before.pixel(0, 0) == BLACK,
+                "the screenshot before exec is not the console",
+            )
+
+            # The program is a file of /bin like every other program: the
+            # shell starts it with the call and waits for it to end.
+            count = machine.prompts()
+            machine.type_line("exec /bin/ui")
+
+            taken = machine.wait_serial("fb: the console is taken", timeout)
+            expect(
+                "the interface takes the screen",
+                taken,
+                "the kernel never said that /dev/fb0 was taken (FBIO_TAKE)",
+            )
+
+            picture = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.pixel(0, 0) == UI_PANEL_RGB,
+                seconds=6.0,
+            )
+            expect("the device has the picture of the interface", picture is not None,
+                   "screendump wrote no PPM")
+
+            if picture is not None:
+                expect(
+                    "the picture is still the mode of ADR 0023",
+                    (picture.width, picture.height) == (VBE_WIDTH, VBE_HEIGHT),
+                    f"the screenshot is {picture.width}x{picture.height}",
+                )
+                expect(
+                    "the panel is one line of the program",
+                    picture.pixel(0, 0) == UI_PANEL_RGB
+                    and picture.pixel(VBE_WIDTH - 1, 0) == UI_PANEL_RGB
+                    and picture.pixel(VBE_WIDTH - 1, UI_PANEL_HEIGHT - 1) == UI_PANEL_RGB,
+                    f"the first pixels are {picture.pixel(0, 0)}",
+                )
+                expect(
+                    "the panel is not the console",
+                    not picture.only_colors(GREY, BLACK),
+                    "the picture of the interface is made of the two colours of the console",
+                )
+                # The words of the panel are the glyphs of the port's font in
+                # the white of the interface on the blue of the panel.
+                expect(
+                    "the panel shows the clock, the tasks and the keys",
+                    picture.find_run("tasks", UI_TEXT_RGB, UI_PANEL_RGB) is not None
+                    and picture.find_run("quit", UI_TEXT_RGB, UI_PANEL_RGB) is not None
+                    and picture.find_run("up", UI_TEXT_RGB, UI_PANEL_RGB) is not None,
+                    "no run of 'up', 'tasks' or 'quit' is on the panel",
+                )
+                # The list of windows on the left: the first row is the
+                # focused one, the second is black.
+                status = picture.pixel(UI_ITEM_X + UI_ITEM_WIDTH - 4, UI_ITEM_Y0 + 2)
+                console = picture.pixel(
+                    UI_ITEM_X + UI_ITEM_WIDTH - 4, UI_ITEM_Y0 + UI_ITEM_STEP + 2
+                )
+                expect(
+                    "the list starts on the status window",
+                    status == GREY and console == BLACK,
+                    f"the two rows of the list are {status} and {console}",
+                )
+                # The console window is the black of the console with the
+                # border of the interface around it.
+                expect(
+                    "the window of the log has the border of the interface",
+                    picture.pixel(UI_CONSOLE_X - 2, UI_CONSOLE_Y - 2) != BLACK,
+                    "the border of the console window is not drawn",
+                )
+                if verbose:
+                    print("--- the picture of /bin/ui ---")
+                    print(f"{picture.width}x{picture.height}, {picture.ink_pixels()} pixel(s) of ink")
+
+            # Tab moves the focus: one rectangle of the list changes and the
+            # panel and the window of the log stay where they were.
+            machine.keys(["tab"])
+            swapped = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.pixel(
+                    UI_ITEM_X + UI_ITEM_WIDTH - 4, UI_ITEM_Y0 + UI_ITEM_STEP + 2
+                )
+                == GREY,
+                seconds=4.0,
+            )
+            expect(
+                "Tab moves the focus to the console window",
+                swapped is not None
+                and swapped.pixel(UI_ITEM_X + UI_ITEM_WIDTH - 4, UI_ITEM_Y0 + 2) == BLACK
+                and swapped.pixel(UI_ITEM_X + UI_ITEM_WIDTH - 4, UI_ITEM_Y0 + UI_ITEM_STEP + 2)
+                == GREY,
+                "the two rows of the list did not trade their colours",
+            )
+            expect(
+                "the frame of the interface did not move",
+                swapped is not None
+                and swapped.pixel(0, 0) == UI_PANEL_RGB
+                and swapped.pixel(UI_CONSOLE_X - 2, UI_CONSOLE_Y - 2) != BLACK,
+                "a rectangle of the interface outside the list changed",
+            )
+
+            machine.keys(["tab"])
+            back = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.pixel(UI_ITEM_X + UI_ITEM_WIDTH - 4, UI_ITEM_Y0 + 2) == GREY,
+                seconds=4.0,
+            )
+            expect(
+                "a second Tab comes back to the status window",
+                back is not None,
+                "the focus did not come back after the second Tab",
+            )
+
+            # q leaves: the program gives the screen back, the shell prints
+            # its prompt and the console is the machine again.
+            machine.keys(["q"])
+
+            given = machine.wait_serial("fb: the console is given back", timeout)
+            expect(
+                "the interface gives the screen back",
+                given,
+                "the kernel never said that /dev/fb0 was given back (FBIO_GIVE)",
+            )
+            expect(
+                "the shell waits for the interface and returns",
+                machine.wait_serial("the program has finished", timeout),
+                "the shell did not name the end of the program",
+            )
+            expect(
+                "the prompt is back on the serial console",
+                _wait_prompts(machine, count + 1, timeout),
+                "the shell did not print its prompt after the interface",
+            )
+
+            shell = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.pixel(0, 0) != UI_PANEL_RGB,
+                seconds=6.0,
+            )
+            expect(
+                "the console is the machine again",
+                shell is not None
+                and shell.pixel(0, 0) == BLACK
+                and shell.only_colors(GREY, BLACK),
+                "the picture after q is not the console of the kernel",
+            )
+            expect(
+                "the prompt of the shell is on the picture",
+                shell is not None and shell.find_run("microos>", GREY, BLACK) is not None,
+                "no run of 'microos>' is the grey of the console on the black paper",
+            )
+            expect(
+                "the keys of the interface did not reach the shell",
+                "unknown command" not in machine.read_serial(),
+                "a key of the interface became a line of the shell",
+            )
+
+            if verbose and shell is not None:
+                print("--- the picture of the console after q ---")
+                print(f"{shell.width}x{shell.height}, {shell.ink_pixels()} pixel(s) of ink")
+        finally:
+            machine.close()
+
+    return checks
+
+
+def _wait_prompts(machine: Machine, wanted: int, timeout: float) -> bool:
+    """The prompt count of the shell, once it reaches `wanted`."""
+    deadline = time.monotonic() + timeout
+
+    while time.monotonic() < deadline:
+        if machine.prompts() >= wanted:
+            return True
+        time.sleep(0.05)
+
+    return False
+
+
 def run_text(loader: str, kernel: str, timeout: float, verbose: bool, display: str) -> list:
     """The fallback of ADR 0023: the text mode of the VGA, 80x25.
 
@@ -1278,6 +1518,11 @@ def main(argv: list) -> int:
         default="none",
         help="the display of QEMU: none (the default, no X needed) or gtk for the real window",
     )
+    parser.add_argument(
+        "--image",
+        default=os.path.join(BUILD, "programs.img"),
+        help="the disk of `make x86-disk`, which carries /bin/ui",
+    )
     args = parser.parse_args(argv)
 
     loader = os.path.join(BUILD, "loader32.elf")
@@ -1288,8 +1533,13 @@ def main(argv: list) -> int:
             print(f"missing {path}: run make x86-build", file=sys.stderr)
             return 2
 
+    if not os.path.isfile(args.image):
+        print(f"missing {args.image}: run make x86-disk", file=sys.stderr)
+        return 2
+
     try:
         checks = run_framebuffer(loader, kernel, args.timeout, args.verbose, args.display)
+        checks += run_ui(loader, kernel, args.image, args.timeout, args.verbose, args.display)
         checks += run_text(loader, kernel, args.timeout, args.verbose, args.display)
     except FileNotFoundError:
         print("qemu-system-x86_64 is not installed", file=sys.stderr)

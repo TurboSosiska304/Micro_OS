@@ -27,7 +27,15 @@ _Noreturn void kernel_panic(const char *file, int line, const char *fmt, ...)
     va_end(ap);
 
     /*
-     * The console first, without the log: the panic may have happened with
+     * The screen first: a program that owns the framebuffer (ADR 0028) has
+     * to lose it, because an interface that hides a panic is worse than a
+     * panic. The call is the port's own and does nothing on a machine whose
+     * console nobody can take.
+     */
+    k_port_console_panic();
+
+    /*
+     * The console next, without the log: the panic may have happened with
      * the lock of the console in the hands of the task that is dying, and
      * a diagnostic that waits for a mutex is no diagnostic at all.
      */

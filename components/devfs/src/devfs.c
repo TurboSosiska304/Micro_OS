@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "kernel/console.h"
+#include "kernel/errno.h"
 #include "kernel/vfs.h"
 
 #define DEV_NAME_MAX 16
@@ -23,8 +24,7 @@
 
 struct dev_file {
     const char *name;
-    int (*read)(char *buf, k_size_t size);
-    int (*write)(const char *buf, k_size_t size);
+    struct devfs_operations operations;
 };
 
 /* The console of the board. */
@@ -56,8 +56,8 @@ static int null_write(const char *buf, k_size_t size)
 }
 
 static const struct dev_file s_devices[] = {
-    {"tty0", tty_read, tty_write},
-    {"null", null_read, null_write},
+    {"tty0", {.read = tty_read, .write = tty_write}},
+    {"null", {.read = null_read, .write = null_write}},
 };
 
 static const k_size_t s_device_count = K_ARRAY_SIZE(s_devices);
@@ -101,11 +101,15 @@ static const struct dev_file *find_device(const char *name)
     return NULL;
 }
 
-int devfs_add(const char *name, int (*read)(char *buf, k_size_t size),
-              int (*write)(const char *buf, k_size_t size))
+int devfs_add_device(const char *name, const struct devfs_operations *operations)
 {
-    if (name == NULL || name[0] == '\0' || (read == NULL && write == NULL)) {
+    if (name == NULL || name[0] == '\0' || operations == NULL) {
         return -1;
+    }
+
+    if (operations->read == NULL && operations->write == NULL && operations->ioctl == NULL &&
+        operations->open == NULL && operations->close == NULL) {
+        return -1; /* a device nobody can talk to is not a device */
     }
 
     if (find_device(name) != NULL) {
@@ -118,15 +122,27 @@ int devfs_add(const char *name, int (*read)(char *buf, k_size_t size),
 
     /*
      * The name is remembered as it is: the caller has to keep it alive
-     * (a string literal of a driver does). A driver registers at boot,
+     * (a string literal of a driver does). The operations are copied, so a
+     * driver may register a table of its own. A driver registers at boot,
      * before anybody opens the device.
      */
     s_extra[s_extra_count].name = name;
-    s_extra[s_extra_count].read = read;
-    s_extra[s_extra_count].write = write;
+    s_extra[s_extra_count].operations = *operations;
     s_extra_count++;
 
     return 0;
+}
+
+int devfs_add(const char *name, int (*read)(char *buf, k_size_t size),
+              int (*write)(const char *buf, k_size_t size))
+{
+    struct devfs_operations operations;
+
+    memset(&operations, 0, sizeof(operations));
+    operations.read = read;
+    operations.write = write;
+
+    return devfs_add_device(name, &operations);
 }
 
 static const char *base_name(const char *path)
@@ -171,6 +187,13 @@ static int devfs_open(void *ctx, const char *path, int flags, struct vfs_file *o
         *slot = dev;
     }
 
+    /* A device that takes a resource for as long as it is open hears about
+     * it here: `/dev/input0` is the keyboard of the interface while the
+     * interface holds it (ADR 0028). */
+    if (dev->operations.open != NULL) {
+        dev->operations.open();
+    }
+
     return 0;
 }
 
@@ -181,11 +204,11 @@ static int devfs_read(void *ctx, struct vfs_file *file, void *buf, k_size_t size
 
     K_UNUSED(ctx);
 
-    if (dev == NULL || dev->read == NULL) {
+    if (dev == NULL || dev->operations.read == NULL) {
         return -2;
     }
 
-    return dev->read((char *)buf, size);
+    return dev->operations.read((char *)buf, size);
 }
 
 static int devfs_write(void *ctx, struct vfs_file *file, const void *buf, k_size_t size)
@@ -195,11 +218,39 @@ static int devfs_write(void *ctx, struct vfs_file *file, const void *buf, k_size
 
     K_UNUSED(ctx);
 
-    if (dev == NULL || dev->write == NULL) {
+    if (dev == NULL || dev->operations.write == NULL) {
         return -2;
     }
 
-    return dev->write((const char *)buf, size);
+    return dev->operations.write((const char *)buf, size);
+}
+
+static int devfs_ioctl(void *ctx, struct vfs_file *file, k_u32_t request, k_u64_t arg)
+{
+    const struct dev_file *const *slot = (const struct dev_file *const *)file->priv;
+    const struct dev_file *dev = (slot != NULL) ? *slot : NULL;
+
+    K_UNUSED(ctx);
+
+    if (dev == NULL || dev->operations.ioctl == NULL) {
+        return KERR_INVAL;
+    }
+
+    return dev->operations.ioctl(request, arg);
+}
+
+static int devfs_close(void *ctx, struct vfs_file *file)
+{
+    const struct dev_file *const *slot = (const struct dev_file *const *)file->priv;
+    const struct dev_file *dev = (slot != NULL) ? *slot : NULL;
+
+    K_UNUSED(ctx);
+
+    if (dev != NULL && dev->operations.close != NULL) {
+        dev->operations.close();
+    }
+
+    return 0;
 }
 
 static int devfs_list(void *ctx, const char *path, struct vfs_dirent *out, k_size_t max,
@@ -300,8 +351,9 @@ static const struct vfs_operations g_operations = {
     .open = devfs_open,
     .read = devfs_read,
     .write = devfs_write,
+    .ioctl = devfs_ioctl,
     .truncate = NULL, /* a device is not a file that can be cut */
-    .close = NULL,
+    .close = devfs_close,
     .list = devfs_list,
     .readdir = devfs_readdir,
     .stat = devfs_stat,

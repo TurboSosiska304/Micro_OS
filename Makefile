@@ -384,8 +384,8 @@ x86-smp-smoke: x86-smp-build x86-disk
 # mode of the fallback with pmemsave, and presses the keys of the keyboard, so
 # a build farm can check both screens of ADR 0023 and IRQ1. Not a part of
 # `make ci`: the monitor is a tool of its own.
-x86-vga-smoke: x86-build
-	python3 tools/x86_vga_smoke.py
+x86-vga-smoke: x86-build x86-disk
+	python3 tools/x86_vga_smoke.py --image $(X86_PROGRAMS_IMAGE)
 
 # The disk of the port (ADR 0008): the same image of `make x86-disk`, copied
 # once to a disk of its own. A person boots the machine, writes a file, boots
