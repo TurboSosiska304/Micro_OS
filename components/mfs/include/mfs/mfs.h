@@ -219,6 +219,14 @@ struct mfs_file {
     bool chain_valid;    /* chain_block is a block of this chain */
     k_u32_t chain_block; /* the block of the chain the cursor names */
     k_u32_t chain_index; /* the index of that block from the head, 0 based */
+    /*
+     * The number of the blocks of the chain, once the descriptor knows it.
+     * The open does not walk the chain: the first write counts it and the
+     * growth keeps the number, so a file written in many small calls pays
+     * one walk and not one per call - the write side of the cursor above.
+     */
+    k_u32_t chain_blocks;
+    bool chain_blocks_valid;
 };
 
 /* The information about the filesystem. */

@@ -2064,14 +2064,27 @@ static int file_grow(struct mfs_file *file, k_u32_t *new_block)
          * cursor of an earlier chain does not name. */
         file->first_block = block;
         file_cursor_forget(file);
+        file->chain_block = block;
+        file->chain_index = 0;
+        file->chain_valid = true;
         *new_block = block;
         return MFS_OK;
     }
 
-    rc = chain_last(file->first_block, &last);
-    if (rc != MFS_OK) {
-        block_release(block);
-        return rc;
+    /*
+     * The block that ends the chain. The write path has just appended a
+     * block when the cursor names the last one, and the count of the
+     * blocks says which index that is; otherwise the chain is walked once
+     * and the rest of the growth of this call goes from the new block.
+     */
+    if (file->chain_valid && file->chain_index + 1u == file->chain_blocks) {
+        last = file->chain_block;
+    } else {
+        rc = chain_last(file->first_block, &last);
+        if (rc != MFS_OK) {
+            block_release(block);
+            return rc;
+        }
     }
 
     rc = chain_set_next(last, block);
@@ -2079,6 +2092,11 @@ static int file_grow(struct mfs_file *file, k_u32_t *new_block)
         block_release(block);
         return rc;
     }
+
+    /* The new block ends the chain: the cursor follows it, not the old end. */
+    file->chain_block = block;
+    file->chain_index = file->chain_blocks;
+    file->chain_valid = true;
 
     *new_block = block;
     return MFS_OK;
@@ -2110,19 +2128,32 @@ static int mfs_write_locked(struct mfs_file *file, const void *buf, k_size_t siz
 
     /* The file has to have enough blocks for the whole write. */
     {
-        k_u32_t have = 0;
         k_u32_t needed = (file->offset + size + MFS_BLOCK_DATA - 1u) / MFS_BLOCK_DATA;
 
-        if (file->first_block != MFS_NEXT_NONE) {
-            rc = chain_count(file->first_block, &have);
-            if (rc != MFS_OK) {
-                return rc;
+        /*
+         * The number of the blocks of the chain is counted once for the
+         * descriptor, not once per call: a program that writes a file a
+         * kilobyte at a time would otherwise walk the whole chain before
+         * every call, which is the write side of the cost the read cursor
+         * above removed.
+         */
+        if (!file->chain_blocks_valid) {
+            k_u32_t have = 0;
+
+            if (file->first_block != MFS_NEXT_NONE) {
+                rc = chain_count(file->first_block, &have);
+                if (rc != MFS_OK) {
+                    return rc;
+                }
             }
+
+            file->chain_blocks = have;
+            file->chain_blocks_valid = true;
         }
 
-        old_blocks = have;
+        old_blocks = file->chain_blocks;
 
-        while (have < needed) {
+        while (file->chain_blocks < needed) {
             k_u32_t added;
 
             rc = file_grow(file, &added);
@@ -2134,7 +2165,7 @@ static int mfs_write_locked(struct mfs_file *file, const void *buf, k_size_t siz
                 file->dirty = true;
                 return rc;
             }
-            have++;
+            file->chain_blocks++;
         }
 
         /* The blocks of the file have been taken, the map has to know it. */
