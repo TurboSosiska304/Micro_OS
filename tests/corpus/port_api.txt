@@ -1,4 +1,4 @@
-# Micro OS — the contract of the platform port, 1.10, as it was recorded.
+# Micro OS — the contract of the platform port, 1.11, as it was recorded.
 #
 # This file is the golden record of kernel/port/*.h: the functions a machine
 # has to implement to be a port of this kernel. `make integrity` compares it
@@ -21,15 +21,15 @@
 #     to be checked against, and the tests of the scheduler cover it. The
 #     version of the contract is the version of the ten headers below.
 #
-# Ten headers, 48 functions: console 5, cpu 2, exec 8, info 4, kv 5, lock 6,
-# mem 6, net 8, power 2, time 2.
+# Eleven headers, 59 functions: console 5, cpu 2, exec 8, info 4, kv 5, lock 6,
+# mem 6, mm 11, net 8, power 2, time 2.
 #
 # The two calls of kernel/port/cpu.h carry a weak default in the portable
 # kernel (components/kernel/src/cpu_default.c): a port that predates them is
 # one core, which is what the board is until its own work (ADR 0012). They are
 # recorded with the word `weak` so that `make integrity` asks the ports that
 # override the default for them and does not fail a port that does not.
-api 1 10
+api 1 11
 
 # kernel/port/console.h — the bytes in and out
 k_port_write kernel/port/console.h
@@ -78,6 +78,19 @@ k_port_heap_free kernel/port/mem.h
 k_port_heap_total kernel/port/mem.h
 k_port_psram_free kernel/port/mem.h
 k_port_psram_total kernel/port/mem.h
+
+# kernel/port/mm.h — the pages a program can map
+k_port_mm_supported kernel/port/mm.h
+k_port_mm_base kernel/port/mm.h
+k_port_mm_limit kernel/port/mm.h
+k_port_mm_top kernel/port/mm.h
+k_port_mm_current kernel/port/mm.h
+k_port_mm_page kernel/port/mm.h
+k_port_mm_writable kernel/port/mm.h
+k_port_mm_private kernel/port/mm.h
+k_port_mm_present kernel/port/mm.h
+k_port_mm_phys kernel/port/mm.h
+k_port_mm_unmap kernel/port/mm.h
 k_port_alloc kernel/port/mem.h
 k_port_free kernel/port/mem.h
 
