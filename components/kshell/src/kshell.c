@@ -506,6 +506,15 @@ bool kshell_stage_is_program(const char *name)
         return false;
     }
 
+    /*
+     * `exec` is a command of the shell and a program in one line: the stage
+     * runs the command, the command starts the file, and the file is a second
+     * task. The arithmetic has to see the two.
+     */
+    if (strcmp(name, "exec") == 0) {
+        return true;
+    }
+
     if (find_command(name) == NULL) {
         return true;
     }
