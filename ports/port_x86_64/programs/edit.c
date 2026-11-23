@@ -435,6 +435,10 @@ static void title_paint(void)
     memcpy(g_shown_title, title, strlen(title) + 1u);
     (void)snprintf(window->title, sizeof(window->title), "%s", title);
 
+    /* The title of the window of the desktop as well: the bar of the server
+     * and the button of its panel are the same words (docs/desktop.md). */
+    (void)uiprog_title(&g_screen, title);
+
     (void)uiprog_fill(&g_screen, 0, UI_FRAME_MARGIN, (int)g_screen.info.width, FONT8_HEIGHT,
                       EDIT_BAR);
 
@@ -780,6 +784,18 @@ int main(int argc, char *const argv[], char *const envp[])
 
             key_handle(event.code);
         }
+
+        /* The server of the desktop asked the window to leave (Alt+F4 or the
+         * square of the bar): it asks its own question about an unsaved file
+         * and leaves when the answer is yes. */
+        if (uiprog_close_requested(&g_screen)) {
+            request_quit();
+        }
+
+        /* One frame of a client: the damage of the keys since the last turn
+         * and nothing else. A program of the whole screen has nothing to
+         * flush - the device was written as it drew. */
+        (void)uiprog_flush(&g_screen);
 
         /* A silent keyboard is EAGAIN and a nap: the loop of every program
          * of the screen of ADR 0028. */
