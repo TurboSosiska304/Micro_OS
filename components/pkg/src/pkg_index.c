@@ -355,7 +355,6 @@ static int entry_finish(struct pkg_entry *entry, const struct pkg_index *index, 
         return PKG_EPARSE;
     }
 
-<<<<<<< HEAD
     /*
      * The digest of the source (ADR 0025) is not checked here: an entry that
      * names a source and a digest that is not one is a fact for the rule of
@@ -364,249 +363,247 @@ static int entry_finish(struct pkg_entry *entry, const struct pkg_index *index, 
      */
 
     if (entry->size > PKG_PACKAGE_MAX) {
-=======
-    if (pkg_size_check(entry->size) != PKG_OK) {
->>>>>>> fix/pkg-cap
-        return PKG_EPARSE;
-    }
-
-    return PKG_OK;
-}
-
-static int parse_entry(struct json_cursor *c, struct pkg_index *index)
-{
-    struct pkg_entry *entry;
-    bool have_abi = false;
-    bool have_size = false;
-    int rc;
-
-    if (index->count >= PKG_INDEX_MAX) {
-        return PKG_EFULL;
-    }
-
-    entry = &index->entries[index->count];
-    memset(entry, 0, sizeof(*entry));
-
-    rc = json_expect(c, '{');
-    if (rc != PKG_OK) {
-        return rc;
-    }
-
-    for (;;) {
-        char key[PKG_NAME_MAX + 1];
-
-        json_ws(c);
-
-        if (c->p < c->end && *c->p == '}') {
-            c->p++;
-            break;
+        if (pkg_size_check(entry->size) != PKG_OK) {
+            return PKG_EPARSE;
         }
 
-        rc = json_string(c, key, sizeof(key));
+        return PKG_OK;
+    }
+
+    static int parse_entry(struct json_cursor * c, struct pkg_index * index)
+    {
+        struct pkg_entry *entry;
+        bool have_abi = false;
+        bool have_size = false;
+        int rc;
+
+        if (index->count >= PKG_INDEX_MAX) {
+            return PKG_EFULL;
+        }
+
+        entry = &index->entries[index->count];
+        memset(entry, 0, sizeof(*entry));
+
+        rc = json_expect(c, '{');
         if (rc != PKG_OK) {
             return rc;
         }
 
-        rc = json_expect(c, ':');
-        if (rc != PKG_OK) {
-            return rc;
-        }
+        for (;;) {
+            char key[PKG_NAME_MAX + 1];
 
-        if (strcmp(key, "name") == 0) {
-            rc = json_string(c, entry->name, sizeof(entry->name));
-        } else if (strcmp(key, "version") == 0) {
-            rc = json_string(c, entry->version, sizeof(entry->version));
-        } else if (strcmp(key, "machine") == 0) {
-            rc = json_string(c, entry->machine, sizeof(entry->machine));
-        } else if (strcmp(key, "file") == 0) {
-            rc = json_string(c, entry->file, sizeof(entry->file));
-        } else if (strcmp(key, "summary") == 0) {
-            rc = json_string(c, entry->summary, sizeof(entry->summary));
-        } else if (strcmp(key, "license") == 0) {
-            rc = json_string(c, entry->license, sizeof(entry->license));
-        } else if (strcmp(key, "source") == 0) {
-            rc = json_string(c, entry->source, sizeof(entry->source));
-        } else if (strcmp(key, "source_sha256") == 0) {
-            rc = json_string(c, entry->source_sha256, sizeof(entry->source_sha256));
-        } else if (strcmp(key, "sha256") == 0) {
-            rc = json_string(c, entry->sha256, sizeof(entry->sha256));
-        } else if (strcmp(key, "abi") == 0) {
-            k_u64_t value = 0;
+            json_ws(c);
 
-            rc = json_number(c, &value);
-            if (rc == PKG_OK) {
-                entry->abi = (k_u32_t)value;
-                have_abi = true;
+            if (c->p < c->end && *c->p == '}') {
+                c->p++;
+                break;
             }
-        } else if (strcmp(key, "size") == 0) {
-            rc = json_number(c, &entry->size);
-            have_size = (rc == PKG_OK);
-        } else {
-            rc = json_skip(c, 1);
-        }
 
-        if (rc != PKG_OK) {
-            return rc;
-        }
-
-        json_ws(c);
-
-        if (c->p < c->end && *c->p == ',') {
-            c->p++;
-            continue;
-        }
-
-        if (c->p < c->end && *c->p == '}') {
-            c->p++;
-            break;
-        }
-
-        return PKG_EPARSE;
-    }
-
-    rc = entry_finish(entry, index, have_abi, have_size);
-    if (rc != PKG_OK) {
-        return rc;
-    }
-
-    index->count++;
-
-    return PKG_OK;
-}
-
-static int parse_packages(struct json_cursor *c, struct pkg_index *index)
-{
-    int rc;
-
-    rc = json_expect(c, '[');
-    if (rc != PKG_OK) {
-        return rc;
-    }
-
-    for (;;) {
-        json_ws(c);
-
-        if (c->p < c->end && *c->p == ']') {
-            c->p++;
-            return PKG_OK;
-        }
-
-        rc = parse_entry(c, index);
-        if (rc != PKG_OK) {
-            return rc;
-        }
-
-        json_ws(c);
-
-        if (c->p < c->end && *c->p == ',') {
-            c->p++;
-            continue;
-        }
-
-        if (c->p < c->end && *c->p == ']') {
-            c->p++;
-            return PKG_OK;
-        }
-
-        return PKG_EPARSE;
-    }
-}
-
-int pkg_index_parse(const char *text, k_size_t size, struct pkg_index *out)
-{
-    struct json_cursor c;
-    int rc;
-
-    if (text == NULL || out == NULL || size == 0) {
-        return PKG_EPARSE;
-    }
-
-    memset(out, 0, sizeof(*out));
-
-    c.p = text;
-    c.end = text + size;
-
-    rc = json_expect(&c, '{');
-    if (rc != PKG_OK) {
-        return rc;
-    }
-
-    for (;;) {
-        char key[PKG_NAME_MAX + 1];
-
-        json_ws(&c);
-
-        if (c.p < c.end && *c.p == '}') {
-            c.p++;
-            break;
-        }
-
-        rc = json_string(&c, key, sizeof(key));
-        if (rc != PKG_OK) {
-            return rc;
-        }
-
-        rc = json_expect(&c, ':');
-        if (rc != PKG_OK) {
-            return rc;
-        }
-
-        if (strcmp(key, "repository") == 0) {
-            rc = json_string(&c, out->repository, sizeof(out->repository));
-        } else if (strcmp(key, "machine") == 0) {
-            rc = json_string(&c, out->machine, sizeof(out->machine));
-        } else if (strcmp(key, "abi") == 0) {
-            k_u64_t value = 0;
-
-            rc = json_number(&c, &value);
-            if (rc == PKG_OK) {
-                out->abi = (k_u32_t)value;
+            rc = json_string(c, key, sizeof(key));
+            if (rc != PKG_OK) {
+                return rc;
             }
-        } else if (strcmp(key, "packages") == 0) {
-            rc = parse_packages(&c, out);
-        } else {
-            rc = json_skip(&c, 1);
+
+            rc = json_expect(c, ':');
+            if (rc != PKG_OK) {
+                return rc;
+            }
+
+            if (strcmp(key, "name") == 0) {
+                rc = json_string(c, entry->name, sizeof(entry->name));
+            } else if (strcmp(key, "version") == 0) {
+                rc = json_string(c, entry->version, sizeof(entry->version));
+            } else if (strcmp(key, "machine") == 0) {
+                rc = json_string(c, entry->machine, sizeof(entry->machine));
+            } else if (strcmp(key, "file") == 0) {
+                rc = json_string(c, entry->file, sizeof(entry->file));
+            } else if (strcmp(key, "summary") == 0) {
+                rc = json_string(c, entry->summary, sizeof(entry->summary));
+            } else if (strcmp(key, "license") == 0) {
+                rc = json_string(c, entry->license, sizeof(entry->license));
+            } else if (strcmp(key, "source") == 0) {
+                rc = json_string(c, entry->source, sizeof(entry->source));
+            } else if (strcmp(key, "source_sha256") == 0) {
+                rc = json_string(c, entry->source_sha256, sizeof(entry->source_sha256));
+            } else if (strcmp(key, "sha256") == 0) {
+                rc = json_string(c, entry->sha256, sizeof(entry->sha256));
+            } else if (strcmp(key, "abi") == 0) {
+                k_u64_t value = 0;
+
+                rc = json_number(c, &value);
+                if (rc == PKG_OK) {
+                    entry->abi = (k_u32_t)value;
+                    have_abi = true;
+                }
+            } else if (strcmp(key, "size") == 0) {
+                rc = json_number(c, &entry->size);
+                have_size = (rc == PKG_OK);
+            } else {
+                rc = json_skip(c, 1);
+            }
+
+            if (rc != PKG_OK) {
+                return rc;
+            }
+
+            json_ws(c);
+
+            if (c->p < c->end && *c->p == ',') {
+                c->p++;
+                continue;
+            }
+
+            if (c->p < c->end && *c->p == '}') {
+                c->p++;
+                break;
+            }
+
+            return PKG_EPARSE;
         }
 
+        rc = entry_finish(entry, index, have_abi, have_size);
         if (rc != PKG_OK) {
             return rc;
         }
 
-        json_ws(&c);
+        index->count++;
 
-        if (c.p < c.end && *c.p == ',') {
-            c.p++;
-            continue;
-        }
-
-        if (c.p < c.end && *c.p == '}') {
-            c.p++;
-            break;
-        }
-
-        return PKG_EPARSE;
+        return PKG_OK;
     }
 
-    if (out->machine[0] == '\0' || out->abi == 0u) {
-        return PKG_EPARSE;
+    static int parse_packages(struct json_cursor * c, struct pkg_index * index)
+    {
+        int rc;
+
+        rc = json_expect(c, '[');
+        if (rc != PKG_OK) {
+            return rc;
+        }
+
+        for (;;) {
+            json_ws(c);
+
+            if (c->p < c->end && *c->p == ']') {
+                c->p++;
+                return PKG_OK;
+            }
+
+            rc = parse_entry(c, index);
+            if (rc != PKG_OK) {
+                return rc;
+            }
+
+            json_ws(c);
+
+            if (c->p < c->end && *c->p == ',') {
+                c->p++;
+                continue;
+            }
+
+            if (c->p < c->end && *c->p == ']') {
+                c->p++;
+                return PKG_OK;
+            }
+
+            return PKG_EPARSE;
+        }
     }
 
-    return PKG_OK;
-}
+    int pkg_index_parse(const char *text, k_size_t size, struct pkg_index *out)
+    {
+        struct json_cursor c;
+        int rc;
 
-int pkg_index_find(const struct pkg_index *index, const char *name)
-{
-    k_size_t i;
+        if (text == NULL || out == NULL || size == 0) {
+            return PKG_EPARSE;
+        }
 
-    if (index == NULL || name == NULL) {
+        memset(out, 0, sizeof(*out));
+
+        c.p = text;
+        c.end = text + size;
+
+        rc = json_expect(&c, '{');
+        if (rc != PKG_OK) {
+            return rc;
+        }
+
+        for (;;) {
+            char key[PKG_NAME_MAX + 1];
+
+            json_ws(&c);
+
+            if (c.p < c.end && *c.p == '}') {
+                c.p++;
+                break;
+            }
+
+            rc = json_string(&c, key, sizeof(key));
+            if (rc != PKG_OK) {
+                return rc;
+            }
+
+            rc = json_expect(&c, ':');
+            if (rc != PKG_OK) {
+                return rc;
+            }
+
+            if (strcmp(key, "repository") == 0) {
+                rc = json_string(&c, out->repository, sizeof(out->repository));
+            } else if (strcmp(key, "machine") == 0) {
+                rc = json_string(&c, out->machine, sizeof(out->machine));
+            } else if (strcmp(key, "abi") == 0) {
+                k_u64_t value = 0;
+
+                rc = json_number(&c, &value);
+                if (rc == PKG_OK) {
+                    out->abi = (k_u32_t)value;
+                }
+            } else if (strcmp(key, "packages") == 0) {
+                rc = parse_packages(&c, out);
+            } else {
+                rc = json_skip(&c, 1);
+            }
+
+            if (rc != PKG_OK) {
+                return rc;
+            }
+
+            json_ws(&c);
+
+            if (c.p < c.end && *c.p == ',') {
+                c.p++;
+                continue;
+            }
+
+            if (c.p < c.end && *c.p == '}') {
+                c.p++;
+                break;
+            }
+
+            return PKG_EPARSE;
+        }
+
+        if (out->machine[0] == '\0' || out->abi == 0u) {
+            return PKG_EPARSE;
+        }
+
+        return PKG_OK;
+    }
+
+    int pkg_index_find(const struct pkg_index *index, const char *name)
+    {
+        k_size_t i;
+
+        if (index == NULL || name == NULL) {
+            return -1;
+        }
+
+        for (i = 0; i < index->count; i++) {
+            if (strcmp(index->entries[i].name, name) == 0) {
+                return (int)i;
+            }
+        }
+
         return -1;
     }
-
-    for (i = 0; i < index->count; i++) {
-        if (strcmp(index->entries[i].name, name) == 0) {
-            return (int)i;
-        }
-    }
-
-    return -1;
-}
