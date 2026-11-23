@@ -13,6 +13,7 @@ built into `build-host/tools/`.
 | `x86_smoke.py` | boot x86-64 in QEMU, check the transcript, the link address and the signature of the kernel |
 | `x86_disk_smoke.py` | two boots on one disk image: a file written in the first is read in the second |
 | `x86_net_smoke.py` | the network of the x86-64 machine against servers of the host, including TLS and `pkg` over HTTPS |
+| `x86_bench.py` | the numbers of the machine: `getpid`, fork and exec, a pipe, a file of 16 MiB and the console, on one boot of fixed sizes (`make bench`) |
 | `x86_image.py` | write the disk image with `/bin` and `/etc` (calls `microos_mkfs`) |
 | `mkfs_mfs.c` | the host tool that formats and fills a MicroFS volume (`microos_mkfs`) |
 | `mkprog.sh` | turn the ELF of a program into a MOX1 image |
