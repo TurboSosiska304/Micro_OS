@@ -84,7 +84,7 @@ help:
 	@echo "  make x86-iso-uefi-smoke  the same image on OVMF, from a CD and a stick"
 	@echo "  make x86-iso-usb-smoke   the same image on a stick, from a BIOS"
 	@echo "  make bench      the numbers of the machine: syscalls, fork, pipe,"
-	@echo "                  file and console, one boot of fixed sizes"
+	@echo "                  file, console and latencies, three boots, the median"
 	@echo "  make soak       the session of 600 seconds on x86-64 (one boot)"
 	@echo "  make soak SOAK_MINUTES=1  the same, short, to check the tool"
 	@echo "  make soak SOAK_ITERATIONS=5  five short boots, one pass each"
@@ -495,15 +495,17 @@ x86-volume-smoke: x86-build build
 x86-mfs-smoke: x86-build build
 	python3 tools/x86_mfs_smoke.py --build $(X86_BUILD) --mkfs $(X86_MKFS)
 
-# The numbers of the machine (tools/x86_bench.py, docs/bench.md): one boot of
-# the x86-64 port, `/bin/bench` of the build in the image for the run, and a
-# table of fixed sizes - the call of the door, a fork and an exec, 4 MiB
-# through a pipe, a file of 16 MiB written and read, and the console. The
-# value of a row is what two releases are compared by; the sizes are the
+# The numbers of the machine (tools/x86_bench.py, docs/bench.md): three boots
+# of the x86-64 port, `/bin/bench` of the build in the image for each run, and
+# a table of fixed sizes - the call of the door and its latency, a fork and an
+# exec, 4 MiB through a pipe and the latency of one byte of one, a file of
+# 16 MiB written and read, and the console. The value of a row is the median of
+# the runs, which is what two releases are compared by; the sizes are the
 # constants of the tool and do not change with the release.
 #
-# Not a part of `make ci`: the pipe of 1.6 holds 256 bytes, so the pipe test
-# is sixteen thousand handoffs and the run is about a minute of emulation.
+# Not a part of `make ci`: the pipe of 1.6 holds 256 bytes and the file is
+# 16 MiB, so three runs are about half a minute of emulation.
+# `make bench BENCH_ARGS="--runs 1"` is one boot for a look and
 # `make bench BENCH_ARGS="--json bench.json"` keeps the table in a file.
 BENCH_ARGS ?=
 
