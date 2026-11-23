@@ -16,6 +16,7 @@ set(MICRO_OS_KERNEL_SRCS
     "src/exec.c"
     "src/fb.c"
     "src/input.c"
+    "src/input_set1.c"
     "src/kfile.c"
     "src/kmm.c"
     "src/kmod.c"

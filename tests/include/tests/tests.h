@@ -34,6 +34,7 @@ void test_fs_fat(void);
 void test_fs_ext2(void);
 void test_sysfs(void);
 void test_ui(void);
+void test_ui_windows(void);
 void test_input_debounce(void);
 void test_battery_soc(void);
 void test_fb_draw(void);

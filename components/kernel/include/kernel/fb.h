@@ -59,8 +59,11 @@ struct fb_rect {
 /*
  * The control commands of the picture. `FBIO_TAKE` stops the console drawing
  * into the framebuffer (the program owns the picture now); `FBIO_GIVE` hands
- * it back and the kernel repaints its grid. A panic always takes the screen,
- * whatever a program holds.
+ * it back and the kernel repaints its grid. A program may have started
+ * another program (the file manager starts the editor) and the screen is one
+ * resource: a give while another descriptor of the device is open changes
+ * nothing, and the last close gives the picture back whatever the programs
+ * asked. A panic always takes the screen, whatever a program holds.
  */
 #define FBIO_TAKE 0x4D01u
 #define FBIO_GIVE 0x4D02u

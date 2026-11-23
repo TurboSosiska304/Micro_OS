@@ -11,8 +11,9 @@ machine in a window can type at all.
 
 There is no display here, and none is needed: QEMU with -display none still
 has its video device, and its monitor reads the picture (screendump) and
-presses keys (sendkey). The test boots the machine three times and checks the
-two screens of ADR 0023 and the first interface of ADR 0028:
+presses keys (sendkey). The test boots the machine five times and checks the
+two screens of ADR 0023 and the programs of the interface (ADR 0028, ADR
+0030):
 
   1. the framebuffer (-vga std, the default): the boot says the screen is the
      framebuffer of 1280x800 by 128x57 cells, the screenshot is a PPM of
@@ -34,7 +35,16 @@ two screens of ADR 0023 and the first interface of ADR 0028:
      x86-disk`, `exec /bin/ui` takes the screen (`FBIO_TAKE`), the screenshot
      of the panel and of the window of the log is not the console any more,
      Tab moves the focus of the list and `q` gives the screen back
-     (`FBIO_GIVE`), after which the picture is the grid of the shell again.
+     (`FBIO_GIVE`), after which the picture is the grid of the shell again;
+  4. the editor of ADR 0030: a copy of the disk, `exec /bin/edit /edit.txt`,
+     two lines typed through the keyboard, Enter, Ctrl+S and Ctrl+Q, then a
+     second boot of the same disk and `cat /edit.txt`, which has to print the
+     two lines; the screenshot is read for the title, the status line and the
+     cell of the cursor;
+  5. the file manager of ADR 0030: `/bin/fm /` on a file the shell made, its
+     title, names and selected row, the arrows and End, the modal window of
+     `d` answered with `n` and then `y`, and the list and the status line
+     after the delete.
 
     tools/x86_vga_smoke.py [--timeout SECONDS] [--display none|gtk] [--verbose]
                            [--image PATH]
@@ -55,6 +65,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -92,6 +103,21 @@ COLUMNS = VBE_WIDTH // CELL_WIDTH  # 160
 GREY = (173, 170, 173)
 BLACK = (0, 0, 0)
 
+
+def rgb565(value: int) -> tuple:
+    """A pixel of the format of ADR 0023, widened by the display.
+
+    The device keeps sixteen bits: five of red, six of green and five of blue,
+    and the display of QEMU widens each of them to a byte (the low bits repeat
+    the high ones, which is what 0x0010 -> (0, 0, 132) shows). The tests of the
+    programs of ADR 0030 name their colours as the sources do.
+    """
+    red = (value >> 11) & 0x1F
+    green = (value >> 5) & 0x3F
+    blue = value & 0x1F
+    return ((red << 3) | (red >> 2), (green << 2) | (green >> 4), (blue << 3) | (blue >> 2))
+
+
 # The colours of the sixteen attributes of the palette (ports/port_x86_64/
 # src/fb.c) that the test reads: a command colours a name or a line with one
 # of them, and the value is the five-six-five number widened by the display.
@@ -123,6 +149,33 @@ UI_ITEM_Y0 = 24
 UI_ITEM_STEP = 22
 UI_CONSOLE_X = UI_LEFT_WIDTH + 8
 UI_CONSOLE_Y = 16 + 8
+
+# The programs of ADR 0030 (/bin/edit and /bin/fm) and the frame of
+# components/ui: a margin of two pixels, the row of the 8x16 font and a pixel
+# of separator, so the body of a window starts at the pixel 21 of its own
+# rectangle; the title is drawn at the margin and the status line is the last
+# row of the picture.
+UI_FRAME_TITLE_HEIGHT = 21
+UI_TITLE_Y = 2
+UI_STATUS_Y = VBE_HEIGHT - CELL_HEIGHT
+
+# The colours of the two programs, the numbers of their sources widened by
+# the display: the dark blue of a bar, the white of the console, the cyan of
+# the window with the keys and the grey of a row of a list that has the
+# focus. They are read out of the screenshot and not from a copy of the
+# drawing code: `rgb565()` is the rule of the device of ADR 0023.
+EDIT_PAPER_RGB = rgb565(0x0000)
+EDIT_INK_RGB = rgb565(0xFFFF)
+EDIT_BAR_RGB = rgb565(0x0010)
+EDIT_FOCUS_RGB = rgb565(0x57FF)
+FM_PAPER_RGB = rgb565(0x0000)
+FM_INK_RGB = rgb565(0xFFFF)
+FM_BAR_RGB = rgb565(0x0010)
+FM_FOCUS_RGB = rgb565(0x57FF)
+FM_SELECT_RGB = rgb565(0xAD55)
+FM_SELECT_INK_RGB = rgb565(0x0000)
+FM_MODAL_X = 416
+FM_MODAL_Y = 372
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, "build-x86")
@@ -207,6 +260,66 @@ class Picture:
             return False
 
         return red.count(ink[0]) == green.count(ink[1]) == blue.count(ink[2])
+
+    def text_at(self, x: int, y: int, letters: str, ink: tuple, paper: tuple) -> bool:
+        """A run of glyphs at a pixel, not at a cell of the console grid.
+
+        The console draws its rows on the lines of the grid; a program of an
+        interface draws a title at the margin of its frame and a row of text
+        where the model of `components/ui` puts it, and those rows are not at
+        a multiple of the sixteen pixels of a cell. The test compares the
+        eight by sixteen block at the pixel with the table of the font, so a
+        word of a program is read as the cells of the console are.
+        """
+        for index, letter in enumerate(letters):
+            glyph = GLYPHS[letter]
+            x0 = x + index * CELL_WIDTH
+
+            if x0 < 0 or y < 0 or x0 + CELL_WIDTH > self.width or y + CELL_HEIGHT > self.height:
+                return False
+
+            for row, bits in enumerate(glyph):
+                for column in range(CELL_WIDTH):
+                    expected = ink if bits & (0x80 >> column) else paper
+
+                    if self.pixel(x0 + column, y + row) != expected:
+                        return False
+
+        return True
+
+    def glyph_at(self, x: int, y: int, ink: tuple, paper: tuple) -> str | None:
+        """The letter of the cell drawn at a pixel, or None.
+
+        The block of eight by sixteen pixels is read as a bitmap and looked up
+        in the table of the font, the way the cells of the console are read;
+        the difference is the pixel and not the cell of the grid.
+        """
+        table = {glyph: letter for letter, glyph in GLYPHS.items()}
+        rows = []
+
+        if x < 0 or y < 0 or x + CELL_WIDTH > self.width or y + CELL_HEIGHT > self.height:
+            return None
+
+        for row in range(CELL_HEIGHT):
+            value = 0
+
+            for column in range(CELL_WIDTH):
+                if self.pixel(x + column, y + row) == ink:
+                    value |= 0x80 >> column
+
+            rows.append(value)
+
+        return table.get(tuple(rows))
+
+    def letters_at(self, x: int, y: int, cells: int, ink: tuple, paper: tuple) -> str:
+        """The letters of `cells` cells from a pixel; '?' for a foreign cell."""
+        letters = []
+
+        for index in range(cells):
+            letter = self.glyph_at(x + index * CELL_WIDTH, y, ink, paper)
+            letters.append(letter if letter is not None else "?")
+
+        return "".join(letters)
 
     def cell_glyph(self, row: int, column: int, ink: tuple, pitch: int = LINE_PITCH) -> tuple:
         """The 8x16 bitmap of a cell: one byte a line, the top bit on the left.
@@ -1156,8 +1269,8 @@ def run_ui(loader: str, kernel: str, image: str, timeout: float, verbose: bool, 
             picture = settled_picture(
                 machine,
                 workdir,
-                lambda seen: seen.pixel(0, 0) == UI_PANEL_RGB,
-                seconds=6.0,
+                lambda seen: seen.pixel(0, 0) == UI_PANEL_RGB
+                and seen.find_run("tasks", UI_TEXT_RGB, UI_PANEL_RGB) is not None,
             )
             expect("the device has the picture of the interface", picture is not None,
                    "screendump wrote no PPM")
@@ -1300,6 +1413,473 @@ def run_ui(loader: str, kernel: str, image: str, timeout: float, verbose: bool, 
             if verbose and shell is not None:
                 print("--- the picture of the console after q ---")
                 print(f"{shell.width}x{shell.height}, {shell.ink_pixels()} pixel(s) of ink")
+        finally:
+            machine.close()
+
+    return checks
+
+
+def run_editor(loader: str, kernel: str, image: str, timeout: float, verbose: bool, display: str) -> list:
+    """The editor of ADR 0030: a file, the arrows and Ctrl+S, on the screen.
+
+    The machine boots a copy of the disk of `make x86-disk`, the shell starts
+    `/bin/edit` on a file that is not there yet, the test types two lines
+    through the keyboard of QEMU (IRQ1 and the E0 sequences of Enter and of
+    the arrows), saves with Ctrl+S, leaves with Ctrl+Q, and then boots the
+    same disk a second time: `cat /edit.txt` has to show the two lines. The
+    file is the proof that the editor wrote what the keys said, and the
+    screenshot is the proof that it showed the same thing.
+    """
+    checks = []
+
+    def expect(name: str, condition: bool, detail: str = "") -> None:
+        checks.append((f"edit: {name}", bool(condition), detail))
+
+    with tempfile.TemporaryDirectory(prefix="microos-x86-edit-") as workdir:
+        disk = os.path.join(workdir, "disk.img")
+        shutil.copyfile(image, disk)
+        machine = Machine(loader, kernel, workdir, "std", display, disk)
+
+        try:
+            booted = machine.wait_serial(PROMPT, timeout)
+            expect("the shell of the disk is up", booted, "the shell never printed its prompt")
+
+            count = machine.prompts()
+            machine.type_line("exec /bin/edit /edit.txt")
+
+            taken = machine.wait_serial("fb: the console is taken", timeout)
+            expect(
+                "the editor takes the screen",
+                taken,
+                "the kernel never said that /dev/fb0 was taken (FBIO_TAKE)",
+            )
+
+            picture = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.text_at(
+                    4, UI_TITLE_Y, "edit - /edit.txt", EDIT_INK_RGB, EDIT_BAR_RGB
+                )
+                and seen.text_at(
+                    4, UI_STATUS_Y, "edit  L1 C1  0 bytes", EDIT_INK_RGB, EDIT_BAR_RGB
+                )
+                and seen.pixel(4, UI_FRAME_TITLE_HEIGHT) == EDIT_INK_RGB,
+            )
+            expect("the window of the editor is drawn", picture is not None,
+                   "screendump wrote no PPM")
+
+            if picture is not None:
+                expect(
+                    "the title says which file is open",
+                    picture.text_at(4, UI_TITLE_Y, "edit - /edit.txt", EDIT_INK_RGB, EDIT_BAR_RGB),
+                    "the title bar does not hold 'edit - /edit.txt'",
+                )
+                expect(
+                    "the status line names the keys",
+                    picture.text_at(
+                        4, UI_STATUS_Y, "edit  L1 C1  0 bytes", EDIT_INK_RGB, EDIT_BAR_RGB
+                    ),
+                    "the status line is not 'edit  L1 C1  0 bytes'",
+                )
+                expect(
+                    "the cursor is one inverted cell of the first line",
+                    picture.pixel(4, UI_FRAME_TITLE_HEIGHT) == EDIT_INK_RGB
+                    and picture.pixel(11, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT - 1) == EDIT_INK_RGB
+                    and picture.pixel(12, UI_FRAME_TITLE_HEIGHT) == EDIT_PAPER_RGB,
+                    "the first cell of the body is not the block of the cursor",
+                )
+
+            # The keys of the keyboard, not the serial port: two letters, the
+            # Enter of the main block and two more.
+            machine.keys(["h", "i"])
+            typed = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.text_at(
+                    4, UI_FRAME_TITLE_HEIGHT, "hi", EDIT_INK_RGB, EDIT_PAPER_RGB
+                )
+                and seen.pixel(20, UI_FRAME_TITLE_HEIGHT) == EDIT_INK_RGB
+                and seen.text_at(4, UI_STATUS_Y, "edit [modified]", EDIT_INK_RGB, EDIT_BAR_RGB),
+            )
+            expect(
+                "the letters of the keyboard are in the file",
+                typed is not None
+                and typed.text_at(4, UI_FRAME_TITLE_HEIGHT, "hi", EDIT_INK_RGB, EDIT_PAPER_RGB),
+                "the first line of the body is not 'hi'",
+            )
+            expect(
+                "the cursor moved after the letters",
+                typed is not None and typed.pixel(20, UI_FRAME_TITLE_HEIGHT) == EDIT_INK_RGB,
+                "the cursor is not the cell after 'hi'",
+            )
+            expect(
+                "the status line says the file has changed",
+                typed is not None
+                and typed.text_at(
+                    4, UI_STATUS_Y, "edit [modified]", EDIT_INK_RGB, EDIT_BAR_RGB
+                ),
+                "the status line does not say [modified]",
+            )
+
+            machine.keys(["ret", "o", "k"])
+            second = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.text_at(
+                    4, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT, "ok", EDIT_INK_RGB, EDIT_PAPER_RGB
+                ),
+            )
+            expect(
+                "Enter starts a second line",
+                second is not None
+                and second.text_at(
+                    4, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT, "ok", EDIT_INK_RGB, EDIT_PAPER_RGB
+                ),
+                "the second line of the body is not 'ok'",
+            )
+
+            # Ctrl+S writes the file and says so.
+            machine.keys(["ctrl-s"])
+            saved = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.text_at(
+                    4, UI_STATUS_Y, "saved 5 bytes", EDIT_INK_RGB, EDIT_BAR_RGB
+                )
+                and seen.text_at(4, UI_TITLE_Y, "edit - /edit.txt", EDIT_INK_RGB, EDIT_BAR_RGB),
+            )
+            expect(
+                "Ctrl+S writes the file",
+                saved is not None,
+                "the status line never said 'saved 5 bytes'",
+            )
+            expect(
+                "a saved file has no mark of a change",
+                saved is not None
+                and saved.text_at(4, UI_TITLE_Y, "edit - /edit.txt", EDIT_INK_RGB, EDIT_BAR_RGB),
+                "the title still marks the file as modified",
+            )
+
+            # Ctrl+Q leaves, the screen is the console again.
+            machine.keys(["ctrl-q"])
+            given = machine.wait_serial("fb: the console is given back", timeout)
+            expect("Ctrl+Q gives the screen back", given,
+                   "the kernel never said that /dev/fb0 was given back (FBIO_GIVE)")
+            expect(
+                "the shell waits for the editor and returns",
+                machine.wait_serial("the program has finished", timeout),
+                "the shell did not name the end of the program",
+            )
+            expect(
+                "the prompt is back after the editor",
+                _wait_prompts(machine, count + 1, timeout),
+                "the shell did not print its prompt after the editor",
+            )
+
+            shell = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.pixel(0, 0) == BLACK,
+                seconds=6.0,
+            )
+            expect(
+                "the console is the machine again",
+                shell is not None and shell.only_colors(GREY, BLACK),
+                "the picture after Ctrl+Q is not the console of the kernel",
+            )
+        finally:
+            machine.close()
+
+        # The same disk, a second boot: the file the editor wrote is there.
+        seconds_dir = os.path.join(workdir, "second")
+        os.makedirs(seconds_dir, exist_ok=True)
+        machine = Machine(loader, kernel, seconds_dir, "std", display, disk)
+
+        try:
+            booted = machine.wait_serial(PROMPT, timeout)
+            expect("the disk of the editor boots again", booted,
+                   "the shell never printed its prompt on the second boot")
+
+            count = machine.prompts()
+            expect(
+                "cat reads the two lines of the editor",
+                machine.run_line("cat /edit.txt", timeout),
+                "the shell did not answer cat",
+            )
+            expect(
+                "the file the editor saved is on the disk",
+                "hi\r\nok" in machine.read_serial(),
+                "cat did not print 'hi' and 'ok'",
+            )
+            expect(
+                "the prompt is back after cat",
+                _wait_prompts(machine, count + 1, timeout),
+                "the shell did not print its prompt after cat",
+            )
+        finally:
+            machine.close()
+
+    return checks
+
+
+def run_fm(loader: str, kernel: str, image: str, timeout: float, verbose: bool, display: str) -> list:
+    """The file manager of ADR 0030: a directory, the arrows, a delete.
+
+    The machine boots a copy of the disk, the shell makes a file in the root
+    (`echo gone > /zzz`), and `/bin/fm /` lists it. The test reads the title,
+    the names and the selected row out of the screenshot, moves the selection
+    with the arrows and End, opens the modal window of `d` (the rectangle of
+    the dialog and the sentence that names the file), answers `n` once and
+    `y` once, and then reads the answer of the call in the status line: the
+    file is gone from the list and the line says it was deleted.
+    """
+    checks = []
+
+    def expect(name: str, condition: bool, detail: str = "") -> None:
+        checks.append((f"fm: {name}", bool(condition), detail))
+
+    def row_holding(picture, letters: str) -> int:
+        """The row of the list that spells `letters`, -1 when there is none."""
+        for row in range((UI_STATUS_Y - UI_FRAME_TITLE_HEIGHT) // CELL_HEIGHT):
+            if picture.text_at(
+                4, UI_FRAME_TITLE_HEIGHT + row * CELL_HEIGHT, letters, FM_INK_RGB, FM_PAPER_RGB
+            ):
+                return row
+        return -1
+
+    with tempfile.TemporaryDirectory(prefix="microos-x86-fm-") as workdir:
+        disk = os.path.join(workdir, "disk.img")
+        shutil.copyfile(image, disk)
+        machine = Machine(loader, kernel, workdir, "std", display, disk)
+
+        try:
+            booted = machine.wait_serial(PROMPT, timeout)
+            expect("the shell of the disk is up", booted, "the shell never printed its prompt")
+            expect(
+                "the fixture of the delete is written",
+                machine.run_line("echo gone > /zzz", timeout),
+                "the shell did not write /zzz",
+            )
+
+            count = machine.prompts()
+            machine.type_line("exec /bin/fm /")
+
+            taken = machine.wait_serial("fb: the console is taken", timeout)
+            expect(
+                "the file manager takes the screen",
+                taken,
+                "the kernel never said that /dev/fb0 was taken (FBIO_TAKE)",
+            )
+
+            picture = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.text_at(4, UI_TITLE_Y, "fm - /", FM_INK_RGB, FM_BAR_RGB)
+                and row_holding(seen, "etc/") >= 0
+                and row_holding(seen, "proc/") >= 0
+                and row_holding(seen, "zzz") >= 0,
+            )
+            expect("the window of the file manager is drawn", picture is not None,
+                   "screendump wrote no PPM")
+
+            zzz_row = -1
+
+            if picture is not None:
+                expect(
+                    "the title names the directory",
+                    picture.text_at(4, UI_TITLE_Y, "fm - /", FM_INK_RGB, FM_BAR_RGB),
+                    "the title bar does not hold 'fm - /'",
+                )
+                expect(
+                    "the list of the root holds the directories",
+                    row_holding(picture, "etc/") >= 0
+                    and row_holding(picture, "proc/") >= 0
+                    and picture.text_at(
+                        4,
+                        UI_FRAME_TITLE_HEIGHT,
+                        "bin/",
+                        FM_SELECT_INK_RGB,
+                        FM_SELECT_RGB,
+                    ),
+                    "the list does not hold 'etc/', 'proc/' and the selected 'bin/'",
+                )
+                expect(
+                    "the list holds the file of the fixture",
+                    row_holding(picture, "zzz") >= 0,
+                    "the list does not hold 'zzz'",
+                )
+                expect(
+                    "the status line names the keys",
+                    "Enter open"
+                    in picture.letters_at(4, UI_STATUS_Y, 100, FM_INK_RGB, FM_BAR_RGB)
+                    and "q quit"
+                    in picture.letters_at(4, UI_STATUS_Y, 100, FM_INK_RGB, FM_BAR_RGB),
+                    "the status line does not name the keys",
+                )
+                expect(
+                    "the first row of the list has the focus",
+                    picture.pixel(4, UI_FRAME_TITLE_HEIGHT) == FM_SELECT_RGB
+                    and picture.pixel(4, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT) == FM_PAPER_RGB,
+                    "the first row is not the grey of the focus",
+                )
+                zzz_row = row_holding(picture, "zzz")
+
+            # The arrows move the selection: the first row is the paper and
+            # the second is the grey, and no other row of the picture moved.
+            machine.keys(["down"])
+            moved = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.pixel(4, UI_FRAME_TITLE_HEIGHT) == FM_PAPER_RGB
+                and seen.pixel(4, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT) == FM_SELECT_RGB,
+            )
+            expect(
+                "the down arrow moves the selection",
+                moved is not None
+                and moved.pixel(4, UI_FRAME_TITLE_HEIGHT) == FM_PAPER_RGB
+                and moved.pixel(4, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT) == FM_SELECT_RGB,
+                "the grey of the selection did not move to the second row",
+            )
+
+            # End: the last name of the list, which is the fixture.
+            machine.keys(["end"])
+            last = settled_picture(
+                machine,
+                workdir,
+                lambda seen: zzz_row >= 0
+                and seen.pixel(4, UI_FRAME_TITLE_HEIGHT + zzz_row * CELL_HEIGHT) == FM_SELECT_RGB,
+            )
+            expect(
+                "End selects the last name of the list",
+                last is not None and zzz_row >= 0,
+                "the last row is not the grey of the focus",
+            )
+
+            # d opens the modal window: its border is the cyan of the focus
+            # over the paper of the list, and it names the file.
+            machine.keys(["d"])
+            dialog = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.pixel(FM_MODAL_X, FM_MODAL_Y) == FM_FOCUS_RGB
+                and seen.text_at(
+                    FM_MODAL_X + 3,
+                    FM_MODAL_Y + UI_FRAME_TITLE_HEIGHT,
+                    "Delete zzz?",
+                    FM_INK_RGB,
+                    FM_PAPER_RGB,
+                ),
+            )
+            expect(
+                "d opens a modal window",
+                dialog is not None,
+                "no rectangle of the dialog is on the screen",
+            )
+            expect(
+                "the dialog asks about the file",
+                dialog is not None
+                and dialog.text_at(
+                    FM_MODAL_X + 3,
+                    FM_MODAL_Y + UI_FRAME_TITLE_HEIGHT,
+                    "Delete zzz?",
+                    FM_INK_RGB,
+                    FM_PAPER_RGB,
+                ),
+                "the dialog does not ask 'Delete zzz?'",
+            )
+
+            # n closes it and the file stays.
+            machine.keys(["n"])
+            cancelled = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.pixel(FM_MODAL_X, FM_MODAL_Y) != FM_FOCUS_RGB
+                and zzz_row >= 0
+                and seen.text_at(
+                    4,
+                    UI_FRAME_TITLE_HEIGHT + zzz_row * CELL_HEIGHT,
+                    "zzz",
+                    FM_SELECT_INK_RGB,
+                    FM_SELECT_RGB,
+                ),
+            )
+            expect(
+                "n closes the dialog and keeps the file",
+                cancelled is not None
+                and cancelled.pixel(FM_MODAL_X, FM_MODAL_Y) != FM_FOCUS_RGB
+                and zzz_row >= 0
+                and cancelled.text_at(
+                    4,
+                    UI_FRAME_TITLE_HEIGHT + zzz_row * CELL_HEIGHT,
+                    "zzz",
+                    FM_SELECT_INK_RGB,
+                    FM_SELECT_RGB,
+                ),
+                "the dialog stayed or the name left the list",
+            )
+
+            # d and y: the call removes the file and the status line says so.
+            machine.keys(["d"])
+            settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.pixel(FM_MODAL_X, FM_MODAL_Y) == FM_FOCUS_RGB,
+            )
+            machine.keys(["y"])
+            deleted = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.text_at(
+                    4, UI_STATUS_Y, "deleted /zzz", FM_INK_RGB, FM_BAR_RGB
+                )
+                and row_holding(seen, "bin/") >= 0
+                and row_holding(seen, "proc/") >= 0,
+            )
+            expect(
+                "y deletes the file",
+                deleted is not None,
+                "the status line never said 'deleted /zzz'",
+            )
+            expect(
+                "the name leaves the list",
+                deleted is not None and row_holding(deleted, "zzz") < 0,
+                "the list still holds 'zzz' after the delete",
+            )
+
+            # q returns to the shell.
+            machine.keys(["q"])
+            expect(
+                "q gives the screen back",
+                machine.wait_serial("fb: the console is given back", timeout),
+                "the kernel never said that /dev/fb0 was given back (FBIO_GIVE)",
+            )
+            expect(
+                "the shell waits for the file manager and returns",
+                machine.wait_serial("the program has finished", timeout),
+                "the shell did not name the end of the program",
+            )
+            expect(
+                "the prompt is back after the file manager",
+                _wait_prompts(machine, count + 1, timeout),
+                "the shell did not print its prompt after the file manager",
+            )
+            expect(
+                "the keys of the file manager did not reach the shell",
+                "unknown command" not in machine.read_serial(),
+                "a key of the file manager became a line of the shell",
+            )
+
+            shell = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.pixel(0, 0) == BLACK,
+                seconds=6.0,
+            )
+            expect(
+                "the console is the machine again",
+                shell is not None and shell.only_colors(GREY, BLACK),
+                "the picture after q is not the console of the kernel",
+            )
         finally:
             machine.close()
 
@@ -1521,7 +2101,7 @@ def main(argv: list) -> int:
     parser.add_argument(
         "--image",
         default=os.path.join(BUILD, "programs.img"),
-        help="the disk of `make x86-disk`, which carries /bin/ui",
+        help="the disk of `make x86-disk`, which carries /bin/ui, /bin/edit and /bin/fm",
     )
     args = parser.parse_args(argv)
 
@@ -1540,6 +2120,8 @@ def main(argv: list) -> int:
     try:
         checks = run_framebuffer(loader, kernel, args.timeout, args.verbose, args.display)
         checks += run_ui(loader, kernel, args.image, args.timeout, args.verbose, args.display)
+        checks += run_editor(loader, kernel, args.image, args.timeout, args.verbose, args.display)
+        checks += run_fm(loader, kernel, args.image, args.timeout, args.verbose, args.display)
         checks += run_text(loader, kernel, args.timeout, args.verbose, args.display)
     except FileNotFoundError:
         print("qemu-system-x86_64 is not installed", file=sys.stderr)

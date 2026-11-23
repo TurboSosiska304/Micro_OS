@@ -102,6 +102,23 @@ enum k_input_key {
     K_INPUT_KEY_F10,
     K_INPUT_KEY_F11,
     K_INPUT_KEY_F12,
+    /*
+     * The keys of a moving cursor. The scancode set 1 carries them behind the
+     * E0 prefix, which the console of 1.3 dropped whole; a program that edits
+     * a text needs them as the keys they are (1.4.0). The numbers above are
+     * the frozen ones of the release that introduced them, and this block is
+     * appended to the end: a number of a key never moves.
+     */
+    K_INPUT_KEY_UP,
+    K_INPUT_KEY_DOWN,
+    K_INPUT_KEY_LEFT,
+    K_INPUT_KEY_RIGHT,
+    K_INPUT_KEY_HOME,
+    K_INPUT_KEY_END,
+    K_INPUT_KEY_PAGEUP,
+    K_INPUT_KEY_PAGEDOWN,
+    K_INPUT_KEY_INSERT,
+    K_INPUT_KEY_DELETE,
     K_INPUT_KEY_COUNT
 };
 

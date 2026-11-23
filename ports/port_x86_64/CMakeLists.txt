@@ -461,20 +461,52 @@ add_libc_program(rmdir SOURCES "${LIBC_USER_DIR}/src/unistd_ext.c"
                                "${LIBC_USER_DIR}/src/stat.c")
 add_libc_program(spawn)
 
-# --- the interface: /bin/ui (ADR 0028) --------------------------------------
+# --- the interface: /bin/ui (ADR 0028) and the programs of ADR 0030 ---------
 #
 # The first program of the skeleton: two devices of the devfs, a panel, a list
 # of windows and a window of the log. The font comes from the console of the
 # port and not from a second table, so the letters of the interface are the
 # letters of the shell and the picture of a screenshot is read with one table.
-# The program allocates nothing: its two buffers are part of the bss of the
-# image (the window of a transfer of the system and one line of pixels), and
-# the arena of the library is not linked into it.
+# The program allocates nothing: its buffers are part of the bss of the image.
+#
+# The window model and the keyboard are `components/ui`, a library of the
+# userland with a test of its own on the host: the skeleton keeps the model of
+# its two windows, and the editor and the file manager of ADR 0030 are the
+# programs that use it whole. `programs/uiprog.c` is the port's half - the
+# writes of /dev/fb0 cut into transfers - so the library stays portable.
+set(UI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui")
+set(UI_INCLUDES "${UI_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
 add_libc_program(ui
     MAIN "${PROGRAM_DIR}/ui.c"
     SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/font_spleen.c"
             "${LIBC_USER_DIR}/src/usleep.c"
-    INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/include"
+            "${UI_DIR}/src/window.c"
+    INCLUDES ${UI_INCLUDES}
+)
+
+add_libc_program(edit
+    MAIN "${PROGRAM_DIR}/edit.c"
+    SOURCES "${PROGRAM_DIR}/uiprog.c"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/font_spleen.c"
+            "${LIBC_USER_DIR}/src/usleep.c"
+            "${UI_DIR}/src/window.c"
+            "${UI_DIR}/src/draw.c"
+            "${UI_DIR}/src/keyboard.c"
+    INCLUDES ${UI_INCLUDES}
+)
+
+add_libc_program(fm
+    MAIN "${PROGRAM_DIR}/fm.c"
+    SOURCES "${PROGRAM_DIR}/uiprog.c"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/font_spleen.c"
+            "${LIBC_USER_DIR}/src/usleep.c"
+            "${LIBC_USER_DIR}/src/dirent.c"
+            "${LIBC_USER_DIR}/src/malloc.c"
+            "${UI_DIR}/src/window.c"
+            "${UI_DIR}/src/draw.c"
+            "${UI_DIR}/src/keyboard.c"
+    INCLUDES ${UI_INCLUDES}
 )
 
 # The first program of somebody else: zcat opens a .gz of the VFS through
