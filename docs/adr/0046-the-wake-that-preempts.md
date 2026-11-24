@@ -123,14 +123,34 @@ a sleep of nothing, and the first gate of the release under valgrind found
 exactly that: `session_authenticate()` delays a wrong password by twenty
 milliseconds and the case asks for sixty, and the call answered less.
 
-`k_sched_sleep_unless()` is a loop on the tick of its deadline. The task sleeps
-the ticks that are left, and only the kernel ends the sleep: the tick (the
-deadline, or a signal the task has to answer), a wake of this task (a channel
-sets READY and sends the door as well), a block or an unblock that arrived
-while it slept. The wake of a channel loses nothing of its latency, because a
-wait ends on the state of the task and not on this loop; what the loop costs is
-the continuation of a port sleep that ended early, which is a call to the port
-per nudge and not per byte.
+`k_sched_sleep_unless()` is a loop on the **clock of the port**, not on the
+tick of the scheduler. The deadline is a number of microseconds of
+`k_port_uptime_us()` taken on the way in; each round sleeps what the clock says
+is left, rounded up to the milliseconds a port takes, and only the kernel ends
+the sleep early: the record of a wait has been woken (`stop`, and with it the
+signal the wait has to answer with EINTR), a block or an unblock arrived while
+it slept.
+
+The clock and not the tick is the whole of the second half of this debt. The
+host runs its clock in a thread of its own beside the tasks, and under a slow
+runner - valgrind, a loaded machine - that thread takes many ticks in one
+millisecond: a loop that counted ticks saw its deadline pass in a tenth of the
+time and answered a sleep of a hundred and fifty milliseconds in twelve. A tick
+is the unit of the scheduler (the quantum, the charge, the deadline the port is
+woken at), and a millisecond of a caller is the unit of the port's clock; the
+two agree on a machine that is not overloaded and must not be assumed to agree
+on one that is.
+
+The state of a task is not a reason to end a sleep either. A wake of another
+object, or a tick that fired early, puts READY in the record of the sleeper,
+and the loop takes the task back to SLEEPING for the rest of its time. A plain
+sleep is not cut by a signal: 1.8 slept it to its end, and the delay of a login
+that a signal could shorten is a delay an attacker chooses.
+
+The wake of a channel loses nothing of its latency, because a wait ends on the
+record of the wait and on the door of the port, and not on this loop; what the
+loop costs is the continuation of a port sleep that ended early, which is a
+call to the port per nudge and not per byte.
 
 ### 5. The numbers
 
