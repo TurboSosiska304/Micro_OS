@@ -1,8 +1,10 @@
 # Micro OS — the checks of the cloud.
 #
 # The same list as `make ci` before a push, and the firmware on top of it:
-# the unit tests, the same tests under valgrind, the sanitizers, the smoke
-# test of the simulator and the integrity of the repository. `make ci` now
+# the unit tests, the same tests under valgrind, the sanitizers, the minimal
+# build, the smoke test of the simulator, the boots of the machine (the plain
+# one, the root of a disk, the door of USB, the programs of the SDK and the two
+# controllers of a disk) and the integrity of the repository. `make ci` now
 # runs TSan too, and boots the x86-64 port when `qemu-system-x86_64` is on
 # PATH — the cloud installs qemu below, so both halves see the same checks.
 # A fresh checkout has no dist/ (the bundle checks skip until a job builds
@@ -37,7 +39,7 @@ jobs:
   host:
     name: tests and integrity
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - name: the repository
         uses: actions/checkout@v4
@@ -60,6 +62,11 @@ jobs:
       - name: the tests of the kernel of two cores
         run: make test-smp
 
+      # The subset that a feature knob links: it was red for a release and a
+      # half because no job ran it, which is what a gate nobody runs is.
+      - name: the build of the subset
+        run: make test-minimal
+
       - name: the smoke test of the simulator
         run: make smoke
 
@@ -74,6 +81,25 @@ jobs:
 
       - name: the kernel boots on x86-64
         run: make x86-smoke
+
+      # The root of the machine out of a volume of the disk, a keyboard of the
+      # USB on a machine with no PS/2 at all, thirteen programs of somebody
+      # else that nobody rewrote, and the two controllers of a laptop's disk
+      # under the rule that a medium this system did not format is read-only.
+      - name: the root of the disk
+        run: make x86-root-smoke
+
+      - name: the door of USB
+        run: make usb-smoke
+
+      - name: the programs of the SDK, unmodified
+        run: make ports-smoke
+
+      - name: the disk of a chipset, read-only
+        run: make ahci-smoke
+
+      - name: the disk of a laptop, read-only
+        run: make nvme-smoke
 
       - name: the same image twice
         run: make reproducible
