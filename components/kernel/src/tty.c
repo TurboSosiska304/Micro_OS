@@ -35,6 +35,13 @@
 #define TTY_GONE (-2)   /* the terminal is gone: the end of the file */
 #define TTY_SIGNAL (-3) /* a signal cut the wait */
 
+/*
+ * The length of one sleep of a read that waits for the console: the serial
+ * line of x86-64 has no interrupt of its own and the byte is found by a poll,
+ * so a wait is a chunk that ends in another poll (ADR 0051 §8).
+ */
+#define K_TTY_WAIT_CHUNK_MS 10u
+
 /* What one byte did to the line. */
 #define TTY_MORE 0  /* the line goes on */
 #define TTY_READY 1 /* the line is complete */
@@ -211,6 +218,8 @@ void k_tty_make_raw(struct k_tty_termios *settings)
  */
 static int tty_wait_byte(struct k_tty *tty, k_u32_t timeout_ms)
 {
+    const bool infinite = (timeout_ms == K_WAIT_INFINITE);
+    k_u64_t deadline = infinite ? 0 : k_sched_uptime_ms() + (k_u64_t)timeout_ms;
     struct task *self = task_self();
 
     if (self != NULL && self->terminal != NULL && self->terminal->get != NULL) {
@@ -220,6 +229,7 @@ static int tty_wait_byte(struct k_tty *tty, k_u32_t timeout_ms)
     }
 
     for (;;) {
+        k_u32_t wait = K_TTY_WAIT_CHUNK_MS;
         int c;
 
         if (tty->pushback >= 0) {
@@ -240,13 +250,32 @@ static int tty_wait_byte(struct k_tty *tty, k_u32_t timeout_ms)
             return TTY_NONE;
         }
 
-        switch (k_wait_block(K_WAIT_CHANNEL_CONSOLE, NULL, timeout_ms)) {
+        if (!infinite) {
+            k_u64_t now = k_sched_uptime_ms();
+
+            if (now >= deadline) {
+                return TTY_NONE;
+            }
+            if ((k_u64_t)wait > deadline - now) {
+                wait = (k_u32_t)(deadline - now);
+            }
+        }
+
+        /*
+         * The wait is a chunk and not the whole timeout, because the serial
+         * line of this port has no interrupt of its own: a byte that arrives
+         * on COM1 is found by the poll above and by nothing else, so a task
+         * that slept for ever would sleep past its own key. The console of
+         * the board and the keyboard of x86-64 wake the task through
+         * K_WAIT_CHANNEL_CONSOLE and the chunk costs them nothing.
+         */
+        switch (k_wait_block(K_WAIT_CHANNEL_CONSOLE, NULL, wait)) {
         case K_WAIT_WOKEN:
             continue; /* look at the console again */
         case K_WAIT_SIGNAL:
             return TTY_SIGNAL;
         default:
-            return TTY_NONE;
+            continue; /* the chunk passed: poll, and sleep again if quiet */
         }
     }
 }
