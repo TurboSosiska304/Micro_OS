@@ -11,9 +11,9 @@ machine in a window can type at all.
 
 There is no display here, and none is needed: QEMU with -display none still
 has its video device, and its monitor reads the picture (screendump) and
-presses keys (sendkey). The test boots the machine five times and checks the
+presses keys (sendkey). The test boots the machine six times and checks the
 two screens of ADR 0023 and the programs of the interface (ADR 0028, ADR
-0030):
+0030, ADR 0054):
 
   1. the framebuffer (-vga std, the default): the boot says the screen is the
      framebuffer of 1280x800 by 128x57 cells, the screenshot is a PPM of
@@ -44,10 +44,20 @@ two screens of ADR 0023 and the programs of the interface (ADR 0028, ADR
   5. the file manager of ADR 0030: `/bin/fm /` on a file the shell made, its
      title, names and selected row, the arrows and End, the modal window of
      `d` answered with `n` and then `y`, and the list and the status line
-     after the delete.
+     after the delete;
+  6. the desk of a person (ADR 0054): a machine told by `/etc/session` to run
+     `/bin/wm` at the boot starts on the desktop and not at the prompt; the
+     panel shows the hour of the machine and the second of the desk is the
+     rectangle of the clock; Alt+T opens `/bin/term`, a line typed into the
+     window is a command of a child process and its answer is the text of the
+     window, the meter of the server (F12) says a key costs a row and not a
+     screen, two screenshots around a key differ only in the row of the key,
+     Ctrl+C stops the command, Ctrl+T is the second size of the font, and the
+     last window gives the prompt of the shell back. The pictures of the
+     windows are kept in the directory of `--shots`.
 
     tools/x86_vga_smoke.py [--timeout SECONDS] [--display none|gtk] [--verbose]
-                           [--image PATH]
+                           [--image PATH] [--shots DIR]
 
 The exit status is 0 when the screens held and 1 otherwise; 2 when the image
 or QEMU is missing. The test needs no X and no window, so a machine of a build
@@ -215,6 +225,7 @@ PANEL_LIGHT_RGB = palette_rgb(220, 227, 238)
 # starts at the pixel 21 of its own rectangle.
 UI_FRAME_TITLE_HEIGHT = 21
 UI_TITLE_Y = 4
+UI_FRAME_MARGIN = 4
 UI_FRAME_PAD = 6
 UI_STATUS_Y = VBE_HEIGHT - CELL_HEIGHT
 
@@ -268,8 +279,33 @@ WM_TITLE_KEEP = 64
 WM_SHADOW = 3
 WM_FOCUS_RING = 2
 
+# The terminal of 2.0 (`/bin/term`, ADR 0054): the rectangle the server gives
+# the first one (the middle of the desk, over the two windows of 1.7), the cell
+# of the small font and of the large one, and the words of its greeting.
+WM_TERM_RECT = (320, 178, 640, 420)
+WM_TERM_PAD = UI_FRAME_PAD
+TERM_CELL_LARGE = 2
+TERM_GREETING = "Micro OS terminal. Ctrl+T"
+TERM_PROMPT = "$ "
+# The message of the second size of the text: the line the window writes when
+# Ctrl+T changes the cell from 8x16 to 16x32.
+TERM_LARGE_TEXT = "term: the text is 16x32"
+
+# The clock of the panel: eight cells of the twenty-four hours, "15:04:05",
+# at the right end of the bar with the air of the panel around it (the source
+# is ports/port_x86_64/programs/wm.c and components/ui/src/clock.c).
+WM_CLOCK_CELL = CELL_WIDTH
+WM_CLOCK_PAD = 8
+WM_CLOCK_RECT = (VBE_WIDTH - WM_CLOCK_PAD - 8 * WM_CLOCK_CELL, VBE_HEIGHT - WM_PANEL_HEIGHT + 4,
+                 8 * WM_CLOCK_CELL, CELL_HEIGHT)
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, "build-x86")
+
+# The directory the screenshots of the run are kept in (`--shots`): a person
+# reads the picture of a window of the desktop without running QEMU, and the
+# report of a lane names the file it looked at.
+SHOTS_DIR = None
 
 # The file of the font the console draws with, and the size of a cell of it in
 # the picture: the 8x16 font of the PC (Spleen, ports/port_x86_64).
@@ -304,6 +340,98 @@ def load_font() -> dict:
 
 
 GLYPHS = load_font()
+
+
+def title_height(scale: int = 1) -> int:
+    """The height of the bar of a window in a font of `scale` pixels a bit.
+
+    The source is `UI_FRAME_TITLE_HEIGHT(font)` of `ui/draw.h`: four pixels of
+    air, the row of the font and a pixel of separator. The second size of the
+    text of the terminal makes the bar taller as well, so the body of the
+    window starts at the thirty-seventh pixel and not at the twenty-first.
+    """
+    return UI_FRAME_MARGIN + CELL_HEIGHT * scale + 1
+
+
+def body_y(rect: tuple, row: int, scale: int = 1) -> int:
+    """The pixel of the row `row` of the body of the window `rect`."""
+    return rect[1] + title_height(scale) + row * CELL_HEIGHT * scale
+
+
+def text_at(
+    picture,
+    rect: tuple,
+    letters: str,
+    row: int | None = None,
+    body: bool = True,
+    ink: tuple | None = None,
+    paper: tuple | None = None,
+) -> bool:
+    """A run of letters in a window of the desk: its title bar or a body row.
+
+    `row` is a row of the body and `body` false names the title bar, which is
+    the pixels of the client at the margin of its frame (docs/desktop.md). The
+    colours are the roles of the palette: the ink of the title on the bar of a
+    window, the ink of the body on the paper of a window.
+    """
+    if picture is None:
+        return False
+
+    x = rect[0] + UI_FRAME_PAD
+
+    if body and row is not None:
+        return picture.text_at(
+            x,
+            body_y(rect, row),
+            letters,
+            INK_RGB if ink is None else ink,
+            SURFACE_RGB if paper is None else paper,
+        )
+
+    return picture.text_at(
+        x,
+        rect[1] + UI_TITLE_Y,
+        letters,
+        TITLE_INK_RGB if ink is None else ink,
+        SURFACE_HIGH_RGB if paper is None else paper,
+    )
+
+
+def text_at_scaled(
+    picture,
+    rect: tuple,
+    letters: str,
+    scale: int,
+    row: int | None = None,
+    body: bool = True,
+    ink: tuple | None = None,
+    paper: tuple | None = None,
+) -> bool:
+    """A run of letters in a window whose text is the font of `scale`."""
+    if picture is None:
+        return False
+
+    x = rect[0] + UI_FRAME_PAD
+
+    if body and row is not None:
+        return picture.text_at_scaled(
+            x,
+            body_y(rect, row, scale),
+            letters,
+            INK_RGB if ink is None else ink,
+            SURFACE_RGB if paper is None else paper,
+            scale,
+        )
+
+    return picture.text_at_scaled(
+        x,
+        rect[1] + UI_FRAME_MARGIN,
+        letters,
+        TITLE_INK_RGB if ink is None else ink,
+        SURFACE_HIGH_RGB if paper is None else paper,
+        scale,
+    )
+
 
 class Picture:
     """A PPM of the screen as a grid of pixels, and the cells of the font.
@@ -377,6 +505,71 @@ class Picture:
                         return False
 
         return True
+
+    def text_at_scaled(
+        self, x: int, y: int, letters: str, ink: tuple, paper: tuple, scale: int
+    ) -> bool:
+        """A run of glyphs in a cell of `scale` pixels a bit of the font.
+
+        The second size of the text of a window (ADR 0054) is the table of the
+        console drawn as squares of two by two: the test reads it the same way
+        it reads the small one and compares the block of the cell.
+        """
+        cell_w = CELL_WIDTH * scale
+        cell_h = CELL_HEIGHT * scale
+
+        for index, letter in enumerate(letters):
+            glyph = GLYPHS[letter]
+            x0 = x + index * cell_w
+
+            if x0 < 0 or y < 0 or x0 + cell_w > self.width or y + cell_h > self.height:
+                return False
+
+            for row, bits in enumerate(glyph):
+                for column in range(CELL_WIDTH):
+                    expected = ink if bits & (0x80 >> column) else paper
+
+                    for dy in range(scale):
+                        for dx in range(scale):
+                            if self.pixel(x0 + column * scale + dx,
+                                          y + row * scale + dy) != expected:
+                                return False
+
+        return True
+
+    def letters_at_scaled(
+        self, x: int, y: int, cells: int, ink: tuple, paper: tuple, scale: int
+    ) -> str:
+        """The letters of `cells` cells of a scaled font; '?' for a foreign one."""
+        letters = []
+
+        for index in range(cells):
+            letters.append(
+                self.scaled_glyph_at(x + index * CELL_WIDTH * scale, y, ink, scale) or "?"
+            )
+
+        return "".join(letters)
+
+    def scaled_glyph_at(self, x: int, y: int, ink: tuple, scale: int) -> str | None:
+        """The letter of a cell of a scaled font, or None for a block of no glyph."""
+        table = {glyph: letter for letter, glyph in GLYPHS.items()}
+        rows = []
+
+        if x < 0 or y < 0 or x + CELL_WIDTH * scale > self.width or (
+            y + CELL_HEIGHT * scale > self.height
+        ):
+            return None
+
+        for row in range(CELL_HEIGHT):
+            value = 0
+
+            for column in range(CELL_WIDTH):
+                if self.pixel(x + column * scale, y + row * scale) == ink:
+                    value |= 0x80 >> column
+
+            rows.append(value)
+
+        return table.get(tuple(rows))
 
     def glyph_at(self, x: int, y: int, ink: tuple, paper: tuple) -> str | None:
         """The letter of the cell drawn at a pixel, or None.
@@ -3106,6 +3299,590 @@ def settled_picture(machine, directory: str, condition, seconds: float = 4.0):
     return picture
 
 
+def keep_picture(machine, directory: str, name: str):
+    """The screen of the machine into the directory of the screenshots.
+
+    `--shots` names a directory a person reads after the run: the picture of
+    the desk, of a window of a client and of the second size of the text are
+    the evidence of a lane and not a step of the test, so the test keeps them
+    and goes on when the directory cannot be written.
+    """
+    picture = machine.picture(directory)
+
+    if picture is None or SHOTS_DIR is None:
+        return picture
+
+    try:
+        os.makedirs(SHOTS_DIR, exist_ok=True)
+        shutil.copyfile(os.path.join(directory, "screen.ppm"), os.path.join(SHOTS_DIR, name))
+    except OSError as error:
+        print(f"the screenshot {name} was not kept: {error}", file=sys.stderr)
+
+    return picture
+
+
+def changed_outside(first, second, keep) -> tuple:
+    """How many pixels of two pictures differ outside the rectangles of `keep`.
+
+    A compositor that repaints a rectangle paints the pixels of that rectangle
+    and no other: a difference outside it is a fragment of the old picture - a
+    flicker - and the answer of the test is the pixel and not a rate.
+    """
+    if first is None or second is None:
+        return -1, None
+
+    count = 0
+    where = None
+    stride = first.width * 3
+
+    for y in range(first.height):
+        row_a = first.pixels[y * stride : (y + 1) * stride]
+        row_b = second.pixels[y * stride : (y + 1) * stride]
+
+        if row_a == row_b:
+            continue
+
+        for (x, top, w, h) in keep:
+            if top <= y < top + h:
+                a = bytearray(row_a)
+                b = bytearray(row_b)
+                a[x * 3 : (x + w) * 3] = b"\0" * (w * 3)
+                b[x * 3 : (x + w) * 3] = b"\0" * (w * 3)
+                row_a, row_b = bytes(a), bytes(b)
+
+        if row_a == row_b:
+            continue
+
+        for x in range(first.width):
+            at = x * 3
+            if row_a[at : at + 3] != row_b[at : at + 3]:
+                count += 1
+                if where is None:
+                    where = (x, y)
+
+    return count, where
+
+
+def changed_inside(first, second, rect) -> tuple:
+    """The pixels that differ inside `rect`, and the band of rows they are in.
+
+    The answer is `(count, x0, y0, x1, y1)`: a key of a terminal that painted
+    one row of its window has a band of one cell of the font and no other
+    pixel, which is the half of "the damage and not a frame" that the two
+    screenshots can see.
+    """
+    if first is None or second is None:
+        return -1, 0, 0, 0, 0
+
+    x, top, w, h = rect
+    count = 0
+    x0 = first.width
+    y0 = first.height
+    x1 = -1
+    y1 = -1
+
+    for y in range(top, top + h):
+        for px in range(x, x + w):
+            if first.pixel(px, y) != second.pixel(px, y):
+                count += 1
+                x0 = min(x0, px)
+                y0 = min(y0, y)
+                x1 = max(x1, px)
+                y1 = max(y1, y)
+
+    return count, x0, y0, x1, y1
+
+
+def meter_numbers(text: str, after: int = 0) -> tuple:
+    """The numbers of the last line of the meter of the frames after `after`.
+
+    The line is the one `/bin/wm` writes on F12:
+    "wm: the meter: 23 frames, 284160 px, the largest 624x64, 4 ms at the worst".
+    """
+    found = None
+
+    for match in re.finditer(
+        r"wm: the meter: (\d+) frames, (\d+) px, the largest (\d+)x(\d+), (\d+) ms",
+        text[after:],
+    ):
+        found = tuple(int(value) for value in match.groups())
+
+    return found
+
+
+def wait_count(machine, needle: str, wanted: int, timeout: float) -> bool:
+    """Wait until the transcript of the machine holds `wanted` copies of a line.
+
+    The count is of the whole run, so a caller that waits for a line the
+    machine printed before - "the desktop is closed" of a second desktop, the
+    prompt of a second session - names the number it wants and not a
+    difference taken after the fact.
+    """
+    deadline = time.monotonic() + timeout
+
+    while time.monotonic() < deadline:
+        if machine.read_serial().count(needle) >= wanted:
+            return True
+        time.sleep(0.05)
+
+    return False
+
+
+def wait_for(machine, needle: str, count: int, timeout: float) -> bool:
+    """Wait for `count` copies of a line more than the transcript has now."""
+    return wait_count(machine, needle, machine.read_serial().count(needle) + count, timeout)
+
+
+def press_until(machine, key: str, needle: str, timeout: float = 20.0, tries: int = 3) -> bool:
+    """A key pressed until its line is in the log, the way a person presses again.
+
+    The byte of a key of the PS/2 is lost on a host under load (K21 of
+    docs/debts.md), and a check of the desk that waits twenty seconds for the
+    answer of one key would fail there although the machine is right. The
+    answer is counted, so a press whose line was already in the log does not
+    count for this one.
+    """
+    for _ in range(tries):
+        # The count is taken before the press: a line that arrives while the
+        # key is still on its way is the answer of this press and not a second
+        # one to wait for.
+        wanted = machine.read_serial().count(needle) + 1
+        machine.keys([key])
+
+        # The window of one press is long: the start of a program of the desk
+        # is a `fork`, an `execve` and a frame of a client, and a second press
+        # of Alt+T while the first is starting would be a second window.
+        if wait_count(machine, needle, wanted, 10.0):
+            return True
+
+    return False
+
+
+def wait_meter(machine, start: int, timeout: float):
+    """The numbers of the next meter of the frames printed after `start`."""
+    deadline = time.monotonic() + timeout
+
+    while time.monotonic() < deadline:
+        numbers = meter_numbers(machine.read_serial(), start)
+        if numbers is not None:
+            return numbers
+        time.sleep(0.05)
+
+    return None
+
+
+def run_boot_desktop(
+    loader: str, kernel: str, image: str, timeout: float, verbose: bool, display: str
+) -> list:
+    """The desk that starts with the machine, its clock and its terminal (2.0).
+
+    The machine of this run is told to start the desktop by a file of /etc and
+    not by a command a person types: `/etc/session` is the list of commands of
+    the console session, the boot runs its `exec /bin/wm`, and the desk of 1.7
+    comes up on the picture while the shell of the machine waits for it
+    (ADR 0054). The test reads the clock of the panel, presses Alt+T for a
+    terminal window, types a line into it, reads the answer of the program out
+    of the pixels of the window, measures the frame of the compositor with the
+    meter of the server (F12), stops a command with Ctrl+C, puts the window in
+    the large font, and closes the last window, which gives the screen and the
+    prompt of the shell back.
+    """
+    checks = []
+
+    def expect(name: str, condition: bool, detail: str = "") -> None:
+        checks.append((f"boot: {name}", bool(condition), detail))
+
+    with tempfile.TemporaryDirectory(prefix="microos-x86-boot-") as workdir:
+        disk = os.path.join(workdir, "disk.img")
+        shutil.copyfile(image, disk)
+
+        # --- the machine is told where its desk is --------------------------
+        machine = Machine(loader, kernel, workdir, "std", display, disk)
+
+        try:
+            expect("the shell of the disk is up",
+                   machine.wait_serial(PROMPT, timeout),
+                   "the shell never printed its prompt")
+            expect("the session of the console is the first one",
+                   "shell ready" in machine.read_serial(),
+                   "the boot did not start a session of the console")
+            expect("a person writes the commands of the session",
+                   machine.run_line("write /etc/session exec /bin/wm", timeout),
+                   "the shell refused to write /etc/session")
+            expect("the commands of the session are the desk",
+                   machine.run_line("cat /etc/session", timeout),
+                   "cat did not read the file of the session")
+            expect("the file of the session names the server",
+                   "exec /bin/wm" in machine.read_serial(),
+                   "/etc/session does not hold the line of the server")
+        finally:
+            machine.close()
+
+        # --- the machine boots to the desktop -------------------------------
+        machine = Machine(loader, kernel, workdir, "std", display, disk)
+
+        try:
+            started = machine.wait_serial("wm: the desktop is up", timeout * 3)
+            transcript = machine.read_serial()
+
+            expect("the desk starts with the machine", started,
+                   "the session did not run /bin/wm of /etc/session")
+            expect("the session runs the commands of /etc before its prompt",
+                   "session: exec /bin/wm" in transcript,
+                   "the log of the session does not name the line it ran")
+            expect("the shell waits under the desk",
+                   PROMPT not in transcript,
+                   "the prompt of the shell came before the desktop, so a "
+                   "person would type at the shell and not at the desk")
+            expect("the screen is the picture of a program",
+                   machine.wait_serial("fb: the console is taken", timeout),
+                   "the server did not take the screen")
+            expect("the clock of the panel is the twenty-four hours of the theme",
+                   machine.wait_serial("wm: the clock is the twenty-four hours", timeout),
+                   "the server did not read the clock of /etc/console")
+            expect("the two windows of the desk are the programs of 1.7",
+                   "wm: window edit - /doc.txt" in transcript
+                   and "wm: window fm - /" in transcript,
+                   "the desk of the boot is not the desk of the server")
+
+            picture = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.pixel(4, 4) == WALL_TOP_RGB
+                and text_at(seen, WM_EDIT_RECT, "edit - /doc.txt"),
+            )
+            expect("the desk of the machine is painted", picture is not None,
+                   "screendump wrote no PPM")
+            picture = keep_picture(machine, workdir, "boot-desk.ppm")
+
+            clock = None
+            if picture is not None:
+                clock = picture.letters_at(
+                    WM_CLOCK_RECT[0], WM_CLOCK_RECT[1], 8, WM_PANEL_INK_RGB, WM_PANEL_RGB
+                )
+
+            expect("the panel shows the hour of the machine",
+                   clock is not None and re.fullmatch(r"[0-9]{2}:[0-9]{2}:[0-9]{2}", clock)
+                   is not None,
+                   f"the cells of the clock are {clock!r}")
+
+            later = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.letters_at(
+                    WM_CLOCK_RECT[0], WM_CLOCK_RECT[1], 8, WM_PANEL_INK_RGB, WM_PANEL_RGB
+                )
+                != clock,
+                4.0,
+            )
+            expect("the clock of the panel follows the second",
+                   later is not None
+                   and later.letters_at(
+                       WM_CLOCK_RECT[0], WM_CLOCK_RECT[1], 8, WM_PANEL_INK_RGB, WM_PANEL_RGB
+                   )
+                   != clock,
+                   "the hour of the panel did not change in four seconds")
+            changed, where = changed_outside(picture, later, [WM_CLOCK_RECT])
+            expect("the second of the desk is the rectangle of the clock",
+                   later is not None and changed == 0,
+                   f"{changed} pixel(s) outside the clock changed, first at {where}")
+
+            # --- Alt+T opens a terminal window ------------------------------
+            expect("Alt+T opens a terminal window",
+                   press_until(machine, "alt-t", "wm: window term", timeout),
+                   "the server did not start /bin/term")
+            expect("the program of the terminal is a window",
+                   machine.wait_serial("term: the window of the terminal is up", timeout),
+                   "the program of the terminal did not start")
+
+            picture = settled_picture(
+                machine,
+                workdir,
+                lambda seen: text_at(seen, WM_TERM_RECT, "term")
+                and text_at(seen, WM_TERM_RECT, TERM_GREETING, row=0, body=True),
+            )
+            picture = keep_picture(machine, workdir, "boot-term.ppm")
+
+            expect("the terminal is a window of the desk",
+                   picture is not None and text_at(picture, WM_TERM_RECT, "term"),
+                   "the title bar of the terminal is not 'term'")
+            expect("the terminal greets the person of the machine",
+                   picture is not None
+                   and text_at(picture, WM_TERM_RECT, TERM_GREETING, row=0, body=True),
+                   "the first row of the window is not the greeting of the terminal")
+            expect("the terminal has a prompt",
+                   picture is not None
+                   and text_at(picture, WM_TERM_RECT, TERM_PROMPT, row=2, body=True),
+                   "the prompt of the terminal is not in the window")
+
+            # --- the compositor: a frame of the desk against a key ----------
+            expect("the server has a meter of its frames",
+                   press_until(machine, "f12", "wm: the meter", timeout),
+                   "F12 did not print the meter of the compositor; the log ends with "
+                   + repr(machine.read_serial()[-300:]))
+
+            start = len(machine.read_serial())
+            machine.keys(["f12"])
+            idle = wait_meter(machine, start, timeout)
+
+            expect("a still desk paints nothing but the second of the clock",
+                   idle is not None and idle[0] <= 1
+                   and idle[1] <= WM_CLOCK_RECT[2] * WM_CLOCK_RECT[3],
+                   f"the frames of a desk with no key are {idle}, and a still desk is "
+                   f"at most the rectangle of the clock")
+
+            # --- a line typed into the window, and its answer ---------------
+            start = len(machine.read_serial())
+            for key in "cat /etc/setting":
+                machine.keys([{" ": "spc", "/": "slash"}.get(key, key)])
+            machine.keys(["ret"])
+
+            expect("the command of the window is the one that typed",
+                   machine.wait_serial("term: the command cat", timeout),
+                   "the window did not run the line of the keys")
+            expect("the program of the window is a child of the machine",
+                   machine.wait_serial("term: cat left with 0", timeout),
+                   "the command of the window did not end")
+
+            answer = settled_picture(
+                machine,
+                workdir,
+                lambda seen: text_at(seen, WM_TERM_RECT, "hostname=x86_64", row=4, body=True),
+            )
+            answer = keep_picture(machine, workdir, "boot-term-answer.ppm")
+
+            expect("the answer of the command is in the window",
+                   answer is not None
+                   and text_at(answer, WM_TERM_RECT, "hostname=x86_64", row=4, body=True)
+                   and text_at(answer, WM_TERM_RECT, "console=vga", row=5, body=True),
+                   "the window of the terminal does not hold the lines of /etc/setting")
+            expect("the prompt of the terminal comes back after the command",
+                   answer is not None
+                   and text_at(answer, WM_TERM_RECT, TERM_PROMPT, row=6, body=True),
+                   "the terminal did not return to its prompt")
+
+            machine.keys(["f12"])
+            numbers = wait_meter(machine, start, timeout)
+
+            expect("the meter counts the frames of a typed line",
+                   numbers is not None,
+                   "the F12 after the line printed no meter")
+
+            expect("the line typed in the window cost a part of the screen",
+                   numbers is not None and numbers[1] < VBE_WIDTH * VBE_HEIGHT // 2,
+                   f"the frames of the line and the answer are {numbers}, not a part of "
+                   f"the {VBE_WIDTH * VBE_HEIGHT} pixels of the picture")
+            expect("a frame of the desk after the first is a rectangle of a window",
+                   numbers is not None and numbers[2] * numbers[3] < VBE_WIDTH * VBE_HEIGHT // 4,
+                   f"the largest rectangle of the run is {numbers[2:4] if numbers else None}, "
+                   f"not a part of the picture")
+
+            # --- a key of the window costs a row of the window --------------
+            #
+            # The meter of the server is reset by F12, so the three keys
+            # between two presses are the whole measurement: the compositor
+            # paints the row of the line and, at most, the rectangle of the
+            # clock, and neither is a screen.
+            start = len(machine.read_serial())
+            machine.keys(["f12"])
+            wait_meter(machine, start, timeout)
+            start = len(machine.read_serial())
+            for key in "abc":
+                machine.keys([key])
+            time.sleep(0.4)
+            machine.keys(["f12"])
+            keys = wait_meter(machine, start, timeout)
+
+            expect("the meter counts the frames of three keys",
+                   keys is not None,
+                   "the F12 after the keys printed no meter")
+
+            expect("a key of the window costs its row and not a screen",
+                   keys is not None and keys[0] >= 1 and keys[1] > 0
+                   and keys[1] < 8 * WM_TERM_RECT[2] * CELL_HEIGHT
+                   and keys[3] <= CELL_HEIGHT and keys[2] <= WM_TERM_RECT[2],
+                   f"the frames of three keys are {keys}: a screen is "
+                   f"{VBE_WIDTH * VBE_HEIGHT} pixels and a row of the window "
+                   f"{WM_TERM_RECT[2] * CELL_HEIGHT}")
+
+            # The line of the three keys is erased, so the command of the next
+            # check is the one the keys type.
+            machine.keys(["ctrl-u"])
+            time.sleep(0.2)
+
+            # --- a key paints a row and nothing else ------------------------
+            before = keep_picture(machine, workdir, "boot-before-key.ppm")
+            machine.keys(["x", "y"])
+            time.sleep(0.4)
+            after = machine.picture(workdir)
+
+            changed, where = changed_outside(before, after, [WM_TERM_RECT, WM_CLOCK_RECT])
+            expect("a key of the window does not paint the desk",
+                   before is not None and after is not None and changed == 0,
+                   f"{changed} pixel(s) of the desk outside the window changed, first at {where}")
+
+            inside, _, y0, _, y1 = changed_inside(before, after, WM_TERM_RECT)
+            expect("a key paints one row of the window",
+                   inside > 0 and (y1 - y0) < CELL_HEIGHT,
+                   f"{inside} pixel(s) of the window changed in the rows {y0}..{y1}, and a "
+                   f"key of a row changes one cell of the font")
+
+            # The line of the two keys is erased whole, so the command of the
+            # next check is the one its keys type and not "xycat".
+            machine.keys(["ctrl-u"])
+            time.sleep(0.2)
+
+            # --- Ctrl+C stops the command of the window --------------------
+            commands = machine.read_serial().count("term: the command cat")
+            for key in "cat":
+                machine.keys([key])
+            machine.keys(["ret"])
+            expect("the window runs a program that reads its input",
+                   wait_count(machine, "term: the command cat", commands + 1, timeout),
+                   "the window did not run the second command; the log ends with "
+                   + repr(machine.read_serial()[-200:]))
+            for key in "hello":
+                machine.keys([key])
+            machine.keys(["ret"])
+            time.sleep(0.6)
+
+            typed = machine.picture(workdir)
+            expect("the keys of a running program are its input",
+                   typed is not None
+                   and text_at(typed, WM_TERM_RECT, "hello", row=7, body=True),
+                   "the program of the window did not echo the line of the keys")
+
+            expect("Ctrl+C tells the command to stop",
+                   press_until(machine, "ctrl-c", "term: Ctrl+C", timeout),
+                   "the window did not interrupt the command")
+            expect("the command of the window is gone",
+                   machine.wait_serial("term: cat left with 130", timeout),
+                   "the interrupted command did not end")
+            interrupted = settled_picture(
+                machine,
+                workdir,
+                lambda seen: text_at(seen, WM_TERM_RECT, TERM_PROMPT, row=9, body=True),
+            )
+            expect("the window comes back to its prompt after Ctrl+C",
+                   interrupted is not None
+                   and text_at(interrupted, WM_TERM_RECT, TERM_PROMPT, row=9, body=True),
+                   "the terminal did not print its prompt after the interrupt")
+
+            # --- the second size of the font --------------------------------
+            expect("Ctrl+T is the second size of the text",
+                   press_until(machine, "ctrl-t", "term: the text is 16x32", timeout),
+                   "the window did not change its font")
+            large = settled_picture(
+                machine,
+                workdir,
+                lambda seen: text_at_scaled(seen, WM_TERM_RECT, TERM_LARGE_TEXT, scale=2,
+                                            row=0, body=True),
+            )
+            large = keep_picture(machine, workdir, "boot-term-large.ppm")
+
+            expect("the large text of the terminal is the same glyphs at twice the cell",
+                   large is not None
+                   and text_at_scaled(large, WM_TERM_RECT, TERM_LARGE_TEXT, scale=2, row=0,
+                                      body=True),
+                   "the row of the large text is not the font of the desk drawn twice")
+            expect("the window of the large text holds the prompt of its grid",
+                   large is not None
+                   and text_at_scaled(large, WM_TERM_RECT, TERM_PROMPT, scale=2, row=1,
+                                      body=True),
+                   "the prompt of the large text is not in the window")
+
+            expect("Ctrl+T comes back to the small text",
+                   press_until(machine, "ctrl-t", "term: the text is 8x16", timeout),
+                   "the window did not come back to the small font")
+
+            # --- the desk ends with its last window -------------------------
+            expect("Ctrl+Q leaves the terminal",
+                   press_until(machine, "ctrl-q", "wm: close term", timeout),
+                   "the window of the terminal did not close")
+
+            # The windows of the default desk leave one at a time: the focus
+            # goes to the window under the one that closed, and the Alt+F4 of
+            # the next turn is the close of that one.
+            expect("Alt+F4 closes the file manager of the desk",
+                   press_until(machine, "alt-f4", "wm: close fm - /", timeout),
+                   "the file manager of the boot did not close")
+            expect("Alt+F4 closes the editor of the desk",
+                   press_until(machine, "alt-f4", "wm: close edit - /doc.txt", timeout),
+                   "the editor of the boot did not close")
+
+            expect("the last window ends the desk of the boot",
+                   machine.wait_serial("wm: the desktop is closed", timeout),
+                   "the desk did not close with its last window")
+            expect("the shell of the session has its screen back",
+                   machine.wait_serial(PROMPT, timeout),
+                   "the session did not come back to its prompt")
+            expect("the shell of the machine works after the desk",
+                   machine.run_line("cat /etc/session", timeout),
+                   "the shell did not run a command after the desktop")
+
+            frames = None
+            for match in re.finditer(
+                r"wm: (\d+) frames, the first (\d+) px of (\d+) in (\d+) ms", machine.read_serial()
+            ):
+                frames = tuple(int(value) for value in match.groups())
+
+            expect("the report of the compositor compares a frame with a screen",
+                   frames is not None and frames[1] == frames[2] == VBE_WIDTH * VBE_HEIGHT,
+                   f"the first frame of the report is {frames}")
+
+            # --- the clock of another format of the theme -------------------
+            expect("the theme names the twelve hours",
+                   machine.run_line("config set console.clock 12h", timeout),
+                   "config refused the clock of the theme")
+
+            machine.type_line("exec /bin/wm")
+            expect("the desk of the theme starts",
+                   machine.wait_serial("wm: the clock is the twelve hours", timeout),
+                   "the server did not read the new format of /etc/console")
+
+            twelve_x = WM_CLOCK_RECT[0] - 3 * CELL_WIDTH
+
+            def twelve_hour(seen) -> str:
+                return seen.letters_at(twelve_x, WM_CLOCK_RECT[1], 11, WM_PANEL_INK_RGB,
+                                       WM_PANEL_RGB).strip()
+
+            clock = settled_picture(
+                machine,
+                workdir,
+                lambda seen: re.fullmatch(r"\d{1,2}:\d{2}:\d{2} (AM|PM)", twelve_hour(seen))
+                is not None,
+                6.0,
+            )
+            letters = twelve_hour(clock) if clock is not None else None
+            expect("the panel of the twelve hours writes the hour of the theme",
+                   letters is not None
+                   and re.fullmatch(r"\d{1,2}:\d{2}:\d{2} (AM|PM)", letters) is not None,
+                   f"the cells of the twelve-hour clock are {letters!r}")
+            keep_picture(machine, workdir, "boot-clock-12h.ppm")
+
+            desktops = machine.read_serial().count("wm: the desktop is closed")
+            prompts = machine.read_serial().count(PROMPT)
+
+            expect("Alt+F4 closes the file manager of the theme",
+                   press_until(machine, "alt-f4", "wm: close fm - /", timeout),
+                   "the file manager of the theme did not close")
+            expect("Alt+F4 closes the editor of the theme",
+                   press_until(machine, "alt-f4", "wm: close edit - /doc.txt", timeout),
+                   "the editor of the theme did not close")
+            expect("the desk of the theme ends",
+                   wait_count(machine, "wm: the desktop is closed", desktops + 1, timeout),
+                   "the second desktop did not close; the log ends with "
+                   + repr(machine.read_serial()[-300:]))
+            expect("the session of the console is a fresh one",
+                   wait_count(machine, PROMPT, prompts + 1, timeout),
+                   "the prompt of the shell did not come back; the log ends with "
+                   + repr(machine.read_serial()[-300:]))
+        finally:
+            machine.close()
+
+    return checks
+
+
 def main(argv: list) -> int:
     parser = argparse.ArgumentParser(description="the screen and keyboard test of the x86-64 port")
     parser.add_argument("--timeout", type=float, default=20.0, help="the seconds each boot gets")
@@ -3120,7 +3897,15 @@ def main(argv: list) -> int:
         default=os.path.join(BUILD, "programs.img"),
         help="the disk of `make x86-disk`, which carries /bin/ui, /bin/edit and /bin/fm",
     )
+    parser.add_argument(
+        "--shots",
+        default=os.path.join(BUILD, "screens"),
+        help="the directory of the screenshots of the run (default: build-x86/screens)",
+    )
     args = parser.parse_args(argv)
+
+    global SHOTS_DIR
+    SHOTS_DIR = args.shots if args.shots else None
 
     loader = os.path.join(BUILD, "loader32.elf")
     kernel = os.path.join(BUILD, "microos64.bin")
@@ -3140,6 +3925,9 @@ def main(argv: list) -> int:
         checks += run_editor(loader, kernel, args.image, args.timeout, args.verbose, args.display)
         checks += run_fm(loader, kernel, args.image, args.timeout, args.verbose, args.display)
         checks += run_desktop(loader, kernel, args.image, args.timeout, args.verbose, args.display)
+        checks += run_boot_desktop(
+            loader, kernel, args.image, args.timeout, args.verbose, args.display
+        )
         checks += run_text(loader, kernel, args.timeout, args.verbose, args.display)
     except FileNotFoundError:
         print("qemu-system-x86_64 is not installed", file=sys.stderr)
@@ -3163,6 +3951,10 @@ def main(argv: list) -> int:
         return 1
 
     print(f"OK: {len(checks)} check(s) passed")
+
+    if SHOTS_DIR is not None:
+        print(f"the screenshots of the run are in {SHOTS_DIR}")
+
     print("RESULT: PASS")
     return 0
 
