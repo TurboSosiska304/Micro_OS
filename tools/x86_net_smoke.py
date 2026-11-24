@@ -2014,6 +2014,18 @@ def main(argv: list) -> int:
 
     checks += check_wire(wire_output, wire_answers, BODY)
     checks += check_fallback(fallback_output, fallback_answers)
+
+    # The address of the commands of the run and the address of the lease are
+    # the same network: the server of QEMU user-net is the host of the files,
+    # so a `wget` of the run reached the gateway the client of DHCP was given.
+    lease_line = re.search(r"dhcp: leased (\d+\.\d+\.\d+\.\d+) for \d+ s from "
+                           r"(\d+\.\d+\.\d+\.\d+)", output)
+    checks.append((
+        "dhcp: the host of the run is the server of the lease",
+        lease_line is not None and lease_line.group(2) == "10.0.2.2"
+        and f"http://10.0.2.2:{http.port}/" in output,
+        lease_line.group(0) if lease_line is not None else "no lease line",
+    ))
     failed = [item for item in checks if not item[1]]
 
     print("Micro OS — the network smoke test of the x86-64 port")
