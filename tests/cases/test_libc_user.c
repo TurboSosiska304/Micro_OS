@@ -41,7 +41,12 @@ static void test_environment(void)
 {
     char *words[] = {"HOME=/root", "PATH=/bin", "EMPTY=", NULL};
     char own[] = "OWN=one";
+#ifndef MICROOS_TSAN
+    /* The case of the child is left out of the race detector (the fork copies
+     * the threads of the runtime into the child), and the status of the wait
+     * is used only there. */
     int status = -1;
+#endif
 
     environ = words;
     KT_CHECK_STR_EQ(getenv("HOME"), "/root");
