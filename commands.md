@@ -64,6 +64,7 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make x86-vga-smoke` | check the framebuffer and the text mode with a screenshot, and the keyboard |
 | `make x86-disk-smoke` | two boots on one disk image: a file survives both (57 checks) |
 | `make ahci-smoke` | the image on the SATA controller of a chipset (q35): the volume of `ahci0p1` is mounted read-only, a write is refused by the rule of ADR 0041, a volume of btrfs is refused at the mount, and the SHA-256 of each image is the same before and after its boot (21 checks) |
+| `make nvme-smoke` | the image on the NVMe controller of a modern laptop: the admin queue and one I/O pair, the volume of `nvme0p1` read-only, a write refused by the rule of ADR 0041, a volume of btrfs refused at the mount, and the SHA-256 of each image the same before and after its boot (23 checks) |
 | `make ... X86_DISK_BUS=virtio` | the disk of any target above on the virtio-blk device of ADR 0037 instead of the primary IDE channel: the same image, the other device (`X86_DISK_BUS=virtio make x86-smoke`, `x86-disk-smoke`, `x86-root-smoke`, `x86-volume-smoke`, `x86-run`, `x86-run-disk`, `x86-run-serial`) |
 | `make x86-root-smoke` | two roots of one machine: the MicroFS and the ext2 image answer the same commands, and FAT32 mounts at `/data` (47 checks) |
 | `make x86-volume-smoke` | a volume of 5 GiB of ext2 and of MicroFS: written, read back, `e2fsck -fn` and `debugfs` of the host and the `fsck` of the machine (about four minutes, not a part of `make ci`) |
