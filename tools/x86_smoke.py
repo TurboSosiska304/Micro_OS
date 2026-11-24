@@ -3173,10 +3173,12 @@ def check(output: str) -> list:
     # executable is zero for a map of this port. The line is short because it
     # is written before the entry of a program of the desktop, and the UART
     # of the machine holds the entry for the length of a line.
+    audited = output.count("x86-64: the map of a program is W^X")
+    finished = output.count("the program has finished")
     expect(
         "every program is reported W^X before it runs",
-        output.count("x86-64: the map of a program is W^X") >= 10,
-        f"{output.count('x86-64: the map of a program is W^X')} report(s) in the run",
+        audited >= 10 and audited >= finished + 1,
+        f"{audited} audit(s) for {finished} line(s) of a program that finished",
     )
     # The audit is a refusal and not a remark (ADR 0052): a space with a page
     # that is writable and executable at once is not entered, and the line of
