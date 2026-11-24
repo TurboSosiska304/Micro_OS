@@ -595,7 +595,9 @@ static int net_dhcp_receive(void *context, void *datagram, k_size_t size, k_u32_
 
     K_UNUSED(context);
 
-    g_dhcp_rx_length = 0u;
+    /* The buffer is not cleared here: an answer that another task of the
+     * machine took between the send and this call is still in it. The send
+     * cleared it, and the exchange reads one datagram at a time. */
     g_dhcp_rx_armed = true;
 
     for (;;) {
