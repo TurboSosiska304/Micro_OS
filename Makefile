@@ -32,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: ahci-smoke all bench board-soak build bundle bundle-board bundle-x86 ci clean coverage cut-smoke disk-stress format fuzz-long help idf-build idf-check idf-flash idf-monitor idf-size integrity nvme-smoke ports-smoke reproducible sdk sim smoke soak soak-host soak-image soak-smp test test-asan test-minimal test-smp test-tsan uefi uefi-run uefi-smoke uefi-stick usb-smoke usb-stick-smoke wiki-check x86-build x86-disk x86-disk-smoke x86-fat-build x86-fs-smoke x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke x86-net-build x86-net-run x86-net-smoke x86-open-build x86-root-smoke x86-run x86-run-disk x86-run-disk-serial x86-run-serial x86-cut-smoke x86-smoke x86-smp-build x86-smp-run x86-smp-smoke x86-usb-smoke x86-vga-smoke x86-volume-smoke
+.PHONY: ahci-smoke all bench board-soak build bundle bundle-board bundle-x86 ci clean coverage cut-smoke disk-stress format fuzz-long help idf-build idf-check idf-flash idf-monitor idf-size integrity nvme-smoke ports-smoke power-smoke reproducible sdk sim smoke soak soak-host soak-image soak-smp test test-asan test-minimal test-smp test-tsan uefi uefi-run uefi-smoke uefi-stick usb-smoke usb-stick-smoke wiki-check x86-build x86-cut-smoke x86-disk x86-disk-smoke x86-fat-build x86-fs-smoke x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke x86-net-build x86-net-run x86-net-smoke x86-open-build x86-root-smoke x86-run x86-run-disk x86-run-disk-serial x86-run-serial x86-smoke x86-smp-build x86-smp-run x86-smp-smoke x86-usb-smoke x86-vga-smoke x86-volume-smoke
 
 help:
 	@echo "Micro OS — available targets:"
@@ -82,6 +82,8 @@ help:
 	@echo "  make x86-disk-smoke two boots on one disk image, a file survives both:"
 	@echo "                  the IDE channel, the SATA controller and NVMe"
 	@echo "                  (X86_DISK_BUS=virtio for the virtio device)"
+	@echo "  make power-smoke  shutdown goes off with ACPI S5, the volume stays clean,"
+	@echo "                  reboot resets the same QEMU process (ADR 0050)"
 	@echo "  make ahci-smoke  the same image on the SATA controller of a chipset: a"
 	@echo "                  named volume is written and survives a reset, an unnamed"
 	@echo "                  one is read-only with the SHA-256 unchanged (ADR 0041)"
@@ -638,6 +640,15 @@ x86-disk-smoke: x86-disk
 	python3 tools/x86_disk_smoke.py --image $(X86_BUILD)/disk-smoke.img --disk $(X86_DISK_BUS)
 	python3 tools/x86_disk_smoke.py --image $(X86_BUILD)/disk-smoke-ahci.img --disk ahci
 	python3 tools/x86_disk_smoke.py --image $(X86_BUILD)/disk-smoke-nvme.img --disk nvme
+
+# The machine that goes off (ADR 0050): a boot writes a file and says
+# `shutdown`, the S5 of ACPI ends the QEMU process, the same image starts
+# again on a clean volume with the file still there, `reboot` resets the
+# guest in the same process (so this one does not pass -no-reboot) and the
+# file survives the reset. The negative - a disk that does not answer the
+# flush keeps the machine alive - is `test_power.c` of the host tests.
+power-smoke: x86-disk
+	python3 tools/x86_power_smoke.py --image $(X86_BUILD)/power-smoke.img --disk $(X86_DISK_BUS)
 
 # The disk of a laptop (ADR 0041): the same image of `make x86-disk` on the
 # SATA controller of a chipset, in a machine of the q35 family that has no IDE

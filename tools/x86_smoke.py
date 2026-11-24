@@ -527,7 +527,7 @@ EXPECTED = [
     # it (ADR 0020); the line is the proof that the check ran and passed.
     "Micro OS: image signature ok (sha-256, ed25519)",
     "board: qemu_x86_64",
-    "port: x86_64, contract 1.12",
+    "port: x86_64, contract 1.13",
     "[ ok ] sched",
     "subsystem(s) ready",
     "the kernel is up",
@@ -1390,6 +1390,26 @@ def check(output: str) -> list:
         "help names a program of the disk",
         "hello is a program at /bin/hello (type hello --help)" in answer("help hello"),
         repr(answer("help hello")),
+    )
+    # The list of the programs is the machine and not a table of the shell, so
+    # the list and the directory have to agree: the check reads `/bin` with the
+    # shell and asks `help` for every name of it. A program that the image
+    # gained and `help` does not name is a machine with a secret, which is what
+    # the list of twenty-four names and a `...` was (`docs/debts.md`, K19).
+    # The names of the listing are the lines without a space and without a
+    # colon: the echo of the line and the lines of the log of the kernel are
+    # not names of a program.
+    programs = [
+        line.strip()
+        for line in answer("ls /bin").splitlines()
+        if line.strip() and " " not in line.strip() and ":" not in line
+    ]
+    listing = answer("help")
+    absent = [name for name in programs if name not in listing]
+    expect(
+        "help names every program of /bin",
+        bool(programs) and not absent,
+        f"{len(programs)} program(s), not in help: {absent[:6]}",
     )
     help_ls = answer("help ls")
     expect(
