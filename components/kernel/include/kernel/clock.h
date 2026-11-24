@@ -33,12 +33,28 @@ void k_clock_register(k_clock_set_fn set);
 int k_clock_set_unix(k_u64_t unix_seconds);
 
 /*
+ * One moment of the wall clock: the seconds of Unix and the fraction of the
+ * second after them. A clock that was set from a chip or from the network has
+ * a whole second in it, so the fraction is the time that passed since that
+ * moment and not the fraction the chip could not hold.
+ */
+struct k_clock_moment {
+    k_u64_t sec;
+    k_u32_t nsec;
+};
+
+/* The moment of the wall clock with its fraction of a second. */
+void k_clock_now(struct k_clock_moment *out);
+
+/*
  * The moment of the wall clock, in the seconds of Unix (UTC), for the
  * filesystem and for anybody who needs a stamp.
  *
- * A clock that was never set - a host build with no RTC, an x86-64 machine
- * with no battery - still gives a number: the seconds since the boot. It is
- * not a date, but it orders the changes of two records, and zero is kept
+ * The port and the drivers seed the clock when they come up: the host process
+ * with the clock of the machine it runs on, the board with the BM8563 and the
+ * x86-64 machine with the CMOS chip of the firmware. A machine whose chip has
+ * no battery and no network still gives a number: the seconds since the boot.
+ * It is not a date, but it orders the changes of two records, and zero is kept
  * for "this filesystem knows no time" rather than for a machine without an
  * RTC. A caller that prints the number as a date should ask
  * k_clock_present() first.

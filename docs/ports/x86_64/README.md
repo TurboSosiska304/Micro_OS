@@ -8,9 +8,9 @@ the machine where a program can really be loaded and run (the window of
 | | |
 |---|---|
 | port | `ports/port_x86_64` |
-| loader | `loader32.S`: a multiboot image that QEMU loads with `-kernel`; it copies the kernel to 16 MiB, maps the same bytes at `0xFFFFFFFF80000000` (the top 2 GiB, where the image is linked), builds the identity map of the first gigabyte and turns the long mode on |
+| loader | `loader32.S`: a multiboot image that QEMU loads with `-kernel`; it copies the kernel to 16 MiB - or to the first free 2 MiB block above it when a module of the medium is in the way, the address it hands the kernel in a register - maps the same bytes at `0xFFFFFFFF80000000` (the top 2 GiB, where the image is linked), builds the identity map of the first gigabyte and turns the long mode on |
 | console | the framebuffer of the VGA of QEMU, 1280x800 at 16 bits per pixel in RGB565 (Bochs VBE, ADR 0023): a grid of 160x50 cells of the 8x16 font of the PC (Spleen, `line_gap` 0/2/4 px of `/etc/font`), the colours of `/etc/console`; the text mode of 80x25 at `0xB8000` when the machine has no Bochs VBE interface; COM1, 115200, `\r\n`, out of one `k_port_write()` |
-| input | the PS/2 keyboard on IRQ1 (scancode set 1, Shift, Ctrl and Caps Lock, and the E0 keys - the arrows, Home, End, PageUp, PageDown, Insert and Delete - as events of `/dev/input0`) or COM1 |
+| input | the PS/2 keyboard on IRQ1 with the scancode set **asked at the boot** (`0xF0 0x00`, and bit 6 of the 8042 for the translation): the set 1 of the XT, the set 2 of a laptop whose firmware does not translate it, and the set 3 are one table of the kernel (`kernel/input_scancode.c`, `make test`), with Shift, Ctrl, Caps Lock and the E0/E1 keys - the arrows, Home, End, PageUp, PageDown, Insert and Delete - as events of `/dev/input0`; or COM1 |
 | clock | the PIT at 1 kHz on the core 0; the local APIC timer at 1 kHz on every application processor, calibrated against the TSC |
 | tasks | `switch.S` (callee-saved registers and the stack), one run queue per core under `KERNEL_SMP`, and a round robin over it |
 | processors | the MADT of ACPI, the trampoline at `0x7000`, INIT and the start-up IPI through the local APIC, one GDT/TSS/IST and one 64 KiB stack per core (ADR 0012) |
@@ -19,11 +19,12 @@ the machine where a program can really be loaded and run (the window of
 | programs | `k_port_exec_supported()` is true; the window is 16 MiB at 32 MiB (`0x02000000`-`0x03000000`) over a physical arena at 64 MiB; a program is a file in `/bin` (the MOX1 format of `kernel/exec.h`), runs in ring 3 with page tables of its own and calls the kernel with `syscall` (the vector 0x80 is the second door, ADR 0007, ADR 0035) |
 | protection | NX and W^X: `EFER.NXE` from the loader, the text read-only and executable, every data page - rodata, data, bss, stacks, heap, arena, screen - writable and NX; no page is both (ADR 0007, sections 9 and 10). The kernel is in the higher half: the image is linked at `0xFFFFFFFF80000000` and mapped there beside the low identity map |
 | signature | the kernel carries a 120-byte trailer (magic, size, SHA-256 and Ed25519) and the loader verifies it before it copies a byte (ADR 0020); the public key is compiled into `loader32.elf`, the private key is outside the tree (`MICROOS_SIGN_KEY`), and `tools/microos_sign` signs and verifies |
-| build | `make x86-build` (needs `cmake`, `ninja`, `xorriso` is not needed) and `make x86-disk` for the volume with `/bin` |
+| firmware | `loader/uefi`: a PE/COFF application that the firmware of a machine starts from a FAT volume, with the picture of GOP (a shadow in RGB565 and a conversion, `src/gop.c`), the ACPI tables of the configuration table, the memory map and `ExitBootServices`; the disk is `disk.img` of the same volume, read by the loader and mounted from the memory as `boot0p1` (ADR 0037, [uefi.md](uefi.md)) |
+| build | `make x86-build` (needs `cmake`, `ninja`, `xorriso` is not needed), `make x86-disk` for the volume with `/bin`, and `make uefi` for the volume a firmware boots (needs `clang` and `lld-link`) |
 | check | `make x86-smoke` (serial), `make x86-vga-smoke` (the framebuffer, the text mode and the keyboard), `make x86-disk-smoke` (two boots on a disk), `make x86-net-smoke` (the network) - all need `qemu-system-x86` |
 | build | `make x86-build` (needs `cmake`, `ninja`); `make x86-iso` needs `xorriso` and `grub-mkrescue` or limine, because it asks a boot loader to write the El Torito record ([iso.md](iso.md)) |
-| check | `make x86-smoke` (serial), `make x86-vga-smoke` (screen and keyboard), `make x86-disk-smoke` (two boots on a disk), `make x86-net-smoke` (the network), `make x86-iso-smoke` (the CD) - all need `qemu-system-x86` |
-| medium | `make x86-iso`: a BIOS ISO with the loader, the kernel and the root image, and a shell and `/bin` out of it ([iso.md](iso.md), ADR 0026) |
+| check | `make x86-smoke` (serial), `make x86-vga-smoke` (screen and keyboard), `make x86-disk-smoke` (two boots on a disk), `make x86-net-smoke` (the network), `make x86-iso-smoke` (a BIOS and a CD), `make x86-iso-usb-smoke` and `make x86-iso-uefi-smoke` (a stick, a BIOS and a firmware), `make uefi-smoke` (the loader of a firmware, the picture of GOP and the shell) - all need `qemu-system-x86`, the last four OVMF |
+| medium | `make x86-iso`: one image with the loader, the kernel and the root image, which boots in a BIOS and in a firmware of UEFI, from a CD and from a USB stick written with `dd`; `make uefi`: the same machine as a FAT volume a firmware starts itself ([iso.md](iso.md), [boot.md](boot.md), [uefi.md](uefi.md), ADR 0026, ADR 0037) |
 
 ## Run it
 
@@ -36,11 +37,16 @@ make x86-run-disk     # the window with a disk of its own, kept between runs
 make x86-run-disk-serial  # the same disk in a terminal
 make x86-net-run      # the same machine with a virtio-net card, in a terminal
 make x86-smoke        # boot and check the lines of the banner and the shell
+make uefi             # the ESP of a firmware machine: BOOTX64.EFI, the kernel, disk.img
+make uefi-run         # that volume in QEMU under OVMF (a window)
+make uefi-smoke       # boot it without a window and check the machine and the picture
 make x86-vga-smoke    # check the picture of both screens and the keyboard, without a display
 make x86-disk-smoke   # two boots on one image: a file written in the first is read in the second
 make x86-net-smoke    # boot with QEMU user-net and check ping, UDP, HTTP, the page of the state and DNS
-make x86-iso          # the BIOS ISO: loader, kernel and root image (needs xorriso and a boot loader)
-make x86-iso-smoke    # boot the ISO with -cdrom and check the shell and /bin
+make x86-iso          # one image, four boots: loader, kernel and root image (xorriso + a boot loader)
+make x86-iso-smoke    # boot the image from a CD on a BIOS and check the shell
+make x86-iso-uefi-smoke  # the same image on OVMF, from a CD and a USB stick
+make x86-iso-usb-smoke   # the same image from a USB stick on a BIOS
 ```
 
 `make x86-run` opens the window of QEMU with `-display gtk`. The display
@@ -97,8 +103,9 @@ checks against the real window instead of its memory.
 The machine boots from three files: `build-x86/loader32.elf` (the loader),
 `build-x86/microos64.bin` (the kernel, a flat image) and
 `build-x86/programs.img` (the disk). The kernel is linked in the higher half
-at `0xFFFFFFFF80000000`, the loader copies the bytes to 16 MiB and maps them
-there, and the C of the kernel is built with `-mcmodel=kernel` (ADR 0007).
+at `0xFFFFFFFF80000000`, the loader copies the bytes to 16 MiB (or above the
+modules of the medium, when one of them is there) and maps them there, and the
+C of the kernel is built with `-mcmodel=kernel` (ADR 0007).
 
 ## The signature of the kernel
 
@@ -428,16 +435,18 @@ kernel, `x86-all.img` (the disk of MicroFS with `/bin` and `/etc`), the
 licenses and a `run.sh` with the disk and the virtio-net card. The tar is
 the artifact of a release, not a build directory: what the target starts is
 what a person downloads. `make x86-user-serial` is the same with `-nographic`.
-## The CD
+## The medium
 
 `make x86-iso` writes `build-x86-iso/microos.iso`: the loader, the signed
-kernel and the root image in one BIOS ISO, which a machine without `-kernel`
-boots from its CD drive. The root image is the second module of the boot and
-the port mounts its first partition at `/` (`boot0p1`, read-only); the shell,
-`/bin` and the programs come from the CD. `make x86-iso-smoke` boots the ISO
-with `-cdrom` and checks the transcript. The page of the medium, with the
-build steps, the requirements and the gaps (UEFI, a hybrid USB image, a
-writable root, a reproducible ISO), is [iso.md](iso.md); the decision is
+kernel and the root image in one image, which a machine without `-kernel`
+boots from a CD drive or from a USB stick written with `dd`, in a BIOS and in
+a firmware of UEFI. The root image is the second module of the boot and the
+port mounts its first partition at `/` (`boot0p1`, read-only); the shell,
+`/bin` and the programs come from the medium. `make x86-iso-smoke` boots the
+image from a CD on a BIOS and checks the transcript; `make x86-iso-uefi-smoke`
+does the same with OVMF, from a CD and from a stick, and `make x86-iso-usb-smoke`
+from a stick on a BIOS. The page of the medium is [iso.md](iso.md), the one of
+the person who carries the stick [boot.md](boot.md), and the decision
 ADR 0026.
 
 ## The network
@@ -763,11 +772,12 @@ in [debts.md](../../debts.md).
   MBR read by the portable parser, MicroFS on the first partition (`ata0p1`)
   and the volume formatted at the first boot; what is written to it survives
   a reset, which `make x86-disk-smoke` checks (ADR 0008);
-* a medium: `make x86-iso` writes a BIOS ISO with the loader, the kernel and
-  an 8 MB root image as the second module; the machine boots it with
-  `-cdrom` and no other flag, mounts the image's first partition at `/`
-  (`boot0p1`, read-only) and runs `/bin` from it, which `make x86-iso-smoke`
-  checks (ADR 0026, [iso.md](iso.md));
+* a medium: `make x86-iso` writes one image with the loader, the kernel and a
+  12 MB root image as the second module; a BIOS boots it from a CD drive or a
+  USB stick, a firmware of UEFI from either, with no `-kernel` and no other
+  flag, mounts the image's first partition at `/` (`boot0p1`, read-only) and
+  runs `/bin` from it, which `make x86-iso-smoke`, `make x86-iso-uefi-smoke`
+  and `make x86-iso-usb-smoke` check (ADR 0026, [iso.md](iso.md));
 * a network: a virtio-net card on the PCI bus, its MAC and link read from the
   config space, ARP, IPv4, ICMP, UDP, a client of TCP and a server of TCP under
   `kernel/port/net.h`; `netinfo`, `ping`, `netudp` and `dns` from the port,
@@ -858,7 +868,8 @@ in [debts.md](../../debts.md).
   `/bin/fork` is the program of the smoke test and prints the 42 of the
   parent next to the 99 of the child;
 * the kernel is in the higher half: the image is linked at
-  `0xFFFFFFFF80000000`, the loader copies it to 16 MiB and maps it there, and
+  `0xFFFFFFFF80000000`, the loader copies it below the arena (16 MiB, or the
+  first free block above it) and maps it there, and
   the C of the kernel is built with `-mcmodel=kernel`. The low identity map of
   the first gigabyte stays for the heap, the arena and the devices, so the
   window of the programs is part of a space whose kernel is out of the reach

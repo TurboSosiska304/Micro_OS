@@ -395,15 +395,24 @@ is why `config sync` can be tested without a board.
 
 ### The record, its moments, and `statx`
 
-A record of MicroFS of today is 32 bytes: the type, the first block, the
-size and the count of entries, then `mtime` and `ctime` as the seconds of
-Unix in 64 bits. A volume of version 1 keeps the 16 bytes of the releases
-before the times and is mounted without a rewrite; its records report zero
-for the two moments, which is "unknown" and not 1970. The version in the
-header and the `MFS_FEATURE_TIME` bit of `features` are read together, so a
-header that claims the room without the feature (or the other way around)
-is refused. The design and the migration are ADR 0013; the layout is
-`docs/memory.md`.
+A record of MicroFS of today is 64 bytes: the type, the first block, the
+size and the count of entries, `mtime` and `ctime` as the seconds of Unix in
+64 bits, the group of the object and a CRC32 of the record (ADR 0038). A
+volume of version 2 keeps the 32 bytes of the releases before the group and
+the checksum, and a volume of version 1 the 16 bytes before the times; both
+are mounted without a rewrite, their records report zero for what they have
+no room for - the moments of a version 1 record are "unknown" and not 1970,
+and a volume without a group has the group of root. The version in the
+header and the bits of `features` (`TIME`, `RECORD_CRC`) are read together,
+so a header that claims the room without the feature (or the other way
+around) is refused. The design and the migration are ADR 0013 and ADR 0038;
+the layout is `docs/memory.md`.
+
+`META` is the map of the free blocks and the table of the records, sized by
+the number of the records and not by a share of the volume: the table grows
+into the data section when the reserve of a new volume runs out, and a
+record that a power cut left half written is one whose CRC32 does not match,
+which the check names and the repair gives back (ADR 0038).
 
 The moments come from `k_clock_now_unix()`, the clock of the kernel that the
 RTC, NTP and the host process feed. A machine that was never set falls back
@@ -413,9 +422,12 @@ and the number does not travel through a program.
 
 `struct vfs_stat` and `KSYS_STAT` are frozen, so the moments have a call of
 their own: `KSYS_STATX` (26) copies a `struct vfs_statx`, the five fields of
-`stat` followed by the two times. The VFS operation is optional: procfs,
-devfs and the FAT reader answer through their `stat` and leave the times
-zero. The library exposes `microos_statx()` and `struct microos_statx`.
+`stat`, the group and the two times. The VFS operation is optional: procfs,
+devfs and the FAT reader answer through their `stat` and leave the group and
+the times zero. The library exposes `microos_statx()` and `struct
+microos_statx`. The structure grew by the word of the group in 1.7 (ADR
+0038), so the call copies 48 bytes and the two headers of the tree move
+together.
 
 ### The types of filesystems
 
@@ -460,18 +472,20 @@ A disk is a block device too, and a partition of it is one: the portable
 parser of `components/kernel/src/partition.c` reads the MBR or the GPT in the
 first sectors, holds every entry against the size of the disk and registers a
 child device with the name of the parent and `p` plus the number of the entry
-(`vd0p1`, `ata0p1`). A child adds the first sector of its partition to every
-request and refuses what runs past its end; the filesystem mounted on it does
-not know that a table exists.
+(`ata0p1`, `virtio0p1`). A child adds the first sector of its partition to
+every request and refuses what runs past its end; the filesystem mounted on it
+does not know that a table exists.
 
 Three rules of the layer are worth remembering: the parser never writes to
 the medium (a broken table is a refusal, not a repair); a disk without a table
 is not a volume, there is no "the whole disk is the filesystem" special case;
-and the drivers live in the ports (ATA PIO on x86-64 today, SDHCI and virtio
-planned) while the tables live in the kernel, because a table is a property of
-the medium and not of the controller. ADR 0008 is the design, including what
-the first real disk is and what waits for the queue, the interrupt and a
-physical address contract.
+and the drivers live in the ports (the ATA channel and the virtio-blk device
+of x86-64, SDHCI on the board) while the tables live in the kernel, because a
+table is a property of the medium and not of the controller. ADR 0008 is the
+design of the layer, ADR 0032 the physical address of a buffer a device reads
+and the bus-master path of the IDE channel, and ADR 0037 the second disk: the
+same image on a queue of virtio descriptors, a request as long as the queue
+allows and the interrupt of a PCI line.
 
 
 ## 6. Memory (phase 3)

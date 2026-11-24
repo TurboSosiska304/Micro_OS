@@ -16,6 +16,13 @@
  * DATA   the contents of the files and of the directories
  * META   the bitmap of the free blocks and the table of the inodes
  * INFO   the header of the filesystem
+ *
+ * A version 3 volume puts the map of the free blocks at the top of META,
+ * next to INFO, and the table of the records below it: the table then grows
+ * downwards into the data section and never moves the map, and a record
+ * keeps its address for the life of the volume (ADR 0038). A version 1 and
+ * 2 volume keeps the map at the start of META and the table after it, with
+ * the table taking the whole of META.
  */
 #ifndef MICRO_OS_MFS_MFS_H
 #define MICRO_OS_MFS_MFS_H
@@ -23,17 +30,24 @@
 #include "kernel/blockdev.h"
 #include "kernel/types.h"
 
+#include <stddef.h>
+
 #define MFS_MAGIC 0x4D465331u /* "MFS1" */
 /*
- * The format of today and the one of the volumes that came before it.
+ * The format of today and the ones of the volumes that came before it.
  *
  * A version 1 volume keeps 16-byte records with no time in them; a version
- * 2 volume keeps 32-byte records with the two moments of Unix seconds.
- * The mount reads both, and nothing is rewritten to make an old volume
- * new: its records have no place for a time, so a time is read as zero,
- * which means "unknown" (ADR 0013).
+ * 2 volume keeps 32-byte records with the two moments of Unix seconds; a
+ * version 3 volume keeps 64-byte records with the moments, the group of the
+ * object and a checksum of the record, and its table of the records is
+ * sized by the number of the records instead of by a share of the volume
+ * (ADR 0038). The mount reads all three, and nothing is rewritten to make
+ * an old volume new: a record of version 1 and 2 has no place for what it
+ * does not have, so the group is read as zero and the table keeps the size
+ * it was formatted with (ADR 0013, ADR 0038).
  */
-#define MFS_VERSION 2
+#define MFS_VERSION 3
+#define MFS_VERSION_TIME 2
 #define MFS_VERSION_LEGACY 1
 #define MFS_BLOCK_SIZE 1024
 
@@ -41,13 +55,23 @@
  * The features of the volume. A volume of an older system does not have
  * the bits set and is mounted the way it always was.
  */
-#define MFS_FEATURE_CRC 0x0001u  /* the header carries a checksum */
-#define MFS_FEATURE_TIME 0x0002u /* the records carry mtime and ctime */
-#define MFS_INODE_SIZE 32
+#define MFS_FEATURE_CRC 0x0001u        /* the header carries a checksum */
+#define MFS_FEATURE_TIME 0x0002u       /* the records carry mtime and ctime */
+#define MFS_FEATURE_RECORD_CRC 0x0004u /* every record carries its checksum */
+#define MFS_INODE_SIZE 64
+#define MFS_INODE_SIZE_TIME 32
 #define MFS_INODE_SIZE_LEGACY 16
 #define MFS_NAME_MAX 32
 #define MFS_PATH_MAX 128
 #define MFS_ROOT_INODE 1
+
+/*
+ * The bytes of the header of a version 1 or 2 volume that its checksum
+ * covers. The header of a version 3 volume is longer and its checksum
+ * covers all of it but the checksum itself (ADR 0038), so a reader of an
+ * old volume has to know where the old span ends.
+ */
+#define MFS_HEADER_CRC_SPAN 48u
 
 /* The flags of an inode. */
 #define MFS_INODE_USED 0x01u
@@ -135,10 +159,28 @@ struct mfs_superblock {
     k_u32_t info_blocks;
     k_u32_t root_inode;
     k_u32_t features;
+    /*
+     * The first field of the header that a version 3 volume added, and the
+     * only one of version 1 and 2 that the old checksum covers is the run
+     * of bytes before it: the checksum of an old header is the checksum of
+     * MFS_HEADER_CRC_SPAN bytes and never of the fields below, which an old
+     * volume has not (ADR 0038).
+     */
     k_u32_t crc; /* the checksum of the header, MFS_FEATURE_CRC */
+    /*
+     * The map of the free blocks and the table of the records of a version
+     * 3 volume, where they are and how many records there are. The fields
+     * are zero in a version 1 and 2 header, whose layout is computed from
+     * the size of META the way it always was.
+     */
+    k_u32_t bitmap_blocks; /* the blocks of the map of the free blocks */
+    k_u32_t inode_blocks;  /* the blocks of the table of the records */
+    k_u32_t inode_size;    /* the bytes of one record */
+    k_u32_t inode_records; /* the slots of the table, the record 0 included */
+    k_u32_t reserved[3];   /* zero */
 };
 
-/* One record of the table of the inodes. */
+/* One record of the table of the inodes, as the rest of the system reads it. */
 struct mfs_inode {
     k_u32_t flags;       /* MFS_INODE_* */
     k_u32_t first_block; /* the first block of the data */
@@ -151,6 +193,38 @@ struct mfs_inode {
      */
     k_u64_t mtime; /* the last change of the content */
     k_u64_t ctime; /* the last change of the record, the mode or the owner */
+    /*
+     * The group of the object (ADR 0038). The owner is the fifteen bits of
+     * the flags the record always had; the group needed a word of its own,
+     * and version 3 gave every record one. A volume of version 1 or 2 has
+     * no group and the reader answers zero, which is the group of root in
+     * this system (ADR 0005).
+     */
+    k_u32_t group;
+};
+
+/*
+ * The record of a version 3 volume, exactly as it lies on the medium: the
+ * record of the memory with a byte of room and a checksum of its own.
+ *
+ * The checksum is CRC32 of the first sixty bytes of the record: the record
+ * is 64 bytes and a block holds sixteen of them, so a record never crosses
+ * the border of a block, and a record that a power cut left half written is
+ * told from a whole one by the check of the volume (ADR 0038). The padding
+ * is zero and belongs to the checksum, so a writer that writes the structure
+ * whole zeroes it.
+ */
+struct mfs_inode_record {
+    k_u32_t flags;
+    k_u32_t first_block;
+    k_u32_t size;
+    k_u32_t entries;
+    k_u64_t mtime;
+    k_u64_t ctime;
+    k_u32_t group;
+    k_u32_t reserved;
+    k_u8_t pad[20];
+    k_u32_t crc;
 };
 
 /*
@@ -170,10 +244,18 @@ struct mfs_dirent_header {
  * the system runs on. A change of one of them is a change of the format
  * of the volume, and the checks below make it a conscious one.
  */
-_Static_assert(sizeof(struct mfs_superblock) == 52, "the header of the volume changed");
-_Static_assert(sizeof(struct mfs_inode) == 32, "a record of the table of the inodes changed");
+_Static_assert(sizeof(struct mfs_superblock) == 80, "the header of the volume changed");
+_Static_assert(sizeof(struct mfs_inode) == 40, "a record of the table of the inodes changed");
+_Static_assert(MFS_INODE_SIZE_TIME == 32, "the record of a version 2 volume changed");
 _Static_assert(MFS_INODE_SIZE_LEGACY == 16, "the record of a legacy volume changed");
+_Static_assert(MFS_INODE_SIZE == sizeof(struct mfs_inode_record),
+               "the record of a version 3 volume changed");
 _Static_assert(sizeof(struct mfs_dirent_header) == 8, "an entry of a directory changed");
+/* The fields of the memory and of the medium are the same, in the same place. */
+_Static_assert(offsetof(struct mfs_inode, group) == offsetof(struct mfs_inode_record, group),
+               "the group of a record moved");
+_Static_assert(MFS_INODE_SIZE % MFS_BLOCK_SIZE == 0 || MFS_BLOCK_SIZE % MFS_INODE_SIZE == 0,
+               "a record crosses the border of a block");
 
 /*
  * One entry of a directory, as the caller sees it. The type is the low
@@ -188,6 +270,7 @@ struct mfs_dirent {
     k_u32_t size;  /* the size of the object in bytes */
     k_u32_t mode;  /* MFS_MODE_* of the object */
     k_u32_t owner; /* the uid of the object */
+    k_u32_t group; /* the gid of the object, 0 on a volume without one */
     char name[MFS_NAME_MAX + 1];
 };
 
@@ -238,6 +321,15 @@ struct mfs_file {
     bool grow_valid;    /* grow_block is the tail of this chain */
     k_u32_t grow_block; /* the block the last append left at the tail */
     k_u32_t grow_index; /* the index of that block from the head, 0 based */
+    /*
+     * The number of the growth of the table of the records (ADR 0038) the
+     * descriptor was made in. A growth moves blocks of the chains into the
+     * free space below the data section, so the block a cursor names may be
+     * a block that is not the chain's any more: a descriptor of a volume
+     * that grew reads its record again and walks from its head, and the
+     * chain itself is whole on the medium all along.
+     */
+    k_u32_t generation;
 };
 
 /* The information about the filesystem. */
@@ -277,6 +369,13 @@ struct mfs_check_report {
 /*
  * Prepare a volume: the layout is computed, the bitmap and the table of
  * the inodes are created and the root directory is made.
+ *
+ * The volume is written in the format of MFS_VERSION (ADR 0038). The table
+ * of the records holds `max_records` records and a reserve of a quarter of
+ * them (64 at the least): META is the map of the free blocks and that
+ * table, and nothing more, so a volume of any size walks a table of a few
+ * kilobytes and not a share of itself. A table that runs full grows through
+ * the blocks of the data section (see mfs_private.h).
  *
  * The device has to speak in the blocks of the filesystem: a sector of
  * another size is refused, because the layout of the volume is written in
@@ -362,17 +461,25 @@ int mfs_check(struct mfs_check_report *report);
  *     entries;
  *   - a record that no name reaches is a create or an unlink that stopped
  *     half way: it is freed, and so are its blocks, because nothing on the
- *     medium can give the name back. This is the only "half-written record"
- *     the format lets a reader detect - a record carries no checksum, so a
- *     record half written byte by byte looks like a record;
+ *     medium can give the name back;
+ *   - a record of a version 3 volume whose checksum does not match is one
+ *     that a power cut left half written: it was never committed, so it is
+ *     read as a free record, its name is removed and its blocks go back to
+ *     the map. Everything the volume held before that write is untouched:
+ *     the record of a version 3 volume is the commit of the object, 64
+ *     bytes that a block of the medium holds whole (ADR 0038). A volume of
+ *     version 1 or 2 has no checksum per record and the rule is only the
+ *     one of the record no name reaches;
  *   - a header that is damaged is not touched: the volume would be a
  *     different volume, and the mount would refuse it. The pass does not
  *     write a byte in that case.
  *
- * The files of a volume have no checksum either, so a half-written *content*
- * of a file is not detected and not repaired: the repair promises a volume
- * that can be mounted and walked, not the data of a write a power cut
- * interrupted.
+ * The files of a volume have no checksum, so a half-written *content* of a
+ * file is not detected and not repaired: the repair promises a volume that
+ * can be mounted and walked, not the data of a write a power cut
+ * interrupted. There is no journal either: a record is one block and one
+ * write, which is what the flash of the board gives, and the checksum is
+ * what tells a whole record from a torn one (docs/debts.md).
  *
  * The header of the volume stores no count of the free blocks or the free
  * records; the counters of the report are computed from the table and the
@@ -431,21 +538,41 @@ int mfs_stat(const char *path, struct mfs_inode *out, struct mfs_dirent *dirent)
 int mfs_list(const char *path, struct mfs_dirent *out, k_size_t max);
 
 /*
- * The mode of an inode is read and written through these, so that the
- * callers - the shell, the syscalls, the check of the access - never have
- * to know where the bits live. The mode is refused outside the nine bits
- * of the rwx triads and the owner outside the fifteen bits of a uid, so
- * that a number that does not fit can never spill into the type. A mode
- * of zero is refused too, see above: it means "the record predates the
- * modes".
+ * The mode, the owner and the group of an inode are read and written
+ * through these, so that the callers - the shell, the syscalls, the check
+ * of the access - never have to know where the numbers live. The mode is
+ * refused outside the nine bits of the rwx triads and the owner outside the
+ * fifteen bits of a uid, so that a number that does not fit can never spill
+ * into the type. A mode of zero is refused too, see above: it means "the
+ * record predates the modes".
+ *
+ * The group is a word of its own in the record of a version 3 volume
+ * (ADR 0038). A volume of version 1 or 2 has no group and reads as zero,
+ * and a write of a group to such a volume is MFS_ENOTSUP instead of a
+ * number that would not come back. Nothing of the system calls mfs_chgrp
+ * yet: the door of the VFS and the triad of the group in the check of the
+ * access are the work of the release that gives the groups a meaning
+ * (docs/debts.md); the storage is here so that a record does not lose the
+ * group when it is rewritten.
  */
 k_u32_t mfs_inode_mode(const struct mfs_inode *inode);
 k_u32_t mfs_inode_owner(const struct mfs_inode *inode);
+k_u32_t mfs_inode_group(const struct mfs_inode *inode);
 int mfs_chmod(const char *path, k_u32_t mode);
 int mfs_chown(const char *path, k_u32_t owner);
+int mfs_chgrp(const char *path, k_u32_t group);
 
 /* The name of an error, for the shell. */
 const char *mfs_strerror(int error);
+
+/*
+ * The checksum of a record of a version 3 volume: CRC32 of the first sixty
+ * bytes of the record. A tool that puts a record into the table by hand -
+ * the builder of an image, a test that makes a damaged volume - writes this
+ * number into the last word of the record; a record without it is read as
+ * one that a power cut left half written (ADR 0038).
+ */
+k_u32_t mfs_record_crc(const void *record);
 
 /*
  * The source of the moments of the records.

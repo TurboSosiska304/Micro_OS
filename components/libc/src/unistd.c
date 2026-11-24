@@ -477,6 +477,7 @@ int microos_statx(const char *path, struct microos_statx *out)
     out->size = info.size;
     out->mode = info.mode;
     out->owner = info.owner;
+    out->group = info.group;
     out->mtime = info.mtime;
     out->ctime = info.ctime;
 

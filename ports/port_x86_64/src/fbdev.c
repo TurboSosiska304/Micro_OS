@@ -8,6 +8,9 @@
  * console), and this file is the shape of the file - a `struct fb_info` on a
  * read, a `struct fb_rect` and its pixels on a write, two control commands -
  * and the rule that a program that closes the device gives the screen back.
+ * The write is the contract of `kernel/fb_ops.h`: the device of the picture
+ * may fill and copy the pixels itself, and the software path is the one that
+ * answers when it has no such operation.
  *
  * There is no clipping: a rectangle that leaves the picture is refused, so a
  * drawing bug of a program is a visible error and not a picture that almost
@@ -20,6 +23,7 @@
 #include "devfs/devfs.h"
 #include "kernel/errno.h"
 #include "kernel/fb.h"
+#include "kernel/fb_ops.h"
 #include "kernel/log.h"
 #include "kernel/types.h"
 #include "port_x86_64_screen.h"
@@ -51,6 +55,8 @@ static int fbdev_write(const char *buf, k_size_t size)
 {
     struct fb_info info;
     struct fb_rect rect;
+    struct k_fb_rect destination;
+    struct k_fb_surface surface;
     const k_u16_t *pixels;
     int rc;
 
@@ -58,7 +64,7 @@ static int fbdev_write(const char *buf, k_size_t size)
         return KERR_INVAL;
     }
 
-    if (!port_x86_64_fb_info(&info)) {
+    if (!port_x86_64_fb_info(&info) || !port_x86_64_fb_surface(&surface)) {
         return KERR_INVAL;
     }
 
@@ -67,7 +73,19 @@ static int fbdev_write(const char *buf, k_size_t size)
         return rc;
     }
 
-    rc = port_x86_64_fb_blit(&rect, pixels);
+    /*
+     * The rectangle of the program goes through the contract of the picture
+     * (kernel/fb_ops.h): the device copies it itself when it can, and the
+     * software path of 1.6 - the `memcpy` into the memory the display reads -
+     * is the whole of it when it cannot. The bytes on the screen are the same
+     * either way.
+     */
+    destination.x = rect.x;
+    destination.y = rect.y;
+    destination.w = rect.w;
+    destination.h = rect.h;
+
+    rc = k_fb_blit(&surface, &destination, pixels, rect.w, 0, 0);
     if (rc != 0) {
         return rc;
     }

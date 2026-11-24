@@ -35,16 +35,14 @@
 
 /*
  * The board has a window of 8 KiB of text and no need of the directory the
- * library keeps: the ABI of its port carries the cwd of the task and its
+ * library resolves: the ABI of its port carries the cwd of the task and its
  * programs use the paths of the shell. The resolver is the library of a
  * program of x86-64, where a program has a directory of its own.
  */
 #ifdef MOX_ARCH_XTENSA
 #define resolve_path(path) (path)
-#define get_directory() NULL
 #else
 #define resolve_path(path) __ulibc_path(path)
-#define get_directory() __ulibc_cwd()
 #endif
 #include <stdint.h>
 
@@ -121,6 +119,9 @@ static int open_flags(int flags)
 
     if (flags & ULIBC_O_CREAT) {
         out |= KSYS_O_CREAT;
+    }
+    if (flags & ULIBC_O_EXCL) {
+        out |= KSYS_O_EXCL;
     }
     if (flags & ULIBC_O_TRUNC) {
         out |= KSYS_O_TRUNC;
@@ -325,39 +326,30 @@ int isatty(int fd)
 }
 
 /*
- * The directory of the program, in the buffer of the caller. The kernel's
- * call is read once (the first time the library needs it) and the library
- * keeps the directory afterwards, because `chdir` moves it in the program and
- * not in the task: the two have to answer the same path.
+ * The directory of the program, in the buffer of the caller. The task keeps
+ * it and the call is the answer: `chdir` moves the record itself (number 48),
+ * so a copy in the library could only be a directory of a moment that has
+ * passed - the bug that made a child of `execve` start somewhere else.
  */
 char *getcwd(char *buf, size_t size)
 {
+    long rc;
+
     if (buf == NULL) {
         errno = EINVAL;
         return NULL;
     }
 
-#ifdef MOX_ARCH_XTENSA
-    /* The kernel keeps the directory of the task; there is no second copy in
-     * the window of the program. */
-    if (__ulibc_syscall6(KSYS_GETCWD, (long)(uintptr_t)buf, (long)size, 0, 0, 0, 0) < 0) {
+    rc = __ulibc_syscall6(KSYS_GETCWD, (long)(uintptr_t)buf, (long)size, 0, 0, 0, 0);
+    if (rc < 0) {
+        /* A buffer that cannot hold the path is the ERANGE of POSIX and not
+         * the E2BIG the edge of the call uses for a buffer that is too big
+         * for a transfer. */
+        errno = (rc == -E2BIG) ? ERANGE : (int)-rc;
         return NULL;
     }
 
     return buf;
-#else
-    const char *cwd = get_directory();
-    size_t length = strlen(cwd) + 1;
-
-    if (size < length) {
-        errno = ERANGE;
-        return NULL;
-    }
-
-    memcpy(buf, cwd, length);
-
-    return buf;
-#endif
 }
 
 int getpid(void)

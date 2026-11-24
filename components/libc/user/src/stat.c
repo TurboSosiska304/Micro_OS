@@ -33,7 +33,7 @@ static void stat_fill(struct stat *out, const struct vfs_statx *info)
     out->st_mode = stat_type(info->type) | (mode_t)(info->mode & 07777u);
     out->st_nlink = (info->type == 2) ? 2 : 1;
     out->st_uid = (uid_t)info->owner;
-    out->st_gid = (gid_t)info->owner;
+    out->st_gid = (gid_t)info->group;
     out->st_rdev = 0;
     out->st_size = (off_t)info->size;
     out->st_blksize = 512;

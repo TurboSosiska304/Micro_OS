@@ -155,14 +155,23 @@ The 80x50 mode with the 8x8 font of the VGA is not built: see
 two screens differ in the grid and not in what the kernel writes to them, and
 the keyboard of IRQ1 is the same for both.
 
-## What a desktop would need
+## The desktop of 1.7
 
-The framebuffer is the first step, not a desktop. A desktop needs a picture a
-program can draw on (a 2D surface), a pointer (the PS/2 mouse of QEMU), and a
-**compositor** - windows, focus and the routing of the input. The compositor
-has to be a program of the system, not the kernel, like X or Wayland; x86-64
-already has ring 3, page tables of a program, NX/W^X, `fork`, `exec`, signals
-and pipes, which is the base of a screen server and its clients.
+The framebuffer is the first step, not a desktop: a desktop needs a picture a
+program can draw on, a pointer and a **compositor**. 1.7 has all three, and
+the compositor is a program of the system and not the kernel, like X or
+Wayland.
+
+`exec /bin/wm` takes the screen, paints the wallpaper, the panel and the
+pointer, and starts its clients with `fork` and `execve` - `/bin/edit` and
+`/bin/fm` - each with a buffer of pixels in a file of `/tmp`, two pipes and the
+variable `MICROOS_WM`. A click raises a window, a drag of its title bar moves
+it (the bar always stays on the picture), `Alt+F4`, the square of the bar and
+the square at the right end of a button of the panel close it, and the keys go to the window
+that has the focus. The protocol is `components/ui/client`, the pointer is the
+second port of the 8042 (`key.pointer.x`, `key.pointer.y` and
+`key.button.left` of `/dev/input0`), and the whole of it is
+[desktop.md](../desktop.md).
 
 The board cannot have one: no MMU, 2 MB of PSRAM, 135x240. The ESP32 stays a
 terminal.

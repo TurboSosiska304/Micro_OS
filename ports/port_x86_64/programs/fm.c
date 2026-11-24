@@ -36,14 +36,19 @@
 #define FM_ID_MAIN 1
 #define FM_ID_DELETE 2
 
-#define FM_PAPER 0x0000u
-#define FM_INK 0xFFFFu
-#define FM_SELECT_PAPER 0xAD55u
-#define FM_SELECT_INK 0x0000u
-#define FM_BORDER 0x52AAu
-#define FM_FOCUS 0x57FFu
-#define FM_BAR 0x0010u
-#define FM_BAR_INK 0xFFFFu
+/* The colours of the file manager: the roles of `ui/palette.h`, as the editor
+ * has them, and a row of a list that has the focus in the selection of the
+ * theme. The status line is the dim ink of the palette and the title the
+ * bright one, so the two bars of the window do not read as one. */
+static k_u16_t g_paper;
+static k_u16_t g_ink;
+static k_u16_t g_select_paper;
+static k_u16_t g_select_ink;
+static k_u16_t g_border;
+static k_u16_t g_focus;
+static k_u16_t g_bar;
+static k_u16_t g_title_ink;
+static k_u16_t g_status_ink;
 
 struct fm_entry {
     char name[VFS_NAME_MAX + 1];
@@ -222,9 +227,9 @@ static void row_paint(int row)
     g_shown_selected[row] = (int)selected;
 
     if (selected) {
-        (void)uiprog_text(&g_screen, g_body_x, y, text, g_cols, FM_SELECT_INK, FM_SELECT_PAPER);
+        (void)uiprog_text(&g_screen, g_body_x, y, text, g_cols, g_select_ink, g_select_paper);
     } else {
-        (void)uiprog_text(&g_screen, g_body_x, y, text, g_cols, FM_INK, FM_PAPER);
+        (void)uiprog_text(&g_screen, g_body_x, y, text, g_cols, g_ink, g_paper);
     }
 }
 
@@ -258,14 +263,14 @@ static void status_paint(void)
 
     memcpy(g_shown_status, g_status, strlen(g_status) + 1u);
 
-    (void)uiprog_fill(&g_screen, 0, g_status_y, (int)g_screen.info.width, FONT8_HEIGHT, FM_BAR);
+    (void)uiprog_fill(&g_screen, 0, g_status_y, (int)g_screen.info.width, FONT8_HEIGHT, g_bar);
 
     length = (int)strlen(g_status);
     if (length > g_cols) {
         length = g_cols;
     }
 
-    (void)uiprog_text(&g_screen, g_body_x, g_status_y, g_status, length, FM_BAR_INK, FM_BAR);
+    (void)uiprog_text(&g_screen, g_body_x, g_status_y, g_status, length, g_status_ink, g_bar);
 }
 
 static void status_build(void)
@@ -301,15 +306,18 @@ static void title_paint(void)
     memcpy(g_shown_title, title, strlen(title) + 1u);
     (void)snprintf(window->title, sizeof(window->title), "%s", title);
 
-    (void)uiprog_fill(&g_screen, 0, UI_FRAME_MARGIN, (int)g_screen.info.width, FONT8_HEIGHT,
-                      FM_BAR);
+    /* The title of the window of the desktop as well: the bar of the server
+     * and the button of its panel are the same words (docs/desktop.md). */
+    (void)uiprog_title(&g_screen, title);
+
+    (void)uiprog_fill(&g_screen, 0, UI_FRAME_MARGIN, (int)g_screen.info.width, FONT8_HEIGHT, g_bar);
 
     length = (int)strlen(title);
     if (length > g_cols) {
         length = g_cols;
     }
 
-    (void)uiprog_text(&g_screen, g_body_x, UI_FRAME_MARGIN, title, length, FM_BAR_INK, FM_BAR);
+    (void)uiprog_text(&g_screen, g_body_x, UI_FRAME_MARGIN, title, length, g_title_ink, g_bar);
 }
 
 static void view_follow(void)
@@ -346,10 +354,10 @@ static void modal_paint(const struct ui_window *window)
 
     (void)uiprog_text(&g_screen, window->rect.x + UI_FRAME_PAD,
                       window->rect.y + UI_FRAME_TITLE_HEIGHT(uiprog_font()), text,
-                      (int)strlen(text), FM_INK, FM_PAPER);
+                      (int)strlen(text), g_ink, g_paper);
     (void)uiprog_text(&g_screen, window->rect.x + UI_FRAME_PAD,
                       window->rect.y + UI_FRAME_TITLE_HEIGHT(uiprog_font()) + FONT8_HEIGHT,
-                      "y deletes it, n (or Esc) keeps it.", 34, FM_INK, FM_PAPER);
+                      "y deletes it, n (or Esc) keeps it.", 34, g_ink, g_paper);
 }
 
 static void modal_open(void)
@@ -466,7 +474,9 @@ static void file_open(void)
     argv[1] = path;
     argv[2] = NULL;
 
-    rc = execve("/bin/edit", argv, NULL);
+    /* The environment travels: a window of the desktop hands the next program
+     * the descriptor of the protocol it was started with (docs/desktop.md). */
+    rc = execve("/bin/edit", argv, environ);
     if (rc < 0) {
         (void)snprintf(g_message, sizeof(g_message), "cannot run /bin/edit: error %d", -rc);
     } else {
@@ -591,7 +601,7 @@ static void layout(void)
 {
     const struct ui_font *font = uiprog_font();
 
-    g_body_x = 4;
+    g_body_x = UI_FRAME_PAD;
     g_body_y = UI_FRAME_TITLE_HEIGHT(font);
     g_status_y = (int)g_screen.info.height - FONT8_HEIGHT;
     g_cols = ((int)g_screen.info.width - 2 * g_body_x) / FONT8_WIDTH;
@@ -633,12 +643,29 @@ int main(int argc, char *const argv[], char *const envp[])
     ui_keyboard_init(&g_keyboard);
     layout();
 
-    g_style.paper = FM_PAPER;
-    g_style.ink = FM_INK;
-    g_style.border = FM_BORDER;
-    g_style.focus_border = FM_FOCUS;
-    g_style.title_paper = FM_BAR;
-    g_style.title_ink = FM_BAR_INK;
+    {
+        struct ui_palette palette;
+
+        (void)uiprog_palette(&palette);
+
+        g_paper = palette.surface;
+        g_ink = palette.ink;
+        g_select_paper = palette.selection;
+        g_select_ink = palette.selection_ink;
+        g_border = palette.border;
+        g_focus = palette.accent;
+        g_bar = palette.surface_high;
+        g_title_ink = palette.title_ink;
+        g_status_ink = palette.ink_dim;
+    }
+
+    g_style.paper = g_paper;
+    g_style.ink = g_ink;
+    g_style.border = g_border;
+    g_style.focus_border = g_focus;
+    g_style.title_paper = g_bar;
+    g_style.title_ink = g_title_ink;
+    g_style.separator = g_border;
 
     bounds.x = 0;
     bounds.y = 0;
@@ -690,6 +717,17 @@ int main(int argc, char *const argv[], char *const envp[])
 
             key_handle(event.code);
         }
+
+        /* The server of the desktop asked the window to leave (Alt+F4 or the
+         * square of the bar): it leaves as `q` would make it. */
+        if (uiprog_close_requested(&g_screen)) {
+            g_running = false;
+        }
+
+        /* One frame of a client: the damage of the keys since the last turn
+         * and nothing else. A program of the whole screen has nothing to
+         * flush - the device was written as it drew. */
+        (void)uiprog_flush(&g_screen);
 
         (void)usleep(30000u);
     }

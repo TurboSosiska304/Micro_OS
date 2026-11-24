@@ -84,6 +84,17 @@ struct vfs_stat {
 struct vfs_statx {
     k_u32_t inode;
     k_u8_t type;
+    /*
+     * The group of the object (ADR 0038), in the room that the alignment of
+     * `type` left free: the call is frozen (KSYS_STATX, ADR 0011) and an image
+     * of 1.0 still runs on this kernel, so the answer keeps its 40 bytes and a
+     * program of the release before this one reads the fields it knows. A
+     * filesystem with no group - every one of this release but MicroFS, whose
+     * version 3 records carry it - answers zero, which is the group of root.
+     * The triad of the group in the check of the access is not read from this
+     * number yet (docs/debts.md).
+     */
+    k_u16_t group;
     k_u64_t size;
     k_u32_t mode;
     k_u32_t owner;

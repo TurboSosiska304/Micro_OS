@@ -41,7 +41,20 @@ import subprocess
 import sys
 import time
 
+from qemu_session import DISKS, disk_name, drive_args, root_name
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# The bus of the disk of this run, set by `--disk`, and the name of the second
+# partition of it - the FAT32 volume the shell mounts at /data. The commands of
+# the run name the device they mount, so the list below is built once the bus
+# is known.
+DISK = "ide"
+DATA_DEVICE = "ata0p2"
+
+# The command that mounts the FAT32 volume of the second partition. The name
+# of the device is the one of the bus of the run.
+MOUNT_DATA = "mount " + DATA_DEVICE + " /data fat32"
 DEFAULT_BUILD = os.path.join(ROOT, "build-x86")
 DEFAULT_IMAGE = os.path.join(DEFAULT_BUILD, "programs.img")
 DEFAULT_EXT2_IMAGE = os.path.join(DEFAULT_BUILD, "programs-ext2.img")
@@ -77,7 +90,7 @@ MMAP_COMMANDS = [
 
 # The second partition of the ext2 image: the FAT32 volume of /data.
 DATA_COMMANDS = [
-    "mount ata0p2 /data fat32",
+    MOUNT_DATA,
     "write /data/note the data volume",
     "cat /data/note",
     "df /data",
@@ -109,8 +122,7 @@ def run_machine(image: str, commands: list, timeout: float, build: str) -> str:
         # A raw image on the primary channel, with the cache of the host on
         # purpose: the writes of the guest are a few files of a test and the
         # flush of `sync` still reaches the medium (tools/x86_disk_smoke.py).
-        "-drive",
-        f"file={image},format=raw,if=ide,index=0,cache=writeback",
+        *drive_args(image, DISK),
     ]
 
     process = subprocess.Popen(
@@ -196,12 +208,12 @@ def root_checks(name: str, transcript: str, expect_type: str) -> tuple:
     # --- the boot reads the type of the root out of the medium
     expect(
         f"{name}: the root is {expect_type} and the boot says so",
-        f"root: the root is {expect_type} on ata0p1" in transcript,
+        f"root: the root is {expect_type} on {root_name(DISK)}" in transcript,
         "the line of the root does not name the filesystem of the volume",
     )
     expect(
         f"{name}: the programs come from the root",
-        "x86-64: the programs come from ata0p1:/bin" in transcript,
+        f"x86-64: the programs come from {root_name(DISK)}:/bin" in transcript,
     )
     expect(
         f"{name}: the boot runs the program of /bin through the call",
@@ -259,7 +271,8 @@ def data_checks(name: str, transcript: str) -> list:
 
     expect(
         f"{name}: the second partition is a FAT32 volume",
-        "fat: FAT32 mounted" in mounted and "mount: ata0p2 is mounted at /data" in mounted,
+        "fat: FAT32 mounted" in mounted
+        and f"mount: {disk_name(DISK)}p2 is mounted at /data" in mounted,
         mounted,
     )
     expect(
@@ -393,13 +406,25 @@ def mapped_file_checks(image: str, transcript: str) -> list:
 
 
 def main(argv: list) -> int:
+    global DISK, DATA_DEVICE
     parser = argparse.ArgumentParser(description="the smoke test of the root of the x86-64 port")
     parser.add_argument("--image", default=DEFAULT_IMAGE, help="the MicroFS image of the disk")
     parser.add_argument("--ext2-image", default=DEFAULT_EXT2_IMAGE, help="the ext2 image of it")
     parser.add_argument("--build", default=DEFAULT_BUILD, help="the directory of the kernel")
     parser.add_argument("--timeout", type=float, default=120.0, help="the seconds a boot gets")
     parser.add_argument("--verbose", action="store_true", help="print both consoles")
+    parser.add_argument(
+        "--disk",
+        choices=DISKS,
+        default="ide",
+        help="the bus of the disk of the run (default: ide)",
+    )
     args = parser.parse_args(argv)
+
+    DISK = args.disk
+    DATA_DEVICE = disk_name(DISK) + "p2"
+
+    DATA_COMMANDS[0] = f"mount {DATA_DEVICE} /data fat32"
 
     for path in ("loader32.elf", "microos64.bin"):
         if not os.path.isfile(os.path.join(args.build, path)):

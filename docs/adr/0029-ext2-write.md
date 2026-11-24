@@ -27,7 +27,9 @@ with the tools of the world as the judge.
   as one block, one bit is changed and the block goes back; the free counts
   of the group descriptor and of the superblock follow it. An allocated block
   is zeroed before an inode names it, so a file never inherits the bytes of
-  an object that is gone.
+  an object that is gone. (ADR 0037 takes the zeroing out of the allocation:
+  the buffer of a write of part of a block is zeroed instead, and a table of
+  pointers is still made as a block of zeros.)
 * The **inode**: a whole 128-byte record written back into its block, with
   the fields this writer does not model - an ACL, a fragment, the second
   half of a longer inode - kept for a change of an attribute and zeroed for
@@ -108,13 +110,17 @@ every image it makes is clean under the tool of the format. The check gives
 the machine an answer about its own root after a crash, and the oracle of
 e2fsprogs keeps both honest.
 
-**Bad.** The writer speaks one table of pointers: the largest file of a
-volume of 1024-byte blocks is 268 KiB, and a program that copies a bigger
-file gets `ENOSPC`. There is no `rename` (a name changes by a copy and a
-removal, which is not atomic), no `rmdir` because the VFS has no such
-operation, no journal, and no repair. A volume of ext3/ext4 is still refused
-at the mount. A directory that is grown by this writer is not indexed with
-`dir_index`, which is legal ext2 and what a `e2fsck -D` reindexes.
+**Bad.** The writer spoke one table of pointers when this ADR was written:
+the largest file of a volume of 1024-byte blocks was 268 KiB, and a program
+that copied a bigger file got `ENOSPC`. 1.5 made the double and the triple
+table of the format writable, so the ceiling is the format and the volume
+now. The cost of the first writer - eleven sectors of the medium for every
+kilobyte of a file - is the debt that ADR 0037 closed. There is no `rename`
+(a name changes by a copy and a removal, which is not atomic), no `rmdir`
+because the VFS has no such operation, no journal, and no repair. A volume of
+ext3/ext4 is still refused at the mount. A directory that is grown by this
+writer is not indexed with `dir_index`, which is legal ext2 and what a
+`e2fsck -D` reindexes.
 
 **Cost.** The check visits every directory of the root at each call, and a
 `stat` of a file reads its inode and the descriptor of its group with no

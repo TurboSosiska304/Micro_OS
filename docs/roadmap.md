@@ -162,6 +162,8 @@ written when the project was an operating system for one board; the numbers
       checks the link address against the ELF (ADR 0007, "The higher half:
       taken")
 * [ ] A port for a real ARM with an MMU: the same contract, a second `arch/`
+      (`docs/plan-arm64.md`; a **later release**, no date - the plan is written
+      and the work is not started)
 * [ ] `KERNEL_NOMMU` becomes 0 and the concessions become features
 
 ## K6 - The filesystem and the network (in progress)
@@ -198,6 +200,14 @@ written when the project was an operating system for one board; the numbers
       half-written create or unlink - is freed with its blocks; the check runs
       again afterwards, and the header, the data of a file and a shared
       directory stay `(not repaired)` for a person
+* [x] MicroFS 1.7 ([ADR 0038](adr/0038-a-table-of-records.md)): the `META`
+      section is the map of the free blocks and the table of the records and
+      nothing else, the table is sized by the records and grows into the data
+      section when its reserve runs out, every record of a version 3 volume
+      carries CRC32 of itself - so a write that a power cut stopped is named
+      by `fsck` and repaired - and the record holds the group of the object,
+      which `statx` answers; a volume of version 1 and 2 mounts and writes as
+      it did
 * [ ] A journal or a cache of the changes under a write
 * [x] ext2, the reader with inodes and a superblock a checker can walk
       (ADR 0019): the superblock, the group descriptors, the inode table,
@@ -253,6 +263,13 @@ written when the project was an operating system for one board; the numbers
       eight names in a cache, and the x86-64 stack asks it for every name, so
       `http`, `httpd` and `mqtt` get the cache behind `k_socket_connect`; the
       board still resolves through lwIP, which has one of its own
+* [ ] The WiFi of a laptop: the reconnaissance and the steps of the Intel
+      8265 of a ThinkPad X1 Carbon 6th Gen are [plan-wifi.md](plan-wifi.md)
+      and the decision is [ADR 0039](adr/0039-wifi-on-a-laptop.md). The path
+      is a port of OpenBSD's `iwm(4)` and `net80211` (BSD, not the GPL
+      `iwlwifi`) with the firmware as a file beside the driver; it is **not a
+      lane of 1.7 or 1.8**, because the wire (the I219-V of the machine) and
+      then USB come first, and it is most of a year of one person after them
 
 ## K7 - Quality (done)
 
@@ -557,14 +574,20 @@ on a VFS without `rename` (see [debts.md](debts.md)).
       `/dev/input0`, the window model, the canvas and the keyboard of
       `components/ui`, the arrows of the E0 prefix as keys of the machine, and
       the programs `/bin/ui`, `/bin/edit` and `/bin/fm`
-* [ ] Later: a 2D surface for a program is there and a mouse is not; a
-      compositor, optionally virtio-gpu 2D in QEMU; UEFI GOP for a real
-      machine, which is a loader of its own
+* [ ] Later: a 2D engine of the device through the contract of `kernel/fb_ops.h`
+      (virtio-gpu 2D in QEMU, the blitter of a real card); a mouse is there and a
+      compositor is not; the UEFI GOP of the firmware is the screen of the UEFI
+      boot (ADR 0037)
 
-A desktop is not a step of this list. A picture a program draws on arrived in
-1.4.0, the programs of the screen in 1.5.0 and a mouse is the next device
-(see [releases/2.0.md](releases/2.0.md)); the compositor stays a program of
-the system and not the kernel.
+The desktop of 1.7 is not a step of this list of the screen: it is a program
+of the userland. `ports/port_x86_64/src/ps2.c` reads the second port of the
+8042 and `/dev/input0` carries `key.pointer.x`, `key.pointer.y` and
+`key.button.left` beside the keys; `/bin/wm` owns the picture, composites the
+buffer of every window, draws the panel and the pointer, and the editor and
+the file manager of 1.5 are its clients through `components/ui/client`
+([desktop.md](desktop.md)). The compositor stays a program of the system and
+not the kernel, and the device may fill and copy a rectangle itself through the
+contract of `kernel/fb_ops.h` - there is no such device in this release.
 
 ## K12 - The stream and the installer (done in 1.2.0)
 
@@ -634,10 +657,20 @@ the system and not the kernel.
 * [x] `make x86-iso-smoke`: the ISO boots with `-cdrom` and nothing else,
       mounts the root image and runs `/bin/hello` from the boot and from the
       shell
-* [ ] UEFI: the EFI application, the memory map of the firmware, GOP and the
-      exit of the boot services; the framebuffer of ADR 0023 is here, so the
-      screen a GOP hands over is the next door to a physical machine, and
-      the loader for it is not written yet
+* [x] UEFI: the EFI application of the tree (`loader/uefi`, a PE/COFF image
+      built by clang and lld-link), the map of the memory of the firmware in
+      the shape the port reads, GOP as the screen of the machine (a shadow of
+      the console's RGB565 and the conversion of the cells that change,
+      `src/gop.c`), the root of the ACPI tables from the configuration table,
+      `ExitBootServices` and the page tables of the boot; `make uefi` writes
+      a FAT volume with `BOOTX64.EFI`, the kernel and `disk.img`, and
+      `make uefi-smoke` boots it under OVMF and checks the machine, the shell
+      and the picture of the card (ADR 0037,
+      [ports/x86_64/uefi.md](ports/x86_64/uefi.md))
+* [ ] The laptop of a person: a USB keyboard (xHCI and a HID keyboard), a
+      disk the kernel drives itself (AHCI, then NVMe) and a writable root,
+      the clock and the shutdown of ACPI, and the I/O APIC of a real chipset -
+      the table of `ports/x86_64/uefi.md` "What is not done" is the order
 * [ ] A hybrid image: the ISO written to a USB stick boots as a disk
       (`limine bios-install`, or a protective MBR and the GRUB record)
 * [ ] A writable root: the root of the CD is read-only, and a person's files

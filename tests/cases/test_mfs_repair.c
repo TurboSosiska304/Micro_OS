@@ -44,24 +44,52 @@ static k_u32_t bitmap_blocks(void)
     return (g_sb.data_blocks + 8u * MFS_BLOCK_SIZE - 1u) / (8u * MFS_BLOCK_SIZE);
 }
 
+/* Where the map of the free blocks starts: the top of META in a version 3
+ * volume, its start in the versions before it (ADR 0038). */
+static k_u32_t bitmap_start(void)
+{
+    return (g_sb.version >= MFS_VERSION) ? g_sb.info_start - g_sb.bitmap_blocks : g_sb.meta_start;
+}
+
 /* The record of the mounted volume: 16 bytes for a volume of version 1. */
 static k_u32_t record_size(void)
 {
-    return (g_sb.version == MFS_VERSION_LEGACY) ? MFS_INODE_SIZE_LEGACY : MFS_INODE_SIZE;
+    if (g_sb.version == MFS_VERSION_LEGACY) {
+        return MFS_INODE_SIZE_LEGACY;
+    }
+
+    return (g_sb.version == MFS_VERSION_TIME) ? MFS_INODE_SIZE_TIME : MFS_INODE_SIZE;
 }
 
 static k_u32_t inode_capacity(void)
 {
+    if (g_sb.version >= MFS_VERSION) {
+        return g_sb.inode_records - 1u;
+    }
+
     return (g_sb.meta_blocks - bitmap_blocks()) * MFS_BLOCK_SIZE / record_size() - 1u;
 }
 
 static k_u32_t inode_block(k_u32_t index)
 {
+    if (g_sb.version >= MFS_VERSION) {
+        k_u32_t per_block = MFS_BLOCK_SIZE / record_size();
+        k_u32_t slots = index + 1u;
+
+        return (g_sb.info_start - g_sb.bitmap_blocks) - (slots + per_block - 1u) / per_block;
+    }
+
     return g_sb.meta_start + bitmap_blocks() + (index * record_size()) / MFS_BLOCK_SIZE;
 }
 
 static k_u32_t inode_offset(k_u32_t index)
 {
+    if (g_sb.version >= MFS_VERSION) {
+        k_u32_t per_block = MFS_BLOCK_SIZE / record_size();
+
+        return ((per_block - (index + 1u) % per_block) % per_block) * record_size();
+    }
+
     return (index * record_size()) % MFS_BLOCK_SIZE;
 }
 
@@ -76,6 +104,15 @@ static int block_write(k_u32_t block, const void *buf)
 }
 
 /* A record of the table, through the device, the way a writer of it works. */
+static k_u32_t legacy_crc32(const void *data, k_size_t size);
+
+/* The bytes of a record that are its fields: the record of a version 3
+ * volume is longer than the structure and carries a checksum after them. */
+static k_size_t record_fields(void)
+{
+    return (record_size() < sizeof(struct mfs_inode)) ? record_size() : sizeof(struct mfs_inode);
+}
+
 static int inode_get(k_u32_t index, struct mfs_inode *out)
 {
     k_u8_t block[MFS_BLOCK_SIZE];
@@ -87,7 +124,7 @@ static int inode_get(k_u32_t index, struct mfs_inode *out)
     /* The reader of the filesystem answers zero for the times of a record
      * that has no room for them, and so does this one. */
     memset(out, 0, sizeof(*out));
-    memcpy(out, block + inode_offset(index), record_size());
+    memcpy(out, block + inode_offset(index), record_fields());
 
     return 0;
 }
@@ -95,12 +132,22 @@ static int inode_get(k_u32_t index, struct mfs_inode *out)
 static int inode_put(k_u32_t index, const struct mfs_inode *inode)
 {
     k_u8_t block[MFS_BLOCK_SIZE];
+    k_u32_t at = inode_offset(index);
 
     if (block_read(inode_block(index), block) != 0) {
         return -1;
     }
 
-    memcpy(block + inode_offset(index), inode, record_size());
+    memset(block + at, 0, record_size());
+    memcpy(block + at, inode, record_fields());
+
+    /* A record of a version 3 volume carries its checksum; a record without
+     * one is the torn write the check of the volume names (ADR 0038). */
+    if (record_size() == MFS_INODE_SIZE) {
+        k_u32_t crc = legacy_crc32(block + at, MFS_INODE_SIZE - sizeof(k_u32_t));
+
+        memcpy(block + at + MFS_INODE_SIZE - sizeof(k_u32_t), &crc, sizeof(crc));
+    }
 
     return block_write(inode_block(index), block);
 }
@@ -136,11 +183,14 @@ static int chain_next(k_u32_t block, k_u32_t *next)
     return 0;
 }
 
+/* A bit of the map of the free blocks, through the device. The map of a
+ * version 3 volume is at the top of META and the one of the versions before
+ * it at its start (ADR 0038). */
 static int bitmap_get(k_u32_t block)
 {
     k_u8_t data[MFS_BLOCK_SIZE];
 
-    if (block_read(g_sb.meta_start, data) != 0) {
+    if (block_read(bitmap_start(), data) != 0) {
         return -1;
     }
 
@@ -151,7 +201,7 @@ static int bitmap_put(k_u32_t block, bool used)
 {
     k_u8_t data[MFS_BLOCK_SIZE];
 
-    if (block_read(g_sb.meta_start, data) != 0) {
+    if (block_read(bitmap_start(), data) != 0) {
         return -1;
     }
 
@@ -161,7 +211,7 @@ static int bitmap_put(k_u32_t block, bool used)
         data[block / 8u] &= (k_u8_t) ~(1u << (block % 8u));
     }
 
-    return block_write(g_sb.meta_start, data);
+    return block_write(bitmap_start(), data);
 }
 
 /* The first block of the data section the map calls free. */
@@ -342,6 +392,7 @@ static k_u32_t legacy_crc32(const void *data, k_size_t size)
 static void volume_to_legacy(void)
 {
     struct mfs_inode records[LEGACY_RECORDS];
+    k_u8_t map[MFS_BLOCK_SIZE];
     k_u8_t *table;
     k_u32_t capacity = inode_capacity();
     k_u32_t i;
@@ -350,15 +401,21 @@ static void volume_to_legacy(void)
         capacity = LEGACY_RECORDS - 1u;
     }
 
-    table = g_volume.data + (size_t)(g_sb.meta_start + bitmap_blocks()) * MFS_BLOCK_SIZE;
-
     memset(records, 0, sizeof(records));
 
     for (i = 1; i <= capacity; i++) {
-        memcpy(&records[i], table + (size_t)i * MFS_INODE_SIZE, sizeof(records[i]));
+        KT_CHECK_INT_EQ(inode_get(i, &records[i]), 0);
     }
 
-    memset(table, 0, (size_t)(g_sb.meta_blocks - bitmap_blocks()) * MFS_BLOCK_SIZE);
+    /* The map moves from the top of META to its start, the old place of the
+     * table (ADR 0038), and the table of the smaller records follows it. */
+    memcpy(map, g_volume.data + (size_t)bitmap_start() * MFS_BLOCK_SIZE, MFS_BLOCK_SIZE);
+
+    memset(g_volume.data + (size_t)g_sb.meta_start * MFS_BLOCK_SIZE, 0,
+           (size_t)g_sb.meta_blocks * MFS_BLOCK_SIZE);
+    memcpy(g_volume.data + (size_t)g_sb.meta_start * MFS_BLOCK_SIZE, map, MFS_BLOCK_SIZE);
+
+    table = g_volume.data + (size_t)(g_sb.meta_start + bitmap_blocks()) * MFS_BLOCK_SIZE;
 
     for (i = 1; i <= capacity; i++) {
         if ((records[i].flags & MFS_INODE_USED) != 0u) {
@@ -367,8 +424,12 @@ static void volume_to_legacy(void)
     }
 
     g_sb.version = MFS_VERSION_LEGACY;
-    g_sb.features &= (k_u32_t)~MFS_FEATURE_TIME;
-    g_sb.crc = legacy_crc32(&g_sb, sizeof(g_sb) - sizeof(g_sb.crc));
+    g_sb.features &= (k_u32_t) ~(MFS_FEATURE_TIME | MFS_FEATURE_RECORD_CRC);
+    g_sb.bitmap_blocks = 0;
+    g_sb.inode_blocks = 0;
+    g_sb.inode_size = 0;
+    g_sb.inode_records = 0;
+    g_sb.crc = legacy_crc32(&g_sb, MFS_HEADER_CRC_SPAN);
 
     memcpy(g_volume.data + (size_t)(REPAIR_BLOCKS - 1) * MFS_BLOCK_SIZE, &g_sb, sizeof(g_sb));
 }
@@ -1081,12 +1142,7 @@ static void test_big_table(void)
     struct mfs_info info;
     struct mfs_inode inode;
     struct mfs_inode after;
-    k_u8_t block[MFS_BLOCK_SIZE];
-    k_u32_t record = MFS_INODE_SIZE;
-    k_u32_t bitmap_blocks;
     k_u32_t index = 33000u;
-    k_u32_t block_number;
-    k_u32_t offset;
     int rc;
 
     ktest_begin("mfs: the repair of a table of records beyond 32768");
@@ -1099,28 +1155,28 @@ static void test_big_table(void)
     KT_CHECK(info.inodes_total > index);
 
     memcpy(&sb, volume.data + (size_t)(BIG_BLOCKS - 1) * MFS_BLOCK_SIZE, sizeof(sb));
-    bitmap_blocks = (sb.data_blocks + 8u * MFS_BLOCK_SIZE - 1u) / (8u * MFS_BLOCK_SIZE);
-    if (sb.version == MFS_VERSION_LEGACY) {
-        record = MFS_INODE_SIZE_LEGACY;
-    }
+    /* The helpers of the file read the volume through the globals of the
+     * fixture; this test has a volume of its own. */
+    g_device = device;
+    g_sb = sb;
 
-    /* A record that is used and that no name reaches, beyond the old map. */
+    /*
+     * A record that is used and that no name reaches, beyond the 32768 the
+     * map of the records of 1.4 held. It goes through the device with the
+     * checksum of the format, so that what the repair meets is a record
+     * nobody reaches and not a record that a write tore (ADR 0038).
+     */
     memset(&inode, 0, sizeof(inode));
     inode.flags = MFS_INODE_USED;
-    block_number = sb.meta_start + bitmap_blocks + (index * record) / MFS_BLOCK_SIZE;
-    offset = (index * record) % MFS_BLOCK_SIZE;
-    KT_CHECK_INT_EQ(device.ops->read(device.ctx, block_number, block, 1), 0);
-    memcpy(block + offset, &inode, record);
-    KT_CHECK_INT_EQ(device.ops->write(device.ctx, block_number, block, 1), 0);
+    KT_CHECK_INT_EQ(inode_put(index, &inode), 0);
 
     rc = mfs_repair(&report);
     KT_CHECK_INT_EQ(rc, MFS_OK);
     KT_CHECK(report.errors == 0);
     KT_CHECK(report.fixed > 0);
 
-    KT_CHECK_INT_EQ(device.ops->read(device.ctx, block_number, block, 1), 0);
     memset(&after, 0, sizeof(after));
-    memcpy(&after, block + offset, record);
+    KT_CHECK_INT_EQ(inode_get(index, &after), 0);
     KT_CHECK_INT_EQ(after.flags, 0);
 
     KT_CHECK_INT_EQ(mfs_check(&report), MFS_OK);

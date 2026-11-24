@@ -1651,6 +1651,16 @@ static void httpd_accept_task(void *arg)
             continue;
         }
 
+        /*
+         * The list of the sessions is also the ceiling of the door: a session
+         * whose pid is not kept is a slot of the task table that nobody gives
+         * back, so a client past the list is refused here.
+         */
+        if (s_session_count >= K_ARRAY_SIZE(s_session_pids)) {
+            refuse_session(client);
+            continue;
+        }
+
         session = kmm_alloc(sizeof(*session), KMM_PRIORITY_USER);
         if (session == NULL) {
             refuse_session(client);
@@ -1660,22 +1670,31 @@ static void httpd_accept_task(void *arg)
         memset(session, 0, sizeof(*session));
         session->stream.socket = client;
 
+        /*
+         * The session is counted before the task that serves it exists. A
+         * client may close in the instant between the two, and the task then
+         * runs and gives the count back; an add that came after the create
+         * could be lost behind a task that had already finished (the count
+         * would wrap below zero and the door would read a number of sessions
+         * that never existed), or a session that is already serving would be
+         * counted late (and one more let over the ceiling). The count is the
+         * reservation, and the task is the work.
+         */
+        counter_add(&s_active);
+
         {
             struct task *task =
                 task_create("httpd", httpd_session_task, session, TASK_PRIO_DEFAULT);
 
             if (task == NULL) {
+                counter_sub(&s_active);
                 kmm_free(session);
                 refuse_session(client);
                 continue;
             }
 
-            if (s_session_count < K_ARRAY_SIZE(s_session_pids)) {
-                s_session_pids[s_session_count++] = task->pid;
-            }
+            s_session_pids[s_session_count++] = task->pid;
         }
-
-        counter_add(&s_active);
     }
 
     k_server_close(server);

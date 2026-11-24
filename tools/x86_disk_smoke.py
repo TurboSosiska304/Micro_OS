@@ -43,6 +43,8 @@ import subprocess
 import sys
 import time
 
+from qemu_session import DISKS, drive_args, root_name
+
 # The image of the build, and the image of this run: the test works on a
 # copy, so a failed boot never leaves a half-written disk for the next one.
 BASE_IMAGE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -168,8 +170,9 @@ def run_machine(image: str, commands: list, timeout: float) -> str:
         "256",
         "-nographic",
         "-no-reboot",
-        # A raw image on the primary channel: the driver of the port polls
-        # the ports of the IDE controller (ADR 0008).
+        # A raw image on one of the two disks of the port: the primary
+        # channel of ADR 0008 by default, the virtio device of ADR 0037 with
+        # `--disk virtio`. The image is the same file.
         #
         # The cache of the host is on purpose. `writethrough` turns every
         # 512-byte write of the guest into a synchronous write of the file,
@@ -179,8 +182,7 @@ def run_machine(image: str, commands: list, timeout: float) -> str:
         # this test is about is a new process on the same file, and the page
         # cache of the host is enough for it; the flush of the guest (the
         # ATA command of `sync`) still reaches the medium.
-        "-drive",
-        f"file={image},format=raw,if=ide,index=0,cache=writeback",
+        *drive_args(image, DISK),
     ]
 
     process = subprocess.Popen(
@@ -252,10 +254,15 @@ def check(first: str, second: str) -> list:
         checks.append((name, bool(condition), detail))
 
     # --- the disk of the machine is found and read
-    expect("the drive on the channel is found", re.search(r"ata0: \d+ MB", first) is not None)
+    expect(
+        "the drive of the machine is found",
+        DISK == "virtio"
+        and re.search(r"virtio0: \d+ MB of virtio-blk", first) is not None
+        or DISK != "virtio" and re.search(r"ata0: \d+ MB", first) is not None,
+    )
     expect(
         "the boot reads the MBR and takes the first partition",
-        "x86-64: the root volume is ata0p1 (1 partition(s))" in first,
+        f"x86-64: the root volume is {root_name(DISK)} (1 partition(s))" in first,
     )
 
     # A boot that stopped before its shell is the failure this test is
@@ -394,7 +401,7 @@ def check(first: str, second: str) -> list:
     )
     expect(
         "the second boot mounts the partition it finds",
-        "x86-64: the root volume is ata0p1" in second,
+        f"x86-64: the root volume is {root_name(DISK)}" in second,
     )
     expect(
         "the volume of the second boot is not formatted again",
@@ -626,8 +633,17 @@ def main(argv: list) -> int:
     parser.add_argument("--timeout", type=float, default=60.0, help="the seconds a boot gets")
     parser.add_argument("--repeat", type=int, default=1, help="how many times to boot the pair")
     parser.add_argument("--keep", action="store_true", help="keep the image after the run")
+    parser.add_argument(
+        "--disk",
+        choices=DISKS,
+        default="ide",
+        help="the bus of the disk of the run (default: ide)",
+    )
     parser.add_argument("--verbose", action="store_true", help="print the consoles of the boots")
     args = parser.parse_args(argv)
+
+    global DISK
+    DISK = args.disk
 
     if args.mkimage:
         try:

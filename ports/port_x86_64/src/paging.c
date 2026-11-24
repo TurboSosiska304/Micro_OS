@@ -64,6 +64,15 @@
 #define PTE_COW 0x200u
 
 /*
+ * The two bits of the cache of a page: a window of a device whose bytes the
+ * processor may not keep - the frame of a graphics card, a control register
+ * of a controller - is mapped with them and the store reaches the device
+ * instead of a line of a cache (port_x86_64_paging_map_mmio).
+ */
+#define PTE_PCD 0x010u
+#define PTE_PWT 0x008u
+
+/*
  * The no-execute bit, the highest of the entry. It only means anything when
  * EFER.NXE is set, which the loader does before it turns paging on (see
  * loader32.S); without it bit 63 is a reserved bit and a page fault. Every
@@ -401,6 +410,52 @@ k_u32_t port_x86_64_paging_map_device(k_u64_t vaddr, k_u64_t paddr, k_size_t len
 
         g_kernel_pd_high[index] =
             (chunk & PTE_ADDRESS) | PTE_PRESENT | PTE_WRITABLE | PTE_PAGE_SIZE | PTE_NX;
+        index++;
+        pages++;
+    }
+
+    return pages;
+}
+
+/*
+ * The same window, for a device whose bytes are the device itself: the frame
+ * of the graphics output of a firmware, a register of a controller. The page
+ * is uncached in both directions (PCD and PWT), because a line of the cache
+ * of the processor in front of a display holds a picture the display never
+ * sees, and a read of a register may be the read of the state of the device
+ * rather than of the memory.
+ *
+ * The framebuffer of the Bochs VBE interface is mapped by the call above
+ * instead: it is the memory of a card of QEMU, a store of it is a store of the
+ * emulator, and the cache of the processor is not a wrong answer to that - it
+ * is a cache of the same bytes. A machine of a person is not an emulator, and
+ * the frame of its firmware is behind this call.
+ */
+k_u32_t port_x86_64_paging_map_mmio(k_u64_t vaddr, k_u64_t paddr, k_size_t len)
+{
+    const k_u64_t high_end = PORT_X86_64_KERNEL_BASE + 0x40000000ull;
+    k_u64_t first = paddr & ~(k_u64_t)(LARGE_PAGE_SIZE - 1u);
+    k_u64_t last = paddr + (k_u64_t)len;
+    k_u64_t chunk;
+    k_u32_t index = (k_u32_t)((vaddr >> 21) & (TABLE_ENTRIES - 1u));
+    k_u32_t pages = 0;
+
+    if (len == 0 || (vaddr & (k_u64_t)(LARGE_PAGE_SIZE - 1u)) != 0 ||
+        vaddr < PORT_X86_64_KERNEL_BASE) {
+        return 0;
+    }
+
+    if (vaddr + (last - first) > high_end) {
+        return 0;
+    }
+
+    for (chunk = first; chunk < last; chunk += LARGE_PAGE_SIZE) {
+        if (index >= TABLE_ENTRIES) {
+            return 0;
+        }
+
+        g_kernel_pd_high[index] = (chunk & PTE_ADDRESS) | PTE_PRESENT | PTE_WRITABLE |
+                                  PTE_PAGE_SIZE | PTE_NX | PTE_PCD | PTE_PWT;
         index++;
         pages++;
     }

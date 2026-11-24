@@ -336,8 +336,14 @@ static void clock_measure(void)
     port_outb(0x42, (k_u8_t)(counts & 0xFF));
     port_outb(0x42, (k_u8_t)(counts >> 8));
 
-    /* The gate of channel 2 is bit 0 of port 0x61: low clears, high starts. */
-    gate = port_inb(0x61) & (k_u8_t)~0x01;
+    /*
+     * The gate of channel 2 is bit 0 of port 0x61, and bit 1 of the same port
+     * is the speaker's own gate: a machine whose firmware left it high turns
+     * this calibration into fifty milliseconds of tone. The speaker stays off
+     * on both sides of the measurement - a machine that beeps while it only
+     * measures its clock is a machine that looks broken.
+     */
+    gate = port_inb(0x61) & (k_u8_t) ~(0x01 | 0x02);
     port_outb(0x61, gate);
     port_outb(0x61, (k_u8_t)(gate | 0x01));
 
@@ -388,7 +394,11 @@ struct idt_pointer {
 #define IRQ_TIMER 0u
 #define IRQ_KEYBOARD 1u
 #define IRQ_CASCADE 2u
-#define IRQ_ATA 14u /* the primary IDE channel, on the slave */
+#define IRQ_MOUSE 12u          /* the second port of the 8042, on the slave (1.7.0) */
+#define IRQ_ATA 14u            /* the primary IDE channel, on the slave */
+#define IRQ_CASCADE_LINE 2u    /* the slave reaches the master through it */
+#define IRQ_SPURIOUS_MASTER 7u /* the vector of an acknowledge of nothing */
+#define IRQ_SPURIOUS_SLAVE 15u /* the same, on the slave */
 
 /* The lines of the port that have a handler, in the order the counters below
  * and the `smp irq` command name them (PORT_X86_64_IRQ_TIMER and
@@ -423,7 +433,9 @@ static struct idt_pointer g_idt_pointer;
 extern void (*const port_isr_exception_table[32])(void);
 extern void isr_irq0(void);
 extern void isr_irq1(void);
+extern void isr_irq12(void);
 extern void isr_irq_ata(void);
+extern void isr_irq_8259_spurious(void);
 extern void isr_syscall(void);
 extern void isr_unexpected(void);
 
@@ -490,8 +502,14 @@ static void pic_init(void)
     port_outb(PIC2_DATA, 0x01);
     port_io_wait();
 
-    port_outb(PIC1_DATA, 0xFC); /* bits 0 and 1 clear: the timer, the keyboard */
-    port_outb(PIC2_DATA, 0xFF); /* nothing of the slave is */
+    /*
+     * The timer, the keyboard and the pointer are open; nothing else is. The
+     * mouse hangs on the fourth line of the slave, so the cascade of the
+     * second chip is open as well (1.7.0): the two bits of the slave that are
+     * clear are the cascade and the pointer.
+     */
+    port_outb(PIC1_DATA, 0xF8); /* bits 0, 1 and 2 clear: timer, keyboard, cascade */
+    port_outb(PIC2_DATA, 0xEF); /* bit 4 clear: the mouse of IRQ12 */
 }
 
 /* Close both chips: every line of the 8259 is masked and the chip raises
@@ -507,8 +525,8 @@ static void pic_mask_all(void)
  * that has no I/O APIC, and the undo of a route that did not hold). */
 static void pic_unmask_port_lines(void)
 {
-    port_outb(PIC1_DATA, 0xFC);
-    port_outb(PIC2_DATA, 0xFF);
+    port_outb(PIC1_DATA, 0xF8);
+    port_outb(PIC2_DATA, 0xEF);
 }
 
 /*
@@ -590,6 +608,22 @@ k_u32_t port_x86_64_irq_count(k_u32_t line, k_u32_t cpu)
  * and with the I/O APIC the line is in service until the local APIC of this
  * core hears about it.
  */
+/*
+ * The acknowledge that found nothing behind the request, on the 8259. The
+ * cascade of the slave is the one the chip puts in service itself, so both
+ * chips are told that the interrupt is over; a chip with nothing in service
+ * makes a no-op of the write. A handler for these three vectors is what keeps
+ * a level-triggered line of the PCI bus - the disk of ADR 0037 is one - from
+ * stopping the machine on a race of the chip that no device caused.
+ */
+void port_x86_64_irq_8259_spurious(k_u64_t *frame)
+{
+    K_UNUSED(frame);
+
+    port_outb(PIC2_COMMAND, PIC_EOI);
+    port_outb(PIC1_COMMAND, PIC_EOI);
+}
+
 void port_x86_64_irq_tick(k_u64_t *frame)
 {
     g_ticks++;
@@ -877,6 +911,10 @@ void port_x86_64_interrupts_init(void)
      * this stub reads the byte that raised it (src/ps2.c). */
     idt_set(IRQ_BASE + IRQ_KEYBOARD, isr_irq1, 0, IDT_GATE_INTERRUPT);
 
+    /* The pointer is the twelfth line: the second device of the same
+     * controller (1.7.0), and the same body with the status byte deciding. */
+    idt_set(IRQ_BASE + IRQ_MOUSE, isr_irq12, 0, IDT_GATE_INTERRUPT);
+
     /*
      * The disk of the machine, the sixth line of the slave. The entry is here
      * for the machine that has the drive: a channel with nothing on it never
@@ -884,6 +922,21 @@ void port_x86_64_interrupts_init(void)
      * opens it (src/ata.c, ADR 0032).
      */
     idt_set(IRQ_BASE + IRQ_ATA, isr_irq_ata, 0, IDT_GATE_INTERRUPT);
+
+    /*
+     * The three vectors of the 8259 that no device owns: the cascade, which is
+     * the line of the slave on the master, and the two the chip answers with
+     * when an acknowledge finds nothing behind the request. A line of the PCI
+     * bus is level-triggered (the ELCR of the PIIX says which of them are), and
+     * a level that lets go of its request between the interrupt and the
+     * acknowledge is exactly that: the chip answers with the vector of its own
+     * line, and a machine without an entry for it stops on a fault that no
+     * device caused. The handler acknowledges and returns (src/interrupts.S,
+     * the story is in src/virtio_blk.c).
+     */
+    idt_set(IRQ_BASE + IRQ_CASCADE_LINE, isr_irq_8259_spurious, 0, IDT_GATE_INTERRUPT);
+    idt_set(IRQ_BASE + IRQ_SPURIOUS_MASTER, isr_irq_8259_spurious, 0, IDT_GATE_INTERRUPT);
+    idt_set(IRQ_BASE + IRQ_SPURIOUS_SLAVE, isr_irq_8259_spurious, 0, IDT_GATE_INTERRUPT);
 
     /*
      * The door of the programs of the port. Without this one line the
@@ -925,6 +978,17 @@ void port_x86_64_interrupts_init(void)
         if (port_x86_64_ioapic_route(IRQ_TIMER, IRQ_BASE + IRQ_TIMER, 0u) &&
             port_x86_64_ioapic_route(IRQ_KEYBOARD, IRQ_BASE + IRQ_KEYBOARD, 0u)) {
             g_ioapic_lines = true;
+
+            /*
+             * The pointer is a line of its own and a machine without a mouse
+             * has nothing on it. A chip that does not take this entry is a
+             * desktop without a pointer, not a machine without an interface:
+             * the line stays shut and the two lines of ADR 0012 are where
+             * they were.
+             */
+            if (!port_x86_64_ioapic_route(IRQ_MOUSE, IRQ_BASE + IRQ_MOUSE, 0u)) {
+                kwarn("input: the I/O APIC did not take the line of the pointer");
+            }
         } else {
             /* A chip that took one line and not the other is a chip this
              * port does not trust with either of them. */
@@ -1064,28 +1128,408 @@ struct mb_mmap_entry {
  */
 static const struct mb_info *g_boot_info;
 
-/* The last byte of the modules of the boot, 0 when the boot had none. The
- * loader copied the kernel out of one of them and the volume of the ISO is
- * read from another, so the heap has to start above both. */
-static k_u64_t boot_modules_end(const struct mb_info *info)
-{
-    const k_u32_t *mods;
-    k_u64_t end = 0;
-    k_u32_t i;
+/*
+ * Where the loader put the image. The BIOS loader copies the bytes to
+ * PORT_X86_64_KERNEL_PHYS and the loader of a UEFI machine asks the firmware
+ * for a block and says where it is; the page tables translate a pointer of
+ * the image with the number this variable holds
+ * (port_x86_64_kernel_phys), so it is set before the first table is built.
+ */
+k_u64_t g_port_x86_64_kernel_phys = PORT_X86_64_KERNEL_PHYS;
 
-    if (info == NULL || (info->flags & MB_FLAG_MODS) == 0 || info->mods_addr == 0) {
-        return 0;
+/* The boot of a UEFI machine, NULL on the BIOS path: the picture, the root of
+ * the ACPI tables and the address of the image (port_x86_64_boot.h). */
+static const struct port_x86_64_boot_info *g_uefi_boot;
+
+/*
+ * The memory the boot describes, and the pieces of it that are not the port's
+ * to keep anything in.
+ *
+ * A boot loader hands the kernel a map of the memory and the modules it loaded
+ * (the kernel's own bytes and the root image of a medium, ADR 0026), and the
+ * port takes two things out of it: a heap for the kernel and the bytes of a
+ * module a filesystem reads. Both have to live in the identity map of the
+ * first gigabyte (PORT_X86_64_IDENTITY_LIMIT), and neither may be in one of
+ * three places:
+ *
+ *  - the window of the programs, 32-48 MiB: every page table of the port, the
+ *    kernel's own included, maps those 16 MiB of the address space onto the
+ *    arena at 64 MiB, so a byte of the map that falls there is a byte of a
+ *    program that never ran (src/paging.c). The heap of the port has always
+ *    stopped below it, at `exec_base`; a module that a firmware loader puts
+ *    there is a module the filesystem reads out of a program's image;
+ *  - the arena itself, 64-80 MiB, where the image of the program being run is
+ *    written;
+ *  - the image of the kernel and the modules of the boot, which are somebody
+ *    else's bytes.
+ *
+ * A "hole" below is one of those ranges. The two callers - the place of the
+ * heap and the place of a module that has to move - ask for the first or the
+ * largest run of the usable memory that avoids them.
+ */
+#define MEMORY_HOLES_MAX 8u
+#define MEMORY_PAGE 4096u
+
+/* The heap of the port: never smaller than a megabyte, never larger than the
+ * 32 MiB the machine of 1.0 gave it. */
+#define HEAP_MIN_BYTES (1024u * 1024u)
+#define HEAP_MAX_BYTES (32u * 1024u * 1024u)
+
+struct memory_hole {
+    k_u64_t base;
+    k_u64_t end;
+};
+
+static struct memory_hole g_holes[MEMORY_HOLES_MAX];
+static k_u32_t g_hole_count;
+
+static void holes_reset(void)
+{
+    g_hole_count = 0;
+}
+
+static void hole_add(k_u64_t base, k_u64_t size)
+{
+    if (size == 0u || g_hole_count >= MEMORY_HOLES_MAX) {
+        return;
     }
 
-    mods = (const k_u32_t *)(uintptr_t)info->mods_addr;
+    g_holes[g_hole_count].base = base;
+    g_holes[g_hole_count].end = base + size;
+    g_hole_count++;
+}
 
-    for (i = 0; i < info->mods_count; i++) {
-        if ((k_u64_t)mods[i * 4u + 1u] > end) {
-            end = mods[i * 4u + 1u];
+/* The end of the first hole that the range [base, end) touches, or 0 when the
+ * whole range is free. */
+static k_u64_t hole_end(k_u64_t base, k_u64_t end)
+{
+    k_u32_t i;
+
+    for (i = 0; i < g_hole_count; i++) {
+        if (g_holes[i].base < end && base < g_holes[i].end) {
+            return g_holes[i].end;
         }
     }
 
-    return end;
+    return 0;
+}
+
+/* One entry of the map of the boot is memory the port may use: the format
+ * names the region as usable and it starts below 4 GiB (the port reads the
+ * 32-bit form of the entry). */
+static bool memory_usable(const struct mb_mmap_entry *entry)
+{
+    return entry->type == MB_MMAP_USABLE && entry->base_high == 0u && entry->length_low != 0u;
+}
+
+/*
+ * The largest run of [from, to) that no hole covers. The starts of the runs
+ * are `from` and the end of every hole, and the end of a run is the beginning
+ * of the next hole: with eight holes at most, a walk over those starts is the
+ * whole of the search.
+ */
+static void memory_largest_run(k_u64_t from, k_u64_t to, k_u64_t *base, k_u64_t *size)
+{
+    k_u64_t starts[MEMORY_HOLES_MAX + 1u];
+    k_u32_t count = 0;
+    k_u32_t i;
+    k_u32_t j;
+
+    *base = 0u;
+    *size = 0u;
+
+    if (to <= from) {
+        return;
+    }
+
+    starts[count++] = from;
+
+    for (i = 0; i < g_hole_count; i++) {
+        if (g_holes[i].end > from && g_holes[i].end < to) {
+            starts[count++] = g_holes[i].end;
+        }
+    }
+
+    for (i = 0; i < count; i++) {
+        k_u64_t start = starts[i];
+        k_u64_t end = to;
+
+        /* A start inside a hole is not a start: the hole's end is one, and it
+         * is in the list above. */
+        if (start >= to || hole_end(start, start + 1u) != 0u) {
+            continue;
+        }
+
+        for (j = 0; j < g_hole_count; j++) {
+            if (g_holes[j].base > start && g_holes[j].base < end) {
+                end = g_holes[j].base;
+            }
+        }
+
+        if (end > start && end - start > *size) {
+            *base = start;
+            *size = end - start;
+        }
+    }
+}
+
+/*
+ * The first block of `size` bytes at or above `from` that the map of the boot
+ * calls usable and no hole covers, inside the identity map of the kernel. Zero
+ * when the machine has no such block.
+ */
+static k_u64_t memory_first_fit(const struct mb_info *info, k_u64_t from, k_u64_t size)
+{
+    k_u64_t cursor;
+    k_u64_t limit;
+
+    if (info == NULL || (info->flags & MB_FLAG_MMAP) == 0 || info->mmap_length == 0 || size == 0u) {
+        return 0u;
+    }
+
+    cursor = info->mmap_addr;
+    limit = cursor + info->mmap_length;
+
+    while (cursor + sizeof(struct mb_mmap_entry) <= limit) {
+        const struct mb_mmap_entry *entry = (const struct mb_mmap_entry *)(uintptr_t)cursor;
+        k_u64_t base = entry->base_low;
+        k_u64_t bytes = entry->length_low;
+        k_u64_t start;
+        k_u64_t end;
+        k_u32_t attempt;
+
+        cursor += entry->size + sizeof(entry->size);
+
+        if (!memory_usable(entry)) {
+            continue;
+        }
+
+        end = base + bytes;
+
+        if (end > PORT_X86_64_IDENTITY_LIMIT) {
+            end = PORT_X86_64_IDENTITY_LIMIT;
+        }
+
+        start = base > from ? base : from;
+        start = (start + MEMORY_PAGE - 1u) & ~(k_u64_t)(MEMORY_PAGE - 1u);
+
+        for (attempt = 0; attempt <= MEMORY_HOLES_MAX && start + size <= end; attempt++) {
+            k_u64_t taken = hole_end(start, start + size);
+
+            if (taken == 0u) {
+                return start;
+            }
+
+            start = (taken + MEMORY_PAGE - 1u) & ~(k_u64_t)(MEMORY_PAGE - 1u);
+        }
+    }
+
+    return 0u;
+}
+
+/*
+ * The modules of the boot, out of the window of the programs.
+ *
+ * A boot loader of a medium that is not this tree's (limine, the EFI half of
+ * the hybrid ISO) puts a module where its own allocator of the memory wants
+ * it, and one of those places is 23.5 MiB: the 16 MB of the root image then
+ * run from 23.5 to 39.5 MiB, through the window of the programs. The loader of
+ * this port (loader32.S and loader/uefi) puts its modules below 20 MiB and
+ * never has the problem, which is why the port could ignore the question for
+ * as long as it did.
+ *
+ * The module is copied whole, before port_x86_64_paging_init() replaces the map
+ * of the loader (that map still identity-maps the memory here, so both halves
+ * of a module that straddles the window read as themselves), to the first free
+ * block above the arena, and the entry of the multiboot information is written
+ * with the new address: the filesystem, the heap and every reader of the module
+ * then see one address, it is a physical one, and it is in the identity map.
+ *
+ * Module 0 - the kernel - is not moved: the loader copied it to its own bytes
+ * (loader32.S) before this code ran, and nothing reads that copy again, so its
+ * bytes are not even a hole of the memory.
+ */
+static void modules_relocate(const struct mb_info *info)
+{
+    const k_u64_t window_base = (k_u64_t)(uintptr_t)k_port_exec_base();
+    const k_u64_t window_end = window_base + PORT_X86_64_USER_ARENA;
+    const k_u64_t arena_base = PORT_X86_64_USER_PHYS;
+    const k_u64_t arena_end = arena_base + PORT_X86_64_USER_ARENA;
+    k_u32_t *mods;
+    k_u32_t index;
+
+    if (info == NULL || (info->flags & MB_FLAG_MODS) == 0 || info->mods_addr == 0) {
+        return;
+    }
+
+    mods = (k_u32_t *)(uintptr_t)info->mods_addr;
+
+    for (index = 1; index < info->mods_count; index++) {
+        k_u32_t *entry = mods + (k_size_t)index * 4u;
+        k_u64_t start = entry[0];
+        k_u64_t end = entry[1];
+        k_u64_t size;
+        k_u64_t target;
+
+        if (end <= start) {
+            continue;
+        }
+
+        size = end - start;
+
+        if (!(start < window_end && window_base < end) &&
+            !(start < arena_end && arena_base < end)) {
+            /* The module is where the port may keep it: it is a hole for the
+             * heap and it stays there. */
+            hole_add(start, size);
+            continue;
+        }
+
+        target = memory_first_fit(info, arena_end, size);
+
+        if (target == 0u) {
+            kwarn("x86-64: the module %u lies in the window of the programs and has nowhere to go",
+                  (unsigned)index);
+            hole_add(start, size);
+            continue;
+        }
+
+        memcpy((void *)(uintptr_t)target, (const void *)(uintptr_t)start, (k_size_t)size);
+        hole_add(target, size);
+
+        entry[0] = (k_u32_t)target;
+        entry[1] = (k_u32_t)(target + size);
+
+        kinfo("x86-64: the module %u (%u KB) was in the window of the programs, moved to 0x%x",
+              (unsigned)index, (unsigned)(size / 1024u), (unsigned)target);
+    }
+}
+
+/* The holes of the memory and the modules out of them, once, before the heap
+ * and before the page tables of the port: both of them are asked here. */
+static void memory_bring_up(const struct mb_info *info)
+{
+    const k_u64_t window_base = (k_u64_t)(uintptr_t)k_port_exec_base();
+    const k_u64_t kernel_end = port_x86_64_kernel_phys(__kernel_end);
+
+    holes_reset();
+
+    /* The image of the kernel, and then the modules: a module that has to move
+     * must not be moved onto the kernel or onto another module. */
+    hole_add(g_port_x86_64_kernel_phys, kernel_end - g_port_x86_64_kernel_phys);
+    modules_relocate(info);
+
+    hole_add(window_base, PORT_X86_64_USER_ARENA);
+    hole_add(PORT_X86_64_USER_PHYS, PORT_X86_64_USER_ARENA);
+}
+
+/* The largest run of the memory of the boot inside [from, to) that no hole
+ * covers: the pieces of every usable entry of the map, and the largest of them
+ * all. */
+static void heap_take(const struct mb_info *info, k_u64_t from, k_u64_t to, k_u64_t *base,
+                      k_u64_t *size)
+{
+    k_u64_t cursor;
+    k_u64_t limit;
+
+    *base = 0u;
+    *size = 0u;
+
+    cursor = info->mmap_addr;
+    limit = cursor + info->mmap_length;
+
+    while (cursor + sizeof(struct mb_mmap_entry) <= limit) {
+        const struct mb_mmap_entry *entry = (const struct mb_mmap_entry *)(uintptr_t)cursor;
+        k_u64_t start = entry->base_low;
+        k_u64_t end = start + entry->length_low;
+        k_u64_t piece_base;
+        k_u64_t piece_size;
+
+        cursor += entry->size + sizeof(entry->size);
+
+        if (!memory_usable(entry)) {
+            continue;
+        }
+
+        if (start < from) {
+            start = from;
+        }
+
+        if (end > to) {
+            end = to;
+        }
+
+        if (end > PORT_X86_64_IDENTITY_LIMIT) {
+            end = PORT_X86_64_IDENTITY_LIMIT;
+        }
+
+        memory_largest_run(start, end, &piece_base, &piece_size);
+
+        if (piece_size > *size) {
+            *base = piece_base;
+            *size = piece_size;
+        }
+    }
+}
+
+/*
+ * The heap of the port: the biggest piece of the memory that is the kernel's,
+ * in three places in the order of their preference.
+ *
+ *  1. below the window of the programs, between the image of the kernel and
+ *     32 MiB. Every boot of this port until the hybrid ISO had its heap here
+ *     (16.6-32 MiB with the modules of the loader of the port);
+ *  2. the 16 MiB between the window and the arena, 48-64 MiB, for a boot whose
+ *     modules left nothing below the window;
+ *  3. above the arena, below the map of the kernel, which is the memory of a
+ *     machine whose every megabyte below 64 MiB is taken.
+ *
+ * The heap of a machine is a megabyte at the least and 32 MiB at the most, and
+ * a machine that has neither piece has no heap: the boot says so and the kernel
+ * runs on its own bytes.
+ */
+static void heap_init(const struct mb_info *info)
+{
+    const k_u64_t window_base = (k_u64_t)(uintptr_t)k_port_exec_base();
+    const k_u64_t window_end = window_base + PORT_X86_64_USER_ARENA;
+    const k_u64_t arena_base = PORT_X86_64_USER_PHYS;
+    const k_u64_t arena_end = arena_base + PORT_X86_64_USER_ARENA;
+    k_u64_t kernel_end = port_x86_64_kernel_phys(__kernel_end);
+    k_u64_t base = 0u;
+    k_u64_t size = 0u;
+
+    if (info == NULL || (info->flags & MB_FLAG_MMAP) == 0 || info->mmap_length == 0) {
+        return;
+    }
+
+    heap_take(info, kernel_end, window_base, &base, &size);
+
+    if (size < HEAP_MIN_BYTES) {
+        heap_take(info, window_end, arena_base, &base, &size);
+    }
+
+    if (size < HEAP_MIN_BYTES) {
+        heap_take(info, arena_end, PORT_X86_64_IDENTITY_LIMIT, &base, &size);
+    }
+
+    if (size > HEAP_MAX_BYTES) {
+        size = HEAP_MAX_BYTES;
+    }
+
+    if (size < HEAP_MIN_BYTES) {
+        kwarn("x86-64: the memory of the boot has no megabyte for the heap of the kernel");
+        return;
+    }
+
+    base = (base + BLOCK_ALIGN - 1) & ~(k_u64_t)(BLOCK_ALIGN - 1);
+
+    g_first = (struct block *)(uintptr_t)base;
+    g_first->size = size - sizeof(struct block);
+    g_first->next = NULL;
+    g_first->free = true;
+
+    g_heap_total = (k_size_t)g_first->size;
+    g_heap_free = g_heap_total;
 }
 
 bool port_x86_64_boot_module(k_u32_t index, k_u64_t *start, k_u64_t *size)
@@ -1113,106 +1557,6 @@ bool port_x86_64_boot_module(k_u32_t index, k_u64_t *start, k_u64_t *size)
     }
 
     return true;
-}
-
-static void heap_init(k_u64_t multiboot_info)
-{
-    const struct mb_info *info = (const struct mb_info *)(uintptr_t)multiboot_info;
-    k_u64_t best_base = 0;
-    k_u64_t best_size = 0;
-    /*
-     * The map of the boot describes physical memory, and the heap is the low
-     * identity map: a block handed out by k_port_alloc() is an address the
-     * card drivers may hand to a device as it stands (src/virtio_net.c). The
-     * kernel image is linked at the top, so its end has to come back to the
-     * physical number before it can bound a region of the map.
-     */
-    k_u64_t kernel_end = port_x86_64_kernel_phys(__kernel_end);
-    k_u64_t cursor;
-    k_u64_t limit;
-
-    if (info == NULL || (info->flags & MB_FLAG_MMAP) == 0 || info->mmap_length == 0) {
-        return;
-    }
-
-    cursor = info->mmap_addr;
-    limit = cursor + info->mmap_length;
-
-    while (cursor + sizeof(struct mb_mmap_entry) <= limit) {
-        const struct mb_mmap_entry *entry = (const struct mb_mmap_entry *)(uintptr_t)cursor;
-        k_u64_t base = entry->base_low | ((k_u64_t)entry->base_high << 32);
-        k_u64_t length = entry->length_low | ((k_u64_t)entry->length_high << 32);
-
-        if (entry->type == MB_MMAP_USABLE && entry->base_high == 0 && length > 0) {
-            if (base + length > kernel_end && length > best_size) {
-                best_base = base;
-                best_size = length;
-            }
-        }
-
-        cursor += entry->size + sizeof(entry->size);
-    }
-
-    if (best_size == 0) {
-        return;
-    }
-
-    /* The kernel sits inside the region: the heap starts after it, and the
-     * region is cut to a sane size (the machine may have gigabytes, the
-     * kernel needs megabytes). */
-    if (best_base < kernel_end) {
-        best_size -= kernel_end - best_base;
-        best_base = kernel_end;
-    }
-
-    best_base = (best_base + BLOCK_ALIGN - 1) & ~(k_u64_t)(BLOCK_ALIGN - 1);
-
-    /*
-     * The modules of the boot are memory as well. A loader that hands the
-     * kernel a volume (the root image of the ISO, ADR 0026) leaves it in the
-     * usable region of the map, and a block of the allocator over those bytes
-     * would turn the filesystem of the boot into a heap that is written and
-     * read at once. The heap starts above the last byte of every module; a
-     * module below the region changes nothing.
-     */
-    {
-        k_u64_t modules_end = boot_modules_end(info);
-
-        if (modules_end > best_base && modules_end < best_base + best_size) {
-            best_size -= modules_end - best_base;
-            best_base = modules_end;
-        }
-    }
-
-    /*
-     * The window of the programs (k_port_exec_base, see port_exec.c) is not
-     * the memory of the kernel. The heap stops below it, or a loaded image
-     * would land on the blocks of the allocator and neither side would see
-     * the damage until much later.
-     */
-    {
-        k_u64_t exec_base = (k_u64_t)(uintptr_t)k_port_exec_base();
-
-        if (exec_base > best_base && best_base + best_size > exec_base) {
-            best_size = exec_base - best_base;
-        }
-    }
-
-    if (best_size > 32u * 1024u * 1024u) {
-        best_size = 32u * 1024u * 1024u;
-    }
-
-    if (best_size < 1024u * 1024u) {
-        return;
-    }
-
-    g_first = (struct block *)(uintptr_t)best_base;
-    g_first->size = best_size - sizeof(struct block);
-    g_first->next = NULL;
-    g_first->free = true;
-
-    g_heap_total = (k_size_t)g_first->size;
-    g_heap_free = g_heap_total;
 }
 
 void *k_port_alloc(k_size_t size, bool psram)
@@ -1734,29 +2078,332 @@ int memcmp(const void *left, const void *right, k_size_t size)
     return 0;
 }
 
-/* --- the init of the port --- */
+/* --- the clock of the firmware: the CMOS chip of the machine ---------------
+ *
+ * Every machine of this port has the battery-backed chip the firmware reads
+ * its setup from, and the same chip keeps the date: the seconds, the minutes,
+ * the hours, the day, the month and the year in BCD behind one index port and
+ * one data port. The kernel keeps its own wall clock (kernel/clock.h) and the
+ * chip is what seeds it at the boot, so a laptop that has been off since last
+ * night knows the date when the shell comes up and not the seconds since its
+ * own start.
+ *
+ * The registers are read twice and compared: the chip updates them every
+ * second from its own oscillator, and a read that straddles the update is a
+ * moment that never existed (23:59:59 of the 31st and 00:00:01 of the 1st).
+ * The NMI of the machine is masked while the index port is written, which is
+ * the convention of the chip and keeps a byte of the machine's memory from
+ * being read instead.
+ */
+#define CMOS_INDEX 0x70u
+#define CMOS_DATA 0x71u
 
-static struct port_x86_64_info g_info;
+#define CMOS_SECOND 0x00u
+#define CMOS_MINUTE 0x02u
+#define CMOS_HOUR 0x04u
+#define CMOS_DAY 0x07u
+#define CMOS_MONTH 0x08u
+#define CMOS_YEAR 0x09u
+#define CMOS_CENTURY 0x32u
+#define CMOS_STATUS_A 0x0Au
+#define CMOS_STATUS_B 0x0Bu
+
+#define CMOS_BINARY 0x04u /* the registers are binary instead of BCD */
+#define CMOS_24_HOUR 0x02u
+#define CMOS_PM 0x80u     /* the hours register in the 12-hour mode */
+#define CMOS_SET 0x80u    /* the updates are stopped, so the registers are ours */
+#define CMOS_UPDATE 0x80u /* the bit of the status register: an update is coming */
+
+static k_u8_t cmos_read(k_u8_t reg)
+{
+    port_outb(CMOS_INDEX, (k_u8_t)(reg | 0x80u));
+    return port_inb(CMOS_DATA);
+}
+
+static void cmos_write(k_u8_t reg, k_u8_t value)
+{
+    port_outb(CMOS_INDEX, (k_u8_t)(reg | 0x80u));
+    port_outb(CMOS_DATA, value);
+}
+
+/* Wait for the chip to be between two updates; false when it never is. */
+static bool cmos_idle(void)
+{
+    int attempt;
+
+    for (attempt = 0; attempt < 1000000; attempt++) {
+        if ((cmos_read(CMOS_STATUS_A) & CMOS_UPDATE) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static int cmos_to_binary(k_u8_t value, bool binary)
+{
+    return binary ? (int)value : ((int)(value >> 4) * 10 + (int)(value & 0x0Fu));
+}
+
+static k_u8_t cmos_to_register(int value, bool binary)
+{
+    if (binary) {
+        return (k_u8_t)value;
+    }
+
+    return (k_u8_t)(((value / 10) << 4) | (value % 10));
+}
+
+/* The day count of a date from 1970-01-01, both ways (Hinnant's calendar). */
+static k_i64_t cmos_days_from_civil(int year, int month, int day)
+{
+    k_i64_t y = (k_i64_t)year - ((month <= 2) ? 1 : 0);
+    k_i64_t era = (y >= 0 ? y : y - 399) / 400;
+    k_u32_t yoe = (k_u32_t)(y - era * 400);
+    k_u32_t doy = (k_u32_t)((153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1);
+    k_u32_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+
+    return era * 146097 + (k_i64_t)doe - 719468;
+}
+
+static void cmos_civil_from_days(k_i64_t days, int *year, int *month, int *day)
+{
+    k_i64_t z = days + 719468;
+    k_i64_t era = (z >= 0 ? z : z - 146096) / 146097;
+    k_u32_t doe = (k_u32_t)(z - era * 146097);
+    k_u32_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    k_u32_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    k_u32_t mp = (5 * doy + 2) / 153;
+    int m = (int)mp + (mp < 10 ? 3 : -9);
+
+    *day = (int)(doy - (153 * mp + 2) / 5 + 1);
+    *month = m;
+    *year = (int)((k_i64_t)yoe + era * 400) + ((m <= 2) ? 1 : 0);
+}
 
 /*
- * The clock of the machine, before a driver of a real one exists. This
- * machine of QEMU has a CMOS clock, and the port does not read it yet; the
- * kernel keeps the moment of the last `k_clock_set_unix()` and the uptime of
- * that moment (kernel/clock.c), so `ntp` gives the machine a clock that
- * keeps running, and a TLS connection has a date to check a certificate
- * against (ADR 0024 §3). The setter is the port's promise that it keeps the
- * moment; the kernel holds the base.
+ * The moment the chip holds, in the seconds of Unix (UTC). False when the
+ * chip does not answer or holds a moment that is not a date: a dead battery
+ * leaves fields like 58 for an hour, and a number that is not a date is worse
+ * than no clock at all.
  */
-static int software_clock_set(k_u64_t unix_seconds)
+static bool cmos_read_unix(k_u64_t *out)
 {
-    (void)unix_seconds;
+    k_u8_t second = 0;
+    k_u8_t minute = 0;
+    k_u8_t hour = 0;
+    k_u8_t day = 0;
+    k_u8_t month = 0;
+    k_u8_t year = 0;
+    k_u8_t century = 0x20u;
+    k_u8_t status = 0;
+    bool binary;
+    bool stable = false;
+    int attempt;
+    int s;
+    int m;
+    int h;
+    int y;
+    int days;
+
+    for (attempt = 0; attempt < 8 && !stable; attempt++) {
+        if (!cmos_idle()) {
+            return false;
+        }
+
+        second = cmos_read(CMOS_SECOND);
+        minute = cmos_read(CMOS_MINUTE);
+        hour = cmos_read(CMOS_HOUR);
+        day = cmos_read(CMOS_DAY);
+        month = cmos_read(CMOS_MONTH);
+        year = cmos_read(CMOS_YEAR);
+        century = cmos_read(CMOS_CENTURY);
+        status = cmos_read(CMOS_STATUS_B);
+
+        /* The moment is one moment only when the seconds did not move under
+         * the read. The month is the register of the bit of the century, and
+         * a chip whose month is 0 is not one of this machine. */
+        stable = (second == cmos_read(CMOS_SECOND)) && ((month & 0x1Fu) != 0);
+    }
+
+    if (!stable) {
+        return false;
+    }
+
+    binary = (status & CMOS_BINARY) != 0;
+
+    s = cmos_to_binary(second, binary);
+    m = cmos_to_binary(minute, binary);
+    h = cmos_to_binary((k_u8_t)(hour & 0x7Fu), binary);
+    days = cmos_to_binary(day, binary);
+    month = (k_u8_t)cmos_to_binary((k_u8_t)(month & 0x1Fu), binary);
+    year = (k_u8_t)cmos_to_binary(year, binary);
+
+    if ((status & CMOS_24_HOUR) == 0) {
+        /* The 12-hour mode: the high bit is the afternoon, and 12:xx is the
+         * hour zero of it. */
+        if (h == 12) {
+            h = 0;
+        }
+        if ((hour & CMOS_PM) != 0) {
+            h += 12;
+        }
+    }
+
+    y = cmos_to_binary(year, binary);
+
+    {
+        int century_value = cmos_to_binary(century, binary);
+
+        /*
+         * The century is an addition of ACPI; a chip of an older machine
+         * keeps something else in that register. A value that is not 19 or 20
+         * is not a century, and the year decides: 70 to 99 belongs to the
+         * last one and 00 to 69 to this one.
+         */
+        if (century_value != 19 && century_value != 20) {
+            century_value = (y >= 70) ? 19 : 20;
+        }
+
+        y += century_value * 100;
+    }
+
+    if (y >= 1900 && y <= 2099 && month >= 1 && month <= 12 && days >= 1 && days <= 31 && h >= 0 &&
+        h <= 23 && m >= 0 && m <= 59 && s >= 0 && s <= 59) {
+        *out = (k_u64_t)(cmos_days_from_civil(y, month, days) * 86400 + h * 3600 + m * 60 + s);
+
+        return true;
+    }
+
+    return false;
+}
+
+/*
+ * The setter the kernel keeps for the clock (kernel/clock.h): a moment that
+ * came from NTP goes back into the chip, so the next boot of the machine
+ * starts from it. The write is the plain one of the chip - the update is
+ * stopped for the seven registers, the mode is BCD and 24 hours - and a chip
+ * that refuses the write is not a refusal of the call: the kernel keeps the
+ * moment in its own base and the next boot falls back to the chip it has.
+ */
+static int cmos_clock_set(k_u64_t unix_seconds)
+{
+    int year;
+    int month;
+    int day;
+    int hour;
+    int minute;
+    int second;
+    int days;
+    k_u64_t held = 0;
+    k_u8_t status;
+
+    if (unix_seconds > 4102444799u) { /* past 2099-12-31, the chip's calendar */
+        return -1;
+    }
+
+    days = (int)((k_i64_t)(unix_seconds / 86400u));
+    second = (int)(unix_seconds % 60u);
+    minute = (int)((unix_seconds / 60u) % 60u);
+    hour = (int)((unix_seconds / 3600u) % 24u);
+
+    cmos_civil_from_days(days, &year, &month, &day);
+
+    if (year < 2000) {
+        return -1;
+    }
+
+    /* The moment is already in the chip: the boot read it and set it. */
+    if (cmos_read_unix(&held) && held == unix_seconds) {
+        return 0;
+    }
+
+    if (!cmos_idle()) {
+        return 0;
+    }
+
+    status = cmos_read(CMOS_STATUS_B);
+    cmos_write(CMOS_STATUS_B, (k_u8_t)((status | CMOS_24_HOUR | CMOS_SET) & ~CMOS_BINARY));
+    cmos_write(CMOS_SECOND, cmos_to_register(second, false));
+    cmos_write(CMOS_MINUTE, cmos_to_register(minute, false));
+    cmos_write(CMOS_HOUR, cmos_to_register(hour, false));
+    cmos_write(CMOS_DAY, cmos_to_register(day, false));
+    cmos_write(CMOS_MONTH, cmos_to_register(month, false));
+    cmos_write(CMOS_YEAR, cmos_to_register(year % 100, false));
+
+    /*
+     * The century register is written only when it already holds a century:
+     * a chip of a machine older than ACPI keeps a byte of the firmware there,
+     * and a year of two digits is still the year of this machine.
+     */
+    {
+        k_u8_t century = cmos_read(CMOS_CENTURY);
+
+        if (century == 0x19u || century == 0x20u) {
+            cmos_write(CMOS_CENTURY, cmos_to_register(year / 100, false));
+        }
+    }
+
+    cmos_write(CMOS_STATUS_B, status);
 
     return 0;
 }
 
-void port_x86_64_init(k_u64_t multiboot_info)
+/* The clock of the machine, read once at the boot and kept by the kernel. */
+static void cmos_clock_seed(void)
 {
-    const struct mb_info *info = (const struct mb_info *)(uintptr_t)multiboot_info;
+    k_u64_t now = 0;
+
+    if (!cmos_read_unix(&now)) {
+        kwarn("x86-64: the CMOS chip holds no date, the clock starts at the boot");
+        return;
+    }
+
+    (void)k_clock_set_unix(now);
+}
+
+/* --- the init of the port --- */
+
+static struct port_x86_64_info g_info;
+
+void port_x86_64_init(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys)
+{
+    const struct mb_info *info;
+
+    /*
+     * Where the loader put the image, before anything translates an address
+     * of the kernel: the bytes of the image are at the top of the address
+     * space and at this number of the memory, and both are needed for a page
+     * table entry as soon as the first one is built. Zero means the loader
+     * did not say and the address of the header is the one.
+     */
+    if (kernel_phys >= 0x100000ull) {
+        g_port_x86_64_kernel_phys = kernel_phys;
+    }
+
+    /*
+     * The two boots of the port are told apart by the second number the entry
+     * was given: the loader of the BIOS path leaves it zero and hands the
+     * multiboot information, and the loader of a UEFI machine puts the magic
+     * of the structure of port_x86_64_boot.h there. The multiboot information
+     * travels inside that structure, so the heap, the modules and the map of
+     * the memory are read by the same code on both machines.
+     */
+    if (boot_magic == PORT_X86_64_BOOT_MAGIC && boot_info != 0u) {
+        g_uefi_boot = (const struct port_x86_64_boot_info *)(uintptr_t)boot_info;
+
+        if (g_uefi_boot->version != PORT_X86_64_BOOT_VERSION) {
+            /* A structure of a loader of another release: the port reads the
+             * part of it the two versions share and says so. */
+            kerror("x86-64: the boot is version %u of the hand-off, the port reads %u",
+                   (unsigned)g_uefi_boot->version, (unsigned)PORT_X86_64_BOOT_VERSION);
+        }
+
+        info = (const struct mb_info *)(uintptr_t)g_uefi_boot->mb_info;
+    } else {
+        g_uefi_boot = NULL;
+        info = (const struct mb_info *)(uintptr_t)boot_info;
+    }
 
     /* The questions of the drivers about the modules of the boot are asked
      * later; the structure itself stays where the loader left it. */
@@ -1772,9 +2419,18 @@ void port_x86_64_init(k_u64_t multiboot_info)
     tls_init();
     com1_init();
     clock_measure();
-    k_clock_register(software_clock_set);
+    k_clock_register(cmos_clock_set);
+    cmos_clock_seed();
     port_x86_64_cpus_init();
-    heap_init(multiboot_info);
+    /*
+     * The memory of the machine, before the page tables of the port: a module
+     * that a loader of the medium put inside the window of the programs is
+     * copied out of it while the identity map of the loader still names every
+     * byte of it, and the heap of the kernel is placed after the modules and
+     * out of the window.
+     */
+    memory_bring_up(info);
+    heap_init(info);
     port_x86_64_paging_init();
 
     /*
@@ -1796,7 +2452,11 @@ void port_x86_64_init(k_u64_t multiboot_info)
 
     g_info.cpu_hz = g_tsc_per_second;
     g_info.usable_bytes = 0;
-    g_info.boot_version = info != NULL ? 1u : 0u;
+    /* 1 is the multiboot 1 information of the BIOS path, and 2 says that the
+     * numbers of the boot came from the firmware through the hand-off of a
+     * UEFI machine (the `boot_version` of the contract is what a reader of
+     * this port's log calls "the version of the boot"). */
+    g_info.boot_version = info != NULL ? (g_uefi_boot != NULL ? 2u : 1u) : 0u;
     g_info.cpu_available = port_x86_64_cpu_available();
     g_info.cpu_started = port_x86_64_cpu_started();
     g_info.apic_base = port_x86_64_apic_base();
@@ -1825,6 +2485,7 @@ void port_x86_64_init(k_u64_t multiboot_info)
     port_x86_64_blockdev_init();
     port_x86_64_module_init();
     port_x86_64_disk_init();
+    port_x86_64_virtio_blk_init();
 
     /* The network is the last device of the boot before the interrupts: it
      * asks the PCI bus for a card, and a machine without one keeps the "no"
@@ -1835,10 +2496,11 @@ void port_x86_64_init(k_u64_t multiboot_info)
      * every millisecond and the kernel has to be able to take it. */
     port_x86_64_interrupts_init();
 
-    /* The disk asked for the line of its channel before the table existed:
-     * the driver opens it now, and the bus master of the channel becomes the
-     * one the transfers use (ADR 0032). */
+    /* The two disks asked for their lines before the table existed: the
+     * drivers open them now, and the bus master of the channel and the queue
+     * of the card become the ones the transfers use (ADR 0032, ADR 0037). */
     port_x86_64_disk_irq_init();
+    port_x86_64_virtio_blk_irq_init();
 
     /*
      * The application processors (ADR 0012). The tables of the machine and
@@ -1855,6 +2517,16 @@ void port_x86_64_init(k_u64_t multiboot_info)
 const struct port_x86_64_info *port_x86_64_info(void)
 {
     return &g_info;
+}
+
+const struct port_x86_64_boot_info *port_x86_64_boot(void)
+{
+    return g_uefi_boot;
+}
+
+const char *port_x86_64_boot_name(void)
+{
+    return g_uefi_boot != NULL ? "uefi" : "multiboot";
 }
 
 void port_x86_64_panic(const char *text)

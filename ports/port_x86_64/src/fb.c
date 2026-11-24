@@ -195,16 +195,31 @@ static void pixel_put(int x, int y, k_u16_t color)
     g_fb[y * g_stride + x] = color;
 }
 
+static struct k_fb_surface fb_surface(void)
+{
+    struct k_fb_surface surface;
+
+    surface.base = (k_u16_t *)(uintptr_t)g_fb;
+    surface.width = (k_u32_t)g_width;
+    surface.height = (k_u32_t)g_height;
+    surface.pitch = (k_u32_t)g_stride;
+
+    return surface;
+}
+
+/* A rectangle of one colour: the operation of the contract (kernel/fb_ops.h),
+ * which is the device's own when it has one and this loop when it has not. */
 static void area_fill(int x, int y, int w, int h, k_u16_t color)
 {
-    int row;
-    int column;
+    struct k_fb_rect rect;
+    struct k_fb_surface surface = fb_surface();
 
-    for (row = 0; row < h; row++) {
-        for (column = 0; column < w; column++) {
-            pixel_put(x + column, y + row, color);
-        }
-    }
+    rect.x = x;
+    rect.y = y;
+    rect.w = w;
+    rect.h = h;
+
+    (void)k_fb_fill(&surface, &rect, color);
 }
 
 /* One glyph of the font of the PC: one byte is one row of the letter and the
@@ -752,34 +767,16 @@ bool port_x86_64_fb_info(struct fb_info *out)
     return true;
 }
 
-/*
- * One rectangle of a program's picture into the memory of the card. The
- * caller has checked the bounds (kernel/fb.c, fb_rect_parse); the check here
- * is the second door for a direct caller and costs one comparison a call.
- */
-int port_x86_64_fb_blit(const struct fb_rect *rect, const k_u16_t *pixels)
+/* The memory of the picture as the contract of an operation of a device. */
+bool port_x86_64_fb_surface(struct k_fb_surface *out)
 {
-    int row;
-
-    if (rect == NULL || pixels == NULL || g_fb == NULL) {
-        return KERR_INVAL;
+    if (out == NULL || g_fb == NULL) {
+        return false;
     }
 
-    if (rect->w == 0u || rect->h == 0u || (k_u32_t)rect->x + (k_u32_t)rect->w > (k_u32_t)g_width ||
-        (k_u32_t)rect->y + (k_u32_t)rect->h > (k_u32_t)g_height) {
-        return KERR_INVAL;
-    }
+    *out = fb_surface();
 
-    for (row = 0; row < (int)rect->h; row++) {
-        k_u16_t *destination =
-            (k_u16_t *)(uintptr_t)(g_fb + (k_size_t)(rect->y + row) * (k_size_t)g_stride +
-                                   (k_size_t)rect->x);
-
-        memcpy(destination, pixels + (k_size_t)row * (k_size_t)rect->w,
-               (k_size_t)rect->w * sizeof(k_u16_t));
-    }
-
-    return 0;
+    return true;
 }
 
 /*

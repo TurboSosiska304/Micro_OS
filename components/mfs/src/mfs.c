@@ -17,10 +17,14 @@ static struct {
     bool mounted;
     const struct k_blockdev *dev;
     struct mfs_superblock sb;
-    k_u32_t inode_size;        /* 16 for a version 1 volume, 32 for version 2 */
+    k_u32_t inode_size;        /* 16 for a version 1 volume, 32 for 2, 64 for 3 */
     k_u32_t bitmap_blocks;     /* the blocks of the bitmap of the free blocks */
+    k_u32_t bitmap_start;      /* the first block of the bitmap in META */
     k_u32_t inode_blocks;      /* the blocks of the table of the inodes */
     k_u32_t inode_capacity;    /* the number of the records of the table */
+    k_u32_t table_end;         /* a version 3 volume: the block after the table */
+    k_u32_t generation;        /* the number of the growths of the table */
+    k_u32_t open_files;        /* the descriptors the filesystem handed out */
     bool bitmap_dirty;         /* the map in the memory is newer than the device */
     k_u8_t *bitmap;            /* the map of the free blocks, one bit per block */
     k_u32_t inode_cache_block; /* the block of the table that is cached */
@@ -101,6 +105,33 @@ k_u32_t mfs_priv_crc32(const void *data, k_size_t size)
     return crc32(data, size);
 }
 
+/*
+ * The checksum of a header of a version 3 volume covers every field of it
+ * but the checksum itself: the map of the blocks, the table and the count of
+ * the records decide where the volume is, and a header that only the first
+ * half of it protects would mount a table that is not there. The header of a
+ * version 1 and 2 volume was written by a system whose header ended after
+ * forty-eight bytes, and the checksum of that one still covers exactly
+ * those bytes, so an old volume keeps the checksum it was made with
+ * (ADR 0038).
+ */
+k_u32_t mfs_priv_header_crc(const struct mfs_superblock *sb)
+{
+    struct mfs_superblock copy;
+
+    if (sb->version < MFS_VERSION) {
+        return crc32(sb, MFS_HEADER_CRC_SPAN);
+    }
+
+    /* The checksum is computed over the header with the field empty, so
+     * that a reader reproduces it without a second copy of the polynomial
+     * over a range that skips a hole. */
+    copy = *sb;
+    copy.crc = 0;
+
+    return crc32(&copy, sizeof(copy));
+}
+
 /* --- the moments of a record --- */
 
 /*
@@ -144,17 +175,28 @@ static void inode_stamp_record(struct mfs_inode *inode)
 }
 
 /*
- * The two formats of a record. The functions are the only places that know
- * the difference between the 16 bytes of a version 1 volume and the 32
- * bytes of version 2: the rest of the filesystem works with struct
- * mfs_inode and never writes past the record of the volume.
+ * The three formats of a record. The functions are the only places that
+ * know the difference between the 16 bytes of a version 1 volume, the 32
+ * bytes of version 2 and the 64 bytes with a checksum of version 3: the rest
+ * of the filesystem works with struct mfs_inode and never writes past the
+ * record of the volume.
  */
 void mfs_priv_inode_decode(const k_u8_t *raw, k_u32_t inode_size, struct mfs_inode *out)
 {
     memset(out, 0, sizeof(*out));
 
     if (inode_size == MFS_INODE_SIZE) {
+        /* The first forty bytes of the record are the record of the memory:
+         * the checksum and the padding after them are not part of it. */
         memcpy(out, raw, sizeof(*out));
+        return;
+    }
+
+    if (inode_size == MFS_INODE_SIZE_TIME) {
+        /* The same prefix without the group: a version 2 record has no
+         * word of its own for it (ADR 0038). */
+        memcpy(out, raw, MFS_INODE_SIZE_TIME);
+        out->group = 0;
         return;
     }
 
@@ -166,9 +208,11 @@ void mfs_priv_inode_decode(const k_u8_t *raw, k_u32_t inode_size, struct mfs_ino
         out->first_block = legacy.first_block;
         out->size = legacy.size;
         out->entries = legacy.entries;
-        /* No room for a time: zero says "unknown", and it is not a date. */
+        /* No room for a time or a group: zero says "unknown", and it is
+         * not a date or a group of root. */
         out->mtime = 0;
         out->ctime = 0;
+        out->group = 0;
     }
 }
 
@@ -177,7 +221,17 @@ void mfs_priv_inode_encode(const struct mfs_inode *inode, k_u32_t inode_size, k_
     memset(raw, 0, inode_size);
 
     if (inode_size == MFS_INODE_SIZE) {
-        memcpy(raw, inode, sizeof(*inode));
+        struct mfs_inode_record *record = (struct mfs_inode_record *)raw;
+
+        memcpy(record, inode, sizeof(*inode));
+        record->reserved = 0;
+        memset(record->pad, 0, sizeof(record->pad));
+        record->crc = mfs_record_crc(raw);
+        return;
+    }
+
+    if (inode_size == MFS_INODE_SIZE_TIME) {
+        memcpy(raw, inode, MFS_INODE_SIZE_TIME);
         return;
     }
 
@@ -190,6 +244,28 @@ void mfs_priv_inode_encode(const struct mfs_inode *inode, k_u32_t inode_size, k_
         legacy.entries = inode->entries;
         memcpy(raw, &legacy, sizeof(legacy));
     }
+}
+
+/*
+ * A record of version 1 and 2 has no checksum: the volume is trusted the way
+ * it always was, and only the structural rules of the check speak about it.
+ */
+bool mfs_priv_inode_sound(const k_u8_t *raw, k_u32_t inode_size)
+{
+    k_u32_t stored;
+
+    if (inode_size != MFS_INODE_SIZE) {
+        return true;
+    }
+
+    memcpy(&stored, raw + MFS_RECORD_CRC_SPAN, sizeof(stored));
+
+    return stored == mfs_record_crc(raw);
+}
+
+k_u32_t mfs_record_crc(const void *record)
+{
+    return crc32(record, MFS_RECORD_CRC_SPAN);
 }
 
 /* --- the low level access to the volume --- */
@@ -314,13 +390,24 @@ static int bitmap_load(void)
     k_u32_t i;
     int rc;
 
+    /*
+     * A version 3 volume stores the map at the top of META, next to INFO,
+     * so that the table can grow downwards without moving it; an older
+     * volume has it at the start of META and the table after it.
+     */
+    if (g.sb.version >= MFS_VERSION) {
+        if (blocks != g.sb.bitmap_blocks || blocks > g.sb.meta_blocks) {
+            return MFS_EINVAL;
+        }
+    }
+
     rc = bitmap_alloc(blocks);
     if (rc != MFS_OK) {
         return rc;
     }
 
     for (i = 0; i < blocks; i++) {
-        rc = dev_read(g.sb.meta_start + i, g.bitmap + i * MFS_BLOCK_SIZE);
+        rc = dev_read(g.bitmap_start + i, g.bitmap + i * MFS_BLOCK_SIZE);
 
         if (rc != MFS_OK) {
             /* The volume is not mounted, the map is not its state. */
@@ -338,7 +425,7 @@ static int bitmap_store(void)
     k_u32_t i;
 
     for (i = 0; i < g.bitmap_blocks; i++) {
-        int rc = dev_write(g.sb.meta_start + i, g.bitmap + i * MFS_BLOCK_SIZE);
+        int rc = dev_write(g.bitmap_start + i, g.bitmap + i * MFS_BLOCK_SIZE);
 
         if (rc != MFS_OK) {
             return rc;
@@ -402,16 +489,82 @@ static void block_release(k_u32_t block)
 
 /* --- the table of the inodes --- */
 
+/* The records of one block of the table. */
+static k_u32_t inode_records_per_block(void)
+{
+    return MFS_BLOCK_SIZE / g.inode_size;
+}
+
+/*
+ * Where a record lies on the medium.
+ *
+ * A version 1 and 2 volume numbers its records from the start of the table
+ * and the table fills META after the map. A version 3 volume numbers them
+ * from the top of the table, which is anchored at the map next to INFO: the
+ * table grows downwards into the data section, a record keeps its address
+ * for the life of the volume, and the growth of the table is a write of new
+ * records below the last one and a header that says so (ADR 0038).
+ */
+static void inode_address(k_u32_t version, k_u32_t meta_start, k_u32_t table_end,
+                          k_u32_t bitmap_blocks, k_u32_t inode_size, k_u32_t index, k_u32_t *block,
+                          k_u32_t *offset)
+{
+    if (version >= MFS_VERSION) {
+        k_u32_t per_block = MFS_BLOCK_SIZE / inode_size;
+        k_u32_t slots = index + 1u; /* the record 0 is the last slot of the top */
+
+        *block = table_end - (slots + per_block - 1u) / per_block;
+        *offset = ((per_block - slots % per_block) % per_block) * inode_size;
+        return;
+    }
+
+    *block = meta_start + bitmap_blocks + (index * inode_size) / MFS_BLOCK_SIZE;
+    *offset = (index * inode_size) % MFS_BLOCK_SIZE;
+}
+
+void mfs_priv_inode_address(const struct mfs_private *view, k_u32_t index, k_u32_t *block,
+                            k_u32_t *offset)
+{
+    inode_address(view->sb->version, view->sb->meta_start, view->table_end, view->bitmap_blocks,
+                  view->inode_size, index, block, offset);
+}
+
+/*
+ * The block of the medium of the n-th block of the table in the order of the
+ * walk, which is also the order of the records: the block holds the records
+ * of [n * per_block, (n + 1) * per_block). A version 1 and 2 volume lays the
+ * table out from its start, a version 3 volume from its top, so the walk of
+ * the two goes in opposite directions over the medium.
+ */
+k_u32_t mfs_priv_table_block(const struct mfs_private *view, k_u32_t walk)
+{
+    if (view->sb->version >= MFS_VERSION) {
+        return view->table_end - 1u - walk;
+    }
+
+    return view->sb->meta_start + view->bitmap_blocks + walk;
+}
+
 static k_u32_t inode_table_block(k_u32_t index)
 {
-    k_u32_t offset = index * g.inode_size;
+    k_u32_t block;
+    k_u32_t offset;
 
-    return g.sb.meta_start + g.bitmap_blocks + offset / MFS_BLOCK_SIZE;
+    inode_address(g.sb.version, g.sb.meta_start, g.table_end, g.bitmap_blocks, g.inode_size, index,
+                  &block, &offset);
+
+    return block;
 }
 
 static k_u32_t inode_table_offset(k_u32_t index)
 {
-    return (index * g.inode_size) % MFS_BLOCK_SIZE;
+    k_u32_t block;
+    k_u32_t offset;
+
+    inode_address(g.sb.version, g.sb.meta_start, g.table_end, g.bitmap_blocks, g.inode_size, index,
+                  &block, &offset);
+
+    return offset;
 }
 
 /*
@@ -444,6 +597,35 @@ static int inode_table_load(k_u32_t block)
     return MFS_OK;
 }
 
+static int inode_read_lenient(k_u32_t index, struct mfs_inode *out)
+{
+    k_u32_t offset;
+    int rc;
+
+    if (index == 0 || index > g.inode_capacity) {
+        return MFS_EINVAL;
+    }
+
+    rc = inode_table_load(inode_table_block(index));
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    offset = inode_table_offset(index);
+    mfs_priv_inode_decode(g.inode_cache + offset, g.inode_size, out);
+
+    return MFS_OK;
+}
+
+/*
+ * Read a record. A used record of a version 3 volume carries its checksum,
+ * and a record that does not match it is one that a power cut left half
+ * written: the object it would have described was never committed, and the
+ * call says that the volume cannot deliver it instead of handing out the
+ * fields of a torn write. A free record is a record nobody claims and has
+ * no checksum to keep. The check of the volume reads such a record the
+ * lenient way and repairs it (ADR 0038).
+ */
 static int inode_read(k_u32_t index, struct mfs_inode *out)
 {
     k_u32_t offset;
@@ -460,6 +642,12 @@ static int inode_read(k_u32_t index, struct mfs_inode *out)
 
     offset = inode_table_offset(index);
     mfs_priv_inode_decode(g.inode_cache + offset, g.inode_size, out);
+
+    if ((out->flags & MFS_INODE_USED) != 0u &&
+        !mfs_priv_inode_sound(g.inode_cache + offset, g.inode_size)) {
+        kerror("mfs: the record %u of the table is not the one that was written", (unsigned)index);
+        return MFS_EIO;
+    }
 
     return MFS_OK;
 }
@@ -497,21 +685,44 @@ static int inode_write(k_u32_t index, const struct mfs_inode *inode)
 }
 
 /* Find a free record of the table of the inodes. */
+static int table_grow(k_u32_t add_blocks);
+
 static int inode_alloc(k_u32_t *index)
 {
     k_u32_t i;
+    int attempt;
 
-    for (i = 1; i <= g.inode_capacity; i++) {
-        struct mfs_inode inode;
-        int rc = inode_read(i, &inode);
+    for (attempt = 0; attempt < 2; attempt++) {
+        for (i = 1; i <= g.inode_capacity; i++) {
+            struct mfs_inode inode;
+            int rc = inode_read_lenient(i, &inode);
 
-        if (rc != MFS_OK) {
-            return rc;
+            if (rc != MFS_OK) {
+                return rc;
+            }
+
+            if ((inode.flags & MFS_INODE_USED) == 0) {
+                *index = i;
+                return MFS_OK;
+            }
         }
 
-        if ((inode.flags & MFS_INODE_USED) == 0) {
-            *index = i;
-            return MFS_OK;
+        /*
+         * A table with no free record grows into the data section: the
+         * second walk sees the records the growth added, and the volume
+         * keeps taking objects until its data section has nothing to give
+         * (ADR 0038).
+         */
+        if (attempt != 0) {
+            break;
+        }
+
+        {
+            int rc = table_grow(0);
+
+            if (rc != MFS_OK) {
+                return rc;
+            }
         }
     }
 
@@ -557,6 +768,11 @@ k_u32_t mfs_inode_owner(const struct mfs_inode *inode)
     }
 
     return (inode->flags >> MFS_OWNER_SHIFT) & MFS_OWNER_MASK;
+}
+
+k_u32_t mfs_inode_group(const struct mfs_inode *inode)
+{
+    return (inode != NULL) ? inode->group : 0;
 }
 
 /* The flags of a new record: the type, the mode and the owner together. */
@@ -667,6 +883,39 @@ static void file_cursor_forget(struct mfs_file *file)
     file->grow_index = 0;
 }
 
+/*
+ * Bring a descriptor of an open file up to the volume after a growth of the
+ * table of the records (ADR 0038). The growth moves the blocks of the chains
+ * and patches the pointers of the chains, so the record of the object is the
+ * truth about the head of the chain and the cursors of the descriptor are
+ * not: the descriptor takes the head of its record again and walks from it.
+ * The number of the blocks of the chain does not change, and neither does
+ * the size the descriptor holds - a write that grew the chain past the
+ * record has that number in the descriptor, not on the medium yet.
+ *
+ * A descriptor of a volume that did not grow pays one comparison.
+ */
+static int file_refresh(struct mfs_file *file)
+{
+    struct mfs_inode inode;
+    int rc;
+
+    if (file->generation == g.generation) {
+        return MFS_OK;
+    }
+
+    rc = inode_read(file->inode, &inode);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    file->first_block = inode.first_block;
+    file_cursor_forget(file);
+    file->generation = g.generation;
+
+    return MFS_OK;
+}
+
 /* The last block of a chain. */
 static int chain_last(k_u32_t first, k_u32_t *last)
 {
@@ -752,6 +1001,307 @@ static int file_release_chain(k_u32_t first)
         }
         block = next;
     }
+
+    return MFS_OK;
+}
+
+/* --- the growth of the table of the records --- */
+
+/*
+ * A free block of the data below a limit. block_alloc() is not it: a free
+ * block of the tail is free and still about to be part of the table, so the
+ * allocation of a block that is moved out of the tail has to look below the
+ * new end of the data section.
+ */
+static int block_alloc_below(k_u32_t limit, k_u32_t *block)
+{
+    k_u32_t i;
+
+    for (i = 0; i < limit; i++) {
+        if (!bitmap_test(i)) {
+            bitmap_set(i, true);
+            *block = g.sb.data_start + i;
+            return MFS_OK;
+        }
+    }
+
+    return MFS_ENOSPC;
+}
+
+/* The block a block of the tail was moved to, or MFS_NEXT_NONE. */
+static k_u32_t tail_new_block(const k_u32_t *from, const k_u32_t *to, k_u32_t count, k_u32_t block)
+{
+    k_u32_t i;
+
+    for (i = 0; i < count; i++) {
+        if (from[i] == block) {
+            return to[i];
+        }
+    }
+
+    return MFS_NEXT_NONE;
+}
+
+/*
+ * The header of the volume, written back into its block of INFO. The block
+ * is read first because only the last block of INFO holds the header and the
+ * rest of the block is not the header's to erase.
+ */
+static int header_write(const struct mfs_superblock *sb)
+{
+    k_u8_t block[MFS_BLOCK_SIZE];
+    k_u32_t at = sb->info_start + sb->info_blocks - 1u;
+    int rc;
+
+    rc = dev_read(at, block);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    memcpy(block, sb, sizeof(*sb));
+
+    return dev_write(at, block);
+}
+
+/*
+ * Grow the table of the records of a version 3 volume by `add_blocks`
+ * blocks, taking them from the top of the data section (ADR 0038).
+ *
+ * The blocks of the tail may hold the data of a file: each of them is moved
+ * to a free block below the new end first, and the pointer of the chain that
+ * names it is patched, so the data survives. The order is the promise of the
+ * pass:
+ *
+ *   1. the replacement blocks are taken in the map and the map reaches the
+ *      device, so a block the table is about to take is never free on the
+ *      medium while a chain names it;
+ *   2. every used block of the tail is copied and its chain pointer patched;
+ *      a power cut between the two loses a block to the map (the check gives
+ *      it back) and never the data;
+ *   3. the tail blocks are written as empty records;
+ *   4. the header is written last: it is the commit of the growth, and a
+ *      volume that loses the power before it is the volume it was, with a
+ *      few blocks moved and nothing lost.
+ *
+ * The table grows downwards from the map, so the records it has keep their
+ * addresses and only the new ones are below them.
+ */
+static int table_grow(k_u32_t add_blocks)
+{
+    struct mfs_superblock sb;
+    k_u32_t old_data;
+    k_u32_t new_data;
+    k_u32_t moves = 0;
+    k_u32_t from[MFS_TABLE_GROW_BLOCKS * 8u];
+    k_u32_t to[MFS_TABLE_GROW_BLOCKS * 8u];
+    k_u32_t index;
+    k_u32_t i;
+    int rc;
+
+    if (!g.mounted || g.sb.version < MFS_VERSION) {
+        return MFS_ENOSPC;
+    }
+
+    /*
+     * The blocks of the chains are moved by the growth, and the chain of an
+     * open file is only half on the medium: the first block of a file that
+     * was written but not closed is named by the descriptor and by no
+     * record, so the growth would take it for a block nobody owns. A
+     * descriptor that is open keeps the table where it is, and the create
+     * that needed the records answers "no space" until it is closed.
+     */
+    if (g.open_files != 0u) {
+        kerror("mfs: the table of the records cannot grow while %u file(s) are open",
+               (unsigned)g.open_files);
+        return MFS_ENOSPC;
+    }
+
+    if (add_blocks == 0u) {
+        add_blocks = MFS_TABLE_GROW_BLOCKS;
+    }
+
+    if (add_blocks > K_ARRAY_SIZE(from)) {
+        return MFS_EINVAL;
+    }
+
+    old_data = g.sb.data_blocks;
+
+    /* The data section keeps a block of its own at the least. */
+    if (old_data <= add_blocks + 1u) {
+        return MFS_ENOSPC;
+    }
+
+    new_data = old_data - add_blocks;
+
+    /* The blocks of the tail that an object holds have to move first. */
+    for (i = new_data; i < old_data; i++) {
+        if (bitmap_test(i)) {
+            moves++;
+        }
+    }
+
+    for (i = 0; i < moves; i++) {
+        from[i] = 0;
+        to[i] = MFS_NEXT_NONE;
+    }
+
+    {
+        k_u32_t taken = 0;
+
+        for (i = new_data; i < old_data; i++) {
+            if (!bitmap_test(i)) {
+                continue;
+            }
+
+            rc = block_alloc_below(new_data, &to[taken]);
+            if (rc != MFS_OK) {
+                /* What was taken goes back: the table does not grow. */
+                while (taken > 0u) {
+                    taken--;
+                    block_release(to[taken]);
+                }
+                kerror("mfs: no room to grow the table of the records");
+                return MFS_ENOSPC;
+            }
+
+            from[taken] = i;
+            taken++;
+        }
+    }
+
+    /* The map with the new blocks reaches the device before a chain does. */
+    rc = bitmap_store();
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    rc = dev_sync();
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    /* Every chain that holds a block of the tail moves that block. */
+    for (index = 1; index <= g.inode_capacity; index++) {
+        struct mfs_inode inode;
+        k_u32_t previous = MFS_NEXT_NONE;
+        k_u32_t current;
+        k_u32_t steps = 0;
+
+        rc = inode_read(index, &inode);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
+        if ((inode.flags & MFS_INODE_USED) == 0u) {
+            continue;
+        }
+
+        current = inode.first_block;
+
+        while (current != MFS_NEXT_NONE && current < old_data) {
+            k_u32_t next;
+            k_u32_t moved;
+
+            rc = chain_next(current, &next);
+            if (rc != MFS_OK) {
+                return rc;
+            }
+
+            moved = tail_new_block(from, to, moves, current);
+
+            if (moved != MFS_NEXT_NONE) {
+                k_u8_t block[MFS_BLOCK_SIZE];
+
+                rc = dev_read(current, block);
+                if (rc != MFS_OK) {
+                    return rc;
+                }
+
+                rc = dev_write(moved, block);
+                if (rc != MFS_OK) {
+                    return rc;
+                }
+
+                if (previous == MFS_NEXT_NONE) {
+                    inode.first_block = moved;
+                    rc = inode_write(index, &inode);
+                } else {
+                    rc = chain_set_next(previous, moved);
+                }
+
+                if (rc != MFS_OK) {
+                    return rc;
+                }
+
+                block_release(current);
+                previous = moved;
+            } else {
+                previous = current;
+            }
+
+            current = next;
+
+            if (++steps > old_data) {
+                /* A loop the check has already named: the growth leaves it
+                 * to the check and does not follow it for ever. */
+                break;
+            }
+        }
+    }
+
+    /* The tail is the table now: empty records, and the map forgets it. */
+    {
+        k_u8_t empty[MFS_BLOCK_SIZE];
+
+        memset(empty, 0, sizeof(empty));
+
+        for (i = new_data; i < old_data; i++) {
+            rc = dev_write(g.sb.data_start + i, empty);
+            if (rc != MFS_OK) {
+                return rc;
+            }
+
+            bitmap_set(i, false);
+        }
+    }
+
+    g.bitmap_dirty = true;
+
+    rc = bitmap_store();
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    /* The header is the commit: until it is written the volume is its old
+     * one, with a few blocks of the tail moved out of the way. */
+    sb = g.sb;
+    sb.data_blocks = new_data;
+    sb.meta_start -= add_blocks;
+    sb.meta_blocks += add_blocks;
+    sb.inode_blocks += add_blocks;
+    sb.inode_records = sb.inode_blocks * inode_records_per_block();
+    sb.crc = mfs_priv_header_crc(&sb);
+
+    rc = header_write(&sb);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    rc = dev_sync();
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    g.sb = sb;
+    g.inode_blocks = sb.inode_blocks;
+    /* The record 0 is not used, the inodes start at 1. */
+    g.inode_capacity = sb.inode_records - 1u;
+    /* The blocks of the chains moved: the descriptors of the open files
+     * take their record again before they touch the medium. */
+    g.generation++;
+
+    kinfo("mfs: the table of the records grew to %u record(s), %u block(s) moved",
+          (unsigned)g.inode_capacity, (unsigned)moves);
 
     return MFS_OK;
 }
@@ -952,11 +1502,13 @@ static int dir_entries(const struct dir_buffer *buf, struct mfs_dirent *out, k_s
             entry.size = 0;
             entry.mode = 0;
             entry.owner = 0;
+            entry.group = 0;
 
             if (inode_read(entry.inode, &child) == MFS_OK) {
                 entry.size = child.size;
                 entry.mode = mfs_inode_mode(&child);
                 entry.owner = mfs_inode_owner(&child);
+                entry.group = mfs_inode_group(&child);
             }
 
             out[found] = entry;
@@ -1208,6 +1760,7 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
     k_u32_t data_blocks;
     k_u32_t bitmap_blocks;
     k_u32_t inode_blocks;
+    k_u32_t records;
     k_u32_t attempt;
     k_u32_t i;
     int rc;
@@ -1245,18 +1798,32 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
     info_start -= info_start % MFS_SECTOR_BLOCKS;
     info_blocks = total - info_start;
 
-    /* The first guess: four percent of the volume for the META section. */
-    meta_blocks = (info_start * 4u + 99u) / 100u;
-    if (meta_blocks < 2) {
-        meta_blocks = 2;
+    /*
+     * The table of the records is sized by the number of the records, not
+     * by a share of the volume (ADR 0038): the records asked for and a
+     * quarter of them more, 64 at the least. A table that runs full grows
+     * into the data section (table_grow()).
+     */
+    records = max_records + max_records / MFS_RECORDS_RESERVE_DIVISOR;
+
+    if (records - max_records < MFS_RECORDS_RESERVE) {
+        records = max_records + MFS_RECORDS_RESERVE;
     }
 
+    if (records < MFS_ROOT_INODE + 1u) {
+        records = MFS_ROOT_INODE + 1u;
+    }
+
+    inode_blocks = (records * MFS_INODE_SIZE + MFS_BLOCK_SIZE - 1u) / MFS_BLOCK_SIZE;
+
     /*
-     * The META section has to hold the bitmap of the free blocks and the
-     * table of the inodes. The bitmap depends on the size of the DATA
-     * section, which depends on the size of the META section, so a few
-     * rounds are enough to find the layout.
+     * The META section holds the map of the free blocks and the table, and
+     * nothing else. The map depends on the size of the DATA section, which
+     * depends on the size of META, so a few rounds find the layout: the
+     * table is fixed and META grows by the blocks of the map only.
      */
+    meta_blocks = inode_blocks + 1u;
+
     for (attempt = 0; attempt < 4; attempt++) {
         if (info_start <= meta_blocks) {
             return MFS_ENOSPC;
@@ -1264,7 +1831,6 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
 
         data_blocks = info_start - meta_blocks;
         bitmap_blocks = bitmap_blocks_for(data_blocks);
-        inode_blocks = (max_records * MFS_INODE_SIZE + MFS_BLOCK_SIZE - 1u) / MFS_BLOCK_SIZE;
 
         /*
          * The map lives in the memory of the machine, not in the format:
@@ -1277,11 +1843,11 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
             return MFS_EINVAL;
         }
 
-        if (bitmap_blocks + inode_blocks <= meta_blocks) {
+        if (inode_blocks + bitmap_blocks == meta_blocks) {
             break;
         }
 
-        meta_blocks = bitmap_blocks + inode_blocks;
+        meta_blocks = inode_blocks + bitmap_blocks;
     }
 
     if (info_start <= meta_blocks) {
@@ -1290,9 +1856,8 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
 
     data_blocks = info_start - meta_blocks;
     bitmap_blocks = bitmap_blocks_for(data_blocks);
-    inode_blocks = (max_records * MFS_INODE_SIZE + MFS_BLOCK_SIZE - 1u) / MFS_BLOCK_SIZE;
 
-    if (bitmap_blocks + inode_blocks > meta_blocks) {
+    if (inode_blocks + bitmap_blocks != meta_blocks) {
         return MFS_ENOSPC;
     }
 
@@ -1308,8 +1873,13 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
     sb.info_start = info_start;
     sb.info_blocks = info_blocks;
     sb.root_inode = MFS_ROOT_INODE;
-    sb.features = MFS_FEATURE_CRC | MFS_FEATURE_TIME;
-    sb.crc = crc32(&sb, sizeof(sb) - sizeof(sb.crc));
+    sb.features = MFS_FEATURE_CRC | MFS_FEATURE_TIME | MFS_FEATURE_RECORD_CRC;
+    /* The map sits at the top of META, the table below it. */
+    sb.bitmap_blocks = bitmap_blocks;
+    sb.inode_blocks = inode_blocks;
+    sb.inode_size = MFS_INODE_SIZE;
+    sb.inode_records = inode_blocks * (MFS_BLOCK_SIZE / MFS_INODE_SIZE);
+    sb.crc = mfs_priv_header_crc(&sb);
 
     /* The state is needed by the helpers below. */
     bitmap_release();
@@ -1318,7 +1888,9 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
     g.sb = sb;
     g.inode_size = MFS_INODE_SIZE;
     g.bitmap_blocks = bitmap_blocks;
+    g.bitmap_start = sb.info_start - bitmap_blocks;
     g.inode_blocks = inode_blocks;
+    g.table_end = sb.info_start - bitmap_blocks;
 
     rc = bitmap_alloc(bitmap_blocks);
     if (rc != MFS_OK) {
@@ -1326,7 +1898,7 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
     }
 
     /* The record 0 is not used, the inodes start at 1. */
-    g.inode_capacity = (inode_blocks * MFS_BLOCK_SIZE) / g.inode_size - 1u;
+    g.inode_capacity = sb.inode_records - 1u;
 
     /*
      * The bitmap: a bit of zero means that the block is free. The bits of
@@ -1338,16 +1910,16 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
     }
 
     /*
-     * The table of the inodes is empty. The whole rest of the META section
-     * belongs to the table, so that the mount finds the same number of the
-     * records as the format.
+     * The table of the inodes is empty. It is written empty before the
+     * header names it, so that a format that is interrupted never leaves a
+     * table of stale records for a volume that is not there yet.
      */
     {
         k_u8_t empty[MFS_BLOCK_SIZE];
 
         memset(empty, 0, sizeof(empty));
-        for (i = 0; i < sb.meta_blocks - bitmap_blocks; i++) {
-            if (dev_write(sb.meta_start + bitmap_blocks + i, empty) != MFS_OK) {
+        for (i = 0; i < inode_blocks; i++) {
+            if (dev_write(sb.meta_start + i, empty) != MFS_OK) {
                 return MFS_EIO;
             }
         }
@@ -1457,11 +2029,13 @@ static int mfs_mount_locked(const struct k_blockdev *dev)
     }
 
     /*
-     * The version is the size of a record (ADR 0013). A version 1 volume
-     * has 16-byte records and no time; a version 2 volume has 32 bytes and
-     * the time feature. A header that claims the feature without the room,
-     * or the room without the feature, describes a volume this system does
-     * not know how to read.
+     * The version says which record the table holds and where the map and
+     * the table are (ADR 0013, ADR 0038). A version 1 volume has 16-byte
+     * records and no time; version 2 has 32 bytes and the time; version 3
+     * has 64 bytes, the time, the group and a checksum per record, and a
+     * header that names the place and the count of both of them. A header
+     * that claims a feature without the room, or the room without the
+     * feature, describes a volume this system does not know how to read.
      */
     if (sb.version == MFS_VERSION_LEGACY) {
         if ((sb.features & MFS_FEATURE_TIME) != 0u) {
@@ -1469,13 +2043,28 @@ static int mfs_mount_locked(const struct k_blockdev *dev)
             return MFS_EINVAL;
         }
         g.inode_size = MFS_INODE_SIZE_LEGACY;
-    } else if (sb.version == MFS_VERSION) {
+    } else if (sb.version == MFS_VERSION_TIME) {
         if ((sb.features & MFS_FEATURE_TIME) == 0u) {
             kerror("mfs: a volume of version %u has no time feature", (unsigned)sb.version);
             return MFS_EINVAL;
         }
+        g.inode_size = MFS_INODE_SIZE_TIME;
+    } else if (sb.version == MFS_VERSION) {
+        if ((sb.features & (MFS_FEATURE_TIME | MFS_FEATURE_RECORD_CRC)) !=
+            (MFS_FEATURE_TIME | MFS_FEATURE_RECORD_CRC)) {
+            kerror("mfs: a volume of version %u has no time or no checksum of a record",
+                   (unsigned)sb.version);
+            return MFS_EINVAL;
+        }
+        if (sb.inode_size != MFS_INODE_SIZE) {
+            kerror("mfs: a volume of version %u keeps records of %u bytes", (unsigned)sb.version,
+                   (unsigned)sb.inode_size);
+            return MFS_EINVAL;
+        }
         g.inode_size = MFS_INODE_SIZE;
     } else {
+        kerror("mfs: the volume is of version %u, and the system reads 1, 2 and 3",
+               (unsigned)sb.version);
         return MFS_EINVAL;
     }
 
@@ -1485,7 +2074,7 @@ static int mfs_mount_locked(const struct k_blockdev *dev)
 
     /* A header that a brownout left half written must not be trusted. */
     if ((sb.features & MFS_FEATURE_CRC) != 0u) {
-        if (sb.crc != crc32(&sb, sizeof(sb) - sizeof(sb.crc))) {
+        if (sb.crc != mfs_priv_header_crc(&sb)) {
             kerror("mfs: the header of the volume is damaged");
             return MFS_EINVAL;
         }
@@ -1517,6 +2106,29 @@ static int mfs_mount_locked(const struct k_blockdev *dev)
         return MFS_EINVAL;
     }
 
+    /*
+     * A version 3 volume says where its map and its table are, and the two
+     * have to fill META the way the format put them: the numbers of the
+     * header are the numbers the mount walks, so a header that disagrees
+     * with itself is refused here instead of indexing a table that is not
+     * there (ADR 0038).
+     */
+    if (sb.version >= MFS_VERSION) {
+        k_u32_t bitmap_blocks = bitmap_blocks_for(sb.data_blocks);
+
+        if (sb.bitmap_blocks != bitmap_blocks || sb.inode_blocks == 0u ||
+            sb.bitmap_blocks + sb.inode_blocks != sb.meta_blocks ||
+            sb.inode_records != sb.inode_blocks * (MFS_BLOCK_SIZE / MFS_INODE_SIZE)) {
+            kerror("mfs: the map and the table of the volume do not fill META");
+            return MFS_EINVAL;
+        }
+
+        g.bitmap_start = sb.info_start - sb.bitmap_blocks;
+        g.table_end = g.bitmap_start;
+    } else {
+        g.bitmap_start = sb.meta_start;
+    }
+
     g.sb = sb;
 
     rc = bitmap_load();
@@ -1524,15 +2136,20 @@ static int mfs_mount_locked(const struct k_blockdev *dev)
         return rc;
     }
 
-    /* The rest of the META section belongs to the table of the inodes. */
-    if (sb.meta_blocks <= g.bitmap_blocks) {
-        rc = MFS_EINVAL;
-        goto fail;
-    }
+    if (sb.version >= MFS_VERSION) {
+        g.inode_blocks = sb.inode_blocks;
+        g.inode_capacity = sb.inode_records - 1u;
+    } else {
+        /* The rest of the META section belongs to the table of the inodes. */
+        if (sb.meta_blocks <= g.bitmap_blocks) {
+            rc = MFS_EINVAL;
+            goto fail;
+        }
 
-    g.inode_blocks = sb.meta_blocks - g.bitmap_blocks;
-    /* The record 0 is not used, the inodes start at 1. */
-    g.inode_capacity = (g.inode_blocks * MFS_BLOCK_SIZE) / g.inode_size - 1u;
+        g.inode_blocks = sb.meta_blocks - g.bitmap_blocks;
+        /* The record 0 is not used, the inodes start at 1. */
+        g.inode_capacity = (g.inode_blocks * MFS_BLOCK_SIZE) / g.inode_size - 1u;
+    }
 
     if (g.inode_capacity < MFS_ROOT_INODE) {
         rc = MFS_EINVAL;
@@ -1678,7 +2295,13 @@ static int mfs_get_info_locked(struct mfs_info *out)
     for (i = 1; i <= g.inode_capacity; i++) {
         struct mfs_inode inode;
 
-        if (inode_read(i, &inode) != MFS_OK) {
+        /*
+         * The count is of the records the table says are used, and a record
+         * that does not checksum still says it is one: the count is not the
+         * place to refuse the volume, and a person's df has to answer on a
+         * volume that fsck will repair (ADR 0038).
+         */
+        if (inode_read_lenient(i, &inode) != MFS_OK) {
             break;
         }
         if (inode.flags & MFS_INODE_USED) {
@@ -1972,6 +2595,7 @@ static int mfs_open_locked(const char *path, int flags, struct mfs_file *out)
         out->size = inode.size;
         out->offset = 0;
         out->flags = flags;
+        out->generation = g.generation;
 
         return MFS_OK;
     }
@@ -2028,6 +2652,11 @@ static int mfs_read_locked(struct mfs_file *file, void *buf, k_size_t size)
 
     if (file == NULL || buf == NULL) {
         return MFS_EINVAL;
+    }
+
+    rc = file_refresh(file);
+    if (rc != MFS_OK) {
+        return rc;
     }
 
     /*
@@ -2186,6 +2815,11 @@ static int mfs_write_locked(struct mfs_file *file, const void *buf, k_size_t siz
         return MFS_EINVAL;
     }
 
+    rc = file_refresh(file);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
     if ((file->flags & (MFS_O_WRONLY | MFS_O_RDWR)) == 0) {
         return MFS_EINVAL;
     }
@@ -2302,6 +2936,11 @@ static int mfs_close_locked(struct mfs_file *file)
 
     if (file == NULL) {
         return MFS_EINVAL;
+    }
+
+    rc = file_refresh(file);
+    if (rc != MFS_OK) {
+        return rc;
     }
 
     if (file->dirty) {
@@ -2476,6 +3115,11 @@ static int mfs_truncate_locked(struct mfs_file *file, k_u64_t size)
 
     if (file == NULL || (file->flags & (MFS_O_WRONLY | MFS_O_RDWR)) == 0) {
         return MFS_EINVAL;
+    }
+
+    rc = file_refresh(file);
+    if (rc != MFS_OK) {
+        return rc;
     }
 
     /* The format keeps the size of a file in 32 bits, so a wider number is
@@ -2898,6 +3542,42 @@ static int mfs_chown_locked(const char *path, k_u32_t owner)
     return mfs_set_attr_locked(path, MFS_OWNER_MASK << MFS_OWNER_SHIFT, owner << MFS_OWNER_SHIFT);
 }
 
+/*
+ * The group of an object is a word of its own and not a bit of the flags,
+ * so it is set on the record itself: only a version 3 volume keeps one, and
+ * a volume of version 1 or 2 answers that the number would not come back
+ * (ADR 0038).
+ */
+static int mfs_chgrp_locked(const char *path, k_u32_t group)
+{
+    struct mfs_inode inode;
+    k_u32_t index = 0;
+    int rc;
+
+    if (!g.mounted) {
+        return MFS_EINVAL;
+    }
+
+    if (g.sb.version < MFS_VERSION) {
+        return MFS_ENOTSUP;
+    }
+
+    rc = path_lookup(path, &inode, NULL, &index);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    inode.group = group;
+    inode_stamp_record(&inode);
+
+    rc = inode_write(index, &inode);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    return mfs_sync();
+}
+
 static int mfs_stat_locked(const char *path, struct mfs_inode *out, struct mfs_dirent *dirent)
 {
     struct mfs_inode inode;
@@ -2917,6 +3597,7 @@ static int mfs_stat_locked(const char *path, struct mfs_inode *out, struct mfs_d
         dirent->size = inode.size;
         dirent->mode = mfs_inode_mode(&inode);
         dirent->owner = mfs_inode_owner(&inode);
+        dirent->group = mfs_inode_group(&inode);
     }
 
     if (out != NULL) {
@@ -3023,6 +3704,7 @@ static int mfs_readdir_locked(struct mfs_file *file, struct mfs_dirent *out, k_s
             entry.size = child.size;
             entry.mode = mfs_inode_mode(&child);
             entry.owner = mfs_inode_owner(&child);
+            entry.group = mfs_inode_group(&child);
         }
 
         out[found++] = entry;
@@ -3115,6 +3797,7 @@ static void checker_view(struct mfs_private *view)
     view->inode_capacity = g.inode_capacity;
     view->inode_size = g.inode_size;
     view->device_blocks = g.dev->sectors;
+    view->table_end = g.table_end;
 }
 
 int mfs_check(struct mfs_check_report *report)
@@ -3247,6 +3930,11 @@ int mfs_open(const char *path, int flags, struct mfs_file *out)
 
     mfs_lock();
     rc = mfs_open_locked(path, flags, out);
+
+    if (rc == MFS_OK) {
+        g.open_files++;
+    }
+
     mfs_unlock();
 
     return rc;
@@ -3291,6 +3979,11 @@ int mfs_close(struct mfs_file *file)
 
     mfs_lock();
     rc = mfs_close_locked(file);
+
+    if (rc == MFS_OK && g.open_files > 0u) {
+        g.open_files--;
+    }
+
     mfs_unlock();
 
     return rc;
@@ -3357,6 +4050,17 @@ int mfs_chown(const char *path, k_u32_t owner)
 
     mfs_lock();
     rc = mfs_chown_locked(path, owner);
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_chgrp(const char *path, k_u32_t group)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_chgrp_locked(path, group);
     mfs_unlock();
 
     return rc;

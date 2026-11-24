@@ -398,6 +398,7 @@ static void test_ui_frame(void)
     style.focus_border = 0x2222u;
     style.title_paper = 0x0000u;
     style.title_ink = 0xFFFFu;
+    style.separator = 0x3333u;
 
     memset(&window, 0, sizeof(window));
     window.id = 7;
@@ -436,9 +437,10 @@ static void test_ui_frame(void)
     KT_CHECK_INT_EQ(fake.pixels[UI_FRAME_PAD], 0xFFFF);
     KT_CHECK_INT_EQ(fake.pixels[0], 0x0000);
 
-    /* The separator sits under the title, in the colour of the frame. */
+    /* The separator sits under the title, in its own tone of the frame. */
     KT_CHECK_INT_EQ(fake.rects[6].h, 1);
-    KT_CHECK_INT_EQ(fake.colors[6], style.focus_border);
+    KT_CHECK_INT_EQ(fake.colors[6], style.separator);
+    KT_CHECK_INT_EQ(fake.rects[6].y, window.rect.y + UI_FRAME_MARGIN + font.height);
 
     /* A window without the keys keeps the plain border. */
     memset(&fake, 0, sizeof(fake));

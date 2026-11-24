@@ -6,19 +6,21 @@
 # component of the kernel: the kernel knows the screen as a device (ADR 0028)
 # and nothing above the device.
 
-set(MICRO_OS_UI_SRCS "src/window.c" "src/draw.c" "src/keyboard.c")
+set(MICRO_OS_UI_SRCS "src/window.c" "src/draw.c" "src/keyboard.c" "src/palette.c"
+    "client/src/wm_protocol.c" "client/src/wm_client.c")
 
 if(ESP_PLATFORM)
     idf_component_register(
         SRCS ${MICRO_OS_UI_SRCS}
-        INCLUDE_DIRS "include"
+        INCLUDE_DIRS "include" "client/include"
         REQUIRES kernel
     )
 
     target_compile_options(${COMPONENT_LIB} PRIVATE -Wextra)
 else()
     add_library(microos_ui STATIC ${MICRO_OS_UI_SRCS})
-    target_include_directories(microos_ui PUBLIC "${CMAKE_CURRENT_LIST_DIR}/include")
+    target_include_directories(microos_ui PUBLIC "${CMAKE_CURRENT_LIST_DIR}/include"
+                                                 "${CMAKE_CURRENT_LIST_DIR}/client/include")
     target_link_libraries(microos_ui PUBLIC microos_kernel)
     target_compile_features(microos_ui PUBLIC c_std_11)
 endif()

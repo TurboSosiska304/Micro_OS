@@ -22,55 +22,58 @@
  * The system calls. The numbers are frozen: a new call gets the next free
  * number, an old one keeps its number forever.
  */
-#define KSYS_EXIT 0       /* exit(code) */
-#define KSYS_READ 1       /* read(fd, buf, count) */
-#define KSYS_WRITE 2      /* write(fd, buf, count) */
-#define KSYS_OPEN 3       /* open(path, flags) */
-#define KSYS_CLOSE 4      /* close(fd) */
-#define KSYS_STAT 5       /* stat(path, buf) */
-#define KSYS_LSEEK 6      /* lseek(fd, offset, whence) */
-#define KSYS_UNLINK 7     /* unlink(path) */
-#define KSYS_MKDIR 8      /* mkdir(path) */
-#define KSYS_READDIR 9    /* readdir(fd, buf, count) */
-#define KSYS_GETPID 10    /* getpid() */
-#define KSYS_GETCWD 11    /* getcwd(buf, size) */
-#define KSYS_IOCTL 12     /* ioctl(fd, cmd, arg) */
-#define KSYS_YIELD 13     /* yield() */
-#define KSYS_SLEEP 14     /* sleep(ms) */
-#define KSYS_UPTIME 15    /* uptime() */
-#define KSYS_REBOOT 16    /* reboot() */
-#define KSYS_FORK 17      /* fork() */
-#define KSYS_GETPPID 18   /* getppid() */
-#define KSYS_WAITPID 19   /* waitpid(pid, status) */
-#define KSYS_MALLOC 20    /* malloc(size) */
-#define KSYS_FREE 21      /* free(ptr) */
-#define KSYS_REALLOC 22   /* realloc(ptr, size) */
-#define KSYS_CHMOD 23     /* chmod(path, mode) */
-#define KSYS_CHOWN 24     /* chown(path, owner) */
-#define KSYS_EXECVE 25    /* execve(path, argv, envp) */
-#define KSYS_STATX 26     /* statx(path, buf) */
-#define KSYS_PIPE 27      /* pipe(fds) */
-#define KSYS_DUP2 28      /* dup2(oldfd, newfd) */
-#define KSYS_KILL 29      /* kill(pid, sig) */
-#define KSYS_SIGNAL 30    /* signal(sig, handler) -> the old handler */
-#define KSYS_SIGRETURN 31 /* the restorer of a signal frame, for the port */
-#define KSYS_GETLIMIT 32  /* getlimit(which, value) */
-#define KSYS_SETLIMIT 33  /* setlimit(which, value) */
-#define KSYS_RENAME 34    /* rename(from, to) */
-#define KSYS_FTRUNCATE 35 /* ftruncate(fd, size) */
-#define KSYS_GETUID 36    /* getuid() */
-#define KSYS_GETEUID 37   /* geteuid() */
-#define KSYS_GETGID 38    /* getgid() */
-#define KSYS_SETUID 39    /* setuid(uid) */
-#define KSYS_SETGID 40    /* setgid(gid) */
-#define KSYS_RMDIR 41     /* rmdir(path) */
-#define KSYS_FSTAT 42     /* fstat(fd, buf) */
-#define KSYS_POLL 43      /* poll(fds, nfds, timeout) */
-#define KSYS_MMAP 44      /* mmap(addr, len, prot, flags, fd, offset) */
-#define KSYS_MUNMAP 45    /* munmap(addr, len) */
-#define KSYS_MSYNC 46     /* msync(addr, len) */
-#define KSYS_BRK 47       /* brk(addr) */
-#define KSYS_COUNT 48     /* the number of the system calls */
+#define KSYS_EXIT 0           /* exit(code) */
+#define KSYS_READ 1           /* read(fd, buf, count) */
+#define KSYS_WRITE 2          /* write(fd, buf, count) */
+#define KSYS_OPEN 3           /* open(path, flags) */
+#define KSYS_CLOSE 4          /* close(fd) */
+#define KSYS_STAT 5           /* stat(path, buf) */
+#define KSYS_LSEEK 6          /* lseek(fd, offset, whence) */
+#define KSYS_UNLINK 7         /* unlink(path) */
+#define KSYS_MKDIR 8          /* mkdir(path) */
+#define KSYS_READDIR 9        /* readdir(fd, buf, count) */
+#define KSYS_GETPID 10        /* getpid() */
+#define KSYS_GETCWD 11        /* getcwd(buf, size) */
+#define KSYS_IOCTL 12         /* ioctl(fd, cmd, arg) */
+#define KSYS_YIELD 13         /* yield() */
+#define KSYS_SLEEP 14         /* sleep(ms) */
+#define KSYS_UPTIME 15        /* uptime() */
+#define KSYS_REBOOT 16        /* reboot() */
+#define KSYS_FORK 17          /* fork() */
+#define KSYS_GETPPID 18       /* getppid() */
+#define KSYS_WAITPID 19       /* waitpid(pid, status) */
+#define KSYS_MALLOC 20        /* malloc(size) */
+#define KSYS_FREE 21          /* free(ptr) */
+#define KSYS_REALLOC 22       /* realloc(ptr, size) */
+#define KSYS_CHMOD 23         /* chmod(path, mode) */
+#define KSYS_CHOWN 24         /* chown(path, owner) */
+#define KSYS_EXECVE 25        /* execve(path, argv, envp) */
+#define KSYS_STATX 26         /* statx(path, buf) */
+#define KSYS_PIPE 27          /* pipe(fds) */
+#define KSYS_DUP2 28          /* dup2(oldfd, newfd) */
+#define KSYS_KILL 29          /* kill(pid, sig) */
+#define KSYS_SIGNAL 30        /* signal(sig, handler) -> the old handler */
+#define KSYS_SIGRETURN 31     /* the restorer of a signal frame, for the port */
+#define KSYS_GETLIMIT 32      /* getlimit(which, value) */
+#define KSYS_SETLIMIT 33      /* setlimit(which, value) */
+#define KSYS_RENAME 34        /* rename(from, to) */
+#define KSYS_FTRUNCATE 35     /* ftruncate(fd, size) */
+#define KSYS_GETUID 36        /* getuid() */
+#define KSYS_GETEUID 37       /* geteuid() */
+#define KSYS_GETGID 38        /* getgid() */
+#define KSYS_SETUID 39        /* setuid(uid) */
+#define KSYS_SETGID 40        /* setgid(gid) */
+#define KSYS_RMDIR 41         /* rmdir(path) */
+#define KSYS_FSTAT 42         /* fstat(fd, buf) */
+#define KSYS_POLL 43          /* poll(fds, nfds, timeout) */
+#define KSYS_MMAP 44          /* mmap(addr, len, prot, flags, fd, offset) */
+#define KSYS_MUNMAP 45        /* munmap(addr, len) */
+#define KSYS_MSYNC 46         /* msync(addr, len) */
+#define KSYS_BRK 47           /* brk(addr) */
+#define KSYS_CHDIR 48         /* chdir(path) */
+#define KSYS_CLOCK_GETTIME 49 /* clock_gettime(clock, buf) */
+#define KSYS_GETRUSAGE 50     /* getrusage(buf) */
+#define KSYS_COUNT 51         /* the number of the system calls */
 
 /*
  * The resources of a limit. One number names one resource and the calls move
@@ -223,6 +226,41 @@ struct ksys_pollfd {
 
 /* The page of the mappings: a length and an offset are multiples of it. */
 #define KSYS_PAGE_SIZE 4096u
+
+/*
+ * The directory of the task and the clock of the machine (numbers 48 and 49).
+ *
+ * `chdir` moves the working directory of the calling task: the kernel keeps
+ * one path for the task, `execve` carries it into a program and `fork` copies
+ * it, so a child starts where its parent moved to. The path has to be a
+ * directory of the VFS, and a path that does not fit the record of a task
+ * (TASK_CWD_MAX, the same 127 characters a call accepts) is ENAMETOOLONG.
+ *
+ * `clock_gettime` is the wall clock and the monotonic one in the shape of
+ * POSIX. The wire is two signed 64-bit words on both machines, because the
+ * seconds of Unix are the same number on the board and on x86-64; the library
+ * of a 32-bit target translates them into its own `struct timespec`.
+ */
+#define KSYS_CLOCK_REALTIME 0  /* the seconds since 1970, the wall clock */
+#define KSYS_CLOCK_MONOTONIC 1 /* the milliseconds since the boot, as uptime */
+
+struct ksys_timespec {
+    k_i64_t tv_sec;  /* seconds; since 1970 for CLOCK_REALTIME */
+    k_i64_t tv_nsec; /* the fraction of the second, 0 to 999999999 */
+};
+
+/*
+ * The use of the processor by the calling task (number 50). `utime_ms` is the
+ * time the task spent running since it was created and `stime_ms` the part of
+ * it the kernel spent on the task's behalf. This system makes no boundary
+ * between the two on a machine of one privilege level - a call is a call -
+ * and the scheduler counts one number for both (kernel/task.h): the whole of
+ * it is the user time and `stime_ms` is zero today.
+ */
+struct ksys_rusage {
+    k_u64_t utime_ms;
+    k_u64_t stime_ms;
+};
 
 /*
  * The longest path a call accepts, the terminator not counted: a path has
@@ -387,6 +425,16 @@ int ksys_munmap(void *addr, k_size_t len);
 int ksys_msync(void *addr, k_size_t len);
 /* The new break, or a negative error (ENOMEM when the heap may not grow). */
 k_ssize_t ksys_brk(void *addr);
+/*
+ * The working directory of the calling task. `chdir` moves it and copies it
+ * into the programs the task starts; a name that is not a directory of the
+ * VFS is refused and the directory the task had is kept.
+ */
+int ksys_chdir(const char *path);
+/* The moment of one of the two clocks: 0, or a negative error. */
+int ksys_clock_gettime(k_u32_t clock, struct ksys_timespec *out);
+/* The processor time of the calling task: 0, or a negative error. */
+int ksys_getrusage(struct ksys_rusage *out);
 int ksys_kill(int pid, int sig);
 /* The old handler, or K_SIG_ERR when the signal is not one of the system. */
 task_signal_fn ksys_signal(int sig, task_signal_fn handler);

@@ -51,6 +51,13 @@ import sys
 import tempfile
 import time
 
+from qemu_session import DISKS, drive_args, root_name
+
+# The bus of the disk of this run, set by `--disk`: the image is one file and
+# the two disks of the port are two devices (ADR 0037), so the lines of the
+# transcript name the device of the run and nothing else changes.
+DISK = "ide"
+
 # The commands that are typed into the shell. The answers are read by their
 # place in the list, the way the smoke test of the simulator does it. The last
 # one looks at the tree the boot left behind: a program that ran out of a file
@@ -386,6 +393,21 @@ COMMANDS = [
     "pwd",
     "ls ..",
     "cd /",
+    # The directory of the task is the kernel's (call 48): a program moves it,
+    # a child it starts begins there, and the shell that ran the program keeps
+    # its own - the program has a record of its own.
+    "exec /bin/chdir",
+    "pwd",
+    # The heap of a program grows with `brk` (call 47): the window of the
+    # desktop is 800 by 600 pixels, and the memory limit of the task is what
+    # the new heap is charged to.
+    "exec /bin/heap",
+    "exec /bin/limit",
+    # The clock of the machine (call 49): a file written now carries the date
+    # of the person and not the year of the records of the image, which the
+    # tool stamped with SOURCE_DATE_EPOCH = 0.
+    "write /tmp/dated.txt x",
+    "exec /bin/ls -l /tmp/dated.txt",
     "memtest",
     # The tools of sbase (third_party/sbase) are the commands of the machine
     # now: `ls`, `cat`, `grep`, `wc` and `head` are the files of /bin and not
@@ -905,13 +927,19 @@ def _write_bad_image(data: bytes, tag: str = "image") -> str:
     return path
 
 
-def machine_argv(loader: str, kernel: str, image: str) -> list:
+def machine_argv(loader: str, kernel: str, image: str, disk: str = None) -> list:
     """The command line of the machine of the smoke tests.
 
     One machine for the run of the commands, the script of the console of the
     accounts and the oversized image: a second copy of these arguments would
     be a second machine, and the checks would read the boot of another one.
+
+    The bus of the disk is the one of the run (the global `DISK`, from
+    `--disk`) unless the caller names another: the machines of a test of this
+    tool all boot the same medium.
     """
+    disk = DISK if disk is None else disk
+
     return [
         "qemu-system-x86_64",
         "-kernel",
@@ -924,15 +952,16 @@ def machine_argv(loader: str, kernel: str, image: str) -> list:
         MACHINE_SMP,
         "-nographic",
         "-no-reboot",
-        # The disk of the machine: a raw image on the primary IDE channel.
-        # The programs of /bin are files of the MicroFS volume in it; the
-        # boot writes nothing to the volume (ADR 0008).
-        "-drive",
-        f"file={image},format=raw,if=ide,index=0,cache=writeback",
+        # The disk of the machine: a raw image on the primary IDE channel of
+        # ADR 0008, or on the virtio device of ADR 0037 (`--disk virtio`).
+        # The programs of /bin are files of the volume in it; the boot writes
+        # nothing to the volume.
+        *drive_args(image, disk),
     ]
 
 
-def run_machine(loader: str, kernel: str, image: str, timeout: float, commands: list = None) -> str:
+def run_machine(loader: str, kernel: str, image: str, timeout: float, commands: list = None,
+                disk: str = None) -> str:
     """Boot the machine, drive the shell and return the transcript.
 
     The output is read while the machine runs, not after it stops: the
@@ -946,7 +975,7 @@ def run_machine(loader: str, kernel: str, image: str, timeout: float, commands: 
     working and an AP that was started without the test knowing it are both
     visible here.
     """
-    command = machine_argv(loader, kernel, image)
+    command = machine_argv(loader, kernel, image, disk)
 
     lines = COMMANDS if commands is None else commands
 
@@ -1248,12 +1277,12 @@ def check(output: str) -> list:
     # back, not only a string.
     expect(
         "the volume of the machine is the disk",
-        "x86-64: the root volume is ata0p1" in output,
+        f"x86-64: the root volume is {root_name(DISK)}" in output,
         "the machine booted without the image of the disk",
     )
     expect(
         "the boot finds the programs on the disk",
-        "x86-64: the programs come from ata0p1:/bin" in output,
+        f"x86-64: the programs come from {root_name(DISK)}:/bin" in output,
     )
     # Nothing is written to the volume at the boot: the program is a file the
     # tool left there, not a blob of the kernel that was installed first.
@@ -1476,9 +1505,13 @@ def check(output: str) -> list:
     # 'program'`) and not the command of the shell. The checks below read the
     # answer of the program and the escape of the colour.
     listing = answer("ls -la /etc")
+    # The moment of a record of the image is SOURCE_DATE_EPOCH, which is zero:
+    # the listing shows the year of a record of 1970 and not the date of the
+    # machine. A file written by the machine today carries its date, and the
+    # check of that one is below.
     expect(
         "ls -la prints the mode, the owner and the group",
-        re.search(r"-rw-r--r--\s+1 root\s+root\s+34 Jan 01 00:00 setting", listing) is not None,
+        re.search(r"-rw-r--r--\s+1 root\s+root\s+34 Jan 01\s+1970 setting", listing) is not None,
         listing,
     )
     expect(
@@ -1661,6 +1694,114 @@ def check(output: str) -> list:
         "ls .. lists the parent",
         all(re.search(rf"(?m)^{name}\r?$", parent) is not None for name in ("bin", "etc")),
         parent,
+    )
+
+    # --- the directory of the task (call 48, the lane of 1.8)
+    #
+    # `chdir` is a call of the kernel now: the programme moves the directory
+    # of its own task, a file is refused with ENOTDIR, and the child of its
+    # fork - a copy of the record - begins in /etc and prints it through
+    # `pwd`, an image of another program. The shell that ran the programme is
+    # still in /, because a program has a record of its own.
+    moved = answer("exec /bin/chdir")
+    expect(
+        "a program begins in the directory of its task",
+        re.search(r"(?m)^chdir: the program begins in /\r?$", moved) is not None,
+        moved[:400],
+    )
+    expect("a program moves its directory", "chdir: cd /etc says /etc" in moved, moved)
+    expect(
+        "a file is not a directory",
+        "chdir: a file is not a directory: 20" in moved and "chdir: after the refusal /etc" in moved,
+        moved,
+    )
+    expect(
+        "the child of a fork begins in the new directory",
+        re.search(r"(?m)^/etc\r?$", moved) is not None
+        and "chdir: the child ended with 0" in moved,
+        moved,
+    )
+    expect(
+        "the move of the child does not move the parent",
+        "chdir: the parent is still in /etc" in moved,
+        moved,
+    )
+    expect(
+        "the chdir program ends with its status",
+        "chdir: done" in moved and "the program exited with 0" in moved,
+        moved,
+    )
+    expect(
+        "a program does not move the directory of the shell",
+        re.search(r"(?m)^/\r?$", answer("pwd", 4)) is not None,
+        answer("pwd", 4),
+    )
+
+    # --- the heap of a program and the limit of its task (calls 47 and 33)
+    #
+    # The window of the desktop is 1 920 000 bytes, more than the arena of the
+    # bss: the block comes from the machine through `brk`. A programme that
+    # lowers its own memory limit cannot have that block any more, and a
+    # smaller one still fits - which is the limit and not the heap.
+    grown = answer("exec /bin/heap")
+    expect("a window of 800 by 600 is a block of the heap", "heap: a window is 1920000 bytes" in grown, grown)
+    expect(
+        "the bytes of the tall window are the bytes of the program",
+        "heap: the corners of the window say 102" in grown,
+        grown,
+    )
+    expect(
+        "a block that was freed is a block of the heap again",
+        "heap: the second window ends with 68" in grown,
+        grown,
+    )
+    expect(
+        "the heap program ends with its status",
+        "heap: done" in grown and "the program exited with 0" in grown,
+        grown,
+    )
+    limited = answer("exec /bin/limit")
+    expect(
+        "a program reads the memory limit of its task",
+        "limit: the memory limit is 2097152 bytes" in limited,
+        limited,
+    )
+    expect(
+        "a program lowers the limit of its task",
+        "limit: lowered to 1048576 bytes" in limited,
+        limited,
+    )
+    expect("a raise of a limit is refused", "limit: a raise says 1" in limited, limited)
+    expect(
+        "the limit is what refuses the window",
+        "limit: a window of 1920000 bytes is refused with 12" in limited,
+        limited,
+    )
+    expect(
+        "a block under the limit still fits",
+        "limit: a block of 524288 bytes is taken and ends with 90" in limited,
+        limited,
+    )
+    expect(
+        "the limit program ends with its status",
+        "limit: done" in limited and "the program exited with 0" in limited,
+        limited,
+    )
+
+    # --- the clock of the machine (call 49)
+    #
+    # The machine reads the date from its own source at the boot (the CMOS of
+    # this port, the process of the host, the chip of the board), so a record
+    # written now carries the date of the person. The records of the image are
+    # of 1970 - the tool stamped them with SOURCE_DATE_EPOCH - so the two
+    # kinds of moment are told apart in one listing of one directory.
+    dated = answer("exec /bin/ls -l /tmp/dated.txt")
+    now = time.gmtime()
+    stamp = time.strftime("%b %d", now)
+    expect(
+        "a file written now carries the date of the machine",
+        stamp in dated and "1970" not in dated,
+        f"{dated!r}, the host is {stamp}",
     )
 
     # --- a directory wider than the old table
@@ -3335,8 +3476,17 @@ def main(argv: list) -> int:
     # of two of them needs three times that on a machine that is not the
     # fastest: the limit is the whole run and a slow host is not a failure.
     parser.add_argument("--timeout", type=float, default=600.0, help="the seconds the machine gets")
+    parser.add_argument(
+        "--disk",
+        choices=DISKS,
+        default="ide",
+        help="the bus of the disk of the run (default: ide)",
+    )
     parser.add_argument("--verbose", action="store_true", help="print the console of the machine")
     args = parser.parse_args(argv)
+
+    global DISK
+    DISK = args.disk
 
     loader = os.path.join(BUILD, "loader32.elf")
     kernel = os.path.join(BUILD, "microos64.bin")

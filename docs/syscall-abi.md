@@ -152,15 +152,19 @@ chose.
 | 45 | `munmap` | `addr, len` | 0, or an error |
 | 46 | `msync` | `addr, len` | 0, or an error |
 | 47 | `brk` | `addr` | the new end of the heap, or an error |
+| 48 | `chdir` | `path` | 0, or an error |
+| 49 | `clock_gettime` | `clock, buf` | 0 and the moment in the place of the caller, or an error |
+| 50 | `getrusage` | `buf` | 0 and the use of the processor in the place of the caller, or an error |
 
 The numbers 0 to 22 are frozen, 23 to 26 were the next free ones; pipes took
 27 and 28 (ADR 0014), signals the three after them (ADR 0015), the limits of
 a task 32 and 33, the atomic rename 34 (ADR 0024 §5), the cut of an open
 file 35 and the credentials of a task 36 to 40 (the second half of 1.4),
 `rmdir` and `fstat` 41 and 42 (the filesystem of 1.5), the wait for a
-descriptor 43 and the memory a program maps 44 to 47 (the first lane of 1.6). A
-call that is not in the table is `ENOSYS`, never a guess at what it might
-have meant.
+descriptor 43 and the memory a program maps 44 to 47 (the first lane of 1.6).
+The lane of 1.8 added the directory of a task 48, the clock 49 and the use of
+the processor 50; the three are below. A call that is not in the table is
+`ENOSYS`, never a guess at what it might have meant.
 
 ## The control commands of `ioctl`
 
@@ -337,10 +341,11 @@ A zeroed mode is still "this filesystem keeps no modes", so the roots of
 
 ## The moments of a file
 
-`stat` has no field for a time, and its structure and its number are frozen.
-`statx` (number 26) is the second door: the first five fields of `struct
-vfs_statx` are the five fields of `struct vfs_stat`, in the same order, and
-the two last fields are the moments of the object.
+`stat` has no field for a time or a group, and its structure and its number
+are frozen. `statx` (number 26) is the second door: the first five fields of
+`struct vfs_statx` are the five fields of `struct vfs_stat`, in the same
+order, the sixth is the group of the object (ADR 0038) and the two last are
+the moments of the object.
 
 ```c
 struct vfs_statx {
@@ -354,13 +359,23 @@ struct vfs_statx {
 };
 ```
 
+**The group of a record arrived in 1.7** (ADR 0038) in the room that the
+alignment of `type` left free: `group` is a 16-bit field at the offset 6, and
+the structure keeps the 40 bytes it has had since the call was frozen. A
+program of an older tree reads the fields it knows and this one reads the
+group as well, so the epoch is not broken and an image of 1.0 still runs (the
+test of the frozen image holds it). The group is zero for every filesystem
+that has no group of its own - all of them but a MicroFS volume of version 3
+- and zero is the group of root, which is what a volume without a group has
+always meant.
+
 The moments are the seconds of Unix in 64 bits, so the year 2038 is not a
 wall of the contract. They come from the clock of the kernel
-(`k_clock_now_unix()`): the RTC of the board, the process of the host and the
-NTP service all feed the same number. A machine whose clock was never set -
-the host build, the x86-64 machine without a battery - stamps with the
-seconds since its boot, which orders the changes but is not a date;
-`k_clock_present()` says which one it is.
+(`k_clock_now_unix()`): the process of the host, the CMOS of an x86-64 machine,
+the BM8563 of the board and the NTP service all feed the same number (see "The
+clock of a machine"). A machine whose chip has no battery and whose network is
+down stamps with the seconds since its boot, which orders the changes but is
+not a date; `k_clock_present()` says which one it is.
 
 **Zero means "this filesystem keeps no time".** A volume of MicroFS of
 version 1 has 16-byte records with no room for a moment, and a filesystem
@@ -374,6 +389,83 @@ field that would always be zero.
 The library has the same call as `microos_statx()` and `struct
 microos_statx`, with the types of `<stdint.h>`; it returns -1 and sets
 `microos_errno()` on an error, like the rest of the library.
+
+## The clock of a machine
+
+The call 49, `clock_gettime(clock, buf)`, is the clock of POSIX in the shape
+of this system: the clock is one of the two selectors, the answer is written
+into the place of the caller and the wire is two signed 64-bit words on both
+machines, because the seconds of Unix are the same number on the board and on
+x86-64. A 32-bit program translates them into its own `struct timespec` in the
+library of a program.
+
+```c
+struct ksys_timespec {
+    k_i64_t tv_sec;  /* seconds; since 1970 for CLOCK_REALTIME */
+    k_i64_t tv_nsec; /* the fraction of a second, 0 to 999999999 */
+};
+
+#define KSYS_CLOCK_REALTIME 0  /* the wall clock */
+#define KSYS_CLOCK_MONOTONIC 1 /* the milliseconds of the boot, as uptime */
+```
+
+`CLOCK_REALTIME` is the wall clock of the kernel (`k_clock_now_unix()`, the
+one `statx` stamps a record with). **Who sets it: the machine at its boot, and
+then the network or a person.** The port and the drivers register a source
+when they come up and read it once: the host the process it runs on, the
+x86-64 machine the CMOS chip of the firmware (ports 0x70 and 0x71, BCD or
+binary, 12 or 24 hours, read twice to avoid the update of the chip), the
+board the BM8563 behind I2C. `ntp` then corrects the moment and `date set`
+writes a new one on the board, and both go through `k_clock_set_unix()`, which
+moves the base the kernel adds the uptime to *and* asks the driver to write
+the chip, so the next boot starts from the corrected time. A machine whose
+chip has no battery and whose network is down answers the seconds since its
+boot: a number that orders two records, and not a date (the zone of `/etc` is
+still a debt of `docs/debts.md`).
+
+`CLOCK_MONOTONIC` is the millisecond count of the boot that `uptime` answers;
+a caller that measures an interval uses it, so a step of `ntp` does not make a
+timer jump. Any other selector, and a place that is not there, is `EINVAL`.
+
+## The use of the processor
+
+`getrusage(buf)` (number 50) is the processor time of the calling task - the
+number the scheduler already counts for the CPU limit of the task
+(`KSYS_RLIMIT_CPU`, kernel/task.h) - brought up to the moment of the call and
+copied into the place of the caller:
+
+```c
+struct ksys_rusage {
+    k_u64_t utime_ms; /* the time the task spent running */
+    k_u64_t stime_ms; /* the part of it the kernel spent for the task */
+};
+```
+
+This system makes no boundary between the two on a machine of one privilege
+level: a call of the board is a function call and the time of the kernel
+inside a call of x86-64 is the time of the caller. The whole of the count is
+the user time and `stime_ms` is zero, which is a fact about the machine and
+not a field that was forgotten. `RUSAGE_CHILDREN` of POSIX has no call: the
+usage of a child that has ended is not kept, and the library answers `ENOSYS`
+for it rather than a zero that looks like a number.
+
+## The directory of a task
+
+Every task has one working directory, a path of at most `TASK_CWD_MAX` (127)
+characters in its record. The shell's `cd` writes it (`task_set_cwd`), a
+program writes it with the call 48 `chdir(path)`, and `fork` and `execve`
+carry it: the child of a fork is a copy of the record and the image of a
+program starts in the directory of the task that entered it. The call resolves
+the name through the VFS, refuses a name that is not a directory with
+`ENOTDIR` and a name that does not fit the record with `ENAMETOOLONG` - it is
+not cut to fit - and leaves the directory the task had when it refuses.
+
+A relative path is still resolved by the library of a program before the call:
+the VFS of this system mounts every filesystem below `/` and its calls take a
+path that begins there (`path_check`). The library asks the kernel for the
+directory of the task (`getcwd`) for every relative name and folds `.` and
+`..`, so the two sides cannot disagree about where the program is. On the
+board a program uses the paths of the shell and the resolver is not linked.
 
 ## The programs
 

@@ -393,6 +393,64 @@ static void test_from_unix(void)
 }
 
 /*
+ * The moment of the chip as the seconds of Unix: the other direction, which
+ * is what the boot seeds the clock of the kernel with and what `date set`
+ * hands to it. The two directions are one calendar: a moment that goes out
+ * and comes back is the same moment, and a moment of the chip that is not a
+ * date is refused instead of being turned into a number.
+ */
+static void test_to_unix(void)
+{
+    static const uint64_t moments[] = {
+        0u,          /* 1970-01-01 00:00:00 */
+        1u,          /* the second after the epoch */
+        86399u,      /* 1970-01-01 23:59:59 */
+        86400u,      /* 1970-01-02, the first day of the next day */
+        951782400u,  /* 2000-02-29 00:00:00, the leap day of a century */
+        1795118400u, /* 2026-11-19 20:00:00 */
+        2147483647u, /* 2038-01-19 03:14:07, the end of a 32-bit time_t */
+        4102444799u, /* 2099-12-31 23:59:59, the last the chip keeps */
+    };
+    struct rtc_datetime dt;
+    struct rtc_datetime broken;
+    uint64_t seconds;
+    unsigned i;
+
+    for (i = 0; i < (unsigned)(sizeof(moments) / sizeof(moments[0])); i++) {
+        seconds = 0;
+        KT_CHECK(rtc_from_unix(moments[i], &dt));
+        KT_CHECK(rtc_to_unix(&dt, &seconds));
+        KT_CHECK(seconds == moments[i]);
+    }
+
+    /* The moment of the chip alone: a date of the driver without the ring of
+     * the seconds, and one that is not a date at all. */
+    memset(&dt, 0, sizeof(dt));
+    dt.year = 2026;
+    dt.month = 11;
+    dt.day = 24;
+    dt.hour = 12;
+    dt.minute = 34;
+    dt.second = 56;
+    KT_CHECK(rtc_to_unix(&dt, &seconds));
+    KT_CHECK(rtc_from_unix(seconds, &broken));
+    KT_CHECK_INT_EQ(broken.year, 2026);
+    KT_CHECK_INT_EQ(broken.month, 11);
+    KT_CHECK_INT_EQ(broken.day, 24);
+    KT_CHECK_INT_EQ(broken.hour, 12);
+    KT_CHECK_INT_EQ(broken.minute, 34);
+    KT_CHECK_INT_EQ(broken.second, 56);
+
+    /* A battery that died leaves 58 for an hour: not a date, no seconds. */
+    dt.hour = 58;
+    seconds = 1234;
+    KT_CHECK(!rtc_to_unix(&dt, &seconds));
+    KT_CHECK(seconds == 1234);
+    KT_CHECK(!rtc_to_unix(NULL, &seconds));
+    KT_CHECK(!rtc_to_unix(&dt, NULL));
+}
+
+/*
  * The alarm of the chip is a match of a minute, an hour and a day. The sleep
  * of the board asks this function for the length of its timer, so the
  * boundaries are the whole point: the same minute is tomorrow, midnight is
@@ -496,5 +554,6 @@ void test_rtc(void)
     test_format();
     test_corpus();
     test_from_unix();
+    test_to_unix();
     test_alarm_ahead();
 }

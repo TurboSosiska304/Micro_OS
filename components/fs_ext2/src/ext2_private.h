@@ -11,7 +11,9 @@
  * a block bitmap of a group, the counters of the group and of the
  * superblock, an inode and the records of a directory. The block buffer is
  * one buffer of the volume, protected by the lock, and no call keeps a
- * block of it across a return.
+ * block of it across a return; the descriptor and one bitmap of the group of
+ * the last change are the state of the volume that outlives a call, and
+ * `ext2_write_flush` is where they reach the medium (ADR 0037).
  */
 #ifndef MICRO_OS_FS_EXT2_EXT2_PRIVATE_H
 #define MICRO_OS_FS_EXT2_EXT2_PRIVATE_H
@@ -42,6 +44,20 @@
 
 /* The largest block of the format this reader walks. */
 #define EXT2_BLOCK_MAX 4096u
+
+/*
+ * The most bytes one call of this filesystem asks of the medium: 64 KiB, the
+ * run of a bus master of a disk and eight of the read ahead of the block
+ * layer. A file is read and written in runs of that size and not a block at a
+ * time, because a command of a medium costs more than the kilobyte it moves
+ * (ADR 0037).
+ */
+#define EXT2_IO_BYTES_MAX 65536u
+
+/* The bitmap the slot of the writer holds, and none when it holds none. */
+#define EXT2_BITMAP_NONE 0u
+#define EXT2_BITMAP_BLOCK 1u
+#define EXT2_BITMAP_INODE 2u
 
 /*
  * The features that change the shape of the metadata. A volume with one
@@ -143,11 +159,32 @@ struct ext2_volume {
     k_u32_t free_blocks;
     k_u32_t free_inodes;
     k_u64_t volume_bytes;
-    /* The group where the next allocation starts: ext2 looks for a free
-     * block after the last one it used, and the volume remembers where
-     * that was without reading every descriptor in front of it. */
+    /* The group where the next allocation starts and the bit of its bitmap
+     * after the last one it gave: the writer scans from the cursor and wraps
+     * instead of walking the bitmap of the group from its first bit for
+     * every block of a file. A freed block becomes the cursor, so the room
+     * of a removal is the room of the next object. */
     k_u32_t alloc_hint;
+    k_u32_t alloc_cursor;
     k_u32_t inode_hint;
+    k_u32_t inode_cursor;
+
+    /*
+     * The group the writer is working in: its descriptor and one of its two
+     * bitmaps stay in the memory of the volume while it is that group, and
+     * reach the medium when the volume settles, when the writer moves to
+     * another group and at the end of a run of blocks. The counters of the
+     * volume are the truth in the memory in between; e2fsck of the host
+     * reads them at the end of a session, and `ext2_volume_flush` writes
+     * them before the superblock (ADR 0037).
+     */
+    struct ext2_group group;
+    k_u32_t group_cached; /* the group of the slot, `groups` for none */
+    bool group_dirty;
+    k_u8_t bitmap_kind; /* the bitmap of `group_cached` the slot holds */
+    bool bitmap_dirty;
+    k_u8_t bitmap[EXT2_BLOCK_MAX];
+
     /* True once a block or an inode of the volume changed: an unmount of a
      * volume that was only read writes nothing at all. */
     bool dirty;
@@ -211,6 +248,16 @@ int ext2_block_for_logical(struct ext2_volume *vol, const struct ext2_inode *ino
                            k_u32_t *block);
 
 /*
+ * A run of logical blocks of an inode as the medium has it: `first` is the
+ * block of the first one, zero when the run is a hole, and `run` how many
+ * blocks follow it - holes, or blocks whose numbers come one after another.
+ * A run stops at the table of pointers that holds the blocks, so one call of
+ * the medium carries it. `want` is the most blocks the caller has a use for.
+ */
+int ext2_block_run(struct ext2_volume *vol, const struct ext2_inode *inode, k_u64_t logical,
+                   k_u32_t want, k_u32_t *first, k_u32_t *run);
+
+/*
  * The next entry of a directory. `pos` is a byte position in the stream of
  * the directory: the call moves it past the entry it returns, a return of
  * 1 is an entry, 0 is the end of the directory and a negative value is an
@@ -237,9 +284,28 @@ int ext2_write_block(struct ext2_volume *vol, k_u32_t block, const void *buf);
 /* Push the counters of the superblock to the medium and sync the device. */
 int ext2_volume_flush(struct ext2_volume *vol);
 
-/* The descriptor of a group, read and written as the 32 bytes it is. */
+/*
+ * The descriptor of a group, read and written as the 32 bytes it is. The
+ * reader and the writer of a volume both go through one slot of the volume:
+ * the descriptor of the group of the last change stays in the memory, the
+ * writes of it are held until the volume settles, and a group that is not
+ * the one of the slot flushes the slot first. e2fsck reads the table of the
+ * descriptors and not this state, which is why the flush is the price of a
+ * change of group.
+ */
 int ext2_group_read(struct ext2_volume *vol, k_u32_t index, struct ext2_group *out);
 int ext2_group_write(struct ext2_volume *vol, const struct ext2_group *group);
+
+/* Write the bitmap and the descriptor of the slot to the medium when they
+ * are not there yet. Nothing is written when the volume did not change. */
+int ext2_write_flush(struct ext2_volume *vol);
+
+/*
+ * Flush the slot and forget it. The caller is about to write a bitmap of a
+ * group itself - the repair pass rebuilds every bitmap of the volume - and a
+ * copy of the slot above that write would put the old bits back.
+ */
+int ext2_write_state_drop(struct ext2_volume *vol);
 
 /*
  * Write an inode back. `preserve` keeps the fields this writer does not
@@ -249,21 +315,26 @@ int ext2_group_write(struct ext2_volume *vol, const struct ext2_group *group);
  */
 int ext2_inode_write(struct ext2_volume *vol, const struct ext2_inode *inode, bool preserve);
 
-/* Take a block or an inode from the bitmaps of the groups; a block comes
- * back zeroed. KERR_NOSPC when the volume has none of them left. */
+/* Take a block or an inode from the bitmaps of the groups. A block comes
+ * back with the bytes of the object that used it before: the caller writes
+ * every byte it owns, and a write of part of a block zeroes the rest of it.
+ * `ext2_alloc_blocks` takes a run of consecutive blocks as one change of the
+ * bitmap, which is what makes a write of a file a batch of the medium rather
+ * than a block. KERR_NOSPC when the volume has none of them left. */
 int ext2_alloc_block(struct ext2_volume *vol, k_u32_t *block);
+int ext2_alloc_blocks(struct ext2_volume *vol, k_u32_t want, k_u32_t *block, k_u32_t *count);
 int ext2_free_block(struct ext2_volume *vol, k_u32_t block);
 int ext2_alloc_inode(struct ext2_volume *vol, k_u32_t *number);
 int ext2_free_inode(struct ext2_volume *vol, k_u32_t number);
 
 /*
  * The block that holds a logical block, allocated when `create` is set and
- * it is a hole. The writer speaks the direct blocks and one level of
- * indirection; a file that needs more is KERR_NOSPC rather than a second
- * layout nobody writes (ADR 0019, M2.2 of the plan).
+ * it is a hole. `fresh` is true for a block this call allocated, whose bytes
+ * are nobody's: a writer of part of a block zeroes the rest of it instead of
+ * reading it back.
  */
 int ext2_inode_get_block(struct ext2_volume *vol, struct ext2_inode *inode, k_u64_t logical,
-                         k_u32_t *block, bool create);
+                         k_u32_t *block, bool create, bool *fresh);
 
 /* The bytes of a regular file at a position, allocating as it goes. */
 int ext2_file_write(struct ext2_volume *vol, struct ext2_inode *inode, k_u64_t offset,

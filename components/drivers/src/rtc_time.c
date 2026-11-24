@@ -242,6 +242,36 @@ bool rtc_from_unix(uint64_t seconds, struct rtc_datetime *dt)
     return rtc_datetime_in_range(dt);
 }
 
+/*
+ * The other way: the seconds of Unix (UTC) of a moment of the chip. The
+ * calendar is the same one, in the other direction, and a moment that is not
+ * in range (a battery that died and left an hour of 58) answers false - the
+ * boot must not seed the clock of the system from a date that is not one.
+ */
+bool rtc_to_unix(const struct rtc_datetime *dt, uint64_t *seconds)
+{
+    int64_t year_number;
+    int64_t era;
+    uint32_t year_of_era;
+    uint32_t day_of_year;
+    uint32_t day_of_era;
+
+    if (dt == NULL || seconds == NULL || !rtc_datetime_in_range(dt)) {
+        return false;
+    }
+
+    year_number = (int64_t)dt->year - ((dt->month <= 2) ? 1 : 0);
+    era = (year_number >= 0 ? year_number : year_number - 399) / 400;
+    year_of_era = (uint32_t)(year_number - era * 400);
+    day_of_year = (uint32_t)((153 * (dt->month + (dt->month > 2 ? -3 : 9)) + 2) / 5 + dt->day - 1);
+    day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+
+    *seconds = (uint64_t)(era * 146097 + (int64_t)day_of_era - 719468) * 86400u +
+               (uint64_t)dt->hour * 3600u + (uint64_t)dt->minute * 60u + (uint64_t)dt->second;
+
+    return true;
+}
+
 /* One minute later, with the calendar of the month taken into account. */
 static bool rtc_next_minute(int *year, int *month, int *day, int *hour, int *minute)
 {

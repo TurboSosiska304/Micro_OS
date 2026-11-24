@@ -168,11 +168,30 @@ int port_x86_64_console_settings_register(void);
 
 /*
  * Bring the controller of the keyboard up and let its interrupt through the
- * controller: the first port on, its clock running, the line of IRQ1 armed.
- * The mask of the 8259 is the business of pic_init(), which runs after this
- * one and opens the line.
+ * controller: the first port on, its clock running, the line of IRQ1 armed,
+ * and the scancode set of the keyboard asked (0xF0 0x00) before a byte of it
+ * is read as a key. The mask of the 8259 is the business of pic_init(), which
+ * runs after this one and opens the line.
  */
 void port_x86_64_ps2_init(void);
+
+/*
+ * Which scancode set the keyboard of this machine speaks: the set the bytes
+ * the handler reads are in (1, 2 or 3 - the set 1 when the controller of the
+ * motherboard translates them, which is the machine of QEMU and of almost
+ * every PC), and the set the device answered when it was asked (0 when it did
+ * not answer: an XT, a controller that does not pass the command, or a
+ * machine whose firmware took the keyboard away). The boot prints both, and
+ * they differ on a laptop of the set 2 whose firmware leaves the translation
+ * off - the machine of 1.8, where the set is the difference between a
+ * keyboard that types and one that does not.
+ */
+k_u8_t port_x86_64_ps2_set(void);
+k_u8_t port_x86_64_ps2_device_set(void);
+
+/* True when the port ordered the device into the set 1 and the device
+ * answered: the wire is the set 1 by construction, not by a guess. */
+bool port_x86_64_ps2_set_ordered(void);
 
 /* The body of IRQ1: one byte of the keyboard, then the EOI. Called from
  * interrupts.S with the interrupts off. */

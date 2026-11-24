@@ -197,8 +197,11 @@ static bool region_is_writable(const struct k_mm_region *region)
     return (region->prot & K_MM_PROT_WRITE) != 0;
 }
 
-/* The bit of a page in the map of the pages that were written and have to go
- * back to the file. */
+/* The bit of a page in the map of the pages that were written. It is the
+ * record of the first store of a page (the write fault), not the list of the
+ * pages to write back: `region_writeback` names the pages that are present,
+ * because a page that is already writable takes its later stores without a
+ * fault. */
 static void region_mark_dirty(struct k_mm_region *region, k_u64_t vaddr)
 {
     k_size_t index;
@@ -212,16 +215,18 @@ static void region_mark_dirty(struct k_mm_region *region, k_u64_t vaddr)
     region->dirty[index / 8u] |= (k_u8_t)(1u << (index % 8u));
 }
 
-static bool region_is_dirty(const struct k_mm_region *region, k_size_t index)
-{
-    if (region->dirty == NULL) {
-        return false;
-    }
-
-    return (region->dirty[index / 8u] & (k_u8_t)(1u << (index % 8u))) != 0;
-}
-
-/* Write the pages of a shared mapping back to its file. */
+/*
+ * Write the pages of a shared mapping back to its file.
+ *
+ * A page that is present is a page the program has touched, and it is the one
+ * to write: the bits of `dirty` are a hint of the first write of a page and
+ * not the truth about the others - a page mapped writable by its first fault
+ * takes every later store without a fault, so a bit that only a fault sets
+ * would name the first frame of a program and no other (the window of the
+ * desktop is a buffer that changes a hundred times). The write of a page that
+ * did not change is a page of the file that the file already has, and the
+ * cost of it is the price of a mapping that is a mapping.
+ */
 static int region_writeback(struct k_mm_space *space, struct k_mm_region *region)
 {
     k_size_t pages = (k_size_t)(region->len / K_MM_PAGE_SIZE);
@@ -236,10 +241,6 @@ static int region_writeback(struct k_mm_space *space, struct k_mm_region *region
         k_u64_t offset = region->offset + (k_u64_t)index * K_MM_PAGE_SIZE;
         void *page;
         int rc;
-
-        if (!region_is_dirty(region, index)) {
-            continue;
-        }
 
         page = k_port_mm_phys(space->handle, vaddr);
 

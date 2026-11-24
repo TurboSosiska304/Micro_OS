@@ -14,6 +14,7 @@ the board live in `hardware/`.
 | contribute, build, run the checks | [../CONTRIBUTING.md](../CONTRIBUTING.md) |
 | understand the design | [architecture.md](architecture.md) |
 | know what is done and what is next | [roadmap.md](roadmap.md) (the kernel) and [ports/esp32/roadmap.md](ports/esp32/roadmap.md) (the board) |
+| know whether WiFi on a laptop is possible, and what it costs | [plan-wifi.md](plan-wifi.md) |
 | bring the kernel to another machine | [porting.md](porting.md) |
 | port a program (zlib, PCRE2, Lua, sbase) to the userland, or build one with the SDK | [porting-programs.md](porting-programs.md) |
 | move a machine from 0.x to 1.0 | [migration.md](migration.md) |

@@ -40,7 +40,7 @@ formatter of a double nor the database of libmagic.
 
 | Part | Files | What it is |
 |---|---|---|
-| the allocation | `src/malloc.c` | an arena in the bss of the program (`-DULIBC_HEAP_SIZE`, 256 KiB by default, 512 KiB for `zcat` and 960 KiB for `file` and `zstd`), not `KSYS_MALLOC`: the block of the kernel is memory of ring 0 and a program cannot read it; `calloc` and `realloc` are the same arena |
+| the allocation | `src/malloc.c` | a free list whose first block is an arena in the bss of the program (`-DULIBC_HEAP_SIZE`, 256 KiB by default) and which grows through `KSYS_BRK` (call 47) when the arena has no room, not `KSYS_MALLOC`: the block of the kernel is memory of ring 0 and a program cannot read it; `calloc` and `realloc` are the same heap, and `free` gives a block back to it and never to the machine |
 | the error | `src/errno.c` | `errno` as a global of the program and `strerror`; the calls keep the negative number of the ABI and the wrappers also store its magnitude, so a portable library reads `errno` after `read` |
 | the streams | `src/file.c` | `fopen`, `fdopen`, `fmemopen`, `freopen`, `fclose`, `fread`, `fwrite`, `fgetc`, `getc`, `getchar`, `ungetc`, `fputc`, `fgets`, `fputs`, `fflush`, `setvbuf`, `perror`, `feof`, `ferror`, `fseek`, `ftell`, `rewind`, `fileno`, `fprintf` over a descriptor; one block of the arena of the program (4 KiB by default) holds the read-ahead and the bytes written and not given to the kernel, the mode is line-buffered on a terminal, block-buffered on a file and a pipe and unbuffered on the error descriptor, and `fflush`/`fclose`/`exit` give the block to the kernel (ADR 0035); the binary mode is accepted and ignored because no file of the system translates a byte; `tmpfile` is a failure (no `/tmp`) |
 | the formatter | `src/stdio.c`, `src/format_float.c` | `printf`, `puts`, `putchar`, `snprintf`/`vsnprintf`/`sprintf`, and `fprintf`/`vfprintf` over the streams; the conversions are the ones of the table below, and a build that defines `ULIBC_WITH_FLOAT` adds the digits of a double from `src/format_float.c` |
@@ -49,13 +49,13 @@ formatter of a double nor the database of libmagic.
 | the numbers and the order of sbase | `src/stdlib_ext.c` | the same conversions with the `ERANGE` of an overflow, `atoll`/`llabs`, the heap sort of `qsort` and the halving walk of `bsearch`, and `getenv`; a command of sbase links this file and a program of another port the one above, so no program carries two answers to one name |
 | the information about an object | `src/stat.c`, `include/sys/stat.h` | the POSIX `struct stat` with the `S_IS*` macros, `stat`/`lstat` (one call: the system has no links) over `KSYS_STATX`, `fstatat`, `fstat` over `KSYS_FSTAT` (the mode, the owner, the size and the two moments of the open object), `chmod`, `umask`. The record of the ABI keeps its own name, `ulibc_stat_call`, and fills `struct vfs_stat` |
 | the entries of a directory | `src/dirent.c`, `include/dirent.h` | `DIR`, `struct dirent`, `opendir`, `fdopendir`, `readdir`, `closedir`, `rewinddir`, `dirfd` over a batch of eight names of `ulibc_readdir` |
-| the path and the directory | `src/path.c`, `src/syscall.c` | the resolver of a relative path against the directory of the program (the ABI has no call that moves it), `.`/`..` folded, and the table of the directories an open named (`fdopendir`) |
+| the path and the directory | `src/path.c`, `src/syscall.c` | the resolver of a relative path against the directory of the task (the kernel's, call 48 moves it), `.`/`..` folded, and the table of the directories an open named (`fdopendir`) |
 | the halves of a path, the copy of a word | `src/libgen.c`, `src/string_ext.c` | `basename`/`dirname`, `strdup`/`strndup` (they allocate, and a program without an arena does not link them), `strspn`/`strcspn`/`strpbrk` (in `src/string.c`, which every program links), the compare without the case of a letter |
 | the patterns and the options | `src/fnmatch.c`, `src/regex.c`, `src/getopt.c` | the pattern of a name, the regular expressions of `grep` and `sed`, and the options of a command |
 | the users and the terminal | `src/pwd.c`, `src/termios.c` | the one owner of the system (`getpwnam` and its neighbours) and the shape of a terminal the release of a library sets |
 | the arithmetic | `src/math.c` | the functions of `<math.h>` for a `double`: the square root, the logarithm and the exponential of the x87 unit, the trigonometric functions of the unit with an argument reduced by `fprem`, and the rounding and the split of the exponent in integers |
 | the long jump | `src/setjmp.c` | `setjmp`/`longjmp` in the six callee-saved registers, the stack pointer and the return address of x86-64 |
-| the clock and the locale | `src/time.c`, `src/locale.c`, `src/ctype.c`, `src/assert.c` | `time` (the uptime: the ABI has no wall clock), `clock`, `clock_gettime`, `gmtime`/`localtime`/`mktime`/`strftime` of the C locale, `asctime`/`ctime` (the 26 bytes of a moment), `localeconv`, the classes of a byte, `assert` |
+| the clock and the locale | `src/time.c`, `src/locale.c`, `src/ctype.c`, `src/assert.c` | `time` and `clock_gettime` over the call 49 (`CLOCK_REALTIME` is the wall clock of the machine, `CLOCK_MONOTONIC` the boot), `clock` over the processor time of the call 50, `gmtime`/`localtime`/`mktime`/`strftime` of the C locale, `asctime`/`ctime` (the 26 bytes of a moment), `localeconv`, the classes of a byte, `assert` |
 | the exit | `src/atexit.c` | the handlers of `atexit`, run by `exit` in the reverse order of their registration |
 | the ends of a POSIX library | `src/unistd_ext.c`, `src/asprintf.c` | `access`, `chdir`, `readlink`, `pipe`, `dup2`, `fork`, `_exit`, `wait`, `sleep`, `sysconf`, `isatty` and the `asprintf`/`vasprintf` of the arena - the calls a library of a Unix-like system expects of a machine that has a task and a descriptor |
 
@@ -215,43 +215,54 @@ the families a portable POSIX source expects, and they are now part of it:
 |---|---|---|
 | `<dirent.h>` | `opendir`, `readdir`, `closedir`, `rewinddir`, `fdopendir` over `KSYS_READDIR`, one batch of eight entries per directory | `src/dirent.c` |
 | `<sys/stat.h>` | `stat`, `lstat`, `fstat`, `fstatat`, `chmod`, `umask` and `struct stat` with the `S_IS*` macros over `KSYS_STATX`; `fstat` asks `KSYS_FSTAT` for the mode, the owner and the moments of the open object | `src/stat.c` |
-| `<unistd.h>` | `access`, `chdir`, `rmdir`, `readlink`, `isatty`, `pipe`, `dup2`, `fork`, `wait`, `waitpid`, `execvp`, `_exit`, `sleep`, `sysconf`, `getopt`; `rmdir` is `KSYS_RMDIR`, not `unlink` of a directory | `src/unistd_ext.c`, `src/getopt.c` |
+| `<unistd.h>` | `access`, `chdir`, `rmdir`, `readlink`, `isatty`, `pipe`, `dup2`, `fork`, `wait`, `waitpid`, `execvp`, `_exit`, `sleep`, `sysconf`, `getopt`, and `realpath` (the canonical name of a path that exists) | `src/unistd_ext.c`, `src/getopt.c`, `src/realpath.c` |
 | `<pwd.h>`, `<grp.h>` | the credentials of the task (`getuid`, `geteuid`, `getgid`, `setuid`, `setgid`); only uid and gid 0 have a name, `root` | `src/pwd.c` |
-| `<time.h>` | `time`, `clock`, `gmtime`/`localtime`, `strftime`, `mktime`, `clock_gettime` | `src/time.c` |
+| `<time.h>` | `time` (the wall clock of the call 49), `clock` (the processor time), `gmtime`/`localtime`, `strftime`, **`strptime`** (the reverse of `strftime` over the same names and numbers), `mktime`, `clock_gettime` | `src/time.c`, `src/strptime.c` |
 | `<regex.h>` | a POSIX basic/extended engine: literals, `.`, `*`, `+`, `?`, `{m,n}`, groups, back references, alternation, brackets and the classes | `src/regex.c` |
 | `<fnmatch.h>` | the pattern of a name with `*`, `?`, `[...]`, `FNM_PATHNAME` and `FNM_NOESCAPE` | `src/fnmatch.c` |
+| `<glob.h>` | `glob`/`globfree`: the names of a path with the wildcards of `fnmatch`, one component at a time over `opendir`/`readdir` and `stat`; `GLOB_NOSORT`, `GLOB_NOCHECK`, `GLOB_MARK`, `GLOB_DOOFFS`, `GLOB_ERR` and `GLOB_APPEND` | `src/glob.c` |
+| `<getopt.h>` | `getopt_long`/`getopt_long_only` beside `getopt`: `--name`, `--name=value`, a prefix no other name has, `struct option` with `no_argument`/`required_argument`/`optional_argument`, the `flag` and `val` of a table, `longindex` | `src/getopt.c` |
 | `<stdlib.h>` | the conversions with `ERANGE` (`strtod` only in a program with `ULIBC_WITH_FLOAT`), `qsort` (merge sort), `bsearch`, `atoll`/`llabs`, `getenv`, `atexit`, `abort`, `srand`/`rand` | `src/stdlib.c`, `src/rand.c` |
+| `<stdlib.h>` (the environment) | `getenv` over `environ`, `setenv`, `unsetenv` and `putenv`: the vector of `_start` is adopted into the arena on the first change, a name is replaced or dropped, and the words of `setenv` belong to the library while the word of `putenv` belongs to the caller | `src/env.c`, `src/stdlib.c` |
 | `<string.h>`, `<strings.h>`, `<ctype.h>` | `strdup`, `strndup`, `strspn`, `strcspn`, `strpbrk`, `strcasecmp`, `strcasestr` and the ASCII classes | `src/strdup.c`, `src/string_ext.c`, `src/ctype.c` |
-| `<stdio.h>` | `fprintf`/`vfprintf`, `sprintf`, `putchar`, `getline`/`getdelim`, `fmemopen`, `fdopen`, `fileno`, `ungetc`, `perror`, `sscanf`, and `popen`/`pclose` (answered `ENOSYS`) | `src/stdio.c`, `src/stdio_ext.c`, `src/file.c`, `src/sscanf.c`, `src/unsupported.c` |
-| `<stdlib.h>` (the real numbers) | `strtod`, `atof` (the decimal form of the C locale, the value of the machine's rounding), and `setenv`/`unsetenv` (answered `ENOSYS`: the environment is the vector of `_start`) | `src/stdlib.c`, `src/unsupported.c` |
+| `<stdio.h>` | `fprintf`/`vfprintf`, `sprintf`, `putchar`, `getline`/`getdelim`, `fmemopen`, `fdopen`, `fileno`, `ungetc`, `perror`, `sscanf`, `vsscanf`, `scanf`, `vscanf`, `fscanf` and `vfscanf` (one reader over a string or a stream, `%f` in a build with `ULIBC_WITH_FLOAT`, `%n`, the width, the `*` and `EOF` at the end of a file), and `popen`/`pclose` (answered `ENOSYS`) | `src/stdio.c`, `src/stdio_ext.c`, `src/file.c`, `src/sscanf.c`, `src/unsupported.c` |
+| `<stdlib.h>` (the real numbers) | `strtod`, `atof` (the decimal form of the C locale, the value of the machine's rounding) | `src/stdlib.c` |
 | `<math.h>` | `fabs`, `floor`, `ceil`, `trunc`, `round`, `fmod`, `modf`, `frexp`, `ldexp`, `sqrt`, `pow`, `exp`, `log`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, over the x87 unit (a program built with `FLOAT`) | `src/math.c` |
 | `<signal.h>` | `signal`, `raise`, `SIGINT`, `SIGPIPE`, `SIGTERM`, `SIGCHLD`, `SIG_DFL`, `SIG_IGN` | `src/syscall.c` |
-| `<sys/time.h>`, `<sys/resource.h>` | `gettimeofday` (the uptime), `utimes` (`ENOSYS`), `getrusage` (`ENOSYS`), `usleep` (a sleep of the task) | `src/gettimeofday.c`, `src/resource.c`, `src/usleep.c`, `src/unsupported.c` |
+| `<sys/time.h>`, `<sys/resource.h>` | `gettimeofday` (the wall clock), `utimes` (`ENOSYS`), `getrusage` over the call 50 (`ru_utime` is the processor time of the task, `ru_stime` is zero, `RUSAGE_CHILDREN` is `ENOSYS`), `getrlimit`/`setrlimit` over the limits of the ABI (`RLIMIT_AS`, `RLIMIT_CPU`, `RLIMIT_NOFILE`), `usleep` (a sleep of the task) | `src/gettimeofday.c`, `src/resource.c`, `src/usleep.c`, `src/unsupported.c` |
 | `<termios.h>` | the two calls of a terminal, answered `ENOTTY`: the console has no control command | `src/termios.c` |
 | `<stdio.h>` (the names) | `rename` (POSIX puts it here, in `src/syscall.c`), and `usleep` in `<unistd.h>` | `src/syscall.c`, `src/usleep.c` |
 
 The stream of `<stdio.h>` is a descriptor, three flags and one block; the
 block is the read-ahead and the write buffer of the stream, it comes from the
-arena of the program and not from the object, and its mode is `_IOLBF` on a
+heap of the program and not from the object, and its mode is `_IOLBF` on a
 terminal, `_IOFBF` on a file and a pipe and `_IONBF` on the error descriptor,
 with `setvbuf` to change it (ADR 0035). `fmemopen` is a block of the caller
-that a command uses for a word of its line. The arena of `malloc` is in the
-bss of the program (256 KiB by default, `ULIBC_HEAP_SIZE` for a tool that
-holds a file), because a block of `KSYS_MALLOC` is memory of ring 0 that a
+that a command uses for a word of its line. The heap of `malloc` begins with
+an arena in the bss of the program (256 KiB by default, `ULIBC_HEAP_SIZE` for
+a tool that wants a bigger first block) and grows with `brk` when the arena
+has no room, because a block of `KSYS_MALLOC` is memory of ring 0 that a
 program cannot read.
 
-Three shapes of the machine are visible in the library and are decisions, not
-bugs:
+Two shapes of the machine were visible in the library and are gone in 1.8:
 
-* **There is no `chdir` in the ABI.** The shell changes the cwd of its task
-  (`cd`) and `execve` carries it into a program, but a program has no call
-  that moves it. The library keeps the directory itself (`src/path.c`) and
-  resolves every relative path against it, so `ls a b`, `find .` and the
-  `chdir` of `ls` between two directories work; a child started by `execve`
-  begins in the directory of the task, not in the one the program moved to.
-* **There is no wall clock.** `time()` is the seconds since the boot, and
-  `localtime` is UTC; the filesystem still keeps a moment of Unix in every
-  record, and a listing prints it.
+* **`chdir` is a call of the ABI (48).** The directory of the task is the
+  kernel's; the library resolves a relative path against it (`getcwd`) and
+  folds `.` and `..`, so `ls a b`, `find .` and the `chdir` of `ls` between
+  two directories work, and a child started by `fork` or `execve` begins in
+  the directory the program moved to. The old copy of the directory in
+  `src/path.c` is what made a child start somewhere else.
+* **The machine has a wall clock (call 49).** `time()`, `gettimeofday` and
+  `CLOCK_REALTIME` answer the date of the machine - the host process, the CMOS
+  of the x86-64 machine, the BM8563 of the board, corrected by `ntp` or
+  `date set` - and `localtime` is UTC. A record written by the machine carries
+  the date of the person, and a listing of a file written now shows it. `clock()`
+  is the processor time of the program (call 50) and not the time since the
+  boot.
+
+Three shapes of the machine are still visible in the library and are decisions,
+not bugs:
+
 * **There is no floating point by default.** A program is built with
   `-mgeneral-regs-only`; a `double` cannot cross a function of the guest, so
   a program that does not ask for the `FLOAT` option has no `strtod`/`%f`, and
@@ -260,6 +271,11 @@ bugs:
   `ULIBC_WITH_FLOAT`, `src/format_float.c`, `src/strtod.c` and `src/math.c`,
   and the loader turns the SSE and x87 units on for ring 3; the scheduler
   saves neither, so one such program runs at a time (`docs/debts.md`).
+* **The calendar is UTC and has no zone.** `localtime` and `gmtime` answer the
+  same structure; a zone in `/etc` is the work of K10 (`docs/debts.md`).
+* **The processor time has no kernel half.** `getrusage` reports the whole of
+  the count as user time and a zero as system time, because a machine of one
+  privilege level has no boundary the kernel could measure.
 
 `fork` is real on x86-64 (copy on write): the child returns from the call with
 0, the parent with the pid, `execve` of a program replaces the image of the
@@ -308,9 +324,10 @@ const char *microos_strerror(int code);
 
 ## What the library cannot do
 
-* **The memory of a program is not protected.** There is no `mmap` and no
-  `brk`: the memory of the tasks is shared, the same way as the tasks
-  themselves share it after a `fork`.
+* **The memory of a program is not protected.** A program of x86-64 has page
+  tables and `mmap` and `brk`; the board and the simulator have neither, and
+  their tasks share one address space, the same way as the tasks themselves
+  share it after a `fork`.
 * **The standard descriptors are the console.** The descriptors 1 and 2 are
   the console of the system when they are not open as a file. `dup2` and
   `pipe` are there (`microos_dup2`, `microos_pipe`), so a program sends its
@@ -337,3 +354,11 @@ compiled for the host by `tests/cases/test_userland.c`, which is a test of its
 own (`userland`); the door the credentials of that build call is the shim of
 `tests/cases/userland_door_shim.c`, and the real calls behind the door are
 covered by `make x86-smoke` and `make x86-disk-smoke`.
+
+The POSIX edge of the library has a second binary of the host, `libc_user`
+(`tests/cases/test_libc_user.c`): the environment, `realpath`, `strptime`,
+`getopt_long`, the reader of a format and `glob`. It links the files of the
+library and asks the door for a tree of names in read-only memory, which
+`tests/cases/libc_user_door_shim.c` answers, so a path, a directory and a
+stream are exercised on the host with the code the machine runs; the crossing
+of the real door stays the business of the two smokes of the port.

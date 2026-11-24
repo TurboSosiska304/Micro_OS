@@ -1,14 +1,13 @@
 /*
- * Micro OS — the directory of a program and the resolution of its paths.
+ * Micro OS — the resolution of the paths of a program.
  *
- * The kernel keeps the working directory of a task (the shell's `cd` moves it
- * and `execve` carries it into the program), but the ABI has no call that
- * moves it from a program: a shell changes the task's field and a program was
- * never given that door. POSIX sources still write `ls a b`, `find .` and the
- * `chdir` of `ls` between two directories, so the library keeps the directory
- * itself and resolves every path of a call against it. The prefix of a
- * relative path is the directory of the program at its start, read once with
- * `KSYS_GETCWD`.
+ * The kernel keeps the working directory of a task: the shell's `cd` moves it
+ * with `task_set_cwd`, the call 48 (`KSYS_CHDIR`) moves it from a program, and
+ * `execve` carries it into the program it starts. This file used to keep a
+ * copy of the directory in the library, because the ABI had no call that moved
+ * one; a child started by `execve` then began in the directory of the task and
+ * not in the one the program had moved to. The copy is gone: `__ulibc_cwd()`
+ * asks the kernel, `chdir` is the call, and the two cannot disagree.
  *
  * The VFS of the system does not fold `.` and `..` inside a path, so the
  * resolver does it: a component `.` is dropped, `..` pops the last one, and an
@@ -16,11 +15,9 @@
  * always absolute and fits `KSYS_PATH_MAX`, which is the longest path a call
  * accepts.
  *
- * A program that chdirs and then starts another program through `execve` sees
- * the shell's directory in the child: the kernel copies the cwd of the task
- * and the library of the *new* program starts from it, not from the directory
- * this one moved to. POSIX would carry the moved directory; the ABI cannot,
- * and `docs/porting-programs.md` says so.
+ * On the board the resolver is not used (the port has no program with a
+ * directory of its own), but the file is linked there by `rename`, and the
+ * functions keep their shape for both machines.
  */
 #include "ulibc_internal.h"
 
@@ -28,8 +25,6 @@
 
 #define PATH_MAX_BYTES (KSYS_PATH_MAX + 1)
 #define PATH_ROTATION 4
-
-static char g_cwd_s[PATH_MAX_BYTES] = "/";
 
 /*
  * The text of the last directories named by an open: the one place where a
@@ -56,34 +51,36 @@ static void dir_map_init(void)
     }
 }
 
-static int g_cwd_ready;
+static char g_cwd_s[PATH_MAX_BYTES] = "/";
 static char g_path_s[PATH_ROTATION][PATH_MAX_BYTES];
 static int g_path_next;
 
-/* The directory of the program, read from the task the first time. */
+/*
+ * The directory of the program, read from the task every time: the kernel is
+ * the one place that keeps it, and a copy here would be the directory of a
+ * moment that `chdir` has moved since. The call is one of the cheap ones - a
+ * string of the task's record - and a path resolution spends one of them.
+ */
 const char *__ulibc_cwd(void)
 {
-    if (!g_cwd_ready) {
-        char buffer[PATH_MAX_BYTES];
+    char buffer[PATH_MAX_BYTES];
 
-        if (__ulibc_syscall6(KSYS_GETCWD, (long)(unsigned long)buffer, (long)sizeof(buffer), 0, 0,
-                             0, 0) >= 0) {
-            size_t length = strlen(buffer);
+    if (__ulibc_syscall6(KSYS_GETCWD, (long)(unsigned long)buffer, (long)sizeof(buffer), 0, 0, 0,
+                         0) >= 0) {
+        size_t length = strlen(buffer);
 
-            if (length > 0 && length < sizeof(g_cwd_s)) {
-                memcpy(g_cwd_s, buffer, length + 1);
-            }
+        if (length > 0 && length < sizeof(g_cwd_s)) {
+            memcpy(g_cwd_s, buffer, length + 1);
         }
-        g_cwd_ready = 1;
     }
 
     return g_cwd_s;
 }
 
-void __ulibc_cwd_reset(void)
-{
-    g_cwd_ready = 0;
-}
+/*
+ * The kernel's copy of the directory is moved by the shell and by the call of
+ * `chdir`, so a library has nothing of its own to clear.
+ */
 
 /*
  * Add a component to the path being built. The root keeps its one slash: a
@@ -186,41 +183,25 @@ const char *__ulibc_path(const char *path)
     return out;
 }
 
+/*
+ * Move the directory of the program: the path is resolved against the one the
+ * task has, and the kernel moves its record of the task. There is no second
+ * copy to keep in step, so `getcwd` and the next relative path see the new
+ * directory at once, and so does the child of a `fork` or an `execve`.
+ */
 int __ulibc_chdir(const char *path)
 {
-    const char *resolved;
-    struct vfs_stat info;
+    const char *resolved = __ulibc_path(path);
+    long rc;
 
-    resolved = __ulibc_path(path);
     if (resolved == NULL) {
         return -1;
     }
 
-    if (__ulibc_syscall6(KSYS_STAT, (long)(unsigned long)resolved, (long)(unsigned long)&info, 0, 0,
-                         0, 0) < 0) {
-        return -1;
+    rc = __ulibc_syscall6(KSYS_CHDIR, (long)(unsigned long)resolved, 0, 0, 0, 0, 0);
+    if (rc < 0) {
+        return (int)__ulibc_result(rc);
     }
-    if (info.type != 2) {
-        errno = ENOTDIR;
-        return -1;
-    }
-
-    /*
-     * The resolved path names a directory, but `info` of a directory is the
-     * only proof the call has: the cwd is the path, not the inode, and the
-     * library stores the text. The copy is safe because the resolver writes
-     * into one of its own buffers and the buffer of the cwd is another.
-     */
-    if (strlen(resolved) >= PATH_MAX_BYTES) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
-    {
-        size_t length = strlen(resolved);
-
-        memcpy(g_cwd_s, resolved, length + 1);
-    }
-    g_cwd_ready = 1;
 
     return 0;
 }

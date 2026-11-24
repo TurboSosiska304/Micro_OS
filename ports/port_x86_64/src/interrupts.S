@@ -243,12 +243,33 @@ isr_irq isr_irq0, port_x86_64_irq_tick
 isr_irq isr_irq1, port_x86_64_irq_keyboard
 
 /*
+ * The pointer: the same controller, the second device (1.7.0). The body reads
+ * the status byte and gives the byte to the mouse; the line is IRQ12.
+ */
+isr_irq isr_irq12, port_x86_64_irq_mouse
+
+/*
  * The primary IDE channel, the sixth line of the slave: the end of a
  * bus-master transfer of the disk (ADR 0032). The handler acknowledges the
  * drive by reading its status and both chips of the 8259, and the wait of the
  * transfer reads the answer out of the engine of the channel.
  */
 isr_irq isr_irq_ata, port_x86_64_irq_ata
+
+/*
+ * The virtio disk of the port (ADR 0037), on the line the configuration space
+ * of its card names. The handler reads the interrupt status of the device,
+ * which is what takes the line down, and acknowledges the 8259.
+ */
+isr_irq isr_irq_virtio_blk, port_x86_64_irq_virtio_blk
+
+/*
+ * The three vectors of the 8259 that no device owns - the cascade and the two
+ * spurious ones: the acknowledge of a request that has nothing behind it, the
+ * price of a level-triggered line of the PCI bus. The handler acknowledges and
+ * returns (src/port_x86_64.c has the whole story).
+ */
+isr_irq isr_irq_8259_spurious, port_x86_64_irq_8259_spurious
 
 /*
  * The timer of a core that the 8259 does not reach: the local APIC of an

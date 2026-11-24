@@ -95,6 +95,13 @@ bool rtc_parse_time(const char *s, struct rtc_datetime *dt);
 bool rtc_from_unix(uint64_t seconds, struct rtc_datetime *dt);
 
 /*
+ * The seconds of Unix (UTC) of a moment of the chip, the same calendar in
+ * the other direction. False when a field is out of range: a moment that is
+ * not a date is not a clock, and the boot does not seed the system from it.
+ */
+bool rtc_to_unix(const struct rtc_datetime *dt, uint64_t *seconds);
+
+/*
  * The seconds from `now` to the start of the next minute the alarm matches,
  * looking at most `limit_days` days ahead. The chip compares a minute and
  * nothing finer, so the answer is never 0 for a moment inside a minute: a

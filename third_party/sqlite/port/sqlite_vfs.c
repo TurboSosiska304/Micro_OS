@@ -60,19 +60,17 @@
 
 #include "sqlite_port.h"
 
-/* The moment of the boot in milliseconds. The host has a real clock, and the
- * test is the same code over it: a database of the host carries the date of
- * the host and a database of the guest the seconds of the boot. */
+/* The moment of the wall clock in milliseconds. The host and the guest have
+ * the same clock now: the call of the ABI behind `gettimeofday` (number 49)
+ * answers the date of the machine on both, so a database carries the date of
+ * the person and not the seconds since the boot. */
 static sqlite3_int64 mx_now_ms(void)
 {
-#ifdef SQLITE_PORT_HOST
     struct timeval now;
 
     (void)gettimeofday(&now, NULL);
+
     return (sqlite3_int64)now.tv_sec * 1000 + (sqlite3_int64)(now.tv_usec / 1000);
-#else
-    return (sqlite3_int64)uptime();
-#endif
 }
 
 /*

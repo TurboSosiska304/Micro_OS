@@ -17,6 +17,8 @@
 
 #include "kernel/types.h"
 
+#include "port_x86_64_boot.h"
+
 /* --- the I/O ports of the PC --------------------------------------------- */
 
 static inline void port_outb(k_u16_t port, k_u8_t value)
@@ -204,6 +206,14 @@ k_u64_t port_x86_64_ticks(void);
 #define PORT_X86_64_IRQ_KEYBOARD 1u
 
 /*
+ * The line of the pointer (1.7.0): the fourth line of the slave of the 8259,
+ * which is the twelfth of the machine. It has a handler and a route of its
+ * own; it has no counter in `smp irq`, because the report of that command is
+ * the two lines of ADR 0012 and the mouse is a device of the interface.
+ */
+#define PORT_X86_64_IRQ_MOUSE 12u
+
+/*
  * The end of an interrupt of one of those lines: the EOI of the local APIC of
  * the core when the I/O APIC delivered it (ADR 0012), the EOI of the 8259
  * when the legacy chip did. The body of a vector calls this and does not have
@@ -350,6 +360,15 @@ k_u64_t port_x86_64_kernel_cr3(void);
 k_u32_t port_x86_64_paging_map_device(k_u64_t vaddr, k_u64_t paddr, k_size_t len);
 
 /*
+ * The same window for a device that is not the memory of the machine: the
+ * pages are uncached (PCD and PWT). The screen of the framebuffer of a
+ * firmware (src/gop.c) is the user of this one, because the frame of a
+ * graphics card is behind a bus and a line of the cache of the processor in
+ * front of it holds a picture the card never shows.
+ */
+k_u32_t port_x86_64_paging_map_mmio(k_u64_t vaddr, k_u64_t paddr, k_size_t len);
+
+/*
  * The page tables of one task. A space is a PML4 and the tables under it; the
  * handle is its physical address, which is also the value that goes into CR3.
  * Create builds the kernel map with the user window; clone copies the tables
@@ -451,6 +470,27 @@ void port_x86_64_disk_init(void);
  * after port_x86_64_interrupts_init().
  */
 void port_x86_64_disk_irq_init(void);
+
+/*
+ * Own the second disk of the port: the virtio-blk device of the PCI bus
+ * (src/virtio_blk.c, ADR 0037), its queue and its partitions. The device is
+ * optional - a machine without the function keeps the drive of the IDE
+ * channel and nothing else - and the root of the boot is the first partition
+ * of it when there is one. Called by port_x86_64_init() after the ATA disk.
+ */
+void port_x86_64_virtio_blk_init(void);
+
+/* The first partition of the virtio disk, NULL when the machine has no such
+ * disk. The boot prefers it to the IDE drive when both are there. */
+const char *port_x86_64_virtio_blk_root(void);
+
+/*
+ * Open the line of the virtio disk: the number is the one the configuration
+ * space of the card names, and the entry of the table is the shared stub of
+ * the port (src/interrupts.S). Called by port_x86_64_init() after the table
+ * of the interrupts exists, beside port_x86_64_disk_irq_init().
+ */
+void port_x86_64_virtio_blk_irq_init(void);
 
 /*
  * Own the medium of the boot: a boot loader may hand the kernel more than the
@@ -641,14 +681,25 @@ bool port_x86_64_timer_off(k_u32_t cpu);
 #define PORT_X86_64_KERNEL_PHYS 0x01000000ull
 
 /*
- * The physical address behind a pointer into the image of the kernel: the
+ * Where the loader put the bytes of this boot. KERNEL_PHYS is the address the
+ * loader of the BIOS path has always used, and both loaders move the copy
+ * when something is in the way: the modules of the medium (loader32.S) and the
+ * memory a firmware of UEFI happened to be using (loader/uefi). The address
+ * is therefore an argument of the entry and a variable of the port, set before
+ * anything else (port_x86_64_init), and every translation of this file reads
+ * it. The two directions of the map are still one shift: the image at the top
+ * and the identity map of the memory below it.
+ */
+extern k_u64_t g_port_x86_64_kernel_phys;
+
+/* The physical address behind a pointer into the image of the kernel: the
  * page tables, the GDT, the TSS and the stacks are linked high, and a page
  * table entry has to name the frame, not the link address. Only for the
  * image: a pointer of the heap is a low address that is already physical.
  */
 static inline k_u64_t port_x86_64_kernel_phys(const void *ptr)
 {
-    return (k_u64_t)(uintptr_t)ptr - PORT_X86_64_KERNEL_BASE + PORT_X86_64_KERNEL_PHYS;
+    return (k_u64_t)(uintptr_t)ptr - PORT_X86_64_KERNEL_BASE + g_port_x86_64_kernel_phys;
 }
 
 /*
@@ -676,6 +727,18 @@ static inline k_u64_t port_x86_64_bus_phys(const void *ptr)
 #define PORT_X86_64_USER_BASE 0x02000000u  /* 32 MiB */
 #define PORT_X86_64_USER_LIMIT 0x03000000u /* 48 MiB */
 #define PORT_X86_64_USER_PHYS 0x04000000u  /* 64 MiB */
+
+/* The bytes of the arena: the window, which is the same size, is mapped onto
+ * it page for page (src/paging.c). */
+#define PORT_X86_64_USER_ARENA (PORT_X86_64_USER_LIMIT - PORT_X86_64_USER_BASE)
+
+/*
+ * The first gigabyte, which is all the memory the kernel can name: the map of
+ * the boot and the map the kernel builds for itself (src/paging.c) identity it
+ * in 2 MiB pages, and a physical address above it is an address no pointer of
+ * the kernel can hold. The heap and the modules of the boot live inside it.
+ */
+#define PORT_X86_64_IDENTITY_LIMIT 0x40000000ull
 
 /*
  * The top of the window, from the last page down: the stack of the program is
@@ -705,11 +768,26 @@ struct port_x86_64_info {
 };
 
 /*
- * Bring up the machine: COM1, the clock, the heap. The address of the
- * multiboot information comes from the loader; every part of the init is
- * also lazy, so a call of the contract before this one still works.
+ * Bring up the machine: COM1, the clock, the heap. The three numbers come from
+ * the loader: `boot_info` is the multiboot information of the BIOS path or the
+ * boot structure of a UEFI machine, `boot_magic` says which of the two -
+ * PORT_X86_64_BOOT_MAGIC for the second, zero (the loader of the BIOS path
+ * leaves the register zero) for the first - and `kernel_phys` is where the
+ * bytes of the image are (zero: the KERNEL_PHYS of this header). Every part of
+ * the init is also lazy, so a call of the contract before this one still works.
  */
-void port_x86_64_init(k_u64_t multiboot_info);
+void port_x86_64_init(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys);
+
+/*
+ * What the boot handed the port when it was a UEFI machine: the picture, the
+ * root of the ACPI tables, the address of the image. NULL on the BIOS path,
+ * and the callers that need one of the three - src/gop.c for the screen,
+ * src/cpu.c for the tables - ask and keep their own answer when it is NULL.
+ */
+const struct port_x86_64_boot_info *port_x86_64_boot(void);
+
+/* The name of the boot of this machine: "multiboot" or "uefi". */
+const char *port_x86_64_boot_name(void);
 
 /* The numbers above, valid after port_x86_64_init(). */
 const struct port_x86_64_info *port_x86_64_info(void);

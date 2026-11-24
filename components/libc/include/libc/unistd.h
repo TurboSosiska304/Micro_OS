@@ -19,6 +19,11 @@
 struct microos_statx {
     uint32_t inode;
     uint8_t type;
+    /* The group of the object, zero for a volume or a filesystem without one
+     * (ADR 0038). It sits in the room that the alignment of `type` leaves
+     * free, so that the answer keeps the 40 bytes of the frozen call and an
+     * image of 1.0 still reads the fields it knows. */
+    uint16_t group;
     uint64_t size;
     uint32_t mode;
     uint32_t owner;

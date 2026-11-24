@@ -93,9 +93,15 @@ SECTIONS
      * after the data. It starts sixteen bytes after the data, because that
      * is the alignment of the widest object of a program (the arena of the
      * library) and mkprog.sh pads the data of the file to the same boundary.
+     *
+     * Its end is a word: the format copies and clears segment by segment in
+     * words and `k_exec_parse` refuses a bss that is not a multiple of four,
+     * so the three bytes of a section that ends on a half word are padding
+     * of the bss and not a hole the next object would land in. The board's
+     * linker script pads its bss the same way.
      */
     . = ALIGN(16);
-    .bss (NOLOAD) : { *(.bss .bss.*) *(COMMON) } :data
+    .bss (NOLOAD) : { *(.bss .bss.*) *(COMMON) . = ALIGN(4); } :data
 
     /DISCARD/ : {
         *(.comment)

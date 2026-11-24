@@ -32,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format sdk idf-check idf-build idf-flash idf-monitor idf-size bundle bundle-board bundle-x86 x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-root-smoke x86-volume-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-fs-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak x86-smp-smoke soak-smp bench
+.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format sdk idf-check idf-build idf-flash idf-monitor idf-size bundle bundle-board bundle-x86 x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-root-smoke x86-volume-smoke uefi uefi-run uefi-smoke uefi-stick x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-fs-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak x86-smp-smoke soak-smp bench
 
 help:
 	@echo "Micro OS — available targets:"
@@ -63,19 +63,28 @@ help:
 	@echo "  make x86-run    boot it in a QEMU window (framebuffer 1280x800, keyboard)"
 	@echo "  make x86-run-serial  boot it with the serial console (-nographic)"
 	@echo "  make x86-smoke  boot it and check what it says"
+	@echo "  make uefi       the same kernel as an image a firmware starts: a FAT"
+	@echo "  make uefi-stick the same wrapped in a table of partitions: a stick of a UEFI machine"
+	@echo "                  volume with BOOTX64.EFI, the kernel and disk.img"
+	@echo "  make uefi-run   boot that volume in QEMU under OVMF (a window)"
+	@echo "  make uefi-smoke boot it without a window and check the machine, the"
+	@echo "                  shell and the picture of the frame"
 	@echo "  make x86-smp-smoke  boot the kernel of two cores and check both of them"
 	@echo "  make x86-disk   the image of the disk: /bin and /etc of MicroFS"
 	@echo "  make x86-vga-smoke   check the screen and the keyboard without a display"
-	@echo "  make x86-run-disk   boot the window with an 8 MB disk on the IDE channel"
+	@echo "  make x86-run-disk   boot the window with an 8 MB disk of the machine"
 	@echo "  make x86-run-disk-serial  the same disk in a terminal (-nographic)"
 	@echo "  make x86-disk-smoke two boots on one disk image, a file survives both"
+	@echo "                  (X86_DISK_BUS=virtio puts the disk on the virtio device)"
 	@echo "  make x86-fs-smoke  rename, rmdir, fsck ext2 and the SQLite journal"
 	@echo "  make x86-net-smoke   the network: ping, UDP and HTTP on QEMU user-net"
-	@echo "  make x86-iso    the bootable ISO: loader, kernel and root.img (K13)"
-	@echo "  make x86-iso-run    boot that ISO in a terminal (-nographic)"
-	@echo "  make x86-iso-smoke  boot the ISO and check the shell and /bin"
+	@echo "  make x86-iso    the bootable medium: CD and stick, BIOS and UEFI (K13)"
+	@echo "  make x86-iso-run    boot that image in a terminal (-nographic)"
+	@echo "  make x86-iso-smoke  boot the image from a CD on a BIOS and check the shell"
+	@echo "  make x86-iso-uefi-smoke  the same image on OVMF, from a CD and a stick"
+	@echo "  make x86-iso-usb-smoke   the same image on a stick, from a BIOS"
 	@echo "  make bench      the numbers of the machine: syscalls, fork, pipe,"
-	@echo "                  file and console, one boot of fixed sizes"
+	@echo "                  file, console and latencies, three boots, the median"
 	@echo "  make soak       the session of 600 seconds on x86-64 (one boot)"
 	@echo "  make soak SOAK_MINUTES=1  the same, short, to check the tool"
 	@echo "  make soak SOAK_ITERATIONS=5  five short boots, one pass each"
@@ -189,6 +198,11 @@ CI_QEMU := $(shell command -v qemu-system-x86_64 2>/dev/null)
 CI_TARGETS := build test test-asan test-tsan test-smp smoke coverage
 ifneq ($(CI_QEMU),)
 CI_TARGETS += x86-smoke x86-root-smoke
+endif
+# The boot of the firmware needs QEMU and the firmware: a machine with one and
+# not the other is a machine of the BIOS gate alone.
+ifneq ($(wildcard /usr/share/edk2/x64/OVMF_CODE.4m.fd),)
+CI_TARGETS += uefi-smoke
 endif
 CI_TARGETS += reproducible integrity
 
@@ -339,7 +353,18 @@ reproducible: x86-disk
 	sha256sum "$$tmp/first.img" $(X86_PROGRAMS_IMAGE) \
 		"$$tmp/first-ext2.img" $(X86_PROGRAMS_EXT2_IMAGE)
 
+# The bus of the disk of the machine: the primary IDE channel of ADR 0008
+# (the default, and the disk of every release before 1.6) or the virtio-blk
+# device of ADR 0037. The image is one file and the bus is the machine, so
+# `make x86-smoke X86_DISK_BUS=virtio` boots the same bytes of the medium on
+# the other device and the checks of the run are the checks of the port.
+X86_DISK_BUS ?= ide
+
+ifeq ($(X86_DISK_BUS),virtio)
+X86_DISK_DRIVE := -drive file=$(X86_ROOT_IMAGE),format=raw,if=virtio,cache=writeback
+else
 X86_DISK_DRIVE := -drive file=$(X86_ROOT_IMAGE),format=raw,if=ide,index=0,cache=writeback
+endif
 
 x86-run: x86-disk
 	@qemu-system-x86_64 -display help 2>&1 | grep -qw "$(X86_DISPLAY)" || { \
@@ -361,7 +386,7 @@ x86-run-serial: x86-disk
 
 x86-smoke: x86-disk x86-open-build
 	python3 tools/x86_smoke.py --image $(X86_PROGRAMS_IMAGE) --open-build $(X86_OPEN_BUILD) \
-		--timeout 180
+		--disk $(X86_DISK_BUS) --timeout 180
 
 # The gate of ADR 0027: one machine boots two roots. The first image is the
 # MicroFS volume of `make x86-disk`, the second is the same /bin and /etc in an
@@ -370,7 +395,71 @@ x86-smoke: x86-disk x86-open-build
 # volume of the second partition is mounted at /data and written.
 x86-root-smoke: x86-disk
 	python3 tools/x86_root_smoke.py --image $(X86_PROGRAMS_IMAGE) \
-		--ext2-image $(X86_PROGRAMS_EXT2_IMAGE) --timeout 180
+		--ext2-image $(X86_PROGRAMS_EXT2_IMAGE) --disk $(X86_DISK_BUS) --timeout 180
+
+# The machine of a firmware (UEFI): the same kernel as `make x86-build` - one
+# kernel for the two ways of starting it - the loader of the firmware
+# (ports/port_x86_64/loader/uefi, a PE/COFF application) and one FAT volume
+# that carries the three files a boot needs (tools/uefi_esp.py). No bootloader
+# of the distribution is involved: the loader is the project's, it reads the
+# kernel and the disk image out of the volume with the file services of the
+# firmware and leaves the boot services before the kernel runs.
+#
+# The loader is built by clang and lld-link, because the format of an
+# application of a firmware is the PE/COFF of the 64-bit Windows machine and
+# that target is what a compiler of the host knows; the target says what is
+# missing instead of building an image that does not boot.
+UEFI_BUILD := build-uefi
+UEFI_IMAGE := $(UEFI_BUILD)/esp.img
+
+# The firmware of the machine: OVMF, the EDK2 build that QEMU runs. The first
+# pair that is installed is the one both targets use.
+UEFI_CODE := $(firstword $(wildcard /usr/share/edk2/x64/OVMF_CODE.4m.fd \
+	/usr/share/edk2/ovmf/OVMF_CODE.fd /usr/share/OVMF/OVMF_CODE.fd \
+	/usr/share/qemu/OVMF_CODE.fd /usr/share/edk2-ovmf/x64/OVMF_CODE.fd))
+UEFI_VARS := $(subst CODE,VARS,$(UEFI_CODE))
+
+uefi: x86-build x86-disk
+	cmake --build $(X86_BUILD) --target uefi
+	python3 tools/uefi_esp.py --image $(UEFI_IMAGE) --build $(X86_BUILD) \
+		--disk $(X86_PROGRAMS_IMAGE)
+
+# The stick of a firmware machine: the ESP above, wrapped in the table of the
+# partitions a firmware reads before it looks for a file. A stick written with
+# `dd` from this image boots on a machine of UEFI only - no BIOS, no CD, no
+# optical drive - which is what a laptop of these years is. The size is the
+# table and the volume; the rest of a stick stays as it was.
+UEFI_STICK := $(UEFI_BUILD)/stick.img
+UEFI_STICK_MB := 64
+
+uefi-stick: uefi
+	rm -f $(UEFI_STICK)
+	truncate -s $(UEFI_STICK_MB)M $(UEFI_STICK)
+	printf 'label: gpt\n,48M,uefi\n' | sfdisk -q $(UEFI_STICK)
+	dd if=$(UEFI_IMAGE) of=$(UEFI_STICK) bs=512 seek=2048 conv=notrunc status=none
+	@echo "$(UEFI_STICK): write it with dd to a stick and start it from the menu of the firmware"
+
+# The machine of a person: the window of QEMU shows the picture of the
+# firmware and the keyboard of the window is the PS/2 keyboard of the port.
+# The variables of the firmware are a file of the system and a boot writes to
+# them: the run takes a copy, the way the smoke test does, and the firmware of
+# the machine stays what it was.
+uefi-run: uefi
+	@test -n "$(UEFI_CODE)" || { echo "uefi-run: no OVMF (install edk2-ovmf)" >&2; exit 2; }
+	@test -f "$(UEFI_VARS)" || { echo "uefi-run: $(UEFI_VARS) is not there" >&2; exit 2; }
+	cp "$(UEFI_VARS)" $(UEFI_BUILD)/vars.fd
+	qemu-system-x86_64 -machine q35 -m 512 -smp 2 \
+		-drive if=pflash,format=raw,readonly=on,file=$(UEFI_CODE) \
+		-drive if=pflash,format=raw,file=$(UEFI_BUILD)/vars.fd \
+		-drive file=$(UEFI_IMAGE),format=raw,if=ide,index=0 \
+		-no-reboot
+
+# The gate: the firmware starts the loader, the loader starts the kernel, the
+# kernel mounts the disk it was handed and the shell answers on the frame of
+# the firmware (tools/uefi_smoke.py reads the picture of the card as well as
+# the serial line).
+uefi-smoke: uefi
+	python3 tools/uefi_smoke.py --image $(UEFI_IMAGE) --timeout 180
 
 # The gate of the two cores (ADR 0012): the kernel of `x86-smp-build` boots on
 # a machine of two processors and has to start both of them, keep a task on
@@ -392,17 +481,31 @@ x86-smp-smoke: x86-smp-build x86-disk
 # through the disk of QEMU is about two minutes of emulation and the images
 # are gigabytes of the host.
 x86-volume-smoke: x86-build build
-	python3 tools/x86_volume_smoke.py --build $(X86_BUILD) --mkfs $(X86_MKFS)
+	python3 tools/x86_volume_smoke.py --build $(X86_BUILD) --mkfs $(X86_MKFS) \
+		--disk $(X86_DISK_BUS)
 
-# The numbers of the machine (tools/x86_bench.py, docs/bench.md): one boot of
-# the x86-64 port, `/bin/bench` of the build in the image for the run, and a
-# table of fixed sizes - the call of the door, a fork and an exec, 4 MiB
-# through a pipe, a file of 16 MiB written and read, and the console. The
-# value of a row is what two releases are compared by; the sizes are the
+# The power cut of ADR 0038: a machine that writes a file of 16 MiB on a
+# MicroFS volume and dies in the middle of the write (the process is taken
+# away, not asked to stop - `-no-reboot` already means a reset is the end of
+# the machine), then the same image boots again and the volume is asked to
+# answer: `fsck` walks it, `fsck -y` leaves it consistent, and the file that
+# was whole before the reset comes back byte for byte. Ten checks, about five
+# seconds of the host; not a part of `make ci` because it needs the disk of
+# QEMU and the image of `make x86-build`.
+x86-mfs-smoke: x86-build build
+	python3 tools/x86_mfs_smoke.py --build $(X86_BUILD) --mkfs $(X86_MKFS)
+
+# The numbers of the machine (tools/x86_bench.py, docs/bench.md): three boots
+# of the x86-64 port, `/bin/bench` of the build in the image for each run, and
+# a table of fixed sizes - the call of the door and its latency, a fork and an
+# exec, 4 MiB through a pipe and the latency of one byte of one, a file of
+# 16 MiB written and read, and the console. The value of a row is the median of
+# the runs, which is what two releases are compared by; the sizes are the
 # constants of the tool and do not change with the release.
 #
-# Not a part of `make ci`: the pipe of 1.6 holds 256 bytes, so the pipe test
-# is sixteen thousand handoffs and the run is about a minute of emulation.
+# Not a part of `make ci`: the pipe of 1.6 holds 256 bytes and the file is
+# 16 MiB, so three runs are about half a minute of emulation.
+# `make bench BENCH_ARGS="--runs 1"` is one boot for a look and
 # `make bench BENCH_ARGS="--json bench.json"` keeps the table in a file.
 BENCH_ARGS ?=
 
@@ -429,6 +532,11 @@ X86_DISK_IMAGE := $(X86_BUILD)/disk.img
 $(X86_DISK_IMAGE): | x86-disk
 	cp $(X86_PROGRAMS_IMAGE) $(X86_DISK_IMAGE)
 
+X86_DISK_IMAGE_DRIVE := -drive file=$(X86_DISK_IMAGE),format=raw,if=ide,index=0,cache=writeback
+ifeq ($(X86_DISK_BUS),virtio)
+X86_DISK_IMAGE_DRIVE := -drive file=$(X86_DISK_IMAGE),format=raw,if=virtio,cache=writeback
+endif
+
 x86-run-disk: x86-build $(X86_DISK_IMAGE)
 	@qemu-system-x86_64 -display help 2>&1 | grep -qw "$(X86_DISPLAY)" || { \
 		echo "QEMU has no '$(X86_DISPLAY)' display: install qemu-ui-gtk" >&2; \
@@ -437,15 +545,15 @@ x86-run-disk: x86-build $(X86_DISK_IMAGE)
 	qemu-system-x86_64 -kernel $(X86_BUILD)/loader32.elf \
 		-initrd $(X86_BUILD)/microos64.bin -m 256 -no-reboot \
 		-display $(X86_DISPLAY) -serial null -vga std \
-		-drive file=$(X86_DISK_IMAGE),format=raw,if=ide,index=0,cache=writeback
+		$(X86_DISK_IMAGE_DRIVE)
 
 x86-run-disk-serial: x86-build $(X86_DISK_IMAGE)
 	qemu-system-x86_64 -kernel $(X86_BUILD)/loader32.elf \
 		-initrd $(X86_BUILD)/microos64.bin -m 256 -nographic -no-reboot \
-		-drive file=$(X86_DISK_IMAGE),format=raw,if=ide,index=0,cache=writeback
+		$(X86_DISK_IMAGE_DRIVE)
 
 x86-disk-smoke: x86-disk
-	python3 tools/x86_disk_smoke.py --image $(X86_BUILD)/disk-smoke.img
+	python3 tools/x86_disk_smoke.py --image $(X86_BUILD)/disk-smoke.img --disk $(X86_DISK_BUS)
 
 # The filesystem of 1.4: rename and rmdir through the programs of /bin,
 # `fsck ext2 -y` on a broken image (and e2fsck of the host after it), and the
@@ -559,13 +667,16 @@ x86-user: x86-all bundle-x86
 x86-user-serial: X86_SERIAL=1
 x86-user-serial: x86-user
 
-# The bootable image of the port (K13, ADR 0026): an ISO with the loader, the
-# kernel and an 8 MB root image, which a BIOS machine takes out of its CD
-# drive. The three files are the ones of the builds above - nothing is built
-# twice - and tools/x86_iso.py only stages them and asks grub-mkrescue or
-# limine to write the El Torito catalogue. The root image is the disk of
-# `make x86-disk`: /bin and /etc written by the tool, mounted read-only by the
-# port because the medium of the boot is not a place to write.
+# The bootable medium of the port (K13, ADR 0026): one image with the loader,
+# the kernel and a 12 MB root image, which boots in four machines - a BIOS and
+# a firmware of UEFI, each from a CD drive and from a USB stick written with
+# `dd`. The three files are the ones of the builds above - nothing is built
+# twice - and tools/x86_iso.py stages them and writes the image: the El Torito
+# record of the BIOS, the one of the EFI, a GPT whose ESP is the FAT image of
+# the EFI record, and the boot sector of a stick (`limine bios-install`). The
+# root image is the disk of `make x86-disk`: /bin and /etc written by the
+# tool, mounted read-only by the port because a CD and a stick written from
+# the image are not places to write.
 X86_ISO_BUILD := build-x86-iso
 X86_ISO_IMAGE := $(X86_ISO_BUILD)/microos.iso
 X86_ISO_BOOTLOADER ?= auto
@@ -579,8 +690,14 @@ X86_ISO_BOOTLOADER ?= auto
 X86_ISO_ROOT := $(X86_ISO_BUILD)/root.img
 
 x86-iso: x86-disk build
+	# The root image must end below KERNEL_PHYS (16 MiB): a module that lies
+	# over the copy of the kernel is refused by the loader, because the copy
+	# would destroy the volume exactly when the kernel is about to read it.
+	# The boot loader of the machine places a module right after the kernel
+	# module, and twelve megabytes leave the room for the programs of the
+	# release and the store of roots with three megabytes to spare.
 	python3 tools/x86_image.py --image $(X86_ISO_ROOT) --build $(X86_BUILD) \
-		--mkfs build-host/tools/microos_mkfs --size-mb 24
+		--mkfs build-host/tools/microos_mkfs --size-mb 12
 	python3 tools/x86_iso.py --loader $(X86_BUILD)/loader32.elf \
 		--kernel $(X86_BUILD)/microos64.bin --root $(X86_ISO_ROOT) \
 		--out $(X86_ISO_IMAGE) --stage $(X86_ISO_BUILD)/iso \
@@ -591,6 +708,19 @@ x86-iso-run: x86-iso
 
 x86-iso-smoke: x86-iso
 	python3 tools/x86_iso_smoke.py --iso $(X86_ISO_IMAGE)
+
+# The other three boots of the same image: the firmware of a UEFI (OVMF) from
+# a DVD drive and from a USB stick, and a BIOS from a stick. The stick is the
+# proof that the image is a medium a person can carry: the firmware is not
+# told which device it has, it finds the ESP of the GPT (UEFI) or the boot
+# sector of the MBR (BIOS) by itself. OVMF is a package of the distribution
+# (/usr/share/edk2/x64), and a machine without it skips the two boots of the
+# firmware with a message, the way `make ci` treats a missing QEMU.
+x86-iso-uefi-smoke: x86-iso
+	python3 tools/x86_iso_uefi_smoke.py --iso $(X86_ISO_IMAGE) --firmware uefi --media both
+
+x86-iso-usb-smoke: x86-iso
+	python3 tools/x86_iso_uefi_smoke.py --iso $(X86_ISO_IMAGE) --firmware bios --media usb
 
 # The campaign of 1.0 (docs/wiki/testing.md). The session is one boot of the
 # x86-64 machine, ten minutes long by default, under the mixed load of

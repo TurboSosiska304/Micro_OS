@@ -81,30 +81,34 @@ tends to need and the tree has:
 | Header | What is there |
 |---|---|
 | `<string.h>` | `strlen`, `strcmp`, `strncmp`, `strcoll`, `strstr`, `strspn`, `strcspn`, `strpbrk`, `strcpy`, `strncpy`, `strcat`, `strchr`, `strrchr`, `strdup` (a file of its own: it allocates), `memcpy`, `memmove`, `memset`, `memcmp`, `memchr` |
-| `<stdlib.h>` | `malloc`, `calloc`, `realloc`, `free`, `exit`, `abort`, `getenv`/`environ`, `strtod`, `strtol`, `strtoul`, `strtoll`, `strtoull`, `atoi`, `atol`, `atof`, `abs`, `labs`, `qsort`, `EXIT_SUCCESS`, `EXIT_FAILURE` |
-| `<stdio.h>` | `printf`, `vprintf`, `fprintf`, `vfprintf`, `sprintf`, `snprintf`, `vsnprintf`, `puts`, `putchar`, `perror`, `getchar`, and the streams `fopen`, `fdopen`, `freopen`, `tmpfile` (a failure: no `/tmp`), `fclose`, `fread`, `fwrite`, `fgetc`, `getc`, `ungetc`, `fputc`, `fgets`, `fputs`, `feof`, `ferror`, `clearerr`, `fflush`, `fseek`, `ftell`, `rewind`, `fileno`, `setvbuf` (accepted, no buffer), `stdin`, `stdout`, `stderr` |
+| `<stdlib.h>` | `malloc`, `calloc`, `realloc`, `free`, `exit`, `abort`, `getenv`/`environ`, `setenv`, `unsetenv`, `putenv`, `strtod`, `strtol`, `strtoul`, `strtoll`, `strtoull`, `atoi`, `atol`, `atof`, `abs`, `labs`, `qsort`, `EXIT_SUCCESS`, `EXIT_FAILURE` |
+| `<stdio.h>` | `printf`, `vprintf`, `fprintf`, `vfprintf`, `sprintf`, `snprintf`, `vsnprintf`, `puts`, `putchar`, `perror`, `getchar`, `sscanf`, `vsscanf`, `scanf`, `vscanf`, `fscanf`, `vfscanf`, and the streams `fopen`, `fdopen`, `freopen`, `tmpfile` (a failure: no `/tmp`), `fclose`, `fread`, `fwrite`, `fgetc`, `getc`, `ungetc`, `fputc`, `fgets`, `fputs`, `feof`, `ferror`, `clearerr`, `fflush`, `fseek`, `ftell`, `rewind`, `fileno`, `setvbuf` (accepted, no buffer), `stdin`, `stdout`, `stderr` |
 | `<sys/stat.h>` | `struct stat` with the `S_IS*` macros, `stat`, `lstat` (the same call: no links), `fstat` (the position of the end), `chmod`, `umask`. The record of the ABI itself is `ulibc_stat_call`, which fills `struct vfs_stat` |
 | `<dirent.h>` | `DIR`, `struct dirent`, `opendir`, `readdir`, `closedir`, `rewinddir`, `dirfd` over a batch of eight entries of the call `ulibc_readdir` |
 | `<libgen.h>` | `basename`, `dirname` |
 | `<errno.h>` | the POSIX numbers, `EDOM`/`ERANGE`, and `errno`, which is a plain global of the program |
-| `<unistd.h>` | `read`, `write`, `lseek`, `close`, `unlink`, `isatty` (0: no terminal), the three `STD*_FILENO` and `off_t`/`ssize_t` |
-| `<fcntl.h>` | `O_RDONLY`, `O_WRONLY`, `O_RDWR`, `O_CREAT`, `O_TRUNC`, `O_APPEND`, `O_DIRECTORY` |
+| `<unistd.h>` | `read`, `write`, `lseek`, `close`, `unlink`, `isatty` (0: no terminal), `realpath`, the three `STD*_FILENO` and `off_t`/`ssize_t` |
+| `<fcntl.h>` | `O_RDONLY`, `O_WRONLY`, `O_RDWR`, `O_CREAT`, `O_EXCL`, `O_TRUNC`, `O_APPEND`, `O_DIRECTORY`; `O_EXCL` with `O_CREAT` is `EEXIST` for a name that is already there |
 | `<sys/types.h>` | `off_t`, `ssize_t`, `off64_t` |
 | `<math.h>` | `sqrt`, `pow`, `fmod`, `floor`, `ceil`, `trunc`, `round`, `fabs`, `exp`, `exp2`, `log`, `log2`, `log10`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `frexp`, `ldexp`, `modf` |
-| `<time.h>` | `time` (the uptime), `clock`, `difftime`, `gmtime`, `localtime`, `mktime`, `strftime`, `struct tm` |
+| `<time.h>` | `time` (the wall clock of the call 49, the seconds of Unix), `clock` (the processor time of the call 50), `difftime`, `gmtime`, `localtime`, `mktime`, `strftime`, `strptime`, `struct tm` |
+| `<glob.h>` | `glob`/`globfree` over `opendir`/`readdir` and `stat`: `*`, `?`, `[`...`]`, `GLOB_NOSORT`, `GLOB_NOCHECK`, `GLOB_MARK`, `GLOB_DOOFFS`, `GLOB_ERR`, `GLOB_APPEND` |
+| `<getopt.h>` | `struct option`, `getopt_long`, `getopt_long_only` beside `getopt`: a long name, `--name=value`, an unambiguous prefix, the `flag`/`val` of a table |
 | `<setjmp.h>` | `setjmp`/`longjmp` (the registers of x86-64) |
 | `<locale.h>` | the C locale: `setlocale`, `localeconv` |
 | `<ctype.h>` | the classes of a byte and `tolower`/`toupper` |
 | `<signal.h>` | the four signals of the ABI, `signal`, `raise`, `sig_atomic_t` |
 | `<assert.h>` | `assert` |
 
-The allocation is an **arena in the bss of the program**, not
-`KSYS_MALLOC`: the block of the kernel is memory of ring 0 and the page
-tables of a program do not map it with the user bit. The size is
-`-DULIBC_HEAP_SIZE=<bytes>` (256 KiB by default, 512 KiB for `zcat`), and
-the bss of an image is capped at 1 MiB by the format. A library that
-allocates more needs a program with a larger arena, or a `brk`/`mmap` of the
-program, which the kernel does not have yet (`docs/debts.md`).
+The allocation is a **heap whose first block is an arena in the bss of the
+program**, not `KSYS_MALLOC`: the block of the kernel is memory of ring 0 and
+the page tables of a program do not map it with the user bit. The first block
+is `-DULIBC_HEAP_SIZE=<bytes>` (256 KiB by default), and a request the arena
+cannot hold grows the heap with `brk` (call 47), so a program that allocates
+two megabytes does not need a constant of its build. The growth is charged to
+the memory limit of the task; on a machine without an address space (the
+board) `brk` answers `ENOSYS` and the heap stays the arena, which is the size
+the bss of the format allows (1 MiB).
 
 The formatter has `%d %i %u %o %x %X %c %s %p %%`, the flags `- + space # 0`
 and `*`, a precision, and the length `l`/`ll`/`z`/`j`/`h`. A build that
@@ -428,7 +432,8 @@ archive from the sources the SDK carries and links that instead:
 ```
 
 `--no-float` leaves the SSE and x87 sources out (no `%f`, no `strtod` of a
-double, no `sscanf`) for a program of integers and a smaller image.
+double) for a program of integers and a smaller image; `sscanf` still reads
+the conversions that are not a double.
 
 The SDK is the **library and the link**; it is not an image of a disk. The
 disk of QEMU is written by this tree, which is where the image tool lives:

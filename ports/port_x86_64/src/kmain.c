@@ -366,14 +366,14 @@ static void init_task(void *arg)
     }
 }
 
-void kmain(k_u64_t multiboot_info)
+void kmain(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys)
 {
     struct kernel_boot_config cfg;
     const char *root_type = NULL;
     int mounted;
     int defaults;
 
-    port_x86_64_init(multiboot_info);
+    port_x86_64_init(boot_info, boot_magic, kernel_phys);
 
     memset(&cfg, 0, sizeof(cfg));
     cfg.board = g_board.name;
@@ -381,6 +381,13 @@ void kmain(k_u64_t multiboot_info)
     cfg.board_info = &g_board;
 
     kernel_boot(&cfg);
+
+    /* Which of the two boots of this port it is: the multiboot image that
+     * QEMU loads with -kernel, or the machine the firmware handed over
+     * (loader/uefi). The rest of the log is the same on both, which is the
+     * point of the port: one kernel, two ways of starting it. */
+    kinfo("x86-64: the boot is %s, the image at 0x%x", port_x86_64_boot_name(),
+          (unsigned)g_port_x86_64_kernel_phys);
 
     /*
      * The cores that stopped before the scheduler may enter it now: the
@@ -393,6 +400,30 @@ void kmain(k_u64_t multiboot_info)
 
     kinfo("x86-64: the kernel is up, heap %u KB free of %u KB",
           (unsigned)(k_port_heap_free() / 1024), (unsigned)(k_port_heap_total() / 1024));
+
+    /*
+     * The keyboard of the machine and the set of its scancodes: the port asks
+     * the device and the controller of it at the boot (src/ps2.c), and the two
+     * numbers are the first thing a person with a laptop of the set 2 wants to
+     * see. A device that did not answer is the set 1 of every machine of the
+     * port, and the line says that too.
+     */
+    if (port_x86_64_ps2_set_ordered()) {
+        /*
+         * The device was told to speak the set 1 and it answered: the wire is
+         * the set 1 whatever the controller claims, which is the one case a
+         * laptop has needed.
+         */
+        kinfo("ps2: the keyboard was told to speak set 1, and it does");
+    } else if (port_x86_64_ps2_device_set() == 0u) {
+        kinfo("ps2: the keyboard did not say which scancode set it speaks, set %u is assumed",
+              (unsigned)port_x86_64_ps2_set());
+    } else if (port_x86_64_ps2_device_set() == port_x86_64_ps2_set()) {
+        kinfo("ps2: the keyboard speaks set %u", (unsigned)port_x86_64_ps2_set());
+    } else {
+        kinfo("ps2: the keyboard speaks set %u, the controller translates it into set %u",
+              (unsigned)port_x86_64_ps2_device_set(), (unsigned)port_x86_64_ps2_set());
+    }
 
     /* The screen the boot chose (ADR 0023): the framebuffer of the VGA and
      * its grid of cells, or the text mode of the firmware when the machine

@@ -20,7 +20,14 @@ image is the same disk with a FAT32 partition after the root.
 
     tools/x86_image.py [--image PATH] [--build DIR] [--mkfs PATH]
                        [--fs mfs|ext2] [--size-mb N] [--data-mb N]
-                       [--source-date-epoch N] [--verbose]
+                       [--bus ide|virtio] [--source-date-epoch N] [--verbose]
+
+The bus is a property of the machine and not of the medium: the same bytes of
+this image are the disk of the primary IDE channel of ADR 0008 and the disk of
+the virtio-blk device of ADR 0037, and `--bus` says which of the two this run
+of the tool is writing for. The image does not change; the tool prints the
+`-drive` argument of the bus that was asked for, which is the line a person
+puts in the command of QEMU.
 
 The exit status is 0 when the image was written, 2 when the tool or one of
 the images of a program is missing, and 1 when the tool failed.
@@ -53,6 +60,12 @@ PROGRAMS = [
     "poll",
     "mmap",
     "big",
+    # The lane of 1.8 of the library: the directory of the task (call 48),
+    # the heap that grows with brk, and the memory limit a program charges it
+    # to. The three are programs of the library and not of the port.
+    "chdir",
+    "heap",
+    "limit",
     # The floating point state of a task (K9): three tasks compute in double
     # at once and the smoke test reads the number of each of them.
     "fpu2",
@@ -102,6 +115,9 @@ PROGRAMS = [
     "ui",
     "edit",
     "fm",
+    # The server of the desktop (1.7): the windows of the programs above as
+    # clients of one program that owns the screen (docs/desktop.md).
+    "wm",
 ]
 
 # The second name of the compression command: `zstdcat` is the same image and
@@ -1152,6 +1168,12 @@ def main(argv: list) -> int:
         metavar="PATH",
         help="make a directory of the volume",
     )
+    parser.add_argument(
+        "--bus",
+        choices=("ide", "virtio"),
+        default="ide",
+        help="the bus the image is booted on (default: ide); the bytes are the same",
+    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
 
@@ -1168,7 +1190,7 @@ def main(argv: list) -> int:
     for path in args.dir:
         extra += ["--dir", path]
 
-    return build_image(
+    rc = build_image(
         args.image,
         args.build,
         args.mkfs,
@@ -1179,6 +1201,19 @@ def main(argv: list) -> int:
         args.fs,
         args.data_mb,
     )
+
+    if rc == 0:
+        # The image is a file of the host and the bus is the machine's: the
+        # screen of this tool is the one place that says which line boots the
+        # bytes it just wrote.
+        if args.bus == "virtio":
+            line = "if=virtio"
+        else:
+            line = "if=ide,index=0"
+        print(f"bus: {args.image} boots as -drive file={args.image},format=raw,{line},"
+              f"cache=writeback")
+
+    return rc
 
 
 if __name__ == "__main__":

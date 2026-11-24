@@ -118,6 +118,28 @@ def rgb565(value: int) -> tuple:
     return ((red << 3) | (red >> 2), (green << 2) | (green >> 4), (blue << 3) | (blue >> 2))
 
 
+def brightness(rgb: tuple) -> int:
+    """The brightness of a colour of the screen, the way a person sees it.
+
+    The checks of the palette ask that one tone is darker than another - the
+    shadow under a window, the ink of a title against the ink of its body -
+    and a tone is a number of the three channels and not one of them.
+    """
+    red, green, blue = rgb
+    return (2126 * red + 7152 * green + 722 * blue) // 10000
+
+
+def desk_at(picture: "Picture", x: int, y: int) -> bool:
+    """The pixel is the wallpaper of its row, not a window, a panel or a shadow.
+
+    The desk at (1250, y) is the reference: no window of the default desktop,
+    and no window the test drags, reaches that column at the rows the checks
+    ask about, and the grid of the wallpaper has no line there (1250 is not
+    the offset of a line of 32).
+    """
+    return picture.pixel(x, y) == picture.pixel(1250, y)
+
+
 # The colours of the sixteen attributes of the palette (ports/port_x86_64/
 # src/fb.c) that the test reads: a command colours a name or a line with one
 # of them, and the value is the five-six-five number widened by the display.
@@ -150,32 +172,101 @@ UI_ITEM_STEP = 22
 UI_CONSOLE_X = UI_LEFT_WIDTH + 8
 UI_CONSOLE_Y = 16 + 8
 
+# The palette of the desktop (components/ui/include/ui/palette.h): a colour is
+# written with eight bits a channel, as a person writes one, and the device of
+# ADR 0023 narrows it to five-six-five. The roles are named and not numbered,
+# so a screenshot is read in the language of the sources: the surface of a
+# window, the ink of a body, the accent of the focus.
+def palette_rgb(red: int, green: int, blue: int) -> tuple:
+    """A colour of the palette, the way `UI_RGB` narrows it and the display
+    widens it: the low bits of a channel are dropped, not rounded."""
+    return rgb565(
+        ((red & 0xF8) << 8) | ((green & 0xFC) << 3) | ((blue & 0xF8) >> 3)
+    )
+
+
+WALL_TOP_RGB = palette_rgb(16, 19, 27)
+WALL_BOTTOM_RGB = palette_rgb(28, 37, 54)
+WALL_GRID_RGB = palette_rgb(20, 26, 36)
+SURFACE_RGB = palette_rgb(24, 29, 39)
+SURFACE_HIGH_RGB = palette_rgb(36, 44, 59)
+PANEL_RGB = palette_rgb(20, 25, 35)
+INK_RGB = palette_rgb(216, 223, 235)
+INK_DIM_RGB = palette_rgb(146, 160, 181)
+TITLE_INK_RGB = palette_rgb(244, 248, 255)
+ACCENT_RGB = palette_rgb(76, 141, 255)
+ACCENT_INK_RGB = palette_rgb(255, 255, 255)
+BORDER_RGB = palette_rgb(58, 70, 92)
+SELECTION_RGB = palette_rgb(46, 63, 92)
+SELECTION_INK_RGB = palette_rgb(255, 255, 255)
+CLOSE_RGB = palette_rgb(208, 80, 75)
+CLOSE_INK_RGB = palette_rgb(255, 255, 255)
+CURSOR_INK_RGB = palette_rgb(255, 255, 255)
+CURSOR_EDGE_RGB = palette_rgb(0, 0, 0)
+
+# The light theme of the same roles: the `theme=light` of /etc/console.
+WALL_TOP_LIGHT_RGB = palette_rgb(238, 242, 248)
+WALL_BOTTOM_LIGHT_RGB = palette_rgb(203, 213, 228)
+PANEL_LIGHT_RGB = palette_rgb(220, 227, 238)
+
 # The programs of ADR 0030 (/bin/edit and /bin/fm) and the frame of
-# components/ui: a margin of two pixels, the row of the 8x16 font and a pixel
-# of separator, so the body of a window starts at the pixel 21 of its own
-# rectangle; the title is drawn at the margin and the status line is the last
-# row of the picture.
+# components/ui: four pixels of air above the row of the title, six at either
+# side of it and of the body, a pixel of separator, so the body of a window
+# starts at the pixel 21 of its own rectangle.
 UI_FRAME_TITLE_HEIGHT = 21
-UI_TITLE_Y = 2
+UI_TITLE_Y = 4
+UI_FRAME_PAD = 6
 UI_STATUS_Y = VBE_HEIGHT - CELL_HEIGHT
 
-# The colours of the two programs, the numbers of their sources widened by
-# the display: the dark blue of a bar, the white of the console, the cyan of
-# the window with the keys and the grey of a row of a list that has the
-# focus. They are read out of the screenshot and not from a copy of the
-# drawing code: `rgb565()` is the rule of the device of ADR 0023.
-EDIT_PAPER_RGB = rgb565(0x0000)
-EDIT_INK_RGB = rgb565(0xFFFF)
-EDIT_BAR_RGB = rgb565(0x0010)
-EDIT_FOCUS_RGB = rgb565(0x57FF)
-FM_PAPER_RGB = rgb565(0x0000)
-FM_INK_RGB = rgb565(0xFFFF)
-FM_BAR_RGB = rgb565(0x0010)
-FM_FOCUS_RGB = rgb565(0x57FF)
-FM_SELECT_RGB = rgb565(0xAD55)
-FM_SELECT_INK_RGB = rgb565(0x0000)
+# The colours of the two programs, the roles of the palette widened by the
+# display: the surface of a window, its bar and the line of status, the three
+# inks of the hierarchy, the accent of the focus and the selection of a list.
+EDIT_PAPER_RGB = SURFACE_RGB
+EDIT_INK_RGB = INK_RGB
+EDIT_TITLE_INK_RGB = TITLE_INK_RGB
+EDIT_DIM_INK_RGB = INK_DIM_RGB
+EDIT_BAR_RGB = SURFACE_HIGH_RGB
+EDIT_FOCUS_RGB = ACCENT_RGB
+FM_PAPER_RGB = SURFACE_RGB
+FM_INK_RGB = INK_RGB
+FM_TITLE_INK_RGB = TITLE_INK_RGB
+FM_DIM_INK_RGB = INK_DIM_RGB
+FM_BAR_RGB = SURFACE_HIGH_RGB
+FM_FOCUS_RGB = ACCENT_RGB
+FM_SELECT_RGB = SELECTION_RGB
+FM_SELECT_INK_RGB = SELECTION_INK_RGB
 FM_MODAL_X = 416
-FM_MODAL_Y = 372
+FM_MODAL_Y = 371
+
+# The desktop of 1.7 (`/bin/wm`, docs/desktop.md) and the numbers of its
+# source: the gradient and the grid of the wallpaper, the panel, the accent of
+# the button of the window with the keys and of the ring of the focus, the red
+# square that closes a window and the pointer of white with a black outline.
+# The rectangles are the two windows the server starts.
+WM_WALL_GRID = 32
+WM_WALL_GRID_OFFSET = 16
+WM_PANEL_RGB = PANEL_RGB
+WM_PANEL_BUTTON_RGB = SURFACE_RGB
+WM_PANEL_INK_RGB = INK_DIM_RGB
+WM_PANEL_FOCUS_RGB = ACCENT_RGB
+WM_PANEL_ACCENT_INK_RGB = ACCENT_INK_RGB
+WM_FOCUS_RGB = ACCENT_RGB
+WM_CLOSE_RGB = CLOSE_RGB
+WM_CURSOR_RGB = CURSOR_INK_RGB
+WM_CURSOR_EDGE_RGB = CURSOR_EDGE_RGB
+WM_PANEL_HEIGHT = 24
+# The two windows of the default desktop: beside each other and not over each
+# other, so the corner of one never hides the text of the other (docs/desktop.md).
+WM_EDIT_RECT = (40, 40, 640, 420)
+WM_FM_RECT = (700, 200, 520, 380)
+# The square of closing at the right end of a button of the panel: the same
+# cross a title bar has, twelve pixels of it in a button of the panel.
+WM_PANEL_CLOSE = 12
+WM_TITLE_KEEP = 64
+# The shadow of a window: three pixels of a darker wallpaper at its right and
+# below, and the ring of the focus around it.
+WM_SHADOW = 3
+WM_FOCUS_RING = 2
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, "build-x86")
@@ -435,6 +526,24 @@ class Picture:
 
         return True
 
+    def row_of(self, text: str, ink: tuple, paper: tuple, pitch: int = LINE_PITCH) -> int | None:
+        """The row of the grid whose first cells spell `text`, or None.
+
+        A console whose log is longer than the glass scrolls, so the first line
+        of the boot is not always the first row of the picture: a check that
+        reads the banner asks where it is instead of assuming the row 0. A
+        machine of a longer boot scrolls one line earlier than a machine of a
+        shorter one, and neither is a failure of the screen.
+        """
+        for row in range(self.height // pitch):
+            if all(
+                self.cell_is(row, index, GLYPHS[letter], ink, paper, pitch)
+                for index, letter in enumerate(text)
+            ):
+                return row
+
+        return None
+
     def cell_is_ink(self, row: int, column: int, ink: tuple, pitch: int = LINE_PITCH) -> bool:
         """The cell is one block of the colour: what the cursor is."""
         x0 = column * CELL_WIDTH
@@ -565,7 +674,14 @@ class Machine:
         self._drain_monitor()
 
     @staticmethod
-    def _connect(path: str, timeout: float = 10.0) -> socket.socket:
+    def _connect(path: str, timeout: float = 30.0) -> socket.socket:
+        """The socket of QEMU, with the patience of a machine under load.
+
+        Ten seconds was enough for a machine of a person and not for a runner
+        of a build farm where three QEMUs start at once: the test then said
+        "QEMU did not start" and it was the wait that was short, not the
+        machine. Half a minute costs nothing when the socket is there at once.
+        """
         deadline = time.monotonic() + timeout
 
         while time.monotonic() < deadline:
@@ -1071,11 +1187,17 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                     and picture.pixel(0, VBE_HEIGHT - 2) == GREY,
                     f"the paper is {picture.pixel(VBE_WIDTH - 2, VBE_HEIGHT - 2)}",
                 )
+                # The banner is the first line of the boot, and the boot of a
+                # machine whose log is longer than the glass scrolls: the check
+                # asks where the banner is instead of assuming the row 0, and a
+                # line more in the log of a kernel is not a failure of the
+                # screen.
                 expect(
                     "the text of the boot is read in the new colours",
                     picture.cell_is(0, 0, GLYPHS["M"], BLACK, GREY)
-                    or picture.cell_is(0, 0, GLYPHS["m"], BLACK, GREY),
-                    "the cell of the banner is not the glyph in the colours of the theme",
+                    or picture.cell_is(0, 0, GLYPHS["m"], BLACK, GREY)
+                    or picture.row_of("MicroOS", BLACK, GREY) is not None,
+                    "no row of the picture holds the banner in the colours of the theme",
                 )
                 foreign = picture.foreign_cells(BLACK)
                 expect(
@@ -1458,12 +1580,13 @@ def run_editor(loader: str, kernel: str, image: str, timeout: float, verbose: bo
                 machine,
                 workdir,
                 lambda seen: seen.text_at(
-                    4, UI_TITLE_Y, "edit - /edit.txt", EDIT_INK_RGB, EDIT_BAR_RGB
+                    UI_FRAME_PAD, UI_TITLE_Y, "edit - /edit.txt", EDIT_TITLE_INK_RGB, EDIT_BAR_RGB
                 )
                 and seen.text_at(
-                    4, UI_STATUS_Y, "edit  L1 C1  0 bytes", EDIT_INK_RGB, EDIT_BAR_RGB
+                    UI_FRAME_PAD, UI_STATUS_Y, "edit  L1 C1  0 bytes", EDIT_DIM_INK_RGB,
+                    EDIT_BAR_RGB
                 )
-                and seen.pixel(4, UI_FRAME_TITLE_HEIGHT) == EDIT_INK_RGB,
+                and seen.pixel(UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT) == EDIT_INK_RGB,
             )
             expect("the window of the editor is drawn", picture is not None,
                    "screendump wrote no PPM")
@@ -1471,21 +1594,24 @@ def run_editor(loader: str, kernel: str, image: str, timeout: float, verbose: bo
             if picture is not None:
                 expect(
                     "the title says which file is open",
-                    picture.text_at(4, UI_TITLE_Y, "edit - /edit.txt", EDIT_INK_RGB, EDIT_BAR_RGB),
+                    picture.text_at(UI_FRAME_PAD, UI_TITLE_Y, "edit - /edit.txt",
+                                    EDIT_TITLE_INK_RGB, EDIT_BAR_RGB),
                     "the title bar does not hold 'edit - /edit.txt'",
                 )
                 expect(
                     "the status line names the keys",
                     picture.text_at(
-                        4, UI_STATUS_Y, "edit  L1 C1  0 bytes", EDIT_INK_RGB, EDIT_BAR_RGB
+                        UI_FRAME_PAD, UI_STATUS_Y, "edit  L1 C1  0 bytes", EDIT_DIM_INK_RGB,
+                        EDIT_BAR_RGB
                     ),
                     "the status line is not 'edit  L1 C1  0 bytes'",
                 )
                 expect(
                     "the cursor is one inverted cell of the first line",
-                    picture.pixel(4, UI_FRAME_TITLE_HEIGHT) == EDIT_INK_RGB
-                    and picture.pixel(11, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT - 1) == EDIT_INK_RGB
-                    and picture.pixel(12, UI_FRAME_TITLE_HEIGHT) == EDIT_PAPER_RGB,
+                    picture.pixel(UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT) == EDIT_INK_RGB
+                    and picture.pixel(UI_FRAME_PAD + 7,
+                                      UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT - 1) == EDIT_INK_RGB
+                    and picture.pixel(UI_FRAME_PAD + 8, UI_FRAME_TITLE_HEIGHT) == EDIT_PAPER_RGB,
                     "the first cell of the body is not the block of the cursor",
                 )
 
@@ -1496,27 +1622,30 @@ def run_editor(loader: str, kernel: str, image: str, timeout: float, verbose: bo
                 machine,
                 workdir,
                 lambda seen: seen.text_at(
-                    4, UI_FRAME_TITLE_HEIGHT, "hi", EDIT_INK_RGB, EDIT_PAPER_RGB
+                    UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT, "hi", EDIT_INK_RGB, EDIT_PAPER_RGB
                 )
-                and seen.pixel(20, UI_FRAME_TITLE_HEIGHT) == EDIT_INK_RGB
-                and seen.text_at(4, UI_STATUS_Y, "edit [modified]", EDIT_INK_RGB, EDIT_BAR_RGB),
+                and seen.pixel(UI_FRAME_PAD + 16, UI_FRAME_TITLE_HEIGHT) == EDIT_INK_RGB
+                and seen.text_at(UI_FRAME_PAD, UI_STATUS_Y, "edit [modified]", EDIT_DIM_INK_RGB,
+                                 EDIT_BAR_RGB),
             )
             expect(
                 "the letters of the keyboard are in the file",
                 typed is not None
-                and typed.text_at(4, UI_FRAME_TITLE_HEIGHT, "hi", EDIT_INK_RGB, EDIT_PAPER_RGB),
+                and typed.text_at(UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT, "hi", EDIT_INK_RGB,
+                                  EDIT_PAPER_RGB),
                 "the first line of the body is not 'hi'",
             )
             expect(
                 "the cursor moved after the letters",
-                typed is not None and typed.pixel(20, UI_FRAME_TITLE_HEIGHT) == EDIT_INK_RGB,
+                typed is not None
+                and typed.pixel(UI_FRAME_PAD + 16, UI_FRAME_TITLE_HEIGHT) == EDIT_INK_RGB,
                 "the cursor is not the cell after 'hi'",
             )
             expect(
                 "the status line says the file has changed",
                 typed is not None
                 and typed.text_at(
-                    4, UI_STATUS_Y, "edit [modified]", EDIT_INK_RGB, EDIT_BAR_RGB
+                    UI_FRAME_PAD, UI_STATUS_Y, "edit [modified]", EDIT_DIM_INK_RGB, EDIT_BAR_RGB
                 ),
                 "the status line does not say [modified]",
             )
@@ -1526,14 +1655,16 @@ def run_editor(loader: str, kernel: str, image: str, timeout: float, verbose: bo
                 machine,
                 workdir,
                 lambda seen: seen.text_at(
-                    4, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT, "ok", EDIT_INK_RGB, EDIT_PAPER_RGB
+                    UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT, "ok", EDIT_INK_RGB,
+                    EDIT_PAPER_RGB
                 ),
             )
             expect(
                 "Enter starts a second line",
                 second is not None
                 and second.text_at(
-                    4, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT, "ok", EDIT_INK_RGB, EDIT_PAPER_RGB
+                    UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT, "ok", EDIT_INK_RGB,
+                    EDIT_PAPER_RGB
                 ),
                 "the second line of the body is not 'ok'",
             )
@@ -1544,9 +1675,10 @@ def run_editor(loader: str, kernel: str, image: str, timeout: float, verbose: bo
                 machine,
                 workdir,
                 lambda seen: seen.text_at(
-                    4, UI_STATUS_Y, "saved 5 bytes", EDIT_INK_RGB, EDIT_BAR_RGB
+                    UI_FRAME_PAD, UI_STATUS_Y, "saved 5 bytes", EDIT_DIM_INK_RGB, EDIT_BAR_RGB
                 )
-                and seen.text_at(4, UI_TITLE_Y, "edit - /edit.txt", EDIT_INK_RGB, EDIT_BAR_RGB),
+                and seen.text_at(UI_FRAME_PAD, UI_TITLE_Y, "edit - /edit.txt",
+                                 EDIT_TITLE_INK_RGB, EDIT_BAR_RGB),
             )
             expect(
                 "Ctrl+S writes the file",
@@ -1556,7 +1688,8 @@ def run_editor(loader: str, kernel: str, image: str, timeout: float, verbose: bo
             expect(
                 "a saved file has no mark of a change",
                 saved is not None
-                and saved.text_at(4, UI_TITLE_Y, "edit - /edit.txt", EDIT_INK_RGB, EDIT_BAR_RGB),
+                and saved.text_at(UI_FRAME_PAD, UI_TITLE_Y, "edit - /edit.txt",
+                                  EDIT_TITLE_INK_RGB, EDIT_BAR_RGB),
                 "the title still marks the file as modified",
             )
 
@@ -1642,7 +1775,8 @@ def run_fm(loader: str, kernel: str, image: str, timeout: float, verbose: bool, 
         """The row of the list that spells `letters`, -1 when there is none."""
         for row in range((UI_STATUS_Y - UI_FRAME_TITLE_HEIGHT) // CELL_HEIGHT):
             if picture.text_at(
-                4, UI_FRAME_TITLE_HEIGHT + row * CELL_HEIGHT, letters, FM_INK_RGB, FM_PAPER_RGB
+                UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT + row * CELL_HEIGHT, letters, FM_INK_RGB,
+                FM_PAPER_RGB
             ):
                 return row
         return -1
@@ -1674,7 +1808,8 @@ def run_fm(loader: str, kernel: str, image: str, timeout: float, verbose: bool, 
             picture = settled_picture(
                 machine,
                 workdir,
-                lambda seen: seen.text_at(4, UI_TITLE_Y, "fm - /", FM_INK_RGB, FM_BAR_RGB)
+                lambda seen: seen.text_at(UI_FRAME_PAD, UI_TITLE_Y, "fm - /",
+                                          FM_TITLE_INK_RGB, FM_BAR_RGB)
                 and row_holding(seen, "etc/") >= 0
                 and row_holding(seen, "proc/") >= 0
                 and row_holding(seen, "zzz") >= 0,
@@ -1687,7 +1822,8 @@ def run_fm(loader: str, kernel: str, image: str, timeout: float, verbose: bool, 
             if picture is not None:
                 expect(
                     "the title names the directory",
-                    picture.text_at(4, UI_TITLE_Y, "fm - /", FM_INK_RGB, FM_BAR_RGB),
+                    picture.text_at(UI_FRAME_PAD, UI_TITLE_Y, "fm - /", FM_TITLE_INK_RGB,
+                                    FM_BAR_RGB),
                     "the title bar does not hold 'fm - /'",
                 )
                 expect(
@@ -1695,7 +1831,7 @@ def run_fm(loader: str, kernel: str, image: str, timeout: float, verbose: bool, 
                     row_holding(picture, "etc/") >= 0
                     and row_holding(picture, "proc/") >= 0
                     and picture.text_at(
-                        4,
+                        UI_FRAME_PAD,
                         UI_FRAME_TITLE_HEIGHT,
                         "bin/",
                         FM_SELECT_INK_RGB,
@@ -1711,15 +1847,18 @@ def run_fm(loader: str, kernel: str, image: str, timeout: float, verbose: bool, 
                 expect(
                     "the status line names the keys",
                     "Enter open"
-                    in picture.letters_at(4, UI_STATUS_Y, 100, FM_INK_RGB, FM_BAR_RGB)
+                    in picture.letters_at(UI_FRAME_PAD, UI_STATUS_Y, 100, FM_DIM_INK_RGB,
+                                          FM_BAR_RGB)
                     and "q quit"
-                    in picture.letters_at(4, UI_STATUS_Y, 100, FM_INK_RGB, FM_BAR_RGB),
+                    in picture.letters_at(UI_FRAME_PAD, UI_STATUS_Y, 100, FM_DIM_INK_RGB,
+                                          FM_BAR_RGB),
                     "the status line does not name the keys",
                 )
                 expect(
                     "the first row of the list has the focus",
-                    picture.pixel(4, UI_FRAME_TITLE_HEIGHT) == FM_SELECT_RGB
-                    and picture.pixel(4, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT) == FM_PAPER_RGB,
+                    picture.pixel(UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT) == FM_SELECT_RGB
+                    and picture.pixel(UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT)
+                    == FM_PAPER_RGB,
                     "the first row is not the grey of the focus",
                 )
                 zzz_row = row_holding(picture, "zzz")
@@ -1730,14 +1869,16 @@ def run_fm(loader: str, kernel: str, image: str, timeout: float, verbose: bool, 
             moved = settled_picture(
                 machine,
                 workdir,
-                lambda seen: seen.pixel(4, UI_FRAME_TITLE_HEIGHT) == FM_PAPER_RGB
-                and seen.pixel(4, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT) == FM_SELECT_RGB,
+                lambda seen: seen.pixel(UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT) == FM_PAPER_RGB
+                and seen.pixel(UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT)
+                == FM_SELECT_RGB,
             )
             expect(
                 "the down arrow moves the selection",
                 moved is not None
-                and moved.pixel(4, UI_FRAME_TITLE_HEIGHT) == FM_PAPER_RGB
-                and moved.pixel(4, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT) == FM_SELECT_RGB,
+                and moved.pixel(UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT) == FM_PAPER_RGB
+                and moved.pixel(UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT + CELL_HEIGHT)
+                == FM_SELECT_RGB,
                 "the grey of the selection did not move to the second row",
             )
 
@@ -1747,7 +1888,8 @@ def run_fm(loader: str, kernel: str, image: str, timeout: float, verbose: bool, 
                 machine,
                 workdir,
                 lambda seen: zzz_row >= 0
-                and seen.pixel(4, UI_FRAME_TITLE_HEIGHT + zzz_row * CELL_HEIGHT) == FM_SELECT_RGB,
+                and seen.pixel(UI_FRAME_PAD, UI_FRAME_TITLE_HEIGHT + zzz_row * CELL_HEIGHT)
+                == FM_SELECT_RGB,
             )
             expect(
                 "End selects the last name of the list",
@@ -1763,7 +1905,7 @@ def run_fm(loader: str, kernel: str, image: str, timeout: float, verbose: bool, 
                 workdir,
                 lambda seen: seen.pixel(FM_MODAL_X, FM_MODAL_Y) == FM_FOCUS_RGB
                 and seen.text_at(
-                    FM_MODAL_X + 3,
+                    FM_MODAL_X + UI_FRAME_PAD,
                     FM_MODAL_Y + UI_FRAME_TITLE_HEIGHT,
                     "Delete zzz?",
                     FM_INK_RGB,
@@ -1779,7 +1921,7 @@ def run_fm(loader: str, kernel: str, image: str, timeout: float, verbose: bool, 
                 "the dialog asks about the file",
                 dialog is not None
                 and dialog.text_at(
-                    FM_MODAL_X + 3,
+                    FM_MODAL_X + UI_FRAME_PAD,
                     FM_MODAL_Y + UI_FRAME_TITLE_HEIGHT,
                     "Delete zzz?",
                     FM_INK_RGB,
@@ -1796,7 +1938,7 @@ def run_fm(loader: str, kernel: str, image: str, timeout: float, verbose: bool, 
                 lambda seen: seen.pixel(FM_MODAL_X, FM_MODAL_Y) != FM_FOCUS_RGB
                 and zzz_row >= 0
                 and seen.text_at(
-                    4,
+                    UI_FRAME_PAD,
                     UI_FRAME_TITLE_HEIGHT + zzz_row * CELL_HEIGHT,
                     "zzz",
                     FM_SELECT_INK_RGB,
@@ -1809,7 +1951,7 @@ def run_fm(loader: str, kernel: str, image: str, timeout: float, verbose: bool, 
                 and cancelled.pixel(FM_MODAL_X, FM_MODAL_Y) != FM_FOCUS_RGB
                 and zzz_row >= 0
                 and cancelled.text_at(
-                    4,
+                    UI_FRAME_PAD,
                     UI_FRAME_TITLE_HEIGHT + zzz_row * CELL_HEIGHT,
                     "zzz",
                     FM_SELECT_INK_RGB,
@@ -1830,7 +1972,7 @@ def run_fm(loader: str, kernel: str, image: str, timeout: float, verbose: bool, 
                 machine,
                 workdir,
                 lambda seen: seen.text_at(
-                    4, UI_STATUS_Y, "deleted /zzz", FM_INK_RGB, FM_BAR_RGB
+                    UI_FRAME_PAD, UI_STATUS_Y, "deleted /zzz", FM_DIM_INK_RGB, FM_BAR_RGB
                 )
                 and row_holding(seen, "bin/") >= 0
                 and row_holding(seen, "proc/") >= 0,
@@ -1896,6 +2038,878 @@ def _wait_prompts(machine: Machine, wanted: int, timeout: float) -> bool:
         time.sleep(0.05)
 
     return False
+
+
+def stray_pixels(picture, x0: int, y0: int, x1: int, y1: int, paper: tuple) -> int:
+    """How many pixels of a rectangle are not the paper the caller expects.
+
+    A bar of a title is one colour with the ink of its text on it; a pixel of
+    any other colour in the part of the bar past the title is a fragment of a
+    frame that was painted and not put right.
+    """
+    count = 0
+
+    for y in range(y0, y1):
+        for x in range(x0, x1):
+            if picture.pixel(x, y) != paper:
+                count += 1
+
+    return count
+
+
+def run_desktop(
+    loader: str, kernel: str, image: str, timeout: float, verbose: bool, display: str
+) -> list:
+    """The desktop of 1.7: `/bin/wm`, two clients and the pointer.
+
+    The machine boots a copy of the disk and the shell starts `/bin/wm`, which
+    takes the screen, starts `/bin/edit` on `/doc.txt` and `/bin/fm` on `/`
+    with `fork` and `execve`, and owns the picture from then on. The test
+    reads the palette out of the screenshot - the gradient of the wallpaper,
+    the air and the separator of a frame, the shadow of a window, the accent
+    of the focus - and then the panel and the two windows; it drives the
+    pointer through the PS/2 mouse of QEMU (`mouse_move`, `mouse_button`) and
+    the keys through `sendkey`, and reads the lines of the server: a click
+    raises the window it lands on, a key goes to the window with the keys, a
+    drag of a title bar moves the window, Alt+F4 closes it and the focus goes
+    back to what is left. The last window ends the desktop, the grid of the
+    shell comes back and `cat /doc.txt` reads the line the editor typed -
+    which is the proof that the buffer of a client, the keys the server
+    forwarded and the file of the program are one story. The desktop starts a
+    second time with `theme=light` of /etc/console and the same checks of the
+    desk are read in the light palette.
+    """
+    checks = []
+
+    def expect(name: str, condition: bool, detail: str = "") -> None:
+        checks.append((f"desktop: {name}", bool(condition), detail))
+
+    def goto(machine, x: int, y: int) -> None:
+        """The pointer to a known point: the corner first, then the difference.
+
+        The mouse of the machine measures a difference and not a position, so
+        a test that wants to click a pixel of a window starts from a corner it
+        cannot miss: a move of more than the picture is the corner, whatever
+        the pointer was before.
+        """
+        for _ in range(12):
+            machine.monitor_command("mouse_move -200 -200")
+            time.sleep(0.02)
+
+        while x or y:
+            step_x = max(-200, min(200, x))
+            step_y = max(-200, min(200, y))
+            machine.monitor_command(f"mouse_move {step_x} {step_y}")
+            x -= step_x
+            y -= step_y
+            time.sleep(0.04)
+
+        time.sleep(0.15)
+
+    def click(machine) -> None:
+        machine.monitor_command("mouse_button 1")
+        time.sleep(0.15)
+        machine.monitor_command("mouse_button 0")
+        time.sleep(0.30)
+
+    def title_at(picture, rect) -> bool:
+        x, y, _, _ = rect
+        return picture.text_at(x + UI_FRAME_PAD, y + UI_TITLE_Y, "edit - /doc.txt",
+                               EDIT_TITLE_INK_RGB, EDIT_BAR_RGB) or picture.text_at(
+                                   x + UI_FRAME_PAD, y + UI_TITLE_Y, "edit - /doc.txt *",
+                                   EDIT_TITLE_INK_RGB, EDIT_BAR_RGB)
+
+    with tempfile.TemporaryDirectory(prefix="microos-x86-desktop-") as workdir:
+        disk = os.path.join(workdir, "disk.img")
+        shutil.copyfile(image, disk)
+        machine = Machine(loader, kernel, workdir, "std", display, disk)
+
+        try:
+            booted = machine.wait_serial(PROMPT, timeout)
+            expect("the shell of the disk is up", booted, "the shell never printed its prompt")
+
+            count = machine.prompts()
+            machine.type_line("exec /bin/wm")
+
+            expect(
+                "the server takes the screen",
+                machine.wait_serial("fb: the console is taken", timeout),
+                "the kernel never said that /dev/fb0 was taken (FBIO_TAKE)",
+            )
+            expect(
+                "the two windows of the desktop are started",
+                machine.wait_serial("wm: the desktop is up", timeout),
+                "the server never said that its windows were up",
+            )
+            transcript = machine.read_serial()
+            expect(
+                "the editor is a window of the server",
+                "wm: window edit - /doc.txt" in transcript,
+                "the server did not start /bin/edit on /doc.txt",
+            )
+            expect(
+                "the file manager is a window of the server",
+                "wm: window fm - /" in transcript,
+                "the server did not start /bin/fm on /",
+            )
+
+            picture = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.pixel(4, 4) == WALL_TOP_RGB
+                and title_at(seen, WM_EDIT_RECT)
+                and seen.text_at(WM_FM_RECT[0] + UI_FRAME_PAD, WM_FM_RECT[1] + UI_TITLE_Y,
+                                 "fm - /", FM_TITLE_INK_RGB, FM_BAR_RGB),
+            )
+            expect("the picture of the desktop is drawn", picture is not None,
+                   "screendump wrote no PPM")
+
+            if picture is not None:
+                expect(
+                    "the wallpaper is a gradient of the theme",
+                    picture.pixel(4, 4) == WALL_TOP_RGB
+                    and picture.pixel(4, 770) == WALL_BOTTOM_RGB
+                    and picture.pixel(4, 4) != picture.pixel(4, 770),
+                    f"the desk is {picture.pixel(4, 4)} at the top and "
+                    f"{picture.pixel(4, 770)} at the bottom, not the gradient of the palette",
+                )
+                expect(
+                    "the title bar of the editor is the text of the client",
+                    title_at(picture, WM_EDIT_RECT),
+                    "the title of the window of the editor is not 'edit - /doc.txt'",
+                )
+                expect(
+                    "the title and the body of a window are two inks",
+                    EDIT_TITLE_INK_RGB != EDIT_INK_RGB
+                    and brightness(EDIT_TITLE_INK_RGB) > brightness(EDIT_INK_RGB),
+                    "the title of a window is not brighter than the text of its body",
+                )
+                expect(
+                    "the title has air on either side of its text",
+                    all(
+                        picture.pixel(x, WM_EDIT_RECT[1] + UI_TITLE_Y + 8) == EDIT_BAR_RGB
+                        for x in range(WM_EDIT_RECT[0] + 1, WM_EDIT_RECT[0] + UI_FRAME_PAD)
+                    ),
+                    "a pixel of the title touches the border of the window",
+                )
+                expect(
+                    "the separator divides the title from the body",
+                    picture.pixel(WM_EDIT_RECT[0] + 3,
+                                  WM_EDIT_RECT[1] + UI_FRAME_TITLE_HEIGHT - 1) == BORDER_RGB,
+                    "no line of the border colour under the title of the editor",
+                )
+                expect(
+                    "the editor draws its body",
+                    picture.pixel(WM_EDIT_RECT[0] + 20, WM_EDIT_RECT[1] + 60) == EDIT_PAPER_RGB,
+                    "the body of the editor is not its paper",
+                )
+                expect(
+                    "the body has air on either side of its text",
+                    picture.pixel(WM_EDIT_RECT[0] + 2, WM_EDIT_RECT[1] + 40) == EDIT_PAPER_RGB
+                    and picture.pixel(WM_EDIT_RECT[0] + 4,
+                                      WM_EDIT_RECT[1] + UI_FRAME_TITLE_HEIGHT + 8)
+                    == EDIT_PAPER_RGB,
+                    "a pixel of the body text touches the border of the window",
+                )
+                expect(
+                    "the title bar of the file manager is the text of the client",
+                    picture.text_at(WM_FM_RECT[0] + UI_FRAME_PAD, WM_FM_RECT[1] + UI_TITLE_Y,
+                                    "fm - /", FM_TITLE_INK_RGB, FM_BAR_RGB),
+                    "the title of the window of the file manager is not 'fm - /'",
+                )
+                expect(
+                    "the list of the file manager is in the window",
+                    picture.text_at(WM_FM_RECT[0] + UI_FRAME_PAD,
+                                    WM_FM_RECT[1] + UI_FRAME_TITLE_HEIGHT,
+                                    "bin/", FM_SELECT_INK_RGB, FM_SELECT_RGB),
+                    "the first row of the root is not the selected 'bin/'",
+                )
+                expect(
+                    "the panel is a bar of the bottom of the picture",
+                    picture.pixel(4, VBE_HEIGHT - 4) == WM_PANEL_RGB,
+                    "the bottom of the picture is not the surface of the panel",
+                )
+                expect(
+                    "a line separates the panel from the desk",
+                    picture.pixel(4, VBE_HEIGHT - WM_PANEL_HEIGHT) == BORDER_RGB,
+                    "the top row of the panel is not the border of the palette",
+                )
+                expect(
+                    "the panel holds a button a window",
+                    picture.text_at(
+                        14, VBE_HEIGHT - WM_PANEL_HEIGHT + 4, "edit - /doc.txt",
+                        WM_PANEL_INK_RGB, WM_PANEL_BUTTON_RGB
+                    ),
+                    "the panel does not name the editor",
+                )
+                expect(
+                    "the button of the window with the keys is the accent",
+                    picture.text_at(
+                        176, VBE_HEIGHT - WM_PANEL_HEIGHT + 4, "fm - /",
+                        WM_PANEL_ACCENT_INK_RGB, WM_PANEL_FOCUS_RGB
+                    ),
+                    "the button of the file manager is not the accent of the theme",
+                )
+                expect(
+                    "the server draws the pointer",
+                    picture.pixel(VBE_WIDTH // 2, VBE_HEIGHT // 2) == WM_CURSOR_RGB,
+                    "the middle of the picture is not the ink of the pointer",
+                )
+                expect(
+                    "the pointer has a black outline",
+                    picture.pixel(VBE_WIDTH // 2 - 1, VBE_HEIGHT // 2 + 2) == WM_CURSOR_EDGE_RGB
+                    and picture.pixel(VBE_WIDTH // 2, VBE_HEIGHT // 2) != WM_CURSOR_EDGE_RGB,
+                    "the pointer has no outline of the edge colour",
+                )
+                expect(
+                    "the shadow of a window is darker than the desk",
+                    picture.pixel(WM_EDIT_RECT[0] + 20,
+                                  WM_EDIT_RECT[1] + WM_EDIT_RECT[3] + 1)
+                    != picture.pixel(1250, WM_EDIT_RECT[1] + WM_EDIT_RECT[3] + 1)
+                    and brightness(picture.pixel(WM_EDIT_RECT[0] + 20,
+                                                 WM_EDIT_RECT[1] + WM_EDIT_RECT[3] + 1))
+                    < brightness(picture.pixel(1250, WM_EDIT_RECT[1] + WM_EDIT_RECT[3] + 1)),
+                    "the pixels under the editor are the wallpaper and not its shadow",
+                )
+                expect(
+                    "the window of the file manager has the keys",
+                    picture.pixel(WM_FM_RECT[0] - 1, WM_FM_RECT[1] - 1) == WM_FOCUS_RGB,
+                    "the ring of the focus is not around the file manager",
+                )
+                expect(
+                    "the accent of the focus is not the yellow of the CGA",
+                    WM_FOCUS_RGB != rgb565(0xFFEA),
+                    "the ring of the focus is the yellow of the terminal again",
+                )
+                expect(
+                    "the window under it does not",
+                    picture.pixel(WM_EDIT_RECT[0] - 2, WM_EDIT_RECT[1] - 2) == WALL_TOP_RGB,
+                    "a ring of the focus is around the editor as well",
+                )
+
+            # --- a click raises the window it lands on ---------------------
+            goto(machine, 200, 200)
+            click(machine)
+            expect(
+                "a click on the window under it raises the editor",
+                machine.wait_serial("wm: raise edit", timeout),
+                "the server did not say that the editor came to the top",
+            )
+
+            picture = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.pixel(WM_EDIT_RECT[0] - 1, WM_EDIT_RECT[1] - 1) == WM_FOCUS_RGB,
+            )
+            expect(
+                "the ring of the focus follows the raise",
+                picture is not None
+                and picture.pixel(WM_EDIT_RECT[0] - 1, WM_EDIT_RECT[1] - 1) == WM_FOCUS_RGB,
+                "the ring of the focus is not around the editor",
+            )
+
+            # The window that does not have the keys is a window a person
+            # reads: a raise is a change of the order and not a blank window.
+            expect(
+                "the window without the keys keeps its title",
+                picture is not None
+                and picture.text_at(WM_FM_RECT[0] + UI_FRAME_PAD,
+                                    WM_FM_RECT[1] + UI_TITLE_Y, "fm - /", FM_TITLE_INK_RGB,
+                                    FM_BAR_RGB),
+                "the title of the file manager went away with the keys",
+            )
+            expect(
+                "the window without the keys keeps its text",
+                picture is not None
+                and picture.text_at(WM_FM_RECT[0] + UI_FRAME_PAD,
+                                    WM_FM_RECT[1] + UI_FRAME_TITLE_HEIGHT,
+                                    "bin/", FM_SELECT_INK_RGB, FM_SELECT_RGB),
+                "the list of the file manager went away with the keys",
+            )
+
+            # --- a key goes to the window with the keys --------------------
+            goto(machine, 120, 160)
+            click(machine)
+            machine.keys(["h", "e", "l", "l", "o"])
+
+            body = (WM_EDIT_RECT[0] + UI_FRAME_PAD, WM_EDIT_RECT[1] + UI_FRAME_TITLE_HEIGHT)
+            status = (WM_EDIT_RECT[0] + UI_FRAME_PAD,
+                      WM_EDIT_RECT[1] + WM_EDIT_RECT[3] - CELL_HEIGHT)
+
+            picture = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.text_at(*body, "hello", EDIT_INK_RGB, EDIT_PAPER_RGB),
+            )
+            expect(
+                "the keys go to the window with the focus",
+                picture is not None
+                and picture.text_at(*body, "hello", EDIT_INK_RGB, EDIT_PAPER_RGB),
+                "the editor did not draw the keys the server forwarded",
+            )
+            expect(
+                "the status line of the editor is the modified document",
+                picture is not None
+                and picture.text_at(*status, "edit [modified]", EDIT_DIM_INK_RGB, EDIT_BAR_RGB),
+                "the status line does not say that the document changed",
+            )
+
+            # The file is written by the client and the line of the answer is
+            # the status line of its window: the desktop has no console.
+            machine.keys(["ctrl-s"])
+
+            picture = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.text_at(*status, "saved 5 bytes", EDIT_DIM_INK_RGB,
+                                          EDIT_BAR_RGB),
+            )
+            expect(
+                "the editor saves the document with Ctrl+S",
+                picture is not None
+                and picture.text_at(*status, "saved 5 bytes", EDIT_DIM_INK_RGB, EDIT_BAR_RGB),
+                "the status line of the editor does not say that it saved the file",
+            )
+
+            # --- the bar of the title is not a trail of the pointer --------
+            #
+            # Every place the pointer leaves is painted again, and the part of
+            # the bar that is past the title has to be the paper of the bar: a
+            # row of fragments there was the strip of the buffer read at the
+            # column of the damage instead of the column of the row.
+            goto(machine, 600, WM_EDIT_RECT[1] + 10)
+            for _ in range(5):
+                machine.monitor_command("mouse_move -100 0")
+                time.sleep(0.15)
+            goto(machine, 640, 600)
+
+            picture = settled_picture(machine, workdir, lambda seen: True)
+            expect(
+                "the pointer leaves no fragment in the bar of the title",
+                picture is not None
+                and not stray_pixels(
+                    picture,
+                    WM_EDIT_RECT[0] + 184,
+                    WM_EDIT_RECT[1] + UI_TITLE_Y,
+                    WM_EDIT_RECT[0] + WM_EDIT_RECT[2] - 24,
+                    WM_EDIT_RECT[1] + UI_TITLE_Y + CELL_HEIGHT,
+                    EDIT_BAR_RGB,
+                ),
+                "the bar of the title of the editor holds pixels that are not its paper",
+            )
+
+            # --- the modal of the unsaved file leaves no fragment ----------
+            #
+            # The dialog is a window of the editor in the middle of its own
+            # rectangle: 44 cells wide, the frame and three lines.
+            modal = (
+                WM_EDIT_RECT[0] + (WM_EDIT_RECT[2] - 44 * CELL_WIDTH) // 2,
+                WM_EDIT_RECT[1] + (WM_EDIT_RECT[3] - (UI_FRAME_TITLE_HEIGHT + 3 * CELL_HEIGHT)) // 2,
+            )
+            machine.keys(["x"])
+            machine.keys(["ctrl-q"])
+            picture = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.text_at(modal[0] + UI_FRAME_PAD, modal[1] + UI_TITLE_Y,
+                                          "unsaved changes", EDIT_TITLE_INK_RGB, EDIT_BAR_RGB),
+            )
+            expect(
+                "Ctrl+Q asks about the unsaved file in a modal window",
+                picture is not None
+                and picture.text_at(modal[0] + UI_FRAME_PAD, modal[1] + UI_TITLE_Y,
+                                    "unsaved changes", EDIT_TITLE_INK_RGB, EDIT_BAR_RGB),
+                "the question about the unsaved file is not on the picture",
+            )
+
+            machine.keys(["n"])
+            time.sleep(0.5)
+            goto(machine, 640, 600)
+            picture = settled_picture(
+                machine,
+                workdir,
+                lambda seen: not stray_pixels(
+                    seen,
+                    WM_EDIT_RECT[0] + 184,
+                    WM_EDIT_RECT[1] + UI_TITLE_Y,
+                    WM_EDIT_RECT[0] + WM_EDIT_RECT[2] - 24,
+                    WM_EDIT_RECT[1] + UI_TITLE_Y + CELL_HEIGHT,
+                    EDIT_BAR_RGB,
+                ),
+            )
+            expect(
+                "the modal leaves no fragment in the bar of the title",
+                picture is not None
+                and not stray_pixels(
+                    picture,
+                    WM_EDIT_RECT[0] + 184,
+                    WM_EDIT_RECT[1] + UI_TITLE_Y,
+                    WM_EDIT_RECT[0] + WM_EDIT_RECT[2] - 24,
+                    WM_EDIT_RECT[1] + UI_TITLE_Y + CELL_HEIGHT,
+                    EDIT_BAR_RGB,
+                ),
+                "the bar of the title of the editor holds pixels that are not its paper",
+            )
+            expect(
+                "the answer of the modal keeps the document",
+                picture is not None
+                and picture.text_at(*body, "hello", EDIT_INK_RGB, EDIT_PAPER_RGB),
+                "the text of the document went away with the modal",
+            )
+
+            # The document is saved again, so the title of the window is the
+            # name of the file and the drags below have one string to match.
+            machine.keys(["ctrl-s"])
+            picture = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.text_at(*status, "saved 6 bytes", EDIT_DIM_INK_RGB,
+                                          EDIT_BAR_RGB),
+            )
+            expect(
+                "the editor saves the document again",
+                picture is not None
+                and picture.text_at(*status, "saved 6 bytes", EDIT_DIM_INK_RGB, EDIT_BAR_RGB),
+                "the status line of the editor does not say that it saved six bytes",
+            )
+
+            # --- a drag of the title bar moves the window ------------------
+            goto(machine, 300, WM_EDIT_RECT[1] + 10)
+            machine.monitor_command("mouse_button 1")
+            time.sleep(0.2)
+            for _ in range(2):
+                machine.monitor_command("mouse_move 50 25")
+                time.sleep(0.15)
+            machine.monitor_command("mouse_button 0")
+            time.sleep(0.4)
+
+            expect(
+                "a drag of the title bar moves the window",
+                machine.wait_serial("wm: move edit - /doc.txt to 140,90", timeout),
+                "the server did not say that the editor moved to 140,90",
+            )
+
+            moved = (140, 90, WM_EDIT_RECT[2], WM_EDIT_RECT[3])
+            picture = settled_picture(machine, workdir, lambda seen: title_at(seen, moved))
+            expect(
+                "the window is drawn at its new rectangle",
+                picture is not None and title_at(picture, moved),
+                "the title of the editor is not at 140,90",
+            )
+            expect(
+                "the place it left is the wallpaper again",
+                picture is not None
+                and desk_at(picture, WM_EDIT_RECT[0] + 4, WM_EDIT_RECT[1] + 2),
+                "the old rectangle of the editor is still painted",
+            )
+
+            # --- a window dragged to an edge keeps its head ----------------
+            #
+            # The bar of the title is the handle of a window: a window pulled
+            # past the top-left corner loses the part of itself that is outside
+            # the picture and keeps the bar, so a person can drag it back. The
+            # window is at 140,90 now and the grab is near the right end of its
+            # bar, so the pointer can pull it past the corner.
+            goto(machine, 740, 100)
+            machine.monitor_command("mouse_button 1")
+            time.sleep(0.2)
+            for _ in range(5):
+                machine.monitor_command("mouse_move -200 -200")
+                time.sleep(0.15)
+            machine.monitor_command("mouse_button 0")
+            time.sleep(0.5)
+
+            expect(
+                "a window dragged past the corner keeps its bar on the picture",
+                machine.wait_serial(f"wm: move edit - /doc.txt to -{WM_EDIT_RECT[2] - WM_TITLE_KEEP},0",
+                                    timeout),
+                "the server did not keep the bar of the title on the picture",
+            )
+
+            picture = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.pixel(10, 5) == EDIT_BAR_RGB
+                and seen.pixel(0, 0) == WM_CURSOR_RGB,
+            )
+            expect(
+                "the bar of the title is at the top of the picture",
+                picture is not None and picture.pixel(10, 5) == EDIT_BAR_RGB,
+                "the corner of the picture holds no bar of a title",
+            )
+            expect(
+                "the pointer of the corner is in the picture",
+                picture is not None and picture.pixel(0, 0) == WM_CURSOR_RGB,
+                "the pointer of the corner is not on the picture",
+            )
+
+            # The sliver of the bar that is left is the handle: drag it back.
+            goto(machine, 20, 8)
+            machine.monitor_command("mouse_button 1")
+            time.sleep(0.2)
+            for _ in range(2):
+                machine.monitor_command("mouse_move 300 200")
+                time.sleep(0.15)
+            machine.monitor_command("mouse_button 0")
+            time.sleep(0.5)
+            expect(
+                "a window of the corner comes back by its bar",
+                machine.wait_serial("wm: move edit - /doc.txt to 24,400", timeout),
+                "the drag of the sliver of the bar moved the window somewhere else",
+            )
+
+            # And the same bar puts it back where the test knows it.
+            goto(machine, 124, 410)
+            machine.monitor_command("mouse_button 1")
+            time.sleep(0.2)
+            machine.monitor_command("mouse_move 16 -200")
+            time.sleep(0.15)
+            machine.monitor_command("mouse_move 0 -160")
+            time.sleep(0.15)
+            machine.monitor_command("mouse_button 0")
+            time.sleep(0.5)
+
+            # The pointer is over the bar it dragged: it goes away before the
+            # picture is read, because a cursor over the title hides a letter.
+            goto(machine, 640, 600)
+            picture = settled_picture(machine, workdir, lambda seen: title_at(seen, WM_EDIT_RECT))
+            expect(
+                "the bar of the title puts the window back",
+                picture is not None and title_at(picture, WM_EDIT_RECT),
+                "the editor is not back at its first rectangle",
+            )
+
+            # --- a window that hangs past the bottom comes back inside ----
+            #
+            # The bar of a window may hang over the bottom of the picture (the
+            # drag keeps the bar and not the body); a window of that shape is
+            # put away from the panel and the panel brings it back, and it
+            # comes back at a rectangle that fits, because the model of a
+            # window refuses a rectangle that is not a part of the screen.
+            goto(machine, 300, 50)
+            machine.monitor_command("mouse_button 1")
+            time.sleep(0.2)
+            machine.monitor_command("mouse_move 0 200")
+            time.sleep(0.15)
+            machine.monitor_command("mouse_move 0 200")
+            time.sleep(0.15)
+            machine.monitor_command("mouse_move 0 200")
+            time.sleep(0.15)
+            machine.monitor_command("mouse_move 0 100")
+            time.sleep(0.15)
+            machine.monitor_command("mouse_button 0")
+            time.sleep(0.5)
+
+            expect(
+                "a window can hang past the bottom of the picture",
+                machine.wait_serial("wm: move edit - /doc.txt to 40,740", timeout),
+                "the drag did not put the window at 40,740",
+            )
+
+            goto(machine, 50, VBE_HEIGHT - 14)
+            click(machine)
+            expect(
+                "the panel puts a window of the bottom away",
+                machine.wait_serial("wm: put away edit", timeout),
+                "the server did not put the editor away",
+            )
+            goto(machine, 50, VBE_HEIGHT - 14)
+            click(machine)
+            expect(
+                "the panel brings it back inside the picture",
+                machine.wait_serial("wm: restore edit", timeout),
+                "the server did not bring the editor back",
+            )
+
+            goto(machine, 640, 600)
+            back = (WM_EDIT_RECT[0], VBE_HEIGHT - WM_PANEL_HEIGHT - WM_EDIT_RECT[3],
+                    WM_EDIT_RECT[2], WM_EDIT_RECT[3])
+            picture = settled_picture(machine, workdir, lambda seen: title_at(seen, back))
+            expect(
+                "the window of the bottom comes back on the picture",
+                picture is not None and title_at(picture, back),
+                f"the title of the editor is not at {back[0]},{back[1]}",
+            )
+
+            # --- a raise puts a window over the one that covered it ---------
+            #
+            # The default desktop keeps the two windows apart (a raise must not
+            # blank the text of the other window); the stacking is still the
+            # rule, and a person who puts one window over another gets it. The
+            # status line of the file manager is the pixel to read: it is blue
+            # when the file manager is on top of the editor and black when the
+            # editor is.
+            goto(machine, 300, 365)
+            machine.monitor_command("mouse_button 1")
+            time.sleep(0.2)
+            machine.monitor_command("mouse_move 200 -56")
+            time.sleep(0.15)
+            machine.monitor_command("mouse_move 200 0")
+            time.sleep(0.15)
+            machine.monitor_command("mouse_move 160 0")
+            time.sleep(0.15)
+            machine.monitor_command("mouse_button 0")
+            time.sleep(0.5)
+
+            expect(
+                "a window can be put over another one",
+                machine.wait_serial("wm: move edit - /doc.txt to 600,300", timeout),
+                "the drag did not put the editor over the file manager",
+            )
+
+            goto(machine, 900, 400)
+            overlap = (WM_FM_RECT[0] + UI_FRAME_PAD, WM_FM_RECT[1] + WM_FM_RECT[3] - 10)
+            picture = settled_picture(
+                machine, workdir, lambda seen: seen.pixel(*overlap) == EDIT_PAPER_RGB
+            )
+            expect(
+                "the window that was dragged last covers the other one",
+                picture is not None and picture.pixel(*overlap) == EDIT_PAPER_RGB,
+                f"the pixel {overlap} of the file manager is not the paper of the editor",
+            )
+
+            goto(machine, 900, 210)
+            click(machine)
+            expect(
+                "a click raises the window over the one that covered it",
+                machine.wait_serial("wm: raise fm", timeout),
+                "the server did not raise the file manager",
+            )
+
+            goto(machine, 640, 700)
+            picture = settled_picture(
+                machine, workdir, lambda seen: seen.pixel(*overlap) == FM_BAR_RGB
+            )
+            expect(
+                "the window that was raised is the one of the two that is drawn",
+                picture is not None and picture.pixel(*overlap) == FM_BAR_RGB,
+                f"the pixel {overlap} is not the line of status of the file manager",
+            )
+
+            # --- the pointer stays in the picture at both corners ----------
+            for _ in range(12):
+                machine.monitor_command("mouse_move 250 250")
+                time.sleep(0.02)
+            picture = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.pixel(VBE_WIDTH - 12, VBE_HEIGHT - 15) == WM_CURSOR_RGB,
+            )
+            expect(
+                "the pointer stays in the picture at the far corner",
+                picture is not None
+                and picture.pixel(VBE_WIDTH - 12, VBE_HEIGHT - 15) == WM_CURSOR_RGB,
+                "the pointer of the far corner is not on the picture",
+            )
+
+            # --- a click on the file manager and Alt+F4 --------------------
+            goto(machine, 900, 500)
+            click(machine)
+            expect(
+                "a click raises the file manager",
+                machine.wait_serial("wm: raise fm", timeout),
+                "the server did not raise the file manager",
+            )
+
+            # --- the button of the panel acts on the release ---------------
+            #
+            # A press that slides away is a press of nothing: the window of a
+            # button of the panel goes away when the button comes up on the
+            # button, and not when a finger touches it.
+            put_away = machine.read_serial().count("wm: put away")
+            goto(machine, 50, VBE_HEIGHT - 14)
+            machine.monitor_command("mouse_button 1")
+            time.sleep(0.2)
+            machine.monitor_command("mouse_move 300 0")
+            time.sleep(0.2)
+            machine.monitor_command("mouse_button 0")
+            time.sleep(0.6)
+            expect(
+                "a press that slides off the panel does nothing",
+                machine.read_serial().count("wm: put away") == put_away,
+                "the window went away although the release was not on the button",
+            )
+
+            goto(machine, 50, VBE_HEIGHT - 14)
+            click(machine)
+            expect(
+                "a click on the button of the panel puts the window away",
+                machine.wait_serial("wm: put away edit", timeout),
+                "the server did not put the editor away",
+            )
+
+            picture = settled_picture(
+                machine,
+                workdir,
+                lambda seen: desk_at(seen, WM_EDIT_RECT[0] + 20, WM_EDIT_RECT[1] + 60),
+            )
+            expect(
+                "the window that is put away leaves the picture",
+                picture is not None
+                and desk_at(picture, WM_EDIT_RECT[0] + 20, WM_EDIT_RECT[1] + 60),
+                "the rectangle of the editor is still painted",
+            )
+
+            goto(machine, 50, VBE_HEIGHT - 14)
+            click(machine)
+            expect(
+                "a click on the button of the panel brings it back",
+                machine.wait_serial("wm: restore edit", timeout),
+                "the server did not bring the editor back",
+            )
+
+            # --- the square of closing of the panel closes a window --------
+            #
+            # The cross of the button is the second way out of a window, and
+            # the one that works when the bar of its title is out of reach.
+            button_w = len("edit - /doc.txt") * CELL_WIDTH + 12 + WM_PANEL_CLOSE + 2
+            cross_x = 8 + button_w - WM_PANEL_CLOSE - 1 + WM_PANEL_CLOSE // 2
+            goto(machine, cross_x, VBE_HEIGHT - 14)
+            click(machine)
+
+            expect(
+                "the square of the panel asks the window to leave",
+                machine.wait_serial("wm: ask to leave edit", timeout),
+                "the cross of the panel did not ask the editor to leave",
+            )
+            expect(
+                "the square of the panel closes the window",
+                machine.wait_serial("wm: close edit", timeout),
+                "the editor did not close its window",
+            )
+
+            empty = (WM_EDIT_RECT[0] + 20, WM_EDIT_RECT[1] + 60)
+            picture = settled_picture(
+                machine, workdir, lambda seen: desk_at(seen, *empty)
+            )
+            expect(
+                "the rectangle of the closed window is the wallpaper",
+                picture is not None and desk_at(picture, *empty),
+                f"the pixel {empty} of the closed window is "
+                f"{picture.pixel(*empty) if picture else None}",
+            )
+            expect(
+                "the focus goes back to the window that is left",
+                picture is not None
+                and picture.pixel(WM_FM_RECT[0] - 1, WM_FM_RECT[1] - 1) == WM_FOCUS_RGB,
+                "the ring of the focus is not around the file manager",
+            )
+
+            # --- Alt+F4 closes the last window and the desktop -------------
+            machine.keys(["alt-f4"])
+            expect(
+                "Alt+F4 asks the window with the focus to leave",
+                machine.wait_serial("wm: ask to leave fm - /", timeout),
+                "the server did not forward the close to the file manager",
+            )
+            expect(
+                "the file manager leaves",
+                machine.wait_serial("wm: close fm - /", timeout),
+                "the file manager did not close its window",
+            )
+            expect(
+                "the last window ends the desktop",
+                machine.wait_serial("wm: the desktop is closed", timeout),
+                "the server did not close the desktop",
+            )
+            expect(
+                "the shell has its screen back",
+                machine.wait_serial(PROMPT, timeout),
+                "the prompt of the shell never came back",
+            )
+            expect(
+                "the file the editor typed is the file of the volume",
+                machine.run_line("cat /doc.txt", timeout),
+                "cat /doc.txt did not answer",
+            )
+
+            text = machine.read_serial()
+            expect(
+                "the line the editor typed is the line of the file",
+                "hello" in text.split("cat /doc.txt")[-1],
+                "the file does not hold the word the keys typed",
+            )
+
+            console = machine.picture(workdir)
+            expect(
+                "the console of the kernel is the picture again",
+                console is not None and console.pixel(4, 4) == BLACK,
+                "the picture after the desktop is not the console",
+            )
+
+            # --- the light theme of /etc/console ---------------------------
+            #
+            # The desktop reads the `theme` of /etc/console at its start, as
+            # the console does: one word of the file and the desk, the windows
+            # and the panel are the light palette, which is the proof that the
+            # colours are roles and not numbers written into a program.
+            expect(
+                "the console takes the light theme",
+                machine.run_line("config set console.theme light", timeout),
+                "config did not answer for the light theme",
+            )
+
+            machine.type_line("exec /bin/wm")
+            expect(
+                "the desktop of the light theme starts",
+                machine.wait_serial("wm: the palette is light", timeout),
+                "the server did not take the theme of /etc/console",
+            )
+            expect(
+                "the windows of the light desktop are up",
+                machine.wait_serial("wm: the desktop is up", timeout),
+                "the server never said that its windows were up in the light theme",
+            )
+
+            picture = settled_picture(
+                machine,
+                workdir,
+                lambda seen: seen.pixel(4, 4) == WALL_TOP_LIGHT_RGB
+                and seen.pixel(WM_EDIT_RECT[0] + 20, WM_EDIT_RECT[1] + 60)
+                == palette_rgb(255, 255, 255),
+            )
+            expect(
+                "the light theme is the gradient of the desk",
+                picture is not None
+                and picture.pixel(4, 4) == WALL_TOP_LIGHT_RGB
+                and picture.pixel(4, 770) == WALL_BOTTOM_LIGHT_RGB
+                and picture.pixel(4, 4) != picture.pixel(4, 770),
+                "the desk of the light theme is not the light gradient",
+            )
+            expect(
+                "the light theme is the surface of the panel",
+                picture is not None and picture.pixel(4, VBE_HEIGHT - 4) == PANEL_LIGHT_RGB,
+                "the panel of the light theme is not its surface",
+            )
+            expect(
+                "the light theme is the sheet of a window",
+                picture is not None
+                and picture.pixel(WM_EDIT_RECT[0] + 20, WM_EDIT_RECT[1] + 60)
+                == palette_rgb(255, 255, 255),
+                "the body of the editor of the light theme is not white",
+            )
+
+            machine.keys(["alt-f4"])
+            expect(
+                "the light desktop closes a window",
+                machine.wait_serial("wm: close fm - /", timeout),
+                "the file manager of the light theme did not close",
+            )
+            machine.keys(["alt-f4"])
+            expect(
+                "the light desktop closes its last window",
+                machine.wait_serial("wm: the desktop is closed", timeout),
+                "the desktop of the light theme did not end",
+            )
+            expect(
+                "the shell has its screen back after the light theme",
+                machine.wait_serial(PROMPT, timeout),
+                "the prompt of the shell never came back after the light desktop",
+            )
+        finally:
+            machine.close()
+
+    return checks
 
 
 def run_text(loader: str, kernel: str, timeout: float, verbose: bool, display: str) -> list:
@@ -2122,6 +3136,7 @@ def main(argv: list) -> int:
         checks += run_ui(loader, kernel, args.image, args.timeout, args.verbose, args.display)
         checks += run_editor(loader, kernel, args.image, args.timeout, args.verbose, args.display)
         checks += run_fm(loader, kernel, args.image, args.timeout, args.verbose, args.display)
+        checks += run_desktop(loader, kernel, args.image, args.timeout, args.verbose, args.display)
         checks += run_text(loader, kernel, args.timeout, args.verbose, args.display)
     except FileNotFoundError:
         print("qemu-system-x86_64 is not installed", file=sys.stderr)

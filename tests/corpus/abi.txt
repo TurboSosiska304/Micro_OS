@@ -32,7 +32,7 @@
 # second door of stat, ADR 0013).
 
 # The number of the calls, compared with ksys_count().
-count 48
+count 51
 
 # The table: number name arity result.
 #
@@ -95,6 +95,9 @@ ksys 44 mmap 6 ptr
 ksys 45 munmap 2 int
 ksys 46 msync 2 int
 ksys 47 brk 1 ssize
+ksys 48 chdir 1 int
+ksys 49 clock_gettime 2 int
+ksys 50 getrusage 1 int
 
 # The errors (kernel/errno.h). EEXIST and ESRCH share the number -3, which is
 # why there are two names on one line of the header: the frozen table had the
@@ -176,6 +179,11 @@ const KSYS_MAP_PRIVATE 2
 const KSYS_MAP_ANONYMOUS 4
 const KSYS_PAGE_SIZE 4096
 
+# The two clocks of the call 49 (kernel/ksys.h). The numbers are the ones of
+# POSIX, so a program that knows the one contract knows the other.
+const KSYS_CLOCK_REALTIME 0
+const KSYS_CLOCK_MONOTONIC 1
+
 # The header of a program image (kernel/exec.h): the magic as the four bytes
 # of the file read as a little-endian word, the version, the size of the
 # header, the numbers of the machines and the ceiling of the zeroed part.
@@ -200,6 +208,7 @@ offset 8 vfs_stat owner 20
 size 8 vfs_statx 40
 offset 8 vfs_statx inode 0
 offset 8 vfs_statx type 4
+offset 8 vfs_statx group 6
 offset 8 vfs_statx size 8
 offset 8 vfs_statx mode 16
 offset 8 vfs_statx owner 20
@@ -216,6 +225,17 @@ size 8 ksys_pollfd 8
 offset 8 ksys_pollfd fd 0
 offset 8 ksys_pollfd events 4
 offset 8 ksys_pollfd revents 6
+
+# The two words of the clock and of the use of the processor are 64 bits wide
+# on both machines: the seconds of Unix do not fit 32 bits after 2038, and a
+# 32-bit program translates them into its own structure in the library.
+size 8 ksys_timespec 16
+offset 8 ksys_timespec tv_sec 0
+offset 8 ksys_timespec tv_nsec 8
+
+size 8 ksys_rusage 16
+offset 8 ksys_rusage utime_ms 0
+offset 8 ksys_rusage stime_ms 8
 
 size 8 k_exec_image 72
 offset 8 k_exec_image data 0
@@ -240,14 +260,15 @@ offset 4 vfs_stat size 8
 offset 4 vfs_stat mode 16
 offset 4 vfs_stat owner 20
 
-size 4 vfs_statx 40
+size 4 vfs_statx 48
 offset 4 vfs_statx inode 0
 offset 4 vfs_statx type 4
 offset 4 vfs_statx size 8
 offset 4 vfs_statx mode 16
 offset 4 vfs_statx owner 20
-offset 4 vfs_statx mtime 24
-offset 4 vfs_statx ctime 32
+offset 4 vfs_statx group 24
+offset 4 vfs_statx mtime 32
+offset 4 vfs_statx ctime 40
 
 size 4 vfs_dirent 56
 offset 4 vfs_dirent name 0
@@ -259,6 +280,14 @@ size 4 ksys_pollfd 8
 offset 4 ksys_pollfd fd 0
 offset 4 ksys_pollfd events 4
 offset 4 ksys_pollfd revents 6
+
+size 4 ksys_timespec 16
+offset 4 ksys_timespec tv_sec 0
+offset 4 ksys_timespec tv_nsec 8
+
+size 4 ksys_rusage 16
+offset 4 ksys_rusage utime_ms 0
+offset 4 ksys_rusage stime_ms 8
 
 size 4 k_exec_image 36
 offset 4 k_exec_image data 0

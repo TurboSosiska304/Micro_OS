@@ -42,6 +42,7 @@ static void run_tests(void *arg)
     test_exec();
     test_fuzz();
     test_mfs();
+    test_mfs_format();
     test_mfs_persistence();
     test_mfs_repair();
     test_mfs_many();
@@ -54,7 +55,11 @@ static void run_tests(void *arg)
     test_sysfs();
     test_ui();
     test_ui_windows();
+    test_ui_palette();
+    test_ui_wm();
+    test_fb_ops();
     test_input_debounce();
+    test_ps2();
     test_battery_soc();
     test_fb_draw();
     test_rtc();

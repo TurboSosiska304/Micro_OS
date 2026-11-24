@@ -486,6 +486,16 @@ add_libc_program(mmap SOURCES "${LIBC_USER_DIR}/src/unistd_ext.c"
                               "${LIBC_USER_DIR}/src/stat.c")
 add_libc_program(big)
 
+# The lane of 1.8: the directory of the task is the kernel's (call 48), so a
+# program moves it and its child starts there; the heap of a program grows
+# with `brk`, so a window of 800 by 600 pixels does not need a constant of the
+# build; and the memory limit of the task is what the new heap is charged to.
+add_libc_program(chdir SOURCES "${LIBC_USER_DIR}/src/unistd_ext.c"
+                              "${LIBC_USER_DIR}/src/stat.c")
+add_libc_program(heap SOURCES "${LIBC_USER_DIR}/src/malloc.c")
+add_libc_program(limit SOURCES "${LIBC_USER_DIR}/src/malloc.c"
+                               "${LIBC_USER_DIR}/src/resource.c")
+
 # --- the interface: /bin/ui (ADR 0028) and the programs of ADR 0030 ---------
 #
 # The first program of the skeleton: two devices of the devfs, a panel, a list
@@ -500,7 +510,9 @@ add_libc_program(big)
 # programs that use it whole. `programs/uiprog.c` is the port's half - the
 # writes of /dev/fb0 cut into transfers - so the library stays portable.
 set(UI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui")
-set(UI_INCLUDES "${UI_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}/include")
+set(UI_INCLUDES "${UI_DIR}/include" "${UI_DIR}/client/include"
+                "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
 
 add_libc_program(ui
     MAIN "${PROGRAM_DIR}/ui.c"
@@ -515,9 +527,37 @@ add_libc_program(edit
     SOURCES "${PROGRAM_DIR}/uiprog.c"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/font_spleen.c"
             "${LIBC_USER_DIR}/src/usleep.c"
+            "${LIBC_USER_DIR}/src/unistd_ext.c"
+            "${LIBC_USER_DIR}/src/stat.c"
             "${UI_DIR}/src/window.c"
             "${UI_DIR}/src/draw.c"
+            "${UI_DIR}/src/palette.c"
             "${UI_DIR}/src/keyboard.c"
+            "${UI_DIR}/client/src/wm_protocol.c"
+            "${UI_DIR}/client/src/wm_client.c"
+    INCLUDES ${UI_INCLUDES}
+)
+
+# --- /bin/wm, the server of the desktop (1.7, docs/desktop.md) --------------
+#
+# The program that owns the screen: it paints the wallpaper, the panel and the
+# pointer, starts its clients with fork and execve, and copies the buffer of
+# every window into the picture. The protocol and the client of it are
+# `components/ui/client` - portable and tested on the host - and this program
+# is the server of that contract plus the picture of the machine.
+add_libc_program(wm
+    MAIN "${PROGRAM_DIR}/wm.c"
+    SOURCES "${PROGRAM_DIR}/uiprog.c"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/font_spleen.c"
+            "${LIBC_USER_DIR}/src/usleep.c"
+            "${LIBC_USER_DIR}/src/unistd_ext.c"
+            "${LIBC_USER_DIR}/src/stat.c"
+            "${UI_DIR}/src/window.c"
+            "${UI_DIR}/src/draw.c"
+            "${UI_DIR}/src/palette.c"
+            "${UI_DIR}/src/keyboard.c"
+            "${UI_DIR}/client/src/wm_protocol.c"
+            "${UI_DIR}/client/src/wm_client.c"
     INCLUDES ${UI_INCLUDES}
 )
 
@@ -526,11 +566,16 @@ add_libc_program(fm
     SOURCES "${PROGRAM_DIR}/uiprog.c"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/font_spleen.c"
             "${LIBC_USER_DIR}/src/usleep.c"
+            "${LIBC_USER_DIR}/src/unistd_ext.c"
+            "${LIBC_USER_DIR}/src/stat.c"
             "${LIBC_USER_DIR}/src/dirent.c"
             "${LIBC_USER_DIR}/src/malloc.c"
             "${UI_DIR}/src/window.c"
             "${UI_DIR}/src/draw.c"
+            "${UI_DIR}/src/palette.c"
             "${UI_DIR}/src/keyboard.c"
+            "${UI_DIR}/client/src/wm_protocol.c"
+            "${UI_DIR}/client/src/wm_client.c"
     INCLUDES ${UI_INCLUDES}
 )
 
@@ -1284,6 +1329,15 @@ set(SQLITE_LIBC_SOURCES
     "${LIBC_USER_DIR}/src/math.c"
     "${LIBC_USER_DIR}/src/sscanf.c"
     "${LIBC_USER_DIR}/src/unsupported.c"
+    # The environment the shell grows (setenv/unsetenv), the canonical name
+    # of a path (its `.archive` and realpath()), the reverse of strftime and
+    # the names of a pattern: the files of the POSIX edge of the library that
+    # the shell of the release may reach. The linker takes the objects the
+    # program names, and these four are small.
+    "${LIBC_USER_DIR}/src/env.c"
+    "${LIBC_USER_DIR}/src/realpath.c"
+    "${LIBC_USER_DIR}/src/strptime.c"
+    "${LIBC_USER_DIR}/src/glob.c"
     "${LIBC_USER_DIR}/src/gettimeofday.c"
     "${LIBC_USER_DIR}/src/resource.c"
     "${LIBC_USER_DIR}/src/usleep.c"
@@ -1401,6 +1455,7 @@ add_executable(microos64
     src/console.c
     src/vga.c
     src/vbe.c
+    src/gop.c
     src/fb.c
     src/font_spleen.c
     src/pci.c
@@ -1421,6 +1476,8 @@ add_executable(microos64
     src/blockdev_ram.c
     src/blockdev_module.c
     src/ata.c
+    src/virtio.c
+    src/virtio_blk.c
     src/virtio_net.c
     src/net.c
     src/libc_shim.c
@@ -1675,6 +1732,78 @@ add_custom_command(
     COMMENT "signing the flat image of the kernel"
     VERBATIM
 )
+
+# --- the loader of a UEFI machine -------------------------------------------
+#
+# The firmware of a laptop reads one format: a PE/COFF application, the
+# subsystem 10 of the specification, entered with the convention of the x86-64
+# Windows ABI. The build writes it with the compiler of the host, because that
+# compiler knows the target: clang has the triple of the Windows machine and
+# lld-link lays the sections and the header out (loader/uefi). GNU ld has an
+# emulation for PE as well and writes a header a firmware does not read, which
+# is why the two tools are asked for by name and the target says what is
+# missing instead of building an image that does not boot.
+#
+# The loader links nothing: no libc, no header of a system, and the twenty
+# kilobytes of its own runtime (loader/uefi/uefi_loader.c).
+find_program(MICROOS_UEFI_CC NAMES clang)
+find_program(MICROOS_UEFI_LD NAMES lld-link)
+
+set(UEFI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/loader/uefi")
+
+set(UEFI_CFLAGS
+    -target x86_64-pc-windows-msvc
+    -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-red-zone
+    -mno-sse -mno-mmx -mno-80387
+    -Wall -Wextra -Werror
+    -I "${UEFI_DIR}" -I "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+
+set(UEFI_OBJECTS "${CMAKE_BINARY_DIR}/uefi_loader.obj" "${CMAKE_BINARY_DIR}/uefi_enter.obj")
+
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/uefi_loader.obj"
+    COMMAND ${MICROOS_UEFI_CC} ${UEFI_CFLAGS} -c "${UEFI_DIR}/uefi_loader.c"
+            -o "${CMAKE_BINARY_DIR}/uefi_loader.obj"
+    DEPENDS "${UEFI_DIR}/uefi_loader.c" "${UEFI_DIR}/efi.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/include/port_x86_64_boot.h"
+    COMMENT "compiling the loader of a UEFI machine"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/uefi_enter.obj"
+    COMMAND ${MICROOS_UEFI_CC} -target x86_64-pc-windows-msvc -mno-red-zone -c
+            "${UEFI_DIR}/uefi_enter.S" -o "${CMAKE_BINARY_DIR}/uefi_enter.obj"
+    DEPENDS "${UEFI_DIR}/uefi_enter.S"
+    COMMENT "assembling the jump of the UEFI loader"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/BOOTX64.EFI"
+    COMMAND ${MICROOS_UEFI_LD}
+            /subsystem:efi_application /entry:efi_main /nodefaultlib
+            /machine:x64 /base:0x10000000 /debug:none
+            /out:${CMAKE_BINARY_DIR}/BOOTX64.EFI ${UEFI_OBJECTS}
+    DEPENDS ${UEFI_OBJECTS}
+    COMMENT "linking BOOTX64.EFI"
+    VERBATIM
+)
+
+# The two loaders of the port: the multiboot image of the BIOS path and the
+# application of a firmware. `make uefi` builds the second and the ESP that
+# carries it; `make x86-build` the first.
+if(MICROOS_UEFI_CC AND MICROOS_UEFI_LD)
+    add_custom_target(uefi DEPENDS "${CMAKE_BINARY_DIR}/BOOTX64.EFI"
+        COMMENT "the loader of a UEFI machine")
+else()
+    add_custom_target(uefi
+        COMMAND ${CMAKE_COMMAND} -E echo
+                "uefi: clang and lld-link are needed for BOOTX64.EFI (Arch: pacman -S clang lld)"
+        COMMAND ${CMAKE_COMMAND} -E false
+        COMMENT "the loader of a UEFI machine")
+endif()
 
 add_custom_target(image
     DEPENDS "${CMAKE_BINARY_DIR}/microos64.bin" "${CMAKE_BINARY_DIR}/loader32.elf"
