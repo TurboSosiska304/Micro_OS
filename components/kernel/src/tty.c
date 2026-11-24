@@ -637,13 +637,31 @@ static bool user_range(k_u64_t address, k_size_t size)
     return k_port_exec_contains((const void *)(uintptr_t)address, size);
 }
 
+/* The window of a copy through a pointer of a program (ADR 0052): a processor
+ * with SMAP refuses a supervisor access to a page of ring 3 unless AC is set,
+ * and a request of this file moves a `struct termios` or a few numbers in one
+ * direction or the other. */
+static void tty_copy_to_user(k_u64_t address, const void *source, k_size_t size)
+{
+    k_port_exec_user_access_begin();
+    memcpy((void *)(uintptr_t)address, source, size);
+    k_port_exec_user_access_end();
+}
+
+static void tty_copy_from_user(void *destination, k_u64_t address, k_size_t size)
+{
+    k_port_exec_user_access_begin();
+    memcpy(destination, (const void *)(uintptr_t)address, size);
+    k_port_exec_user_access_end();
+}
+
 static int tty_get_termios(struct k_tty *tty, k_u64_t arg)
 {
     if (!user_range(arg, sizeof(tty->mode))) {
         return KERR_FAULT;
     }
 
-    memcpy((void *)(uintptr_t)arg, &tty->mode, sizeof(tty->mode));
+    tty_copy_to_user(arg, &tty->mode, sizeof(tty->mode));
 
     return 0;
 }
@@ -657,7 +675,7 @@ static int tty_set_termios(struct k_tty *tty, k_u64_t arg, bool flush)
         return KERR_FAULT;
     }
 
-    memcpy(&mode, (const void *)(uintptr_t)arg, sizeof(mode));
+    tty_copy_from_user(&mode, arg, sizeof(mode));
 
     /*
      * The canonical line being typed does not survive a change of the mode:
@@ -704,7 +722,7 @@ static int tty_get_winsize(k_u64_t arg)
         k_port_console_size(&size.ws_row, &size.ws_col);
     }
 
-    memcpy((void *)(uintptr_t)arg, &size, sizeof(size));
+    tty_copy_to_user(arg, &size, sizeof(size));
 
     return 0;
 }
@@ -745,7 +763,7 @@ int k_tty_ioctl(k_u32_t request, k_u64_t arg)
             count += (k_i32_t)(tty->length - tty->position);
         }
 
-        memcpy((void *)(uintptr_t)arg, &count, sizeof(count));
+        tty_copy_to_user(arg, &count, sizeof(count));
         return 0;
     }
     default:

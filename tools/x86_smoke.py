@@ -58,6 +58,15 @@ from qemu_session import DISKS, drive_args, root_name
 # transcript name the device of the run and nothing else changes.
 DISK = "ide"
 
+# The processor of the run, set by `--cpu`. Empty is the machine of every
+# release: QEMU's own default, which has neither SMEP nor SMAP, and the
+# supervisor bit of every kernel page is the boundary (ADR 0052). A run with
+# `--cpu qemu64,+smep,+smap` boots the same image on the processor of a
+# machine of 2014 and puts every copy of a program's memory through the
+# window of the port; it is the other half of `make mmu-smoke`, over the whole
+# suite and not only over the attacks.
+CPU = ""
+
 # The commands that are typed into the shell. The answers are read by their
 # place in the list, the way the smoke test of the simulator does it. The last
 # one looks at the tree the boot left behind: a program that ran out of a file
@@ -557,7 +566,7 @@ EXPECTED = [
     # it (ADR 0020); the line is the proof that the check ran and passed.
     "Micro OS: image signature ok (sha-256, ed25519)",
     board_line(),
-    "port: x86_64, contract 1.13",
+    "port: x86_64, contract 1.14",
     "[ ok ] sched",
     "subsystem(s) ready",
     "the kernel is up",
@@ -979,6 +988,7 @@ def machine_argv(loader: str, kernel: str, image: str, disk: str = None) -> list
 
     return [
         "qemu-system-x86_64",
+        *(["-cpu", CPU] if CPU else []),
         "-kernel",
         loader,
         "-initrd",
@@ -1988,6 +1998,17 @@ def check(output: str) -> list:
                 "file",
                 "sqlite3",
                 "awk",
+                # The attacks of the policy of a page (ADR 0052): the suite of
+                # `make mmu-smoke` is files of this image and not of a build
+                # of its own.
+                "mmu_text",
+                "mmu_execstack",
+                "mmu_kernel",
+                "mmu_heap",
+                "mmu_wx",
+                "mmu_stray",
+                "mmu_stack",
+                "mmu_io",
             )
         ),
         bin_listing[-200:],
@@ -3127,17 +3148,19 @@ def check(output: str) -> list:
         re.search(r"MicroOS \d+\.\d+\.\d+", answer("uname", 1)) is not None,
     )
 
-    # --- the guard page under the stack (ADR 0048)
-    # The stack of a program is 64 KiB and the page under it is not mapped,
-    # so a recursion that runs past the bottom meets the page and not the
-    # data of the program. The fault is a store into a page that is not
-    # present (error 0x6: not present, write, ring 3) at an address in the
-    # guard, and the program never prints the line after the recursion.
+    # --- the guard page under the stack (ADR 0048, ADR 0052)
+    # The stack of a program starts as 64 KiB and grows into a room of 1 MiB
+    # (ADR 0052); the page under the room is the guard and it is never
+    # mapped, so a recursion that runs past the limit of the task meets that
+    # page and not the data of the program. The fault is a store into a page
+    # that is not present (error 0x6: not present, write, ring 3) in the
+    # guard page at 0x02eef000 - and the program never prints the line after
+    # the recursion.
     stack = answer("exec /bin/crash stack")
     expect("the stack overrun program starts", "PROGRAM: crash overruns the stack" in stack)
     expect(
         "the guard page under the stack takes the program down",
-        "the program faulted: vector 14 at 0x0000000002fe" in stack
+        "the program faulted: vector 14 at 0x0000000002ee" in stack
         and "error 0x0000000000000006" in stack,
         stack[-400:],
     )
@@ -3169,10 +3192,23 @@ def check(output: str) -> list:
     # executable is zero for a map of this port. The line is short because it
     # is written before the entry of a program of the desktop, and the UART
     # of the machine holds the entry for the length of a line.
+    audited = output.count("x86-64: the map of a program is W^X")
+    finished = output.count("the program has finished")
     expect(
         "every program is reported W^X before it runs",
-        output.count("x86-64: the map of a program is W^X") >= 10,
-        f"{output.count('x86-64: the map of a program is W^X')} report(s) in the run",
+        audited >= 10 and audited >= finished + 1,
+        f"{audited} audit(s) for {finished} line(s) of a program that finished",
+    )
+    # The audit is a refusal and not a remark (ADR 0052): a space with a page
+    # that is writable and executable at once is not entered, and the line of
+    # the refusal in a run of the whole image is the failure of the port. The
+    # number of the audit lines is not the number of the programs here - the
+    # run does not exec every file of /bin - so `make mmu-smoke` is the check
+    # that counts them against its own execs.
+    expect(
+        "no program of the run was refused as not W^X",
+        "the map of the program is not W^X" not in output,
+        output[-600:],
     )
 
     # --- the first lane of 1.6: the wait for a descriptor
@@ -3653,11 +3689,17 @@ def main(argv: list) -> int:
         default="ide",
         help="the bus of the disk of the run (default: ide)",
     )
+    parser.add_argument(
+        "--cpu",
+        default="",
+        help="the processor of the machine, e.g. qemu64,+smep,+smap (default: QEMU's own)",
+    )
     parser.add_argument("--verbose", action="store_true", help="print the console of the machine")
     args = parser.parse_args(argv)
 
-    global DISK
+    global DISK, CPU
     DISK = args.disk
+    CPU = args.cpu
 
     loader = os.path.join(BUILD, "loader32.elf")
     kernel = os.path.join(BUILD, "microos64.bin")

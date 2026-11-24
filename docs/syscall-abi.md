@@ -672,14 +672,23 @@ is ignored rather than refused, because the system has no `MAP_FIXED`.
 `len` and `offset` are whole numbers of `KSYS_PAGE_SIZE` (4096) and the offset
 is into the file behind `fd`.
 
+The policy of a page is one rule of the ABI since 2.0 (ADR 0052): a page is
+code or it is data, never both. `mmap` with `KSYS_PROT_WRITE` and
+`KSYS_PROT_EXEC` together is `EINVAL` before a page is made, and a program
+that asks for it keeps running. The other half is the ceiling of the task:
+the bytes of an anonymous mapping are counted against
+`KSYS_RLIMIT_MEMORY` (`ulimit -m`) as the heap is, and a mapping past it is
+`ENOMEM`.
+
 The answers and the errors:
 
 * `mmap` answers the address of the range, `EINVAL` for a length or an offset
   that is not a page, a `prot` or a flag outside the set, neither or both of
-  the sharing flags, and an address that is not aligned; `EBADF` for a
-  descriptor that is not open; `ESPIPE` for a pipe (it has no bytes to map);
-  `ENOMEM` for a range that does not fit the window of the program; `ENOSYS`
-  on a machine without page tables.
+  the sharing flags, a `prot` that is writable and executable at once, and an
+  address that is not aligned; `EBADF` for a descriptor that is not open;
+  `ESPIPE` for a pipe (it has no bytes to map); `ENOMEM` for a range that does
+  not fit the window of the program or the memory limit of the task;
+  `ENOSYS` on a machine without page tables.
 * `munmap` answers 0 and gives the pages back; the shared pages of the range
   go to their file first. A range that cuts a mapping in two is `EINVAL`
   rather than a silent half; a range that holds no mapping is 0 and does
@@ -688,9 +697,10 @@ The answers and the errors:
   written back to their file. A private mapping has nothing to write.
 * `brk(addr)` moves the end of the heap and answers the new end; `brk(NULL)`
   answers the current one. The heap begins after the image of the program and
-  may not cross a mapping or the top of the window, where the restorer, the
-  guard page and the stack are: the refusal is `ENOMEM` and the break stays
-  where it was. A heap that shrinks gives the pages above the new end back.
+  may not cross a mapping, the top of the window, where the restorer, the
+  guard page and the room of the stack are, or the memory limit of the task:
+  the refusal is `ENOMEM` and the break stays where it was. A heap that
+  shrinks gives the pages above the new end back.
 
 The two sharing modes are the two answers of a write. A write into a
 `KSYS_MAP_PRIVATE` page is a copy of that page for this program alone, and the

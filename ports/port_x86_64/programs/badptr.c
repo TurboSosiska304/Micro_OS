@@ -9,9 +9,11 @@
  *   - 0xdead0000 is outside the window of the programs altogether;
  *   - the last four bytes of the window with a request of eight run past its
  *     end, where the next byte belongs to nobody;
- *   - the guard page under the stack is inside the window and deliberately not
- *     mapped, so a program that overruns its stack meets a page that is not
- *     there instead of one of its own.
+ *   - the page below the stack is inside the room of ADR 0052 and is not
+ *     mapped yet: a *store of the program* there would grow the stack, and a
+ *     pointer a call hands to the kernel is not that store - the call cannot
+ *     make a page for an address the program has not used, so it is EFAULT
+ *     like the two above.
  *
  * The answer of every call is EFAULT (14 with the minus sign), and the machine
  * is alive after all of them: the last line is written through the same call

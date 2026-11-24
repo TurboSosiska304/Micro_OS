@@ -20,6 +20,7 @@ void test_version(void);
 void test_board(void);
 void test_task(void);
 void test_guard(void);
+void test_mm(void);
 void test_sched(void);
 void test_sched_queue(void);
 void test_smp(void);

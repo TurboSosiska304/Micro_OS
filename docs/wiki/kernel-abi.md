@@ -196,6 +196,14 @@ and the default action ends it with 143. The descriptors stop at the limit
 with `EMFILE`: `open`, `pipe` and a `dup2` onto a number at or above it.
 Lowering a limit never closes what is already open.
 
+On the machine with page tables the memory limit is the ceiling of the whole
+address space of a program: `brk` is charged to it as it grows, an anonymous
+mapping is counted when it is made and given back when it is unmapped, and
+the stack of a program stops at it too - a program that lowers its limit to
+128 KiB has a heap, a mapping and a stack that each stop there. A page that
+the program asks for as writable and executable at once is `EINVAL`, not a
+page: a page is code or it is data (ADR 0052).
+
 The library has `microos_getlimit`, `microos_setlimit` and
 `microos_getrlimits`, the shell has `ulimit` to print and lower the limits of
 the shell, and [`docs/syscall-abi.md`](../syscall-abi.md) has the contract.

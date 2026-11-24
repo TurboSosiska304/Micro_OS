@@ -90,6 +90,16 @@ PROGRAMS = [
     "pwd",
     "spawn",
     "nx",
+    # The attacks of the policy of a page (ADR 0052): the suite of `make
+    # mmu-smoke` types one line per program and reads what the map did.
+    "mmu_text",
+    "mmu_execstack",
+    "mmu_kernel",
+    "mmu_heap",
+    "mmu_wx",
+    "mmu_stray",
+    "mmu_stack",
+    "mmu_io",
     "zcat",
     "pcre2grep",
     "lua",
