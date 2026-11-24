@@ -48,27 +48,3 @@ int gethostname(char *name, size_t size)
     errno = ENOSYS;
     return -1;
 }
-
-/*
- * The stream of a command is a static `execve` with a pipe of two ends and a
- * table of four descriptors; the library has no call to build one (the pipe
- * of the shell is the kernel's and a program cannot make io_uring of it). The
- * answer is `ENOSYS` and a NULL stream, so the shell of SQLite reports that
- * `.output` to a command is not supported instead of hanging.
- */
-FILE *popen(const char *command, const char *mode)
-{
-    (void)command;
-    (void)mode;
-
-    errno = ENOSYS;
-    return NULL;
-}
-
-int pclose(FILE *stream)
-{
-    (void)stream;
-
-    errno = ENOSYS;
-    return -1;
-}

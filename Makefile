@@ -32,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format sdk idf-check idf-build idf-flash idf-monitor idf-size bundle bundle-board bundle-x86 x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-root-smoke x86-volume-smoke uefi uefi-run uefi-smoke uefi-stick usb-smoke x86-usb-smoke usb-stick-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke ahci-smoke nvme-smoke x86-fs-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak x86-smp-smoke soak-smp bench
+.PHONY: ahci-smoke all bench board-soak build bundle bundle-board bundle-x86 ci clean coverage disk-stress format fuzz-long help idf-build idf-check idf-flash idf-monitor idf-size integrity nvme-smoke ports-smoke reproducible sdk sim smoke soak soak-host soak-image soak-smp test test-asan test-minimal test-smp test-tsan uefi uefi-run uefi-smoke uefi-stick usb-smoke usb-stick-smoke wiki-check x86-build x86-disk x86-disk-smoke x86-fat-build x86-fs-smoke x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke x86-net-build x86-net-run x86-net-smoke x86-open-build x86-root-smoke x86-run x86-run-disk x86-run-disk-serial x86-run-serial x86-smoke x86-smp-build x86-smp-run x86-smp-smoke x86-usb-smoke x86-vga-smoke x86-volume-smoke
 
 help:
 	@echo "Micro OS — available targets:"
@@ -63,6 +63,8 @@ help:
 	@echo "  make x86-run    boot it in a QEMU window (framebuffer 1280x800, keyboard)"
 	@echo "  make x86-run-serial  boot it with the serial console (-nographic)"
 	@echo "  make x86-smoke  boot it and check what it says"
+	@echo "  make ports-smoke  the console set of sbase built by the SDK and run on"
+	@echo "                  the machine: the gate of a program nobody rewrote"
 	@echo "  make uefi       the same kernel as an image a firmware starts: a FAT"
 	@echo "  make uefi-stick the same wrapped in a table of partitions: a stick of a UEFI machine"
 	@echo "                  volume with BOOTX64.EFI, the kernel and disk.img"
@@ -204,7 +206,7 @@ wiki-check:
 CI_QEMU := $(shell command -v qemu-system-x86_64 2>/dev/null)
 CI_TARGETS := build test test-asan test-tsan test-smp smoke coverage
 ifneq ($(CI_QEMU),)
-CI_TARGETS += x86-smoke x86-root-smoke usb-smoke
+CI_TARGETS += x86-smoke x86-root-smoke usb-smoke ports-smoke
 endif
 # The boot of the firmware needs QEMU and the firmware: a machine with one and
 # not the other is a machine of the BIOS gate alone.
@@ -215,7 +217,7 @@ CI_TARGETS += reproducible integrity
 
 ci: $(CI_TARGETS)
 ifeq ($(CI_QEMU),)
-	@echo "ci: qemu-system-x86_64 not found, x86-smoke, x86-root-smoke and usb-smoke are skipped"
+	@echo "ci: qemu-system-x86_64 not found, x86-smoke, x86-root-smoke, usb-smoke and ports-smoke are skipped"
 endif
 
 sim: build
@@ -223,12 +225,12 @@ sim: build
 
 clean:
 	rm -rf $(BUILD_DIR) $(ASAN_DIR) $(MINIMAL_DIR) $(COVERAGE_DIR) $(SMP_DIR) \
-		build-tsan build-sdk
+		build-tsan build-sdk build-ports
 
 format:
 	@command -v clang-format >/dev/null 2>&1 || { echo "clang-format not found"; exit 1; }
 	find components ports main tests -type f \( -name '*.c' -o -name '*.h' \) \
-		-exec clang-format -i {} +
+		-not -path 'tests/ports/sbase/*' -exec clang-format -i {} +
 	@echo "sources formatted"
 
 # The SDK: the headers of a program, the library of a program, the crt and the
@@ -393,6 +395,23 @@ x86-run-serial: x86-disk
 
 x86-smoke: x86-disk x86-open-build
 	python3 tools/x86_smoke.py --image $(X86_PROGRAMS_IMAGE) --open-build $(X86_OPEN_BUILD) \
+		--disk $(X86_DISK_BUS) --timeout 180
+
+# The gate of a program nobody rewrote (lane M3 of 1.8, docs/ports-table.md):
+# the console set of sbase - true, false, echo, basename, dirname, pwd,
+# printenv, sleep, cksum, tee, cmp - is built by **the SDK** and not by the
+# CMake of this tree, and every file of it is the release of the upstream
+# byte for byte (tests/ports/upstream.txt). The volume of the run is the image
+# of `make x86-disk` with /bin/ports added to it, so the boot and the shell
+# are the machine of the release; the programs are typed at the shell and the
+# answers are the answers of the release. The three calls of a command that
+# 1.8 added to the library - popen, pclose and system - are the program
+# /bin/ports/command of the same gate.
+PORTS_BUILD := build-ports
+
+ports-smoke: x86-disk
+	sh tools/ports_build.sh --build $(PORTS_BUILD)
+	python3 tools/ports_smoke.py --build $(PORTS_BUILD) --x86 $(X86_BUILD) \
 		--disk $(X86_DISK_BUS) --timeout 180
 
 # The gate of ADR 0027: one machine boots two roots. The first image is the

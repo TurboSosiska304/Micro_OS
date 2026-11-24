@@ -1,0 +1,38 @@
+# Micro OS — the release of sbase that `make ports-smoke` builds, byte for byte.
+#
+# upstream: https://git.suckless.org/sbase
+# commit:   c546c3a5724c81cee9a11d816a38ccdf17472129 ("rm: Don't ask for confirmation to remove symlinks")
+# license:  MIT (LICENSE in this directory, the file of the release)
+#
+# The format is the one of sha256sum: <digest>  <path>, relative to this file.
+# `tools/ports_smoke.py` recomputes every digest before it boots the machine: a
+# hunk edited into a source to make a tool compile fails the gate, which is the
+# whole point of it. The tree does not build these files; `tools/ports_build.sh`
+# builds them with the SDK of `make sdk` and the CMake project beside this file.
+5f4ecca1bb057a6d6301aff8f2b403e723af5dc86a5e00e8c7e5c2f56cdb9c79  sbase/arg.h
+ff62a0e779649e2bd31de05889007c04e6e1030c9a5a2d5e7bd1d0d0edd62f82  sbase/basename.c
+a5c5076455e746521f0eafec80fa23e2c17fd6e3c20bd51ffc78bc975b918bef  sbase/cksum.c
+c4bc7b70cd4e61e9fdb48807458cba74e29cda7730bfba42819d8c2669d15f24  sbase/cmp.c
+00fc3129294c2ddf3d39dee3b6a2f581d98b565f66250796deabf82d2fe78e07  sbase/compat.h
+6efe1808691a2a7b5649d43cc0ccfb18515057c17b26ff7ea397f36dcbb04516  sbase/crypt.h
+3194f3f3f5345d76539f34e8c3bf01d8eb44e63ee028f367141ee358a413ec3a  sbase/dirname.c
+117c10e0e5a5139a80490673a3f14dd1dfcc45856adb84a83b28e3b301f1b48c  sbase/echo.c
+7395c307d6d52689dc29bafa4e90f34736d0c6dbd20d49479c239ced3e980ee7  sbase/false.c
+ac2359d2bdf2fc6092d12cb477c7e2501499d1eb42782f249a864502fcf7280f  sbase/libutil/crypt.c
+5ff4b2a4f2038e193a5c6b1d5f862405f80d5443515b0f88c88eaff1de474d1f  sbase/libutil/ealloc.c
+9547578e4e4585bbc8429b580c2db409328214efd383c5be01b0bb9017f1bf1c  sbase/libutil/eprintf.c
+a5ee307130cfbe8aaace3528f370ef42f0ef16b135e957084f3a5fa42b883773  sbase/libutil/fshut.c
+5c1c875678f3367489cb9fcf5e76db51f51236710ae3bfcac245ff9640ecff5c  sbase/libutil/putword.c
+575924340929a37051a045b20e17c9a7a3ff76ea4fcbd83b383a00684856d4aa  sbase/libutil/sha256.c
+698a2f71bbd6e93cb1f3d09964446dea52cb38ea6a928c945553f199b308421f  sbase/libutil/strtonum.c
+afca00ac3c52ab6350e143e6d9a27e52e1622a056bacbc88cc475dc6184a2cef  sbase/libutil/writeall.c
+8197a14741aea94037f9703b2db5ccd11d46e888a7d4c3bd703e37704e607337  sbase/printenv.c
+ea445d47b67e21e44dc691daa24053f62d4a970e2d731d689d4c9d4f68e30f8d  sbase/pwd.c
+15ba1fc172d09ac2226536bb902c973d8a53a970161c13b97ed53cd2c1a2e170  sbase/sha256.h
+8cd097bed929704568813684cf962c27abdbb7e1f29ccd332d914f21bf80563a  sbase/sha256sum.c
+6bc22712955313254bdefb296b07438eca22a1e29417c1c42301eaa869d8944d  sbase/sleep.c
+af9c2adcd4b21b9b1638e7a94066d43dbec4032ff2a333cc0aec167f6e518421  sbase/tee.c
+428ec1a55c383b07d84ecc81c8de01b35f9bb6a73c725ba2d91a2db23f71917c  sbase/text.h
+69d3b149795c2e501046fb9ec3ae805a3aa10c828b7918f0e660d42830f1f469  sbase/true.c
+341a70a1f9d449f28c4d65bb594898e2d6cf2eabc21da018abdf024b7f71e7d6  sbase/util.h
+bb2839b37f82358f6036a16508c484d668b33b2273a8530acf1cb6fef93f54db  sbase/whoami.c

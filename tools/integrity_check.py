@@ -932,7 +932,12 @@ def check_git(root: str, report: Report) -> None:
 # release as it is, with its own 79-column lines - and a diff against a
 # release has to stay readable: the rules of this tree apply to the files we
 # write, and a vendored component is reviewed as a whole (its README.md).
-VENDOR_PREFIXES = ("third_party/",)
+#
+# `tests/ports/sbase` is a release of somebody else as well, and it is the
+# point of `make ports-smoke` that not a byte of it is ours: the gate compares
+# every file with the sha256 of the upstream commit (tests/ports/upstream.txt)
+# and a formatter that rewrote a tab of `echo.c` would make the gate a lie.
+VENDOR_PREFIXES = ("third_party/", "tests/ports/sbase/")
 
 
 def is_vendored(name: str) -> bool:
@@ -1093,7 +1098,7 @@ def check_format(root: str, report: Report, files: list, formatter: str) -> None
     # `.clang-format` with `DisableFormat`, and reading a 9 MB amalgamation
     # only to learn that is a waste of a minute and of a gigabyte.
     sources = sorted(
-        f for f in files if f.endswith((".c", ".h")) and not f.startswith("third_party/")
+        f for f in files if f.endswith((".c", ".h")) and not is_vendored(f)
     )
     if not sources:
         report.skip(group, "clang-format", "there are no C sources")
@@ -2084,8 +2089,10 @@ def check_version(root: str, report: Report, expected: str, suffix: str | None =
 
 # The trees that are somebody else's: their bytes are not ours to reformat,
 # and the style checks of this repository stop at their door. A file there is
-# still a file of the tree for UTF-8, LF and the newline at the end.
-VENDORED_PREFIXES = ("third_party/",)
+# still a file of the tree for UTF-8, LF and the newline at the end. The
+# release of sbase under `tests/ports/sbase` is one of them: the gate of
+# `make ports-smoke` is that not a byte of it was edited.
+VENDORED_PREFIXES = ("third_party/", "tests/ports/sbase/")
 
 
 # --- the entry point ---------------------------------------------------------

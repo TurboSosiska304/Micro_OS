@@ -282,10 +282,17 @@ COMMANDS = [
     "exec /bin/awk BEGIN{srand(1);r=rand();print(r>=0&&r<1)}",
     # The status of a script that ends with `exit N` comes back to the shell.
     "exec /bin/awk BEGIN{exit(3)}",
-    # The two calls of a shell: this machine has none, and the interpreter
-    # says so on the error descriptor instead of pretending the line ran.
+    # The two calls of a shell. `system` is the port layer of awk, which still
+    # answers with its own sentence (the port of the release owns the name);
+    # `"cmd" | getline` reaches `popen` of the library now (1.8) and runs the
+    # program of the command, so the line is the one `echo` wrote.
     "exec /bin/awk \"BEGIN{print(system(\\\"true\\\"))}\"",
     "exec /bin/awk \"BEGIN{print(\\\"echo\\\"|getline)}\"",
+    # A command that reads a file: `popen` of the library runs `/bin/cat`, the
+    # stream is a pipe of this system, and the loop is the three lines of
+    # /etc/setting. The interpreter is the release; the port of the command is
+    # the library.
+    "exec /bin/awk \"BEGIN{while((\\\"cat /etc/setting\\\"|getline line)>0)n++;print(n)}\"",
     "exec /bin/awk -f /etc/no-such.awk",
     # The same script with no file: the interpreter reads descriptor 0, which
     # the shell does not open at the prompt yet, so awk reports a read error.
@@ -2613,10 +2620,19 @@ def check(output: str) -> list:
     )
     awk_pipe = answer('exec /bin/awk "BEGIN{print(\\"echo\\"|getline)}"')
     expect(
-        "awk cmd | getline answers the failure of a machine without a shell",
-        re.search(r"(?m)^-1\r?$", awk_pipe) is not None
+        "awk cmd | getline runs the command through popen",
+        re.search(r"(?m)^1\r?$", awk_pipe) is not None
         and "the program exited with 0" in awk_pipe,
         awk_pipe,
+    )
+    awk_lines = answer(
+        'exec /bin/awk "BEGIN{while((\\"cat /etc/setting\\"|getline line)>0)n++;print(n)}"'
+    )
+    expect(
+        "awk reads a whole file through the pipe of popen",
+        re.search(r"(?m)^3\r?$", awk_lines) is not None
+        and "the program exited with 0" in awk_lines,
+        awk_lines,
     )
     awk_missing = answer("exec /bin/awk -f /etc/no-such.awk")
     expect(

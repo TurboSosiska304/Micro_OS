@@ -678,6 +678,10 @@ target_compile_definitions(microos_tests PRIVATE
         "${CMAKE_SOURCE_DIR}/components/libc/user/src/strptime.c"
         "${CMAKE_SOURCE_DIR}/components/libc/user/src/glob.c"
         "${CMAKE_SOURCE_DIR}/components/libc/user/src/sscanf.c"
+        # The words of a command: the reader of the line of `popen` and
+        # `system` (src/words.c) has no door under it and is checked here; the
+        # two calls themselves are the gate of `make ports-smoke`.
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/words.c"
         "${CMAKE_SOURCE_DIR}/components/libc/user/src/stdlib.c"
         "${CMAKE_SOURCE_DIR}/components/libc/user/src/path.c"
         "${CMAKE_SOURCE_DIR}/components/libc/user/src/stat.c"

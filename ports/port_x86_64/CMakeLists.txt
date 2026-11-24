@@ -1343,6 +1343,13 @@ set(SQLITE_LIBC_SOURCES
     "${LIBC_USER_DIR}/src/realpath.c"
     "${LIBC_USER_DIR}/src/strptime.c"
     "${LIBC_USER_DIR}/src/glob.c"
+    # The command of a shell (1.8): `popen`/`pclose` are the pipe, the fork
+    # and the `execve` of the child of `src/popen.c`, the words of the line
+    # are `src/words.c`, and `system` is the same without a stream. The shell
+    # of the release has a `.system` that reaches it.
+    "${LIBC_USER_DIR}/src/popen.c"
+    "${LIBC_USER_DIR}/src/system.c"
+    "${LIBC_USER_DIR}/src/words.c"
     "${LIBC_USER_DIR}/src/gettimeofday.c"
     "${LIBC_USER_DIR}/src/resource.c"
     "${LIBC_USER_DIR}/src/usleep.c"
@@ -1436,6 +1443,17 @@ add_libc_program(awk
             "${LIBC_USER_DIR}/src/assert.c"
             "${LIBC_USER_DIR}/src/format_float.c"
             "${LIBC_USER_DIR}/src/unsupported.c"
+            # The command of a shell (1.8): awk's `"cmd" | getline` is
+            # `popen` and its `close()` is `pclose`, and the two are the
+            # pipe, the fork and the `execve` of `src/popen.c` over the
+            # words of `src/words.c`. `src/unistd_ext.c` carries the calls
+            # they build on (fork, pipe, dup2, execvp, waitpid) and `stat`
+            # is what its `access()` asks of `src/stat.c`. `system` is not
+            # here: awk answers it in its own port layer with a sentence.
+            "${LIBC_USER_DIR}/src/unistd_ext.c"
+            "${LIBC_USER_DIR}/src/stat.c"
+            "${LIBC_USER_DIR}/src/popen.c"
+            "${LIBC_USER_DIR}/src/words.c"
     COMPILE_OPTIONS -DULIBC_WITH_FLOAT -include "${AWK_DIR}/port/awk_port.h"
         -Wno-unused-parameter -Wno-unused-but-set-variable -Os
 )
