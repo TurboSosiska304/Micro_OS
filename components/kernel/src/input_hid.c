@@ -434,8 +434,8 @@ void k_input_hid_mouse_init(struct k_input_hid_mouse_state *state)
 }
 
 /* One event of the mouse, dropped when the answer is full. */
-static k_size_t mouse_emit(struct k_input_hid_event *out, k_size_t max, k_size_t count,
-                           k_u16_t key, k_u16_t value)
+static k_size_t mouse_emit(struct k_input_hid_event *out, k_size_t max, k_size_t count, k_u16_t key,
+                           k_u16_t value)
 {
     if (count < max) {
         out[count].key = key;
@@ -455,8 +455,7 @@ k_size_t k_input_hid_mouse_decode(struct k_input_hid_mouse_state *state, const k
     k_i8_t dy;
     bool left;
 
-    if (state == NULL || report == NULL || out == NULL || max == 0u ||
-        length < 3u) {
+    if (state == NULL || report == NULL || out == NULL || max == 0u || length < 3u) {
         return 0;
     }
 

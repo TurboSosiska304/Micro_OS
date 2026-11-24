@@ -7,6 +7,10 @@
  * sub-class 0x03, programming interface 0x30). This header is what the rest
  * of the port knows about it: a boot call, the characters of the console, the
  * events of `/dev/input0` and the capture of the keyboard by an interface.
+ * Since the second iteration of M1 the controller enumerates the devices
+ * behind its hubs, sees a device that arrives after the boot, reads the mouse
+ * of the boot protocol and owns a line of its own (MSI/MSI-X, or the legacy
+ * pin where the port keeps the 8259).
  *
  * The controller is optional: a machine without one keeps the keyboard of
  * the PS/2 and the boot says nothing, and every call below answers "nothing"
@@ -37,6 +41,11 @@ void port_x86_64_xhci_init(void);
 
 /* True when a keyboard of the USB answered the enumeration and reports. */
 bool port_x86_64_usb_keyboard(void);
+
+/* True when a mouse of the boot protocol answered the enumeration. Its
+ * events are the pointer events of `/dev/input0`, as the ones of the PS/2
+ * are. */
+bool port_x86_64_usb_pointer(void);
 
 /* The next character of the USB keyboard, or -1 when its ring is empty. The
  * call also reads the controller, so a caller that polls the console often
@@ -93,6 +102,15 @@ bool port_x86_64_usb_storage_attach(struct port_x86_64_usb_device *device,
                                     const struct port_x86_64_usb_config *config);
 bool port_x86_64_usb_net_attach(struct port_x86_64_usb_device *device,
                                 const struct port_x86_64_usb_config *config);
+
+/*
+ * The device left (a hub port lost it, or the controller did): the class
+ * forgets it and gives back what it registered - `usb0` leaves the table of
+ * the block layer and its partitions with it. The device is only the one the
+ * call names, so a class that is handed a stale view does nothing.
+ */
+void port_x86_64_usb_storage_detach(struct port_x86_64_usb_device *device);
+void port_x86_64_usb_net_detach(struct port_x86_64_usb_device *device);
 
 /*
  * Turn one endpoint of the device on: its address is the one of the
