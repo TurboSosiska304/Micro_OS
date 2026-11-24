@@ -46,6 +46,20 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Added
 
+- The stick of a person is a disk, and the memory is not (ADR 0056): the image
+  of `make uefi-stick` is a **table of two partitions** - the ESP of 64 MiB with
+  the loader, the kernel and a copy of the volume as a spare root, and a second
+  partition of **MicroFS** of 24 MiB. The kernel finds that second partition
+  over xHCI and its class of mass storage (`usb0p2`), the root mount prefers it
+  to the module the loader carries, and the door of the writes opens because
+  the medium is ours and `/etc/volumes` names it. The module is read-only and
+  **says so** now: the volume the boot carries is memory, and a write to it
+  answered `EIO` from the RAM before - the owner of a laptop saw exactly that
+  with `write /x.txt hi` and a boot that had said "read-write" of a copy in the
+  memory. `make uefi-stick-smoke` is 20 checks: OVMF boots the stick as a USB
+  disk, `usb0p2` mounts read-write, a file is written, the power is cut off by
+  killing QEMU, and the second boot finds the file with `fsck` clean; a second
+  partition of FAT32 is refused and the SHA-256 of the stick does not move.
 - The policy of the MMU (ADR 0052): the page tables of a program have rules
   now, and the hardware enforces them. `mmap` of `PROT_WRITE|PROT_EXEC` is
   refused with `EINVAL` **before** a page exists, and the audit of `exec` stays
