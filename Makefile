@@ -32,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: ahci-smoke all bench board-soak build bundle bundle-board bundle-x86 ci clean coverage cut-smoke disk-stress format fuzz-long help idf-build idf-check idf-flash idf-monitor idf-size integrity nvme-smoke ports-smoke power-smoke reproducible sdk sim smoke soak soak-host soak-image soak-smp test test-asan test-minimal test-smp test-tsan tty-smoke uefi uefi-run uefi-smoke uefi-stick usb-smoke usb-stick-smoke wiki-check x86-build x86-cut-smoke x86-disk x86-disk-smoke x86-fat-build x86-fs-smoke x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke x86-net-build x86-net-run x86-net-smoke x86-open-build x86-root-smoke x86-run x86-run-disk x86-run-disk-serial x86-run-serial x86-smoke x86-smp-build x86-smp-run x86-smp-smoke x86-usb-smoke x86-vga-smoke x86-volume-smoke
+.PHONY: ahci-smoke all bench board-soak build bundle bundle-board bundle-x86 ci clean coverage cut-smoke disk-stress format fuzz-long help idf-build idf-check idf-flash idf-monitor idf-size integrity nvme-smoke ports-smoke power-smoke reproducible sdk sim smoke soak soak-host soak-image soak-smp test test-asan test-minimal test-smp test-tsan tty-smoke uefi uefi-run uefi-smoke uefi-stick uefi-stick-smoke usb-smoke usb-stick-smoke wiki-check x86-build x86-cut-smoke x86-disk x86-disk-smoke x86-fat-build x86-fs-smoke x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke x86-net-build x86-net-run x86-net-smoke x86-open-build x86-root-smoke x86-run x86-run-disk x86-run-disk-serial x86-run-serial x86-smoke x86-smp-build x86-smp-run x86-smp-smoke x86-usb-smoke x86-vga-smoke x86-volume-smoke
 help:
 	@echo "Micro OS — available targets:"
 	@echo "  make build      configure and build the host build"
@@ -68,7 +68,9 @@ help:
 	@echo "  make tty-smoke  kilo, a full-screen editor of somebody else, typed at the"
 	@echo "                  machine with no line of its source edited (ADR 0051)"
 	@echo "  make uefi       the same kernel as an image a firmware starts: a FAT"
-	@echo "  make uefi-stick the same wrapped in a table of partitions: a stick of a UEFI machine"
+	@echo "  make uefi-stick a stick of two partitions: the ESP and the volume of the machine"
+	@echo "  make uefi-stick-smoke  the stick boots by OVMF as a USB disk, a file survives"
+	@echo "                  a power cut, and a foreign second partition stays read-only"
 	@echo "                  volume with BOOTX64.EFI, the kernel and disk.img"
 	@echo "  make uefi-run   boot that volume in QEMU under OVMF (a window)"
 	@echo "  make uefi-smoke boot it without a window and check the machine, the"
@@ -485,20 +487,25 @@ uefi: x86-build x86-disk
 	python3 tools/uefi_esp.py --image $(UEFI_IMAGE) --build $(X86_BUILD) \
 		--disk $(X86_PROGRAMS_IMAGE)
 
-# The stick of a firmware machine: the ESP above, wrapped in the table of the
-# partitions a firmware reads before it looks for a file. A stick written with
-# `dd` from this image boots on a machine of UEFI only - no BIOS, no CD, no
-# optical drive - which is what a laptop of these years is. The size is the
-# table and the volume; the rest of a stick stays as it was.
+# The stick of a person (ADR 0056): a GPT with the ESP of the firmware and,
+# in the partition after it, the MicroFS volume the kernel writes through the
+# USB port. The ESP keeps the image of the boot as the fallback of a machine
+# whose controller did not come up; the volume is a partition, not a file in
+# the ESP, so a file a person writes is a sector of the stick and not a byte
+# of the memory. `tools/uefi_stick.py` writes the table and the two parts.
 UEFI_STICK := $(UEFI_BUILD)/stick.img
-UEFI_STICK_MB := 64
 
-uefi-stick: uefi
-	rm -f $(UEFI_STICK)
-	truncate -s $(UEFI_STICK_MB)M $(UEFI_STICK)
-	printf 'label: gpt\n,48M,uefi\n' | sfdisk -q $(UEFI_STICK)
-	dd if=$(UEFI_IMAGE) of=$(UEFI_STICK) bs=512 seek=2048 conv=notrunc status=none
+uefi-stick: uefi x86-disk
+	python3 tools/uefi_stick.py --image $(UEFI_STICK) --build $(X86_BUILD) --mkfs $(X86_MKFS)
 	@echo "$(UEFI_STICK): write it with dd to a stick and start it from the menu of the firmware"
+	@echo "  it is a stick of two partitions: the ESP of the firmware and the volume of the machine"
+
+# The gate of the stick (ADR 0056): the image is booted as a USB stick by OVMF,
+# a file is written, the power goes with the process, and the second boot finds
+# the file; a stick whose second partition is a volume of another system stays
+# read-only and its SHA-256 is the same before and after.
+uefi-stick-smoke: uefi-stick
+	python3 tools/uefi_stick_smoke.py --image $(UEFI_STICK) --build $(X86_BUILD) --mkfs $(X86_MKFS)
 
 # The machine of a person: the window of QEMU shows the picture of the
 # firmware and the keyboard of the window is the PS/2 keyboard of the port.
