@@ -212,6 +212,14 @@ timeout of 900 seconds. The bound of twenty milliseconds of 1.8 made that a
 rare shape and not an impossible one; the arm under the lock of the object is
 what removes it, and the case of the window in the suite is the proof.
 
+The sleep of the kernel was the one shape of the lane that a gate found after
+the numbers above: a sleep of `ms` could end at once when the nudge of another
+sleep arrived for it, and `k_sched_sleep_ms()` is a loop on the tick of its
+deadline now (ADR 0046 §4). One boot of the same tool after that change
+answered **20 992 ns** for `lat_pipe_p50` and 41 472 ns for the p99: the loop
+did not move the row, as it should not - a wait ends on the state of the task
+and not on the sleep that carried it.
+
 The port of the board is not in this table: its sleep is `vTaskDelay`, which a
 task of the kernel cannot cut, so its waits keep the ten milliseconds of
 `WAIT_CHUNK_MS` (ADR 0046, "What is still open", and `docs/debts.md`). A
