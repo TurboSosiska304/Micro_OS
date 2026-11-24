@@ -39,13 +39,16 @@
  */
 #include "port_x86_64.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "kernel/log.h"
 #include "kernel/lock.h"
 #include "kernel/port.h"
 #include "kernel/sched.h"
+#include "kernel/vfs.h"
 #include "kshell/kshell.h"
+#include "net/dhcp.h"
 #include "net/dns.h"
 #include "port_x86_64_net.h"
 
@@ -114,12 +117,43 @@
 
 #define NET_IP(a, b, c, d) (((k_u32_t)(a) << 24) | ((k_u32_t)(b) << 16) | ((k_u32_t)(c) << 8) | (d))
 
+/*
+ * The address of the machine has two sources since 2.0: the lease of a DHCP
+ * server, which is what a network of a person answers, and the fixed address
+ * of 1.8, which is the fallback of a machine that nobody answers - the user
+ * network of QEMU without a server, a cable that was pulled, a stick in the
+ * wrong port. The fixed one is the value below and it is what the stack uses
+ * until (and if) an ACK makes the lease true.
+ *
+ * /etc/network is the file of the machine: it holds the lease that was taken
+ * and the settings a person edits (a fixed address, a resolver), and it is
+ * read before the client asks, so a machine of a network with a DHCP server
+ * that should not be asked says `dhcp 0` there and nothing else changes.
+ */
 static k_u32_t g_ip = NET_IP(10, 0, 2, 15);
 static k_u32_t g_mask = NET_IP(255, 255, 255, 0);
 static k_u32_t g_gateway = NET_IP(10, 0, 2, 2);
 static k_u32_t g_dns = NET_IP(10, 0, 2, 3);
 static k_u8_t g_mac[6];
 static bool g_configured;
+
+/* Where the address above came from, and the lease it came from. */
+enum net_address {
+    NET_ADDRESS_LEASE, /* the ACK of a DHCP server */
+    NET_ADDRESS_FIXED, /* the fixed address of 1.8, or the one of /etc/network */
+};
+
+static enum net_address g_address = NET_ADDRESS_FIXED;
+static struct dhcp_lease g_lease;
+static k_u32_t g_dhcp_transactions;
+
+/* The receive side of the client: one datagram to the port of DHCP, filled by
+ * udp_input() while the exchange waits for it. The wire of the client is one
+ * datagram at a time and the wait is one task, which is the boot or the first
+ * command of the shell that needed the network. */
+static k_u8_t g_dhcp_rx[DHCP_MESSAGE_MAX];
+static k_size_t g_dhcp_rx_length;
+static bool g_dhcp_rx_armed;
 
 static k_u64_t g_ip_tx;
 static k_u64_t g_ip_rx;
@@ -265,6 +299,454 @@ static bool arp_lookup(k_u32_t ip, k_u8_t mac[6])
 
 /* --- the configuration ----------------------------------------------------- */
 
+/* The waits of the exchange: the whole budget of a machine with no server,
+ * which is short enough for a boot and long enough for a wire. */
+#define NET_DHCP_BUDGET_MS 3000u
+#define NET_DHCP_RENEW_MS 2000u
+
+static void net_poll(void);
+static bool net_send_ip_at(k_u32_t source, k_u32_t destination, const k_u8_t mac[6],
+                           k_u8_t protocol, const k_u8_t *payload, k_size_t length);
+static bool net_parse_ip(const char *text, k_u32_t *address);
+
+static k_size_t net_prefix(k_u32_t mask)
+{
+    k_size_t bits = 0;
+
+    while (bits < 32u && (mask & (0x80000000u >> bits)) != 0u) {
+        bits++;
+    }
+
+    return bits;
+}
+
+/*
+ * The line of the boot: one line with the address, the way out and the
+ * resolver, which is the one `tools/x86_net_smoke.py` looks for and the one a
+ * person reads in the log of a machine that came up.
+ */
+static void net_log_config(void)
+{
+    kinfo("net: %u.%u.%u.%u/%u, gateway %u.%u.%u.%u, dns %u.%u.%u.%u", (unsigned)(g_ip >> 24),
+          (unsigned)((g_ip >> 16) & 0xFFu), (unsigned)((g_ip >> 8) & 0xFFu),
+          (unsigned)(g_ip & 0xFFu), (unsigned)net_prefix(g_mask), (unsigned)(g_gateway >> 24),
+          (unsigned)((g_gateway >> 16) & 0xFFu), (unsigned)((g_gateway >> 8) & 0xFFu),
+          (unsigned)(g_gateway & 0xFFu), (unsigned)(g_dns >> 24), (unsigned)((g_dns >> 16) & 0xFFu),
+          (unsigned)((g_dns >> 8) & 0xFFu), (unsigned)(g_dns & 0xFFu));
+}
+
+/* --- /etc/network ---------------------------------------------------------- */
+
+/*
+ * The file of the machine, one `name value` a line. It is read before the
+ * client asks and written after an answer, so the address of the machine
+ * survives a reboot and a person can overrule the network:
+ *
+ *     dhcp 0                       # do not ask, the address below is the one
+ *     address 192.168.1.20         # the address of a fixed machine
+ *     netmask 255.255.255.0
+ *     gateway 192.168.1.1
+ *     dns 192.168.1.1
+ *
+ * A file without `dhcp 0` means "ask": the lease is the truth while it lasts,
+ * and the address in the file is the fallback of a machine nobody answered.
+ */
+#define NET_FILE_PATH "/etc/network"
+#define NET_FILE_MAX 512u
+
+static char g_file_text[NET_FILE_MAX];
+static bool g_file_static;
+
+/* The value of one line, copied out of the file's text and trimmed. */
+static bool net_file_value(const char *line, k_size_t length, const char *name, char *value,
+                           k_size_t size)
+{
+    k_size_t name_length = strlen(name);
+    k_size_t at;
+
+    if (length <= name_length || strncmp(line, name, name_length) != 0 ||
+        line[name_length] != ' ') {
+        return false;
+    }
+
+    at = name_length + 1u;
+
+    while (at < length && line[at] == ' ') {
+        at++;
+    }
+
+    if (length - at >= size) {
+        return false;
+    }
+
+    memcpy(value, line + at, length - at);
+    value[length - at] = '\0';
+
+    while (length > at && (value[length - at - 1u] == '\r' || value[length - at - 1u] == '\n')) {
+        value[length - at - 1u] = '\0';
+        length--;
+    }
+
+    return true;
+}
+
+/*
+ * Read the file, when the volume has one. A machine without it - the boot of
+ * a fresh image - asks DHCP with the fixed address of 1.8 behind it.
+ */
+static void net_file_load(void)
+{
+    k_u8_t priv[VFS_FILE_DATA_SIZE];
+    struct vfs_file file;
+    char line[64];
+    char value[32];
+    k_size_t length;
+    k_size_t at;
+    int read;
+
+    g_file_static = false;
+
+    if (vfs_open(NET_FILE_PATH, VFS_O_RDONLY, &file, priv) != 0) {
+        return;
+    }
+
+    read = vfs_read(&file, g_file_text, sizeof(g_file_text) - 1u);
+    (void)vfs_close(&file);
+
+    if (read <= 0) {
+        return;
+    }
+
+    length = (k_size_t)read;
+    g_file_text[length] = '\0';
+    at = 0;
+
+    while (at < length) {
+        k_size_t end = at;
+        k_size_t line_length;
+
+        while (end < length && g_file_text[end] != '\n') {
+            end++;
+        }
+
+        line_length = end - at;
+
+        if (line_length >= sizeof(line)) {
+            line_length = sizeof(line) - 1u;
+        }
+
+        memcpy(line, g_file_text + at, line_length);
+        line[line_length] = '\0';
+
+        if (net_file_value(line, line_length, "dhcp", value, sizeof(value))) {
+            /* `dhcp 0` and `dhcp no` are the two ways a person says "do not
+             * ask"; anything else leaves the client on. */
+            g_file_static = value[0] == '0' || value[0] == 'n' || value[0] == 'N';
+        } else if (net_file_value(line, line_length, "address", value, sizeof(value))) {
+            k_u32_t address;
+
+            if (net_parse_ip(value, &address) && address != 0u) {
+                g_ip = address;
+            }
+        } else if (net_file_value(line, line_length, "netmask", value, sizeof(value))) {
+            k_u32_t mask;
+
+            if (net_parse_ip(value, &mask) && mask != 0u) {
+                g_mask = mask;
+            }
+        } else if (net_file_value(line, line_length, "gateway", value, sizeof(value))) {
+            k_u32_t gateway;
+
+            if (net_parse_ip(value, &gateway)) {
+                g_gateway = gateway;
+            }
+        } else if (net_file_value(line, line_length, "dns", value, sizeof(value))) {
+            k_u32_t dns;
+
+            if (net_parse_ip(value, &dns) && dns != 0u) {
+                g_dns = dns;
+            }
+        }
+
+        at = end + 1u;
+    }
+}
+
+/*
+ * Write the address the machine has, so that the next boot starts from the
+ * same place and a person can read what the network said. The write is a
+ * best effort: a volume that is not writable (a root of a live stick) is a
+ * machine that still has its address in memory.
+ */
+static void net_file_save(void)
+{
+    k_u8_t priv[VFS_FILE_DATA_SIZE];
+    struct vfs_file file;
+    int length;
+    int written;
+
+    length = snprintf(
+        g_file_text, sizeof(g_file_text),
+        "# /etc/network: the address of this machine, written by the kernel.\n"
+        "# `dhcp 0` keeps the address below and asks nobody.\n"
+        "dhcp %u\n"
+        "address %u.%u.%u.%u\n"
+        "netmask %u.%u.%u.%u\n"
+        "gateway %u.%u.%u.%u\n"
+        "dns %u.%u.%u.%u\n"
+        "source %s\n"
+        "server %u.%u.%u.%u\n"
+        "lease %u\n"
+        "t1 %u\n"
+        "t2 %u\n",
+        /* A fallback is not a decision: the client stays on and
+         * asks again at the next boot. Only a person's
+         * `dhcp 0` turns it off, and this file then belongs to
+         * the person and is not written here. */
+        1u, (unsigned)(g_ip >> 24), (unsigned)((g_ip >> 16) & 0xFFu),
+        (unsigned)((g_ip >> 8) & 0xFFu), (unsigned)(g_ip & 0xFFu), (unsigned)(g_mask >> 24),
+        (unsigned)((g_mask >> 16) & 0xFFu), (unsigned)((g_mask >> 8) & 0xFFu),
+        (unsigned)(g_mask & 0xFFu), (unsigned)(g_gateway >> 24),
+        (unsigned)((g_gateway >> 16) & 0xFFu), (unsigned)((g_gateway >> 8) & 0xFFu),
+        (unsigned)(g_gateway & 0xFFu), (unsigned)(g_dns >> 24), (unsigned)((g_dns >> 16) & 0xFFu),
+        (unsigned)((g_dns >> 8) & 0xFFu), (unsigned)(g_dns & 0xFFu),
+        g_address == NET_ADDRESS_LEASE ? "dhcp" : "fixed", (unsigned)(g_lease.server >> 24),
+        (unsigned)((g_lease.server >> 16) & 0xFFu), (unsigned)((g_lease.server >> 8) & 0xFFu),
+        (unsigned)(g_lease.server & 0xFFu), (unsigned)g_lease.lease_s, (unsigned)dhcp_t1(&g_lease),
+        (unsigned)dhcp_t2(&g_lease));
+
+    if (length <= 0 || (k_size_t)length >= sizeof(g_file_text)) {
+        return;
+    }
+
+    if (vfs_open(NET_FILE_PATH, VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, priv) != 0) {
+        kwarn("net: %s is not writable, the address lives in memory only", NET_FILE_PATH);
+        return;
+    }
+
+    written = vfs_write(&file, g_file_text, (k_size_t)length);
+    (void)vfs_close(&file);
+
+    if (written != length) {
+        kwarn("net: %s holds %d of %d byte(s)", NET_FILE_PATH, written, length);
+    }
+}
+
+/* --- the client of DHCP on this stack -------------------------------------- */
+
+static bool net_dhcp_send(void *context, const void *datagram, k_size_t size)
+{
+    k_u8_t broadcast[6] = {0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu};
+    k_u8_t packet[NET_UDP_HDR + DHCP_MESSAGE_MAX];
+    k_u32_t sum;
+    k_u32_t source;
+    k_u16_t checksum;
+
+    K_UNUSED(context);
+
+    if (size > DHCP_MESSAGE_MAX) {
+        return false;
+    }
+
+    /* A machine with a lease asks from its own address; the first exchange
+     * of a machine without one is from the zero address, which is what
+     * RFC 2131 §4.1 says a client without an address puts there. */
+    source = g_address == NET_ADDRESS_LEASE ? g_lease.address : 0u;
+
+    net_put_be16(packet + 0, DHCP_CLIENT_PORT);
+    net_put_be16(packet + 2, DHCP_SERVER_PORT);
+    net_put_be16(packet + 4, (k_u16_t)(NET_UDP_HDR + size));
+    net_put_be16(packet + 6, 0u);
+    memcpy(packet + NET_UDP_HDR, datagram, size);
+
+    sum = net_pseudo_sum(source, 0xFFFFFFFFu, NET_IP_UDP, NET_UDP_HDR + size);
+    sum = net_sum(sum, packet, NET_UDP_HDR + size);
+    checksum = net_sum_finish(sum);
+    net_put_be16(packet + 6, checksum == 0u ? 0xFFFFu : checksum);
+
+    return net_send_ip_at(source, 0xFFFFFFFFu, broadcast, NET_IP_UDP, packet, NET_UDP_HDR + size);
+}
+
+static int net_dhcp_receive(void *context, void *datagram, k_size_t size, k_u32_t timeout_ms)
+{
+    k_u64_t deadline = k_port_uptime_ms() + timeout_ms;
+    int length = -1;
+
+    K_UNUSED(context);
+
+    g_dhcp_rx_length = 0u;
+    g_dhcp_rx_armed = true;
+
+    for (;;) {
+        net_poll();
+
+        if (g_dhcp_rx_length > 0u) {
+            length = (int)g_dhcp_rx_length;
+
+            if (g_dhcp_rx_length > size) {
+                length = -1;
+            } else {
+                memcpy(datagram, g_dhcp_rx, g_dhcp_rx_length);
+            }
+
+            g_dhcp_rx_length = 0u;
+            break;
+        }
+
+        if (k_port_uptime_ms() >= deadline) {
+            length = 0;
+            break;
+        }
+
+        k_sched_sleep_ms(1);
+    }
+
+    g_dhcp_rx_armed = false;
+
+    return length;
+}
+
+static k_u64_t net_dhcp_now(void *context)
+{
+    K_UNUSED(context);
+
+    return k_port_uptime_ms();
+}
+
+/*
+ * The lease is ours: the address, the mask, the way out and the resolver come
+ * from the server, and the cache of names goes with the resolver that answered
+ * it. The gateway of a lease that named none stays zero: a network without a
+ * way out is a network of one segment, and sending frames to a gateway of
+ * 0.0.0.0 would be sending them nowhere.
+ */
+static void net_dhcp_apply(void *context, const struct dhcp_lease *lease)
+{
+    K_UNUSED(context);
+
+    g_lease = *lease;
+    g_address = NET_ADDRESS_LEASE;
+    g_ip = lease->address;
+
+    if (lease->mask != 0u) {
+        g_mask = lease->mask;
+    }
+
+    g_gateway = lease->gateway;
+
+    if (lease->dns != 0u) {
+        g_dns = lease->dns;
+    }
+
+    dns_cache_clear();
+}
+
+static const struct dhcp_transport g_dhcp_transport = {
+    .send = net_dhcp_send,
+    .receive = net_dhcp_receive,
+    .now_ms = net_dhcp_now,
+    .apply = net_dhcp_apply,
+    .context = NULL,
+};
+
+/*
+ * Ask for an address. The transport is this file's own: frames on the card,
+ * a datagram to the port of the client and the clock of the machine. A server
+ * that answers makes the lease true and the line of the log says so; a network
+ * without one leaves the fixed address of 1.8 and says that instead - the two
+ * outcomes a person has to be able to tell apart in the boot.
+ */
+static void net_dhcp_start(bool keep_address)
+{
+    struct dhcp_lease lease;
+    k_u32_t xid;
+    enum dhcp_result result;
+
+    xid = dhcp_xid(g_mac, k_port_uptime_ms(), ++g_dhcp_transactions);
+
+    result = dhcp_client_acquire(&g_dhcp_transport, g_mac, xid, NET_DHCP_BUDGET_MS, &lease);
+
+    if (result == DHCP_OK) {
+        net_log_config();
+        kinfo("dhcp: leased %u.%u.%u.%u for %u s from %u.%u.%u.%u (t1 %u, t2 %u)",
+              (unsigned)(lease.address >> 24), (unsigned)((lease.address >> 16) & 0xFFu),
+              (unsigned)((lease.address >> 8) & 0xFFu), (unsigned)(lease.address & 0xFFu),
+              (unsigned)lease.lease_s, (unsigned)(lease.server >> 24),
+              (unsigned)((lease.server >> 16) & 0xFFu), (unsigned)((lease.server >> 8) & 0xFFu),
+              (unsigned)(lease.server & 0xFFu), (unsigned)dhcp_t1(&lease),
+              (unsigned)dhcp_t2(&lease));
+        net_file_save();
+
+        return;
+    }
+
+    g_address = NET_ADDRESS_FIXED;
+
+    if (!keep_address) {
+        g_ip = NET_IP(10, 0, 2, 15);
+        g_mask = NET_IP(255, 255, 255, 0);
+        g_gateway = NET_IP(10, 0, 2, 2);
+        g_dns = NET_IP(10, 0, 2, 3);
+    }
+
+    net_log_config();
+
+    if (result == DHCP_REFUSED) {
+        kwarn("dhcp: the server refused the address, the fixed one is in use");
+    } else {
+        kwarn("dhcp: no answer from a server in %u ms, the fixed address is in use",
+              (unsigned)NET_DHCP_BUDGET_MS);
+    }
+
+    net_file_save();
+}
+
+/*
+ * The renewal of a lease, at the first use of the network after T1. The
+ * exchange is one REQUEST and one ACK and costs a part of a second, so it is
+ * done by the caller of the stack and not by a task of its own; a renewal that
+ * timed out keeps the address (the lease has until T2) and one that was
+ * refused starts the whole exchange again.
+ */
+static void net_lease_check(void)
+{
+    struct dhcp_lease lease;
+    k_u32_t xid;
+    enum dhcp_result result;
+    k_u64_t now;
+
+    if (g_address != NET_ADDRESS_LEASE || g_lease.lease_s == 0u) {
+        return;
+    }
+
+    now = k_port_uptime_ms();
+
+    if (!dhcp_renew_due(&g_lease, now)) {
+        return;
+    }
+
+    xid = dhcp_xid(g_mac, now, ++g_dhcp_transactions);
+
+    if (dhcp_rebind_due(&g_lease, now)) {
+        net_dhcp_start(true);
+        return;
+    }
+
+    result = dhcp_client_renew(&g_dhcp_transport, g_mac, &g_lease, xid, NET_DHCP_RENEW_MS, &lease);
+
+    if (result == DHCP_OK) {
+        kinfo("dhcp: renewed %u.%u.%u.%u for %u s", (unsigned)(g_lease.address >> 24),
+              (unsigned)((g_lease.address >> 16) & 0xFFu),
+              (unsigned)((g_lease.address >> 8) & 0xFFu), (unsigned)(g_lease.address & 0xFFu),
+              (unsigned)g_lease.lease_s);
+        net_file_save();
+    } else if (result == DHCP_REFUSED) {
+        /* The server says the address is not ours: ask for another one now
+         * instead of waiting for T2 with an address that is gone. */
+        net_dhcp_start(true);
+    }
+}
+
 static void net_config_apply(void)
 {
     if (g_configured) {
@@ -275,19 +757,37 @@ static void net_config_apply(void)
         return;
     }
 
+    /* From here a frame can leave: the exchange of DHCP has no address yet
+     * and needs the MAC alone, which is the one thing this line waits for. */
     g_configured = true;
 
-    kinfo("net: %u.%u.%u.%u/24, gateway %u.%u.%u.%u, dns %u.%u.%u.%u", (unsigned)(g_ip >> 24),
-          (unsigned)((g_ip >> 16) & 0xFFu), (unsigned)((g_ip >> 8) & 0xFFu),
-          (unsigned)(g_ip & 0xFFu), (unsigned)(g_gateway >> 24),
-          (unsigned)((g_gateway >> 16) & 0xFFu), (unsigned)((g_gateway >> 8) & 0xFFu),
-          (unsigned)(g_gateway & 0xFFu), (unsigned)(g_dns >> 24), (unsigned)((g_dns >> 16) & 0xFFu),
-          (unsigned)((g_dns >> 8) & 0xFFu), (unsigned)(g_dns & 0xFFu));
+    net_file_load();
+
+    if (g_file_static) {
+        g_address = NET_ADDRESS_FIXED;
+        net_log_config();
+        kinfo("dhcp: off, /etc/network names the address");
+
+        return;
+    }
+
+    if (!port_x86_64_nic_link()) {
+        g_address = NET_ADDRESS_FIXED;
+        net_log_config();
+        kwarn("dhcp: the link is down, the fixed address is in use");
+
+        return;
+    }
+
+    /* An address from the file is a fallback: the client asks, and a server
+     * that does not answer leaves the machine where it was. */
+    net_dhcp_start(g_ip != 0u);
 }
 
 static bool net_ready(void)
 {
     net_config_apply();
+    net_lease_check();
 
     return g_configured;
 }
@@ -309,7 +809,7 @@ static bool net_resolve(const char *host, k_u32_t *address);
 
 static void net_input(const k_u8_t *frame, k_size_t length);
 static void tcp_input(k_u32_t source, const k_u8_t *segment, k_size_t length);
-static void udp_input(k_u32_t source, const k_u8_t *datagram, k_size_t length);
+static void udp_input(k_u32_t source, k_u32_t destination, const k_u8_t *datagram, k_size_t length);
 static bool tcp_send_segment(struct k_socket *socket, k_u8_t flags, k_u32_t sequence,
                              const k_u8_t *payload, k_size_t length);
 
@@ -426,22 +926,21 @@ static bool arp_resolve(k_u32_t ip, k_u8_t mac[6], k_u32_t timeout_ms)
     return false;
 }
 
-static bool net_send_ip(k_u32_t destination, k_u8_t protocol, const k_u8_t *payload,
-                        k_size_t length)
+/*
+ * One IPv4 packet to one MAC, with the source address and the destination the
+ * caller names. The stack of a configured machine reaches this through
+ * net_send_ip() and its ARP; the client of DHCP is the other caller: it has no
+ * address of its own at the start and its frames are broadcasts, so it names
+ * the zero address and the MAC of every station.
+ */
+static bool net_send_ip_at(k_u32_t source, k_u32_t destination, const k_u8_t mac[6],
+                           k_u8_t protocol, const k_u8_t *payload, k_size_t length)
 {
     k_u8_t packet[PORT_X86_64_FRAME_MAX - NET_ETH_HDR];
-    k_u8_t mac[6];
-    k_u32_t hop;
     k_u16_t total = (k_u16_t)(NET_IP_HDR + length);
     static k_u16_t identification;
 
     if (length > sizeof(packet) - NET_IP_HDR || total > 1500u) {
-        return false;
-    }
-
-    hop = net_next_hop(destination);
-
-    if (!arp_resolve(hop, mac, NET_ARP_TIMEOUT_MS)) {
         return false;
     }
 
@@ -453,7 +952,7 @@ static bool net_send_ip(k_u32_t destination, k_u8_t protocol, const k_u8_t *payl
     packet[8] = (k_u8_t)NET_TTL;
     packet[9] = protocol;
     net_put_be16(packet + 10, 0u);
-    net_put_be32(packet + 12, g_ip);
+    net_put_be32(packet + 12, source);
     net_put_be32(packet + 16, destination);
     net_put_be16(packet + 10, net_checksum(packet, NET_IP_HDR));
 
@@ -466,6 +965,21 @@ static bool net_send_ip(k_u32_t destination, k_u8_t protocol, const k_u8_t *payl
     g_ip_tx++;
 
     return true;
+}
+
+static bool net_send_ip(k_u32_t destination, k_u8_t protocol, const k_u8_t *payload,
+                        k_size_t length)
+{
+    k_u8_t mac[6];
+    k_u32_t hop;
+
+    hop = net_next_hop(destination);
+
+    if (!arp_resolve(hop, mac, NET_ARP_TIMEOUT_MS)) {
+        return false;
+    }
+
+    return net_send_ip_at(g_ip, destination, mac, protocol, payload, length);
 }
 
 /* --- ICMP ------------------------------------------------------------------ */
@@ -529,7 +1043,7 @@ struct udp_pending {
 
 static struct udp_pending g_udp;
 
-static void udp_input(k_u32_t source, const k_u8_t *data, k_size_t length)
+static void udp_input(k_u32_t source, k_u32_t destination, const k_u8_t *data, k_size_t length)
 {
     k_u16_t source_port;
     k_u16_t destination_port;
@@ -554,7 +1068,7 @@ static void udp_input(k_u32_t source, const k_u8_t *data, k_size_t length)
     /* A zero checksum is "the sender did not compute one", which IPv4 allows
      * for UDP; anything else has to add up to zero over the pseudo header. */
     if (checksum != 0u) {
-        k_u32_t sum = net_pseudo_sum(source, g_ip, NET_IP_UDP, datagram_length);
+        k_u32_t sum = net_pseudo_sum(source, destination, NET_IP_UDP, datagram_length);
 
         sum = net_sum(sum, data, datagram_length);
 
@@ -562,6 +1076,23 @@ static void udp_input(k_u32_t source, const k_u8_t *data, k_size_t length)
             g_ip_dropped++;
             return;
         }
+    }
+
+    /* The client of DHCP listens on its own: a datagram to the port of the
+     * client from the port of a server is the answer of the exchange, whoever
+     * sent it and whether the machine has an address yet. It is taken before
+     * the one exchange of the stack, because the exchange of NTP or of the
+     * resolver is not open while the machine is asking for an address. */
+    if (g_dhcp_rx_armed && destination_port == DHCP_CLIENT_PORT &&
+        source_port == DHCP_SERVER_PORT) {
+        payload = (k_size_t)(datagram_length - NET_UDP_HDR);
+
+        if (payload <= sizeof(g_dhcp_rx)) {
+            memcpy(g_dhcp_rx, data + NET_UDP_HDR, payload);
+            g_dhcp_rx_length = payload;
+        }
+
+        return;
     }
 
     if (!g_udp.active || destination_port != g_udp.local_port || source_port != g_udp.remote_port ||
@@ -1160,7 +1691,7 @@ static void ip_input(const k_u8_t *frame, k_size_t length)
         icmp_input(source, packet + header_length, total - header_length);
         break;
     case NET_IP_UDP:
-        udp_input(source, packet + header_length, total - header_length);
+        udp_input(source, destination, packet + header_length, total - header_length);
         break;
     case NET_IP_TCP:
         tcp_input(source, packet + header_length, total - header_length);
@@ -1741,11 +2272,31 @@ static int cmd_netinfo(int argc, char **argv)
 
     kshell_printf("  ip ");
     print_ip(g_ip);
-    kshell_printf("/24, gateway ");
+    kshell_printf("/%u, gateway ", (unsigned)net_prefix(g_mask));
     print_ip(g_gateway);
     kshell_printf(", dns ");
     print_ip(g_dns);
     kshell_printf("\n");
+
+    if (g_address == NET_ADDRESS_LEASE) {
+        k_u32_t left = g_lease.lease_s;
+        k_u32_t spent = 0;
+
+        if (g_lease.lease_s != 0u) {
+            spent = (k_u32_t)((k_port_uptime_ms() - g_lease.obtained_ms) / 1000u);
+            left = spent < g_lease.lease_s ? g_lease.lease_s - spent : 0u;
+        }
+
+        kshell_printf("  dhcp: leased for %u s, %u s left (t1 %u, t2 %u), server ",
+                      (unsigned)g_lease.lease_s, (unsigned)left, (unsigned)dhcp_t1(&g_lease),
+                      (unsigned)dhcp_t2(&g_lease));
+        print_ip(g_lease.server);
+        kshell_printf("\n");
+    } else if (g_file_static) {
+        kshell_printf("  dhcp: off, /etc/network names the address\n");
+    } else {
+        kshell_printf("  dhcp: no server, the fixed address of 1.8\n");
+    }
 
     kshell_printf("  %u frame(s) in, %u out, %u dropped; %u ip in, %u out\n",
                   (unsigned)port_x86_64_nic_rx_frames(), (unsigned)port_x86_64_nic_tx_frames(),

@@ -212,7 +212,7 @@ set(SETTINGS_SOURCES
 # and not by the CMakeLists of the component, which is written for the tree of
 # ESP-IDF. src/dns.c is the exception: the stack of the port asks it for every
 # name, in every image, and it is the cache the contract of K6 asks for.
-set(NET_SOURCES "${NET_DIR}/src/dns.c")
+set(NET_SOURCES "${NET_DIR}/src/dns.c" "${NET_DIR}/src/dhcp.c")
 
 if(MICRO_OS_X86_NET)
     list(APPEND NET_SOURCES
