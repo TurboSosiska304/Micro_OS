@@ -204,6 +204,23 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Fixed
 
+- A sleep could answer before its deadline: the port's sleep is a door that a
+  wake of another channel knocks on too, and `k_sched_sleep_ms()` took the
+  first answer - so a session of three wrong passwords waited less than three
+  times the delay it was told, and a case of the terminal measured 90 ms of a
+  sleep of 100. The sleep is a loop on a deadline taken once at the entry now,
+  and only the kernel ends it (the tick, a wake of this task, a signal, the
+  stop flag of a wait). `make test-valgrind` was the gate that found it, and
+  `tests/cases/test_wait.c` holds it: a task sleeps 50 ms while another wakes
+  its door every 2 ms, and the case answers 52 (0 before the fix).
+- A directory entry carried a byte nobody wrote: `dir_find` filled the name,
+  the record and the type of a `struct mfs_dirent` and left `reserved` as the
+  stack had it, `dir_add` copied the eight bytes of the header whole, and the
+  byte went to the medium, into the journal slot and into its checksum -
+  valgrind of the cloud named the rename of the host case. The header is built
+  from a zeroed struct now, `dir_find` and `dir_entries` zero what they hand
+  out, and a case fills the stack with `0x5A`, renames, reads the block of the
+  directory back from the medium and asks the reserved byte to be zero.
 - `telnet` asked for the password on the console of the machine and not on the
   socket of the session: a client of the wire could not log in at all, and the
   person in front of the board was asked for a password that came from
