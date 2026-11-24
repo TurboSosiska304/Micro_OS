@@ -32,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format sdk idf-check idf-build idf-flash idf-monitor idf-size bundle bundle-board bundle-x86 x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-root-smoke x86-volume-smoke uefi uefi-run uefi-smoke uefi-stick x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-fs-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak x86-smp-smoke soak-smp bench
+.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format sdk idf-check idf-build idf-flash idf-monitor idf-size bundle bundle-board bundle-x86 x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-root-smoke x86-volume-smoke uefi uefi-run uefi-smoke uefi-stick usb-smoke x86-usb-smoke x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-fs-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak x86-smp-smoke soak-smp bench
 
 help:
 	@echo "Micro OS — available targets:"
@@ -72,6 +72,7 @@ help:
 	@echo "  make x86-smp-smoke  boot the kernel of two cores and check both of them"
 	@echo "  make x86-disk   the image of the disk: /bin and /etc of MicroFS"
 	@echo "  make x86-vga-smoke   check the screen and the keyboard without a display"
+	@echo "  make usb-smoke  the keyboard of the USB on a machine with no PS/2"
 	@echo "  make x86-run-disk   boot the window with an 8 MB disk of the machine"
 	@echo "  make x86-run-disk-serial  the same disk in a terminal (-nographic)"
 	@echo "  make x86-disk-smoke two boots on one disk image, a file survives both"
@@ -197,7 +198,7 @@ wiki-check:
 CI_QEMU := $(shell command -v qemu-system-x86_64 2>/dev/null)
 CI_TARGETS := build test test-asan test-tsan test-smp smoke coverage
 ifneq ($(CI_QEMU),)
-CI_TARGETS += x86-smoke x86-root-smoke
+CI_TARGETS += x86-smoke x86-root-smoke usb-smoke
 endif
 # The boot of the firmware needs QEMU and the firmware: a machine with one and
 # not the other is a machine of the BIOS gate alone.
@@ -208,7 +209,7 @@ CI_TARGETS += reproducible integrity
 
 ci: $(CI_TARGETS)
 ifeq ($(CI_QEMU),)
-	@echo "ci: qemu-system-x86_64 not found, x86-smoke and x86-root-smoke are skipped"
+	@echo "ci: qemu-system-x86_64 not found, x86-smoke, x86-root-smoke and usb-smoke are skipped"
 endif
 
 sim: build
@@ -519,6 +520,18 @@ bench: x86-build build
 # `make ci`: the monitor is a tool of its own.
 x86-vga-smoke: x86-build x86-disk
 	python3 tools/x86_vga_smoke.py --image $(X86_PROGRAMS_IMAGE)
+
+# The keyboard of the USB (ADR 0040): the machine of this run has no PS/2
+# controller at all (`-machine pc,i8042=off`) and the only keyboard on it is a
+# device of the xHCI controller, so a line typed through the monitor of QEMU
+# reaches the kernel through the rings of the controller and the reports of the
+# HID device, and nothing else. The same image of the disk as the smoke test =
+# the shell, /bin and /etc are the files of the release.
+usb-smoke: x86-build x86-disk
+	python3 tools/x86_usb_smoke.py --image $(X86_PROGRAMS_IMAGE) --timeout 180
+
+# The same gate under the name of the other machines of the port.
+x86-usb-smoke: usb-smoke
 
 # The disk of the port (ADR 0008): the same image of `make x86-disk`, copied
 # once to a disk of its own. A person boots the machine, writes a file, boots
