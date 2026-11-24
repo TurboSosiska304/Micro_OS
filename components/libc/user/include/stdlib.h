@@ -54,4 +54,14 @@ int putenv(char *word);
 int atexit(void (*function)(void));
 void abort(void) __attribute__((__noreturn__));
 
+/*
+ * A command of the machine as a process of its own: `system` forks the child,
+ * puts the program of the first word of the line over it and waits. There is
+ * no `/bin/sh` on this system, so the line is split by the quoting rules of
+ * the shell and the first word names the program (`src/words.c`,
+ * `src/command.c`). A NULL line answers 1, as POSIX asks ("a shell is
+ * available"); the status of the command is the number the child exited with.
+ */
+int system(const char *command);
+
 #endif /* MICRO_OS_LIBC_USER_STDLIB_H */

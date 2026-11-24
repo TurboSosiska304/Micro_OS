@@ -43,4 +43,36 @@ void __ulibc_dir_remember(int fd, const char *path);
 void __ulibc_dir_forget(int fd);
 const char *__ulibc_dir_path(int fd);
 
+/*
+ * The words of a line, split in place with the quoting rules of the shell of
+ * the machine: a word ends at a blank, `'...'` and `"..."` keep their blanks,
+ * and `\` escapes. The answer is the number of words, 0 for a line of blanks,
+ * or -1 with `E2BIG` for a line longer than the caller's table. `src/words.c`
+ * is the one implementation, and `popen`/`system` of `src/popen.c` and
+ * `src/system.c` are the callers.
+ */
+int __ulibc_split_words(char *text, char **words, int max);
+
+/*
+ * The words of one command, in the block of the caller: the copy of the text,
+ * the split and the NULL that ends the vector, in one call. The two numbers
+ * are the ones of one `execve` of the ABI - eight words in a block of 512
+ * bytes (`KSYS_ARGV_MAX` and `KSYS_ARGV_BYTES` of the kernel) - because a
+ * longer vector would be refused by the call and not by this library.
+ */
+#define ULIBC_COMMAND_WORDS 8
+#define ULIBC_COMMAND_BYTES 512
+
+int __ulibc_command_words(const char *command, char *block, char **words, int max);
+
+/*
+ * A new descriptor (an `open`, an end of a `pipe`) off the numbers of the
+ * console: 1 and 2 are the console of this system while they are not open as
+ * a file, so a file that took one of them receives what the program writes
+ * "to the console" (docs/debts.md). The answer is the number the descriptor
+ * lives at after the move - the same number when it was never 1 or 2, and
+ * `other` is the end of a pipe that the move must not take.
+ */
+int __ulibc_fd_away(int fd, int other);
+
 #endif /* MICRO_OS_LIBC_USER_INTERNAL_H */

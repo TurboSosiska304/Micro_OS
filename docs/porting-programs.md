@@ -81,8 +81,8 @@ tends to need and the tree has:
 | Header | What is there |
 |---|---|
 | `<string.h>` | `strlen`, `strcmp`, `strncmp`, `strcoll`, `strstr`, `strspn`, `strcspn`, `strpbrk`, `strcpy`, `strncpy`, `strcat`, `strchr`, `strrchr`, `strdup` (a file of its own: it allocates), `memcpy`, `memmove`, `memset`, `memcmp`, `memchr` |
-| `<stdlib.h>` | `malloc`, `calloc`, `realloc`, `free`, `exit`, `abort`, `getenv`/`environ`, `setenv`, `unsetenv`, `putenv`, `strtod`, `strtol`, `strtoul`, `strtoll`, `strtoull`, `atoi`, `atol`, `atof`, `abs`, `labs`, `qsort`, `EXIT_SUCCESS`, `EXIT_FAILURE` |
-| `<stdio.h>` | `printf`, `vprintf`, `fprintf`, `vfprintf`, `sprintf`, `snprintf`, `vsnprintf`, `puts`, `putchar`, `perror`, `getchar`, `sscanf`, `vsscanf`, `scanf`, `vscanf`, `fscanf`, `vfscanf`, and the streams `fopen`, `fdopen`, `freopen`, `tmpfile` (a failure: no `/tmp`), `fclose`, `fread`, `fwrite`, `fgetc`, `getc`, `ungetc`, `fputc`, `fgets`, `fputs`, `feof`, `ferror`, `clearerr`, `fflush`, `fseek`, `ftell`, `rewind`, `fileno`, `setvbuf` (accepted, no buffer), `stdin`, `stdout`, `stderr` |
+| `<stdlib.h>` | `malloc`, `calloc`, `realloc`, `free`, `exit`, `abort`, `system` (1.8: a fork, the program of the first word of the line and its status; there is no shell), `getenv`/`environ`, `setenv`, `unsetenv`, `putenv`, `strtod`, `strtol`, `strtoul`, `strtoll`, `strtoull`, `atoi`, `atol`, `atof`, `abs`, `labs`, `qsort`, `EXIT_SUCCESS`, `EXIT_FAILURE` |
+| `<stdio.h>` | `printf`, `vprintf`, `fprintf`, `vfprintf`, `sprintf`, `snprintf`, `vsnprintf`, `puts`, `putchar`, `perror`, `getchar`, `sscanf`, `vsscanf`, `scanf`, `vscanf`, `fscanf`, `vfscanf`, `popen`/`pclose` (1.8: a pipe, a fork and the `execve` of the first word of the command, because there is no `/bin/sh`), and the streams `fopen`, `fdopen`, `freopen`, `tmpfile` (a failure: no `/tmp`), `fclose`, `fread`, `fwrite`, `fgetc`, `getc`, `ungetc`, `fputc`, `fgets`, `fputs`, `feof`, `ferror`, `clearerr`, `fflush`, `fseek`, `ftell`, `rewind`, `fileno`, `setvbuf` (accepted, no buffer), `stdin`, `stdout`, `stderr` |
 | `<sys/stat.h>` | `struct stat` with the `S_IS*` macros, `stat`, `lstat` (the same call: no links), `fstat` (the position of the end), `chmod`, `umask`. The record of the ABI itself is `ulibc_stat_call`, which fills `struct vfs_stat` |
 | `<dirent.h>` | `DIR`, `struct dirent`, `opendir`, `readdir`, `closedir`, `rewinddir`, `dirfd` over a batch of eight entries of the call `ulibc_readdir` |
 | `<libgen.h>` | `basename`, `dirname` |
@@ -290,11 +290,13 @@ The port layer answers two different questions:
   `bsearch`, `popen` and `pclose` are the library of a program's files and
   the program links them, because a name has one implementation in the tree;
 * the platform: `system` says on the error descriptor that the machine has no
-  shell and answers `-1`; `"cmd" | getline` and `print | "cmd"` reach the
-  `popen` of the library, which answers NULL with `ENOSYS`, so the call is
-  `-1` or a fatal error of the redirect. A script that reads a file with
-  `getline < "name"` and writes one with `print > "name"` works through the
-  VFS: the refusal is only the shell, and the smoke test checks both sides.
+  shell and answers `-1` (the port of the release owns the name; the library
+  has its own `system` now, and a port that drops the stub gets it); since 1.8
+  `"cmd" | getline` and `print | "cmd"` reach the `popen` of the library,
+  which is a pipe, a `fork` and the `execve` of the first word of the command,
+  so the command runs. A script that reads a file with `getline < "name"` and
+  writes one with `print > "name"` works through the VFS, as before: the smoke
+  test checks the three sides (`docs/ports-table.md`).
 
 `port/sys/wait.h` and `port/wctype.h` exist because the source includes
 those headers and the library of a program has neither; the path of the
