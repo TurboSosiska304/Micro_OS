@@ -1497,6 +1497,7 @@ add_executable(microos64
     src/font_spleen.c
     src/pci.c
     src/ps2.c
+    src/acpi.c
     src/xhci.c
     src/usb_storage.c
     src/usb_net.c
@@ -1514,6 +1515,7 @@ add_executable(microos64
     src/ioapic.c
     src/port_exec.c
     src/port_x86_64_task.c
+    src/stack.c
     src/blockdev_ram.c
     src/blockdev_module.c
     src/ata.c

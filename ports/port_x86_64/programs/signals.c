@@ -50,6 +50,14 @@ static long fast_call(long number, long a0, long a1, long a2, long a3, long a4, 
     return rax;
 }
 
+/*
+ * A pid that names no task of any session. The number was 9999, and the soak
+ * of ten minutes makes thirty thousand tasks: the machine eventually ran this
+ * program as the task 9999, the "ghost" was the program itself, and the kill
+ * of a pid that does not exist answered zero (the soak of 1.9 found it).
+ */
+#define PROGRAM_GHOST_PID 999999999L
+
 static volatile int g_int_runs;
 static volatile int g_last_int;
 
@@ -224,7 +232,7 @@ int signals_main(int argc, char *const argv[])
     (void)prog_waitpid(pid, &status, 0);
 
     /* 5. A pid that names no task, and a signal that does not exist. */
-    r = prog_kill(9999, KSYS_SIGTERM);
+    r = prog_kill(PROGRAM_GHOST_PID, KSYS_SIGTERM);
     prog_puts("PROGRAM: kill ghost returned ");
     prog_put_dec((unsigned long)(r < 0 ? -r : r));
     prog_puts("\n");

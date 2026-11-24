@@ -17,16 +17,36 @@ static struct {
     bool mounted;
     const struct k_blockdev *dev;
     struct mfs_superblock sb;
-    k_u32_t inode_size;        /* 16 for a version 1 volume, 32 for 2, 64 for 3 */
-    k_u32_t bitmap_blocks;     /* the blocks of the bitmap of the free blocks */
-    k_u32_t bitmap_start;      /* the first block of the bitmap in META */
-    k_u32_t inode_blocks;      /* the blocks of the table of the inodes */
-    k_u32_t inode_capacity;    /* the number of the records of the table */
-    k_u32_t table_end;         /* a version 3 volume: the block after the table */
-    k_u32_t generation;        /* the number of the growths of the table */
-    k_u32_t open_files;        /* the descriptors the filesystem handed out */
-    bool bitmap_dirty;         /* the map in the memory is newer than the device */
-    k_u8_t *bitmap;            /* the map of the free blocks, one bit per block */
+    k_u32_t inode_size;     /* 16 for a version 1 volume, 32 for 2, 64 for 3 */
+    k_u32_t bitmap_blocks;  /* the blocks of the bitmap of the free blocks */
+    k_u32_t bitmap_start;   /* the first block of the bitmap in META */
+    k_u32_t inode_blocks;   /* the blocks of the table of the inodes */
+    k_u32_t inode_capacity; /* the number of the records of the table */
+    k_u32_t table_end;      /* a version 3 volume: the block after the table */
+    k_u32_t generation;     /* the number of the growths of the table */
+    k_u32_t open_files;     /* the descriptors the filesystem handed out */
+    bool bitmap_dirty;      /* the map in the memory is newer than the device */
+    k_u8_t *bitmap;         /* the map of the free blocks, one bit per block */
+    /*
+     * The journal of a version 4 volume (ADR 0047): where it is, how many
+     * slots it has, and the transaction that is being built. `txn_depth` is
+     * the nesting of the public calls, so a create that calls another public
+     * call commits once; a write outside any operation begins and commits a
+     * transaction of its own.
+     */
+    k_u32_t journal_start;
+    k_u32_t journal_blocks;
+    k_u32_t journal_slots;
+    k_u32_t journal_sequence;    /* the number of the last transaction */
+    k_u32_t journal_replayed;    /* the blocks the mount restored */
+    k_u8_t *bitmap_dirty_blocks; /* one byte per block of the map */
+    k_u32_t txn_depth;
+    bool txn_open;             /* the journal holds a transaction in progress */
+    k_u32_t txn_slots;         /* the slots it has written */
+    k_u32_t *txn_homes;        /* the block each slot of the journal belongs to */
+    k_u32_t txn_map_crc;       /* the CRC of the slot headers, running */
+    bool txn_failed;           /* a slot could not be written */
+    bool txn_bypass;           /* a pass that orders its writes itself (table_grow) */
     k_u32_t inode_cache_block; /* the block of the table that is cached */
     bool inode_cache_valid;    /* the cache holds the block of the medium */
     k_u8_t inode_cache[MFS_BLOCK_SIZE];
@@ -73,10 +93,14 @@ static void mfs_unlock(void)
  * of IEEE 802.3), enough to notice a header that a brownout left half
  * written.
  */
-static k_u32_t crc32(const void *data, k_size_t size)
+static k_u32_t crc32_start(void)
+{
+    return 0xFFFFFFFFu;
+}
+
+static k_u32_t crc32_feed(k_u32_t crc, const void *data, k_size_t size)
 {
     const k_u8_t *bytes = (const k_u8_t *)data;
-    k_u32_t crc = 0xFFFFFFFFu;
     k_size_t i;
     int bit;
 
@@ -92,7 +116,17 @@ static k_u32_t crc32(const void *data, k_size_t size)
         }
     }
 
+    return crc;
+}
+
+static k_u32_t crc32_finish(k_u32_t crc)
+{
     return crc ^ 0xFFFFFFFFu;
+}
+
+static k_u32_t crc32(const void *data, k_size_t size)
+{
+    return crc32_finish(crc32_feed(crc32_start(), data, size));
 }
 
 /*
@@ -307,6 +341,33 @@ static int dev_write(k_u32_t block, const void *buf)
     return MFS_OK;
 }
 
+static k_u32_t journal_slot_image_block(k_u32_t slot);
+
+/*
+ * Read a block of the metadata through the journal: a block that the open
+ * transaction has already written is the image in its slot and not the block
+ * on the medium, which still holds the state before the transaction. Without
+ * this the filesystem would read its own uncommitted write as the old block:
+ * a record written by a create and read again by the directory that names it,
+ * a directory block read again by the append of its chain (ADR 0047 §3).
+ */
+static int meta_read(k_u32_t block, void *buf)
+{
+    if (g.txn_open) {
+        k_u32_t slot = g.txn_slots;
+
+        while (slot > 0u) {
+            slot--;
+
+            if (g.txn_homes != NULL && g.txn_homes[slot] == block) {
+                return dev_read(journal_slot_image_block(slot), buf);
+            }
+        }
+    }
+
+    return dev_read(block, buf);
+}
+
 /* The device hands the changes to the medium, when it holds them back. */
 static int dev_sync(void)
 {
@@ -315,6 +376,503 @@ static int dev_sync(void)
     }
 
     return (g.dev->ops->sync(g.dev->ctx) == 0) ? MFS_OK : MFS_EIO;
+}
+
+/* --- the journal of a version 4 volume (ADR 0047) --- */
+
+/*
+ * A version 4 volume keeps a run of blocks in META for the transactions of
+ * the metadata: the header of the journal, then a slot of two blocks per
+ * block of a transaction. The order of a commit is the promise of the ADR:
+ * the slots reach the medium, the header says "committed" and the device is
+ * flushed, the images go to the blocks they name, and the header is cleared.
+ * The home blocks are not touched before the commit, so a transaction that
+ * was not committed is forgotten by the mount and leaves the volume it
+ * found; one that was committed is replayed until it is whole.
+ */
+static bool journaled(void)
+{
+    return g.sb.version >= MFS_VERSION_JOURNAL && g.journal_slots != 0u && !g.txn_bypass;
+}
+
+static k_u32_t journal_slot_header_block(k_u32_t slot)
+{
+    return g.journal_start + 1u + slot * 2u;
+}
+
+static k_u32_t journal_slot_image_block(k_u32_t slot)
+{
+    return g.journal_start + 2u + slot * 2u;
+}
+
+static int journal_header_write(k_u32_t state, k_u32_t sequence, k_u32_t slots, k_u32_t map_crc)
+{
+    struct mfs_journal_header header;
+    k_u8_t block[MFS_BLOCK_SIZE];
+
+    memset(&header, 0, sizeof(header));
+    header.magic = MFS_JOURNAL_MAGIC;
+    header.version = MFS_JOURNAL_VERSION;
+    header.sequence = sequence;
+    header.state = state;
+    header.slots = slots;
+    header.map_crc = map_crc;
+    /* The checksum covers the six words before it. */
+    header.crc = crc32(&header, offsetof(struct mfs_journal_header, crc));
+
+    memset(block, 0, sizeof(block));
+    memcpy(block, &header, sizeof(header));
+
+    return dev_write(g.journal_start, block);
+}
+
+static int journal_header_read(struct mfs_journal_header *header)
+{
+    k_u8_t block[MFS_BLOCK_SIZE];
+    int rc;
+
+    rc = dev_read(g.journal_start, block);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    memcpy(header, block, sizeof(*header));
+
+    if (header->magic == 0u) {
+        /* A journal that was never written is a journal with nothing in it;
+         * the format writes the magic, so this is only a fresh medium. */
+        memset(header, 0, sizeof(*header));
+        return MFS_OK;
+    }
+
+    if (header->magic != MFS_JOURNAL_MAGIC || header->version != MFS_JOURNAL_VERSION) {
+        kerror("mfs: the journal of the volume is not the one of the system");
+        return MFS_EINVAL;
+    }
+
+    if (header->crc != crc32(header, offsetof(struct mfs_journal_header, crc))) {
+        kerror("mfs: the header of the journal is damaged");
+        return MFS_EINVAL;
+    }
+
+    return MFS_OK;
+}
+
+/*
+ * Write the slots of the open transaction, commit them, put the images into
+ * the blocks they name and clear the header. The device is flushed after the
+ * commit and after the images: the first flush is the commit, the second is
+ * the checkpoint of the blocks the mount could otherwise replay over a newer
+ * state.
+ */
+static int journal_flush(void)
+{
+    k_u32_t slot;
+    int rc;
+
+    if (!g.txn_open) {
+        return MFS_OK;
+    }
+
+    if (g.txn_failed || g.txn_slots == 0u) {
+        g.txn_open = false;
+        g.txn_slots = 0u;
+        g.txn_failed = false;
+        return MFS_OK;
+    }
+
+    rc = journal_header_write(MFS_JOURNAL_STATE_COMMITTED, g.journal_sequence, g.txn_slots,
+                              crc32_finish(g.txn_map_crc));
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    rc = dev_sync();
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    for (slot = 0; slot < g.txn_slots; slot++) {
+        struct mfs_journal_slot entry;
+        k_u8_t block[MFS_BLOCK_SIZE];
+
+        rc = dev_read(journal_slot_header_block(slot), block);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
+        memcpy(&entry, block, sizeof(entry));
+
+        rc = dev_read(journal_slot_image_block(slot), block);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
+        if (entry.crc != crc32(block, MFS_BLOCK_SIZE) || entry.home >= g.sb.total_blocks) {
+            kerror("mfs: the slot %u of the journal is not the one that was written",
+                   (unsigned)slot);
+            return MFS_EIO;
+        }
+
+        rc = dev_write(entry.home, block);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+    }
+
+    rc = dev_sync();
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    /* The checkpoint needs no flush: the next transaction writes the header
+     * before its slots, and its commit flushes both. A header that reaches
+     * the mount still committed replays the same images, which is harmless. */
+    (void)journal_header_write(MFS_JOURNAL_STATE_EMPTY, g.journal_sequence, 0, 0);
+    g.txn_open = false;
+    g.txn_slots = 0;
+    g.txn_failed = false;
+
+    return MFS_OK;
+}
+
+/*
+ * Commit what the journal holds and leave the operation open. The growth of
+ * the table of the records is a pass that orders its own writes and cannot
+ * defer them to the commit of the operation that happened to need it; it
+ * takes this point, writes its blocks directly, and the operation continues
+ * in a journal of its own.
+ */
+static int txn_checkpoint(void)
+{
+    if (!g.txn_open) {
+        return MFS_OK;
+    }
+
+    return journal_flush();
+}
+
+/* Start a transaction: the header of the journal takes the next number. */
+static int journal_begin(void)
+{
+    int rc;
+
+    if (!journaled() || g.txn_open) {
+        return MFS_OK;
+    }
+
+    g.journal_sequence++;
+    g.txn_slots = 0u;
+    g.txn_map_crc = crc32_start();
+    g.txn_failed = false;
+    g.txn_open = true;
+
+    rc = journal_header_write(MFS_JOURNAL_STATE_EMPTY, g.journal_sequence, 0, 0);
+    if (rc != MFS_OK) {
+        g.txn_open = false;
+        return rc;
+    }
+
+    return MFS_OK;
+}
+
+/*
+ * Put a block image into the open transaction. A transaction that runs out
+ * of slots is committed where it stands and a new one begins: every block of
+ * the journal is still written ahead of its home, and the price is that the
+ * operation it belongs to may be a little less atomic than the ADR promises
+ * - which no operation of the filesystem reaches, since the journal holds a
+ * slot per block of the map and the map is the widest thing a change dirties.
+ */
+static int journal_add(k_u32_t home, const void *image)
+{
+    struct mfs_journal_slot entry;
+    k_u32_t words[3];
+    k_u32_t slot;
+    k_u8_t block[MFS_BLOCK_SIZE];
+    int rc;
+
+    if (!journaled()) {
+        return dev_write(home, image);
+    }
+
+    if (home >= g.sb.total_blocks) {
+        return MFS_EIO;
+    }
+
+    if (g.txn_depth == 0u) {
+        g.txn_depth = 1u;
+        rc = journal_begin();
+
+        if (rc == MFS_OK) {
+            rc = journal_add(home, image);
+        }
+
+        if (rc == MFS_OK) {
+            rc = journal_flush();
+        } else {
+            g.txn_open = false;
+            g.txn_slots = 0u;
+            g.txn_failed = false;
+        }
+
+        g.txn_depth = 0u;
+
+        return rc;
+    }
+
+    if (g.txn_failed) {
+        return MFS_EIO;
+    }
+
+    if (!g.txn_open) {
+        rc = journal_begin();
+        if (rc != MFS_OK) {
+            return rc;
+        }
+    }
+
+    if (g.txn_slots >= g.journal_slots) {
+        rc = journal_flush();
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
+        rc = journal_begin();
+        if (rc != MFS_OK) {
+            return rc;
+        }
+    }
+
+    slot = g.txn_slots++;
+
+    memset(&entry, 0, sizeof(entry));
+    entry.home = home;
+    entry.sequence = g.journal_sequence;
+    entry.crc = crc32(image, MFS_BLOCK_SIZE);
+
+    memset(block, 0, sizeof(block));
+    memcpy(block, &entry, sizeof(entry));
+
+    rc = dev_write(journal_slot_header_block(slot), block);
+    if (rc == MFS_OK) {
+        rc = dev_write(journal_slot_image_block(slot), image);
+    }
+
+    if (rc != MFS_OK) {
+        /* The slot is not sound: the transaction cannot be committed, and a
+         * header that names it would fail its own check at the mount. */
+        g.txn_failed = true;
+        return rc;
+    }
+
+    if (g.txn_homes != NULL) {
+        g.txn_homes[slot] = home;
+    }
+
+    words[0] = entry.home;
+    words[1] = entry.sequence;
+    words[2] = entry.crc;
+    g.txn_map_crc = crc32_feed(g.txn_map_crc, words, sizeof(words));
+
+    return MFS_OK;
+}
+
+/*
+ * Begin a transaction of a public operation; nested calls share the one. The
+ * journal takes its number and writes its header at the first block that
+ * changes, not here: a call that turns out to write nothing - a close of a
+ * file that was only read, a chmod that asks for the mode it finds - must
+ * leave the medium as it found it, or a boot that only reads would change a
+ * volume (ADR 0047 §3).
+ */
+static int mfs_txn_begin(void)
+{
+    g.txn_depth++;
+
+    return MFS_OK;
+}
+
+/* Commit the transaction of the outermost public call. */
+static int mfs_txn_commit(void)
+{
+    int rc = MFS_OK;
+
+    if (g.txn_depth == 0u) {
+        return MFS_OK;
+    }
+
+    g.txn_depth--;
+
+    if (g.txn_depth == 0u) {
+        rc = journal_flush();
+    }
+
+    return rc;
+}
+
+/* Forget the transaction: the home blocks were never touched. */
+static void mfs_txn_abort(void)
+{
+    g.txn_depth = 0u;
+    g.txn_open = false;
+    g.txn_slots = 0u;
+    g.txn_failed = false;
+}
+
+/*
+ * The journal of a block that is metadata: a record of the table, a block of
+ * the map, a block of a directory, the header of the volume. A block of the
+ * data of a file is not journaled (ADR 0047 §4).
+ */
+static int meta_write(k_u32_t block, const void *image)
+{
+    return journal_add(block, image);
+}
+
+/*
+ * Put the journal of a volume that a cut left back into the volume. A
+ * committed transaction is checked against its own slots and replayed; a
+ * transaction that is not committed is forgotten, because its home blocks
+ * were never written. The call runs before the map is loaded, so it writes
+ * the blocks directly and not through the journal.
+ */
+static int journal_replay(void)
+{
+    struct mfs_journal_header header;
+    k_u32_t map_crc;
+    k_u32_t slot;
+    int rc;
+
+    g.journal_replayed = 0u;
+
+    if (!journaled()) {
+        return MFS_OK;
+    }
+
+    rc = journal_header_read(&header);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    /* The number of the last transaction is kept even when there is nothing
+     * to replay: the checkpoint of an unmount writes it back, and a machine
+     * that mounts the volume again changes no byte of it. */
+    g.journal_sequence = header.sequence;
+
+    if (header.state != MFS_JOURNAL_STATE_COMMITTED || header.slots == 0u) {
+        if (header.state == MFS_JOURNAL_STATE_EMPTY && header.slots == 0u) {
+            return MFS_OK;
+        }
+
+        kinfo("mfs: the journal held no committed transaction; the cut changed nothing");
+        (void)journal_header_write(MFS_JOURNAL_STATE_EMPTY, header.sequence, 0, 0);
+        return MFS_OK;
+    }
+
+    if (header.slots > g.journal_slots) {
+        kerror("mfs: the journal claims %u slot(s) of %u", (unsigned)header.slots,
+               (unsigned)g.journal_slots);
+        return MFS_EINVAL;
+    }
+
+    g.journal_sequence = header.sequence;
+
+    /* The slot headers are checked first, so a journal that another
+     * transaction half overwrote is not applied at all. */
+    map_crc = crc32_start();
+
+    for (slot = 0; slot < header.slots; slot++) {
+        struct mfs_journal_slot entry;
+        k_u8_t block[MFS_BLOCK_SIZE];
+        k_u32_t words[3];
+
+        rc = dev_read(journal_slot_header_block(slot), block);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
+        memcpy(&entry, block, sizeof(entry));
+
+        if (entry.sequence != header.sequence || entry.home >= g.sb.total_blocks) {
+            kerror("mfs: the journal does not match its header; the transaction is ignored");
+            (void)journal_header_write(MFS_JOURNAL_STATE_EMPTY, header.sequence, 0, 0);
+            return MFS_OK;
+        }
+
+        words[0] = entry.home;
+        words[1] = entry.sequence;
+        words[2] = entry.crc;
+        map_crc = crc32_feed(map_crc, words, sizeof(words));
+    }
+
+    if (crc32_finish(map_crc) != header.map_crc) {
+        kerror("mfs: the journal does not checksum; the transaction is ignored");
+        (void)journal_header_write(MFS_JOURNAL_STATE_EMPTY, header.sequence, 0, 0);
+        return MFS_OK;
+    }
+
+    for (slot = 0; slot < header.slots; slot++) {
+        struct mfs_journal_slot entry;
+        k_u8_t block[MFS_BLOCK_SIZE];
+
+        rc = dev_read(journal_slot_header_block(slot), block);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
+        memcpy(&entry, block, sizeof(entry));
+
+        rc = dev_read(journal_slot_image_block(slot), block);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
+        if (entry.crc != crc32(block, MFS_BLOCK_SIZE)) {
+            kerror("mfs: the image of the slot %u is not the one that was committed",
+                   (unsigned)slot);
+            return MFS_EIO;
+        }
+
+        rc = dev_write(entry.home, block);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+    }
+
+    rc = dev_sync();
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    (void)journal_header_write(MFS_JOURNAL_STATE_EMPTY, header.sequence, 0, 0);
+
+    rc = dev_sync();
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    g.journal_replayed = header.slots;
+    kinfo("mfs: the journal replayed %u block(s) of the transaction %u", (unsigned)header.slots,
+          (unsigned)header.sequence);
+
+    return MFS_OK;
+}
+
+/* The transaction the journal of the mounted volume still holds, if any. */
+k_u32_t mfs_priv_journal_pending(void)
+{
+    struct mfs_journal_header header;
+
+    if (!journaled()) {
+        return 0u;
+    }
+
+    if (journal_header_read(&header) != MFS_OK) {
+        return 0u;
+    }
+
+    return (header.state == MFS_JOURNAL_STATE_COMMITTED) ? header.slots : 0u;
 }
 
 /* --- the bitmap of the free blocks --- */
@@ -344,6 +902,16 @@ static void bitmap_release(void)
         kmm_free(g.bitmap);
         g.bitmap = NULL;
     }
+
+    if (g.bitmap_dirty_blocks != NULL) {
+        kmm_free(g.bitmap_dirty_blocks);
+        g.bitmap_dirty_blocks = NULL;
+    }
+
+    if (g.txn_homes != NULL) {
+        kmm_free(g.txn_homes);
+        g.txn_homes = NULL;
+    }
 }
 
 /*
@@ -359,6 +927,7 @@ static void bitmap_release(void)
 static int bitmap_alloc(k_u32_t blocks)
 {
     k_u8_t *map;
+    k_u8_t *dirty;
     k_size_t size;
 
     if (blocks == 0u || blocks > MFS_BITMAP_MAX_BLOCKS) {
@@ -375,11 +944,27 @@ static int bitmap_alloc(k_u32_t blocks)
         return MFS_ENOMEM;
     }
 
+    /*
+     * The journal writes only the blocks of the map that a change dirtied,
+     * so the filesystem keeps one byte per block of the map next to it. The
+     * bytes of a volume of 64 GiB are 8192, which is the price of not
+     * writing 8 MiB of the map for every record of a file.
+     */
+    dirty = (k_u8_t *)kmm_alloc(blocks, KMM_PRIORITY_SYSTEM);
+
+    if (dirty == NULL) {
+        kerror("mfs: no memory for the dirty blocks of the map (%u block(s))", (unsigned)blocks);
+        kmm_free(map);
+        return MFS_ENOMEM;
+    }
+
     memset(map, 0, size);
+    memset(dirty, 0, blocks);
 
     /* A map of an earlier volume cannot describe this one. */
     bitmap_release();
     g.bitmap = map;
+    g.bitmap_dirty_blocks = dirty;
 
     return MFS_OK;
 }
@@ -423,14 +1008,38 @@ static int bitmap_load(void)
 static int bitmap_store(void)
 {
     k_u32_t i;
+    int rc;
+
+    if (!g.bitmap_dirty) {
+        return MFS_OK;
+    }
+
+    rc = mfs_txn_begin();
+    if (rc != MFS_OK) {
+        return rc;
+    }
 
     for (i = 0; i < g.bitmap_blocks; i++) {
-        int rc = dev_write(g.bitmap_start + i, g.bitmap + i * MFS_BLOCK_SIZE);
+        if (g.bitmap_dirty_blocks != NULL && g.bitmap_dirty_blocks[i] == 0u) {
+            continue;
+        }
 
+        rc = meta_write(g.bitmap_start + i, g.bitmap + i * MFS_BLOCK_SIZE);
         if (rc != MFS_OK) {
+            (void)mfs_txn_commit();
             return rc;
         }
     }
+
+    rc = mfs_txn_commit();
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    if (g.bitmap_dirty_blocks != NULL) {
+        memset(g.bitmap_dirty_blocks, 0, g.bitmap_blocks);
+    }
+    g.bitmap_dirty = false;
 
     return MFS_OK;
 }
@@ -460,6 +1069,11 @@ static void bitmap_set(k_u32_t index, bool used)
         g.bitmap[byte] |= (k_u8_t)(1u << bit);
     } else {
         g.bitmap[byte] &= (k_u8_t) ~(1u << bit);
+    }
+
+    /* The block of the map this bit belongs to is what the journal writes. */
+    if (g.bitmap_dirty_blocks != NULL) {
+        g.bitmap_dirty_blocks[byte / MFS_BLOCK_SIZE] = 1u;
     }
 
     /* The device has to learn about it, the next sync writes the map out. */
@@ -585,7 +1199,7 @@ static int inode_table_load(k_u32_t block)
         return MFS_OK;
     }
 
-    rc = dev_read(block, g.inode_cache);
+    rc = meta_read(block, g.inode_cache);
     if (rc != MFS_OK) {
         g.inode_cache_valid = false;
         return rc;
@@ -674,7 +1288,7 @@ static int inode_write(k_u32_t index, const struct mfs_inode *inode)
     mfs_priv_inode_encode(inode, g.inode_size, raw);
     memcpy(g.inode_cache + offset, raw, g.inode_size);
 
-    rc = dev_write(block, g.inode_cache);
+    rc = meta_write(block, g.inode_cache);
     if (rc != MFS_OK) {
         /* The block of the medium is not the one of the cache any more. */
         g.inode_cache_valid = false;
@@ -687,6 +1301,30 @@ static int inode_write(k_u32_t index, const struct mfs_inode *inode)
 /* Find a free record of the table of the inodes. */
 static int table_grow(k_u32_t add_blocks);
 
+/*
+ * Mark the record of an object as the draft of a write that the close will
+ * publish (ADR 0047). The write is a metadata write like any other: it goes
+ * through the journal, and a cut that leaves the flag on the medium is what
+ * tells the mount to remove the file.
+ */
+static int inode_mark_pending(k_u32_t index)
+{
+    struct mfs_inode inode;
+    int rc;
+
+    rc = inode_read(index, &inode);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    if ((inode.flags & MFS_INODE_PENDING) != 0u) {
+        return MFS_OK;
+    }
+
+    inode.flags |= MFS_INODE_PENDING;
+
+    return inode_write(index, &inode);
+}
 static int inode_alloc(k_u32_t *index)
 {
     k_u32_t i;
@@ -789,7 +1427,7 @@ static int chain_next(k_u32_t block, k_u32_t *next)
 {
     k_u8_t buffer[MFS_BLOCK_SIZE];
 
-    int rc = dev_read(block, buffer);
+    int rc = meta_read(block, buffer);
 
     if (rc != MFS_OK) {
         return rc;
@@ -1053,14 +1691,14 @@ static int header_write(const struct mfs_superblock *sb)
     k_u32_t at = sb->info_start + sb->info_blocks - 1u;
     int rc;
 
-    rc = dev_read(at, block);
+    rc = meta_read(at, block);
     if (rc != MFS_OK) {
         return rc;
     }
 
     memcpy(block, sb, sizeof(*sb));
 
-    return dev_write(at, block);
+    return meta_write(at, block);
 }
 
 /*
@@ -1086,7 +1724,7 @@ static int header_write(const struct mfs_superblock *sb)
  * The table grows downwards from the map, so the records it has keep their
  * addresses and only the new ones are below them.
  */
-static int table_grow(k_u32_t add_blocks)
+static int table_grow_body(k_u32_t add_blocks)
 {
     struct mfs_superblock sb;
     k_u32_t old_data;
@@ -1306,6 +1944,37 @@ static int table_grow(k_u32_t add_blocks)
     return MFS_OK;
 }
 
+/*
+ * The growth is a pass of its own: it orders its writes (the map before a
+ * chain, the header last) and cannot have them deferred to the commit of the
+ * operation that needed the records. The journal is checkpointed first and
+ * the pass writes the blocks it means to write, which is the order the
+ * format already promised (ADR 0038 §5, ADR 0047 §4).
+ */
+static int table_grow(k_u32_t add_blocks)
+{
+    int rc;
+
+    if (!g.mounted || g.sb.version < MFS_VERSION) {
+        return MFS_ENOSPC;
+    }
+
+    if (g.sb.version < MFS_VERSION_JOURNAL) {
+        return table_grow_body(add_blocks);
+    }
+
+    rc = txn_checkpoint();
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    g.txn_bypass = true;
+    rc = table_grow_body(add_blocks);
+    g.txn_bypass = false;
+
+    return rc;
+}
+
 /* --- the directories --- */
 
 struct dir_buffer {
@@ -1347,7 +2016,7 @@ static int dir_read(const struct mfs_inode *inode, struct dir_buffer *buf)
 
         {
             k_u8_t block_data[MFS_BLOCK_SIZE];
-            int rc = dev_read(block, block_data);
+            int rc = meta_read(block, block_data);
 
             if (rc != MFS_OK) {
                 return rc;
@@ -1397,13 +2066,13 @@ static int dir_write_data(const struct mfs_inode *inode, const k_u8_t *data, k_s
         }
 
         memset(block_data, 0, sizeof(block_data));
-        rc = dev_read(block, block_data);
+        rc = meta_read(block, block_data);
         if (rc != MFS_OK) {
             return rc;
         }
 
         memcpy(block_data + 4, data + offset, chunk);
-        rc = dev_write(block, block_data);
+        rc = meta_write(block, block_data);
         if (rc != MFS_OK) {
             return rc;
         }
@@ -1441,13 +2110,29 @@ static int dir_write_data(const struct mfs_inode *inode, const k_u8_t *data, k_s
                 empty[2] = (k_u8_t)(MFS_NEXT_NONE >> 16);
                 empty[3] = (k_u8_t)(MFS_NEXT_NONE >> 24);
 
-                rc = dev_write(new_block, empty);
+                rc = meta_write(new_block, empty);
                 if (rc != MFS_OK) {
                     block_release(new_block);
                     return rc;
                 }
 
-                rc = chain_set_next(block, new_block);
+                /* The link of a directory is metadata: a cut that leaves it
+                 * in place while the size of the directory is the old one
+                 * would make the chain longer than the object (ADR 0047). */
+                {
+                    k_u8_t link[MFS_BLOCK_SIZE];
+                    k_u32_t at = block;
+
+                    rc = meta_read(at, link);
+                    if (rc != MFS_OK) {
+                        block_release(new_block);
+                        return rc;
+                    }
+
+                    memcpy(link, &new_block, sizeof(new_block));
+                    rc = meta_write(at, link);
+                }
+
                 if (rc != MFS_OK) {
                     /* The block is not in any chain: the map takes it back. */
                     block_release(new_block);
@@ -1484,6 +2169,7 @@ static int dir_entries(const struct dir_buffer *buf, struct mfs_dirent *out, k_s
         struct mfs_dirent entry;
         k_size_t name_len;
 
+        memset(&entry, 0, sizeof(entry));
         memcpy(&entry.inode, buf->data + offset, sizeof(entry.inode));
         memcpy(&entry.name_len, buf->data + offset + 4, sizeof(entry.name_len));
         entry.type = buf->data[offset + 6];
@@ -1547,6 +2233,7 @@ static int dir_find(const struct dir_buffer *buf, const char *name, struct mfs_d
         if (entry.name_len == name_len &&
             memcmp(buf->data + offset + sizeof(struct mfs_dirent_header), name, name_len) == 0) {
             if (out != NULL) {
+                memset(out, 0, sizeof(*out));
                 memcpy(out->name, buf->data + offset + sizeof(struct mfs_dirent_header), name_len);
                 out->name[name_len] = '\0';
                 out->inode = entry.inode;
@@ -1565,7 +2252,8 @@ static int dir_find(const struct dir_buffer *buf, const char *name, struct mfs_d
 /* Add an entry to a directory. */
 static int dir_add(struct dir_buffer *buf, const struct mfs_dirent *entry)
 {
-    k_size_t need = sizeof(struct mfs_dirent_header) + entry->name_len;
+    struct mfs_dirent_header header;
+    k_size_t need = sizeof(header) + entry->name_len;
 
     /*
      * The buffer of the directory is the room of the directory: a person
@@ -1577,8 +2265,21 @@ static int dir_add(struct dir_buffer *buf, const struct mfs_dirent *entry)
         return MFS_ENOSPC;
     }
 
-    memcpy(buf->data + buf->size, entry, sizeof(struct mfs_dirent_header));
-    memcpy(buf->data + buf->size + sizeof(struct mfs_dirent_header), entry->name, entry->name_len);
+    /*
+     * The bytes of the entry are built here and not copied from the caller:
+     * a `struct mfs_dirent` has fields a lookup does not fill - `reserved`
+     * among them - and a block of a directory that carries a byte nobody
+     * wrote is a block the journal checksums over undefined memory (ADR
+     * 0047, and the valgrind pass of the suite). The reserved byte of the
+     * format is zero, and it is zero here.
+     */
+    memset(&header, 0, sizeof(header));
+    header.inode = entry->inode;
+    header.name_len = entry->name_len;
+    header.type = entry->type;
+
+    memcpy(buf->data + buf->size, &header, sizeof(header));
+    memcpy(buf->data + buf->size + sizeof(header), entry->name, entry->name_len);
     buf->size += need;
 
     return MFS_OK;
@@ -1749,7 +2450,9 @@ static int path_parent(const char *path, char *dir, k_size_t dir_size, char *nam
 
 /* --- the public interface --- */
 
-static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
+static int mfs_recover_pending(void);
+
+static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records, k_u32_t flags)
 {
     struct mfs_superblock sb;
     struct mfs_inode inode;
@@ -1760,7 +2463,10 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
     k_u32_t data_blocks;
     k_u32_t bitmap_blocks;
     k_u32_t inode_blocks;
+    k_u32_t journal_blocks = 0;
+    k_u32_t journal_slots = 0;
     k_u32_t records;
+    k_u32_t version = ((flags & MFS_FORMAT_JOURNAL) != 0u) ? MFS_VERSION_JOURNAL : MFS_VERSION;
     k_u32_t attempt;
     k_u32_t i;
     int rc;
@@ -1817,10 +2523,10 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
     inode_blocks = (records * MFS_INODE_SIZE + MFS_BLOCK_SIZE - 1u) / MFS_BLOCK_SIZE;
 
     /*
-     * The META section holds the map of the free blocks and the table, and
-     * nothing else. The map depends on the size of the DATA section, which
-     * depends on the size of META, so a few rounds find the layout: the
-     * table is fixed and META grows by the blocks of the map only.
+     * The META section holds the journal (a version 4 volume), the map of
+     * the free blocks and the table, and nothing else. The map depends on
+     * the size of the DATA section, which depends on the size of META, and
+     * the journal is sized by the map, so a few rounds find the layout.
      */
     meta_blocks = inode_blocks + 1u;
 
@@ -1831,6 +2537,16 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
 
         data_blocks = info_start - meta_blocks;
         bitmap_blocks = bitmap_blocks_for(data_blocks);
+
+        /* The journal holds a transaction that may dirty every block of the
+         * map, and a few blocks more for the records and directories. */
+        if (version >= MFS_VERSION_JOURNAL) {
+            journal_slots = bitmap_blocks + MFS_JOURNAL_EXTRA_SLOTS;
+            journal_blocks = 1u + journal_slots * 2u;
+        } else {
+            journal_slots = 0;
+            journal_blocks = 0;
+        }
 
         /*
          * The map lives in the memory of the machine, not in the format:
@@ -1843,11 +2559,11 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
             return MFS_EINVAL;
         }
 
-        if (inode_blocks + bitmap_blocks == meta_blocks) {
+        if (inode_blocks + bitmap_blocks + journal_blocks == meta_blocks) {
             break;
         }
 
-        meta_blocks = inode_blocks + bitmap_blocks;
+        meta_blocks = inode_blocks + bitmap_blocks + journal_blocks;
     }
 
     if (info_start <= meta_blocks) {
@@ -1857,13 +2573,18 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
     data_blocks = info_start - meta_blocks;
     bitmap_blocks = bitmap_blocks_for(data_blocks);
 
-    if (inode_blocks + bitmap_blocks != meta_blocks) {
+    if (version >= MFS_VERSION_JOURNAL) {
+        journal_slots = bitmap_blocks + MFS_JOURNAL_EXTRA_SLOTS;
+        journal_blocks = 1u + journal_slots * 2u;
+    }
+
+    if (inode_blocks + bitmap_blocks + journal_blocks != meta_blocks) {
         return MFS_ENOSPC;
     }
 
     memset(&sb, 0, sizeof(sb));
     sb.magic = MFS_MAGIC;
-    sb.version = MFS_VERSION;
+    sb.version = version;
     sb.block_size = MFS_BLOCK_SIZE;
     sb.total_blocks = total;
     sb.data_start = 0;
@@ -1874,11 +2595,22 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
     sb.info_blocks = info_blocks;
     sb.root_inode = MFS_ROOT_INODE;
     sb.features = MFS_FEATURE_CRC | MFS_FEATURE_TIME | MFS_FEATURE_RECORD_CRC;
-    /* The map sits at the top of META, the table below it. */
+
+    if (version >= MFS_VERSION_JOURNAL) {
+        sb.features |= MFS_FEATURE_JOURNAL;
+    }
+
+    /* The map sits at the top of META, the journal below it, the table
+     * below the journal. */
     sb.bitmap_blocks = bitmap_blocks;
     sb.inode_blocks = inode_blocks;
     sb.inode_size = MFS_INODE_SIZE;
     sb.inode_records = inode_blocks * (MFS_BLOCK_SIZE / MFS_INODE_SIZE);
+    if (version >= MFS_VERSION_JOURNAL) {
+        sb.journal_start = info_start - bitmap_blocks - journal_blocks;
+        sb.journal_blocks = journal_blocks;
+        sb.journal_slots = journal_slots;
+    }
     sb.crc = mfs_priv_header_crc(&sb);
 
     /* The state is needed by the helpers below. */
@@ -1890,7 +2622,17 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
     g.bitmap_blocks = bitmap_blocks;
     g.bitmap_start = sb.info_start - bitmap_blocks;
     g.inode_blocks = inode_blocks;
-    g.table_end = sb.info_start - bitmap_blocks;
+    g.journal_start = sb.journal_start;
+    g.journal_blocks = journal_blocks;
+    /*
+     * The body of the format writes the table, the root and the map into
+     * their final blocks, not through the journal: the volume has no header
+     * yet, and a journal that committed a transaction of a volume nobody can
+     * mount would only be cleared at the next format. The journal of the
+     * mount is opened at the end, with the header that says it is empty.
+     */
+    g.journal_slots = 0u;
+    g.table_end = sb.info_start - bitmap_blocks - journal_blocks;
 
     rc = bitmap_alloc(bitmap_blocks);
     if (rc != MFS_OK) {
@@ -1955,6 +2697,20 @@ static int mfs_format_locked(const struct k_blockdev *dev, k_u32_t max_records)
 
     if (bitmap_store() != MFS_OK) {
         return MFS_EIO;
+    }
+
+    /*
+     * The journal of a version 4 volume starts empty. The header goes before
+     * the header of the volume, which is the commit of the format: a volume
+     * whose INFO block is not there is not a volume, and a journal without a
+     * commit has nothing to replay.
+     */
+    if (version >= MFS_VERSION_JOURNAL) {
+        if (journal_header_write(MFS_JOURNAL_STATE_EMPTY, 0, 0, 0) != MFS_OK) {
+            return MFS_EIO;
+        }
+
+        g.journal_slots = journal_slots;
     }
 
     /*
@@ -2049,7 +2805,7 @@ static int mfs_mount_locked(const struct k_blockdev *dev)
             return MFS_EINVAL;
         }
         g.inode_size = MFS_INODE_SIZE_TIME;
-    } else if (sb.version == MFS_VERSION) {
+    } else if (sb.version == MFS_VERSION || sb.version == MFS_VERSION_JOURNAL) {
         if ((sb.features & (MFS_FEATURE_TIME | MFS_FEATURE_RECORD_CRC)) !=
             (MFS_FEATURE_TIME | MFS_FEATURE_RECORD_CRC)) {
             kerror("mfs: a volume of version %u has no time or no checksum of a record",
@@ -2061,9 +2817,18 @@ static int mfs_mount_locked(const struct k_blockdev *dev)
                    (unsigned)sb.inode_size);
             return MFS_EINVAL;
         }
+        if (sb.version == MFS_VERSION_JOURNAL && (sb.features & MFS_FEATURE_JOURNAL) == 0u) {
+            kerror("mfs: a volume of version %u has no journal", (unsigned)sb.version);
+            return MFS_EINVAL;
+        }
+        if (sb.version < MFS_VERSION_JOURNAL && (sb.features & MFS_FEATURE_JOURNAL) != 0u) {
+            kerror("mfs: a volume of version %u claims a journal it has no room for",
+                   (unsigned)sb.version);
+            return MFS_EINVAL;
+        }
         g.inode_size = MFS_INODE_SIZE;
     } else {
-        kerror("mfs: the volume is of version %u, and the system reads 1, 2 and 3",
+        kerror("mfs: the volume is of version %u, and the system reads 1, 2, 3 and 4",
                (unsigned)sb.version);
         return MFS_EINVAL;
     }
@@ -2115,25 +2880,77 @@ static int mfs_mount_locked(const struct k_blockdev *dev)
      */
     if (sb.version >= MFS_VERSION) {
         k_u32_t bitmap_blocks = bitmap_blocks_for(sb.data_blocks);
+        k_u32_t journal_blocks = 0;
+        k_u32_t journal_slots = 0;
+
+        if (sb.version >= MFS_VERSION_JOURNAL) {
+            journal_blocks = sb.journal_blocks;
+            journal_slots = sb.journal_slots;
+
+            /* The journal is the header and two blocks per slot, and it has
+             * to be a section of its own between the table and the map. */
+            if (journal_blocks < 3u || journal_slots == 0u ||
+                journal_blocks != 1u + journal_slots * 2u) {
+                kerror("mfs: the journal of the volume is not a journal");
+                return MFS_EINVAL;
+            }
+        } else if (sb.journal_blocks != 0u || sb.journal_slots != 0u) {
+            kerror("mfs: a volume without the journal feature names one");
+            return MFS_EINVAL;
+        }
 
         if (sb.bitmap_blocks != bitmap_blocks || sb.inode_blocks == 0u ||
-            sb.bitmap_blocks + sb.inode_blocks != sb.meta_blocks ||
+            sb.bitmap_blocks + sb.inode_blocks + journal_blocks != sb.meta_blocks ||
             sb.inode_records != sb.inode_blocks * (MFS_BLOCK_SIZE / MFS_INODE_SIZE)) {
-            kerror("mfs: the map and the table of the volume do not fill META");
+            kerror("mfs: the map, the table and the journal do not fill META");
             return MFS_EINVAL;
         }
 
         g.bitmap_start = sb.info_start - sb.bitmap_blocks;
-        g.table_end = g.bitmap_start;
+        g.journal_start = sb.info_start - sb.bitmap_blocks - journal_blocks;
+        g.journal_blocks = journal_blocks;
+        g.journal_slots = journal_slots;
+        g.table_end = g.journal_start;
+
+        if (g.table_end < sb.meta_start) {
+            kerror("mfs: the journal of the volume is outside META");
+            return MFS_EINVAL;
+        }
     } else {
         g.bitmap_start = sb.meta_start;
     }
 
     g.sb = sb;
 
+    /*
+     * The journal of a version 4 volume is replayed before the map is read:
+     * the transaction it holds may be the one that put the map and the
+     * records into the state the mount is about to walk (ADR 0047).
+     */
+    rc = journal_replay();
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
     rc = bitmap_load();
     if (rc != MFS_OK) {
         return rc;
+    }
+
+    /*
+     * The blocks the slots of the journal belong to, so that a read inside
+     * the transaction sees the image of its slot and not the block of the
+     * medium, which is the state before the transaction (ADR 0047 §3).
+     */
+    if (g.journal_slots != 0u) {
+        g.txn_homes =
+            (k_u32_t *)kmm_alloc((k_size_t)g.journal_slots * sizeof(k_u32_t), KMM_PRIORITY_SYSTEM);
+
+        if (g.txn_homes == NULL) {
+            kerror("mfs: no memory for the journal of %u slot(s)", (unsigned)g.journal_slots);
+            rc = MFS_ENOMEM;
+            goto fail;
+        }
     }
 
     if (sb.version >= MFS_VERSION) {
@@ -2175,6 +2992,17 @@ static int mfs_mount_locked(const struct k_blockdev *dev)
 
     g.mounted = true;
 
+    /*
+     * A version 4 volume may hold the draft of a file that a cut
+     * interrupted: the journal is replayed, and then the table is asked for
+     * a record that a close did not publish. The volume answers only after
+     * the repair, so a plain fsck of the next boot finds nothing (ADR 0047).
+     */
+    rc = mfs_recover_pending();
+    if (rc != MFS_OK) {
+        goto fail;
+    }
+
     return MFS_OK;
 
 fail:
@@ -2182,6 +3010,7 @@ fail:
      * A volume that did not mount is not the volume that owns the map: the
      * memory goes back before the call answers.
      */
+    g.mounted = false;
     bitmap_release();
 
     return rc;
@@ -2200,6 +3029,19 @@ static void mfs_unmount_locked(void)
      */
     if (g.mounted) {
         (void)mfs_sync_locked();
+
+        /*
+         * The checkpoint of the last transaction is a write that costs no
+         * flush while the volume is up - the next commit flushes it - but a
+         * volume that is unmounted has no next commit. The header says the
+         * journal is empty and reaches the medium here, so a machine that
+         * mounts the volume again changes no byte of it (ADR 0047 §3).
+         */
+        if (journaled() && !g.txn_open) {
+            if (journal_header_write(MFS_JOURNAL_STATE_EMPTY, g.journal_sequence, 0, 0) == MFS_OK) {
+                (void)dev_sync();
+            }
+        }
     }
 
     bitmap_release();
@@ -2220,6 +3062,15 @@ static int mfs_sync_locked(void)
             return rc;
         }
         g.bitmap_dirty = false;
+    }
+
+    /*
+     * A sync inside a transaction is a promise that the commit keeps: the
+     * images of the map are in the journal and the flush of the commit puts
+     * them and the blocks before them on the medium together.
+     */
+    if (g.txn_open) {
+        return MFS_OK;
     }
 
     /* A device that holds its writes back learns that the work is done. */
@@ -2498,7 +3349,7 @@ static int mfs_mkdir_locked(const char *path)
     return mfs_sync();
 }
 
-static int mfs_create_locked(const char *path)
+static int mfs_create_locked(const char *path, bool pending)
 {
     char dir_path[MFS_PATH_MAX];
     char name[MFS_NAME_MAX + 1];
@@ -2528,6 +3379,9 @@ static int mfs_create_locked(const char *path)
 
     memset(&inode, 0, sizeof(inode));
     inode.flags = inode_flags(MFS_INODE_USED, MFS_MODE_DEFAULT, 0);
+    if (pending) {
+        inode.flags |= MFS_INODE_PENDING;
+    }
     inode.first_block = MFS_NEXT_NONE;
     inode.size = 0;
     inode.entries = 0;
@@ -2549,10 +3403,37 @@ static int mfs_create_locked(const char *path)
     return mfs_sync();
 }
 
+/*
+ * The create of an open: one transaction of its own, because the open reads
+ * the volume again to learn the record it just made. A create that a program
+ * asks for with mfs_create() is the same operation without the flag of the
+ * draft.
+ */
+static int mfs_create_internal(const char *path, bool pending)
+{
+    int rc;
+
+    mfs_txn_begin();
+    rc = mfs_create_locked(path, pending);
+
+    if (rc == MFS_OK) {
+        int commit = mfs_txn_commit();
+
+        if (commit != MFS_OK) {
+            rc = commit;
+        }
+    } else {
+        mfs_txn_abort();
+    }
+
+    return rc;
+}
+
 static int mfs_open_locked(const char *path, int flags, struct mfs_file *out)
 {
     struct mfs_inode inode;
     struct mfs_dirent entry;
+    bool pending = false;
     int rc;
 
     if (!g.mounted || out == NULL) {
@@ -2561,11 +3442,24 @@ static int mfs_open_locked(const char *path, int flags, struct mfs_file *out)
 
     rc = path_lookup(path, &inode, &entry, NULL);
     if (rc == MFS_ENOENT && (flags & MFS_O_CREAT) != 0) {
-        rc = mfs_create(path);
+        bool writing = (flags & (MFS_O_WRONLY | MFS_O_RDWR)) != 0;
+
+        /*
+         * A file a program made to write is a draft from the moment of the
+         * create: the record and its name land in one transaction with the
+         * flag of the draft on, so a cut after this open leaves no file at
+         * all instead of an empty one the program never finished (ADR 0047).
+         * The create commits on its own: the lookup below reads the volume,
+         * and a write of a transaction is not on the medium before its
+         * commit.
+         */
+        rc = mfs_create_internal(path, writing);
         if (rc != MFS_OK) {
             return rc;
         }
+
         rc = path_lookup(path, &inode, &entry, NULL);
+        pending = writing;
     }
 
     if (rc != MFS_OK) {
@@ -2607,7 +3501,9 @@ static int mfs_open_locked(const char *path, int flags, struct mfs_file *out)
     if ((flags & MFS_O_TRUNC) != 0 && (flags & (MFS_O_WRONLY | MFS_O_RDWR)) != 0) {
         /*
          * The content of the file is dropped: the blocks of the chain go
-         * back to the map, otherwise they are lost forever.
+         * back to the map, otherwise they are lost forever. The record of
+         * the object becomes the draft of the new content in the same write:
+         * a cut before the close leaves no file, not half of one (ADR 0047).
          */
         rc = file_release_chain(inode.first_block);
         if (rc != MFS_OK) {
@@ -2616,7 +3512,9 @@ static int mfs_open_locked(const char *path, int flags, struct mfs_file *out)
 
         inode.size = 0;
         inode.first_block = MFS_NEXT_NONE;
+        inode.flags |= MFS_INODE_PENDING;
         inode_stamp(&inode);
+        pending = true;
 
         rc = inode_write(entry.inode, &inode);
         if (rc != MFS_OK) {
@@ -2634,6 +3532,7 @@ static int mfs_open_locked(const char *path, int flags, struct mfs_file *out)
     out->inode = entry.inode;
     out->first_block = inode.first_block;
     out->size = inode.size;
+    out->pending = pending || ((inode.flags & MFS_INODE_PENDING) != 0u);
     /*
      * A file that was opened with "append" starts at its end: everything
      * written to it is added to what is already there.
@@ -2825,6 +3724,19 @@ static int mfs_write_locked(struct mfs_file *file, const void *buf, k_size_t siz
     }
 
     /*
+     * The first write of a descriptor makes the object a draft: the record
+     * carries the flag until the close publishes the file, and a cut in the
+     * middle of the write leaves no file at all (ADR 0047).
+     */
+    if (!file->pending) {
+        rc = inode_mark_pending(file->inode);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+        file->pending = true;
+    }
+
+    /*
      * A file that was opened with "append" is written to its end every
      * time: the position of the descriptor does not decide where the data
      * goes.
@@ -2943,19 +3855,29 @@ static int mfs_close_locked(struct mfs_file *file)
         return rc;
     }
 
-    if (file->dirty) {
+    if (file->dirty || file->pending) {
         rc = inode_read(file->inode, &inode);
         if (rc != MFS_OK) {
             return rc;
         }
         inode.size = file->size;
         inode.first_block = file->first_block;
+        /*
+         * The close publishes the file: the record of the object and the
+         * whole map of the blocks a descriptor took reach the medium in one
+         * transaction, and the flag of the draft goes in the same write
+         * (ADR 0047). A cut before the commit leaves the record pending and
+         * the mount removes the file; a cut after it is replayed and the
+         * file is whole.
+         */
+        inode.flags &= ~MFS_INODE_PENDING;
         inode_stamp(&inode);
         rc = inode_write(file->inode, &inode);
         if (rc != MFS_OK) {
             return rc;
         }
         file->dirty = false;
+        file->pending = false;
     }
 
     /* The blocks of the file have been taken, the map has to know it. */
@@ -3120,6 +4042,15 @@ static int mfs_truncate_locked(struct mfs_file *file, k_u64_t size)
     rc = file_refresh(file);
     if (rc != MFS_OK) {
         return rc;
+    }
+
+    /* A cut of an open object is a write of it: a draft until the close. */
+    if (!file->pending) {
+        rc = inode_mark_pending(file->inode);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+        file->pending = true;
     }
 
     /* The format keeps the size of a file in 32 bits, so a wider number is
@@ -3722,12 +4653,12 @@ static int mfs_readdir_locked(struct mfs_file *file, struct mfs_dirent *out, k_s
  * for the whole of their work: the volume is one piece of state and
  * two tasks that touch it together corrupt it.
  */
-int mfs_format(const struct k_blockdev *dev, k_u32_t max_records)
+int mfs_format_ex(const struct k_blockdev *dev, k_u32_t max_records, k_u32_t flags)
 {
     int rc;
 
     mfs_lock();
-    rc = mfs_format_locked(dev, max_records);
+    rc = mfs_format_locked(dev, max_records, flags);
 
     /*
      * A format is not a mount: the map it built to lay the volume out is
@@ -3738,6 +4669,11 @@ int mfs_format(const struct k_blockdev *dev, k_u32_t max_records)
     mfs_unlock();
 
     return rc;
+}
+
+int mfs_format(const struct k_blockdev *dev, k_u32_t max_records)
+{
+    return mfs_format_ex(dev, max_records, 0u);
 }
 
 int mfs_mount(const struct k_blockdev *dev)
@@ -3800,6 +4736,58 @@ static void checker_view(struct mfs_private *view)
     view->table_end = g.table_end;
 }
 
+/*
+ * The records of a version 4 volume that a cut left in the middle of a
+ * write: the mount asks the table once for a pending record, and if there is
+ * one it runs the repair pass before it answers. The pass is the one of
+ * `fsck -y` (ADR 0038), with one more rule for the pending flag (ADR 0047):
+ * a pending record is not reached by its name, so the entry goes, the record
+ * goes and the map takes its blocks.
+ */
+static int mfs_recover_pending(void)
+{
+    struct mfs_private view;
+    struct mfs_check_report report;
+    k_u32_t index;
+    int rc;
+
+    if (g.sb.version < MFS_VERSION_JOURNAL) {
+        return MFS_OK;
+    }
+
+    for (index = 1; index <= g.inode_capacity; index++) {
+        struct mfs_inode inode;
+
+        if (inode_read_lenient(index, &inode) != MFS_OK) {
+            break;
+        }
+
+        if ((inode.flags & (MFS_INODE_USED | MFS_INODE_PENDING)) ==
+            (MFS_INODE_USED | MFS_INODE_PENDING)) {
+            break;
+        }
+    }
+
+    if (index > g.inode_capacity) {
+        return MFS_OK;
+    }
+
+    memset(&report, 0, sizeof(report));
+    report.data_blocks = g.sb.data_blocks;
+    checker_view(&view);
+
+    rc = mfs_repair_locked(&view, &report);
+    if (rc != MFS_OK) {
+        kerror("mfs: the mount could not discard the unfinished write (%s)", mfs_strerror(rc));
+        return rc;
+    }
+
+    kinfo("mfs: the mount discarded an unfinished write, %u change(s), %u left",
+          (unsigned)report.fixed, (unsigned)report.errors);
+
+    return MFS_OK;
+}
+
 int mfs_check(struct mfs_check_report *report)
 {
     struct mfs_private view;
@@ -3818,6 +4806,7 @@ int mfs_check(struct mfs_check_report *report)
 
     memset(report, 0, sizeof(*report));
     report->data_blocks = g.sb.data_blocks;
+    report->journal_replayed = g.journal_replayed;
 
     /*
      * The checker gets the state of the volume, not a copy of it: the lock
@@ -3884,6 +4873,7 @@ int mfs_repair(struct mfs_check_report *report)
     *report = after;
     report->fixed = pass.fixed;
     report->unfixed = after.errors;
+    report->journal_replayed = g.journal_replayed;
 
     /*
      * A pass that could not do its work - a medium that refused a write, a
@@ -3902,12 +4892,31 @@ int mfs_repair(struct mfs_check_report *report)
     return rc;
 }
 
+/*
+ * The public calls that change the volume open a transaction of the journal
+ * (ADR 0047) and commit it when the call succeeded: the blocks of the map,
+ * the records and the directories of one operation reach the medium
+ * together, or none of them does. A failed call forgets the transaction: the
+ * blocks of the medium were not touched before the commit.
+ */
 int mfs_mkdir(const char *path)
 {
     int rc;
 
     mfs_lock();
+    mfs_txn_begin();
     rc = mfs_mkdir_locked(path);
+
+    if (rc == MFS_OK) {
+        int commit = mfs_txn_commit();
+
+        if (commit != MFS_OK) {
+            rc = commit;
+        }
+    } else {
+        mfs_txn_abort();
+    }
+
     mfs_unlock();
 
     return rc;
@@ -3918,7 +4927,7 @@ int mfs_create(const char *path)
     int rc;
 
     mfs_lock();
-    rc = mfs_create_locked(path);
+    rc = mfs_create_internal(path, false);
     mfs_unlock();
 
     return rc;
@@ -3967,7 +4976,19 @@ int mfs_truncate(struct mfs_file *file, k_u64_t size)
     int rc;
 
     mfs_lock();
+    mfs_txn_begin();
     rc = mfs_truncate_locked(file, size);
+
+    if (rc == MFS_OK) {
+        int commit = mfs_txn_commit();
+
+        if (commit != MFS_OK) {
+            rc = commit;
+        }
+    } else {
+        mfs_txn_abort();
+    }
+
     mfs_unlock();
 
     return rc;
@@ -3978,7 +4999,18 @@ int mfs_close(struct mfs_file *file)
     int rc;
 
     mfs_lock();
+    mfs_txn_begin();
     rc = mfs_close_locked(file);
+
+    if (rc == MFS_OK) {
+        int commit = mfs_txn_commit();
+
+        if (commit != MFS_OK) {
+            rc = commit;
+        }
+    } else {
+        mfs_txn_abort();
+    }
 
     if (rc == MFS_OK && g.open_files > 0u) {
         g.open_files--;
@@ -3994,7 +5026,19 @@ int mfs_unlink(const char *path)
     int rc;
 
     mfs_lock();
+    mfs_txn_begin();
     rc = mfs_remove_locked(path, false);
+
+    if (rc == MFS_OK) {
+        int commit = mfs_txn_commit();
+
+        if (commit != MFS_OK) {
+            rc = commit;
+        }
+    } else {
+        mfs_txn_abort();
+    }
+
     mfs_unlock();
 
     return rc;
@@ -4005,7 +5049,19 @@ int mfs_rmdir(const char *path)
     int rc;
 
     mfs_lock();
+    mfs_txn_begin();
     rc = mfs_remove_locked(path, true);
+
+    if (rc == MFS_OK) {
+        int commit = mfs_txn_commit();
+
+        if (commit != MFS_OK) {
+            rc = commit;
+        }
+    } else {
+        mfs_txn_abort();
+    }
+
     mfs_unlock();
 
     return rc;
@@ -4016,7 +5072,19 @@ int mfs_rename(const char *from, const char *to)
     int rc;
 
     mfs_lock();
+    mfs_txn_begin();
     rc = mfs_rename_locked(from, to);
+
+    if (rc == MFS_OK) {
+        int commit = mfs_txn_commit();
+
+        if (commit != MFS_OK) {
+            rc = commit;
+        }
+    } else {
+        mfs_txn_abort();
+    }
+
     mfs_unlock();
 
     return rc;
@@ -4038,7 +5106,19 @@ int mfs_chmod(const char *path, k_u32_t mode)
     int rc;
 
     mfs_lock();
+    mfs_txn_begin();
     rc = mfs_chmod_locked(path, mode);
+
+    if (rc == MFS_OK) {
+        int commit = mfs_txn_commit();
+
+        if (commit != MFS_OK) {
+            rc = commit;
+        }
+    } else {
+        mfs_txn_abort();
+    }
+
     mfs_unlock();
 
     return rc;
@@ -4049,7 +5129,19 @@ int mfs_chown(const char *path, k_u32_t owner)
     int rc;
 
     mfs_lock();
+    mfs_txn_begin();
     rc = mfs_chown_locked(path, owner);
+
+    if (rc == MFS_OK) {
+        int commit = mfs_txn_commit();
+
+        if (commit != MFS_OK) {
+            rc = commit;
+        }
+    } else {
+        mfs_txn_abort();
+    }
+
     mfs_unlock();
 
     return rc;
@@ -4060,7 +5152,19 @@ int mfs_chgrp(const char *path, k_u32_t group)
     int rc;
 
     mfs_lock();
+    mfs_txn_begin();
     rc = mfs_chgrp_locked(path, group);
+
+    if (rc == MFS_OK) {
+        int commit = mfs_txn_commit();
+
+        if (commit != MFS_OK) {
+            rc = commit;
+        }
+    } else {
+        mfs_txn_abort();
+    }
+
     mfs_unlock();
 
     return rc;

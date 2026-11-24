@@ -17,6 +17,7 @@
 #   --quick    the short smokes only: no 600-second session, no board
 #   --no-board the board of the ESP32 is not on the serial port of this machine
 #   --log      where the logs go (default: /tmp/opencode/release-gate)
+#   --no-wait  the host is not waited for: the gate starts on a busy machine
 #
 # A gate that fails does not stop the run: the exit code is the number of the
 # gates that failed, and every line of the table says its own answer.
@@ -37,6 +38,7 @@ while [ $# -gt 0 ]; do
         --no-board) BOARD=0; shift ;;
         --log) LOGDIR="$2"; shift 2 ;;
         --serial) SERIAL="$2"; shift 2 ;;
+        --no-wait) NOWAIT=1; shift ;;
         *) echo "release-gate: unknown argument $1" >&2; exit 2 ;;
     esac
 done
@@ -65,17 +67,83 @@ if [ "${FREE_MB:-0}" -lt 2048 ]; then
     exit 2
 fi
 
+# The host has to be quiet: the smokes of QEMU lose a console, a frame or a
+# boot under the load of the builds of another lane, and a gate of the release
+# that runs beside one reports flakes of the host as if they were defects
+# (x86-smoke answered 154 blocks of 310 in the gate of 1.8.0 with three lanes
+# building on the same twelve cores, and 405 checks alone a minute later; in the
+# gate of 1.9.0-rc1 the same smoke answered 8 blocks of 312 and then all 312 on
+# a quiet machine). The gate waits for the load of the minute to fall under two,
+# says how long it waited, and `--no-wait` takes the machine as it is.
+CORES="$(nproc)"
+# Half of the cores was too generous: a machine of twelve cores with a lane
+# building on five of them has a load of five and a console of QEMU that loses
+# a prompt - the smoke of the machine answered 8 blocks of 312 in the gate of
+# 1.9.0-rc1 and 312 of 312 on the same tree an hour later, with the lanes
+# stopped. The gate wants two.
+LIMIT=2
+if [ "$CORES" -lt 4 ]; then
+    LIMIT=1
+fi
+WAITED=0
+if [ "${NOWAIT:-0}" -eq 0 ]; then
+    while :; do
+        LOAD1="$(cut -d' ' -f1 /proc/loadavg)"
+        BUSY="$(awk -v l="$LOAD1" -v m="$LIMIT" 'BEGIN { print (l > m) ? 1 : 0 }')"
+        if [ "$BUSY" -eq 0 ]; then
+            break
+        fi
+        if [ "$WAITED" -ge "${WAIT_MAX:-1800}" ]; then
+            echo "release-gate: the load is $LOAD1 on $CORES core(s) after ${WAITED}s of waiting" \
+                 "- the numbers below are of a busy host" >&2
+            break
+        fi
+        if [ "$WAITED" -eq 0 ]; then
+            echo "release-gate: the load is $LOAD1, waiting for $LIMIT (a quiet host)"
+        fi
+        sleep 15
+        WAITED=$((WAITED + 15))
+    done
+fi
+printf '| the host | %s core(s), load %s, waited %s s |\n' "$CORES" \
+    "$(cut -d' ' -f1 /proc/loadavg)" "$WAITED" >> "$LOGDIR/table.txt"
+
 # The smokes of QEMU are sensitive to the load of the host - the tree says so in
 # several places, and a gate that runs one after another on a machine that also
 # builds is the heaviest load they meet: an image that loses its console under
 # that load has not lost it on a quiet machine. A gate that fails is run a
 # second time, on the record: the line of the table says "second run", and a
 # real defect fails twice.
+# The load of a smoke is not only the load of the meter at the start of the
+# gate: the build of the image the smoke boots is a build of three jobs, and a
+# smoke that starts a minute after one is a smoke under load (x86-disk-smoke
+# failed twice in the gate of 1.9.0-rc1 and passed alone a minute later, with
+# the same tree). Every smoke waits for the host to be quiet, again.
+wait_quiet() {
+    waited=0
+    while :; do
+        load1="$(cut -d' ' -f1 /proc/loadavg)"
+        busy="$(awk -v l="$load1" -v m="$LIMIT" 'BEGIN { print (l > m) ? 1 : 0 }')"
+        if [ "$busy" -eq 0 ]; then
+            return 0
+        fi
+        if [ "$waited" -ge 300 ]; then
+            echo " (the load was $load1 after ${waited}s)"
+            return 0
+        fi
+        sleep 10
+        waited=$((waited + 10))
+    done
+}
+
 run() {
     name="$1"
     shift
     TOTAL=$((TOTAL + 1))
     log="$LOGDIR/$(echo "$name" | tr ' /' '__').log"
+    case "$name" in
+        *smoke*) wait_quiet ;;
+    esac
 
     if "$@" > "$log" 2>&1; then
         detail="$(sed -n 's/.*OK: \([0-9]* check(s)\) passed.*/\1/p' "$log" | tail -1)"
@@ -121,12 +189,15 @@ run "x86-vga-smoke" m x86-vga-smoke
 run "x86-disk-smoke" m x86-disk-smoke
 run "x86-root-smoke" m x86-root-smoke
 run "x86-volume-smoke" m x86-volume-smoke
+run "x86-mfs-smoke" m x86-mfs-smoke
+run "x86-cut-smoke" m x86-cut-smoke
 run "x86-smp-smoke" m x86-smp-smoke
 run "x86-net-smoke" m x86-net-smoke
 run "usb-smoke" m usb-smoke
 run "ports-smoke" m ports-smoke
 run "ahci-smoke" m ahci-smoke
 run "nvme-smoke" m nvme-smoke
+run "power-smoke" m power-smoke
 run "uefi-smoke" m uefi-smoke
 run "x86-iso-smoke" m x86-iso-smoke
 

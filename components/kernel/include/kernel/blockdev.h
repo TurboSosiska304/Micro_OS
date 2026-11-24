@@ -250,6 +250,20 @@ int k_blockdev_unregister(const struct k_blockdev *dev);
 k_size_t k_blockdev_count(void);
 const struct k_blockdev *k_blockdev_at(k_size_t index);
 
+/*
+ * Bring every device of the table to the medium: the cache of a device is
+ * written out and the `sync` operation below it is asked - the FLUSH CACHE
+ * EXT of a disk, the Flush of an NVMe namespace, the sync of a flash chip.
+ *
+ * It is the flush of the clean end (kernel/power.c, ADR 0050), and it is
+ * the one call of the block layer a caller may make without a mount: a
+ * device that nobody mounted still has a cache that may hold a sector.
+ * Returns 0, or KERR_IO when one of the devices did not answer; the ones
+ * after it are still asked, because a disk that failed is no reason to
+ * leave the sectors of another in a cache.
+ */
+int k_blockdev_sync_all(void);
+
 /* A device by name, NULL when there is none. */
 const struct k_blockdev *k_blockdev_find(const char *name);
 

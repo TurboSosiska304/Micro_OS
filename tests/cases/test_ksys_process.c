@@ -7,6 +7,7 @@
 #include "ktest.h"
 #include "tests/tests.h"
 
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -36,28 +37,35 @@ static struct k_blockdev g_device;
 static char g_text[CORPUS_MAX];
 static k_size_t g_text_len;
 
-/* What the child and the parent share. */
+/*
+ * What the child and the parent share. The variables are atomic and not
+ * volatile: a child of a fork writes one of them on its own task and the
+ * parent reads it after the wait, and a volatile int is a data race with a
+ * synchronization the compiler does not see - ThreadSanitizer reported
+ * exactly this handshake once the wake of a task became immediate (ADR 0046)
+ * and the reader stopped arriving a tick after the writer.
+ */
 static char g_shared[CORPUS_MAX];
-static volatile int g_child_done;
-static volatile int g_fork_result;
-static volatile int g_wait_result;
-static volatile int g_wait_status = -1;
-static volatile int g_parent_pid;
-static volatile int g_child_pid;
-static volatile int g_child_waits;
+static atomic_int g_child_done;
+static atomic_int g_fork_result;
+static atomic_int g_wait_result;
+static atomic_int g_wait_status = -1;
+static atomic_int g_parent_pid;
+static atomic_int g_child_pid;
+static atomic_int g_child_waits;
 
 /* A pipe across a fork: the child writes, the parent reads to the end. */
 static int g_pipe_fds[2];
-static volatile int g_pipe_wrote = -1;
-static volatile int g_pipe_got;
-static volatile int g_pipe_child;
-static volatile int g_pipe_wait = -1;
-static volatile int g_pipe_status = -1;
-static volatile int g_pipe_result;
+static atomic_int g_pipe_wrote = -1;
+static atomic_int g_pipe_got;
+static atomic_int g_pipe_child;
+static atomic_int g_pipe_wait = -1;
+static atomic_int g_pipe_status = -1;
+static atomic_int g_pipe_result;
 static char g_pipe_text[32];
 
 /* The result of the test, the parent writes it. */
-static volatile int g_result;
+static atomic_int g_result;
 
 static int load_corpus(void)
 {
@@ -155,7 +163,10 @@ static void parent_program(void *arg)
     g_child_pid = g_fork_result;
 
     if (g_fork_result > 0) {
-        g_wait_result = ksys_waitpid(g_fork_result, (int *)&g_wait_status, 0);
+        int status = -1;
+
+        g_wait_result = ksys_waitpid(g_fork_result, &status, 0);
+        g_wait_status = status;
     }
 
     g_result = 1;
@@ -260,7 +271,10 @@ static void posix_program(void *arg)
     g_fork_result = pid;
 
     if (pid > 0) {
-        g_wait_result = microos_waitpid(pid, (int *)&g_wait_status, 0);
+        int status = -1;
+
+        g_wait_result = microos_waitpid(pid, &status, 0);
+        g_wait_status = status;
     }
 
     g_result = 1;
@@ -321,8 +335,11 @@ static void any_child_program(void *arg)
     g_fork_result = pid;
 
     if (pid > 0) {
+        int status = -1;
+
         /* -1 is "any child", the shape the library's wait() has. */
-        g_wait_result = ksys_waitpid(-1, (int *)&g_wait_status, 0);
+        g_wait_result = ksys_waitpid(-1, &status, 0);
+        g_wait_status = status;
     }
 
     g_result = 1;
@@ -416,7 +433,10 @@ static void pipe_program(void *arg)
     ksys_close(g_pipe_fds[0]);
 
     if (pid > 0) {
-        g_pipe_wait = ksys_waitpid(pid, (int *)&g_pipe_status, 0);
+        int status = -1;
+
+        g_pipe_wait = ksys_waitpid(pid, &status, 0);
+        g_pipe_status = status;
     }
 
     g_pipe_result = 1;
@@ -742,8 +762,8 @@ static void test_execve(void)
 
 /* --- signals --- */
 
-static volatile int g_sig_runs;
-static volatile int g_sig_last;
+static atomic_int g_sig_runs;
+static atomic_int g_sig_last;
 
 static void test_signal_handler(int sig)
 {
@@ -941,10 +961,10 @@ static void test_signal_chld(void)
  * address space per task the child re-enters it from the start and knows
  * itself by the flag of its task.
  */
-static volatile int g_cwd_child_saw_parent;
-static volatile int g_cwd_child_moved;
-static volatile int g_cwd_parent_kept;
-static volatile int g_cwd_fork;
+static atomic_int g_cwd_child_saw_parent;
+static atomic_int g_cwd_child_moved;
+static atomic_int g_cwd_parent_kept;
+static atomic_int g_cwd_fork;
 
 static void chdir_program(void *arg)
 {

@@ -134,11 +134,13 @@ COMMANDS = [
     "exec /bin/pcre2grep -i h.LLO /etc/setting",
     "exec /bin/pcre2grep -o -g 1 ^hostname=(x86_64)$ /etc/setting",
     "exec /bin/ls /etc/licenses",
-    # The same commands with no file: they read descriptor 0, which the shell
-    # does not pass to a program yet, so the call answers EBADF (9). The line
-    # is the proof that the input is descriptor 0 and not a usage sentence.
-    "exec /bin/cat",
-    "exec /bin/wc -l -",
+    # The same commands with a file of no bytes: they read descriptor 0, which
+    # is the terminal of the task while the shell opened nothing on it
+    # (ADR 0051 §2). The gate gives them /dev/null so that the read ends
+    # instead of waiting for a person, and the line stays the proof that the
+    # input is descriptor 0 and not a usage sentence.
+    "exec /bin/cat < /dev/null",
+    "exec /bin/wc -l - < /dev/null",
     # The tree through the calls: a directory made, a directory refused by
     # rm without -r, the tree taken down with the flag, and a listing of a
     # directory that is no longer there.
@@ -295,8 +297,9 @@ COMMANDS = [
     "exec /bin/awk \"BEGIN{while((\\\"cat /etc/setting\\\"|getline line)>0)n++;print(n)}\"",
     "exec /bin/awk -f /etc/no-such.awk",
     # The same script with no file: the interpreter reads descriptor 0, which
-    # the shell does not open at the prompt yet, so awk reports a read error.
-    "exec /bin/awk {print}",
+    # at the prompt is the terminal of the task (ADR 0051 §2), so the gate
+    # points it at a file and the read ends.
+    "exec /bin/awk {print} < /etc/setting",
     "echo hi > /tmp/f",
     "cat /tmp/f",
     "cat < /tmp/f",
@@ -377,6 +380,14 @@ COMMANDS = [
     # The program that faults: it writes to address zero in ring 3, and the
     # shell has to answer the command after it for the machine to be alive.
     "exec /bin/crash",
+    # The same failure one page lower (ADR 0048): the recursion runs past the
+    # bottom of the stack into the page the port leaves unmapped, the fault
+    # takes the program down and the shell answers again.
+    "exec /bin/crash stack",
+    # And the stack of a task of the kernel: the command starts a task that
+    # overflows its own 32 KiB stack, waits for it, and the answer is the
+    # status 255 of a task that ended in the guard page.
+    "guard",
     "uname",
     # The files of the machine: the mode is octal (the x86 kernel's printf
     # learned %o), the root of the tree cannot be unmounted, and `free` is
@@ -527,7 +538,7 @@ EXPECTED = [
     # it (ADR 0020); the line is the proof that the check ran and passed.
     "Micro OS: image signature ok (sha-256, ed25519)",
     "board: qemu_x86_64",
-    "port: x86_64, contract 1.12",
+    "port: x86_64, contract 1.13",
     "[ ok ] sched",
     "subsystem(s) ready",
     "the kernel is up",
@@ -2265,17 +2276,19 @@ def check(output: str) -> list:
     licenses = answer("exec /bin/ls /etc/licenses")
     expect("the license of PCRE2 is a file of the disk", "pcre2" in licenses, licenses)
     # No file is descriptor 0. A program inherits the table of the shell
-    # (ADR 0017), but the prompt does not open the console on descriptor 0
-    # yet, so the read answers EBADF; a redirect or a pipe fills it.
-    cat = answer("exec /bin/cat")
+    # (ADR 0017), and the prompt leaves the terminal of the task on it while
+    # nothing is open (ADR 0051 §2): a redirect, a pipe or /dev/null is what
+    # makes the read end.
+    cat = answer("exec /bin/cat < /dev/null")
     expect(
         "cat reads descriptor 0 when no file is named",
-        "bad file descriptor" in cat,
+        "bad file descriptor" not in cat,
         cat,
     )
-    expect("cat of a closed stdin is a failure", "the program exited with 1" in cat)
-    wc = answer("exec /bin/wc -l -")
-    expect("wc reads descriptor 0 for a dash", "bad file descriptor" in wc, wc)
+    expect("cat of an empty input ends with 0", "the program exited with 0" in cat, cat)
+    wc = answer("exec /bin/wc -l - < /dev/null")
+    expect("wc reads descriptor 0 for a dash",
+           "bad file descriptor" not in wc and re.search(r"(?m)^\s*0\s", wc) is not None, wc)
     # The tree: the shell makes /tmp, the program makes a directory in it.
     # Without -r a directory is refused, even an empty one; with -r the tree
     # goes away and the listing of it is ENOENT (2).
@@ -2660,10 +2673,10 @@ def check(output: str) -> list:
         "can't open file /etc/no-such.awk" in awk_missing and "exited with 2" in awk_missing,
         awk_missing,
     )
-    awk_stdin = answer("exec /bin/awk {print}")
+    awk_stdin = answer("exec /bin/awk {print} < /etc/setting")
     expect(
-        "awk without a file reads descriptor 0 and reports the failure",
-        "i/o error occurred on /dev/stdin" in awk_stdin,
+        "awk without a file reads descriptor 0",
+        "hostname=x86_64" in awk_stdin and "i/o error" not in awk_stdin,
         awk_stdin,
     )
 
@@ -3093,6 +3106,54 @@ def check(output: str) -> list:
     expect(
         "the shell survives a fault of a program",
         re.search(r"MicroOS \d+\.\d+\.\d+", answer("uname", 1)) is not None,
+    )
+
+    # --- the guard page under the stack (ADR 0048)
+    # The stack of a program is 64 KiB and the page under it is not mapped,
+    # so a recursion that runs past the bottom meets the page and not the
+    # data of the program. The fault is a store into a page that is not
+    # present (error 0x6: not present, write, ring 3) at an address in the
+    # guard, and the program never prints the line after the recursion.
+    stack = answer("exec /bin/crash stack")
+    expect("the stack overrun program starts", "PROGRAM: crash overruns the stack" in stack)
+    expect(
+        "the guard page under the stack takes the program down",
+        "the program faulted: vector 14 at 0x0000000002fe" in stack
+        and "error 0x0000000000000006" in stack,
+        stack[-400:],
+    )
+    expect(
+        "the program that overran its stack did not continue",
+        "PROGRAM: crash did not fault on the stack" not in stack,
+    )
+    expect(
+        "the shell survives the overflow of a program",
+        re.search(r"MicroOS \d+\.\d+\.\d+", answer("uname", 1)) is not None,
+    )
+    # The task of the kernel has the page too: the command starts a task that
+    # recurses past its own stack, waits for it and reports the status the
+    # kernel gives a task that faulted. The machine stays.
+    guard = answer("guard")
+    expect(
+        "a task that overflows its kernel stack dies and the machine lives",
+        "guard: the task ran into the guard page and died (status 255); the machine is alive"
+        in guard,
+        guard[-400:],
+    )
+    expect(
+        "the log names the task and the page of the overflow",
+        "reached the guard page at 0x" in guard and "the task ends, the machine stays" in guard,
+        guard[-500:],
+    )
+    # Every program of the run is audited before it starts: the report is a
+    # line of the log, and the number of the pages that are both writable and
+    # executable is zero for a map of this port. The line is short because it
+    # is written before the entry of a program of the desktop, and the UART
+    # of the machine holds the entry for the length of a line.
+    expect(
+        "every program is reported W^X before it runs",
+        output.count("x86-64: the map of a program is W^X") >= 10,
+        f"{output.count('x86-64: the map of a program is W^X')} report(s) in the run",
     )
 
     # --- the first lane of 1.6: the wait for a descriptor

@@ -26,6 +26,7 @@
 #include <string.h>
 
 #include "kernel/console.h"
+#include "kernel/tty.h"
 #include "kernel/errno.h"
 #include "kernel/ksys.h"
 #include "kernel/log.h"
@@ -799,11 +800,21 @@ static int port_exec_place(const struct k_exec_image *image, char *const argv[],
 
     /* The tables have to keep the promise before a byte of the program runs:
      * a page that is writable and executable at once is a refusal here and
-     * not a fault on the machine. */
+     * not a fault on the machine. The line is the report of the audit that
+     * every `exec` leaves in the log (ADR 0048). */
     if (port_x86_64_paging_audit(space) != 0) {
         kerror("x86_64: the map of the program is not W^X");
         goto fail;
     }
+
+    /*
+     * The report of the audit at every exec (ADR 0048). It is one short
+     * line on purpose: the console of the machine is a UART and a line is
+     * written byte by byte with the interrupts off, and a program of the
+     * desktop is entered right after this one - the log must not hold the
+     * entry of a window for the milliseconds of a longer sentence.
+     */
+    kinfo("x86-64: the map of a program is W^X");
 
     if (!space_write(space, PORT_EXEC_RESTORER, g_restorer_code, sizeof(g_restorer_code))) {
         goto fail;
@@ -1052,7 +1063,13 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
         const bool own_console = (task_get_job(caller) == TASK_JOB_NONE);
 
         for (;;) {
-            if (own_console) {
+            /*
+             * The console is watched for Ctrl+C only while no program reads
+             * it: a program that reads its terminal owns every key, and the
+             * Ctrl+C of an editor in raw mode is the byte it asked for
+             * (ADR 0051 §8).
+             */
+            if (own_console && !k_tty_console_claimed()) {
                 int key = k_console_poll();
 
                 if (key == 3) {

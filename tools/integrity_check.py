@@ -933,11 +933,12 @@ def check_git(root: str, report: Report) -> None:
 # release has to stay readable: the rules of this tree apply to the files we
 # write, and a vendored component is reviewed as a whole (its README.md).
 #
-# `tests/ports/sbase` is a release of somebody else as well, and it is the
-# point of `make ports-smoke` that not a byte of it is ours: the gate compares
-# every file with the sha256 of the upstream commit (tests/ports/upstream.txt)
-# and a formatter that rewrote a tab of `echo.c` would make the gate a lie.
-VENDOR_PREFIXES = ("third_party/", "tests/ports/sbase/")
+# `tests/ports/sbase` and `tests/ports/kilo` are releases of somebody else as
+# well, and it is the point of `make ports-smoke` that not a byte of them is
+# ours: the gate compares every file with the sha256 of the upstream commit
+# (tests/ports/upstream.txt) and a formatter that rewrote a tab of `echo.c` or
+# a brace of `kilo.c` would make the gate a lie.
+VENDOR_PREFIXES = ("third_party/", "tests/ports/sbase/", "tests/ports/kilo/")
 
 
 def is_vendored(name: str) -> bool:
@@ -2092,7 +2093,7 @@ def check_version(root: str, report: Report, expected: str, suffix: str | None =
 # still a file of the tree for UTF-8, LF and the newline at the end. The
 # release of sbase under `tests/ports/sbase` is one of them: the gate of
 # `make ports-smoke` is that not a byte of it was edited.
-VENDORED_PREFIXES = ("third_party/", "tests/ports/sbase/")
+VENDORED_PREFIXES = ("third_party/", "tests/ports/sbase/", "tests/ports/kilo/")
 
 
 # --- the entry point ---------------------------------------------------------

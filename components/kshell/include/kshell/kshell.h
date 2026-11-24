@@ -23,7 +23,7 @@
  * silently. At 48 the shell dropped `exec` and `mfetch` once the commands of
  * P3 arrived, which is why the table has room now.
  */
-#define KSHELL_MAX_COMMANDS 64
+#define KSHELL_MAX_COMMANDS 72
 #define KSHELL_MAX_ARGS 8
 #define KSHELL_LINE_MAX 128
 

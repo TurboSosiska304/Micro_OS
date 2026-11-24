@@ -31,6 +31,7 @@
 #include "port_x86_64_screen.h"
 #include "port_x86_64_task.h"
 #include "port_x86_64_apic.h"
+#include "port_x86_64_acpi.h"
 #include "port_x86_64_ahci.h"
 #include "port_x86_64_nvme.h"
 #include "port_x86_64_xhci.h"
@@ -163,17 +164,15 @@ static void com1_write(const char *data, k_size_t len)
             continue;
         }
 
-        /* Inside a CSI sequence: its final byte ends it. */
+        /* Inside a CSI sequence: its final byte ends it. The serial log is
+         * text and not a terminal, so the sequence is dropped whole - the
+         * colours of the SGR ones and the moves of the cursor alike (ADR
+         * 0051 §7): a person reading the file of COM1 reads the lines a
+         * program wrote and not the bytes that placed them. */
         com1_hold(c);
         if (c >= '@' && c <= '~') {
-            bool sgr = (c == 'm');
-
             g_com1_state = COM1_TEXT;
-            if (!sgr) {
-                com1_flush();
-            } else {
-                g_com1_len = 0;
-            }
+            g_com1_len = 0;
         }
     }
 }
@@ -326,6 +325,12 @@ int k_port_console_poll(void)
     }
 
     return -1;
+}
+
+/* The size of the screen in cells, for TIOCGWINSZ of a program (ADR 0051). */
+void k_port_console_size(k_u16_t *rows, k_u16_t *columns)
+{
+    port_x86_64_console_size(rows, columns);
 }
 
 /* --- the calibration of the processor clock --- */
@@ -772,6 +777,26 @@ static const char *exception_name(k_u64_t vector)
 int port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs)
 {
     /*
+     * The guard page under the stack of a kernel task (ADR 0048). A fault of
+     * ring 0 whose address is in that page is an overflow of the stack and
+     * the end of the task, not of the machine. The double fault is the other
+     * face of the same event: when the stack pointer has already left the
+     * stack, the processor cannot push the frame of the first page fault, and
+     * CR2 still names the page that broke it. Both cases are answered here,
+     * before the copy-on-write and the mapping paths, which have nothing to
+     * say about a page no task may own.
+     */
+    if (vector == 8u || vector == 14u) {
+        k_u64_t guard_address;
+
+        __asm__ volatile("movq %%cr2, %0" : "=r"(guard_address));
+
+        if ((vector == 8u || (cs & 3u) == 0u) && port_x86_64_task_guard_fault(guard_address)) {
+            port_x86_64_task_stack_fault(guard_address, vector, rip);
+        }
+    }
+
+    /*
      * A page fault of the window of the programs is one of three things: the
      * first write into a page a fork made read-only (copy on write), a store
      * of the kernel into the text of a program, or a page of a mapping of the
@@ -917,7 +942,12 @@ void port_x86_64_interrupts_init(void)
 
     for (vector = 0; vector < 32u; vector++) {
         /* A double fault takes IST1: the stack it interrupted may be the one
-         * that broke, and a fault handler needs a stack of its own. */
+         * that broke, and a fault handler needs a stack of its own. The page
+         * fault keeps the stack of the task: its handler may sleep while it
+         * reads a file for a mapping, and an IST stack of the core cannot be
+         * left suspended across a switch (ADR 0048). The case where the stack
+         * of the task cannot hold the frame at all - the overflow that has
+         * already left it - is the double fault, and IST1 is the answer. */
         k_u8_t ist = (vector == 8u) ? IDT_IST_DOUBLE_FAULT : 0u;
 
         idt_set(vector, port_isr_exception_table[vector], ist, IDT_GATE_INTERRUPT);
@@ -1917,6 +1947,26 @@ int k_port_mutex_lock(k_port_mutex_t *mutex)
 
         k_port_exit_critical();
 
+        if (owner == PORT_MUTEX_BOOT && self != PORT_MUTEX_BOOT) {
+            /* The owner is the context the core booted on: it is resumed
+             * only when no task is ready, so a task that yields and retries
+             * is a task that never gets the lock. Hand it the CPU. */
+            static k_u32_t idle_waits;
+
+            /*
+             * The first time is a line of the debug log: the path is rare
+             * (a section long enough for a tick to split it while the idle
+             * context of the core holds it), and a person looking at a
+             * machine that seems slow wants to know it happened.
+             */
+            if (__atomic_add_fetch(&idle_waits, 1, __ATOMIC_RELAXED) == 1u) {
+                klog(K_LOG_LEVEL_DEBUG,
+                     "port: a task waited for a mutex of the boot context; the CPU was given");
+            }
+            port_x86_64_yield_to_idle();
+            continue;
+        }
+
         mutex_wait();
     }
 }
@@ -1968,6 +2018,63 @@ void k_port_reset(void)
     k_port_halt();
 }
 
+/*
+ * The clean end (ADR 0050): the kernel has already stopped the tasks,
+ * flushed the disks and taken the mounts down, and this is the last step.
+ *
+ * The soft off of a PC is the S5 of ACPI and every mechanism below it is a
+ * fallback for a firmware that did not describe one. The two writes of the
+ * emulators are the S5 of a PIIX4 (QEMU, the port 0x604) and of a Bochs
+ * machine (0xB004); a machine with neither ignores them, and the sentence
+ * that follows is the honest answer - the processor stops and a person has
+ * to press the button. A halt that keeps the data is better than a reset
+ * that pretends the machine went off.
+ */
+#define QEMU_PM1A_CNT_PORT 0x604u
+#define BOCHS_PM1A_CNT_PORT 0xB004u
+#define ACPI_S5_REQUEST 0x2000u
+
+void k_port_power(enum k_power_action action)
+{
+    switch (action) {
+    case K_POWER_HALT:
+        kinfo("x86-64: the processor stops, the power stays on");
+        k_port_halt();
+        break;
+
+    case K_POWER_OFF:
+        kinfo("x86-64: the power goes off (ACPI S5, %s)", port_x86_64_acpi_name());
+
+        if (port_x86_64_acpi_off() == 0) {
+            kwarn("x86-64: the S5 request did not take, the ports of the emulators are tried");
+        }
+
+        port_outw(QEMU_PM1A_CNT_PORT, ACPI_S5_REQUEST);
+        port_outw(BOCHS_PM1A_CNT_PORT, ACPI_S5_REQUEST);
+
+        /*
+         * A machine that is still here has no software way off: the
+         * sentence says which key and the processor stops where it is, so
+         * that nothing is written after the flush (ADR 0041).
+         */
+        kerror("x86-64: this machine has no software switch-off; press the power button");
+        k_port_halt();
+        break;
+
+    case K_POWER_REBOOT:
+        kinfo("x86-64: the machine restarts");
+
+        if (port_x86_64_acpi_reset() == 0) {
+            k_port_halt();
+        }
+
+        port_outb(0x64, 0xFE);
+        kerror("x86-64: the reset did not take, the processor stops");
+        k_port_halt();
+        break;
+    }
+}
+
 /* --- the identity --- */
 
 const char *k_port_name(void)
@@ -1981,7 +2088,7 @@ const char *k_port_arch(void)
 }
 
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 12u
+#define PORT_API_MINOR 13u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_x86_64 does not speak the contract of this kernel");

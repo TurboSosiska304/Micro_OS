@@ -232,13 +232,14 @@ void test_mfs_big(void)
 
     /*
      * 64 MiB of data is 8 KiB of the map: one bit per block, rounded up to
-     * the blocks of the device. The mount holds exactly one block of the
-     * allocator and it is that block; the previous design held two blocks
-     * for every volume or none at all.
+     * the blocks of the device, and one byte per block of the map that the
+     * journal may have to write (ADR 0047). The mount holds the two and
+     * nothing else; the previous design held two blocks for every volume or
+     * none at all.
      */
     kmm_get_stats(&mounted);
-    KT_CHECK_INT_EQ(mounted.allocations, before.allocations + 1);
-    KT_CHECK_INT_EQ(mounted.total_bytes, before.total_bytes + 8u * MFS_BLOCK_SIZE);
+    KT_CHECK_INT_EQ(mounted.allocations, before.allocations + 2);
+    KT_CHECK_INT_EQ(mounted.total_bytes, before.total_bytes + 8u * MFS_BLOCK_SIZE + 8u);
 
     /* The volume says what it is: 64 MiB, almost all of it data. */
     KT_CHECK_INT_EQ(mfs_get_info(&info), MFS_OK);

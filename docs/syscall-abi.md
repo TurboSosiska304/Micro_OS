@@ -176,6 +176,23 @@ numbers of a system call: a new command takes the next free one.
 |---|---|---|
 | `FBIO_TAKE` 0x4D01 | `/dev/fb0` | the console stops drawing; the picture is the program's |
 | `FBIO_GIVE` 0x4D02 | `/dev/fb0` | the console repaints its grid and draws again; a give while another program holds the device changes nothing, so a program that starts a program keeps the picture |
+| `TCGETS` 0x5401 | `/dev/tty0`, `/dev/tty`, 0, 1 and 2 | the mode of the terminal, into a `struct termios` of 36 bytes |
+| `TCSETS` 0x5402 | the same | set the mode now; `TCSETSW` 0x5403 is the same and `TCSETSF` 0x5404 sets it and drops the input |
+| `TIOCGWINSZ` 0x5413 | the same | the size of the screen in cells, into a `struct winsize` of 8 bytes |
+| `TIOCSWINSZ` 0x5414 | the same | accepted and ignored: nothing resizes a screen from a program |
+| `FIONREAD` 0x541B | the same | the bytes that wait to be read, into an `int` |
+
+The two structures, the flags and the indices of `c_cc` are the ones of Linux
+and cross the call as they are (`kernel/tty.h`, ADR 0051 §3). The descriptors
+0, 1 and 2 are the terminal of the task **while they are not open**, which is
+the same rule `write` has had since 1.0 and the reason a program that was
+written for a Unix finds a terminal in what it inherited:
+
+| Descriptor | Not open | Open |
+|---|---|---|
+| 0 | `read` and `ioctl` of the terminal of the task | the object the program opened |
+| 1, 2 | `write` to the console; `ioctl` of the terminal | the object the program opened |
+| `/dev/tty0`, `/dev/tty` | — | the terminal of the task: the console of the machine, or its own for a session of telnet |
 
 A panic always takes the screen back, whatever a program holds (ADR 0028). A
 command that is not one of the table, or a descriptor whose object has no

@@ -1,13 +1,18 @@
+#define _GNU_SOURCE 1 /* pthread_getattr_np(): the bounds of the stack of a thread */
+
 #include "port_host.h"
 #include "port_host_psram.h"
 
 #include <errno.h>
 #include <malloc.h>
 #include <pthread.h>
+#include <setjmp.h>
+#include <signal.h>
 #include <stdatomic.h>
 #include <sched.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/select.h>
 #include <time.h>
 #include <unistd.h>
@@ -228,6 +233,21 @@ k_u64_t k_port_uptime_ms(void)
 /* The code the process of the host stops with: a panic is a failure. */
 #define HOST_PANIC_EXIT_CODE 89
 
+/*
+ * The codes of the three ends of the process, so that a script that started
+ * the simulator can tell them apart (ADR 0050):
+ *
+ *   0   the machine was switched off - the clean end, a success;
+ *   76  the machine asked for a reset and the process is the reset; a
+ *       supervisor of the test may start it again on this code;
+ *   89  the processor was halted - a panic, a failure (HOST_PANIC_EXIT_CODE).
+ *
+ * 76 has no POSIX meaning of its own: it is the number this port reserves
+ * for "start me again", and a script of the tree reads it by name.
+ */
+#define HOST_POWER_OFF_EXIT_CODE 0
+#define HOST_POWER_REBOOT_EXIT_CODE 76
+
 void k_port_halt(void)
 {
     /*
@@ -240,7 +260,22 @@ void k_port_halt(void)
 
 void k_port_reset(void)
 {
-    exit(0);
+    exit(HOST_POWER_REBOOT_EXIT_CODE);
+}
+
+void k_port_power(enum k_power_action action)
+{
+    switch (action) {
+    case K_POWER_HALT:
+        k_port_halt();
+        break;
+    case K_POWER_OFF:
+        exit(HOST_POWER_OFF_EXIT_CODE);
+        break;
+    case K_POWER_REBOOT:
+        k_port_reset();
+        break;
+    }
 }
 
 const char *k_port_name(void)
@@ -334,7 +369,7 @@ k_u32_t k_port_cpu_id(void)
  * for a module of Linux.
  */
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 12u
+#define PORT_API_MINOR 13u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_host does not speak the contract of this kernel");
@@ -397,6 +432,30 @@ int k_port_console_poll(void)
     }
 
     return k_port_console_getchar();
+}
+
+/*
+ * The size of the terminal of the developer, in cells. The host is a process
+ * and its console is the terminal it was started in, so the answer is the one
+ * the kernel of the host gives: TIOCGWINSZ, and 80x25 for a pipe or a file.
+ */
+void k_port_console_size(k_u16_t *rows, k_u16_t *columns)
+{
+    struct winsize size;
+
+    memset(&size, 0, sizeof(size));
+
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) != 0 || size.ws_row == 0 || size.ws_col == 0) {
+        size.ws_row = 25;
+        size.ws_col = 80;
+    }
+
+    if (rows != NULL) {
+        *rows = size.ws_row;
+    }
+    if (columns != NULL) {
+        *columns = size.ws_col;
+    }
 }
 
 /*
@@ -538,13 +597,154 @@ k_u64_t k_port_uptime_us(void)
 
 /* --- tasks (pthreads) --- */
 
-typedef struct {
+/*
+ * The guard page under the stack of a task (ADR 0048). A pthread of glibc
+ * already has a page at the bottom of its stack that is not readable and not
+ * writable; the port says so explicitly and remembers the bounds of the
+ * stack, so that a SIGSEGV whose address is in that page is an overflow of
+ * this task and not a crash of the process.
+ *
+ * A signal cannot be handled on the stack that just overflowed: the kernel
+ * would push the frame of the signal into the guard and the process would
+ * die. Every task therefore takes one of the alternate stacks of a fixed
+ * pool before it starts, and the handler runs there and jumps out of the
+ * signal to the task's own escape point. The pool is fixed so that a run of
+ * thousands of tasks leaks nothing, which the address sanitizer and the
+ * valgrind of the gate would otherwise report.
+ */
+#define HOST_ALTSTACK_COUNT 32u
+#define HOST_ALTSTACK_SIZE (16u * 1024u)
+
+static k_u8_t g_altstacks[HOST_ALTSTACK_COUNT][HOST_ALTSTACK_SIZE] __attribute__((aligned(16)));
+static atomic_bool g_altstack_used[HOST_ALTSTACK_COUNT];
+typedef struct host_task_ctl {
     struct task *task;
     k_port_task_entry_fn entry;
     pthread_mutex_t lock;
     pthread_cond_t cond;
     bool started;
+    /* The bounds of the stack, from pthread_getattr_np() on this thread. */
+    void *stack_base; /* the lowest byte the stack may use */
+    size_t guard;     /* the bytes below it that are not mapped */
+    /* Where the handler of the guard page comes back to, and the number of
+     * the signal that brought it there. */
+    sigjmp_buf escape;
+    unsigned altstack; /* index into g_altstacks, HOST_ALTSTACK_COUNT for none */
+    volatile sig_atomic_t fault;
+
+    /*
+     * A k_port_task_wake() arrived: the sleep of the task ends now. The flag
+     * is guarded by `lock` and cleared by the sleep that consumed it, so a
+     * wake that lands before the task begins to sleep still cuts that sleep
+     * (the state of the task was changed by the kernel before the door was
+     * called, and the sleep looks at the flag before it waits).
+     */
+    bool woken;
+    struct host_task_ctl *next; /* the live contexts of the port */
 } host_task_ctl;
+
+/* The control block of the thread that runs: read by the signal handler. */
+static __thread host_task_ctl *s_ctl;
+
+/* The two handlers the process had before the port installed its own. */
+static struct sigaction s_old_segv;
+static struct sigaction s_old_bus;
+
+static unsigned host_altstack_take(void)
+{
+    unsigned index;
+
+    for (index = 0; index < HOST_ALTSTACK_COUNT; index++) {
+        bool expected = false;
+
+        if (atomic_compare_exchange_strong(&g_altstack_used[index], &expected, true)) {
+            return index;
+        }
+    }
+
+    return HOST_ALTSTACK_COUNT;
+}
+
+static void host_altstack_give(unsigned index)
+{
+    if (index < HOST_ALTSTACK_COUNT) {
+        atomic_store(&g_altstack_used[index], false);
+    }
+}
+
+/* Hand a signal the port does not answer to the handler of the process. */
+static void host_fault_chain(int sig, siginfo_t *info, void *context, const struct sigaction *old)
+{
+    if ((old->sa_flags & SA_SIGINFO) != 0 && old->sa_sigaction != NULL) {
+        old->sa_sigaction(sig, info, context);
+        return;
+    }
+
+    if (old->sa_handler == SIG_IGN) {
+        return;
+    }
+
+    if (old->sa_handler != SIG_DFL && old->sa_handler != NULL) {
+        old->sa_handler(sig);
+        return;
+    }
+
+    /* The default action: the signal is raised again with the default
+     * disposition, and the process ends the way it would have ended. */
+    {
+        struct sigaction action;
+
+        memset(&action, 0, sizeof(action));
+        action.sa_handler = SIG_DFL;
+        (void)sigaction(sig, &action, NULL);
+        (void)raise(sig);
+    }
+}
+
+static void host_fault_handler(int sig, siginfo_t *info, void *context)
+{
+    host_task_ctl *ctl = s_ctl;
+    uintptr_t address = (uintptr_t)((info != NULL) ? info->si_addr : NULL);
+
+    if (ctl != NULL && ctl->stack_base != NULL && ctl->guard != 0) {
+        uintptr_t bottom = (uintptr_t)ctl->stack_base;
+
+        if (address >= bottom - ctl->guard && address < bottom) {
+            ctl->fault = sig;
+            siglongjmp(ctl->escape, 1);
+        }
+    }
+
+    host_fault_chain(sig, info, context, (sig == SIGBUS) ? &s_old_bus : &s_old_segv);
+}
+
+static void host_fault_init(void)
+{
+    struct sigaction action;
+
+    memset(&action, 0, sizeof(action));
+    action.sa_sigaction = host_fault_handler;
+    action.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESTART;
+    sigemptyset(&action.sa_mask);
+
+    (void)sigaction(SIGSEGV, &action, &s_old_segv);
+    (void)sigaction(SIGBUS, &action, &s_old_bus);
+}
+
+static pthread_once_t s_fault_once = PTHREAD_ONCE_INIT;
+
+/*
+ * The contexts that a wake may reach, and the lock of the list.
+ *
+ * A wake of the kernel names a struct task, and the record of the kernel can
+ * outlive the block of this port for a moment (a task that is exiting and a
+ * wake that is in flight). The list is what makes the door safe: the wake
+ * holds this lock while it finds the context and signals its condition, and
+ * the thread that ends takes the lock before it destroys anything. A task
+ * that is not in the list has no sleep to cut and the wake is dropped.
+ */
+static pthread_mutex_t s_task_lock = PTHREAD_MUTEX_INITIALIZER;
+static host_task_ctl *s_tasks;
 
 k_size_t k_port_task_stack_size(void)
 {
@@ -561,9 +761,67 @@ static void host_task_cleanup(void *arg)
 {
     host_task_ctl *ctl = (host_task_ctl *)arg;
 
+    if (ctl->altstack < HOST_ALTSTACK_COUNT) {
+        stack_t disable;
+
+        memset(&disable, 0, sizeof(disable));
+        disable.ss_flags = SS_DISABLE;
+        (void)sigaltstack(&disable, NULL);
+        host_altstack_give(ctl->altstack);
+        ctl->altstack = HOST_ALTSTACK_COUNT;
+    }
+
+    pthread_mutex_lock(&s_task_lock);
+
+    {
+        host_task_ctl **slot = &s_tasks;
+
+        while (*slot != NULL) {
+            if (*slot == ctl) {
+                *slot = ctl->next;
+                break;
+            }
+            slot = &(*slot)->next;
+        }
+    }
+
+    /*
+     * The condition is destroyed after the context has left the list and
+     * while the lock of the list is held: a wake that found it a moment ago
+     * has finished signalling, and a wake that comes now finds nothing.
+     */
     pthread_mutex_destroy(&ctl->lock);
     pthread_cond_destroy(&ctl->cond);
+
+    pthread_mutex_unlock(&s_task_lock);
+
     free(ctl);
+}
+
+/*
+ * The bounds of the stack of this thread and the guard page at its bottom.
+ * glibc allocates the stack and the port only reads the numbers: the guard is
+ * one page unless the machine says otherwise, and a thread whose numbers are
+ * not there runs without the contract instead of failing to start.
+ */
+static void host_task_stack_bounds(host_task_ctl *ctl)
+{
+    pthread_attr_t attr;
+    void *base = NULL;
+    size_t size = 0;
+    size_t guard = 0;
+
+    if (pthread_getattr_np(pthread_self(), &attr) != 0) {
+        return;
+    }
+
+    if (pthread_attr_getstack(&attr, &base, &size) == 0 &&
+        pthread_attr_getguardsize(&attr, &guard) == 0) {
+        ctl->stack_base = base;
+        ctl->guard = guard;
+    }
+
+    pthread_attr_destroy(&attr);
 }
 
 static void *host_task_thread(void *arg)
@@ -571,15 +829,55 @@ static void *host_task_thread(void *arg)
     host_task_ctl *ctl = (host_task_ctl *)arg;
 
     pthread_once(&s_once, host_once_init);
+    pthread_once(&s_fault_once, host_fault_init);
     pthread_setspecific(s_task_key, ctl->task);
+
+    host_task_stack_bounds(ctl);
+
+    ctl->altstack = host_altstack_take();
+    if (ctl->altstack < HOST_ALTSTACK_COUNT) {
+        stack_t altstack;
+
+        memset(&altstack, 0, sizeof(altstack));
+        altstack.ss_sp = g_altstacks[ctl->altstack];
+        altstack.ss_size = HOST_ALTSTACK_SIZE;
+        altstack.ss_flags = 0;
+        (void)sigaltstack(&altstack, NULL);
+    }
+
+    s_ctl = ctl;
+
+    pthread_cleanup_push(host_task_cleanup, ctl);
+
+    /*
+     * The escape point of the handler of the guard page. A stack overflow
+     * cannot return to the code that overflowed it, and a task that is
+     * abandoned would leave its record and its slot to the machine: the
+     * handler jumps here and the task ends through the kernel, with the
+     * status a program that faulted has on the other ports.
+     */
+    if (sigsetjmp(ctl->escape, 1) != 0) {
+        char line[160];
+        int length = snprintf(line, sizeof(line),
+                              "host: the stack of the task '%s' overflowed; the task ends, the "
+                              "machine stays\n",
+                              (ctl->task != NULL) ? ctl->task->name : "?");
+
+        if (length > 0) {
+            k_port_write(line, (k_size_t)length);
+        }
+
+        task_exit(255);
+
+        /* Not reached: the exit of a task does not come back. */
+        pthread_exit(NULL);
+    }
 
     pthread_mutex_lock(&ctl->lock);
     while (!ctl->started) {
         pthread_cond_wait(&ctl->cond, &ctl->lock);
     }
     pthread_mutex_unlock(&ctl->lock);
-
-    pthread_cleanup_push(host_task_cleanup, ctl);
 
     ctl->entry(ctl->task);
 
@@ -603,15 +901,56 @@ int k_port_task_create(struct task *t, k_port_task_entry_fn entry, void *arg)
 
     ctl->task = t;
     ctl->entry = entry;
+    ctl->altstack = HOST_ALTSTACK_COUNT;
     pthread_mutex_init(&ctl->lock, NULL);
-    pthread_cond_init(&ctl->cond, NULL);
+
+    {
+        /*
+         * The condition counts from the monotonic clock, the clock of the
+         * uptime of this port: a machine whose wall clock is set during a
+         * sleep must not make the sleep longer or shorter than it asked for.
+         */
+        pthread_condattr_t cond_attr;
+
+        pthread_condattr_init(&cond_attr);
+        pthread_condattr_setclock(&cond_attr, CLOCK_MONOTONIC);
+        pthread_cond_init(&ctl->cond, &cond_attr);
+        pthread_condattr_destroy(&cond_attr);
+    }
+
+    ctl->started = false;
+    ctl->woken = false;
+
+    pthread_mutex_lock(&s_task_lock);
+    ctl->next = s_tasks;
+    s_tasks = ctl;
+    pthread_mutex_unlock(&s_task_lock);
 
     pthread_attr_init(&attr);
     pthread_attr_setstacksize(&attr, k_port_task_stack_size());
+    /* One page under the stack that is not there: the guard of ADR 0048. */
+    (void)pthread_attr_setguardsize(&attr, 4096u);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 
     if (pthread_create(&thread, &attr, host_task_thread, ctl) != 0) {
         pthread_attr_destroy(&attr);
+
+        pthread_mutex_lock(&s_task_lock);
+
+        {
+            host_task_ctl **slot = &s_tasks;
+
+            while (*slot != NULL) {
+                if (*slot == ctl) {
+                    *slot = ctl->next;
+                    break;
+                }
+                slot = &(*slot)->next;
+            }
+        }
+
+        pthread_mutex_unlock(&s_task_lock);
+
         pthread_cond_destroy(&ctl->cond);
         pthread_mutex_destroy(&ctl->lock);
         free(ctl);
@@ -651,16 +990,98 @@ void k_port_task_yield(void)
     sched_yield();
 }
 
+/*
+ * The sleep of a task of the host is a wait on the condition of its own
+ * context, and not a nanosleep: the kernel wakes a task by name when the
+ * object it waits for changes its state, and that wake has to end the sleep
+ * at once (ADR 0046). A nanosleep runs to the end and the task would come
+ * back a millisecond later - the tick that 1.8 paid for every pipe.
+ *
+ * A thread that is not a task of the kernel (the boot, a helper of a test)
+ * has no context and keeps the plain sleep of the process.
+ */
+bool k_port_task_sleep_cuttable(void)
+{
+    return true;
+}
+
+void k_port_task_wake(struct task *t)
+{
+    host_task_ctl *ctl;
+
+    if (t == NULL) {
+        return;
+    }
+
+    pthread_mutex_lock(&s_task_lock);
+
+    for (ctl = s_tasks; ctl != NULL; ctl = ctl->next) {
+        if (ctl->task == t) {
+            pthread_mutex_lock(&ctl->lock);
+            ctl->woken = true;
+            pthread_cond_signal(&ctl->cond);
+            pthread_mutex_unlock(&ctl->lock);
+            break;
+        }
+    }
+
+    pthread_mutex_unlock(&s_task_lock);
+}
+
 void k_port_task_sleep_ms(k_u32_t ms)
 {
-    struct timespec ts;
+    struct task *self = k_port_task_current();
+    host_task_ctl *ctl = (self != NULL) ? (host_task_ctl *)self->ctx : NULL;
+    struct timespec deadline;
 
-    ts.tv_sec = (time_t)(ms / 1000u);
-    ts.tv_nsec = (long)(ms % 1000u) * 1000000L;
-
-    while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {
-        /* retry */
+    if (ms == 0) {
+        return;
     }
+
+    if (ctl == NULL) {
+        struct timespec ts;
+
+        ts.tv_sec = (time_t)(ms / 1000u);
+        ts.tv_nsec = (long)(ms % 1000u) * 1000000L;
+
+        while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {
+            /* retry */
+        }
+
+        return;
+    }
+
+    if (clock_gettime(CLOCK_MONOTONIC, &deadline) != 0) {
+        deadline.tv_sec = 0;
+        deadline.tv_nsec = 0;
+    }
+
+    deadline.tv_sec += (time_t)(ms / 1000u);
+    deadline.tv_nsec += (long)(ms % 1000u) * 1000000L;
+
+    if (deadline.tv_nsec >= 1000000000L) {
+        deadline.tv_sec++;
+        deadline.tv_nsec -= 1000000000L;
+    }
+
+    pthread_mutex_lock(&ctl->lock);
+
+    while (!ctl->woken) {
+        if (pthread_cond_timedwait(&ctl->cond, &ctl->lock, &deadline) != 0) {
+            /* The deadline, or a condition that cannot be waited on any
+             * more: either way this sleep is over. */
+            break;
+        }
+    }
+
+    /*
+     * The flag is consumed whether the wait ended by it or by its deadline:
+     * a wake that lost the race with the clock must not cut the next sleep of
+     * this task.
+     */
+    ctl->woken = false;
+
+    pthread_mutex_unlock(&ctl->lock);
 }
 
 void k_port_task_exit(int code)

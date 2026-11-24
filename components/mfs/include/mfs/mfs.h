@@ -41,12 +41,15 @@
  * version 3 volume keeps 64-byte records with the moments, the group of the
  * object and a checksum of the record, and its table of the records is
  * sized by the number of the records instead of by a share of the volume
- * (ADR 0038). The mount reads all three, and nothing is rewritten to make
- * an old volume new: a record of version 1 and 2 has no place for what it
- * does not have, so the group is read as zero and the table keeps the size
- * it was formatted with (ADR 0013, ADR 0038).
+ * (ADR 0038). A version 4 volume is a version 3 volume with a journal in
+ * META (ADR 0047): the layout of the table and the record is the one of 3.
+ * The mount reads all four, and nothing is rewritten to make an old volume
+ * new: a record of version 1 and 2 has no place for what it does not have,
+ * so the group is read as zero and the table keeps the size it was
+ * formatted with (ADR 0013, ADR 0038, ADR 0047).
  */
 #define MFS_VERSION 3
+#define MFS_VERSION_JOURNAL 4
 #define MFS_VERSION_TIME 2
 #define MFS_VERSION_LEGACY 1
 #define MFS_BLOCK_SIZE 1024
@@ -58,7 +61,11 @@
 #define MFS_FEATURE_CRC 0x0001u        /* the header carries a checksum */
 #define MFS_FEATURE_TIME 0x0002u       /* the records carry mtime and ctime */
 #define MFS_FEATURE_RECORD_CRC 0x0004u /* every record carries its checksum */
+#define MFS_FEATURE_JOURNAL 0x0008u    /* META holds the journal (ADR 0047) */
 #define MFS_INODE_SIZE 64
+
+/* The flags of mfs_format_ex(). */
+#define MFS_FORMAT_JOURNAL 0x1u /* write a version 4 volume (ADR 0047) */
 #define MFS_INODE_SIZE_TIME 32
 #define MFS_INODE_SIZE_LEGACY 16
 #define MFS_NAME_MAX 32
@@ -76,6 +83,14 @@
 /* The flags of an inode. */
 #define MFS_INODE_USED 0x01u
 #define MFS_INODE_DIR 0x02u
+/*
+ * A write that a close has not published yet (ADR 0047). The flag is set on
+ * the first write of an object and taken off by the close, in one journaled
+ * transaction with the size and the map: a record the mount finds pending
+ * is the draft of a file that a cut interrupted, and the mount removes it
+ * instead of presenting half of the write.
+ */
+#define MFS_INODE_PENDING 0x04u
 
 /* The bits of a record that say what the object is, not what may be done to it. */
 #define MFS_INODE_TYPE_MASK (MFS_INODE_USED | MFS_INODE_DIR)
@@ -177,7 +192,15 @@ struct mfs_superblock {
     k_u32_t inode_blocks;  /* the blocks of the table of the records */
     k_u32_t inode_size;    /* the bytes of one record */
     k_u32_t inode_records; /* the slots of the table, the record 0 included */
-    k_u32_t reserved[3];   /* zero */
+    /*
+     * The journal of a version 4 volume (ADR 0047): where it starts, how many
+     * blocks it takes and how many transactions of two blocks it holds. The
+     * words are the `reserved` of a version 3 header, so a version 1, 2 and 3
+     * volume keeps its zeros and the header keeps its 80 bytes.
+     */
+    k_u32_t journal_start;  /* the block of the header of the journal */
+    k_u32_t journal_blocks; /* the blocks of the journal, the header included */
+    k_u32_t journal_slots;  /* the transactions it holds, 2 blocks each */
 };
 
 /* One record of the table of the inodes, as the rest of the system reads it. */
@@ -239,6 +262,36 @@ struct mfs_dirent_header {
 };
 
 /*
+ * The journal of a version 4 volume (ADR 0047). The header is the first
+ * block of the journal; every transaction of the journal is two blocks: a
+ * slot header with the block it belongs to and the checksum of its image,
+ * and the image itself. The images are block images, never bytes of a file.
+ */
+#define MFS_JOURNAL_MAGIC 0x4A53464Du /* "MFSJ" */
+#define MFS_JOURNAL_VERSION 1u
+#define MFS_JOURNAL_STATE_EMPTY 0u     /* nothing to replay */
+#define MFS_JOURNAL_STATE_COMMITTED 1u /* every slot is the truth */
+/* The slots a transaction may need beyond one per block of the map. */
+#define MFS_JOURNAL_EXTRA_SLOTS 16u
+
+struct mfs_journal_header {
+    k_u32_t magic;
+    k_u32_t version;
+    k_u32_t sequence; /* the number of the transaction */
+    k_u32_t state;    /* MFS_JOURNAL_STATE_* */
+    k_u32_t slots;    /* the slots of the transaction */
+    k_u32_t map_crc;  /* CRC32 of the slot headers, in order */
+    k_u32_t crc;      /* CRC32 of the six words above */
+};
+
+struct mfs_journal_slot {
+    k_u32_t home;     /* the block of the volume the image belongs to */
+    k_u32_t sequence; /* the transaction of the slot */
+    k_u32_t crc;      /* CRC32 of the image */
+    k_u32_t reserved; /* zero */
+};
+
+/*
  * The layout of these structures is the layout of the volume: the fields
  * are whole words and the records have the same size on every processor
  * the system runs on. A change of one of them is a change of the format
@@ -251,6 +304,25 @@ _Static_assert(MFS_INODE_SIZE_LEGACY == 16, "the record of a legacy volume chang
 _Static_assert(MFS_INODE_SIZE == sizeof(struct mfs_inode_record),
                "the record of a version 3 volume changed");
 _Static_assert(sizeof(struct mfs_dirent_header) == 8, "an entry of a directory changed");
+_Static_assert(sizeof(struct mfs_journal_header) == 28, "the header of the journal changed");
+_Static_assert(sizeof(struct mfs_journal_slot) == 16, "a slot of the journal changed");
+/*
+ * The structures that are copied into a block and checksummed whole have no
+ * byte that the format does not name: a padding word would be written to the
+ * medium as the garbage of a stack frame and the checksum would cover it
+ * (ADR 0047, the valgrind pass of the suite). The asserts are the promise
+ * that a field added later is either covered or the format changes on
+ * purpose.
+ */
+_Static_assert(offsetof(struct mfs_superblock, journal_slots) + sizeof(k_u32_t) ==
+                   sizeof(struct mfs_superblock),
+               "the header of the volume has padding");
+_Static_assert(offsetof(struct mfs_journal_header, crc) + sizeof(k_u32_t) ==
+                   sizeof(struct mfs_journal_header),
+               "the header of the journal has padding");
+_Static_assert(offsetof(struct mfs_journal_slot, reserved) + sizeof(k_u32_t) ==
+                   sizeof(struct mfs_journal_slot),
+               "a slot of the journal has padding");
 /* The fields of the memory and of the medium are the same, in the same place. */
 _Static_assert(offsetof(struct mfs_inode, group) == offsetof(struct mfs_inode_record, group),
                "the group of a record moved");
@@ -330,6 +402,13 @@ struct mfs_file {
      * chain itself is whole on the medium all along.
      */
     k_u32_t generation;
+    /*
+     * The record is pending on the medium: the descriptor of a write marked
+     * it, and the close publishes the file (ADR 0047). A descriptor that is
+     * not for writing never sets it, so a read-only open of a file that a
+     * crash left pending publishes nothing.
+     */
+    bool pending;
 };
 
 /* The information about the filesystem. */
@@ -362,6 +441,13 @@ struct mfs_check_report {
     k_u32_t errors;  /* the number of the problems, 0 for a sound volume */
     k_u32_t fixed;   /* the repairs that mfs_repair() applied, 0 for a check */
     k_u32_t unfixed; /* the problems left after the repair pass */
+    /*
+     * The blocks the journal of the mount restored before this check ran
+     * (ADR 0047). The mount replays it, so the number is 0 on a volume that
+     * was unmounted cleanly, and it is the count of the images of the last
+     * committed transaction after a cut.
+     */
+    k_u32_t journal_replayed;
     /* The first problem in English, an empty string for a sound volume. */
     char first[MFS_CHECK_MESSAGE_MAX];
 };
@@ -383,6 +469,15 @@ struct mfs_check_report {
  * would silently hand out the wrong bytes.
  */
 int mfs_format(const struct k_blockdev *dev, k_u32_t max_records);
+
+/*
+ * Prepare a volume in the format the flags ask for. `MFS_FORMAT_JOURNAL`
+ * makes a version 4 volume, which is the version 3 layout with the journal
+ * of ADR 0047 in META; without the flag the call is mfs_format() and writes
+ * version 3, the format of 1.8. A version 4 volume is what the image of the
+ * machine is built with; a host that does not ask keeps the older volume.
+ */
+int mfs_format_ex(const struct k_blockdev *dev, k_u32_t max_records, k_u32_t flags);
 
 /* Mount a volume. The header is read and checked. */
 int mfs_mount(const struct k_blockdev *dev);
@@ -477,9 +572,10 @@ int mfs_check(struct mfs_check_report *report);
  * The files of a volume have no checksum, so a half-written *content* of a
  * file is not detected and not repaired: the repair promises a volume that
  * can be mounted and walked, not the data of a write a power cut
- * interrupted. There is no journal either: a record is one block and one
- * write, which is what the flash of the board gives, and the checksum is
- * what tells a whole record from a torn one (docs/debts.md).
+ * interrupted. A version 4 volume has a journal, and its mount replays the
+ * committed transaction and discards the draft of a write that a close did
+ * not publish before the check runs (ADR 0047); the repair here is the pass
+ * of a volume whose journal is empty. (docs/debts.md).
  *
  * The header of the volume stores no count of the free blocks or the free
  * records; the counters of the report are computed from the table and the

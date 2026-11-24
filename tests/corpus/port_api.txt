@@ -1,4 +1,4 @@
-# Micro OS — the contract of the platform port, 1.12, as it was recorded.
+# Micro OS — the contract of the platform port, 1.13, as it was recorded.
 #
 # This file is the golden record of kernel/port/*.h: the functions a machine
 # has to implement to be a port of this kernel. `make integrity` compares it
@@ -19,10 +19,12 @@
 #   * the execution substrate (kernel/port_task.h, the k_port_task_* calls) is
 #     not in this list: it is the part of a port that has no machine behind it
 #     to be checked against, and the tests of the scheduler cover it. The
-#     version of the contract is the version of the ten headers below.
+#     version of the contract is the version of the ten headers below, and the
+#     one call that moved it without a header above (the cut of a sleep,
+#     ADR 0046) is a call of that substrate.
 #
 # Eleven headers, 59 functions: console 5, cpu 2, exec 8, info 4, kv 5, lock 6,
-# mem 6, mm 11, net 8, power 2, time 2.
+# mem 6, mm 11, net 8, power 3, time 2.
 #
 # The two calls of kernel/port/cpu.h carry a weak default in the portable
 # kernel (components/kernel/src/cpu_default.c): a port that predates them is
@@ -31,7 +33,7 @@
 # override the default for them and does not fail a port that does not. The
 # wake of a core (ADR 0034) is the third of them: a port without a wake-up
 # interrupt of its own leaves the task to the next tick of the core.
-api 1 12
+api 1 13
 
 # kernel/port/console.h — the bytes in and out
 k_port_write kernel/port/console.h
@@ -39,6 +41,7 @@ k_port_console_panic kernel/port/console.h
 k_port_console_readline kernel/port/console.h
 k_port_console_getchar kernel/port/console.h
 k_port_console_poll kernel/port/console.h
+k_port_console_size kernel/port/console.h
 
 # kernel/port/cpu.h — the cores of the machine (a weak default is one core)
 k_port_cpu_count kernel/port/cpu.h weak
@@ -109,6 +112,7 @@ k_port_net_udp_exchange kernel/port/net.h
 
 # kernel/port/power.h — the two ends of the machine
 k_port_halt kernel/port/power.h
+k_port_power kernel/port/power.h
 k_port_reset kernel/port/power.h
 
 # kernel/port/time.h — the clock since the boot

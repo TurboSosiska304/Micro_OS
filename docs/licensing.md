@@ -23,6 +23,7 @@ commercially; the note here is what the tree does.
 | file (libmagic) | 5.45 | BSD-2-Clause | `third_party/file`, `/bin/file` and the database `/etc/magic.mgc` of `/etc` | `/bin/file` of the x86-64 MicroFS image; `/etc/licenses/file` in the image and `LICENSE.file` in the x86-64 tar |
 | SQLite | 3.54.1 | public domain | `third_party/sqlite`, the amalgamation, `/bin/sqlite3` | `/bin/sqlite3` of the x86-64 MicroFS image; `/etc/licenses/sqlite` in the image and `LICENSE.sqlite` in the x86-64 tar |
 | awk (the One True Awk) | 20240728 | Lucent permissive | `third_party/awk`, `ports/port_x86_64/programs` (the `main` is the release's `main.c`) | `/bin/awk` of the x86-64 MicroFS image; `/etc/licenses/awk` in the image and `LICENSE.awk` in the x86-64 tar |
+| kilo | 323d93b (tip) | BSD-2-Clause | `tests/ports/kilo`, the editor of the gate of the terminal (ADR 0051) | `/bin/ports/kilo` of the volume of `make ports-smoke` and `make tty-smoke`; `/etc/licenses/kilo` in that volume |
 
 Spleen is a font by Frederic Cambus; the license and the note are in
 [`third_party/spleen`](../third_party/spleen/README.md). The 8x16 table is
@@ -91,6 +92,17 @@ puts `LICENSE.sbase` into the x86-64 archive, and a package that installs a
 tool (`microos-progs` of a release) copies the same file beside it. The
 notice is not merged into the MIT `LICENSE` of the tree: the two are the same
 license but not the same text.
+
+kilo is a full-screen editor by Salvatore Sanfilippo (antirez), the first
+program of somebody else in this tree that is not a command of a stream: it
+asks a terminal for its mode and for the size of its screen and draws with
+the escape sequences of a screen (ADR 0051). It is not a program of the
+release image but a program of the gate - `tests/ports/kilo` is the source
+byte for byte, `make ports-smoke` and `make tty-smoke` build it with the SDK
+and run it - and the volume of those runs carries `/etc/licenses/kilo`
+beside `/bin/ports/kilo`. The BSD-2-Clause license asks that the notice
+travel with the binary, and it does; the file is not merged into the MIT
+`LICENSE` of the tree.
 
 bc and dc are the calculators of Gavin D. Howard, one engine with two names;
 the version, the files, the port layer and the configuration of the port are

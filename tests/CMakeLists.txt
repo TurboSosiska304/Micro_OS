@@ -15,6 +15,7 @@ if(NOT ESP_PLATFORM)
         cases/test_blockdev_view.c
         cases/test_root.c
         cases/test_volume.c
+        cases/test_power.c
         cases/test_render.c
         cases/test_boot.c
         cases/test_kmod.c
@@ -23,6 +24,7 @@ if(NOT ESP_PLATFORM)
         cases/test_fuzz.c
         cases/test_mfs.c
         cases/test_mfs_format.c
+        cases/test_mfs_journal.c
         cases/test_mfs_persistence.c
         cases/test_mfs_repair.c
         cases/test_mfs_many.c
@@ -49,6 +51,7 @@ if(NOT ESP_PLATFORM)
         cases/test_console.c
         cases/test_telnet.c
         cases/test_text_wrap.c
+        cases/test_tty.c
         cases/test_ksys.c
         cases/test_ksys_process.c
         cases/test_users.c
@@ -60,9 +63,11 @@ if(NOT ESP_PLATFORM)
         cases/test_config.c
         cases/test_settings.c
         cases/test_task.c
+        cases/test_guard.c
         cases/test_sched.c
         cases/test_sched_queue.c
         cases/test_smp.c
+        cases/test_wait.c
         cases/test_sign.c
         cases/test_progs.c
         cases/test_zlib.c

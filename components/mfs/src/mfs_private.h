@@ -125,6 +125,15 @@ k_u32_t mfs_priv_crc32(const void *data, k_size_t size);
 k_u32_t mfs_priv_header_crc(const struct mfs_superblock *sb);
 
 /*
+ * The slots of a transaction that the journal of the mounted volume still
+ * holds, 0 when it is empty. The mount replays a committed transaction
+ * before it answers, so a check of a mounted volume reads 0; the call is
+ * what lets the check say that the medium changed under the mount (ADR
+ * 0047).
+ */
+k_u32_t mfs_priv_journal_pending(void);
+
+/*
  * Read one block of the mounted volume. The block has to be a block of the
  * volume; MFS_EIO says that the device could not deliver it.
  */

@@ -20,6 +20,7 @@
 #include "kernel/port_task.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
+#include "drivers/power.h"
 
 /*
  * Configuration of the kernel tasks on top of FreeRTOS:
@@ -197,6 +198,47 @@ void k_port_reset(void)
     esp_restart();
 }
 
+/*
+ * The last step of the clean end (ADR 0050) on a board with a power latch.
+ *
+ * The board has no PMIC and no S5: "off" is the deep sleep of the chip with
+ * HOLD kept high and BUTTON C as the wake source, so a person who presses
+ * the button gets the board back and the volume it left clean. A wake from
+ * that sleep is a restart of the chip - the RAM does not survive it - and
+ * the boot says "power: woke from ext1" (src/drv_power.c). A sleep that
+ * cannot arm the button would be a board with no way back: the driver drops
+ * the latch instead, which is the old `power off` of the board.
+ *
+ * The reboot is the chip's own, and the halt is the idle loop of the
+ * kernel on FreeRTOS: the processor stays in the task of the shutdown and
+ * the board keeps its power for a person who reads the sentence.
+ */
+void k_port_power(enum k_power_action action)
+{
+    switch (action) {
+    case K_POWER_HALT:
+        kinfo("esp32: the processor stops, the power stays on");
+        k_port_halt();
+        break;
+
+    case K_POWER_OFF:
+        kinfo("esp32: the board goes to deep sleep, button C wakes it");
+        if (drv_power_deep_off() != 0) {
+            kwarn("esp32: the wake source did not arm, the latch is dropped");
+            (void)drv_power_off();
+        }
+        /* drv_power_off() answers with the cable in; the machine stays
+         * awake then, and there is nothing else this port can do. */
+        k_port_halt();
+        break;
+
+    case K_POWER_REBOOT:
+        kinfo("esp32: the board restarts");
+        esp_restart();
+        break;
+    }
+}
+
 const char *k_port_name(void)
 {
     return "esp32";
@@ -213,7 +255,7 @@ const char *k_port_arch(void)
  * wrong meaning, the way vermagic does for a module of Linux.
  */
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 12u
+#define PORT_API_MINOR 13u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_esp32 does not speak the contract of this kernel");
@@ -272,6 +314,21 @@ int k_port_console_poll(void)
     }
 
     return (int)c;
+}
+
+/*
+ * The size of the console of the board: the panel is 80 columns of 25 rows
+ * (docs/ports/esp32/hardware.md), and a program of the board has no window to
+ * draw in that would be another number.
+ */
+void k_port_console_size(k_u16_t *rows, k_u16_t *columns)
+{
+    if (rows != NULL) {
+        *rows = 25u;
+    }
+    if (columns != NULL) {
+        *columns = 80u;
+    }
 }
 
 /* --- memory --- */

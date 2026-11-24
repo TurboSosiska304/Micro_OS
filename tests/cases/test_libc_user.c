@@ -25,7 +25,10 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stddef.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <termios.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -830,6 +833,51 @@ static void test_words(void)
     }
 }
 
+/* --- the terminal -------------------------------------------------------- */
+
+/*
+ * The structure of the mode is the one of the ABI byte for byte: the library
+ * hands the pointer of the caller to the kernel and nothing is translated
+ * (ADR 0051 §3). A field or a flag that moved would be a mode that a program
+ * sets and the kernel reads differently, which no test of the machine would
+ * see as a wrong number - it would see a console that does not change.
+ */
+static void test_termios_layout(void)
+{
+    struct termios mode;
+    struct winsize size;
+
+    ktest_begin("libc_user: the mode of a terminal is the structure of the ABI");
+
+    KT_CHECK_INT_EQ(sizeof(mode), 36);
+    KT_CHECK_INT_EQ(offsetof(struct termios, c_iflag), 0);
+    KT_CHECK_INT_EQ(offsetof(struct termios, c_oflag), 4);
+    KT_CHECK_INT_EQ(offsetof(struct termios, c_cflag), 8);
+    KT_CHECK_INT_EQ(offsetof(struct termios, c_lflag), 12);
+    KT_CHECK_INT_EQ(offsetof(struct termios, c_line), 16);
+    KT_CHECK_INT_EQ(offsetof(struct termios, c_cc), 17);
+    KT_CHECK_INT_EQ(NCCS, 19);
+    KT_CHECK_INT_EQ(sizeof(size), 8);
+
+    /* The indices and the flags a source of a screen names. */
+    KT_CHECK_INT_EQ(VINTR, 0);
+    KT_CHECK_INT_EQ(VERASE, 2);
+    KT_CHECK_INT_EQ(VEOF, 4);
+    KT_CHECK_INT_EQ(VTIME, 5);
+    KT_CHECK_INT_EQ(VMIN, 6);
+    KT_CHECK_INT_EQ(ISIG, 0000001);
+    KT_CHECK_INT_EQ(ICANON, 0000002);
+    KT_CHECK_INT_EQ(ECHO, 0000010);
+    KT_CHECK_INT_EQ(ICRNL, 0000400);
+    KT_CHECK_INT_EQ(OPOST, 0000001);
+    KT_CHECK_INT_EQ(CS8, 0000060);
+    KT_CHECK_INT_EQ(TCSANOW, 0);
+    KT_CHECK_INT_EQ(TCSAFLUSH, 2);
+    KT_CHECK_INT_EQ(TCGETS, 0x5401);
+    KT_CHECK_INT_EQ(TIOCGWINSZ, 0x5413);
+    KT_CHECK_INT_EQ(FIONREAD, 0x541B);
+}
+
 void test_libc_user(void)
 {
     ktest_begin("libc_user");
@@ -842,4 +890,5 @@ void test_libc_user(void)
     test_scanf();
     test_glob();
     test_words();
+    test_termios_layout();
 }

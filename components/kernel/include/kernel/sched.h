@@ -50,8 +50,51 @@ k_u64_t k_sched_uptime_ms(void);
 /* Give up the CPU. */
 void k_sched_yield(void);
 
-/* Sleep the current task for the given number of milliseconds. */
+/* Sleep the current task for the given number of milliseconds. Never less:
+ * the sleep is a loop on the clock of the port (see below). */
 void k_sched_sleep_ms(k_u32_t ms);
+
+/*
+ * Sleep the current task for at least `ms` milliseconds, without beginning the
+ * sleep when `stop` is already true. The look at the flag and the removal from
+ * the run queue are one critical section, so a wakeup that sets the flag in
+ * the window between the caller's look and this call is not slept on - that
+ * window is the lost wakeup of 1.8 (docs/debts.md, K15).
+ *
+ * A sleep is never shorter than its argument, whatever wakes the port: the
+ * deadline is a number of microseconds of the clock of the port, the task
+ * sleeps what is left in a loop, and a nudge that cut a round (the door of a
+ * port, a wake that lost its race) or a tick that fired early only makes the
+ * loop sleep the rest again. A tick is the unit of the scheduler and a
+ * millisecond of the caller is the unit of the port; on the host, whose clock
+ * is a thread of its own, the two part company under a slow runner.
+ *
+ * `stop` (the record of a wait) is the reason a wait ends early, with a
+ * signal the task has to answer; a block or an unblock that arrived while the
+ * task slept is the other. A plain sleep is not cut by a signal: the delay of
+ * a login that a signal could shorten is a delay an attacker chooses.
+ *
+ * Answers true when the task slept, false when it did not because the flag
+ * was set. The flag is written under the scheduler lock by whoever wakes the
+ * task (kernel/wait.c), which is what makes the plain read of it safe.
+ */
+bool k_sched_sleep_unless(k_u32_t ms, const bool *stop);
+
+/*
+ * Wake a task that is asleep, now: it leaves the sleeping table, becomes what
+ * its sleep was going to make it (READY for a wait), enters the run queue of
+ * its core and that core is told - the interrupt of the port when it is
+ * another one. The caller holds the scheduler lock; the interrupt goes out
+ * after the caller has dropped it, with k_sched_wake_flush().
+ *
+ * Answers true when the task was runnable after the call (it left the
+ * sleeping table), false when it was not sleeping or its sleep was a block.
+ */
+bool k_sched_wake_task_locked(struct task *t);
+
+/* Send the interrupts the hand-overs of k_sched_wake_task_locked() asked for.
+ * Called with the scheduler lock dropped. */
+void k_sched_wake_flush(void);
 
 /* Block/unblock a task (waiting for an event, e.g. a queue or a device). */
 void k_sched_block(struct task *t);

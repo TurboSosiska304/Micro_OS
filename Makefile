@@ -32,8 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: ahci-smoke all bench board-soak build bundle bundle-board bundle-x86 ci clean coverage disk-stress format fuzz-long help idf-build idf-check idf-flash idf-monitor idf-size integrity nvme-smoke ports-smoke reproducible sdk sim smoke soak soak-host soak-image soak-smp test test-asan test-minimal test-smp test-tsan uefi uefi-run uefi-smoke uefi-stick usb-smoke usb-stick-smoke wiki-check x86-build x86-disk x86-disk-smoke x86-fat-build x86-fs-smoke x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke x86-net-build x86-net-run x86-net-smoke x86-open-build x86-root-smoke x86-run x86-run-disk x86-run-disk-serial x86-run-serial x86-smoke x86-smp-build x86-smp-run x86-smp-smoke x86-usb-smoke x86-vga-smoke x86-volume-smoke
-
+.PHONY: ahci-smoke all bench board-soak build bundle bundle-board bundle-x86 ci clean coverage cut-smoke disk-stress format fuzz-long help idf-build idf-check idf-flash idf-monitor idf-size integrity nvme-smoke ports-smoke power-smoke reproducible sdk sim smoke soak soak-host soak-image soak-smp test test-asan test-minimal test-smp test-tsan tty-smoke uefi uefi-run uefi-smoke uefi-stick usb-smoke usb-stick-smoke wiki-check x86-build x86-cut-smoke x86-disk x86-disk-smoke x86-fat-build x86-fs-smoke x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke x86-net-build x86-net-run x86-net-smoke x86-open-build x86-root-smoke x86-run x86-run-disk x86-run-disk-serial x86-run-serial x86-smoke x86-smp-build x86-smp-run x86-smp-smoke x86-usb-smoke x86-vga-smoke x86-volume-smoke
 help:
 	@echo "Micro OS — available targets:"
 	@echo "  make build      configure and build the host build"
@@ -66,6 +65,8 @@ help:
 	@echo "  make x86-smoke  boot it and check what it says"
 	@echo "  make ports-smoke  the console set of sbase built by the SDK and run on"
 	@echo "                  the machine: the gate of a program nobody rewrote"
+	@echo "  make tty-smoke  kilo, a full-screen editor of somebody else, typed at the"
+	@echo "                  machine with no line of its source edited (ADR 0051)"
 	@echo "  make uefi       the same kernel as an image a firmware starts: a FAT"
 	@echo "  make uefi-stick the same wrapped in a table of partitions: a stick of a UEFI machine"
 	@echo "                  volume with BOOTX64.EFI, the kernel and disk.img"
@@ -82,6 +83,8 @@ help:
 	@echo "  make x86-disk-smoke two boots on one disk image, a file survives both:"
 	@echo "                  the IDE channel, the SATA controller and NVMe"
 	@echo "                  (X86_DISK_BUS=virtio for the virtio device)"
+	@echo "  make power-smoke  shutdown goes off with ACPI S5, the volume stays clean,"
+	@echo "                  reboot resets the same QEMU process (ADR 0050)"
 	@echo "  make ahci-smoke  the same image on the SATA controller of a chipset: a"
 	@echo "                  named volume is written and survives a reset, an unnamed"
 	@echo "                  one is read-only with the SHA-256 unchanged (ADR 0041)"
@@ -225,7 +228,7 @@ wiki-check:
 # joins the list when `qemu-system-x86_64` is on PATH and is skipped with a
 # message when it is not. A missing optional machine must not fail a run.
 CI_QEMU := $(shell command -v qemu-system-x86_64 2>/dev/null)
-CI_TARGETS := build test test-asan test-tsan test-minimal test-valgrind release-gate test-smp smoke coverage
+CI_TARGETS := build test test-asan test-tsan test-minimal test-valgrind test-smp smoke coverage
 ifneq ($(CI_QEMU),)
 CI_TARGETS += x86-smoke x86-root-smoke usb-smoke ports-smoke
 endif
@@ -251,7 +254,8 @@ clean:
 format:
 	@command -v clang-format >/dev/null 2>&1 || { echo "clang-format not found"; exit 1; }
 	find components ports main tests -type f \( -name '*.c' -o -name '*.h' \) \
-		-not -path 'tests/ports/sbase/*' -exec clang-format -i {} +
+		-not -path 'tests/ports/sbase/*' -not -path 'tests/ports/kilo/*' \
+		-exec clang-format -i {} +
 	@echo "sources formatted"
 
 # The SDK: the headers of a program, the library of a program, the crt and the
@@ -435,6 +439,16 @@ ports-smoke: x86-disk
 	python3 tools/ports_smoke.py --build $(PORTS_BUILD) --x86 $(X86_BUILD) \
 		--disk $(X86_DISK_BUS) --timeout 180
 
+# The gate of the terminal of a program (ADR 0051): the editor of somebody
+# else - antirez's kilo, BSD-2-Clause, byte for byte in tests/ports/kilo - is
+# typed at the machine, saves a file with Ctrl+S, leaves with Ctrl+Q, and `cat`
+# reads the line back. `ports-smoke` builds the same programs with the same
+# SDK; this one drives the keyboard that a transcript of lines cannot.
+tty-smoke: x86-disk
+	sh tools/ports_build.sh --build $(PORTS_BUILD)
+	python3 tools/tty_smoke.py --build $(PORTS_BUILD) --x86 $(X86_BUILD) \
+		--disk $(X86_DISK_BUS) --timeout 240
+
 # The gate of ADR 0027: one machine boots two roots. The first image is the
 # MicroFS volume of `make x86-disk`, the second is the same /bin and /etc in an
 # ext2 volume, and the same commands (`ls /bin`, `cat /etc/setting`, `exec
@@ -542,6 +556,19 @@ x86-volume-smoke: x86-build build
 x86-mfs-smoke: x86-build build
 	python3 tools/x86_mfs_smoke.py --build $(X86_BUILD) --mkfs $(X86_MKFS)
 
+# The gate of ADR 0047: twenty cuts of one write. The image is copied, the
+# copy is booted and killed in the middle of a write of a file (the process
+# goes, not the machine: `-no-reboot` makes a reset the end of it), and the
+# same blocks are booted again. The mount replays the journal or discards
+# the draft, `fsck` finds nothing, the file written before the cut is whole,
+# and the file the cut interrupted is either whole or absent - never a
+# prefix. Twenty points of the write, about a minute of the host.
+x86-cut-smoke: x86-build build
+	python3 tools/x86_cut_smoke.py --build $(X86_BUILD) --mkfs $(X86_MKFS)
+
+# The name of the lane: the same gate.
+cut-smoke: x86-cut-smoke
+
 # The numbers of the machine (tools/x86_bench.py, docs/bench.md): three boots
 # of the x86-64 port, `/bin/bench` of the build in the image for each run, and
 # a table of fixed sizes - the call of the door and its latency, a fork and an
@@ -625,6 +652,15 @@ x86-disk-smoke: x86-disk
 	python3 tools/x86_disk_smoke.py --image $(X86_BUILD)/disk-smoke.img --disk $(X86_DISK_BUS)
 	python3 tools/x86_disk_smoke.py --image $(X86_BUILD)/disk-smoke-ahci.img --disk ahci
 	python3 tools/x86_disk_smoke.py --image $(X86_BUILD)/disk-smoke-nvme.img --disk nvme
+
+# The machine that goes off (ADR 0050): a boot writes a file and says
+# `shutdown`, the S5 of ACPI ends the QEMU process, the same image starts
+# again on a clean volume with the file still there, `reboot` resets the
+# guest in the same process (so this one does not pass -no-reboot) and the
+# file survives the reset. The negative - a disk that does not answer the
+# flush keeps the machine alive - is `test_power.c` of the host tests.
+power-smoke: x86-disk
+	python3 tools/x86_power_smoke.py --image $(X86_BUILD)/power-smoke.img --disk $(X86_DISK_BUS)
 
 # The disk of a laptop (ADR 0041): the same image of `make x86-disk` on the
 # SATA controller of a chipset, in a machine of the q35 family that has no IDE

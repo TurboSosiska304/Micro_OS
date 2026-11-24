@@ -49,7 +49,7 @@ architecture own its part in `arch/<arch>/include/asm`:
 | `kernel/port/time.h` | time since the boot | `k_port_uptime_ms`, `k_port_uptime_us` |
 | `kernel/port/mem.h` | internal heap and PSRAM | `k_port_alloc`, `k_port_heap_free` |
 | `kernel/port/lock.h` | critical sections, recursive mutexes | `k_port_enter_critical`, `k_port_mutex_lock` |
-| `kernel/port/power.h` | halt, reset | `k_port_halt`, `k_port_reset` |
+| `kernel/port/power.h` | halt, off, reset | `k_port_power`, `k_port_halt`, `k_port_reset` |
 | `kernel/port/kv.h` | the store that survives a restart | `k_port_kv_get`, `k_port_kv_next` |
 | `kernel/port/net.h` | TCP and UDP | `k_port_net_connect`, `k_port_net_listen` |
 | `kernel/port/info.h` | identity and contract version | `k_port_name`, `k_port_api_major` |
@@ -361,10 +361,15 @@ end, so sixteen pipes of 64 KiB cost a megabyte only when they are all open.
 The two ends are ordinary descriptors of the task, so the access check, the
 close, `dup2` and the copy of a fork need no special case; a write with no
 reader is `EPIPE`, because the kernel has no signals yet, and a write of at
-most `PIPE_BUF` bytes is one step of the ring. A wait of a pipe is a poll
-with the sleep of the task and no bound - a reader slower than its writer is
-an ordinary pipeline, and a signal cuts the wait short with `EINTR`; a queue
-of waiters and its wakeup are the next step (`docs/debts.md`).
+most `PIPE_BUF` bytes is one step of the ring. A wait of a pipe is a record of
+the task on the channel of the pipes (`kernel/wait.h`, ADR 0046): it is armed
+under the lock of the table, before that lock is dropped, so the writer cannot
+put a byte in between and lose its wakeup; the writer then takes the waiter
+out of the sleeping table in the call of the write, and the wait has no bound
+- a reader slower than its writer is an ordinary pipeline, and a signal cuts
+the wait short with `EINTR`. The waiters are a table of the size of the table
+of the tasks and the wake is a broadcast of the channel, which is coarse on
+purpose: a waiter that finds itself woken and has nothing to read looks again.
 
 ### The blocks under the filesystem
 

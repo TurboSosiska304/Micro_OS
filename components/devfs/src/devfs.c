@@ -11,6 +11,7 @@
 
 #include "kernel/console.h"
 #include "kernel/errno.h"
+#include "kernel/tty.h"
 #include "kernel/vfs.h"
 
 #define DEV_NAME_MAX 16
@@ -27,18 +28,30 @@ struct dev_file {
     struct devfs_operations operations;
 };
 
-/* The console of the board. */
+/* The console of the board: the terminal of the task that opens it
+ * (kernel/tty.h). `read` is the line discipline - a line of a person with the
+ * echo and the editing of a terminal, or the raw bytes of a program that put
+ * the terminal in raw mode - and `write` is the console of the machine. */
 static int tty_read(char *buf, k_size_t size)
 {
-    int rc = k_console_readline(buf, size);
+    int rc = k_tty_read(buf, size);
 
-    return rc < 0 ? 0 : rc;
+    /* An empty line is a read of no bytes and not the end of the file: the
+     * device answers zero, and a negative answer is the error of the call. */
+    return rc;
 }
 
 static int tty_write(const char *buf, k_size_t size)
 {
     k_console_write(buf, size);
     return (int)size;
+}
+
+/* The mode of the terminal, the size of its screen and the bytes that wait:
+ * TCGETS, TCSETS, TIOCGWINSZ and FIONREAD (ADR 0051 §3). */
+static int tty_ioctl(k_u32_t request, k_u64_t arg)
+{
+    return k_tty_ioctl(request, arg);
 }
 
 /* The sink: everything that is written disappears. */
@@ -56,7 +69,8 @@ static int null_write(const char *buf, k_size_t size)
 }
 
 static const struct dev_file s_devices[] = {
-    {"tty0", {.read = tty_read, .write = tty_write}},
+    {"tty0", {.read = tty_read, .write = tty_write, .ioctl = tty_ioctl}},
+    {"tty", {.read = tty_read, .write = tty_write, .ioctl = tty_ioctl}},
     {"null", {.read = null_read, .write = null_write}},
 };
 

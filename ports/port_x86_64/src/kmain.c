@@ -552,6 +552,12 @@ void kmain(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys)
         kwarn("x86-64: not every command of the network is registered");
     }
 
+    /* The proof of the guard page under a kernel stack (ADR 0048): `guard`
+     * starts a task that overflows its own stack and ends there. */
+    if (port_x86_64_stack_register() != 0) {
+        kwarn("x86-64: the guard command is not registered");
+    }
+
 #if KERNEL_SMP
     /* The cores of the machine: the state of the scheduler of every core, a
      * run of workers and the IPI of one core to another (ADR 0012). A
