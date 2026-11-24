@@ -343,6 +343,20 @@ the second (`docs/plan-1.8.md`, M2).
 | The NVMe controller is on the bus 0: the walk of the port does not follow a bridge, and a function behind a root port of a real laptop (02:00.0) is invisible. | `ports/port_x86_64/src/pci.c`, `src/nvme.c` | open | A walk of the secondary buses from the PCI-to-PCI bridges (the type-1 header, the bus numbers the firmware assigned), and the ECAM window of the MCFG; the row is the same debt as the WiFi one. |
 | A medium that appears after the boot (a namespace of a hot-plugged drive, a card) is not seen: the driver asks once, at the boot, and there is no notification of a change of `CSTS`. | `ports/port_x86_64/src/nvme.c` | open | The hot-plug of the medium (the PCIe hot-plug of the slot, or a `rescan` command that asks the controllers again and re-registers a disk), and the unmount of what used that device. |
 
+## K17 - The gate of ten minutes, and two sentences it took for a defect
+
+The sessions of `make soak` and `make soak-smp` are the half of the gate that
+runs a machine for ten minutes: they are also the half that no lane runs while
+it works, so the gate of `1.8.0-rc1` was the first time in two releases that
+they met the new commands of the tree. They said two things, and neither was a
+defect of the machine.
+
+| Debt | Where | Status | What it needs |
+|---|---|---|---|
+| `netinfo` was asked for `net: 10.0.2.15/24`, the line the **kernel logs once** when the interface is configured. The line lands in whichever block of the transcript is open, and in one cycle of 921 it landed in the block before the command. The check names the device and the address of the command's own answer now (`netinfo: virtio0`, `ip 10.0.2.15/24`), which is more than the line was. | `tools/soak.py` (`Command("netinfo", ...)`) | done | Nothing; a line of a log is not an answer of a command. |
+| A pipeline of a program answered `0` instead of a number in five cycles of 844, and the reason was in its own block: `exec: the port refused the image (rc=-1)` and `ls: not enough memory for the image`. The load fills the volume and pushes the heap to its limit on purpose - a download of a hundred megabytes, a database, a fork - and a machine that refuses an image **by name** and keeps its shell is the machine the gate is asking about. The block is a hint now, not a failure (and the report prints three lines of the block, and `SOAK_DUMP` writes the whole of it, which is how the sentence was found). | `tools/soak.py` (`Session.execute`, `Session.fail`) | done | A gate that keeps the sentence of a starved image as an error if the shell **also** lost a line of a healthy program; the two cases are one string apart and only the report tells them. |
+| The memory of the machine is pushed to that limit by the load itself, and the counter of the session (`heap free 11582 KB -> 23100 KB`) does not show a leak. What is not measured is *when* the heap is at its limit: a count of the refusals of an image per session would say whether the pressure is a moment of a cycle or a trend. | `tools/soak.py`, `components/kernel/src/kmm.c` | open | A counter of the refusals in the report of the session, and a session of an hour that shows it flat. |
+
 ## K16 - The stream of a hundred megabytes, once
 
 `make x86-net-smoke` downloads a hundred megabytes from the serving side of
