@@ -57,6 +57,7 @@
 #include "mfs/mfs.h"
 
 #include "port_x86_64_ahci.h"
+#include "port_x86_64_nvme.h"
 #include "port_x86_64_pci.h"
 
 /* --- the registers of the primary channel --- */
@@ -1137,15 +1138,17 @@ void port_x86_64_disk_irq_init(void)
  * Of the disks of the port the virtio one comes first: it is the device of
  * this release (ADR 0037) and a machine that was given both is a machine whose
  * root is the fast one. The hard disk of a chipset (the AHCI controller of
- * ADR 0041) is asked last, after the channel of 1984: a machine that has both
- * keeps the boot of the release it had, and the disk of a person is the root
- * of the machine that has no other.
+ * ADR 0041) and the disk of a modern laptop (the NVMe controller of ADR 0042)
+ * are asked after the channel of 1984, and the NVMe one last: a machine that
+ * has both keeps the boot of the release it had, and the disk of a person is
+ * the root of the machine that has no other.
  */
 const char *port_x86_64_root_device(void)
 {
     const char *boot = port_x86_64_module_root();
     const char *virtio = port_x86_64_virtio_blk_root();
     const char *ahci = port_x86_64_ahci_root();
+    const char *nvme = port_x86_64_nvme_root();
 
     if (boot != NULL) {
         return boot;
@@ -1159,5 +1162,9 @@ const char *port_x86_64_root_device(void)
         return g_root;
     }
 
-    return ahci != NULL ? ahci : "ram0";
+    if (ahci != NULL) {
+        return ahci;
+    }
+
+    return nvme != NULL ? nvme : "ram0";
 }

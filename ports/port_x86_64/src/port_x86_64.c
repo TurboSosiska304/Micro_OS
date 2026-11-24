@@ -32,6 +32,7 @@
 #include "port_x86_64_task.h"
 #include "port_x86_64_apic.h"
 #include "port_x86_64_ahci.h"
+#include "port_x86_64_nvme.h"
 #include "port_x86_64_xhci.h"
 
 /* --- the machine --- */
@@ -2504,6 +2505,7 @@ void port_x86_64_init(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys
     port_x86_64_disk_init();
     port_x86_64_virtio_blk_init();
     port_x86_64_ahci_init();
+    port_x86_64_nvme_init();
 
     /* The network is the last device of the boot before the interrupts: it
      * asks the PCI bus for a card, and a machine without one keeps the "no"

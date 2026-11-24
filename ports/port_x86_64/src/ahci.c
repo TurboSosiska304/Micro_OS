@@ -348,25 +348,13 @@ static bool ahci_wait(k_u32_t port, k_u32_t register_offset, k_u32_t mask, bool 
 }
 
 /*
- * The physical address behind a byte the transfer names (ADR 0032 §1): the
- * window of the programs is the only memory of this machine whose virtual
- * address is not its physical one, and the page tables of the moment hold
- * the frame. Zero is "this buffer is not one the controller may be given".
+ * The physical address behind a byte the transfer names: the shared
+ * translation of the port (ADR 0032 §1, port_x86_64_dma_phys). Zero is "this
+ * buffer is not one the controller may be given".
  */
 static k_u64_t ahci_phys(k_u64_t address)
 {
-    if (address >= PORT_X86_64_USER_BASE && address < PORT_X86_64_USER_LIMIT) {
-        void *frame = port_x86_64_paging_phys(port_x86_64_current_cr3(),
-                                              address & ~(k_u64_t)(AHCI_PAGE - 1u));
-
-        if (frame == NULL) {
-            return 0;
-        }
-
-        return (k_u64_t)(uintptr_t)frame | (address & (AHCI_PAGE - 1u));
-    }
-
-    return port_x86_64_bus_phys((const void *)(uintptr_t)address);
+    return port_x86_64_dma_phys((const void *)(uintptr_t)address);
 }
 
 /*
