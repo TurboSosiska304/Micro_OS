@@ -563,6 +563,39 @@ the memory of the parent and re-enters the program, and the port says so.
 There is no `fork()` with an address space of its own on the board, and no
 plan to pretend otherwise.
 
+## A program with a screen: kilo
+
+A program that draws a whole screen asks four questions before it draws:
+`isatty`, the mode of the terminal, the size of the screen, and then it sets
+the raw mode. All four answer on this machine since 1.9 (ADR 0051), so the
+editor of somebody else runs here with no patch of its source:
+
+```text
+microos> exec /bin/ports/kilo /tmp/k.txt
+```
+
+`kilo` (antirez, BSD-2-Clause) is not a program of the release image: it is a
+program of the gate of a port, copied byte for byte into `tests/ports/kilo`,
+built by the SDK with `tools/ports_build.sh`, and run by `make tty-smoke` and
+`make ports-smoke`. The transcript of `make tty-smoke` is the proof: a line is
+typed, Ctrl+S saves it, Ctrl+Q leaves, and `cat /tmp/k.txt` prints it back.
+
+What the terminal gives a program of the console:
+
+| Question | Call | The answer of this machine |
+|---|---|---|
+| is this a terminal? | `isatty(fd)` | true for 0, 1 and 2 of a task at the prompt, for `/dev/tty0` and for `/dev/tty` |
+| what is the mode? | `tcgetattr` (`TCGETS`) | canonical with the echo and the signal of Ctrl+C, or the raw mode a program set |
+| what is the size? | `ioctl(TIOCGWINSZ)` | the screen of the machine: 80x25 of the text mode, 160x50 of the framebuffer, 80x25 of the panel |
+| which keys are there? | `read` | a line with the editing of a terminal, or the raw bytes with `VMIN`/`VTIME` |
+
+The mode belongs to the terminal and not to the descriptor: a program that
+sets it and exits gives the console back the one it found
+(`k_tty_task_exit`), and a terminal of telnet has a mode of its own. The
+arrows, Home and End are not in the character stream yet and `SIGWINCH` is not
+a signal of the ABI, so an editor moves with the letters and the Enter and is
+not told about a resize (`docs/debts.md`).
+
 ## What a program cannot do
 
 * **No ELF and no dynamic linker.** The format is `MOX1`, everything is
@@ -586,11 +619,14 @@ plan to pretend otherwise.
   `K_EXEC_MAX_IMAGE` (8 MiB); a larger file is `E2BIG` before a byte of it is
   read, and the machine holds two copies of the image for the time of the
   load ([debts.md](../debts.md)).
-* **No descriptor 0 at the prompt.** A program is a task with a table of
-  sixteen descriptors of its own, and `execve` carries the table of the
-  caller: a redirection or a pipe is what fills descriptor 0, and a program
-  started at the prompt with no redirection reads `EBADF` from it. The
-  descriptors 1 and 2 are the console.
+* **No descriptor 0 at the prompt, only a terminal behind it.** A program is a
+  task with a table of sixteen descriptors of its own, and `execve` carries
+  the table of the caller: a redirection or a pipe is what fills descriptor 0.
+  A program started at the prompt with no redirection reads the **terminal of
+  the task** instead - `read(0)` and `ioctl(0)` answer the console of the
+  machine and the descriptors 1 and 2 are its output (ADR 0051 §2) - so
+  `cat` with no name reads the keyboard and a full-screen editor works, but
+  `fstat(0)` still says `EBADF`: 0 is a fallback and not an open file.
 * **No `mmap` and no `brk`.** A program cannot ask for a range of its own, so
   the allocator is the arena of its bss and a library that allocates more
   than `ULIBC_HEAP_SIZE` needs a larger program or the ranges the kernel does
