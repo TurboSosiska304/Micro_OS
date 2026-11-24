@@ -10,8 +10,8 @@ the resolver of names live above it.
 
 | | ESP32 (board) | x86-64 (QEMU) | host substrate |
 |---|---|---|---|
-| link | WiFi station, lwIP | virtio-net | the sockets of Linux |
-| address | DHCP from the access point | static `10.0.2.15/24`, gateway `10.0.2.2`, DNS `10.0.2.3` (the user network of QEMU) | whatever Linux gives |
+| link | WiFi station, lwIP | the ethernet of the laptop (`e1000e`, Intel I219) or virtio-net or a stick of CDC-ECM | the sockets of Linux |
+| address | DHCP from the access point | DHCP, the lease in `/etc/network`; the fixed `10.0.2.15/24` of 1.8 when nobody answers | whatever Linux gives |
 | names | lwIP (`getaddrinfo`) | a resolver of its own with a cache: `dns <name>` | the resolver of Linux |
 | TCP and UDP | yes | yes | yes |
 | ICMP | the stack of lwIP | `ping <address>` | no |
@@ -160,8 +160,8 @@ does not replace the signature, and the signature does not replace TLS.
 ## What is not there yet
 
 * no TLS on the board (above);
-* no DHCP and no IPv6 on x86-64: the address of the port is the one of the
-  user network of QEMU, and a real link is a later change;
+* no IPv6 on x86-64: the stack is IPv4, and the address comes from DHCP (a
+  lease in `/etc/network`, ADR 0055) or from the fixed address of the file;
 * no congestion window and no retransmission timers beyond the simple ones of
   the port (`docs/ports/x86_64/README.md` says what the stack is); the
   window of a session is one segment in flight and 4 KB of buffer, and the

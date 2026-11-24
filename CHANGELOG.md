@@ -14,6 +14,43 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### The release
 
+- 2.0.0 "Composition": the machine of its user (`docs/plan-2.0.md`) - the policy
+  of the MMU, a `fork` that is a copy of the pages, the group of a record and
+  the `setuid` bit, a desktop that starts with the machine, the wire of a
+  laptop with DHCP, and a guide a stranger can follow.
+
+### Added
+
+- The wire of a person, first half (ADR 0055): **DHCP** as a client of the
+  library (`components/net/src/dhcp.c`): DISCOVER/OFFER/REQUEST/ACK, T1 and T2,
+  a NAK that starts again, the lease in `/etc/network` (read before the request,
+  written after the answer, `dhcp 0` for the fixed address of 1.8), and a
+  fallback that keeps the machine usable when no server answers. And the
+  **Ethernet of a laptop**: `e1000e` (the I219 of a ThinkPad and the 82574L of
+  QEMU), legacy descriptors, the MAC from the NVM, the window of BAR0 above the
+  identity map. `make x86-net-smoke` is 130 checks over three machines: virtio
+  with DHCP, `-device e1000e` with DHCP and a download of the host, and a wire
+  with no server at all.
+- The four defects the owner of a laptop found in the first minute of 1.9.0 on
+  a real machine, and the fixes: the **scratchpad buffers** of xHCI (a
+  controller of QEMU asks for none, the controller of a laptop for 65, and the
+  driver kept 8: no USB at all); the **volume of the boot medium** is
+  `boot0p1` and the image did not name it, so the rule of ADR 0041 made the
+  stick read-only; a **serial port that is not there** answers 0xFF and the
+  console read it as a key, which filled the line of the shell - the keyboard
+  of the machine was never asked; and the board of the port called itself
+  "QEMU x86-64 machine" on a laptop. The first bytes of the keyboard are in the
+  log now.
+
+## [1.9.0] - 2026-11-24
+
+### The release
+
+- 1.9.0 "Composition": the release of the machine that owns its files - of the
+  wake that preempts (ADR 0046), of the journal (ADR 0047), of the guard of a
+  stack (ADR 0048), of the machine that switches itself off (ADR 0050) and of
+  the terminal of a program (ADR 0051, with kilo of somebody else on it)
+  (`docs/releases/1.9.md`).
 - 1.9.0-rc1: the release of the machine that owns its files - of the wake that
   preempts (ADR 0046), of the journal (ADR 0047), of the guard of a stack
   (ADR 0048), of the machine that switches itself off (ADR 0050) and of the

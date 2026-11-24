@@ -258,6 +258,17 @@ static void test_defaults(void)
     KT_CHECK_INT_EQ(settings_get("console", "theme", NULL, value, sizeof(value)), SETTINGS_OK);
     KT_CHECK_STR_EQ(value, "dark");
 
+    /* The clock of the panel is a key of the console and not a file of its
+     * own: the panel of the desktop shows the hour the way the theme says
+     * (ADR 0054), and a machine of a zone names its minutes from UTC. */
+    KT_CHECK_INT_EQ(settings_get("console", "clock", NULL, value, sizeof(value)), SETTINGS_OK);
+    KT_CHECK_STR_EQ(value, "24h");
+    KT_CHECK_INT_EQ(settings_set("console", "clock", "12h"), SETTINGS_KEPT);
+    KT_CHECK_INT_EQ(settings_get("console", "clock", NULL, value, sizeof(value)), SETTINGS_OK);
+    KT_CHECK_STR_EQ(value, "12h");
+    KT_CHECK_INT_EQ(settings_get("console", "utc_offset", NULL, value, sizeof(value)), SETTINGS_OK);
+    KT_CHECK_STR_EQ(value, "0");
+
     /* A key of no system, a system of no tree and a small buffer. */
     KT_CHECK_INT_EQ(settings_get("display", "gamma", NULL, value, sizeof(value)), SETTINGS_EKEY);
     KT_CHECK_INT_EQ(settings_get("display", "gamma", "2", value, sizeof(value)), SETTINGS_OK);

@@ -33,6 +33,7 @@
 #include "port_x86_64_apic.h"
 #include "port_x86_64_acpi.h"
 #include "port_x86_64_ahci.h"
+#include "port_x86_64_e1000e.h"
 #include "port_x86_64_nvme.h"
 #include "port_x86_64_xhci.h"
 
@@ -69,8 +70,45 @@ static void tls_init(void)
 #define COM1 0x3F8
 #define COM1_LSR 0x3FD /* line status: bit 5 "can write", bit 0 "can read" */
 
+/*
+ * Whether there is a serial port at all.
+ *
+ * A laptop of these years has no 16550 at 0x3F8, and reading the line status
+ * of a port that is not there answers 0xFF: every bit set, "a byte is
+ * waiting", and the read of the data register answers 0xFF too. The console
+ * took that byte as a key - a byte that prints nothing - and the line of the
+ * shell grew to its limit with it: the owner of the laptop typed `uname` and
+ * the machine answered "line too long, it was not executed" for every line,
+ * the key of the PS/2 and the USB never being asked.
+ *
+ * The probe is the scratch register of the UART: 0xAE written and read back.
+ * A machine with the port has it, a machine without one answers 0xFF, and a
+ * controller that does not keep the register (some do not) is asked once and
+ * then believed by the line status: a status of 0xFF is a bus with nothing on
+ * it, not a port with every error at once.
+ */
+static bool g_com1_present;
+
+static void com1_probe(void)
+{
+    port_outb(COM1 + 7, 0xAEu);
+
+    if (port_inb(COM1 + 7) == 0xAEu) {
+        g_com1_present = true;
+        return;
+    }
+
+    g_com1_present = port_inb(COM1_LSR) != 0xFFu;
+}
+
 static void com1_init(void)
 {
+    com1_probe();
+
+    if (!g_com1_present) {
+        return;
+    }
+
     port_outb(COM1 + 1, 0x00); /* no interrupts: the console is polled */
     port_outb(COM1 + 3, 0x80); /* DLAB on */
     port_outb(COM1 + 0, 0x01); /* divisor 1: 115200 baud */
@@ -286,7 +324,7 @@ int k_port_console_getchar(void)
             return key;
         }
 
-        if ((port_inb(COM1_LSR) & 0x01) != 0) {
+        if (g_com1_present && (port_inb(COM1_LSR) & 0x01) != 0) {
             return (int)port_inb(COM1);
         }
 
@@ -315,7 +353,7 @@ int k_port_console_poll(void)
         return key;
     }
 
-    if ((port_inb(COM1_LSR) & 0x01) != 0) {
+    if (g_com1_present && (port_inb(COM1_LSR) & 0x01) != 0) {
         /* The serial port has no interrupt of its own in this port: the byte
          * is found by a poll, and finding it is the moment a task that waits
          * for the console in `poll` can be told. */
@@ -843,6 +881,18 @@ int port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs
         __asm__ volatile("sti" : : : "memory");
 
         if (k_mm_fault(k_mm_current(), address, write) == 0) {
+            return 1;
+        }
+
+        /*
+         * The stack of a program grows into the room under it (ADR 0052). The
+         * page that is not there is the growth point and not a fault when the
+         * address is in that room and the stack has not reached the ceiling
+         * of the task; a fetch does not grow a stack, and an address below the
+         * room - the guard page and the restorer under it - is the fault of
+         * the program.
+         */
+        if ((error & 0x10u) == 0u && port_x86_64_stack_grow(address)) {
             return 1;
         }
     }
@@ -2088,7 +2138,7 @@ const char *k_port_arch(void)
 }
 
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 13u
+#define PORT_API_MINOR 14u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_x86_64 does not speak the contract of this kernel");
@@ -2616,7 +2666,12 @@ void port_x86_64_init(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys
 
     /* The network is the last device of the boot before the interrupts: it
      * asks the PCI bus for a card, and a machine without one keeps the "no"
-     * answers of the contract. */
+     * answers of the contract. The card of the laptop (the e1000e of ADR 0055)
+     * is asked for first and the virtio card of QEMU second: the first driver
+     * that brings a device up takes the stack (src/netdev.c), so a machine
+     * with both has the wire of a person and a machine with one has that one.
+     */
+    port_x86_64_e1000e_init();
     port_x86_64_net_init();
 
     /* Last, because it is the point of no return: from here the timer fires

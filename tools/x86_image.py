@@ -91,6 +91,16 @@ PROGRAMS = [
     "pwd",
     "spawn",
     "nx",
+    # The attacks of the policy of a page (ADR 0052): the suite of `make
+    # mmu-smoke` types one line per program and reads what the map did.
+    "mmu_text",
+    "mmu_execstack",
+    "mmu_kernel",
+    "mmu_heap",
+    "mmu_wx",
+    "mmu_stray",
+    "mmu_stack",
+    "mmu_io",
     "zcat",
     "pcre2grep",
     "lua",
@@ -123,8 +133,10 @@ PROGRAMS = [
     "edit",
     "fm",
     # The server of the desktop (1.7): the windows of the programs above as
-    # clients of one program that owns the screen (docs/desktop.md).
+    # clients of one program that owns the screen (docs/desktop.md), and the
+    # terminal window that runs the programs of /bin in a window (2.0).
     "wm",
+    "term",
 ]
 
 # The programs of the SDK: `make ports-build` writes them into build-ports and
@@ -298,7 +310,12 @@ END { printf "awk: %d records, sum %d, root %d\\n", count, sum, roots }
 # attached to; a copy of the image without the line is read-only, which is the
 # negative half of the gate. `--volumes` replaces the list, `--volumes none`
 # writes no file at all.
-VOLUMES = ("ata0p1", "virtio0p1", "ahci0p1", "nvme0p1")
+# The boot medium of a UEFI machine names its own partition `boot0p1`
+# (the loader of the ESP carries a disk image and the kernel reads its table),
+# and a stick written by `make uefi-stick` was read-only on the laptop because
+# of it: the settings of /etc could not be written and `write` answered the
+# sentence of the rule.
+VOLUMES = ("ata0p1", "virtio0p1", "ahci0p1", "nvme0p1", "boot0p1")
 
 VOLUMES_HEADER = "# the volumes of this system that a mount may write (ADR 0041)"
 

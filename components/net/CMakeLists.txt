@@ -110,7 +110,11 @@ else()
         return()
     endif()
 
-    set(MICRO_OS_NET_SRCS "src/net.c" "src/dns.c")
+    # The client of DHCP is here in every build of the component: the stack of
+    # the x86-64 port asks it for the address of the machine at the first use
+    # of the network, and the client itself is portable (net/dhcp.h). Its test
+    # is the server the case of tests/cases/test_dhcp.c scripts.
+    set(MICRO_OS_NET_SRCS "src/net.c" "src/dns.c" "src/dhcp.c")
 
     if(MICRO_OS_NET_HTTP)
         list(APPEND MICRO_OS_NET_SRCS "src/http.c")

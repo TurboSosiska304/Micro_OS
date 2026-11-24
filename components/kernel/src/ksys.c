@@ -75,7 +75,9 @@ static int copy_from_user(void *dst, ksys_arg_t src, k_size_t size)
         return KERR_FAULT;
     }
 
+    k_port_exec_user_access_begin();
     memcpy(dst, (const void *)(uintptr_t)src, size);
+    k_port_exec_user_access_end();
     return 0;
 }
 
@@ -89,8 +91,23 @@ static int copy_to_user(ksys_arg_t dst, const void *src, k_size_t size)
         return KERR_FAULT;
     }
 
+    k_port_exec_user_access_begin();
     memcpy((void *)(uintptr_t)dst, src, size);
+    k_port_exec_user_access_end();
     return 0;
+}
+
+/*
+ * A block of the kernel written to the memory of a program, for the calls
+ * whose range was checked with k_port_exec_contains() and no k_mm_touch: the
+ * same window as above, which is the one moment the kernel may touch a page
+ * of ring 3 on a processor with SMAP (ADR 0052).
+ */
+static void block_to_user(ksys_arg_t dst, const void *src, k_size_t size)
+{
+    k_port_exec_user_access_begin();
+    memcpy((void *)(uintptr_t)dst, src, size);
+    k_port_exec_user_access_end();
 }
 
 /*
@@ -127,15 +144,21 @@ static int path_check(const char *path)
     }
 
     for (i = 0; i <= KSYS_PATH_MAX; i++) {
+        char c;
+
         if (!k_port_exec_contains((const void *)(uintptr_t)(address + i), 1)) {
             return KERR_FAULT;
         }
 
+        k_port_exec_user_access_begin();
+        c = path[i];
+        k_port_exec_user_access_end();
+
         if (i == 0) {
-            if (path[0] != '/') {
+            if (c != '/') {
                 return KERR_INVAL;
             }
-        } else if (path[i] == '\0') {
+        } else if (c == '\0') {
             return 0;
         }
     }
@@ -392,7 +415,16 @@ static k_ssize_t sys_read(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys_
                 return rc;
             }
 
-            return k_tty_read((char *)(uintptr_t)buf, (k_size_t)count);
+            k_ssize_t got;
+
+            /*
+             * The window of SMAP (ADR 0052): the terminal of the console
+             * writes the buffer of the program itself.
+             */
+            k_port_exec_user_access_begin();
+            got = k_tty_read((char *)(uintptr_t)buf, (k_size_t)count);
+            k_port_exec_user_access_end();
+            return got;
         }
 
         return KERR_BADF;
@@ -418,7 +450,16 @@ static k_ssize_t sys_read(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys_
         return 0;
     }
 
-    return kfile_read(file, (void *)(uintptr_t)buf, count);
+    {
+        k_ssize_t got;
+
+        /* The files of the VFS write the buffer of the program in ring 0, and
+         * the window of ADR 0052 is the call the program asked for. */
+        k_port_exec_user_access_begin();
+        got = kfile_read(file, (void *)(uintptr_t)buf, count);
+        k_port_exec_user_access_end();
+        return got;
+    }
 }
 
 static k_ssize_t sys_write(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys_arg_t a3,
@@ -447,7 +488,14 @@ static k_ssize_t sys_write(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys
             return 0;
         }
 
-        return kfile_write(file, (const void *)(uintptr_t)buf, count);
+        {
+            k_ssize_t wrote;
+
+            k_port_exec_user_access_begin();
+            wrote = kfile_write(file, (const void *)(uintptr_t)buf, count);
+            k_port_exec_user_access_end();
+            return wrote;
+        }
     }
 
     /*
@@ -460,7 +508,9 @@ static k_ssize_t sys_write(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys
             return rc;
         }
 
+        k_port_exec_user_access_begin();
         k_console_write((const char *)(uintptr_t)buf, (k_size_t)count);
+        k_port_exec_user_access_end();
         return (k_ssize_t)count;
     }
 
@@ -601,7 +651,7 @@ static k_ssize_t sys_pipe(ksys_arg_t fds, ksys_arg_t a1, ksys_arg_t a2, ksys_arg
         return rc;
     }
 
-    memcpy((void *)(uintptr_t)fds, ends, sizeof(ends));
+    block_to_user(fds, ends, sizeof(ends));
 
     return 0;
 }
@@ -1114,7 +1164,7 @@ static k_ssize_t sys_stat(ksys_arg_t path, ksys_arg_t buf, ksys_arg_t a2, ksys_a
         return rc;
     }
 
-    memcpy((void *)(uintptr_t)buf, &stat, sizeof(stat));
+    block_to_user(buf, &stat, sizeof(stat));
 
     return 0;
 }
@@ -1150,7 +1200,7 @@ static k_ssize_t sys_statx(ksys_arg_t path, ksys_arg_t buf, ksys_arg_t a2, ksys_
         return rc;
     }
 
-    memcpy((void *)(uintptr_t)buf, &stat, sizeof(stat));
+    block_to_user(buf, &stat, sizeof(stat));
 
     return 0;
 }
@@ -1206,7 +1256,7 @@ static k_ssize_t sys_fstat(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t a2, ksys_ar
         stat.size = file->file.size;
     }
 
-    memcpy((void *)(uintptr_t)buf, &stat, sizeof(stat));
+    block_to_user(buf, &stat, sizeof(stat));
 
     return 0;
 }
@@ -1294,6 +1344,7 @@ static k_ssize_t sys_ftruncate(ksys_arg_t fd, ksys_arg_t size, ksys_arg_t a2, ks
 static k_ssize_t sys_unlink(ksys_arg_t path, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
                             ksys_arg_t a4, ksys_arg_t a5)
 {
+    char name[KSYS_PATH_MAX + 1];
     int rc;
 
     K_UNUSED(a1);
@@ -1302,17 +1353,18 @@ static k_ssize_t sys_unlink(ksys_arg_t path, ksys_arg_t a1, ksys_arg_t a2, ksys_
     K_UNUSED(a4);
     K_UNUSED(a5);
 
-    rc = path_check((const char *)(uintptr_t)path);
+    rc = path_copy(name, path);
     if (rc != 0) {
         return rc;
     }
 
-    return vfs_unlink((const char *)(uintptr_t)path);
+    return vfs_unlink(name);
 }
 
 static k_ssize_t sys_rmdir(ksys_arg_t path, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
                            ksys_arg_t a4, ksys_arg_t a5)
 {
+    char name[KSYS_PATH_MAX + 1];
     int rc;
 
     K_UNUSED(a1);
@@ -1321,17 +1373,18 @@ static k_ssize_t sys_rmdir(ksys_arg_t path, ksys_arg_t a1, ksys_arg_t a2, ksys_a
     K_UNUSED(a4);
     K_UNUSED(a5);
 
-    rc = path_check((const char *)(uintptr_t)path);
+    rc = path_copy(name, path);
     if (rc != 0) {
         return rc;
     }
 
-    return vfs_rmdir((const char *)(uintptr_t)path);
+    return vfs_rmdir(name);
 }
 
 static k_ssize_t sys_mkdir(ksys_arg_t path, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
                            ksys_arg_t a4, ksys_arg_t a5)
 {
+    char name[KSYS_PATH_MAX + 1];
     int rc;
 
     K_UNUSED(a1);
@@ -1340,12 +1393,12 @@ static k_ssize_t sys_mkdir(ksys_arg_t path, ksys_arg_t a1, ksys_arg_t a2, ksys_a
     K_UNUSED(a4);
     K_UNUSED(a5);
 
-    rc = path_check((const char *)(uintptr_t)path);
+    rc = path_copy(name, path);
     if (rc != 0) {
         return rc;
     }
 
-    return vfs_mkdir((const char *)(uintptr_t)path);
+    return vfs_mkdir(name);
 }
 
 /*
@@ -1356,6 +1409,8 @@ static k_ssize_t sys_mkdir(ksys_arg_t path, ksys_arg_t a1, ksys_arg_t a2, ksys_a
 static k_ssize_t sys_rename(ksys_arg_t from, ksys_arg_t to, ksys_arg_t a2, ksys_arg_t a3,
                             ksys_arg_t a4, ksys_arg_t a5)
 {
+    char from_name[KSYS_PATH_MAX + 1];
+    char to_name[KSYS_PATH_MAX + 1];
     int rc;
 
     K_UNUSED(a2);
@@ -1363,17 +1418,17 @@ static k_ssize_t sys_rename(ksys_arg_t from, ksys_arg_t to, ksys_arg_t a2, ksys_
     K_UNUSED(a4);
     K_UNUSED(a5);
 
-    rc = path_check((const char *)(uintptr_t)from);
+    rc = path_copy(from_name, from);
     if (rc != 0) {
         return rc;
     }
 
-    rc = path_check((const char *)(uintptr_t)to);
+    rc = path_copy(to_name, to);
     if (rc != 0) {
         return rc;
     }
 
-    return vfs_rename((const char *)(uintptr_t)from, (const char *)(uintptr_t)to);
+    return vfs_rename(from_name, to_name);
 }
 
 static k_ssize_t sys_readdir(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys_arg_t a3,
@@ -1436,7 +1491,10 @@ static k_ssize_t sys_readdir(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ks
      * directory is the one that was opened with O_DIRECTORY; a descriptor
      * of a file answers ENOTDIR in the VFS.
      */
+    k_port_exec_user_access_begin();
     rc = vfs_readdir(&file->file, out, max, &count_files);
+    k_port_exec_user_access_end();
+
     if (rc != 0) {
         return rc;
     }
@@ -2298,7 +2356,7 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
     }
 
     if (status != 0) {
-        *(int *)(uintptr_t)status = child_exit;
+        block_to_user(status, &child_exit, sizeof(child_exit));
     }
 
     task_reap(child_pid);
@@ -2307,9 +2365,30 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
 }
 
 /*
- * The memory of a program. The priority of the task decides where the
- * memory comes from, the same way as for the kernel itself.
+ * The heap of the kernel, as a call. It is not part of the ABI of a program:
+ * a block of `kmm_alloc` is a pointer of ring 0, which the page tables of a
+ * program map without the user bit, so a program can neither read nor write
+ * what it asks for - and `free` of an address it guessed would hand a block
+ * of the kernel back to the allocator while the kernel still holds it. A
+ * caller with an address space is refused (ADR 0052); a task of the kernel -
+ * the shell, the init of the boot - is the caller this call is for.
  */
+static bool kernel_heap_refused(void)
+{
+    static bool said;
+
+    if (k_mm_current() == 0) {
+        return false;
+    }
+
+    if (!said) {
+        said = true;
+        kwarn("ksys: a program asked for the heap of the kernel; the call is refused (ADR 0052)");
+    }
+
+    return true;
+}
+
 static k_ssize_t sys_malloc(ksys_arg_t size, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
                             ksys_arg_t a4, ksys_arg_t a5)
 {
@@ -2321,7 +2400,7 @@ static k_ssize_t sys_malloc(ksys_arg_t size, ksys_arg_t a1, ksys_arg_t a2, ksys_
     K_UNUSED(a4);
     K_UNUSED(a5);
 
-    if (size == 0) {
+    if (size == 0 || kernel_heap_refused()) {
         return 0;
     }
 
@@ -2342,7 +2421,7 @@ static k_ssize_t sys_free(ksys_arg_t ptr, ksys_arg_t a1, ksys_arg_t a2, ksys_arg
     K_UNUSED(a4);
     K_UNUSED(a5);
 
-    if (ptr == 0) {
+    if (ptr == 0 || kernel_heap_refused()) {
         return 0;
     }
 
@@ -2362,6 +2441,10 @@ static k_ssize_t sys_realloc(ksys_arg_t ptr, ksys_arg_t size, ksys_arg_t a2, ksy
     K_UNUSED(a3);
     K_UNUSED(a4);
     K_UNUSED(a5);
+
+    if (kernel_heap_refused()) {
+        return 0;
+    }
 
     if (size <= 0) {
         kmm_free(old_block);
@@ -2389,6 +2472,7 @@ static k_ssize_t sys_realloc(ksys_arg_t ptr, ksys_arg_t size, ksys_arg_t a2, ksy
 static k_ssize_t sys_chmod(ksys_arg_t path, ksys_arg_t mode, ksys_arg_t a2, ksys_arg_t a3,
                            ksys_arg_t a4, ksys_arg_t a5)
 {
+    char name[KSYS_PATH_MAX + 1];
     int rc;
 
     K_UNUSED(a2);
@@ -2396,7 +2480,7 @@ static k_ssize_t sys_chmod(ksys_arg_t path, ksys_arg_t mode, ksys_arg_t a2, ksys
     K_UNUSED(a4);
     K_UNUSED(a5);
 
-    rc = path_check((const char *)(uintptr_t)path);
+    rc = path_copy(name, path);
     if (rc != 0) {
         return rc;
     }
@@ -2411,12 +2495,13 @@ static k_ssize_t sys_chmod(ksys_arg_t path, ksys_arg_t mode, ksys_arg_t a2, ksys
         return KERR_INVAL;
     }
 
-    return vfs_chmod((const char *)(uintptr_t)path, (k_u32_t)mode);
+    return vfs_chmod(name, (k_u32_t)mode);
 }
 
 static k_ssize_t sys_chown(ksys_arg_t path, ksys_arg_t owner, ksys_arg_t a2, ksys_arg_t a3,
                            ksys_arg_t a4, ksys_arg_t a5)
 {
+    char name[KSYS_PATH_MAX + 1];
     int rc;
 
     K_UNUSED(a2);
@@ -2424,7 +2509,7 @@ static k_ssize_t sys_chown(ksys_arg_t path, ksys_arg_t owner, ksys_arg_t a2, ksy
     K_UNUSED(a4);
     K_UNUSED(a5);
 
-    rc = path_check((const char *)(uintptr_t)path);
+    rc = path_copy(name, path);
     if (rc != 0) {
         return rc;
     }
@@ -2434,7 +2519,7 @@ static k_ssize_t sys_chown(ksys_arg_t path, ksys_arg_t owner, ksys_arg_t a2, ksy
         return KERR_INVAL;
     }
 
-    return vfs_chown((const char *)(uintptr_t)path, (k_u32_t)owner);
+    return vfs_chown(name, (k_u32_t)owner);
 }
 
 static k_ssize_t sys_chgrp(ksys_arg_t path, ksys_arg_t group, ksys_arg_t a2, ksys_arg_t a3,

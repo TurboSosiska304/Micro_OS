@@ -580,6 +580,52 @@ static void key_handle(k_u8_t byte)
  * lines and a byte of the other device that arrived at the same moment is
  * not lost.
  */
+/*
+ * The first bytes of the keyboard, kept as they arrived: a machine whose keys
+ * are rubbish (a laptop of 2026, whose EC speaks a set the driver guessed
+ * wrong) answers with the bytes themselves instead of a sentence about them.
+ * Sixteen bytes, one line of the log, once.
+ */
+#define PS2_TRACE_BYTES 16u
+static k_u8_t g_trace[PS2_TRACE_BYTES];
+static k_u32_t g_trace_count;
+
+static void ps2_trace(k_u8_t byte)
+{
+    char line[PS2_TRACE_BYTES * 3u + 24u];
+    k_size_t used = 0;
+    k_u32_t i;
+
+    if (g_trace_count >= PS2_TRACE_BYTES) {
+        return;
+    }
+
+    g_trace[g_trace_count++] = byte;
+
+    if (g_trace_count < PS2_TRACE_BYTES) {
+        return;
+    }
+
+    {
+        static const char head[] = "ps2: the first bytes: ";
+        static const char hex[] = "0123456789abcdef";
+
+        for (i = 0; head[i] != '\0' && used + 1u < sizeof(line); i++) {
+            line[used++] = head[i];
+        }
+
+        for (i = 0; i < PS2_TRACE_BYTES && used + 3u < sizeof(line); i++) {
+            line[used++] = hex[(g_trace[i] >> 4) & 0x0Fu];
+            line[used++] = hex[g_trace[i] & 0x0Fu];
+            line[used++] = ' ';
+        }
+
+        line[used] = '\0';
+    }
+
+    kinfo("%s", line);
+}
+
 static void ps2_take_bytes(void)
 {
     int guard;
@@ -597,6 +643,7 @@ static void ps2_take_bytes(void)
         if ((status & PS2_STATUS_AUX) != 0) {
             mouse_byte(byte);
         } else {
+            ps2_trace(byte);
             key_handle(byte);
         }
     }

@@ -99,17 +99,20 @@ page and stack is NX, and the boot audits the tables), the kernel in the
 higher half at `0xFFFFFFFF80000000` (ADR 0007),
 `execve` with `MOX1` images, `fork()` with copy on write, MicroFS on the first
 partition of an ATA disk (or on 512 KB of RAM without one), the modes and the
-owners, and the network: a virtio-net card, ARP, ICMP, UDP, a client and a
-server of TCP and a resolver with a cache (`make x86-net-smoke`). It is the
-machine of [`programs.md`](programs.md) and the proof that the kernel is
+owners, and the network: the ethernet of a laptop (the `e1000e` of an Intel
+I219) or a virtio-net card, ARP, ICMP, UDP, a client and a server of TCP, a
+resolver with a cache and a client of DHCP that takes the address of the
+network and keeps the lease in `/etc/network` (`make x86-net-smoke`). It is
+the machine of [`programs.md`](programs.md) and the proof that the kernel is
 portable.
 
 What does not: the second processor (the list is read, the AP bring-up is the
 blocker of ADR 0012, "The pilot of 1.x"), the key-value store (no `/etc` to
 persist), a second disk, DMA,
 SMAP/SMEP (a documented decision, ADR 0007), and
-the parts of the network that wait for a real link: DHCP, IPv6 and a
-congestion window. The details are in
+the parts of the network that wait for more than one machine: IPv6, a
+congestion window, and the PHY of a real I219 (the driver of `e1000e` has
+its plain half). The details are in
 [`docs/ports/x86_64/README.md`](../ports/x86_64/README.md).
 
 ## host: the tests and the simulator

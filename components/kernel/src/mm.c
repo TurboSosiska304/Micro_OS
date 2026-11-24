@@ -57,6 +57,20 @@ k_mm_space_t k_mm_current(void)
     return k_port_mm_supported() ? k_port_mm_current() : 0;
 }
 
+/*
+ * A page is code or it is data (ADR 0052). The rule is the one the tables of
+ * every program already carry - a page of the text is executable and not
+ * writable, every data page, the stack, the arena and the heap are writable
+ * and NX - and here it is stated once, where a mapping is asked for, so that
+ * a program cannot ask the kernel for the one page the processor refuses to
+ * build honestly.
+ */
+bool k_mm_prot_allowed(k_u32_t prot)
+{
+    return (prot & (k_u32_t)(K_MM_PROT_WRITE | K_MM_PROT_EXEC)) !=
+           (k_u32_t)(K_MM_PROT_WRITE | K_MM_PROT_EXEC);
+}
+
 static struct k_mm_space *space_find(k_mm_space_t handle)
 {
     k_size_t i;
@@ -195,6 +209,28 @@ static bool region_is_shared(const struct k_mm_region *region)
 static bool region_is_writable(const struct k_mm_region *region)
 {
     return (region->prot & K_MM_PROT_WRITE) != 0;
+}
+
+/*
+ * The bytes of the anonymous mappings of a space, which is what the budget of
+ * the task counts (ADR 0052). The answer is read from the regions of the list
+ * and not kept in a counter of its own: a counter would be a second truth
+ * that `munmap`, a fork and the end of the space each have to update, and the
+ * list is the hand of records a program can make. A region leaves the list
+ * when it is unmapped, so the bytes it counted go with it.
+ */
+static k_u64_t space_mapped(const struct k_mm_space *space)
+{
+    k_u64_t total = 0;
+    const struct k_mm_region *region;
+
+    for (region = space->regions; region != NULL; region = region->next) {
+        if ((region->flags & K_MM_CHARGED) != 0) {
+            total += region->len;
+        }
+    }
+
+    return total;
 }
 
 /* The bit of a page in the map of the pages that were written. It is the
@@ -473,6 +509,16 @@ int k_mm_map(k_mm_space_t handle, k_u64_t address, k_size_t len, k_u32_t prot, k
         return KERR_INVAL;
     }
 
+    /*
+     * The policy of the page (ADR 0052): a program may not ask for a page it
+     * may write and run at once. The refusal is the call and not a page fault
+     * later, so a program that asks for a code it built itself is told EINVAL
+     * and keeps running; the tables of the port never carry such a page.
+     */
+    if (!k_mm_prot_allowed(prot)) {
+        return KERR_INVAL;
+    }
+
     if ((flags & K_MM_ANONYMOUS) == 0 && path == NULL) {
         return KERR_INVAL;
     }
@@ -535,7 +581,27 @@ int k_mm_map(k_mm_space_t handle, k_u64_t address, k_size_t len, k_u32_t prot, k
                         ? K_MM_ANONYMOUS
                         : ((flags & K_MM_SHARED) != 0 ? K_MM_SHARED : K_MM_PRIVATE);
 
-    if (region->flags != K_MM_ANONYMOUS) {
+    /*
+     * An anonymous mapping is memory the program owns and not a page of a
+     * file, so it is bounded by the budget of the task that makes it, the
+     * same KSYS_RLIMIT_MEMORY the heap is counted against (ADR 0052). The
+     * call is the one of the program: a space that the kernel is filling for
+     * another task (execve places the image of a program in a space that is
+     * not the space of the caller) is not charged to the caller, which would
+     * put a program's bss on the shell's budget.
+     */
+    if (region->flags == K_MM_ANONYMOUS && handle == k_port_mm_current()) {
+        struct task *self = task_self();
+
+        if (self != NULL && !task_memory_fits(self, space_mapped(space) + (k_u64_t)len)) {
+            region_free(region);
+            return KERR_NOMEM;
+        }
+
+        region->flags |= K_MM_CHARGED;
+    }
+
+    if ((region->flags & K_MM_ANONYMOUS) == 0) {
         rc = region_attach_file(region, path, region->flags);
         if (rc != 0) {
             region_free(region);

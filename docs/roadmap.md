@@ -145,7 +145,20 @@ written when the project was an operating system for one board; the numbers
 * [x] SMAP/SMEP: a decision, not a feature of 1.0 - the default QEMU
       processor does not advertise either, and SMAP needs `STAC`/`CLAC` in
       the portable copy edge. The reasons are in ADR 0007 section 10 and the
-      debt in `docs/debts.md`
+      debt in `docs/debts.md`. Closed in 2.0 (ADR 0052): the port probes
+      CPUID leaf 7, turns on the bits the processor has and says which case
+      the boot is, and the portable kernel opens the window of
+      `k_port_exec_user_access_begin/end` (contract 1.14) around every copy
+      through a pointer of a program. `make mmu-smoke` runs on
+      `-cpu qemu64,+smep,+smap`
+* [x] The policy of a page (2.0, ADR 0052): `mmap(PROT_WRITE | PROT_EXEC)` is
+      `EINVAL` at the edge and not only an audit of the image, the stack of a
+      program grows into a room of 1 MiB page by page on the fault with the
+      memory limit of the task as its ceiling, an anonymous mapping is
+      counted against the same limit as the heap, the kernel is
+      supervisor-only in every space (a case with error `0x7`, not `0x6`),
+      and a bad access is `EFAULT` with the address in the log. The gate is
+      `make mmu-smoke`
 * [x] Basic signals: `SIGINT`, `SIGTERM`, `SIGCHLD` and `SIGPIPE`, the
       dispositions `SIG_DFL`/`SIG_IGN`, a handler that runs in ring 3 through
       a frame of the port and returns through `sigreturn`, `waitpid()` cut by

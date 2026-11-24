@@ -305,6 +305,17 @@ system is `ENOSPC`; lowering the limit never closes what is already open.
 `ulimit` of the shell prints the three numbers and lowers them, and the
 library has `microos_getlimit()`/`microos_setlimit()`.
 
+The memory limit is also the ceiling of the address space of a program on a
+machine that has one (ADR 0052): `brk` is charged to it, an anonymous mapping
+is counted when it is made and given back when it is unmapped, and the stack
+of a program stops at it too - a program that lowers its limit to 128 KiB has
+a heap, a mapping and a stack that each stop there. What is not counted is a
+page of a file behind a mapping (it is the file), the stack pages already
+grown (the limit is applied to the stack as one object), and the copy of an
+anonymous mapping that a fork makes (the child starts with its parent's count
+and no charge of its own). A total `RLIMIT_AS` over every page is a debt of
+`docs/debts.md`.
+
 ## 5. Virtual filesystem (phase 2)
 
 The goal is "everything is a file":
@@ -506,6 +517,25 @@ allows and the interrupt of a PCI line.
   port is linked in the higher half and mapped at the top, and the low identity
   map is kept for the heap, the arena and the devices (ADR 0007, "The higher
   half: taken").
+
+### The policy of a page (2.0, ADR 0052)
+
+The tables of the x86-64 port carry a policy and not only a map. A page of a
+program is code or it is data: `mmap` with `PROT_WRITE | PROT_EXEC` is
+`EINVAL`, the audit of every `exec` refuses a space that has such a page, and
+the boot reads the kernel's own map back. The stack of a program starts as
+64 KiB at the top of the window and grows downwards into a room of 1 MiB one
+page per fault, the page below the room is the guard and the lowest page the
+room may own, and the ceiling of the whole stack is `KSYS_RLIMIT_MEMORY` of
+the task. The kernel is supervisor-only in every space, so ring 3 cannot read
+or write a byte of it, and the two bits of CR4 that keep the kernel out of the
+memory of a program - SMEP and SMAP - are turned on when CPUID advertises them
+and named at the boot; the kernel opens the window of `STAC`/`CLAC` around
+every copy through a pointer of a program and closes it on the next context
+switch. A bad access is `EFAULT` with the address in the log, whether it was a
+fault of the program or a pointer a call refused. The host and the board have
+no page tables for a program and enforce nothing of this: the policy is the
+port's, and `docs/debts.md` names the two machines.
 
 ## 7. Drivers (phase 4)
 
