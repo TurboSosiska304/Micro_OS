@@ -71,7 +71,7 @@
  * the kernel: which directories hold the commands is a matter of the person
  * at the console, and a program of this system does not inherit it yet.
  */
-#define SHELL_PATH_DEFAULT "/bin:/usr/bin"
+#define SHELL_PATH_DEFAULT "/bin:/bin/ports:/usr/bin"
 #define SHELL_PATH_SIZE 96
 
 static char g_shell_path[SHELL_PATH_SIZE] = SHELL_PATH_DEFAULT;
@@ -2744,7 +2744,7 @@ static const struct file_command {
       .usage = "path [directories]",
       .detail = "Without a word the value is printed. With one it is set, the directories\n"
                 "separated by ':'. An empty value is not a list of directories and is\n"
-                "refused; the default is /bin:/usr/bin.\n"},
+                "refused; the default is /bin:/bin/ports:/usr/bin.\n"},
      cmd_path},
 #if KERNEL_EXEC
     {"exec",

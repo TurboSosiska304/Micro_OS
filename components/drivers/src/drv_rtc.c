@@ -682,74 +682,6 @@ static int cmd_rtc(int argc, char **argv)
     return KSHELL_OK;
 }
 
-static int cmd_date(int argc, char **argv)
-{
-    char buf[48];
-
-    if (argc == 1) {
-        /* The line is read from the chip now, not at the boot. */
-        if (rtc_read_now() != 0) {
-            kshell_printf("date: the clock does not answer\n");
-            return KSHELL_ERROR;
-        }
-
-        kshell_printf("%s\n", rtc_line(buf, sizeof(buf)));
-        return KSHELL_OK;
-    }
-
-    if (argc == 4 && strcmp(argv[1], "set") == 0) {
-        struct rtc_datetime dt;
-
-        memset(&dt, 0, sizeof(dt));
-
-        if (!rtc_parse_date(argv[2], &dt) || !rtc_parse_time(argv[3], &dt)) {
-            kshell_printf("usage: date | date set <YYYY-MM-DD> <HH:MM:SS>\n");
-            return KSHELL_USAGE;
-        }
-
-        if (!rtc_datetime_in_range(&dt)) {
-            kshell_printf("date set: no such day: %s %s\n", argv[2], argv[3]);
-            return KSHELL_ERROR;
-        }
-
-        if (!s_present) {
-            kshell_printf("date set: there is no clock to set\n");
-            return KSHELL_ERROR;
-        }
-
-        /*
-         * The moment goes through the kernel's clock and not around it: the
-         * chip and the base the kernel adds the uptime to have to agree, and
-         * a write of the registers alone left `time()` on the old moment
-         * until the next boot. The driver's setter writes the chip.
-         */
-        {
-            uint64_t seconds = 0;
-
-            if (!rtc_to_unix(&dt, &seconds)) {
-                kshell_printf("date set: no such day: %s %s\n", argv[2], argv[3]);
-                return KSHELL_ERROR;
-            }
-
-            if (k_clock_set_unix(seconds) != 0) {
-                kshell_printf("date set: the clock did not take the time\n");
-                return KSHELL_ERROR;
-            }
-        }
-
-        if (rtc_read_now() != 0) {
-            kshell_printf("date set: the clock does not answer\n");
-            return KSHELL_ERROR;
-        }
-
-        kshell_printf("%s\n", rtc_line(buf, sizeof(buf)));
-        return KSHELL_OK;
-    }
-
-    kshell_printf("usage: date | date set <YYYY-MM-DD> <HH:MM:SS>\n");
-    return KSHELL_USAGE;
-}
-
 /*
  * The clock of the system, as the driver of the chip sees it: the kernel
  * asks for the seconds of Unix, the driver turns them into the moment of
@@ -772,7 +704,12 @@ int drv_rtc_register(void)
 {
     int rc = kmod_register(&s_rtc_module);
 
-    kshell_register("date", "the time of the RTC", cmd_date);
+    /*
+     * `date` is not registered here: the clock of the machine is the kernel's
+     * (kernel/clock.h), the command is portable (components/kshell) and the
+     * driver is the one that *sets* it - through k_clock_set_unix, below. The
+     * driver keeps the alarm, which is the chip's own.
+     */
     kshell_register("rtc", "the alarm of the RTC: rtc alarm ...", cmd_rtc);
     k_clock_register(rtc_clock_set);
 

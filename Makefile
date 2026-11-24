@@ -356,16 +356,32 @@ X86_PROGRAMS_IMAGE := $(X86_BUILD)/programs.img
 X86_PROGRAMS_EXT2_IMAGE := $(X86_BUILD)/programs-ext2.img
 X86_MKFS := $(BUILD_DIR)/tools/microos_mkfs
 
+# The programs of the SDK: `kilo` and the console set of sbase, built by
+# `tests/ports` with the SDK and by no CMake of this tree (ADR 0025, the lane
+# M3 of 1.8). The release image carries them in `/bin/ports` and the two gates
+# of the collection drive them, so the build is one stamp and not one per
+# caller: a source of `tests/ports` or the script of the SDK is the dependency.
+PORTS_BUILD := build-ports
+PORTS_DIR := $(PORTS_BUILD)/programs
+PORTS_STAMP := $(PORTS_DIR)/kilo.mox
+PORTS_SOURCES := $(shell find tests/ports -type f \( -name '*.c' -o -name '*.h' -o -name '*.txt' -o -name 'CMakeLists.txt' \) 2>/dev/null) \
+	tools/ports_build.sh tools/sdk/make_sdk.sh
+
+$(PORTS_STAMP): $(PORTS_SOURCES)
+	sh tools/ports_build.sh --build $(PORTS_BUILD)
+
+ports-build: $(PORTS_STAMP)
+
 # The root the machine of `make x86-run` boots: the MicroFS image by default,
 # the ext2 one with `make x86-run X86_ROOT=ext2` (ADR 0027 §3).
 X86_ROOT ?= mfs
 X86_ROOT_IMAGE := $(if $(filter ext2,$(X86_ROOT)),$(X86_PROGRAMS_EXT2_IMAGE),$(X86_PROGRAMS_IMAGE))
 
-x86-disk: x86-build build
+x86-disk: x86-build build $(PORTS_STAMP)
 	python3 tools/x86_image.py --image $(X86_PROGRAMS_IMAGE) \
-		--build $(X86_BUILD) --mkfs $(X86_MKFS)
+		--build $(X86_BUILD) --mkfs $(X86_MKFS) --ports $(PORTS_DIR)
 	python3 tools/x86_image.py --image $(X86_PROGRAMS_EXT2_IMAGE) --fs ext2 \
-		--build $(X86_BUILD) --mkfs $(X86_MKFS)
+		--build $(X86_BUILD) --mkfs $(X86_MKFS) --ports $(PORTS_DIR)
 
 # The gate of a reproducible image: the same inputs, the same bytes. The
 # moments of the MicroFS records come from SOURCE_DATE_EPOCH (the tool has
@@ -432,10 +448,7 @@ x86-smoke: x86-disk x86-open-build
 # answers are the answers of the release. The three calls of a command that
 # 1.8 added to the library - popen, pclose and system - are the program
 # /bin/ports/command of the same gate.
-PORTS_BUILD := build-ports
-
 ports-smoke: x86-disk
-	sh tools/ports_build.sh --build $(PORTS_BUILD)
 	python3 tools/ports_smoke.py --build $(PORTS_BUILD) --x86 $(X86_BUILD) \
 		--disk $(X86_DISK_BUS) --timeout 180
 
@@ -445,7 +458,6 @@ ports-smoke: x86-disk
 # reads the line back. `ports-smoke` builds the same programs with the same
 # SDK; this one drives the keyboard that a transcript of lines cannot.
 tty-smoke: x86-disk
-	sh tools/ports_build.sh --build $(PORTS_BUILD)
 	python3 tools/tty_smoke.py --build $(PORTS_BUILD) --x86 $(X86_BUILD) \
 		--disk $(X86_DISK_BUS) --timeout 240
 
