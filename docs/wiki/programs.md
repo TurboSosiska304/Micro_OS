@@ -627,16 +627,21 @@ not told about a resize (`docs/debts.md`).
   machine and the descriptors 1 and 2 are its output (ADR 0051 §2) - so
   `cat` with no name reads the keyboard and a full-screen editor works, but
   `fstat(0)` still says `EBADF`: 0 is a fallback and not an open file.
-* **No `mmap` and no `brk`.** A program cannot ask for a range of its own, so
-  the allocator is the arena of its bss and a library that allocates more
-  than `ULIBC_HEAP_SIZE` needs a larger program or the ranges the kernel does
-  not have yet.
+* **The memory of a program is bounded.** `mmap` and `brk` exist (calls 44
+  and 47): a mapping is a record of the address space and the page comes on
+  the fault, and the heap grows from the end of the image. Both stop at the
+  memory limit of the task (`ulimit -m`), an anonymous mapping is counted
+  when it is made, and a page that is writable and executable at once is
+  refused with `EINVAL` (ADR 0052). The stack of a program starts at 64 KiB
+  and grows to 1 MiB, or to the limit of the task when that is smaller.
 * **No shell `export`.** The environment of every program is the four words of
   the kernel; a program that wants its own passes one to `execve`.
-* **No protection by SMAP yet.** The edge checks the page tables of the caller
-  and then reads the same pages in ring 0; the hardware half of the rule waits
-  for the flags of the processor (SMEP) and the `STAC`/`CLAC` window of the
-  copy (SMAP). The higher half is there.
+* **The boundary is the user bit, and SMEP/SMAP when the processor has them.**
+  The edge checks the page tables of the caller and then copies; a processor
+  with SMEP and SMAP (CPUID leaf 7) gets both bits in CR4 and the kernel opens
+  the `STAC`/`CLAC` window only around the copy it asked for, while an older
+  processor keeps the supervisor bit of every kernel page as the boundary -
+  and the boot says which one it is (ADR 0052). The higher half is there.
 
 The open rows are in [`docs/debts.md`](../debts.md); the plan is
 [`docs/roadmap.md`](../roadmap.md), K4 and K5.

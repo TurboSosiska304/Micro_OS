@@ -38,6 +38,7 @@ static void run_tests(void *arg)
     test_render();
     test_task();
     test_guard();
+    test_mm();
     test_sched();
     test_sched_queue();
     test_smp();

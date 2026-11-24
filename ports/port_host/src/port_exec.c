@@ -70,13 +70,9 @@ bool k_port_exec_contains(const void *ptr, k_size_t size)
  * A copy into the memory of a program is a copy into the memory of the
  * kernel here (no SMAP on this machine), so the window is empty.
  */
-void k_port_exec_user_access_begin(void)
-{
-}
+void k_port_exec_user_access_begin(void) {}
 
-void k_port_exec_user_access_end(void)
-{
-}
+void k_port_exec_user_access_end(void) {}
 
 /*
  * A fork of a program: there is no address space per task here, so the child

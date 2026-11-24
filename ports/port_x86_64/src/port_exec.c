@@ -456,7 +456,8 @@ bool port_x86_64_stack_grow(k_u64_t address)
      * the only place a person (or `make mmu-smoke`) can read it is here: the
      * program sees the same address it always had.
      */
-    klog(K_LOG_LEVEL_INFO, "x86-64: the stack of the program (pid %u) grew by %u page(s) to 0x%08x%08x",
+    klog(K_LOG_LEVEL_INFO,
+         "x86-64: the stack of the program (pid %u) grew by %u page(s) to 0x%08x%08x",
          (self != NULL) ? (unsigned)self->pid : 0u, (unsigned)((bottom - address) / PAGE_SIZE),
          (unsigned)(address >> 32), (unsigned)(address & 0xFFFFFFFFu));
 
