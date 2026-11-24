@@ -51,7 +51,7 @@ k_u64_t k_sched_uptime_ms(void);
 void k_sched_yield(void);
 
 /* Sleep the current task for the given number of milliseconds. Never less:
- * the sleep is a loop on the tick of its deadline (see below). */
+ * the sleep is a loop on the clock of the port (see below). */
 void k_sched_sleep_ms(k_u32_t ms);
 
 /*
@@ -62,11 +62,17 @@ void k_sched_sleep_ms(k_u32_t ms);
  * window is the lost wakeup of 1.8 (docs/debts.md, K15).
  *
  * A sleep is never shorter than its argument, whatever wakes the port: the
- * sleep of the task is a loop on the tick of its deadline, and a nudge that
- * cut it (the door of a port, a wake that lost its race) only makes the loop
- * sleep the rest again. A signal the task has to answer, a block and an
- * unblock are the kernel's own reasons to end a sleep early, and they are the
- * ones of 1.0.
+ * deadline is a number of microseconds of the clock of the port, the task
+ * sleeps what is left in a loop, and a nudge that cut a round (the door of a
+ * port, a wake that lost its race) or a tick that fired early only makes the
+ * loop sleep the rest again. A tick is the unit of the scheduler and a
+ * millisecond of the caller is the unit of the port; on the host, whose clock
+ * is a thread of its own, the two part company under a slow runner.
+ *
+ * `stop` (the record of a wait) is the reason a wait ends early, with a
+ * signal the task has to answer; a block or an unblock that arrived while the
+ * task slept is the other. A plain sleep is not cut by a signal: the delay of
+ * a login that a signal could shorten is a delay an attacker chooses.
  *
  * Answers true when the task slept, false when it did not because the flag
  * was set. The flag is written under the scheduler lock by whoever wakes the
