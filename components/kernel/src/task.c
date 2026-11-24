@@ -12,6 +12,7 @@
 #include "kernel/port_task.h"
 #include "kernel/sched.h"
 #include "kernel/signal.h"
+#include "kernel/wait.h"
 
 static struct task g_tasks[TASK_MAX_TASKS];
 static k_u32_t g_next_pid = 1;
@@ -712,8 +713,6 @@ void task_exit(int code)
         memcpy(name, self->name, sizeof(name));
         name[sizeof(name) - 1] = '\0';
         pid = self->pid;
-        /* The parent learns of the end before the slot can be reaped. */
-        task_signal_notify_parent(self);
 
         /*
          * The children of a task that ends are the children of init from
@@ -759,7 +758,30 @@ void task_exit(int code)
          */
         kinfo("task: '%s' (pid %u) exited with code %d", name, (unsigned)pid, code);
 
+        /*
+         * A record of a wait must not outlive the task that armed it: its
+         * slot in the table of the tasks would be given to the next task,
+         * and a wake of the channel would then run a task that waits on
+         * nothing.
+         */
+        k_wait_forget(self);
+
+        /*
+         * The state of a finished task and the mark of SIGCHLD on its parent
+         * are one step. A parent that is woken by the mark before the slot
+         * says ZOMBIE scans the table, finds a child that is still running
+         * and answers EINTR for a child that has in fact exited - and the
+         * wake of 1.9 is immediate enough to make that window a test of the
+         * suite of two cores. The section also keeps the slot ours: the
+         * parent may reap it the moment the state says ZOMBIE, and the mark
+         * would then go to the parent of the task that took the slot next.
+         * The wait of the parent is the tick and the door of its port, which
+         * do not need this lock (they take it after it is dropped).
+         */
+        k_port_enter_critical();
         k_sched_task_terminated(self);
+        task_signal_notify_parent(self);
+        k_port_exit_critical();
     }
 
     k_port_task_exit(code);
