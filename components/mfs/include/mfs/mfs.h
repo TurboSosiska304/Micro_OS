@@ -306,6 +306,23 @@ _Static_assert(MFS_INODE_SIZE == sizeof(struct mfs_inode_record),
 _Static_assert(sizeof(struct mfs_dirent_header) == 8, "an entry of a directory changed");
 _Static_assert(sizeof(struct mfs_journal_header) == 28, "the header of the journal changed");
 _Static_assert(sizeof(struct mfs_journal_slot) == 16, "a slot of the journal changed");
+/*
+ * The structures that are copied into a block and checksummed whole have no
+ * byte that the format does not name: a padding word would be written to the
+ * medium as the garbage of a stack frame and the checksum would cover it
+ * (ADR 0047, the valgrind pass of the suite). The asserts are the promise
+ * that a field added later is either covered or the format changes on
+ * purpose.
+ */
+_Static_assert(offsetof(struct mfs_superblock, journal_slots) + sizeof(k_u32_t) ==
+                   sizeof(struct mfs_superblock),
+               "the header of the volume has padding");
+_Static_assert(offsetof(struct mfs_journal_header, crc) + sizeof(k_u32_t) ==
+                   sizeof(struct mfs_journal_header),
+               "the header of the journal has padding");
+_Static_assert(offsetof(struct mfs_journal_slot, reserved) + sizeof(k_u32_t) ==
+                   sizeof(struct mfs_journal_slot),
+               "a slot of the journal has padding");
 /* The fields of the memory and of the medium are the same, in the same place. */
 _Static_assert(offsetof(struct mfs_inode, group) == offsetof(struct mfs_inode_record, group),
                "the group of a record moved");
