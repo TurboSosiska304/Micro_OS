@@ -63,6 +63,7 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make x86-run-serial` | the machine on the serial console and no window |
 | `make x86-vga-smoke` | check the framebuffer and the text mode with a screenshot, and the keyboard |
 | `make x86-disk-smoke` | two boots on one disk image: a file survives both (57 checks) |
+| `make ports-smoke` | the gate of a program nobody rewrote: thirteen utilities of sbase built by **the SDK** and not by the CMake of the tree, byte for byte the release (`tests/ports/upstream.txt`), run on the machine out of `/bin/ports`, plus `popen`/`pclose`/`system` (1.8, `docs/ports-table.md`) |
 | `make ahci-smoke` | the image on the SATA controller of a chipset (q35): the volume of `ahci0p1` is mounted read-only, a write is refused by the rule of ADR 0041, a volume of btrfs is refused at the mount, and the SHA-256 of each image is the same before and after its boot (21 checks) |
 | `make ... X86_DISK_BUS=virtio` | the disk of any target above on the virtio-blk device of ADR 0037 instead of the primary IDE channel: the same image, the other device (`X86_DISK_BUS=virtio make x86-smoke`, `x86-disk-smoke`, `x86-root-smoke`, `x86-volume-smoke`, `x86-run`, `x86-run-disk`, `x86-run-serial`) |
 | `make x86-root-smoke` | two roots of one machine: the MicroFS and the ext2 image answer the same commands, and FAT32 mounts at `/data` (47 checks) |
@@ -80,7 +81,7 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make x86-user` | build the complete machine and its release tar, unpack the tar and start it (the artifact a person downloads; no ESP-IDF needed) |
 | `make x86-user-serial` | the same tar with the serial console and no window |
 | `make bundle-x86` | the tar of the x86-64 machine alone into `dist/`, without the firmware build |
-| `make ci` | `build`, `test`, `test-asan`, `test-tsan`, `test-smp`, `smoke`, `coverage`, `x86-smoke` and `x86-root-smoke` when QEMU is there, `reproducible`, `integrity` — run it before pushing |
+| `make ci` | `build`, `test`, `test-asan`, `test-tsan`, `test-smp`, `smoke`, `coverage`, `x86-smoke`, `x86-root-smoke`, `usb-smoke` and `ports-smoke` when QEMU is there, `reproducible`, `integrity` — run it before pushing |
 
 The same build by hand:
 

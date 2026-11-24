@@ -451,6 +451,24 @@ and the key of the repository, and the machine installs it with `pkg`
 the ESP32 has 8 KiB windows and shares the address space of the kernel (ADR
 0018), and its images belong to the firmware build.
 
+### The gate of zero patches
+
+The proof that the recipe is not needed for a program of POSIX is
+`make ports-smoke` (lane M3 of 1.8, [`ports-table.md`](ports-table.md),
+[`tests/ports/`](../tests/ports/)): thirteen utilities of sbase - `true`,
+`false`, `echo`, `basename`, `dirname`, `pwd`, `printenv`, `sleep`, `cksum`,
+`tee`, `cmp`, `whoami`, `sha256sum` - are copied into `tests/ports/sbase/`
+byte for byte, built by the SDK and by no CMake of this tree, written into
+`/bin/ports` of a volume and typed at the shell of the machine. The gate
+fails on an edited source (the sha256 of the upstream commit is checked before
+the boot), on a program that does not link against the library, and on an
+answer that is not the answer of the release. The table of
+[`ports-table.md`](ports-table.md) has the three numbers of every one of them
+- source lines, port-layer lines and patched lines - and of the ten tools of
+this tree, which do have a port layer for two reasons worth knowing: a
+`double` in a program built with `-mgeneral-regs-only` (`sort -n`, `ls -h`)
+and an option the release never had (`grep -r`, `ls --color`).
+
 ## The second port: ten tools of sbase
 
 The second port (after zlib) is a set of commands: `third_party/sbase` with
