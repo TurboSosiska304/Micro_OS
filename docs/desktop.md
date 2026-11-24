@@ -4,10 +4,14 @@ The machine of x86-64 has a picture, a keyboard and a pointer, and no window
 system: since 1.5 a program of the interface (`/bin/ui`, `/bin/edit`,
 `/bin/fm`) took the whole screen with `FBIO_TAKE` and painted it itself
 (ADR 0028, ADR 0030). 1.7 adds the one program that owns the screen, and the
-programs of the interface become its windows:
+programs of the interface become its windows. 2.0 adds the three things a desk
+of a person still missed - it starts with the machine, it has a terminal, and
+its frame is measured (ADR 0054):
 
-* `/bin/wm` — the server: the wallpaper, the panel, the pointer, the list of
-  the windows, the compositor and the focus.
+* `/bin/wm` — the server: the wallpaper, the panel with the clock of the
+  machine, the pointer, the list of the windows, the compositor and the focus.
+* `/bin/term` — the terminal window: a program of `/bin` on a pair of pipes,
+  its output in a grid of cells, its keys from the window (ADR 0054).
 * a **client** — a program the server started with `fork` and `execve`: a
   buffer of pixels of its own window, a pipe for the events the server sends
   down and a pipe for the requests it sends up.
@@ -17,6 +21,30 @@ programs of the interface become its windows:
   `ports/port_x86_64/programs/uiprog.c`, which binds the client to three
   descriptors and a mapping, exactly as `uiprog.c` bound a program to
   `/dev/fb0` before.
+
+## The desk starts with the machine
+
+The console session of the port (`session_run()`, ADR 0044) reads
+`/etc/session` before its prompt and runs its lines as commands of the shell in
+its own task:
+
+```
+# /etc/session - the commands of the console session, one a line
+exec /bin/wm
+```
+
+The session is the parent of the desk: the shell waits for the server, the
+prompt comes back when the last window closes, and a `logout` of the session
+makes the init of the port start another one, which runs the file again. A
+machine without the file boots to the prompt of 1.7, which is what the smoke
+tests of the shell and of `/bin` read; the machine of a person carries the two
+lines above, and `make x86-vga-smoke` writes the file into the disk of its sixth
+boot and reads the desk it starts (ADR 0054 §1).
+
+The keys of the server are its own and no client sees them: the left button of
+the pointer, Alt+F4 (the close of the window with the keys), **Alt+T** (a
+terminal window, 640x420 at the middle of the desk) and **F12** (the meter of
+the frames, below).
 
 ## The picture of the desktop
 
@@ -40,16 +68,25 @@ dark theme.
 | the wallpaper | the whole picture | a vertical gradient of the theme from `background_top` to `background_bottom`, and a grid of one pixel every 32, both counted from the top of the picture |
 | a window | the rectangle the server gave it | the pixels of the client's buffer, a drop shadow of three pixels at its right and below, the square of closing and, when it has the keys, a ring of two pixels of `accent` |
 | the title bar | the first 21 pixels of a window, drawn by the client | four pixels of air, the row of the font at six pixels from either side, the title in `title_ink`, a pixel of `border` as the separator, and the body below |
-| the panel | the bottom 24 pixels | one pixel of `border` at its top, then a button a window: six pixels of air at either side of a label, sixteen pixels of the panel between two buttons, `surface` for a window that has no keys and `accent` for the one that does |
+| the panel | the bottom 24 pixels | one pixel of `border` at its top, then a button a window: six pixels of air at either side of a label, sixteen pixels of the panel between two buttons, `surface` for a window that has no keys and `accent` for the one that does; the clock of the machine at the right end, in `ink_dim` |
 | the pointer | 12x15 pixels at the point of the mouse | a white arrow with one pixel of black around it |
 
 The **hierarchy of the text** is three inks of one font: `title_ink` for the
 bar of a window, `ink` for the body, `ink_dim` for the line of status and for
 the label of a button that does not have the keys. The font of this port is
-Spleen 8x16 and the tree carries no second size of it, so the weight is not a
-second table of glyphs: a title is brighter than a body, the bar is a surface
-of its own, and a line of the border divides it from the body - colour, tone
-and air, not a bold face.
+Spleen 8x16 and the tree carries no second table of it, so the weight is not a
+bold face: a title is brighter than a body, the bar is a surface of its own, and
+a line of the border divides it from the body - colour, tone and air, not a bold
+face.
+
+There are **two sizes** of it, and the second is the first one at twice the
+cell: `struct ui_font` carries a `scale`, one pixel of a glyph is a square of
+`scale` pixels, and a scale of 2 is a cell of 16x32 out of the same 95 rows of
+eight bits (ADR 0054 §5). The title bar of a window follows the cell of the
+font it is given - 21 pixels at the small size and 37 at the large one - so a
+window of the large text is a window of the large bar as well. The terminal
+switches with Ctrl+T: 78 columns and 24 rows of its window at the small size,
+39 and 11 at the large one.
 
 The server paints *rectangles*: a frame of a client, a motion of the pointer,
 a raise and a drag are rectangles of a list of damage, and the loop paints the
@@ -59,6 +96,14 @@ The shadow is a colour of the wallpaper at the row it falls on - the palette's
 shadow blended over the gradient - so the bar of depth is the same on the dark
 desk and on the light one, and it is drawn under the window and never under
 the panel.
+
+Two rectangles of the list are one when they touch, and "touch" is the four
+edges of *their own* rectangles: 1.7 compared them with the edges of the box
+they would make together, so two rectangles anywhere on the screen were one
+whenever their box spanned the screen. The clock of the panel at the bottom
+right made the damage of one key a frame of 1280x765. 2.0 fixed the comparison
+(ADR 0054 §6), and the panel paints the part of itself that changed and not the
+whole bar.
 
 The wallpaper's gradient is counted from the top of the picture and not from
 the top of the rectangle being painted, so a small damage rectangle and a whole
@@ -182,6 +227,64 @@ The server of 1.7 is the whole of the interface: it takes the screen with
 screen back whatever a program holds (ADR 0028 §2), so a desktop cannot hide a
 kernel failure.
 
+## The terminal window
+
+`/bin/term` is a client of the server like the editor, and it is the terminal
+of the programs of `/bin` (ADR 0054 §2):
+
+* a line typed in the window is a command: `fork`, the two pipes on the
+  descriptors 0, 1 and 2, `execve` of `/bin/<name>` (or of a path with a slash).
+  The bytes of the child's output are the cells of the window, and the keys of a
+  running command are its input; the arrows, Home, End and Delete are the
+  sequences of a terminal of the console (`ESC[A` and its siblings);
+* the line itself is edited by the window while no command runs: the
+  characters, Enter, Backspace, Ctrl+U for the whole line, and `cd`, `clear`,
+  `help` and `exit`, which are properties of the process and not programs;
+* **Ctrl+C** is `kill(child, SIGINT)`, the interrupt of a terminal, and the
+  running command stops; Ctrl+Q leaves the window;
+* the grid is `components/ui/src/term.c` - the bytes into cells, the line
+  endings, the deferred wrap of the last cell, the scroll, the sequences of a
+  screen and the damage of the rows - and it is held on the host
+  (`tests/cases/test_ui_term.c`). The window paints the rows whose text or
+  cursor changed and flushes them as one rectangle of its buffer.
+
+There is no pty in this system and the window is not one: the child of a
+command has no controlling terminal, `isatty` of it is false, and the shell of
+the machine - a task of the kernel - cannot run in the window. The one of the
+window is the small front end above, and the pty with a shell of the userland
+on it is the row of `docs/debts.md` this release writes.
+
+## The clock of the panel
+
+The right end of the panel shows the hour of the machine, once a second:
+
+* the time is the wall clock of the kernel - the CMOS at the boot, the NTP of
+  1.8 after it - and the panel adds the minutes of a zone;
+* the format is a key of `/etc/console`, the file of the theme: `clock=24h`
+  (the default, `15:04:05`) or `clock=12h` (`3:04:05 PM`), and
+  `utc_offset=+180` for a zone east of UTC. `config set console.clock 12h` is
+  the command of the shell that writes it;
+* the second damages the rectangle of the clock and nothing else, and a desk
+  with no key and no second paints nothing at all: the meter of the server says
+  `0 frames` between two presses of F12.
+
+## The frame of the compositor, measured
+
+The server counts what it paints: the pixels of every rectangle of every turn,
+the largest rectangle and the milliseconds of the turn. Two lines say it, and
+`make x86-vga-smoke` reads both:
+
+* at the end of the desk: `wm: 42 frames, the first 1024000 px of 1024000 in 6
+  ms; 280000 px after it, 4 ms at the worst; the largest 1280x24`;
+* on **F12**, since the last press: `wm: the meter: 3 frames, 40960 px, the
+  largest 640x16, 2 ms at the worst`.
+
+A person presses F12, types a line, presses it again and reads the price of the
+line; the test measures a typed line and three keys the same way, and takes two
+screenshots around a key: they differ in the row of the key and in the clock and
+in nothing else, which is what "a damaged rectangle and not a frame" means on
+the glass.
+
 ## The programs of the interface
 
 `/bin/edit` and `/bin/fm` did not change their logic when the window arrived:
@@ -260,6 +363,17 @@ a picture of the interface.
   and the last window ends the desktop, the prompt of the shell comes back,
   `cat /doc.txt` prints the word the keys typed and the picture is the grid of
   the kernel again.
+* the sixth boot of `make x86-vga-smoke` is the desk of 2.0 (ADR 0054): the
+  machine is told by `/etc/session` to run the server and starts on the desk
+  without a typed command; the panel shows the hour of the machine, the next
+  second changes the rectangle of the clock and no other pixel; Alt+T opens
+  `/bin/term`, a line typed in the window runs a child process and the answer
+  of `cat /etc/setting` is the text of the window; two presses of F12 around a
+  line and around three keys measure the frames of the compositor, and two
+  screenshots around a key differ only in its row; Ctrl+C stops the command,
+  Ctrl+T is the 16x32 cell and back, the last window gives the prompt back, and
+  a desk of `clock=12h` writes `3:04:05 PM` in the panel. The pictures of the
+  run are kept in `build-x86/screens` (`--shots`).
 * `make x86-smoke` is the gate of the machine and of `/bin`: the mouse does not
   change a byte of it.
 
@@ -275,10 +389,14 @@ a picture of the interface.
   the whole visible rectangle on every damage: a client that says "my buffer
   changed in one row" gets one row read, a client that says "all of it" gets
   all of it.
-* One desktop, one picture, one pointer. There is no second screen and no
-  session.
+* One desktop, one picture, one pointer. There is no second screen, no second
+  session and no way to run a desktop over the air.
+* No pty and no shell of the userland: the terminal of a window runs the
+  programs of `/bin` and not the shell of the kernel (ADR 0054).
+* The clock shows the hour and the zone and no date, and the panel has one
+  clock and no list of the applications.
 * The pointer has one button. The right and the middle button, the wheel and
   the two axes of a touchpad are later numbers of the contract.
-* `/bin/wm` is not a service of the boot: a person starts it with `exec
-  /bin/wm` and the shell waits for it. A session of `/etc/init.d` is the next
-  step.
+* `/bin/wm` is a service of the boot of a machine that says so, and only of
+  such a machine: `/etc/session` names it, the session of the console runs it,
+  and a machine without the file is the machine of 1.7 (ADR 0054 §1).
