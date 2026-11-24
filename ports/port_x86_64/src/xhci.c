@@ -1758,28 +1758,36 @@ static bool mouse_attach(k_u32_t slot, const struct xhci_where *where, k_u32_t s
     interval = endpoint_interval(mouse.interval, speed);
     max_packet = mouse.max_packet & 0x07FFu;
 
-    if (max_packet < K_INPUT_HID_MOUSE_REPORT) {
-        /* A device that says its report is three bytes is a mouse without a
-         * wheel; the buffer is the four and the transfer moves the three. */
-        max_packet = 3u;
-    } else {
-        max_packet = K_INPUT_HID_MOUSE_REPORT;
-    }
-
-    if (!configure_interrupt(slot, where, speed, dci, interval, max_packet, g_mouse_ring,
-                             &g_mouse.index, &g_mouse.cycle)) {
-        kinfo("usb: port %u: the endpoint of the mouse did not come up",
-              (unsigned)where->root_port);
+    if (max_packet < 3u) {
+        kinfo("usb: port %u: the mouse names an endpoint packet of %u byte(s)",
+              (unsigned)where->root_port, (unsigned)max_packet);
         return false;
     }
 
-    g_mouse.present = true;
-    g_mouse.slot = (k_u8_t)slot;
-    g_mouse.dci = (k_u8_t)dci;
-    g_mouse.interface = mouse.interface;
-    g_mouse.max_packet = (k_u16_t)max_packet;
-    g_mouse.where = *where;
-    k_input_hid_mouse_init(&g_mouse_hid);
+    /* The endpoint of a mouse of the boot protocol carries a report of three
+     * bytes, or four with a wheel, whatever the largest packet of the device
+     * is: the transfer asks for the report and the device answers a short
+     * packet when it has fewer bytes to give. The context keeps the packet of
+     * the descriptor. */
+    {
+        k_u32_t report_length =
+            max_packet >= K_INPUT_HID_MOUSE_REPORT ? K_INPUT_HID_MOUSE_REPORT : 3u;
+
+        if (!configure_interrupt(slot, where, speed, dci, interval, max_packet, g_mouse_ring,
+                                 &g_mouse.index, &g_mouse.cycle)) {
+            kinfo("usb: port %u: the endpoint of the mouse did not come up",
+                  (unsigned)where->root_port);
+            return false;
+        }
+
+        g_mouse.present = true;
+        g_mouse.slot = (k_u8_t)slot;
+        g_mouse.dci = (k_u8_t)dci;
+        g_mouse.interface = mouse.interface;
+        g_mouse.max_packet = (k_u16_t)report_length;
+        g_mouse.where = *where;
+        k_input_hid_mouse_init(&g_mouse_hid);
+    }
 
     for (index = 0; index < XHCI_KBD_BUFFERS; index++) {
         k_u32_t cursor = g_mouse.index;
@@ -1787,7 +1795,7 @@ static bool mouse_attach(k_u32_t slot, const struct xhci_where *where, k_u32_t s
 
         memset(g_mouse_report[cursor], 0, K_INPUT_HID_MOUSE_REPORT);
         trb->param = trb_phys(g_mouse_report[cursor]);
-        trb->status = max_packet;
+        trb->status = g_mouse.max_packet;
         trb->control = XHCI_TRB_TYPE(XHCI_TRB_NORMAL) | XHCI_TRB_IOC | g_mouse.cycle;
         g_mouse.index++;
     }
@@ -1797,7 +1805,7 @@ static bool mouse_attach(k_u32_t slot, const struct xhci_where *where, k_u32_t s
 
     kinfo("usb: mouse %04x:%04x on port %u, slot %u, interface %u, %u byte report",
           (unsigned)vendor, (unsigned)product, (unsigned)where->root_port, (unsigned)slot,
-          (unsigned)mouse.interface, (unsigned)max_packet);
+          (unsigned)mouse.interface, (unsigned)g_mouse.max_packet);
 
     return true;
 }
