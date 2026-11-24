@@ -2364,7 +2364,7 @@ static bool kernel_heap_refused(void)
 
     if (!said) {
         said = true;
-        kwarn("x86-64: a program asked for the heap of the kernel; the call is refused (ADR 0052)");
+        kwarn("ksys: a program asked for the heap of the kernel; the call is refused (ADR 0052)");
     }
 
     return true;
