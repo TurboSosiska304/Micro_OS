@@ -34,6 +34,17 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Added
 
+- A machine of a laptop keeps its files: the write path of the two disks of
+  M2, behind the rule of ADR 0041 and not in front of it. The root mount asks
+  for the writes after it is in the tree (`vfs_mount_root_writes`), so its own
+  `/etc/volumes` can be read; another volume asks with
+  `vfs_mount_type_write()` or the `rw` option of `/etc/fstab`; a volume the
+  rule does not name is mounted read-only with the reason in the log. The
+  drivers grew `WRITE DMA EXT`/`FLUSH CACHE EXT` and the NVMe `WRITE`/`Flush`
+  of the namespace, the image tool names the volumes it formats, and
+  `make x86-disk-smoke` proves a file that survives a reset on the IDE channel,
+  the SATA controller and the NVMe namespace - while a volume the list does not
+  name and a volume of btrfs leave the SHA-256 of their image unchanged.
 - The door of a laptop, USB (ADR 0040): `ports/port_x86_64/src/xhci.c` finds
   the controller of the bus (class 0x0C/0x03), resets it and programs it - a
   command ring and an event ring with its ERST, the slots and the contexts of
@@ -50,7 +61,7 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   `i8042=off` - no PS/2 at all, so the keys can only come through xHCI - and
   `make usb-stick-smoke USB_STICK=/dev/sdc` boots with the stick of a person
   attached read-only: 35 and 43 checks.
-- The grain of a volume (ADR 0044): the sector is a property of the volume,
+- The grain of a volume (ADR 0043): the sector is a property of the volume,
   not of the medium. `struct k_blockdev_view` is a device of the block layer
   whose sector is the one of the superblock, over a device whose sector is
   smaller - arithmetic over one call, no copy and no allocation - and ext2
