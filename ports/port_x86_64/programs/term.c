@@ -628,14 +628,23 @@ static void line_key(k_u16_t code, const struct ui_keyboard *keyboard)
 {
     if (keyboard->ctrl) {
         switch (code) {
-        case K_INPUT_KEY_T:
+        case K_INPUT_KEY_T: {
+            const char *text = g_large ? "term: the text is 8x16" : "term: the text is 16x32";
+
             g_large = !g_large;
             g_font = g_large ? uiprog_font_large() : uiprog_font();
             layout();
             frame_paint();
-            print_line(g_large ? "term: the text is 16x32" : "term: the text is 8x16");
+            print_line(text);
+
+            /* The line of the grid is for the person in front of the window
+             * and the line of the log is for the smoke test and the serial: a
+             * change of the size of the text is one sentence in two places. */
+            say_fmt("", text);
+
             prompt();
             return;
+        }
         case K_INPUT_KEY_Q:
             g_running = false;
             return;

@@ -224,7 +224,10 @@ measured, and the measurement found and fixed a defect of 1.7 that made every
 key a screen. The theme colours the console, the desk and its hour from one
 file.
 
-**Bad.** The child of the terminal has no terminal: a program that asks
+**Bad.** The desk holds three windows and not four: a window is three
+descriptors of the server and the table of a task is sixteen, so the editor,
+the file manager and one terminal fit, and a second terminal is refused with a
+sentence. The child of the terminal has no terminal either: a program that asks
 `isatty` gets the truth, and a full-screen program of the console cannot run in
 the window. The shell of the window is a small front end of its own and not
 `kshell` - two command interpreters of one machine, and the userland one has

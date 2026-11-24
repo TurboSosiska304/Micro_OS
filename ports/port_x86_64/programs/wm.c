@@ -129,6 +129,11 @@ struct wm_app {
     char path[40];
     char title[WM_TITLE_MAX];
     struct ui_rect rect;
+
+    /* The window was asked to leave and its program has not exited yet: a
+     * second Alt+F4 or a second square of the bar is a press of nothing, which
+     * is the rule of every button of the interface. */
+    bool closing;
     unsigned char inbox[WM_MESSAGE_BYTES];
     unsigned inbox_bytes;
 };
@@ -1289,9 +1294,11 @@ static void app_request_close(int index)
     struct wm_message message;
     struct wm_app *app = &g_apps[index];
 
-    if (!app->used) {
+    if (!app->used || app->closing) {
         return;
     }
+
+    app->closing = true;
 
     wm_message_close(&message);
     (void)write(app->events, &message, sizeof(message));
@@ -1764,8 +1771,23 @@ static void app_spawn(int index, const char *path, char *const argv[], const cha
         return;
     }
 
-    if (pipe(down) != 0 || pipe(up) != 0) {
-        say("wm: no pipes for a window\n");
+    /*
+     * The pipes of a window are four descriptors until the fork and two after
+     * it, and the buffer is one more: a window of this desk is three
+     * descriptors of the server, and the table of a task has sixteen (the
+     * console, the three of the window and the room of the fork). A fourth
+     * window does not fit, and the server says which of the two failed.
+     */
+    if (pipe(down) != 0) {
+        say("wm: the table of the descriptors has no room for a window\n");
+        (void)close(buffer);
+        return;
+    }
+
+    if (pipe(up) != 0) {
+        say("wm: the table of the descriptors has no room for a window\n");
+        (void)close(down[0]);
+        (void)close(down[1]);
         (void)close(buffer);
         return;
     }

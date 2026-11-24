@@ -395,6 +395,12 @@ a picture of the interface.
   programs of `/bin` and not the shell of the kernel (ADR 0054).
 * The clock shows the hour and the zone and no date, and the panel has one
   clock and no list of the applications.
+* A window is three descriptors of the server - the events, the requests and
+  the file of the pixels - and the table of a task has sixteen: the desktop
+  holds the editor, the file manager and **one** terminal, and a second Alt+T
+  answers that the table has no room. A desk of more windows is the pty and
+  the descriptor passing of a later release, or a larger table of descriptors
+  in the ABI.
 * The pointer has one button. The right and the middle button, the wheel and
   the two axes of a touchpad are later numbers of the contract.
 * `/bin/wm` is a service of the boot of a machine that says so, and only of
