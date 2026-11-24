@@ -355,6 +355,14 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Fixed
 
+- A child of a `fork` took its fields from the parent **after** its slot was
+  in the table and marked in use, so the child - a thread of its own on the
+  host and a task of another core in `KERNEL_SMP` - read a record that was
+  still being written: the race detector of the cloud named the read of
+  `task_exit` against the write of `task_spawn`. The inheritance happens in
+  the critical section of the slot now, and the table of the descriptors,
+  which has the lock of its own in the opposite order, is copied after it and
+  before the task can run.
 - The suite under valgrind, the gate of the cloud, was red for two days
   without a single failed check: a checksum over the padding of a record
   (`tests/cases/test_mfs_format.c`) and a `strstr` over the bytes a file of
