@@ -45,6 +45,7 @@ microos> tree /
 | `/etc` | the configuration: a file name is the key and its content the value for a single setting, `key=value` lines for a system (`display`, `font`, `console`) |
 | `/etc/passwd` | the accounts: `name:uid:gid:home:shell`, one line per person (ADR 0033) |
 | `/etc/shadow` | the hash of a password: `name:$sha256$<salt>$<hex>`, `*` for an account without one; mode `0600` |
+| `/etc/group` | the groups: `name:gid:member,member`, one line per group (ADR 0044). A task has one gid and no supplementary list, so the members decide nothing yet |
 | `/etc/init.d` | the scripts of the init process, one command per line |
 | `/etc/fstab` | the volumes the boot mounts after the root, when the file is there |
 | `/etc/greeting.gz` | on x86-64: the gzip fixture of `/bin/zcat`, written by `tools/x86_image.py` with a fixed moment |

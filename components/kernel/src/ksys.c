@@ -268,20 +268,15 @@ static k_u32_t caller_uid(void)
 }
 
 /*
- * The bits of a mode that decide for the caller. Root passes every triad; a
- * task whose uid is the owner of the object reads the triad of the owner and
- * every other task reads the triad of the others, because no filesystem of
- * this system stores a group (docs/debts.md).
+ * The bits of a mode that decide for the caller. The rule lives in the VFS
+ * (vfs_access_bits) and not here, because the check of the write of a
+ * directory and the search of a path ask the same question: one answer for
+ * the edge of the system and the tree above the filesystems, or the two doors
+ * disagree about who may write what.
  */
 static k_u32_t caller_bits(const struct vfs_stat *info)
 {
-    k_u32_t uid = caller_uid();
-
-    if (uid == KSYS_UID) {
-        return 7u;
-    }
-
-    return (info->owner == uid) ? ((info->mode >> 6) & 7u) : (info->mode & 7u);
+    return vfs_access_bits(info);
 }
 
 /*
@@ -1895,8 +1890,33 @@ static k_ssize_t sys_getppid(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_a
 
 /* --- the credentials of the caller --- */
 
+/*
+ * The real uid: the person. It is the identity `whoami` of a setuid program
+ * names and the one that comes back when the program drops what it was given
+ * (ADR 0053). The permission checks never read it.
+ */
 static k_ssize_t sys_getuid(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
                             ksys_arg_t a4, ksys_arg_t a5)
+{
+    struct task *self = task_self();
+
+    K_UNUSED(a0);
+    K_UNUSED(a1);
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    return (self != NULL) ? (k_ssize_t)task_get_ruid(self) : 0;
+}
+
+/*
+ * The effective uid: the identity every check of the kernel reads. It is the
+ * real uid for a task of the shell, and the owner of the file while a program
+ * of the setuid flag of MOX1 runs (ADR 0053).
+ */
+static k_ssize_t sys_geteuid(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                             ksys_arg_t a4, ksys_arg_t a5)
 {
     K_UNUSED(a0);
     K_UNUSED(a1);
@@ -1906,19 +1926,6 @@ static k_ssize_t sys_getuid(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_ar
     K_UNUSED(a5);
 
     return (k_ssize_t)caller_uid();
-}
-
-/*
- * The effective uid. There is one uid in this kernel: a program cannot change
- * its identity without changing the identity its children inherit, because
- * the image of a program has no setuid bit and the kernel has no saved uid
- * to return to (docs/debts.md). The call exists because a portable source
- * asks for it, and it answers the number getuid answers.
- */
-static k_ssize_t sys_geteuid(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
-                             ksys_arg_t a4, ksys_arg_t a5)
-{
-    return sys_getuid(a0, a1, a2, a3, a4, a5);
 }
 
 static k_ssize_t sys_getgid(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
@@ -1937,11 +1944,16 @@ static k_ssize_t sys_getgid(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_ar
 }
 
 /*
- * Change the uid of the caller. Root may become any uid of the fifteen bits
- * a record of a filesystem holds; a task of another uid may only name the
- * number it already has, which is a no-op. A task that gives up root cannot
- * take it back with this call, which is the price of one credential and the
- * one way back is a reboot (or a login process, the other half of this work).
+ * Change the uid of the caller, with the three uids of POSIX (ADR 0053). *
+ * Root - the effective uid zero - names any uid of the fifteen bits a record
+ * holds, and the three uids become that number: this is how a program that
+ * entered with the identity of its owner gives it up (`setuid(getuid())`,
+ * which also clears the saved uid, so the identity cannot be taken back).
+ *
+ * A task of another effective uid names its real uid or its saved uid, and
+ * the effective uid moves to it: this is how a setuid program takes the
+ * identity it was given and how it can leave and return to it. Any other
+ * number is KERR_PERM. The real uid never moves but by the hand of root.
  */
 static k_ssize_t sys_setuid(ksys_arg_t uid, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
                             ksys_arg_t a4, ksys_arg_t a5)
@@ -1963,16 +1975,23 @@ static k_ssize_t sys_setuid(ksys_arg_t uid, ksys_arg_t a1, ksys_arg_t a2, ksys_a
         return KERR_INVAL;
     }
 
-    if (!task_is_root(self) && target != task_get_uid(self)) {
+    if (task_is_root(self)) {
+        task_set_uid(self, target);
+        return 0;
+    }
+
+    if (target != task_get_ruid(self) && target != task_get_suid(self)) {
         return KERR_PERM;
     }
 
-    task_set_uid(self, target);
+    task_set_euid(self, target);
 
     return 0;
 }
 
-/* The same rule for the group; the gid decides no permission yet. */
+/* The same rule for the group, with the one gid this system has: there is no
+ * saved gid and no image asks for one, so a task of another gid may only name
+ * the number it already has. */
 static k_ssize_t sys_setgid(ksys_arg_t gid, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
                             ksys_arg_t a4, ksys_arg_t a5)
 {
@@ -2503,6 +2522,30 @@ static k_ssize_t sys_chown(ksys_arg_t path, ksys_arg_t owner, ksys_arg_t a2, ksy
     return vfs_chown(name, (k_u32_t)owner);
 }
 
+static k_ssize_t sys_chgrp(ksys_arg_t path, ksys_arg_t group, ksys_arg_t a2, ksys_arg_t a3,
+                           ksys_arg_t a4, ksys_arg_t a5)
+{
+    int rc;
+
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    rc = path_check((const char *)(uintptr_t)path);
+    if (rc != 0) {
+        return rc;
+    }
+
+    /* The gid has the width of a uid; a wider number would spill into the
+     * type of the record, so it is refused here and not cut. */
+    if ((group & ~(ksys_arg_t)KSYS_GID_MAX) != 0) {
+        return KERR_INVAL;
+    }
+
+    return vfs_chgrp((const char *)(uintptr_t)path, (k_u32_t)group);
+}
+
 /*
  * The program. The file is read through the VFS, its header is checked
  * against the format of the system, and the port is asked to run it: only
@@ -2616,6 +2659,68 @@ static int argv_copy(ksys_arg_t from, char *args[], char *words, k_size_t words_
 #endif /* KERNEL_EXEC */
 
 #if KERNEL_EXEC
+/* The credentials of the caller before a setuid run, to give them back. */
+struct exec_creds {
+    k_u32_t euid;
+    k_u32_t suid;
+};
+
+/*
+ * The setuid flag of an image (ADR 0053), the act of `execve` and not of the
+ * parser: the file is about to become the program of this task, and the
+ * identity of the program is the owner of that file.
+ *
+ * A file the caller may write is not a door: a setuid image that its caller
+ * can replace would let the caller write the code that runs with the identity
+ * of the owner, which is the classic hole of a setuid program and the reason
+ * Linux clears the bit when the file is written. Root is the exception, as it
+ * is for every triad: it may already write anything.
+ *
+ * The answer is 1 when the identity was applied, 0 when the image asks for
+ * none, or KERR_PERM when the file may not carry the flag for this caller.
+ * The saved uids are given back by exec_creds_end() when the program returns:
+ * a task of the kernel that starts a program (the shell) waits for it and
+ * must not keep the identity of the program it started. The one answer that
+ * is not a return is K_EXEC_RUN_REPLACED, where the port has made the image
+ * the memory and the entry of the very task that called the call - a program
+ * that becomes another program, as POSIX has it. That task is the image from
+ * then on, and it ends with it: nothing else of it runs with the identity, so
+ * there is nothing to give back.
+ */
+static int exec_creds_begin(const struct vfs_stat *info, const struct k_exec_image *image,
+                            struct exec_creds *saved)
+{
+    struct task *self = task_self();
+
+    if (!image->setuid || self == NULL) {
+        return 0;
+    }
+
+    if (task_get_uid(self) != KSYS_UID && (vfs_access_bits(info) & KSYS_MODE_WRITE) != 0) {
+        kwarn("exec: %s asks for the identity of its owner and the caller may write the file",
+              (image->path != NULL) ? image->path : "the image");
+        return KERR_PERM;
+    }
+
+    saved->euid = task_get_uid(self);
+    saved->suid = task_get_suid(self);
+    task_set_euid(self, info->owner);
+
+    return 1;
+}
+
+/* The caller gets its own identity back, whatever the program did with it. */
+static void exec_creds_end(const struct exec_creds *saved)
+{
+    struct task *self = task_self();
+
+    if (self == NULL) {
+        return;
+    }
+
+    task_set_uids(self, task_get_ruid(self), saved->euid, saved->suid);
+}
+
 static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t envp, ksys_arg_t a3,
                             ksys_arg_t a4, ksys_arg_t a5)
 {
@@ -2632,8 +2737,10 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t envp, k
     char env_words[KSYS_ARGV_BYTES];
     char *const *vector = NULL;
     char *const *environment = NULL;
+    struct exec_creds creds;
     k_u8_t *data;
     k_size_t got = 0;
+    int applied;
     int rc;
 
     K_UNUSED(a3);
@@ -2755,7 +2862,16 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t envp, k
         image.path = name;
         image.envp = (const char *const *)environment;
 
+        applied = exec_creds_begin(&info, &image, &creds);
+        if (applied < 0) {
+            return applied;
+        }
+
         rc = k_exec_run(&image, vector);
+
+        if (applied > 0 && rc != K_EXEC_RUN_REPLACED) {
+            exec_creds_end(&creds);
+        }
 
         if (rc == K_EXEC_RUN_REPLACED) {
             return 0;
@@ -2825,7 +2941,18 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t envp, k
      */
     image.envp = (const char *const *)environment;
 
+    applied = exec_creds_begin(&info, &image, &creds);
+    if (applied < 0) {
+        kmm_free(data);
+        return applied;
+    }
+
     rc = k_exec_run(&image, vector);
+
+    if (applied > 0 && rc != K_EXEC_RUN_REPLACED) {
+        exec_creds_end(&creds);
+    }
+
     kmm_free(data);
 
     /*
@@ -2985,6 +3112,7 @@ void ksys_init(void)
     ksys_register(KSYS_REALLOC, "realloc", sys_realloc);
     ksys_register(KSYS_CHMOD, "chmod", sys_chmod);
     ksys_register(KSYS_CHOWN, "chown", sys_chown);
+    ksys_register(KSYS_CHGRP, "chgrp", sys_chgrp);
     ksys_register(KSYS_EXECVE, "execve", sys_execve);
     ksys_register(KSYS_STATX, "statx", sys_statx);
     ksys_register(KSYS_PIPE, "pipe", sys_pipe);
@@ -3193,6 +3321,11 @@ int ksys_chmod(const char *path, k_u32_t mode)
 int ksys_chown(const char *path, k_u32_t owner)
 {
     return (int)ksys_call(KSYS_CHOWN, (ksys_arg_t)(uintptr_t)path, (ksys_arg_t)owner, 0, 0, 0, 0);
+}
+
+int ksys_chgrp(const char *path, k_u32_t group)
+{
+    return (int)ksys_call(KSYS_CHGRP, (ksys_arg_t)(uintptr_t)path, (ksys_arg_t)group, 0, 0, 0, 0);
 }
 
 int ksys_execve(const char *path, char *const argv[])

@@ -34,6 +34,7 @@ static k_size_t g_type_count;
 static int stat_raw(const char *path, struct vfs_stat *out);
 static int mount_point_check(const char *point);
 static k_u32_t caller_uid(void);
+static k_u32_t caller_gid(void);
 
 /*
  * Whether a point is the path of a mount: an absolute path, without a
@@ -640,17 +641,31 @@ static k_u32_t caller_uid(void)
 }
 
 /*
- * The bits of a mode that decide for the caller. Root passes every triad;
- * a task whose uid is the owner of the object reads the triad of the owner;
- * every other task reads the triad of the others, because no filesystem of
- * this system stores a group and the group triad is therefore never the
- * answer (docs/debts.md).
+ * The gid the call is made for, from the same record and by the same rule: a
+ * task without one is the boot of the kernel, which is the group of root.
+ */
+static k_u32_t caller_gid(void)
+{
+    struct task *self = task_self();
+
+    return (self != NULL) ? task_get_gid(self) : VFS_UID;
+}
+
+/*
+ * The bits of a mode that decide for the caller. Root passes every triad; a
+ * task whose uid is the owner of the object reads the triad of the owner; a
+ * task of another uid whose gid is the group of the object reads the triad of
+ * the group; every other task reads the triad of the others. The order is the
+ * order of POSIX: the owner triad is the answer for the owner even when the
+ * group triad would be wider, and a filesystem that keeps no group answers
+ * zero, which is the group of root and therefore matches no task that is not
+ * root - exactly the answer of "no group" before the group was stored.
  *
  * The bypass of root is the rule of POSIX with the one exception of the
  * execute bit, which the caller of execve checks itself: root runs a file
  * that has an x bit for somebody, not a file with no x bit at all.
  */
-static k_u32_t caller_bits(const struct vfs_stat *info)
+k_u32_t vfs_access_bits(const struct vfs_stat *info)
 {
     k_u32_t uid = caller_uid();
 
@@ -658,7 +673,15 @@ static k_u32_t caller_bits(const struct vfs_stat *info)
         return VFS_MODE_TRIAD;
     }
 
-    return (info->owner == uid) ? ((info->mode >> 6) & 7u) : (info->mode & 7u);
+    if (info->owner == uid) {
+        return (info->mode >> 6) & 7u;
+    }
+
+    if (info->group != VFS_UID && info->group == caller_gid()) {
+        return (info->mode >> 3) & 7u;
+    }
+
+    return info->mode & 7u;
 }
 
 /*
@@ -716,7 +739,7 @@ static int dir_write_check(const char *path)
         return 0;
     }
 
-    if (info.mode != 0u && (caller_bits(&info) & VFS_MODE_WRITE) == 0u) {
+    if (info.mode != 0u && (vfs_access_bits(&info) & VFS_MODE_WRITE) == 0u) {
         return KERR_PERM;
     }
 
@@ -798,6 +821,7 @@ static int statx_raw(const char *path, struct vfs_statx *out)
         out->size = info.size;
         out->mode = info.mode;
         out->owner = info.owner;
+        out->group = (k_u16_t)info.group;
         out->mtime = 0;
         out->ctime = 0;
         return 0;
@@ -904,7 +928,7 @@ static int searchable_check(const char *prefix)
         return 0;
     }
 
-    return ((caller_bits(&info) & VFS_MODE_EXEC) != 0u) ? 0 : KERR_PERM;
+    return ((vfs_access_bits(&info) & VFS_MODE_EXEC) != 0u) ? 0 : KERR_PERM;
 }
 
 /*
@@ -1037,15 +1061,23 @@ int vfs_open(const char *path, int flags, struct vfs_file *out, void *priv)
      * debt of 1.6): the record of a filesystem is born with the uid of root
      * because a filesystem has no task, and the VFS is the layer that knows
      * who is calling. The gain is a home a person can write in without root
-     * taking the file back, and the price is that the group of the record
-     * stays root until a call sets one - the filesystems have an owner but
-     * no operation for the group yet (docs/debts.md).
+     * taking the file back.
      *
-     * A create of a name that was already there is not a create: its owner
-     * does not move because somebody opened it.
+     * The group comes with the owner and by the same act (ADR 0044): the
+     * record is born with the group of root and the maker gives it its own
+     * gid, so a file of a group is the file of the group a person belongs to.
+     * A filesystem that keeps no group says KERR_NOTSUP and the file keeps
+     * the zero it was born with.
+     *
+     * A create of a name that was already there is not a create: neither
+     * number moves because somebody opened the file.
      */
     if (creating && caller_uid() != VFS_UID && m->ops->chown != NULL) {
         (void)m->ops->chown(m->ctx, path, caller_uid());
+    }
+
+    if (creating && caller_gid() != VFS_UID && m->ops->chgrp != NULL) {
+        (void)m->ops->chgrp(m->ctx, path, caller_gid());
     }
 
     return rc;
@@ -1347,6 +1379,11 @@ int vfs_mkdir(const char *path)
         (void)m->ops->chown(m->ctx, path, caller_uid());
     }
 
+    if (rc == 0 && caller_gid() != VFS_UID && m->ops->chgrp != NULL) {
+        /* And it is of the group of that person (ADR 0044). */
+        (void)m->ops->chgrp(m->ctx, path, caller_gid());
+    }
+
     return rc;
 }
 
@@ -1583,6 +1620,51 @@ int vfs_chown(const char *path, k_u32_t owner)
     }
 
     rc = m->ops->chown(m->ctx, path, owner);
+
+    return rc;
+}
+
+int vfs_chgrp(const char *path, k_u32_t group)
+{
+    const struct mount *m = resolve(path, NULL);
+    struct vfs_stat info;
+    int rc;
+
+    if (m == NULL) {
+        return KERR_NOENT;
+    }
+
+    rc = path_search_check(path);
+    if (rc != 0) {
+        return rc;
+    }
+
+    /*
+     * A filesystem without groups answers KERR_NOTSUP before the caller is
+     * asked about the object: the answer is about the volume and not about
+     * the person, which is the rule of chmod above.
+     */
+    if (m->ops->chgrp == NULL) {
+        return KERR_NOTSUP;
+    }
+
+    /*
+     * Root gives an object to any group; the owner gives it to the group of
+     * its own task and to no other (POSIX with one gid per task, ADR 0044).
+     * A third task learns KERR_PERM, the same sentence as chmod.
+     */
+    if (caller_uid() != VFS_UID) {
+        rc = stat_raw(path, &info);
+        if (rc != 0) {
+            return rc;
+        }
+
+        if (info.owner != caller_uid() || group != caller_gid()) {
+            return KERR_PERM;
+        }
+    }
+
+    rc = m->ops->chgrp(m->ctx, path, group);
 
     return rc;
 }

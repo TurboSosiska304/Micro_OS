@@ -45,6 +45,7 @@ import hashlib
 import io
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -138,6 +139,16 @@ PROGRAMS = [
     "term",
 ]
 
+# The programs of the SDK: `make ports-build` writes them into build-ports and
+# the release image carries them under /bin/ports (ADR 0025 - a program of
+# somebody else travels with its license, and the license of the editor is the
+# file of the tree). The list is the directory and not a second table: the
+# build is the list of the programs, and a copy of it here would be a list
+# that a new port of the collection forgets to grow.
+PORTS_DIR = "build-ports/programs"
+PORTS_PATH = "/bin/ports"
+KILO_LICENSE = "tests/ports/kilo/LICENSE"
+
 # The second name of the compression command: `zstdcat` is the same image and
 # a different name in /bin, the way a Unix-like system links one program under
 # the name of its mode. The port does not patch the release for it: `zstdcli.c`
@@ -175,6 +186,10 @@ SETTING = "hello\nhostname=x86_64\nconsole=vga"
 ACCOUNTS_SALT = "mox1"
 ACCOUNTS_ROOT_PASSWORD = "microos"
 ACCOUNTS_PASSWD = "root:0:0:/:/bin/sh\nguest:7:7:/home/guest:/bin/sh"
+# The groups of the machine (ADR 0044): `name:gid:member,member`, and the
+# primary group of each account with no member list of its own - a task of
+# this system has one gid and no supplementary group.
+ACCOUNTS_GROUP = "root:0:\nguest:7:"
 
 
 def accounts_shadow() -> str:
@@ -560,12 +575,42 @@ def tree_file(path: str, source: str, mode: int = 0o644) -> tuple:
     return ("file", path, source, mode)
 
 
-def tree_program(path: str, source: str) -> tuple:
-    return ("program", path, source, 0o755)
+def tree_program(path: str, source: str, mode: int = 0o755) -> tuple:
+    return ("program", path, source, mode)
 
 
 def tree_text(path: str, text: str, mode: int = 0o644) -> tuple:
     return ("text", path, text, mode)
+
+
+# The flag of the header of MOX1 that asks for the identity of the owner of the
+# file (K_EXEC_FLAG_SETUID, ADR 0053). It is a flag of the image and not a mode:
+# the nine bits of chmod cannot hold it.
+K_EXEC_FLAG_SETUID = 0x2
+
+
+def setuid_image(source: str, path: str) -> str:
+    """A copy of the image `source` with the setuid flag of the header.
+
+    The gate of the bit is one program of the image under two names: the same
+    bytes as `/bin/cat` and the flag of the owner, so the smoke test reads a
+    file as the owner of the program and not as its caller - and a second copy
+    of the mode 0777, which the call of execve refuses for a caller that may
+    write it. The copy is a file of the build and not of the tree.
+    """
+    with open(source, "rb") as handle:
+        data = bytearray(handle.read())
+
+    if len(data) < 32 or data[0:4] != b"MOX1":
+        raise ValueError(f"{source} is not a MOX1 image")
+
+    flags = struct.unpack_from("<I", data, 8)[0]
+    struct.pack_into("<I", data, 8, flags | K_EXEC_FLAG_SETUID)
+
+    with open(path, "wb") as handle:
+        handle.write(bytes(data))
+
+    return path
 
 
 def extra_entries(extra: list) -> list:
@@ -984,6 +1029,7 @@ def build_image(
     block_size: int = EXT2_BLOCK_BYTES,
     volumes: tuple = VOLUMES,
     journal: bool = True,
+    ports: str | None = None,
     volume_only: bool = False,
 ) -> int:
     """Write the image with the programs of the build and /etc/setting.
@@ -995,7 +1041,11 @@ def build_image(
 
     `fs` is the filesystem of the root: "mfs" (the default of the machine,
     written by `tools/mkfs_mfs.c`) or "ext2" (the same tree in a volume of the
-    tools of the host, ADR 0027 §3).
+    tools of the host, ADR 0027 §3). `ports` is the directory of the images of
+    the SDK (`make ports-build`): every `.mox` of it is a file of `/bin/ports`
+    and the license of the editor travels with it. None writes no `/bin/ports`
+    at all, which is a machine without the programs of somebody else - the
+    image of a test that counts the tree, and not the image of a release.
     """
     if not os.path.isfile(mkfs):
         print(f"missing {mkfs}: run make build", file=sys.stderr)
@@ -1020,6 +1070,49 @@ def build_image(
             print(f"missing {path}: run make x86-build", file=sys.stderr)
             return 2
         entries.append(tree_program(f"/bin/{name}", path))
+
+    # The gate of the setuid bit of MOX1 (ADR 0053): `/bin/suidcat` is the
+    # image of `cat` with the flag of the header, and `/bin/badcat` is the same
+    # image of the mode 0777 - a setuid program its caller may write, which the
+    # call of execve refuses.
+    if "cat" in PROGRAMS:
+        cat_image = os.path.join(build_dir, "cat.mox")
+        entries.append(
+            tree_program(
+                "/bin/suidcat",
+                setuid_image(cat_image, os.path.join(build_dir, "suidcat.mox")),
+            )
+        )
+        entries.append(
+            tree_program(
+                "/bin/badcat",
+                setuid_image(cat_image, os.path.join(build_dir, "badcat.mox")),
+                0o777,
+            )
+        )
+
+    # The programs of the SDK: one directory of images, one directory of the
+    # volume, and the licenses of the collection that are not already there.
+    # A release without them is a machine whose notes promise `kilo` and whose
+    # PATH has no `kilo` in it (the defect of the owner's laptop, 1.9).
+    if ports is not None:
+        names = sorted(name for name in os.listdir(ports) if name.endswith(".mox"))
+        if not names:
+            print(f"{ports} holds no .mox image: run sh tools/ports_build.sh", file=sys.stderr)
+            return 2
+
+        entries.append(tree_dir(PORTS_PATH))
+
+        for name in names:
+            entries.append(
+                tree_program(
+                    f"{PORTS_PATH}/{name[: -len('.mox')]}",
+                    os.path.join(ports, name),
+                )
+            )
+
+        if os.path.isfile(KILO_LICENSE):
+            entries.append(tree_file("/etc/licenses/kilo", KILO_LICENSE))
 
     # The second names of the commands: one image, two names in /bin.
     for second, first in SECOND_NAMES.items():
@@ -1128,6 +1221,7 @@ def build_image(
     # docs/debts.md (the create path gives it to root), and the smoke test
     # reads the owner of one of them.
     entries.append(tree_text("/etc/passwd", ACCOUNTS_PASSWD))
+    entries.append(tree_text("/etc/group", ACCOUNTS_GROUP))
     entries.append(tree_text("/etc/shadow", accounts_shadow(), 0o600))
     entries.append(tree_dir("/home"))
     entries.append(tree_dir("/home/guest"))
@@ -1270,6 +1364,13 @@ def main(argv: list) -> int:
         help="make a directory of the volume",
     )
     parser.add_argument(
+        "--ports",
+        default=None,
+        metavar="DIR",
+        help="the programs of the SDK into /bin/ports (default: none; `make x86-disk` "
+        f"passes {PORTS_DIR})",
+    )
+    parser.add_argument(
         "--bus",
         choices=("ide", "virtio"),
         default="ide",
@@ -1322,6 +1423,15 @@ def main(argv: list) -> int:
     for path in args.dir:
         extra += ["--dir", path]
 
+    if args.ports is None or args.ports == "none" or args.ports == "":
+        ports = None
+    else:
+        ports = args.ports
+
+    if ports is not None and not os.path.isdir(ports):
+        print(f"{ports} is not a directory: run sh tools/ports_build.sh", file=sys.stderr)
+        return 2
+
     if args.volumes is None:
         volumes = VOLUMES
     elif args.volumes == "none" or args.volumes == "":
@@ -1342,6 +1452,7 @@ def main(argv: list) -> int:
         args.block_size,
         volumes,
         not args.no_journal,
+        ports,
         args.volume_only,
     )
 

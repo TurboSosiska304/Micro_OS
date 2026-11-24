@@ -125,6 +125,12 @@ int microos_yield(void);
 void microos_exit(int code);
 int microos_chmod(const char *path, unsigned mode);
 int microos_chown(const char *path, unsigned owner);
+/*
+ * The group of an object (ADR 0044). Root gives it to any group; the owner
+ * of the object gives it to the group of its own task. A volume without
+ * groups - FAT32 - answers ENOTSUP.
+ */
+int microos_chgrp(const char *path, unsigned group);
 int microos_statx(const char *path, struct microos_statx *out);
 int microos_execve(const char *path, char *const argv[]);
 int microos_kill(int pid, int sig);

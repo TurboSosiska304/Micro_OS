@@ -1220,6 +1220,7 @@ int kshell_init(void)
     rc |= kshell_register_memtest();
     rc |= kshell_register_files();
     rc |= kshell_register_mfetch();
+    rc |= kshell_register_time();
 
     return rc;
 }

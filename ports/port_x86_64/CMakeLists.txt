@@ -129,6 +129,7 @@ set(KSHELL_SOURCES
     "${KSHELL_DIR}/src/kshell_files.c"
     "${KSHELL_DIR}/src/kshell_memtest.c"
     "${KSHELL_DIR}/src/kshell_mfetch.c"
+    "${KSHELL_DIR}/src/kshell_time.c"
     "${KSHELL_DIR}/src/kshell_pipe.c"
 )
 

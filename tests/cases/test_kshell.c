@@ -612,6 +612,69 @@ static void test_ls_color(void)
  * commands apart: `ls` has no branch and no path line, `tree` has both and
  * ends with the count of what it drew.
  */
+/*
+ * The property: `date` reads the clock of the kernel and prints it as UTC, and
+ * the calendar it prints is the one it reads back (ADR 0053 is not this, the
+ * command is 1.9's: the owner's laptop had no clock command at all). The
+ * numbers of the test are fixed moments of the seconds of Unix, so the check
+ * does not depend on the clock of the host under the test.
+ */
+static void test_date(void)
+{
+    char line[32];
+    char buf[1024];
+    size_t used;
+    FILE *sink;
+
+    ktest_begin("kshell: date prints the clock of the kernel in UTC");
+
+    KT_CHECK(kshell_time_line(0u, line, sizeof(line)));
+    KT_CHECK_STR_EQ(line, "1970-01-01 00:00:00");
+
+    KT_CHECK(kshell_time_line(1000000000u, line, sizeof(line)));
+    KT_CHECK_STR_EQ(line, "2001-09-09 01:46:40");
+
+    /* The leap day of a century that is a leap year, and the end of the
+     * calendar of the command (2099 is the last year of the chip of the
+     * board). */
+    KT_CHECK(kshell_time_line(951782400u, line, sizeof(line)));
+    KT_CHECK_STR_EQ(line, "2000-02-29 00:00:00");
+
+    KT_CHECK(kshell_time_line(4102444799u, line, sizeof(line)));
+    KT_CHECK_STR_EQ(line, "2099-12-31 23:59:59");
+
+    /* A number outside the calendar is no line at all: the command says the
+     * machine has no clock rather than print a date of another century. */
+    KT_CHECK(!kshell_time_line(4102444800u, line, sizeof(line)));
+    KT_CHECK_STR_EQ(line, "");
+
+    /* A day that the calendar does not have is refused before the clock is
+     * asked, so the check does not need a clock under it; the sentence is
+     * the one a person reads. */
+    sink = tmpfile();
+    KT_CHECK(sink != NULL);
+    if (sink == NULL) {
+        return;
+    }
+
+    port_host_set_sink(sink);
+
+    KT_CHECK_INT_EQ(kshell_execute("date set 2026-02-30 00:00:00"), KSHELL_ERROR);
+    KT_CHECK_INT_EQ(kshell_execute("date set 2026-11-24 25:00:00"), KSHELL_ERROR);
+    KT_CHECK_INT_EQ(kshell_execute("date set 26-11-24 00:00:00"), KSHELL_ERROR);
+    KT_CHECK_INT_EQ(kshell_execute("date nonsense"), KSHELL_USAGE);
+
+    rewind(sink);
+    used = fread(buf, 1, sizeof(buf) - 1, sink);
+    buf[used] = '\0';
+
+    /* The sink belongs to the port and it closes the file it was given. */
+    port_host_set_sink(NULL);
+
+    KT_CHECK(strstr(buf, "is not a moment") != NULL);
+    KT_CHECK(strstr(buf, "usage: date") != NULL);
+}
+
 static void test_ls(void)
 {
     struct vfs_file file;
@@ -1054,7 +1117,7 @@ static void test_attr(void)
 
     /* The notes of the help come from the table, once per request. */
     KT_CHECK(strstr(buf, "The mode is the nine bits in octal") != NULL);
-    KT_CHECK(strstr(buf, "the type, the mode, the owner and the size") != NULL);
+    KT_CHECK(strstr(buf, "the type, the mode, the owner, the group and the size") != NULL);
     KT_CHECK(strstr(buf, "help: nosuch: no such command") != NULL);
     /* The long notes of fsck pass the 192 bytes of the print buffer: a
      * sentence from the end is there, whole. The sentence is the one of the
@@ -1079,7 +1142,7 @@ static void test_attr(void)
     KT_CHECK(strstr(buf, "exec: /bin/hello: not a MOX1 image of this system") != NULL);
     KT_CHECK(strstr(buf, "exec: hello: not found in /nosuchdir") != NULL);
 #endif
-    KT_CHECK(strstr(buf, "/bin:/usr/bin\n") != NULL);
+    KT_CHECK(strstr(buf, "/bin:/bin/ports:/usr/bin\n") != NULL);
 
     ls_teardown();
 }
@@ -1359,6 +1422,7 @@ void test_kshell(void)
     test_kill();
     test_free();
     test_uptime();
+    test_date();
     test_memtest();
     test_mfetch();
     test_ls();

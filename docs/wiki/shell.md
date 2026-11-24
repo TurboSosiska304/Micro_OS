@@ -198,8 +198,8 @@ The files, on every machine:
 | `df [-h] [path]` | the free blocks and inodes; `-h` in KB/MB. The block is the unit of the volume and says so (`1 KB each`, `512 bytes each`), and a volume that keeps no inodes (FAT32) says `not kept by this volume` |
 | `mount` | the mounted filesystems |
 | `fsck [-y] [fat <point\|device>] [ext2 <point>]` | check a volume: MicroFS, the FAT volume at a point or on a device, or the ext2 volume at a point; `-y` repairs it |
-| `stat <path>` | the type, the mode, the owner and the size |
-| `chmod <mode> <path>`, `chown <uid> <path>` | the mode (octal) and the owner (0..32767) |
+| `stat <path>` | the type, the mode, the owner, the group and the size |
+| `chmod <mode> <path>`, `chown <uid> <path>`, `chgrp <gid> <path>` | the mode (octal), the owner and the group (0..32767) |
 | `path [directories]` | show or set `PATH` |
 | `exec <program> [args...]` | run a program, by a path or found in `PATH` |
 | `kill [-signal] <pid>` | send `INT`, `TERM`, `CHLD` or `PIPE` to a task; TERM by default. `init` and the console itself are refused with a sentence: there is no `getty`, so a signal to the shell would leave the machine without one |
@@ -208,7 +208,8 @@ The files, on every machine:
 | `logout` | end the session of this terminal: the console starts another one as root, a client of telnet is disconnected |
 | `who` | the sessions that are in: the name of `/etc/passwd`, the terminal and the pid (`/proc/sessions`) |
 | `whoami` | the name of the account of the shell |
-| `id` | the uid, the gid and the account of the shell |
+| `id` | the uid and the gid of the shell, the names of `/etc/passwd` and `/etc/group` for them, the home and the shell |
+| `groups` | the names of the groups of the shell (one: a task has one gid) |
 
 The services, where the port registers them:
 
@@ -223,7 +224,7 @@ The services, where the port registers them:
 | `httpd [port\|off]` | the page of the state over HTTP, default port 80 | board |
 | `mqtt <host> <port> <topic> <message>` | publish one message at QoS 0 | board |
 | `telnet [on\|off]` | the shell on port 23 | board |
-| `date`, `date set <YYYY-MM-DD> <HH:MM:SS>` | the RTC, or the clock of the host | board, simulator |
+| `date`, `date set <YYYY-MM-DD> <HH:MM:SS>` | the wall clock of the kernel in UTC (the RTC of the board, the CMOS of x86-64, the clock of the host); `set` writes it through the kernel | every port |
 | `battery`, `beep [frequency] [ms]`, `led on\|off\|heart\|dance` | the power cell, the buzzer, the LED | board, simulator (stubs) |
 | `input [seconds]` | watch the buttons | board, simulator (stubs) |
 | `wifi [status\|scan\|connect <ssid> [key]\|join\|disconnect\|forget]` | the WiFi station | board, simulator (stub) |
@@ -275,7 +276,7 @@ psram: not available on this platform
 
 ## `PATH` and `exec`
 
-`PATH` starts at `/bin:/usr/bin` and belongs to the shell: it is not a file of
+`PATH` starts at `/bin:/bin/ports:/usr/bin` and belongs to the shell: it is not a file of
 `/etc`, and a program does not inherit it yet. The commands of the shell that
 change its state (`cd`, `path`) and the ones that have no program (`help`,
 `uname`, `ps`, `df`, `mount`, `config`, `stat`, `write`, `tree`, `kill`, ...)
@@ -284,7 +285,7 @@ the file wins, and the command is the fallback.
 
 ```text
 microos> path
-/bin:/usr/bin
+/bin:/bin/ports:/usr/bin
 microos> path /bin
 microos> path ""
 path: an empty value is not a list of directories
@@ -302,7 +303,7 @@ says where it looked:
 
 ```text
 microos> exec hello
-exec: hello: not found in /bin:/usr/bin
+exec: hello: not found in /bin:/bin/ports:/usr/bin
 ```
 
 On the board and in the simulator there is no program to run: a fresh volume

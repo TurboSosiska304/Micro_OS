@@ -140,8 +140,8 @@ chose.
 | 33 | `setlimit` | `which, value` | 0, or an error |
 | 34 | `rename` | `from, to` | 0, or an error |
 | 35 | `ftruncate` | `fd, size` | 0, or an error |
-| 36 | `getuid` | - | the uid of the task |
-| 37 | `geteuid` | - | the uid of the task (one credential) |
+| 36 | `getuid` | - | the real uid of the task |
+| 37 | `geteuid` | - | the effective uid of the task |
 | 38 | `getgid` | - | the gid of the task |
 | 39 | `setuid` | `uid` | 0, or an error |
 | 40 | `setgid` | `gid` | 0, or an error |
@@ -155,6 +155,7 @@ chose.
 | 48 | `chdir` | `path` | 0, or an error |
 | 49 | `clock_gettime` | `clock, buf` | 0 and the moment in the place of the caller, or an error |
 | 50 | `getrusage` | `buf` | 0 and the use of the processor in the place of the caller, or an error |
+| 51 | `chgrp` | `path, group` | 0, or an error |
 
 The numbers 0 to 22 are frozen, 23 to 26 were the next free ones; pipes took
 27 and 28 (ADR 0014), signals the three after them (ADR 0015), the limits of
@@ -163,8 +164,9 @@ file 35 and the credentials of a task 36 to 40 (the second half of 1.4),
 `rmdir` and `fstat` 41 and 42 (the filesystem of 1.5), the wait for a
 descriptor 43 and the memory a program maps 44 to 47 (the first lane of 1.6).
 The lane of 1.8 added the directory of a task 48, the clock 49 and the use of
-the processor 50; the three are below. A call that is not in the table is
-`ENOSYS`, never a guess at what it might have meant.
+the processor 50; the three are below. The group of an object took 51 beside
+the owner (ADR 0044). A call that is not in the table is `ENOSYS`, never a
+guess at what it might have meant.
 
 ## The control commands of `ioctl`
 
@@ -288,13 +290,25 @@ next entry lives in that descriptor; the end of the directory is an empty
 answer and not an error. A descriptor that is not a directory is `ENOTDIR`.
 The shell still lists a path with `vfs_list`, which needs no descriptor.
 
-## The mode and the owner of an object
+## The mode, the owner and the group of an object
 
-Every object has a mode and an owner. The mode is nine bits of `rwx` for the
-user, the group and the others, and the owner is a uid; a new file is `0644`
-and a new directory `0755`. `stat` reports both, in the `struct vfs_stat` it
-copies to the caller, and `chmod` (number 23) and `chown` (number 24) change
-them one at a time.
+Every object has a mode, an owner and a group. The mode is nine bits of `rwx`
+for the user, the group and the others, the owner is a uid and the group a
+gid; a new file is `0644` and a new directory `0755`. `stat` reports all
+three, in the `struct vfs_stat` it copies to the caller, and `chmod` (number
+23), `chown` (number 24) and `chgrp` (number 51) change them one at a time.
+
+Not every filesystem keeps all three. MicroFS keeps them in the record of a
+version 3 volume (a volume of version 1 or 2 has no word for the group and
+answers `ENOTSUP`), ext2 keeps them in the inode, FAT32 keeps none of them and
+answers `ENOTSUP` to `chmod`, `chown` and `chgrp` alike, and a virtual
+filesystem that keeps no modes - procfs, devfs - leaves the three at zero.
+
+A name that a create makes (`open` with `O_CREAT`, `mkdir`) takes the uid of
+the task that made it as its owner and the gid of that task as its group; the
+record of a filesystem is born with the two of root because a filesystem has
+no task, and the VFS is the layer that knows who is calling. An open of a name
+that was already there moves neither number.
 
 Every task has a **uid** and a **gid** (numbers 36 to 40 read and change
 them). A task takes both from the task that created it; a fork, a program and
@@ -302,14 +316,17 @@ an `execve` keep them, so `getuid()` answers the identity the caller was
 started with and not a constant. The root of the system is uid 0 (`KSYS_UID`):
 the boot, the kernel itself and the shell of the console, until a person types
 `login` or `su` (ADR 0033). The accounts are `/etc/passwd` (a name, a uid, a
-gid, a home and a shell) and `/etc/shadow` (a salted SHA-256 of a password),
-read by the shell and by `getpwnam`/`getpwuid` of the library - the same file
+gid, a home and a shell), `/etc/shadow` (a salted SHA-256 of a password) and
+`/etc/group` (a name, a gid and a member list), read by the shell and by
+`getpwnam`/`getpwuid`/`getgrgid`/`getgrnam` of the library - the same files
 for the two, so a program and the console cannot disagree about a name.
 
-* a task whose uid is the owner of an object reads the triad of the owner;
-  every other task reads the triad of the others, because no filesystem of
-  this system stores a group - the gid is kept and inherited, and the triad of
-  the group is never the answer (`docs/debts.md`);
+* a task whose uid is the owner of an object reads the triad of the owner; a
+  task of another uid whose gid is the group of the object reads the triad of
+  the group; every other task reads the triad of the others. An object whose
+  filesystem keeps no group answers zero, which is the group of root, so the
+  triad of the group is never the answer of a task that is not root - the
+  answer of a filesystem that has no groups at all;
 * **root passes the read and the write triads.** It is the exemption of POSIX:
   a file of the mode `0200` is read by root, and one of `0400` is written by
   it. The exception is the execute bit, which `execve` checks itself: root
@@ -325,24 +342,39 @@ touch it": it means "this filesystem keeps no modes" - `procfs` and `devfs` -
 and those objects keep the access they always had.
 
 `chmod` belongs to the owner of the object and to root, `chown` to root
-alone, and `mount`/`umount` to root alone; a task of another uid learns
-`EPERM`. `setuid` and `setgid` follow the same shape: root names any uid of
-the fifteen bits of a record, and a task of another uid names only the number
-it already has. There is one credential and not the three of POSIX, so
-`geteuid` answers what `getuid` answers and a task that gives up root cannot
-name zero again with `setuid`. The door to another identity is the console:
-`login` and `su` are commands of the shell of the kernel, they check
-`/etc/shadow` and move the two numbers of the *shell* task together
-(`task_set_creds`, the gid first), and every program the person starts
-inherits them. There is no setuid bit in the image of a program, so a program
-cannot change the identity it runs with (ADR 0033).
+alone, `chgrp` to root, or to the owner of the object giving it to the group
+of its own task (a task has one gid and no supplementary list, ADR 0044), and
+`mount`/`umount` to root alone; a task of another uid learns `EPERM`.
 
-The mode of `chmod` is refused outside the nine bits (`EINVAL`) and so is an
-owner outside the fifteen bits of a uid (`EINVAL`): a number that does not fit
-would spill into the type of the object. `chmod 000` is not expressible
+A task has the **three uids of POSIX** (ADR 0053): the real uid is the
+person, the effective uid is the identity every check of the kernel reads -
+`geteuid` answers it and `getuid` answers the real one - and the saved uid is
+the identity `setuid` may return to. `login` and `su` move the three together
+(`task_set_creds`, the gid first), and every program the person starts
+inherits them.
+
+`setuid` follows the rule of POSIX with these three: a task whose effective
+uid is zero names any uid of the fifteen bits of a record and the three become
+it (which is how a program that entered as root gives the identity up with
+`setuid(getuid())`, the saved uid included); any other task names its real or
+its saved uid and the effective uid moves to it, and any other number is
+`EPERM`. `setgid` keeps the shape of one gid: root names any group of the
+fifteen bits, a task names the one it has.
+
+An image may ask for the identity of the owner of its file with the
+`K_EXEC_FLAG_SETUID` flag of the header (ADR 0053): `execve` then makes the
+effective and the saved uid of the caller the owner of the file, for as long as
+the program runs, and refuses the image with `EPERM` when the caller may write
+the file (root is exempt). The bit is not a mode and `chmod` cannot grant it;
+`pkg` installs such an image only as root.
+
+The mode of `chmod` is refused outside the nine bits (`EINVAL`), and so are an
+owner outside the fifteen bits of a uid and a group outside the fifteen bits
+of a gid (`EINVAL`): a number that does not fit would spill into the type of
+the object. `chmod 000` is not expressible
 either: a zero in the record means "the record predates the modes", so the
 filesystem refuses it instead of storing a number it would read back as
-`0644`. `stat` checks nothing and reports the two numbers to whoever asks.
+`0644`. `stat` checks nothing and reports the three numbers to whoever asks.
 
 The **`x` bit of every directory of a path** is checked before the object at
 the end is looked at. The VFS walks the components of the path, calls `stat`

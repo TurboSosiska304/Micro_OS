@@ -513,6 +513,7 @@ static int ext2_vfs_stat(void *ctx, const char *path, struct vfs_stat *out)
         out->size = inode.size;
         out->mode = ext2_inode_mode(&inode);
         out->owner = inode.uid;
+        out->group = inode.gid;
     }
 
     k_mutex_unlock(&vol->lock);
@@ -548,6 +549,7 @@ static int ext2_vfs_statx(void *ctx, const char *path, struct vfs_statx *out)
         out->size = inode.size;
         out->mode = ext2_inode_mode(&inode);
         out->owner = inode.uid;
+        out->group = inode.gid;
         out->mtime = inode.mtime;
         out->ctime = inode.ctime;
     }
@@ -758,6 +760,43 @@ static int ext2_vfs_chown(void *ctx, const char *path, k_u32_t owner)
     return rc;
 }
 
+static int ext2_vfs_chgrp(void *ctx, const char *path, k_u32_t group)
+{
+    struct ext2_volume *vol = (struct ext2_volume *)ctx;
+    const char *relative;
+    struct ext2_inode inode;
+    int rc;
+
+    if (vol == NULL || path == NULL || !vol->mounted) {
+        return KERR_INVAL;
+    }
+
+    if (group > 0xFFFFu) {
+        return KERR_INVAL; /* the group of an ext2 record is 16 bits */
+    }
+
+    relative = ext2_relative(vol, path);
+    if (relative == NULL) {
+        return KERR_NOENT;
+    }
+
+    rc = volume_lock(vol);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = ext2_lookup(vol, relative, &inode, NULL);
+    if (rc == 0) {
+        inode.gid = (k_u16_t)group;
+        inode.ctime = ext2_now();
+        rc = ext2_inode_write(vol, &inode, true);
+    }
+
+    k_mutex_unlock(&vol->lock);
+
+    return rc;
+}
+
 static int ext2_vfs_umount(void *ctx)
 {
     ext2_volume_unmount((struct ext2_volume *)ctx);
@@ -780,6 +819,7 @@ static const struct vfs_operations g_ext2_operations = {
     .rename = ext2_vfs_rename,
     .chmod = ext2_vfs_chmod,
     .chown = ext2_vfs_chown,
+    .chgrp = ext2_vfs_chgrp,
     .statfs = ext2_vfs_statfs,
     .strerror = ext2_strerror,
     .umount = ext2_vfs_umount,

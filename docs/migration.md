@@ -77,6 +77,16 @@ Rebuild an old program with `tools/mkprog.sh`. The script defaults to
 `--arch x86-64`; the board's programs use `--arch xtensa` and the windows of
 its port. Keep the source or the object file, not only the `.mox`.
 
+### The setuid flag of an image (1.9)
+
+`K_EXEC_FLAG_SETUID` (`0x2` of the flags word at offset 8) asks the kernel for
+the identity of the owner of the file while the program runs
+([ADR 0053](adr/0053-the-setuid-bit-of-an-image.md)). The version is still 2
+and no image of the tree carries the bit: a kernel before 1.9 refused the bit
+as an unknown flag, so an image that sets it simply does not run there.
+`tools/mkprog.sh --setuid` writes it, `pkg` installs such an image only as
+root, and a file the caller may write is refused with `EPERM`.
+
 ### NX on x86-64
 
 0.8 makes the x86-64 map W^X: the text of the kernel and of a program is
@@ -219,6 +229,9 @@ expect.
 * **MOX1 is one-way.** A version 2 image is refused by a 0.x kernel and a
   version 1 image is refused by 1.0. Rebuild from the source; keep the object
   files or the source, not only the `.mox`.
+* **An image with the setuid flag needs 1.9.** A kernel before it refuses the
+  flag as one it does not know (`EINVAL`), and the file has to be owned by the
+  identity the program asks for and not writable by the caller (ADR 0053).
 * **NX is not a switch.** A program that relied on writable text or
   executable data fails on x86-64 after 1.0. Fix the program; there is no
   boot flag to turn the rule off.

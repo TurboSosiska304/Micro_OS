@@ -9,9 +9,10 @@
  * test exercises (`getuid`, `geteuid`, `getgid`, `setuid`, `setgid`).
  *
  * Three of them answer a file instead: `open`, `read` and `close` serve the
- * text the test put in with userland_door_set_passwd(), so that the reader of
- * /etc/passwd of the library (src/pwd.c) is covered on the host by a real
- * record and a real line that is not one. The real door is
+ * text the test put in with userland_door_set_passwd() or
+ * userland_door_set_group() for the two files it names, so that the reader of
+ * /etc/passwd and of /etc/group of the library (src/pwd.c) is covered on the
+ * host by a real record and a real line that is not one. The real door is
  * `components/libc/user/src/syscall.c`, and its crossing is covered by
  * `make x86-smoke`, where a program of the machine calls the kernel.
  */
@@ -27,15 +28,20 @@
 long __ulibc_syscall6(long number, long a0, long a1, long a2, long a3, long a4, long a5);
 long __ulibc_result(long result);
 
-/* The text of /etc/passwd the test answers, the position in it and whether
- * the file is open. NULL means "there is no such file". */
+/* The text of the file the door answers, the position in it and whether the
+ * file is open. NULL means "there is no such file". The path of the open
+ * decides which of the two texts the test put in. */
 static const char *g_passwd_text;
-static size_t g_passwd_at;
-static int g_passwd_open;
+static const char *g_group_text;
+static const char *g_open_text;
+static size_t g_open_at;
+static int g_open_fd;
 
-/* Hand the reader of the library a file of accounts, or take it away with
- * NULL. Declared by the test that calls it (tests/cases/test_userland.c). */
+/* Hand the reader of the library a file of accounts or of groups, or take it
+ * away with NULL. Declared by the test that calls them
+ * (tests/cases/test_userland.c). */
 void userland_door_set_passwd(const char *text);
+void userland_door_set_group(const char *text);
 
 /*
  * The heap of the call 47, for the test of the allocator of a program
@@ -49,8 +55,17 @@ unsigned long userland_door_brk_calls(void);
 void userland_door_set_passwd(const char *text)
 {
     g_passwd_text = text;
-    g_passwd_at = 0;
-    g_passwd_open = 0;
+    g_open_text = NULL;
+    g_open_at = 0;
+    g_open_fd = 0;
+}
+
+void userland_door_set_group(const char *text)
+{
+    g_group_text = text;
+    g_open_text = NULL;
+    g_open_at = 0;
+    g_open_fd = 0;
 }
 
 /*
@@ -123,33 +138,43 @@ long __ulibc_syscall6(long number, long a0, long a1, long a2, long a3, long a4, 
     switch (number) {
     case KSYS_BRK:
         return door_brk((unsigned long)a0);
-    case KSYS_OPEN:
-        if (g_passwd_text == NULL) {
+    case KSYS_OPEN: {
+        const char *path = (const char *)(uintptr_t)a0;
+        const char *text = g_passwd_text;
+
+        if (path != NULL && strcmp(path, "/etc/group") == 0) {
+            text = g_group_text;
+        }
+
+        if (text == NULL) {
             return KERR_NOENT;
         }
-        g_passwd_at = 0;
-        g_passwd_open = 1;
+
+        g_open_text = text;
+        g_open_at = 0;
+        g_open_fd = 1;
         return 3; /* a descriptor that is not the console */
+    }
     case KSYS_READ: {
         size_t count = (size_t)a2;
         size_t left;
 
-        if (!g_passwd_open) {
+        if (!g_open_fd) {
             return KERR_BADF;
         }
 
-        left = strlen(g_passwd_text) - g_passwd_at;
+        left = strlen(g_open_text) - g_open_at;
         if (count > left) {
             count = left;
         }
 
-        memcpy((void *)(uintptr_t)a1, g_passwd_text + g_passwd_at, count);
-        g_passwd_at += count;
+        memcpy((void *)(uintptr_t)a1, g_open_text + g_open_at, count);
+        g_open_at += count;
 
         return (long)count;
     }
     case KSYS_CLOSE:
-        g_passwd_open = 0;
+        g_open_fd = 0;
         return 0;
     default:
         return 0;

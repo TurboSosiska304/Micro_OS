@@ -151,6 +151,18 @@ int kshell_register_memtest(void);
 /* Register `mfetch`, the report about the system with the logo. */
 int kshell_register_mfetch(void);
 
+/* Register `date`, the wall clock of the kernel as a command (UTC). */
+int kshell_register_time(void);
+
+/*
+ * A moment of the wall clock as the line of `date` - `YYYY-MM-DD HH:MM:SS` of
+ * UTC - or false when the number is outside the calendar the command reads
+ * (1970..2099, which is the chip of the board and the epoch of the seconds).
+ * The pure half of the command, so that a test can check the calendar of a
+ * fixed number without a clock of the host under it.
+ */
+bool kshell_time_line(k_u64_t unix_seconds, char *buf, k_size_t size);
+
 /*
  * Register the built in commands. The shell does it on its own, the tests
  * call it directly.

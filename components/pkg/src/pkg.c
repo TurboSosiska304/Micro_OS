@@ -18,6 +18,7 @@
 
 #include "kernel/errno.h"
 #include "kernel/kmm.h"
+#include "kernel/ksys.h"
 #include "kernel/version.h"
 #include "kernel/vfs.h"
 #include "kshell/kshell.h"
@@ -613,6 +614,9 @@ static void say_error(int code)
     case PKG_ELICENSE:
         pkg_error("the package is copyleft and names no usable source");
         break;
+    case PKG_EPERM:
+        pkg_error("the program asks for the identity of its owner, which only root installs");
+        break;
     default:
         pkg_error("the volume refused the call");
         break;
@@ -846,6 +850,25 @@ static int write_record(const struct pkg_plan *plan)
     return pkg_db_write(&record);
 }
 
+bool pkg_image_asks_owner(const void *data, k_size_t size)
+{
+    const k_u8_t *bytes = (const k_u8_t *)data;
+    k_u32_t flags;
+
+    if (bytes == NULL || size < 12u) {
+        return false;
+    }
+
+    if (bytes[0] != 'M' || bytes[1] != 'O' || bytes[2] != 'X' || bytes[3] != '1') {
+        return false;
+    }
+
+    flags = (k_u32_t)bytes[8] | ((k_u32_t)bytes[9] << 8) | ((k_u32_t)bytes[10] << 16) |
+            ((k_u32_t)bytes[11] << 24);
+
+    return (flags & K_EXEC_FLAG_SETUID) != 0u;
+}
+
 static int verify_and_install(struct pkg_options *options, const struct pkg_plan *plan,
                               const char *source, const char *repo)
 {
@@ -919,6 +942,28 @@ static int verify_and_install(struct pkg_options *options, const struct pkg_plan
     if (options->download_only) {
         kmm_free(data);
         return PKG_OK;
+    }
+
+    /*
+     * A program that asks for the identity of its owner is installed by root
+     * and by nobody else (ADR 0053). The package is signed, so the repository
+     * already says which images may carry the flag; this is the second half
+     * of the rule: the task that puts it in /bin is the one that may give it
+     * an owner, and a file of /bin that a person can write is a setuid
+     * program that person can replace - which the call of execve refuses, and
+     * the installer says so before the file is there.
+     */
+    if (pkg_image_asks_owner(data, size)) {
+        if (ksys_getuid() != 0u) {
+            pkg_error("%s asks for the identity of its owner: only root installs it",
+                      plan->entry.name);
+            kmm_free(data);
+            return PKG_EPERM;
+        }
+
+        pkg_say("%s asks for the identity of its owner: it runs as root and its caller may not "
+                "write it",
+                plan->entry.name);
     }
 
     if (pkg_mkdir_p(PKG_BINDIR) != PKG_OK) {
@@ -2013,7 +2058,9 @@ static const struct kshell_help g_pkg_help = {
               "  --color auto|always|never --quiet --verbose --help --version\n"
               "\n"
               "A package without a valid signature does not install, and --nosignature\n"
-              "is not a flag. A volume without rename installs in place, with a warning.\n",
+              "is not a flag. A volume without rename installs in place, with a warning.\n"
+              "A program that asks for the identity of its owner (the setuid flag of its\n"
+              "image) installs as root and by root only (ADR 0053).\n",
     .owns_short_h = false,
 };
 

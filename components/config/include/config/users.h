@@ -27,9 +27,10 @@
 
 #include "kernel/types.h"
 
-/* The two files of the accounts. */
+/* The two files of the accounts, and the file of the groups (ADR 0044). */
 #define USERS_PASSWD_PATH "/etc/passwd"
 #define USERS_SHADOW_PATH "/etc/shadow"
+#define USERS_GROUP_PATH "/etc/group"
 
 /* The limits of a record: a name of fifteen characters, a path of a home and
  * a shell of 47, a line of 159 and a file of 511 bytes. The file of a
@@ -59,18 +60,38 @@ struct user_account {
     k_u32_t gid;
 };
 
+/*
+ * One line of /etc/group, `name:gid:member,member` (ADR 0044 §4). The members
+ * are kept as the line wrote them: a task has one gid and no supplementary
+ * list, so nothing of this system reads the list, and a machine that has one
+ * is a change of `struct task` and of every entrance. The format is the one
+ * of POSIX so that the file of this machine is a file of every machine.
+ */
+struct user_group {
+    char name[USERS_NAME_MAX];
+    char members[USERS_FIELD_MAX];
+    k_u32_t gid;
+};
+
 /* The default salt of a record this tree writes, and the password of root of
  * an image of this tree. They are the two halves of the recipe of the first
  * account: `printf 'mox1%s' microos | sha256sum` is the digest of it. */
 #define USERS_DEFAULT_SALT "mox1"
 #define USERS_DEFAULT_PASSWORD "microos"
 
-/* The text of the default /etc/passwd, for a boot that has none. The
+/*
+ * The text of the default /etc/passwd, for a boot that has none. The
  * /etc/shadow of that boot is made beside it: the hash of the password below
- * for root, and `*` for every other account of the file. */
+ * for root, and `*` for every other account of the file. /etc/group of that
+ * boot names the primary group of each account with no member of its own,
+ * because a member list is a list of supplementary groups and a task of this
+ * system has none (ADR 0044 §4).
+ */
 #define USERS_DEFAULT_PASSWD                                                                       \
     "root:0:0:/:/bin/sh\n"                                                                         \
     "guest:7:7:/home/guest:/bin/sh\n"
+
+#define USERS_DEFAULT_GROUP "root:0:\nguest:7:\n"
 
 /*
  * One line of /etc/passwd into an account. The fields are
@@ -88,6 +109,16 @@ bool users_parse_passwd(const char *line, struct user_account *out);
 bool users_parse_shadow(const char *line, char *name, k_size_t name_size, char *hash,
                         k_size_t hash_size);
 
+/*
+ * One line of /etc/group into a group. The fields are `name:gid:members`; an
+ * empty line and a line that begins with '#' are not a record, and neither is
+ * a line with a fourth field, a name that does not fit or a gid that is not a
+ * decimal number of fifteen bits. The members are a comma separated list of
+ * names, each of the shape of a name, or an empty field for a group with no
+ * member.
+ */
+bool users_parse_group(const char *line, struct user_group *out);
+
 /* The digest of a password under a salt, as a line of /etc/shadow writes it:
  * `$sha256$<salt>$<64 hex digits>`. False when the answer does not fit. */
 bool users_hash_make(const char *password, const char *salt, char *out, k_size_t size);
@@ -104,6 +135,16 @@ bool users_hash_check(const char *hash, const char *password);
  * wins. `out` is written only on USERS_OK. */
 int users_find_name(const char *name, struct user_account *out);
 int users_find_uid(k_u32_t uid, struct user_account *out);
+
+/*
+ * The record of a group, by name or by gid, from /etc/group and by the same
+ * rule as the two above: a line that is not a record stops the read with
+ * USERS_EFORMAT, because half of a file of groups is a different set of
+ * groups. USERS_ENOENT when the file has no such line, which is not the same
+ * as a group with no member.
+ */
+int users_find_group(const char *name, struct user_group *out);
+int users_find_gid(k_u32_t gid, struct user_group *out);
 
 /* The hash of a name, as /etc/shadow keeps it. USERS_ENOENT when the file has
  * no line of that name, which is not the same as an empty hash. */

@@ -712,6 +712,7 @@ static int fat_vfs_stat(void *ctx, const char *path, struct vfs_stat *out)
         out->size = entry.size;
         out->mode = 0; /* FAT has no modes of its own */
         out->owner = 0;
+        out->group = 0; /* and no groups either: see the chgrp of the table */
     }
 
     k_mutex_unlock(&vol->lock);
@@ -754,6 +755,7 @@ static int fat_vfs_statx(void *ctx, const char *path, struct vfs_statx *out)
         out->size = entry.size;
         out->mode = 0;
         out->owner = 0;
+        out->group = 0;
         out->mtime = entry.mtime;
         out->ctime = entry.mtime;
     }
@@ -769,6 +771,14 @@ static int fat_vfs_umount(void *ctx)
     return 0;
 }
 
+/*
+ * The groups of a volume of FAT32: there are none. The table leaves chmod,
+ * chown and chgrp empty for that reason, and the VFS answers KERR_NOTSUP -
+ * "this volume has no such attribute" - instead of a zero that would read
+ * back as the group of root and put every object of the volume in it. A
+ * volume of FAT is mounted read-write and keeps no owner, no mode and no
+ * group (ADR 0044 §1).
+ */
 static const struct vfs_operations g_fat_operations = {
     .open = fat_vfs_open,
     .read = fat_vfs_read,

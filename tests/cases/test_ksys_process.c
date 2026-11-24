@@ -758,6 +758,65 @@ static void test_execve(void)
 
     teardown();
 }
+
+/*
+ * The setuid flag of an image (ADR 0053): the parser knows it, and the call
+ * refuses a file that its caller may write - the caller would write the code
+ * that runs as the owner. The image is well formed, so the refusal is the
+ * flag and not the format, and the answer of a file the caller may not write
+ * is the one of a machine that cannot run a program: the gate passed.
+ */
+static void test_execve_setuid(void)
+{
+    static k_u8_t image[K_EXEC_HEADER_SIZE + 4];
+    struct task *self = task_self();
+    k_size_t size = build_image(image);
+
+    ktest_begin("ksys: the setuid image of a file the caller may write is refused");
+
+    setup();
+
+    put_u32(image + 8, K_EXEC_FLAG_SETUID);
+
+    KT_CHECK_INT_EQ(write_file("/suid", image, size), 0);
+    KT_CHECK_INT_EQ(ksys_chmod("/suid", 0777), 0);
+    KT_CHECK_INT_EQ(ksys_chown("/suid", 0), 0);
+
+    /* A guest may write the file: the flag is not a door for it. */
+    task_set_uid(self, 7);
+    task_set_gid(self, 7);
+    KT_CHECK_INT_EQ(ksys_execve("/suid", NULL), KERR_PERM);
+
+    /* The refused call left the credentials of the caller alone. */
+    KT_CHECK_INT_EQ(ksys_geteuid(), 7);
+    KT_CHECK_INT_EQ(task_get_suid(self), 7);
+
+    /* The same image that the caller may not write passes the gate and the
+     * answer is the machine of the test, which runs no programs. */
+    task_set_uid(self, 0);
+    KT_CHECK_INT_EQ(ksys_chmod("/suid", 0755), 0);
+    task_set_uid(self, 7);
+    KT_CHECK_INT_EQ(ksys_execve("/suid", NULL), KERR_NOSYS);
+
+    /* Root may write the file already and is not refused for it: the check is
+     * the door of the caller, not a rule about the file. */
+    task_set_uid(self, 0);
+    KT_CHECK_INT_EQ(ksys_chmod("/suid", 0777), 0);
+    KT_CHECK_INT_EQ(ksys_execve("/suid", NULL), KERR_NOSYS);
+
+    /* A flag this generation does not know is a refusal of the format. */
+    put_u32(image + 8, 0x4u);
+    KT_CHECK_INT_EQ(write_file("/future", image, size), 0);
+    KT_CHECK_INT_EQ(ksys_chmod("/future", 0755), 0);
+    KT_CHECK_INT_EQ(ksys_execve("/future", NULL), KERR_INVAL);
+
+    /* The runner is root for the tests that follow: teardown() forgets the
+     * credentials and the uid of this task is the fixture of the file. */
+    task_set_uid(self, 0);
+    task_set_gid(self, 0);
+
+    teardown();
+}
 #endif /* KERNEL_EXEC */
 
 /* --- signals --- */
@@ -1166,5 +1225,6 @@ void test_ksys_process(void)
     test_clock_and_usage();
 #if KERNEL_EXEC
     test_execve();
+    test_execve_setuid();
 #endif
 }

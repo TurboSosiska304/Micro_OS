@@ -2425,7 +2425,6 @@ static bool cmos_read_unix(k_u64_t *out)
     h = cmos_to_binary((k_u8_t)(hour & 0x7Fu), binary);
     days = cmos_to_binary(day, binary);
     month = (k_u8_t)cmos_to_binary((k_u8_t)(month & 0x1Fu), binary);
-    year = (k_u8_t)cmos_to_binary(year, binary);
 
     if ((status & CMOS_24_HOUR) == 0) {
         /* The 12-hour mode: the high bit is the afternoon, and 12:xx is the
@@ -2438,6 +2437,13 @@ static bool cmos_read_unix(k_u64_t *out)
         }
     }
 
+    /*
+     * The year is converted from BCD here and **once**: a second pass over a
+     * number that is already decimal reads its digits as BCD and gives back
+     * another number - 26 became 0x1A and then 20, 43 became 0x2B and then 31
+     * - so the clock of the machine ran six and twelve years behind (found by
+     * the `date` of the release, which prints a year a person can read).
+     */
     y = cmos_to_binary(year, binary);
 
     {

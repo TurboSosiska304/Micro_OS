@@ -57,7 +57,7 @@ K_EXEC_ARCH_XTENSA=1
 
 usage()
 {
-    echo "usage: $0 [--base <hex>] [--data-base <hex>]" >&2
+    echo "usage: $0 [--base <hex>] [--data-base <hex>] [--setuid]" >&2
     echo "       [--arch x86-64|xtensa] <object.o> <out.mox> <entry-symbol>" >&2
     exit 2
 }
@@ -66,6 +66,7 @@ base=
 data_base=
 arch=x86-64
 arch_number=$K_EXEC_ARCH_X86_64
+flags=0
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -94,6 +95,13 @@ while [ "$#" -gt 0 ]; do
             ;;
         --arch=*)
             arch=${1#--arch=}
+            shift
+            ;;
+        --setuid)
+            # The flag of the header that asks for the identity of the owner
+            # of the file (K_EXEC_FLAG_SETUID, ADR 0053). It is a flag of the
+            # image and not a mode: the nine bits of chmod cannot hold it.
+            flags=$((flags | 2))
             shift
             ;;
         --)
@@ -426,7 +434,7 @@ emit_le32()
 {
     emit_le32 "$K_EXEC_MAGIC"
     emit_le32 "$K_EXEC_VERSION"
-    emit_le32 0
+    emit_le32 "$flags"
     emit_le32 "$entry"
     emit_le32 "$text_aligned"
     emit_le32 "$data_aligned"
@@ -438,4 +446,8 @@ emit_le32()
     head -c $((data_aligned - data_size)) /dev/zero
 } > "$output"
 
-echo "mkprog: $output: $arch, text $text_aligned, data $data_aligned, bss $bss_size, entry $entry"
+if [ "$flags" -ne 0 ]; then
+    echo "mkprog: $output: $arch, text $text_aligned, data $data_aligned, bss $bss_size, entry $entry, flags $flags"
+else
+    echo "mkprog: $output: $arch, text $text_aligned, data $data_aligned, bss $bss_size, entry $entry"
+fi

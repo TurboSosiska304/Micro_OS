@@ -32,7 +32,7 @@
 # second door of stat, ADR 0013).
 
 # The number of the calls, compared with ksys_count().
-count 51
+count 52
 
 # The table: number name arity result.
 #
@@ -98,6 +98,7 @@ ksys 47 brk 1 ssize
 ksys 48 chdir 1 int
 ksys 49 clock_gettime 2 int
 ksys 50 getrusage 1 int
+ksys 51 chgrp 2 int
 
 # The errors (kernel/errno.h). EEXIST and ESRCH share the number -3, which is
 # why there are two names on one line of the header: the frozen table had the
@@ -198,12 +199,13 @@ const K_EXEC_BSS_MAX 1048576
 # ksys_arg_t is the width of an argument of a call, a register of the target:
 # it is a name in this list and not a constant, because the board is 32 bits.
 size 8 ksys_arg_t 8
-size 8 vfs_stat 24
+size 8 vfs_stat 32
 offset 8 vfs_stat inode 0
 offset 8 vfs_stat type 4
 offset 8 vfs_stat size 8
 offset 8 vfs_stat mode 16
 offset 8 vfs_stat owner 20
+offset 8 vfs_stat group 24
 
 size 8 vfs_statx 40
 offset 8 vfs_statx inode 0
@@ -241,6 +243,7 @@ size 8 k_exec_image 72
 offset 8 k_exec_image data 0
 offset 8 k_exec_image size 8
 offset 8 k_exec_image arch 16
+offset 8 k_exec_image setuid 20
 offset 8 k_exec_image entry 24
 offset 8 k_exec_image text_size 32
 offset 8 k_exec_image data_size 40
@@ -253,12 +256,13 @@ offset 8 k_exec_image path 64
 # are four bytes there, and the two times of vfs_statx are eight bytes wide on
 # both machines.
 size 4 ksys_arg_t 4
-size 4 vfs_stat 24
+size 4 vfs_stat 28
 offset 4 vfs_stat inode 0
 offset 4 vfs_stat type 4
 offset 4 vfs_stat size 8
 offset 4 vfs_stat mode 16
 offset 4 vfs_stat owner 20
+offset 4 vfs_stat group 24
 
 size 4 vfs_statx 48
 offset 4 vfs_statx inode 0
@@ -289,16 +293,17 @@ size 4 ksys_rusage 16
 offset 4 ksys_rusage utime_ms 0
 offset 4 ksys_rusage stime_ms 8
 
-size 4 k_exec_image 36
+size 4 k_exec_image 40
 offset 4 k_exec_image data 0
 offset 4 k_exec_image size 4
 offset 4 k_exec_image arch 8
-offset 4 k_exec_image entry 12
-offset 4 k_exec_image text_size 16
-offset 4 k_exec_image data_size 20
-offset 4 k_exec_image bss_size 24
-offset 4 k_exec_image envp 28
-offset 4 k_exec_image path 32
+offset 4 k_exec_image setuid 12
+offset 4 k_exec_image entry 16
+offset 4 k_exec_image text_size 20
+offset 4 k_exec_image data_size 24
+offset 4 k_exec_image bss_size 28
+offset 4 k_exec_image envp 32
+offset 4 k_exec_image path 36
 
 # There is no k_rlimit in 1.0: a task of this system has no limit of its own
 # yet, and the limits are a line of the gate of the release (docs/releases/

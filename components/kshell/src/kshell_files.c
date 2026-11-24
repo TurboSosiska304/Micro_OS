@@ -71,7 +71,7 @@
  * the kernel: which directories hold the commands is a matter of the person
  * at the console, and a program of this system does not inherit it yet.
  */
-#define SHELL_PATH_DEFAULT "/bin:/usr/bin"
+#define SHELL_PATH_DEFAULT "/bin:/bin/ports:/usr/bin"
 #define SHELL_PATH_SIZE 96
 
 static char g_shell_path[SHELL_PATH_SIZE] = SHELL_PATH_DEFAULT;
@@ -1774,7 +1774,15 @@ static const char *exec_error_text(int code)
     }
 
     if (code == -KERR_PERM) {
-        return "not permitted: the file has no execute bit";
+        /*
+         * The two reasons of the call and no third: the x bit of the mode is
+         * not one for this caller, or the image asks for the identity of its
+         * owner and the caller may write the file, which would let the caller
+         * write the program that runs as the owner (ADR 0053). The line of the
+         * kernel before this one says which of the two it was.
+         */
+        return "not permitted: the x bit is not for this caller, or a setuid image the "
+               "caller may write";
     }
 
     if (code == -KERR_NOMEM) {
@@ -1839,6 +1847,41 @@ static int cmd_chown(int argc, char **argv)
     if (rc != 0) {
         kshell_printf("chown: %s: %s\n", path,
                       attr_error_text(microos_errno(), "a uid is 0..32767"));
+        return KSHELL_ERROR;
+    }
+
+    return KSHELL_OK;
+}
+
+/*
+ * The group of an object (ADR 0044). Root gives a file to any group, the
+ * owner of the file gives it to the group of its own task, and a volume of
+ * FAT32 has no groups at all and says so with the sentence of ENOTSUP.
+ */
+static int cmd_chgrp(int argc, char **argv)
+{
+    char path[SHELL_PATH_MAX];
+    unsigned long group = 0;
+    int rc;
+
+    if (argc != 3) {
+        kshell_printf("usage: chgrp <gid> <path>\n");
+        return KSHELL_USAGE;
+    }
+
+    if (!shell_number(argv[1], 10, KSYS_GID_MAX, &group)) {
+        kshell_printf("chgrp: %s: a gid is 0..%u\n", argv[1], (unsigned)KSYS_GID_MAX);
+        return KSHELL_ERROR;
+    }
+
+    if (!shell_resolve(argv[2], path, sizeof(path))) {
+        return path_too_long("chgrp");
+    }
+
+    rc = microos_chgrp(path, (unsigned)group);
+    if (rc != 0) {
+        kshell_printf("chgrp: %s: %s\n", path,
+                      attr_error_text(microos_errno(), "a gid is 0..32767"));
         return KSHELL_ERROR;
     }
 
@@ -1917,6 +1960,7 @@ static int cmd_stat(int argc, char **argv)
     }
 
     kshell_printf("owner: %u\n", (unsigned)info.owner);
+    kshell_printf("group: %u\n", (unsigned)info.group);
     kshell_printf("size: %llu\n", (unsigned long long)info.size);
 
     return KSHELL_OK;
@@ -2682,18 +2726,25 @@ static const struct file_command {
       .usage = "chown <uid> <path>",
       .detail = "The uid is a decimal number, 0..32767.\n"},
      cmd_chown},
+    {"chgrp",
+     {.summary = "change the group of a file",
+      .usage = "chgrp <gid> <path>",
+      .detail = "The gid is a decimal number, 0..32767. Root gives a file to any group;\n"
+                "the owner of a file gives it to the group of its own task. A volume of\n"
+                "FAT32 keeps no group and refuses the call.\n"},
+     cmd_chgrp},
     {"stat",
-     {.summary = "the type, the mode, the owner and the size",
+     {.summary = "the type, the mode, the owner, the group and the size",
       .usage = "stat <path>",
       .detail = "Prints the line of `ls -l` first and then the same numbers as fields, so\n"
-                "that a chmod or a chown is checked without a calculator.\n"},
+                "that a chmod, a chown or a chgrp is checked without a calculator.\n"},
      cmd_stat},
     {"path",
      {.summary = "show or set PATH",
       .usage = "path [directories]",
       .detail = "Without a word the value is printed. With one it is set, the directories\n"
                 "separated by ':'. An empty value is not a list of directories and is\n"
-                "refused; the default is /bin:/usr/bin.\n"},
+                "refused; the default is /bin:/bin/ports:/usr/bin.\n"},
      cmd_path},
 #if KERNEL_EXEC
     {"exec",

@@ -12,6 +12,7 @@
 set(MICRO_OS_KSHELL_SRCS
     "src/kshell.c"
     "src/kshell_files.c"
+    "src/kshell_time.c"
     "src/kshell_memtest.c"
     "src/kshell_mfetch.c"
     "src/kshell_pipe.c"

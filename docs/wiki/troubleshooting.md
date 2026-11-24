@@ -69,7 +69,9 @@ the tools. A row names the sentence you see, the cause and the move.
 
 ## Programs
 
-* `exec: hello: not found in /bin:/usr/bin` — there is no `/bin` here.
+* `exec: hello: not found in /bin:/bin/ports:/usr/bin` — the name is not a
+  file of any directory of `PATH`; `/bin/ports` is where the programs of the
+  SDK live (kilo and the console set of sbase).
   x86-64 has `/bin` in the disk image (`make x86-disk` builds it); `path`
   shows the search list.
 * `this machine cannot run a program` — `execve` is `ENOSYS` on this port.
