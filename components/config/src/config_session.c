@@ -25,6 +25,7 @@
 #include "kernel/sched.h"
 #include "kernel/task.h"
 #include "kernel/version.h"
+#include "kernel/vfs.h"
 #include "kshell/kshell.h"
 
 /* A name that is not in /etc/passwd is hashed against this record anyway, so
@@ -235,6 +236,92 @@ int session_authenticate(const char *given, struct user_account *out, k_u32_t de
     return USERS_EAUTH;
 }
 
+/*
+ * The commands of the console session before its prompt: the file
+ * `/etc/session`, one line a command, the way the scripts of `/etc/init.d` are
+ * commands of a task. The desktop of a machine is the one line `exec /bin/wm`:
+ * the session of the console starts it, the shell waits for it, and the prompt
+ * of the shell comes back when the last window of the desktop closes (ADR
+ * 0054). A machine without the file is the machine of 1.7 and boots to the
+ * prompt, which is what the smoke tests of the shell and of `/bin` read.
+ *
+ * The script runs in this task and not in a task of its own: the desktop is a
+ * foreground program of the session that started it, and a `logout` among its
+ * lines ends the session like a typed one. A session of telnet does not read
+ * the file - the console of the machine is not the terminal of a client.
+ */
+#define SESSION_SCRIPT "/etc/session"
+#define SESSION_SCRIPT_MAX 512
+
+static bool session_startup(void)
+{
+    struct vfs_file file;
+    k_u8_t priv[VFS_FILE_DATA_SIZE];
+    char text[SESSION_SCRIPT_MAX + 1];
+    char line[SESSION_LINE_MAX];
+    int got;
+    int rc;
+    k_size_t at = 0;
+
+    rc = vfs_open(SESSION_SCRIPT, VFS_O_RDONLY, &file, priv);
+    if (rc != 0) {
+        return false;
+    }
+
+    got = vfs_read(&file, text, SESSION_SCRIPT_MAX);
+    (void)vfs_close(&file);
+
+    if (got <= 0) {
+        return false;
+    }
+
+    text[got] = '\0';
+    kinfo("session: the commands of %s are running", SESSION_SCRIPT);
+
+    while (text[at] != '\0') {
+        k_size_t length = 0;
+
+        while (text[at] != '\0' && text[at] != '\n' && length + 1 < sizeof(line)) {
+            line[length++] = text[at++];
+        }
+
+        /* The rest of a line that did not fit is thrown away: half a command
+         * is a different command (the rule of the prompt of the shell). */
+        while (text[at] != '\0' && text[at] != '\n') {
+            at++;
+            length = sizeof(line); /* a line that was cut is not executed */
+        }
+
+        if (text[at] == '\n') {
+            at++;
+        }
+
+        while (length > 0 &&
+               (line[length - 1] == ' ' || line[length - 1] == '\t' || line[length - 1] == '\r')) {
+            length--;
+        }
+
+        while (length > 0 && (line[0] == ' ' || line[0] == '\t')) {
+            memmove(line, line + 1, length);
+            length--;
+        }
+
+        line[length] = '\0';
+
+        if (length == 0 || line[0] == '#' || length >= sizeof(line) - 1u) {
+            continue;
+        }
+
+        kinfo("session: %s", line);
+
+        if (kshell_execute(line) == KSHELL_LOGOUT) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 int session_run(void)
 {
     char line[SESSION_LINE_MAX];
@@ -243,6 +330,10 @@ int session_run(void)
 
     if (tty == TASK_TTY_CONSOLE) {
         session_write_fmt("%s shell ready. Type 'help' for the list of commands.\n", kernel_name());
+
+        if (session_startup()) {
+            return SESSION_EXIT_LOGOUT;
+        }
     }
 
     for (;;) {
