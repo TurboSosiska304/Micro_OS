@@ -40,6 +40,7 @@ help:
 	@echo "  make test       build and run the unit tests (host)"
 	@echo "  make test-asan  the same tests with the address and UB sanitizers"
 	@echo "  make test-tsan  the same tests under the race detector (two cores)"
+	@echo "  make test-valgrind  the suite under valgrind, as the cloud runs it"
 	@echo "  make test-smp   the host tests of the kernel of two cores (KERNEL_SMP)"
 	@echo "  make test-minimal  the host tests with the optional features off"
 	@echo "  make smoke      boot the simulator and check its answers"
@@ -142,6 +143,16 @@ test-asan:
 	cmake --build $(ASAN_DIR)
 	ctest --test-dir $(ASAN_DIR) --output-on-failure
 
+# The suite under the memory checker of the cloud, byte for byte what the
+# workflow runs. It was the gate of the cloud alone and it was red for two
+# days - a checksum over the padding of a record and a `strstr` over the
+# bytes a file did not write - without a single failed check of the suite:
+# a child of a fork inherits the count and its exit code turns into the 42 of
+# `--error-exitcode`, which the case reads as the exit code of its program.
+# A gate of the cloud that can be run here is a gate somebody runs.
+test-valgrind: test
+	valgrind --error-exitcode=42 --track-origins=yes ./$(BUILD_DIR)/tests/microos_tests
+
 # The second host configuration (ADR 0010): the optional features off. It is
 # a target of its own, not a part of `make ci` at first: it proves that the
 # sources still build without the PSRAM, the MOX1 runtime and the network,
@@ -206,7 +217,7 @@ wiki-check:
 # joins the list when `qemu-system-x86_64` is on PATH and is skipped with a
 # message when it is not. A missing optional machine must not fail a run.
 CI_QEMU := $(shell command -v qemu-system-x86_64 2>/dev/null)
-CI_TARGETS := build test test-asan test-tsan test-minimal test-smp smoke coverage
+CI_TARGETS := build test test-asan test-tsan test-minimal test-valgrind test-smp smoke coverage
 ifneq ($(CI_QEMU),)
 CI_TARGETS += x86-smoke x86-root-smoke usb-smoke ports-smoke
 endif

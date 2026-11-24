@@ -327,6 +327,10 @@ static void test_version_legacy_volume(void)
  */
 static void test_record_checksum(void)
 {
+    /* The record is written into a raw span byte for byte, so the padding of
+     * the struct is part of the record: a struct that is not zeroed answers
+     * the checksum with bytes nobody wrote, which is what valgrind of the
+     * cloud reported and a flaky checksum of a record would be. */
     struct mfs_inode inode;
     k_u8_t raw[FORMAT_RECORD];
     k_u32_t crc;
@@ -334,6 +338,7 @@ static void test_record_checksum(void)
     ktest_begin("mfs format: the checksum of a record answers for the whole record");
 
     memset(raw, 0, sizeof(raw));
+    memset(&inode, 0, sizeof(inode));
     inode.flags = MFS_INODE_USED;
     inode.first_block = 0xFFFFFFFFu;
     inode.size = 0;

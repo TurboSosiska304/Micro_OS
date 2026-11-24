@@ -153,7 +153,14 @@ jobs:
           IDF_PATH: ""
         run: make build
 
+      # The env of the container names ESP-IDF, and `make x86-all` builds the
+      # host tree first: a defined IDF_PATH makes that configure take the path
+      # of the firmware, whose python environment is the entrypoint's and not
+      # the shell of the step (the module idf_component_manager disappears).
+      # The host build of the port of x86-64 needs no ESP-IDF at all.
       - name: the complete machine of the x86-64 port
+        env:
+          IDF_PATH: ""
         run: make x86-all
 
       - name: the bundle of dist/

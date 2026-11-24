@@ -344,6 +344,15 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Fixed
 
+- The suite under valgrind, the gate of the cloud, was red for two days
+  without a single failed check: a checksum over the padding of a record
+  (`tests/cases/test_mfs_format.c`) and a `strstr` over the bytes a file of
+  `/proc` did not write (`tests/cases/test_sysfs.c`) read uninitialised
+  memory, and a child of a `fork` inherits the count of its parent, so its
+  exit code became the 42 of `--error-exitcode` and a case that read the exit
+  code of its program read 42 instead of the answer. Both reads are fixed and
+  `make test-valgrind` runs the same command here as the cloud does: 0 errors
+  from 0 contexts, 76 058 checks.
 - A wait of a pipe or of `poll` could sleep for as long as the machine was up:
   `k_wait_block` registers the waiter after the caller has looked at the
   object, so a wake that arrived in that window found no record and was lost,
