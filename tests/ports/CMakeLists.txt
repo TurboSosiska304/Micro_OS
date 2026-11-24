@@ -64,3 +64,15 @@ endforeach()
 # three calls are the library of the tree - and the eleven above do not know
 # it exists.
 add_executable(command command.c)
+
+# kilo: a full-screen editor of somebody else, and the gate of the terminal of
+# ADR 0051. Its source is the release, byte for byte (`kilo/README.md` and
+# `upstream.txt`), and it is built by the SDK with no port layer: the editor
+# asks `isatty`, `tcgetattr`, `tcsetattr`, `cfmakeraw`, `ioctl` and `read`, and
+# the library of this system answers all of them.
+add_executable(kilo kilo/kilo.c)
+
+# The other half of the same gate, and ours as `command` is: the terminal of a
+# program asked in the words a transcript can check - is it a terminal, what is
+# its mode, what is the size of the screen, and does the raw mode go back.
+add_executable(ttyprobe ttyprobe.c)
