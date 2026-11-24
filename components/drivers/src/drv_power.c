@@ -39,6 +39,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "kernel/kmod.h"
+#include "kernel/power.h"
 #include "kshell/kshell.h"
 
 /*
@@ -190,6 +191,40 @@ int drv_power_sleep_until_alarm(void)
     }
 
     return power_sleep_start(alarm_s);
+}
+
+/*
+ * The off of the clean end (ADR 0050): the board keeps its latch through
+ * HOLD and the chip sleeps until BUTTON C. There is no timer and no alarm
+ * on this path - "off" means "until somebody presses the button" - and the
+ * clock's alarm is cleared first for the reason drv_power_off() clears it:
+ * the INT line is part of the latch, and a fired alarm would hold the power
+ * supply closed while the chip slept.
+ *
+ * A board on a battery with no wake source would be gone; a board of this
+ * one wakes on the button, which is the only switch it has.
+ */
+int drv_power_deep_off(void)
+{
+    esp_err_t rc;
+
+    (void)drv_rtc_alarm_clear();
+
+    rc = esp_sleep_enable_ext1_wakeup(1ULL << PIN_WAKE, ESP_EXT1_WAKEUP_ALL_LOW);
+    if (rc != ESP_OK) {
+        return -1;
+    }
+
+    if (gpio_hold_en(PIN_HOLD) != ESP_OK) {
+        return -2;
+    }
+    gpio_deep_sleep_hold_en();
+
+    vTaskDelay(pdMS_TO_TICKS(POWER_QUIET_MS));
+
+    esp_deep_sleep_start();
+
+    return -3;
 }
 
 int drv_power_off(void)
@@ -359,18 +394,18 @@ static int cmd_sleep(int argc, char **argv)
     return KSHELL_ERROR;
 }
 
-/* `power off`: the latch opens; the cable keeps the board alive. */
+/* `power off`: the clean end, then deep sleep; button C wakes the board. */
 static int cmd_poweroff(void)
 {
-    kshell_printf("power off: dropping HOLD (G4)\n");
+    int rc;
 
-    if (drv_power_off() != 0) {
-        kshell_printf("power off: the hold line did not move\n");
+    kshell_printf("power off: no new session, the volumes are synced and the disks flushed\n");
+
+    rc = k_power_shutdown(K_POWER_OFF, false);
+    if (rc != 0) {
+        kshell_printf("power off: refused (rc=%d), the board stays on\n", rc);
         return KSHELL_ERROR;
     }
-
-    kshell_printf("power off: the cable still feeds the board, HOLD is back on\n");
-    kshell_printf("power off: unplug the cable to power the board off\n");
 
     return KSHELL_OK;
 }

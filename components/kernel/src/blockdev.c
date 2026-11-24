@@ -45,6 +45,7 @@
 #include "kernel/errno.h"
 #include "kernel/kmm.h"
 #include "kernel/lock.h"
+#include "kernel/log.h"
 #include "kernel/port.h"
 
 #include <string.h>
@@ -1155,6 +1156,43 @@ const struct k_blockdev *k_blockdev_at(k_size_t index)
     k_port_exit_critical();
 
     return dev;
+}
+
+int k_blockdev_sync_all(void)
+{
+    const struct k_blockdev *devs[K_BLOCKDEV_MAX];
+    k_size_t count = 0;
+    k_size_t i;
+    int rc = 0;
+
+    /*
+     * The table is copied under the critical section and the devices are
+     * asked outside of it: a sync of a disk is a command that waits for an
+     * interrupt, and an interrupt off across it would hold the machine for
+     * the time of a platter.
+     */
+    k_port_enter_critical();
+
+    for (i = 0; i < g_count; i++) {
+        devs[count++] = g_entries[i].dev;
+    }
+
+    k_port_exit_critical();
+
+    for (i = 0; i < count; i++) {
+        const struct k_blockdev *dev = devs[i];
+
+        if (dev == NULL || dev->ops == NULL || dev->ops->sync == NULL) {
+            continue;
+        }
+
+        if (dev->ops->sync(dev->ctx) != 0) {
+            kerror("blockdev: %s did not answer the flush", dev->name);
+            rc = KERR_IO;
+        }
+    }
+
+    return rc;
 }
 
 const struct k_blockdev *k_blockdev_find(const char *name)
