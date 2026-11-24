@@ -468,6 +468,33 @@ static void schedule(void)
 }
 
 /*
+ * Give the CPU back to the context the core booted on - the idle loop of the
+ * core - and return here when the scheduler gives it back.
+ *
+ * The boot context is not a task and is not in a run queue: the scheduler
+ * reaches it only when no task is runnable, and a task that keeps itself
+ * ready waiting for a lock it holds keeps the core from it for good. A mutex
+ * whose owner is that context is therefore a mutex a task may wait for
+ * forever, which is the deadlock a filesystem section long enough for a tick
+ * made real (ADR 0047). A caller that knows whom it waits for asks for the
+ * switch here: the boot context finishes its section and the scheduler
+ * resumes the caller.
+ */
+void port_x86_64_yield_to_idle(void)
+{
+    struct port_cpu *self = this_cpu();
+    k_u64_t flags;
+
+    if (self->current == NULL || self->boot.rsp == 0u) {
+        return;
+    }
+
+    flags = port_save_flags_and_cli();
+    commit_switch(self->current, &self->boot);
+    port_restore_flags(flags);
+}
+
+/*
  * Wait for the next interrupt, or spin when there is no interrupt to wait
  * for. The state of the flag is the whole difference: before the table of
  * the interrupts exists a hlt would stop the machine for good, and after it
