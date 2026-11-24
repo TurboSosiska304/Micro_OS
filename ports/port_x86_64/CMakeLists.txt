@@ -1476,6 +1476,7 @@ add_executable(microos64
     src/blockdev_ram.c
     src/blockdev_module.c
     src/ata.c
+    src/ahci.c
     src/virtio.c
     src/virtio_blk.c
     src/virtio_net.c
