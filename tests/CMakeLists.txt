@@ -52,6 +52,7 @@ if(NOT ESP_PLATFORM)
         cases/test_ksys.c
         cases/test_ksys_process.c
         cases/test_users.c
+        cases/test_session.c
         cases/test_libc.c
         cases/test_kshell.c
         cases/test_kshell_pipe.c

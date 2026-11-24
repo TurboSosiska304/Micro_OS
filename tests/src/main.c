@@ -74,6 +74,7 @@ static void run_tests(void *arg)
     test_ksys();
     test_ksys_process();
     test_users();
+    test_session();
     test_libc();
     test_kshell();
     test_kshell_pipe();
