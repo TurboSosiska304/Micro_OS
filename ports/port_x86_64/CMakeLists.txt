@@ -1497,6 +1497,7 @@ add_executable(microos64
     src/font_spleen.c
     src/pci.c
     src/ps2.c
+    src/acpi.c
     src/xhci.c
     src/usb_storage.c
     src/usb_net.c

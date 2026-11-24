@@ -34,6 +34,7 @@ static void run_tests(void *arg)
     test_partition();
     test_root();
     test_volume();
+    test_power();
     test_render();
     test_task();
     test_sched();

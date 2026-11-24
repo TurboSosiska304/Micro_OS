@@ -860,15 +860,105 @@ static int cmd_modules(int argc, char **argv)
     return problems == 0 ? KSHELL_OK : KSHELL_ERROR;
 }
 
-static int cmd_reboot(int argc, char **argv)
+/* Why the clean end was refused, for the person who typed the command. */
+static const char *power_error_text(int rc)
 {
-    (void)argc;
-    (void)argv;
+    switch (rc) {
+    case KERR_PERM:
+        return "only the root takes the machine down";
+    case KERR_IO:
+        return "a disk did not answer the flush, the data is worth more than the speed";
+    case KERR_BUSY:
+        return "the machine is already going down, or a mount is busy";
+    default:
+        return "the volume or the disk refused to leave";
+    }
+}
 
-    kshell_printf("rebooting...\n");
-    k_reboot();
+/*
+ * The one call under the four commands. The steps of the clean end are the
+ * kernel's (kernel/power.c) and it prints each of them; the shell prints the
+ * sentence of the command, the flag that was given and the reason of a
+ * refusal, so that a person who reads the console knows what happened.
+ */
+static int power_ask(enum k_power_action action, bool force, const char *command)
+{
+    int rc;
+
+    if (force) {
+        kshell_printf("%s: -f, the machine is taken down without a sync\n", command);
+    } else {
+        kshell_printf("%s: the clean end of the machine (%s)\n", command,
+                      k_power_action_name(action));
+    }
+
+    rc = k_power_shutdown(action, force);
+    if (rc != 0) {
+        kshell_printf("%s: refused: %s (rc=%d)\n", command, power_error_text(rc), rc);
+        return KSHELL_ERROR;
+    }
 
     return KSHELL_OK;
+}
+
+static int cmd_shutdown(int argc, char **argv)
+{
+    enum k_power_action action = K_POWER_OFF;
+    bool force = false;
+    int i;
+
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-f") == 0) {
+            force = true;
+        } else if (strcmp(argv[i], "off") == 0) {
+            action = K_POWER_OFF;
+        } else if (strcmp(argv[i], "halt") == 0) {
+            action = K_POWER_HALT;
+        } else if (strcmp(argv[i], "reboot") == 0) {
+            action = K_POWER_REBOOT;
+        } else {
+            kshell_printf("usage: shutdown [-f] [off|halt|reboot]\n");
+            return KSHELL_USAGE;
+        }
+    }
+
+    return power_ask(action, force, "shutdown");
+}
+
+static int cmd_poweroff(int argc, char **argv)
+{
+    bool force = argc == 2 && strcmp(argv[1], "-f") == 0;
+
+    if (argc > 1 && !force) {
+        kshell_printf("usage: poweroff [-f]\n");
+        return KSHELL_USAGE;
+    }
+
+    return power_ask(K_POWER_OFF, force, "poweroff");
+}
+
+static int cmd_halt(int argc, char **argv)
+{
+    bool force = argc == 2 && strcmp(argv[1], "-f") == 0;
+
+    if (argc > 1 && !force) {
+        kshell_printf("usage: halt [-f]\n");
+        return KSHELL_USAGE;
+    }
+
+    return power_ask(K_POWER_HALT, force, "halt");
+}
+
+static int cmd_reboot(int argc, char **argv)
+{
+    bool force = argc == 2 && strcmp(argv[1], "-f") == 0;
+
+    if (argc > 1 && !force) {
+        kshell_printf("usage: reboot [-f]\n");
+        return KSHELL_USAGE;
+    }
+
+    return power_ask(K_POWER_REBOOT, force, "reboot");
 }
 
 static int cmd_clear(int argc, char **argv)
@@ -1082,7 +1172,39 @@ static const struct builtin_command {
       .usage = "abi",
       .detail = "The number and the name of every system call of this kernel.\n"},
      cmd_abi},
-    {"reboot", {.summary = "restart the board", .usage = "reboot"}, cmd_reboot},
+    {"shutdown",
+     {.summary = "stop the machine in an orderly way",
+      .usage = "shutdown [-f] [off|halt|reboot]",
+      .detail = "No new session starts, the tasks are asked to end, the volumes are\n"
+                "synced, every disk is flushed, the mounts are taken down and the\n"
+                "machine goes off (the default), stops or restarts.\n"
+                "  -f  take the machine down without the sync and the flush\n"
+                "A disk that does not answer the flush keeps the machine on: the\n"
+                "data is worth more than the speed of the shutdown (ADR 0041).\n"},
+     cmd_shutdown},
+    {"poweroff",
+     {.summary = "switch the machine off",
+      .usage = "poweroff [-f]",
+      .detail = "The clean end of `shutdown off`: the tasks end, the volumes are synced,\n"
+                "the disks are flushed, the mounts leave and the power goes off. On the\n"
+                "board it is the deep sleep woken by button C; on the host it is the exit\n"
+                "code 0; on x86-64 it is the S5 of ACPI.\n"},
+     cmd_poweroff},
+    {"halt",
+     {.summary = "stop the processor and keep the power",
+      .usage = "halt [-f]",
+      .detail = "The clean end of `shutdown halt`: the tasks end, the volumes are synced\n"
+                "and the disks are flushed, then the processor stops and the machine stays\n"
+                "powered. A person switches it off with the button.\n"},
+     cmd_halt},
+    {"reboot",
+     {.summary = "restart the board",
+      .usage = "reboot [-f]",
+      .detail = "The clean end of `shutdown reboot`: the sync and the flush first, then the\n"
+                "reset of the machine. The ACPI reset register or the reset control port\n"
+                "of the chipset on x86-64, the chip's own reset on the board, the exit code\n"
+                "76 of the host process.\n"},
+     cmd_reboot},
 };
 
 int kshell_init(void)

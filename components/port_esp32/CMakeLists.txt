@@ -116,7 +116,7 @@ idf_component_register(
     # esp_app_format is the description of the application (its version), and
     # it is private to the check of the image. app_update is the OTA slot of
     # the boot, the rollback and the confirmation (ADR 0022).
-    PRIV_REQUIRES wifi heap esp_app_format app_update net
+    PRIV_REQUIRES wifi heap esp_app_format app_update net drivers
     # The port is the other half of the kernel contract: the kernel calls
     # k_port_* and the port calls back into the kernel (the scheduler, the
     # log). ESP-IDF links the components in dependency order and repeats

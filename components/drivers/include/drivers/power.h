@@ -54,6 +54,16 @@ int drv_power_sleep_until_alarm(void);
  */
 int drv_power_off(void);
 
+/*
+ * The off of the clean end (ADR 0050): hold HOLD, arm BUTTON C as the only
+ * wake source and go to deep sleep. The board is off until a person presses
+ * the button; there is no timer and no alarm. The call does not return on
+ * success, and a negative answer is a wake source that could not be armed -
+ * the caller then drops the latch (drv_power_off) rather than sleep with no
+ * way back.
+ */
+int drv_power_deep_off(void);
+
 /* Register the module of the hardware doctor and the commands of the shell. */
 int drv_power_register(void);
 

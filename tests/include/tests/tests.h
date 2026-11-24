@@ -13,6 +13,7 @@ void test_blockdev_view(void);
 void test_partition(void);
 void test_root(void);
 void test_volume(void);
+void test_power(void);
 void test_render(void);
 void test_boot(void);
 void test_version(void);
