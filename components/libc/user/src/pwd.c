@@ -5,13 +5,14 @@
  * of this system. `getpwnam` and `getpwuid` read the file through the door of
  * the system calls and answer a record of it — the same file the shell reads
  * for `login`, so a program and the console cannot disagree about who uid 7
- * is. There is no table of names in the library and none in the kernel.
+ * is. A group is a line of /etc/group: `name:gid:member,member`, and
+ * `getgrgid` and `getgrnam` read it by the same rule (ADR 0044 §4). There is
+ * no table of names in the library and none in the kernel.
  *
  * The kernel keeps a uid and a gid in every task (a fork and a program keep
  * them), so `getuid` and its siblings ask the kernel and answer the identity
  * the program runs with; a program that an administrator gave another name
- * answers with that name. There is no group file yet: `getgrgid` and
- * `getgrnam` know the group of root and nothing else (docs/debts.md).
+ * answers with that name.
  *
  * The structure is the one of POSIX and the strings are static: a caller does
  * not free the answer and does not keep it across a call of this file.
@@ -28,13 +29,21 @@
 
 #include "ulibc_internal.h"
 
-/* The files of the accounts, and the room a record of one takes. A file of a
- * machine of a few people is a few hundred bytes; one that is larger is not
- * read to its end, which is the same rule the shell follows. */
+/* The files of the accounts and a record of one. A file of a machine of a few
+ * people is a few hundred bytes; one that is larger is not read to its end,
+ * which is the same rule the shell follows. */
 #define ULIBC_PASSWD_PATH "/etc/passwd"
+#define ULIBC_GROUP_PATH "/etc/group"
 #define ULIBC_PASSWD_MAX 512
 #define ULIBC_PASSWD_LINE 160
 #define ULIBC_PASSWD_FIELDS 5
+#define ULIBC_GROUP_FIELDS 3
+
+/* The names of one group of /etc/group, and the list of pointers a `struct
+ * group` answers. A member list is the list of the supplementary groups of
+ * POSIX, which a task of this system does not have: it is parsed because the
+ * file has it, and nothing of the system reads it to decide a permission. */
+#define ULIBC_GROUP_MEMBERS 8
 
 static char g_user_name_s[16];
 static char g_user_password_s[2];
@@ -51,15 +60,16 @@ static struct passwd g_user_s = {
     .pw_shell = g_user_shell_s,
 };
 
-static char g_group_name_s[] = "root";
-static char g_group_password_s[] = "";
-static char *const g_group_members_s[] = {NULL};
+static char g_group_name_s[16];
+static char g_group_password_s[2];
+static char g_group_members_s[48];
+static char *g_group_member_list_s[ULIBC_GROUP_MEMBERS];
 
 static struct group g_group_s = {
     .gr_name = g_group_name_s,
     .gr_passwd = g_group_password_s,
     .gr_gid = 0,
-    .gr_mem = (char **)g_group_members_s,
+    .gr_mem = g_group_member_list_s,
 };
 
 /*
@@ -67,7 +77,7 @@ static struct group g_group_s = {
  * file cannot be read: a program that cannot open /etc/passwd has no name and
  * says so with errno, which is the answer of a caller of getpwnam.
  */
-static int read_passwd(char *buf, size_t size)
+static int read_file(const char *path, char *buf, size_t size)
 {
     long fd;
     size_t used = 0;
@@ -78,7 +88,7 @@ static int read_passwd(char *buf, size_t size)
     }
 
     fd = __ulibc_result(
-        __ulibc_syscall6(KSYS_OPEN, (long)(uintptr_t)ULIBC_PASSWD_PATH, KSYS_O_RDONLY, 0, 0, 0, 0));
+        __ulibc_syscall6(KSYS_OPEN, (long)(uintptr_t)path, KSYS_O_RDONLY, 0, 0, 0, 0));
     if (fd < 0) {
         return -1;
     }
@@ -203,7 +213,7 @@ static struct passwd *find(bool by_uid, const char *name, uid_t uid)
     const char *at;
     int length;
 
-    length = read_passwd(text, sizeof(text));
+    length = read_file(ULIBC_PASSWD_PATH, text, sizeof(text));
     if (length < 0) {
         return NULL;
     }
@@ -280,22 +290,124 @@ int setgid(gid_t gid)
     return (int)__ulibc_result(__ulibc_syscall6(KSYS_SETGID, (long)gid, 0, 0, 0, 0, 0));
 }
 
-struct group *getgrgid(gid_t gid)
+/*
+ * The member list of a line of /etc/group into the static list of pointers.
+ * The text is cut in place: the names stay in the buffer of the caller and
+ * the list ends with a NULL. An empty field is a group with no member.
+ */
+static void split_members(char *text)
 {
-    if (gid != 0) {
-        errno = ENOENT;
+    size_t count = 0;
+    char *at = text;
+
+    while (*at != '\0' && count + 1 < ULIBC_GROUP_MEMBERS) {
+        char *comma = strchr(at, ',');
+
+        g_group_member_list_s[count++] = at;
+
+        if (comma == NULL) {
+            break;
+        }
+
+        *comma = '\0';
+        at = comma + 1;
+    }
+
+    g_group_member_list_s[count] = NULL;
+}
+
+/*
+ * One line of /etc/group into the static record: `name:gid:member,member`.
+ * False when the line is not a record of this format, which the caller skips:
+ * a file of groups may hold a line of another system beside its own.
+ */
+static bool parse_group_line(const char *line)
+{
+    const char *at = line;
+    char members[sizeof(g_group_members_s)];
+    unsigned gid;
+
+    if (line[0] == '\0' || line[0] == '\n' || line[0] == '#') {
+        return false;
+    }
+
+    if (!copy_field(&at, g_group_name_s, sizeof(g_group_name_s)) || g_group_name_s[0] == '\0') {
+        return false;
+    }
+    if (!number_field(&at, &gid)) {
+        return false;
+    }
+    if (!copy_field(&at, members, sizeof(members))) {
+        return false;
+    }
+
+    /* A fourth field is a line of another format; a name with a colon in it
+     * was cut by copy_field and is not a name of this file either. */
+    if (*at != '\0' && *at != '\n') {
+        return false;
+    }
+
+    g_group_s.gr_gid = (gid_t)gid;
+
+    if (members[0] != '\0') {
+        memcpy(g_group_members_s, members, strlen(members) + 1);
+        split_members(g_group_members_s);
+    } else {
+        g_group_member_list_s[0] = NULL;
+    }
+
+    return true;
+}
+
+/* The first line of /etc/group that matches, by name or by gid. */
+static struct group *find_group(bool by_gid, const char *name, gid_t gid)
+{
+    static char text[ULIBC_PASSWD_MAX];
+    const char *at;
+    int length;
+
+    length = read_file(ULIBC_GROUP_PATH, text, sizeof(text));
+    if (length < 0) {
         return NULL;
     }
 
-    return &g_group_s;
+    at = text;
+
+    while (*at != '\0') {
+        const char *end = strchr(at, '\n');
+        size_t len = (end != NULL) ? (size_t)(end - at) : strlen(at);
+        char line[ULIBC_PASSWD_LINE];
+
+        if (len < sizeof(line)) {
+            memcpy(line, at, len);
+            line[len] = '\0';
+
+            if (parse_group_line(line)) {
+                if (by_gid ? (g_group_s.gr_gid == gid) : (strcmp(g_group_s.gr_name, name) == 0)) {
+                    return &g_group_s;
+                }
+            }
+        }
+
+        at = (end != NULL) ? end + 1 : at + len;
+    }
+
+    errno = ENOENT;
+
+    return NULL;
+}
+
+struct group *getgrgid(gid_t gid)
+{
+    return find_group(true, NULL, gid);
 }
 
 struct group *getgrnam(const char *name)
 {
-    if (name == NULL || strcmp(name, g_group_name_s) != 0) {
+    if (name == NULL) {
         errno = ENOENT;
         return NULL;
     }
 
-    return &g_group_s;
+    return find_group(false, name, 0);
 }

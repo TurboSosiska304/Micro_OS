@@ -1845,6 +1845,41 @@ static int cmd_chown(int argc, char **argv)
     return KSHELL_OK;
 }
 
+/*
+ * The group of an object (ADR 0044). Root gives a file to any group, the
+ * owner of the file gives it to the group of its own task, and a volume of
+ * FAT32 has no groups at all and says so with the sentence of ENOTSUP.
+ */
+static int cmd_chgrp(int argc, char **argv)
+{
+    char path[SHELL_PATH_MAX];
+    unsigned long group = 0;
+    int rc;
+
+    if (argc != 3) {
+        kshell_printf("usage: chgrp <gid> <path>\n");
+        return KSHELL_USAGE;
+    }
+
+    if (!shell_number(argv[1], 10, KSYS_GID_MAX, &group)) {
+        kshell_printf("chgrp: %s: a gid is 0..%u\n", argv[1], (unsigned)KSYS_GID_MAX);
+        return KSHELL_ERROR;
+    }
+
+    if (!shell_resolve(argv[2], path, sizeof(path))) {
+        return path_too_long("chgrp");
+    }
+
+    rc = microos_chgrp(path, (unsigned)group);
+    if (rc != 0) {
+        kshell_printf("chgrp: %s: %s\n", path,
+                      attr_error_text(microos_errno(), "a gid is 0..32767"));
+        return KSHELL_ERROR;
+    }
+
+    return KSHELL_OK;
+}
+
 /* The nine bits of a mode as ls writes them: a live bit is a letter. */
 static void mode_text(unsigned mode, char out[10])
 {
@@ -1917,6 +1952,7 @@ static int cmd_stat(int argc, char **argv)
     }
 
     kshell_printf("owner: %u\n", (unsigned)info.owner);
+    kshell_printf("group: %u\n", (unsigned)info.group);
     kshell_printf("size: %llu\n", (unsigned long long)info.size);
 
     return KSHELL_OK;
@@ -2682,11 +2718,18 @@ static const struct file_command {
       .usage = "chown <uid> <path>",
       .detail = "The uid is a decimal number, 0..32767.\n"},
      cmd_chown},
+    {"chgrp",
+     {.summary = "change the group of a file",
+      .usage = "chgrp <gid> <path>",
+      .detail = "The gid is a decimal number, 0..32767. Root gives a file to any group;\n"
+                "the owner of a file gives it to the group of its own task. A volume of\n"
+                "FAT32 keeps no group and refuses the call.\n"},
+     cmd_chgrp},
     {"stat",
-     {.summary = "the type, the mode, the owner and the size",
+     {.summary = "the type, the mode, the owner, the group and the size",
       .usage = "stat <path>",
       .detail = "Prints the line of `ls -l` first and then the same numbers as fields, so\n"
-                "that a chmod or a chown is checked without a calculator.\n"},
+                "that a chmod, a chown or a chgrp is checked without a calculator.\n"},
      cmd_stat},
     {"path",
      {.summary = "show or set PATH",

@@ -316,8 +316,9 @@ an `execve` keep them, so `getuid()` answers the identity the caller was
 started with and not a constant. The root of the system is uid 0 (`KSYS_UID`):
 the boot, the kernel itself and the shell of the console, until a person types
 `login` or `su` (ADR 0033). The accounts are `/etc/passwd` (a name, a uid, a
-gid, a home and a shell) and `/etc/shadow` (a salted SHA-256 of a password),
-read by the shell and by `getpwnam`/`getpwuid` of the library - the same file
+gid, a home and a shell), `/etc/shadow` (a salted SHA-256 of a password) and
+`/etc/group` (a name, a gid and a member list), read by the shell and by
+`getpwnam`/`getpwuid`/`getgrgid`/`getgrnam` of the library - the same files
 for the two, so a program and the console cannot disagree about a name.
 
 * a task whose uid is the owner of an object reads the triad of the owner; a

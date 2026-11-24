@@ -440,6 +440,24 @@ int microos_chmod(const char *path, unsigned mode)
     return 0;
 }
 
+int microos_chgrp(const char *path, unsigned group)
+{
+    int rc;
+
+    if (path == NULL || (group & ~LIB_UID_MAX) != 0u) {
+        return fail(KERR_INVAL);
+    }
+
+    rc = ksys_chgrp(path, (k_u32_t)group);
+    if (rc < 0) {
+        return fail(rc);
+    }
+
+    g_errno = 0;
+
+    return 0;
+}
+
 int microos_chown(const char *path, unsigned owner)
 {
     int rc;

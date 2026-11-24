@@ -1054,7 +1054,7 @@ static void test_attr(void)
 
     /* The notes of the help come from the table, once per request. */
     KT_CHECK(strstr(buf, "The mode is the nine bits in octal") != NULL);
-    KT_CHECK(strstr(buf, "the type, the mode, the owner and the size") != NULL);
+    KT_CHECK(strstr(buf, "the type, the mode, the owner, the group and the size") != NULL);
     KT_CHECK(strstr(buf, "help: nosuch: no such command") != NULL);
     /* The long notes of fsck pass the 192 bytes of the print buffer: a
      * sentence from the end is there, whole. The sentence is the one of the

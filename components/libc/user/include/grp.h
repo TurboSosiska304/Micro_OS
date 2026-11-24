@@ -1,8 +1,14 @@
 /*
- * Micro OS — the one group of the system.
+ * Micro OS — the group of a name and of a gid.
  *
- * The same story as `pwd.h`: uid 0 and gid 0 are the only ones the kernel
- * knows, and a listing names the group `root`.
+ * A group is a line of /etc/group, `name:gid:member,member` (ADR 0044 §4),
+ * and `getgrgid` and `getgrnam` read the file the way `getpwuid` reads
+ * /etc/passwd: there is no table of groups in the library and none in the
+ * kernel. A task has one gid and no supplementary list, so the member list is
+ * parsed and returned and decides no permission.
+ *
+ * The structure is the one of POSIX and the strings are static: a caller does
+ * not free the answer and does not keep it across a call of this file.
  */
 #ifndef MICRO_OS_LIBC_USER_GRP_H
 #define MICRO_OS_LIBC_USER_GRP_H

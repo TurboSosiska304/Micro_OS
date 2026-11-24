@@ -198,8 +198,8 @@ The files, on every machine:
 | `df [-h] [path]` | the free blocks and inodes; `-h` in KB/MB. The block is the unit of the volume and says so (`1 KB each`, `512 bytes each`), and a volume that keeps no inodes (FAT32) says `not kept by this volume` |
 | `mount` | the mounted filesystems |
 | `fsck [-y] [fat <point\|device>] [ext2 <point>]` | check a volume: MicroFS, the FAT volume at a point or on a device, or the ext2 volume at a point; `-y` repairs it |
-| `stat <path>` | the type, the mode, the owner and the size |
-| `chmod <mode> <path>`, `chown <uid> <path>` | the mode (octal) and the owner (0..32767) |
+| `stat <path>` | the type, the mode, the owner, the group and the size |
+| `chmod <mode> <path>`, `chown <uid> <path>`, `chgrp <gid> <path>` | the mode (octal), the owner and the group (0..32767) |
 | `path [directories]` | show or set `PATH` |
 | `exec <program> [args...]` | run a program, by a path or found in `PATH` |
 | `kill [-signal] <pid>` | send `INT`, `TERM`, `CHLD` or `PIPE` to a task; TERM by default. `init` and the console itself are refused with a sentence: there is no `getty`, so a signal to the shell would leave the machine without one |
@@ -208,7 +208,8 @@ The files, on every machine:
 | `logout` | end the session of this terminal: the console starts another one as root, a client of telnet is disconnected |
 | `who` | the sessions that are in: the name of `/etc/passwd`, the terminal and the pid (`/proc/sessions`) |
 | `whoami` | the name of the account of the shell |
-| `id` | the uid, the gid and the account of the shell |
+| `id` | the uid and the gid of the shell, the names of `/etc/passwd` and `/etc/group` for them, the home and the shell |
+| `groups` | the names of the groups of the shell (one: a task has one gid) |
 
 The services, where the port registers them:
 

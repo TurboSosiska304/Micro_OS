@@ -19,6 +19,7 @@
 #include <errno.h>
 #include <getopt.h>
 #include <libgen.h>
+#include <grp.h>
 #include <pwd.h>
 #include <string.h>
 #include <unistd.h>
@@ -33,6 +34,7 @@ void test_userland(void);
 /* The text of /etc/passwd the door of this binary answers
  * (tests/cases/userland_door_shim.c). */
 void userland_door_set_passwd(const char *text);
+void userland_door_set_group(const char *text);
 
 static void test_classes(void)
 {
@@ -253,6 +255,56 @@ static void test_users(void)
     KT_CHECK_INT_EQ(setgid(0), 0);
 }
 
+/*
+ * The records of /etc/group, read by the same door: a group is
+ * `name:gid:member,member`, a line that is not a record is skipped, and the
+ * member list is the list of pointers of POSIX - parsed because the file has
+ * it, and deciding nothing because a task of this system has one gid.
+ */
+static void test_groups(void)
+{
+    struct group *group;
+
+    userland_door_set_group("# the groups of the test\n"
+                            "root:0:\n"
+                            "guest:7:alice,bob\n"
+                            "not a record\n");
+
+    group = getgrgid(0);
+    KT_CHECK(group != NULL);
+    if (group != NULL) {
+        KT_CHECK_STR_EQ(group->gr_name, "root");
+        KT_CHECK_INT_EQ(group->gr_gid, 0);
+        KT_CHECK(group->gr_mem[0] == NULL);
+        KT_CHECK_STR_EQ(group->gr_passwd, "");
+    }
+
+    group = getgrgid(7);
+    KT_CHECK(group != NULL);
+    if (group != NULL) {
+        KT_CHECK_STR_EQ(group->gr_name, "guest");
+        KT_CHECK_INT_EQ(group->gr_gid, 7);
+        KT_CHECK(group->gr_mem[0] != NULL && strcmp(group->gr_mem[0], "alice") == 0);
+        KT_CHECK(group->gr_mem[1] != NULL && strcmp(group->gr_mem[1], "bob") == 0);
+        KT_CHECK(group->gr_mem[2] == NULL);
+    }
+
+    group = getgrnam("guest");
+    KT_CHECK(group != NULL);
+    if (group != NULL) {
+        KT_CHECK_INT_EQ(group->gr_gid, 7);
+    }
+
+    KT_CHECK(getgrnam("nobody") == NULL);
+    KT_CHECK(getgrgid(8) == NULL);
+
+    /* A machine without /etc/group has no name of a group at all. */
+    userland_door_set_group(NULL);
+    errno = 0;
+    KT_CHECK(getgrnam("root") == NULL);
+    KT_CHECK_INT_EQ(errno, ENOENT);
+}
+
 static void test_number_order(void)
 {
     KT_CHECK(sbase_numcmp("2", "10") < 0);
@@ -277,5 +329,6 @@ void test_userland(void)
     test_options();
     test_expressions();
     test_users();
+    test_groups();
     test_number_order();
 }

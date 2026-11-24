@@ -820,6 +820,94 @@ static void test_accounts_file(void)
 }
 
 /*
+ * The property: /etc/group is a file of records `name:gid:member,member`, a
+ * line that is not one stops the read, and a group is found by its name and
+ * by its gid and nowhere else (ADR 0044 §4).
+ */
+static void test_accounts_group(void)
+{
+    struct user_group group;
+    struct user_group parsed;
+
+    ktest_begin("users: the groups are the file of /etc/group");
+
+    setup();
+    KT_CHECK_INT_EQ(ksys_mkdir("/etc"), 0);
+
+    /* No file at all is no group at all. */
+    KT_CHECK_INT_EQ(users_find_group("root", &group), USERS_ENOENT);
+    KT_CHECK_INT_EQ(users_find_gid(0, &group), USERS_ENOENT);
+
+    /* The record of the format, with and without a member list. */
+    KT_CHECK(users_parse_group("root:0:\n", &parsed));
+    KT_CHECK_STR_EQ(parsed.name, "root");
+    KT_CHECK_INT_EQ(parsed.gid, 0);
+    KT_CHECK_STR_EQ(parsed.members, "");
+
+    KT_CHECK(users_parse_group("staff:12:alice,bob", &parsed));
+    KT_CHECK_STR_EQ(parsed.name, "staff");
+    KT_CHECK_INT_EQ(parsed.gid, 12);
+    KT_CHECK_STR_EQ(parsed.members, "alice,bob");
+
+    /* A line that is not a record of this file: a comment, an empty line, a
+     * missing field, a fourth field, a gid that is not a number of fifteen
+     * bits, a name with a slash in it, an empty member, a name too long. */
+    KT_CHECK(!users_parse_group("# a comment", &parsed));
+    KT_CHECK(!users_parse_group("", &parsed));
+    KT_CHECK(!users_parse_group("staff:12", &parsed));
+    KT_CHECK(!users_parse_group("staff:12:a:b", &parsed));
+    KT_CHECK(!users_parse_group("staff:x:", &parsed));
+    KT_CHECK(!users_parse_group("staff:40000:", &parsed));
+    KT_CHECK(!users_parse_group("st/aff:12:", &parsed));
+    KT_CHECK(!users_parse_group("staff:12:alice,,bob", &parsed));
+    KT_CHECK(!users_parse_group("staff:12:,alice", &parsed));
+    KT_CHECK(!users_parse_group("a-name-of-sixteen:12:", &parsed));
+
+    write_text(USERS_GROUP_PATH, "# the groups of the test\n"
+                                 "root:0:\n"
+                                 "guest:7:guest\n"
+                                 "staff:12:alice,bob\n");
+
+    KT_CHECK_INT_EQ(users_find_group("guest", &group), USERS_OK);
+    KT_CHECK_STR_EQ(group.name, "guest");
+    KT_CHECK_INT_EQ(group.gid, 7);
+    KT_CHECK_STR_EQ(group.members, "guest");
+
+    KT_CHECK_INT_EQ(users_find_gid(12, &group), USERS_OK);
+    KT_CHECK_STR_EQ(group.name, "staff");
+    KT_CHECK_INT_EQ(users_find_gid(0, &group), USERS_OK);
+    KT_CHECK_STR_EQ(group.name, "root");
+
+    KT_CHECK_INT_EQ(users_find_group("nobody", &group), USERS_ENOENT);
+    KT_CHECK_INT_EQ(users_find_gid(8, &group), USERS_ENOENT);
+    KT_CHECK_INT_EQ(users_find_group(NULL, &group), USERS_ENOENT);
+
+    /* Half a file of groups is a different set of groups: a broken line stops
+     * the read with the error of the file and not with the next record. */
+    write_text(USERS_GROUP_PATH, "garbage\nroot:0:\n");
+    KT_CHECK_INT_EQ(users_find_group("root", &group), USERS_EFORMAT);
+    KT_CHECK_INT_EQ(users_find_gid(0, &group), USERS_EFORMAT);
+
+    write_text(USERS_GROUP_PATH, "root:0:\ngarbage\n");
+    KT_CHECK_INT_EQ(users_find_group("root", &group), USERS_OK);
+    KT_CHECK_INT_EQ(users_find_gid(7, &group), USERS_EFORMAT);
+
+    /* The primary group of an account is the gid of its line of /etc/passwd,
+     * and the default file of the groups names the two accounts of the tree. */
+    write_text(USERS_PASSWD_PATH, USERS_DEFAULT_PASSWD);
+    write_text(USERS_GROUP_PATH, USERS_DEFAULT_GROUP);
+    {
+        struct user_account account;
+
+        KT_CHECK_INT_EQ(users_find_name("guest", &account), USERS_OK);
+        KT_CHECK_INT_EQ(users_find_gid(account.gid, &group), USERS_OK);
+        KT_CHECK_STR_EQ(group.name, "guest");
+    }
+
+    teardown();
+}
+
+/*
  * The property: a name and a password are checked against the two files, and
  * the act of `login` moves the uid, the gid and the directory of the task.
  */
@@ -901,11 +989,13 @@ static void test_accounts_defaults(void)
 
     setup();
 
-    KT_CHECK_INT_EQ(users_defaults("/etc"), 2);
+    KT_CHECK_INT_EQ(users_defaults("/etc"), 3);
     KT_CHECK_INT_EQ(ksys_stat(USERS_PASSWD_PATH, &info), 0);
     KT_CHECK_INT_EQ(info.mode, 0644);
     KT_CHECK_INT_EQ(ksys_stat(USERS_SHADOW_PATH, &info), 0);
     KT_CHECK_INT_EQ(info.mode, 0600);
+    KT_CHECK_INT_EQ(ksys_stat(USERS_GROUP_PATH, &info), 0);
+    KT_CHECK_INT_EQ(info.mode, 0644);
     KT_CHECK_INT_EQ(ksys_stat("/home/guest", &info), 0);
     KT_CHECK_INT_EQ(info.type, 2);
 
@@ -938,6 +1028,7 @@ void test_users(void)
     test_privileged_acts();
     test_accounts_records();
     test_accounts_file();
+    test_accounts_group();
     test_accounts_act();
     test_accounts_defaults();
 }

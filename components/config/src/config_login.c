@@ -198,6 +198,7 @@ static int cmd_id(int argc, char **argv)
 {
     struct task *self = task_self();
     struct user_account account;
+    struct user_group group;
     k_u32_t uid;
     k_u32_t gid;
 
@@ -215,12 +216,60 @@ static int cmd_id(int argc, char **argv)
     uid = task_get_uid(self);
     gid = task_get_gid(self);
 
+    /*
+     * The names of the two numbers are the two files of /etc and nothing
+     * else: a gid without a line in /etc/group is the number alone, the way
+     * `id` of POSIX answers for a group the machine does not name.
+     */
+    if (users_find_gid(gid, &group) != USERS_OK) {
+        group.name[0] = '\0';
+    }
+
     if (users_find_uid(uid, &account) == USERS_OK) {
-        kshell_printf("uid=%u(%s) gid=%u home=%s shell=%s\n", (unsigned)uid, account.name,
-                      (unsigned)gid, (account.home[0] != '\0') ? account.home : "/",
-                      (account.shell[0] != '\0') ? account.shell : "none");
+        if (group.name[0] != '\0') {
+            kshell_printf("uid=%u(%s) gid=%u(%s) home=%s shell=%s\n", (unsigned)uid, account.name,
+                          (unsigned)gid, group.name, (account.home[0] != '\0') ? account.home : "/",
+                          (account.shell[0] != '\0') ? account.shell : "none");
+        } else {
+            kshell_printf("uid=%u(%s) gid=%u home=%s shell=%s\n", (unsigned)uid, account.name,
+                          (unsigned)gid, (account.home[0] != '\0') ? account.home : "/",
+                          (account.shell[0] != '\0') ? account.shell : "none");
+        }
+    } else if (group.name[0] != '\0') {
+        kshell_printf("uid=%u gid=%u(%s) (no account of this uid)\n", (unsigned)uid, (unsigned)gid,
+                      group.name);
     } else {
         kshell_printf("uid=%u gid=%u (no account of this uid)\n", (unsigned)uid, (unsigned)gid);
+    }
+
+    return KSHELL_OK;
+}
+
+/*
+ * The groups of this shell. A task has one gid and no supplementary list
+ * (ADR 0044 §4), so the answer is one name: the name of /etc/group that has
+ * the gid, or the number alone when the file does not name it.
+ */
+static int cmd_groups(int argc, char **argv)
+{
+    struct task *self = task_self();
+    struct user_group group;
+
+    (void)argv;
+
+    if (argc != 1) {
+        kshell_printf("usage: groups\n");
+        return KSHELL_USAGE;
+    }
+
+    if (self == NULL) {
+        return KSHELL_ERROR;
+    }
+
+    if (users_find_gid(task_get_gid(self), &group) == USERS_OK) {
+        kshell_printf("%s\n", group.name);
+    } else {
+        kshell_printf("%u\n", (unsigned)task_get_gid(self));
     }
 
     return KSHELL_OK;
@@ -248,15 +297,23 @@ int users_register(void)
                   "or the password of root under `su`.\n",
     };
     static const struct kshell_help id_help = {
-        .summary = "the user of this shell",
+        .summary = "the user and the group of this shell",
         .usage = "id",
-        .detail = "The uid, the gid and the account of /etc/passwd that the shell runs as.\n",
+        .detail = "The uid and the gid of the shell, the account of /etc/passwd and the group\n"
+                  "of /etc/group that answer for them, the home and the shell of the account.\n",
+    };
+    static const struct kshell_help groups_help = {
+        .summary = "the groups of this shell",
+        .usage = "groups",
+        .detail = "One name: the line of /etc/group whose gid is the gid of the shell. A task\n"
+                  "has one gid and no supplementary group in this system.\n",
     };
     int rc = 0;
 
     rc |= kshell_register_help("login", &login_help, cmd_login);
     rc |= kshell_register_help("su", &su_help, cmd_su);
     rc |= kshell_register_help("id", &id_help, cmd_id);
+    rc |= kshell_register_help("groups", &groups_help, cmd_groups);
 
     return rc;
 }

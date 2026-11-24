@@ -3499,7 +3499,7 @@ def users_checks(loader: str, kernel: str, image: str, timeout: float) -> list:
     )
     expect(
         "su gives the shell the uid and the gid of the account",
-        "uid=7(guest) gid=7 home=/home/guest" in answer("id", 2),
+        "uid=7(guest) gid=7(guest) home=/home/guest" in answer("id", 2),
         answer("id", 2),
     )
     expect(

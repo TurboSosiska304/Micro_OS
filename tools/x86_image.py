@@ -163,6 +163,10 @@ SETTING = "hello\nhostname=x86_64\nconsole=vga"
 ACCOUNTS_SALT = "mox1"
 ACCOUNTS_ROOT_PASSWORD = "microos"
 ACCOUNTS_PASSWD = "root:0:0:/:/bin/sh\nguest:7:7:/home/guest:/bin/sh"
+# The groups of the machine (ADR 0044): `name:gid:member,member`, and the
+# primary group of each account with no member list of its own - a task of
+# this system has one gid and no supplementary group.
+ACCOUNTS_GROUP = "root:0:\nguest:7:"
 
 
 def accounts_shadow() -> str:
@@ -1104,6 +1108,7 @@ def build_image(
     # docs/debts.md (the create path gives it to root), and the smoke test
     # reads the owner of one of them.
     entries.append(tree_text("/etc/passwd", ACCOUNTS_PASSWD))
+    entries.append(tree_text("/etc/group", ACCOUNTS_GROUP))
     entries.append(tree_text("/etc/shadow", accounts_shadow(), 0o600))
     entries.append(tree_dir("/home"))
     entries.append(tree_dir("/home/guest"))
