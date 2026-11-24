@@ -80,6 +80,8 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make uefi` | the volume a firmware boots: a FAT32 ESP with `EFI/BOOT/BOOTX64.EFI`, the kernel and `disk.img` (needs `clang` and `lld-link`, ADR 0037) |
 | `make uefi-run` | that volume in a window under OVMF |
 | `make uefi-smoke` | boot it under OVMF and check the loader, the kernel, the shell and the picture of the GOP frame (26 checks, needs OVMF) |
+| `make uefi-stick` | the stick of a person: one GPT with the ESP of the firmware and, in the partition after it, the MicroFS volume the kernel writes through the USB port (ADR 0056; 90 MB, `dd` it to a stick) |
+| `make uefi-stick-smoke` | boot the stick as a USB disk under OVMF, write a file, take the power away and find the file in the second boot; a foreign second partition stays read-only and the SHA-256 of the image is the same (20 checks, needs OVMF and QEMU's xHCI) |
 | `make x86-iso` | the BIOS ISO (El Torito) with the loader, the kernel and the root image (K13) |
 | `make x86-iso-run` | boot the ISO in a terminal (`-nographic`) |
 | `make x86-iso-smoke` | boot the ISO with `-cdrom` and nothing else, and check the shell and `/bin` |
