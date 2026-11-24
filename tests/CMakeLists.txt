@@ -38,6 +38,7 @@ if(NOT ESP_PLATFORM)
         cases/test_ui.c
         cases/test_ui_windows.c
         cases/test_ui_palette.c
+        cases/test_ui_term.c
         cases/test_ui_wm.c
         cases/test_fb_ops.c
         cases/test_input_debounce.c
@@ -64,6 +65,7 @@ if(NOT ESP_PLATFORM)
         cases/test_settings.c
         cases/test_task.c
         cases/test_guard.c
+        cases/test_mm.c
         cases/test_sched.c
         cases/test_sched_queue.c
         cases/test_smp.c

@@ -46,6 +46,11 @@ bool k_port_exec_contains(const void *ptr, k_size_t size)
     return true;
 }
 
+/* No address space per task, so no window to open for a copy either. */
+void k_port_exec_user_access_begin(void) {}
+
+void k_port_exec_user_access_end(void) {}
+
 /* No address space per task on the port that is not a machine. */
 int k_port_fork_copy(struct task *child)
 {

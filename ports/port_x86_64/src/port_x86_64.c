@@ -883,6 +883,18 @@ int port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs
         if (k_mm_fault(k_mm_current(), address, write) == 0) {
             return 1;
         }
+
+        /*
+         * The stack of a program grows into the room under it (ADR 0052). The
+         * page that is not there is the growth point and not a fault when the
+         * address is in that room and the stack has not reached the ceiling
+         * of the task; a fetch does not grow a stack, and an address below the
+         * room - the guard page and the restorer under it - is the fault of
+         * the program.
+         */
+        if ((error & 0x10u) == 0u && port_x86_64_stack_grow(address)) {
+            return 1;
+        }
     }
 
     /*
@@ -2139,7 +2151,7 @@ const char *k_port_arch(void)
 }
 
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 13u
+#define PORT_API_MINOR 14u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_x86_64 does not speak the contract of this kernel");

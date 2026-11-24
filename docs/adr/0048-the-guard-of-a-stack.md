@@ -287,3 +287,16 @@ port made before the tables are built.
   this decision on the machines with an MMU; the row of the board (K3, a
   program of the board is a reboot) stays open, with the canary as the whole
   of what the SRAM of the board allows.
+
+## Update (2.0): the stack of a program grows, the guard is the end of the room
+
+The stack of a *program* of ring 3 is the one this ADR did not move: the page
+under it was the guard, and a program of two pages of frame was taken down for
+being deeper than 64 KiB. ADR 0052 gives the program a room of 1 MiB under its
+first 64 KiB: the page under the stack of the moment is the growth point, the
+frames are made on the fault up to the memory limit of the task, and the page
+under the room - `0x02eee000` of the window - is the guard of this ADR. A
+recursion that runs past the limit meets it with the same error code (`0x6`)
+and the same status (255), one megabyte lower than in 1.9, and `make
+x86-smoke` reads the address. The stacks of the *kernel* tasks, the split of
+the 2 MiB chunk and the answer to the double fault are unchanged.

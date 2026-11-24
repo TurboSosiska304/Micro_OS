@@ -448,7 +448,7 @@ The limits are the ones of every image of the port and not of the SDK:
 | the bss | 1 MiB (`K_EXEC_BSS_MAX`) | the arena of `malloc` is a block of the bss |
 | the arena | 256 KiB (`make sdk SDK_HEAP=`) | the default of `src/malloc.c`; a bigger one is `share/build-libc.sh --heap` |
 | one read or write | 64 KiB (`KSYS_MAX_IO`) | the block of one system call |
-| the window | 16 MiB | `0x02000000`-`0x03000000`, with a 64 KiB stack at the top |
+| the window | 16 MiB | `0x02000000`-`0x03000000`, with a stack of 64 KiB and a room of 1 MiB for it at the top, and the heap and the mappings below the room (ADR 0052) |
 
 A program that needs another arena, or no float path at all, rebuilds the
 archive from the sources the SDK carries and links that instead:

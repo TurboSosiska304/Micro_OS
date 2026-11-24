@@ -477,3 +477,23 @@ What the higher half does not do yet:
   1.7), but without SMAP: the check and the copy are the same page tables,
   and SMAP/SMEP are a decision of their own for a machine that has them
   (section 10).
+
+## Update (2.0): the policy of a page
+
+This ADR gave the port a map and the audit of it; [ADR 0052](0052-the-policy-of-a-page.md)
+gives the map a policy, and three sentences of the record above have moved:
+
+* the rule of section 9 is now enforced at the edge a program reaches:
+  `mmap(PROT_WRITE | PROT_EXEC)` is `EINVAL` before a page is made
+  (`k_mm_prot_allowed()` of `kernel/mm.c`), and the audit of `exec` stays as
+  the second half - a space that carries such a page is not entered;
+* the stack of a program is not "the last 64 KiB of the window with the page
+  under it as the guard": it starts as 64 KiB and grows into a room of 1 MiB
+  below it, one page per fault and up to the memory limit of the task. The
+  guard is the page under the room, at `0x02eef000` of the window, and the
+  restorer moved down with it. The guard of a *kernel* task is ADR 0048 and
+  did not move;
+* section 10 (no SMEP and no SMAP) was the decision of 1.0 and is kept as it
+  was written: 2.0 turns both on when CPUID advertises them, with the window
+  of `k_port_exec_user_access_begin/end` around every copy through a pointer
+  of a program and the AC flag carried by the context.

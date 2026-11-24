@@ -38,6 +38,7 @@ static void run_tests(void *arg)
     test_render();
     test_task();
     test_guard();
+    test_mm();
     test_sched();
     test_sched_queue();
     test_smp();
@@ -62,6 +63,7 @@ static void run_tests(void *arg)
     test_ui();
     test_ui_windows();
     test_ui_palette();
+    test_ui_term();
     test_ui_wm();
     test_fb_ops();
     test_input_debounce();

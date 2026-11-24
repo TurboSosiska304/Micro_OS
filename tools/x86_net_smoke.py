@@ -72,8 +72,29 @@ PROMPT = "microos> "
 
 # What the kernel has to say before the shell exists, and the one line that
 # proves the driver found the card.
+def board_line() -> str:
+    """The line of the board of the port, read from the source of the machine.
+
+    The x86-64 port is not QEMU's board - the name says what the machine of the
+    port is - and a rename there is one edit of `kmain.c` and not one edit of
+    every smoke of the port (`board: x86_64` since the wire of 2.0).
+    """
+    try:
+        path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "ports/port_x86_64/src/kmain.c",
+        )
+        with open(path, encoding="utf-8") as handle:
+            found = re.search(r'\.name\s*=\s*"([^"]+)"', handle.read())
+        if found is not None:
+            return "board: " + found.group(1)
+    except OSError:
+        pass
+    return "board: x86_64"
+
+
 EXPECTED = [
-    "board: qemu_x86_64",
+    board_line(),
     "virtio0:",
     "link up",
     "net: 10.0.2.15/24, gateway 10.0.2.2, dns 10.0.2.3",

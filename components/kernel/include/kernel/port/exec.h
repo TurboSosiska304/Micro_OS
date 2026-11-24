@@ -100,6 +100,22 @@ void k_port_exec_exit(int code);
 bool k_port_exec_contains(const void *ptr, k_size_t size);
 
 /*
+ * The window around a copy the kernel makes through a pointer of a program.
+ * The check above says that the range is memory of the caller; the copy that
+ * follows is the kernel touching it, and a processor with SMAP refuses a
+ * supervisor access to a page of ring 3 unless AC in RFLAGS is set. The
+ * portable kernel opens the window around the copy and closes it after, so
+ * that the one moment the kernel is allowed into the memory of a program is
+ * the one line that asked for it (ADR 0052, the x86-64 port).
+ *
+ * A port whose programs share the memory of the kernel, and a processor
+ * without SMAP, do nothing: every port implements the pair, and the pair is
+ * empty where there is nothing to open.
+ */
+void k_port_exec_user_access_begin(void);
+void k_port_exec_user_access_end(void);
+
+/*
  * The substance of fork() on a machine with an MMU: the kernel has made the
  * record of the child (`struct task`, a pid, the parent), and the port gives
  * it the context of the caller - the address space, the registers and the

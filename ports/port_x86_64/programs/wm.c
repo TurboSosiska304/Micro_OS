@@ -34,6 +34,7 @@
 #include <poll.h>
 #include <string.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "kernel/errno.h"
@@ -43,10 +44,10 @@
 #include "ui/wm_protocol.h"
 #include "ulibc.h"
 
-/* The windows of one desktop: three programs and the room of one more is
- * more than the screen of 1280 by 800 holds and less than the table of the
- * descriptors of a task (each window is three of them). */
-#define WM_APPS 3
+/* The windows of one desktop: the editor, the file manager, the terminal and
+ * the room of one more. Each window is three descriptors of the server, and
+ * the table of a task is what a desktop of 1280 by 800 runs out of first. */
+#define WM_APPS 4
 
 /* The damage of one turn of the loop: a key, a motion and the raise of two
  * windows are a handful of rectangles, and a list that is full is cleared
@@ -64,6 +65,25 @@
  * right end of the button of the panel: the same cross in a square of paint. */
 #define WM_CLOSE_BOX 12
 #define WM_PANEL_CLOSE 12
+
+/* The clock of the panel: the right end of the bar, the cell of the small font
+ * and twelve bytes of text ("15:04:05" and "3:04:05 PM"). The clock is painted
+ * again once a second and the damage is its own rectangle, so the desk of a
+ * person is not repainted for the second that passed. */
+#define WM_CLOCK_CELL FONT8_WIDTH
+#define WM_CLOCK_PAD 8
+#define WM_CLOCK_TEXT_MAX 12
+
+/* The rectangle of a window the server starts for the terminal: the size of the
+ * editor, at a place that does not cover either window of the default desk. */
+#define WM_TERM_W 640
+#define WM_TERM_H 420
+#define WM_TERM_X 320
+#define WM_TERM_Y 178
+
+/* Alt+T is the key of the server that opens a terminal window, the way Alt+F4
+ * closes the window that has the keys (docs/desktop.md). */
+#define WM_KEY_TERMINAL K_INPUT_KEY_T
 
 /* The pixels of a title bar that a drag keeps on the picture. The bar is the
  * handle of the window and the only thing a person can drag it back by, so a
@@ -109,6 +129,11 @@ struct wm_app {
     char path[40];
     char title[WM_TITLE_MAX];
     struct ui_rect rect;
+
+    /* The window was asked to leave and its program has not exited yet: a
+     * second Alt+F4 or a second square of the bar is a press of nothing, which
+     * is the rule of every button of the interface. */
+    bool closing;
     unsigned char inbox[WM_MESSAGE_BYTES];
     unsigned inbox_bytes;
 };
@@ -157,6 +182,45 @@ static unsigned g_windows_spawned;
 static struct ui_rect g_damage[WM_DAMAGE_MAX];
 static int g_damage_count;
 
+/* The clock of the panel: its format from /etc/console, the text it shows and
+ * the second it was read at. The text of a second that is the same is not
+ * painted again, so a still desk costs nothing. */
+static struct ui_clock g_clock;
+static char g_clock_text[WM_CLOCK_TEXT_MAX];
+static long g_clock_second = -1;
+
+/* The frames of the desk, for the report of the compositor: the first one is
+ * the whole picture and the rest are the damage of a client, of the pointer or
+ * of the clock. The numbers are what `make x86-vga-smoke` reads to compare a
+ * full frame with a damaged one (docs/desktop.md). */
+struct wm_frames {
+    unsigned frames;
+    unsigned long first_pixels;
+    unsigned long first_ms;
+    unsigned long damaged_pixels;
+    unsigned long slowest_ms;
+    unsigned long slowest_pixels;
+
+    /* The largest rectangle painted since the start, by area. */
+    int largest_w;
+    int largest_h;
+
+    /* The same counters since the last F12 of the person: the meter of a
+     * person measures the action between two presses of the key and not the
+     * whole life of the desk. */
+    unsigned since_frames;
+    unsigned long since_pixels;
+    unsigned long since_slowest_ms;
+    int since_largest_w;
+    int since_largest_h;
+};
+
+static struct wm_frames g_frames;
+
+/* The key of the meter of the frames: a person presses it, does a thing and
+ * presses it again, and the two lines say what the thing cost. */
+#define WM_KEY_METER K_INPUT_KEY_F12
+
 /* The pixels of a row of a window, read out of the file of the buffer: one
  * transfer of the system and no more, which is what the file and the device
  * both ask for. */
@@ -178,6 +242,73 @@ static void say_title(const char *prefix, const char *title)
     if (length > 0) {
         (void)write(ULIBC_STDOUT, line, (size_t)length);
     }
+}
+
+/* The milliseconds of the machine after its start: the measurement of a frame
+ * of the compositor is this clock and not the time of a person. */
+static unsigned long now_ms(void)
+{
+    struct timespec moment;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &moment) != 0) {
+        return 0;
+    }
+
+    return (unsigned long)moment.tv_sec * 1000ul + (unsigned long)(moment.tv_nsec / 1000000l);
+}
+
+/* --- the clock of the panel ----------------------------------------------- */
+
+static int panel_top(void);
+static void damage_add(int x, int y, int w, int h);
+static void terminal_spawn(void);
+
+/* The rectangle of the clock at the right end of the panel. It is one
+ * rectangle for the paint, the damage of a tick and the log of a frame. */
+static struct ui_rect clock_rect(void)
+{
+    struct ui_rect rect;
+
+    /* The width of the clock is the width of the *format* and not of the
+     * moment: "3:04:05 PM" is ten cells and "12:04:05 PM" eleven, and a
+     * rectangle that followed the text would leave the tail of the old hour
+     * on the glass for the minute of the tens. */
+    int cells = g_clock.twelve ? (int)sizeof("12:04:05 PM") - 1 : (int)sizeof("00:00:00") - 1;
+
+    rect.w = cells * WM_CLOCK_CELL;
+    rect.h = FONT8_HEIGHT;
+    rect.x = g_width - WM_CLOCK_PAD - rect.w;
+    rect.y = panel_top() + (WM_PANEL_HEIGHT - rect.h) / 2;
+
+    return rect;
+}
+
+/* The clock of the machine in the words of the theme: the second of the wall
+ * clock of the port (CMOS at the boot) and the format of /etc/console. The
+ * damage is the rectangle of the text, so a second of a desk is one row of the
+ * panel and not the whole picture. */
+static void clock_tick(void)
+{
+    struct ui_rect rect;
+    long now = (long)time(NULL);
+    char text[WM_CLOCK_TEXT_MAX];
+
+    if (now == g_clock_second) {
+        return;
+    }
+
+    ui_clock_text(&g_clock, now, text, sizeof(text));
+
+    if (strcmp(text, g_clock_text) == 0) {
+        g_clock_second = now;
+        return;
+    }
+
+    memcpy(g_clock_text, text, strlen(text) + 1u);
+    g_clock_second = now;
+
+    rect = clock_rect();
+    damage_add(rect.x, rect.y, rect.w, rect.h);
 }
 
 /* --- the damage ----------------------------------------------------------- */
@@ -224,10 +355,19 @@ static void damage_add(int x, int y, int w, int h)
         int right = rect.x + rect.w > seen->x + seen->w ? rect.x + rect.w : seen->x + seen->w;
         int bottom = rect.y + rect.h > seen->y + seen->h ? rect.y + rect.h : seen->y + seen->h;
 
-        /* A rectangle that touches one already waiting grows it: a drag of a
-         * window is a hundred small rectangles and the union is one. */
-        if (left <= seen->x + seen->w && seen->x <= right && top <= seen->y + seen->h &&
-            seen->y <= bottom) {
+        /*
+         * A rectangle that touches one already waiting grows it: a drag of a
+         * window is a hundred small rectangles and the union is one.
+         *
+         * The two rectangles touch when the left of one is not past the right
+         * of the other and the top of one is not past the bottom of the other,
+         * each edge of *its own* rectangle: 1.7 compared the two with the
+         * edges of the box they would make together, and the clock of the
+         * panel at the bottom right then touched every window of the desk -
+         * the damage of one key was a frame of the whole screen.
+         */
+        if (rect.x <= seen->x + seen->w && seen->x <= rect.x + rect.w &&
+            rect.y <= seen->y + seen->h && seen->y <= rect.y + rect.h) {
             seen->x = left;
             seen->y = top;
             seen->w = right - left;
@@ -627,12 +767,17 @@ static void panel_paint(const struct ui_rect *area)
         return;
     }
 
-    (void)uiprog_fill(&g_screen, panel.x, panel.y, panel.w, panel.h, g_palette.panel);
+    /* The damage of the panel is painted and not the whole bar: the tick of
+     * the clock is a hundred pixels of the right end, and a person reading the
+     * hour does not see the buttons of the windows painted again. */
+    (void)uiprog_fill(&g_screen, part.x, part.y, part.w, part.h, g_palette.panel);
 
     /* The panel is separated from the desk by one pixel of the border, so a
      * window that goes under it is a window that ends and not a window that
      * fades. */
-    (void)uiprog_fill(&g_screen, panel.x, panel.y, panel.w, 1, g_palette.border);
+    if (part.y == panel.y) {
+        (void)uiprog_fill(&g_screen, part.x, panel.y, part.w, 1, g_palette.border);
+    }
 
     for (index = 0; index < WM_APPS; index++) {
         struct ui_rect button;
@@ -674,6 +819,35 @@ static void panel_paint(const struct ui_rect *area)
             struct ui_rect close = panel_close_rect(index);
 
             cross_paint(close.x, close.y, close.w);
+        }
+    }
+
+    /* The clock of the machine at the right end of the panel, in the ink of
+     * the desk and not in the ink of a label: it is a number of the machine
+     * and not a window of a person. */
+    {
+        struct ui_rect clock = clock_rect();
+        struct ui_rect visible;
+
+        if (ui_rect_intersect(&clock, &part, &visible)) {
+            int cells = clock.w / WM_CLOCK_CELL;
+            int used = (int)strlen(g_clock_text);
+            int x = clock.x;
+
+            /* The hour is drawn against the right end of its rectangle: a
+             * clock of the twelve hours is ten cells in the morning and
+             * eleven at noon, and a number that moved by a cell every hour is
+             * not a clock a person reads. The rectangle of the format is
+             * filled first, so the tail of the old text is the panel. */
+            if (used > cells) {
+                used = cells;
+            }
+            if (used < cells) {
+                x += (cells - used) * WM_CLOCK_CELL;
+            }
+
+            (void)uiprog_text(&g_screen, x, clock.y, g_clock_text, used, g_palette.ink_dim,
+                              g_palette.panel);
         }
     }
 }
@@ -737,14 +911,35 @@ static void cursor_paint(void)
 /* The rectangles of the turn of the loop, and the pointer over them. */
 static void flush_pending(void)
 {
+    unsigned long started;
+    unsigned long painted = 0;
+    unsigned long elapsed;
     int index;
 
     if (g_damage_count == 0) {
         return;
     }
 
+    started = now_ms();
+
     for (index = 0; index < g_damage_count; index++) {
-        scene_paint(&g_damage[index]);
+        struct ui_rect *rect = &g_damage[index];
+
+        scene_paint(rect);
+        painted += (unsigned long)rect->w * (unsigned long)rect->h;
+
+        /* The largest rectangle of the run, by area: a person reading "628x16"
+         * reads a row of a window and not the picture. */
+        if ((long)rect->w * (long)rect->h > (long)g_frames.largest_w * (long)g_frames.largest_h) {
+            g_frames.largest_w = rect->w;
+            g_frames.largest_h = rect->h;
+        }
+
+        if ((long)rect->w * (long)rect->h >
+            (long)g_frames.since_largest_w * (long)g_frames.since_largest_h) {
+            g_frames.since_largest_w = rect->w;
+            g_frames.since_largest_h = rect->h;
+        }
     }
 
     g_damage_count = 0;
@@ -757,6 +952,81 @@ static void flush_pending(void)
      * to see to know where a click will land.
      */
     cursor_paint();
+
+    elapsed = now_ms() - started;
+
+    /*
+     * The frame of the compositor, counted: the first one is the whole picture
+     * and every one after it is the damage of a client, of the pointer or of
+     * the clock. The numbers are the answer to "does a key cost a screen?", and
+     * `make x86-vga-smoke` reads them from the log of the server.
+     */
+    g_frames.frames++;
+    g_frames.since_frames++;
+    g_frames.since_pixels += painted;
+
+    if (elapsed > g_frames.since_slowest_ms) {
+        g_frames.since_slowest_ms = elapsed;
+    }
+
+    if (g_frames.frames == 1u) {
+        g_frames.first_pixels = painted;
+        g_frames.first_ms = elapsed;
+        return;
+    }
+
+    g_frames.damaged_pixels += painted;
+
+    if (elapsed > g_frames.slowest_ms) {
+        g_frames.slowest_ms = elapsed;
+        g_frames.slowest_pixels = painted;
+    }
+
+    if (g_frames.slowest_pixels == 0u) {
+        g_frames.slowest_pixels = painted;
+    }
+}
+
+/* The meter: what the frames since the last press of F12 cost. The line is the
+ * answer of the compositor to "does a key cost a screen?" (docs/desktop.md). */
+static void meter_report(void)
+{
+    char line[192];
+    int length = snprintf(line, sizeof(line),
+                          "wm: the meter: %u frames, %lu px, the largest %dx%d, %lu ms at the "
+                          "worst\n",
+                          g_frames.since_frames, g_frames.since_pixels, g_frames.since_largest_w,
+                          g_frames.since_largest_h, g_frames.since_slowest_ms);
+
+    if (length > 0) {
+        (void)write(ULIBC_STDOUT, line, (size_t)length);
+    }
+
+    g_frames.since_frames = 0u;
+    g_frames.since_pixels = 0ul;
+    g_frames.since_slowest_ms = 0ul;
+    g_frames.since_largest_w = 0;
+    g_frames.since_largest_h = 0;
+}
+
+/* The report of the frames of the desk: the line a person reads to know what
+ * the compositor cost, and the line the smoke test compares. */
+static void frames_report(void)
+{
+    char line[224];
+    unsigned long full = (unsigned long)g_width * (unsigned long)g_height;
+    int length;
+
+    length = snprintf(line, sizeof(line),
+                      "wm: %u frames, the first %lu px of %lu in %lu ms; %lu px after it, "
+                      "%lu ms at the worst; the largest %dx%d\n",
+                      g_frames.frames, g_frames.first_pixels, full, g_frames.first_ms,
+                      g_frames.damaged_pixels, g_frames.slowest_ms, g_frames.largest_w,
+                      g_frames.largest_h);
+
+    if (length > 0) {
+        (void)write(ULIBC_STDOUT, line, (size_t)length);
+    }
 }
 
 /* --- the focus ------------------------------------------------------------ */
@@ -1024,9 +1294,11 @@ static void app_request_close(int index)
     struct wm_message message;
     struct wm_app *app = &g_apps[index];
 
-    if (!app->used) {
+    if (!app->used || app->closing) {
         return;
     }
+
+    app->closing = true;
 
     wm_message_close(&message);
     (void)write(app->events, &message, sizeof(message));
@@ -1437,6 +1709,21 @@ static void event_handle(const struct input_event *event)
         return;
     }
 
+    /* Alt+T opens a terminal window, the door to the programs of /bin of a
+     * desktop that has no other (ADR 0054). */
+    if (g_alt && event->code == WM_KEY_TERMINAL && event->value == INPUT_VALUE_PRESS) {
+        terminal_spawn();
+        return;
+    }
+
+    /* F12 is the meter of the frames: the numbers since the last press, which
+     * is how a person - and the smoke test - measures one action of the desk
+     * against the whole screen. */
+    if (event->code == WM_KEY_METER && event->value == INPUT_VALUE_PRESS) {
+        meter_report();
+        return;
+    }
+
     key_to_focus(event->code, event->value);
 }
 
@@ -1484,8 +1771,23 @@ static void app_spawn(int index, const char *path, char *const argv[], const cha
         return;
     }
 
-    if (pipe(down) != 0 || pipe(up) != 0) {
-        say("wm: no pipes for a window\n");
+    /*
+     * The pipes of a window are four descriptors until the fork and two after
+     * it, and the buffer is one more: a window of this desk is three
+     * descriptors of the server, and the table of a task has sixteen (the
+     * console, the three of the window and the room of the fork). A fourth
+     * window does not fit, and the server says which of the two failed.
+     */
+    if (pipe(down) != 0) {
+        say("wm: the table of the descriptors has no room for a window\n");
+        (void)close(buffer);
+        return;
+    }
+
+    if (pipe(up) != 0) {
+        say("wm: the table of the descriptors has no room for a window\n");
+        (void)close(down[0]);
+        (void)close(down[1]);
         (void)close(buffer);
         return;
     }
@@ -1606,6 +1908,68 @@ static void app_spawn(int index, const char *path, char *const argv[], const cha
     say_title("wm: window ", title);
 }
 
+/*
+ * A terminal window (ADR 0054): `/bin/term` is a client like the editor, with
+ * a rectangle of its own. The server opens it with Alt+T and puts it where the
+ * desk has room: the editor of the default desk is at the top left and the
+ * file manager at the right, so the terminal falls below the editor and the
+ * windows of a desktop that has several of them are laid one under another by
+ * the height of the bar.
+ */
+static int terminal_slot(void)
+{
+    for (int index = 0; index < WM_APPS; index++) {
+        if (!g_apps[index].used) {
+            return index;
+        }
+    }
+
+    return -1;
+}
+
+static unsigned g_terminals;
+
+static void terminal_spawn(void)
+{
+    static char *const term_argv[] = {(char *)"/bin/term", NULL};
+    int slot = terminal_slot();
+    int x = WM_TERM_X;
+    int y = WM_TERM_Y;
+    int w = WM_TERM_W;
+    int h = WM_TERM_H;
+    char title[24];
+
+    if (slot < 0) {
+        say("wm: no room for another window\n");
+        return;
+    }
+
+    if (g_terminals > 0u) {
+        /* A desk with a terminal already: the next one steps down and to the
+         * right, the way a person puts a second sheet of paper. */
+        x += (int)(g_terminals % 3u) * 40;
+        y += (int)(g_terminals % 3u) * 30;
+    }
+
+    if (x + w > g_width) {
+        x = g_width - w;
+    }
+    if (y + h > panel_top()) {
+        y = panel_top() - h - 8;
+    }
+    if (x < 0) {
+        x = 0;
+    }
+    if (y < 0) {
+        y = 0;
+    }
+
+    (void)snprintf(title, sizeof(title), "term %u", g_terminals + 1u);
+
+    app_spawn(slot, "/bin/term", term_argv, title, x, y, w, h);
+    g_terminals++;
+}
+
 /* --- the loop ------------------------------------------------------------- */
 
 /* The windows of the default desktop: the editor on a document and the file
@@ -1679,6 +2043,13 @@ int main(int argc, char *const argv[], char *const envp[])
      * /etc/console colours both, so a machine has one mood and not two. */
     say_title("wm: the palette is ", uiprog_palette(&g_palette));
 
+    /* The clock of the panel is the clock of the machine in the format of the
+     * same file: `/etc/console` holds the mood of the desk and the way it
+     * writes the hour. */
+    uiprog_clock(&g_clock);
+    say(g_clock.twelve ? "wm: the clock is the twelve hours of the theme\n"
+                       : "wm: the clock is the twenty-four hours of the theme\n");
+
     g_width = (int)g_screen.info.width;
     g_height = (int)g_screen.info.height;
 
@@ -1699,8 +2070,21 @@ int main(int argc, char *const argv[], char *const envp[])
     g_pointer_x = g_width / 2;
     g_pointer_y = g_height / 2;
 
-    scene_paint(&(struct ui_rect){0, 0, g_width, g_height});
-    cursor_paint();
+    clock_tick();
+
+    /* The first frame is the whole picture, measured: a person reads the price
+     * of a screen of 1280x800 once, and the damage of a key against it is the
+     * rest of the report (docs/desktop.md). */
+    {
+        unsigned long started = now_ms();
+
+        scene_paint(&(struct ui_rect){0, 0, g_width, g_height});
+        cursor_paint();
+
+        g_frames.frames = 1u;
+        g_frames.first_pixels = (unsigned long)g_width * (unsigned long)g_height;
+        g_frames.first_ms = now_ms() - started;
+    }
 
     desktop_open();
 
@@ -1745,6 +2129,10 @@ int main(int argc, char *const argv[], char *const envp[])
             event_handle(&event);
         }
 
+        /* The second of the machine: the clock of the panel is the only thing
+         * of a still desk that changes, and it changes one rectangle of it. */
+        clock_tick();
+
         children_reap();
         flush_pending();
 
@@ -1761,6 +2149,7 @@ int main(int argc, char *const argv[], char *const envp[])
         }
     }
 
+    frames_report();
     uiprog_close(&g_screen);
 
     say("wm: the desktop is closed, the screen goes back\n");

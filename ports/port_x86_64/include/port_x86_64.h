@@ -310,6 +310,39 @@ int port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs
  */
 void port_x86_64_program_fault(k_u64_t vector, k_u64_t error, k_u64_t address, k_u64_t rip);
 
+/*
+ * The stack of the program that runs grew (ADR 0052): `address` is the page
+ * the program touched, it lies in the room under the stack, and every page
+ * from it up to the lowest page the stack owns becomes a writable, NX page of
+ * the task. The answer is true when the instruction that faulted may be run
+ * again: false when the address is not in the room, when the stack has
+ * reached the limit of the task (KSYS_RLIMIT_MEMORY, `ulimit -m`), or when
+ * the machine has no frame to give - and the caller then treats the fault as
+ * the end of the program (EFAULT with the address in the log).
+ *
+ * A fetch does not grow a stack: an instruction that jumps under the stack
+ * pointer is a fault of the program and not a frame of a call.
+ */
+bool port_x86_64_stack_grow(k_u64_t address);
+
+/*
+ * The window around a copy the kernel makes through a pointer of a program.
+ * A processor with SMAP (CR4 bit 21, ADR 0052) refuses a supervisor read or
+ * write of a page of ring 3 unless AC in RFLAGS is set; the portable kernel
+ * opens the window around its copy and closes it after. A machine without
+ * SMAP - the board, the host, the null port, and an x86-64 without the bit -
+ * does nothing.
+ */
+void port_x86_64_user_access_begin(void);
+void port_x86_64_user_access_end(void);
+
+/* Does this processor have the two bits of SMEP and SMAP, and are they on?
+ * The boot prints the answer, and the attack suite of `make mmu-smoke` reads
+ * the line: a machine without them keeps the supervisor bit of every kernel
+ * page as the boundary, which is the one that matters for ring 3. */
+bool port_x86_64_smep_on(void);
+bool port_x86_64_smap_on(void);
+
 /* --- the descriptors, the page tables and the thread pointer -------------- */
 
 /*
@@ -807,16 +840,30 @@ k_u64_t port_x86_64_dma_phys(const void *buffer);
 #define PORT_X86_64_IDENTITY_LIMIT 0x40000000ull
 
 /*
- * The top of the window, from the last page down: the stack of the program is
- * 64 KiB, the page below it is not mapped (the guard of an overflow), and the
- * page below that holds the restorer of a signal handler. Everything below
- * the restorer belongs to the heap and to `mmap` (kernel/mm.h), and the
- * kernel may not place a mapping above it.
+ * The top of the window, from the last page down. The stack of a program
+ * starts as 64 KiB at the top and grows downwards on demand into the room
+ * below it (ADR 0052): the page under the lowest stack page of the moment is
+ * the point the fault handler grows, and the room ends on a page that is
+ * never mapped - the guard of an overflow. Below the guard is the page of the
+ * restorer of a signal handler, and everything below the restorer belongs to
+ * the image, the heap and `mmap` (kernel/mm.h): the kernel may not place a
+ * mapping above it.
+ *
+ *   USER_LIMIT                 the top of the window
+ *   stack                      STACK_SIZE bytes, the first mapping
+ *   ...                        the room, made page by page on the fault
+ *   STACK_FLOOR_OFFSET         the lowest page a grown stack may own
+ *   GUARD_OFFSET               one page, never mapped: the guard
+ *   RESTORER_OFFSET            one page, code of ring 3
+ *   USER_TOP                   the ceiling of the heap and of `mmap`
  */
 #define PORT_X86_64_USER_STACK_SIZE (64u * 1024u)
 #define PORT_X86_64_USER_STACK_OFFSET                                                              \
     ((PORT_X86_64_USER_LIMIT - PORT_X86_64_USER_BASE) - PORT_X86_64_USER_STACK_SIZE)
-#define PORT_X86_64_USER_GUARD_OFFSET (PORT_X86_64_USER_STACK_OFFSET - 4096u)
+#define PORT_X86_64_USER_STACK_ROOM (1024u * 1024u)
+#define PORT_X86_64_USER_STACK_FLOOR_OFFSET                                                        \
+    (PORT_X86_64_USER_STACK_OFFSET - PORT_X86_64_USER_STACK_ROOM)
+#define PORT_X86_64_USER_GUARD_OFFSET (PORT_X86_64_USER_STACK_FLOOR_OFFSET - 4096u)
 #define PORT_X86_64_USER_RESTORER_OFFSET (PORT_X86_64_USER_GUARD_OFFSET - 4096u)
 #define PORT_X86_64_USER_TOP (PORT_X86_64_USER_BASE + PORT_X86_64_USER_RESTORER_OFFSET)
 

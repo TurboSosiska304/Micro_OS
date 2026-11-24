@@ -30,12 +30,23 @@
  * cell, the most significant bit is the leftmost pixel, and the glyph has
  * `height` rows (the shape of a VGA font and of `port_x86_64_font.h`). The
  * width is at most eight - one byte a row is what a glyph is.
+ *
+ * `scale` is the size of the picture of one pixel of the glyph, and 0 or 1 is
+ * the font at its own size. It is what gives a machine with one table of
+ * glyphs a second size of its text (docs/desktop.md, ADR 0054): the terminal
+ * of the desktop draws the cells of the console at twice their side, which is
+ * a 16x32 cell out of the 8x16 rows and not a second table of glyphs.
  */
 struct ui_font {
     int width;
     int height;
+    int scale;
     const k_u8_t *(*glyph)(char character);
 };
+
+/* The side of one cell of the picture, the scale of the font included. */
+int ui_font_cell_width(const struct ui_font *font);
+int ui_font_cell_height(const struct ui_font *font);
 
 /* A rectangle of pixels of the caller, one row after another. */
 struct ui_canvas {
@@ -77,7 +88,7 @@ struct ui_style {
  * character of a text screen, not the title of a window. */
 #define UI_FRAME_MARGIN 4
 #define UI_FRAME_PAD 6
-#define UI_FRAME_TITLE_HEIGHT(font) (UI_FRAME_MARGIN + (font)->height + 1)
+#define UI_FRAME_TITLE_HEIGHT(font) (UI_FRAME_MARGIN + ui_font_cell_height(font) + 1)
 
 /* --- the canvas ---------------------------------------------------------- */
 
