@@ -53,6 +53,7 @@ import argparse
 import hashlib
 import os
 import re
+import stat
 import shutil
 import socket
 import subprocess
@@ -97,17 +98,43 @@ VALUE_PRESS = 1
 SETTING = ["hello", "hostname=x86_64", "console=vga"]
 
 
-def sha256_file(path: str) -> str:
+def sha256_file(path: str, limit: int = 0) -> str:
     digest = hashlib.sha256()
+    left = limit
 
     with open(path, "rb") as handle:
         while True:
-            chunk = handle.read(1024 * 1024)
+            want = 1024 * 1024 if left <= 0 else min(1024 * 1024, left)
+            chunk = handle.read(want)
             if not chunk:
                 break
             digest.update(chunk)
+            if left > 0:
+                left -= len(chunk)
+                if left == 0:
+                    break
 
     return digest.hexdigest()
+
+
+def sectors_written(path: str) -> int:
+    """The counter of the kernel of the sectors the device has taken.
+
+    A stick of 58 GB is half an hour of reading to hash, and the digest of the
+    whole of it is not the only proof that nothing was written: the kernel
+    counts the sectors the device accepted, and a write that the driver refused
+    never reaches the count. The digest of the head of the medium covers the
+    table of partitions and the first partition; the counter covers the rest.
+    """
+    name = os.path.basename(os.path.realpath(path))
+
+    try:
+        with open(f"/sys/block/{name}/stat", "r", encoding="utf-8") as handle:
+            fields = handle.read().split()
+    except OSError:
+        return -1
+
+    return int(fields[6]) if len(fields) > 6 else -1
 
 
 class Machine:
@@ -591,8 +618,16 @@ def run_stick(loader: str, kernel: str, image: str, workdir: str, stick: str,
         expect("the stick of the person is there", False, stick)
         return checks
 
+    # A medium of tens of gigabytes is hashed at its head and counted at its
+    # tail: the table, the first partition and the counter of the kernel say
+    # that nothing was written without half an hour of reading. A file of an
+    # image is small enough to be hashed whole.
+    medium = stat.S_ISBLK(os.stat(stick).st_mode)
+    limit = 128 * 1024 * 1024 if medium else 0
+
     try:
-        before = sha256_file(stick)
+        before = sha256_file(stick, limit)
+        written_before = sectors_written(stick)
     except OSError as error:
         expect("the stick of the person is readable", False, str(error))
         return checks
@@ -644,7 +679,8 @@ def run_stick(loader: str, kernel: str, image: str, workdir: str, stick: str,
         machine.close()
 
     try:
-        after = sha256_file(stick)
+        after = sha256_file(stick, limit)
+        written_after = sectors_written(stick)
     except OSError as error:
         expect("the stick of the person is readable after the boot", False, str(error))
         return checks
@@ -654,6 +690,13 @@ def run_stick(loader: str, kernel: str, image: str, workdir: str, stick: str,
             "the bytes of the stick of the person are the same",
             before == after,
             f"{before} before, {after} after",
+        )
+    )
+    checks.append(
+        (
+            "the stick of the person took no sector",
+            written_before == written_after,
+            f"{written_before} sectors written before, {written_after} after",
         )
     )
 
