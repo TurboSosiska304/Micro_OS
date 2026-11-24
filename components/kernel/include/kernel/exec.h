@@ -12,6 +12,8 @@
  *    0  magic      the bytes 'M', 'O', 'X', '1'
  *    4  version    2
  *    8  flags      0, a flag this kernel does not know is a refusal
+ *                  (K_EXEC_FLAG_WX names the one flag the format knows and
+ *                  still refuses: a page both writable and executable)
  *   12  entry      offset of the first instruction from the start of the image
  *   16  text_size  bytes of code
  *   20  data_size  bytes of initialised data
@@ -39,6 +41,18 @@
 #define K_EXEC_MAGIC 0x31584F4Du
 #define K_EXEC_VERSION 2u
 #define K_EXEC_HEADER_SIZE 32u
+
+/*
+ * The only flag the format has ever named: an image that asks for one page
+ * both writable and executable. No port of this system builds such a page -
+ * the text is read-only and executable, the data writable and NX (ADR 0007,
+ * ADR 0048) - so the parser refuses the request with a line of its own
+ * instead of the generic "unknown flags". The bit was unknown before this
+ * decision, which means an image that set it was refused then too: naming it
+ * costs no compatibility.
+ */
+#define K_EXEC_FLAG_WX 0x1u
+#define K_EXEC_FLAGS_KNOWN K_EXEC_FLAG_WX
 
 /*
  * The machine of an image, the number of the field `arch`. The list is the

@@ -43,6 +43,18 @@ k_u64_t port_x86_64_task_space(void);
 k_u64_t port_x86_64_task_stack_top(void);
 void port_x86_64_task_set_space(k_u64_t cr3);
 
+/*
+ * The guard page under the stack of a kernel task (ADR 0048). `guard_fault`
+ * is true when the address belongs to the page under the stack of the context
+ * that runs now; `stack_fault` says so on COM1 and in the log and ends that
+ * task with status 255, on the stack of the exception and without ever
+ * returning. The caller is port_x86_64_exception(), which has already read
+ * CR2 and checked that the fault came from ring 0.
+ */
+bool port_x86_64_task_guard_fault(k_u64_t address);
+void port_x86_64_task_stack_fault(k_u64_t address, k_u64_t vector, k_u64_t rip)
+    __attribute__((noreturn));
+
 /* Is the task that runs now a program of ring 3? */
 bool port_x86_64_task_is_user(void);
 

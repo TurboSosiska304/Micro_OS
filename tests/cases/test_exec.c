@@ -267,9 +267,16 @@ static void check_bad_header(void)
     put_u32(&image[4], K_EXEC_VERSION + 1u);
     KT_CHECK_INT_EQ(k_exec_parse(image, size, &parsed), -1);
 
-    /* An unknown flag is a generation this kernel does not know either. */
+    /* The one flag the format names is the request of a page both writable
+     * and executable, and no port of this system builds one: the parser
+     * refuses it with its own sentence. Any other bit is a generation this
+     * kernel does not know either. */
     size = build_image(image);
-    put_u32(&image[8], 1u);
+    put_u32(&image[8], K_EXEC_FLAG_WX);
+    KT_CHECK_INT_EQ(k_exec_parse(image, size, &parsed), -1);
+
+    size = build_image(image);
+    put_u32(&image[8], 0x80000000u);
     KT_CHECK_INT_EQ(k_exec_parse(image, size, &parsed), -1);
 
     /* A file shorter than the header is not an image at all. */

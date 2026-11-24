@@ -63,6 +63,7 @@ if(NOT ESP_PLATFORM)
         cases/test_config.c
         cases/test_settings.c
         cases/test_task.c
+        cases/test_guard.c
         cases/test_sched.c
         cases/test_sched_queue.c
         cases/test_smp.c
