@@ -324,7 +324,7 @@ def one_run(args, index: int) -> dict:
     try:
         with (stdout_to_stderr() if args.json == "-" else contextlib.nullcontext()):
             written = build_image(image, args.build, args.mkfs, IMAGE_MB, fs=args.fs, data_mb=0,
-                                  extra=["--program", program])
+                                  extra=["--program", program], block_size=args.block_size)
 
         if written != 0:
             return {"results": [], "failure": "the image of the run could not be written",
@@ -399,11 +399,12 @@ def one_run(args, index: int) -> dict:
 
 
 def human_summary(results: list, boot_seconds: float, seconds: float, fs: str, runs: int,
-                  out) -> None:
+                  out, block_size: int = 1024) -> None:
     print("Micro OS — the numbers of the x86-64 port", file=out)
     print("=" * 86, file=out)
+    grain = f", blocks of {block_size} bytes" if fs == "ext2" else ""
     print(f"  boot {boot_seconds:.1f} s, the run {seconds:.1f} s over {runs}"
-          f" {'run' if runs == 1 else 'runs'}, the image {IMAGE_MB} MB of {fs}", file=out)
+          f" {'run' if runs == 1 else 'runs'}, the image {IMAGE_MB} MB of {fs}{grain}", file=out)
     print("", file=out)
     print(f"  {'name':<16} {'median':>14} {'unit':<9} {'spread':>7} {'guest':>10} {'host':>9}"
           "  what", file=out)
@@ -427,6 +428,9 @@ def main(argv: list) -> int:
                         help="the bus of the disk of the run (default: ide)")
     parser.add_argument("--fs", choices=("mfs", "ext2"), default="mfs",
                         help="the filesystem of the root (default: mfs)")
+    parser.add_argument("--block-size", type=int, choices=(1024, 2048, 4096), default=1024,
+                        metavar="N",
+                        help="the block of the ext2 volume in bytes (default: 1024)")
     parser.add_argument("--runs", type=int, default=DEFAULT_RUNS, metavar="N",
                         help=f"the boots the median is taken over (default: {DEFAULT_RUNS})")
     parser.add_argument("--dir", default=None, help="where the image of the run is written")
@@ -441,6 +445,9 @@ def main(argv: list) -> int:
 
     if args.runs < 1:
         parser.error("--runs takes a number of boots of at least one")
+
+    if args.block_size != 1024 and args.fs != "ext2":
+        parser.error("--block-size is the grain of the ext2 volume: MicroFS counts 1024")
 
     for path in ("loader32.elf", "microos64.bin", "bench.mox"):
         if not os.path.isfile(os.path.join(args.build, path)):
@@ -519,7 +526,8 @@ def main(argv: list) -> int:
     # error stream, so that neither reader sees the other one's lines.
     human = sys.stderr if args.json == "-" else sys.stdout
 
-    human_summary(results, boot_seconds, seconds_all, args.fs, len(kept), human)
+    human_summary(results, boot_seconds, seconds_all, args.fs, len(kept), human,
+                  args.block_size)
 
     if starved_runs:
         print(f"  the host was busy in run{'' if len(starved_runs) == 1 else 's'} "
@@ -546,6 +554,7 @@ def main(argv: list) -> int:
             "commit": commit(),
             "date": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
             "fs": args.fs,
+            "block_size": args.block_size,
             "image_mb": IMAGE_MB,
             "runs": len(kept),
             "runs_asked": args.runs,

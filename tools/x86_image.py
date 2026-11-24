@@ -599,7 +599,16 @@ def microfs_command(entries: list, image: str, size_mb: int, mkfs: str, epoch: i
 EXT2_START_LBA = 2048
 EXT2_DEFAULT_MB = 64
 EXT2_DATA_MB = 8
+
+# The grain of the volume: the block of the format, the unit every record of
+# ext2 is measured in. 1024 is the block of the image of the release, and the
+# bytes of that image are the bytes of 1.7; 4096 is the grain of ADR 0042 - one
+# operation of the block layer per block of the volume, and the metadata of the
+# volume a quarter of the records for the same file - and a caller that measures
+# it names it with `--block-size 4096` (`tools/x86_volume_smoke.py`,
+# `tools/x86_bench.py`).
 EXT2_BLOCK_BYTES = 1024
+EXT2_BLOCK_CHOICES = (1024, 2048, 4096)
 EXT2_UUID = "00000000-0000-4000-8000-000000000000"
 EXT2_HASH_SEED = "01234567-89ab-cdef-0123-456789abcdef"
 
@@ -756,6 +765,7 @@ def build_ext2_image(
     data_mb: int = EXT2_DATA_MB,
     epoch: int = SOURCE_DATE_EPOCH,
     verbose: bool = False,
+    block_size: int = EXT2_BLOCK_BYTES,
 ) -> int:
     """Write a disk whose root partition is an ext2 volume of the same tree.
 
@@ -798,7 +808,7 @@ def build_ext2_image(
         with open(volume, "wb") as file:
             file.truncate(root_mb * 1024 * 1024)
 
-        blocks = root_mb * 1024 * 1024 // EXT2_BLOCK_BYTES
+        blocks = root_mb * 1024 * 1024 // block_size
         command = [
             mke2fs,
             "-q",
@@ -806,7 +816,7 @@ def build_ext2_image(
             "-t",
             "ext2",
             "-b",
-            str(EXT2_BLOCK_BYTES),
+            str(block_size),
             "-I",
             "256",
             "-m",
@@ -883,7 +893,8 @@ def build_ext2_image(
                 copy_into(disk, data, data_lba * 512)
 
     if verbose:
-        print(f"ext2: {image}, {root_mb} MB of root, {data_mb} MB of data")
+        print(f"ext2: {image}, {root_mb} MB of root, {data_mb} MB of data,"
+              f" blocks of {block_size} bytes")
 
     return 0
 
@@ -901,6 +912,7 @@ def build_image(
     extra: list | None = None,
     fs: str = "mfs",
     data_mb: int = EXT2_DATA_MB,
+    block_size: int = EXT2_BLOCK_BYTES,
 ) -> int:
     """Write the image with the programs of the build and /etc/setting.
 
@@ -1089,7 +1101,7 @@ def build_image(
         if data_mb > 0:
             entries.append(tree_dir("/data"))
 
-        return build_ext2_image(image, entries, size_mb, data_mb, epoch, verbose)
+        return build_ext2_image(image, entries, size_mb, data_mb, epoch, verbose, block_size)
 
     command = microfs_command(entries, image, size_mb, mkfs, epoch)
 
@@ -1135,6 +1147,14 @@ def main(argv: list) -> int:
         default=EXT2_DATA_MB,
         metavar="N",
         help=f"the FAT32 /data partition of the ext2 image (default: {EXT2_DATA_MB}, 0: none)",
+    )
+    parser.add_argument(
+        "--block-size",
+        type=int,
+        choices=EXT2_BLOCK_CHOICES,
+        default=EXT2_BLOCK_BYTES,
+        metavar="N",
+        help="the block of the ext2 volume in bytes (default: 1024; MicroFS is 1024)",
     )
     parser.add_argument(
         "--source-date-epoch",
@@ -1183,6 +1203,10 @@ def main(argv: list) -> int:
     if args.size_mb is None:
         args.size_mb = EXT2_DEFAULT_MB if args.fs == "ext2" else IMAGE_MB
 
+    if args.block_size != EXT2_BLOCK_BYTES and args.fs != "ext2":
+        print("--block-size is the grain of the ext2 volume: MicroFS counts 1024", file=sys.stderr)
+        return 2
+
     extra: list = []
     for pair in args.file:
         extra += ["--file", pair]
@@ -1203,6 +1227,7 @@ def main(argv: list) -> int:
         extra,
         args.fs,
         args.data_mb,
+        args.block_size,
     )
 
     if rc == 0:
