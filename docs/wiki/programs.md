@@ -174,7 +174,8 @@ the mode of a program (`0755`), and no boot creates one:
 | `/bin/ui` | the skeleton of ADR 0028: `/dev/fb0` and `/dev/input0`, a panel, a list of windows and the log; Tab moves the focus and `q` gives the screen back |
 | `/bin/edit` | a text editor (ADR 0030): a file, the arrows and the characters of `/dev/input0`, `Ctrl+S`, `Ctrl+Q`, a title bar and a status line; a modal window asks about an unsaved file |
 | `/bin/fm` | a file manager (ADR 0030): the directory through `readdir`, Enter to open a directory or `/bin/edit`, `d`/Delete with a modal question and `unlink`, `q` |
-| `/bin/wm` | the desktop of 1.7: the wallpaper, the panel, the pointer and the compositor; it starts `/bin/edit` and `/bin/fm` as its windows, a click raises a window, a drag of the title bar moves it, `Alt+F4` closes it ([desktop.md](../desktop.md)) |
+| `/bin/wm` | the desktop of 1.7: the wallpaper, the panel with the clock of the machine, the pointer and the compositor; it starts `/bin/edit` and `/bin/fm` as its windows, a click raises a window, a drag of the title bar moves it, `Alt+F4` closes it, `Alt+T` opens a terminal and `F12` is the meter of its frames ([desktop.md](../desktop.md), ADR 0054) |
+| `/bin/term` | the terminal window of 2.0 (ADR 0054): a line typed in the window is a command of `/bin` on two pipes, the output is the grid of the window, `Ctrl+C` stops the command, `Ctrl+T` is the large text and `Ctrl+Q` leaves |
 
 
 The first six talk to the kernel through `programs/prog.h`, because what they

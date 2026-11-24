@@ -533,11 +533,30 @@ PROMPT = "microos> "
 # What the kernel has to say before the shell exists. The banner is the proof
 # that the whole chain works: the loader, the switch to long mode, the
 # console of COM1, the contract of the port and the boot of the kernel.
+def board_line() -> str:
+    """The line of the board of the port, read from the source of the machine.
+
+    The x86-64 port is not QEMU's board - the name says what the machine of the
+    port is - and a rename there is one edit of `kmain.c` and not one edit of
+    every smoke of the port (`board: x86_64` since the wire of 2.0).
+    """
+    try:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        path = os.path.join(root, "ports/port_x86_64/src/kmain.c")
+        with open(path, encoding="utf-8") as handle:
+            found = re.search(r'\.name\s*=\s*"([^"]+)"', handle.read())
+        if found is not None:
+            return "board: " + found.group(1)
+    except OSError:
+        pass
+    return "board: x86_64"
+
+
 EXPECTED = [
     # The loader checked the trailer of the kernel before it copied a byte of
     # it (ADR 0020); the line is the proof that the check ran and passed.
     "Micro OS: image signature ok (sha-256, ed25519)",
-    "board: qemu_x86_64",
+    board_line(),
     "port: x86_64, contract 1.13",
     "[ ok ] sched",
     "subsystem(s) ready",
@@ -790,7 +809,7 @@ def open_policy_checks(open_build: str) -> list:
     )
     expect(
         "an unsigned image boots under the open policy",
-        "board: qemu_x86_64" in transcript and "the kernel is up" in transcript,
+        board_line() in transcript and "the kernel is up" in transcript,
         transcript[-300:],
     )
     expect(
@@ -818,7 +837,7 @@ def open_policy_checks(open_build: str) -> list:
     )
     expect(
         "a damaged image boots under the open policy",
-        "board: qemu_x86_64" in transcript and "the kernel is up" in transcript,
+        board_line() in transcript and "the kernel is up" in transcript,
         transcript[-300:],
     )
 
@@ -880,7 +899,7 @@ def signature_checks(loader: str, kernel: str) -> list:
     )
     expect(
         "the damaged kernel never reached the kernel",
-        "the kernel is up" not in refused and "board: qemu_x86_64" not in refused,
+        "the kernel is up" not in refused and board_line() not in refused,
         refused[-200:],
     )
 

@@ -551,6 +551,7 @@ add_libc_program(edit
             "${UI_DIR}/src/window.c"
             "${UI_DIR}/src/draw.c"
             "${UI_DIR}/src/palette.c"
+            "${UI_DIR}/src/clock.c"
             "${UI_DIR}/src/keyboard.c"
             "${UI_DIR}/client/src/wm_protocol.c"
             "${UI_DIR}/client/src/wm_client.c"
@@ -571,10 +572,37 @@ add_libc_program(wm
             "${LIBC_USER_DIR}/src/usleep.c"
             "${LIBC_USER_DIR}/src/unistd_ext.c"
             "${LIBC_USER_DIR}/src/stat.c"
+            "${LIBC_USER_DIR}/src/time.c"
             "${UI_DIR}/src/window.c"
             "${UI_DIR}/src/draw.c"
             "${UI_DIR}/src/palette.c"
+            "${UI_DIR}/src/clock.c"
             "${UI_DIR}/src/keyboard.c"
+            "${UI_DIR}/client/src/wm_protocol.c"
+            "${UI_DIR}/client/src/wm_client.c"
+    INCLUDES ${UI_INCLUDES}
+)
+
+# --- /bin/term, the terminal window of the desktop (2.0, ADR 0054) ----------
+#
+# The window that runs the programs of /bin: a client of the server like the
+# editor, a grid of cells of `components/ui/src/term.c`, and a child process on
+# a pair of pipes. The grid is the portable half of the terminal and the host
+# test holds it (`tests/cases/test_ui_term.c`); this program is the picture of
+# the cells and the pipes.
+add_libc_program(term
+    MAIN "${PROGRAM_DIR}/term.c"
+    SOURCES "${PROGRAM_DIR}/uiprog.c"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/font_spleen.c"
+            "${LIBC_USER_DIR}/src/usleep.c"
+            "${LIBC_USER_DIR}/src/unistd_ext.c"
+            "${LIBC_USER_DIR}/src/stat.c"
+            "${UI_DIR}/src/window.c"
+            "${UI_DIR}/src/draw.c"
+            "${UI_DIR}/src/palette.c"
+            "${UI_DIR}/src/clock.c"
+            "${UI_DIR}/src/keyboard.c"
+            "${UI_DIR}/src/term.c"
             "${UI_DIR}/client/src/wm_protocol.c"
             "${UI_DIR}/client/src/wm_client.c"
     INCLUDES ${UI_INCLUDES}
@@ -592,6 +620,7 @@ add_libc_program(fm
             "${UI_DIR}/src/window.c"
             "${UI_DIR}/src/draw.c"
             "${UI_DIR}/src/palette.c"
+            "${UI_DIR}/src/clock.c"
             "${UI_DIR}/src/keyboard.c"
             "${UI_DIR}/client/src/wm_protocol.c"
             "${UI_DIR}/client/src/wm_client.c"
