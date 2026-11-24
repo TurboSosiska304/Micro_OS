@@ -34,6 +34,20 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Added
 
+- The disk of a chipset, on the SATA controller of a laptop (ADR 0041):
+  `ports/port_x86_64/src/ahci.c` speaks class 01/06 of the PCI bus with its
+  window of registers above the identity map (CAP/GHC/IS/PI, a command list
+  and a FIS area per port, a PRDT of physical pages), reads the identify data
+  of the drive and the table of its partitions (MBR and GPT, the parser of the
+  kernel), mounts the volume of the first partition as the root of the machine
+  and runs `/bin/hello` out of it. The disk is **read-only**: the rule of
+  `components/kernel/src/volume.c` refuses every write of a volume this system
+  did not format and `/etc/volumes` does not name, a volume of another system
+  (btrfs, ext4, NTFS, XFS) is refused at the mount, and the table of the
+  partitions is never written. `make ahci-smoke` boots the image on a q35
+  machine and proves it twice by the SHA-256 of the whole image before and
+  after the boot - once for the volume of this system, once for the volume of
+  btrfs.
 - The palette of the desktop (`components/ui/include/ui/palette.h`): the
   server of `/bin/wm` and the programs of the interface paint the roles of a
   theme - a slate desk with an azure accent, or the light theme of

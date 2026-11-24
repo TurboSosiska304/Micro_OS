@@ -32,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format sdk idf-check idf-build idf-flash idf-monitor idf-size bundle bundle-board bundle-x86 x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-root-smoke x86-volume-smoke uefi uefi-run uefi-smoke uefi-stick x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-fs-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak x86-smp-smoke soak-smp bench
+.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format sdk idf-check idf-build idf-flash idf-monitor idf-size bundle bundle-board bundle-x86 x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-root-smoke x86-volume-smoke uefi uefi-run uefi-smoke uefi-stick x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke ahci-smoke x86-fs-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak x86-smp-smoke soak-smp bench
 
 help:
 	@echo "Micro OS — available targets:"
@@ -76,6 +76,9 @@ help:
 	@echo "  make x86-run-disk-serial  the same disk in a terminal (-nographic)"
 	@echo "  make x86-disk-smoke two boots on one disk image, a file survives both"
 	@echo "                  (X86_DISK_BUS=virtio puts the disk on the virtio device)"
+	@echo "  make ahci-smoke  the same image on the SATA controller of a chipset: the"
+	@echo "                  volume is mounted read-only and the SHA-256 of the image"
+	@echo "                  is the same before and after (ADR 0041)"
 	@echo "  make x86-fs-smoke  rename, rmdir, fsck ext2 and the SQLite journal"
 	@echo "  make x86-net-smoke   the network: ping, UDP and HTTP on QEMU user-net"
 	@echo "  make x86-iso    the bootable medium: CD and stick, BIOS and UEFI (K13)"
@@ -554,6 +557,20 @@ x86-run-disk-serial: x86-build $(X86_DISK_IMAGE)
 
 x86-disk-smoke: x86-disk
 	python3 tools/x86_disk_smoke.py --image $(X86_BUILD)/disk-smoke.img --disk $(X86_DISK_BUS)
+
+# The disk of a laptop (ADR 0041): the same image of `make x86-disk` on the
+# SATA controller of a chipset, in a machine of the q35 family that has no IDE
+# channel at all. The kernel finds the controller (class 01/06), reads the
+# identify data, the table and the volume of the first partition, and mounts
+# it read-only: the volume carries the header of MicroFS and `/etc/volumes`
+# does not name it, so the rule refuses every write. The tool proves it twice:
+# a write of the shell is refused with the sentence of the rule, and the
+# SHA-256 of the whole image is the same before and after the boot. The second
+# boot carries the magic of btrfs where the volume was - a disk of another
+# system - and the mount is refused, the machine stops, and the image is again
+# byte for byte the one the tool wrote.
+ahci-smoke: x86-build x86-disk
+	python3 tools/x86_ahci_smoke.py --image $(X86_PROGRAMS_IMAGE) --build $(X86_BUILD)
 
 # The filesystem of 1.4: rename and rmdir through the programs of /bin,
 # `fsck ext2 -y` on a broken image (and e2fsck of the host after it), and the

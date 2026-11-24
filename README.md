@@ -168,6 +168,13 @@ Micro_OS/
   of its owner, not on the open Internet. This is a decision of 1.0, not a
   missing build ([ADR 0011](docs/adr/0011-versioning-and-1.0.md)); the
   security model is in [SECURITY.md](SECURITY.md).
+* **A disk this system did not format is read-only.** The SATA controller of
+  a chipset finds the disk of a laptop, mounts the volume of its first
+  partition and writes nothing: a volume is writable only when its superblock
+  carries the identifier of this system **and** `/etc/volumes` names it, and
+  the write path of the release is not open yet
+  ([ADR 0041](docs/adr/0041-a-disk-nobody-formatted.md)). NVMe is not there
+  ([docs/plan-1.8.md](docs/plan-1.8.md), M2).
 * **The board has limits of its own**: no PMIC, 8 MB of flash with two
   application slots (the update is over USB), a 200 mAh battery. They are in
   [docs/ports/esp32](docs/ports/esp32/README.md).
