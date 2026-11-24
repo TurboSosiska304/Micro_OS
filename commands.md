@@ -45,6 +45,8 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make test` | build and run the unit tests through `ctest` |
 | `make test-asan` | the same tests with the address and UB sanitizers, in `build-asan/` |
 | `make test-tsan` | the same tests under the race detector on two cores, in `build-tsan/` |
+| `make test-minimal` | the second host configuration: the optional features off, so that a symbol only one feature asked for cannot hide (`build-minimal/`) |
+| `make test-valgrind` | the suite under the memory checker of the cloud, byte for byte the command the workflow runs (`--error-exitcode=42 --track-origins=yes`); a child of a `fork` inherits the count, so its exit code is 42 and a case reads that |
 | `make sim` | build and run the kernel simulator `build-host/ports/port_host/microos_sim` |
 | `make smoke` | boot the simulator and check the shell, the filesystem and the network (needs `make build` first) |
 | `make coverage` | the host build with `--coverage`, the tests, the simulator and the gcov report of `components/kernel` (70% of lines) |
@@ -82,7 +84,7 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make x86-user` | build the complete machine and its release tar, unpack the tar and start it (the artifact a person downloads; no ESP-IDF needed) |
 | `make x86-user-serial` | the same tar with the serial console and no window |
 | `make bundle-x86` | the tar of the x86-64 machine alone into `dist/`, without the firmware build |
-| `make ci` | `build`, `test`, `test-asan`, `test-tsan`, `test-smp`, `smoke`, `coverage`, `x86-smoke`, `x86-root-smoke`, `usb-smoke` and `ports-smoke` when QEMU is there, `reproducible`, `integrity` — run it before pushing |
+| `make ci` | `build`, `test`, `test-asan`, `test-tsan`, `test-minimal`, `test-smp`, `smoke`, `coverage`, `x86-smoke`, `x86-root-smoke`, `usb-smoke` and `ports-smoke` when QEMU is there, `reproducible`, `integrity` — run it before pushing; the cloud adds valgrind, `ahci-smoke`, `nvme-smoke` and the firmware |
 
 The same build by hand:
 
