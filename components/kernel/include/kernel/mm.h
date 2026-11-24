@@ -23,7 +23,11 @@
  *
  * A mapping may not cross the heap or the top, and `brk` may not cross a
  * mapping: both answer ENOMEM with the break where it was, which is the
- * refusal of POSIX and not a panic of the kernel.
+ * refusal of POSIX and not a panic of the kernel. The memory of a program is
+ * also bounded by the limit of the task that asked for it
+ * (KSYS_RLIMIT_MEMORY, `ulimit -m`): the heap is accounted by the allocator
+ * as it grows (`brk`), and the bytes of an anonymous mapping are counted when
+ * the mapping is made, so the two calls stop at the same ceiling.
  */
 #ifndef MICRO_OS_KERNEL_MM_H
 #define MICRO_OS_KERNEL_MM_H
@@ -49,9 +53,12 @@
 #define K_MM_ANONYMOUS 0x04u
 
 /* The marks the kernel puts on a region it made itself: the image of a
- * program and the heap of its `brk`. They are not flags of the ABI. */
+ * program, the heap of its `brk`, and the anonymous mapping whose bytes were
+ * counted against the budget of the task that asked for it. They are not flags
+ * of the ABI. */
 #define K_MM_IMAGE 0x0100u
 #define K_MM_HEAP 0x0200u
+#define K_MM_CHARGED 0x0400u
 
 /* One region of an address space. The records live in the heap of the kernel
  * and the list is in the order of the addresses. */
@@ -75,6 +82,16 @@ typedef k_u64_t k_mm_space_t;
 
 /* The space of the caller. */
 k_mm_space_t k_mm_current(void);
+
+/*
+ * The policy of a page (ADR 0052): a page of a program is code or it is data,
+ * never both. `prot` is the three bits of the ABI and the answer is false when
+ * it asks for a page that is writable and executable at once - the refusal of
+ * `mmap(PROT_WRITE | PROT_EXEC)` and the rule every region of the kernel obeys
+ * when it is made. A machine whose processor has the bits of NX needs no
+ * second check: this is the map that keeps the page from ever carrying both.
+ */
+bool k_mm_prot_allowed(k_u32_t prot);
 
 /*
  * A new mapping of `len` bytes with the protection and the flags of the ABI.

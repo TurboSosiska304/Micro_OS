@@ -238,6 +238,16 @@ bool k_port_exec_contains(const void *ptr, k_size_t size)
     return true;
 }
 
+/* A program of the board is a task of the kernel with no page of its own
+ * under a supervisor bit: the window of a copy is empty. */
+void k_port_exec_user_access_begin(void)
+{
+}
+
+void k_port_exec_user_access_end(void)
+{
+}
+
 /* Without an MMU the child shares the memory: the kernel's placeholder. */
 int k_port_fork_copy(struct task *child)
 {

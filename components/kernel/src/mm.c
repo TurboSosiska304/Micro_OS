@@ -46,6 +46,8 @@ struct k_mm_space {
     struct k_mm_region *regions;
     k_u64_t brk;      /* the current end of the heap */
     k_u64_t brk_base; /* where the heap began, the end of the image */
+    k_u64_t mapped;   /* the bytes of the anonymous mappings, a budget of the
+                       * task that made them (ADR 0052) */
 };
 
 static struct k_mm_space g_spaces[TASK_MAX_TASKS];
@@ -55,6 +57,20 @@ static struct k_mm_space g_spaces[TASK_MAX_TASKS];
 k_mm_space_t k_mm_current(void)
 {
     return k_port_mm_supported() ? k_port_mm_current() : 0;
+}
+
+/*
+ * A page is code or it is data (ADR 0052). The rule is the one the tables of
+ * every program already carry - a page of the text is executable and not
+ * writable, every data page, the stack, the arena and the heap are writable
+ * and NX - and here it is stated once, where a mapping is asked for, so that
+ * a program cannot ask the kernel for the one page the processor refuses to
+ * build honestly.
+ */
+bool k_mm_prot_allowed(k_u32_t prot)
+{
+    return (prot & (k_u32_t)(K_MM_PROT_WRITE | K_MM_PROT_EXEC)) !=
+           (k_u32_t)(K_MM_PROT_WRITE | K_MM_PROT_EXEC);
 }
 
 static struct k_mm_space *space_find(k_mm_space_t handle)
@@ -90,6 +106,7 @@ static struct k_mm_space *space_get(k_mm_space_t handle)
             g_spaces[i].regions = NULL;
             g_spaces[i].brk = 0;
             g_spaces[i].brk_base = 0;
+            g_spaces[i].mapped = 0;
             return &g_spaces[i];
         }
     }
@@ -195,6 +212,22 @@ static bool region_is_shared(const struct k_mm_region *region)
 static bool region_is_writable(const struct k_mm_region *region)
 {
     return (region->prot & K_MM_PROT_WRITE) != 0;
+}
+
+/* A region leaves the space: the bytes it counted against the budget of the
+ * task that made it go with it, so a program that maps and unmaps a window in
+ * a loop pays for the window and not for the number of windows it ever had. */
+static void region_uncharge(struct k_mm_space *space, const struct k_mm_region *region)
+{
+    if ((region->flags & K_MM_CHARGED) == 0) {
+        return;
+    }
+
+    if (space->mapped >= region->len) {
+        space->mapped -= region->len;
+    } else {
+        space->mapped = 0;
+    }
 }
 
 /* The bit of a page in the map of the pages that were written. It is the
@@ -473,6 +506,16 @@ int k_mm_map(k_mm_space_t handle, k_u64_t address, k_size_t len, k_u32_t prot, k
         return KERR_INVAL;
     }
 
+    /*
+     * The policy of the page (ADR 0052): a program may not ask for a page it
+     * may write and run at once. The refusal is the call and not a page fault
+     * later, so a program that asks for a code it built itself is told EINVAL
+     * and keeps running; the tables of the port never carry such a page.
+     */
+    if (!k_mm_prot_allowed(prot)) {
+        return KERR_INVAL;
+    }
+
     if ((flags & K_MM_ANONYMOUS) == 0 && path == NULL) {
         return KERR_INVAL;
     }
@@ -535,7 +578,28 @@ int k_mm_map(k_mm_space_t handle, k_u64_t address, k_size_t len, k_u32_t prot, k
                         ? K_MM_ANONYMOUS
                         : ((flags & K_MM_SHARED) != 0 ? K_MM_SHARED : K_MM_PRIVATE);
 
-    if (region->flags != K_MM_ANONYMOUS) {
+    /*
+     * An anonymous mapping is memory the program owns and not a page of a
+     * file, so it is bounded by the budget of the task that makes it, the
+     * same KSYS_RLIMIT_MEMORY the heap is counted against (ADR 0052). The
+     * call is the one of the program: a space that the kernel is filling for
+     * another task (execve places the image of a program in a space that is
+     * not the space of the caller) is not charged to the caller, which would
+     * put a program's bss on the shell's budget.
+     */
+    if (region->flags == K_MM_ANONYMOUS && handle == k_port_mm_current()) {
+        struct task *self = task_self();
+
+        if (self != NULL && !task_memory_fits(self, space->mapped + (k_u64_t)len)) {
+            region_free(region);
+            return KERR_NOMEM;
+        }
+
+        region->flags |= K_MM_CHARGED;
+        space->mapped += (k_u64_t)len;
+    }
+
+    if ((region->flags & K_MM_ANONYMOUS) == 0) {
         rc = region_attach_file(region, path, region->flags);
         if (rc != 0) {
             region_free(region);
@@ -604,6 +668,7 @@ int k_mm_unmap(k_mm_space_t handle, k_u64_t address, k_size_t len)
 
         *slot = region->next;
         k_port_mm_unmap(handle, region->start, (k_size_t)region->len);
+        region_uncharge(space, region);
         region_free(region);
         unmapped += (k_size_t)region->len;
     }
@@ -841,6 +906,7 @@ int k_mm_fork(k_mm_space_t parent, k_mm_space_t child)
 
     to->brk = from->brk;
     to->brk_base = from->brk_base;
+    to->mapped = from->mapped;
 
     for (region = from->regions; region != NULL; region = region->next) {
         struct k_mm_region *copy = region_new();
@@ -895,6 +961,7 @@ void k_mm_release(k_mm_space_t handle)
         struct k_mm_region *region = space->regions;
 
         space->regions = region->next;
+        region_uncharge(space, region);
         region_free(region);
     }
 
@@ -902,4 +969,5 @@ void k_mm_release(k_mm_space_t handle)
     space->handle = 0;
     space->brk = 0;
     space->brk_base = 0;
+    space->mapped = 0;
 }

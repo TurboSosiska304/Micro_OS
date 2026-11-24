@@ -373,6 +373,16 @@ static void commit_switch(struct port_task *prev, struct port_task *next)
     this_cpu()->current = next;
 
     /*
+     * The window of a copy into the memory of a program (ADR 0052) does not
+     * cross a switch. A copy that was in flight when its task was taken down
+     * leaves AC set on the core, and SMAP would then be open for the next
+     * task for as long as it runs; the flag is closed here, on every switch,
+     * which covers the task that returns from its copy (it closes the window
+     * itself) and the task that never came back to close it.
+     */
+    port_x86_64_user_access_end();
+
+    /*
      * The thread pointer follows the task, not the machine: each one has its
      * own errno, and the block is put in the register before the other
      * context is resumed with it.
