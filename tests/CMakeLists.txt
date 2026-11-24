@@ -24,6 +24,7 @@ if(NOT ESP_PLATFORM)
         cases/test_fuzz.c
         cases/test_mfs.c
         cases/test_mfs_format.c
+        cases/test_mfs_journal.c
         cases/test_mfs_persistence.c
         cases/test_mfs_repair.c
         cases/test_mfs_many.c
@@ -62,6 +63,7 @@ if(NOT ESP_PLATFORM)
         cases/test_config.c
         cases/test_settings.c
         cases/test_task.c
+        cases/test_guard.c
         cases/test_sched.c
         cases/test_sched_queue.c
         cases/test_smp.c

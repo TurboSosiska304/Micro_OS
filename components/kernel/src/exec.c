@@ -102,7 +102,22 @@ int k_exec_parse(const void *data, k_size_t size, struct k_exec_image *out)
         return -1;
     }
 
-    if (flags != K_EXEC_FLAGS_NONE) {
+    /*
+     * An image may ask for a page that is writable and executable at once
+     * (K_EXEC_FLAG_WX), and no port of this system builds one: the text is
+     * read-only and executable, the data writable and NX. The request is
+     * refused with the sentence that names it, before the port is asked, so
+     * a program whose image carries the bit is a refusal of the format and
+     * not a fault of a page table. Any other bit is a flag this generation
+     * does not know, and a flag it does not know may change the meaning of
+     * the bytes.
+     */
+    if ((flags & K_EXEC_FLAG_WX) != 0u) {
+        kwarn("exec: the image asks for a page both writable and executable");
+        return -1;
+    }
+
+    if ((flags & ~K_EXEC_FLAGS_KNOWN) != 0u) {
         return -1;
     }
 

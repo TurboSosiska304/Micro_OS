@@ -21,6 +21,7 @@ struct mkfs_args {
     k_u32_t size_mb;
     k_u32_t start_lba;
     k_u64_t epoch;
+    k_u32_t format_flags;
     struct mkfs_mfs_entry *entries;
     k_size_t count;
     k_size_t capacity;
@@ -41,6 +42,7 @@ static void usage(void)
            "  --file PATH=HOST        write a file of the host (mode 0644)\n"
            "  --program PATH=HOST     write a program (mode 0755)\n"
            "  --text PATH=TEXT        write TEXT and a newline (mode 0644)\n"
+           "  --journal               write a version 4 volume (the journal, ADR 0047)\n"
            "  --volumes LIST          name the volumes of this system in /etc/volumes:\n"
            "                          one device name per comma (ahci0p1), or `none`\n"
            "  --mode MODE             the mode of the entry just written, in octal\n"
@@ -285,6 +287,13 @@ int main(int argc, char **argv)
             return 0;
         }
 
+        /* A flag without a value is handled before the options that take
+         * one, or the flag would eat the argument after it. */
+        if (strcmp(option, "--journal") == 0) {
+            args.format_flags |= MKFS_MFS_JOURNAL;
+            continue;
+        }
+
         if (value == NULL) {
             fprintf(stderr, "mkfs: %s needs a value\n", option);
             rc = 2;
@@ -363,8 +372,8 @@ int main(int argc, char **argv)
         goto out;
     }
 
-    rc = mkfs_mfs_build_image(args.image, args.size_mb, args.start_lba, args.entries, args.count,
-                              args.epoch) == 0
+    rc = mkfs_mfs_build_image_ex(args.image, args.size_mb, args.start_lba, args.entries, args.count,
+                                 args.epoch, args.format_flags) == 0
              ? 0
              : 1;
 

@@ -800,11 +800,21 @@ static int port_exec_place(const struct k_exec_image *image, char *const argv[],
 
     /* The tables have to keep the promise before a byte of the program runs:
      * a page that is writable and executable at once is a refusal here and
-     * not a fault on the machine. */
+     * not a fault on the machine. The line is the report of the audit that
+     * every `exec` leaves in the log (ADR 0048). */
     if (port_x86_64_paging_audit(space) != 0) {
         kerror("x86_64: the map of the program is not W^X");
         goto fail;
     }
+
+    /*
+     * The report of the audit at every exec (ADR 0048). It is one short
+     * line on purpose: the console of the machine is a UART and a line is
+     * written byte by byte with the interrupts off, and a program of the
+     * desktop is entered right after this one - the log must not hold the
+     * entry of a window for the milliseconds of a longer sentence.
+     */
+    kinfo("x86-64: the map of a program is W^X");
 
     if (!space_write(space, PORT_EXEC_RESTORER, g_restorer_code, sizeof(g_restorer_code))) {
         goto fail;

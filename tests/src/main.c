@@ -37,6 +37,7 @@ static void run_tests(void *arg)
     test_power();
     test_render();
     test_task();
+    test_guard();
     test_sched();
     test_sched_queue();
     test_smp();
@@ -47,6 +48,7 @@ static void run_tests(void *arg)
     test_fuzz();
     test_mfs();
     test_mfs_format();
+    test_mfs_journal();
     test_mfs_persistence();
     test_mfs_repair();
     test_mfs_many();

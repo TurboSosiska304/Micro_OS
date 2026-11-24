@@ -10,6 +10,17 @@ the MicroFS volume change by adding only.
 A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 (`vX.Y.Z-pre`) is a pre-release and must match `kernel_version()`.
 
+## [Unreleased]
+
+### The release
+
+- 1.9.0-rc1: the release of the machine that owns its files - of the wake that
+  preempts (ADR 0046), of the journal (ADR 0047), of the guard of a stack
+  (ADR 0048), of the machine that switches itself off (ADR 0050) and of the
+  terminal of a program (ADR 0051, with kilo of somebody else on it)
+  (`docs/releases/1.9.md`).
+
+
 ## [1.8.0] - 2026-11-24
 
 ### The release
@@ -32,6 +43,46 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Added
 
+- The guard of a stack (ADR 0048): the stack of every task of the kernel has a
+  page under it that is not mapped, on x86-64 and on the host, so a store past
+  the bottom of a stack is a fault **of that task** and not a field of the heap
+  of its neighbour found much later somewhere else (the 16 KiB stack of the
+  shell under `pkg -S` faulted in `k_sched_tick`). The handler recognises the
+  address and ends the task; the machine answers the next line, `/bin/crash
+  stack` is the program that proves it, and `tests/cases/test_guard.c` holds
+  the same contract on the host - with an alternate signal stack and a
+  `siglongjmp`, which is the only way a thread of the host leaves a stack that
+  is gone. The audit of `exec` refuses an image that asks for a page both
+  writable and executable, and names the segment it refused. `make x86-smoke`
+  is 412 checks.
+- A wake that preempts (ADR 0046): the one defect the ABI of the kernel had
+  carried since 1.0 - `k_wait_wake` moved `wake_tick` to the present and the
+  waiter became runnable at the next tick, so a round trip of a pipe was
+  **1.006 ms**, one tick, on the machine and on the host. The waiter **arms**
+  its record under the lock of the object, looks, and then sleeps
+  (`k_wait_arm`/`k_wait_sleep`/`k_wait_disarm`), so the window of K15 - a wake
+  that arrived between the look and the registration and was lost - is closed
+  by construction; a wake runs the queue of the core (or sends the IPI of K8),
+  and the port's sleep is cut by the wake itself. `lat_pipe_p50` of x86-64 in
+  QEMU is **19 968 ns** and p99 46 592 ns (from 1 005 056 and 1 044 992), and
+  the host answers a pipe round trip in **3 µs**. The twenty-millisecond chunk
+  that 1.8 put on the waits of a pipe and of `poll` is gone.
+- A terminal of a program (ADR 0051): `/dev/tty` with `termios` - `tcgetattr`,
+  `tcsetattr`, `cfmakeraw`, `VMIN`/`VTIME`, `TCGETS`/`TCSETS`, `TIOCGWINSZ`
+  and an `isatty` that asks - the screen of the console as a property of the
+  port, and a console that understands the cursor and the clearing of a
+  screen. On it, **kilo**, a full-screen editor of somebody else (BSD-2, not
+  one line changed), is built by the SDK and driven on the machine:
+  `make tty-smoke` opens a file, types a line, saves with `Ctrl-S`, quits with
+  `Ctrl-Q` (the keys of antirez kilo, not of a guess) and reads the line back
+  out of the volume; `make ports-smoke` is 73 checks. The descriptors 0, 1 and
+  2 of a task are its terminal while nothing is opened on them, so a program
+  finds the console without opening `/dev/tty`; the mode belongs to the
+  terminal and the console goes back to canonical when the program that
+  changed it goes away; the console of the port understands the cursor, the
+  clearing and a **deferred wrap** at the last cell (the status bar of kilo,
+  exactly as wide as the screen, scrolled the frame once per redraw until that
+  was found).
 - A machine that switches itself off (ADR 0050): `shutdown`, `poweroff` and
   `reboot` are commands of the shell and `k_power_shutdown` is the order of a
   clean end - the sessions are closed to new ones, the volumes are synced and
