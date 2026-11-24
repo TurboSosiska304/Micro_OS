@@ -636,10 +636,97 @@ static void test_journal_bytes(void)
     volume_free();
 }
 
+/*
+ * The most ordinary sequence of the filesystem: write a file, close it, open
+ * it again and read it back - a hundred times, on eight names that are made
+ * and cut again.
+ *
+ * The deadlock of the x86-64 machine that this lane found is a property of
+ * the port's mutex and not of this one (a task waiting for a lock held by the
+ * context the core booted on, which is not in a run queue); the host port has
+ * no such context and cannot show it. What the loop does show is the state of
+ * the journal after the sequence a person runs all day: a transaction that
+ * leaves the record, the map or the directory behind fails here first.
+ *
+ * The second half is the file of a write that was not closed: a reader of the
+ * same object sees the record the close has not published - size zero - and
+ * the whole content arrives with the close. Neither a hang nor a wrong size
+ * is allowed.
+ */
+static void test_journal_write_read(void)
+{
+    struct mfs_file file;
+    struct mfs_inode inode;
+    char path[32];
+    char text[64];
+    char back[64];
+    int i;
+
+    ktest_begin("mfs journal: a file is written, closed and read again");
+
+    KT_CHECK(volume_alloc());
+    if (g_volume == NULL || g_base == NULL) {
+        volume_free();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(volume_make(), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+
+    for (i = 0; i < 100; i++) {
+        int rc;
+
+        snprintf(path, sizeof(path), "/f%d.txt", i % 8);
+        memset(text, 'a' + (i % 26), sizeof(text));
+        text[sizeof(text) - 1] = '\0';
+
+        rc = mfs_create(path);
+        KT_CHECK(rc == MFS_OK || rc == MFS_EEXIST);
+        KT_CHECK_INT_EQ(mfs_open(path, MFS_O_WRONLY | MFS_O_TRUNC, &file), MFS_OK);
+        KT_CHECK(mfs_write(&file, text, sizeof(text)) == (int)sizeof(text));
+        KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+
+        KT_CHECK_INT_EQ(mfs_open(path, MFS_O_RDONLY, &file), MFS_OK);
+        memset(back, 0, sizeof(back));
+        KT_CHECK(mfs_read(&file, back, sizeof(back)) == (int)sizeof(back));
+        KT_CHECK(memcmp(back, text, sizeof(text)) == 0);
+        KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+    }
+
+    /* A write that was not closed: the record says zero until the close. */
+    KT_CHECK_INT_EQ(mfs_create("/open.txt"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_open("/open.txt", MFS_O_WRONLY, &file), MFS_OK);
+    KT_CHECK(mfs_write(&file, "unfinished", 10) == 10);
+    KT_CHECK_INT_EQ(mfs_stat("/open.txt", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(inode.size, 0u);
+
+    {
+        struct mfs_file reader;
+
+        KT_CHECK_INT_EQ(mfs_open("/open.txt", MFS_O_RDONLY, &reader), MFS_OK);
+        KT_CHECK_INT_EQ(mfs_read(&reader, back, sizeof(back)), 0);
+        KT_CHECK_INT_EQ(mfs_close(&reader), MFS_OK);
+    }
+
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_stat("/open.txt", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(inode.size, 10u);
+
+    KT_CHECK_INT_EQ(mfs_open("/open.txt", MFS_O_RDONLY, &file), MFS_OK);
+    memset(back, 0, sizeof(back));
+    KT_CHECK(mfs_read(&file, back, 10) == 10);
+    KT_CHECK(memcmp(back, "unfinished", 10) == 0);
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+
+    mfs_unmount();
+    volume_free();
+}
+
 void test_mfs_journal(void)
 {
     test_journal_format();
     test_journal_bytes();
+    test_journal_write_read();
     test_journal_cut();
     test_journal_rename();
 }
