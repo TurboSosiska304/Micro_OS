@@ -140,8 +140,8 @@ chose.
 | 33 | `setlimit` | `which, value` | 0, or an error |
 | 34 | `rename` | `from, to` | 0, or an error |
 | 35 | `ftruncate` | `fd, size` | 0, or an error |
-| 36 | `getuid` | - | the uid of the task |
-| 37 | `geteuid` | - | the uid of the task (one credential) |
+| 36 | `getuid` | - | the real uid of the task |
+| 37 | `geteuid` | - | the effective uid of the task |
 | 38 | `getgid` | - | the gid of the task |
 | 39 | `setuid` | `uid` | 0, or an error |
 | 40 | `setgid` | `gid` | 0, or an error |
@@ -344,16 +344,29 @@ and those objects keep the access they always had.
 `chmod` belongs to the owner of the object and to root, `chown` to root
 alone, `chgrp` to root, or to the owner of the object giving it to the group
 of its own task (a task has one gid and no supplementary list, ADR 0044), and
-`mount`/`umount` to root alone; a task of another uid learns `EPERM`. `setuid` and `setgid` follow the same shape: root names any uid of
-the fifteen bits of a record, and a task of another uid names only the number
-it already has. There is one credential and not the three of POSIX, so
-`geteuid` answers what `getuid` answers and a task that gives up root cannot
-name zero again with `setuid`. The door to another identity is the console:
-`login` and `su` are commands of the shell of the kernel, they check
-`/etc/shadow` and move the two numbers of the *shell* task together
+`mount`/`umount` to root alone; a task of another uid learns `EPERM`.
+
+A task has the **three uids of POSIX** (ADR 0053): the real uid is the
+person, the effective uid is the identity every check of the kernel reads -
+`geteuid` answers it and `getuid` answers the real one - and the saved uid is
+the identity `setuid` may return to. `login` and `su` move the three together
 (`task_set_creds`, the gid first), and every program the person starts
-inherits them. There is no setuid bit in the image of a program, so a program
-cannot change the identity it runs with (ADR 0033).
+inherits them.
+
+`setuid` follows the rule of POSIX with these three: a task whose effective
+uid is zero names any uid of the fifteen bits of a record and the three become
+it (which is how a program that entered as root gives the identity up with
+`setuid(getuid())`, the saved uid included); any other task names its real or
+its saved uid and the effective uid moves to it, and any other number is
+`EPERM`. `setgid` keeps the shape of one gid: root names any group of the
+fifteen bits, a task names the one it has.
+
+An image may ask for the identity of the owner of its file with the
+`K_EXEC_FLAG_SETUID` flag of the header (ADR 0053): `execve` then makes the
+effective and the saved uid of the caller the owner of the file, for as long as
+the program runs, and refuses the image with `EPERM` when the caller may write
+the file (root is exempt). The bit is not a mode and `chmod` cannot grant it;
+`pkg` installs such an image only as root.
 
 The mode of `chmod` is refused outside the nine bits (`EINVAL`), and so are an
 owner outside the fifteen bits of a uid and a group outside the fifteen bits

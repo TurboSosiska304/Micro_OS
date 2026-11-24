@@ -92,19 +92,27 @@ struct k_tty;
 struct task {
     k_u32_t pid;
     /*
-     * The credentials of the task (ADR 0005, the second half of 1.4): the
-     * user it runs as and the group it belongs to. The uid decides the
-     * triads of the mode of every object the task touches; uid zero is the
-     * root of the system and is the only one that bypasses them. The gid is
-     * kept and inherited but no object of the filesystems holds one yet, so
-     * the group triad is never the one the VFS reads (docs/debts.md).
+     * The credentials of the task (ADR 0005, the second half of 1.4, ADR
+     * 0053): the user it runs as, the group it belongs to, and the three uids
+     * of POSIX. The effective uid decides the triads of the mode of every
+     * object the task touches; uid zero is the root of the system and is the
+     * only one that bypasses them. The gid is kept and inherited, and the
+     * group triad of the check reads it.
      *
-     * A fresh task takes both numbers from the task that creates it, and a
-     * fork and a program keep them. There is one credential and not the
-     * three of POSIX: setuid moves the real and the effective uid together,
-     * because the image of a program has no setuid bit to move one alone.
+     * The real uid is the person, the effective uid is the identity the
+     * checks use and the saved uid is the one `setuid` may return to. The
+     * three are equal for a task of the shell; the image of a program with
+     * the setuid flag of MOX1 makes the effective and the saved uid the owner
+     * of the file for the run of the program, and the real uid stays the
+     * person (ADR 0053). There is no saved gid: a setuid image changes no
+     * group and `setgid` keeps its one number.
+     *
+     * A fresh task takes the three uids and the gid from the task that
+     * creates it, and a fork and a program keep them.
      */
     k_u32_t uid;
+    k_u32_t euid;
+    k_u32_t suid;
     k_u32_t gid;
     /*
      * The session of the task: the kind of terminal it is the session of,
@@ -257,19 +265,37 @@ void task_set_mem_priority(struct task *t, int priority);
 int task_get_mem_priority(struct task *t);
 
 /*
- * The credentials of a task. The uid is the one the permission checks of the
- * VFS compare with the owner of an object; uid zero is the root and the only
- * value that is allowed to bypass a triad, to change the owner of an object,
- * to mount a volume and to signal a task of another user. The gid is kept
- * with the task and inherited, and it decides nothing yet: no filesystem of
- * this system stores a group (docs/debts.md).
+ * The credentials of a task. The effective uid is the one the permission
+ * checks of the VFS compare with the owner of an object; uid zero is the root
+ * and the only value that is allowed to bypass a triad, to change the owner
+ * of an object, to mount a volume and to signal a task of another user. The
+ * gid is kept with the task and inherited, and the group triad of a record is
+ * read with it.
+ *
+ * `task_get_uid` is the **effective** uid, because every check of the kernel
+ * asks it; the real and the saved uid are the two of POSIX beside it, read by
+ * the calls `getuid` and `setuid` (ADR 0053). `task_set_uid` is the act of
+ * becoming somebody: it moves the three together, which is what `login`, `su`
+ * and a test that needs another identity mean. `task_set_euid` moves the
+ * effective and the saved uid and leaves the real one - the act of a setuid
+ * image.
  *
  * A NULL task names the kernel itself, which runs as root: the helpers are
  * called by the boot before a task exists and answer zero there.
  */
 k_u32_t task_get_uid(const struct task *t);
+k_u32_t task_get_ruid(const struct task *t);
+k_u32_t task_get_suid(const struct task *t);
 k_u32_t task_get_gid(const struct task *t);
 void task_set_uid(struct task *t, k_u32_t uid);
+void task_set_euid(struct task *t, k_u32_t uid);
+/*
+ * The three uids at once, for the one caller that has to give back a pair it
+ * saved: the end of a setuid run restores the effective and the saved uid of
+ * the task that started the program (ADR 0053). The real uid moves only by
+ * the hand of root, and a caller that names it does so knowingly.
+ */
+void task_set_uids(struct task *t, k_u32_t uid, k_u32_t euid, k_u32_t suid);
 void task_set_gid(struct task *t, k_u32_t gid);
 
 /*

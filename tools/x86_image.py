@@ -547,12 +547,42 @@ def tree_file(path: str, source: str, mode: int = 0o644) -> tuple:
     return ("file", path, source, mode)
 
 
-def tree_program(path: str, source: str) -> tuple:
-    return ("program", path, source, 0o755)
+def tree_program(path: str, source: str, mode: int = 0o755) -> tuple:
+    return ("program", path, source, mode)
 
 
 def tree_text(path: str, text: str, mode: int = 0o644) -> tuple:
     return ("text", path, text, mode)
+
+
+# The flag of the header of MOX1 that asks for the identity of the owner of the
+# file (K_EXEC_FLAG_SETUID, ADR 0053). It is a flag of the image and not a mode:
+# the nine bits of chmod cannot hold it.
+K_EXEC_FLAG_SETUID = 0x2
+
+
+def setuid_image(source: str, path: str) -> str:
+    """A copy of the image `source` with the setuid flag of the header.
+
+    The gate of the bit is one program of the image under two names: the same
+    bytes as `/bin/cat` and the flag of the owner, so the smoke test reads a
+    file as the owner of the program and not as its caller - and a second copy
+    of the mode 0777, which the call of execve refuses for a caller that may
+    write it. The copy is a file of the build and not of the tree.
+    """
+    with open(source, "rb") as handle:
+        data = bytearray(handle.read())
+
+    if len(data) < 32 or data[0:4] != b"MOX1":
+        raise ValueError(f"{source} is not a MOX1 image")
+
+    flags = struct.unpack_from("<I", data, 8)[0]
+    struct.pack_into("<I", data, 8, flags | K_EXEC_FLAG_SETUID)
+
+    with open(path, "wb") as handle:
+        handle.write(bytes(data))
+
+    return path
 
 
 def extra_entries(extra: list) -> list:
@@ -1000,6 +1030,26 @@ def build_image(
             print(f"missing {path}: run make x86-build", file=sys.stderr)
             return 2
         entries.append(tree_program(f"/bin/{name}", path))
+
+    # The gate of the setuid bit of MOX1 (ADR 0053): `/bin/suidcat` is the
+    # image of `cat` with the flag of the header, and `/bin/badcat` is the same
+    # image of the mode 0777 - a setuid program its caller may write, which the
+    # call of execve refuses.
+    if "cat" in PROGRAMS:
+        cat_image = os.path.join(build_dir, "cat.mox")
+        entries.append(
+            tree_program(
+                "/bin/suidcat",
+                setuid_image(cat_image, os.path.join(build_dir, "suidcat.mox")),
+            )
+        )
+        entries.append(
+            tree_program(
+                "/bin/badcat",
+                setuid_image(cat_image, os.path.join(build_dir, "badcat.mox")),
+                0o777,
+            )
+        )
 
     # The second names of the commands: one image, two names in /bin.
     for second, first in SECOND_NAMES.items():

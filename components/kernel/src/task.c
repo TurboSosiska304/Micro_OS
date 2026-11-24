@@ -203,7 +203,37 @@ k_u32_t task_get_uid(const struct task *t)
     }
 
     k_port_enter_critical();
+    uid = t->euid;
+    k_port_exit_critical();
+
+    return uid;
+}
+
+k_u32_t task_get_ruid(const struct task *t)
+{
+    k_u32_t uid;
+
+    if (t == NULL) {
+        return 0u;
+    }
+
+    k_port_enter_critical();
     uid = t->uid;
+    k_port_exit_critical();
+
+    return uid;
+}
+
+k_u32_t task_get_suid(const struct task *t)
+{
+    k_u32_t uid;
+
+    if (t == NULL) {
+        return 0u;
+    }
+
+    k_port_enter_critical();
+    uid = t->suid;
     k_port_exit_critical();
 
     return uid;
@@ -232,6 +262,33 @@ void task_set_uid(struct task *t, k_u32_t uid)
 
     k_port_enter_critical();
     t->uid = uid;
+    t->euid = uid;
+    t->suid = uid;
+    k_port_exit_critical();
+}
+
+void task_set_euid(struct task *t, k_u32_t uid)
+{
+    if (t == NULL) {
+        return;
+    }
+
+    k_port_enter_critical();
+    t->euid = uid;
+    t->suid = uid;
+    k_port_exit_critical();
+}
+
+void task_set_uids(struct task *t, k_u32_t uid, k_u32_t euid, k_u32_t suid)
+{
+    if (t == NULL) {
+        return;
+    }
+
+    k_port_enter_critical();
+    t->uid = uid;
+    t->euid = euid;
+    t->suid = suid;
     k_port_exit_critical();
 }
 
@@ -255,6 +312,8 @@ void task_set_creds(struct task *t, k_u32_t uid, k_u32_t gid)
     k_port_enter_critical();
     t->gid = gid;
     t->uid = uid;
+    t->euid = uid;
+    t->suid = uid;
     k_port_exit_critical();
 }
 
@@ -304,6 +363,8 @@ const char *task_tty_name(k_u8_t tty)
 void task_creds_inherit(struct task *child, const struct task *parent)
 {
     k_u32_t uid;
+    k_u32_t euid;
+    k_u32_t suid;
     k_u32_t gid;
 
     if (child == NULL || parent == NULL) {
@@ -312,8 +373,12 @@ void task_creds_inherit(struct task *child, const struct task *parent)
 
     k_port_enter_critical();
     uid = parent->uid;
+    euid = parent->euid;
+    suid = parent->suid;
     gid = parent->gid;
     child->uid = uid;
+    child->euid = euid;
+    child->suid = suid;
     child->gid = gid;
     k_port_exit_critical();
 }
@@ -537,6 +602,8 @@ static struct task *task_alloc_slot(const char *name, task_entry_fn entry, void 
         t->stack_size = k_port_task_stack_size();
         t->parent = creator;
         t->uid = (creator != NULL) ? creator->uid : 0u;
+        t->euid = (creator != NULL) ? creator->euid : 0u;
+        t->suid = (creator != NULL) ? creator->suid : 0u;
         t->gid = (creator != NULL) ? creator->gid : 0u;
         t->mem_priority = KMM_PRIORITY_USER;
         t->limit_memory = TASK_LIMIT_MEMORY_MAX;

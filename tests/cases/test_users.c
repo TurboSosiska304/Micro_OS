@@ -537,6 +537,93 @@ static void test_group_permissions(void)
     teardown();
 }
 
+/*
+ * The property: a task has the three uids of POSIX (ADR 0053). The effective
+ * uid is the one every check reads, the real one is the person and the saved
+ * one is what `setuid` may return to; a setuid image moves the effective and
+ * the saved uid and leaves the real one, and `setuid` of a task that is not
+ * root names its real or its saved uid and nothing else.
+ */
+static void test_three_uids(void)
+{
+    struct task *self = task_self();
+    char byte = 'u';
+    int fd;
+
+    ktest_begin("users: the real, the effective and the saved uid of a task");
+
+    setup();
+
+    /* A task of the shell has the three the same, and the two calls agree. */
+    KT_CHECK_INT_EQ(task_get_ruid(self), 0);
+    KT_CHECK_INT_EQ(task_get_uid(self), 0);
+    KT_CHECK_INT_EQ(task_get_suid(self), 0);
+    KT_CHECK_INT_EQ(ksys_getuid(), 0);
+    KT_CHECK_INT_EQ(ksys_geteuid(), 0);
+
+    fd = ksys_open("/secret", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_write(fd, &byte, 1), 1);
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+    KT_CHECK_INT_EQ(ksys_chmod("/secret", 0600), 0);
+    KT_CHECK_INT_EQ(ksys_chown("/secret", 0), 0);
+
+    /*
+     * The act of a setuid image: the effective and the saved uid become the
+     * owner of the file and the real uid is the person. The file of root is
+     * then out of reach although the real uid of the task is zero - the
+     * checks read the effective uid and nothing else.
+     */
+    task_set_euid(self, 7);
+    KT_CHECK_INT_EQ(ksys_getuid(), 0);
+    KT_CHECK_INT_EQ(ksys_geteuid(), 7);
+    KT_CHECK_INT_EQ(task_get_suid(self), 7);
+    KT_CHECK_INT_EQ(ksys_open("/secret", KSYS_O_RDONLY), KERR_PERM);
+
+    /* The real uid is a way back, as POSIX has it, and it is the only one
+     * that is: 9 is neither the real nor the saved uid. */
+    KT_CHECK_INT_EQ(ksys_setuid(9), KERR_PERM);
+    KT_CHECK_INT_EQ(ksys_geteuid(), 7);
+    KT_CHECK_INT_EQ(ksys_setuid(0), 0);
+    KT_CHECK_INT_EQ(ksys_geteuid(), 0);
+
+    fd = ksys_open("/secret", KSYS_O_RDONLY);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    /* The saved uid is the other way: the task of the image returns to the
+     * identity it was given, and that identity is the one the checks read. */
+    task_set_euid(self, 7);
+    KT_CHECK_INT_EQ(ksys_setuid(7), 0);
+    KT_CHECK_INT_EQ(ksys_geteuid(), 7);
+    KT_CHECK_INT_EQ(ksys_open("/secret", KSYS_O_RDONLY), KERR_PERM);
+
+    /* A task whose three uids are 7 has no way back to root with a call:
+     * `logout` on the console and the init that makes the next session are
+     * the door (ADR 0044). */
+    task_set_uid(self, 7);
+    KT_CHECK_INT_EQ(ksys_getuid(), 7);
+    KT_CHECK_INT_EQ(ksys_geteuid(), 7);
+    KT_CHECK_INT_EQ(ksys_setuid(0), KERR_PERM);
+    KT_CHECK_INT_EQ(ksys_setuid(7), 0);
+
+    /* Root moves the three together, which is what a login does. */
+    task_set_uid(self, 0);
+    KT_CHECK_INT_EQ(ksys_setuid(7), 0);
+    KT_CHECK_INT_EQ(ksys_getuid(), 7);
+    KT_CHECK_INT_EQ(ksys_geteuid(), 7);
+    KT_CHECK_INT_EQ(task_get_suid(self), 7);
+    KT_CHECK_INT_EQ(ksys_setuid(0), KERR_PERM);
+
+    task_set_uid(self, 0);
+
+    teardown();
+}
+
 static void test_cwd_fit(void)
 {
     struct task *self = task_self();
@@ -1024,6 +1111,7 @@ void test_users(void)
     test_uid_permissions();
     test_directory_bits();
     test_group_permissions();
+    test_three_uids();
     test_cwd_fit();
     test_privileged_acts();
     test_accounts_records();

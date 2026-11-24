@@ -432,6 +432,7 @@ static const struct abi_field g_k_exec_image_fields[] = {
     {"data", offsetof(struct k_exec_image, data)},
     {"size", offsetof(struct k_exec_image, size)},
     {"arch", offsetof(struct k_exec_image, arch)},
+    {"setuid", offsetof(struct k_exec_image, setuid)},
     {"entry", offsetof(struct k_exec_image, entry)},
     {"text_size", offsetof(struct k_exec_image, text_size)},
     {"data_size", offsetof(struct k_exec_image, data_size)},

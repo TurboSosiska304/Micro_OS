@@ -47,11 +47,11 @@ who wants to use the system, not a second copy of the contract.
 | 33 | `setlimit` | lower one of them |
 | 34 | `rename` | a name of an object inside one filesystem |
 | 35 | `ftruncate` | cut an open file to a size |
-| 36 | `getuid` | the uid of the task |
-| 37 | `geteuid` | the uid of the task (one credential) |
+| 36 | `getuid` | the real uid of the task |
+| 37 | `geteuid` | the effective uid of the task |
 | 38 | `getgid` | the gid of the task |
-| 39 | `setuid` | change the uid: root names any, another task itself |
-| 40 | `setgid` | change the gid by the same rule |
+| 39 | `setuid` | change the uid: root names any, another task its real or saved uid |
+| 40 | `setgid` | change the gid by the rule of one gid |
 
 `41` is the count, not a call. A number that is not in the table is `ENOSYS`;
 a new call always takes the next free number, and an old one never moves. The
@@ -206,16 +206,19 @@ Every object has nine bits of `rwx` and a uid of fifteen bits, stored in the
 spare bits of its MicroFS record ([`docs/memory.md`](../memory.md#6-the-record-of-an-inode)).
 A new file is `0644`, a new directory `0755`, and the owner is 0.
 
-Every task has a **uid** and a **gid**, inherited from the task that made it
-(`getuid` 36, `geteuid` 37, `getgid` 38, `setuid` 39, `setgid` 40). Root is
-uid 0 and it passes the triads of read and write: a file of mode `0200` is
-read by root, and one of `0400` is written by it. An object owned by the uid
-of the task is judged by the triad of the owner, one owned by any other
-number by the triad of the others, because no filesystem stores a group. The
-execute bit is the exception: `execve` needs an `x` bit for somebody, root
-included. `open` compares its access with the mode before a descriptor
+Every task has a real, an effective and a saved **uid** and a **gid**,
+inherited from the task that made it (`getuid` 36 is the real uid, `geteuid`
+37 the effective one that every check reads, `getgid` 38, `setuid` 39,
+`setgid` 40). Root is uid 0 and it passes the triads of read and write: a file
+of mode `0200` is read by root, and one of `0400` is written by it. An object
+owned by the effective uid of the task is judged by the triad of the owner,
+one whose group is the gid of the task by the triad of the group, and every
+other by the triad of the others. The execute bit is the exception: `execve`
+needs an `x` bit for somebody, root included. An image with the setuid flag of
+`MOX1` runs with the identity of the owner of its file for the length of the
+run (ADR 0053). `open` compares its access with the mode before a descriptor
 exists, so every filesystem answers a forbidden open the same way (`EPERM`);
-`stat` reports and checks nothing, as in POSIX. `chmod` is the owner or root,
+`stat` reports and checks nothing, as in POSIX. `chmod` and `chgrp` are the owner or root,
 `chown`, `mount` and `umount` are root, and a signal to a task of another uid
 is `EPERM`.
 

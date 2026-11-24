@@ -267,10 +267,10 @@ static void check_bad_header(void)
     put_u32(&image[4], K_EXEC_VERSION + 1u);
     KT_CHECK_INT_EQ(k_exec_parse(image, size, &parsed), -1);
 
-    /* The one flag the format names is the request of a page both writable
-     * and executable, and no port of this system builds one: the parser
-     * refuses it with its own sentence. Any other bit is a generation this
-     * kernel does not know either. */
+    /* The first flag the format names is the request of a page both
+     * writable and executable, and no port of this system builds one: the
+     * parser refuses it with its own sentence. Any other bit is a generation
+     * this kernel does not know either. */
     size = build_image(image);
     put_u32(&image[8], K_EXEC_FLAG_WX);
     KT_CHECK_INT_EQ(k_exec_parse(image, size, &parsed), -1);
@@ -278,6 +278,23 @@ static void check_bad_header(void)
     size = build_image(image);
     put_u32(&image[8], 0x80000000u);
     KT_CHECK_INT_EQ(k_exec_parse(image, size, &parsed), -1);
+
+    /* The setuid flag of the image (ADR 0053) is a flag the parser knows: it
+     * is copied into the answer, and the call of execve decides whether the
+     * file may carry it. Alone and with the rest of the header unchanged, so
+     * that the identity of the owner is not a second version of the format. */
+    size = build_image(image);
+    put_u32(&image[8], K_EXEC_FLAG_SETUID);
+    memset(&parsed, 0, sizeof(parsed));
+    KT_CHECK_INT_EQ(k_exec_parse(image, size, &parsed), 0);
+    KT_CHECK(parsed.setuid);
+    KT_CHECK_INT_EQ(parsed.entry, K_EXEC_HEADER_SIZE);
+
+    /* The flag is the only difference: an ordinary image answers false. */
+    size = build_image(image);
+    memset(&parsed, 0xFF, sizeof(parsed));
+    KT_CHECK_INT_EQ(k_exec_parse(image, size, &parsed), 0);
+    KT_CHECK(!parsed.setuid);
 
     /* A file shorter than the header is not an image at all. */
     size = build_image(image);
@@ -443,6 +460,8 @@ static void check_frozen_image(void)
     KT_CHECK_INT_EQ(parsed.text_size, FROZEN_TEXT_SIZE);
     KT_CHECK_INT_EQ(parsed.data_size, FROZEN_DATA_SIZE);
     KT_CHECK_INT_EQ(parsed.bss_size, FROZEN_BSS_SIZE);
+    /* The image of 1.0 asks for no identity of an owner. */
+    KT_CHECK(!parsed.setuid);
     KT_CHECK(parsed.envp == NULL);
 
     /* The rule of the port against the windows of protection: the text ends

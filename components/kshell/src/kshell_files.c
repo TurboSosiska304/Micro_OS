@@ -1774,7 +1774,15 @@ static const char *exec_error_text(int code)
     }
 
     if (code == -KERR_PERM) {
-        return "not permitted: the file has no execute bit";
+        /*
+         * The two reasons of the call and no third: the x bit of the mode is
+         * not one for this caller, or the image asks for the identity of its
+         * owner and the caller may write the file, which would let the caller
+         * write the program that runs as the owner (ADR 0053). The line of the
+         * kernel before this one says which of the two it was.
+         */
+        return "not permitted: the x bit is not for this caller, or a setuid image the "
+               "caller may write";
     }
 
     if (code == -KERR_NOMEM) {

@@ -243,6 +243,7 @@ size 8 k_exec_image 72
 offset 8 k_exec_image data 0
 offset 8 k_exec_image size 8
 offset 8 k_exec_image arch 16
+offset 8 k_exec_image setuid 20
 offset 8 k_exec_image entry 24
 offset 8 k_exec_image text_size 32
 offset 8 k_exec_image data_size 40
@@ -292,16 +293,17 @@ size 4 ksys_rusage 16
 offset 4 ksys_rusage utime_ms 0
 offset 4 ksys_rusage stime_ms 8
 
-size 4 k_exec_image 36
+size 4 k_exec_image 40
 offset 4 k_exec_image data 0
 offset 4 k_exec_image size 4
 offset 4 k_exec_image arch 8
-offset 4 k_exec_image entry 12
-offset 4 k_exec_image text_size 16
-offset 4 k_exec_image data_size 20
-offset 4 k_exec_image bss_size 24
-offset 4 k_exec_image envp 28
-offset 4 k_exec_image path 32
+offset 4 k_exec_image setuid 12
+offset 4 k_exec_image entry 16
+offset 4 k_exec_image text_size 20
+offset 4 k_exec_image data_size 24
+offset 4 k_exec_image bss_size 28
+offset 4 k_exec_image envp 32
+offset 4 k_exec_image path 36
 
 # There is no k_rlimit in 1.0: a task of this system has no limit of its own
 # yet, and the limits are a line of the gate of the release (docs/releases/

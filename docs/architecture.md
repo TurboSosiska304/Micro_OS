@@ -98,7 +98,7 @@ contract is therefore two files in one commit, and a reviewer sees it.
 | `/proc`, `/dev`, `/sys` | yes | `/proc` and `/dev` from phase 2, `/sys` later |
 | System calls | yes | yes, from phase 3; hardware isolation on x86-64 (ring 3), logical on the board |
 | Memory protection | MMU | **on x86-64 only**: page tables per program, a user window and ring 3 (ADR 0007); the ESP32 has no MMU and keeps the logical boundary |
-| Multi-user | yes | partial (a uid and a gid per task, inherited and checked against the three triads of every object; `/etc/passwd`, `/etc/shadow` and `/etc/group`, `login`, `su`, `id` and `groups` on the console; no setuid bit in an image, ADR 0033, ADR 0044) |
+| Multi-user | yes | partial (a uid and a gid per task, inherited and checked against the three triads of every object; `/etc/passwd`, `/etc/shadow` and `/etc/group`, `login`, `su`, `id` and `groups` on the console, and the setuid flag of an image, ADR 0033, ADR 0044, ADR 0053) |
 | Dynamic linker | yes | no (everything is statically linked) |
 
 We honestly call this **Linux-like**, not Linux. On the board there is no
@@ -590,9 +590,12 @@ parses a format of its own and the port runs it. The decisions are in
 An executable is a flat image with a 32-byte header (`kernel/exec.h`): the
 magic `MOX1`, a version (2), flags, the offset of the entry, the sizes of the
 text, the data and the bss, and the machine the bytes are code for (`arch`: 0
-x86-64, 1 Xtensa). The image is linked for the window of the port - the code
-at its base plus the 32 bytes of the header - and copied as it is, because
-nothing relocates it; the bss is not in the file and the port clears it.
+x86-64, 1 Xtensa). The flags are `WX` (a page both writable and executable,
+which the parser refuses) and `SETUID` (the program asks for the identity of
+the owner of its file, ADR 0053); a bit the kernel does not know is a refusal.
+The image is linked for the window of the port - the code at its base plus the
+32 bytes of the header - and copied as it is, because nothing relocates it;
+the bss is not in the file and the port clears it.
 `tools/mkprog.sh` turns an object into the image and writes the machine. The
 parser (`components/kernel/src/exec.c`) checks the image against itself and
 nothing else: the magic and the version, an arch the format knows, sizes that

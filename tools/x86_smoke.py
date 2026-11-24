@@ -3332,6 +3332,31 @@ USERS_SCRIPT = [
     (PROMPT, "id"),
     (PROMPT, "whoami"),
     (PROMPT, "who"),
+    # --- the group and the setuid bit of the image (ADR 0044, ADR 0053)
+    #
+    # A file of the group 7 of root: the root session makes it and gives it to
+    # the group, and the guest of the next block - the account of gid 7 - reads
+    # it with the triad of the group and does not write it.
+    (PROMPT, "mkdir /tmp/g"),
+    (PROMPT, "write /tmp/g/team.txt seven"),
+    (PROMPT, "chgrp 7 /tmp/g/team.txt"),
+    (PROMPT, "chmod 640 /tmp/g/team.txt"),
+    (PROMPT, "stat /tmp/g/team.txt"),
+    # The session is a guest again: the group of the shell has a name, and the
+    # two images that ask for the identity of their owner do and do not work
+    # for a person. `/bin/suidcat` is the image of `cat` with the flag of the
+    # header and the owner root, and `/bin/badcat` is the same image of the
+    # mode 0777: a setuid program the caller may write, which execve refuses.
+    (PROMPT, "su - guest"),
+    (PROMPT, "groups"),
+    (PROMPT, "stat /bin/suidcat"),
+    (PROMPT, "exec /bin/suidcat /etc/shadow"),
+    (PROMPT, "exec /bin/cat /etc/shadow"),
+    (PROMPT, "exec /bin/badcat /etc/shadow"),
+    (PROMPT, "id"),
+    (PROMPT, "write /bin/suidcat x"),
+    (PROMPT, "cat /tmp/g/team.txt"),
+    (PROMPT, "write /tmp/g/team.txt x"),
     (PROMPT, ""),
 ]
 
@@ -3602,6 +3627,86 @@ def users_checks(loader: str, kernel: str, image: str, timeout: float) -> list:
         "who names the new session of the console",
         "root" in answer("who", 1) and "console" in answer("who", 1),
         answer("who", 1),
+    )
+
+    # --- the group and the setuid bit of the image (ADR 0044, ADR 0053)
+    #
+    # The tail of the script is the group of a file and the two images that ask
+    # for the identity of their owner. The commands are answered by their
+    # occurrence in the script, which is the rule of the helper above.
+    group_stat = answer("stat /tmp/g/team.txt")
+    expect(
+        "root gives a file to a group and the record keeps it",
+        "mode: 0640" in group_stat and "group: 7" in group_stat,
+        group_stat,
+    )
+    expect(
+        "the account of the group reads the file of the group",
+        last_line(answer("cat /tmp/g/team.txt")) == "seven",
+        answer("cat /tmp/g/team.txt"),
+    )
+    expect(
+        "the account of the group does not write the file of the group",
+        "not permitted" in answer("write /tmp/g/team.txt x").lower(),
+        answer("write /tmp/g/team.txt x"),
+    )
+
+    expect(
+        "groups names the group of the shell from /etc/group",
+        last_line(answer("groups")) == "guest",
+        answer("groups"),
+    )
+
+    suid_stat = answer("stat /bin/suidcat")
+    expect(
+        "the image of the setuid program is root's file of 0755",
+        "mode: 0755" in suid_stat
+        and "owner: 0" in suid_stat
+        and "group: 0" in suid_stat,
+        suid_stat,
+    )
+
+    # The program asks for the identity of its owner: it reads the file that
+    # only root reads, and the same image without the bit is refused.
+    suid_cat = answer("exec /bin/suidcat /etc/shadow")
+    expect(
+        "a setuid program reads a file of its owner and not of its caller",
+        "$sha256$mox1$" in suid_cat,
+        suid_cat.strip()[-300:],
+    )
+    plain_cat = answer("exec /bin/cat /etc/shadow")
+    expect(
+        "the same program without the bit is refused to the same caller",
+        "not permitted" in plain_cat.lower() and "$sha256$" not in plain_cat,
+        plain_cat.strip()[-300:],
+    )
+
+    # A setuid image that the caller may write is not a door: the call of
+    # execve refuses it, and the line of the kernel says which file and why.
+    bad_cat = answer("exec /bin/badcat /etc/shadow")
+    expect(
+        "a setuid image the caller may write is refused",
+        "asks for the identity of its owner" in bad_cat
+        and "not permitted" in bad_cat
+        and "$sha256$" not in bad_cat,
+        bad_cat.strip()[-300:],
+    )
+
+    # The identity was the program's and not the shell's: the task that asked
+    # for the program is the guest it was. `whoami` is the third of the script
+    # - the two before it are the guest's session and the root's after a
+    # logout - and it reads the effective uid of the task.
+    expect(
+        "the shell keeps its own identity after a setuid run",
+        last_line(answer("whoami", 3)) == "guest",
+        answer("whoami", 3),
+    )
+
+    # And the file of root is not a file of the caller.
+    expect(
+        "the setuid program cannot be written by its caller",
+        "not permitted" in answer("write /bin/suidcat x").lower(),
+        answer("write /bin/suidcat x"),
     )
 
     return checks
