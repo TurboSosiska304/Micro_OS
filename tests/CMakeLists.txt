@@ -38,6 +38,7 @@ if(NOT ESP_PLATFORM)
         cases/test_ui_wm.c
         cases/test_fb_ops.c
         cases/test_input_debounce.c
+        cases/test_input_hid.c
         cases/test_ps2.c
         cases/test_battery_soc.c
         cases/test_fb_draw.c

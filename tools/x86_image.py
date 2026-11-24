@@ -66,6 +66,9 @@ PROGRAMS = [
     "chdir",
     "heap",
     "limit",
+    # The keyboard as events (ADR 0040): the smoke test of the USB reads the
+    # code and the edge of a key out of /dev/input0 through this program.
+    "keys",
     # The floating point state of a task (K9): three tasks compute in double
     # at once and the smoke test reads the number of each of them.
     "fpu2",

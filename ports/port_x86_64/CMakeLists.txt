@@ -486,6 +486,11 @@ add_libc_program(mmap SOURCES "${LIBC_USER_DIR}/src/unistd_ext.c"
                               "${LIBC_USER_DIR}/src/stat.c")
 add_libc_program(big)
 
+# The keyboard as events (ADR 0040): the smoke test of the USB types a key and
+# reads the code and the edge of it out of /dev/input0, which is the promise
+# the two keyboards of the machine share.
+add_libc_program(keys SOURCES "${LIBC_USER_DIR}/src/usleep.c")
+
 # The lane of 1.8: the directory of the task is the kernel's (call 48), so a
 # program moves it and its child starts there; the heap of a program grows
 # with `brk`, so a window of 800 by 600 pixels does not need a constant of the
@@ -1460,6 +1465,7 @@ add_executable(microos64
     src/font_spleen.c
     src/pci.c
     src/ps2.c
+    src/xhci.c
     src/fbdev.c
     src/inputdev.c
     src/gdt.c

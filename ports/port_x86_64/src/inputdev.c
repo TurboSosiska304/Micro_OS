@@ -19,6 +19,7 @@
 #include "kernel/log.h"
 #include "kernel/types.h"
 #include "port_x86_64_input.h"
+#include "port_x86_64_xhci.h"
 
 static int g_open_count;
 
@@ -37,7 +38,10 @@ static int inputdev_read(char *buf, k_size_t size)
     while (take + sizeof(struct input_event) <= size) {
         struct input_event event;
 
-        if (!port_x86_64_input_event(&event)) {
+        /* The keyboard of the PS/2 first and the one of the USB after it:
+         * a machine has one of the two and the reader of the device does not
+         * know which (ADR 0040). */
+        if (!port_x86_64_input_event(&event) && !port_x86_64_usb_event(&event)) {
             break;
         }
 
@@ -58,6 +62,7 @@ static void inputdev_open(void)
 {
     if (g_open_count == 0) {
         port_x86_64_input_capture(true);
+        port_x86_64_usb_capture(true);
     }
 
     g_open_count++;
@@ -71,6 +76,7 @@ static void inputdev_close(void)
 
     if (g_open_count == 0) {
         port_x86_64_input_capture(false);
+        port_x86_64_usb_capture(false);
     }
 }
 

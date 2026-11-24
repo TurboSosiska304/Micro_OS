@@ -60,6 +60,7 @@ static void run_tests(void *arg)
     test_ui_wm();
     test_fb_ops();
     test_input_debounce();
+    test_input_hid();
     test_ps2();
     test_battery_soc();
     test_fb_draw();
