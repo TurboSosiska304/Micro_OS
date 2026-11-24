@@ -34,6 +34,18 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Added
 
+- The accounts of a person, second half (ADR 0045): a **session** is a task
+  with a terminal of its own (`kernel/console.h`), `init` of the console is a
+  getty that starts one and starts another after a `logout`, `who` and
+  `logout` are commands, and `/bin/login` is not needed - the console is the
+  person in front of the machine (root, no password, the rule of the ADR),
+  while `login` and `su` are the door for another account. The dialog of the
+  door is the same code for the console and for the wire: three attempts, one
+  sentence for a wrong password and for a name that is not there, a delay, and
+  a hash computed for both so that the two take the same time. The owner of a
+  new file is the uid of its maker (`vfs_open(O_CREAT)` and `vfs_mkdir` ask
+  the filesystem for a `chown`), so a file a guest writes is the guest's -
+  `x86-smoke` reads `owner: 7` where it was `owner: 0`.
 - A machine of a laptop keeps its files: the write path of the two disks of
   M2, behind the rule of ADR 0041 and not in front of it. The root mount asks
   for the writes after it is in the tree (`vfs_mount_root_writes`), so its own
@@ -368,6 +380,14 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Fixed
 
+- `telnet` asked for the password on the console of the machine and not on the
+  socket of the session: a client of the wire could not log in at all, and the
+  person in front of the board was asked for a password that came from
+  somebody else. It is the defect of 1.6 that the cleanroom wrote down. A task
+  has a terminal now, the session of a client puts the socket there, and the
+  echo of the password is agreed with the client (RFC 857) and never put in
+  the transcript - `x86-net-smoke` checks that `password: ` never appears on
+  COM1, which is the proof that the dialog went to the wire.
 - A child of a `fork` took its fields from the parent **after** its slot was
   in the table and marked in use, so the child - a thread of its own on the
   host and a task of another core in `KERNEL_SMP` - read a record that was

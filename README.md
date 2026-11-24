@@ -164,19 +164,22 @@ Micro_OS/
   of the kernel) and no job control: no groups, no `&`, no `fg`/`bg`.
 * **No TLS, and the network is the LAN.** HTTP, MQTT and telnet speak plain
   text: there is no HTTPS, no certificate store, no IPv6 and no raw sockets.
-  `httpd` and `telnet` take no password, so the machine belongs on the network
-  of its owner, not on the open Internet. This is a decision of 1.0, not a
-  missing build ([ADR 0011](docs/adr/0011-versioning-and-1.0.md)); the
-  security model is in [SECURITY.md](SECURITY.md).
+  `telnet` asks for the account of the machine (`/etc/passwd` and
+  `/etc/shadow`) on the socket of the session, and `httpd` takes no password,
+  so the machine belongs on the network of its owner, not on the open
+  Internet. This is a decision of 1.0, not a missing build
+  ([ADR 0011](docs/adr/0011-versioning-and-1.0.md)); the security model is in
+  [SECURITY.md](SECURITY.md).
 * **A disk this system did not format is read-only.** The SATA controller of
   a chipset and the NVMe controller of a laptop find the disk of a machine,
   mount the volume of its first partition and write nothing: a volume is
   writable only when its superblock carries the identifier of this system
-  **and** `/etc/volumes` names it, and the write path of the release is not
-  open yet ([ADR 0041](docs/adr/0041-a-disk-nobody-formatted.md),
-  [ADR 0042](docs/adr/0042-nvme-one-pair-of-rings.md)). The NVMe driver has
-  one pair of queues, one command in flight and no completion interrupt
-  ([docs/plan-1.8.md](docs/plan-1.8.md), M2).
+  **and** `/etc/volumes` names it. A volume that passes the two is written,
+  and `make x86-disk-smoke` keeps a file across a reset on the IDE channel, on
+  SATA and on NVMe (ADR 0041, ADR 0042). What is not there: the same rule for
+  a medium of the USB that is written and taken out while it is mounted, and
+  an NVMe driver with one pair of queues, one command in flight and no
+  completion interrupt (`docs/plan-1.8.md`, M2).
 * **The board has limits of its own**: no PMIC, 8 MB of flash with two
   application slots (the update is over USB), a 200 mAh battery. They are in
   [docs/ports/esp32](docs/ports/esp32/README.md).
