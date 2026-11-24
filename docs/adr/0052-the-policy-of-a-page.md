@@ -141,8 +141,9 @@ budget:
 * a mapping that is anonymous and private, asked by the program whose space
   it is (`handle == k_port_mm_current()`), is checked against
   `task_memory_fits(self, mapped + len)` and refused with `ENOMEM` when it
-  does not fit; `struct k_mm_space::mapped` is the number of such bytes and
-  the region carries the mark `K_MM_CHARGED`;
+  does not fit; `mapped` is the sum of the lengths of the regions of the space
+  that carry the mark `K_MM_CHARGED`, read from the list when the call asks
+  rather than kept in a counter of its own;
 * the bytes go back to the budget when the mapping is unmapped and when the
   space is released, so a program that maps and unmaps one window in a loop
   pays for the window and not for the number of windows it ever had;
