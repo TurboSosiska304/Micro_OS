@@ -1524,6 +1524,7 @@ add_executable(microos64
     src/virtio.c
     src/virtio_blk.c
     src/virtio_net.c
+    src/e1000e.c
     src/net.c
     src/libc_shim.c
     src/tls_platform.c

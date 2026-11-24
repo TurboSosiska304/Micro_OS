@@ -33,6 +33,7 @@
 #include "port_x86_64_apic.h"
 #include "port_x86_64_acpi.h"
 #include "port_x86_64_ahci.h"
+#include "port_x86_64_e1000e.h"
 #include "port_x86_64_nvme.h"
 #include "port_x86_64_xhci.h"
 
@@ -2596,7 +2597,12 @@ void port_x86_64_init(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys
 
     /* The network is the last device of the boot before the interrupts: it
      * asks the PCI bus for a card, and a machine without one keeps the "no"
-     * answers of the contract. */
+     * answers of the contract. The card of the laptop (the e1000e of ADR 0055)
+     * is asked for first and the virtio card of QEMU second: the first driver
+     * that brings a device up takes the stack (src/netdev.c), so a machine
+     * with both has the wire of a person and a machine with one has that one.
+     */
+    port_x86_64_e1000e_init();
     port_x86_64_net_init();
 
     /* Last, because it is the point of no return: from here the timer fires
