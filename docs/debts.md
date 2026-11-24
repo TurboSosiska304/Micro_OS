@@ -343,6 +343,21 @@ the second (`docs/plan-1.8.md`, M2).
 | The NVMe controller is on the bus 0: the walk of the port does not follow a bridge, and a function behind a root port of a real laptop (02:00.0) is invisible. | `ports/port_x86_64/src/pci.c`, `src/nvme.c` | open | A walk of the secondary buses from the PCI-to-PCI bridges (the type-1 header, the bus numbers the firmware assigned), and the ECAM window of the MCFG; the row is the same debt as the WiFi one. |
 | A medium that appears after the boot (a namespace of a hot-plugged drive, a card) is not seen: the driver asks once, at the boot, and there is no notification of a change of `CSTS`. | `ports/port_x86_64/src/nvme.c` | open | The hot-plug of the medium (the PCIe hot-plug of the slot, or a `rescan` command that asks the controllers again and re-registers a disk), and the unmount of what used that device. |
 
+## K18 - The medium of the release is built by the person
+
+Two releases in a row went out without their CD and without their stick, and
+both times the reason was in the same step: the packages of the medium were
+installed *after* the environment of ESP-IDF was prepared, and the install was
+part of a job whose failure loses the release. 1.7.0 went out without them
+because `apt-get` replaced `python3` and the firmware of the same job lost the
+module `idf_component_manager`; `1.8.0-rc2` went out with nothing at all
+because `limine` is not in the sources of the container of ESP-IDF, and an
+`apt-get install` that cannot find one of its arguments fails.
+
+| Debt | Where | Status | What it needs |
+|---|---|---|---|
+| The four packages of the medium (`xorriso`, `limine`, `clang`, `lld`) are asked for one by one now and a missing one is a sentence, so the firmware job cannot be lost by them; the medium itself is still the step of that job, in a container that may not have `limine`, and the person builds the image and uploads it - which is what the releases of 1.7.0 and of 1.8.0-rc3 do. | `.github/workflows/release.yml`, `docs/releases/1.8.md` | open | A job of the medium of its own, on `ubuntu-latest` and not in the container of ESP-IDF, where `apt-get install limine xorriso clang lld` is the whole of the toolchain; the two images built there and uploaded as the artifacts of the release, and the step of the container left with the firmware alone. |
+
 ## K17 - The gate of ten minutes, and two sentences it took for a defect
 
 The sessions of `make soak` and `make soak-smp` are the half of the gate that

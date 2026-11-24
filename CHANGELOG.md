@@ -14,6 +14,9 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### The release
 
+- 1.8.0-rc3: the packages of the medium are asked for one at a time and a
+  missing one is a sentence instead of a failed job (`limine` is not in the
+  sources of the container of ESP-IDF, which is what the tag of rc2 found).
 - 1.8.0-rc2: the medium of the release is in the bundle of its own tag. The
   step of the CD and of the stick of `release.yml` installed `xorriso`,
   `limine`, `clang` and `lld` **after** the environment of ESP-IDF was
