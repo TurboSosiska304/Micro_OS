@@ -359,6 +359,184 @@ static void test_directory_bits(void)
     teardown();
 }
 
+/* A task of a uid and a gid, for a row of the matrix. The runner is the only
+ * task of a test and it starts as root, so this is the fixture that is not
+ * the call under test (setuid does not move the gid and cannot come back). */
+static void as_user(struct task *self, k_u32_t uid, k_u32_t gid)
+{
+    task_set_uid(self, uid);
+    task_set_gid(self, gid);
+}
+
+/*
+ * The matrix of the access, row by row: the owner triad for the owner, the
+ * triad of the group for a task whose gid is the group of the object, the
+ * triad of the others for everybody else, and root above the three. A row
+ * that is not in this test is a row nobody has thought about (ADR 0044 §3).
+ *
+ * The file is 0640 of uid 7 and gid 7, so the three rows answer: read and
+ * write (owner), read alone (group), nothing (others).
+ */
+static void test_group_permissions(void)
+{
+    struct task *self = task_self();
+    struct vfs_stat info;
+    struct vfs_statx info_x;
+    char byte = 'g';
+    int fd;
+
+    ktest_begin("users: the gid of the caller decides the triad of the group");
+
+    setup();
+
+    fd = ksys_open("/g.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_write(fd, &byte, 1), 1);
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    KT_CHECK_INT_EQ(ksys_chown("/g.txt", 7), 0);
+    KT_CHECK_INT_EQ(ksys_chgrp("/g.txt", 7), 0);
+    KT_CHECK_INT_EQ(ksys_chmod("/g.txt", 0640), 0);
+
+    /* The record keeps the three numbers, and stat and statx agree. */
+    KT_CHECK_INT_EQ(ksys_stat("/g.txt", &info), 0);
+    KT_CHECK_INT_EQ(info.owner, 7);
+    KT_CHECK_INT_EQ(info.group, 7);
+    KT_CHECK_INT_EQ(info.mode, 0640);
+    KT_CHECK_INT_EQ(ksys_statx("/g.txt", &info_x), 0);
+    KT_CHECK_INT_EQ(info_x.owner, 7);
+    KT_CHECK_INT_EQ(info_x.group, 7);
+
+    /* Root: the two triads are passed. */
+    as_user(self, 0, 0);
+    fd = ksys_open("/g.txt", KSYS_O_RDWR);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    /* The owner reads its own triad even when another group would be wider:
+     * uid 7 with gid 8 is still the owner of the file of gid 7. */
+    as_user(self, 7, 8);
+    fd = ksys_open("/g.txt", KSYS_O_RDWR);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    /* The row of the group: uid 8 is not the owner, gid 7 is the group of
+     * the object, so the r of 0640 reads and the w of it is not there. */
+    as_user(self, 8, 7);
+    fd = ksys_open("/g.txt", KSYS_O_RDONLY);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+    KT_CHECK_INT_EQ(ksys_open("/g.txt", KSYS_O_WRONLY), KERR_PERM);
+
+    /* The row of the others: uid 8 with gid 8 is neither the owner nor the
+     * group, and the others of 0640 are zero. */
+    as_user(self, 8, 8);
+    KT_CHECK_INT_EQ(ksys_open("/g.txt", KSYS_O_RDONLY), KERR_PERM);
+    KT_CHECK_INT_EQ(ksys_open("/g.txt", KSYS_O_WRONLY), KERR_PERM);
+
+    /* The group of the object is what decides, not the gid of the task that
+     * made it: the same uid 8 reads the file after a chown, and a file of
+     * another group is not read by the gid it used to have. */
+    as_user(self, 0, 0);
+    KT_CHECK_INT_EQ(ksys_chmod("/g.txt", 0604), 0);
+    as_user(self, 8, 8);
+    fd = ksys_open("/g.txt", KSYS_O_RDONLY);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    /*
+     * The act of chgrp: root gives the object to any group; the owner gives
+     * it to the group of its own task and to no other; a third task does not
+     * touch it at all. A group wider than the fifteen bits of a record is
+     * refused at the door.
+     */
+    as_user(self, 0, 0);
+    KT_CHECK_INT_EQ(ksys_chgrp("/g.txt", 7), 0);
+    KT_CHECK_INT_EQ(ksys_stat("/g.txt", &info), 0);
+    KT_CHECK_INT_EQ(info.group, 7);
+
+    as_user(self, 7, 7);
+    KT_CHECK_INT_EQ(ksys_chgrp("/g.txt", 7), 0);
+    KT_CHECK_INT_EQ(ksys_chgrp("/g.txt", 9), KERR_PERM);
+
+    as_user(self, 7, 9);
+    KT_CHECK_INT_EQ(ksys_chgrp("/g.txt", 7), KERR_PERM); /* not the group of the task */
+    KT_CHECK_INT_EQ(ksys_chgrp("/g.txt", 9), 0);         /* the group of the task */
+    KT_CHECK_INT_EQ(ksys_stat("/g.txt", &info), 0);
+    KT_CHECK_INT_EQ(info.group, 9);
+
+    as_user(self, 8, 9);
+    KT_CHECK_INT_EQ(ksys_chgrp("/g.txt", 9), KERR_PERM);
+
+    as_user(self, 0, 0);
+    KT_CHECK_INT_EQ(ksys_chgrp("/g.txt", KSYS_GID_MAX + 1u), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_chgrp("/no/such/file", 7), KERR_NOENT);
+
+    /*
+     * The group of a new object is the gid of its maker, with the owner in
+     * the same act, and a directory with the two triads of the group is a
+     * place the group may write in.
+     */
+    as_user(self, 0, 0);
+    KT_CHECK_INT_EQ(ksys_mkdir("/people"), 0);
+    KT_CHECK_INT_EQ(ksys_chown("/people", 7), 0);
+    KT_CHECK_INT_EQ(ksys_chmod("/people", 0755), 0);
+
+    as_user(self, 7, 7);
+    fd = ksys_open("/people/made.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+    KT_CHECK_INT_EQ(ksys_mkdir("/people/made-dir"), 0);
+
+    KT_CHECK_INT_EQ(ksys_stat("/people/made.txt", &info), 0);
+    KT_CHECK_INT_EQ(info.owner, 7);
+    KT_CHECK_INT_EQ(info.group, 7);
+    KT_CHECK_INT_EQ(ksys_stat("/people/made-dir", &info), 0);
+    KT_CHECK_INT_EQ(info.owner, 7);
+    KT_CHECK_INT_EQ(info.group, 7);
+
+    as_user(self, 0, 0);
+    KT_CHECK_INT_EQ(ksys_mkdir("/gd"), 0);
+    KT_CHECK_INT_EQ(ksys_chgrp("/gd", 7), 0);
+    KT_CHECK_INT_EQ(ksys_chmod("/gd", 0770), 0);
+
+    /* A member of the group writes in the directory of the group. */
+    as_user(self, 8, 7);
+    fd = ksys_open("/gd/a", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    /* A task of another group has no such right even with the same uid. */
+    as_user(self, 8, 8);
+    KT_CHECK_INT_EQ(ksys_open("/gd/b", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC), KERR_PERM);
+    KT_CHECK_INT_EQ(ksys_chgrp("/gd", 8), KERR_PERM);
+
+    /* The walk of a path reads the triad of the group of the directory: the
+     * x of 0770 is there for gid 7 and not for gid 8. */
+    as_user(self, 8, 7);
+    KT_CHECK_INT_EQ(ksys_stat("/gd/a", &info), 0);
+    as_user(self, 8, 8);
+    KT_CHECK_INT_EQ(ksys_stat("/gd/a", &info), KERR_PERM);
+
+    as_user(self, 0, 0);
+
+    teardown();
+}
+
 static void test_cwd_fit(void)
 {
     struct task *self = task_self();
@@ -755,6 +933,7 @@ void test_users(void)
     test_creds_inherit();
     test_uid_permissions();
     test_directory_bits();
+    test_group_permissions();
     test_cwd_fit();
     test_privileged_acts();
     test_accounts_records();

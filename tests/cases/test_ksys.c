@@ -315,7 +315,7 @@ static void test_abi_is_stable(void)
         {KSYS_MMAP, "mmap"},           {KSYS_MUNMAP, "munmap"},
         {KSYS_MSYNC, "msync"},         {KSYS_BRK, "brk"},
         {KSYS_CHDIR, "chdir"},         {KSYS_CLOCK_GETTIME, "clock_gettime"},
-        {KSYS_GETRUSAGE, "getrusage"},
+        {KSYS_GETRUSAGE, "getrusage"}, {KSYS_CHGRP, "chgrp"},
     };
     size_t i;
 
@@ -411,7 +411,7 @@ struct abi_object {
 static const struct abi_field g_vfs_stat_fields[] = {
     {"inode", offsetof(struct vfs_stat, inode)}, {"type", offsetof(struct vfs_stat, type)},
     {"size", offsetof(struct vfs_stat, size)},   {"mode", offsetof(struct vfs_stat, mode)},
-    {"owner", offsetof(struct vfs_stat, owner)},
+    {"owner", offsetof(struct vfs_stat, owner)}, {"group", offsetof(struct vfs_stat, group)},
 };
 
 static const struct abi_field g_vfs_statx_fields[] = {

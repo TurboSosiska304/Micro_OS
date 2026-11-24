@@ -73,7 +73,8 @@
 #define KSYS_CHDIR 48         /* chdir(path) */
 #define KSYS_CLOCK_GETTIME 49 /* clock_gettime(clock, buf) */
 #define KSYS_GETRUSAGE 50     /* getrusage(buf) */
-#define KSYS_COUNT 51         /* the number of the system calls */
+#define KSYS_CHGRP 51         /* chgrp(path, group) */
+#define KSYS_COUNT 52         /* the number of the system calls */
 
 /*
  * The resources of a limit. One number names one resource and the calls move
@@ -141,21 +142,23 @@
 #define KSYS_WNOHANG 1 /* do not wait, answer 0 when the child is not ready */
 
 /*
- * The mode and the owner of an object, as the edge of the system accepts
- * them: the mode is the nine bits of the rwx triads and the owner is a uid
- * of fifteen bits, which is what every filesystem of the system keeps for
- * the two numbers (ADR 0005). A wider number is refused at the door instead
- * of being cut to fit the record.
+ * The mode, the owner and the group of an object, as the edge of the system
+ * accepts them: the mode is the nine bits of the rwx triads, the owner is a
+ * uid of fifteen bits and the group a gid of the same width, which is what
+ * every filesystem of the system keeps for the three numbers (ADR 0005,
+ * ADR 0044). A wider number is refused at the door instead of being cut to
+ * fit the record.
  *
  * The root of the system has the uid zero: it passes the triads, changes
- * the owner of an object, mounts a volume and signals any task. A task of
- * another uid is the owner of what it owns and the "others" of everything
- * else; there is no group in a record yet, so the gid of a task is kept and
- * inherited but decides nothing (docs/debts.md).
+ * the owner and the group of an object, mounts a volume and signals any
+ * task. A task of another uid is the owner of what it owns, reads the triad
+ * of the group when its gid is the group of the object, and the "others" of
+ * everything else.
  */
 #define KSYS_MODE_MASK 0777u
 #define KSYS_UID 0u
 #define KSYS_UID_MAX 0x7FFFu
+#define KSYS_GID_MAX KSYS_UID_MAX
 
 /* The whence of the lseek. */
 #define KSYS_SEEK_SET 0
@@ -388,6 +391,7 @@ void ksys_free(void *ptr);
 void *ksys_realloc(void *ptr, k_size_t size);
 int ksys_chmod(const char *path, k_u32_t mode);
 int ksys_chown(const char *path, k_u32_t owner);
+int ksys_chgrp(const char *path, k_u32_t group);
 /*
  * Make the caller a program. `argv` is its vector of arguments (NULL for
  * none) and `envp` its environment, a vector of "NAME=VALUE" words (NULL for

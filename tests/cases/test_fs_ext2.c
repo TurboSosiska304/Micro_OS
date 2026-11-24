@@ -1750,10 +1750,12 @@ static void test_attributes(void)
 
     KT_CHECK_INT_EQ(vfs_chmod(TEST_ROOT_POINT "/attr.txt", 0600), 0);
     KT_CHECK_INT_EQ(vfs_chown(TEST_ROOT_POINT "/attr.txt", 1000), 0);
+    KT_CHECK_INT_EQ(vfs_chgrp(TEST_ROOT_POINT "/attr.txt", 1001), 0);
 
     KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/attr.txt", &stat), 0);
     KT_CHECK_INT_EQ(stat.mode, 0600);
     KT_CHECK_INT_EQ(stat.owner, 1000);
+    KT_CHECK_INT_EQ(stat.group, 1001);
 
     KT_CHECK_INT_EQ(vfs_statx(TEST_ROOT_POINT "/attr.txt", &info), 0);
     KT_CHECK(info.ctime > 0);
@@ -1761,13 +1763,16 @@ static void test_attributes(void)
     /* A mode with bits beyond the twelve of the format is not a mode. */
     KT_CHECK_INT_EQ(vfs_chmod(TEST_ROOT_POINT "/attr.txt", 010000), KERR_INVAL);
     KT_CHECK_INT_EQ(vfs_chown(TEST_ROOT_POINT "/attr.txt", 0x10000u), KERR_INVAL);
+    KT_CHECK_INT_EQ(vfs_chgrp(TEST_ROOT_POINT "/attr.txt", 0x10000u), KERR_INVAL);
     KT_CHECK_INT_EQ(vfs_chmod(TEST_ROOT_POINT "/missing.txt", 0600), KERR_NOENT);
+    KT_CHECK_INT_EQ(vfs_chgrp(TEST_ROOT_POINT "/missing.txt", 7), KERR_NOENT);
 
     KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
     KT_CHECK(image_store_file(image));
     check_e2fsck(image);
     check_debugfs(image, "stat /attr.txt", "Mode:  0600");
     check_debugfs(image, "stat /attr.txt", "User:  1000");
+    check_debugfs(image, "stat /attr.txt", "Group:  1001");
 
     (void)unlink(image);
     (void)rmdir(dir);

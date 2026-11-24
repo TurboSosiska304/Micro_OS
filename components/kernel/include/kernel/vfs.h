@@ -58,9 +58,12 @@ struct vfs_dirent {
 /*
  * The information about an object. The mode and the owner are the numbers
  * the filesystem keeps for the object (ADR 0005): nine bits of rwx for the
- * user, the group and the others, and a uid. A filesystem that has no modes
- * of its own - procfs, devfs - answers with a zero, and a zero means
- * exactly that: no modes, not a file nobody may touch.
+ * user, the group and the others, a uid and a gid. A filesystem that has no
+ * modes of its own - procfs, devfs - answers with a zero, and a zero means
+ * exactly that: no modes, not a file nobody may touch. The same goes for the
+ * group: a filesystem that keeps none answers zero, which is the group of
+ * root, and no object of it is then ever "of the group" of a task that is
+ * not root.
  */
 struct vfs_stat {
     k_u32_t inode;
@@ -68,6 +71,14 @@ struct vfs_stat {
     k_u64_t size;
     k_u32_t mode;
     k_u32_t owner;
+    /*
+     * The group of the object (ADR 0044). It is a `k_u32_t` and not the
+     * fifteen bits of a record because this is the question the check of the
+     * access asks and not a field of a file format; the filesystems hold the
+     * number they have. The order of the fields keeps the structure aligned
+     * without a hole (a kernel structure, not the frozen ABI of statx).
+     */
+    k_u32_t group;
 };
 
 /*
@@ -189,6 +200,15 @@ struct vfs_operations {
      */
     int (*chmod)(void *ctx, const char *path, k_u32_t mode);
     int (*chown)(void *ctx, const char *path, k_u32_t owner);
+    /*
+     * The group of an object. It is a call of its own for the same reason the
+     * owner is: a filesystem may keep one and not the other. MicroFS keeps it
+     * in the word of a version 3 record and ext2 in the `i_gid` of the inode;
+     * FAT32 has no groups at all and leaves the field empty, so the caller
+     * learns KERR_NOTSUP - "this volume has no such attribute" - rather than
+     * a zero that would read back as the group of root.
+     */
+    int (*chgrp)(void *ctx, const char *path, k_u32_t group);
     int (*statfs)(void *ctx, struct vfs_statfs *out);
     const char *(*strerror)(int error);
     /*
@@ -448,16 +468,42 @@ int vfs_rename(const char *from, const char *to);
 int vfs_statfs(const char *path, struct vfs_statfs *out);
 
 /*
- * The mode and the owner of an object; a filesystem without them says so.
+ * The bits of a mode that decide for the caller: the triad of the owner for
+ * the owner of the object, the triad of the group for a task whose gid is the
+ * group of the object, the triad of the others for everybody else, and all
+ * three for root. An object of a filesystem that keeps no group answers zero,
+ * which is the group of root, so a task that is not root never reads the
+ * triad of the group of such an object.
  *
- * The two calls carry the policy of the system above the filesystem: chmod
- * is the owner of the object or root and chown is root alone. A caller that
- * is neither learns KERR_PERM. The rule lives here and not at the edge of
- * the system calls, because the shell and the tests reach the same objects
- * through these functions.
+ * The same function answers the two doors of the question - the check of the
+ * VFS (a write of a directory, the search of a path) and the check of the
+ * edge of the system (the access of an open, the mark of a program) - so that
+ * the two can never disagree about who may do what. The rule of root is the
+ * rule of POSIX: it passes the read and the write; the execute bit is the
+ * exception, which the caller of execve asks about itself.
+ */
+k_u32_t vfs_access_bits(const struct vfs_stat *info);
+
+/*
+ * The mode, the owner and the group of an object; a filesystem without them
+ * says so.
+ *
+ * The three calls carry the policy of the system above the filesystem: chmod
+ * is the owner of the object or root, chown is root alone, and chgrp is root
+ * or the owner of the object giving it to the group it belongs to itself. A
+ * caller that is none of those learns KERR_PERM. The rule lives here and not
+ * at the edge of the system calls, because the shell and the tests reach the
+ * same objects through these functions.
+ *
+ * The owner has this one widening over chown because a group gives away no
+ * privilege: the owner already reads and writes its object, and the group it
+ * may name is the group of its own task and no other. A task has one gid and
+ * no supplementary list (ADR 0044), so "a group the caller belongs to" is
+ * exactly that one number.
  */
 int vfs_chmod(const char *path, k_u32_t mode);
 int vfs_chown(const char *path, k_u32_t owner);
+int vfs_chgrp(const char *path, k_u32_t group);
 
 /* The message of the last error. */
 const char *vfs_strerror(int error);

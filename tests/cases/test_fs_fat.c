@@ -932,6 +932,7 @@ static void test_no_mode_no_owner(void)
 
     KT_CHECK_INT_EQ(vfs_chmod(TEST_ROOT_POINT "/HELLO.TXT", 0644), KERR_NOTSUP);
     KT_CHECK_INT_EQ(vfs_chown(TEST_ROOT_POINT "/HELLO.TXT", 7), KERR_NOTSUP);
+    KT_CHECK_INT_EQ(vfs_chgrp(TEST_ROOT_POINT "/HELLO.TXT", 7), KERR_NOTSUP);
 
     KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/HELLO.TXT", &stat), 0);
     KT_CHECK_INT_EQ(stat.mode, 0);
@@ -1722,6 +1723,7 @@ static void test_null_operations(void)
 
     KT_CHECK_INT_EQ(vfs_chmod("/proc/version", 0644), KERR_NOTSUP);
     KT_CHECK_INT_EQ(vfs_chown("/proc/version", 7), KERR_NOTSUP);
+    KT_CHECK_INT_EQ(vfs_chgrp("/proc/version", 7), KERR_NOTSUP);
     KT_CHECK_INT_EQ(vfs_mkdir("/proc/newdir"), KERR_NOTSUP);
     KT_CHECK_INT_EQ(vfs_unlink("/proc/version"), KERR_NOTSUP);
     KT_CHECK_INT_EQ(vfs_statfs("/proc", &volume), KERR_NOTSUP);

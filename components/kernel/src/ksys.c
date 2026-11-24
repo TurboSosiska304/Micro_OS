@@ -245,20 +245,15 @@ static k_u32_t caller_uid(void)
 }
 
 /*
- * The bits of a mode that decide for the caller. Root passes every triad; a
- * task whose uid is the owner of the object reads the triad of the owner and
- * every other task reads the triad of the others, because no filesystem of
- * this system stores a group (docs/debts.md).
+ * The bits of a mode that decide for the caller. The rule lives in the VFS
+ * (vfs_access_bits) and not here, because the check of the write of a
+ * directory and the search of a path ask the same question: one answer for
+ * the edge of the system and the tree above the filesystems, or the two doors
+ * disagree about who may write what.
  */
 static k_u32_t caller_bits(const struct vfs_stat *info)
 {
-    k_u32_t uid = caller_uid();
-
-    if (uid == KSYS_UID) {
-        return 7u;
-    }
-
-    return (info->owner == uid) ? ((info->mode >> 6) & 7u) : (info->mode & 7u);
+    return vfs_access_bits(info);
 }
 
 /*
@@ -2418,6 +2413,30 @@ static k_ssize_t sys_chown(ksys_arg_t path, ksys_arg_t owner, ksys_arg_t a2, ksy
     return vfs_chown((const char *)(uintptr_t)path, (k_u32_t)owner);
 }
 
+static k_ssize_t sys_chgrp(ksys_arg_t path, ksys_arg_t group, ksys_arg_t a2, ksys_arg_t a3,
+                           ksys_arg_t a4, ksys_arg_t a5)
+{
+    int rc;
+
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    rc = path_check((const char *)(uintptr_t)path);
+    if (rc != 0) {
+        return rc;
+    }
+
+    /* The gid has the width of a uid; a wider number would spill into the
+     * type of the record, so it is refused here and not cut. */
+    if ((group & ~(ksys_arg_t)KSYS_GID_MAX) != 0) {
+        return KERR_INVAL;
+    }
+
+    return vfs_chgrp((const char *)(uintptr_t)path, (k_u32_t)group);
+}
+
 /*
  * The program. The file is read through the VFS, its header is checked
  * against the format of the system, and the port is asked to run it: only
@@ -2900,6 +2919,7 @@ void ksys_init(void)
     ksys_register(KSYS_REALLOC, "realloc", sys_realloc);
     ksys_register(KSYS_CHMOD, "chmod", sys_chmod);
     ksys_register(KSYS_CHOWN, "chown", sys_chown);
+    ksys_register(KSYS_CHGRP, "chgrp", sys_chgrp);
     ksys_register(KSYS_EXECVE, "execve", sys_execve);
     ksys_register(KSYS_STATX, "statx", sys_statx);
     ksys_register(KSYS_PIPE, "pipe", sys_pipe);
@@ -3108,6 +3128,11 @@ int ksys_chmod(const char *path, k_u32_t mode)
 int ksys_chown(const char *path, k_u32_t owner)
 {
     return (int)ksys_call(KSYS_CHOWN, (ksys_arg_t)(uintptr_t)path, (ksys_arg_t)owner, 0, 0, 0, 0);
+}
+
+int ksys_chgrp(const char *path, k_u32_t group)
+{
+    return (int)ksys_call(KSYS_CHGRP, (ksys_arg_t)(uintptr_t)path, (ksys_arg_t)group, 0, 0, 0, 0);
 }
 
 int ksys_execve(const char *path, char *const argv[])
