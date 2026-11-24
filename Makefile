@@ -199,12 +199,14 @@ wiki-check:
 # TSan is a part of the list: the host kernel is one address space and the
 # race detector is the closest the tests get to preemption, so a push that
 # passes only the plain and ASan builds has not seen the same code the cloud
-# sees. The boot of the x86-64 port is not: QEMU is a machine of its own and
+# sees. The minimal build is a part of it for the same reason: it links a
+# subset of the tree and a symbol that only one feature asked for keeps it
+# green, and it was red for a release and a half before anybody ran it. The boot of the x86-64 port is not: QEMU is a machine of its own and
 # not every laptop has it. The cloud installs it and runs x86-smoke; here it
 # joins the list when `qemu-system-x86_64` is on PATH and is skipped with a
 # message when it is not. A missing optional machine must not fail a run.
 CI_QEMU := $(shell command -v qemu-system-x86_64 2>/dev/null)
-CI_TARGETS := build test test-asan test-tsan test-smp smoke coverage
+CI_TARGETS := build test test-asan test-tsan test-minimal test-smp smoke coverage
 ifneq ($(CI_QEMU),)
 CI_TARGETS += x86-smoke x86-root-smoke usb-smoke ports-smoke
 endif
