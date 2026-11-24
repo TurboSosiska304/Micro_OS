@@ -324,7 +324,9 @@ static int build_image(const char *image_path, k_u32_t size_mb, k_u32_t start_lb
     image_bytes = (off_t)size_mb * 1024 * 1024;
     total_sectors = (k_u32_t)(image_bytes / MKFS_SECTOR_BYTES);
 
-    if (start_lba >= total_sectors) {
+    if ((flags & MKFS_MFS_VOLUME_ONLY) != 0u) {
+        start_lba = 0;
+    } else if (start_lba >= total_sectors) {
         fprintf(stderr, "mkfs: the partition starts past the end of the image\n");
         return -1;
     }
@@ -341,7 +343,7 @@ static int build_image(const char *image_path, k_u32_t size_mb, k_u32_t start_lb
         return -1;
     }
 
-    if (write_mbr(fd, total_sectors, start_lba) != 0) {
+    if ((flags & MKFS_MFS_VOLUME_ONLY) == 0u && write_mbr(fd, total_sectors, start_lba) != 0) {
         fprintf(stderr, "mkfs: cannot write the MBR of %s: %s\n", image_path, strerror(errno));
         close(fd);
         return -1;
@@ -357,7 +359,7 @@ static int build_image(const char *image_path, k_u32_t size_mb, k_u32_t start_lb
     device.ops = &g_mkfs_ops;
     device.ctx = &volume;
 
-    rc = mfs_format_ex(&device, 256, flags == MKFS_MFS_JOURNAL ? MFS_FORMAT_JOURNAL : 0u);
+    rc = mfs_format_ex(&device, 256, (flags & MKFS_MFS_JOURNAL) != 0u ? MFS_FORMAT_JOURNAL : 0u);
     if (rc != MFS_OK) {
         fprintf(stderr, "mkfs: cannot format the volume (%s)\n", mfs_strerror(rc));
         close(fd);
