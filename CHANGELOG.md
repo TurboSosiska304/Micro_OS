@@ -32,6 +32,27 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Added
 
+- A wake that preempts (ADR 0046): the one defect the ABI of the kernel had
+  carried since 1.0 - `k_wait_wake` moved `wake_tick` to the present and the
+  waiter became runnable at the next tick, so a round trip of a pipe was
+  **1.006 ms**, one tick, on the machine and on the host. The waiter **arms**
+  its record under the lock of the object, looks, and then sleeps
+  (`k_wait_arm`/`k_wait_sleep`/`k_wait_disarm`), so the window of K15 - a wake
+  that arrived between the look and the registration and was lost - is closed
+  by construction; a wake runs the queue of the core (or sends the IPI of K8),
+  and the port's sleep is cut by the wake itself. `lat_pipe_p50` of x86-64 in
+  QEMU is **19 968 ns** and p99 46 592 ns (from 1 005 056 and 1 044 992), and
+  the host answers a pipe round trip in **3 µs**. The twenty-millisecond chunk
+  that 1.8 put on the waits of a pipe and of `poll` is gone.
+- A terminal of a program (ADR 0051): `/dev/tty` with `termios` - `tcgetattr`,
+  `tcsetattr`, `cfmakeraw`, `VMIN`/`VTIME`, `TCGETS`/`TCSETS`, `TIOCGWINSZ`
+  and an `isatty` that asks - the screen of the console as a property of the
+  port, and a console that understands the cursor and the clearing of a
+  screen. On it, **kilo**, a full-screen editor of somebody else (BSD-2, not
+  one line changed), is built by the SDK and driven on the machine:
+  `make tty-smoke` opens a file, types a line, saves with `Ctrl-S`, quits with
+  `Ctrl-X` and reads the line back out of the volume; `make ports-smoke` is
+  73 checks.
 - A machine that switches itself off (ADR 0050): `shutdown`, `poweroff` and
   `reboot` are commands of the shell and `k_power_shutdown` is the order of a
   clean end - the sessions are closed to new ones, the volumes are synced and
