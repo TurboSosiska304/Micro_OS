@@ -55,6 +55,7 @@ void test_console_sinks(void);
 void test_telnet(void);
 void test_session(void);
 void test_text_wrap(void);
+void test_tty(void);
 void test_ksys(void);
 void test_ksys_process(void);
 void test_users(void);

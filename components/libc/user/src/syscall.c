@@ -32,6 +32,7 @@
 
 #include <errno.h>
 #include <signal.h>
+#include <sys/ioctl.h>
 
 /*
  * The board has a window of 8 KiB of text and no need of the directory the
@@ -384,16 +385,19 @@ int raise(int number)
 }
 
 /*
- * The system has no terminal of a program behind a descriptor: the console of
- * the port is an output, and a read of the descriptor of the input of a
- * program answers EBADF until the shell passes one (`docs/debts.md`). A
- * library that asks whether it talks to a person is told the truth.
+ * The system has a terminal of a program behind a descriptor since 1.9
+ * (ADR 0051): the console of the task, on the descriptors 0, 1 and 2 while
+ * nothing is opened on them, and `/dev/tty0` when a program opened it. The
+ * answer is the question of `TCGETS`, asked with the call and not with this
+ * library's `ioctl`, so that a program that links the runtime alone (and not
+ * `src/termios.c`) still asks it.
  */
 int isatty(int fd)
 {
-    (void)fd;
+    unsigned char probe[36]; /* struct termios: the 36 bytes of the ABI */
+    long rc = __ulibc_syscall6(KSYS_IOCTL, fd, (long)TCGETS, (long)(uintptr_t)probe, 0, 0, 0);
 
-    return 0;
+    return rc == 0;
 }
 
 /*

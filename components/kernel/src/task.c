@@ -12,6 +12,7 @@
 #include "kernel/port_task.h"
 #include "kernel/sched.h"
 #include "kernel/signal.h"
+#include "kernel/tty.h"
 
 static struct task g_tasks[TASK_MAX_TASKS];
 static k_u32_t g_next_pid = 1;
@@ -585,6 +586,10 @@ static void task_free_slot(struct task *t)
     if (t == NULL) {
         return;
     }
+
+    /* The mode of the terminal of a session goes with the task, and a console
+     * that a program left raw goes back to canonical (kernel/tty.c). */
+    k_tty_task_exit(t);
 
     kfile_table_close(t);
 

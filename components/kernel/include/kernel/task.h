@@ -87,6 +87,7 @@ struct k_terminal;
  * descriptors of the parent and of the child of a fork, may share one.
  */
 struct kfile;
+struct k_tty;
 
 struct task {
     k_u32_t pid;
@@ -113,6 +114,13 @@ struct task {
      * a terminal of its own.
      */
     struct k_terminal *terminal;
+    /*
+     * The mode of the terminal of that session (kernel/tty.h): made on the
+     * first question a program asks of its terminal and freed with the task.
+     * A task with no terminal of its own uses the mode of the console and
+     * this pointer stays NULL.
+     */
+    struct k_tty *tty_state;
     k_u8_t tty;
     char name[TASK_NAME_MAX];
     task_state_t state;

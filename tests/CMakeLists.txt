@@ -50,6 +50,7 @@ if(NOT ESP_PLATFORM)
         cases/test_console.c
         cases/test_telnet.c
         cases/test_text_wrap.c
+        cases/test_tty.c
         cases/test_ksys.c
         cases/test_ksys_process.c
         cases/test_users.c

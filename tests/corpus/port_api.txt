@@ -39,6 +39,7 @@ k_port_console_panic kernel/port/console.h
 k_port_console_readline kernel/port/console.h
 k_port_console_getchar kernel/port/console.h
 k_port_console_poll kernel/port/console.h
+k_port_console_size kernel/port/console.h
 
 # kernel/port/cpu.h — the cores of the machine (a weak default is one core)
 k_port_cpu_count kernel/port/cpu.h weak

@@ -37,6 +37,7 @@ set(MICRO_OS_KERNEL_SRCS
     "src/sched.c"
     "src/sysinfo.c"
     "src/task.c"
+    "src/tty.c"
     "src/vfs.c"
     "src/version.c"
     "src/volume.c"

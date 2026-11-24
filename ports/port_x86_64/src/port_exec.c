@@ -26,6 +26,7 @@
 #include <string.h>
 
 #include "kernel/console.h"
+#include "kernel/tty.h"
 #include "kernel/errno.h"
 #include "kernel/ksys.h"
 #include "kernel/log.h"
@@ -1052,7 +1053,13 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
         const bool own_console = (task_get_job(caller) == TASK_JOB_NONE);
 
         for (;;) {
-            if (own_console) {
+            /*
+             * The console is watched for Ctrl+C only while no program reads
+             * it: a program that reads its terminal owns every key, and the
+             * Ctrl+C of an editor in raw mode is the byte it asked for
+             * (ADR 0051 §8).
+             */
+            if (own_console && !k_tty_console_claimed()) {
                 int key = k_console_poll();
 
                 if (key == 3) {

@@ -134,11 +134,13 @@ COMMANDS = [
     "exec /bin/pcre2grep -i h.LLO /etc/setting",
     "exec /bin/pcre2grep -o -g 1 ^hostname=(x86_64)$ /etc/setting",
     "exec /bin/ls /etc/licenses",
-    # The same commands with no file: they read descriptor 0, which the shell
-    # does not pass to a program yet, so the call answers EBADF (9). The line
-    # is the proof that the input is descriptor 0 and not a usage sentence.
-    "exec /bin/cat",
-    "exec /bin/wc -l -",
+    # The same commands with a file of no bytes: they read descriptor 0, which
+    # is the terminal of the task while the shell opened nothing on it
+    # (ADR 0051 §2). The gate gives them /dev/null so that the read ends
+    # instead of waiting for a person, and the line stays the proof that the
+    # input is descriptor 0 and not a usage sentence.
+    "exec /bin/cat < /dev/null",
+    "exec /bin/wc -l - < /dev/null",
     # The tree through the calls: a directory made, a directory refused by
     # rm without -r, the tree taken down with the flag, and a listing of a
     # directory that is no longer there.
@@ -295,8 +297,9 @@ COMMANDS = [
     "exec /bin/awk \"BEGIN{while((\\\"cat /etc/setting\\\"|getline line)>0)n++;print(n)}\"",
     "exec /bin/awk -f /etc/no-such.awk",
     # The same script with no file: the interpreter reads descriptor 0, which
-    # the shell does not open at the prompt yet, so awk reports a read error.
-    "exec /bin/awk {print}",
+    # at the prompt is the terminal of the task (ADR 0051 §2), so the gate
+    # points it at a file and the read ends.
+    "exec /bin/awk {print} < /etc/setting",
     "echo hi > /tmp/f",
     "cat /tmp/f",
     "cat < /tmp/f",
@@ -2265,17 +2268,19 @@ def check(output: str) -> list:
     licenses = answer("exec /bin/ls /etc/licenses")
     expect("the license of PCRE2 is a file of the disk", "pcre2" in licenses, licenses)
     # No file is descriptor 0. A program inherits the table of the shell
-    # (ADR 0017), but the prompt does not open the console on descriptor 0
-    # yet, so the read answers EBADF; a redirect or a pipe fills it.
-    cat = answer("exec /bin/cat")
+    # (ADR 0017), and the prompt leaves the terminal of the task on it while
+    # nothing is open (ADR 0051 §2): a redirect, a pipe or /dev/null is what
+    # makes the read end.
+    cat = answer("exec /bin/cat < /dev/null")
     expect(
         "cat reads descriptor 0 when no file is named",
-        "bad file descriptor" in cat,
+        "bad file descriptor" not in cat,
         cat,
     )
-    expect("cat of a closed stdin is a failure", "the program exited with 1" in cat)
-    wc = answer("exec /bin/wc -l -")
-    expect("wc reads descriptor 0 for a dash", "bad file descriptor" in wc, wc)
+    expect("cat of an empty input ends with 0", "the program exited with 0" in cat, cat)
+    wc = answer("exec /bin/wc -l - < /dev/null")
+    expect("wc reads descriptor 0 for a dash",
+           "bad file descriptor" not in wc and re.search(r"(?m)^\s*0\s", wc) is not None, wc)
     # The tree: the shell makes /tmp, the program makes a directory in it.
     # Without -r a directory is refused, even an empty one; with -r the tree
     # goes away and the listing of it is ENOENT (2).
@@ -2660,10 +2665,10 @@ def check(output: str) -> list:
         "can't open file /etc/no-such.awk" in awk_missing and "exited with 2" in awk_missing,
         awk_missing,
     )
-    awk_stdin = answer("exec /bin/awk {print}")
+    awk_stdin = answer("exec /bin/awk {print} < /etc/setting")
     expect(
-        "awk without a file reads descriptor 0 and reports the failure",
-        "i/o error occurred on /dev/stdin" in awk_stdin,
+        "awk without a file reads descriptor 0",
+        "hostname=x86_64" in awk_stdin and "i/o error" not in awk_stdin,
         awk_stdin,
     )
 

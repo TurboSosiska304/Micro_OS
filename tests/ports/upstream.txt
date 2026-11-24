@@ -1,8 +1,12 @@
-# Micro OS — the release of sbase that `make ports-smoke` builds, byte for byte.
+# Micro OS — the release that `make ports-smoke` builds, byte for byte.
 #
 # upstream: https://git.suckless.org/sbase
 # commit:   c546c3a5724c81cee9a11d816a38ccdf17472129 ("rm: Don't ask for confirmation to remove symlinks")
 # license:  MIT (LICENSE in this directory, the file of the release)
+#
+# upstream: https://github.com/antirez/kilo
+# commit:   323d93b29bd89a2cb446de90c4ed4fea1764176e ("Fix function declaration missing void.")
+# license:  BSD-2-Clause (kilo/LICENSE, the file of the release)
 #
 # The format is the one of sha256sum: <digest>  <path>, relative to this file.
 # `tools/ports_smoke.py` recomputes every digest before it boots the machine: a
@@ -36,3 +40,6 @@ af9c2adcd4b21b9b1638e7a94066d43dbec4032ff2a333cc0aec167f6e518421  sbase/tee.c
 69d3b149795c2e501046fb9ec3ae805a3aa10c828b7918f0e660d42830f1f469  sbase/true.c
 341a70a1f9d449f28c4d65bb594898e2d6cf2eabc21da018abdf024b7f71e7d6  sbase/util.h
 bb2839b37f82358f6036a16508c484d668b33b2273a8530acf1cb6fef93f54db  sbase/whoami.c
+eb0b719b3327af6c4b480cd21f7944e944a5ddf571c04572eb8d025f52e056c6  sbase/LICENSE
+b4a76f8575c0d9f3f927988133e6d9a24a55bca1d8e1ce094b30e7c44bcc9eb6  kilo/LICENSE
+4a44dd0e41670a9e49ecccb338ee199334f0dd472fc7f86467569cf99c391abe  kilo/kilo.c

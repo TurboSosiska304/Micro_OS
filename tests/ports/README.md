@@ -13,11 +13,17 @@ tests/ports/
       util.h arg.h compat.h             the headers the tools include
       libutil/         the helpers the tools call (eprintf, fshut, putword,
                        ealloc, strtonum, writeall), unchanged as well
-    upstream.txt     the sha256 of every file above against the commit
+    kilo/            the release of kilo, byte for byte (BSD-2-Clause)
+      LICENSE          the license of the release, unchanged
+      kilo.c           the editor of 1 308 lines, and the gate of the terminal
+      README.md        our note: the version, the commit and the binary
+    upstream.txt     the sha256 of every file above against its commit
     CMakeLists.txt   one project, one target per program: a person with the
                      SDK writes this file, and it names no source of the tree
     command.c        the one program here that is ours: the gate of `popen`,
                      `pclose` and `system` on the machine
+    ttyprobe.c       the other one: the terminal of a program asked in the
+                     words of a transcript (ADR 0051)
     README.md        this file
 ```
 
@@ -68,3 +74,25 @@ The twelfth program, `command.c`, is ours: it is the gate of the three calls
 of a command that 1.8 added to the library (`popen`, `pclose`, `system`), and
 it starts the tools of the same directory — the pipes and the statuses are the
 answers of programs built by the SDK, not of a stub.
+
+## The screen
+
+`kilo/kilo.c` is the editor of Salvatore Sanfilippo (antirez) and the second
+gate of the directory: a program that owns the screen and reads one key at a
+time, built by the same SDK with **no line of its source edited** (ADR 0051).
+It is the reason `components/libc/user` has `<termios.h>`, `ioctl` and an
+`isatty` that asks, and the reason the console of x86-64 reads the cursor and
+erase sequences of a terminal.
+
+A transcript can type at a shell and not at an editor, so the gate has two
+halves: `make ports-smoke` writes kilo into `/bin/ports` and runs `ttyprobe.c`
+(ours) which asks the terminal in the words of a transcript — `isatty`, the
+mode, the size of the screen, the raw mode and the mode that comes back — and
+`make tty-smoke` drives the keyboard itself: it types a line into
+`/bin/ports/kilo /tmp/k.txt`, sends Ctrl+S and Ctrl+Q and reads the file back
+with `cat`. The two are the proof of the same thing, and neither can be
+replaced by the other.
+
+`upstream.txt` carries the sha256 of `kilo/kilo.c` and `kilo/LICENSE` beside
+the sources of sbase, and `tools/integrity_check.py` treats `tests/ports/kilo/`
+as a vendored tree: a formatter never touches a byte of it.

@@ -8,6 +8,7 @@
 #include <sched.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/select.h>
 #include <time.h>
 #include <unistd.h>
@@ -427,6 +428,30 @@ int k_port_console_poll(void)
     }
 
     return k_port_console_getchar();
+}
+
+/*
+ * The size of the terminal of the developer, in cells. The host is a process
+ * and its console is the terminal it was started in, so the answer is the one
+ * the kernel of the host gives: TIOCGWINSZ, and 80x25 for a pipe or a file.
+ */
+void k_port_console_size(k_u16_t *rows, k_u16_t *columns)
+{
+    struct winsize size;
+
+    memset(&size, 0, sizeof(size));
+
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) != 0 || size.ws_row == 0 || size.ws_col == 0) {
+        size.ws_row = 25;
+        size.ws_col = 80;
+    }
+
+    if (rows != NULL) {
+        *rows = size.ws_row;
+    }
+    if (columns != NULL) {
+        *columns = size.ws_col;
+    }
 }
 
 /*
