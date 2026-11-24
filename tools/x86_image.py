@@ -646,7 +646,8 @@ def extra_entries(extra: list) -> list:
 
 
 def microfs_command(entries: list, image: str, size_mb: int, mkfs: str, epoch: int,
-                    volumes: tuple = VOLUMES, journal: bool = True) -> list:
+                    volumes: tuple = VOLUMES, journal: bool = True,
+                    volume_only: bool = False) -> list:
     """The call of the host tool that writes a MicroFS volume in the image.
 
     `mkfs` names the volumes it formatted: the list of /etc/volumes is the
@@ -672,6 +673,11 @@ def microfs_command(entries: list, image: str, size_mb: int, mkfs: str, epoch: i
     # half of the gate of the format.
     if journal:
         command.append("--journal")
+
+    # The volume of a partition: no MBR and no table of its own, because the
+    # table of the stick names the partition (ADR 0056).
+    if volume_only:
+        command.append("--volume-only")
 
     for kind, path, payload, mode in entries:
         if kind == "dir":
@@ -1024,6 +1030,7 @@ def build_image(
     volumes: tuple = VOLUMES,
     journal: bool = True,
     ports: str | None = None,
+    volume_only: bool = False,
 ) -> int:
     """Write the image with the programs of the build and /etc/setting.
 
@@ -1268,7 +1275,7 @@ def build_image(
 
         return build_ext2_image(image, entries, size_mb, data_mb, epoch, verbose, block_size)
 
-    command = microfs_command(entries, image, size_mb, mkfs, epoch, volumes, journal)
+    command = microfs_command(entries, image, size_mb, mkfs, epoch, volumes, journal, volume_only)
 
     os.makedirs(os.path.dirname(os.path.abspath(image)), exist_ok=True)
 
@@ -1382,11 +1389,21 @@ def main(argv: list) -> int:
         action="store_true",
         help="make a version 3 volume (no journal, the format of 1.8)",
     )
+    parser.add_argument(
+        "--volume-only",
+        action="store_true",
+        help="write the MicroFS volume alone, with no MBR: a partition of "
+             "another table (the stick of ADR 0056)",
+    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
 
     if args.size_mb is None:
         args.size_mb = EXT2_DEFAULT_MB if args.fs == "ext2" else IMAGE_MB
+
+    if args.volume_only and args.fs != "mfs":
+        print("--volume-only is a MicroFS volume: ext2 is written by mke2fs", file=sys.stderr)
+        return 2
 
     if args.no_journal and args.fs == "ext2":
         print("--no-journal is the format of MicroFS: ext2 has no journal yet", file=sys.stderr)
@@ -1436,9 +1453,12 @@ def main(argv: list) -> int:
         volumes,
         not args.no_journal,
         ports,
+        args.volume_only,
     )
 
-    if rc == 0:
+    if rc == 0 and args.volume_only:
+        print(f"volume: {args.image}, {args.size_mb} MB, a MicroFS volume with no table")
+    elif rc == 0:
         # The image is a file of the host and the bus is the machine's: the
         # screen of this tool is the one place that says which line boots the
         # bytes it just wrote.

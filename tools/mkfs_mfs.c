@@ -43,6 +43,7 @@ static void usage(void)
            "  --program PATH=HOST     write a program (mode 0755)\n"
            "  --text PATH=TEXT        write TEXT and a newline (mode 0644)\n"
            "  --journal               write a version 4 volume (the journal, ADR 0047)\n"
+           "  --volume-only           write the volume alone, no MBR (a partition)\n"
            "  --volumes LIST          name the volumes of this system in /etc/volumes:\n"
            "                          one device name per comma (ahci0p1), or `none`\n"
            "  --mode MODE             the mode of the entry just written, in octal\n"
@@ -291,6 +292,11 @@ int main(int argc, char **argv)
          * one, or the flag would eat the argument after it. */
         if (strcmp(option, "--journal") == 0) {
             args.format_flags |= MKFS_MFS_JOURNAL;
+            continue;
+        }
+
+        if (strcmp(option, "--volume-only") == 0) {
+            args.format_flags |= MKFS_MFS_VOLUME_ONLY;
             continue;
         }
 

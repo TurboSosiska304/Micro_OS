@@ -200,6 +200,7 @@ run "ahci-smoke" m ahci-smoke
 run "nvme-smoke" m nvme-smoke
 run "power-smoke" m power-smoke
 run "uefi-smoke" m uefi-smoke
+run "uefi-stick-smoke" m uefi-stick-smoke
 run "x86-iso-smoke" m x86-iso-smoke
 
 # --- the firmware -----------------------------------------------------------

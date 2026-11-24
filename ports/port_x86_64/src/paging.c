@@ -126,6 +126,14 @@ static bool g_smap_on;
 #define PAGE_POOL_PAGES 256u
 #define PAGE_POOL_WORDS (PAGE_POOL_PAGES / 64u)
 
+/* True once the port has replaced the tables of the loader with its own. The
+ * map of the loader covers the whole memory of the machine (a machine of UEFI
+ * reads its ACPI tables above the first gigabyte there); the map of the port
+ * covers the first gigabyte and the windows it makes. A reader of the firmware
+ * tables (src/cpu.c) asks this to know which of the two maps is the one that
+ * runs. */
+static bool g_paging_ready;
+
 static k_u64_t g_kernel_pml4[TABLE_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
 static k_u64_t g_kernel_pdpt_low[TABLE_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
 static k_u64_t g_kernel_pd_low[TABLE_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
@@ -626,6 +634,7 @@ void port_x86_64_paging_init(void)
     g_kernel_pml4[PML4_HIGH_ENTRY] = page_phys(g_kernel_pdpt_high) | PTE_PRESENT | PTE_WRITABLE;
 
     write_cr3(page_phys(g_kernel_pml4));
+    g_paging_ready = true;
 
     /*
      * The kernel has to honour the write bit of its own tables; CR0 is a
@@ -1236,6 +1245,33 @@ void port_x86_64_paging_unmap_page(k_u64_t cr3, k_u64_t vaddr)
     invlpg(vaddr & ~(k_u64_t)(PAGE_SIZE - 1u));
 
     port_x86_64_frame_release(entry & PTE_ADDRESS);
+}
+
+/*
+ * True when an address of the kernel's half - the image, the heap window of
+ * the port, the window of a device - is in the map of every space: the top
+ * 2 GiB are one table shared by all of them (the comment above
+ * port_x86_64_paging_space_create), so the answer is the entry of the kernel's
+ * own table and not the walk of a space. A driver that polls a card asks this
+ * before it reads a register: a window that a space lost is a page fault of
+ * the kernel and not a frame lost.
+ */
+bool port_x86_64_paging_ready(void)
+{
+    return g_paging_ready;
+}
+
+bool port_x86_64_paging_kernel_present(k_u64_t vaddr)
+{
+    k_u64_t index;
+
+    if (vaddr < PORT_X86_64_KERNEL_BASE) {
+        return false;
+    }
+
+    index = (vaddr >> 21) & (TABLE_ENTRIES - 1u);
+
+    return (g_kernel_pd_high[index] & PTE_PRESENT) != 0u;
 }
 
 void *port_x86_64_paging_phys(k_u64_t cr3, k_u64_t vaddr)

@@ -174,6 +174,7 @@ struct e1000_tx_desc {
 
 static volatile k_u32_t *g_regs;
 static k_u8_t g_mac[6];
+static bool g_mapped;
 static bool g_present;
 static bool g_link;
 
@@ -194,14 +195,41 @@ static const struct port_x86_64_nic_ops g_e1000_ops;
 
 /* --- the register file ---------------------------------------------------- */
 
+/*
+ * The registers, and the two guards of them. An offset outside the window of
+ * the card is not a register of it, and a window that the table of the moment
+ * does not hold is a page fault of the kernel and not a frame lost: a driver
+ * of a card is not allowed to take the machine down because a mapping of the
+ * boot is not in the space of a task.
+ */
 static k_u32_t e1000_read(k_u16_t offset)
 {
+    if (!g_mapped || (k_u32_t)offset + 4u > E1000_WINDOW_SIZE) {
+        return 0u;
+    }
+
     return g_regs[offset / 4u];
 }
 
 static void e1000_write(k_u16_t offset, k_u32_t value)
 {
+    if (!g_mapped || (k_u32_t)offset + 4u > E1000_WINDOW_SIZE) {
+        return;
+    }
+
     g_regs[offset / 4u] = value;
+}
+
+/* The window of the card in the space of the moment: the mapping is made once
+ * at the boot into the top 2 GiB that every space of this port shares, and
+ * this call says whether the space that runs now has it. */
+static bool e1000_window_ready(void)
+{
+    if (!g_present || !g_mapped) {
+        return false;
+    }
+
+    return port_x86_64_paging_kernel_present((k_u64_t)(uintptr_t)g_regs & ~(k_u64_t)0xFFFu);
 }
 
 /* --- the NVM -------------------------------------------------------------- */
@@ -358,27 +386,61 @@ static bool e1000_probe(struct port_x86_64_pci_device *card)
 static bool e1000_map(const struct port_x86_64_pci_device *card)
 {
     k_u32_t bar = port_x86_64_pci_read32(card, PCI_BAR0);
+    k_u32_t high = 0u;
     k_u64_t offset;
     k_u64_t window;
 
     if ((bar & PCI_BAR_IO) != 0u) {
-        kerror("e1000e0: BAR0 is not a window of memory");
+        kerror("e1000e: BAR0 of the card is not a window of memory");
+        return false;
+    }
+
+    /*
+     * A 64-bit window keeps its upper half in the register after the first
+     * one (bits 2:1 of the low half are 10b), and a laptop of a firmware that
+     * put the card above 4 GiB has its address there. A driver that reads
+     * only the low half maps a page of something else, and the first register
+     * it reads is the page fault the report of the laptop showed.
+     */
+    if (((bar >> 1) & 3u) == 2u) {
+        high = port_x86_64_pci_read32(card, PCI_BAR1);
+    }
+
+    window = ((k_u64_t)high << 32) | (k_u64_t)(bar & ~0x0Fu);
+
+    kinfo("e1000e: BAR0 is 0x%x:%08x, %s", (unsigned)high, (unsigned)(bar & ~0x0Fu),
+          high != 0u || ((bar >> 1) & 3u) == 2u ? "a 64-bit window" : "a 32-bit window");
+
+    if (window == 0u || (k_u32_t)(bar & ~0x0Fu) == 0xFFFFFFF0u) {
+        kerror("e1000e: the card did not name a window of memory");
         return false;
     }
 
     /* The low four bits of the register are flags and the address is the
      * rest of it; the map is taken to whole 2 MiB pages, so the window is the
      * page the BAR starts in and the card is at its offset inside the page. */
-    window = (k_u64_t)(bar & ~0x0Fu);
     offset = window & 0x1FFFFFu;
 
     if (port_x86_64_paging_map_mmio(PORT_X86_64_E1000_VIRT, window - offset,
                                     (k_size_t)(offset + E1000_WINDOW_SIZE)) == 0u) {
-        kerror("e1000e0: the window of the card is not in the map of the port");
+        kerror("e1000e: the window of BAR0 at 0x%x:%08x is not in the map of the port",
+               (unsigned)(window >> 32), (unsigned)(window & 0xFFFFFFFFu));
         return false;
     }
 
     g_regs = (volatile k_u32_t *)(uintptr_t)(PORT_X86_64_E1000_VIRT + offset);
+    g_mapped = true;
+
+    /* A window that answers all ones is a window of nothing: the card did not
+     * decode the address, and a driver that programs rings through it would
+     * wait for a device that is not there. */
+    if (e1000_read(E1000_STATUS) == 0xFFFFFFFFu && e1000_read(E1000_CTRL) == 0xFFFFFFFFu) {
+        kerror("e1000e: the window of BAR0 answers all ones, the card is not there");
+        g_mapped = false;
+        return false;
+    }
+
+    kinfo("e1000e: the window of BAR0 is %u KiB, mapped", (unsigned)(E1000_WINDOW_SIZE / 1024u));
 
     return true;
 }
@@ -493,7 +555,7 @@ const char *port_x86_64_e1000e_name(void)
 
 static bool e1000_nic_mac(k_u8_t mac[6])
 {
-    if (!g_present || mac == NULL) {
+    if (!e1000_window_ready() || mac == NULL) {
         return false;
     }
 
@@ -504,7 +566,7 @@ static bool e1000_nic_mac(k_u8_t mac[6])
 
 static bool e1000_nic_link(void)
 {
-    if (!g_present) {
+    if (!e1000_window_ready()) {
         return false;
     }
 
@@ -525,7 +587,7 @@ static bool e1000_nic_receive(void *buf, k_size_t size, k_size_t *length)
     struct e1000_rx_desc *descriptor;
     k_u16_t frame_length;
 
-    if (!g_present || buf == NULL || length == NULL) {
+    if (!e1000_window_ready() || buf == NULL || length == NULL) {
         return false;
     }
 
@@ -568,7 +630,7 @@ static bool e1000_nic_send(const void *frame, k_size_t length)
     struct e1000_tx_desc *descriptor;
     k_u64_t deadline;
 
-    if (!g_present || frame == NULL || length == 0u || length > E1000_BUFFER_SIZE) {
+    if (!e1000_window_ready() || frame == NULL || length == 0u || length > E1000_BUFFER_SIZE) {
         return false;
     }
 

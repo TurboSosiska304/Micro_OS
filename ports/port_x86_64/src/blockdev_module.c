@@ -106,11 +106,26 @@ static int module_sync(void *ctx)
     return 0;
 }
 
+/*
+ * The door of the writes of an image of the boot: there is none to open, and
+ * a mount that asks is told so. The volume is the bytes the loader copied to
+ * the memory before the kernel ran (ADR 0056): a write would be a byte of the
+ * RAM and not of a medium, so it is refused at the door and the root stays
+ * read-only, which is what it is.
+ */
+static int module_writes(void *ctx, bool open)
+{
+    K_UNUSED(ctx);
+
+    return open ? KERR_ROFS : 0;
+}
+
 static const struct k_blockdev_ops g_module_ops = {
     .read = module_read,
     .write = module_write,
     .erase = NULL, /* there is nothing to erase: the medium is the image */
     .sync = module_sync,
+    .writes = module_writes,
 };
 
 static struct k_blockdev g_module_device = {
