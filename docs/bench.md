@@ -21,6 +21,7 @@ make bench                                  # three boots, the median of each ro
 make bench BENCH_ARGS="--runs 1"            # one boot, for a look
 make bench BENCH_ARGS="--json bench.json"   # the same table as JSON as well
 make bench BENCH_ARGS="--fs ext2"           # the same tree on an ext2 root
+make bench BENCH_ARGS="--fs ext2 --block-size 4096"   # the grain of the volume
 make bench BENCH_ARGS="--verbose"           # the console of every line
 ```
 
@@ -295,6 +296,22 @@ The rest of the human summary of that run:
   console                 1010.10 lines/s       198 ms   235 ms  200 lines written to the console
   shell_pipe                 0.17 MiB/s              - 23437 ms  cat /bench.bin | wc -c (wall clock)
 ```
+
+## The volume of ext2 and the grain of its blocks (ADR 0037, ADR 0042)
+
+`--block-size 1024|2048|4096` is the grain of the ext2 volume (the default is
+1024, the block of the image of the release). The same table at the two grains
+of ADR 0042, three runs each, on the machine of the lane of 1.8:
+
+| Grain | `file_write` | `file_read` |
+|---|---|---|
+| 1024 bytes | 285.71 MiB/s | 444.44 MiB/s |
+| 4096 bytes | 186.04 MiB/s | 363.63 MiB/s |
+
+The coarse grain is the slower one on the disk of the port: the cost of a
+write is the command of the channel and not the byte, and the metadata of a
+volume of 4 KiB blocks is four times the bytes for the same record. ADR 0042
+names the numbers of the volume of 5 GiB and the reason.
 
 ## The volume of ext2 (ADR 0037)
 
