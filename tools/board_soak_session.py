@@ -223,7 +223,7 @@ class Load:
             Command("config set display.rotation 0", ["display.rotation=0"], soft=True),
             Command("config set font.scale 1", ["font.scale=1"], soft=True),
             Command("sleep 50", ["slept 50 ms"]),
-            Command("kill 9999", ["no such process"]),
+            Command("kill 999999999", ["no such process"]),
             Command("abi", ["call(s) registered"]),
             Command("ps", [re.compile(r"pid\s+prio\s+state"), "shell"]),
             Command("ulimit", [FD_ROW]),
