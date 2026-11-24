@@ -365,6 +365,71 @@ static void test_sleep_deadline(void)
            (unsigned long long)elapsed);
 }
 
+/* --- a tick that runs ahead of the clock of the port --- */
+
+/*
+ * The deadline of a sleep is the clock of the port and not the count of ticks
+ * of the scheduler: the host runs its clock in a thread beside the task, and
+ * under a slow runner (valgrind) that thread can take many ticks in one
+ * millisecond. A sleep that counted ticks answered at once in that case - the
+ * gate of 1.9 found a terminal and a session that did exactly that - and the
+ * storm of this case is that thread, made fast on purpose.
+ */
+static atomic_int g_storm_go;
+
+static void tick_storm_task(void *arg)
+{
+    int i;
+
+    K_UNUSED(arg);
+
+    while (__atomic_load_n(&g_storm_go, __ATOMIC_SEQ_CST) == 0) {
+        k_sched_sleep_ms(1);
+    }
+
+    /*
+     * The burst lands a few milliseconds into the sleep of the test (the
+     * barrier above is a millisecond of a sleep and five more here) and is
+     * five hundred ticks, ten times the fifty of the deadline: it is the
+     * clock of the host under a slow runner, made fast on purpose.
+     */
+    k_sched_sleep_ms(5);
+
+    for (i = 0; i < 500; i++) {
+        k_sched_tick();
+    }
+}
+
+static void test_sleep_tick_storm(void)
+{
+    struct task *storm;
+    k_u64_t start;
+    k_u64_t elapsed;
+
+    ktest_begin("wait: a tick that runs ahead of the clock does not shorten a sleep");
+
+    (void)__atomic_store_n(&g_storm_go, 0, __ATOMIC_SEQ_CST);
+
+    storm = task_create("wt-storm", tick_storm_task, NULL, TASK_PRIO_DEFAULT + 1);
+    KT_CHECK(storm != NULL);
+
+    if (storm == NULL) {
+        return;
+    }
+
+    start = k_sched_uptime_ms();
+    (void)__atomic_store_n(&g_storm_go, 1, __ATOMIC_SEQ_CST);
+    k_sched_sleep_ms(50);
+    elapsed = k_sched_uptime_ms() - start;
+
+    (void)task_wait(storm->pid, NULL, 2000);
+
+    KT_CHECK(elapsed >= 50u);
+
+    printf("wait: the sleep of 50 ms under a storm of ticks took %llu ms\n",
+           (unsigned long long)elapsed);
+}
+
 void test_wait(void)
 {
     test_wait_arm();
@@ -372,4 +437,5 @@ void test_wait(void)
     test_wake_latency();
     test_wait_pipe_round_trip();
     test_sleep_deadline();
+    test_sleep_tick_storm();
 }
