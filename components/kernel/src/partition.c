@@ -167,6 +167,17 @@ static int child_sync(void *ctx_ptr)
     return ctx->parent->ops->sync(ctx->parent->ctx);
 }
 
+/* The door of the writes belongs to the whole disk and a partition is a way
+ * of naming its sectors: the mount of a partition opens the writes of the
+ * controller below it (ADR 0041 §2). The child ops carry the call only when
+ * the parent's do, so k_blockdev_gated() answers for the pair. */
+static int child_writes(void *ctx_ptr, bool open)
+{
+    const struct partition_ctx *ctx = (const struct partition_ctx *)ctx_ptr;
+
+    return ctx->parent->ops->writes(ctx->parent->ctx, open);
+}
+
 /* A disk needs no erase, and a partition of it neither. */
 static const struct k_blockdev_ops g_child_ops = {
     .read = child_read,
@@ -182,6 +193,37 @@ static const struct k_blockdev_ops g_child_ops_erase = {
     .erase = child_erase,
     .sync = child_sync,
 };
+
+/* The same two when the disk below them has the door of the writes. */
+static const struct k_blockdev_ops g_child_ops_gated = {
+    .read = child_read,
+    .write = child_write,
+    .erase = NULL,
+    .sync = child_sync,
+    .writes = child_writes,
+};
+
+static const struct k_blockdev_ops g_child_ops_erase_gated = {
+    .read = child_read,
+    .write = child_write,
+    .erase = child_erase,
+    .sync = child_sync,
+    .writes = child_writes,
+};
+
+/* The pair of operations a child of `disk` needs: the erase of the parent and
+ * the door of the writes of the parent, each only when the parent has it. */
+static const struct k_blockdev_ops *child_ops_of(const struct k_blockdev *disk)
+{
+    bool erase = disk->ops->erase != NULL;
+    bool gated = disk->ops->writes != NULL;
+
+    if (erase) {
+        return gated ? &g_child_ops_erase_gated : &g_child_ops_erase;
+    }
+
+    return gated ? &g_child_ops_gated : &g_child_ops;
+}
 
 /* --- the little numbers of the tables --- */
 
@@ -737,7 +779,7 @@ static int register_children(const struct k_blockdev *disk, const struct partiti
         slot->dev.name = slot->name;
         slot->dev.sector_size = disk->sector_size;
         slot->dev.sectors = slot->ctx.sectors;
-        slot->dev.ops = disk->ops->erase != NULL ? &g_child_ops_erase : &g_child_ops;
+        slot->dev.ops = child_ops_of(disk);
         slot->dev.ctx = &slot->ctx;
 
         if (k_blockdev_register(&slot->dev) != 0) {
