@@ -54,7 +54,8 @@
  * not define, so a set bit there is a damage.
  */
 #define CHECK_FLAGS_MASK                                                                           \
-    (MFS_INODE_TYPE_MASK | (MFS_MODE_MASK << MFS_MODE_SHIFT) | (MFS_OWNER_MASK << MFS_OWNER_SHIFT))
+    (MFS_INODE_TYPE_MASK | MFS_INODE_PENDING | (MFS_MODE_MASK << MFS_MODE_SHIFT) |                 \
+     (MFS_OWNER_MASK << MFS_OWNER_SHIFT))
 
 /* What the message of the report is about. */
 enum check_subject {
@@ -330,7 +331,7 @@ static int check_header(const struct mfs_private *view, struct mfs_check_report 
     }
 
     if (sb.version != MFS_VERSION && sb.version != MFS_VERSION_TIME &&
-        sb.version != MFS_VERSION_LEGACY) {
+        sb.version != MFS_VERSION_LEGACY && sb.version != MFS_VERSION_JOURNAL) {
         add_error(report, CHECK_SUBJECT_HEADER, 0, "the version is not one of the system");
         sound = false;
     }
@@ -413,14 +414,31 @@ static int check_header(const struct mfs_private *view, struct mfs_check_report 
     /*
      * A version 3 volume says where its map and its table are; the two have
      * to fill META and the table has to hold the records the header counts
-     * (ADR 0038).
+     * (ADR 0038). A version 4 volume has the journal between them, and the
+     * three have to fill META in the order the design gives (ADR 0047).
      */
-    if (sb.version >= MFS_VERSION &&
-        (sb.bitmap_blocks != bitmap_blocks || sb.inode_blocks == 0u ||
-         sb.bitmap_blocks + sb.inode_blocks != sb.meta_blocks ||
-         sb.inode_records != sb.inode_blocks * (MFS_BLOCK_SIZE / sb.inode_size))) {
-        add_error(report, CHECK_SUBJECT_HEADER, 0, "the map and the table do not fill META");
-        sound = false;
+    if (sb.version >= MFS_VERSION) {
+        k_u32_t journal_blocks = (sb.version >= MFS_VERSION_JOURNAL) ? sb.journal_blocks : 0u;
+        k_u32_t journal_slots = (sb.version >= MFS_VERSION_JOURNAL) ? sb.journal_slots : 0u;
+
+        if (sb.bitmap_blocks != bitmap_blocks || sb.inode_blocks == 0u ||
+            sb.bitmap_blocks + sb.inode_blocks + journal_blocks != sb.meta_blocks ||
+            sb.inode_records != sb.inode_blocks * (MFS_BLOCK_SIZE / sb.inode_size)) {
+            add_error(report, CHECK_SUBJECT_HEADER, 0,
+                      "the map, the table and the journal do not fill META");
+            sound = false;
+        }
+
+        if (sb.version >= MFS_VERSION_JOURNAL) {
+            if ((sb.features & MFS_FEATURE_JOURNAL) == 0u || journal_blocks < 3u ||
+                journal_slots == 0u || journal_blocks != 1u + journal_slots * 2u) {
+                add_error(report, CHECK_SUBJECT_HEADER, 0, "the journal is not a journal");
+                sound = false;
+            }
+        } else if ((sb.features & MFS_FEATURE_JOURNAL) != 0u || journal_blocks != 0u) {
+            add_error(report, CHECK_SUBJECT_HEADER, 0, "a volume without the journal names one");
+            sound = false;
+        }
     }
 
     /*
@@ -541,6 +559,16 @@ static int check_inode(const struct mfs_private *view, struct mfs_check_report *
     }
 
     is_dir = (flags & MFS_INODE_DIR) != 0u;
+
+    /*
+     * A pending record is the draft of a write that a close did not
+     * publish. The mount of a version 4 volume discards it before the check
+     * runs, so a record that is still here is a volume that was not mounted
+     * by this system (ADR 0047).
+     */
+    if ((flags & MFS_INODE_PENDING) != 0u) {
+        add_error(report, CHECK_SUBJECT_INODE, index, "is a write that a close did not publish");
+    }
 
     if (is_dir) {
         report->directories++;
@@ -1399,6 +1427,14 @@ static int repair_entries(const struct mfs_private *view, struct mfs_check_repor
             }
 
             if ((target.flags & MFS_INODE_USED) == 0u) {
+                remove = true;
+            } else if ((target.flags & MFS_INODE_PENDING) != 0u) {
+                /*
+                 * The record is the draft of a write that a close did not
+                 * publish: the name is not the name of a file, and the pass
+                 * of the orphans frees the record and the map its blocks
+                 * (ADR 0047).
+                 */
                 remove = true;
             } else if (record_kept(buf, kept, child)) {
                 /* This format has one name per record: the second entry
