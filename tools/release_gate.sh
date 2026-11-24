@@ -71,13 +71,19 @@ fi
 # boot under the load of the builds of another lane, and a gate of the release
 # that runs beside one reports flakes of the host as if they were defects
 # (x86-smoke answered 154 blocks of 310 in the gate of 1.8.0 with three lanes
-# building on the same twelve cores, and 405 checks alone a minute later). The
-# gate waits for the load of the minute to fall under half of the cores, says
-# how long it waited, and `--no-wait` takes the machine as it is.
+# building on the same twelve cores, and 405 checks alone a minute later; in the
+# gate of 1.9.0-rc1 the same smoke answered 8 blocks of 312 and then all 312 on
+# a quiet machine). The gate waits for the load of the minute to fall under two,
+# says how long it waited, and `--no-wait` takes the machine as it is.
 CORES="$(nproc)"
-LIMIT=$((CORES / 2))
-if [ "$LIMIT" -lt 2 ]; then
-    LIMIT=2
+# Half of the cores was too generous: a machine of twelve cores with a lane
+# building on five of them has a load of five and a console of QEMU that loses
+# a prompt - the smoke of the machine answered 8 blocks of 312 in the gate of
+# 1.9.0-rc1 and 312 of 312 on the same tree an hour later, with the lanes
+# stopped. The gate wants two.
+LIMIT=2
+if [ "$CORES" -lt 4 ]; then
+    LIMIT=1
 fi
 WAITED=0
 if [ "${NOWAIT:-0}" -eq 0 ]; then
