@@ -8,6 +8,16 @@ with a laptop gets first, and each lane is a branch of `release_candidate` with
 its own gates; a lane that does not fit moves to 1.9 without rewriting the
 promise.
 
+## Where the lanes stand
+
+| Lane | State |
+|---|---|
+| M1 USB | **the controller, the keyboard, a stick and a wire are in.** xHCI with a command ring, an event ring and an ERST, the slots and the ports (ADR 0040); a keyboard of the HID boot protocol whose reports the portable kernel decodes (`kernel/input_hid.c`) and whose events are the ones of PS/2; a stick of class 08/06/0x50 as a disk of the block layer; CDC-ECM as the second network device. What is not there: hubs (class 09), RNDIS, the notify endpoint of CDC, a mouse of the USB, the interrupt of the controller (the event ring is polled), a hot-plug after the boot, and a bridge of PCI. |
+| M2 disk | **AHCI and NVMe read, and nothing writes.** ADR 0041 is the rule and it came before the code: a medium this system did not format is read-only, a volume is writable only when its superblock carries our mark *and* `/etc/volumes` names it, and a write below the first sector of a partition is refused. ADR 0042 is the pair of rings of NVMe. The gates of both controllers hash the image before and after the boot. What is not there: the write path (`WRITE`/`WRITE DMA EXT`/`Flush`, `mount -w`, `/etc/volumes` from `mkfs`), MSI-X, a PRP list, more than one queue pair, a bridge of PCI, several namespace, and hot-plug. |
+| M3 libc | in a branch: `popen`/`pclose` and `system` over `fork` + `execve` + `pipe`, the gate of the unmodified programs and the table of the patches. |
+| M4 grain | **a volume of 4 KiB is in** (ADR 0044): the grain is a property of the volume, not of the medium, and ext2 opens a view of the device whose sector is the one of its superblock; `e2fsck -fn` is clean on every path of a write at 4 KiB, and a write of 16 MiB at that grain read 2.5 MiB of the disk instead of 36 after the defect of read ahead was found and fixed. MicroFS stays at 1 KiB: a grain of its own is version 4 of the format, and it waits in the debts. |
+| M5-M7 | not started. |
+
 ## M1 - USB, the door of a real laptop
 
 A machine of these years has no PS/2 port the firmware will share, no COM
@@ -26,6 +36,16 @@ a laptop that boots into a laptop that works.
 
 Gates: `make usb-smoke` under QEMU (`qemu-xhci` + a USB keyboard, a stick and a
 CDC device); a laptop with a stick; `x86-smoke` and every smoke of 1.7 green.
+
+The stick of the owner (a medium of 58 GB with one vfat partition) went through
+the whole door: `make usb-stick-smoke USB_STICK=/dev/sdc` attaches it read-only,
+the machine boots, `mount usb0p1 /mnt fat32` lists the tree of the partition and
+reads a file of it, `write` is refused by the rule, and the medium is unchanged
+- the digest of its head (the table and the first partition) and the counter of
+the sectors the kernel gave the device (131 072 before, 131 072 after). The
+digest of a medium of tens of gigabytes is bounded for the same reason the
+counter is read: half an hour of reading proves nothing that the counter and
+the head do not.
 
 ## M2 - the disk of a person: AHCI, then NVMe
 
