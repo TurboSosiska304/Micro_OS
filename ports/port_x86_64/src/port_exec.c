@@ -1496,18 +1496,28 @@ void port_x86_64_program_fault(k_u64_t vector, k_u64_t error, k_u64_t address, k
          (unsigned)(rip & 0xFFFFFFFFu));
 
     /*
-     * The reason, in the words of the ABI (ADR 0052): a program that touched
-     * an address it does not own - the page under its stack, a page of the
-     * kernel, the text it may not write, the stack it may not run - is gone
-     * with EFAULT and the machine is not. The line carries the address twice
-     * on purpose: the first one is the number CR2 holds, the second the
-     * sentence a person reads.
+     * The reason, in the words of the ABI (ADR 0052). A page fault is a
+     * program that touched an address it does not own - the page under its
+     * stack, a page of the kernel, the text it may not write, the stack it
+     * may not run - and the answer of a bad address is EFAULT. The line
+     * carries the address twice on purpose: the first line has the number CR2
+     * holds, the second the sentence a person reads. Any other vector is not
+     * an address and does not wear its name: the instruction is named and the
+     * task ends with the same status.
      */
-    klog(K_LOG_LEVEL_ERROR,
-         "x86-64: the program (pid %u) touched 0x%08x%08x and that is not a page it may use: "
-         "EFAULT, the task ends, the machine stays",
-         (self != NULL) ? (unsigned)self->pid : 0u, (unsigned)(address >> 32),
-         (unsigned)(address & 0xFFFFFFFFu));
+    if (vector == 14u) {
+        klog(K_LOG_LEVEL_ERROR,
+             "x86-64: the program (pid %u) touched 0x%08x%08x and that is not a page it may use: "
+             "EFAULT, the task ends, the machine stays",
+             (self != NULL) ? (unsigned)self->pid : 0u, (unsigned)(address >> 32),
+             (unsigned)(address & 0xFFFFFFFFu));
+    } else {
+        klog(K_LOG_LEVEL_ERROR,
+             "x86-64: the program (pid %u) met exception %u at 0x%08x%08x: the task ends, the "
+             "machine stays",
+             (self != NULL) ? (unsigned)self->pid : 0u, (unsigned)vector, (unsigned)(address >> 32),
+             (unsigned)(address & 0xFFFFFFFFu));
+    }
 
     /* A fault of a program is the end of its task, not of the machine. */
     task_exit(255);
