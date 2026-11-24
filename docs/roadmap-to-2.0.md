@@ -29,6 +29,16 @@ layer, or protect a task from another.
 If the release is cut by readiness, **USB and AHCI/NVMe come first**: they are
 what a laptop is missing. The rest moves to 1.9 without rewriting a promise.
 
+**1.8.0, cut on 24 November 2026, kept four of the seven and half of a fifth:**
+the door of USB (with the hub, the hot-plug, the mouse and the line of the
+controller), the two disk controllers with the rule of ADR 0041 and the write
+path behind it, the library of a program nobody rewrote (thirteen utilities of
+sbase with no patch) and the grain of a volume (ADR 0043, which also found a
+defect of the read ahead of 1.7); the accounts landed the session and the door
+of `telnet` on the socket, and left the group and the setuid bit, with their
+six steps in ADR 0044. The terminal, Ethernet with DHCP and the whole of the
+desktop's second half moved to 1.9, where `docs/plan-1.9.md` begins with them.
+
 ## 1.9 - the machine that owns its files
 
 | Lane | What it gives | The gate |

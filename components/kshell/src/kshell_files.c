@@ -2283,12 +2283,14 @@ static bool shell_find_program(const char *name, char *out, k_size_t size)
 /*
  * `help` names the programs of PATH: every regular file with an execute bit,
  * read one directory at a time through the same iterator as `ls`, so the
- * listing costs no table of names and no malloc. The count is bounded because
- * the answer of `help` is the screen of a small board; `...` says that the
- * list goes on. A directory of PATH that is not there is not an error: the
- * default names /usr/bin on a machine that has none.
+ * listing costs no table of names and no malloc. **Every** name is printed:
+ * the list used to stop at twenty-four with a `...`, and the person who asked
+ * the machine what it has was answered with the first twenty-four of them -
+ * `/bin/edit`, `/bin/kilo` and the rest were a secret of the repository
+ * (`make x86-smoke` now holds the two in step, `tools/x86_smoke.py`). A
+ * directory of PATH that is not there is not an error: the default names
+ * /usr/bin on a machine that has none.
  */
-#define KSHELL_HELP_PROGRAMS_MAX 24
 
 /* The widest line of names that `help` draws before it wraps. */
 #define KSHELL_HELP_PROGRAMS_WIDTH 74
@@ -2300,9 +2302,7 @@ void kshell_help_list_programs(void)
     struct vfs_dirent entry;
     bool heading = false;
     bool line_open = false;
-    bool cut = false;
     int column = 0;
-    int shown = 0;
 
     for (;;) {
         const char *colon = strchr(cursor, ':');
@@ -2344,13 +2344,6 @@ void kshell_help_list_programs(void)
                     heading = true;
                 }
 
-                if (shown >= KSHELL_HELP_PROGRAMS_MAX) {
-                    kshell_printf("%s...", line_open ? " " : "  ");
-                    line_open = true;
-                    cut = true;
-                    break;
-                }
-
                 width = strlen(entry.name);
 
                 if (column > 0 && column + 1 + (int)width > KSHELL_HELP_PROGRAMS_WIDTH) {
@@ -2369,13 +2362,12 @@ void kshell_help_list_programs(void)
                 kshell_printf("%s", entry.name);
                 column += (int)width;
                 line_open = true;
-                shown++;
             }
 
             shell_dir_close(&dir);
         }
 
-        if (cut || colon == NULL) {
+        if (colon == NULL) {
             break;
         }
         cursor = colon + 1;

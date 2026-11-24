@@ -343,6 +343,19 @@ the second (`docs/plan-1.8.md`, M2).
 | The NVMe controller is on the bus 0: the walk of the port does not follow a bridge, and a function behind a root port of a real laptop (02:00.0) is invisible. | `ports/port_x86_64/src/pci.c`, `src/nvme.c` | open | A walk of the secondary buses from the PCI-to-PCI bridges (the type-1 header, the bus numbers the firmware assigned), and the ECAM window of the MCFG; the row is the same debt as the WiFi one. |
 | A medium that appears after the boot (a namespace of a hot-plugged drive, a card) is not seen: the driver asks once, at the boot, and there is no notification of a change of `CSTS`. | `ports/port_x86_64/src/nvme.c` | open | The hot-plug of the medium (the PCIe hot-plug of the slot, or a `rescan` command that asks the controllers again and re-registers a disk), and the unmount of what used that device. |
 
+## K19 - The list of the machine was cut at twenty-four
+
+`help` names the programs of `PATH` by reading the directories, which is right,
+and it stopped after twenty-four names with a `...` "because the answer of
+`help` is the screen of a small board". On the machine of the release there are
+fifty-two programs in `/bin`: `/bin/edit`, the editor of the desktop, was never
+named by the list that is supposed to say what the machine has, and a person
+learned about it from a report instead of from the machine.
+
+| Debt | Where | Status | What it needs |
+|---|---|---|---|
+| The list is the whole of `PATH` now (wrapping at 74 columns, no cap), and the two are held together by a check: `tools/x86_smoke.py` reads `/bin` with the shell and asks `help` for every name of it, and `tests/cases/test_kshell.c` puts twenty-six programs on a volume and asks for the last one. A program that the image gains and the list does not name fails both. | `components/kshell/src/kshell_files.c`, `tools/x86_smoke.py`, `tests/cases/test_kshell.c` | done | Nothing; the board's 80x25 console shows a long list, which is the honest answer of a machine that has fifty-two programs. |
+
 ## K18 - The medium of the release is built by the person
 
 Two releases in a row went out without their CD and without their stick, and
