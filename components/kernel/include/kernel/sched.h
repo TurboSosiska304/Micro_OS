@@ -50,15 +50,23 @@ k_u64_t k_sched_uptime_ms(void);
 /* Give up the CPU. */
 void k_sched_yield(void);
 
-/* Sleep the current task for the given number of milliseconds. */
+/* Sleep the current task for the given number of milliseconds. Never less:
+ * the sleep is a loop on the tick of its deadline (see below). */
 void k_sched_sleep_ms(k_u32_t ms);
 
 /*
- * Sleep the current task for at most `ms`, without beginning the sleep when
- * `stop` is already true. The look at the flag and the removal from the run
- * queue are one critical section, so a wakeup that sets the flag in the
- * window between the caller's look and this call is not slept on - that
+ * Sleep the current task for at least `ms` milliseconds, without beginning the
+ * sleep when `stop` is already true. The look at the flag and the removal from
+ * the run queue are one critical section, so a wakeup that sets the flag in
+ * the window between the caller's look and this call is not slept on - that
  * window is the lost wakeup of 1.8 (docs/debts.md, K15).
+ *
+ * A sleep is never shorter than its argument, whatever wakes the port: the
+ * sleep of the task is a loop on the tick of its deadline, and a nudge that
+ * cut it (the door of a port, a wake that lost its race) only makes the loop
+ * sleep the rest again. A signal the task has to answer, a block and an
+ * unblock are the kernel's own reasons to end a sleep early, and they are the
+ * ones of 1.0.
  *
  * Answers true when the task slept, false when it did not because the flag
  * was set. The flag is written under the scheduler lock by whoever wakes the

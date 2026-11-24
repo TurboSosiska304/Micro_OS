@@ -21,6 +21,7 @@
 
 #include "kernel/kfile.h"
 #include "kernel/port.h"
+#include "kernel/port_task.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
 #include "kernel/wait.h"
@@ -309,10 +310,66 @@ static void test_wait_pipe_round_trip(void)
     (void)kfile_close(task_self(), ack[1]);
 }
 
+/* --- a sleep is never shorter than its argument --- */
+
+/*
+ * A nudge every two milliseconds, from another task, while the test sleeps: a
+ * door of the port that lost its race with the sleep it was meant for (and a
+ * port that rounds its timeout) must not make a sleep shorter than the time
+ * the caller asked for. The pre-1.9 shape of the kernel slept once and
+ * answered, so the first nudge ended a sleep of fifty milliseconds at once;
+ * the sleep is a loop on the tick of its deadline now.
+ */
+static atomic_int g_nudge_running;
+
+static void nudge_task(void *arg)
+{
+    struct task *sleeper = (struct task *)arg;
+
+    while (__atomic_load_n(&g_nudge_running, __ATOMIC_SEQ_CST) != 0) {
+        k_port_task_wake(sleeper);
+        k_sched_sleep_ms(2);
+    }
+}
+
+static void test_sleep_deadline(void)
+{
+    struct task *nudger;
+    k_u64_t start;
+    k_u64_t elapsed;
+
+    ktest_begin("wait: a sleep is never shorter than its time");
+
+    (void)__atomic_store_n(&g_nudge_running, 1, __ATOMIC_SEQ_CST);
+
+    nudger = task_create("wt-nudge", nudge_task, task_self(), TASK_PRIO_DEFAULT + 1);
+    KT_CHECK(nudger != NULL);
+
+    if (nudger == NULL) {
+        (void)__atomic_store_n(&g_nudge_running, 0, __ATOMIC_SEQ_CST);
+        return;
+    }
+
+    start = k_port_uptime_us();
+    k_sched_sleep_ms(50);
+    elapsed = (k_port_uptime_us() - start) / 1000u;
+
+    (void)__atomic_store_n(&g_nudge_running, 0, __ATOMIC_SEQ_CST);
+
+    /* The nudger leaves at its next two milliseconds; the wait reaps it. */
+    (void)task_wait(nudger->pid, NULL, 2000);
+
+    KT_CHECK(elapsed >= 50u);
+
+    printf("wait: the sleep of 50 ms under a nudge every 2 ms took %llu ms\n",
+           (unsigned long long)elapsed);
+}
+
 void test_wait(void)
 {
     test_wait_arm();
     test_wait_window();
     test_wake_latency();
     test_wait_pipe_round_trip();
+    test_sleep_deadline();
 }

@@ -599,7 +599,40 @@ bool k_sched_sleep_unless(k_u32_t ms, const bool *stop)
     }
     sched_unlock();
 
-    k_port_task_sleep_ms(ms);
+    /*
+     * The sleep of the port may end before the tick that the kernel asked
+     * for: the door of a port is a nudge and a nudge may have lost its race
+     * with the sleep it was meant for, and a port rounds its timeout. The
+     * task sleeps the rest in a loop, so that a sleep of `ms` is never
+     * shorter than `ms`; what ends it is the kernel and only the kernel -
+     * the tick (the deadline, or a signal the task has to answer), a wake of
+     * this task (READY arrives with the door), a block or an unblock that
+     * arrived while it slept. The caller of k_wait_sleep() is not affected:
+     * its own record is the `stop` flag and a wake of it changes the state
+     * as well.
+     */
+    for (;;) {
+        k_i32_t left;
+
+        sched_lock();
+
+        if (self->state != TASK_STATE_SLEEPING || self->pending_wake || self->pending_block) {
+            sched_unlock();
+            break;
+        }
+
+        left = (k_i32_t)(self->wake_tick - g_ticks);
+
+        sched_unlock();
+
+        if (left <= 0) {
+            /* The tick has reached the deadline; the tick itself (or the
+             * port's own clock) has woken the task, or is about to. */
+            break;
+        }
+
+        k_port_task_sleep_ms((k_u32_t)left);
+    }
 
     sched_lock();
 
