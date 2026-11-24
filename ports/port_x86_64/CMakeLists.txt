@@ -212,7 +212,7 @@ set(SETTINGS_SOURCES
 # and not by the CMakeLists of the component, which is written for the tree of
 # ESP-IDF. src/dns.c is the exception: the stack of the port asks it for every
 # name, in every image, and it is the cache the contract of K6 asks for.
-set(NET_SOURCES "${NET_DIR}/src/dns.c")
+set(NET_SOURCES "${NET_DIR}/src/dns.c" "${NET_DIR}/src/dhcp.c")
 
 if(MICRO_OS_X86_NET)
     list(APPEND NET_SOURCES
@@ -1553,6 +1553,7 @@ add_executable(microos64
     src/virtio.c
     src/virtio_blk.c
     src/virtio_net.c
+    src/e1000e.c
     src/net.c
     src/libc_shim.c
     src/tls_platform.c
@@ -1592,7 +1593,7 @@ endif()
 
 target_compile_definitions(microos64 PRIVATE
     KERNEL_BOARD_NAME="x86_64"
-    KERNEL_BOARD_DESC="QEMU x86-64 machine"
+    KERNEL_BOARD_DESC="x86-64 machine"
     KERNEL_PSRAM=$<BOOL:${KERNEL_PSRAM}>
     KERNEL_EXEC=$<BOOL:${KERNEL_EXEC}>
     KERNEL_SMP=$<BOOL:${KERNEL_SMP}>

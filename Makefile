@@ -91,7 +91,7 @@ help:
 	@echo "  make nvme-smoke  the same image on the NVMe controller of a laptop: the"
 	@echo "                  same writes, the same rule, the same proof (ADR 0042)"
 	@echo "  make x86-fs-smoke  rename, rmdir, fsck ext2 and the SQLite journal"
-	@echo "  make x86-net-smoke   the network: ping, UDP and HTTP on QEMU user-net"
+	@echo "  make x86-net-smoke   the network: DHCP, ping, UDP, HTTP and the e1000e"
 	@echo "  make x86-iso    the bootable medium: CD and stick, BIOS and UEFI (K13)"
 	@echo "  make x86-iso-run    boot that image in a terminal (-nographic)"
 	@echo "  make x86-iso-smoke  boot the image from a CD on a BIOS and check the shell"
@@ -701,6 +701,11 @@ x86-fs-smoke: x86-disk
 # part of `make ci`: the network of the test is the loopback of the host, and
 # a build farm is not a place to open a port. The default image keeps the flag
 # off, so `make x86-smoke` is the same machine it always was.
+#
+# Since 2.0 the smoke test boots three machines of that image (ADR 0055): the
+# card of virtio of K6, the e1000e of a laptop on the same user network, and
+# the e1000e on a wire whose other end never answers - where the client of
+# DHCP has to fall back to the fixed address in its budget and say so.
 X86_NET_BUILD := build-x86-net
 
 # The machine of `make x86-net-run` forwards 8080 of the loopback to 8080 of

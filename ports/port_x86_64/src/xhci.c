@@ -271,7 +271,15 @@ static k_u8_t g_hub_desc[16] __attribute__((aligned(64)));
  * their addresses, which the controller reads, and the pages themselves,
  * which this driver allocates on the heap and keeps for the life of the
  * machine. */
-#define XHCI_SCRATCH_MAX 8u
+/*
+ * The scratchpad buffers a controller asks for (HCSPARAMS2, up to 1023 of
+ * them). A controller of QEMU asks for none, and the driver of 1.7 was
+ * written against it and kept eight: the controller of a laptop asks for 65
+ * and the driver refused to start, with the sentence in the log and no USB at
+ * all - no keyboard, no mouse, no stick. The memory is a page a buffer, which
+ * a machine of 13 MB of heap does not notice.
+ */
+#define XHCI_SCRATCH_MAX 256u
 static k_u64_t g_scratch_array[XHCI_SCRATCH_MAX] __attribute__((aligned(64)));
 static void *g_scratch_raw[XHCI_SCRATCH_MAX];
 

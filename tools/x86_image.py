@@ -285,7 +285,12 @@ END { printf "awk: %d records, sum %d, root %d\\n", count, sum, roots }
 # attached to; a copy of the image without the line is read-only, which is the
 # negative half of the gate. `--volumes` replaces the list, `--volumes none`
 # writes no file at all.
-VOLUMES = ("ata0p1", "virtio0p1", "ahci0p1", "nvme0p1")
+# The boot medium of a UEFI machine names its own partition `boot0p1`
+# (the loader of the ESP carries a disk image and the kernel reads its table),
+# and a stick written by `make uefi-stick` was read-only on the laptop because
+# of it: the settings of /etc could not be written and `write` answered the
+# sentence of the rule.
+VOLUMES = ("ata0p1", "virtio0p1", "ahci0p1", "nvme0p1", "boot0p1")
 
 VOLUMES_HEADER = "# the volumes of this system that a mount may write (ADR 0041)"
 
