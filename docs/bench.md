@@ -181,23 +181,26 @@ TCG, 256 MB, one processor), the tree of 1.8.0 (`a8096c5b`) against this one:
 | Row | 1.8.0 | 1.9.0 | Change |
 |---|---|---|---|
 | `lat_pipe_p50` | 1 005 056 ns | **19 968 ns** | 50 times |
-| `lat_pipe_p99` | 1 044 992 ns | **46 592 ns** | 22 times |
+| `lat_pipe_p99` | 1 044 992 ns | **36 352 ns** | 29 times |
 | `pipe` (4 MiB, both ends) | 31.00 MiB/s | **333.33-400.00 MiB/s** | 11-13 times |
 | `lat_syscall_p50` | 472 ns | 472 ns | the door does not move |
 
 The 1.8 column is three runs of `--runs 1` (1 003 008, 1 005 056 and
 1 009 152 ns for the p50) and agrees with the table of the release above
 (1 004 032, 1 006 080, 1 007 104 ns). The 1.9 column is one `make bench` of
-three boots: 18 944, 19 968 and 19 968 ns, spread 5.1 %, and the p99 of the
-same boots 42 496, 46 592 and 46 592 ns. A second batch answered the same
-19 968 ns for the p50 and a `pipe` of 400 MiB/s: the rate of the pipe is the
-row that moves with the load of the host, and its three runs of one batch were
-400.00, 307.69 and 333.33 MiB/s.
+three boots, and the middle byte was steady enough to land in one bucket:
+19 968, 19 968 and 19 968 ns, spread 0.0 %, and the p99 of the same boots
+35 328, 36 352 and 43 520 ns. A second batch answered 18 944, 19 968 and
+19 968 ns for the p50 and 46 592 ns for the p99, and a `pipe` of 333.33 MiB/s
+against the 400.00 of this one: the rate of the pipe is the row that moves with
+the load of the host, and its three runs of this batch were 363.63, 400.00 and
+400.00 MiB/s.
 
 The suite measures the same round trip on the host port
 (`tests/cases/test_wait.c`, 64 bytes, the p50 of each run printed as `wait: the
-p50 of a byte through a pipe is <n> us`): **3 µs**, three runs, and the wake of
-a sleeping task from the wake to the stamp of the waiter is **7-9 µs**. The
+p50 of a byte through a pipe is <n> us`): **4 µs**, three runs of 4, 4 and
+3 µs, and the wake of a sleeping task from the wake to the stamp of the waiter
+is **8-11 µs** (10, 8 and 11). The
 host is not in the table above because it has no `/bin/bench`: the case of the
 suite is its number, and it is the same mechanism.
 

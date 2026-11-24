@@ -123,13 +123,14 @@ full table is in `docs/bench.md`):
 | Row | 1.8.0 | 1.9.0 | |
 |---|---|---|---|
 | `lat_pipe_p50` | 1 005 056 ns | **19 968 ns** | a tick → twenty microseconds |
-| `lat_pipe_p99` | 1 044 992 ns | **46 592 ns** | the tail moves with the middle |
+| `lat_pipe_p99` | 1 044 992 ns | **36 352 ns** | the tail moves with the middle |
 | `pipe` (4 MiB, both ends) | 31.00 MiB/s | **333-400 MiB/s** | the rate of a pipe that blocks |
 | `lat_syscall_p50` | 472 ns | 472 ns | the door of the call does not move |
 
 On the host the same round trip, measured by the case of the suite
-(`tests/cases/test_wait.c`, the p50 of 64 bytes, three runs): **3 µs**. The wake
-of a sleeping task, measured from the wake to the stamp of the waiter: 7-9 µs.
+(`tests/cases/test_wait.c`, the p50 of 64 bytes, three runs of 4, 4 and 3 µs):
+**4 µs**. The wake of a sleeping task, measured from the wake to the stamp of
+the waiter: 8-11 µs.
 
 ## Consequences
 
