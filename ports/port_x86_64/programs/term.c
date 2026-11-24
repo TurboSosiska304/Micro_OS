@@ -82,6 +82,11 @@ static char g_line[TERM_LINE_MAX];
 static int g_line_length;
 static bool g_running = true;
 
+/* The words of the bar of the window: the name of the terminal and, while a
+ * command runs in it, the name of the command. The bar of the server and the
+ * button of its panel are the same words (docs/desktop.md). */
+static char g_title[UI_TITLE_MAX] = "term";
+
 static long g_child = -1;
 static int g_child_in = -1;
 static int g_child_out = -1;
@@ -192,6 +197,43 @@ static void grid_paint(void)
     row_paint(g_cursor_row);
 }
 
+/*
+ * The title of the window, in its own bar and in the panel of the server. The
+ * bar of a client is the pixels of the client, so the row of the title is
+ * painted here and only when the words change: a command that starts is a row
+ * of 16 pixels of a window and not a frame (docs/desktop.md).
+ */
+static void title_set(const char *title)
+{
+    int index;
+    int cells;
+    int length;
+    int cell_w = ui_font_cell_width(g_font);
+
+    if (title == NULL || strcmp(title, g_title) == 0) {
+        return;
+    }
+
+    (void)snprintf(g_title, sizeof(g_title), "%s", title);
+
+    index = ui_screen_find(&g_model, TERM_ID);
+    if (index != UI_WINDOW_NONE) {
+        (void)snprintf(g_model.windows[index].title, sizeof(g_model.windows[index].title), "%s",
+                       g_title);
+    }
+
+    (void)uiprog_title(&g_screen, g_title);
+
+    cells = ((int)g_screen.info.width - 2 * UI_FRAME_PAD) / cell_w;
+    length = (int)strlen(g_title);
+    if (length > cells) {
+        length = cells;
+    }
+
+    (void)uiprog_text_font(&g_screen, UI_FRAME_PAD, UI_FRAME_MARGIN, g_title, cells, g_title_ink,
+                           g_bar, g_font);
+}
+
 static void frame_paint(void)
 {
     int index = ui_screen_find(&g_model, TERM_ID);
@@ -268,8 +310,11 @@ static bool build_path(const char *name, char *out, k_size_t size)
     return length > 0 && (k_size_t)length < size;
 }
 
-/* The words of the line: spaces separate them, a double quote keeps a space in
- * a word, and a word that does not fit is the whole line refused. */
+/* The words of the line: spaces separate them and a command of more words than
+ * the table holds is refused whole, because a command that lost its last
+ * argument is a different command. There is no quote and no operator in this
+ * line: a pipe and a variable are the work of the shell of the machine, which
+ * is a task of the kernel and not this window (ADR 0054). */
 static int split_line(char *line, char *words[], int max)
 {
     int count = 0;
@@ -444,7 +489,7 @@ static void command_run(const char *line)
         char title[UI_TITLE_MAX];
 
         (void)snprintf(title, sizeof(title), "term - %s", g_child_name);
-        (void)uiprog_title(&g_screen, title);
+        title_set(title);
     }
 }
 
@@ -481,7 +526,7 @@ static void child_reap(void)
         say_fmt("", line);
     }
 
-    (void)uiprog_title(&g_screen, "term");
+    title_set("term");
     prompt();
 }
 
@@ -725,7 +770,7 @@ int main(int argc, char *const argv[], char *const envp[])
 
     prompt();
     frame_paint();
-    (void)uiprog_title(&g_screen, "term");
+    (void)uiprog_title(&g_screen, g_title);
     say("term: the window of the terminal is up\n");
 
     while (g_running) {
