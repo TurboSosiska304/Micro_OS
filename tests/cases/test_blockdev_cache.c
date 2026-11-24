@@ -25,6 +25,7 @@ static k_size_t s_erases;
 static k_size_t s_syncs;
 static k_u32_t s_last_sector;
 static k_size_t s_last_count;
+static k_size_t s_last_read_count;
 
 static void fill_sector(k_u32_t sector)
 {
@@ -44,6 +45,7 @@ static int counting_read(void *ctx, k_u32_t sector, void *buf, k_size_t count)
     }
 
     s_reads++;
+    s_last_read_count = count;
     memcpy(buf, s_data[sector], count * CACHE_SECTOR_SIZE);
 
     return 0;
@@ -179,6 +181,47 @@ void test_blockdev_cache(void)
 
     KT_CHECK_INT_EQ(view->ops->read(view->ctx, 3, buffer, 1), 0);
     KT_CHECK_INT_EQ(s_reads, 1);
+
+    /*
+     * --- a run is one command, and the read ahead is a continuation --------
+     *
+     * The stream of a caller is what the read ahead is for, and it is a call
+     * that starts where the last one ended (ADR 0042). A call of four sectors
+     * from a cold cache is one command of four; the call that continues it is
+     * a stream and the device is asked for its read ahead; a call somewhere
+     * else is a call of its own and one command of its own size.
+     */
+
+    s_reads = 0;
+    s_last_read_count = 0;
+    KT_CHECK_INT_EQ(view->ops->read(view->ctx, 16, run, 4), 0);
+    KT_CHECK_INT_EQ(s_reads, 1);
+    KT_CHECK_INT_EQ((int)s_last_read_count, 4);
+    KT_CHECK_INT_EQ(memcmp(run, s_data[16], 4 * CACHE_SECTOR_SIZE), 0);
+
+    s_reads = 0;
+    KT_CHECK_INT_EQ(view->ops->read(view->ctx, 20, run, 4), 0);
+    KT_CHECK_INT_EQ(s_reads, 1);
+    KT_CHECK_INT_EQ((int)s_last_read_count, 8);
+
+    /* The sectors of the read ahead are there for the call after it. */
+    s_reads = 0;
+    KT_CHECK_INT_EQ(view->ops->read(view->ctx, 24, run, 4), 0);
+    KT_CHECK_INT_EQ((int)s_reads, 0);
+
+    s_reads = 0;
+    s_last_read_count = 0;
+    KT_CHECK_INT_EQ(view->ops->read(view->ctx, 40, buffer, 1), 0);
+    KT_CHECK_INT_EQ(s_reads, 1);
+    KT_CHECK_INT_EQ((int)s_last_read_count, 1);
+
+    /* ... and the call of one sector that continues *it* is a stream. */
+    s_reads = 0;
+    KT_CHECK_INT_EQ(view->ops->read(view->ctx, 41, buffer, 1), 0);
+    KT_CHECK_INT_EQ(s_reads, 1);
+    KT_CHECK_INT_EQ((int)s_last_read_count, 8);
+
+    s_reads = 0;
 
     /* --- a write goes through, and the copy follows it ------------------- */
 

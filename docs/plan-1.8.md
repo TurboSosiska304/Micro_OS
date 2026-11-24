@@ -92,6 +92,20 @@ The five steps of `docs/debts.md`, the lane 1.7 named and did not take:
 Target: **100 MiB/s of writing** on a volume of 5 GiB, and the five operations
 of the block layer per kilobyte down to one and a quarter.
 
+**Taken in 1.8, and the target was the wrong number** (ADR 0042): the five
+operations per kilobyte were closed by the run of ADR 0037 and not by the
+grain - the block layer is at 0.10 per kilobyte at either grain - and the
+grain of 4 KiB is the *slower* one on the disk of the port (122 against 141
+MiB/s written on the volume of 5 GiB, 186 against 286 in `make bench`) because
+the cost of a write is the command of the channel and the metadata of ext2 is
+a record: at 4 KiB blocks the same file costs 22 384 sectors of the medium
+where 1 KiB blocks cost 20 796. Both grains pass `e2fsck -fn` and both are
+above 100 MiB/s. What the lane did deliver: the view of a volume at a grain of
+its own, the ext2 root of `--block-size`, the two grains in the gate, and the
+defect of the read ahead that the grain exposed (a 16 MiB write read 36 MiB of
+the disk). MicroFS keeps its kilobyte: a 4 KiB block is version 4 of its
+format, and `docs/debts.md` names the shape of that change.
+
 ## M5 - the desktop, second half
 
 The cleanroom of 1.7 said: "it looks like the 90s". That is not a defect, it is

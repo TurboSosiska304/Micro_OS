@@ -139,9 +139,40 @@ static int device_write(struct ext2_volume *vol, k_u64_t offset, const void *buf
     }
 
     while (size > 0) {
-        k_u32_t sector = (k_u32_t)(offset / dev_size);
-        k_u32_t inside = (k_u32_t)(offset % dev_size);
-        k_size_t chunk = dev_size - inside;
+        k_u32_t sector;
+        k_u32_t inside;
+        k_size_t chunk;
+
+        /*
+         * A run of whole sectors is one call of the device and not one per
+         * sector: the block layer gathers the run into the commands of the
+         * medium, and the writer of the volume hands it runs of whole blocks
+         * (`ext2_file_write`). The calls and the lookups of the cache are what
+         * the medium pays besides the bytes (ADR 0037, ADR 0042).
+         */
+        if ((offset % dev_size) == 0u && size >= dev_size) {
+            k_size_t run = size / dev_size;
+
+            if (run > EXT2_IO_BYTES_MAX / dev_size) {
+                run = EXT2_IO_BYTES_MAX / dev_size;
+            }
+
+            if (vol->dev->ops->write(vol->dev->ctx, (k_u32_t)(offset / dev_size), src, run) != 0) {
+                return KERR_IO;
+            }
+
+            /* The cache holds what the medium held before the write. */
+            vol->cache_valid = false;
+
+            src += run * dev_size;
+            offset += run * dev_size;
+            size -= run * dev_size;
+            continue;
+        }
+
+        sector = (k_u32_t)(offset / dev_size);
+        inside = (k_u32_t)(offset % dev_size);
+        chunk = dev_size - inside;
 
         if (sector >= vol->dev->sectors) {
             return KERR_IO;
@@ -151,19 +182,13 @@ static int device_write(struct ext2_volume *vol, k_u64_t offset, const void *buf
             chunk = size;
         }
 
-        if (inside == 0 && chunk == dev_size) {
-            if (vol->dev->ops->write(vol->dev->ctx, sector, src, 1) != 0) {
-                return KERR_IO;
-            }
-        } else {
-            /* A partial sector is read, changed and written back. */
-            if (vol->dev->ops->read(vol->dev->ctx, sector, vol->sector, 1) != 0) {
-                return KERR_IO;
-            }
-            memcpy(vol->sector + inside, src, chunk);
-            if (vol->dev->ops->write(vol->dev->ctx, sector, vol->sector, 1) != 0) {
-                return KERR_IO;
-            }
+        /* A partial sector is read, changed and written back. */
+        if (vol->dev->ops->read(vol->dev->ctx, sector, vol->sector, 1) != 0) {
+            return KERR_IO;
+        }
+        memcpy(vol->sector + inside, src, chunk);
+        if (vol->dev->ops->write(vol->dev->ctx, sector, vol->sector, 1) != 0) {
+            return KERR_IO;
         }
 
         /* The cache holds what the medium held before the write. */
@@ -238,6 +263,7 @@ int ext2_volume_mount(struct ext2_volume *vol, const struct k_blockdev *dev)
     k_u32_t table;
     k_u64_t device_bytes;
     k_u64_t groups;
+    int failure = KERR_INVAL;
     int rc;
 
     if (vol == NULL || dev == NULL) {
@@ -339,31 +365,48 @@ int ext2_volume_mount(struct ext2_volume *vol, const struct k_blockdev *dev)
     vol->free_inodes = ext2_le32(sb + 16);
     vol->volume_bytes = (k_u64_t)blocks_count * block_size;
 
+    /*
+     * The grain of the volume over the grain of the medium: the superblock is
+     * the only thing that knows the block size, so the volume opens the view
+     * and everything below this line reads the volume at its own grain
+     * (ADR 0042). The superblock itself was read through the medium, before
+     * the size was known.
+     */
+    if (block_size > dev->sector_size) {
+        if (k_blockdev_view_open(&vol->view, dev, block_size) != 0) {
+            return KERR_NOTSUP;
+        }
+
+        vol->dev = k_blockdev_view_device(&vol->view);
+        vol->view_open = true;
+    }
+
     device_bytes = (k_u64_t)dev->sectors * dev->sector_size;
     if (vol->volume_bytes < EXT2_SUPERBLOCK_OFFSET + EXT2_SUPERBLOCK_SIZE ||
         vol->volume_bytes > device_bytes) {
-        return KERR_INVAL;
+        goto fail;
     }
 
     /* The table of the group descriptors has to fit on the medium before a
      * group is looked at; the descriptor of the first group names the inode
      * table, which is the next thing every path needs. */
     if (ext2_descriptor_start(vol) + (k_u64_t)groups * 32u > vol->volume_bytes) {
-        return KERR_INVAL;
+        goto fail;
     }
 
     rc = device_read(vol, ext2_descriptor_start(vol), group, sizeof(group));
     if (rc != 0) {
-        return rc;
+        failure = rc;
+        goto fail;
     }
 
     table = ext2_le32(group + 8);
     if (table == 0 || table >= blocks_count) {
-        return KERR_INVAL;
+        goto fail;
     }
 
     if ((k_u64_t)table * block_size + (k_u64_t)inodes_per_group * inode_size > vol->volume_bytes) {
-        return KERR_INVAL;
+        goto fail;
     }
 
     vol->mounted = true;
@@ -372,6 +415,15 @@ int ext2_volume_mount(struct ext2_volume *vol, const struct k_blockdev *dev)
           (unsigned)blocks_count, (unsigned)block_size, (unsigned)groups);
 
     return 0;
+
+fail:
+    if (vol->view_open) {
+        k_blockdev_view_close(&vol->view);
+        vol->view_open = false;
+        vol->dev = dev;
+    }
+
+    return failure;
 }
 
 /*
@@ -429,6 +481,8 @@ int ext2_volume_flush(struct ext2_volume *vol)
 
 void ext2_volume_unmount(struct ext2_volume *vol)
 {
+    const struct k_blockdev *medium;
+
     if (vol == NULL) {
         return;
     }
@@ -438,6 +492,16 @@ void ext2_volume_unmount(struct ext2_volume *vol)
         vol->group_cached = vol->groups;
         vol->bitmap_kind = EXT2_BITMAP_NONE;
     }
+
+    /*
+     * The view is the volume's and not the device's: it goes away with the
+     * mount, after the last flush. The medium is the device the caller named,
+     * and the volume answers with it again.
+     */
+    medium = vol->view_open ? vol->view.medium : vol->dev;
+    k_blockdev_view_close(&vol->view);
+    vol->view_open = false;
+    vol->dev = medium;
 
     vol->mounted = false;
     vol->cache_valid = false;

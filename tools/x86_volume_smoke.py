@@ -22,13 +22,19 @@ the volume (640 KiB of a 5 GiB volume) and whose chain of blocks grows one
 block at a time. FAT32 is not: it is the exchange volume of the second
 partition and its ceiling is the format's own.
 
+The ext2 volume is asked of both grains of ADR 0042 - 1 KiB and 4 KiB blocks -
+and every check names the one it made, so the two rows of a release are the
+same questions of two volumes. MicroFS has one block of 1 KiB and is asked
+once; `--block-size` narrows the run to one grain.
+
 The program that writes the file is `/bin/mkbig`, built by `make x86-build`
 and put in the image by this tool and not by the image of the release: the
 smoke of the volume is a test of the machine, not a tool a person uses.
 
     python3 tools/x86_volume_smoke.py [--build DIR] [--mkfs PATH]
                                       [--dir DIR] [--mib-ext2 128]
-                                      [--mib-mfs 16] [--keep] [--verbose]
+                                      [--mib-mfs 16] [--block-size both]
+                                      [--keep] [--verbose]
 
 The exit status is 0 when every check passed, 2 when a tool or an image is
 missing, and 1 when a check failed.
@@ -46,7 +52,7 @@ import tempfile
 import time
 
 from qemu_session import DISKS, Machine, MachineError, root_name
-from x86_image import build_image
+from x86_image import EXT2_BLOCK_BYTES, build_image
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_BUILD = os.path.join(ROOT, "build-x86")
@@ -175,12 +181,23 @@ def heap_free_kb(answer: str) -> int:
 
 
 def df_blocks(answer: str) -> tuple:
-    match = re.search(r"blocks: (\d+) of (\d+) free", answer)
+    """The free and the total blocks of `df /`, and the size of one of them.
 
-    return (int(match.group(1)), int(match.group(2))) if match is not None else (0, 0)
+    The blocks of a volume are its own unit (the shell names the size beside
+    the count), so a caller that compares a volume with a number of bytes
+    multiplies by the grain and not by a kilobyte: the ext2 volume of 4 KiB
+    blocks has a quarter of the blocks of the one of 1 KiB.
+    """
+    match = re.search(r"blocks: (\d+) of (\d+) free \((\d+) KB each\)", answer)
+
+    if match is None:
+        return (0, 0, 0)
+
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3)) * 1024)
 
 
-def build_mkbig_image(image: str, build: str, mkfs: str, fs: str) -> int:
+def build_mkbig_image(image: str, build: str, mkfs: str, fs: str,
+                      block_size: int = EXT2_BLOCK_BYTES) -> int:
     """The tree of the release and `/bin/mkbig` in a volume of 5 GiB."""
     extra = ["--program", f"/bin/mkbig={os.path.join(build, 'mkbig.mox')}"]
 
@@ -192,61 +209,84 @@ def build_mkbig_image(image: str, build: str, mkfs: str, fs: str) -> int:
         fs=fs,
         data_mb=0,
         extra=extra,
+        block_size=block_size,
     )
 
 
-def ext2_checks(build: str, work: str, mkfs: str, mib: int, timeout: float) -> None:
-    """The ext2 root: written, read back, and read by the tools of the world."""
-    image = os.path.join(work, "ext2-5g.img")
+def grain_name(block_size: int) -> str:
+    """The grain of a volume, as a line of the report names it."""
+    return f"{block_size // 1024} KiB"
+
+
+def df_bytes(free: int, total: int, block_size: int) -> tuple:
+    """The free and the total bytes of a `df` line."""
+    return (free * block_size, total * block_size)
+
+
+def ext2_checks(build: str, work: str, mkfs: str, mib: int, timeout: float,
+                block_size: int = EXT2_BLOCK_BYTES) -> None:
+    """The ext2 root at one grain: written, read back, and read by the world.
+
+    Every check names the grain of the volume of the run: the smoke asks the
+    same questions of a volume of 1 KiB blocks and of 4 KiB ones (ADR 0042),
+    and the two are the two rows of the table of the report.
+    """
+    grain = grain_name(block_size)
+    title = f"ext2 {grain}"
+    image = os.path.join(work, f"ext2-5g-{block_size}.img")
     started = time.monotonic()
 
-    if build_mkbig_image(image, build, mkfs, "ext2") != 0:
-        check("ext2: the image of 5 GiB is written", False, image)
+    if build_mkbig_image(image, build, mkfs, "ext2", block_size) != 0:
+        check(f"{title}: the image of 5 GiB is written", False, image)
         return
 
     seconds = time.monotonic() - started
     on_disk = size_on_disk(image)
     check(
-        f"ext2: the image of {VOLUME_MB} MB costs {on_disk // (1024 * 1024)} MB of the host",
+        f"{title}: the image of {VOLUME_MB} MB costs {on_disk // (1024 * 1024)} MB of the host",
         on_disk <= SPARSE_LIMIT_MB * 1024 * 1024,
         f"{on_disk} bytes on disk, {seconds:.1f} s to build",
     )
-    print(f"  ext2: the image of {VOLUME_MB} MB is {on_disk // (1024 * 1024)} MB of the host"
-          f" ({seconds:.1f} s of mkfs)")
+    print(f"  {title}: the image of {VOLUME_MB} MB is {on_disk // (1024 * 1024)} MB of the host"
+          f" ({seconds:.1f} s of mkfs, blocks of {block_size} bytes)")
 
     try:
         with Machine(build, image, disk=DISK) as machine:
             banner = machine.open(timeout=timeout)
-            check("ext2: the machine boots on the volume of 5 GiB",
+            check(f"{title}: the machine boots on the volume of 5 GiB",
                   f"root: the root is ext2 on {root_name(DISK)}" in banner, banner[-400:])
 
             answer, _ = timed(machine, "df /", 60.0)
-            free, total = df_blocks(answer)
-            check("ext2: df / counts the blocks of the volume of 5 GiB",
-                  total * 1024 >= (VOLUME_MB - 64) * 1024 * 1024, answer)
+            free, total, unit = df_blocks(answer)
+            free_bytes, total_bytes = df_bytes(free, total, unit)
+            check(f"{title}: df / counts the blocks of the volume of 5 GiB",
+                  unit == block_size and total_bytes >= (VOLUME_MB - 64) * 1024 * 1024, answer)
 
             answer, _ = timed(machine, "ls /bin", 60.0)
-            check("ext2: /bin of the volume is the tree of the release",
+            check(f"{title}: /bin of the volume is the tree of the release",
                   "mkbig" in answer and "hello" in answer and "no such file" not in answer,
                   answer)
 
             answer, seconds = timed(machine, f"exec /bin/mkbig write /big.bin {mib}", 1800.0)
             wrote = mib_per_second(answer, "wrote")
-            check(f"ext2: a file of {mib} MiB is written to the volume",
+            check(f"{title}: a file of {mib} MiB is written to the volume",
                   f"wrote {mib * 1024 * 1024} bytes" in answer and wrote > 0.2, answer)
 
             written_rate = wrote
             written_seconds = seconds
 
             answer, _ = timed(machine, "df /", 60.0)
-            after_free, after_total = df_blocks(answer)
-            used = free - after_free
-            check("ext2: df / shows the file on the medium",
-                  after_total == total and mib * 1024 <= used <= mib * 1024 + 8192, answer)
+            after_free, after_total, after_unit = df_blocks(answer)
+            after_bytes = after_free * after_unit
+            used_bytes = free_bytes - after_bytes
+            check(f"{title}: df / shows the file on the medium",
+                  after_total == total and after_unit == unit
+                  and mib * 1024 * 1024 <= used_bytes <= mib * 1024 * 1024 + 8 * 1024 * 1024,
+                  answer)
 
             answer, seconds = timed(machine, f"exec /bin/mkbig verify /big.bin {mib}", 1800.0)
             read = mib_per_second(answer, "read")
-            check(f"ext2: the file of {mib} MiB comes back from the medium",
+            check(f"{title}: the file of {mib} MiB comes back from the medium",
                   "the bytes agree" in answer and read > 0.2, answer)
             read_rate = read
             read_seconds = seconds
@@ -259,7 +299,7 @@ def ext2_checks(build: str, work: str, mkfs: str, mib: int, timeout: float) -> N
             answer, seconds = timed(machine, "exec /bin/mmap /big.bin", 1800.0)
             sums = re.findall(r"mmap: sum through (?:mmap|read) (-?\d+)", answer)
             check(
-                f"ext2: the file of {mib} MiB is read through mmap",
+                f"{title}: the file of {mib} MiB is read through mmap",
                 "mmap: done" in answer and len(sums) == 2 and sums[0] == sums[1],
                 answer[-600:],
             )
@@ -269,16 +309,16 @@ def ext2_checks(build: str, work: str, mkfs: str, mib: int, timeout: float) -> N
             # root of this machine is e2fsck of the host below. The gap is in
             # docs/debts.md and in the report of the gate.
             answer, _ = timed(machine, "fsck", 60.0)
-            print(f"  ext2: fsck of the machine: {answer.strip()}")
+            print(f"  {title}: fsck of the machine: {answer.strip()}")
     except MachineError as error:
-        check("ext2: the machine boots on the volume of 5 GiB", False, str(error))
+        check(f"{title}: the machine boots on the volume of 5 GiB", False, str(error))
         return
 
-    print(f"  ext2: wrote {mib} MiB at {written_rate:.2f} MiB/s ({written_seconds:.1f} s),"
+    print(f"  {title}: wrote {mib} MiB at {written_rate:.2f} MiB/s ({written_seconds:.1f} s),"
           f" read it at {read_rate:.2f} MiB/s ({read_seconds:.1f} s)")
 
     # --- the tools of the world, on the image of the session
-    part = os.path.join(work, "ext2-part.img")
+    part = os.path.join(work, f"ext2-part-{block_size}.img")
 
     if not host_tool("e2fsck") or not host_tool("debugfs"):
         print("  (e2fsprogs is not installed: the half of the host is skipped)", file=sys.stderr)
@@ -286,12 +326,19 @@ def ext2_checks(build: str, work: str, mkfs: str, mib: int, timeout: float) -> N
 
     extract_partition(image, part, VOLUME_MB)
 
+    # The grain the tools of the world see is the grain the superblock names:
+    # an image of 4 KiB blocks is a volume of `mke2fs -b 4096`, not a 1 KiB one
+    # with a different file.
+    status, text = run_tool(["debugfs", "-R", "stats", part])
+    check(f"{title}: the superblock of the volume names blocks of {block_size} bytes",
+          status == 0 and f"Block size:               {block_size}" in text, text[:600])
+
     status, text = run_tool(["e2fsck", "-fn", part])
-    check("ext2: e2fsck -fn of the host finds nothing to repair",
+    check(f"{title}: e2fsck -fn of the host finds nothing to repair",
           status == 0 and "Fix? no" not in text, text[-800:])
 
     status, text = run_tool(["debugfs", "-R", "stat /big.bin", part])
-    check(f"ext2: debugfs sees the file of {mib} MiB",
+    check(f"{title}: debugfs sees the file of {mib} MiB",
           status == 0 and f"Size: {mib * 1024 * 1024}" in text, text[-400:])
 
 
@@ -323,9 +370,9 @@ def mfs_checks(build: str, work: str, mkfs: str, mib: int, timeout: float) -> in
                   f"root: the root is mfs on {root_name(DISK)}" in banner, banner[-400:])
 
             answer, seconds = timed(machine, "df /", 120.0)
-            free, total = df_blocks(answer)
+            free, total, unit = df_blocks(answer)
             check("mfs: df / counts the blocks of the volume of 5 GiB",
-                  total * 1024 >= (VOLUME_MB - 512) * 1024 * 1024, answer)
+                  unit == 1024 and total * unit >= (VOLUME_MB - 512) * 1024 * 1024, answer)
             check("mfs: the inode table of the volume is walked once, not per record",
                   "inodes:" in answer, answer)
 
@@ -348,9 +395,10 @@ def mfs_checks(build: str, work: str, mkfs: str, mib: int, timeout: float) -> in
             read_seconds = seconds
 
             answer, _ = timed(machine, "df /", 120.0)
-            after_free, after_total = df_blocks(answer)
+            after_free, after_total, after_unit = df_blocks(answer)
             check("mfs: df / shows the file on the medium",
-                  after_total == total and free - after_free >= mib * 1024, answer)
+                  after_total == total and after_unit == unit
+                  and (free - after_free) * unit >= mib * 1024 * 1024, answer)
 
             answer, fsck_seconds = timed(machine, "fsck", 120.0)
             check("mfs: fsck of the machine says the volume is consistent",
@@ -402,6 +450,12 @@ def main(argv: list) -> int:
                         help="the size of the file of the ext2 volume (default: 128)")
     parser.add_argument("--mib-mfs", type=int, default=16, metavar="N",
                         help="the size of the file of the MicroFS volume (default: 16)")
+    parser.add_argument(
+        "--block-size",
+        choices=("1024", "4096", "both"),
+        default="both",
+        help="the grain of the ext2 volume (default: both, 1024 and 4096; MicroFS is 1024)",
+    )
     parser.add_argument("--timeout", type=float, default=1800.0,
                         help="the seconds a boot gets (default: 1800)")
     parser.add_argument("--keep", action="store_true", help="keep the images of the run")
@@ -438,8 +492,12 @@ def main(argv: list) -> int:
 
     started = time.monotonic()
 
+    grains = (1024, 4096) if args.block_size == "both" else (int(args.block_size),)
+
     try:
-        ext2_checks(args.build, work, args.mkfs, args.mib_ext2, args.timeout)
+        for block_size in grains:
+            ext2_checks(args.build, work, args.mkfs, args.mib_ext2, args.timeout, block_size)
+
         mfs_checks(args.build, work, args.mkfs, args.mib_mfs, args.timeout)
     finally:
         if not args.keep:
@@ -463,8 +521,8 @@ def main(argv: list) -> int:
         print("RESULT: FAIL")
         return 1
 
-    print(f"OK: {len(CHECKS)} check(s) passed on two volumes of {VOLUME_MB} MB"
-          f" in {seconds:.0f} s")
+    print(f"OK: {len(CHECKS)} check(s) passed on the volumes of {VOLUME_MB} MB"
+          f" (ext2 at {args.block_size}, MicroFS) in {seconds:.0f} s")
     print("RESULT: PASS")
 
     return 0
