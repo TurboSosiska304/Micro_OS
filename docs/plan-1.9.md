@@ -80,6 +80,23 @@ Gates: `x86-smoke` with the fault cases, `soak` (the shell survives), a new
 Gates: `x86-vga-smoke` with a terminal, two sizes and a palette; `ports-smoke`
 with a `less` of the outside world on a file of the volume.
 
+## L7 - the machine that switches itself off (asked for on the way)
+
+A machine that cannot be switched off is a machine whose files are whatever the
+power cut left. The lane is the one the person asked for between the others,
+and it is in: **ADR 0050**, the clean end of `kernel/power.c` (the sessions
+closed, the volumes synced and the disks flushed **before** any task is
+signalled, a second sync for what the tasks wrote, the unmount of every volume,
+the power), the refusal of a shutdown whose flush failed, `k_port_power()` in
+the contract of the port (1.13) with ACPI S5 on x86-64, deep sleep on the board
+and a documented exit code on the host, and the commands `shutdown`,
+`poweroff`, `halt`, `reboot`.
+
+Gate: `make power-smoke` - the process of QEMU ends by itself on `shutdown`,
+the same image boots again with a clean volume and its file, `reboot` boots the
+same process a second time, and a block device whose `sync` fails refuses the
+shutdown and leaves the machine running.
+
 ## L5 - the accounts, second half (from 1.8, ADR 0044 has the six steps)
 
 * `chgrp` under the next free number of the ABI, `chgrp` in
