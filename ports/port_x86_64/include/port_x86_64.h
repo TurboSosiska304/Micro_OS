@@ -404,6 +404,21 @@ int port_x86_64_paging_map_user(k_u64_t cr3, k_u64_t vaddr, k_u64_t paddr, k_siz
 void *port_x86_64_paging_phys(k_u64_t cr3, k_u64_t vaddr);
 
 /*
+ * True when the address is in the kernel's half of the map and the table of
+ * its page is there. The top 2 GiB are shared by every space of the port, so
+ * the answer is one entry: a driver that polls a window of a device asks this
+ * before it reads a register (src/e1000e.c).
+ */
+bool port_x86_64_paging_kernel_present(k_u64_t vaddr);
+
+/*
+ * True once the tables of the loader are the tables of the port. Before that
+ * the map of the machine is the one the loader made and it names the whole
+ * memory - the ACPI tables of a laptop included (src/cpu.c).
+ */
+bool port_x86_64_paging_ready(void);
+
+/*
  * The pages of a program that the kernel makes on demand (kernel/port/mm.h):
  * a page that is not there yet, a read-only page that becomes writable, a
  * private copy of a page, and the page that goes. The address of the kernel

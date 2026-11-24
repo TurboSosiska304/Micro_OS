@@ -912,6 +912,19 @@ int port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs
     com1_put_hex64(rip);
     com1_puts(", cs 0x");
     com1_put_hex64(cs);
+
+    /* The address that named the failure: the instruction for the vectors
+     * that carry no address, and the register CR2 for the page fault. It is
+     * the one number a person sends when the machine stops in a driver, and
+     * without it the symbol of the rip is a guess. */
+    if (vector == 14u) {
+        k_u64_t address;
+
+        __asm__ volatile("movq %%cr2, %0" : "=r"(address));
+        com1_puts(", cr2 0x");
+        com1_put_hex64(address);
+    }
+
     com1_puts("\nx86-64: the machine stops here\n");
 
     k_port_halt();
