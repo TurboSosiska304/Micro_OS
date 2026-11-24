@@ -69,8 +69,45 @@ static void tls_init(void)
 #define COM1 0x3F8
 #define COM1_LSR 0x3FD /* line status: bit 5 "can write", bit 0 "can read" */
 
+/*
+ * Whether there is a serial port at all.
+ *
+ * A laptop of these years has no 16550 at 0x3F8, and reading the line status
+ * of a port that is not there answers 0xFF: every bit set, "a byte is
+ * waiting", and the read of the data register answers 0xFF too. The console
+ * took that byte as a key - a byte that prints nothing - and the line of the
+ * shell grew to its limit with it: the owner of the laptop typed `uname` and
+ * the machine answered "line too long, it was not executed" for every line,
+ * the key of the PS/2 and the USB never being asked.
+ *
+ * The probe is the scratch register of the UART: 0xAE written and read back.
+ * A machine with the port has it, a machine without one answers 0xFF, and a
+ * controller that does not keep the register (some do not) is asked once and
+ * then believed by the line status: a status of 0xFF is a bus with nothing on
+ * it, not a port with every error at once.
+ */
+static bool g_com1_present;
+
+static void com1_probe(void)
+{
+    port_outb(COM1 + 7, 0xAEu);
+
+    if (port_inb(COM1 + 7) == 0xAEu) {
+        g_com1_present = true;
+        return;
+    }
+
+    g_com1_present = port_inb(COM1_LSR) != 0xFFu;
+}
+
 static void com1_init(void)
 {
+    com1_probe();
+
+    if (!g_com1_present) {
+        return;
+    }
+
     port_outb(COM1 + 1, 0x00); /* no interrupts: the console is polled */
     port_outb(COM1 + 3, 0x80); /* DLAB on */
     port_outb(COM1 + 0, 0x01); /* divisor 1: 115200 baud */
@@ -286,7 +323,7 @@ int k_port_console_getchar(void)
             return key;
         }
 
-        if ((port_inb(COM1_LSR) & 0x01) != 0) {
+        if (g_com1_present && (port_inb(COM1_LSR) & 0x01) != 0) {
             return (int)port_inb(COM1);
         }
 
@@ -315,7 +352,7 @@ int k_port_console_poll(void)
         return key;
     }
 
-    if ((port_inb(COM1_LSR) & 0x01) != 0) {
+    if (g_com1_present && (port_inb(COM1_LSR) & 0x01) != 0) {
         /* The serial port has no interrupt of its own in this port: the byte
          * is found by a poll, and finding it is the moment a task that waits
          * for the console in `poll` can be told. */
