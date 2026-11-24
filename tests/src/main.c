@@ -32,6 +32,7 @@ static void run_tests(void *arg)
     test_blockdev_cache();
     test_partition();
     test_root();
+    test_volume();
     test_render();
     test_task();
     test_sched();

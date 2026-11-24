@@ -13,6 +13,7 @@ if(NOT ESP_PLATFORM)
         cases/test_blockdev.c
         cases/test_blockdev_cache.c
         cases/test_root.c
+        cases/test_volume.c
         cases/test_render.c
         cases/test_boot.c
         cases/test_kmod.c
