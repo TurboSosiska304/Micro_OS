@@ -178,7 +178,8 @@ The core of the kernel, on every machine:
 | `ulimit [-m bytes \| -c ms \| -n fds]` | the limits of the shell, or lower one of them |
 | `memtest [kilobytes]` | measure the memory and its speed |
 | `mfetch [color]` | the system report with a logo |
-| `reboot` | restart the machine |
+| `shutdown [-f] [off\|halt\|reboot]` | the clean end: no new session, the tasks end, the volumes are synced, the disks flushed, the mounts leave, then the state asked for |
+| `poweroff [-f]`, `halt [-f]`, `reboot [-f]` | the same end with the power off, the processor stopped or the machine reset |
 
 The files, on every machine:
 
@@ -226,7 +227,7 @@ The services, where the port registers them:
 | `i2c` | scan the I2C bus | board |
 | `mic` | the level of the microphone | board |
 | `rtc alarm [HH:MM\|+<seconds>\|day <1-31> HH:MM\|clear]` | the alarm of the BM8563 and its flag | board |
-| `power [sleep <seconds>\|off]` | deep sleep with the timer or button C, or power off | board |
+| `power [sleep <seconds>\|off]` | deep sleep with the timer or button C, or the clean end and a deep sleep woken by button C | board |
 | `factory reset -y` | erase MicroFS and the NVS, then restart; without `-y` it only explains | board |
 
 The simulator has no network and no drivers: `http`, `wget`, `pkg`, `ntp`,

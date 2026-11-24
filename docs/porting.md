@@ -58,7 +58,7 @@ new call of the contract and a port that forgot one are both a failed check.
 | `kernel/port/mem.h` | 6 | the heap, the PSRAM and their numbers | **yes**; PSRAM may be absent |
 | `kernel/port/lock.h` | 6 | critical sections and recursive mutexes | **yes** |
 | `kernel/port/cpu.h` | 2 | the cores of the machine and the one asking | no: the weak default is one core |
-| `kernel/port/power.h` | 2 | halt and reset | **yes** |
+| `kernel/port/power.h` | 3 | halt, off and reset | **yes** |
 | `kernel/port/info.h` | 4 | name, architecture, contract version | **yes** |
 | `kernel/port/kv.h` | 5 | the store behind `/etc` | no: "nothing is stored" |
 | `kernel/port/net.h` | 8 | TCP client and server, one UDP exchange | no: "no network" |
@@ -197,7 +197,7 @@ needs its own build and its own smoke test.
 * [ ] `mem`: alloc/free and the four numbers; the PSRAM may be the heap;
 * [ ] `lock`: a critical section that does not sleep, a recursive mutex that
       does;
-* [ ] `power`: halt and reset, neither returns;
+* [ ] `power`: halt, off and reset, none returns;
 * [ ] `kv`, `net`, `exec`: real or honest stubs (see the table);
 * [ ] `kernel_boot()` with the board description and the subsystem table;
 * [ ] the block devices the machine has, registered before MicroFS mounts;
