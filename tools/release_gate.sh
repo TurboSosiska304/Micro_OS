@@ -114,11 +114,36 @@ printf '| the host | %s core(s), load %s, waited %s s |\n' "$CORES" \
 # that load has not lost it on a quiet machine. A gate that fails is run a
 # second time, on the record: the line of the table says "second run", and a
 # real defect fails twice.
+# The load of a smoke is not only the load of the meter at the start of the
+# gate: the build of the image the smoke boots is a build of three jobs, and a
+# smoke that starts a minute after one is a smoke under load (x86-disk-smoke
+# failed twice in the gate of 1.9.0-rc1 and passed alone a minute later, with
+# the same tree). Every smoke waits for the host to be quiet, again.
+wait_quiet() {
+    waited=0
+    while :; do
+        load1="$(cut -d' ' -f1 /proc/loadavg)"
+        busy="$(awk -v l="$load1" -v m="$LIMIT" 'BEGIN { print (l > m) ? 1 : 0 }')"
+        if [ "$busy" -eq 0 ]; then
+            return 0
+        fi
+        if [ "$waited" -ge 300 ]; then
+            echo " (the load was $load1 after ${waited}s)"
+            return 0
+        fi
+        sleep 10
+        waited=$((waited + 10))
+    done
+}
+
 run() {
     name="$1"
     shift
     TOTAL=$((TOTAL + 1))
     log="$LOGDIR/$(echo "$name" | tr ' /' '__').log"
+    case "$name" in
+        *smoke*) wait_quiet ;;
+    esac
 
     if "$@" > "$log" 2>&1; then
         detail="$(sed -n 's/.*OK: \([0-9]* check(s)\) passed.*/\1/p' "$log" | tail -1)"
