@@ -1,35 +1,41 @@
-#!/usr/bin/env python3
-"""Micro OS — the policy of a page on x86-64 (ADR 0052): the attack suite.
+#!/ usr / bin / env python3
+""
+    "Micro OS — the policy of a page on x86-64 (ADR 0052): the attack suite.
 
-The port has had page tables since 1.0 (ADR 0007): a program is a task of
-ring 3 with a space of its own, the text is read-only, every data page is NX,
-and the boot reads the tables back. What it did not have was a *policy* that
-covers every page a program can reach and every way it can be wrong. This tool
-is the gate of that policy, and every check below is one line of the machine:
+    The port has had page tables since 1.0(ADR 0007)
+    : a program is a task of ring 3 with a space of its own, the text is read - only,
+      every data page is NX, and the boot reads the tables back.What it did not have was a * policy
+                                     * that covers every page a program can reach
+                                 and every way it can be wrong.This tool is the gate of that policy,
+      and every check below is one line of the machine :
 
-  1. the boot says what the processor has - SMEP and SMAP on this machine of
-     QEMU (`-cpu qemu64,+smep,+smap`), the supervisor bit of every kernel page
-     otherwise - and the map of the kernel is W^X;
-  2. a program that writes its own text dies with EFAULT, the address in the
-     log and the error code of a write, and its task dies with 255;
-  3. a program that jumps into its own stack dies with EFAULT and the error
-     code of an instruction fetch, because the stack is data;
-  4. a program that writes the kernel address dies with EFAULT and the error
-     code of a present page - the supervisor bit is what stopped it, not a
-     hole in the map;
-  5. a program that touches a page it does not own dies with EFAULT and the
-     address in the log;
+              1. the boot says what the processor has
+              - SMEP
+          and SMAP on this machine of QEMU(`- cpu qemu64, +smep, +smap`),
+      the supervisor bit of every kernel page otherwise - and the map of the kernel is W ^ X;
+2. a program that writes its own text dies with EFAULT,
+    the address in the log and the error code of a write, and its task dies with 255;
+3. a program that jumps into its own stack dies with EFAULT and the error code of an instruction
+    fetch,
+    because the stack is data;
+4. a program that writes the kernel address dies with EFAULT and the error code of a present page -
+    the supervisor bit is what stopped it,
+    not a hole in the map;
+5. a program that touches a page it does not own dies with EFAULT and the address in the log;
   6. a program that asks `mmap` for a writable and executable page is refused
      with EINVAL and keeps running, and the same page with one bit less is a
      mapping it can use;
-  7. a program that grows its heap and its mappings past the memory limit of
-     its task is answered ENOMEM by both calls and keeps running;
-  8. a program that uses 128 KiB of stack gets them: the port grows the stack
-     by the pages of the frame, the line of the growth is in the log and every
-     byte of the array reads back;
-  9. after every death the shell is alive and a program still runs: the fault
-     took the task and not the machine;
- 10. the W^X audit of every program that runs leaves its line in the log, and
+  7. a program that grows its heap and its mappings past the memory limit of its task is answered
+      ENOMEM by both calls and keeps running;
+  8. a program that uses 128 KiB of stack gets them
+      : the port grows the stack by the pages of the frame,
+        the line of the growth is in the log and every byte of the array reads back;
+  9. a read and a write of a pipe that sleep in the middle of the copy keep the window of SMAP open
+      on the context that opened it,
+      and the next task does not inherit it;
+  10. after every death the shell is alive and a program still runs : the fault took the task and
+                                                                      not the machine;
+ 11. the W^X audit of every program that runs leaves its line in the log, and
      not one of them is refused.
 
 Each attack is a program of the image (`ports/port_x86_64/programs/mmu_*.c`)
@@ -53,19 +59,19 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from qemu_session import Machine, MachineError  # noqa: E402
 
-# The audit line of every `exec` (ADR 0007 §9) and the boot's own map.
+#The audit line of every `exec` (ADR 0007 §9) and the boot's own map.
 AUDIT = "x86-64: the map of a program is W^X"
 AUDIT_BAD = "the map of the program is not W^X"
 BOOT_AUDIT = "x86-64: the map is W^X"
 
-# The processor of the suite. QEMU's qemu64 is the machine of every other
-# smoke of the port and has neither bit of 2014; the two features are added
-# here so that the gate of the policy runs on the processor that has them.
-# `--cpu qemu64` runs the same suite on a machine whose boundary is only the
-# supervisor bit, which is the other half of the promise.
+#The processor of the suite.QEMU's qemu64 is the machine of every other
+#smoke of the port and has neither bit of 2014; the two features are added
+#here so that the gate of the policy runs on the processor that has them.
+# `-- cpu qemu64` runs the same suite on a machine whose boundary is only the
+#supervisor bit, which is the other half of the promise.
 DEFAULT_CPU = "qemu64,+smep,+smap"
 
-# The programs of the suite: the image and the line the shell types.
+#The programs of the suite : the image and the line the shell types.
 ATTACKS = (
     "mmu_text",
     "mmu_execstack",
@@ -74,9 +80,10 @@ ATTACKS = (
     "mmu_heap",
     "mmu_wx",
     "mmu_stack",
+    "mmu_io",
 )
 
-# The program that proves the machine still runs a program after a fault.
+#The program that proves the machine still runs a program after a fault.
 ALIVE = "exec /bin/echo alive"
 
 
@@ -118,51 +125,50 @@ def check_death(report: Report, block: str, name: str, code: str, page: str,
     exact address is the frame of the program and moves with the compiler, the
     page it is in is what the attack is about. The lines are the death of the
     program, the reason the policy gives it and the status of the task;
-    `forbidden` is the line the program would have printed if the page had
-    done what it asked.
-    """
-    report.expect(f"{name}: the program starts", f"PROGRAM: {name} starts" in block, block)
-    report.expect(f"{name}: the page fault of the attack is a page fault",
-                  "the program faulted: vector 14" in block, block)
-    report.expect(f"{name}: the access is the one the attack asked for",
-                  f"error 0x{code:0>16}" in block, block)
-    report.expect(f"{name}: the fault names the page {page}",
-                  f"the program faulted: vector 14 at 0x{page}" in block, block)
-    report.expect(f"{name}: the answer is EFAULT with the address in the log",
-                  "EFAULT, the task ends, the machine stays" in block
-                  and f"touched 0x{page}" in block, block)
-    report.expect(f"{name}: the task ends with the status of a fault",
-                  "the program exited with 255" in block, block)
-    report.expect(f"{name}: the page did not do what the program asked",
-                  forbidden not in block, block)
+ `forbidden` is the line the program would have printed if the page had done what it asked
+     .""
+      "
+     report
+     .expect(f "{name}: the program starts", f "PROGRAM: {name} starts" in block, block) report
+     .expect(f "{name}: the page fault of the attack is a page fault",
+             "the program faulted: vector 14" in block, block) report
+     .expect(f "{name}: the access is the one the attack asked for",
+             f "error 0x{code:0>16}" in block, block) report
+     .expect(f "{name}: the fault names the page {page}",
+             f "the program faulted: vector 14 at 0x{page}" in block, block) report
+     .expect(f "{name}: the answer is EFAULT with the address in the log",
+             "EFAULT, the task ends, the machine stays" in block and f "touched 0x{page}" in block,
+             block) report
+     .expect(f "{name}: the task ends with the status of a fault",
+             "the program exited with 255" in block, block) report
+     .expect(f "{name}: the page did not do what the program asked", forbidden not in block, block)
 
+         def main(argv : list)
+     ->int : parser =
+     argparse.ArgumentParser(description = "the attack suite of the MMU policy (ADR 0052)") parser
+         .add_argument("--image", default = os.path.join("build-x86", "programs.img")) parser
+         .add_argument("--build", default = "build-x86") parser
+         .add_argument("--cpu", default = DEFAULT_CPU) parser
+         .add_argument("--timeout", type = float, default = 240.0) parser.add_argument(
+             "--verbose", action = "store_true") args = parser
+                                                            .parse_args(argv)
 
-def main(argv: list) -> int:
-    parser = argparse.ArgumentParser(description="the attack suite of the MMU policy (ADR 0052)")
-    parser.add_argument("--image", default=os.path.join("build-x86", "programs.img"))
-    parser.add_argument("--build", default="build-x86")
-    parser.add_argument("--cpu", default=DEFAULT_CPU)
-    parser.add_argument("--timeout", type=float, default=240.0)
-    parser.add_argument("--verbose", action="store_true")
-    args = parser.parse_args(argv)
+                                                                if not os.path
+                                                            .exists(args.image)
+     : print(f "mmu-smoke: no image at {args.image}; run `make x86-disk`",
+             file = sys.stderr) return 2
 
-    if not os.path.exists(args.image):
-        print(f"mmu-smoke: no image at {args.image}; run `make x86-disk`", file=sys.stderr)
-        return 2
+       if not os.path.exists(os.path.join(args.build, "microos64.bin"))
+     : print(f "mmu-smoke: no kernel in {args.build}; run `make x86-build`",
+             file = sys.stderr) return 2
 
-    if not os.path.exists(os.path.join(args.build, "microos64.bin")):
-        print(f"mmu-smoke: no kernel in {args.build}; run `make x86-build`", file=sys.stderr)
-        return 2
+       report = Report(args.verbose) execs = 0
 
-    report = Report(args.verbose)
-    execs = 0
-
-    try:
-        with Machine(args.build, args.image, extra_args=["-cpu", args.cpu]) as machine:
+ try : with Machine(args.build, args.image, extra_args = [ "-cpu", args.cpu ]) as machine:
             banner = machine.open(args.timeout)
             execs += 1  # the boot runs /bin/hello through the call
 
-            # --- the machine and its map ---------------------------------
+#-- - the machine and its map -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
             report.expect("the boot reaches the shell", "the kernel is up" in banner, banner)
             report.expect("the map of the kernel is W^X", BOOT_AUDIT in banner, banner)
             report.expect("the boot names the policy of the processor",
@@ -174,7 +180,7 @@ def main(argv: list) -> int:
                 report.expect("the processor of the suite has SMEP and SMAP",
                               "SMEP and SMAP are on" in banner, banner)
 
-            # --- the attacks that end their program -----------------------
+#-- - the attacks that end their program -- -- -- -- -- -- -- -- -- -- -- -
             text = run(machine, "exec /bin/mmu_text", args.timeout)
             execs += 1
             report.expect("mmu_text: the program prints where its text is",
@@ -191,7 +197,7 @@ def main(argv: list) -> int:
             check_death(report, kernel, "mmu_kernel", "7", "ffffffff80000000",
                         "the kernel text took the write")
 
-            # --- the two calls that answer and let the program live -------
+#-- - the two calls that answer and let the program live -- -- -- -
             heap = run(machine, "exec /bin/mmu_heap", args.timeout)
             execs += 1
             report.expect("mmu_heap: the program starts", "PROGRAM: mmu_heap starts" in heap, heap)
@@ -227,13 +233,23 @@ def main(argv: list) -> int:
             report.expect("mmu_stack: every page of the array reads back",
                           "PROGRAM: the pages of the stack read back 528" in grown, grown)
 
-            # --- the machine is alive after every death -------------------
+            io = run(machine, "exec /bin/mmu_io", args.timeout)
+            execs += 1
+            report.expect("mmu_io: the read of a pipe survives the sleep in the copy",
+                          "the read of the pipe came back after the sleep" in io, io)
+            report.expect("mmu_io: the write of a pipe survives the sleep in the copy",
+                          "the write of the pipe came back after the sleep" in io, io)
+            report.expect("mmu_io: the window of the copy travels with the context",
+                          "a copy that sleeps keeps its window" in io
+                          and "the program exited with 0" in io, io)
+
+#-- - the machine is alive after every death -- -- -- -- -- -- -- -- -- -
             alive = run(machine, ALIVE, args.timeout)
             execs += 1
             report.expect("the shell runs a program after the attacks",
                           "alive" in alive and "the program exited with 0" in alive, alive)
 
-            # --- the audit of every program that ran ----------------------
+#-- - the audit of every program that ran -- -- -- -- -- -- -- -- -- -- --
             transcript = machine.transcript.decode("utf-8", errors="replace")
             report.expect("no program of the run was refused as not W^X",
                           AUDIT_BAD not in transcript, transcript)

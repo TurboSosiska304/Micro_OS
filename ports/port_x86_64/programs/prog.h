@@ -107,6 +107,16 @@ static inline long prog_sleep(long ms)
 }
 
 /*
+ * The two ends of a pipe. The read end is written to `fds[0]` and the write
+ * end to `fds[1]`, as POSIX has it, and the call answers 0 or a negative
+ * error.
+ */
+static inline long prog_pipe(int *fds)
+{
+    return prog_call(KSYS_PIPE, (long)(unsigned long)fds, 0, 0, 0, 0, 0);
+}
+
+/*
  * The process calls. On a machine with an address space per task fork() is
  * 0 in the child and the pid of the child in the parent; waitpid() sleeps
  * until that child finishes and writes its status where the pointer says.

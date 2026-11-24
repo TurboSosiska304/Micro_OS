@@ -3108,17 +3108,19 @@ def check(output: str) -> list:
         re.search(r"MicroOS \d+\.\d+\.\d+", answer("uname", 1)) is not None,
     )
 
-    # --- the guard page under the stack (ADR 0048)
-    # The stack of a program is 64 KiB and the page under it is not mapped,
-    # so a recursion that runs past the bottom meets the page and not the
-    # data of the program. The fault is a store into a page that is not
-    # present (error 0x6: not present, write, ring 3) at an address in the
-    # guard, and the program never prints the line after the recursion.
+    # --- the guard page under the stack (ADR 0048, ADR 0052)
+    # The stack of a program starts as 64 KiB and grows into a room of 1 MiB
+    # (ADR 0052); the page under the room is the guard and it is never
+    # mapped, so a recursion that runs past the limit of the task meets that
+    # page and not the data of the program. The fault is a store into a page
+    # that is not present (error 0x6: not present, write, ring 3) at the
+    # bottom of the window - 0x02eee000 - and the program never prints the
+    # line after the recursion.
     stack = answer("exec /bin/crash stack")
     expect("the stack overrun program starts", "PROGRAM: crash overruns the stack" in stack)
     expect(
         "the guard page under the stack takes the program down",
-        "the program faulted: vector 14 at 0x0000000002fe" in stack
+        "the program faulted: vector 14 at 0x0000000002ee" in stack
         and "error 0x0000000000000006" in stack,
         stack[-400:],
     )

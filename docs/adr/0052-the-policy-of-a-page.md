@@ -123,10 +123,12 @@ a fetch into the room: an instruction that jumps under the stack pointer is
 not a frame of a call. A stack overflow is therefore not an answer of a call;
 it ends the task, as POSIX leaves a `SIGSEGV` of a stack.
 
-The growth is a line of the log
+A growth of more than one page is a line of the log
 (`x86-64: the stack of the program (pid N) grew by K page(s) to 0x...`): it
 is the only place the promise is visible, because the program sees the same
-address it always had.
+address it always had. A recursion that walks down one page at a time is not
+logged - that is how a stack is used, and a line per page of a deep recursion
+is a log nobody reads.
 
 ### 4. The heap and the mappings stop at the same ceiling
 

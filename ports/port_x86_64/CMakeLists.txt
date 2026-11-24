@@ -431,6 +431,7 @@ add_program_image(mmu_heap mmu_heap_main)
 add_program_image(mmu_wx mmu_wx_main)
 add_program_image(mmu_stray mmu_stray_main)
 add_program_image(mmu_stack mmu_stack_main)
+add_program_image(mmu_io mmu_io_main)
 
 # A program that uses the library of a program: the runtime sources are
 # compiled for the window together with the file of the program, linked with

@@ -99,6 +99,7 @@ PROGRAMS = [
     "mmu_wx",
     "mmu_stray",
     "mmu_stack",
+    "mmu_io",
     "zcat",
     "pcre2grep",
     "lua",
