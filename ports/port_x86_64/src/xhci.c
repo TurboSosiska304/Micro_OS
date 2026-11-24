@@ -314,6 +314,19 @@ static bool wait_until(k_u32_t offset, k_u32_t mask, k_u32_t value, k_u32_t time
     return (op_read(offset) & mask) == value;
 }
 
+/* Spend a few milliseconds without a ring to wait on. The clock of the
+ * machine is the tick of the PIT, so a wait is a deadline and the loop reads
+ * the register of the controller between two of them - which is also the
+ * moment the device behind the port needs to be ready. */
+static void delay_ms(k_u32_t milliseconds)
+{
+    k_u64_t deadline = k_port_uptime_ms() + milliseconds;
+
+    while (k_port_uptime_ms() < deadline) {
+        __asm__ volatile("pause");
+    }
+}
+
 /* --- the event ring -------------------------------------------------------- */
 
 /* The event the controller wrote, or NULL when the ring is empty. The cycle
@@ -523,6 +536,10 @@ static bool address_device(k_u32_t slot, k_u32_t port, k_u32_t speed, k_u32_t pa
               (unsigned)code);
         return false;
     }
+
+    /* The recovery time of SET_ADDRESS (USB 2.0, 9.2.6.3): two milliseconds
+     * before the first request of the descriptor. */
+    delay_ms(2u);
 
     return true;
 }
@@ -1050,6 +1067,11 @@ static bool port_reset(k_u32_t port, k_u32_t *speed)
     }
 
     *speed = (state & XHCI_PORT_SPEED_MASK) >> XHCI_PORT_SPEED_SHIFT;
+
+    /* The specification gives the device a moment after the reset of its
+     * port before it answers the first command (Linux spends 10 ms here),
+     * and a controller of a real laptop is not QEMU about it. */
+    delay_ms(10u);
 
     return true;
 }
