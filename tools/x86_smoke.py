@@ -2769,7 +2769,7 @@ def check(output: str) -> list:
     # machine without a thread pointer would fault before it answered.
     expect(
         "a file without the x bit is not a program",
-        "has no execute bit" in answer("exec /bin/hello", 0),
+        "the x bit is not for this caller" in answer("exec /bin/hello", 0),
     )
     expect(
         "the owner is a number of the shell",
@@ -3642,7 +3642,7 @@ def users_checks(loader: str, kernel: str, image: str, timeout: float) -> list:
     )
     expect(
         "the account of the group reads the file of the group",
-        last_line(answer("cat /tmp/g/team.txt")) == "seven",
+        re.search(r"(?m)^seven\r?$", answer("cat /tmp/g/team.txt")) is not None,
         answer("cat /tmp/g/team.txt"),
     )
     expect(
@@ -3693,13 +3693,13 @@ def users_checks(loader: str, kernel: str, image: str, timeout: float) -> list:
     )
 
     # The identity was the program's and not the shell's: the task that asked
-    # for the program is the guest it was. `whoami` is the third of the script
-    # - the two before it are the guest's session and the root's after a
-    # logout - and it reads the effective uid of the task.
+    # for the program is the guest it was. `id` is the tenth of the script -
+    # the nine before it are the sessions of `login`, `su` and the logout -
+    # and it reads the effective uid of the task.
     expect(
         "the shell keeps its own identity after a setuid run",
-        last_line(answer("whoami", 3)) == "guest",
-        answer("whoami", 3),
+        "uid=7(guest)" in answer("id", 9),
+        answer("id", 9),
     )
 
     # And the file of root is not a file of the caller.

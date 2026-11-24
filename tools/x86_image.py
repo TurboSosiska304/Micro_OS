@@ -45,6 +45,7 @@ import hashlib
 import io
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
