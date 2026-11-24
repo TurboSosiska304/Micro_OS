@@ -42,6 +42,7 @@
  */
 #include "kernel/blockdev.h"
 
+#include "kernel/errno.h"
 #include "kernel/kmm.h"
 #include "kernel/lock.h"
 #include "kernel/port.h"
@@ -825,6 +826,29 @@ static int cache_sync(void *ctx)
     return rc;
 }
 
+/*
+ * The door of the writes crosses the cache: the mount is above the cache and
+ * the controller is below it, and the sector the cache holds has to be
+ * written by a driver that was told to write. A cache with a write-back
+ * policy is emptied before the door closes, so a sector it still holds is
+ * not lost (the two disks of ADR 0041 are write-through and have none).
+ */
+static int cache_writes(void *ctx, bool open)
+{
+    struct k_blockdev_cache *cache = ctx;
+    const struct k_blockdev *dev = cache->owner;
+
+    if (!open && k_mutex_lock(&g_blockdev_lock) == 0) {
+        if (cache->live) {
+            (void)cache_flush_all(cache);
+        }
+
+        k_mutex_unlock(&g_blockdev_lock);
+    }
+
+    return dev->ops->writes(dev->ctx, open);
+}
+
 /* --- the table ------------------------------------------------------------ */
 
 /*
@@ -929,6 +953,7 @@ static int blockdev_add(const struct k_blockdev *dev, bool cached, bool write_ba
             cache->ops.write = cache_write;
             cache->ops.erase = dev->ops->erase != NULL ? cache_erase : NULL;
             cache->ops.sync = dev->ops->sync != NULL ? cache_sync : NULL;
+            cache->ops.writes = dev->ops->writes != NULL ? cache_writes : NULL;
             cache->view.ops = &cache->ops;
 
             entry->dev = &cache->view;
@@ -1162,6 +1187,30 @@ const struct k_blockdev *k_blockdev_find(const char *name)
     return found;
 }
 
+/*
+ * The door of the writes of a medium (ADR 0041 §2). The layers that stand
+ * between a mount and a controller - the cache, a partition, a view - carry
+ * the operation of the medium below them, so a device either has the whole
+ * chain or none of it, and a mount asks the name it mounted.
+ */
+bool k_blockdev_gated(const struct k_blockdev *dev)
+{
+    return dev != NULL && dev->ops != NULL && dev->ops->writes != NULL;
+}
+
+int k_blockdev_writes(const struct k_blockdev *dev, bool open)
+{
+    if (dev == NULL || dev->ops == NULL) {
+        return KERR_INVAL;
+    }
+
+    if (dev->ops->writes == NULL) {
+        return KERR_NOTSUP;
+    }
+
+    return dev->ops->writes(dev->ctx, open);
+}
+
 /* --- the grain of a volume ------------------------------------------------ */
 
 /*
@@ -1255,6 +1304,15 @@ static int view_sync(void *ctx)
     return view->medium->ops->sync(view->medium->ctx);
 }
 
+/* The door of the writes is the medium's: a view is a way of reading and
+ * writing the same bytes, not a medium with a rule of its own. */
+static int view_writes(void *ctx, bool open)
+{
+    struct k_blockdev_view *view = ctx;
+
+    return view->medium->ops->writes(view->medium->ctx, open);
+}
+
 int k_blockdev_view_open(struct k_blockdev_view *view, const struct k_blockdev *medium,
                          k_u32_t sector_size)
 {
@@ -1286,6 +1344,7 @@ int k_blockdev_view_open(struct k_blockdev_view *view, const struct k_blockdev *
     view->ops.write = view_write;
     view->ops.erase = (medium->ops->erase != NULL) ? view_erase : NULL;
     view->ops.sync = (medium->ops->sync != NULL) ? view_sync : NULL;
+    view->ops.writes = (medium->ops->writes != NULL) ? view_writes : NULL;
 
     view->dev.name = medium->name;
     view->dev.sector_size = sector_size;

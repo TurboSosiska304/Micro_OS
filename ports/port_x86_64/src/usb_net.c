@@ -383,3 +383,19 @@ bool port_x86_64_usb_net_attach(struct port_x86_64_usb_device *device,
 
     return true;
 }
+
+/* The wire left: the seam keeps its operations, and the device answers
+ * "no link" and "no frame" from now on. A machine with a card of virtio
+ * never had this wire as its first device, and a machine with only the dongle
+ * is a machine whose network is down until it is plugged again. */
+void port_x86_64_usb_net_detach(struct port_x86_64_usb_device *device)
+{
+    if (device == NULL || g_usbnet.device != device) {
+        return;
+    }
+
+    g_usbnet.present = false;
+    g_usbnet.device = NULL;
+
+    kinfo("usbnet0: the wire on the port %u is gone", (unsigned)device->port);
+}

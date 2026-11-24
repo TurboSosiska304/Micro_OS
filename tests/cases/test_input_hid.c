@@ -460,6 +460,100 @@ static void test_cap(void)
     KT_CHECK(state.seen);
 }
 
+/* --- the mouse of the boot protocol --------------------------------------- */
+
+static int mouse_decode(struct k_input_hid_mouse_state *state, const k_u8_t *bytes, int length,
+                        struct k_input_hid_event *events)
+{
+    return (int)k_input_hid_mouse_decode(state, bytes, (k_size_t)length, events, 32);
+}
+
+/* A motion of the report is two events: the x axis and the y axis, the second
+ * turned over because the screen counts down. */
+static void test_mouse_motion(void)
+{
+    struct k_input_hid_mouse_state state;
+    struct k_input_hid_event events[8];
+    k_u8_t bytes[4] = {0x00, 0x03, 0x02, 0x00};
+    int count;
+
+    k_input_hid_mouse_init(&state);
+    count = mouse_decode(&state, bytes, 3, events);
+    KT_CHECK_INT_EQ(count, 2);
+    KT_CHECK_INT_EQ(events[0].key, K_INPUT_KEY_POINTER_X);
+    KT_CHECK_INT_EQ((k_i16_t)events[0].value, 3);
+    KT_CHECK_INT_EQ(events[1].key, K_INPUT_KEY_POINTER_Y);
+    KT_CHECK_INT_EQ((k_i16_t)events[1].value, -2);
+}
+
+/* A negative difference is a signed byte and not the number 255. */
+static void test_mouse_negative(void)
+{
+    struct k_input_hid_mouse_state state;
+    struct k_input_hid_event events[8];
+    k_u8_t bytes[4] = {0x00, 0xFF, 0xF0, 0x00};
+    int count;
+
+    k_input_hid_mouse_init(&state);
+    count = mouse_decode(&state, bytes, 3, events);
+    KT_CHECK_INT_EQ(count, 2);
+    KT_CHECK_INT_EQ((k_i16_t)events[0].value, -1);
+    KT_CHECK_INT_EQ((k_i16_t)events[1].value, 16);
+}
+
+/* The button is an edge of the mask and not a level of every report, and a
+ * report of no motion has no axes at all. */
+static void test_mouse_button(void)
+{
+    struct k_input_hid_mouse_state state;
+    struct k_input_hid_event events[8];
+    k_u8_t press[4] = {0x01, 0x00, 0x00, 0x00};
+    k_u8_t hold[4] = {0x01, 0x00, 0x00, 0x00};
+    k_u8_t release[4] = {0x00, 0x00, 0x00, 0x00};
+    int count;
+
+    k_input_hid_mouse_init(&state);
+
+    count = mouse_decode(&state, press, 3, events);
+    KT_CHECK_INT_EQ(count, 1);
+    KT_CHECK_INT_EQ(events[0].key, K_INPUT_KEY_BUTTON_LEFT);
+    KT_CHECK_INT_EQ(events[0].value, INPUT_VALUE_PRESS);
+
+    count = mouse_decode(&state, hold, 3, events);
+    KT_CHECK_INT_EQ(count, 0);
+
+    count = mouse_decode(&state, release, 3, events);
+    KT_CHECK_INT_EQ(count, 1);
+    KT_CHECK_INT_EQ(events[0].key, K_INPUT_KEY_BUTTON_LEFT);
+    KT_CHECK_INT_EQ(events[0].value, INPUT_VALUE_RELEASE);
+}
+
+/* The fourth byte is the wheel, signed, and a report of three bytes has
+ * none. */
+static void test_mouse_wheel(void)
+{
+    struct k_input_hid_mouse_state state;
+    struct k_input_hid_event events[8];
+    k_u8_t up[4] = {0x00, 0x00, 0x00, 0x01};
+    k_u8_t down[4] = {0x00, 0x00, 0x00, 0xFF};
+    int count;
+
+    k_input_hid_mouse_init(&state);
+
+    count = mouse_decode(&state, up, 4, events);
+    KT_CHECK_INT_EQ(count, 1);
+    KT_CHECK_INT_EQ(events[0].key, K_INPUT_KEY_POINTER_WHEEL);
+    KT_CHECK_INT_EQ((k_i16_t)events[0].value, 1);
+
+    count = mouse_decode(&state, down, 4, events);
+    KT_CHECK_INT_EQ(count, 1);
+    KT_CHECK_INT_EQ(events[0].key, K_INPUT_KEY_POINTER_WHEEL);
+    KT_CHECK_INT_EQ((k_i16_t)events[0].value, -1);
+
+    count = mouse_decode(&state, up, 3, events);
+    KT_CHECK_INT_EQ(count, 0);
+}
+
 void test_input_hid(void)
 {
     test_usages();
@@ -473,4 +567,8 @@ void test_input_hid(void)
     test_line_keys();
     test_unknown_usage();
     test_cap();
+    test_mouse_motion();
+    test_mouse_negative();
+    test_mouse_button();
+    test_mouse_wheel();
 }

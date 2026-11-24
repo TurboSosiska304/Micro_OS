@@ -43,7 +43,7 @@ import subprocess
 import sys
 import time
 
-from qemu_session import DISKS, drive_args, root_name
+from qemu_session import DISKS, drive_args, machine_args, root_name
 
 # The image of the build, and the image of this run: the test works on a
 # copy, so a failed boot never leaves a half-written disk for the next one.
@@ -170,6 +170,10 @@ def run_machine(image: str, commands: list, timeout: float) -> str:
         "256",
         "-nographic",
         "-no-reboot",
+        # The machine of the bus: the q35 of the SATA controller of a chipset,
+        # the default machine of the IDE channel, the virtio card and the
+        # NVMe function (ADR 0041, ADR 0042).
+        *machine_args(DISK),
         # A raw image on one of the two disks of the port: the primary
         # channel of ADR 0008 by default, the virtio device of ADR 0037 with
         # `--disk virtio`. The image is the same file.
@@ -254,12 +258,16 @@ def check(first: str, second: str) -> list:
         checks.append((name, bool(condition), detail))
 
     # --- the disk of the machine is found and read
-    expect(
-        "the drive of the machine is found",
-        DISK == "virtio"
-        and re.search(r"virtio0: \d+ MB of virtio-blk", first) is not None
-        or DISK != "virtio" and re.search(r"ata0: \d+ MB", first) is not None,
-    )
+    if DISK == "virtio":
+        found_line = re.search(r"virtio0: \d+ MB of virtio-blk", first) is not None
+    elif DISK == "ahci":
+        found_line = re.search(r"ahci0: \d+ MB on the port \d+", first) is not None
+    elif DISK == "nvme":
+        found_line = re.search(r"nvme0: \d+ MB, \d+-byte blocks", first) is not None
+    else:
+        found_line = re.search(r"ata0: \d+ MB", first) is not None
+
+    expect("the drive of the machine is found", found_line)
     expect(
         "the boot reads the MBR and takes the first partition",
         f"x86-64: the root volume is {root_name(DISK)} (1 partition(s))" in first,

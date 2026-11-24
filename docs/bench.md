@@ -297,11 +297,11 @@ The rest of the human summary of that run:
   shell_pipe                 0.17 MiB/s              - 23437 ms  cat /bench.bin | wc -c (wall clock)
 ```
 
-## The volume of ext2 and the grain of its blocks (ADR 0037, ADR 0042)
+## The volume of ext2 and the grain of its blocks (ADR 0037, ADR 0043)
 
 `--block-size 1024|2048|4096` is the grain of the ext2 volume (the default is
 1024, the block of the image of the release). The same table at the two grains
-of ADR 0042, three runs each, on the machine of the lane of 1.8:
+of ADR 0043, three runs each, on the machine of the lane of 1.8:
 
 | Grain | `file_write` | `file_read` |
 |---|---|---|
@@ -310,7 +310,7 @@ of ADR 0042, three runs each, on the machine of the lane of 1.8:
 
 The coarse grain is the slower one on the disk of the port: the cost of a
 write is the command of the channel and not the byte, and the metadata of a
-volume of 4 KiB blocks is four times the bytes for the same record. ADR 0042
+volume of 4 KiB blocks is four times the bytes for the same record. ADR 0043
 names the numbers of the volume of 5 GiB and the reason.
 
 ## The volume of ext2 (ADR 0037)

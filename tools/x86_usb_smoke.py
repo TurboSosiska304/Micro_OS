@@ -39,6 +39,27 @@ lists it, and the SHA-256 of the whole device is compared before and after.
 The device is a block device of the host (`/dev/sdc`) and the run needs the
 permission to read it; a machine without the device skips the mode.
 
+Three more machines of the same boot drive what the lane added in its second
+iteration:
+
+   4. **the hub** (`-device usb-hub` on the root port and a keyboard at its
+      first port): the hub of the class 09 is enumerated, its ports are
+      powered, its port status is read, a device behind it is addressed with
+      the route string of the slot context, and a line typed through it
+      reaches the shell;
+   5. **the hot-plug**: the shell is up with nothing on the controller, the
+      monitor adds a keyboard (`device_add`), the connect change of the root
+      port enumerates it and the keys arrive; `device_del` takes it away and
+      the shell on the serial console lives on;
+   6. **the mouse** (`-device usb-mouse` behind the hub): the boot names the
+      pointer of the boot protocol, and `/bin/keys` reads the movements and
+      the button out of `/dev/input0` as the same events the mouse of the
+      PS/2 makes.
+
+The line of the controller is the fourth decision of the lane: the boot names
+it (`MSI`, `MSI-X` or the legacy pin), and the test waits for the first event
+it raised.
+
     tools/x86_usb_smoke.py [--image PATH] [--ext2-image PATH]
                            [--net-build PATH] [--stick DEVICE]
                            [--timeout SECONDS] [--verbose]
@@ -353,6 +374,16 @@ def run_usb(loader: str, kernel: str, image: str, ext2_image: str, workdir: str,
             "xhci: controller at" in text,
             "the port did not find the xHCI function of the PCI bus",
         )
+        expect(
+            "the controller has a line of its own",
+            "xhci: the line of the controller is MSI" in text,
+            "the controller of the run did not take MSI or MSI-X",
+        )
+        expect(
+            "the line of the controller raises its first event",
+            machine.wait_serial("xhci: the event ring raised the line", 5.0),
+            "no interrupt of the controller arrived in the five seconds of the boot",
+        )
         match = re.search(r"xhci: controller at [0-9a-f]+, version \d+\.\d+, (\d+) port", text)
         expect(
             "the controller reports its ports",
@@ -530,6 +561,238 @@ def run_usb(loader: str, kernel: str, image: str, ext2_image: str, workdir: str,
             f"{before} before, {after} after",
         )
     )
+
+    return checks
+
+
+def run_hub(loader: str, kernel: str, image: str, workdir: str, timeout: float) -> list:
+    """One boot whose keyboard is behind a hub, and not in a root port.
+
+    The hub of the test is a `usb-hub` on the root port 1 of the controller
+    and the keyboard is at its first port. QEMU names a port of a USB bus by
+    the path of the devices above it (`1.1`: the port 1 of the controller,
+    then the port 1 of the hub), which is the route string the controller
+    reads out of the slot context.
+    """
+    checks = []
+
+    def expect(name: str, condition: bool, detail: str = "") -> None:
+        checks.append((name, bool(condition), detail))
+
+    devices = [
+        "-device", "usb-hub,bus=xhci.0,id=hub",
+        "-device", "usb-kbd,bus=xhci.0,port=1.1,id=hubkbd",
+    ]
+
+    try:
+        machine = Machine(loader, kernel, image, workdir, devices)
+    except (OSError, RuntimeError) as error:
+        expect("the machine of the hub starts", False, str(error))
+        return checks
+
+    try:
+        booted = machine.wait_serial(PROMPT, timeout)
+        text = machine.read_serial()
+        time.sleep(0.5)
+
+        expect("the machine boots with a hub on its controller", booted, text[-600:])
+        hub = re.search(
+            r"usb: hub [0-9a-f]{4}:[0-9a-f]{4} on port (\d+), slot (\d+), "
+            r"(\d+) port\(s\), (\d+) level\(s\)",
+            text,
+        )
+        expect(
+            "the boot enumerates the hub of the class 09",
+            hub is not None,
+            "the descriptor of the hub or its ports did not come up",
+        )
+        expect(
+            "the hub has the ports the driver walks",
+            hub is not None and int(hub.group(3)) >= 1,
+            "the hub of the run named no port",
+        )
+        expect(
+            "the boot names the keyboard behind the hub",
+            re.search(r"usb: keyboard [0-9a-f]{4}:[0-9a-f]{4} on port \d+, slot \d+", text)
+            is not None,
+            "the device of the hub port did not enumerate",
+        )
+        expect(
+            "the controller has a line of its own behind a hub",
+            "xhci: the line of the controller is MSI" in text,
+            "the controller of the run did not take MSI or MSI-X",
+        )
+
+        echo = machine.answer(LINE_ECHO, timeout)
+        answered = lines_of(echo)
+        expect(
+            "a line typed on the keyboard behind the hub reaches the shell",
+            "echo Usb" in answered and "Usb" in answered,
+            echo[-300:],
+        )
+
+        machine.monitor_command("device_del hubkbd")
+        expect(
+            "a keyboard taken out of a port of the hub is gone",
+            machine.wait_serial("usb: the keyboard on the port", 8.0),
+            "the connect change of the hub port did not take the device away",
+        )
+        expect(
+            "the shell lives after the keyboard of the hub left",
+            re.search(r"MicroOS \d+\.\d+\.\d+", machine.answer_serial("uname", timeout))
+            is not None,
+            "",
+        )
+    finally:
+        machine.close()
+
+    return checks
+
+
+def run_hotplug(loader: str, kernel: str, image: str, workdir: str, timeout: float) -> list:
+    """One boot with nothing on the controller, then a keyboard in a root port.
+
+    The machine has no device at all when the shell is up. The monitor adds a
+    keyboard to a port of the controller (the `device_add` of QEMU is a
+    hot-plug of the emulated machine), the driver has to see the connect
+    change, enumerate it and give the shell its keys; `device_del` takes it
+    away, and the shell has to live on the serial console afterwards.
+    """
+    checks = []
+
+    def expect(name: str, condition: bool, detail: str = "") -> None:
+        checks.append((name, bool(condition), detail))
+
+    try:
+        machine = Machine(loader, kernel, image, workdir, [])
+    except (OSError, RuntimeError) as error:
+        expect("the machine of the hot-plug starts", False, str(error))
+        return checks
+
+    try:
+        booted = machine.wait_serial(PROMPT, timeout)
+        time.sleep(0.5)
+        expect("the machine boots with nothing on its controller", booted, "")
+
+        machine.monitor_command("device_add usb-kbd,bus=xhci.0,id=hot")
+        expect(
+            "a keyboard inserted after the boot is enumerated",
+            machine.wait_serial("usb: keyboard", 8.0),
+            "the connect change of the root port did not bring a device up",
+        )
+        time.sleep(0.3)
+
+        echo = machine.answer(LINE_ECHO, timeout)
+        answered = lines_of(echo)
+        expect(
+            "the keyboard inserted after the boot types a line",
+            "echo Usb" in answered and "Usb" in answered,
+            echo[-300:],
+        )
+
+        machine.monitor_command("device_del hot")
+        expect(
+            "the keyboard taken out of the port is gone",
+            machine.wait_serial("usb: the keyboard on the port", 8.0),
+            "the disconnect change of the root port did not take the device away",
+        )
+
+        answer = machine.answer_serial("uname", timeout)
+        expect(
+            "the shell lives after the device left",
+            re.search(r"MicroOS \d+\.\d+\.\d+", answer) is not None,
+            answer[-300:],
+        )
+    finally:
+        machine.close()
+
+    return checks
+
+
+def run_mouse(loader: str, kernel: str, image: str, workdir: str, timeout: float) -> list:
+    """One boot with a mouse of the USB behind a hub, and its events.
+
+    The mouse is the fourth device of the machine (a hub, a keyboard and the
+    pointer) and a program of `/bin/keys` reads `/dev/input0`: the movements
+    and the button of the monitor of QEMU have to arrive as the same events
+    the mouse of the PS/2 makes.
+    """
+    checks = []
+
+    def expect(name: str, condition: bool, detail: str = "") -> None:
+        checks.append((name, bool(condition), detail))
+
+    devices = [
+        "-device", "usb-hub,bus=xhci.0,id=hub",
+        "-device", "usb-kbd,bus=xhci.0,port=1.1",
+        "-device", "usb-mouse,bus=xhci.0,port=1.2",
+    ]
+
+    try:
+        machine = Machine(loader, kernel, image, workdir, devices)
+    except (OSError, RuntimeError) as error:
+        expect("the machine of the mouse starts", False, str(error))
+        return checks
+
+    try:
+        booted = machine.wait_serial(PROMPT, timeout)
+        text = machine.read_serial()
+        time.sleep(0.5)
+
+        expect("the machine boots with a mouse of the USB", booted, text[-600:])
+        expect(
+            "the boot names the mouse of the boot protocol",
+            re.search(r"usb: mouse [0-9a-f]{4}:[0-9a-f]{4} on port \d+, slot \d+", text)
+            is not None,
+            "the pointer of the USB did not enumerate",
+        )
+        expect(
+            "the mouse is a HID device of a report of four bytes",
+            re.search(r"usb: mouse .*, \d+ byte report", text) is not None,
+            "the report of the mouse is not the one of the boot protocol",
+        )
+
+        machine.press(LINE_KEYS)
+        opened = machine.wait_serial("exec /bin/keys", timeout)
+        time.sleep(0.4)
+
+        machine.monitor_command("mouse_move 20 10")
+        time.sleep(0.3)
+        machine.monitor_command("mouse_button 1")
+        time.sleep(0.2)
+        machine.monitor_command("mouse_button 0")
+        time.sleep(0.2)
+
+        machine.wait_serial("keys: done", timeout)
+        events = machine.read_serial()
+
+        expect(
+            "the reader of the events takes the pointer",
+            opened and "exec: /bin/keys:" not in events,
+            events[-400:],
+        )
+        expect(
+            "the movement of the mouse is an event of the x axis",
+            re.search(r"keys: \d+ 79 20\r?$", events, re.MULTILINE) is not None,
+            events[-400:],
+        )
+        expect(
+            "the movement of the mouse is an event of the y axis, turned over",
+            re.search(r"keys: \d+ 80 65526\r?$", events, re.MULTILINE) is not None,
+            events[-400:],
+        )
+        expect(
+            "the press of the button is an event of the pointer",
+            re.search(r"keys: \d+ 81 1\r?$", events, re.MULTILINE) is not None,
+            events[-400:],
+        )
+        expect(
+            "the release of the button is an event of its own",
+            re.search(r"keys: \d+ 81 0\r?$", events, re.MULTILINE) is not None,
+            events[-400:],
+        )
+    finally:
+        machine.close()
 
     return checks
 
@@ -757,6 +1020,12 @@ def main(argv: list) -> int:
     try:
         checks += run_usb(loader, kernel, args.image, args.ext2_image,
                           os.path.join(workdir, "usb"), args.timeout)
+        checks += run_hub(loader, kernel, args.image,
+                          os.path.join(workdir, "hub"), args.timeout)
+        checks += run_hotplug(loader, kernel, args.image,
+                              os.path.join(workdir, "hotplug"), args.timeout)
+        checks += run_mouse(loader, kernel, args.image,
+                            os.path.join(workdir, "mouse"), args.timeout)
     except FileNotFoundError as error:
         print(f"usb-smoke: {error}", file=sys.stderr)
         return 2

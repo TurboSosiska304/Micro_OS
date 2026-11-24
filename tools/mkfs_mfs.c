@@ -41,6 +41,8 @@ static void usage(void)
            "  --file PATH=HOST        write a file of the host (mode 0644)\n"
            "  --program PATH=HOST     write a program (mode 0755)\n"
            "  --text PATH=TEXT        write TEXT and a newline (mode 0644)\n"
+           "  --volumes LIST          name the volumes of this system in /etc/volumes:\n"
+           "                          one device name per comma (ahci0p1), or `none`\n"
            "  --mode MODE             the mode of the entry just written, in octal\n"
            "                          (0600 for a file only its owner reads)\n"
            "  --help                  this text\n");
@@ -156,6 +158,69 @@ static bool split_pair(char *argument, char **path, char **value)
     return true;
 }
 
+/*
+ * `/etc/volumes` of the volume just written (ADR 0041 §1): the list the rule
+ * of the disks reads to decide whether a volume may be written. `mkfs` knows
+ * which device it formatted - the caller passes the names - and nothing else
+ * in the system writes this file.
+ *
+ * The list is one device name per line, the shape the rule parses; a comma is
+ * the separator of the command line and becomes a newline. `none` (or an
+ * empty list) writes no file: a medium that names no volume is read-only,
+ * which is the safe default of a tool that was not told what it made.
+ */
+static bool add_volumes(struct mkfs_args *args, const char *list)
+{
+    static const char header[] = "# the volumes of this system that a mount may write (ADR 0041)\n";
+    size_t header_length = sizeof(header) - 1u;
+    size_t length;
+    char *copy;
+    size_t i;
+
+    if (list == NULL || list[0] == '\0' || strcmp(list, "none") == 0) {
+        return true;
+    }
+
+    length = strlen(list);
+
+    /* A name that is not a word of a device is not written: the rule would
+     * read a line of nonsense and refuse the volume it was meant to allow. */
+    for (i = 0; i < length; i++) {
+        if (list[i] == ',') {
+            continue;
+        }
+
+        if (list[i] == ' ' || list[i] == '\t') {
+            fprintf(stderr, "mkfs: --volumes takes device names separated by commas\n");
+            return false;
+        }
+    }
+
+    copy = (char *)malloc(header_length + length + 2u);
+
+    if (copy == NULL) {
+        fprintf(stderr, "mkfs: out of memory for the list of the volumes\n");
+        return false;
+    }
+
+    memcpy(copy, header, header_length);
+
+    for (i = 0; i < length; i++) {
+        copy[header_length + i] = list[i] == ',' ? '\n' : list[i];
+    }
+
+    copy[header_length + length] = '\n';
+    copy[header_length + length + 1u] = '\0';
+
+    if (!keep_owned(args, copy)) {
+        free(copy);
+        return false;
+    }
+
+    return add_entry(args, "/etc/volumes", NULL, (const k_u8_t *)copy,
+                     (k_size_t)(header_length + length + 1u), MKFS_MFS_MODE_FILE, false);
+}
+
 static bool add_text(struct mkfs_args *args, char *pair)
 {
     char *path;
@@ -261,6 +326,11 @@ int main(int argc, char **argv)
         } else if (strcmp(option, "--text") == 0) {
             if (!add_text(&args, (char *)value)) {
                 rc = 1;
+                goto out;
+            }
+        } else if (strcmp(option, "--volumes") == 0) {
+            if (!add_volumes(&args, value)) {
+                rc = 2;
                 goto out;
             }
         } else if (strcmp(option, "--mode") == 0) {

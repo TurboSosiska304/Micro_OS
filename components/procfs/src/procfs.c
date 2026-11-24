@@ -249,10 +249,42 @@ static int read_blockdev(char *buf, k_size_t size, k_u32_t pid)
     return n;
 }
 
+/*
+ * The mounted filesystems: the point, the volume behind it, the type and
+ * whether the mount may write. The last word is the answer of ADR 0041 §2 -
+ * `ro` for a volume of a medium with a door that no mount asked about, `rw`
+ * for the root of the boot when the rule allowed it - and it is the file a
+ * person reads when `df` counts the blocks of a volume and says nothing
+ * about the writes.
+ */
+static int read_mounts(char *buf, k_size_t size, k_u32_t pid)
+{
+    k_size_t count = vfs_mount_count();
+    k_size_t i;
+    int n = 0;
+
+    K_UNUSED(pid);
+
+    n += snprintf(buf + n, size - (k_size_t)n, "device     point      type  mode\n");
+
+    for (i = 0; i < count && n > 0 && (k_size_t)n < size; i++) {
+        const char *device = vfs_mount_device(i);
+        const char *type = vfs_mount_type_name(i);
+
+        n += snprintf(buf + n, size - (k_size_t)n, "%-10s %-10s %-5s %s\n",
+                      device != NULL ? device : "-", vfs_mount_name(i),
+                      (type != NULL && type[0] != '\0') ? type : "-",
+                      vfs_mount_is_read_only(i) ? "ro" : "rw");
+    }
+
+    return n;
+}
+
 static const struct proc_file s_root_files[] = {
     {"version", read_version},   {"uptime", read_uptime},   {"meminfo", read_meminfo},
     {"tasks", read_tasks},       {"modules", read_modules}, {"kmsg", read_kmsg},
     {"blockdev", read_blockdev}, {"sessions", read_sessions},
+    {"mounts", read_mounts},
 };
 
 static const k_size_t s_root_file_count = K_ARRAY_SIZE(s_root_files);

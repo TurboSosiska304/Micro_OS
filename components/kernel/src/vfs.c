@@ -2,14 +2,27 @@
 
 #include <string.h>
 
+#include "kernel/blockdev.h"
 #include "kernel/errno.h"
 #include "kernel/log.h"
 #include "kernel/task.h"
+#include "kernel/volume.h"
 
 struct mount {
     char point[VFS_PATH_MAX];
     const struct vfs_operations *ops;
     void *ctx;
+    /* The volume behind the mount and the type that mounted it, for the
+     * report of /proc and for the door of the writes (ADR 0041 §2). The
+     * virtual filesystems and the mounts a type makes for itself have no
+     * device. */
+    const struct k_blockdev *dev;
+    char type[VFS_TYPE_NAME_MAX + 1];
+    /* Whether the mount asked for the writes and was allowed them. A mount
+     * of a medium with a door starts read-only; the root of the boot is
+     * mounted and then asked (k_root_mount), the other volumes before their
+     * mount (vfs_mount_type_write). */
+    bool rw;
 };
 
 #define VFS_MAX_FILES 16
@@ -120,6 +133,16 @@ int vfs_mount(const char *point, const struct vfs_operations *ops, void *ctx)
     copy_str(slot->point, sizeof(slot->point), point);
     slot->ops = ops;
     slot->ctx = ctx;
+    /*
+     * A filesystem that mounts itself is writable: the door of ADR 0041 is
+     * a property of a medium a controller found, and the VFS knows nothing
+     * of such a door. A mount of a type - the way every volume of a disk
+     * arrives - starts read-only and is asked for the writes by the caller
+     * that has the medium.
+     */
+    slot->dev = NULL;
+    slot->type[0] = '\0';
+    slot->rw = true;
     g_count++;
 
     kinfo("vfs: '%s' is mounted", slot->point);
@@ -172,6 +195,16 @@ int vfs_umount(const char *point)
                 if (rc != 0) {
                     return rc;
                 }
+            }
+
+            /*
+             * The door of the writes belongs to the mount that asked for
+             * it: a volume that leaves the tree is read-only again until
+             * another mount asks (ADR 0041 §2). The filesystem above has
+             * written what it held a line ago, so nothing is lost here.
+             */
+            if (g_mounts[i].rw && g_mounts[i].dev != NULL) {
+                (void)k_blockdev_writes(g_mounts[i].dev, false);
             }
 
             kinfo("vfs: '%s' is unmounted", g_mounts[i].point);
@@ -274,9 +307,39 @@ int vfs_type_find(const char *name)
     return -1;
 }
 
-int vfs_mount_type(const char *point, const char *type, const char *device)
+/* The slot of a mounted point, NULL when nothing is there. */
+static struct mount *mount_at(const char *point)
 {
     k_size_t i;
+
+    for (i = 0; i < g_count; i++) {
+        if (strcmp(g_mounts[i].point, point) == 0) {
+            return &g_mounts[i];
+        }
+    }
+
+    return NULL;
+}
+
+/*
+ * The two mounts of a type: the one every caller had and the one that asks
+ * for the writes (ADR 0041 §2).
+ *
+ * The rule is asked by the writing mount and before the type reads the
+ * volume: a medium of another system, or a volume of this system that
+ * /etc/volumes does not name, is KERR_ROFS and no filesystem sees it. A
+ * medium without the door of the writes (the memory of the machine, the
+ * flash, the image of the tests) is mounted as it always was: there is no
+ * rule to ask and no controller to open.
+ *
+ * A listing mount of a medium with the door leaves it closed: the disk
+ * stays as the boot found it, and /proc/mounts says `ro` for the volume.
+ */
+static int mount_type(const char *point, const char *type, const char *device, bool write)
+{
+    k_size_t i;
+    struct mount *slot;
+    const struct k_blockdev *dev = NULL;
     int index;
     int rc;
 
@@ -323,7 +386,145 @@ int vfs_mount_type(const char *point, const char *type, const char *device)
         return rc;
     }
 
-    return g_types[index].mount(point, device);
+    if (device != NULL) {
+        dev = k_blockdev_find(device);
+    }
+
+    if (write && k_blockdev_gated(dev)) {
+        struct k_volume_id id;
+        const char *why = NULL;
+
+        if (k_volume_identify(dev, &id) != 0) {
+            kerror("vfs: the head of %s cannot be read, it is not mounted for writing", device);
+            return KERR_ROFS;
+        }
+
+        if (!k_volume_may_write(dev, &id, &why)) {
+            kwarn("vfs: %s is read-only: %s", device,
+                  why != NULL ? why : "the rule of ADR 0041 refuses the writes");
+            return KERR_ROFS;
+        }
+    }
+
+    rc = g_types[index].mount(point, device);
+    if (rc != 0) {
+        return rc;
+    }
+
+    slot = mount_at(point);
+
+    if (slot == NULL) {
+        /* A type that returned the success of somebody else did not mount. */
+        return KERR_INVAL;
+    }
+
+    slot->dev = dev;
+    copy_str(slot->type, sizeof(slot->type), type);
+
+    if (k_blockdev_gated(dev)) {
+        if (write) {
+            rc = k_blockdev_writes(dev, true);
+
+            if (rc != 0) {
+                kerror("vfs: %s cannot open its writes (%d), the mount is undone", device, rc);
+                (void)vfs_umount(point);
+                return rc;
+            }
+
+            slot->rw = true;
+            kinfo("vfs: %s is mounted at %s, read-write: the rule of ADR 0041 allows it", device,
+                  point);
+        } else {
+            slot->rw = false;
+            kinfo("vfs: %s is mounted at %s, read-only: no mount asked for the writes", device,
+                  point);
+        }
+    } else {
+        slot->rw = true;
+        kinfo("vfs: %s is mounted at %s, read-write", device != NULL ? device : "-", point);
+    }
+
+    return 0;
+}
+
+int vfs_mount_type(const char *point, const char *type, const char *device)
+{
+    return mount_type(point, type, device, false);
+}
+
+int vfs_mount_type_write(const char *point, const char *type, const char *device)
+{
+    return mount_type(point, type, device, true);
+}
+
+/*
+ * The root of the boot is mounted before its own /etc can be read: the list
+ * of /etc/volumes lives inside the volume that is being mounted. This call
+ * is the second half of k_root_mount(): the root is in the tree, so the rule
+ * can read the file, and the decision of the boot is taken then.
+ *
+ * A medium without the door of the writes needs no decision here and keeps
+ * the read-write mount every release had. A medium with the door and a
+ * refusal keeps the mount and stays read-only, which is the state of a root
+ * of another system (an ext2 volume the image can read) and of a volume of
+ * this system that /etc/volumes does not name.
+ */
+int vfs_mount_root_writes(const char *point, const char *device)
+{
+    struct mount *slot;
+    const struct k_blockdev *dev;
+    struct k_volume_id id;
+    const char *why = NULL;
+
+    if (caller_uid() != VFS_UID) {
+        return KERR_PERM;
+    }
+
+    slot = mount_at(point);
+
+    if (slot == NULL) {
+        return KERR_NOENT;
+    }
+
+    dev = k_blockdev_find(device);
+
+    if (dev == NULL) {
+        return KERR_NOENT;
+    }
+
+    slot->dev = dev;
+
+    if (!k_blockdev_gated(dev)) {
+        slot->rw = true;
+        return 0;
+    }
+
+    if (k_volume_identify(dev, &id) != 0) {
+        slot->rw = false;
+        (void)k_blockdev_writes(dev, false);
+        kwarn("root: the head of %s cannot be read, the root stays read-only", device);
+        return KERR_ROFS;
+    }
+
+    if (!k_volume_may_write(dev, &id, &why)) {
+        slot->rw = false;
+        (void)k_blockdev_writes(dev, false);
+        kwarn("root: %s is mounted read-only: %s", device,
+              why != NULL ? why : "the rule of ADR 0041 refuses the writes");
+        return KERR_ROFS;
+    }
+
+    if (k_blockdev_writes(dev, true) != 0) {
+        slot->rw = false;
+        (void)k_blockdev_writes(dev, false);
+        kwarn("root: %s cannot open its writes, the root stays read-only", device);
+        return KERR_ROFS;
+    }
+
+    slot->rw = true;
+    kinfo("root: %s is mounted read-write, the volume is named in " K_VOLUME_LIST_PATH, device);
+
+    return 0;
 }
 
 k_size_t vfs_mount_count(void)
@@ -338,6 +539,33 @@ const char *vfs_mount_name(k_size_t index)
     }
 
     return g_mounts[index].point;
+}
+
+const char *vfs_mount_device(k_size_t index)
+{
+    if (index >= g_count || g_mounts[index].dev == NULL) {
+        return NULL;
+    }
+
+    return g_mounts[index].dev->name;
+}
+
+const char *vfs_mount_type_name(k_size_t index)
+{
+    if (index >= g_count) {
+        return NULL;
+    }
+
+    return g_mounts[index].type;
+}
+
+bool vfs_mount_is_read_only(k_size_t index)
+{
+    if (index >= g_count) {
+        return true;
+    }
+
+    return !g_mounts[index].rw;
 }
 
 /*
@@ -1379,6 +1607,13 @@ const char *vfs_strerror(int error)
         return "cross-device rename";
     }
 
+    /* The refusal of the rule of the disks is the kernel's as well: a
+     * filesystem that mounts read-only has no word for the reason the mount
+     * was refused (ADR 0041 §2). */
+    if (error == KERR_ROFS) {
+        return "read-only filesystem";
+    }
+
     for (i = 0; i < g_count; i++) {
         if (g_mounts[i].ops->strerror != NULL) {
             return g_mounts[i].ops->strerror(error);
@@ -1406,6 +1641,8 @@ const char *vfs_strerror(int error)
         return "is a directory";
     case KERR_NOSPC:
         return "no space left on device";
+    case KERR_ROFS:
+        return "read-only filesystem";
     default:
         return "unknown error";
     }
@@ -1486,19 +1723,26 @@ static int fstab_mount_line(char *line, const char *path, int number)
     }
 
     /*
-     * The options are read so that a table of Linux can be used as it is,
-     * but nothing acts on them yet: `ro` on a MicroFS volume would promise
-     * a write that the volume accepts, and `defaults` is the only word
-     * that asks for what a mount already does. An option that is not
-     * understood is refused instead of silently dropped, and a table with
-     * two of them (a list after a comma) is not a table of this system.
+     * The options are read so that a table of Linux can be used as it is.
+     * `defaults` asks for what a mount already does - an ordinary mount of
+     * the volume, read-only when the medium has the door of ADR 0041 and
+     * nothing asked for the writes - and `rw` is the mount that asks: the
+     * rule of the volume decides, and a volume it refuses does not mount.
+     * An option that is not understood is refused instead of silently
+     * dropped, and a table with two of them (a list after a comma) is not a
+     * table of this system.
      */
-    if (count == VFS_FSTAB_FIELDS && strcmp(fields[3], "defaults") != 0) {
+    if (count == VFS_FSTAB_FIELDS && strcmp(fields[3], "defaults") != 0 &&
+        strcmp(fields[3], "rw") != 0) {
         kwarn("vfs: %s:%d: the option '%s' is not supported", path, number, fields[3]);
         return 0;
     }
 
-    rc = vfs_mount_type(fields[1], fields[2], fields[0]);
+    if (count == VFS_FSTAB_FIELDS && strcmp(fields[3], "rw") == 0) {
+        rc = vfs_mount_type_write(fields[1], fields[2], fields[0]);
+    } else {
+        rc = vfs_mount_type(fields[1], fields[2], fields[0]);
+    }
     if (rc != 0) {
         kwarn("vfs: %s:%d: %s at %s: %s", path, number, fields[2], fields[1], vfs_strerror(rc));
         return 0;

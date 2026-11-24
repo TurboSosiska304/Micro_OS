@@ -34,6 +34,30 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Added
 
+- A machine of a laptop keeps its files: the write path of the two disks of
+  M2, behind the rule of ADR 0041 and not in front of it. The root mount asks
+  for the writes after it is in the tree (`vfs_mount_root_writes`), so its own
+  `/etc/volumes` can be read; another volume asks with
+  `vfs_mount_type_write()` or the `rw` option of `/etc/fstab`; a volume the
+  rule does not name is mounted read-only with the reason in the log. The
+  drivers grew `WRITE DMA EXT`/`FLUSH CACHE EXT` and the NVMe `WRITE`/`Flush`
+  of the namespace, the image tool names the volumes it formats, and
+  `make x86-disk-smoke` proves a file that survives a reset on the IDE channel,
+  the SATA controller and the NVMe namespace - while a volume the list does not
+  name and a volume of btrfs leave the SHA-256 of their image unchanged.
+- The door of a laptop, second iteration: a **hub** of the class 09 (the power
+  of its ports, the reset of one, the route string of a device behind it, four
+  tiers of eight ports), so a keyboard or a stick behind a dock is found; the
+  **hot-plug** of the root ports and of the hub ports, so a device inserted
+  after the boot is enumerated and one taken out leaves the input, the block
+  layer and the network without a panic; a **mouse** of the HID boot protocol
+  as the pointer of `/dev/input0` beside the PS/2 one (the wheel is a key of
+  the event contract, added to it and not taken from it); and the **line** of
+  the controller, MSI-X first with MSI and the legacy pin behind it, in place
+  of a poll of the event ring. The event ring is one consumer for the three
+  classes now - a completion of a bulk transfer of the network is not thrown
+  away by the pump of the console - which the wire of `usb-smoke` had been
+  losing. `make usb-smoke` is 58 checks.
 - The door of a laptop, USB (ADR 0040): `ports/port_x86_64/src/xhci.c` finds
   the controller of the bus (class 0x0C/0x03), resets it and programs it - a
   command ring and an event ring with its ERST, the slots and the contexts of
@@ -50,7 +74,7 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   `i8042=off` - no PS/2 at all, so the keys can only come through xHCI - and
   `make usb-stick-smoke USB_STICK=/dev/sdc` boots with the stick of a person
   attached read-only: 35 and 43 checks.
-- The grain of a volume (ADR 0044): the sector is a property of the volume,
+- The grain of a volume (ADR 0043): the sector is a property of the volume,
   not of the medium. `struct k_blockdev_view` is a device of the block layer
   whose sector is the one of the superblock, over a device whose sector is
   smaller - arithmetic over one call, no copy and no allocation - and ext2
@@ -344,6 +368,32 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Fixed
 
+- A child of a `fork` took its fields from the parent **after** its slot was
+  in the table and marked in use, so the child - a thread of its own on the
+  host and a task of another core in `KERNEL_SMP` - read a record that was
+  still being written: the race detector of the cloud named the read of
+  `task_exit` against the write of `task_spawn`. The inheritance happens in
+  the critical section of the slot now, and the table of the descriptors,
+  which has the lock of its own in the opposite order, is copied after it and
+  before the task can run.
+- The suite under valgrind, the gate of the cloud, was red for two days
+  without a single failed check: a checksum over the padding of a record
+  (`tests/cases/test_mfs_format.c`) and a `strstr` over the bytes a file of
+  `/proc` did not write (`tests/cases/test_sysfs.c`) read uninitialised
+  memory, and a child of a `fork` inherits the count of its parent, so its
+  exit code became the 42 of `--error-exitcode` and a case that read the exit
+  code of its program read 42 instead of the answer. Both reads are fixed and
+  `make test-valgrind` runs the same command here as the cloud does: 0 errors
+  from 0 contexts, 76 058 checks.
+- A wait of a pipe or of `poll` could sleep for as long as the machine was up:
+  `k_wait_block` registers the waiter after the caller has looked at the
+  object, so a wake that arrived in that window found no record and was lost,
+  and a wait without a deadline never looked again. A pipeline of the shell
+  never finished under a slow runner of the cloud - the test suite died on its
+  timeout with no failed check, which is what a hang looks like. A wait is
+  twenty milliseconds long now (`KFILE_WAIT_CHUNK_MS`), which is the chunk the
+  sleep already had, so a lost wake costs a turn of the loop and not the line;
+  the cause and its fix are K15 of `docs/debts.md`.
 - The read ahead of the block layer (ADR 0032) armed the wait of the stream
   *inside* the call that read, so a write of 16 MiB at a grain of 4 KiB read
   36 MiB of the disk before it wrote a byte. The wait belongs to the stream and

@@ -56,8 +56,17 @@ static int read_file(const char *path, char *buf, k_size_t size)
         return rc;
     }
 
-    rc = vfs_read(&file, buf, size);
+    /* One byte short of the buffer, and the end of the string written: the
+     * file of a virtual filesystem has no terminator of its own, and every
+     * reader of this test asks the buffer a question with `strstr`, which
+     * reads the bytes after the file - valgrind of the cloud said so, and a
+     * green answer out of an uninitialised byte is not an answer. */
+    rc = vfs_read(&file, buf, size - 1);
     vfs_close(&file);
+
+    if (rc >= 0) {
+        buf[rc] = '\0';
+    }
 
     return rc;
 }

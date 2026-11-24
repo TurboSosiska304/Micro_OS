@@ -1,4 +1,4 @@
-# ADR 0042 - the grain of a volume is a view, and the wall is not the grain
+# ADR 0043 - the grain of a volume is a view, and the wall is not the grain
 
 * Status: accepted, implemented
 * Date: 2026-11-24

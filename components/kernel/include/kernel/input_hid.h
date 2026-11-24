@@ -72,4 +72,38 @@ k_u16_t k_input_hid_key(k_u8_t usage);
 k_size_t k_input_hid_decode(struct k_input_hid_state *state, const k_u8_t *report,
                             struct k_input_hid_event *out, k_size_t max);
 
+/* --- the mouse of the boot protocol --------------------------------------- */
+
+/*
+ * A mouse of the boot protocol (HID 1.11, appendix B.2) reports three bytes -
+ * the buttons, the signed difference of the x axis and the signed difference
+ * of the y axis - and a mouse with a wheel adds a fourth, the signed notches
+ * of the wheel. The report is a difference and not a position, and the device
+ * sends one only when it has something to say.
+ *
+ * This decoder is the portable half of the driver, as the keyboard's is: the
+ * port gives it the bytes of an interrupt transfer and pushes the events it
+ * answers into the same ring of `/dev/input0` the mouse of the PS/2 fills.
+ * The y axis is turned over here, because the device counts up and the screen
+ * counts down; a difference of zero is not an event, a button is one on the
+ * edge of it, and the wheel is the signed value of its byte.
+ */
+#define K_INPUT_HID_MOUSE_REPORT 4u
+
+struct k_input_hid_mouse_state {
+    k_u8_t buttons; /* the mask of the buttons of the report before this one */
+};
+
+/* The state of a mouse that has sent nothing yet. */
+void k_input_hid_mouse_init(struct k_input_hid_mouse_state *state);
+
+/*
+ * The events of one report of `length` bytes (3 or 4): the motion on each
+ * axis that is not zero, the edge of every button, and the notches of the
+ * wheel. The answer is the number of events written, capped at `max`, and a
+ * report that holds more than `max` loses the rest without losing the state.
+ */
+k_size_t k_input_hid_mouse_decode(struct k_input_hid_mouse_state *state, const k_u8_t *report,
+                                  k_size_t length, struct k_input_hid_event *out, k_size_t max);
+
 #endif /* MICRO_OS_KERNEL_INPUT_HID_H */

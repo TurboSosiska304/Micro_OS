@@ -290,11 +290,12 @@ static k_ssize_t pipe_read(struct kfile *f, void *buf, k_size_t count)
 
         /*
          * An empty pipe with no writer is the end of the file, the zero of
-         * POSIX. A pipe whose writer is still there is not: the reader
-         * waits for the bytes. The wait has no bound of its own, because a
-         * reader slower than its writer is an ordinary pipeline and not an
-         * error; a signal cuts it short, and the answer is EINTR so that a
-         * caller can try again, exactly as `waitpid` does.
+         * POSIX. A pipe whose writer is still there is not: the reader waits
+         * for the bytes, and a reader slower than its writer is an ordinary
+         * pipeline and not an error. The wait is bounded (KFILE_WAIT_CHUNK_MS)
+         * so that a wakeup lost in the window of the registration costs one
+         * turn of this loop; a signal cuts it short with EINTR, exactly as
+         * `waitpid` does.
          */
         if (p->writers == 0) {
             k_mutex_unlock(&g_fd_lock);
@@ -308,7 +309,7 @@ static k_ssize_t pipe_read(struct kfile *f, void *buf, k_size_t count)
          * writer wakes a reader of this channel when it puts bytes in, and a
          * signal cuts the wait with EINTR.
          */
-        answer = k_wait_block(K_WAIT_CHANNEL_PIPES, NULL, K_WAIT_INFINITE);
+        answer = k_wait_block(K_WAIT_CHANNEL_PIPES, NULL, KFILE_WAIT_CHUNK_MS);
         if (answer == K_WAIT_SIGNAL) {
             return KERR_INTR;
         }
@@ -364,7 +365,7 @@ static k_ssize_t pipe_write(struct kfile *f, const void *buf, k_size_t count)
             if (room < count) {
                 k_mutex_unlock(&g_fd_lock);
 
-                answer = k_wait_block(K_WAIT_CHANNEL_PIPES, NULL, K_WAIT_INFINITE);
+                answer = k_wait_block(K_WAIT_CHANNEL_PIPES, NULL, KFILE_WAIT_CHUNK_MS);
                 if (answer == K_WAIT_SIGNAL) {
                     return KERR_INTR;
                 }
@@ -396,7 +397,7 @@ static k_ssize_t pipe_write(struct kfile *f, const void *buf, k_size_t count)
         }
 
         /* The pipe is full: wait for the reader to make room. */
-        answer = k_wait_block(K_WAIT_CHANNEL_PIPES, NULL, K_WAIT_INFINITE);
+        answer = k_wait_block(K_WAIT_CHANNEL_PIPES, NULL, KFILE_WAIT_CHUNK_MS);
         if (answer == K_WAIT_SIGNAL) {
             return (done > 0) ? (k_ssize_t)done : KERR_INTR;
         }

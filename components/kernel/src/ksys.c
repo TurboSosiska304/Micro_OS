@@ -784,11 +784,26 @@ static k_ssize_t sys_poll(ksys_arg_t fds, ksys_arg_t nfds, ksys_arg_t timeout, k
          * Nothing is polled in a loop, and the timeout is the deadline of the
          * scheduler's sleep.
          */
+        /*
+         * A wait without a deadline is a wait of one chunk and not of the
+         * life of the machine: the waiter registers after the list is looked
+         * at, so a wakeup that arrives in that window is lost (K15), and the
+         * chunk is what makes the list be looked at again. The sleep of a
+         * wait is ten milliseconds either way.
+         */
+        if (infinite) {
+            wait_ms = KFILE_WAIT_CHUNK_MS;
+        }
+
         rc = k_wait_block(piped ? K_WAIT_CHANNEL_PIPES : NULL,
                           console ? K_WAIT_CHANNEL_CONSOLE : NULL, wait_ms);
 
         if (rc == K_WAIT_SIGNAL) {
             return KERR_INTR;
+        }
+
+        if (rc == K_WAIT_TIMEOUT && infinite) {
+            continue;
         }
 
         if (rc == K_WAIT_TIMEOUT) {

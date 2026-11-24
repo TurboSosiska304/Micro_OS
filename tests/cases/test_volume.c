@@ -227,6 +227,152 @@ static void named_checks(void)
     mfs_ram_free(&memory);
 }
 
+/*
+ * The mount that asks for the writes (ADR 0041 §2), on a medium with the
+ * door: the root is mounted before its own /etc/volumes can be read, so the
+ * decision of the boot is the second call (vfs_mount_root_writes). A volume
+ * the list names opens the door and a file written through the VFS reaches
+ * the medium; a list that does not name it leaves the mount read-only, says
+ * so, and the write of the filesystem is the refusal of the door.
+ */
+static struct k_blockdev_ops s_gate_ram_ops;
+static bool s_gate_ram_open;
+
+static int (*s_ram_read)(void *ctx, k_u32_t sector, void *buf, k_size_t count);
+static int (*s_ram_write)(void *ctx, k_u32_t sector, const void *buf, k_size_t count);
+
+static int gate_ram_read(void *ctx, k_u32_t sector, void *buf, k_size_t count)
+{
+    return s_ram_read(ctx, sector, buf, count);
+}
+
+static int gate_ram_write(void *ctx, k_u32_t sector, const void *buf, k_size_t count)
+{
+    if (!s_gate_ram_open) {
+        return -1;
+    }
+
+    return s_ram_write(ctx, sector, buf, count);
+}
+
+static int gate_ram_writes(void *ctx, bool open)
+{
+    K_UNUSED(ctx);
+
+    s_gate_ram_open = open;
+
+    return 0;
+}
+
+static void mount_write_checks(void)
+{
+    static const char named[] = "# the volume of this machine\nram0\n";
+    static const char unnamed[] = "# nothing may be written\n";
+    struct mfs_ram_device memory;
+    struct k_blockdev root;
+    struct vfs_file file;
+    k_u8_t priv[VFS_FILE_DATA_SIZE];
+    char text[8];
+    int rc;
+
+    KT_CHECK_INT_EQ(mfs_ram_init(&memory, 128u), 0);
+    mfs_ram_device(&memory, &root);
+    root.name = "ram0";
+
+    s_ram_read = root.ops->read;
+    s_ram_write = root.ops->write;
+    s_gate_ram_ops = *root.ops;
+    s_gate_ram_ops.read = gate_ram_read;
+    s_gate_ram_ops.write = gate_ram_write;
+    s_gate_ram_ops.writes = gate_ram_writes;
+    root.ops = &s_gate_ram_ops;
+
+    /* The volume is made while the door is open: the fixture of the test is
+     * the act of a tool that may write, not a mount that guessed. */
+    s_gate_ram_open = true;
+    KT_CHECK_INT_EQ(mfs_format(&root, 32u), MFS_OK);
+    s_gate_ram_open = false;
+
+    KT_CHECK_INT_EQ(k_blockdev_register(&root), 0);
+    KT_CHECK_INT_EQ(mfs_vfs_register_type(), 0);
+    KT_CHECK(k_blockdev_gated(&root));
+
+    /* The list of the fixture: /etc/volumes names the volume of the test. */
+    s_gate_ram_open = true;
+    KT_CHECK_INT_EQ(vfs_mount_type("/", "mfs", "ram0"), 0);
+    KT_CHECK_INT_EQ(vfs_mkdir_p("/etc"), 0);
+    rc = vfs_open(K_VOLUME_LIST_PATH, VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, priv);
+    KT_CHECK_INT_EQ(rc, 0);
+    if (rc == 0) {
+        KT_CHECK_INT_EQ(vfs_write(&file, named, sizeof(named) - 1u), (int)(sizeof(named) - 1u));
+        KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    }
+
+    /* A file of the volume, so that the read-only mount below has something
+     * to refuse a write to. */
+    rc = vfs_open("/note.txt", VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, priv);
+    KT_CHECK_INT_EQ(rc, 0);
+    if (rc == 0) {
+        KT_CHECK_INT_EQ(vfs_write(&file, "x", 1u), 1);
+        KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    }
+
+    KT_CHECK_INT_EQ(vfs_umount("/"), 0);
+    mfs_unmount();
+    s_gate_ram_open = false;
+
+    /* A mount that did not ask: the volume is in the tree, read-only. */
+    KT_CHECK_INT_EQ(vfs_mount_type("/", "mfs", "ram0"), 0);
+    KT_CHECK(vfs_mount_is_read_only(0));
+    KT_CHECK(!s_gate_ram_open);
+
+    rc = vfs_open("/note.txt", VFS_O_WRONLY, &file, priv);
+    KT_CHECK_INT_EQ(rc, 0);
+    if (rc == 0) {
+        KT_CHECK(vfs_write(&file, "x", 1u) < 0);
+        (void)vfs_close(&file);
+    }
+
+    /* The second half of the root mount: the list is readable now, and it
+     * names the volume. */
+    KT_CHECK_INT_EQ(vfs_mount_root_writes("/", "ram0"), 0);
+    KT_CHECK(!vfs_mount_is_read_only(0));
+    KT_CHECK(s_gate_ram_open);
+
+    rc = vfs_open("/note.txt", VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, priv);
+    KT_CHECK_INT_EQ(rc, 0);
+    if (rc == 0) {
+        KT_CHECK_INT_EQ(vfs_write(&file, "hello", 5u), 5);
+        KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    }
+
+    rc = vfs_open("/note.txt", VFS_O_RDONLY, &file, priv);
+    KT_CHECK_INT_EQ(rc, 0);
+    if (rc == 0) {
+        KT_CHECK_INT_EQ(vfs_read(&file, text, sizeof(text)), 5);
+        KT_CHECK_INT_EQ(memcmp(text, "hello", 5u), 0);
+        KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    }
+
+    /* A list that stops naming the volume takes the writes away again. */
+    rc = vfs_open(K_VOLUME_LIST_PATH, VFS_O_WRONLY | VFS_O_TRUNC, &file, priv);
+    KT_CHECK_INT_EQ(rc, 0);
+    if (rc == 0) {
+        KT_CHECK_INT_EQ(vfs_write(&file, unnamed, sizeof(unnamed) - 1u),
+                        (int)(sizeof(unnamed) - 1u));
+        KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    }
+
+    KT_CHECK_INT_EQ(vfs_mount_root_writes("/", "ram0"), KERR_ROFS);
+    KT_CHECK(vfs_mount_is_read_only(0));
+    KT_CHECK(!s_gate_ram_open);
+
+    KT_CHECK_INT_EQ(vfs_umount("/"), 0);
+    mfs_unmount();
+    KT_CHECK_INT_EQ(k_blockdev_unregister(&root), 0);
+    mfs_ram_free(&memory);
+}
+
 void test_volume(void)
 {
     struct k_volume_id id;
@@ -330,6 +476,10 @@ void test_volume(void)
     /* The last question is the list of /etc/volumes of a mounted root: the
      * positive answer of the rule, and the name that is not on the list. */
     named_checks();
+
+    /* And the mount that asks: the door of the writes on a medium that has
+     * one, the file that goes through it, and the list that takes it away. */
+    mount_write_checks();
 
     /* Nothing of the test wrote the medium: every call above was a reader. */
     KT_CHECK_INT_EQ(s_writes, 0);

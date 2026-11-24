@@ -92,6 +92,7 @@ static const char *const s_names[K_INPUT_KEY_COUNT] = {
     "key.pointer.x",
     "key.pointer.y",
     "key.button.left",
+    "key.pointer.wheel",
 };
 
 const char *k_input_key_name(k_u16_t code)

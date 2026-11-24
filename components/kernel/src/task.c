@@ -485,7 +485,21 @@ static void task_trampoline(void *arg)
  * is not made here - an ordinary task and the child of a fork get different
  * ones - and the slot is not published until the caller says so.
  */
-static struct task *task_alloc_slot(const char *name, task_entry_fn entry, void *arg, k_u8_t prio)
+/*
+ * What a new task takes from the one that makes it: nothing (a task of the
+ * boot or of the kernel), the fields of a child whose program shares the
+ * memory of its parent (the stages of a pipeline), or the whole of a child
+ * with an address space of its own (a fork, which also keeps the dispositions
+ * of the signals).
+ */
+enum task_inherit {
+    TASK_INHERIT_NONE,
+    TASK_INHERIT_SHARED,
+    TASK_INHERIT_FORK,
+};
+
+static struct task *task_alloc_slot(const char *name, task_entry_fn entry, void *arg, k_u8_t prio,
+                                    struct task *inherit, enum task_inherit kind)
 {
     struct task *t = NULL;
     k_size_t i;
@@ -529,6 +543,35 @@ static struct task *task_alloc_slot(const char *name, task_entry_fn entry, void 
         t->cpu_stamp_ms = k_sched_uptime_ms();
         task_set_cwd(t, "/");
         task_set_name(t, name);
+
+        /*
+         * What a child of a fork takes from its parent is written **in** the
+         * section and not after it: the slot is `in_use` and in the table
+         * from the moment above, so another core - the child itself, which
+         * the port starts as a thread of its own - reads it while this write
+         * is in flight. The memory checker of the cloud named the read of
+         * `task_exit` and the write here as a race, which is exactly what a
+         * second core would do with those two.
+         */
+        if (inherit != NULL && kind != TASK_INHERIT_NONE) {
+            t->parent = inherit;
+            t->job = inherit->job;
+            task_set_cwd(t, task_get_cwd(inherit));
+            task_creds_inherit(t, inherit);
+            task_limits_inherit(t, inherit);
+
+            if (kind == TASK_INHERIT_FORK) {
+                task_signal_inherit(t, inherit);
+            }
+        }
+
+        /* The table of the descriptors is taken below and not here: it is
+         * the lock of the files and not the critical section, and kfile_alloc
+         * takes the two in the other order - the critical section under the
+         * lock of the files - so this one has to stay outside or the two
+         * orders make a deadlock (the race detector of the cloud named
+         * exactly the pair). */
+
         g_used++;
     }
 
@@ -565,20 +608,16 @@ static struct task *task_spawn(const char *name, task_entry_fn entry, void *arg,
 {
     struct task *t;
 
-    t = task_alloc_slot(name, entry, arg, prio);
+    t = task_alloc_slot(name, entry, arg, prio, inherit,
+                        inherit != NULL ? TASK_INHERIT_SHARED : TASK_INHERIT_NONE);
     if (t == NULL) {
         kerror("task: the task table is full (%u slots)", (unsigned)TASK_MAX_TASKS);
         return NULL;
     }
 
-    if (inherit != NULL) {
-        t->parent = inherit;
-        t->job = inherit->job;
-        task_set_cwd(t, task_get_cwd(inherit));
-        task_creds_inherit(t, inherit);
-        task_limits_inherit(t, inherit);
-        kfile_table_copy(t, inherit);
-    }
+    /* The files of a child are copied before the port makes it runnable:
+     * nothing reads the table of a task that does not exist yet. */
+    kfile_table_copy(t, inherit);
 
     /*
      * The execution context is created suspended, so that the task is
@@ -631,18 +670,12 @@ int task_fork(struct task *parent, const char *name, struct task **child)
 
     *child = NULL;
 
-    c = task_alloc_slot(name, NULL, NULL, parent->prio);
+    c = task_alloc_slot(name, NULL, NULL, parent->prio, parent, TASK_INHERIT_FORK);
     if (c == NULL) {
         return -2;
     }
 
-    c->parent = parent;
-    c->job = parent->job;
-    task_set_cwd(c, task_get_cwd(parent));
-    task_creds_inherit(c, parent);
-    task_limits_inherit(c, parent);
     kfile_table_copy(c, parent);
-    task_signal_inherit(c, parent);
 
     rc = k_port_fork_copy(c);
     if (rc < 0) {

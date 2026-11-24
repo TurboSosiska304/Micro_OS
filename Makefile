@@ -40,6 +40,7 @@ help:
 	@echo "  make test       build and run the unit tests (host)"
 	@echo "  make test-asan  the same tests with the address and UB sanitizers"
 	@echo "  make test-tsan  the same tests under the race detector (two cores)"
+	@echo "  make test-valgrind  the suite under valgrind, as the cloud runs it"
 	@echo "  make test-smp   the host tests of the kernel of two cores (KERNEL_SMP)"
 	@echo "  make test-minimal  the host tests with the optional features off"
 	@echo "  make smoke      boot the simulator and check its answers"
@@ -78,13 +79,14 @@ help:
 	@echo "  make usb-stick-smoke  USB_STICK=/dev/sdc attached read-only, hashed"
 	@echo "  make x86-run-disk   boot the window with an 8 MB disk of the machine"
 	@echo "  make x86-run-disk-serial  the same disk in a terminal (-nographic)"
-	@echo "  make x86-disk-smoke two boots on one disk image, a file survives both"
-	@echo "                  (X86_DISK_BUS=virtio puts the disk on the virtio device)"
-	@echo "  make ahci-smoke  the same image on the SATA controller of a chipset: the"
-	@echo "                  volume is mounted read-only and the SHA-256 of the image"
-	@echo "                  is the same before and after (ADR 0041)"
+	@echo "  make x86-disk-smoke two boots on one disk image, a file survives both:"
+	@echo "                  the IDE channel, the SATA controller and NVMe"
+	@echo "                  (X86_DISK_BUS=virtio for the virtio device)"
+	@echo "  make ahci-smoke  the same image on the SATA controller of a chipset: a"
+	@echo "                  named volume is written and survives a reset, an unnamed"
+	@echo "                  one is read-only with the SHA-256 unchanged (ADR 0041)"
 	@echo "  make nvme-smoke  the same image on the NVMe controller of a laptop: the"
-	@echo "                  same rule, the same proof by the hash (ADR 0042)"
+	@echo "                  same writes, the same rule, the same proof (ADR 0042)"
 	@echo "  make x86-fs-smoke  rename, rmdir, fsck ext2 and the SQLite journal"
 	@echo "  make x86-net-smoke   the network: ping, UDP and HTTP on QEMU user-net"
 	@echo "  make x86-iso    the bootable medium: CD and stick, BIOS and UEFI (K13)"
@@ -141,6 +143,23 @@ test-asan:
 	cmake -B $(ASAN_DIR) -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug -DMICRO_OS_SANITIZE=ON
 	cmake --build $(ASAN_DIR)
 	ctest --test-dir $(ASAN_DIR) --output-on-failure
+
+# The suite under the memory checker of the cloud, byte for byte what the
+# workflow runs. It was the gate of the cloud alone and it was red for two
+# days - a checksum over the padding of a record and a `strstr` over the
+# bytes a file did not write - without a single failed check of the suite:
+# a child of a fork inherits the count and its exit code turns into the 42 of
+# `--error-exitcode`, which the case reads as the exit code of its program.
+# A gate of the cloud that can be run here is a gate somebody runs.
+test-valgrind: test
+	valgrind --error-exitcode=42 --track-origins=yes ./$(BUILD_DIR)/tests/microos_tests
+
+# The gate of a release in one command: every smoke, the two sessions, the
+# board, the integrity against the tag and a Release from an empty directory,
+# with a table of the answers (`tools/release_gate.sh`). It keeps going after a
+# failed gate, so one red line does not hide the others.
+release-gate:
+	sh tools/release_gate.sh $(RELEASE_GATE_ARGS)
 
 # The second host configuration (ADR 0010): the optional features off. It is
 # a target of its own, not a part of `make ci` at first: it proves that the
@@ -206,7 +225,7 @@ wiki-check:
 # joins the list when `qemu-system-x86_64` is on PATH and is skipped with a
 # message when it is not. A missing optional machine must not fail a run.
 CI_QEMU := $(shell command -v qemu-system-x86_64 2>/dev/null)
-CI_TARGETS := build test test-asan test-tsan test-minimal test-smp smoke coverage
+CI_TARGETS := build test test-asan test-tsan test-minimal test-valgrind release-gate test-smp smoke coverage
 ifneq ($(CI_QEMU),)
 CI_TARGETS += x86-smoke x86-root-smoke usb-smoke ports-smoke
 endif
@@ -604,30 +623,32 @@ x86-run-disk-serial: x86-build $(X86_DISK_IMAGE)
 
 x86-disk-smoke: x86-disk
 	python3 tools/x86_disk_smoke.py --image $(X86_BUILD)/disk-smoke.img --disk $(X86_DISK_BUS)
+	python3 tools/x86_disk_smoke.py --image $(X86_BUILD)/disk-smoke-ahci.img --disk ahci
+	python3 tools/x86_disk_smoke.py --image $(X86_BUILD)/disk-smoke-nvme.img --disk nvme
 
 # The disk of a laptop (ADR 0041): the same image of `make x86-disk` on the
 # SATA controller of a chipset, in a machine of the q35 family that has no IDE
 # channel at all. The kernel finds the controller (class 01/06), reads the
 # identify data, the table and the volume of the first partition, and mounts
-# it read-only: the volume carries the header of MicroFS and `/etc/volumes`
-# does not name it, so the rule refuses every write. The tool proves it twice:
-# a write of the shell is refused with the sentence of the rule, and the
-# SHA-256 of the whole image is the same before and after the boot. The second
-# boot carries the magic of btrfs where the volume was - a disk of another
-# system - and the mount is refused, the machine stops, and the image is again
-# byte for byte the one the tool wrote.
+# it read-write: the volume carries the header of MicroFS and `/etc/volumes`
+# names `ahci0p1`, so the rule lets the writes through and the root mount
+# asks for them. The tool writes a file, boots the same image again and reads
+# it out of the medium - the file survives a reset. Two more boots prove the
+# refusals: a copy whose `/etc/volumes` names nothing is mounted read-only and
+# a write is refused with the sentence of the rule, and a copy with the magic
+# of btrfs is refused at the mount. The SHA-256 of each negative image is the
+# same before and after the boot.
 ahci-smoke: x86-build x86-disk
 	python3 tools/x86_ahci_smoke.py --image $(X86_PROGRAMS_IMAGE) --build $(X86_BUILD)
 
 # The disk of a modern laptop (ADR 0042): the same image of `make x86-disk` on
 # the NVMe controller of the PCI bus - the admin queue, the two identifiers and
 # one I/O queue pair created through the admin queue - in a machine of the
-# i440fx family, where the function sits on the bus 0. The boot mounts the
-# volume of `nvme0p1` read-only: the rule of ADR 0041 decides, there is no
-# WRITE command in the driver, and `/etc/volumes` does not name the volume, so
-# every write is refused. The tool proves it twice, as the SATA gate does: the
-# SHA-256 of the whole image is the same before and after the boot of the
-# volume of this system, and again after the boot of a volume of btrfs.
+# i440fx family, where the function sits on the bus 0. The same four boots as
+# the SATA gate: the volume of `nvme0p1` named in `/etc/volumes` is written and
+# its file survives the reset, the volume the list does not name is read-only
+# with the hash of the image unchanged, and a volume of btrfs is refused at the
+# mount.
 nvme-smoke: x86-build x86-disk
 	python3 tools/x86_nvme_smoke.py --image $(X86_PROGRAMS_IMAGE) --build $(X86_BUILD)
 
