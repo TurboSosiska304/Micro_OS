@@ -574,7 +574,18 @@ static bool net_dhcp_send(void *context, const void *datagram, k_size_t size)
     checksum = net_sum_finish(sum);
     net_put_be16(packet + 6, checksum == 0u ? 0xFFFFu : checksum);
 
-    return net_send_ip_at(source, 0xFFFFFFFFu, broadcast, NET_IP_UDP, packet, NET_UDP_HDR + size);
+    if (!net_send_ip_at(source, 0xFFFFFFFFu, broadcast, NET_IP_UDP, packet, NET_UDP_HDR + size)) {
+        return false;
+    }
+
+    /* The door opens with the datagram and not with the wait for the answer:
+     * another task of the machine (the door of telnet) polls the card while
+     * this one is between two calls, and an answer it took is an answer this
+     * task reads from the buffer instead of losing it. */
+    g_dhcp_rx_length = 0u;
+    g_dhcp_rx_armed = true;
+
+    return true;
 }
 
 static int net_dhcp_receive(void *context, void *datagram, k_size_t size, k_u32_t timeout_ms)
