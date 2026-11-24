@@ -14,6 +14,10 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### The release
 
+- 1.8.0-rc1: the release of the door of USB, of a disk of a person under the
+  rule that a medium this system did not format is read-only, of the library
+  of a program nobody rewrote and of a volume whose grain is its own
+  (`docs/releases/1.8.md`).
 - 1.7.0-rc1: the release of the desktop, of the disk at the speed of the
   medium, of a filesystem that does not walk a table of a gigabyte, and of a
   machine that starts on a laptop from a stick (`docs/releases/1.7.md`).
