@@ -41,6 +41,17 @@ int k_port_console_poll(void)
     return -1;
 }
 
+/* The null port has no screen: the size of the terminals of this system. */
+void k_port_console_size(k_u16_t *rows, k_u16_t *columns)
+{
+    if (rows != NULL) {
+        *rows = 25u;
+    }
+    if (columns != NULL) {
+        *columns = 80u;
+    }
+}
+
 /*
  * The memory a program can map. This machine has no page tables of its own
  * for a program - the board shares the memory of the kernel and the simulator
@@ -201,9 +212,21 @@ int k_port_mutex_unlock(k_port_mutex_t *mutex)
 
 /* --- power --- */
 
+/*
+ * The null port is not a machine: it has nothing to power down and nothing
+ * to restart. The two calls are the two empty answers the kernel stops on
+ * when it asks - a test that reached them has a bug of its own - and the
+ * power of the clean end is the same nothing, with the action named by the
+ * caller (ADR 0050).
+ */
 void k_port_halt(void) {}
 
 void k_port_reset(void) {}
+
+void k_port_power(enum k_power_action action)
+{
+    K_UNUSED(action);
+}
 
 /* --- identity --- */
 
@@ -219,7 +242,7 @@ const char *k_port_arch(void)
 
 /* The contract this port was written for. */
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 12u
+#define PORT_API_MINOR 13u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_null does not speak the contract of this kernel");

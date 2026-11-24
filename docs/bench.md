@@ -115,16 +115,21 @@ fortieth of it.
   flight at a time — the writer waits for the answer before it stamps the next
   byte — so no sample waits in a queue of its own.
 
-The pipe row reads the scheduler and not the copy, and it is worth a second
-look: **about 1 ms, one tick of the timer.** A blocked reader is woken by the
-write in the kernel, but a wake only moves the tick of the sleeper
-(`components/kernel/src/wait.c`: a waiter asleep is woken by the scheduler at
-its next tick), so the read returns about one tick later and the state of the
-task, not the copy of the byte, is the number. The rate row, `pipe`, does not
-see this: its two ends retry `EAGAIN` and never sleep, and 4 MiB of 256-byte
-handoffs at 31 MiB/s is 8 µs for a handoff. The two numbers do not disagree;
-they measure a busy pipe against an empty one, and the wake that has to wait
-for the tick is what a program that blocks on a pipe pays.
+The pipe row reads the scheduler and not the copy, and it was worth a second
+look: from 1.5 to 1.8 the row was **about 1 ms, one tick of the timer.** A
+blocked reader was woken by the write in the kernel, but a wake only moved the
+tick of the sleeper (`components/kernel/src/wait.c`: a waiter asleep was woken
+by the scheduler at its next tick), so the read returned about one tick later
+and the state of the task, not the copy of the byte, was the number. The rest
+of the row is the same: its two ends retry `EAGAIN`, and 4 MiB of 256-byte
+handoffs at 31 MiB/s is 8 µs for a handoff. The two numbers never disagreed;
+they measured a busy pipe against an empty one, and the wake that had to wait
+for the tick was what a program that blocks on a pipe paid.
+
+1.9 moved that number and this row with it (ADR 0046): the writer puts the task
+of the reader back in the run queue in the call of the write, and the sleep of
+the port is cut, so the middle byte of a pipe is **twenty microseconds** and
+not a millisecond. The table of the change is below, "The wake of 1.9".
 
 The percentile is the nearest rank — the sample at the ceil(p % of the count)th
 place — and the value of a bucket is its middle, which is the resolution of the
@@ -155,9 +160,60 @@ scheduled something else, so 536 ns and 920 ns are the same tree on a shared
 machine and not two trees. `lat_syscall_p50` is the row of the gate; a lane
 that changes the door looks at both.
 
-The pipe's p99 is the other way around: the tick is a hard floor under the
-handoff and the tail is 3 % of the middle, so the two rows move together and
-the p50 is the row of the gate.
+The pipe's p99 was the other way around until 1.9: the tick was a hard floor
+under the handoff and the tail was 3 % of the middle, so the two rows moved
+together. With the wake of ADR 0046 the middle is twenty microseconds and the
+tail is still twice the middle - the second wake of the round trip and the
+switch of the emulator - and the two rows still move together.
+
+## The wake of 1.9 (ADR 0046)
+
+The two latency rows of the pipe and the rate of the pipe were one shape from
+1.5 to 1.8: a waiter was woken by moving its tick to the present, and the timer
+did the rest, so an empty pipe answered in a millisecond. ADR 0046 puts the
+waiter in the run queue of its core in the call of the writer (the IPI of
+ADR 0034 when it is another core), and cuts the sleep of the port, so the same
+byte costs the two handoffs of the two tasks.
+
+The table is the same tool on the same machine (AMD Ryzen 5 5600, QEMU 11.1.3,
+TCG, 256 MB, one processor), the tree of 1.8.0 (`a8096c5b`) against this one:
+
+| Row | 1.8.0 | 1.9.0 | Change |
+|---|---|---|---|
+| `lat_pipe_p50` | 1 005 056 ns | **19 968 ns** | 50 times |
+| `lat_pipe_p99` | 1 044 992 ns | **46 592 ns** | 22 times |
+| `pipe` (4 MiB, both ends) | 31.00 MiB/s | **333.33-400.00 MiB/s** | 11-13 times |
+| `lat_syscall_p50` | 472 ns | 472 ns | the door does not move |
+
+The 1.8 column is three runs of `--runs 1` (1 003 008, 1 005 056 and
+1 009 152 ns for the p50) and agrees with the table of the release above
+(1 004 032, 1 006 080, 1 007 104 ns). The 1.9 column is one `make bench` of
+three boots: 18 944, 19 968 and 19 968 ns, spread 5.1 %, and the p99 of the
+same boots 42 496, 46 592 and 46 592 ns. A second batch answered the same
+19 968 ns for the p50 and a `pipe` of 400 MiB/s: the rate of the pipe is the
+row that moves with the load of the host, and its three runs of one batch were
+400.00, 307.69 and 333.33 MiB/s.
+
+The suite measures the same round trip on the host port
+(`tests/cases/test_wait.c`, 64 bytes, the p50 of each run printed as `wait: the
+p50 of a byte through a pipe is <n> us`): **3 µs**, three runs, and the wake of
+a sleeping task from the wake to the stamp of the waiter is **7-9 µs**. The
+host is not in the table above because it has no `/bin/bench`: the case of the
+suite is its number, and it is the same mechanism.
+
+Two things about the 1.8 side of this table are worth a note of their own. The
+tool of 1.8 hung twice on this host while the numbers above were taken: once
+after `pipe`, once after `console`, both times on a step of `/bin/bench` whose
+child never answered and the shell waited for it - the lost wakeup of K15 as a
+timeout of 900 seconds. The bound of twenty milliseconds of 1.8 made that a
+rare shape and not an impossible one; the arm under the lock of the object is
+what removes it, and the case of the window in the suite is the proof.
+
+The port of the board is not in this table: its sleep is `vTaskDelay`, which a
+task of the kernel cannot cut, so its waits keep the ten milliseconds of
+`WAIT_CHUNK_MS` (ADR 0046, "What is still open", and `docs/debts.md`). A
+machine of a hundred kilobytes of SRAM has one scheduler and it is not the one
+of this kernel.
 
 ## The gate of a release
 
@@ -350,14 +406,15 @@ next step of the reader, not of this lane.
 Two shapes of the kernel decide most of the table, and both of them are the
 subject of a lane of 1.6:
 
-* **The pipe holds 256 bytes** (`KFILE_PIPE_SIZE`, ADR 0014) and answers
-  `EAGAIN` after a bounded wait. The 4 MiB of `pipe` is therefore sixteen
-  thousand handoffs of 256 bytes, and its rate is the scheduler's, not the
-  copy's: 0.2 MiB/s is 256 bytes per ~1.3 ms. `shell_pipe` pays the same
-  shape through the library of `cat` and `wc`. The loop of the benchmark does
-  not change when the pipe grows a real buffer - it retries on `EAGAIN` and
-  on the short read and the short write - so the row moves and the test does
-  not.
+* **The pipe is a ring of 64 KiB** on x86-64 and the host, 4 KiB on the board
+  (`KFILE_PIPE_SIZE`, ADR 0035), and a write waits when the ring is full
+  instead of answering `EAGAIN`. The 4 MiB of `pipe` is therefore a writer and
+  a reader that both block, and its rate is the scheduler's and not the
+  copy's: 31 MiB/s in 1.8 was 64 KiB per two milliseconds, and the 333-400
+  MiB/s of 1.9 is the same handoff without the tick (ADR 0046, "The wake of
+  1.9"). `shell_pipe` pays the same shape through the library of `cat` and
+  `wc`: 2.4 MiB/s is a line at a time and a program started per stage, not the
+  ring.
 * **A system call enters through the IDT** (`int $0x80`). `syscall_getpid`
   is that door and a call of no work: 1.28 million calls a second is 0.78 µs
   of the emulated processor per call, and a release that enters through a

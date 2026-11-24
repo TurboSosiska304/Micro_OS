@@ -34,12 +34,14 @@ static void run_tests(void *arg)
     test_partition();
     test_root();
     test_volume();
+    test_power();
     test_render();
     test_task();
     test_guard();
     test_sched();
     test_sched_queue();
     test_smp();
+    test_wait();
     test_kmod();
     test_kmm();
     test_exec();
@@ -72,6 +74,7 @@ static void run_tests(void *arg)
     test_console_sinks();
     test_telnet();
     test_text_wrap();
+    test_tty();
     test_ksys();
     test_ksys_process();
     test_users();

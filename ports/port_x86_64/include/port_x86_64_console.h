@@ -135,6 +135,13 @@ void port_x86_64_console_init(void);
 const char *port_x86_64_console_name(void);
 
 /*
+ * The size of the screen that was chosen, in cells: 80x25 of the text mode of
+ * the VGA, 160x50 of the framebuffer (or the rows `font.line_gap` of /etc left).
+ * It is the answer of TIOCGWINSZ for a program (ADR 0051 §6).
+ */
+void port_x86_64_console_size(k_u16_t *rows, k_u16_t *columns);
+
+/*
  * Draw the bytes on the screen: one call, the same bytes that go to COM1.
  *
  * The control characters are the ones a terminal has: '\n' ends the line (and

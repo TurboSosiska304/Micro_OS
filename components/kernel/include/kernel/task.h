@@ -87,6 +87,7 @@ struct k_terminal;
  * descriptors of the parent and of the child of a fork, may share one.
  */
 struct kfile;
+struct k_tty;
 
 struct task {
     k_u32_t pid;
@@ -113,6 +114,13 @@ struct task {
      * a terminal of its own.
      */
     struct k_terminal *terminal;
+    /*
+     * The mode of the terminal of that session (kernel/tty.h): made on the
+     * first question a program asks of its terminal and freed with the task.
+     * A task with no terminal of its own uses the mode of the console and
+     * this pointer stays NULL.
+     */
+    struct k_tty *tty_state;
     k_u8_t tty;
     char name[TASK_NAME_MAX];
     task_state_t state;
@@ -354,6 +362,22 @@ k_u32_t task_get_job(const struct task *t);
  * least one task was named, and ESRCH when the job has no other task.
  */
 int task_signal_job(k_u32_t job, int sig);
+
+/*
+ * Send a signal to every living task of the machine except `except` (the
+ * task that asks, which is the shell of a shutdown) and the zombies. The
+ * answer is the number of the signals that went out, or a negative error.
+ * The clean end of the machine uses it (kernel/power.c, ADR 0050): every
+ * task that may be in the middle of a write is told to end, and the
+ * shutdown waits a bounded time for it.
+ */
+int task_signal_all(const struct task *except, int sig);
+
+/*
+ * The living tasks of the machine except `except`: what the shutdown reads
+ * to know whether the tasks it signalled are gone.
+ */
+k_size_t task_count_living_except(const struct task *except);
 
 /*
  * Access to the task table without taking the lock. Only for the internals

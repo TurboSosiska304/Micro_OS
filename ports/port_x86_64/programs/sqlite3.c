@@ -135,11 +135,24 @@ static void reserve_console(void)
     (void)close(3);
 }
 
-/* The arguments of the shell with the one command of the port in front. */
+/* The arguments of the shell with the commands of the port in front.
+ *
+ * `PRAGMA journal_mode=DELETE` is the journal of this machine: a descriptor
+ * more for a journal is one the table of four does not have, and a session
+ * that dies with a hot journal is rolled back by the next open.
+ *
+ * `.mode list` is the shape of the screen. The shell of SQLite chooses the
+ * box of a terminal when `isatty(1)` says so, and since 1.9 the console of
+ * this machine *is* a terminal (ADR 0051) - but a cell of its grid has a
+ * letter of an ASCII font and no glyph of the box drawing, so a table would
+ * arrive as the numbers without the frame. The mode of the port is the list
+ * of the release of 1.8, and a script of a person sets its own with `.mode`
+ * after it. */
 static char **with_journal_command(int argc, char **argv)
 {
     static char journal[] = "PRAGMA journal_mode=DELETE";
-    char **out = (char **)malloc(((size_t)argc + 3u) * sizeof(char *));
+    static char list[] = ".mode list";
+    char **out = (char **)malloc(((size_t)argc + 5u) * sizeof(char *));
     int index;
 
     if (out == NULL) {
@@ -148,11 +161,13 @@ static char **with_journal_command(int argc, char **argv)
 
     out[0] = argv[0];
     out[1] = (char *)"-cmd";
-    out[2] = journal;
+    out[2] = list;
+    out[3] = (char *)"-cmd";
+    out[4] = journal;
     for (index = 1; index < argc; index++) {
-        out[index + 2] = argv[index];
+        out[index + 4] = argv[index];
     }
-    out[argc + 2] = NULL;
+    out[argc + 4] = NULL;
 
     return out;
 }
@@ -165,9 +180,24 @@ int main(int argc, char **argv)
 
     script = read_script(&length);
 
-    /* The descriptor of the input is not needed any more: the script is in
-     * the memory and the slot is the one a `.read` of the shell will use. */
-    (void)close(0);
+    /*
+     * The input of the shell is the script and not a person: the descriptor
+     * 0 is `/dev/null`, which is not a terminal, and the shell of SQLite
+     * keeps the batch mode of its release - no prompt before a line, and no
+     * box of a table (ADR 0051: on this machine the console *is* a terminal,
+     * and a program that asks isatty() is told the truth). The slot 0 is not
+     * free for a `.read` any more, which takes the next one.
+     */
+    {
+        int empty = open("/dev/null", ULIBC_O_RDONLY);
+
+        if (empty < 0) {
+            (void)close(0); /* no device: the slot is what a `.read` gets */
+        } else if (empty != 0) {
+            (void)dup2(empty, 0);
+            (void)close(empty);
+        }
+    }
 
     reserve_console();
 
@@ -189,5 +219,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    return sqlite3_shell_main(argc + 2, args);
+    /* The two commands of the port are two arguments and two values in front
+     * of the line of the caller. */
+    return sqlite3_shell_main(argc + 4, args);
 }

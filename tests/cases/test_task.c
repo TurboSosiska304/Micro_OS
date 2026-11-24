@@ -1,3 +1,5 @@
+#include <stdatomic.h>
+
 #include "ktest.h"
 #include "tests/tests.h"
 
@@ -187,8 +189,8 @@ static void exiting_task(void *arg)
  * leaves without waiting, and its child, which must name the runner (pid 1)
  * as its parent afterwards.
  */
-static volatile k_u32_t g_grandchild_pid;
-static volatile int g_grandchild_ran;
+static _Atomic(k_u32_t) g_grandchild_pid;
+static atomic_int g_grandchild_ran;
 
 static void grandchild_task(void *arg)
 {

@@ -72,6 +72,17 @@ PROGRAMS = [
     "sha256sum",
 ]
 
+# The programs of the gate that a transcript cannot drive: `kilo` reads its
+# keys one at a time in raw mode and a line of the harness is a line of the
+# shell. It is built, written into the volume and hashed like the others, and
+# the half of its gate that types a line, saves and reads the file back is
+# `make tty-smoke` (tools/tty_smoke.py, ADR 0051 §10).
+SCREEN_PROGRAMS = ["kilo"]
+
+# The programs of this directory that are ours: the calls of a command, and
+# the terminal asked in the words a transcript can check.
+OWN_PROGRAMS = ["command", "ttyprobe"]
+
 # The commands of the run, in the order they are typed. A comment in front of
 # a group says what the group proves; the checks below read the answer of each
 # line out of the transcript, so a line added here needs a check there.
@@ -113,6 +124,10 @@ COMMANDS = [
     # The calls of a command: `system`, `popen` both ways and `pclose`, with
     # the programs of this same directory as the commands.
     "exec /bin/ports/command",
+    # The terminal of a program (ADR 0051): the four questions a full-screen
+    # program asks before it draws, and the answer of the console of the
+    # machine.
+    "exec /bin/ports/ttyprobe",
     # The listing of the directory is the list of the build itself.
     "exec /bin/ls /bin/ports",
 ]
@@ -136,11 +151,17 @@ def upstream_checks() -> list:
             listed[path] = digest
 
     root = os.path.join(ROOT, "tests", "ports")
+    # Every file of a release of the gate is in the manifest: the sources of
+    # sbase and the source and the license of kilo. `README.md` is ours and
+    # says where the file came from, and a dot file (the `.clang-format` that
+    # keeps the formatter away from sbase) is tooling of the tree and not a
+    # byte of the release.
     present = sorted(
         os.path.relpath(os.path.join(directory, name), root).replace(os.sep, "/")
-        for directory, _, names in os.walk(os.path.join(root, "sbase"))
+        for release in ("sbase", "kilo")
+        for directory, _, names in os.walk(os.path.join(root, release))
         for name in names
-        if name.endswith((".c", ".h", ".1"))
+        if name != "README.md" and not name.startswith(".")
     )
 
     checks.append(
@@ -304,9 +325,28 @@ def check(output: str) -> list:
            line_is(cmd, "read back: written through a pipe"), cmd)
     expect("the gate program ends with 0", "the program exited with 0" in cmd, cmd)
 
+    # --- the terminal of a program (ADR 0051) ------------------------------
+    tty = answer(blocks, "exec /bin/ports/ttyprobe")
+    expect("the console is the terminal of the descriptors 0 and 1",
+           line_is(tty, "tty: isatty(0)=1 isatty(1)=1 isatty(9)=0"), tty)
+    expect("a terminal starts canonical with echo and the signal of Ctrl+C",
+           line_is(tty, "tty: mode canonical=1 echo=1 isig=1 vmin=1 vtime=0"), tty)
+    expect("TIOCGWINSZ answers the size of the screen",
+           re.search(r"(?m)^tty: size [0-9]+x[0-9]+\r?$", tty) is not None, tty)
+    expect("cfmakeraw clears the discipline of the line",
+           line_is(tty, "tty: raw canonical=0 echo=0 isig=0 vmin=1 vtime=0"), tty)
+    expect("the mode goes back to the one the program found",
+           line_is(tty, "tty: back canonical=1 echo=1 isig=1 vmin=1 vtime=0"), tty)
+    expect("/dev/tty is the same terminal under the name of POSIX",
+           line_is(tty, "tty: /dev/tty isatty=1"), tty)
+    expect("a file is not a terminal", line_is(tty, "tty: a file isatty=0"), tty)
+    expect("the gate of the terminal ends with 0", "the program exited with 0" in tty, tty)
+
     # --- the directory of the build ----------------------------------------
     listing = answer(blocks, "exec /bin/ls /bin/ports")
-    missing = [name for name in PROGRAMS + ["command"] if name not in listing]
+    missing = [
+        name for name in PROGRAMS + SCREEN_PROGRAMS + OWN_PROGRAMS if name not in listing
+    ]
     expect("every program of the gate is a file of /bin/ports", not missing, f"missing {missing}")
 
     return checks
@@ -331,12 +371,16 @@ def build_image(image: str, x86: str, programs: str, verbose: bool) -> int:
         "--dir",
         "/bin/ports",
     ]
-    for name in PROGRAMS + ["command"]:
+    for name in PROGRAMS + SCREEN_PROGRAMS + OWN_PROGRAMS:
         path = os.path.join(programs, f"{name}.mox")
         if not os.path.isfile(path):
             print(f"missing {path}: run sh tools/ports_build.sh", file=sys.stderr)
             return 2
         command += ["--program", f"/bin/ports/{name}={path}"]
+
+    # The license of the editor travels in the volume, as the license of every
+    # program of the image does (ADR 0025 §4).
+    command += ["--file", f"/etc/licenses/kilo={os.path.join(ROOT, 'tests', 'ports', 'kilo', 'LICENSE')}"]
 
     if verbose:
         print("image:", " ".join(command))
@@ -429,8 +473,8 @@ def main(argv: list) -> int:
             print(f"          {detail}")
 
     print("=" * 72)
-    print(f"ports: {len(PROGRAMS)} program(s) of sbase, {len(checks)} check(s), "
-          f"{time.monotonic() - started:.0f} s of the machine")
+    print(f"ports: {len(PROGRAMS)} program(s) of sbase, {len(SCREEN_PROGRAMS)} of a screen, "
+          f"{len(checks)} check(s), {time.monotonic() - started:.0f} s of the machine")
 
     if failed:
         print(f"FAILED: {len(failed)} of {len(checks)} check(s) did not pass")

@@ -21,6 +21,7 @@
 
 #include "kernel/kmm.h"
 #include "kernel/log.h"
+#include "kernel/power.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
 #include "kernel/version.h"
@@ -341,6 +342,16 @@ k_u32_t session_start(const struct session_info *info)
         return 0;
     }
 
+    /*
+     * A machine that is going down does not open a new door (ADR 0050):
+     * the getty of every port reads the same flag, so the console, telnet
+     * and a shell that starts a session of its own all stop here.
+     */
+    if (k_power_ending()) {
+        kwarn("session: the machine is going down, no new session");
+        return 0;
+    }
+
     copy = kmm_alloc(sizeof(*copy), KMM_PRIORITY_SYSTEM);
     if (copy == NULL) {
         kerror("session: no memory for the record of a session");
@@ -381,6 +392,14 @@ void session_console_reaped(k_u32_t pid, int status)
     }
 
     g_console_pid = 0;
+
+    /*
+     * A logout during the clean end is not a door to open again: the
+     * machine is going down and the getty stays quiet (ADR 0050).
+     */
+    if (k_power_ending()) {
+        return;
+    }
 
     /*
      * A logout is a session that ended for a person who wants the door

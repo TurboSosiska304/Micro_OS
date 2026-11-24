@@ -101,6 +101,12 @@ jobs:
       - name: the disk of a laptop, read-only
         run: make nvme-smoke
 
+      # The machine switches itself off: the process of QEMU ends by itself on
+      # `shutdown`, the same image boots again with a clean volume, and
+      # `reboot` boots the same process a second time (ADR 0050).
+      - name: the machine that switches itself off
+        run: make power-smoke
+
       - name: the same image twice
         run: make reproducible
 

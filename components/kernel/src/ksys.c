@@ -17,6 +17,7 @@
 #include "kernel/port_task.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
+#include "kernel/tty.h"
 #include "kernel/vfs.h"
 #include "kernel/wait.h"
 
@@ -384,6 +385,21 @@ static k_ssize_t sys_read(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys_
     K_UNUSED(a5);
 
     if (file == NULL) {
+        /*
+         * The descriptor 0 is the terminal of the task when nothing was
+         * opened on it, the same rule as the console of 1 and 2 for a write
+         * (ADR 0051 §2): a program that was written for a Unix finds its
+         * keyboard there and never opens `/dev/tty`.
+         */
+        if (fd == 0) {
+            rc = buffer_check(buf, count);
+            if (rc != 0) {
+                return rc;
+            }
+
+            return k_tty_read((char *)(uintptr_t)buf, (k_size_t)count);
+        }
+
         return KERR_BADF;
     }
 
@@ -622,6 +638,16 @@ static k_ssize_t sys_dup2(ksys_arg_t oldfd, ksys_arg_t newfd, ksys_arg_t a2, ksy
 }
 
 /*
+ * The step of a `poll` that waits on something other than a pipe or the
+ * console. Such a list has no channel to arm - the state of a regular file
+ * and of a device of the VFS is always the one it reports - so the wait is a
+ * plain sleep and the list is looked at again after each step: `poll` with no
+ * descriptor and no deadline is a wait of the life of the machine, and a step
+ * keeps it from being one number of ticks that wraps.
+ */
+#define KSYS_POLL_IDLE_MS 10u
+
+/*
  * The readiness of one descriptor for `poll`. The answer is the bits of
  * revents, and the rules are the ones of the object: a pipe knows whether a
  * byte is there, a regular file of this system never makes a read wait, and
@@ -646,9 +672,14 @@ static k_u16_t poll_entry(ksys_arg_t fd, k_u16_t events)
     if (file == NULL) {
         /* The descriptors 1 and 2 are the console of the system when they
          * are not open as a file (the same rule as write), and it is always
-         * ready to take a byte. */
+         * ready to take a byte. The descriptor 0 is the terminal of the task,
+         * ready when a key waits (ADR 0051 §2). */
         if (fd == 1 || fd == 2) {
             return (k_u16_t)(events & (KSYS_POLLIN | KSYS_POLLOUT));
+        }
+
+        if (fd == 0) {
+            return ((events & KSYS_POLLIN) != 0 && k_tty_input_ready()) ? KSYS_POLLIN : 0;
         }
 
         return KSYS_POLLERR;
@@ -670,8 +701,8 @@ static k_u16_t poll_entry(ksys_arg_t fd, k_u16_t events)
      * knows. The path of the open file is the name it was opened with, which
      * is the whole of the identity a device of this system has.
      */
-    if (strcmp(file->path, "/dev/tty0") == 0) {
-        if ((events & KSYS_POLLIN) != 0 && k_console_poll() >= 0) {
+    if (strcmp(file->path, "/dev/tty0") == 0 || strcmp(file->path, "/dev/tty") == 0) {
+        if ((events & KSYS_POLLIN) != 0 && k_tty_input_ready()) {
             revents |= KSYS_POLLIN;
         }
 
@@ -742,18 +773,21 @@ static k_ssize_t sys_poll(ksys_arg_t fds, ksys_arg_t nfds, ksys_arg_t timeout, k
         k_u16_t events;
         bool piped = false;
         bool console = false;
+        bool armed = false;
+        k_u32_t step;
 
         count = 0;
 
+        /*
+         * The channels this list can be woken by, from the kind of each
+         * descriptor: the kind does not change under the call. The record is
+         * armed before the list is looked at, so a state that changes while
+         * this loop runs is either seen by the look below or wakes the
+         * record - there is no window in which the wakeup finds nothing
+         * (docs/debts.md, K15).
+         */
         for (i = 0; i < (k_u32_t)nfds; i++) {
             struct kfile *file = ((k_i32_t)list[i].fd < 0) ? NULL : fd_get(list[i].fd);
-
-            events = (k_u16_t)(list[i].events & (KSYS_POLLIN | KSYS_POLLOUT));
-            list[i].revents = poll_entry(list[i].fd, events);
-
-            if (list[i].revents != 0) {
-                count++;
-            }
 
             if (file != NULL) {
                 if (file->kind == KFILE_PIPE) {
@@ -764,7 +798,24 @@ static k_ssize_t sys_poll(ksys_arg_t fds, ksys_arg_t nfds, ksys_arg_t timeout, k
             }
         }
 
+        if (piped || console) {
+            armed = k_wait_arm(piped ? K_WAIT_CHANNEL_PIPES : NULL,
+                               console ? K_WAIT_CHANNEL_CONSOLE : NULL);
+        }
+
+        for (i = 0; i < (k_u32_t)nfds; i++) {
+            events = (k_u16_t)(list[i].events & (KSYS_POLLIN | KSYS_POLLOUT));
+            list[i].revents = poll_entry(list[i].fd, events);
+
+            if (list[i].revents != 0) {
+                count++;
+            }
+        }
+
         if (count > 0) {
+            if (armed) {
+                k_wait_disarm();
+            }
             break;
         }
 
@@ -772,6 +823,9 @@ static k_ssize_t sys_poll(ksys_arg_t fds, ksys_arg_t nfds, ksys_arg_t timeout, k
             k_u64_t now = k_sched_uptime_ms();
 
             if (now >= deadline) {
+                if (armed) {
+                    k_wait_disarm();
+                }
                 break;
             }
 
@@ -780,23 +834,40 @@ static k_ssize_t sys_poll(ksys_arg_t fds, ksys_arg_t nfds, ksys_arg_t timeout, k
 
         /*
          * The wait is the scheduler's: the task leaves the run queue and a
-         * pipe or the console wakes it when the state it watches changes.
-         * Nothing is polled in a loop, and the timeout is the deadline of the
-         * scheduler's sleep.
+         * pipe or the console wakes it when the state it watches changes -
+         * at once, not at the next tick, because the record is armed and the
+         * wake of the channel moves the task back into the run queue.
          */
-        /*
-         * A wait without a deadline is a wait of one chunk and not of the
-         * life of the machine: the waiter registers after the list is looked
-         * at, so a wakeup that arrives in that window is lost (K15), and the
-         * chunk is what makes the list be looked at again. The sleep of a
-         * wait is ten milliseconds either way.
-         */
-        if (infinite) {
-            wait_ms = KFILE_WAIT_CHUNK_MS;
+        if (!armed) {
+            /*
+             * Nothing of the list can wake a task (no pipe, no console): the
+             * state is looked at once more after a step of the plain sleep
+             * and the call answers. `poll` with no descriptor and no deadline
+             * is a wait of the life of the machine, and a step keeps it from
+             * being one number of ticks that wraps.
+             */
+            step = wait_ms;
+
+            if (step > KSYS_POLL_IDLE_MS) {
+                step = KSYS_POLL_IDLE_MS;
+            }
+
+            if (!infinite) {
+                k_u64_t now = k_sched_uptime_ms();
+
+                if (now >= deadline) {
+                    break;
+                }
+
+                step = (k_u32_t)K_MIN((k_u64_t)step, deadline - now);
+            }
+
+            k_sched_sleep_ms(step);
+            continue;
         }
 
-        rc = k_wait_block(piped ? K_WAIT_CHANNEL_PIPES : NULL,
-                          console ? K_WAIT_CHANNEL_CONSOLE : NULL, wait_ms);
+        rc = k_wait_sleep(wait_ms);
+        k_wait_disarm();
 
         if (rc == K_WAIT_SIGNAL) {
             return KERR_INTR;
@@ -1566,6 +1637,15 @@ static k_ssize_t sys_ioctl(ksys_arg_t fd, ksys_arg_t cmd, ksys_arg_t arg, ksys_a
     K_UNUSED(a5);
 
     if (file == NULL) {
+        /*
+         * The descriptors 0, 1 and 2 are the terminal of the task while they
+         * are not open: a program asks it for the mode and the size before it
+         * draws anything (ADR 0051 §2, §3).
+         */
+        if (fd <= 2) {
+            return k_tty_ioctl((k_u32_t)cmd, (k_u64_t)arg);
+        }
+
         return KERR_BADF;
     }
 

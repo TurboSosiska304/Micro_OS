@@ -60,22 +60,20 @@
 #define KFILE_PIPE_BUF 512u
 
 /*
- * The bound of one wait of a pipe or of `poll`, and the reason it is not
- * "forever".
+ * The bound of one wait of a pipe or of `poll`.
  *
- * `k_wait_block` registers the waiter after the caller has looked at the
- * object, and a writer that wakes the channel in that window finds no record:
- * the wakeup is lost, the waiter sleeps, and with an unbounded wait it sleeps
- * for as long as the machine is up - a pipeline of the shell that never
- * finishes, which is what the unit test of the host found under a slow runner
- * (K15 in docs/debts.md). A wait with a bound costs nothing that the chunk of
- * the wait does not already cost - the sleep of a wait is ten milliseconds
- * either way - and makes the caller look at the object again, so a lost
- * wakeup costs twenty milliseconds of a stage and not the line. The proper
- * fix is to register before the look and not after it, which is the lane of
- * the wakeup of 1.9.
+ * There is none. A wait registers its record under the lock of the object it
+ * watches (`k_wait_arm`) and the object wakes it after the state has changed,
+ * so a wakeup cannot arrive in a window where the waiter has not registered
+ * yet - the shape that cost 1.8 a lost wakeup and a wait of twenty
+ * milliseconds at a time (K15 in docs/debts.md). A reader of an empty pipe
+ * with a writer still there sleeps until the writer puts a byte in; the
+ * reader of an empty pipe with no writer left answers the end of the file.
+ *
+ * A port whose sleep cannot be cut looks at the record every ten milliseconds
+ * instead (kernel/wait.c, WAIT_CHUNK_MS), which is the granularity of that
+ * port and not of the wait.
  */
-#define KFILE_WAIT_CHUNK_MS 20u
 
 /*
  * The bits a descriptor reports to `poll` (KSYS_POLLIN and the two others of

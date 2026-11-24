@@ -12,6 +12,8 @@
 #include "kernel/port_task.h"
 #include "kernel/sched.h"
 #include "kernel/signal.h"
+#include "kernel/tty.h"
+#include "kernel/wait.h"
 
 static struct task g_tasks[TASK_MAX_TASKS];
 static k_u32_t g_next_pid = 1;
@@ -586,6 +588,10 @@ static void task_free_slot(struct task *t)
         return;
     }
 
+    /* The mode of the terminal of a session goes with the task, and a console
+     * that a program left raw goes back to canonical (kernel/tty.c). */
+    k_tty_task_exit(t);
+
     kfile_table_close(t);
 
     k_port_enter_critical();
@@ -712,8 +718,6 @@ void task_exit(int code)
         memcpy(name, self->name, sizeof(name));
         name[sizeof(name) - 1] = '\0';
         pid = self->pid;
-        /* The parent learns of the end before the slot can be reaped. */
-        task_signal_notify_parent(self);
 
         /*
          * The children of a task that ends are the children of init from
@@ -759,7 +763,30 @@ void task_exit(int code)
          */
         kinfo("task: '%s' (pid %u) exited with code %d", name, (unsigned)pid, code);
 
+        /*
+         * A record of a wait must not outlive the task that armed it: its
+         * slot in the table of the tasks would be given to the next task,
+         * and a wake of the channel would then run a task that waits on
+         * nothing.
+         */
+        k_wait_forget(self);
+
+        /*
+         * The state of a finished task and the mark of SIGCHLD on its parent
+         * are one step. A parent that is woken by the mark before the slot
+         * says ZOMBIE scans the table, finds a child that is still running
+         * and answers EINTR for a child that has in fact exited - and the
+         * wake of 1.9 is immediate enough to make that window a test of the
+         * suite of two cores. The section also keeps the slot ours: the
+         * parent may reap it the moment the state says ZOMBIE, and the mark
+         * would then go to the parent of the task that took the slot next.
+         * The wait of the parent is the tick and the door of its port, which
+         * do not need this lock (they take it after it is dropped).
+         */
+        k_port_enter_critical();
         k_sched_task_terminated(self);
+        task_signal_notify_parent(self);
+        k_port_exit_critical();
     }
 
     k_port_task_exit(code);
@@ -1167,6 +1194,76 @@ int task_signal_job(k_u32_t job, int sig)
     }
 
     return (sent > 0) ? 0 : KERR_SRCH;
+}
+
+/*
+ * The signal of the whole machine: every living task but the one that asks.
+ * The pids are collected under the critical section for the same reason as
+ * the job above; the signal itself goes out through task_signal_send(),
+ * which checks the state again.
+ */
+int task_signal_all(const struct task *except, int sig)
+{
+    k_u32_t pids[TASK_MAX_TASKS];
+    k_size_t count = 0;
+    k_size_t i;
+    int sent = 0;
+
+    if (signal_slot(sig) < 0) {
+        return KERR_INVAL;
+    }
+
+    k_port_enter_critical();
+
+    for (i = 0; i < TASK_MAX_TASKS; i++) {
+        struct task *t = &g_tasks[i];
+
+        if (!t->in_use || t == except) {
+            continue;
+        }
+
+        if (t->state == TASK_STATE_ZOMBIE || t->state == TASK_STATE_DEAD) {
+            continue;
+        }
+
+        pids[count++] = t->pid;
+    }
+
+    k_port_exit_critical();
+
+    for (i = 0; i < count; i++) {
+        if (task_signal_send(pids[i], sig) == 0) {
+            sent++;
+        }
+    }
+
+    return sent;
+}
+
+k_size_t task_count_living_except(const struct task *except)
+{
+    k_size_t i;
+    k_size_t count = 0;
+
+    k_port_enter_critical();
+
+    for (i = 0; i < TASK_MAX_TASKS; i++) {
+        const struct task *t = &g_tasks[i];
+
+        if (!t->in_use || t == except) {
+            continue;
+        }
+
+        if (t->state == TASK_STATE_ZOMBIE || t->state == TASK_STATE_DEAD) {
+            continue;
+        }
+
+        count++;
+    }
+
+    k_port_exit_critical();
+
+    return count;
 }
 
 task_signal_fn task_signal_set(struct task *t, int sig, task_signal_fn handler)

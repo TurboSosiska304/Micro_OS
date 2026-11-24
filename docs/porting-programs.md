@@ -87,7 +87,7 @@ tends to need and the tree has:
 | `<dirent.h>` | `DIR`, `struct dirent`, `opendir`, `readdir`, `closedir`, `rewinddir`, `dirfd` over a batch of eight entries of the call `ulibc_readdir` |
 | `<libgen.h>` | `basename`, `dirname` |
 | `<errno.h>` | the POSIX numbers, `EDOM`/`ERANGE`, and `errno`, which is a plain global of the program |
-| `<unistd.h>` | `read`, `write`, `lseek`, `close`, `unlink`, `isatty` (0: no terminal), `realpath`, the three `STD*_FILENO` and `off_t`/`ssize_t` |
+| `<unistd.h>` | `read`, `write`, `lseek`, `close`, `unlink`, `isatty` (the terminal of the task, ADR 0051), `realpath`, the three `STD*_FILENO` and `off_t`/`ssize_t` |
 | `<fcntl.h>` | `O_RDONLY`, `O_WRONLY`, `O_RDWR`, `O_CREAT`, `O_EXCL`, `O_TRUNC`, `O_APPEND`, `O_DIRECTORY`; `O_EXCL` with `O_CREAT` is `EEXIST` for a name that is already there |
 | `<sys/types.h>` | `off_t`, `ssize_t`, `off64_t` |
 | `<math.h>` | `sqrt`, `pow`, `fmod`, `floor`, `ceil`, `trunc`, `round`, `fabs`, `exp`, `exp2`, `log`, `log2`, `log10`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `frexp`, `ldexp`, `modf` |
@@ -303,6 +303,31 @@ those headers and the library of a program has neither; the path of the
 header is the port layer's, and the host build of the test takes the headers
 of the host, so the two builds of the same sources are the two machines.
 
+
+### A program with a screen: the terminal
+
+A command reads a file and writes a line; a program of a console reads a key
+and draws a screen. The machine answers the second one since 1.9 (ADR 0051):
+
+| The source asks | The answer of this system |
+|---|---|
+| `isatty(0)`, `isatty(1)` | true: 0, 1 and 2 are the terminal of the task while nothing is open on them |
+| `tcgetattr(0, &t)` | the mode of the console: canonical with the echo, or the raw mode a program set |
+| `cfmakeraw(&t)`, `tcsetattr(0, TCSAFLUSH, &t)` | the raw mode: `VMIN`/`VTIME`, no echo, no signals - Ctrl+C is a byte |
+| `ioctl(1, TIOCGWINSZ, &ws)` | the screen in cells: 80x25 of the text mode, 160x50 of the framebuffer, 80x25 of the panel |
+| `open("/dev/tty", O_RDWR)` | the same terminal under the name of POSIX |
+| `\x1b[<row>;<col>H`, `\x1b[K`, `\x1b[J`, `\x1b[A` | read by the console of x86-64: the cursor, the erase of a line and of the screen, the four moves |
+| `\x1b[?25l`, `\x1b[38;5;...m` | dropped: the cursor of a screen of cells is not hidden and a colour is one of the sixteen |
+
+`tests/ports/kilo` is the worked example (antirez's editor, BSD-2-Clause,
+1 308 lines, no port layer and no patch): a source of a console compiles here
+when it asks those calls and nothing else, and if one of them is missing it is
+a row of `docs/debts.md` and a change of `components/libc/user` - never a hunk
+of the source. The keys of the console of x86-64 are the characters a shell
+types and not the arrows (the extended keys belong to the interface,
+ADR 0028), and `SIGWINCH` is not a signal of the ABI: an editor of this system
+moves with the letters, the Enter and the Backspace and is not told about a
+resize.
 
 ## 4. The program and the tests
 
@@ -618,7 +643,10 @@ of the host, `make x86-smoke` for the program and `/etc/sql-*.sql`,
 6. Add `microos_userland_library` and `add_libc_program` to
    `ports/port_x86_64/CMakeLists.txt`; build with `-Os`; check the image is
    under `K_EXEC_MAX_IMAGE` (8 MiB) and the bss under the megabyte of MOX1.
-7. Add the program to `tools/x86_image.py`, with a fixture and its license.
+7. Add the program to `tools/x86_image.py`, with a fixture and its license;
+   a program of the ports gate (`tests/ports/`) goes to the volume of
+   `make ports-smoke` and `make tty-smoke` instead, and its license to
+   `/etc/licenses/` of that volume.
 8. Write the host test; add the smoke commands and the checks; run
    `make test`, `make x86-smoke`, `make x86-disk-smoke`, `make test-asan`,
    `make test-tsan`, `make test-smp`, `make smoke`, `make ci`,

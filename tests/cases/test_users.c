@@ -19,6 +19,8 @@
  * and not the fixture, because a task that gave up root cannot take it back
  * with that call.
  */
+#include <stdatomic.h>
+
 #include "ktest.h"
 #include "tests/tests.h"
 
@@ -40,10 +42,10 @@ static struct mfs_ram_device g_volume;
 static struct k_blockdev g_device;
 
 /* What a child records about itself, for the test of the inheritance. */
-static volatile k_u32_t g_child_uid;
-static volatile k_u32_t g_child_gid;
-static volatile int g_victim_running;
-static volatile k_u32_t g_victim_uid;
+static _Atomic(k_u32_t) g_child_uid;
+static _Atomic(k_u32_t) g_child_gid;
+static atomic_int g_victim_running;
+static _Atomic(k_u32_t) g_victim_uid;
 
 static void setup(void)
 {

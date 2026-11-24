@@ -53,6 +53,35 @@ void k_sched_yield(void);
 /* Sleep the current task for the given number of milliseconds. */
 void k_sched_sleep_ms(k_u32_t ms);
 
+/*
+ * Sleep the current task for at most `ms`, without beginning the sleep when
+ * `stop` is already true. The look at the flag and the removal from the run
+ * queue are one critical section, so a wakeup that sets the flag in the
+ * window between the caller's look and this call is not slept on - that
+ * window is the lost wakeup of 1.8 (docs/debts.md, K15).
+ *
+ * Answers true when the task slept, false when it did not because the flag
+ * was set. The flag is written under the scheduler lock by whoever wakes the
+ * task (kernel/wait.c), which is what makes the plain read of it safe.
+ */
+bool k_sched_sleep_unless(k_u32_t ms, const bool *stop);
+
+/*
+ * Wake a task that is asleep, now: it leaves the sleeping table, becomes what
+ * its sleep was going to make it (READY for a wait), enters the run queue of
+ * its core and that core is told - the interrupt of the port when it is
+ * another one. The caller holds the scheduler lock; the interrupt goes out
+ * after the caller has dropped it, with k_sched_wake_flush().
+ *
+ * Answers true when the task was runnable after the call (it left the
+ * sleeping table), false when it was not sleeping or its sleep was a block.
+ */
+bool k_sched_wake_task_locked(struct task *t);
+
+/* Send the interrupts the hand-overs of k_sched_wake_task_locked() asked for.
+ * Called with the scheduler lock dropped. */
+void k_sched_wake_flush(void);
+
 /* Block/unblock a task (waiting for an event, e.g. a queue or a device). */
 void k_sched_block(struct task *t);
 void k_sched_unblock(struct task *t);

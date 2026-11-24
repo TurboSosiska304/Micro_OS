@@ -877,6 +877,19 @@ static bool sleep_is_over(const struct task *self, k_u32_t ticks, k_u64_t deadli
     return k_sched_ticks() == ticks && k_port_uptime_us() >= deadline_us;
 }
 
+/*
+ * A sleep of this port ends when the state of the task changes: the loop
+ * below looks at it on every return from the scheduler and from the halt, and
+ * a wake of the kernel changes it before the task is claimed again
+ * (k_sched_wake_task_locked). The door of the host is therefore not needed
+ * here - the port already answers in the time of a switch and not in the time
+ * of a tick.
+ */
+bool k_port_task_sleep_cuttable(void)
+{
+    return true;
+}
+
 void k_port_task_sleep_ms(k_u32_t ms)
 {
     struct port_task *current = this_cpu()->current;

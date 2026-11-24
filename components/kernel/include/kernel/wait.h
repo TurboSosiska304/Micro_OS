@@ -8,18 +8,30 @@
  * channel (the address of the state that changed, which is a stable name for
  * as long as the object lives) and the waiter is woken by whoever changes it.
  *
- * The wait itself is the scheduler's. A waiter that is woken while it sleeps
- * has its wake tick moved to the present, and the tick of the timer is what
- * runs it again; a waiter with a deadline is woken by the same tick when the
- * deadline passes. Nothing here loops on the processor: a task that waits
- * costs no time until the moment it is runnable again.
+ * A wait is three calls and the lock of the object held across the first one:
  *
- * The channels are a fixed table of the size of the table of the tasks: a
- * waiter is one record and the system has no more waiters than tasks. The
- * broadcast is deliberately coarse - `k_wait_wake()` wakes every waiter of a
- * channel and each of them looks at its own state again - because a machine
- * of this size does not need a list of the waiters of one pipe, and a wakeup
- * that finds nothing to read is a wasted millisecond, not a bug.
+ *     lock(object);
+ *     if (the state is already the one I want) { unlock; answer; }
+ *     k_wait_arm(channel, second);     // still under the lock
+ *     unlock(object);
+ *     rc = k_wait_sleep(timeout);      // the scheduler sleeps the task
+ *     k_wait_disarm();
+ *
+ * The arm is what closes the window of 1.8 (docs/debts.md, K15). The writer
+ * changes the state under the same lock of the object and wakes the channel
+ * after it drops that lock: a wake that comes after the arm finds the record
+ * of this task and not nothing, and a wake that comes before the arm has
+ * changed a state the look under the lock could not see yet. There is no
+ * moment in which a wake is lost, so a wait needs no bound and no chunk: the
+ * task sleeps until the object wakes it, the deadline passes, or a signal
+ * arrives.
+ *
+ * The wake itself is immediate. `k_wait_wake()` takes the waiter out of the
+ * sleeping table, puts it in the run queue of its core and tells that core
+ * (the IPI of ADR 0012/0034 when it is another one); the sleep of the port is
+ * cut by `k_port_task_wake()`, so a waiter of the host or of the board does
+ * not sit out the rest of a chunk. A port whose sleep already ends when the
+ * state of the task changes - x86-64 - needs no door and says so.
  */
 #ifndef MICRO_OS_KERNEL_WAIT_H
 #define MICRO_OS_KERNEL_WAIT_H
@@ -27,7 +39,7 @@
 #include "kernel/task.h"
 #include "kernel/types.h"
 
-/* The answers of k_wait_block(). */
+/* The answers of k_wait_sleep(). */
 #define K_WAIT_WOKEN 0    /* the object said that its state changed */
 #define K_WAIT_TIMEOUT -1 /* the deadline passed */
 #define K_WAIT_SIGNAL -2  /* a signal the task has to answer arrived */
@@ -45,22 +57,48 @@ extern const char k_wait_channel_pipes;
 extern const char k_wait_channel_console;
 
 /*
- * Wait on `channel` (and on `second`, when it is not NULL) for at most
- * `timeout_ms` milliseconds; a timeout of K_WAIT_INFINITE waits until the
- * object wakes the task. Two channels are enough for every wait of this
- * system: the wait of `poll` is the one that watches a pipe and the console at
- * the same time.
+ * Register the wait of the calling task on `channel` (and on `second`, when it
+ * is not NULL) and forget every wakeup that came before it. The caller holds
+ * the lock of the object whose state it has just looked at, and keeps it until
+ * the state has been looked at once more - a look before the arm is enough
+ * when the writer needs the same lock to change the state, because the two
+ * cannot interleave.
  *
- * The call blocks the calling task in the scheduler, so the processor goes to
- * somebody else and the wait costs nothing. The answer is K_WAIT_WOKEN, or
- * K_WAIT_TIMEOUT, or K_WAIT_SIGNAL when a pending signal that the task has to
- * answer cut the wait (the call of the object then answers EINTR). A caller
+ * Two channels are enough for every wait of this system: the wait of `poll`
+ * is the one that watches a pipe and the console at the same time.
+ *
+ * Answers false when there is no task to wait (the boot, a test of the host)
+ * or no record free; the caller then looks at its object in a loop or sleeps
+ * for its timeout, exactly as a caller outside of a task always did.
+ */
+bool k_wait_arm(const void *channel, const void *second);
+
+/*
+ * Sleep the calling task until the record armed by k_wait_arm() has been
+ * woken, the deadline passes, or a pending signal that the task has to answer
+ * arrives. The answer is K_WAIT_WOKEN, K_WAIT_TIMEOUT or K_WAIT_SIGNAL (the
+ * call of the object then answers EINTR).
+ *
+ * The call leaves the run queue and costs no processor time; the wake of the
+ * object puts the task back in it, and the sleep of the port is cut, so the
+ * caller is runnable in microseconds and not at the next tick. A caller
  * outside of a task sleeps for the timeout and answers K_WAIT_TIMEOUT: there
- * is no run queue to leave.
+ * is no run queue to leave and nothing to wake.
+ *
+ * `timeout_ms` is measured from this call and not from the arm: a caller in a
+ * loop asks again with the time that is left, which is what the loop of
+ * `poll` does with its own deadline.
  */
 #define K_WAIT_INFINITE 0xFFFFFFFFu
 
-int k_wait_block(const void *channel, const void *second, k_u32_t timeout_ms);
+int k_wait_sleep(k_u32_t timeout_ms);
+
+/*
+ * Drop the record of the calling task. A waiter that is woken after this has
+ * been armed again by a later wait is woken for that one, which is why the
+ * call is the last of the three and not a way to cancel a wait in flight.
+ */
+void k_wait_disarm(void);
 
 /* Wake every waiter of `channel`. Safe from an interrupt and from a task. */
 void k_wait_wake(const void *channel);

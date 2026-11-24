@@ -4,7 +4,8 @@ The table of lane M3 of 1.8 ([`plan-1.8.md`](plan-1.8.md)): what a program of
 somebody else costs in this tree, in three numbers — the lines of its own
 source, the lines of a port layer this system adds, and the lines of the
 upstream source that had to be **edited**. The lane promises zero for the
-console set, and `make ports-smoke` is the gate that says so on the machine
+console set and for the terminal set of 1.9, and `make ports-smoke` and
+`make tty-smoke` are the gates that say so on the machine
 ([`tests/ports/`](../tests/ports/)).
 
 The recipe of a port is [`porting-programs.md`](porting-programs.md); the
@@ -51,7 +52,7 @@ table measures is the **library**: a program needs a port layer when
 | `cmp` | `cmp.c` | 82 | 0 | 0 | 14 656 | nothing for a file with itself; `differ: byte 1, line 1` and status 1 for two |
 | `whoami` | `whoami.c` | 37 | 0 | 0 | 14 528 | `root` through `getpwuid` and `/etc/passwd` |
 | `sha256sum` | `sha256sum.c` | 45 | 0 | 0 | 19 168 | the SHA-256 of `/etc/setting`, with `sha256.c` of the release beside it |
-| **total** | 13 files | **577** | **0** | **0** | 171 KiB | 62 checks in `make ports-smoke` |
+| **total** | 13 files | **577** | **0** | **0** | 171 KiB | 73 checks in `make ports-smoke` |
 
 The helpers they call are the release's own: `libutil/eprintf.c`,
 `fshut.c`, `putword.c`, `ealloc.c`, `strtonum.c`, `writeall.c`,
@@ -78,6 +79,64 @@ Why zero holds for these thirteen, in one sentence each:
 * **Their paths are the paths of this system.** A name is short, a file has
   an owner and a mode, `.` and `..` are folded by the resolver of the
   library: nothing of the thirteen walks a tree or links a file.
+
+## The terminal set: a program with a screen, zero patches
+
+The console set is a program that answers a line with a line. The second set
+of the same gate is a program that owns the screen, and it is where a system
+without a terminal gives itself away: every editor of a Unix starts with
+`isatty`, `tcgetattr`, `cfmakeraw` and `ioctl(TIOCGWINSZ)`, and a machine that
+answers "no" to the first one never sees the program at all.
+
+| Program | Source | Lines | Port layer | Patches | Image | What the machine answers |
+|---|---|---:|---:|---:|---:|---|
+| `kilo` | `kilo.c` | 1 308 | 0 | 0 | 245 KiB of image | the screen of the console, a line typed, Ctrl+S, Ctrl+Q, and `cat` reads the file |
+| `ttyprobe` (ours) | `ttyprobe.c` | 100 | — | — | 14 KiB | `isatty` 0/1 yes and 9 no, canonical, the size, raw, and back |
+| **total** | 1 file of the release | **1 308** | **0** | **0** | 259 KiB | 12 checks of `make tty-smoke`, 8 of `make ports-smoke` |
+
+`kilo` is the editor of Salvatore Sanfilippo (`antirez/kilo`, commit
+`323d93b`), copied byte for byte into `tests/ports/kilo` with its `LICENSE`
+and the sha256 of both in `tests/ports/upstream.txt`; the note is
+[`tests/ports/kilo/README.md`](../tests/ports/kilo/README.md). It is built by
+the SDK and by no CMake of the tree, like the thirteen tools of sbase, and the
+one warning of its release (`-Wunterminated-string-initialization` on the
+`"//"` of its C syntax table) is the release's and not a failure of the gate
+(`-DMICROOS_WARNINGS=OFF`).
+
+The gate has two halves because a transcript cannot type at an editor:
+
+* **`make ports-smoke`** builds kilo, writes it into `/bin/ports` of the
+  volume, hashes its source like the sources of sbase, and checks that the
+  file is there. It also runs `ttyprobe`, which asks the terminal in words a
+  transcript can read: the four questions of a full-screen program, the size
+  of the screen, the raw mode and the mode that comes back.
+* **`make tty-smoke`** drives the keyboard of the machine: it types
+  `exec /bin/ports/kilo /tmp/k.txt`, waits for the screen, types a line, sends
+  Ctrl+S (save) and Ctrl+Q (quit), waits for the shell, and reads the file
+  back with `cat`. The line of the file is the proof of the editor and of the
+  terminal under it.
+
+The second program of the table is ours and is the other half of the same
+proof: `tests/ports/ttyprobe.c` is a file of this tree (as `command.c` is) and
+it is the terminal asked with the calls of the library, in the words of a
+transcript. It is not a port of anything and it is not in the count of zero
+patches.
+
+Why zero holds for an editor, in one sentence each:
+
+* **Its numbers are integers.** `-mgeneral-regs-only` is the rule of a program
+  of `/bin`, and the editor of 1 308 lines never computes in a `double`.
+* **It asks the calls the library has.** `isatty`, `tcgetattr`, `tcsetattr`,
+  `cfmakeraw`, `ioctl`, `read`, `write`, `open`, `ftruncate`, `exit`,
+  `atexit`, `time`, `snprintf`, `sscanf` and `malloc` are in
+  [`libc.md`](libc.md) with ADR 0051.
+* **It asks for a terminal and the machine has one.** The mode of the console,
+  the echo, the signal of Ctrl+C, the raw read and the size of the screen are
+  the subject of ADR 0051; the escape sequences it draws with are read by the
+  console of x86-64.
+* **Its source is the release.** The 1 308 lines are the upstream bytes; a hunk
+  that somebody edited to make the editor compile would fail the sha256 check
+  before the machine boots.
 
 ## The ten tools of the tree: where zero does not hold, and why
 
