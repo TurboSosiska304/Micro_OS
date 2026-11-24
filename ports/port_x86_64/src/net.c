@@ -1704,7 +1704,13 @@ static void ip_input(const k_u8_t *frame, k_size_t length)
     source = net_get_be32(packet + 12);
     destination = net_get_be32(packet + 16);
 
-    if (destination != g_ip && destination != 0xFFFFFFFFu) {
+    /* A machine that is asking for an address has none yet: the answer of a
+     * server is a broadcast or a unicast to the address it is offering, and
+     * neither is the address of this stack. The exchange is the only caller
+     * that opens this door, and udp_input() and the client still check the
+     * port, the transaction and the MAC of the frame. */
+    if (destination != g_ip && destination != 0xFFFFFFFFu &&
+        !(g_dhcp_rx_armed && packet[9] == NET_IP_UDP)) {
         return;
     }
 

@@ -169,7 +169,10 @@ mask now instead of being a `/24` in the format string.
 * A machine of the owner with an I219 has a wire. The driver is the plain
   half of the card; what is left for a real one is the PHY and the management
   engine of the chipset, which is a table of the family and not a shape of
-  this stack: the line of K6 in `docs/debts.md` names it.
+  this stack: the line of K6 in `docs/debts.md` names it. The driver forces
+  the link up (`CTRL.SLU`) and reads `STATUS.LU`, which is the state of the
+  MAC and of the reset; a cable that is pulled is told by the timeout of the
+  client of DHCP and not by the card, until the PHY is read.
 * The RTL8153 is not driven, and the CDC-ECM stick of 1.8 stays the USB wire.
   A driver of the RTL would have the laptop and no machine of the tree to test
   it on - the same reason this ADR did not take it.
