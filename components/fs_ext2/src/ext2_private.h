@@ -41,8 +41,9 @@
 
 /* The largest sector of a device this reader accepts: the ports move 1 KiB
  * sectors, and the view of a volume of 4096-byte blocks is a device of 4 KiB
- * (ADR 0042). It is the buffer of one sector below, so it is the largest block
- * of the format as well. */
+ * (ADR 0042). It is the buffer of one sector of the device, and the sector of
+ * the device of a volume is never larger than the block of the volume, so it
+ * is the largest block of the format as well. */
 #define EXT2_DEV_SECTOR_MAX 4096u
 
 /* The largest block of the format this reader walks. */
