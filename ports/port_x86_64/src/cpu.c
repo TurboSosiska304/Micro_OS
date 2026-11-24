@@ -278,6 +278,65 @@ static const struct acpi_rsdp *rsdp_find(void)
 }
 
 /*
+ * The tables of a firmware are physical memory, and the identity map of this
+ * port covers the first gigabyte of the machine. A firmware of a BIOS leaves
+ * its tables in that gigabyte; a machine of UEFI puts them above it, where
+ * the first read of a signature is a page fault of the kernel and not a
+ * table - the shutdown of a laptop of the report stopped before its first
+ * line of the power for exactly that reason.
+ *
+ * So every address of the walk is asked for through this call: a page the
+ * identity map holds is read where it is, and a page it does not is mapped
+ * uncached into a window of the top 2 GiB (the window of the screen, the
+ * APIC and the cards). One page at a time, and the page of the last call is
+ * remembered: a walk reads the table of the moment many times and maps once.
+ */
+#define ACPI_WINDOW_VIRT (PORT_X86_64_KERNEL_BASE + 0x3A000000ull)
+#define ACPI_WINDOW_SIZE 0x200000u
+#define ACPI_PAGE_MASK 0x1FFFFFull
+
+static k_u64_t g_acpi_mapped;
+
+static const void *acpi_readable(k_u64_t address)
+{
+    k_u64_t page;
+    k_u64_t offset;
+
+    if (address == 0u) {
+        return NULL;
+    }
+
+    /*
+     * Before the port owns the page tables the map is the loader's, which
+     * names every byte of the machine: the tables are read where they are.
+     * The window below is made in the table of the port and reading it there
+     * on the map of the loader would be a fault of the early boot.
+     */
+    if (!port_x86_64_paging_ready()) {
+        return (const void *)(uintptr_t)address;
+    }
+
+    if (port_x86_64_paging_phys(port_x86_64_current_cr3(), address & ~(k_u64_t)0xFFFu) != NULL) {
+        return (const void *)(uintptr_t)address;
+    }
+
+    page = address & ~ACPI_PAGE_MASK;
+    offset = address & ACPI_PAGE_MASK;
+
+    if (g_acpi_mapped != page) {
+        if (port_x86_64_paging_map_device(ACPI_WINDOW_VIRT, page, ACPI_WINDOW_SIZE) == 0u) {
+            kwarn("acpi: the table at 0x%x:%08x is not in the map of the port",
+                  (unsigned)(address >> 32), (unsigned)(address & 0xFFFFFFFFu));
+            return NULL;
+        }
+
+        g_acpi_mapped = page;
+    }
+
+    return (const void *)(uintptr_t)(ACPI_WINDOW_VIRT + offset);
+}
+
+/*
  * The table with a signature, for the parts of the port that are not the
  * processors: the FADT of the power (src/acpi.c). The walk is the one of
  * madt_read() below, written once more rather than folded into it because
@@ -287,6 +346,7 @@ static const struct acpi_rsdp *rsdp_find(void)
 const void *port_x86_64_acpi_table(const char signature[4], k_u32_t *length)
 {
     const struct acpi_rsdp *rsdp = rsdp_find();
+    const struct acpi_header *root_header;
     k_u64_t root;
     k_u64_t end;
     k_u64_t cursor;
@@ -306,18 +366,35 @@ const void *port_x86_64_acpi_table(const char signature[4], k_u32_t *length)
         return NULL;
     }
 
-    if (memcmp(((const struct acpi_header *)(uintptr_t)root)->signature, "XSDT", 4) != 0 &&
-        memcmp(((const struct acpi_header *)(uintptr_t)root)->signature, "RSDT", 4) != 0) {
+    root_header = (const struct acpi_header *)acpi_readable(root);
+
+    if (root_header == NULL) {
         return NULL;
     }
 
-    end = root + ((const struct acpi_header *)(uintptr_t)root)->length;
+    if (memcmp(root_header->signature, "XSDT", 4) != 0 &&
+        memcmp(root_header->signature, "RSDT", 4) != 0) {
+        return NULL;
+    }
+
+    end = root + root_header->length;
     cursor = root + ACPI_TABLE_HEADER;
 
     for (; cursor + step <= end; cursor += step) {
-        k_u64_t address = (step == 8u) ? *(const k_u64_t *)(uintptr_t)cursor
-                                       : (k_u64_t)(*(const k_u32_t *)(uintptr_t)cursor);
-        const struct acpi_header *table = (const struct acpi_header *)(uintptr_t)address;
+        const void *entry = acpi_readable(cursor);
+        k_u64_t address;
+        const struct acpi_header *table;
+
+        if (entry == NULL) {
+            return NULL;
+        }
+
+        address = (step == 8u) ? *(const k_u64_t *)entry : (k_u64_t)(*(const k_u32_t *)entry);
+        table = (const struct acpi_header *)acpi_readable(address);
+
+        if (table == NULL) {
+            continue;
+        }
 
         if (memcmp(table->signature, signature, 4) != 0) {
             continue;
@@ -352,20 +429,36 @@ static void madt_read(const struct acpi_rsdp *rsdp)
         return;
     }
 
-    if (memcmp(((const struct acpi_header *)(uintptr_t)root)->signature, "XSDT", 4) != 0 &&
-        memcmp(((const struct acpi_header *)(uintptr_t)root)->signature, "RSDT", 4) != 0) {
-        return;
+    {
+        const struct acpi_header *header = (const struct acpi_header *)acpi_readable(root);
+
+        if (header == NULL) {
+            return;
+        }
+
+        if (memcmp(header->signature, "XSDT", 4) != 0 &&
+            memcmp(header->signature, "RSDT", 4) != 0) {
+            return;
+        }
+
+        end = root + header->length;
     }
 
-    end = root + ((const struct acpi_header *)(uintptr_t)root)->length;
     cursor = root + ACPI_TABLE_HEADER;
 
     for (; cursor + step <= end; cursor += step) {
-        k_u64_t address = (step == 8u) ? *(const k_u64_t *)(uintptr_t)cursor
-                                       : (k_u64_t)(*(const k_u32_t *)(uintptr_t)cursor);
-        const struct acpi_header *table = (const struct acpi_header *)(uintptr_t)address;
+        const void *entry = acpi_readable(cursor);
+        k_u64_t address;
+        const struct acpi_header *table;
 
-        if (memcmp(table->signature, ACPI_MADT_SIGNATURE, 4) == 0) {
+        if (entry == NULL) {
+            return;
+        }
+
+        address = (step == 8u) ? *(const k_u64_t *)entry : (k_u64_t)(*(const k_u32_t *)entry);
+        table = (const struct acpi_header *)acpi_readable(address);
+
+        if (table != NULL && memcmp(table->signature, ACPI_MADT_SIGNATURE, 4) == 0) {
             table_address = address;
             break;
         }
@@ -376,9 +469,9 @@ static void madt_read(const struct acpi_rsdp *rsdp)
     }
 
     {
-        const struct acpi_madt *madt = (const struct acpi_madt *)(uintptr_t)table_address;
+        const struct acpi_madt *madt = (const struct acpi_madt *)acpi_readable(table_address);
 
-        if (madt->header.length < sizeof(struct acpi_madt) ||
+        if (madt == NULL || madt->header.length < sizeof(struct acpi_madt) ||
             acpi_checksum(madt, madt->header.length) != 0) {
             return;
         }
@@ -389,16 +482,16 @@ static void madt_read(const struct acpi_rsdp *rsdp)
         end = table_address + madt->header.length;
 
         while (cursor + sizeof(struct acpi_madt_entry) <= end) {
-            const struct acpi_madt_entry *entry = (const struct acpi_madt_entry *)(uintptr_t)cursor;
+            const struct acpi_madt_entry *entry =
+                (const struct acpi_madt_entry *)acpi_readable(cursor);
 
-            if (entry->length == 0u || cursor + entry->length > end) {
+            if (entry == NULL || entry->length == 0u || cursor + entry->length > end) {
                 break;
             }
 
             if (entry->type == ACPI_ENTRY_LOCAL_APIC &&
                 entry->length >= sizeof(struct acpi_madt_local_apic)) {
-                const struct acpi_madt_local_apic *cpu =
-                    (const struct acpi_madt_local_apic *)(uintptr_t)cursor;
+                const struct acpi_madt_local_apic *cpu = (const struct acpi_madt_local_apic *)entry;
 
                 if ((cpu->flags & ACPI_CPU_ENABLED) != 0u) {
                     g_cpus.available++;
@@ -412,7 +505,7 @@ static void madt_read(const struct acpi_rsdp *rsdp)
             } else if (entry->type == ACPI_ENTRY_LOCAL_X2APIC &&
                        entry->length >= sizeof(struct acpi_madt_local_x2apic)) {
                 const struct acpi_madt_local_x2apic *cpu =
-                    (const struct acpi_madt_local_x2apic *)(uintptr_t)cursor;
+                    (const struct acpi_madt_local_x2apic *)entry;
 
                 if ((cpu->flags & ACPI_CPU_ENABLED) != 0u) {
                     g_cpus.available++;
@@ -425,8 +518,7 @@ static void madt_read(const struct acpi_rsdp *rsdp)
                 }
             } else if (entry->type == ACPI_ENTRY_IOAPIC &&
                        entry->length >= sizeof(struct acpi_madt_ioapic)) {
-                const struct acpi_madt_ioapic *ioapic =
-                    (const struct acpi_madt_ioapic *)(uintptr_t)cursor;
+                const struct acpi_madt_ioapic *ioapic = (const struct acpi_madt_ioapic *)entry;
 
                 /* The first one is the chip of the ISA lines; a machine of
                  * several keeps the others for the buses nobody programs. */
@@ -437,7 +529,7 @@ static void madt_read(const struct acpi_rsdp *rsdp)
             } else if (entry->type == ACPI_ENTRY_IRQ_OVERRIDE &&
                        entry->length >= sizeof(struct acpi_madt_irq_override)) {
                 const struct acpi_madt_irq_override *override =
-                    (const struct acpi_madt_irq_override *)(uintptr_t)cursor;
+                    (const struct acpi_madt_irq_override *)entry;
 
                 if (override->source < ACPI_ISA_IRQ_MAX) {
                     g_cpus.irq_gsi[override->source] = (k_u16_t) override->gsi;

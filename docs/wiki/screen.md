@@ -173,6 +173,29 @@ second port of the 8042 (`key.pointer.x`, `key.pointer.y` and
 `key.button.left` of `/dev/input0`), and the whole of it is
 [desktop.md](../desktop.md).
 
+## The desk of 2.0
+
+The session of the console runs the commands of `/etc/session` before its
+prompt, and the file of a machine with a desktop is one line, `exec /bin/wm`:
+the machine boots into the desk, the shell of the session waits for it, and the
+prompt comes back when the last window closes (ADR 0054). The panel shows the
+hour of the machine, in the format of `/etc/console` - `clock=24h` or
+`clock=12h` - and a second of the desk is the rectangle of the clock and
+nothing else.
+
+`Alt+T` opens `/bin/term`, the terminal of the desk: a client like the editor,
+with a child process on a pair of pipes for the command, a grid of cells of
+`components/ui/src/term.c` for its output, `Ctrl+C` as the interrupt of the
+running command and `Ctrl+T` for the 16x32 cell of the second size of the font.
+There is no pty in this system yet: the child has no terminal, and the shell of
+the window is a small front end of its own.
+
+The compositor is measured: the server counts the pixels and the milliseconds
+of its frames, prints the summary when the desk closes, and `F12` prints the
+meter since the last press (`wm: the meter: 3 frames, 40960 px, the largest
+640x16, 2 ms at the worst`). A key of a window is a row of that window and not
+a frame of the screen.
+
 The board cannot have one: no MMU, 2 MB of PSRAM, 135x240. The ESP32 stays a
 terminal.
 

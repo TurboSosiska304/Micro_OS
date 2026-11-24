@@ -419,6 +419,20 @@ add_program_image(badptr badptr_main)
 add_program_image(signals signals_main)
 add_program_image(nx nx_main)
 
+# The attacks of the policy of a page (ADR 0052, `make mmu-smoke`): each one
+# breaks one rule of the map and is expected to end its own task with EFAULT,
+# except the two that ask for more than the policy allows and are answered by
+# the call - a writable and executable mapping, and a heap past the limit of
+# the task. The suite also reads the stack that grows by 128 KiB.
+add_program_image(mmu_text mmu_text_main)
+add_program_image(mmu_execstack mmu_execstack_main)
+add_program_image(mmu_kernel mmu_kernel_main)
+add_program_image(mmu_heap mmu_heap_main)
+add_program_image(mmu_wx mmu_wx_main)
+add_program_image(mmu_stray mmu_stray_main)
+add_program_image(mmu_stack mmu_stack_main)
+add_program_image(mmu_io mmu_io_main)
+
 # A program that uses the library of a program: the runtime sources are
 # compiled for the window together with the file of the program, linked with
 # the same script, and the entry is `_start` of the library - main() is a
@@ -551,6 +565,7 @@ add_libc_program(edit
             "${UI_DIR}/src/window.c"
             "${UI_DIR}/src/draw.c"
             "${UI_DIR}/src/palette.c"
+            "${UI_DIR}/src/clock.c"
             "${UI_DIR}/src/keyboard.c"
             "${UI_DIR}/client/src/wm_protocol.c"
             "${UI_DIR}/client/src/wm_client.c"
@@ -571,10 +586,37 @@ add_libc_program(wm
             "${LIBC_USER_DIR}/src/usleep.c"
             "${LIBC_USER_DIR}/src/unistd_ext.c"
             "${LIBC_USER_DIR}/src/stat.c"
+            "${LIBC_USER_DIR}/src/time.c"
             "${UI_DIR}/src/window.c"
             "${UI_DIR}/src/draw.c"
             "${UI_DIR}/src/palette.c"
+            "${UI_DIR}/src/clock.c"
             "${UI_DIR}/src/keyboard.c"
+            "${UI_DIR}/client/src/wm_protocol.c"
+            "${UI_DIR}/client/src/wm_client.c"
+    INCLUDES ${UI_INCLUDES}
+)
+
+# --- /bin/term, the terminal window of the desktop (2.0, ADR 0054) ----------
+#
+# The window that runs the programs of /bin: a client of the server like the
+# editor, a grid of cells of `components/ui/src/term.c`, and a child process on
+# a pair of pipes. The grid is the portable half of the terminal and the host
+# test holds it (`tests/cases/test_ui_term.c`); this program is the picture of
+# the cells and the pipes.
+add_libc_program(term
+    MAIN "${PROGRAM_DIR}/term.c"
+    SOURCES "${PROGRAM_DIR}/uiprog.c"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/font_spleen.c"
+            "${LIBC_USER_DIR}/src/usleep.c"
+            "${LIBC_USER_DIR}/src/unistd_ext.c"
+            "${LIBC_USER_DIR}/src/stat.c"
+            "${UI_DIR}/src/window.c"
+            "${UI_DIR}/src/draw.c"
+            "${UI_DIR}/src/palette.c"
+            "${UI_DIR}/src/clock.c"
+            "${UI_DIR}/src/keyboard.c"
+            "${UI_DIR}/src/term.c"
             "${UI_DIR}/client/src/wm_protocol.c"
             "${UI_DIR}/client/src/wm_client.c"
     INCLUDES ${UI_INCLUDES}
@@ -592,6 +634,7 @@ add_libc_program(fm
             "${UI_DIR}/src/window.c"
             "${UI_DIR}/src/draw.c"
             "${UI_DIR}/src/palette.c"
+            "${UI_DIR}/src/clock.c"
             "${UI_DIR}/src/keyboard.c"
             "${UI_DIR}/client/src/wm_protocol.c"
             "${UI_DIR}/client/src/wm_client.c"

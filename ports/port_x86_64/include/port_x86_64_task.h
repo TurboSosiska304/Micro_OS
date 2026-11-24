@@ -116,8 +116,12 @@ void port_x86_64_idle(void) __attribute__((noreturn));
  */
 void port_x86_64_yield_to_idle(void);
 
-/* The interrupt flag of RFLAGS. */
+/* The interrupt flag of RFLAGS and the alignment check flag. AC is bit 18
+ * (0x40000) and it is what SMAP reads to allow a supervisor access to a page
+ * of ring 3 (ADR 0052, `STAC` and `CLAC` of src/paging.c); the bit is named
+ * here because the port saves it with the context that opened the window. */
 #define PORT_X86_64_RFLAGS_IF 0x200u
+#define PORT_X86_64_RFLAGS_AC 0x40000u
 
 /*
  * The frame that an entry from ring 3 leaves on the kernel stack of a

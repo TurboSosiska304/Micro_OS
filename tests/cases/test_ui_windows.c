@@ -281,6 +281,7 @@ static void test_ui_canvas(void)
      * the test as well (the font is the caller's and answers). */
     font.width = 8;
     font.height = 2;
+    font.scale = 0;
     font.glyph = test_glyph;
     ui_canvas_init(&canvas, 16, 2, pixels);
     ui_canvas_fill(&canvas, 0x0010u);
@@ -390,6 +391,7 @@ static void test_ui_frame(void)
 
     font.width = 8;
     font.height = 2;
+    font.scale = 0;
     font.glyph = test_glyph;
 
     style.paper = 0x0000u;
@@ -539,11 +541,88 @@ static void test_ui_keyboard(void)
     KT_CHECK(!ui_keyboard_event(&keyboard, NULL));
 }
 
+/* The second size of the font (ADR 0054): the same glyphs at twice the cell.
+ * The canvas paints one pixel of a glyph as a square of `scale` pixels, and
+ * the frame of a window is as tall as the cell of the font it is given. */
+static void test_ui_font_size(void)
+{
+    struct ui_font font;
+    struct ui_canvas canvas;
+    k_u16_t cell_pixels[16 * 4];
+    k_u16_t pair_pixels[32 * 4];
+    int index;
+
+    ktest_begin("ui: a font has two sizes and the frame follows its cell");
+
+    font.width = 8;
+    font.height = 2;
+    font.scale = 0;
+    font.glyph = test_glyph;
+
+    /* A font without a scale is the font at its own size. */
+    KT_CHECK_INT_EQ(ui_font_cell_width(&font), 8);
+    KT_CHECK_INT_EQ(ui_font_cell_height(&font), 2);
+    KT_CHECK_INT_EQ(UI_FRAME_TITLE_HEIGHT(&font), UI_FRAME_MARGIN + 2 + 1);
+
+    font.scale = 1;
+    KT_CHECK_INT_EQ(ui_font_cell_width(&font), 8);
+    KT_CHECK_INT_EQ(ui_font_cell_height(&font), 2);
+
+    /* Twice the cell, and the title bar of a window grows with it. */
+    font.scale = 2;
+    KT_CHECK_INT_EQ(ui_font_cell_width(&font), 16);
+    KT_CHECK_INT_EQ(ui_font_cell_height(&font), 4);
+    KT_CHECK_INT_EQ(UI_FRAME_TITLE_HEIGHT(&font), UI_FRAME_MARGIN + 4 + 1);
+
+    /* One glyph of a 16x4 cell: every pixel of the small glyph is a square of
+     * two by two. The cross of s_cross is 0x81 on the first row, which is the
+     * left and the right column of the cell. */
+    ui_canvas_init(&canvas, 16, 4, cell_pixels);
+    ui_canvas_fill(&canvas, 0x0010u);
+    KT_CHECK_INT_EQ(ui_canvas_text(&canvas, 0, 0, "X", 1, 0x00FFu, 0x0010u, &font), 0);
+    KT_CHECK_INT_EQ(cell_pixels[0], 0x00FF);
+    KT_CHECK_INT_EQ(cell_pixels[1], 0x00FF);
+    KT_CHECK_INT_EQ(cell_pixels[1 * 16 + 0], 0x00FF);
+    KT_CHECK_INT_EQ(cell_pixels[1 * 16 + 1], 0x00FF);
+    KT_CHECK_INT_EQ(cell_pixels[2], 0x0010);
+    KT_CHECK_INT_EQ(cell_pixels[14], 0x00FF);
+    KT_CHECK_INT_EQ(cell_pixels[15], 0x00FF);
+    KT_CHECK_INT_EQ(cell_pixels[1 * 16 + 14], 0x00FF); /* the right arm on the first row */
+    KT_CHECK_INT_EQ(cell_pixels[1 * 16 + 13], 0x0010);
+    KT_CHECK_INT_EQ(cell_pixels[3 * 16 + 13], 0x00FF); /* the low arm of the cross */
+
+    /* The columns of the second cell start at the pixel 16 of a row. */
+    ui_canvas_init(&canvas, 32, 4, pair_pixels);
+    ui_canvas_fill(&canvas, 0x0010u);
+    KT_CHECK_INT_EQ(ui_canvas_text(&canvas, 0, 0, "IX", 2, 0x00FFu, 0x0010u, &font), 0);
+    KT_CHECK_INT_EQ(pair_pixels[16], 0x00FF);         /* the 'X' of the second cell */
+    KT_CHECK_INT_EQ(pair_pixels[15], 0x0010);         /* the paper after the 'I' */
+    KT_CHECK_INT_EQ(pair_pixels[1 * 32 + 1], 0x00FF); /* the left column of the 'I' */
+    KT_CHECK_INT_EQ(pair_pixels[1 * 32 + 2], 0x0010);
+
+    /* A font of a scale this library cannot draw is refused, and a scaled
+     * text is clipped by the canvas like the small one. */
+    font.scale = 9;
+    ui_canvas_init(&canvas, 16, 4, cell_pixels);
+    KT_CHECK_INT_EQ(ui_canvas_text(&canvas, 0, 0, "X", 1, 0x00FFu, 0x0010u, &font), -1);
+    font.scale = 2;
+    ui_canvas_fill(&canvas, 0x0010u);
+    KT_CHECK_INT_EQ(ui_canvas_text(&canvas, 8, 0, "XX", 2, 0x00FFu, 0x0010u, &font), 0);
+    for (index = 0; index < 8; index++) {
+        KT_CHECK_INT_EQ(cell_pixels[index], 0x0010); /* the paper of the row before the text */
+    }
+    KT_CHECK_INT_EQ(cell_pixels[8], 0x00FF);
+    /* The second cell starts at the pixel 24, past the canvas of 16: it is
+     * clipped and the row holds the paper of the first cell's tail only. */
+    KT_CHECK_INT_EQ(cell_pixels[15], 0x0010);
+}
+
 void test_ui_windows(void)
 {
     test_ui_rects();
     test_ui_screen();
     test_ui_canvas();
     test_ui_frame();
+    test_ui_font_size();
     test_ui_keyboard();
 }
