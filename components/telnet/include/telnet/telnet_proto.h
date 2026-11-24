@@ -30,6 +30,10 @@
 #define TELNET_SB 0xFA
 #define TELNET_SE 0xF0
 
+/* The options this server has an opinion about: echo (RFC 857), which is the
+ * one that decides who repeats the password of a person. */
+#define TELNET_OPT_ECHO 1
+
 /* The same line the shell reads from the UART. */
 #define TELNET_LINE_MAX 128
 
@@ -72,5 +76,33 @@ void telnet_parser_feed(struct telnet_parser *p, uint8_t byte, char *reply, size
  * typed too much is not a command at all.
  */
 bool telnet_parser_take_line(struct telnet_parser *p, char *line, size_t max);
+
+/*
+ * The stream of an interactive session: the same negotiation as the parser,
+ * but every byte of the person comes back at once instead of being assembled
+ * into a line. A session of the shell reads the byte, echoes it or not, and
+ * decides what a newline means; the parser above is kept for a caller that
+ * wants the lines, and the two use the same states of the wire.
+ *
+ * The echo is the option that matters over the air: the server offers WILL
+ * ECHO when the session opens, and `echo` turns true when the peer answers DO
+ * ECHO - from then on the server repeats what the person types and the client
+ * does not, which is what makes a password invisible on both ends. A client
+ * that refuses keeps its own echo, and the server then echoes nothing; the
+ * password is silent either way, because a secret line is never echoed.
+ *
+ * `telnet_stream_feed()` answers the data byte (0..255) or -1 for a byte of
+ * the protocol: IAC, a CR that the LF will end, a NUL. The answer of the
+ * negotiation goes to reply, exactly as the parser writes it.
+ */
+struct telnet_stream {
+    uint8_t state;
+    uint8_t command;
+    bool echo;
+};
+
+void telnet_stream_init(struct telnet_stream *s);
+int telnet_stream_feed(struct telnet_stream *s, uint8_t byte, char *reply, size_t reply_max,
+                       size_t *reply_len);
 
 #endif /* MICRO_OS_TELNET_TELNET_PROTO_H */

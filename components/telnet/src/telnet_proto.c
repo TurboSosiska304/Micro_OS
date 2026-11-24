@@ -162,3 +162,106 @@ bool telnet_parser_take_line(struct telnet_parser *p, char *line, size_t max)
 
     return true;
 }
+
+/* --- the stream of an interactive session -------------------------------- */
+
+void telnet_stream_init(struct telnet_stream *s)
+{
+    memset(s, 0, sizeof(*s));
+}
+
+static void stream_option(struct telnet_stream *s, uint8_t byte, char *reply, size_t reply_max,
+                          size_t *reply_len)
+{
+    /*
+     * ECHO is the one option this server implements, and it implements it in
+     * the direction that keeps a password off the screen: the server repeats
+     * the bytes, the client does not. DO is the client accepting the offer of
+     * the server; DONT is the client keeping its own echo; WILL is a client
+     * that wants to echo and is told not to, because one of the two has to be
+     * the one that echoes.
+     */
+    if (byte == TELNET_OPT_ECHO) {
+        if (s->command == TELNET_DO) {
+            s->echo = true;
+            return;
+        }
+
+        if (s->command == TELNET_DONT) {
+            s->echo = false;
+            return;
+        }
+
+        if (s->command == TELNET_WILL) {
+            reply_byte(reply, reply_max, reply_len, TELNET_IAC);
+            reply_byte(reply, reply_max, reply_len, TELNET_DONT);
+            reply_byte(reply, reply_max, reply_len, byte);
+            return;
+        }
+
+        /* WONT ECHO: the client will not echo, and the server's own offer
+         * stands. Nothing to answer. */
+        return;
+    }
+
+    if (s->command == TELNET_WILL) {
+        reply_byte(reply, reply_max, reply_len, TELNET_IAC);
+        reply_byte(reply, reply_max, reply_len, TELNET_DONT);
+        reply_byte(reply, reply_max, reply_len, byte);
+    } else if (s->command == TELNET_DO) {
+        reply_byte(reply, reply_max, reply_len, TELNET_IAC);
+        reply_byte(reply, reply_max, reply_len, TELNET_WONT);
+        reply_byte(reply, reply_max, reply_len, byte);
+    }
+}
+
+int telnet_stream_feed(struct telnet_stream *s, uint8_t byte, char *reply, size_t reply_max,
+                       size_t *reply_len)
+{
+    switch (s->state) {
+    case ST_IAC:
+        if (byte == TELNET_IAC) {
+            s->state = ST_DATA;
+            return (int)TELNET_IAC;
+        }
+        if (byte == TELNET_SB) {
+            s->state = ST_SUB;
+            return -1;
+        }
+        if (byte == TELNET_WILL || byte == TELNET_WONT || byte == TELNET_DO ||
+            byte == TELNET_DONT) {
+            s->command = byte;
+            s->state = ST_OPT;
+            return -1;
+        }
+        /* Anything else (NOP, BREAK, ...): swallowed. */
+        s->state = ST_DATA;
+        return -1;
+
+    case ST_OPT:
+        stream_option(s, byte, reply, reply_max, reply_len);
+        s->state = ST_DATA;
+        return -1;
+
+    case ST_SUB:
+        if (byte == TELNET_IAC) {
+            s->state = ST_SUB_IAC;
+        }
+        return -1;
+
+    case ST_SUB_IAC:
+        s->state = (byte == TELNET_SE) ? ST_DATA : ST_SUB;
+        return -1;
+
+    case ST_DATA:
+    default:
+        if (byte == TELNET_IAC) {
+            s->state = ST_IAC;
+            return -1;
+        }
+        if (byte == '\r' || byte == 0) {
+            return -1; /* the LF ends the line; a NUL would end it early */
+        }
+        return (int)byte;
+    }
+}
