@@ -3877,6 +3877,27 @@ def run_boot_desktop(
                    wait_count(machine, PROMPT, prompts + 1, timeout),
                    "the prompt of the shell did not come back; the log ends with "
                    + repr(machine.read_serial()[-300:]))
+
+            # --- the desk leaves, and the machine goes down -----------------
+            #
+            # The desk is a foreground program of the session (ADR 0054), so
+            # the prompt it gave back is the prompt of the shell that can end
+            # the machine: a `shutdown` of the desk has to sync the volumes and
+            # take the power down like the one of ADR 0050 (`make power-smoke`
+            # holds the same promise without a window).
+            machine.type_line("shutdown")
+            expect("the machine of the desk switches itself off",
+                   machine.wait_serial("power: the volumes are synced", timeout * 2),
+                   "shutdown did not sync the volumes; the log ends with "
+                   + repr(machine.read_serial()[-300:]))
+
+            deadline = time.monotonic() + timeout
+            while machine.process.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.1)
+
+            expect("the desk of the machine ends with the power",
+                   machine.process.poll() is not None,
+                   "QEMU was still running after the shutdown of the desk")
         finally:
             machine.close()
 
