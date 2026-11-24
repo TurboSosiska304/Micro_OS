@@ -71,13 +71,19 @@ fi
 # boot under the load of the builds of another lane, and a gate of the release
 # that runs beside one reports flakes of the host as if they were defects
 # (x86-smoke answered 154 blocks of 310 in the gate of 1.8.0 with three lanes
-# building on the same twelve cores, and 405 checks alone a minute later). The
-# gate waits for the load of the minute to fall under half of the cores, says
-# how long it waited, and `--no-wait` takes the machine as it is.
+# building on the same twelve cores, and 405 checks alone a minute later; in the
+# gate of 1.9.0-rc1 the same smoke answered 8 blocks of 312 and then all 312 on
+# a quiet machine). The gate waits for the load of the minute to fall under two,
+# says how long it waited, and `--no-wait` takes the machine as it is.
 CORES="$(nproc)"
-LIMIT=$((CORES / 2))
-if [ "$LIMIT" -lt 2 ]; then
-    LIMIT=2
+# Half of the cores was too generous: a machine of twelve cores with a lane
+# building on five of them has a load of five and a console of QEMU that loses
+# a prompt - the smoke of the machine answered 8 blocks of 312 in the gate of
+# 1.9.0-rc1 and 312 of 312 on the same tree an hour later, with the lanes
+# stopped. The gate wants two.
+LIMIT=2
+if [ "$CORES" -lt 4 ]; then
+    LIMIT=1
 fi
 WAITED=0
 if [ "${NOWAIT:-0}" -eq 0 ]; then
@@ -108,11 +114,36 @@ printf '| the host | %s core(s), load %s, waited %s s |\n' "$CORES" \
 # that load has not lost it on a quiet machine. A gate that fails is run a
 # second time, on the record: the line of the table says "second run", and a
 # real defect fails twice.
+# The load of a smoke is not only the load of the meter at the start of the
+# gate: the build of the image the smoke boots is a build of three jobs, and a
+# smoke that starts a minute after one is a smoke under load (x86-disk-smoke
+# failed twice in the gate of 1.9.0-rc1 and passed alone a minute later, with
+# the same tree). Every smoke waits for the host to be quiet, again.
+wait_quiet() {
+    waited=0
+    while :; do
+        load1="$(cut -d' ' -f1 /proc/loadavg)"
+        busy="$(awk -v l="$load1" -v m="$LIMIT" 'BEGIN { print (l > m) ? 1 : 0 }')"
+        if [ "$busy" -eq 0 ]; then
+            return 0
+        fi
+        if [ "$waited" -ge 300 ]; then
+            echo " (the load was $load1 after ${waited}s)"
+            return 0
+        fi
+        sleep 10
+        waited=$((waited + 10))
+    done
+}
+
 run() {
     name="$1"
     shift
     TOTAL=$((TOTAL + 1))
     log="$LOGDIR/$(echo "$name" | tr ' /' '__').log"
+    case "$name" in
+        *smoke*) wait_quiet ;;
+    esac
 
     if "$@" > "$log" 2>&1; then
         detail="$(sed -n 's/.*OK: \([0-9]* check(s)\) passed.*/\1/p' "$log" | tail -1)"

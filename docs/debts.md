@@ -499,6 +499,19 @@ of an older copy knows what changed.
 * **The window of x86-64 is 16 MiB, not 32 MiB.** `docs/ports/x86_64/README.md`
   said "the window is 32 MiB at 32 MiB"; it starts at 32 MiB and ends at
   48 MiB.
+## K21 - The console of the machine under a loaded host
+
+The smoke of the machine answered **8 blocks of 312** in the gate of
+`1.9.0-rc1` while four lanes were building, and **312 of 312** on the same tree
+an hour later with the lanes stopped. The same symptom has been seen twice: a
+shell that stops answering, `x86-smoke` at 154 and at 303 checks, and a soak
+that stopped at `exec /bin/signals`.
+
+| Debt | Where | Status | What it needs |
+|---|---|---|---|
+| A command stream into the console can stop being answered under the load of the host, and the machine does not come back on a bare newline - so a byte of the line or the wake of the reader is lost and the line never ends. Suspects: the read of the console in chunks of ten milliseconds (`kernel/tty.c`) which polls COM1 because the port has no interrupt of its own, and the door of the sleep that a wake of another channel can knock on. It has not been reproduced on a quiet machine (312 of 312 commands, twice). | `components/kernel/src/tty.c`, `ports/port_x86_64/src/console.c`, `kernel/wait.c` | open | A probe that loads the host on purpose (a build of twelve jobs) while a machine is driven by the three hundred commands of the smoke, the count of the bytes the console gave and the bytes the reader took out in the answer of the run, and - if the byte is lost - the interrupt of COM1 or the receive buffer of the port. |
+| The gate of the release waits for the load of the minute to fall under **two** now (it waited for half of the cores before, and five of twelve was not quiet enough). | `tools/release_gate.sh` | done | Nothing; a smoke that fails under load and passes alone is a gate that must not run under load. |
+
 ## K20 - The machine that switches itself off (ADR 0050)
 
 `shutdown`, `poweroff`, `halt` and `reboot` bring the machine down in an
