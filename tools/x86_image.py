@@ -127,6 +127,16 @@ PROGRAMS = [
     "wm",
 ]
 
+# The programs of the SDK: `make ports-build` writes them into build-ports and
+# the release image carries them under /bin/ports (ADR 0025 - a program of
+# somebody else travels with its license, and the license of the editor is the
+# file of the tree). The list is the directory and not a second table: the
+# build is the list of the programs, and a copy of it here would be a list
+# that a new port of the collection forgets to grow.
+PORTS_DIR = "build-ports/programs"
+PORTS_PATH = "/bin/ports"
+KILO_LICENSE = "tests/ports/kilo/LICENSE"
+
 # The second name of the compression command: `zstdcat` is the same image and
 # a different name in /bin, the way a Unix-like system links one program under
 # the name of its mode. The port does not patch the release for it: `zstdcli.c`
@@ -996,6 +1006,7 @@ def build_image(
     block_size: int = EXT2_BLOCK_BYTES,
     volumes: tuple = VOLUMES,
     journal: bool = True,
+    ports: str | None = None,
 ) -> int:
     """Write the image with the programs of the build and /etc/setting.
 
@@ -1006,7 +1017,11 @@ def build_image(
 
     `fs` is the filesystem of the root: "mfs" (the default of the machine,
     written by `tools/mkfs_mfs.c`) or "ext2" (the same tree in a volume of the
-    tools of the host, ADR 0027 §3).
+    tools of the host, ADR 0027 §3). `ports` is the directory of the images of
+    the SDK (`make ports-build`): every `.mox` of it is a file of `/bin/ports`
+    and the license of the editor travels with it. None writes no `/bin/ports`
+    at all, which is a machine without the programs of somebody else - the
+    image of a test that counts the tree, and not the image of a release.
     """
     if not os.path.isfile(mkfs):
         print(f"missing {mkfs}: run make build", file=sys.stderr)
@@ -1051,6 +1066,29 @@ def build_image(
                 0o777,
             )
         )
+
+    # The programs of the SDK: one directory of images, one directory of the
+    # volume, and the licenses of the collection that are not already there.
+    # A release without them is a machine whose notes promise `kilo` and whose
+    # PATH has no `kilo` in it (the defect of the owner's laptop, 1.9).
+    if ports is not None:
+        names = sorted(name for name in os.listdir(ports) if name.endswith(".mox"))
+        if not names:
+            print(f"{ports} holds no .mox image: run sh tools/ports_build.sh", file=sys.stderr)
+            return 2
+
+        entries.append(tree_dir(PORTS_PATH))
+
+        for name in names:
+            entries.append(
+                tree_program(
+                    f"{PORTS_PATH}/{name[: -len('.mox')]}",
+                    os.path.join(ports, name),
+                )
+            )
+
+        if os.path.isfile(KILO_LICENSE):
+            entries.append(tree_file("/etc/licenses/kilo", KILO_LICENSE))
 
     # The second names of the commands: one image, two names in /bin.
     for second, first in SECOND_NAMES.items():
@@ -1302,6 +1340,13 @@ def main(argv: list) -> int:
         help="make a directory of the volume",
     )
     parser.add_argument(
+        "--ports",
+        default=None,
+        metavar="DIR",
+        help="the programs of the SDK into /bin/ports (default: none; `make x86-disk` "
+        f"passes {PORTS_DIR})",
+    )
+    parser.add_argument(
         "--bus",
         choices=("ide", "virtio"),
         default="ide",
@@ -1344,6 +1389,15 @@ def main(argv: list) -> int:
     for path in args.dir:
         extra += ["--dir", path]
 
+    if args.ports is None or args.ports == "none" or args.ports == "":
+        ports = None
+    else:
+        ports = args.ports
+
+    if ports is not None and not os.path.isdir(ports):
+        print(f"{ports} is not a directory: run sh tools/ports_build.sh", file=sys.stderr)
+        return 2
+
     if args.volumes is None:
         volumes = VOLUMES
     elif args.volumes == "none" or args.volumes == "":
@@ -1364,6 +1418,7 @@ def main(argv: list) -> int:
         args.block_size,
         volumes,
         not args.no_journal,
+        ports,
     )
 
     if rc == 0:
