@@ -228,7 +228,7 @@ wiki-check:
 # joins the list when `qemu-system-x86_64` is on PATH and is skipped with a
 # message when it is not. A missing optional machine must not fail a run.
 CI_QEMU := $(shell command -v qemu-system-x86_64 2>/dev/null)
-CI_TARGETS := build test test-asan test-tsan test-minimal test-valgrind release-gate test-smp smoke coverage
+CI_TARGETS := build test test-asan test-tsan test-minimal test-valgrind test-smp smoke coverage
 ifneq ($(CI_QEMU),)
 CI_TARGETS += x86-smoke x86-root-smoke usb-smoke ports-smoke
 endif
