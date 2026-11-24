@@ -127,6 +127,24 @@ defect of the read ahead that the grain exposed (a 16 MiB write read 36 MiB of
 the disk). MicroFS keeps its kilobyte: a 4 KiB block is version 4 of its
 format, and `docs/debts.md` names the shape of that change.
 
+## Where 1.8 stopped, and what moved to 1.9
+
+M1 (USB: the controller, the keyboard, a stick, a wire, a hub, the hot-plug, a
+mouse, the line of the controller), M2 (the two controllers of a disk, the rule
+of ADR 0041 and the write path that keeps a file across a reset), M3 (the
+library and the thirteen programs of the gate) and M4 (the grain of the volume)
+are in. M6 landed half: the session and the door of `telnet` are in, and the
+group record and the `setuid` bit of `MOX1` are format decisions with the form
+of the change written in ADR 0045 - they belong to a release that may break a
+format, and 1.8 may not.
+
+**M5 and M7 move to 1.9 with the whole of their text below.** The reason is not
+time: a release that carries a door of USB, a disk that keeps a file and a
+library of a program nobody rewrote is a release that can be tried; a terminal
+with `termios` and a driver of Ethernet are each a lane of months, and the
+promise of 1.8 is already larger than the promise of 1.7. The text stays where
+it is so that the next release begins with it.
+
 ## M5 - the desktop, second half
 
 The cleanroom of 1.7 said: "it looks like the 90s". That is not a defect, it is

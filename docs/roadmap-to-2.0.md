@@ -39,6 +39,9 @@ what a laptop is missing. The rest moves to 1.9 without rewriting a promise.
 | **the scheduler** | a wake that preempts: a call of an empty pipe answers in microseconds and not in a tick (1.7 measured **1.006 ms**, one tick) | `lat_pipe_p50` under 100 µs |
 | **the installer** | `pkg` with dependencies, an update of the packages as a transaction, and a repository that signs the index and the sources | a package installed, upgraded and rolled back |
 | **the board** | the ESP32 as the compatibility port: its own volume format of version 3, its `fsck`, its update over the air with a rollback on the hardware | `device-test` and `make board-soak` green |
+| **the terminal** (M5 of 1.8) | `/dev/tty` with `termios`, so a program of the outside world owns the screen and the keys; the palette of the console beyond the sixteen of CGA, a second size of the font, the window of a program in the panel of `wm` | `x86-vga-smoke` with a terminal, two sizes and a palette |
+| **the wire** (M7 of 1.8) | Ethernet of a laptop (the I219 of a ThinkPad, the RTL8153 over the USB of M1) and DHCP: the address of a network and not a fixed one | a laptop that reaches the network of the house with no command typed |
+| **the group** (M6 of 1.8) | `/etc/group`, a group in the record of a file (`chgrp` first, then the triad of the check), the `setuid` bit of `MOX1` and its saved uid - the six steps of ADR 0045 | a file of a group that another account reads and does not write |
 
 ## 2.0 - the machine of its user
 
