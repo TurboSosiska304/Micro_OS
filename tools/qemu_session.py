@@ -34,11 +34,11 @@ PROMPT = "microos> "
 PROMPT_BYTES = PROMPT.encode("ascii")
 
 # The buses a disk of the port can be on: the legacy IDE channel of ADR 0008,
-# the virtio-blk device of ADR 0037, and the SATA controller of a chipset
-# (ADR 0041). The image is one file and the bus is the machine, so a smoke
-# test of the same image on another bus is the same bytes of the medium and
-# another device under them.
-DISKS = ("ide", "virtio", "ahci")
+# the virtio-blk device of ADR 0037, the SATA controller of a chipset
+# (ADR 0041) and the NVMe controller of a modern laptop (ADR 0042). The image
+# is one file and the bus is the machine, so a smoke test of the same image on
+# another bus is the same bytes of the medium and another device under them.
+DISKS = ("ide", "virtio", "ahci", "nvme")
 
 
 def drive_args(image: str, disk: str = "ide") -> list:
@@ -56,6 +56,12 @@ def drive_args(image: str, disk: str = "ide") -> list:
         return [
             "-drive", f"file={image},format=raw,if=none,id=ahci0,cache=writeback",
             "-device", "ide-hd,drive=ahci0,bus=ide.0",
+        ]
+
+    if disk == "nvme":
+        return [
+            "-drive", f"file={image},format=raw,if=none,id=nvme0,cache=writeback",
+            "-device", "nvme,serial=microos,drive=nvme0",
         ]
 
     return ["-drive", f"file={image},format=raw,if=ide,index=0,cache=writeback"]
@@ -82,6 +88,9 @@ def disk_name(disk: str = "ide") -> str:
 
     if disk == "ahci":
         return "ahci0"
+
+    if disk == "nvme":
+        return "nvme0"
 
     return "ata0"
 

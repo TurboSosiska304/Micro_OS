@@ -716,6 +716,20 @@ static inline k_u64_t port_x86_64_bus_phys(const void *ptr)
 }
 
 /*
+ * The physical address a bus master sees for a buffer of the kernel or of a
+ * program (ADR 0032 §1). The window of the programs is the only memory of the
+ * machine whose virtual address is not its physical one, and the page tables
+ * of the moment are the only place that knows where its frame is; everything
+ * else is the arithmetic of port_x86_64_bus_phys(). Zero is a page that does
+ * not translate, which no caller may give to a device.
+ *
+ * A driver that walks a buffer page by page asks this call for every page: the
+ * offset of a page is kept by the translation, so the piece of one page is the
+ * same number of bytes before and after it.
+ */
+k_u64_t port_x86_64_dma_phys(const void *buffer);
+
+/*
  * The window of the programs is the only memory of the machine that a ring 3
  * program may touch. It is mapped by the per-program page tables onto the
  * physical arena below, so the virtual address of a program and the physical

@@ -48,6 +48,17 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   machine and proves it twice by the SHA-256 of the whole image before and
   after the boot - once for the volume of this system, once for the volume of
   btrfs.
+- The disk of a modern laptop, on the NVMe controller of the PCI bus
+  (ADR 0042): `ports/port_x86_64/src/nvme.c` enables the controller (AQA, ASQ,
+  ACQ, CC.EN and CSTS.RDY), identifies the controller and the namespace 1,
+  creates one pair of I/O queues through the admin queue, and reads the
+  namespace with `PRP1`/`PRP2` - the two physical pages of a request, by the
+  translation of ADR 0032 - in commands of at most 8 KiB. The namespace of 512
+  bytes is the sector of the medium, the block layer sees the kilobyte of
+  MicroFS, and the disk is read-only by the rule of ADR 0041: there is no
+  `WRITE` command in the driver, and `make nvme-smoke` proves a mount, a
+  program and the SHA-256 of the whole image before and after the boot - once
+  for the volume of this system and once for a volume of btrfs.
 - The palette of the desktop (`components/ui/include/ui/palette.h`): the
   server of `/bin/wm` and the programs of the interface paint the roles of a
   theme - a slate desk with an azure accent, or the light theme of

@@ -1173,6 +1173,32 @@ void *port_x86_64_paging_phys(k_u64_t cr3, k_u64_t vaddr)
 }
 
 /*
+ * The address a device sees for a buffer of the kernel or of a program
+ * (ADR 0032 §1): the translation of the one window whose virtual address is
+ * not its physical one, and the arithmetic of the two halves of the map for
+ * everything else. Zero is a page that is not there, which no driver may give
+ * to a device.
+ */
+k_u64_t port_x86_64_dma_phys(const void *buffer)
+{
+    k_u64_t address = (k_u64_t)(uintptr_t)buffer;
+    void *frame;
+
+    if (address >= PORT_X86_64_USER_BASE && address < PORT_X86_64_USER_LIMIT) {
+        frame = port_x86_64_paging_phys(port_x86_64_current_cr3(),
+                                        address & ~(k_u64_t)(PAGE_SIZE - 1u));
+
+        if (frame == NULL) {
+            return 0;
+        }
+
+        return (k_u64_t)(uintptr_t)frame | (address & (PAGE_SIZE - 1u));
+    }
+
+    return port_x86_64_bus_phys(buffer);
+}
+
+/*
  * The first write into a page a fork made read-only. The frame is copied and
  * the entry of this space points at the copy with the write bit back; the
  * other space keeps the old frame, which is now private to it too. Returns 1
