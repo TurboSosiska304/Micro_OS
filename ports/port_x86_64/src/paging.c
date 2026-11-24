@@ -1254,6 +1254,128 @@ int port_x86_64_paging_handle_cow(k_u64_t cr3, k_u64_t vaddr)
 }
 
 /*
+ * The 4 KiB table of the low identity map that holds `vaddr`. The chunk is
+ * split once: every page keeps the protection of the large page it replaced
+ * (the identity map of the heap is writable, supervisor and NX), and the
+ * kernel's PD names the new table. NULL when the address is not in the
+ * identity map or the pool of the tables has no page.
+ */
+static k_u64_t *kernel_low_pt(k_u64_t vaddr)
+{
+    k_u32_t index = (k_u32_t)((vaddr >> 21) & (TABLE_ENTRIES - 1u));
+    k_u64_t entry;
+    k_u64_t *pt;
+    k_u64_t base;
+    k_u32_t page;
+
+    if (vaddr >= PORT_X86_64_IDENTITY_LIMIT ||
+        (index >= USER_PD_FIRST && index < USER_PD_FIRST + USER_PD_COUNT)) {
+        return NULL;
+    }
+
+    entry = g_kernel_pd_low[index];
+    if ((entry & PTE_PRESENT) == 0) {
+        return NULL;
+    }
+
+    if ((entry & PTE_PAGE_SIZE) == 0) {
+        return table_entry(entry);
+    }
+
+    pt = page_pool_alloc();
+    if (pt == NULL) {
+        return NULL;
+    }
+
+    base = entry & PTE_ADDRESS;
+
+    for (page = 0; page < TABLE_ENTRIES; page++) {
+        k_u64_t flags =
+            entry & (PTE_PRESENT | PTE_WRITABLE | PTE_USER | PTE_PCD | PTE_PWT | PTE_NX);
+
+        pt[page] = (base + ((k_u64_t)page << PAGE_SHIFT)) | flags;
+    }
+
+    g_kernel_pd_low[index] =
+        page_phys(pt) | (entry & (PTE_PRESENT | PTE_WRITABLE | PTE_USER | PTE_PCD | PTE_PWT));
+
+    return pt;
+}
+
+bool port_x86_64_paging_kernel_guard_install(k_u64_t address)
+{
+    k_u64_t page = address & ~(k_u64_t)(PAGE_SIZE - 1u);
+    k_u64_t *pt;
+    k_u64_t entry;
+    k_u32_t index;
+
+    if (page < PAGE_SIZE || page >= PORT_X86_64_IDENTITY_LIMIT) {
+        return false;
+    }
+
+    pt = kernel_low_pt(page);
+    if (pt == NULL) {
+        return false;
+    }
+
+    index = (k_u32_t)((page >> PAGE_SHIFT) & (TABLE_ENTRIES - 1u));
+    entry = pt[index];
+
+    /*
+     * Only a page of data may become the guard: a page of text is read-only
+     * or executable, and a page that is already not there belongs to another
+     * guard. The test is the whole of the promise the identity map makes for
+     * the heap.
+     */
+    if ((entry & (PTE_PRESENT | PTE_WRITABLE | PTE_NX)) != (PTE_PRESENT | PTE_WRITABLE | PTE_NX)) {
+        return false;
+    }
+
+    pt[index] = 0;
+    invlpg(page);
+
+    return true;
+}
+
+void port_x86_64_paging_kernel_guard_remove(k_u64_t address)
+{
+    k_u64_t page = address & ~(k_u64_t)(PAGE_SIZE - 1u);
+    k_u64_t *pt;
+    k_u32_t index;
+
+    if (page < PAGE_SIZE || page >= PORT_X86_64_IDENTITY_LIMIT) {
+        return;
+    }
+
+    pt = kernel_low_pt(page);
+    if (pt == NULL) {
+        return;
+    }
+
+    index = (k_u32_t)((page >> PAGE_SHIFT) & (TABLE_ENTRIES - 1u));
+    pt[index] = page | PTE_PRESENT | PTE_WRITABLE | PTE_NX;
+    invlpg(page);
+}
+
+void port_x86_64_paging_space_sync_kernel(k_u64_t cr3, k_u64_t vaddr)
+{
+    k_u32_t index = (k_u32_t)((vaddr >> 21) & (TABLE_ENTRIES - 1u));
+    k_u64_t *pd;
+
+    if (cr3 == 0 || vaddr >= PORT_X86_64_IDENTITY_LIMIT || index == 0u ||
+        (index >= USER_PD_FIRST && index < USER_PD_FIRST + USER_PD_COUNT)) {
+        return;
+    }
+
+    pd = space_pd(cr3);
+    if (pd == NULL) {
+        return;
+    }
+
+    pd[index] = g_kernel_pd_low[index];
+}
+
+/*
  * Count the pages of one space that are both writable and executable. The
  * machine's tables are built by this file, and the audit is the check that
  * the protection the port promises is the protection the tables carry: the

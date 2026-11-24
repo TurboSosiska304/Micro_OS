@@ -432,6 +432,30 @@ int port_x86_64_paging_allow_kernel_write(k_u64_t cr3, k_u64_t vaddr);
 k_u32_t port_x86_64_paging_audit(k_u64_t cr3);
 
 /*
+ * The guard page under the stack of a kernel task (ADR 0048). The stack of a
+ * task of this port lives in the low identity map of the kernel, in 2 MiB
+ * pages shared by every address space. The install call splits the chunk that
+ * holds `address` into 4 KiB pages - the rest of the chunk keeps the
+ * protection of the large page, writable and NX - and makes the one page not
+ * present; the remove call puts the identity page back before the block goes
+ * to the allocator, so a later allocation of the same bytes is a page like
+ * every other. The answer is false when the address is not a writable, NX
+ * page of the identity map, and the caller then runs without a guard: a
+ * guard is better than none, and a page that would be taken away from code is
+ * never lost.
+ *
+ * A space that was built before the split carries the large page in its own
+ * PD, which is why the sync call copies the current entry of the kernel's PD
+ * into the PD of a space: a child of a fork gets the guard of its own stack
+ * before it can run on it (port_x86_64_task_fork_create). The switch writes
+ * CR3, which flushes the TLB of the core, so a stale large-page entry of
+ * another core cannot outlive the switch to the task that owns the guard.
+ */
+bool port_x86_64_paging_kernel_guard_install(k_u64_t address);
+void port_x86_64_paging_kernel_guard_remove(k_u64_t address);
+void port_x86_64_paging_space_sync_kernel(k_u64_t cr3, k_u64_t vaddr);
+
+/*
  * The copy of the page under `vaddr` for the first write after a fork. The
  * page belongs to both spaces until then; this one gets a frame of its own
  * with the write bit back. Returns 1 when the instruction may be retried.
@@ -540,6 +564,13 @@ void port_x86_64_net_init(void);
  * they are part of the image (MICRO_OS_X86_NET, see kmain.c).
  */
 int port_x86_64_net_register(void);
+
+/*
+ * Register the command of the guard page with the shell: `guard` starts a
+ * task that overflows its own stack and proves that the task ends and the
+ * machine does not (ADR 0048). The smoke test of the port types it.
+ */
+int port_x86_64_stack_register(void);
 
 /*
  * The hook of the task substrate, called on every tick. Weak here: a build

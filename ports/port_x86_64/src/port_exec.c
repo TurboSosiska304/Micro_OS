@@ -799,11 +799,15 @@ static int port_exec_place(const struct k_exec_image *image, char *const argv[],
 
     /* The tables have to keep the promise before a byte of the program runs:
      * a page that is writable and executable at once is a refusal here and
-     * not a fault on the machine. */
+     * not a fault on the machine. The line is the report of the audit that
+     * every `exec` leaves in the log (ADR 0048). */
     if (port_x86_64_paging_audit(space) != 0) {
         kerror("x86_64: the map of the program is not W^X");
         goto fail;
     }
+
+    kinfo("x86-64: the map of %s has no page both writable and executable",
+          (image->path != NULL) ? image->path : "the program");
 
     if (!space_write(space, PORT_EXEC_RESTORER, g_restorer_code, sizeof(g_restorer_code))) {
         goto fail;

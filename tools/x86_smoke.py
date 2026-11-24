@@ -377,6 +377,14 @@ COMMANDS = [
     # The program that faults: it writes to address zero in ring 3, and the
     # shell has to answer the command after it for the machine to be alive.
     "exec /bin/crash",
+    # The same failure one page lower (ADR 0048): the recursion runs past the
+    # bottom of the stack into the page the port leaves unmapped, the fault
+    # takes the program down and the shell answers again.
+    "exec /bin/crash stack",
+    # And the stack of a task of the kernel: the command starts a task that
+    # overflows its own 32 KiB stack, waits for it, and the answer is the
+    # status 255 of a task that ended in the guard page.
+    "guard",
     "uname",
     # The files of the machine: the mode is octal (the x86 kernel's printf
     # learned %o), the root of the tree cannot be unmounted, and `free` is
@@ -3073,6 +3081,51 @@ def check(output: str) -> list:
     expect(
         "the shell survives a fault of a program",
         re.search(r"MicroOS \d+\.\d+\.\d+", answer("uname", 1)) is not None,
+    )
+
+    # --- the guard page under the stack (ADR 0048)
+    # The stack of a program is 64 KiB and the page under it is not mapped,
+    # so a recursion that runs past the bottom meets the page and not the
+    # data of the program. The fault is a store into a page that is not
+    # present (error 0x6: not present, write, ring 3) at an address in the
+    # guard, and the program never prints the line after the recursion.
+    stack = answer("exec /bin/crash stack")
+    expect("the stack overrun program starts", "PROGRAM: crash overruns the stack" in stack)
+    expect(
+        "the guard page under the stack takes the program down",
+        "the program faulted: vector 14 at 0x0000000002fe" in stack
+        and "error 0x0000000000000006" in stack,
+        stack[-400:],
+    )
+    expect(
+        "the program that overran its stack did not continue",
+        "PROGRAM: crash did not fault on the stack" not in stack,
+    )
+    expect(
+        "the shell survives the overflow of a program",
+        re.search(r"MicroOS \d+\.\d+\.\d+", answer("uname", 1)) is not None,
+    )
+    # The task of the kernel has the page too: the command starts a task that
+    # recurses past its own stack, waits for it and reports the status the
+    # kernel gives a task that faulted. The machine stays.
+    guard = answer("guard")
+    expect(
+        "a task that overflows its kernel stack dies and the machine lives",
+        "guard: the task ran into the guard page and died (status 255); the machine is alive"
+        in guard,
+        guard[-400:],
+    )
+    expect(
+        "the log names the task and the page of the overflow",
+        "reached the guard page at 0x" in guard and "the task ends, the machine stays" in guard,
+        guard[-500:],
+    )
+    # Every program of the run is audited before it starts: the report is a
+    # line of the log, and the number of the pages that are both writable and
+    # executable is zero for a map of this port.
+    expect(
+        "every program is reported W^X before it runs",
+        "x86-64: the map of /bin/hello has no page both writable and executable" in output,
     )
 
     # --- the first lane of 1.6: the wait for a descriptor

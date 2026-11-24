@@ -69,6 +69,7 @@ struct port_task {
     void *block;       /* the allocation: this header and the stack above it */
     k_u8_t *tls;       /* the block behind IA32_FS_BASE of this task */
     k_u64_t stack_top; /* the empty top of the stack: RSP0 when it is a program */
+    k_u64_t guard;     /* the page under the stack that is not present, 0 none */
     k_u64_t cr3;       /* the page tables of the task; the kernel's by default */
     bool is_user;      /* a program of ring 3 runs on this context */
     bool exiting;      /* k_port_task_exit has begun on this context */
@@ -126,6 +127,9 @@ static k_u64_t task_tls_base(const struct port_task *pt)
 
 /* The ABI of the machine wants every stack 16 bytes aligned. */
 #define PORT_STACK_ALIGN 16u
+
+/* The page of the processor: the guard under a stack is one of these. */
+#define PORT_PAGE_SIZE 4096u
 
 /*
  * The frame that `int $0x80` leaves on the kernel stack of a program: the ten
@@ -295,6 +299,19 @@ static void release_pending(void)
 
     self->pending_free = NULL;
     flags = port_save_flags_and_cli();
+
+    /*
+     * The guard page under the stack is the port's, not the allocator's: it
+     * is not present in the map of the kernel and the block is a run of
+     * bytes the heap gives to the next task. The page goes back before the
+     * bytes do, or the next allocation that lands on it would fault on a
+     * page nobody promised to be missing (ADR 0048).
+     */
+    if (dead->guard != 0) {
+        port_x86_64_paging_kernel_guard_remove(dead->guard);
+        dead->guard = 0;
+    }
+
     k_port_free(dead->block);
 
     if (dead->tls != NULL) {
@@ -492,33 +509,62 @@ static void idle_forever(void)
  * and the stack above it, and the copy of the TLS block of the library. Both
  * the ordinary task of the kernel and the program of a fork are made here;
  * they only differ in the frame that starts them.
+ *
+ * The block is laid out for the guard page of ADR 0048: the header at the
+ * first address the allocator gave, one page that absorbs the alignment, the
+ * guard page itself, and then the stack. The guard is a page of the identity
+ * map made not present below the lowest address the stack may use, so an
+ * overflow is a page fault of the kernel and not a write into the heap under
+ * it. The three pages over the stack are the price of that: one page of
+ * slack, the guard, and the page the header shares with the allocator's
+ * block. The block is one allocation and `port_task` stays at its start, out
+ * of the guard.
  */
 static struct port_task *task_context_new(struct task *t, k_u8_t **block, k_u64_t *top)
 {
     k_size_t size = k_port_task_stack_size();
+    k_size_t total = size + 3u * PORT_PAGE_SIZE;
     struct port_task *pt;
     k_u8_t *base;
+    k_u64_t guard;
+    k_u64_t stack_base;
 
-    base = (k_u8_t *)k_port_alloc(size, false);
+    base = (k_u8_t *)k_port_alloc(total, false);
     if (base == NULL) {
-        kerror("x86_64: no memory for the stack of a task (%u bytes)", (unsigned)size);
+        kerror("x86_64: no memory for the stack of a task (%u bytes)", (unsigned)total);
         return NULL;
     }
 
-    /*
-     * The allocator aligns its payload for its own bookkeeping, which is not
-     * the alignment of the ABI; the stack is cut from the top of the block
-     * downwards so that the frame below lands on a 16 byte boundary.
-     */
-    *top = (k_u64_t)(uintptr_t)(base + size) & ~(k_u64_t)(PORT_STACK_ALIGN - 1);
+    /* The block is zeroed before the guard is taken out of it: a memset of a
+     * range that holds an unmapped page is the fault the guard is for. */
+    memset(base, 0, total);
 
-    /* A stack that has never been used reads better as zeros in a dump. */
-    memset(base, 0, size);
+    /*
+     * The allocator aligns its payload for its own bookkeeping, and a page of
+     * the processor does not have to be that alignment. The first page of the
+     * block holds the header and whatever the alignment leaves; the guard is
+     * the page after it, and the stack begins on the page after the guard.
+     * The header must never share a page with the guard: the page is taken
+     * out of the map, and `struct port_task` - the floating point state
+     * included - lives in it.
+     */
+    {
+        uintptr_t aligned =
+            ((uintptr_t)base + PORT_PAGE_SIZE - 1u) & ~(uintptr_t)(PORT_PAGE_SIZE - 1u);
+
+        guard = (k_u64_t)aligned + PORT_PAGE_SIZE;
+        stack_base = guard + PORT_PAGE_SIZE;
+    }
+
+    /* A stack that has never been used reads better as zeros in a dump; the
+     * frame below the top lands on the 16 byte boundary of the ABI. */
+    *top = (stack_base + size) & ~(k_u64_t)(PORT_STACK_ALIGN - 1);
 
     pt = (struct port_task *)base;
     pt->task = t;
     pt->block = base;
     pt->tls = NULL;
+    pt->guard = 0;
     pt->stack_top = *top;
     pt->cr3 = port_x86_64_kernel_cr3();
     pt->is_user = false;
@@ -539,6 +585,12 @@ static struct port_task *task_context_new(struct task *t, k_u8_t **block, k_u64_
         task_tls_copy(pt->tls);
     }
 
+    if (port_x86_64_paging_kernel_guard_install(guard)) {
+        pt->guard = guard;
+    } else {
+        kwarn("x86_64: the stack of a task has no guard page");
+    }
+
     *block = base;
     return pt;
 }
@@ -551,8 +603,9 @@ k_size_t k_port_task_stack_size(void)
      * 32 KiB and not 16: the shell of this machine is also the client of
      * TLS, and one handshake of mbedTLS with a certificate chain is a few
      * kilobytes of stack deeper than a command of the filesystem. The
-     * memory is here (a machine of QEMU has tens of megabytes of heap) and
-     * a stack overflow in ring 0 is a machine that stops without a word.
+     * memory is here (a machine of QEMU has tens of megabytes of heap), and
+     * since ADR 0048 an overflow ends the task in the guard page under the
+     * stack instead of walking into the heap of the port.
      */
     return 32 * 1024;
 }
@@ -633,6 +686,17 @@ int port_x86_64_task_fork_create(struct task *child, k_u64_t cr3, const void *fr
     pt->cr3 = cr3;
     pt->is_user = true;
 
+    /*
+     * The space was cloned from the parent before this stack existed, and its
+     * PD may still map the whole chunk of the new stack as one large page: the
+     * guard of the child would be invisible to the walk of the child's own
+     * CR3. The entry of the kernel's PD is copied into the space now, before
+     * the task can run (ADR 0048).
+     */
+    if (pt->guard != 0) {
+        port_x86_64_paging_space_sync_kernel(cr3, pt->guard);
+    }
+
     child->ctx = pt;
     child->stack = base;
     child->stack_size = k_port_task_stack_size();
@@ -652,6 +716,50 @@ k_u64_t port_x86_64_task_stack_top(void)
     struct port_task *current = this_cpu()->current;
 
     return current != NULL ? current->stack_top : 0;
+}
+
+/*
+ * Is `address` the guard page under the stack of the task that runs now? The
+ * answer is the whole of what the fault handler needs to tell an overflow of
+ * a kernel stack from a fault of the kernel: the page is one page, it belongs
+ * to this context and to no other, and an address inside it can be named by
+ * no code the task has a right to run (ADR 0048).
+ */
+bool port_x86_64_task_guard_fault(k_u64_t address)
+{
+    struct port_task *current = this_cpu()->current;
+
+    if (current == NULL || current->guard == 0) {
+        return false;
+    }
+
+    return address >= current->guard && address < current->guard + PORT_PAGE_SIZE;
+}
+
+/*
+ * The end of a task that overflowed its kernel stack. The frame of the fault
+ * is on the stack of the exception (the IST page of the core, or the top of
+ * this stack when the fault could still push there), and the task is taken
+ * down the way a fault of a program is: the context leaves the CPU for good,
+ * its block and its address space are released by the next context, and the
+ * shell that waits for it sees status 255. Nothing of the machine is stopped.
+ */
+void port_x86_64_task_stack_fault(k_u64_t address, k_u64_t vector, k_u64_t rip)
+{
+    struct task *self = k_port_task_current();
+
+    klog(K_LOG_LEVEL_ERROR, "x86-64: the task '%s' (pid %u) reached the guard page at 0x%08x%08x",
+         (self != NULL) ? self->name : "?", (self != NULL) ? (unsigned)self->pid : 0u,
+         (unsigned)(address >> 32), (unsigned)(address & 0xFFFFFFFFu));
+
+    kinfo("x86-64: vector %u, rip 0x%08x%08x: the task ends, the machine stays", (unsigned)vector,
+          (unsigned)(rip >> 32), (unsigned)(rip & 0xFFFFFFFFu));
+
+    task_exit(255);
+
+    /* Not reached: the exit of a task does not come back. */
+    for (;;) {
+    }
 }
 
 bool port_x86_64_task_is_user(void)
@@ -678,6 +786,13 @@ void port_x86_64_task_set_space(k_u64_t cr3)
     current->cr3 = cr3;
     current->is_user = true;
     port_x86_64_tss_set_rsp0(current->stack_top);
+
+    /* The space came from the tables of this moment and already names the
+     * guard of this stack, but the copy is cheap and a stale large page here
+     * would cost the guard the whole point of ADR 0048. */
+    if (current->guard != 0) {
+        port_x86_64_paging_space_sync_kernel(cr3, current->guard);
+    }
 
     /* The kernel is part of the new map, so the switch is safe here and the
      * iretq that follows sees the pages of the program. */

@@ -772,6 +772,26 @@ static const char *exception_name(k_u64_t vector)
 int port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs)
 {
     /*
+     * The guard page under the stack of a kernel task (ADR 0048). A fault of
+     * ring 0 whose address is in that page is an overflow of the stack and
+     * the end of the task, not of the machine. The double fault is the other
+     * face of the same event: when the stack pointer has already left the
+     * stack, the processor cannot push the frame of the first page fault, and
+     * CR2 still names the page that broke it. Both cases are answered here,
+     * before the copy-on-write and the mapping paths, which have nothing to
+     * say about a page no task may own.
+     */
+    if (vector == 8u || vector == 14u) {
+        k_u64_t guard_address;
+
+        __asm__ volatile("movq %%cr2, %0" : "=r"(guard_address));
+
+        if ((vector == 8u || (cs & 3u) == 0u) && port_x86_64_task_guard_fault(guard_address)) {
+            port_x86_64_task_stack_fault(guard_address, vector, rip);
+        }
+    }
+
+    /*
      * A page fault of the window of the programs is one of three things: the
      * first write into a page a fork made read-only (copy on write), a store
      * of the kernel into the text of a program, or a page of a mapping of the
@@ -917,7 +937,12 @@ void port_x86_64_interrupts_init(void)
 
     for (vector = 0; vector < 32u; vector++) {
         /* A double fault takes IST1: the stack it interrupted may be the one
-         * that broke, and a fault handler needs a stack of its own. */
+         * that broke, and a fault handler needs a stack of its own. The page
+         * fault keeps the stack of the task: its handler may sleep while it
+         * reads a file for a mapping, and an IST stack of the core cannot be
+         * left suspended across a switch (ADR 0048). The case where the stack
+         * of the task cannot hold the frame at all - the overflow that has
+         * already left it - is the double fault, and IST1 is the answer. */
         k_u8_t ist = (vector == 8u) ? IDT_IST_DOUBLE_FAULT : 0u;
 
         idt_set(vector, port_isr_exception_table[vector], ist, IDT_GATE_INTERRUPT);
