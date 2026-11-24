@@ -51,7 +51,19 @@ The x86-64 port has an MMU and uses it ([ADR 0007](docs/adr/0007-paging-and-user
 * NX/W^X: the text of the kernel and of a program is the only executable
   memory, and no page is writable and executable at once;
 * `fork()` copies the page tables and both copies are read-only until the
-  first write.
+  first write;
+* the policy of a page ([ADR 0052](docs/adr/0052-the-policy-of-a-page.md)): a
+  page is code or it is data - `mmap(PROT_WRITE | PROT_EXEC)` is `EINVAL` and
+  the audit of every `exec` refuses such a space - the stack of a program
+  grows only inside the room of the window and up to the memory limit of the
+  task, a heap and an anonymous mapping stop at the same limit, and a bad
+  access is `EFAULT` with the address in the log. SMEP and SMAP are turned on
+  when the processor advertises them (the boot says which machine it is) and
+  the kernel opens the `STAC`/`CLAC` window only around the copy a call asked
+  for;
+* the boundary against ring 3 is the supervisor bit of every kernel page, on
+  every machine, and a store into the kernel from a program is a page fault
+  with the address in the log (`/bin/mmu_kernel`).
 
 ### ESP32: no MMU, no sandbox
 
@@ -161,6 +173,10 @@ not a vulnerability:
 * [ADR 0004](docs/adr/0004-portable-boundary.md) — the portable boundary.
 * [ADR 0007](docs/adr/0007-paging-and-user-mode.md) — paging, ring 3, the
   failure of a program, NX/W^X and the decision about SMAP/SMEP.
+* [ADR 0052](docs/adr/0052-the-policy-of-a-page.md) — the policy of a page:
+  W^X at the edge of a mapping, the stack that grows, the ceiling of the heap
+  and of the mappings, the kernel that ring 3 cannot write, EFAULT with the
+  address.
 * [ADR 0011](docs/adr/0011-versioning-and-1.0.md) — versioning and what 1.0
   does not require.
 * [ADR 0018](docs/adr/0018-esp32-programs.md) — a program on the board.
