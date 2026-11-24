@@ -262,6 +262,8 @@ static bool vio_start(void)
     return true;
 }
 
+static const struct port_x86_64_nic_ops g_vio_ops;
+
 void port_x86_64_net_init(void)
 {
     if (!vio_probe()) {
@@ -279,21 +281,13 @@ void port_x86_64_net_init(void)
     kinfo("virtio0: %02x:%02x:%02x:%02x:%02x:%02x, %s", (unsigned)g_vio_mac[0],
           (unsigned)g_vio_mac[1], (unsigned)g_vio_mac[2], (unsigned)g_vio_mac[3],
           (unsigned)g_vio_mac[4], (unsigned)g_vio_mac[5], g_vio_link ? "link up" : "no link");
+
+    port_x86_64_nic_register(&g_vio_ops);
 }
 
 /* --- the frames ----------------------------------------------------------- */
 
-const char *port_x86_64_nic_name(void)
-{
-    return g_vio_present ? "virtio0" : NULL;
-}
-
-bool port_x86_64_nic_present(void)
-{
-    return g_vio_present;
-}
-
-bool port_x86_64_nic_mac(k_u8_t mac[6])
+static bool vio_nic_mac(k_u8_t mac[6])
 {
     if (!g_vio_present || mac == NULL) {
         return false;
@@ -304,7 +298,7 @@ bool port_x86_64_nic_mac(k_u8_t mac[6])
     return true;
 }
 
-bool port_x86_64_nic_link(void)
+static bool vio_nic_link(void)
 {
     if (!g_vio_present) {
         return false;
@@ -321,7 +315,7 @@ bool port_x86_64_nic_link(void)
  * frame starts after it. The descriptor is put back into the available ring
  * at once, so the device has a buffer for the next packet in the same visit.
  */
-bool port_x86_64_nic_receive(void *buf, k_size_t size, k_size_t *length)
+static bool vio_nic_receive(void *buf, k_size_t size, k_size_t *length)
 {
     k_u16_t used;
     k_u32_t id;
@@ -378,7 +372,7 @@ bool port_x86_64_nic_receive(void *buf, k_size_t size, k_size_t *length)
  * it in the budget is a device that is gone, and the frame is reported as
  * lost instead of holding a task for ever.
  */
-bool port_x86_64_nic_send(const void *frame, k_size_t length)
+static bool vio_nic_send(const void *frame, k_size_t length)
 {
     k_u16_t used_before;
     k_u32_t id;
@@ -425,17 +419,31 @@ bool port_x86_64_nic_send(const void *frame, k_size_t length)
     return true;
 }
 
-k_u64_t port_x86_64_nic_rx_frames(void)
+static k_u64_t vio_nic_rx_frames(void)
 {
     return g_rx_frames;
 }
 
-k_u64_t port_x86_64_nic_tx_frames(void)
+static k_u64_t vio_nic_tx_frames(void)
 {
     return g_tx_frames;
 }
 
-k_u64_t port_x86_64_nic_rx_dropped(void)
+static k_u64_t vio_nic_rx_dropped(void)
 {
     return g_rx_dropped;
 }
+
+/* The seam the stack of src/net.c reads (src/netdev.c). The card registers
+ * as soon as it is up; a machine with no card registers nothing and the calls
+ * of the stack answer "no network". */
+static const struct port_x86_64_nic_ops g_vio_ops = {
+    .name = "virtio0",
+    .mac = vio_nic_mac,
+    .link = vio_nic_link,
+    .receive = vio_nic_receive,
+    .send = vio_nic_send,
+    .rx_frames = vio_nic_rx_frames,
+    .tx_frames = vio_nic_tx_frames,
+    .rx_dropped = vio_nic_rx_dropped,
+};

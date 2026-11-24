@@ -1149,6 +1149,7 @@ const char *port_x86_64_root_device(void)
     const char *virtio = port_x86_64_virtio_blk_root();
     const char *ahci = port_x86_64_ahci_root();
     const char *nvme = port_x86_64_nvme_root();
+    const char *usb = port_x86_64_usb_storage_root();
 
     if (boot != NULL) {
         return boot;
@@ -1166,5 +1167,13 @@ const char *port_x86_64_root_device(void)
         return ahci;
     }
 
-    return nvme != NULL ? nvme : "ram0";
+    if (nvme != NULL) {
+        return nvme;
+    }
+
+    if (usb != NULL) {
+        return usb;
+    }
+
+    return "ram0";
 }
