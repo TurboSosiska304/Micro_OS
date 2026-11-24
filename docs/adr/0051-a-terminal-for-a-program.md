@@ -199,6 +199,15 @@ The scroll stays the one the console had: a write past the last row scrolls the
 grid by one line. A scroll *region* is not there, and a full-screen program of
 this tree does not use one.
 
+The last cell of a line has the **deferred wrap** of a terminal: the cursor
+stays on it and the next character wraps. A full-screen program fills the
+width - the status bar of an editor is exactly as wide as the screen - and a
+console that wrapped on the write would scroll the screen a line for every
+one of them, which is the first row of the file leaving the top of the
+picture. The picture of a run of `kilo` on the framebuffer of 1280x800 is the
+check of it: the row of the file at the top of the grid of 160x50 cells and
+the two rows of the status at the bottom.
+
 The serial line is the log, and the log of a screen is text: `COM1` receives
 the same bytes with **every** CSI sequence removed, not the SGR ones alone. A
 person at the serial console of a machine running an editor reads the lines
