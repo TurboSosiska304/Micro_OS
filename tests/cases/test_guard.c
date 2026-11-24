@@ -13,11 +13,49 @@
 #include "tests/tests.h"
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "kernel/log.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
 #include "port_host.h"
+
+/*
+ * Valgrind counts the intentional store into the guard page as an invalid
+ * write, and `--error-exitcode=42` would fail the suite of `make
+ * test-valgrind` for the one access the test is made of. The client request
+ * of the header is the documented way to ask whether the machine is the
+ * instrumented one; the environment is the fallback for a build without the
+ * header. The overflow itself is run by the plain and the address sanitizer
+ * builds, and the rest of the port - the bounds of the stack, the alternate
+ * stack, the handler and its cleanup - runs here either way.
+ */
+#if defined(__has_include)
+#if __has_include(<valgrind/valgrind.h>)
+#include <valgrind/valgrind.h>
+#define KTEST_HAVE_VALGRIND 1
+#endif
+#endif
+
+static __attribute__((unused)) bool guard_runs_here(void)
+{
+#if defined(KTEST_HAVE_VALGRIND)
+    if (RUNNING_ON_VALGRIND) {
+        return false;
+    }
+#endif
+
+    {
+        const char *preload = getenv("LD_PRELOAD");
+
+        if (preload != NULL && strstr(preload, "vgpreload") != NULL) {
+            return false;
+        }
+    }
+
+    return true;
+}
 
 /*
  * The frame of the recursion is large enough that the stack is gone in fewer
@@ -77,6 +115,14 @@ void test_guard(void)
 #else
     struct task *overrun;
     struct task *alive;
+
+    if (!guard_runs_here()) {
+        /* The store into the guard is an invalid write to the instrumented
+         * machine by definition (see above); the code around it has already
+         * run in every task of this suite. */
+        KT_CHECK(1);
+        return;
+    }
 
     port_host_set_sink(tmpfile());
 
