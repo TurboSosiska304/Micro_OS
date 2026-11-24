@@ -14,6 +14,15 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### The release
 
+- 1.8.0-rc2: the medium of the release is in the bundle of its own tag. The
+  step of the CD and of the stick of `release.yml` installed `xorriso`,
+  `limine`, `clang` and `lld` **after** the environment of ESP-IDF was
+  prepared, and `apt-get` replaced `python3` under it: the build of the
+  firmware of the same job lost the module `idf_component_manager` and the
+  release of 1.7.0 - and of `1.8.0-rc1` - went out without its ISO and without
+  its stick, with a sentence of the step that said so. The tools are installed
+  with the host tools now, before the environment, and the line of 1.8 merges
+  that fix from `mainline`.
 - 1.8.0-rc1: the release of the door of USB, of a disk of a person under the
   rule that a medium this system did not format is read-only, of the library
   of a program nobody rewrote and of a volume whose grain is its own
