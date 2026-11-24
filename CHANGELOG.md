@@ -34,6 +34,44 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Added
 
+- The door of a laptop, USB (ADR 0040): `ports/port_x86_64/src/xhci.c` finds
+  the controller of the bus (class 0x0C/0x03), resets it and programs it - a
+  command ring and an event ring with its ERST, the slots and the contexts of
+  a device, the ports with their speed and their reset - all of it by physical
+  addresses of the port's contract (ADR 0032). On it: a keyboard of the HID
+  boot protocol whose eight-byte reports the portable kernel decodes
+  (`kernel/input_hid.c`, `tests/cases/test_input_hid.c`), with the same events
+  and the same characters as the PS/2 one, so a machine with both reads them
+  as one keyboard; a stick of mass storage (BOT, class 08/06/0x50, `INQUIRY`,
+  `READ CAPACITY(10)`, `READ(10)`, `WRITE(10)`) registered as `usb0` of the
+  block layer and the rule of ADR 0041 over it; and CDC-ECM as the second
+  network device of the port (`usbnet0`, frames over two bulk endpoints, the
+  MAC from the descriptor of a string). `make usb-smoke` runs a machine with
+  `i8042=off` - no PS/2 at all, so the keys can only come through xHCI - and
+  `make usb-stick-smoke USB_STICK=/dev/sdc` boots with the stick of a person
+  attached read-only: 35 and 43 checks.
+- The grain of a volume (ADR 0044): the sector is a property of the volume,
+  not of the medium. `struct k_blockdev_view` is a device of the block layer
+  whose sector is the one of the superblock, over a device whose sector is
+  smaller - arithmetic over one call, no copy and no allocation - and ext2
+  opens one when its superblock says a block of 4 KiB on a medium of 512-byte
+  sectors. `e2fsck -fn` and `debugfs` are clean on every path of a write at
+  that grain (a file past the twelve direct blocks, a hole past the single
+  table, a truncation inside a block, a truncation that gives the table back,
+  a growth into a hole), and `make x86-volume-smoke` writes and reads a volume
+  of 5 GiB at both grains: 32 checks.
+- The library of a program nobody rewrote: `popen`, `pclose` and `system` are
+  a pipe, a fork, a dup2 and the execve of the first word of the line, and
+  `make ports-smoke` builds **thirteen utilities of sbase with not one line
+  changed** - `true false echo basename dirname pwd printenv sleep cksum tee
+  cmp whoami sha256sum` - with the toolchain of `make sdk`, runs them on the
+  image of the release and checks their answers: 62 checks. `tests/ports/
+  upstream.txt` holds the digest of every vendored file and the gate
+  recalculates it before the machine starts, so a byte of a local edit fails
+  the gate; `docs/ports-table.md` is the table of the lines of source, of the
+  lines of a port layer and of the patches, per program (577 / 0 / 0 for the
+  thirteen).
+
 - The disk of a chipset, on the SATA controller of a laptop (ADR 0041):
   `ports/port_x86_64/src/ahci.c` speaks class 01/06 of the PCI bus with its
   window of registers above the identity map (CAP/GHC/IS/PI, a command list
@@ -306,6 +344,25 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Fixed
 
+- The read ahead of the block layer (ADR 0032) armed the wait of the stream
+  *inside* the call that read, so a write of 16 MiB at a grain of 4 KiB read
+  36 MiB of the disk before it wrote a byte. The wait belongs to the stream and
+  not to the call: the same write reads 2.5 MiB, and the write of the same file
+  went from 129 to 184 MiB/s. Held by a case of `test_blockdev_cache.c`.
+- The descriptors 1 and 2 were "the console" only while nothing had opened
+  them, so the first `pipe()` or `open()` of a program took them: `tee` wrote
+  its answer into its own file instead of the console, and any program that
+  spoke after an `open` spoke to the wrong place. `open` and `pipe` move a new
+  descriptor off them now (the probe is `fstat`, not `read`: a read of the
+  write end of a pipe answers `EBADF` too), and an explicit `dup2(fd, 1)` is
+  still obeyed.
+- A case of `tests/cases/test_ksys_process.c` waited three seconds for a
+  program it had started as a task among the others: a host that runs a build,
+  a sanitizer suite and three copies of the case answered a failure of the
+  property instead of a slow machine. The waits of that file are ten seconds,
+  and the status of the `fork` case is under the same condition as its use
+  (the race detector refused to compile the file, so `make test-tsan` was red
+  and nobody had looked).
 - The keyboard of a laptop whose firmware leaves the translation of the 8042
   off: it speaks the scancode set 2, and the port read every byte of it as the
   set 1 - the prompt arrived, the keys did not type their letters, and a line
