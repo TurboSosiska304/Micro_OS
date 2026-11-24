@@ -11,6 +11,7 @@ set(MICRO_OS_CONFIG_SRCS
     "src/config_cmd.c"
     "src/config_users.c"
     "src/config_login.c"
+    "src/config_session.c"
 )
 
 if(ESP_PLATFORM)
