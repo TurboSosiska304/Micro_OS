@@ -64,8 +64,19 @@ jobs:
       # the host cc to turn the signing key into the public half of the
       # image, and the x86-64 port needs cmake and ninja. Install them
       # before either build.
+      # xorriso and limine write the CD of a BIOS and of a firmware, clang and
+      # lld-link build the loader of a firmware, and sfdisk's table of the
+      # stick comes with util-linux. They are installed **here** and not in
+      # the step of the medium: an apt-get that replaces python3 after the
+      # environment of ESP-IDF is prepared breaks the build of the firmware
+      # (the module idf_component_manager disappears), which is what the
+      # release of 1.7.0 found on its own tag.
       - name: the host tools of both machines
-        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends cmake ninja-build build-essential e2fsprogs dosfstools
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends \
+              cmake ninja-build build-essential e2fsprogs dosfstools \
+              xorriso limine clang lld
 
       # The steps of Actions run through docker exec and miss the
       # entrypoint of the image, the one that sources export.sh — the
@@ -108,9 +119,6 @@ jobs:
       - name: the bootable medium of the x86-64 machine
         shell: bash
         run: |
-          # clang and lld-link build the loader of a firmware: the PE/COFF
-          # header of GNU ld is one the firmware does not read.
-          (apt-get update -qq && apt-get install -y -qq xorriso limine ovmf clang lld) >/dev/null 2>&1 || true
           make x86-iso || echo "the image is not in this bundle: xorriso or limine is missing"
           make uefi-stick || echo "the stick is not in this bundle: clang or lld-link is missing"
 
