@@ -280,16 +280,21 @@ static bool session_startup(void)
 
     while (text[at] != '\0') {
         k_size_t length = 0;
+        bool cut = false;
 
         while (text[at] != '\0' && text[at] != '\n' && length + 1 < sizeof(line)) {
             line[length++] = text[at++];
         }
 
-        /* The rest of a line that did not fit is thrown away: half a command
-         * is a different command (the rule of the prompt of the shell). */
-        while (text[at] != '\0' && text[at] != '\n') {
-            at++;
-            length = sizeof(line); /* a line that was cut is not executed */
+        /* The rest of a line that did not fit is thrown away and the line is
+         * not executed: half a command is a different command (the rule of the
+         * prompt of the shell). */
+        if (text[at] != '\0' && text[at] != '\n') {
+            cut = true;
+
+            while (text[at] != '\0' && text[at] != '\n') {
+                at++;
+            }
         }
 
         if (text[at] == '\n') {
@@ -302,13 +307,13 @@ static bool session_startup(void)
         }
 
         while (length > 0 && (line[0] == ' ' || line[0] == '\t')) {
-            memmove(line, line + 1, length);
+            memmove(line, line + 1, length - 1u);
             length--;
         }
 
         line[length] = '\0';
 
-        if (length == 0 || line[0] == '#' || length >= sizeof(line) - 1u) {
+        if (length == 0 || line[0] == '#' || cut) {
             continue;
         }
 
