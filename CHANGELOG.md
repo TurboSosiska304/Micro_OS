@@ -51,8 +51,15 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   screen. On it, **kilo**, a full-screen editor of somebody else (BSD-2, not
   one line changed), is built by the SDK and driven on the machine:
   `make tty-smoke` opens a file, types a line, saves with `Ctrl-S`, quits with
-  `Ctrl-X` and reads the line back out of the volume; `make ports-smoke` is
-  73 checks.
+  `Ctrl-Q` (the keys of antirez kilo, not of a guess) and reads the line back
+  out of the volume; `make ports-smoke` is 73 checks. The descriptors 0, 1 and
+  2 of a task are its terminal while nothing is opened on them, so a program
+  finds the console without opening `/dev/tty`; the mode belongs to the
+  terminal and the console goes back to canonical when the program that
+  changed it goes away; the console of the port understands the cursor, the
+  clearing and a **deferred wrap** at the last cell (the status bar of kilo,
+  exactly as wide as the screen, scrolled the frame once per redraw until that
+  was found).
 - A machine that switches itself off (ADR 0050): `shutdown`, `poweroff` and
   `reboot` are commands of the shell and `k_power_shutdown` is the order of a
   clean end - the sessions are closed to new ones, the volumes are synced and
