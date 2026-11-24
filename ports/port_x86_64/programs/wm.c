@@ -826,8 +826,22 @@ static void panel_paint(const struct ui_rect *area)
 
         if (ui_rect_intersect(&clock, &part, &visible)) {
             int cells = clock.w / WM_CLOCK_CELL;
+            int used = (int)strlen(g_clock_text);
+            int x = clock.x;
 
-            (void)uiprog_text(&g_screen, clock.x, clock.y, g_clock_text, cells, g_palette.ink_dim,
+            /* The hour is drawn against the right end of its rectangle: a
+             * clock of the twelve hours is ten cells in the morning and
+             * eleven at noon, and a number that moved by a cell every hour is
+             * not a clock a person reads. The rectangle of the format is
+             * filled first, so the tail of the old text is the panel. */
+            if (used > cells) {
+                used = cells;
+            }
+            if (used < cells) {
+                x += (cells - used) * WM_CLOCK_CELL;
+            }
+
+            (void)uiprog_text(&g_screen, x, clock.y, g_clock_text, used, g_palette.ink_dim,
                               g_palette.panel);
         }
     }
