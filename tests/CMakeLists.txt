@@ -90,6 +90,11 @@ if(NOT ESP_PLATFORM)
        AND MICRO_OS_NET_NTP AND MICRO_OS_NET_MQTT)
         list(APPEND MICRO_OS_TEST_CASES cases/test_net.c)
     endif()
+    # The client of DHCP is a protocol of its own and needs no socket of the
+    # host: its server is the script of tests/cases/test_dhcp.c.
+    if(MICRO_OS_NET)
+        list(APPEND MICRO_OS_TEST_CASES cases/test_dhcp.c)
+    endif()
     if(MICRO_OS_NET AND MICRO_OS_NET_HTTP)
         list(APPEND MICRO_OS_TEST_CASES cases/test_pkg.c)
     endif()
