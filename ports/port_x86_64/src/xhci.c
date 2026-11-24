@@ -639,11 +639,13 @@ static struct xhci_trb *ep0_put(k_u32_t index, const struct xhci_trb *trb)
     return slot;
 }
 
-/* The answer of the endpoint 0: a transfer event of this slot and this
- * endpoint, whose completion code says how the transfer ended. */
-static bool ep0_wait(k_u32_t slot, k_u32_t dci, k_u8_t *code, k_u32_t *left)
+/* The answer of one endpoint: a transfer event of this slot and this
+ * endpoint, whose completion code says how the transfer ended and whose
+ * length says how many bytes the device did not move. */
+static bool wait_transfer(k_u32_t slot, k_u32_t dci, k_u32_t timeout_ms, k_u8_t *code,
+                          k_u32_t *left)
 {
-    k_u64_t deadline = k_port_uptime_ms() + 500u;
+    k_u64_t deadline = k_port_uptime_ms() + timeout_ms;
 
     for (;;) {
         struct xhci_trb *event = event_peek();
@@ -727,7 +729,7 @@ static bool control_transfer(k_u32_t slot, k_u8_t request_type, k_u8_t request, 
     __asm__ volatile("" : : : "memory");
     doorbell(slot, 1);
 
-    if (!ep0_wait(slot, 1u, &code, &left)) {
+    if (!wait_transfer(slot, 1u, 500u, &code, &left)) {
         return false;
     }
 
@@ -817,6 +819,402 @@ static k_u32_t endpoint_interval(k_u8_t interval, k_u32_t speed)
     return interval > 16u ? 15u : (k_u32_t)(interval - 1u);
 }
 
+/* --- the classes on top of the controller --------------------------------- */
+
+/*
+ * A device of a class is a slot, the endpoints the class asked for, and the
+ * rings those endpoints read. The class drivers (`src/usb_storage.c` and
+ * `src/usb_net.c`) know the descriptors and the commands of their class and
+ * call this file for a transfer; the rings, the contexts, the doorbells and
+ * the physical addresses stay here.
+ *
+ * The pool is four devices, as the pool of the slots is: a machine of the
+ * release has a keyboard, a stick and a wire. The rings are sixteen TRBs and
+ * a bulk transfer of this driver is at most fifteen of them, so a transfer
+ * never wraps the ring between its first and its last TRB.
+ */
+#define XHCI_DEV_EP 4u
+#define XHCI_DEV_EP_RING 16u
+#define XHCI_DEV_EP_PUT (XHCI_DEV_EP_RING - 1u)
+#define XHCI_PAGE 4096u
+
+enum xhci_usb_class {
+    XHCI_USB_NONE = 0,
+    XHCI_USB_KEYBOARD,
+    XHCI_USB_STORAGE,
+    XHCI_USB_NET,
+};
+
+struct xhci_endpoint_state {
+    bool used;
+    k_u8_t dci;
+    k_u32_t type; /* the type of the endpoint context: 2, 6 or 7 */
+    k_u16_t max_packet;
+    k_u8_t interval;
+    struct xhci_trb *ring;
+    k_u32_t index; /* the producer of the ring */
+    k_u32_t cycle;
+};
+
+struct xhci_class_device {
+    bool used;
+    k_u8_t slot;
+    k_u8_t port;
+    k_u32_t speed;
+    k_u16_t vendor;
+    k_u16_t product;
+    k_u8_t config;
+    struct xhci_endpoint_state eps[XHCI_DEV_EP];
+    k_u32_t endpoints;
+    struct port_x86_64_usb_device view;
+};
+
+static struct xhci_class_device g_class_device[XHCI_DEVICES];
+static struct xhci_trb g_class_ring[XHCI_DEVICES][XHCI_DEV_EP][XHCI_DEV_EP_RING]
+    __attribute__((aligned(64)));
+static k_u8_t g_config[512] __attribute__((aligned(64)));
+
+/* The device of a slot, or NULL when the class pool does not hold it. */
+static struct xhci_class_device *class_device_of(k_u32_t slot)
+{
+    k_u32_t index;
+
+    for (index = 0; index < XHCI_DEVICES; index++) {
+        if (g_class_device[index].used && g_class_device[index].slot == slot) {
+            return &g_class_device[index];
+        }
+    }
+
+    return NULL;
+}
+
+/* The endpoint of a context index, or NULL when it is not on. */
+static struct xhci_endpoint_state *class_endpoint(struct xhci_class_device *device, k_u32_t dci)
+{
+    k_u32_t index;
+
+    if (device == NULL || dci == 0u) {
+        return NULL;
+    }
+
+    for (index = 0; index < XHCI_DEV_EP; index++) {
+        if (device->eps[index].used && device->eps[index].dci == dci) {
+            return &device->eps[index];
+        }
+    }
+
+    return NULL;
+}
+
+/*
+ * Which class the interfaces of a configuration carry, in the order the
+ * devices of this release are wanted: a keyboard of the boot protocol of
+ * HID, a stick of the Bulk-Only Transport, a wire of CDC-ECM. A device of
+ * another class is enumerated and gives its slot back.
+ */
+static enum xhci_usb_class classify_configuration(const k_u8_t *descriptor, k_u32_t length)
+{
+    k_u32_t offset = 0;
+
+    while (offset + 2u <= length) {
+        k_u8_t size = descriptor[offset];
+        k_u8_t type = descriptor[offset + 1u];
+
+        if (size < 2u || offset + size > length) {
+            break;
+        }
+
+        if (type == 4u && size >= 9u) {
+            k_u8_t base = descriptor[offset + 5u];
+            k_u8_t sub = descriptor[offset + 6u];
+            k_u8_t protocol = descriptor[offset + 7u];
+
+            if (base == 3u && sub == 1u && protocol == 1u) {
+                return XHCI_USB_KEYBOARD;
+            }
+
+            if (base == 8u && sub == 6u && protocol == 0x50u) {
+                return XHCI_USB_STORAGE;
+            }
+
+            if (base == 2u && sub == 6u) {
+                return XHCI_USB_NET;
+            }
+        }
+
+        offset += size;
+    }
+
+    return XHCI_USB_NONE;
+}
+
+/* Put one TRB on the ring of an endpoint, respecting the link at its end and
+ * the cycle of the producer. */
+static struct xhci_trb *endpoint_put(struct xhci_endpoint_state *endpoint,
+                                     const struct xhci_trb *trb)
+{
+    struct xhci_trb *slot;
+
+    if (endpoint->index >= XHCI_DEV_EP_PUT) {
+        ring_link(endpoint->ring, XHCI_DEV_EP_RING, endpoint->cycle);
+        endpoint->cycle ^= 1u;
+        endpoint->index = 0;
+    }
+
+    slot = &endpoint->ring[endpoint->index];
+    *slot = *trb;
+    slot->control |= endpoint->cycle;
+    endpoint->index++;
+
+    return slot;
+}
+
+/*
+ * The Configure Endpoint command of a class device: every endpoint that is
+ * on is named again in the add flags, because the specification says the
+ * controller forgets the contexts a command does not name.
+ */
+static bool class_configure(struct xhci_class_device *device)
+{
+    struct xhci_trb trb;
+    struct xhci_trb *posted;
+    k_u32_t add = 1u << 0;
+    k_u32_t entries = 1u;
+    k_u32_t index;
+    k_u8_t code = 0;
+    k_u32_t answer = 0;
+
+    memset(g_input, 0, sizeof(g_input));
+
+    for (index = 0; index < XHCI_DEV_EP; index++) {
+        if (device->eps[index].used) {
+            add |= 1u << device->eps[index].dci;
+
+            if (device->eps[index].dci > entries) {
+                entries = device->eps[index].dci;
+            }
+        }
+    }
+
+    context_put32(g_input, 0u, 0u);
+    context_put32(g_input, 4u, add);
+    slot_context(g_input, device->speed, device->port, entries);
+
+    for (index = 0; index < XHCI_DEV_EP; index++) {
+        if (device->eps[index].used) {
+            endpoint_context(g_input, device->eps[index].dci, device->eps[index].type,
+                             device->eps[index].interval, device->eps[index].max_packet,
+                             device->eps[index].ring);
+        }
+    }
+
+    trb.param = trb_phys(g_input);
+    trb.status = 0;
+    trb.control = XHCI_TRB_TYPE(XHCI_TRB_CONFIGURE_ENDPOINT) | (device->slot << 24);
+
+    __asm__ volatile("" : : : "memory");
+    posted = command_put(&trb);
+    __asm__ volatile("" : : : "memory");
+    doorbell(0, 0);
+
+    if (!command_wait(posted, &code, &answer)) {
+        return false;
+    }
+
+    return code == XHCI_CODE_SUCCESS;
+}
+
+/*
+ * The physical address behind a byte of a transfer (ADR 0032 §1): the window
+ * of the programs is the one memory of this machine whose virtual address is
+ * not its physical one. Zero is a buffer the controller may not be given.
+ */
+static k_u64_t usb_phys(k_u64_t address)
+{
+    if (address >= PORT_X86_64_USER_BASE && address < PORT_X86_64_USER_LIMIT) {
+        void *frame = port_x86_64_paging_phys(port_x86_64_current_cr3(),
+                                              address & ~(k_u64_t)(XHCI_PAGE - 1u));
+
+        if (frame == NULL) {
+            return 0;
+        }
+
+        return (k_u64_t)(uintptr_t)frame | (address & (XHCI_PAGE - 1u));
+    }
+
+    return port_x86_64_bus_phys((const void *)(uintptr_t)address);
+}
+
+/* --- the calls a class driver makes --------------------------------------- */
+
+int port_x86_64_xhci_endpoint(struct port_x86_64_usb_device *device, k_u8_t address, bool bulk,
+                              k_u8_t interval, k_u16_t max_packet)
+{
+    struct xhci_class_device *class_device;
+    struct xhci_endpoint_state *endpoint = NULL;
+    k_u32_t dci;
+    k_u32_t index;
+    k_u32_t slot_index = XHCI_DEV_EP;
+    k_u32_t device_index;
+
+    if (device == NULL) {
+        return -1;
+    }
+
+    class_device = class_device_of(device->slot);
+
+    if (class_device == NULL) {
+        return -1;
+    }
+
+    dci = endpoint_dci(address);
+
+    for (index = 0; index < XHCI_DEV_EP; index++) {
+        if (class_device->eps[index].used && class_device->eps[index].dci == dci) {
+            endpoint = &class_device->eps[index];
+            slot_index = index;
+            break;
+        }
+    }
+
+    if (endpoint == NULL) {
+        for (index = 0; index < XHCI_DEV_EP; index++) {
+            if (!class_device->eps[index].used) {
+                endpoint = &class_device->eps[index];
+                slot_index = index;
+                break;
+            }
+        }
+    }
+
+    if (endpoint == NULL) {
+        return -1;
+    }
+
+    device_index = (k_u32_t)(class_device - g_class_device);
+
+    if (!endpoint->used) {
+        memset(endpoint, 0, sizeof(*endpoint));
+        endpoint->dci = (k_u8_t)dci;
+        endpoint->ring = g_class_ring[device_index][slot_index];
+        endpoint->cycle = 1u;
+        memset(endpoint->ring, 0, sizeof(g_class_ring[device_index][slot_index]));
+        ring_link(endpoint->ring, XHCI_DEV_EP_RING, endpoint->cycle);
+        endpoint->used = true;
+        class_device->endpoints++;
+    }
+
+    endpoint->type = bulk ? ((address & 0x80u) != 0u ? 6u : 2u) : 7u;
+    endpoint->interval = interval;
+    endpoint->max_packet = max_packet;
+
+    if (!class_configure(class_device)) {
+        endpoint->used = false;
+        class_device->endpoints--;
+        return -1;
+    }
+
+    if (bulk) {
+        if ((address & 0x80u) != 0u) {
+            device->bulk_in_dci = (k_u8_t)dci;
+            device->bulk_in_packet = max_packet;
+        } else {
+            device->bulk_out_dci = (k_u8_t)dci;
+            device->bulk_out_packet = max_packet;
+        }
+    }
+
+    return 0;
+}
+
+int port_x86_64_xhci_control(struct port_x86_64_usb_device *device, k_u8_t request_type,
+                             k_u8_t request, k_u16_t value, k_u16_t index, k_u16_t length,
+                             void *data)
+{
+    if (device == NULL) {
+        return -1;
+    }
+
+    return control_transfer(device->slot, request_type, request, value, index, length, data) ? 0
+                                                                                             : -1;
+}
+
+int port_x86_64_xhci_bulk(struct port_x86_64_usb_device *device, bool in, void *buffer,
+                          k_u32_t length, k_u32_t timeout_ms, k_u32_t *moved)
+{
+    struct xhci_class_device *class_device;
+    struct xhci_endpoint_state *endpoint;
+    struct xhci_trb trb;
+    k_u32_t done = 0;
+    k_u8_t code = 0;
+    k_u32_t left = 0;
+
+    if (device == NULL || buffer == NULL || moved == NULL) {
+        return -1;
+    }
+
+    *moved = 0;
+
+    class_device = class_device_of(device->slot);
+    endpoint = class_endpoint(class_device, in ? device->bulk_in_dci : device->bulk_out_dci);
+
+    if (class_device == NULL || endpoint == NULL) {
+        return -1;
+    }
+
+    __asm__ volatile("" : : : "memory");
+
+    if (length == 0u) {
+        /* A transfer of no bytes is a TRB of no bytes that still raises the
+         * event: it is how a command with no data stage is asked. */
+        trb.param = 0;
+        trb.status = 0;
+        trb.control = XHCI_TRB_TYPE(XHCI_TRB_NORMAL) | XHCI_TRB_IOC;
+        (void)endpoint_put(endpoint, &trb);
+    }
+
+    while (done < length) {
+        k_u64_t address = (k_u64_t)(uintptr_t)((const k_u8_t *)buffer + done);
+        k_size_t inside = (k_size_t)(address & (XHCI_PAGE - 1u));
+        k_size_t piece = XHCI_PAGE - inside;
+        k_u64_t physical;
+        bool last;
+
+        if (piece > (k_size_t)(length - done)) {
+            piece = (k_size_t)(length - done);
+        }
+
+        physical = usb_phys(address);
+
+        if (physical == 0u) {
+            return -1;
+        }
+
+        last = done + piece >= length;
+        trb.param = physical;
+        trb.status = (k_u32_t)piece;
+        trb.control = XHCI_TRB_TYPE(XHCI_TRB_NORMAL) | (last ? XHCI_TRB_IOC : XHCI_TRB_CHAIN);
+        (void)endpoint_put(endpoint, &trb);
+
+        done += (k_u32_t)piece;
+    }
+
+    __asm__ volatile("" : : : "memory");
+    doorbell(device->slot, endpoint->dci);
+
+    if (!wait_transfer(device->slot, endpoint->dci, timeout_ms, &code, &left)) {
+        return -1;
+    }
+
+    if (code != XHCI_CODE_SUCCESS && code != XHCI_CODE_SHORT) {
+        return -1;
+    }
+
+    *moved = left <= length ? length - left : length;
+
+    return 0;
+}
+
 /* --- one device ------------------------------------------------------------ */
 
 /* Give a slot back when the device is not the one this release wants. */
@@ -843,19 +1241,160 @@ static void disable_slot(k_u32_t slot)
 }
 
 /*
+ * The keyboard of the boot protocol: the configuration of the device is in
+ * `g_config`, the slot is addressed, and its endpoint of the reports is the
+ * one the class of the HID of the boot protocol names. The answer is true
+ * when the keyboard is armed and the console can read its reports.
+ */
+static bool keyboard_attach(k_u32_t slot, k_u32_t port, k_u32_t speed, k_u16_t vendor,
+                            k_u16_t product, k_u32_t length)
+{
+    struct usb_keyboard keyboard;
+    k_u32_t index;
+    k_u32_t dci;
+    k_u32_t interval;
+    k_u32_t max_packet;
+
+    parse_configuration(g_config, length, &keyboard);
+
+    if (!keyboard.found) {
+        return false;
+    }
+
+    if (g_keyboard.present) {
+        kinfo("usb: a second keyboard of the boot protocol on port %u is not used", (unsigned)port);
+        return false;
+    }
+
+    /* SET_PROTOCOL (boot): a keyboard of the HID has a report of eight bytes
+     * only in the boot protocol, and this driver reads the eight. */
+    if (!control_transfer(slot, 0x21u, 0x0Bu, 0u, keyboard.interface, 0u, NULL)) {
+        kwarn("usb: the keyboard did not take the boot protocol, its report is the one of the "
+              "HID");
+    }
+
+    dci = endpoint_dci(keyboard.endpoint);
+    interval = endpoint_interval(keyboard.interval, speed);
+    max_packet = keyboard.max_packet & 0x07FFu;
+
+    if (!configure_keyboard(slot, port, speed, dci, interval, max_packet)) {
+        kinfo("usb: port %u: the endpoint of the reports did not come up", (unsigned)port);
+        return false;
+    }
+
+    g_keyboard.present = true;
+    g_keyboard.slot = (k_u8_t)slot;
+    g_keyboard.dci = (k_u8_t)dci;
+    g_keyboard.interface = keyboard.interface;
+    g_keyboard.max_packet = (k_u16_t)max_packet;
+    k_input_hid_init(&g_hid);
+
+    /* Seven reports are in the ring of the endpoint before the first key
+     * arrives: a person who types while the boot still prints a line does
+     * not lose the first letter to the speed of the poll. */
+    for (index = 0; index < XHCI_KBD_BUFFERS; index++) {
+        k_u32_t cursor = g_keyboard.index;
+
+        memset(g_kbd_report[cursor], 0, K_INPUT_HID_REPORT);
+        {
+            struct xhci_trb *trb = &g_kbd_ring[cursor];
+
+            trb->param = trb_phys(g_kbd_report[cursor]);
+            trb->status = K_INPUT_HID_REPORT;
+            trb->control = XHCI_TRB_TYPE(XHCI_TRB_NORMAL) | XHCI_TRB_IOC | g_keyboard.cycle;
+        }
+        g_keyboard.index++;
+    }
+
+    __asm__ volatile("" : : : "memory");
+    doorbell(slot, dci);
+
+    kinfo("usb: keyboard %04x:%04x on port %u, slot %u, interface %u, %u bytes", (unsigned)vendor,
+          (unsigned)product, (unsigned)port, (unsigned)slot, (unsigned)keyboard.interface,
+          (unsigned)max_packet);
+
+    return true;
+}
+
+/*
+ * A device of a class: the pool of the class devices takes it, the class
+ * driver reads the configuration and turns its endpoints on, and the answer
+ * of the driver is the answer of the enumeration. A device the class cannot
+ * bring up gives its slot back.
+ */
+static bool class_attach(enum xhci_usb_class kind, k_u32_t slot, k_u32_t port, k_u32_t speed,
+                         k_u16_t vendor, k_u16_t product, k_u32_t length)
+{
+    struct port_x86_64_usb_config config;
+    struct xhci_class_device *device = NULL;
+    k_u32_t index;
+    bool attached;
+
+    for (index = 0; index < XHCI_DEVICES; index++) {
+        if (!g_class_device[index].used) {
+            device = &g_class_device[index];
+            break;
+        }
+    }
+
+    if (device == NULL) {
+        kinfo("usb: the pool of the class devices is full, the port %u is not used",
+              (unsigned)port);
+        return false;
+    }
+
+    memset(device, 0, sizeof(*device));
+    device->used = true;
+    device->slot = (k_u8_t)slot;
+    device->port = (k_u8_t)port;
+    device->speed = speed;
+    device->vendor = vendor;
+    device->product = product;
+    device->config = g_config[5];
+
+    device->view.slot = (k_u8_t)slot;
+    device->view.port = (k_u8_t)port;
+    device->view.speed = speed;
+    device->view.vendor = vendor;
+    device->view.product = product;
+    device->view.config = g_config[5];
+
+    config.bytes = g_config;
+    config.length = length;
+    config.value = g_config[5];
+
+    attached = kind == XHCI_USB_STORAGE ? port_x86_64_usb_storage_attach(&device->view, &config)
+                                        : port_x86_64_usb_net_attach(&device->view, &config);
+
+    if (!attached) {
+        device->used = false;
+    }
+
+    return attached;
+}
+
+/*
  * The enumeration of the device of one port: a slot, an address, the
- * descriptors of it, and the endpoint of the reports when the device is a
- * keyboard. The answer is true when a keyboard of the boot protocol was
- * found and is reporting.
+ * descriptor of the device and the configuration that carries a class this
+ * release drives. A device of the USB has one or more configurations and the
+ * first one is not always the one a driver wants - the network device of
+ * QEMU carries RNDIS in the first and CDC-ECM in the second - so every
+ * configuration is read until one names a class of this release.
+ *
+ * The answer is true when the device was brought up: a keyboard that reports,
+ * a stick that is a block device, or a wire that is a network device.
  */
 static bool enumerate_device(k_u32_t port, k_u32_t speed)
 {
-    struct usb_keyboard keyboard;
+    enum xhci_usb_class kind = XHCI_USB_NONE;
     k_u8_t code = 0;
     k_u32_t slot = 0;
     k_u32_t index;
     k_u32_t packet = ep0_packet(speed);
-    k_u32_t total;
+    k_u32_t total = 0;
+    k_u32_t chosen = 0;
+    k_u32_t configurations;
+    k_u32_t configuration;
     k_u16_t vendor = 0;
     k_u16_t product = 0;
 
@@ -921,91 +1460,60 @@ static bool enumerate_device(k_u32_t port, k_u32_t speed)
 
     vendor = (k_u16_t)(g_desc[8] | ((k_u16_t)g_desc[9] << 8));
     product = (k_u16_t)(g_desc[10] | ((k_u16_t)g_desc[11] << 8));
+    configurations = g_desc[17];
 
-    if (!control_transfer(slot, 0x80u, 6u, 0x0200u, 0u, 9u, g_desc)) {
-        kinfo("usb: port %u: the device has no configuration", (unsigned)port);
-        disable_slot(slot);
-        return false;
+    for (configuration = 0; configuration < configurations && configuration < 4u; configuration++) {
+        if (!control_transfer(slot, 0x80u, 6u, (k_u16_t)(0x0200u | configuration), 0u, 9u,
+                              g_desc)) {
+            break;
+        }
+
+        total = (k_u32_t)g_desc[2] | ((k_u32_t)g_desc[3] << 8);
+
+        if (total < 9u || total > sizeof(g_desc)) {
+            continue;
+        }
+
+        if (total > 9u && !control_transfer(slot, 0x80u, 6u, (k_u16_t)(0x0200u | configuration), 0u,
+                                            (k_u16_t)total, g_desc)) {
+            continue;
+        }
+
+        kind = classify_configuration(g_desc, total);
+
+        if (kind != XHCI_USB_NONE) {
+            memcpy(g_config, g_desc, total);
+            chosen = total;
+            break;
+        }
     }
 
-    total = (k_u32_t)g_desc[2] | ((k_u32_t)g_desc[3] << 8);
-    if (total < 9u || total > sizeof(g_desc)) {
-        total = 9u;
-    }
-
-    if (total > 9u && !control_transfer(slot, 0x80u, 6u, 0x0200u, 0u, (k_u16_t)total, g_desc)) {
-        disable_slot(slot);
-        return false;
-    }
-
-    parse_configuration(g_desc, total, &keyboard);
-
-    if (!keyboard.found) {
-        kinfo("usb: port %u: %04x:%04x is not a keyboard of the boot protocol", (unsigned)port,
-              (unsigned)vendor, (unsigned)product);
+    if (kind == XHCI_USB_NONE) {
+        kinfo("usb: port %u: %04x:%04x is not a device of a class this release drives",
+              (unsigned)port, (unsigned)vendor, (unsigned)product);
         disable_slot(slot);
         return false;
     }
 
     /* SET_CONFIGURATION: the configuration of the descriptor, with no
      * payload and the value at byte five. */
-    if (!control_transfer(slot, 0x00u, 9u, g_desc[5], 0u, 0u, NULL)) {
+    if (!control_transfer(slot, 0x00u, 9u, g_config[5], 0u, 0u, NULL)) {
         kinfo("usb: port %u: the device refused its configuration", (unsigned)port);
         disable_slot(slot);
         return false;
     }
 
-    /* SET_PROTOCOL (boot): a keyboard of the HID has a report of eight
-     * bytes only in the boot protocol, and this driver reads the eight. */
-    if (!control_transfer(slot, 0x21u, 0x0Bu, 0u, keyboard.interface, 0u, NULL)) {
-        kwarn("usb: the keyboard did not take the boot protocol, its report is the one of the "
-              "HID");
+    if (kind == XHCI_USB_KEYBOARD) {
+        if (keyboard_attach(slot, port, speed, vendor, product, chosen)) {
+            return true;
+        }
+    } else if (class_attach(kind, slot, port, speed, vendor, product, chosen)) {
+        return true;
     }
 
-    {
-        k_u32_t dci = endpoint_dci(keyboard.endpoint);
-        k_u32_t interval = endpoint_interval(keyboard.interval, speed);
-        k_u32_t max_packet = keyboard.max_packet & 0x07FFu;
+    disable_slot(slot);
 
-        if (!configure_keyboard(slot, port, speed, dci, interval, max_packet)) {
-            kinfo("usb: port %u: the endpoint of the reports did not come up", (unsigned)port);
-            disable_slot(slot);
-            return false;
-        }
-
-        g_keyboard.present = true;
-        g_keyboard.slot = (k_u8_t)slot;
-        g_keyboard.dci = (k_u8_t)dci;
-        g_keyboard.interface = keyboard.interface;
-        g_keyboard.max_packet = (k_u16_t)max_packet;
-        k_input_hid_init(&g_hid);
-
-        /* Seven reports are in the ring of the endpoint before the first key
-         * arrives: a person who types while the boot still prints a line
-         * does not lose the first letter to the speed of the poll. */
-        for (index = 0; index < XHCI_KBD_BUFFERS; index++) {
-            k_u32_t cursor = g_keyboard.index;
-
-            memset(g_kbd_report[cursor], 0, K_INPUT_HID_REPORT);
-            {
-                struct xhci_trb *trb = &g_kbd_ring[cursor];
-
-                trb->param = trb_phys(g_kbd_report[cursor]);
-                trb->status = K_INPUT_HID_REPORT;
-                trb->control = XHCI_TRB_TYPE(XHCI_TRB_NORMAL) | XHCI_TRB_IOC | g_keyboard.cycle;
-            }
-            g_keyboard.index++;
-        }
-
-        __asm__ volatile("" : : : "memory");
-        doorbell(slot, dci);
-
-        kinfo("usb: keyboard %04x:%04x on port %u, slot %u, interface %u, %u bytes",
-              (unsigned)vendor, (unsigned)product, (unsigned)port, (unsigned)slot,
-              (unsigned)keyboard.interface, (unsigned)max_packet);
-    }
-
-    return true;
+    return false;
 }
 
 /* --- the port of the controller -------------------------------------------- */
@@ -1478,6 +1986,7 @@ void port_x86_64_xhci_init(void)
 
     g_keyboard.present = false;
     g_running = false;
+    memset(g_class_device, 0, sizeof(g_class_device));
 
     if (!port_x86_64_pci_find_class(0x0Cu, 0x03u, 0x30u, &device)) {
         kdebug("xhci: the machine has no USB 3.0 controller");
@@ -1507,12 +2016,9 @@ void port_x86_64_xhci_init(void)
 
         kinfo("xhci: port %u: a device at speed %u", (unsigned)port, (unsigned)speed);
 
-        if (enumerate_device(port, speed)) {
-            /* One keyboard is the keyboard of the machine: a second one on
-             * another port is a device of the same class and there is no
-             * focus to give it. */
-            break;
-        }
+        /* Every port is enumerated: a laptop has a keyboard and a stick at
+         * the same time, and the second one is not a reason to stop. */
+        (void)enumerate_device(port, speed);
     }
 
     if (!g_keyboard.present) {

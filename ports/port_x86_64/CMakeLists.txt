@@ -1466,6 +1466,9 @@ add_executable(microos64
     src/pci.c
     src/ps2.c
     src/xhci.c
+    src/usb_storage.c
+    src/usb_net.c
+    src/netdev.c
     src/fbdev.c
     src/inputdev.c
     src/gdt.c

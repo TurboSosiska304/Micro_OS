@@ -484,6 +484,12 @@ void port_x86_64_virtio_blk_init(void);
  * disk. The boot prefers it to the IDE drive when both are there. */
 const char *port_x86_64_virtio_blk_root(void);
 
+/* The first partition of the stick of the USB (ADR 0040), NULL when the
+ * machine has no stick or the table names no partition this kernel reads.
+ * The boot prefers the disks it had before it: an internal disk is the root
+ * of a laptop with a stick in a port. */
+const char *port_x86_64_usb_storage_root(void);
+
 /*
  * Open the line of the virtio disk: the number is the one the configuration
  * space of the card names, and the entry of the table is the shared stub of

@@ -1146,6 +1146,7 @@ const char *port_x86_64_root_device(void)
     const char *boot = port_x86_64_module_root();
     const char *virtio = port_x86_64_virtio_blk_root();
     const char *ahci = port_x86_64_ahci_root();
+    const char *usb = port_x86_64_usb_storage_root();
 
     if (boot != NULL) {
         return boot;
@@ -1159,5 +1160,13 @@ const char *port_x86_64_root_device(void)
         return g_root;
     }
 
-    return ahci != NULL ? ahci : "ram0";
+    if (ahci != NULL) {
+        return ahci;
+    }
+
+    if (usb != NULL) {
+        return usb;
+    }
+
+    return "ram0";
 }
