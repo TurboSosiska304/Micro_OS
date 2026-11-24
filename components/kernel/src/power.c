@@ -198,7 +198,7 @@ int k_power_shutdown(enum k_power_action action, bool force)
         return rc;
     }
 
-    kinfo("power: the machine goes %s", action == K_POWER_OFF ? "off" : name);
+    kinfo("power: the machine goes down: %s", name);
 
     k_port_power(action);
 
