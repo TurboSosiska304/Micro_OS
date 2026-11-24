@@ -144,6 +144,55 @@ system any more, and the release says so and drops it.
   broken, and `idf-build` with the budget of the image checked.
 * **Catches**: the drift of a port nobody runs.
 
+## 11. The packages of a person (promised to 3.0)
+
+The person who uses 3.0 must be able to install **base applications from the
+repository of the project** and a **defined list of programs of BSD and Linux**,
+without building them by hand and without a toolchain on the target.
+
+* **Gate**: `make pkg-suite` - a fresh machine of 3.0, `pkg repo add` of the
+  repository of the release, `pkg -Sy`, then `pkg -S` of the list:
+  * **the base applications of this project**: the editor, the file manager, the
+    terminal, the shell tools of `/bin/ports`, the calculator, the archiver -
+    the programs of the tree that a person of a desktop uses;
+  * **the list of BSD and Linux programs**, versioned in `docs/packages.md`
+    with the name, the version, the licence and the digest of the source: the
+    permissive ones built by the tree's SDK with zero patches (sbase, 9base,
+    `less`, `neatvi`), and the copyleft ones (`nano`, `vim`, `git` if it fits)
+    **built outside the tree** by the repository - ADR 0025 allows a GPL
+    program as a package of the system and never as a file of the tree.
+  Each package is installed, run on a fixed input, and its answer checked; an
+  upgrade of a package to a new version, and a rollback of a broken one.
+* **Catches**: a package that needs a library the image does not have, a
+  repository that signs the index and not the sources, an install that leaves
+  the volume half-written.
+* **The repository** (`microos-progs`, ADR 0024) carries the packages, the
+  index and its signature; the list of `docs/packages.md` is a promise of the
+  release and is checked by the gate on every `rc`.
+
+## 12. A beginning of a GPU, expected and not promised
+
+A release line that says "the desktop" and no word about a graphics processor
+is a line that has not looked at the horizon. 3.0 **does not promise** a driver
+of a real GPU - a driver of Intel or AMD is a firmware blob (not free, ADR
+0025), a memory manager of its own and years of work - but the release line
+**expects to begin it**, and the shape of the beginning is:
+
+* a driver of **`virtio-gpu` 2D** behind `kernel/fb_ops.h` (the contract of
+  1.7, which the software path is the only implementation of today): a command
+  queue, resources, a framebuffer, a scanout - all of it in QEMU, all of it
+  checkable, and it is the machine the compositor of the desktop will use to
+  prove that a real scanout is not slower than a copy;
+* an **ADR** that says what a real GPU would need (firmware, a memory manager,
+  a command submission model, and the licence of the firmware), so that the
+  next line begins with a document and not with a surprise;
+* a gate, if the driver lands: `make gpu-smoke` - the desktop of 2.0 drawn by
+  `virtio-gpu`, a full frame and a damaged one, and the copy path of the
+  software fallback as the reference.
+
+What is **not** expected: a driver of a real GPU in 3.0, 3D, Vulkan, or a
+promise of any of them.
+
 ## The process of a major
 
 * **A deprecation is announced in the 2.x line**, with a shim that keeps the old

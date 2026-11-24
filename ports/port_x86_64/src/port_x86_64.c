@@ -1947,6 +1947,26 @@ int k_port_mutex_lock(k_port_mutex_t *mutex)
 
         k_port_exit_critical();
 
+        if (owner == PORT_MUTEX_BOOT && self != PORT_MUTEX_BOOT) {
+            /* The owner is the context the core booted on: it is resumed
+             * only when no task is ready, so a task that yields and retries
+             * is a task that never gets the lock. Hand it the CPU. */
+            static k_u32_t idle_waits;
+
+            /*
+             * The first time is a line of the debug log: the path is rare
+             * (a section long enough for a tick to split it while the idle
+             * context of the core holds it), and a person looking at a
+             * machine that seems slow wants to know it happened.
+             */
+            if (__atomic_add_fetch(&idle_waits, 1, __ATOMIC_RELAXED) == 1u) {
+                klog(K_LOG_LEVEL_DEBUG,
+                     "port: a task waited for a mutex of the boot context; the CPU was given");
+            }
+            port_x86_64_yield_to_idle();
+            continue;
+        }
+
         mutex_wait();
     }
 }
