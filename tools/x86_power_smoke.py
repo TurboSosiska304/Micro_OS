@@ -58,11 +58,13 @@ class Machine:
     nothing about the reset of the port.
     """
 
-    def __init__(self, image: str, disk: str, timeout: float, verbose: bool) -> None:
+    def __init__(self, image: str, disk: str, timeout: float, verbose: bool,
+                 extra: list | None = None) -> None:
         self.image = image
         self.disk = disk
         self.timeout = timeout
         self.verbose = verbose
+        self.extra = list(extra or [])
         self.buffer = b""
         self.process: subprocess.Popen | None = None
 
@@ -76,7 +78,11 @@ class Machine:
             "-m",
             "256",
             "-nographic",
-            *machine_args(self.disk),
+            # An `extra` list is a machine of its own (the negative of the
+            # ACPI: `-machine pc,acpi=off`), and the bus of the disk is named
+            # in it instead of in the default.
+            *([] if self.extra else machine_args(self.disk)),
+            *self.extra,
             *drive_args(self.image, self.disk),
         ]
 
@@ -263,6 +269,48 @@ def run(args) -> list:
         expect("the second shutdown is a success too", code == 0, f"the exit code was {code}")
     finally:
         second.close()
+
+    # --- the negative of the software switch-off: a firmware with no ACPI.
+    #
+    # The defect of the laptop of the report was not "the machine did not go
+    # off": the clean end had finished, the S5 request did not take, and the
+    # machine fell back into the idle loop and faulted. The machine of this
+    # run has no ACPI table at all (`-machine pc,acpi=off`), so the port has
+    # no block of PM1a to write and no FADT to read: it has to say so, stop
+    # the processor, and be a machine that is still there and quiet.
+    without_acpi = "q35,acpi=off" if args.disk == "ahci" else "pc,acpi=off"
+    empty = Machine(args.image, args.disk, args.timeout, args.verbose,
+                    extra=["-machine", without_acpi])
+    try:
+        empty.open()
+
+        if empty.process is not None and empty.process.stdin is not None:
+            empty.process.stdin.write(b"shutdown\n")
+            empty.process.stdin.flush()
+
+        time.sleep(2.0)
+
+        try:
+            empty._read(1.0)
+        except MachineGone:
+            pass
+
+        transcript = empty.buffer.decode("utf-8", errors="replace")
+        tail = transcript[-800:]
+
+        expect("a firmware without ACPI does not stop the clean end",
+               "shutdown: the clean end of the machine" in transcript, tail)
+        expect("the shutdown names the missing table", "no FADT" in transcript, tail)
+        expect("the shutdown says which button to press",
+               "this machine has no software switch-off; press the power button" in transcript,
+               tail)
+        expect("the machine does not fault on the way down", "exception" not in transcript, tail)
+        expect("the machine stops where it is instead of polling",
+               "the machine stops here" not in transcript, tail)
+        expect("the machine is still there, halted",
+               empty.process is not None and empty.process.poll() is None, tail)
+    finally:
+        empty.close()
 
     return checks
 
