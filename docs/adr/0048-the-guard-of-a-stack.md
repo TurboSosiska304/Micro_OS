@@ -49,7 +49,7 @@ parent sees a status, and the rest of the system keeps running.
 | Machine | A task that faults | What proves it |
 |---|---|---|
 | x86-64, program of ring 3 | the program is taken down, status 255 | `/bin/crash`, `/bin/nx`, `/bin/badptr`, `/bin/crash stack` |
-| x86-64, kernel task | the task is taken down, status 255 | `guard` of the shell, `tests/cases/test_guard.c` |
+| x86-64, kernel task | the task is taken down, status 255 | `guard` of the shell and its line in the log |
 | host (pthread) | the task is taken down, status 255 | `tests/cases/test_guard.c` |
 | board (FreeRTOS) | the machine stops, with the name of the task | the canary of FreeRTOS, section 5 |
 
@@ -138,8 +138,8 @@ not a second path: the descriptors close, the children are reparented to init,
 the parent is woken, and the log line names the task:
 
 ```
-x86-64: the stack of the task 'stack-test' (pid 42) reached the guard page at
-0x... (vector 8, rip 0x...); the task ends, the machine stays
+x86-64: the task 'stack-test' (pid 42) reached the guard page at 0x...
+x86-64: vector 8, rip 0x...: the task ends, the machine stays
 ```
 
 The boot context of a core (kmain on the core 0, the idle loop of an
@@ -213,8 +213,14 @@ executable. The audit is a refusal at `execve` and at the boot, and the port
 now leaves its answer in the log at every program:
 
 ```
-x86-64: the map of /bin/hello has no page both writable and executable
+x86-64: the map of a program is W^X
 ```
+
+The line is one short sentence and not the name of the file: it is written
+before the entry of a program, the console of the machine is a UART written
+byte by byte, and a longer line made the window server of `x86-vga-smoke` miss
+the registration of its clients (see "Consequences"). The audit itself is the
+same walk of the tables that the boot and every exec already made.
 
 The format of an image gains the one flag it has ever named: `K_EXEC_FLAG_WX`
 (bit 0 of the flags word, `kernel/exec.h`). The bit was an unknown flag and
@@ -268,6 +274,14 @@ port made before the tables are built.
   no longer exists. The decision does not change the locks; it makes the first
   fault visible with the name of the task, which is what a person needs to
   find the lock.
+* The report of the audit is one short line, and the lesson is worth keeping:
+  a longer line that named the file (the first shape of the change) made the
+  light desktop of `make x86-vga-smoke` lose the registration of its two
+  window clients, every run, because the console of a machine is a UART
+  written byte by byte and the entry of a program of the desktop followed the
+  line. The line is not the place to write a sentence of the size of a
+  terminal; the audit and its refusal are unchanged, and the name of the
+  program is the line of the task that runs it.
 * The `docs/debts.md` rows of K5 (a guard page under a kernel stack) and K8
   (the same, as a property of the substrate of the many cores) are closed by
   this decision on the machines with an MMU; the row of the board (K3, a
