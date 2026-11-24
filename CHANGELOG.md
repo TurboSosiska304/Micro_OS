@@ -45,6 +45,19 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   `make x86-disk-smoke` proves a file that survives a reset on the IDE channel,
   the SATA controller and the NVMe namespace - while a volume the list does not
   name and a volume of btrfs leave the SHA-256 of their image unchanged.
+- The door of a laptop, second iteration: a **hub** of the class 09 (the power
+  of its ports, the reset of one, the route string of a device behind it, four
+  tiers of eight ports), so a keyboard or a stick behind a dock is found; the
+  **hot-plug** of the root ports and of the hub ports, so a device inserted
+  after the boot is enumerated and one taken out leaves the input, the block
+  layer and the network without a panic; a **mouse** of the HID boot protocol
+  as the pointer of `/dev/input0` beside the PS/2 one (the wheel is a key of
+  the event contract, added to it and not taken from it); and the **line** of
+  the controller, MSI-X first with MSI and the legacy pin behind it, in place
+  of a poll of the event ring. The event ring is one consumer for the three
+  classes now - a completion of a bulk transfer of the network is not thrown
+  away by the pump of the console - which the wire of `usb-smoke` had been
+  losing. `make usb-smoke` is 58 checks.
 - The door of a laptop, USB (ADR 0040): `ports/port_x86_64/src/xhci.c` finds
   the controller of the bus (class 0x0C/0x03), resets it and programs it - a
   command ring and an event ring with its ERST, the slots and the contexts of
