@@ -15,12 +15,14 @@ mounts at `/data` (`mkfs.fat`, dose tools).
 
 The image is a whole disk: an MBR, one Linux partition at LBA 2048 and a
 volume in it, with the `.mox` images of the build in `/bin`, an empty
-`/etc/init.d` and the settings of the machine in `/etc/setting`. The ext2
+`/etc/init.d` and the settings of the machine in `/etc/setting`. The MicroFS
+volume is version 4 and carries the journal of ADR 0047; `--no-journal` makes
+the version 3 volume of 1.8, which is the control half of the gate of a cut. The ext2
 image is the same disk with a FAT32 partition after the root.
 
     tools/x86_image.py [--image PATH] [--build DIR] [--mkfs PATH]
                        [--fs mfs|ext2] [--size-mb N] [--data-mb N]
-                       [--bus ide|virtio] [--volumes LIST]
+                       [--bus ide|virtio] [--volumes LIST] [--no-journal]
                        [--source-date-epoch N] [--verbose]
 
 The bus is a property of the machine and not of the medium: the same bytes of
@@ -582,7 +584,7 @@ def extra_entries(extra: list) -> list:
 
 
 def microfs_command(entries: list, image: str, size_mb: int, mkfs: str, epoch: int,
-                    volumes: tuple = VOLUMES) -> list:
+                    volumes: tuple = VOLUMES, journal: bool = True) -> list:
     """The call of the host tool that writes a MicroFS volume in the image.
 
     `mkfs` names the volumes it formatted: the list of /etc/volumes is the
@@ -602,6 +604,12 @@ def microfs_command(entries: list, image: str, size_mb: int, mkfs: str, epoch: i
         "--volumes",
         ",".join(volumes) if volumes else "none",
     ]
+
+    # The volume of the release is version 4: the journal of ADR 0047. A
+    # caller that wants the volume of 1.8 asks for none, which is the other
+    # half of the gate of the format.
+    if journal:
+        command.append("--journal")
 
     for kind, path, payload, mode in entries:
         if kind == "dir":
@@ -952,6 +960,7 @@ def build_image(
     data_mb: int = EXT2_DATA_MB,
     block_size: int = EXT2_BLOCK_BYTES,
     volumes: tuple = VOLUMES,
+    journal: bool = True,
 ) -> int:
     """Write the image with the programs of the build and /etc/setting.
 
@@ -1148,7 +1157,7 @@ def build_image(
 
         return build_ext2_image(image, entries, size_mb, data_mb, epoch, verbose, block_size)
 
-    command = microfs_command(entries, image, size_mb, mkfs, epoch, volumes)
+    command = microfs_command(entries, image, size_mb, mkfs, epoch, volumes, journal)
 
     os.makedirs(os.path.dirname(os.path.abspath(image)), exist_ok=True)
 
@@ -1250,11 +1259,20 @@ def main(argv: list) -> int:
         f"(default: {','.join(VOLUMES)}; `none` writes no list and the volume "
         "is read-only)",
     )
+    parser.add_argument(
+        "--no-journal",
+        action="store_true",
+        help="make a version 3 volume (no journal, the format of 1.8)",
+    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
 
     if args.size_mb is None:
         args.size_mb = EXT2_DEFAULT_MB if args.fs == "ext2" else IMAGE_MB
+
+    if args.no_journal and args.fs == "ext2":
+        print("--no-journal is the format of MicroFS: ext2 has no journal yet", file=sys.stderr)
+        return 2
 
     if args.block_size != EXT2_BLOCK_BYTES and args.fs != "ext2":
         print("--block-size is the grain of the ext2 volume: MicroFS counts 1024", file=sys.stderr)
@@ -1289,6 +1307,7 @@ def main(argv: list) -> int:
         args.data_mb,
         args.block_size,
         volumes,
+        not args.no_journal,
     )
 
     if rc == 0:

@@ -306,7 +306,7 @@ static k_u64_t mkfs_fixed_time(void)
 }
 
 static int build_image(const char *image_path, k_u32_t size_mb, k_u32_t start_lba,
-                       const struct mkfs_mfs_entry *entries, k_size_t count)
+                       const struct mkfs_mfs_entry *entries, k_size_t count, k_u32_t flags)
 {
     struct mkfs_device volume;
     struct k_blockdev device;
@@ -357,7 +357,7 @@ static int build_image(const char *image_path, k_u32_t size_mb, k_u32_t start_lb
     device.ops = &g_mkfs_ops;
     device.ctx = &volume;
 
-    rc = mfs_format(&device, 256);
+    rc = mfs_format_ex(&device, 256, flags == MKFS_MFS_JOURNAL ? MFS_FORMAT_JOURNAL : 0u);
     if (rc != MFS_OK) {
         fprintf(stderr, "mkfs: cannot format the volume (%s)\n", mfs_strerror(rc));
         close(fd);
@@ -403,8 +403,9 @@ static int build_image(const char *image_path, k_u32_t size_mb, k_u32_t start_lb
     return 0;
 }
 
-int mkfs_mfs_build_image(const char *image_path, k_u32_t size_mb, k_u32_t start_lba,
-                         const struct mkfs_mfs_entry *entries, k_size_t count, k_u64_t epoch)
+int mkfs_mfs_build_image_ex(const char *image_path, k_u32_t size_mb, k_u32_t start_lba,
+                            const struct mkfs_mfs_entry *entries, k_size_t count, k_u64_t epoch,
+                            k_u32_t flags)
 {
     int rc;
 
@@ -416,9 +417,15 @@ int mkfs_mfs_build_image(const char *image_path, k_u32_t size_mb, k_u32_t start_
     s_epoch = epoch;
     mfs_set_time_source(mkfs_fixed_time);
 
-    rc = build_image(image_path, size_mb, start_lba, entries, count);
+    rc = build_image(image_path, size_mb, start_lba, entries, count, flags);
 
     mfs_set_time_source(NULL);
 
     return rc;
+}
+
+int mkfs_mfs_build_image(const char *image_path, k_u32_t size_mb, k_u32_t start_lba,
+                         const struct mkfs_mfs_entry *entries, k_size_t count, k_u64_t epoch)
+{
+    return mkfs_mfs_build_image_ex(image_path, size_mb, start_lba, entries, count, epoch, 0u);
 }

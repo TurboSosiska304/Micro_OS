@@ -24,6 +24,7 @@ if(NOT ESP_PLATFORM)
         cases/test_fuzz.c
         cases/test_mfs.c
         cases/test_mfs_format.c
+        cases/test_mfs_journal.c
         cases/test_mfs_persistence.c
         cases/test_mfs_repair.c
         cases/test_mfs_many.c
