@@ -2881,12 +2881,15 @@ def run_desktop(
                 picture is not None and picture.pixel(4, VBE_HEIGHT - 4) == PANEL_LIGHT_RGB,
                 "the panel of the light theme is not its surface",
             )
+            sheet = (
+                picture.pixel(WM_EDIT_RECT[0] + 20, WM_EDIT_RECT[1] + 60)
+                if picture is not None
+                else None
+            )
             expect(
                 "the light theme is the sheet of a window",
-                picture is not None
-                and picture.pixel(WM_EDIT_RECT[0] + 20, WM_EDIT_RECT[1] + 60)
-                == palette_rgb(255, 255, 255),
-                "the body of the editor of the light theme is not white",
+                sheet == palette_rgb(255, 255, 255),
+                f"the body of the editor of the light theme is {sheet!r}, not white",
             )
 
             machine.keys(["alt-f4"])
