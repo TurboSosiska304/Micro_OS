@@ -46,4 +46,14 @@ int k_port_console_getchar(void);
  */
 int k_port_console_poll(void);
 
+/*
+ * The size of the console of the machine in cells: the rows and the columns
+ * a full-screen program is told through TIOCGWINSZ (ADR 0051 §6). A port
+ * answers the screen it has - 80x25 of the text mode of the VGA, 160x50 of the
+ * framebuffer of ADR 0023, the 80x25 of the panel of the board, the real
+ * terminal of the host process - and a port with no screen of its own answers
+ * 80x25.
+ */
+void k_port_console_size(k_u16_t *rows, k_u16_t *columns);
+
 #endif /* MICRO_OS_KERNEL_PORT_CONSOLE_H */

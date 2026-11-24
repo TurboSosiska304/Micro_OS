@@ -17,6 +17,7 @@
 #include "kernel/port_task.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
+#include "kernel/tty.h"
 #include "kernel/vfs.h"
 #include "kernel/wait.h"
 
@@ -384,6 +385,21 @@ static k_ssize_t sys_read(ksys_arg_t fd, ksys_arg_t buf, ksys_arg_t count, ksys_
     K_UNUSED(a5);
 
     if (file == NULL) {
+        /*
+         * The descriptor 0 is the terminal of the task when nothing was
+         * opened on it, the same rule as the console of 1 and 2 for a write
+         * (ADR 0051 §2): a program that was written for a Unix finds its
+         * keyboard there and never opens `/dev/tty`.
+         */
+        if (fd == 0) {
+            rc = buffer_check(buf, count);
+            if (rc != 0) {
+                return rc;
+            }
+
+            return k_tty_read((char *)(uintptr_t)buf, (k_size_t)count);
+        }
+
         return KERR_BADF;
     }
 
@@ -646,9 +662,14 @@ static k_u16_t poll_entry(ksys_arg_t fd, k_u16_t events)
     if (file == NULL) {
         /* The descriptors 1 and 2 are the console of the system when they
          * are not open as a file (the same rule as write), and it is always
-         * ready to take a byte. */
+         * ready to take a byte. The descriptor 0 is the terminal of the task,
+         * ready when a key waits (ADR 0051 §2). */
         if (fd == 1 || fd == 2) {
             return (k_u16_t)(events & (KSYS_POLLIN | KSYS_POLLOUT));
+        }
+
+        if (fd == 0) {
+            return ((events & KSYS_POLLIN) != 0 && k_tty_input_ready()) ? KSYS_POLLIN : 0;
         }
 
         return KSYS_POLLERR;
@@ -670,8 +691,8 @@ static k_u16_t poll_entry(ksys_arg_t fd, k_u16_t events)
      * knows. The path of the open file is the name it was opened with, which
      * is the whole of the identity a device of this system has.
      */
-    if (strcmp(file->path, "/dev/tty0") == 0) {
-        if ((events & KSYS_POLLIN) != 0 && k_console_poll() >= 0) {
+    if (strcmp(file->path, "/dev/tty0") == 0 || strcmp(file->path, "/dev/tty") == 0) {
+        if ((events & KSYS_POLLIN) != 0 && k_tty_input_ready()) {
             revents |= KSYS_POLLIN;
         }
 
@@ -1566,6 +1587,15 @@ static k_ssize_t sys_ioctl(ksys_arg_t fd, ksys_arg_t cmd, ksys_arg_t arg, ksys_a
     K_UNUSED(a5);
 
     if (file == NULL) {
+        /*
+         * The descriptors 0, 1 and 2 are the terminal of the task while they
+         * are not open: a program asks it for the mode and the size before it
+         * draws anything (ADR 0051 §2, §3).
+         */
+        if (fd <= 2) {
+            return k_tty_ioctl((k_u32_t)cmd, (k_u64_t)arg);
+        }
+
         return KERR_BADF;
     }
 

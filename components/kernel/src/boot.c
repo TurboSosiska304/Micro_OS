@@ -9,6 +9,7 @@
 #include "kernel/panic.h"
 #include "kernel/port.h"
 #include "kernel/sched.h"
+#include "kernel/tty.h"
 #include "kernel/version.h"
 
 #define KERNEL_MAX_SUBSYS 32
@@ -20,6 +21,7 @@ static int sched_subsys_init(void)
     k_sched_init();
     kmm_init();
     ksys_init();
+    k_tty_init();
     return 0;
 }
 

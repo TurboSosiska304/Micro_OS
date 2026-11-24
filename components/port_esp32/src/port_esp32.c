@@ -274,6 +274,21 @@ int k_port_console_poll(void)
     return (int)c;
 }
 
+/*
+ * The size of the console of the board: the panel is 80 columns of 25 rows
+ * (docs/ports/esp32/hardware.md), and a program of the board has no window to
+ * draw in that would be another number.
+ */
+void k_port_console_size(k_u16_t *rows, k_u16_t *columns)
+{
+    if (rows != NULL) {
+        *rows = 25u;
+    }
+    if (columns != NULL) {
+        *columns = 80u;
+    }
+}
+
 /* --- memory --- */
 
 k_size_t k_port_heap_free(void)

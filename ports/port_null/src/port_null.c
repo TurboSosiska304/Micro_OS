@@ -41,6 +41,17 @@ int k_port_console_poll(void)
     return -1;
 }
 
+/* The null port has no screen: the size of the terminals of this system. */
+void k_port_console_size(k_u16_t *rows, k_u16_t *columns)
+{
+    if (rows != NULL) {
+        *rows = 25u;
+    }
+    if (columns != NULL) {
+        *columns = 80u;
+    }
+}
+
 /*
  * The memory a program can map. This machine has no page tables of its own
  * for a program - the board shares the memory of the kernel and the simulator

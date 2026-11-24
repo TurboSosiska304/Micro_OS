@@ -42,11 +42,13 @@
 
 /*
  * The escape sequences the console reads: the pair of the `clear` command of
- * the shell (ESC[2J, ESC[H) and the SGR sequences of the colours
- * (ESC[...m, kernel/ansi.h). A window is not a terminal and the bytes are not
- * for a terminal emulator, so the port reads the sequences itself: the state
- * below is the whole parser - text, after ESC, inside a CSI until the final
- * byte - and a sequence of any other kind is dropped instead of being
+ * the shell (ESC[2J, ESC[H), the sequences that put the cursor and erase a
+ * part of the screen (CUP, CUU/CUD/CUF/CUB, CHA, VPA, ED, EL) that a
+ * full-screen program draws with (ADR 0051 §7), and the SGR sequences of the
+ * colours (ESC[...m, kernel/ansi.h). A window is not a terminal and the bytes
+ * are not for a terminal emulator, so the port reads the sequences itself: the
+ * state below is the whole parser - text, after ESC, inside a CSI until the
+ * final byte - and a sequence of any other kind is dropped instead of being
  * printed.
  */
 #define CONSOLE_TEXT 0u
@@ -94,6 +96,16 @@ static k_size_t s_params_len;
 const char *port_x86_64_console_name(void)
 {
     return s_screen != NULL ? s_screen->name : "none";
+}
+
+void port_x86_64_console_size(k_u16_t *rows, k_u16_t *columns)
+{
+    if (rows != NULL) {
+        *rows = (s_screen != NULL && s_screen->rows > 0) ? (k_u16_t)s_screen->rows : 25u;
+    }
+    if (columns != NULL) {
+        *columns = (s_screen != NULL && s_screen->columns > 0) ? (k_u16_t)s_screen->columns : 80u;
+    }
 }
 
 /* The attribute of a letter written now: the SGR state over the pair of the
@@ -261,22 +273,188 @@ static void params_add(char character)
     }
 }
 
+/* The `index`-th number of the parameter list: 0 for a missing one, which is
+ * what a terminal reads as "the default of this sequence". The list is the
+ * bytes between "ESC[" and the final byte, digits and semicolons. */
+static int params_get(k_size_t index)
+{
+    k_size_t field = 0;
+    k_size_t i;
+    int value = 0;
+    bool seen = false;
+
+    for (i = 0; i < s_params_len; i++) {
+        char c = s_params[i];
+
+        if (c == ';') {
+            if (field == index) {
+                return seen ? value : 0;
+            }
+            field++;
+            value = 0;
+            seen = false;
+            continue;
+        }
+
+        if (field == index) {
+            value = value * 10 + (c - '0');
+            if (value > 9999) {
+                value = 9999;
+            }
+            seen = true;
+        }
+    }
+
+    return (field == index && seen) ? value : 0;
+}
+
+static int clamp_cell(int value, int limit)
+{
+    if (value < 0) {
+        return 0;
+    }
+    if (value >= limit) {
+        return limit - 1;
+    }
+
+    return value;
+}
+
+/* The cursor is put at a cell, 1-based in the sequence and 0-based here: a
+ * row or a column of zero is the first one, as a terminal reads it. */
+static void cursor_to(int row, int column)
+{
+    s_row = clamp_cell(row > 0 ? row - 1 : 0, s_screen->rows);
+    s_column = clamp_cell(column > 0 ? column - 1 : 0, s_screen->columns);
+    cursor_update();
+}
+
+/* Erase with the colour of the text that is being written now, which is what
+ * a terminal does with the paper of the current SGR state. */
+static void erase_cells(int row, int from, int to)
+{
+    int column;
+
+    for (column = from; column < to; column++) {
+        s_screen->put(row, column, ' ', pen_attr());
+    }
+}
+
+/* ESC[J: the part of the screen the parameter names. */
+static void erase_display(int mode)
+{
+    if (mode == 2 || mode == 3) {
+        screen_clear();
+        return;
+    }
+
+    if (mode == 1) {
+        int row;
+
+        for (row = 0; row < s_row; row++) {
+            erase_cells(row, 0, s_screen->columns);
+        }
+        erase_cells(s_row, 0, s_column + 1);
+    } else {
+        int row;
+
+        erase_cells(s_row, s_column, s_screen->columns);
+        for (row = s_row + 1; row < s_screen->rows; row++) {
+            erase_cells(row, 0, s_screen->columns);
+        }
+    }
+
+    cursor_update();
+}
+
+/* ESC[K: the part of the line the parameter names. */
+static void erase_line(int mode)
+{
+    if (mode == 2) {
+        erase_cells(s_row, 0, s_screen->columns);
+    } else if (mode == 1) {
+        erase_cells(s_row, 0, s_column + 1);
+    } else {
+        erase_cells(s_row, s_column, s_screen->columns);
+    }
+
+    cursor_update();
+}
+
 /* The final byte of a CSI sequence: the sequences this system understands,
  * and a silent end for every other one. */
 static void csi_final(char character)
 {
     s_escape = CONSOLE_TEXT;
 
-    if (character == 'm') {
+    switch (character) {
+    case 'm':
         (void)k_ansi_sgr_text(&s_ansi, s_params, s_params_len);
-    } else if (character == 'J') {
-        screen_clear(); /* ESC[2J: the cells and the cursor */
-    } else if (character == 'H') {
-        s_row = 0;
-        s_column = 0;
+        break;
+    case 'H':
+    case 'f':
+        /* CUP: the cursor goes to a cell, 1-based, the default 1;1. */
+        cursor_to(params_get(0), params_get(1));
+        break;
+    case 'A': {
+        int count = params_get(0);
+
+        if (count < 1) {
+            count = 1;
+        }
+        s_row = clamp_cell(s_row - count, s_screen->rows);
         cursor_update();
+        break;
     }
-    /* Any other final byte ends the sequence and leaves no trace. */
+    case 'B': {
+        int count = params_get(0);
+
+        if (count < 1) {
+            count = 1;
+        }
+        s_row = clamp_cell(s_row + count, s_screen->rows);
+        cursor_update();
+        break;
+    }
+    case 'C': {
+        int count = params_get(0);
+
+        if (count < 1) {
+            count = 1;
+        }
+        s_column = clamp_cell(s_column + count, s_screen->columns);
+        cursor_update();
+        break;
+    }
+    case 'D': {
+        int count = params_get(0);
+
+        if (count < 1) {
+            count = 1;
+        }
+        s_column = clamp_cell(s_column - count, s_screen->columns);
+        cursor_update();
+        break;
+    }
+    case 'G':
+        s_column = clamp_cell(params_get(0) - 1, s_screen->columns);
+        cursor_update();
+        break;
+    case 'd':
+        s_row = clamp_cell(params_get(0) - 1, s_screen->rows);
+        cursor_update();
+        break;
+    case 'J':
+        erase_display(params_get(0));
+        break;
+    case 'K':
+        erase_line(params_get(0));
+        break;
+    default:
+        /* Any other final byte ends the sequence and leaves no trace: the
+         * cursor of ESC[?25l is not a cell of this screen. */
+        break;
+    }
 
     s_params_len = 0;
 }

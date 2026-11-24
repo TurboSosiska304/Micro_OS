@@ -163,17 +163,15 @@ static void com1_write(const char *data, k_size_t len)
             continue;
         }
 
-        /* Inside a CSI sequence: its final byte ends it. */
+        /* Inside a CSI sequence: its final byte ends it. The serial log is
+         * text and not a terminal, so the sequence is dropped whole - the
+         * colours of the SGR ones and the moves of the cursor alike (ADR
+         * 0051 §7): a person reading the file of COM1 reads the lines a
+         * program wrote and not the bytes that placed them. */
         com1_hold(c);
         if (c >= '@' && c <= '~') {
-            bool sgr = (c == 'm');
-
             g_com1_state = COM1_TEXT;
-            if (!sgr) {
-                com1_flush();
-            } else {
-                g_com1_len = 0;
-            }
+            g_com1_len = 0;
         }
     }
 }
@@ -326,6 +324,12 @@ int k_port_console_poll(void)
     }
 
     return -1;
+}
+
+/* The size of the screen in cells, for TIOCGWINSZ of a program (ADR 0051). */
+void k_port_console_size(k_u16_t *rows, k_u16_t *columns)
+{
+    port_x86_64_console_size(rows, columns);
 }
 
 /* --- the calibration of the processor clock --- */
