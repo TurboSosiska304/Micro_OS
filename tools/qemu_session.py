@@ -33,19 +33,42 @@ import time
 PROMPT = "microos> "
 PROMPT_BYTES = PROMPT.encode("ascii")
 
-# The two buses a disk of the port can be on: the legacy IDE channel of
-# ADR 0008 and the virtio-blk device of ADR 0037. The image is one file and
-# the bus is the machine, so a smoke test of the same image on the second bus
-# is the same bytes of the medium and another device under them.
-DISKS = ("ide", "virtio")
+# The buses a disk of the port can be on: the legacy IDE channel of ADR 0008,
+# the virtio-blk device of ADR 0037, and the SATA controller of a chipset
+# (ADR 0041). The image is one file and the bus is the machine, so a smoke
+# test of the same image on another bus is the same bytes of the medium and
+# another device under them.
+DISKS = ("ide", "virtio", "ahci")
 
 
 def drive_args(image: str, disk: str = "ide") -> list:
-    """The `-drive` arguments of a disk image on one of the two buses."""
+    """The `-drive` arguments of a disk image on one of the buses.
+
+    The SATA disk is attached to the first port of the AHCI controller of the
+    machine (the bus `ide.0` of `-M q35`): the controller is the one the
+    chipset has, and the drive is a device of that bus and not of the legacy
+    channel.
+    """
     if disk == "virtio":
         return ["-drive", f"file={image},format=raw,if=virtio,cache=writeback"]
 
+    if disk == "ahci":
+        return [
+            "-drive", f"file={image},format=raw,if=none,id=ahci0,cache=writeback",
+            "-device", "ide-hd,drive=ahci0,bus=ide.0",
+        ]
+
     return ["-drive", f"file={image},format=raw,if=ide,index=0,cache=writeback"]
+
+
+def machine_args(disk: str = "ide") -> list:
+    """The `-machine` arguments the bus needs, empty for the default machine.
+
+    The legacy channel and the virtio card are devices of the i440fx machine
+    of the port; the SATA controller of a chipset is the one of the q35
+    machine, which has no IDE channel at all - the disk of a laptop.
+    """
+    return ["-M", "q35"] if disk == "ahci" else []
 
 
 def disk_name(disk: str = "ide") -> str:
@@ -54,7 +77,13 @@ def disk_name(disk: str = "ide") -> str:
     The boot names the first partition of it by that name plus "p1", and the
     checks of a smoke test are about the words the port prints.
     """
-    return "virtio0" if disk == "virtio" else "ata0"
+    if disk == "virtio":
+        return "virtio0"
+
+    if disk == "ahci":
+        return "ahci0"
+
+    return "ata0"
 
 
 def root_name(disk: str = "ide") -> str:
@@ -119,6 +148,7 @@ class Machine:
             "-no-reboot",
         ]
 
+        command += machine_args(self.disk)
         command += drive_args(self.image, self.disk)
 
         if self.net:
