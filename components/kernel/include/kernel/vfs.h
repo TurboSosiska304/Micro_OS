@@ -288,6 +288,29 @@ int vfs_type_find(const char *name);
 int vfs_mount_type(const char *point, const char *type, const char *device);
 
 /*
+ * The mount that asks for the writes (ADR 0041 §2). A volume of a medium
+ * with the door of the writes - the disks a controller found - is mounted
+ * read-write only when the rule of kernel/volume.c allows it: the superblock
+ * carries the mark of this system and `/etc/volumes` names the device. The
+ * refusal is KERR_ROFS and the sentence of the rule is in the log; nothing
+ * of the volume was read or written by the type.
+ *
+ * A medium without the door - the memory of the machine, the flash of the
+ * board, the image of the tests - is mounted as vfs_mount_type() mounts it:
+ * there is no rule to ask.
+ */
+int vfs_mount_type_write(const char *point, const char *type, const char *device);
+
+/*
+ * The second half of the mount of the root: the root is in the tree, so the
+ * `/etc/volumes` of its own volume can be read, and the boot decides whether
+ * the mount may write. A refusal (KERR_ROFS) leaves the mount in the tree and
+ * read-only; a medium without the door is read-write, as every release
+ * before the rule had it.
+ */
+int vfs_mount_root_writes(const char *point, const char *device);
+
+/*
  * Unmount a filesystem.
  *
  * KERR_NOENT means that nothing is mounted at the point, KERR_INVAL that
@@ -309,6 +332,17 @@ k_size_t vfs_mount_count(void);
 
 /* The name of a mounted filesystem. */
 const char *vfs_mount_name(k_size_t index);
+
+/*
+ * The volume behind a mount, the type that mounted it, and whether the mount
+ * may write: the three answers of /proc/mounts, so that a volume mounted
+ * read-write says `rw` and one the rule left alone says `ro` (ADR 0041 §2).
+ * A mount a filesystem made for itself has no device and no type, and both
+ * answers are NULL; such a mount is read-write.
+ */
+const char *vfs_mount_device(k_size_t index);
+const char *vfs_mount_type_name(k_size_t index);
+bool vfs_mount_is_read_only(k_size_t index);
 
 /* The table of the volumes mounted by the boot. */
 #define VFS_FSTAB_PATH "/etc/fstab"
