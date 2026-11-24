@@ -17,6 +17,7 @@
 #   --quick    the short smokes only: no 600-second session, no board
 #   --no-board the board of the ESP32 is not on the serial port of this machine
 #   --log      where the logs go (default: /tmp/opencode/release-gate)
+#   --no-wait  the host is not waited for: the gate starts on a busy machine
 #
 # A gate that fails does not stop the run: the exit code is the number of the
 # gates that failed, and every line of the table says its own answer.
@@ -37,6 +38,7 @@ while [ $# -gt 0 ]; do
         --no-board) BOARD=0; shift ;;
         --log) LOGDIR="$2"; shift 2 ;;
         --serial) SERIAL="$2"; shift 2 ;;
+        --no-wait) NOWAIT=1; shift ;;
         *) echo "release-gate: unknown argument $1" >&2; exit 2 ;;
     esac
 done
@@ -64,6 +66,41 @@ if [ "${FREE_MB:-0}" -lt 2048 ]; then
     echo "release-gate: /tmp has ${FREE_MB} MB free, the images of the gates need 2 GB" >&2
     exit 2
 fi
+
+# The host has to be quiet: the smokes of QEMU lose a console, a frame or a
+# boot under the load of the builds of another lane, and a gate of the release
+# that runs beside one reports flakes of the host as if they were defects
+# (x86-smoke answered 154 blocks of 310 in the gate of 1.8.0 with three lanes
+# building on the same twelve cores, and 405 checks alone a minute later). The
+# gate waits for the load of the minute to fall under half of the cores, says
+# how long it waited, and `--no-wait` takes the machine as it is.
+CORES="$(nproc)"
+LIMIT=$((CORES / 2))
+if [ "$LIMIT" -lt 2 ]; then
+    LIMIT=2
+fi
+WAITED=0
+if [ "${NOWAIT:-0}" -eq 0 ]; then
+    while :; do
+        LOAD1="$(cut -d' ' -f1 /proc/loadavg)"
+        BUSY="$(awk -v l="$LOAD1" -v m="$LIMIT" 'BEGIN { print (l > m) ? 1 : 0 }')"
+        if [ "$BUSY" -eq 0 ]; then
+            break
+        fi
+        if [ "$WAITED" -ge "${WAIT_MAX:-1800}" ]; then
+            echo "release-gate: the load is $LOAD1 on $CORES core(s) after ${WAITED}s of waiting" \
+                 "- the numbers below are of a busy host" >&2
+            break
+        fi
+        if [ "$WAITED" -eq 0 ]; then
+            echo "release-gate: the load is $LOAD1, waiting for $LIMIT (a quiet host)"
+        fi
+        sleep 15
+        WAITED=$((WAITED + 15))
+    done
+fi
+printf '| the host | %s core(s), load %s, waited %s s |\n' "$CORES" \
+    "$(cut -d' ' -f1 /proc/loadavg)" "$WAITED" >> "$LOGDIR/table.txt"
 
 # The smokes of QEMU are sensitive to the load of the host - the tree says so in
 # several places, and a gate that runs one after another on a machine that also
