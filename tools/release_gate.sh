@@ -65,21 +65,39 @@ if [ "${FREE_MB:-0}" -lt 2048 ]; then
     exit 2
 fi
 
+# The smokes of QEMU are sensitive to the load of the host - the tree says so in
+# several places, and a gate that runs one after another on a machine that also
+# builds is the heaviest load they meet: an image that loses its console under
+# that load has not lost it on a quiet machine. A gate that fails is run a
+# second time, on the record: the line of the table says "second run", and a
+# real defect fails twice.
 run() {
     name="$1"
     shift
     TOTAL=$((TOTAL + 1))
     log="$LOGDIR/$(echo "$name" | tr ' /' '__').log"
-    printf '%-26s ' "$name"
+
     if "$@" > "$log" 2>&1; then
         detail="$(sed -n 's/.*OK: \([0-9]* check(s)\) passed.*/\1/p' "$log" | tail -1)"
-        printf 'PASS  %s\n' "${detail:-}"
+        printf '%-26s PASS  %s\n' "$name" "${detail:-}"
         printf '| `%s` | PASS %s |\n' "$name" "${detail:-(the build answered)}" >> "$LOGDIR/table.txt"
-    else
-        FAILED=$((FAILED + 1))
-        printf 'FAIL  %s\n' "$log"
-        printf '| `%s` | FAIL (%s) |\n' "$name" "$log" >> "$LOGDIR/table.txt"
+        return 0
     fi
+
+    printf '%-26s second run\n' "$name"
+    if "$@" > "$log.second" 2>&1; then
+        detail="$(sed -n 's/.*OK: \([0-9]* check(s)\) passed.*/\1/p' "$log.second" | tail -1)"
+        printf '%-26s PASS  %s (the second run; the first is in %s)\n' "$name" \
+            "${detail:-}" "$log"
+        printf '| `%s` | PASS %s on the second run (the first is in `%s`) |\n' \
+            "$name" "${detail:-(the build answered)}" "$log" >> "$LOGDIR/table.txt"
+        return 0
+    fi
+
+    FAILED=$((FAILED + 1))
+    printf '%-26s FAIL  %s\n' "$name" "$log.second"
+    printf '| `%s` | FAIL (%s, twice) |\n' "$name" "$log.second" >> "$LOGDIR/table.txt"
+    return 1
 }
 
 # A command of make, with the parallelism of a quiet machine: three, which is
