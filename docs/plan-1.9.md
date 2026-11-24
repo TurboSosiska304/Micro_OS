@@ -16,6 +16,18 @@ over (the terminal and the wire) and the half of the accounts it left open.
 Each lane is a branch of `release_candidate` with its own gates; a lane that
 does not fit moves to 2.0 without rewriting the promise.
 
+## Where the lanes stand (1.9.0-rc1)
+
+| Lane | State |
+|---|---|
+| L1 wake | **in.** The arm/sleep/disarm pair under the lock of the object, a wake that runs the queue of the core, and the sleep of the port cut by the wake: `lat_pipe_p50` of x86-64 is **19 968 ns** and the host answers a pipe in **3 µs** (ADR 0046). What the lane cost the tree: a sleep that answered before its deadline, which the gate of the release found on the merged tree and which is fixed with a case of its own. |
+| L2 journal | **in.** A volume of version 4 with a write-ahead log in `META`, a draft that is removed or replayed at the mount, 221 points of a cut held on the host and twenty on the machine (ADR 0047). ext2's journal is not: the form and the criteria are in the debts. The lane also had to stop a metadata block from carrying a byte nobody wrote - the `reserved` of a directory entry came from the stack of a rename. |
+| L3 protection | **in.** A guard page under the stack of every task of the kernel on x86-64 and on the host, the fault of a task ends the task, `/bin/crash stack`, and the audit of `exec` that refuses a page both writable and executable (ADR 0048). The board has the canary of FreeRTOS and no isolation, which is said where it belongs. The double fault from a bug of the kernel is still a stop. |
+| L4 terminal | **in.** `/dev/tty`, `termios`, `ioctl`, the size of the screen in the port's contract, and **kilo** of somebody else built by the SDK and driven at the machine (ADR 0051). `SIGWINCH`, the arrows in the stream of characters and NAWS in the terminal of telnet are not. |
+| L7 power | **in.** The clean end (the flush before the signals, the refusal of a disk that fails), ACPI S5, the reset register, deep sleep on the board and the cold start (ADR 0050). |
+| L5 accounts | not started: the six steps of ADR 0044 (the group of a record, `/etc/group`, `chgrp`, the setuid bit of `MOX1`). |
+| L6 wire | not started: Ethernet of a laptop and DHCP. |
+
 ## L1 - the wake that preempts
 
 The one defect of the ABI of the kernel that 1.7 measured and 1.8 made safe
