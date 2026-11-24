@@ -76,9 +76,9 @@ const char *port_x86_64_root_device(void);
 #define PORT_IDLE_MS 1000u
 
 static const struct kernel_board g_board = {
-    .name = "qemu_x86_64",
-    .desc = "QEMU x86-64 machine",
-    .soc = "QEMU virtio",
+    .name = "x86_64",
+    .desc = "the x86-64 machine of this port",
+    .soc = "x86-64 with a 8259 or an I/O APIC",
     .flash_mb = 0,
     .psram_kb = 0,
     .lcd = "none (the console is COM1)",
