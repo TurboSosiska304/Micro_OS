@@ -667,12 +667,12 @@ contract of `kernel/fb_ops.h` - there is no such device in this release.
       `make uefi-smoke` boots it under OVMF and checks the machine, the shell
       and the picture of the card (ADR 0037,
       [ports/x86_64/uefi.md](ports/x86_64/uefi.md))
-* [ ] The laptop of a person: a USB keyboard (xHCI and a HID keyboard) - done
-      in the lane of 1.8 (`make x86-usb-smoke`, ADR 0040) and waiting for the
-      rest -, a disk the kernel drives itself (AHCI, then NVMe) and a writable
-      root, the clock and the shutdown of ACPI, and the I/O APIC of a real
-      chipset - the table of `ports/x86_64/uefi.md` "What is not done" is the
-      order
+* [ ] The laptop of a person: a USB keyboard, a stick and a wire of the USB
+      (xHCI with the classes of HID, BOT/SCSI and CDC-ECM) - done in the lane
+      of 1.8 (`make usb-smoke`, ADR 0040) -, a disk the kernel drives itself
+      (AHCI, then NVMe) and a writable root, the clock and the shutdown of
+      ACPI, and the I/O APIC of a real chipset - the table of
+      `ports/x86_64/uefi.md` "What is not done" is the order
 * [ ] A hybrid image: the ISO written to a USB stick boots as a disk
       (`limine bios-install`, or a protective MBR and the GRUB record)
 * [ ] A writable root: the root of the CD is read-only, and a person's files

@@ -1,10 +1,11 @@
-# ADR 0040 - The keyboard of the USB: xHCI, the rings and the HID of the boot protocol
+# ADR 0040 - The USB of a laptop: the controller, the keyboard, the stick and the wire
 
 * Status: accepted
 * Date: 2026-11-24
 * Related: ADR 0028 (a key is an event), ADR 0032 (the address of a buffer a
-  device reads), ADR 0012 (many cores), `docs/plan-1.8.md` (M1),
-  `docs/desktop.md`, `docs/ports/x86_64/README.md`
+  device reads), ADR 0012 (many cores), ADR 0041 (a disk nobody formatted),
+  ADR 0008 (block devices), `docs/plan-1.8.md` (M1), `docs/desktop.md`,
+  `docs/ports/x86_64/README.md`
 
 ## Context
 
@@ -207,6 +208,119 @@ driver of the port.
   the controller. They are the rows of `docs/debts.md` and the next lanes of
   1.8.
 * A device of another class on a port is enumerated and refused, and the
-  controller is left with the slots of the devices it understood; a stick of
-  the second half plugs into the same enumeration and takes the next step
-  from there.
+  controller is left with the slots of the devices it understood.
+
+## The second half of M1: the stick and the wire
+
+### 6. The stick: the Bulk-Only Transport on the block layer
+
+A stick is a SCSI disk behind one interface: the class 08, sub-class 06 and
+protocol 0x50 is the **Bulk-Only Transport**, and it moves the commands of
+that disk over two bulk endpoints. One command is three transfers - a Command
+Block Wrapper of 31 bytes ("USBC", a tag, the length and the CDB), the data of
+the command in the direction the CDB says, and a Command Status Wrapper of 13
+bytes ("USBS", the same tag, a residue and a status) - and the signatures and
+the tag are the proof that the three are one command.
+`src/usb_storage.c` is that class: `TEST UNIT READY`, `INQUIRY`,
+`READ CAPACITY(10)`, `READ(10)` and `WRITE(10)`, and a `struct k_blockdev`
+registered as `usb0`.
+
+The unit of the block layer is 1 KiB, as on the two other disks of the port,
+so one sector of the filesystem is two 512-byte sectors of the medium and the
+arithmetic lives in the driver. A command moves at most 32 KiB - eight pieces
+of a page, eight TRBs of the ring of the endpoint - and a read of the block
+layer is cut into commands of that size. The buffer of the caller may be a
+page of a program, so every piece of a page is translated with
+`port_x86_64_paging_phys()` and the controller gets a physical address per
+piece (ADR 0032 §1), exactly as the AHCI driver does.
+
+The medium is the one of a person, and the rule of **ADR 0041** is the first
+thing the attach does: the whole disk and its first partition are identified
+by `kernel/volume.c`, the disk is registered read-only with a write-through
+cache, and a write is refused with the rule's sentence (a volume this system
+did not make, a volume it did not name) or with the one of the table (a
+sector below the first partition of the medium). `WRITE(10)` is implemented
+behind the same closed door the AHCI driver keeps, opened by the `mount -w` of
+M2 and not by a mount.
+
+`usb0` is a disk of the port beside the IDE channel, virtio and AHCI: the
+block layer, `partition_scan()` and the rule do not know which controller is
+under them, and the boot's root chain prefers an internal disk to a stick in
+a port. A machine with only a stick boots from it.
+
+One limit of the tree is in the way of a stick of MicroFS: `mfs_mount()` holds
+one volume at a time, so mounting a MicroFS stick beside a MicroFS root
+replaces the root's state. The gate uses an ext2 volume on the stick for that
+reason (a volume of another system, which is also the stronger case of the
+rule), and the single-volume MicroFS is a row of `docs/debts.md`.
+
+### 7. The wire: CDC-ECM, and not RNDIS
+
+A telephone that shares its connection and a dongle of ethernet appear as one
+of two classes: **CDC-ECM**, the standard of the USB, which is ethernet
+frames over two bulk endpoints; and **RNDIS**, the same idea in a protocol of
+Microsoft with a control channel of its own. This release speaks the first:
+the control interface of class 2, sub-class 6, its functional descriptor of
+the ethernet (the MAC is the string it names), the data interface of class 10
+whose alternate setting 1 carries the two bulk endpoints, and then one class
+request - `SET_ETHERNET_PACKET_FILTER` - and one `SET_INTERFACE` for the data
+setting. `src/usb_net.c` is that class.
+
+RNDIS is not spoken. It is a message protocol per control transfer
+(INITIALIZE, SET, QUERY, KEEPALIVE, an OID for every property of the card),
+it is larger than the whole data path of ECM, and the device of QEMU that a
+test can give the machine carries ECM in its second configuration - the
+enumeration reads every configuration of a device until one names a class of
+this release, which is the change the wire forced on the controller's driver.
+A telephone whose tethering is RNDIS only (the Android of the default) is a
+row of `docs/debts.md`; the firmware of a gadget that offers ECM, a Linux and
+an iPhone are the standard.
+
+The notification endpoint of the control interface is **not** configured: it
+carries the speed of the link and the notifications of the device, and this
+stack has one speed and a link that is up when the device is there. Polling a
+second endpoint for a change nothing acts on is a cost of every frame.
+
+The wire is a device under the stack of `src/net.c` and not a second stack:
+`src/netdev.c` is the seam (a name, a MAC, the link, a frame in and a frame
+out), the card of virtio and the wire of the USB register their operations
+there, and the first registration wins - the card of the PCI bus is probed
+before the controller of the USB, so a laptop with both has its wire and a
+laptop with only the dongle has the dongle. The frames are polled: a receive
+asks the bulk endpoint with a timeout of two milliseconds and a device that
+has nothing answers "no frame", which is the shape the stack already had.
+
+### 8. What the line still does not have
+
+* **the hub** (class 09): the ports of a controller are enumerated and the
+  ports below a hub are not; a laptop whose keyboard is behind the hub of a
+  dock is a row of `docs/debts.md`;
+* **RNDIS** and the telephone of Android;
+* **the write of the stick**: `WRITE(10)` is there and the door of the rule
+  is the `mount -w` of M2;
+* **the interrupt of the controller**: the event ring is polled, which is
+  enough for a keyboard and a wire of a few frames and is not the design of a
+  disk of a gigabyte per second.
+
+## Consequences of the second half
+
+* The gate is `make usb-smoke` and it drives the three classes on one machine
+  with no PS/2: the keyboard (16 checks of the first half, unchanged), the
+  stick (its partition mounted, a file read through the USB, a write refused,
+  the SHA-256 of the whole image the same before and after) and the wire (the
+  boot names `usbnet0`, `netinfo` reads its MAC, `ping 10.0.2.2` crosses the
+  bulk endpoints, the counters move). It is 35 checks and the wire is the
+  image of `MICRO_OS_X86_NET=ON`.
+* `make usb-stick-smoke USB_STICK=/dev/sdc` is the stick of a person, attached
+  read-only: the test mounts its first partition, lists it and compares the
+  SHA-256 of the whole device. The device belongs to the host and the run
+  needs the permission to read it.
+* The boot of a machine with a stick says what it found and what the rule
+  answered: `usb0: QEMU QEMU HARDDISK 2.5+, 16 MB on the port 2 of the
+  controller`, `usb0: usb0p1: the volume of another system (ext2),
+  read-only`, `usb0: the disk is read-only: the medium carries a volume of
+  another system`, and `usb: 1 disk(s) of the storage class, read-only,
+  nothing written`.
+* The network of the port is two drivers behind one seam, and
+  `make x86-net-smoke` (virtio) and `make usb-smoke` (the wire) are the same
+  stack on both.
