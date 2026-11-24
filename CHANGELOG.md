@@ -46,6 +46,33 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Added
 
+- The accounts of a person, second half (ADR 0044, ADR 0053): `chgrp` is the
+  call **51** of the ABI (the count is 52) with an adapter in every filesystem
+  (MicroFS, ext2, and `ENOTSUP` on FAT32 which has no group), the group of a
+  record is in `struct vfs_stat` with `struct statx` still at 40 bytes, one
+  rule of the triads (`vfs_access_bits()`) answers for the VFS and for the edge
+  of the calls, `/etc/group` has its parser and `getgrgid`/`getgrnam`, a new
+  object takes the gid of its maker, and the image carries the **setuid bit of
+  MOX1**: a flag of the header, the real/effective/saved uid of the task, the
+  act in `execve` that refuses an image its caller can write, and `pkg` that
+  installs such a package only as root. `make x86-smoke` is 429 checks:
+  `/bin/suidcat` reads a file of its owner, the same program without the bit is
+  refused, a writable setuid image is refused, and the shell keeps its own
+  identity after the run.
+- `date` is a command of the shell (not a program: the clock is set by a
+  privileged act of the kernel and a program could only read it) that prints
+  `YYYY-MM-DD HH:MM:SS` and refuses a day that does not exist; the port of
+  x86-64 read the year of the CMOS **through BCD twice** - 2026 was printed as
+  2020 and 2043 as 2031 - and the date is a gate now.
+- The programs we promise are in the image, and a gate says so:
+  `tools/x86_image.py --ports` puts the SDK build into `/bin/ports` (kilo and
+  the set of sbase, 231 072 bytes), `PATH` of the shell is
+  `/bin:/bin/ports:/usr/bin`, and `tests/ports/promised.txt` - one list of
+  fifty-seven names, each with the version that promised it - is read by
+  `x86-smoke` (four checks: `/bin`, `/bin/ports`, the table of `help` and the
+  list of `help`) and by `ports-smoke` (everything in `/bin/ports` is really
+  built by the SDK). The owner of a laptop asked for `date` and the machine
+  answered "command not found": a promise that nothing checked.
 - The stick of a person is a disk, and the memory is not (ADR 0056): the image
   of `make uefi-stick` is a **table of two partitions** - the ESP of 64 MiB with
   the loader, the kernel and a copy of the volume as a spare root, and a second
