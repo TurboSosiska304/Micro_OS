@@ -32,6 +32,18 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Added
 
+- The guard of a stack (ADR 0048): the stack of every task of the kernel has a
+  page under it that is not mapped, on x86-64 and on the host, so a store past
+  the bottom of a stack is a fault **of that task** and not a field of the heap
+  of its neighbour found much later somewhere else (the 16 KiB stack of the
+  shell under `pkg -S` faulted in `k_sched_tick`). The handler recognises the
+  address and ends the task; the machine answers the next line, `/bin/crash
+  stack` is the program that proves it, and `tests/cases/test_guard.c` holds
+  the same contract on the host - with an alternate signal stack and a
+  `siglongjmp`, which is the only way a thread of the host leaves a stack that
+  is gone. The audit of `exec` refuses an image that asks for a page both
+  writable and executable, and names the segment it refused. `make x86-smoke`
+  is 412 checks.
 - A wake that preempts (ADR 0046): the one defect the ABI of the kernel had
   carried since 1.0 - `k_wait_wake` moved `wake_tick` to the present and the
   waiter became runnable at the next tick, so a round trip of a pipe was
