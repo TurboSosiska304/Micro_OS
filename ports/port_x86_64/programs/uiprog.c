@@ -502,10 +502,96 @@ const struct ui_font *uiprog_font(void)
     static const struct ui_font s_font = {
         .width = FONT8_WIDTH,
         .height = FONT8_HEIGHT,
+        .scale = 0,
         .glyph = font8x16_glyph,
     };
 
     return &s_font;
+}
+
+/* The same glyphs at twice the cell: the second size of the text of a window
+ * (ADR 0054). One table of 95 glyphs serves both, and a cell of 16x32 pixels
+ * is one bit of it drawn as a square of two. */
+const struct ui_font *uiprog_font_large(void)
+{
+    static const struct ui_font s_font = {
+        .width = FONT8_WIDTH,
+        .height = FONT8_HEIGHT,
+        .scale = 2,
+        .glyph = font8x16_glyph,
+    };
+
+    return &s_font;
+}
+
+/* The text of /etc/console, or -1 when the machine has no such file: the one
+ * file of the mood of the desktop, read by the palette and by the clock. */
+static int console_text(char *text, k_size_t size)
+{
+    long got;
+    int descriptor;
+
+    if (text == NULL || size < 2u) {
+        return -1;
+    }
+
+    descriptor = open("/etc/console", ULIBC_O_RDONLY);
+    if (descriptor < 0) {
+        return -1;
+    }
+
+    got = read(descriptor, text, size - 1u);
+    (void)close(descriptor);
+
+    if (got <= 0) {
+        return -1;
+    }
+
+    text[got] = '\0';
+
+    return (int)got;
+}
+
+void uiprog_clock(struct ui_clock *clock)
+{
+    char text[128];
+    const char *line;
+
+    if (clock == NULL) {
+        return;
+    }
+
+    ui_clock_default(clock);
+
+    if (console_text(text, sizeof(text)) < 0) {
+        return;
+    }
+
+    line = text;
+
+    while (*line != '\0') {
+        const char *end = line;
+
+        while (*end != '\0' && *end != '\n') {
+            end++;
+        }
+
+        if (end > line) {
+            char copy[64];
+            k_size_t length = (k_size_t)(end - line);
+
+            if (length >= sizeof(copy)) {
+                length = sizeof(copy) - 1u;
+            }
+
+            memcpy(copy, line, length);
+            copy[length] = '\0';
+
+            (void)ui_clock_line(clock, copy);
+        }
+
+        line = *end == '\n' ? end + 1 : end;
+    }
 }
 
 /* Does the text of /etc/console name the light theme? The file is one
@@ -535,8 +621,6 @@ static bool console_theme_is_light(const char *text)
 const char *uiprog_palette(struct ui_palette *palette)
 {
     char text[128];
-    long got;
-    int descriptor;
 
     if (palette == NULL) {
         return "dark";
@@ -544,19 +628,9 @@ const char *uiprog_palette(struct ui_palette *palette)
 
     ui_palette_dark(palette);
 
-    descriptor = open("/etc/console", ULIBC_O_RDONLY);
-    if (descriptor < 0) {
+    if (console_text(text, sizeof(text)) < 0) {
         return "dark";
     }
-
-    got = read(descriptor, text, sizeof(text) - 1u);
-    (void)close(descriptor);
-
-    if (got <= 0) {
-        return "dark";
-    }
-
-    text[got] = '\0';
 
     if (!console_theme_is_light(text)) {
         return "dark";
@@ -572,17 +646,33 @@ int uiprog_fill(struct uiprog *program, int x, int y, int w, int h, k_u16_t colo
     return program_fill(program, x, y, w, h, color);
 }
 
-int uiprog_text(struct uiprog *program, int x, int y, const char *text, int cells, k_u16_t ink,
-                k_u16_t paper)
+int uiprog_text_font(struct uiprog *program, int x, int y, const char *text, int cells, k_u16_t ink,
+                     k_u16_t paper, const struct ui_font *font)
 {
     struct ui_canvas canvas;
+    int cell_w;
+    int cell_h;
     int width;
 
-    if (program == NULL || cells <= 0 || cells > UIPROG_COLS_MAX) {
+    if (program == NULL || font == NULL || cells <= 0 || cells > UIPROG_COLS_MAX) {
         return -1;
     }
 
-    width = cells * FONT8_WIDTH;
+    cell_w = ui_font_cell_width(font);
+    cell_h = ui_font_cell_height(font);
+
+    if (cell_w <= 0 || cell_h <= 0) {
+        return -1;
+    }
+
+    width = cells * cell_w;
+
+    /* The scratch of the program holds the widest row of the small font: a row
+     * of the large one that does not fit is refused here, because a blit of
+     * half a line is a line of the wrong letters. */
+    if ((long)width * (long)cell_h > (long)UIPROG_LINE_PIXELS) {
+        return -1;
+    }
 
     /* A row of the window may be wider than the window when a program asks
      * for more cells than it has: the canvas is clipped by the target and the
@@ -591,12 +681,18 @@ int uiprog_text(struct uiprog *program, int x, int y, const char *text, int cell
         return -1;
     }
 
-    ui_canvas_init(&canvas, width, FONT8_HEIGHT, program->line);
-    if (ui_canvas_text(&canvas, 0, 0, text, cells, ink, paper, uiprog_font()) != 0) {
+    ui_canvas_init(&canvas, width, cell_h, program->line);
+    if (ui_canvas_text(&canvas, 0, 0, text, cells, ink, paper, font) != 0) {
         return -1;
     }
 
-    return program_blit(program, x, y, width, FONT8_HEIGHT, program->line);
+    return program_blit(program, x, y, width, cell_h, program->line);
+}
+
+int uiprog_text(struct uiprog *program, int x, int y, const char *text, int cells, k_u16_t ink,
+                k_u16_t paper)
+{
+    return uiprog_text_font(program, x, y, text, cells, ink, paper, uiprog_font());
 }
 
 int uiprog_text_reverse(struct uiprog *program, int x, int y, const char *text, int cells,

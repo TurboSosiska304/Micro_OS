@@ -122,8 +122,10 @@ PROGRAMS = [
     "edit",
     "fm",
     # The server of the desktop (1.7): the windows of the programs above as
-    # clients of one program that owns the screen (docs/desktop.md).
+    # clients of one program that owns the screen (docs/desktop.md), and the
+    # terminal window that runs the programs of /bin in a window (2.0).
     "wm",
+    "term",
 ]
 
 # The second name of the compression command: `zstdcat` is the same image and

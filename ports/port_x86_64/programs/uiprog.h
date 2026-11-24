@@ -32,6 +32,7 @@
 #include "kernel/ksys.h"
 #include "kernel/types.h"
 #include "port_x86_64_font.h"
+#include "ui/clock.h"
 #include "ui/draw.h"
 #include "ui/palette.h"
 #include "ui/window.h"
@@ -94,6 +95,14 @@ int uiprog_rows(const struct uiprog *program);
 const struct ui_font *uiprog_font(void);
 
 /*
+ * The same glyphs at twice the cell: the second size of a program of the
+ * desktop (ADR 0054). A machine has one table of glyphs - 95 rows of eight
+ * bits - and a 16x32 cell is that table drawn two pixels a bit, which is what
+ * the terminal of the window of the shell uses for its large text.
+ */
+const struct ui_font *uiprog_font_large(void);
+
+/*
  * The palette of the desktop: the roles of `ui/palette.h` filled from the
  * `theme` of `/etc/console`, so one word of the file colours the console and
  * the desktop of the machine alike. The answer is the name of the theme,
@@ -103,12 +112,25 @@ const struct ui_font *uiprog_font(void);
  */
 const char *uiprog_palette(struct ui_palette *palette);
 
+/*
+ * The clock of the panel: the `clock` and `utc_offset` keys of the same
+ * `/etc/console`, read with `ui/clock.h`. A file without them is the
+ * twenty-four hours of UTC, which is the clock of the console log.
+ */
+void uiprog_clock(struct ui_clock *clock);
+
 /* A rectangle of one colour, and a row of text as one rectangle of the device
  * or of the window. Both cut a rectangle that is too wide for one transfer of
  * the system into strips of whole rows. */
 int uiprog_fill(struct uiprog *program, int x, int y, int w, int h, k_u16_t color);
 int uiprog_text(struct uiprog *program, int x, int y, const char *text, int cells, k_u16_t ink,
                 k_u16_t paper);
+
+/* A row of text in the font of the caller, which may be the large one: the
+ * rectangle is `cells` cells of that font, and a row wider than the scratch of
+ * the program is refused (-1) rather than drawn in pieces. */
+int uiprog_text_font(struct uiprog *program, int x, int y, const char *text, int cells, k_u16_t ink,
+                     k_u16_t paper, const struct ui_font *font);
 
 /* A row of text in the two colours traded: the row of a list that has the
  * focus. */
