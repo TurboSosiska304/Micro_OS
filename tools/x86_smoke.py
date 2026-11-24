@@ -3167,6 +3167,17 @@ def check(output: str) -> list:
         output.count("x86-64: the map of a program is W^X") >= 10,
         f"{output.count('x86-64: the map of a program is W^X')} report(s) in the run",
     )
+    # The audit is a refusal and not a remark (ADR 0052): a space with a page
+    # that is writable and executable at once is not entered, and the line of
+    # the refusal in a run of the whole image is the failure of the port. The
+    # number of the audit lines is not the number of the programs here - the
+    # run does not exec every file of /bin - so `make mmu-smoke` is the check
+    # that counts them against its own execs.
+    expect(
+        "no program of the run was refused as not W^X",
+        "the map of the program is not W^X" not in output,
+        output[-600:],
+    )
 
     # --- the first lane of 1.6: the wait for a descriptor
     poll = answer("exec /bin/poll")
