@@ -9,6 +9,7 @@
  *   /proc/uptime      the time since the boot
  *   /proc/meminfo     the memory of the system
  *   /proc/tasks       the list of the tasks
+ *   /proc/sessions    the sessions of the terminals (who)
  *   /proc/modules     the state of the modules
  *   /proc/kmsg        the ring of the log of the kernel, the newest last
  *   /proc/self/       the task that reads the file
@@ -135,6 +136,38 @@ static int read_tasks(char *buf, k_size_t size, k_u32_t pid)
 }
 
 /*
+ * The sessions of the machine: a task that opened a terminal and has not
+ * left it (ADR 0033, the second half of the accounts). The file is a utmp
+ * that a boot cannot lose: it is made of the table of the tasks, so a
+ * session that ends is not a line somebody has to delete, and a reset takes
+ * every line with it. `who` prints the names of /etc/passwd beside these
+ * numbers; the kernel keeps the uid and not the name.
+ */
+static int read_sessions(char *buf, k_size_t size, k_u32_t pid)
+{
+    k_size_t count = task_count();
+    k_size_t i;
+    int n = 0;
+
+    K_UNUSED(pid);
+
+    n += snprintf(buf + n, size - (k_size_t)n, "pid  uid  tty       name\n");
+
+    for (i = 0; i < count + 8; i++) {
+        struct task *t = task_get_by_index(i);
+
+        if (t == NULL || task_get_tty(t) == TASK_TTY_NONE) {
+            continue;
+        }
+
+        n += snprintf(buf + n, size - (k_size_t)n, "%4u  %3u  %-8s  %s\n", (unsigned)t->pid,
+                      (unsigned)task_get_uid(t), task_tty_name(task_get_tty(t)), t->name);
+    }
+
+    return n;
+}
+
+/*
  * The ring of the log of the kernel, which is what `dmesg` reads: the newest
  * messages are the last lines of the file, and the buffer of the caller is
  * filled with as much of the ring as fits (kernel/log.c decides where the
@@ -219,7 +252,7 @@ static int read_blockdev(char *buf, k_size_t size, k_u32_t pid)
 static const struct proc_file s_root_files[] = {
     {"version", read_version},   {"uptime", read_uptime},   {"meminfo", read_meminfo},
     {"tasks", read_tasks},       {"modules", read_modules}, {"kmsg", read_kmsg},
-    {"blockdev", read_blockdev},
+    {"blockdev", read_blockdev}, {"sessions", read_sessions},
 };
 
 static const k_size_t s_root_file_count = K_ARRAY_SIZE(s_root_files);

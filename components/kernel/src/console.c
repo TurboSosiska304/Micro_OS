@@ -4,6 +4,7 @@
 #include "kernel/console.h"
 
 #include "kernel/port.h"
+#include "kernel/task.h"
 #include "kernel/wait.h"
 
 /*
@@ -84,10 +85,25 @@ void k_console_remove_sink(k_console_sink_fn sink)
 
 void k_console_write(const char *data, k_size_t len)
 {
+    struct k_terminal *terminal;
     k_console_sink_fn sinks[K_CONSOLE_SINK_MAX];
     k_size_t i;
 
     if (data == NULL || len == 0) {
+        return;
+    }
+
+    /*
+     * A task with a terminal of its own writes to that terminal and not to
+     * the console of the machine: the output of a session of telnet is the
+     * output of that session, the way the UART is the output of the console.
+     * The two would otherwise be one stream, and two people on the machine
+     * at once would read each other's answers.
+     */
+    terminal = k_terminal_current();
+
+    if (terminal != NULL && terminal->put != NULL) {
+        terminal->put(terminal->ctx, data, len);
         return;
     }
 
@@ -118,14 +134,59 @@ int k_console_readline(char *buf, k_size_t size)
     return k_port_console_readline(buf, size);
 }
 
+struct k_terminal *k_terminal_current(void)
+{
+    struct task *self = task_self();
+
+    return (self != NULL) ? self->terminal : NULL;
+}
+
+void k_terminal_set(struct k_terminal *terminal)
+{
+    struct task *self = task_self();
+
+    if (self != NULL) {
+        self->terminal = terminal;
+    }
+}
+
 int k_console_getchar(void)
 {
+    struct k_terminal *terminal = k_terminal_current();
+
+    if (terminal != NULL && terminal->get != NULL) {
+        return terminal->get(terminal->ctx);
+    }
+
     return k_port_console_getchar();
 }
 
 int k_console_poll(void)
 {
     return k_port_console_poll();
+}
+
+void k_console_terminal_put(const char *data, k_size_t len)
+{
+    struct k_terminal *terminal = k_terminal_current();
+
+    if (terminal != NULL && terminal->put != NULL) {
+        terminal->put(terminal->ctx, data, len);
+        return;
+    }
+
+    k_console_write(data, len);
+}
+
+bool k_console_terminal_echo(void)
+{
+    struct k_terminal *terminal = k_terminal_current();
+
+    if (terminal == NULL) {
+        return true; /* the console of the port: the task echoes the person */
+    }
+
+    return (terminal->echo != NULL) ? terminal->echo(terminal->ctx) : false;
 }
 
 void k_console_input_notify(void)
