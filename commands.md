@@ -74,6 +74,7 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make x86-root-smoke` | two roots of one machine: the MicroFS and the ext2 image answer the same commands, and FAT32 mounts at `/data` (47 checks) |
 | `make x86-volume-smoke` | a volume of 5 GiB of ext2 and of MicroFS: written, read back, `e2fsck -fn` and `debugfs` of the host and the `fsck` of the machine (about four minutes, not a part of `make ci`) |
 | `make x86-mfs-smoke` | a write interrupted by the power: the machine dies in the middle of 16 MiB, boots again on the same volume, and `fsck`/`fsck -y` find the volume it left (10 checks, ADR 0038) |
+| `make cut-smoke` (`x86-cut-smoke`) | the gate of ADR 0047: twenty cuts of one write. The image is copied, the copy is killed in the middle of a write at a different point each time, and the same blocks are booted again: the mount replays the journal or discards the draft, `fsck` finds nothing, the file written before the cut is whole, and the interrupted one is whole or absent (106 checks, about a minute) |
 | `make bench` | the numbers of the x86-64 port: `getpid`, fork and exec, a pipe, a file of 16 MiB and the console, one boot of fixed sizes; `make bench BENCH_ARGS="--json bench.json"` keeps the table (about a minute, not a part of `make ci`, `docs/bench.md`) |
 | `make uefi` | the volume a firmware boots: a FAT32 ESP with `EFI/BOOT/BOOTX64.EFI`, the kernel and `disk.img` (needs `clang` and `lld-link`, ADR 0037) |
 | `make uefi-run` | that volume in a window under OVMF |

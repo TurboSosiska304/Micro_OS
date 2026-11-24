@@ -915,13 +915,13 @@ static void test_flags(void)
     mfs_unmount();
 
     KT_CHECK_INT_EQ(inode_get(index, &inode), 0);
-    inode.flags |= 0x04u;
+    inode.flags |= 0x08u;
     KT_CHECK_INT_EQ(inode_put(index, &inode), 0);
 
     hole = free_record();
     KT_CHECK(hole != 0);
     memset(&inode, 0, sizeof(inode));
-    inode.flags = 0x04u;
+    inode.flags = 0x08u;
     KT_CHECK_INT_EQ(inode_put(hole, &inode), 0);
 
     KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
@@ -930,7 +930,7 @@ static void test_flags(void)
     expect_repaired();
 
     KT_CHECK_INT_EQ(mfs_stat("/f", &inode, NULL), MFS_OK);
-    KT_CHECK_INT_EQ(inode.flags & 0x04u, 0u);
+    KT_CHECK_INT_EQ(inode.flags & 0x08u, 0u);
     KT_CHECK_INT_EQ(mfs_inode_mode(&inode), MFS_MODE_DEFAULT);
     KT_CHECK_INT_EQ(inode_get(hole, &inode), 0);
     KT_CHECK_INT_EQ(inode.flags, 0u);
